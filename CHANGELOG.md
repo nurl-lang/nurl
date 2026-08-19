@@ -8,7 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`bench/pq.nu`** — the post-quantum stack measured, with the same-host
+  reference numbers (pq-crystals / sphincsplus, ref C and AVX2, dated) in
+  the header as the bar.
+
+- **`v256` sixteen-lane arithmetic** — `nurl_v256_{add16,sub16,mullo16,
+  mulhi16,sra16,bcast16}`; `mulhi16` is spelled as the widen-multiply-narrow
+  sequence LLVM pattern-matches back into `vpmulhw`.
+
 ### Changed
+
+- **ML-KEM and ML-DSA: four-way noise samplers, bit-sliced CBD, vector
+  NTT** — PRF_η / ExpandS / ExpandMask run four nonce-streams per sponge;
+  CBD sums η-bit groups a word at a time instead of per bit; the ML-KEM
+  NTT's wide layers run sixteen Montgomery butterflies per operation,
+  bit-identical to the scalar arithmetic (the borrow in
+  `mulhi(x,y) − mulhi(t,q)` cannot happen, so ACVP byte-equality holds).
+  From the branch start: ML-KEM-768 keygen/encaps/decaps 39/42/60 → 31/32/39
+  µs, ML-DSA-44 sign 180 → 153 µs, ML-DSA-65 sign 312 → 273 µs.
 
 - **SLH-DSA now runs four hashes at a time, and beats the reference AVX2
   implementation on every operation** (i7-5930K, µs/op, sphincsplus
