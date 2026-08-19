@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`SSL_CERT_FILE` anchors verify-full** — `std/tls_verify.nu` reads the
+  de-facto standard environment variable every mainstream TLS stack honors
+  (OpenSSL semantics: when set, the file REPLACES the system bundle, and an
+  unreadable path fails loudly with "no trust anchor" rather than silently
+  falling back). Until now verify-full could anchor only to the three
+  hardcoded system bundle paths — a private CA or a self-signed lab server
+  meant editing /etc/ssl or giving up on verification. Gated by
+  `compiler/tests/tls_ssl_cert_file.nu`, a pure-NURL end-to-end: mint a
+  certificate with `x509_selfsigned_p256`, serve it through the same
+  `tcp_listen_tls` PEM path `packages/http` uses, verify-full against it as
+  its own anchor over an X25519MLKEM768 handshake — plus the
+  override-replaces and default-unchanged halves, mutation-tested.
+
+### Fixed
+
+- **`pqc probe` no longer reports "handshake failed" for an untrusted
+  certificate** — a probe's question is "does this server negotiate a
+  post-quantum group", and the handshake answers it whether or not the
+  chain anchors here. On TlsBadCert it retries insecurely and reports the
+  real group with a `(certificate UNTRUSTED here)` note, keeping "not
+  post-quantum" and "not trusted" apart. And `probe HOST:PORT` now works
+  as the usage always documented — the port suffix was parsed by nothing,
+  so probing anything but :443 silently dialled the wrong port.
+
 ### Changed
 
 - **Polynomial serialisation no longer pushes one byte at a time** —

@@ -328,24 +328,46 @@ $ `stdlib/ext/env.nu`
     ~ < k 34 { ( nurl_print ` ` ) = k + k 1 }
 }
 
+// The probe's question is "does this server negotiate a post-quantum
+// group", and the handshake answers it whether or not the certificate
+// chains to a root this machine trusts. So probe first with
+// verification, and on TlsBadCert retry insecurely: the group is real
+// either way, and the output says the trust half separately. The old
+// spelling used only the verifying connect, so a self-signed lab server
+// that negotiated X25519MLKEM768 perfectly was reported "handshake
+// failed" — conflating "not post-quantum" with "not trusted", which are
+// exactly the two things a probe exists to keep apart.
 @ __cmd_probe s host i port → i {
     ( __pad host )
-    : !*TlsConn TlsErr r ( tls_connect host port host )
-    ?? r {
-        T c → {
-            : i g ( tls_group c )
-            : b pq ( tls_is_post_quantum c )
-            ( nurl_print ? pq `PQ   ` `no   ` )
-            ( nurl_print ( __group_name g ) )
-            ( nurl_print `\n` )
-            ( tls_close c )
-            ^ ? pq 0 1
-        }
-        F _e → {
-            ( nurl_print `--   handshake failed\n` )
-            ^ 2
+    : ~ b trusted T
+    : ~ * TlsConn conn # *TlsConn 0
+    ?? ( tls_connect host port host ) {
+        T c → { = conn c }
+        F e → {
+            ?? e {
+                TlsBadCert → {
+                    = trusted F
+                    ?? ( tls_connect_insecure host port host ) {
+                        T c2 → { = conn c2 }
+                        F _e2 → {}
+                    }
+                }
+                _ → {}
+            }
         }
     }
+    ? == # i conn 0 {
+        ( nurl_print `--   handshake failed\n` )
+        ^ 2
+    } {}
+    : i g ( tls_group conn )
+    : b pq ( tls_is_post_quantum conn )
+    ( nurl_print ? pq `PQ   ` `no   ` )
+    ( nurl_print ( __group_name g ) )
+    ? ! trusted { ( nurl_print `   (certificate UNTRUSTED here)` ) } {}
+    ( nurl_print `\n` )
+    ( tls_close conn )
+    ^ ? pq 0 1
 }
 
 // ── bench ──────────────────────────────────────────────────────────
@@ -558,12 +580,44 @@ $ `stdlib/ext/env.nu`
 
     ? != 0 ( nurl_str_eq cmd `probe` ) {
         ? < n 2 { ( __die `probe needs at least one host` ) ^ 2 } {}
-        : i port ( __opt_int p `port` 443 )
+        : i dport ( __opt_int p `port` 443 )
         ( nurl_print `host                              PQ?  group\n` )
         : ~ i k 1
         : ~ i worst 0
         ~ < k n {
-            : i r ( __cmd_probe ( __pos ps k ) port )
+            // The usage header has always said HOST[:PORT]; honour it.
+            // A trailing `:<digits>` overrides --port for that one
+            // host. The split is from the RIGHT and only when the
+            // suffix is all digits, so a bare IPv6 literal (which has
+            // no port syntax without brackets) still passes through
+            // whole rather than losing its last group.
+            : s hp ( __pos ps k )
+            : i hl ( nurl_str_len hp )
+            : ~ i port dport
+            : ~ s host hp
+            // Rightmost ':' by hand (there is no rfind in the string
+            // set), and the suffix after it must be all digits.
+            : ~ i ci 0
+            : ~ i sc 0
+            : ~ i q 0
+            ~ < q hl {
+                ? == ( nurl_str_get hp q ) 58 { = ci q = sc + sc 1 } {}
+                = q + q 1
+            }
+            ? & & == sc 1 >= ci 0 > - hl + ci 1 0 {
+                : ~ b digits T
+                : ~ i j + ci 1
+                ~ & digits < j hl {
+                    : i ch ( nurl_str_get hp j )
+                    ? | < ch 48 > ch 57 { = digits F } {}
+                    = j + j 1
+                }
+                ? digits {
+                    = port ( nurl_str_to_int ( nurl_str_slice hp + ci 1 - hl + ci 1 ) )
+                    = host ( nurl_str_slice hp 0 ci )
+                } {}
+            } {}
+            : i r ( __cmd_probe host port )
             ? > r worst { = worst r } {}
             = k + k 1
         }
