@@ -19,6 +19,9 @@
 //                                                    no — `remove` returns 0 only when
 //                                                    the entry was actually unlinked,
 //                                                    so we surface ENOENT as NotFound)
+//   ( set_permissions path mode ) → ! v IoErr       chmod(2); mode is the octal
+//                                                    value as a plain integer
+//                                                    (0o600 = 384)
 //   ( dir_create path )          → ! v IoErr        mkdir 0755; AlreadyExists if exists
 //   ( dir_create_all path )      → ! v IoErr        mkdir -p: every missing parent;
 //                                                    an existing directory is not an error
@@ -320,6 +323,32 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ dir_create s path → !v IoErr {
     : i rc ( nurl_dir_create path )
     ? == rc 0 {
+        ^ @ !v IoErr { T 0 }
+    } {}
+    : IoErr e ( _io_err_of_kind ( errno_kind ) )
+    ^ @ !v IoErr { F e }
+}
+
+& `c` @ chmod s path i32 mode → i32
+
+// POSIX chmod(2). `mode` is the permission word as a plain integer, so
+// the familiar octal literals are written out in decimal: 0o600 = 384,
+// 0o644 = 420, 0o700 = 448, 0o755 = 493.
+//
+// This is what a program writes a private key with. write_file creates
+// at 0666 & ~umask, which on a default umask leaves a key readable by
+// every account on the host; there is no create-with-mode variant here
+// because fopen has no such argument, so the sequence is write then
+// tighten. The window between the two is why the caller should also be
+// creating the file in a directory that is not world-readable.
+//
+// On Windows the CRT honours only the owner-write bit and ignores the
+// rest — treat a success there as "read-only flag set", not as POSIX
+// permissions.
+@ set_permissions s path i mode → !v IoErr {
+    ? == # i path 0 { ^ @ !v IoErr { F @ IoErr { NotFound } } } {}
+    : i32 rc ( chmod path # i32 mode )
+    ? == # i rc 0 {
         ^ @ !v IoErr { T 0 }
     } {}
     : IoErr e ( _io_err_of_kind ( errno_kind ) )

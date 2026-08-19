@@ -2,8 +2,45 @@
 
 $ `stdlib/core/string.nu`
 
+// Escape a value for interpolation into HTML text or a quoted
+// attribute. Everything this module renders that did not come from a
+// string literal in this file goes through here — a certificate serial
+// and an error message both arrive from the request body, and
+// `<script>` in either one used to reach the browser verbatim.
+//
+// The five characters are the OWASP text-and-attribute set: escaping
+// both quote forms is what makes the same function safe in an
+// attribute context, not only between tags.
+@ ui_html_escape s raw → String {
+    : String out ( string_new )
+    : i n ( nurl_str_len raw )
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_get raw k )
+        ? == c 38 { ( string_push_str out `&amp;` ) } {
+            ? == c 60 { ( string_push_str out `&lt;` ) } {
+                ? == c 62 { ( string_push_str out `&gt;` ) } {
+                    ? == c 34 { ( string_push_str out `&quot;` ) } {
+                        ? == c 39 { ( string_push_str out `&#39;` ) } {
+                            ( string_push_char out c )
+                        }
+                    }
+                }
+            }
+        }
+        = k + k 1
+    }
+    ^ out
+}
+
+@ _ui_push_esc String out s raw → v {
+    : String e ( ui_html_escape raw )
+    ( string_push_str out ( string_data e ) )
+    ( string_free e )
+}
+
 // Base layout wrapper
-@ _ui_wrap s title String body String active_nav → String {
+@ _ui_wrap s title String body s active_nav → String {
     : String out ( string_new )
     ( string_push_str out `<!DOCTYPE html>\n<html lang="en">\n<head>\n` )
     ( string_push_str out `  <meta charset="UTF-8">\n` )
@@ -12,6 +49,7 @@ $ `stdlib/core/string.nu`
     ( string_push_str out title )
     ( string_push_str out ` - Private PKI Service</title>\n` )
     ( string_push_str out `  <link rel="stylesheet" href="/css/style.css">\n` )
+    ( string_push_str out `  <script src="/js/app.js" defer></script>\n` )
     ( string_push_str out `</head>\n<body>\n` )
     ( string_push_str out `  <div class="container">\n` )
     ( string_push_str out `    <header>\n` )
@@ -21,15 +59,15 @@ $ `stdlib/core/string.nu`
     ( string_push_str out `    <nav>\n      <ul>\n` )
 
     ( string_push_str out `        <li><a href="/"` )
-    ? ( string_eq active_nav ( string_from `home` ) ) { ( string_push_str out ` class="active"` ) } {}
+    ? == 0 ( nurl_str_cmp active_nav `home` ) { ( string_push_str out ` class="active"` ) } {}
     ( string_push_str out `>Home</a></li>\n` )
 
     ( string_push_str out `        <li><a href="/request-cert"` )
-    ? ( string_eq active_nav ( string_from `request` ) ) { ( string_push_str out ` class="active"` ) } {}
+    ? == 0 ( nurl_str_cmp active_nav `request` ) { ( string_push_str out ` class="active"` ) } {}
     ( string_push_str out `>Request Certificate</a></li>\n` )
 
     ( string_push_str out `        <li><a href="/revoke"` )
-    ? ( string_eq active_nav ( string_from `revoke` ) ) { ( string_push_str out ` class="active"` ) } {}
+    ? == 0 ( nurl_str_cmp active_nav `revoke` ) { ( string_push_str out ` class="active"` ) } {}
     ( string_push_str out `>Revoke Certificate</a></li>\n` )
 
     ( string_push_str out `        <li><a href="/crl">Download CRL</a></li>\n` )
@@ -37,7 +75,7 @@ $ `stdlib/core/string.nu`
     ( string_push_str out `        <li><a href="/ca-cert">Download CA</a></li>\n` )
 
     ( string_push_str out `        <li><a href="/api"` )
-    ? ( string_eq active_nav ( string_from `api` ) ) { ( string_push_str out ` class="active"` ) } {}
+    ? == 0 ( nurl_str_cmp active_nav `api` ) { ( string_push_str out ` class="active"` ) } {}
     ( string_push_str out `>API Docs</a></li>\n` )
 
     ( string_push_str out `      </ul>\n    </nav>\n` )
@@ -50,7 +88,6 @@ $ `stdlib/core/string.nu`
     ( string_push_str out `  </div>\n` )
     ( string_push_str out `</body>\n</html>\n` )
     ( string_free body )
-    ( string_free active_nav )
     ^ out
 }
 
@@ -79,7 +116,7 @@ $ `stdlib/core/string.nu`
     ( string_push_str b `          </div>\n` )
     ( string_push_str b `        </div>\n` )
     ( string_push_str b `      </section>\n` )
-    ^ ( _ui_wrap `Home` b ( string_from `home` ) )
+    ^ ( _ui_wrap `Home` b `home` )
 }
 
 @ ui_render_request_cert s error_msg → String {
@@ -88,7 +125,7 @@ $ `stdlib/core/string.nu`
     ( string_push_str b `        <h2>Request a New Certificate</h2>\n` )
     ? > ( nurl_str_len error_msg ) 0 {
         ( string_push_str b `        <div class="error-message"><p><strong>Error:</strong> ` )
-        ( string_push_str b error_msg )
+        ( _ui_push_esc b error_msg )
         ( string_push_str b `</p></div>\n` )
     } {}
     ( string_push_str b `        <form action="/request-cert" method="post">\n` )
@@ -113,7 +150,7 @@ $ `stdlib/core/string.nu`
     ( string_push_str b `          </div>\n` )
     ( string_push_str b `        </form>\n` )
     ( string_push_str b `      </section>\n` )
-    ^ ( _ui_wrap `Request Certificate` b ( string_from `request` ) )
+    ^ ( _ui_wrap `Request Certificate` b `request` )
 }
 
 @ ui_render_cert_result s device_id s cert s key s ca_cert s expires → String {
@@ -122,10 +159,10 @@ $ `stdlib/core/string.nu`
     ( string_push_str b `        <h2>Certificate Generated Successfully</h2>\n` )
     ( string_push_str b `        <div class="success-message">\n` )
     ( string_push_str b `          <p>Certificate for device <strong>` )
-    ( string_push_str b device_id )
+    ( _ui_push_esc b device_id )
     ( string_push_str b `</strong> has been issued.</p>\n` )
     ( string_push_str b `          <p>Expires at: <strong>` )
-    ( string_push_str b expires )
+    ( _ui_push_esc b expires )
     ( string_push_str b `</strong></p>\n` )
     ( string_push_str b `        </div>\n` )
     ( string_push_str b `        <div class="cert-container">\n` )
@@ -133,20 +170,20 @@ $ `stdlib/core/string.nu`
     ( string_push_str b `          <div class="cert-section">\n` )
     ( string_push_str b `            <h3>Device Certificate</h3>\n` )
     ( string_push_str b `            <textarea readonly class="cert-text" id="cert_box">` )
-    ( string_push_str b cert )
+    ( _ui_push_esc b cert )
     ( string_push_str b `</textarea>\n` )
     ( string_push_str b `            <div class="button-group">\n` )
-    ( string_push_str b `              <button class="button copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('cert_box').value); this.innerText='Copied!';">Copy Certificate</button>\n` )
+    ( string_push_str b `              <button type="button" class="button copy-btn" data-copy="cert_box">Copy Certificate</button>\n` )
     ( string_push_str b `            </div>\n` )
     ( string_push_str b `          </div>\n` )
 
     ( string_push_str b `          <div class="cert-section">\n` )
     ( string_push_str b `            <h3>Private Key</h3>\n` )
     ( string_push_str b `            <textarea readonly class="cert-text" id="key_box">` )
-    ( string_push_str b key )
+    ( _ui_push_esc b key )
     ( string_push_str b `</textarea>\n` )
     ( string_push_str b `            <div class="button-group">\n` )
-    ( string_push_str b `              <button class="button copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('key_box').value); this.innerText='Copied!';">Copy Private Key</button>\n` )
+    ( string_push_str b `              <button type="button" class="button copy-btn" data-copy="key_box">Copy Private Key</button>\n` )
     ( string_push_str b `            </div>\n` )
     ( string_push_str b `            <p class="warning">&iexcl; Keep this private key secure! It is not stored on the server.</p>\n` )
     ( string_push_str b `          </div>\n` )
@@ -154,10 +191,10 @@ $ `stdlib/core/string.nu`
     ( string_push_str b `          <div class="cert-section">\n` )
     ( string_push_str b `            <h3>CA Certificate</h3>\n` )
     ( string_push_str b `            <textarea readonly class="cert-text" id="ca_box">` )
-    ( string_push_str b ca_cert )
+    ( _ui_push_esc b ca_cert )
     ( string_push_str b `</textarea>\n` )
     ( string_push_str b `            <div class="button-group">\n` )
-    ( string_push_str b `              <button class="button copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('ca_box').value); this.innerText='Copied!';">Copy CA Certificate</button>\n` )
+    ( string_push_str b `              <button type="button" class="button copy-btn" data-copy="ca_box">Copy CA Certificate</button>\n` )
     ( string_push_str b `            </div>\n` )
     ( string_push_str b `          </div>\n` )
 
@@ -167,7 +204,7 @@ $ `stdlib/core/string.nu`
     ( string_push_str b `          <a href="/" class="button primary">Return Home</a>\n` )
     ( string_push_str b `        </div>\n` )
     ( string_push_str b `      </section>\n` )
-    ^ ( _ui_wrap `Certificate Generated` b ( string_from `request` ) )
+    ^ ( _ui_wrap `Certificate Generated` b `request` )
 }
 
 @ ui_render_revoke_cert s error_msg → String {
@@ -176,7 +213,7 @@ $ `stdlib/core/string.nu`
     ( string_push_str b `        <h2>Revoke a Certificate</h2>\n` )
     ? > ( nurl_str_len error_msg ) 0 {
         ( string_push_str b `        <div class="error-message"><p><strong>Error:</strong> ` )
-        ( string_push_str b error_msg )
+        ( _ui_push_esc b error_msg )
         ( string_push_str b `</p></div>\n` )
     } {}
     ( string_push_str b `        <form action="/revoke" method="post">\n` )
@@ -201,7 +238,7 @@ $ `stdlib/core/string.nu`
     ( string_push_str b `          </div>\n` )
     ( string_push_str b `        </form>\n` )
     ( string_push_str b `      </section>\n` )
-    ^ ( _ui_wrap `Revoke Certificate` b ( string_from `revoke` ) )
+    ^ ( _ui_wrap `Revoke Certificate` b `revoke` )
 }
 
 @ ui_render_revoke_result s message s serial s revocation_time s crl → String {
@@ -210,23 +247,23 @@ $ `stdlib/core/string.nu`
     ( string_push_str b `        <h2>Certificate Revoked Successfully</h2>\n` )
     ( string_push_str b `        <div class="success-message">\n` )
     ( string_push_str b `          <p>` )
-    ( string_push_str b message )
+    ( _ui_push_esc b message )
     ( string_push_str b `</p>\n` )
     ( string_push_str b `          <p>Serial Number: <strong>` )
-    ( string_push_str b serial )
+    ( _ui_push_esc b serial )
     ( string_push_str b `</strong></p>\n` )
     ( string_push_str b `          <p>Revocation Time: <strong>` )
-    ( string_push_str b revocation_time )
+    ( _ui_push_esc b revocation_time )
     ( string_push_str b `</strong></p>\n` )
     ( string_push_str b `        </div>\n` )
     ( string_push_str b `        <div class="cert-container">\n` )
     ( string_push_str b `          <div class="cert-section">\n` )
     ( string_push_str b `            <h3>Updated Certificate Revocation List (CRL)</h3>\n` )
     ( string_push_str b `            <textarea readonly class="cert-text" id="crl_box">` )
-    ( string_push_str b crl )
+    ( _ui_push_esc b crl )
     ( string_push_str b `</textarea>\n` )
     ( string_push_str b `            <div class="button-group">\n` )
-    ( string_push_str b `              <button class="button copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('crl_box').value); this.innerText='Copied!';">Copy CRL</button>\n` )
+    ( string_push_str b `              <button type="button" class="button copy-btn" data-copy="crl_box">Copy CRL</button>\n` )
     ( string_push_str b `              <a href="/crl" class="button">Download CRL</a>\n` )
     ( string_push_str b `            </div>\n` )
     ( string_push_str b `          </div>\n` )
@@ -236,14 +273,17 @@ $ `stdlib/core/string.nu`
     ( string_push_str b `          <a href="/" class="button primary">Return Home</a>\n` )
     ( string_push_str b `        </div>\n` )
     ( string_push_str b `      </section>\n` )
-    ^ ( _ui_wrap `Certificate Revoked` b ( string_from `revoke` ) )
+    ^ ( _ui_wrap `Certificate Revoked` b `revoke` )
 }
 
-@ ui_render_api_docs → String {
+@ ui_render_api_docs s alg_display → String {
     : String b ( string_new )
     ( string_push_str b `      <section class="card">\n` )
     ( string_push_str b `        <h2>REST API Documentation</h2>\n` )
     ( string_push_str b `        <p>Complete RESTful endpoints for PKI automation and device enrollment.</p>\n` )
+    ( string_push_str b `        <p><strong>CA signature algorithm:</strong> <code>` )
+    ( _ui_push_esc b alg_display )
+    ( string_push_str b `</code></p>\n` )
 
     ( string_push_str b `        <div class="api-endpoint">\n` )
     ( string_push_str b `          <h3>POST /init</h3>\n` )
@@ -274,6 +314,14 @@ $ `stdlib/core/string.nu`
     ( string_push_str b `        </div>\n` )
 
     ( string_push_str b `        <div class="api-endpoint">\n` )
+    ( string_push_str b `          <h3>POST /request-csr</h3>\n` )
+    ( string_push_str b `          <div class="endpoint-details">\n` )
+    ( string_push_str b `            <p>Sign a PKCS#10 CSR the device generated locally, so its private key never crosses the wire. Requires management API key.</p>\n` )
+    ( string_push_str b `            <pre>POST /request-csr\nContent-Type: application/json\nX-API-Key: your-management-key\n\n{\n  "csr": "-----BEGIN CERTIFICATE REQUEST-----\\n...",\n  "validity_days": 365\n}</pre>\n` )
+    ( string_push_str b `          </div>\n` )
+    ( string_push_str b `        </div>\n` )
+
+    ( string_push_str b `        <div class="api-endpoint">\n` )
     ( string_push_str b `          <h3>POST /revoke</h3>\n` )
     ( string_push_str b `          <div class="endpoint-details">\n` )
     ( string_push_str b `            <p>Revoke a certificate by serial number or certificate PEM. Requires management API key.</p>\n` )
@@ -298,7 +346,7 @@ $ `stdlib/core/string.nu`
     ( string_push_str b `        </div>\n` )
 
     ( string_push_str b `      </section>\n` )
-    ^ ( _ui_wrap `API Documentation` b ( string_from `api` ) )
+    ^ ( _ui_wrap `API Documentation` b `api` )
 }
 
 @ ui_default_css → String {
@@ -326,5 +374,23 @@ $ `stdlib/core/string.nu`
     ( string_push_str s `pre{background:#0f172a;color:#e2e8f0;padding:1rem;border-radius:6px;overflow-x:auto;margin:0.75rem 0;font-family:ui-monospace,Menlo,monospace;font-size:0.85rem;line-height:1.5;}\n` )
     ( string_push_str s `code{font-family:ui-monospace,Menlo,monospace;background:#f1f5f9;padding:0.15rem 0.35rem;border-radius:4px;font-size:0.9em;}\n` )
     ( string_push_str s `.api-info,.crl-info{margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--border);}.action-buttons{display:flex;gap:1rem;margin-top:1.5rem;}footer{background:#0f172a;color:#94a3b8;text-align:center;padding:1.5rem;font-size:0.9rem;}\n` )
+    ^ s
+}
+
+// The page's only script, served from /js/app.js so the Content-Security-
+// Policy can say `script-src 'self'` and mean it. Inline `onclick=`
+// handlers would force `'unsafe-inline'`, which is the same as having no
+// script policy at all.
+@ ui_app_js → String {
+    : String s ( string_new )
+    ( string_push_str s `document.addEventListener('click', function (ev) {\n` )
+    ( string_push_str s `  var btn = ev.target.closest('.copy-btn');\n` )
+    ( string_push_str s `  if (!btn) return;\n` )
+    ( string_push_str s `  var box = document.getElementById(btn.dataset.copy);\n` )
+    ( string_push_str s `  if (!box) return;\n` )
+    ( string_push_str s `  navigator.clipboard.writeText(box.value).then(function () {\n` )
+    ( string_push_str s `    btn.textContent = 'Copied!';\n` )
+    ( string_push_str s `  });\n` )
+    ( string_push_str s `});\n` )
     ^ s
 }

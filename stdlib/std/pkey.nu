@@ -14,6 +14,7 @@
 //   ( pem_to_der s pem )            → !( Vec u ) ParseErr   armor strip + base64
 //   ( ec_p256_priv_from_pem s pem ) → !( Vec u ) ParseErr   → 32-byte scalar
 //   ( ec_p256_pub_from_priv ( Vec u ) scalar ) → ( Vec u )  → 65-byte 0x04‖X‖Y
+//   ( mldsa_priv_from_pem s pem )   → !MldsaPriv ParseErr   → level + raw sk
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -171,6 +172,81 @@ $ `stdlib/std/ecdsa_p256.nu`
             : ?RsaPriv rp ( __pk_rsa_pkcs1 der )
             ( vec_free [u] der )
             ^ ?? rp { T k → @ !RsaPriv ParseErr { T k } F _ → @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } }
+        }
+    }
+}
+
+// ── ML-DSA private keys (FIPS 204) ─────────────────────────────────
+//
+// The PKCS#8 container x509_gen.nu writes and openssl 3.5+ reads:
+//
+//   SEQ { INTEGER 0,
+//         AlgorithmIdentifier { OID 2.16.840.1.101.3.4.3.{17,18,19} },
+//         OCTET STRING { OCTET STRING(sk) } }
+//
+// The OID alone fixes the parameter set — ML-DSA has no algorithm
+// parameters — so the level comes back out of the parse rather than
+// having to be supplied. `sk` is returned raw and UNVALIDATED in
+// length: only a caller that already links std/mldsa.nu can say what
+// `mldsa_sk_len level` should be, and pulling the whole scheme in here
+// just to check one integer would cost every pkey user the import.
+: MldsaPriv { i level ( Vec u ) sk }
+
+@ mldsa_priv_free MldsaPriv k → v { ( vec_free [u] . k sk ) }
+
+@ __pk_mldsa_level ( Vec u ) b DerTlv oid → i {
+    ? ( _der_oid_is b oid `608648016503040311` ) { ^ 44 } {}
+    ? ( _der_oid_is b oid `608648016503040312` ) { ^ 65 } {}
+    ? ( _der_oid_is b oid `608648016503040313` ) { ^ 87 } {}
+    ^ 0
+}
+
+@ mldsa_priv_from_pem s pem → !MldsaPriv ParseErr {
+    : !( Vec u ) ParseErr dr ( pem_to_der pem )
+    ?? dr {
+        F e → ^ @ !MldsaPriv ParseErr { F e }
+        T der → {
+            : DerTlv seq ( der_at der 0 )
+            ? | == . seq ok 0 != . seq tag 48 {
+                ( vec_free [u] der )
+                ^ @ !MldsaPriv ParseErr { F @ ParseErr { BadFormat } }
+            } {}
+            : DerTlv ver ( _der_child der seq )  // version INTEGER 0
+            : DerTlv alg ( _der_next der ver )  // AlgorithmIdentifier
+            ? | | == . alg ok 0 != . alg tag 48 == . ver ok 0 {
+                ( vec_free [u] der )
+                ^ @ !MldsaPriv ParseErr { F @ ParseErr { BadFormat } }
+            } {}
+            : i level ( __pk_mldsa_level der ( _der_child der alg ) )
+            ? == level 0 {
+                ( vec_free [u] der )
+                ^ @ !MldsaPriv ParseErr { F @ ParseErr { BadFormat } }
+            } {}
+            : DerTlv pk8 ( _der_next der alg )  // privateKey OCTET STRING
+            ? | == . pk8 ok 0 != . pk8 tag 4 {
+                ( vec_free [u] der )
+                ^ @ !MldsaPriv ParseErr { F @ ParseErr { BadFormat } }
+            } {}
+            : ( Vec u ) body ( _der_content der pk8 )
+            // The privateKey OCTET STRING wraps a DER value, and for
+            // ML-DSA that value is itself an OCTET STRING holding the
+            // key bytes. Encoders that drop the inner wrapper and store
+            // the key bare are accepted too: unwrap only when the inner
+            // TLV is an OCTET STRING that spans the whole body.
+            : ~ ( Vec u ) sk body
+            : DerTlv inner ( der_at body 0 )
+            ? & == . inner ok 1 == . inner tag 4 {
+                ? == + . inner start . inner len ( vec_len [u] body ) {
+                    = sk ( _der_content body inner )
+                    ( vec_free [u] body )
+                } {}
+            } {}
+            ( vec_free [u] der )
+            ? == ( vec_len [u] sk ) 0 {
+                ( vec_free [u] sk )
+                ^ @ !MldsaPriv ParseErr { F @ ParseErr { BadFormat } }
+            } {}
+            ^ @ !MldsaPriv ParseErr { T @ MldsaPriv { level sk } }
         }
     }
 }

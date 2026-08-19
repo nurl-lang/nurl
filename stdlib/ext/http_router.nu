@@ -521,9 +521,16 @@ $ `stdlib/ext/http_response.nu`
 // ownership of their captures).
 
 // Logging middleware. Writes "[req] METHOD path" to stderr before
-// delegating, and "[req] METHOD path → STATUS" after. Inert-by-design:
-// no allocation, no log-level gate (callers can swap in a custom
-// logger by wrapping `with_log_requests` themselves).
+// delegating, and "[req] METHOD path → STATUS" after. No log-level
+// gate (callers can swap in a custom logger by wrapping
+// `with_log_requests` themselves).
+//
+// `nurl_str_int` allocates, and auto-drop only tracks resources it saw
+// bound (spec §8.1) — an owned temporary handed straight to a call is
+// never collected. So the status rendering goes through a `: s`
+// binding: inline, a server leaks it once per request, forever, which
+// is exactly the kind of leak nobody notices until an uptime graph
+// bends.
 @ with_log_requests
 ( @ HttpResponse HttpRequest ) inner
 → ( @ HttpResponse HttpRequest ) {
@@ -539,7 +546,8 @@ $ `stdlib/ext/http_response.nu`
         ( nurl_eprint ` ` )
         ( nurl_eprint ( string_data . req path ) )
         ( nurl_eprint ` → ` )
-        ( nurl_eprint ( nurl_str_int . resp status ) )
+        : s st ( nurl_str_int . resp status )
+        ( nurl_eprint st )
         ( nurl_eprint `\n` )
         ^ resp
     }

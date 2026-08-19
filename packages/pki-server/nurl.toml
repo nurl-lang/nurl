@@ -1,7 +1,7 @@
 [package]
 name = "pki-server"
-version = "0.2.0"
-description = "A pure-NURL Private PKI (Public Key Infrastructure) server and CA manager. Provides X.509 certificate authority operations, device initialization, certificate issuance, renewal, revocation, CRL generation, API key authentication, and responsive modern web UI — 100% pure NURL with zero external dependencies."
+version = "0.3.0"
+description = "A pure-NURL Private PKI (Public Key Infrastructure) server and CA manager. Provides X.509 certificate authority operations with a choice of classical ECDSA P-256 or post-quantum ML-DSA (FIPS 204) signatures, device initialization, certificate issuance, PKCS#10 CSR signing, renewal, revocation, CRL generation, API key authentication, and a responsive web UI — 100% pure NURL with zero external dependencies."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/nurl-lang/nurl-lang"
 
