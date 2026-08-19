@@ -63,7 +63,7 @@ jobs:
       # apt mirror degraded repeatedly (2026-08-19) and every job whose
       # first step was `apt-get update` burned its whole timeout there.
       # Pin the DATED tag; :latest is never referenced from CI.
-      image: nurllang/ci:ubuntu24-20260819
+      image: nurllang/ci:ubuntu24-20260819-r2
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -304,7 +304,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     container:
-      image: nurllang/ci:ubuntu24-20260819
+      image: nurllang/ci:ubuntu24-20260819-r2
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -461,7 +461,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     container:
-      image: nurllang/ci:ubuntu24-20260819
+      image: nurllang/ci:ubuntu24-20260819-r2
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}

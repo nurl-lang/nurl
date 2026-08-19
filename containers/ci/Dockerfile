@@ -37,6 +37,13 @@ ARG DEBIAN_FRONTEND=noninteractive
 # sudo (workflow steps spell `sudo apt-get ...`; with the packages
 # pre-installed those lines go away, but a stray sudo in a script must
 # not become the new mystery failure).
+#
+# libclang-rt-dev is the one GitHub's bare runner image hid: Ubuntu 24
+# splits the sanitizer runtimes out of `clang`, the runner image ships
+# them pre-installed, and the first containerized ASan job died with
+# "cannot find libclang_rt.asan-x86_64.a" 35 seconds in.
+# python3-xxhash replaces a per-run `pip install xxhash` in the zstd
+# gate — the same per-run network fetch this image exists to remove.
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         bash \
         binutils \
@@ -49,6 +56,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         grub-efi-amd64-bin \
         grub-pc-bin \
         jq \
+        libclang-rt-dev \
         libcurl4-openssl-dev \
         libpq-dev \
         libsqlite3-dev \
@@ -59,6 +67,8 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         openssl \
         pkg-config \
         python3 \
+        python3-pip \
+        python3-xxhash \
         qemu-system-arm \
         qemu-system-misc \
         qemu-system-x86 \
@@ -86,4 +96,10 @@ RUN curl -fsSL --retry 5 -o /tmp/zig.tar.xz \
 # blanket-trusting is the container-CI convention.
 RUN git config --system --add safe.directory '*'
 
-ENV NURL_ZIG=/opt/zig/zig
+# Deliberately NO global NURL_ZIG. nurl.sh prefers a bundled zig when it
+# sees one, and zig 0.13's own ASan runtime is a different LLVM
+# generation from system clang 18's instrumentation — a runtime_san.o
+# compiled by one and linked by the other dies with "undefined symbol:
+# __asan_unregister_elf_globals". On the bare runners NURL_ZIG was only
+# ever set per-step by the unikernel job, and the workflow still does
+# exactly that; the image just provides /opt/zig for it to point at.
