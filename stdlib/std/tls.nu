@@ -35,19 +35,49 @@ $ `stdlib/std/tls_verify.nu`
 
 & `libc` @ nurl_tcp_connect s host i port → i
 
-// Write all of `data` to the raw socket fd. Returns F on any error. tls.nu
-// is deliberately self-contained over the libc socket (nurl_tcp_* are
-// compiler builtins) so it carries no dependency on stdlib/std/net.nu —
-// that lets net.nu import THIS module and dispatch its polymorphic TcpConn
+// Fiber/reactor primitives (nurl_fiber_current, nurl_reactor_wait_*,
+// nurl_tcp_get_fd / _timeout_ms / _set_nonblock). FFI-only module, so
+// this import keeps tls.nu free of any stdlib/std/net.nu dependency —
+// net.nu imports THIS module and dispatches its polymorphic TcpConn
 // reads/writes to the pure TLS stack without an import cycle.
+$ `stdlib/std/async_ffi.nu`
+
+// Park the current fiber until `raw`'s socket is readable (want = 0)
+// or writable (want = 1), honouring the handle's configured timeout
+// (0 = wait for ever, matching the blocking path's SO_RCVTIMEO
+// semantics). Returns T when the socket is ready, F on timeout or a
+// missing fiber context.
+@ __tls_io_wait i raw i want → b {
+    : i fd ( nurl_tcp_get_fd raw )
+    : i ms ( nurl_tcp_timeout_ms raw )
+    : i deadline ? > ms 0 ms - 0 1
+    : i rc ? != want 0 ( nurl_reactor_wait_write fd deadline ) ( nurl_reactor_wait_read fd deadline )
+    ^ > rc 0
+}
+
+// Write all of `data` to the raw socket fd. Returns F on any error.
+//
+// Context-aware: on a fiber the socket is flipped non-blocking and an
+// EAGAIN parks on the reactor until writable (the worker pthread stays
+// free for other fibers); off a fiber the write blocks in the kernel,
+// which is what a synchronous client wants.
 @ _tls_sock_write i fd ( Vec u ) data → b {
     : *u dp ( vec_data [u] data )
     : i n ( vec_len [u] data )
+    : b on_fiber != ( nurl_fiber_current ) 0
+    ? on_fiber { ( nurl_tcp_set_nonblock fd 1 ) } {}
     : ~ i off 0
     ~ < off n {
         : i wn ( nurl_tcp_write fd # s + # i dp off - n off )
-        ? <= wn 0 { ^ F } {}
-        = off + off wn
+        ? <= wn 0 {
+            : ~ b retry F
+            ? & on_fiber == ( nurl_tcp_err_kind fd ) 7 {
+                = retry ( __tls_io_wait fd 1 )
+            } {}
+            ? retry {} { ^ F }
+        } {
+            = off + off wn
+        }
     }
     ^ T
 }
@@ -230,17 +260,28 @@ $ `stdlib/std/tls_verify.nu`
 
 // ── socket record I/O ─────────────────────────────────────────────
 // Ensure rxbuf holds at least `n` bytes, reading from the socket.
-// Direct blocking read via the runtime socket primitive. tcp_read_chunk
-// dispatches to a fiber/epoll path when a fiber context is present, which
-// parks with no reactor to wake it in a plain program; the raw blocking
-// read is what a synchronous client wants.
+//
+// Context-aware: on a fiber the socket is non-blocking and an EAGAIN
+// parks on the reactor until readable — the worker pthread stays free,
+// so a fiber HTTP-over-TLS server multiplexes its connections instead
+// of pinning one worker per idle keep-alive conn. Off a fiber the raw
+// blocking read is what a synchronous client wants (SO_RCVTIMEO still
+// bounds it; the reactor deadline mirrors that via __tls_io_wait).
 @ __fill * TlsConn c i n → !i TlsErr {
     : i raw . c fd
+    : b on_fiber != ( nurl_fiber_current ) 0
+    ? on_fiber { ( nurl_tcp_set_nonblock raw 1 ) } {}
     ~ < ( vec_len [u] . c rxbuf ) n {
         : ( Vec u ) tmp ( vec_with_cap [u] 16384 )
         : *u p ( vec_data [u] tmp )
         : s pbuf # s p
-        : i got ( nurl_tcp_read raw pbuf 16384 )
+        : ~ i got ( nurl_tcp_read raw pbuf 16384 )
+        : ~ b timed_out F
+        ~ & ! timed_out & on_fiber & < got 0 == ( nurl_tcp_err_kind raw ) 7 {
+            ? ( __tls_io_wait raw 0 ) {
+                = got ( nurl_tcp_read raw pbuf 16384 )
+            } { = timed_out T }
+        }
         ? < got 0 { ( vec_free [u] tmp ) ^ @ !i TlsErr { F # TlsErr TlsRead } } {}
         ? == got 0 { ( vec_free [u] tmp ) ^ @ !i TlsErr { F # TlsErr TlsClosed } } {}
         : b _ok ( vec_set_len [u] tmp got )

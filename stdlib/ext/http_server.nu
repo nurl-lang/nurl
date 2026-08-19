@@ -337,13 +337,13 @@ $ `stdlib/ext/http_response.nu`
             F e → {
                 : s nm ( http_req_err_name e )
                 ? != 0 ( nurl_str_eq nm `HttpReqIncomplete` ) {
-                    // Incomplete = keep reading. Top up carry.
-                    : !( Vec u ) NetErr r ( tcp_read_chunk conn 4096 )
+                    // Incomplete = keep reading. Top up carry in place —
+                    // tcp_read_into appends straight into carry's spare
+                    // capacity, skipping tcp_read_chunk's per-read
+                    // throwaway Vec (alloc + copy + free per read).
+                    : !i NetErr r ( tcp_read_into conn carry 4096 )
                     ?? r {
-                        T chunk → {
-                            : i got ( vec_len [u] chunk )
-                            ( vec_extend [u] carry chunk )
-                            ( vec_free [u] chunk )
+                        T got → {
                             ? <= got 0 {
                                 // 0 bytes can't happen (NetClosed is returned
                                 // as Err) but guard against runtime bugs.
@@ -386,14 +386,9 @@ $ `stdlib/ext/http_response.nu`
 @ __carry_ensure TcpConn conn ( Vec u ) carry i n → b {
     : ~ b ok T
     ~ & ok < ( vec_len [u] carry ) n {
-        : !( Vec u ) NetErr r ( tcp_read_chunk conn 4096 )
+        : !i NetErr r ( tcp_read_into conn carry 4096 )
         ?? r {
-            T chunk → {
-                : i got ( vec_len [u] chunk )
-                ( vec_extend [u] carry chunk )
-                ( vec_free [u] chunk )
-                ? <= got 0 { = ok F } {}
-            }
+            T got → { ? <= got 0 { = ok F } {} }
             F _ → { = ok F }
         }
     }
@@ -417,14 +412,9 @@ $ `stdlib/ext/http_response.nu`
         }
         ? >= found 0 {} {
             ? >= len cap { = stop T } {
-                : !( Vec u ) NetErr r ( tcp_read_chunk conn 4096 )
+                : !i NetErr r ( tcp_read_into conn carry 4096 )
                 ?? r {
-                    T chunk → {
-                        : i got ( vec_len [u] chunk )
-                        ( vec_extend [u] carry chunk )
-                        ( vec_free [u] chunk )
-                        ? <= got 0 { = stop T } {}
-                    }
+                    T got → { ? <= got 0 { = stop T } {} }
                     F _ → { = stop T }
                 }
             }
@@ -559,15 +549,18 @@ $ `stdlib/ext/http_response.nu`
 // HTTP/1.1's keep-alive default applies and the caller may continue
 // reading further requests on the same socket.
 //
-// Frees `r` after serialise+write regardless of outcome.
+// Frees `r` after serialise+write regardless of outcome. `wire` is the
+// connection-level scratch buffer (owned by _serve_keepalive_loop):
+// serialising into it instead of a fresh Vec saves an allocate/free
+// pair per response on the keep-alive hot path.
 
-@ __write_response TcpConn conn HttpResponse r b force_close → !v NetErr {
+@ __write_response TcpConn conn HttpResponse r b force_close ( Vec u ) wire → !v NetErr {
     ? force_close {
         ( response_set_header r `Connection` `close` )
     } {}
-    : ( Vec u ) wire ( response_serialize r )
+    ( vec_clear [u] wire )
+    ( response_serialize_to r wire )
     : !v NetErr wr ( tcp_write_all conn wire )
-    ( vec_free [u] wire )
     ( http_response_free r )
     ^ wr
 }
@@ -659,63 +652,71 @@ $ `stdlib/ext/http_response.nu`
 // `tcp_accept` itself fails — per-request write/parse errors close
 // the connection but do not bubble out.
 
+// Everything a freshly accepted connection gets, regardless of the
+// concurrency model driving it (sync loop, worker pool, or a per-conn
+// fiber): the DoS admission gate, the per-conn idle timeout, the
+// keep-alive serve loop, and the close. Consumes `conn`.
+@ __serve_accepted HttpServer s TcpConn conn → v {
+    // DoS gate. If the server was constructed with
+    // server_new_with_dos, dos_state holds a runtime-side
+    // counter+IP-table. acquire returns 0 when the global or
+    // per-IP cap is exceeded; we close the conn immediately
+    // (no canned 503 — that costs more than rejecting at the
+    // TCP layer). On accept: extract peer IP (best-effort —
+    // tcp_peer_addr returns "ip:port"; we split on ':'). On
+    // release: pass the same IP back so the counter unwinds.
+    : s ds_rp . s dos_state
+    : i ds_raw # i ds_rp
+    : ~ s peer_ip ``
+    // When non-NULL, owns the String whose buffer `peer_ip` aliases
+    // (the "ip:port" truncated at the colon). Freed on EVERY exit
+    // path below — the DoS path used to leak one String per
+    // connection, which an attacker opening/closing connections in a
+    // loop turns into unbounded heap growth.
+    : ~ s ip_ctl # s 0
+    ? != ds_raw 0 {
+        : s addr ( tcp_peer_addr conn )
+        : i an ( nurl_str_len addr )
+        : ~ i colon -1
+        : ~ i k 0
+        ~ & == colon -1 < k an {
+            ? == 58 ( nurl_str_get addr k ) { = colon k } {}
+            = k + k 1
+        }
+        ? > colon 0 {
+            : String ip_only ( string_new )
+            : ~ i j 0
+            ~ < j colon {
+                ( string_push_char ip_only ( nurl_str_get addr j ) )
+                = j + j 1
+            }
+            = peer_ip ( string_data ip_only )
+            // Retain the ctl so we can free the String once the
+            // serve loop AND the dos_state_release that consumes
+            // peer_ip are done — `string_data` aliases this buffer,
+            // so it must outlive every peer_ip use below.
+            = ip_ctl . ip_only ctl
+        } { = peer_ip addr }
+        : i ok ( dos_state_try_acquire ds_raw peer_ip )
+        ? == ok 0 {
+            ? != 0 # i ip_ctl { ( string_free @ String { ip_ctl } ) } {}
+            ( tcp_close_conn conn )
+            ^ v
+        } {}
+    } {}
+    : i ito . s idle_timeout_ms
+    ? > ito 0 { ( tcp_set_timeout conn ito ) } {}
+    ( _serve_keepalive_loop s conn )
+    ? != ds_raw 0 { ( dos_state_release ds_raw peer_ip ) } {}
+    ? != 0 # i ip_ctl { ( string_free @ String { ip_ctl } ) } {}
+    ( tcp_close_conn conn )
+}
+
 @ server_run_once HttpServer s → !v NetErr {
     : !TcpConn NetErr ar ( tcp_accept . s listener )
     ?? ar {
         T conn → {
-            // DoS gate. If the server was constructed with
-            // server_new_with_dos, dos_state holds a runtime-side
-            // counter+IP-table. acquire returns 0 when the global or
-            // per-IP cap is exceeded; we close the conn immediately
-            // (no canned 503 — that costs more than rejecting at the
-            // TCP layer). On accept: extract peer IP (best-effort —
-            // tcp_peer_addr returns "ip:port"; we split on ':'). On
-            // release: pass the same IP back so the counter unwinds.
-            : s ds_rp . s dos_state
-            : i ds_raw # i ds_rp
-            : ~ s peer_ip ``
-            // When non-NULL, owns the String whose buffer `peer_ip` aliases
-            // (the "ip:port" truncated at the colon). Freed on EVERY exit
-            // path below — the DoS path used to leak one String per
-            // connection, which an attacker opening/closing connections in a
-            // loop turns into unbounded heap growth.
-            : ~ s ip_ctl # s 0
-            ? != ds_raw 0 {
-                : s addr ( tcp_peer_addr conn )
-                : i an ( nurl_str_len addr )
-                : ~ i colon -1
-                : ~ i k 0
-                ~ & == colon -1 < k an {
-                    ? == 58 ( nurl_str_get addr k ) { = colon k } {}
-                    = k + k 1
-                }
-                ? > colon 0 {
-                    : String ip_only ( string_new )
-                    : ~ i j 0
-                    ~ < j colon {
-                        ( string_push_char ip_only ( nurl_str_get addr j ) )
-                        = j + j 1
-                    }
-                    = peer_ip ( string_data ip_only )
-                    // Retain the ctl so we can free the String once the
-                    // serve loop AND the dos_state_release that consumes
-                    // peer_ip are done — `string_data` aliases this buffer,
-                    // so it must outlive every peer_ip use below.
-                    = ip_ctl . ip_only ctl
-                } { = peer_ip addr }
-                : i ok ( dos_state_try_acquire ds_raw peer_ip )
-                ? == ok 0 {
-                    ? != 0 # i ip_ctl { ( string_free @ String { ip_ctl } ) } {}
-                    ( tcp_close_conn conn )
-                    ^ @ !v NetErr { T 0 }
-                } {}
-            } {}
-            : i ito . s idle_timeout_ms
-            ? > ito 0 { ( tcp_set_timeout conn ito ) } {}
-            ( _serve_keepalive_loop s conn )
-            ? != ds_raw 0 { ( dos_state_release ds_raw peer_ip ) } {}
-            ? != 0 # i ip_ctl { ( string_free @ String { ip_ctl } ) } {}
-            ( tcp_close_conn conn )
+            ( __serve_accepted s conn )
             ^ @ !v NetErr { T 0 }
         }
         F e → ^ @ !v NetErr { F e }
@@ -753,6 +754,10 @@ $ `stdlib/ext/http_response.nu`
     // visible to the next _read_request_head call without re-reading
     // from the socket.
     : ( Vec u ) carry ( vec_with_cap [u] 4096 )
+    // Connection-level response wire buffer, cleared and refilled by
+    // __write_response per response — one allocation per CONNECTION
+    // instead of one per response.
+    : ( Vec u ) wire ( vec_with_cap [u] 256 )
     // Pre-allocated panic fallback response, hoisted OUT of the request
     // loop: on the success path the handler's response replaces it and
     // it survives untouched into the next iteration, so a keep-alive
@@ -846,7 +851,7 @@ $ `stdlib/ext/http_response.nu`
                         = n_served + n_served 1
                         : b at_cap ? > max_req 0 >= n_served max_req T
                         : b should_close | | | req_close resp_close at_cap timed_out
-                        : !v NetErr wr ( __write_response conn final_resp should_close )
+                        : !v NetErr wr ( __write_response conn final_resp should_close wire )
                         ( request_free req )
                         // A panic (or panic+timeout) consumed the
                         // connection-level fallback — rebuild it. Cold
@@ -870,7 +875,7 @@ $ `stdlib/ext/http_response.nu`
                     }
                 } {
                     : HttpResponse er ( response_text 400 `malformed body\n` )
-                    : !v NetErr _wr ( __write_response conn er T )
+                    : !v NetErr _wr ( __write_response conn er T wire )
                     ( request_free req )
                     = done T
                 }
@@ -884,13 +889,14 @@ $ `stdlib/ext/http_response.nu`
                 : s nm ( http_req_err_name e )
                 ? != 0 ( nurl_str_eq nm `HttpReqIo` ) {} {
                     : HttpResponse er ( _parse_err_response e )
-                    : !v NetErr _wr ( __write_response conn er T )
+                    : !v NetErr _wr ( __write_response conn er T wire )
                 }
                 = done T
             }
         }
     }
     ( http_response_free panic_resp )
+    ( vec_free [u] wire )
     ( vec_free [u] carry )
 }
 
@@ -1106,14 +1112,24 @@ $ `stdlib/ext/http_response.nu`
 
 $ `stdlib/std/async.nu`
 
-// Per-conn fiber body — runs the existing keep-alive loop (which
-// uses the now-context-aware tcp_read_chunk / tcp_write_all) then
-// closes. Lifted to top-level so the surrounding accept-loop closure
-// stays simple — nested ":"-binding of a closure inside another
-// closure's body provoked an IR-codegen bug in earlier sweeps.
-@ __async_serve_conn HttpServer s TcpConn c → v {
-    ( _serve_keepalive_loop s c )
-    ( tcp_close_conn c )
+// Per-conn fiber body — the same admission + keep-alive + close path
+// every other concurrency model gets (__serve_accepted applies the DoS
+// gate and the per-conn idle timeout, then runs the loop over the
+// context-aware tcp_read_chunk / tcp_write_all). Lifted to top-level so
+// the surrounding accept-loop closure stays simple — nested ":"-binding
+// of a closure inside another closure's body provoked an IR-codegen bug
+// in earlier sweeps.
+@ __async_serve_conn HttpServer s TcpConn c0 → v {
+    // Complete the TLS handshake (no-op for plaintext) HERE, on the
+    // connection's own fiber — the accept loop hands over the bare
+    // transport conn precisely so N clients' handshakes overlap
+    // instead of serialising on the accept fiber. On Err the TLS
+    // layer has already closed the socket; there is no one to answer.
+    : !TcpConn NetErr hs ( tcp_conn_complete_tls . s listener c0 )
+    ?? hs {
+        T c → { ( __serve_accepted s c ) }
+        F _ → {}
+    }
 }
 
 // Top-level accept loop. Spawned as a fiber by `server_run_async`;
@@ -1125,7 +1141,9 @@ $ `stdlib/std/async.nu`
     : TcpListener listener . s listener
     : ~ b done F
     ~ ! done {
-        : !TcpConn NetErr cr ( tcp_accept listener )
+        // Transport accept only — each conn fiber completes its own TLS
+        // handshake (see __async_serve_conn), so handshakes overlap.
+        : !TcpConn NetErr cr ( tcp_accept_transport listener )
         ?? cr {
             T c → {
                 // spawn_owned: the runtime frees this per-connection
@@ -1133,7 +1151,17 @@ $ `stdlib/std/async.nu`
                 // plain `spawn` (env BORROWED) it leaked per accept.
                 ( spawn_owned \ → v { ( __async_serve_conn s c ) } )
             }
-            F e → { = done T }
+            F e → {
+                // Mirror server_run's policy: a failed TLS handshake is
+                // a per-CONNECTION event (a port scanner or plain-HTTP
+                // probe against the TLS port) — keep accepting. Any
+                // other error means the listener is gone (clean stop)
+                // or broken: end the loop. (With the handshake on the
+                // conn fiber this arm should not see NetTlsHandshake,
+                // but the policy costs nothing to keep.)
+                : s nm ( net_err_name e )
+                ? != 0 ( nurl_str_eq nm `NetTlsHandshake` ) {} { = done T }
+            }
         }
     }
 }

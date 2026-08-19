@@ -107,22 +107,23 @@ def main():
         "servers and the same load over a self-signed EC (P-256) "
         "certificate, which `oha` accepts with `--insecure`. The NURL "
         "server is the `packages/http` HttpApp facade (`http_app_listen` "
-        "/ `http_app_listen_tls`) with a 10-thread worker pool — the "
-        "surface a real NURL service deploys."
+        "/ `http_app_listen_tls`) in `http_app_async` mode — fiber per "
+        "connection on the M:N async runtime, one worker pthread per "
+        "core, the surface a scaling NURL service deploys (and the same "
+        "model as the Rust peer's tokio multi-thread runtime)."
     )
     w("")
     w(
         "**Read the throughput columns, not the latency columns, at high "
         "concurrency.** These are *closed-loop* measurements: `oha` holds "
         "C connections open and fires the next request the instant one "
-        "returns. When a server's in-flight work saturates below C (NURL's "
-        "10 blocking workers do, by design), the extra connections queue "
-        "inside `oha` and never reach the server, so `req/s` is the "
-        "server's true saturation throughput but the latency percentiles "
-        f"describe only the few connections in flight. Such cells are "
-        f"marked {DAGGER} and left un-bold: their latency is not a "
-        "service-level number (that needs an open-loop generator — see "
-        "*Planned rigor*). The effective in-flight count is "
+        "returns. If a server's in-flight work saturates below C, the "
+        "extra connections queue inside `oha` and never reach the server, "
+        "so `req/s` is the server's true saturation throughput but the "
+        "latency percentiles describe only the few connections in flight. "
+        f"Such cells are marked {DAGGER} and left un-bold: their latency "
+        "is not a service-level number (that needs an open-loop generator "
+        "— see *Planned rigor*). The effective in-flight count is "
         "`req/s x mean-latency` (Little's law)."
     )
     w("")
