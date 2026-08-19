@@ -10,6 +10,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`SSL_CERT_FILE` anchors verify-full** — `std/tls_verify.nu` reads the
+  de-facto standard environment variable every mainstream TLS stack honors
+  (OpenSSL semantics: when set, the file REPLACES the system bundle, and an
+  unreadable path fails loudly with "no trust anchor" rather than silently
+  falling back). Until now verify-full could anchor only to the three
+  hardcoded system bundle paths — a private CA or a self-signed lab server
+  meant editing /etc/ssl or giving up on verification. Gated by
+  `compiler/tests/tls_ssl_cert_file.nu`, a pure-NURL end-to-end: mint a
+  certificate with `x509_selfsigned_p256`, serve it through the same
+  `tcp_listen_tls` PEM path `packages/http` uses, verify-full against it as
+  its own anchor over an X25519MLKEM768 handshake — plus the
+  override-replaces and default-unchanged halves, mutation-tested.
+
+### Fixed
+
+- **`pqc probe` no longer reports "handshake failed" for an untrusted
+  certificate** — a probe's question is "does this server negotiate a
+  post-quantum group", and the handshake answers it whether or not the
+  chain anchors here. On TlsBadCert it retries insecurely and reports the
+  real group with a `(certificate UNTRUSTED here)` note, keeping "not
+  post-quantum" and "not trusted" apart. And `probe HOST:PORT` now works
+  as the usage always documented — the port suffix was parsed by nothing,
+  so probing anything but :443 silently dialled the wrong port.
+
+### Changed
+
+- **Polynomial serialisation no longer pushes one byte at a time** —
+  `__bitpack` (ML-DSA) and `__byte_encode` (ML-KEM) reserve their exact
+  output (a polynomial packs to 32·bits bytes) and write through the raw
+  pointer. The per-byte `vec_push` cursor was a call, a capacity check and a
+  possible grow per byte, ~15,000 times per ML-DSA-65 signing attempt, and
+  the hottest scalar loop in both `mldsa_sign_mu` and K-PKE encryption.
+  ML-KEM-512 encaps 27 → 20 µs, decaps 32 → 25 µs; ML-KEM-768
+  encaps/decaps 32/39 → 30/38 µs. ACVP byte-exact throughout.
+
+### Added
+
 - **`bench/pq.nu`** — the post-quantum stack measured, with the same-host
   reference numbers (pq-crystals / sphincsplus, ref C and AVX2, dated) in
   the header as the bar.

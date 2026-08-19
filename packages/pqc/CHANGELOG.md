@@ -5,6 +5,17 @@ All notable changes to `pqc` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-08-19
+
+### Fixed
+
+- `probe` reports the negotiated group even when the certificate does not
+  anchor to this machine's trust store, marking it
+  `(certificate UNTRUSTED here)` instead of the misleading
+  "handshake failed" — the handshake had succeeded; verification failed.
+- `probe HOST:PORT` works as documented; the `:PORT` suffix used to be
+  ignored and every probe dialled `--port` (default 443).
+
 ## [0.2.0] — 2026-08-17
 
 ### Added

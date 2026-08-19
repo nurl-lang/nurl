@@ -301,8 +301,23 @@ $ `stdlib/std/x509.nu`
     ^ -1
 }
 
-// Read the system CA bundle (first existing well-known path).
+// Read the CA bundle: SSL_CERT_FILE if set, else the first existing
+// well-known system path.
+//
+// SSL_CERT_FILE is the de-facto override every mainstream TLS consumer
+// honors (OpenSSL, curl, Go, Python, ...), and without it there was no
+// way to anchor verify-full to anything but the distribution's bundle —
+// a private CA or a test root meant editing /etc/ssl or giving up on
+// verification entirely. OpenSSL semantics: when set, the file REPLACES
+// the system bundle rather than extending it, and a path that does not
+// read yields an empty store — verification then fails with "no trust
+// anchor", which is loud, rather than silently falling back to a bundle
+// the caller asked to override.
 @ __v_load_bundle → ( Vec u ) {
+    : s ov ( getenv `SSL_CERT_FILE` )
+    ? != # i ov 0 {
+        ? > ( nurl_str_len ov ) 0 { ^ ( __v_read_or_empty ov ) } {}
+    } {}
     : ( Vec u ) r1 ( __v_read_or_empty `/etc/ssl/certs/ca-certificates.crt` )
     ? > ( vec_len [u] r1 ) 0 { ^ r1 } {}
     ( vec_free [u] r1 )

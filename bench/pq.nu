@@ -16,11 +16,11 @@
 // and their hand-written AVX2:
 //
 //     µs/op                pure NURL    their ref C    their AVX2
-//     ML-KEM-768 keygen        31           47             11.8
-//                encaps        32           63             11.7
-//                decaps        39           79             12.5
+//     ML-KEM-768 keygen        30           47             11.8
+//                encaps        30           63             11.7
+//                decaps        38           79             12.5
 //     ML-DSA-65  sign         286          569            113
-//                verify        90          160             45
+//                verify        85          160             45
 //     SLH-DSA-128f keygen     656         4696           1104
 //                  sign     19807       112721          25546
 //                  verify     1616         7953           1894

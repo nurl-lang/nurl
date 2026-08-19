@@ -594,6 +594,15 @@ simd @ __cbd_batch * i16 dst ( Vec u ) seed i n0 i count i eta → v {
 // drains to fewer than 8 bits before each new value goes in.
 
 @ __byte_encode * i16 a i off i d ( Vec u ) out → v {
+    // Exactly 32·d bytes per polynomial: reserve once, write raw. See
+    // __bitpack in std/mldsa.nu for why — the same per-byte vec_push
+    // cursor was the hot scalar loop of K-PKE encryption here.
+    : i nbytes * 32 d
+    : i base ( vec_len [u] out )
+    ( vec_reserve [u] out nbytes )
+    : b _l ( vec_set_len [u] out + base nbytes )
+    : *u dst ( vec_data [u] out )
+    : ~ i w base
     : ~ i acc 0
     : ~ i nbits 0
     : ~ i i 0
@@ -601,7 +610,8 @@ simd @ __cbd_batch * i16 dst ( Vec u ) seed i n0 i count i eta → v {
         = acc | acc << & # i . a + off i - << 1 d 1 nbits
         = nbits + nbits d
         ~ >= nbits 8 {
-            ( vec_push [u] out # u & acc 255 )
+            = . dst w # u & acc 255
+            = w + w 1
             = acc >> acc 8
             = nbits - nbits 8
         }

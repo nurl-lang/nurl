@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+verify_with_anchor   ok
+group_is_hybrid_pq   ok
+override_replaces    ok
+default_still_fails  ok
