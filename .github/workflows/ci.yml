@@ -56,30 +56,24 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    container:
+      # containers/ci/Dockerfile — clang/llvm, the FFI dev libraries,
+      # qemu + grub for the unikernel gates, gdb, zstd, and zig at
+      # /opt/zig, all pre-installed. Exists because the runner pool's
+      # apt mirror degraded repeatedly (2026-08-19) and every job whose
+      # first step was `apt-get update` burned its whole timeout there.
+      # Pin the DATED tag; :latest is never referenced from CI.
+      image: nurllang/ci:ubuntu24-20260819-r2
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install build deps (clang + optional FFI libs)
-        # The optional dev packages let the FFI sentinel checks
-        # (stdlib/runtime.<lib>) light up so the corresponding ext/
-        # modules build. With any of these missing, the affected
-        # FFI calls return their *_Other / *_Unsupported variant
-        # instead of breaking the build.
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            clang \
-            llvm \
-            pkg-config \
-            libcurl4-openssl-dev \
-            libssl-dev \
-            libsqlite3-dev \
-            libpq-dev \
-            zlib1g-dev \
-            libzstd-dev
-          clang --version
+      - name: Toolchain versions
+        run: clang --version | head -1
 
       - name: ./build.sh (stage1 ≡ stage2 fixed point + run_tests.sh)
         # build.sh itself prints the final line "BUILD SUCCESS &
@@ -287,7 +281,6 @@ jobs:
         # must be REFUSED without a crash or a hang, and resident size
         # must stay flat across hundreds of round trips.
         run: |
-          sudo apt-get install -y --no-install-recommends zstd
           ./tools/zstd_gate.sh --quick
 
       - name: HTTP-server per-request leak gate
@@ -302,9 +295,7 @@ jobs:
         # broken !DI emission. This builds the --debug regression
         # (dwarf_closure_drop, the -O2 inliner crash) plus the gdb
         # behavioural checks; gdb makes the source-level asserts run too.
-        run: |
-          sudo apt-get install -y --no-install-recommends gdb
-          ./tools/dwarf_test.sh
+        run: ./tools/dwarf_test.sh
 
   unikernel:
     name: unikernel (no libc, and then no operating system)
@@ -312,6 +303,11 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    container:
+      image: nurllang/ci:ubuntu24-20260819-r2
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
 
     # Two gates, and they are different questions. The first asks
     # whether the ordinary test corpus still runs with no libc linked —
@@ -328,19 +324,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install build deps
-        # The grub/xorriso/mtools half is what lets `baremetal_gate`
-        # package a hybrid BIOS+UEFI disk and boot it, rather than
-        # checking the Multiboot2 header and skipping the rest. Both
-        # module directories are named because a missing one produces a
-        # single-firmware image, which is a bug that only shows up on
-        # hardware the CI runner is not.
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            clang binutils qemu-system-x86 qemu-system-arm qemu-system-misc curl \
-            grub-common grub-pc-bin grub-efi-amd64-bin xorriso mtools
 
       - name: Build the compiler
         run: ./build.sh --no-tests
@@ -383,16 +366,6 @@ jobs:
         # line the way the plan says the host states the epoch.
         run: ./unikernel/run_qemu_tests.sh
 
-      - name: Fetch zig (the AArch64 cross toolchain)
-        # The same zig the ecosystem's install ships and the playground
-        # image carries; the aarch64 image is built with it rather than
-        # with a distro cross-gcc, so the toolchain in CI is the one a
-        # user gets.
-        run: |
-          ZIG_VERSION=0.13.0
-          curl -fsSL --retry 5 -o /tmp/zig.tar.xz \
-            "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
-          mkdir -p /opt/zig && sudo tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
 
       - name: runtime.c compiles for every playground cross target
         # The playground image warms stdlib/runtime.<target>.o for six
@@ -487,24 +460,15 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    container:
+      image: nurllang/ci:ubuntu24-20260819-r2
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install build deps (clang + optional FFI libs)
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            clang \
-            pkg-config \
-            libcurl4-openssl-dev \
-            libssl-dev \
-            libsqlite3-dev \
-            libpq-dev \
-            zlib1g-dev \
-            libzstd-dev
-          clang --version
 
       - name: ./build.sh --san (instrumented bootstrap)
         # --no-tests so the standard runner does not run with the
