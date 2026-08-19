@@ -172,6 +172,24 @@ $ `stdlib/core/vec.nu`
 @ json_float f x → Json {
     : s raw ( nurl_str_float x )
     : String s ( string_from raw )
+    // An integral double prints as bare digits (`85.0` → `85`), which a
+    // strictly typed consumer reads as an integer field — real schema
+    // drift when the value happens to land on a whole number. Keep the
+    // float-ness in the text: when the raw form is digits (with an
+    // optional leading `-`) and nothing else, append `.0`. Anything
+    // with a `.`, an exponent, or a non-finite spelling (inf/nan)
+    // already reads as a float and passes through untouched.
+    : i n ( nurl_str_len raw )
+    : *u bp # *u raw
+    : ~ b plain > n 0
+    : ~ i k 0
+    ~ < k n {
+        : i c # i . bp k
+        : b ok | != 0 ( is_digit c ) & == c 45 == k 0
+        ? ok {} { = plain F }
+        = k + k 1
+    }
+    ? plain { ( string_push_str s `.0` ) } {}
     ^ @ Json { JNum s }
 }
 

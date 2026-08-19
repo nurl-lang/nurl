@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+integral: 85.0
+neg integral: -3.0
+zero: 0.0
+fractional: 2.5
+exponent: 1e+300
+tiny: 0.001
+neg fractional: -0.25

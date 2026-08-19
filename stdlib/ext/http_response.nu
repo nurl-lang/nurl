@@ -59,15 +59,17 @@
 //     bytes; nothing is moved. The transition Connection: close is
 //     not implied — caller manages keep-alive separately.
 //
-// Notes on inherited language gaps:
+// Notes on formerly-inherited language gaps (fixed 2026-05-14 by the
+// multi-field payload boxing fix; `compiler/tests/vec_get_multifield.nu`
+// pins both):
 //
-//   * Multi-field structs can't ride `! T E` Ok arms. `response_*`
-//     constructors return HttpResponse directly (it's a pure
-//     allocation, no failure mode). Streaming helpers DO use
-//     `! v NetErr` because `v` (i64-fits) and `NetErr` (enum) both
-//     ride the encoding fine.
-//   * `vec_get [Header]` miscompiles for multi-field Header. Iteration
-//     over headers uses `vec_data` + `*Header` direct-pointer access.
+//   * Multi-field structs ride `! T E` Ok arms fine now. `response_*`
+//     constructors still return HttpResponse directly because it's a
+//     pure allocation with no failure mode, not because the encoding
+//     couldn't carry it. Streaming helpers use `! v NetErr` as before.
+//   * `vec_get [Header]` is compiler-correct now. Iteration over
+//     headers keeps `vec_data` + `*Header` direct-pointer access for
+//     the zero-copy borrow (same as http_request.nu's `header_get`).
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`
@@ -277,7 +279,8 @@ $ `stdlib/ext/json.nu`
 }
 
 // Case-insensitive header presence check. Direct *Header iteration —
-// see http_request.nu's note re. the `vec_get [Header]` miscompile.
+// a zero-copy borrow, not a workaround; see http_request.nu's note
+// (the old `vec_get [Header]` miscompile was fixed 2026-05-14).
 @ __has_header_ci ( Vec Header ) hs s name → b {
     : i n ( vec_len [Header] hs )
     : *Header hdata ( vec_data [Header] hs )
