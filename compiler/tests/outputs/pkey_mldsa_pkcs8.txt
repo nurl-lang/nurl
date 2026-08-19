@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+mldsa44-wrapped-level	ok
+mldsa44-wrapped-length	ok
+mldsa44-wrapped-signs	ok
+mldsa44-bare-roundtrip	ok
+mldsa65-wrapped-level	ok
+mldsa65-wrapped-length	ok
+mldsa65-wrapped-signs	ok
+mldsa65-bare-roundtrip	ok
+mldsa87-wrapped-level	ok
+mldsa87-wrapped-length	ok
+mldsa87-wrapped-signs	ok
+mldsa87-bare-roundtrip	ok
+reject-ec-key	ok
+reject-garbage	ok

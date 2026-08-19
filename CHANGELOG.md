@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+### Security
+
+- **`packages/pki-server` 0.3.0 closes three reachable holes**, each
+  reproduced against a running server before and after the fix.
+  *Reflected XSS*: `POST /revoke` echoed the caller-supplied `serial` into
+  the HTML result page unescaped, so `serial=<script>…` reached the browser
+  verbatim; `ui.nu` now escapes every interpolated value and HTML responses
+  carry `Content-Security-Policy: default-src 'none'; script-src 'self'; …`
+  (the UI's one script moved to `/js/app.js` so that policy can hold).
+  *Arbitrary file write*: revoking by PEM lifted the CN out of an
+  **unverified** certificate and used it to build
+  `<initial-dir>/<cn>/<cn>.crt`, so a self-signed certificate with
+  `subjectAltName=DNS:../…` wrote outside the tree; the certificate is now
+  signature-checked against the CA first, the CN is reduced to
+  `[A-Za-z0-9._-]` at the one function that turns it into a path, and that
+  function refuses to create files that do not already exist.
+  *`index.txt` record forgery*: a serial carrying tabs and newlines was
+  appended straight into the tab-separated index, forging revocation
+  records; serials must now be even-length hex of at most 40 bytes.
+- **pki-server no longer ships working default credentials.** The
+  `your-device-init-key` / `your-management-key-here` placeholders
+  authenticated every caller of any deployment that never overrode them.
+  They now authenticate nothing; when no key is configured a 192-bit key is
+  generated at startup and printed to stderr once. An empty key denies
+  rather than admits, and both keys are compared with `std/subtle`'s
+  `constant_time_eq` — `string_eq` stops at the first differing byte, which
+  turns every request into a measurement of how many leading bytes matched.
+- **A revoked enrollment certificate is enforced at issuance.** Revocation
+  used to be a side effect — the stored enrollment file was scribbled over
+  — so revoking by serial alone, with no CN to name a file by, left the
+  device free to keep collecting operational certificates. `/request-cert`
+  and `/renew_initial_cert` now check the certificate's serial against
+  `index.txt`.
+
 ### Changed
 
 - **The three Linux CI jobs run in a pre-baked container**
@@ -19,7 +54,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its whole timeout inside `apt-get update` without executing a line of the
   code under test. CI pins the dated tag; `:latest` is never referenced.
 
+
 ### Added
+
+- **Post-quantum CA in `packages/pki-server`** — `--algorithm
+  p256|mldsa44|mldsa65|mldsa87` (default `p256`) selects the CA key type
+  at creation, and the choice covers the CA certificate, every issued
+  certificate, the CRL signature and chain verification, so a PQ
+  deployment has no classical signature anywhere in its trust path.
+  `/request-csr` keeps whatever key algorithm the requester generated
+  while signing with the CA's, and `GET /health` reports `algorithm` and
+  `post_quantum`. `--algorithm` names what a *new* CA is minted with; an
+  existing key pair keeps its own. Composite/hybrid certificates are
+  deliberately out of scope — the choice is pure-classical or pure-PQ.
+- **`mldsa_priv_from_pem` in `std/pkey.nu`** — loads the PKCS#8
+  `OneAsymmetricKey` container `x509_gen.nu` writes for ML-DSA and returns
+  the parameter set alongside the key, since the OID is the only thing
+  that names it. Accepts both the wrapped and the bare `privateKey`
+  encoding.
+- **`set_permissions` in `std/fs.nu`** — POSIX `chmod(2)`, which is what a
+  program that writes a private key needs: `write_file` creates at
+  `0666 & ~umask`, leaving a key readable by every account on the host.
+  pki-server now writes every private key it stores at mode `0600`.
+- **RFC 5280 extensions on every pki-server certificate** — `keyUsage`
+  (critical), `extendedKeyUsage`, `subjectKeyIdentifier` and
+  `authorityKeyIdentifier` joined the `basicConstraints` and
+  `subjectAltName` that were already there. Key identifiers are RFC 7093
+  method 1 (leftmost 160 bits of SHA-256), which keeps the package free of
+  a SHA-1 dependency.
 
 - **`SSL_CERT_FILE` anchors verify-full** — `std/tls_verify.nu` reads the
   de-facto standard environment variable every mainstream TLS stack honors
@@ -36,6 +98,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **pki-server's DER length encoder stopped at two octets** and emitted a
+  silently truncated length above 65535 — unreachable while every
+  certificate was a half-kilobyte ECDSA one, reachable the moment an
+  ML-DSA CRL crosses 64 KiB. It now emits the fewest length octets that
+  hold the value, as DER requires.
+- **A regenerated pki-server CRL restamped every revocation with "now."**
+  `index.txt` records the revocation date; the reader threw it away and
+  substituted the current time for all entries, so the CRL lost its
+  history on every restart. Dates now round-trip as UTCTime, entries are
+  no longer duplicated when the same serial is revoked twice, and a line
+  whose serial or date does not parse is dropped instead of propagated.
+- **The HTTP access logs leaked one allocation per request.**
+  `nurl_str_int` allocates, and auto-drop only tracks resources it saw
+  *bound* (spec §8.1) — an owned temporary handed straight to a call is
+  never collected. `with_log_requests` leaked one such string per
+  request and `with_access_log` three, in processes expected to run for
+  months. Both now bind before printing. (Found by running
+  `packages/pki-server` under `NURL_SAN=1`; the same idiom appears at
+  other `nurl_str_int` call sites in stdlib, which this does not sweep.)
+- **pki-server leaked the stored certificate's DER on every failed
+  enrollment check** — the match nested the stored-PEM unwrap inside the
+  submitted-PEM arm, so any request whose submitted PEM did not parse
+  (that is, every probe) dropped the other buffer on the floor.
+- **pki-server's E2E suite was verifying the CA against itself.** Its
+  greedy `sed` for `"certificate"` matched `"ca_certificate"` — the last
+  occurrence in the response — so the OpenSSL chain check never looked at
+  an issued certificate. JSON is now parsed as JSON, and the suite runs
+  the whole lifecycle twice (classical and post-quantum) with security
+  regression tests for each hole listed above.
 - **`pqc probe` no longer reports "handshake failed" for an untrusted
   certificate** — a probe's question is "does this server negotiate a
   post-quantum group", and the handshake answers it whether or not the
@@ -47,6 +138,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **pki-server no longer sends permissive CORS headers.** `http_app_cors`
+  made a CA's management API scriptable from any origin; nothing in the
+  package needs cross-origin access, and a browser-driven caller can set
+  its own proxy. `validity_days` is also capped at 3650 on every issuance
+  endpoint, and `--serial-file` is accepted and ignored (serials have been
+  96-bit CSPRNG values throughout; the flag never did anything).
 - **Polynomial serialisation no longer pushes one byte at a time** —
   `__bitpack` (ML-DSA) and `__byte_encode` (ML-KEM) reserve their exact
   output (a polynomial packs to 32·bits bytes) and write through the raw

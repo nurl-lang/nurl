@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+chmod-0600	ok
+chmod-0644	ok
+chmod-0700	ok
+chmod-0600-again	ok
+owner-can-still-read	ok
+chmod-directory	ok
+missing-path-is-an-error	ok

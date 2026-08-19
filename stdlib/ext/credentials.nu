@@ -20,8 +20,6 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 
-& `c` @ chmod s path i mode → i
-
 @ __creds_home → String {
     : ?String h ( env_get `HOME` )
     ^ ?? h {
@@ -141,7 +139,7 @@ $ `stdlib/ext/env.nu`
     ( string_push_str body token )
     ( string_push_char body 10 )  // \n
     : !v IoErr wr ( write_file ( string_data path ) ( string_data body ) )
-    ( chmod ( string_data path ) 384 )  // 0600
+    : !v IoErr _cm ( set_permissions ( string_data path ) 384 )  // 0600
     ( string_free body )
     ( string_free path )
     ^ wr
@@ -156,7 +154,7 @@ $ `stdlib/ext/env.nu`
             : String body ( __creds_without content registry )
             : !v IoErr wr ( write_file ( string_data path ) ( string_data body ) )
             ?? wr { T _ → {} F _ → { = rc 1 } }
-            ( chmod ( string_data path ) 384 )
+            : !v IoErr _cm ( set_permissions ( string_data path ) 384 )
             ( string_free body )
             ( string_free content )
         }

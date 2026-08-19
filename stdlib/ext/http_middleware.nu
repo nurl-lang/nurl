@@ -70,12 +70,18 @@ $ `stdlib/core/vec.nu`
         ( nurl_eprint ( string_data . req method ) )
         ( nurl_eprint ` ` )
         ( nurl_eprint ( string_data . req path ) )
+        // Each nurl_str_int allocates, and auto-drop only tracks what it
+        // saw bound (spec §8.1) — inline, these three leak once per
+        // request in a process expected to run for months.
+        : s st ( nurl_str_int . resp status )
+        : s sb ( nurl_str_int ( vec_len [u] . resp body ) )
+        : s sd ( nurl_str_int dt_ms )
         ( nurl_eprint ` → ` )
-        ( nurl_eprint ( nurl_str_int . resp status ) )
+        ( nurl_eprint st )
         ( nurl_eprint ` ` )
-        ( nurl_eprint ( nurl_str_int ( vec_len [u] . resp body ) ) )
+        ( nurl_eprint sb )
         ( nurl_eprint `B ` )
-        ( nurl_eprint ( nurl_str_int dt_ms ) )
+        ( nurl_eprint sd )
         ( nurl_eprint `ms\n` )
 
         ^ resp
