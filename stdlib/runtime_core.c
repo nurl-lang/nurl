@@ -2134,25 +2134,65 @@ long long nurl_umulhi(long long a, long long b) {
  *
  * Non-x86 answers 0, so a marked function's wide clone is simply never
  * reached; those targets are also expected to pass --no-cpu-dispatch, so
- * the clone is not emitted in the first place. */
+ * the clone is not emitted in the first place.
+ *
+ * The cpuid is written out by hand rather than via
+ * __builtin_cpu_supports, which looks like a compiler builtin and is
+ * not: it expands to a call into libgcc/compiler-rt for `__cpu_model`
+ * and `__cpu_indicator_init`. runtime_core.c is the half of the runtime
+ * that links against nolibc on a freestanding target, which has neither
+ * — and the MSVC linker has neither either, so the first version of
+ * this broke the unikernel symbol gate and the Windows build at once.
+ * Four instructions inline owe nobody anything. */
 static int nurl__cpu_v3 = -1;
 
-static void nurl__cpu_detect(void) {
-#if defined(__x86_64__) || defined(_M_X64)
-#if defined(__GNUC__) || defined(__clang__)
-    __builtin_cpu_init();
-    nurl__cpu_v3 = __builtin_cpu_supports("avx2") &&
-                   __builtin_cpu_supports("bmi2") &&
-                   __builtin_cpu_supports("fma")
-                       ? 1
-                       : 0;
-#else
-    nurl__cpu_v3 = 0;
-#endif
-#else
-    nurl__cpu_v3 = 0;
-#endif
+#if (defined(__x86_64__) || defined(_M_X64)) && \
+    (defined(__GNUC__) || defined(__clang__))
+
+static void nurl__cpuid(unsigned leaf, unsigned sub, unsigned out[4]) {
+    __asm__ __volatile__("cpuid"
+                         : "=a"(out[0]), "=b"(out[1]), "=c"(out[2]),
+                           "=d"(out[3])
+                         : "a"(leaf), "c"(sub));
 }
+
+/* xgetbv(0). Spelled as its bytes because some assemblers this has to
+ * pass through predate the mnemonic. */
+static unsigned long long nurl__xcr0(void) {
+    unsigned lo, hi;
+    __asm__ __volatile__(".byte 0x0f, 0x01, 0xd0" : "=a"(lo), "=d"(hi) : "c"(0));
+    return ((unsigned long long)hi << 32) | lo;
+}
+
+static void nurl__cpu_detect(void) {
+    unsigned r[4];
+    nurl__cpuid(0, 0, r);
+    if (r[0] < 7) { nurl__cpu_v3 = 0; return; }
+
+    nurl__cpuid(1, 0, r);
+    const unsigned ecx1 = r[2];
+    /* OSXSAVE (bit 27) gates xgetbv itself — reading XCR0 without it is
+     * a #UD, not a zero. AVX (28) and FMA (12) come from the same word. */
+    if (!(ecx1 & (1u << 27))) { nurl__cpu_v3 = 0; return; }
+    if (!(ecx1 & (1u << 28)) || !(ecx1 & (1u << 12))) { nurl__cpu_v3 = 0; return; }
+
+    /* The CPU having AVX2 is not enough: the OS must also be saving the
+     * upper halves of the YMM registers across a context switch, or the
+     * wide clone corrupts state instead of running faster. XCR0 bits 1
+     * (SSE) and 2 (AVX) are that promise. This is the check
+     * __builtin_cpu_supports was doing for us. */
+    if ((nurl__xcr0() & 0x6) != 0x6) { nurl__cpu_v3 = 0; return; }
+
+    nurl__cpuid(7, 0, r);
+    const unsigned ebx7 = r[1];
+    nurl__cpu_v3 = ((ebx7 & (1u << 5)) && (ebx7 & (1u << 8))) ? 1 : 0;
+}
+
+#else
+
+static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; }
+
+#endif
 
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((constructor)) static void nurl__cpu_ctor(void) {

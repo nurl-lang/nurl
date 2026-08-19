@@ -149,6 +149,43 @@ else
     note "object-code check" "skipped (no clang/objdump)"
 fi
 
+# ── 7. The runtime's answer matches an independent one ──────────────
+# Everything above checks that the wide clone was BUILT. Nothing above
+# notices nurl_cpu_x86_v3() answering 0 forever: the program still runs,
+# still passes every vector, and is silently 1.7x slower. So ask the
+# kernel what the CPU has and require the runtime to agree.
+#
+# This is not a check that the host has AVX2 — it is a check that the
+# runtime and /proc/cpuinfo tell the same story, which is a claim that
+# holds on a machine without it too.
+if [ -r /proc/cpuinfo ] && [ "$(uname -m)" = "x86_64" ] &&
+        command -v clang >/dev/null 2>&1; then
+    want=0
+    if grep -qm1 ' avx2 ' /proc/cpuinfo && grep -qm1 ' bmi2 ' /proc/cpuinfo &&
+            grep -qm1 ' fma ' /proc/cpuinfo; then
+        want=1
+    fi
+    cat > "$WORK/cpu.c" <<'CEOF'
+#include <stdio.h>
+int nurl_cpu_x86_v3(void);
+int main(void) { printf("%d\n", nurl_cpu_x86_v3()); return 0; }
+CEOF
+    if clang -O0 "$WORK/cpu.c" "$ROOT/stdlib/runtime.native.o" -o "$WORK/cpu" \
+            -lm -lpthread -ldl -lsqlite3 2>/dev/null; then
+        got=$("$WORK/cpu" 2>/dev/null)
+        if [ "$got" = "$want" ]; then
+            ok "runtime CPUID agrees with /proc/cpuinfo" "both say $want"
+        else
+            bad "runtime CPUID agrees with /proc/cpuinfo" \
+                "runtime says $got, /proc/cpuinfo implies $want"
+        fi
+    else
+        note "runtime CPUID cross-check" "skipped (could not link runtime.native.o)"
+    fi
+else
+    note "runtime CPUID cross-check" "skipped (not x86-64 Linux)"
+fi
+
 echo ""
 if [ "$fails" -eq 0 ]; then
     echo "simd_dispatch_ir: all assertions passed"
