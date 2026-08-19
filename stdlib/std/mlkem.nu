@@ -413,27 +413,103 @@ $ `stdlib/std/subtle.nu`
     ^ out
 }
 
+// Four PRF_η streams at once: same seed, four nonce bytes, 64·η bytes
+// each appended to o0..o3. The callers hand out consecutive nonces in
+// fixed-length batches (k or 2k of them), which is the equal-length
+// lockstep the four-way sponge wants; a short batch clamps the spare
+// lanes to the last real nonce and discards them.
+@ __mlkem_prf_x4 ( Vec u ) seed i n0 i n1 i n2 i n3 i eta ( Vec u ) o0 ( Vec u ) o1 ( Vec u ) o2 ( Vec u ) o3 → v {
+    : *Sha3x4 h ( shake256x4_init )
+    ( sha3x4_absorb h seed seed seed seed )
+    : ( Vec u ) b0 ( vec_new [u] ) ( vec_push [u] b0 # u n0 )
+    : ( Vec u ) b1 ( vec_new [u] ) ( vec_push [u] b1 # u n1 )
+    : ( Vec u ) b2 ( vec_new [u] ) ( vec_push [u] b2 # u n2 )
+    : ( Vec u ) b3 ( vec_new [u] ) ( vec_push [u] b3 # u n3 )
+    ( sha3x4_absorb h b0 b1 b2 b3 )
+    ( vec_free [u] b0 ) ( vec_free [u] b1 ) ( vec_free [u] b2 ) ( vec_free [u] b3 )
+    ( sha3x4_squeeze h * 64 eta o0 o1 o2 o3 )
+    ( sha3x4_free h )
+}
+
+// One batch of `count` consecutive-nonce CBD polynomials into dst,
+// starting at nonce `n0`, four streams per sponge.
+simd @ __cbd_batch * i16 dst ( Vec u ) seed i n0 i count i eta → v {
+    : ( Vec u ) o0 ( vec_new [u] )
+    : ( Vec u ) o1 ( vec_new [u] )
+    : ( Vec u ) o2 ( vec_new [u] )
+    : ( Vec u ) o3 ( vec_new [u] )
+    : ~ i g 0
+    ~ < g count {
+        : b z0 ( vec_set_len [u] o0 0 )
+        : b z1 ( vec_set_len [u] o1 0 )
+        : b z2 ( vec_set_len [u] o2 0 )
+        : b z3 ( vec_set_len [u] o3 0 )
+        ? ! & & & z0 z1 z2 z3 { = g count } {
+            : i m1 ? < + g 1 count + g 1 - count 1
+            : i m2 ? < + g 2 count + g 2 - count 1
+            : i m3 ? < + g 3 count + g 3 - count 1
+            ( __mlkem_prf_x4 seed + n0 g + n0 m1 + n0 m2 + n0 m3 eta o0 o1 o2 o3 )
+            ( __cbd dst * 256 g o0 eta )
+            ? < + g 1 count { ( __cbd dst * 256 + g 1 o1 eta ) } {}
+            ? < + g 2 count { ( __cbd dst * 256 + g 2 o2 eta ) } {}
+            ? < + g 3 count { ( __cbd dst * 256 + g 3 o3 eta ) } {}
+            = g + g 4
+        }
+    }
+    ( vec_free [u] o0 ) ( vec_free [u] o1 )
+    ( vec_free [u] o2 ) ( vec_free [u] o3 )
+}
+
 // SamplePolyCBD_η (FIPS 203 Algorithm 8): each coefficient is the
 // difference of two sums of η bits drawn consecutively from the byte
 // string — a centred binomial distribution on [-η, η].
 @ __cbd * i16 r i off ( Vec u ) buf i eta → v {
     : *u bp ( vec_data [u] buf )
-    : ~ i i 0
-    ~ < i 256 {
-        : i base * * 2 eta i
-        : ~ i x 0
-        : ~ i y 0
-        : ~ i j 0
-        ~ < j eta {
-            : i ba + base j
-            = x + x & 1 >> # i . bp / ba 8 % ba 8
-            : i bb + + base eta j
-            = y + y & 1 >> # i . bp / bb 8 % bb 8
-            = j + j 1
+    // The spec's per-bit loop costs 2·η loads, shifts and masks per
+    // coefficient. The sums it wants are carry-free inside their own
+    // bit groups, so a masked add computes η-bit-sums for a whole word
+    // of coefficients at once — the standard CBD bit-slice, and the
+    // same coefficients bit for bit (the ACVP vectors pin it).
+    ? == eta 2 {
+        // 8 coefficients per 32-bit window: d = popcount-by-pairs, each
+        // 4-bit group is a₂b₂ packed as (a + (b << 2)) of 2-bit sums.
+        : ~ i i 0
+        ~ < i 32 {
+            : i o4 * i 4
+            : i t | | | # i . bp o4 << # i . bp + o4 1 8 << # i . bp + o4 2 16 << # i . bp + o4 3 24
+            : i d + & t 1431655765 & >> t 1 1431655765
+            : ~ i j 0
+            ~ < j 8 {
+                : i a & >> d * j 4 3
+                : i b & >> d + * j 4 2 3
+                = . r + off + * i 8 j # i16 - a b
+                = j + j 1
+            }
+            = i + i 1
         }
-        = . r + off i # i16 - x y
-        = i + i 1
-    }
+        ^ v
+    } {}
+    ? == eta 3 {
+        // 4 coefficients per 3 bytes: sums of 3 bits via 0x249249.
+        : ~ i i 0
+        ~ < i 64 {
+            : i o3 * i 3
+            : i t | | # i . bp o3 << # i . bp + o3 1 8 << # i . bp + o3 2 16
+            : i d + + & t 2396745 & >> t 1 2396745 & >> t 2 2396745
+            : ~ i j 0
+            ~ < j 4 {
+                : i a & >> d * j 6 7
+                : i b & >> d + * j 6 3 7
+                = . r + off + * i 4 j # i16 - a b
+                = j + j 1
+            }
+            = i + i 1
+        }
+        ^ v
+    } {}
+    // Any other η would be a new parameter set; fail loudly rather than
+    // sample a distribution FIPS 203 does not define.
+    ( nurl_panic `__cbd: eta must be 2 or 3 (FIPS 203 has no other parameter set)` )
 }
 
 // ── Byte encoding, compression ─────────────────────────────────────
@@ -569,23 +645,9 @@ simd @ __kpke_keygen MlkemParams prm ( Vec u ) d ( Vec u ) ekout ( Vec u ) dkout
     : ( Vec i16 ) e ( __poly_zero * 256 k )
     : *i16 sp ( vec_data [i16] s )
     : *i16 ep ( vec_data [i16] e )
-    : ~ i n 0
+    ( __cbd_batch sp sigma 0 k . prm eta1 )
+    ( __cbd_batch ep sigma k k . prm eta1 )
     : ~ i i 0
-    ~ < i k {
-        : ( Vec u ) prf ( __mlkem_prf sigma n . prm eta1 )
-        ( __cbd sp * 256 i prf . prm eta1 )
-        ( vec_free [u] prf )
-        = n + n 1
-        = i + i 1
-    }
-    = i 0
-    ~ < i k {
-        : ( Vec u ) prf ( __mlkem_prf sigma n . prm eta1 )
-        ( __cbd ep * 256 i prf . prm eta1 )
-        ( vec_free [u] prf )
-        = n + n 1
-        = i + i 1
-    }
 
     = i 0
     ~ < i k { ( __ntt sp * 256 i zp ) ( __poly_reduce sp * 256 i ) = i + i 1 }
@@ -645,24 +707,9 @@ simd @ __kpke_encrypt MlkemParams prm ( Vec u ) ek ( Vec u ) m ( Vec u ) r ( Vec
     : *i16 yp ( vec_data [i16] y )
     : *i16 e1p ( vec_data [i16] e1 )
     : *i16 e2p ( vec_data [i16] e2 )
-    : ~ i n 0
-    = i 0
-    ~ < i k {
-        : ( Vec u ) prf ( __mlkem_prf r n . prm eta1 )
-        ( __cbd yp * 256 i prf . prm eta1 )
-        ( vec_free [u] prf )
-        = n + n 1
-        = i + i 1
-    }
-    = i 0
-    ~ < i k {
-        : ( Vec u ) prf ( __mlkem_prf r n . prm eta2 )
-        ( __cbd e1p * 256 i prf . prm eta2 )
-        ( vec_free [u] prf )
-        = n + n 1
-        = i + i 1
-    }
-    : ( Vec u ) prf2 ( __mlkem_prf r n . prm eta2 )
+    ( __cbd_batch yp r 0 k . prm eta1 )
+    ( __cbd_batch e1p r k k . prm eta2 )
+    : ( Vec u ) prf2 ( __mlkem_prf r * 2 k . prm eta2 )
     ( __cbd e2p 0 prf2 . prm eta2 )
     ( vec_free [u] prf2 )
 
