@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Polynomial serialisation no longer pushes one byte at a time** —
+  `__bitpack` (ML-DSA) and `__byte_encode` (ML-KEM) reserve their exact
+  output (a polynomial packs to 32·bits bytes) and write through the raw
+  pointer. The per-byte `vec_push` cursor was a call, a capacity check and a
+  possible grow per byte, ~15,000 times per ML-DSA-65 signing attempt, and
+  the hottest scalar loop in both `mldsa_sign_mu` and K-PKE encryption.
+  ML-KEM-512 encaps 27 → 20 µs, decaps 32 → 25 µs; ML-KEM-768
+  encaps/decaps 32/39 → 30/38 µs. ACVP byte-exact throughout.
+
 ### Added
 
 - **`bench/pq.nu`** — the post-quantum stack measured, with the same-host

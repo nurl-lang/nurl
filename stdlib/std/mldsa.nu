@@ -512,7 +512,19 @@ $ `stdlib/std/subtle.nu`
 
 // BitPack(w, a, b): each coefficient stored as b − w[i].
 @ __bitpack * i32 a i off i bits i b ( Vec u ) out → v {
+    // A polynomial packs to exactly 32·bits bytes, so reserve once and
+    // write through the raw pointer. The previous spelling pushed one
+    // byte at a time — a call, a capacity check and a possible grow per
+    // byte, ~15,000 times per ML-DSA-65 signing attempt across w1, z
+    // and the secret-key fields, and the profile showed the cursor loop
+    // as the hottest scalar code in sign_mu.
     : i mask - << 1 bits 1
+    : i nbytes * 32 bits
+    : i base ( vec_len [u] out )
+    ( vec_reserve [u] out nbytes )
+    : b _l ( vec_set_len [u] out + base nbytes )
+    : *u dst ( vec_data [u] out )
+    : ~ i w base
     : ~ i acc 0
     : ~ i nb 0
     : ~ i i 0
@@ -520,7 +532,8 @@ $ `stdlib/std/subtle.nu`
         = acc | acc << & - b # i . a + off i mask nb
         = nb + nb bits
         ~ >= nb 8 {
-            ( vec_push [u] out # u & acc 255 )
+            = . dst w # u & acc 255
+            = w + w 1
             = acc >> acc 8
             = nb - nb 8
         }
