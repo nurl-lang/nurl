@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
 ### Security
 
 - **`packages/pki-server` 0.3.0 closes three reachable holes**, each
@@ -41,6 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   device free to keep collecting operational certificates. `/request-cert`
   and `/renew_initial_cert` now check the certificate's serial against
   `index.txt`.
+
+### Changed
+
+- **The three Linux CI jobs run in a pre-baked container**
+  (`nurllang/ci:ubuntu24-<date>`, built from `containers/ci/Dockerfile`) —
+  clang/llvm, the FFI dev libraries, qemu + grub, gdb, zstd and the zig
+  toolchain pre-installed, so no CI run touches the Ubuntu package mirror or
+  ziglang.org. Exists because the mirror reachable from GitHub's runner pool
+  degraded three separate times on 2026-08-19 and every affected job burned
+  its whole timeout inside `apt-get update` without executing a line of the
+  code under test. CI pins the dated tag; `:latest` is never referenced.
+
 
 ### Added
 
