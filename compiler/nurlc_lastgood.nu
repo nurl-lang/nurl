@@ -24744,6 +24744,80 @@
     ( emit `  ret <4 x i64> %wr.r` )
     ( emit `}` )
     ( emit `declare <4 x i64> @llvm.fshl.v4i64(<4 x i64>, <4 x i64>, <4 x i64>)` )
+
+    // ── v256: sixteen 16-bit lanes ────────────────────────────────
+    //
+    // The lattice half of the PQ stack. ML-KEM's field is 12 bits, its
+    // NTT butterflies are add/sub/Montgomery-multiply over i16, and the
+    // production implementations do sixteen of them per instruction
+    // with vpaddw / vpsubw / vpmullw / vpmulhw. Auto-vectorising the
+    // scalar spelling gets the additions but not the multiply: a
+    // Montgomery product written over i32 forces sign-extends, 32-bit
+    // multiplies and repacks (measured: 784 vpinsrw + 512 vpextrw of
+    // pure lane traffic in one function). Spelled as mullo/mulhi over
+    // 16-bit lanes, the same product is three multiplies and no width
+    // change at all.
+    //
+    // mulhi is written as the widen-multiply-shift-narrow sequence LLVM
+    // pattern-matches back into vpmulhw (SSE2 pmulhw at baseline, NEON
+    // sqdmulh-family, a widening pair on wasm) — the portable spelling
+    // of an instruction the IR has no direct name for.
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_add16(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %pa.a = bitcast <4 x i64> %a to <16 x i16>` )
+    ( emit `  %pa.b = bitcast <4 x i64> %b to <16 x i16>` )
+    ( emit `  %pa.s = add <16 x i16> %pa.a, %pa.b` )
+    ( emit `  %pa.r = bitcast <16 x i16> %pa.s to <4 x i64>` )
+    ( emit `  ret <4 x i64> %pa.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_sub16(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %ps.a = bitcast <4 x i64> %a to <16 x i16>` )
+    ( emit `  %ps.b = bitcast <4 x i64> %b to <16 x i16>` )
+    ( emit `  %ps.s = sub <16 x i16> %ps.a, %ps.b` )
+    ( emit `  %ps.r = bitcast <16 x i16> %ps.s to <4 x i64>` )
+    ( emit `  ret <4 x i64> %ps.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_mullo16(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %pm.a = bitcast <4 x i64> %a to <16 x i16>` )
+    ( emit `  %pm.b = bitcast <4 x i64> %b to <16 x i16>` )
+    ( emit `  %pm.p = mul <16 x i16> %pm.a, %pm.b` )
+    ( emit `  %pm.r = bitcast <16 x i16> %pm.p to <4 x i64>` )
+    ( emit `  ret <4 x i64> %pm.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_mulhi16(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %ph.a = bitcast <4 x i64> %a to <16 x i16>` )
+    ( emit `  %ph.b = bitcast <4 x i64> %b to <16 x i16>` )
+    ( emit `  %ph.wa = sext <16 x i16> %ph.a to <16 x i32>` )
+    ( emit `  %ph.wb = sext <16 x i16> %ph.b to <16 x i32>` )
+    ( emit `  %ph.p = mul <16 x i32> %ph.wa, %ph.wb` )
+    ( emit `  %ph.h = lshr <16 x i32> %ph.p, <i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16>` )
+    ( emit `  %ph.t = trunc <16 x i32> %ph.h to <16 x i16>` )
+    ( emit `  %ph.r = bitcast <16 x i16> %ph.t to <4 x i64>` )
+    ( emit `  ret <4 x i64> %ph.r` )
+    ( emit `}` )
+    // Arithmetic right shift, all sixteen lanes by the same amount.
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_sra16(<4 x i64> %a, i64 %n) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %pr.a = bitcast <4 x i64> %a to <16 x i16>` )
+    ( emit `  %pr.t = trunc i64 %n to i16` )
+    ( emit `  %pr.m = and i16 %pr.t, 15` )
+    ( emit `  %pr.0 = insertelement <16 x i16> undef, i16 %pr.m, i32 0` )
+    ( emit `  %pr.s = shufflevector <16 x i16> %pr.0, <16 x i16> undef, <16 x i32> zeroinitializer` )
+    ( emit `  %pr.v = ashr <16 x i16> %pr.a, %pr.s` )
+    ( emit `  %pr.r = bitcast <16 x i16> %pr.v to <4 x i64>` )
+    ( emit `  ret <4 x i64> %pr.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_bcast16(i64 %x) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %pb.t = trunc i64 %x to i16` )
+    ( emit `  %pb.0 = insertelement <16 x i16> undef, i16 %pb.t, i32 0` )
+    ( emit `  %pb.s = shufflevector <16 x i16> %pb.0, <16 x i16> undef, <16 x i32> zeroinitializer` )
+    ( emit `  %pb.r = bitcast <16 x i16> %pb.s to <4 x i64>` )
+    ( emit `  ret <4 x i64> %pb.r` )
+    ( emit `}` )
 }
 
 // Register the SIMD + wide-arithmetic primitives in the symbol table,
@@ -24791,6 +24865,12 @@
     ( nurl_sym_def syms `nurl_v256_andnot` `v256` )
     ( nurl_sym_def syms `nurl_v256_not` `v256` )
     ( nurl_sym_def syms `nurl_v256_rotl64` `v256` )
+    ( nurl_sym_def syms `nurl_v256_add16` `v256` )
+    ( nurl_sym_def syms `nurl_v256_sub16` `v256` )
+    ( nurl_sym_def syms `nurl_v256_mullo16` `v256` )
+    ( nurl_sym_def syms `nurl_v256_mulhi16` `v256` )
+    ( nurl_sym_def syms `nurl_v256_sra16` `v256` )
+    ( nurl_sym_def syms `nurl_v256_bcast16` `v256` )
     ( nurl_sym_def syms `nurl_ctz` `u64` )
     ( nurl_sym_def syms `nurl_clz` `u64` )
     ( nurl_sym_def syms `nurl_popcnt` `u64` )

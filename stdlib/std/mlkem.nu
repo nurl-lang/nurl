@@ -156,9 +156,57 @@ $ `stdlib/std/subtle.nu`
 // multiplication in the NTT domain is `__basemul` below and not a
 // pointwise product.
 
-@ __ntt * i16 r i off * i16 zetas → v {
+// Sixteen Montgomery products at once, bit-identical to __mont per
+// lane: lo(x·y) and its q-inverse multiple share their low 16 bits, so
+// (x·y − t·q) >> 16 is exactly mulhi(x,y) − mulhi(t,q) — the borrow
+// can never happen. This is the vpmullw/vpmulhw spelling every
+// production ML-KEM uses; here it is also the proof obligation, because
+// ACVP pins the bytes and "congruent mod q" would not be enough to
+// notice a broken lane.
+@ __fqmul_v v256 x v256 z v256 qv v256 qinv → v256 {
+    : v256 lo ( nurl_v256_mullo16 x z )
+    : v256 t ( nurl_v256_mullo16 lo qinv )
+    ^ ( nurl_v256_sub16 ( nurl_v256_mulhi16 x z ) ( nurl_v256_mulhi16 t qv ) )
+}
+
+// Sixteen Barrett reductions: (20159·a + 2^25) >> 26 computed as
+// ((20159·a >> 16) + 512) >> 10 — the discarded low half can never
+// carry into the rounding constant, so the lanes match the scalar
+// __barrett bit for bit.
+@ __barrett_v v256 a v256 qv v256 c20159 → v256 {
+    : v256 t ( nurl_v256_sra16 ( nurl_v256_add16 ( nurl_v256_mulhi16 a c20159 ) ( nurl_v256_bcast16 512 ) ) 10 )
+    ^ ( nurl_v256_sub16 a ( nurl_v256_mullo16 t qv ) )
+}
+
+simd @ __ntt * i16 r i off * i16 zetas → v {
+    : v256 qv ( nurl_v256_bcast16 3329 )
+    : v256 qinv ( nurl_v256_bcast16 -3327 )
     : ~ i len 128
     : ~ i k 1
+    // Layers with len >= 16: a butterfly's two operands are 16-lane
+    // contiguous runs, so sixteen go at once.
+    ~ >= len 16 {
+        : ~ i start 0
+        ~ < start 256 {
+            : v256 vz ( nurl_v256_bcast16 # i . zetas k )
+            = k + k 1
+            : ~ i j start
+            ~ < j + start len {
+                : s pa # s + # i r * 2 + off j
+                : s pb # s + # i r * 2 + off + j len
+                : v256 va ( nurl_v256_ld pa )
+                : v256 vb ( nurl_v256_ld pb )
+                : v256 t ( __fqmul_v vb vz qv qinv )
+                ( nurl_v256_st pb ( nurl_v256_sub16 va t ) )
+                ( nurl_v256_st pa ( nurl_v256_add16 va t ) )
+                = j + j 16
+            }
+            = start + start * 2 len
+        }
+        = len >> len 1
+    }
+    // Layers 8, 4, 2: operands interleave below vector width — scalar,
+    // same butterflies, same k walk.
     ~ >= len 2 {
         : ~ i start 0
         ~ < start 256 {
@@ -181,10 +229,14 @@ $ `stdlib/std/subtle.nu`
 // Montgomery factor) — every caller wants a Montgomery-domain value
 // next, so folding the 1/128 scaling and the factor into one constant
 // saves a pass. f = 1441 = 2^32/128 mod q.
-@ __invntt * i16 r i off * i16 zetas → v {
+simd @ __invntt * i16 r i off * i16 zetas → v {
+    : v256 qv ( nurl_v256_bcast16 3329 )
+    : v256 qinv ( nurl_v256_bcast16 -3327 )
+    : v256 c20159 ( nurl_v256_bcast16 20159 )
     : ~ i len 2
     : ~ i k 127
-    ~ <= len 128 {
+    // Narrow layers scalar, exactly as the forward transform.
+    ~ <= len 8 {
         : ~ i start 0
         ~ < start 256 {
             : i16 zeta . zetas k
@@ -201,10 +253,32 @@ $ `stdlib/std/subtle.nu`
         }
         = len << len 1
     }
+    ~ <= len 128 {
+        : ~ i start 0
+        ~ < start 256 {
+            : v256 vz ( nurl_v256_bcast16 # i . zetas k )
+            = k - k 1
+            : ~ i j start
+            ~ < j + start len {
+                : s pa # s + # i r * 2 + off j
+                : s pb # s + # i r * 2 + off + j len
+                : v256 t ( nurl_v256_ld pa )
+                : v256 vb ( nurl_v256_ld pb )
+                ( nurl_v256_st pa ( __barrett_v ( nurl_v256_add16 t vb ) qv c20159 ) )
+                ( nurl_v256_st pb ( __fqmul_v ( nurl_v256_sub16 vb t ) vz qv qinv ) )
+                = j + j 16
+            }
+            = start + start * 2 len
+        }
+        = len << len 1
+    }
+    // ·(2^32/128 mod q), sixteen lanes at a time.
+    : v256 fv ( nurl_v256_bcast16 1441 )
     : ~ i i 0
     ~ < i 256 {
-        = . r + off i ( __fqmul . r + off i # i16 1441 )
-        = i + i 1
+        : s pp # s + # i r * 2 + off i
+        ( nurl_v256_st pp ( __fqmul_v ( nurl_v256_ld pp ) fv qv qinv ) )
+        = i + i 16
     }
 }
 
@@ -219,7 +293,7 @@ $ `stdlib/std/subtle.nu`
     = . r + ri 1 + ( __fqmul a0 b1 ) ( __fqmul a1 b0 )
 }
 
-@ __poly_basemul * i16 r i ro * i16 a i ao * i16 b i bo * i16 zetas → v {
+simd @ __poly_basemul * i16 r i ro * i16 a i ao * i16 b i bo * i16 zetas → v {
     : ~ i i 0
     ~ < i 64 {
         : i16 z . zetas + 64 i
