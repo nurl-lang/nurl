@@ -1,6 +1,6 @@
 # NURL Language Reference
 
-**Status:** language specification, grammar v2.4. This document is the
+**Status:** language specification, grammar v2.6. This document is the
 normative reference for the NURL — Neural Unified Representation Language —
 source language as implemented by `compiler/nurlc.nu`.
 
@@ -76,6 +76,7 @@ used as variable, parameter, field, or function names:
 | `TT_TYPE_KW` | `u16 u32 u64` | unsigned fixed-width integers (v1.8) |
 | `TT_TYPE_KW` | `f32` | 32-bit float (v1.8) |
 | `TT_TYPE_KW` | `v128` | 128-bit SIMD vector (v2.5, §4.1b) |
+| `TT_SIMD` | `simd` | CPU-dispatch prefix on a function (v2.6, §3.3b) |
 | `TT_BOOL` | `T` `F` | boolean literals |
 | `TT_SIZEOF` | `Z` | sizeof operator |
 | `TT_PUB` | `pub` | visibility prefix (v2.0) |
@@ -260,6 +261,64 @@ The contract is pinned by tests: `pub_trait_ffi_visibility.nu` proves the
 unenforced surface (a non-`pub` trait method + FFI) stays callable across
 files, and the `should_fail_pub_*` tests prove the enforced surface (a
 private fn / struct / const / enum variant) is rejected.
+
+### 3.3b `simd` CPU dispatch (grammar v2.6)
+
+A **function** declaration may carry a leading `simd` prefix. It asks the
+compiler to emit that function twice — once for the baseline ISA and once
+for a wider one — and to pick between them at run time. `pub` and `simd`
+may appear in either order; `simd` is accepted on `@` declarations only.
+
+```
+simd @ poly_add * i32 r * i32 a * i32 b i n → v { … }
+pub simd @ mldsa_sign_mu i level … → ( Vec u ) { … }
+```
+
+What nurlc emits for `simd @ f`:
+
+| symbol | what it is |
+| --- | --- |
+| `@f.base` | the body, baseline ISA |
+| `@f.x86v3` | the same body, `"target-cpu"="x86-64-v3"` (AVX2 + BMI2 + FMA) |
+| `@f` | a dispatcher: one call to `nurl_cpu_x86_v3()`, one branch |
+
+Callers keep calling `f`. The answer is resolved once from a constructor
+and cached, so the dispatcher costs a load, a test and a branch the
+predictor gets right every time — which is why the binary stays runnable
+on a machine without AVX2 instead of dying on an illegal instruction, the
+outcome `-march=native` would produce.
+
+**The prefix belongs on FEW, LARGE functions.** Applying it to every
+function in a module measures *slower than not applying it at all* —
+2× slower on the ML-DSA signing path. A dispatcher is an opaque call in
+the middle of the call graph, so every small helper it fronts stops being
+inlinable into its caller, and the vectorisation it buys does not come
+close to paying for that. The subtree needs no marking: LLVM permits
+inlining a baseline callee into a feature-richer caller (the reverse is
+what it refuses), so an unmarked helper inlined into `@f.x86v3` is
+compiled with the wide feature set and vectorises there. Mark the coarse
+entry point; leave its callees alone.
+
+Three consequences worth knowing:
+
+- **A marked module is not partitioned.** `--split` would separate the
+  wide clone from the callees it needs inlined, which is most of what the
+  prefix buys (measured: ML-DSA-65 sign 352 µs unsplit, 509 µs split).
+  nurlc declines to split such a module, trading build time for the run
+  speed the prefix was asked for.
+- **`--g` suppresses cloning.** A `!DISubprogram` may be attached to
+  exactly one function, so the clones would produce invalid metadata.
+  A debug build gets one copy, as `--split` does.
+- **`--no-cpu-dispatch` turns the prefix off**, emitting each marked
+  function once. nurlc emits no `target triple`, so it cannot tell that a
+  module is bound for AArch64 or wasm; anything building for a non-x86-64
+  target must pass this flag, and `nurl.sh`, the unikernel scripts and the
+  build API all do.
+
+Generic functions may not be marked: a generic is monomorphised after the
+whole program is parsed, so the prefix would not survive to its
+instantiations. nurlc rejects `simd` there rather than accept a prefix
+that does nothing.
 
 ### 3.4 Constants and globals
 
@@ -1692,15 +1751,15 @@ Four new diagnostics shipped 2026-05-25 closing the remaining
 
 ### 11.1 Grammar version
 
-This document corresponds to **grammar v2.5** (the `v128` SIMD lane
-type, §4.1b; v2.4 added `break` / `continue`, v2.3 dynamic trait
-objects). The authoritative grammar lives in
+This document corresponds to **grammar v2.6** (the `simd` CPU-dispatch
+prefix, §3.3b; v2.5 added the `v128` SIMD lane type, §4.1b; v2.4
+`break` / `continue`; v2.3 dynamic trait objects). The authoritative grammar lives in
 [`spec/grammar.ebnf`](../spec/grammar.ebnf); changes since v1.x are
 tracked in that file's prelude.
 
-A compiler is "v2.5 conformant" if it accepts every program the EBNF
+A compiler is "v2.6 conformant" if it accepts every program the EBNF
 generates and rejects every program the EBNF does not generate, with
-the semantics defined here. A program is "v2.5 portable" if it relies
+the semantics defined here. A program is "v2.6 portable" if it relies
 only on features documented in this spec or in
 [`spec/grammar.ebnf`](../spec/grammar.ebnf) — not on
 compiler-internal accidents.

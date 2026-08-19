@@ -8,6 +8,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`simd`: CPU-dispatched code generation (grammar v2.6)** —
+  A function declaration may carry a leading `simd` prefix. nurlc then emits
+  the body twice — `@f.base` for the baseline ISA and `@f.x86v3` with an
+  AVX2 + BMI2 + FMA feature set — plus a dispatcher under the real name `@f`
+  that picks between them on a CPUID answer cached by the runtime
+  (`nurl_cpu_x86_v3`, `stdlib/runtime_core.c`). Callers are unchanged and the
+  binary still runs on machines without AVX2, which is what separates this
+  from handing clang `-march=native`. `pub` and `simd` compose in either
+  order. See docs/spec.md §3.3b.
+
+  The prefix is deliberately opt-in and coarse: marking *every* function in a
+  module measured **2× slower than marking none** (ML-DSA-65 sign 574 → 1127
+  µs), because a dispatcher is an opaque call that stops every helper it
+  fronts from being inlined. Marked on a handful of entry points instead, the
+  callees are inlined *into* the wide clone and vectorise there.
+
+  Because nurlc emits no `target triple`, a build aimed anywhere other than
+  x86-64 must pass `--no-cpu-dispatch` or clang reports one unrecognised
+  feature per feature per marked function (26 warnings on a module importing
+  `std/mlkem`). `nurl.sh`, `unikernel/compile_nu.sh`, the ESP32 scripts and the
+  `/build_wasm` + `/build_target` API endpoints all pass it automatically.
+  `--g` also suppresses cloning, since a `!DISubprogram` binds to one function.
+
+- **`v256`: a 256-bit vector type, and `std/hash_sha3x4` — four Keccak
+  sponges at once** —
+  `v256` is `<4 x i64>`, four 64-bit lanes, the shape four interleaved Keccak
+  states want. Unlike `v128` it is not baseline anywhere, and that is the
+  point: LLVM legalises it into paired 128-bit operations on any target, so a
+  `v256` kernel is *correct* everywhere and *fast* where AVX2 exists — put it
+  behind `simd` and the wide clone gets real `vpxor`/`vpsllq`/`vpandn`.
+  Primitives: `nurl_v256_{zero,ld,st,set64,bcast64,get64,put64,xor,and,or,
+  andnot,not,rotl64}`. Verified to lower on x86-64, AArch64, RISC-V and wasm32.
+
+  `stdlib/std/hash_sha3x4.nu` builds Keccak-f[1600]×4 and a four-way sponge
+  (`shake128x4_init`, `shake256x4_init`, `sha3x4_absorb`, `sha3x4_squeeze`)
+  on it. Measured **3.32× per stream** against the scalar sponge
+  (2254 → 678 ns for a 34-byte seed and 504 squeezed bytes). This is the
+  kernel every production PQ implementation's AVX2 win is actually made of:
+  on this host SPHINCS+'s AVX2 build generates four WOTS+ public keys in the
+  time its reference C generates one.
+
+  Correctness is differential against the scalar sponge that NIST's vectors
+  already cover, one lane at a time, over 16 cases spanning both rates, both
+  domain bytes, empty/short/block-straddling inputs and outputs, and
+  absorb-in-pieces + squeeze-resume. Eight mutations of the permutation and
+  the sponge plumbing were each caught.
+
+- **ML-KEM and ML-DSA generate their matrices four cells at a time** —
+  `gen_matrix` (FIPS 203) and `ExpandA` (FIPS 204) expand k*k / k*l
+  independent SHAKE128 streams that differ only in two trailing index bytes,
+  which is exactly what the four-way sponge is for. Rejection makes the four
+  lanes consume different numbers of bytes, so each group runs until its last
+  lane has 256 coefficients and the finished lanes stop reading — wasted
+  squeezing that is still far cheaper than four separate sponges, because the
+  four share one permutation and the permutation is the cost. ML-DSA's three
+  copies of the ExpandA loop (keygen, sign, verify) are now one
+  `__md_expand_a`: a matrix that disagreed between signing and verifying
+  would be a silent interoperability failure, not a crash.
+
+- **`std/hash_sha3` now declares its public surface** — the twelve documented
+  API entries and the `Sha3` type carry `pub`; everything else in the file is
+  private to it, as the header comment always said. `keccak_round_constants`
+  is public so the four-way sponge shares one transcription of the ι table
+  rather than keeping a second copy that could drift.
+
+### Changed
+
+- **A module containing a `simd`-marked function is no longer partitioned by
+  `--split`.** Splitting separates the wide clone from the callees it needs
+  inlined, giving back most of what the prefix buys: ML-DSA-65 sign measured
+  352 µs unsplit against 509 µs split ×3 (and the ThinLTO backend at `-O3`,
+  which *helps* an unsplit module, makes the split one worse still). nurlc
+  answers "no parts written" — the same answer a module too small to split
+  already gives, which every driver already handles.
+
+- **Post-quantum throughput, from the two changes above alone** (i7-5930K
+  @ 3.5 GHz, µs/op, no algorithm changed — NIST ACVP vectors still pass
+  byte-exactly: ML-KEM 180, ML-DSA 615, SLH-DSA 396):
+
+  | | before | after | speedup | AVX2 ref | gap now |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | ML-KEM-512 keygen / encaps / decaps | 33 / 36 / 43 | 25 / 27 / 33 | 1.3× | 8.1 / 7.7 / 8.0 | ~3.5× |
+  | ML-KEM-768 keygen / encaps / decaps | 52 / 55 / 69 | 41 / 43 / 50 | 1.27–1.38× | 11.8 / 11.7 / 12.5 | 3.5–4.0× |
+  | ML-KEM-1024 keygen / encaps / decaps | 90 / 83 / 98 | 62 / 59 / 68 | ~1.44× | 16.2 / 16.6 / 17.9 | ~3.7× |
+  | ML-DSA-44 keygen / sign / verify | 94 / 404 / 112 | 56 / 177 / 53 | 1.68 / 2.28 / 2.11× | | |
+  | ML-DSA-65 keygen / sign / verify | 184 / 644 / 161 | 105 / 304 / 82 | 1.75 / 2.12 / 1.96× | 44 / 113 / 45 | 2.4 / 2.7 / **1.8×** |
+  | ML-DSA-87 keygen / sign / verify | 255 / 699 / 291 | 127 / 393 / 120 | 2.0 / 1.78 / 2.4× | | |
+  | SLH-DSA-128f keygen / sign | 3308 / 70728 | 2728 / 68176 | 1.21 / 1.04× | 1104 / 25546 | 2.5 / 2.7× |
+
+  SLH-DSA still runs one Keccak at a time: its WOTS+ and FORS subtrees are
+  four-way parallel too, but wiring them up is a larger change than the two
+  matrix expansions above and is not in this entry.
+
+### Fixed
+
+- **`nurlfmt` no longer breaks a `simd @` declaration across lines** — the
+  formatter glues the prefix to its decl-starter exactly as it does `pub`.
+
 ## [0.45.0] — 2026-08-18
 
 ### Added

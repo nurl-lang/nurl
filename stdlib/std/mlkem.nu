@@ -49,6 +49,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash_sha3.nu`
+$ `stdlib/std/hash_sha3x4.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/subtle.nu`
 
@@ -293,6 +294,34 @@ $ `stdlib/std/subtle.nu`
 // continuous stream either way — but a 168-byte pull costs one
 // permutation where 56 three-byte pulls would cost the same permutation
 // plus 56 rounds of call and bookkeeping.
+// Rejection sampling over one squeezed block (FIPS 203 Algorithm 7).
+// Consumes three bytes at a time, keeps each 12-bit half below q, and
+// returns the new coefficient count. Shared by the one-at-a-time and
+// four-at-a-time samplers below so the two cannot disagree about which
+// candidates a block yields.
+@ __rej_uniform * i16 r i off i ctr ( Vec u ) buf i blen → i {
+    : *u bp ( vec_data [u] buf )
+    : ~ i c ctr
+    : ~ i pos 0
+    ~ & < c 256 <= + pos 3 blen {
+        : i b0 # i . bp pos
+        : i b1 # i . bp + pos 1
+        : i b2 # i . bp + pos 2
+        : i d1 & | b0 << b1 8 4095
+        : i d2 & | >> b1 4 << b2 4 4095
+        = pos + pos 3
+        ? & < d1 3329 < c 256 {
+            = . r + off c # i16 d1
+            = c + c 1
+        } {}
+        ? & < d2 3329 < c 256 {
+            = . r + off c # i16 d2
+            = c + c 1
+        } {}
+    }
+    ^ c
+}
+
 @ __sample_ntt * i16 r i off ( Vec u ) rho i x1 i x2 → v {
     : *Sha3 xof ( shake128_init )
     ( sha3_absorb xof rho )
@@ -305,27 +334,70 @@ $ `stdlib/std/subtle.nu`
     : ~ i ctr 0
     ~ < ctr 256 {
         : ( Vec u ) buf ( sha3_squeeze xof 168 )
-        : *u bp ( vec_data [u] buf )
-        : ~ i pos 0
-        ~ & < ctr 256 <= + pos 3 168 {
-            : i b0 # i . bp pos
-            : i b1 # i . bp + pos 1
-            : i b2 # i . bp + pos 2
-            : i d1 & | b0 << b1 8 4095
-            : i d2 & | >> b1 4 << b2 4 4095
-            = pos + pos 3
-            ? & < d1 3329 < ctr 256 {
-                = . r + off ctr # i16 d1
-                = ctr + ctr 1
-            } {}
-            ? & < d2 3329 < ctr 256 {
-                = . r + off ctr # i16 d2
-                = ctr + ctr 1
-            } {}
-        }
+        = ctr ( __rej_uniform r off ctr buf 168 )
         ( vec_free [u] buf )
     }
     ( sha3_free xof )
+}
+
+// The two index bytes of cell `c` of a k×k matrix, in the order FIPS
+// 203 asks for: ρ‖j‖i for key generation, ρ‖i‖j for the transpose
+// encryption wants.
+@ __mat_idx i k b transposed i c → ( Vec u ) {
+    : i i / c k
+    : i j % c k
+    : ( Vec u ) v ( vec_new [u] )
+    ? transposed
+    { ( vec_push [u] v # u i ) ( vec_push [u] v # u j ) }
+    { ( vec_push [u] v # u j ) ( vec_push [u] v # u i ) }
+    ^ v
+}
+
+// Four matrix cells at once, on the four-way sponge.
+//
+// The cells of Â are independent SHAKE128 streams that differ only in
+// two trailing index bytes, which is exactly the shape hash_sha3x4
+// exists for. Rejection makes the four streams consume DIFFERENT
+// numbers of bytes — a block yields between 0 and 112 usable
+// coefficients — so the loop runs until the LAST lane has its 256 and
+// the lanes that finished early simply stop reading. That is wasted
+// squeezing, and it is still far cheaper than four separate sponges:
+// the four share one permutation, and the permutation is the cost.
+@ __sample_ntt_x4 * i16 r ( Vec u ) rho i k b transposed i c0 → v {
+    : *Sha3x4 xof ( shake128x4_init )
+    ( sha3x4_absorb xof rho rho rho rho )
+    : ( Vec u ) x0 ( __mat_idx k transposed + c0 0 )
+    : ( Vec u ) x1 ( __mat_idx k transposed + c0 1 )
+    : ( Vec u ) x2 ( __mat_idx k transposed + c0 2 )
+    : ( Vec u ) x3 ( __mat_idx k transposed + c0 3 )
+    ( sha3x4_absorb xof x0 x1 x2 x3 )
+    ( vec_free [u] x0 ) ( vec_free [u] x1 )
+    ( vec_free [u] x2 ) ( vec_free [u] x3 )
+
+    : ( Vec u ) b0 ( vec_with_cap [u] 168 )
+    : ( Vec u ) b1 ( vec_with_cap [u] 168 )
+    : ( Vec u ) b2 ( vec_with_cap [u] 168 )
+    : ( Vec u ) b3 ( vec_with_cap [u] 168 )
+    : ~ i n0 0
+    : ~ i n1 0
+    : ~ i n2 0
+    : ~ i n3 0
+    ~ | | | < n0 256 < n1 256 < n2 256 < n3 256 {
+        : b z0 ( vec_set_len [u] b0 0 )
+        : b z1 ( vec_set_len [u] b1 0 )
+        : b z2 ( vec_set_len [u] b2 0 )
+        : b z3 ( vec_set_len [u] b3 0 )
+        ? ! & & & z0 z1 z2 z3 { = n0 256 = n1 256 = n2 256 = n3 256 } {
+            ( sha3x4_squeeze xof 168 b0 b1 b2 b3 )
+            = n0 ( __rej_uniform r * 256 + c0 0 n0 b0 168 )
+            = n1 ( __rej_uniform r * 256 + c0 1 n1 b1 168 )
+            = n2 ( __rej_uniform r * 256 + c0 2 n2 b2 168 )
+            = n3 ( __rej_uniform r * 256 + c0 3 n3 b3 168 )
+        }
+    }
+    ( vec_free [u] b0 ) ( vec_free [u] b1 )
+    ( vec_free [u] b2 ) ( vec_free [u] b3 )
+    ( sha3x4_free xof )
 }
 
 // PRF_η (FIPS 203 §4.1): SHAKE256(s ‖ b, 64η).
@@ -449,25 +521,33 @@ $ `stdlib/std/subtle.nu`
 // Â — the k×k matrix expanded from ρ. `transposed` selects which of the
 // two index orders FIPS 203 asks for: key generation samples Â[i][j]
 // from ρ‖j‖i, encryption wants Â^T and so samples from ρ‖i‖j.
+//
+// The k*k cells are walked in groups of four so the four-way sponge can
+// take them; k*k is 4, 9 or 16, so k=3 leaves one cell for the scalar
+// sampler. Cell c is row c/k, column c%k, which is the same traversal
+// the nested loops did, in the same order, writing the same offsets.
 @ __gen_matrix ( Vec i16 ) a ( Vec u ) rho i k b transposed * i16 _zetas → v {
     : *i16 ap ( vec_data [i16] a )
-    : ~ i i 0
-    ~ < i k {
-        : ~ i j 0
-        ~ < j k {
-            : i off * 256 + * i k j
-            ? transposed
-            { ( __sample_ntt ap off rho i j ) }
-            { ( __sample_ntt ap off rho j i ) }
-            = j + j 1
-        }
-        = i + i 1
+    : i n * k k
+    : ~ i c 0
+    ~ <= + c 4 n {
+        ( __sample_ntt_x4 ap rho k transposed c )
+        = c + c 4
+    }
+    ~ < c n {
+        : i i / c k
+        : i j % c k
+        : i off * 256 c
+        ? transposed
+        { ( __sample_ntt ap off rho i j ) }
+        { ( __sample_ntt ap off rho j i ) }
+        = c + c 1
     }
 }
 
 // K-PKE.KeyGen (Algorithm 13). Returns ek ‖ dk concatenated by the
 // caller; here ek and dk come back as two vectors.
-@ __kpke_keygen MlkemParams prm ( Vec u ) d ( Vec u ) ekout ( Vec u ) dkout → v {
+simd @ __kpke_keygen MlkemParams prm ( Vec u ) d ( Vec u ) ekout ( Vec u ) dkout → v {
     : i k . prm k
     : ( Vec i16 ) zt ( __mlkem_zetas )
     : *i16 zp ( vec_data [i16] zt )
@@ -544,7 +624,7 @@ $ `stdlib/std/subtle.nu`
 }
 
 // K-PKE.Encrypt (Algorithm 14).
-@ __kpke_encrypt MlkemParams prm ( Vec u ) ek ( Vec u ) m ( Vec u ) r ( Vec u ) ctout → v {
+simd @ __kpke_encrypt MlkemParams prm ( Vec u ) ek ( Vec u ) m ( Vec u ) r ( Vec u ) ctout → v {
     : i k . prm k
     : ( Vec i16 ) zt ( __mlkem_zetas )
     : *i16 zp ( vec_data [i16] zt )
@@ -640,7 +720,7 @@ $ `stdlib/std/subtle.nu`
 }
 
 // K-PKE.Decrypt (Algorithm 15) → the 32-byte message.
-@ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
+simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
     : i k . prm k
     : ( Vec i16 ) zt ( __mlkem_zetas )
     : *i16 zp ( vec_data [i16] zt )

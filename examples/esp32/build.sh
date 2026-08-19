@@ -31,7 +31,7 @@ NURLC="$ROOT/build/nurlc"
 [ -x "$NURLC" ] || { echo "ERROR: $NURLC not found — run ./build.sh in repo root first." >&2; exit 1; }
 
 echo "==> [1/3] nurlc: $SRC -> $OUT/$BASE.ll"
-"$NURLC" "$SRC" > "$OUT/$BASE.ll"
+"$NURLC" --no-cpu-dispatch "$SRC" > "$OUT/$BASE.ll"
 
 case "$TARGET" in
   esp32c3|esp32c6|esp32h2|*-riscv|riscv32)

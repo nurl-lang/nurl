@@ -16,7 +16,7 @@ CLANG="$(ls "$HOME"/.espressif/tools/esp-clang/*/esp-clang/bin/clang 2>/dev/null
 [ -x "${CLANG:-}" ] || { echo "ERROR: esp-clang not found — install with: python3 \$IDF_PATH/tools/idf_tools.py install esp-clang" >&2; exit 1; }
 
 echo "==> nurlc:     nurl_blink.nu -> nurl_blink.ll"
-"$NURLC" "$HERE/nurl_blink.nu" > "$HERE/nurl_blink.ll"
+"$NURLC" --no-cpu-dispatch "$HERE/nurl_blink.nu" > "$HERE/nurl_blink.ll"
 
 echo "==> esp-clang: nurl_blink.ll -> nurl_blink.o  (xtensa-esp32-elf)"
 "$CLANG" --target=xtensa-esp32-elf -mcpu=esp32 -O2 \

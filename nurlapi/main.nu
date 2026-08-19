@@ -1475,7 +1475,13 @@ s combined_stdout s combined_stderr → v {
                     ? != 0 ( nurl_str_len provided_ir ) {
                         ( string_free ir ) = ir ( string_from provided_ir ) = nok T
                     } {
-                        : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( vec_push [s] nurlc_args `--ffi-host-imports` )
+                        // --no-cpu-dispatch: the `simd` prefix expands to an
+                        // x86-64-v3 clone, and nurlc emits no target triple
+                        // to tell clang this module is bound for wasm32 —
+                        // left on, every marked function draws one "not a
+                        // recognized feature for this target" line per
+                        // feature.
+                        : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( vec_push [s] nurlc_args `--ffi-host-imports` ) ( vec_push [s] nurlc_args `--no-cpu-dispatch` )
                         : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
                         ?? nurlc_res {
                             T n_out → {
@@ -4068,6 +4074,17 @@ s combined_stdout s combined_stderr → v {
     ^ ``
 }
 
+// Is this target x86-64? The `simd` prefix expands to an x86-64-v3
+// clone plus a CPUID dispatcher, and nurlc emits no target triple, so
+// anything aimed elsewhere has to pass --no-cpu-dispatch or clang
+// answers with one "not a recognized feature for this target" line per
+// feature per marked function.
+@ __zig_is_x86_64 s id → b {
+    ? ( nurl_str_eq id `linux-x64-musl` ) { ^ T } {}
+    ? ( nurl_str_eq id `macos-x64` ) { ^ T } {}
+    ^ F
+}
+
 @ __zig_is_static s id → b {
     ? ( nurl_str_eq id `linux-x64-musl` ) { ^ T } {}
     ? ( nurl_str_eq id `linux-arm64-musl` ) { ^ T } {}
@@ -4116,6 +4133,7 @@ s combined_stdout s combined_stderr → v {
                     : String rt_o ( get_runtime_target_o target )
 
                     : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
+                    ? ! ( __zig_is_x86_64 target ) { ( vec_push [s] nurlc_args `--no-cpu-dispatch` ) } {}
                     : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
                     ?? nurlc_res {
                         T n_out → {

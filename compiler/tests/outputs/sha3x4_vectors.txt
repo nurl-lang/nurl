@@ -1,0 +1,21 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+shake128 in=0    ok
+shake128 in=1    ok
+shake128 in=167  ok
+shake128 in=168  ok
+shake128 in=169  ok
+shake128 in=512  ok
+shake128 out=167 ok
+shake128 out=168 ok
+shake128 out=504 ok
+shake256 in=135  ok
+shake256 in=136  ok
+shake256 out=300 ok
+sha3-256 dom=6   ok
+sha3-512 dom=6   ok
+pieces+resume   ok
+unequal rejected ok
+sha3x4: all lanes agree with the scalar sponge

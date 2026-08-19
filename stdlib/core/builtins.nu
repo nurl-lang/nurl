@@ -381,5 +381,20 @@
 
 & `c` @ nurl_panic_last_msg → s
 
+// ── CPU features ───────────────────────────────────────────────────
+
+// Does this CPU have the x86-64-v3 feature set — AVX2, BMI2 and FMA,
+// with an OS that preserves the wide registers across a context switch?
+// 1 or 0, resolved once at startup and cached.
+//
+// This is the predicate behind the `simd` prefix on a function
+// declaration (docs/spec.md §3.3b): nurlc emits a marked function twice
+// and generates a dispatcher that calls this to choose. Call it
+// directly when you have written two kernels by hand and want to pick
+// between them yourself.
+//
+// Always 0 off x86-64, so a fallback path is never dead code.
+& `c` @ nurl_cpu_x86_v3 → i32
+
 // libc: print a string + newline to stdout.
 & `c` @ puts s text → i32

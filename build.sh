@@ -603,6 +603,13 @@ ln -sf build/nurlc nurlc 2>/dev/null || cp build/nurlc nurlc
 # them elsewhere, and this is one of them.
 if (( RUN_TESTS == 1 )); then
     step "split equivalence" bash compiler/tests/split_equivalence.sh
+    # The `simd` prefix, checked where a behavioural test cannot look:
+    # that two clones exist, that only the wide one carries feature
+    # bits, that the dispatcher owns the undecorated symbol, and that
+    # the wide clone really lowers to ymm. simd_dispatch.nu proves the
+    # answers are right; nothing in it can notice the wide clone
+    # silently disappearing, which is the regression that costs 1.7x.
+    step "simd dispatch IR" bash compiler/tests/simd_dispatch_ir.sh
 fi
 
 # ── nurlfmt ──────────────────────────────────────────────────

@@ -260,6 +260,17 @@ NURLC_G=""
 if [ $DEBUG_INFO -eq 1 ]; then
     NURLC_G="--g"
 fi
+# The `simd` prefix expands to an x86-64-v3 clone plus a CPUID
+# dispatcher, and nurlc emits no target triple to tell it otherwise. On
+# any other architecture clang would answer with `'+avx2' is not a
+# recognized feature for this target` once per feature per marked
+# function, so turn the prefix off here — nurl.sh always builds for the
+# machine it runs on, which makes `uname -m` the whole decision.
+NURLC_CPU=""
+case "$(uname -m)" in
+    x86_64 | amd64) ;;
+    *) NURLC_CPU="--no-cpu-dispatch" ;;
+esac
 SPLIT_FLAGS=""
 if [ "$SPLIT_N" -gt 0 ]; then
     SPLIT_FLAGS="--split=$SPLIT_N --split-out=$OUTBASE"
@@ -281,7 +292,7 @@ if [ "$SPLIT_N" -gt 0 ]; then
     rm -f "$OUTBASE".[0-9]*.ll "$OUTBASE".[0-9]*.o
 fi
 # shellcheck disable=SC2086
-"$NURLC" $NURLC_G $SPLIT_FLAGS "$SRCFILE" > "$LLFILE"
+"$NURLC" $NURLC_G $NURLC_CPU $SPLIT_FLAGS "$SRCFILE" > "$LLFILE"
 
 # `--split=N` is a ceiling, and nurlc holds the policy: it writes no
 # parts at all for a module too small for two of them to be worth it
