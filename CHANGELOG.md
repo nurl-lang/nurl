@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The three Linux CI jobs run in a pre-baked container**
+  (`nurllang/ci:ubuntu24-<date>`, built from `containers/ci/Dockerfile`) —
+  clang/llvm, the FFI dev libraries, qemu + grub, gdb, zstd and the zig
+  toolchain pre-installed, so no CI run touches the Ubuntu package mirror or
+  ziglang.org. Exists because the mirror reachable from GitHub's runner pool
+  degraded three separate times on 2026-08-19 and every affected job burned
+  its whole timeout inside `apt-get update` without executing a line of the
+  code under test. CI pins the dated tag; `:latest` is never referenced.
+
 ### Added
 
 - **`SSL_CERT_FILE` anchors verify-full** — `std/tls_verify.nu` reads the
