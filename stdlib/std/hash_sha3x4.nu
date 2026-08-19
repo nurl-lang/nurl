@@ -177,7 +177,9 @@ simd @ __kf1600x4 * u64 a * u64 b * u64 rc → v {
 
 // ── The four-way sponge ────────────────────────────────────────────
 
-: Sha3x4 {
+// The public surface, explicit since `pub` on shake256x4_block put the
+// file in strict mode — the same set the header comment documents.
+pub : Sha3x4 {
     ( Vec u64 ) st  // 25 lanes x 4 ways, way W of lane L at L*4 + W
     ( Vec u64 ) scr  // 100-lane ping-pong buffer
     ( Vec u64 ) rc  // the 24 iota constants, shared by all four
@@ -187,7 +189,7 @@ simd @ __kf1600x4 * u64 a * u64 b * u64 rc → v {
     b squeezing
 }
 
-@ sha3x4_new i rate i dom → *Sha3x4 {
+pub @ sha3x4_new i rate i dom → *Sha3x4 {
     : *Sha3x4 h # *Sha3x4 ( nurl_alloc Z Sha3x4 )
     : ( Vec u64 ) st ( vec_with_cap [u64] 100 )
     : b _l ( vec_set_len [u64] st 100 )
@@ -206,16 +208,96 @@ simd @ __kf1600x4 * u64 a * u64 b * u64 rc → v {
     ^ h
 }
 
-@ sha3x4_free * Sha3x4 h → v {
+pub @ sha3x4_free * Sha3x4 h → v {
     ( vec_free [u64] . h st )
     ( vec_free [u64] . h scr )
     ( vec_free [u64] . h rc )
     ( nurl_free # s h )
 }
 
-@ shake128x4_init → *Sha3x4 { ^ ( sha3x4_new 168 31 ) }
+pub @ shake128x4_init → *Sha3x4 { ^ ( sha3x4_new 168 31 ) }
 
-@ shake256x4_init → *Sha3x4 { ^ ( sha3x4_new 136 31 ) }
+pub @ shake256x4_init → *Sha3x4 { ^ ( sha3x4_new 136 31 ) }
+
+// ── The one-block special case ─────────────────────────────────────
+//
+// SHAKE256 where all four inputs fit in one rate block (≤ 135 bytes)
+// and all four outputs fit in another (≤ 136): absorb, ONE permutation,
+// extract. No sponge struct, no allocation, state and scratch are two
+// caller-owned 100-lane buffers reused across calls.
+//
+// This exists because SLH-DSA is nothing else. Its F, H and PRF are
+// SHAKE256 over pkseed(n) ‖ ADRS(32) ‖ value(n or 2n) — 64 to 128
+// bytes in, n ≤ 32 out — and a 128f signature computes ~90,000 of
+// them. Through the generic sponge that is six allocations per hash;
+// measured, the allocator traffic plus the per-call setup was costing
+// as much as a quarter of the permutation work it wrapped. Here a hash
+// is: stage bytes, one x4 permutation, read bytes.
+//
+// The four inputs are read from p0..p3 (inlen bytes each — same length
+// by construction, the caller staged them) and the outputs written to
+// o0..o3 (outlen bytes each). Both bounds are CONTRACTS, not clamps: a
+// caller who exceeds them has asked for a different function (the
+// multi-block sponge above), and truncating silently would produce
+// wrong digests that still look random. Panic, loudly.
+pub @ shake256x4_block * u64 st * u64 scr * u64 rc * u p0 * u p1 * u p2 * u p3 i inlen * u o0 * u o1 * u o2 * u o3 i outlen → v {
+    ? | > inlen 135 > outlen 136
+    { ( nurl_panic `shake256x4_block: input must fit one 136-byte rate block (inlen <= 135, outlen <= 136) — use the Sha3x4 sponge for anything longer` ) }
+    {}
+    // Zero state. The compiler's memset is fine here; this is 800 bytes
+    // once per hash, not per byte.
+    ( nurl_memset # s st 0 800 )
+    // Absorb: whole 8-byte words first, then the tail bytes, per way.
+    : i words / inlen 8
+    : ~ i wi 0
+    ~ < wi words {
+        : i off * wi 8
+        ( __k4_in8 st wi 0 p0 off )
+        ( __k4_in8 st wi 1 p1 off )
+        ( __k4_in8 st wi 2 p2 off )
+        ( __k4_in8 st wi 3 p3 off )
+        = wi + wi 1
+    }
+    : ~ i bi * words 8
+    ~ < bi inlen {
+        ( __k4_absorb_byte st 0 bi # i . p0 bi )
+        ( __k4_absorb_byte st 1 bi # i . p1 bi )
+        ( __k4_absorb_byte st 2 bi # i . p2 bi )
+        ( __k4_absorb_byte st 3 bi # i . p3 bi )
+        = bi + bi 1
+    }
+    // pad10*1 with the SHAKE domain byte, all four ways. inlen < 135
+    // keeps the two pad bytes distinct; inlen == 135 merges them into
+    // one byte, which the XOR spelling gets right for free.
+    : ~ i w 0
+    ~ < w 4 {
+        ( __k4_absorb_byte st w inlen 31 )
+        ( __k4_absorb_byte st w 135 128 )
+        = w + w 1
+    }
+    ( __kf1600x4 st scr rc )
+    // Extract: whole words then tail, mirroring the absorb.
+    : i ow / outlen 8
+    : ~ i oi 0
+    ~ < oi ow {
+        : i off * oi 8
+        ( __k4_out8 o0 off . st + * 4 oi 0 )
+        ( __k4_out8 o1 off . st + * 4 oi 1 )
+        ( __k4_out8 o2 off . st + * 4 oi 2 )
+        ( __k4_out8 o3 off . st + * 4 oi 3 )
+        = oi + oi 1
+    }
+    : ~ i ob * ow 8
+    ~ < ob outlen {
+        : i lane / ob 8
+        : i sh * 8 % ob 8
+        = . o0 ob # u & # i >> . st + * 4 lane 0 # u64 sh 255
+        = . o1 ob # u & # i >> . st + * 4 lane 1 # u64 sh 255
+        = . o2 ob # u & # i >> . st + * 4 lane 2 # u64 sh 255
+        = . o3 ob # u & # i >> . st + * 4 lane 3 # u64 sh 255
+        = ob + ob 1
+    }
+}
 
 // XOR one byte into way `w` at block offset `pos`. The interleave puts
 // way w of lane L at u64 index L*4 + w, so the byte's home is decided
@@ -253,7 +335,7 @@ simd @ __kf1600x4 * u64 a * u64 b * u64 rc → v {
 // is 32-66 bytes against 24 rounds of permutation per 168-byte block),
 // and four interleaved ways make the aligned case rarer than it looks.
 // Correctness first where it costs nothing.
-@ sha3x4_absorb * Sha3x4 h ( Vec u ) d0 ( Vec u ) d1 ( Vec u ) d2 ( Vec u ) d3 → v {
+pub @ sha3x4_absorb * Sha3x4 h ( Vec u ) d0 ( Vec u ) d1 ( Vec u ) d2 ( Vec u ) d3 → v {
     ? . h squeezing { ^ v } {}
     : i n ( vec_len [u] d0 )
     // Equal lengths are the contract. Silently absorbing the shortest
@@ -333,7 +415,7 @@ simd @ __kf1600x4 * u64 a * u64 b * u64 rc → v {
     = . p + off 7 # u & # i >> w # u64 56 255
 }
 
-@ sha3x4_squeeze * Sha3x4 h i n ( Vec u ) o0 ( Vec u ) o1 ( Vec u ) o2 ( Vec u ) o3 → v {
+pub @ sha3x4_squeeze * Sha3x4 h i n ( Vec u ) o0 ( Vec u ) o1 ( Vec u ) o2 ( Vec u ) o3 → v {
     ? ! . h squeezing { ( __k4_pad h ) } {}
     ? <= n 0 { ^ v } {}
     // Grow all four to their final length up front, then write through

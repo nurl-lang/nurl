@@ -8,6 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **SLH-DSA now runs four hashes at a time, and beats the reference AVX2
+  implementation on every operation** (i7-5930K, µs/op, sphincsplus
+  `shake-avx2` built from source on the same host):
+
+  | | before | after | AVX2 ref | |
+  | --- | ---: | ---: | ---: | --- |
+  | 128f keygen / sign / verify | 2598 / 62085 / 3771 | 656 / 19807 / 1616 | 1104 / 25546 / 1894 | 1.2–1.7× faster |
+  | 128s keygen / sign / verify | 168156 / 1307537 / 1337 | 43200 / 325635 / 651 | 70857 / 544364 / 707 | 1.1–1.7× faster |
+  | 192f sign | 101442 | 31744 | — | 3.2× |
+  | 256f sign / verify | 214134 / 5475 | 58618 / 2239 | 83238 / 2786 | 1.4× / 1.2× faster |
+
+  Three changes, all structure, no algorithm: `shake256x4_block` in
+  `std/hash_sha3x4` (F/H/PRF always fit one rate block — one four-way
+  permutation, no sponge struct, no allocation, against ~90,000 hashes and
+  six allocations each per 128f signature before); WOTS+ chains four at a
+  time (equal-step lockstep in keygen/sign, per-lane entry points in verify
+  — a lane joins at its own start and idles before it, since the permutation
+  runs on all four lanes regardless); and FORS trees built bottom-up (leaves
+  and internal levels four at a time, the auth path extracted from the one
+  build instead of recomputing a sibling subtree per level). A per-call
+  `SlhCtx` scratch is threaded down the call chain, so concurrent signers
+  share nothing.
+
+  Oracle: SLH-DSA ACVP byte-exact (keyGen 60, sigGen 168, sigVer 168 — 0
+  failed), and four mutations of the new paths (chain-entry off-by-one,
+  FORS sibling without `^1`, pad domain byte, verify parent parity) each
+  caught.
+
 ### Added
 
 - **`simd`: CPU-dispatched code generation (grammar v2.6)** —
