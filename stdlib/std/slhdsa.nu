@@ -50,6 +50,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash_sha3.nu`
+$ `stdlib/std/hash_sha3x4.nu`
 $ `stdlib/std/random.nu`
 
 // ── Parameters ─────────────────────────────────────────────────────
@@ -229,6 +230,171 @@ $ `stdlib/std/random.nu`
     ^ out
 }
 
+// ── Four hashes at a time ──────────────────────────────────────────
+//
+// Everything below the top-level API is built out of F, H and PRF —
+// SHAKE256 over pkseed ‖ ADRS ‖ value, one rate block in, n bytes out —
+// and the structure hands them out in independent groups: a WOTS+ key
+// is `len` chains that never read each other, a FORS tree is 2^a
+// leaves that never read each other. A 128f signature computes ~90,000
+// of these hashes, ~150 at a time in independent batches.
+//
+// So the hot paths stage four inputs side by side and run
+// shake256x4_block: one four-way permutation, no sponge struct, no
+// allocation. The scratch lives in one context created per public-API
+// call and threaded down the call chain — per-call state, so two
+// threads signing concurrently never share it.
+//
+// Where a batch is not a multiple of four, the spare lanes REDO the
+// last real unit and the result is discarded: the permutation runs on
+// all four lanes regardless, so a duplicated lane costs nothing, and
+// there is no scalar tail path to keep in agreement with this one.
+
+: SlhCtx {
+    ( Vec u64 ) st  // 100 interleaved lanes — shake256x4_block state
+    ( Vec u64 ) scr  // its ping-pong partner
+    ( Vec u64 ) rc
+    ( Vec u ) in0  // four staging buffers, one rate block each
+    ( Vec u ) in1
+    ( Vec u ) in2
+    ( Vec u ) in3
+    ( Vec u ) val  // four 32-byte lane values, way w at offset w*32
+}
+
+@ __sx_buf i len → ( Vec u ) {
+    : ( Vec u ) v ( vec_with_cap [u] len )
+    : b _l ( vec_set_len [u] v len )
+    ^ v
+}
+
+@ __slhx4_new → *SlhCtx {
+    : *SlhCtx c # *SlhCtx ( nurl_alloc Z SlhCtx )
+    = . c st ( __sx_buf_u64 100 )
+    = . c scr ( __sx_buf_u64 100 )
+    = . c rc ( keccak_round_constants )
+    = . c in0 ( __sx_buf 136 )
+    = . c in1 ( __sx_buf 136 )
+    = . c in2 ( __sx_buf 136 )
+    = . c in3 ( __sx_buf 136 )
+    = . c val ( __sx_buf 128 )
+    ^ c
+}
+
+@ __sx_buf_u64 i len → ( Vec u64 ) {
+    : ( Vec u64 ) v ( vec_with_cap [u64] len )
+    : b _l ( vec_set_len [u64] v len )
+    ^ v
+}
+
+@ __slhx4_free * SlhCtx c → v {
+    ( vec_free [u64] . c st )
+    ( vec_free [u64] . c scr )
+    ( vec_free [u64] . c rc )
+    ( vec_free [u] . c in0 )
+    ( vec_free [u] . c in1 )
+    ( vec_free [u] . c in2 )
+    ( vec_free [u] . c in3 )
+    ( vec_free [u] . c val )
+    ( nurl_free # s c )
+}
+
+@ __sx_in * SlhCtx c i w → *u {
+    ? == w 0 { ^ ( vec_data [u] . c in0 ) } {}
+    ? == w 1 { ^ ( vec_data [u] . c in1 ) } {}
+    ? == w 2 { ^ ( vec_data [u] . c in2 ) } {}
+    ^ ( vec_data [u] . c in3 )
+}
+
+// Stage lane w with pkseed ‖ adrs ‖ value — the byte order __slh_shake
+// absorbs, so the four-way and one-way spellings of the same hash are
+// the same bytes. `value` is a raw pointer because it is usually a lane
+// of ctx.val; the vecs it can also come from hand over vec_data.
+@ __sx_stage * SlhCtx c i w ( Vec u ) pkseed ( Vec u ) adrs * u value i vlen → i {
+    : i n ( vec_len [u] pkseed )
+    : *u dst ( __sx_in c w )
+    ( nurl_memcpy # s dst # s ( vec_data [u] pkseed ) n )
+    ( nurl_memcpy # s + # i dst n # s ( vec_data [u] adrs ) 32 )
+    ( nurl_memcpy # s + # i dst + n 32 # s value vlen )
+    ^ + + n 32 vlen
+}
+
+// One four-way hash over the staged inputs, n bytes back into each
+// lane of ctx.val.
+@ __sx_run * SlhCtx c i inlen i n → v {
+    : *u vp ( vec_data [u] . c val )
+    ( shake256x4_block ( vec_data [u64] . c st ) ( vec_data [u64] . c scr )
+    ( vec_data [u64] . c rc )
+    ( __sx_in c 0 ) ( __sx_in c 1 ) ( __sx_in c 2 ) ( __sx_in c 3 )
+    inlen
+    vp # *u + # i vp 32 # *u + # i vp 64 # *u + # i vp 96 n )
+}
+
+// Four WOTS+ chains in lockstep: lane w walks chain `cw_w`, F applied
+// `steps` times from step `start`. Values live in ctx.val on entry and
+// exit. All four lanes take the same number of steps — the callers
+// with per-chain step counts (sign, verify) stay on the scalar path,
+// where the count is data-dependent and small.
+@ __chains_x4 * SlhCtx c ( Vec u ) pkseed ( Vec u ) adrs i c0 i c1 i c2 i c3 i start i steps i n → v {
+    : *u vp ( vec_data [u] . c val )
+    : ~ i j start
+    ~ < j + start steps {
+        ( __adrs_set_hash adrs j )
+        ( __adrs_set_chain adrs c0 )
+        : i l0 ( __sx_stage c 0 pkseed adrs vp n )
+        ( __adrs_set_chain adrs c1 )
+        : i l1 ( __sx_stage c 1 pkseed adrs # *u + # i vp 32 n )
+        ( __adrs_set_chain adrs c2 )
+        : i l2 ( __sx_stage c 2 pkseed adrs # *u + # i vp 64 n )
+        ( __adrs_set_chain adrs c3 )
+        : i l3 ( __sx_stage c 3 pkseed adrs # *u + # i vp 96 n )
+        ( __sx_run c l0 n )
+        = j + j 1
+    }
+}
+
+// Four chains with PER-LANE starting points, in lockstep on the hash
+// index. Verification walks chain w from step m_w to 15, so the lanes
+// share their END but not their start: lane w joins at j = start_w and
+// keeps its value untouched before that. Every lane is staged every
+// step — an idle lane hashes its frozen value and the result is
+// discarded — because the permutation runs on all four lanes either
+// way, and a data-dependent staging skip would be a branch per lane
+// per step for no work saved.
+//
+// `vals` is a caller-owned 4×32 buffer (lane w at w*32): unlike the
+// equal-start runner the values cannot live in ctx.val, because a
+// discarded lane must KEEP its old value across the run that would
+// have overwritten it.
+@ __chains_var_x4 * SlhCtx c ( Vec u ) pkseed ( Vec u ) adrs i c0 i c1 i c2 i c3 i s0 i s1 i s2 i s3 * u vals i n → v {
+    : *u vp ( vec_data [u] . c val )
+    // Start at the earliest lane's entry point: steps before it would
+    // stage four frozen values and discard four results — a permutation
+    // for nothing, and for a high-digit group (all starts at 15, which
+    // a real message produces regularly) that was all fifteen of them.
+    : ~ i jmin s0
+    ? < s1 jmin { = jmin s1 } {}
+    ? < s2 jmin { = jmin s2 } {}
+    ? < s3 jmin { = jmin s3 } {}
+    : ~ i j jmin
+    ~ < j 15 {
+        ( __adrs_set_hash adrs j )
+        ( __adrs_set_chain adrs c0 )
+        : i l0 ( __sx_stage c 0 pkseed adrs vals n )
+        ( __adrs_set_chain adrs c1 )
+        : i l1 ( __sx_stage c 1 pkseed adrs # *u + # i vals 32 n )
+        ( __adrs_set_chain adrs c2 )
+        : i l2 ( __sx_stage c 2 pkseed adrs # *u + # i vals 64 n )
+        ( __adrs_set_chain adrs c3 )
+        : i l3 ( __sx_stage c 3 pkseed adrs # *u + # i vals 96 n )
+        ( __sx_run c l0 n )
+        ? >= j s0 { ( nurl_memcpy # s vals # s vp n ) } {}
+        ? >= j s1 { ( nurl_memcpy # s + # i vals 32 # s # *u + # i vp 32 n ) } {}
+        ? >= j s2 { ( nurl_memcpy # s + # i vals 64 # s # *u + # i vp 64 n ) } {}
+        ? >= j s3 { ( nurl_memcpy # s + # i vals 96 # s # *u + # i vp 96 n ) } {}
+        = j + j 1
+    }
+}
+
 // ── WOTS+ (§5) ─────────────────────────────────────────────────────
 
 // Iterate F from step `i` for `s` steps. The chain length is what a
@@ -273,26 +439,49 @@ $ `stdlib/std/random.nu`
     ^ msg
 }
 
-@ __wots_pkgen ( Vec u ) skseed ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+// The hottest function in the scheme: a 128f signature calls this ~150
+// times, and each call is len chains × (1 PRF + 15 F). All chains run
+// the same 15 steps, so they go four at a time; a group past the end
+// duplicates the last chain and drops the extra lanes.
+@ __wots_pkgen * SlhCtx c ( Vec u ) skseed ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+    : i n . p n
+    : i len . p len
     : ( Vec u ) skadrs ( __adrs_copy adrs )
     ( __adrs_set_type skadrs 5 )
     ( __adrs_set_kp skadrs ( __adrs_get_kp adrs ) )
-    : ( Vec u ) tmp ( vec_new [u] )
-    : ~ i i 0
-    ~ < i . p len {
-        ( __adrs_set_chain skadrs i )
-        : ( Vec u ) sk ( __slh_prf pkseed skadrs skseed . p n )
-        ( __adrs_set_chain adrs i )
-        : ( Vec u ) ch ( __wots_chain sk 0 15 pkseed adrs . p n )
-        ( bytes_extend_bytes tmp ch )
-        ( vec_free [u] ch )
-        ( vec_free [u] sk )
-        = i + i 1
+    : ( Vec u ) tmp ( __sx_buf * len n )
+    : *u tp ( vec_data [u] tmp )
+    : *u vp ( vec_data [u] . c val )
+    : *u ssp ( vec_data [u] skseed )
+    : ~ i g 0
+    ~ < g len {
+        : i c0 + g 0
+        : i c1 ? < + g 1 len + g 1 - len 1
+        : i c2 ? < + g 2 len + g 2 - len 1
+        : i c3 ? < + g 3 len + g 3 - len 1
+        // sk_w ← PRF(pkseed, skadrs(chain=c_w), skseed), four ways.
+        ( __adrs_set_chain skadrs c0 )
+        : i l0 ( __sx_stage c 0 pkseed skadrs ssp n )
+        ( __adrs_set_chain skadrs c1 )
+        : i l1 ( __sx_stage c 1 pkseed skadrs ssp n )
+        ( __adrs_set_chain skadrs c2 )
+        : i l2 ( __sx_stage c 2 pkseed skadrs ssp n )
+        ( __adrs_set_chain skadrs c3 )
+        : i l3 ( __sx_stage c 3 pkseed skadrs ssp n )
+        ( __sx_run c l0 n )
+        // 15 F steps in lockstep.
+        ( __chains_x4 c pkseed adrs c0 c1 c2 c3 0 15 n )
+        : ~ i w 0
+        ~ & < w 4 < + g w len {
+            ( nurl_memcpy # s + # i tp * + g w n # s + # i vp * w 32 n )
+            = w + w 1
+        }
+        = g + g 4
     }
     : ( Vec u ) pkadrs ( __adrs_copy adrs )
     ( __adrs_set_type pkadrs 1 )
     ( __adrs_set_kp pkadrs ( __adrs_get_kp adrs ) )
-    : ( Vec u ) out ( __slh_f pkseed pkadrs tmp . p n )
+    : ( Vec u ) out ( __slh_f pkseed pkadrs tmp n )
     ( vec_free [u] tmp ) ( vec_free [u] pkadrs ) ( vec_free [u] skadrs )
     ^ out
 }
@@ -318,23 +507,40 @@ $ `stdlib/std/random.nu`
     ^ sig
 }
 
-@ __wots_pk_from_sig ( Vec u ) sig ( Vec u ) m ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+@ __wots_pk_from_sig * SlhCtx c ( Vec u ) sig ( Vec u ) m ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+    : i n . p n
+    : i len . p len
     : ( Vec i ) msg ( __wots_msg m p )
-    : ( Vec u ) tmp ( vec_new [u] )
-    : ~ i i 0
-    ~ < i . p len {
-        ( __adrs_set_chain adrs i )
-        : i mi ?? ( vec_get [i] msg i ) { T x → { x } F → { 0 } }
-        : ( Vec u ) si ( bytes_slice sig * i . p n * + i 1 . p n )
-        : ( Vec u ) ch ( __wots_chain si mi - 15 mi pkseed adrs . p n )
-        ( bytes_extend_bytes tmp ch )
-        ( vec_free [u] ch ) ( vec_free [u] si )
-        = i + i 1
+    : *i mp ( vec_data [i] msg )
+    : *u sp ( vec_data [u] sig )
+    : ( Vec u ) tmp ( __sx_buf * len n )
+    : *u tp ( vec_data [u] tmp )
+    : ( Vec u ) vals ( __sx_buf 128 )
+    : *u va ( vec_data [u] vals )
+    : ~ i g 0
+    ~ < g len {
+        : i c0 + g 0
+        : i c1 ? < + g 1 len + g 1 - len 1
+        : i c2 ? < + g 2 len + g 2 - len 1
+        : i c3 ? < + g 3 len + g 3 - len 1
+        ( nurl_memcpy # s va # s # *u + # i sp * c0 n n )
+        ( nurl_memcpy # s + # i va 32 # s # *u + # i sp * c1 n n )
+        ( nurl_memcpy # s + # i va 64 # s # *u + # i sp * c2 n n )
+        ( nurl_memcpy # s + # i va 96 # s # *u + # i sp * c3 n n )
+        ( __chains_var_x4 c pkseed adrs c0 c1 c2 c3
+        # i . mp c0 # i . mp c1 # i . mp c2 # i . mp c3 va n )
+        : ~ i w 0
+        ~ & < w 4 < + g w len {
+            ( nurl_memcpy # s + # i tp * + g w n # s + # i va * w 32 n )
+            = w + w 1
+        }
+        = g + g 4
     }
+    ( vec_free [u] vals )
     : ( Vec u ) pkadrs ( __adrs_copy adrs )
     ( __adrs_set_type pkadrs 1 )
     ( __adrs_set_kp pkadrs ( __adrs_get_kp adrs ) )
-    : ( Vec u ) out ( __slh_f pkseed pkadrs tmp . p n )
+    : ( Vec u ) out ( __slh_f pkseed pkadrs tmp n )
     ( vec_free [u] tmp ) ( vec_free [u] pkadrs ) ( vec_free [i] msg )
     ^ out
 }
@@ -345,14 +551,14 @@ $ `stdlib/std/random.nu`
 //
 // This is where an `s` parameter set spends its time: h' = 9 means
 // every one of the d layers rebuilds 512 WOTS+ key pairs per signature.
-@ __xmss_node ( Vec u ) skseed i i2 i z ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+@ __xmss_node * SlhCtx c ( Vec u ) skseed i i2 i z ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
     ? == z 0 {
         ( __adrs_set_type adrs 0 )
         ( __adrs_set_kp adrs i2 )
-        ^ ( __wots_pkgen skseed pkseed adrs p )
+        ^ ( __wots_pkgen c skseed pkseed adrs p )
     } {}
-    : ( Vec u ) l ( __xmss_node skseed * 2 i2 - z 1 pkseed adrs p )
-    : ( Vec u ) r ( __xmss_node skseed + * 2 i2 1 - z 1 pkseed adrs p )
+    : ( Vec u ) l ( __xmss_node c skseed * 2 i2 - z 1 pkseed adrs p )
+    : ( Vec u ) r ( __xmss_node c skseed + * 2 i2 1 - z 1 pkseed adrs p )
     ( __adrs_set_type adrs 2 )
     ( __adrs_set_height adrs z )
     ( __adrs_set_index adrs i2 )
@@ -363,13 +569,13 @@ $ `stdlib/std/random.nu`
     ^ out
 }
 
-@ __xmss_sign ( Vec u ) m ( Vec u ) skseed i idx ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+@ __xmss_sign * SlhCtx c ( Vec u ) m ( Vec u ) skseed i idx ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
     : ( Vec u ) auth ( vec_new [u] )
     : ~ i j 0
     ~ < j . p hp {
         : i kk ^^ >> idx j 1
         : ( Vec u ) a2 ( __adrs_copy adrs )
-        : ( Vec u ) nd ( __xmss_node skseed kk j pkseed a2 p )
+        : ( Vec u ) nd ( __xmss_node c skseed kk j pkseed a2 p )
         ( bytes_extend_bytes auth nd )
         ( vec_free [u] nd ) ( vec_free [u] a2 )
         = j + j 1
@@ -382,12 +588,12 @@ $ `stdlib/std/random.nu`
     ^ sig
 }
 
-@ __xmss_pk_from_sig i idx ( Vec u ) sigx ( Vec u ) m ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+@ __xmss_pk_from_sig * SlhCtx c i idx ( Vec u ) sigx ( Vec u ) m ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
     : i wl * . p len . p n
     ( __adrs_set_type adrs 0 )
     ( __adrs_set_kp adrs idx )
     : ( Vec u ) wsig ( bytes_slice sigx 0 wl )
-    : ~ ( Vec u ) node ( __wots_pk_from_sig wsig m pkseed adrs p )
+    : ~ ( Vec u ) node ( __wots_pk_from_sig c wsig m pkseed adrs p )
     ( vec_free [u] wsig )
     ( __adrs_set_type adrs 2 )
     ( __adrs_set_index adrs idx )
@@ -416,18 +622,18 @@ $ `stdlib/std/random.nu`
 
 // ── Hypertree (§7) ─────────────────────────────────────────────────
 
-@ __ht_sign ( Vec u ) m ( Vec u ) skseed ( Vec u ) pkseed i idx_tree i idx_leaf SlhParams p → ( Vec u ) {
+@ __ht_sign * SlhCtx c ( Vec u ) m ( Vec u ) skseed ( Vec u ) pkseed i idx_tree i idx_leaf SlhParams p → ( Vec u ) {
     : ~ i it idx_tree
     : ~ i il idx_leaf
     : ( Vec u ) adrs ( __adrs_new )
     ( __adrs_set_layer adrs 0 )
     ( __adrs_set_tree adrs it )
-    : ( Vec u ) sig0 ( __xmss_sign m skseed il pkseed adrs p )
+    : ( Vec u ) sig0 ( __xmss_sign c m skseed il pkseed adrs p )
     : ~ ( Vec u ) out ( bytes_slice sig0 0 ( vec_len [u] sig0 ) )
     : ( Vec u ) a0 ( __adrs_new )
     ( __adrs_set_layer a0 0 )
     ( __adrs_set_tree a0 it )
-    : ~ ( Vec u ) root ( __xmss_pk_from_sig il sig0 m pkseed a0 p )
+    : ~ ( Vec u ) root ( __xmss_pk_from_sig c il sig0 m pkseed a0 p )
     ( vec_free [u] a0 ) ( vec_free [u] sig0 ) ( vec_free [u] adrs )
 
     : ~ i j 1
@@ -441,13 +647,13 @@ $ `stdlib/std/random.nu`
         : ( Vec u ) aj ( __adrs_new )
         ( __adrs_set_layer aj j )
         ( __adrs_set_tree aj it )
-        : ( Vec u ) sj ( __xmss_sign root skseed il pkseed aj p )
+        : ( Vec u ) sj ( __xmss_sign c root skseed il pkseed aj p )
         ( bytes_extend_bytes out sj )
         ? < j - . p d 1 {
             : ( Vec u ) a2 ( __adrs_new )
             ( __adrs_set_layer a2 j )
             ( __adrs_set_tree a2 it )
-            : ( Vec u ) nr ( __xmss_pk_from_sig il sj root pkseed a2 p )
+            : ( Vec u ) nr ( __xmss_pk_from_sig c il sj root pkseed a2 p )
             ( vec_free [u] root )
             = root nr
             ( vec_free [u] a2 )
@@ -459,7 +665,7 @@ $ `stdlib/std/random.nu`
     ^ out
 }
 
-@ __ht_verify ( Vec u ) m ( Vec u ) sight ( Vec u ) pkseed i idx_tree i idx_leaf ( Vec u ) pkroot SlhParams p → b {
+@ __ht_verify * SlhCtx c ( Vec u ) m ( Vec u ) sight ( Vec u ) pkseed i idx_tree i idx_leaf ( Vec u ) pkroot SlhParams p → b {
     : i xl * + . p hp . p len . p n
     : ~ i it idx_tree
     : ~ i il idx_leaf
@@ -467,7 +673,7 @@ $ `stdlib/std/random.nu`
     ( __adrs_set_layer a0 0 )
     ( __adrs_set_tree a0 it )
     : ( Vec u ) s0 ( bytes_slice sight 0 xl )
-    : ~ ( Vec u ) node ( __xmss_pk_from_sig il s0 m pkseed a0 p )
+    : ~ ( Vec u ) node ( __xmss_pk_from_sig c il s0 m pkseed a0 p )
     ( vec_free [u] s0 ) ( vec_free [u] a0 )
     : ~ i j 1
     ~ < j . p d {
@@ -481,7 +687,7 @@ $ `stdlib/std/random.nu`
         ( __adrs_set_layer aj j )
         ( __adrs_set_tree aj it )
         : ( Vec u ) sj ( bytes_slice sight * j xl * + j 1 xl )
-        : ( Vec u ) nn ( __xmss_pk_from_sig il sj node pkseed aj p )
+        : ( Vec u ) nn ( __xmss_pk_from_sig c il sj node pkseed aj p )
         ( vec_free [u] node )
         = node nn
         ( vec_free [u] sj ) ( vec_free [u] aj )
@@ -509,89 +715,239 @@ $ `stdlib/std/random.nu`
     ^ out
 }
 
-@ __fors_node ( Vec u ) skseed i i2 i z ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
-    ? == z 0 {
-        : ( Vec u ) sk ( __fors_skgen skseed pkseed adrs i2 p )
+// One FORS tree, built bottom-up: all 2^a leaves, then each level
+// packed in place. The recursion this replaces recomputed the sibling
+// subtree of every auth level separately — the same total hash count,
+// but one leaf at a time; here the leaves go four at a time (PRF and F
+// both), the internal levels pack four pairs at a time, and the auth
+// path falls out of the one build for free.
+//
+// The level packing is in place at the front of `buf`: parents at
+// [0, half) are written from children at [2·pi, 2·pi+2). Within a group
+// of four, all stagings copy their input bytes before the first result
+// is written back, and a later group reads children at indices at least
+// twice its parent index — always ahead of every parent written so far.
+//
+// Returns the root; appends sk(selected leaf) ‖ auth[0..a) to `sig`,
+// which is exactly the per-tree slice of a FORS signature.
+@ __fors_tree * SlhCtx c ( Vec u ) skseed ( Vec u ) pkseed ( Vec u ) adrs i tree i sel ( Vec u ) sig SlhParams p → ( Vec u ) {
+    : i n . p n
+    : i a . p a
+    : i nleaf << 1 a
+    : i base * tree nleaf
+    : *u vp ( vec_data [u] . c val )
+
+    // The revealed secret: sk of the selected leaf, first in the sig.
+    : ( Vec u ) skadrs ( __adrs_copy adrs )
+    ( __adrs_set_type skadrs 6 )
+    ( __adrs_set_kp skadrs ( __adrs_get_kp adrs ) )
+    ( __adrs_set_index skadrs + base sel )
+    : ( Vec u ) sksel ( __slh_prf pkseed skadrs skseed n )
+    ( bytes_extend_bytes sig sksel )
+    ( vec_free [u] sksel )
+
+    : ( Vec u ) buf ( __sx_buf * nleaf n )
+    : *u bp ( vec_data [u] buf )
+    : *u ssp ( vec_data [u] skseed )
+
+    // Leaves, four at a time: sk_w ← PRF(idx), leaf_w ← F(sk_w).
+    : ~ i li 0
+    ~ < li nleaf {
+        : i i0 + base + li 0
+        : i i1 + base ? < + li 1 nleaf + li 1 - nleaf 1
+        : i i2 + base ? < + li 2 nleaf + li 2 - nleaf 1
+        : i i3 + base ? < + li 3 nleaf + li 3 - nleaf 1
+        ( __adrs_set_index skadrs i0 )
+        : i l0 ( __sx_stage c 0 pkseed skadrs ssp n )
+        ( __adrs_set_index skadrs i1 )
+        : i l1 ( __sx_stage c 1 pkseed skadrs ssp n )
+        ( __adrs_set_index skadrs i2 )
+        : i l2 ( __sx_stage c 2 pkseed skadrs ssp n )
+        ( __adrs_set_index skadrs i3 )
+        : i l3 ( __sx_stage c 3 pkseed skadrs ssp n )
+        ( __sx_run c l0 n )
         ( __adrs_set_height adrs 0 )
+        ( __adrs_set_index adrs i0 )
+        : i f0 ( __sx_stage c 0 pkseed adrs vp n )
+        ( __adrs_set_index adrs i1 )
+        : i f1 ( __sx_stage c 1 pkseed adrs # *u + # i vp 32 n )
         ( __adrs_set_index adrs i2 )
-        : ( Vec u ) out ( __slh_f pkseed adrs sk . p n )
-        ( vec_free [u] sk )
-        ^ out
-    } {}
-    : ( Vec u ) l ( __fors_node skseed * 2 i2 - z 1 pkseed adrs p )
-    : ( Vec u ) r ( __fors_node skseed + * 2 i2 1 - z 1 pkseed adrs p )
-    ( __adrs_set_height adrs z )
-    ( __adrs_set_index adrs i2 )
-    : ( Vec u ) both ( bytes_slice l 0 ( vec_len [u] l ) )
-    ( bytes_extend_bytes both r )
-    : ( Vec u ) out ( __slh_f pkseed adrs both . p n )
-    ( vec_free [u] both ) ( vec_free [u] r ) ( vec_free [u] l )
-    ^ out
+        : i f2 ( __sx_stage c 2 pkseed adrs # *u + # i vp 64 n )
+        ( __adrs_set_index adrs i3 )
+        : i f3 ( __sx_stage c 3 pkseed adrs # *u + # i vp 96 n )
+        ( __sx_run c f0 n )
+        : ~ i w 0
+        ~ & < w 4 < + li w nleaf {
+            ( nurl_memcpy # s + # i bp * + li w n # s + # i vp * w 32 n )
+            = w + w 1
+        }
+        = li + li 4
+    }
+
+    // Pack upward. Before each level is consumed, its auth node — the
+    // sibling of the selected leaf's ancestor — is still in buf.
+    : ~ i cur nleaf
+    : ~ i h 0
+    ~ < h a {
+        : i sib ^^ >> sel h 1
+        : ( Vec u ) an ( bytes_slice buf * sib n * + sib 1 n )
+        ( bytes_extend_bytes sig an )
+        ( vec_free [u] an )
+        : i half / cur 2
+        : i hh + h 1
+        ( __adrs_set_height adrs hh )
+        : ~ i pi 0
+        ~ < pi half {
+            : i p0 + pi 0
+            : i p1 ? < + pi 1 half + pi 1 - half 1
+            : i p2 ? < + pi 2 half + pi 2 - half 1
+            : i p3 ? < + pi 3 half + pi 3 - half 1
+            ( __adrs_set_index adrs + * tree half p0 )
+            : i l0 ( __sx_stage c 0 pkseed adrs # *u + # i bp * * 2 p0 n * 2 n )
+            ( __adrs_set_index adrs + * tree half p1 )
+            : i l1 ( __sx_stage c 1 pkseed adrs # *u + # i bp * * 2 p1 n * 2 n )
+            ( __adrs_set_index adrs + * tree half p2 )
+            : i l2 ( __sx_stage c 2 pkseed adrs # *u + # i bp * * 2 p2 n * 2 n )
+            ( __adrs_set_index adrs + * tree half p3 )
+            : i l3 ( __sx_stage c 3 pkseed adrs # *u + # i bp * * 2 p3 n * 2 n )
+            ( __sx_run c l0 n )
+            : ~ i w 0
+            ~ & < w 4 < + pi w half {
+                ( nurl_memcpy # s + # i bp * + pi w n # s + # i vp * w 32 n )
+                = w + w 1
+            }
+            = pi + pi 4
+        }
+        = cur half
+        = h hh
+    }
+
+    : ( Vec u ) root ( bytes_slice buf 0 n )
+    ( vec_free [u] buf ) ( vec_free [u] skadrs )
+    ^ root
 }
 
-@ __fors_sign ( Vec u ) md ( Vec u ) skseed ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+@ __fors_sign * SlhCtx c ( Vec u ) md ( Vec u ) skseed ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
     : ( Vec i ) idx ( __base_2b md . p a . p k )
     : ( Vec u ) sig ( vec_new [u] )
     : ~ i i 0
     ~ < i . p k {
         : i ii ?? ( vec_get [i] idx i ) { T x → { x } F → { 0 } }
-        : ( Vec u ) sk ( __fors_skgen skseed pkseed adrs + * i << 1 . p a ii p )
-        ( bytes_extend_bytes sig sk )
-        ( vec_free [u] sk )
-        : ~ i j 0
-        ~ < j . p a {
-            : i s ^^ >> ii j 1
-            : ( Vec u ) nd ( __fors_node skseed + * i << 1 - . p a j s j pkseed adrs p )
-            ( bytes_extend_bytes sig nd )
-            ( vec_free [u] nd )
-            = j + j 1
-        }
+        : ( Vec u ) root ( __fors_tree c skseed pkseed adrs i ii sig p )
+        ( vec_free [u] root )
         = i + i 1
     }
     ( vec_free [i] idx )
     ^ sig
 }
 
-@ __fors_pk_from_sig ( Vec u ) sigf ( Vec u ) md ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
-    : ( Vec i ) idx ( __base_2b md . p a . p k )
-    : i step * + 1 . p a . p n
-    : ( Vec u ) roots ( vec_new [u] )
-    : ~ i i 0
-    ~ < i . p k {
-        : i ii ?? ( vec_get [i] idx i ) { T x → { x } F → { 0 } }
-        : ( Vec u ) sk ( bytes_slice sigf * i step + * i step . p n )
+// FORS verification, four trees at a time. The k root recomputations
+// are independent and identical in shape — one leaf F, then `a` levels
+// of H walking the auth path — so lane w walks tree g+w in lockstep.
+// Only the concatenation order inside a level is per-lane data (the
+// bit of ii_w that says whether the node is a left or right child),
+// and that is staging bytes, not control flow the lanes would have to
+// agree on.
+@ __fors_pk_from_sig * SlhCtx c ( Vec u ) sigf ( Vec u ) md ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+    : i n . p n
+    : i a . p a
+    : i k . p k
+    : ( Vec i ) idx ( __base_2b md a k )
+    : *i xp ( vec_data [i] idx )
+    : i step * + 1 a n
+    : *u sfp ( vec_data [u] sigf )
+    : ( Vec u ) roots ( __sx_buf * k n )
+    : *u rp ( vec_data [u] roots )
+    : *u vp ( vec_data [u] . c val )
+    : ( Vec u ) vals ( __sx_buf 128 )
+    : *u va ( vec_data [u] vals )
+    // Per-lane 2n concatenation scratch for the H levels.
+    : ( Vec u ) both ( __sx_buf 256 )
+    : *u bo ( vec_data [u] both )
+
+    : ~ i g 0
+    ~ < g k {
+        : i t0 + g 0
+        : i t1 ? < + g 1 k + g 1 - k 1
+        : i t2 ? < + g 2 k + g 2 - k 1
+        : i t3 ? < + g 3 k + g 3 - k 1
+        : i i0 # i . xp t0
+        : i i1 # i . xp t1
+        : i i2 # i . xp t2
+        : i i3 # i . xp t3
+        : ~ i u0 + * t0 << 1 a i0
+        : ~ i u1 + * t1 << 1 a i1
+        : ~ i u2 + * t2 << 1 a i2
+        : ~ i u3 + * t3 << 1 a i3
+
+        // Leaf: node_w ← F(pkseed, adrs(h=0, idx=u_w), sk_w).
         ( __adrs_set_height adrs 0 )
-        ( __adrs_set_index adrs + * i << 1 . p a ii )
-        : ~ ( Vec u ) node ( __slh_f pkseed adrs sk . p n )
-        ( vec_free [u] sk )
+        ( __adrs_set_index adrs u0 )
+        : i l0 ( __sx_stage c 0 pkseed adrs # *u + # i sfp * t0 step n )
+        ( __adrs_set_index adrs u1 )
+        : i l1 ( __sx_stage c 1 pkseed adrs # *u + # i sfp * t1 step n )
+        ( __adrs_set_index adrs u2 )
+        : i l2 ( __sx_stage c 2 pkseed adrs # *u + # i sfp * t2 step n )
+        ( __adrs_set_index adrs u3 )
+        : i l3 ( __sx_stage c 3 pkseed adrs # *u + # i sfp * t3 step n )
+        ( __sx_run c l0 n )
+        ( nurl_memcpy # s va # s vp n )
+        ( nurl_memcpy # s + # i va 32 # s # *u + # i vp 32 n )
+        ( nurl_memcpy # s + # i va 64 # s # *u + # i vp 64 n )
+        ( nurl_memcpy # s + # i va 96 # s # *u + # i vp 96 n )
+
         : ~ i j 0
-        ~ < j . p a {
-            : ( Vec u ) aj ( bytes_slice sigf + + * i step . p n * j . p n + + * i step . p n * + j 1 . p n )
+        ~ < j a {
             ( __adrs_set_height adrs + j 1 )
-            : i cur ( __adrs_get_index adrs )
-            : ~ ( Vec u ) both ( vec_new [u] )
-            ? == % >> ii j 2 0 {
-                ( __adrs_set_index adrs / cur 2 )
-                ( bytes_extend_bytes both node )
-                ( bytes_extend_bytes both aj )
-            } {
-                ( __adrs_set_index adrs / - cur 1 2 )
-                ( bytes_extend_bytes both aj )
-                ( bytes_extend_bytes both node )
+            // Lane w: parent index and node ‖ auth vs auth ‖ node from
+            // bit j of ii_w; the level's auth node sits after sk and j
+            // earlier auth nodes in this tree's signature slice.
+            : ~ i w 0
+            ~ < w 4 {
+                : i tw ? == w 0 t0 ? == w 1 t1 ? == w 2 t2 t3
+                : i iw ? == w 0 i0 ? == w 1 i1 ? == w 2 i2 i3
+                : *u ap # *u + # i sfp + + * tw step n * j n
+                : *u bw # *u + # i bo * w 64
+                ? == % >> iw j 2 0 {
+                    ( nurl_memcpy # s bw # s # *u + # i va * w 32 n )
+                    ( nurl_memcpy # s + # i bw n # s ap n )
+                } {
+                    ( nurl_memcpy # s bw # s ap n )
+                    ( nurl_memcpy # s + # i bw n # s # *u + # i va * w 32 n )
+                }
+                = w + w 1
             }
-            : ( Vec u ) nn ( __slh_f pkseed adrs both . p n )
-            ( vec_free [u] both ) ( vec_free [u] aj ) ( vec_free [u] node )
-            = node nn
+            = u0 ? == % >> i0 j 2 0 / u0 2 / - u0 1 2
+            = u1 ? == % >> i1 j 2 0 / u1 2 / - u1 1 2
+            = u2 ? == % >> i2 j 2 0 / u2 2 / - u2 1 2
+            = u3 ? == % >> i3 j 2 0 / u3 2 / - u3 1 2
+            ( __adrs_set_index adrs u0 )
+            : i h0 ( __sx_stage c 0 pkseed adrs bo * 2 n )
+            ( __adrs_set_index adrs u1 )
+            : i h1 ( __sx_stage c 1 pkseed adrs # *u + # i bo 64 * 2 n )
+            ( __adrs_set_index adrs u2 )
+            : i h2 ( __sx_stage c 2 pkseed adrs # *u + # i bo 128 * 2 n )
+            ( __adrs_set_index adrs u3 )
+            : i h3 ( __sx_stage c 3 pkseed adrs # *u + # i bo 192 * 2 n )
+            ( __sx_run c h0 n )
+            ( nurl_memcpy # s va # s vp n )
+            ( nurl_memcpy # s + # i va 32 # s # *u + # i vp 32 n )
+            ( nurl_memcpy # s + # i va 64 # s # *u + # i vp 64 n )
+            ( nurl_memcpy # s + # i va 96 # s # *u + # i vp 96 n )
             = j + j 1
         }
-        ( bytes_extend_bytes roots node )
-        ( vec_free [u] node )
-        = i + i 1
+        : ~ i w 0
+        ~ & < w 4 < + g w k {
+            ( nurl_memcpy # s + # i rp * + g w n # s + # i va * w 32 n )
+            = w + w 1
+        }
+        = g + g 4
     }
+    ( vec_free [u] both ) ( vec_free [u] vals )
     : ( Vec u ) fa ( __adrs_copy adrs )
     ( __adrs_set_type fa 4 )
     ( __adrs_set_kp fa ( __adrs_get_kp adrs ) )
-    : ( Vec u ) out ( __slh_f pkseed fa roots . p n )
+    : ( Vec u ) out ( __slh_f pkseed fa roots n )
     ( vec_free [u] fa ) ( vec_free [u] roots ) ( vec_free [i] idx )
     ^ out
 }
@@ -617,7 +973,9 @@ $ `stdlib/std/random.nu`
     : SlhParams p ( __slh_params set )
     : ( Vec u ) adrs ( __adrs_new )
     ( __adrs_set_layer adrs - . p d 1 )
-    : ( Vec u ) root ( __xmss_node skseed 0 . p hp pkseed adrs p )
+    : *SlhCtx c ( __slhx4_new )
+    : ( Vec u ) root ( __xmss_node c skseed 0 . p hp pkseed adrs p )
+    ( __slhx4_free c )
     ( vec_free [u] adrs )
     : ( Vec u ) pk ( bytes_slice pkseed 0 . p n )
     ( bytes_extend_bytes pk root )
@@ -697,9 +1055,11 @@ $ `stdlib/std/random.nu`
     ( __adrs_set_tree adrs it )
     ( __adrs_set_type adrs 3 )
     ( __adrs_set_kp adrs il )
-    : ( Vec u ) sigf ( __fors_sign md skseed pkseed adrs p )
-    : ( Vec u ) pkf ( __fors_pk_from_sig sigf md pkseed adrs p )
-    : ( Vec u ) sigh ( __ht_sign pkf skseed pkseed it il p )
+    : *SlhCtx c ( __slhx4_new )
+    : ( Vec u ) sigf ( __fors_sign c md skseed pkseed adrs p )
+    : ( Vec u ) pkf ( __fors_pk_from_sig c sigf md pkseed adrs p )
+    : ( Vec u ) sigh ( __ht_sign c pkf skseed pkseed it il p )
+    ( __slhx4_free c )
 
     : ( Vec u ) out ( bytes_slice r 0 n )
     ( bytes_extend_bytes out sigf )
@@ -738,8 +1098,10 @@ $ `stdlib/std/random.nu`
     ( __adrs_set_tree adrs it )
     ( __adrs_set_type adrs 3 )
     ( __adrs_set_kp adrs il )
-    : ( Vec u ) pkf ( __fors_pk_from_sig sigf md pkseed adrs p )
-    : b ok ( __ht_verify pkf sigh pkseed it il pkroot p )
+    : *SlhCtx c ( __slhx4_new )
+    : ( Vec u ) pkf ( __fors_pk_from_sig c sigf md pkseed adrs p )
+    : b ok ( __ht_verify c pkf sigh pkseed it il pkroot p )
+    ( __slhx4_free c )
 
     ( vec_free [u] pkf ) ( vec_free [u] adrs ) ( vec_free [u] md )
     ( vec_free [u] sigh ) ( vec_free [u] sigf ) ( vec_free [u] r )

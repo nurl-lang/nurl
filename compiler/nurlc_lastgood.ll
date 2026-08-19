@@ -504,6 +504,61 @@ entry:
   ret <4 x i64> %wr.r
 }
 declare <4 x i64> @llvm.fshl.v4i64(<4 x i64>, <4 x i64>, <4 x i64>)
+define linkonce_odr <4 x i64> @nurl_v256_add16(<4 x i64> %a, <4 x i64> %b) alwaysinline {
+entry:
+  %pa.a = bitcast <4 x i64> %a to <16 x i16>
+  %pa.b = bitcast <4 x i64> %b to <16 x i16>
+  %pa.s = add <16 x i16> %pa.a, %pa.b
+  %pa.r = bitcast <16 x i16> %pa.s to <4 x i64>
+  ret <4 x i64> %pa.r
+}
+define linkonce_odr <4 x i64> @nurl_v256_sub16(<4 x i64> %a, <4 x i64> %b) alwaysinline {
+entry:
+  %ps.a = bitcast <4 x i64> %a to <16 x i16>
+  %ps.b = bitcast <4 x i64> %b to <16 x i16>
+  %ps.s = sub <16 x i16> %ps.a, %ps.b
+  %ps.r = bitcast <16 x i16> %ps.s to <4 x i64>
+  ret <4 x i64> %ps.r
+}
+define linkonce_odr <4 x i64> @nurl_v256_mullo16(<4 x i64> %a, <4 x i64> %b) alwaysinline {
+entry:
+  %pm.a = bitcast <4 x i64> %a to <16 x i16>
+  %pm.b = bitcast <4 x i64> %b to <16 x i16>
+  %pm.p = mul <16 x i16> %pm.a, %pm.b
+  %pm.r = bitcast <16 x i16> %pm.p to <4 x i64>
+  ret <4 x i64> %pm.r
+}
+define linkonce_odr <4 x i64> @nurl_v256_mulhi16(<4 x i64> %a, <4 x i64> %b) alwaysinline {
+entry:
+  %ph.a = bitcast <4 x i64> %a to <16 x i16>
+  %ph.b = bitcast <4 x i64> %b to <16 x i16>
+  %ph.wa = sext <16 x i16> %ph.a to <16 x i32>
+  %ph.wb = sext <16 x i16> %ph.b to <16 x i32>
+  %ph.p = mul <16 x i32> %ph.wa, %ph.wb
+  %ph.h = lshr <16 x i32> %ph.p, <i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16>
+  %ph.t = trunc <16 x i32> %ph.h to <16 x i16>
+  %ph.r = bitcast <16 x i16> %ph.t to <4 x i64>
+  ret <4 x i64> %ph.r
+}
+define linkonce_odr <4 x i64> @nurl_v256_sra16(<4 x i64> %a, i64 %n) alwaysinline {
+entry:
+  %pr.a = bitcast <4 x i64> %a to <16 x i16>
+  %pr.t = trunc i64 %n to i16
+  %pr.m = and i16 %pr.t, 15
+  %pr.0 = insertelement <16 x i16> undef, i16 %pr.m, i32 0
+  %pr.s = shufflevector <16 x i16> %pr.0, <16 x i16> undef, <16 x i32> zeroinitializer
+  %pr.v = ashr <16 x i16> %pr.a, %pr.s
+  %pr.r = bitcast <16 x i16> %pr.v to <4 x i64>
+  ret <4 x i64> %pr.r
+}
+define linkonce_odr <4 x i64> @nurl_v256_bcast16(i64 %x) alwaysinline {
+entry:
+  %pb.t = trunc i64 %x to i16
+  %pb.0 = insertelement <16 x i16> undef, i16 %pb.t, i32 0
+  %pb.s = shufflevector <16 x i16> %pb.0, <16 x i16> undef, <16 x i32> zeroinitializer
+  %pb.r = bitcast <16 x i16> %pb.s to <4 x i64>
+  ret <4 x i64> %pb.r
+}
 declare void @nurl_vec_drop(i8*, ptr, i64)
 declare i64    @nurl_is_nan(double)
 declare i64    @nurl_is_inf(double)
@@ -101980,6 +102035,116 @@ entry:
   call void @emit(i8* %r327)
   %r328 = getelementptr [68 x i8], [68 x i8]* @.str.7114, i64 0, i64 0
   call void @emit(i8* %r328)
+  %r329 = getelementptr [90 x i8], [90 x i8]* @.str.7115, i64 0, i64 0
+  call void @emit(i8* %r329)
+  %r330 = getelementptr [7 x i8], [7 x i8]* @.str.7116, i64 0, i64 0
+  call void @emit(i8* %r330)
+  %r331 = getelementptr [45 x i8], [45 x i8]* @.str.7117, i64 0, i64 0
+  call void @emit(i8* %r331)
+  %r332 = getelementptr [45 x i8], [45 x i8]* @.str.7118, i64 0, i64 0
+  call void @emit(i8* %r332)
+  %r333 = getelementptr [38 x i8], [38 x i8]* @.str.7119, i64 0, i64 0
+  call void @emit(i8* %r333)
+  %r334 = getelementptr [48 x i8], [48 x i8]* @.str.7120, i64 0, i64 0
+  call void @emit(i8* %r334)
+  %r335 = getelementptr [22 x i8], [22 x i8]* @.str.7121, i64 0, i64 0
+  call void @emit(i8* %r335)
+  %r336 = getelementptr [2 x i8], [2 x i8]* @.str.7122, i64 0, i64 0
+  call void @emit(i8* %r336)
+  %r337 = getelementptr [90 x i8], [90 x i8]* @.str.7123, i64 0, i64 0
+  call void @emit(i8* %r337)
+  %r338 = getelementptr [7 x i8], [7 x i8]* @.str.7124, i64 0, i64 0
+  call void @emit(i8* %r338)
+  %r339 = getelementptr [45 x i8], [45 x i8]* @.str.7125, i64 0, i64 0
+  call void @emit(i8* %r339)
+  %r340 = getelementptr [45 x i8], [45 x i8]* @.str.7126, i64 0, i64 0
+  call void @emit(i8* %r340)
+  %r341 = getelementptr [38 x i8], [38 x i8]* @.str.7127, i64 0, i64 0
+  call void @emit(i8* %r341)
+  %r342 = getelementptr [48 x i8], [48 x i8]* @.str.7128, i64 0, i64 0
+  call void @emit(i8* %r342)
+  %r343 = getelementptr [22 x i8], [22 x i8]* @.str.7129, i64 0, i64 0
+  call void @emit(i8* %r343)
+  %r344 = getelementptr [2 x i8], [2 x i8]* @.str.7130, i64 0, i64 0
+  call void @emit(i8* %r344)
+  %r345 = getelementptr [92 x i8], [92 x i8]* @.str.7131, i64 0, i64 0
+  call void @emit(i8* %r345)
+  %r346 = getelementptr [7 x i8], [7 x i8]* @.str.7132, i64 0, i64 0
+  call void @emit(i8* %r346)
+  %r347 = getelementptr [45 x i8], [45 x i8]* @.str.7133, i64 0, i64 0
+  call void @emit(i8* %r347)
+  %r348 = getelementptr [45 x i8], [45 x i8]* @.str.7134, i64 0, i64 0
+  call void @emit(i8* %r348)
+  %r349 = getelementptr [38 x i8], [38 x i8]* @.str.7135, i64 0, i64 0
+  call void @emit(i8* %r349)
+  %r350 = getelementptr [48 x i8], [48 x i8]* @.str.7136, i64 0, i64 0
+  call void @emit(i8* %r350)
+  %r351 = getelementptr [22 x i8], [22 x i8]* @.str.7137, i64 0, i64 0
+  call void @emit(i8* %r351)
+  %r352 = getelementptr [2 x i8], [2 x i8]* @.str.7138, i64 0, i64 0
+  call void @emit(i8* %r352)
+  %r353 = getelementptr [92 x i8], [92 x i8]* @.str.7139, i64 0, i64 0
+  call void @emit(i8* %r353)
+  %r354 = getelementptr [7 x i8], [7 x i8]* @.str.7140, i64 0, i64 0
+  call void @emit(i8* %r354)
+  %r355 = getelementptr [45 x i8], [45 x i8]* @.str.7141, i64 0, i64 0
+  call void @emit(i8* %r355)
+  %r356 = getelementptr [45 x i8], [45 x i8]* @.str.7142, i64 0, i64 0
+  call void @emit(i8* %r356)
+  %r357 = getelementptr [47 x i8], [47 x i8]* @.str.7143, i64 0, i64 0
+  call void @emit(i8* %r357)
+  %r358 = getelementptr [47 x i8], [47 x i8]* @.str.7144, i64 0, i64 0
+  call void @emit(i8* %r358)
+  %r359 = getelementptr [40 x i8], [40 x i8]* @.str.7145, i64 0, i64 0
+  call void @emit(i8* %r359)
+  %r360 = getelementptr [162 x i8], [162 x i8]* @.str.7146, i64 0, i64 0
+  call void @emit(i8* %r360)
+  %r361 = getelementptr [47 x i8], [47 x i8]* @.str.7147, i64 0, i64 0
+  call void @emit(i8* %r361)
+  %r362 = getelementptr [48 x i8], [48 x i8]* @.str.7148, i64 0, i64 0
+  call void @emit(i8* %r362)
+  %r363 = getelementptr [22 x i8], [22 x i8]* @.str.7149, i64 0, i64 0
+  call void @emit(i8* %r363)
+  %r364 = getelementptr [2 x i8], [2 x i8]* @.str.7150, i64 0, i64 0
+  call void @emit(i8* %r364)
+  %r365 = getelementptr [84 x i8], [84 x i8]* @.str.7151, i64 0, i64 0
+  call void @emit(i8* %r365)
+  %r366 = getelementptr [7 x i8], [7 x i8]* @.str.7152, i64 0, i64 0
+  call void @emit(i8* %r366)
+  %r367 = getelementptr [45 x i8], [45 x i8]* @.str.7153, i64 0, i64 0
+  call void @emit(i8* %r367)
+  %r368 = getelementptr [30 x i8], [30 x i8]* @.str.7154, i64 0, i64 0
+  call void @emit(i8* %r368)
+  %r369 = getelementptr [28 x i8], [28 x i8]* @.str.7155, i64 0, i64 0
+  call void @emit(i8* %r369)
+  %r370 = getelementptr [59 x i8], [59 x i8]* @.str.7156, i64 0, i64 0
+  call void @emit(i8* %r370)
+  %r371 = getelementptr [87 x i8], [87 x i8]* @.str.7157, i64 0, i64 0
+  call void @emit(i8* %r371)
+  %r372 = getelementptr [39 x i8], [39 x i8]* @.str.7158, i64 0, i64 0
+  call void @emit(i8* %r372)
+  %r373 = getelementptr [48 x i8], [48 x i8]* @.str.7159, i64 0, i64 0
+  call void @emit(i8* %r373)
+  %r374 = getelementptr [22 x i8], [22 x i8]* @.str.7160, i64 0, i64 0
+  call void @emit(i8* %r374)
+  %r375 = getelementptr [2 x i8], [2 x i8]* @.str.7161, i64 0, i64 0
+  call void @emit(i8* %r375)
+  %r376 = getelementptr [72 x i8], [72 x i8]* @.str.7162, i64 0, i64 0
+  call void @emit(i8* %r376)
+  %r377 = getelementptr [7 x i8], [7 x i8]* @.str.7163, i64 0, i64 0
+  call void @emit(i8* %r377)
+  %r378 = getelementptr [30 x i8], [30 x i8]* @.str.7164, i64 0, i64 0
+  call void @emit(i8* %r378)
+  %r379 = getelementptr [59 x i8], [59 x i8]* @.str.7165, i64 0, i64 0
+  call void @emit(i8* %r379)
+  %r380 = getelementptr [87 x i8], [87 x i8]* @.str.7166, i64 0, i64 0
+  call void @emit(i8* %r380)
+  %r381 = getelementptr [48 x i8], [48 x i8]* @.str.7167, i64 0, i64 0
+  call void @emit(i8* %r381)
+  %r382 = getelementptr [22 x i8], [22 x i8]* @.str.7168, i64 0, i64 0
+  call void @emit(i8* %r382)
+  %r383 = getelementptr [2 x i8], [2 x i8]* @.str.7169, i64 0, i64 0
+  call void @emit(i8* %r383)
   ret void
 }
 
@@ -102312,955 +102477,1040 @@ entry:
 @.str.7112 = private unnamed_addr constant [22 x i8] c"  ret <4 x i64> %wr.r\00"
 @.str.7113 = private unnamed_addr constant [2 x i8] c"}\00"
 @.str.7114 = private unnamed_addr constant [68 x i8] c"declare <4 x i64> @llvm.fshl.v4i64(<4 x i64>, <4 x i64>, <4 x i64>)\00"
+@.str.7115 = private unnamed_addr constant [90 x i8] c"define linkonce_odr <4 x i64> @nurl_v256_add16(<4 x i64> %a, <4 x i64> %b) alwaysinline {\00"
+@.str.7116 = private unnamed_addr constant [7 x i8] c"entry:\00"
+@.str.7117 = private unnamed_addr constant [45 x i8] c"  %pa.a = bitcast <4 x i64> %a to <16 x i16>\00"
+@.str.7118 = private unnamed_addr constant [45 x i8] c"  %pa.b = bitcast <4 x i64> %b to <16 x i16>\00"
+@.str.7119 = private unnamed_addr constant [38 x i8] c"  %pa.s = add <16 x i16> %pa.a, %pa.b\00"
+@.str.7120 = private unnamed_addr constant [48 x i8] c"  %pa.r = bitcast <16 x i16> %pa.s to <4 x i64>\00"
+@.str.7121 = private unnamed_addr constant [22 x i8] c"  ret <4 x i64> %pa.r\00"
+@.str.7122 = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.7123 = private unnamed_addr constant [90 x i8] c"define linkonce_odr <4 x i64> @nurl_v256_sub16(<4 x i64> %a, <4 x i64> %b) alwaysinline {\00"
+@.str.7124 = private unnamed_addr constant [7 x i8] c"entry:\00"
+@.str.7125 = private unnamed_addr constant [45 x i8] c"  %ps.a = bitcast <4 x i64> %a to <16 x i16>\00"
+@.str.7126 = private unnamed_addr constant [45 x i8] c"  %ps.b = bitcast <4 x i64> %b to <16 x i16>\00"
+@.str.7127 = private unnamed_addr constant [38 x i8] c"  %ps.s = sub <16 x i16> %ps.a, %ps.b\00"
+@.str.7128 = private unnamed_addr constant [48 x i8] c"  %ps.r = bitcast <16 x i16> %ps.s to <4 x i64>\00"
+@.str.7129 = private unnamed_addr constant [22 x i8] c"  ret <4 x i64> %ps.r\00"
+@.str.7130 = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.7131 = private unnamed_addr constant [92 x i8] c"define linkonce_odr <4 x i64> @nurl_v256_mullo16(<4 x i64> %a, <4 x i64> %b) alwaysinline {\00"
+@.str.7132 = private unnamed_addr constant [7 x i8] c"entry:\00"
+@.str.7133 = private unnamed_addr constant [45 x i8] c"  %pm.a = bitcast <4 x i64> %a to <16 x i16>\00"
+@.str.7134 = private unnamed_addr constant [45 x i8] c"  %pm.b = bitcast <4 x i64> %b to <16 x i16>\00"
+@.str.7135 = private unnamed_addr constant [38 x i8] c"  %pm.p = mul <16 x i16> %pm.a, %pm.b\00"
+@.str.7136 = private unnamed_addr constant [48 x i8] c"  %pm.r = bitcast <16 x i16> %pm.p to <4 x i64>\00"
+@.str.7137 = private unnamed_addr constant [22 x i8] c"  ret <4 x i64> %pm.r\00"
+@.str.7138 = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.7139 = private unnamed_addr constant [92 x i8] c"define linkonce_odr <4 x i64> @nurl_v256_mulhi16(<4 x i64> %a, <4 x i64> %b) alwaysinline {\00"
+@.str.7140 = private unnamed_addr constant [7 x i8] c"entry:\00"
+@.str.7141 = private unnamed_addr constant [45 x i8] c"  %ph.a = bitcast <4 x i64> %a to <16 x i16>\00"
+@.str.7142 = private unnamed_addr constant [45 x i8] c"  %ph.b = bitcast <4 x i64> %b to <16 x i16>\00"
+@.str.7143 = private unnamed_addr constant [47 x i8] c"  %ph.wa = sext <16 x i16> %ph.a to <16 x i32>\00"
+@.str.7144 = private unnamed_addr constant [47 x i8] c"  %ph.wb = sext <16 x i16> %ph.b to <16 x i32>\00"
+@.str.7145 = private unnamed_addr constant [40 x i8] c"  %ph.p = mul <16 x i32> %ph.wa, %ph.wb\00"
+@.str.7146 = private unnamed_addr constant [162 x i8] c"  %ph.h = lshr <16 x i32> %ph.p, <i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16>\00"
+@.str.7147 = private unnamed_addr constant [47 x i8] c"  %ph.t = trunc <16 x i32> %ph.h to <16 x i16>\00"
+@.str.7148 = private unnamed_addr constant [48 x i8] c"  %ph.r = bitcast <16 x i16> %ph.t to <4 x i64>\00"
+@.str.7149 = private unnamed_addr constant [22 x i8] c"  ret <4 x i64> %ph.r\00"
+@.str.7150 = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.7151 = private unnamed_addr constant [84 x i8] c"define linkonce_odr <4 x i64> @nurl_v256_sra16(<4 x i64> %a, i64 %n) alwaysinline {\00"
+@.str.7152 = private unnamed_addr constant [7 x i8] c"entry:\00"
+@.str.7153 = private unnamed_addr constant [45 x i8] c"  %pr.a = bitcast <4 x i64> %a to <16 x i16>\00"
+@.str.7154 = private unnamed_addr constant [30 x i8] c"  %pr.t = trunc i64 %n to i16\00"
+@.str.7155 = private unnamed_addr constant [28 x i8] c"  %pr.m = and i16 %pr.t, 15\00"
+@.str.7156 = private unnamed_addr constant [59 x i8] c"  %pr.0 = insertelement <16 x i16> undef, i16 %pr.m, i32 0\00"
+@.str.7157 = private unnamed_addr constant [87 x i8] c"  %pr.s = shufflevector <16 x i16> %pr.0, <16 x i16> undef, <16 x i32> zeroinitializer\00"
+@.str.7158 = private unnamed_addr constant [39 x i8] c"  %pr.v = ashr <16 x i16> %pr.a, %pr.s\00"
+@.str.7159 = private unnamed_addr constant [48 x i8] c"  %pr.r = bitcast <16 x i16> %pr.v to <4 x i64>\00"
+@.str.7160 = private unnamed_addr constant [22 x i8] c"  ret <4 x i64> %pr.r\00"
+@.str.7161 = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.7162 = private unnamed_addr constant [72 x i8] c"define linkonce_odr <4 x i64> @nurl_v256_bcast16(i64 %x) alwaysinline {\00"
+@.str.7163 = private unnamed_addr constant [7 x i8] c"entry:\00"
+@.str.7164 = private unnamed_addr constant [30 x i8] c"  %pb.t = trunc i64 %x to i16\00"
+@.str.7165 = private unnamed_addr constant [59 x i8] c"  %pb.0 = insertelement <16 x i16> undef, i16 %pb.t, i32 0\00"
+@.str.7166 = private unnamed_addr constant [87 x i8] c"  %pb.s = shufflevector <16 x i16> %pb.0, <16 x i16> undef, <16 x i32> zeroinitializer\00"
+@.str.7167 = private unnamed_addr constant [48 x i8] c"  %pb.r = bitcast <16 x i16> %pb.s to <4 x i64>\00"
+@.str.7168 = private unnamed_addr constant [22 x i8] c"  ret <4 x i64> %pb.r\00"
+@.str.7169 = private unnamed_addr constant [2 x i8] c"}\00"
 define void @register_simd_syms(i64 %syms) {
 entry:
-  %r0 = getelementptr [13 x i8], [13 x i8]* @.str.7115, i64 0, i64 0
-  %r1 = getelementptr [5 x i8], [5 x i8]* @.str.7116, i64 0, i64 0
+  %r0 = getelementptr [13 x i8], [13 x i8]* @.str.7170, i64 0, i64 0
+  %r1 = getelementptr [5 x i8], [5 x i8]* @.str.7171, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r0, i8* %r1)
-  %r2 = getelementptr [13 x i8], [13 x i8]* @.str.7117, i64 0, i64 0
-  %r3 = getelementptr [5 x i8], [5 x i8]* @.str.7118, i64 0, i64 0
+  %r2 = getelementptr [13 x i8], [13 x i8]* @.str.7172, i64 0, i64 0
+  %r3 = getelementptr [5 x i8], [5 x i8]* @.str.7173, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r2, i8* %r3)
-  %r4 = getelementptr [15 x i8], [15 x i8]* @.str.7119, i64 0, i64 0
-  %r5 = getelementptr [5 x i8], [5 x i8]* @.str.7120, i64 0, i64 0
+  %r4 = getelementptr [15 x i8], [15 x i8]* @.str.7174, i64 0, i64 0
+  %r5 = getelementptr [5 x i8], [5 x i8]* @.str.7175, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r4, i8* %r5)
-  %r6 = getelementptr [16 x i8], [16 x i8]* @.str.7121, i64 0, i64 0
-  %r7 = getelementptr [5 x i8], [5 x i8]* @.str.7122, i64 0, i64 0
+  %r6 = getelementptr [16 x i8], [16 x i8]* @.str.7176, i64 0, i64 0
+  %r7 = getelementptr [5 x i8], [5 x i8]* @.str.7177, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r6, i8* %r7)
-  %r8 = getelementptr [16 x i8], [16 x i8]* @.str.7123, i64 0, i64 0
-  %r9 = getelementptr [5 x i8], [5 x i8]* @.str.7124, i64 0, i64 0
+  %r8 = getelementptr [16 x i8], [16 x i8]* @.str.7178, i64 0, i64 0
+  %r9 = getelementptr [5 x i8], [5 x i8]* @.str.7179, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r8, i8* %r9)
-  %r10 = getelementptr [18 x i8], [18 x i8]* @.str.7125, i64 0, i64 0
-  %r11 = getelementptr [5 x i8], [5 x i8]* @.str.7126, i64 0, i64 0
+  %r10 = getelementptr [18 x i8], [18 x i8]* @.str.7180, i64 0, i64 0
+  %r11 = getelementptr [5 x i8], [5 x i8]* @.str.7181, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r10, i8* %r11)
-  %r12 = getelementptr [17 x i8], [17 x i8]* @.str.7127, i64 0, i64 0
-  %r13 = getelementptr [5 x i8], [5 x i8]* @.str.7128, i64 0, i64 0
+  %r12 = getelementptr [17 x i8], [17 x i8]* @.str.7182, i64 0, i64 0
+  %r13 = getelementptr [5 x i8], [5 x i8]* @.str.7183, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r12, i8* %r13)
-  %r14 = getelementptr [16 x i8], [16 x i8]* @.str.7129, i64 0, i64 0
-  %r15 = getelementptr [4 x i8], [4 x i8]* @.str.7130, i64 0, i64 0
+  %r14 = getelementptr [16 x i8], [16 x i8]* @.str.7184, i64 0, i64 0
+  %r15 = getelementptr [4 x i8], [4 x i8]* @.str.7185, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r14, i8* %r15)
-  %r16 = getelementptr [16 x i8], [16 x i8]* @.str.7131, i64 0, i64 0
-  %r17 = getelementptr [4 x i8], [4 x i8]* @.str.7132, i64 0, i64 0
+  %r16 = getelementptr [16 x i8], [16 x i8]* @.str.7186, i64 0, i64 0
+  %r17 = getelementptr [4 x i8], [4 x i8]* @.str.7187, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r16, i8* %r17)
-  %r18 = getelementptr [14 x i8], [14 x i8]* @.str.7133, i64 0, i64 0
-  %r19 = getelementptr [5 x i8], [5 x i8]* @.str.7134, i64 0, i64 0
+  %r18 = getelementptr [14 x i8], [14 x i8]* @.str.7188, i64 0, i64 0
+  %r19 = getelementptr [5 x i8], [5 x i8]* @.str.7189, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r18, i8* %r19)
-  %r20 = getelementptr [14 x i8], [14 x i8]* @.str.7135, i64 0, i64 0
-  %r21 = getelementptr [5 x i8], [5 x i8]* @.str.7136, i64 0, i64 0
+  %r20 = getelementptr [14 x i8], [14 x i8]* @.str.7190, i64 0, i64 0
+  %r21 = getelementptr [5 x i8], [5 x i8]* @.str.7191, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r20, i8* %r21)
-  %r22 = getelementptr [13 x i8], [13 x i8]* @.str.7137, i64 0, i64 0
-  %r23 = getelementptr [5 x i8], [5 x i8]* @.str.7138, i64 0, i64 0
+  %r22 = getelementptr [13 x i8], [13 x i8]* @.str.7192, i64 0, i64 0
+  %r23 = getelementptr [5 x i8], [5 x i8]* @.str.7193, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r22, i8* %r23)
-  %r24 = getelementptr [17 x i8], [17 x i8]* @.str.7139, i64 0, i64 0
-  %r25 = getelementptr [5 x i8], [5 x i8]* @.str.7140, i64 0, i64 0
+  %r24 = getelementptr [17 x i8], [17 x i8]* @.str.7194, i64 0, i64 0
+  %r25 = getelementptr [5 x i8], [5 x i8]* @.str.7195, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r24, i8* %r25)
-  %r26 = getelementptr [16 x i8], [16 x i8]* @.str.7141, i64 0, i64 0
-  %r27 = getelementptr [5 x i8], [5 x i8]* @.str.7142, i64 0, i64 0
+  %r26 = getelementptr [16 x i8], [16 x i8]* @.str.7196, i64 0, i64 0
+  %r27 = getelementptr [5 x i8], [5 x i8]* @.str.7197, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r26, i8* %r27)
-  %r28 = getelementptr [16 x i8], [16 x i8]* @.str.7143, i64 0, i64 0
-  %r29 = getelementptr [5 x i8], [5 x i8]* @.str.7144, i64 0, i64 0
+  %r28 = getelementptr [16 x i8], [16 x i8]* @.str.7198, i64 0, i64 0
+  %r29 = getelementptr [5 x i8], [5 x i8]* @.str.7199, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r28, i8* %r29)
-  %r30 = getelementptr [16 x i8], [16 x i8]* @.str.7145, i64 0, i64 0
-  %r31 = getelementptr [5 x i8], [5 x i8]* @.str.7146, i64 0, i64 0
+  %r30 = getelementptr [16 x i8], [16 x i8]* @.str.7200, i64 0, i64 0
+  %r31 = getelementptr [5 x i8], [5 x i8]* @.str.7201, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r30, i8* %r31)
-  %r32 = getelementptr [15 x i8], [15 x i8]* @.str.7147, i64 0, i64 0
-  %r33 = getelementptr [5 x i8], [5 x i8]* @.str.7148, i64 0, i64 0
+  %r32 = getelementptr [15 x i8], [15 x i8]* @.str.7202, i64 0, i64 0
+  %r33 = getelementptr [5 x i8], [5 x i8]* @.str.7203, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r32, i8* %r33)
-  %r34 = getelementptr [17 x i8], [17 x i8]* @.str.7149, i64 0, i64 0
-  %r35 = getelementptr [5 x i8], [5 x i8]* @.str.7150, i64 0, i64 0
+  %r34 = getelementptr [17 x i8], [17 x i8]* @.str.7204, i64 0, i64 0
+  %r35 = getelementptr [5 x i8], [5 x i8]* @.str.7205, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r34, i8* %r35)
-  %r36 = getelementptr [17 x i8], [17 x i8]* @.str.7151, i64 0, i64 0
-  %r37 = getelementptr [5 x i8], [5 x i8]* @.str.7152, i64 0, i64 0
+  %r36 = getelementptr [17 x i8], [17 x i8]* @.str.7206, i64 0, i64 0
+  %r37 = getelementptr [5 x i8], [5 x i8]* @.str.7207, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r36, i8* %r37)
-  %r38 = getelementptr [16 x i8], [16 x i8]* @.str.7153, i64 0, i64 0
-  %r39 = getelementptr [5 x i8], [5 x i8]* @.str.7154, i64 0, i64 0
+  %r38 = getelementptr [16 x i8], [16 x i8]* @.str.7208, i64 0, i64 0
+  %r39 = getelementptr [5 x i8], [5 x i8]* @.str.7209, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r38, i8* %r39)
-  %r40 = getelementptr [16 x i8], [16 x i8]* @.str.7155, i64 0, i64 0
-  %r41 = getelementptr [5 x i8], [5 x i8]* @.str.7156, i64 0, i64 0
+  %r40 = getelementptr [16 x i8], [16 x i8]* @.str.7210, i64 0, i64 0
+  %r41 = getelementptr [5 x i8], [5 x i8]* @.str.7211, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r40, i8* %r41)
-  %r42 = getelementptr [20 x i8], [20 x i8]* @.str.7157, i64 0, i64 0
-  %r43 = getelementptr [5 x i8], [5 x i8]* @.str.7158, i64 0, i64 0
+  %r42 = getelementptr [20 x i8], [20 x i8]* @.str.7212, i64 0, i64 0
+  %r43 = getelementptr [5 x i8], [5 x i8]* @.str.7213, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r42, i8* %r43)
-  %r44 = getelementptr [20 x i8], [20 x i8]* @.str.7159, i64 0, i64 0
-  %r45 = getelementptr [5 x i8], [5 x i8]* @.str.7160, i64 0, i64 0
+  %r44 = getelementptr [20 x i8], [20 x i8]* @.str.7214, i64 0, i64 0
+  %r45 = getelementptr [5 x i8], [5 x i8]* @.str.7215, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r44, i8* %r45)
-  %r46 = getelementptr [20 x i8], [20 x i8]* @.str.7161, i64 0, i64 0
-  %r47 = getelementptr [5 x i8], [5 x i8]* @.str.7162, i64 0, i64 0
+  %r46 = getelementptr [20 x i8], [20 x i8]* @.str.7216, i64 0, i64 0
+  %r47 = getelementptr [5 x i8], [5 x i8]* @.str.7217, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r46, i8* %r47)
-  %r48 = getelementptr [18 x i8], [18 x i8]* @.str.7163, i64 0, i64 0
-  %r49 = getelementptr [4 x i8], [4 x i8]* @.str.7164, i64 0, i64 0
+  %r48 = getelementptr [18 x i8], [18 x i8]* @.str.7218, i64 0, i64 0
+  %r49 = getelementptr [4 x i8], [4 x i8]* @.str.7219, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r48, i8* %r49)
-  %r50 = getelementptr [18 x i8], [18 x i8]* @.str.7165, i64 0, i64 0
-  %r51 = getelementptr [4 x i8], [4 x i8]* @.str.7166, i64 0, i64 0
+  %r50 = getelementptr [18 x i8], [18 x i8]* @.str.7220, i64 0, i64 0
+  %r51 = getelementptr [4 x i8], [4 x i8]* @.str.7221, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r50, i8* %r51)
-  %r52 = getelementptr [17 x i8], [17 x i8]* @.str.7167, i64 0, i64 0
-  %r53 = getelementptr [5 x i8], [5 x i8]* @.str.7168, i64 0, i64 0
+  %r52 = getelementptr [17 x i8], [17 x i8]* @.str.7222, i64 0, i64 0
+  %r53 = getelementptr [5 x i8], [5 x i8]* @.str.7223, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r52, i8* %r53)
-  %r54 = getelementptr [15 x i8], [15 x i8]* @.str.7169, i64 0, i64 0
-  %r55 = getelementptr [5 x i8], [5 x i8]* @.str.7170, i64 0, i64 0
+  %r54 = getelementptr [15 x i8], [15 x i8]* @.str.7224, i64 0, i64 0
+  %r55 = getelementptr [5 x i8], [5 x i8]* @.str.7225, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r54, i8* %r55)
-  %r56 = getelementptr [13 x i8], [13 x i8]* @.str.7171, i64 0, i64 0
-  %r57 = getelementptr [5 x i8], [5 x i8]* @.str.7172, i64 0, i64 0
+  %r56 = getelementptr [13 x i8], [13 x i8]* @.str.7226, i64 0, i64 0
+  %r57 = getelementptr [5 x i8], [5 x i8]* @.str.7227, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r56, i8* %r57)
-  %r58 = getelementptr [13 x i8], [13 x i8]* @.str.7173, i64 0, i64 0
-  %r59 = getelementptr [5 x i8], [5 x i8]* @.str.7174, i64 0, i64 0
+  %r58 = getelementptr [13 x i8], [13 x i8]* @.str.7228, i64 0, i64 0
+  %r59 = getelementptr [5 x i8], [5 x i8]* @.str.7229, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r58, i8* %r59)
-  %r60 = getelementptr [16 x i8], [16 x i8]* @.str.7175, i64 0, i64 0
-  %r61 = getelementptr [5 x i8], [5 x i8]* @.str.7176, i64 0, i64 0
+  %r60 = getelementptr [16 x i8], [16 x i8]* @.str.7230, i64 0, i64 0
+  %r61 = getelementptr [5 x i8], [5 x i8]* @.str.7231, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r60, i8* %r61)
-  %r62 = getelementptr [18 x i8], [18 x i8]* @.str.7177, i64 0, i64 0
-  %r63 = getelementptr [5 x i8], [5 x i8]* @.str.7178, i64 0, i64 0
+  %r62 = getelementptr [18 x i8], [18 x i8]* @.str.7232, i64 0, i64 0
+  %r63 = getelementptr [5 x i8], [5 x i8]* @.str.7233, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r62, i8* %r63)
-  %r64 = getelementptr [16 x i8], [16 x i8]* @.str.7179, i64 0, i64 0
-  %r65 = getelementptr [4 x i8], [4 x i8]* @.str.7180, i64 0, i64 0
+  %r64 = getelementptr [16 x i8], [16 x i8]* @.str.7234, i64 0, i64 0
+  %r65 = getelementptr [4 x i8], [4 x i8]* @.str.7235, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r64, i8* %r65)
-  %r66 = getelementptr [16 x i8], [16 x i8]* @.str.7181, i64 0, i64 0
-  %r67 = getelementptr [5 x i8], [5 x i8]* @.str.7182, i64 0, i64 0
+  %r66 = getelementptr [16 x i8], [16 x i8]* @.str.7236, i64 0, i64 0
+  %r67 = getelementptr [5 x i8], [5 x i8]* @.str.7237, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r66, i8* %r67)
-  %r68 = getelementptr [14 x i8], [14 x i8]* @.str.7183, i64 0, i64 0
-  %r69 = getelementptr [5 x i8], [5 x i8]* @.str.7184, i64 0, i64 0
+  %r68 = getelementptr [14 x i8], [14 x i8]* @.str.7238, i64 0, i64 0
+  %r69 = getelementptr [5 x i8], [5 x i8]* @.str.7239, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r68, i8* %r69)
-  %r70 = getelementptr [14 x i8], [14 x i8]* @.str.7185, i64 0, i64 0
-  %r71 = getelementptr [5 x i8], [5 x i8]* @.str.7186, i64 0, i64 0
+  %r70 = getelementptr [14 x i8], [14 x i8]* @.str.7240, i64 0, i64 0
+  %r71 = getelementptr [5 x i8], [5 x i8]* @.str.7241, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r70, i8* %r71)
-  %r72 = getelementptr [13 x i8], [13 x i8]* @.str.7187, i64 0, i64 0
-  %r73 = getelementptr [5 x i8], [5 x i8]* @.str.7188, i64 0, i64 0
+  %r72 = getelementptr [13 x i8], [13 x i8]* @.str.7242, i64 0, i64 0
+  %r73 = getelementptr [5 x i8], [5 x i8]* @.str.7243, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r72, i8* %r73)
-  %r74 = getelementptr [17 x i8], [17 x i8]* @.str.7189, i64 0, i64 0
-  %r75 = getelementptr [5 x i8], [5 x i8]* @.str.7190, i64 0, i64 0
+  %r74 = getelementptr [17 x i8], [17 x i8]* @.str.7244, i64 0, i64 0
+  %r75 = getelementptr [5 x i8], [5 x i8]* @.str.7245, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r74, i8* %r75)
-  %r76 = getelementptr [14 x i8], [14 x i8]* @.str.7191, i64 0, i64 0
-  %r77 = getelementptr [5 x i8], [5 x i8]* @.str.7192, i64 0, i64 0
+  %r76 = getelementptr [14 x i8], [14 x i8]* @.str.7246, i64 0, i64 0
+  %r77 = getelementptr [5 x i8], [5 x i8]* @.str.7247, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r76, i8* %r77)
-  %r78 = getelementptr [17 x i8], [17 x i8]* @.str.7193, i64 0, i64 0
-  %r79 = getelementptr [5 x i8], [5 x i8]* @.str.7194, i64 0, i64 0
+  %r78 = getelementptr [17 x i8], [17 x i8]* @.str.7248, i64 0, i64 0
+  %r79 = getelementptr [5 x i8], [5 x i8]* @.str.7249, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r78, i8* %r79)
-  %r80 = getelementptr [9 x i8], [9 x i8]* @.str.7195, i64 0, i64 0
-  %r81 = getelementptr [4 x i8], [4 x i8]* @.str.7196, i64 0, i64 0
+  %r80 = getelementptr [16 x i8], [16 x i8]* @.str.7250, i64 0, i64 0
+  %r81 = getelementptr [5 x i8], [5 x i8]* @.str.7251, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r80, i8* %r81)
-  %r82 = getelementptr [9 x i8], [9 x i8]* @.str.7197, i64 0, i64 0
-  %r83 = getelementptr [4 x i8], [4 x i8]* @.str.7198, i64 0, i64 0
+  %r82 = getelementptr [16 x i8], [16 x i8]* @.str.7252, i64 0, i64 0
+  %r83 = getelementptr [5 x i8], [5 x i8]* @.str.7253, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r82, i8* %r83)
-  %r84 = getelementptr [12 x i8], [12 x i8]* @.str.7199, i64 0, i64 0
-  %r85 = getelementptr [4 x i8], [4 x i8]* @.str.7200, i64 0, i64 0
+  %r84 = getelementptr [18 x i8], [18 x i8]* @.str.7254, i64 0, i64 0
+  %r85 = getelementptr [5 x i8], [5 x i8]* @.str.7255, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r84, i8* %r85)
-  %r86 = getelementptr [13 x i8], [13 x i8]* @.str.7201, i64 0, i64 0
-  %r87 = getelementptr [4 x i8], [4 x i8]* @.str.7202, i64 0, i64 0
+  %r86 = getelementptr [18 x i8], [18 x i8]* @.str.7256, i64 0, i64 0
+  %r87 = getelementptr [5 x i8], [5 x i8]* @.str.7257, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r86, i8* %r87)
-  %r88 = getelementptr [13 x i8], [13 x i8]* @.str.7203, i64 0, i64 0
-  %r89 = getelementptr [4 x i8], [4 x i8]* @.str.7204, i64 0, i64 0
+  %r88 = getelementptr [16 x i8], [16 x i8]* @.str.7258, i64 0, i64 0
+  %r89 = getelementptr [5 x i8], [5 x i8]* @.str.7259, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r88, i8* %r89)
-  %r90 = getelementptr [12 x i8], [12 x i8]* @.str.7205, i64 0, i64 0
-  %r91 = getelementptr [4 x i8], [4 x i8]* @.str.7206, i64 0, i64 0
+  %r90 = getelementptr [18 x i8], [18 x i8]* @.str.7260, i64 0, i64 0
+  %r91 = getelementptr [5 x i8], [5 x i8]* @.str.7261, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r90, i8* %r91)
-  %r92 = getelementptr [12 x i8], [12 x i8]* @.str.7207, i64 0, i64 0
-  %r93 = getelementptr [4 x i8], [4 x i8]* @.str.7208, i64 0, i64 0
+  %r92 = getelementptr [9 x i8], [9 x i8]* @.str.7262, i64 0, i64 0
+  %r93 = getelementptr [4 x i8], [4 x i8]* @.str.7263, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r92, i8* %r93)
-  %r94 = getelementptr [12 x i8], [12 x i8]* @.str.7209, i64 0, i64 0
-  %r95 = getelementptr [4 x i8], [4 x i8]* @.str.7210, i64 0, i64 0
+  %r94 = getelementptr [9 x i8], [9 x i8]* @.str.7264, i64 0, i64 0
+  %r95 = getelementptr [4 x i8], [4 x i8]* @.str.7265, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r94, i8* %r95)
-  %r96 = getelementptr [12 x i8], [12 x i8]* @.str.7211, i64 0, i64 0
-  %r97 = getelementptr [4 x i8], [4 x i8]* @.str.7212, i64 0, i64 0
+  %r96 = getelementptr [12 x i8], [12 x i8]* @.str.7266, i64 0, i64 0
+  %r97 = getelementptr [4 x i8], [4 x i8]* @.str.7267, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r96, i8* %r97)
+  %r98 = getelementptr [13 x i8], [13 x i8]* @.str.7268, i64 0, i64 0
+  %r99 = getelementptr [4 x i8], [4 x i8]* @.str.7269, i64 0, i64 0
+  call void @nurl_sym_def(i64 %syms, i8* %r98, i8* %r99)
+  %r100 = getelementptr [13 x i8], [13 x i8]* @.str.7270, i64 0, i64 0
+  %r101 = getelementptr [4 x i8], [4 x i8]* @.str.7271, i64 0, i64 0
+  call void @nurl_sym_def(i64 %syms, i8* %r100, i8* %r101)
+  %r102 = getelementptr [12 x i8], [12 x i8]* @.str.7272, i64 0, i64 0
+  %r103 = getelementptr [4 x i8], [4 x i8]* @.str.7273, i64 0, i64 0
+  call void @nurl_sym_def(i64 %syms, i8* %r102, i8* %r103)
+  %r104 = getelementptr [12 x i8], [12 x i8]* @.str.7274, i64 0, i64 0
+  %r105 = getelementptr [4 x i8], [4 x i8]* @.str.7275, i64 0, i64 0
+  call void @nurl_sym_def(i64 %syms, i8* %r104, i8* %r105)
+  %r106 = getelementptr [12 x i8], [12 x i8]* @.str.7276, i64 0, i64 0
+  %r107 = getelementptr [4 x i8], [4 x i8]* @.str.7277, i64 0, i64 0
+  call void @nurl_sym_def(i64 %syms, i8* %r106, i8* %r107)
+  %r108 = getelementptr [12 x i8], [12 x i8]* @.str.7278, i64 0, i64 0
+  %r109 = getelementptr [4 x i8], [4 x i8]* @.str.7279, i64 0, i64 0
+  call void @nurl_sym_def(i64 %syms, i8* %r108, i8* %r109)
   ret void
 }
 
-@.str.7115 = private unnamed_addr constant [13 x i8] c"nurl_v128_ld\00"
-@.str.7116 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7117 = private unnamed_addr constant [13 x i8] c"nurl_v128_st\00"
-@.str.7118 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7119 = private unnamed_addr constant [15 x i8] c"nurl_v128_zero\00"
-@.str.7120 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7121 = private unnamed_addr constant [16 x i8] c"nurl_v128_set32\00"
-@.str.7122 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7123 = private unnamed_addr constant [16 x i8] c"nurl_v128_set64\00"
-@.str.7124 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7125 = private unnamed_addr constant [18 x i8] c"nurl_v128_bcast32\00"
-@.str.7126 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7127 = private unnamed_addr constant [17 x i8] c"nurl_v128_bcast8\00"
-@.str.7128 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7129 = private unnamed_addr constant [16 x i8] c"nurl_v128_get32\00"
-@.str.7130 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7131 = private unnamed_addr constant [16 x i8] c"nurl_v128_get64\00"
-@.str.7132 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7133 = private unnamed_addr constant [14 x i8] c"nurl_v128_xor\00"
-@.str.7134 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7135 = private unnamed_addr constant [14 x i8] c"nurl_v128_and\00"
-@.str.7136 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7137 = private unnamed_addr constant [13 x i8] c"nurl_v128_or\00"
-@.str.7138 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7139 = private unnamed_addr constant [17 x i8] c"nurl_v128_andnot\00"
-@.str.7140 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7141 = private unnamed_addr constant [16 x i8] c"nurl_v128_add32\00"
-@.str.7142 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7143 = private unnamed_addr constant [16 x i8] c"nurl_v128_sub32\00"
-@.str.7144 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7145 = private unnamed_addr constant [16 x i8] c"nurl_v128_add64\00"
-@.str.7146 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7147 = private unnamed_addr constant [15 x i8] c"nurl_v128_add8\00"
-@.str.7148 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7149 = private unnamed_addr constant [17 x i8] c"nurl_v128_mul32u\00"
-@.str.7150 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7151 = private unnamed_addr constant [17 x i8] c"nurl_v128_rotl32\00"
-@.str.7152 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7153 = private unnamed_addr constant [16 x i8] c"nurl_v128_shl64\00"
-@.str.7154 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7155 = private unnamed_addr constant [16 x i8] c"nurl_v128_shr64\00"
-@.str.7156 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7157 = private unnamed_addr constant [20 x i8] c"nurl_v128_rotlanes1\00"
-@.str.7158 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7159 = private unnamed_addr constant [20 x i8] c"nurl_v128_rotlanes2\00"
-@.str.7160 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7161 = private unnamed_addr constant [20 x i8] c"nurl_v128_rotlanes3\00"
-@.str.7162 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7163 = private unnamed_addr constant [18 x i8] c"nurl_v128_eqmask8\00"
-@.str.7164 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7165 = private unnamed_addr constant [18 x i8] c"nurl_v128_ltmask8\00"
-@.str.7166 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7167 = private unnamed_addr constant [17 x i8] c"nurl_v128_lower8\00"
-@.str.7168 = private unnamed_addr constant [5 x i8] c"v128\00"
-@.str.7169 = private unnamed_addr constant [15 x i8] c"nurl_v256_zero\00"
-@.str.7170 = private unnamed_addr constant [5 x i8] c"v256\00"
-@.str.7171 = private unnamed_addr constant [13 x i8] c"nurl_v256_ld\00"
-@.str.7172 = private unnamed_addr constant [5 x i8] c"v256\00"
-@.str.7173 = private unnamed_addr constant [13 x i8] c"nurl_v256_st\00"
-@.str.7174 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7175 = private unnamed_addr constant [16 x i8] c"nurl_v256_set64\00"
-@.str.7176 = private unnamed_addr constant [5 x i8] c"v256\00"
-@.str.7177 = private unnamed_addr constant [18 x i8] c"nurl_v256_bcast64\00"
-@.str.7178 = private unnamed_addr constant [5 x i8] c"v256\00"
-@.str.7179 = private unnamed_addr constant [16 x i8] c"nurl_v256_get64\00"
-@.str.7180 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7181 = private unnamed_addr constant [16 x i8] c"nurl_v256_put64\00"
-@.str.7182 = private unnamed_addr constant [5 x i8] c"v256\00"
-@.str.7183 = private unnamed_addr constant [14 x i8] c"nurl_v256_xor\00"
-@.str.7184 = private unnamed_addr constant [5 x i8] c"v256\00"
-@.str.7185 = private unnamed_addr constant [14 x i8] c"nurl_v256_and\00"
-@.str.7186 = private unnamed_addr constant [5 x i8] c"v256\00"
-@.str.7187 = private unnamed_addr constant [13 x i8] c"nurl_v256_or\00"
-@.str.7188 = private unnamed_addr constant [5 x i8] c"v256\00"
-@.str.7189 = private unnamed_addr constant [17 x i8] c"nurl_v256_andnot\00"
-@.str.7190 = private unnamed_addr constant [5 x i8] c"v256\00"
-@.str.7191 = private unnamed_addr constant [14 x i8] c"nurl_v256_not\00"
-@.str.7192 = private unnamed_addr constant [5 x i8] c"v256\00"
-@.str.7193 = private unnamed_addr constant [17 x i8] c"nurl_v256_rotl64\00"
-@.str.7194 = private unnamed_addr constant [5 x i8] c"v256\00"
-@.str.7195 = private unnamed_addr constant [9 x i8] c"nurl_ctz\00"
-@.str.7196 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7197 = private unnamed_addr constant [9 x i8] c"nurl_clz\00"
-@.str.7198 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7199 = private unnamed_addr constant [12 x i8] c"nurl_popcnt\00"
-@.str.7200 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7201 = private unnamed_addr constant [13 x i8] c"nurl_bswap64\00"
-@.str.7202 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7203 = private unnamed_addr constant [13 x i8] c"nurl_bswap32\00"
-@.str.7204 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7205 = private unnamed_addr constant [12 x i8] c"nurl_rotl32\00"
-@.str.7206 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7207 = private unnamed_addr constant [12 x i8] c"nurl_rotr32\00"
-@.str.7208 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7209 = private unnamed_addr constant [12 x i8] c"nurl_rotl64\00"
-@.str.7210 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7211 = private unnamed_addr constant [12 x i8] c"nurl_rotr64\00"
-@.str.7212 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.7170 = private unnamed_addr constant [13 x i8] c"nurl_v128_ld\00"
+@.str.7171 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7172 = private unnamed_addr constant [13 x i8] c"nurl_v128_st\00"
+@.str.7173 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7174 = private unnamed_addr constant [15 x i8] c"nurl_v128_zero\00"
+@.str.7175 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7176 = private unnamed_addr constant [16 x i8] c"nurl_v128_set32\00"
+@.str.7177 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7178 = private unnamed_addr constant [16 x i8] c"nurl_v128_set64\00"
+@.str.7179 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7180 = private unnamed_addr constant [18 x i8] c"nurl_v128_bcast32\00"
+@.str.7181 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7182 = private unnamed_addr constant [17 x i8] c"nurl_v128_bcast8\00"
+@.str.7183 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7184 = private unnamed_addr constant [16 x i8] c"nurl_v128_get32\00"
+@.str.7185 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.7186 = private unnamed_addr constant [16 x i8] c"nurl_v128_get64\00"
+@.str.7187 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.7188 = private unnamed_addr constant [14 x i8] c"nurl_v128_xor\00"
+@.str.7189 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7190 = private unnamed_addr constant [14 x i8] c"nurl_v128_and\00"
+@.str.7191 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7192 = private unnamed_addr constant [13 x i8] c"nurl_v128_or\00"
+@.str.7193 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7194 = private unnamed_addr constant [17 x i8] c"nurl_v128_andnot\00"
+@.str.7195 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7196 = private unnamed_addr constant [16 x i8] c"nurl_v128_add32\00"
+@.str.7197 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7198 = private unnamed_addr constant [16 x i8] c"nurl_v128_sub32\00"
+@.str.7199 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7200 = private unnamed_addr constant [16 x i8] c"nurl_v128_add64\00"
+@.str.7201 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7202 = private unnamed_addr constant [15 x i8] c"nurl_v128_add8\00"
+@.str.7203 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7204 = private unnamed_addr constant [17 x i8] c"nurl_v128_mul32u\00"
+@.str.7205 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7206 = private unnamed_addr constant [17 x i8] c"nurl_v128_rotl32\00"
+@.str.7207 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7208 = private unnamed_addr constant [16 x i8] c"nurl_v128_shl64\00"
+@.str.7209 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7210 = private unnamed_addr constant [16 x i8] c"nurl_v128_shr64\00"
+@.str.7211 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7212 = private unnamed_addr constant [20 x i8] c"nurl_v128_rotlanes1\00"
+@.str.7213 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7214 = private unnamed_addr constant [20 x i8] c"nurl_v128_rotlanes2\00"
+@.str.7215 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7216 = private unnamed_addr constant [20 x i8] c"nurl_v128_rotlanes3\00"
+@.str.7217 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7218 = private unnamed_addr constant [18 x i8] c"nurl_v128_eqmask8\00"
+@.str.7219 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.7220 = private unnamed_addr constant [18 x i8] c"nurl_v128_ltmask8\00"
+@.str.7221 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.7222 = private unnamed_addr constant [17 x i8] c"nurl_v128_lower8\00"
+@.str.7223 = private unnamed_addr constant [5 x i8] c"v128\00"
+@.str.7224 = private unnamed_addr constant [15 x i8] c"nurl_v256_zero\00"
+@.str.7225 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7226 = private unnamed_addr constant [13 x i8] c"nurl_v256_ld\00"
+@.str.7227 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7228 = private unnamed_addr constant [13 x i8] c"nurl_v256_st\00"
+@.str.7229 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7230 = private unnamed_addr constant [16 x i8] c"nurl_v256_set64\00"
+@.str.7231 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7232 = private unnamed_addr constant [18 x i8] c"nurl_v256_bcast64\00"
+@.str.7233 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7234 = private unnamed_addr constant [16 x i8] c"nurl_v256_get64\00"
+@.str.7235 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.7236 = private unnamed_addr constant [16 x i8] c"nurl_v256_put64\00"
+@.str.7237 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7238 = private unnamed_addr constant [14 x i8] c"nurl_v256_xor\00"
+@.str.7239 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7240 = private unnamed_addr constant [14 x i8] c"nurl_v256_and\00"
+@.str.7241 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7242 = private unnamed_addr constant [13 x i8] c"nurl_v256_or\00"
+@.str.7243 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7244 = private unnamed_addr constant [17 x i8] c"nurl_v256_andnot\00"
+@.str.7245 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7246 = private unnamed_addr constant [14 x i8] c"nurl_v256_not\00"
+@.str.7247 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7248 = private unnamed_addr constant [17 x i8] c"nurl_v256_rotl64\00"
+@.str.7249 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7250 = private unnamed_addr constant [16 x i8] c"nurl_v256_add16\00"
+@.str.7251 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7252 = private unnamed_addr constant [16 x i8] c"nurl_v256_sub16\00"
+@.str.7253 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7254 = private unnamed_addr constant [18 x i8] c"nurl_v256_mullo16\00"
+@.str.7255 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7256 = private unnamed_addr constant [18 x i8] c"nurl_v256_mulhi16\00"
+@.str.7257 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7258 = private unnamed_addr constant [16 x i8] c"nurl_v256_sra16\00"
+@.str.7259 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7260 = private unnamed_addr constant [18 x i8] c"nurl_v256_bcast16\00"
+@.str.7261 = private unnamed_addr constant [5 x i8] c"v256\00"
+@.str.7262 = private unnamed_addr constant [9 x i8] c"nurl_ctz\00"
+@.str.7263 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.7264 = private unnamed_addr constant [9 x i8] c"nurl_clz\00"
+@.str.7265 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.7266 = private unnamed_addr constant [12 x i8] c"nurl_popcnt\00"
+@.str.7267 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.7268 = private unnamed_addr constant [13 x i8] c"nurl_bswap64\00"
+@.str.7269 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.7270 = private unnamed_addr constant [13 x i8] c"nurl_bswap32\00"
+@.str.7271 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.7272 = private unnamed_addr constant [12 x i8] c"nurl_rotl32\00"
+@.str.7273 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.7274 = private unnamed_addr constant [12 x i8] c"nurl_rotr32\00"
+@.str.7275 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.7276 = private unnamed_addr constant [12 x i8] c"nurl_rotl64\00"
+@.str.7277 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.7278 = private unnamed_addr constant [12 x i8] c"nurl_rotr64\00"
+@.str.7279 = private unnamed_addr constant [4 x i8] c"u64\00"
 define void @emit_header(i64 %syms) {
 entry:
-  %r0 = getelementptr [34 x i8], [34 x i8]* @.str.7213, i64 0, i64 0
+  %r0 = getelementptr [34 x i8], [34 x i8]* @.str.7280, i64 0, i64 0
   call void @emit(i8* %r0)
-  %r1 = getelementptr [48 x i8], [48 x i8]* @.str.7214, i64 0, i64 0
+  %r1 = getelementptr [48 x i8], [48 x i8]* @.str.7281, i64 0, i64 0
   call void @emit(i8* %r1)
-  %r2 = getelementptr [1 x i8], [1 x i8]* @.str.7215, i64 0, i64 0
+  %r2 = getelementptr [1 x i8], [1 x i8]* @.str.7282, i64 0, i64 0
   call void @emit(i8* %r2)
-  %r3 = getelementptr [61 x i8], [61 x i8]* @.str.7216, i64 0, i64 0
+  %r3 = getelementptr [61 x i8], [61 x i8]* @.str.7283, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r3)
-  %r4 = getelementptr [24 x i8], [24 x i8]* @.str.7217, i64 0, i64 0
+  %r4 = getelementptr [24 x i8], [24 x i8]* @.str.7284, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r4)
-  %r5 = getelementptr [31 x i8], [31 x i8]* @.str.7218, i64 0, i64 0
+  %r5 = getelementptr [31 x i8], [31 x i8]* @.str.7285, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r5)
-  %r6 = getelementptr [26 x i8], [26 x i8]* @.str.7219, i64 0, i64 0
+  %r6 = getelementptr [26 x i8], [26 x i8]* @.str.7286, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r6)
-  %r7 = getelementptr [24 x i8], [24 x i8]* @.str.7220, i64 0, i64 0
+  %r7 = getelementptr [24 x i8], [24 x i8]* @.str.7287, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r7)
-  %r8 = getelementptr [26 x i8], [26 x i8]* @.str.7221, i64 0, i64 0
+  %r8 = getelementptr [26 x i8], [26 x i8]* @.str.7288, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r8)
-  %r9 = getelementptr [31 x i8], [31 x i8]* @.str.7222, i64 0, i64 0
+  %r9 = getelementptr [31 x i8], [31 x i8]* @.str.7289, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r9)
-  %r10 = getelementptr [37 x i8], [37 x i8]* @.str.7223, i64 0, i64 0
+  %r10 = getelementptr [37 x i8], [37 x i8]* @.str.7290, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r10)
-  %r11 = getelementptr [36 x i8], [36 x i8]* @.str.7224, i64 0, i64 0
+  %r11 = getelementptr [36 x i8], [36 x i8]* @.str.7291, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r11)
-  %r12 = getelementptr [31 x i8], [31 x i8]* @.str.7225, i64 0, i64 0
+  %r12 = getelementptr [31 x i8], [31 x i8]* @.str.7292, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r12)
-  %r13 = getelementptr [41 x i8], [41 x i8]* @.str.7226, i64 0, i64 0
+  %r13 = getelementptr [41 x i8], [41 x i8]* @.str.7293, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r13)
-  %r14 = getelementptr [25 x i8], [25 x i8]* @.str.7227, i64 0, i64 0
+  %r14 = getelementptr [25 x i8], [25 x i8]* @.str.7294, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r14)
-  %r15 = getelementptr [26 x i8], [26 x i8]* @.str.7228, i64 0, i64 0
+  %r15 = getelementptr [26 x i8], [26 x i8]* @.str.7295, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r15)
-  %r16 = getelementptr [34 x i8], [34 x i8]* @.str.7229, i64 0, i64 0
+  %r16 = getelementptr [34 x i8], [34 x i8]* @.str.7296, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r16)
-  %r17 = getelementptr [36 x i8], [36 x i8]* @.str.7230, i64 0, i64 0
+  %r17 = getelementptr [36 x i8], [36 x i8]* @.str.7297, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r17)
-  %r18 = getelementptr [26 x i8], [26 x i8]* @.str.7231, i64 0, i64 0
+  %r18 = getelementptr [26 x i8], [26 x i8]* @.str.7298, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r18)
-  %r19 = getelementptr [31 x i8], [31 x i8]* @.str.7232, i64 0, i64 0
+  %r19 = getelementptr [31 x i8], [31 x i8]* @.str.7299, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r19)
-  %r20 = getelementptr [30 x i8], [30 x i8]* @.str.7233, i64 0, i64 0
+  %r20 = getelementptr [30 x i8], [30 x i8]* @.str.7300, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r20)
-  %r21 = getelementptr [26 x i8], [26 x i8]* @.str.7234, i64 0, i64 0
+  %r21 = getelementptr [26 x i8], [26 x i8]* @.str.7301, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r21)
-  %r22 = getelementptr [30 x i8], [30 x i8]* @.str.7235, i64 0, i64 0
+  %r22 = getelementptr [30 x i8], [30 x i8]* @.str.7302, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r22)
-  %r23 = getelementptr [41 x i8], [41 x i8]* @.str.7236, i64 0, i64 0
+  %r23 = getelementptr [41 x i8], [41 x i8]* @.str.7303, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r23)
-  %r24 = getelementptr [30 x i8], [30 x i8]* @.str.7237, i64 0, i64 0
+  %r24 = getelementptr [30 x i8], [30 x i8]* @.str.7304, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r24)
-  %r25 = getelementptr [40 x i8], [40 x i8]* @.str.7238, i64 0, i64 0
+  %r25 = getelementptr [40 x i8], [40 x i8]* @.str.7305, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r25)
-  %r26 = getelementptr [24 x i8], [24 x i8]* @.str.7239, i64 0, i64 0
+  %r26 = getelementptr [24 x i8], [24 x i8]* @.str.7306, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r26)
-  %r27 = getelementptr [35 x i8], [35 x i8]* @.str.7240, i64 0, i64 0
+  %r27 = getelementptr [35 x i8], [35 x i8]* @.str.7307, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r27)
-  %r28 = getelementptr [25 x i8], [25 x i8]* @.str.7241, i64 0, i64 0
+  %r28 = getelementptr [25 x i8], [25 x i8]* @.str.7308, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r28)
-  %r29 = getelementptr [31 x i8], [31 x i8]* @.str.7242, i64 0, i64 0
+  %r29 = getelementptr [31 x i8], [31 x i8]* @.str.7309, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r29)
-  %r30 = getelementptr [26 x i8], [26 x i8]* @.str.7243, i64 0, i64 0
+  %r30 = getelementptr [26 x i8], [26 x i8]* @.str.7310, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r30)
-  %r31 = getelementptr [33 x i8], [33 x i8]* @.str.7244, i64 0, i64 0
+  %r31 = getelementptr [33 x i8], [33 x i8]* @.str.7311, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r31)
-  %r32 = getelementptr [35 x i8], [35 x i8]* @.str.7245, i64 0, i64 0
+  %r32 = getelementptr [35 x i8], [35 x i8]* @.str.7312, i64 0, i64 0
   call void @nurl_print(i8* %r32)
-  %r33 = getelementptr [35 x i8], [35 x i8]* @.str.7246, i64 0, i64 0
+  %r33 = getelementptr [35 x i8], [35 x i8]* @.str.7313, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r33)
-  %r34 = getelementptr [30 x i8], [30 x i8]* @.str.7247, i64 0, i64 0
+  %r34 = getelementptr [30 x i8], [30 x i8]* @.str.7314, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r34)
-  %r35 = getelementptr [32 x i8], [32 x i8]* @.str.7248, i64 0, i64 0
+  %r35 = getelementptr [32 x i8], [32 x i8]* @.str.7315, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r35)
-  %r36 = getelementptr [31 x i8], [31 x i8]* @.str.7249, i64 0, i64 0
+  %r36 = getelementptr [31 x i8], [31 x i8]* @.str.7316, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r36)
-  %r37 = getelementptr [33 x i8], [33 x i8]* @.str.7250, i64 0, i64 0
+  %r37 = getelementptr [33 x i8], [33 x i8]* @.str.7317, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r37)
-  %r38 = getelementptr [34 x i8], [34 x i8]* @.str.7251, i64 0, i64 0
+  %r38 = getelementptr [34 x i8], [34 x i8]* @.str.7318, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r38)
-  %r39 = getelementptr [34 x i8], [34 x i8]* @.str.7252, i64 0, i64 0
+  %r39 = getelementptr [34 x i8], [34 x i8]* @.str.7319, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r39)
-  %r40 = getelementptr [34 x i8], [34 x i8]* @.str.7253, i64 0, i64 0
+  %r40 = getelementptr [34 x i8], [34 x i8]* @.str.7320, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r40)
-  %r41 = getelementptr [30 x i8], [30 x i8]* @.str.7254, i64 0, i64 0
+  %r41 = getelementptr [30 x i8], [30 x i8]* @.str.7321, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r41)
-  %r42 = getelementptr [31 x i8], [31 x i8]* @.str.7255, i64 0, i64 0
+  %r42 = getelementptr [31 x i8], [31 x i8]* @.str.7322, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r42)
-  %r43 = getelementptr [31 x i8], [31 x i8]* @.str.7256, i64 0, i64 0
+  %r43 = getelementptr [31 x i8], [31 x i8]* @.str.7323, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r43)
-  %r44 = getelementptr [34 x i8], [34 x i8]* @.str.7257, i64 0, i64 0
+  %r44 = getelementptr [34 x i8], [34 x i8]* @.str.7324, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r44)
-  %r45 = getelementptr [34 x i8], [34 x i8]* @.str.7258, i64 0, i64 0
+  %r45 = getelementptr [34 x i8], [34 x i8]* @.str.7325, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r45)
-  %r46 = getelementptr [32 x i8], [32 x i8]* @.str.7259, i64 0, i64 0
+  %r46 = getelementptr [32 x i8], [32 x i8]* @.str.7326, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r46)
-  %r47 = getelementptr [37 x i8], [37 x i8]* @.str.7260, i64 0, i64 0
+  %r47 = getelementptr [37 x i8], [37 x i8]* @.str.7327, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r47)
-  %r48 = getelementptr [57 x i8], [57 x i8]* @.str.7261, i64 0, i64 0
+  %r48 = getelementptr [57 x i8], [57 x i8]* @.str.7328, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r48)
-  %r49 = getelementptr [53 x i8], [53 x i8]* @.str.7262, i64 0, i64 0
+  %r49 = getelementptr [53 x i8], [53 x i8]* @.str.7329, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r49)
-  %r50 = getelementptr [47 x i8], [47 x i8]* @.str.7263, i64 0, i64 0
+  %r50 = getelementptr [47 x i8], [47 x i8]* @.str.7330, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r50)
-  %r51 = getelementptr [41 x i8], [41 x i8]* @.str.7264, i64 0, i64 0
+  %r51 = getelementptr [41 x i8], [41 x i8]* @.str.7331, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r51)
-  %r52 = getelementptr [50 x i8], [50 x i8]* @.str.7265, i64 0, i64 0
+  %r52 = getelementptr [50 x i8], [50 x i8]* @.str.7332, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r52)
-  %r53 = getelementptr [34 x i8], [34 x i8]* @.str.7266, i64 0, i64 0
+  %r53 = getelementptr [34 x i8], [34 x i8]* @.str.7333, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r53)
-  %r54 = getelementptr [29 x i8], [29 x i8]* @.str.7267, i64 0, i64 0
+  %r54 = getelementptr [29 x i8], [29 x i8]* @.str.7334, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r54)
-  %r55 = getelementptr [26 x i8], [26 x i8]* @.str.7268, i64 0, i64 0
+  %r55 = getelementptr [26 x i8], [26 x i8]* @.str.7335, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r55)
-  %r56 = getelementptr [29 x i8], [29 x i8]* @.str.7269, i64 0, i64 0
+  %r56 = getelementptr [29 x i8], [29 x i8]* @.str.7336, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r56)
-  %r57 = getelementptr [32 x i8], [32 x i8]* @.str.7270, i64 0, i64 0
+  %r57 = getelementptr [32 x i8], [32 x i8]* @.str.7337, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r57)
-  %r58 = getelementptr [33 x i8], [33 x i8]* @.str.7271, i64 0, i64 0
+  %r58 = getelementptr [33 x i8], [33 x i8]* @.str.7338, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r58)
-  %r59 = getelementptr [29 x i8], [29 x i8]* @.str.7272, i64 0, i64 0
+  %r59 = getelementptr [29 x i8], [29 x i8]* @.str.7339, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r59)
-  %r60 = getelementptr [37 x i8], [37 x i8]* @.str.7273, i64 0, i64 0
+  %r60 = getelementptr [37 x i8], [37 x i8]* @.str.7340, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r60)
-  %r61 = getelementptr [36 x i8], [36 x i8]* @.str.7274, i64 0, i64 0
+  %r61 = getelementptr [36 x i8], [36 x i8]* @.str.7341, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r61)
-  %r62 = getelementptr [37 x i8], [37 x i8]* @.str.7275, i64 0, i64 0
+  %r62 = getelementptr [37 x i8], [37 x i8]* @.str.7342, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r62)
-  %r63 = getelementptr [31 x i8], [31 x i8]* @.str.7276, i64 0, i64 0
+  %r63 = getelementptr [31 x i8], [31 x i8]* @.str.7343, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r63)
-  %r64 = getelementptr [30 x i8], [30 x i8]* @.str.7277, i64 0, i64 0
+  %r64 = getelementptr [30 x i8], [30 x i8]* @.str.7344, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r64)
-  %r65 = getelementptr [31 x i8], [31 x i8]* @.str.7278, i64 0, i64 0
+  %r65 = getelementptr [31 x i8], [31 x i8]* @.str.7345, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r65)
-  %r66 = getelementptr [37 x i8], [37 x i8]* @.str.7279, i64 0, i64 0
+  %r66 = getelementptr [37 x i8], [37 x i8]* @.str.7346, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r66)
-  %r67 = getelementptr [29 x i8], [29 x i8]* @.str.7280, i64 0, i64 0
+  %r67 = getelementptr [29 x i8], [29 x i8]* @.str.7347, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r67)
-  %r68 = getelementptr [32 x i8], [32 x i8]* @.str.7281, i64 0, i64 0
+  %r68 = getelementptr [32 x i8], [32 x i8]* @.str.7348, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r68)
-  %r69 = getelementptr [37 x i8], [37 x i8]* @.str.7282, i64 0, i64 0
+  %r69 = getelementptr [37 x i8], [37 x i8]* @.str.7349, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r69)
-  %r70 = getelementptr [47 x i8], [47 x i8]* @.str.7283, i64 0, i64 0
+  %r70 = getelementptr [47 x i8], [47 x i8]* @.str.7350, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r70)
-  %r71 = getelementptr [39 x i8], [39 x i8]* @.str.7284, i64 0, i64 0
+  %r71 = getelementptr [39 x i8], [39 x i8]* @.str.7351, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r71)
-  %r72 = getelementptr [41 x i8], [41 x i8]* @.str.7285, i64 0, i64 0
+  %r72 = getelementptr [41 x i8], [41 x i8]* @.str.7352, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r72)
-  %r73 = getelementptr [42 x i8], [42 x i8]* @.str.7286, i64 0, i64 0
+  %r73 = getelementptr [42 x i8], [42 x i8]* @.str.7353, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r73)
-  %r74 = getelementptr [41 x i8], [41 x i8]* @.str.7287, i64 0, i64 0
+  %r74 = getelementptr [41 x i8], [41 x i8]* @.str.7354, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r74)
-  %r75 = getelementptr [66 x i8], [66 x i8]* @.str.7288, i64 0, i64 0
+  %r75 = getelementptr [66 x i8], [66 x i8]* @.str.7355, i64 0, i64 0
   call void @emit(i8* %r75)
-  %r76 = getelementptr [7 x i8], [7 x i8]* @.str.7289, i64 0, i64 0
+  %r76 = getelementptr [7 x i8], [7 x i8]* @.str.7356, i64 0, i64 0
   call void @emit(i8* %r76)
-  %r77 = getelementptr [31 x i8], [31 x i8]* @.str.7290, i64 0, i64 0
+  %r77 = getelementptr [31 x i8], [31 x i8]* @.str.7357, i64 0, i64 0
   call void @emit(i8* %r77)
-  %r78 = getelementptr [46 x i8], [46 x i8]* @.str.7291, i64 0, i64 0
+  %r78 = getelementptr [46 x i8], [46 x i8]* @.str.7358, i64 0, i64 0
   call void @emit(i8* %r78)
-  %r79 = getelementptr [9 x i8], [9 x i8]* @.str.7292, i64 0, i64 0
+  %r79 = getelementptr [9 x i8], [9 x i8]* @.str.7359, i64 0, i64 0
   call void @emit(i8* %r79)
-  %r80 = getelementptr [33 x i8], [33 x i8]* @.str.7293, i64 0, i64 0
+  %r80 = getelementptr [33 x i8], [33 x i8]* @.str.7360, i64 0, i64 0
   call void @emit(i8* %r80)
-  %r81 = getelementptr [57 x i8], [57 x i8]* @.str.7294, i64 0, i64 0
+  %r81 = getelementptr [57 x i8], [57 x i8]* @.str.7361, i64 0, i64 0
   call void @emit(i8* %r81)
-  %r82 = getelementptr [31 x i8], [31 x i8]* @.str.7295, i64 0, i64 0
+  %r82 = getelementptr [31 x i8], [31 x i8]* @.str.7362, i64 0, i64 0
   call void @emit(i8* %r82)
-  %r83 = getelementptr [16 x i8], [16 x i8]* @.str.7296, i64 0, i64 0
+  %r83 = getelementptr [16 x i8], [16 x i8]* @.str.7363, i64 0, i64 0
   call void @emit(i8* %r83)
-  %r84 = getelementptr [9 x i8], [9 x i8]* @.str.7297, i64 0, i64 0
+  %r84 = getelementptr [9 x i8], [9 x i8]* @.str.7364, i64 0, i64 0
   call void @emit(i8* %r84)
-  %r85 = getelementptr [12 x i8], [12 x i8]* @.str.7298, i64 0, i64 0
+  %r85 = getelementptr [12 x i8], [12 x i8]* @.str.7365, i64 0, i64 0
   call void @emit(i8* %r85)
-  %r86 = getelementptr [2 x i8], [2 x i8]* @.str.7299, i64 0, i64 0
+  %r86 = getelementptr [2 x i8], [2 x i8]* @.str.7366, i64 0, i64 0
   call void @emit(i8* %r86)
-  %r87 = getelementptr [75 x i8], [75 x i8]* @.str.7300, i64 0, i64 0
+  %r87 = getelementptr [75 x i8], [75 x i8]* @.str.7367, i64 0, i64 0
   call void @emit(i8* %r87)
-  %r88 = getelementptr [7 x i8], [7 x i8]* @.str.7301, i64 0, i64 0
+  %r88 = getelementptr [7 x i8], [7 x i8]* @.str.7368, i64 0, i64 0
   call void @emit(i8* %r88)
-  %r89 = getelementptr [31 x i8], [31 x i8]* @.str.7302, i64 0, i64 0
+  %r89 = getelementptr [31 x i8], [31 x i8]* @.str.7369, i64 0, i64 0
   call void @emit(i8* %r89)
-  %r90 = getelementptr [47 x i8], [47 x i8]* @.str.7303, i64 0, i64 0
+  %r90 = getelementptr [47 x i8], [47 x i8]* @.str.7370, i64 0, i64 0
   call void @emit(i8* %r90)
-  %r91 = getelementptr [10 x i8], [10 x i8]* @.str.7304, i64 0, i64 0
+  %r91 = getelementptr [10 x i8], [10 x i8]* @.str.7371, i64 0, i64 0
   call void @emit(i8* %r91)
-  %r92 = getelementptr [33 x i8], [33 x i8]* @.str.7305, i64 0, i64 0
+  %r92 = getelementptr [33 x i8], [33 x i8]* @.str.7372, i64 0, i64 0
   call void @emit(i8* %r92)
-  %r93 = getelementptr [57 x i8], [57 x i8]* @.str.7306, i64 0, i64 0
+  %r93 = getelementptr [57 x i8], [57 x i8]* @.str.7373, i64 0, i64 0
   call void @emit(i8* %r93)
-  %r94 = getelementptr [27 x i8], [27 x i8]* @.str.7307, i64 0, i64 0
+  %r94 = getelementptr [27 x i8], [27 x i8]* @.str.7374, i64 0, i64 0
   call void @emit(i8* %r94)
-  %r95 = getelementptr [20 x i8], [20 x i8]* @.str.7308, i64 0, i64 0
+  %r95 = getelementptr [20 x i8], [20 x i8]* @.str.7375, i64 0, i64 0
   call void @emit(i8* %r95)
-  %r96 = getelementptr [9 x i8], [9 x i8]* @.str.7309, i64 0, i64 0
+  %r96 = getelementptr [9 x i8], [9 x i8]* @.str.7376, i64 0, i64 0
   call void @emit(i8* %r96)
-  %r97 = getelementptr [11 x i8], [11 x i8]* @.str.7310, i64 0, i64 0
+  %r97 = getelementptr [11 x i8], [11 x i8]* @.str.7377, i64 0, i64 0
   call void @emit(i8* %r97)
-  %r98 = getelementptr [2 x i8], [2 x i8]* @.str.7311, i64 0, i64 0
+  %r98 = getelementptr [2 x i8], [2 x i8]* @.str.7378, i64 0, i64 0
   call void @emit(i8* %r98)
-  %r99 = getelementptr [68 x i8], [68 x i8]* @.str.7312, i64 0, i64 0
+  %r99 = getelementptr [68 x i8], [68 x i8]* @.str.7379, i64 0, i64 0
   call void @emit(i8* %r99)
-  %r100 = getelementptr [7 x i8], [7 x i8]* @.str.7313, i64 0, i64 0
+  %r100 = getelementptr [7 x i8], [7 x i8]* @.str.7380, i64 0, i64 0
   call void @emit(i8* %r100)
-  %r101 = getelementptr [30 x i8], [30 x i8]* @.str.7314, i64 0, i64 0
+  %r101 = getelementptr [30 x i8], [30 x i8]* @.str.7381, i64 0, i64 0
   call void @emit(i8* %r101)
-  %r102 = getelementptr [30 x i8], [30 x i8]* @.str.7315, i64 0, i64 0
+  %r102 = getelementptr [30 x i8], [30 x i8]* @.str.7382, i64 0, i64 0
   call void @emit(i8* %r102)
-  %r103 = getelementptr [32 x i8], [32 x i8]* @.str.7316, i64 0, i64 0
+  %r103 = getelementptr [32 x i8], [32 x i8]* @.str.7383, i64 0, i64 0
   call void @emit(i8* %r103)
-  %r104 = getelementptr [30 x i8], [30 x i8]* @.str.7317, i64 0, i64 0
+  %r104 = getelementptr [30 x i8], [30 x i8]* @.str.7384, i64 0, i64 0
   call void @emit(i8* %r104)
-  %r105 = getelementptr [34 x i8], [34 x i8]* @.str.7318, i64 0, i64 0
+  %r105 = getelementptr [34 x i8], [34 x i8]* @.str.7385, i64 0, i64 0
   call void @emit(i8* %r105)
-  %r106 = getelementptr [16 x i8], [16 x i8]* @.str.7319, i64 0, i64 0
+  %r106 = getelementptr [16 x i8], [16 x i8]* @.str.7386, i64 0, i64 0
   call void @emit(i8* %r106)
-  %r107 = getelementptr [2 x i8], [2 x i8]* @.str.7320, i64 0, i64 0
+  %r107 = getelementptr [2 x i8], [2 x i8]* @.str.7387, i64 0, i64 0
   call void @emit(i8* %r107)
-  %r108 = getelementptr [77 x i8], [77 x i8]* @.str.7321, i64 0, i64 0
+  %r108 = getelementptr [77 x i8], [77 x i8]* @.str.7388, i64 0, i64 0
   call void @emit(i8* %r108)
-  %r109 = getelementptr [7 x i8], [7 x i8]* @.str.7322, i64 0, i64 0
+  %r109 = getelementptr [7 x i8], [7 x i8]* @.str.7389, i64 0, i64 0
   call void @emit(i8* %r109)
-  %r110 = getelementptr [30 x i8], [30 x i8]* @.str.7323, i64 0, i64 0
+  %r110 = getelementptr [30 x i8], [30 x i8]* @.str.7390, i64 0, i64 0
   call void @emit(i8* %r110)
-  %r111 = getelementptr [30 x i8], [30 x i8]* @.str.7324, i64 0, i64 0
+  %r111 = getelementptr [30 x i8], [30 x i8]* @.str.7391, i64 0, i64 0
   call void @emit(i8* %r111)
-  %r112 = getelementptr [30 x i8], [30 x i8]* @.str.7325, i64 0, i64 0
+  %r112 = getelementptr [30 x i8], [30 x i8]* @.str.7392, i64 0, i64 0
   call void @emit(i8* %r112)
-  %r113 = getelementptr [32 x i8], [32 x i8]* @.str.7326, i64 0, i64 0
+  %r113 = getelementptr [32 x i8], [32 x i8]* @.str.7393, i64 0, i64 0
   call void @emit(i8* %r113)
-  %r114 = getelementptr [32 x i8], [32 x i8]* @.str.7327, i64 0, i64 0
+  %r114 = getelementptr [32 x i8], [32 x i8]* @.str.7394, i64 0, i64 0
   call void @emit(i8* %r114)
-  %r115 = getelementptr [34 x i8], [34 x i8]* @.str.7328, i64 0, i64 0
+  %r115 = getelementptr [34 x i8], [34 x i8]* @.str.7395, i64 0, i64 0
   call void @emit(i8* %r115)
-  %r116 = getelementptr [16 x i8], [16 x i8]* @.str.7329, i64 0, i64 0
+  %r116 = getelementptr [16 x i8], [16 x i8]* @.str.7396, i64 0, i64 0
   call void @emit(i8* %r116)
-  %r117 = getelementptr [2 x i8], [2 x i8]* @.str.7330, i64 0, i64 0
+  %r117 = getelementptr [2 x i8], [2 x i8]* @.str.7397, i64 0, i64 0
   call void @emit(i8* %r117)
-  %r118 = getelementptr [77 x i8], [77 x i8]* @.str.7331, i64 0, i64 0
+  %r118 = getelementptr [77 x i8], [77 x i8]* @.str.7398, i64 0, i64 0
   call void @emit(i8* %r118)
-  %r119 = getelementptr [7 x i8], [7 x i8]* @.str.7332, i64 0, i64 0
+  %r119 = getelementptr [7 x i8], [7 x i8]* @.str.7399, i64 0, i64 0
   call void @emit(i8* %r119)
-  %r120 = getelementptr [30 x i8], [30 x i8]* @.str.7333, i64 0, i64 0
+  %r120 = getelementptr [30 x i8], [30 x i8]* @.str.7400, i64 0, i64 0
   call void @emit(i8* %r120)
-  %r121 = getelementptr [30 x i8], [30 x i8]* @.str.7334, i64 0, i64 0
+  %r121 = getelementptr [30 x i8], [30 x i8]* @.str.7401, i64 0, i64 0
   call void @emit(i8* %r121)
-  %r122 = getelementptr [30 x i8], [30 x i8]* @.str.7335, i64 0, i64 0
+  %r122 = getelementptr [30 x i8], [30 x i8]* @.str.7402, i64 0, i64 0
   call void @emit(i8* %r122)
-  %r123 = getelementptr [32 x i8], [32 x i8]* @.str.7336, i64 0, i64 0
+  %r123 = getelementptr [32 x i8], [32 x i8]* @.str.7403, i64 0, i64 0
   call void @emit(i8* %r123)
-  %r124 = getelementptr [32 x i8], [32 x i8]* @.str.7337, i64 0, i64 0
+  %r124 = getelementptr [32 x i8], [32 x i8]* @.str.7404, i64 0, i64 0
   call void @emit(i8* %r124)
-  %r125 = getelementptr [30 x i8], [30 x i8]* @.str.7338, i64 0, i64 0
+  %r125 = getelementptr [30 x i8], [30 x i8]* @.str.7405, i64 0, i64 0
   call void @emit(i8* %r125)
-  %r126 = getelementptr [34 x i8], [34 x i8]* @.str.7339, i64 0, i64 0
+  %r126 = getelementptr [34 x i8], [34 x i8]* @.str.7406, i64 0, i64 0
   call void @emit(i8* %r126)
-  %r127 = getelementptr [16 x i8], [16 x i8]* @.str.7340, i64 0, i64 0
+  %r127 = getelementptr [16 x i8], [16 x i8]* @.str.7407, i64 0, i64 0
   call void @emit(i8* %r127)
-  %r128 = getelementptr [2 x i8], [2 x i8]* @.str.7341, i64 0, i64 0
+  %r128 = getelementptr [2 x i8], [2 x i8]* @.str.7408, i64 0, i64 0
   call void @emit(i8* %r128)
-  %r129 = getelementptr [77 x i8], [77 x i8]* @.str.7342, i64 0, i64 0
+  %r129 = getelementptr [77 x i8], [77 x i8]* @.str.7409, i64 0, i64 0
   call void @emit(i8* %r129)
-  %r130 = getelementptr [7 x i8], [7 x i8]* @.str.7343, i64 0, i64 0
+  %r130 = getelementptr [7 x i8], [7 x i8]* @.str.7410, i64 0, i64 0
   call void @emit(i8* %r130)
-  %r131 = getelementptr [30 x i8], [30 x i8]* @.str.7344, i64 0, i64 0
+  %r131 = getelementptr [30 x i8], [30 x i8]* @.str.7411, i64 0, i64 0
   call void @emit(i8* %r131)
-  %r132 = getelementptr [30 x i8], [30 x i8]* @.str.7345, i64 0, i64 0
+  %r132 = getelementptr [30 x i8], [30 x i8]* @.str.7412, i64 0, i64 0
   call void @emit(i8* %r132)
-  %r133 = getelementptr [30 x i8], [30 x i8]* @.str.7346, i64 0, i64 0
+  %r133 = getelementptr [30 x i8], [30 x i8]* @.str.7413, i64 0, i64 0
   call void @emit(i8* %r133)
-  %r134 = getelementptr [32 x i8], [32 x i8]* @.str.7347, i64 0, i64 0
+  %r134 = getelementptr [32 x i8], [32 x i8]* @.str.7414, i64 0, i64 0
   call void @emit(i8* %r134)
-  %r135 = getelementptr [32 x i8], [32 x i8]* @.str.7348, i64 0, i64 0
+  %r135 = getelementptr [32 x i8], [32 x i8]* @.str.7415, i64 0, i64 0
   call void @emit(i8* %r135)
-  %r136 = getelementptr [34 x i8], [34 x i8]* @.str.7349, i64 0, i64 0
+  %r136 = getelementptr [34 x i8], [34 x i8]* @.str.7416, i64 0, i64 0
   call void @emit(i8* %r136)
-  %r137 = getelementptr [16 x i8], [16 x i8]* @.str.7350, i64 0, i64 0
+  %r137 = getelementptr [16 x i8], [16 x i8]* @.str.7417, i64 0, i64 0
   call void @emit(i8* %r137)
-  %r138 = getelementptr [2 x i8], [2 x i8]* @.str.7351, i64 0, i64 0
+  %r138 = getelementptr [2 x i8], [2 x i8]* @.str.7418, i64 0, i64 0
   call void @emit(i8* %r138)
-  %r139 = getelementptr [77 x i8], [77 x i8]* @.str.7352, i64 0, i64 0
+  %r139 = getelementptr [77 x i8], [77 x i8]* @.str.7419, i64 0, i64 0
   call void @emit(i8* %r139)
-  %r140 = getelementptr [7 x i8], [7 x i8]* @.str.7353, i64 0, i64 0
+  %r140 = getelementptr [7 x i8], [7 x i8]* @.str.7420, i64 0, i64 0
   call void @emit(i8* %r140)
-  %r141 = getelementptr [30 x i8], [30 x i8]* @.str.7354, i64 0, i64 0
+  %r141 = getelementptr [30 x i8], [30 x i8]* @.str.7421, i64 0, i64 0
   call void @emit(i8* %r141)
-  %r142 = getelementptr [30 x i8], [30 x i8]* @.str.7355, i64 0, i64 0
+  %r142 = getelementptr [30 x i8], [30 x i8]* @.str.7422, i64 0, i64 0
   call void @emit(i8* %r142)
-  %r143 = getelementptr [30 x i8], [30 x i8]* @.str.7356, i64 0, i64 0
+  %r143 = getelementptr [30 x i8], [30 x i8]* @.str.7423, i64 0, i64 0
   call void @emit(i8* %r143)
-  %r144 = getelementptr [32 x i8], [32 x i8]* @.str.7357, i64 0, i64 0
+  %r144 = getelementptr [32 x i8], [32 x i8]* @.str.7424, i64 0, i64 0
   call void @emit(i8* %r144)
-  %r145 = getelementptr [32 x i8], [32 x i8]* @.str.7358, i64 0, i64 0
+  %r145 = getelementptr [32 x i8], [32 x i8]* @.str.7425, i64 0, i64 0
   call void @emit(i8* %r145)
-  %r146 = getelementptr [30 x i8], [30 x i8]* @.str.7359, i64 0, i64 0
+  %r146 = getelementptr [30 x i8], [30 x i8]* @.str.7426, i64 0, i64 0
   call void @emit(i8* %r146)
-  %r147 = getelementptr [34 x i8], [34 x i8]* @.str.7360, i64 0, i64 0
+  %r147 = getelementptr [34 x i8], [34 x i8]* @.str.7427, i64 0, i64 0
   call void @emit(i8* %r147)
-  %r148 = getelementptr [27 x i8], [27 x i8]* @.str.7361, i64 0, i64 0
+  %r148 = getelementptr [27 x i8], [27 x i8]* @.str.7428, i64 0, i64 0
   call void @emit(i8* %r148)
-  %r149 = getelementptr [16 x i8], [16 x i8]* @.str.7362, i64 0, i64 0
+  %r149 = getelementptr [16 x i8], [16 x i8]* @.str.7429, i64 0, i64 0
   call void @emit(i8* %r149)
-  %r150 = getelementptr [2 x i8], [2 x i8]* @.str.7363, i64 0, i64 0
+  %r150 = getelementptr [2 x i8], [2 x i8]* @.str.7430, i64 0, i64 0
   call void @emit(i8* %r150)
-  %r151 = getelementptr [84 x i8], [84 x i8]* @.str.7364, i64 0, i64 0
+  %r151 = getelementptr [84 x i8], [84 x i8]* @.str.7431, i64 0, i64 0
   call void @emit(i8* %r151)
-  %r152 = getelementptr [7 x i8], [7 x i8]* @.str.7365, i64 0, i64 0
+  %r152 = getelementptr [7 x i8], [7 x i8]* @.str.7432, i64 0, i64 0
   call void @emit(i8* %r152)
-  %r153 = getelementptr [30 x i8], [30 x i8]* @.str.7366, i64 0, i64 0
+  %r153 = getelementptr [30 x i8], [30 x i8]* @.str.7433, i64 0, i64 0
   call void @emit(i8* %r153)
-  %r154 = getelementptr [30 x i8], [30 x i8]* @.str.7367, i64 0, i64 0
+  %r154 = getelementptr [30 x i8], [30 x i8]* @.str.7434, i64 0, i64 0
   call void @emit(i8* %r154)
-  %r155 = getelementptr [30 x i8], [30 x i8]* @.str.7368, i64 0, i64 0
+  %r155 = getelementptr [30 x i8], [30 x i8]* @.str.7435, i64 0, i64 0
   call void @emit(i8* %r155)
-  %r156 = getelementptr [30 x i8], [30 x i8]* @.str.7369, i64 0, i64 0
+  %r156 = getelementptr [30 x i8], [30 x i8]* @.str.7436, i64 0, i64 0
   call void @emit(i8* %r156)
-  %r157 = getelementptr [32 x i8], [32 x i8]* @.str.7370, i64 0, i64 0
+  %r157 = getelementptr [32 x i8], [32 x i8]* @.str.7437, i64 0, i64 0
   call void @emit(i8* %r157)
-  %r158 = getelementptr [32 x i8], [32 x i8]* @.str.7371, i64 0, i64 0
+  %r158 = getelementptr [32 x i8], [32 x i8]* @.str.7438, i64 0, i64 0
   call void @emit(i8* %r158)
-  %r159 = getelementptr [32 x i8], [32 x i8]* @.str.7372, i64 0, i64 0
+  %r159 = getelementptr [32 x i8], [32 x i8]* @.str.7439, i64 0, i64 0
   call void @emit(i8* %r159)
-  %r160 = getelementptr [34 x i8], [34 x i8]* @.str.7373, i64 0, i64 0
+  %r160 = getelementptr [34 x i8], [34 x i8]* @.str.7440, i64 0, i64 0
   call void @emit(i8* %r160)
-  %r161 = getelementptr [16 x i8], [16 x i8]* @.str.7374, i64 0, i64 0
+  %r161 = getelementptr [16 x i8], [16 x i8]* @.str.7441, i64 0, i64 0
   call void @emit(i8* %r161)
-  %r162 = getelementptr [2 x i8], [2 x i8]* @.str.7375, i64 0, i64 0
+  %r162 = getelementptr [2 x i8], [2 x i8]* @.str.7442, i64 0, i64 0
   call void @emit(i8* %r162)
-  %r163 = getelementptr [84 x i8], [84 x i8]* @.str.7376, i64 0, i64 0
+  %r163 = getelementptr [84 x i8], [84 x i8]* @.str.7443, i64 0, i64 0
   call void @emit(i8* %r163)
-  %r164 = getelementptr [7 x i8], [7 x i8]* @.str.7377, i64 0, i64 0
+  %r164 = getelementptr [7 x i8], [7 x i8]* @.str.7444, i64 0, i64 0
   call void @emit(i8* %r164)
-  %r165 = getelementptr [30 x i8], [30 x i8]* @.str.7378, i64 0, i64 0
+  %r165 = getelementptr [30 x i8], [30 x i8]* @.str.7445, i64 0, i64 0
   call void @emit(i8* %r165)
-  %r166 = getelementptr [30 x i8], [30 x i8]* @.str.7379, i64 0, i64 0
+  %r166 = getelementptr [30 x i8], [30 x i8]* @.str.7446, i64 0, i64 0
   call void @emit(i8* %r166)
-  %r167 = getelementptr [30 x i8], [30 x i8]* @.str.7380, i64 0, i64 0
+  %r167 = getelementptr [30 x i8], [30 x i8]* @.str.7447, i64 0, i64 0
   call void @emit(i8* %r167)
-  %r168 = getelementptr [30 x i8], [30 x i8]* @.str.7381, i64 0, i64 0
+  %r168 = getelementptr [30 x i8], [30 x i8]* @.str.7448, i64 0, i64 0
   call void @emit(i8* %r168)
-  %r169 = getelementptr [32 x i8], [32 x i8]* @.str.7382, i64 0, i64 0
+  %r169 = getelementptr [32 x i8], [32 x i8]* @.str.7449, i64 0, i64 0
   call void @emit(i8* %r169)
-  %r170 = getelementptr [32 x i8], [32 x i8]* @.str.7383, i64 0, i64 0
+  %r170 = getelementptr [32 x i8], [32 x i8]* @.str.7450, i64 0, i64 0
   call void @emit(i8* %r170)
-  %r171 = getelementptr [32 x i8], [32 x i8]* @.str.7384, i64 0, i64 0
+  %r171 = getelementptr [32 x i8], [32 x i8]* @.str.7451, i64 0, i64 0
   call void @emit(i8* %r171)
-  %r172 = getelementptr [30 x i8], [30 x i8]* @.str.7385, i64 0, i64 0
+  %r172 = getelementptr [30 x i8], [30 x i8]* @.str.7452, i64 0, i64 0
   call void @emit(i8* %r172)
-  %r173 = getelementptr [34 x i8], [34 x i8]* @.str.7386, i64 0, i64 0
+  %r173 = getelementptr [34 x i8], [34 x i8]* @.str.7453, i64 0, i64 0
   call void @emit(i8* %r173)
-  %r174 = getelementptr [16 x i8], [16 x i8]* @.str.7387, i64 0, i64 0
+  %r174 = getelementptr [16 x i8], [16 x i8]* @.str.7454, i64 0, i64 0
   call void @emit(i8* %r174)
-  %r175 = getelementptr [2 x i8], [2 x i8]* @.str.7388, i64 0, i64 0
+  %r175 = getelementptr [2 x i8], [2 x i8]* @.str.7455, i64 0, i64 0
   call void @emit(i8* %r175)
   call void @emit_simd_preamble()
-  %r176 = getelementptr [43 x i8], [43 x i8]* @.str.7389, i64 0, i64 0
+  %r176 = getelementptr [43 x i8], [43 x i8]* @.str.7456, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r176)
-  %r177 = getelementptr [36 x i8], [36 x i8]* @.str.7390, i64 0, i64 0
+  %r177 = getelementptr [36 x i8], [36 x i8]* @.str.7457, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r177)
-  %r178 = getelementptr [36 x i8], [36 x i8]* @.str.7391, i64 0, i64 0
+  %r178 = getelementptr [36 x i8], [36 x i8]* @.str.7458, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r178)
-  %r179 = getelementptr [38 x i8], [38 x i8]* @.str.7392, i64 0, i64 0
+  %r179 = getelementptr [38 x i8], [38 x i8]* @.str.7459, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r179)
-  %r180 = getelementptr [38 x i8], [38 x i8]* @.str.7393, i64 0, i64 0
+  %r180 = getelementptr [38 x i8], [38 x i8]* @.str.7460, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r180)
-  %r181 = getelementptr [39 x i8], [39 x i8]* @.str.7394, i64 0, i64 0
+  %r181 = getelementptr [39 x i8], [39 x i8]* @.str.7461, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r181)
-  %r182 = getelementptr [57 x i8], [57 x i8]* @.str.7395, i64 0, i64 0
+  %r182 = getelementptr [57 x i8], [57 x i8]* @.str.7462, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r182)
-  %r183 = getelementptr [70 x i8], [70 x i8]* @.str.7396, i64 0, i64 0
+  %r183 = getelementptr [70 x i8], [70 x i8]* @.str.7463, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r183)
-  %r184 = getelementptr [43 x i8], [43 x i8]* @.str.7397, i64 0, i64 0
+  %r184 = getelementptr [43 x i8], [43 x i8]* @.str.7464, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r184)
-  %r185 = getelementptr [69 x i8], [69 x i8]* @.str.7398, i64 0, i64 0
+  %r185 = getelementptr [69 x i8], [69 x i8]* @.str.7465, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r185)
-  %r186 = getelementptr [41 x i8], [41 x i8]* @.str.7399, i64 0, i64 0
+  %r186 = getelementptr [41 x i8], [41 x i8]* @.str.7466, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r186)
-  %r187 = getelementptr [42 x i8], [42 x i8]* @.str.7400, i64 0, i64 0
+  %r187 = getelementptr [42 x i8], [42 x i8]* @.str.7467, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r187)
-  %r188 = getelementptr [49 x i8], [49 x i8]* @.str.7401, i64 0, i64 0
+  %r188 = getelementptr [49 x i8], [49 x i8]* @.str.7468, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r188)
-  %r189 = getelementptr [48 x i8], [48 x i8]* @.str.7402, i64 0, i64 0
+  %r189 = getelementptr [48 x i8], [48 x i8]* @.str.7469, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r189)
-  %r190 = getelementptr [39 x i8], [39 x i8]* @.str.7403, i64 0, i64 0
+  %r190 = getelementptr [39 x i8], [39 x i8]* @.str.7470, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r190)
-  %r191 = getelementptr [38 x i8], [38 x i8]* @.str.7404, i64 0, i64 0
+  %r191 = getelementptr [38 x i8], [38 x i8]* @.str.7471, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r191)
-  %r192 = getelementptr [36 x i8], [36 x i8]* @.str.7405, i64 0, i64 0
+  %r192 = getelementptr [36 x i8], [36 x i8]* @.str.7472, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r192)
-  %r193 = getelementptr [36 x i8], [36 x i8]* @.str.7406, i64 0, i64 0
+  %r193 = getelementptr [36 x i8], [36 x i8]* @.str.7473, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r193)
-  %r194 = getelementptr [40 x i8], [40 x i8]* @.str.7407, i64 0, i64 0
+  %r194 = getelementptr [40 x i8], [40 x i8]* @.str.7474, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r194)
-  %r195 = getelementptr [40 x i8], [40 x i8]* @.str.7408, i64 0, i64 0
+  %r195 = getelementptr [40 x i8], [40 x i8]* @.str.7475, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r195)
-  %r196 = getelementptr [34 x i8], [34 x i8]* @.str.7409, i64 0, i64 0
+  %r196 = getelementptr [34 x i8], [34 x i8]* @.str.7476, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r196)
-  %r197 = getelementptr [45 x i8], [45 x i8]* @.str.7410, i64 0, i64 0
+  %r197 = getelementptr [45 x i8], [45 x i8]* @.str.7477, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r197)
-  %r198 = getelementptr [44 x i8], [44 x i8]* @.str.7411, i64 0, i64 0
+  %r198 = getelementptr [44 x i8], [44 x i8]* @.str.7478, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r198)
-  %r199 = getelementptr [39 x i8], [39 x i8]* @.str.7412, i64 0, i64 0
+  %r199 = getelementptr [39 x i8], [39 x i8]* @.str.7479, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r199)
-  %r200 = getelementptr [51 x i8], [51 x i8]* @.str.7413, i64 0, i64 0
+  %r200 = getelementptr [51 x i8], [51 x i8]* @.str.7480, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r200)
-  %r201 = getelementptr [47 x i8], [47 x i8]* @.str.7414, i64 0, i64 0
+  %r201 = getelementptr [47 x i8], [47 x i8]* @.str.7481, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r201)
-  %r202 = getelementptr [50 x i8], [50 x i8]* @.str.7415, i64 0, i64 0
+  %r202 = getelementptr [50 x i8], [50 x i8]* @.str.7482, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r202)
-  %r203 = getelementptr [49 x i8], [49 x i8]* @.str.7416, i64 0, i64 0
+  %r203 = getelementptr [49 x i8], [49 x i8]* @.str.7483, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r203)
-  %r204 = getelementptr [39 x i8], [39 x i8]* @.str.7417, i64 0, i64 0
+  %r204 = getelementptr [39 x i8], [39 x i8]* @.str.7484, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r204)
-  %r205 = getelementptr [47 x i8], [47 x i8]* @.str.7418, i64 0, i64 0
+  %r205 = getelementptr [47 x i8], [47 x i8]* @.str.7485, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r205)
-  %r206 = getelementptr [40 x i8], [40 x i8]* @.str.7419, i64 0, i64 0
+  %r206 = getelementptr [40 x i8], [40 x i8]* @.str.7486, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r206)
-  %r207 = getelementptr [45 x i8], [45 x i8]* @.str.7420, i64 0, i64 0
+  %r207 = getelementptr [45 x i8], [45 x i8]* @.str.7487, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r207)
-  %r208 = getelementptr [40 x i8], [40 x i8]* @.str.7421, i64 0, i64 0
+  %r208 = getelementptr [40 x i8], [40 x i8]* @.str.7488, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r208)
-  %r209 = getelementptr [45 x i8], [45 x i8]* @.str.7422, i64 0, i64 0
+  %r209 = getelementptr [45 x i8], [45 x i8]* @.str.7489, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r209)
-  %r210 = getelementptr [59 x i8], [59 x i8]* @.str.7423, i64 0, i64 0
+  %r210 = getelementptr [59 x i8], [59 x i8]* @.str.7490, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r210)
-  %r211 = getelementptr [69 x i8], [69 x i8]* @.str.7424, i64 0, i64 0
+  %r211 = getelementptr [69 x i8], [69 x i8]* @.str.7491, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r211)
-  %r212 = getelementptr [42 x i8], [42 x i8]* @.str.7425, i64 0, i64 0
+  %r212 = getelementptr [42 x i8], [42 x i8]* @.str.7492, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r212)
-  %r213 = getelementptr [55 x i8], [55 x i8]* @.str.7426, i64 0, i64 0
+  %r213 = getelementptr [55 x i8], [55 x i8]* @.str.7493, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r213)
-  %r214 = getelementptr [54 x i8], [54 x i8]* @.str.7427, i64 0, i64 0
+  %r214 = getelementptr [54 x i8], [54 x i8]* @.str.7494, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r214)
-  %r215 = getelementptr [62 x i8], [62 x i8]* @.str.7428, i64 0, i64 0
+  %r215 = getelementptr [62 x i8], [62 x i8]* @.str.7495, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r215)
-  %r216 = getelementptr [46 x i8], [46 x i8]* @.str.7429, i64 0, i64 0
+  %r216 = getelementptr [46 x i8], [46 x i8]* @.str.7496, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r216)
-  %r217 = getelementptr [35 x i8], [35 x i8]* @.str.7430, i64 0, i64 0
+  %r217 = getelementptr [35 x i8], [35 x i8]* @.str.7497, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r217)
-  %r218 = getelementptr [43 x i8], [43 x i8]* @.str.7431, i64 0, i64 0
+  %r218 = getelementptr [43 x i8], [43 x i8]* @.str.7498, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r218)
-  %r219 = getelementptr [44 x i8], [44 x i8]* @.str.7432, i64 0, i64 0
+  %r219 = getelementptr [44 x i8], [44 x i8]* @.str.7499, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r219)
-  %r220 = getelementptr [34 x i8], [34 x i8]* @.str.7433, i64 0, i64 0
+  %r220 = getelementptr [34 x i8], [34 x i8]* @.str.7500, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r220)
-  %r221 = getelementptr [37 x i8], [37 x i8]* @.str.7434, i64 0, i64 0
+  %r221 = getelementptr [37 x i8], [37 x i8]* @.str.7501, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r221)
-  %r222 = getelementptr [37 x i8], [37 x i8]* @.str.7435, i64 0, i64 0
+  %r222 = getelementptr [37 x i8], [37 x i8]* @.str.7502, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r222)
-  %r223 = getelementptr [38 x i8], [38 x i8]* @.str.7436, i64 0, i64 0
+  %r223 = getelementptr [38 x i8], [38 x i8]* @.str.7503, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r223)
-  %r224 = getelementptr [45 x i8], [45 x i8]* @.str.7437, i64 0, i64 0
+  %r224 = getelementptr [45 x i8], [45 x i8]* @.str.7504, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r224)
-  %r225 = getelementptr [48 x i8], [48 x i8]* @.str.7438, i64 0, i64 0
+  %r225 = getelementptr [48 x i8], [48 x i8]* @.str.7505, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r225)
-  %r226 = getelementptr [45 x i8], [45 x i8]* @.str.7439, i64 0, i64 0
+  %r226 = getelementptr [45 x i8], [45 x i8]* @.str.7506, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r226)
-  %r227 = getelementptr [30 x i8], [30 x i8]* @.str.7440, i64 0, i64 0
+  %r227 = getelementptr [30 x i8], [30 x i8]* @.str.7507, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r227)
-  %r228 = getelementptr [37 x i8], [37 x i8]* @.str.7441, i64 0, i64 0
+  %r228 = getelementptr [37 x i8], [37 x i8]* @.str.7508, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r228)
-  %r229 = getelementptr [36 x i8], [36 x i8]* @.str.7442, i64 0, i64 0
+  %r229 = getelementptr [36 x i8], [36 x i8]* @.str.7509, i64 0, i64 0
   call void @__emit_rt_decl__fp1(i64 %syms, i8* %r229)
-  %r230 = getelementptr [1 x i8], [1 x i8]* @.str.7443, i64 0, i64 0
+  %r230 = getelementptr [1 x i8], [1 x i8]* @.str.7510, i64 0, i64 0
   call void @emit(i8* %r230)
   ret void
 }
 
-@.str.7213 = private unnamed_addr constant [34 x i8] c"; NURL compiler output (nurlc.nu)\00"
-@.str.7214 = private unnamed_addr constant [48 x i8] c"; link: clang <this.ll> stdlib/runtime.o -o out\00"
-@.str.7215 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.7216 = private unnamed_addr constant [61 x i8] c"declare void @llvm.dbg.declare(metadata, metadata, metadata)\00"
-@.str.7217 = private unnamed_addr constant [24 x i8] c"declare i32  @puts(i8*)\00"
-@.str.7218 = private unnamed_addr constant [31 x i8] c"declare i32  @printf(i8*, ...)\00"
-@.str.7219 = private unnamed_addr constant [26 x i8] c"declare i8*  @malloc(i64)\00"
-@.str.7220 = private unnamed_addr constant [24 x i8] c"declare void @free(i8*)\00"
-@.str.7221 = private unnamed_addr constant [26 x i8] c"declare i64  @strlen(i8*)\00"
-@.str.7222 = private unnamed_addr constant [31 x i8] c"declare i32  @strcmp(i8*, i8*)\00"
-@.str.7223 = private unnamed_addr constant [37 x i8] c"declare i32  @strncmp(i8*, i8*, i64)\00"
-@.str.7224 = private unnamed_addr constant [36 x i8] c"declare i32  @memcmp(i8*, i8*, i64)\00"
-@.str.7225 = private unnamed_addr constant [31 x i8] c"declare i8*  @strstr(i8*, i8*)\00"
-@.str.7226 = private unnamed_addr constant [41 x i8] c"declare i8*  @memmem(i8*, i64, i8*, i64)\00"
-@.str.7227 = private unnamed_addr constant [25 x i8] c"declare i64  @atoll(i8*)\00"
-@.str.7228 = private unnamed_addr constant [26 x i8] c"declare double @atof(i8*)\00"
-@.str.7229 = private unnamed_addr constant [34 x i8] c"declare double @strtod(i8*, i8**)\00"
-@.str.7230 = private unnamed_addr constant [36 x i8] c"declare i8*  @memcpy(i8*, i8*, i64)\00"
-@.str.7231 = private unnamed_addr constant [26 x i8] c"declare i8*  @strdup(i8*)\00"
-@.str.7232 = private unnamed_addr constant [31 x i8] c"declare i8*  @nurl_strdup(i8*)\00"
-@.str.7233 = private unnamed_addr constant [30 x i8] c"declare i8*  @fopen(i8*, i8*)\00"
-@.str.7234 = private unnamed_addr constant [26 x i8] c"declare i32  @fclose(i8*)\00"
-@.str.7235 = private unnamed_addr constant [30 x i8] c"declare i32  @fputs(i8*, i8*)\00"
-@.str.7236 = private unnamed_addr constant [41 x i8] c"declare i64  @fwrite(i8*, i64, i64, i8*)\00"
-@.str.7237 = private unnamed_addr constant [30 x i8] c"declare i32  @fputc(i32, i8*)\00"
-@.str.7238 = private unnamed_addr constant [40 x i8] c"declare i64  @fread(i8*, i64, i64, i8*)\00"
-@.str.7239 = private unnamed_addr constant [24 x i8] c"declare i32  @feof(i8*)\00"
-@.str.7240 = private unnamed_addr constant [35 x i8] c"declare i32  @fseek(i8*, i64, i32)\00"
-@.str.7241 = private unnamed_addr constant [25 x i8] c"declare i64  @ftell(i8*)\00"
-@.str.7242 = private unnamed_addr constant [31 x i8] c"declare i32  @access(i8*, i32)\00"
-@.str.7243 = private unnamed_addr constant [26 x i8] c"declare i8*  @getenv(i8*)\00"
-@.str.7244 = private unnamed_addr constant [33 x i8] c"declare i8*  @realpath(i8*, i8*)\00"
-@.str.7245 = private unnamed_addr constant [35 x i8] c"@__nurl_ret_owned = global i64 0\0A\0A\00"
-@.str.7246 = private unnamed_addr constant [35 x i8] c"declare void @nurl_init(i32, i8**)\00"
-@.str.7247 = private unnamed_addr constant [30 x i8] c"declare void @nurl_print(i8*)\00"
-@.str.7248 = private unnamed_addr constant [32 x i8] c"declare void @nurl_println(i8*)\00"
-@.str.7249 = private unnamed_addr constant [31 x i8] c"declare void @nurl_eprint(i8*)\00"
-@.str.7250 = private unnamed_addr constant [33 x i8] c"declare void @nurl_eprintln(i8*)\00"
-@.str.7251 = private unnamed_addr constant [34 x i8] c"declare void @nurl_print_int(i64)\00"
-@.str.7252 = private unnamed_addr constant [34 x i8] c"declare void @nurl_print_str(i8*)\00"
-@.str.7253 = private unnamed_addr constant [34 x i8] c"declare void @nurl_print_bool(i1)\00"
-@.str.7254 = private unnamed_addr constant [30 x i8] c"declare i64  @nurl_read_int()\00"
-@.str.7255 = private unnamed_addr constant [31 x i8] c"declare i8*  @nurl_read_line()\00"
-@.str.7256 = private unnamed_addr constant [31 x i8] c"declare i64  @nurl_stdin_eof()\00"
-@.str.7257 = private unnamed_addr constant [34 x i8] c"declare void @nurl_flush_stdout()\00"
-@.str.7258 = private unnamed_addr constant [34 x i8] c"declare void @nurl_flush_stderr()\00"
-@.str.7259 = private unnamed_addr constant [32 x i8] c"declare i8*  @nurl_str_int(i64)\00"
-@.str.7260 = private unnamed_addr constant [37 x i8] c"declare i8*  @nurl_str_float(double)\00"
-@.str.7261 = private unnamed_addr constant [57 x i8] c"declare i64    @nurl_scan_byte3(i8*, i64, i64, i64, i64)\00"
-@.str.7262 = private unnamed_addr constant [53 x i8] c"declare i64    @nurl_byte_substr(i8*, i64, i8*, i64)\00"
-@.str.7263 = private unnamed_addr constant [47 x i8] c"declare i64    @nurl_count_byte(i8*, i64, i64)\00"
-@.str.7264 = private unnamed_addr constant [41 x i8] c"declare double @nurl_fast_atof(i8*, i64)\00"
-@.str.7265 = private unnamed_addr constant [50 x i8] c"declare double @nurl_fast_atof_ex(i8*, i64, i64*)\00"
-@.str.7266 = private unnamed_addr constant [34 x i8] c"declare i8*  @nurl_read_file(i8*)\00"
-@.str.7267 = private unnamed_addr constant [29 x i8] c"declare void @nurl_exit(i64)\00"
-@.str.7268 = private unnamed_addr constant [26 x i8] c"declare i64  @nurl_argc()\00"
-@.str.7269 = private unnamed_addr constant [29 x i8] c"declare i8*  @nurl_argv(i64)\00"
-@.str.7270 = private unnamed_addr constant [32 x i8] c"declare i64  @nurl_argv_count()\00"
-@.str.7271 = private unnamed_addr constant [33 x i8] c"declare i8*  @nurl_argv_get(i64)\00"
-@.str.7272 = private unnamed_addr constant [29 x i8] c"declare i8*  @nurl_version()\00"
-@.str.7273 = private unnamed_addr constant [37 x i8] c"declare void @nurl_print_buf_start()\00"
-@.str.7274 = private unnamed_addr constant [36 x i8] c"declare i8*  @nurl_print_buf_stop()\00"
-@.str.7275 = private unnamed_addr constant [37 x i8] c"declare void @nurl_print_buf_reset()\00"
-@.str.7276 = private unnamed_addr constant [31 x i8] c"declare i8*  @nurl_malloc(i64)\00"
-@.str.7277 = private unnamed_addr constant [30 x i8] c"declare i8*  @nurl_alloc(i64)\00"
-@.str.7278 = private unnamed_addr constant [31 x i8] c"declare i8*  @nurl_zalloc(i64)\00"
-@.str.7279 = private unnamed_addr constant [37 x i8] c"declare i8*  @nurl_realloc(i8*, i64)\00"
-@.str.7280 = private unnamed_addr constant [29 x i8] c"declare void @nurl_free(i8*)\00"
-@.str.7281 = private unnamed_addr constant [32 x i8] c"declare i32  @nurl_cpu_x86_v3()\00"
-@.str.7282 = private unnamed_addr constant [37 x i8] c"declare void @nurl_journal_push(i8*)\00"
-@.str.7283 = private unnamed_addr constant [47 x i8] c"declare void @nurl_journal_push_drop(i8*, ptr)\00"
-@.str.7284 = private unnamed_addr constant [39 x i8] c"declare void @nurl_journal_forget(i8*)\00"
-@.str.7285 = private unnamed_addr constant [41 x i8] c"declare void @nurl_memcpy(i8*, i8*, i64)\00"
-@.str.7286 = private unnamed_addr constant [42 x i8] c"declare void @nurl_memmove(i8*, i8*, i64)\00"
-@.str.7287 = private unnamed_addr constant [41 x i8] c"declare void @nurl_memset(i8*, i64, i64)\00"
-@.str.7288 = private unnamed_addr constant [66 x i8] c"define linkonce_odr i64 @nurl_peek(i8* %p, i64 %i) alwaysinline {\00"
-@.str.7289 = private unnamed_addr constant [7 x i8] c"entry:\00"
-@.str.7290 = private unnamed_addr constant [31 x i8] c"  %pk.n = icmp eq i8* %p, null\00"
-@.str.7291 = private unnamed_addr constant [46 x i8] c"  br i1 %pk.n, label %pk.zero, label %pk.load\00"
-@.str.7292 = private unnamed_addr constant [9 x i8] c"pk.load:\00"
-@.str.7293 = private unnamed_addr constant [33 x i8] c"  %pk.b = bitcast i8* %p to i64*\00"
-@.str.7294 = private unnamed_addr constant [57 x i8] c"  %pk.e = getelementptr inbounds i64, i64* %pk.b, i64 %i\00"
-@.str.7295 = private unnamed_addr constant [31 x i8] c"  %pk.v = load i64, i64* %pk.e\00"
-@.str.7296 = private unnamed_addr constant [16 x i8] c"  ret i64 %pk.v\00"
-@.str.7297 = private unnamed_addr constant [9 x i8] c"pk.zero:\00"
-@.str.7298 = private unnamed_addr constant [12 x i8] c"  ret i64 0\00"
-@.str.7299 = private unnamed_addr constant [2 x i8] c"}\00"
-@.str.7300 = private unnamed_addr constant [75 x i8] c"define linkonce_odr void @nurl_poke(i8* %p, i64 %i, i64 %v) alwaysinline {\00"
-@.str.7301 = private unnamed_addr constant [7 x i8] c"entry:\00"
-@.str.7302 = private unnamed_addr constant [31 x i8] c"  %pw.n = icmp eq i8* %p, null\00"
-@.str.7303 = private unnamed_addr constant [47 x i8] c"  br i1 %pw.n, label %pw.done, label %pw.store\00"
-@.str.7304 = private unnamed_addr constant [10 x i8] c"pw.store:\00"
-@.str.7305 = private unnamed_addr constant [33 x i8] c"  %pw.b = bitcast i8* %p to i64*\00"
-@.str.7306 = private unnamed_addr constant [57 x i8] c"  %pw.e = getelementptr inbounds i64, i64* %pw.b, i64 %i\00"
-@.str.7307 = private unnamed_addr constant [27 x i8] c"  store i64 %v, i64* %pw.e\00"
-@.str.7308 = private unnamed_addr constant [20 x i8] c"  br label %pw.done\00"
-@.str.7309 = private unnamed_addr constant [9 x i8] c"pw.done:\00"
-@.str.7310 = private unnamed_addr constant [11 x i8] c"  ret void\00"
-@.str.7311 = private unnamed_addr constant [2 x i8] c"}\00"
-@.str.7312 = private unnamed_addr constant [68 x i8] c"define linkonce_odr i64 @nurl_umulhi(i64 %a, i64 %b) alwaysinline {\00"
-@.str.7313 = private unnamed_addr constant [7 x i8] c"entry:\00"
-@.str.7314 = private unnamed_addr constant [30 x i8] c"  %mh.a = zext i64 %a to i128\00"
-@.str.7315 = private unnamed_addr constant [30 x i8] c"  %mh.b = zext i64 %b to i128\00"
-@.str.7316 = private unnamed_addr constant [32 x i8] c"  %mh.p = mul i128 %mh.a, %mh.b\00"
-@.str.7317 = private unnamed_addr constant [30 x i8] c"  %mh.h = lshr i128 %mh.p, 64\00"
-@.str.7318 = private unnamed_addr constant [34 x i8] c"  %mh.r = trunc i128 %mh.h to i64\00"
-@.str.7319 = private unnamed_addr constant [16 x i8] c"  ret i64 %mh.r\00"
-@.str.7320 = private unnamed_addr constant [2 x i8] c"}\00"
-@.str.7321 = private unnamed_addr constant [77 x i8] c"define linkonce_odr i64 @nurl_addc_lo(i64 %a, i64 %b, i64 %c) alwaysinline {\00"
-@.str.7322 = private unnamed_addr constant [7 x i8] c"entry:\00"
-@.str.7323 = private unnamed_addr constant [30 x i8] c"  %ac.a = zext i64 %a to i128\00"
-@.str.7324 = private unnamed_addr constant [30 x i8] c"  %ac.b = zext i64 %b to i128\00"
-@.str.7325 = private unnamed_addr constant [30 x i8] c"  %ac.c = zext i64 %c to i128\00"
-@.str.7326 = private unnamed_addr constant [32 x i8] c"  %ac.s = add i128 %ac.a, %ac.b\00"
-@.str.7327 = private unnamed_addr constant [32 x i8] c"  %ac.t = add i128 %ac.s, %ac.c\00"
-@.str.7328 = private unnamed_addr constant [34 x i8] c"  %ac.r = trunc i128 %ac.t to i64\00"
-@.str.7329 = private unnamed_addr constant [16 x i8] c"  ret i64 %ac.r\00"
-@.str.7330 = private unnamed_addr constant [2 x i8] c"}\00"
-@.str.7331 = private unnamed_addr constant [77 x i8] c"define linkonce_odr i64 @nurl_addc_hi(i64 %a, i64 %b, i64 %c) alwaysinline {\00"
-@.str.7332 = private unnamed_addr constant [7 x i8] c"entry:\00"
-@.str.7333 = private unnamed_addr constant [30 x i8] c"  %ah.a = zext i64 %a to i128\00"
-@.str.7334 = private unnamed_addr constant [30 x i8] c"  %ah.b = zext i64 %b to i128\00"
-@.str.7335 = private unnamed_addr constant [30 x i8] c"  %ah.c = zext i64 %c to i128\00"
-@.str.7336 = private unnamed_addr constant [32 x i8] c"  %ah.s = add i128 %ah.a, %ah.b\00"
-@.str.7337 = private unnamed_addr constant [32 x i8] c"  %ah.t = add i128 %ah.s, %ah.c\00"
-@.str.7338 = private unnamed_addr constant [30 x i8] c"  %ah.h = lshr i128 %ah.t, 64\00"
-@.str.7339 = private unnamed_addr constant [34 x i8] c"  %ah.r = trunc i128 %ah.h to i64\00"
-@.str.7340 = private unnamed_addr constant [16 x i8] c"  ret i64 %ah.r\00"
-@.str.7341 = private unnamed_addr constant [2 x i8] c"}\00"
-@.str.7342 = private unnamed_addr constant [77 x i8] c"define linkonce_odr i64 @nurl_subb_lo(i64 %a, i64 %b, i64 %c) alwaysinline {\00"
-@.str.7343 = private unnamed_addr constant [7 x i8] c"entry:\00"
-@.str.7344 = private unnamed_addr constant [30 x i8] c"  %sc.a = zext i64 %a to i128\00"
-@.str.7345 = private unnamed_addr constant [30 x i8] c"  %sc.b = zext i64 %b to i128\00"
-@.str.7346 = private unnamed_addr constant [30 x i8] c"  %sc.c = zext i64 %c to i128\00"
-@.str.7347 = private unnamed_addr constant [32 x i8] c"  %sc.d = sub i128 %sc.a, %sc.b\00"
-@.str.7348 = private unnamed_addr constant [32 x i8] c"  %sc.e = sub i128 %sc.d, %sc.c\00"
-@.str.7349 = private unnamed_addr constant [34 x i8] c"  %sc.r = trunc i128 %sc.e to i64\00"
-@.str.7350 = private unnamed_addr constant [16 x i8] c"  ret i64 %sc.r\00"
-@.str.7351 = private unnamed_addr constant [2 x i8] c"}\00"
-@.str.7352 = private unnamed_addr constant [77 x i8] c"define linkonce_odr i64 @nurl_subb_hi(i64 %a, i64 %b, i64 %c) alwaysinline {\00"
-@.str.7353 = private unnamed_addr constant [7 x i8] c"entry:\00"
-@.str.7354 = private unnamed_addr constant [30 x i8] c"  %sh.a = zext i64 %a to i128\00"
-@.str.7355 = private unnamed_addr constant [30 x i8] c"  %sh.b = zext i64 %b to i128\00"
-@.str.7356 = private unnamed_addr constant [30 x i8] c"  %sh.c = zext i64 %c to i128\00"
-@.str.7357 = private unnamed_addr constant [32 x i8] c"  %sh.d = sub i128 %sh.a, %sh.b\00"
-@.str.7358 = private unnamed_addr constant [32 x i8] c"  %sh.e = sub i128 %sh.d, %sh.c\00"
-@.str.7359 = private unnamed_addr constant [30 x i8] c"  %sh.h = lshr i128 %sh.e, 64\00"
-@.str.7360 = private unnamed_addr constant [34 x i8] c"  %sh.t = trunc i128 %sh.h to i64\00"
-@.str.7361 = private unnamed_addr constant [27 x i8] c"  %sh.r = and i64 %sh.t, 1\00"
-@.str.7362 = private unnamed_addr constant [16 x i8] c"  ret i64 %sh.r\00"
-@.str.7363 = private unnamed_addr constant [2 x i8] c"}\00"
-@.str.7364 = private unnamed_addr constant [84 x i8] c"define linkonce_odr i64 @nurl_mac_lo(i64 %a, i64 %b, i64 %c, i64 %d) alwaysinline {\00"
-@.str.7365 = private unnamed_addr constant [7 x i8] c"entry:\00"
-@.str.7366 = private unnamed_addr constant [30 x i8] c"  %ml.a = zext i64 %a to i128\00"
-@.str.7367 = private unnamed_addr constant [30 x i8] c"  %ml.b = zext i64 %b to i128\00"
-@.str.7368 = private unnamed_addr constant [30 x i8] c"  %ml.c = zext i64 %c to i128\00"
-@.str.7369 = private unnamed_addr constant [30 x i8] c"  %ml.d = zext i64 %d to i128\00"
-@.str.7370 = private unnamed_addr constant [32 x i8] c"  %ml.p = mul i128 %ml.a, %ml.b\00"
-@.str.7371 = private unnamed_addr constant [32 x i8] c"  %ml.s = add i128 %ml.p, %ml.c\00"
-@.str.7372 = private unnamed_addr constant [32 x i8] c"  %ml.t = add i128 %ml.s, %ml.d\00"
-@.str.7373 = private unnamed_addr constant [34 x i8] c"  %ml.r = trunc i128 %ml.t to i64\00"
-@.str.7374 = private unnamed_addr constant [16 x i8] c"  ret i64 %ml.r\00"
-@.str.7375 = private unnamed_addr constant [2 x i8] c"}\00"
-@.str.7376 = private unnamed_addr constant [84 x i8] c"define linkonce_odr i64 @nurl_mac_hi(i64 %a, i64 %b, i64 %c, i64 %d) alwaysinline {\00"
-@.str.7377 = private unnamed_addr constant [7 x i8] c"entry:\00"
-@.str.7378 = private unnamed_addr constant [30 x i8] c"  %mv.a = zext i64 %a to i128\00"
-@.str.7379 = private unnamed_addr constant [30 x i8] c"  %mv.b = zext i64 %b to i128\00"
-@.str.7380 = private unnamed_addr constant [30 x i8] c"  %mv.c = zext i64 %c to i128\00"
-@.str.7381 = private unnamed_addr constant [30 x i8] c"  %mv.d = zext i64 %d to i128\00"
-@.str.7382 = private unnamed_addr constant [32 x i8] c"  %mv.p = mul i128 %mv.a, %mv.b\00"
-@.str.7383 = private unnamed_addr constant [32 x i8] c"  %mv.s = add i128 %mv.p, %mv.c\00"
-@.str.7384 = private unnamed_addr constant [32 x i8] c"  %mv.t = add i128 %mv.s, %mv.d\00"
-@.str.7385 = private unnamed_addr constant [30 x i8] c"  %mv.h = lshr i128 %mv.t, 64\00"
-@.str.7386 = private unnamed_addr constant [34 x i8] c"  %mv.r = trunc i128 %mv.h to i64\00"
-@.str.7387 = private unnamed_addr constant [16 x i8] c"  ret i64 %mv.r\00"
-@.str.7388 = private unnamed_addr constant [2 x i8] c"}\00"
-@.str.7389 = private unnamed_addr constant [43 x i8] c"declare void @nurl_vec_drop(i8*, ptr, i64)\00"
-@.str.7390 = private unnamed_addr constant [36 x i8] c"declare i64    @nurl_is_nan(double)\00"
-@.str.7391 = private unnamed_addr constant [36 x i8] c"declare i64    @nurl_is_inf(double)\00"
-@.str.7392 = private unnamed_addr constant [38 x i8] c"declare i64  @nurl_dir_list_open(i8*)\00"
-@.str.7393 = private unnamed_addr constant [38 x i8] c"declare i8*  @nurl_dir_list_next(i64)\00"
-@.str.7394 = private unnamed_addr constant [39 x i8] c"declare void @nurl_dir_list_close(i64)\00"
-@.str.7395 = private unnamed_addr constant [57 x i8] c"declare i64  @nurl_http_perform_full(i8*, i8*, i8*, i8*)\00"
-@.str.7396 = private unnamed_addr constant [70 x i8] c"declare i64  @nurl_http_perform_full_to(i8*, i8*, i8*, i8*, i64, i64)\00"
-@.str.7397 = private unnamed_addr constant [43 x i8] c"declare void @nurl_http_response_free(i64)\00"
-@.str.7398 = private unnamed_addr constant [69 x i8] c"declare i64  @nurl_http_stream_open_to(i8*, i8*, i8*, i8*, i64, i64)\00"
-@.str.7399 = private unnamed_addr constant [41 x i8] c"declare i8*  @nurl_http_stream_next(i64)\00"
-@.str.7400 = private unnamed_addr constant [42 x i8] c"declare void @nurl_http_stream_close(i64)\00"
-@.str.7401 = private unnamed_addr constant [49 x i8] c"declare i64  @nurl_http_stream_pump_headers(i64)\00"
-@.str.7402 = private unnamed_addr constant [48 x i8] c"declare i64  @nurl_proc_run(i8*, i8*, i64, i8*)\00"
-@.str.7403 = private unnamed_addr constant [39 x i8] c"declare i64  @nurl_proc_exit_code(i64)\00"
-@.str.7404 = private unnamed_addr constant [38 x i8] c"declare i64  @nurl_proc_err_kind(i64)\00"
-@.str.7405 = private unnamed_addr constant [36 x i8] c"declare i8*  @nurl_proc_stdout(i64)\00"
-@.str.7406 = private unnamed_addr constant [36 x i8] c"declare i8*  @nurl_proc_stderr(i64)\00"
-@.str.7407 = private unnamed_addr constant [40 x i8] c"declare i64  @nurl_proc_stdout_len(i64)\00"
-@.str.7408 = private unnamed_addr constant [40 x i8] c"declare i64  @nurl_proc_stderr_len(i64)\00"
-@.str.7409 = private unnamed_addr constant [34 x i8] c"declare void @nurl_proc_free(i64)\00"
-@.str.7410 = private unnamed_addr constant [45 x i8] c"declare i64  @nurl_proc_spawn(i8*, i8*, i64)\00"
-@.str.7411 = private unnamed_addr constant [44 x i8] c"declare i64  @nurl_proc_spawn_err_kind(i64)\00"
-@.str.7412 = private unnamed_addr constant [39 x i8] c"declare i64  @nurl_proc_spawn_pid(i64)\00"
-@.str.7413 = private unnamed_addr constant [51 x i8] c"declare i64  @nurl_proc_spawn_write(i64, i8*, i64)\00"
-@.str.7414 = private unnamed_addr constant [47 x i8] c"declare void @nurl_proc_spawn_close_stdin(i64)\00"
-@.str.7415 = private unnamed_addr constant [50 x i8] c"declare i8*  @nurl_proc_spawn_read_line(i64, i64)\00"
-@.str.7416 = private unnamed_addr constant [49 x i8] c"declare i64  @nurl_proc_spawn_read_line_len(i64)\00"
-@.str.7417 = private unnamed_addr constant [39 x i8] c"declare i64  @nurl_proc_spawn_eof(i64)\00"
-@.str.7418 = private unnamed_addr constant [47 x i8] c"declare i64  @nurl_proc_spawn_last_io_err(i64)\00"
-@.str.7419 = private unnamed_addr constant [40 x i8] c"declare i64  @nurl_proc_spawn_wait(i64)\00"
-@.str.7420 = private unnamed_addr constant [45 x i8] c"declare i64  @nurl_proc_spawn_kill(i64, i64)\00"
-@.str.7421 = private unnamed_addr constant [40 x i8] c"declare void @nurl_proc_spawn_free(i64)\00"
-@.str.7422 = private unnamed_addr constant [45 x i8] c"declare i64  @nurl_tcp_listen(i8*, i64, i64)\00"
-@.str.7423 = private unnamed_addr constant [59 x i8] c"declare i64  @nurl_tcp_listen_tls(i8*, i64, i64, i8*, i8*)\00"
-@.str.7424 = private unnamed_addr constant [69 x i8] c"declare i64  @nurl_tcp_listen_tls_alpn(i8*, i64, i64, i8*, i8*, i8*)\00"
-@.str.7425 = private unnamed_addr constant [42 x i8] c"declare i8*  @nurl_tcp_alpn_selected(i64)\00"
-@.str.7426 = private unnamed_addr constant [55 x i8] c"declare i64  @nurl_tcp_tls_add_sni(i64, i8*, i8*, i8*)\00"
-@.str.7427 = private unnamed_addr constant [54 x i8] c"declare i64  @nurl_tcp_tls_reload(i64, i8*, i8*, i8*)\00"
-@.str.7428 = private unnamed_addr constant [62 x i8] c"declare i64  @nurl_tcp_tls_require_client_cert(i64, i8*, i64)\00"
-@.str.7429 = private unnamed_addr constant [46 x i8] c"declare i8*  @nurl_tcp_peer_cert_subject(i64)\00"
-@.str.7430 = private unnamed_addr constant [35 x i8] c"declare i64  @nurl_tcp_accept(i64)\00"
-@.str.7431 = private unnamed_addr constant [43 x i8] c"declare i64  @nurl_tcp_read(i64, i8*, i64)\00"
-@.str.7432 = private unnamed_addr constant [44 x i8] c"declare i64  @nurl_tcp_write(i64, i8*, i64)\00"
-@.str.7433 = private unnamed_addr constant [34 x i8] c"declare void @nurl_tcp_close(i64)\00"
-@.str.7434 = private unnamed_addr constant [37 x i8] c"declare void @nurl_tcp_shutdown(i64)\00"
-@.str.7435 = private unnamed_addr constant [37 x i8] c"declare i64  @nurl_tcp_err_kind(i64)\00"
-@.str.7436 = private unnamed_addr constant [38 x i8] c"declare i8*  @nurl_tcp_peer_addr(i64)\00"
-@.str.7437 = private unnamed_addr constant [45 x i8] c"declare void @nurl_tcp_set_timeout(i64, i64)\00"
-@.str.7438 = private unnamed_addr constant [48 x i8] c"declare void @nurl_signal_install_shutdown(i64)\00"
-@.str.7439 = private unnamed_addr constant [45 x i8] c"declare void @nurl_signal_trigger_shutdown()\00"
-@.str.7440 = private unnamed_addr constant [30 x i8] c"declare void @nurl_panic(i8*)\00"
-@.str.7441 = private unnamed_addr constant [37 x i8] c"declare i64  @nurl_recover(i8*, i8*)\00"
-@.str.7442 = private unnamed_addr constant [36 x i8] c"declare i8*  @nurl_panic_last_msg()\00"
-@.str.7443 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.7280 = private unnamed_addr constant [34 x i8] c"; NURL compiler output (nurlc.nu)\00"
+@.str.7281 = private unnamed_addr constant [48 x i8] c"; link: clang <this.ll> stdlib/runtime.o -o out\00"
+@.str.7282 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.7283 = private unnamed_addr constant [61 x i8] c"declare void @llvm.dbg.declare(metadata, metadata, metadata)\00"
+@.str.7284 = private unnamed_addr constant [24 x i8] c"declare i32  @puts(i8*)\00"
+@.str.7285 = private unnamed_addr constant [31 x i8] c"declare i32  @printf(i8*, ...)\00"
+@.str.7286 = private unnamed_addr constant [26 x i8] c"declare i8*  @malloc(i64)\00"
+@.str.7287 = private unnamed_addr constant [24 x i8] c"declare void @free(i8*)\00"
+@.str.7288 = private unnamed_addr constant [26 x i8] c"declare i64  @strlen(i8*)\00"
+@.str.7289 = private unnamed_addr constant [31 x i8] c"declare i32  @strcmp(i8*, i8*)\00"
+@.str.7290 = private unnamed_addr constant [37 x i8] c"declare i32  @strncmp(i8*, i8*, i64)\00"
+@.str.7291 = private unnamed_addr constant [36 x i8] c"declare i32  @memcmp(i8*, i8*, i64)\00"
+@.str.7292 = private unnamed_addr constant [31 x i8] c"declare i8*  @strstr(i8*, i8*)\00"
+@.str.7293 = private unnamed_addr constant [41 x i8] c"declare i8*  @memmem(i8*, i64, i8*, i64)\00"
+@.str.7294 = private unnamed_addr constant [25 x i8] c"declare i64  @atoll(i8*)\00"
+@.str.7295 = private unnamed_addr constant [26 x i8] c"declare double @atof(i8*)\00"
+@.str.7296 = private unnamed_addr constant [34 x i8] c"declare double @strtod(i8*, i8**)\00"
+@.str.7297 = private unnamed_addr constant [36 x i8] c"declare i8*  @memcpy(i8*, i8*, i64)\00"
+@.str.7298 = private unnamed_addr constant [26 x i8] c"declare i8*  @strdup(i8*)\00"
+@.str.7299 = private unnamed_addr constant [31 x i8] c"declare i8*  @nurl_strdup(i8*)\00"
+@.str.7300 = private unnamed_addr constant [30 x i8] c"declare i8*  @fopen(i8*, i8*)\00"
+@.str.7301 = private unnamed_addr constant [26 x i8] c"declare i32  @fclose(i8*)\00"
+@.str.7302 = private unnamed_addr constant [30 x i8] c"declare i32  @fputs(i8*, i8*)\00"
+@.str.7303 = private unnamed_addr constant [41 x i8] c"declare i64  @fwrite(i8*, i64, i64, i8*)\00"
+@.str.7304 = private unnamed_addr constant [30 x i8] c"declare i32  @fputc(i32, i8*)\00"
+@.str.7305 = private unnamed_addr constant [40 x i8] c"declare i64  @fread(i8*, i64, i64, i8*)\00"
+@.str.7306 = private unnamed_addr constant [24 x i8] c"declare i32  @feof(i8*)\00"
+@.str.7307 = private unnamed_addr constant [35 x i8] c"declare i32  @fseek(i8*, i64, i32)\00"
+@.str.7308 = private unnamed_addr constant [25 x i8] c"declare i64  @ftell(i8*)\00"
+@.str.7309 = private unnamed_addr constant [31 x i8] c"declare i32  @access(i8*, i32)\00"
+@.str.7310 = private unnamed_addr constant [26 x i8] c"declare i8*  @getenv(i8*)\00"
+@.str.7311 = private unnamed_addr constant [33 x i8] c"declare i8*  @realpath(i8*, i8*)\00"
+@.str.7312 = private unnamed_addr constant [35 x i8] c"@__nurl_ret_owned = global i64 0\0A\0A\00"
+@.str.7313 = private unnamed_addr constant [35 x i8] c"declare void @nurl_init(i32, i8**)\00"
+@.str.7314 = private unnamed_addr constant [30 x i8] c"declare void @nurl_print(i8*)\00"
+@.str.7315 = private unnamed_addr constant [32 x i8] c"declare void @nurl_println(i8*)\00"
+@.str.7316 = private unnamed_addr constant [31 x i8] c"declare void @nurl_eprint(i8*)\00"
+@.str.7317 = private unnamed_addr constant [33 x i8] c"declare void @nurl_eprintln(i8*)\00"
+@.str.7318 = private unnamed_addr constant [34 x i8] c"declare void @nurl_print_int(i64)\00"
+@.str.7319 = private unnamed_addr constant [34 x i8] c"declare void @nurl_print_str(i8*)\00"
+@.str.7320 = private unnamed_addr constant [34 x i8] c"declare void @nurl_print_bool(i1)\00"
+@.str.7321 = private unnamed_addr constant [30 x i8] c"declare i64  @nurl_read_int()\00"
+@.str.7322 = private unnamed_addr constant [31 x i8] c"declare i8*  @nurl_read_line()\00"
+@.str.7323 = private unnamed_addr constant [31 x i8] c"declare i64  @nurl_stdin_eof()\00"
+@.str.7324 = private unnamed_addr constant [34 x i8] c"declare void @nurl_flush_stdout()\00"
+@.str.7325 = private unnamed_addr constant [34 x i8] c"declare void @nurl_flush_stderr()\00"
+@.str.7326 = private unnamed_addr constant [32 x i8] c"declare i8*  @nurl_str_int(i64)\00"
+@.str.7327 = private unnamed_addr constant [37 x i8] c"declare i8*  @nurl_str_float(double)\00"
+@.str.7328 = private unnamed_addr constant [57 x i8] c"declare i64    @nurl_scan_byte3(i8*, i64, i64, i64, i64)\00"
+@.str.7329 = private unnamed_addr constant [53 x i8] c"declare i64    @nurl_byte_substr(i8*, i64, i8*, i64)\00"
+@.str.7330 = private unnamed_addr constant [47 x i8] c"declare i64    @nurl_count_byte(i8*, i64, i64)\00"
+@.str.7331 = private unnamed_addr constant [41 x i8] c"declare double @nurl_fast_atof(i8*, i64)\00"
+@.str.7332 = private unnamed_addr constant [50 x i8] c"declare double @nurl_fast_atof_ex(i8*, i64, i64*)\00"
+@.str.7333 = private unnamed_addr constant [34 x i8] c"declare i8*  @nurl_read_file(i8*)\00"
+@.str.7334 = private unnamed_addr constant [29 x i8] c"declare void @nurl_exit(i64)\00"
+@.str.7335 = private unnamed_addr constant [26 x i8] c"declare i64  @nurl_argc()\00"
+@.str.7336 = private unnamed_addr constant [29 x i8] c"declare i8*  @nurl_argv(i64)\00"
+@.str.7337 = private unnamed_addr constant [32 x i8] c"declare i64  @nurl_argv_count()\00"
+@.str.7338 = private unnamed_addr constant [33 x i8] c"declare i8*  @nurl_argv_get(i64)\00"
+@.str.7339 = private unnamed_addr constant [29 x i8] c"declare i8*  @nurl_version()\00"
+@.str.7340 = private unnamed_addr constant [37 x i8] c"declare void @nurl_print_buf_start()\00"
+@.str.7341 = private unnamed_addr constant [36 x i8] c"declare i8*  @nurl_print_buf_stop()\00"
+@.str.7342 = private unnamed_addr constant [37 x i8] c"declare void @nurl_print_buf_reset()\00"
+@.str.7343 = private unnamed_addr constant [31 x i8] c"declare i8*  @nurl_malloc(i64)\00"
+@.str.7344 = private unnamed_addr constant [30 x i8] c"declare i8*  @nurl_alloc(i64)\00"
+@.str.7345 = private unnamed_addr constant [31 x i8] c"declare i8*  @nurl_zalloc(i64)\00"
+@.str.7346 = private unnamed_addr constant [37 x i8] c"declare i8*  @nurl_realloc(i8*, i64)\00"
+@.str.7347 = private unnamed_addr constant [29 x i8] c"declare void @nurl_free(i8*)\00"
+@.str.7348 = private unnamed_addr constant [32 x i8] c"declare i32  @nurl_cpu_x86_v3()\00"
+@.str.7349 = private unnamed_addr constant [37 x i8] c"declare void @nurl_journal_push(i8*)\00"
+@.str.7350 = private unnamed_addr constant [47 x i8] c"declare void @nurl_journal_push_drop(i8*, ptr)\00"
+@.str.7351 = private unnamed_addr constant [39 x i8] c"declare void @nurl_journal_forget(i8*)\00"
+@.str.7352 = private unnamed_addr constant [41 x i8] c"declare void @nurl_memcpy(i8*, i8*, i64)\00"
+@.str.7353 = private unnamed_addr constant [42 x i8] c"declare void @nurl_memmove(i8*, i8*, i64)\00"
+@.str.7354 = private unnamed_addr constant [41 x i8] c"declare void @nurl_memset(i8*, i64, i64)\00"
+@.str.7355 = private unnamed_addr constant [66 x i8] c"define linkonce_odr i64 @nurl_peek(i8* %p, i64 %i) alwaysinline {\00"
+@.str.7356 = private unnamed_addr constant [7 x i8] c"entry:\00"
+@.str.7357 = private unnamed_addr constant [31 x i8] c"  %pk.n = icmp eq i8* %p, null\00"
+@.str.7358 = private unnamed_addr constant [46 x i8] c"  br i1 %pk.n, label %pk.zero, label %pk.load\00"
+@.str.7359 = private unnamed_addr constant [9 x i8] c"pk.load:\00"
+@.str.7360 = private unnamed_addr constant [33 x i8] c"  %pk.b = bitcast i8* %p to i64*\00"
+@.str.7361 = private unnamed_addr constant [57 x i8] c"  %pk.e = getelementptr inbounds i64, i64* %pk.b, i64 %i\00"
+@.str.7362 = private unnamed_addr constant [31 x i8] c"  %pk.v = load i64, i64* %pk.e\00"
+@.str.7363 = private unnamed_addr constant [16 x i8] c"  ret i64 %pk.v\00"
+@.str.7364 = private unnamed_addr constant [9 x i8] c"pk.zero:\00"
+@.str.7365 = private unnamed_addr constant [12 x i8] c"  ret i64 0\00"
+@.str.7366 = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.7367 = private unnamed_addr constant [75 x i8] c"define linkonce_odr void @nurl_poke(i8* %p, i64 %i, i64 %v) alwaysinline {\00"
+@.str.7368 = private unnamed_addr constant [7 x i8] c"entry:\00"
+@.str.7369 = private unnamed_addr constant [31 x i8] c"  %pw.n = icmp eq i8* %p, null\00"
+@.str.7370 = private unnamed_addr constant [47 x i8] c"  br i1 %pw.n, label %pw.done, label %pw.store\00"
+@.str.7371 = private unnamed_addr constant [10 x i8] c"pw.store:\00"
+@.str.7372 = private unnamed_addr constant [33 x i8] c"  %pw.b = bitcast i8* %p to i64*\00"
+@.str.7373 = private unnamed_addr constant [57 x i8] c"  %pw.e = getelementptr inbounds i64, i64* %pw.b, i64 %i\00"
+@.str.7374 = private unnamed_addr constant [27 x i8] c"  store i64 %v, i64* %pw.e\00"
+@.str.7375 = private unnamed_addr constant [20 x i8] c"  br label %pw.done\00"
+@.str.7376 = private unnamed_addr constant [9 x i8] c"pw.done:\00"
+@.str.7377 = private unnamed_addr constant [11 x i8] c"  ret void\00"
+@.str.7378 = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.7379 = private unnamed_addr constant [68 x i8] c"define linkonce_odr i64 @nurl_umulhi(i64 %a, i64 %b) alwaysinline {\00"
+@.str.7380 = private unnamed_addr constant [7 x i8] c"entry:\00"
+@.str.7381 = private unnamed_addr constant [30 x i8] c"  %mh.a = zext i64 %a to i128\00"
+@.str.7382 = private unnamed_addr constant [30 x i8] c"  %mh.b = zext i64 %b to i128\00"
+@.str.7383 = private unnamed_addr constant [32 x i8] c"  %mh.p = mul i128 %mh.a, %mh.b\00"
+@.str.7384 = private unnamed_addr constant [30 x i8] c"  %mh.h = lshr i128 %mh.p, 64\00"
+@.str.7385 = private unnamed_addr constant [34 x i8] c"  %mh.r = trunc i128 %mh.h to i64\00"
+@.str.7386 = private unnamed_addr constant [16 x i8] c"  ret i64 %mh.r\00"
+@.str.7387 = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.7388 = private unnamed_addr constant [77 x i8] c"define linkonce_odr i64 @nurl_addc_lo(i64 %a, i64 %b, i64 %c) alwaysinline {\00"
+@.str.7389 = private unnamed_addr constant [7 x i8] c"entry:\00"
+@.str.7390 = private unnamed_addr constant [30 x i8] c"  %ac.a = zext i64 %a to i128\00"
+@.str.7391 = private unnamed_addr constant [30 x i8] c"  %ac.b = zext i64 %b to i128\00"
+@.str.7392 = private unnamed_addr constant [30 x i8] c"  %ac.c = zext i64 %c to i128\00"
+@.str.7393 = private unnamed_addr constant [32 x i8] c"  %ac.s = add i128 %ac.a, %ac.b\00"
+@.str.7394 = private unnamed_addr constant [32 x i8] c"  %ac.t = add i128 %ac.s, %ac.c\00"
+@.str.7395 = private unnamed_addr constant [34 x i8] c"  %ac.r = trunc i128 %ac.t to i64\00"
+@.str.7396 = private unnamed_addr constant [16 x i8] c"  ret i64 %ac.r\00"
+@.str.7397 = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.7398 = private unnamed_addr constant [77 x i8] c"define linkonce_odr i64 @nurl_addc_hi(i64 %a, i64 %b, i64 %c) alwaysinline {\00"
+@.str.7399 = private unnamed_addr constant [7 x i8] c"entry:\00"
+@.str.7400 = private unnamed_addr constant [30 x i8] c"  %ah.a = zext i64 %a to i128\00"
+@.str.7401 = private unnamed_addr constant [30 x i8] c"  %ah.b = zext i64 %b to i128\00"
+@.str.7402 = private unnamed_addr constant [30 x i8] c"  %ah.c = zext i64 %c to i128\00"
+@.str.7403 = private unnamed_addr constant [32 x i8] c"  %ah.s = add i128 %ah.a, %ah.b\00"
+@.str.7404 = private unnamed_addr constant [32 x i8] c"  %ah.t = add i128 %ah.s, %ah.c\00"
+@.str.7405 = private unnamed_addr constant [30 x i8] c"  %ah.h = lshr i128 %ah.t, 64\00"
+@.str.7406 = private unnamed_addr constant [34 x i8] c"  %ah.r = trunc i128 %ah.h to i64\00"
+@.str.7407 = private unnamed_addr constant [16 x i8] c"  ret i64 %ah.r\00"
+@.str.7408 = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.7409 = private unnamed_addr constant [77 x i8] c"define linkonce_odr i64 @nurl_subb_lo(i64 %a, i64 %b, i64 %c) alwaysinline {\00"
+@.str.7410 = private unnamed_addr constant [7 x i8] c"entry:\00"
+@.str.7411 = private unnamed_addr constant [30 x i8] c"  %sc.a = zext i64 %a to i128\00"
+@.str.7412 = private unnamed_addr constant [30 x i8] c"  %sc.b = zext i64 %b to i128\00"
+@.str.7413 = private unnamed_addr constant [30 x i8] c"  %sc.c = zext i64 %c to i128\00"
+@.str.7414 = private unnamed_addr constant [32 x i8] c"  %sc.d = sub i128 %sc.a, %sc.b\00"
+@.str.7415 = private unnamed_addr constant [32 x i8] c"  %sc.e = sub i128 %sc.d, %sc.c\00"
+@.str.7416 = private unnamed_addr constant [34 x i8] c"  %sc.r = trunc i128 %sc.e to i64\00"
+@.str.7417 = private unnamed_addr constant [16 x i8] c"  ret i64 %sc.r\00"
+@.str.7418 = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.7419 = private unnamed_addr constant [77 x i8] c"define linkonce_odr i64 @nurl_subb_hi(i64 %a, i64 %b, i64 %c) alwaysinline {\00"
+@.str.7420 = private unnamed_addr constant [7 x i8] c"entry:\00"
+@.str.7421 = private unnamed_addr constant [30 x i8] c"  %sh.a = zext i64 %a to i128\00"
+@.str.7422 = private unnamed_addr constant [30 x i8] c"  %sh.b = zext i64 %b to i128\00"
+@.str.7423 = private unnamed_addr constant [30 x i8] c"  %sh.c = zext i64 %c to i128\00"
+@.str.7424 = private unnamed_addr constant [32 x i8] c"  %sh.d = sub i128 %sh.a, %sh.b\00"
+@.str.7425 = private unnamed_addr constant [32 x i8] c"  %sh.e = sub i128 %sh.d, %sh.c\00"
+@.str.7426 = private unnamed_addr constant [30 x i8] c"  %sh.h = lshr i128 %sh.e, 64\00"
+@.str.7427 = private unnamed_addr constant [34 x i8] c"  %sh.t = trunc i128 %sh.h to i64\00"
+@.str.7428 = private unnamed_addr constant [27 x i8] c"  %sh.r = and i64 %sh.t, 1\00"
+@.str.7429 = private unnamed_addr constant [16 x i8] c"  ret i64 %sh.r\00"
+@.str.7430 = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.7431 = private unnamed_addr constant [84 x i8] c"define linkonce_odr i64 @nurl_mac_lo(i64 %a, i64 %b, i64 %c, i64 %d) alwaysinline {\00"
+@.str.7432 = private unnamed_addr constant [7 x i8] c"entry:\00"
+@.str.7433 = private unnamed_addr constant [30 x i8] c"  %ml.a = zext i64 %a to i128\00"
+@.str.7434 = private unnamed_addr constant [30 x i8] c"  %ml.b = zext i64 %b to i128\00"
+@.str.7435 = private unnamed_addr constant [30 x i8] c"  %ml.c = zext i64 %c to i128\00"
+@.str.7436 = private unnamed_addr constant [30 x i8] c"  %ml.d = zext i64 %d to i128\00"
+@.str.7437 = private unnamed_addr constant [32 x i8] c"  %ml.p = mul i128 %ml.a, %ml.b\00"
+@.str.7438 = private unnamed_addr constant [32 x i8] c"  %ml.s = add i128 %ml.p, %ml.c\00"
+@.str.7439 = private unnamed_addr constant [32 x i8] c"  %ml.t = add i128 %ml.s, %ml.d\00"
+@.str.7440 = private unnamed_addr constant [34 x i8] c"  %ml.r = trunc i128 %ml.t to i64\00"
+@.str.7441 = private unnamed_addr constant [16 x i8] c"  ret i64 %ml.r\00"
+@.str.7442 = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.7443 = private unnamed_addr constant [84 x i8] c"define linkonce_odr i64 @nurl_mac_hi(i64 %a, i64 %b, i64 %c, i64 %d) alwaysinline {\00"
+@.str.7444 = private unnamed_addr constant [7 x i8] c"entry:\00"
+@.str.7445 = private unnamed_addr constant [30 x i8] c"  %mv.a = zext i64 %a to i128\00"
+@.str.7446 = private unnamed_addr constant [30 x i8] c"  %mv.b = zext i64 %b to i128\00"
+@.str.7447 = private unnamed_addr constant [30 x i8] c"  %mv.c = zext i64 %c to i128\00"
+@.str.7448 = private unnamed_addr constant [30 x i8] c"  %mv.d = zext i64 %d to i128\00"
+@.str.7449 = private unnamed_addr constant [32 x i8] c"  %mv.p = mul i128 %mv.a, %mv.b\00"
+@.str.7450 = private unnamed_addr constant [32 x i8] c"  %mv.s = add i128 %mv.p, %mv.c\00"
+@.str.7451 = private unnamed_addr constant [32 x i8] c"  %mv.t = add i128 %mv.s, %mv.d\00"
+@.str.7452 = private unnamed_addr constant [30 x i8] c"  %mv.h = lshr i128 %mv.t, 64\00"
+@.str.7453 = private unnamed_addr constant [34 x i8] c"  %mv.r = trunc i128 %mv.h to i64\00"
+@.str.7454 = private unnamed_addr constant [16 x i8] c"  ret i64 %mv.r\00"
+@.str.7455 = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.7456 = private unnamed_addr constant [43 x i8] c"declare void @nurl_vec_drop(i8*, ptr, i64)\00"
+@.str.7457 = private unnamed_addr constant [36 x i8] c"declare i64    @nurl_is_nan(double)\00"
+@.str.7458 = private unnamed_addr constant [36 x i8] c"declare i64    @nurl_is_inf(double)\00"
+@.str.7459 = private unnamed_addr constant [38 x i8] c"declare i64  @nurl_dir_list_open(i8*)\00"
+@.str.7460 = private unnamed_addr constant [38 x i8] c"declare i8*  @nurl_dir_list_next(i64)\00"
+@.str.7461 = private unnamed_addr constant [39 x i8] c"declare void @nurl_dir_list_close(i64)\00"
+@.str.7462 = private unnamed_addr constant [57 x i8] c"declare i64  @nurl_http_perform_full(i8*, i8*, i8*, i8*)\00"
+@.str.7463 = private unnamed_addr constant [70 x i8] c"declare i64  @nurl_http_perform_full_to(i8*, i8*, i8*, i8*, i64, i64)\00"
+@.str.7464 = private unnamed_addr constant [43 x i8] c"declare void @nurl_http_response_free(i64)\00"
+@.str.7465 = private unnamed_addr constant [69 x i8] c"declare i64  @nurl_http_stream_open_to(i8*, i8*, i8*, i8*, i64, i64)\00"
+@.str.7466 = private unnamed_addr constant [41 x i8] c"declare i8*  @nurl_http_stream_next(i64)\00"
+@.str.7467 = private unnamed_addr constant [42 x i8] c"declare void @nurl_http_stream_close(i64)\00"
+@.str.7468 = private unnamed_addr constant [49 x i8] c"declare i64  @nurl_http_stream_pump_headers(i64)\00"
+@.str.7469 = private unnamed_addr constant [48 x i8] c"declare i64  @nurl_proc_run(i8*, i8*, i64, i8*)\00"
+@.str.7470 = private unnamed_addr constant [39 x i8] c"declare i64  @nurl_proc_exit_code(i64)\00"
+@.str.7471 = private unnamed_addr constant [38 x i8] c"declare i64  @nurl_proc_err_kind(i64)\00"
+@.str.7472 = private unnamed_addr constant [36 x i8] c"declare i8*  @nurl_proc_stdout(i64)\00"
+@.str.7473 = private unnamed_addr constant [36 x i8] c"declare i8*  @nurl_proc_stderr(i64)\00"
+@.str.7474 = private unnamed_addr constant [40 x i8] c"declare i64  @nurl_proc_stdout_len(i64)\00"
+@.str.7475 = private unnamed_addr constant [40 x i8] c"declare i64  @nurl_proc_stderr_len(i64)\00"
+@.str.7476 = private unnamed_addr constant [34 x i8] c"declare void @nurl_proc_free(i64)\00"
+@.str.7477 = private unnamed_addr constant [45 x i8] c"declare i64  @nurl_proc_spawn(i8*, i8*, i64)\00"
+@.str.7478 = private unnamed_addr constant [44 x i8] c"declare i64  @nurl_proc_spawn_err_kind(i64)\00"
+@.str.7479 = private unnamed_addr constant [39 x i8] c"declare i64  @nurl_proc_spawn_pid(i64)\00"
+@.str.7480 = private unnamed_addr constant [51 x i8] c"declare i64  @nurl_proc_spawn_write(i64, i8*, i64)\00"
+@.str.7481 = private unnamed_addr constant [47 x i8] c"declare void @nurl_proc_spawn_close_stdin(i64)\00"
+@.str.7482 = private unnamed_addr constant [50 x i8] c"declare i8*  @nurl_proc_spawn_read_line(i64, i64)\00"
+@.str.7483 = private unnamed_addr constant [49 x i8] c"declare i64  @nurl_proc_spawn_read_line_len(i64)\00"
+@.str.7484 = private unnamed_addr constant [39 x i8] c"declare i64  @nurl_proc_spawn_eof(i64)\00"
+@.str.7485 = private unnamed_addr constant [47 x i8] c"declare i64  @nurl_proc_spawn_last_io_err(i64)\00"
+@.str.7486 = private unnamed_addr constant [40 x i8] c"declare i64  @nurl_proc_spawn_wait(i64)\00"
+@.str.7487 = private unnamed_addr constant [45 x i8] c"declare i64  @nurl_proc_spawn_kill(i64, i64)\00"
+@.str.7488 = private unnamed_addr constant [40 x i8] c"declare void @nurl_proc_spawn_free(i64)\00"
+@.str.7489 = private unnamed_addr constant [45 x i8] c"declare i64  @nurl_tcp_listen(i8*, i64, i64)\00"
+@.str.7490 = private unnamed_addr constant [59 x i8] c"declare i64  @nurl_tcp_listen_tls(i8*, i64, i64, i8*, i8*)\00"
+@.str.7491 = private unnamed_addr constant [69 x i8] c"declare i64  @nurl_tcp_listen_tls_alpn(i8*, i64, i64, i8*, i8*, i8*)\00"
+@.str.7492 = private unnamed_addr constant [42 x i8] c"declare i8*  @nurl_tcp_alpn_selected(i64)\00"
+@.str.7493 = private unnamed_addr constant [55 x i8] c"declare i64  @nurl_tcp_tls_add_sni(i64, i8*, i8*, i8*)\00"
+@.str.7494 = private unnamed_addr constant [54 x i8] c"declare i64  @nurl_tcp_tls_reload(i64, i8*, i8*, i8*)\00"
+@.str.7495 = private unnamed_addr constant [62 x i8] c"declare i64  @nurl_tcp_tls_require_client_cert(i64, i8*, i64)\00"
+@.str.7496 = private unnamed_addr constant [46 x i8] c"declare i8*  @nurl_tcp_peer_cert_subject(i64)\00"
+@.str.7497 = private unnamed_addr constant [35 x i8] c"declare i64  @nurl_tcp_accept(i64)\00"
+@.str.7498 = private unnamed_addr constant [43 x i8] c"declare i64  @nurl_tcp_read(i64, i8*, i64)\00"
+@.str.7499 = private unnamed_addr constant [44 x i8] c"declare i64  @nurl_tcp_write(i64, i8*, i64)\00"
+@.str.7500 = private unnamed_addr constant [34 x i8] c"declare void @nurl_tcp_close(i64)\00"
+@.str.7501 = private unnamed_addr constant [37 x i8] c"declare void @nurl_tcp_shutdown(i64)\00"
+@.str.7502 = private unnamed_addr constant [37 x i8] c"declare i64  @nurl_tcp_err_kind(i64)\00"
+@.str.7503 = private unnamed_addr constant [38 x i8] c"declare i8*  @nurl_tcp_peer_addr(i64)\00"
+@.str.7504 = private unnamed_addr constant [45 x i8] c"declare void @nurl_tcp_set_timeout(i64, i64)\00"
+@.str.7505 = private unnamed_addr constant [48 x i8] c"declare void @nurl_signal_install_shutdown(i64)\00"
+@.str.7506 = private unnamed_addr constant [45 x i8] c"declare void @nurl_signal_trigger_shutdown()\00"
+@.str.7507 = private unnamed_addr constant [30 x i8] c"declare void @nurl_panic(i8*)\00"
+@.str.7508 = private unnamed_addr constant [37 x i8] c"declare i64  @nurl_recover(i8*, i8*)\00"
+@.str.7509 = private unnamed_addr constant [36 x i8] c"declare i8*  @nurl_panic_last_msg()\00"
+@.str.7510 = private unnamed_addr constant [1 x i8] c"\00"
 define i8* @__dirname__fp1(i8* %p) {
 entry:
   %r0 = alloca i8*
@@ -103295,15 +103545,15 @@ end_6:
   store i64 %r14, i64* %r5
   br label %loop_check_1
 loop_exit_3:
-  %r15 = getelementptr [1 x i8], [1 x i8]* @.str.7444, i64 0, i64 0
-  %r16 = getelementptr [1 x i8], [1 x i8]* @.str.7445, i64 0, i64 0
+  %r15 = getelementptr [1 x i8], [1 x i8]* @.str.7511, i64 0, i64 0
+  %r16 = getelementptr [1 x i8], [1 x i8]* @.str.7512, i64 0, i64 0
   %r17 = tail call i8* @nurl_str_cat(i8* %r15, i8* %r16)
   store i64 1, i64* @__nurl_ret_owned
   ret i8* %r17
 }
 
-@.str.7444 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.7445 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.7511 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.7512 = private unnamed_addr constant [1 x i8] c"\00"
 define i8* @__norm_import_path__fp1(i8* %path) {
 entry:
   %r0 = alloca i8*
@@ -103323,7 +103573,7 @@ entry:
   %r74 = alloca i8*
   store i8* null, i8** %r74
   %r86 = alloca i64
-  %r1 = getelementptr [1 x i8], [1 x i8]* @.str.7446, i64 0, i64 0
+  %r1 = getelementptr [1 x i8], [1 x i8]* @.str.7513, i64 0, i64 0
   %r2 = call i8* @nurl_str_cat(i8* %path, i8* %r1)
   %r4 = load i8*, i8** %r3
   call void @nurl_free(i8* %r4)
@@ -103399,7 +103649,7 @@ then_11:
   br i1 %r42, label %then_14, label %else_15
 then_14:
   %r43 = load i8*, i8** %r37
-  %r44 = getelementptr [2 x i8], [2 x i8]* @.str.7447, i64 0, i64 0
+  %r44 = getelementptr [2 x i8], [2 x i8]* @.str.7514, i64 0, i64 0
   %r45 = load i8*, i8** %r3
   %r46 = call i8* @nurl_str_cat3(i8* %r43, i8* %r44, i8* %r45)
   %r48 = load i8*, i8** %r47
@@ -103451,7 +103701,7 @@ then_20:
 else_21:
   br label %end_22
 end_22:
-  %r64 = getelementptr [12 x i8], [12 x i8]* @.str.7448, i64 0, i64 0
+  %r64 = getelementptr [12 x i8], [12 x i8]* @.str.7515, i64 0, i64 0
   %r65 = call i8* @getenv(i8* %r64)
   store i8* %r65, i8** %r66
   %r67 = load i8*, i8** %r66
@@ -103460,7 +103710,7 @@ end_22:
   br i1 %r69, label %then_23, label %else_24
 then_23:
   %r70 = load i8*, i8** %r66
-  %r71 = getelementptr [2 x i8], [2 x i8]* @.str.7449, i64 0, i64 0
+  %r71 = getelementptr [2 x i8], [2 x i8]* @.str.7516, i64 0, i64 0
   %r72 = load i8*, i8** %r3
   %r73 = call i8* @nurl_str_cat3(i8* %r70, i8* %r71, i8* %r72)
   %r75 = load i8*, i8** %r74
@@ -103545,10 +103795,10 @@ end_37:
   ret i8* %r111
 }
 
-@.str.7446 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.7447 = private unnamed_addr constant [2 x i8] c"/\00"
-@.str.7448 = private unnamed_addr constant [12 x i8] c"NURL_STDLIB\00"
-@.str.7449 = private unnamed_addr constant [2 x i8] c"/\00"
+@.str.7513 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.7514 = private unnamed_addr constant [2 x i8] c"/\00"
+@.str.7515 = private unnamed_addr constant [12 x i8] c"NURL_STDLIB\00"
+@.str.7516 = private unnamed_addr constant [2 x i8] c"/\00"
 define i8* @__import_nu_fallback__fp1(i8* %cur) {
 entry:
   %r0 = alloca i8*
@@ -103565,7 +103815,7 @@ entry:
   store i8* null, i8** %r44
   %r52 = alloca i8*
   store i8* null, i8** %r52
-  %r1 = getelementptr [4 x i8], [4 x i8]* @.str.7450, i64 0, i64 0
+  %r1 = getelementptr [4 x i8], [4 x i8]* @.str.7517, i64 0, i64 0
   %r2 = call i8* @nurl_str_cat(i8* %cur, i8* %r1)
   %r4 = load i8*, i8** %r3
   call void @nurl_free(i8* %r4)
@@ -103596,7 +103846,7 @@ then_1:
   br i1 %r20, label %then_4, label %else_5
 then_4:
   %r21 = load i8*, i8** %r15
-  %r22 = getelementptr [2 x i8], [2 x i8]* @.str.7451, i64 0, i64 0
+  %r22 = getelementptr [2 x i8], [2 x i8]* @.str.7518, i64 0, i64 0
   %r23 = load i8*, i8** %r3
   %r24 = call i8* @nurl_str_cat3(i8* %r21, i8* %r22, i8* %r23)
   %r26 = load i8*, i8** %r25
@@ -103648,7 +103898,7 @@ then_10:
 else_11:
   br label %end_12
 end_12:
-  %r42 = getelementptr [12 x i8], [12 x i8]* @.str.7452, i64 0, i64 0
+  %r42 = getelementptr [12 x i8], [12 x i8]* @.str.7519, i64 0, i64 0
   %r43 = call i8* @getenv(i8* %r42)
   store i8* %r43, i8** %r44
   %r45 = load i8*, i8** %r44
@@ -103657,7 +103907,7 @@ end_12:
   br i1 %r47, label %then_13, label %else_14
 then_13:
   %r48 = load i8*, i8** %r44
-  %r49 = getelementptr [2 x i8], [2 x i8]* @.str.7453, i64 0, i64 0
+  %r49 = getelementptr [2 x i8], [2 x i8]* @.str.7520, i64 0, i64 0
   %r50 = load i8*, i8** %r3
   %r51 = call i8* @nurl_str_cat3(i8* %r48, i8* %r49, i8* %r50)
   %r53 = load i8*, i8** %r52
@@ -103687,7 +103937,7 @@ end_18:
 else_14:
   br label %end_15
 end_15:
-  %r62 = getelementptr [1 x i8], [1 x i8]* @.str.7454, i64 0, i64 0
+  %r62 = getelementptr [1 x i8], [1 x i8]* @.str.7521, i64 0, i64 0
   %r63 = call i8* @nurl_str_cat(i8* %cur, i8* %r62)
   store i64 1, i64* @__nurl_ret_owned
   %r64 = load i8*, i8** %r3
@@ -103697,11 +103947,11 @@ end_15:
   ret i8* %r63
 }
 
-@.str.7450 = private unnamed_addr constant [4 x i8] c".nu\00"
-@.str.7451 = private unnamed_addr constant [2 x i8] c"/\00"
-@.str.7452 = private unnamed_addr constant [12 x i8] c"NURL_STDLIB\00"
-@.str.7453 = private unnamed_addr constant [2 x i8] c"/\00"
-@.str.7454 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.7517 = private unnamed_addr constant [4 x i8] c".nu\00"
+@.str.7518 = private unnamed_addr constant [2 x i8] c"/\00"
+@.str.7519 = private unnamed_addr constant [12 x i8] c"NURL_STDLIB\00"
+@.str.7520 = private unnamed_addr constant [2 x i8] c"/\00"
+@.str.7521 = private unnamed_addr constant [1 x i8] c"\00"
 define i8* @__canon_import_key__fp1(i8* %path) {
 entry:
   %r0 = alloca i8*
@@ -103719,7 +103969,7 @@ entry:
   br i1 %r6, label %then_1, label %else_2
 then_1:
   %r7 = load i8*, i8** %r3
-  %r8 = getelementptr [1 x i8], [1 x i8]* @.str.7455, i64 0, i64 0
+  %r8 = getelementptr [1 x i8], [1 x i8]* @.str.7522, i64 0, i64 0
   %r9 = call i8* @nurl_str_cat(i8* %r7, i8* %r8)
   %r11 = load i8*, i8** %r10
   call void @nurl_free(i8* %r11)
@@ -103735,20 +103985,20 @@ then_1:
 else_2:
   br label %end_3
 end_3:
-  %r16 = getelementptr [1 x i8], [1 x i8]* @.str.7456, i64 0, i64 0
+  %r16 = getelementptr [1 x i8], [1 x i8]* @.str.7523, i64 0, i64 0
   %r17 = tail call i8* @nurl_str_cat(i8* %path, i8* %r16)
   store i64 1, i64* @__nurl_ret_owned
   ret i8* %r17
 }
 
-@.str.7455 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.7456 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.7522 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.7523 = private unnamed_addr constant [1 x i8] c"\00"
 define i1 @mem_is_imported(i64 %syms, i8* %path) {
 entry:
   %r0 = alloca i1
   %r3 = alloca i8*
   store i8* null, i8** %r3
-  %r1 = getelementptr [19 x i8], [19 x i8]* @.str.7457, i64 0, i64 0
+  %r1 = getelementptr [19 x i8], [19 x i8]* @.str.7524, i64 0, i64 0
   %r2 = call i8* @nurl_sym_get(i64 %syms, i8* %r1)
   %r4 = load i8*, i8** %r3
   call void @nurl_free(i8* %r4)
@@ -103762,14 +104012,14 @@ entry:
   ret i1 %r7
 }
 
-@.str.7457 = private unnamed_addr constant [19 x i8] c"__imported_files__\00"
+@.str.7524 = private unnamed_addr constant [19 x i8] c"__imported_files__\00"
 define void @mem_mark_imported(i64 %syms, i8* %path) {
 entry:
   %r2 = alloca i8*
   store i8* null, i8** %r2
   %r14 = alloca i8*
   store i8* null, i8** %r14
-  %r0 = getelementptr [19 x i8], [19 x i8]* @.str.7458, i64 0, i64 0
+  %r0 = getelementptr [19 x i8], [19 x i8]* @.str.7525, i64 0, i64 0
   %r1 = call i8* @nurl_sym_get(i64 %syms, i8* %r0)
   %r3 = load i8*, i8** %r2
   call void @nurl_free(i8* %r3)
@@ -103781,12 +104031,12 @@ entry:
   %r7 = icmp eq i64 0, %r6
   br i1 %r7, label %then_1, label %else_2
 then_1:
-  %r8 = getelementptr [1 x i8], [1 x i8]* @.str.7459, i64 0, i64 0
+  %r8 = getelementptr [1 x i8], [1 x i8]* @.str.7526, i64 0, i64 0
   %r9 = call i8* @nurl_str_cat(i8* %path, i8* %r8)
   br label %end_3
 else_2:
   %r10 = load i8*, i8** %r2
-  %r11 = getelementptr [2 x i8], [2 x i8]* @.str.7460, i64 0, i64 0
+  %r11 = getelementptr [2 x i8], [2 x i8]* @.str.7527, i64 0, i64 0
   %r12 = call i8* @nurl_str_cat3(i8* %r10, i8* %r11, i8* %path)
   br label %end_3
 end_3:
@@ -103796,7 +104046,7 @@ end_3:
   store i8* %r13, i8** %r14
   %r16 = load i8*, i8** %r14
   call void @nurl_journal_push(i8* %r16)
-  %r17 = getelementptr [19 x i8], [19 x i8]* @.str.7461, i64 0, i64 0
+  %r17 = getelementptr [19 x i8], [19 x i8]* @.str.7528, i64 0, i64 0
   %r18 = load i8*, i8** %r14
   call void @nurl_sym_def(i64 %syms, i8* %r17, i8* %r18)
   %r19 = load i8*, i8** %r2
@@ -103806,1329 +104056,1329 @@ end_3:
   ret void
 }
 
-@.str.7458 = private unnamed_addr constant [19 x i8] c"__imported_files__\00"
-@.str.7459 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.7460 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.7461 = private unnamed_addr constant [19 x i8] c"__imported_files__\00"
+@.str.7525 = private unnamed_addr constant [19 x i8] c"__imported_files__\00"
+@.str.7526 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.7527 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.7528 = private unnamed_addr constant [19 x i8] c"__imported_files__\00"
 define void @init_syms(i64 %syms) {
 entry:
-  %r0 = getelementptr [19 x i8], [19 x i8]* @.str.7462, i64 0, i64 0
-  %r1 = getelementptr [1 x i8], [1 x i8]* @.str.7463, i64 0, i64 0
+  %r0 = getelementptr [19 x i8], [19 x i8]* @.str.7529, i64 0, i64 0
+  %r1 = getelementptr [1 x i8], [1 x i8]* @.str.7530, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r0, i8* %r1)
-  %r2 = getelementptr [18 x i8], [18 x i8]* @.str.7464, i64 0, i64 0
-  %r3 = getelementptr [1 x i8], [1 x i8]* @.str.7465, i64 0, i64 0
+  %r2 = getelementptr [18 x i8], [18 x i8]* @.str.7531, i64 0, i64 0
+  %r3 = getelementptr [1 x i8], [1 x i8]* @.str.7532, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r2, i8* %r3)
-  %r4 = getelementptr [10 x i8], [10 x i8]* @.str.7466, i64 0, i64 0
-  %r5 = getelementptr [4 x i8], [4 x i8]* @.str.7467, i64 0, i64 0
+  %r4 = getelementptr [10 x i8], [10 x i8]* @.str.7533, i64 0, i64 0
+  %r5 = getelementptr [4 x i8], [4 x i8]* @.str.7534, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r4, i8* %r5)
-  %r6 = getelementptr [14 x i8], [14 x i8]* @.str.7468, i64 0, i64 0
-  %r7 = getelementptr [4 x i8], [4 x i8]* @.str.7469, i64 0, i64 0
+  %r6 = getelementptr [14 x i8], [14 x i8]* @.str.7535, i64 0, i64 0
+  %r7 = getelementptr [4 x i8], [4 x i8]* @.str.7536, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r6, i8* %r7)
-  %r8 = getelementptr [13 x i8], [13 x i8]* @.str.7470, i64 0, i64 0
-  %r9 = getelementptr [4 x i8], [4 x i8]* @.str.7471, i64 0, i64 0
+  %r8 = getelementptr [13 x i8], [13 x i8]* @.str.7537, i64 0, i64 0
+  %r9 = getelementptr [4 x i8], [4 x i8]* @.str.7538, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r8, i8* %r9)
-  %r10 = getelementptr [15 x i8], [15 x i8]* @.str.7472, i64 0, i64 0
-  %r11 = getelementptr [4 x i8], [4 x i8]* @.str.7473, i64 0, i64 0
+  %r10 = getelementptr [15 x i8], [15 x i8]* @.str.7539, i64 0, i64 0
+  %r11 = getelementptr [4 x i8], [4 x i8]* @.str.7540, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r10, i8* %r11)
-  %r12 = getelementptr [15 x i8], [15 x i8]* @.str.7474, i64 0, i64 0
-  %r13 = getelementptr [4 x i8], [4 x i8]* @.str.7475, i64 0, i64 0
+  %r12 = getelementptr [15 x i8], [15 x i8]* @.str.7541, i64 0, i64 0
+  %r13 = getelementptr [4 x i8], [4 x i8]* @.str.7542, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r12, i8* %r13)
-  %r14 = getelementptr [13 x i8], [13 x i8]* @.str.7476, i64 0, i64 0
-  %r15 = getelementptr [4 x i8], [4 x i8]* @.str.7477, i64 0, i64 0
+  %r14 = getelementptr [13 x i8], [13 x i8]* @.str.7543, i64 0, i64 0
+  %r15 = getelementptr [4 x i8], [4 x i8]* @.str.7544, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r14, i8* %r15)
-  %r16 = getelementptr [14 x i8], [14 x i8]* @.str.7478, i64 0, i64 0
-  %r17 = getelementptr [4 x i8], [4 x i8]* @.str.7479, i64 0, i64 0
+  %r16 = getelementptr [14 x i8], [14 x i8]* @.str.7545, i64 0, i64 0
+  %r17 = getelementptr [4 x i8], [4 x i8]* @.str.7546, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r16, i8* %r17)
-  %r18 = getelementptr [14 x i8], [14 x i8]* @.str.7480, i64 0, i64 0
-  %r19 = getelementptr [4 x i8], [4 x i8]* @.str.7481, i64 0, i64 0
+  %r18 = getelementptr [14 x i8], [14 x i8]* @.str.7547, i64 0, i64 0
+  %r19 = getelementptr [4 x i8], [4 x i8]* @.str.7548, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r18, i8* %r19)
-  %r20 = getelementptr [13 x i8], [13 x i8]* @.str.7482, i64 0, i64 0
-  %r21 = getelementptr [4 x i8], [4 x i8]* @.str.7483, i64 0, i64 0
+  %r20 = getelementptr [13 x i8], [13 x i8]* @.str.7549, i64 0, i64 0
+  %r21 = getelementptr [4 x i8], [4 x i8]* @.str.7550, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r20, i8* %r21)
-  %r22 = getelementptr [15 x i8], [15 x i8]* @.str.7484, i64 0, i64 0
-  %r23 = getelementptr [4 x i8], [4 x i8]* @.str.7485, i64 0, i64 0
+  %r22 = getelementptr [15 x i8], [15 x i8]* @.str.7551, i64 0, i64 0
+  %r23 = getelementptr [4 x i8], [4 x i8]* @.str.7552, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r22, i8* %r23)
-  %r24 = getelementptr [15 x i8], [15 x i8]* @.str.7486, i64 0, i64 0
-  %r25 = getelementptr [4 x i8], [4 x i8]* @.str.7487, i64 0, i64 0
+  %r24 = getelementptr [15 x i8], [15 x i8]* @.str.7553, i64 0, i64 0
+  %r25 = getelementptr [4 x i8], [4 x i8]* @.str.7554, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r24, i8* %r25)
-  %r26 = getelementptr [27 x i8], [27 x i8]* @.str.7488, i64 0, i64 0
-  %r27 = getelementptr [22 x i8], [22 x i8]* @.str.7489, i64 0, i64 0
+  %r26 = getelementptr [27 x i8], [27 x i8]* @.str.7555, i64 0, i64 0
+  %r27 = getelementptr [22 x i8], [22 x i8]* @.str.7556, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r26, i8* %r27)
-  %r28 = getelementptr [28 x i8], [28 x i8]* @.str.7490, i64 0, i64 0
-  %r29 = getelementptr [22 x i8], [22 x i8]* @.str.7491, i64 0, i64 0
+  %r28 = getelementptr [28 x i8], [28 x i8]* @.str.7557, i64 0, i64 0
+  %r29 = getelementptr [22 x i8], [22 x i8]* @.str.7558, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r28, i8* %r29)
-  %r30 = getelementptr [28 x i8], [28 x i8]* @.str.7492, i64 0, i64 0
-  %r31 = getelementptr [22 x i8], [22 x i8]* @.str.7493, i64 0, i64 0
+  %r30 = getelementptr [28 x i8], [28 x i8]* @.str.7559, i64 0, i64 0
+  %r31 = getelementptr [22 x i8], [22 x i8]* @.str.7560, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r30, i8* %r31)
-  %r32 = getelementptr [29 x i8], [29 x i8]* @.str.7494, i64 0, i64 0
-  %r33 = getelementptr [22 x i8], [22 x i8]* @.str.7495, i64 0, i64 0
+  %r32 = getelementptr [29 x i8], [29 x i8]* @.str.7561, i64 0, i64 0
+  %r33 = getelementptr [22 x i8], [22 x i8]* @.str.7562, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r32, i8* %r33)
   %r34 = load i64, i64* @g_auto_drop_strings
   %r35 = icmp ne i64 0, %r34
   br i1 %r35, label %then_1, label %else_2
 then_1:
-  %r36 = getelementptr [24 x i8], [24 x i8]* @.str.7496, i64 0, i64 0
-  %r37 = getelementptr [4 x i8], [4 x i8]* @.str.7497, i64 0, i64 0
+  %r36 = getelementptr [24 x i8], [24 x i8]* @.str.7563, i64 0, i64 0
+  %r37 = getelementptr [4 x i8], [4 x i8]* @.str.7564, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r36, i8* %r37)
-  %r38 = getelementptr [25 x i8], [25 x i8]* @.str.7498, i64 0, i64 0
-  %r39 = getelementptr [4 x i8], [4 x i8]* @.str.7499, i64 0, i64 0
+  %r38 = getelementptr [25 x i8], [25 x i8]* @.str.7565, i64 0, i64 0
+  %r39 = getelementptr [4 x i8], [4 x i8]* @.str.7566, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r38, i8* %r39)
-  %r40 = getelementptr [25 x i8], [25 x i8]* @.str.7500, i64 0, i64 0
-  %r41 = getelementptr [4 x i8], [4 x i8]* @.str.7501, i64 0, i64 0
+  %r40 = getelementptr [25 x i8], [25 x i8]* @.str.7567, i64 0, i64 0
+  %r41 = getelementptr [4 x i8], [4 x i8]* @.str.7568, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r40, i8* %r41)
-  %r42 = getelementptr [24 x i8], [24 x i8]* @.str.7502, i64 0, i64 0
-  %r43 = getelementptr [4 x i8], [4 x i8]* @.str.7503, i64 0, i64 0
+  %r42 = getelementptr [24 x i8], [24 x i8]* @.str.7569, i64 0, i64 0
+  %r43 = getelementptr [4 x i8], [4 x i8]* @.str.7570, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r42, i8* %r43)
-  %r44 = getelementptr [26 x i8], [26 x i8]* @.str.7504, i64 0, i64 0
-  %r45 = getelementptr [4 x i8], [4 x i8]* @.str.7505, i64 0, i64 0
+  %r44 = getelementptr [26 x i8], [26 x i8]* @.str.7571, i64 0, i64 0
+  %r45 = getelementptr [4 x i8], [4 x i8]* @.str.7572, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r44, i8* %r45)
-  %r46 = getelementptr [26 x i8], [26 x i8]* @.str.7506, i64 0, i64 0
-  %r47 = getelementptr [4 x i8], [4 x i8]* @.str.7507, i64 0, i64 0
+  %r46 = getelementptr [26 x i8], [26 x i8]* @.str.7573, i64 0, i64 0
+  %r47 = getelementptr [4 x i8], [4 x i8]* @.str.7574, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r46, i8* %r47)
-  %r48 = getelementptr [26 x i8], [26 x i8]* @.str.7508, i64 0, i64 0
-  %r49 = getelementptr [4 x i8], [4 x i8]* @.str.7509, i64 0, i64 0
+  %r48 = getelementptr [26 x i8], [26 x i8]* @.str.7575, i64 0, i64 0
+  %r49 = getelementptr [4 x i8], [4 x i8]* @.str.7576, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r48, i8* %r49)
-  %r50 = getelementptr [26 x i8], [26 x i8]* @.str.7510, i64 0, i64 0
-  %r51 = getelementptr [4 x i8], [4 x i8]* @.str.7511, i64 0, i64 0
+  %r50 = getelementptr [26 x i8], [26 x i8]* @.str.7577, i64 0, i64 0
+  %r51 = getelementptr [4 x i8], [4 x i8]* @.str.7578, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r50, i8* %r51)
-  %r52 = getelementptr [24 x i8], [24 x i8]* @.str.7512, i64 0, i64 0
-  %r53 = getelementptr [4 x i8], [4 x i8]* @.str.7513, i64 0, i64 0
+  %r52 = getelementptr [24 x i8], [24 x i8]* @.str.7579, i64 0, i64 0
+  %r53 = getelementptr [4 x i8], [4 x i8]* @.str.7580, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r52, i8* %r53)
-  %r54 = getelementptr [25 x i8], [25 x i8]* @.str.7514, i64 0, i64 0
-  %r55 = getelementptr [4 x i8], [4 x i8]* @.str.7515, i64 0, i64 0
+  %r54 = getelementptr [25 x i8], [25 x i8]* @.str.7581, i64 0, i64 0
+  %r55 = getelementptr [4 x i8], [4 x i8]* @.str.7582, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r54, i8* %r55)
-  %r56 = getelementptr [30 x i8], [30 x i8]* @.str.7516, i64 0, i64 0
-  %r57 = getelementptr [4 x i8], [4 x i8]* @.str.7517, i64 0, i64 0
+  %r56 = getelementptr [30 x i8], [30 x i8]* @.str.7583, i64 0, i64 0
+  %r57 = getelementptr [4 x i8], [4 x i8]* @.str.7584, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r56, i8* %r57)
-  %r58 = getelementptr [24 x i8], [24 x i8]* @.str.7518, i64 0, i64 0
-  %r59 = getelementptr [4 x i8], [4 x i8]* @.str.7519, i64 0, i64 0
+  %r58 = getelementptr [24 x i8], [24 x i8]* @.str.7585, i64 0, i64 0
+  %r59 = getelementptr [4 x i8], [4 x i8]* @.str.7586, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r58, i8* %r59)
-  %r60 = getelementptr [29 x i8], [29 x i8]* @.str.7520, i64 0, i64 0
-  %r61 = getelementptr [4 x i8], [4 x i8]* @.str.7521, i64 0, i64 0
+  %r60 = getelementptr [29 x i8], [29 x i8]* @.str.7587, i64 0, i64 0
+  %r61 = getelementptr [4 x i8], [4 x i8]* @.str.7588, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r60, i8* %r61)
-  %r62 = getelementptr [29 x i8], [29 x i8]* @.str.7522, i64 0, i64 0
-  %r63 = getelementptr [4 x i8], [4 x i8]* @.str.7523, i64 0, i64 0
+  %r62 = getelementptr [29 x i8], [29 x i8]* @.str.7589, i64 0, i64 0
+  %r63 = getelementptr [4 x i8], [4 x i8]* @.str.7590, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r62, i8* %r63)
-  %r64 = getelementptr [21 x i8], [21 x i8]* @.str.7524, i64 0, i64 0
-  %r65 = getelementptr [4 x i8], [4 x i8]* @.str.7525, i64 0, i64 0
+  %r64 = getelementptr [21 x i8], [21 x i8]* @.str.7591, i64 0, i64 0
+  %r65 = getelementptr [4 x i8], [4 x i8]* @.str.7592, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r64, i8* %r65)
-  %r66 = getelementptr [26 x i8], [26 x i8]* @.str.7526, i64 0, i64 0
-  %r67 = getelementptr [4 x i8], [4 x i8]* @.str.7527, i64 0, i64 0
+  %r66 = getelementptr [26 x i8], [26 x i8]* @.str.7593, i64 0, i64 0
+  %r67 = getelementptr [4 x i8], [4 x i8]* @.str.7594, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r66, i8* %r67)
-  %r68 = getelementptr [26 x i8], [26 x i8]* @.str.7528, i64 0, i64 0
-  %r69 = getelementptr [4 x i8], [4 x i8]* @.str.7529, i64 0, i64 0
+  %r68 = getelementptr [26 x i8], [26 x i8]* @.str.7595, i64 0, i64 0
+  %r69 = getelementptr [4 x i8], [4 x i8]* @.str.7596, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r68, i8* %r69)
-  %r70 = getelementptr [25 x i8], [25 x i8]* @.str.7530, i64 0, i64 0
-  %r71 = getelementptr [4 x i8], [4 x i8]* @.str.7531, i64 0, i64 0
+  %r70 = getelementptr [25 x i8], [25 x i8]* @.str.7597, i64 0, i64 0
+  %r71 = getelementptr [4 x i8], [4 x i8]* @.str.7598, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r70, i8* %r71)
-  %r72 = getelementptr [25 x i8], [25 x i8]* @.str.7532, i64 0, i64 0
-  %r73 = getelementptr [4 x i8], [4 x i8]* @.str.7533, i64 0, i64 0
+  %r72 = getelementptr [25 x i8], [25 x i8]* @.str.7599, i64 0, i64 0
+  %r73 = getelementptr [4 x i8], [4 x i8]* @.str.7600, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r72, i8* %r73)
-  %r74 = getelementptr [24 x i8], [24 x i8]* @.str.7534, i64 0, i64 0
-  %r75 = getelementptr [4 x i8], [4 x i8]* @.str.7535, i64 0, i64 0
+  %r74 = getelementptr [24 x i8], [24 x i8]* @.str.7601, i64 0, i64 0
+  %r75 = getelementptr [4 x i8], [4 x i8]* @.str.7602, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r74, i8* %r75)
-  %r76 = getelementptr [21 x i8], [21 x i8]* @.str.7536, i64 0, i64 0
-  %r77 = getelementptr [4 x i8], [4 x i8]* @.str.7537, i64 0, i64 0
+  %r76 = getelementptr [21 x i8], [21 x i8]* @.str.7603, i64 0, i64 0
+  %r77 = getelementptr [4 x i8], [4 x i8]* @.str.7604, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r76, i8* %r77)
-  %r78 = getelementptr [22 x i8], [22 x i8]* @.str.7538, i64 0, i64 0
-  %r79 = getelementptr [4 x i8], [4 x i8]* @.str.7539, i64 0, i64 0
+  %r78 = getelementptr [22 x i8], [22 x i8]* @.str.7605, i64 0, i64 0
+  %r79 = getelementptr [4 x i8], [4 x i8]* @.str.7606, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r78, i8* %r79)
-  %r80 = getelementptr [26 x i8], [26 x i8]* @.str.7540, i64 0, i64 0
-  %r81 = getelementptr [4 x i8], [4 x i8]* @.str.7541, i64 0, i64 0
+  %r80 = getelementptr [26 x i8], [26 x i8]* @.str.7607, i64 0, i64 0
+  %r81 = getelementptr [4 x i8], [4 x i8]* @.str.7608, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r80, i8* %r81)
-  %r82 = getelementptr [31 x i8], [31 x i8]* @.str.7542, i64 0, i64 0
-  %r83 = getelementptr [4 x i8], [4 x i8]* @.str.7543, i64 0, i64 0
+  %r82 = getelementptr [31 x i8], [31 x i8]* @.str.7609, i64 0, i64 0
+  %r83 = getelementptr [4 x i8], [4 x i8]* @.str.7610, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r82, i8* %r83)
-  %r84 = getelementptr [21 x i8], [21 x i8]* @.str.7544, i64 0, i64 0
-  %r85 = getelementptr [4 x i8], [4 x i8]* @.str.7545, i64 0, i64 0
+  %r84 = getelementptr [21 x i8], [21 x i8]* @.str.7611, i64 0, i64 0
+  %r85 = getelementptr [4 x i8], [4 x i8]* @.str.7612, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r84, i8* %r85)
-  %r86 = getelementptr [22 x i8], [22 x i8]* @.str.7546, i64 0, i64 0
-  %r87 = getelementptr [4 x i8], [4 x i8]* @.str.7547, i64 0, i64 0
+  %r86 = getelementptr [22 x i8], [22 x i8]* @.str.7613, i64 0, i64 0
+  %r87 = getelementptr [4 x i8], [4 x i8]* @.str.7614, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r86, i8* %r87)
-  %r88 = getelementptr [27 x i8], [27 x i8]* @.str.7548, i64 0, i64 0
-  %r89 = getelementptr [4 x i8], [4 x i8]* @.str.7549, i64 0, i64 0
+  %r88 = getelementptr [27 x i8], [27 x i8]* @.str.7615, i64 0, i64 0
+  %r89 = getelementptr [4 x i8], [4 x i8]* @.str.7616, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r88, i8* %r89)
-  %r90 = getelementptr [26 x i8], [26 x i8]* @.str.7550, i64 0, i64 0
-  %r91 = getelementptr [4 x i8], [4 x i8]* @.str.7551, i64 0, i64 0
+  %r90 = getelementptr [26 x i8], [26 x i8]* @.str.7617, i64 0, i64 0
+  %r91 = getelementptr [4 x i8], [4 x i8]* @.str.7618, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r90, i8* %r91)
-  %r92 = getelementptr [26 x i8], [26 x i8]* @.str.7552, i64 0, i64 0
-  %r93 = getelementptr [4 x i8], [4 x i8]* @.str.7553, i64 0, i64 0
+  %r92 = getelementptr [26 x i8], [26 x i8]* @.str.7619, i64 0, i64 0
+  %r93 = getelementptr [4 x i8], [4 x i8]* @.str.7620, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r92, i8* %r93)
-  %r94 = getelementptr [29 x i8], [29 x i8]* @.str.7554, i64 0, i64 0
-  %r95 = getelementptr [4 x i8], [4 x i8]* @.str.7555, i64 0, i64 0
+  %r94 = getelementptr [29 x i8], [29 x i8]* @.str.7621, i64 0, i64 0
+  %r95 = getelementptr [4 x i8], [4 x i8]* @.str.7622, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r94, i8* %r95)
-  %r96 = getelementptr [28 x i8], [28 x i8]* @.str.7556, i64 0, i64 0
-  %r97 = getelementptr [4 x i8], [4 x i8]* @.str.7557, i64 0, i64 0
+  %r96 = getelementptr [28 x i8], [28 x i8]* @.str.7623, i64 0, i64 0
+  %r97 = getelementptr [4 x i8], [4 x i8]* @.str.7624, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r96, i8* %r97)
-  %r98 = getelementptr [26 x i8], [26 x i8]* @.str.7558, i64 0, i64 0
-  %r99 = getelementptr [4 x i8], [4 x i8]* @.str.7559, i64 0, i64 0
+  %r98 = getelementptr [26 x i8], [26 x i8]* @.str.7625, i64 0, i64 0
+  %r99 = getelementptr [4 x i8], [4 x i8]* @.str.7626, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r98, i8* %r99)
-  %r100 = getelementptr [28 x i8], [28 x i8]* @.str.7560, i64 0, i64 0
-  %r101 = getelementptr [4 x i8], [4 x i8]* @.str.7561, i64 0, i64 0
+  %r100 = getelementptr [28 x i8], [28 x i8]* @.str.7627, i64 0, i64 0
+  %r101 = getelementptr [4 x i8], [4 x i8]* @.str.7628, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r100, i8* %r101)
-  %r102 = getelementptr [27 x i8], [27 x i8]* @.str.7562, i64 0, i64 0
-  %r103 = getelementptr [4 x i8], [4 x i8]* @.str.7563, i64 0, i64 0
+  %r102 = getelementptr [27 x i8], [27 x i8]* @.str.7629, i64 0, i64 0
+  %r103 = getelementptr [4 x i8], [4 x i8]* @.str.7630, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r102, i8* %r103)
-  %r104 = getelementptr [26 x i8], [26 x i8]* @.str.7564, i64 0, i64 0
-  %r105 = getelementptr [4 x i8], [4 x i8]* @.str.7565, i64 0, i64 0
+  %r104 = getelementptr [26 x i8], [26 x i8]* @.str.7631, i64 0, i64 0
+  %r105 = getelementptr [4 x i8], [4 x i8]* @.str.7632, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r104, i8* %r105)
-  %r106 = getelementptr [20 x i8], [20 x i8]* @.str.7566, i64 0, i64 0
-  %r107 = getelementptr [4 x i8], [4 x i8]* @.str.7567, i64 0, i64 0
+  %r106 = getelementptr [20 x i8], [20 x i8]* @.str.7633, i64 0, i64 0
+  %r107 = getelementptr [4 x i8], [4 x i8]* @.str.7634, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r106, i8* %r107)
-  %r108 = getelementptr [23 x i8], [23 x i8]* @.str.7568, i64 0, i64 0
-  %r109 = getelementptr [4 x i8], [4 x i8]* @.str.7569, i64 0, i64 0
+  %r108 = getelementptr [23 x i8], [23 x i8]* @.str.7635, i64 0, i64 0
+  %r109 = getelementptr [4 x i8], [4 x i8]* @.str.7636, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r108, i8* %r109)
-  %r110 = getelementptr [21 x i8], [21 x i8]* @.str.7570, i64 0, i64 0
-  %r111 = getelementptr [4 x i8], [4 x i8]* @.str.7571, i64 0, i64 0
+  %r110 = getelementptr [21 x i8], [21 x i8]* @.str.7637, i64 0, i64 0
+  %r111 = getelementptr [4 x i8], [4 x i8]* @.str.7638, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r110, i8* %r111)
-  %r112 = getelementptr [20 x i8], [20 x i8]* @.str.7572, i64 0, i64 0
-  %r113 = getelementptr [4 x i8], [4 x i8]* @.str.7573, i64 0, i64 0
+  %r112 = getelementptr [20 x i8], [20 x i8]* @.str.7639, i64 0, i64 0
+  %r113 = getelementptr [4 x i8], [4 x i8]* @.str.7640, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r112, i8* %r113)
-  %r114 = getelementptr [27 x i8], [27 x i8]* @.str.7574, i64 0, i64 0
-  %r115 = getelementptr [4 x i8], [4 x i8]* @.str.7575, i64 0, i64 0
+  %r114 = getelementptr [27 x i8], [27 x i8]* @.str.7641, i64 0, i64 0
+  %r115 = getelementptr [4 x i8], [4 x i8]* @.str.7642, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r114, i8* %r115)
-  %r116 = getelementptr [20 x i8], [20 x i8]* @.str.7576, i64 0, i64 0
-  %r117 = getelementptr [4 x i8], [4 x i8]* @.str.7577, i64 0, i64 0
+  %r116 = getelementptr [20 x i8], [20 x i8]* @.str.7643, i64 0, i64 0
+  %r117 = getelementptr [4 x i8], [4 x i8]* @.str.7644, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r116, i8* %r117)
-  %r118 = getelementptr [21 x i8], [21 x i8]* @.str.7578, i64 0, i64 0
-  %r119 = getelementptr [4 x i8], [4 x i8]* @.str.7579, i64 0, i64 0
+  %r118 = getelementptr [21 x i8], [21 x i8]* @.str.7645, i64 0, i64 0
+  %r119 = getelementptr [4 x i8], [4 x i8]* @.str.7646, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r118, i8* %r119)
-  %r120 = getelementptr [23 x i8], [23 x i8]* @.str.7580, i64 0, i64 0
-  %r121 = getelementptr [4 x i8], [4 x i8]* @.str.7581, i64 0, i64 0
+  %r120 = getelementptr [23 x i8], [23 x i8]* @.str.7647, i64 0, i64 0
+  %r121 = getelementptr [4 x i8], [4 x i8]* @.str.7648, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r120, i8* %r121)
-  %r122 = getelementptr [28 x i8], [28 x i8]* @.str.7582, i64 0, i64 0
-  %r123 = getelementptr [4 x i8], [4 x i8]* @.str.7583, i64 0, i64 0
+  %r122 = getelementptr [28 x i8], [28 x i8]* @.str.7649, i64 0, i64 0
+  %r123 = getelementptr [4 x i8], [4 x i8]* @.str.7650, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r122, i8* %r123)
-  %r124 = getelementptr [23 x i8], [23 x i8]* @.str.7584, i64 0, i64 0
-  %r125 = getelementptr [4 x i8], [4 x i8]* @.str.7585, i64 0, i64 0
+  %r124 = getelementptr [23 x i8], [23 x i8]* @.str.7651, i64 0, i64 0
+  %r125 = getelementptr [4 x i8], [4 x i8]* @.str.7652, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r124, i8* %r125)
-  %r126 = getelementptr [25 x i8], [25 x i8]* @.str.7586, i64 0, i64 0
-  %r127 = getelementptr [4 x i8], [4 x i8]* @.str.7587, i64 0, i64 0
+  %r126 = getelementptr [25 x i8], [25 x i8]* @.str.7653, i64 0, i64 0
+  %r127 = getelementptr [4 x i8], [4 x i8]* @.str.7654, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r126, i8* %r127)
-  %r128 = getelementptr [24 x i8], [24 x i8]* @.str.7588, i64 0, i64 0
-  %r129 = getelementptr [4 x i8], [4 x i8]* @.str.7589, i64 0, i64 0
+  %r128 = getelementptr [24 x i8], [24 x i8]* @.str.7655, i64 0, i64 0
+  %r129 = getelementptr [4 x i8], [4 x i8]* @.str.7656, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r128, i8* %r129)
-  %r130 = getelementptr [22 x i8], [22 x i8]* @.str.7590, i64 0, i64 0
-  %r131 = getelementptr [4 x i8], [4 x i8]* @.str.7591, i64 0, i64 0
+  %r130 = getelementptr [22 x i8], [22 x i8]* @.str.7657, i64 0, i64 0
+  %r131 = getelementptr [4 x i8], [4 x i8]* @.str.7658, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r130, i8* %r131)
-  %r132 = getelementptr [19 x i8], [19 x i8]* @.str.7592, i64 0, i64 0
-  %r133 = getelementptr [4 x i8], [4 x i8]* @.str.7593, i64 0, i64 0
+  %r132 = getelementptr [19 x i8], [19 x i8]* @.str.7659, i64 0, i64 0
+  %r133 = getelementptr [4 x i8], [4 x i8]* @.str.7660, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r132, i8* %r133)
-  %r134 = getelementptr [25 x i8], [25 x i8]* @.str.7594, i64 0, i64 0
-  %r135 = getelementptr [4 x i8], [4 x i8]* @.str.7595, i64 0, i64 0
+  %r134 = getelementptr [25 x i8], [25 x i8]* @.str.7661, i64 0, i64 0
+  %r135 = getelementptr [4 x i8], [4 x i8]* @.str.7662, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r134, i8* %r135)
-  %r136 = getelementptr [20 x i8], [20 x i8]* @.str.7596, i64 0, i64 0
-  %r137 = getelementptr [4 x i8], [4 x i8]* @.str.7597, i64 0, i64 0
+  %r136 = getelementptr [20 x i8], [20 x i8]* @.str.7663, i64 0, i64 0
+  %r137 = getelementptr [4 x i8], [4 x i8]* @.str.7664, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r136, i8* %r137)
-  %r138 = getelementptr [22 x i8], [22 x i8]* @.str.7598, i64 0, i64 0
-  %r139 = getelementptr [4 x i8], [4 x i8]* @.str.7599, i64 0, i64 0
+  %r138 = getelementptr [22 x i8], [22 x i8]* @.str.7665, i64 0, i64 0
+  %r139 = getelementptr [4 x i8], [4 x i8]* @.str.7666, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r138, i8* %r139)
-  %r140 = getelementptr [26 x i8], [26 x i8]* @.str.7600, i64 0, i64 0
-  %r141 = getelementptr [4 x i8], [4 x i8]* @.str.7601, i64 0, i64 0
+  %r140 = getelementptr [26 x i8], [26 x i8]* @.str.7667, i64 0, i64 0
+  %r141 = getelementptr [4 x i8], [4 x i8]* @.str.7668, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r140, i8* %r141)
-  %r142 = getelementptr [23 x i8], [23 x i8]* @.str.7602, i64 0, i64 0
-  %r143 = getelementptr [4 x i8], [4 x i8]* @.str.7603, i64 0, i64 0
+  %r142 = getelementptr [23 x i8], [23 x i8]* @.str.7669, i64 0, i64 0
+  %r143 = getelementptr [4 x i8], [4 x i8]* @.str.7670, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r142, i8* %r143)
-  %r144 = getelementptr [29 x i8], [29 x i8]* @.str.7604, i64 0, i64 0
-  %r145 = getelementptr [4 x i8], [4 x i8]* @.str.7605, i64 0, i64 0
+  %r144 = getelementptr [29 x i8], [29 x i8]* @.str.7671, i64 0, i64 0
+  %r145 = getelementptr [4 x i8], [4 x i8]* @.str.7672, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r144, i8* %r145)
-  %r146 = getelementptr [30 x i8], [30 x i8]* @.str.7606, i64 0, i64 0
-  %r147 = getelementptr [4 x i8], [4 x i8]* @.str.7607, i64 0, i64 0
+  %r146 = getelementptr [30 x i8], [30 x i8]* @.str.7673, i64 0, i64 0
+  %r147 = getelementptr [4 x i8], [4 x i8]* @.str.7674, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r146, i8* %r147)
-  %r148 = getelementptr [20 x i8], [20 x i8]* @.str.7608, i64 0, i64 0
-  %r149 = getelementptr [4 x i8], [4 x i8]* @.str.7609, i64 0, i64 0
+  %r148 = getelementptr [20 x i8], [20 x i8]* @.str.7675, i64 0, i64 0
+  %r149 = getelementptr [4 x i8], [4 x i8]* @.str.7676, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r148, i8* %r149)
-  %r150 = getelementptr [38 x i8], [38 x i8]* @.str.7610, i64 0, i64 0
-  %r151 = getelementptr [4 x i8], [4 x i8]* @.str.7611, i64 0, i64 0
+  %r150 = getelementptr [38 x i8], [38 x i8]* @.str.7677, i64 0, i64 0
+  %r151 = getelementptr [4 x i8], [4 x i8]* @.str.7678, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r150, i8* %r151)
-  %r152 = getelementptr [37 x i8], [37 x i8]* @.str.7612, i64 0, i64 0
-  %r153 = getelementptr [4 x i8], [4 x i8]* @.str.7613, i64 0, i64 0
+  %r152 = getelementptr [37 x i8], [37 x i8]* @.str.7679, i64 0, i64 0
+  %r153 = getelementptr [4 x i8], [4 x i8]* @.str.7680, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r152, i8* %r153)
-  %r154 = getelementptr [22 x i8], [22 x i8]* @.str.7614, i64 0, i64 0
-  %r155 = getelementptr [4 x i8], [4 x i8]* @.str.7615, i64 0, i64 0
+  %r154 = getelementptr [22 x i8], [22 x i8]* @.str.7681, i64 0, i64 0
+  %r155 = getelementptr [4 x i8], [4 x i8]* @.str.7682, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r154, i8* %r155)
-  %r156 = getelementptr [29 x i8], [29 x i8]* @.str.7616, i64 0, i64 0
-  %r157 = getelementptr [4 x i8], [4 x i8]* @.str.7617, i64 0, i64 0
+  %r156 = getelementptr [29 x i8], [29 x i8]* @.str.7683, i64 0, i64 0
+  %r157 = getelementptr [4 x i8], [4 x i8]* @.str.7684, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r156, i8* %r157)
-  %r158 = getelementptr [32 x i8], [32 x i8]* @.str.7618, i64 0, i64 0
-  %r159 = getelementptr [4 x i8], [4 x i8]* @.str.7619, i64 0, i64 0
+  %r158 = getelementptr [32 x i8], [32 x i8]* @.str.7685, i64 0, i64 0
+  %r159 = getelementptr [4 x i8], [4 x i8]* @.str.7686, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r158, i8* %r159)
-  %r160 = getelementptr [28 x i8], [28 x i8]* @.str.7620, i64 0, i64 0
-  %r161 = getelementptr [4 x i8], [4 x i8]* @.str.7621, i64 0, i64 0
+  %r160 = getelementptr [28 x i8], [28 x i8]* @.str.7687, i64 0, i64 0
+  %r161 = getelementptr [4 x i8], [4 x i8]* @.str.7688, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r160, i8* %r161)
-  %r162 = getelementptr [20 x i8], [20 x i8]* @.str.7622, i64 0, i64 0
-  %r163 = getelementptr [4 x i8], [4 x i8]* @.str.7623, i64 0, i64 0
+  %r162 = getelementptr [20 x i8], [20 x i8]* @.str.7689, i64 0, i64 0
+  %r163 = getelementptr [4 x i8], [4 x i8]* @.str.7690, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r162, i8* %r163)
-  %r164 = getelementptr [25 x i8], [25 x i8]* @.str.7624, i64 0, i64 0
-  %r165 = getelementptr [4 x i8], [4 x i8]* @.str.7625, i64 0, i64 0
+  %r164 = getelementptr [25 x i8], [25 x i8]* @.str.7691, i64 0, i64 0
+  %r165 = getelementptr [4 x i8], [4 x i8]* @.str.7692, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r164, i8* %r165)
-  %r166 = getelementptr [27 x i8], [27 x i8]* @.str.7626, i64 0, i64 0
-  %r167 = getelementptr [4 x i8], [4 x i8]* @.str.7627, i64 0, i64 0
+  %r166 = getelementptr [27 x i8], [27 x i8]* @.str.7693, i64 0, i64 0
+  %r167 = getelementptr [4 x i8], [4 x i8]* @.str.7694, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r166, i8* %r167)
-  %r168 = getelementptr [29 x i8], [29 x i8]* @.str.7628, i64 0, i64 0
-  %r169 = getelementptr [4 x i8], [4 x i8]* @.str.7629, i64 0, i64 0
+  %r168 = getelementptr [29 x i8], [29 x i8]* @.str.7695, i64 0, i64 0
+  %r169 = getelementptr [4 x i8], [4 x i8]* @.str.7696, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r168, i8* %r169)
-  %r170 = getelementptr [22 x i8], [22 x i8]* @.str.7630, i64 0, i64 0
-  %r171 = getelementptr [4 x i8], [4 x i8]* @.str.7631, i64 0, i64 0
+  %r170 = getelementptr [22 x i8], [22 x i8]* @.str.7697, i64 0, i64 0
+  %r171 = getelementptr [4 x i8], [4 x i8]* @.str.7698, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r170, i8* %r171)
-  %r172 = getelementptr [27 x i8], [27 x i8]* @.str.7632, i64 0, i64 0
-  %r173 = getelementptr [4 x i8], [4 x i8]* @.str.7633, i64 0, i64 0
+  %r172 = getelementptr [27 x i8], [27 x i8]* @.str.7699, i64 0, i64 0
+  %r173 = getelementptr [4 x i8], [4 x i8]* @.str.7700, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r172, i8* %r173)
-  %r174 = getelementptr [20 x i8], [20 x i8]* @.str.7634, i64 0, i64 0
-  %r175 = getelementptr [4 x i8], [4 x i8]* @.str.7635, i64 0, i64 0
+  %r174 = getelementptr [20 x i8], [20 x i8]* @.str.7701, i64 0, i64 0
+  %r175 = getelementptr [4 x i8], [4 x i8]* @.str.7702, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r174, i8* %r175)
-  %r176 = getelementptr [23 x i8], [23 x i8]* @.str.7636, i64 0, i64 0
-  %r177 = getelementptr [4 x i8], [4 x i8]* @.str.7637, i64 0, i64 0
+  %r176 = getelementptr [23 x i8], [23 x i8]* @.str.7703, i64 0, i64 0
+  %r177 = getelementptr [4 x i8], [4 x i8]* @.str.7704, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r176, i8* %r177)
-  %r178 = getelementptr [20 x i8], [20 x i8]* @.str.7638, i64 0, i64 0
-  %r179 = getelementptr [4 x i8], [4 x i8]* @.str.7639, i64 0, i64 0
+  %r178 = getelementptr [20 x i8], [20 x i8]* @.str.7705, i64 0, i64 0
+  %r179 = getelementptr [4 x i8], [4 x i8]* @.str.7706, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r178, i8* %r179)
-  %r180 = getelementptr [21 x i8], [21 x i8]* @.str.7640, i64 0, i64 0
-  %r181 = getelementptr [4 x i8], [4 x i8]* @.str.7641, i64 0, i64 0
+  %r180 = getelementptr [21 x i8], [21 x i8]* @.str.7707, i64 0, i64 0
+  %r181 = getelementptr [4 x i8], [4 x i8]* @.str.7708, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r180, i8* %r181)
-  %r182 = getelementptr [24 x i8], [24 x i8]* @.str.7642, i64 0, i64 0
-  %r183 = getelementptr [4 x i8], [4 x i8]* @.str.7643, i64 0, i64 0
+  %r182 = getelementptr [24 x i8], [24 x i8]* @.str.7709, i64 0, i64 0
+  %r183 = getelementptr [4 x i8], [4 x i8]* @.str.7710, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r182, i8* %r183)
-  %r184 = getelementptr [27 x i8], [27 x i8]* @.str.7644, i64 0, i64 0
-  %r185 = getelementptr [4 x i8], [4 x i8]* @.str.7645, i64 0, i64 0
+  %r184 = getelementptr [27 x i8], [27 x i8]* @.str.7711, i64 0, i64 0
+  %r185 = getelementptr [4 x i8], [4 x i8]* @.str.7712, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r184, i8* %r185)
-  %r186 = getelementptr [28 x i8], [28 x i8]* @.str.7646, i64 0, i64 0
-  %r187 = getelementptr [4 x i8], [4 x i8]* @.str.7647, i64 0, i64 0
+  %r186 = getelementptr [28 x i8], [28 x i8]* @.str.7713, i64 0, i64 0
+  %r187 = getelementptr [4 x i8], [4 x i8]* @.str.7714, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r186, i8* %r187)
-  %r188 = getelementptr [20 x i8], [20 x i8]* @.str.7648, i64 0, i64 0
-  %r189 = getelementptr [4 x i8], [4 x i8]* @.str.7649, i64 0, i64 0
+  %r188 = getelementptr [20 x i8], [20 x i8]* @.str.7715, i64 0, i64 0
+  %r189 = getelementptr [4 x i8], [4 x i8]* @.str.7716, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r188, i8* %r189)
-  %r190 = getelementptr [22 x i8], [22 x i8]* @.str.7650, i64 0, i64 0
-  %r191 = getelementptr [4 x i8], [4 x i8]* @.str.7651, i64 0, i64 0
+  %r190 = getelementptr [22 x i8], [22 x i8]* @.str.7717, i64 0, i64 0
+  %r191 = getelementptr [4 x i8], [4 x i8]* @.str.7718, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r190, i8* %r191)
-  %r192 = getelementptr [30 x i8], [30 x i8]* @.str.7652, i64 0, i64 0
-  %r193 = getelementptr [4 x i8], [4 x i8]* @.str.7653, i64 0, i64 0
+  %r192 = getelementptr [30 x i8], [30 x i8]* @.str.7719, i64 0, i64 0
+  %r193 = getelementptr [4 x i8], [4 x i8]* @.str.7720, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r192, i8* %r193)
-  %r194 = getelementptr [31 x i8], [31 x i8]* @.str.7654, i64 0, i64 0
-  %r195 = getelementptr [4 x i8], [4 x i8]* @.str.7655, i64 0, i64 0
+  %r194 = getelementptr [31 x i8], [31 x i8]* @.str.7721, i64 0, i64 0
+  %r195 = getelementptr [4 x i8], [4 x i8]* @.str.7722, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r194, i8* %r195)
-  %r196 = getelementptr [27 x i8], [27 x i8]* @.str.7656, i64 0, i64 0
-  %r197 = getelementptr [4 x i8], [4 x i8]* @.str.7657, i64 0, i64 0
+  %r196 = getelementptr [27 x i8], [27 x i8]* @.str.7723, i64 0, i64 0
+  %r197 = getelementptr [4 x i8], [4 x i8]* @.str.7724, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r196, i8* %r197)
-  %r198 = getelementptr [24 x i8], [24 x i8]* @.str.7658, i64 0, i64 0
-  %r199 = getelementptr [4 x i8], [4 x i8]* @.str.7659, i64 0, i64 0
+  %r198 = getelementptr [24 x i8], [24 x i8]* @.str.7725, i64 0, i64 0
+  %r199 = getelementptr [4 x i8], [4 x i8]* @.str.7726, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r198, i8* %r199)
-  %r200 = getelementptr [24 x i8], [24 x i8]* @.str.7660, i64 0, i64 0
-  %r201 = getelementptr [4 x i8], [4 x i8]* @.str.7661, i64 0, i64 0
+  %r200 = getelementptr [24 x i8], [24 x i8]* @.str.7727, i64 0, i64 0
+  %r201 = getelementptr [4 x i8], [4 x i8]* @.str.7728, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r200, i8* %r201)
-  %r202 = getelementptr [24 x i8], [24 x i8]* @.str.7662, i64 0, i64 0
-  %r203 = getelementptr [4 x i8], [4 x i8]* @.str.7663, i64 0, i64 0
+  %r202 = getelementptr [24 x i8], [24 x i8]* @.str.7729, i64 0, i64 0
+  %r203 = getelementptr [4 x i8], [4 x i8]* @.str.7730, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r202, i8* %r203)
-  %r204 = getelementptr [24 x i8], [24 x i8]* @.str.7664, i64 0, i64 0
-  %r205 = getelementptr [4 x i8], [4 x i8]* @.str.7665, i64 0, i64 0
+  %r204 = getelementptr [24 x i8], [24 x i8]* @.str.7731, i64 0, i64 0
+  %r205 = getelementptr [4 x i8], [4 x i8]* @.str.7732, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r204, i8* %r205)
-  %r206 = getelementptr [30 x i8], [30 x i8]* @.str.7666, i64 0, i64 0
-  %r207 = getelementptr [4 x i8], [4 x i8]* @.str.7667, i64 0, i64 0
+  %r206 = getelementptr [30 x i8], [30 x i8]* @.str.7733, i64 0, i64 0
+  %r207 = getelementptr [4 x i8], [4 x i8]* @.str.7734, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r206, i8* %r207)
-  %r208 = getelementptr [21 x i8], [21 x i8]* @.str.7668, i64 0, i64 0
-  %r209 = getelementptr [4 x i8], [4 x i8]* @.str.7669, i64 0, i64 0
+  %r208 = getelementptr [21 x i8], [21 x i8]* @.str.7735, i64 0, i64 0
+  %r209 = getelementptr [4 x i8], [4 x i8]* @.str.7736, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r208, i8* %r209)
-  %r210 = getelementptr [35 x i8], [35 x i8]* @.str.7670, i64 0, i64 0
-  %r211 = getelementptr [4 x i8], [4 x i8]* @.str.7671, i64 0, i64 0
+  %r210 = getelementptr [35 x i8], [35 x i8]* @.str.7737, i64 0, i64 0
+  %r211 = getelementptr [4 x i8], [4 x i8]* @.str.7738, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r210, i8* %r211)
-  %r212 = getelementptr [21 x i8], [21 x i8]* @.str.7672, i64 0, i64 0
-  %r213 = getelementptr [4 x i8], [4 x i8]* @.str.7673, i64 0, i64 0
+  %r212 = getelementptr [21 x i8], [21 x i8]* @.str.7739, i64 0, i64 0
+  %r213 = getelementptr [4 x i8], [4 x i8]* @.str.7740, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r212, i8* %r213)
-  %r214 = getelementptr [27 x i8], [27 x i8]* @.str.7674, i64 0, i64 0
-  %r215 = getelementptr [4 x i8], [4 x i8]* @.str.7675, i64 0, i64 0
+  %r214 = getelementptr [27 x i8], [27 x i8]* @.str.7741, i64 0, i64 0
+  %r215 = getelementptr [4 x i8], [4 x i8]* @.str.7742, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r214, i8* %r215)
-  %r216 = getelementptr [23 x i8], [23 x i8]* @.str.7676, i64 0, i64 0
-  %r217 = getelementptr [4 x i8], [4 x i8]* @.str.7677, i64 0, i64 0
+  %r216 = getelementptr [23 x i8], [23 x i8]* @.str.7743, i64 0, i64 0
+  %r217 = getelementptr [4 x i8], [4 x i8]* @.str.7744, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r216, i8* %r217)
-  %r218 = getelementptr [25 x i8], [25 x i8]* @.str.7678, i64 0, i64 0
-  %r219 = getelementptr [4 x i8], [4 x i8]* @.str.7679, i64 0, i64 0
+  %r218 = getelementptr [25 x i8], [25 x i8]* @.str.7745, i64 0, i64 0
+  %r219 = getelementptr [4 x i8], [4 x i8]* @.str.7746, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r218, i8* %r219)
-  %r220 = getelementptr [28 x i8], [28 x i8]* @.str.7680, i64 0, i64 0
-  %r221 = getelementptr [4 x i8], [4 x i8]* @.str.7681, i64 0, i64 0
+  %r220 = getelementptr [28 x i8], [28 x i8]* @.str.7747, i64 0, i64 0
+  %r221 = getelementptr [4 x i8], [4 x i8]* @.str.7748, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r220, i8* %r221)
-  %r222 = getelementptr [26 x i8], [26 x i8]* @.str.7682, i64 0, i64 0
-  %r223 = getelementptr [4 x i8], [4 x i8]* @.str.7683, i64 0, i64 0
+  %r222 = getelementptr [26 x i8], [26 x i8]* @.str.7749, i64 0, i64 0
+  %r223 = getelementptr [4 x i8], [4 x i8]* @.str.7750, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r222, i8* %r223)
-  %r224 = getelementptr [24 x i8], [24 x i8]* @.str.7684, i64 0, i64 0
-  %r225 = getelementptr [4 x i8], [4 x i8]* @.str.7685, i64 0, i64 0
+  %r224 = getelementptr [24 x i8], [24 x i8]* @.str.7751, i64 0, i64 0
+  %r225 = getelementptr [4 x i8], [4 x i8]* @.str.7752, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r224, i8* %r225)
-  %r226 = getelementptr [28 x i8], [28 x i8]* @.str.7686, i64 0, i64 0
-  %r227 = getelementptr [4 x i8], [4 x i8]* @.str.7687, i64 0, i64 0
+  %r226 = getelementptr [28 x i8], [28 x i8]* @.str.7753, i64 0, i64 0
+  %r227 = getelementptr [4 x i8], [4 x i8]* @.str.7754, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r226, i8* %r227)
-  %r228 = getelementptr [30 x i8], [30 x i8]* @.str.7688, i64 0, i64 0
-  %r229 = getelementptr [4 x i8], [4 x i8]* @.str.7689, i64 0, i64 0
+  %r228 = getelementptr [30 x i8], [30 x i8]* @.str.7755, i64 0, i64 0
+  %r229 = getelementptr [4 x i8], [4 x i8]* @.str.7756, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r228, i8* %r229)
-  %r230 = getelementptr [26 x i8], [26 x i8]* @.str.7690, i64 0, i64 0
-  %r231 = getelementptr [4 x i8], [4 x i8]* @.str.7691, i64 0, i64 0
+  %r230 = getelementptr [26 x i8], [26 x i8]* @.str.7757, i64 0, i64 0
+  %r231 = getelementptr [4 x i8], [4 x i8]* @.str.7758, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r230, i8* %r231)
-  %r232 = getelementptr [30 x i8], [30 x i8]* @.str.7692, i64 0, i64 0
-  %r233 = getelementptr [4 x i8], [4 x i8]* @.str.7693, i64 0, i64 0
+  %r232 = getelementptr [30 x i8], [30 x i8]* @.str.7759, i64 0, i64 0
+  %r233 = getelementptr [4 x i8], [4 x i8]* @.str.7760, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r232, i8* %r233)
-  %r234 = getelementptr [27 x i8], [27 x i8]* @.str.7694, i64 0, i64 0
-  %r235 = getelementptr [4 x i8], [4 x i8]* @.str.7695, i64 0, i64 0
+  %r234 = getelementptr [27 x i8], [27 x i8]* @.str.7761, i64 0, i64 0
+  %r235 = getelementptr [4 x i8], [4 x i8]* @.str.7762, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r234, i8* %r235)
-  %r236 = getelementptr [27 x i8], [27 x i8]* @.str.7696, i64 0, i64 0
-  %r237 = getelementptr [4 x i8], [4 x i8]* @.str.7697, i64 0, i64 0
+  %r236 = getelementptr [27 x i8], [27 x i8]* @.str.7763, i64 0, i64 0
+  %r237 = getelementptr [4 x i8], [4 x i8]* @.str.7764, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r236, i8* %r237)
-  %r238 = getelementptr [33 x i8], [33 x i8]* @.str.7698, i64 0, i64 0
-  %r239 = getelementptr [4 x i8], [4 x i8]* @.str.7699, i64 0, i64 0
+  %r238 = getelementptr [33 x i8], [33 x i8]* @.str.7765, i64 0, i64 0
+  %r239 = getelementptr [4 x i8], [4 x i8]* @.str.7766, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r238, i8* %r239)
-  %r240 = getelementptr [27 x i8], [27 x i8]* @.str.7700, i64 0, i64 0
-  %r241 = getelementptr [4 x i8], [4 x i8]* @.str.7701, i64 0, i64 0
+  %r240 = getelementptr [27 x i8], [27 x i8]* @.str.7767, i64 0, i64 0
+  %r241 = getelementptr [4 x i8], [4 x i8]* @.str.7768, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r240, i8* %r241)
-  %r242 = getelementptr [41 x i8], [41 x i8]* @.str.7702, i64 0, i64 0
-  %r243 = getelementptr [4 x i8], [4 x i8]* @.str.7703, i64 0, i64 0
+  %r242 = getelementptr [41 x i8], [41 x i8]* @.str.7769, i64 0, i64 0
+  %r243 = getelementptr [4 x i8], [4 x i8]* @.str.7770, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r242, i8* %r243)
-  %r244 = getelementptr [30 x i8], [30 x i8]* @.str.7704, i64 0, i64 0
-  %r245 = getelementptr [4 x i8], [4 x i8]* @.str.7705, i64 0, i64 0
+  %r244 = getelementptr [30 x i8], [30 x i8]* @.str.7771, i64 0, i64 0
+  %r245 = getelementptr [4 x i8], [4 x i8]* @.str.7772, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r244, i8* %r245)
-  %r246 = getelementptr [32 x i8], [32 x i8]* @.str.7706, i64 0, i64 0
-  %r247 = getelementptr [4 x i8], [4 x i8]* @.str.7707, i64 0, i64 0
+  %r246 = getelementptr [32 x i8], [32 x i8]* @.str.7773, i64 0, i64 0
+  %r247 = getelementptr [4 x i8], [4 x i8]* @.str.7774, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r246, i8* %r247)
-  %r248 = getelementptr [31 x i8], [31 x i8]* @.str.7708, i64 0, i64 0
-  %r249 = getelementptr [4 x i8], [4 x i8]* @.str.7709, i64 0, i64 0
+  %r248 = getelementptr [31 x i8], [31 x i8]* @.str.7775, i64 0, i64 0
+  %r249 = getelementptr [4 x i8], [4 x i8]* @.str.7776, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r248, i8* %r249)
-  %r250 = getelementptr [31 x i8], [31 x i8]* @.str.7710, i64 0, i64 0
-  %r251 = getelementptr [4 x i8], [4 x i8]* @.str.7711, i64 0, i64 0
+  %r250 = getelementptr [31 x i8], [31 x i8]* @.str.7777, i64 0, i64 0
+  %r251 = getelementptr [4 x i8], [4 x i8]* @.str.7778, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r250, i8* %r251)
-  %r252 = getelementptr [35 x i8], [35 x i8]* @.str.7712, i64 0, i64 0
-  %r253 = getelementptr [4 x i8], [4 x i8]* @.str.7713, i64 0, i64 0
+  %r252 = getelementptr [35 x i8], [35 x i8]* @.str.7779, i64 0, i64 0
+  %r253 = getelementptr [4 x i8], [4 x i8]* @.str.7780, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r252, i8* %r253)
   br label %end_3
 else_2:
   br label %end_3
 end_3:
-  %r254 = getelementptr [7 x i8], [7 x i8]* @.str.7714, i64 0, i64 0
-  %r255 = getelementptr [4 x i8], [4 x i8]* @.str.7715, i64 0, i64 0
+  %r254 = getelementptr [7 x i8], [7 x i8]* @.str.7781, i64 0, i64 0
+  %r255 = getelementptr [4 x i8], [4 x i8]* @.str.7782, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r254, i8* %r255)
-  %r256 = getelementptr [12 x i8], [12 x i8]* @.str.7716, i64 0, i64 0
-  %r257 = getelementptr [4 x i8], [4 x i8]* @.str.7717, i64 0, i64 0
+  %r256 = getelementptr [12 x i8], [12 x i8]* @.str.7783, i64 0, i64 0
+  %r257 = getelementptr [4 x i8], [4 x i8]* @.str.7784, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r256, i8* %r257)
-  %r258 = getelementptr [11 x i8], [11 x i8]* @.str.7718, i64 0, i64 0
-  %r259 = getelementptr [4 x i8], [4 x i8]* @.str.7719, i64 0, i64 0
+  %r258 = getelementptr [11 x i8], [11 x i8]* @.str.7785, i64 0, i64 0
+  %r259 = getelementptr [4 x i8], [4 x i8]* @.str.7786, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r258, i8* %r259)
-  %r260 = getelementptr [12 x i8], [12 x i8]* @.str.7720, i64 0, i64 0
-  %r261 = getelementptr [4 x i8], [4 x i8]* @.str.7721, i64 0, i64 0
+  %r260 = getelementptr [12 x i8], [12 x i8]* @.str.7787, i64 0, i64 0
+  %r261 = getelementptr [4 x i8], [4 x i8]* @.str.7788, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r260, i8* %r261)
-  %r262 = getelementptr [13 x i8], [13 x i8]* @.str.7722, i64 0, i64 0
-  %r263 = getelementptr [4 x i8], [4 x i8]* @.str.7723, i64 0, i64 0
+  %r262 = getelementptr [13 x i8], [13 x i8]* @.str.7789, i64 0, i64 0
+  %r263 = getelementptr [4 x i8], [4 x i8]* @.str.7790, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r262, i8* %r263)
-  %r264 = getelementptr [7 x i8], [7 x i8]* @.str.7724, i64 0, i64 0
-  %r265 = getelementptr [4 x i8], [4 x i8]* @.str.7725, i64 0, i64 0
+  %r264 = getelementptr [7 x i8], [7 x i8]* @.str.7791, i64 0, i64 0
+  %r265 = getelementptr [4 x i8], [4 x i8]* @.str.7792, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r264, i8* %r265)
-  %r266 = getelementptr [7 x i8], [7 x i8]* @.str.7726, i64 0, i64 0
-  %r267 = getelementptr [4 x i8], [4 x i8]* @.str.7727, i64 0, i64 0
+  %r266 = getelementptr [7 x i8], [7 x i8]* @.str.7793, i64 0, i64 0
+  %r267 = getelementptr [4 x i8], [4 x i8]* @.str.7794, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r266, i8* %r267)
-  %r268 = getelementptr [8 x i8], [8 x i8]* @.str.7728, i64 0, i64 0
-  %r269 = getelementptr [4 x i8], [4 x i8]* @.str.7729, i64 0, i64 0
+  %r268 = getelementptr [8 x i8], [8 x i8]* @.str.7795, i64 0, i64 0
+  %r269 = getelementptr [4 x i8], [4 x i8]* @.str.7796, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r268, i8* %r269)
-  %r270 = getelementptr [7 x i8], [7 x i8]* @.str.7730, i64 0, i64 0
-  %r271 = getelementptr [4 x i8], [4 x i8]* @.str.7731, i64 0, i64 0
+  %r270 = getelementptr [7 x i8], [7 x i8]* @.str.7797, i64 0, i64 0
+  %r271 = getelementptr [4 x i8], [4 x i8]* @.str.7798, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r270, i8* %r271)
-  %r272 = getelementptr [7 x i8], [7 x i8]* @.str.7732, i64 0, i64 0
-  %r273 = getelementptr [4 x i8], [4 x i8]* @.str.7733, i64 0, i64 0
+  %r272 = getelementptr [7 x i8], [7 x i8]* @.str.7799, i64 0, i64 0
+  %r273 = getelementptr [4 x i8], [4 x i8]* @.str.7800, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r272, i8* %r273)
-  %r274 = getelementptr [7 x i8], [7 x i8]* @.str.7734, i64 0, i64 0
-  %r275 = getelementptr [4 x i8], [4 x i8]* @.str.7735, i64 0, i64 0
+  %r274 = getelementptr [7 x i8], [7 x i8]* @.str.7801, i64 0, i64 0
+  %r275 = getelementptr [4 x i8], [4 x i8]* @.str.7802, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r274, i8* %r275)
-  %r276 = getelementptr [6 x i8], [6 x i8]* @.str.7736, i64 0, i64 0
-  %r277 = getelementptr [4 x i8], [4 x i8]* @.str.7737, i64 0, i64 0
+  %r276 = getelementptr [6 x i8], [6 x i8]* @.str.7803, i64 0, i64 0
+  %r277 = getelementptr [4 x i8], [4 x i8]* @.str.7804, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r276, i8* %r277)
-  %r278 = getelementptr [5 x i8], [5 x i8]* @.str.7738, i64 0, i64 0
-  %r279 = getelementptr [7 x i8], [7 x i8]* @.str.7739, i64 0, i64 0
+  %r278 = getelementptr [5 x i8], [5 x i8]* @.str.7805, i64 0, i64 0
+  %r279 = getelementptr [7 x i8], [7 x i8]* @.str.7806, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r278, i8* %r279)
-  %r280 = getelementptr [7 x i8], [7 x i8]* @.str.7740, i64 0, i64 0
-  %r281 = getelementptr [7 x i8], [7 x i8]* @.str.7741, i64 0, i64 0
+  %r280 = getelementptr [7 x i8], [7 x i8]* @.str.7807, i64 0, i64 0
+  %r281 = getelementptr [7 x i8], [7 x i8]* @.str.7808, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r280, i8* %r281)
-  %r282 = getelementptr [7 x i8], [7 x i8]* @.str.7742, i64 0, i64 0
-  %r283 = getelementptr [4 x i8], [4 x i8]* @.str.7743, i64 0, i64 0
+  %r282 = getelementptr [7 x i8], [7 x i8]* @.str.7809, i64 0, i64 0
+  %r283 = getelementptr [4 x i8], [4 x i8]* @.str.7810, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r282, i8* %r283)
-  %r284 = getelementptr [7 x i8], [7 x i8]* @.str.7744, i64 0, i64 0
-  %r285 = getelementptr [4 x i8], [4 x i8]* @.str.7745, i64 0, i64 0
+  %r284 = getelementptr [7 x i8], [7 x i8]* @.str.7811, i64 0, i64 0
+  %r285 = getelementptr [4 x i8], [4 x i8]* @.str.7812, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r284, i8* %r285)
-  %r286 = getelementptr [12 x i8], [12 x i8]* @.str.7746, i64 0, i64 0
-  %r287 = getelementptr [4 x i8], [4 x i8]* @.str.7747, i64 0, i64 0
+  %r286 = getelementptr [12 x i8], [12 x i8]* @.str.7813, i64 0, i64 0
+  %r287 = getelementptr [4 x i8], [4 x i8]* @.str.7814, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r286, i8* %r287)
-  %r288 = getelementptr [6 x i8], [6 x i8]* @.str.7748, i64 0, i64 0
-  %r289 = getelementptr [4 x i8], [4 x i8]* @.str.7749, i64 0, i64 0
+  %r288 = getelementptr [6 x i8], [6 x i8]* @.str.7815, i64 0, i64 0
+  %r289 = getelementptr [4 x i8], [4 x i8]* @.str.7816, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r288, i8* %r289)
-  %r290 = getelementptr [7 x i8], [7 x i8]* @.str.7750, i64 0, i64 0
-  %r291 = getelementptr [4 x i8], [4 x i8]* @.str.7751, i64 0, i64 0
+  %r290 = getelementptr [7 x i8], [7 x i8]* @.str.7817, i64 0, i64 0
+  %r291 = getelementptr [4 x i8], [4 x i8]* @.str.7818, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r290, i8* %r291)
-  %r292 = getelementptr [6 x i8], [6 x i8]* @.str.7752, i64 0, i64 0
-  %r293 = getelementptr [4 x i8], [4 x i8]* @.str.7753, i64 0, i64 0
+  %r292 = getelementptr [6 x i8], [6 x i8]* @.str.7819, i64 0, i64 0
+  %r293 = getelementptr [4 x i8], [4 x i8]* @.str.7820, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r292, i8* %r293)
-  %r294 = getelementptr [7 x i8], [7 x i8]* @.str.7754, i64 0, i64 0
-  %r295 = getelementptr [4 x i8], [4 x i8]* @.str.7755, i64 0, i64 0
+  %r294 = getelementptr [7 x i8], [7 x i8]* @.str.7821, i64 0, i64 0
+  %r295 = getelementptr [4 x i8], [4 x i8]* @.str.7822, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r294, i8* %r295)
-  %r296 = getelementptr [6 x i8], [6 x i8]* @.str.7756, i64 0, i64 0
-  %r297 = getelementptr [4 x i8], [4 x i8]* @.str.7757, i64 0, i64 0
+  %r296 = getelementptr [6 x i8], [6 x i8]* @.str.7823, i64 0, i64 0
+  %r297 = getelementptr [4 x i8], [4 x i8]* @.str.7824, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r296, i8* %r297)
-  %r298 = getelementptr [6 x i8], [6 x i8]* @.str.7758, i64 0, i64 0
-  %r299 = getelementptr [4 x i8], [4 x i8]* @.str.7759, i64 0, i64 0
+  %r298 = getelementptr [6 x i8], [6 x i8]* @.str.7825, i64 0, i64 0
+  %r299 = getelementptr [4 x i8], [4 x i8]* @.str.7826, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r298, i8* %r299)
-  %r300 = getelementptr [5 x i8], [5 x i8]* @.str.7760, i64 0, i64 0
-  %r301 = getelementptr [4 x i8], [4 x i8]* @.str.7761, i64 0, i64 0
+  %r300 = getelementptr [5 x i8], [5 x i8]* @.str.7827, i64 0, i64 0
+  %r301 = getelementptr [4 x i8], [4 x i8]* @.str.7828, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r300, i8* %r301)
-  %r302 = getelementptr [6 x i8], [6 x i8]* @.str.7762, i64 0, i64 0
-  %r303 = getelementptr [4 x i8], [4 x i8]* @.str.7763, i64 0, i64 0
+  %r302 = getelementptr [6 x i8], [6 x i8]* @.str.7829, i64 0, i64 0
+  %r303 = getelementptr [4 x i8], [4 x i8]* @.str.7830, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r302, i8* %r303)
-  %r304 = getelementptr [6 x i8], [6 x i8]* @.str.7764, i64 0, i64 0
-  %r305 = getelementptr [4 x i8], [4 x i8]* @.str.7765, i64 0, i64 0
+  %r304 = getelementptr [6 x i8], [6 x i8]* @.str.7831, i64 0, i64 0
+  %r305 = getelementptr [4 x i8], [4 x i8]* @.str.7832, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r304, i8* %r305)
-  %r306 = getelementptr [7 x i8], [7 x i8]* @.str.7766, i64 0, i64 0
-  %r307 = getelementptr [4 x i8], [4 x i8]* @.str.7767, i64 0, i64 0
+  %r306 = getelementptr [7 x i8], [7 x i8]* @.str.7833, i64 0, i64 0
+  %r307 = getelementptr [4 x i8], [4 x i8]* @.str.7834, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r306, i8* %r307)
-  %r308 = getelementptr [7 x i8], [7 x i8]* @.str.7768, i64 0, i64 0
-  %r309 = getelementptr [4 x i8], [4 x i8]* @.str.7769, i64 0, i64 0
+  %r308 = getelementptr [7 x i8], [7 x i8]* @.str.7835, i64 0, i64 0
+  %r309 = getelementptr [4 x i8], [4 x i8]* @.str.7836, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r308, i8* %r309)
-  %r310 = getelementptr [9 x i8], [9 x i8]* @.str.7770, i64 0, i64 0
-  %r311 = getelementptr [4 x i8], [4 x i8]* @.str.7771, i64 0, i64 0
+  %r310 = getelementptr [9 x i8], [9 x i8]* @.str.7837, i64 0, i64 0
+  %r311 = getelementptr [4 x i8], [4 x i8]* @.str.7838, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r310, i8* %r311)
-  %r312 = getelementptr [15 x i8], [15 x i8]* @.str.7772, i64 0, i64 0
-  %r313 = getelementptr [4 x i8], [4 x i8]* @.str.7773, i64 0, i64 0
+  %r312 = getelementptr [15 x i8], [15 x i8]* @.str.7839, i64 0, i64 0
+  %r313 = getelementptr [4 x i8], [4 x i8]* @.str.7840, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r312, i8* %r313)
-  %r314 = getelementptr [16 x i8], [16 x i8]* @.str.7774, i64 0, i64 0
-  %r315 = getelementptr [5 x i8], [5 x i8]* @.str.7775, i64 0, i64 0
+  %r314 = getelementptr [16 x i8], [16 x i8]* @.str.7841, i64 0, i64 0
+  %r315 = getelementptr [5 x i8], [5 x i8]* @.str.7842, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r314, i8* %r315)
-  %r316 = getelementptr [22 x i8], [22 x i8]* @.str.7776, i64 0, i64 0
-  %r317 = getelementptr [5 x i8], [5 x i8]* @.str.7777, i64 0, i64 0
+  %r316 = getelementptr [22 x i8], [22 x i8]* @.str.7843, i64 0, i64 0
+  %r317 = getelementptr [5 x i8], [5 x i8]* @.str.7844, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r316, i8* %r317)
-  %r318 = getelementptr [21 x i8], [21 x i8]* @.str.7778, i64 0, i64 0
-  %r319 = getelementptr [5 x i8], [5 x i8]* @.str.7779, i64 0, i64 0
+  %r318 = getelementptr [21 x i8], [21 x i8]* @.str.7845, i64 0, i64 0
+  %r319 = getelementptr [5 x i8], [5 x i8]* @.str.7846, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r318, i8* %r319)
-  %r320 = getelementptr [16 x i8], [16 x i8]* @.str.7780, i64 0, i64 0
-  %r321 = getelementptr [5 x i8], [5 x i8]* @.str.7781, i64 0, i64 0
+  %r320 = getelementptr [16 x i8], [16 x i8]* @.str.7847, i64 0, i64 0
+  %r321 = getelementptr [5 x i8], [5 x i8]* @.str.7848, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r320, i8* %r321)
-  %r322 = getelementptr [17 x i8], [17 x i8]* @.str.7782, i64 0, i64 0
-  %r323 = getelementptr [4 x i8], [4 x i8]* @.str.7783, i64 0, i64 0
+  %r322 = getelementptr [17 x i8], [17 x i8]* @.str.7849, i64 0, i64 0
+  %r323 = getelementptr [4 x i8], [4 x i8]* @.str.7850, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r322, i8* %r323)
-  %r324 = getelementptr [14 x i8], [14 x i8]* @.str.7784, i64 0, i64 0
-  %r325 = getelementptr [5 x i8], [5 x i8]* @.str.7785, i64 0, i64 0
+  %r324 = getelementptr [14 x i8], [14 x i8]* @.str.7851, i64 0, i64 0
+  %r325 = getelementptr [5 x i8], [5 x i8]* @.str.7852, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r324, i8* %r325)
-  %r326 = getelementptr [23 x i8], [23 x i8]* @.str.7786, i64 0, i64 0
-  %r327 = getelementptr [7 x i8], [7 x i8]* @.str.7787, i64 0, i64 0
+  %r326 = getelementptr [23 x i8], [23 x i8]* @.str.7853, i64 0, i64 0
+  %r327 = getelementptr [7 x i8], [7 x i8]* @.str.7854, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r326, i8* %r327)
-  %r328 = getelementptr [12 x i8], [12 x i8]* @.str.7788, i64 0, i64 0
-  %r329 = getelementptr [4 x i8], [4 x i8]* @.str.7789, i64 0, i64 0
+  %r328 = getelementptr [12 x i8], [12 x i8]* @.str.7855, i64 0, i64 0
+  %r329 = getelementptr [4 x i8], [4 x i8]* @.str.7856, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r328, i8* %r329)
-  %r330 = getelementptr [12 x i8], [12 x i8]* @.str.7790, i64 0, i64 0
-  %r331 = getelementptr [4 x i8], [4 x i8]* @.str.7791, i64 0, i64 0
+  %r330 = getelementptr [12 x i8], [12 x i8]* @.str.7857, i64 0, i64 0
+  %r331 = getelementptr [4 x i8], [4 x i8]* @.str.7858, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r330, i8* %r331)
-  %r332 = getelementptr [21 x i8], [21 x i8]* @.str.7792, i64 0, i64 0
-  %r333 = getelementptr [4 x i8], [4 x i8]* @.str.7793, i64 0, i64 0
+  %r332 = getelementptr [21 x i8], [21 x i8]* @.str.7859, i64 0, i64 0
+  %r333 = getelementptr [4 x i8], [4 x i8]* @.str.7860, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r332, i8* %r333)
-  %r334 = getelementptr [16 x i8], [16 x i8]* @.str.7794, i64 0, i64 0
-  %r335 = getelementptr [4 x i8], [4 x i8]* @.str.7795, i64 0, i64 0
+  %r334 = getelementptr [16 x i8], [16 x i8]* @.str.7861, i64 0, i64 0
+  %r335 = getelementptr [4 x i8], [4 x i8]* @.str.7862, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r334, i8* %r335)
-  %r336 = getelementptr [17 x i8], [17 x i8]* @.str.7796, i64 0, i64 0
-  %r337 = getelementptr [4 x i8], [4 x i8]* @.str.7797, i64 0, i64 0
+  %r336 = getelementptr [17 x i8], [17 x i8]* @.str.7863, i64 0, i64 0
+  %r337 = getelementptr [4 x i8], [4 x i8]* @.str.7864, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r336, i8* %r337)
-  %r338 = getelementptr [16 x i8], [16 x i8]* @.str.7798, i64 0, i64 0
-  %r339 = getelementptr [4 x i8], [4 x i8]* @.str.7799, i64 0, i64 0
+  %r338 = getelementptr [16 x i8], [16 x i8]* @.str.7865, i64 0, i64 0
+  %r339 = getelementptr [4 x i8], [4 x i8]* @.str.7866, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r338, i8* %r339)
-  %r340 = getelementptr [15 x i8], [15 x i8]* @.str.7800, i64 0, i64 0
-  %r341 = getelementptr [7 x i8], [7 x i8]* @.str.7801, i64 0, i64 0
+  %r340 = getelementptr [15 x i8], [15 x i8]* @.str.7867, i64 0, i64 0
+  %r341 = getelementptr [7 x i8], [7 x i8]* @.str.7868, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r340, i8* %r341)
-  %r342 = getelementptr [18 x i8], [18 x i8]* @.str.7802, i64 0, i64 0
-  %r343 = getelementptr [7 x i8], [7 x i8]* @.str.7803, i64 0, i64 0
+  %r342 = getelementptr [18 x i8], [18 x i8]* @.str.7869, i64 0, i64 0
+  %r343 = getelementptr [7 x i8], [7 x i8]* @.str.7870, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r342, i8* %r343)
-  %r344 = getelementptr [19 x i8], [19 x i8]* @.str.7804, i64 0, i64 0
-  %r345 = getelementptr [4 x i8], [4 x i8]* @.str.7805, i64 0, i64 0
+  %r344 = getelementptr [19 x i8], [19 x i8]* @.str.7871, i64 0, i64 0
+  %r345 = getelementptr [4 x i8], [4 x i8]* @.str.7872, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r344, i8* %r345)
-  %r346 = getelementptr [19 x i8], [19 x i8]* @.str.7806, i64 0, i64 0
-  %r347 = getelementptr [4 x i8], [4 x i8]* @.str.7807, i64 0, i64 0
+  %r346 = getelementptr [19 x i8], [19 x i8]* @.str.7873, i64 0, i64 0
+  %r347 = getelementptr [4 x i8], [4 x i8]* @.str.7874, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r346, i8* %r347)
-  %r348 = getelementptr [20 x i8], [20 x i8]* @.str.7808, i64 0, i64 0
-  %r349 = getelementptr [5 x i8], [5 x i8]* @.str.7809, i64 0, i64 0
+  %r348 = getelementptr [20 x i8], [20 x i8]* @.str.7875, i64 0, i64 0
+  %r349 = getelementptr [5 x i8], [5 x i8]* @.str.7876, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r348, i8* %r349)
-  %r350 = getelementptr [23 x i8], [23 x i8]* @.str.7810, i64 0, i64 0
-  %r351 = getelementptr [4 x i8], [4 x i8]* @.str.7811, i64 0, i64 0
+  %r350 = getelementptr [23 x i8], [23 x i8]* @.str.7877, i64 0, i64 0
+  %r351 = getelementptr [4 x i8], [4 x i8]* @.str.7878, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r350, i8* %r351)
-  %r352 = getelementptr [26 x i8], [26 x i8]* @.str.7812, i64 0, i64 0
-  %r353 = getelementptr [4 x i8], [4 x i8]* @.str.7813, i64 0, i64 0
+  %r352 = getelementptr [26 x i8], [26 x i8]* @.str.7879, i64 0, i64 0
+  %r353 = getelementptr [4 x i8], [4 x i8]* @.str.7880, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r352, i8* %r353)
-  %r354 = getelementptr [24 x i8], [24 x i8]* @.str.7814, i64 0, i64 0
-  %r355 = getelementptr [5 x i8], [5 x i8]* @.str.7815, i64 0, i64 0
+  %r354 = getelementptr [24 x i8], [24 x i8]* @.str.7881, i64 0, i64 0
+  %r355 = getelementptr [5 x i8], [5 x i8]* @.str.7882, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r354, i8* %r355)
-  %r356 = getelementptr [25 x i8], [25 x i8]* @.str.7816, i64 0, i64 0
-  %r357 = getelementptr [4 x i8], [4 x i8]* @.str.7817, i64 0, i64 0
+  %r356 = getelementptr [25 x i8], [25 x i8]* @.str.7883, i64 0, i64 0
+  %r357 = getelementptr [4 x i8], [4 x i8]* @.str.7884, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r356, i8* %r357)
-  %r358 = getelementptr [22 x i8], [22 x i8]* @.str.7818, i64 0, i64 0
-  %r359 = getelementptr [4 x i8], [4 x i8]* @.str.7819, i64 0, i64 0
+  %r358 = getelementptr [22 x i8], [22 x i8]* @.str.7885, i64 0, i64 0
+  %r359 = getelementptr [4 x i8], [4 x i8]* @.str.7886, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r358, i8* %r359)
-  %r360 = getelementptr [33 x i8], [33 x i8]* @.str.7820, i64 0, i64 0
-  %r361 = getelementptr [4 x i8], [4 x i8]* @.str.7821, i64 0, i64 0
+  %r360 = getelementptr [33 x i8], [33 x i8]* @.str.7887, i64 0, i64 0
+  %r361 = getelementptr [4 x i8], [4 x i8]* @.str.7888, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r360, i8* %r361)
-  %r362 = getelementptr [23 x i8], [23 x i8]* @.str.7822, i64 0, i64 0
-  %r363 = getelementptr [5 x i8], [5 x i8]* @.str.7823, i64 0, i64 0
+  %r362 = getelementptr [23 x i8], [23 x i8]* @.str.7889, i64 0, i64 0
+  %r363 = getelementptr [5 x i8], [5 x i8]* @.str.7890, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r362, i8* %r363)
-  %r364 = getelementptr [30 x i8], [30 x i8]* @.str.7824, i64 0, i64 0
-  %r365 = getelementptr [4 x i8], [4 x i8]* @.str.7825, i64 0, i64 0
+  %r364 = getelementptr [30 x i8], [30 x i8]* @.str.7891, i64 0, i64 0
+  %r365 = getelementptr [4 x i8], [4 x i8]* @.str.7892, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r364, i8* %r365)
-  %r366 = getelementptr [14 x i8], [14 x i8]* @.str.7826, i64 0, i64 0
-  %r367 = getelementptr [4 x i8], [4 x i8]* @.str.7827, i64 0, i64 0
+  %r366 = getelementptr [14 x i8], [14 x i8]* @.str.7893, i64 0, i64 0
+  %r367 = getelementptr [4 x i8], [4 x i8]* @.str.7894, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r366, i8* %r367)
-  %r368 = getelementptr [20 x i8], [20 x i8]* @.str.7828, i64 0, i64 0
-  %r369 = getelementptr [4 x i8], [4 x i8]* @.str.7829, i64 0, i64 0
+  %r368 = getelementptr [20 x i8], [20 x i8]* @.str.7895, i64 0, i64 0
+  %r369 = getelementptr [4 x i8], [4 x i8]* @.str.7896, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r368, i8* %r369)
-  %r370 = getelementptr [19 x i8], [19 x i8]* @.str.7830, i64 0, i64 0
-  %r371 = getelementptr [4 x i8], [4 x i8]* @.str.7831, i64 0, i64 0
+  %r370 = getelementptr [19 x i8], [19 x i8]* @.str.7897, i64 0, i64 0
+  %r371 = getelementptr [4 x i8], [4 x i8]* @.str.7898, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r370, i8* %r371)
-  %r372 = getelementptr [17 x i8], [17 x i8]* @.str.7832, i64 0, i64 0
-  %r373 = getelementptr [4 x i8], [4 x i8]* @.str.7833, i64 0, i64 0
+  %r372 = getelementptr [17 x i8], [17 x i8]* @.str.7899, i64 0, i64 0
+  %r373 = getelementptr [4 x i8], [4 x i8]* @.str.7900, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r372, i8* %r373)
-  %r374 = getelementptr [17 x i8], [17 x i8]* @.str.7834, i64 0, i64 0
-  %r375 = getelementptr [4 x i8], [4 x i8]* @.str.7835, i64 0, i64 0
+  %r374 = getelementptr [17 x i8], [17 x i8]* @.str.7901, i64 0, i64 0
+  %r375 = getelementptr [4 x i8], [4 x i8]* @.str.7902, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r374, i8* %r375)
-  %r376 = getelementptr [21 x i8], [21 x i8]* @.str.7836, i64 0, i64 0
-  %r377 = getelementptr [4 x i8], [4 x i8]* @.str.7837, i64 0, i64 0
+  %r376 = getelementptr [21 x i8], [21 x i8]* @.str.7903, i64 0, i64 0
+  %r377 = getelementptr [4 x i8], [4 x i8]* @.str.7904, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r376, i8* %r377)
-  %r378 = getelementptr [21 x i8], [21 x i8]* @.str.7838, i64 0, i64 0
-  %r379 = getelementptr [4 x i8], [4 x i8]* @.str.7839, i64 0, i64 0
+  %r378 = getelementptr [21 x i8], [21 x i8]* @.str.7905, i64 0, i64 0
+  %r379 = getelementptr [4 x i8], [4 x i8]* @.str.7906, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r378, i8* %r379)
-  %r380 = getelementptr [15 x i8], [15 x i8]* @.str.7840, i64 0, i64 0
-  %r381 = getelementptr [5 x i8], [5 x i8]* @.str.7841, i64 0, i64 0
+  %r380 = getelementptr [15 x i8], [15 x i8]* @.str.7907, i64 0, i64 0
+  %r381 = getelementptr [5 x i8], [5 x i8]* @.str.7908, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r380, i8* %r381)
-  %r382 = getelementptr [16 x i8], [16 x i8]* @.str.7842, i64 0, i64 0
-  %r383 = getelementptr [4 x i8], [4 x i8]* @.str.7843, i64 0, i64 0
+  %r382 = getelementptr [16 x i8], [16 x i8]* @.str.7909, i64 0, i64 0
+  %r383 = getelementptr [4 x i8], [4 x i8]* @.str.7910, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r382, i8* %r383)
-  %r384 = getelementptr [25 x i8], [25 x i8]* @.str.7844, i64 0, i64 0
-  %r385 = getelementptr [4 x i8], [4 x i8]* @.str.7845, i64 0, i64 0
+  %r384 = getelementptr [25 x i8], [25 x i8]* @.str.7911, i64 0, i64 0
+  %r385 = getelementptr [4 x i8], [4 x i8]* @.str.7912, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r384, i8* %r385)
-  %r386 = getelementptr [20 x i8], [20 x i8]* @.str.7846, i64 0, i64 0
-  %r387 = getelementptr [4 x i8], [4 x i8]* @.str.7847, i64 0, i64 0
+  %r386 = getelementptr [20 x i8], [20 x i8]* @.str.7913, i64 0, i64 0
+  %r387 = getelementptr [4 x i8], [4 x i8]* @.str.7914, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r386, i8* %r387)
-  %r388 = getelementptr [22 x i8], [22 x i8]* @.str.7848, i64 0, i64 0
-  %r389 = getelementptr [4 x i8], [4 x i8]* @.str.7849, i64 0, i64 0
+  %r388 = getelementptr [22 x i8], [22 x i8]* @.str.7915, i64 0, i64 0
+  %r389 = getelementptr [4 x i8], [4 x i8]* @.str.7916, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r388, i8* %r389)
-  %r390 = getelementptr [28 x i8], [28 x i8]* @.str.7850, i64 0, i64 0
-  %r391 = getelementptr [5 x i8], [5 x i8]* @.str.7851, i64 0, i64 0
+  %r390 = getelementptr [28 x i8], [28 x i8]* @.str.7917, i64 0, i64 0
+  %r391 = getelementptr [5 x i8], [5 x i8]* @.str.7918, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r390, i8* %r391)
-  %r392 = getelementptr [26 x i8], [26 x i8]* @.str.7852, i64 0, i64 0
-  %r393 = getelementptr [4 x i8], [4 x i8]* @.str.7853, i64 0, i64 0
+  %r392 = getelementptr [26 x i8], [26 x i8]* @.str.7919, i64 0, i64 0
+  %r393 = getelementptr [4 x i8], [4 x i8]* @.str.7920, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r392, i8* %r393)
-  %r394 = getelementptr [30 x i8], [30 x i8]* @.str.7854, i64 0, i64 0
-  %r395 = getelementptr [4 x i8], [4 x i8]* @.str.7855, i64 0, i64 0
+  %r394 = getelementptr [30 x i8], [30 x i8]* @.str.7921, i64 0, i64 0
+  %r395 = getelementptr [4 x i8], [4 x i8]* @.str.7922, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r394, i8* %r395)
-  %r396 = getelementptr [20 x i8], [20 x i8]* @.str.7856, i64 0, i64 0
-  %r397 = getelementptr [4 x i8], [4 x i8]* @.str.7857, i64 0, i64 0
+  %r396 = getelementptr [20 x i8], [20 x i8]* @.str.7923, i64 0, i64 0
+  %r397 = getelementptr [4 x i8], [4 x i8]* @.str.7924, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r396, i8* %r397)
-  %r398 = getelementptr [28 x i8], [28 x i8]* @.str.7858, i64 0, i64 0
-  %r399 = getelementptr [4 x i8], [4 x i8]* @.str.7859, i64 0, i64 0
+  %r398 = getelementptr [28 x i8], [28 x i8]* @.str.7925, i64 0, i64 0
+  %r399 = getelementptr [4 x i8], [4 x i8]* @.str.7926, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r398, i8* %r399)
-  %r400 = getelementptr [21 x i8], [21 x i8]* @.str.7860, i64 0, i64 0
-  %r401 = getelementptr [4 x i8], [4 x i8]* @.str.7861, i64 0, i64 0
+  %r400 = getelementptr [21 x i8], [21 x i8]* @.str.7927, i64 0, i64 0
+  %r401 = getelementptr [4 x i8], [4 x i8]* @.str.7928, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r400, i8* %r401)
-  %r402 = getelementptr [21 x i8], [21 x i8]* @.str.7862, i64 0, i64 0
-  %r403 = getelementptr [4 x i8], [4 x i8]* @.str.7863, i64 0, i64 0
+  %r402 = getelementptr [21 x i8], [21 x i8]* @.str.7929, i64 0, i64 0
+  %r403 = getelementptr [4 x i8], [4 x i8]* @.str.7930, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r402, i8* %r403)
-  %r404 = getelementptr [21 x i8], [21 x i8]* @.str.7864, i64 0, i64 0
-  %r405 = getelementptr [5 x i8], [5 x i8]* @.str.7865, i64 0, i64 0
+  %r404 = getelementptr [21 x i8], [21 x i8]* @.str.7931, i64 0, i64 0
+  %r405 = getelementptr [5 x i8], [5 x i8]* @.str.7932, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r404, i8* %r405)
-  %r406 = getelementptr [16 x i8], [16 x i8]* @.str.7866, i64 0, i64 0
-  %r407 = getelementptr [4 x i8], [4 x i8]* @.str.7867, i64 0, i64 0
+  %r406 = getelementptr [16 x i8], [16 x i8]* @.str.7933, i64 0, i64 0
+  %r407 = getelementptr [4 x i8], [4 x i8]* @.str.7934, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r406, i8* %r407)
-  %r408 = getelementptr [20 x i8], [20 x i8]* @.str.7868, i64 0, i64 0
-  %r409 = getelementptr [4 x i8], [4 x i8]* @.str.7869, i64 0, i64 0
+  %r408 = getelementptr [20 x i8], [20 x i8]* @.str.7935, i64 0, i64 0
+  %r409 = getelementptr [4 x i8], [4 x i8]* @.str.7936, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r408, i8* %r409)
-  %r410 = getelementptr [25 x i8], [25 x i8]* @.str.7870, i64 0, i64 0
-  %r411 = getelementptr [4 x i8], [4 x i8]* @.str.7871, i64 0, i64 0
+  %r410 = getelementptr [25 x i8], [25 x i8]* @.str.7937, i64 0, i64 0
+  %r411 = getelementptr [4 x i8], [4 x i8]* @.str.7938, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r410, i8* %r411)
-  %r412 = getelementptr [23 x i8], [23 x i8]* @.str.7872, i64 0, i64 0
-  %r413 = getelementptr [4 x i8], [4 x i8]* @.str.7873, i64 0, i64 0
+  %r412 = getelementptr [23 x i8], [23 x i8]* @.str.7939, i64 0, i64 0
+  %r413 = getelementptr [4 x i8], [4 x i8]* @.str.7940, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r412, i8* %r413)
-  %r414 = getelementptr [21 x i8], [21 x i8]* @.str.7874, i64 0, i64 0
-  %r415 = getelementptr [4 x i8], [4 x i8]* @.str.7875, i64 0, i64 0
+  %r414 = getelementptr [21 x i8], [21 x i8]* @.str.7941, i64 0, i64 0
+  %r415 = getelementptr [4 x i8], [4 x i8]* @.str.7942, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r414, i8* %r415)
-  %r416 = getelementptr [20 x i8], [20 x i8]* @.str.7876, i64 0, i64 0
-  %r417 = getelementptr [4 x i8], [4 x i8]* @.str.7877, i64 0, i64 0
+  %r416 = getelementptr [20 x i8], [20 x i8]* @.str.7943, i64 0, i64 0
+  %r417 = getelementptr [4 x i8], [4 x i8]* @.str.7944, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r416, i8* %r417)
-  %r418 = getelementptr [33 x i8], [33 x i8]* @.str.7878, i64 0, i64 0
-  %r419 = getelementptr [4 x i8], [4 x i8]* @.str.7879, i64 0, i64 0
+  %r418 = getelementptr [33 x i8], [33 x i8]* @.str.7945, i64 0, i64 0
+  %r419 = getelementptr [4 x i8], [4 x i8]* @.str.7946, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r418, i8* %r419)
-  %r420 = getelementptr [27 x i8], [27 x i8]* @.str.7880, i64 0, i64 0
-  %r421 = getelementptr [4 x i8], [4 x i8]* @.str.7881, i64 0, i64 0
+  %r420 = getelementptr [27 x i8], [27 x i8]* @.str.7947, i64 0, i64 0
+  %r421 = getelementptr [4 x i8], [4 x i8]* @.str.7948, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r420, i8* %r421)
-  %r422 = getelementptr [16 x i8], [16 x i8]* @.str.7882, i64 0, i64 0
-  %r423 = getelementptr [4 x i8], [4 x i8]* @.str.7883, i64 0, i64 0
+  %r422 = getelementptr [16 x i8], [16 x i8]* @.str.7949, i64 0, i64 0
+  %r423 = getelementptr [4 x i8], [4 x i8]* @.str.7950, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r422, i8* %r423)
-  %r424 = getelementptr [14 x i8], [14 x i8]* @.str.7884, i64 0, i64 0
-  %r425 = getelementptr [4 x i8], [4 x i8]* @.str.7885, i64 0, i64 0
+  %r424 = getelementptr [14 x i8], [14 x i8]* @.str.7951, i64 0, i64 0
+  %r425 = getelementptr [4 x i8], [4 x i8]* @.str.7952, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r424, i8* %r425)
-  %r426 = getelementptr [15 x i8], [15 x i8]* @.str.7886, i64 0, i64 0
-  %r427 = getelementptr [4 x i8], [4 x i8]* @.str.7887, i64 0, i64 0
+  %r426 = getelementptr [15 x i8], [15 x i8]* @.str.7953, i64 0, i64 0
+  %r427 = getelementptr [4 x i8], [4 x i8]* @.str.7954, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r426, i8* %r427)
-  %r428 = getelementptr [15 x i8], [15 x i8]* @.str.7888, i64 0, i64 0
-  %r429 = getelementptr [5 x i8], [5 x i8]* @.str.7889, i64 0, i64 0
+  %r428 = getelementptr [15 x i8], [15 x i8]* @.str.7955, i64 0, i64 0
+  %r429 = getelementptr [5 x i8], [5 x i8]* @.str.7956, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r428, i8* %r429)
-  %r430 = getelementptr [18 x i8], [18 x i8]* @.str.7890, i64 0, i64 0
-  %r431 = getelementptr [5 x i8], [5 x i8]* @.str.7891, i64 0, i64 0
+  %r430 = getelementptr [18 x i8], [18 x i8]* @.str.7957, i64 0, i64 0
+  %r431 = getelementptr [5 x i8], [5 x i8]* @.str.7958, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r430, i8* %r431)
-  %r432 = getelementptr [18 x i8], [18 x i8]* @.str.7892, i64 0, i64 0
-  %r433 = getelementptr [4 x i8], [4 x i8]* @.str.7893, i64 0, i64 0
+  %r432 = getelementptr [18 x i8], [18 x i8]* @.str.7959, i64 0, i64 0
+  %r433 = getelementptr [4 x i8], [4 x i8]* @.str.7960, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r432, i8* %r433)
-  %r434 = getelementptr [19 x i8], [19 x i8]* @.str.7894, i64 0, i64 0
-  %r435 = getelementptr [4 x i8], [4 x i8]* @.str.7895, i64 0, i64 0
+  %r434 = getelementptr [19 x i8], [19 x i8]* @.str.7961, i64 0, i64 0
+  %r435 = getelementptr [4 x i8], [4 x i8]* @.str.7962, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r434, i8* %r435)
-  %r436 = getelementptr [21 x i8], [21 x i8]* @.str.7896, i64 0, i64 0
-  %r437 = getelementptr [5 x i8], [5 x i8]* @.str.7897, i64 0, i64 0
+  %r436 = getelementptr [21 x i8], [21 x i8]* @.str.7963, i64 0, i64 0
+  %r437 = getelementptr [5 x i8], [5 x i8]* @.str.7964, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r436, i8* %r437)
-  %r438 = getelementptr [29 x i8], [29 x i8]* @.str.7898, i64 0, i64 0
-  %r439 = getelementptr [5 x i8], [5 x i8]* @.str.7899, i64 0, i64 0
+  %r438 = getelementptr [29 x i8], [29 x i8]* @.str.7965, i64 0, i64 0
+  %r439 = getelementptr [5 x i8], [5 x i8]* @.str.7966, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r438, i8* %r439)
-  %r440 = getelementptr [29 x i8], [29 x i8]* @.str.7900, i64 0, i64 0
-  %r441 = getelementptr [5 x i8], [5 x i8]* @.str.7901, i64 0, i64 0
+  %r440 = getelementptr [29 x i8], [29 x i8]* @.str.7967, i64 0, i64 0
+  %r441 = getelementptr [5 x i8], [5 x i8]* @.str.7968, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r440, i8* %r441)
-  %r442 = getelementptr [11 x i8], [11 x i8]* @.str.7902, i64 0, i64 0
-  %r443 = getelementptr [5 x i8], [5 x i8]* @.str.7903, i64 0, i64 0
+  %r442 = getelementptr [11 x i8], [11 x i8]* @.str.7969, i64 0, i64 0
+  %r443 = getelementptr [5 x i8], [5 x i8]* @.str.7970, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r442, i8* %r443)
-  %r444 = getelementptr [13 x i8], [13 x i8]* @.str.7904, i64 0, i64 0
-  %r445 = getelementptr [4 x i8], [4 x i8]* @.str.7905, i64 0, i64 0
+  %r444 = getelementptr [13 x i8], [13 x i8]* @.str.7971, i64 0, i64 0
+  %r445 = getelementptr [4 x i8], [4 x i8]* @.str.7972, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r444, i8* %r445)
-  %r446 = getelementptr [20 x i8], [20 x i8]* @.str.7906, i64 0, i64 0
-  %r447 = getelementptr [4 x i8], [4 x i8]* @.str.7907, i64 0, i64 0
+  %r446 = getelementptr [20 x i8], [20 x i8]* @.str.7973, i64 0, i64 0
+  %r447 = getelementptr [4 x i8], [4 x i8]* @.str.7974, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r446, i8* %r447)
-  %r448 = getelementptr [11 x i8], [11 x i8]* @.str.7908, i64 0, i64 0
-  %r449 = getelementptr [5 x i8], [5 x i8]* @.str.7909, i64 0, i64 0
+  %r448 = getelementptr [11 x i8], [11 x i8]* @.str.7975, i64 0, i64 0
+  %r449 = getelementptr [5 x i8], [5 x i8]* @.str.7976, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r448, i8* %r449)
-  %r450 = getelementptr [13 x i8], [13 x i8]* @.str.7910, i64 0, i64 0
-  %r451 = getelementptr [5 x i8], [5 x i8]* @.str.7911, i64 0, i64 0
+  %r450 = getelementptr [13 x i8], [13 x i8]* @.str.7977, i64 0, i64 0
+  %r451 = getelementptr [5 x i8], [5 x i8]* @.str.7978, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r450, i8* %r451)
-  %r452 = getelementptr [12 x i8], [12 x i8]* @.str.7912, i64 0, i64 0
-  %r453 = getelementptr [5 x i8], [5 x i8]* @.str.7913, i64 0, i64 0
+  %r452 = getelementptr [12 x i8], [12 x i8]* @.str.7979, i64 0, i64 0
+  %r453 = getelementptr [5 x i8], [5 x i8]* @.str.7980, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r452, i8* %r453)
-  %r454 = getelementptr [14 x i8], [14 x i8]* @.str.7914, i64 0, i64 0
-  %r455 = getelementptr [5 x i8], [5 x i8]* @.str.7915, i64 0, i64 0
+  %r454 = getelementptr [14 x i8], [14 x i8]* @.str.7981, i64 0, i64 0
+  %r455 = getelementptr [5 x i8], [5 x i8]* @.str.7982, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r454, i8* %r455)
-  %r456 = getelementptr [15 x i8], [15 x i8]* @.str.7916, i64 0, i64 0
-  %r457 = getelementptr [5 x i8], [5 x i8]* @.str.7917, i64 0, i64 0
+  %r456 = getelementptr [15 x i8], [15 x i8]* @.str.7983, i64 0, i64 0
+  %r457 = getelementptr [5 x i8], [5 x i8]* @.str.7984, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r456, i8* %r457)
-  %r458 = getelementptr [15 x i8], [15 x i8]* @.str.7918, i64 0, i64 0
-  %r459 = getelementptr [5 x i8], [5 x i8]* @.str.7919, i64 0, i64 0
+  %r458 = getelementptr [15 x i8], [15 x i8]* @.str.7985, i64 0, i64 0
+  %r459 = getelementptr [5 x i8], [5 x i8]* @.str.7986, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r458, i8* %r459)
-  %r460 = getelementptr [16 x i8], [16 x i8]* @.str.7920, i64 0, i64 0
-  %r461 = getelementptr [5 x i8], [5 x i8]* @.str.7921, i64 0, i64 0
+  %r460 = getelementptr [16 x i8], [16 x i8]* @.str.7987, i64 0, i64 0
+  %r461 = getelementptr [5 x i8], [5 x i8]* @.str.7988, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r460, i8* %r461)
-  %r462 = getelementptr [10 x i8], [10 x i8]* @.str.7922, i64 0, i64 0
-  %r463 = getelementptr [5 x i8], [5 x i8]* @.str.7923, i64 0, i64 0
+  %r462 = getelementptr [10 x i8], [10 x i8]* @.str.7989, i64 0, i64 0
+  %r463 = getelementptr [5 x i8], [5 x i8]* @.str.7990, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r462, i8* %r463)
-  %r464 = getelementptr [18 x i8], [18 x i8]* @.str.7924, i64 0, i64 0
-  %r465 = getelementptr [5 x i8], [5 x i8]* @.str.7925, i64 0, i64 0
+  %r464 = getelementptr [18 x i8], [18 x i8]* @.str.7991, i64 0, i64 0
+  %r465 = getelementptr [5 x i8], [5 x i8]* @.str.7992, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r464, i8* %r465)
-  %r466 = getelementptr [18 x i8], [18 x i8]* @.str.7926, i64 0, i64 0
-  %r467 = getelementptr [5 x i8], [5 x i8]* @.str.7927, i64 0, i64 0
+  %r466 = getelementptr [18 x i8], [18 x i8]* @.str.7993, i64 0, i64 0
+  %r467 = getelementptr [5 x i8], [5 x i8]* @.str.7994, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r466, i8* %r467)
-  %r468 = getelementptr [15 x i8], [15 x i8]* @.str.7928, i64 0, i64 0
-  %r469 = getelementptr [4 x i8], [4 x i8]* @.str.7929, i64 0, i64 0
+  %r468 = getelementptr [15 x i8], [15 x i8]* @.str.7995, i64 0, i64 0
+  %r469 = getelementptr [4 x i8], [4 x i8]* @.str.7996, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r468, i8* %r469)
-  %r470 = getelementptr [5 x i8], [5 x i8]* @.str.7930, i64 0, i64 0
-  %r471 = getelementptr [5 x i8], [5 x i8]* @.str.7931, i64 0, i64 0
+  %r470 = getelementptr [5 x i8], [5 x i8]* @.str.7997, i64 0, i64 0
+  %r471 = getelementptr [5 x i8], [5 x i8]* @.str.7998, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r470, i8* %r471)
-  %r472 = getelementptr [10 x i8], [10 x i8]* @.str.7932, i64 0, i64 0
-  %r473 = getelementptr [5 x i8], [5 x i8]* @.str.7933, i64 0, i64 0
+  %r472 = getelementptr [10 x i8], [10 x i8]* @.str.7999, i64 0, i64 0
+  %r473 = getelementptr [5 x i8], [5 x i8]* @.str.8000, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r472, i8* %r473)
-  %r474 = getelementptr [12 x i8], [12 x i8]* @.str.7934, i64 0, i64 0
-  %r475 = getelementptr [5 x i8], [5 x i8]* @.str.7935, i64 0, i64 0
+  %r474 = getelementptr [12 x i8], [12 x i8]* @.str.8001, i64 0, i64 0
+  %r475 = getelementptr [5 x i8], [5 x i8]* @.str.8002, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r474, i8* %r475)
-  %r476 = getelementptr [13 x i8], [13 x i8]* @.str.7936, i64 0, i64 0
-  %r477 = getelementptr [5 x i8], [5 x i8]* @.str.7937, i64 0, i64 0
+  %r476 = getelementptr [13 x i8], [13 x i8]* @.str.8003, i64 0, i64 0
+  %r477 = getelementptr [5 x i8], [5 x i8]* @.str.8004, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r476, i8* %r477)
-  %r478 = getelementptr [10 x i8], [10 x i8]* @.str.7938, i64 0, i64 0
-  %r479 = getelementptr [5 x i8], [5 x i8]* @.str.7939, i64 0, i64 0
+  %r478 = getelementptr [10 x i8], [10 x i8]* @.str.8005, i64 0, i64 0
+  %r479 = getelementptr [5 x i8], [5 x i8]* @.str.8006, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r478, i8* %r479)
-  %r480 = getelementptr [21 x i8], [21 x i8]* @.str.7940, i64 0, i64 0
-  %r481 = getelementptr [5 x i8], [5 x i8]* @.str.7941, i64 0, i64 0
+  %r480 = getelementptr [21 x i8], [21 x i8]* @.str.8007, i64 0, i64 0
+  %r481 = getelementptr [5 x i8], [5 x i8]* @.str.8008, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r480, i8* %r481)
-  %r482 = getelementptr [20 x i8], [20 x i8]* @.str.7942, i64 0, i64 0
-  %r483 = getelementptr [4 x i8], [4 x i8]* @.str.7943, i64 0, i64 0
+  %r482 = getelementptr [20 x i8], [20 x i8]* @.str.8009, i64 0, i64 0
+  %r483 = getelementptr [4 x i8], [4 x i8]* @.str.8010, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r482, i8* %r483)
-  %r484 = getelementptr [21 x i8], [21 x i8]* @.str.7944, i64 0, i64 0
-  %r485 = getelementptr [5 x i8], [5 x i8]* @.str.7945, i64 0, i64 0
+  %r484 = getelementptr [21 x i8], [21 x i8]* @.str.8011, i64 0, i64 0
+  %r485 = getelementptr [5 x i8], [5 x i8]* @.str.8012, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r484, i8* %r485)
-  %r486 = getelementptr [10 x i8], [10 x i8]* @.str.7946, i64 0, i64 0
-  %r487 = getelementptr [4 x i8], [4 x i8]* @.str.7947, i64 0, i64 0
+  %r486 = getelementptr [10 x i8], [10 x i8]* @.str.8013, i64 0, i64 0
+  %r487 = getelementptr [4 x i8], [4 x i8]* @.str.8014, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r486, i8* %r487)
-  %r488 = getelementptr [12 x i8], [12 x i8]* @.str.7948, i64 0, i64 0
-  %r489 = getelementptr [4 x i8], [4 x i8]* @.str.7949, i64 0, i64 0
+  %r488 = getelementptr [12 x i8], [12 x i8]* @.str.8015, i64 0, i64 0
+  %r489 = getelementptr [4 x i8], [4 x i8]* @.str.8016, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r488, i8* %r489)
-  %r490 = getelementptr [13 x i8], [13 x i8]* @.str.7950, i64 0, i64 0
-  %r491 = getelementptr [4 x i8], [4 x i8]* @.str.7951, i64 0, i64 0
+  %r490 = getelementptr [13 x i8], [13 x i8]* @.str.8017, i64 0, i64 0
+  %r491 = getelementptr [4 x i8], [4 x i8]* @.str.8018, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r490, i8* %r491)
-  %r492 = getelementptr [13 x i8], [13 x i8]* @.str.7952, i64 0, i64 0
-  %r493 = getelementptr [4 x i8], [4 x i8]* @.str.7953, i64 0, i64 0
+  %r492 = getelementptr [13 x i8], [13 x i8]* @.str.8019, i64 0, i64 0
+  %r493 = getelementptr [4 x i8], [4 x i8]* @.str.8020, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r492, i8* %r493)
-  %r494 = getelementptr [13 x i8], [13 x i8]* @.str.7954, i64 0, i64 0
-  %r495 = getelementptr [4 x i8], [4 x i8]* @.str.7955, i64 0, i64 0
+  %r494 = getelementptr [13 x i8], [13 x i8]* @.str.8021, i64 0, i64 0
+  %r495 = getelementptr [4 x i8], [4 x i8]* @.str.8022, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r494, i8* %r495)
-  %r496 = getelementptr [13 x i8], [13 x i8]* @.str.7956, i64 0, i64 0
-  %r497 = getelementptr [4 x i8], [4 x i8]* @.str.7957, i64 0, i64 0
+  %r496 = getelementptr [13 x i8], [13 x i8]* @.str.8023, i64 0, i64 0
+  %r497 = getelementptr [4 x i8], [4 x i8]* @.str.8024, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r496, i8* %r497)
-  %r498 = getelementptr [12 x i8], [12 x i8]* @.str.7958, i64 0, i64 0
-  %r499 = getelementptr [4 x i8], [4 x i8]* @.str.7959, i64 0, i64 0
+  %r498 = getelementptr [12 x i8], [12 x i8]* @.str.8025, i64 0, i64 0
+  %r499 = getelementptr [4 x i8], [4 x i8]* @.str.8026, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r498, i8* %r499)
-  %r500 = getelementptr [12 x i8], [12 x i8]* @.str.7960, i64 0, i64 0
-  %r501 = getelementptr [4 x i8], [4 x i8]* @.str.7961, i64 0, i64 0
+  %r500 = getelementptr [12 x i8], [12 x i8]* @.str.8027, i64 0, i64 0
+  %r501 = getelementptr [4 x i8], [4 x i8]* @.str.8028, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r500, i8* %r501)
   call void @register_simd_syms(i64 %syms)
-  %r502 = getelementptr [10 x i8], [10 x i8]* @.str.7962, i64 0, i64 0
-  %r503 = getelementptr [5 x i8], [5 x i8]* @.str.7963, i64 0, i64 0
+  %r502 = getelementptr [10 x i8], [10 x i8]* @.str.8029, i64 0, i64 0
+  %r503 = getelementptr [5 x i8], [5 x i8]* @.str.8030, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r502, i8* %r503)
-  %r504 = getelementptr [12 x i8], [12 x i8]* @.str.7964, i64 0, i64 0
-  %r505 = getelementptr [5 x i8], [5 x i8]* @.str.7965, i64 0, i64 0
+  %r504 = getelementptr [12 x i8], [12 x i8]* @.str.8031, i64 0, i64 0
+  %r505 = getelementptr [5 x i8], [5 x i8]* @.str.8032, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r504, i8* %r505)
-  %r506 = getelementptr [14 x i8], [14 x i8]* @.str.7966, i64 0, i64 0
-  %r507 = getelementptr [5 x i8], [5 x i8]* @.str.7967, i64 0, i64 0
+  %r506 = getelementptr [14 x i8], [14 x i8]* @.str.8033, i64 0, i64 0
+  %r507 = getelementptr [5 x i8], [5 x i8]* @.str.8034, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r506, i8* %r507)
-  %r508 = getelementptr [10 x i8], [10 x i8]* @.str.7968, i64 0, i64 0
-  %r509 = getelementptr [4 x i8], [4 x i8]* @.str.7969, i64 0, i64 0
+  %r508 = getelementptr [10 x i8], [10 x i8]* @.str.8035, i64 0, i64 0
+  %r509 = getelementptr [4 x i8], [4 x i8]* @.str.8036, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r508, i8* %r509)
-  %r510 = getelementptr [16 x i8], [16 x i8]* @.str.7970, i64 0, i64 0
-  %r511 = getelementptr [4 x i8], [4 x i8]* @.str.7971, i64 0, i64 0
+  %r510 = getelementptr [16 x i8], [16 x i8]* @.str.8037, i64 0, i64 0
+  %r511 = getelementptr [4 x i8], [4 x i8]* @.str.8038, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r510, i8* %r511)
-  %r512 = getelementptr [14 x i8], [14 x i8]* @.str.7972, i64 0, i64 0
-  %r513 = getelementptr [4 x i8], [4 x i8]* @.str.7973, i64 0, i64 0
+  %r512 = getelementptr [14 x i8], [14 x i8]* @.str.8039, i64 0, i64 0
+  %r513 = getelementptr [4 x i8], [4 x i8]* @.str.8040, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r512, i8* %r513)
-  %r514 = getelementptr [5 x i8], [5 x i8]* @.str.7974, i64 0, i64 0
-  %r515 = getelementptr [4 x i8], [4 x i8]* @.str.7975, i64 0, i64 0
+  %r514 = getelementptr [5 x i8], [5 x i8]* @.str.8041, i64 0, i64 0
+  %r515 = getelementptr [4 x i8], [4 x i8]* @.str.8042, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r514, i8* %r515)
-  %r516 = getelementptr [7 x i8], [7 x i8]* @.str.7976, i64 0, i64 0
-  %r517 = getelementptr [4 x i8], [4 x i8]* @.str.7977, i64 0, i64 0
+  %r516 = getelementptr [7 x i8], [7 x i8]* @.str.8043, i64 0, i64 0
+  %r517 = getelementptr [4 x i8], [4 x i8]* @.str.8044, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r516, i8* %r517)
-  %r518 = getelementptr [17 x i8], [17 x i8]* @.str.7978, i64 0, i64 0
-  %r519 = getelementptr [2 x i8], [2 x i8]* @.str.7979, i64 0, i64 0
+  %r518 = getelementptr [17 x i8], [17 x i8]* @.str.8045, i64 0, i64 0
+  %r519 = getelementptr [2 x i8], [2 x i8]* @.str.8046, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r518, i8* %r519)
-  %r520 = getelementptr [23 x i8], [23 x i8]* @.str.7980, i64 0, i64 0
-  %r521 = getelementptr [2 x i8], [2 x i8]* @.str.7981, i64 0, i64 0
+  %r520 = getelementptr [23 x i8], [23 x i8]* @.str.8047, i64 0, i64 0
+  %r521 = getelementptr [2 x i8], [2 x i8]* @.str.8048, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r520, i8* %r521)
-  %r522 = getelementptr [21 x i8], [21 x i8]* @.str.7982, i64 0, i64 0
-  %r523 = getelementptr [9 x i8], [9 x i8]* @.str.7983, i64 0, i64 0
+  %r522 = getelementptr [21 x i8], [21 x i8]* @.str.8049, i64 0, i64 0
+  %r523 = getelementptr [9 x i8], [9 x i8]* @.str.8050, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r522, i8* %r523)
   ret void
 }
 
-@.str.7462 = private unnamed_addr constant [19 x i8] c"__imported_files__\00"
-@.str.7463 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.7464 = private unnamed_addr constant [18 x i8] c"__scanned_files__\00"
-@.str.7465 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.7466 = private unnamed_addr constant [10 x i8] c"nurl_argv\00"
-@.str.7467 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7468 = private unnamed_addr constant [14 x i8] c"nurl_argv_get\00"
-@.str.7469 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7470 = private unnamed_addr constant [13 x i8] c"nurl_version\00"
-@.str.7471 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7472 = private unnamed_addr constant [15 x i8] c"nurl_read_file\00"
-@.str.7473 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7474 = private unnamed_addr constant [15 x i8] c"nurl_read_line\00"
-@.str.7475 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7476 = private unnamed_addr constant [13 x i8] c"nurl_str_cat\00"
-@.str.7477 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7478 = private unnamed_addr constant [14 x i8] c"nurl_str_cat3\00"
-@.str.7479 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7480 = private unnamed_addr constant [14 x i8] c"nurl_str_cat4\00"
-@.str.7481 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7482 = private unnamed_addr constant [13 x i8] c"nurl_str_int\00"
-@.str.7483 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7484 = private unnamed_addr constant [15 x i8] c"nurl_str_float\00"
-@.str.7485 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7486 = private unnamed_addr constant [15 x i8] c"nurl_str_slice\00"
-@.str.7487 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7488 = private unnamed_addr constant [27 x i8] c"nurl_str_cat__needs_stdlib\00"
-@.str.7489 = private unnamed_addr constant [22 x i8] c"stdlib/core/string.nu\00"
-@.str.7490 = private unnamed_addr constant [28 x i8] c"nurl_str_cat3__needs_stdlib\00"
-@.str.7491 = private unnamed_addr constant [22 x i8] c"stdlib/core/string.nu\00"
-@.str.7492 = private unnamed_addr constant [28 x i8] c"nurl_str_cat4__needs_stdlib\00"
-@.str.7493 = private unnamed_addr constant [22 x i8] c"stdlib/core/string.nu\00"
-@.str.7494 = private unnamed_addr constant [29 x i8] c"nurl_str_slice__needs_stdlib\00"
-@.str.7495 = private unnamed_addr constant [22 x i8] c"stdlib/core/string.nu\00"
-@.str.7496 = private unnamed_addr constant [24 x i8] c"nurl_str_cat__ret_owned\00"
-@.str.7497 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7498 = private unnamed_addr constant [25 x i8] c"nurl_str_cat3__ret_owned\00"
-@.str.7499 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7500 = private unnamed_addr constant [25 x i8] c"nurl_str_cat4__ret_owned\00"
-@.str.7501 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7502 = private unnamed_addr constant [24 x i8] c"nurl_str_int__ret_owned\00"
-@.str.7503 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7504 = private unnamed_addr constant [26 x i8] c"nurl_str_float__ret_owned\00"
-@.str.7505 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7506 = private unnamed_addr constant [26 x i8] c"nurl_str_slice__ret_owned\00"
-@.str.7507 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7508 = private unnamed_addr constant [26 x i8] c"nurl_read_file__ret_owned\00"
-@.str.7509 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7510 = private unnamed_addr constant [26 x i8] c"nurl_read_line__ret_owned\00"
-@.str.7511 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7512 = private unnamed_addr constant [24 x i8] c"nurl_sym_get__ret_owned\00"
-@.str.7513 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7514 = private unnamed_addr constant [25 x i8] c"nurl_sym_get2__ret_owned\00"
-@.str.7515 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7516 = private unnamed_addr constant [30 x i8] c"nurl_get_last_type__ret_owned\00"
-@.str.7517 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7518 = private unnamed_addr constant [24 x i8] c"nurl_lex_val__ret_owned\00"
-@.str.7519 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7520 = private unnamed_addr constant [29 x i8] c"nurl_lex_filename__ret_owned\00"
-@.str.7521 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7522 = private unnamed_addr constant [29 x i8] c"nurl_lex_peek_val__ret_owned\00"
-@.str.7523 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7524 = private unnamed_addr constant [21 x i8] c"nurl_llty__ret_owned\00"
-@.str.7525 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7526 = private unnamed_addr constant [26 x i8] c"ty_to_unsigned__ret_owned\00"
-@.str.7527 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7528 = private unnamed_addr constant [26 x i8] c"str_first_word__ret_owned\00"
-@.str.7529 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7530 = private unnamed_addr constant [25 x i8] c"str_skip_word__ret_owned\00"
-@.str.7531 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7532 = private unnamed_addr constant [25 x i8] c"seplist_first__ret_owned\00"
-@.str.7533 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7534 = private unnamed_addr constant [24 x i8] c"seplist_rest__ret_owned\00"
-@.str.7535 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7536 = private unnamed_addr constant [21 x i8] c"__kw_trim__ret_owned\00"
-@.str.7537 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7538 = private unnamed_addr constant [22 x i8] c"bck_st_set__ret_owned\00"
-@.str.7539 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7540 = private unnamed_addr constant [26 x i8] c"bck_join_state__ret_owned\00"
-@.str.7541 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7542 = private unnamed_addr constant [31 x i8] c"bck_loop_carry_seed__ret_owned\00"
-@.str.7543 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7544 = private unnamed_addr constant [21 x i8] c"llvm_type__ret_owned\00"
-@.str.7545 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7546 = private unnamed_addr constant [22 x i8] c"parse_type__ret_owned\00"
-@.str.7547 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7548 = private unnamed_addr constant [27 x i8] c"parse_type_base__ret_owned\00"
-@.str.7549 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7550 = private unnamed_addr constant [26 x i8] c"parse_type_ptr__ret_owned\00"
-@.str.7551 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7552 = private unnamed_addr constant [26 x i8] c"parse_type_opt__ret_owned\00"
-@.str.7553 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7554 = private unnamed_addr constant [29 x i8] c"parse_type_optopt__ret_owned\00"
-@.str.7555 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7556 = private unnamed_addr constant [28 x i8] c"parse_type_slice__ret_owned\00"
-@.str.7557 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7558 = private unnamed_addr constant [26 x i8] c"parse_type_res__ret_owned\00"
-@.str.7559 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7560 = private unnamed_addr constant [28 x i8] c"parse_type_paren__ret_owned\00"
-@.str.7561 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7562 = private unnamed_addr constant [27 x i8] c"parse_type_enum__ret_owned\00"
-@.str.7563 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7564 = private unnamed_addr constant [26 x i8] c"parse_type_dyn__ret_owned\00"
-@.str.7565 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7566 = private unnamed_addr constant [20 x i8] c"gen_expr__ret_owned\00"
-@.str.7567 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7568 = private unnamed_addr constant [23 x i8] c"gen_operand__ret_owned\00"
-@.str.7569 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7570 = private unnamed_addr constant [21 x i8] c"gen_ident__ret_owned\00"
-@.str.7571 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7572 = private unnamed_addr constant [20 x i8] c"gen_call__ret_owned\00"
-@.str.7573 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7574 = private unnamed_addr constant [27 x i8] c"gen_call_kwargs__ret_owned\00"
-@.str.7575 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7576 = private unnamed_addr constant [20 x i8] c"gen_cond__ret_owned\00"
-@.str.7577 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7578 = private unnamed_addr constant [21 x i8] c"gen_match__ret_owned\00"
-@.str.7579 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7580 = private unnamed_addr constant [23 x i8] c"gen_str_lit__ret_owned\00"
-@.str.7581 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7582 = private unnamed_addr constant [28 x i8] c"gen_str_lit_expr__ret_owned\00"
-@.str.7583 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7584 = private unnamed_addr constant [23 x i8] c"gen_int_lit__ret_owned\00"
-@.str.7585 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7586 = private unnamed_addr constant [25 x i8] c"gen_float_lit__ret_owned\00"
-@.str.7587 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7588 = private unnamed_addr constant [24 x i8] c"gen_bool_lit__ret_owned\00"
-@.str.7589 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7590 = private unnamed_addr constant [22 x i8] c"gen_sizeof__ret_owned\00"
-@.str.7591 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7592 = private unnamed_addr constant [19 x i8] c"gen_ret__ret_owned\00"
-@.str.7593 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7594 = private unnamed_addr constant [25 x i8] c"gen_unary_not__ret_owned\00"
-@.str.7595 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7596 = private unnamed_addr constant [20 x i8] c"gen_cast__ret_owned\00"
-@.str.7597 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7598 = private unnamed_addr constant [22 x i8] c"gen_member__ret_owned\00"
-@.str.7599 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7600 = private unnamed_addr constant [26 x i8] c"gen_block_expr__ret_owned\00"
-@.str.7601 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7602 = private unnamed_addr constant [23 x i8] c"gen_agg_lit__ret_owned\00"
-@.str.7603 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7604 = private unnamed_addr constant [29 x i8] c"gen_slice_literal__ret_owned\00"
-@.str.7605 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7606 = private unnamed_addr constant [30 x i8] c"gen_backslash_expr__ret_owned\00"
-@.str.7607 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7608 = private unnamed_addr constant [20 x i8] c"gen_oror__ret_owned\00"
-@.str.7609 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7610 = private unnamed_addr constant [38 x i8] c"gen_logical_or_bitwise_and__ret_owned\00"
-@.str.7611 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7612 = private unnamed_addr constant [37 x i8] c"gen_logical_or_bitwise_or__ret_owned\00"
-@.str.7613 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7614 = private unnamed_addr constant [22 x i8] c"gen_binary__ret_owned\00"
-@.str.7615 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7616 = private unnamed_addr constant [29 x i8] c"gen_dyn_construct__ret_owned\00"
-@.str.7617 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7618 = private unnamed_addr constant [32 x i8] c"gen_inout_field_addr__ret_owned\00"
-@.str.7619 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7620 = private unnamed_addr constant [28 x i8] c"gen_closure_expr__ret_owned\00"
-@.str.7621 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7622 = private unnamed_addr constant [20 x i8] c"gen_stmt__ret_owned\00"
-@.str.7623 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7624 = private unnamed_addr constant [25 x i8] c"gen_block_ret__ret_owned\00"
-@.str.7625 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7626 = private unnamed_addr constant [27 x i8] c"gen_block_stmts__ret_owned\00"
-@.str.7627 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7628 = private unnamed_addr constant [29 x i8] c"gen_let_or_struct__ret_owned\00"
-@.str.7629 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7630 = private unnamed_addr constant [22 x i8] c"gen_assign__ret_owned\00"
-@.str.7631 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7632 = private unnamed_addr constant [27 x i8] c"gen_field_store__ret_owned\00"
-@.str.7633 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7634 = private unnamed_addr constant [20 x i8] c"gen_loop__ret_owned\00"
-@.str.7635 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7636 = private unnamed_addr constant [23 x i8] c"gen_foreach__ret_owned\00"
-@.str.7637 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7638 = private unnamed_addr constant [20 x i8] c"load_var__ret_owned\00"
-@.str.7639 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7640 = private unnamed_addr constant [21 x i8] c"gen_defer__ret_owned\00"
-@.str.7641 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7642 = private unnamed_addr constant [24 x i8] c"bck_walk_seq__ret_owned\00"
-@.str.7643 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7644 = private unnamed_addr constant [27 x i8] c"bck_handle_cond__ret_owned\00"
-@.str.7645 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7646 = private unnamed_addr constant [28 x i8] c"bck_handle_match__ret_owned\00"
-@.str.7647 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7648 = private unnamed_addr constant [20 x i8] c"bck_loop__ret_owned\00"
-@.str.7649 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7650 = private unnamed_addr constant [22 x i8] c"encode_str__ret_owned\00"
-@.str.7651 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7652 = private unnamed_addr constant [30 x i8] c"nurl_lex_src_slice__ret_owned\00"
-@.str.7653 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7654 = private unnamed_addr constant [31 x i8] c"nurl_print_buf_stop__ret_owned\00"
-@.str.7655 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7656 = private unnamed_addr constant [27 x i8] c"priv_mangle_for__ret_owned\00"
-@.str.7657 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7658 = private unnamed_addr constant [24 x i8] c"priv_resolve__ret_owned\00"
-@.str.7659 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7660 = private unnamed_addr constant [24 x i8] c"priv_file_id__ret_owned\00"
-@.str.7661 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7662 = private unnamed_addr constant [24 x i8] c"llvm_to_nurl__ret_owned\00"
-@.str.7663 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7664 = private unnamed_addr constant [24 x i8] c"coerce_to_i1__ret_owned\00"
-@.str.7665 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7666 = private unnamed_addr constant [30 x i8] c"emit_deferred_cstr__ret_owned\00"
-@.str.7667 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7668 = private unnamed_addr constant [21 x i8] c"nurl_argv__ret_owned\00"
-@.str.7669 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7670 = private unnamed_addr constant [35 x i8] c"simple_capture_analysis__ret_owned\00"
-@.str.7671 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7672 = private unnamed_addr constant [21 x i8] c"__nth_sep__ret_owned\00"
-@.str.7673 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7674 = private unnamed_addr constant [27 x i8] c"mangle_src_word__ret_owned\00"
-@.str.7675 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7676 = private unnamed_addr constant [23 x i8] c"mangle_type__ret_owned\00"
-@.str.7677 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7678 = private unnamed_addr constant [25 x i8] c"demangle_type__ret_owned\00"
-@.str.7679 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7680 = private unnamed_addr constant [28 x i8] c"nurl_src_to_llvm__ret_owned\00"
-@.str.7681 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7682 = private unnamed_addr constant [26 x i8] c"__tok_src_text__ret_owned\00"
-@.str.7683 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7684 = private unnamed_addr constant [24 x i8] c"subst_source__ret_owned\00"
-@.str.7685 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7686 = private unnamed_addr constant [28 x i8] c"subst_source_raw__ret_owned\00"
-@.str.7687 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7688 = private unnamed_addr constant [30 x i8] c"__canon_import_key__ret_owned\00"
-@.str.7689 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7690 = private unnamed_addr constant [26 x i8] c"__norm_int_lit__ret_owned\00"
-@.str.7691 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7692 = private unnamed_addr constant [30 x i8] c"nurl_lex_line_text__ret_owned\00"
-@.str.7693 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7694 = private unnamed_addr constant [27 x i8] c"nurl_diag_caret__ret_owned\00"
-@.str.7695 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7696 = private unnamed_addr constant [27 x i8] c"__src_line_text__ret_owned\00"
-@.str.7697 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7698 = private unnamed_addr constant [33 x i8] c"nurl_lex_line_text_at__ret_owned\00"
-@.str.7699 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7700 = private unnamed_addr constant [27 x i8] c"__suggest_ident__ret_owned\00"
-@.str.7701 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7702 = private unnamed_addr constant [41 x i8] c"mem_collect_struct_fields_for__ret_owned\00"
-@.str.7703 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7704 = private unnamed_addr constant [30 x i8] c"__norm_import_path__ret_owned\00"
-@.str.7705 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7706 = private unnamed_addr constant [32 x i8] c"__import_nu_fallback__ret_owned\00"
-@.str.7707 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7708 = private unnamed_addr constant [31 x i8] c"compound_field_type__ret_owned\00"
-@.str.7709 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7710 = private unnamed_addr constant [31 x i8] c"convert_closure_arg__ret_owned\00"
-@.str.7711 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7712 = private unnamed_addr constant [35 x i8] c"mem_ret_struct_transfer__ret_owned\00"
-@.str.7713 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7714 = private unnamed_addr constant [7 x i8] c"malloc\00"
-@.str.7715 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7716 = private unnamed_addr constant [12 x i8] c"nurl_malloc\00"
-@.str.7717 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7718 = private unnamed_addr constant [11 x i8] c"nurl_alloc\00"
-@.str.7719 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7720 = private unnamed_addr constant [12 x i8] c"nurl_zalloc\00"
-@.str.7721 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7722 = private unnamed_addr constant [13 x i8] c"nurl_realloc\00"
-@.str.7723 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7724 = private unnamed_addr constant [7 x i8] c"strlen\00"
-@.str.7725 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7726 = private unnamed_addr constant [7 x i8] c"strcmp\00"
-@.str.7727 = private unnamed_addr constant [4 x i8] c"i32\00"
-@.str.7728 = private unnamed_addr constant [8 x i8] c"strncmp\00"
-@.str.7729 = private unnamed_addr constant [4 x i8] c"i32\00"
-@.str.7730 = private unnamed_addr constant [7 x i8] c"memcmp\00"
-@.str.7731 = private unnamed_addr constant [4 x i8] c"i32\00"
-@.str.7732 = private unnamed_addr constant [7 x i8] c"strstr\00"
-@.str.7733 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7734 = private unnamed_addr constant [7 x i8] c"memmem\00"
-@.str.7735 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7736 = private unnamed_addr constant [6 x i8] c"atoll\00"
-@.str.7737 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7738 = private unnamed_addr constant [5 x i8] c"atof\00"
-@.str.7739 = private unnamed_addr constant [7 x i8] c"double\00"
-@.str.7740 = private unnamed_addr constant [7 x i8] c"strtod\00"
-@.str.7741 = private unnamed_addr constant [7 x i8] c"double\00"
-@.str.7742 = private unnamed_addr constant [7 x i8] c"memcpy\00"
-@.str.7743 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7744 = private unnamed_addr constant [7 x i8] c"strdup\00"
-@.str.7745 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7746 = private unnamed_addr constant [12 x i8] c"nurl_strdup\00"
-@.str.7747 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7748 = private unnamed_addr constant [6 x i8] c"fopen\00"
-@.str.7749 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7750 = private unnamed_addr constant [7 x i8] c"fclose\00"
-@.str.7751 = private unnamed_addr constant [4 x i8] c"i32\00"
-@.str.7752 = private unnamed_addr constant [6 x i8] c"fputs\00"
-@.str.7753 = private unnamed_addr constant [4 x i8] c"i32\00"
-@.str.7754 = private unnamed_addr constant [7 x i8] c"fwrite\00"
-@.str.7755 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7756 = private unnamed_addr constant [6 x i8] c"fputc\00"
-@.str.7757 = private unnamed_addr constant [4 x i8] c"i32\00"
-@.str.7758 = private unnamed_addr constant [6 x i8] c"fread\00"
-@.str.7759 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7760 = private unnamed_addr constant [5 x i8] c"feof\00"
-@.str.7761 = private unnamed_addr constant [4 x i8] c"i32\00"
-@.str.7762 = private unnamed_addr constant [6 x i8] c"fseek\00"
-@.str.7763 = private unnamed_addr constant [4 x i8] c"i32\00"
-@.str.7764 = private unnamed_addr constant [6 x i8] c"ftell\00"
-@.str.7765 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7766 = private unnamed_addr constant [7 x i8] c"access\00"
-@.str.7767 = private unnamed_addr constant [4 x i8] c"i32\00"
-@.str.7768 = private unnamed_addr constant [7 x i8] c"getenv\00"
-@.str.7769 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7770 = private unnamed_addr constant [9 x i8] c"realpath\00"
-@.str.7771 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7772 = private unnamed_addr constant [15 x i8] c"nurl_file_open\00"
-@.str.7773 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7774 = private unnamed_addr constant [16 x i8] c"nurl_file_write\00"
-@.str.7775 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7776 = private unnamed_addr constant [22 x i8] c"nurl_file_write_range\00"
-@.str.7777 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7778 = private unnamed_addr constant [21 x i8] c"nurl_file_write_byte\00"
-@.str.7779 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7780 = private unnamed_addr constant [16 x i8] c"nurl_file_close\00"
-@.str.7781 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7782 = private unnamed_addr constant [17 x i8] c"nurl_file_exists\00"
-@.str.7783 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7784 = private unnamed_addr constant [14 x i8] c"nurl_file_del\00"
-@.str.7785 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7786 = private unnamed_addr constant [23 x i8] c"nurl_parse_float_range\00"
-@.str.7787 = private unnamed_addr constant [7 x i8] c"double\00"
-@.str.7788 = private unnamed_addr constant [12 x i8] c"nurl_is_nan\00"
-@.str.7789 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7790 = private unnamed_addr constant [12 x i8] c"nurl_is_inf\00"
-@.str.7791 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7792 = private unnamed_addr constant [21 x i8] c"nurl_parse_int_range\00"
-@.str.7793 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7794 = private unnamed_addr constant [16 x i8] c"nurl_scan_byte3\00"
-@.str.7795 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7796 = private unnamed_addr constant [17 x i8] c"nurl_byte_substr\00"
-@.str.7797 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7798 = private unnamed_addr constant [16 x i8] c"nurl_count_byte\00"
-@.str.7799 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7800 = private unnamed_addr constant [15 x i8] c"nurl_fast_atof\00"
-@.str.7801 = private unnamed_addr constant [7 x i8] c"double\00"
-@.str.7802 = private unnamed_addr constant [18 x i8] c"nurl_fast_atof_ex\00"
-@.str.7803 = private unnamed_addr constant [7 x i8] c"double\00"
-@.str.7804 = private unnamed_addr constant [19 x i8] c"nurl_dir_list_next\00"
-@.str.7805 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7806 = private unnamed_addr constant [19 x i8] c"nurl_dir_list_open\00"
-@.str.7807 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7808 = private unnamed_addr constant [20 x i8] c"nurl_dir_list_close\00"
-@.str.7809 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7810 = private unnamed_addr constant [23 x i8] c"nurl_http_perform_full\00"
-@.str.7811 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7812 = private unnamed_addr constant [26 x i8] c"nurl_http_perform_full_to\00"
-@.str.7813 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7814 = private unnamed_addr constant [24 x i8] c"nurl_http_response_free\00"
-@.str.7815 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7816 = private unnamed_addr constant [25 x i8] c"nurl_http_stream_open_to\00"
-@.str.7817 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7818 = private unnamed_addr constant [22 x i8] c"nurl_http_stream_next\00"
-@.str.7819 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7820 = private unnamed_addr constant [33 x i8] c"nurl_http_stream_next__ret_owned\00"
-@.str.7821 = private unnamed_addr constant [4 x i8] c"str\00"
-@.str.7822 = private unnamed_addr constant [23 x i8] c"nurl_http_stream_close\00"
-@.str.7823 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7824 = private unnamed_addr constant [30 x i8] c"nurl_http_stream_pump_headers\00"
-@.str.7825 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7826 = private unnamed_addr constant [14 x i8] c"nurl_proc_run\00"
-@.str.7827 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7828 = private unnamed_addr constant [20 x i8] c"nurl_proc_exit_code\00"
-@.str.7829 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7830 = private unnamed_addr constant [19 x i8] c"nurl_proc_err_kind\00"
-@.str.7831 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7832 = private unnamed_addr constant [17 x i8] c"nurl_proc_stdout\00"
-@.str.7833 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7834 = private unnamed_addr constant [17 x i8] c"nurl_proc_stderr\00"
-@.str.7835 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7836 = private unnamed_addr constant [21 x i8] c"nurl_proc_stdout_len\00"
-@.str.7837 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7838 = private unnamed_addr constant [21 x i8] c"nurl_proc_stderr_len\00"
-@.str.7839 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7840 = private unnamed_addr constant [15 x i8] c"nurl_proc_free\00"
-@.str.7841 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7842 = private unnamed_addr constant [16 x i8] c"nurl_proc_spawn\00"
-@.str.7843 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7844 = private unnamed_addr constant [25 x i8] c"nurl_proc_spawn_err_kind\00"
-@.str.7845 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7846 = private unnamed_addr constant [20 x i8] c"nurl_proc_spawn_pid\00"
-@.str.7847 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7848 = private unnamed_addr constant [22 x i8] c"nurl_proc_spawn_write\00"
-@.str.7849 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7850 = private unnamed_addr constant [28 x i8] c"nurl_proc_spawn_close_stdin\00"
-@.str.7851 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7852 = private unnamed_addr constant [26 x i8] c"nurl_proc_spawn_read_line\00"
-@.str.7853 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7854 = private unnamed_addr constant [30 x i8] c"nurl_proc_spawn_read_line_len\00"
-@.str.7855 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7856 = private unnamed_addr constant [20 x i8] c"nurl_proc_spawn_eof\00"
-@.str.7857 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7858 = private unnamed_addr constant [28 x i8] c"nurl_proc_spawn_last_io_err\00"
-@.str.7859 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7860 = private unnamed_addr constant [21 x i8] c"nurl_proc_spawn_wait\00"
-@.str.7861 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7862 = private unnamed_addr constant [21 x i8] c"nurl_proc_spawn_kill\00"
-@.str.7863 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7864 = private unnamed_addr constant [21 x i8] c"nurl_proc_spawn_free\00"
-@.str.7865 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7866 = private unnamed_addr constant [16 x i8] c"nurl_tcp_listen\00"
-@.str.7867 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7868 = private unnamed_addr constant [20 x i8] c"nurl_tcp_listen_tls\00"
-@.str.7869 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7870 = private unnamed_addr constant [25 x i8] c"nurl_tcp_listen_tls_alpn\00"
-@.str.7871 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7872 = private unnamed_addr constant [23 x i8] c"nurl_tcp_alpn_selected\00"
-@.str.7873 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7874 = private unnamed_addr constant [21 x i8] c"nurl_tcp_tls_add_sni\00"
-@.str.7875 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7876 = private unnamed_addr constant [20 x i8] c"nurl_tcp_tls_reload\00"
-@.str.7877 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7878 = private unnamed_addr constant [33 x i8] c"nurl_tcp_tls_require_client_cert\00"
-@.str.7879 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7880 = private unnamed_addr constant [27 x i8] c"nurl_tcp_peer_cert_subject\00"
-@.str.7881 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7882 = private unnamed_addr constant [16 x i8] c"nurl_tcp_accept\00"
-@.str.7883 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7884 = private unnamed_addr constant [14 x i8] c"nurl_tcp_read\00"
-@.str.7885 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7886 = private unnamed_addr constant [15 x i8] c"nurl_tcp_write\00"
-@.str.7887 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7888 = private unnamed_addr constant [15 x i8] c"nurl_tcp_close\00"
-@.str.7889 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7890 = private unnamed_addr constant [18 x i8] c"nurl_tcp_shutdown\00"
-@.str.7891 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7892 = private unnamed_addr constant [18 x i8] c"nurl_tcp_err_kind\00"
-@.str.7893 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7894 = private unnamed_addr constant [19 x i8] c"nurl_tcp_peer_addr\00"
-@.str.7895 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7896 = private unnamed_addr constant [21 x i8] c"nurl_tcp_set_timeout\00"
-@.str.7897 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7898 = private unnamed_addr constant [29 x i8] c"nurl_signal_install_shutdown\00"
-@.str.7899 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7900 = private unnamed_addr constant [29 x i8] c"nurl_signal_trigger_shutdown\00"
-@.str.7901 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7902 = private unnamed_addr constant [11 x i8] c"nurl_panic\00"
-@.str.7903 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7904 = private unnamed_addr constant [13 x i8] c"nurl_recover\00"
-@.str.7905 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7906 = private unnamed_addr constant [20 x i8] c"nurl_panic_last_msg\00"
-@.str.7907 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7908 = private unnamed_addr constant [11 x i8] c"nurl_print\00"
-@.str.7909 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7910 = private unnamed_addr constant [13 x i8] c"nurl_println\00"
-@.str.7911 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7912 = private unnamed_addr constant [12 x i8] c"nurl_eprint\00"
-@.str.7913 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7914 = private unnamed_addr constant [14 x i8] c"nurl_eprintln\00"
-@.str.7915 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7916 = private unnamed_addr constant [15 x i8] c"nurl_print_int\00"
-@.str.7917 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7918 = private unnamed_addr constant [15 x i8] c"nurl_print_str\00"
-@.str.7919 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7920 = private unnamed_addr constant [16 x i8] c"nurl_print_bool\00"
-@.str.7921 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7922 = private unnamed_addr constant [10 x i8] c"nurl_exit\00"
-@.str.7923 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7924 = private unnamed_addr constant [18 x i8] c"nurl_flush_stdout\00"
-@.str.7925 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7926 = private unnamed_addr constant [18 x i8] c"nurl_flush_stderr\00"
-@.str.7927 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7928 = private unnamed_addr constant [15 x i8] c"nurl_stdin_eof\00"
-@.str.7929 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7930 = private unnamed_addr constant [5 x i8] c"free\00"
-@.str.7931 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7932 = private unnamed_addr constant [10 x i8] c"nurl_free\00"
-@.str.7933 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7934 = private unnamed_addr constant [12 x i8] c"nurl_memcpy\00"
-@.str.7935 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7936 = private unnamed_addr constant [13 x i8] c"nurl_memmove\00"
-@.str.7937 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7938 = private unnamed_addr constant [10 x i8] c"nurl_poke\00"
-@.str.7939 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7940 = private unnamed_addr constant [21 x i8] c"nurl_print_buf_start\00"
-@.str.7941 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7942 = private unnamed_addr constant [20 x i8] c"nurl_print_buf_stop\00"
-@.str.7943 = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.7944 = private unnamed_addr constant [21 x i8] c"nurl_print_buf_reset\00"
-@.str.7945 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7946 = private unnamed_addr constant [10 x i8] c"nurl_peek\00"
-@.str.7947 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7948 = private unnamed_addr constant [12 x i8] c"nurl_umulhi\00"
-@.str.7949 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7950 = private unnamed_addr constant [13 x i8] c"nurl_addc_lo\00"
-@.str.7951 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7952 = private unnamed_addr constant [13 x i8] c"nurl_addc_hi\00"
-@.str.7953 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7954 = private unnamed_addr constant [13 x i8] c"nurl_subb_lo\00"
-@.str.7955 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7956 = private unnamed_addr constant [13 x i8] c"nurl_subb_hi\00"
-@.str.7957 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7958 = private unnamed_addr constant [12 x i8] c"nurl_mac_lo\00"
-@.str.7959 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7960 = private unnamed_addr constant [12 x i8] c"nurl_mac_hi\00"
-@.str.7961 = private unnamed_addr constant [4 x i8] c"u64\00"
-@.str.7962 = private unnamed_addr constant [10 x i8] c"nurl_init\00"
-@.str.7963 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7964 = private unnamed_addr constant [12 x i8] c"nurl_memset\00"
-@.str.7965 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7966 = private unnamed_addr constant [14 x i8] c"nurl_vec_drop\00"
-@.str.7967 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.7968 = private unnamed_addr constant [10 x i8] c"nurl_argc\00"
-@.str.7969 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7970 = private unnamed_addr constant [16 x i8] c"nurl_argv_count\00"
-@.str.7971 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7972 = private unnamed_addr constant [14 x i8] c"nurl_read_int\00"
-@.str.7973 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.7974 = private unnamed_addr constant [5 x i8] c"puts\00"
-@.str.7975 = private unnamed_addr constant [4 x i8] c"i32\00"
-@.str.7976 = private unnamed_addr constant [7 x i8] c"printf\00"
-@.str.7977 = private unnamed_addr constant [4 x i8] c"i32\00"
-@.str.7978 = private unnamed_addr constant [17 x i8] c"printf__variadic\00"
-@.str.7979 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.7980 = private unnamed_addr constant [23 x i8] c"printf__variadic_fixed\00"
-@.str.7981 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.7982 = private unnamed_addr constant [21 x i8] c"printf__variadic_sig\00"
-@.str.7983 = private unnamed_addr constant [9 x i8] c"i8*, ...\00"
+@.str.7529 = private unnamed_addr constant [19 x i8] c"__imported_files__\00"
+@.str.7530 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.7531 = private unnamed_addr constant [18 x i8] c"__scanned_files__\00"
+@.str.7532 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.7533 = private unnamed_addr constant [10 x i8] c"nurl_argv\00"
+@.str.7534 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7535 = private unnamed_addr constant [14 x i8] c"nurl_argv_get\00"
+@.str.7536 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7537 = private unnamed_addr constant [13 x i8] c"nurl_version\00"
+@.str.7538 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7539 = private unnamed_addr constant [15 x i8] c"nurl_read_file\00"
+@.str.7540 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7541 = private unnamed_addr constant [15 x i8] c"nurl_read_line\00"
+@.str.7542 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7543 = private unnamed_addr constant [13 x i8] c"nurl_str_cat\00"
+@.str.7544 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7545 = private unnamed_addr constant [14 x i8] c"nurl_str_cat3\00"
+@.str.7546 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7547 = private unnamed_addr constant [14 x i8] c"nurl_str_cat4\00"
+@.str.7548 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7549 = private unnamed_addr constant [13 x i8] c"nurl_str_int\00"
+@.str.7550 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7551 = private unnamed_addr constant [15 x i8] c"nurl_str_float\00"
+@.str.7552 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7553 = private unnamed_addr constant [15 x i8] c"nurl_str_slice\00"
+@.str.7554 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7555 = private unnamed_addr constant [27 x i8] c"nurl_str_cat__needs_stdlib\00"
+@.str.7556 = private unnamed_addr constant [22 x i8] c"stdlib/core/string.nu\00"
+@.str.7557 = private unnamed_addr constant [28 x i8] c"nurl_str_cat3__needs_stdlib\00"
+@.str.7558 = private unnamed_addr constant [22 x i8] c"stdlib/core/string.nu\00"
+@.str.7559 = private unnamed_addr constant [28 x i8] c"nurl_str_cat4__needs_stdlib\00"
+@.str.7560 = private unnamed_addr constant [22 x i8] c"stdlib/core/string.nu\00"
+@.str.7561 = private unnamed_addr constant [29 x i8] c"nurl_str_slice__needs_stdlib\00"
+@.str.7562 = private unnamed_addr constant [22 x i8] c"stdlib/core/string.nu\00"
+@.str.7563 = private unnamed_addr constant [24 x i8] c"nurl_str_cat__ret_owned\00"
+@.str.7564 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7565 = private unnamed_addr constant [25 x i8] c"nurl_str_cat3__ret_owned\00"
+@.str.7566 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7567 = private unnamed_addr constant [25 x i8] c"nurl_str_cat4__ret_owned\00"
+@.str.7568 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7569 = private unnamed_addr constant [24 x i8] c"nurl_str_int__ret_owned\00"
+@.str.7570 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7571 = private unnamed_addr constant [26 x i8] c"nurl_str_float__ret_owned\00"
+@.str.7572 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7573 = private unnamed_addr constant [26 x i8] c"nurl_str_slice__ret_owned\00"
+@.str.7574 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7575 = private unnamed_addr constant [26 x i8] c"nurl_read_file__ret_owned\00"
+@.str.7576 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7577 = private unnamed_addr constant [26 x i8] c"nurl_read_line__ret_owned\00"
+@.str.7578 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7579 = private unnamed_addr constant [24 x i8] c"nurl_sym_get__ret_owned\00"
+@.str.7580 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7581 = private unnamed_addr constant [25 x i8] c"nurl_sym_get2__ret_owned\00"
+@.str.7582 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7583 = private unnamed_addr constant [30 x i8] c"nurl_get_last_type__ret_owned\00"
+@.str.7584 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7585 = private unnamed_addr constant [24 x i8] c"nurl_lex_val__ret_owned\00"
+@.str.7586 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7587 = private unnamed_addr constant [29 x i8] c"nurl_lex_filename__ret_owned\00"
+@.str.7588 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7589 = private unnamed_addr constant [29 x i8] c"nurl_lex_peek_val__ret_owned\00"
+@.str.7590 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7591 = private unnamed_addr constant [21 x i8] c"nurl_llty__ret_owned\00"
+@.str.7592 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7593 = private unnamed_addr constant [26 x i8] c"ty_to_unsigned__ret_owned\00"
+@.str.7594 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7595 = private unnamed_addr constant [26 x i8] c"str_first_word__ret_owned\00"
+@.str.7596 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7597 = private unnamed_addr constant [25 x i8] c"str_skip_word__ret_owned\00"
+@.str.7598 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7599 = private unnamed_addr constant [25 x i8] c"seplist_first__ret_owned\00"
+@.str.7600 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7601 = private unnamed_addr constant [24 x i8] c"seplist_rest__ret_owned\00"
+@.str.7602 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7603 = private unnamed_addr constant [21 x i8] c"__kw_trim__ret_owned\00"
+@.str.7604 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7605 = private unnamed_addr constant [22 x i8] c"bck_st_set__ret_owned\00"
+@.str.7606 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7607 = private unnamed_addr constant [26 x i8] c"bck_join_state__ret_owned\00"
+@.str.7608 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7609 = private unnamed_addr constant [31 x i8] c"bck_loop_carry_seed__ret_owned\00"
+@.str.7610 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7611 = private unnamed_addr constant [21 x i8] c"llvm_type__ret_owned\00"
+@.str.7612 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7613 = private unnamed_addr constant [22 x i8] c"parse_type__ret_owned\00"
+@.str.7614 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7615 = private unnamed_addr constant [27 x i8] c"parse_type_base__ret_owned\00"
+@.str.7616 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7617 = private unnamed_addr constant [26 x i8] c"parse_type_ptr__ret_owned\00"
+@.str.7618 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7619 = private unnamed_addr constant [26 x i8] c"parse_type_opt__ret_owned\00"
+@.str.7620 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7621 = private unnamed_addr constant [29 x i8] c"parse_type_optopt__ret_owned\00"
+@.str.7622 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7623 = private unnamed_addr constant [28 x i8] c"parse_type_slice__ret_owned\00"
+@.str.7624 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7625 = private unnamed_addr constant [26 x i8] c"parse_type_res__ret_owned\00"
+@.str.7626 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7627 = private unnamed_addr constant [28 x i8] c"parse_type_paren__ret_owned\00"
+@.str.7628 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7629 = private unnamed_addr constant [27 x i8] c"parse_type_enum__ret_owned\00"
+@.str.7630 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7631 = private unnamed_addr constant [26 x i8] c"parse_type_dyn__ret_owned\00"
+@.str.7632 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7633 = private unnamed_addr constant [20 x i8] c"gen_expr__ret_owned\00"
+@.str.7634 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7635 = private unnamed_addr constant [23 x i8] c"gen_operand__ret_owned\00"
+@.str.7636 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7637 = private unnamed_addr constant [21 x i8] c"gen_ident__ret_owned\00"
+@.str.7638 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7639 = private unnamed_addr constant [20 x i8] c"gen_call__ret_owned\00"
+@.str.7640 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7641 = private unnamed_addr constant [27 x i8] c"gen_call_kwargs__ret_owned\00"
+@.str.7642 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7643 = private unnamed_addr constant [20 x i8] c"gen_cond__ret_owned\00"
+@.str.7644 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7645 = private unnamed_addr constant [21 x i8] c"gen_match__ret_owned\00"
+@.str.7646 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7647 = private unnamed_addr constant [23 x i8] c"gen_str_lit__ret_owned\00"
+@.str.7648 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7649 = private unnamed_addr constant [28 x i8] c"gen_str_lit_expr__ret_owned\00"
+@.str.7650 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7651 = private unnamed_addr constant [23 x i8] c"gen_int_lit__ret_owned\00"
+@.str.7652 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7653 = private unnamed_addr constant [25 x i8] c"gen_float_lit__ret_owned\00"
+@.str.7654 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7655 = private unnamed_addr constant [24 x i8] c"gen_bool_lit__ret_owned\00"
+@.str.7656 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7657 = private unnamed_addr constant [22 x i8] c"gen_sizeof__ret_owned\00"
+@.str.7658 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7659 = private unnamed_addr constant [19 x i8] c"gen_ret__ret_owned\00"
+@.str.7660 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7661 = private unnamed_addr constant [25 x i8] c"gen_unary_not__ret_owned\00"
+@.str.7662 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7663 = private unnamed_addr constant [20 x i8] c"gen_cast__ret_owned\00"
+@.str.7664 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7665 = private unnamed_addr constant [22 x i8] c"gen_member__ret_owned\00"
+@.str.7666 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7667 = private unnamed_addr constant [26 x i8] c"gen_block_expr__ret_owned\00"
+@.str.7668 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7669 = private unnamed_addr constant [23 x i8] c"gen_agg_lit__ret_owned\00"
+@.str.7670 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7671 = private unnamed_addr constant [29 x i8] c"gen_slice_literal__ret_owned\00"
+@.str.7672 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7673 = private unnamed_addr constant [30 x i8] c"gen_backslash_expr__ret_owned\00"
+@.str.7674 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7675 = private unnamed_addr constant [20 x i8] c"gen_oror__ret_owned\00"
+@.str.7676 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7677 = private unnamed_addr constant [38 x i8] c"gen_logical_or_bitwise_and__ret_owned\00"
+@.str.7678 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7679 = private unnamed_addr constant [37 x i8] c"gen_logical_or_bitwise_or__ret_owned\00"
+@.str.7680 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7681 = private unnamed_addr constant [22 x i8] c"gen_binary__ret_owned\00"
+@.str.7682 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7683 = private unnamed_addr constant [29 x i8] c"gen_dyn_construct__ret_owned\00"
+@.str.7684 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7685 = private unnamed_addr constant [32 x i8] c"gen_inout_field_addr__ret_owned\00"
+@.str.7686 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7687 = private unnamed_addr constant [28 x i8] c"gen_closure_expr__ret_owned\00"
+@.str.7688 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7689 = private unnamed_addr constant [20 x i8] c"gen_stmt__ret_owned\00"
+@.str.7690 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7691 = private unnamed_addr constant [25 x i8] c"gen_block_ret__ret_owned\00"
+@.str.7692 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7693 = private unnamed_addr constant [27 x i8] c"gen_block_stmts__ret_owned\00"
+@.str.7694 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7695 = private unnamed_addr constant [29 x i8] c"gen_let_or_struct__ret_owned\00"
+@.str.7696 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7697 = private unnamed_addr constant [22 x i8] c"gen_assign__ret_owned\00"
+@.str.7698 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7699 = private unnamed_addr constant [27 x i8] c"gen_field_store__ret_owned\00"
+@.str.7700 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7701 = private unnamed_addr constant [20 x i8] c"gen_loop__ret_owned\00"
+@.str.7702 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7703 = private unnamed_addr constant [23 x i8] c"gen_foreach__ret_owned\00"
+@.str.7704 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7705 = private unnamed_addr constant [20 x i8] c"load_var__ret_owned\00"
+@.str.7706 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7707 = private unnamed_addr constant [21 x i8] c"gen_defer__ret_owned\00"
+@.str.7708 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7709 = private unnamed_addr constant [24 x i8] c"bck_walk_seq__ret_owned\00"
+@.str.7710 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7711 = private unnamed_addr constant [27 x i8] c"bck_handle_cond__ret_owned\00"
+@.str.7712 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7713 = private unnamed_addr constant [28 x i8] c"bck_handle_match__ret_owned\00"
+@.str.7714 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7715 = private unnamed_addr constant [20 x i8] c"bck_loop__ret_owned\00"
+@.str.7716 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7717 = private unnamed_addr constant [22 x i8] c"encode_str__ret_owned\00"
+@.str.7718 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7719 = private unnamed_addr constant [30 x i8] c"nurl_lex_src_slice__ret_owned\00"
+@.str.7720 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7721 = private unnamed_addr constant [31 x i8] c"nurl_print_buf_stop__ret_owned\00"
+@.str.7722 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7723 = private unnamed_addr constant [27 x i8] c"priv_mangle_for__ret_owned\00"
+@.str.7724 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7725 = private unnamed_addr constant [24 x i8] c"priv_resolve__ret_owned\00"
+@.str.7726 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7727 = private unnamed_addr constant [24 x i8] c"priv_file_id__ret_owned\00"
+@.str.7728 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7729 = private unnamed_addr constant [24 x i8] c"llvm_to_nurl__ret_owned\00"
+@.str.7730 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7731 = private unnamed_addr constant [24 x i8] c"coerce_to_i1__ret_owned\00"
+@.str.7732 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7733 = private unnamed_addr constant [30 x i8] c"emit_deferred_cstr__ret_owned\00"
+@.str.7734 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7735 = private unnamed_addr constant [21 x i8] c"nurl_argv__ret_owned\00"
+@.str.7736 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7737 = private unnamed_addr constant [35 x i8] c"simple_capture_analysis__ret_owned\00"
+@.str.7738 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7739 = private unnamed_addr constant [21 x i8] c"__nth_sep__ret_owned\00"
+@.str.7740 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7741 = private unnamed_addr constant [27 x i8] c"mangle_src_word__ret_owned\00"
+@.str.7742 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7743 = private unnamed_addr constant [23 x i8] c"mangle_type__ret_owned\00"
+@.str.7744 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7745 = private unnamed_addr constant [25 x i8] c"demangle_type__ret_owned\00"
+@.str.7746 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7747 = private unnamed_addr constant [28 x i8] c"nurl_src_to_llvm__ret_owned\00"
+@.str.7748 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7749 = private unnamed_addr constant [26 x i8] c"__tok_src_text__ret_owned\00"
+@.str.7750 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7751 = private unnamed_addr constant [24 x i8] c"subst_source__ret_owned\00"
+@.str.7752 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7753 = private unnamed_addr constant [28 x i8] c"subst_source_raw__ret_owned\00"
+@.str.7754 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7755 = private unnamed_addr constant [30 x i8] c"__canon_import_key__ret_owned\00"
+@.str.7756 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7757 = private unnamed_addr constant [26 x i8] c"__norm_int_lit__ret_owned\00"
+@.str.7758 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7759 = private unnamed_addr constant [30 x i8] c"nurl_lex_line_text__ret_owned\00"
+@.str.7760 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7761 = private unnamed_addr constant [27 x i8] c"nurl_diag_caret__ret_owned\00"
+@.str.7762 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7763 = private unnamed_addr constant [27 x i8] c"__src_line_text__ret_owned\00"
+@.str.7764 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7765 = private unnamed_addr constant [33 x i8] c"nurl_lex_line_text_at__ret_owned\00"
+@.str.7766 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7767 = private unnamed_addr constant [27 x i8] c"__suggest_ident__ret_owned\00"
+@.str.7768 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7769 = private unnamed_addr constant [41 x i8] c"mem_collect_struct_fields_for__ret_owned\00"
+@.str.7770 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7771 = private unnamed_addr constant [30 x i8] c"__norm_import_path__ret_owned\00"
+@.str.7772 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7773 = private unnamed_addr constant [32 x i8] c"__import_nu_fallback__ret_owned\00"
+@.str.7774 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7775 = private unnamed_addr constant [31 x i8] c"compound_field_type__ret_owned\00"
+@.str.7776 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7777 = private unnamed_addr constant [31 x i8] c"convert_closure_arg__ret_owned\00"
+@.str.7778 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7779 = private unnamed_addr constant [35 x i8] c"mem_ret_struct_transfer__ret_owned\00"
+@.str.7780 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7781 = private unnamed_addr constant [7 x i8] c"malloc\00"
+@.str.7782 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7783 = private unnamed_addr constant [12 x i8] c"nurl_malloc\00"
+@.str.7784 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7785 = private unnamed_addr constant [11 x i8] c"nurl_alloc\00"
+@.str.7786 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7787 = private unnamed_addr constant [12 x i8] c"nurl_zalloc\00"
+@.str.7788 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7789 = private unnamed_addr constant [13 x i8] c"nurl_realloc\00"
+@.str.7790 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7791 = private unnamed_addr constant [7 x i8] c"strlen\00"
+@.str.7792 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7793 = private unnamed_addr constant [7 x i8] c"strcmp\00"
+@.str.7794 = private unnamed_addr constant [4 x i8] c"i32\00"
+@.str.7795 = private unnamed_addr constant [8 x i8] c"strncmp\00"
+@.str.7796 = private unnamed_addr constant [4 x i8] c"i32\00"
+@.str.7797 = private unnamed_addr constant [7 x i8] c"memcmp\00"
+@.str.7798 = private unnamed_addr constant [4 x i8] c"i32\00"
+@.str.7799 = private unnamed_addr constant [7 x i8] c"strstr\00"
+@.str.7800 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7801 = private unnamed_addr constant [7 x i8] c"memmem\00"
+@.str.7802 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7803 = private unnamed_addr constant [6 x i8] c"atoll\00"
+@.str.7804 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7805 = private unnamed_addr constant [5 x i8] c"atof\00"
+@.str.7806 = private unnamed_addr constant [7 x i8] c"double\00"
+@.str.7807 = private unnamed_addr constant [7 x i8] c"strtod\00"
+@.str.7808 = private unnamed_addr constant [7 x i8] c"double\00"
+@.str.7809 = private unnamed_addr constant [7 x i8] c"memcpy\00"
+@.str.7810 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7811 = private unnamed_addr constant [7 x i8] c"strdup\00"
+@.str.7812 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7813 = private unnamed_addr constant [12 x i8] c"nurl_strdup\00"
+@.str.7814 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7815 = private unnamed_addr constant [6 x i8] c"fopen\00"
+@.str.7816 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7817 = private unnamed_addr constant [7 x i8] c"fclose\00"
+@.str.7818 = private unnamed_addr constant [4 x i8] c"i32\00"
+@.str.7819 = private unnamed_addr constant [6 x i8] c"fputs\00"
+@.str.7820 = private unnamed_addr constant [4 x i8] c"i32\00"
+@.str.7821 = private unnamed_addr constant [7 x i8] c"fwrite\00"
+@.str.7822 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7823 = private unnamed_addr constant [6 x i8] c"fputc\00"
+@.str.7824 = private unnamed_addr constant [4 x i8] c"i32\00"
+@.str.7825 = private unnamed_addr constant [6 x i8] c"fread\00"
+@.str.7826 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7827 = private unnamed_addr constant [5 x i8] c"feof\00"
+@.str.7828 = private unnamed_addr constant [4 x i8] c"i32\00"
+@.str.7829 = private unnamed_addr constant [6 x i8] c"fseek\00"
+@.str.7830 = private unnamed_addr constant [4 x i8] c"i32\00"
+@.str.7831 = private unnamed_addr constant [6 x i8] c"ftell\00"
+@.str.7832 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7833 = private unnamed_addr constant [7 x i8] c"access\00"
+@.str.7834 = private unnamed_addr constant [4 x i8] c"i32\00"
+@.str.7835 = private unnamed_addr constant [7 x i8] c"getenv\00"
+@.str.7836 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7837 = private unnamed_addr constant [9 x i8] c"realpath\00"
+@.str.7838 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7839 = private unnamed_addr constant [15 x i8] c"nurl_file_open\00"
+@.str.7840 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7841 = private unnamed_addr constant [16 x i8] c"nurl_file_write\00"
+@.str.7842 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7843 = private unnamed_addr constant [22 x i8] c"nurl_file_write_range\00"
+@.str.7844 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7845 = private unnamed_addr constant [21 x i8] c"nurl_file_write_byte\00"
+@.str.7846 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7847 = private unnamed_addr constant [16 x i8] c"nurl_file_close\00"
+@.str.7848 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7849 = private unnamed_addr constant [17 x i8] c"nurl_file_exists\00"
+@.str.7850 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7851 = private unnamed_addr constant [14 x i8] c"nurl_file_del\00"
+@.str.7852 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7853 = private unnamed_addr constant [23 x i8] c"nurl_parse_float_range\00"
+@.str.7854 = private unnamed_addr constant [7 x i8] c"double\00"
+@.str.7855 = private unnamed_addr constant [12 x i8] c"nurl_is_nan\00"
+@.str.7856 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7857 = private unnamed_addr constant [12 x i8] c"nurl_is_inf\00"
+@.str.7858 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7859 = private unnamed_addr constant [21 x i8] c"nurl_parse_int_range\00"
+@.str.7860 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7861 = private unnamed_addr constant [16 x i8] c"nurl_scan_byte3\00"
+@.str.7862 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7863 = private unnamed_addr constant [17 x i8] c"nurl_byte_substr\00"
+@.str.7864 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7865 = private unnamed_addr constant [16 x i8] c"nurl_count_byte\00"
+@.str.7866 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7867 = private unnamed_addr constant [15 x i8] c"nurl_fast_atof\00"
+@.str.7868 = private unnamed_addr constant [7 x i8] c"double\00"
+@.str.7869 = private unnamed_addr constant [18 x i8] c"nurl_fast_atof_ex\00"
+@.str.7870 = private unnamed_addr constant [7 x i8] c"double\00"
+@.str.7871 = private unnamed_addr constant [19 x i8] c"nurl_dir_list_next\00"
+@.str.7872 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7873 = private unnamed_addr constant [19 x i8] c"nurl_dir_list_open\00"
+@.str.7874 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7875 = private unnamed_addr constant [20 x i8] c"nurl_dir_list_close\00"
+@.str.7876 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7877 = private unnamed_addr constant [23 x i8] c"nurl_http_perform_full\00"
+@.str.7878 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7879 = private unnamed_addr constant [26 x i8] c"nurl_http_perform_full_to\00"
+@.str.7880 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7881 = private unnamed_addr constant [24 x i8] c"nurl_http_response_free\00"
+@.str.7882 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7883 = private unnamed_addr constant [25 x i8] c"nurl_http_stream_open_to\00"
+@.str.7884 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7885 = private unnamed_addr constant [22 x i8] c"nurl_http_stream_next\00"
+@.str.7886 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7887 = private unnamed_addr constant [33 x i8] c"nurl_http_stream_next__ret_owned\00"
+@.str.7888 = private unnamed_addr constant [4 x i8] c"str\00"
+@.str.7889 = private unnamed_addr constant [23 x i8] c"nurl_http_stream_close\00"
+@.str.7890 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7891 = private unnamed_addr constant [30 x i8] c"nurl_http_stream_pump_headers\00"
+@.str.7892 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7893 = private unnamed_addr constant [14 x i8] c"nurl_proc_run\00"
+@.str.7894 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7895 = private unnamed_addr constant [20 x i8] c"nurl_proc_exit_code\00"
+@.str.7896 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7897 = private unnamed_addr constant [19 x i8] c"nurl_proc_err_kind\00"
+@.str.7898 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7899 = private unnamed_addr constant [17 x i8] c"nurl_proc_stdout\00"
+@.str.7900 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7901 = private unnamed_addr constant [17 x i8] c"nurl_proc_stderr\00"
+@.str.7902 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7903 = private unnamed_addr constant [21 x i8] c"nurl_proc_stdout_len\00"
+@.str.7904 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7905 = private unnamed_addr constant [21 x i8] c"nurl_proc_stderr_len\00"
+@.str.7906 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7907 = private unnamed_addr constant [15 x i8] c"nurl_proc_free\00"
+@.str.7908 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7909 = private unnamed_addr constant [16 x i8] c"nurl_proc_spawn\00"
+@.str.7910 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7911 = private unnamed_addr constant [25 x i8] c"nurl_proc_spawn_err_kind\00"
+@.str.7912 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7913 = private unnamed_addr constant [20 x i8] c"nurl_proc_spawn_pid\00"
+@.str.7914 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7915 = private unnamed_addr constant [22 x i8] c"nurl_proc_spawn_write\00"
+@.str.7916 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7917 = private unnamed_addr constant [28 x i8] c"nurl_proc_spawn_close_stdin\00"
+@.str.7918 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7919 = private unnamed_addr constant [26 x i8] c"nurl_proc_spawn_read_line\00"
+@.str.7920 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7921 = private unnamed_addr constant [30 x i8] c"nurl_proc_spawn_read_line_len\00"
+@.str.7922 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7923 = private unnamed_addr constant [20 x i8] c"nurl_proc_spawn_eof\00"
+@.str.7924 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7925 = private unnamed_addr constant [28 x i8] c"nurl_proc_spawn_last_io_err\00"
+@.str.7926 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7927 = private unnamed_addr constant [21 x i8] c"nurl_proc_spawn_wait\00"
+@.str.7928 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7929 = private unnamed_addr constant [21 x i8] c"nurl_proc_spawn_kill\00"
+@.str.7930 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7931 = private unnamed_addr constant [21 x i8] c"nurl_proc_spawn_free\00"
+@.str.7932 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7933 = private unnamed_addr constant [16 x i8] c"nurl_tcp_listen\00"
+@.str.7934 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7935 = private unnamed_addr constant [20 x i8] c"nurl_tcp_listen_tls\00"
+@.str.7936 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7937 = private unnamed_addr constant [25 x i8] c"nurl_tcp_listen_tls_alpn\00"
+@.str.7938 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7939 = private unnamed_addr constant [23 x i8] c"nurl_tcp_alpn_selected\00"
+@.str.7940 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7941 = private unnamed_addr constant [21 x i8] c"nurl_tcp_tls_add_sni\00"
+@.str.7942 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7943 = private unnamed_addr constant [20 x i8] c"nurl_tcp_tls_reload\00"
+@.str.7944 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7945 = private unnamed_addr constant [33 x i8] c"nurl_tcp_tls_require_client_cert\00"
+@.str.7946 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7947 = private unnamed_addr constant [27 x i8] c"nurl_tcp_peer_cert_subject\00"
+@.str.7948 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7949 = private unnamed_addr constant [16 x i8] c"nurl_tcp_accept\00"
+@.str.7950 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7951 = private unnamed_addr constant [14 x i8] c"nurl_tcp_read\00"
+@.str.7952 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7953 = private unnamed_addr constant [15 x i8] c"nurl_tcp_write\00"
+@.str.7954 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7955 = private unnamed_addr constant [15 x i8] c"nurl_tcp_close\00"
+@.str.7956 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7957 = private unnamed_addr constant [18 x i8] c"nurl_tcp_shutdown\00"
+@.str.7958 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7959 = private unnamed_addr constant [18 x i8] c"nurl_tcp_err_kind\00"
+@.str.7960 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7961 = private unnamed_addr constant [19 x i8] c"nurl_tcp_peer_addr\00"
+@.str.7962 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7963 = private unnamed_addr constant [21 x i8] c"nurl_tcp_set_timeout\00"
+@.str.7964 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7965 = private unnamed_addr constant [29 x i8] c"nurl_signal_install_shutdown\00"
+@.str.7966 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7967 = private unnamed_addr constant [29 x i8] c"nurl_signal_trigger_shutdown\00"
+@.str.7968 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7969 = private unnamed_addr constant [11 x i8] c"nurl_panic\00"
+@.str.7970 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7971 = private unnamed_addr constant [13 x i8] c"nurl_recover\00"
+@.str.7972 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7973 = private unnamed_addr constant [20 x i8] c"nurl_panic_last_msg\00"
+@.str.7974 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.7975 = private unnamed_addr constant [11 x i8] c"nurl_print\00"
+@.str.7976 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7977 = private unnamed_addr constant [13 x i8] c"nurl_println\00"
+@.str.7978 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7979 = private unnamed_addr constant [12 x i8] c"nurl_eprint\00"
+@.str.7980 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7981 = private unnamed_addr constant [14 x i8] c"nurl_eprintln\00"
+@.str.7982 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7983 = private unnamed_addr constant [15 x i8] c"nurl_print_int\00"
+@.str.7984 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7985 = private unnamed_addr constant [15 x i8] c"nurl_print_str\00"
+@.str.7986 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7987 = private unnamed_addr constant [16 x i8] c"nurl_print_bool\00"
+@.str.7988 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7989 = private unnamed_addr constant [10 x i8] c"nurl_exit\00"
+@.str.7990 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7991 = private unnamed_addr constant [18 x i8] c"nurl_flush_stdout\00"
+@.str.7992 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7993 = private unnamed_addr constant [18 x i8] c"nurl_flush_stderr\00"
+@.str.7994 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7995 = private unnamed_addr constant [15 x i8] c"nurl_stdin_eof\00"
+@.str.7996 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.7997 = private unnamed_addr constant [5 x i8] c"free\00"
+@.str.7998 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.7999 = private unnamed_addr constant [10 x i8] c"nurl_free\00"
+@.str.8000 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.8001 = private unnamed_addr constant [12 x i8] c"nurl_memcpy\00"
+@.str.8002 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.8003 = private unnamed_addr constant [13 x i8] c"nurl_memmove\00"
+@.str.8004 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.8005 = private unnamed_addr constant [10 x i8] c"nurl_poke\00"
+@.str.8006 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.8007 = private unnamed_addr constant [21 x i8] c"nurl_print_buf_start\00"
+@.str.8008 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.8009 = private unnamed_addr constant [20 x i8] c"nurl_print_buf_stop\00"
+@.str.8010 = private unnamed_addr constant [4 x i8] c"i8*\00"
+@.str.8011 = private unnamed_addr constant [21 x i8] c"nurl_print_buf_reset\00"
+@.str.8012 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.8013 = private unnamed_addr constant [10 x i8] c"nurl_peek\00"
+@.str.8014 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.8015 = private unnamed_addr constant [12 x i8] c"nurl_umulhi\00"
+@.str.8016 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.8017 = private unnamed_addr constant [13 x i8] c"nurl_addc_lo\00"
+@.str.8018 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.8019 = private unnamed_addr constant [13 x i8] c"nurl_addc_hi\00"
+@.str.8020 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.8021 = private unnamed_addr constant [13 x i8] c"nurl_subb_lo\00"
+@.str.8022 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.8023 = private unnamed_addr constant [13 x i8] c"nurl_subb_hi\00"
+@.str.8024 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.8025 = private unnamed_addr constant [12 x i8] c"nurl_mac_lo\00"
+@.str.8026 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.8027 = private unnamed_addr constant [12 x i8] c"nurl_mac_hi\00"
+@.str.8028 = private unnamed_addr constant [4 x i8] c"u64\00"
+@.str.8029 = private unnamed_addr constant [10 x i8] c"nurl_init\00"
+@.str.8030 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.8031 = private unnamed_addr constant [12 x i8] c"nurl_memset\00"
+@.str.8032 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.8033 = private unnamed_addr constant [14 x i8] c"nurl_vec_drop\00"
+@.str.8034 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.8035 = private unnamed_addr constant [10 x i8] c"nurl_argc\00"
+@.str.8036 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.8037 = private unnamed_addr constant [16 x i8] c"nurl_argv_count\00"
+@.str.8038 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.8039 = private unnamed_addr constant [14 x i8] c"nurl_read_int\00"
+@.str.8040 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.8041 = private unnamed_addr constant [5 x i8] c"puts\00"
+@.str.8042 = private unnamed_addr constant [4 x i8] c"i32\00"
+@.str.8043 = private unnamed_addr constant [7 x i8] c"printf\00"
+@.str.8044 = private unnamed_addr constant [4 x i8] c"i32\00"
+@.str.8045 = private unnamed_addr constant [17 x i8] c"printf__variadic\00"
+@.str.8046 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8047 = private unnamed_addr constant [23 x i8] c"printf__variadic_fixed\00"
+@.str.8048 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8049 = private unnamed_addr constant [21 x i8] c"printf__variadic_sig\00"
+@.str.8050 = private unnamed_addr constant [9 x i8] c"i8*, ...\00"
 define void @skip_balanced(i64 %lex) {
 entry:
   %r10 = alloca i64
@@ -105257,7 +105507,7 @@ loop_body_2:
   br i1 %r10, label %and_right_6, label %and_end_7
 and_right_6:
   %r11 = call i8* @nurl_lex_val(i64 %lex)
-  %r12 = getelementptr [5 x i8], [5 x i8]* @.str.7984, i64 0, i64 0
+  %r12 = getelementptr [5 x i8], [5 x i8]* @.str.8051, i64 0, i64 0
   %r13 = call i1 @seq(i8* %r11, i8* %r12)
   call void @nurl_free(i8* %r11)
   br label %and_end_7
@@ -105271,9 +105521,9 @@ then_8:
   %r17 = xor i1 %r16, 1
   br i1 %r17, label %then_11, label %else_12
 then_11:
-  %r18 = getelementptr [54 x i8], [54 x i8]* @.str.7985, i64 0, i64 0
+  %r18 = getelementptr [54 x i8], [54 x i8]* @.str.8052, i64 0, i64 0
   %r19 = call i8* @tok_here(i64 %lex)
-  %r20 = getelementptr [118 x i8], [118 x i8]* @.str.7986, i64 0, i64 0
+  %r20 = getelementptr [118 x i8], [118 x i8]* @.str.8053, i64 0, i64 0
   %r21 = call i8* @nurl_str_cat3(i8* %r18, i8* %r19, i8* %r20)
   call void @die(i64 %lex, i8* %r21)
   call void @nurl_free(i8* %r21)
@@ -105288,7 +105538,7 @@ end_13:
   %r25 = load i8*, i8** %r23
   call void @nurl_journal_push(i8* %r25)
   call void @nurl_lex_advance(i64 %lex)
-  %r26 = getelementptr [8 x i8], [8 x i8]* @.str.7987, i64 0, i64 0
+  %r26 = getelementptr [8 x i8], [8 x i8]* @.str.8054, i64 0, i64 0
   %r27 = call i8* @nurl_str_cat(i8* %tname, i8* %r26)
   %r29 = load i8*, i8** %r28
   call void @nurl_free(i8* %r29)
@@ -105317,12 +105567,12 @@ then_14:
   br i1 %r45, label %then_17, label %else_18
 then_17:
   %r46 = load i8*, i8** %r23
-  %r47 = getelementptr [1 x i8], [1 x i8]* @.str.7988, i64 0, i64 0
+  %r47 = getelementptr [1 x i8], [1 x i8]* @.str.8055, i64 0, i64 0
   %r48 = call i8* @nurl_str_cat(i8* %r46, i8* %r47)
   br label %end_19
 else_18:
   %r49 = load i8*, i8** %r34
-  %r50 = getelementptr [2 x i8], [2 x i8]* @.str.7989, i64 0, i64 0
+  %r50 = getelementptr [2 x i8], [2 x i8]* @.str.8056, i64 0, i64 0
   %r51 = load i8*, i8** %r23
   %r52 = call i8* @nurl_str_cat(i8* %r50, i8* %r51)
   %r53 = call i8* @nurl_str_cat(i8* %r49, i8* %r52)
@@ -105415,9 +105665,9 @@ loop_exit_28:
   %r94 = load i8*, i8** %r92
   call void @nurl_journal_push(i8* %r94)
   %r95 = load i64, i64* @g_trait_syms
-  %r96 = getelementptr [3 x i8], [3 x i8]* @.str.7990, i64 0, i64 0
+  %r96 = getelementptr [3 x i8], [3 x i8]* @.str.8057, i64 0, i64 0
   %r97 = load i8*, i8** %r64
-  %r98 = getelementptr [6 x i8], [6 x i8]* @.str.7991, i64 0, i64 0
+  %r98 = getelementptr [6 x i8], [6 x i8]* @.str.8058, i64 0, i64 0
   %r99 = call i8* @nurl_str_cat(i8* %r97, i8* %r98)
   %r100 = call i8* @nurl_str_cat(i8* %r96, i8* %r99)
   call void @nurl_free(i8* %r99)
@@ -105426,7 +105676,7 @@ loop_exit_28:
   %r102 = load i8*, i8** %r92
   call void @nurl_sym_def(i64 %r95, i8* %r101, i8* %r102)
   call void @nurl_free(i8* %r101)
-  %r103 = getelementptr [10 x i8], [10 x i8]* @.str.7992, i64 0, i64 0
+  %r103 = getelementptr [10 x i8], [10 x i8]* @.str.8059, i64 0, i64 0
   %r104 = call i8* @nurl_str_cat(i8* %tname, i8* %r103)
   %r106 = load i8*, i8** %r105
   call void @nurl_free(i8* %r106)
@@ -105455,12 +105705,12 @@ then_35:
   br i1 %r122, label %then_38, label %else_39
 then_38:
   %r123 = load i8*, i8** %r64
-  %r124 = getelementptr [1 x i8], [1 x i8]* @.str.7993, i64 0, i64 0
+  %r124 = getelementptr [1 x i8], [1 x i8]* @.str.8060, i64 0, i64 0
   %r125 = call i8* @nurl_str_cat(i8* %r123, i8* %r124)
   br label %end_40
 else_39:
   %r126 = load i8*, i8** %r111
-  %r127 = getelementptr [2 x i8], [2 x i8]* @.str.7994, i64 0, i64 0
+  %r127 = getelementptr [2 x i8], [2 x i8]* @.str.8061, i64 0, i64 0
   %r128 = load i8*, i8** %r64
   %r129 = call i8* @nurl_str_cat(i8* %r127, i8* %r128)
   %r130 = call i8* @nurl_str_cat(i8* %r126, i8* %r129)
@@ -105493,9 +105743,9 @@ then_41:
   %r144 = load i8*, i8** %r142
   call void @nurl_journal_push(i8* %r144)
   %r145 = load i64, i64* @g_trait_syms
-  %r146 = getelementptr [3 x i8], [3 x i8]* @.str.7995, i64 0, i64 0
+  %r146 = getelementptr [3 x i8], [3 x i8]* @.str.8062, i64 0, i64 0
   %r147 = load i8*, i8** %r64
-  %r148 = getelementptr [6 x i8], [6 x i8]* @.str.7996, i64 0, i64 0
+  %r148 = getelementptr [6 x i8], [6 x i8]* @.str.8063, i64 0, i64 0
   %r149 = call i8* @nurl_str_cat(i8* %r147, i8* %r148)
   %r150 = call i8* @nurl_str_cat(i8* %r146, i8* %r149)
   call void @nurl_free(i8* %r149)
@@ -105504,7 +105754,7 @@ then_41:
   %r152 = load i8*, i8** %r142
   call void @nurl_sym_def(i64 %r145, i8* %r151, i8* %r152)
   call void @nurl_free(i8* %r151)
-  %r153 = getelementptr [11 x i8], [11 x i8]* @.str.7997, i64 0, i64 0
+  %r153 = getelementptr [11 x i8], [11 x i8]* @.str.8064, i64 0, i64 0
   %r154 = call i8* @nurl_str_cat(i8* %tname, i8* %r153)
   %r156 = load i8*, i8** %r155
   call void @nurl_free(i8* %r156)
@@ -105533,12 +105783,12 @@ then_44:
   br i1 %r172, label %then_47, label %else_48
 then_47:
   %r173 = load i8*, i8** %r64
-  %r174 = getelementptr [1 x i8], [1 x i8]* @.str.7998, i64 0, i64 0
+  %r174 = getelementptr [1 x i8], [1 x i8]* @.str.8065, i64 0, i64 0
   %r175 = call i8* @nurl_str_cat(i8* %r173, i8* %r174)
   br label %end_49
 else_48:
   %r176 = load i8*, i8** %r161
-  %r177 = getelementptr [2 x i8], [2 x i8]* @.str.7999, i64 0, i64 0
+  %r177 = getelementptr [2 x i8], [2 x i8]* @.str.8066, i64 0, i64 0
   %r178 = load i8*, i8** %r64
   %r179 = call i8* @nurl_str_cat(i8* %r177, i8* %r178)
   %r180 = call i8* @nurl_str_cat(i8* %r176, i8* %r179)
@@ -105596,22 +105846,22 @@ loop_exit_3:
   ret void
 }
 
-@.str.7984 = private unnamed_addr constant [5 x i8] c"type\00"
-@.str.7985 = private unnamed_addr constant [54 x i8] c"expected an associated-type name after 'type', found \00"
-@.str.7986 = private unnamed_addr constant [118 x i8] c". A trait declares one as 'type Name', and each impl binds it with 'type Name ConcreteType' \E2\80\94 three tokens, no '='.\00"
-@.str.7987 = private unnamed_addr constant [8 x i8] c"__assoc\00"
-@.str.7988 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.7989 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.7990 = private unnamed_addr constant [3 x i8] c"__\00"
-@.str.7991 = private unnamed_addr constant [6 x i8] c"__sig\00"
-@.str.7992 = private unnamed_addr constant [10 x i8] c"__methods\00"
-@.str.7993 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.7994 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.7995 = private unnamed_addr constant [3 x i8] c"__\00"
-@.str.7996 = private unnamed_addr constant [6 x i8] c"__src\00"
-@.str.7997 = private unnamed_addr constant [11 x i8] c"__defaults\00"
-@.str.7998 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.7999 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8051 = private unnamed_addr constant [5 x i8] c"type\00"
+@.str.8052 = private unnamed_addr constant [54 x i8] c"expected an associated-type name after 'type', found \00"
+@.str.8053 = private unnamed_addr constant [118 x i8] c". A trait declares one as 'type Name', and each impl binds it with 'type Name ConcreteType' \E2\80\94 three tokens, no '='.\00"
+@.str.8054 = private unnamed_addr constant [8 x i8] c"__assoc\00"
+@.str.8055 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8056 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8057 = private unnamed_addr constant [3 x i8] c"__\00"
+@.str.8058 = private unnamed_addr constant [6 x i8] c"__sig\00"
+@.str.8059 = private unnamed_addr constant [10 x i8] c"__methods\00"
+@.str.8060 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8061 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8062 = private unnamed_addr constant [3 x i8] c"__\00"
+@.str.8063 = private unnamed_addr constant [6 x i8] c"__src\00"
+@.str.8064 = private unnamed_addr constant [11 x i8] c"__defaults\00"
+@.str.8065 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8066 = private unnamed_addr constant [2 x i8] c" \00"
 define i8* @trait_default_ret(i8* %subst_src) {
 entry:
   %r0 = alloca i8*
@@ -105619,7 +105869,7 @@ entry:
   %r3 = alloca i64
   %r17 = alloca i8*
   store i8* null, i8** %r17
-  %r1 = getelementptr [20 x i8], [20 x i8]* @.str.8000, i64 0, i64 0
+  %r1 = getelementptr [20 x i8], [20 x i8]* @.str.8067, i64 0, i64 0
   %r2 = call i64 @nurl_lex_new(i8* %subst_src, i8* %r1)
   store i64 %r2, i64* %r3
   br label %loop_check_1
@@ -105643,8 +105893,8 @@ loop_body_2:
   call void @nurl_lex_advance(i64 %r13)
   br label %loop_check_1
 loop_exit_3:
-  %r14 = getelementptr [4 x i8], [4 x i8]* @.str.8001, i64 0, i64 0
-  %r15 = getelementptr [1 x i8], [1 x i8]* @.str.8002, i64 0, i64 0
+  %r14 = getelementptr [4 x i8], [4 x i8]* @.str.8068, i64 0, i64 0
+  %r15 = getelementptr [1 x i8], [1 x i8]* @.str.8069, i64 0, i64 0
   %r16 = call i8* @nurl_str_cat(i8* %r14, i8* %r15)
   %r18 = load i8*, i8** %r17
   call void @nurl_free(i8* %r18)
@@ -105675,9 +105925,9 @@ end_8:
   ret i8* %r29
 }
 
-@.str.8000 = private unnamed_addr constant [20 x i8] c"<trait_default_ret>\00"
-@.str.8001 = private unnamed_addr constant [4 x i8] c"i64\00"
-@.str.8002 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8067 = private unnamed_addr constant [20 x i8] c"<trait_default_ret>\00"
+@.str.8068 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.8069 = private unnamed_addr constant [1 x i8] c"\00"
 define void @register_missing_defaults(i64 %lex, i8* %tname, i8* %impl_nurl, i8* %impl_llvm, i8* %impl_mangle, i8* %provided, i8* %bindings, i64 %syms) {
 entry:
   %r3 = alloca i8*
@@ -105702,7 +105952,7 @@ entry:
   %r102 = alloca i8*
   store i8* null, i8** %r102
   %r0 = load i64, i64* @g_trait_syms
-  %r1 = getelementptr [9 x i8], [9 x i8]* @.str.8003, i64 0, i64 0
+  %r1 = getelementptr [9 x i8], [9 x i8]* @.str.8070, i64 0, i64 0
   %r2 = call i8* @nurl_sym_get2(i64 %r0, i8* %tname, i8* %r1)
   %r4 = load i8*, i8** %r3
   call void @nurl_free(i8* %r4)
@@ -105710,7 +105960,7 @@ entry:
   %r5 = load i8*, i8** %r3
   call void @nurl_journal_push(i8* %r5)
   %r6 = load i64, i64* @g_trait_syms
-  %r7 = getelementptr [11 x i8], [11 x i8]* @.str.8004, i64 0, i64 0
+  %r7 = getelementptr [11 x i8], [11 x i8]* @.str.8071, i64 0, i64 0
   %r8 = call i8* @nurl_sym_get2(i64 %r6, i8* %tname, i8* %r7)
   %r10 = load i8*, i8** %r9
   call void @nurl_free(i8* %r10)
@@ -105743,9 +105993,9 @@ then_4:
   br label %end_6
 else_5:
   %r25 = load i64, i64* @g_trait_syms
-  %r26 = getelementptr [3 x i8], [3 x i8]* @.str.8005, i64 0, i64 0
+  %r26 = getelementptr [3 x i8], [3 x i8]* @.str.8072, i64 0, i64 0
   %r27 = load i8*, i8** %r17
-  %r28 = getelementptr [6 x i8], [6 x i8]* @.str.8006, i64 0, i64 0
+  %r28 = getelementptr [6 x i8], [6 x i8]* @.str.8073, i64 0, i64 0
   %r29 = call i8* @nurl_str_cat(i8* %r27, i8* %r28)
   %r30 = call i8* @nurl_str_cat(i8* %r26, i8* %r29)
   call void @nurl_free(i8* %r29)
@@ -105791,7 +106041,7 @@ end_9:
   %r56 = load i8*, i8** %r54
   call void @nurl_journal_push(i8* %r56)
   %r57 = load i8*, i8** %r17
-  %r58 = getelementptr [3 x i8], [3 x i8]* @.str.8007, i64 0, i64 0
+  %r58 = getelementptr [3 x i8], [3 x i8]* @.str.8074, i64 0, i64 0
   %r59 = call i8* @nurl_str_cat(i8* %r58, i8* %impl_llvm)
   %r60 = call i8* @nurl_str_cat(i8* %r57, i8* %r59)
   call void @nurl_free(i8* %r59)
@@ -105809,7 +106059,7 @@ end_9:
   store i64 0, i64* %r68
   %r69 = load i8*, i8** %r49
   %r70 = call i8* @dyn_sig_parts(i8* %r69)
-  %r71 = getelementptr [1 x i8], [1 x i8]* @.str.8008, i64 0, i64 0
+  %r71 = getelementptr [1 x i8], [1 x i8]* @.str.8075, i64 0, i64 0
   %r72 = call i8* @nurl_str_cat(i8* %r70, i8* %r71)
   call void @nurl_free(i8* %r70)
   %r74 = load i8*, i8** %r73
@@ -105836,7 +106086,7 @@ loop_body_11:
 loop_exit_12:
   %r84 = load i64, i64* @g_impl_ret_syms
   %r85 = load i8*, i8** %r61
-  %r86 = getelementptr [8 x i8], [8 x i8]* @.str.8009, i64 0, i64 0
+  %r86 = getelementptr [8 x i8], [8 x i8]* @.str.8076, i64 0, i64 0
   %r87 = call i8* @nurl_str_cat(i8* %r85, i8* %r86)
   %r88 = load i64, i64* %r68
   %r89 = sub i64 %r88, 2
@@ -105849,13 +106099,13 @@ loop_exit_12:
   call void @nurl_sym_def(i64 %r91, i8* %r92, i8* %impl_mangle)
   %r93 = load i64, i64* @g_impl_name_syms
   %r94 = load i8*, i8** %r17
-  %r95 = getelementptr [12 x i8], [12 x i8]* @.str.8010, i64 0, i64 0
+  %r95 = getelementptr [12 x i8], [12 x i8]* @.str.8077, i64 0, i64 0
   %r96 = call i8* @nurl_str_cat(i8* %r94, i8* %r95)
-  %r97 = getelementptr [2 x i8], [2 x i8]* @.str.8011, i64 0, i64 0
+  %r97 = getelementptr [2 x i8], [2 x i8]* @.str.8078, i64 0, i64 0
   call void @nurl_sym_def(i64 %r93, i8* %r96, i8* %r97)
   call void @nurl_free(i8* %r96)
   %r98 = load i8*, i8** %r17
-  %r99 = getelementptr [3 x i8], [3 x i8]* @.str.8012, i64 0, i64 0
+  %r99 = getelementptr [3 x i8], [3 x i8]* @.str.8079, i64 0, i64 0
   %r100 = call i8* @nurl_str_cat(i8* %r99, i8* %impl_mangle)
   %r101 = call i8* @nurl_str_cat(i8* %r98, i8* %r100)
   call void @nurl_free(i8* %r100)
@@ -105902,16 +106152,16 @@ loop_exit_3:
   ret void
 }
 
-@.str.8003 = private unnamed_addr constant [9 x i8] c"__tparam\00"
-@.str.8004 = private unnamed_addr constant [11 x i8] c"__defaults\00"
-@.str.8005 = private unnamed_addr constant [3 x i8] c"__\00"
-@.str.8006 = private unnamed_addr constant [6 x i8] c"__src\00"
-@.str.8007 = private unnamed_addr constant [3 x i8] c"##\00"
-@.str.8008 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8009 = private unnamed_addr constant [8 x i8] c"__arity\00"
-@.str.8010 = private unnamed_addr constant [12 x i8] c"__impl_seen\00"
-@.str.8011 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.8012 = private unnamed_addr constant [3 x i8] c"__\00"
+@.str.8070 = private unnamed_addr constant [9 x i8] c"__tparam\00"
+@.str.8071 = private unnamed_addr constant [11 x i8] c"__defaults\00"
+@.str.8072 = private unnamed_addr constant [3 x i8] c"__\00"
+@.str.8073 = private unnamed_addr constant [6 x i8] c"__src\00"
+@.str.8074 = private unnamed_addr constant [3 x i8] c"##\00"
+@.str.8075 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8076 = private unnamed_addr constant [8 x i8] c"__arity\00"
+@.str.8077 = private unnamed_addr constant [12 x i8] c"__impl_seen\00"
+@.str.8078 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8079 = private unnamed_addr constant [3 x i8] c"__\00"
 define i8* @capture_impl_nurl_name(i64 %lex) {
 entry:
   %r0 = alloca i8*
@@ -105934,7 +106184,7 @@ then_3:
   %r9 = call i8* @nurl_lex_val(i64 %lex)
   br label %end_5
 else_4:
-  %r10 = getelementptr [1 x i8], [1 x i8]* @.str.8013, i64 0, i64 0
+  %r10 = getelementptr [1 x i8], [1 x i8]* @.str.8080, i64 0, i64 0
   %r11 = call i8* @nurl_strdup(i8* %r10)
   br label %end_5
 end_5:
@@ -105943,7 +106193,7 @@ end_5:
   ret i8* %r12
 }
 
-@.str.8013 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8080 = private unnamed_addr constant [1 x i8] c"\00"
 define i8* @__parse_assoc_binding__fp1(i64 %lex) {
 entry:
   %r0 = alloca i8*
@@ -105958,9 +106208,9 @@ entry:
   %r3 = xor i1 %r2, 1
   br i1 %r3, label %then_1, label %else_2
 then_1:
-  %r4 = getelementptr [54 x i8], [54 x i8]* @.str.8014, i64 0, i64 0
+  %r4 = getelementptr [54 x i8], [54 x i8]* @.str.8081, i64 0, i64 0
   %r5 = call i8* @tok_here(i64 %lex)
-  %r6 = getelementptr [143 x i8], [143 x i8]* @.str.8015, i64 0, i64 0
+  %r6 = getelementptr [143 x i8], [143 x i8]* @.str.8082, i64 0, i64 0
   %r7 = call i8* @nurl_str_cat3(i8* %r4, i8* %r5, i8* %r6)
   call void @die(i64 %lex, i8* %r7)
   call void @nurl_free(i8* %r7)
@@ -105986,9 +106236,9 @@ end_3:
   %r18 = icmp eq i64 0, %r17
   br i1 %r18, label %then_4, label %else_5
 then_4:
-  %r19 = getelementptr [18 x i8], [18 x i8]* @.str.8016, i64 0, i64 0
+  %r19 = getelementptr [18 x i8], [18 x i8]* @.str.8083, i64 0, i64 0
   %r20 = load i8*, i8** %r9
-  %r21 = getelementptr [137 x i8], [137 x i8]* @.str.8017, i64 0, i64 0
+  %r21 = getelementptr [137 x i8], [137 x i8]* @.str.8084, i64 0, i64 0
   %r22 = call i8* @nurl_str_cat3(i8* %r19, i8* %r20, i8* %r21)
   call void @die(i64 %lex, i8* %r22)
   call void @nurl_free(i8* %r22)
@@ -105998,7 +106248,7 @@ else_5:
 end_6:
   call void @nurl_lex_advance(i64 %lex)
   %r23 = load i8*, i8** %r9
-  %r24 = getelementptr [2 x i8], [2 x i8]* @.str.8018, i64 0, i64 0
+  %r24 = getelementptr [2 x i8], [2 x i8]* @.str.8085, i64 0, i64 0
   %r25 = load i8*, i8** %r13
   %r26 = call i8* @nurl_str_cat(i8* %r24, i8* %r25)
   %r27 = call i8* @nurl_str_cat(i8* %r23, i8* %r26)
@@ -106011,11 +106261,11 @@ end_6:
   ret i8* %r27
 }
 
-@.str.8014 = private unnamed_addr constant [54 x i8] c"expected an associated-type name after 'type', found \00"
-@.str.8015 = private unnamed_addr constant [143 x i8] c". An impl binds what the trait declared: 'type Name ConcreteType' \E2\80\94 the keyword, the name, then the concrete type, with no '=' between them.\00"
-@.str.8016 = private unnamed_addr constant [18 x i8] c"associated type '\00"
-@.str.8017 = private unnamed_addr constant [137 x i8] c"' must be bound to a simple type name \E2\80\94 write 'type Elem i' or 'type Elem MyStruct', with no '=' and no parenthesised or generic form.\00"
-@.str.8018 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8081 = private unnamed_addr constant [54 x i8] c"expected an associated-type name after 'type', found \00"
+@.str.8082 = private unnamed_addr constant [143 x i8] c". An impl binds what the trait declared: 'type Name ConcreteType' \E2\80\94 the keyword, the name, then the concrete type, with no '=' between them.\00"
+@.str.8083 = private unnamed_addr constant [18 x i8] c"associated type '\00"
+@.str.8084 = private unnamed_addr constant [137 x i8] c"' must be bound to a simple type name \E2\80\94 write 'type Elem i' or 'type Elem MyStruct', with no '=' and no parenthesised or generic form.\00"
+@.str.8085 = private unnamed_addr constant [2 x i8] c" \00"
 define void @__coherence_register__fp1(i64 %lex, i8* %mname, i8* %impl_llvm, i8* %impl_nurl, i8* %tname) {
 entry:
   %r3 = alloca i8*
@@ -106030,7 +106280,7 @@ entry:
   store i8* null, i8** %r36
   %r42 = alloca i8*
   store i8* null, i8** %r42
-  %r0 = getelementptr [3 x i8], [3 x i8]* @.str.8019, i64 0, i64 0
+  %r0 = getelementptr [3 x i8], [3 x i8]* @.str.8086, i64 0, i64 0
   %r1 = call i8* @nurl_str_cat(i8* %r0, i8* %impl_llvm)
   %r2 = call i8* @nurl_str_cat(i8* %mname, i8* %r1)
   call void @nurl_free(i8* %r1)
@@ -106040,7 +106290,7 @@ entry:
   %r5 = load i8*, i8** %r3
   call void @nurl_journal_push(i8* %r5)
   %r6 = call i8* @nurl_lex_filename(i64 %lex)
-  %r7 = getelementptr [2 x i8], [2 x i8]* @.str.8020, i64 0, i64 0
+  %r7 = getelementptr [2 x i8], [2 x i8]* @.str.8087, i64 0, i64 0
   %r8 = call i64 @nurl_lex_line(i64 %lex)
   %r9 = call i8* @nurl_str_int(i64 %r8)
   %r10 = call i8* @nurl_str_cat(i8* %r7, i8* %r9)
@@ -106103,13 +106353,13 @@ end_9:
   %r44 = call i1 @seq(i8* %r43, i8* %tname)
   br i1 %r44, label %then_10, label %else_11
 then_10:
-  %r45 = getelementptr [26 x i8], [26 x i8]* @.str.8021, i64 0, i64 0
-  %r46 = getelementptr [13 x i8], [13 x i8]* @.str.8022, i64 0, i64 0
+  %r45 = getelementptr [26 x i8], [26 x i8]* @.str.8088, i64 0, i64 0
+  %r46 = getelementptr [13 x i8], [13 x i8]* @.str.8089, i64 0, i64 0
   %r47 = call i8* @nurl_str_cat3(i8* %r45, i8* %tname, i8* %r46)
   %r48 = load i8*, i8** %r42
-  %r49 = getelementptr [12 x i8], [12 x i8]* @.str.8023, i64 0, i64 0
+  %r49 = getelementptr [12 x i8], [12 x i8]* @.str.8090, i64 0, i64 0
   %r50 = call i8* @nurl_str_cat3(i8* %r48, i8* %r49, i8* %mname)
-  %r51 = getelementptr [51 x i8], [51 x i8]* @.str.8024, i64 0, i64 0
+  %r51 = getelementptr [51 x i8], [51 x i8]* @.str.8091, i64 0, i64 0
   %r52 = call i8* @nurl_str_cat(i8* %r50, i8* %r51)
   call void @nurl_free(i8* %r50)
   %r53 = call i8* @nurl_str_cat(i8* %r47, i8* %r52)
@@ -106119,15 +106369,15 @@ then_10:
   call void @nurl_free(i8* %r53)
   unreachable
 else_11:
-  %r54 = getelementptr [9 x i8], [9 x i8]* @.str.8025, i64 0, i64 0
-  %r55 = getelementptr [13 x i8], [13 x i8]* @.str.8026, i64 0, i64 0
+  %r54 = getelementptr [9 x i8], [9 x i8]* @.str.8092, i64 0, i64 0
+  %r55 = getelementptr [13 x i8], [13 x i8]* @.str.8093, i64 0, i64 0
   %r56 = call i8* @nurl_str_cat3(i8* %r54, i8* %mname, i8* %r55)
   %r57 = load i8*, i8** %r42
-  %r58 = getelementptr [30 x i8], [30 x i8]* @.str.8027, i64 0, i64 0
+  %r58 = getelementptr [30 x i8], [30 x i8]* @.str.8094, i64 0, i64 0
   %r59 = load i8*, i8** %r36
   %r60 = call i8* @nurl_str_cat3(i8* %r57, i8* %r58, i8* %r59)
-  %r61 = getelementptr [14 x i8], [14 x i8]* @.str.8028, i64 0, i64 0
-  %r62 = getelementptr [45 x i8], [45 x i8]* @.str.8029, i64 0, i64 0
+  %r61 = getelementptr [14 x i8], [14 x i8]* @.str.8095, i64 0, i64 0
+  %r62 = getelementptr [45 x i8], [45 x i8]* @.str.8096, i64 0, i64 0
   %r63 = call i8* @nurl_str_cat3(i8* %r61, i8* %tname, i8* %r62)
   %r64 = call i8* @nurl_str_cat(i8* %r60, i8* %r63)
   call void @nurl_free(i8* %r60)
@@ -106164,17 +106414,17 @@ end_3:
   ret void
 }
 
-@.str.8019 = private unnamed_addr constant [3 x i8] c"##\00"
-@.str.8020 = private unnamed_addr constant [2 x i8] c":\00"
-@.str.8021 = private unnamed_addr constant [26 x i8] c"duplicate impl of trait '\00"
-@.str.8022 = private unnamed_addr constant [13 x i8] c"' for type '\00"
-@.str.8023 = private unnamed_addr constant [12 x i8] c"' (method '\00"
-@.str.8024 = private unnamed_addr constant [51 x i8] c"') \E2\80\94 each trait may be implemented once per type\00"
-@.str.8025 = private unnamed_addr constant [9 x i8] c"method '\00"
-@.str.8026 = private unnamed_addr constant [13 x i8] c"' for type '\00"
-@.str.8027 = private unnamed_addr constant [30 x i8] c"' is provided by both trait '\00"
-@.str.8028 = private unnamed_addr constant [14 x i8] c"' and trait '\00"
-@.str.8029 = private unnamed_addr constant [45 x i8] c"' \E2\80\94 bare-name dispatch cannot disambiguate\00"
+@.str.8086 = private unnamed_addr constant [3 x i8] c"##\00"
+@.str.8087 = private unnamed_addr constant [2 x i8] c":\00"
+@.str.8088 = private unnamed_addr constant [26 x i8] c"duplicate impl of trait '\00"
+@.str.8089 = private unnamed_addr constant [13 x i8] c"' for type '\00"
+@.str.8090 = private unnamed_addr constant [12 x i8] c"' (method '\00"
+@.str.8091 = private unnamed_addr constant [51 x i8] c"') \E2\80\94 each trait may be implemented once per type\00"
+@.str.8092 = private unnamed_addr constant [9 x i8] c"method '\00"
+@.str.8093 = private unnamed_addr constant [13 x i8] c"' for type '\00"
+@.str.8094 = private unnamed_addr constant [30 x i8] c"' is provided by both trait '\00"
+@.str.8095 = private unnamed_addr constant [14 x i8] c"' and trait '\00"
+@.str.8096 = private unnamed_addr constant [45 x i8] c"' \E2\80\94 bare-name dispatch cannot disambiguate\00"
 define void @scan_impl_decl(i64 %lex, i64 %syms) {
 entry:
   %r1 = alloca i8*
@@ -106223,7 +106473,7 @@ entry:
   %r3 = load i8*, i8** %r1
   call void @nurl_journal_push(i8* %r3)
   call void @nurl_lex_advance(i64 %lex)
-  %r4 = getelementptr [1 x i8], [1 x i8]* @.str.8030, i64 0, i64 0
+  %r4 = getelementptr [1 x i8], [1 x i8]* @.str.8097, i64 0, i64 0
   %r5 = call i8* @nurl_strdup(i8* %r4)
   %r7 = load i8*, i8** %r6
   call void @nurl_free(i8* %r7)
@@ -106282,7 +106532,7 @@ loop_exit_11:
 else_2:
   br label %end_3
 end_3:
-  %r30 = getelementptr [1 x i8], [1 x i8]* @.str.8031, i64 0, i64 0
+  %r30 = getelementptr [1 x i8], [1 x i8]* @.str.8098, i64 0, i64 0
   %r31 = call i8* @nurl_strdup(i8* %r30)
   %r33 = load i8*, i8** %r32
   call void @nurl_free(i8* %r33)
@@ -106319,7 +106569,7 @@ then_22:
   br label %end_24
 else_23:
   %r49 = load i8*, i8** %r32
-  %r50 = getelementptr [2 x i8], [2 x i8]* @.str.8032, i64 0, i64 0
+  %r50 = getelementptr [2 x i8], [2 x i8]* @.str.8099, i64 0, i64 0
   %r51 = call i8* @nurl_lex_val(i64 %lex)
   %r52 = call i8* @nurl_str_cat(i8* %r50, i8* %r51)
   call void @nurl_free(i8* %r51)
@@ -106339,9 +106589,9 @@ loop_exit_19:
   %r58 = icmp eq i64 0, %r57
   br i1 %r58, label %then_25, label %else_26
 then_25:
-  %r59 = getelementptr [66 x i8], [66 x i8]* @.str.8033, i64 0, i64 0
+  %r59 = getelementptr [66 x i8], [66 x i8]* @.str.8100, i64 0, i64 0
   %r60 = call i8* @tok_here(i64 %lex)
-  %r61 = getelementptr [94 x i8], [94 x i8]* @.str.8034, i64 0, i64 0
+  %r61 = getelementptr [94 x i8], [94 x i8]* @.str.8101, i64 0, i64 0
   %r62 = call i8* @nurl_str_cat3(i8* %r59, i8* %r60, i8* %r61)
   call void @die(i64 %lex, i8* %r62)
   call void @nurl_free(i8* %r62)
@@ -106359,7 +106609,7 @@ end_16:
   br i1 %r65, label %then_28, label %else_29
 then_28:
   %r66 = call i8* @vis_current_src_file()
-  %r67 = getelementptr [2 x i8], [2 x i8]* @.str.8035, i64 0, i64 0
+  %r67 = getelementptr [2 x i8], [2 x i8]* @.str.8102, i64 0, i64 0
   %r68 = call i64 @nurl_lex_line(i64 %lex)
   %r69 = call i8* @nurl_str_int(i64 %r68)
   %r70 = call i8* @nurl_str_cat(i8* %r67, i8* %r69)
@@ -106372,7 +106622,7 @@ then_28:
   store i8* %r71, i8** %r72
   %r74 = load i8*, i8** %r72
   call void @nurl_journal_push(i8* %r74)
-  %r75 = getelementptr [5 x i8], [5 x i8]* @.str.8036, i64 0, i64 0
+  %r75 = getelementptr [5 x i8], [5 x i8]* @.str.8103, i64 0, i64 0
   %r76 = load i8*, i8** %r1
   %r77 = call i8* @nurl_str_cat(i8* %r75, i8* %r76)
   %r79 = load i8*, i8** %r78
@@ -106402,11 +106652,11 @@ and_end_32:
   %r94 = phi i1 [ 0, %then_28 ], [ %r93, %and_right_31 ]
   br i1 %r94, label %then_33, label %else_34
 then_33:
-  %r95 = getelementptr [20 x i8], [20 x i8]* @.str.8037, i64 0, i64 0
+  %r95 = getelementptr [20 x i8], [20 x i8]* @.str.8104, i64 0, i64 0
   %r96 = load i8*, i8** %r1
-  %r97 = getelementptr [27 x i8], [27 x i8]* @.str.8038, i64 0, i64 0
+  %r97 = getelementptr [27 x i8], [27 x i8]* @.str.8105, i64 0, i64 0
   %r98 = load i8*, i8** %r84
-  %r99 = getelementptr [293 x i8], [293 x i8]* @.str.8039, i64 0, i64 0
+  %r99 = getelementptr [293 x i8], [293 x i8]* @.str.8106, i64 0, i64 0
   %r100 = call i8* @nurl_str_cat3(i8* %r97, i8* %r98, i8* %r99)
   %r101 = call i8* @nurl_str_cat(i8* %r96, i8* %r100)
   call void @nurl_free(i8* %r100)
@@ -106424,16 +106674,16 @@ else_34:
 end_35:
   %r106 = load i64, i64* @g_trait_syms
   %r107 = load i8*, i8** %r1
-  %r108 = getelementptr [9 x i8], [9 x i8]* @.str.8040, i64 0, i64 0
+  %r108 = getelementptr [9 x i8], [9 x i8]* @.str.8107, i64 0, i64 0
   %r109 = call i8* @nurl_str_cat(i8* %r107, i8* %r108)
   %r110 = load i8*, i8** %r6
   call void @nurl_sym_def(i64 %r106, i8* %r109, i8* %r110)
   call void @nurl_free(i8* %r109)
   %r111 = load i64, i64* @g_trait_syms
   %r112 = load i8*, i8** %r1
-  %r113 = getelementptr [10 x i8], [10 x i8]* @.str.8041, i64 0, i64 0
+  %r113 = getelementptr [10 x i8], [10 x i8]* @.str.8108, i64 0, i64 0
   %r114 = call i8* @nurl_str_cat(i8* %r112, i8* %r113)
-  %r115 = getelementptr [2 x i8], [2 x i8]* @.str.8042, i64 0, i64 0
+  %r115 = getelementptr [2 x i8], [2 x i8]* @.str.8109, i64 0, i64 0
   call void @nurl_sym_def(i64 %r111, i8* %r114, i8* %r115)
   call void @nurl_free(i8* %r114)
   %r116 = load i8*, i8** %r32
@@ -106443,7 +106693,7 @@ end_35:
 then_36:
   %r119 = load i64, i64* @g_trait_syms
   %r120 = load i8*, i8** %r1
-  %r121 = getelementptr [9 x i8], [9 x i8]* @.str.8043, i64 0, i64 0
+  %r121 = getelementptr [9 x i8], [9 x i8]* @.str.8110, i64 0, i64 0
   %r122 = call i8* @nurl_str_cat(i8* %r120, i8* %r121)
   %r123 = load i8*, i8** %r32
   call void @nurl_sym_def(i64 %r119, i8* %r122, i8* %r123)
@@ -106470,7 +106720,7 @@ else_29:
   %r130 = icmp ne i64 0, %r129
   br i1 %r130, label %then_39, label %else_40
 then_39:
-  %r131 = getelementptr [167 x i8], [167 x i8]* @.str.8044, i64 0, i64 0
+  %r131 = getelementptr [167 x i8], [167 x i8]* @.str.8111, i64 0, i64 0
   call void @die(i64 %lex, i8* %r131)
   unreachable
 else_40:
@@ -106497,14 +106747,14 @@ end_41:
   call void @nurl_journal_push(i8* %r144)
   %r145 = load i64, i64* @g_trait_syms
   %r146 = load i8*, i8** %r1
-  %r147 = getelementptr [3 x i8], [3 x i8]* @.str.8045, i64 0, i64 0
+  %r147 = getelementptr [3 x i8], [3 x i8]* @.str.8112, i64 0, i64 0
   %r148 = load i8*, i8** %r137
   %r149 = call i8* @nurl_str_cat3(i8* %r146, i8* %r147, i8* %r148)
-  %r150 = getelementptr [2 x i8], [2 x i8]* @.str.8046, i64 0, i64 0
+  %r150 = getelementptr [2 x i8], [2 x i8]* @.str.8113, i64 0, i64 0
   call void @nurl_sym_def(i64 %r145, i8* %r149, i8* %r150)
   call void @nurl_free(i8* %r149)
   %r151 = call i8* @nurl_lex_filename(i64 %lex)
-  %r152 = getelementptr [2 x i8], [2 x i8]* @.str.8047, i64 0, i64 0
+  %r152 = getelementptr [2 x i8], [2 x i8]* @.str.8114, i64 0, i64 0
   %r153 = call i64 @nurl_lex_line(i64 %lex)
   %r154 = call i8* @nurl_str_int(i64 %r153)
   %r155 = call i8* @nurl_str_cat(i8* %r152, i8* %r154)
@@ -106519,13 +106769,13 @@ end_41:
   call void @nurl_journal_push(i8* %r159)
   %r160 = load i8*, i8** @g_super_obligations
   %r161 = load i8*, i8** %r1
-  %r162 = getelementptr [2 x i8], [2 x i8]* @.str.8048, i64 0, i64 0
+  %r162 = getelementptr [2 x i8], [2 x i8]* @.str.8115, i64 0, i64 0
   %r163 = load i8*, i8** %r137
-  %r164 = getelementptr [2 x i8], [2 x i8]* @.str.8049, i64 0, i64 0
+  %r164 = getelementptr [2 x i8], [2 x i8]* @.str.8116, i64 0, i64 0
   %r165 = load i8*, i8** %r133
-  %r166 = getelementptr [2 x i8], [2 x i8]* @.str.8050, i64 0, i64 0
+  %r166 = getelementptr [2 x i8], [2 x i8]* @.str.8117, i64 0, i64 0
   %r167 = load i8*, i8** %r157
-  %r168 = getelementptr [2 x i8], [2 x i8]* @.str.8051, i64 0, i64 0
+  %r168 = getelementptr [2 x i8], [2 x i8]* @.str.8118, i64 0, i64 0
   %r169 = call i8* @nurl_str_cat(i8* %r167, i8* %r168)
   %r170 = call i8* @nurl_str_cat(i8* %r166, i8* %r169)
   call void @nurl_free(i8* %r169)
@@ -106550,14 +106800,14 @@ end_41:
   store i8* %r176, i8** @g_super_obligations
   %r181 = load i64, i64* @TT_LBRACE
   call void @expect(i64 %lex, i64 %r181)
-  %r182 = getelementptr [1 x i8], [1 x i8]* @.str.8052, i64 0, i64 0
+  %r182 = getelementptr [1 x i8], [1 x i8]* @.str.8119, i64 0, i64 0
   %r183 = call i8* @nurl_strdup(i8* %r182)
   %r185 = load i8*, i8** %r184
   call void @nurl_free(i8* %r185)
   store i8* %r183, i8** %r184
   %r186 = load i8*, i8** %r184
   call void @nurl_journal_push(i8* %r186)
-  %r187 = getelementptr [1 x i8], [1 x i8]* @.str.8053, i64 0, i64 0
+  %r187 = getelementptr [1 x i8], [1 x i8]* @.str.8120, i64 0, i64 0
   %r188 = call i8* @nurl_strdup(i8* %r187)
   %r190 = load i8*, i8** %r189
   call void @nurl_free(i8* %r190)
@@ -106585,7 +106835,7 @@ loop_body_43:
   br i1 %r201, label %and_right_47, label %and_end_48
 and_right_47:
   %r202 = call i8* @nurl_lex_val(i64 %lex)
-  %r203 = getelementptr [5 x i8], [5 x i8]* @.str.8054, i64 0, i64 0
+  %r203 = getelementptr [5 x i8], [5 x i8]* @.str.8121, i64 0, i64 0
   %r204 = call i1 @seq(i8* %r202, i8* %r203)
   call void @nurl_free(i8* %r202)
   br label %and_end_48
@@ -106609,7 +106859,7 @@ then_52:
   br label %end_54
 else_53:
   %r215 = load i8*, i8** %r189
-  %r216 = getelementptr [2 x i8], [2 x i8]* @.str.8055, i64 0, i64 0
+  %r216 = getelementptr [2 x i8], [2 x i8]* @.str.8122, i64 0, i64 0
   %r217 = load i8*, i8** %r207
   %r218 = call i8* @nurl_str_cat(i8* %r216, i8* %r217)
   %r219 = call i8* @nurl_str_cat(i8* %r215, i8* %r218)
@@ -106645,12 +106895,12 @@ then_58:
   br i1 %r233, label %then_61, label %else_62
 then_61:
   %r234 = load i8*, i8** %r228
-  %r235 = getelementptr [1 x i8], [1 x i8]* @.str.8056, i64 0, i64 0
+  %r235 = getelementptr [1 x i8], [1 x i8]* @.str.8123, i64 0, i64 0
   %r236 = call i8* @nurl_str_cat(i8* %r234, i8* %r235)
   br label %end_63
 else_62:
   %r237 = load i8*, i8** %r184
-  %r238 = getelementptr [2 x i8], [2 x i8]* @.str.8057, i64 0, i64 0
+  %r238 = getelementptr [2 x i8], [2 x i8]* @.str.8124, i64 0, i64 0
   %r239 = load i8*, i8** %r228
   %r240 = call i8* @nurl_str_cat(i8* %r238, i8* %r239)
   %r241 = call i8* @nurl_str_cat(i8* %r237, i8* %r240)
@@ -106682,13 +106932,13 @@ loop_body_65:
   br i1 %r253, label %and_right_69, label %and_end_70
 and_right_69:
   %r254 = call i8* @nurl_lex_val(i64 %lex)
-  %r255 = getelementptr [6 x i8], [6 x i8]* @.str.8058, i64 0, i64 0
+  %r255 = getelementptr [6 x i8], [6 x i8]* @.str.8125, i64 0, i64 0
   %r256 = call i1 @seq(i8* %r254, i8* %r255)
   call void @nurl_free(i8* %r254)
   br i1 %r256, label %or_end_72, label %or_right_71
 or_right_71:
   %r257 = call i8* @nurl_lex_val(i64 %lex)
-  %r258 = getelementptr [5 x i8], [5 x i8]* @.str.8059, i64 0, i64 0
+  %r258 = getelementptr [5 x i8], [5 x i8]* @.str.8126, i64 0, i64 0
   %r259 = call i1 @seq(i8* %r257, i8* %r258)
   call void @nurl_free(i8* %r257)
   br label %or_end_72
@@ -106740,7 +106990,7 @@ then_79:
   %r277 = load i8*, i8** %r275
   call void @nurl_journal_push(i8* %r277)
   %r278 = load i8*, i8** %r228
-  %r279 = getelementptr [3 x i8], [3 x i8]* @.str.8060, i64 0, i64 0
+  %r279 = getelementptr [3 x i8], [3 x i8]* @.str.8127, i64 0, i64 0
   %r280 = load i8*, i8** %r137
   %r281 = call i8* @nurl_str_cat(i8* %r279, i8* %r280)
   %r282 = call i8* @nurl_str_cat(i8* %r278, i8* %r281)
@@ -106761,7 +107011,7 @@ then_79:
   call void @nurl_sym_def(i64 %r290, i8* %r291, i8* %r292)
   %r293 = load i64, i64* @g_impl_ret_syms
   %r294 = load i8*, i8** %r283
-  %r295 = getelementptr [8 x i8], [8 x i8]* @.str.8061, i64 0, i64 0
+  %r295 = getelementptr [8 x i8], [8 x i8]* @.str.8128, i64 0, i64 0
   %r296 = call i8* @nurl_str_cat(i8* %r294, i8* %r295)
   %r297 = load i64, i64* %r244
   %r298 = call i8* @nurl_str_int(i64 %r297)
@@ -106774,13 +107024,13 @@ then_79:
   call void @nurl_sym_def(i64 %r299, i8* %r300, i8* %r301)
   %r302 = load i64, i64* @g_impl_name_syms
   %r303 = load i8*, i8** %r228
-  %r304 = getelementptr [12 x i8], [12 x i8]* @.str.8062, i64 0, i64 0
+  %r304 = getelementptr [12 x i8], [12 x i8]* @.str.8129, i64 0, i64 0
   %r305 = call i8* @nurl_str_cat(i8* %r303, i8* %r304)
-  %r306 = getelementptr [2 x i8], [2 x i8]* @.str.8063, i64 0, i64 0
+  %r306 = getelementptr [2 x i8], [2 x i8]* @.str.8130, i64 0, i64 0
   call void @nurl_sym_def(i64 %r302, i8* %r305, i8* %r306)
   call void @nurl_free(i8* %r305)
   %r307 = load i8*, i8** %r228
-  %r308 = getelementptr [3 x i8], [3 x i8]* @.str.8064, i64 0, i64 0
+  %r308 = getelementptr [3 x i8], [3 x i8]* @.str.8131, i64 0, i64 0
   %r309 = load i8*, i8** %r142
   %r310 = call i8* @nurl_str_cat(i8* %r308, i8* %r309)
   %r311 = call i8* @nurl_str_cat(i8* %r307, i8* %r310)
@@ -106877,41 +107127,41 @@ end_30:
   ret void
 }
 
-@.str.8030 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8031 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8032 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8033 = private unnamed_addr constant [66 x i8] c"expected at least one trait name after the supertrait ':', found \00"
-@.str.8034 = private unnamed_addr constant [94 x i8] c". A trait requiring others is '% Name : Base1 Base2 { ... }'; drop the ':' if there are none.\00"
-@.str.8035 = private unnamed_addr constant [2 x i8] c":\00"
-@.str.8036 = private unnamed_addr constant [5 x i8] c"tr##\00"
-@.str.8037 = private unnamed_addr constant [20 x i8] c"duplicate trait '% \00"
-@.str.8038 = private unnamed_addr constant [27 x i8] c"' \E2\80\94 already declared at \00"
-@.str.8039 = private unnamed_addr constant [293 x i8] c". NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If you meant to IMPLEMENT the trait, an impl names the trait and the type with no ':' between them \E2\80\94 '% Trait Type { ... }'; a ':' here is the supertrait clause, which belongs on the declaration.\00"
-@.str.8040 = private unnamed_addr constant [9 x i8] c"__tparam\00"
-@.str.8041 = private unnamed_addr constant [10 x i8] c"__istrait\00"
-@.str.8042 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.8043 = private unnamed_addr constant [9 x i8] c"__supers\00"
-@.str.8044 = private unnamed_addr constant [167 x i8] c"a supertrait ':' clause belongs on the trait DECLARATION ('% Name : Base { ... }'), not on an impl. An impl names the trait and the type only: '% Trait Type { ... }'.\00"
-@.str.8045 = private unnamed_addr constant [3 x i8] c"##\00"
-@.str.8046 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.8047 = private unnamed_addr constant [2 x i8] c":\00"
-@.str.8048 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8049 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8050 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8051 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8052 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8053 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8054 = private unnamed_addr constant [5 x i8] c"type\00"
-@.str.8055 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8056 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8057 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8058 = private unnamed_addr constant [6 x i8] c"inout\00"
-@.str.8059 = private unnamed_addr constant [5 x i8] c"sink\00"
-@.str.8060 = private unnamed_addr constant [3 x i8] c"##\00"
-@.str.8061 = private unnamed_addr constant [8 x i8] c"__arity\00"
-@.str.8062 = private unnamed_addr constant [12 x i8] c"__impl_seen\00"
-@.str.8063 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.8064 = private unnamed_addr constant [3 x i8] c"__\00"
+@.str.8097 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8098 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8099 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8100 = private unnamed_addr constant [66 x i8] c"expected at least one trait name after the supertrait ':', found \00"
+@.str.8101 = private unnamed_addr constant [94 x i8] c". A trait requiring others is '% Name : Base1 Base2 { ... }'; drop the ':' if there are none.\00"
+@.str.8102 = private unnamed_addr constant [2 x i8] c":\00"
+@.str.8103 = private unnamed_addr constant [5 x i8] c"tr##\00"
+@.str.8104 = private unnamed_addr constant [20 x i8] c"duplicate trait '% \00"
+@.str.8105 = private unnamed_addr constant [27 x i8] c"' \E2\80\94 already declared at \00"
+@.str.8106 = private unnamed_addr constant [293 x i8] c". NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If you meant to IMPLEMENT the trait, an impl names the trait and the type with no ':' between them \E2\80\94 '% Trait Type { ... }'; a ':' here is the supertrait clause, which belongs on the declaration.\00"
+@.str.8107 = private unnamed_addr constant [9 x i8] c"__tparam\00"
+@.str.8108 = private unnamed_addr constant [10 x i8] c"__istrait\00"
+@.str.8109 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8110 = private unnamed_addr constant [9 x i8] c"__supers\00"
+@.str.8111 = private unnamed_addr constant [167 x i8] c"a supertrait ':' clause belongs on the trait DECLARATION ('% Name : Base { ... }'), not on an impl. An impl names the trait and the type only: '% Trait Type { ... }'.\00"
+@.str.8112 = private unnamed_addr constant [3 x i8] c"##\00"
+@.str.8113 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8114 = private unnamed_addr constant [2 x i8] c":\00"
+@.str.8115 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8116 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8117 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8118 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8119 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8120 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8121 = private unnamed_addr constant [5 x i8] c"type\00"
+@.str.8122 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8123 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8124 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8125 = private unnamed_addr constant [6 x i8] c"inout\00"
+@.str.8126 = private unnamed_addr constant [5 x i8] c"sink\00"
+@.str.8127 = private unnamed_addr constant [3 x i8] c"##\00"
+@.str.8128 = private unnamed_addr constant [8 x i8] c"__arity\00"
+@.str.8129 = private unnamed_addr constant [12 x i8] c"__impl_seen\00"
+@.str.8130 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8131 = private unnamed_addr constant [3 x i8] c"__\00"
 define void @verify_assoc_bindings(i64 %lex, i8* %tname, i8* %impl_nurl, i8* %bindings) {
 entry:
   %r3 = alloca i8*
@@ -106925,14 +107175,14 @@ entry:
   %r53 = alloca i8*
   store i8* null, i8** %r53
   %r0 = load i64, i64* @g_trait_syms
-  %r1 = getelementptr [8 x i8], [8 x i8]* @.str.8065, i64 0, i64 0
+  %r1 = getelementptr [8 x i8], [8 x i8]* @.str.8132, i64 0, i64 0
   %r2 = call i8* @nurl_sym_get2(i64 %r0, i8* %tname, i8* %r1)
   %r4 = load i8*, i8** %r3
   call void @nurl_free(i8* %r4)
   store i8* %r2, i8** %r3
   %r5 = load i8*, i8** %r3
   call void @nurl_journal_push(i8* %r5)
-  %r6 = getelementptr [1 x i8], [1 x i8]* @.str.8066, i64 0, i64 0
+  %r6 = getelementptr [1 x i8], [1 x i8]* @.str.8133, i64 0, i64 0
   %r7 = call i8* @nurl_str_cat(i8* %bindings, i8* %r6)
   %r9 = load i8*, i8** %r8
   call void @nurl_free(i8* %r9)
@@ -106969,14 +107219,14 @@ loop_body_2:
   %r28 = xor i1 %r27, 1
   br i1 %r28, label %then_4, label %else_5
 then_4:
-  %r29 = getelementptr [8 x i8], [8 x i8]* @.str.8067, i64 0, i64 0
-  %r30 = getelementptr [27 x i8], [27 x i8]* @.str.8068, i64 0, i64 0
+  %r29 = getelementptr [8 x i8], [8 x i8]* @.str.8134, i64 0, i64 0
+  %r30 = getelementptr [27 x i8], [27 x i8]* @.str.8135, i64 0, i64 0
   %r31 = call i8* @nurl_str_cat3(i8* %r29, i8* %tname, i8* %r30)
   %r32 = load i8*, i8** %r16
-  %r33 = getelementptr [21 x i8], [21 x i8]* @.str.8069, i64 0, i64 0
-  %r34 = getelementptr [99 x i8], [99 x i8]* @.str.8070, i64 0, i64 0
+  %r33 = getelementptr [21 x i8], [21 x i8]* @.str.8136, i64 0, i64 0
+  %r34 = getelementptr [99 x i8], [99 x i8]* @.str.8137, i64 0, i64 0
   %r35 = load i8*, i8** %r16
-  %r36 = getelementptr [28 x i8], [28 x i8]* @.str.8071, i64 0, i64 0
+  %r36 = getelementptr [28 x i8], [28 x i8]* @.str.8138, i64 0, i64 0
   %r37 = call i8* @nurl_str_cat(i8* %r35, i8* %r36)
   %r38 = call i8* @nurl_str_cat3(i8* %impl_nurl, i8* %r34, i8* %r37)
   call void @nurl_free(i8* %r37)
@@ -106997,7 +107247,7 @@ end_6:
   br label %loop_check_1
 loop_exit_3:
   %r42 = load i8*, i8** %r3
-  %r43 = getelementptr [1 x i8], [1 x i8]* @.str.8072, i64 0, i64 0
+  %r43 = getelementptr [1 x i8], [1 x i8]* @.str.8139, i64 0, i64 0
   %r44 = call i8* @nurl_str_cat(i8* %r42, i8* %r43)
   %r46 = load i8*, i8** %r45
   call void @nurl_free(i8* %r46)
@@ -107030,13 +107280,13 @@ loop_body_8:
   %r62 = icmp eq i64 0, %r61
   br i1 %r62, label %then_10, label %else_11
 then_10:
-  %r63 = getelementptr [16 x i8], [16 x i8]* @.str.8073, i64 0, i64 0
-  %r64 = getelementptr [13 x i8], [13 x i8]* @.str.8074, i64 0, i64 0
+  %r63 = getelementptr [16 x i8], [16 x i8]* @.str.8140, i64 0, i64 0
+  %r64 = getelementptr [13 x i8], [13 x i8]* @.str.8141, i64 0, i64 0
   %r65 = call i8* @nurl_str_cat3(i8* %r63, i8* %tname, i8* %r64)
-  %r66 = getelementptr [30 x i8], [30 x i8]* @.str.8075, i64 0, i64 0
+  %r66 = getelementptr [30 x i8], [30 x i8]* @.str.8142, i64 0, i64 0
   %r67 = load i8*, i8** %r53
   %r68 = call i8* @nurl_str_cat3(i8* %impl_nurl, i8* %r66, i8* %r67)
-  %r69 = getelementptr [22 x i8], [22 x i8]* @.str.8076, i64 0, i64 0
+  %r69 = getelementptr [22 x i8], [22 x i8]* @.str.8143, i64 0, i64 0
   %r70 = call i8* @nurl_str_cat(i8* %r68, i8* %r69)
   call void @nurl_free(i8* %r68)
   %r71 = call i8* @nurl_str_cat(i8* %r65, i8* %r70)
@@ -107062,18 +107312,18 @@ loop_exit_9:
   ret void
 }
 
-@.str.8065 = private unnamed_addr constant [8 x i8] c"__assoc\00"
-@.str.8066 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8067 = private unnamed_addr constant [8 x i8] c"trait '\00"
-@.str.8068 = private unnamed_addr constant [27 x i8] c"' has no associated type '\00"
-@.str.8069 = private unnamed_addr constant [21 x i8] c"' to bind for type '\00"
-@.str.8070 = private unnamed_addr constant [99 x i8] c"'. An impl may only bind the associated types the trait declares \E2\80\94 check the name, or add 'type \00"
-@.str.8071 = private unnamed_addr constant [28 x i8] c"' to the trait declaration.\00"
-@.str.8072 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8073 = private unnamed_addr constant [16 x i8] c"impl of trait '\00"
-@.str.8074 = private unnamed_addr constant [13 x i8] c"' for type '\00"
-@.str.8075 = private unnamed_addr constant [30 x i8] c"' must bind associated type '\00"
-@.str.8076 = private unnamed_addr constant [22 x i8] c"' (add a 'type' line)\00"
+@.str.8132 = private unnamed_addr constant [8 x i8] c"__assoc\00"
+@.str.8133 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8134 = private unnamed_addr constant [8 x i8] c"trait '\00"
+@.str.8135 = private unnamed_addr constant [27 x i8] c"' has no associated type '\00"
+@.str.8136 = private unnamed_addr constant [21 x i8] c"' to bind for type '\00"
+@.str.8137 = private unnamed_addr constant [99 x i8] c"'. An impl may only bind the associated types the trait declares \E2\80\94 check the name, or add 'type \00"
+@.str.8138 = private unnamed_addr constant [28 x i8] c"' to the trait declaration.\00"
+@.str.8139 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8140 = private unnamed_addr constant [16 x i8] c"impl of trait '\00"
+@.str.8141 = private unnamed_addr constant [13 x i8] c"' for type '\00"
+@.str.8142 = private unnamed_addr constant [30 x i8] c"' must bind associated type '\00"
+@.str.8143 = private unnamed_addr constant [22 x i8] c"' (add a 'type' line)\00"
 define void @verify_super_obligations() {
 entry:
   %r3 = alloca i8*
@@ -107091,7 +107341,7 @@ entry:
   %r53 = alloca i8*
   store i8* null, i8** %r53
   %r0 = load i8*, i8** @g_super_obligations
-  %r1 = getelementptr [1 x i8], [1 x i8]* @.str.8077, i64 0, i64 0
+  %r1 = getelementptr [1 x i8], [1 x i8]* @.str.8144, i64 0, i64 0
   %r2 = call i8* @nurl_str_cat(i8* %r0, i8* %r1)
   %r4 = load i8*, i8** %r3
   call void @nurl_free(i8* %r4)
@@ -107155,7 +107405,7 @@ loop_body_2:
   store i8* %r39, i8** %r3
   %r41 = load i64, i64* @g_trait_syms
   %r42 = load i8*, i8** %r11
-  %r43 = getelementptr [9 x i8], [9 x i8]* @.str.8078, i64 0, i64 0
+  %r43 = getelementptr [9 x i8], [9 x i8]* @.str.8145, i64 0, i64 0
   %r44 = call i8* @nurl_sym_get2(i64 %r41, i8* %r42, i8* %r43)
   %r46 = load i8*, i8** %r45
   call void @nurl_free(i8* %r46)
@@ -107183,7 +107433,7 @@ loop_body_5:
   store i8* %r57, i8** %r45
   %r59 = load i64, i64* @g_trait_syms
   %r60 = load i8*, i8** %r53
-  %r61 = getelementptr [3 x i8], [3 x i8]* @.str.8079, i64 0, i64 0
+  %r61 = getelementptr [3 x i8], [3 x i8]* @.str.8146, i64 0, i64 0
   %r62 = load i8*, i8** %r19
   %r63 = call i8* @nurl_str_cat3(i8* %r60, i8* %r61, i8* %r62)
   %r64 = call i64 @nurl_sym_len(i64 %r59, i8* %r63)
@@ -107192,19 +107442,19 @@ loop_body_5:
   br i1 %r65, label %then_7, label %else_8
 then_7:
   %r66 = load i8*, i8** %r35
-  %r67 = getelementptr [7 x i8], [7 x i8]* @.str.8080, i64 0, i64 0
+  %r67 = getelementptr [7 x i8], [7 x i8]* @.str.8147, i64 0, i64 0
   %r68 = load i8*, i8** %r27
-  %r69 = getelementptr [21 x i8], [21 x i8]* @.str.8081, i64 0, i64 0
+  %r69 = getelementptr [21 x i8], [21 x i8]* @.str.8148, i64 0, i64 0
   %r70 = call i8* @nurl_str_cat3(i8* %r67, i8* %r68, i8* %r69)
   %r71 = load i8*, i8** %r11
-  %r72 = getelementptr [27 x i8], [27 x i8]* @.str.8082, i64 0, i64 0
+  %r72 = getelementptr [27 x i8], [27 x i8]* @.str.8149, i64 0, i64 0
   %r73 = load i8*, i8** %r53
   %r74 = call i8* @nurl_str_cat3(i8* %r71, i8* %r72, i8* %r73)
-  %r75 = getelementptr [14 x i8], [14 x i8]* @.str.8083, i64 0, i64 0
+  %r75 = getelementptr [14 x i8], [14 x i8]* @.str.8150, i64 0, i64 0
   %r76 = load i8*, i8** %r11
-  %r77 = getelementptr [29 x i8], [29 x i8]* @.str.8084, i64 0, i64 0
+  %r77 = getelementptr [29 x i8], [29 x i8]* @.str.8151, i64 0, i64 0
   %r78 = load i8*, i8** %r53
-  %r79 = getelementptr [2 x i8], [2 x i8]* @.str.8085, i64 0, i64 0
+  %r79 = getelementptr [2 x i8], [2 x i8]* @.str.8152, i64 0, i64 0
   %r80 = call i8* @nurl_str_cat3(i8* %r77, i8* %r78, i8* %r79)
   %r81 = call i8* @nurl_str_cat3(i8* %r75, i8* %r76, i8* %r80)
   call void @nurl_free(i8* %r80)
@@ -107247,15 +107497,15 @@ loop_exit_3:
   ret void
 }
 
-@.str.8077 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8078 = private unnamed_addr constant [9 x i8] c"__supers\00"
-@.str.8079 = private unnamed_addr constant [3 x i8] c"##\00"
-@.str.8080 = private unnamed_addr constant [7 x i8] c"type '\00"
-@.str.8081 = private unnamed_addr constant [21 x i8] c"' implements trait '\00"
-@.str.8082 = private unnamed_addr constant [27 x i8] c"' but not its supertrait '\00"
-@.str.8083 = private unnamed_addr constant [14 x i8] c"' \E2\80\94 every '\00"
-@.str.8084 = private unnamed_addr constant [29 x i8] c"' type must also implement '\00"
-@.str.8085 = private unnamed_addr constant [2 x i8] c"'\00"
+@.str.8144 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8145 = private unnamed_addr constant [9 x i8] c"__supers\00"
+@.str.8146 = private unnamed_addr constant [3 x i8] c"##\00"
+@.str.8147 = private unnamed_addr constant [7 x i8] c"type '\00"
+@.str.8148 = private unnamed_addr constant [21 x i8] c"' implements trait '\00"
+@.str.8149 = private unnamed_addr constant [27 x i8] c"' but not its supertrait '\00"
+@.str.8150 = private unnamed_addr constant [14 x i8] c"' \E2\80\94 every '\00"
+@.str.8151 = private unnamed_addr constant [29 x i8] c"' type must also implement '\00"
+@.str.8152 = private unnamed_addr constant [2 x i8] c"'\00"
 define void @emit_missing_defaults(i8* %tname, i8* %impl_nurl, i8* %impl_mangle, i8* %provided, i8* %bindings, i64 %syms, i64 %cg) {
 entry:
   %r3 = alloca i8*
@@ -107278,7 +107528,7 @@ entry:
   %r76 = alloca i8*
   store i8* null, i8** %r76
   %r0 = load i64, i64* @g_trait_syms
-  %r1 = getelementptr [9 x i8], [9 x i8]* @.str.8086, i64 0, i64 0
+  %r1 = getelementptr [9 x i8], [9 x i8]* @.str.8153, i64 0, i64 0
   %r2 = call i8* @nurl_sym_get2(i64 %r0, i8* %tname, i8* %r1)
   %r4 = load i8*, i8** %r3
   call void @nurl_free(i8* %r4)
@@ -107286,7 +107536,7 @@ entry:
   %r5 = load i8*, i8** %r3
   call void @nurl_journal_push(i8* %r5)
   %r6 = load i64, i64* @g_trait_syms
-  %r7 = getelementptr [11 x i8], [11 x i8]* @.str.8087, i64 0, i64 0
+  %r7 = getelementptr [11 x i8], [11 x i8]* @.str.8154, i64 0, i64 0
   %r8 = call i8* @nurl_sym_get2(i64 %r6, i8* %tname, i8* %r7)
   %r10 = load i8*, i8** %r9
   call void @nurl_free(i8* %r10)
@@ -107319,9 +107569,9 @@ then_4:
   br label %end_6
 else_5:
   %r25 = load i64, i64* @g_trait_syms
-  %r26 = getelementptr [3 x i8], [3 x i8]* @.str.8088, i64 0, i64 0
+  %r26 = getelementptr [3 x i8], [3 x i8]* @.str.8155, i64 0, i64 0
   %r27 = load i8*, i8** %r17
-  %r28 = getelementptr [6 x i8], [6 x i8]* @.str.8089, i64 0, i64 0
+  %r28 = getelementptr [6 x i8], [6 x i8]* @.str.8156, i64 0, i64 0
   %r29 = call i8* @nurl_str_cat(i8* %r27, i8* %r28)
   %r30 = call i8* @nurl_str_cat(i8* %r26, i8* %r29)
   call void @nurl_free(i8* %r29)
@@ -107360,7 +107610,7 @@ end_9:
   %r51 = load i8*, i8** %r49
   call void @nurl_journal_push(i8* %r51)
   %r52 = load i8*, i8** %r17
-  %r53 = getelementptr [3 x i8], [3 x i8]* @.str.8090, i64 0, i64 0
+  %r53 = getelementptr [3 x i8], [3 x i8]* @.str.8157, i64 0, i64 0
   %r54 = call i8* @nurl_str_cat(i8* %r53, i8* %impl_mangle)
   %r55 = call i8* @nurl_str_cat(i8* %r52, i8* %r54)
   call void @nurl_free(i8* %r54)
@@ -107369,9 +107619,9 @@ end_9:
   store i8* %r55, i8** %r56
   %r58 = load i8*, i8** %r56
   call void @nurl_journal_push(i8* %r58)
-  %r59 = getelementptr [3 x i8], [3 x i8]* @.str.8091, i64 0, i64 0
+  %r59 = getelementptr [3 x i8], [3 x i8]* @.str.8158, i64 0, i64 0
   %r60 = load i8*, i8** %r56
-  %r61 = getelementptr [2 x i8], [2 x i8]* @.str.8092, i64 0, i64 0
+  %r61 = getelementptr [2 x i8], [2 x i8]* @.str.8159, i64 0, i64 0
   %r62 = load i8*, i8** %r49
   %r63 = call i8* @nurl_str_cat(i8* %r61, i8* %r62)
   %r64 = call i8* @nurl_str_cat(i8* %r60, i8* %r63)
@@ -107384,23 +107634,23 @@ end_9:
   %r68 = load i8*, i8** %r66
   call void @nurl_journal_push(i8* %r68)
   %r69 = load i8*, i8** %r66
-  %r70 = getelementptr [16 x i8], [16 x i8]* @.str.8093, i64 0, i64 0
+  %r70 = getelementptr [16 x i8], [16 x i8]* @.str.8160, i64 0, i64 0
   %r71 = call i64 @nurl_lex_new(i8* %r69, i8* %r70)
   store i64 %r71, i64* %r72
   %r73 = load i8*, i8** @g_diag_ctx
-  %r74 = getelementptr [1 x i8], [1 x i8]* @.str.8094, i64 0, i64 0
+  %r74 = getelementptr [1 x i8], [1 x i8]* @.str.8161, i64 0, i64 0
   %r75 = call i8* @nurl_str_cat(i8* %r73, i8* %r74)
   %r77 = load i8*, i8** %r76
   call void @nurl_free(i8* %r77)
   store i8* %r75, i8** %r76
   %r78 = load i8*, i8** %r76
   call void @nurl_journal_push(i8* %r78)
-  %r79 = getelementptr [34 x i8], [34 x i8]* @.str.8095, i64 0, i64 0
+  %r79 = getelementptr [34 x i8], [34 x i8]* @.str.8162, i64 0, i64 0
   %r80 = load i8*, i8** %r17
-  %r81 = getelementptr [13 x i8], [13 x i8]* @.str.8096, i64 0, i64 0
+  %r81 = getelementptr [13 x i8], [13 x i8]* @.str.8163, i64 0, i64 0
   %r82 = call i8* @nurl_str_cat4(i8* %r79, i8* %r80, i8* %r81, i8* %tname)
-  %r83 = getelementptr [27 x i8], [27 x i8]* @.str.8097, i64 0, i64 0
-  %r84 = getelementptr [39 x i8], [39 x i8]* @.str.8098, i64 0, i64 0
+  %r83 = getelementptr [27 x i8], [27 x i8]* @.str.8164, i64 0, i64 0
+  %r84 = getelementptr [39 x i8], [39 x i8]* @.str.8165, i64 0, i64 0
   %r85 = call i8* @nurl_str_cat3(i8* %r83, i8* %impl_nurl, i8* %r84)
   %r86 = call i8* @nurl_str_cat(i8* %r82, i8* %r85)
   call void @nurl_free(i8* %r82)
@@ -107457,19 +107707,19 @@ loop_exit_3:
   ret void
 }
 
-@.str.8086 = private unnamed_addr constant [9 x i8] c"__tparam\00"
-@.str.8087 = private unnamed_addr constant [11 x i8] c"__defaults\00"
-@.str.8088 = private unnamed_addr constant [3 x i8] c"__\00"
-@.str.8089 = private unnamed_addr constant [6 x i8] c"__src\00"
-@.str.8090 = private unnamed_addr constant [3 x i8] c"__\00"
-@.str.8091 = private unnamed_addr constant [3 x i8] c"@ \00"
-@.str.8092 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8093 = private unnamed_addr constant [16 x i8] c"<trait_default>\00"
-@.str.8094 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8095 = private unnamed_addr constant [34 x i8] c" [in the default body of method '\00"
-@.str.8096 = private unnamed_addr constant [13 x i8] c"' of trait '\00"
-@.str.8097 = private unnamed_addr constant [27 x i8] c"', emitted for impl type '\00"
-@.str.8098 = private unnamed_addr constant [39 x i8] c"' \E2\80\94 fix it at the trait declaration]\00"
+@.str.8153 = private unnamed_addr constant [9 x i8] c"__tparam\00"
+@.str.8154 = private unnamed_addr constant [11 x i8] c"__defaults\00"
+@.str.8155 = private unnamed_addr constant [3 x i8] c"__\00"
+@.str.8156 = private unnamed_addr constant [6 x i8] c"__src\00"
+@.str.8157 = private unnamed_addr constant [3 x i8] c"__\00"
+@.str.8158 = private unnamed_addr constant [3 x i8] c"@ \00"
+@.str.8159 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8160 = private unnamed_addr constant [16 x i8] c"<trait_default>\00"
+@.str.8161 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8162 = private unnamed_addr constant [34 x i8] c" [in the default body of method '\00"
+@.str.8163 = private unnamed_addr constant [13 x i8] c"' of trait '\00"
+@.str.8164 = private unnamed_addr constant [27 x i8] c"', emitted for impl type '\00"
+@.str.8165 = private unnamed_addr constant [39 x i8] c"' \E2\80\94 fix it at the trait declaration]\00"
 define i8* @parse_type_dyn(i64 %lex) {
 entry:
   %r0 = alloca i8*
@@ -107482,7 +107732,7 @@ entry:
   %r3 = xor i1 %r2, 1
   br i1 %r3, label %then_1, label %else_2
 then_1:
-  %r4 = getelementptr [88 x i8], [88 x i8]* @.str.8099, i64 0, i64 0
+  %r4 = getelementptr [88 x i8], [88 x i8]* @.str.8166, i64 0, i64 0
   call void @die(i64 %lex, i8* %r4)
   unreachable
 else_2:
@@ -107501,7 +107751,7 @@ end_3:
   call void @dyn_note_needed(i8* %r10)
   %r11 = load i64, i64* @g_trait_syms
   %r12 = load i8*, i8** %r6
-  %r13 = getelementptr [10 x i8], [10 x i8]* @.str.8100, i64 0, i64 0
+  %r13 = getelementptr [10 x i8], [10 x i8]* @.str.8167, i64 0, i64 0
   %r14 = call i64 @nurl_sym_len2(i64 %r11, i8* %r12, i8* %r13)
   %r15 = icmp ne i64 0, %r14
   br i1 %r15, label %then_4, label %else_5
@@ -107512,7 +107762,7 @@ then_4:
 else_5:
   br label %end_6
 end_6:
-  %r17 = getelementptr [6 x i8], [6 x i8]* @.str.8101, i64 0, i64 0
+  %r17 = getelementptr [6 x i8], [6 x i8]* @.str.8168, i64 0, i64 0
   %r18 = load i8*, i8** %r6
   %r19 = call i8* @nurl_str_cat(i8* %r17, i8* %r18)
   store i64 1, i64* @__nurl_ret_owned
@@ -107521,9 +107771,9 @@ end_6:
   ret i8* %r19
 }
 
-@.str.8099 = private unnamed_addr constant [88 x i8] c"'%' in a type position must be followed by a trait name (dynamic trait object '%Trait')\00"
-@.str.8100 = private unnamed_addr constant [10 x i8] c"__istrait\00"
-@.str.8101 = private unnamed_addr constant [6 x i8] c"%dyn.\00"
+@.str.8166 = private unnamed_addr constant [88 x i8] c"'%' in a type position must be followed by a trait name (dynamic trait object '%Trait')\00"
+@.str.8167 = private unnamed_addr constant [10 x i8] c"__istrait\00"
+@.str.8168 = private unnamed_addr constant [6 x i8] c"%dyn.\00"
 define void @dyn_note_needed(i8* %tname) {
 entry:
   %r0 = load i8*, i8** @g_dyn_needed
@@ -107536,12 +107786,12 @@ then_1:
   %r5 = icmp eq i64 0, %r4
   br i1 %r5, label %then_4, label %else_5
 then_4:
-  %r6 = getelementptr [1 x i8], [1 x i8]* @.str.8102, i64 0, i64 0
+  %r6 = getelementptr [1 x i8], [1 x i8]* @.str.8169, i64 0, i64 0
   %r7 = call i8* @nurl_str_cat(i8* %tname, i8* %r6)
   br label %end_6
 else_5:
   %r8 = load i8*, i8** @g_dyn_needed
-  %r9 = getelementptr [2 x i8], [2 x i8]* @.str.8103, i64 0, i64 0
+  %r9 = getelementptr [2 x i8], [2 x i8]* @.str.8170, i64 0, i64 0
   %r10 = call i8* @nurl_str_cat3(i8* %r8, i8* %r9, i8* %tname)
   br label %end_6
 end_6:
@@ -107560,8 +107810,8 @@ end_3:
   ret void
 }
 
-@.str.8102 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8103 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8169 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8170 = private unnamed_addr constant [2 x i8] c" \00"
 define i8* @dyn_flat_methods(i8* %tname) {
 entry:
   %r0 = alloca i8*
@@ -107574,7 +107824,7 @@ entry:
   store i8* null, i8** %r26
   call void @__dyn_flat_add__fp1(i8* %tname, i8* %tname)
   %r1 = load i64, i64* @g_trait_syms
-  %r2 = getelementptr [9 x i8], [9 x i8]* @.str.8104, i64 0, i64 0
+  %r2 = getelementptr [9 x i8], [9 x i8]* @.str.8171, i64 0, i64 0
   %r3 = call i8* @nurl_sym_get2(i64 %r1, i8* %tname, i8* %r2)
   %r5 = load i8*, i8** %r4
   call void @nurl_free(i8* %r5)
@@ -107609,7 +107859,7 @@ then_4:
   call void @__dyn_flat_add__fp1(i8* %tname, i8* %r21)
   %r22 = load i64, i64* @g_trait_syms
   %r23 = load i8*, i8** %r12
-  %r24 = getelementptr [9 x i8], [9 x i8]* @.str.8105, i64 0, i64 0
+  %r24 = getelementptr [9 x i8], [9 x i8]* @.str.8172, i64 0, i64 0
   %r25 = call i8* @nurl_sym_get2(i64 %r22, i8* %r23, i8* %r24)
   %r27 = load i8*, i8** %r26
   call void @nurl_free(i8* %r27)
@@ -107627,12 +107877,12 @@ then_7:
   br i1 %r34, label %then_10, label %else_11
 then_10:
   %r35 = load i8*, i8** %r26
-  %r36 = getelementptr [1 x i8], [1 x i8]* @.str.8106, i64 0, i64 0
+  %r36 = getelementptr [1 x i8], [1 x i8]* @.str.8173, i64 0, i64 0
   %r37 = call i8* @nurl_str_cat(i8* %r35, i8* %r36)
   br label %end_12
 else_11:
   %r38 = load i8*, i8** %r4
-  %r39 = getelementptr [2 x i8], [2 x i8]* @.str.8107, i64 0, i64 0
+  %r39 = getelementptr [2 x i8], [2 x i8]* @.str.8174, i64 0, i64 0
   %r40 = load i8*, i8** %r26
   %r41 = call i8* @nurl_str_cat3(i8* %r38, i8* %r39, i8* %r40)
   br label %end_12
@@ -107664,13 +107914,13 @@ loop_exit_3:
   ret i8* %r46
 }
 
-@.str.8104 = private unnamed_addr constant [9 x i8] c"__supers\00"
-@.str.8105 = private unnamed_addr constant [9 x i8] c"__supers\00"
-@.str.8106 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8107 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8171 = private unnamed_addr constant [9 x i8] c"__supers\00"
+@.str.8172 = private unnamed_addr constant [9 x i8] c"__supers\00"
+@.str.8173 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8174 = private unnamed_addr constant [2 x i8] c" \00"
 define void @__dyn_flat_reset__fp1() {
 entry:
-  %r0 = getelementptr [1 x i8], [1 x i8]* @.str.8108, i64 0, i64 0
+  %r0 = getelementptr [1 x i8], [1 x i8]* @.str.8175, i64 0, i64 0
   %r1 = load i64, i64* @g_dyn_flat_out__nurlown
   %r2 = load i8*, i8** @g_dyn_flat_out
   %r3 = icmp ne i64 %r1, 0
@@ -107678,7 +107928,7 @@ entry:
   call void @nurl_free(i8* %r4)
   store i64 0, i64* @g_dyn_flat_out__nurlown
   store i8* %r0, i8** @g_dyn_flat_out
-  %r5 = getelementptr [1 x i8], [1 x i8]* @.str.8109, i64 0, i64 0
+  %r5 = getelementptr [1 x i8], [1 x i8]* @.str.8176, i64 0, i64 0
   %r6 = load i64, i64* @g_dyn_flat_seen__nurlown
   %r7 = load i8*, i8** @g_dyn_flat_seen
   %r8 = icmp ne i64 %r6, 0
@@ -107689,8 +107939,8 @@ entry:
   ret void
 }
 
-@.str.8108 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8109 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8175 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8176 = private unnamed_addr constant [1 x i8] c"\00"
 define void @__dyn_flat_add__fp1(i8* %vtTrait, i8* %declTrait) {
 entry:
   %r3 = alloca i8*
@@ -107698,7 +107948,7 @@ entry:
   %r11 = alloca i8*
   store i8* null, i8** %r11
   %r0 = load i64, i64* @g_trait_syms
-  %r1 = getelementptr [10 x i8], [10 x i8]* @.str.8110, i64 0, i64 0
+  %r1 = getelementptr [10 x i8], [10 x i8]* @.str.8177, i64 0, i64 0
   %r2 = call i8* @nurl_sym_get2(i64 %r0, i8* %declTrait, i8* %r1)
   %r4 = load i8*, i8** %r3
   call void @nurl_free(i8* %r4)
@@ -107737,12 +107987,12 @@ else_5:
   br i1 %r22, label %then_7, label %else_8
 then_7:
   %r23 = load i8*, i8** %r11
-  %r24 = getelementptr [1 x i8], [1 x i8]* @.str.8111, i64 0, i64 0
+  %r24 = getelementptr [1 x i8], [1 x i8]* @.str.8178, i64 0, i64 0
   %r25 = call i8* @nurl_str_cat(i8* %r23, i8* %r24)
   br label %end_9
 else_8:
   %r26 = load i8*, i8** @g_dyn_flat_seen
-  %r27 = getelementptr [2 x i8], [2 x i8]* @.str.8112, i64 0, i64 0
+  %r27 = getelementptr [2 x i8], [2 x i8]* @.str.8179, i64 0, i64 0
   %r28 = load i8*, i8** %r11
   %r29 = call i8* @nurl_str_cat3(i8* %r26, i8* %r27, i8* %r28)
   br label %end_9
@@ -107761,14 +108011,14 @@ end_9:
   br i1 %r37, label %then_10, label %else_11
 then_10:
   %r38 = load i8*, i8** %r11
-  %r39 = getelementptr [2 x i8], [2 x i8]* @.str.8113, i64 0, i64 0
+  %r39 = getelementptr [2 x i8], [2 x i8]* @.str.8180, i64 0, i64 0
   %r40 = call i8* @nurl_str_cat3(i8* %r38, i8* %r39, i8* %declTrait)
   br label %end_12
 else_11:
   %r41 = load i8*, i8** @g_dyn_flat_out
-  %r42 = getelementptr [2 x i8], [2 x i8]* @.str.8114, i64 0, i64 0
+  %r42 = getelementptr [2 x i8], [2 x i8]* @.str.8181, i64 0, i64 0
   %r43 = load i8*, i8** %r11
-  %r44 = getelementptr [2 x i8], [2 x i8]* @.str.8115, i64 0, i64 0
+  %r44 = getelementptr [2 x i8], [2 x i8]* @.str.8182, i64 0, i64 0
   %r45 = call i8* @nurl_str_cat4(i8* %r42, i8* %r43, i8* %r44, i8* %declTrait)
   %r46 = call i8* @nurl_str_cat(i8* %r41, i8* %r45)
   call void @nurl_free(i8* %r45)
@@ -107794,12 +108044,12 @@ loop_exit_3:
   ret void
 }
 
-@.str.8110 = private unnamed_addr constant [10 x i8] c"__methods\00"
-@.str.8111 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8112 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8113 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8114 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8115 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8177 = private unnamed_addr constant [10 x i8] c"__methods\00"
+@.str.8178 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8179 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8180 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8181 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8182 = private unnamed_addr constant [2 x i8] c" \00"
 define i64 @dyn_flat_count(i8* %tname) {
 entry:
   %r0 = alloca i64
@@ -107808,7 +108058,7 @@ entry:
   %r7 = alloca i64
   call void @__dyn_flat_reset__fp1()
   %r1 = call i8* @dyn_flat_methods(i8* %tname)
-  %r2 = getelementptr [1 x i8], [1 x i8]* @.str.8116, i64 0, i64 0
+  %r2 = getelementptr [1 x i8], [1 x i8]* @.str.8183, i64 0, i64 0
   %r3 = call i8* @nurl_str_cat(i8* %r1, i8* %r2)
   %r5 = load i8*, i8** %r4
   call void @nurl_free(i8* %r5)
@@ -107844,7 +108094,7 @@ loop_exit_3:
   ret i64 %r19
 }
 
-@.str.8116 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8183 = private unnamed_addr constant [1 x i8] c"\00"
 define i64 @dyn_method_slot(i8* %tname, i8* %m) {
 entry:
   %r0 = alloca i64
@@ -107856,7 +108106,7 @@ entry:
   store i8* null, i8** %r14
   call void @__dyn_flat_reset__fp1()
   %r1 = call i8* @dyn_flat_methods(i8* %tname)
-  %r2 = getelementptr [1 x i8], [1 x i8]* @.str.8117, i64 0, i64 0
+  %r2 = getelementptr [1 x i8], [1 x i8]* @.str.8184, i64 0, i64 0
   %r3 = call i8* @nurl_str_cat(i8* %r1, i8* %r2)
   %r5 = load i8*, i8** %r4
   call void @nurl_free(i8* %r5)
@@ -107931,7 +108181,7 @@ end_11:
   ret i64 %r36
 }
 
-@.str.8117 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8184 = private unnamed_addr constant [1 x i8] c"\00"
 define i8* @dyn_method_decltrait(i8* %tname, i8* %m) {
 entry:
   %r0 = alloca i8*
@@ -107944,14 +108194,14 @@ entry:
   store i8* null, i8** %r25
   call void @__dyn_flat_reset__fp1()
   %r1 = call i8* @dyn_flat_methods(i8* %tname)
-  %r2 = getelementptr [1 x i8], [1 x i8]* @.str.8118, i64 0, i64 0
+  %r2 = getelementptr [1 x i8], [1 x i8]* @.str.8185, i64 0, i64 0
   %r3 = call i8* @nurl_str_cat(i8* %r1, i8* %r2)
   %r5 = load i8*, i8** %r4
   call void @nurl_free(i8* %r5)
   store i8* %r3, i8** %r4
   %r6 = load i8*, i8** %r4
   call void @nurl_journal_push(i8* %r6)
-  %r7 = getelementptr [1 x i8], [1 x i8]* @.str.8119, i64 0, i64 0
+  %r7 = getelementptr [1 x i8], [1 x i8]* @.str.8186, i64 0, i64 0
   %r8 = load i64, i64* @g_dyn_dtout__nurlown
   %r9 = load i8*, i8** @g_dyn_dtout
   %r10 = icmp ne i64 %r8, 0
@@ -108003,7 +108253,7 @@ and_end_5:
   br i1 %r36, label %then_6, label %else_7
 then_6:
   %r37 = load i8*, i8** %r25
-  %r38 = getelementptr [1 x i8], [1 x i8]* @.str.8120, i64 0, i64 0
+  %r38 = getelementptr [1 x i8], [1 x i8]* @.str.8187, i64 0, i64 0
   %r39 = call i8* @nurl_str_cat(i8* %r37, i8* %r38)
   %r40 = load i64, i64* @g_dyn_dtout__nurlown
   %r41 = load i8*, i8** @g_dyn_dtout
@@ -108031,9 +108281,9 @@ loop_exit_3:
   ret i8* %r46
 }
 
-@.str.8118 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8119 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8120 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8185 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8186 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8187 = private unnamed_addr constant [1 x i8] c"\00"
 define void @dyn_check_object_safe(i64 %lex, i8* %tname) {
 entry:
   %r3 = alloca i8*
@@ -108051,7 +108301,7 @@ entry:
   %r65 = alloca i8*
   store i8* null, i8** %r65
   %r0 = load i64, i64* @g_trait_syms
-  %r1 = getelementptr [9 x i8], [9 x i8]* @.str.8121, i64 0, i64 0
+  %r1 = getelementptr [9 x i8], [9 x i8]* @.str.8188, i64 0, i64 0
   %r2 = call i8* @nurl_sym_get2(i64 %r0, i8* %tname, i8* %r1)
   %r4 = load i8*, i8** %r3
   call void @nurl_free(i8* %r4)
@@ -108063,10 +108313,10 @@ entry:
   %r8 = icmp eq i64 0, %r7
   br i1 %r8, label %then_1, label %else_2
 then_1:
-  %r9 = getelementptr [8 x i8], [8 x i8]* @.str.8122, i64 0, i64 0
-  %r10 = getelementptr [156 x i8], [156 x i8]* @.str.8123, i64 0, i64 0
+  %r9 = getelementptr [8 x i8], [8 x i8]* @.str.8189, i64 0, i64 0
+  %r10 = getelementptr [156 x i8], [156 x i8]* @.str.8190, i64 0, i64 0
   %r11 = call i8* @nurl_str_cat3(i8* %r9, i8* %tname, i8* %r10)
-  %r12 = getelementptr [2 x i8], [2 x i8]* @.str.8124, i64 0, i64 0
+  %r12 = getelementptr [2 x i8], [2 x i8]* @.str.8191, i64 0, i64 0
   %r13 = call i8* @nurl_str_cat(i8* %tname, i8* %r12)
   %r14 = call i8* @nurl_str_cat(i8* %r11, i8* %r13)
   call void @nurl_free(i8* %r11)
@@ -108078,7 +108328,7 @@ else_2:
   br label %end_3
 end_3:
   %r15 = load i64, i64* @g_trait_syms
-  %r16 = getelementptr [8 x i8], [8 x i8]* @.str.8125, i64 0, i64 0
+  %r16 = getelementptr [8 x i8], [8 x i8]* @.str.8192, i64 0, i64 0
   %r17 = call i8* @nurl_sym_get2(i64 %r15, i8* %tname, i8* %r16)
   %r19 = load i8*, i8** %r18
   call void @nurl_free(i8* %r19)
@@ -108086,7 +108336,7 @@ end_3:
   %r20 = load i8*, i8** %r18
   call void @nurl_journal_push(i8* %r20)
   %r21 = load i64, i64* @g_trait_syms
-  %r22 = getelementptr [10 x i8], [10 x i8]* @.str.8126, i64 0, i64 0
+  %r22 = getelementptr [10 x i8], [10 x i8]* @.str.8193, i64 0, i64 0
   %r23 = call i8* @nurl_sym_get2(i64 %r21, i8* %tname, i8* %r22)
   %r25 = load i8*, i8** %r24
   call void @nurl_free(i8* %r25)
@@ -108113,9 +108363,9 @@ loop_body_5:
   call void @nurl_free(i8* %r37)
   store i8* %r36, i8** %r24
   %r38 = load i64, i64* @g_trait_syms
-  %r39 = getelementptr [3 x i8], [3 x i8]* @.str.8127, i64 0, i64 0
+  %r39 = getelementptr [3 x i8], [3 x i8]* @.str.8194, i64 0, i64 0
   %r40 = load i8*, i8** %r32
-  %r41 = getelementptr [6 x i8], [6 x i8]* @.str.8128, i64 0, i64 0
+  %r41 = getelementptr [6 x i8], [6 x i8]* @.str.8195, i64 0, i64 0
   %r42 = call i8* @nurl_str_cat(i8* %r40, i8* %r41)
   %r43 = call i8* @nurl_str_cat(i8* %r39, i8* %r42)
   call void @nurl_free(i8* %r42)
@@ -108140,7 +108390,7 @@ loop_body_5:
   br label %loop_check_4
 loop_exit_6:
   %r54 = load i64, i64* @g_trait_syms
-  %r55 = getelementptr [9 x i8], [9 x i8]* @.str.8129, i64 0, i64 0
+  %r55 = getelementptr [9 x i8], [9 x i8]* @.str.8196, i64 0, i64 0
   %r56 = call i8* @nurl_sym_get2(i64 %r54, i8* %tname, i8* %r55)
   %r58 = load i8*, i8** %r57
   call void @nurl_free(i8* %r58)
@@ -108168,7 +108418,7 @@ loop_body_8:
   store i8* %r69, i8** %r57
   %r71 = load i64, i64* @g_trait_syms
   %r72 = load i8*, i8** %r65
-  %r73 = getelementptr [10 x i8], [10 x i8]* @.str.8130, i64 0, i64 0
+  %r73 = getelementptr [10 x i8], [10 x i8]* @.str.8197, i64 0, i64 0
   %r74 = call i64 @nurl_sym_len2(i64 %r71, i8* %r72, i8* %r73)
   %r75 = icmp ne i64 0, %r74
   br i1 %r75, label %then_10, label %else_11
@@ -108195,36 +108445,36 @@ loop_exit_9:
   ret void
 }
 
-@.str.8121 = private unnamed_addr constant [9 x i8] c"__tparam\00"
-@.str.8122 = private unnamed_addr constant [8 x i8] c"trait '\00"
-@.str.8123 = private unnamed_addr constant [156 x i8] c"' is not object-safe: a dynamic object needs the trait to be generic over Self ('% Name [T] { ... }'). Add the parameter, or dispatch statically. Wanted '%\00"
-@.str.8124 = private unnamed_addr constant [2 x i8] c"'\00"
-@.str.8125 = private unnamed_addr constant [8 x i8] c"__assoc\00"
-@.str.8126 = private unnamed_addr constant [10 x i8] c"__methods\00"
-@.str.8127 = private unnamed_addr constant [3 x i8] c"__\00"
-@.str.8128 = private unnamed_addr constant [6 x i8] c"__sig\00"
-@.str.8129 = private unnamed_addr constant [9 x i8] c"__supers\00"
-@.str.8130 = private unnamed_addr constant [10 x i8] c"__istrait\00"
+@.str.8188 = private unnamed_addr constant [9 x i8] c"__tparam\00"
+@.str.8189 = private unnamed_addr constant [8 x i8] c"trait '\00"
+@.str.8190 = private unnamed_addr constant [156 x i8] c"' is not object-safe: a dynamic object needs the trait to be generic over Self ('% Name [T] { ... }'). Add the parameter, or dispatch statically. Wanted '%\00"
+@.str.8191 = private unnamed_addr constant [2 x i8] c"'\00"
+@.str.8192 = private unnamed_addr constant [8 x i8] c"__assoc\00"
+@.str.8193 = private unnamed_addr constant [10 x i8] c"__methods\00"
+@.str.8194 = private unnamed_addr constant [3 x i8] c"__\00"
+@.str.8195 = private unnamed_addr constant [6 x i8] c"__sig\00"
+@.str.8196 = private unnamed_addr constant [9 x i8] c"__supers\00"
+@.str.8197 = private unnamed_addr constant [10 x i8] c"__istrait\00"
 define void @dyn_check_method_safe(i64 %lex, i8* %tname, i8* %m, i8* %sig, i8* %tparam, i8* %assoc) {
 entry:
   %r2 = alloca i64
   %r43 = alloca i8*
   store i8* null, i8** %r43
-  %r0 = getelementptr [10 x i8], [10 x i8]* @.str.8131, i64 0, i64 0
+  %r0 = getelementptr [10 x i8], [10 x i8]* @.str.8198, i64 0, i64 0
   %r1 = call i64 @nurl_lex_new(i8* %sig, i8* %r0)
   store i64 %r1, i64* %r2
   %r3 = load i64, i64* %r2
   %r4 = call i8* @nurl_lex_val(i64 %r3)
-  %r5 = getelementptr [5 x i8], [5 x i8]* @.str.8132, i64 0, i64 0
+  %r5 = getelementptr [5 x i8], [5 x i8]* @.str.8199, i64 0, i64 0
   %r6 = call i1 @seq(i8* %r4, i8* %r5)
   call void @nurl_free(i8* %r4)
   br i1 %r6, label %then_1, label %else_2
 then_1:
-  %r7 = getelementptr [9 x i8], [9 x i8]* @.str.8133, i64 0, i64 0
-  %r8 = getelementptr [13 x i8], [13 x i8]* @.str.8134, i64 0, i64 0
+  %r7 = getelementptr [9 x i8], [9 x i8]* @.str.8200, i64 0, i64 0
+  %r8 = getelementptr [13 x i8], [13 x i8]* @.str.8201, i64 0, i64 0
   %r9 = call i8* @nurl_str_cat3(i8* %r7, i8* %m, i8* %r8)
-  %r10 = getelementptr [72 x i8], [72 x i8]* @.str.8135, i64 0, i64 0
-  %r11 = getelementptr [47 x i8], [47 x i8]* @.str.8136, i64 0, i64 0
+  %r10 = getelementptr [72 x i8], [72 x i8]* @.str.8202, i64 0, i64 0
+  %r11 = getelementptr [47 x i8], [47 x i8]* @.str.8203, i64 0, i64 0
   %r12 = call i8* @nurl_str_cat(i8* %tname, i8* %r11)
   %r13 = call i8* @nurl_str_cat3(i8* %tname, i8* %r10, i8* %r12)
   call void @nurl_free(i8* %r12)
@@ -108239,7 +108489,7 @@ else_2:
 end_3:
   %r15 = load i64, i64* %r2
   %r16 = call i8* @nurl_lex_val(i64 %r15)
-  %r17 = getelementptr [6 x i8], [6 x i8]* @.str.8137, i64 0, i64 0
+  %r17 = getelementptr [6 x i8], [6 x i8]* @.str.8204, i64 0, i64 0
   %r18 = call i1 @seq(i8* %r16, i8* %r17)
   call void @nurl_free(i8* %r16)
   br i1 %r18, label %then_4, label %else_5
@@ -108257,11 +108507,11 @@ end_6:
   %r23 = xor i1 %r22, 1
   br i1 %r23, label %then_7, label %else_8
 then_7:
-  %r24 = getelementptr [9 x i8], [9 x i8]* @.str.8138, i64 0, i64 0
-  %r25 = getelementptr [13 x i8], [13 x i8]* @.str.8139, i64 0, i64 0
+  %r24 = getelementptr [9 x i8], [9 x i8]* @.str.8205, i64 0, i64 0
+  %r25 = getelementptr [13 x i8], [13 x i8]* @.str.8206, i64 0, i64 0
   %r26 = call i8* @nurl_str_cat3(i8* %r24, i8* %m, i8* %r25)
-  %r27 = getelementptr [73 x i8], [73 x i8]* @.str.8140, i64 0, i64 0
-  %r28 = getelementptr [2 x i8], [2 x i8]* @.str.8141, i64 0, i64 0
+  %r27 = getelementptr [73 x i8], [73 x i8]* @.str.8207, i64 0, i64 0
+  %r28 = getelementptr [2 x i8], [2 x i8]* @.str.8208, i64 0, i64 0
   %r29 = call i8* @nurl_str_cat(i8* %tname, i8* %r28)
   %r30 = call i8* @nurl_str_cat3(i8* %tname, i8* %r27, i8* %r29)
   call void @nurl_free(i8* %r29)
@@ -108306,11 +108556,11 @@ loop_body_14:
   %r47 = call i1 @seq(i8* %r46, i8* %tparam)
   br i1 %r47, label %then_16, label %else_17
 then_16:
-  %r48 = getelementptr [9 x i8], [9 x i8]* @.str.8142, i64 0, i64 0
-  %r49 = getelementptr [13 x i8], [13 x i8]* @.str.8143, i64 0, i64 0
+  %r48 = getelementptr [9 x i8], [9 x i8]* @.str.8209, i64 0, i64 0
+  %r49 = getelementptr [13 x i8], [13 x i8]* @.str.8210, i64 0, i64 0
   %r50 = call i8* @nurl_str_cat3(i8* %r48, i8* %m, i8* %r49)
-  %r51 = getelementptr [96 x i8], [96 x i8]* @.str.8144, i64 0, i64 0
-  %r52 = getelementptr [2 x i8], [2 x i8]* @.str.8145, i64 0, i64 0
+  %r51 = getelementptr [96 x i8], [96 x i8]* @.str.8211, i64 0, i64 0
+  %r52 = getelementptr [2 x i8], [2 x i8]* @.str.8212, i64 0, i64 0
   %r53 = call i8* @nurl_str_cat(i8* %tname, i8* %r52)
   %r54 = call i8* @nurl_str_cat3(i8* %tname, i8* %r51, i8* %r53)
   call void @nurl_free(i8* %r53)
@@ -108334,13 +108584,13 @@ and_end_20:
   %r60 = phi i1 [ 0, %end_18 ], [ %r59, %and_right_19 ]
   br i1 %r60, label %then_21, label %else_22
 then_21:
-  %r61 = getelementptr [9 x i8], [9 x i8]* @.str.8146, i64 0, i64 0
-  %r62 = getelementptr [13 x i8], [13 x i8]* @.str.8147, i64 0, i64 0
+  %r61 = getelementptr [9 x i8], [9 x i8]* @.str.8213, i64 0, i64 0
+  %r62 = getelementptr [13 x i8], [13 x i8]* @.str.8214, i64 0, i64 0
   %r63 = call i8* @nurl_str_cat3(i8* %r61, i8* %m, i8* %r62)
-  %r64 = getelementptr [25 x i8], [25 x i8]* @.str.8148, i64 0, i64 0
+  %r64 = getelementptr [25 x i8], [25 x i8]* @.str.8215, i64 0, i64 0
   %r65 = load i8*, i8** %r43
-  %r66 = getelementptr [54 x i8], [54 x i8]* @.str.8149, i64 0, i64 0
-  %r67 = getelementptr [2 x i8], [2 x i8]* @.str.8150, i64 0, i64 0
+  %r66 = getelementptr [54 x i8], [54 x i8]* @.str.8216, i64 0, i64 0
+  %r67 = getelementptr [2 x i8], [2 x i8]* @.str.8217, i64 0, i64 0
   %r68 = call i8* @nurl_str_cat(i8* %tname, i8* %r67)
   %r69 = call i8* @nurl_str_cat3(i8* %r65, i8* %r66, i8* %r68)
   call void @nurl_free(i8* %r68)
@@ -108367,26 +108617,26 @@ loop_exit_15:
   ret void
 }
 
-@.str.8131 = private unnamed_addr constant [10 x i8] c"<objsafe>\00"
-@.str.8132 = private unnamed_addr constant [5 x i8] c"sink\00"
-@.str.8133 = private unnamed_addr constant [9 x i8] c"method '\00"
-@.str.8134 = private unnamed_addr constant [13 x i8] c"' of trait '\00"
-@.str.8135 = private unnamed_addr constant [72 x i8] c"' has a 'sink' (by-value consuming) receiver \E2\80\94 not object-safe for '%\00"
-@.str.8136 = private unnamed_addr constant [47 x i8] c"' dispatch; use a by-value or 'inout' receiver\00"
-@.str.8137 = private unnamed_addr constant [6 x i8] c"inout\00"
-@.str.8138 = private unnamed_addr constant [9 x i8] c"method '\00"
-@.str.8139 = private unnamed_addr constant [13 x i8] c"' of trait '\00"
-@.str.8140 = private unnamed_addr constant [73 x i8] c"' has no Self receiver as its first parameter \E2\80\94 not object-safe for '%\00"
-@.str.8141 = private unnamed_addr constant [2 x i8] c"'\00"
-@.str.8142 = private unnamed_addr constant [9 x i8] c"method '\00"
-@.str.8143 = private unnamed_addr constant [13 x i8] c"' of trait '\00"
-@.str.8144 = private unnamed_addr constant [96 x i8] c"' mentions Self beyond the receiver (a parameter or the return type) \E2\80\94 not object-safe for '%\00"
-@.str.8145 = private unnamed_addr constant [2 x i8] c"'\00"
-@.str.8146 = private unnamed_addr constant [9 x i8] c"method '\00"
-@.str.8147 = private unnamed_addr constant [13 x i8] c"' of trait '\00"
-@.str.8148 = private unnamed_addr constant [25 x i8] c"' uses associated type '\00"
-@.str.8149 = private unnamed_addr constant [54 x i8] c"' through a dynamic object \E2\80\94 not object-safe for '%\00"
-@.str.8150 = private unnamed_addr constant [2 x i8] c"'\00"
+@.str.8198 = private unnamed_addr constant [10 x i8] c"<objsafe>\00"
+@.str.8199 = private unnamed_addr constant [5 x i8] c"sink\00"
+@.str.8200 = private unnamed_addr constant [9 x i8] c"method '\00"
+@.str.8201 = private unnamed_addr constant [13 x i8] c"' of trait '\00"
+@.str.8202 = private unnamed_addr constant [72 x i8] c"' has a 'sink' (by-value consuming) receiver \E2\80\94 not object-safe for '%\00"
+@.str.8203 = private unnamed_addr constant [47 x i8] c"' dispatch; use a by-value or 'inout' receiver\00"
+@.str.8204 = private unnamed_addr constant [6 x i8] c"inout\00"
+@.str.8205 = private unnamed_addr constant [9 x i8] c"method '\00"
+@.str.8206 = private unnamed_addr constant [13 x i8] c"' of trait '\00"
+@.str.8207 = private unnamed_addr constant [73 x i8] c"' has no Self receiver as its first parameter \E2\80\94 not object-safe for '%\00"
+@.str.8208 = private unnamed_addr constant [2 x i8] c"'\00"
+@.str.8209 = private unnamed_addr constant [9 x i8] c"method '\00"
+@.str.8210 = private unnamed_addr constant [13 x i8] c"' of trait '\00"
+@.str.8211 = private unnamed_addr constant [96 x i8] c"' mentions Self beyond the receiver (a parameter or the return type) \E2\80\94 not object-safe for '%\00"
+@.str.8212 = private unnamed_addr constant [2 x i8] c"'\00"
+@.str.8213 = private unnamed_addr constant [9 x i8] c"method '\00"
+@.str.8214 = private unnamed_addr constant [13 x i8] c"' of trait '\00"
+@.str.8215 = private unnamed_addr constant [25 x i8] c"' uses associated type '\00"
+@.str.8216 = private unnamed_addr constant [54 x i8] c"' through a dynamic object \E2\80\94 not object-safe for '%\00"
+@.str.8217 = private unnamed_addr constant [2 x i8] c"'\00"
 define void @emit_dyn_method_thunk(i8* %vtTrait, i8* %declTrait, i8* %m, i8* %impl_nurl, i8* %impl_llvm, i8* %impl_mangle, i64 %cg) {
 entry:
   %r6 = alloca i8*
@@ -108426,8 +108676,8 @@ entry:
   store i8* null, i8** %r154
   %r160 = alloca i8*
   store i8* null, i8** %r160
-  %r0 = getelementptr [2 x i8], [2 x i8]* @.str.8151, i64 0, i64 0
-  %r1 = getelementptr [2 x i8], [2 x i8]* @.str.8152, i64 0, i64 0
+  %r0 = getelementptr [2 x i8], [2 x i8]* @.str.8218, i64 0, i64 0
+  %r1 = getelementptr [2 x i8], [2 x i8]* @.str.8219, i64 0, i64 0
   %r2 = call i8* @nurl_str_cat(i8* %r1, i8* %m)
   %r3 = call i8* @nurl_str_cat(i8* %impl_mangle, i8* %r2)
   call void @nurl_free(i8* %r2)
@@ -108440,7 +108690,7 @@ entry:
   store i8* %r5, i8** %r6
   %r8 = load i8*, i8** %r6
   call void @nurl_journal_push(i8* %r8)
-  %r9 = getelementptr [7 x i8], [7 x i8]* @.str.8153, i64 0, i64 0
+  %r9 = getelementptr [7 x i8], [7 x i8]* @.str.8220, i64 0, i64 0
   %r10 = load i8*, i8** %r6
   %r11 = call i8* @nurl_str_cat(i8* %r9, i8* %r10)
   %r13 = load i8*, i8** %r12
@@ -108464,7 +108714,7 @@ else_2:
 end_3:
   %r21 = load i64, i64* @g_impl_name_syms
   %r22 = load i8*, i8** %r12
-  %r23 = getelementptr [2 x i8], [2 x i8]* @.str.8154, i64 0, i64 0
+  %r23 = getelementptr [2 x i8], [2 x i8]* @.str.8221, i64 0, i64 0
   call void @nurl_sym_def(i64 %r21, i8* %r22, i8* %r23)
   %r24 = call i8* @dyn_subst_parts(i8* %declTrait, i8* %m, i8* %impl_nurl)
   %r26 = load i8*, i8** %r25
@@ -108514,15 +108764,15 @@ end_3:
   store i8* %r54, i8** %r55
   %r57 = load i8*, i8** %r55
   call void @nurl_journal_push(i8* %r57)
-  %r58 = getelementptr [10 x i8], [10 x i8]* @.str.8155, i64 0, i64 0
+  %r58 = getelementptr [10 x i8], [10 x i8]* @.str.8222, i64 0, i64 0
   %r59 = call i8* @nurl_strdup(i8* %r58)
   %r61 = load i8*, i8** %r60
   call void @nurl_free(i8* %r61)
   store i8* %r59, i8** %r60
   %r62 = load i8*, i8** %r60
   call void @nurl_journal_push(i8* %r62)
-  %r63 = getelementptr [1 x i8], [1 x i8]* @.str.8156, i64 0, i64 0
-  %r64 = getelementptr [1 x i8], [1 x i8]* @.str.8157, i64 0, i64 0
+  %r63 = getelementptr [1 x i8], [1 x i8]* @.str.8223, i64 0, i64 0
+  %r64 = getelementptr [1 x i8], [1 x i8]* @.str.8224, i64 0, i64 0
   %r65 = call i8* @nurl_str_cat(i8* %r63, i8* %r64)
   %r67 = load i8*, i8** %r66
   call void @nurl_free(i8* %r67)
@@ -108530,7 +108780,7 @@ end_3:
   %r68 = load i8*, i8** %r66
   call void @nurl_journal_push(i8* %r68)
   %r69 = load i8*, i8** %r55
-  %r70 = getelementptr [1 x i8], [1 x i8]* @.str.8158, i64 0, i64 0
+  %r70 = getelementptr [1 x i8], [1 x i8]* @.str.8225, i64 0, i64 0
   %r71 = call i8* @nurl_str_cat(i8* %r69, i8* %r70)
   %r73 = load i8*, i8** %r72
   call void @nurl_free(i8* %r73)
@@ -108564,9 +108814,9 @@ loop_body_5:
   store i8* %r88, i8** %r89
   %r91 = load i8*, i8** %r89
   call void @nurl_journal_push(i8* %r91)
-  %r92 = getelementptr [3 x i8], [3 x i8]* @.str.8159, i64 0, i64 0
+  %r92 = getelementptr [3 x i8], [3 x i8]* @.str.8226, i64 0, i64 0
   %r93 = load i8*, i8** %r89
-  %r94 = getelementptr [4 x i8], [4 x i8]* @.str.8160, i64 0, i64 0
+  %r94 = getelementptr [4 x i8], [4 x i8]* @.str.8227, i64 0, i64 0
   %r95 = load i64, i64* %r75
   %r96 = call i8* @nurl_str_int(i64 %r95)
   %r97 = call i8* @nurl_str_cat4(i8* %r92, i8* %r93, i8* %r94, i8* %r96)
@@ -108602,30 +108852,30 @@ loop_body_5:
   store i8* null, i8** %r98
   br label %loop_check_4
 loop_exit_6:
-  %r114 = getelementptr [8 x i8], [8 x i8]* @.str.8161, i64 0, i64 0
+  %r114 = getelementptr [8 x i8], [8 x i8]* @.str.8228, i64 0, i64 0
   call void @nurl_print(i8* %r114)
   %r115 = load i8*, i8** %r30
   %r116 = call i8* @nurl_llty(i8* %r115)
   call void @nurl_print(i8* %r116)
   call void @nurl_free(i8* %r116)
-  %r117 = getelementptr [10 x i8], [10 x i8]* @.str.8162, i64 0, i64 0
+  %r117 = getelementptr [10 x i8], [10 x i8]* @.str.8229, i64 0, i64 0
   call void @nurl_print(i8* %r117)
   %r118 = load i8*, i8** %r6
   call void @nurl_print(i8* %r118)
-  %r119 = getelementptr [2 x i8], [2 x i8]* @.str.8163, i64 0, i64 0
+  %r119 = getelementptr [2 x i8], [2 x i8]* @.str.8230, i64 0, i64 0
   call void @nurl_print(i8* %r119)
   %r120 = load i8*, i8** %r60
   call void @nurl_print(i8* %r120)
-  %r121 = getelementptr [12 x i8], [12 x i8]* @.str.8164, i64 0, i64 0
+  %r121 = getelementptr [12 x i8], [12 x i8]* @.str.8231, i64 0, i64 0
   call void @nurl_print(i8* %r121)
-  %r122 = getelementptr [29 x i8], [29 x i8]* @.str.8165, i64 0, i64 0
+  %r122 = getelementptr [29 x i8], [29 x i8]* @.str.8232, i64 0, i64 0
   call void @nurl_print(i8* %r122)
   %r123 = load i8*, i8** %r50
   call void @nurl_print(i8* %r123)
-  %r124 = getelementptr [3 x i8], [3 x i8]* @.str.8166, i64 0, i64 0
+  %r124 = getelementptr [3 x i8], [3 x i8]* @.str.8233, i64 0, i64 0
   call void @nurl_print(i8* %r124)
-  %r125 = getelementptr [1 x i8], [1 x i8]* @.str.8167, i64 0, i64 0
-  %r126 = getelementptr [1 x i8], [1 x i8]* @.str.8168, i64 0, i64 0
+  %r125 = getelementptr [1 x i8], [1 x i8]* @.str.8234, i64 0, i64 0
+  %r126 = getelementptr [1 x i8], [1 x i8]* @.str.8235, i64 0, i64 0
   %r127 = call i8* @nurl_str_cat(i8* %r125, i8* %r126)
   %r129 = load i8*, i8** %r128
   call void @nurl_free(i8* %r129)
@@ -108633,23 +108883,23 @@ loop_exit_6:
   %r130 = load i8*, i8** %r128
   call void @nurl_journal_push(i8* %r130)
   %r131 = load i8*, i8** %r40
-  %r132 = getelementptr [4 x i8], [4 x i8]* @.str.8169, i64 0, i64 0
+  %r132 = getelementptr [4 x i8], [4 x i8]* @.str.8236, i64 0, i64 0
   %r133 = call i1 @seq(i8* %r131, i8* %r132)
   br i1 %r133, label %then_7, label %else_8
 then_7:
-  %r134 = getelementptr [14 x i8], [14 x i8]* @.str.8170, i64 0, i64 0
+  %r134 = getelementptr [14 x i8], [14 x i8]* @.str.8237, i64 0, i64 0
   call void @nurl_print(i8* %r134)
   %r135 = load i8*, i8** %r50
   call void @nurl_print(i8* %r135)
-  %r136 = getelementptr [3 x i8], [3 x i8]* @.str.8171, i64 0, i64 0
+  %r136 = getelementptr [3 x i8], [3 x i8]* @.str.8238, i64 0, i64 0
   call void @nurl_print(i8* %r136)
   %r137 = load i8*, i8** %r50
   call void @nurl_print(i8* %r137)
-  %r138 = getelementptr [6 x i8], [6 x i8]* @.str.8172, i64 0, i64 0
+  %r138 = getelementptr [6 x i8], [6 x i8]* @.str.8239, i64 0, i64 0
   call void @nurl_print(i8* %r138)
   %r139 = load i8*, i8** %r50
-  %r140 = getelementptr [2 x i8], [2 x i8]* @.str.8173, i64 0, i64 0
-  %r141 = getelementptr [4 x i8], [4 x i8]* @.str.8174, i64 0, i64 0
+  %r140 = getelementptr [2 x i8], [2 x i8]* @.str.8240, i64 0, i64 0
+  %r141 = getelementptr [4 x i8], [4 x i8]* @.str.8241, i64 0, i64 0
   %r142 = call i8* @nurl_str_cat3(i8* %r139, i8* %r140, i8* %r141)
   %r143 = load i8*, i8** %r128
   call void @nurl_free(i8* %r143)
@@ -108657,7 +108907,7 @@ then_7:
   br label %end_9
 else_8:
   %r144 = load i8*, i8** %r50
-  %r145 = getelementptr [5 x i8], [5 x i8]* @.str.8175, i64 0, i64 0
+  %r145 = getelementptr [5 x i8], [5 x i8]* @.str.8242, i64 0, i64 0
   %r146 = call i8* @nurl_str_cat(i8* %r144, i8* %r145)
   %r147 = load i8*, i8** %r128
   call void @nurl_free(i8* %r147)
@@ -108665,8 +108915,8 @@ else_8:
   br label %end_9
 end_9:
   %r148 = phi i8* [ %r142, %then_7 ], [ %r146, %else_8 ]
-  %r149 = getelementptr [2 x i8], [2 x i8]* @.str.8176, i64 0, i64 0
-  %r150 = getelementptr [3 x i8], [3 x i8]* @.str.8177, i64 0, i64 0
+  %r149 = getelementptr [2 x i8], [2 x i8]* @.str.8243, i64 0, i64 0
+  %r150 = getelementptr [3 x i8], [3 x i8]* @.str.8244, i64 0, i64 0
   %r151 = call i8* @nurl_str_cat(i8* %r150, i8* %impl_mangle)
   %r152 = call i8* @nurl_str_cat(i8* %m, i8* %r151)
   call void @nurl_free(i8* %r151)
@@ -108686,43 +108936,43 @@ end_9:
   %r162 = load i8*, i8** %r160
   call void @nurl_journal_push(i8* %r162)
   %r163 = load i8*, i8** %r30
-  %r164 = getelementptr [5 x i8], [5 x i8]* @.str.8178, i64 0, i64 0
+  %r164 = getelementptr [5 x i8], [5 x i8]* @.str.8245, i64 0, i64 0
   %r165 = call i1 @seq(i8* %r163, i8* %r164)
   br i1 %r165, label %then_10, label %else_11
 then_10:
-  %r166 = getelementptr [13 x i8], [13 x i8]* @.str.8179, i64 0, i64 0
+  %r166 = getelementptr [13 x i8], [13 x i8]* @.str.8246, i64 0, i64 0
   call void @nurl_print(i8* %r166)
   %r167 = load i8*, i8** %r154
   call void @nurl_print(i8* %r167)
-  %r168 = getelementptr [2 x i8], [2 x i8]* @.str.8180, i64 0, i64 0
+  %r168 = getelementptr [2 x i8], [2 x i8]* @.str.8247, i64 0, i64 0
   call void @nurl_print(i8* %r168)
   %r169 = load i8*, i8** %r160
   call void @nurl_print(i8* %r169)
-  %r170 = getelementptr [16 x i8], [16 x i8]* @.str.8181, i64 0, i64 0
+  %r170 = getelementptr [16 x i8], [16 x i8]* @.str.8248, i64 0, i64 0
   call void @nurl_print(i8* %r170)
   br label %end_12
 else_11:
-  %r171 = getelementptr [13 x i8], [13 x i8]* @.str.8182, i64 0, i64 0
+  %r171 = getelementptr [13 x i8], [13 x i8]* @.str.8249, i64 0, i64 0
   call void @nurl_print(i8* %r171)
   %r172 = load i8*, i8** %r30
   %r173 = call i8* @nurl_llty(i8* %r172)
   call void @nurl_print(i8* %r173)
   call void @nurl_free(i8* %r173)
-  %r174 = getelementptr [2 x i8], [2 x i8]* @.str.8183, i64 0, i64 0
+  %r174 = getelementptr [2 x i8], [2 x i8]* @.str.8250, i64 0, i64 0
   call void @nurl_print(i8* %r174)
   %r175 = load i8*, i8** %r154
   call void @nurl_print(i8* %r175)
-  %r176 = getelementptr [2 x i8], [2 x i8]* @.str.8184, i64 0, i64 0
+  %r176 = getelementptr [2 x i8], [2 x i8]* @.str.8251, i64 0, i64 0
   call void @nurl_print(i8* %r176)
   %r177 = load i8*, i8** %r160
   call void @nurl_print(i8* %r177)
-  %r178 = getelementptr [9 x i8], [9 x i8]* @.str.8185, i64 0, i64 0
+  %r178 = getelementptr [9 x i8], [9 x i8]* @.str.8252, i64 0, i64 0
   call void @nurl_print(i8* %r178)
   %r179 = load i8*, i8** %r30
   %r180 = call i8* @nurl_llty(i8* %r179)
   call void @nurl_print(i8* %r180)
   call void @nurl_free(i8* %r180)
-  %r181 = getelementptr [7 x i8], [7 x i8]* @.str.8186, i64 0, i64 0
+  %r181 = getelementptr [7 x i8], [7 x i8]* @.str.8253, i64 0, i64 0
   call void @nurl_print(i8* %r181)
   br label %end_12
 end_12:
@@ -108759,42 +109009,42 @@ end_12:
   ret void
 }
 
-@.str.8151 = private unnamed_addr constant [2 x i8] c".\00"
-@.str.8152 = private unnamed_addr constant [2 x i8] c".\00"
-@.str.8153 = private unnamed_addr constant [7 x i8] c"dynm##\00"
-@.str.8154 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.8155 = private unnamed_addr constant [10 x i8] c"i8* %self\00"
-@.str.8156 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8157 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8158 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8159 = private unnamed_addr constant [3 x i8] c", \00"
-@.str.8160 = private unnamed_addr constant [4 x i8] c" %a\00"
-@.str.8161 = private unnamed_addr constant [8 x i8] c"define \00"
-@.str.8162 = private unnamed_addr constant [10 x i8] c" @__dynm.\00"
-@.str.8163 = private unnamed_addr constant [2 x i8] c"(\00"
-@.str.8164 = private unnamed_addr constant [12 x i8] c") {\0Aentry:\0A\00"
-@.str.8165 = private unnamed_addr constant [29 x i8] c"  %p = bitcast i8* %self to \00"
-@.str.8166 = private unnamed_addr constant [3 x i8] c"*\0A\00"
-@.str.8167 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8168 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8169 = private unnamed_addr constant [4 x i8] c"val\00"
-@.str.8170 = private unnamed_addr constant [14 x i8] c"  %rv = load \00"
-@.str.8171 = private unnamed_addr constant [3 x i8] c", \00"
-@.str.8172 = private unnamed_addr constant [6 x i8] c"* %p\0A\00"
-@.str.8173 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8174 = private unnamed_addr constant [4 x i8] c"%rv\00"
-@.str.8175 = private unnamed_addr constant [5 x i8] c"* %p\00"
-@.str.8176 = private unnamed_addr constant [2 x i8] c"@\00"
-@.str.8177 = private unnamed_addr constant [3 x i8] c"__\00"
-@.str.8178 = private unnamed_addr constant [5 x i8] c"void\00"
-@.str.8179 = private unnamed_addr constant [13 x i8] c"  call void \00"
-@.str.8180 = private unnamed_addr constant [2 x i8] c"(\00"
-@.str.8181 = private unnamed_addr constant [16 x i8] c")\0A  ret void\0A}\0A\00"
-@.str.8182 = private unnamed_addr constant [13 x i8] c"  %r = call \00"
-@.str.8183 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8184 = private unnamed_addr constant [2 x i8] c"(\00"
-@.str.8185 = private unnamed_addr constant [9 x i8] c")\0A  ret \00"
-@.str.8186 = private unnamed_addr constant [7 x i8] c" %r\0A}\0A\00"
+@.str.8218 = private unnamed_addr constant [2 x i8] c".\00"
+@.str.8219 = private unnamed_addr constant [2 x i8] c".\00"
+@.str.8220 = private unnamed_addr constant [7 x i8] c"dynm##\00"
+@.str.8221 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8222 = private unnamed_addr constant [10 x i8] c"i8* %self\00"
+@.str.8223 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8224 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8225 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8226 = private unnamed_addr constant [3 x i8] c", \00"
+@.str.8227 = private unnamed_addr constant [4 x i8] c" %a\00"
+@.str.8228 = private unnamed_addr constant [8 x i8] c"define \00"
+@.str.8229 = private unnamed_addr constant [10 x i8] c" @__dynm.\00"
+@.str.8230 = private unnamed_addr constant [2 x i8] c"(\00"
+@.str.8231 = private unnamed_addr constant [12 x i8] c") {\0Aentry:\0A\00"
+@.str.8232 = private unnamed_addr constant [29 x i8] c"  %p = bitcast i8* %self to \00"
+@.str.8233 = private unnamed_addr constant [3 x i8] c"*\0A\00"
+@.str.8234 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8235 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8236 = private unnamed_addr constant [4 x i8] c"val\00"
+@.str.8237 = private unnamed_addr constant [14 x i8] c"  %rv = load \00"
+@.str.8238 = private unnamed_addr constant [3 x i8] c", \00"
+@.str.8239 = private unnamed_addr constant [6 x i8] c"* %p\0A\00"
+@.str.8240 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8241 = private unnamed_addr constant [4 x i8] c"%rv\00"
+@.str.8242 = private unnamed_addr constant [5 x i8] c"* %p\00"
+@.str.8243 = private unnamed_addr constant [2 x i8] c"@\00"
+@.str.8244 = private unnamed_addr constant [3 x i8] c"__\00"
+@.str.8245 = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.8246 = private unnamed_addr constant [13 x i8] c"  call void \00"
+@.str.8247 = private unnamed_addr constant [2 x i8] c"(\00"
+@.str.8248 = private unnamed_addr constant [16 x i8] c")\0A  ret void\0A}\0A\00"
+@.str.8249 = private unnamed_addr constant [13 x i8] c"  %r = call \00"
+@.str.8250 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8251 = private unnamed_addr constant [2 x i8] c"(\00"
+@.str.8252 = private unnamed_addr constant [9 x i8] c")\0A  ret \00"
+@.str.8253 = private unnamed_addr constant [7 x i8] c" %r\0A}\0A\00"
 define void @emit_dyn_vtable(i8* %tname, i8* %impl_nurl, i8* %impl_llvm, i8* %impl_mangle, i64 %syms, i64 %cg) {
 entry:
   %r7 = alloca i8*
@@ -108829,8 +109079,8 @@ then_1:
 else_2:
   br label %end_3
 end_3:
-  %r3 = getelementptr [8 x i8], [8 x i8]* @.str.8187, i64 0, i64 0
-  %r4 = getelementptr [3 x i8], [3 x i8]* @.str.8188, i64 0, i64 0
+  %r3 = getelementptr [8 x i8], [8 x i8]* @.str.8254, i64 0, i64 0
+  %r4 = getelementptr [3 x i8], [3 x i8]* @.str.8255, i64 0, i64 0
   %r5 = call i8* @nurl_str_cat(i8* %r4, i8* %impl_llvm)
   %r6 = call i8* @nurl_str_cat3(i8* %r3, i8* %tname, i8* %r5)
   call void @nurl_free(i8* %r5)
@@ -108853,9 +109103,9 @@ else_5:
 end_6:
   %r15 = load i64, i64* @g_impl_name_syms
   %r16 = load i8*, i8** %r7
-  %r17 = getelementptr [2 x i8], [2 x i8]* @.str.8189, i64 0, i64 0
+  %r17 = getelementptr [2 x i8], [2 x i8]* @.str.8256, i64 0, i64 0
   call void @nurl_sym_def(i64 %r15, i8* %r16, i8* %r17)
-  %r18 = getelementptr [9 x i8], [9 x i8]* @.str.8190, i64 0, i64 0
+  %r18 = getelementptr [9 x i8], [9 x i8]* @.str.8257, i64 0, i64 0
   %r19 = call i8* @nurl_strdup(i8* %r18)
   %r21 = load i8*, i8** %r20
   call void @nurl_free(i8* %r21)
@@ -108870,9 +109120,9 @@ then_7:
   store i8* %r24, i8** %r25
   %r26 = load i8*, i8** %r25
   call void @emit_jdrop_thunk(i8* %impl_llvm, i8* %r26)
-  %r27 = getelementptr [34 x i8], [34 x i8]* @.str.8191, i64 0, i64 0
+  %r27 = getelementptr [34 x i8], [34 x i8]* @.str.8258, i64 0, i64 0
   %r28 = load i8*, i8** %r25
-  %r29 = getelementptr [9 x i8], [9 x i8]* @.str.8192, i64 0, i64 0
+  %r29 = getelementptr [9 x i8], [9 x i8]* @.str.8259, i64 0, i64 0
   %r30 = call i8* @nurl_str_cat(i8* %r28, i8* %r29)
   %r31 = call i8* @nurl_str_cat(i8* %r27, i8* %r30)
   call void @nurl_free(i8* %r30)
@@ -108885,7 +109135,7 @@ else_8:
 end_9:
   call void @__dyn_flat_reset__fp1()
   %r33 = call i8* @dyn_flat_methods(i8* %tname)
-  %r34 = getelementptr [1 x i8], [1 x i8]* @.str.8193, i64 0, i64 0
+  %r34 = getelementptr [1 x i8], [1 x i8]* @.str.8260, i64 0, i64 0
   %r35 = call i8* @nurl_str_cat(i8* %r33, i8* %r34)
   %r37 = load i8*, i8** %r36
   call void @nurl_free(i8* %r37)
@@ -108937,25 +109187,25 @@ loop_exit_12:
   %r62 = call i64 @dyn_flat_count(i8* %tname)
   %r63 = add i64 %r62, 1
   store i64 %r63, i64* %r64
-  %r65 = getelementptr [7 x i8], [7 x i8]* @.str.8194, i64 0, i64 0
+  %r65 = getelementptr [7 x i8], [7 x i8]* @.str.8261, i64 0, i64 0
   call void @nurl_print(i8* %r65)
   call void @nurl_print(i8* %tname)
-  %r66 = getelementptr [2 x i8], [2 x i8]* @.str.8195, i64 0, i64 0
+  %r66 = getelementptr [2 x i8], [2 x i8]* @.str.8262, i64 0, i64 0
   call void @nurl_print(i8* %r66)
   call void @nurl_print(i8* %impl_mangle)
-  %r67 = getelementptr [14 x i8], [14 x i8]* @.str.8196, i64 0, i64 0
+  %r67 = getelementptr [14 x i8], [14 x i8]* @.str.8263, i64 0, i64 0
   call void @nurl_print(i8* %r67)
   %r68 = load i64, i64* %r64
   %r69 = call i8* @nurl_str_int(i64 %r68)
   call void @nurl_print(i8* %r69)
   call void @nurl_free(i8* %r69)
-  %r70 = getelementptr [11 x i8], [11 x i8]* @.str.8197, i64 0, i64 0
+  %r70 = getelementptr [11 x i8], [11 x i8]* @.str.8264, i64 0, i64 0
   call void @nurl_print(i8* %r70)
   %r71 = load i8*, i8** %r20
   call void @nurl_print(i8* %r71)
   call void @__dyn_flat_reset__fp1()
   %r72 = call i8* @dyn_flat_methods(i8* %tname)
-  %r73 = getelementptr [1 x i8], [1 x i8]* @.str.8198, i64 0, i64 0
+  %r73 = getelementptr [1 x i8], [1 x i8]* @.str.8265, i64 0, i64 0
   %r74 = call i8* @nurl_str_cat(i8* %r72, i8* %r73)
   %r76 = load i8*, i8** %r75
   call void @nurl_free(i8* %r76)
@@ -109008,21 +109258,21 @@ loop_body_14:
   store i8* %r104, i8** %r105
   %r107 = load i8*, i8** %r105
   call void @nurl_journal_push(i8* %r107)
-  %r108 = getelementptr [16 x i8], [16 x i8]* @.str.8199, i64 0, i64 0
+  %r108 = getelementptr [16 x i8], [16 x i8]* @.str.8266, i64 0, i64 0
   call void @nurl_print(i8* %r108)
   %r109 = load i8*, i8** %r105
   call void @nurl_print(i8* %r109)
-  %r110 = getelementptr [10 x i8], [10 x i8]* @.str.8200, i64 0, i64 0
+  %r110 = getelementptr [10 x i8], [10 x i8]* @.str.8267, i64 0, i64 0
   call void @nurl_print(i8* %r110)
   call void @nurl_print(i8* %tname)
-  %r111 = getelementptr [2 x i8], [2 x i8]* @.str.8201, i64 0, i64 0
+  %r111 = getelementptr [2 x i8], [2 x i8]* @.str.8268, i64 0, i64 0
   call void @nurl_print(i8* %r111)
   call void @nurl_print(i8* %impl_mangle)
-  %r112 = getelementptr [2 x i8], [2 x i8]* @.str.8202, i64 0, i64 0
+  %r112 = getelementptr [2 x i8], [2 x i8]* @.str.8269, i64 0, i64 0
   call void @nurl_print(i8* %r112)
   %r113 = load i8*, i8** %r83
   call void @nurl_print(i8* %r113)
-  %r114 = getelementptr [9 x i8], [9 x i8]* @.str.8203, i64 0, i64 0
+  %r114 = getelementptr [9 x i8], [9 x i8]* @.str.8270, i64 0, i64 0
   call void @nurl_print(i8* %r114)
   %r115 = load i8*, i8** %r83
   call void @nurl_free(i8* %r115)
@@ -109038,7 +109288,7 @@ loop_body_14:
   store i8* null, i8** %r105
   br label %loop_check_13
 loop_exit_15:
-  %r119 = getelementptr [4 x i8], [4 x i8]* @.str.8204, i64 0, i64 0
+  %r119 = getelementptr [4 x i8], [4 x i8]* @.str.8271, i64 0, i64 0
   call void @nurl_print(i8* %r119)
   %r120 = load i8*, i8** %r7
   call void @nurl_free(i8* %r120)
@@ -109051,86 +109301,86 @@ loop_exit_15:
   ret void
 }
 
-@.str.8187 = private unnamed_addr constant [8 x i8] c"dynvt##\00"
-@.str.8188 = private unnamed_addr constant [3 x i8] c"##\00"
-@.str.8189 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.8190 = private unnamed_addr constant [9 x i8] c"i8* null\00"
-@.str.8191 = private unnamed_addr constant [34 x i8] c"i8* bitcast (void(i8*)* @__jdrop_\00"
-@.str.8192 = private unnamed_addr constant [9 x i8] c" to i8*)\00"
-@.str.8193 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8194 = private unnamed_addr constant [7 x i8] c"@__vt.\00"
-@.str.8195 = private unnamed_addr constant [2 x i8] c".\00"
-@.str.8196 = private unnamed_addr constant [14 x i8] c" = constant [\00"
-@.str.8197 = private unnamed_addr constant [11 x i8] c" x i8*] [ \00"
-@.str.8198 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8199 = private unnamed_addr constant [16 x i8] c", i8* bitcast (\00"
-@.str.8200 = private unnamed_addr constant [10 x i8] c" @__dynm.\00"
-@.str.8201 = private unnamed_addr constant [2 x i8] c".\00"
-@.str.8202 = private unnamed_addr constant [2 x i8] c".\00"
-@.str.8203 = private unnamed_addr constant [9 x i8] c" to i8*)\00"
-@.str.8204 = private unnamed_addr constant [4 x i8] c" ]\0A\00"
+@.str.8254 = private unnamed_addr constant [8 x i8] c"dynvt##\00"
+@.str.8255 = private unnamed_addr constant [3 x i8] c"##\00"
+@.str.8256 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8257 = private unnamed_addr constant [9 x i8] c"i8* null\00"
+@.str.8258 = private unnamed_addr constant [34 x i8] c"i8* bitcast (void(i8*)* @__jdrop_\00"
+@.str.8259 = private unnamed_addr constant [9 x i8] c" to i8*)\00"
+@.str.8260 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8261 = private unnamed_addr constant [7 x i8] c"@__vt.\00"
+@.str.8262 = private unnamed_addr constant [2 x i8] c".\00"
+@.str.8263 = private unnamed_addr constant [14 x i8] c" = constant [\00"
+@.str.8264 = private unnamed_addr constant [11 x i8] c" x i8*] [ \00"
+@.str.8265 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8266 = private unnamed_addr constant [16 x i8] c", i8* bitcast (\00"
+@.str.8267 = private unnamed_addr constant [10 x i8] c" @__dynm.\00"
+@.str.8268 = private unnamed_addr constant [2 x i8] c".\00"
+@.str.8269 = private unnamed_addr constant [2 x i8] c".\00"
+@.str.8270 = private unnamed_addr constant [9 x i8] c" to i8*)\00"
+@.str.8271 = private unnamed_addr constant [4 x i8] c" ]\0A\00"
 define void @emit_dyn_drop_fn(i8* %tname) {
 entry:
   %r2 = alloca i8*
   store i8* null, i8** %r2
   %r7 = alloca i8*
   store i8* null, i8** %r7
-  %r0 = getelementptr [6 x i8], [6 x i8]* @.str.8205, i64 0, i64 0
+  %r0 = getelementptr [6 x i8], [6 x i8]* @.str.8272, i64 0, i64 0
   %r1 = call i8* @nurl_str_cat(i8* %r0, i8* %tname)
   %r3 = load i8*, i8** %r2
   call void @nurl_free(i8* %r3)
   store i8* %r1, i8** %r2
   %r4 = load i8*, i8** %r2
   call void @nurl_journal_push(i8* %r4)
-  %r5 = getelementptr [5 x i8], [5 x i8]* @.str.8206, i64 0, i64 0
+  %r5 = getelementptr [5 x i8], [5 x i8]* @.str.8273, i64 0, i64 0
   %r6 = call i8* @nurl_str_cat(i8* %r5, i8* %tname)
   %r8 = load i8*, i8** %r7
   call void @nurl_free(i8* %r8)
   store i8* %r6, i8** %r7
   %r9 = load i8*, i8** %r7
   call void @nurl_journal_push(i8* %r9)
-  %r10 = getelementptr [20 x i8], [20 x i8]* @.str.8207, i64 0, i64 0
+  %r10 = getelementptr [20 x i8], [20 x i8]* @.str.8274, i64 0, i64 0
   call void @nurl_print(i8* %r10)
   %r11 = load i8*, i8** %r7
   call void @nurl_print(i8* %r11)
-  %r12 = getelementptr [2 x i8], [2 x i8]* @.str.8208, i64 0, i64 0
+  %r12 = getelementptr [2 x i8], [2 x i8]* @.str.8275, i64 0, i64 0
   call void @nurl_print(i8* %r12)
   %r13 = load i8*, i8** %r2
   call void @nurl_print(i8* %r13)
-  %r14 = getelementptr [15 x i8], [15 x i8]* @.str.8209, i64 0, i64 0
+  %r14 = getelementptr [15 x i8], [15 x i8]* @.str.8276, i64 0, i64 0
   call void @nurl_print(i8* %r14)
-  %r15 = getelementptr [24 x i8], [24 x i8]* @.str.8210, i64 0, i64 0
+  %r15 = getelementptr [24 x i8], [24 x i8]* @.str.8277, i64 0, i64 0
   call void @nurl_print(i8* %r15)
   %r16 = load i8*, i8** %r2
   call void @nurl_print(i8* %r16)
-  %r17 = getelementptr [8 x i8], [8 x i8]* @.str.8211, i64 0, i64 0
+  %r17 = getelementptr [8 x i8], [8 x i8]* @.str.8278, i64 0, i64 0
   call void @nurl_print(i8* %r17)
-  %r18 = getelementptr [22 x i8], [22 x i8]* @.str.8212, i64 0, i64 0
+  %r18 = getelementptr [22 x i8], [22 x i8]* @.str.8279, i64 0, i64 0
   call void @nurl_print(i8* %r18)
   %r19 = load i8*, i8** %r2
   call void @nurl_print(i8* %r19)
-  %r20 = getelementptr [8 x i8], [8 x i8]* @.str.8213, i64 0, i64 0
+  %r20 = getelementptr [8 x i8], [8 x i8]* @.str.8280, i64 0, i64 0
   call void @nurl_print(i8* %r20)
-  %r21 = getelementptr [35 x i8], [35 x i8]* @.str.8214, i64 0, i64 0
+  %r21 = getelementptr [35 x i8], [35 x i8]* @.str.8281, i64 0, i64 0
   call void @nurl_print(i8* %r21)
-  %r22 = getelementptr [51 x i8], [51 x i8]* @.str.8215, i64 0, i64 0
+  %r22 = getelementptr [51 x i8], [51 x i8]* @.str.8282, i64 0, i64 0
   call void @nurl_print(i8* %r22)
-  %r23 = getelementptr [37 x i8], [37 x i8]* @.str.8216, i64 0, i64 0
+  %r23 = getelementptr [37 x i8], [37 x i8]* @.str.8283, i64 0, i64 0
   call void @nurl_print(i8* %r23)
-  %r24 = getelementptr [36 x i8], [36 x i8]* @.str.8217, i64 0, i64 0
+  %r24 = getelementptr [36 x i8], [36 x i8]* @.str.8284, i64 0, i64 0
   call void @nurl_print(i8* %r24)
-  %r25 = getelementptr [38 x i8], [38 x i8]* @.str.8218, i64 0, i64 0
+  %r25 = getelementptr [38 x i8], [38 x i8]* @.str.8285, i64 0, i64 0
   call void @nurl_print(i8* %r25)
-  %r26 = getelementptr [57 x i8], [57 x i8]* @.str.8219, i64 0, i64 0
+  %r26 = getelementptr [57 x i8], [57 x i8]* @.str.8286, i64 0, i64 0
   call void @nurl_print(i8* %r26)
-  %r27 = getelementptr [42 x i8], [42 x i8]* @.str.8220, i64 0, i64 0
+  %r27 = getelementptr [42 x i8], [42 x i8]* @.str.8287, i64 0, i64 0
   call void @nurl_print(i8* %r27)
-  %r28 = getelementptr [56 x i8], [56 x i8]* @.str.8221, i64 0, i64 0
+  %r28 = getelementptr [56 x i8], [56 x i8]* @.str.8288, i64 0, i64 0
   call void @nurl_print(i8* %r28)
-  %r29 = getelementptr [71 x i8], [71 x i8]* @.str.8222, i64 0, i64 0
+  %r29 = getelementptr [71 x i8], [71 x i8]* @.str.8289, i64 0, i64 0
   call void @nurl_print(i8* %r29)
   %r30 = load i64, i64* @g_impl_name_syms
-  %r31 = getelementptr [7 x i8], [7 x i8]* @.str.8223, i64 0, i64 0
+  %r31 = getelementptr [7 x i8], [7 x i8]* @.str.8290, i64 0, i64 0
   %r32 = load i8*, i8** %r2
   %r33 = call i8* @nurl_str_cat(i8* %r31, i8* %r32)
   %r34 = load i8*, i8** %r7
@@ -109146,25 +109396,25 @@ entry:
   ret void
 }
 
-@.str.8205 = private unnamed_addr constant [6 x i8] c"%dyn.\00"
-@.str.8206 = private unnamed_addr constant [5 x i8] c"dyn.\00"
-@.str.8207 = private unnamed_addr constant [20 x i8] c"define void @drop__\00"
-@.str.8208 = private unnamed_addr constant [2 x i8] c"(\00"
-@.str.8209 = private unnamed_addr constant [15 x i8] c" %v) {\0Aentry:\0A\00"
-@.str.8210 = private unnamed_addr constant [24 x i8] c"  %data = extractvalue \00"
-@.str.8211 = private unnamed_addr constant [8 x i8] c" %v, 0\0A\00"
-@.str.8212 = private unnamed_addr constant [22 x i8] c"  %vt = extractvalue \00"
-@.str.8213 = private unnamed_addr constant [8 x i8] c" %v, 1\0A\00"
-@.str.8214 = private unnamed_addr constant [35 x i8] c"  %vtnull = icmp eq i8* %vt, null\0A\00"
-@.str.8215 = private unnamed_addr constant [51 x i8] c"  br i1 %vtnull, label %done, label %hasvt\0Ahasvt:\0A\00"
-@.str.8216 = private unnamed_addr constant [37 x i8] c"  %slotpp = bitcast i8* %vt to i8**\0A\00"
-@.str.8217 = private unnamed_addr constant [36 x i8] c"  %dropfn = load i8*, i8** %slotpp\0A\00"
-@.str.8218 = private unnamed_addr constant [38 x i8] c"  %dnull = icmp eq i8* %dropfn, null\0A\00"
-@.str.8219 = private unnamed_addr constant [57 x i8] c"  br i1 %dnull, label %freebox, label %rundrop\0Arundrop:\0A\00"
-@.str.8220 = private unnamed_addr constant [42 x i8] c"  %f = bitcast i8* %dropfn to void(i8*)*\0A\00"
-@.str.8221 = private unnamed_addr constant [56 x i8] c"  call void %f(i8* %data)\0A  br label %freebox\0Afreebox:\0A\00"
-@.str.8222 = private unnamed_addr constant [71 x i8] c"  call void @nurl_free(i8* %data)\0A  br label %done\0Adone:\0A  ret void\0A}\0A\00"
-@.str.8223 = private unnamed_addr constant [7 x i8] c"drop##\00"
+@.str.8272 = private unnamed_addr constant [6 x i8] c"%dyn.\00"
+@.str.8273 = private unnamed_addr constant [5 x i8] c"dyn.\00"
+@.str.8274 = private unnamed_addr constant [20 x i8] c"define void @drop__\00"
+@.str.8275 = private unnamed_addr constant [2 x i8] c"(\00"
+@.str.8276 = private unnamed_addr constant [15 x i8] c" %v) {\0Aentry:\0A\00"
+@.str.8277 = private unnamed_addr constant [24 x i8] c"  %data = extractvalue \00"
+@.str.8278 = private unnamed_addr constant [8 x i8] c" %v, 0\0A\00"
+@.str.8279 = private unnamed_addr constant [22 x i8] c"  %vt = extractvalue \00"
+@.str.8280 = private unnamed_addr constant [8 x i8] c" %v, 1\0A\00"
+@.str.8281 = private unnamed_addr constant [35 x i8] c"  %vtnull = icmp eq i8* %vt, null\0A\00"
+@.str.8282 = private unnamed_addr constant [51 x i8] c"  br i1 %vtnull, label %done, label %hasvt\0Ahasvt:\0A\00"
+@.str.8283 = private unnamed_addr constant [37 x i8] c"  %slotpp = bitcast i8* %vt to i8**\0A\00"
+@.str.8284 = private unnamed_addr constant [36 x i8] c"  %dropfn = load i8*, i8** %slotpp\0A\00"
+@.str.8285 = private unnamed_addr constant [38 x i8] c"  %dnull = icmp eq i8* %dropfn, null\0A\00"
+@.str.8286 = private unnamed_addr constant [57 x i8] c"  br i1 %dnull, label %freebox, label %rundrop\0Arundrop:\0A\00"
+@.str.8287 = private unnamed_addr constant [42 x i8] c"  %f = bitcast i8* %dropfn to void(i8*)*\0A\00"
+@.str.8288 = private unnamed_addr constant [56 x i8] c"  call void %f(i8* %data)\0A  br label %freebox\0Afreebox:\0A\00"
+@.str.8289 = private unnamed_addr constant [71 x i8] c"  call void @nurl_free(i8* %data)\0A  br label %done\0Adone:\0A  ret void\0A}\0A\00"
+@.str.8290 = private unnamed_addr constant [7 x i8] c"drop##\00"
 define void @ensure_dyn_types_emitted(i64 %syms, i64 %cg) {
 entry:
   %r3 = alloca i8*
@@ -109176,7 +109426,7 @@ entry:
   %r32 = alloca i8*
   store i8* null, i8** %r32
   %r0 = load i8*, i8** @g_dyn_needed
-  %r1 = getelementptr [1 x i8], [1 x i8]* @.str.8224, i64 0, i64 0
+  %r1 = getelementptr [1 x i8], [1 x i8]* @.str.8291, i64 0, i64 0
   %r2 = call i8* @nurl_str_cat(i8* %r0, i8* %r1)
   %r4 = load i8*, i8** %r3
   call void @nurl_free(i8* %r4)
@@ -109202,11 +109452,11 @@ loop_body_2:
   %r16 = load i8*, i8** %r3
   call void @nurl_free(i8* %r16)
   store i8* %r15, i8** %r3
-  %r17 = getelementptr [6 x i8], [6 x i8]* @.str.8225, i64 0, i64 0
+  %r17 = getelementptr [6 x i8], [6 x i8]* @.str.8292, i64 0, i64 0
   call void @nurl_print(i8* %r17)
   %r18 = load i8*, i8** %r11
   call void @nurl_print(i8* %r18)
-  %r19 = getelementptr [22 x i8], [22 x i8]* @.str.8226, i64 0, i64 0
+  %r19 = getelementptr [22 x i8], [22 x i8]* @.str.8293, i64 0, i64 0
   call void @nurl_print(i8* %r19)
   %r20 = load i8*, i8** %r11
   call void @nurl_free(i8* %r20)
@@ -109214,7 +109464,7 @@ loop_body_2:
   br label %loop_check_1
 loop_exit_3:
   %r21 = load i8*, i8** @g_dyn_needed
-  %r22 = getelementptr [1 x i8], [1 x i8]* @.str.8227, i64 0, i64 0
+  %r22 = getelementptr [1 x i8], [1 x i8]* @.str.8294, i64 0, i64 0
   %r23 = call i8* @nurl_str_cat(i8* %r21, i8* %r22)
   %r25 = load i8*, i8** %r24
   call void @nurl_free(i8* %r25)
@@ -109254,10 +109504,10 @@ loop_exit_6:
   ret void
 }
 
-@.str.8224 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8225 = private unnamed_addr constant [6 x i8] c"%dyn.\00"
-@.str.8226 = private unnamed_addr constant [22 x i8] c" = type { i8*, i8* }\0A\00"
-@.str.8227 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8291 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8292 = private unnamed_addr constant [6 x i8] c"%dyn.\00"
+@.str.8293 = private unnamed_addr constant [22 x i8] c" = type { i8*, i8* }\0A\00"
+@.str.8294 = private unnamed_addr constant [1 x i8] c"\00"
 define void @scan_dyn_types(i64 %lex) {
 entry:
   %r0 = alloca i64
@@ -109323,7 +109573,7 @@ then_15:
   call void @nurl_journal_push(i8* %r27)
   %r28 = load i64, i64* @g_trait_syms
   %r29 = load i8*, i8** %r25
-  %r30 = getelementptr [10 x i8], [10 x i8]* @.str.8228, i64 0, i64 0
+  %r30 = getelementptr [10 x i8], [10 x i8]* @.str.8295, i64 0, i64 0
   %r31 = call i64 @nurl_sym_len2(i64 %r28, i8* %r29, i8* %r30)
   %r32 = icmp ne i64 0, %r31
   br i1 %r32, label %then_18, label %else_19
@@ -109358,7 +109608,7 @@ else_11:
   br i1 %r38, label %and_right_24, label %and_end_25
 and_right_24:
   %r39 = call i8* @nurl_lex_val(i64 %lex)
-  %r40 = getelementptr [4 x i8], [4 x i8]* @.str.8229, i64 0, i64 0
+  %r40 = getelementptr [4 x i8], [4 x i8]* @.str.8296, i64 0, i64 0
   %r41 = call i1 @seq(i8* %r39, i8* %r40)
   call void @nurl_free(i8* %r39)
   br label %and_end_25
@@ -109379,7 +109629,7 @@ then_29:
   call void @nurl_journal_push(i8* %r48)
   %r49 = load i64, i64* @g_trait_syms
   %r50 = load i8*, i8** %r46
-  %r51 = getelementptr [10 x i8], [10 x i8]* @.str.8230, i64 0, i64 0
+  %r51 = getelementptr [10 x i8], [10 x i8]* @.str.8297, i64 0, i64 0
   %r52 = call i64 @nurl_sym_len2(i64 %r49, i8* %r50, i8* %r51)
   %r53 = icmp ne i64 0, %r52
   br i1 %r53, label %then_32, label %else_33
@@ -109413,9 +109663,9 @@ loop_exit_3:
   ret void
 }
 
-@.str.8228 = private unnamed_addr constant [10 x i8] c"__istrait\00"
-@.str.8229 = private unnamed_addr constant [4 x i8] c"dyn\00"
-@.str.8230 = private unnamed_addr constant [10 x i8] c"__istrait\00"
+@.str.8295 = private unnamed_addr constant [10 x i8] c"__istrait\00"
+@.str.8296 = private unnamed_addr constant [4 x i8] c"dyn\00"
+@.str.8297 = private unnamed_addr constant [10 x i8] c"__istrait\00"
 define i8* @gen_dyn_construct(i64 %lex, i64 %syms, i64 %cg) {
 entry:
   %r0 = alloca i8*
@@ -109456,8 +109706,8 @@ entry:
   %r5 = load i8*, i8** %r2
   call void @lint_note_used(i8* %r5)
   call void @nurl_lex_advance(i64 %lex)
-  %r6 = getelementptr [16 x i8], [16 x i8]* @.str.8231, i64 0, i64 0
-  %r7 = getelementptr [2 x i8], [2 x i8]* @.str.8232, i64 0, i64 0
+  %r6 = getelementptr [16 x i8], [16 x i8]* @.str.8298, i64 0, i64 0
+  %r7 = getelementptr [2 x i8], [2 x i8]* @.str.8299, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r6, i8* %r7)
   %r8 = call i8* @gen_operand(i64 %lex, i64 %syms, i64 %cg)
   %r10 = load i8*, i8** %r9
@@ -109465,8 +109715,8 @@ entry:
   store i8* %r8, i8** %r9
   %r11 = load i8*, i8** %r9
   call void @nurl_journal_push(i8* %r11)
-  %r12 = getelementptr [16 x i8], [16 x i8]* @.str.8233, i64 0, i64 0
-  %r13 = getelementptr [1 x i8], [1 x i8]* @.str.8234, i64 0, i64 0
+  %r12 = getelementptr [16 x i8], [16 x i8]* @.str.8300, i64 0, i64 0
+  %r13 = getelementptr [1 x i8], [1 x i8]* @.str.8301, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r12, i8* %r13)
   %r14 = call i8* @nurl_get_last_type()
   %r16 = load i8*, i8** %r15
@@ -109481,7 +109731,7 @@ entry:
   %r20 = load i8*, i8** %r2
   call void @dyn_note_needed(i8* %r20)
   %r21 = load i8*, i8** %r2
-  %r22 = getelementptr [3 x i8], [3 x i8]* @.str.8235, i64 0, i64 0
+  %r22 = getelementptr [3 x i8], [3 x i8]* @.str.8302, i64 0, i64 0
   %r23 = load i8*, i8** %r15
   %r24 = call i8* @nurl_str_cat3(i8* %r21, i8* %r22, i8* %r23)
   %r26 = load i8*, i8** %r25
@@ -109495,16 +109745,16 @@ entry:
   %r31 = icmp eq i64 0, %r30
   br i1 %r31, label %then_1, label %else_2
 then_1:
-  %r32 = getelementptr [7 x i8], [7 x i8]* @.str.8236, i64 0, i64 0
+  %r32 = getelementptr [7 x i8], [7 x i8]* @.str.8303, i64 0, i64 0
   %r33 = load i8*, i8** %r15
-  %r34 = getelementptr [29 x i8], [29 x i8]* @.str.8237, i64 0, i64 0
+  %r34 = getelementptr [29 x i8], [29 x i8]* @.str.8304, i64 0, i64 0
   %r35 = call i8* @nurl_str_cat3(i8* %r32, i8* %r33, i8* %r34)
   %r36 = load i8*, i8** %r2
-  %r37 = getelementptr [34 x i8], [34 x i8]* @.str.8238, i64 0, i64 0
+  %r37 = getelementptr [34 x i8], [34 x i8]* @.str.8305, i64 0, i64 0
   %r38 = load i8*, i8** %r2
-  %r39 = getelementptr [36 x i8], [36 x i8]* @.str.8239, i64 0, i64 0
+  %r39 = getelementptr [36 x i8], [36 x i8]* @.str.8306, i64 0, i64 0
   %r40 = load i8*, i8** %r2
-  %r41 = getelementptr [61 x i8], [61 x i8]* @.str.8240, i64 0, i64 0
+  %r41 = getelementptr [61 x i8], [61 x i8]* @.str.8307, i64 0, i64 0
   %r42 = call i8* @nurl_str_cat(i8* %r40, i8* %r41)
   %r43 = call i8* @nurl_str_cat3(i8* %r38, i8* %r39, i8* %r42)
   call void @nurl_free(i8* %r42)
@@ -109526,7 +109776,7 @@ end_3:
   store i8* %r47, i8** %r48
   %r50 = load i8*, i8** %r48
   call void @nurl_journal_push(i8* %r50)
-  %r51 = getelementptr [6 x i8], [6 x i8]* @.str.8241, i64 0, i64 0
+  %r51 = getelementptr [6 x i8], [6 x i8]* @.str.8308, i64 0, i64 0
   %r52 = load i8*, i8** %r2
   %r53 = call i8* @nurl_str_cat(i8* %r51, i8* %r52)
   %r55 = load i8*, i8** %r54
@@ -109540,23 +109790,23 @@ end_3:
   store i8* %r57, i8** %r58
   %r60 = load i8*, i8** %r58
   call void @nurl_journal_push(i8* %r60)
-  %r61 = getelementptr [3 x i8], [3 x i8]* @.str.8242, i64 0, i64 0
+  %r61 = getelementptr [3 x i8], [3 x i8]* @.str.8309, i64 0, i64 0
   call void @nurl_print(i8* %r61)
   %r62 = load i8*, i8** %r58
   call void @nurl_print(i8* %r62)
-  %r63 = getelementptr [18 x i8], [18 x i8]* @.str.8243, i64 0, i64 0
+  %r63 = getelementptr [18 x i8], [18 x i8]* @.str.8310, i64 0, i64 0
   call void @nurl_print(i8* %r63)
   %r64 = load i8*, i8** %r15
   %r65 = call i8* @nurl_llty(i8* %r64)
   call void @nurl_print(i8* %r65)
   call void @nurl_free(i8* %r65)
-  %r66 = getelementptr [3 x i8], [3 x i8]* @.str.8244, i64 0, i64 0
+  %r66 = getelementptr [3 x i8], [3 x i8]* @.str.8311, i64 0, i64 0
   call void @nurl_print(i8* %r66)
   %r67 = load i8*, i8** %r15
   %r68 = call i8* @nurl_llty(i8* %r67)
   call void @nurl_print(i8* %r68)
   call void @nurl_free(i8* %r68)
-  %r69 = getelementptr [15 x i8], [15 x i8]* @.str.8245, i64 0, i64 0
+  %r69 = getelementptr [15 x i8], [15 x i8]* @.str.8312, i64 0, i64 0
   call void @nurl_print(i8* %r69)
   %r70 = call i8* @nurl_cg_reg(i64 %cg)
   %r72 = load i8*, i8** %r71
@@ -109564,21 +109814,21 @@ end_3:
   store i8* %r70, i8** %r71
   %r73 = load i8*, i8** %r71
   call void @nurl_journal_push(i8* %r73)
-  %r74 = getelementptr [3 x i8], [3 x i8]* @.str.8246, i64 0, i64 0
+  %r74 = getelementptr [3 x i8], [3 x i8]* @.str.8313, i64 0, i64 0
   call void @nurl_print(i8* %r74)
   %r75 = load i8*, i8** %r71
   call void @nurl_print(i8* %r75)
-  %r76 = getelementptr [13 x i8], [13 x i8]* @.str.8247, i64 0, i64 0
+  %r76 = getelementptr [13 x i8], [13 x i8]* @.str.8314, i64 0, i64 0
   call void @nurl_print(i8* %r76)
   %r77 = load i8*, i8** %r15
   %r78 = call i8* @nurl_llty(i8* %r77)
   call void @nurl_print(i8* %r78)
   call void @nurl_free(i8* %r78)
-  %r79 = getelementptr [3 x i8], [3 x i8]* @.str.8248, i64 0, i64 0
+  %r79 = getelementptr [3 x i8], [3 x i8]* @.str.8315, i64 0, i64 0
   call void @nurl_print(i8* %r79)
   %r80 = load i8*, i8** %r58
   call void @nurl_print(i8* %r80)
-  %r81 = getelementptr [9 x i8], [9 x i8]* @.str.8249, i64 0, i64 0
+  %r81 = getelementptr [9 x i8], [9 x i8]* @.str.8316, i64 0, i64 0
   call void @nurl_print(i8* %r81)
   %r82 = call i8* @nurl_cg_reg(i64 %cg)
   %r84 = load i8*, i8** %r83
@@ -109586,15 +109836,15 @@ end_3:
   store i8* %r82, i8** %r83
   %r85 = load i8*, i8** %r83
   call void @nurl_journal_push(i8* %r85)
-  %r86 = getelementptr [3 x i8], [3 x i8]* @.str.8250, i64 0, i64 0
+  %r86 = getelementptr [3 x i8], [3 x i8]* @.str.8317, i64 0, i64 0
   call void @nurl_print(i8* %r86)
   %r87 = load i8*, i8** %r83
   call void @nurl_print(i8* %r87)
-  %r88 = getelementptr [29 x i8], [29 x i8]* @.str.8251, i64 0, i64 0
+  %r88 = getelementptr [29 x i8], [29 x i8]* @.str.8318, i64 0, i64 0
   call void @nurl_print(i8* %r88)
   %r89 = load i8*, i8** %r71
   call void @nurl_print(i8* %r89)
-  %r90 = getelementptr [3 x i8], [3 x i8]* @.str.8252, i64 0, i64 0
+  %r90 = getelementptr [3 x i8], [3 x i8]* @.str.8319, i64 0, i64 0
   call void @nurl_print(i8* %r90)
   %r91 = call i8* @nurl_cg_reg(i64 %cg)
   %r93 = load i8*, i8** %r92
@@ -109602,43 +109852,43 @@ end_3:
   store i8* %r91, i8** %r92
   %r94 = load i8*, i8** %r92
   call void @nurl_journal_push(i8* %r94)
-  %r95 = getelementptr [3 x i8], [3 x i8]* @.str.8253, i64 0, i64 0
+  %r95 = getelementptr [3 x i8], [3 x i8]* @.str.8320, i64 0, i64 0
   call void @nurl_print(i8* %r95)
   %r96 = load i8*, i8** %r92
   call void @nurl_print(i8* %r96)
-  %r97 = getelementptr [16 x i8], [16 x i8]* @.str.8254, i64 0, i64 0
+  %r97 = getelementptr [16 x i8], [16 x i8]* @.str.8321, i64 0, i64 0
   call void @nurl_print(i8* %r97)
   %r98 = load i8*, i8** %r83
   call void @nurl_print(i8* %r98)
-  %r99 = getelementptr [5 x i8], [5 x i8]* @.str.8255, i64 0, i64 0
+  %r99 = getelementptr [5 x i8], [5 x i8]* @.str.8322, i64 0, i64 0
   call void @nurl_print(i8* %r99)
   %r100 = load i8*, i8** %r15
   %r101 = call i8* @nurl_llty(i8* %r100)
   call void @nurl_print(i8* %r101)
   call void @nurl_free(i8* %r101)
-  %r102 = getelementptr [3 x i8], [3 x i8]* @.str.8256, i64 0, i64 0
+  %r102 = getelementptr [3 x i8], [3 x i8]* @.str.8323, i64 0, i64 0
   call void @nurl_print(i8* %r102)
-  %r103 = getelementptr [9 x i8], [9 x i8]* @.str.8257, i64 0, i64 0
+  %r103 = getelementptr [9 x i8], [9 x i8]* @.str.8324, i64 0, i64 0
   call void @nurl_print(i8* %r103)
   %r104 = load i8*, i8** %r15
   %r105 = call i8* @nurl_llty(i8* %r104)
   call void @nurl_print(i8* %r105)
   call void @nurl_free(i8* %r105)
-  %r106 = getelementptr [2 x i8], [2 x i8]* @.str.8258, i64 0, i64 0
+  %r106 = getelementptr [2 x i8], [2 x i8]* @.str.8325, i64 0, i64 0
   call void @nurl_print(i8* %r106)
   %r107 = load i8*, i8** %r9
   call void @nurl_print(i8* %r107)
-  %r108 = getelementptr [3 x i8], [3 x i8]* @.str.8259, i64 0, i64 0
+  %r108 = getelementptr [3 x i8], [3 x i8]* @.str.8326, i64 0, i64 0
   call void @nurl_print(i8* %r108)
   %r109 = load i8*, i8** %r15
   %r110 = call i8* @nurl_llty(i8* %r109)
   call void @nurl_print(i8* %r110)
   call void @nurl_free(i8* %r110)
-  %r111 = getelementptr [3 x i8], [3 x i8]* @.str.8260, i64 0, i64 0
+  %r111 = getelementptr [3 x i8], [3 x i8]* @.str.8327, i64 0, i64 0
   call void @nurl_print(i8* %r111)
   %r112 = load i8*, i8** %r92
   call void @nurl_print(i8* %r112)
-  %r113 = getelementptr [2 x i8], [2 x i8]* @.str.8261, i64 0, i64 0
+  %r113 = getelementptr [2 x i8], [2 x i8]* @.str.8328, i64 0, i64 0
   call void @nurl_print(i8* %r113)
   %r114 = load i8*, i8** %r2
   %r115 = call i64 @dyn_flat_count(i8* %r114)
@@ -109650,25 +109900,25 @@ end_3:
   store i8* %r118, i8** %r119
   %r121 = load i8*, i8** %r119
   call void @nurl_journal_push(i8* %r121)
-  %r122 = getelementptr [3 x i8], [3 x i8]* @.str.8262, i64 0, i64 0
+  %r122 = getelementptr [3 x i8], [3 x i8]* @.str.8329, i64 0, i64 0
   call void @nurl_print(i8* %r122)
   %r123 = load i8*, i8** %r119
   call void @nurl_print(i8* %r123)
-  %r124 = getelementptr [13 x i8], [13 x i8]* @.str.8263, i64 0, i64 0
+  %r124 = getelementptr [13 x i8], [13 x i8]* @.str.8330, i64 0, i64 0
   call void @nurl_print(i8* %r124)
   %r125 = load i64, i64* %r117
   %r126 = call i8* @nurl_str_int(i64 %r125)
   call void @nurl_print(i8* %r126)
   call void @nurl_free(i8* %r126)
-  %r127 = getelementptr [16 x i8], [16 x i8]* @.str.8264, i64 0, i64 0
+  %r127 = getelementptr [16 x i8], [16 x i8]* @.str.8331, i64 0, i64 0
   call void @nurl_print(i8* %r127)
   %r128 = load i8*, i8** %r2
   call void @nurl_print(i8* %r128)
-  %r129 = getelementptr [2 x i8], [2 x i8]* @.str.8265, i64 0, i64 0
+  %r129 = getelementptr [2 x i8], [2 x i8]* @.str.8332, i64 0, i64 0
   call void @nurl_print(i8* %r129)
   %r130 = load i8*, i8** %r48
   call void @nurl_print(i8* %r130)
-  %r131 = getelementptr [9 x i8], [9 x i8]* @.str.8266, i64 0, i64 0
+  %r131 = getelementptr [9 x i8], [9 x i8]* @.str.8333, i64 0, i64 0
   call void @nurl_print(i8* %r131)
   %r132 = call i8* @nurl_cg_reg(i64 %cg)
   %r134 = load i8*, i8** %r133
@@ -109676,19 +109926,19 @@ end_3:
   store i8* %r132, i8** %r133
   %r135 = load i8*, i8** %r133
   call void @nurl_journal_push(i8* %r135)
-  %r136 = getelementptr [3 x i8], [3 x i8]* @.str.8267, i64 0, i64 0
+  %r136 = getelementptr [3 x i8], [3 x i8]* @.str.8334, i64 0, i64 0
   call void @nurl_print(i8* %r136)
   %r137 = load i8*, i8** %r133
   call void @nurl_print(i8* %r137)
-  %r138 = getelementptr [16 x i8], [16 x i8]* @.str.8268, i64 0, i64 0
+  %r138 = getelementptr [16 x i8], [16 x i8]* @.str.8335, i64 0, i64 0
   call void @nurl_print(i8* %r138)
   %r139 = load i8*, i8** %r54
   call void @nurl_print(i8* %r139)
-  %r140 = getelementptr [13 x i8], [13 x i8]* @.str.8269, i64 0, i64 0
+  %r140 = getelementptr [13 x i8], [13 x i8]* @.str.8336, i64 0, i64 0
   call void @nurl_print(i8* %r140)
   %r141 = load i8*, i8** %r83
   call void @nurl_print(i8* %r141)
-  %r142 = getelementptr [5 x i8], [5 x i8]* @.str.8270, i64 0, i64 0
+  %r142 = getelementptr [5 x i8], [5 x i8]* @.str.8337, i64 0, i64 0
   call void @nurl_print(i8* %r142)
   %r143 = call i8* @nurl_cg_reg(i64 %cg)
   %r145 = load i8*, i8** %r144
@@ -109696,23 +109946,23 @@ end_3:
   store i8* %r143, i8** %r144
   %r146 = load i8*, i8** %r144
   call void @nurl_journal_push(i8* %r146)
-  %r147 = getelementptr [3 x i8], [3 x i8]* @.str.8271, i64 0, i64 0
+  %r147 = getelementptr [3 x i8], [3 x i8]* @.str.8338, i64 0, i64 0
   call void @nurl_print(i8* %r147)
   %r148 = load i8*, i8** %r144
   call void @nurl_print(i8* %r148)
-  %r149 = getelementptr [16 x i8], [16 x i8]* @.str.8272, i64 0, i64 0
+  %r149 = getelementptr [16 x i8], [16 x i8]* @.str.8339, i64 0, i64 0
   call void @nurl_print(i8* %r149)
   %r150 = load i8*, i8** %r54
   call void @nurl_print(i8* %r150)
-  %r151 = getelementptr [2 x i8], [2 x i8]* @.str.8273, i64 0, i64 0
+  %r151 = getelementptr [2 x i8], [2 x i8]* @.str.8340, i64 0, i64 0
   call void @nurl_print(i8* %r151)
   %r152 = load i8*, i8** %r133
   call void @nurl_print(i8* %r152)
-  %r153 = getelementptr [7 x i8], [7 x i8]* @.str.8274, i64 0, i64 0
+  %r153 = getelementptr [7 x i8], [7 x i8]* @.str.8341, i64 0, i64 0
   call void @nurl_print(i8* %r153)
   %r154 = load i8*, i8** %r119
   call void @nurl_print(i8* %r154)
-  %r155 = getelementptr [5 x i8], [5 x i8]* @.str.8275, i64 0, i64 0
+  %r155 = getelementptr [5 x i8], [5 x i8]* @.str.8342, i64 0, i64 0
   call void @nurl_print(i8* %r155)
   %r156 = load i8*, i8** %r54
   call void @nurl_set_last_type(i8* %r156)
@@ -109745,51 +109995,51 @@ end_3:
   ret i8* %r157
 }
 
-@.str.8231 = private unnamed_addr constant [16 x i8] c"__in_call_arg__\00"
-@.str.8232 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.8233 = private unnamed_addr constant [16 x i8] c"__in_call_arg__\00"
-@.str.8234 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8235 = private unnamed_addr constant [3 x i8] c"##\00"
-@.str.8236 = private unnamed_addr constant [7 x i8] c"type '\00"
-@.str.8237 = private unnamed_addr constant [29 x i8] c"' does not implement trait '\00"
-@.str.8238 = private unnamed_addr constant [34 x i8] c"', so it cannot be made into a '%\00"
-@.str.8239 = private unnamed_addr constant [36 x i8] c"' object. Write the impl first: '% \00"
-@.str.8240 = private unnamed_addr constant [61 x i8] c" <Type> { ... }', supplying every method the trait declares.\00"
-@.str.8241 = private unnamed_addr constant [6 x i8] c"%dyn.\00"
-@.str.8242 = private unnamed_addr constant [3 x i8] c"  \00"
-@.str.8243 = private unnamed_addr constant [18 x i8] c" = getelementptr \00"
-@.str.8244 = private unnamed_addr constant [3 x i8] c", \00"
-@.str.8245 = private unnamed_addr constant [15 x i8] c"* null, i64 1\0A\00"
-@.str.8246 = private unnamed_addr constant [3 x i8] c"  \00"
-@.str.8247 = private unnamed_addr constant [13 x i8] c" = ptrtoint \00"
-@.str.8248 = private unnamed_addr constant [3 x i8] c"* \00"
-@.str.8249 = private unnamed_addr constant [9 x i8] c" to i64\0A\00"
-@.str.8250 = private unnamed_addr constant [3 x i8] c"  \00"
-@.str.8251 = private unnamed_addr constant [29 x i8] c" = call i8* @nurl_alloc(i64 \00"
-@.str.8252 = private unnamed_addr constant [3 x i8] c")\0A\00"
-@.str.8253 = private unnamed_addr constant [3 x i8] c"  \00"
-@.str.8254 = private unnamed_addr constant [16 x i8] c" = bitcast i8* \00"
-@.str.8255 = private unnamed_addr constant [5 x i8] c" to \00"
-@.str.8256 = private unnamed_addr constant [3 x i8] c"*\0A\00"
-@.str.8257 = private unnamed_addr constant [9 x i8] c"  store \00"
-@.str.8258 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8259 = private unnamed_addr constant [3 x i8] c", \00"
-@.str.8260 = private unnamed_addr constant [3 x i8] c"* \00"
-@.str.8261 = private unnamed_addr constant [2 x i8] c"\0A\00"
-@.str.8262 = private unnamed_addr constant [3 x i8] c"  \00"
-@.str.8263 = private unnamed_addr constant [13 x i8] c" = bitcast [\00"
-@.str.8264 = private unnamed_addr constant [16 x i8] c" x i8*]* @__vt.\00"
-@.str.8265 = private unnamed_addr constant [2 x i8] c".\00"
-@.str.8266 = private unnamed_addr constant [9 x i8] c" to i8*\0A\00"
-@.str.8267 = private unnamed_addr constant [3 x i8] c"  \00"
-@.str.8268 = private unnamed_addr constant [16 x i8] c" = insertvalue \00"
-@.str.8269 = private unnamed_addr constant [13 x i8] c" undef, i8* \00"
-@.str.8270 = private unnamed_addr constant [5 x i8] c", 0\0A\00"
-@.str.8271 = private unnamed_addr constant [3 x i8] c"  \00"
-@.str.8272 = private unnamed_addr constant [16 x i8] c" = insertvalue \00"
-@.str.8273 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8274 = private unnamed_addr constant [7 x i8] c", i8* \00"
-@.str.8275 = private unnamed_addr constant [5 x i8] c", 1\0A\00"
+@.str.8298 = private unnamed_addr constant [16 x i8] c"__in_call_arg__\00"
+@.str.8299 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8300 = private unnamed_addr constant [16 x i8] c"__in_call_arg__\00"
+@.str.8301 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8302 = private unnamed_addr constant [3 x i8] c"##\00"
+@.str.8303 = private unnamed_addr constant [7 x i8] c"type '\00"
+@.str.8304 = private unnamed_addr constant [29 x i8] c"' does not implement trait '\00"
+@.str.8305 = private unnamed_addr constant [34 x i8] c"', so it cannot be made into a '%\00"
+@.str.8306 = private unnamed_addr constant [36 x i8] c"' object. Write the impl first: '% \00"
+@.str.8307 = private unnamed_addr constant [61 x i8] c" <Type> { ... }', supplying every method the trait declares.\00"
+@.str.8308 = private unnamed_addr constant [6 x i8] c"%dyn.\00"
+@.str.8309 = private unnamed_addr constant [3 x i8] c"  \00"
+@.str.8310 = private unnamed_addr constant [18 x i8] c" = getelementptr \00"
+@.str.8311 = private unnamed_addr constant [3 x i8] c", \00"
+@.str.8312 = private unnamed_addr constant [15 x i8] c"* null, i64 1\0A\00"
+@.str.8313 = private unnamed_addr constant [3 x i8] c"  \00"
+@.str.8314 = private unnamed_addr constant [13 x i8] c" = ptrtoint \00"
+@.str.8315 = private unnamed_addr constant [3 x i8] c"* \00"
+@.str.8316 = private unnamed_addr constant [9 x i8] c" to i64\0A\00"
+@.str.8317 = private unnamed_addr constant [3 x i8] c"  \00"
+@.str.8318 = private unnamed_addr constant [29 x i8] c" = call i8* @nurl_alloc(i64 \00"
+@.str.8319 = private unnamed_addr constant [3 x i8] c")\0A\00"
+@.str.8320 = private unnamed_addr constant [3 x i8] c"  \00"
+@.str.8321 = private unnamed_addr constant [16 x i8] c" = bitcast i8* \00"
+@.str.8322 = private unnamed_addr constant [5 x i8] c" to \00"
+@.str.8323 = private unnamed_addr constant [3 x i8] c"*\0A\00"
+@.str.8324 = private unnamed_addr constant [9 x i8] c"  store \00"
+@.str.8325 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8326 = private unnamed_addr constant [3 x i8] c", \00"
+@.str.8327 = private unnamed_addr constant [3 x i8] c"* \00"
+@.str.8328 = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.str.8329 = private unnamed_addr constant [3 x i8] c"  \00"
+@.str.8330 = private unnamed_addr constant [13 x i8] c" = bitcast [\00"
+@.str.8331 = private unnamed_addr constant [16 x i8] c" x i8*]* @__vt.\00"
+@.str.8332 = private unnamed_addr constant [2 x i8] c".\00"
+@.str.8333 = private unnamed_addr constant [9 x i8] c" to i8*\0A\00"
+@.str.8334 = private unnamed_addr constant [3 x i8] c"  \00"
+@.str.8335 = private unnamed_addr constant [16 x i8] c" = insertvalue \00"
+@.str.8336 = private unnamed_addr constant [13 x i8] c" undef, i8* \00"
+@.str.8337 = private unnamed_addr constant [5 x i8] c", 0\0A\00"
+@.str.8338 = private unnamed_addr constant [3 x i8] c"  \00"
+@.str.8339 = private unnamed_addr constant [16 x i8] c" = insertvalue \00"
+@.str.8340 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8341 = private unnamed_addr constant [7 x i8] c", i8* \00"
+@.str.8342 = private unnamed_addr constant [5 x i8] c", 1\0A\00"
 define void @gen_trait_or_impl(i64 %lex, i64 %syms, i64 %cg) {
 entry:
   %r2 = alloca i8*
@@ -109912,14 +110162,14 @@ else_18:
   call void @nurl_journal_push(i8* %r42)
   %r43 = load i64, i64* @TT_LBRACE
   call void @expect(i64 %lex, i64 %r43)
-  %r44 = getelementptr [1 x i8], [1 x i8]* @.str.8276, i64 0, i64 0
+  %r44 = getelementptr [1 x i8], [1 x i8]* @.str.8343, i64 0, i64 0
   %r45 = call i8* @nurl_strdup(i8* %r44)
   %r47 = load i8*, i8** %r46
   call void @nurl_free(i8* %r47)
   store i8* %r45, i8** %r46
   %r48 = load i8*, i8** %r46
   call void @nurl_journal_push(i8* %r48)
-  %r49 = getelementptr [1 x i8], [1 x i8]* @.str.8277, i64 0, i64 0
+  %r49 = getelementptr [1 x i8], [1 x i8]* @.str.8344, i64 0, i64 0
   %r50 = call i8* @nurl_strdup(i8* %r49)
   %r52 = load i8*, i8** %r51
   call void @nurl_free(i8* %r52)
@@ -109947,7 +110197,7 @@ loop_body_21:
   br i1 %r63, label %and_right_25, label %and_end_26
 and_right_25:
   %r64 = call i8* @nurl_lex_val(i64 %lex)
-  %r65 = getelementptr [5 x i8], [5 x i8]* @.str.8278, i64 0, i64 0
+  %r65 = getelementptr [5 x i8], [5 x i8]* @.str.8345, i64 0, i64 0
   %r66 = call i1 @seq(i8* %r64, i8* %r65)
   call void @nurl_free(i8* %r64)
   br label %and_end_26
@@ -109971,7 +110221,7 @@ then_30:
   br label %end_32
 else_31:
   %r77 = load i8*, i8** %r51
-  %r78 = getelementptr [2 x i8], [2 x i8]* @.str.8279, i64 0, i64 0
+  %r78 = getelementptr [2 x i8], [2 x i8]* @.str.8346, i64 0, i64 0
   %r79 = load i8*, i8** %r69
   %r80 = call i8* @nurl_str_cat(i8* %r78, i8* %r79)
   %r81 = call i8* @nurl_str_cat(i8* %r77, i8* %r80)
@@ -110007,12 +110257,12 @@ then_36:
   br i1 %r95, label %then_39, label %else_40
 then_39:
   %r96 = load i8*, i8** %r90
-  %r97 = getelementptr [1 x i8], [1 x i8]* @.str.8280, i64 0, i64 0
+  %r97 = getelementptr [1 x i8], [1 x i8]* @.str.8347, i64 0, i64 0
   %r98 = call i8* @nurl_str_cat(i8* %r96, i8* %r97)
   br label %end_41
 else_40:
   %r99 = load i8*, i8** %r46
-  %r100 = getelementptr [2 x i8], [2 x i8]* @.str.8281, i64 0, i64 0
+  %r100 = getelementptr [2 x i8], [2 x i8]* @.str.8348, i64 0, i64 0
   %r101 = load i8*, i8** %r90
   %r102 = call i8* @nurl_str_cat(i8* %r100, i8* %r101)
   %r103 = call i8* @nurl_str_cat(i8* %r99, i8* %r102)
@@ -110024,7 +110274,7 @@ end_41:
   call void @nurl_free(i8* %r105)
   store i8* %r104, i8** %r46
   %r106 = load i8*, i8** %r90
-  %r107 = getelementptr [3 x i8], [3 x i8]* @.str.8282, i64 0, i64 0
+  %r107 = getelementptr [3 x i8], [3 x i8]* @.str.8349, i64 0, i64 0
   %r108 = load i8*, i8** %r40
   %r109 = call i8* @nurl_str_cat(i8* %r107, i8* %r108)
   %r110 = call i8* @nurl_str_cat(i8* %r106, i8* %r109)
@@ -110037,12 +110287,12 @@ end_41:
   %r114 = load i8*, i8** %r111
   call void @gen_fn_decl_concrete(i8* %r114, i64 %lex, i64 %syms, i64 %cg)
   %r115 = load i8*, i8** %r2
-  %r116 = getelementptr [5 x i8], [5 x i8]* @.str.8283, i64 0, i64 0
+  %r116 = getelementptr [5 x i8], [5 x i8]* @.str.8350, i64 0, i64 0
   %r117 = call i1 @seq(i8* %r115, i8* %r116)
   br i1 %r117, label %and_right_42, label %and_end_43
 and_right_42:
   %r118 = load i8*, i8** %r90
-  %r119 = getelementptr [5 x i8], [5 x i8]* @.str.8284, i64 0, i64 0
+  %r119 = getelementptr [5 x i8], [5 x i8]* @.str.8351, i64 0, i64 0
   %r120 = call i1 @seq(i8* %r118, i8* %r119)
   br label %and_end_43
 and_end_43:
@@ -110112,9 +110362,9 @@ end_52:
   store i8* null, i8** %r133
   br label %end_38
 else_37:
-  %r152 = getelementptr [60 x i8], [60 x i8]* @.str.8285, i64 0, i64 0
+  %r152 = getelementptr [60 x i8], [60 x i8]* @.str.8352, i64 0, i64 0
   %r153 = call i8* @tok_here(i64 %lex)
-  %r154 = getelementptr [130 x i8], [130 x i8]* @.str.8286, i64 0, i64 0
+  %r154 = getelementptr [130 x i8], [130 x i8]* @.str.8353, i64 0, i64 0
   %r155 = call i8* @nurl_str_cat3(i8* %r152, i8* %r153, i8* %r154)
   call void @die(i64 %lex, i8* %r155)
   call void @nurl_free(i8* %r155)
@@ -110184,17 +110434,17 @@ end_19:
   ret void
 }
 
-@.str.8276 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8277 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8278 = private unnamed_addr constant [5 x i8] c"type\00"
-@.str.8279 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8280 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8281 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8282 = private unnamed_addr constant [3 x i8] c"__\00"
-@.str.8283 = private unnamed_addr constant [5 x i8] c"Drop\00"
-@.str.8284 = private unnamed_addr constant [5 x i8] c"drop\00"
-@.str.8285 = private unnamed_addr constant [60 x i8] c"expected a method name after '@' in this impl block, found \00"
-@.str.8286 = private unnamed_addr constant [130 x i8] c". An impl is '% Trait Type { @ name params \E2\86\92 ret { body } ... }' \E2\80\94 every method repeats the '@ name' form the trait declared.\00"
+@.str.8343 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8344 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8345 = private unnamed_addr constant [5 x i8] c"type\00"
+@.str.8346 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8347 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8348 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8349 = private unnamed_addr constant [3 x i8] c"__\00"
+@.str.8350 = private unnamed_addr constant [5 x i8] c"Drop\00"
+@.str.8351 = private unnamed_addr constant [5 x i8] c"drop\00"
+@.str.8352 = private unnamed_addr constant [60 x i8] c"expected a method name after '@' in this impl block, found \00"
+@.str.8353 = private unnamed_addr constant [130 x i8] c". An impl is '% Trait Type { @ name params \E2\86\92 ret { body } ... }' \E2\80\94 every method repeats the '@ name' form the trait declared.\00"
 define i8* @scan_compound_ta_inner(i64 %lex, i64 %syms) {
 entry:
   %r0 = alloca i8*
@@ -110219,15 +110469,15 @@ entry:
   %r4 = load i8*, i8** %r2
   call void @nurl_journal_push(i8* %r4)
   call void @nurl_lex_advance(i64 %lex)
-  %r5 = getelementptr [1 x i8], [1 x i8]* @.str.8287, i64 0, i64 0
+  %r5 = getelementptr [1 x i8], [1 x i8]* @.str.8354, i64 0, i64 0
   %r6 = call i8* @nurl_strdup(i8* %r5)
   %r8 = load i8*, i8** %r7
   call void @nurl_free(i8* %r8)
   store i8* %r6, i8** %r7
   %r9 = load i8*, i8** %r7
   call void @nurl_journal_push(i8* %r9)
-  %r10 = getelementptr [1 x i8], [1 x i8]* @.str.8288, i64 0, i64 0
-  %r11 = getelementptr [1 x i8], [1 x i8]* @.str.8289, i64 0, i64 0
+  %r10 = getelementptr [1 x i8], [1 x i8]* @.str.8355, i64 0, i64 0
+  %r11 = getelementptr [1 x i8], [1 x i8]* @.str.8356, i64 0, i64 0
   %r12 = call i8* @nurl_str_cat(i8* %r10, i8* %r11)
   %r14 = load i8*, i8** %r13
   call void @nurl_free(i8* %r14)
@@ -110249,7 +110499,7 @@ and_end_5:
   %r22 = phi i1 [ 0, %loop_check_1 ], [ %r21, %and_right_4 ]
   br i1 %r22, label %loop_body_2, label %loop_exit_3
 loop_body_2:
-  %r23 = getelementptr [1 x i8], [1 x i8]* @.str.8290, i64 0, i64 0
+  %r23 = getelementptr [1 x i8], [1 x i8]* @.str.8357, i64 0, i64 0
   %r24 = call i8* @nurl_strdup(i8* %r23)
   %r26 = load i8*, i8** %r25
   call void @nurl_free(i8* %r26)
@@ -110288,12 +110538,12 @@ end_8:
   br i1 %r44, label %then_9, label %else_10
 then_9:
   %r45 = load i8*, i8** %r25
-  %r46 = getelementptr [1 x i8], [1 x i8]* @.str.8291, i64 0, i64 0
+  %r46 = getelementptr [1 x i8], [1 x i8]* @.str.8358, i64 0, i64 0
   %r47 = call i8* @nurl_str_cat(i8* %r45, i8* %r46)
   br label %end_11
 else_10:
   %r48 = load i8*, i8** %r7
-  %r49 = getelementptr [2 x i8], [2 x i8]* @.str.8292, i64 0, i64 0
+  %r49 = getelementptr [2 x i8], [2 x i8]* @.str.8359, i64 0, i64 0
   %r50 = load i8*, i8** %r25
   %r51 = call i8* @nurl_str_cat3(i8* %r48, i8* %r49, i8* %r50)
   br label %end_11
@@ -110303,7 +110553,7 @@ end_11:
   call void @nurl_free(i8* %r53)
   store i8* %r52, i8** %r7
   %r54 = load i8*, i8** %r13
-  %r55 = getelementptr [3 x i8], [3 x i8]* @.str.8293, i64 0, i64 0
+  %r55 = getelementptr [3 x i8], [3 x i8]* @.str.8360, i64 0, i64 0
   %r56 = load i8*, i8** %r25
   %r57 = call i8* @mangle_src_word(i8* %r56)
   %r58 = call i8* @nurl_str_cat(i8* %r55, i8* %r57)
@@ -110330,7 +110580,7 @@ else_13:
 end_14:
   %r65 = load i64, i64* @g_generic_struct_syms
   %r66 = load i8*, i8** %r2
-  %r67 = getelementptr [11 x i8], [11 x i8]* @.str.8294, i64 0, i64 0
+  %r67 = getelementptr [11 x i8], [11 x i8]* @.str.8361, i64 0, i64 0
   %r68 = call i8* @nurl_sym_get2(i64 %r65, i8* %r66, i8* %r67)
   %r70 = load i8*, i8** %r69
   call void @nurl_free(i8* %r70)
@@ -110364,14 +110614,14 @@ end_17:
   ret i8* %r79
 }
 
-@.str.8287 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8288 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8289 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8290 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8291 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8292 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8293 = private unnamed_addr constant [3 x i8] c"__\00"
-@.str.8294 = private unnamed_addr constant [11 x i8] c"__stparams\00"
+@.str.8354 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8355 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8356 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8357 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8358 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8359 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8360 = private unnamed_addr constant [3 x i8] c"__\00"
+@.str.8361 = private unnamed_addr constant [11 x i8] c"__stparams\00"
 define void @scan_generic_structs(i64 %lex, i64 %syms) {
 entry:
   %r4 = alloca i64
@@ -110451,7 +110701,7 @@ then_10:
   br i1 %r20, label %then_13, label %else_14
 then_13:
   call void @nurl_lex_advance(i64 %lex)
-  %r21 = getelementptr [1 x i8], [1 x i8]* @.str.8295, i64 0, i64 0
+  %r21 = getelementptr [1 x i8], [1 x i8]* @.str.8362, i64 0, i64 0
   %r22 = call i8* @nurl_strdup(i8* %r21)
   %r24 = load i8*, i8** %r23
   call void @nurl_free(i8* %r24)
@@ -110486,12 +110736,12 @@ loop_body_17:
   br i1 %r39, label %then_21, label %else_22
 then_21:
   %r40 = load i8*, i8** %r34
-  %r41 = getelementptr [1 x i8], [1 x i8]* @.str.8296, i64 0, i64 0
+  %r41 = getelementptr [1 x i8], [1 x i8]* @.str.8363, i64 0, i64 0
   %r42 = call i8* @nurl_str_cat(i8* %r40, i8* %r41)
   br label %end_23
 else_22:
   %r43 = load i8*, i8** %r23
-  %r44 = getelementptr [2 x i8], [2 x i8]* @.str.8297, i64 0, i64 0
+  %r44 = getelementptr [2 x i8], [2 x i8]* @.str.8364, i64 0, i64 0
   %r45 = load i8*, i8** %r34
   %r46 = call i8* @nurl_str_cat(i8* %r44, i8* %r45)
   %r47 = call i8* @nurl_str_cat(i8* %r43, i8* %r46)
@@ -110522,7 +110772,7 @@ end_26:
   %r56 = icmp eq i64 %r54, %r55
   br i1 %r56, label %then_27, label %else_28
 then_27:
-  %r57 = getelementptr [15 x i8], [15 x i8]* @.str.8298, i64 0, i64 0
+  %r57 = getelementptr [15 x i8], [15 x i8]* @.str.8365, i64 0, i64 0
   %r58 = call i8* @collect_fn_body(i64 %lex, i8* %r57)
   %r60 = load i8*, i8** %r59
   call void @nurl_free(i8* %r60)
@@ -110531,14 +110781,14 @@ then_27:
   call void @nurl_journal_push(i8* %r61)
   %r62 = load i64, i64* @g_generic_struct_syms
   %r63 = load i8*, i8** %r15
-  %r64 = getelementptr [11 x i8], [11 x i8]* @.str.8299, i64 0, i64 0
+  %r64 = getelementptr [11 x i8], [11 x i8]* @.str.8366, i64 0, i64 0
   %r65 = call i8* @nurl_str_cat(i8* %r63, i8* %r64)
   %r66 = load i8*, i8** %r23
   call void @nurl_sym_def(i64 %r62, i8* %r65, i8* %r66)
   call void @nurl_free(i8* %r65)
   %r67 = load i64, i64* @g_generic_struct_syms
   %r68 = load i8*, i8** %r15
-  %r69 = getelementptr [8 x i8], [8 x i8]* @.str.8300, i64 0, i64 0
+  %r69 = getelementptr [8 x i8], [8 x i8]* @.str.8367, i64 0, i64 0
   %r70 = call i8* @nurl_str_cat(i8* %r68, i8* %r69)
   %r71 = load i8*, i8** %r59
   call void @nurl_sym_def(i64 %r67, i8* %r70, i8* %r71)
@@ -110602,7 +110852,7 @@ then_35:
   call void @nurl_journal_push(i8* %r91)
   %r92 = load i64, i64* @g_generic_struct_syms
   %r93 = load i8*, i8** %r89
-  %r94 = getelementptr [11 x i8], [11 x i8]* @.str.8301, i64 0, i64 0
+  %r94 = getelementptr [11 x i8], [11 x i8]* @.str.8368, i64 0, i64 0
   %r95 = call i8* @nurl_sym_get2(i64 %r92, i8* %r93, i8* %r94)
   %r97 = load i8*, i8** %r96
   call void @nurl_free(i8* %r97)
@@ -110615,7 +110865,7 @@ then_35:
   br i1 %r101, label %then_38, label %else_39
 then_38:
   call void @nurl_lex_advance(i64 %lex)
-  %r102 = getelementptr [1 x i8], [1 x i8]* @.str.8302, i64 0, i64 0
+  %r102 = getelementptr [1 x i8], [1 x i8]* @.str.8369, i64 0, i64 0
   %r103 = call i8* @nurl_strdup(i8* %r102)
   %r105 = load i8*, i8** %r104
   call void @nurl_free(i8* %r105)
@@ -110637,7 +110887,7 @@ and_end_45:
   %r113 = phi i1 [ 0, %loop_check_41 ], [ %r112, %and_right_44 ]
   br i1 %r113, label %loop_body_42, label %loop_exit_43
 loop_body_42:
-  %r114 = getelementptr [1 x i8], [1 x i8]* @.str.8303, i64 0, i64 0
+  %r114 = getelementptr [1 x i8], [1 x i8]* @.str.8370, i64 0, i64 0
   %r115 = call i8* @nurl_strdup(i8* %r114)
   %r117 = load i8*, i8** %r116
   call void @nurl_free(i8* %r117)
@@ -110668,12 +110918,12 @@ end_48:
   br i1 %r129, label %then_49, label %else_50
 then_49:
   %r130 = load i8*, i8** %r116
-  %r131 = getelementptr [1 x i8], [1 x i8]* @.str.8304, i64 0, i64 0
+  %r131 = getelementptr [1 x i8], [1 x i8]* @.str.8371, i64 0, i64 0
   %r132 = call i8* @nurl_str_cat(i8* %r130, i8* %r131)
   br label %end_51
 else_50:
   %r133 = load i8*, i8** %r104
-  %r134 = getelementptr [2 x i8], [2 x i8]* @.str.8305, i64 0, i64 0
+  %r134 = getelementptr [2 x i8], [2 x i8]* @.str.8372, i64 0, i64 0
   %r135 = load i8*, i8** %r116
   %r136 = call i8* @nurl_str_cat(i8* %r134, i8* %r135)
   %r137 = call i8* @nurl_str_cat(i8* %r133, i8* %r136)
@@ -110773,7 +111023,7 @@ end_65:
   %r174 = load i8*, i8** %r172
   call void @nurl_journal_push(i8* %r174)
   %r175 = load i64, i64* @g_generic_struct_syms
-  %r176 = getelementptr [12 x i8], [12 x i8]* @.str.8306, i64 0, i64 0
+  %r176 = getelementptr [12 x i8], [12 x i8]* @.str.8373, i64 0, i64 0
   %r177 = call i8* @nurl_sym_get(i64 %r175, i8* %r176)
   %r179 = load i8*, i8** %r178
   call void @nurl_free(i8* %r179)
@@ -110793,12 +111043,12 @@ else_67:
   br i1 %r186, label %then_69, label %else_70
 then_69:
   %r187 = load i8*, i8** %r172
-  %r188 = getelementptr [1 x i8], [1 x i8]* @.str.8307, i64 0, i64 0
+  %r188 = getelementptr [1 x i8], [1 x i8]* @.str.8374, i64 0, i64 0
   %r189 = call i8* @nurl_str_cat(i8* %r187, i8* %r188)
   br label %end_71
 else_70:
   %r190 = load i8*, i8** %r178
-  %r191 = getelementptr [2 x i8], [2 x i8]* @.str.8308, i64 0, i64 0
+  %r191 = getelementptr [2 x i8], [2 x i8]* @.str.8375, i64 0, i64 0
   %r192 = load i8*, i8** %r172
   %r193 = call i8* @nurl_str_cat3(i8* %r190, i8* %r191, i8* %r192)
   br label %end_71
@@ -110810,7 +111060,7 @@ end_71:
   %r197 = load i8*, i8** %r195
   call void @nurl_journal_push(i8* %r197)
   %r198 = load i64, i64* @g_generic_struct_syms
-  %r199 = getelementptr [12 x i8], [12 x i8]* @.str.8309, i64 0, i64 0
+  %r199 = getelementptr [12 x i8], [12 x i8]* @.str.8376, i64 0, i64 0
   %r200 = load i8*, i8** %r195
   call void @nurl_sym_def(i64 %r198, i8* %r199, i8* %r200)
   %r201 = load i64, i64* %r157
@@ -110886,36 +111136,36 @@ loop_exit_3:
   ret void
 }
 
-@.str.8295 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8296 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8297 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8298 = private unnamed_addr constant [15 x i8] c"generic struct\00"
-@.str.8299 = private unnamed_addr constant [11 x i8] c"__stparams\00"
-@.str.8300 = private unnamed_addr constant [8 x i8] c"__sbody\00"
-@.str.8301 = private unnamed_addr constant [11 x i8] c"__stparams\00"
-@.str.8302 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8303 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8304 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8305 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8306 = private unnamed_addr constant [12 x i8] c"__scanned__\00"
-@.str.8307 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8308 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8309 = private unnamed_addr constant [12 x i8] c"__scanned__\00"
+@.str.8362 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8363 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8364 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8365 = private unnamed_addr constant [15 x i8] c"generic struct\00"
+@.str.8366 = private unnamed_addr constant [11 x i8] c"__stparams\00"
+@.str.8367 = private unnamed_addr constant [8 x i8] c"__sbody\00"
+@.str.8368 = private unnamed_addr constant [11 x i8] c"__stparams\00"
+@.str.8369 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8370 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8371 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8372 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8373 = private unnamed_addr constant [12 x i8] c"__scanned__\00"
+@.str.8374 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8375 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8376 = private unnamed_addr constant [12 x i8] c"__scanned__\00"
 define i1 @__is_param_marker_word__fp1(i8* %v) {
 entry:
   %r0 = alloca i1
-  %r1 = getelementptr [3 x i8], [3 x i8]* @.str.8310, i64 0, i64 0
+  %r1 = getelementptr [3 x i8], [3 x i8]* @.str.8377, i64 0, i64 0
   %r2 = call i1 @seq(i8* %v, i8* %r1)
   br i1 %r2, label %or_end_2, label %or_right_1
 or_right_1:
-  %r3 = getelementptr [6 x i8], [6 x i8]* @.str.8311, i64 0, i64 0
+  %r3 = getelementptr [6 x i8], [6 x i8]* @.str.8378, i64 0, i64 0
   %r4 = call i1 @seq(i8* %v, i8* %r3)
   br label %or_end_2
 or_end_2:
   %r5 = phi i1 [ 1, %entry ], [ %r4, %or_right_1 ]
   br i1 %r5, label %or_end_4, label %or_right_3
 or_right_3:
-  %r6 = getelementptr [5 x i8], [5 x i8]* @.str.8312, i64 0, i64 0
+  %r6 = getelementptr [5 x i8], [5 x i8]* @.str.8379, i64 0, i64 0
   %r7 = call i1 @seq(i8* %v, i8* %r6)
   br label %or_end_4
 or_end_4:
@@ -110923,9 +111173,9 @@ or_end_4:
   ret i1 %r8
 }
 
-@.str.8310 = private unnamed_addr constant [3 x i8] c"in\00"
-@.str.8311 = private unnamed_addr constant [6 x i8] c"inout\00"
-@.str.8312 = private unnamed_addr constant [5 x i8] c"sink\00"
+@.str.8377 = private unnamed_addr constant [3 x i8] c"in\00"
+@.str.8378 = private unnamed_addr constant [6 x i8] c"inout\00"
+@.str.8379 = private unnamed_addr constant [5 x i8] c"sink\00"
 define i64 @scan_skip_paren(i64 %lex) {
 entry:
   %r0 = alloca i64
@@ -111107,7 +111357,7 @@ entry:
   store i8* null, i8** %r6
   %r10 = alloca i8*
   store i8* null, i8** %r10
-  %r1 = getelementptr [13 x i8], [13 x i8]* @.str.8313, i64 0, i64 0
+  %r1 = getelementptr [13 x i8], [13 x i8]* @.str.8380, i64 0, i64 0
   %r2 = call i64 @nurl_lex_new(i8* %src, i8* %r1)
   store i64 %r2, i64* %r3
   %r4 = load i64, i64* %r3
@@ -111126,7 +111376,7 @@ entry:
   %r13 = load i64, i64* %r3
   call void @nurl_lex_free(i64 %r13)
   %r14 = load i8*, i8** %r10
-  %r15 = getelementptr [2 x i8], [2 x i8]* @.str.8314, i64 0, i64 0
+  %r15 = getelementptr [2 x i8], [2 x i8]* @.str.8381, i64 0, i64 0
   %r16 = load i8*, i8** %r6
   %r17 = call i8* @nurl_str_cat3(i8* %r14, i8* %r15, i8* %r16)
   store i64 1, i64* @__nurl_ret_owned
@@ -111137,8 +111387,8 @@ entry:
   ret i8* %r17
 }
 
-@.str.8313 = private unnamed_addr constant [13 x i8] c"<kw-default>\00"
-@.str.8314 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8380 = private unnamed_addr constant [13 x i8] c"<kw-default>\00"
+@.str.8381 = private unnamed_addr constant [2 x i8] c" \00"
 define i1 @priv_is_private(i8* %fname) {
 entry:
   %r0 = alloca i1
@@ -111165,7 +111415,7 @@ then_6:
 else_7:
   br label %end_8
 end_8:
-  %r8 = getelementptr [5 x i8], [5 x i8]* @.str.8315, i64 0, i64 0
+  %r8 = getelementptr [5 x i8], [5 x i8]* @.str.8382, i64 0, i64 0
   %r9 = call i64 @nurl_str_find(i8* %fname, i8* %r8)
   %r10 = icmp sge i64 %r9, 0
   br i1 %r10, label %then_9, label %else_10
@@ -111177,7 +111427,7 @@ end_11:
   ret i1 1
 }
 
-@.str.8315 = private unnamed_addr constant [5 x i8] c"__fp\00"
+@.str.8382 = private unnamed_addr constant [5 x i8] c"__fp\00"
 define i8* @priv_file_id() {
 entry:
   %r0 = alloca i8*
@@ -111242,7 +111492,7 @@ define i8* @priv_mangle_for(i8* %fname, i8* %fid) {
 entry:
   %r0 = alloca i8*
   store i8* null, i8** %r0
-  %r1 = getelementptr [5 x i8], [5 x i8]* @.str.8316, i64 0, i64 0
+  %r1 = getelementptr [5 x i8], [5 x i8]* @.str.8383, i64 0, i64 0
   %r2 = call i8* @nurl_str_cat(i8* %r1, i8* %fid)
   %r3 = tail call i8* @nurl_str_cat(i8* %fname, i8* %r2)
   call void @nurl_free(i8* %r2)
@@ -111250,7 +111500,7 @@ entry:
   ret i8* %r3
 }
 
-@.str.8316 = private unnamed_addr constant [5 x i8] c"__fp\00"
+@.str.8383 = private unnamed_addr constant [5 x i8] c"__fp\00"
 define void @priv_note_owner(i8* %fname) {
 entry:
   %r1 = alloca i8*
@@ -111292,12 +111542,12 @@ end_3:
   br i1 %r17, label %then_4, label %else_5
 then_4:
   %r18 = load i8*, i8** %r1
-  %r19 = getelementptr [1 x i8], [1 x i8]* @.str.8317, i64 0, i64 0
+  %r19 = getelementptr [1 x i8], [1 x i8]* @.str.8384, i64 0, i64 0
   %r20 = call i8* @nurl_str_cat(i8* %r18, i8* %r19)
   br label %end_6
 else_5:
   %r21 = load i8*, i8** %r6
-  %r22 = getelementptr [2 x i8], [2 x i8]* @.str.8318, i64 0, i64 0
+  %r22 = getelementptr [2 x i8], [2 x i8]* @.str.8385, i64 0, i64 0
   %r23 = load i8*, i8** %r1
   %r24 = call i8* @nurl_str_cat(i8* %r22, i8* %r23)
   %r25 = call i8* @nurl_str_cat(i8* %r21, i8* %r24)
@@ -111324,7 +111574,7 @@ then_7:
   br label %end_9
 else_8:
   %r37 = load i8*, i8** %r29
-  %r38 = getelementptr [3 x i8], [3 x i8]* @.str.8319, i64 0, i64 0
+  %r38 = getelementptr [3 x i8], [3 x i8]* @.str.8386, i64 0, i64 0
   %r39 = call i8* @vis_current_src_file()
   %r40 = call i8* @nurl_str_cat(i8* %r38, i8* %r39)
   call void @nurl_free(i8* %r39)
@@ -111344,9 +111594,9 @@ end_9:
   ret void
 }
 
-@.str.8317 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8318 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8319 = private unnamed_addr constant [3 x i8] c", \00"
+@.str.8384 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8385 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8386 = private unnamed_addr constant [3 x i8] c", \00"
 define i8* @priv_resolve(i64 %lex, i64 %syms, i8* %fname) {
 entry:
   %r0 = alloca i8*
@@ -111357,12 +111607,12 @@ entry:
   store i8* null, i8** %r18
   %r28 = alloca i64
   %r29 = alloca i64
-  %r1 = getelementptr [6 x i8], [6 x i8]* @.str.8320, i64 0, i64 0
+  %r1 = getelementptr [6 x i8], [6 x i8]* @.str.8387, i64 0, i64 0
   %r2 = call i64 @nurl_sym_len2(i64 %syms, i8* %fname, i8* %r1)
   %r3 = icmp ne i64 0, %r2
   br i1 %r3, label %then_1, label %else_2
 then_1:
-  %r4 = getelementptr [1 x i8], [1 x i8]* @.str.8321, i64 0, i64 0
+  %r4 = getelementptr [1 x i8], [1 x i8]* @.str.8388, i64 0, i64 0
   %r5 = tail call i8* @nurl_str_cat(i8* %fname, i8* %r4)
   store i64 1, i64* @__nurl_ret_owned
   ret i8* %r5
@@ -111381,7 +111631,7 @@ end_3:
   %r13 = icmp eq i64 0, %r12
   br i1 %r13, label %then_4, label %else_5
 then_4:
-  %r14 = getelementptr [1 x i8], [1 x i8]* @.str.8322, i64 0, i64 0
+  %r14 = getelementptr [1 x i8], [1 x i8]* @.str.8389, i64 0, i64 0
   %r15 = call i8* @nurl_str_cat(i8* %fname, i8* %r14)
   store i64 1, i64* @__nurl_ret_owned
   %r16 = load i8*, i8** %r8
@@ -111450,15 +111700,15 @@ then_16:
   br i1 %r46, label %then_19, label %else_20
 then_19:
   %r47 = load i64, i64* @g_priv_warned
-  %r48 = getelementptr [2 x i8], [2 x i8]* @.str.8323, i64 0, i64 0
+  %r48 = getelementptr [2 x i8], [2 x i8]* @.str.8390, i64 0, i64 0
   call void @nurl_sym_def(i64 %r47, i8* %fname, i8* %r48)
-  %r49 = getelementptr [2 x i8], [2 x i8]* @.str.8324, i64 0, i64 0
-  %r50 = getelementptr [31 x i8], [31 x i8]* @.str.8325, i64 0, i64 0
+  %r49 = getelementptr [2 x i8], [2 x i8]* @.str.8391, i64 0, i64 0
+  %r50 = getelementptr [31 x i8], [31 x i8]* @.str.8392, i64 0, i64 0
   %r51 = load i64, i64* @g_priv_owner_files
   %r52 = call i8* @nurl_sym_get(i64 %r51, i8* %fname)
   %r53 = call i8* @nurl_str_cat4(i8* %r49, i8* %fname, i8* %r50, i8* %r52)
   call void @nurl_free(i8* %r52)
-  %r54 = getelementptr [323 x i8], [323 x i8]* @.str.8326, i64 0, i64 0
+  %r54 = getelementptr [323 x i8], [323 x i8]* @.str.8393, i64 0, i64 0
   %r55 = call i8* @nurl_str_cat(i8* %r53, i8* %r54)
   call void @nurl_free(i8* %r53)
   call void @warn(i64 %lex, i8* %r55)
@@ -111478,18 +111728,18 @@ end_21:
 else_17:
   br label %end_18
 end_18:
-  %r60 = getelementptr [19 x i8], [19 x i8]* @.str.8327, i64 0, i64 0
-  %r61 = getelementptr [32 x i8], [32 x i8]* @.str.8328, i64 0, i64 0
+  %r60 = getelementptr [19 x i8], [19 x i8]* @.str.8394, i64 0, i64 0
+  %r61 = getelementptr [32 x i8], [32 x i8]* @.str.8395, i64 0, i64 0
   %r62 = load i64, i64* @g_priv_owner_files
   %r63 = call i8* @nurl_sym_get(i64 %r62, i8* %fname)
   %r64 = call i8* @nurl_str_cat4(i8* %r60, i8* %fname, i8* %r61, i8* %r63)
   call void @nurl_free(i8* %r63)
-  %r65 = getelementptr [143 x i8], [143 x i8]* @.str.8329, i64 0, i64 0
+  %r65 = getelementptr [143 x i8], [143 x i8]* @.str.8396, i64 0, i64 0
   %r66 = call i8* @nurl_str_cat(i8* %r64, i8* %r65)
   call void @nurl_free(i8* %r64)
   call void @die(i64 %lex, i8* %r66)
   call void @nurl_free(i8* %r66)
-  %r67 = getelementptr [1 x i8], [1 x i8]* @.str.8330, i64 0, i64 0
+  %r67 = getelementptr [1 x i8], [1 x i8]* @.str.8397, i64 0, i64 0
   %r68 = call i8* @nurl_str_cat(i8* %fname, i8* %r67)
   store i64 1, i64* @__nurl_ret_owned
   %r69 = load i8*, i8** %r8
@@ -111499,17 +111749,17 @@ end_18:
   ret i8* %r68
 }
 
-@.str.8320 = private unnamed_addr constant [6 x i8] c"__ptr\00"
-@.str.8321 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8322 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8323 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.8324 = private unnamed_addr constant [2 x i8] c"'\00"
-@.str.8325 = private unnamed_addr constant [31 x i8] c"' is file-private (defined in \00"
-@.str.8326 = private unnamed_addr constant [323 x i8] c"); cross-file use of a '__' function is OBSOLETE and will stop resolving in a future release \E2\80\94 rename it with ONE underscore ('_name'), at its definition and at every call site, if it is meant to be shared. A '__' name is file-scoped by design; nothing in the stdlib or the first-party tree relies on this path any more.\00"
-@.str.8327 = private unnamed_addr constant [19 x i8] c"private function '\00"
-@.str.8328 = private unnamed_addr constant [32 x i8] c"' is defined in several files (\00"
-@.str.8329 = private unnamed_addr constant [143 x i8] c") and this file is not one of them \E2\80\94 a '__' function is file-scoped; call it from its own file, or rename the shared one with ONE underscore\00"
-@.str.8330 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8387 = private unnamed_addr constant [6 x i8] c"__ptr\00"
+@.str.8388 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8389 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8390 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8391 = private unnamed_addr constant [2 x i8] c"'\00"
+@.str.8392 = private unnamed_addr constant [31 x i8] c"' is file-private (defined in \00"
+@.str.8393 = private unnamed_addr constant [323 x i8] c"); cross-file use of a '__' function is OBSOLETE and will stop resolving in a future release \E2\80\94 rename it with ONE underscore ('_name'), at its definition and at every call site, if it is meant to be shared. A '__' name is file-scoped by design; nothing in the stdlib or the first-party tree relies on this path any more.\00"
+@.str.8394 = private unnamed_addr constant [19 x i8] c"private function '\00"
+@.str.8395 = private unnamed_addr constant [32 x i8] c"' is defined in several files (\00"
+@.str.8396 = private unnamed_addr constant [143 x i8] c") and this file is not one of them \E2\80\94 a '__' function is file-scoped; call it from its own file, or rename the shared one with ONE underscore\00"
+@.str.8397 = private unnamed_addr constant [1 x i8] c"\00"
 define void @scan_fn_sigs(i64 %lex, i64 %syms) {
 entry:
   %r0 = alloca i64
@@ -111700,7 +111950,7 @@ else_28:
   br label %end_29
 end_29:
   %r47 = call i8* @vis_current_src_file()
-  %r48 = getelementptr [2 x i8], [2 x i8]* @.str.8331, i64 0, i64 0
+  %r48 = getelementptr [2 x i8], [2 x i8]* @.str.8398, i64 0, i64 0
   %r49 = call i64 @nurl_lex_line(i64 %lex)
   %r50 = call i8* @nurl_str_int(i64 %r49)
   %r51 = call i8* @nurl_str_cat(i8* %r48, i8* %r50)
@@ -111887,7 +112137,7 @@ and_end_67:
   br i1 %r140, label %then_72, label %else_73
 then_72:
   %r141 = load i8*, i8** %r37
-  %r142 = getelementptr [4 x i8], [4 x i8]* @.str.8332, i64 0, i64 0
+  %r142 = getelementptr [4 x i8], [4 x i8]* @.str.8399, i64 0, i64 0
   %r143 = call i8* @nurl_str_cat(i8* %r141, i8* %r142)
   br label %end_74
 else_73:
@@ -111923,11 +112173,11 @@ and_end_76:
   %r163 = phi i1 [ 0, %end_74 ], [ %r162, %and_right_75 ]
   br i1 %r163, label %then_77, label %else_78
 then_77:
-  %r164 = getelementptr [23 x i8], [23 x i8]* @.str.8333, i64 0, i64 0
+  %r164 = getelementptr [23 x i8], [23 x i8]* @.str.8400, i64 0, i64 0
   %r165 = load i8*, i8** %r37
-  %r166 = getelementptr [26 x i8], [26 x i8]* @.str.8334, i64 0, i64 0
+  %r166 = getelementptr [26 x i8], [26 x i8]* @.str.8401, i64 0, i64 0
   %r167 = load i8*, i8** %r153
-  %r168 = getelementptr [196 x i8], [196 x i8]* @.str.8335, i64 0, i64 0
+  %r168 = getelementptr [196 x i8], [196 x i8]* @.str.8402, i64 0, i64 0
   %r169 = call i8* @nurl_str_cat3(i8* %r166, i8* %r167, i8* %r168)
   %r170 = call i8* @nurl_str_cat(i8* %r165, i8* %r169)
   call void @nurl_free(i8* %r169)
@@ -111976,14 +112226,14 @@ loop_body_90:
 loop_exit_91:
   call void @nurl_lex_advance(i64 %lex)
   %r185 = load i8*, i8** %r37
-  %r186 = getelementptr [10 x i8], [10 x i8]* @.str.8336, i64 0, i64 0
+  %r186 = getelementptr [10 x i8], [10 x i8]* @.str.8403, i64 0, i64 0
   %r187 = call i8* @nurl_str_cat(i8* %r185, i8* %r186)
-  %r188 = getelementptr [2 x i8], [2 x i8]* @.str.8337, i64 0, i64 0
+  %r188 = getelementptr [2 x i8], [2 x i8]* @.str.8404, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r187, i8* %r188)
   call void @nurl_free(i8* %r187)
   store i1 0, i1* %r189
   store i1 1, i1* %r190
-  %r191 = getelementptr [1 x i8], [1 x i8]* @.str.8338, i64 0, i64 0
+  %r191 = getelementptr [1 x i8], [1 x i8]* @.str.8405, i64 0, i64 0
   %r192 = call i8* @nurl_strdup(i8* %r191)
   %r194 = load i8*, i8** %r193
   call void @nurl_free(i8* %r194)
@@ -112024,7 +112274,7 @@ and_end_100:
   br i1 %r209, label %then_101, label %else_102
 then_101:
   %r210 = call i8* @nurl_lex_val(i64 %lex)
-  %r211 = getelementptr [6 x i8], [6 x i8]* @.str.8339, i64 0, i64 0
+  %r211 = getelementptr [6 x i8], [6 x i8]* @.str.8406, i64 0, i64 0
   %r212 = call i1 @seq(i8* %r210, i8* %r211)
   call void @nurl_free(i8* %r210)
   br i1 %r212, label %then_104, label %else_105
@@ -112072,7 +112322,7 @@ then_110:
   br label %end_112
 else_111:
   %r234 = load i8*, i8** %r193
-  %r235 = getelementptr [2 x i8], [2 x i8]* @.str.8340, i64 0, i64 0
+  %r235 = getelementptr [2 x i8], [2 x i8]* @.str.8407, i64 0, i64 0
   %r236 = load i8*, i8** %r226
   %r237 = call i8* @nurl_str_cat3(i8* %r234, i8* %r235, i8* %r236)
   br label %end_112
@@ -112103,7 +112353,7 @@ loop_exit_94:
   br i1 %r244, label %then_116, label %else_117
 then_116:
   %r245 = load i8*, i8** %r37
-  %r246 = getelementptr [13 x i8], [13 x i8]* @.str.8341, i64 0, i64 0
+  %r246 = getelementptr [13 x i8], [13 x i8]* @.str.8408, i64 0, i64 0
   %r247 = call i8* @nurl_str_cat(i8* %r245, i8* %r246)
   %r248 = load i8*, i8** %r193
   call void @nurl_sym_def(i64 %syms, i8* %r247, i8* %r248)
@@ -112132,7 +112382,7 @@ loop_body_120:
   br i1 %r257, label %and_right_124, label %and_end_125
 and_right_124:
   %r258 = call i8* @nurl_lex_val(i64 %lex)
-  %r259 = getelementptr [6 x i8], [6 x i8]* @.str.8342, i64 0, i64 0
+  %r259 = getelementptr [6 x i8], [6 x i8]* @.str.8409, i64 0, i64 0
   %r260 = call i1 @seq(i8* %r258, i8* %r259)
   call void @nurl_free(i8* %r258)
   br label %and_end_125
@@ -112153,9 +112403,9 @@ loop_exit_121:
   br i1 %r263, label %then_129, label %else_130
 then_129:
   %r264 = load i8*, i8** %r37
-  %r265 = getelementptr [12 x i8], [12 x i8]* @.str.8343, i64 0, i64 0
+  %r265 = getelementptr [12 x i8], [12 x i8]* @.str.8410, i64 0, i64 0
   %r266 = call i8* @nurl_str_cat(i8* %r264, i8* %r265)
-  %r267 = getelementptr [2 x i8], [2 x i8]* @.str.8344, i64 0, i64 0
+  %r267 = getelementptr [2 x i8], [2 x i8]* @.str.8411, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r266, i8* %r267)
   call void @nurl_free(i8* %r266)
   br label %end_131
@@ -112171,7 +112421,7 @@ else_87:
   store i1 0, i1* %r269
   store i64 0, i64* %r270
   store i1 1, i1* %r271
-  %r272 = getelementptr [1 x i8], [1 x i8]* @.str.8345, i64 0, i64 0
+  %r272 = getelementptr [1 x i8], [1 x i8]* @.str.8412, i64 0, i64 0
   %r273 = call i8* @nurl_strdup(i8* %r272)
   %r275 = load i8*, i8** %r274
   call void @nurl_free(i8* %r275)
@@ -112212,7 +112462,7 @@ and_end_140:
   br i1 %r290, label %then_141, label %else_142
 then_141:
   %r291 = call i8* @nurl_lex_val(i64 %lex)
-  %r292 = getelementptr [6 x i8], [6 x i8]* @.str.8346, i64 0, i64 0
+  %r292 = getelementptr [6 x i8], [6 x i8]* @.str.8413, i64 0, i64 0
   %r293 = call i1 @seq(i8* %r291, i8* %r292)
   call void @nurl_free(i8* %r291)
   br i1 %r293, label %then_144, label %else_145
@@ -112260,7 +112510,7 @@ then_150:
   br label %end_152
 else_151:
   %r315 = load i8*, i8** %r274
-  %r316 = getelementptr [2 x i8], [2 x i8]* @.str.8347, i64 0, i64 0
+  %r316 = getelementptr [2 x i8], [2 x i8]* @.str.8414, i64 0, i64 0
   %r317 = load i8*, i8** %r307
   %r318 = call i8* @nurl_str_cat3(i8* %r315, i8* %r316, i8* %r317)
   br label %end_152
@@ -112281,7 +112531,7 @@ then_153:
   call void @nurl_journal_push(i8* %r326)
   call void @nurl_lex_advance(i64 %lex)
   %r327 = load i8*, i8** %r37
-  %r328 = getelementptr [3 x i8], [3 x i8]* @.str.8348, i64 0, i64 0
+  %r328 = getelementptr [3 x i8], [3 x i8]* @.str.8415, i64 0, i64 0
   %r329 = load i64, i64* %r270
   %r330 = call i8* @__kw_key__fp1(i8* %r327, i8* %r328, i64 %r329)
   %r331 = load i8*, i8** %r324
@@ -112299,7 +112549,7 @@ then_156:
   %r337 = call i64 @nurl_lex_cur_start(i64 %lex)
   store i64 %r337, i64* %r338
   %r339 = load i8*, i8** %r37
-  %r340 = getelementptr [3 x i8], [3 x i8]* @.str.8349, i64 0, i64 0
+  %r340 = getelementptr [3 x i8], [3 x i8]* @.str.8416, i64 0, i64 0
   %r341 = load i64, i64* %r270
   %r342 = call i8* @__kw_key__fp1(i8* %r339, i8* %r340, i64 %r341)
   %r343 = load i64, i64* %r336
@@ -112313,9 +112563,9 @@ then_156:
   call void @nurl_free(i8* %r342)
   call void @nurl_free(i8* %r348)
   %r349 = load i8*, i8** %r37
-  %r350 = getelementptr [12 x i8], [12 x i8]* @.str.8350, i64 0, i64 0
+  %r350 = getelementptr [12 x i8], [12 x i8]* @.str.8417, i64 0, i64 0
   %r351 = call i8* @nurl_str_cat(i8* %r349, i8* %r350)
-  %r352 = getelementptr [2 x i8], [2 x i8]* @.str.8351, i64 0, i64 0
+  %r352 = getelementptr [2 x i8], [2 x i8]* @.str.8418, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r351, i8* %r352)
   call void @nurl_free(i8* %r351)
   br label %end_158
@@ -112365,9 +112615,9 @@ loop_exit_161:
   br i1 %r367, label %then_164, label %else_165
 then_164:
   %r368 = load i8*, i8** %r37
-  %r369 = getelementptr [12 x i8], [12 x i8]* @.str.8352, i64 0, i64 0
+  %r369 = getelementptr [12 x i8], [12 x i8]* @.str.8419, i64 0, i64 0
   %r370 = call i8* @nurl_str_cat(i8* %r368, i8* %r369)
-  %r371 = getelementptr [2 x i8], [2 x i8]* @.str.8353, i64 0, i64 0
+  %r371 = getelementptr [2 x i8], [2 x i8]* @.str.8420, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r370, i8* %r371)
   call void @nurl_free(i8* %r370)
   br label %end_166
@@ -112378,7 +112628,7 @@ end_166:
   br i1 %r372, label %then_167, label %else_168
 then_167:
   %r373 = load i8*, i8** %r37
-  %r374 = getelementptr [7 x i8], [7 x i8]* @.str.8354, i64 0, i64 0
+  %r374 = getelementptr [7 x i8], [7 x i8]* @.str.8421, i64 0, i64 0
   %r375 = call i8* @nurl_str_cat(i8* %r373, i8* %r374)
   %r376 = load i64, i64* %r270
   %r377 = call i8* @nurl_str_int(i64 %r376)
@@ -112386,13 +112636,13 @@ then_167:
   call void @nurl_free(i8* %r375)
   call void @nurl_free(i8* %r377)
   %r378 = load i8*, i8** %r37
-  %r379 = getelementptr [13 x i8], [13 x i8]* @.str.8355, i64 0, i64 0
+  %r379 = getelementptr [13 x i8], [13 x i8]* @.str.8422, i64 0, i64 0
   %r380 = call i8* @nurl_str_cat(i8* %r378, i8* %r379)
   %r381 = load i8*, i8** %r274
   call void @nurl_sym_def(i64 %syms, i8* %r380, i8* %r381)
   call void @nurl_free(i8* %r380)
   %r382 = load i8*, i8** %r37
-  %r383 = getelementptr [8 x i8], [8 x i8]* @.str.8356, i64 0, i64 0
+  %r383 = getelementptr [8 x i8], [8 x i8]* @.str.8423, i64 0, i64 0
   %r384 = call i8* @nurl_str_cat(i8* %r382, i8* %r383)
   %r386 = load i8*, i8** %r385
   call void @nurl_free(i8* %r386)
@@ -112428,7 +112678,7 @@ and_end_171:
   br i1 %r405, label %then_172, label %else_173
 then_172:
   %r406 = load i8*, i8** %r385
-  %r407 = getelementptr [2 x i8], [2 x i8]* @.str.8357, i64 0, i64 0
+  %r407 = getelementptr [2 x i8], [2 x i8]* @.str.8424, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r406, i8* %r407)
   br label %end_174
 else_173:
@@ -112466,9 +112716,9 @@ then_175:
   %r421 = load i8*, i8** %r417
   call void @nurl_sym_def(i64 %syms, i8* %r420, i8* %r421)
   %r422 = load i8*, i8** %r37
-  %r423 = getelementptr [9 x i8], [9 x i8]* @.str.8358, i64 0, i64 0
+  %r423 = getelementptr [9 x i8], [9 x i8]* @.str.8425, i64 0, i64 0
   %r424 = call i8* @nurl_str_cat(i8* %r422, i8* %r423)
-  %r425 = getelementptr [2 x i8], [2 x i8]* @.str.8359, i64 0, i64 0
+  %r425 = getelementptr [2 x i8], [2 x i8]* @.str.8426, i64 0, i64 0
   call void @nurl_sym_def(i64 %syms, i8* %r424, i8* %r425)
   call void @nurl_free(i8* %r424)
   %r426 = load i8*, i8** %r417
@@ -112522,7 +112772,7 @@ then_178:
   %r443 = load i8*, i8** %r441
   call void @nurl_journal_push(i8* %r443)
   call void @nurl_lex_advance(i64 %lex)
-  %r444 = getelementptr [1 x i8], [1 x i8]* @.str.8360, i64 0, i64 0
+  %r444 = getelementptr [1 x i8], [1 x i8]* @.str.8427, i64 0, i64 0
   %r445 = call i8* @nurl_strdup(i8* %r444)
   %r447 = load i8*, i8** %r446
   call void @nurl_free(i8* %r447)
@@ -112549,7 +112799,7 @@ end_183:
   store i8* %r454, i8** %r455
   %r457 = load i8*, i8** %r455
   call void @nurl_journal_push(i8* %r457)
-  %r458 = getelementptr [18 x i8], [18 x i8]* @.str.8361, i64 0, i64 0
+  %r458 = getelementptr [18 x i8], [18 x i8]* @.str.8428, i64 0, i64 0
   %r459 = call i8* @nurl_sym_get(i64 %syms, i8* %r458)
   %r461 = load i8*, i8** %r460
   call void @nurl_free(i8* %r461)
@@ -112569,12 +112819,12 @@ else_185:
   br i1 %r468, label %then_187, label %else_188
 then_187:
   %r469 = load i8*, i8** %r455
-  %r470 = getelementptr [1 x i8], [1 x i8]* @.str.8362, i64 0, i64 0
+  %r470 = getelementptr [1 x i8], [1 x i8]* @.str.8429, i64 0, i64 0
   %r471 = call i8* @nurl_str_cat(i8* %r469, i8* %r470)
   br label %end_189
 else_188:
   %r472 = load i8*, i8** %r460
-  %r473 = getelementptr [2 x i8], [2 x i8]* @.str.8363, i64 0, i64 0
+  %r473 = getelementptr [2 x i8], [2 x i8]* @.str.8430, i64 0, i64 0
   %r474 = load i8*, i8** %r455
   %r475 = call i8* @nurl_str_cat3(i8* %r472, i8* %r473, i8* %r474)
   br label %end_189
@@ -112585,7 +112835,7 @@ end_189:
   store i8* %r476, i8** %r477
   %r479 = load i8*, i8** %r477
   call void @nurl_journal_push(i8* %r479)
-  %r480 = getelementptr [18 x i8], [18 x i8]* @.str.8364, i64 0, i64 0
+  %r480 = getelementptr [18 x i8], [18 x i8]* @.str.8431, i64 0, i64 0
   %r481 = load i8*, i8** %r477
   call void @nurl_sym_def(i64 %syms, i8* %r480, i8* %r481)
   %r482 = load i64, i64* %r436
@@ -112615,7 +112865,7 @@ then_190:
   %r499 = load i8*, i8** %r487
   %r500 = load i8*, i8** %r496
   %r501 = load i8*, i8** %r446
-  %r502 = getelementptr [3 x i8], [3 x i8]* @.str.8365, i64 0, i64 0
+  %r502 = getelementptr [3 x i8], [3 x i8]* @.str.8432, i64 0, i64 0
   %r503 = call i8* @nurl_str_cat(i8* %r501, i8* %r502)
   %r504 = call i8* @alias_rewrite_source(i8* %r499, i8* %r500, i8* %r503)
   call void @nurl_free(i8* %r503)
@@ -112696,7 +112946,7 @@ then_196:
   %r539 = load i8*, i8** %r537
   call void @nurl_journal_push(i8* %r539)
   call void @nurl_lex_advance(i64 %lex)
-  %r540 = getelementptr [1 x i8], [1 x i8]* @.str.8366, i64 0, i64 0
+  %r540 = getelementptr [1 x i8], [1 x i8]* @.str.8433, i64 0, i64 0
   %r541 = call i8* @nurl_strdup(i8* %r540)
   %r543 = load i8*, i8** %r542
   call void @nurl_free(i8* %r543)
@@ -112751,7 +113001,7 @@ then_210:
   br label %end_212
 else_211:
   %r566 = load i8*, i8** %r542
-  %r567 = getelementptr [2 x i8], [2 x i8]* @.str.8367, i64 0, i64 0
+  %r567 = getelementptr [2 x i8], [2 x i8]* @.str.8434, i64 0, i64 0
   %r568 = load i8*, i8** %r557
   %r569 = call i8* @nurl_str_cat3(i8* %r566, i8* %r567, i8* %r568)
   br label %end_212
@@ -112786,7 +113036,7 @@ then_213:
   %r583 = load i8*, i8** %r579
   call void @nurl_sym_def(i64 %syms, i8* %r582, i8* %r583)
   %r584 = load i8*, i8** %r537
-  %r585 = getelementptr [13 x i8], [13 x i8]* @.str.8368, i64 0, i64 0
+  %r585 = getelementptr [13 x i8], [13 x i8]* @.str.8435, i64 0, i64 0
   %r586 = call i8* @nurl_str_cat(i8* %r584, i8* %r585)
   %r587 = load i8*, i8** %r542
   call void @nurl_sym_def(i64 %syms, i8* %r586, i8* %r587)
@@ -112840,44 +113090,44 @@ loop_exit_3:
   ret void
 }
 
-@.str.8331 = private unnamed_addr constant [2 x i8] c":\00"
-@.str.8332 = private unnamed_addr constant [4 x i8] c"__g\00"
-@.str.8333 = private unnamed_addr constant [23 x i8] c"duplicate function '@ \00"
-@.str.8334 = private unnamed_addr constant [26 x i8] c"' \E2\80\94 already defined at \00"
-@.str.8335 = private unnamed_addr constant [196 x i8] c". NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If the two are in different files, both are visible to the importer, so the names must still differ.\00"
-@.str.8336 = private unnamed_addr constant [10 x i8] c"__generic\00"
-@.str.8337 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.8338 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8339 = private unnamed_addr constant [6 x i8] c"inout\00"
-@.str.8340 = private unnamed_addr constant [2 x i8] c";\00"
-@.str.8341 = private unnamed_addr constant [13 x i8] c"__ptypes_src\00"
-@.str.8342 = private unnamed_addr constant [6 x i8] c"inout\00"
-@.str.8343 = private unnamed_addr constant [12 x i8] c"__has_inout\00"
-@.str.8344 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.8345 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8346 = private unnamed_addr constant [6 x i8] c"inout\00"
-@.str.8347 = private unnamed_addr constant [2 x i8] c";\00"
-@.str.8348 = private unnamed_addr constant [3 x i8] c"pn\00"
-@.str.8349 = private unnamed_addr constant [3 x i8] c"pd\00"
-@.str.8350 = private unnamed_addr constant [12 x i8] c"__kw_hasdef\00"
-@.str.8351 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.8352 = private unnamed_addr constant [12 x i8] c"__has_inout\00"
-@.str.8353 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.8354 = private unnamed_addr constant [7 x i8] c"__kw_n\00"
-@.str.8355 = private unnamed_addr constant [13 x i8] c"__ptypes_src\00"
-@.str.8356 = private unnamed_addr constant [8 x i8] c"__arity\00"
-@.str.8357 = private unnamed_addr constant [2 x i8] c"?\00"
-@.str.8358 = private unnamed_addr constant [9 x i8] c"__nurlfn\00"
-@.str.8359 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.8360 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8361 = private unnamed_addr constant [18 x i8] c"__scanned_files__\00"
-@.str.8362 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8363 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8364 = private unnamed_addr constant [18 x i8] c"__scanned_files__\00"
-@.str.8365 = private unnamed_addr constant [3 x i8] c"__\00"
-@.str.8366 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8367 = private unnamed_addr constant [2 x i8] c";\00"
-@.str.8368 = private unnamed_addr constant [13 x i8] c"__ffi_params\00"
+@.str.8398 = private unnamed_addr constant [2 x i8] c":\00"
+@.str.8399 = private unnamed_addr constant [4 x i8] c"__g\00"
+@.str.8400 = private unnamed_addr constant [23 x i8] c"duplicate function '@ \00"
+@.str.8401 = private unnamed_addr constant [26 x i8] c"' \E2\80\94 already defined at \00"
+@.str.8402 = private unnamed_addr constant [196 x i8] c". NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If the two are in different files, both are visible to the importer, so the names must still differ.\00"
+@.str.8403 = private unnamed_addr constant [10 x i8] c"__generic\00"
+@.str.8404 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8405 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8406 = private unnamed_addr constant [6 x i8] c"inout\00"
+@.str.8407 = private unnamed_addr constant [2 x i8] c";\00"
+@.str.8408 = private unnamed_addr constant [13 x i8] c"__ptypes_src\00"
+@.str.8409 = private unnamed_addr constant [6 x i8] c"inout\00"
+@.str.8410 = private unnamed_addr constant [12 x i8] c"__has_inout\00"
+@.str.8411 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8412 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8413 = private unnamed_addr constant [6 x i8] c"inout\00"
+@.str.8414 = private unnamed_addr constant [2 x i8] c";\00"
+@.str.8415 = private unnamed_addr constant [3 x i8] c"pn\00"
+@.str.8416 = private unnamed_addr constant [3 x i8] c"pd\00"
+@.str.8417 = private unnamed_addr constant [12 x i8] c"__kw_hasdef\00"
+@.str.8418 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8419 = private unnamed_addr constant [12 x i8] c"__has_inout\00"
+@.str.8420 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8421 = private unnamed_addr constant [7 x i8] c"__kw_n\00"
+@.str.8422 = private unnamed_addr constant [13 x i8] c"__ptypes_src\00"
+@.str.8423 = private unnamed_addr constant [8 x i8] c"__arity\00"
+@.str.8424 = private unnamed_addr constant [2 x i8] c"?\00"
+@.str.8425 = private unnamed_addr constant [9 x i8] c"__nurlfn\00"
+@.str.8426 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8427 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8428 = private unnamed_addr constant [18 x i8] c"__scanned_files__\00"
+@.str.8429 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8430 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8431 = private unnamed_addr constant [18 x i8] c"__scanned_files__\00"
+@.str.8432 = private unnamed_addr constant [3 x i8] c"__\00"
+@.str.8433 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8434 = private unnamed_addr constant [2 x i8] c";\00"
+@.str.8435 = private unnamed_addr constant [13 x i8] c"__ffi_params\00"
 define void @scan_type_names(i64 %lex, i64 %syms) {
 entry:
   %r0 = alloca i64
@@ -112967,7 +113217,7 @@ then_15:
   %r33 = load i8*, i8** %r31
   call void @nurl_journal_push(i8* %r33)
   call void @nurl_lex_advance(i64 %lex)
-  %r34 = getelementptr [1 x i8], [1 x i8]* @.str.8369, i64 0, i64 0
+  %r34 = getelementptr [1 x i8], [1 x i8]* @.str.8436, i64 0, i64 0
   %r35 = call i8* @nurl_strdup(i8* %r34)
   %r37 = load i8*, i8** %r36
   call void @nurl_free(i8* %r37)
@@ -112994,7 +113244,7 @@ end_20:
   store i8* %r44, i8** %r45
   %r47 = load i8*, i8** %r45
   call void @nurl_journal_push(i8* %r47)
-  %r48 = getelementptr [15 x i8], [15 x i8]* @.str.8370, i64 0, i64 0
+  %r48 = getelementptr [15 x i8], [15 x i8]* @.str.8437, i64 0, i64 0
   %r49 = call i8* @nurl_sym_get(i64 %syms, i8* %r48)
   %r51 = load i8*, i8** %r50
   call void @nurl_free(i8* %r51)
@@ -113014,12 +113264,12 @@ else_22:
   br i1 %r58, label %then_24, label %else_25
 then_24:
   %r59 = load i8*, i8** %r45
-  %r60 = getelementptr [1 x i8], [1 x i8]* @.str.8371, i64 0, i64 0
+  %r60 = getelementptr [1 x i8], [1 x i8]* @.str.8438, i64 0, i64 0
   %r61 = call i8* @nurl_str_cat(i8* %r59, i8* %r60)
   br label %end_26
 else_25:
   %r62 = load i8*, i8** %r50
-  %r63 = getelementptr [2 x i8], [2 x i8]* @.str.8372, i64 0, i64 0
+  %r63 = getelementptr [2 x i8], [2 x i8]* @.str.8439, i64 0, i64 0
   %r64 = load i8*, i8** %r45
   %r65 = call i8* @nurl_str_cat3(i8* %r62, i8* %r63, i8* %r64)
   br label %end_26
@@ -113030,7 +113280,7 @@ end_26:
   store i8* %r66, i8** %r67
   %r69 = load i8*, i8** %r67
   call void @nurl_journal_push(i8* %r69)
-  %r70 = getelementptr [15 x i8], [15 x i8]* @.str.8373, i64 0, i64 0
+  %r70 = getelementptr [15 x i8], [15 x i8]* @.str.8440, i64 0, i64 0
   %r71 = load i8*, i8** %r67
   call void @nurl_sym_def(i64 %syms, i8* %r70, i8* %r71)
   %r72 = load i64, i64* %r23
@@ -113060,7 +113310,7 @@ then_27:
   %r89 = load i8*, i8** %r77
   %r90 = load i8*, i8** %r86
   %r91 = load i8*, i8** %r36
-  %r92 = getelementptr [3 x i8], [3 x i8]* @.str.8374, i64 0, i64 0
+  %r92 = getelementptr [3 x i8], [3 x i8]* @.str.8441, i64 0, i64 0
   %r93 = call i8* @nurl_str_cat(i8* %r91, i8* %r92)
   %r94 = call i8* @alias_rewrite_source(i8* %r89, i8* %r90, i8* %r93)
   call void @nurl_free(i8* %r93)
@@ -113161,7 +113411,7 @@ then_38:
   br i1 %r135, label %then_41, label %else_42
 then_41:
   %r136 = call i8* @nurl_lex_val(i64 %lex)
-  %r137 = getelementptr [2 x i8], [2 x i8]* @.str.8375, i64 0, i64 0
+  %r137 = getelementptr [2 x i8], [2 x i8]* @.str.8442, i64 0, i64 0
   %r138 = call i8* @nurl_lex_val(i64 %lex)
   %r139 = call i8* @nurl_str_cat(i8* %r137, i8* %r138)
   call void @nurl_free(i8* %r138)
@@ -113195,7 +113445,7 @@ or_end_48:
   br i1 %r151, label %then_49, label %else_50
 then_49:
   %r152 = call i8* @nurl_lex_val(i64 %lex)
-  %r153 = getelementptr [2 x i8], [2 x i8]* @.str.8376, i64 0, i64 0
+  %r153 = getelementptr [2 x i8], [2 x i8]* @.str.8443, i64 0, i64 0
   %r154 = call i8* @nurl_lex_val(i64 %lex)
   %r155 = call i8* @nurl_str_cat(i8* %r153, i8* %r154)
   call void @nurl_free(i8* %r154)
@@ -113230,14 +113480,14 @@ loop_exit_3:
   ret void
 }
 
-@.str.8369 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8370 = private unnamed_addr constant [15 x i8] c"__tn_scanned__\00"
-@.str.8371 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8372 = private unnamed_addr constant [2 x i8] c" \00"
-@.str.8373 = private unnamed_addr constant [15 x i8] c"__tn_scanned__\00"
-@.str.8374 = private unnamed_addr constant [3 x i8] c"__\00"
-@.str.8375 = private unnamed_addr constant [2 x i8] c"%\00"
-@.str.8376 = private unnamed_addr constant [2 x i8] c"%\00"
+@.str.8436 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8437 = private unnamed_addr constant [15 x i8] c"__tn_scanned__\00"
+@.str.8438 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8439 = private unnamed_addr constant [2 x i8] c" \00"
+@.str.8440 = private unnamed_addr constant [15 x i8] c"__tn_scanned__\00"
+@.str.8441 = private unnamed_addr constant [3 x i8] c"__\00"
+@.str.8442 = private unnamed_addr constant [2 x i8] c"%\00"
+@.str.8443 = private unnamed_addr constant [2 x i8] c"%\00"
 define void @parse_toplevel_decl(i64 %lex, i64 %syms, i64 %cg) {
 entry:
   %r12 = alloca i64
@@ -113285,7 +113535,7 @@ and_end_10:
   %r18 = phi i1 [ 0, %loop_exit_3 ], [ %r17, %and_right_9 ]
   br i1 %r18, label %then_11, label %else_12
 then_11:
-  %r19 = getelementptr [197 x i8], [197 x i8]* @.str.8377, i64 0, i64 0
+  %r19 = getelementptr [197 x i8], [197 x i8]* @.str.8444, i64 0, i64 0
   call void @die(i64 %lex, i8* %r19)
   unreachable
 else_12:
@@ -113336,16 +113586,16 @@ else_27:
   %r37 = icmp eq i64 %r35, %r36
   br i1 %r37, label %then_29, label %else_30
 then_29:
-  %r38 = getelementptr [87 x i8], [87 x i8]* @.str.8378, i64 0, i64 0
+  %r38 = getelementptr [87 x i8], [87 x i8]* @.str.8445, i64 0, i64 0
   call void @die(i64 %lex, i8* %r38)
   unreachable
 else_30:
-  %r39 = getelementptr [12 x i8], [12 x i8]* @.str.8379, i64 0, i64 0
+  %r39 = getelementptr [12 x i8], [12 x i8]* @.str.8446, i64 0, i64 0
   %r40 = load i64, i64* %r12
   %r41 = call i8* @nurl_lex_val(i64 %lex)
   %r42 = call i8* @__tok_label__fp1(i64 %r40, i8* %r41)
   call void @nurl_free(i8* %r41)
-  %r43 = getelementptr [210 x i8], [210 x i8]* @.str.8380, i64 0, i64 0
+  %r43 = getelementptr [210 x i8], [210 x i8]* @.str.8447, i64 0, i64 0
   %r44 = call i8* @nurl_str_cat3(i8* %r39, i8* %r42, i8* %r43)
   call void @nurl_free(i8* %r42)
   call void @die(i64 %lex, i8* %r44)
@@ -113365,10 +113615,10 @@ end_16:
   ret void
 }
 
-@.str.8377 = private unnamed_addr constant [197 x i8] c"'simd' is a prefix on function declarations only \E2\80\94 it selects CPU-dispatched code generation for an '@' declaration, and has no meaning on a const, struct, enum, import, trait or FFI declaration\00"
-@.str.8378 = private unnamed_addr constant [87 x i8] c"enum declarations start with ': |', not a bare '|' \E2\80\94 write ': | Name { Variant... }'\00"
-@.str.8379 = private unnamed_addr constant [12 x i8] c"unexpected \00"
-@.str.8380 = private unnamed_addr constant [210 x i8] c" at the top level \E2\80\94 expected a declaration (@ fn, : const/struct/enum, & ffi, $ import, or % trait/impl). A stray '}' or leftover expression here usually means an earlier function body has unbalanced braces.\00"
+@.str.8444 = private unnamed_addr constant [197 x i8] c"'simd' is a prefix on function declarations only \E2\80\94 it selects CPU-dispatched code generation for an '@' declaration, and has no meaning on a const, struct, enum, import, trait or FFI declaration\00"
+@.str.8445 = private unnamed_addr constant [87 x i8] c"enum declarations start with ': |', not a bare '|' \E2\80\94 write ': | Name { Variant... }'\00"
+@.str.8446 = private unnamed_addr constant [12 x i8] c"unexpected \00"
+@.str.8447 = private unnamed_addr constant [210 x i8] c" at the top level \E2\80\94 expected a declaration (@ fn, : const/struct/enum, & ffi, $ import, or % trait/impl). A stray '}' or leftover expression here usually means an earlier function body has unbalanced braces.\00"
 declare i64 @nurl_recover_nojournal(i8*, i8*)
 
 declare void @nurl_print_buf_unwind()
@@ -113512,16 +113762,16 @@ loop_exit_6:
 
 define void @__ice_report__fp1(i8* %file, i8* %pm) {
 entry:
-  %r0 = getelementptr [1 x i8], [1 x i8]* @.str.8381, i64 0, i64 0
+  %r0 = getelementptr [1 x i8], [1 x i8]* @.str.8448, i64 0, i64 0
   call void @nurl_eprintln(i8* %r0)
-  %r1 = getelementptr [47 x i8], [47 x i8]* @.str.8382, i64 0, i64 0
+  %r1 = getelementptr [47 x i8], [47 x i8]* @.str.8449, i64 0, i64 0
   call void @nurl_eprintln(i8* %r1)
-  %r2 = getelementptr [18 x i8], [18 x i8]* @.str.8383, i64 0, i64 0
+  %r2 = getelementptr [18 x i8], [18 x i8]* @.str.8450, i64 0, i64 0
   %r3 = call i8* @nurl_str_cat(i8* %r2, i8* %pm)
   call void @nurl_eprintln(i8* %r3)
   call void @nurl_free(i8* %r3)
-  %r4 = getelementptr [20 x i8], [20 x i8]* @.str.8384, i64 0, i64 0
-  %r5 = getelementptr [13 x i8], [13 x i8]* @.str.8385, i64 0, i64 0
+  %r4 = getelementptr [20 x i8], [20 x i8]* @.str.8451, i64 0, i64 0
+  %r5 = getelementptr [13 x i8], [13 x i8]* @.str.8452, i64 0, i64 0
   %r6 = call i8* @nurl_str_cat3(i8* %r4, i8* %file, i8* %r5)
   %r7 = load i64, i64* @g_stmt_line
   %r8 = call i8* @nurl_str_int(i64 %r7)
@@ -113530,11 +113780,11 @@ entry:
   call void @nurl_free(i8* %r8)
   call void @nurl_eprintln(i8* %r9)
   call void @nurl_free(i8* %r9)
-  %r10 = getelementptr [70 x i8], [70 x i8]* @.str.8386, i64 0, i64 0
+  %r10 = getelementptr [70 x i8], [70 x i8]* @.str.8453, i64 0, i64 0
   call void @nurl_eprintln(i8* %r10)
-  %r11 = getelementptr [78 x i8], [78 x i8]* @.str.8387, i64 0, i64 0
+  %r11 = getelementptr [78 x i8], [78 x i8]* @.str.8454, i64 0, i64 0
   call void @nurl_eprintln(i8* %r11)
-  %r12 = getelementptr [18 x i8], [18 x i8]* @.str.8388, i64 0, i64 0
+  %r12 = getelementptr [18 x i8], [18 x i8]* @.str.8455, i64 0, i64 0
   %r13 = call i8* @nurl_version()
   %r14 = call i8* @nurl_str_cat(i8* %r12, i8* %r13)
   call void @nurl_eprintln(i8* %r14)
@@ -113543,14 +113793,14 @@ entry:
   unreachable
 }
 
-@.str.8381 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8382 = private unnamed_addr constant [47 x i8] c"internal compiler error: nurlc itself panicked\00"
-@.str.8383 = private unnamed_addr constant [18 x i8] c"  panic message: \00"
-@.str.8384 = private unnamed_addr constant [20 x i8] c"  while processing \00"
-@.str.8385 = private unnamed_addr constant [13 x i8] c", near line \00"
-@.str.8386 = private unnamed_addr constant [70 x i8] c"  this is a bug in nurlc, not in your program \E2\80\94 please report it at\00"
-@.str.8387 = private unnamed_addr constant [78 x i8] c"  https://github.com/nurl-lang/nurl/issues with the source that triggered it.\00"
-@.str.8388 = private unnamed_addr constant [18 x i8] c"  nurlc version: \00"
+@.str.8448 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8449 = private unnamed_addr constant [47 x i8] c"internal compiler error: nurlc itself panicked\00"
+@.str.8450 = private unnamed_addr constant [18 x i8] c"  panic message: \00"
+@.str.8451 = private unnamed_addr constant [20 x i8] c"  while processing \00"
+@.str.8452 = private unnamed_addr constant [13 x i8] c", near line \00"
+@.str.8453 = private unnamed_addr constant [70 x i8] c"  this is a bug in nurlc, not in your program \E2\80\94 please report it at\00"
+@.str.8454 = private unnamed_addr constant [78 x i8] c"  https://github.com/nurl-lang/nurl/issues with the source that triggered it.\00"
+@.str.8455 = private unnamed_addr constant [18 x i8] c"  nurlc version: \00"
 define void @parse_program(i64 %lex, i64 %syms, i64 %cg) {
 entry:
   %r32 = alloca i64
@@ -113592,7 +113842,7 @@ then_4:
   %r37 = call i8* @nurl_panic_last_msg()
   store i8* %r37, i8** %r38
   %r39 = load i8*, i8** %r38
-  %r40 = getelementptr [15 x i8], [15 x i8]* @.str.8389, i64 0, i64 0
+  %r40 = getelementptr [15 x i8], [15 x i8]* @.str.8456, i64 0, i64 0
   %r41 = call i1 @seq(i8* %r39, i8* %r40)
   br i1 %r41, label %then_7, label %else_8
 then_7:
@@ -113614,7 +113864,7 @@ else_8:
   %r46 = icmp sgt i64 %r45, 0
   br i1 %r46, label %then_13, label %else_14
 then_13:
-  %r47 = getelementptr [79 x i8], [79 x i8]* @.str.8390, i64 0, i64 0
+  %r47 = getelementptr [79 x i8], [79 x i8]* @.str.8457, i64 0, i64 0
   call void @nurl_eprintln(i8* %r47)
   call void @nurl_exit(i64 1)
   unreachable
@@ -113636,8 +113886,8 @@ loop_exit_3:
   ret void
 }
 
-@.str.8389 = private unnamed_addr constant [15 x i8] c"__nurlc_diag__\00"
-@.str.8390 = private unnamed_addr constant [79 x i8] c"note: stopping early \E2\80\94 the compiler could not continue past the errors above\00"
+@.str.8456 = private unnamed_addr constant [15 x i8] c"__nurlc_diag__\00"
+@.str.8457 = private unnamed_addr constant [79 x i8] c"note: stopping early \E2\80\94 the compiler could not continue past the errors above\00"
 
 define void @__closure_1(i8* %__env) {
 entry:
@@ -114057,7 +114307,7 @@ loop_body_2:
   %r11 = inttoptr i64 %r10 to i8*
   %r12 = load i64, i64* %r2
   %r13 = sub i64 %mlen, %r12
-  %r14 = getelementptr [9 x i8], [9 x i8]* @.str.8391, i64 0, i64 0
+  %r14 = getelementptr [9 x i8], [9 x i8]* @.str.8458, i64 0, i64 0
   %r15 = call i64 @nurl_memmem_range(i8* %r11, i64 %r13, i8* %r14, i64 8)
   store i64 %r15, i64* %r16
   %r17 = load i64, i64* %r16
@@ -114081,7 +114331,7 @@ else_5:
   %r30 = inttoptr i64 %r29 to i8*
   %r31 = load i64, i64* %r23
   %r32 = sub i64 %mlen, %r31
-  %r33 = getelementptr [4 x i8], [4 x i8]* @.str.8392, i64 0, i64 0
+  %r33 = getelementptr [4 x i8], [4 x i8]* @.str.8459, i64 0, i64 0
   %r34 = call i64 @nurl_memmem_range(i8* %r30, i64 %r32, i8* %r33, i64 3)
   store i64 %r34, i64* %r35
   %r36 = load i64, i64* %r35
@@ -114134,8 +114384,8 @@ loop_exit_3:
   ret i64 %r60
 }
 
-@.str.8391 = private unnamed_addr constant [9 x i8] c"\0Adefine \00"
-@.str.8392 = private unnamed_addr constant [4 x i8] c"\0A}\0A\00"
+@.str.8458 = private unnamed_addr constant [9 x i8] c"\0Adefine \00"
+@.str.8459 = private unnamed_addr constant [4 x i8] c"\0A}\0A\00"
 define void @__dce_print_range__fp1(i64 %from, i64 %to) {
 entry:
   %r4 = alloca i8*
@@ -114197,7 +114447,7 @@ end_6:
   %r7 = icmp eq i64 %r5, 0
   br i1 %r7, label %divzero_7, label %divok_8
 divzero_7:
-  %r8 = getelementptr [17 x i8], [17 x i8]* @.str.8393, i64 0, i64 0
+  %r8 = getelementptr [17 x i8], [17 x i8]* @.str.8460, i64 0, i64 0
   call void @nurl_panic(i8* %r8)
   unreachable
 divok_8:
@@ -114228,7 +114478,7 @@ end_14:
   ret i64 %r18
 }
 
-@.str.8393 = private unnamed_addr constant [17 x i8] c"division by zero\00"
+@.str.8460 = private unnamed_addr constant [17 x i8] c"division by zero\00"
 define void @dce_emit_module(i8* %mod) {
 entry:
   %r1 = alloca i64
@@ -114310,7 +114560,7 @@ end_8:
   %r36 = load i64, i64* %r1
   %r37 = call i64 @__dce_index__fp1(i64 %r36, i64 0)
   %r38 = load i64, i64* @g_dce_map
-  %r39 = getelementptr [5 x i8], [5 x i8]* @.str.8394, i64 0, i64 0
+  %r39 = getelementptr [5 x i8], [5 x i8]* @.str.8461, i64 0, i64 0
   %r40 = call i8* @nurl_sym_get(i64 %r38, i8* %r39)
   %r42 = load i8*, i8** %r41
   call void @nurl_free(i8* %r42)
@@ -114358,7 +114608,7 @@ loop_body_18:
 loop_exit_19:
   br label %end_16
 else_15:
-  %r63 = getelementptr [5 x i8], [5 x i8]* @.str.8395, i64 0, i64 0
+  %r63 = getelementptr [5 x i8], [5 x i8]* @.str.8462, i64 0, i64 0
   call void @__dce_mark_name__fp1(i8* %r63)
   store i64 0, i64* %r64
   store i64 0, i64* %r65
@@ -114480,8 +114730,8 @@ end_34:
   ret void
 }
 
-@.str.8394 = private unnamed_addr constant [5 x i8] c"main\00"
-@.str.8395 = private unnamed_addr constant [5 x i8] c"main\00"
+@.str.8461 = private unnamed_addr constant [5 x i8] c"main\00"
+@.str.8462 = private unnamed_addr constant [5 x i8] c"main\00"
 define void @dce_free() {
 entry:
   %r0 = load i64, i64* @g_dce_start
@@ -114762,7 +115012,7 @@ end_3:
   %r12 = load i64, i64* %r2
   %r13 = add i64 %r11, %r12
   %r14 = inttoptr i64 %r13 to i8*
-  %r15 = getelementptr [12 x i8], [12 x i8]* @.str.8396, i64 0, i64 0
+  %r15 = getelementptr [12 x i8], [12 x i8]* @.str.8463, i64 0, i64 0
   %r16 = call i64 @nurl_str_starts(i8* %r14, i8* %r15)
   %r17 = icmp ne i64 0, %r16
   br i1 %r17, label %then_4, label %else_5
@@ -114777,7 +115027,7 @@ end_6:
   ret i1 %r20
 }
 
-@.str.8396 = private unnamed_addr constant [12 x i8] c" = private \00"
+@.str.8463 = private unnamed_addr constant [12 x i8] c" = private \00"
 define i64 @__sp_word_end__fp1(i64 %t, i64 %lim) {
 entry:
   %r0 = alloca i64
@@ -115046,7 +115296,7 @@ entry:
   store i64 %r0, i64* %r1
   %r2 = load i64, i64* %r1
   call void @__sp_write__fp1(i64 %p, i64 %r2)
-  %r3 = getelementptr [13 x i8], [13 x i8]* @.str.8397, i64 0, i64 0
+  %r3 = getelementptr [13 x i8], [13 x i8]* @.str.8464, i64 0, i64 0
   call void @__sp_puts__fp1(i8* %r3)
   %r4 = load i64, i64* %r1
   %r5 = add i64 %r4, 3
@@ -115071,7 +115321,7 @@ loop_body_2:
   store i64 %r15, i64* %r16
   %r17 = load i64, i64* %r6
   %r18 = load i64, i64* %r16
-  %r19 = getelementptr [7 x i8], [7 x i8]* @.str.8398, i64 0, i64 0
+  %r19 = getelementptr [7 x i8], [7 x i8]* @.str.8465, i64 0, i64 0
   %r20 = call i1 @__sp_word_eq__fp1(i64 %r17, i64 %r18, i8* %r19)
   br i1 %r20, label %then_6, label %else_7
 then_6:
@@ -115080,7 +115330,7 @@ then_6:
 else_7:
   %r21 = load i64, i64* %r6
   %r22 = load i64, i64* %r16
-  %r23 = getelementptr [9 x i8], [9 x i8]* @.str.8399, i64 0, i64 0
+  %r23 = getelementptr [9 x i8], [9 x i8]* @.str.8466, i64 0, i64 0
   %r24 = call i1 @__sp_word_eq__fp1(i64 %r21, i64 %r22, i8* %r23)
   br i1 %r24, label %then_9, label %else_10
 then_9:
@@ -115101,10 +115351,10 @@ loop_exit_3:
   %r28 = icmp eq i64 %r27, 1
   br i1 %r28, label %then_12, label %else_13
 then_12:
-  %r29 = getelementptr [10 x i8], [10 x i8]* @.str.8400, i64 0, i64 0
+  %r29 = getelementptr [10 x i8], [10 x i8]* @.str.8467, i64 0, i64 0
   br label %end_14
 else_13:
-  %r30 = getelementptr [8 x i8], [8 x i8]* @.str.8401, i64 0, i64 0
+  %r30 = getelementptr [8 x i8], [8 x i8]* @.str.8468, i64 0, i64 0
   br label %end_14
 end_14:
   %r31 = phi i8* [ %r29, %then_12 ], [ %r30, %else_13 ]
@@ -115113,17 +115363,17 @@ end_14:
   %r33 = load i64, i64* %r6
   %r34 = call i64 @__sp_type_end__fp1(i64 %r33, i64 %le)
   call void @__sp_write__fp1(i64 %r32, i64 %r34)
-  %r35 = getelementptr [2 x i8], [2 x i8]* @.str.8402, i64 0, i64 0
+  %r35 = getelementptr [2 x i8], [2 x i8]* @.str.8469, i64 0, i64 0
   call void @__sp_puts__fp1(i8* %r35)
   ret void
 }
 
-@.str.8397 = private unnamed_addr constant [13 x i8] c" = external \00"
-@.str.8398 = private unnamed_addr constant [7 x i8] c"global\00"
-@.str.8399 = private unnamed_addr constant [9 x i8] c"constant\00"
-@.str.8400 = private unnamed_addr constant [10 x i8] c"constant \00"
-@.str.8401 = private unnamed_addr constant [8 x i8] c"global \00"
-@.str.8402 = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.str.8464 = private unnamed_addr constant [13 x i8] c" = external \00"
+@.str.8465 = private unnamed_addr constant [7 x i8] c"global\00"
+@.str.8466 = private unnamed_addr constant [9 x i8] c"constant\00"
+@.str.8467 = private unnamed_addr constant [10 x i8] c"constant \00"
+@.str.8468 = private unnamed_addr constant [8 x i8] c"global \00"
+@.str.8469 = private unnamed_addr constant [2 x i8] c"\0A\00"
 define void @__sp_scan_refs__fp1(i64 %from, i64 %to, i64 %part) {
 entry:
   %r3 = alloca i8*
@@ -115493,7 +115743,7 @@ end_20:
   %r71 = icmp eq i64 0, %first
   br i1 %r71, label %then_24, label %else_25
 then_24:
-  %r72 = getelementptr [3 x i8], [3 x i8]* @.str.8403, i64 0, i64 0
+  %r72 = getelementptr [3 x i8], [3 x i8]* @.str.8470, i64 0, i64 0
   call void @__sp_puts__fp1(i8* %r72)
   br label %end_26
 else_25:
@@ -115505,7 +115755,7 @@ end_26:
   ret void
 }
 
-@.str.8403 = private unnamed_addr constant [3 x i8] c", \00"
+@.str.8470 = private unnamed_addr constant [3 x i8] c", \00"
 define void @__sp_declare__fp1(i64 %st, i64 %en) {
 entry:
   %r3 = alloca i8*
@@ -115524,7 +115774,7 @@ entry:
   store i8* %r2, i8** %r3
   %r4 = call i64 @__sp_line_end__fp1(i64 %st, i64 %en)
   store i64 %r4, i64* %r5
-  %r6 = getelementptr [8 x i8], [8 x i8]* @.str.8404, i64 0, i64 0
+  %r6 = getelementptr [8 x i8], [8 x i8]* @.str.8471, i64 0, i64 0
   call void @__sp_puts__fp1(i8* %r6)
   %r7 = add i64 %st, 6
   store i64 %r7, i64* %r8
@@ -115703,13 +115953,13 @@ end_15:
   %r99 = phi i64 [ %r57, %then_13 ], [ %r98, %end_20 ]
   br label %loop_check_6
 loop_exit_8:
-  %r100 = getelementptr [3 x i8], [3 x i8]* @.str.8405, i64 0, i64 0
+  %r100 = getelementptr [3 x i8], [3 x i8]* @.str.8472, i64 0, i64 0
   call void @__sp_puts__fp1(i8* %r100)
   ret void
 }
 
-@.str.8404 = private unnamed_addr constant [8 x i8] c"declare\00"
-@.str.8405 = private unnamed_addr constant [3 x i8] c")\0A\00"
+@.str.8471 = private unnamed_addr constant [8 x i8] c"declare\00"
+@.str.8472 = private unnamed_addr constant [3 x i8] c")\0A\00"
 define void @__sp_emit_global__fp1(i64 %p, i64 %le, i64 %nx, i64 %k) {
 entry:
   %r5 = alloca i64
@@ -115837,9 +116087,9 @@ entry:
   store i8* null, i8** %r10
   %r17 = alloca i8*
   store i8* null, i8** %r17
-  %r0 = getelementptr [2 x i8], [2 x i8]* @.str.8406, i64 0, i64 0
+  %r0 = getelementptr [2 x i8], [2 x i8]* @.str.8473, i64 0, i64 0
   %r1 = call i8* @nurl_str_int(i64 %k)
-  %r2 = getelementptr [4 x i8], [4 x i8]* @.str.8407, i64 0, i64 0
+  %r2 = getelementptr [4 x i8], [4 x i8]* @.str.8474, i64 0, i64 0
   %r3 = call i8* @nurl_str_cat3(i8* %r0, i8* %r1, i8* %r2)
   call void @nurl_free(i8* %r1)
   %r5 = load i8*, i8** %r4
@@ -115856,7 +116106,7 @@ entry:
   %r12 = load i8*, i8** %r10
   call void @nurl_journal_push(i8* %r12)
   %r13 = load i8*, i8** %r10
-  %r14 = getelementptr [3 x i8], [3 x i8]* @.str.8408, i64 0, i64 0
+  %r14 = getelementptr [3 x i8], [3 x i8]* @.str.8475, i64 0, i64 0
   %r15 = call i8* @fopen(i8* %r13, i8* %r14)
   %r16 = bitcast i8* %r15 to i8*
   store i8* %r16, i8** %r17
@@ -115865,7 +116115,7 @@ entry:
   %r20 = icmp eq i64 0, %r19
   br i1 %r20, label %then_1, label %else_2
 then_1:
-  %r21 = getelementptr [21 x i8], [21 x i8]* @.str.8409, i64 0, i64 0
+  %r21 = getelementptr [21 x i8], [21 x i8]* @.str.8476, i64 0, i64 0
   %r22 = load i8*, i8** %r10
   %r23 = call i8* @nurl_str_cat(i8* %r21, i8* %r22)
   call void @nurl_eprintln(i8* %r23)
@@ -115885,10 +116135,10 @@ end_3:
   ret void
 }
 
-@.str.8406 = private unnamed_addr constant [2 x i8] c".\00"
-@.str.8407 = private unnamed_addr constant [4 x i8] c".ll\00"
-@.str.8408 = private unnamed_addr constant [3 x i8] c"wb\00"
-@.str.8409 = private unnamed_addr constant [21 x i8] c"nurlc: cannot write \00"
+@.str.8473 = private unnamed_addr constant [2 x i8] c".\00"
+@.str.8474 = private unnamed_addr constant [4 x i8] c".ll\00"
+@.str.8475 = private unnamed_addr constant [3 x i8] c"wb\00"
+@.str.8476 = private unnamed_addr constant [21 x i8] c"nurlc: cannot write \00"
 define void @__sp_close__fp1() {
 entry:
   %r3 = alloca i32
@@ -116033,7 +116283,7 @@ end_9:
   %r43 = icmp eq i64 %r41, 0
   br i1 %r43, label %divzero_10, label %divok_11
 divzero_10:
-  %r44 = getelementptr [17 x i8], [17 x i8]* @.str.8410, i64 0, i64 0
+  %r44 = getelementptr [17 x i8], [17 x i8]* @.str.8477, i64 0, i64 0
   call void @nurl_panic(i8* %r44)
   unreachable
 divok_11:
@@ -116046,7 +116296,7 @@ then_12:
   %r49 = icmp eq i64 %r47, 0
   br i1 %r49, label %divzero_15, label %divok_16
 divzero_15:
-  %r50 = getelementptr [17 x i8], [17 x i8]* @.str.8411, i64 0, i64 0
+  %r50 = getelementptr [17 x i8], [17 x i8]* @.str.8478, i64 0, i64 0
   call void @nurl_panic(i8* %r50)
   unreachable
 divok_16:
@@ -116095,7 +116345,7 @@ else_21:
   %r79 = load i64, i64* %r62
   %r80 = add i64 %r78, %r79
   %r81 = inttoptr i64 %r80 to i8*
-  %r82 = getelementptr [21 x i8], [21 x i8]* @.str.8412, i64 0, i64 0
+  %r82 = getelementptr [21 x i8], [21 x i8]* @.str.8479, i64 0, i64 0
   %r83 = call i64 @nurl_str_starts(i8* %r81, i8* %r82)
   %r84 = icmp ne i64 0, %r83
   br i1 %r84, label %then_23, label %else_24
@@ -116350,92 +116600,92 @@ loop_exit_45:
   ret void
 }
 
-@.str.8410 = private unnamed_addr constant [17 x i8] c"division by zero\00"
-@.str.8411 = private unnamed_addr constant [17 x i8] c"division by zero\00"
-@.str.8412 = private unnamed_addr constant [21 x i8] c"define linkonce_odr \00"
+@.str.8477 = private unnamed_addr constant [17 x i8] c"division by zero\00"
+@.str.8478 = private unnamed_addr constant [17 x i8] c"division by zero\00"
+@.str.8479 = private unnamed_addr constant [21 x i8] c"define linkonce_odr \00"
 define void @nurlc_print_help() {
 entry:
-  %r0 = getelementptr [80 x i8], [80 x i8]* @.str.8413, i64 0, i64 0
+  %r0 = getelementptr [80 x i8], [80 x i8]* @.str.8480, i64 0, i64 0
   call void @nurl_print(i8* %r0)
-  %r1 = getelementptr [42 x i8], [42 x i8]* @.str.8414, i64 0, i64 0
+  %r1 = getelementptr [42 x i8], [42 x i8]* @.str.8481, i64 0, i64 0
   call void @nurl_print(i8* %r1)
-  %r2 = getelementptr [8 x i8], [8 x i8]* @.str.8415, i64 0, i64 0
+  %r2 = getelementptr [8 x i8], [8 x i8]* @.str.8482, i64 0, i64 0
   call void @nurl_print(i8* %r2)
-  %r3 = getelementptr [48 x i8], [48 x i8]* @.str.8416, i64 0, i64 0
+  %r3 = getelementptr [48 x i8], [48 x i8]* @.str.8483, i64 0, i64 0
   call void @nurl_print(i8* %r3)
-  %r4 = getelementptr [60 x i8], [60 x i8]* @.str.8417, i64 0, i64 0
+  %r4 = getelementptr [60 x i8], [60 x i8]* @.str.8484, i64 0, i64 0
   call void @nurl_print(i8* %r4)
-  %r5 = getelementptr [77 x i8], [77 x i8]* @.str.8418, i64 0, i64 0
+  %r5 = getelementptr [77 x i8], [77 x i8]* @.str.8485, i64 0, i64 0
   call void @nurl_print(i8* %r5)
-  %r6 = getelementptr [71 x i8], [71 x i8]* @.str.8419, i64 0, i64 0
+  %r6 = getelementptr [71 x i8], [71 x i8]* @.str.8486, i64 0, i64 0
   call void @nurl_print(i8* %r6)
-  %r7 = getelementptr [71 x i8], [71 x i8]* @.str.8420, i64 0, i64 0
+  %r7 = getelementptr [71 x i8], [71 x i8]* @.str.8487, i64 0, i64 0
   call void @nurl_print(i8* %r7)
-  %r8 = getelementptr [61 x i8], [61 x i8]* @.str.8421, i64 0, i64 0
+  %r8 = getelementptr [61 x i8], [61 x i8]* @.str.8488, i64 0, i64 0
   call void @nurl_print(i8* %r8)
-  %r9 = getelementptr [78 x i8], [78 x i8]* @.str.8422, i64 0, i64 0
+  %r9 = getelementptr [78 x i8], [78 x i8]* @.str.8489, i64 0, i64 0
   call void @nurl_print(i8* %r9)
-  %r10 = getelementptr [70 x i8], [70 x i8]* @.str.8423, i64 0, i64 0
+  %r10 = getelementptr [70 x i8], [70 x i8]* @.str.8490, i64 0, i64 0
   call void @nurl_print(i8* %r10)
-  %r11 = getelementptr [59 x i8], [59 x i8]* @.str.8424, i64 0, i64 0
+  %r11 = getelementptr [59 x i8], [59 x i8]* @.str.8491, i64 0, i64 0
   call void @nurl_print(i8* %r11)
-  %r12 = getelementptr [69 x i8], [69 x i8]* @.str.8425, i64 0, i64 0
+  %r12 = getelementptr [69 x i8], [69 x i8]* @.str.8492, i64 0, i64 0
   call void @nurl_print(i8* %r12)
-  %r13 = getelementptr [73 x i8], [73 x i8]* @.str.8426, i64 0, i64 0
+  %r13 = getelementptr [73 x i8], [73 x i8]* @.str.8493, i64 0, i64 0
   call void @nurl_print(i8* %r13)
-  %r14 = getelementptr [74 x i8], [74 x i8]* @.str.8427, i64 0, i64 0
+  %r14 = getelementptr [74 x i8], [74 x i8]* @.str.8494, i64 0, i64 0
   call void @nurl_print(i8* %r14)
-  %r15 = getelementptr [72 x i8], [72 x i8]* @.str.8428, i64 0, i64 0
+  %r15 = getelementptr [72 x i8], [72 x i8]* @.str.8495, i64 0, i64 0
   call void @nurl_print(i8* %r15)
-  %r16 = getelementptr [70 x i8], [70 x i8]* @.str.8429, i64 0, i64 0
+  %r16 = getelementptr [70 x i8], [70 x i8]* @.str.8496, i64 0, i64 0
   call void @nurl_print(i8* %r16)
-  %r17 = getelementptr [74 x i8], [74 x i8]* @.str.8430, i64 0, i64 0
+  %r17 = getelementptr [74 x i8], [74 x i8]* @.str.8497, i64 0, i64 0
   call void @nurl_print(i8* %r17)
-  %r18 = getelementptr [75 x i8], [75 x i8]* @.str.8431, i64 0, i64 0
+  %r18 = getelementptr [75 x i8], [75 x i8]* @.str.8498, i64 0, i64 0
   call void @nurl_print(i8* %r18)
-  %r19 = getelementptr [66 x i8], [66 x i8]* @.str.8432, i64 0, i64 0
+  %r19 = getelementptr [66 x i8], [66 x i8]* @.str.8499, i64 0, i64 0
   call void @nurl_print(i8* %r19)
-  %r20 = getelementptr [70 x i8], [70 x i8]* @.str.8433, i64 0, i64 0
+  %r20 = getelementptr [70 x i8], [70 x i8]* @.str.8500, i64 0, i64 0
   call void @nurl_print(i8* %r20)
-  %r21 = getelementptr [73 x i8], [73 x i8]* @.str.8434, i64 0, i64 0
+  %r21 = getelementptr [73 x i8], [73 x i8]* @.str.8501, i64 0, i64 0
   call void @nurl_print(i8* %r21)
-  %r22 = getelementptr [74 x i8], [74 x i8]* @.str.8435, i64 0, i64 0
+  %r22 = getelementptr [74 x i8], [74 x i8]* @.str.8502, i64 0, i64 0
   call void @nurl_print(i8* %r22)
-  %r23 = getelementptr [57 x i8], [57 x i8]* @.str.8436, i64 0, i64 0
+  %r23 = getelementptr [57 x i8], [57 x i8]* @.str.8503, i64 0, i64 0
   call void @nurl_print(i8* %r23)
-  %r24 = getelementptr [64 x i8], [64 x i8]* @.str.8437, i64 0, i64 0
+  %r24 = getelementptr [64 x i8], [64 x i8]* @.str.8504, i64 0, i64 0
   call void @nurl_print(i8* %r24)
-  %r25 = getelementptr [58 x i8], [58 x i8]* @.str.8438, i64 0, i64 0
+  %r25 = getelementptr [58 x i8], [58 x i8]* @.str.8505, i64 0, i64 0
   call void @nurl_print(i8* %r25)
   ret void
 }
 
-@.str.8413 = private unnamed_addr constant [80 x i8] c"nurlc \E2\80\94 the NURL compiler. Compiles a .nu source file to LLVM IR on stdout.\0A\0A\00"
-@.str.8414 = private unnamed_addr constant [42 x i8] c"usage: nurlc [flags] <file.nu>  >out.ll\0A\0A\00"
-@.str.8415 = private unnamed_addr constant [8 x i8] c"flags:\0A\00"
-@.str.8416 = private unnamed_addr constant [48 x i8] c"  --help, -h          print this help and exit\0A\00"
-@.str.8417 = private unnamed_addr constant [60 x i8] c"  --version, -v       print the toolchain version and exit\0A\00"
-@.str.8418 = private unnamed_addr constant [77 x i8] c"  --g, -g             emit DWARF debug info (nurl.sh --debug forwards this)\0A\00"
-@.str.8419 = private unnamed_addr constant [71 x i8] c"  --lint              run lint-only diagnostics (e.g. unused imports)\0A\00"
-@.str.8420 = private unnamed_addr constant [71 x i8] c"  --no-borrowck       disable the borrow-checker pass (on by default)\0A\00"
-@.str.8421 = private unnamed_addr constant [61 x i8] c"  --strict-borrowck   run the borrow-checker in strict mode\0A\00"
-@.str.8422 = private unnamed_addr constant [78 x i8] c"  --no-strict-arity   demote the n-ary '&'/'|' arity-trap error to a warning\0A\00"
-@.str.8423 = private unnamed_addr constant [70 x i8] c"  --no-dce            emit unreachable functions too (on by default)\0A\00"
-@.str.8424 = private unnamed_addr constant [59 x i8] c"  --ffi-host-imports  emit FFI calls as wasm host imports\0A\00"
-@.str.8425 = private unnamed_addr constant [69 x i8] c"  --no-cpu-dispatch   ignore the 'simd' prefix and emit each marked\0A\00"
-@.str.8426 = private unnamed_addr constant [73 x i8] c"                      function once. The prefix names an x86-64 feature\0A\00"
-@.str.8427 = private unnamed_addr constant [74 x i8] c"                      set, and nurlc emits no target triple, so anything\0A\00"
-@.str.8428 = private unnamed_addr constant [72 x i8] c"                      building for another architecture must pass this\0A\00"
-@.str.8429 = private unnamed_addr constant [70 x i8] c"                      (nurl.sh does it for every non-x86-64 target).\0A\00"
-@.str.8430 = private unnamed_addr constant [74 x i8] c"  --split=N           ALSO write the module as up to N independent ones,\0A\00"
-@.str.8431 = private unnamed_addr constant [75 x i8] c"                      so N clang processes can lower them at once (stdout\0A\00"
-@.str.8432 = private unnamed_addr constant [66 x i8] c"                      still carries the whole module either way)\0A\00"
-@.str.8433 = private unnamed_addr constant [70 x i8] c"  --split-out=PREFIX  where they go: PREFIX.0.ll \E2\80\A6 PREFIX.<N-1>.ll\0A\00"
-@.str.8434 = private unnamed_addr constant [73 x i8] c"  --split-min=BYTES   smallest a part may be (default 131072). A module\0A\00"
-@.str.8435 = private unnamed_addr constant [74 x i8] c"                      too small to fill two of them is not split at all.\0A\00"
-@.str.8436 = private unnamed_addr constant [57 x i8] c"\0AThe LLVM IR goes to stdout; link it with clang against\0A\00"
-@.str.8437 = private unnamed_addr constant [64 x i8] c"stdlib/runtime.native.o (see docs/BUILDING.md). For a one-step\0A\00"
-@.str.8438 = private unnamed_addr constant [58 x i8] c"source-to-binary build use ./nurl.sh <file.nu> [output].\0A\00"
+@.str.8480 = private unnamed_addr constant [80 x i8] c"nurlc \E2\80\94 the NURL compiler. Compiles a .nu source file to LLVM IR on stdout.\0A\0A\00"
+@.str.8481 = private unnamed_addr constant [42 x i8] c"usage: nurlc [flags] <file.nu>  >out.ll\0A\0A\00"
+@.str.8482 = private unnamed_addr constant [8 x i8] c"flags:\0A\00"
+@.str.8483 = private unnamed_addr constant [48 x i8] c"  --help, -h          print this help and exit\0A\00"
+@.str.8484 = private unnamed_addr constant [60 x i8] c"  --version, -v       print the toolchain version and exit\0A\00"
+@.str.8485 = private unnamed_addr constant [77 x i8] c"  --g, -g             emit DWARF debug info (nurl.sh --debug forwards this)\0A\00"
+@.str.8486 = private unnamed_addr constant [71 x i8] c"  --lint              run lint-only diagnostics (e.g. unused imports)\0A\00"
+@.str.8487 = private unnamed_addr constant [71 x i8] c"  --no-borrowck       disable the borrow-checker pass (on by default)\0A\00"
+@.str.8488 = private unnamed_addr constant [61 x i8] c"  --strict-borrowck   run the borrow-checker in strict mode\0A\00"
+@.str.8489 = private unnamed_addr constant [78 x i8] c"  --no-strict-arity   demote the n-ary '&'/'|' arity-trap error to a warning\0A\00"
+@.str.8490 = private unnamed_addr constant [70 x i8] c"  --no-dce            emit unreachable functions too (on by default)\0A\00"
+@.str.8491 = private unnamed_addr constant [59 x i8] c"  --ffi-host-imports  emit FFI calls as wasm host imports\0A\00"
+@.str.8492 = private unnamed_addr constant [69 x i8] c"  --no-cpu-dispatch   ignore the 'simd' prefix and emit each marked\0A\00"
+@.str.8493 = private unnamed_addr constant [73 x i8] c"                      function once. The prefix names an x86-64 feature\0A\00"
+@.str.8494 = private unnamed_addr constant [74 x i8] c"                      set, and nurlc emits no target triple, so anything\0A\00"
+@.str.8495 = private unnamed_addr constant [72 x i8] c"                      building for another architecture must pass this\0A\00"
+@.str.8496 = private unnamed_addr constant [70 x i8] c"                      (nurl.sh does it for every non-x86-64 target).\0A\00"
+@.str.8497 = private unnamed_addr constant [74 x i8] c"  --split=N           ALSO write the module as up to N independent ones,\0A\00"
+@.str.8498 = private unnamed_addr constant [75 x i8] c"                      so N clang processes can lower them at once (stdout\0A\00"
+@.str.8499 = private unnamed_addr constant [66 x i8] c"                      still carries the whole module either way)\0A\00"
+@.str.8500 = private unnamed_addr constant [70 x i8] c"  --split-out=PREFIX  where they go: PREFIX.0.ll \E2\80\A6 PREFIX.<N-1>.ll\0A\00"
+@.str.8501 = private unnamed_addr constant [73 x i8] c"  --split-min=BYTES   smallest a part may be (default 131072). A module\0A\00"
+@.str.8502 = private unnamed_addr constant [74 x i8] c"                      too small to fill two of them is not split at all.\0A\00"
+@.str.8503 = private unnamed_addr constant [57 x i8] c"\0AThe LLVM IR goes to stdout; link it with clang against\0A\00"
+@.str.8504 = private unnamed_addr constant [64 x i8] c"stdlib/runtime.native.o (see docs/BUILDING.md). For a one-step\0A\00"
+@.str.8505 = private unnamed_addr constant [58 x i8] c"source-to-binary build use ./nurl.sh <file.nu> [output].\0A\00"
 define void @_nurl_main() {
 entry:
   %r2 = alloca i8*
@@ -116456,7 +116706,7 @@ entry:
   %r233 = alloca i64
   %r269 = alloca i8*
   store i8* null, i8** %r269
-  %r0 = getelementptr [1 x i8], [1 x i8]* @.str.8439, i64 0, i64 0
+  %r0 = getelementptr [1 x i8], [1 x i8]* @.str.8506, i64 0, i64 0
   %r1 = call i8* @nurl_strdup(i8* %r0)
   %r3 = load i8*, i8** %r2
   call void @nurl_free(i8* %r3)
@@ -116479,12 +116729,12 @@ loop_body_2:
   %r13 = load i8*, i8** %r11
   call void @nurl_journal_push(i8* %r13)
   %r14 = load i8*, i8** %r11
-  %r15 = getelementptr [10 x i8], [10 x i8]* @.str.8440, i64 0, i64 0
+  %r15 = getelementptr [10 x i8], [10 x i8]* @.str.8507, i64 0, i64 0
   %r16 = call i1 @seq(i8* %r14, i8* %r15)
   br i1 %r16, label %or_end_5, label %or_right_4
 or_right_4:
   %r17 = load i8*, i8** %r11
-  %r18 = getelementptr [3 x i8], [3 x i8]* @.str.8441, i64 0, i64 0
+  %r18 = getelementptr [3 x i8], [3 x i8]* @.str.8508, i64 0, i64 0
   %r19 = call i1 @seq(i8* %r17, i8* %r18)
   br label %or_end_5
 or_end_5:
@@ -116493,18 +116743,18 @@ or_end_5:
 then_6:
   %r21 = call i8* @nurl_version()
   call void @nurl_print(i8* %r21)
-  %r22 = getelementptr [2 x i8], [2 x i8]* @.str.8442, i64 0, i64 0
+  %r22 = getelementptr [2 x i8], [2 x i8]* @.str.8509, i64 0, i64 0
   call void @nurl_print(i8* %r22)
   call void @nurl_exit(i64 0)
   unreachable
 else_7:
   %r23 = load i8*, i8** %r11
-  %r24 = getelementptr [7 x i8], [7 x i8]* @.str.8443, i64 0, i64 0
+  %r24 = getelementptr [7 x i8], [7 x i8]* @.str.8510, i64 0, i64 0
   %r25 = call i1 @seq(i8* %r23, i8* %r24)
   br i1 %r25, label %or_end_10, label %or_right_9
 or_right_9:
   %r26 = load i8*, i8** %r11
-  %r27 = getelementptr [3 x i8], [3 x i8]* @.str.8444, i64 0, i64 0
+  %r27 = getelementptr [3 x i8], [3 x i8]* @.str.8511, i64 0, i64 0
   %r28 = call i1 @seq(i8* %r26, i8* %r27)
   br label %or_end_10
 or_end_10:
@@ -116516,12 +116766,12 @@ then_11:
   unreachable
 else_12:
   %r30 = load i8*, i8** %r11
-  %r31 = getelementptr [4 x i8], [4 x i8]* @.str.8445, i64 0, i64 0
+  %r31 = getelementptr [4 x i8], [4 x i8]* @.str.8512, i64 0, i64 0
   %r32 = call i1 @seq(i8* %r30, i8* %r31)
   br i1 %r32, label %or_end_15, label %or_right_14
 or_right_14:
   %r33 = load i8*, i8** %r11
-  %r34 = getelementptr [3 x i8], [3 x i8]* @.str.8446, i64 0, i64 0
+  %r34 = getelementptr [3 x i8], [3 x i8]* @.str.8513, i64 0, i64 0
   %r35 = call i1 @seq(i8* %r33, i8* %r34)
   br label %or_end_15
 or_end_15:
@@ -116532,7 +116782,7 @@ then_16:
   br label %end_18
 else_17:
   %r37 = load i8*, i8** %r11
-  %r38 = getelementptr [7 x i8], [7 x i8]* @.str.8447, i64 0, i64 0
+  %r38 = getelementptr [7 x i8], [7 x i8]* @.str.8514, i64 0, i64 0
   %r39 = call i1 @seq(i8* %r37, i8* %r38)
   br i1 %r39, label %then_19, label %else_20
 then_19:
@@ -116540,7 +116790,7 @@ then_19:
   br label %end_21
 else_20:
   %r40 = load i8*, i8** %r11
-  %r41 = getelementptr [11 x i8], [11 x i8]* @.str.8448, i64 0, i64 0
+  %r41 = getelementptr [11 x i8], [11 x i8]* @.str.8515, i64 0, i64 0
   %r42 = call i1 @seq(i8* %r40, i8* %r41)
   br i1 %r42, label %then_22, label %else_23
 then_22:
@@ -116548,7 +116798,7 @@ then_22:
   br label %end_24
 else_23:
   %r43 = load i8*, i8** %r11
-  %r44 = getelementptr [14 x i8], [14 x i8]* @.str.8449, i64 0, i64 0
+  %r44 = getelementptr [14 x i8], [14 x i8]* @.str.8516, i64 0, i64 0
   %r45 = call i1 @seq(i8* %r43, i8* %r44)
   br i1 %r45, label %then_25, label %else_26
 then_25:
@@ -116556,7 +116806,7 @@ then_25:
   br label %end_27
 else_26:
   %r46 = load i8*, i8** %r11
-  %r47 = getelementptr [18 x i8], [18 x i8]* @.str.8450, i64 0, i64 0
+  %r47 = getelementptr [18 x i8], [18 x i8]* @.str.8517, i64 0, i64 0
   %r48 = call i1 @seq(i8* %r46, i8* %r47)
   br i1 %r48, label %then_28, label %else_29
 then_28:
@@ -116565,7 +116815,7 @@ then_28:
   br label %end_30
 else_29:
   %r49 = load i8*, i8** %r11
-  %r50 = getelementptr [15 x i8], [15 x i8]* @.str.8451, i64 0, i64 0
+  %r50 = getelementptr [15 x i8], [15 x i8]* @.str.8518, i64 0, i64 0
   %r51 = call i1 @seq(i8* %r49, i8* %r50)
   br i1 %r51, label %then_31, label %else_32
 then_31:
@@ -116573,7 +116823,7 @@ then_31:
   br label %end_33
 else_32:
   %r52 = load i8*, i8** %r11
-  %r53 = getelementptr [18 x i8], [18 x i8]* @.str.8452, i64 0, i64 0
+  %r53 = getelementptr [18 x i8], [18 x i8]* @.str.8519, i64 0, i64 0
   %r54 = call i1 @seq(i8* %r52, i8* %r53)
   br i1 %r54, label %then_34, label %else_35
 then_34:
@@ -116581,7 +116831,7 @@ then_34:
   br label %end_36
 else_35:
   %r55 = load i8*, i8** %r11
-  %r56 = getelementptr [19 x i8], [19 x i8]* @.str.8453, i64 0, i64 0
+  %r56 = getelementptr [19 x i8], [19 x i8]* @.str.8520, i64 0, i64 0
   %r57 = call i1 @seq(i8* %r55, i8* %r56)
   br i1 %r57, label %then_37, label %else_38
 then_37:
@@ -116589,7 +116839,7 @@ then_37:
   br label %end_39
 else_38:
   %r58 = load i8*, i8** %r11
-  %r59 = getelementptr [18 x i8], [18 x i8]* @.str.8454, i64 0, i64 0
+  %r59 = getelementptr [18 x i8], [18 x i8]* @.str.8521, i64 0, i64 0
   %r60 = call i1 @seq(i8* %r58, i8* %r59)
   br i1 %r60, label %then_40, label %else_41
 then_40:
@@ -116597,7 +116847,7 @@ then_40:
   br label %end_42
 else_41:
   %r61 = load i8*, i8** %r11
-  %r62 = getelementptr [9 x i8], [9 x i8]* @.str.8455, i64 0, i64 0
+  %r62 = getelementptr [9 x i8], [9 x i8]* @.str.8522, i64 0, i64 0
   %r63 = call i1 @seq(i8* %r61, i8* %r62)
   br i1 %r63, label %then_43, label %else_44
 then_43:
@@ -116605,7 +116855,7 @@ then_43:
   br label %end_45
 else_44:
   %r64 = load i8*, i8** %r11
-  %r65 = getelementptr [9 x i8], [9 x i8]* @.str.8456, i64 0, i64 0
+  %r65 = getelementptr [9 x i8], [9 x i8]* @.str.8523, i64 0, i64 0
   %r66 = call i64 @nurl_str_starts(i8* %r64, i8* %r65)
   %r67 = icmp ne i64 0, %r66
   br i1 %r67, label %then_46, label %else_47
@@ -116621,7 +116871,7 @@ then_46:
   br label %end_48
 else_47:
   %r74 = load i8*, i8** %r11
-  %r75 = getelementptr [13 x i8], [13 x i8]* @.str.8457, i64 0, i64 0
+  %r75 = getelementptr [13 x i8], [13 x i8]* @.str.8524, i64 0, i64 0
   %r76 = call i64 @nurl_str_starts(i8* %r74, i8* %r75)
   %r77 = icmp ne i64 0, %r76
   br i1 %r77, label %then_49, label %else_50
@@ -116641,7 +116891,7 @@ then_49:
   br label %end_51
 else_50:
   %r87 = load i8*, i8** %r11
-  %r88 = getelementptr [13 x i8], [13 x i8]* @.str.8458, i64 0, i64 0
+  %r88 = getelementptr [13 x i8], [13 x i8]* @.str.8525, i64 0, i64 0
   %r89 = call i64 @nurl_str_starts(i8* %r87, i8* %r88)
   %r90 = icmp ne i64 0, %r89
   br i1 %r90, label %then_52, label %else_53
@@ -116704,7 +116954,7 @@ loop_exit_3:
   %r105 = icmp eq i64 0, %r104
   br i1 %r105, label %then_55, label %else_56
 then_55:
-  %r106 = getelementptr [189 x i8], [189 x i8]* @.str.8459, i64 0, i64 0
+  %r106 = getelementptr [189 x i8], [189 x i8]* @.str.8526, i64 0, i64 0
   call void @nurl_eprintln(i8* %r106)
   call void @nurl_exit(i64 1)
   unreachable
@@ -116750,7 +117000,7 @@ and_end_68:
   %r118 = phi i1 [ 0, %end_66 ], [ %r117, %and_right_67 ]
   br i1 %r118, label %then_69, label %else_70
 then_69:
-  %r119 = getelementptr [42 x i8], [42 x i8]* @.str.8460, i64 0, i64 0
+  %r119 = getelementptr [42 x i8], [42 x i8]* @.str.8527, i64 0, i64 0
   call void @nurl_eprintln(i8* %r119)
   call void @nurl_exit(i64 1)
   unreachable
@@ -116768,7 +117018,7 @@ and_end_73:
   %r124 = phi i1 [ 0, %end_71 ], [ %r123, %and_right_72 ]
   br i1 %r124, label %then_74, label %else_75
 then_74:
-  %r125 = getelementptr [74 x i8], [74 x i8]* @.str.8461, i64 0, i64 0
+  %r125 = getelementptr [74 x i8], [74 x i8]* @.str.8528, i64 0, i64 0
   call void @nurl_eprintln(i8* %r125)
   call void @nurl_exit(i64 1)
   unreachable
@@ -116792,8 +117042,8 @@ end_79:
   store i8* %r130, i8** %r131
   %r133 = load i8*, i8** %r131
   call void @nurl_journal_push(i8* %r133)
-  %r134 = getelementptr [15 x i8], [15 x i8]* @.str.8462, i64 0, i64 0
-  %r135 = getelementptr [20 x i8], [20 x i8]* @.str.8463, i64 0, i64 0
+  %r134 = getelementptr [15 x i8], [15 x i8]* @.str.8529, i64 0, i64 0
+  %r135 = getelementptr [20 x i8], [20 x i8]* @.str.8530, i64 0, i64 0
   %r136 = call i8* @nurl_str_cat(i8* %r134, i8* %r135)
   %r138 = load i8*, i8** %r137
   call void @nurl_free(i8* %r138)
@@ -116824,8 +117074,8 @@ end_82:
   %r151 = call i64 @nurl_sym_new()
   store i64 %r151, i64* @g_struct_inst_syms
   %r152 = load i64, i64* @g_generic_syms
-  %r153 = getelementptr [19 x i8], [19 x i8]* @.str.8464, i64 0, i64 0
-  %r154 = getelementptr [2 x i8], [2 x i8]* @.str.8465, i64 0, i64 0
+  %r153 = getelementptr [19 x i8], [19 x i8]* @.str.8531, i64 0, i64 0
+  %r154 = getelementptr [2 x i8], [2 x i8]* @.str.8532, i64 0, i64 0
   call void @nurl_sym_def(i64 %r152, i8* %r153, i8* %r154)
   %r155 = call i64 @nurl_sym_new()
   store i64 %r155, i64* @g_impl_ret_syms
@@ -116884,12 +117134,12 @@ end_82:
   %r182 = call i64 @nurl_sym_new()
   store i64 %r182, i64* @g_fn_noreturn
   %r183 = load i64, i64* @g_fn_noreturn
-  %r184 = getelementptr [10 x i8], [10 x i8]* @.str.8466, i64 0, i64 0
-  %r185 = getelementptr [2 x i8], [2 x i8]* @.str.8467, i64 0, i64 0
+  %r184 = getelementptr [10 x i8], [10 x i8]* @.str.8533, i64 0, i64 0
+  %r185 = getelementptr [2 x i8], [2 x i8]* @.str.8534, i64 0, i64 0
   call void @nurl_sym_def(i64 %r183, i8* %r184, i8* %r185)
   %r186 = load i64, i64* @g_fn_noreturn
-  %r187 = getelementptr [11 x i8], [11 x i8]* @.str.8468, i64 0, i64 0
-  %r188 = getelementptr [2 x i8], [2 x i8]* @.str.8469, i64 0, i64 0
+  %r187 = getelementptr [11 x i8], [11 x i8]* @.str.8535, i64 0, i64 0
+  %r188 = getelementptr [2 x i8], [2 x i8]* @.str.8536, i64 0, i64 0
   call void @nurl_sym_def(i64 %r186, i8* %r187, i8* %r188)
   %r189 = call i64 @nurl_sym_new()
   store i64 %r189, i64* @g_loop_break_used
@@ -116988,20 +117238,20 @@ end_91:
   %r240 = icmp sgt i64 %r239, 0
   br i1 %r240, label %then_92, label %else_93
 then_92:
-  %r241 = getelementptr [24 x i8], [24 x i8]* @.str.8470, i64 0, i64 0
+  %r241 = getelementptr [24 x i8], [24 x i8]* @.str.8537, i64 0, i64 0
   %r242 = load i64, i64* @g_err_count
   %r243 = call i8* @nurl_str_int(i64 %r242)
-  %r244 = getelementptr [16 x i8], [16 x i8]* @.str.8471, i64 0, i64 0
+  %r244 = getelementptr [16 x i8], [16 x i8]* @.str.8538, i64 0, i64 0
   %r245 = call i8* @nurl_str_cat3(i8* %r241, i8* %r243, i8* %r244)
   call void @nurl_free(i8* %r243)
   %r246 = load i64, i64* @g_err_count
   %r247 = icmp sgt i64 %r246, 1
   br i1 %r247, label %then_95, label %else_96
 then_95:
-  %r248 = getelementptr [2 x i8], [2 x i8]* @.str.8472, i64 0, i64 0
+  %r248 = getelementptr [2 x i8], [2 x i8]* @.str.8539, i64 0, i64 0
   br label %end_97
 else_96:
-  %r249 = getelementptr [1 x i8], [1 x i8]* @.str.8473, i64 0, i64 0
+  %r249 = getelementptr [1 x i8], [1 x i8]* @.str.8540, i64 0, i64 0
   br label %end_97
 end_97:
   %r250 = phi i8* [ %r248, %then_95 ], [ %r249, %else_96 ]
@@ -117009,7 +117259,7 @@ end_97:
   call void @nurl_free(i8* %r245)
   call void @nurl_eprintln(i8* %r251)
   call void @nurl_free(i8* %r251)
-  %r252 = getelementptr [156 x i8], [156 x i8]* @.str.8474, i64 0, i64 0
+  %r252 = getelementptr [156 x i8], [156 x i8]* @.str.8541, i64 0, i64 0
   call void @nurl_eprintln(i8* %r252)
   call void @nurl_exit(i64 1)
   unreachable
@@ -117029,23 +117279,23 @@ end_94:
   %r256 = icmp sgt i64 %r255, 0
   br i1 %r256, label %then_98, label %else_99
 then_98:
-  %r257 = getelementptr [32 x i8], [32 x i8]* @.str.8475, i64 0, i64 0
+  %r257 = getelementptr [32 x i8], [32 x i8]* @.str.8542, i64 0, i64 0
   %r258 = load i64, i64* @g_bck_errors
   %r259 = call i8* @nurl_str_int(i64 %r258)
   %r260 = load i64, i64* @g_bck_errors
   %r261 = icmp sgt i64 %r260, 1
   br i1 %r261, label %then_101, label %else_102
 then_101:
-  %r262 = getelementptr [27 x i8], [27 x i8]* @.str.8476, i64 0, i64 0
+  %r262 = getelementptr [27 x i8], [27 x i8]* @.str.8543, i64 0, i64 0
   br label %end_103
 else_102:
-  %r263 = getelementptr [26 x i8], [26 x i8]* @.str.8477, i64 0, i64 0
+  %r263 = getelementptr [26 x i8], [26 x i8]* @.str.8544, i64 0, i64 0
   br label %end_103
 end_103:
   %r264 = phi i8* [ %r262, %then_101 ], [ %r263, %else_102 ]
   %r265 = call i8* @nurl_str_cat3(i8* %r257, i8* %r259, i8* %r264)
   call void @nurl_free(i8* %r259)
-  %r266 = getelementptr [39 x i8], [39 x i8]* @.str.8478, i64 0, i64 0
+  %r266 = getelementptr [39 x i8], [39 x i8]* @.str.8545, i64 0, i64 0
   %r267 = call i8* @nurl_str_cat(i8* %r265, i8* %r266)
   call void @nurl_free(i8* %r265)
   call void @nurl_eprintln(i8* %r267)
@@ -117161,46 +117411,46 @@ end_100:
   ret void
 }
 
-@.str.8439 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8440 = private unnamed_addr constant [10 x i8] c"--version\00"
-@.str.8441 = private unnamed_addr constant [3 x i8] c"-v\00"
-@.str.8442 = private unnamed_addr constant [2 x i8] c"\0A\00"
-@.str.8443 = private unnamed_addr constant [7 x i8] c"--help\00"
-@.str.8444 = private unnamed_addr constant [3 x i8] c"-h\00"
-@.str.8445 = private unnamed_addr constant [4 x i8] c"--g\00"
-@.str.8446 = private unnamed_addr constant [3 x i8] c"-g\00"
-@.str.8447 = private unnamed_addr constant [7 x i8] c"--lint\00"
-@.str.8448 = private unnamed_addr constant [11 x i8] c"--borrowck\00"
-@.str.8449 = private unnamed_addr constant [14 x i8] c"--no-borrowck\00"
-@.str.8450 = private unnamed_addr constant [18 x i8] c"--strict-borrowck\00"
-@.str.8451 = private unnamed_addr constant [15 x i8] c"--strict-arity\00"
-@.str.8452 = private unnamed_addr constant [18 x i8] c"--no-strict-arity\00"
-@.str.8453 = private unnamed_addr constant [19 x i8] c"--ffi-host-imports\00"
-@.str.8454 = private unnamed_addr constant [18 x i8] c"--no-cpu-dispatch\00"
-@.str.8455 = private unnamed_addr constant [9 x i8] c"--no-dce\00"
-@.str.8456 = private unnamed_addr constant [9 x i8] c"--split=\00"
-@.str.8457 = private unnamed_addr constant [13 x i8] c"--split-out=\00"
-@.str.8458 = private unnamed_addr constant [13 x i8] c"--split-min=\00"
-@.str.8459 = private unnamed_addr constant [189 x i8] c"usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch] [--no-dce] [--split=N --split-out=PREFIX] <file.nu>\00"
-@.str.8460 = private unnamed_addr constant [42 x i8] c"nurlc: --split=N needs --split-out=PREFIX\00"
-@.str.8461 = private unnamed_addr constant [74 x i8] c"nurlc: --split cannot be combined with --g (DWARF metadata is per-module)\00"
-@.str.8462 = private unnamed_addr constant [15 x i8] c"@@nurl-disable\00"
-@.str.8463 = private unnamed_addr constant [20 x i8] c"-autodrop-strings@@\00"
-@.str.8464 = private unnamed_addr constant [19 x i8] c"__deferred_count__\00"
-@.str.8465 = private unnamed_addr constant [2 x i8] c"0\00"
-@.str.8466 = private unnamed_addr constant [10 x i8] c"nurl_exit\00"
-@.str.8467 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.8468 = private unnamed_addr constant [11 x i8] c"nurl_panic\00"
-@.str.8469 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.8470 = private unnamed_addr constant [24 x i8] c"error: aborting due to \00"
-@.str.8471 = private unnamed_addr constant [16 x i8] c" previous error\00"
-@.str.8472 = private unnamed_addr constant [2 x i8] c"s\00"
-@.str.8473 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.8474 = private unnamed_addr constant [156 x i8] c"note: each error stopped its declaration \E2\80\94 later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.\00"
-@.str.8475 = private unnamed_addr constant [32 x i8] c"error: compilation aborted \E2\80\94 \00"
-@.str.8476 = private unnamed_addr constant [27 x i8] c" borrow-checker violations\00"
-@.str.8477 = private unnamed_addr constant [26 x i8] c" borrow-checker violation\00"
-@.str.8478 = private unnamed_addr constant [39 x i8] c" (re-run with --no-borrowck to bypass)\00"
+@.str.8506 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8507 = private unnamed_addr constant [10 x i8] c"--version\00"
+@.str.8508 = private unnamed_addr constant [3 x i8] c"-v\00"
+@.str.8509 = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.str.8510 = private unnamed_addr constant [7 x i8] c"--help\00"
+@.str.8511 = private unnamed_addr constant [3 x i8] c"-h\00"
+@.str.8512 = private unnamed_addr constant [4 x i8] c"--g\00"
+@.str.8513 = private unnamed_addr constant [3 x i8] c"-g\00"
+@.str.8514 = private unnamed_addr constant [7 x i8] c"--lint\00"
+@.str.8515 = private unnamed_addr constant [11 x i8] c"--borrowck\00"
+@.str.8516 = private unnamed_addr constant [14 x i8] c"--no-borrowck\00"
+@.str.8517 = private unnamed_addr constant [18 x i8] c"--strict-borrowck\00"
+@.str.8518 = private unnamed_addr constant [15 x i8] c"--strict-arity\00"
+@.str.8519 = private unnamed_addr constant [18 x i8] c"--no-strict-arity\00"
+@.str.8520 = private unnamed_addr constant [19 x i8] c"--ffi-host-imports\00"
+@.str.8521 = private unnamed_addr constant [18 x i8] c"--no-cpu-dispatch\00"
+@.str.8522 = private unnamed_addr constant [9 x i8] c"--no-dce\00"
+@.str.8523 = private unnamed_addr constant [9 x i8] c"--split=\00"
+@.str.8524 = private unnamed_addr constant [13 x i8] c"--split-out=\00"
+@.str.8525 = private unnamed_addr constant [13 x i8] c"--split-min=\00"
+@.str.8526 = private unnamed_addr constant [189 x i8] c"usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch] [--no-dce] [--split=N --split-out=PREFIX] <file.nu>\00"
+@.str.8527 = private unnamed_addr constant [42 x i8] c"nurlc: --split=N needs --split-out=PREFIX\00"
+@.str.8528 = private unnamed_addr constant [74 x i8] c"nurlc: --split cannot be combined with --g (DWARF metadata is per-module)\00"
+@.str.8529 = private unnamed_addr constant [15 x i8] c"@@nurl-disable\00"
+@.str.8530 = private unnamed_addr constant [20 x i8] c"-autodrop-strings@@\00"
+@.str.8531 = private unnamed_addr constant [19 x i8] c"__deferred_count__\00"
+@.str.8532 = private unnamed_addr constant [2 x i8] c"0\00"
+@.str.8533 = private unnamed_addr constant [10 x i8] c"nurl_exit\00"
+@.str.8534 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8535 = private unnamed_addr constant [11 x i8] c"nurl_panic\00"
+@.str.8536 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.8537 = private unnamed_addr constant [24 x i8] c"error: aborting due to \00"
+@.str.8538 = private unnamed_addr constant [16 x i8] c" previous error\00"
+@.str.8539 = private unnamed_addr constant [2 x i8] c"s\00"
+@.str.8540 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.8541 = private unnamed_addr constant [156 x i8] c"note: each error stopped its declaration \E2\80\94 later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.\00"
+@.str.8542 = private unnamed_addr constant [32 x i8] c"error: compilation aborted \E2\80\94 \00"
+@.str.8543 = private unnamed_addr constant [27 x i8] c" borrow-checker violations\00"
+@.str.8544 = private unnamed_addr constant [26 x i8] c" borrow-checker violation\00"
+@.str.8545 = private unnamed_addr constant [39 x i8] c" (re-run with --no-borrowck to bypass)\00"
 define i32 @main(i32 %argc, i8** %argv) {
 entry:
   call void @nurl_init(i32 %argc, i8** %argv)

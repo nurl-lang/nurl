@@ -10,6 +10,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`bench/pq.nu`** — the post-quantum stack measured, with the same-host
+  reference numbers (pq-crystals / sphincsplus, ref C and AVX2, dated) in
+  the header as the bar.
+
+- **`v256` sixteen-lane arithmetic** — `nurl_v256_{add16,sub16,mullo16,
+  mulhi16,sra16,bcast16}`; `mulhi16` is spelled as the widen-multiply-narrow
+  sequence LLVM pattern-matches back into `vpmulhw`.
+
+### Changed
+
+- **ML-KEM and ML-DSA: four-way noise samplers, bit-sliced CBD, vector
+  NTT** — PRF_η / ExpandS / ExpandMask run four nonce-streams per sponge;
+  CBD sums η-bit groups a word at a time instead of per bit; the ML-KEM
+  NTT's wide layers run sixteen Montgomery butterflies per operation,
+  bit-identical to the scalar arithmetic (the borrow in
+  `mulhi(x,y) − mulhi(t,q)` cannot happen, so ACVP byte-equality holds).
+  From the branch start: ML-KEM-768 keygen/encaps/decaps 39/42/60 → 31/32/39
+  µs, ML-DSA-44 sign 180 → 153 µs, ML-DSA-65 sign 312 → 273 µs.
+
+- **SLH-DSA now runs four hashes at a time, and beats the reference AVX2
+  implementation on every operation** (i7-5930K, µs/op, sphincsplus
+  `shake-avx2` built from source on the same host):
+
+  | | before | after | AVX2 ref | |
+  | --- | ---: | ---: | ---: | --- |
+  | 128f keygen / sign / verify | 2598 / 62085 / 3771 | 656 / 19807 / 1616 | 1104 / 25546 / 1894 | 1.2–1.7× faster |
+  | 128s keygen / sign / verify | 168156 / 1307537 / 1337 | 43200 / 325635 / 651 | 70857 / 544364 / 707 | 1.1–1.7× faster |
+  | 192f sign | 101442 | 31744 | — | 3.2× |
+  | 256f sign / verify | 214134 / 5475 | 58618 / 2239 | 83238 / 2786 | 1.4× / 1.2× faster |
+
+  Three changes, all structure, no algorithm: `shake256x4_block` in
+  `std/hash_sha3x4` (F/H/PRF always fit one rate block — one four-way
+  permutation, no sponge struct, no allocation, against ~90,000 hashes and
+  six allocations each per 128f signature before); WOTS+ chains four at a
+  time (equal-step lockstep in keygen/sign, per-lane entry points in verify
+  — a lane joins at its own start and idles before it, since the permutation
+  runs on all four lanes regardless); and FORS trees built bottom-up (leaves
+  and internal levels four at a time, the auth path extracted from the one
+  build instead of recomputing a sibling subtree per level). A per-call
+  `SlhCtx` scratch is threaded down the call chain, so concurrent signers
+  share nothing.
+
+  Oracle: SLH-DSA ACVP byte-exact (keyGen 60, sigGen 168, sigVer 168 — 0
+  failed), and four mutations of the new paths (chain-entry off-by-one,
+  FORS sibling without `^1`, pad domain byte, verify parent parity) each
+  caught.
+
+### Added
+
 - **`simd`: CPU-dispatched code generation (grammar v2.6)** —
   A function declaration may carry a leading `simd` prefix. nurlc then emits
   the body twice — `@f.base` for the baseline ISA and `@f.x86v3` with an

@@ -684,6 +684,74 @@ $ `stdlib/std/subtle.nu`
 
 // RejBoundedPoly (Algorithm 31): coefficients in [−η, η] from
 // SHAKE256(ρ' ‖ nonce), two candidates per byte.
+// Four RejBoundedPoly streams at once (nonces n0..n0+3, same ρ').
+// Rejection makes the lanes consume different amounts, so the group
+// squeezes until its last lane has 256 coefficients — the same shape
+// as __poly_uniform_x4, with the nibble sampler in place of the
+// 24-bit one. Writes polynomial g+w at r[off0 + (g+w)·256].
+@ __eta_reject * i32 r i off i ctr ( Vec u ) buf i blen i eta → i {
+    : *u bp ( vec_data [u] buf )
+    : ~ i c ctr
+    : ~ i pos 0
+    ~ & < c 256 < pos blen {
+        : i byte # i . bp pos
+        = pos + pos 1
+        : i c0 ( __coeff_from_halfbyte & byte 15 eta )
+        ? & != c0 100 < c 256 {
+            = . r + off c # i32 c0
+            = c + c 1
+        } {}
+        : i c1 ( __coeff_from_halfbyte >> byte 4 eta )
+        ? & != c1 100 < c 256 {
+            = . r + off c # i32 c1
+            = c + c 1
+        } {}
+    }
+    ^ c
+}
+
+@ __uniform_eta_x4 * i32 r i off0 ( Vec u ) rhop i n0 i count i eta → v {
+    : ~ i g 0
+    ~ < g count {
+        : i m1 ? < + g 1 count + g 1 - count 1
+        : i m2 ? < + g 2 count + g 2 - count 1
+        : i m3 ? < + g 3 count + g 3 - count 1
+        : *Sha3x4 h ( shake256x4_init )
+        ( sha3x4_absorb h rhop rhop rhop rhop )
+        : ( Vec u ) b0 ( vec_new [u] ) ( vec_push [u] b0 # u & + n0 g 255 ) ( vec_push [u] b0 # u & >> + n0 g 8 255 )
+        : ( Vec u ) b1 ( vec_new [u] ) ( vec_push [u] b1 # u & + n0 m1 255 ) ( vec_push [u] b1 # u & >> + n0 m1 8 255 )
+        : ( Vec u ) b2 ( vec_new [u] ) ( vec_push [u] b2 # u & + n0 m2 255 ) ( vec_push [u] b2 # u & >> + n0 m2 8 255 )
+        : ( Vec u ) b3 ( vec_new [u] ) ( vec_push [u] b3 # u & + n0 m3 255 ) ( vec_push [u] b3 # u & >> + n0 m3 8 255 )
+        ( sha3x4_absorb h b0 b1 b2 b3 )
+        ( vec_free [u] b0 ) ( vec_free [u] b1 ) ( vec_free [u] b2 ) ( vec_free [u] b3 )
+        : ( Vec u ) o0 ( vec_with_cap [u] 136 )
+        : ( Vec u ) o1 ( vec_with_cap [u] 136 )
+        : ( Vec u ) o2 ( vec_with_cap [u] 136 )
+        : ( Vec u ) o3 ( vec_with_cap [u] 136 )
+        : ~ i c0 0
+        : ~ i c1 0
+        : ~ i c2 0
+        : ~ i c3 0
+        ~ | | | < c0 256 < c1 256 < c2 256 < c3 256 {
+            : b z0 ( vec_set_len [u] o0 0 )
+            : b z1 ( vec_set_len [u] o1 0 )
+            : b z2 ( vec_set_len [u] o2 0 )
+            : b z3 ( vec_set_len [u] o3 0 )
+            ? ! & & & z0 z1 z2 z3 { = c0 256 = c1 256 = c2 256 = c3 256 } {
+                ( sha3x4_squeeze h 136 o0 o1 o2 o3 )
+                = c0 ( __eta_reject r + off0 * 256 g c0 o0 136 eta )
+                = c1 ( __eta_reject r + off0 * 256 m1 c1 o1 136 eta )
+                = c2 ( __eta_reject r + off0 * 256 m2 c2 o2 136 eta )
+                = c3 ( __eta_reject r + off0 * 256 m3 c3 o3 136 eta )
+            }
+        }
+        ( vec_free [u] o0 ) ( vec_free [u] o1 )
+        ( vec_free [u] o2 ) ( vec_free [u] o3 )
+        ( sha3x4_free h )
+        = g + g 4
+    }
+}
+
 @ __poly_uniform_eta * i32 r i off ( Vec u ) rhop i nonce i eta → v {
     : *Sha3 xof ( shake256_init )
     ( sha3_absorb xof rhop )
@@ -718,6 +786,44 @@ $ `stdlib/std/subtle.nu`
 
 // ExpandMask's per-polynomial half (Algorithm 34): a masking polynomial
 // with coefficients in (−γ1, γ1], unpacked straight from the stream.
+// Four ExpandMask streams at once: nonces κ..κ+3, fixed 32·zbits bytes
+// each — no rejection, so this is pure equal-length lockstep. Runs once
+// per signing attempt over the l mask polynomials, which makes it the
+// hottest sampler in the scheme: a rejected attempt pays it again.
+@ __gamma1_x4 * i32 r i off0 ( Vec u ) rhop i kappa i count i g1 i zbits → v {
+    : ~ i g 0
+    ~ < g count {
+        : i m1 ? < + g 1 count + g 1 - count 1
+        : i m2 ? < + g 2 count + g 2 - count 1
+        : i m3 ? < + g 3 count + g 3 - count 1
+        : *Sha3x4 h ( shake256x4_init )
+        ( sha3x4_absorb h rhop rhop rhop rhop )
+        : i n0 + kappa g
+        : i n1 + kappa m1
+        : i n2 + kappa m2
+        : i n3 + kappa m3
+        : ( Vec u ) b0 ( vec_new [u] ) ( vec_push [u] b0 # u & n0 255 ) ( vec_push [u] b0 # u & >> n0 8 255 )
+        : ( Vec u ) b1 ( vec_new [u] ) ( vec_push [u] b1 # u & n1 255 ) ( vec_push [u] b1 # u & >> n1 8 255 )
+        : ( Vec u ) b2 ( vec_new [u] ) ( vec_push [u] b2 # u & n2 255 ) ( vec_push [u] b2 # u & >> n2 8 255 )
+        : ( Vec u ) b3 ( vec_new [u] ) ( vec_push [u] b3 # u & n3 255 ) ( vec_push [u] b3 # u & >> n3 8 255 )
+        ( sha3x4_absorb h b0 b1 b2 b3 )
+        ( vec_free [u] b0 ) ( vec_free [u] b1 ) ( vec_free [u] b2 ) ( vec_free [u] b3 )
+        : ( Vec u ) o0 ( vec_with_cap [u] * 32 zbits )
+        : ( Vec u ) o1 ( vec_with_cap [u] * 32 zbits )
+        : ( Vec u ) o2 ( vec_with_cap [u] * 32 zbits )
+        : ( Vec u ) o3 ( vec_with_cap [u] * 32 zbits )
+        ( sha3x4_squeeze h * 32 zbits o0 o1 o2 o3 )
+        ( sha3x4_free h )
+        ( __bitunpack o0 0 zbits g1 r + off0 * 256 + g 0 )
+        ? < + g 1 count { ( __bitunpack o1 0 zbits g1 r + off0 * 256 + g 1 ) } {}
+        ? < + g 2 count { ( __bitunpack o2 0 zbits g1 r + off0 * 256 + g 2 ) } {}
+        ? < + g 3 count { ( __bitunpack o3 0 zbits g1 r + off0 * 256 + g 3 ) } {}
+        ( vec_free [u] o0 ) ( vec_free [u] o1 )
+        ( vec_free [u] o2 ) ( vec_free [u] o3 )
+        = g + g 4
+    }
+}
+
 @ __poly_uniform_gamma1 * i32 r i off ( Vec u ) rhop i nonce i g1 i zbits → v {
     : *Sha3 xof ( shake256_init )
     ( sha3_absorb xof rhop )
@@ -906,10 +1012,9 @@ simd @ mldsa_keygen_derand i level ( Vec u ) xi → *MldsaKeys {
     : ( Vec i32 ) s2 ( __md_poly_zero * 256 k )
     : *i32 s1p ( vec_data [i32] s1 )
     : *i32 s2p ( vec_data [i32] s2 )
+    ( __uniform_eta_x4 s1p 0 rhop 0 l . p eta )
+    ( __uniform_eta_x4 s2p 0 rhop l k . p eta )
     : ~ i i 0
-    ~ < i l { ( __poly_uniform_eta s1p * 256 i rhop i . p eta ) = i + i 1 }
-    = i 0
-    ~ < i k { ( __poly_uniform_eta s2p * 256 i rhop + i l . p eta ) = i + i 1 }
 
     // t ← NTT^-1(Â ∘ NTT(s1)) + s2
     : ( Vec i32 ) s1h ( __md_poly_zero * 256 l )
@@ -1085,11 +1190,7 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
         = tries + tries 1
 
         // y ← ExpandMask(ρ'', κ) ; w ← NTT^-1(Â ∘ NTT(y))
-        = i 0
-        ~ < i l {
-            ( __poly_uniform_gamma1 yp * 256 i rhopp + kappa i g1 . p zbits )
-            = i + i 1
-        }
+        ( __gamma1_x4 yp 0 rhopp kappa l g1 . p zbits )
         = i 0
         ~ < i * 256 l { = . yhp i . yp i = i + i 1 }
         = i 0
