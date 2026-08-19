@@ -57,7 +57,13 @@ $ `stdlib/std/bytes.nu`
 // The 24 ι round constants (FIPS 202 §3.2.5). Written as their
 // two's-complement i64 where they exceed 2^63-1: NURL has no hex
 // literals, and `# u64 -N` reinterprets the bit pattern.
-@ __keccak_rc → ( Vec u64 ) {
+//
+// Public because the four-way sponge in hash_sha3x4.nu needs the same
+// twenty-four values, and two transcriptions of a constant table are
+// two chances to get one wrong — the kind of divergence that shows up
+// as a single failing test vector at round 17 and nowhere else. The
+// caller owns the returned Vec.
+pub @ keccak_round_constants → ( Vec u64 ) {
     : ( Vec u64 ) v ( vec_with_cap [u64] 24 )
     : b _l ( vec_set_len [u64] v 24 )
     : *u64 p ( vec_data [u64] v )
@@ -177,7 +183,11 @@ $ `stdlib/std/bytes.nu`
 
 // ── The sponge ─────────────────────────────────────────────────────
 
-: Sha3 {
+// Public surface, made explicit (grammar v2.0). The file entered strict
+// mode when hash_sha3x4.nu needed `keccak_round_constants`; everything
+// marked here is what the header comment already documented as the API,
+// and everything left unmarked is now genuinely private to this file.
+pub : Sha3 {
     ( Vec u64 ) st  // 25 lanes
     ( Vec u64 ) scr  // 25-lane ping-pong buffer for the permutation
     ( Vec u64 ) rc  // ι constants
@@ -190,7 +200,7 @@ $ `stdlib/std/bytes.nu`
 // A sponge with an explicit rate and domain byte. `rate` is the block
 // size in bytes (200 - 2·capacity/8); `dom` is 6 for the SHA-3 digests
 // and 31 for the SHAKE XOFs.
-@ sha3_new i rate i dom → *Sha3 {
+pub @ sha3_new i rate i dom → *Sha3 {
     : *Sha3 h # *Sha3 ( nurl_alloc Z Sha3 )
     : ( Vec u64 ) st ( vec_with_cap [u64] 25 )
     : b _l ( vec_set_len [u64] st 25 )
@@ -201,7 +211,7 @@ $ `stdlib/std/bytes.nu`
     : ( Vec u64 ) scr ( vec_with_cap [u64] 25 )
     : b _s ( vec_set_len [u64] scr 25 )
     = . h scr scr
-    = . h rc ( __keccak_rc )
+    = . h rc ( keccak_round_constants )
     = . h rate rate
     = . h pos 0
     = . h dom dom
@@ -209,7 +219,7 @@ $ `stdlib/std/bytes.nu`
     ^ h
 }
 
-@ sha3_free * Sha3 h → v {
+pub @ sha3_free * Sha3 h → v {
     ( vec_free [u64] . h st )
     ( vec_free [u64] . h scr )
     ( vec_free [u64] . h rc )
@@ -260,7 +270,7 @@ $ `stdlib/std/bytes.nu`
     = . h pos pos
 }
 
-@ sha3_absorb * Sha3 h ( Vec u ) data → v {
+pub @ sha3_absorb * Sha3 h ( Vec u ) data → v {
     ? . h squeezing { ^ v } {}
     : i n ( vec_len [u] data )
     ? <= n 0 { ^ v } {}
@@ -286,7 +296,7 @@ $ `stdlib/std/bytes.nu`
 // same stream, so ( squeeze h 3 ) three times and ( squeeze h 9 ) once
 // return the same nine bytes — the property ML-KEM's rejection sampler
 // depends on.
-@ sha3_squeeze * Sha3 h i n → ( Vec u ) {
+pub @ sha3_squeeze * Sha3 h i n → ( Vec u ) {
     ? ! . h squeezing { ( __sha3_pad h ) } {}
     : ( Vec u ) out ( vec_with_cap [u] ? > n 0 n 1 )
     ? <= n 0 { ^ out } {}
@@ -334,18 +344,18 @@ $ `stdlib/std/bytes.nu`
     ^ out
 }
 
-@ sha3_224_pure ( Vec u ) data → ( Vec u ) { ^ ( __sha3_oneshot data 144 6 28 ) }
+pub @ sha3_224_pure ( Vec u ) data → ( Vec u ) { ^ ( __sha3_oneshot data 144 6 28 ) }
 
-@ sha3_256_pure ( Vec u ) data → ( Vec u ) { ^ ( __sha3_oneshot data 136 6 32 ) }
+pub @ sha3_256_pure ( Vec u ) data → ( Vec u ) { ^ ( __sha3_oneshot data 136 6 32 ) }
 
-@ sha3_384_pure ( Vec u ) data → ( Vec u ) { ^ ( __sha3_oneshot data 104 6 48 ) }
+pub @ sha3_384_pure ( Vec u ) data → ( Vec u ) { ^ ( __sha3_oneshot data 104 6 48 ) }
 
-@ sha3_512_pure ( Vec u ) data → ( Vec u ) { ^ ( __sha3_oneshot data 72 6 64 ) }
+pub @ sha3_512_pure ( Vec u ) data → ( Vec u ) { ^ ( __sha3_oneshot data 72 6 64 ) }
 
-@ shake128_pure ( Vec u ) data i outlen → ( Vec u ) { ^ ( __sha3_oneshot data 168 31 outlen ) }
+pub @ shake128_pure ( Vec u ) data i outlen → ( Vec u ) { ^ ( __sha3_oneshot data 168 31 outlen ) }
 
-@ shake256_pure ( Vec u ) data i outlen → ( Vec u ) { ^ ( __sha3_oneshot data 136 31 outlen ) }
+pub @ shake256_pure ( Vec u ) data i outlen → ( Vec u ) { ^ ( __sha3_oneshot data 136 31 outlen ) }
 
-@ shake128_init → *Sha3 { ^ ( sha3_new 168 31 ) }
+pub @ shake128_init → *Sha3 { ^ ( sha3_new 168 31 ) }
 
-@ shake256_init → *Sha3 { ^ ( sha3_new 136 31 ) }
+pub @ shake256_init → *Sha3 { ^ ( sha3_new 136 31 ) }

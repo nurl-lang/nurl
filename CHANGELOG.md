@@ -33,6 +33,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/build_wasm` + `/build_target` API endpoints all pass it automatically.
   `--g` also suppresses cloning, since a `!DISubprogram` binds to one function.
 
+- **`v256`: a 256-bit vector type, and `std/hash_sha3x4` — four Keccak
+  sponges at once** —
+  `v256` is `<4 x i64>`, four 64-bit lanes, the shape four interleaved Keccak
+  states want. Unlike `v128` it is not baseline anywhere, and that is the
+  point: LLVM legalises it into paired 128-bit operations on any target, so a
+  `v256` kernel is *correct* everywhere and *fast* where AVX2 exists — put it
+  behind `simd` and the wide clone gets real `vpxor`/`vpsllq`/`vpandn`.
+  Primitives: `nurl_v256_{zero,ld,st,set64,bcast64,get64,put64,xor,and,or,
+  andnot,not,rotl64}`. Verified to lower on x86-64, AArch64, RISC-V and wasm32.
+
+  `stdlib/std/hash_sha3x4.nu` builds Keccak-f[1600]×4 and a four-way sponge
+  (`shake128x4_init`, `shake256x4_init`, `sha3x4_absorb`, `sha3x4_squeeze`)
+  on it. Measured **3.32× per stream** against the scalar sponge
+  (2254 → 678 ns for a 34-byte seed and 504 squeezed bytes). This is the
+  kernel every production PQ implementation's AVX2 win is actually made of:
+  on this host SPHINCS+'s AVX2 build generates four WOTS+ public keys in the
+  time its reference C generates one.
+
+  Correctness is differential against the scalar sponge that NIST's vectors
+  already cover, one lane at a time, over 16 cases spanning both rates, both
+  domain bytes, empty/short/block-straddling inputs and outputs, and
+  absorb-in-pieces + squeeze-resume. Eight mutations of the permutation and
+  the sponge plumbing were each caught.
+
+- **`std/hash_sha3` now declares its public surface** — the twelve documented
+  API entries and the `Sha3` type carry `pub`; everything else in the file is
+  private to it, as the header comment always said. `keccak_round_constants`
+  is public so the four-way sponge shares one transcription of the ι table
+  rather than keeping a second copy that could drift.
+
 ### Changed
 
 - **A module containing a `simd`-marked function is no longer partitioned by

@@ -86,7 +86,7 @@
 : i TT_CONTINUE 49  // `continue` — jump to the innermost loop's condition
 
 // `simd` — the CPU-dispatch prefix on a function declaration (grammar
-// v2.5), classified by the lexer exactly like `pub`. Marks a function
+// v2.6), classified by the lexer exactly like `pub`. Marks a function
 // worth compiling twice: once for the baseline ISA and once for a wider
 // one, with a runtime CPUID check picking between them. See
 // emit_multiversion for why this is opt-in and coarse-grained.
@@ -335,6 +335,7 @@
     // at the IR boundary. Listed here so it does not fall through to
     // the named-type default and become the phantom type `%v128`.
     ? ( seq ty `v128` ) `v128`
+    ? ( seq ty `v256` ) `v256`
     ( nurl_str_cat `%` ty )
 }
 
@@ -451,6 +452,21 @@
     // (stdlib/std/simd.nu), because `+` on a vector must say WHICH lane
     // width it adds and an operator cannot; the primitive names do.
     ? ( seq t `v128` ) { ^ # s ( nurl_strdup `<4 x i32>` ) } {}
+    // `v256` — the same idea one register wider, and carried as
+    // `<4 x i64>` because the one kernel that needs 256 bits at all
+    // needs 64-bit lanes: four independent Keccak states advanced in
+    // lockstep, which is how every production ML-KEM / ML-DSA /
+    // SLH-DSA implementation generates its matrix, its noise and its
+    // WOTS+ chains.
+    //
+    // Unlike `v128`, 256 bits is NOT baseline anywhere. That is the
+    // point rather than a problem: a `v256` kernel is correct on any
+    // target, because LLVM legalises `<4 x i64>` into whatever the
+    // machine has (two SSE2 registers on baseline x86-64, two NEON
+    // ones on AArch64) — it is only FAST where AVX2 exists. Put the
+    // kernel behind the `simd` prefix (§3.3b) and the wide clone gets
+    // real `vpxor`/`vpsllq` while the baseline clone keeps working.
+    ? ( seq t `v256` ) { ^ # s ( nurl_strdup `<4 x i64>` ) } {}
     : i tl ( nurl_str_len t )
     : ~ i p 0
     ~ < p tl {
@@ -1880,6 +1896,10 @@
 // set when the parser consumes a TT_SIMD ahead of a declaration, read
 // and cleared by gen_fn_decl_concrete at the matching `@`.
 : ~ i g_pending_simd 0
+
+// Set by emit_multiversion the first time it runs. The splitter reads
+// it and declines to partition the module — see split_emit_module.
+: ~ i g_have_simd_fn 0
 
 // Which wider ISA the `simd` prefix dispatches to. 1 = x86-64-v3
 // (AVX2 + BMI2 + FMA), 0 = no dispatch, emit the function once.
@@ -6217,6 +6237,13 @@
                 == & # i . idp 1 255 49
                 == & # i . idp 2 255 50
                 == & # i . idp 3 255 56 {
+                    = ttype TT_TYPE_KW
+                } {}
+                // `v256` — same rule, one register wider.
+                ? & & & == & # i . idp 0 255 118
+                == & # i . idp 1 255 50
+                == & # i . idp 2 255 53
+                == & # i . idp 3 255 54 {
                     = ttype TT_TYPE_KW
                 } {}
                 // `simd` — the CPU-dispatch prefix, classified here for
@@ -21695,7 +21722,7 @@
     }
 }
 
-// ── CPU dispatch: the `simd` prefix (grammar v2.5) ─────────────────
+// ── CPU dispatch: the `simd` prefix (grammar v2.6) ─────────────────
 //
 // A `simd @ f …` is emitted three times: the body under `@f.base`,
 // the same body under `@f.x86v3` carrying an x86-64-v3 target-features
@@ -21732,6 +21759,7 @@
     ? < bi 0 { ( emit_hoisted fn_ir ) ^ v } {}
     : s body ( nurl_str_slice fn_ir bi - ( strlen fn_ir ) bi )
     : b is_void ( seq ret_ll `void` )
+    = g_have_simd_fn 1
 
     : s hdr_b ( nurl_str_cat ( nurl_str_cat3 `define ` ret_ll ` @` )
     ( nurl_str_cat3 lname `.base(` ( nurl_str_cat params `) {` ) ) )
@@ -24611,6 +24639,111 @@
     ( emit `declare i32 @llvm.fshr.i32(i32, i32, i32)` )
     ( emit `declare i64 @llvm.fshl.i64(i64, i64, i64)` )
     ( emit `declare i64 @llvm.fshr.i64(i64, i64, i64)` )
+
+    // ── v256: four 64-bit lanes ───────────────────────────────────
+    //
+    // A deliberately small set — everything Keccak-f1600 x4 needs and
+    // nothing else. The permutation is xor / rotate / and-not over
+    // 64-bit lanes, so that is exactly what is here; there is no add,
+    // no compare and no shuffle, because no caller has needed one and
+    // an unused primitive is a maintenance cost with no user to
+    // justify its lowering being checked on four architectures.
+    //
+    // The carrier is `<4 x i64>` (see nurl_llty). On a machine without
+    // AVX2 every one of these legalises into a pair of 128-bit
+    // operations, which is correct and roughly scalar speed — the
+    // reason a v256 kernel is safe to write unconditionally and worth
+    // putting behind the `simd` prefix.
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_zero() alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  ret <4 x i64> zeroinitializer` )
+    ( emit `}` )
+    // align 1: a NURL buffer comes from malloc and a slice into one is
+    // unaligned by construction. On x86 and AArch64 the unaligned
+    // vector load is the same instruction as the aligned one.
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_ld(i8* %p) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %wl.v = load <4 x i64>, i8* %p, align 1` )
+    ( emit `  ret <4 x i64> %wl.v` )
+    ( emit `}` )
+    ( emit `define linkonce_odr void @nurl_v256_st(i8* %p, <4 x i64> %v) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  store <4 x i64> %v, i8* %p, align 1` )
+    ( emit `  ret void` )
+    ( emit `}` )
+    // Lane 0 first, i.e. little-endian memory order: `set64 a b c d`
+    // then `st` writes a, b, c, d.
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_set64(i64 %a, i64 %b, i64 %c, i64 %d) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %ws.0 = insertelement <4 x i64> undef,  i64 %a, i32 0` )
+    ( emit `  %ws.1 = insertelement <4 x i64> %ws.0, i64 %b, i32 1` )
+    ( emit `  %ws.2 = insertelement <4 x i64> %ws.1, i64 %c, i32 2` )
+    ( emit `  %ws.3 = insertelement <4 x i64> %ws.2, i64 %d, i32 3` )
+    ( emit `  ret <4 x i64> %ws.3` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_bcast64(i64 %x) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %wb.0 = insertelement <4 x i64> undef, i64 %x, i32 0` )
+    ( emit `  %wb.s = shufflevector <4 x i64> %wb.0, <4 x i64> undef, <4 x i32> zeroinitializer` )
+    ( emit `  ret <4 x i64> %wb.s` )
+    ( emit `}` )
+    // The index is masked rather than trusted: a variable extract is
+    // legal IR but an out-of-range one is poison, and a lane index
+    // computed from a loop counter is exactly where that would come
+    // from.
+    ( emit `define linkonce_odr i64 @nurl_v256_get64(<4 x i64> %v, i64 %i) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %wg.i = and i64 %i, 3` )
+    ( emit `  %wg.r = extractelement <4 x i64> %v, i64 %wg.i` )
+    ( emit `  ret i64 %wg.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_put64(<4 x i64> %v, i64 %i, i64 %x) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %wp.i = and i64 %i, 3` )
+    ( emit `  %wp.r = insertelement <4 x i64> %v, i64 %x, i64 %wp.i` )
+    ( emit `  ret <4 x i64> %wp.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_xor(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %wx.r = xor <4 x i64> %a, %b` )
+    ( emit `  ret <4 x i64> %wx.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_and(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %wa.r = and <4 x i64> %a, %b` )
+    ( emit `  ret <4 x i64> %wa.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_or(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %wo.r = or <4 x i64> %a, %b` )
+    ( emit `  ret <4 x i64> %wo.r` )
+    ( emit `}` )
+    // (~a) & b — Keccak's chi step, and the reason `not` alone is not
+    // enough: on AVX2 this pair is the single instruction `vpandn`.
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_andnot(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %wn.n = xor <4 x i64> %a, <i64 -1, i64 -1, i64 -1, i64 -1>` )
+    ( emit `  %wn.r = and <4 x i64> %wn.n, %b` )
+    ( emit `  ret <4 x i64> %wn.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_not(<4 x i64> %a) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %wt.r = xor <4 x i64> %a, <i64 -1, i64 -1, i64 -1, i64 -1>` )
+    ( emit `  ret <4 x i64> %wt.r` )
+    ( emit `}` )
+    // Rotate every lane left by the same amount. `@llvm.fshl` is a
+    // funnel shift on every target and becomes a rotate wherever the
+    // ISA has one; AVX2 has no 64-bit rotate, so it lowers to
+    // vpsllq/vpsrlq/vpor, which is still one dependency step.
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_rotl64(<4 x i64> %a, i64 %n) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %wr.m = and i64 %n, 63` )
+    ( emit `  %wr.0 = insertelement <4 x i64> undef, i64 %wr.m, i32 0` )
+    ( emit `  %wr.s = shufflevector <4 x i64> %wr.0, <4 x i64> undef, <4 x i32> zeroinitializer` )
+    ( emit `  %wr.r = call <4 x i64> @llvm.fshl.v4i64(<4 x i64> %a, <4 x i64> %a, <4 x i64> %wr.s)` )
+    ( emit `  ret <4 x i64> %wr.r` )
+    ( emit `}` )
+    ( emit `declare <4 x i64> @llvm.fshl.v4i64(<4 x i64>, <4 x i64>, <4 x i64>)` )
 }
 
 // Register the SIMD + wide-arithmetic primitives in the symbol table,
@@ -24645,6 +24778,19 @@
     ( nurl_sym_def syms `nurl_v128_eqmask8` `u64` )
     ( nurl_sym_def syms `nurl_v128_ltmask8` `u64` )
     ( nurl_sym_def syms `nurl_v128_lower8` `v128` )
+    ( nurl_sym_def syms `nurl_v256_zero` `v256` )
+    ( nurl_sym_def syms `nurl_v256_ld` `v256` )
+    ( nurl_sym_def syms `nurl_v256_st` `void` )
+    ( nurl_sym_def syms `nurl_v256_set64` `v256` )
+    ( nurl_sym_def syms `nurl_v256_bcast64` `v256` )
+    ( nurl_sym_def syms `nurl_v256_get64` `u64` )
+    ( nurl_sym_def syms `nurl_v256_put64` `v256` )
+    ( nurl_sym_def syms `nurl_v256_xor` `v256` )
+    ( nurl_sym_def syms `nurl_v256_and` `v256` )
+    ( nurl_sym_def syms `nurl_v256_or` `v256` )
+    ( nurl_sym_def syms `nurl_v256_andnot` `v256` )
+    ( nurl_sym_def syms `nurl_v256_not` `v256` )
+    ( nurl_sym_def syms `nurl_v256_rotl64` `v256` )
     ( nurl_sym_def syms `nurl_ctz` `u64` )
     ( nurl_sym_def syms `nurl_clz` `u64` )
     ( nurl_sym_def syms `nurl_popcnt` `u64` )
@@ -24790,7 +24936,7 @@
     ( __emit_rt_decl syms `declare i8*  @nurl_zalloc(i64)` )
     ( __emit_rt_decl syms `declare i8*  @nurl_realloc(i8*, i64)` )
     ( __emit_rt_decl syms `declare void @nurl_free(i8*)` )
-    // CPU dispatch for the `simd` prefix (grammar v2.5). Cached in the
+    // CPU dispatch for the `simd` prefix (grammar v2.6). Cached in the
     // runtime and answered from a constructor, so the dispatcher a
     // marked function grows is a load, a test and a branch the predictor
     // gets right every time. Always declared: with no marked function in
@@ -27019,7 +27165,7 @@
                     // consumed by vis_record_fn / vis_take_pending_pub at the
                     // matching @-decl. Pre-step BEFORE reading tt so the dispatch
                     // ternary chain below sees the post-pub token.
-                    // Grammar v2.5 adds `simd`, and the two may appear in either
+                    // Grammar v2.6 adds `simd`, and the two may appear in either
                     // order — hence a loop rather than two sequential tests.
                     ~ | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD
                     { ? == ( nurl_lex_type lex ) TT_PUB
@@ -27452,7 +27598,7 @@
     // flag is read-and-cleared by vis_take_pending_pub at the @-
     // decl site (gen_fn_decl). Other decl kinds parse the prefix
     // for forward-compat but enforcement is fn-only in v2.0.
-    // Grammar v2.5 adds the `simd` CPU-dispatch prefix alongside `pub`;
+    // Grammar v2.6 adds the `simd` CPU-dispatch prefix alongside `pub`;
     // both are optional and order-independent, so consume whatever run
     // of them precedes the declaration token.
     ~ | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD
@@ -27813,6 +27959,28 @@
 // processes cost more to start than they save.
 @ __sp_parts i mlen → i {
     ? == 0 g_split_max { ^ 0 } {}
+    // A module holding a `simd`-marked function is not partitioned.
+    // Splitting costs run speed everywhere (the note above measures
+    // 3.4% on a self-compile), but on a multiversioned function it
+    // costs an order more, because the whole point of the wide clone is
+    // that its callees are inlined INTO it and vectorised there — and
+    // a callee in another part is a callee ThinLTO has to import back
+    // across a boundary that did not have to exist.
+    //
+    // Measured, ML-DSA-65 sign on this module (i7-5930K, us/op):
+    //
+    //     no split                     352      <- what the prefix buys
+    //     split x3                     509
+    //     split x3, no -plugin-opt,O3  422
+    //     unmarked, either way        ~600
+    //
+    // So the split gives back most of a 1.7x win to save 7 s of cold
+    // build. The prefix is an explicit statement that this module's
+    // code generation is what matters; honour it. The cost lands only
+    // on programs that actually use marked code, and the "no parts
+    // written" answer is one the drivers already handle — it is the
+    // same one a module too small to split gives.
+    ? != 0 g_have_simd_fn { ^ 0 } {}
     : i want / mlen g_split_min
     : ~ i n g_split_max
     ? < want n { = n want } {}
