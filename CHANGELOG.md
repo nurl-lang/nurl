@@ -57,6 +57,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   absorb-in-pieces + squeeze-resume. Eight mutations of the permutation and
   the sponge plumbing were each caught.
 
+- **ML-KEM and ML-DSA generate their matrices four cells at a time** —
+  `gen_matrix` (FIPS 203) and `ExpandA` (FIPS 204) expand k*k / k*l
+  independent SHAKE128 streams that differ only in two trailing index bytes,
+  which is exactly what the four-way sponge is for. Rejection makes the four
+  lanes consume different numbers of bytes, so each group runs until its last
+  lane has 256 coefficients and the finished lanes stop reading — wasted
+  squeezing that is still far cheaper than four separate sponges, because the
+  four share one permutation and the permutation is the cost. ML-DSA's three
+  copies of the ExpandA loop (keygen, sign, verify) are now one
+  `__md_expand_a`: a matrix that disagreed between signing and verifying
+  would be a silent interoperability failure, not a crash.
+
 - **`std/hash_sha3` now declares its public surface** — the twelve documented
   API entries and the `Sha3` type carry `pub`; everything else in the file is
   private to it, as the header comment always said. `keccak_round_constants`
@@ -77,15 +89,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   @ 3.5 GHz, µs/op, no algorithm changed — NIST ACVP vectors still pass
   byte-exactly: ML-KEM 180, ML-DSA 615, SLH-DSA 396):
 
-  | | before | after | |
-  | --- | ---: | ---: | ---: |
-  | ML-KEM-768 keygen / encaps / decaps | 52 / 55 / 69 | 46 / 53 / 57 | 1.13× / 1.04× / 1.21× |
-  | ML-KEM-1024 keygen | 90 | 71 | 1.27× |
-  | ML-DSA-44 sign / verify | 404 / 112 | 224 / 77 | 1.80× / 1.45× |
-  | ML-DSA-65 keygen / sign / verify | 184 / 644 / 161 | 147 / 346 / 141 | 1.25× / 1.86× / 1.14× |
-  | ML-DSA-87 sign | 699 | 428 | 1.63× |
-  | SLH-DSA-128f keygen / sign | 3308 / 70728 | 2664 / 63109 | 1.24× / 1.12× |
-  | SLH-DSA-256f keygen | 13802 | 10235 | 1.35× |
+  | | before | after | speedup | AVX2 ref | gap now |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | ML-KEM-512 keygen / encaps / decaps | 33 / 36 / 43 | 25 / 27 / 33 | 1.3× | 8.1 / 7.7 / 8.0 | ~3.5× |
+  | ML-KEM-768 keygen / encaps / decaps | 52 / 55 / 69 | 41 / 43 / 50 | 1.27–1.38× | 11.8 / 11.7 / 12.5 | 3.5–4.0× |
+  | ML-KEM-1024 keygen / encaps / decaps | 90 / 83 / 98 | 62 / 59 / 68 | ~1.44× | 16.2 / 16.6 / 17.9 | ~3.7× |
+  | ML-DSA-44 keygen / sign / verify | 94 / 404 / 112 | 56 / 177 / 53 | 1.68 / 2.28 / 2.11× | | |
+  | ML-DSA-65 keygen / sign / verify | 184 / 644 / 161 | 105 / 304 / 82 | 1.75 / 2.12 / 1.96× | 44 / 113 / 45 | 2.4 / 2.7 / **1.8×** |
+  | ML-DSA-87 keygen / sign / verify | 255 / 699 / 291 | 127 / 393 / 120 | 2.0 / 1.78 / 2.4× | | |
+  | SLH-DSA-128f keygen / sign | 3308 / 70728 | 2728 / 68176 | 1.21 / 1.04× | 1104 / 25546 | 2.5 / 2.7× |
+
+  SLH-DSA still runs one Keccak at a time: its WOTS+ and FORS subtrees are
+  four-way parallel too, but wiring them up is a larger change than the two
+  matrix expansions above and is not in this entry.
 
 ### Fixed
 

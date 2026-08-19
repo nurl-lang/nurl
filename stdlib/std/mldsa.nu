@@ -51,6 +51,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash_sha3.nu`
+$ `stdlib/std/hash_sha3x4.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/hash_sha512.nu`
 $ `stdlib/std/random.nu`
@@ -558,6 +559,25 @@ $ `stdlib/std/subtle.nu`
 // RejNTTPoly (FIPS 204 Algorithm 30): coefficients uniform in [0, q)
 // from SHAKE128(ρ ‖ s ‖ r), three bytes per candidate with the top bit
 // masked off. Rejection depends only on ρ, which is public.
+// Rejection sampling over one squeezed block (FIPS 204 Algorithm 30).
+// Three bytes give one 23-bit candidate; anything at or above q is
+// dropped. Shared by the one-at-a-time and four-at-a-time samplers so
+// the two cannot disagree about what a block yields.
+@ __rej_uniform_q * i32 r i off i ctr ( Vec u ) buf i blen → i {
+    : *u bp ( vec_data [u] buf )
+    : ~ i c ctr
+    : ~ i pos 0
+    ~ & < c 256 <= + pos 3 blen {
+        : i z | | # i . bp pos << # i . bp + pos 1 8 << & # i . bp + pos 2 127 16
+        = pos + pos 3
+        ? < z 8380417 {
+            = . r + off c # i32 z
+            = c + c 1
+        } {}
+    }
+    ^ c
+}
+
 @ __poly_uniform * i32 r i off ( Vec u ) rho i x1 i x2 → v {
     : *Sha3 xof ( shake128_init )
     ( sha3_absorb xof rho )
@@ -569,19 +589,86 @@ $ `stdlib/std/subtle.nu`
     : ~ i ctr 0
     ~ < ctr 256 {
         : ( Vec u ) buf ( sha3_squeeze xof 168 )
-        : *u bp ( vec_data [u] buf )
-        : ~ i pos 0
-        ~ & < ctr 256 <= + pos 3 168 {
-            : i z | | # i . bp pos << # i . bp + pos 1 8 << & # i . bp + pos 2 127 16
-            = pos + pos 3
-            ? < z 8380417 {
-                = . r + off ctr # i32 z
-                = ctr + ctr 1
-            } {}
-        }
+        = ctr ( __rej_uniform_q r off ctr buf 168 )
         ( vec_free [u] buf )
     }
     ( sha3_free xof )
+}
+
+// The two index bytes of cell `c` of the k×l matrix: ρ‖s‖r, column
+// before row, as FIPS 204 §3.7 writes ExpandA.
+@ __md_a_idx i l i c → ( Vec u ) {
+    : ( Vec u ) v ( vec_new [u] )
+    ( vec_push [u] v # u % c l )
+    ( vec_push [u] v # u / c l )
+    ^ v
+}
+
+// Four cells of Â at once, on the four-way sponge.
+//
+// Same shape as ML-KEM's matrix: independent SHAKE128 streams differing
+// only in two trailing bytes, and rejection makes each consume a
+// different number of them, so the loop runs until the last lane has
+// its 256 coefficients. See stdlib/std/hash_sha3x4.nu.
+@ __poly_uniform_x4 * i32 r ( Vec u ) rho i l i c0 → v {
+    : *Sha3x4 xof ( shake128x4_init )
+    ( sha3x4_absorb xof rho rho rho rho )
+    : ( Vec u ) x0 ( __md_a_idx l + c0 0 )
+    : ( Vec u ) x1 ( __md_a_idx l + c0 1 )
+    : ( Vec u ) x2 ( __md_a_idx l + c0 2 )
+    : ( Vec u ) x3 ( __md_a_idx l + c0 3 )
+    ( sha3x4_absorb xof x0 x1 x2 x3 )
+    ( vec_free [u] x0 ) ( vec_free [u] x1 )
+    ( vec_free [u] x2 ) ( vec_free [u] x3 )
+
+    : ( Vec u ) b0 ( vec_with_cap [u] 168 )
+    : ( Vec u ) b1 ( vec_with_cap [u] 168 )
+    : ( Vec u ) b2 ( vec_with_cap [u] 168 )
+    : ( Vec u ) b3 ( vec_with_cap [u] 168 )
+    : ~ i n0 0
+    : ~ i n1 0
+    : ~ i n2 0
+    : ~ i n3 0
+    ~ | | | < n0 256 < n1 256 < n2 256 < n3 256 {
+        : b z0 ( vec_set_len [u] b0 0 )
+        : b z1 ( vec_set_len [u] b1 0 )
+        : b z2 ( vec_set_len [u] b2 0 )
+        : b z3 ( vec_set_len [u] b3 0 )
+        ? ! & & & z0 z1 z2 z3 { = n0 256 = n1 256 = n2 256 = n3 256 } {
+            ( sha3x4_squeeze xof 168 b0 b1 b2 b3 )
+            = n0 ( __rej_uniform_q r * 256 + c0 0 n0 b0 168 )
+            = n1 ( __rej_uniform_q r * 256 + c0 1 n1 b1 168 )
+            = n2 ( __rej_uniform_q r * 256 + c0 2 n2 b2 168 )
+            = n3 ( __rej_uniform_q r * 256 + c0 3 n3 b3 168 )
+        }
+    }
+    ( vec_free [u] b0 ) ( vec_free [u] b1 )
+    ( vec_free [u] b2 ) ( vec_free [u] b3 )
+    ( sha3x4_free xof )
+}
+
+// ExpandA (FIPS 204 §3.7): the whole k×l matrix from ρ.
+//
+// One function, three callers — keygen, sign and verify each built the
+// same nested loop, and a matrix that disagreed between signing and
+// verifying would be a silent interoperability failure rather than a
+// crash. Cell c is row c/l, column c%l, which walks the same cells in
+// the same order and writes the same offsets the loops did.
+//
+// k·l is 16, 30 or 56, so ML-DSA-65 leaves two cells for the scalar
+// sampler after the groups of four.
+@ __md_expand_a ( Vec i32 ) a ( Vec u ) rho i k i l → v {
+    : *i32 ap ( vec_data [i32] a )
+    : i n * k l
+    : ~ i c 0
+    ~ <= + c 4 n {
+        ( __poly_uniform_x4 ap rho l c )
+        = c + c 4
+    }
+    ~ < c n {
+        ( __poly_uniform ap * 256 c rho % c l / c l )
+        = c + c 1
+    }
 }
 
 // CoeffFromHalfByte (Algorithm 15) — the η-bounded sampler's inner map.
@@ -811,16 +898,8 @@ simd @ mldsa_keygen_derand i level ( Vec u ) xi → *MldsaKeys {
 
     // Â ← ExpandA(ρ) — the seed suffix is (column, row), in that order
     : ( Vec i32 ) a ( __md_poly_zero * 256 * k l )
+    ( __md_expand_a a rho k l )
     : *i32 ap ( vec_data [i32] a )
-    : ~ i r 0
-    ~ < r k {
-        : ~ i s 0
-        ~ < s l {
-            ( __poly_uniform ap * 256 + * r l s rho s r )
-            = s + s 1
-        }
-        = r + r 1
-    }
 
     // (s1, s2) ← ExpandS(ρ')
     : ( Vec i32 ) s1 ( __md_poly_zero * 256 l )
@@ -965,13 +1044,8 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
     ~ < i k { ( __md_ntt t0p * 256 i zp ) = i + i 1 }
 
     : ( Vec i32 ) a ( __md_poly_zero * 256 * k l )
+    ( __md_expand_a a rho k l )
     : *i32 ap ( vec_data [i32] a )
-    : ~ i r 0
-    ~ < r k {
-        : ~ i s 0
-        ~ < s l { ( __poly_uniform ap * 256 + * r l s rho s r ) = s + s 1 }
-        = r + r 1
-    }
 
     // ρ'' ← H(K ‖ rnd ‖ μ, 64)
     : *Sha3 hr ( shake256_init )
@@ -1197,13 +1271,8 @@ simd @ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
 
     ? ok {
         : ( Vec i32 ) a ( __md_poly_zero * 256 * k l )
+        ( __md_expand_a a rho k l )
         : *i32 ap ( vec_data [i32] a )
-        : ~ i r 0
-        ~ < r k {
-            : ~ i s 0
-            ~ < s l { ( __poly_uniform ap * 256 + * r l s rho s r ) = s + s 1 }
-            = r + r 1
-        }
         : ( Vec i32 ) cp ( __md_poly_zero 256 )
         : *i32 cpp ( vec_data [i32] cp )
         ( __poly_challenge cpp 0 ctilde . p tau )
