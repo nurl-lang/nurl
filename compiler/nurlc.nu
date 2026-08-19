@@ -85,6 +85,13 @@
 : i TT_BREAK 48  // `break`    — leave the innermost loop
 : i TT_CONTINUE 49  // `continue` — jump to the innermost loop's condition
 
+// `simd` — the CPU-dispatch prefix on a function declaration (grammar
+// v2.6), classified by the lexer exactly like `pub`. Marks a function
+// worth compiling twice: once for the baseline ISA and once for a wider
+// one, with a runtime CPUID check picking between them. See
+// emit_multiversion for why this is opt-in and coarse-grained.
+: i TT_SIMD 50
+
 // ── Abort helpers ─────────────────────────────────────────────────
 
 // Multi-error mode (rustc-style): while parse_program's per-declaration
@@ -1869,6 +1876,26 @@
 : ~ i g_pending_pub 0
 : ~ i g_vis_syms 0
 
+// g_pending_simd is the `simd` prefix's counterpart to g_pending_pub:
+// set when the parser consumes a TT_SIMD ahead of a declaration, read
+// and cleared by gen_fn_decl_concrete at the matching `@`.
+: ~ i g_pending_simd 0
+
+// Set by emit_multiversion the first time it runs. The splitter reads
+// it and declines to partition the module — see split_emit_module.
+: ~ i g_have_simd_fn 0
+
+// Which wider ISA the `simd` prefix dispatches to. 1 = x86-64-v3
+// (AVX2 + BMI2 + FMA), 0 = no dispatch, emit the function once.
+//
+// nurlc emits no `target triple` — the same IR is handed to clang for
+// every target — so the feature string cannot be inferred here. It is
+// the caller's job to turn dispatch off when the target is not x86-64,
+// which nurl.sh does for every cross build; left on, clang would report
+// `'+avx2' is not a recognized feature for this target` once per
+// feature per marked function.
+: ~ i g_cpu_dispatch 1
+
 // Unused-symbol lint (opt-in via `--lint`). Default OFF so ordinary
 // builds — and the compiler's own bootstrap, which never passes
 // `--lint` — emit byte-identical IR and stay at their fixed point.
@@ -3423,6 +3450,7 @@
     ? == tt TT_BREAK { ^ ( nurl_str_cat `'break'` `` ) } {}
     ? == tt TT_CONTINUE { ^ ( nurl_str_cat `'continue'` `` ) } {}
     ? == tt TT_PUB { ^ ( nurl_str_cat `'pub'` `` ) } {}
+    ? == tt TT_SIMD { ^ ( nurl_str_cat `'simd'` `` ) } {}
     ? != 0 ( nurl_str_len val ) { ^ ( nurl_str_cat3 `'` val `'` ) } {}
     ( nurl_str_cat `this token` `` )
 }
@@ -6194,6 +6222,18 @@
                 == & # i . idp 2 255 50
                 == & # i . idp 3 255 56 {
                     = ttype TT_TYPE_KW
+                } {}
+                // `simd` — the CPU-dispatch prefix, classified here for
+                // the same reason `pub` is: parse_toplevel_decl has to
+                // recognise it BEFORE it dispatches on the declaration
+                // token, and a prefix that arrives as TT_IDENT is
+                // indistinguishable from a stray identifier at the top
+                // level (which is a hard error).
+                ? & & & == & # i . idp 0 255 115
+                == & # i . idp 1 255 105
+                == & # i . idp 2 255 109
+                == & # i . idp 3 255 100 {
+                    = ttype TT_SIMD
                 } {}
             } {}
             ( __tok_write lex base ttype id inum line start )
@@ -15313,11 +15353,13 @@
         }
         { ? == ( nurl_lex_type lex ) TT_PUB
             { ( die lex `expected variable name in let — 'pub' is a reserved keyword (the visibility prefix on top-level declarations) and cannot name a binding` ) }
-            { ? == ( nurl_lex_type lex ) TT_BOOL
-                { ( die lex `expected variable name in let — 'T' and 'F' are the boolean literals and cannot name a binding; pick another name` ) }
-                { ( die lex ( nurl_str_cat3
-                    `expected a binding name, found ` ( tok_here lex )
-                    `. A binding is ': type name value' — the TYPE comes before the name, and ': ~' makes it mutable. E.g. ': i n 0', ': ~ String s ( string_new )'. The type may be omitted only when the value's type is inferable: ': n 0'.` ) ) } } }
+            { ? == ( nurl_lex_type lex ) TT_SIMD
+                { ( die lex `expected variable name in let — 'simd' is a reserved keyword (the CPU-dispatch prefix on function declarations) and cannot name a binding` ) }
+                { ? == ( nurl_lex_type lex ) TT_BOOL
+                    { ( die lex `expected variable name in let — 'T' and 'F' are the boolean literals and cannot name a binding; pick another name` ) }
+                    { ( die lex ( nurl_str_cat3
+                        `expected a binding name, found ` ( tok_here lex )
+                        `. A binding is ': type name value' — the TYPE comes before the name, and ': ~' makes it mutable. E.g. ': i n 0', ': ~ String s ( string_new )'. The type may be omitted only when the value's type is inferable: ': n 0'.` ) ) } } } }
     }
 }
 
@@ -21657,6 +21699,82 @@
     }
 }
 
+// ── CPU dispatch: the `simd` prefix (grammar v2.6) ─────────────────
+//
+// A `simd @ f …` is emitted three times: the body under `@f.base`,
+// the same body under `@f.x86v3` carrying an x86-64-v3 target-features
+// attribute, and a dispatcher under the real name `@f` that picks one
+// on a cached CPUID answer. Callers keep calling `@f` and binaries stay
+// runnable on machines without the wider ISA — the point of doing this
+// here rather than handing clang `-march=native`, which produces a
+// binary that SIGILLs on the next machine over.
+//
+// Why the prefix is opt-in, and why it belongs on FEW, LARGE functions:
+// applying it to every function in a module measured **2x slower than
+// not applying it at all** (ML-DSA-65 sign 574 -> 1127 us). A dispatcher
+// is an opaque call sitting in the middle of the call graph, so every
+// small helper it fronts stops being inlinable into its caller, and the
+// vectorisation it buys does not come close to paying for that. Marked
+// on 8 coarse entry points instead, the same module reached the
+// -march=native ceiling (sign 574 -> 405 us).
+//
+// The subtree comes along for free: LLVM permits inlining a baseline
+// callee into a feature-richer caller (the reverse is what it refuses),
+// so an unmarked helper inlined into `@f.x86v3` is compiled with the
+// wide feature set and vectorises there, while the copy inlined into
+// `@f.base` does not.
+//
+// Recursive self-calls inside the body are deliberately NOT renamed to
+// the clone. They keep calling `@f`, i.e. they re-enter through the
+// dispatcher — one correctly-predicted branch per recursion, against
+// the alternative of rewriting call sites inside IR text.
+@ emit_multiversion s fn_ir s lname s ret_ll s params → v {
+    // Everything from "\nentry:\n" onwards is the body, verbatim. The
+    // header is rebuilt rather than patched: the caller still holds the
+    // three pieces it was printed from, so there is nothing to parse.
+    : i bi ( nurl_str_find fn_ir `\nentry:\n` )
+    ? < bi 0 { ( emit_hoisted fn_ir ) ^ v } {}
+    : s body ( nurl_str_slice fn_ir bi - ( strlen fn_ir ) bi )
+    : b is_void ( seq ret_ll `void` )
+    = g_have_simd_fn 1
+
+    : s hdr_b ( nurl_str_cat ( nurl_str_cat3 `define ` ret_ll ` @` )
+    ( nurl_str_cat3 lname `.base(` ( nurl_str_cat params `) {` ) ) )
+    ( emit_hoisted ( nurl_str_cat hdr_b body ) )
+
+    : s hdr_w ( nurl_str_cat ( nurl_str_cat3 `define ` ret_ll ` @` )
+    ( nurl_str_cat3 lname `.x86v3(` ( nurl_str_cat params
+    `) "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave" {` ) ) )
+    ( emit_hoisted ( nurl_str_cat hdr_w body ) )
+
+    // The dispatcher. `params` doubles as the argument list: it is
+    // already `<type> %<name>` pairs, which is exactly a call's operand
+    // syntax, so forwarding needs no reconstruction.
+    ( nurl_print `define ` ) ( nurl_print ret_ll )
+    ( nurl_print ` @` ) ( nurl_print lname )
+    ( nurl_print `(` ) ( nurl_print params ) ( nurl_print `) {\nentry:\n` )
+    ( nurl_print `  %__mv = call i32 @nurl_cpu_x86_v3()\n` )
+    ( nurl_print `  %__mvc = icmp ne i32 %__mv, 0\n` )
+    ( nurl_print `  br i1 %__mvc, label %__mv_wide, label %__mv_base\n` )
+    ( nurl_print `__mv_wide:\n` )
+    ? is_void
+    { ( nurl_print `  call void @` ) ( nurl_print lname )
+        ( nurl_print `.x86v3(` ) ( nurl_print params ) ( nurl_print `)\n  ret void\n` ) }
+    { ( nurl_print `  %__mvw = call ` ) ( nurl_print ret_ll )
+        ( nurl_print ` @` ) ( nurl_print lname )
+        ( nurl_print `.x86v3(` ) ( nurl_print params ) ( nurl_print `)\n  ret ` )
+        ( nurl_print ret_ll ) ( nurl_print ` %__mvw\n` ) }
+    ( nurl_print `__mv_base:\n` )
+    ? is_void
+    { ( nurl_print `  call void @` ) ( nurl_print lname )
+        ( nurl_print `.base(` ) ( nurl_print params ) ( nurl_print `)\n  ret void\n` ) }
+    { ( nurl_print `  %__mvb = call ` ) ( nurl_print ret_ll )
+        ( nurl_print ` @` ) ( nurl_print lname )
+        ( nurl_print `.base(` ) ( nurl_print params ) ( nurl_print `)\n  ret ` )
+        ( nurl_print ret_ll ) ( nurl_print ` %__mvb\n` ) }
+    ( nurl_print `}\n\n` )
+}
+
 // emit_closure_globals: emit only NEW deferred closure definitions since last call
 @ emit_closure_globals → v {
     // Emit new closure function definitions (from watermark to current)
@@ -21720,7 +21838,15 @@
             : i p4c ( nurl_lex_peek4_type lex )
             : b genb & is_name1 | | == p2 TT_COLON == p3 TT_COLON == p4c TT_COLON
             ? | | | gen1 gen2 gen3 genb
-            { ( gen_generic_fn_store lex syms fname ) }
+            {  // A generic is stored now and instantiated later, from
+                // flush_deferred_instantiations — by which point the
+                // `simd` prefix has long been read and cleared, so the
+                // monomorphisations would come out unmarked. Say so
+                // instead of accepting a prefix that does nothing.
+                ? != g_pending_simd 0
+                { ( die lex `'simd' cannot be applied to a generic function — a generic is monomorphised after the whole program is parsed, and the CPU-dispatch prefix does not survive to its instantiations. Mark the concrete function that calls it instead` ) }
+                {}
+                ( gen_generic_fn_store lex syms fname ) }
             { ( gen_fn_decl_concrete fname lex syms cg ) }
         }
         { ( gen_fn_decl_concrete fname lex syms cg ) }
@@ -21732,6 +21858,13 @@
 
 @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_cg_reset cg )
+    // Read-and-clear the `simd` prefix here, at the head of the one
+    // function it belongs to. Generic functions reach this path from
+    // flush_deferred_instantiations long after the prefix was parsed,
+    // so a monomorphisation never inherits it — gen_fn_decl rejects
+    // `simd` on a generic rather than letting it silently do nothing.
+    : i __fn_simd g_pending_simd
+    = g_pending_simd 0
     // Fresh per-function deferred arm-local drop list (see
     // mem_defer_new_strings) — slot names are function-local SSA.
     ( nurl_sym_set g_fn_escapes `__deferred_drops__` `` )
@@ -22252,7 +22385,14 @@
     ( emit `}` ) ( emit `` )
     // Stop capturing and re-emit with allocas hoisted into the entry block.
     : s __fn_ir ( nurl_print_buf_stop )
-    ( emit_hoisted __fn_ir )
+    // `simd @ f …` — emit the body twice under decorated names plus a
+    // CPU-dispatching stub under the real one. Suppressed under --g:
+    // a !DISubprogram may be attached to exactly one function, so the
+    // clones would produce invalid metadata, and a debug build has no
+    // use for the speed (the same reason --split and --g are exclusive).
+    ? & & != __fn_simd 0 != g_cpu_dispatch 0 == g_dbg_enabled 0
+    { ( emit_multiversion __fn_ir lname ( nurl_llty ret_ty ) params_str ) }
+    { ( emit_hoisted __fn_ir ) }
     // Clear DWARF state — subsequent module-scope code (string globals,
     // closure defs, the next function's metadata) must not inherit
     // this function's DILocation, or its calls would attach `!dbg !N`
@@ -23757,10 +23897,10 @@
                             }
                             {}
                         }
-                        { ? & == depth 0 == tt TT_PUB
-                            {  // `pub` prefix on any decl — skip the keyword,
-                                // the following decl will be picked up by its
-                                // own branch on the next iteration.
+                        { ? & == depth 0 | == tt TT_PUB == tt TT_SIMD
+                            {  // `pub` / `simd` prefix on any decl — skip the
+                                // keyword, the following decl will be picked up
+                                // by its own branch on the next iteration.
                                 ( nurl_lex_advance lx )
                             }
                             { ? & == depth 0 == tt TT_COLON
@@ -24655,6 +24795,12 @@
     ( __emit_rt_decl syms `declare i8*  @nurl_zalloc(i64)` )
     ( __emit_rt_decl syms `declare i8*  @nurl_realloc(i8*, i64)` )
     ( __emit_rt_decl syms `declare void @nurl_free(i8*)` )
+    // CPU dispatch for the `simd` prefix (grammar v2.6). Cached in the
+    // runtime and answered from a constructor, so the dispatcher a
+    // marked function grows is a load, a test and a branch the predictor
+    // gets right every time. Always declared: with no marked function in
+    // the module it is unreferenced and the optimiser drops it.
+    ( __emit_rt_decl syms `declare i32  @nurl_cpu_x86_v3()` )
     ( __emit_rt_decl syms `declare void @nurl_journal_push(i8*)` )
     ( __emit_rt_decl syms `declare void @nurl_journal_push_drop(i8*, ptr)` )
     ( __emit_rt_decl syms `declare void @nurl_journal_forget(i8*)` )
@@ -26878,11 +27024,14 @@
                     // consumed by vis_record_fn / vis_take_pending_pub at the
                     // matching @-decl. Pre-step BEFORE reading tt so the dispatch
                     // ternary chain below sees the post-pub token.
-                    ? == ( nurl_lex_type lex ) TT_PUB
-                    { ( nurl_lex_advance lex )
-                        = g_pending_pub 1
+                    // Grammar v2.6 adds `simd`, and the two may appear in either
+                    // order — hence a loop rather than two sequential tests.
+                    ~ | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD
+                    { ? == ( nurl_lex_type lex ) TT_PUB
+                        { = g_pending_pub 1 }
+                        { = g_pending_simd 1 }
+                        ( nurl_lex_advance lex )
                     }
-                    {}
                     : i tt ( nurl_lex_type lex )
                     // A `pub` belongs to THIS declaration and no other.
                     // Only the TT_AT arm below ever consumed the flag, so
@@ -26900,6 +27049,12 @@
                     // Read-and-clear here, where the prefix was parsed,
                     // and hand the answer to the one arm that wants it.
                     : b decl_pub ( vis_take_pending_pub )
+                    // Same read-and-clear discipline for `simd`. This pass
+                    // only collects signatures — codegen re-lexes and sets
+                    // the flag again — but a prefix left pending here would
+                    // survive into the codegen pass and multiversion whichever
+                    // function it reached first.
+                    = g_pending_simd 0
                     ? == tt TT_AT
                     { ( nurl_lex_advance lex )
                         ? ( is_ident_tok ( nurl_lex_type lex ) )
@@ -27302,12 +27457,23 @@
     // flag is read-and-cleared by vis_take_pending_pub at the @-
     // decl site (gen_fn_decl). Other decl kinds parse the prefix
     // for forward-compat but enforcement is fn-only in v2.0.
-    ? == ( nurl_lex_type lex ) TT_PUB
-    { ( nurl_lex_advance lex )
-        = g_pending_pub 1
+    // Grammar v2.6 adds the `simd` CPU-dispatch prefix alongside `pub`;
+    // both are optional and order-independent, so consume whatever run
+    // of them precedes the declaration token.
+    ~ | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD
+    { ? == ( nurl_lex_type lex ) TT_PUB
+        { = g_pending_pub 1 }
+        { = g_pending_simd 1 }
+        ( nurl_lex_advance lex )
     }
-    {}
     : i tt ( nurl_lex_type lex )
+    // `simd` is meaningful only on a function. Anywhere else it is a
+    // silent no-op that would leak onto the next `@` the parser reached
+    // — the same cross-file bug `pub` had, so it gets the same fix:
+    // reject it here rather than let it drift.
+    ? & != g_pending_simd 0 != tt TT_AT
+    { ( die lex `'simd' is a prefix on function declarations only — it selects CPU-dispatched code generation for an '@' declaration, and has no meaning on a const, struct, enum, import, trait or FFI declaration` ) }
+    {}
     ? == tt TT_AT { ( gen_fn_decl lex syms cg ) }
     ? == tt TT_COLON { ( gen_const_or_struct lex syms ) }
     ? == tt TT_AMP { ( gen_ffi_decl lex syms ) }
@@ -27377,6 +27543,7 @@
     ? == tt TT_DOLLAR { ^ T } {}
     ? == tt TT_PERCENT { ^ T } {}
     ? == tt TT_PUB { ^ T } {}
+    ? == tt TT_SIMD { ^ T } {}
     ^ F
 }
 
@@ -27651,6 +27818,28 @@
 // processes cost more to start than they save.
 @ __sp_parts i mlen → i {
     ? == 0 g_split_max { ^ 0 } {}
+    // A module holding a `simd`-marked function is not partitioned.
+    // Splitting costs run speed everywhere (the note above measures
+    // 3.4% on a self-compile), but on a multiversioned function it
+    // costs an order more, because the whole point of the wide clone is
+    // that its callees are inlined INTO it and vectorised there — and
+    // a callee in another part is a callee ThinLTO has to import back
+    // across a boundary that did not have to exist.
+    //
+    // Measured, ML-DSA-65 sign on this module (i7-5930K, us/op):
+    //
+    //     no split                     352      <- what the prefix buys
+    //     split x3                     509
+    //     split x3, no -plugin-opt,O3  422
+    //     unmarked, either way        ~600
+    //
+    // So the split gives back most of a 1.7x win to save 7 s of cold
+    // build. The prefix is an explicit statement that this module's
+    // code generation is what matters; honour it. The cost lands only
+    // on programs that actually use marked code, and the "no parts
+    // written" answer is one the drivers already handle — it is the
+    // same one a module too small to split gives.
+    ? != 0 g_have_simd_fn { ^ 0 } {}
     : i want / mlen g_split_min
     : ~ i n g_split_max
     ? < want n { = n want } {}
@@ -28204,6 +28393,11 @@
     ( nurl_print `  --no-strict-arity   demote the n-ary '&'/'|' arity-trap error to a warning\n` )
     ( nurl_print `  --no-dce            emit unreachable functions too (on by default)\n` )
     ( nurl_print `  --ffi-host-imports  emit FFI calls as wasm host imports\n` )
+    ( nurl_print `  --no-cpu-dispatch   ignore the 'simd' prefix and emit each marked\n` )
+    ( nurl_print `                      function once. The prefix names an x86-64 feature\n` )
+    ( nurl_print `                      set, and nurlc emits no target triple, so anything\n` )
+    ( nurl_print `                      building for another architecture must pass this\n` )
+    ( nurl_print `                      (nurl.sh does it for every non-x86-64 target).\n` )
     ( nurl_print `  --split=N           ALSO write the module as up to N independent ones,\n` )
     ( nurl_print `                      so N clang processes can lower them at once (stdout\n` )
     ( nurl_print `                      still carries the whole module either way)\n` )
@@ -28247,19 +28441,21 @@
                                         { = g_strict_arity 0 }
                                         { ? ( seq a `--ffi-host-imports` )
                                             { = g_ffi_host_imports 1 }
-                                            { ? ( seq a `--no-dce` )
-                                                { = g_dce 0 }
-                                                { ? != 0 ( nurl_str_starts a `--split=` )
-                                                    { = g_split_max ( nurl_str_to_int ( nurl_str_slice a 8 - ( nurl_str_len a ) 8 ) ) }
-                                                    { ? != 0 ( nurl_str_starts a `--split-out=` )
-                                                        { = g_split_out ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) }
-                                                        { ? != 0 ( nurl_str_starts a `--split-min=` )
-                                                            { = g_split_min ( nurl_str_to_int ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) ) }
-                                                            { = path a } } } } } } } } } } } } } }
+                                            { ? ( seq a `--no-cpu-dispatch` )
+                                                { = g_cpu_dispatch 0 }
+                                                { ? ( seq a `--no-dce` )
+                                                    { = g_dce 0 }
+                                                    { ? != 0 ( nurl_str_starts a `--split=` )
+                                                        { = g_split_max ( nurl_str_to_int ( nurl_str_slice a 8 - ( nurl_str_len a ) 8 ) ) }
+                                                        { ? != 0 ( nurl_str_starts a `--split-out=` )
+                                                            { = g_split_out ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) }
+                                                            { ? != 0 ( nurl_str_starts a `--split-min=` )
+                                                                { = g_split_min ( nurl_str_to_int ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) ) }
+                                                                { = path a } } } } } } } } } } } } } } }
         = ai + ai 1
     }
     ? == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-dce] [--split=N --split-out=PREFIX] <file.nu>` ) ( nurl_exit 1 ) }
+    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch] [--no-dce] [--split=N --split-out=PREFIX] <file.nu>` ) ( nurl_exit 1 ) }
     {}
     // --split writes files, so it needs somewhere to write them. Cap it
     // at 64: past the core count the parts only get smaller, and each

@@ -8,6 +8,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`simd`: CPU-dispatched code generation (grammar v2.6)** —
+  A function declaration may carry a leading `simd` prefix. nurlc then emits
+  the body twice — `@f.base` for the baseline ISA and `@f.x86v3` with an
+  AVX2 + BMI2 + FMA feature set — plus a dispatcher under the real name `@f`
+  that picks between them on a CPUID answer cached by the runtime
+  (`nurl_cpu_x86_v3`, `stdlib/runtime_core.c`). Callers are unchanged and the
+  binary still runs on machines without AVX2, which is what separates this
+  from handing clang `-march=native`. `pub` and `simd` compose in either
+  order. See docs/spec.md §3.3b.
+
+  The prefix is deliberately opt-in and coarse: marking *every* function in a
+  module measured **2× slower than marking none** (ML-DSA-65 sign 574 → 1127
+  µs), because a dispatcher is an opaque call that stops every helper it
+  fronts from being inlined. Marked on a handful of entry points instead, the
+  callees are inlined *into* the wide clone and vectorise there.
+
+  Because nurlc emits no `target triple`, a build aimed anywhere other than
+  x86-64 must pass `--no-cpu-dispatch` or clang reports one unrecognised
+  feature per feature per marked function (26 warnings on a module importing
+  `std/mlkem`). `nurl.sh`, `unikernel/compile_nu.sh`, the ESP32 scripts and the
+  `/build_wasm` + `/build_target` API endpoints all pass it automatically.
+  `--g` also suppresses cloning, since a `!DISubprogram` binds to one function.
+
+### Changed
+
+- **A module containing a `simd`-marked function is no longer partitioned by
+  `--split`.** Splitting separates the wide clone from the callees it needs
+  inlined, giving back most of what the prefix buys: ML-DSA-65 sign measured
+  352 µs unsplit against 509 µs split ×3 (and the ThinLTO backend at `-O3`,
+  which *helps* an unsplit module, makes the split one worse still). nurlc
+  answers "no parts written" — the same answer a module too small to split
+  already gives, which every driver already handles.
+
+- **Post-quantum throughput, from the two changes above alone** (i7-5930K
+  @ 3.5 GHz, µs/op, no algorithm changed — NIST ACVP vectors still pass
+  byte-exactly: ML-KEM 180, ML-DSA 615, SLH-DSA 396):
+
+  | | before | after | |
+  | --- | ---: | ---: | ---: |
+  | ML-KEM-768 keygen / encaps / decaps | 52 / 55 / 69 | 46 / 53 / 57 | 1.13× / 1.04× / 1.21× |
+  | ML-KEM-1024 keygen | 90 | 71 | 1.27× |
+  | ML-DSA-44 sign / verify | 404 / 112 | 224 / 77 | 1.80× / 1.45× |
+  | ML-DSA-65 keygen / sign / verify | 184 / 644 / 161 | 147 / 346 / 141 | 1.25× / 1.86× / 1.14× |
+  | ML-DSA-87 sign | 699 | 428 | 1.63× |
+  | SLH-DSA-128f keygen / sign | 3308 / 70728 | 2664 / 63109 | 1.24× / 1.12× |
+  | SLH-DSA-256f keygen | 13802 | 10235 | 1.35× |
+
+### Fixed
+
+- **`nurlfmt` no longer breaks a `simd @` declaration across lines** — the
+  formatter glues the prefix to its decl-starter exactly as it does `pub`.
+
 ## [0.45.0] — 2026-08-18
 
 ### Added

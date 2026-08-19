@@ -21,7 +21,7 @@ CLANG="$(ls "$HOME"/.espressif/tools/esp-clang/*/esp-clang/bin/clang 2>/dev/null
 # $-imports resolve relative to CWD, so compile from the repo root.
 cd "$ROOT"
 echo "==> nurlc:     nurl_uart.nu (+ stdlib/hal/*) -> nurl_uart.ll"
-"$NURLC" "$HERE/nurl_uart.nu" > "$HERE/nurl_uart.ll"
+"$NURLC" --no-cpu-dispatch "$HERE/nurl_uart.nu" > "$HERE/nurl_uart.ll"
 
 echo "==> esp-clang: nurl_uart.ll -> nurl_uart.o  (xtensa-esp32-elf, -O0)"
 "$CLANG" --target=xtensa-esp32-elf -mcpu=esp32 -O0 \

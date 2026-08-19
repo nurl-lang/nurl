@@ -92,6 +92,9 @@ $ `tools/nurlfmt/tokenize.nu`
     // sigil (`@`/`:`/`&`/`%`) suppresses its own blank line because
     // `pub` has already claimed the slot.
     ? ( __pp_text_eq text `pub` ) { ^ T } {}
+    // Grammar v2.6 CPU-dispatch prefix — same gluing rule as `pub`,
+    // and the two may appear in either order (`pub simd @`, `simd pub @`).
+    ? ( __pp_text_eq text `simd` ) { ^ T } {}
     ^ F
 }
 
@@ -412,7 +415,8 @@ $ `tools/nurlfmt/tokenize.nu`
                     // at depth 0 so the following decl-starter knows
                     // to glue. `pub` inside a comment/string never
                     // reaches this path (those are non-IDENT kinds).
-                    ? & & == bd 0 == pd 0 ( __pp_text_eq text `pub` ) {
+                    ? & & == bd 0 == pd 0
+                    | ( __pp_text_eq text `pub` ) ( __pp_text_eq text `simd` ) {
                         = prev_was_pub T
                     } {
                         = prev_was_pub F

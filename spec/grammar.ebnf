@@ -1,5 +1,5 @@
 (* NURL — Neural Unified Representation Language
-   Grammar v2.5 — complete language specification
+   Grammar v2.6 — complete language specification
    File extension: .nu
 
    All expressions use PREFIX NOTATION.
@@ -55,11 +55,19 @@ decl = import_decl                 (*  $                             *)
      | ('pub')? ffi_decl           (*  &                             *)
      | ('pub')? trait_decl         (*  %  IDENT  {                   *)
      | ('pub')? impl_decl          (*  %  IDENT  type                *)
-     | ('pub')? fn_decl            (*  @  (only kind enforced in v2.0)*)
+     | decl_prefix* fn_decl        (*  @  (only kind enforced in v2.0)*)
      | ('pub')? struct_decl        (*  :  IDENT   {                  *)
      | ('pub')? enum_decl          (*  :  |                          *)
      | ('pub')? const_decl         (*  :  type                       *)
      ;
+
+(* A function declaration may carry both prefixes, in either order
+   (grammar v2.6). `simd` is accepted ONLY on `@` — on any other decl
+   it is a diagnostic, not a silent no-op, because a prefix left
+   pending drifts onto the next `@` the parser reaches, which after an
+   import boundary is a function in a different file. `pub` had exactly
+   that bug before v2.0 made it read-and-clear. *)
+decl_prefix = 'pub' | 'simd' ;
 
 
 (* $ `path` IDENT?
@@ -793,6 +801,7 @@ IDENT       = IDENT_PLAIN ( '::' IDENT_PLAIN )* ;
      T F                     →  boolean literals          (TT_BOOL)
      Z                       →  sizeof keyword            (TT_SIZEOF)
      pub                     →  visibility prefix         (TT_PUB)
+     simd                    →  CPU-dispatch prefix (v2.6) (TT_SIMD)
      break                   →  leave innermost loop      (TT_BREAK)
      continue                →  next iteration            (TT_CONTINUE)
 

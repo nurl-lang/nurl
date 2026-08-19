@@ -99,7 +99,20 @@ while [ "$probe" != "/" ]; do
 done
 cd "$workdir" || exit 2
 
-"$ROOT/build/nurlc" "$SRC" > "$OUT_LL" 2>"$WORK/compile.err" || fail 3 "$WORK/compile.err" "nurlc"
+# The `simd` prefix expands to an x86-64-v3 clone plus a CPUID
+# dispatcher, and nurlc emits no target triple to say otherwise — so on
+# an aarch64/riscv64 unikernel every marked function would draw one
+# "not a recognized feature for this target" line per feature. Ask the
+# CROSS compiler what it targets rather than pattern-matching its name:
+# NURL_TARGET_CC is a whole command line, and -dumpmachine is the
+# answer from the tool that will actually lower the IR.
+NURLC_CPU=""
+case "$($CC -dumpmachine 2>/dev/null)" in
+    x86_64-* | amd64-*) ;;
+    *) NURLC_CPU="--no-cpu-dispatch" ;;
+esac
+
+"$ROOT/build/nurlc" $NURLC_CPU "$SRC" > "$OUT_LL" 2>"$WORK/compile.err" || fail 3 "$WORK/compile.err" "nurlc"
 $CC -O2 -c "$OUT_LL" -o "$OBJ" 2>"$WORK/cc.err" || fail 4 "$WORK/cc.err" "$CC"
 
 # What does the shim define? Its own `@ nurl_*` definitions, read from
@@ -125,6 +138,6 @@ root_nu="$WORK/__with_sockets.nu"
     printf '$ `%s`\n' "${NURL_NETDEV:-$ROOT/unikernel/net/netdev_none.nu}"
 } > "$root_nu"
 
-"$ROOT/build/nurlc" "$root_nu" > "$OUT_LL" 2>"$WORK/compile.err" || fail 3 "$WORK/compile.err" "nurlc (with socket shim)"
+"$ROOT/build/nurlc" $NURLC_CPU "$root_nu" > "$OUT_LL" 2>"$WORK/compile.err" || fail 3 "$WORK/compile.err" "nurlc (with socket shim)"
 $CC -O2 -c "$OUT_LL" -o "$OBJ" 2>"$WORK/cc.err" || fail 4 "$WORK/cc.err" "$CC (with socket shim)"
 exit 0

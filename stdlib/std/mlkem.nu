@@ -467,7 +467,7 @@ $ `stdlib/std/subtle.nu`
 
 // K-PKE.KeyGen (Algorithm 13). Returns ek ‖ dk concatenated by the
 // caller; here ek and dk come back as two vectors.
-@ __kpke_keygen MlkemParams prm ( Vec u ) d ( Vec u ) ekout ( Vec u ) dkout → v {
+simd @ __kpke_keygen MlkemParams prm ( Vec u ) d ( Vec u ) ekout ( Vec u ) dkout → v {
     : i k . prm k
     : ( Vec i16 ) zt ( __mlkem_zetas )
     : *i16 zp ( vec_data [i16] zt )
@@ -544,7 +544,7 @@ $ `stdlib/std/subtle.nu`
 }
 
 // K-PKE.Encrypt (Algorithm 14).
-@ __kpke_encrypt MlkemParams prm ( Vec u ) ek ( Vec u ) m ( Vec u ) r ( Vec u ) ctout → v {
+simd @ __kpke_encrypt MlkemParams prm ( Vec u ) ek ( Vec u ) m ( Vec u ) r ( Vec u ) ctout → v {
     : i k . prm k
     : ( Vec i16 ) zt ( __mlkem_zetas )
     : *i16 zp ( vec_data [i16] zt )
@@ -640,7 +640,7 @@ $ `stdlib/std/subtle.nu`
 }
 
 // K-PKE.Decrypt (Algorithm 15) → the 32-byte message.
-@ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
+simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
     : i k . prm k
     : ( Vec i16 ) zt ( __mlkem_zetas )
     : *i16 zp ( vec_data [i16] zt )

@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+sum       5050
+sum_tripled 15150
+dot       171700
+tri       5050
+scaled    35350
+empty     0

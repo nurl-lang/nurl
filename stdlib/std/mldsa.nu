@@ -790,7 +790,7 @@ MldsaParams p ( Vec u ) out → v {
 }
 
 // ML-DSA.KeyGen_internal (Algorithm 6).
-@ mldsa_keygen_derand i level ( Vec u ) xi → *MldsaKeys {
+simd @ mldsa_keygen_derand i level ( Vec u ) xi → *MldsaKeys {
     : MldsaParams p ( __mldsa_params level )
     : i k . p k
     : i l . p l
@@ -936,7 +936,7 @@ MldsaParams p ( Vec u ) out → v {
 // expected iteration count is between 4 and 7 depending on the level —
 // but an unbounded loop on a corrupted secret key would hang a server,
 // and failing is recoverable where hanging is not.
-@ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u ) {
+simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u ) {
     : MldsaParams p ( __mldsa_params level )
     : i k . p k
     : i l . p l
@@ -1160,7 +1160,7 @@ MldsaParams p ( Vec u ) out → v {
 // ── Verification ───────────────────────────────────────────────────
 
 // ML-DSA.Verify_internal (Algorithm 8).
-@ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
+simd @ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
     : MldsaParams p ( __mldsa_params level )
     : i k . p k
     : i l . p l

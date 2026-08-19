@@ -2117,6 +2117,54 @@ long long nurl_umulhi(long long a, long long b) {
 #endif
 }
 
+/* Does this CPU have the x86-64-v3 feature set — AVX2, BMI2, FMA?
+ *
+ * This is the predicate behind the language's `simd` prefix: nurlc emits
+ * a marked function twice, once for the baseline ISA and once with
+ * x86-64-v3 target features, and the dispatcher it generates calls this
+ * to pick between them. A load, a test and a perfectly-predicted branch
+ * per call, against binaries that stay runnable everywhere — the reason
+ * this exists instead of handing clang -march=native.
+ *
+ * Resolved once from a constructor so the common path never re-runs
+ * cpuid. The lazy re-check covers the targets where constructors do not
+ * run (freestanding, the unikernel): -1 means "never resolved", and the
+ * first caller resolves it. Reads and writes of an int are atomic enough
+ * for this — two threads racing both compute the same answer.
+ *
+ * Non-x86 answers 0, so a marked function's wide clone is simply never
+ * reached; those targets are also expected to pass --no-cpu-dispatch, so
+ * the clone is not emitted in the first place. */
+static int nurl__cpu_v3 = -1;
+
+static void nurl__cpu_detect(void) {
+#if defined(__x86_64__) || defined(_M_X64)
+#if defined(__GNUC__) || defined(__clang__)
+    __builtin_cpu_init();
+    nurl__cpu_v3 = __builtin_cpu_supports("avx2") &&
+                   __builtin_cpu_supports("bmi2") &&
+                   __builtin_cpu_supports("fma")
+                       ? 1
+                       : 0;
+#else
+    nurl__cpu_v3 = 0;
+#endif
+#else
+    nurl__cpu_v3 = 0;
+#endif
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((constructor)) static void nurl__cpu_ctor(void) {
+    nurl__cpu_detect();
+}
+#endif
+
+int nurl_cpu_x86_v3(void) {
+    if (nurl__cpu_v3 < 0) nurl__cpu_detect();
+    return nurl__cpu_v3;
+}
+
 /* Indirect-call trampoline for the packages/gpu CPU backend. A CUDA-C kernel
  * compiled for the host (by cpu.nu, via the system C++ compiler) exposes a
  * fixed entry `void __cpu_launch(void** params, long long grid, long long
