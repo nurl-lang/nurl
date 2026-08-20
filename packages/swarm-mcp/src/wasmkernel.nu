@@ -8,11 +8,14 @@
 // each worker; the worker runs it under `wasmtime` and returns the partial,
 // which the coordinator combines with the reduce op exactly as in phase 1.
 //
-// The `wasmtime` here is just a CLI contract — `wasmtime run <module> <lo> <hi>`,
-// partial on stdout. The toolchain's own pure-NURL runtime (packages/wasmtime)
-// satisfies it exactly, so a worker needs NO external runtime: put that binary
-// on PATH as `wasmtime`, or point $WASMTIME at it. The Bytecode-Alliance
-// wasmtime works too — whichever $WASMTIME resolves to is used.
+// The runtime is the pure-NURL wasmtime, compiled INTO this binary
+// (deps/wasmtime) and run in-process by default: a worker needs no
+// external runtime, no subprocess and no writable filesystem — which is
+// what lets a unikernel guest run wasm chunks at all. Setting $WASMTIME
+// switches CPU chunks to an external binary over the CLI contract
+// `wasmtime run <module> <lo> <hi>` (partial on stdout) — the
+// Bytecode-Alliance wasmtime for its JIT, or the pure-NURL CLI; GPU
+// chunks always use that external contract.
 //
 //   CPU chunk (kind_wasm)     : [lo:8 BE][hi:8 BE][wasm…]
 //   GPU chunk (kind_wasm_gpu) : payload v2 — see wasm_gpu_chunk_payload below
@@ -36,6 +39,8 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/ext/env.nu`
+$ `deps/wasmtime/src/module.nu`
+$ `deps/wasmtime/src/interp.nu`
 $ `token.nu`
 
 @ kind_wasm → i { ^ 2 }
@@ -313,9 +318,21 @@ $ `token.nu`
     ^ p
 }
 
-// The runtime binary: $WASMTIME, else `wasmtime` on PATH. The pure-NURL
-// packages/wasmtime is a drop-in here (no external dependency); the
-// Bytecode-Alliance wasmtime works equally well.
+// ── the engine: in-process by default, external by request ───────
+// The pure-NURL wasmtime is a dependency of this package
+// (deps/wasmtime), so a worker runs CPU wasm chunks IN-PROCESS by
+// default: no runtime on PATH, no subprocess, no writable filesystem
+// and no disk cache — which is what lets a unikernel guest, a machine
+// with none of those, run them at all. Setting $WASMTIME selects an
+// external runtime binary instead (the Bytecode-Alliance wasmtime for
+// its JIT, or the pure-NURL CLI) over the unchanged `wasmtime run
+// <module> <lo> <hi>` contract. GPU chunks always use the external
+// binary: their out_file modes and the CUDA bridge are exercised and
+// supported there, and a --gpu worker already requires it.
+@ __wasm_external → String { ^ ( env_var_or `WASMTIME` `` ) }
+
+// The external runtime binary for the paths that always use one (GPU
+// chunks, and every path when $WASMTIME is set).
 @ __wasmtime → String { ^ ( env_var_or `WASMTIME` `wasmtime` ) }
 
 // Can this node actually run wasm modules? A worker used to accept chunks with
@@ -323,6 +340,11 @@ $ `token.nu`
 // task arrived; the node knows the answer at startup, so it should say so then.
 // Returns "" when the runtime works, else the reason it does not.
 @ wasmtime_probe → String {
+    // In-process engine: the runtime is compiled into this binary, so
+    // there is nothing to probe and nothing that can be missing.
+    : String ext ( __wasm_external )
+    ? == ( string_len ext ) 0 { ( string_free ext ) ^ ( string_new ) } {}
+    ( string_free ext )
     : String wt ( __wasmtime )
     : ( Vec s ) args ( vec_new [s] )
     ( vec_push [s] args `--version` )
@@ -438,8 +460,12 @@ $ `token.nu`
             ? == ( output_exit_code out ) 0 { = ok 1 = v ( nurl_str_to_int ( output_stdout out ) ) } {
                 // The runtime's own words (a trap, a CUDA error) are the most
                 // useful thing we have; keep them for the result frame.
+                // string_trim BORROWS its argument, so the intermediate
+                // String must be bound and freed — inline it leaked.
+                : String rerr ( string_from ( output_stderr out ) )
                 ( string_free err )
-                = err ( string_trim ( string_from ( output_stderr out ) ) )
+                = err ( string_trim rerr )
+                ( string_free rerr )
                 ? == ( string_len err ) 0 {
                     ( string_free err )
                     = err ( string_from `wasm runtime exited non-zero with no message` )
@@ -454,6 +480,76 @@ $ `token.nu`
     }
     ( string_free wt )
     ( vec_free [s] args )
+    ^ @ WasmRun { ok v err }
+}
+
+// Run a module's bytes over [lo, hi) in THIS process, on the pure-NURL
+// interpreter: decode, run `_start` with argv [kernel.wasm, lo, hi],
+// capture, parse the printed partial. The same contract as the CLI —
+// exit 0 + partial on stdout — with the pipe replaced by
+// interp_capture and the module file replaced by the bytes we already
+// hold, so nothing here touches a filesystem or spawns anything.
+// CONSUMES `wasm`: module_decode stores the handle as the module's
+// byte image (`. m code`) and module_free frees it — the caller must
+// not free it again (that double free cost a debugging round as a
+// heap corruption that crashed a LATER hmac on the same fiber).
+// The module is decoded per chunk rather than cached: worker threads
+// share one handler closure, a shared decoded-module table would be a
+// data race, and the decode is a straight single pass over bytes that
+// predecodes function bodies lazily anyway.
+@ __wasm_run_inproc ( Vec u ) wasm i lo i hi i allow_gpu → WasmRun {
+    : ~ i v 0
+    : ~ i ok 0
+    : ~ String err ( string_new )
+    : *Module m ( module_decode wasm )
+    ? ! . m ok {
+        : String dm ( bytes_to_str . m err )
+        ( string_free err )
+        = err ( string_concat ( string_from `wasm module did not decode: ` ) ( string_from ( string_data dm ) ) )
+        ( string_free dm )
+    } {
+        : i fidx ( module_export_func m `_start` )
+        ? < fidx 0 {
+            ( string_free err )
+            = err ( string_from `wasm module has no _start export (not a WASI command)` )
+        } {
+            : *Interp it ( interp_new m )
+            ? != allow_gpu 0 { ( interp_allow_gpu it ) } {}
+            ( interp_capture it )
+            ( interp_push_arg it `kernel.wasm` )
+            : s los ( nurl_str_int lo )
+            : s his ( nurl_str_int hi )
+            ( interp_push_arg it los )
+            ( interp_push_arg it his )
+            ( interp_run_start it )
+            ( exec_func it fidx )
+            ( interp_flush it )
+            ? . it trap {
+                : String tm ( bytes_to_str . it trapmsg )
+                ( string_free err )
+                = err ( string_concat ( string_from `wasm trap: ` ) ( string_from ( string_data tm ) ) )
+                ( string_free tm )
+            } {
+                ? != . it exit_code 0 {
+                    : String se ( bytes_to_str ( interp_stderr_bytes it ) )
+                    ( string_free err )
+                    = err ( string_trim se )
+                    ( string_free se )
+                    ? == ( string_len err ) 0 {
+                        ( string_free err )
+                        = err ( string_from `wasm module exited non-zero with no message` )
+                    } {}
+                } {
+                    : String so ( bytes_to_str ( interp_stdout_bytes it ) )
+                    = ok 1
+                    = v ( nurl_str_to_int ( string_data so ) )
+                    ( string_free so )
+                }
+            }
+            ( interp_free it )
+        }
+    }
+    ( module_free m )
     ^ @ WasmRun { ok v err }
 }
 
@@ -473,17 +569,33 @@ $ `token.nu`
                 : i lo ?? ( bytes_read_u64_be body 0 ) { T x → # i x F → 0 }
                 : i hi ?? ( bytes_read_u64_be body 8 ) { T x → # i x F → 0 }
                 : ( Vec u ) wasm ( bytes_slice body 16 ( vec_len [u] body ) )
-                : String hex ( _wasm_hash wasm )
-                : String path ( __wasm_cache_path hex )
-                ? ! ( file_exists ( string_data path ) ) {
-                    ?? ( write_file_bytes ( string_data path ) wasm ) { T _ → {} F _ → {} }
-                } {}
-                : WasmRun wr ( __wasm_run path lo hi 0 )
-                = run_ok . wr ok
-                = partial . wr value
-                ( string_free why )
-                = why . wr err
-                ( string_free hex ) ( string_free path ) ( vec_free [u] wasm )
+                : String ext ( __wasm_external )
+                ? == ( string_len ext ) 0 {
+                    // In-process (the default): the bytes we hold ARE the
+                    // module — no disk cache, no file, no subprocess.
+                    // __wasm_run_inproc consumes `wasm`.
+                    : WasmRun wr ( __wasm_run_inproc wasm lo hi 0 )
+                    = run_ok . wr ok
+                    = partial . wr value
+                    ( string_free why )
+                    = why . wr err
+                } {
+                    // External runtime ($WASMTIME): the CLI contract needs
+                    // a file, so cache the module by content hash.
+                    : String hex ( _wasm_hash wasm )
+                    : String path ( __wasm_cache_path hex )
+                    ? ! ( file_exists ( string_data path ) ) {
+                        ?? ( write_file_bytes ( string_data path ) wasm ) { T _ → {} F _ → {} }
+                    } {}
+                    : WasmRun wr ( __wasm_run path lo hi 0 )
+                    = run_ok . wr ok
+                    = partial . wr value
+                    ( string_free why )
+                    = why . wr err
+                    ( string_free hex ) ( string_free path )
+                    ( vec_free [u] wasm )
+                }
+                ( string_free ext )
                 ( vec_free [u] body )
             }
         }
@@ -624,8 +736,12 @@ $ `token.nu`
                     = gerr ( string_from `the module ran but wrote a short or unreadable output file` )
                 } {}
             } {
+                // Bound and freed for the same reason as the CPU path:
+                // string_trim borrows, an inline temp leaks.
+                : String gserr ( string_from ( output_stderr out ) )
                 ( string_free gerr )
-                = gerr ( string_trim ( string_from ( output_stderr out ) ) )
+                = gerr ( string_trim gserr )
+                ( string_free gserr )
                 ? == ( string_len gerr ) 0 {
                     ( string_free gerr )
                     = gerr ( string_from `the GPU module exited non-zero with no message` )
