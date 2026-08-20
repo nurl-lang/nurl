@@ -294,13 +294,14 @@ unikernel/run_qemu.sh myserver.elf -t 60 -- \
     -device virtio-net-device,netdev=n0
 ```
 
-Firecracker should take the same ELF as `--kernel-image` with `boot-args`
+Firecracker takes the same ELF as `--kernel-image` with `boot-args`
 carrying the same keys — PVH is its boot protocol too, and the exit
 sentinel exists because Firecracker has no channel for an exit code.
-**Not gated, and therefore not claimed**: every measurement and every
-gate in this directory is QEMU microvm. The plan has Firecracker as a
-later step, and until a job boots one, treat the paragraph above as a
-design intent rather than a tested path.
+How much of that is gated is stated in the hypervisor section below:
+the PVH note's structure always, a real cloud-hypervisor/Firecracker
+boot wherever `/dev/kvm` is usable (CI's runner is), and **every
+MEASUREMENT in this file is QEMU microvm** — the other two boot the
+image, but no throughput or boot-time figure is claimed for them.
 
 **The threat model, stated.** The hypervisor and whoever writes the
 kernel command line are TRUSTED — they choose the image, its
@@ -351,6 +352,27 @@ validity is checked against arrives on the kernel command line, and the
 bytes travel over the pure TCP stack and the virtio-net driver. The
 handshake is `stdlib/std/tls.nu` — pure NURL, no libssl, which is why
 it links here at all.
+
+## The endpoint milestone: a swarm compute appliance
+
+The plan's acceptance test (B10) was a unikernel that boots straight
+into a running **swarm-mcp** node, and `unikernel/tests/swarm_gate.sh`
+now runs it on every commit. The SAME `packages/swarm-mcp` source
+builds both ways: hosted (a relay and the MCP control surface on the
+host) and as a guest image. The guest boots, `--connect`s OUT through
+the pure TCP stack and virtio-net, appears in `swarm_census`, and
+completes both kernel flavours end-to-end — an expression task
+(sum of x² over [0,1000) = 332833500) and a **compiled-wasm task**:
+the coordinator compiles the NURL kernel to wasm32-wasi on the host
+and the guest executes the chunks **in-process on the pure-NURL
+wasmtime**, because a machine with no processes cannot shell out to a
+runtime and now does not need to.
+
+Measured on this gate (TCG, an interpreter floor): census join 6 s
+after launch, cold start to the first completed tool answer 9 s. A
+guest advertises CPU-wasm capability only; a GPU request answers
+exactly like a hosted machine with no NVIDIA driver, because the
+image links the same `cuda_stubs.c` that nurl.sh uses there.
 
 ## Which hypervisors, and what the artifact actually is
 
