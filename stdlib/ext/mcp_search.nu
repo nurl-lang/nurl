@@ -1074,10 +1074,14 @@ $ `stdlib/ext/nurldoc.nu`
 // each term is compared against every stdlib module's name (the
 // spellings __ms_term_names_module accepts). An agent that queries
 // "csv json string" wants ext/csv.nu's API surface, not an OR-ranked
-// declaration list, so every named module's whole API surface is
-// emitted — the byte cap split evenly between them, each truncation
-// pointing at module= for the rest. Returns how many modules a term
-// named (0 ⇒ the caller falls through to the OR pass as before).
+// declaration list. Modules are emitted WHOLE or not at all — a partial
+// module reads as the complete one, and an agent must never conclude a
+// function is missing because a byte cap cut it off. What the cap
+// excludes is listed by name for a follow-up module= call, and terms
+// that named NO module are listed as not-searched-here so their
+// concepts don't silently vanish from the reply. Returns how many
+// modules a term named (0 ⇒ the caller falls through to the OR pass
+// as before).
 @ __ms_api_exact_modules s stdlib_dir ( Vec String ) terms String out → i {
     : Json files ( json_arr_new )
     ( msearch_walk_nu_files files stdlib_dir `` )
@@ -1085,6 +1089,7 @@ $ `stdlib/ext/nurldoc.nu`
     : i tn ( vec_len [String] terms )
     : ( Vec String ) rels ( vec_new [String] )
     : ( Vec String ) hits ( vec_new [String] )
+    : ( Vec String ) misses ( vec_new [String] )
     // Terms outer, files inner: the reply lists modules in QUERY order
     // ("csv json …" leads with ext/csv.nu), deduplicated by rel path.
     : ~ i tk 0
@@ -1092,6 +1097,7 @@ $ `stdlib/ext/nurldoc.nu`
         ?? ( vec_get [String] terms tk ) {
             T t → {
                 ? > ( string_len t ) 0 {
+                    : ~ b tmatched F
                     : ~ i k 0
                     ~ < k nf {
                         ?? ( json_arr_get files k ) {
@@ -1101,14 +1107,17 @@ $ `stdlib/ext/nurldoc.nu`
                                     T pj → { ? ( json_is_str pj ) { = rel ( json_as_str pj ) } {} }
                                     F _ → {}
                                 }
-                                ? & > ( nurl_str_len rel ) 3 ! ( __ms_has_str rels rel ) {
+                                ? > ( nurl_str_len rel ) 3 {
                                     : String rel_lc ( __ms_lc rel )
                                     : String stem ( string_substr rel_lc 0 - ( string_len rel_lc ) 3 )
                                     : String base ( __ms_basename ( string_data rel_lc ) )
                                     : String bstem ( string_substr base 0 - ( string_len base ) 3 )
                                     ? ( __ms_term_names_module ( string_data t ) rel_lc stem base bstem ) {
-                                        ( vec_push [String] rels ( string_from rel ) )
-                                        ( vec_push [String] hits ( string_from ( string_data t ) ) )
+                                        = tmatched T
+                                        ? ! ( __ms_has_str rels rel ) {
+                                            ( vec_push [String] rels ( string_from rel ) )
+                                            ( vec_push [String] hits ( string_from ( string_data t ) ) )
+                                        } {}
                                     } {}
                                     ( string_free bstem )
                                     ( string_free base )
@@ -1120,6 +1129,7 @@ $ `stdlib/ext/nurldoc.nu`
                         }
                         = k + k 1
                     }
+                    ? ! tmatched { ( vec_push [String] misses ( string_from ( string_data t ) ) ) } {}
                 } {}
             }
             F _ → {}
@@ -1129,6 +1139,8 @@ $ `stdlib/ext/nurldoc.nu`
     ( json_free files )
 
     : i n ( vec_len [String] rels )
+    : i cap ( __ms_api_out_cap )
+    : i base_len ( string_len out )
     ? > n 0 {
         ? == n 1 {
             ( string_push_str out `No declaration contains every term, but a term names a stdlib module exactly — its whole API surface:\n\n` )
@@ -1137,7 +1149,10 @@ $ `stdlib/ext/nurldoc.nu`
             ( string_push_int out n )
             ( string_push_str out ` terms name stdlib modules exactly — their API surfaces:\n\n` )
         }
-        : i share / ( __ms_api_out_cap ) n
+        // Whole modules only. A surface that would overflow the cap is
+        // deferred to a one-line module= pointer instead of being cut
+        // mid-module — a partial surface reads as the complete one.
+        : String defer ( string_with_cap 256 )
         : ~ i j 0
         ~ < j n {
             : ~ s relj ``
@@ -1145,30 +1160,60 @@ $ `stdlib/ext/nurldoc.nu`
             : ~ s tj ``
             ?? ( vec_get [String] hits j ) { T h → = tj ( string_data h ) F _ → {} }
             ? > ( nurl_str_len relj ) 0 {
-                ( string_push_str out `── ` )
-                ( string_push_str out relj )
-                ( string_push_str out ` (term '` )
-                ( string_push_str out tj )
-                ( string_push_str out `') ──\n` )
                 : String md ( __ms_api_render_module stdlib_dir relj )
-                ? > ( string_len md ) share {
-                    : String cut ( string_substr md 0 share )
-                    ( string_push_str out ( string_data cut ) )
-                    ( string_free cut )
-                    ( string_push_str out `\n… truncated — module='` )
+                : i add + ( string_len md ) + ( nurl_str_len relj ) 64
+                ? & > ( string_len md ) 0 >= cap + - ( string_len out ) base_len add {
+                    ( string_push_str out `── ` )
                     ( string_push_str out relj )
-                    ( string_push_str out `' for the rest.\n` )
-                } {
+                    ( string_push_str out ` (term '` )
+                    ( string_push_str out tj )
+                    ( string_push_str out `') ──\n` )
                     ( string_push_str out ( string_data md ) )
+                    ( string_push_char out 10 )
+                } {
+                    ( string_push_str defer `  ` )
+                    ( string_push_str defer relj )
+                    ( string_push_str defer ` (term '` )
+                    ( string_push_str defer tj )
+                    ( string_push_str defer `') — read it with module='` )
+                    ( string_push_str defer relj )
+                    ( string_push_str defer `'.\n` )
                 }
                 ( string_free md )
-                ( string_push_char out 10 )
             } {}
             = j + j 1
         }
+        ? > ( string_len defer ) 0 {
+            ( string_push_str out `Named by a term but did not fit in this reply — each is one module= call:\n` )
+            ( string_push_str out ( string_data defer ) )
+            ( string_push_char out 10 )
+        } {}
+        ( string_free defer )
+        // Every remaining term was NOT searched here. Say so, or an
+        // agent reads "vec sort string split lowercase contains" coming
+        // back without lowercase as "lowercase does not exist".
+        : i nm ( vec_len [String] misses )
+        ? > nm 0 {
+            ( string_push_str out `NOT searched in this reply: ` )
+            : ~ i mi 0
+            ~ < mi nm {
+                ?? ( vec_get [String] misses mi ) {
+                    T m → {
+                        ? > mi 0 { ( string_push_str out `, ` ) } {}
+                        ( string_push_char out 39 )
+                        ( string_push_str out ( string_data m ) )
+                        ( string_push_char out 39 )
+                    }
+                    F _ → {}
+                }
+                = mi + mi 1
+            }
+            ( string_push_str out ` — these name no module, and this reply answered only the module-name terms. What they describe may well exist (likely inside the modules above); query each concept separately, e.g. query='string lowercase'.\n` )
+        } {}
     } {}
     ( vec_free_with [String] rels \ String r → v { ( string_free r ) } )
     ( vec_free_with [String] hits \ String h → v { ( string_free h ) } )
+    ( vec_free_with [String] misses \ String m → v { ( string_free m ) } )
     ^ n
 }
 
@@ -1508,7 +1553,7 @@ $ `stdlib/ext/nurldoc.nu`
 //
 // docs/ is the prose the API surface cannot answer: MEMORY.md (who owns
 // what, and when it is freed), CRYPTO.md (which cipher suites ship),
-// GOTCHAS.md, spec.md, … An agent that can only reach nurl_api ends up
+// spec.md, … An agent that can only reach nurl_api ends up
 // guessing at exactly the questions these files answer, so both servers
 // expose the tree as one tool: no `name` lists what exists, a `name`
 // returns that document verbatim.

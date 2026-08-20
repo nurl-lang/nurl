@@ -62,8 +62,6 @@ $ `nurlapi/pptws.nu`
 
 @ get_roadmap_path → String { ^ ( env_var_or `NURL_ROADMAP_PATH` `/opt/nurl/ROADMAP.md` ) }
 
-@ get_gotchas_path → String { ^ ( env_var_or `NURL_GOTCHAS_PATH` `/opt/nurl/docs/GOTCHAS.md` ) }
-
 // The docs/ prose tree behind nurl_docs and the /docs/* routes.
 @ get_docs_dir → String { ^ ( env_var_or `NURL_DOCS_DIR` `/opt/nurl/docs` ) }
 
@@ -1571,7 +1569,6 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_info_push_str tools `nurl_read_grammar` )
     ( __mcp_info_push_str tools `nurl_read_readme` )
     ( __mcp_info_push_str tools `nurl_read_roadmap` )
-    ( __mcp_info_push_str tools `nurl_read_gotchas` )
     ( __mcp_info_push_str tools `nurl_docs` )
     ( __mcp_info_push_str tools `nurl_changelog` )
     ( __mcp_info_push_str tools `nurl_api` )
@@ -1582,7 +1579,6 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_info_push_str resources `nurl://grammar` )
     ( __mcp_info_push_str resources `nurl://readme` )
     ( __mcp_info_push_str resources `nurl://roadmap` )
-    ( __mcp_info_push_str resources `nurl://gotchas` )
     ( __mcp_info_push_str resources `nurl://stdlib/{path}` )
     ( __mcp_info_push_str resources `nurl://example/{name}` )
     ( __mcp_info_push_str resources `nurl://test/{name}` )
@@ -1683,8 +1679,6 @@ s combined_stdout s combined_stderr → v {
     ( __oa_path paths `/readme.md` `get` `Raw README.md source` `text/markdown response.` )
     ( __oa_path paths `/roadmap` `get` `Render ROADMAP.md as HTML` `Markdown rendered with same chrome as api/'s viewer.` )
     ( __oa_path paths `/roadmap.md` `get` `Raw ROADMAP.md source` `text/markdown response.` )
-    ( __oa_path paths `/gotchas` `get` `Render docs/GOTCHAS.md as HTML` `Markdown rendered with same chrome as api/'s viewer.` )
-    ( __oa_path paths `/gotchas.md` `get` `Raw docs/GOTCHAS.md source` `text/markdown response.` )
     ( __oa_path paths `/grammar` `get` `Render the current NURL grammar (spec/grammar.ebnf)` `EBNF wrapped in a fenced code block.` )
     ( __oa_path paths `/grammar.ebnf` `get` `Raw spec/grammar.ebnf` `text/plain response.` )
 
@@ -2266,7 +2260,7 @@ s combined_stdout s combined_stderr → v {
 
 // ── Markdown → HTML renderer (Python markdown lib equivalent) ─────
 //
-// Minimal but README/ROADMAP/GOTCHAS-grade renderer. Supports:
+// Minimal but README/ROADMAP-grade renderer. Supports:
 //   * ATX headings (# .. ######)
 //   * Fenced code blocks (```lang … ```) with language class
 //   * Tables (GitHub-style `| col | col |` with `|---|---|` separator)
@@ -2992,22 +2986,6 @@ s combined_stdout s combined_stderr → v {
     ( nurl_print `[srv] GET /roadmap.md\n` )
     : String fp ( get_roadmap_path )
     : HttpResponse r ( __serve_file_text ( string_data fp ) `text/markdown; charset=utf-8` `ROADMAP.md not found\n` )
-    ( string_free fp )
-    ^ r
-}
-
-@ h_gotchas HttpRequest req Params params → HttpResponse {
-    ( nurl_print `[srv] GET /gotchas\n` )
-    : String fp ( get_gotchas_path )
-    : HttpResponse r ( __serve_md_as_html ( string_data fp ) `Gotchas` `/gotchas.md` `GOTCHAS.md not found\n` )
-    ( string_free fp )
-    ^ r
-}
-
-@ h_gotchas_md HttpRequest req Params params → HttpResponse {
-    ( nurl_print `[srv] GET /gotchas.md\n` )
-    : String fp ( get_gotchas_path )
-    : HttpResponse r ( __serve_file_text ( string_data fp ) `text/markdown; charset=utf-8` `GOTCHAS.md not found\n` )
     ( string_free fp )
     ^ r
 }
@@ -4321,7 +4299,7 @@ s combined_stdout s combined_stderr → v {
     ( json_obj_set props `filename`
     ( __mcp_prop `string` `Logical filename for diagnostics (default main.nu)` ) )
     ( json_obj_set props `run`
-    ( __mcp_prop `boolean` `Also RUN the compiled program and return its exit code, stdout and stderr, so one call gets you output instead of an artifact you cannot execute. Disabled on this server unless the operator set NURL_ALLOW_RUN=1 — running a freshly compiled program is unsandboxed code execution against the container's filesystem, network and environment, and asking for it while it is off returns an error saying so rather than a silent build. The sandboxed alternative is nurl_build_unikernel, which boots the program as its own kernel under QEMU with no network and a time cap.` ) )
+    ( __mcp_prop `boolean` `Also run the compiled binary and return exit code, stdout, stderr. Unsandboxed code execution — disabled unless the operator set NURL_ALLOW_RUN=1 (asking while off returns an error, not a silent build). nurl_build_unikernel is the sandboxed alternative.` ) )
     ( json_obj_set schema `properties` props )
     ^ schema
 }
@@ -4880,8 +4858,8 @@ s combined_stdout s combined_stderr → v {
 //
 // nurl_api answers "what is the signature", never "who frees this" or
 // "which cipher suites ship" — those live in docs/MEMORY.md and
-// docs/CRYPTO.md. Only GOTCHAS.md had a tool, so the other dozen
-// documents were invisible to an MCP-only agent, which then guessed.
+// docs/CRYPTO.md; without this tool they were invisible to an
+// MCP-only agent, which then guessed.
 // No 'name' lists the tree (path, size, title); a 'name' returns that
 // document, matched forgivingly ('MEMORY', 'memory.md', 'docs/MEMORY.md'
 // all land on the same file) and paged with 'offset' when it is large.
@@ -4985,15 +4963,15 @@ s combined_stdout s combined_stderr → v {
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
     ( json_obj_set props `name`
-    ( __mcp_prop `string` `Which document to return, e.g. 'MEMORY.md', 'CRYPTO.md', 'dev/COMPILER_INTERNALS.md'. The 'docs/' prefix and the '.md' suffix are both optional and matching is case-insensitive. Omit to list every document with its size and title.` ) )
+    ( __mcp_prop `string` `Which document, e.g. 'MEMORY.md', 'dev/COMPILER_INTERNALS.md' ('docs/' prefix and '.md' optional, case-insensitive). Omit to list every document.` ) )
     ( json_obj_set props `section`
-    ( __mcp_prop `string` `Return ONE section of 'name' instead of the whole document — by its number ('7.4', '2') or by words from its heading ('move checking'). The section runs to the next heading of the same or higher level, so '2' includes its 2.x subsections and '2.1' does not. This is the cheap way to answer a specific question: MEMORY.md is 44 KB, the section that says who frees a String is a fraction of that. A miss replies with the outline.` ) )
+    ( __mcp_prop `string` `Return ONE section of 'name' — by number ('7.4'; '2' includes its 2.x subsections) or by heading words ('move checking'). The cheap way to answer a specific question; a miss replies with the outline.` ) )
     ( json_obj_set props `outline`
     ( __mcp_prop `boolean` `With 'name': return that document's heading map (section titles + byte sizes) instead of its text, so you can pick a 'section' without reading the document first.` ) )
     ( json_obj_set props `query`
-    ( __mcp_prop `string` `Search every SECTION of every document for these terms (whole-word, ranked by how many they cover, heading matches outranking body matches) and return the best few with their 'section=' keys. Use this when you know the question but not which document answers it. Ignored when 'name' is set.` ) )
+    ( __mcp_prop `string` `Search every section of every document (whole-word, ranked, heading hits outrank body hits); returns the best few with their 'section=' keys. Use when you know the question but not the document. Ignored when 'name' is set.` ) )
     ( json_obj_set props `offset`
-    ( __mcp_prop `integer` `Byte offset to start from (default 0). Documents are capped at 48 KB per call; a truncated reply prints the exact offset to pass next. Prefer 'section' or 'query' — paging a whole document to find one paragraph is the expensive way.` ) )
+    ( __mcp_prop `integer` `Byte offset for paging (default 0; replies cap at 48 KB and print the next offset). Prefer 'section' or 'query'.` ) )
     ( json_obj_set schema `properties` props )
     ^ schema
 }
@@ -5005,11 +4983,11 @@ s combined_stdout s combined_stderr → v {
     ( json_obj_set props `module`
     ( __mcp_prop `string` `Render ONE installed-stdlib module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'.` ) )
     ( json_obj_set props `package`
-    ( __mcp_prop `string` `Render a PUBLISHED registry package's API surface — nurldoc over its src/*.nu, streamed from the tarball. The name from a registry search, e.g. 'nn'. Use this after a registry hit (nurl_grep where='packages', or a 0-hit query) to learn the functions/types a package exposes — their names are not otherwise searchable.` ) )
+    ( __mcp_prop `string` `A published registry package's API surface, rendered from its tarball — the step after a registry hit, since package symbol names are not otherwise searchable. E.g. 'nn'.` ) )
     ( json_obj_set props `version`
     ( __mcp_prop `string` `Optional package version (e.g. '0.1.1'); defaults to the latest. Only meaningful with 'package'.` ) )
     ( json_obj_set props `query`
-    ( __mcp_prop `string` `Search every stdlib module's declarations instead: space- or comma-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. When no declaration has all of them, any term that exactly NAMES a stdlib module ('csv', 'csv.nu', or 'ext/csv.nu') returns that whole module's API surface instead; failing that, the terms are re-run as an OR — each matched as a WHOLE word (bounded by a digit or any non-letter, so 'string' hits string_push_str but not substring) — and the best-covering declarations come back ranked, most terms covered first. Only when that finds nothing does the reply widen to example programs and registry packages. So a concept-shaped query like 'string builder append' is fine here. Ignored when 'module' or 'package' is set.` ) )
+    ( __mcp_prop `string` `Declaration search: space- or comma-separated terms, ALL must occur (case-insensitive) in signature + doc comment + module path. Keep one call to ONE concept (2–4 related terms, e.g. 'string lowercase'). Zero-hit fallbacks run in order: a term that exactly names a module ('csv', 'csv.nu', 'ext/csv.nu') returns that whole surface — never cut mid-module, and the reply ends by listing any term it did not search; then a whole-word OR ranked by coverage; then examples + registry. Ignored when 'module' or 'package' is set.` ) )
     ( json_obj_set schema `properties` props )
     ^ schema
 }
@@ -5058,7 +5036,7 @@ s combined_stdout s combined_stderr → v {
     ( json_obj_set props `where`
     ( __mcp_prop `string` `Scope: 'stdlib', 'examples', 'tests', 'packages' (registry name+description search), or 'all' (default). Combine with commas, e.g. 'stdlib,examples'.` ) )
     ( json_obj_set props `word`
-    ( __mcp_prop `boolean` `true = return ONLY word-boundary lines and drop the in-word tail entirely (the filtered count is still reported). Rarely needed: results are always ranked boundary-first. Local corpora only; the registry side always matches substrings.` ) )
+    ( __mcp_prop `boolean` `true = only word-boundary lines, in-word tail dropped (rarely needed — results already rank boundary-first). Local corpora only.` ) )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `pattern` ) )
     ( json_obj_set schema `properties` props )
@@ -5161,11 +5139,6 @@ s combined_stdout s combined_stderr → v {
         : Json result ( __mcp_read_file_result ( string_data fp ) )
         ( string_free fp ) ^ result
     } {}
-    ? != 0 ( nurl_str_eq name `nurl_read_gotchas` ) {
-        : String fp ( get_gotchas_path )
-        : Json result ( __mcp_read_file_result ( string_data fp ) )
-        ( string_free fp ) ^ result
-    } {}
 
     ? != 0 ( nurl_str_eq name `nurl_docs` ) {
         ^ ( __mcp_tool_docs args )
@@ -5188,84 +5161,86 @@ s combined_stdout s combined_stderr → v {
 
 // ── tools/list response ─────────────────────────────────────────────
 
-@ __mcp_tool_desc s name s desc Json schema → Json {
-    ^ ( mcp_tool_descriptor name desc schema )
+// Read-only tool: browse/search/read — clients may auto-allow.
+@ __mcp_tool_ro s name s desc Json schema → Json {
+    ^ ( mcp_tool_annotate ( mcp_tool_descriptor name desc schema ) T F T F )
+}
+
+// Build tool: produces artifacts server-side, destroys nothing.
+@ __mcp_tool_build s name s desc Json schema → Json {
+    ^ ( mcp_tool_annotate ( mcp_tool_descriptor name desc schema ) F F T F )
 }
 
 @ __mcp_build_tools_list → Json {
     : Json arr ( json_arr_new )
 
     // Build tools.
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_native`
-    `Compile NURL source to a native x86_64 Linux ELF binary. Returns build status, nurlc+clang return codes, combined stderr, download URLs for the generated .ll and the binary. Pass run=true to also EXECUTE it and get back exit code, stdout and stderr in the same call — the difference between an artifact you cannot run and an answer. That is unsandboxed code execution, so it is off unless the operator set NURL_ALLOW_RUN=1, and asking for it while it is off returns an error saying so rather than a silent build; nurl_build_unikernel is the sandboxed way to see output (QEMU, no network, time cap). Equivalent to POST /build.`
+    ( json_arr_push arr ( __mcp_tool_build `nurl_build_native`
+    `Compile NURL source to an x86_64 Linux ELF. Returns status, compiler stderr, and download URLs for the binary + .ll. run=true also executes it and returns exit code + output (see the run parameter for when that is allowed).`
     ( __mcp_schema_build_native ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_wasm`
-    `Compile NURL source to a wasm32-wasi WebAssembly module. Returns build status, compile logs, and download URLs for the generated .wasm module (wasm_artifact) and the LLVM IR (ll_artifact) — no inline base64. Runs in-browser via a WASI shim or with wasmtime. Equivalent to POST /build_wasm with links_only:true.`
+    ( json_arr_push arr ( __mcp_tool_build `nurl_build_wasm`
+    `Compile NURL source to a wasm32-wasi module. Returns status, compile logs, and download URLs for the .wasm + .ll (no inline base64). The module runs in-browser via a WASI shim or with wasmtime.`
     ( __mcp_schema_source_filename ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_windows`
-    `Cross-compile NURL source to a Windows x86_64 .exe via mingw-w64 (clang -c → x86_64-w64-mingw32-gcc link). Static libcurl + Schannel TLS when the runtime is libcurl-enabled. Returns build status, return codes, combined stderr, download URL. Equivalent to POST /build_windows.`
+    ( json_arr_push arr ( __mcp_tool_build `nurl_build_windows`
+    `Cross-compile NURL source to a Windows x86_64 .exe (mingw-w64; static libcurl + Schannel TLS). Returns status, stderr, and a download URL.`
     ( __mcp_schema_source_filename ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_macos`
-    `Cross-compile NURL source to a macOS x86_64 Mach-O binary via zig cc. Unsigned — clear quarantine attribute before running. Equivalent to POST /build_macos.`
+    ( json_arr_push arr ( __mcp_tool_build `nurl_build_macos`
+    `Cross-compile NURL source to an unsigned macOS x86_64 Mach-O (zig cc); clear the quarantine attribute before running.`
     ( __mcp_schema_source_filename ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_target`
-    `Cross-compile NURL source to one of several extra targets via zig cc. target selects which: *-musl static ELFs (x86_64/ARM64/RISC-V 64 Linux), linux-arm64-gnu dynamic glibc ELF, macos-x64/macos-arm64 unsigned Mach-O. Equivalent to POST /build_target.`
+    ( json_arr_push arr ( __mcp_tool_build `nurl_build_target`
+    `Cross-compile NURL source via zig cc; 'target' picks static musl ELFs (x86_64/arm64/riscv64 Linux), linux-arm64-gnu (glibc), or macos-x64/macos-arm64 Mach-O.`
     ( __mcp_schema_build_target ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_unikernel`
-    `Build NURL source into a bootable unikernel image — x86_64 (PVH/microvm) or aarch64 (QEMU virt), chosen with arch (no OS, no libc — the pure-NURL TCP/IP + TLS stack; fork/exec/signals and C libraries are unavailable). By default also BOOTS the image server-side (TCG, no network, ~20 s cap) and returns the guest console + exit status, plus an ELF download link and ready-to-paste QEMU commands. files bakes {"relative/path": base64} into a read-only in-image filesystem. Equivalent to POST /build_unikernel.`
+    ( json_arr_push arr ( __mcp_tool_build `nurl_build_unikernel`
+    `Build NURL source into a bootable unikernel image (x86_64 PVH/microvm or aarch64 virt — no OS or libc: pure-NURL TCP/IP + TLS, no fork/exec). By default also boots it server-side (no network, ~20 s cap) and returns the guest console, an ELF download link, and ready-to-paste QEMU commands. The sandboxed way to run NURL here.`
     ( __mcp_schema_build_unikernel ) ) )
 
     // Browse.
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_list_examples`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_list_examples`
     `List bundled NURL example programs. Returns a JSON array of {name, path, bytes} entries, sorted alphabetically.`
     ( __mcp_schema_empty ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_list_stdlib`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_list_stdlib`
     `List bundled NURL stdlib modules. Returns a JSON array of {name, path, bytes} entries (recursive — core/, std/, ext/), sorted alphabetically.`
     ( __mcp_schema_empty ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_list_tests`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_list_tests`
     `List bundled compiler tests. Returns a JSON array of {name, path, bytes} entries, sorted alphabetically.`
     ( __mcp_schema_empty ) ) )
 
     // Read per-catalogue.
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_example`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_example`
     `Return the source of a bundled example. name is the relative path returned by nurl_list_examples.`
     ( __mcp_schema_name ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_stdlib`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_stdlib`
     `Return the source of a stdlib module. name is the relative path returned by nurl_list_stdlib (e.g. core/string.nu).`
     ( __mcp_schema_name ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_test`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_test`
     `Return the source of a bundled compiler test. name is the relative path returned by nurl_list_tests.`
     ( __mcp_schema_name ) ) )
 
     // Read docs.
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_grammar`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_grammar`
     `Return the current NURL grammar EBNF (spec/grammar.ebnf).`
     ( __mcp_schema_empty ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_readme`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_readme`
     `Return README.md verbatim — project overview, syntax cheat sheet, build instructions.`
     ( __mcp_schema_empty ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_roadmap`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_roadmap`
     `Return ROADMAP.md verbatim — current development plan + ship log.`
     ( __mcp_schema_empty ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_gotchas`
-    `Return docs/GOTCHAS.md verbatim — known compiler quirks with workarounds.`
-    ( __mcp_schema_empty ) ) )
-
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_docs`
-    `The docs/ prose tree — the questions the API surface cannot answer: MEMORY.md (ownership: who frees what, and when), CRYPTO.md (the shipped cipher suites + TLS stack), ASYNC.md (stackful fibers), BUILDING.md, PLATFORMS.md, NETWORKING.md, DISTRIBUTED.md, FORMAT.md, LIMITATIONS.md, TOOLING.md, PLAYGROUND.md, spec.md (the full language reference), dev/COMPILER_INTERNALS.md. Four ways in: NO arguments lists every document (path, size, title); query='who frees a string' searches every SECTION of every document and returns the best few with their section keys; name='MEMORY.md' outline=true gives that document's heading map; name='MEMORY.md' section='2.1' returns one section. name= alone returns the whole document ('docs/' prefix and '.md' suffix optional, case-insensitive, 'offset' pages past 48 KB) — prefer query or section, since MEMORY.md is 44 KB and spec.md 63 KB. Read this before guessing at memory, crypto, or platform behaviour — every one of these topics is documented.`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_docs`
+    `Search and read the shipped docs/ prose — MEMORY.md (ownership: who frees what), CRYPTO.md, ASYNC.md, spec.md (the full language reference), and ten more: the behaviour questions no API surface answers. Read this before guessing at memory, crypto, or platform behaviour. No arguments lists the documents; query= finds the sections that answer a question; name= with section=/outline= reads pieces. Prefer query/section — whole documents run 40–60 KB.`
     ( __mcp_schema_docs ) ) )
 
     // Changelog.
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_changelog`
-    `Targeted CHANGELOG.md retrieval — the changelog is large (240+ KB) and growing, so never fetch it whole. Call with NO arguments first to get a compact index (releases + entry counts). Then pass query (space-separated terms, ALL must occur, case-insensitive) and/or release (e.g. 0.9.6 or Unreleased) to get complete changelog entries, each prefixed with its '[release] — date › category' provenance, ranked by relevance (title hits first). The top 'limit' matches come in full; every further match is listed as a one-line title so nothing relevant is invisible. Pass compact=true for a titles-only overview. Use this to find out when/whether a feature, fix, or rename happened.`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_changelog`
+    `Find when/whether a feature, fix, or rename shipped — targeted retrieval from the 240+ KB CHANGELOG, never fetch it whole. No arguments returns the release index; query= and/or release= return the matching entries in full ('[release] — date › category' provenance, best matches first, the rest as one-line titles).`
     ( __mcp_schema_changelog ) ) )
 
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_api`
-    `A stdlib module's API surface, a published package's API surface, or a search across all stdlib modules — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders one stdlib module's signatures + doc comments + full type definitions, no function bodies. package='nn' renders a registry package's API the same way (streamed from its tarball) — the step after a registry hit to see the functions/types it exposes. query='csv quote' finds every stdlib declaration whose signature/doc/module-path contains ALL terms; if nothing contains all of them, any term that exactly names a stdlib module wins first (query='csv json' returns ext/csv.nu's and ext/json.nu's API surfaces), then the SAME terms are re-run as a whole-word OR, ranked by how many of them each declaration covers (so 'vec_push new string_new' still lands on the real functions), and only if that finds nothing too does the search widen to examples + registry. The import-free C-runtime builtins (nurl_println, nurl_str_float, …) are indexed too, as core/builtins.nu.`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_api`
+    `A module's API surface (signatures + doc comments + full type definitions, no bodies), or a declaration search across the whole stdlib. Prefer this over nurl_read_stdlib — a surface is ~6× smaller than the source, one matching declaration ~0.3 KB. module='ext/csv.nu' or package='nn' renders one surface (C-runtime builtins are indexed as core/builtins.nu); query= searches declarations — one concept per call, 2–4 related terms. Every reply states what it searched and lists what it could not.`
     ( __mcp_schema_api ) ) )
 
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_grep`
-    `Case-insensitive substring search (grep -F -i) across the NURL corpora: stdlib sources, examples, compiler tests (path:line: text, per-file and total caps) and the package registry (name + description). Results are RANKED: lines where the match sits at word boundaries (adjacent byte is not a letter — mcp_call, /mcp and mcp2 qualify, memcpy does not) come first; in-word substring matches follow under a separate clearly-labeled tail, so short acronyms stay readable without any flags. Scope with where='stdlib'|'examples'|'tests'|'packages'|'all'; word=true drops the in-word tail entirely.`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_grep`
+    `Case-insensitive substring search across stdlib, examples, and tests (path:line: text) plus the package registry (name + description) — "is there anything for X" over raw text. Word-boundary matches rank first; in-word hits follow in a labeled tail. Scope with where=.`
     ( __mcp_schema_grep ) ) )
 
     : Json out ( json_obj_new )
@@ -5288,7 +5263,6 @@ s combined_stdout s combined_stderr → v {
     : Json arr ( json_arr_new )
     ( json_arr_push arr ( __mcp_resource_desc `nurl://readme` `README` `Project overview + syntax cheat sheet.` `text/markdown` ) )
     ( json_arr_push arr ( __mcp_resource_desc `nurl://roadmap` `ROADMAP` `Current development plan + ship log.` `text/markdown` ) )
-    ( json_arr_push arr ( __mcp_resource_desc `nurl://gotchas` `GOTCHAS` `Known compiler quirks + workarounds.` `text/markdown` ) )
     ( json_arr_push arr ( __mcp_resource_desc `nurl://grammar` `Grammar` `Current NURL grammar (EBNF).` `text/plain` ) )
     ( json_arr_push arr ( __mcp_resource_desc `nurl://stdlib` `Stdlib` `JSON listing of every stdlib module.` `application/json` ) )
     ( json_arr_push arr ( __mcp_resource_desc `nurl://examples` `Examples` `JSON listing of every bundled example.` `application/json` ) )
@@ -5331,50 +5305,40 @@ s combined_stdout s combined_stderr → v {
                 } F _ → {} }
             ( string_free fp )
         } {
-            ? != 0 ( nurl_str_eq uri `nurl://gotchas` ) {
-                : String fp ( get_gotchas_path )
+            ? != 0 ( nurl_str_eq uri `nurl://grammar` ) {
+                : String fp ( get_grammar_path )
                 : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
                 ?? rd { T body → {
                         : String s_body ( bytes_to_str body )
-                        ( json_arr_push arr ( __mcp_resource_text_node uri `text/markdown` ( string_data s_body ) ) )
+                        ( json_arr_push arr ( __mcp_resource_text_node uri `text/plain` ( string_data s_body ) ) )
                         ( vec_free [u] body ) ( string_free s_body )
                     } F _ → {} }
                 ( string_free fp )
             } {
-                ? != 0 ( nurl_str_eq uri `nurl://grammar` ) {
-                    : String fp ( get_grammar_path )
-                    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-                    ?? rd { T body → {
-                            : String s_body ( bytes_to_str body )
-                            ( json_arr_push arr ( __mcp_resource_text_node uri `text/plain` ( string_data s_body ) ) )
-                            ( vec_free [u] body ) ( string_free s_body )
-                        } F _ → {} }
-                    ( string_free fp )
+                ? != 0 ( nurl_str_eq uri `nurl://stdlib` ) {
+                    : String dir ( get_stdlib_dir )
+                    : Json listing ( json_arr_new )
+                    ( msearch_walk_nu_files listing ( string_data dir ) `` )
+                    : String body ( json_stringify listing )
+                    ( json_arr_push arr ( __mcp_resource_text_node uri `application/json` ( string_data body ) ) )
+                    ( json_free listing ) ( string_free body ) ( string_free dir )
                 } {
-                    ? != 0 ( nurl_str_eq uri `nurl://stdlib` ) {
-                        : String dir ( get_stdlib_dir )
+                    ? != 0 ( nurl_str_eq uri `nurl://examples` ) {
+                        : String dir ( get_examples_dir )
                         : Json listing ( json_arr_new )
                         ( msearch_walk_nu_files listing ( string_data dir ) `` )
                         : String body ( json_stringify listing )
                         ( json_arr_push arr ( __mcp_resource_text_node uri `application/json` ( string_data body ) ) )
                         ( json_free listing ) ( string_free body ) ( string_free dir )
                     } {
-                        ? != 0 ( nurl_str_eq uri `nurl://examples` ) {
-                            : String dir ( get_examples_dir )
+                        ? != 0 ( nurl_str_eq uri `nurl://tests` ) {
+                            : String dir ( get_tests_dir )
                             : Json listing ( json_arr_new )
                             ( msearch_walk_nu_files listing ( string_data dir ) `` )
                             : String body ( json_stringify listing )
                             ( json_arr_push arr ( __mcp_resource_text_node uri `application/json` ( string_data body ) ) )
                             ( json_free listing ) ( string_free body ) ( string_free dir )
-                        } {
-                            ? != 0 ( nurl_str_eq uri `nurl://tests` ) {
-                                : String dir ( get_tests_dir )
-                                : Json listing ( json_arr_new )
-                                ( msearch_walk_nu_files listing ( string_data dir ) `` )
-                                : String body ( json_stringify listing )
-                                ( json_arr_push arr ( __mcp_resource_text_node uri `application/json` ( string_data body ) ) )
-                                ( json_free listing ) ( string_free body ) ( string_free dir )
-                            } {} } } } } } }
+                        } {} } } } } }
     : Json out ( json_obj_new )
     ( json_obj_set out `contents` arr )
     ^ out
@@ -5398,7 +5362,7 @@ s combined_stdout s combined_stderr → v {
     ? != 0 ( nurl_str_eq name `nurl_coding_assistant` ) {
         : Json content ( json_obj_new )
         ( json_obj_set content `type` ( json_str_lit `text` ) )
-        ( json_obj_set content `text` ( json_str_lit `You are about to read or write NURL source. NURL uses prefix notation: every operator comes before its arguments and arity is fixed. Calls require parentheses: ( fn arg1 arg2 ). Single-letter type keywords (i u f b s v), no semicolons. Functions: @ name params → ret { body }. Bindings: : type name expr (immutable) or : ~ type name expr (mutable). Pattern match: ?? expr { Variant payload → body ... }. Read README and GOTCHAS first via the tools — every common pitfall has a documented diagnostic. When writing code, ALWAYS check examples for the closest shape before guessing syntax.` ) )
+        ( json_obj_set content `text` ( json_str_lit `You are about to read or write NURL source. NURL uses prefix notation: every operator comes before its arguments and arity is fixed. Calls require parentheses: ( fn arg1 arg2 ). Single-letter type keywords (i u f b s v), no semicolons. Functions: @ name params → ret { body }. Bindings: : type name expr (immutable) or : ~ type name expr (mutable). Pattern match: ?? expr { Variant payload → body ... }. Read README first via the tools — every common pitfall has a documented compiler diagnostic. When writing code, ALWAYS check examples for the closest shape before guessing syntax.` ) )
 
         : Json msg ( json_obj_new )
         ( json_obj_set msg `role` ( json_str_lit `user` ) )
@@ -5855,8 +5819,6 @@ s combined_stdout s combined_stderr → v {
             ( router_get r `/readme.md` \ HttpRequest req Params params → HttpResponse { ^ ( h_readme_md req params ) } )
             ( router_get r `/roadmap` \ HttpRequest req Params params → HttpResponse { ^ ( h_roadmap req params ) } )
             ( router_get r `/roadmap.md` \ HttpRequest req Params params → HttpResponse { ^ ( h_roadmap_md req params ) } )
-            ( router_get r `/gotchas` \ HttpRequest req Params params → HttpResponse { ^ ( h_gotchas req params ) } )
-            ( router_get r `/gotchas.md` \ HttpRequest req Params params → HttpResponse { ^ ( h_gotchas_md req params ) } )
             ( router_get r `/grammar` \ HttpRequest req Params params → HttpResponse { ^ ( h_grammar req params ) } )
             ( router_get r `/grammar.ebnf` \ HttpRequest req Params params → HttpResponse { ^ ( h_grammar_ebnf req params ) } )
             // Render repo docs by their natural path so relative links inside

@@ -1039,9 +1039,9 @@ version = "0.0.0"
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
     ( nm_prop props `module` `Render ONE installed-stdlib module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'.` )
-    ( nm_prop props `package` `Render a PUBLISHED registry package's API surface — nurldoc over its src/*.nu, streamed from the tarball. The name from a registry search, e.g. 'nn'. Use this after a registry hit to learn the functions/types a package exposes (their names are not otherwise searchable).` )
+    ( nm_prop props `package` `A published registry package's API surface, rendered from its tarball — the step after a registry hit, since package symbol names are not otherwise searchable. E.g. 'nn'.` )
     ( nm_prop props `version` `Optional package version (e.g. '0.1.1'); defaults to the latest. Only meaningful with 'package'.` )
-    ( nm_prop props `query` `Search every installed-stdlib module's declarations: space- or comma-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. When no declaration has all of them, any term that exactly NAMES a stdlib module ('csv', 'csv.nu', or 'ext/csv.nu') returns that whole module's API surface instead; failing that, the terms are re-run as an OR — each matched as a WHOLE word (bounded by a digit or any non-letter, so 'string' hits string_push_str but not substring) — and the best-covering declarations come back ranked, most terms covered first; only if that finds nothing too does the reply widen to the package registry. So a concept-shaped query like 'string builder append' is fine here. An exact package-name term is noted regardless. Ignored when 'module' or 'package' is set.` )
+    ( nm_prop props `query` `Declaration search: space- or comma-separated terms, ALL must occur (case-insensitive) in signature + doc comment + module path. Keep one call to ONE concept (2–4 related terms, e.g. 'string lowercase'). Zero-hit fallbacks run in order: a term that exactly names a module ('csv', 'csv.nu', 'ext/csv.nu') returns that whole surface — never cut mid-module, and the reply ends by listing any term it did not search; then a whole-word OR ranked by coverage; then the package registry. Ignored when 'module' or 'package' is set.` )
     ( json_obj_set schema `properties` props )
     ^ schema
 }
@@ -1085,11 +1085,11 @@ version = "0.0.0"
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
-    ( nm_prop props `name` `Which document to return, e.g. 'MEMORY.md', 'CRYPTO.md', 'dev/COMPILER_INTERNALS.md'. The 'docs/' prefix and the '.md' suffix are both optional and matching is case-insensitive. Omit to list every document with its size and title.` )
-    ( nm_prop props `section` `Return ONE section of 'name' instead of the whole document — by its number ('7.4', '2') or by words from its heading ('move checking'). The section runs to the next heading of the same or higher level, so '2' includes its 2.x subsections and '2.1' does not. MEMORY.md is 44 KB; the section that says who frees a String is a fraction of that. A miss replies with the outline.` )
+    ( nm_prop props `name` `Which document, e.g. 'MEMORY.md', 'dev/COMPILER_INTERNALS.md' ('docs/' prefix and '.md' optional, case-insensitive). Omit to list every document.` )
+    ( nm_prop props `section` `Return ONE section of 'name' — by number ('7.4'; '2' includes its 2.x subsections) or by heading words ('move checking'). The cheap way to answer a specific question; a miss replies with the outline.` )
     ( nm_prop_bool props `outline` `With 'name': return that document's heading map (section titles + byte sizes) instead of its text, so you can pick a 'section' without reading the document first.` )
-    ( nm_prop props `query` `Search every SECTION of every document for these terms (whole-word, ranked by how many they cover, heading matches outranking body matches) and return the best few with their 'section=' keys. Use this when you know the question but not which document answers it. Ignored when 'name' is set.` )
-    ( nm_prop_int props `offset` `Byte offset to start from (default 0). Documents are capped at 48 KB per call; a truncated reply prints the exact offset to pass next. Prefer 'section' or 'query' — paging a whole document to find one paragraph is the expensive way.` )
+    ( nm_prop props `query` `Search every section of every document (whole-word, ranked, heading hits outrank body hits); returns the best few with their 'section=' keys. Use when you know the question but not the document. Ignored when 'name' is set.` )
+    ( nm_prop_int props `offset` `Byte offset for paging (default 0; replies cap at 48 KB and print the next offset). Prefer 'section' or 'query'.` )
     ( json_obj_set schema `properties` props )
     ^ schema
 }
@@ -1110,7 +1110,7 @@ version = "0.0.0"
     : Json props ( json_obj_new )
     ( nm_prop props `source` `Inline NURL source for a single-file program (written as main.nu). Provide this OR "files".` )
     ( nm_prop props `files` `A {relative-path: content} object for a multi-file project, e.g. {"main.nu": "...", "src/util.nu": "..."}. Paths must stay inside the workspace.` )
-    ( nm_prop props `deps` `A {name: version-requirement} object of registry dependencies, e.g. {"nn": "^0.1.1"}. Resolved (transitively, signature-verified) with nurlpkg install; a program imports one as $ 'deps/<name>/src/<module>.nu' (see nurl_api package=<name> for the module path).` )
+    ( nm_prop props `deps` `{name: version-requirement} registry deps, e.g. {"nn": "^0.1.1"}. A program imports one as $ 'deps/<name>/src/<module>.nu' (nurl_api package=<name> shows module paths).` )
     ( nm_prop props `entry` `The .nu file to compile (default main.nu).` )
     ( json_obj_set schema `properties` props )
     ^ schema
@@ -1142,44 +1142,44 @@ version = "0.0.0"
 @ build_tools_list → ( Vec Json ) {
     : ( Vec Json ) tools ( vec_new [Json] )
     ? ( nm_build_ok ) {
-        ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_build`
+        ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_build`
         `Compile NURL (inline "source" or a "path") with the local toolchain; reports success or compiler diagnostics. Does not run the program.`
-        ( nm_schema_src_path ) ) )
-        ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_build_project`
-        `Compile a program that USES registry packages: give "source" (or "files") plus "deps" ({name: req}); the tool resolves them (nurlpkg install — transitive, checksum + signature verified) and compiles with the local toolchain, returning JSON with binary_path and ll_path (no inline base64). The bridge from nurl_api/nurl_grep discovery to a working build. Does not run the program.`
-        ( nm_schema_project ) ) )
+        ( nm_schema_src_path ) ) F F T F ) )
+        ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_build_project`
+        `Compile a program that uses registry packages: "source" (or "files") plus "deps" ({name: req}); deps are resolved with nurlpkg (transitive, checksum + signature verified). Returns binary_path and ll_path. Does not run the program.`
+        ( nm_schema_project ) ) F F T F ) )
     } {}
     ? ( nm_build_ok ) {
-        ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_build_wasm`
-        `Compile NURL (inline "source" or a "path") to a wasm32-wasi module, fully locally (no build service). Optional "out" = output path; a "path" input defaults to <input>.wasm next to it; inline "source" without "out" writes the module + its .ll to a temp path and returns JSON with wasm_path and ll_path (no inline base64).`
-        ( nm_schema_src_path ) ) )
+        ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_build_wasm`
+        `Compile NURL (inline "source" or a "path") to a wasm32-wasi module, fully locally. Writes the .wasm + .ll next to "path" (or to "out", or a temp path for inline source) and returns wasm_path and ll_path.`
+        ( nm_schema_src_path ) ) F F T F ) )
     } {}
     ? ( nm_run_ok ) {
-        ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_run`
+        ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_run`
         `Compile AND run NURL with the local toolchain; returns the program's exit code, stdout, and stderr.`
-        ( nm_schema_src_path ) ) )
+        ( nm_schema_src_path ) ) F T F T ) )
     } {}
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_check`
+    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_check`
     `Front-end only: type-check and borrow-check NURL without producing a binary. Fast. Reports diagnostics.`
-    ( nm_schema_src_path ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_fmt`
+    ( nm_schema_src_path ) ) T F T F ) )
+    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_fmt`
     `Format NURL to canonical form with nurlfmt; returns the formatted source.`
-    ( nm_schema_src_path ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_list_stdlib`
+    ( nm_schema_src_path ) ) F F T F ) )
+    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_list_stdlib`
     `List the .nu modules in the installed standard library (under $NURL_STDLIB).`
-    ( nm_schema_empty ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_read_stdlib`
+    ( nm_schema_empty ) ) T F T F ) )
+    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_read_stdlib`
     `Read one module from the installed standard library by relative path.`
-    ( nm_schema_name ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_docs`
-    `The docs/ prose tree shipped with the toolchain — the questions the API surface cannot answer: MEMORY.md (ownership: who frees what, and when), CRYPTO.md (the shipped cipher suites + TLS stack), ASYNC.md (stackful fibers), BUILDING.md, PLATFORMS.md, NETWORKING.md, DISTRIBUTED.md, FORMAT.md, LIMITATIONS.md, TOOLING.md, spec.md (the full language reference), dev/COMPILER_INTERNALS.md. Four ways in: NO arguments lists every document (path, size, title); query='who frees a string' searches every SECTION of every document and returns the best few with their section keys; name='MEMORY.md' outline=true gives that document's heading map; name='MEMORY.md' section='2.1' returns one section. name= alone returns the whole document ('docs/' prefix and '.md' suffix optional, case-insensitive, 'offset' pages past 48 KB) — prefer query or section, since MEMORY.md is 44 KB and spec.md 63 KB. Read this before guessing at memory, crypto, or platform behaviour — every one of those topics is documented.`
-    ( nm_schema_docs ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_api`
-    `A stdlib module's API surface, or a search across all of them — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders signatures + doc comments + type definitions; query='csv quote' finds matching declarations. The import-free C-runtime builtins (nurl_println, nurl_str_float, …) are indexed too, as core/builtins.nu. A query no single declaration satisfies first tries each term as an exact module name (query='csv json' returns ext/csv.nu's and ext/json.nu's API surfaces), then re-runs the terms as a whole-word OR ranked by term coverage, and only then widens to the package registry; an exact package-name term is footnoted regardless.`
-    ( nm_schema_api ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_grep`
+    ( nm_schema_name ) ) T F T F ) )
+    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_docs`
+    `Search and read the shipped docs/ prose — MEMORY.md (ownership: who frees what), CRYPTO.md, ASYNC.md, spec.md (the full language reference), and ten more: the behaviour questions no API surface answers. Read this before guessing at memory, crypto, or platform behaviour. No arguments lists the documents; query= finds the sections that answer a question; name= with section=/outline= reads pieces. Prefer query/section — whole documents run 40–60 KB.`
+    ( nm_schema_docs ) ) T F T F ) )
+    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_api`
+    `A module's API surface (signatures + doc comments + full type definitions, no bodies), or a declaration search across the whole stdlib. Prefer this over nurl_read_stdlib — a surface is ~6× smaller than the source, one matching declaration ~0.3 KB. module='ext/csv.nu' or package='nn' renders one surface (C-runtime builtins are indexed as core/builtins.nu); query= searches declarations — one concept per call, 2–4 related terms. Every reply states what it searched and lists what it could not.`
+    ( nm_schema_api ) ) T F T F ) )
+    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_grep`
     `Case-insensitive search across the installed stdlib (path:line: text; word-boundary matches ranked first, in-word substring hits in a labeled tail) and the package registry (name + description) — "is there a package for X" works from any MCP-only editor. word=true for short acronyms.`
-    ( nm_schema_grep ) ) )
+    ( nm_schema_grep ) ) T F T F ) )
     ^ tools
 }
 

@@ -8,6 +8,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`nurl_api`'s exact-module replies never truncate mid-module, and
+  every query term is accounted for.** A grab-bag query like
+  `vec sort string split lowercase contains` used to split the byte cap
+  evenly across the named modules and cut `core/string.nu` mid-surface —
+  and said nothing about `split`/`lowercase`/`contains`, so an agent
+  could read the truncation as "lowercase does not exist". Now a named
+  module's API surface is emitted whole or not at all (what doesn't fit
+  becomes a one-line `module=` pointer), and the reply ends by listing
+  the terms that named no module as NOT searched, pointing the agent at
+  one-concept follow-up queries. Both fronts' `query` descriptions now
+  teach the one-concept-per-call shape (2–4 related terms).
+
+- **Every MCP tool now carries spec ToolAnnotations**
+  (`readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`,
+  via the new `ext/mcp.nu` helper `mcp_tool_annotate`). Clients such as
+  claude.ai key their per-tool permission defaults and grouping off
+  these hints — and an absent `destructiveHint` defaults to TRUE in the
+  spec, so an unannotated read-only tool was being presented as if it
+  could destroy state, leaving every tool stuck in "Needs approval".
+  Browse/search/read tools declare read-only (auto-allowable); builds
+  declare non-destructive + idempotent; `nurl_run` honestly declares
+  destructive + open-world.
+
+- **MCP tool descriptions cut to ~60 % of their size** across nurl-mcp
+  (bumped to 0.12.0) and the playground — agents reported the
+  descriptions eating real context budget. Every tool now follows one shape: what it returns,
+  when to use it, and at most one note that changes how you call it;
+  parameter mechanics live in the parameter descriptions and runtime
+  details (fallback order, byte caps, what wasn't searched) are stated
+  by the replies themselves.
+
+### Removed
+
+- **`nurl_read_gotchas`, the `nurl://gotchas` resource, the playground's
+  `/gotchas` routes, and `docs/GOTCHAS.md` itself.** The document earned
+  its keep when the compiler couldn't yet explain its own errors; 170 of
+  173 error sites now carry the explanation inline, and the gotchas file
+  had been reduced to saying so.
+
 ## [0.47.0] — 2026-08-20
 
 ### Changed

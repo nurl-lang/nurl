@@ -13,8 +13,8 @@ limitations — they live with each module (the `stdlib/**` file headers and
 The fixed grammar quirks (binary `&` / `|` arity, ternary cascading, `^`
 vs `^^`) are documented in the [Grammar](#grammar) section below; the
 closure-capture and `: ~` closure-borrow-escape rules live in
-[`docs/MEMORY.md`](MEMORY.md). All of these are compiler-diagnosed — see
-[`docs/GOTCHAS.md`](GOTCHAS.md) for the "the error message is the API" policy.
+[`docs/MEMORY.md`](MEMORY.md). All of these are compiler-diagnosed —
+"the error message is the API".
 
 ## Type system
 

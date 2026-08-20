@@ -16,7 +16,7 @@ NURL takes a few design positions that are uncommon together:
 - **Locally parseable** — a construct's shape (arity and nesting) is fixed by a short window of surrounding tokens, with no long-range parse dependencies. (A few operators — `.`, `&`, `|`, `#` — resolve their *lowering* by operand type; see [`docs/spec.md`](docs/spec.md) §4.9/§6.)
 - **Deterministic compiler** — the same source always produces identical output, with no platform-dependent codegen. The self-hosted compiler reaches a byte-identical fixed point on its own source. (Raw `*T` pointers and out-of-range shifts inherit LLVM semantics — spec §4.2, §6.1.)
 - **Single-owner memory + default-on static borrow checker** — auto-drop at scope exit, plus a diagnostic pass (on by default, `--no-borrowck` to disable) that catches use-after-move, alias-double-free, escaping closure-captures, and iterator invalidation as hard errors.
-- **Diagnostics that name the cure** — an error states what was expected, what was found, and the correct form with an example, because for a model the compiler is the only teacher in the loop. 170 of the compiler's 173 error sites carry an explanation; `docs/GOTCHAS.md` is short because the messages do the work.
+- **Diagnostics that name the cure** — an error states what was expected, what was found, and the correct form with an example, because for a model the compiler is the only teacher in the loop. 170 of the compiler's 173 error sites carry an explanation — the messages do the work a gotchas document used to.
 - **LLVM-based codegen, broad platform reach** — one pipeline targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64 — and a NURL program can **boot as its own kernel**: bootable unikernel images (no host OS, no libc) on x86_64, AArch64 and RISC-V64. See [`unikernel/README.md`](unikernel/README.md).
 
 A reproducible benchmark suite lives in [`bench/`](bench/): 15 benchmarks
@@ -226,7 +226,6 @@ pure-NURL runtime. Details: [`docs/TOOLING.md`](docs/TOOLING.md).
 | Platforms — codegen targets & host OSes (incl. FreeBSD) | [`docs/PLATFORMS.md`](docs/PLATFORMS.md) |
 | Unikernel — a NURL program as its own kernel | [`unikernel/README.md`](unikernel/README.md) |
 | Known limitations | [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) |
-| Gotchas (compiler-diagnosed) | [`docs/GOTCHAS.md`](docs/GOTCHAS.md) |
 | Compiler internals (for contributors) | [`docs/dev/COMPILER_INTERNALS.md`](docs/dev/COMPILER_INTERNALS.md) |
 | Examples catalogue | [`examples/README.md`](examples/README.md) |
 | Roadmap · Changelog · Contributing | [`ROADMAP.md`](ROADMAP.md) · [`CHANGELOG.md`](CHANGELOG.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md) |

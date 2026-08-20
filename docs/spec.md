@@ -1848,8 +1848,6 @@ IR blob + deterministic compiler + fixed-point check) mirrors Zig.
 - [`spec/grammar.ebnf`](../spec/grammar.ebnf) — authoritative grammar.
 - [`docs/MEMORY.md`](MEMORY.md) — memory model and borrow checker
   programmer's guide.
-- [`docs/GOTCHAS.md`](GOTCHAS.md) — source-level traps (currently none;
-  the compiler diagnoses them at the point of error).
 - [`docs/FORMAT.md`](FORMAT.md) — `nurlfmt` rules.
 - [`docs/ASYNC.md`](ASYNC.md) — async runtime design.
 - [`README.md`](../README.md) — project overview and tutorials.
