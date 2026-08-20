@@ -188,7 +188,7 @@ def t_mcp_info(c: Client) -> None:
     assert_eq("transport", j.get("transport"), "streamable-http")
     assert_eq("url_path", j.get("url_path"), "/mcp")
     tools = j.get("tools", [])
-    assert_eq("20 tools advertised", len(tools), 20)
+    assert_eq("19 tools advertised", len(tools), 19)
     for t in (
         "nurl_build_native",
         "nurl_build_wasm",
@@ -268,7 +268,7 @@ def t_tools_list(c: Client) -> None:
     print("\n[MCP] tools/list")
     _, _, env = c.rpc({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
     tools = env.get("result", {}).get("tools", [])
-    assert_eq("20 tools", len(tools), 20)
+    assert_eq("19 tools", len(tools), 19)
     names = {t.get("name") for t in tools}
     for required in (
         "nurl_build_native",
@@ -285,7 +285,6 @@ def t_tools_list(c: Client) -> None:
         "nurl_read_grammar",
         "nurl_read_readme",
         "nurl_read_roadmap",
-        "nurl_read_gotchas",
         "nurl_docs",
         "nurl_changelog",
         "nurl_api",
@@ -349,7 +348,7 @@ def t_tools_call_listing(c: Client) -> None:
 
 def t_tools_call_reads(c: Client) -> None:
     print("\n[MCP] tools/call nurl_read_grammar / nurl_read_readme")
-    for tool in ("nurl_read_grammar", "nurl_read_readme", "nurl_read_roadmap", "nurl_read_gotchas"):
+    for tool in ("nurl_read_grammar", "nurl_read_readme", "nurl_read_roadmap"):
         env = _tool_call(c, tool, {})
         text = _tool_text(env)
         assert_true(f"{tool} returns non-empty text", len(text) > 100, f"len={len(text)}")
@@ -709,7 +708,6 @@ def t_resources(c: Client) -> None:
     for u in (
         "nurl://readme",
         "nurl://roadmap",
-        "nurl://gotchas",
         "nurl://grammar",
         "nurl://stdlib",
         "nurl://examples",

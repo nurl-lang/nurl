@@ -122,8 +122,8 @@ $ `stdlib/std/fs.nu`  // nurl_file_open / nurl_file_close
         : i start ( nurl_peek ctl 3 )
         : ~ i end ( nurl_peek ctl 4 )
         // Carry the buffer address as an i64 and cast per use — a
-        // mutable ': ~ *u' binding miscompiles across realloc (GOTCHAS
-        // item 10); this function reassigns it on grow.
+        // mutable ': ~ *u' binding miscompiles across realloc (a
+        // compiler-diagnosed trap); this function reassigns it on grow.
         : ~ i bufa ( nurl_peek ctl 1 )
         // Compact: shift [start, end) down to offset 0.
         ? > start 0 {

@@ -15,8 +15,7 @@ seems wrong, that's a contribution opportunity too.
   the repro to the few lines that trigger the issue, that's already
   most of the fix.
 - **Improve documentation.** README, grammar comments, stdlib
-  docstrings, `docs/GOTCHAS.md`, and example programs all benefit
-  from extra eyes.
+  docstrings, and example programs all benefit from extra eyes.
 - **Write examples.** New `.nu` programs in `examples/` that
   demonstrate idioms, stdlib usage, or interesting algorithms are
   always welcome.
@@ -100,8 +99,8 @@ enough — we'll iterate on the design in the issue thread.
 - **Update docs** if you change observable behaviour. The README is a
   thin overview that links to topic docs under [`docs/`](docs/); update
   the relevant one (`docs/spec.md`, `docs/LIMITATIONS.md`,
-  `docs/NETWORKING.md`, …), the EBNF grammar in `spec/`, or
-  `docs/GOTCHAS.md`, and add a `CHANGELOG.md` entry, as appropriate.
+  `docs/NETWORKING.md`, …) or the EBNF grammar in `spec/`, and add a
+  `CHANGELOG.md` entry, as appropriate.
 - **Keep commit messages descriptive.** A one-line subject is fine
   for small fixes; multi-line bodies are welcome for larger changes
   that warrant context.

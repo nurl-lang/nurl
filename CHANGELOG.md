@@ -22,6 +22,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one-concept follow-up queries. Both fronts' `query` descriptions now
   teach the one-concept-per-call shape (2–4 related terms).
 
+- **MCP tool descriptions cut to ~60 % of their size** across nurl-mcp
+  and the playground — agents reported the descriptions eating real
+  context budget. Every tool now follows one shape: what it returns,
+  when to use it, and at most one note that changes how you call it;
+  parameter mechanics live in the parameter descriptions and runtime
+  details (fallback order, byte caps, what wasn't searched) are stated
+  by the replies themselves.
+
+### Removed
+
+- **`nurl_read_gotchas`, the `nurl://gotchas` resource, the playground's
+  `/gotchas` routes, and `docs/GOTCHAS.md` itself.** The document earned
+  its keep when the compiler couldn't yet explain its own errors; 170 of
+  173 error sites now carry the explanation inline, and the gotchas file
+  had been reduced to saying so.
+
 ## [0.47.0] — 2026-08-20
 
 ### Changed

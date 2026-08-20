@@ -131,7 +131,7 @@ Cursor, Windsurf, Zed and other MCP-capable IDEs accept the same URL
 - **Tools** to act on NURL source: *build* (compile + return artifact for
   native Linux / Windows / macOS / cross targets / wasm), *browse* (list
   examples, stdlib, tests), and *read* (examples, stdlib, tests, grammar,
-  readme, roadmap, gotchas).
+  readme, roadmap).
 - **Search** — `nurl_api` (a module's or a registry package's API surface,
   or a term search over every stdlib declaration) and `nurl_grep` (ranked
   substring search across stdlib, examples, tests and the registry).

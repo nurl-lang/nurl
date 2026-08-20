@@ -1553,7 +1553,7 @@ $ `stdlib/ext/nurldoc.nu`
 //
 // docs/ is the prose the API surface cannot answer: MEMORY.md (who owns
 // what, and when it is freed), CRYPTO.md (which cipher suites ship),
-// GOTCHAS.md, spec.md, … An agent that can only reach nurl_api ends up
+// spec.md, … An agent that can only reach nurl_api ends up
 // guessing at exactly the questions these files answer, so both servers
 // expose the tree as one tool: no `name` lists what exists, a `name`
 // returns that document verbatim.

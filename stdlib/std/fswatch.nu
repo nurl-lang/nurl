@@ -71,8 +71,8 @@ $ `stdlib/core/posix.nu`  // read / close
 
 // Heap control block (FsWatch is a copyable handle over it).
 //   fd  — inotify fd (-1 once closed)
-//   buf — event buffer address, held as i64 (GOTCHAS: a mutable *u
-//         binding miscompiles across reassignment; cast per use)
+//   buf — event buffer address, held as i64 (a mutable *u binding
+//         miscompiles across reassignment; cast per use)
 //   lim — bytes valid in buf
 //   pos — read cursor into buf
 : FsWatchImpl { i fd i buf i lim i pos }
