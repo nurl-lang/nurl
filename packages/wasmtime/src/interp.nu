@@ -116,6 +116,9 @@ $ `module.nu`
     i max_depth  // frame-stack depth limit (trap when exceeded)
     i fuel  // remaining instruction budget (-1 = unlimited)
     b gpu_ok  // env/CUDA host imports enabled (opt-in; default off)
+    b cap  // capture stdout/stderr into capout/caperr instead of the host streams
+    ( Vec u ) capout  // captured module stdout (raw bytes, NULs preserved)
+    ( Vec u ) caperr  // captured module stderr
     ( Vec s ) pfuncs  // *PFunc per defined function, predecoded lazily (#s 0 until first call)
 }
 
@@ -171,6 +174,9 @@ $ `module.nu`
     = . it max_depth 65536
     = . it fuel -1
     = . it gpu_ok F
+    = . it cap F
+    = . it capout ( vec_new [u] )
+    = . it caperr ( vec_new [u] )
     // copy global initial values
     : i ng ( vec_len [i] . m global_init )
     : ~ i gi 0
@@ -270,12 +276,28 @@ $ `module.nu`
     ~ < fi fn { ?? ( vec_get [s] . it fds fi ) { T pp → ( __freefd pp ) F → {} } = fi + fi 1 }
     ( vec_free [s] . it fds )
     ( vec_free [u] . it trapmsg )
+    ( vec_free [u] . it capout )
+    ( vec_free [u] . it caperr )
     : i pn ( vec_len [s] . it pfuncs )
     : ~ i pi 0
     ~ < pi pn { ?? ( vec_get [s] . it pfuncs pi ) { T pp → ( __pf_free pp ) F → {} } = pi + pi 1 }
     ( vec_free [s] . it pfuncs )
     ( nurl_free # s it )
 }
+
+// Capture the module's stdout/stderr into buffers instead of writing
+// them to the host's own streams. This is the embedder's switch: a
+// host program that runs a module as a function call wants the
+// module's output back as a VALUE, not interleaved into its own
+// console. Enable before exec_func; read the buffers after it.
+@ interp_capture * Interp it → v { = . it cap T }
+
+// The captured bytes — BORROWED views into the Interp (valid until
+// interp_free; do not free). Raw bytes, exactly as the module wrote
+// them: a NUL neither truncates nor terminates.
+@ interp_stdout_bytes * Interp it → ( Vec u ) { ^ . it capout }
+
+@ interp_stderr_bytes * Interp it → ( Vec u ) { ^ . it caperr }
 
 // Append a program argument (copied from a NUL-terminated host string).
 @ interp_push_arg * Interp it s str → v {
@@ -1730,9 +1752,18 @@ $ `module.nu`
     : ~ i k 0
     ~ < k len { ( vec_push [u] buf # u & ( __mem_load it + ptr k 1 0 ) 255 ) = k + k 1 }
     ? | == fd 1 == fd 2 {
-        : String s ( bytes_to_str buf )
-        ? == fd 2 { ( nurl_eprint ( string_data s ) ) } { ( nurl_print ( string_data s ) ) }
-        ( string_free s )
+        ? . it cap {
+            // An embedder asked for the output as a value: raw bytes,
+            // appended, NULs preserved — bytes_to_str would truncate at
+            // the first NUL a binary-printing module emits.
+            : ( Vec u ) dst ? == fd 2 . it caperr . it capout
+            : ~ i c 0
+            ~ < c len { ( vec_push [u] dst # u ?? ( vec_get [u] buf c ) { T x → # i x F → 0 } ) = c + c 1 }
+        } {
+            : String s ( bytes_to_str buf )
+            ? == fd 2 { ( nurl_eprint ( string_data s ) ) } { ( nurl_print ( string_data s ) ) }
+            ( string_free s )
+        }
     } {
         : s fp ( __fd_at it fd )
         ? != # i fp 0 {

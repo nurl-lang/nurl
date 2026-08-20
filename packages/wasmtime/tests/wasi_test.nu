@@ -81,6 +81,33 @@ $ `src/interp.nu`
         }
         F e → { ( nurl_print `SKIP: cannot stage /tmp/t.txt\n` ) }
     }
+    // ── case 3: interp_capture — the embedder reads stdout as a value ──
+    // Same module as case 1, but with capture enabled its "hi from wasi\n"
+    // must land in interp_stdout_bytes and NOT on our console (the golden
+    // pins that: no second "hi from wasi" line appears in this output).
+    : !( Vec u ) ParseErr dr3 ( bytes_from_hex ( wasm_wasi ) )
+    ?? dr3 {
+        T bytes → {
+            : *Module m ( module_decode bytes )
+            ? . m ok {
+                : *Interp it ( interp_new m )
+                ( interp_capture it )
+                ( interp_push_arg it `wasitest` )
+                ( exec_func it ( module_export_func m `_start` ) )
+                : ( Vec u ) got ( interp_stdout_bytes it )
+                : String gs ( bytes_to_str got )
+                ( nurl_print `captured stdout: ` )
+                : i okc ( nurl_str_eq ( string_data gs ) `hi from wasi\n` )
+                ( nurl_print ? != okc 0 `== ` `!= ` )
+                ( nurl_print `"hi from wasi\\n"\n` )
+                ? == okc 0 { = fails + fails 1 } {}
+                ( string_free gs )
+                ( interp_free it )
+            } { ( nurl_print `FAIL: module did not decode (capture case)\n` ) = fails + fails 1 }
+            ( module_free m )
+        }
+        F → { ( nurl_print `FAIL: hex parse (capture case)\n` ) = fails + fails 1 }
+    }
     ? == fails 0 { ( nurl_print `ALL WASI TESTS PASSED\n` ) } { ( nurl_print `WASI TESTS FAILED\n` ) }
     ^ fails
 }
