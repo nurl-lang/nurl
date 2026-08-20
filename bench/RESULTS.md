@@ -1,6 +1,6 @@
 # Benchmark results — NURL vs C vs Rust vs Node vs Python
 
-Generated `2026-08-20T14:05:04Z` by `bench/bench.sh`. **Do not edit by hand** — the next
+Generated `2026-08-20T15:45:09Z` by `bench/bench.sh`. **Do not edit by hand** — the next
 run overwrites it. The machine-readable form of this same run is
 [`results/latest.json`](results/latest.json), which is what the landing
 page renders its table from.
@@ -11,11 +11,11 @@ page renders its table from.
 |---|---|
 | Host | `GitHub Actions ubuntu-latest runner` |
 | Kernel | `Linux 6.17.0-1022-azure x86_64` |
-| CPU | AMD EPYC 9V74 80-Core Processor (4 logical cores) |
-| Memory | 16373452 KiB |
-| Commit | `e4535b010e633955d28a4a14f02472146f261cd0` |
-| CI run | https://github.com/nurl-lang/nurl/actions/runs/32377517330 |
-| NURL | `v0.46.0-10-ge4535b01` |
+| CPU | AMD EPYC 7763 64-Core Processor (4 logical cores) |
+| Memory | 16377684 KiB |
+| Commit | `f972ccb91e5670b6351b38b507b28eaad9852917` |
+| CI run | https://github.com/nurl-lang/nurl/actions/runs/32387545933 |
+| NURL | `v0.46.0-13-gf972ccb9` |
 | C | Ubuntu clang version 18.1.3 (1ubuntu1) |
 | Rust | rustc 1.97.1 (8bab26f4f 2026-07-14) |
 | Node | v22.23.2 |
@@ -23,7 +23,10 @@ page renders its table from.
 
 | Setting | Value |
 |---|---|
-| Optimisation | NURL/C `clang -O2 -flto=thin` + ThinLTO backend O3, Rust `-C opt-level=3` |
+| NURL flags | `nurlc` → LLVM IR; `clang -O2 -flto=thin -c`; link `clang -O2 -flto=thin -Wl,-plugin-opt,O3` (ThinLTO backend at O3 — the standard `nurl.sh` release pipeline) |
+| C flags | `clang -O2 -flto=thin -c`; link `clang -O2 -flto=thin -Wl,-plugin-opt,O3` — the identical pipeline, so neither column gets a backend the other lacks |
+| Rust flags | `rustc -C opt-level=3` — rustc has no prelink/backend split; opt-level 3 is the `cargo build --release` default |
+| Node / Python | `node` / `python3`, no flags |
 | Timed runs per cell | up to 5, adaptive: as many as fit in 8000 ms |
 | Timed compiles per cell | 3 (median) |
 | Per-run timeout | 300 s |
@@ -36,22 +39,22 @@ same computation. **Bold** is the fastest cell in the row.
 
 | Benchmark | NURL | C | Rust | Node | Python |
 |---|---:|---:|---:|---:|---:|
-| _(floor: empty program)_ | _1.580_ | _1.559_ | _1.810_ | _25.285_ | _18.242_ |
-| `lcg` | 44.227 | **44.124** | 44.370 | 1817.035 | 5286.906 |
-| `packet_classifier` | 63.589 | **63.546** | 63.722 | 160.803 | 4483.926 |
-| `ring_write` | **47.698** | 47.714 | 47.833 | 75.148 | 6521.791 |
-| `histogram_bins` | 44.747 | **44.552** | 44.752 | 75.864 | 6335.550 |
-| `prefix_scan` | 24.532 | **24.526** | 24.772 | 73.049 | 4887.665 |
-| `binary_search` | **34.333** | 35.790 | 41.742 | 112.623 | 6495.148 |
-| `sort_window` | 30.139 | **30.106** | 30.430 | 165.561 | 11477.365 |
-| `bloom_filter` | 19.709 | **18.691** | 20.651 | 2691.624 | 8473.816 |
-| `hash_join` | **27.751** | 28.666 | 30.203 | 3491.929 | 8220.276 |
-| `sieve` | 20.723 | **19.984** | 20.369 | 70.410 | 3304.119 |
-| `fib` | **27.893** | 33.106 | 29.280 | 142.744 | 1292.389 |
-| `collatz` | 13.688 | **13.664** | 13.778 | 51.533 | 752.162 |
-| `matmul` | **45.304** | 46.278 | 47.236 | 84.179 | 3707.431 |
-| `json_parse` | **8.702** | 8.817 | 12.403 | 39.798 | 38.958 |
-| `nbody` | 26.804 | 44.906 | **26.267** | 96.513 | 3273.930 |
+| _(floor: empty program)_ | _1.412_ | _1.410_ | _1.611_ | _22.933_ | _16.722_ |
+| `lcg` | 38.904 | **38.887** | 39.172 | 2052.356 | 5049.066 |
+| `packet_classifier` | 56.294 | **56.187** | 56.401 | 161.912 | 4757.438 |
+| `ring_write` | **42.211** | 42.234 | 42.472 | 66.035 | 6207.343 |
+| `histogram_bins` | **39.558** | 40.692 | 39.792 | 67.954 | 6165.729 |
+| `prefix_scan` | 21.759 | **21.756** | 21.984 | 65.940 | 4684.213 |
+| `binary_search` | **36.269** | 38.297 | 40.008 | 106.869 | 6076.017 |
+| `sort_window` | **26.581** | 26.591 | 26.831 | 198.103 | 11501.202 |
+| `bloom_filter` | **17.732** | 17.807 | 18.303 | 2841.920 | 7404.718 |
+| `hash_join` | **26.954** | 28.044 | 29.269 | 3418.220 | 8289.541 |
+| `sieve` | 20.186 | **19.822** | 20.161 | 66.378 | 3233.793 |
+| `fib` | **25.213** | 29.994 | 28.147 | 131.789 | 1355.285 |
+| `collatz` | 12.220 | **12.106** | 12.292 | 49.337 | 721.473 |
+| `matmul` | **33.407** | 33.558 | 33.697 | 76.834 | 3320.613 |
+| `json_parse` | 8.857 | **8.518** | 11.691 | 35.864 | 38.261 |
+| `nbody` | 25.292 | 39.760 | **24.051** | 100.388 | 3029.569 |
 
 ## 2. Compile time (median, ms)
 
@@ -71,22 +74,22 @@ at run time, inside their own cells above.
 
 | Benchmark | NURL `nurlc` | NURL `clang` | **NURL total** | NURL rebuild | C `clang` | Rust `rustc` |
 |---|---:|---:|---:|---:|---:|---:|
-| _(floor: empty program)_ | _3.038_ | _106.531_ | _**109.569**_ | _66.725_ | _90.589_ | _70.031_ |
-| `lcg` | 3.168 | 107.832 | **111.000** | 65.681 | 110.842 | 76.283 |
-| `packet_classifier` | 3.272 | 108.071 | **111.343** | 67.171 | 103.500 | 76.529 |
-| `ring_write` | 3.371 | 108.646 | **112.017** | 66.900 | 104.113 | 78.043 |
-| `histogram_bins` | 3.448 | 126.499 | **129.947** | 67.325 | 119.200 | 85.343 |
-| `prefix_scan` | 3.462 | 112.130 | **115.592** | 67.946 | 110.273 | 82.743 |
-| `binary_search` | 3.641 | 117.104 | **120.745** | 68.414 | 106.212 | 83.548 |
-| `sort_window` | 3.782 | 124.151 | **127.933** | 68.526 | 117.148 | 89.528 |
-| `bloom_filter` | 3.914 | 113.335 | **117.249** | 66.894 | 111.985 | 92.572 |
-| `hash_join` | 6.476 | 260.769 | **267.245** | 70.761 | 221.313 | 134.517 |
-| `sieve` | 3.487 | 110.041 | **113.528** | 66.475 | 112.501 | 87.370 |
-| `fib` | 3.218 | 103.770 | **106.988** | 65.263 | 98.396 | 73.222 |
-| `collatz` | 3.315 | 106.005 | **109.320** | 64.813 | 99.990 | 77.571 |
-| `matmul` | 3.720 | 107.929 | **111.649** | 65.109 | 112.606 | 99.143 |
-| `json_parse` | 52.042 | 422.559 | **474.601** | 117.318 | 168.786 | 190.188 |
-| `nbody` | 5.047 | 134.376 | **139.423** | 67.025 | 134.562 | 112.490 |
+| _(floor: empty program)_ | _2.599_ | _91.210_ | _**93.809**_ | _58.195_ | _79.858_ | _59.724_ |
+| `lcg` | 2.727 | 91.438 | **94.165** | 56.600 | 86.733 | 68.312 |
+| `packet_classifier` | 2.847 | 95.937 | **98.784** | 58.019 | 90.387 | 69.101 |
+| `ring_write` | 2.914 | 95.886 | **98.800** | 58.641 | 91.399 | 68.661 |
+| `histogram_bins` | 3.022 | 115.069 | **118.091** | 59.342 | 108.883 | 77.003 |
+| `prefix_scan` | 3.071 | 100.974 | **104.045** | 59.984 | 100.042 | 74.080 |
+| `binary_search` | 3.192 | 104.116 | **107.308** | 59.153 | 97.880 | 81.563 |
+| `sort_window` | 3.262 | 105.255 | **108.517** | 59.131 | 103.028 | 80.094 |
+| `bloom_filter` | 3.519 | 102.835 | **106.354** | 59.341 | 102.601 | 75.263 |
+| `hash_join` | 6.008 | 257.103 | **263.111** | 61.876 | 218.093 | 121.794 |
+| `sieve` | 3.111 | 98.867 | **101.978** | 59.118 | 101.954 | 79.416 |
+| `fib` | 2.834 | 95.001 | **97.835** | 58.542 | 89.707 | 67.212 |
+| `collatz` | 2.994 | 98.187 | **101.181** | 61.248 | 94.604 | 69.710 |
+| `matmul` | 3.362 | 100.676 | **104.038** | 59.079 | 105.270 | 91.850 |
+| `json_parse` | 53.154 | 434.289 | **487.443** | 110.510 | 160.883 | 181.111 |
+| `nbody` | 4.637 | 127.101 | **131.738** | 60.620 | 128.627 | 100.733 |
 
 ## 3. Correctness gate
 
