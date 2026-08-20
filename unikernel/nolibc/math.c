@@ -127,6 +127,46 @@ double round(double x) {
     return t;
 }
 
+/* rint(): round to the nearest integer, ties to EVEN — what wasm's
+ * f32.nearest / f64.nearest and the FPU's default mode both mean.
+ * Spelled in exact arithmetic like trunc rather than as the
+ * x + 2^52 - 2^52 idiom, so the answer does not depend on the current
+ * rounding mode. `x - t` is exact (Sterbenz), t*0.5 is exact (power-
+ * of-two scale), so both the half test and the evenness test are
+ * exact. |x| >= 2^52, inf and nan all take the d == 0 path and come
+ * back unchanged. */
+double rint(double x) {
+    double t = trunc(x);
+    double d = fabs(x - t);
+    if (d > 0.5) t += copysign(1.0, x);
+    else if (d == 0.5) {
+        if (t != 2.0 * trunc(t * 0.5)) t += copysign(1.0, x);  /* tie, t odd → away */
+    }
+    if (t == 0.0) return copysign(0.0, x);   /* rint(-0.3) is -0.0 */
+    return t;
+}
+
+/* The float entries the wasm interpreter's f32 ops link against.
+ * truncf: truncating a float's value yields a float-representable
+ * value, so going through the double path is exact. sqrtf: hardware,
+ * like sqrt — the single-precision instruction rounds once, which is
+ * the correct answer by definition. */
+float truncf(float x) { return (float)trunc(x); }
+
+float sqrtf(float x) {
+    float r;
+#if defined(__x86_64__)
+    __asm__("sqrtss %1, %0" : "=x"(r) : "x"(x));
+#elif defined(__aarch64__)
+    __asm__("fsqrt %s0, %s1" : "=w"(r) : "w"(x));
+#elif defined(__riscv) && defined(__riscv_flen) && __riscv_flen >= 32
+    __asm__("fsqrt.s %0, %1" : "=f"(r) : "f"(x));
+#else
+#  error "nolibc sqrtf: no hardware square root known for this target"
+#endif
+    return r;
+}
+
 /* x * 2^n, correct through the subnormal range. Done in at most two
  * multiplications by exact powers of two, so no bits are lost that
  * gradual underflow would not lose anyway. */

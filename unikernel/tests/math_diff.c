@@ -37,6 +37,8 @@
 /* nolibc's, under names that let both live in one process. */
 double nl_sqrt(double), nl_fabs(double), nl_floor(double), nl_ceil(double);
 double nl_trunc(double), nl_round(double), nl_copysign(double, double);
+double nl_rint(double);
+float nl_truncf(float), nl_sqrtf(float);
 double nl_exp(double), nl_log(double), nl_log2(double), nl_log10(double);
 double nl_sin(double), nl_cos(double), nl_tan(double);
 double nl_atan(double), nl_atan2(double, double), nl_pow(double, double);
@@ -148,6 +150,30 @@ static void exact_one(const char *name, double (*f)(double),
     if (bad) { printf("      first at %.17g: got %.17g want %.17g\n", at, f(at), g(at)); failures++; }
 }
 
+/* The float-entry twin: same edges, same bit-equality bar. */
+static uint32_t bits_f(float x) { uint32_t b; memcpy(&b, &x, 4); return b; }
+static void exact_onef(const char *name, float (*f)(float),
+                       float (*g)(float), long long iters) {
+    long long bad = 0;
+    float at = 0;
+    static const float edge[] = {
+        0.0f, -0.0f, 0.5f, -0.5f, 1.0f, -1.0f, 1.5f, -1.5f, 2.5f, -2.5f,
+        8388607.5f, 8388608.0f, 3.4e38f, -3.4e38f, 1.4e-45f, -1.4e-45f,
+        1.0f / 0.0f, -1.0f / 0.0f,
+    };
+    for (unsigned i = 0; i < sizeof edge / sizeof edge[0]; i++)
+        if (bits_f(f(edge[i])) != bits_f(g(edge[i]))) { bad++; at = edge[i]; }
+    for (long long i = 0; i < iters; i++) {
+        uint32_t b = (uint32_t)(rnd() >> 32);
+        float x;
+        memcpy(&x, &b, 4);
+        if (isnan(x)) continue;
+        if (bits_f(f(x)) != bits_f(g(x))) { bad++; at = x; }
+    }
+    printf("  %-8s %10lld mismatches%s\n", name, bad, bad ? "  <- NOT EXACT" : " (bit-identical)");
+    if (bad) { printf("      first at %.9g: got %.9g want %.9g\n", (double)at, (double)f(at), (double)g(at)); failures++; }
+}
+
 int main(int argc, char **argv) {
     long long N = (argc > 1) ? atoll(argv[1]) : 200000;
     if (argc > 2) rng_state = (uint64_t)atoll(argv[2]) * 2654435761u + 1;
@@ -159,6 +185,11 @@ int main(int argc, char **argv) {
     exact_one("ceil",  nl_ceil,  ceil,  N);
     exact_one("trunc", nl_trunc, trunc, N);
     exact_one("round", nl_round, round, N);
+    /* rint under the default rounding mode is ties-to-even, which is
+     * the only mode this process runs in — bit equality applies. */
+    exact_one("rint",  nl_rint,  rint,  N);
+    exact_onef("truncf", nl_truncf, truncf, N);
+    exact_onef("sqrtf",  nl_sqrtf,  sqrtf,  N);
 
     /* cbrt is checked against ARITHMETIC, not against glibc. glibc's
      * cbrt is the less accurate of the two here — it answers

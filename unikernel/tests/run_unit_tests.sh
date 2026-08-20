@@ -145,7 +145,8 @@ expect_signal entropy-fault  134 "a refusing entropy source ends the program"
 #    sampled, and one seed's worst case is not the function's.
 # shellcheck disable=SC2086
 $CC $FREE $(for f in sqrt fabs floor ceil trunc round copysign exp log log2 log10 \
-                    sin cos tan atan atan2 pow cbrt hypot erf erfc; do
+                    sin cos tan atan atan2 pow cbrt hypot erf erfc \
+                    rint truncf sqrtf; do
                 printf -- '-D%s=nl_%s ' "$f" "$f"; done) \
     -c "$NOLIBC/math.c" -o "$OUT/test_math_renamed.o" || exit 2
 $CC -O2 "$ROOT/unikernel/tests/math_diff.c" "$OUT/test_math_renamed.o" \
