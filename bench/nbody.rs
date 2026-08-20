@@ -4,7 +4,7 @@
 // print the total energy (see the C peer for the full rationale).
 //
 // Rust never contracts a multiply-add into an fma without an explicit
-// `f64::mul_add`, and `-C opt-level=2` implies no fast-math, so this
+// `f64::mul_add`, and no rustc opt-level implies fast-math, so this
 // port needs no flag to stay bit-identical with the other four.
 const NBODY: usize = 5;
 const STEPS: u32 = 500_000;
