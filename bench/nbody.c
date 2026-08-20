@@ -27,6 +27,11 @@
 //     `-mfma`-bearing flag is ever added to `bench.sh`, this row needs
 //     an explicit `-ffp-contract=off` or its gate will start failing.**
 //     Rust never contracts without `f64::mul_add`, so it is unaffected.
+//     Lacking FMA hardware is NOT full protection, either: clang still
+//     emits `llvm.fmuladd`, and LLVM constant-folds that *fused* — a
+//     variant of this file with the whole setup visible to the constant
+//     folder produced a different checksum at plain `-O2`, no `-march`
+//     involved. The gate catches it; this note explains what happened.
 //   * The five files evaluate the operations in the same order. IEEE
 //     addition is not associative, so a reordered sum is a different
 //     number, and the gate would catch it as a mismatch rather than
@@ -57,10 +62,14 @@
 // pointer per body instead of seven — but the layout has to be the same
 // in all five ports or the row measures struct layout as well as FP
 // throughput. Measured on this corpus: AoS C retires 274.0M
-// instructions, SoA C 290.1M, and NURL — which is SoA — 291.9M. Held to
-// one layout the backends agree to well under a per cent; held to two,
-// the row would have reported a 6% spread that has nothing to do with
-// floating point. SoA is the one layout that is natural in all five
+// instructions, SoA C 290.1M. (NURL and Rust retire ~185M on the same
+// source shape: their frontends' IR passes LLVM's full-unroll cost
+// model at the O3 backend stage, which flattens the five-body loops and
+// keeps the state in registers; clang's C-shaped IR does not, at any
+// flag level tried — -O3, -fno-math-errno, locals, LTO. The gap is an
+// LLVM cost-model artifact, not extra work in the C.) Held to two
+// layouts, the row would have added a 6% spread that has nothing to do
+// with floating point. SoA is the one layout that is natural in all five
 // languages at once: an AoS Python port would be a list of objects and
 // would measure the interpreter's object model instead of its float
 // path.

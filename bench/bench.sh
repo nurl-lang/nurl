@@ -35,6 +35,11 @@
 # ============================================================
 set -u
 
+# $EPOCHREALTIME's decimal separator and awk's %f output both follow the
+# locale; under e.g. fi_FI a comma where time_ms expects a dot turns
+# compile times negative. Pin the whole run to C.
+export LC_ALL=C
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH="$ROOT/bench"
 BUILD="$BENCH/_build"
@@ -219,13 +224,35 @@ compile_nurl() {           # <src.nu> <outbase> -> "<frontend_ms> <total_ms> <wa
     echo "$(median "${fe[@]}") $(median "${tot[@]}") $(median "${wtot[@]}")"
 }
 
+# The C and Rust columns get the same optimisation pipeline the NURL
+# column gets, not a nominally-equal `-O2`. The NURL driver compiles at
+# $OPT but runs the ThinLTO *backend* at O3 (`-plugin-opt,O3`, see
+# compile_nurl above), and that backend pass is where LLVM makes its
+# biggest run-time decisions — e.g. on `nbody` it is what fully unrolls
+# the five-body loops and keeps the system state in registers, worth
+# 1.7x. So: C goes through the identical clang ThinLTO pipeline, and
+# Rust runs `-C opt-level=3` — rustc has no separate prelink/backend
+# knob, and opt-level 3 is what `cargo build --release` ships, so it is
+# both the closest equivalent and Rust's standard release setting.
 compile_c() {              # <src.c> <outbase> -> "<ms>" or FAIL
-    local src="$1" bin="$2.c.bin" out=() r t
+    local src="$1" obj="$2.c.o" bin="$2.c.bin" out=() r t l
     for ((r = 0; r < COMPILE_REPS; r++)); do
-        # shellcheck disable=SC2086
-        t="$(cd "$ROOT" && time_ms clang $OPT "$src" -lm -o "$bin")"
-        [[ "$t" == FAIL || "$t" == TIMEOUT ]] && { echo FAIL; return 1; }
-        out+=("$t")
+        if [[ "$(uname -s)" == Linux ]]; then
+            # shellcheck disable=SC2086
+            t="$(cd "$ROOT" && time_ms clang $OPT -flto=thin -c "$src" -o "$obj")"
+            [[ "$t" == FAIL || "$t" == TIMEOUT ]] && { echo FAIL; return 1; }
+            # shellcheck disable=SC2086
+            l="$(cd "$ROOT" && time_ms clang $OPT -flto=thin -Wl,-plugin-opt,O3 \
+                     -Wl,--as-needed "$obj" -lm -o "$bin")"
+            [[ "$l" == FAIL || "$l" == TIMEOUT ]] && { echo FAIL; return 1; }
+            out+=("$(awk -v a="$t" -v b="$l" 'BEGIN { printf "%.3f", a + b }')")
+        else
+            # Non-Linux fallback: full LTO, matching compile_nurl's.
+            # shellcheck disable=SC2086
+            t="$(cd "$ROOT" && time_ms clang $OPT -flto "$src" -lm -o "$bin")"
+            [[ "$t" == FAIL || "$t" == TIMEOUT ]] && { echo FAIL; return 1; }
+            out+=("$t")
+        fi
     done
     median "${out[@]}"
 }
@@ -233,7 +260,7 @@ compile_c() {              # <src.c> <outbase> -> "<ms>" or FAIL
 compile_rust() {           # <src.rs> <outbase> -> "<ms>" or FAIL
     local src="$1" bin="$2.rs.bin" out=() r t
     for ((r = 0; r < COMPILE_REPS; r++)); do
-        t="$(cd "$ROOT" && time_ms rustc -C opt-level=2 "$src" -o "$bin")"
+        t="$(cd "$ROOT" && time_ms rustc -C opt-level=3 "$src" -o "$bin")"
         [[ "$t" == FAIL || "$t" == TIMEOUT ]] && { echo FAIL; return 1; }
         out+=("$t")
     done
@@ -441,7 +468,7 @@ emit_md() {
     printf '| Python | %s |\n' "$PYTHON_VERSION"
     printf '\n'
     printf '| Setting | Value |\n|---|---|\n'
-    printf '| Optimisation | NURL/C `clang %s`, Rust `-C opt-level=2` |\n' "$OPT"
+    printf '| Optimisation | NURL/C `clang %s -flto=thin` + ThinLTO backend O3, Rust `-C opt-level=3` |\n' "$OPT"
     printf '| Timed runs per cell | up to %s, adaptive: as many as fit in %s ms |\n' "$MAX_REPS" "$BUDGET_MS"
     printf '| Timed compiles per cell | %s (median) |\n' "$COMPILE_REPS"
     printf '| Per-run timeout | %s s |\n' "$TIMEOUT_S"
