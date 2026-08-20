@@ -20,11 +20,17 @@ $ `stdlib/std/p256_field.nu`
 
 @ to_limbs BigInt x → ( Vec i ) {
     : ( Vec u ) be ( bigint_to_bytes_be x 32 )
-    : ( Vec i ) out ( vec_with_cap [i] 8 )
+    : ( Vec i ) out ( vec_with_cap [i] 4 )
     : ~ i k 0
-    ~ < k 8 {
-        ( vec_push [i] out | | | ( __bg be - 31 * 4 k ) << ( __bg be - 30 * 4 k ) 8
-        << ( __bg be - 29 * 4 k ) 16 << ( __bg be - 28 * 4 k ) 24 )
+    ~ < k 4 {
+        : i base - 24 * 8 k
+        : ~ u64 acc 0
+        : ~ i j 0
+        ~ < j 8 {
+            = acc | << acc 8 # u64 ( __bg be + base j )
+            = j + j 1
+        }
+        ( vec_push [i] out # i acc )
         = k + k 1
     }
     ( vec_free [u] be ) ^ out
@@ -32,11 +38,14 @@ $ `stdlib/std/p256_field.nu`
 
 @ from_limbs ( Vec i ) v → BigInt {
     : ( Vec u ) be ( vec_with_cap [u] 32 )
-    : ~ i k 7
+    : ~ i k 3
     ~ >= k 0 {
-        : i lk ?? ( vec_get [i] v k ) { T x → x F _ → 0 }
-        ( vec_push [u] be # u & >> lk 24 255 ) ( vec_push [u] be # u & >> lk 16 255 )
-        ( vec_push [u] be # u & >> lk 8 255 ) ( vec_push [u] be # u & lk 255 )
+        : u64 lk # u64 ?? ( vec_get [i] v k ) { T x → x F _ → 0 }
+        : ~ i sh 56
+        ~ >= sh 0 {
+            ( vec_push [u] be # u & # i >> lk sh 255 )
+            = sh - sh 8
+        }
         = k - k 1
     }
     : BigInt r ( bigint_from_bytes_be be ) ( vec_free [u] be ) ^ r
