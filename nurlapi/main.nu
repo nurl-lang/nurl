@@ -4805,10 +4805,12 @@ s combined_stdout s combined_stderr → v {
 //
 // A model asking "is there anything about X" should not need a second
 // tool call when the stdlib has no declaration for X. On a 0-hit query
-// the same AND-terms are matched against each example FILE (path +
-// content — examples are whole programs, so file granularity is the
-// useful one) and against the registry (per-term name/description
-// search, de-duplicated), and whatever exists is appended to the reply.
+// any term that exactly names a stdlib module ('csv' → ext/csv.nu)
+// returns that module's whole API surface first; otherwise the same
+// AND-terms are matched against each example FILE (path + content —
+// examples are whole programs, so file granularity is the useful one)
+// and against the registry (per-term name/description search,
+// de-duplicated), and whatever exists is appended to the reply.
 
 @ __mcp_tool_api Json args → Json {
     : s module ( __mcp_args_get `module` args `` )
@@ -5007,7 +5009,7 @@ s combined_stdout s combined_stderr → v {
     ( json_obj_set props `version`
     ( __mcp_prop `string` `Optional package version (e.g. '0.1.1'); defaults to the latest. Only meaningful with 'package'.` ) )
     ( json_obj_set props `query`
-    ( __mcp_prop `string` `Search every stdlib module's declarations instead: space-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. When no declaration has all of them, the terms are re-run as an OR — each matched as a WHOLE word (bounded by a digit or any non-letter, so 'string' hits string_push_str but not substring) — and the best-covering declarations come back ranked, most terms covered first. Only when that finds nothing does the reply widen to example programs and registry packages. So a concept-shaped query like 'string builder append' is fine here. Ignored when 'module' or 'package' is set.` ) )
+    ( __mcp_prop `string` `Search every stdlib module's declarations instead: space- or comma-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. When no declaration has all of them, any term that exactly NAMES a stdlib module ('csv', 'csv.nu', or 'ext/csv.nu') returns that whole module's API surface instead; failing that, the terms are re-run as an OR — each matched as a WHOLE word (bounded by a digit or any non-letter, so 'string' hits string_push_str but not substring) — and the best-covering declarations come back ranked, most terms covered first. Only when that finds nothing does the reply widen to example programs and registry packages. So a concept-shaped query like 'string builder append' is fine here. Ignored when 'module' or 'package' is set.` ) )
     ( json_obj_set schema `properties` props )
     ^ schema
 }
@@ -5259,7 +5261,7 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_schema_changelog ) ) )
 
     ( json_arr_push arr ( __mcp_tool_desc `nurl_api`
-    `A stdlib module's API surface, a published package's API surface, or a search across all stdlib modules — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders one stdlib module's signatures + doc comments + full type definitions, no function bodies. package='nn' renders a registry package's API the same way (streamed from its tarball) — the step after a registry hit to see the functions/types it exposes. query='csv quote' finds every stdlib declaration whose signature/doc/module-path contains ALL terms; if nothing contains all of them the SAME terms are re-run as a whole-word OR, ranked by how many of them each declaration covers (so 'string builder append' or 'vec_push new string_new' still lands on the real functions), and only if that finds nothing too does the search widen to examples + registry. The import-free C-runtime builtins (nurl_println, nurl_str_float, …) are indexed too, as core/builtins.nu.`
+    `A stdlib module's API surface, a published package's API surface, or a search across all stdlib modules — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders one stdlib module's signatures + doc comments + full type definitions, no function bodies. package='nn' renders a registry package's API the same way (streamed from its tarball) — the step after a registry hit to see the functions/types it exposes. query='csv quote' finds every stdlib declaration whose signature/doc/module-path contains ALL terms; if nothing contains all of them, any term that exactly names a stdlib module wins first (query='csv json' returns ext/csv.nu's and ext/json.nu's API surfaces), then the SAME terms are re-run as a whole-word OR, ranked by how many of them each declaration covers (so 'vec_push new string_new' still lands on the real functions), and only if that finds nothing too does the search widen to examples + registry. The import-free C-runtime builtins (nurl_println, nurl_str_float, …) are indexed too, as core/builtins.nu.`
     ( __mcp_schema_api ) ) )
 
     ( json_arr_push arr ( __mcp_tool_desc `nurl_grep`
