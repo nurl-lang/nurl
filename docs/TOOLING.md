@@ -92,6 +92,23 @@ deps follow the newest published version, path deps the local copy's
 `lock`, `verify`, `publish`, `login`, `logout [--revoke]`, `search`,
 `yank` / `unyank`, `test`, `bench`, `self-update`, `version`, `help`.
 
+**`publish` runs five gates before it packs anything**, and refuses on
+any of them — a published version can be yanked but never replaced, so
+the tool is deliberately harder to talk into an upload than out of one:
+the manifest parses and carries a name + version; every `deps/…` import
+is declared in `[dependencies]`; path-deps carry a version requirement
+and match the local copies you built against; and — the one that costs
+real time — **`src/main.nu` typechecks against the INSTALLED toolchain**,
+not the checkout you developed in. That last gate compiles with
+`$NURL_STDLIB`'s (or `~/.nurl`'s) compiler and stdlib, front-end only,
+because a package can import stdlib files that have shipped for years
+while calling a function added to one of them last week: every path
+exists, and the tarball still fails to build for everyone who installs
+it. If no installed compiler is found the gate WARNs and lets the
+publish through rather than passing silently — an unverifiable check
+should say so. `--dry-run` runs all five and uploads nothing (and needs
+no token).
+
 `self-update` is the odd one out: it upgrades the **toolchain**, not a
 package, and `nurl upgrade` is its canonical spelling (that is what the
 "a newer NURL toolchain is available" notice prints). It runs the installer

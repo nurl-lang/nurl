@@ -60,6 +60,34 @@ matching `nurl_free` / `drop`. Reassigning an owned binding frees the
 previous value first. Returning a fresh allocation **transfers
 ownership** to the caller and suppresses the local drop.
 
+### A `:` binding, and only a `:` binding
+
+The word doing the work above is **binding**. An allocating call whose
+result goes straight into another call's argument list is owned by
+nothing, so nothing frees it:
+
+```nurl
+( nurl_eprint ( nurl_str_int . resp status ) )   // leaks, every call
+: s st ( nurl_str_int . resp status )            // owned; freed at scope exit
+( nurl_eprint st )
+```
+
+Both compile, neither warns, and the difference is invisible until you
+run under LSan. It is a leak rather than a bug in the usual sense — the
+program is correct, it just grows — which is why it survives in code
+that is otherwise well tested: `ext/http_router.nu` and
+`ext/http_middleware.nu` each leaked one such string *per HTTP request*
+until 0.46.0, in servers meant to run for months.
+
+Bind first, then use. And do **not** then also free it by hand: the
+binding already carries a drop, so an explicit `nurl_free` on top is a
+double-free.
+
+The same shape appears one level up in `??` matches — unwrapping result
+B *inside* result A's `T` arm means B is never reached, and never
+freed, on any path where A is `F`. Unwrap each to its own binding
+first.
+
 ### Conservative by construction
 
 The compiler only registers a drop for a resource it saw allocated

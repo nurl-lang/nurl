@@ -691,6 +691,12 @@ base_type = 'i'  (*  signed 64-bit integer  →  i64    *)
                         No arithmetic operator applies — every operation is a
                         `nurl_v128_*` primitive, because `+` on a vector must
                         say which lane width it means. *)
+          | 'v256'  (*  256-bit SIMD vector →  <4 x i64>  (v2.6, docs/spec.md §4.1c)
+                        Same rules, one register wider. 256 bits is baseline
+                        NOWHERE, so a `v256` kernel is correct everywhere (LLVM
+                        legalises `<4 x i64>` into whatever the machine has) but
+                        fast only where AVX2 exists — pair it with the `simd`
+                        prefix to get a wide clone and a baseline one. *)
           ;
 
 sized_type = 'i8' | 'i16' | 'i32' | 'u16' | 'u32' | 'u64' | 'f32' ;
@@ -798,6 +804,7 @@ IDENT       = IDENT_PLAIN ( '::' IDENT_PLAIN )* ;
      u16 u32 u64             →  unsigned fixed-width ints (TT_TYPE_KW)
      f32                     →  32-bit float              (TT_TYPE_KW)
      v128                    →  SIMD vector    (v2.5)     (TT_TYPE_KW)
+     v256                    →  wide SIMD vec  (v2.6)     (TT_TYPE_KW)
      T F                     →  boolean literals          (TT_BOOL)
      Z                       →  sizeof keyword            (TT_SIZEOF)
      pub                     →  visibility prefix         (TT_PUB)

@@ -7,8 +7,8 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-18 · Current release: **0.45.0** · Language: **Grammar
-v2.5** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
+_Last reviewed: 2026-08-20 · Current release: **0.46.0** · Language: **Grammar
+v2.6** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
 
@@ -21,7 +21,7 @@ stage2). The only build dependency is clang / LLVM 15+.
 
 What is solid today:
 
-- **Language (Grammar v2.5).** Sum types (`|`) and product types (structs),
+- **Language (Grammar v2.6).** Sum types (`|`) and product types (structs),
   generics over structs and functions (incl. generics over option/result
   types), pattern matching with **match guards**, **or-patterns**, and
   **N-ary payloads**, **trait bounds** on type parameters (`[A: Ord]`), **compile-time constant
@@ -29,13 +29,18 @@ What is solid today:
   `u` = byte/u8, plus sized `i8`/`i16`/`i32`, `u16`/`u32`/`u64`, `f` = f64
   and `f32`), tail-call optimization, and
   **variadic FFI** (the `printf` family callable directly). Since 0.40.0 the
-  language also spells the two shapes a fast numeric kernel is written in:
+  language also spells the shapes a fast numeric kernel is written in:
   **`v128`**, a first-class by-value SIMD vector type over ~27
   `nurl_v128_*` primitives (§4.1b) that lowers to SSE2 / NEON / wasm
   `simd128` with no CPUID probe and no fallback path, and **wide
   arithmetic** — `nurl_umulhi` (the high half of a 64×64 multiply) plus
   `nurl_addc` / `nurl_subb` / `nurl_mac` for carry chains the backend
-  recognises. The grammar decision
+  recognises. 0.46.0 adds the two that need a *runtime* decision:
+  **`v256`** (sixteen 16-bit lanes) and the **`simd` declaration prefix**
+  (grammar v2.6, §3.3b) — nurlc emits one clone of the function per
+  instruction-set tier and dispatches on CPUID once per process, so a
+  kernel written once runs AVX2 where it exists and baseline where it does
+  not, with no `#ifdef` and no separate build. The grammar decision
   for prefix-arity (no grouping delimiter) is formally locked, and since
   0.37.0 the n-ary `&`/`|` arity trap it makes possible is a **hard error
   by default** (`--no-strict-arity` demotes it to a warning) — the shape
@@ -95,12 +100,13 @@ A high-level map of what exists. Dates and per-feature detail are in
 - Self-hosted compiler (`compiler/nurlc.nu`) with a deterministic, byte-identical
   bootstrap; stage-0 links the committed `nurlc_lastgood.ll` snapshot (no
   Python in the toolchain).
-- Grammar evolved v0.1 → **v2.4** (snapshots in [`spec/`](spec/)). v2.x added:
+- Grammar evolved v0.1 → **v2.6** (snapshots in [`spec/`](spec/)). v2.x added:
   visibility (`pub`) enforcement across functions, types, consts, and enum
   variants; trait bounds; match guards + or-patterns; const folding; channel
   select; **dynamic trait objects** (`%Trait` + `( dyn Trait v )`, v2.3);
-  **`break` / `continue`** as reserved identifiers (v2.4); and locked the
-  prefix-arity grouping decision.
+  **`break` / `continue`** as reserved identifiers (v2.4); the **`v128`**
+  SIMD lane type (v2.5); the **`simd` CPU-dispatch prefix** on `@`
+  declarations (v2.6); and locked the prefix-arity grouping decision.
 - Type system: strong, static, inferred, algebraic; no subtyping, no implicit
   conversions. Sized integer/float types with **signedness carried in the
   type representation itself** (`u`/`u16`/`u32`/`u64` distinct from the
@@ -172,9 +178,10 @@ platform-specific shims.
   `ecdsa_p256` (P-256 + P-384 constant-time), `rsa` (PKCS#1 v1.5 + PSS), `aes_gcm`, `chacha20poly1305`,
   `hash` (SHA-1/224/256/384/512, SHA-512/224, SHA-512/256, MD5, HMAC), `hash_blake3`, `hash_xxh64` (XXH64),
   `hkdf`, `pbkdf2`, `scrypt`, `encode` (hex, base64, base32), `random` (OS CSPRNG `rand_bytes`), `rng` (xoshiro256\*\*).
-- **std/PKI & certificates** — `x509` (DER parser + chain/host validation, ML-DSA & SLH-DSA OIDs), `x509_gen` (self-signed P-256 & ML-DSA certificates, PKCS#8), `csr` (PKCS#10 RFC 2986 parser, generator, self-signature verifier, PEM round-trip, CA issuance from CSR).
+- **std/PKI & certificates** — `x509` (DER parser + chain/host validation, ML-DSA & SLH-DSA OIDs), `x509_gen` (self-signed P-256 & ML-DSA certificates, PKCS#8), `csr` (PKCS#10 RFC 2986 parser, generator, self-signature verifier, PEM round-trip, CA issuance from CSR), `pkey` (PEM private-key loading: SEC1/PKCS#8 P-256, RSA, and ML-DSA). A complete private CA built on them — classical or post-quantum, with enrollment, CSR signing, revocation and CRLs — is the `pki-server` registry package.
 - **std/compression** — `zstd` (pure-NURL RFC 8878 Zstandard decompressor & compressor up to level 19 optimal parser, no libzstd), `deflate` (RFC 1951 + table-driven CRC-32).
-- **std/IO & net** — `fs` (incl. streaming, `readlink`, `file_sync`, `dir_sync`, `file_truncate`), `path` (typed),
+- **std/IO & net** — `fs` (incl. streaming, `readlink`, `file_sync`, `dir_sync`,
+  `file_truncate`, `set_permissions`), `path` (typed),
   `net` (TCP/TLS), `udp`, `dns`, `dos`.
 - **ext/serialization** — `json`, `toml`, `csv`, `msgpack`, `cbor`, `xml`, `yaml`,
   `serde`, `regex`.
@@ -184,7 +191,11 @@ platform-specific shims.
   HTTP client (with cookie jar), **Post-Quantum TLS 1.3** (client & server: `X25519MLKEM768` hybrid & pure ML-KEM key exchange, ML-DSA certificate support, SNI + ALPN + mTLS + live cert reload), **HTTP/2**
   (RFC 9113 + HPACK, **server and client**), **WebSocket** (RFC 6455, **server
   and client**, with **permessage-deflate** compression — RFC 7692),
-  reverse proxy with binary-safe streaming. The stack has had a
+  reverse proxy with binary-safe streaming. Since 0.46.0 the serve path's
+  scaling mode is **fiber-per-connection** (`http_app_async n`): TLS record
+  I/O parks on the reactor instead of blocking a worker pthread, and the TLS
+  handshake runs on the connection's own fiber, so handshakes overlap rather
+  than serialise on the accept loop. The stack has had a
   dedicated security-hardening pass (path-traversal, SSRF, request-smuggling,
   HTTP/2 CONTINUATION-flood + stream-accounting, and clean cross-thread
   listener shutdown) with regression tests, and its serve path is
@@ -293,7 +304,9 @@ platform-specific shims.
   first *trainable* package, a deterministic sklearn-faithful MLP regressor),
   local LLMs (`nurllama`, `gguf`, `tokenizer`, `safetensor`), speech (`whisper`,
   `audio`), distributed compute (`swarm`, `swarm-mcp`), web
-  (`template` HTML templating, `http`), database clients (`psql`, `redis`
+  (`template` HTML templating, `http`), PKI (`pki-server` — a private CA
+  with a classical *or* post-quantum signing key), database clients
+  (`psql`, `redis`
   — pure NURL), and application scaffolding (`cli`, `cas`, `wasmbuilder`,
   `nurl-mcp`).
   Installed tools carry runtime data via the manifest's `[install] assets`

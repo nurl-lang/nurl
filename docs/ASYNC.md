@@ -83,10 +83,30 @@ resume on the next send/recv; from a plain thread the same calls use the
 per-channel condvar. One `Channel[A]` type serves both worlds.
 
 **`server_run_async`** (`stdlib/ext/http_server.nu`) drives the HTTP
-server on fibers: an accept fiber spawns one fiber per connection;
-keep-alive, the request-line timeout and the DoS limits work as under
-the thread pool. It returns when the listener closes and the fiber pool
-drains.
+server on fibers: an accept fiber spawns one fiber per connection. It
+returns when the listener closes and the fiber pool drains. Since 0.46.0
+the three serve paths share one `__serve_accepted` — so keep-alive, the
+request-line timeout and the DoS limits are literally the same code
+under `server_run`, `server_run_pool` and `server_run_async`, rather
+than three implementations that were supposed to agree. (They did not:
+the async path had neither admission control nor a per-connection idle
+timeout before that.)
+
+**TLS works on the fiber path** as of 0.46.0, which is what makes it a
+deployment mode rather than a demo. Two things had to change. First,
+`std/tls.nu`'s `__fill` / `_tls_sock_write` are context-aware: on a
+fiber, `EAGAIN` parks on the reactor and the worker moves to another
+connection; off a fiber they block exactly as before, so a threaded
+caller is unaffected. Second, the handshake moved off the accept fiber
+— `tcp_accept_transport` accepts without handshaking and
+`tcp_conn_complete_tls` runs the handshake on the *connection's* own
+fiber, so handshakes overlap instead of serialising one behind another
+(675 → 7 034 handshakes/s on a 12-core i7-5930K). A connection whose
+handshake fails is now one failed connection; a plain-TCP probe against
+a TLS port used to take the whole accept loop down with it.
+
+`packages/http` exposes this as **`http_app_async n`** — fiber per
+connection, `n` worker pthreads, `0` meaning one per core.
 
 ## 4. Semantics worth knowing
 
@@ -197,6 +217,15 @@ source-level traps.
   fiber-aware `tcp_accept` falls through to the blocking path and surfaces
   `NetTimeout`). A new TLS-reading runtime entry point must be annotated the
   same way.
+- **The spin-then-park window is sized for a TLS peer.**
+  `nurl__reactor_wait` spins before paying the two-thread park/wake
+  chain. That window was 64 probes (~25 µs), which a plaintext HTTP peer
+  answers inside but a TLS turnaround (decrypt + handle + encrypt,
+  ~35–45 µs on loopback) does not — so every keep-alive HTTPS request at
+  low concurrency missed the spin and ate a full park. It is 256 probes
+  since 0.46.0, and gated to ≤ 4 live fibers so a loaded server does not
+  burn cores spinning. Changing either number moves the low-concurrency
+  HTTPS cell in `bench/HTTP_RESULTS.md` and nothing else.
 - **Reactor park-vs-unpark ordering.** `nurl__reactor_wait` registers the
   wait entry with `active = 0`; the worker loop flips it via
   `nurl__reactor_activate` only after the parking fiber's `swapcontext`
