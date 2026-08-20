@@ -282,19 +282,10 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
     ^ y
 }
 
-// bigint (0 ≤ x < p, ≤ 256 bits) → 8 little-endian 32-bit plain limbs.
+// bigint (0 ≤ x < p, ≤ 256 bits) → 4 little-endian 64-bit plain limbs.
 @ __big_to_limbs8 BigInt x → ( Vec i ) {
     : ( Vec u ) be ( bigint_to_bytes_be x 32 )
-    : ( Vec i ) out ( vec_with_cap [i] 8 )
-    : ~ i k 0
-    ~ < k 8 {
-        : i b0 ?? ( vec_get [u] be - 31 * 4 k ) { T b → # i b F _ → 0 }
-        : i b1 ?? ( vec_get [u] be - 30 * 4 k ) { T b → # i b F _ → 0 }
-        : i b2 ?? ( vec_get [u] be - 29 * 4 k ) { T b → # i b F _ → 0 }
-        : i b3 ?? ( vec_get [u] be - 28 * 4 k ) { T b → # i b F _ → 0 }
-        ( vec_push [i] out | | | b0 << b1 8 << b2 16 << b3 24 )
-        = k + k 1
-    }
+    : ( Vec i ) out ( __p256_be32_to_limbs be 0 )
     ( vec_free [u] be )
     ^ out
 }
@@ -320,16 +311,21 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
 // Montgomery projective once per call. Verified against k·G in Python.
 @ __p256_comb_tbl_hex → s { ^ `6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f57fe36b40af22af8921656b32262c71da1ab919365c65dfb63a5a9e22185a5943e697d45825b636249f09f40407dca6f174b3d5867b8af212d50d152c699ca101e35798220cedc02a608548c24aa7358f830895e4fccc3ac216fc51ff8101e6e4700f948e1f433a2df3e4b396768a3299f0570bedc523e6efaad2b99852c392c30fa822bc2811aaa58492592e326e25de29493baaad651f7e90e75cb48e14db63bff44ae8f5dba80d6f4ad4bcb3df188b34b1a65050fe82f5e41124545f462ee7300a4bbc89d6726fb257c0de95e02789e96c98fd0d35f1fa93391ce2097992af72aac7e0d09b46447f1ddb25ff1e3c6f5bb1eeada9d806a5aa54a291c08127a014cb5692606a4a62a9cad33b680a7daae0d3eb336c224571d6e260f8ee4039a053098cfa3e1e4663878487ed997a9a3b5205ef8d8039927cfe93d3159d83bc01a5ab9e10958f1608c22c48c5ffea17c1585a137ef5c4ad4230368cb6d945111ed3ebc6118b1aa09a629e17ebad0648f446ed771c49a10f77c34a47b8785b4ed94a5b506612a677a657880b3a18a2e902e9a521b074ca0141a84aa9397512218eeb13461ceac089f1c42604fbe1627d40626db15419e26d9d0beada7a4c4f3840418d68dea064219700d1a0a5fd208dfb48f9c1875e98c12dc761c1fecc0497865d7b26f6a5ba6dd4435639622ef8d32017429c50c16caad0481eef5551b507590781b8291c6a220ac342967aa815c8575e52c4144103ecbcf9faed0927a43281690cde8df015159397b2a14f1291643488f80eeee54a05e35a8343ceeac55f8057f62eeca7b5d4fb54a0fe5274647ebe82d789a6dd561becc52c00cae38e38205e5ff8bf89bfe2ad60e9c067efea8f480d300594ec356dceaa60759d48f8146091c821d488e9843c27035d2627caa74754d5dad9289944395920d7b0fa3289d5db7aecc78f879f44919adc3734938dac7b7df6ea0408ebade130dead9aa8a56606f0afdb90422d81c9c6f5415bf70c35eddf9c6c7e1c792ebc499ee7c6fae6d777f9e8f73f9804c47bab8955dde6464641a7cf1aaf7ae617214f0ad04dbc747abc07bb82d6536c0292052d44bcdf6567f0698ff75e4ec9655d01a765c96900d8eb165f9c1d90902aa17bf29fc7b19a1e635f210ec2e7ba735fe58ccf83762c71e018aaa22086a46c269843f16b47957bd86848c84760c41eaf972b45f2159928383f4db07f10ee50f2fe8863ba0dbc83d36d88b34fed7bb921a0332299698420447d739beedb5e67fb982fd588c6766efc35ff7dc297eac357c84fc9d789bd852d4825ab834131eee12e9d953a4aaff73d349b95a7fae5000c7e33c972e25b328a535f566ec73617f5622df4373713269e4c35874afdf43aaee9c75df7f82f2a0455c08468b08bd737e02819085a92bfcde533864c8c7669c5f9a0ac223094b7ff25f55a2c214cd923fe7442010729acef8bf285dfd6c3f34193640bfbb7f12d94f114d38a40510000c15ba774a58d771a08ebc72ab82b74d77bf411f30f0fc8a6d39677a78492762736ff8344315fc596439591a3c6b94a6cf20ffb313728be674f84749b0b881666b8babd2d27ecdf824a920c2284059bf2bab833c357f5f468f344af6b317466efe0a423083e49f343a0a28c42ba792fe96a79fb3e72ad0c31b9c405f8540a20604ed93c24d67ff3668bfc2271f5c626cdfe17db3fb24d4a0ac9835f0e6155faeb3df8bf9d6b4a9b60ff39edff736545270a098d637d797dd6882b263d00d534d8ac7b195c6872b2fa24f7333fe89b0850c04b69640bc0e96a25fb201b4084ce8a404541b1f23d69561d30f51dc2d82e7b3068d03765581e5a0aebfc19cfb424f5763393d06a40071e15941a5cf443d550180e1b6020632968f6b8542783dfeeeb5b06e70ce08ffefd75f3fa01876bd86a703f10e895df07cbe1feba92e40ce6fbc8044dfda45028cf5293d2f310bf7f90c76f8a78712655bd6058b07b81568e83fb2d63c62cd05550d19d86abc96fedcc38452ef202481af78e1fbef8467e379ee514e409ef7dd9c51419ed83f257d4628271f170737bb6e51f547c5972a107b422d1e7bd6f85147ed031a0e45c2258eee44b35702476b51c309a2b25bb1387a62f98b3a9fe9a068ca922ee097c184ea25bcd6fc9cf343d86699898a60bcd7758e0a73c3879d7d86da147f00d75821e9baf4d7aaac4170ac0d84aeca4b075f432ca235d2af12355428dede80187f877ae7cd4da598a46ebfb0249aa28a8a8fbb7fbe79e03e042ea3478e062311cb1f3dceafeb7328fb9ef172f46339c5fbc3e48e514e109aa13a20e540e9f3d15281350b4bb44b8ee1b8bebc3d35e8855a59acbbd5f2012ca3c26846730ad139ad48c2ffbcf19dc0b10615290bec161ce30304b3c37853fe325890da658f5f8f4be3a18644a975b93e742a176c395ae64d73870e00c7531905283d7768c940d8a6fb01e3081abb7f6be1f9ebdec88947b45f151ab984b9feeea5c087565ce611fe5069e5850bc1fa3578c681d6be2b2567ac59de1e8e76080e0f8dadf6dcec6ad55f11bcb36a57bca0bc11dfcab92c48087f3263f2166cf14e1b02a6a766ee58790f1deb1edd4763f4fcb` }
 
-// 32 big-endian bytes at offset `off` → eight little-endian 2^32 limbs.
+// 32 big-endian bytes at offset `off` → four little-endian 2^64 limbs.
 @ __p256_be32_to_limbs ( Vec u ) src i off → ( Vec i ) {
-    : ( Vec i ) out ( vec_with_cap [i] 8 )
+    : ( Vec i ) out ( vec_with_cap [i] 4 )
     : ~ i k 0
-    ~ < k 8 {
-        : i b0 ?? ( vec_get [u] src + off - 31 * 4 k ) { T b → # i b F _ → 0 }
-        : i b1 ?? ( vec_get [u] src + off - 30 * 4 k ) { T b → # i b F _ → 0 }
-        : i b2 ?? ( vec_get [u] src + off - 29 * 4 k ) { T b → # i b F _ → 0 }
-        : i b3 ?? ( vec_get [u] src + off - 28 * 4 k ) { T b → # i b F _ → 0 }
-        ( vec_push [i] out | | | b0 << b1 8 << b2 16 << b3 24 )
+    ~ < k 4 {
+        // limb k = bytes [off + 24−8k … off + 31−8k], big-endian.
+        : i base + off - 24 * 8 k
+        : ~ u64 acc 0
+        : ~ i j 0
+        ~ < j 8 {
+            : u64 bj # u64 ?? ( vec_get [u] src + base j ) { T b → # i b F _ → 0 }
+            = acc | << acc 8 bj
+            = j + j 1
+        }
+        ( vec_push [i] out # i acc )
         = k + k 1
     }
     ^ out
@@ -355,22 +351,26 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
 @ __p256_comb_build → v {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec u ) tbytes ?? ( bytes_from_hex ( __p256_comb_tbl_hex ) ) { T v → v F _ → ( vec_new [u] ) }
-    : P256Pt tmp ( _p256_pt_mag )
+    : ( Vec i ) mx ( _mag4 )
+    : ( Vec i ) my ( _mag4 )
     : ~ i t 0
     ~ < t 2 {
-        : ( Vec i ) tbl ( _magn 384 )
-        ( _p256_set_identity_d scr tmp )
-        ( _p256_tbl_put tbl 0 tmp )
+        // AFFINE Montgomery entries (x‖y, 8 limbs) — the Jacobian comb's
+        // mixed addition wants Z = 1 implicitly. Entry 0 stays all-zero
+        // (never committed; see _p256_jmadd_d's keep mask).
+        : ( Vec i ) tbl ( _magn 128 )
+        : *i zp ( vec_data [i] tbl )
+        = . zp 0 0 = . zp 1 0 = . zp 2 0 = . zp 3 0
+        = . zp 4 0 = . zp 5 0 = . zp 6 0 = . zp 7 0
         : ~ i s 1
         ~ < s 16 {
             // T1 points sit at blob offsets 0‥14·64, T2 at 15·64‥29·64.
             : i off * + * t 15 - s 1 64
             : ( Vec i ) xl ( __p256_be32_to_limbs tbytes off )
             : ( Vec i ) yl ( __p256_be32_to_limbs tbytes + off 32 )
-            ( _p256_to_mont_d scr . tmp x xl )
-            ( _p256_to_mont_d scr . tmp y yl )
-            ( _p256_one_mont_d scr . tmp z )
-            ( _p256_tbl_put tbl s tmp )
+            ( _p256_to_mont_d scr mx xl )
+            ( _p256_to_mont_d scr my yl )
+            ( _p256_atbl_put tbl s mx my )
             ( vec_free [i] xl ) ( vec_free [i] yl )
             = s + s 1
         }
@@ -378,7 +378,7 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
         = t + t 1
     }
     ( vec_free [u] tbytes )
-    ( p256pt_free tmp )
+    ( vec_free [i] mx ) ( vec_free [i] my )
     ( _p256_scr_free scr )
 }
 
@@ -392,30 +392,35 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
     ^ @ ( Vec i ) { # s g_p256_comb_tbl2 }
 }
 
-// scalar · G → 64 bytes X‖Y, constant-time fixed-base comb.
+// scalar · G → 64 bytes X‖Y, constant-time fixed-base comb on JACOBIAN
+// coordinates with affine table entries: 32 × (3M+5S) doublings +
+// 64 × (8M+3S) mixed additions, against the projective complete
+// formula's 14 multiplies for every one of those 96 operations. The
+// exceptional cases the complete formula absorbed are handled by
+// constant-time masks — see the Jacobian-layer header in
+// std/p256_field.nu for the case analysis and the ~2⁻²²⁴ bound on the
+// one it (deliberately, like ecp_nistz256) does not cover.
 @ p256ct_scalarmult_base ( Vec u ) kbytes → ( Vec u ) {
     : P256Scratch scr ( _p256_scr_new )
-    : ( Vec i ) aplain ( _p256_a_plain )
-    : ( Vec i ) am ( _p256_to_mont_s scr aplain ) ( vec_free [i] aplain )
-    : ( Vec i ) b3plain ( _p256_b3_plain )
-    : ( Vec i ) b3m ( _p256_to_mont_s scr b3plain ) ( vec_free [i] b3plain )
     // Shared, lazily-built tables of G multiples — BORROWED from the
     // global cache; must not be freed here.
     : ( Vec i ) tbl1 ( __p256_comb_tbl_mont )
     : ( Vec i ) tbl2 ( __p256_comb_tbl2_mont )
+    : ( Vec i ) onem ( _p256_one_mont_s scr )
+    : ( Vec i ) ex ( _mag4 )
+    : ( Vec i ) ey ( _mag4 )
+    // acc = ∞: Z = 0 (X/Y values are irrelevant while Z = 0; the
+    // doubling keeps Z at 0 and the first committed add replaces all
+    // three coordinates via the ∞ mask).
     : P256Pt acc ( _p256_pt_mag )
     ( _p256_set_identity_d scr acc )
-    : P256Pt selp ( _p256_pt_mag )
     // Eight-tooth Lim–Lee comb as two 4-tooth halves: iteration i
     // (31‥0) doubles once, then adds T1[bits i,i+32,i+64,i+96] and
-    // T2[bits i+128,…,i+224]. 32 doublings + 64 additions, against the
-    // 4-tooth layout's 64 + 64 — the doubling half of the work gone
-    // for one more 3 KB public table. Same constant-time properties:
-    // fixed trip count, masked table scans, complete additions (digit
-    // 0 reads the identity, which the formula absorbs).
+    // T2[bits i+128,…,i+224]. Constant-time: fixed trip count, masked
+    // table scans, masked exceptional-case commits.
     : ~ i i 31
     ~ >= i 0 {
-        ( p256ct_padd_d scr acc acc acc am b3m )
+        ( _p256_jdbl_d scr acc )
         : ~ i idx1 0
         : ~ i idx2 0
         : ~ i j 0
@@ -430,23 +435,30 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
             = idx2 | idx2 << b2 j
             = j + j 1
         }
-        ( _p256_tbl_get_d selp tbl1 idx1 )
-        ( p256ct_padd_d scr acc acc selp am b3m )
-        ( _p256_tbl_get_d selp tbl2 idx2 )
-        ( p256ct_padd_d scr acc acc selp am b3m )
+        // keep-mask: −1 exactly when the digit is 0 (branch-free).
+        : i k1 - # i >> # u64 | idx1 - 0 idx1 63 1
+        : i k2 - # i >> # u64 | idx2 - 0 idx2 63 1
+        ( _p256_atbl_get_d ex ey tbl1 idx1 )
+        ( _p256_jmadd_d scr acc ex ey onem k1 )
+        ( _p256_atbl_get_d ex ey tbl2 idx2 )
+        ( _p256_jmadd_d scr acc ex ey onem k2 )
         = i - i 1
     }
-    : ( Vec i ) zinv ( _mag8 )
+    // Jacobian → affine: x = X/Z², y = Y/Z³ (Z = 0 → zinv = 0 → the
+    // all-zero identity output, as before).
+    : ( Vec i ) zinv ( _mag4 )
     ( _p256_inv_d scr zinv . acc z )
-    ( _p256_mul_d scr . acc x . acc x zinv )
-    ( _p256_mul_d scr . acc y . acc y zinv )
+    ( _p256_mul_d scr . acc z zinv zinv )
+    ( _p256_mul_d scr . acc x . acc x . acc z )
+    ( _p256_mul_d scr . acc z . acc z zinv )
+    ( _p256_mul_d scr . acc y . acc y . acc z )
     ( _p256_from_mont_d scr . acc x . acc x )
     ( _p256_from_mont_d scr . acc y . acc y )
     : ( Vec u ) out ( vec_with_cap [u] 64 )
     ( _p256_limbs_to_be out . acc x )
     ( _p256_limbs_to_be out . acc y )
-    ( p256pt_free acc ) ( p256pt_free selp )
-    ( vec_free [i] am ) ( vec_free [i] b3m ) ( vec_free [i] zinv )
+    ( p256pt_free acc )
+    ( vec_free [i] ex ) ( vec_free [i] ey ) ( vec_free [i] onem ) ( vec_free [i] zinv )
     ( _p256_scr_free scr )
     ^ out
 }
