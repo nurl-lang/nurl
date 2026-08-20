@@ -176,6 +176,12 @@ exactly that.
   benchmark, driven by [`run_http.sh`](run_http.sh) with `oha` as the
   load generator; results in [`HTTP_RESULTS.md`](HTTP_RESULTS.md). It
   measures requests per second, not wall clock, so it has its own runner.
+* `pq_compare.nu` + `rust_pq/` are the post-quantum crypto peer
+  benchmark (ML-KEM, ML-DSA, SLH-DSA, SHAKE128 — pure-NURL stdlib vs
+  pure-Rust RustCrypto), driven by [`run_pq.sh`](run_pq.sh); results in
+  [`PQ_RESULTS.md`](PQ_RESULTS.md). `pq.nu` is the NURL-only variant of
+  the same measurements with the scheme authors' reference-C and AVX2
+  numbers recorded in its header.
 * `stdlib_hotpath.nu` is a NURL-only profiling probe with no peers.
 
 ## The wasm suite — `wasmbench.sh`

@@ -1,0 +1,31 @@
+# bench/rust_pq/Cargo.toml — the Rust half of the post-quantum peer
+# comparison (bench/run_pq.sh drives this against bench/pq_compare.nu).
+#
+# Pure-Rust RustCrypto implementations, chosen to mirror what the NURL
+# side is: a portable, safe-language implementation with no hand-written
+# assembly — so the table compares languages and compilers, not one
+# side's asm against the other's portable code.
+#
+# Build:
+#     cargo build --release --manifest-path bench/rust_pq/Cargo.toml
+
+[package]
+name = "pq_bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+shake = "0.1"
+ml-kem = "0.3"
+ml-dsa = { version = "0.1", features = ["rand_core"] }
+slh-dsa = "0.2.0-rc.5"
+signature = { version = "3.0.0-rc.10", features = ["rand_core"] }
+# SysRng = getrandom(2) per draw, the same per-op OS-entropy discipline
+# as the NURL side's nurl_rand_fill.
+crypto-common = { version = "0.2", features = ["getrandom", "rand_core"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
