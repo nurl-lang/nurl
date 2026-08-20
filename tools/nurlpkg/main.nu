@@ -293,7 +293,8 @@ $ `stdlib/std/bytes.nu`
 ` )
         ( nurl_print `  2. every deps/... import is declared in [dependencies]
 ` )
-        ( nurl_print `  3. required stdlib symbols exist in the RELEASED toolchain
+        ( nurl_print `  3. every imported stdlib file exists in the RELEASED toolchain, and
+     src/main.nu typechecks against it
 ` )
         ( nurl_print `  4. path-deps carry a version requirement
 ` )
@@ -2448,6 +2449,16 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 // stdlib path a package imports must exist in the INSTALLED toolchain's stdlib
 // ($NURL_STDLIB, or ~/.nurl/stdlib), and publishing is refused when one does
 // not, with the release that is missing named.
+//
+// File existence is necessary and NOT sufficient, which the second half of
+// this gate exists to catch. A package can import only stdlib files that have
+// shipped for years and still call a FUNCTION added to one of them last week:
+// pki-server 0.3.0 imports std/fs.nu and std/pkey.nu — both ancient — while
+// calling `set_permissions` and `mldsa_priv_from_pem`, which the released
+// stdlib does not define. Every path existed, the gate passed, and the tarball
+// would have been unbuildable for every user of `nurlpkg install`. Publishing
+// is irreversible, so the check has to be the real one: typecheck `src/main.nu`
+// with the INSTALLED compiler against the INSTALLED stdlib, and believe it.
 @ __scan_stdlib_imports_file s path ( Vec String ) acc → v {
     ?? ( read_file path ) {
         T txt → {
@@ -2588,6 +2599,88 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     } {}
     ( string_free root )
     ^ ? > missing 0 1 0
+}
+
+// Typecheck the package's entry point with the toolchain the user will
+// actually install with: front-end only, no link step (nurlc writes IR to
+// stdout, which is discarded), so this needs no C toolchain and costs a
+// fraction of a build.
+//
+// Which toolchain that is comes from __toolchain_stdlib_root — $NURL_STDLIB
+// when set, else ~/.nurl. Pointing $NURL_STDLIB at a checkout therefore aims
+// the gate at that checkout, which is the documented escape hatch for "I am
+// publishing against this tree, not the release" and makes the check pass
+// trivially. That is deliberate; the default, with $NURL_STDLIB unset, is the
+// one that protects users.
+//
+// Two conditions leave the question unanswered rather than answered "yes":
+// no compiler at <root>/bin/nurlc, and a compiler that will not launch. Both
+// WARN on stderr and let the publish through — an unverifiable gate has to say
+// so out loud rather than pass quietly, and refusing would make the tool
+// unusable on a box that has no toolchain installed.
+@ __installed_nurlc String root → String {
+    : String p ( string_from ( string_data root ) )
+    ( string_push_str p ? ( __is_windows ) `/bin/nurlc.exe` `/bin/nurlc` )
+    ? ( file_exists ( string_data p ) ) { ^ p } {}
+    ( string_free p )
+    ^ ( string_new )
+}
+
+@ __check_builds_against_installed → i {
+    ? ! ( file_exists `src/main.nu` ) { ^ 0 } {}
+    : String root ( __toolchain_stdlib_root )
+    ? == 0 ( string_len root ) { ( string_free root ) ^ 0 } {}
+
+    : String cc ( __installed_nurlc root )
+    ? == 0 ( string_len cc ) {
+        ( nurl_eprint `nurlpkg: WARNING — no installed compiler at ` )
+        ( nurl_eprint ( string_data root ) )
+        ( nurl_eprintln `/bin/nurlc, so "does this build against the released toolchain?" went UNCHECKED.` )
+        ( nurl_eprintln `nurlpkg:          Install the toolchain you are targeting before publishing.` )
+        ( string_free cc )
+        ( string_free root )
+        ^ 0
+    } {}
+
+    : String cmd ( string_with_cap 160 )
+    ( string_push_str cmd `NURL_STDLIB=` )
+    ( string_push_str cmd ( string_data root ) )
+    ( string_push_char cmd 32 )
+    ( string_push_str cmd ( string_data cc ) )
+    ( string_push_str cmd ` src/main.nu >/dev/null` )
+
+    : ~ i bad 0
+    ?? ( process_run_shell ( string_data cmd ) ) {
+        T out → {
+            ? ( output_success out ) {} {
+                : s err ( output_stderr out )
+                ( nurl_eprint `nurlpkg: this package does not compile against the INSTALLED toolchain at ` )
+                ( nurl_eprintln ( string_data root ) )
+                ( nurl_eprint err )
+                // Two very different causes land here, and telling the
+                // publisher the wrong one wastes their afternoon: an
+                // unresolved deps/ tree is "run the build first", while
+                // anything else is "the released stdlib is too old".
+                ? > ( nurl_str_find err `cannot open import 'deps/` ) -1 {
+                    ( nurl_eprintln `nurlpkg: deps/ is not resolved in this working tree — run 'nurlpkg build' (or link the` )
+                    ( nurl_eprintln `nurlpkg: path deps) and try again. Nothing about the released toolchain was established.` )
+                } {
+                    ( nurl_eprintln `nurlpkg: every imported stdlib FILE exists there, but something the package calls does not.` )
+                    ( nurl_eprintln `nurlpkg: publishing is irreversible, so this is refused — cut a toolchain release that ships` )
+                    ( nurl_eprintln `nurlpkg: what this needs first, then publish.` )
+                }
+                = bad 1
+            }
+            ( output_free out )
+        }
+        F _ → {
+            ( nurl_eprintln `nurlpkg: WARNING — could not launch the installed compiler; the released-toolchain build went UNCHECKED.` )
+        }
+    }
+    ( string_free cmd )
+    ( string_free cc )
+    ( string_free root )
+    ^ bad
 }
 
 @ __check_declared_deps Manifest m → i {
@@ -2898,6 +2991,10 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                     ^ 1
                 } {}
                 ? != 0 ( __check_stdlib_available ) {
+                    ( manifest_free m )
+                    ^ 1
+                } {}
+                ? != 0 ( __check_builds_against_installed ) {
                     ( manifest_free m )
                     ^ 1
                 } {}
