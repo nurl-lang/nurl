@@ -34,8 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   destructive + open-world.
 
 - **MCP tool descriptions cut to ~60 % of their size** across nurl-mcp
-  and the playground — agents reported the descriptions eating real
-  context budget. Every tool now follows one shape: what it returns,
+  (bumped to 0.12.0) and the playground — agents reported the
+  descriptions eating real context budget. Every tool now follows one shape: what it returns,
   when to use it, and at most one note that changes how you call it;
   parameter mechanics live in the parameter descriptions and runtime
   details (fallback order, byte caps, what wasn't searched) are stated
