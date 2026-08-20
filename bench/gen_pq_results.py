@@ -77,7 +77,9 @@ def main():
         "language implementations with no hand-written assembly, "
         "measured by the same harness discipline (iteration-calibrated "
         "timed loops, per-op OS randomness, hedged signing, medians "
-        f"of {env.get('runs','3')} runs)."
+        f"of {env.get('runs','3')} runs). The ratios compare those two "
+        "implementations, not the two languages — \"Where the ratios "
+        "come from\" below says what they do and do not show."
     )
     w("")
 
@@ -185,21 +187,106 @@ def main():
     )
     w("")
 
+    # ── where the ratios come from ───────────────────────────────
+    # This section is the report's honesty contract: it separates what
+    # the numbers say about the two implementations from what they do
+    # NOT say about the two languages. Everything quantitative in it is
+    # computed from this run's data so it can never drift out of date.
+    def ratio_range(prefix):
+        ratios = []
+        for n in row_names:
+            if not n.startswith(prefix):
+                continue
+            a, b = med(rows, n, "nurl"), med(rows, n, "rust")
+            if a and b:
+                ratios.append(b / a)
+        return (min(ratios), max(ratios)) if ratios else None
+
+    shake_pct = None
+    if thr_names:
+        a = med(thr, thr_names[0], "nurl")
+        b = med(thr, thr_names[0], "rust")
+        if a and b:
+            shake_pct = abs(a / b - 1) * 100
+
+    w("## Where the ratios come from\n")
+    w(
+        "This table compares two implementations, not two languages. "
+        "Before quoting a ratio, know what it is made of:"
+    )
+    w("")
+    if shake_pct is not None:
+        verify_ratios = [
+            med(rows, n, "rust") / med(rows, n, "nurl")
+            for n in row_names
+            if n.startswith("ML-DSA-") and "verify" in n
+            and med(rows, n, "nurl") and med(rows, n, "rust")
+        ]
+        vr = (
+            f" — compare the ML-DSA verify rows "
+            f"({min(verify_ratios):.2f}–{max(verify_ratios):.2f}× in "
+            "this run), the least asymmetric scheme-level operations"
+            if verify_ratios
+            else ""
+        )
+        w(
+            "- **Start from the control row.** Single-lane SHAKE128 is "
+            "the closest thing here to a pure language-and-compiler "
+            "comparison: the same scalar Keccak permutation, the same "
+            "workload, no API or vectorisation asymmetry on either "
+            f"side. In this run the two columns are within "
+            f"{shake_pct:.0f}% of each other. Ratios far above that "
+            "elsewhere are implementation differences, not language "
+            f"ones{vr}."
+        )
+    slh = ratio_range("SLH-DSA-")
+    slh_span = f" ({slh[0]:.1f}–{slh[1]:.1f}×)" if slh else ""
+    w(
+        f"- **SLH-DSA{slh_span}: batched Keccak vs scalar Keccak.** "
+        "SLH-DSA's cost is thousands of short, independent hash "
+        "chains. NURL batches them four Keccak lanes at a time "
+        "(`std/hash_sha3x4`: `simd`-prefixed NURL source the compiler "
+        "vectorises to AVX2 behind a runtime CPU check); RustCrypto "
+        "`slh-dsa` hashes one lane at a time. No assembly on either "
+        "side, but these rows compare a batched implementation "
+        "against a scalar one. A Rust port of the same four-lane "
+        "strategy (e.g. via `std::simd`) should close most of this "
+        "gap; no such crate path existed at measurement time."
+    )
+    kem = ratio_range("ML-KEM-")
+    dsa = ratio_range("ML-DSA-")
+    lattice_span = ""
+    if kem and dsa:
+        lo = min(kem[0], dsa[0])
+        hi = max(kem[1], dsa[1])
+        lattice_span = f" ({lo:.1f}–{hi:.1f}×)"
+    w(
+        f"- **ML-KEM and ML-DSA{lattice_span}: a tuned implementation "
+        "against young crates.** Both columns spend most of these "
+        "cycles in the same scalar Keccak the control row measures "
+        "directly, so the gaps live in what surrounds it — sampling, "
+        "NTT, serialisation, memory traffic. The RustCrypto lattice "
+        "crates are pre-1.0 and have not had a dedicated performance "
+        "pass; the NURL stdlib has been profiled and tuned across "
+        "several releases. These rows have not been root-caused "
+        "one by one: read them as optimised-vs-not-yet-optimised "
+        "implementations, with the language contribution bounded by "
+        "the control row above."
+    )
+    w(
+        "- **Neither column is the fastest known.** The scheme "
+        "authors' AVX2 assembly implementations beat both columns on "
+        "the lattice schemes; see the header of `bench/pq.nu` for "
+        "that comparison."
+    )
+    w("")
+
     # ── notes ────────────────────────────────────────────────────
     w("## Notes\n")
     w(
         "- **Correctness is pinned elsewhere.** Every NURL algorithm "
         "here is byte-exact against NIST ACVP vectors "
         "(`tools/*_acvp_gate.nu`); this report only measures speed."
-    )
-    w(
-        "- **Both sides are portable code.** No hand-written assembly "
-        "on either side. NURL's edge in SLH-DSA comes from running four "
-        "independent Keccak lanes at a time through `std/hash_sha3x4` "
-        "behind the `simd` prefix — same source language, vectorised by "
-        "the compiler. The scheme authors' AVX2 implementations are "
-        "faster than both sides on the lattice schemes; see the header "
-        "of `bench/pq.nu` for that comparison."
     )
     w(
         "- **API-surface caveat (ML-DSA sign).** RustCrypto signs from "
