@@ -1190,8 +1190,18 @@ void kmain(unsigned long start_info_paddr) {
     time_init();
     nl_tls_init_guest();          /* before the first __thread access */
 
-    no_argv[0] = 0;
-    nl_environ = no_argv;         /* an empty environment, terminated */
+    /* Plan B7: getenv reads the cmdline's key=value pairs (args="…"
+     * stays argv's). boot/cmdenv.c owns the grammar for all three
+     * platforms. */
+    {
+        static char env_buf[1024];
+        static char *envv[33];
+        extern int nl_env_from_cmdline(const char *, char *,
+                                       unsigned long, char **, int);
+        nl_env_from_cmdline(cmdline, env_buf, sizeof env_buf, envv, 32);
+        nl_environ = envv;
+        (void)no_argv;
+    }
 
     int argc = build_argv(cmdline);
     exit(main(argc, guest_argv));

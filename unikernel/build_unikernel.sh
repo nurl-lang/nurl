@@ -98,7 +98,7 @@ cache_inputs() {
         "$NOLIBC"/dtoa.c "$NOLIBC"/math.c "$NOLIBC"/misc.c \
         "$NOLIBC"/setjmp_x86_64.S \
         "$BOOT"/platform_x86.c "$BOOT"/initfs.c "$BOOT"/pagealloc.c \
-        "$BOOT"/nosys.c "$BOOT"/tls_guest.c "$BOOT"/boot.S \
+        "$BOOT"/nosys.c "$BOOT"/tls_guest.c "$BOOT"/boot.S "$BOOT"/cmdenv.c \
         "$BOOT"/multiboot2.c "$BOOT"/console.c "$BOOT"/font8x16.c \
         "$BOOT"/mb2.h "$BOOT"/console.h "$BOOT"/font8x16.h \
         "$ROOT/stdlib/cuda_stubs.c" "$ROOT/stdlib/nvrtc_stubs.c" \
@@ -116,6 +116,7 @@ cache_build() {
     $CC $KFLAGS -c "$BOOT/initfs.c"       -o "$CACHE/boot_initfs.o"
     $CC $KFLAGS -c "$BOOT/pagealloc.c"    -o "$CACHE/boot_pagealloc.o"
     $CC $KFLAGS -c "$BOOT/nosys.c"        -o "$CACHE/boot_nosys.o"
+    $CC $KFLAGS -c "$BOOT/cmdenv.c"       -o "$CACHE/boot_cmdenv.o"
     $CC $KFLAGS -c "$BOOT/tls_guest.c"    -o "$CACHE/tls_guest.o"
     $CC $KFLAGS -c "$BOOT/multiboot2.c"   -o "$CACHE/boot_multiboot2.o"
     $CC $KFLAGS -c "$BOOT/console.c"          -o "$CACHE/boot_console.o"
@@ -208,6 +209,7 @@ $CC -nostdlib -static -Wl,-T,"$BOOT/link.ld" -Wl,--build-id=none \
     "$CACHE/runtime_core.o" "$CACHE/runtime_ctx.o" "$CACHE/runtime_bare.o" \
     "$CACHE/platform.o" "$CACHE/tls_guest.o" \
     "$CACHE/boot_initfs.o" "$CACHE/boot_pagealloc.o" "$CACHE/boot_nosys.o" \
+    "$CACHE/boot_cmdenv.o" \
     "$CACHE/boot_multiboot2.o" "$CACHE/boot_console.o" "$CACHE/boot_font8x16.o" \
     "$CACHE/cuda_stubs.o" "$CACHE/nvrtc_stubs.o" \
     "$OUTDIR/$base.initfs_data.o" \

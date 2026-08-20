@@ -388,6 +388,50 @@ if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1 && command -v openssl >/dev/n
     rm -rf "$tlsdir"
 fi
 
+# ── name resolution: DNS over the pure stack ────────────────────
+# demos/resolve.nu asks for a NAME; the resolver is a scripted UDP
+# server on the host (answers 198.51.100.7 to any A query), reached
+# via the dns=ip:port cmdline key — the same host-states-a-fact
+# contract as wallclock=, and what makes this gate deterministic and
+# offline. The DHCP path (option 6) uses the identical query code;
+# only the server's address arrives differently.
+if [ $# -eq 0 ] && command -v python3 >/dev/null 2>&1; then
+    demos=$((demos + 1))
+    if "$ROOT/unikernel/build_unikernel.sh" "$ROOT/unikernel/demos/resolve.nu" >/dev/null 2>&1; then
+        python3 - >/dev/null 2>&1 <<'PYEOF' &
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind(('127.0.0.1', 5391)); s.settimeout(90)
+try:
+    while True:
+        d, a = s.recvfrom(512)
+        i = 12
+        while d[i]: i += 1 + d[i]
+        i += 5
+        resp = (d[:2] + b'\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00'
+                + d[12:i] + b'\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04'
+                + bytes([198, 51, 100, 7]))
+        s.sendto(resp, a)
+except socket.timeout:
+    pass
+PYEOF
+        dnspid=$!
+        got=$(NURL_APPEND='args="gate.test" dns=10.0.2.2:5391' \
+              "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/resolve.elf" -t 90 -- \
+              -netdev user,id=n0 -device virtio-net-device,netdev=n0 2>&1)
+        kill "$dnspid" 2>/dev/null
+        if printf '%s' "$got" | grep -q 'answer 198.51.100.7'; then
+            echo "PASS resolve (a name resolved through the pure UDP stack)"
+        else
+            echo "FAIL resolve"
+            printf '%s\n' "$got" | head -4 | sed 's/^/     /'
+            fails=$((fails + 1))
+        fi
+    else
+        echo "FAIL resolve (build)"; fails=$((fails + 1))
+    fi
+fi
+
 # ── B10: the swarm-mcp appliance — the plan's endpoint milestone ──
 # The same package that runs hosted boots as the guest, joins the
 # cluster through the relay leg, and completes an expression task and

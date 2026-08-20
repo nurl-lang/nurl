@@ -247,6 +247,12 @@ rather than guessed:
 | `wallclock=N` | the boot epoch, seconds | whenever X.509 validity is checked: TLS client verification, and a server whose certificate has dates |
 | `virtio_mmio.device=…` | where the devices are | appended by the hypervisor; the guest parses it, and a guest with no match reports "no device" rather than probing blindly |
 | `args="…"` | the program's argv | when the program takes arguments. ONE key, quoted, because QEMU appends its own entries after `-append` and a program that read the tail of the line would be handed them |
+| `dns=ip[:port]` | the resolver | when a name must resolve and DHCP's option 6 is absent or wrong; stated-but-unparseable exits 127 rather than resolving against a guessed server |
+
+Every other `key=value` token on the line is the guest's ENVIRONMENT:
+`getenv("key")` answers it (boot/cmdenv.c; plan B7 always promised
+this and the environment was left empty). `args="…"` stays argv's,
+and a bare word is not an assignment.
 
 **How small it goes.** Measured, by asking QEMU for less and less until
 the answer stopped coming:
@@ -281,7 +287,7 @@ on somebody's Firecracker host.
 | IP fragments | dropped, counted, never reassembled. A datagram over the MTU does not arrive |
 | open files | 16, from the baked-in archive, read-only |
 | sockets | 1024 open at once (`sock_set_max_fds` to change it); past that `accept` refuses and leaves the connection in the backlog rather than the machine running out. Ephemeral ports are per-protocol; TCP and UDP have separate spaces |
-| name resolution | literals and `localhost`. Anything else is refused, not guessed |
+| name resolution | literals, `localhost`, and A records from the resolver the network announced — DHCP option 6, or a `dns=ip[:port]` cmdline key (the same host-states-a-fact contract as `wallclock=`; unparseable = exit 127). The query rides `stdlib/net/dnsclient.nu` over the pure UDP stack: stub-resolver scope, so a TC-bit answer is an error (no TCP retry), CNAMEs are followed only inside the one response, and hostile compression pointers run out of hop budget rather than time. No resolver → a name is refused, not guessed |
 | processes, signals | none. `fork`/`exec` report unsupported; there is one address space and nothing to fork |
 | GPU | none in a microVM; a swarm node advertises CPU-wasm capability only |
 
