@@ -3982,7 +3982,13 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
      * from registration on. */
     if (fd >= 0 &&
         __atomic_load_n(&nurl__sched.pending, __ATOMIC_RELAXED) <= 4) {
-        for (int i = 0; i < 64; i++) {
+        /* 256 probes ≈ 80-250 µs: sized for a TLS peer's turnaround
+         * (decrypt + handle + encrypt ≈ 35-45 µs on loopback), which
+         * the previous 64-probe window (~25 µs) missed — every
+         * keep-alive HTTPS request then paid the full park/wake chain
+         * even at c=1 with idle cores. The ≤4-live-fibers gate above
+         * still keeps loaded servers off this path entirely. */
+        for (int i = 0; i < 256; i++) {
             if (__atomic_load_n(&w->rq_len, __ATOMIC_RELAXED) > 0) break;
             if (__atomic_load_n(&nurl__sched.global_head,
                                 __ATOMIC_RELAXED)) break;
