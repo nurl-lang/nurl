@@ -42,6 +42,8 @@ $ `stdlib/ext/http_static.nu`
     Router router
     i idle_ms  // keep-alive idle timeout (ms) for the server
     i workers  // 0 → single-threaded server_run; >0 → server_run_pool(n)
+    b use_async  // T → fiber-per-connection server_run_async (see http_app_async)
+    i async_workers  // worker pthreads for the fiber runtime; 0 = one per core
     b log_requests  // access log (method/path/status) to stderr
     b cors  // permissive CORS + OPTIONS preflight
     b quiet  // suppress the "serving on host:port" banner
@@ -60,6 +62,8 @@ $ `stdlib/ext/http_static.nu`
     = . a router ( router_new )
     = . a idle_ms 5000
     = . a workers 0
+    = . a use_async F
+    = . a async_workers 0
     = . a log_requests F
     = . a cors F
     = . a quiet F
@@ -81,7 +85,22 @@ $ `stdlib/ext/http_static.nu`
 // ── Configuration (each returns v; call before http_app_listen) ───────────
 
 // Serve on a worker pool of `n` threads (0 = single-threaded keep-alive).
+// Each worker is pinned to one connection for that connection's whole
+// keep-alive lifetime, so at most `n` clients are in flight at once —
+// prefer http_app_async for servers that must scale past a handful of
+// concurrent connections.
 @ http_app_workers * HttpApp a i n → v { = . a workers n }
+
+// Serve fiber-per-connection on the M:N async runtime (server_run_async):
+// every accepted connection gets its own fiber, and `n` worker pthreads
+// (0 = one per core) multiplex all of them — socket waits park the fiber
+// on the reactor instead of pinning a thread, for both plaintext and TLS
+// listeners. This is the scaling mode; it overrides http_app_workers.
+// Handlers must not assume a bounded number of concurrent invocations.
+@ http_app_async * HttpApp a i n → v {
+    = . a use_async T
+    = . a async_workers n
+}
 
 // Keep-alive idle timeout in milliseconds (0 = server default).
 @ http_app_idle_ms * HttpApp a i ms → v { = . a idle_ms ms }
@@ -268,10 +287,16 @@ $ `stdlib/ext/http_static.nu`
     : HttpServer srv ( server_new_complete listener base . a idle_ms ka ( __httpapp_limits a ) rt )
     ( __httpapp_banner a scheme host port )
     : ~ i rc 0
-    ? > . a workers 0 {
-        = rc ( __httpapp_run_result ( server_run_pool srv . a workers ) )
+    ? . a use_async {
+        ( runtime_init . a async_workers )
+        = rc ( __httpapp_run_result ( server_run_async srv ) )
+        ( runtime_shutdown )
     } {
-        = rc ( __httpapp_run_result ( server_run srv ) )
+        ? > . a workers 0 {
+            = rc ( __httpapp_run_result ( server_run_pool srv . a workers ) )
+        } {
+            = rc ( __httpapp_run_result ( server_run srv ) )
+        }
     }
     ( server_stop srv )
     ? has_log { ( nurl_free # s # *u logw 1 ) } {}

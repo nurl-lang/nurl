@@ -3235,6 +3235,23 @@ static void nurl__fiber_entry(unsigned hi, unsigned lo) {
 }
 #endif
 
+/* ── fiber-stack cache ──────────────────────────────────────────────
+ * Recycled fiber stacks. A fiber-per-connection server churns one
+ * stack per accepted conn; paying mmap + mprotect on every spawn and
+ * munmap on every exit is 3 syscalls plus — dominating on the free
+ * side — cross-CPU TLB-shootdown IPIs for the unmap. All stacks share
+ * one geometry (guard + usable, fixed at compile time), so a plain
+ * bounded LIFO of base pointers suffices; the freelist link is stored
+ * in the (writable) usable area itself, so the cache costs no heap.
+ * The guard page of a cached stack stays PROT_NONE — recycled stacks
+ * keep their overflow protection. Beyond the cap, stacks fall through
+ * to munmap; the cap bounds virtual (not resident) memory at
+ * cap × ~68 KB. */
+#define NURL_FIBER_STACK_CACHE_CAP 256
+static pthread_mutex_t nurl__stack_cache_lock = PTHREAD_MUTEX_INITIALIZER;
+static void  *nurl__stack_cache_head = NULL;
+static int    nurl__stack_cache_len  = 0;
+
 static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
     NurlFiber *f = (NurlFiber*)calloc(1, sizeof(NurlFiber));
     if (!f) return NULL;
@@ -3247,18 +3264,29 @@ static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
                   / (size_t)pg * (size_t)pg;
     size_t total = guard + usable;
 
-#if defined(MAP_ANONYMOUS)
-    int mflags = MAP_PRIVATE | MAP_ANONYMOUS;
-#else
-    int mflags = MAP_PRIVATE | MAP_ANON;
-#endif
-    void *base = mmap(NULL, total, PROT_READ | PROT_WRITE, mflags, -1, 0);
-    if (base == MAP_FAILED) { free(f); return NULL; }
+    void *base = NULL;
+    pthread_mutex_lock(&nurl__stack_cache_lock);
+    if (nurl__stack_cache_head) {
+        base = nurl__stack_cache_head;
+        nurl__stack_cache_head = *(void**)((char*)base + guard);
+        nurl__stack_cache_len--;
+    }
+    pthread_mutex_unlock(&nurl__stack_cache_lock);
 
-    if (mprotect(base, guard, PROT_NONE) != 0) {
-        munmap(base, total);
-        free(f);
-        return NULL;
+    if (!base) {
+#if defined(MAP_ANONYMOUS)
+        int mflags = MAP_PRIVATE | MAP_ANONYMOUS;
+#else
+        int mflags = MAP_PRIVATE | MAP_ANON;
+#endif
+        base = mmap(NULL, total, PROT_READ | PROT_WRITE, mflags, -1, 0);
+        if (base == MAP_FAILED) { free(f); return NULL; }
+
+        if (mprotect(base, guard, PROT_NONE) != 0) {
+            munmap(base, total);
+            free(f);
+            return NULL;
+        }
     }
     f->stack_base = base;
     f->stack_total_sz = total;
@@ -3301,7 +3329,20 @@ static void nurl__fiber_free(NurlFiber *f) {
         pthread_mutex_destroy(&f->join_m);
         pthread_cond_destroy(&f->join_c);
     }
-    if (f->stack_base) munmap(f->stack_base, f->stack_total_sz);
+    if (f->stack_base) {
+        /* Recycle onto the stack cache (see its header note); the link
+         * lives at stack_lo, the first writable byte past the guard. */
+        int cached = 0;
+        pthread_mutex_lock(&nurl__stack_cache_lock);
+        if (nurl__stack_cache_len < NURL_FIBER_STACK_CACHE_CAP) {
+            *(void**)f->stack_lo = nurl__stack_cache_head;
+            nurl__stack_cache_head = f->stack_base;
+            nurl__stack_cache_len++;
+            cached = 1;
+        }
+        pthread_mutex_unlock(&nurl__stack_cache_lock);
+        if (!cached) munmap(f->stack_base, f->stack_total_sz);
+    }
     free(f);
 }
 
@@ -3914,6 +3955,44 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     NurlWorker *w = nurl__tls_worker;
     if (!w || !w->current) return -1;  /* not on a fiber */
     nurl__reactor_start_if_needed();
+
+    /* Spin-then-park. A park costs two cross-thread wake chains (pipe
+     * poke to the reactor, then cond-var wake of a worker) — tens of
+     * microseconds of latency per I/O wait. When this worker has
+     * nothing else it could run, spend that time probing the fd
+     * directly instead: on a keep-alive HTTP connection the peer's
+     * next request usually lands within the window, and the park (and
+     * its reactor round-trip) is skipped entirely.
+     *
+     * Spinning is a LOW-concurrency latency optimization only: it is
+     * gated on the whole runtime having at most 4 live fibers. Fibers
+     * parked on the reactor sit in no run queue, so queue-emptiness
+     * checks alone cannot see a loaded server — with dozens of
+     * connections every worker's queues look empty and every park
+     * would spin, and that was measured to cost 15-20 % of c=10..50
+     * closed-loop HTTP throughput purely by burning cores the load
+     * generator needed (spin "success" is no signal either: on a
+     * closed-loop peer the next request always lands in-window). With
+     * few fibers the burned core is genuinely idle, and the win is
+     * large: the c=1 HTTP cell went from 8 k to 21 k req/s.
+     *
+     * Every read here (pending, queues) is racy by design: a stale
+     * answer only mis-sizes the spin, never loses a wakeup, because
+     * the park below re-checks nothing — the reactor owns the wait
+     * from registration on. */
+    if (fd >= 0 &&
+        __atomic_load_n(&nurl__sched.pending, __ATOMIC_RELAXED) <= 4) {
+        for (int i = 0; i < 64; i++) {
+            if (__atomic_load_n(&w->rq_len, __ATOMIC_RELAXED) > 0) break;
+            if (__atomic_load_n(&nurl__sched.global_head,
+                                __ATOMIC_RELAXED)) break;
+            struct pollfd probe = { .fd = fd, .events = events,
+                                    .revents = 0 };
+            int pr = poll(&probe, 1, 0);
+            if (pr > 0) return 1;
+            if (pr < 0 && errno != EINTR) break;
+        }
+    }
 
     pthread_mutex_lock(&nurl__reactor.lock);
     NurlReactorWait *wt = nurl__reactor.freelist;

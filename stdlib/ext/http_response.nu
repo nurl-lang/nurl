@@ -236,6 +236,16 @@ $ `stdlib/ext/json.nu`
 
 @ response_serialize HttpResponse r → ( Vec u ) {
     : ( Vec u ) out ( vec_with_cap [u] + 64 ( vec_len [u] . r body ) )
+    ( response_serialize_to r out )
+    ^ out
+}
+
+// Serialise APPENDING into a caller-owned buffer — the keep-alive
+// server reuses one wire buffer across a connection's whole request
+// stream instead of allocating (and freeing) a fresh Vec per response.
+// Caller clears the buffer between responses; this only appends.
+@ response_serialize_to HttpResponse r ( Vec u ) out → v {
+    ( vec_reserve [u] out + 64 ( vec_len [u] . r body ) )
 
     // ── Status line: "HTTP/1.1 <code> <reason>\r\n" ──
     ( bytes_extend_str out `HTTP/1.1 ` )
@@ -274,8 +284,6 @@ $ `stdlib/ext/json.nu`
     // profiling nurlapi /build_wasm showed ~2.5 s of the 3 s total
     // wall-time was spent in this single byte-by-byte loop.
     ( bytes_extend_bytes out . r body )
-
-    ^ out
 }
 
 // Case-insensitive header presence check. Direct *Header iteration —

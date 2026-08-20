@@ -25,11 +25,12 @@ $ `packages/http/src/http.nu`
     ( http_app_get a `/` \ HttpRequest req Params params → HttpResponse {
         ^ ( response_text 200 `Hello, World!\n` )
     } )
-    // Worker pool so the bench measures the full server surface rather
-    // than a single accept loop. 10 workers is a reasonable default for
-    // ~12-core hosts (tokio's default multi-thread runtime in the Rust
-    // peer uses every core).
-    ( http_app_workers a 10 )
+    // Fiber-per-connection on the M:N async runtime, one worker pthread
+    // per core (the deployment default a scaling NURL service uses) —
+    // apples-to-apples with tokio's default multi-thread runtime in the
+    // Rust peer. The old 10-thread pool pinned one worker per keep-alive
+    // connection, so any concurrency above 10 starved in the bench.
+    ( http_app_async a 0 )
 
     // TLS mode when three arguments are supplied (port, cert, key);
     // otherwise the original plaintext default. argv[0] is the program

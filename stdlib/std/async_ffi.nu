@@ -44,3 +44,19 @@
 & `c` @ nurl_reactor_wait_write i fd i timeout_ms → i
 
 & `c` @ nurl_fiber_sleep_ms i ms → i
+
+// TCP-handle helpers the fiber I/O paths need alongside the reactor.
+// Declared HERE (not in std/net.nu) so the pure TLS stack — which
+// net.nu imports, ruling out the reverse import — can park on the
+// reactor without a declaration cycle. `handle` is the runtime-side
+// NurlTcp pointer every nurl_tcp_* builtin traffics in, not an OS fd;
+// `nurl_tcp_get_fd` is the bridge to the reactor's fd-based API.
+
+& `c` @ nurl_tcp_get_fd i handle → i
+
+// What a read/write on this socket should wait for, in milliseconds;
+// 0 = for ever. The fiber paths need it because they park on the
+// reactor instead of on SO_RCVTIMEO.
+& `c` @ nurl_tcp_timeout_ms i handle → i
+
+& `c` @ nurl_tcp_set_nonblock i handle i on → v

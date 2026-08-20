@@ -546,14 +546,37 @@ $ `stdlib/std/pkey.nu`
     ^ # i . c raw
 }
 
-@ tcp_accept TcpListener l → !TcpConn NetErr {
-    // Context-aware: on a fiber, dispatch to the async path so the worker
-    // pthread stays free while we wait. TLS listeners take the blocking
-    // path (the pure handshake is synchronous).
-    ? == . l is_tls 0 {
-        : i fcur ( nurl_fiber_current )
-        ? != fcur 0 { ^ ( tcp_accept_async l ) } {}
-    } {}
+// Run the server-side pure-TLS handshake over a freshly accepted raw
+// conn handle, using the listener's parked cert/key material. Consumes
+// `craw` (the *TlsConn owns the socket on success; closed on failure).
+@ __tls_accept_handshake TcpListener l i craw → !TcpConn NetErr {
+    : ( Vec u ) cert ( __net_vecview . l certp . l certlen )
+    : ( Vec u ) k1 ( __net_vecview . l kp1 . l kl1 )
+    // keytype 1 = RSA (k1 = n, k2 = d, k3 = e); else EC P-256 (k1 = scalar).
+    : !*TlsConn TlsErr r ? == . l keytype 1
+    { : ( Vec u ) k2 ( __net_vecview . l kp2 . l kl2 )
+        : ( Vec u ) k3 ( __net_vecview . l kp3 . l kl3 )
+        : !*TlsConn TlsErr rr ( tls_accept_rsa craw cert k1 k3 k2 )
+        ( vec_free [u] k2 ) ( vec_free [u] k3 )
+        rr }
+    ( tls_accept craw cert k1 )
+    ( vec_free [u] cert )
+    ( vec_free [u] k1 )
+    ?? r {
+        F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
+        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 2 # i tc } }
+    }
+}
+
+// Accept ONLY the transport (TCP) connection — even on a TLS listener,
+// no handshake runs here. Context-aware: on a fiber the wait parks on
+// the reactor. This is the building block a fiber-per-connection
+// server wants: accept cheaply on the accept fiber, then let each
+// CONNECTION's fiber run `tcp_conn_complete_tls`, so handshakes
+// proceed concurrently instead of serialising on the accept loop.
+@ tcp_accept_transport TcpListener l → !TcpConn NetErr {
+    : i fcur ( nurl_fiber_current )
+    ? != fcur 0 { ^ ( tcp_accept_async l ) } {}
     : i lraw # i . l raw
     : i craw ( nurl_tcp_accept lraw )
     ? == craw 0 { ^ @ !TcpConn NetErr { F # NetErr NetOther } } {}
@@ -562,26 +585,32 @@ $ `stdlib/std/pkey.nu`
         ( nurl_tcp_close craw )
         ^ @ !TcpConn NetErr { F ( _net_err_of ek ) }
     } {}
-    ? != . l is_tls 0 {
-        : ( Vec u ) cert ( __net_vecview . l certp . l certlen )
-        : ( Vec u ) k1 ( __net_vecview . l kp1 . l kl1 )
-        // keytype 1 = RSA (k1 = n, k2 = d, k3 = e); else EC P-256 (k1 = scalar).
-        : !*TlsConn TlsErr r ? == . l keytype 1
-        { : ( Vec u ) k2 ( __net_vecview . l kp2 . l kl2 )
-            : ( Vec u ) k3 ( __net_vecview . l kp3 . l kl3 )
-            : !*TlsConn TlsErr rr ( tls_accept_rsa craw cert k1 k3 k2 )
-            ( vec_free [u] k2 ) ( vec_free [u] k3 )
-            rr }
-        ( tls_accept craw cert k1 )
-        ( vec_free [u] cert )
-        ( vec_free [u] k1 )
-        ?? r {
-            F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
-            T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 2 # i tc } }
-        }
-    } {}
     : TcpConn c @ TcpConn { # s craw 0 0 }
     ^ @ !TcpConn NetErr { T c }
+}
+
+// Complete a TLS listener's server handshake over a transport conn from
+// `tcp_accept_transport`. Consumes `c` — on success the returned conn
+// supersedes it (the *TlsConn owns the socket); on Err the socket is
+// already closed by the TLS layer. A plaintext listener returns `c`
+// unchanged. The handshake's record I/O is context-aware, so on a fiber
+// a slow client parks this fiber instead of blocking the worker.
+@ tcp_conn_complete_tls TcpListener l TcpConn c → !TcpConn NetErr {
+    ? == . l is_tls 0 { ^ @ !TcpConn NetErr { T c } } {}
+    ^ ( __tls_accept_handshake l # i . c raw )
+}
+
+@ tcp_accept TcpListener l → !TcpConn NetErr {
+    // Context-aware: on a fiber, the transport accept parks on the
+    // reactor so the worker pthread stays free while we wait. For a
+    // TLS listener the handshake then runs right here in the calling
+    // context (fiber-aware record I/O parks; a plain thread blocks).
+    : !TcpConn NetErr acc ( tcp_accept_transport l )
+    ? == . l is_tls 0 { ^ acc } {}
+    ?? acc {
+        T rawc → ^ ( __tls_accept_handshake l # i . rawc raw )
+        F e → ^ @ !TcpConn NetErr { F e }
+    }
 }
 
 @ tcp_close_conn TcpConn c → v {
@@ -700,6 +729,71 @@ $ `stdlib/std/pkey.nu`
     ^ @ !( Vec u ) NetErr { T v }
 }
 
+// ONE recv(2), appended IN PLACE: up to `max` bytes land directly in
+// `buf`'s spare capacity (reserved here, grown at most once). This is
+// tcp_read_chunk minus its per-call throwaway Vec — on the HTTP keep-
+// alive hot path that per-read allocate + copy-into-carry + free pair
+// is pure overhead, since every caller immediately appends the chunk
+// to a connection-level buffer anyway. Context-aware like the rest of
+// the family: TLS conns route through the record layer, fibers park on
+// the reactor for EAGAIN, plain threads block.
+//
+// Ok(n) = n > 0 bytes appended. EOF is Err(NetClosed), a fiber-side
+// deadline overrun Err(NetTimeout) — identical to tcp_read_chunk.
+@ tcp_read_into TcpConn c ( Vec u ) buf i max → !i NetErr {
+    ? <= max 0 { ^ @ !i NetErr { T 0 } } {}
+    ? != ( __conn_tlsptr c ) 0 {
+        // TLS: the record layer necessarily materialises decrypted
+        // bytes in their own Vec; append and release it.
+        : !( Vec u ) NetErr r ( __tls_read_net c max )
+        ?? r {
+            T v → {
+                : i n ( vec_len [u] v )
+                ( vec_extend [u] buf v )
+                ( vec_free [u] v )
+                ^ @ !i NetErr { T n }
+            }
+            F e → ^ @ !i NetErr { F e }
+        }
+    } {}
+    : s rp . c raw
+    : i raw # i rp
+    ( vec_reserve [u] buf max )
+    : i len ( vec_len [u] buf )
+    : *u p ( vec_data [u] buf )
+    : s pbuf # s + # i p len
+    : i fcur ( nurl_fiber_current )
+    ? == fcur 0 {
+        : i n ( nurl_tcp_read raw pbuf max )
+        ? > n 0 {
+            : b _ok ( vec_set_len [u] buf + len n )
+            ^ @ !i NetErr { T n }
+        } {}
+        ? == n 0 { ^ @ !i NetErr { F # NetErr NetClosed } } {}
+        ^ @ !i NetErr { F ( _net_err_of ( nurl_tcp_err_kind raw ) ) }
+    } {}
+    // Fiber path: mirrors tcp_read_chunk_async (EAGAIN → park with the
+    // socket's OWN deadline; see that function's timeout note).
+    ( nurl_tcp_set_nonblock raw 1 )
+    : i fd ( nurl_tcp_get_fd raw )
+    ~ T {
+        : i n ( nurl_tcp_read raw pbuf max )
+        ? > n 0 {
+            : b _ok ( vec_set_len [u] buf + len n )
+            ^ @ !i NetErr { T n }
+        } {}
+        ? == n 0 { ^ @ !i NetErr { F # NetErr NetClosed } } {}
+        : i ek ( nurl_tcp_err_kind raw )
+        ? == ek 7 {
+            : i rc ( nurl_reactor_wait_read fd ( __wait_ms raw ) )
+            ? <= rc 0 { ^ @ !i NetErr { F # NetErr NetTimeout } } {}
+        } {
+            ^ @ !i NetErr { F ( _net_err_of ek ) }
+        }
+    }
+    ^ @ !i NetErr { F # NetErr NetOther }
+}
+
 // ── Writing ────────────────────────────────────────────────────────
 
 @ tcp_write_all TcpConn c ( Vec u ) bytes → !v NetErr {
@@ -759,14 +853,9 @@ $ `stdlib/std/pkey.nu`
 
 $ `stdlib/std/async_ffi.nu`
 
-& `c` @ nurl_tcp_get_fd i handle → i
-
-// What a read/write on this socket should wait for, in milliseconds;
-// 0 = for ever. The fiber paths below need it because they park on the
-// reactor instead of on SO_RCVTIMEO — see `__wait_ms`.
-& `c` @ nurl_tcp_timeout_ms i handle → i
-
-& `c` @ nurl_tcp_set_nonblock i handle i on → v
+// nurl_tcp_get_fd / nurl_tcp_timeout_ms / nurl_tcp_set_nonblock are
+// declared in async_ffi.nu (imported above) so the pure TLS stack can
+// use them too without an import cycle.
 
 & `c` @ nurl_tcp_ref i handle → v
 
