@@ -61,21 +61,29 @@ NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # ── build both harnesses ────────────────────────────────────────────
 NURL_BIN="$BENCH/_build/pq_compare"
 RUST_BIN="$BENCH/rust_pq/target/release/pq_bench"
+mkdir -p "$BENCH/_build"   # gitignored; absent on a fresh checkout (CI)
 
+# A missing toolchain downgrades its column to n/a — that is what the
+# report's n/a legend means, and a local run without cargo should still
+# produce the NURL half. A *failed build* is different: the toolchain is
+# present and something is broken, and an n/a column published by a
+# green run hides exactly the failure the run exists to surface (this
+# happened: the 2026-08-20 CI run committed an all-n/a NURL column to
+# main because nurl.sh could not create bench/_build). Fail hard.
 nurl_ready=0
 if (( have_nurl )); then
     # nurl.sh is the standard compile+link driver (resolves stdlib
     # imports relative to $ROOT, links runtime.o with the right libs).
-    if ( cd "$ROOT" && ./nurl.sh -O2 bench/pq_compare.nu "$NURL_BIN" >&2 ); then
-        nurl_ready=1
-    fi
+    ( cd "$ROOT" && ./nurl.sh -O2 bench/pq_compare.nu "$NURL_BIN" >&2 ) \
+        || { echo "run_pq.sh: NURL harness build failed" >&2; exit 1; }
+    nurl_ready=1
 fi
 
 rust_ready=0
 if (( have_rs )); then
-    if cargo build --release --manifest-path "$BENCH/rust_pq/Cargo.toml" >&2; then
-        rust_ready=1
-    fi
+    cargo build --release --manifest-path "$BENCH/rust_pq/Cargo.toml" >&2 \
+        || { echo "run_pq.sh: Rust harness build failed" >&2; exit 1; }
+    rust_ready=1
 fi
 
 # RustCrypto crate versions, for the report's implementation table.
