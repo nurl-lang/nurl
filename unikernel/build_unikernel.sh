@@ -101,6 +101,7 @@ cache_inputs() {
         "$BOOT"/nosys.c "$BOOT"/tls_guest.c "$BOOT"/boot.S \
         "$BOOT"/multiboot2.c "$BOOT"/console.c "$BOOT"/font8x16.c \
         "$BOOT"/mb2.h "$BOOT"/console.h "$BOOT"/font8x16.h \
+        "$ROOT/stdlib/cuda_stubs.c" "$ROOT/stdlib/nvrtc_stubs.c" \
         "${BASH_SOURCE[0]}"
 }
 
@@ -119,6 +120,15 @@ cache_build() {
     $CC $KFLAGS -c "$BOOT/multiboot2.c"   -o "$CACHE/boot_multiboot2.o"
     $CC $KFLAGS -c "$BOOT/console.c"          -o "$CACHE/boot_console.o"
     $CC $KFLAGS -c "$BOOT/font8x16.c"     -o "$CACHE/boot_font8x16.o"
+    # The CUDA / NVRTC driver-API stubs — the SAME files nurl.sh links
+    # when libcuda is absent on a build host, so a guest answers a GPU
+    # request exactly like a hosted machine with no NVIDIA driver:
+    # every call returns a non-zero CUresult and the caller takes its
+    # already-written no-GPU path. (swarm-mcp's wasm interpreter binds
+    # these; a microVM advertises CPU-wasm capability only — plan B10.)
+    # Pure freestanding C — no libc calls in either file.
+    $CC $KFLAGS -c "$ROOT/stdlib/cuda_stubs.c"  -o "$CACHE/cuda_stubs.o"
+    $CC $KFLAGS -c "$ROOT/stdlib/nvrtc_stubs.c" -o "$CACHE/nvrtc_stubs.o"
     $CC -c "$BOOT/boot.S"                 -o "$CACHE/boot.o"
     $CC $KFLAGS -c "$NOLIBC/setjmp_x86_64.S" -o "$CACHE/nl_setjmp.o" 2>/dev/null \
         || $CC -c "$NOLIBC/setjmp_x86_64.S" -o "$CACHE/nl_setjmp.o"
@@ -199,6 +209,7 @@ $CC -nostdlib -static -Wl,-T,"$BOOT/link.ld" -Wl,--build-id=none \
     "$CACHE/platform.o" "$CACHE/tls_guest.o" \
     "$CACHE/boot_initfs.o" "$CACHE/boot_pagealloc.o" "$CACHE/boot_nosys.o" \
     "$CACHE/boot_multiboot2.o" "$CACHE/boot_console.o" "$CACHE/boot_font8x16.o" \
+    "$CACHE/cuda_stubs.o" "$CACHE/nvrtc_stubs.o" \
     "$OUTDIR/$base.initfs_data.o" \
     "$CACHE"/nl_*.o
 

@@ -30,6 +30,13 @@
 # ============================================================
 set -uo pipefail
 
+# Every check below parses readelf's English output with awk — and
+# readelf localises ("Entry point" is something else on a Finnish
+# desktop), which made this gate report an EMPTY entry address against
+# a correct image. CI never sees it (C locale there), which is exactly
+# why the fix belongs in the script, not in the environment.
+export LC_ALL=C
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 IMG="${1:-$ROOT/build/unikernel/hello.elf}"
 CH="${NURL_CLOUD_HYPERVISOR:-cloud-hypervisor}"

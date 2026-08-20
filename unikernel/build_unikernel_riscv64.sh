@@ -104,6 +104,7 @@ cache_inputs() {
         "$BOOT"/platform_riscv64.c "$BOOT"/initfs.c "$BOOT"/pagealloc.c \
         "$BOOT"/nosys.c "$BOOT"/fdt.c "$BOOT"/virtio_rng.c \
         "$BOOT"/tls_guest_riscv64.c "$BOOT"/boot_riscv64.S \
+        "$ROOT/stdlib/cuda_stubs.c" "$ROOT/stdlib/nvrtc_stubs.c" \
         "${BASH_SOURCE[0]}"
 }
 
@@ -119,6 +120,10 @@ cache_build() {
     $ZIG cc $KFLAGS -c "$BOOT/initfs.c"          -o "$CACHE/boot_initfs.o"
     $ZIG cc $KFLAGS -c "$BOOT/pagealloc.c"       -o "$CACHE/boot_pagealloc.o"
     $ZIG cc $KFLAGS -c "$BOOT/nosys.c"           -o "$CACHE/boot_nosys.o"
+    # CUDA/NVRTC driver-API stubs — the same no-GPU answers nurl.sh links
+    # on a host with no NVIDIA driver (see build_unikernel.sh).
+    $ZIG cc $KFLAGS -c "$ROOT/stdlib/cuda_stubs.c"  -o "$CACHE/cuda_stubs.o"
+    $ZIG cc $KFLAGS -c "$ROOT/stdlib/nvrtc_stubs.c" -o "$CACHE/nvrtc_stubs.o"
     $ZIG cc $KFLAGS -c "$BOOT/fdt.c"             -o "$CACHE/boot_fdt.o"
     $ZIG cc $KFLAGS -c "$BOOT/virtio_rng.c"      -o "$CACHE/boot_virtio_rng.o"
     $ZIG cc $KFLAGS -c "$BOOT/tls_guest_riscv64.c" -o "$CACHE/tls_guest.o"
