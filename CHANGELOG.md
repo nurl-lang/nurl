@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.46.0] — 2026-08-20
 
 ### Security
 
@@ -28,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *`index.txt` record forgery*: a serial carrying tabs and newlines was
   appended straight into the tab-separated index, forging revocation
   records; serials must now be even-length hex of at most 40 bytes.
+
 - **pki-server no longer ships working default credentials.** The
   `your-device-init-key` / `your-management-key-here` placeholders
   authenticated every caller of any deployment that never overrode them.
@@ -36,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than admits, and both keys are compared with `std/subtle`'s
   `constant_time_eq` — `string_eq` stops at the first differing byte, which
   turns every request into a measurement of how many leading bytes matched.
+
 - **A revoked enrollment certificate is enforced at issuance.** Revocation
   used to be a side effect — the stored enrollment file was scribbled over
   — so revoking by serial alone, with no CN to name a file by, left the
@@ -43,19 +46,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `/renew_initial_cert` now check the certificate's serial against
   `index.txt`.
 
-### Changed
-
-- **The three Linux CI jobs run in a pre-baked container**
-  (`nurllang/ci:ubuntu24-<date>`, built from `containers/ci/Dockerfile`) —
-  clang/llvm, the FFI dev libraries, qemu + grub, gdb, zstd and the zig
-  toolchain pre-installed, so no CI run touches the Ubuntu package mirror or
-  ziglang.org. Exists because the mirror reachable from GitHub's runner pool
-  degraded three separate times on 2026-08-19 and every affected job burned
-  its whole timeout inside `apt-get update` without executing a line of the
-  code under test. CI pins the dated tag; `:latest` is never referenced.
-
-
 ### Added
+
+- **Fiber-per-connection HTTP serving** — `http_app_async n` (n worker
+  pthreads, 0 = one per core) makes the async runtime the facade's scaling
+  mode instead of a path that existed but could not be deployed. Three
+  things had kept it unusable: TLS record I/O blocked worker pthreads, the
+  TLS handshake blocked the accept loop, and the async path skipped both
+  the DoS gate and the per-connection idle timeout. Now `std/tls.nu`'s
+  `__fill` / `_tls_sock_write` are context-aware — on a fiber, EAGAIN parks
+  on the reactor and the worker stays free; off one they block as before —
+  `tcp_accept_transport` + `tcp_conn_complete_tls` move the handshake onto
+  the connection's own fiber so handshakes overlap (675 → 7 034
+  handshakes/s), and `__serve_accepted` factors admission control and
+  timeouts so the sync, pool and fiber paths share them. A plain-TCP probe
+  against a TLS port used to kill the whole server; it is now one failed
+  connection. Plaintext req/s against the old 10-thread pool, same host
+  (12-core i7-5930K, oha): C=1 14.6k → 20.5k, C=50 141k → 203k, C=200
+  151k → 252k; TLS C=200 57.8k → 186k. Gated by
+  `compiler/tests/async_http_server_tls.nu`.
 
 - **Post-quantum CA in `packages/pki-server`** — `--algorithm
   p256|mldsa44|mldsa65|mldsa87` (default `p256`) selects the CA key type
@@ -67,15 +76,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `post_quantum`. `--algorithm` names what a *new* CA is minted with; an
   existing key pair keeps its own. Composite/hybrid certificates are
   deliberately out of scope — the choice is pure-classical or pure-PQ.
+
 - **`mldsa_priv_from_pem` in `std/pkey.nu`** — loads the PKCS#8
   `OneAsymmetricKey` container `x509_gen.nu` writes for ML-DSA and returns
   the parameter set alongside the key, since the OID is the only thing
   that names it. Accepts both the wrapped and the bare `privateKey`
   encoding.
+
 - **`set_permissions` in `std/fs.nu`** — POSIX `chmod(2)`, which is what a
   program that writes a private key needs: `write_file` creates at
   `0666 & ~umask`, leaving a key readable by every account on the host.
   pki-server now writes every private key it stores at mode `0600`.
+
 - **RFC 5280 extensions on every pki-server certificate** — `keyUsage`
   (critical), `extendedKeyUsage`, `subjectKeyIdentifier` and
   `authorityKeyIdentifier` joined the `basicConstraints` and
@@ -96,65 +108,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own anchor over an X25519MLKEM768 handshake — plus the
   override-replaces and default-unchanged halves, mutation-tested.
 
-### Fixed
-
-- **pki-server's DER length encoder stopped at two octets** and emitted a
-  silently truncated length above 65535 — unreachable while every
-  certificate was a half-kilobyte ECDSA one, reachable the moment an
-  ML-DSA CRL crosses 64 KiB. It now emits the fewest length octets that
-  hold the value, as DER requires.
-- **A regenerated pki-server CRL restamped every revocation with "now."**
-  `index.txt` records the revocation date; the reader threw it away and
-  substituted the current time for all entries, so the CRL lost its
-  history on every restart. Dates now round-trip as UTCTime, entries are
-  no longer duplicated when the same serial is revoked twice, and a line
-  whose serial or date does not parse is dropped instead of propagated.
-- **The HTTP access logs leaked one allocation per request.**
-  `nurl_str_int` allocates, and auto-drop only tracks resources it saw
-  *bound* (spec §8.1) — an owned temporary handed straight to a call is
-  never collected. `with_log_requests` leaked one such string per
-  request and `with_access_log` three, in processes expected to run for
-  months. Both now bind before printing. (Found by running
-  `packages/pki-server` under `NURL_SAN=1`; the same idiom appears at
-  other `nurl_str_int` call sites in stdlib, which this does not sweep.)
-- **pki-server leaked the stored certificate's DER on every failed
-  enrollment check** — the match nested the stored-PEM unwrap inside the
-  submitted-PEM arm, so any request whose submitted PEM did not parse
-  (that is, every probe) dropped the other buffer on the floor.
-- **pki-server's E2E suite was verifying the CA against itself.** Its
-  greedy `sed` for `"certificate"` matched `"ca_certificate"` — the last
-  occurrence in the response — so the OpenSSL chain check never looked at
-  an issued certificate. JSON is now parsed as JSON, and the suite runs
-  the whole lifecycle twice (classical and post-quantum) with security
-  regression tests for each hole listed above.
-- **`pqc probe` no longer reports "handshake failed" for an untrusted
-  certificate** — a probe's question is "does this server negotiate a
-  post-quantum group", and the handshake answers it whether or not the
-  chain anchors here. On TlsBadCert it retries insecurely and reports the
-  real group with a `(certificate UNTRUSTED here)` note, keeping "not
-  post-quantum" and "not trusted" apart. And `probe HOST:PORT` now works
-  as the usage always documented — the port suffix was parsed by nothing,
-  so probing anything but :443 silently dialled the wrong port.
-
-### Changed
-
-- **pki-server no longer sends permissive CORS headers.** `http_app_cors`
-  made a CA's management API scriptable from any origin; nothing in the
-  package needs cross-origin access, and a browser-driven caller can set
-  its own proxy. `validity_days` is also capped at 3650 on every issuance
-  endpoint, and `--serial-file` is accepted and ignored (serials have been
-  96-bit CSPRNG values throughout; the flag never did anything).
-- **Polynomial serialisation no longer pushes one byte at a time** —
-  `__bitpack` (ML-DSA) and `__byte_encode` (ML-KEM) reserve their exact
-  output (a polynomial packs to 32·bits bytes) and write through the raw
-  pointer. The per-byte `vec_push` cursor was a call, a capacity check and a
-  possible grow per byte, ~15,000 times per ML-DSA-65 signing attempt, and
-  the hottest scalar loop in both `mldsa_sign_mu` and K-PKE encryption.
-  ML-KEM-512 encaps 27 → 20 µs, decaps 32 → 25 µs; ML-KEM-768
-  encaps/decaps 32/39 → 30/38 µs. ACVP byte-exact throughout.
-
-### Added
-
 - **`bench/pq.nu`** — the post-quantum stack measured, with the same-host
   reference numbers (pq-crystals / sphincsplus, ref C and AVX2, dated) in
   the header as the bar.
@@ -162,47 +115,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`v256` sixteen-lane arithmetic** — `nurl_v256_{add16,sub16,mullo16,
   mulhi16,sra16,bcast16}`; `mulhi16` is spelled as the widen-multiply-narrow
   sequence LLVM pattern-matches back into `vpmulhw`.
-
-### Changed
-
-- **ML-KEM and ML-DSA: four-way noise samplers, bit-sliced CBD, vector
-  NTT** — PRF_η / ExpandS / ExpandMask run four nonce-streams per sponge;
-  CBD sums η-bit groups a word at a time instead of per bit; the ML-KEM
-  NTT's wide layers run sixteen Montgomery butterflies per operation,
-  bit-identical to the scalar arithmetic (the borrow in
-  `mulhi(x,y) − mulhi(t,q)` cannot happen, so ACVP byte-equality holds).
-  From the branch start: ML-KEM-768 keygen/encaps/decaps 39/42/60 → 31/32/39
-  µs, ML-DSA-44 sign 180 → 153 µs, ML-DSA-65 sign 312 → 273 µs.
-
-- **SLH-DSA now runs four hashes at a time, and beats the reference AVX2
-  implementation on every operation** (i7-5930K, µs/op, sphincsplus
-  `shake-avx2` built from source on the same host):
-
-  | | before | after | AVX2 ref | |
-  | --- | ---: | ---: | ---: | --- |
-  | 128f keygen / sign / verify | 2598 / 62085 / 3771 | 656 / 19807 / 1616 | 1104 / 25546 / 1894 | 1.2–1.7× faster |
-  | 128s keygen / sign / verify | 168156 / 1307537 / 1337 | 43200 / 325635 / 651 | 70857 / 544364 / 707 | 1.1–1.7× faster |
-  | 192f sign | 101442 | 31744 | — | 3.2× |
-  | 256f sign / verify | 214134 / 5475 | 58618 / 2239 | 83238 / 2786 | 1.4× / 1.2× faster |
-
-  Three changes, all structure, no algorithm: `shake256x4_block` in
-  `std/hash_sha3x4` (F/H/PRF always fit one rate block — one four-way
-  permutation, no sponge struct, no allocation, against ~90,000 hashes and
-  six allocations each per 128f signature before); WOTS+ chains four at a
-  time (equal-step lockstep in keygen/sign, per-lane entry points in verify
-  — a lane joins at its own start and idles before it, since the permutation
-  runs on all four lanes regardless); and FORS trees built bottom-up (leaves
-  and internal levels four at a time, the auth path extracted from the one
-  build instead of recomputing a sibling subtree per level). A per-call
-  `SlhCtx` scratch is threaded down the call chain, so concurrent signers
-  share nothing.
-
-  Oracle: SLH-DSA ACVP byte-exact (keyGen 60, sigGen 168, sigVer 168 — 0
-  failed), and four mutations of the new paths (chain-entry off-by-one,
-  FORS sibling without `^1`, pad domain byte, verify parent parity) each
-  caught.
-
-### Added
 
 - **`simd`: CPU-dispatched code generation (grammar v2.6)** —
   A function declaration may carry a leading `simd` prefix. nurlc then emits
@@ -271,6 +183,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **P-256 stores field elements as four 64-bit limbs, and `k·G` runs in
+  Jacobian coordinates.** The field kept eight 32-bit limbs and packed them
+  to 4×64 inside every Montgomery multiply, unpacking on exit — ~24
+  pack/unpack operations riding on each of the ~1500 multiplies of a scalar
+  multiplication. Elements are now stored as four 64-bit limbs, with add/sub
+  running on `nurl_addc`/`nurl_subb` chains in registers. The fixed-base
+  comb then moved from complete RCB projective addition (14 muls for *every*
+  doubling and addition) to Jacobian with an affine table (dbl-2001-b, mixed
+  Jacobian+affine), completeness replaced case by case with constant-time
+  masks; the variable-base ladder keeps the complete formula, so adversarial
+  inputs never reach the masked paths. ECDSA sign 168 → 96 µs, P-256 keygen
+  130 → 62 µs, TLS server CPU 775 → 659 µs/handshake. Verified by
+  differential testing against bigint (400 field trials, 60 scalarmult
+  trials) and a new `p256_scalarmult_base_kat` whose 18 vectors —
+  cross-checked against an independent Python implementation — include the
+  structured edges that exercise every masked exceptional path.
+
+- **TLS server: one-write first flight, wider comb, zero-copy records.**
+  ServerHello through Finished left as six separate `send()`s — six
+  syscalls and up to six client wakeups per handshake — and now leave in
+  one write, which is what rustls also puts on the wire. The fixed-base
+  comb widened 4 → 8 teeth and its Montgomery tables are built once per
+  process rather than re-parsed from a 1.5 KB hex string on every sign.
+  `__fill` reads straight into `rxbuf`'s spare capacity and `__consume`
+  shifts in place, instead of a fresh 16 KB scratch Vec plus copy per
+  record. The reactor's spin window also grew 64 → 256 probes: a plaintext
+  peer answers inside the old window but a TLS turnaround is ~35–45 µs, so
+  every low-concurrency HTTPS request missed the spin and paid a full park.
+  https C=1 13–15k → 18–20k req/s (p50 0.069 → 0.046 ms); the ≤4-live-fibers
+  gate keeps loaded servers off the spin entirely.
+
+- **The three Linux CI jobs run in a pre-baked container**
+  (`nurllang/ci:ubuntu24-<date>`, built from `containers/ci/Dockerfile`) —
+  clang/llvm, the FFI dev libraries, qemu + grub, gdb, zstd and the zig
+  toolchain pre-installed, so no CI run touches the Ubuntu package mirror or
+  ziglang.org. Exists because the mirror reachable from GitHub's runner pool
+  degraded three separate times on 2026-08-19 and every affected job burned
+  its whole timeout inside `apt-get update` without executing a line of the
+  code under test. CI pins the dated tag; `:latest` is never referenced.
+
+- **pki-server no longer sends permissive CORS headers.** `http_app_cors`
+  made a CA's management API scriptable from any origin; nothing in the
+  package needs cross-origin access, and a browser-driven caller can set
+  its own proxy. `validity_days` is also capped at 3650 on every issuance
+  endpoint, and `--serial-file` is accepted and ignored (serials have been
+  96-bit CSPRNG values throughout; the flag never did anything).
+
+- **Polynomial serialisation no longer pushes one byte at a time** —
+  `__bitpack` (ML-DSA) and `__byte_encode` (ML-KEM) reserve their exact
+  output (a polynomial packs to 32·bits bytes) and write through the raw
+  pointer. The per-byte `vec_push` cursor was a call, a capacity check and a
+  possible grow per byte, ~15,000 times per ML-DSA-65 signing attempt, and
+  the hottest scalar loop in both `mldsa_sign_mu` and K-PKE encryption.
+  ML-KEM-512 encaps 27 → 20 µs, decaps 32 → 25 µs; ML-KEM-768
+  encaps/decaps 32/39 → 30/38 µs. ACVP byte-exact throughout.
+
+- **ML-KEM and ML-DSA: four-way noise samplers, bit-sliced CBD, vector
+  NTT** — PRF_η / ExpandS / ExpandMask run four nonce-streams per sponge;
+  CBD sums η-bit groups a word at a time instead of per bit; the ML-KEM
+  NTT's wide layers run sixteen Montgomery butterflies per operation,
+  bit-identical to the scalar arithmetic (the borrow in
+  `mulhi(x,y) − mulhi(t,q)` cannot happen, so ACVP byte-equality holds).
+  From the branch start: ML-KEM-768 keygen/encaps/decaps 39/42/60 → 31/32/39
+  µs, ML-DSA-44 sign 180 → 153 µs, ML-DSA-65 sign 312 → 273 µs.
+
+- **SLH-DSA now runs four hashes at a time, and beats the reference AVX2
+  implementation on every operation** (i7-5930K, µs/op, sphincsplus
+  `shake-avx2` built from source on the same host):
+
+  | | before | after | AVX2 ref | |
+  | --- | ---: | ---: | ---: | --- |
+  | 128f keygen / sign / verify | 2598 / 62085 / 3771 | 656 / 19807 / 1616 | 1104 / 25546 / 1894 | 1.2–1.7× faster |
+  | 128s keygen / sign / verify | 168156 / 1307537 / 1337 | 43200 / 325635 / 651 | 70857 / 544364 / 707 | 1.1–1.7× faster |
+  | 192f sign | 101442 | 31744 | — | 3.2× |
+  | 256f sign / verify | 214134 / 5475 | 58618 / 2239 | 83238 / 2786 | 1.4× / 1.2× faster |
+
+  Three changes, all structure, no algorithm: `shake256x4_block` in
+  `std/hash_sha3x4` (F/H/PRF always fit one rate block — one four-way
+  permutation, no sponge struct, no allocation, against ~90,000 hashes and
+  six allocations each per 128f signature before); WOTS+ chains four at a
+  time (equal-step lockstep in keygen/sign, per-lane entry points in verify
+  — a lane joins at its own start and idles before it, since the permutation
+  runs on all four lanes regardless); and FORS trees built bottom-up (leaves
+  and internal levels four at a time, the auth path extracted from the one
+  build instead of recomputing a sibling subtree per level). A per-call
+  `SlhCtx` scratch is threaded down the call chain, so concurrent signers
+  share nothing.
+
+  Oracle: SLH-DSA ACVP byte-exact (keyGen 60, sigGen 168, sigVer 168 — 0
+  failed), and four mutations of the new paths (chain-entry off-by-one,
+  FORS sibling without `^1`, pad domain byte, verify parent parity) each
+  caught.
+
 - **A module containing a `simd`-marked function is no longer partitioned by
   `--split`.** Splitting separates the wide clone from the callees it needs
   inlined, giving back most of what the prefix buys: ML-DSA-65 sign measured
@@ -298,6 +303,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matrix expansions above and is not in this entry.
 
 ### Fixed
+
+- **`nurlpkg publish` checked a proxy for the thing it claimed to check.**
+  Its own `--help` said gate 3 verified that "required stdlib symbols exist
+  in the RELEASED toolchain"; it verified that every imported stdlib *file*
+  was present in the installed prefix, and nothing about what the package
+  *called* inside those files. `packages/pki-server` 0.3.0 imports
+  `std/fs.nu` and `std/pkey.nu` — both present in every release — while
+  calling `set_permissions` and `mldsa_priv_from_pem`, added to them in the
+  same PR: every path existed, every gate passed, and the tarball would not
+  compile for anyone running `nurlpkg install`. Publishing is irreversible
+  (yank, never replace), so the gate now does the real check — typecheck
+  `src/main.nu` with the INSTALLED compiler against the INSTALLED stdlib.
+  An unresolved `deps/` tree and a too-old stdlib are told apart by the
+  compiler's own diagnostic, since they want opposite advice; a missing or
+  unlaunchable compiler WARNs and lets the publish through rather than
+  passing silently.
+
+- **pki-server's DER length encoder stopped at two octets** and emitted a
+  silently truncated length above 65535 — unreachable while every
+  certificate was a half-kilobyte ECDSA one, reachable the moment an
+  ML-DSA CRL crosses 64 KiB. It now emits the fewest length octets that
+  hold the value, as DER requires.
+
+- **A regenerated pki-server CRL restamped every revocation with "now."**
+  `index.txt` records the revocation date; the reader threw it away and
+  substituted the current time for all entries, so the CRL lost its
+  history on every restart. Dates now round-trip as UTCTime, entries are
+  no longer duplicated when the same serial is revoked twice, and a line
+  whose serial or date does not parse is dropped instead of propagated.
+
+- **The HTTP access logs leaked one allocation per request.**
+  `nurl_str_int` allocates, and auto-drop only tracks resources it saw
+  *bound* (spec §8.1) — an owned temporary handed straight to a call is
+  never collected. `with_log_requests` leaked one such string per
+  request and `with_access_log` three, in processes expected to run for
+  months. Both now bind before printing. (Found by running
+  `packages/pki-server` under `NURL_SAN=1`; the same idiom appears at
+  other `nurl_str_int` call sites in stdlib, which this does not sweep.)
+
+- **pki-server leaked the stored certificate's DER on every failed
+  enrollment check** — the match nested the stored-PEM unwrap inside the
+  submitted-PEM arm, so any request whose submitted PEM did not parse
+  (that is, every probe) dropped the other buffer on the floor.
+
+- **pki-server's E2E suite was verifying the CA against itself.** Its
+  greedy `sed` for `"certificate"` matched `"ca_certificate"` — the last
+  occurrence in the response — so the OpenSSL chain check never looked at
+  an issued certificate. JSON is now parsed as JSON, and the suite runs
+  the whole lifecycle twice (classical and post-quantum) with security
+  regression tests for each hole listed above.
+
+- **`pqc probe` no longer reports "handshake failed" for an untrusted
+  certificate** — a probe's question is "does this server negotiate a
+  post-quantum group", and the handshake answers it whether or not the
+  chain anchors here. On TlsBadCert it retries insecurely and reports the
+  real group with a `(certificate UNTRUSTED here)` note, keeping "not
+  post-quantum" and "not trusted" apart. And `probe HOST:PORT` now works
+  as the usage always documented — the port suffix was parsed by nothing,
+  so probing anything but :443 silently dialled the wrong port.
 
 - **`nurlfmt` no longer breaks a `simd @` declaration across lines** — the
   formatter glues the prefix to its decl-starter exactly as it does `pub`.
@@ -338,7 +402,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ASan+LSan, and pinned by `compiler/tests/vec_get_multifield.nu`.
   The pointer iteration stays (it is the zero-copy borrow); the
   comments now say why honestly.
-
 ## [0.45.0] — 2026-08-18
 
 ### Added
@@ -14198,6 +14261,7 @@ releases are measured.
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
 [Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.45.0...HEAD
+[0.46.0]: https://github.com/nurl-lang/nurl/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/nurl-lang/nurl/compare/v0.44.2...v0.45.0
 [0.44.2]: https://github.com/nurl-lang/nurl/compare/v0.44.1...v0.44.2
 [0.44.1]: https://github.com/nurl-lang/nurl/compare/v0.44.0...v0.44.1

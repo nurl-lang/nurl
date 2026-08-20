@@ -89,7 +89,7 @@ server stack picks it up transparently — swap `tcp_listen` for
 | Capability | Notes |
 |---|---|
 | **TLS server-side** — `tcp_listen_tls host port cert_path key_path → !TcpListener NetErr` | HttpServer integrates without code changes. |
-| **TLS client-side** — `tcp_connect_tls host port server_name verify` | Client handshake with SNI; `verify` enables peer-certificate chain + host-name verification against the system trust store. The primitive behind the MQTT client and any outbound TLS. |
+| **TLS client-side** — `tcp_connect_tls host port server_name verify` | Client handshake with SNI; `verify` enables peer-certificate chain + host-name verification against the system trust store — or against `$SSL_CERT_FILE` when that is set, which **replaces** the system bundle (OpenSSL semantics) and fails closed if unreadable, so a private CA or a self-signed lab server no longer means editing `/etc/ssl` or giving up on verification. The primitive behind the MQTT client and any outbound TLS. |
 | TLS 1.2 minimum | TLS 1.0 / 1.1 / SSL 3.0 disabled in the SSL_CTX. |
 | **SNI** (RFC 6066 §3) — `tcp_tls_add_sni listener hostname cert key` | Multi-tenant HTTPS — per-hostname cert/key pairs on one listener; handshake-time selection; no-match falls through to the default cert. |
 | **ALPN** (RFC 7301) — `tcp_listen_tls_with_alpn`; `tcp_alpn_protocol conn` | Required by HTTP/2-over-TLS (RFC 9113 §3.3). |

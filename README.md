@@ -171,13 +171,25 @@ product types via structs), with no subtyping and no implicit conversions.
 
 ## Testing & CI
 
-Every push and PR runs the bootstrap fixed point and the full test corpus on
-**Linux and FreeBSD** (a real 14.2 VM), an `examples/` frontend gate, a
-`nurlfmt` canonical-format gate, and the whole corpus under AddressSanitizer +
-UndefinedBehaviorSanitizer. The second OS keeps the toolchain honest — the
+Every push and PR that touches code runs the bootstrap fixed point and the
+full test corpus on **four host platforms and one bare-metal target**, not
+one:
+
+| Gate | Where | What it proves |
+|---|---|---|
+| Linux x86_64 | `ubuntu-latest` | Fixed point + full corpus, `examples/` frontend gate, `nurlfmt` canonical-format gate, and ~20 targeted gates (CRC-32, XXH64, Zstandard against the `zstd` CLI, DWARF, HTTP per-request leak, diagnostic coverage) |
+| FreeBSD 14.2 | real VM | The same corpus on a second OS |
+| **Windows x86_64** | `windows-latest` | `build.bat` fixed point + the Windows golden corpus, then `nurl.bat` builds and runs a program with both the bundled zig and clang |
+| **macOS ARM64** | `macos-14` (Apple Silicon) | `./build.sh` stage1 ≡ stage2 fixed point + the full corpus against the **same goldens as Linux**, plus the `examples/` gate |
+| **Unikernel** | QEMU, in CI | The corpus with no libc at all, then the guest booted on x86_64, AArch64 **and** RISC-V64 — plus the PVH image under cloud-hypervisor |
+| Sanitizers | `ubuntu-latest` | The whole corpus under AddressSanitizer + UndefinedBehaviorSanitizer |
+
+The second OS and the two non-Linux hosts keep the toolchain honest — the
 shipped `nurlc` / `nurlpkg` binaries link only libc and `nurl.sh` is POSIX
-`sh`, so the toolchain runs unmodified on glibc, musl / Alpine, and BSD. Gate
-list and how to reproduce each locally:
+`sh`, so the toolchain runs unmodified on glibc, musl / Alpine, BSD, Windows
+and macOS. A documentation-only PR (`webdocs/**`) skips the code gates and
+runs the docs build instead; a PR touching both runs everything. Gate list
+and how to reproduce each locally:
 [`docs/BUILDING.md`](docs/BUILDING.md#continuous-integration).
 
 ---

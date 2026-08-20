@@ -76,6 +76,7 @@ used as variable, parameter, field, or function names:
 | `TT_TYPE_KW` | `u16 u32 u64` | unsigned fixed-width integers (v1.8) |
 | `TT_TYPE_KW` | `f32` | 32-bit float (v1.8) |
 | `TT_TYPE_KW` | `v128` | 128-bit SIMD vector (v2.5, §4.1b) |
+| `TT_TYPE_KW` | `v256` | 256-bit SIMD vector (v2.6, §4.1c) |
 | `TT_SIMD` | `simd` | CPU-dispatch prefix on a function (v2.6, §3.3b) |
 | `TT_BOOL` | `T` `F` | boolean literals |
 | `TT_SIZEOF` | `Z` | sizeof operator |
@@ -360,6 +361,7 @@ explicit cast (`#`).
 | `u16` `u32` `u64` | `i16` `i32` `i64` | unsigned sized integers (v1.8) |
 | `f32` | `float` | 32-bit float (v1.8) |
 | `v128` | `<4 x i32>` | 128-bit SIMD vector (v2.5) — see §4.1b |
+| `v256` | `<4 x i64>` | 256-bit SIMD vector (v2.6) — see §4.1c |
 
 The unsigned variants share LLVM types with their signed counterparts;
 the compiler tracks signedness in a side-channel and selects `udiv` /
@@ -523,6 +525,45 @@ limbs into bindings *first* and chain over those. Called on `. p k`
 operands straight out of memory, the two halves reload through a
 possibly-aliasing pointer, the CSE cannot happen, and the chain
 collapses back to the tree it was meant to replace.
+
+### 4.1c `v256` — the wide SIMD lane type (v2.6)
+
+`v256` is the same idea one register wider, and follows every rule
+§4.1b states: by-value, opaque to the operators, every operation a
+`nurl_v256_*` primitive.
+
+It is carried as `<4 x i64>` rather than `<16 x i16>` because the
+kernels that need 256 bits at all need 64-bit lanes — four independent
+Keccak states advanced in lockstep, which is how every production
+ML-KEM / ML-DSA / SLH-DSA implementation generates its matrix, its
+noise and its WOTS+ chains. As with `v128`, the carrier is not the lane
+width: each primitive bitcasts to the lanes it operates on.
+
+**Unlike `v128`, 256 bits is baseline nowhere**, and that is the point
+rather than a problem. A `v256` kernel is *correct* on any target,
+because LLVM legalises `<4 x i64>` into whatever the machine has — two
+SSE2 registers on baseline x86-64, two NEON ones on AArch64. It is only
+*fast* where AVX2 exists. Put the kernel behind the `simd` prefix
+(§3.3b) and the wide clone gets real `vpxor` / `vpsllq` while the
+baseline clone keeps working, with the choice made once per process on
+a CPUID probe.
+
+| Group | Primitives |
+|---|---|
+| load / store | `nurl_v256_ld(*u) → v256`, `nurl_v256_st(*u, v256)` — unaligned |
+| construct | `nurl_v256_zero`, `_set64(a b c d)`, `_bcast64(x)`, `_bcast16(x)` |
+| extract / insert | `nurl_v256_get64(v, i) → u64`, `_put64(v, i, x) → v256` |
+| bitwise | `nurl_v256_xor`, `_and`, `_or`, `_andnot`, `_not` |
+| 64-bit lanes | `nurl_v256_rotl64(v, n)` |
+| 16-bit lanes | `nurl_v256_add16`, `_sub16`, `_mullo16`, `_mulhi16`, `_sra16` |
+
+The 64-bit group is what four-way Keccak needs (rotate and xor); the
+16-bit group is what an ML-KEM / ML-DSA NTT butterfly needs.
+
+`_mulhi16` is spelled as the widen-multiply-narrow sequence LLVM
+pattern-matches back into a single `vpmulhw`, rather than as an
+intrinsic — so the same source is one instruction on AVX2 and a correct
+scalarised sequence everywhere else.
 
 ### 4.2 Pointer types
 

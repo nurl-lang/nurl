@@ -377,7 +377,12 @@ limits — `-O0` would slow down the thing that is already slowest.
 ## Continuous integration
 
 Every pull request, and every push to `main`, runs
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml):
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — plus, in
+parallel, the two host-platform workflows
+[`windows-tests.yml`](../.github/workflows/windows-tests.yml) and
+[`macos-tests.yml`](../.github/workflows/macos-tests.yml). A PR that
+touches only `webdocs/**` skips the code gates and builds the docs
+instead; one that touches both runs everything.
 
 | Job / step | What it checks |
 |---|---|
@@ -390,7 +395,21 @@ Every pull request, and every push to `main`, runs
 | HTTP per-request leak gate | `tools/leakcheck/run.sh` — the HTTP server serves a request burst leak-free under LSan |
 | AddressSanitizer + UndefinedBehaviorSanitizer | `build.sh --san` + the corpus under ASan/UBSan, plus a leak-pinned test set under LSan |
 | FreeBSD (VM) | full build + bootstrap + corpus on a real FreeBSD 14.2 guest (`vmactions/freebsd-vm`) — a hard gate that keeps libc/`sh` portability honest |
+| unikernel (no libc, then no OS) | the corpus built with no libc at all, then the guest **booted** under QEMU on x86_64, AArch64 *and* RISC-V64 — and the x86_64 PVH image under cloud-hypervisor as a second loader |
+| Windows x86_64 (`windows-latest`) | `build.bat` — bootstrap fixed point + the Windows golden corpus (`compiler/tests/outputs-windows/`), then `nurl.bat` builds and runs a program with the bundled zig *and* with clang |
+| macOS ARM64 (`macos-14`, Apple Silicon) | `./build.sh` — stage1 ≡ stage2 fixed point + the full corpus against the **same goldens as Linux**, plus the `examples/` frontend gate |
 
 A local `./build.sh` reproduces the first two gates; `./build.sh --san` then
 `./compiler/tests/run_san_tests.sh` reproduces the sanitizer gate; and
-`./compiler/tests/nurlfmt_check.sh` reproduces the format gate.
+`./compiler/tests/nurlfmt_check.sh` reproduces the format gate. The
+unikernel gate is `unikernel/run_nolibc_tests.sh` followed by
+`unikernel/run_qemu_tests.sh` (and the `_arm64` / `_riscv64` variants —
+each needs the matching `qemu-system-*`); the two host-platform gates
+need those hosts.
+
+The Linux jobs run inside a pre-baked container
+(`nurllang/ci:ubuntu24-<date>`, built from
+[`containers/ci/Dockerfile`](../containers/ci/Dockerfile)) with clang/LLVM,
+the FFI dev libraries, qemu + grub, gdb, zstd and the zig toolchain already
+installed, so no CI run reaches the Ubuntu package mirror or ziglang.org.
+CI pins the dated tag; `:latest` is never referenced.
