@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.0] — 2026-08-20
+
 ### Changed
 
 - **`nurl_api` 0-hit queries now resolve exact module names before fuzzy
@@ -23,6 +25,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   module does the search fall through to the whole-word OR pass and the
   examples/registry widening as before. Query terms are now also split on
   commas, not just spaces, so `csv,json` behaves like `csv json`.
+
+### Fixed
+
+- **The playground's `/build_wasm` no longer dies on programs that import
+  `stdlib/core/io.nu`** (or anything else whose IR declares a vararg libc
+  symbol — `open(2)`, `fcntl`, `printf`). `nurlapi/main.nu` carried its
+  own ~590-line fork of the wasm32-wasi IR rewriter, and the copies had
+  drifted: the fork predated the vararg fix in `__wb_ir_decl_params`, so
+  those declares produced an illegal `... %aN` parameter in a shim define
+  and clang rejected the module — a five-line hello importing
+  `stdlib/core/io.nu` could not build to wasm, while the local wasmbuilder
+  CLI (whose copy had the fix) was fine. The fork is deleted; the service
+  now imports `packages/wasmbuilder/src/wasi_ir.nu` — one rewriter, two
+  consumers — and inherits everything else the package version had
+  learned since the fork: the `realpath` stub, spacing-robust declare
+  removal, env-import attribute marking, and the `-O0` main alias. (#954)
 
 ## [0.46.0] — 2026-08-20
 
@@ -14276,7 +14294,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.47.0...HEAD
+[0.47.0]: https://github.com/nurl-lang/nurl/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/nurl-lang/nurl/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/nurl-lang/nurl/compare/v0.44.2...v0.45.0
 [0.44.2]: https://github.com/nurl-lang/nurl/compare/v0.44.1...v0.44.2
