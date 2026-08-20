@@ -388,5 +388,20 @@ if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1 && command -v openssl >/dev/n
     rm -rf "$tlsdir"
 fi
 
+# ── B10: the swarm-mcp appliance — the plan's endpoint milestone ──
+# The same package that runs hosted boots as the guest, joins the
+# cluster through the relay leg, and completes an expression task and
+# a compiled-wasm task (run in-process on the pure-NURL wasmtime — a
+# guest has no processes). swarm_gate.sh prints its own detail lines,
+# including the measured cold-start-to-first-answer figure.
+if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
+    demos=$((demos + 1))
+    if "$ROOT/unikernel/tests/swarm_gate.sh"; then
+        echo "PASS swarm appliance (B10: census + expr + wasm in the guest)"
+    else
+        echo "FAIL swarm appliance"; fails=$((fails + 1))
+    fi
+fi
+
 echo "── QEMU guest run: $((${#names[@]} + demos - fails))/$((${#names[@]} + demos)) ──"
 [ "$fails" -eq 0 ]

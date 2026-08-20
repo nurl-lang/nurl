@@ -46,13 +46,15 @@ deterministically (no coordination):
   accepts token-authentic results.
 
 > **Requires NURL ≥ v0.10.12** (built from source against your installed stdlib
-> at install time). **wasm kernels additionally need a `wasmtime` on each
-> worker** — the toolchain's own pure-NURL runtime (`packages/wasmtime`) is a
-> drop-in (put it on `PATH` as `wasmtime` or set `$WASMTIME`), so no external
-> runtime is required; the Bytecode-Alliance `wasmtime` works too. `--mcp`
-> auto-mints a self-signed TLS cert on first run **in pure NURL**
-> (`std/x509_gen` — no `openssl`, no subprocess), or pass your own with
-> `--tls-cert`/`--tls-key`.
+> at install time). **CPU wasm kernels run in-process** on the pure-NURL
+> wasmtime that is compiled into the binary (`deps/wasmtime`) — no runtime on
+> `PATH`, no subprocess, no writable filesystem, which is what lets a worker
+> be a NURL **unikernel guest**. Set `$WASMTIME` to run CPU chunks under an
+> external runtime instead (the Bytecode-Alliance `wasmtime` for its JIT, or
+> the pure-NURL CLI); **`--gpu` still requires that external runtime** — GPU
+> chunks always use the CLI contract. `--mcp` auto-mints a self-signed TLS
+> cert on first run **in pure NURL** (`std/x509_gen` — no `openssl`, no
+> subprocess), or pass your own with `--tls-cert`/`--tls-key`.
 
 ## The control surface (what the LLM sees)
 
