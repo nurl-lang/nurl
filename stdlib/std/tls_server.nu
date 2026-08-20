@@ -52,8 +52,12 @@ $ `stdlib/std/aes_gcm.nu`
 
 // ── server-direction record I/O ─────────────────────────────────────
 
-// Encrypt + send one record under the SERVER write keys (s_key/s_iv/s_seq).
-@ __srv_send_enc * TlsConn c i content_type ( Vec u ) content → !v TlsErr {
+// Encrypt one record under the SERVER write keys (s_key/s_iv/s_seq) and
+// APPEND its wire bytes to `out` — no socket write. The handshake path
+// batches its whole first flight (SH‥Finished) into one buffer and one
+// send() through this; __srv_send_enc below wraps it for the callers
+// that do want an immediate write (application data, alerts).
+@ __srv_enc_rec_to * TlsConn c ( Vec u ) out i content_type ( Vec u ) content → v {
     : ( Vec u ) inner ( vec_with_cap [u] + ( vec_len [u] content ) 1 )
     ( _tls_cat inner content )
     ( vec_push [u] inner # u content_type )
@@ -65,19 +69,34 @@ $ `stdlib/std/aes_gcm.nu`
     ( _tls_u16 aad total )
     : ( Vec u ) nonce ( _nonce . c s_iv . c s_seq )
     : ( Vec u ) sealed ( _aead_seal . c cipher . c s_key nonce aad inner )
-    : ( Vec u ) rec ( vec_with_cap [u] + total 5 )
-    ( vec_push [u] rec # u 23 )
-    ( vec_push [u] rec # u 3 )
-    ( vec_push [u] rec # u 3 )
-    ( _tls_u16 rec total )
-    ( _tls_cat rec sealed )
-    : b w ( _tls_sock_write . c fd rec )
+    ( vec_push [u] out # u 23 )
+    ( vec_push [u] out # u 3 )
+    ( vec_push [u] out # u 3 )
+    ( _tls_u16 out total )
+    ( _tls_cat out sealed )
     ( vec_free [u] inner )
     ( vec_free [u] aad )
     ( vec_free [u] nonce )
     ( vec_free [u] sealed )
-    ( vec_free [u] rec )
     = . c s_seq + . c s_seq 1
+}
+
+// Append one PLAINTEXT record (rtype, body) to `out` — the unencrypted
+// ServerHello / CCS legs of the batched first flight.
+@ __srv_plain_rec_to ( Vec u ) out i rtype ( Vec u ) body → v {
+    ( vec_push [u] out # u rtype )
+    ( vec_push [u] out # u 3 )
+    ( vec_push [u] out # u 3 )
+    ( _tls_u16 out ( vec_len [u] body ) )
+    ( _tls_cat out body )
+}
+
+// Encrypt + send one record under the SERVER write keys (s_key/s_iv/s_seq).
+@ __srv_send_enc * TlsConn c i content_type ( Vec u ) content → !v TlsErr {
+    : ( Vec u ) rec ( vec_new [u] )
+    ( __srv_enc_rec_to c rec content_type content )
+    : b w ( _tls_sock_write . c fd rec )
+    ( vec_free [u] rec )
     ^ ? w @ !v TlsErr { T 0 } @ !v TlsErr { F # TlsErr TlsWrite }
 }
 
@@ -471,20 +490,23 @@ $ `stdlib/std/aes_gcm.nu`
     } {}
 
     // ── ServerHello ──
+    // The whole first flight — SH, CCS, EE, Certificate, CertificateVerify,
+    // server Finished — is batched into `flight` and leaves in ONE send()
+    // after the Finished is built. Six separate writes cost six syscalls
+    // and six client-side wakeups per handshake; one flight is also what
+    // rustls/OpenSSL put on the wire. A write failure surfaces exactly
+    // like any torn handshake: the client-Finished read below fails and
+    // the handshake ends in TlsHandshake.
+    : ( Vec u ) flight ( vec_with_cap [u] 2048 )
     : ( Vec u ) srand ( __srv_rand 32 )
     : ( Vec u ) sh ( __srv_build_sh srand ch sidlen suite grp spub )
     ( _tls_cat tr sh )
-    : !v TlsErr shw ( _send_plain c 22 sh )
-    ?? shw { T _ → {} F _ → {
-            ( __srv_cleanup_accept ch crand cpub eph spub ecdhe srand sh tr )
-            ( nurl_free # s c ) ^ ( __srv_fail raw )
-        } }
+    ( __srv_plain_rec_to flight 22 sh )
 
     // optional CCS for middlebox compatibility
     : ( Vec u ) ccs ( vec_with_cap [u] 1 )
     ( vec_push [u] ccs # u 1 )
-    : !v TlsErr _ccw ( _send_plain c 20 ccs )
-    ?? _ccw { T _ → {} F _ → {} }
+    ( __srv_plain_rec_to flight 20 ccs )
     ( vec_free [u] ccs )
 
     // ── key schedule (handshake) ──
@@ -508,8 +530,7 @@ $ `stdlib/std/aes_gcm.nu`
     ( _tls_u16 eebody 0 )
     : ( Vec u ) ee ( __srv_hs_wrap 8 eebody )
     ( _tls_cat tr ee )
-    : !v TlsErr eew ( __srv_send_enc c 22 ee )
-    ?? eew { T _ → {} F _ → {} }
+    ( __srv_enc_rec_to c flight 22 ee )
     ( vec_free [u] eebody )
 
     // ── Certificate ──
@@ -522,8 +543,7 @@ $ `stdlib/std/aes_gcm.nu`
     ( _tls_cat certbody cert_chain )
     : ( Vec u ) certmsg ( __srv_hs_wrap 11 certbody )
     ( _tls_cat tr certmsg )
-    : !v TlsErr cw ( __srv_send_enc c 22 certmsg )
-    ?? cw { T _ → {} F _ → {} }
+    ( __srv_enc_rec_to c flight 22 certmsg )
     ( vec_free [u] certbody )
 
     // ── CertificateVerify ──
@@ -533,8 +553,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) cvbody ( __srv_cv_body keytype ec_priv rsa_n rsa_e rsa_d cvdig cvc ml_level )
     : ( Vec u ) cvmsg ( __srv_hs_wrap 15 cvbody )
     ( _tls_cat tr cvmsg )
-    : !v TlsErr cvw ( __srv_send_enc c 22 cvmsg )
-    ?? cvw { T _ → {} F _ → {} }
+    ( __srv_enc_rec_to c flight 22 cvmsg )
     ( vec_free [u] th_cert ) ( vec_free [u] cvc ) ( vec_free [u] cvdig )
     ( vec_free [u] cvbody )
 
@@ -543,8 +562,11 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) sfin ( _finished_mac s_hs th_cv )
     : ( Vec u ) sfmsg ( __srv_hs_wrap 20 sfin )
     ( _tls_cat tr sfmsg )
-    : !v TlsErr sfw ( __srv_send_enc c 22 sfmsg )
-    ?? sfw { T _ → {} F _ → {} }
+    ( __srv_enc_rec_to c flight 22 sfmsg )
+    // The complete first flight, one send().
+    : b fw ( _tls_sock_write . c fd flight )
+    ( vec_free [u] flight )
+    ? fw {} { ( nurl_eprintln `tls: server flight write failed` ) }
     ( vec_free [u] th_cv )
     ( vec_free [u] sfin )
 

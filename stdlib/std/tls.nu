@@ -272,9 +272,15 @@ $ `stdlib/std/async_ffi.nu`
     : b on_fiber != ( nurl_fiber_current ) 0
     ? on_fiber { ( nurl_tcp_set_nonblock raw 1 ) } {}
     ~ < ( vec_len [u] . c rxbuf ) n {
-        : ( Vec u ) tmp ( vec_with_cap [u] 16384 )
-        : *u p ( vec_data [u] tmp )
-        : s pbuf # s p
+        // Read straight into rxbuf's spare capacity — the previous
+        // per-fill 16 KB scratch Vec + copy-append + free was pure
+        // overhead on the record hot path (once per record read, i.e.
+        // once per keep-alive HTTPS request). Capacity settles at
+        // ~len+16 K and is reused for the connection's lifetime.
+        ( vec_reserve [u] . c rxbuf 16384 )
+        : i len ( vec_len [u] . c rxbuf )
+        : *u p ( vec_data [u] . c rxbuf )
+        : s pbuf # s + # i p len
         : ~ i got ( nurl_tcp_read raw pbuf 16384 )
         : ~ b timed_out F
         ~ & ! timed_out & on_fiber & < got 0 == ( nurl_tcp_err_kind raw ) 7 {
@@ -282,22 +288,25 @@ $ `stdlib/std/async_ffi.nu`
                 = got ( nurl_tcp_read raw pbuf 16384 )
             } { = timed_out T }
         }
-        ? < got 0 { ( vec_free [u] tmp ) ^ @ !i TlsErr { F # TlsErr TlsRead } } {}
-        ? == got 0 { ( vec_free [u] tmp ) ^ @ !i TlsErr { F # TlsErr TlsClosed } } {}
-        : b _ok ( vec_set_len [u] tmp got )
-        ( _tls_cat . c rxbuf tmp )
-        ( vec_free [u] tmp )
+        ? < got 0 { ^ @ !i TlsErr { F # TlsErr TlsRead } } {}
+        ? == got 0 { ^ @ !i TlsErr { F # TlsErr TlsClosed } } {}
+        : b _ok ( vec_set_len [u] . c rxbuf + len got )
     }
     ^ @ !i TlsErr { T 1 }
 }
 
-// Drop the first `n` bytes of rxbuf (consume them).
+// Drop the first `n` bytes of rxbuf (consume them). In place: shift the
+// tail down and shrink len — the old slice-copy allocated (and freed) a
+// fresh Vec per consumed record. The tail is empty in the common case
+// (one record per read), so the memmove is usually zero bytes.
 @ __consume * TlsConn c i n → v {
-    : ( Vec u ) old . c rxbuf
-    : i total ( vec_len [u] old )
-    : ( Vec u ) rest ( bytes_slice old n total )
-    ( vec_free [u] old )
-    = . c rxbuf rest
+    : ( Vec u ) buf . c rxbuf
+    : i total ( vec_len [u] buf )
+    ? >= n total { ( vec_clear [u] buf ) ^ v } {}
+    : i remaining - total n
+    : *u p ( vec_data [u] buf )
+    ( nurl_memmove # s p # s # *u + # i p n remaining )
+    : b _ok ( vec_set_len [u] buf remaining )
 }
 
 // Record = type(1) ver(2) length(2) body. Returns (type, body); body is
