@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`nurl_api`'s exact-module replies never truncate mid-module, and
+  every query term is accounted for.** A grab-bag query like
+  `vec sort string split lowercase contains` used to split the byte cap
+  evenly across the named modules and cut `core/string.nu` mid-surface —
+  and said nothing about `split`/`lowercase`/`contains`, so an agent
+  could read the truncation as "lowercase does not exist". Now a named
+  module's API surface is emitted whole or not at all (what doesn't fit
+  becomes a one-line `module=` pointer), and the reply ends by listing
+  the terms that named no module as NOT searched, pointing the agent at
+  one-concept follow-up queries. Both fronts' `query` descriptions now
+  teach the one-concept-per-call shape (2–4 related terms).
+
 ## [0.47.0] — 2026-08-20
 
 ### Changed
