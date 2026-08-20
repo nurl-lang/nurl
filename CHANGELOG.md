@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`nurl_api` 0-hit queries now resolve exact module names before fuzzy
+  widening** (`ext/mcp_search.nu`, shared by nurl-mcp — bumped to 0.11.0 —
+  and the playground API). Agents habitually query concept lists like
+  `csv json string`; no
+  single declaration contains all three, so the reply used to be an
+  OR-ranked declaration list even though two of the terms literally name
+  stdlib modules. Now, when the AND pass finds nothing, any term that
+  exactly names a module — `csv`, `csv.nu`, or `ext/csv.nu` — returns that
+  module's whole API surface (in query order, deduplicated, the byte cap
+  split evenly between the named modules), and only when no term names a
+  module does the search fall through to the whole-word OR pass and the
+  examples/registry widening as before. Query terms are now also split on
+  commas, not just spaces, so `csv,json` behaves like `csv json`.
+
 ## [0.46.0] — 2026-08-20
 
 ### Security

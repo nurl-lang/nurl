@@ -5,10 +5,13 @@
 //   * msearch_api_module — one module's API surface via nurldoc
 //     (signatures + doc comments + full type definitions, no bodies)
 //   * msearch_api_query  — AND-term search over every module's
-//     declaration blocks; zero hits re-run the terms as a whole-word OR
-//     ranked by coverage, and only if THAT finds nothing does the search
-//     widen to example programs and the package registry; an exact
-//     package-name term is noted in a footer regardless of hit count
+//     declaration blocks (terms split on spaces and commas); on zero
+//     hits, a term that exactly NAMES a stdlib module ('csv' →
+//     ext/csv.nu) returns that module's whole API surface; otherwise
+//     the terms are re-run as a whole-word OR ranked by coverage, and
+//     only if THAT finds nothing does the search widen to example
+//     programs and the package registry; an exact package-name term is
+//     noted in a footer regardless of hit count
 //   * msearch_grep       — case-insensitive substring grep with
 //     word-boundary RANKING (boundary-clean lines first, in-word tail
 //     labeled; word=T drops the tail), plus registry name+description
@@ -1055,6 +1058,120 @@ $ `stdlib/ext/nurldoc.nu`
     ^ matched
 }
 
+// Does `td` (a lowercase query term) exactly name the module whose
+// lowercase relative path is rel_lc? Accepted spellings: the full path
+// ('ext/csv.nu'), the path without '.nu' ('ext/csv'), the basename
+// ('csv.nu'), and the bare stem ('csv').
+@ __ms_term_names_module s td String rel_lc String stem String base String bstem → b {
+    ? != 0 ( nurl_str_eq td ( string_data rel_lc ) ) { ^ T } {}
+    ? != 0 ( nurl_str_eq td ( string_data stem ) ) { ^ T } {}
+    ? != 0 ( nurl_str_eq td ( string_data base ) ) { ^ T } {}
+    ? != 0 ( nurl_str_eq td ( string_data bstem ) ) { ^ T } {}
+    ^ F
+}
+
+// The exact-module pass a 0-hit query earns BEFORE any fuzzy widening:
+// each term is compared against every stdlib module's name (the
+// spellings __ms_term_names_module accepts). An agent that queries
+// "csv json string" wants ext/csv.nu's API surface, not an OR-ranked
+// declaration list, so every named module's whole API surface is
+// emitted — the byte cap split evenly between them, each truncation
+// pointing at module= for the rest. Returns how many modules a term
+// named (0 ⇒ the caller falls through to the OR pass as before).
+@ __ms_api_exact_modules s stdlib_dir ( Vec String ) terms String out → i {
+    : Json files ( json_arr_new )
+    ( msearch_walk_nu_files files stdlib_dir `` )
+    : i nf ( json_arr_len files )
+    : i tn ( vec_len [String] terms )
+    : ( Vec String ) rels ( vec_new [String] )
+    : ( Vec String ) hits ( vec_new [String] )
+    // Terms outer, files inner: the reply lists modules in QUERY order
+    // ("csv json …" leads with ext/csv.nu), deduplicated by rel path.
+    : ~ i tk 0
+    ~ < tk tn {
+        ?? ( vec_get [String] terms tk ) {
+            T t → {
+                ? > ( string_len t ) 0 {
+                    : ~ i k 0
+                    ~ < k nf {
+                        ?? ( json_arr_get files k ) {
+                            T fo → {
+                                : ~ s rel ``
+                                ?? ( json_obj_get fo `path` ) {
+                                    T pj → { ? ( json_is_str pj ) { = rel ( json_as_str pj ) } {} }
+                                    F _ → {}
+                                }
+                                ? & > ( nurl_str_len rel ) 3 ! ( __ms_has_str rels rel ) {
+                                    : String rel_lc ( __ms_lc rel )
+                                    : String stem ( string_substr rel_lc 0 - ( string_len rel_lc ) 3 )
+                                    : String base ( __ms_basename ( string_data rel_lc ) )
+                                    : String bstem ( string_substr base 0 - ( string_len base ) 3 )
+                                    ? ( __ms_term_names_module ( string_data t ) rel_lc stem base bstem ) {
+                                        ( vec_push [String] rels ( string_from rel ) )
+                                        ( vec_push [String] hits ( string_from ( string_data t ) ) )
+                                    } {}
+                                    ( string_free bstem )
+                                    ( string_free base )
+                                    ( string_free stem )
+                                    ( string_free rel_lc )
+                                } {}
+                            }
+                            F _ → {}
+                        }
+                        = k + k 1
+                    }
+                } {}
+            }
+            F _ → {}
+        }
+        = tk + tk 1
+    }
+    ( json_free files )
+
+    : i n ( vec_len [String] rels )
+    ? > n 0 {
+        ? == n 1 {
+            ( string_push_str out `No declaration contains every term, but a term names a stdlib module exactly — its whole API surface:\n\n` )
+        } {
+            ( string_push_str out `No declaration contains every term, but ` )
+            ( string_push_int out n )
+            ( string_push_str out ` terms name stdlib modules exactly — their API surfaces:\n\n` )
+        }
+        : i share / ( __ms_api_out_cap ) n
+        : ~ i j 0
+        ~ < j n {
+            : ~ s relj ``
+            ?? ( vec_get [String] rels j ) { T r → = relj ( string_data r ) F _ → {} }
+            : ~ s tj ``
+            ?? ( vec_get [String] hits j ) { T h → = tj ( string_data h ) F _ → {} }
+            ? > ( nurl_str_len relj ) 0 {
+                ( string_push_str out `── ` )
+                ( string_push_str out relj )
+                ( string_push_str out ` (term '` )
+                ( string_push_str out tj )
+                ( string_push_str out `') ──\n` )
+                : String md ( __ms_api_render_module stdlib_dir relj )
+                ? > ( string_len md ) share {
+                    : String cut ( string_substr md 0 share )
+                    ( string_push_str out ( string_data cut ) )
+                    ( string_free cut )
+                    ( string_push_str out `\n… truncated — module='` )
+                    ( string_push_str out relj )
+                    ( string_push_str out `' for the rest.\n` )
+                } {
+                    ( string_push_str out ( string_data md ) )
+                }
+                ( string_free md )
+                ( string_push_char out 10 )
+            } {}
+            = j + j 1
+        }
+    } {}
+    ( vec_free_with [String] rels \ String r → v { ( string_free r ) } )
+    ( vec_free_with [String] hits \ String h → v { ( string_free h ) } )
+    ^ n
+}
+
 // One module's API surface (nurldoc render, byte-capped with a note);
 // "" when the module is unreadable/missing.
 @ msearch_api_module s stdlib_dir s rel → String {
@@ -1069,13 +1186,19 @@ $ `stdlib/ext/nurldoc.nu`
     ^ md
 }
 
-// Declaration search over every module under stdlib_dir. Zero hits
-// widen to examples_dir ("" skips) and the registry (regbase "" skips);
-// an exact package-name term is footnoted regardless of hit count.
-// Returns the COMPLETE reply text.
+// Declaration search over every module under stdlib_dir; terms are the
+// query split on spaces and commas. Zero hits first try each term as an
+// exact stdlib module NAME ('csv' → ext/csv.nu's API surface), then the
+// whole-word OR pass, then widen to examples_dir ("" skips) and the
+// registry (regbase "" skips); an exact package-name term is footnoted
+// regardless of hit count. Returns the COMPLETE reply text.
 @ msearch_api_query s stdlib_dir s examples_dir s regbase s query → String {
     : String q_lc ( __ms_lc query )
-    : ( Vec String ) terms ( string_split q_lc ` ` )
+    // Agents separate terms with commas about as often as with spaces
+    // ("csv,json") — treat both as term boundaries.
+    : String q_norm ( string_replace q_lc `,` ` ` )
+    : ( Vec String ) terms ( string_split q_norm ` ` )
+    ( string_free q_norm )
     : String out ( string_with_cap 4096 )
     : ( Vec i ) ctr ( vec_new [i] )
     ( vec_push [i] ctr 0 ) ( vec_push [i] ctr 0 )
@@ -1140,24 +1263,30 @@ $ `stdlib/ext/nurldoc.nu`
     // matches in full, so the one-line exact-name footer would repeat it.
     : ~ b widened F
     ? == matched 0 {
-        // Widen the OPERATOR first: the same terms ORed, whole-word,
-        // ranked by coverage. A multi-term concept query ("string builder
-        // append") lands on real declarations here, and when it does the
-        // corpus fallback stays out of the reply — the point of the pass
-        // is fewer, better hits, not more of them.
-        : i or_n ( __ms_api_or_widen stdlib_dir terms hdr )
-        ? == or_n 0 {
-            // Widen rather than shrug: the same terms against example files
-            // and the package registry, in the same reply.
-            = widened T
-            ( string_push_str hdr `No stdlib declaration matches — widened the search:\n\n` )
-            : ~ i ex_n 0
-            ? > ( nurl_str_len examples_dir ) 0 { = ex_n ( __ms_api_fallback_examples examples_dir terms hdr ) } {}
-            ? > ex_n 0 { ( string_push_char hdr 10 ) } {}
-            : ~ i pk_n 0
-            ? > ( nurl_str_len regbase ) 0 { = pk_n ( __ms_api_fallback_packages regbase terms hdr ) } {}
-            ? == + ex_n pk_n 0 {
-                ( string_push_str hdr `Nothing in examples or the registry either — terms are AND-ed substrings; try fewer or shorter terms, or nurl_grep for raw line search.\n` )
+        // A term that exactly NAMES a stdlib module wins before any
+        // fuzzy widening: "csv json string" means ext/csv.nu's API
+        // surface, not an OR-ranked declaration list.
+        : i nm_n ( __ms_api_exact_modules stdlib_dir terms hdr )
+        ? == nm_n 0 {
+            // Widen the OPERATOR next: the same terms ORed, whole-word,
+            // ranked by coverage. A multi-term concept query ("string builder
+            // append") lands on real declarations here, and when it does the
+            // corpus fallback stays out of the reply — the point of the pass
+            // is fewer, better hits, not more of them.
+            : i or_n ( __ms_api_or_widen stdlib_dir terms hdr )
+            ? == or_n 0 {
+                // Widen rather than shrug: the same terms against example files
+                // and the package registry, in the same reply.
+                = widened T
+                ( string_push_str hdr `No stdlib declaration matches — widened the search:\n\n` )
+                : ~ i ex_n 0
+                ? > ( nurl_str_len examples_dir ) 0 { = ex_n ( __ms_api_fallback_examples examples_dir terms hdr ) } {}
+                ? > ex_n 0 { ( string_push_char hdr 10 ) } {}
+                : ~ i pk_n 0
+                ? > ( nurl_str_len regbase ) 0 { = pk_n ( __ms_api_fallback_packages regbase terms hdr ) } {}
+                ? == + ex_n pk_n 0 {
+                    ( string_push_str hdr `Nothing in examples or the registry either — terms are AND-ed substrings; try fewer or shorter terms, or nurl_grep for raw line search.\n` )
+                } {}
             } {}
         } {}
     } {}
