@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one-concept follow-up queries. Both fronts' `query` descriptions now
   teach the one-concept-per-call shape (2–4 related terms).
 
+- **Every MCP tool now carries spec ToolAnnotations**
+  (`readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`,
+  via the new `ext/mcp.nu` helper `mcp_tool_annotate`). Clients such as
+  claude.ai key their per-tool permission defaults and grouping off
+  these hints — and an absent `destructiveHint` defaults to TRUE in the
+  spec, so an unannotated read-only tool was being presented as if it
+  could destroy state, leaving every tool stuck in "Needs approval".
+  Browse/search/read tools declare read-only (auto-allowable); builds
+  declare non-destructive + idempotent; `nurl_run` honestly declares
+  destructive + open-world.
+
 - **MCP tool descriptions cut to ~60 % of their size** across nurl-mcp
   and the playground — agents reported the descriptions eating real
   context budget. Every tool now follows one shape: what it returns,

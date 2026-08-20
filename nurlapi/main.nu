@@ -5161,79 +5161,85 @@ s combined_stdout s combined_stderr → v {
 
 // ── tools/list response ─────────────────────────────────────────────
 
-@ __mcp_tool_desc s name s desc Json schema → Json {
-    ^ ( mcp_tool_descriptor name desc schema )
+// Read-only tool: browse/search/read — clients may auto-allow.
+@ __mcp_tool_ro s name s desc Json schema → Json {
+    ^ ( mcp_tool_annotate ( mcp_tool_descriptor name desc schema ) T F T F )
+}
+
+// Build tool: produces artifacts server-side, destroys nothing.
+@ __mcp_tool_build s name s desc Json schema → Json {
+    ^ ( mcp_tool_annotate ( mcp_tool_descriptor name desc schema ) F F T F )
 }
 
 @ __mcp_build_tools_list → Json {
     : Json arr ( json_arr_new )
 
     // Build tools.
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_native`
+    ( json_arr_push arr ( __mcp_tool_build `nurl_build_native`
     `Compile NURL source to an x86_64 Linux ELF. Returns status, compiler stderr, and download URLs for the binary + .ll. run=true also executes it and returns exit code + output (see the run parameter for when that is allowed).`
     ( __mcp_schema_build_native ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_wasm`
+    ( json_arr_push arr ( __mcp_tool_build `nurl_build_wasm`
     `Compile NURL source to a wasm32-wasi module. Returns status, compile logs, and download URLs for the .wasm + .ll (no inline base64). The module runs in-browser via a WASI shim or with wasmtime.`
     ( __mcp_schema_source_filename ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_windows`
+    ( json_arr_push arr ( __mcp_tool_build `nurl_build_windows`
     `Cross-compile NURL source to a Windows x86_64 .exe (mingw-w64; static libcurl + Schannel TLS). Returns status, stderr, and a download URL.`
     ( __mcp_schema_source_filename ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_macos`
+    ( json_arr_push arr ( __mcp_tool_build `nurl_build_macos`
     `Cross-compile NURL source to an unsigned macOS x86_64 Mach-O (zig cc); clear the quarantine attribute before running.`
     ( __mcp_schema_source_filename ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_target`
+    ( json_arr_push arr ( __mcp_tool_build `nurl_build_target`
     `Cross-compile NURL source via zig cc; 'target' picks static musl ELFs (x86_64/arm64/riscv64 Linux), linux-arm64-gnu (glibc), or macos-x64/macos-arm64 Mach-O.`
     ( __mcp_schema_build_target ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_unikernel`
+    ( json_arr_push arr ( __mcp_tool_build `nurl_build_unikernel`
     `Build NURL source into a bootable unikernel image (x86_64 PVH/microvm or aarch64 virt — no OS or libc: pure-NURL TCP/IP + TLS, no fork/exec). By default also boots it server-side (no network, ~20 s cap) and returns the guest console, an ELF download link, and ready-to-paste QEMU commands. The sandboxed way to run NURL here.`
     ( __mcp_schema_build_unikernel ) ) )
 
     // Browse.
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_list_examples`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_list_examples`
     `List bundled NURL example programs. Returns a JSON array of {name, path, bytes} entries, sorted alphabetically.`
     ( __mcp_schema_empty ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_list_stdlib`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_list_stdlib`
     `List bundled NURL stdlib modules. Returns a JSON array of {name, path, bytes} entries (recursive — core/, std/, ext/), sorted alphabetically.`
     ( __mcp_schema_empty ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_list_tests`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_list_tests`
     `List bundled compiler tests. Returns a JSON array of {name, path, bytes} entries, sorted alphabetically.`
     ( __mcp_schema_empty ) ) )
 
     // Read per-catalogue.
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_example`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_example`
     `Return the source of a bundled example. name is the relative path returned by nurl_list_examples.`
     ( __mcp_schema_name ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_stdlib`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_stdlib`
     `Return the source of a stdlib module. name is the relative path returned by nurl_list_stdlib (e.g. core/string.nu).`
     ( __mcp_schema_name ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_test`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_test`
     `Return the source of a bundled compiler test. name is the relative path returned by nurl_list_tests.`
     ( __mcp_schema_name ) ) )
 
     // Read docs.
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_grammar`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_grammar`
     `Return the current NURL grammar EBNF (spec/grammar.ebnf).`
     ( __mcp_schema_empty ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_readme`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_readme`
     `Return README.md verbatim — project overview, syntax cheat sheet, build instructions.`
     ( __mcp_schema_empty ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_roadmap`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_roadmap`
     `Return ROADMAP.md verbatim — current development plan + ship log.`
     ( __mcp_schema_empty ) ) )
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_docs`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_docs`
     `Search and read the shipped docs/ prose — MEMORY.md (ownership: who frees what), CRYPTO.md, ASYNC.md, spec.md (the full language reference), and ten more: the behaviour questions no API surface answers. Read this before guessing at memory, crypto, or platform behaviour. No arguments lists the documents; query= finds the sections that answer a question; name= with section=/outline= reads pieces. Prefer query/section — whole documents run 40–60 KB.`
     ( __mcp_schema_docs ) ) )
 
     // Changelog.
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_changelog`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_changelog`
     `Find when/whether a feature, fix, or rename shipped — targeted retrieval from the 240+ KB CHANGELOG, never fetch it whole. No arguments returns the release index; query= and/or release= return the matching entries in full ('[release] — date › category' provenance, best matches first, the rest as one-line titles).`
     ( __mcp_schema_changelog ) ) )
 
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_api`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_api`
     `A module's API surface (signatures + doc comments + full type definitions, no bodies), or a declaration search across the whole stdlib. Prefer this over nurl_read_stdlib — a surface is ~6× smaller than the source, one matching declaration ~0.3 KB. module='ext/csv.nu' or package='nn' renders one surface (C-runtime builtins are indexed as core/builtins.nu); query= searches declarations — one concept per call, 2–4 related terms. Every reply states what it searched and lists what it could not.`
     ( __mcp_schema_api ) ) )
 
-    ( json_arr_push arr ( __mcp_tool_desc `nurl_grep`
+    ( json_arr_push arr ( __mcp_tool_ro `nurl_grep`
     `Case-insensitive substring search across stdlib, examples, and tests (path:line: text) plus the package registry (name + description) — "is there anything for X" over raw text. Word-boundary matches rank first; in-word hits follow in a labeled tail. Scope with where=.`
     ( __mcp_schema_grep ) ) )
 

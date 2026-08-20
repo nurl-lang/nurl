@@ -1142,44 +1142,44 @@ version = "0.0.0"
 @ build_tools_list → ( Vec Json ) {
     : ( Vec Json ) tools ( vec_new [Json] )
     ? ( nm_build_ok ) {
-        ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_build`
+        ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_build`
         `Compile NURL (inline "source" or a "path") with the local toolchain; reports success or compiler diagnostics. Does not run the program.`
-        ( nm_schema_src_path ) ) )
-        ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_build_project`
+        ( nm_schema_src_path ) ) F F T F ) )
+        ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_build_project`
         `Compile a program that uses registry packages: "source" (or "files") plus "deps" ({name: req}); deps are resolved with nurlpkg (transitive, checksum + signature verified). Returns binary_path and ll_path. Does not run the program.`
-        ( nm_schema_project ) ) )
+        ( nm_schema_project ) ) F F T F ) )
     } {}
     ? ( nm_build_ok ) {
-        ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_build_wasm`
+        ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_build_wasm`
         `Compile NURL (inline "source" or a "path") to a wasm32-wasi module, fully locally. Writes the .wasm + .ll next to "path" (or to "out", or a temp path for inline source) and returns wasm_path and ll_path.`
-        ( nm_schema_src_path ) ) )
+        ( nm_schema_src_path ) ) F F T F ) )
     } {}
     ? ( nm_run_ok ) {
-        ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_run`
+        ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_run`
         `Compile AND run NURL with the local toolchain; returns the program's exit code, stdout, and stderr.`
-        ( nm_schema_src_path ) ) )
+        ( nm_schema_src_path ) ) F T F T ) )
     } {}
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_check`
+    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_check`
     `Front-end only: type-check and borrow-check NURL without producing a binary. Fast. Reports diagnostics.`
-    ( nm_schema_src_path ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_fmt`
+    ( nm_schema_src_path ) ) T F T F ) )
+    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_fmt`
     `Format NURL to canonical form with nurlfmt; returns the formatted source.`
-    ( nm_schema_src_path ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_list_stdlib`
+    ( nm_schema_src_path ) ) F F T F ) )
+    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_list_stdlib`
     `List the .nu modules in the installed standard library (under $NURL_STDLIB).`
-    ( nm_schema_empty ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_read_stdlib`
+    ( nm_schema_empty ) ) T F T F ) )
+    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_read_stdlib`
     `Read one module from the installed standard library by relative path.`
-    ( nm_schema_name ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_docs`
+    ( nm_schema_name ) ) T F T F ) )
+    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_docs`
     `Search and read the shipped docs/ prose — MEMORY.md (ownership: who frees what), CRYPTO.md, ASYNC.md, spec.md (the full language reference), and ten more: the behaviour questions no API surface answers. Read this before guessing at memory, crypto, or platform behaviour. No arguments lists the documents; query= finds the sections that answer a question; name= with section=/outline= reads pieces. Prefer query/section — whole documents run 40–60 KB.`
-    ( nm_schema_docs ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_api`
+    ( nm_schema_docs ) ) T F T F ) )
+    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_api`
     `A module's API surface (signatures + doc comments + full type definitions, no bodies), or a declaration search across the whole stdlib. Prefer this over nurl_read_stdlib — a surface is ~6× smaller than the source, one matching declaration ~0.3 KB. module='ext/csv.nu' or package='nn' renders one surface (C-runtime builtins are indexed as core/builtins.nu); query= searches declarations — one concept per call, 2–4 related terms. Every reply states what it searched and lists what it could not.`
-    ( nm_schema_api ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_grep`
+    ( nm_schema_api ) ) T F T F ) )
+    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_grep`
     `Case-insensitive search across the installed stdlib (path:line: text; word-boundary matches ranked first, in-word substring hits in a labeled tail) and the package registry (name + description) — "is there a package for X" works from any MCP-only editor. word=true for short acronyms.`
-    ( nm_schema_grep ) ) )
+    ( nm_schema_grep ) ) T F T F ) )
     ^ tools
 }
 

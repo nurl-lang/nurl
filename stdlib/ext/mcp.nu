@@ -430,6 +430,23 @@ $ `stdlib/ext/json.nu`
     ^ out
 }
 
+// Attach MCP ToolAnnotations (spec 2025-03-26) to a tool descriptor and
+// return the same handle. Clients use these as trust hints for
+// permission defaults and grouping — claude.ai, for one, can default
+// read-only tools to auto-allow while write-shaped tools need approval.
+// An ABSENT destructiveHint defaults to TRUE in the spec, so a harmless
+// tool that skips annotations entirely is presented as if it could
+// destroy state; every tool a server lists should pass through here.
+@ mcp_tool_annotate Json tool b read_only b destructive b idempotent b open_world → Json {
+    : Json a ( json_obj_new )
+    ( json_obj_set a `readOnlyHint` ( json_bool read_only ) )
+    ( json_obj_set a `destructiveHint` ( json_bool destructive ) )
+    ( json_obj_set a `idempotentHint` ( json_bool idempotent ) )
+    ( json_obj_set a `openWorldHint` ( json_bool open_world ) )
+    ( json_obj_set tool `annotations` a )
+    ^ tool
+}
+
 // CONSUMES the Vec[Json]: every element is moved into the wrapped
 // JArr. After this call the caller must not vec_free the input — the
 // Json envelope owns it.
