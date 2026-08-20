@@ -468,7 +468,10 @@ emit_md() {
     printf '| Python | %s |\n' "$PYTHON_VERSION"
     printf '\n'
     printf '| Setting | Value |\n|---|---|\n'
-    printf '| Optimisation | NURL/C `clang %s -flto=thin` + ThinLTO backend O3, Rust `-C opt-level=3` |\n' "$OPT"
+    printf '| NURL flags | `nurlc` → LLVM IR; `clang %s -flto=thin -c`; link `clang %s -flto=thin -Wl,-plugin-opt,O3` (ThinLTO backend at O3 — the standard `nurl.sh` release pipeline) |\n' "$OPT" "$OPT"
+    printf '| C flags | `clang %s -flto=thin -c`; link `clang %s -flto=thin -Wl,-plugin-opt,O3` — the identical pipeline, so neither column gets a backend the other lacks |\n' "$OPT" "$OPT"
+    printf '| Rust flags | `rustc -C opt-level=3` — rustc has no prelink/backend split; opt-level 3 is the `cargo build --release` default |\n'
+    printf '| Node / Python | `node` / `python3`, no flags |\n'
     printf '| Timed runs per cell | up to %s, adaptive: as many as fit in %s ms |\n' "$MAX_REPS" "$BUDGET_MS"
     printf '| Timed compiles per cell | %s (median) |\n' "$COMPILE_REPS"
     printf '| Per-run timeout | %s s |\n' "$TIMEOUT_S"
