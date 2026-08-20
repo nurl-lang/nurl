@@ -253,6 +253,22 @@ $ `stdlib/std/bytes.nu`
     ^ out
 }
 
+// Digest-so-far WITHOUT consuming the stream: clones the running state
+// and finalises the clone; `h` stays live and can keep absorbing. This
+// is what an incremental transcript hash needs — TLS 1.3 reads the
+// transcript digest at five points while the transcript keeps growing,
+// and re-hashing the whole transcript from scratch at each point costs
+// ~5× the bytes this pays.
+@ sha256_snapshot * Sha256 h → ( Vec u ) {
+    : *Sha256 c # *Sha256 ( nurl_alloc Z Sha256 )
+    = . c state ( vec_clone [u32] . h state )
+    = . c buf ( vec_clone [u] . h buf )
+    = . c total . h total
+    = . c k ( vec_clone [u32] . h k )
+    = . c m ( vec_clone [u32] . h m )
+    ^ ( sha256_final c )
+}
+
 // One-shot over the streaming core.
 @ sha256_pure ( Vec u ) data → ( Vec u ) {
     : *Sha256 h ( sha256_init )

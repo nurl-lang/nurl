@@ -759,7 +759,17 @@ typedef struct NurlTcp {
      * this copy is for the fiber path, which cannot use SO_RCVTIMEO —
      * it parks on the reactor instead, and has to be told how long. */
     long long     timeout_ms;
+    /* SO_RCVTIMEO/SO_SNDTIMEO not yet pushed to the kernel. Set by
+     * nurl_tcp_set_timeout, consumed by the first BLOCKING read/write:
+     * a fiber-served connection never blocks, so eagerly issuing the
+     * two setsockopt() calls there was two wasted syscalls on every
+     * accepted connection (the fiber path reads timeout_ms directly). */
+    int           timeo_dirty;
 } NurlTcp;
+
+/* Defined next to nurl_tcp_set_timeout below; used by the blocking
+ * read/write paths to apply a deferred timeout. */
+static void nurl__tcp_apply_timeo(NurlTcp *h);
 
 /* Wake the async reactor (if running) so it re-polls. Called after a fd is
  * closed: a fiber parked on that fd would otherwise never wake (poll does
@@ -1289,6 +1299,7 @@ long long nurl_tcp_read(long long handle, const char *buf, long long n) {
         h->err_kind = NURL_NET_ERR_READ;
         return -1;
     }
+    if (h->timeo_dirty && !h->nonblock) nurl__tcp_apply_timeo(h);
 #ifdef _WIN32
     int rd = recv(h->fd, (char*)buf, (n > 0x40000000 ? 0x40000000 : (int)n), 0);
 #else
@@ -1323,6 +1334,7 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
         h->err_kind = NURL_NET_ERR_WRITE;
         return -1;
     }
+    if (h->timeo_dirty && !h->nonblock) nurl__tcp_apply_timeo(h);
     long long total = 0;
     /* SO_SNDTIMEO (set by nurl_tcp_set_timeout for the keep-alive idle
      * deadline) also caps every blocking send(): when a SLOW-BUT-ALIVE
@@ -1562,10 +1574,14 @@ long long nurl_tcp_timeout_ms(long long handle) {
     return h ? h->timeout_ms : 0;
 }
 
-void nurl_tcp_set_timeout(long long handle, long long ms) {
-    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
-    if (!h || h->fd == NURL_INVALID_SOCK) return;
-    h->timeout_ms = ms > 0 ? ms : 0;
+/* Push the stored timeout to the kernel socket options. Only a BLOCKING
+ * read/write needs SO_RCVTIMEO/SO_SNDTIMEO (a non-blocking socket
+ * returns EAGAIN regardless and the fiber path parks on the reactor
+ * with timeout_ms), so nurl_tcp_set_timeout defers this until the first
+ * blocking operation actually happens — see timeo_dirty. */
+static void nurl__tcp_apply_timeo(NurlTcp *h) {
+    long long ms = h->timeout_ms;
+    h->timeo_dirty = 0;
 #ifdef _WIN32
     /* Win32 SO_RCVTIMEO is a DWORD of ms (not a timeval). */
     DWORD tv = (ms > 0) ? (DWORD)ms : 0;
@@ -1585,6 +1601,13 @@ void nurl_tcp_set_timeout(long long handle, long long ms) {
     setsockopt(h->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, (socklen_t)sizeof(tv));
     setsockopt(h->fd, SOL_SOCKET, SO_SNDTIMEO, &tv, (socklen_t)sizeof(tv));
 #endif
+}
+
+void nurl_tcp_set_timeout(long long handle, long long ms) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK) return;
+    h->timeout_ms = ms > 0 ? ms : 0;
+    h->timeo_dirty = 1;
 }
 
 /* ── §18b  UDP sockets (dual-stack IPv4/IPv6 + multicast) ──────── */
@@ -3982,7 +4005,13 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
      * from registration on. */
     if (fd >= 0 &&
         __atomic_load_n(&nurl__sched.pending, __ATOMIC_RELAXED) <= 4) {
-        for (int i = 0; i < 64; i++) {
+        /* 256 probes ≈ 80-250 µs: sized for a TLS peer's turnaround
+         * (decrypt + handle + encrypt ≈ 35-45 µs on loopback), which
+         * the previous 64-probe window (~25 µs) missed — every
+         * keep-alive HTTPS request then paid the full park/wake chain
+         * even at c=1 with idle cores. The ≤4-live-fibers gate above
+         * still keeps loaded servers off this path entirely. */
+        for (int i = 0; i < 256; i++) {
             if (__atomic_load_n(&w->rq_len, __ATOMIC_RELAXED) > 0) break;
             if (__atomic_load_n(&nurl__sched.global_head,
                                 __ATOMIC_RELAXED)) break;
