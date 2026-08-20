@@ -84,7 +84,7 @@ done
 # one that goes looking for devices.
 demos=0
 if [ $# -eq 0 ]; then
-    for demo in devices netdev dhcp loopback; do
+    for demo in devices netdev dhcp loopback idle; do
         src="$ROOT/unikernel/demos/$demo.nu"
         exp="$ROOT/unikernel/demos/$demo.expected"
         [ -f "$src" ] && [ -f "$exp" ] || continue

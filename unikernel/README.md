@@ -282,6 +282,7 @@ on somebody's Firecracker host.
 | | |
 |---|---|
 | vCPUs | one. Fibers are cooperative; there is no preemption and no SMP |
+| idle | `hlt`, woken by the local-APIC timer — TSC-deadline mode where the CPU has it, a TSC-calibrated one-shot where it does not (TCG). Devices stay POLLED (the B0 decision stands; the interrupt exists only to end a sleep, so deadlock stays decidable), and the poller's cadence backs off 1 → 16 ms when no traffic moves — the first frame after a quiet spell waits at most 16 ms. Measured on an idle joined worker appliance under TCG: a full host core before, 5.6 % after. `demos/idle.nu` gates that the machine really halts |
 | memory | whatever the hypervisor reports; 256 MiB is what the gates run with, 4 MiB is what a server needs (see above) |
 | MTU | 1500. Frames are refused above 2036 bytes rather than truncated |
 | IP fragments | dropped, counted, never reassembled. A datagram over the MTU does not arrive |

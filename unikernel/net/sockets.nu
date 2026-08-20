@@ -221,9 +221,21 @@ $ `stdlib/net/dnsclient.nu`
 // a device — a loopback-only program keeps the deadlock detector's proof
 // intact, because for it "nothing runnable, no timer" really is the end.
 @ __poll_forever → v {
+    // Adaptive cadence: 1 ms while traffic moves, backing off to
+    // 16 ms when nothing has for a while. The backoff is what lets
+    // the tickless idle actually idle — a fixed 1 ms poll is a
+    // thousand wakeups a second whether or not a frame has arrived
+    // all day — and the price is bounded and stated: the FIRST frame
+    // after a quiet spell waits at most 16 ms before the machine
+    // notices; everything after it is back at 1 ms. A parked TCP
+    // handshake retransmits in seconds, so 16 ms is noise there.
+    : ~ i cadence 1
     ~ T {
-        : i _m ( __drive ( __ms ) )
-        ( nurl_fiber_sleep_ms 1 )
+        : i moved ( __drive ( __ms ) )
+        ? != moved 0 { = cadence 1 } {
+            ? < cadence 16 { = cadence * cadence 2 } {}
+        }
+        ( nurl_fiber_sleep_ms cadence )
     }
 }
 
