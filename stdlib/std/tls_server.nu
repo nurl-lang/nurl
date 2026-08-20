@@ -347,16 +347,21 @@ $ `stdlib/std/aes_gcm.nu`
     = . c kx_group 0
     = . c alpn_sel ( vec_new [u] )
 
-    : ( Vec u ) tr ( vec_new [u] )
+    // Incremental transcript hash: absorb each handshake message as it
+    // is appended and SNAPSHOT the digest at the checkpoints, instead of
+    // accumulating a transcript Vec and re-hashing it from scratch at
+    // every checkpoint (~4.3 KB hashed per handshake where ~1.3 KB
+    // suffices).
+    : *Sha256 trh ( sha256_init )
 
     // ── ClientHello ──
     : !( Vec u ) TlsErr chr ( __srv_next_hs c )
     : ( Vec u ) ch ?? chr { T m → m F _ → ( vec_new [u] ) }
     ? | == ( vec_len [u] ch ) 0 != ( _t_bget ch 0 ) 1 {
-        ( vec_free [u] ch ) ( vec_free [u] tr ) ( nurl_free # s c )
+        ( vec_free [u] ch ) ( __trh_abort trh ) ( nurl_free # s c )
         ^ ( __srv_fail raw )
     } {}
-    ( _tls_cat tr ch )
+    ( sha256_update trh ch )
 
     : ( Vec u ) crand ( bytes_slice ch 6 38 )
     : i sidlen ( _t_bget ch 38 )
@@ -398,7 +403,7 @@ $ `stdlib/std/aes_gcm.nu`
     // key_share (0x0033): pick x25519 (0x001d) if offered, else secp256r1.
     : i ks ( __srv_find_ext ch es ee 51 )
     ? < ks 0 {
-        ( vec_free [u] ch ) ( vec_free [u] crand ) ( vec_free [u] tr ) ( nurl_free # s c )
+        ( vec_free [u] ch ) ( vec_free [u] crand ) ( __trh_abort trh ) ( nurl_free # s c )
         ^ ( __srv_fail raw )
     } {}
     : i kslen ( _rdint ch ks 2 )  // client_shares length (first 2 bytes of ext body)
@@ -437,7 +442,7 @@ $ `stdlib/std/aes_gcm.nu`
     } {}
     = kp ksend
     ? == grp 0 {
-        ( vec_free [u] ch ) ( vec_free [u] crand ) ( vec_free [u] cpub ) ( vec_free [u] tr ) ( nurl_free # s c )
+        ( vec_free [u] ch ) ( vec_free [u] crand ) ( vec_free [u] cpub ) ( __trh_abort trh ) ( nurl_free # s c )
         ^ ( __srv_fail raw )
     } {}
 
@@ -485,7 +490,8 @@ $ `stdlib/std/aes_gcm.nu`
     // H3: RFC 8446 §7.4.2 — reject a degenerate (all-zero) ECDHE secret from a
     // low-order client key_share before it can seed the key schedule.
     ? ( _all_zero ecdhe ) {
-        ( __srv_cleanup_accept ch crand cpub eph spub ecdhe ( vec_new [u] ) ( vec_new [u] ) tr )
+        ( __srv_cleanup_accept ch crand cpub eph spub ecdhe ( vec_new [u] ) ( vec_new [u] ) )
+        ( __trh_abort trh )
         ( nurl_free # s c ) ^ ( __srv_fail raw )
     } {}
 
@@ -500,7 +506,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) flight ( vec_with_cap [u] 2048 )
     : ( Vec u ) srand ( __srv_rand 32 )
     : ( Vec u ) sh ( __srv_build_sh srand ch sidlen suite grp spub )
-    ( _tls_cat tr sh )
+    ( sha256_update trh sh )
     ( __srv_plain_rec_to flight 22 sh )
 
     // optional CCS for middlebox compatibility
@@ -516,7 +522,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) early ( hkdf_extract empty z32 )
     : ( Vec u ) derived1 ( derive_secret early `derived` ehash )
     : ( Vec u ) hs_secret ( hkdf_extract derived1 ecdhe )
-    : ( Vec u ) th_sh ( sha256_pure tr )
+    : ( Vec u ) th_sh ( sha256_snapshot trh )
     : ( Vec u ) c_hs ( derive_secret hs_secret `c hs traffic` th_sh )
     : ( Vec u ) s_hs ( derive_secret hs_secret `s hs traffic` th_sh )
     ( _set_keys c 0 s_hs )  // server write keys
@@ -529,7 +535,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) eebody ( vec_new [u] )
     ( _tls_u16 eebody 0 )
     : ( Vec u ) ee ( __srv_hs_wrap 8 eebody )
-    ( _tls_cat tr ee )
+    ( sha256_update trh ee )
     ( __srv_enc_rec_to c flight 22 ee )
     ( vec_free [u] eebody )
 
@@ -542,26 +548,26 @@ $ `stdlib/std/aes_gcm.nu`
     ( _u24 certbody ( vec_len [u] cert_chain ) )  // certificate_list length
     ( _tls_cat certbody cert_chain )
     : ( Vec u ) certmsg ( __srv_hs_wrap 11 certbody )
-    ( _tls_cat tr certmsg )
+    ( sha256_update trh certmsg )
     ( __srv_enc_rec_to c flight 22 certmsg )
     ( vec_free [u] certbody )
 
     // ── CertificateVerify ──
-    : ( Vec u ) th_cert ( sha256_pure tr )
+    : ( Vec u ) th_cert ( sha256_snapshot trh )
     : ( Vec u ) cvc ( __srv_cv_content th_cert )
     : ( Vec u ) cvdig ( sha256_pure cvc )
     : ( Vec u ) cvbody ( __srv_cv_body keytype ec_priv rsa_n rsa_e rsa_d cvdig cvc ml_level )
     : ( Vec u ) cvmsg ( __srv_hs_wrap 15 cvbody )
-    ( _tls_cat tr cvmsg )
+    ( sha256_update trh cvmsg )
     ( __srv_enc_rec_to c flight 22 cvmsg )
     ( vec_free [u] th_cert ) ( vec_free [u] cvc ) ( vec_free [u] cvdig )
     ( vec_free [u] cvbody )
 
     // ── server Finished ──
-    : ( Vec u ) th_cv ( sha256_pure tr )
+    : ( Vec u ) th_cv ( sha256_snapshot trh )
     : ( Vec u ) sfin ( _finished_mac s_hs th_cv )
     : ( Vec u ) sfmsg ( __srv_hs_wrap 20 sfin )
-    ( _tls_cat tr sfmsg )
+    ( sha256_update trh sfmsg )
     ( __srv_enc_rec_to c flight 22 sfmsg )
     // The complete first flight, one send().
     : b fw ( _tls_sock_write . c fd flight )
@@ -571,7 +577,7 @@ $ `stdlib/std/aes_gcm.nu`
     ( vec_free [u] sfin )
 
     // ── application keys (transcript through server Finished) ──
-    : ( Vec u ) th_sf ( sha256_pure tr )
+    : ( Vec u ) th_sf ( sha256_final trh )
     : ( Vec u ) c_ap ( derive_secret master `c ap traffic` th_sf )
     : ( Vec u ) s_ap ( derive_secret master `s ap traffic` th_sf )
 
@@ -597,7 +603,7 @@ $ `stdlib/std/aes_gcm.nu`
     ( vec_free [u] ch ) ( vec_free [u] crand ) ( vec_free [u] cpub ) ( vec_free [u] eph )
     ( vec_free [u] spub ) ( vec_free [u] ecdhe ) ( vec_free [u] srand ) ( vec_free [u] sh )
     ( vec_free [u] ee ) ( vec_free [u] certmsg ) ( vec_free [u] cvmsg ) ( vec_free [u] sfmsg )
-    ( vec_free [u] tr ) ( vec_free [u] z32 ) ( vec_free [u] empty ) ( vec_free [u] ehash )
+    ( vec_free [u] z32 ) ( vec_free [u] empty ) ( vec_free [u] ehash )
     ( vec_free [u] early ) ( vec_free [u] derived1 ) ( vec_free [u] hs_secret ) ( vec_free [u] th_sh )
     ( vec_free [u] c_hs ) ( vec_free [u] s_hs ) ( vec_free [u] derived2 ) ( vec_free [u] master )
     ( vec_free [u] th_sf ) ( vec_free [u] c_ap ) ( vec_free [u] s_ap )
@@ -651,10 +657,15 @@ $ `stdlib/std/aes_gcm.nu`
     ^ r
 }
 
-@ __srv_cleanup_accept ( Vec u ) ch ( Vec u ) crand ( Vec u ) cpub ( Vec u ) eph ( Vec u ) spub ( Vec u ) ecdhe ( Vec u ) srand ( Vec u ) sh ( Vec u ) tr → v {
+@ __srv_cleanup_accept ( Vec u ) ch ( Vec u ) crand ( Vec u ) cpub ( Vec u ) eph ( Vec u ) spub ( Vec u ) ecdhe ( Vec u ) srand ( Vec u ) sh → v {
     ( vec_free [u] ch ) ( vec_free [u] crand ) ( vec_free [u] cpub ) ( vec_free [u] eph )
     ( vec_free [u] spub ) ( vec_free [u] ecdhe ) ( vec_free [u] srand ) ( vec_free [u] sh )
-    ( vec_free [u] tr )
+}
+
+// Discard a live transcript hasher (error paths).
+@ __trh_abort * Sha256 h → v {
+    : ( Vec u ) d ( sha256_final h )
+    ( vec_free [u] d )
 }
 
 @ __srv_rand i n → ( Vec u ) {
