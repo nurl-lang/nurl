@@ -889,6 +889,35 @@ def t_build_wasm_libc_shims(c: Client) -> None:
     assert_true("no shim/call-site signature mismatch", not mismatched, "; ".join(mismatched))
 
 
+def t_build_wasm_vararg_libc(c: Client) -> None:
+    print("\n[REST] /build_wasm — vararg libc declares don't poison the shims")
+    # stdlib/core/io.nu FFI-declares open(2), whose IR declare carries a
+    # vararg `...`. The shim generator must drop it — `... %aN` in a
+    # define's parameter list is not legal LLVM, and emitting it failed
+    # every wasm build whose import graph reached io.nu (this exact
+    # program, examples/jira_manager.nu, …) with clang's
+    # "expected ')' at end of argument list". The service used to carry
+    # its own fork of the rewriter that predated the fix; it now shares
+    # packages/wasmbuilder/src/wasi_ir.nu, where the drop lives.
+    src = "$ `stdlib/core/io.nu`\n\n@ main → v {\n    ( nurl_print `hello\\n` )\n}\n"
+    status, _, raw = c.post(
+        "/build_wasm",
+        {"source": src, "filename": "varargshim.nu", "emit_ll": True},
+        timeout=180.0,
+    )
+    assert_eq("build_wasm status 200", status, 200)
+    try:
+        j = json.loads(raw)
+    except json.JSONDecodeError:
+        bad("build_wasm result is JSON", f"got {raw[:200]!r}")
+        return
+    assert_eq("build_wasm ok", j.get("status"), "ok")
+    assert_true("wasm bytes returned", bool(j.get("wasm_base64")), f"keys={list(j)}")
+    ir = j.get("llvm_ir") or ""
+    bad_defines = [l for l in ir.splitlines() if l.startswith("define ") and "... %" in l]
+    assert_true("no `... %aN` in shim defines", not bad_defines, "; ".join(bad_defines)[:200])
+
+
 def t_build_unikernel_rest(c: Client) -> None:
     print("\n[REST] /build_unikernel — image + initfs + guards")
     # 1. A hello builds into a PVH ELF with boot commands attached.
@@ -1155,6 +1184,7 @@ def main() -> int:
         t_tools_call_build(c)
         t_tools_call_build_wasm(c)
         t_build_wasm_libc_shims(c)
+        t_build_wasm_vararg_libc(c)
         t_build_wasm_links_only_rest(c)
         t_build_unikernel_rest(c)
         t_tools_call_build_unikernel(c)
