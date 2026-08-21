@@ -5289,14 +5289,24 @@
     ? == h 0 { ^ } {}
     : s t # s h
     : i count ( nurl_peek t 0 )
-    : *i names # *i # s ( nurl_peek t 3 )
-    : *i types # *i # s ( nurl_peek t 4 )
+    // `*s`, not `*i`: these are the POINTER arrays every other reader
+    // in this file walks as `*s` (nurl_sym_def writes them that way).
+    // Reading them as i64 is a stride pun that is invisible on a
+    // 64-bit target — sizeof(ptr) == 8 there, so the two spellings
+    // address the same bytes — and wrong on wasm32, where a pointer
+    // is 4 bytes: each i64 read fuses TWO entries into one bogus
+    // address, and free() then reads a chunk header outside linear
+    // memory. That trap is what nurlc.wasm hit compiling anything
+    // (dce_free → nurl_sym_free → free), after the IR had already
+    // been emitted correctly.
+    : *s names # *s # s ( nurl_peek t 3 )
+    : *s types # *s # s ( nurl_peek t 4 )
     : ~ i k 0
     ~ < k count {
-        : i np . names k
-        ? != 0 np { ( nurl_free # s np ) } {}
-        : i tp . types k
-        ? != 0 tp { ( nurl_free # s tp ) } {}
+        : s np . names k
+        ? != 0 # i np { ( nurl_free np ) } {}
+        : s tp . types k
+        ? != 0 # i tp { ( nurl_free tp ) } {}
         = k + k 1
     }
     ( nurl_free # s ( nurl_peek t 3 ) )

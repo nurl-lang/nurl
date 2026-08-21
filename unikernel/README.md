@@ -382,6 +382,43 @@ guest advertises CPU-wasm capability only; a GPU request answers
 exactly like a hosted machine with no NVIDIA driver, because the
 image links the same `cuda_stubs.c` that nurl.sh uses there.
 
+## The compiler, as wasm, inside the machine
+
+```
+$ unikernel/tests/wasmc_gate.sh
+wasmc_gate: nurlc.wasm: 1540481 bytes
+wasmc_gate:   hello.nu: byte-identical to native (6624 bytes)
+…
+wasmc_gate: verified: 8 programs compiled by nurlc.wasm IN THE GUEST,
+            byte-identical to native (23s)
+```
+
+`compiler/nurlc.nu` compiled to wasm32-wasi (by `packages/wasmbuilder`,
+locally — native nurlc for the IR, zig's wasm-ld for the link) is baked
+into an image beside a handful of corpus programs and the IR the NATIVE
+compiler produced for them. The guest decodes the module on
+`packages/wasmtime` and runs it IN-PROCESS, because a machine with no
+processes has no other way to run it, and compares its output BYTE FOR
+BYTE with the native compiler's. All eight agree.
+
+That comparison is the claim worth making. "The wasm build works" is
+about a pipeline; "the compiler emits the same bytes with no libc, no
+kernel and no host underneath it" is about the language. Two defects
+had to be fixed before it was true, and neither was visible anywhere
+else:
+
+- `nurl_sym_free` walked the symbol table's pointer arrays as `*i`
+  while every other reader and the writer use `*s`. On a 64-bit target
+  those spellings address the same bytes; on wasm32 a pointer is four,
+  so each read fused two entries into one bogus address and `free`
+  read a chunk header outside linear memory. nurlc.wasm trapped after
+  emitting correct IR.
+- the initfs ignored `O_DIRECTORY`, so `opendir` SUCCEEDED on a regular
+  file. Every "is this a directory?" predicate written the obvious way
+  then says yes about a file — including the wasm runtime's
+  `path_open`, which handed the compiler an empty directory fd and got
+  a compile of an empty program, with no error anywhere.
+
 ## Which hypervisors, and what the artifact actually is
 
 The image is an ELF with a `XEN_ELFNOTE_PHYS32_ENTRY` note in it. That

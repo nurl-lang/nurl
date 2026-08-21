@@ -432,6 +432,19 @@ PYEOF
     fi
 fi
 
+# ── the compiler itself, as wasm, in the guest ──────────────────
+# nurlc.wasm compiles corpus programs INSIDE the machine and its IR is
+# compared byte for byte with the native compiler's. wasmc_gate.sh
+# prints its own detail lines and skips loudly without zig.
+if [ $# -eq 0 ]; then
+    demos=$((demos + 1))
+    if "$ROOT/unikernel/tests/wasmc_gate.sh"; then
+        echo "PASS wasmc (nurlc.wasm in the guest, byte-identical to native)"
+    else
+        echo "FAIL wasmc"; fails=$((fails + 1))
+    fi
+fi
+
 # ── B10: the swarm-mcp appliance — the plan's endpoint milestone ──
 # The same package that runs hosted boots as the guest, joins the
 # cluster through the relay leg, and completes an expression task and

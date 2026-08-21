@@ -123,6 +123,10 @@ static const unsigned char *fs_lookup(const char *name, fs_size_t *size_out) {
 
 /* ── the four functions nolibc's stdio is written against ───────── */
 
+/* O_DIRECTORY, the Linux value — nolibc's opendir passes it and this
+ * file is the only thing that reads it. */
+#define NL_O_DIRECTORY 0200000
+
 int nl_open(const char *path, int flags, int mode) {
     (void)mode;
     /* Read-only, and it says so: a write to a filesystem that lives in
@@ -130,6 +134,21 @@ int nl_open(const char *path, int flags, int mode) {
      * for writing and got a descriptor would discover that later, at
      * the write, with the data already gone. */
     if ((flags & 3) != 0) { nl_errno_slot = 30 /* EROFS */; return -1; }
+
+    /* An archive is not a directory tree you can walk: there is no
+     * getdents here, so `opendir` must FAIL, which is what it does on
+     * the Linux nolibc build and what the README has always claimed.
+     * Ignoring this flag made it SUCCEED on a regular file — and a
+     * successful opendir that then lists nothing is the worst possible
+     * answer, because every "is this a directory?" predicate written
+     * the obvious way (open it as one; if that works, it is one) then
+     * says yes about a file. That is not hypothetical: the wasm
+     * runtime's path_open asks exactly that question, decided that a
+     * NURL source file was a directory, handed the compiler an empty
+     * directory fd, and nurlc.wasm dutifully compiled an empty
+     * program — 21939 bytes of preamble instead of the program's own
+     * 6624, with no error anywhere in the chain. */
+    if ((flags & NL_O_DIRECTORY) != 0) { nl_errno_slot = 20 /* ENOTDIR */; return -1; }
 
     fs_size_t size = 0;
     const unsigned char *data = fs_lookup(path, &size);
