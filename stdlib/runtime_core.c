@@ -2943,6 +2943,27 @@ long long nurl_is_inf(double x) { return isinf(x) ? 1 : 0; }
 #  include <dirent.h>      /* opendir, readdir, closedir */
 #endif
 
+/* Is `opendir`/`readdir`/`closedir` REAL on this build?
+ *
+ * `stdlib/std/fs.nu`'s `dir_list` has two implementations — the POSIX
+ * one drives the dirent trio directly from NURL, and Win32/WASI route
+ * through the `nurl_dir_list_*` handle trio below — and it has to pick.
+ * It used to pick by asking whether `nurl_native_constant` knew
+ * `O_RDONLY`, which is a question about a CONSTANT standing in for a
+ * question about a CAPABILITY. The two agreed until the day the
+ * constant was added for Windows (it is needed there: the flags differ
+ * from POSIX, so a caller cannot spell them as literals) — and then
+ * every directory listing on Windows went down the POSIX path, into
+ * this file's own ENOSYS stubs, and came back as "i/o error".
+ *
+ * So: ask the real question. This cannot be broken by adding a
+ * constant, because it is not about constants. */
+#if defined(_WIN32) || defined(__wasi__)
+long long nurl_have_posix_dirent(void) { return 0; }
+#else
+long long nurl_have_posix_dirent(void) { return 1; }
+#endif
+
 /* Directory listing — opaque handle (i64) + skip-dots iteration.
  * The "." and ".." entries are filtered so callers don't have to. */
 
