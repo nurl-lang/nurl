@@ -28031,6 +28031,17 @@
 // link against, so the pass leaves it alone. `--no-dce` disables it.
 
 : ~ i g_dce 1  // 0 after --no-dce
+// `--keep=a,b,c` — extra DCE roots.
+//
+// The pass's root set is `main` plus whatever module-scope constants
+// name. That is complete for a program whose every entry point is
+// reachable from `main`, and WRONG for a module that is linked with C
+// which calls into it: nothing in the IR records that
+// `unikernel/boot/vfs.c` calls `nurl_disk_open`, so the whole disk
+// layer was dropped and the guest linked, booted and reported "no
+// filesystem" about a filesystem it was carrying. A function referenced
+// only from outside the module has to be named from outside it too.
+: ~ s g_dce_keep ``
 // Partitioned emission — see "Partitioned emission" below.
 : ~ i g_split_n 0  // parts requested; 0 = one module on stdout
 : ~ i g_split_max 0  // --split=N, the CEILING on the part count
@@ -28248,6 +28259,23 @@
         ~ < li n { ( nurl_poke # s g_dce_live li 1 ) = li + li 1 }
     } {
         ( __dce_mark_name `main` )
+        // `--keep=` roots: names the LINK needs that the module never
+        // mentions. Comma-separated, and a name that is not in this
+        // module is silently no-op — the caller may pass one list for
+        // several modules.
+        ? != 0 ( nurl_str_len g_dce_keep ) {
+            : i klen ( nurl_str_len g_dce_keep )
+            : ~ i ks 0
+            ~ <= ks klen {
+                : ~ i ke ks
+                ~ & < ke klen != 44 ( nurl_str_get g_dce_keep ke ) { = ke + ke 1 }
+                ? > ke ks {
+                    : s nm ( nurl_str_slice g_dce_keep ks - ke ks )
+                    ( __dce_mark_name nm )
+                } {}
+                = ks + ke 1
+            }
+        } {}
         // Roots from module scope: the gaps between function bodies hold the
         // globals, and a dyn vtable constant names its thunks there.
         : ~ i gap 0
@@ -28766,6 +28794,7 @@
     ( nurl_print `  --strict-borrowck   run the borrow-checker in strict mode\n` )
     ( nurl_print `  --no-strict-arity   demote the n-ary '&'/'|' arity-trap error to a warning\n` )
     ( nurl_print `  --no-dce            emit unreachable functions too (on by default)\n` )
+    ( nurl_print `  --keep=a,b          keep these functions even if nothing in the module calls them\n` )
     ( nurl_print `  --ffi-host-imports  emit FFI calls as wasm host imports\n` )
     ( nurl_print `  --no-cpu-dispatch   ignore the 'simd' prefix and emit each marked\n` )
     ( nurl_print `                      function once. The prefix names an x86-64 feature\n` )
@@ -28819,17 +28848,19 @@
                                                 { = g_cpu_dispatch 0 }
                                                 { ? ( seq a `--no-dce` )
                                                     { = g_dce 0 }
-                                                    { ? != 0 ( nurl_str_starts a `--split=` )
-                                                        { = g_split_max ( nurl_str_to_int ( nurl_str_slice a 8 - ( nurl_str_len a ) 8 ) ) }
-                                                        { ? != 0 ( nurl_str_starts a `--split-out=` )
-                                                            { = g_split_out ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) }
-                                                            { ? != 0 ( nurl_str_starts a `--split-min=` )
-                                                                { = g_split_min ( nurl_str_to_int ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) ) }
-                                                                { = path a } } } } } } } } } } } } } } }
+                                                    { ? != 0 ( nurl_str_starts a `--keep=` )
+                                                        { = g_dce_keep ( nurl_str_slice a 7 - ( nurl_str_len a ) 7 ) }
+                                                        { ? != 0 ( nurl_str_starts a `--split=` )
+                                                            { = g_split_max ( nurl_str_to_int ( nurl_str_slice a 8 - ( nurl_str_len a ) 8 ) ) }
+                                                            { ? != 0 ( nurl_str_starts a `--split-out=` )
+                                                                { = g_split_out ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) }
+                                                                { ? != 0 ( nurl_str_starts a `--split-min=` )
+                                                                    { = g_split_min ( nurl_str_to_int ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) ) }
+                                                                    { = path a } } } } } } } } } } } } } } } }
         = ai + ai 1
     }
     ? == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch] [--no-dce] [--split=N --split-out=PREFIX] <file.nu>` ) ( nurl_exit 1 ) }
+    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch] [--no-dce] [--keep=a,b] [--split=N --split-out=PREFIX] <file.nu>` ) ( nurl_exit 1 ) }
     {}
     // --split writes files, so it needs somewhere to write them. Cap it
     // at 64: past the core count the parts only get smaller, and each

@@ -2627,6 +2627,17 @@ long long nurl_native_constant(const char *name) {
     if (strcmp(name, "F_SETFD")     == 0) return F_SETFD;
     if (strcmp(name, "FD_CLOEXEC")  == 0) return FD_CLOEXEC;
     if (strcmp(name, "O_NONBLOCK")  == 0) return O_NONBLOCK;
+    /* The open(2) mode and creation flags. They are NOT the same numbers
+     * on every platform this compiles for — O_CREAT is 0100 on Linux and
+     * 0x0200 on macOS — so a caller that spelled them as literals would
+     * open the wrong thing on one of them. */
+    if (strcmp(name, "O_RDONLY")    == 0) return O_RDONLY;
+    if (strcmp(name, "O_WRONLY")    == 0) return O_WRONLY;
+    if (strcmp(name, "O_RDWR")      == 0) return O_RDWR;
+    if (strcmp(name, "O_CREAT")     == 0) return O_CREAT;
+    if (strcmp(name, "O_EXCL")      == 0) return O_EXCL;
+    if (strcmp(name, "O_TRUNC")     == 0) return O_TRUNC;
+    if (strcmp(name, "O_APPEND")    == 0) return O_APPEND;
     if (strcmp(name, "POLLIN")      == 0) return POLLIN;
     if (strcmp(name, "POLLOUT")     == 0) return POLLOUT;
     if (strcmp(name, "POLLHUP")     == 0) return POLLHUP;
