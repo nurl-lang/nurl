@@ -76,7 +76,7 @@
   | **Liveness probe** | `GET /health` (no Docker `HEALTHCHECK` directive — wire one up in your orchestrator) |
   | **Supported arch** | `linux/amd64` |
   | **WASI SDK** | 24.0 |
-  | **Zig** | 0.13.0 |
+  | **Zig** | 0.16.0 |
   | **libcurl (mingw)** | 8.10.1, static, Schannel |
 
   ## Environment variables

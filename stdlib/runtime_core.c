@@ -35,6 +35,20 @@
 #ifndef _GNU_SOURCE
 #  define _GNU_SOURCE   /* memmem() */
 #endif
+/* MinGW: claim <pthread_time.h>'s include guard so <time.h> below cannot
+ * pull its body in. The mingw-w64 that zig 0.16 ships (0.13 predates it)
+ * defines clock_gettime and nanosleep there as `static __inline__`
+ * forwarders to libwinpthread's clock_gettime64 / nanosleep64. `static`
+ * emits no external symbol, and std/time.nu binds both as plain `c`
+ * imports, so the runtime still has to export those exact names — which
+ * the header's own definitions turn into a redefinition error. Suppress
+ * the header and let this file's definitions (search: "UCRT <time.h>
+ * defines struct timespec") be the whole story. Nothing here needs the
+ * rest of it: the CLOCK_* macros are defined below under #ifndef, and
+ * clock_getres / clock_nanosleep / TIMER_ABSTIME are unused. */
+#if defined(_WIN32) && !defined(_MSC_VER) && !defined(WIN_PTHREADS_TIME_H)
+#  define WIN_PTHREADS_TIME_H
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

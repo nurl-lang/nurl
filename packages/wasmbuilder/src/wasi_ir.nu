@@ -667,7 +667,8 @@ $ `stdlib/core/vec.nu`
                     // wasm-import-module, wasm-ld still rejects the symbol
                     // as undefined (the import-name attribute is what marks
                     // it an explicit import — verified against zig 0.13 /
-                    // LLVM 18 wasm-ld). The name differs per declare, so
+                    // LLVM 18 and zig 0.16 / LLVM 21 wasm-ld). The name
+                    // differs per declare, so
                     // the attrs go inline rather than via a shared group.
                     : String snm ( __wb_declare_sym jline )
                     ? > ( string_len snm ) 0 {

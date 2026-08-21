@@ -11,7 +11,7 @@
 // pure-NURL one: `nurlpkg install wasmtime && wt run program.wasm`.
 //
 // The first build on a machine without a bundled zig downloads a pinned,
-// sha256-verified zig 0.13.0 into $NURL_HOME/zig (set
+// sha256-verified zig 0.16.0 into $NURL_HOME/zig (set
 // NURL_WASM_NO_DOWNLOAD=1 to forbid that and fail instead).
 
 $ `stdlib/core/io.nu`
@@ -25,7 +25,7 @@ $ `build.nu`
 
 // Keep in step with nurl.toml's [package] version — `--version` is what a
 // bug report quotes, so a stale literal here misattributes the bug.
-@ __wbc_version → s { ^ `wasmbuilder 0.1.6` }
+@ __wbc_version → s { ^ `wasmbuilder 0.1.7` }
 
 // --doctor: print every resolution step so a broken setup explains itself.
 @ __wbc_doctor → i {
@@ -56,7 +56,7 @@ $ `build.nu`
             ( wb_compiler_free c )
         }
         F e → {
-            ( nurl_print `  wasm cc:      not found — the first build will download zig 0.13.0 into $NURL_HOME/zig\n                (` )
+            ( nurl_print `  wasm cc:      not found — the first build will download zig 0.16.0 into $NURL_HOME/zig\n                (` )
             ( nurl_print ( string_data e ) ) ( nurl_print `)\n` )
             ( string_free e )
         }

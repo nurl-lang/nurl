@@ -10,6 +10,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`wasm-bench`, a manually-triggered workflow that re-measures the wasm
+  benchmark on a runner and commits the report** — the fourth member of
+  the `bench` / `http-bench` / `pq-bench` family, and the last benchmark
+  whose published numbers could only come from one person's workstation.
+  It provisions the pieces `bench/wasmbench.sh` refuses to start without
+  (zig, a reference wasmtime, rustc's `wasm32-wasip1`), runs the suite,
+  and pushes `bench/WASMRESULTS.md` + `bench/results/wasm-latest.json`
+  straight to `main` with the same replay-on-conflict mechanism the other
+  three use. Manual-only, like `http-bench` and `pq-bench`: the pure-NURL
+  interpreter column alone is tens of minutes.
+
+  Two inputs: `quick` runs one repetition per cell to smoke-test the
+  harness and deliberately skips the commit — a 1-rep run is not a
+  measurement and must not replace the published table — and
+  `wt_all_langs` adds the C and Rust modules to the interpreter column.
+  `$WASMTIME` is pinned to the installed reference binary rather than
+  left to a PATH lookup, because on any box with the NURL toolchain
+  installed `wasmtime` on PATH is the *pure-NURL interpreter*, which
+  would quietly fill the reference-JIT column with the runtime that
+  column exists to compare against.
+
+### Fixed
+
+- **The Windows runtime builds again against zig 0.16's MinGW.** The
+  mingw-w64 that 0.16 ships (0.13 predates it) defines `clock_gettime` and
+  `nanosleep` in `<pthread_time.h>` — which `<time.h>` includes — as
+  `static __inline__` forwarders to libwinpthread's `clock_gettime64` /
+  `nanosleep64`, and `runtime_core.c` defines both itself, so
+  `runtime.mingw.o` stopped compiling with two redefinition errors.
+  Deleting ours is not an option: `static` emits no external symbol, and
+  `std/time.nu` binds both as plain `c` imports, so the runtime has to
+  export those exact names. `runtime_core.c` now claims the header's
+  include guard on the MinGW path; nothing else in the runtime uses the
+  rest of that header.
+
+- **`bench/wasmbench.sh` and `bench/chaincheck.sh` now pin `LC_ALL=C`.**
+  `$EPOCHREALTIME` and awk both follow the locale's decimal separator, so
+  under e.g. `fi_FI` the comma made wasmbench report negative compile
+  times and collapsed chaincheck's wall readings to whole seconds.
+  `bench/bench.sh` had carried this line for a while; its two siblings
+  had not, and CI never noticed because runners are `C.UTF-8`.
+
 - **The unikernel has a disk.** A guest built with
   `build_unikernel.sh --disk` carries a virtio-blk driver
   (`unikernel/drivers/virtioblk.nu`), a FAT12/16/32 filesystem
@@ -56,6 +98,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   way to spell them and had to avoid `open(2)` entirely.
 
 ### Changed
+
+- **The pinned zig backend is now 0.16.0 (LLVM 21) everywhere** — the
+  release bundles (Linux x86_64/aarch64, Windows), the CI image's
+  `/opt/zig`, the fuzz workflow's wasm differential leg, the playground
+  image (`nurlapi/Dockerfile`), and the zig release wasmbuilder
+  provisions into `$NURL_HOME/zig` when none is found (wasmbuilder
+  0.1.7). Note zig's release archives renamed themselves between 0.13
+  and 0.16 — `zig-linux-x86_64-<ver>` became `zig-x86_64-linux-<ver>` —
+  so every hardcoded download URL moved with the version. `wasm32-wasi`
+  is still the wasm target name, and `zig cc`'s LLVM 21 stays ≥ the
+  system clang 18 used for the shipped `runtime.o` bitcode.
 
 - **`nurl_api`'s exact-module replies never truncate mid-module, and
   every query term is accounted for.** A grab-bag query like

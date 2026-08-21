@@ -44,7 +44,7 @@ wasmbuilder just drives it:
 
 If no zig is found at all (for example a Windows install, or a Linux
 toolchain installed with the clang fallback), wasmbuilder downloads the
-pinned zig 0.13.0 release **once**, sha256-verified against
+pinned zig 0.16.0 release **once**, sha256-verified against
 ziglang.org's release index, into `$NURL_HOME/zig` — after which builds
 are fully offline. Set `NURL_WASM_NO_DOWNLOAD=1` to forbid the download
 and fail instead.
