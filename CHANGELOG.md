@@ -6,7 +6,7 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.48.0] — 2026-08-21
 
 ### Added
 
@@ -31,26 +31,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would quietly fill the reference-JIT column with the runtime that
   column exists to compare against.
 
-### Fixed
+- **The NURL compiler runs as wasm inside the unikernel, and its output
+  is byte-identical to native.** `unikernel/demos/wasmc.nu` bakes
+  `nurlc.wasm`, eight import-free corpus programs and the NATIVE
+  compiler's IR for each into an image; the guest decodes the module on
+  `packages/wasmtime`, runs it IN-PROCESS (a unikernel has no subprocess
+  to run it in) and compares byte for byte. All eight agree, 23 s under
+  TCG. `unikernel/tests/wasmc_gate.sh` runs the whole chain from
+  `nurlc.nu` to the comparison and is wired into the guest suite; it
+  skips loudly without zig or QEMU rather than passing quietly. (#962)
 
-- **The Windows runtime builds again against zig 0.16's MinGW.** The
-  mingw-w64 that 0.16 ships (0.13 predates it) defines `clock_gettime` and
-  `nanosleep` in `<pthread_time.h>` — which `<time.h>` includes — as
-  `static __inline__` forwarders to libwinpthread's `clock_gettime64` /
-  `nanosleep64`, and `runtime_core.c` defines both itself, so
-  `runtime.mingw.o` stopped compiling with two redefinition errors.
-  Deleting ours is not an option: `static` emits no external symbol, and
-  `std/time.nu` binds both as plain `c` imports, so the runtime has to
-  export those exact names. `runtime_core.c` now claims the header's
-  include guard on the MinGW path; nothing else in the runtime uses the
-  rest of that header.
+- **The bootstrap fixed point, taken inside the unikernel.**
+  `unikernel/tests/selfhost_gate.sh` is `build.sh`'s own fixed-point
+  equality — the compiler compiles its own source and the emitted IR
+  must equal the IR it was built from — with the compiler running as
+  wasm, in a machine with no operating system. The guest compiles the
+  29 067-line `nurlc.nu` and emits the 4 337 947 bytes `nurlc.wasm` was
+  linked from, byte-identical, in 1300 s under TCG. It is a fixed point
+  at the compiler's OUTPUT boundary, which is where `build.sh` checks
+  the native one — turning IR back into a module needs LLVM, which stays
+  on the host, and the script's header says so. Deliberately not in
+  `run_qemu_tests.sh` or CI: 22 minutes against `wasmc_gate.sh`'s 23 s.
+  (#963)
 
-- **`bench/wasmbench.sh` and `bench/chaincheck.sh` now pin `LC_ALL=C`.**
-  `$EPOCHREALTIME` and awk both follow the locale's decimal separator, so
-  under e.g. `fi_FI` the comma made wasmbench report negative compile
-  times and collapsed chaincheck's wall readings to whole seconds.
-  `bench/bench.sh` had carried this line for a while; its two siblings
-  had not, and CI never noticed because runners are `C.UTF-8`.
+- **B10 closed — the unikernel boots straight into a swarm compute
+  appliance.** The same `packages/swarm-mcp` that runs hosted builds as
+  a guest, `--connect`s to the relay, appears in the census and answers
+  both expression and compiled-wasm tasks. Wasm runs IN-PROCESS on the
+  pure-NURL wasmtime (now a dependency and the default engine;
+  `$WASMTIME` still selects an external one, which GPU work needs).
+  Measured under TCG: join 6 s, cold start to first answer 8–9 s.
+  `unikernel/tests/swarm_gate.sh` runs it on every commit. Also from
+  that work: a DNS resolver over the pure UDP stack
+  (`stdlib/net/dnsclient.nu` + the `dns=` cmdline key), every
+  `key=value` on the kernel command line becoming the guest's
+  environment, and tickless idle — a joined idle worker went from a full
+  host core to 5.6 % of one. (#961)
 
 - **The unikernel has a disk.** A guest built with
   `build_unikernel.sh --disk` carries a virtio-blk driver
@@ -92,10 +108,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "no filesystem" about a filesystem it was carrying.
 
 - **`nurl_native_constant` now answers `O_RDONLY`, `O_WRONLY`,
-  `O_RDWR`, `O_CREAT`, `O_EXCL`, `O_TRUNC` and `O_APPEND`.** They are
-  not the same numbers on every target — `O_CREAT` is `0100` on Linux
-  and `0x0200` on macOS — so NURL code that needed them had no correct
-  way to spell them and had to avoid `open(2)` entirely.
+  `O_RDWR`, `O_CREAT`, `O_EXCL`, `O_TRUNC`, `O_APPEND` and `O_BINARY`.**
+  They are not the same numbers on every target — `O_CREAT` is `0100` on
+  Linux and `0x0100` on Windows — so NURL code that needed them had no
+  correct way to spell them and had to avoid `open(2)` entirely.
+  `O_BINARY` is 0 wherever there is no text mode to opt out of, so a
+  caller ORs it in unconditionally instead of branching on platform.
+  Alongside them, three portable descriptor shims — `nurl_pread`,
+  `nurl_pwrite`, `nurl_fd_sync` — because the MSVC CRT has none of
+  `pread`, `pwrite` or `fsync`, and `nurl_have_posix_dirent`, which
+  answers whether `opendir`/`readdir` are real on this build. That last
+  one replaced a platform test that asked whether `O_RDONLY` existed:
+  publishing the constant on Windows silently rerouted every directory
+  listing there into an ENOSYS stub, so the capability is now asked
+  about directly and cannot be broken by adding a constant.
 
 ### Changed
 
@@ -140,6 +166,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameter mechanics live in the parameter descriptions and runtime
   details (fallback order, byte caps, what wasn't searched) are stated
   by the replies themselves.
+
+### Fixed
+
+- **FFI declarations that returned C `int` as `i` read every failure as
+  a success.** `pipe`/`fork`/`dup2`/`close`/`fcntl`/`waitpid`/`kill`/
+  `getpid`/`execvp`/`poll` in `stdlib/core/posix.nu` (and the pthread
+  family in `std/thread.nu`) declared a 64-bit return for a function
+  that returns 32 bits. A C `int` of -1 leaves the upper register half
+  ZEROED, so the result arrived as 4294967295 and `< 0` answered no —
+  every failing call silently read as a large success. Fatal in the
+  unikernel, where `nosys.c` refuses all of these: `process_run`
+  misread four refused pipes and a refused fork as successes and hung
+  reading garbage fds. Latent hosted, on any path where these calls
+  actually fail. `→ i32` makes nurlc emit the matching declare and
+  sign-extend; `read`/`write` keep `i64`, since `ssize_t` genuinely is.
+  (#961)
+
+- **`nurl_sym_free` walked the symbol table with the wrong stride** —
+  `*i` where `nurl_sym_def` and fourteen other readers use `*s`. Where a
+  pointer is 8 bytes the two spellings address the same bytes and the
+  bug is invisible; on wasm32 a pointer is 4, so every read fused two
+  entries into one bogus address and `free` walked outside linear
+  memory. `nurlc.wasm` trapped in `dce_free` after emitting correct IR.
+  (#962)
+
+- **The unikernel's initfs served a regular file as a directory.**
+  `nl_open` checked the access mode and ignored `O_DIRECTORY`, so
+  `opendir` SUCCEEDED on a file — and every "is this a directory?"
+  predicate written the obvious way then says yes about a file. The wasm
+  runtime's `path_open` asks exactly that, was handed an empty directory
+  fd, and `nurlc.wasm` dutifully compiled an empty program: 21 939 bytes
+  of preamble instead of the program's 6 624, with no error anywhere in
+  the chain. Now ENOTDIR. (#962)
+
+- **The Windows runtime builds again against zig 0.16's MinGW.** The
+  mingw-w64 that 0.16 ships (0.13 predates it) defines `clock_gettime` and
+  `nanosleep` in `<pthread_time.h>` — which `<time.h>` includes — as
+  `static __inline__` forwarders to libwinpthread's `clock_gettime64` /
+  `nanosleep64`, and `runtime_core.c` defines both itself, so
+  `runtime.mingw.o` stopped compiling with two redefinition errors.
+  Deleting ours is not an option: `static` emits no external symbol, and
+  `std/time.nu` binds both as plain `c` imports, so the runtime has to
+  export those exact names. `runtime_core.c` now claims the header's
+  include guard on the MinGW path; nothing else in the runtime uses the
+  rest of that header.
+
+- **`bench/wasmbench.sh` and `bench/chaincheck.sh` now pin `LC_ALL=C`.**
+  `$EPOCHREALTIME` and awk both follow the locale's decimal separator, so
+  under e.g. `fi_FI` the comma made wasmbench report negative compile
+  times and collapsed chaincheck's wall readings to whole seconds.
+  `bench/bench.sh` had carried this line for a while; its two siblings
+  had not, and CI never noticed because runners are `C.UTF-8`.
 
 ### Removed
 
