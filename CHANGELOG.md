@@ -33,6 +33,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Windows runtime builds again against zig 0.16's MinGW.** The
+  mingw-w64 that 0.16 ships (0.13 predates it) defines `clock_gettime` and
+  `nanosleep` in `<pthread_time.h>` — which `<time.h>` includes — as
+  `static __inline__` forwarders to libwinpthread's `clock_gettime64` /
+  `nanosleep64`, and `runtime_core.c` defines both itself, so
+  `runtime.mingw.o` stopped compiling with two redefinition errors.
+  Deleting ours is not an option: `static` emits no external symbol, and
+  `std/time.nu` binds both as plain `c` imports, so the runtime has to
+  export those exact names. `runtime_core.c` now claims the header's
+  include guard on the MinGW path; nothing else in the runtime uses the
+  rest of that header.
+
 - **`bench/wasmbench.sh` and `bench/chaincheck.sh` now pin `LC_ALL=C`.**
   `$EPOCHREALTIME` and awk both follow the locale's decimal separator, so
   under e.g. `fi_FI` the comma made wasmbench report negative compile
