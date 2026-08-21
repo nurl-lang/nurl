@@ -401,6 +401,15 @@ compiler produced for them. The guest decodes the module on
 processes has no other way to run it, and compares its output BYTE FOR
 BYTE with the native compiler's. All eight agree.
 
+`unikernel/tests/selfhost_gate.sh` puts `compiler/nurlc.nu` itself in
+that image — it has no imports either, so it costs one more file — and
+then the comparison is the bootstrap fixed point: the guest re-emits
+the 4 337 947 bytes `nurlc.wasm` was linked from, which is the equality
+`build.sh` checks between `nurlc_self.ll` and `nurlc_self2.ll`, with
+the compiler running as wasm and nothing underneath it. It is a
+separate script and run by hand, because the guest spends 22 minutes on
+it under TCG against 23 s for the eight above.
+
 That comparison is the claim worth making. "The wasm build works" is
 about a pipeline; "the compiler emits the same bytes with no libc, no
 kernel and no host underneath it" is about the language. Two defects
