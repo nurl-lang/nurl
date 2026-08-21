@@ -12,7 +12,9 @@
 // packet — already E2E-encrypted by the layers below.
 //
 // Underneath, each peer rides one of two legs:
-//   • DIRECT  — net/securedgram (encrypted UDP, roams across wifi↔cellular)
+//   • DIRECT  — net/securedgram (encrypted UDP, roams across wifi↔cellular;
+//               chunks big messages itself, so the two legs carry the same
+//               16 MiB payloads — the MTU no longer picks the leg)
 //   • RELAY   — net/relay (DERP-style dumb forwarder, opaque by pubkey)
 //
 // PATH POLICY (per peer): start RELAYED for instant connectivity, try a
