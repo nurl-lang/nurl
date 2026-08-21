@@ -31,6 +31,23 @@
 // semantics stay datagram: a lost chunk is a lost MESSAGE, never a
 // stall — there is no ARQ here, the layers above already own retries.
 // (Wire format bump: both ends must speak the framing byte.)
+//
+// WHAT CHUNKING DOES AND DOES NOT BUY, stated because the difference
+// decides which leg a payload should take. It removes the MTU as a
+// size limit. It does NOT add reliability: with no ARQ, ONE lost
+// chunk loses the whole message, and the chance of that grows with
+// the chunk count — a thousand-chunk message on a path that drops one
+// datagram in a thousand essentially never arrives. Nor does it make
+// a burst fit: chunks go out back to back, so the receiver's socket
+// buffer must hold whatever it has not drained yet (a receiver
+// sitting in a recv loop drains as they land; one that sends first
+// and reads afterwards does not, and FreeBSD's default UDP receive
+// space is a fifth of Linux's — this is why the cap below is modest
+// rather than the relay leg's 16 MiB). So: securedgram_max_msg is the
+// size at which a direct datagram is still a REASONABLE bet, and
+// net/transport routes anything larger over the relay leg, where TCP
+// owns segmentation and retransmission. That is a routing decision,
+// not an error.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -107,10 +124,12 @@ $ `stdlib/net/session.nu`
 // package publishes).
 @ securedgram_chunk_bytes → i { ^ 1152 }
 
-// The biggest message the chunk header can carry and a receiver will
-// buffer — the same 16 MiB the relay leg's frames allow, so the two
-// legs agree on what "a message" can be.
-@ securedgram_max_msg → i { ^ 16777216 }
+// The biggest message this leg will send or reassemble: 256 KiB, i.e.
+// 228 chunks. Chosen against loss rather than against the header's
+// range — see the note above; the relay leg carries anything bigger
+// and net/transport routes it there. A send past this is refused up
+// front (NetWrite), never truncated and never half-sent.
+@ securedgram_max_msg → i { ^ 262144 }
 
 @ __sdg_max_partials → i { ^ 4 }
 

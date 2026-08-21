@@ -41,7 +41,7 @@ $ `interp.nu`
 
 // Keep in step with nurl.toml's [package] version — `--version` is what a
 // bug report quotes, so a stale literal here misattributes the bug.
-@ __wt_version → s { ^ `wasmtime 0.8.1 (pure NURL)` }
+@ __wt_version → s { ^ `wasmtime 0.8.2 (pure NURL)` }
 
 @ usage → v {
     ( nurl_print `wasmtime — a WebAssembly runtime in pure NURL\n\n` )

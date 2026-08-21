@@ -9,7 +9,7 @@ short non-final refused:  YES
 cnt/idx bounds refused:   YES
 oldest partial evicted:   YES
 small round trip:         YES
-100 kB chunked trip:      YES
+24 kB chunked trip:       YES
 reverse chunked trip:     YES
 oversize refused:         YES
 net_securedgram done

@@ -156,12 +156,22 @@ $ `stdlib/net/securedgram.nu`
                         F → { ( pb `small round trip:         ` F ) }
                     }
                     ( vec_free [u] small )
-                    // big message: 100 000 bytes → 87 chunks, one answer
-                    : ( Vec u ) big ( pattern 100000 )
+                    // A multi-chunk message, sized so the burst fits the
+                    // SMALLEST default UDP receive buffer among the
+                    // platforms this suite runs on: this test sends
+                    // everything before it reads a byte, and FreeBSD's
+                    // default udp recvspace (~42 kB) is a fifth of
+                    // Linux's — at 100 kB the chunks were dropped by the
+                    // kernel, the message never completed, and the test
+                    // spent its whole timeout budget in 500 ms recv
+                    // timeouts. A real receiver drains as chunks land;
+                    // this one deliberately does not, so it must stay
+                    // under the buffer. 24 kB = 21 chunks.
+                    : ( Vec u ) big ( pattern 24000 )
                     : !v NetErr _s2 ( securedgram_send an . bkp pk big )
                     ?? ( pump bn 300 ) {
-                        T d → { ( pb `100 kB chunked trip:      ` ( veq . d data big ) ) ( recvdata_free d ) }
-                        F → { ( pb `100 kB chunked trip:      ` F ) }
+                        T d → { ( pb `24 kB chunked trip:       ` ( veq . d data big ) ) ( recvdata_free d ) }
+                        F → { ( pb `24 kB chunked trip:       ` F ) }
                     }
                     // and back, the other direction, right after
                     : !v NetErr _s3 ( securedgram_send bn . akp pk big )
@@ -172,12 +182,7 @@ $ `stdlib/net/securedgram.nu`
                     ( vec_free [u] big )
                     // an oversize send is refused up front, not
                     // truncated and not half-sent
-                    : ( Vec u ) huge ( vec_with_cap [u] + ( securedgram_max_msg ) 1 )
-                    : ( Vec u ) block ( pattern 1048576 )
-                    : ~ i bi 0
-                    ~ < bi 16 { ( vec_extend [u] huge block ) = bi + bi 1 }
-                    ( vec_push [u] huge # u 0 )
-                    ( vec_free [u] block )
+                    : ( Vec u ) huge ( pattern + ( securedgram_max_msg ) 1 )
                     : !v NetErr toolarge ( securedgram_send an . bkp pk huge )
                     ( pb `oversize refused:         ` ?? toolarge { T _ → F F e → T } )
                     ( vec_free [u] huge )

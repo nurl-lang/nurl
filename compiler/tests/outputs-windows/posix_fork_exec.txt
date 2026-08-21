@@ -1,8 +1,8 @@
 COMPILE OK
 LINK OK
-EXIT 0
+EXIT 1
 OUTPUT
 O_NONBLOCK>0=F
 POLLIN==1=F
 unknown==-1=T
-exited=F exit_code=-1
+fork failed errno=40

@@ -50,17 +50,45 @@ export NURLC="${NURLC:-$ROOT/build/nurlc}"
 export NURL_STDLIB="${NURL_STDLIB:-$ROOT}"
 export NURL_BUILD_API="http://127.0.0.1:1"
 
+# ── materialise the package's path dependencies ─────────────────
+# `packages/*/deps/` is gitignored — it is a BUILD ARTEFACT that
+# nurlpkg materialises from the manifest, so a fresh checkout (CI's)
+# has none while a developer's tree does. This gate is the first thing
+# in compiler CI to build a package, and it silently built against a
+# developer-only artefact until CI said "did not build". Do what a
+# package consumer does: every `name = { path = … }` in the manifest
+# becomes deps/name. Derived from the manifest, not a hardcoded list,
+# so a new dependency cannot quietly break this again.
+PKG="$ROOT/packages/swarm-mcp"
+mkdir -p "$PKG/deps"
+while IFS= read -r line; do
+    dep=${line%% *}
+    rel=$(printf '%s' "$line" | sed -n 's/.*path[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p')
+    [ -n "$dep" ] && [ -n "$rel" ] || continue
+    [ -e "$PKG/deps/$dep" ] && continue
+    ( cd "$PKG/deps" && ln -sfn "../$rel" "$dep" )
+done < <(sed -n '/^\[dependencies\]/,/^\[/p' "$PKG/nurl.toml" | grep 'path[[:space:]]*=')
+
 # ── build both halves ───────────────────────────────────────────
+build_err=$(mktemp)
 if ! "$ROOT/unikernel/build_unikernel.sh" "$ROOT/packages/swarm-mcp/src/main.nu" \
-        -o "$OUTDIR/swarm_appliance.elf" >/dev/null 2>&1; then
-    say "FAIL: guest image did not build"; exit 1
+        -o "$OUTDIR/swarm_appliance.elf" >"$build_err" 2>&1; then
+    # A gate that cannot say WHY a build failed costs a CI round trip
+    # per guess — this one cost exactly that.
+    say "FAIL: guest image did not build"
+    tail -6 "$build_err" | sed 's/^/swarm_gate:   /'
+    rm -f "$build_err"
+    exit 1
 fi
 
 HOSTBIN="$OUTDIR/swarm_gate_host"
-if ! ( cd "$ROOT/packages/swarm-mcp" \
-        && "$ROOT/nurl.sh" src/main.nu "$HOSTBIN" >/dev/null 2>&1 ); then
-    say "FAIL: host-side swarm-mcp did not build"; exit 1
+if ! ( cd "$PKG" && "$ROOT/nurl.sh" src/main.nu "$HOSTBIN" >"$build_err" 2>&1 ); then
+    say "FAIL: host-side swarm-mcp did not build"
+    tail -6 "$build_err" | sed 's/^/swarm_gate:   /'
+    rm -f "$build_err"
+    exit 1
 fi
+rm -f "$build_err"
 
 # ── the host node: relay + MCP, no worker (the guest is the fleet) ──
 node_log=$(mktemp)

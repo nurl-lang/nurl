@@ -175,7 +175,16 @@ $ `stdlib/net/relay.nu`
         ^ @ !v NetErr { F # NetErr NetOther }
     } {}
     : *PeerPath p # *PeerPath pp
-    : i leg ( transport_pick p . t has_relay )
+    : ~ i leg ( transport_pick p . t has_relay )
+    // SIZE picks the leg too, not just liveness. The direct leg is
+    // datagrams with no retransmission: it chunks under the MTU, but
+    // one lost chunk loses the message, so past securedgram_max_msg a
+    // direct send is a bad bet the relay leg (TCP — segmentation and
+    // retransmission included) simply does not make. Routing it there
+    // is a decision, not a failure; with no relay the direct leg still
+    // gets the attempt and refuses it honestly.
+    ? & & == leg 2 == . t has_relay 1
+    > ( vec_len [u] payload ) ( securedgram_max_msg ) { = leg 1 } {}
     ? == leg 2 {
         : *SecureNode node # *SecureNode . t node
         ^ ( securedgram_send node pubkey payload )
