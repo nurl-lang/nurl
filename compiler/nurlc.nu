@@ -2489,10 +2489,21 @@
     // worst case every byte escapes to three chars, plus NUL
     : s out # s ( nurl_alloc + * n 3 1 )
     : *u op # *u out
+    // Read the source through a `*u` rather than `nurl_str_get`: that
+    // helper calls `strlen` on EVERY call to bounds-check, which is
+    // O(1) reasoning and O(n) work, so a loop over n characters is
+    // O(n²) — and this loop is the one embedded assets go through.
+    // Measured on the native compiler: a 20k-char literal took 9 ms,
+    // 40k 26 ms, 80k 81 ms, 160k 290 ms, with 98.6 % of the profile in
+    // __strlen_avx2. Under the wasm build (no AVX2 strlen, an
+    // interpreter on top) the same 20k literal took 11 SECONDS, which
+    // is what made a 164 kB corpus test impossible to run in the
+    // guest. The bounds this loop needs it already has: [pos, end).
+    : *u vp # *u val
     : ~ i w 0
     : ~ i p pos
     ~ < p end {
-        : i c ( nurl_str_get val p )
+        : i c & # i . vp p 255
         ? | | < c 32 > c 126 | == c 34 == c 92 {
             = . op w # u 92 = w + w 1
             = . op w # u ( __hex_digit_ch / c 16 ) = w + w 1
@@ -5289,14 +5300,24 @@
     ? == h 0 { ^ } {}
     : s t # s h
     : i count ( nurl_peek t 0 )
-    : *i names # *i # s ( nurl_peek t 3 )
-    : *i types # *i # s ( nurl_peek t 4 )
+    // `*s`, not `*i`: these are the POINTER arrays every other reader
+    // in this file walks as `*s` (nurl_sym_def writes them that way).
+    // Reading them as i64 is a stride pun that is invisible on a
+    // 64-bit target — sizeof(ptr) == 8 there, so the two spellings
+    // address the same bytes — and wrong on wasm32, where a pointer
+    // is 4 bytes: each i64 read fuses TWO entries into one bogus
+    // address, and free() then reads a chunk header outside linear
+    // memory. That trap is what nurlc.wasm hit compiling anything
+    // (dce_free → nurl_sym_free → free), after the IR had already
+    // been emitted correctly.
+    : *s names # *s # s ( nurl_peek t 3 )
+    : *s types # *s # s ( nurl_peek t 4 )
     : ~ i k 0
     ~ < k count {
-        : i np . names k
-        ? != 0 np { ( nurl_free # s np ) } {}
-        : i tp . types k
-        ? != 0 tp { ( nurl_free # s tp ) } {}
+        : s np . names k
+        ? != 0 # i np { ( nurl_free np ) } {}
+        : s tp . types k
+        ? != 0 # i tp { ( nurl_free tp ) } {}
         = k + k 1
     }
     ( nurl_free # s ( nurl_peek t 3 ) )
@@ -25462,6 +25483,72 @@
 // resolved path — same behaviour as before, just a weaker key. The
 // as-written path stays in use for reading and diagnostics, so error
 // messages and goldens are unchanged.
+// Resolve '.', '..' and repeated '/' in `path` TEXTUALLY — no
+// filesystem, no libc. This is the dedup key's floor: `realpath(3)`
+// does this and resolves symlinks too, but it is a POSIX call, and a
+// target without one (wasm32-wasi stubs it to NULL) fell back to the
+// path AS WRITTEN. Two spellings of one file were then two keys, so
+// `stdlib/core/vec.nu` and `stdlib/std/../core/vec.nu` both compiled
+// and every symbol in vec.nu collided with itself — import_diamond,
+// which exists to pin exactly that, failed under nurlc.wasm and
+// passed natively. A leading '..' that cannot be popped stays: it is
+// still meaningful relative to a cwd this function does not know.
+@ __lex_normalize s path → s {
+    : i n ( nurl_str_len path )
+    ? == n 0 { ^ ( nurl_str_cat path `` ) } {}
+    : *u pp # *u path
+    // The result is never longer than the input; +2 covers a "." for
+    // a fully-collapsing path and the NUL.
+    : s out # s ( nurl_alloc + n 2 )
+    : *u op # *u out
+    // Where each kept component starts in `out`, so ".." can pop one.
+    : s stk # s ( nurl_alloc * + / n 2 2 8 )
+    : *i sp # *i stk
+    : ~ i sn 0
+    : ~ i w 0
+    : b absolute == & # i . pp 0 255 47
+    ? absolute { = . op 0 # u 47 = w 1 } {}
+    : ~ i i 0
+    ~ < i n {
+        : ~ i j i
+        ~ & < j n != & # i . pp j 255 47 { = j + j 1 }
+        : i clen - j i
+        : b is_dot & == clen 1 == & # i . pp i 255 46
+        : b is_dotdot & & == clen 2 == & # i . pp i 255 46 == & # i . pp + i 1 255 46
+        ? | == clen 0 is_dot {} {
+            : ~ b popped F
+            ? & is_dotdot > sn 0 {
+                // Pop unless what is on top is itself a '..' — those
+                // are the components no amount of text can resolve.
+                : i last . sp - sn 1
+                : b last_dd & & == - w last 3
+                == & # i . op last 255 46 == & # i . op + last 1 255 46
+                ? ! last_dd { = w last = sn - sn 1 = popped T } {}
+            } {}
+            ? popped {} {
+                = . sp sn w
+                = sn + sn 1
+                : ~ i c 0
+                ~ < c clen { = . op + w c # u & # i . pp + i c 255 = c + c 1 }
+                = w + w clen
+                = . op w # u 47
+                = w + w 1
+            }
+        }
+        = i + j 1
+    }
+    // Strip the trailing '/' a component always writes — but never the
+    // root's own leading one.
+    ? & > w 0 == & # i . op - w 1 255 47 { ? ! & absolute == w 1 { = w - w 1 } {} } {}
+    // "a/.." and "." collapse to nothing, which is the current
+    // directory — "." — never the empty string, which is not a path
+    // and would collide with itself as a key.
+    ? == w 0 { = . op 0 # u 46 = w 1 } {}
+    = . op w # u 0
+    ( nurl_free stk )
+    ^ out
+}
+
 @ __canon_import_key s path → s {
     : s r ( realpath path # *u 0 )
     // realpath(3) mallocs its result ONLY when the second argument is
@@ -25475,7 +25562,10 @@
         ( nurl_free # s r )
         ^ out }
     {}
-    ^ ( nurl_str_cat path `` )
+    // No realpath on this target (wasm32-wasi stubs it): normalise
+    // what the text alone can settle, which is every case that does
+    // not involve a symlink.
+    ^ ( __lex_normalize path )
 }
 
 @ mem_is_imported i syms s path → b {
