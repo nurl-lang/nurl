@@ -4,7 +4,7 @@
 #  x86_64 PVH kernel image.
 #
 #  Usage:  unikernel/build_unikernel.sh prog.nu [-o out.elf]
-#              [--fs dir] [--out-dir dir]
+#              [--fs dir] [--disk] [--out-dir dir]
 #
 #  Same NURL, same runtime_core.c, same runtime_bare.c and the same
 #  nolibc as the Linux -nostdlib build. Exactly three files differ, and
@@ -51,18 +51,24 @@ CC="${CC:-clang}"
 SRC=""
 OUT=""
 FSDIR=""
+# Whether the image carries a filesystem for a block device. Opt-in,
+# because the disk layer is ~30 KB of NURL that a program with no disk
+# should not pay for — and because a machine that was not given a disk
+# and a machine that was told to ignore one should behave identically.
+DISK=""
 OUTDIR="${NURL_UNIKERNEL_OUT:-$ROOT/build/unikernel}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         -o) OUT="$2"; shift 2 ;;
         --fs) FSDIR="$2"; shift 2 ;;
+        --disk) DISK=1; shift ;;
         --out-dir) OUTDIR="$2"; shift 2 ;;
         *)  SRC="$1"; shift ;;
     esac
 done
 [ -n "$SRC" ] || {
-    echo "usage: build_unikernel.sh prog.nu [-o out.elf] [--fs dir] [--out-dir dir]" >&2
+    echo "usage: build_unikernel.sh prog.nu [-o out.elf] [--fs dir] [--disk] [--out-dir dir]" >&2
     exit 2
 }
 [ -x "$ROOT/build/nurlc" ] || {
@@ -98,7 +104,7 @@ cache_inputs() {
         "$NOLIBC"/dtoa.c "$NOLIBC"/math.c "$NOLIBC"/misc.c \
         "$NOLIBC"/setjmp_x86_64.S \
         "$BOOT"/platform_x86.c "$BOOT"/initfs.c "$BOOT"/pagealloc.c \
-        "$BOOT"/nosys.c "$BOOT"/tls_guest.c "$BOOT"/boot.S "$BOOT"/cmdenv.c \
+        "$BOOT"/nosys.c "$BOOT"/vfs.c "$BOOT"/tls_guest.c "$BOOT"/boot.S "$BOOT"/cmdenv.c \
         "$BOOT"/multiboot2.c "$BOOT"/console.c "$BOOT"/font8x16.c \
         "$BOOT"/mb2.h "$BOOT"/console.h "$BOOT"/font8x16.h \
         "$ROOT/stdlib/cuda_stubs.c" "$ROOT/stdlib/nvrtc_stubs.c" \
@@ -116,6 +122,7 @@ cache_build() {
     $CC $KFLAGS -c "$BOOT/initfs.c"       -o "$CACHE/boot_initfs.o"
     $CC $KFLAGS -c "$BOOT/pagealloc.c"    -o "$CACHE/boot_pagealloc.o"
     $CC $KFLAGS -c "$BOOT/nosys.c"        -o "$CACHE/boot_nosys.o"
+    $CC $KFLAGS -c "$BOOT/vfs.c"           -o "$CACHE/boot_vfs.o"
     $CC $KFLAGS -c "$BOOT/cmdenv.c"       -o "$CACHE/boot_cmdenv.o"
     $CC $KFLAGS -c "$BOOT/tls_guest.c"    -o "$CACHE/tls_guest.o"
     $CC $KFLAGS -c "$BOOT/multiboot2.c"   -o "$CACHE/boot_multiboot2.o"
@@ -161,6 +168,8 @@ want_key="CC=$CC KFLAGS=$(echo $KFLAGS)"
 # resolution (NURL_STDLIB) and prints the compiler's message when the
 # program does not compile.
 NURL_NETDEV="$ROOT/unikernel/net/netdev_virtio.nu" \
+    NURL_DISK="$DISK" \
+    NURL_BLKDEV="$ROOT/unikernel/fs/blkdev_virtio.nu" \
     "$ROOT/unikernel/compile_nu.sh" "$SRC" "$OUTDIR/$base.ll" "$OUTDIR"
 # compile_nu.sh leaves a hosted-flavoured object; recompile the IR with
 # the kernel flags. `zig cc` drops -O for .ll inputs (#644) and plain
@@ -208,7 +217,7 @@ $CC -nostdlib -static -Wl,-T,"$BOOT/link.ld" -Wl,--build-id=none \
     "$CACHE/boot.o" "$OUTDIR/$base.o" \
     "$CACHE/runtime_core.o" "$CACHE/runtime_ctx.o" "$CACHE/runtime_bare.o" \
     "$CACHE/platform.o" "$CACHE/tls_guest.o" \
-    "$CACHE/boot_initfs.o" "$CACHE/boot_pagealloc.o" "$CACHE/boot_nosys.o" \
+    "$CACHE/boot_initfs.o" "$CACHE/boot_pagealloc.o" "$CACHE/boot_nosys.o" "$CACHE/boot_vfs.o" \
     "$CACHE/boot_cmdenv.o" \
     "$CACHE/boot_multiboot2.o" "$CACHE/boot_console.o" "$CACHE/boot_font8x16.o" \
     "$CACHE/cuda_stubs.o" "$CACHE/nvrtc_stubs.o" \

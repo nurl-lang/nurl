@@ -26,6 +26,7 @@ Decided by coupling, not convenience:
 |---|---|
 | `nolibc/` | the libc subset: `string.c`, `malloc.c`, `stdio.c`, `dtoa.c`, `math.c` (+ the generated `math_tables.h`), `misc.c`, `syscall_linux.c`, `tls_linux.c`, `start_x86_64.S`, `setjmp_x86_64.S` |
 | `runtime_bare.c` | threads, fibers, sync and entropy for one vCPU with nothing under it |
+| `fs/`, `drivers/virtioblk.nu` | the disk: the `nurl_disk_*` shim the VFS calls, the two block-device spellings (a virtio device, or none), and the driver — one queue, three descriptors, a request at a time |
 | `net/sockets.nu` | the socket ABI (`nurl_tcp_*`, `nurl_udp_*`, `nurl_dns_*`, `nurl_reactor_wait_*`) in NURL, over the sans-IO stack in `stdlib/net/` |
 | `boot/` | the guest: PVH entry + long mode + SSE + the interrupt stubs (`boot.S`), the address space (`link.ld`), the machine's bottom edge (`platform_x86.c`), the pages themselves (`pagealloc.c`), the baked-in filesystem (`initfs.c`), the thread pointer without an auxv (`tls_guest.c`) — and their AArch64 counterparts `boot_arm64.S`, `link_arm64.ld`, `platform_arm64.c`, `tls_guest_arm64.c` (`pagealloc.c` and `initfs.c` are shared: portable C, one copy) |
 | `drivers/` | `virtionet.nu` — frames in and out over a real device |
@@ -50,17 +51,19 @@ from a baked-in image) and the second (the boot shim enters at
 with a different bottom edge, which is what makes testing it on Linux
 worth anything.
 
-## State (2026-08-06)
+## State (2026-08-21)
 
 ```
-  PASS         451    corpus tests that build and run with no libc at all
+  PASS         505    corpus tests that build and run with no libc at all
   FAIL           0
-  NEEDS-BARE    21    processes and signals — a unikernel has neither
+  NEEDS-BARE    23    processes and signals — a unikernel has neither
   NEEDS-LIBM     0
-  NEEDS-NOLIBC   7    realpath, mkstemp, inotify, execvp, unix sockets
-  NEEDS-LIB      4    libsqlite3 x3, libzstd x1 — third-party C libraries
-  SKIP         144    compile-fail tests and tests with no standalone build
+  NEEDS-NOLIBC   9    realpath, inotify, execvp, unix sockets
+  NEEDS-LIB      3    libsqlite3 — third-party C libraries
+  SKIP         344    compile-fail tests and tests with no standalone build
 ```
+
+The guest suite (`unikernel/run_qemu_tests.sh`) is **29/29**.
 
 TCP, UDP and name resolution are all in that PASS column. `async_tcp`,
 `async_http_server`, `http_server_pool`, `http_server_stop_direct`,
@@ -235,8 +238,13 @@ always had.
 ## Running one in production
 
 **What the image needs.** Nothing but a hypervisor with virtio-mmio and
-a serial port. No disk, no initrd, no bootloader, no kernel command line
-beyond the keys below, no filesystem except the one baked into the ELF.
+a serial port. No initrd, no bootloader and no kernel command line
+beyond the keys below. A disk is OPTIONAL and always has been: without
+one the only filesystem is the archive baked into the ELF, read-only,
+and every write is refused rather than silently dropped. With one —
+`-drive` plus `virtio-blk-device`, and an image built with `--disk` —
+the same program's ordinary `write_file` / `read_file` / `dir_list`
+calls reach a FAT volume any host can read.
 
 **The kernel command line** is a contract, and every key is stated
 rather than guessed:
@@ -248,6 +256,7 @@ rather than guessed:
 | `virtio_mmio.device=…` | where the devices are | appended by the hypervisor; the guest parses it, and a guest with no match reports "no device" rather than probing blindly |
 | `args="…"` | the program's argv | when the program takes arguments. ONE key, quoted, because QEMU appends its own entries after `-append` and a program that read the tail of the line would be handed them |
 | `dns=ip[:port]` | the resolver | when a name must resolve and DHCP's option 6 is absent or wrong; stated-but-unparseable exits 127 rather than resolving against a guessed server |
+| `disk=rw\|ro\|format\|off` | what to do with the block device | only to say something other than `rw`. `ro` refuses every write with EROFS; `format` writes a filesystem **only onto a device that does not mount**, so it is not a reformat-on-every-boot switch; `off` makes the machine behave exactly as one with no disk. A guest with no virtio-blk device ignores the key |
 
 Every other `key=value` token on the line is the guest's ENVIRONMENT:
 `getenv("key")` answers it (boot/cmdenv.c; plan B7 always promised
@@ -286,11 +295,14 @@ on somebody's Firecracker host.
 | memory | whatever the hypervisor reports; 256 MiB is what the gates run with, 4 MiB is what a server needs (see above) |
 | MTU | 1500. Frames are refused above 2036 bytes rather than truncated |
 | IP fragments | dropped, counted, never reassembled. A datagram over the MTU does not arrive — and the direct leg no longer needs one to: `net/securedgram` chunks its messages under the MTU itself (reassembled above the AEAD), which is what lifted plan B10's "worker pins relay mode" restriction. Chunking removes the MTU limit, not packet loss: with no ARQ one lost chunk loses the message, so the direct leg caps a message at 256 KiB and `net/transport` routes anything larger over the relay leg, where TCP owns segmentation and retransmission |
-| open files | 16, from the baked-in archive, read-only |
+| storage | a virtio-blk disk, FAT12/16/32, read AND write — long names, subdirectories, rename, truncate, `readdir`, `fsync`. Opt-in at build time (`--disk`), measured at **+72 KiB** of image over the same program without it. The guest can `mkfs` a blank disk itself (`disk=format`); the volume it makes and the volumes it writes are both called clean by `fsck.vfat`. **No journal**: `fsync` orders data and its FAT chain before the directory entry, so a crash loses the newest bytes rather than the file, but a crash between two writes can still leave clusters no directory names — which `fsck.vfat` reclaims. Sectors are 512 bytes and a volume that says otherwise is refused at mount rather than read at the wrong offsets |
+| open files | 16 from the baked-in archive (read-only) plus 32 on the disk. A path the IMAGE holds is served from the image even when the disk has the same name — the archive is part of the program, and a guest whose behaviour depended on what an attached disk happened to contain would be one nobody can reason about |
+| stat on a disk file | `stat`/`lstat`/`fstat` still answer -ENOSYS, so `path_type` does not see the disk. `open`, `lseek`, `access` and `readdir` (with `d_type`) do, which is what `file_exists`, `file_size`, `read_file` and `dir_list` are built on |
 | TCP | immediate ACKs, no Nagle, fixed 64 KB window (the peer's window scaling is honored), slow start + fast retransmit; **no SACK, no delayed ACK, no cwnd beyond slow start** — and that list is now MEASURED as a non-limit, not assumed: a 4 MiB bulk transfer over virtio moves 1.56 MiB/s under TCG with the guest CPU at 93 % of a core — the interpreter is the ceiling, while the 64 KB window at sub-millisecond RTT allows two orders of magnitude more. SACK pays only on lossy paths, which neither virtio nor this gate's topology has; it returns when a real deployment on one measures a need |
 | sockets | 1024 open at once (`sock_set_max_fds` to change it); past that `accept` refuses and leaves the connection in the backlog rather than the machine running out. Ephemeral ports are per-protocol; TCP and UDP have separate spaces |
 | name resolution | literals, `localhost`, and A records from the resolver the network announced — DHCP option 6, or a `dns=ip[:port]` cmdline key (the same host-states-a-fact contract as `wallclock=`; unparseable = exit 127). The query rides `stdlib/net/dnsclient.nu` over the pure UDP stack: stub-resolver scope, so a TC-bit answer is an error (no TCP retry), CNAMEs are followed only inside the one response, and hostile compression pointers run out of hop budget rather than time. No resolver → a name is refused, not guessed |
 | processes, signals | none. `fork`/`exec` report unsupported; there is one address space and nothing to fork |
+| vCPUs, again | one, and every layer above assumes it: the block driver waits for its own request rather than queueing, the scheduler is cooperative, and the allocator takes no lock. SMP is not a missing flag — it is a different set of invariants |
 | GPU | none in a microVM; a swarm node advertises CPU-wasm capability only |
 
 **Building and running one:**
@@ -301,6 +313,22 @@ unikernel/run_qemu.sh myserver.elf -t 60 -- \
     -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8443-:8443 \
     -device virtio-net-device,netdev=n0
 ```
+
+**With a disk**, which is a different image (`--disk` links the block
+layer in) and two more QEMU arguments:
+
+```sh
+truncate -s 64M state.img && mkfs.vfat -F 32 state.img   # or: boot once with disk=format
+unikernel/build_unikernel.sh myserver.nu --disk -o myserver.elf
+unikernel/run_qemu.sh myserver.elf -t 60 -- \
+    -drive file=state.img,format=raw,if=none,id=d0 \
+    -device virtio-blk-device,drive=d0
+```
+
+Afterwards `fsck.vfat state.img` checks it and anything that reads FAT
+can open it — which is why the format is FAT and not something of our
+own: an appliance whose state only its own author can inspect is an
+appliance nobody should run.
 
 Firecracker takes the same ELF as `--kernel-image` with `boot-args`
 carrying the same keys — PVH is its boot protocol too, and the exit
@@ -322,6 +350,85 @@ reports because a device is on the other side of the same trust
 boundary. There is no user/supervisor split inside the guest and no
 attempt at one: a unikernel is one program in one address space, and a
 privilege boundary with nothing on the other side of it is ceremony.
+
+## A disk, and state that outlives the machine
+
+```
+$ truncate -s 32M state.img && mkfs.vfat -F 16 state.img
+$ unikernel/build_unikernel.sh --disk unikernel/demos/disk.nu -o disk.elf
+$ unikernel/run_qemu.sh disk.elf -t 60 -- \
+      -drive file=state.img,format=raw,if=none,id=d0 -device virtio-blk-device,drive=d0
+boots_before=0
+...
+$ unikernel/run_qemu.sh disk.elf -t 60 -- ...same...
+boots_before=1
+$ python3 unikernel/tests/fatread.py state.img /boots.txt
+/boots.txt=2
+```
+
+Until this existed the only filesystem was the tar inside the ELF, and
+every write was a refusal — which is correct for a machine with nowhere
+to put the bytes and fatal for anything that has to remember something.
+A database, a write-ahead log, a cache, a queue: all of them need the
+same four things, and none of them could run here.
+
+**The stack, bottom to top.** `drivers/virtioblk.nu` is the device: one
+queue, three descriptors per request (a header the driver writes, the
+data, one status byte the device writes), and each request waited for
+rather than queued — a cooperative scheduler on one vCPU has nothing to
+do with queue depth, and a completion running while a filesystem is
+halfway through a directory is a bug class rather than a feature.
+`stdlib/hal/blockdev.nu` is the seam: four `nurl_blk_*` symbols,
+declared there and answered by a virtio device, by nothing, or by a
+file on a host — which is how the layers above are developed and
+fuzzed where `mkfs.vfat` is. `stdlib/fs/fat.nu` and `fatfs.nu` are the
+filesystem, and `boot/vfs.c` is what makes it invisible: `nl_open`,
+`read`, `write`, `lseek`, `unlink`, `rename`, `mkdir`, `truncate`,
+`fsync`, `access` and `getdents64` ask the baked-in archive first and
+the disk second, so a program that already reads and writes files keeps
+working with nothing added to it. `demos/disk.nu` contains no
+disk-aware call at all.
+
+**Why FAT.** Because the alternative is a format only its own author can
+read. `mkfs.vfat` builds the volumes the gate tests against, `fsck.vfat`
+delivers the verdict on what the guest wrote, and
+`unikernel/tests/fatread.py` — a reader in another language that shares
+no code with this one — checks that the bytes are where the directory
+says they are, which is a different question from "is the structure
+consistent" and the one a cluster-arithmetic bug gets wrong. An
+implementation that can only be checked by itself is one whose bugs
+surface after somebody's data is already in it.
+
+**What it does not have is a journal**, and it does not pretend
+otherwise. `fsync` puts data and the FAT chain that names it on the
+medium before the directory entry that publishes the new size, so a
+crash loses the newest bytes rather than the file that held them — but
+a crash between two of those writes can still leave clusters no
+directory names. That is lost space, `fsck.vfat` reclaims it, and it is
+written down here rather than discovered later.
+
+**Three bugs this cost**, each invisible to the layer that had it:
+
+- **The formatter's FAT size did not converge.** Sizing a FAT is a
+  recurrence — a bigger table leaves fewer data sectors, which need
+  fewer entries — and on a 64 MiB disk it OSCILLATES between 1008 and
+  1009 sectors for ever. A loop looking for a fixed point ran out of
+  iterations and returned whichever it stopped on; when that was the
+  smaller one, the table was one entry short of the clusters the volume
+  claimed. The criterion is safety, not equality: grow until the table
+  covers the clusters, then shrink while it still does.
+- **The disk layer was compiled and then dropped.** Nothing in NURL
+  calls `nurl_disk_open` — `boot/vfs.c` does — so dead-code elimination
+  removed the whole filesystem, the image linked (the C side's
+  references are weak on purpose), booted, and reported "no filesystem"
+  about a filesystem it was carrying. A function reachable only from
+  outside the module has to be named from outside it: `nurlc --keep=`.
+- **`mmap` of a disk file returned anonymous pages.** `read_file` maps
+  rather than reads, the guest's `mmap` answered file-backed requests
+  with a pointer into the baked-in image, and a disk file has no such
+  address — so a file the guest had just written came back as "cannot
+  read". A private read-only mapping is a snapshot, and a snapshot may
+  be a copy.
 
 ## An MCP endpoint that IS the machine
 

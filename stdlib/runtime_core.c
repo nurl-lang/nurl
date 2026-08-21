@@ -327,6 +327,12 @@ void nurl_flush_stderr(void) { fflush(stderr); }
  * on Windows 10+ consoles, a no-op everywhere else. */
 #ifdef _WIN32
 #  include <io.h>
+/* `<fcntl.h>` for the `_O_*` flags `nurl_native_constant` hands out.
+ * It is included again further down for MSVC, but only there — and
+ * this file is compiled BOTH ways on Windows (MinGW via zig for
+ * `runtime.mingw.o`, and MSVC), so a MinGW-only build would not see
+ * the macros at all. Include it where both branches reach it. */
+#  include <fcntl.h>
 #  ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 #    define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #  endif
@@ -1623,6 +1629,61 @@ long long nurl_file_sync(void *h) {
 #endif
 }
 
+/* Positional read/write and a durability barrier, on a raw descriptor.
+ *
+ * `pread`/`pwrite`/`fsync` are POSIX and the MSVC CRT has none of the
+ * three, so a NURL caller spelling them directly links everywhere
+ * except Windows — which is how `stdlib/fs/blkdev_file.nu` passed on
+ * this machine and failed in CI with three unresolved externals. Same
+ * shim reasoning as `nurl_file_sync` above: one C function per
+ * operation, the platform difference resolved here rather than at every
+ * call site.
+ *
+ * POSITIONAL, not seek-then-read, because the offset belongs to the
+ * call: a block device served by two interleaved requests has no file
+ * position anyone can reason about. On Windows that has to be emulated
+ * with a seek, which is why `_lseeki64` appears in a function whose
+ * whole point is not seeking — the emulation is confined to the branch
+ * that needs it. */
+long long nurl_pread(int fd, void *buf, long long n, long long off) {
+    if (!buf || n < 0 || off < 0) return -1;
+#ifdef _WIN32
+    if (_lseeki64(fd, (__int64)off, SEEK_SET) < 0) return -1;
+    return (long long)_read(fd, buf, (unsigned int)n);
+#elif defined(__wasi__)
+    if (lseek(fd, (off_t)off, SEEK_SET) < 0) return -1;
+    return (long long)read(fd, buf, (size_t)n);
+#else
+    return (long long)pread(fd, buf, (size_t)n, (off_t)off);
+#endif
+}
+
+long long nurl_pwrite(int fd, const void *buf, long long n, long long off) {
+    if (!buf || n < 0 || off < 0) return -1;
+#ifdef _WIN32
+    if (_lseeki64(fd, (__int64)off, SEEK_SET) < 0) return -1;
+    return (long long)_write(fd, buf, (unsigned int)n);
+#elif defined(__wasi__)
+    if (lseek(fd, (off_t)off, SEEK_SET) < 0) return -1;
+    return (long long)write(fd, buf, (size_t)n);
+#else
+    return (long long)pwrite(fd, buf, (size_t)n, (off_t)off);
+#endif
+}
+
+/* `fsync` for a descriptor. WASI answers 0 because there is no
+ * durability barrier to reach for — not because the bytes are safe. */
+long long nurl_fd_sync(int fd) {
+#ifdef _WIN32
+    return _commit(fd) == 0 ? 0 : -1;
+#elif defined(__wasi__)
+    (void)fd;
+    return 0;
+#else
+    return fsync(fd) == 0 ? 0 : -1;
+#endif
+}
+
 /* Cut a file down to `len` bytes (or extend it with zeros). Returns 0 on
  * success, -1 on failure.
  *
@@ -2641,6 +2702,17 @@ long long nurl_native_constant(const char *name) {
     if (strcmp(name, "F_SETFD")     == 0) return F_SETFD;
     if (strcmp(name, "FD_CLOEXEC")  == 0) return FD_CLOEXEC;
     if (strcmp(name, "O_NONBLOCK")  == 0) return O_NONBLOCK;
+    /* The open(2) mode and creation flags. They are NOT the same numbers
+     * on every platform this compiles for — O_CREAT is 0100 on Linux and
+     * 0x0200 on macOS — so a caller that spelled them as literals would
+     * open the wrong thing on one of them. */
+    if (strcmp(name, "O_RDONLY")    == 0) return O_RDONLY;
+    if (strcmp(name, "O_WRONLY")    == 0) return O_WRONLY;
+    if (strcmp(name, "O_RDWR")      == 0) return O_RDWR;
+    if (strcmp(name, "O_CREAT")     == 0) return O_CREAT;
+    if (strcmp(name, "O_EXCL")      == 0) return O_EXCL;
+    if (strcmp(name, "O_TRUNC")     == 0) return O_TRUNC;
+    if (strcmp(name, "O_APPEND")    == 0) return O_APPEND;
     if (strcmp(name, "POLLIN")      == 0) return POLLIN;
     if (strcmp(name, "POLLOUT")     == 0) return POLLOUT;
     if (strcmp(name, "POLLHUP")     == 0) return POLLHUP;
@@ -2682,6 +2754,24 @@ long long nurl_native_constant(const char *name) {
     if (strcmp(name, "SIGFPE")      == 0) return SIGFPE;
     if (strcmp(name, "SIGILL")      == 0) return SIGILL;
     if (strcmp(name, "SIGSEGV")     == 0) return SIGSEGV;
+    /* The open(2) flags. The CRT spells them with a leading underscore
+     * and the numbers are NOT the POSIX ones — O_CREAT is 0100 on Linux
+     * and 0x0100 here — which is exactly why they are asked for by name
+     * rather than written as literals. */
+    if (strcmp(name, "O_RDONLY")    == 0) return _O_RDONLY;
+    if (strcmp(name, "O_WRONLY")    == 0) return _O_WRONLY;
+    if (strcmp(name, "O_RDWR")      == 0) return _O_RDWR;
+    if (strcmp(name, "O_CREAT")     == 0) return _O_CREAT;
+    if (strcmp(name, "O_EXCL")      == 0) return _O_EXCL;
+    if (strcmp(name, "O_TRUNC")     == 0) return _O_TRUNC;
+    if (strcmp(name, "O_APPEND")    == 0) return _O_APPEND;
+    if (strcmp(name, "O_BINARY")    == 0) return _O_BINARY;
+#endif
+#if !defined(_WIN32)
+    /* Zero everywhere else: only the Windows CRT has a text mode to opt
+     * out of. A caller ORs it in unconditionally, which is what makes
+     * the caller portable rather than conditional. */
+    if (strcmp(name, "O_BINARY")    == 0) return 0;
 #endif
     if (strcmp(name, "ENOENT")      == 0) return ENOENT;
     if (strcmp(name, "EACCES")      == 0) return EACCES;
@@ -2865,6 +2955,27 @@ long long nurl_is_inf(double x) { return isinf(x) ? 1 : 0; }
 #else
 #  include <unistd.h>      /* getcwd, chdir, setenv, unsetenv */
 #  include <dirent.h>      /* opendir, readdir, closedir */
+#endif
+
+/* Is `opendir`/`readdir`/`closedir` REAL on this build?
+ *
+ * `stdlib/std/fs.nu`'s `dir_list` has two implementations — the POSIX
+ * one drives the dirent trio directly from NURL, and Win32/WASI route
+ * through the `nurl_dir_list_*` handle trio below — and it has to pick.
+ * It used to pick by asking whether `nurl_native_constant` knew
+ * `O_RDONLY`, which is a question about a CONSTANT standing in for a
+ * question about a CAPABILITY. The two agreed until the day the
+ * constant was added for Windows (it is needed there: the flags differ
+ * from POSIX, so a caller cannot spell them as literals) — and then
+ * every directory listing on Windows went down the POSIX path, into
+ * this file's own ENOSYS stubs, and came back as "i/o error".
+ *
+ * So: ask the real question. This cannot be broken by adding a
+ * constant, because it is not about constants. */
+#if defined(_WIN32) || defined(__wasi__)
+long long nurl_have_posix_dirent(void) { return 0; }
+#else
+long long nurl_have_posix_dirent(void) { return 1; }
 #endif
 
 /* Directory listing — opaque handle (i64) + skip-dots iteration.

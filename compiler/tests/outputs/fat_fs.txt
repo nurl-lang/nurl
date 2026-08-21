@@ -1,0 +1,147 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- f16 ---
+device created: YES
+formatted: YES
+mounted: YES
+FAT type: YES
+free clusters counted: YES
+8.3 name written: YES
+8.3 name read back: YES
+long name written: YES
+long name read back: YES
+lookup is case-insensitive: YES
+mixed-case name written: YES
+mixed-case found by lower: YES
+mkdir: YES
+mkdir nested: YES
+nested dir is a dir: YES
+mkdir on an existing name: YES
+file in a nested dir: YES
+nested file read back: YES
+rmdir refuses a full dir: YES
+a file is not a directory: YES
+128 KiB written: YES
+128 KiB reads back byte for byte: YES
+size on the medium: YES
+seek to the middle: YES
+short read at an offset: YES
+the offset's own byte: YES
+seek to the end: YES
+append wrote: YES
+append landed at the end: YES
+truncate down: YES
+truncated content: YES
+truncate a big file down: YES
+shrunk size: YES
+what is left is still right: YES
+rename: YES
+old name gone: YES
+new name has the content: YES
+a file to replace: YES
+rename over a file: YES
+replacement content: YES
+rename of a missing file: YES
+dir cannot replace a file: YES
+open of a missing file: YES
+O_EXCL on an existing file: YES
+opening a directory to write: YES
+unlink refuses a directory: YES
+truncate of a missing file: YES
+120 long-named entries created: YES
+directory opened: YES
+readdir sees every one of them: YES
+sync: YES
+unmounted: YES
+re-mounted: YES
+content survived the remount: YES
+the big file survived too: YES
+directories survived: YES
+mounted read-only: YES
+read-only still reads: YES
+read-only refuses a create: YES
+read-only refuses an unlink: YES
+mounted again: YES
+unlink the big file: YES
+unlink the small one: YES
+unlink the long name: YES
+unlink the mixed-case name: YES
+bulk unlink: YES
+unlink the nested file: YES
+rmdir the empty dir: YES
+rmdir its parent: YES
+every cluster came back: YES
+--- f32 ---
+device created: YES
+formatted: YES
+mounted: YES
+FAT type: YES
+free clusters counted: YES
+8.3 name written: YES
+8.3 name read back: YES
+long name written: YES
+long name read back: YES
+lookup is case-insensitive: YES
+mixed-case name written: YES
+mixed-case found by lower: YES
+mkdir: YES
+mkdir nested: YES
+nested dir is a dir: YES
+mkdir on an existing name: YES
+file in a nested dir: YES
+nested file read back: YES
+rmdir refuses a full dir: YES
+a file is not a directory: YES
+128 KiB written: YES
+128 KiB reads back byte for byte: YES
+size on the medium: YES
+seek to the middle: YES
+short read at an offset: YES
+the offset's own byte: YES
+seek to the end: YES
+append wrote: YES
+append landed at the end: YES
+truncate down: YES
+truncated content: YES
+truncate a big file down: YES
+shrunk size: YES
+what is left is still right: YES
+rename: YES
+old name gone: YES
+new name has the content: YES
+a file to replace: YES
+rename over a file: YES
+replacement content: YES
+rename of a missing file: YES
+dir cannot replace a file: YES
+open of a missing file: YES
+O_EXCL on an existing file: YES
+opening a directory to write: YES
+unlink refuses a directory: YES
+truncate of a missing file: YES
+120 long-named entries created: YES
+directory opened: YES
+readdir sees every one of them: YES
+sync: YES
+unmounted: YES
+re-mounted: YES
+content survived the remount: YES
+the big file survived too: YES
+directories survived: YES
+mounted read-only: YES
+read-only still reads: YES
+read-only refuses a create: YES
+read-only refuses an unlink: YES
+mounted again: YES
+unlink the big file: YES
+unlink the small one: YES
+unlink the long name: YES
+unlink the mixed-case name: YES
+bulk unlink: YES
+unlink the nested file: YES
+rmdir the empty dir: YES
+rmdir its parent: YES
+every cluster came back: YES
+done

@@ -107,23 +107,14 @@ long long nurl_proc_stdout_len(long long h) { (void)h; return 0; }
 long long nurl_proc_stderr_len(long long h) { (void)h; return 0; }
 void nurl_proc_free(long long h)           { (void)h; }
 
-/* ── writing to a filesystem that is inside the executable ───── */
-
-int mkstemp(char *tmpl)                     { (void)tmpl; return ns_refuse(NS_EROFS); }
-int rename(const char *a, const char *b)    { (void)a; (void)b; return ns_refuse(NS_EROFS); }
-int rmdir(const char *p)                    { (void)p; return ns_refuse(NS_EROFS); }
-
-/* Durability, on a filesystem that is a tar inside the image.
- *
- * Both refuse rather than succeed quietly, for the reason the whole file
- * exists: fsync's contract is "what you wrote is on the device", and a
- * caller that reaches it here never got to write anything — `open` for
- * writing was refused first. Answering 0 would tell a write-ahead log
- * that its records are durable on a machine with nowhere to put them,
- * which is the one lie this directory refuses to tell. truncate is the
- * same read-only story as rename and rmdir above.
- *
- * A guest that grows a writable device (virtio-blk) implements these
- * there, and every caller stays put. */
-int fsync(int fd)                           { (void)fd; return ns_refuse(NS_EROFS); }
-int truncate(const char *p, long long len)  { (void)p; (void)len; return ns_refuse(NS_EROFS); }
+/* ── writing to a filesystem ─────────────────────────────────── */
+/*
+ * `rename`, `rmdir`, `truncate`, `fsync` and `mkstemp` USED to live
+ * here, refusing with EROFS, because the only filesystem this machine
+ * had was a tar inside its own text segment. They moved to
+ * `boot/vfs.c` when the guest grew a block device: the refusal is
+ * still what a diskless machine answers, but it is now a fact about
+ * the filesystem rather than about the machine, and one file has to
+ * hold both answers. Every caller stayed put, which is what that
+ * comment always promised would happen.
+ */

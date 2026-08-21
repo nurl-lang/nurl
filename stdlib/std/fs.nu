@@ -461,7 +461,15 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     // POSIX: drive opendir/readdir/closedir in pure NURL via
     // `__dir_list_pure_posix`. Win32 / WASI route through the runtime's
     // `nurl_dir_list_*` opaque-handle trio (FindFirstFile state cache).
-    ? != ( posix_const `O_RDONLY` ) -1 {
+    // The predicate is a CAPABILITY question answered by the runtime, not
+    // a constant lookup standing in for one. `posix_const \`O_RDONLY\` != -1`
+    // used to be the test, and it stopped meaning "POSIX dirent works
+    // here" the moment `O_RDONLY` was published on Windows too — where
+    // it is needed, because the flag values differ from POSIX and a
+    // caller cannot spell them as literals. Every Windows directory
+    // listing then took this branch into runtime_core.c's own ENOSYS
+    // stubs and reported an i/o error.
+    ? ( posix_have_dirent ) {
         ^ ( __dir_list_pure_posix path )
     } {}
     : i h ( nurl_dir_list_open path )

@@ -121,7 +121,20 @@ void nl_exit_group(int code) {
 #define SYS_getrandom_ 318
 #define SYS_fsync_     74
 #define SYS_truncate_  76
+#define SYS_pread64_   17
+#define SYS_pwrite64_  18
 
+/* Positional read/write. `stdlib/runtime_core.c` calls these through its
+ * `nurl_pread`/`nurl_pwrite` shims, so nolibc has to have them — that is
+ * what `tools/check_nolibc_symbols.sh` asserts, and it caught their
+ * absence in the PR that introduced the caller rather than at link time
+ * months later. */
+long long pread(int fd, void *buf, unsigned long n, long long off) {
+    return nl_ret(nl_syscall6(SYS_pread64_, fd, (long)buf, (long)n, (long)off, 0, 0));
+}
+long long pwrite(int fd, const void *buf, unsigned long n, long long off) {
+    return nl_ret(nl_syscall6(SYS_pwrite64_, fd, (long)buf, (long)n, (long)off, 0, 0));
+}
 long long read(int fd, void *buf, unsigned long n)  { return nl_read(fd, buf, n); }
 long long write(int fd, const void *buf, unsigned long n) { return nl_write(fd, buf, n); }
 int   close(int fd)                                 { return nl_close(fd); }

@@ -18,12 +18,13 @@
  * the name, the size, and the file type. 512-byte header, payload
  * rounded up to 512, repeat.
  *
- * WHERE IT PLUGS IN. nolibc's `fopen`/`fread`/`fseek` are already
- * written against `nl_open`/`nl_read`/`nl_lseek`/`nl_close` — the same
- * four functions the Linux build implements with syscalls. Implementing
- * those four here means every reader above them works unchanged, from
- * `fread` to `fs_read_file` to whatever the TLS code does to load a
- * PEM. Nothing above knows the file came out of the binary.
+ * WHERE IT PLUGS IN. nolibc's `fopen`/`fread`/`fseek` are written
+ * against `nl_open`/`nl_read`/`nl_lseek`/`nl_close` — the same four
+ * functions the Linux build implements with syscalls. Those four live
+ * one layer up, in `boot/vfs.c`, which asks THIS file first and the
+ * disk (when there is one) second. Everything here is named `ifs_*`
+ * and answers only about the archive: a lookup that misses is a miss,
+ * not a decision about the machine.
  */
 
 typedef unsigned long fs_size_t;
@@ -127,7 +128,7 @@ static const unsigned char *fs_lookup(const char *name, fs_size_t *size_out) {
  * file is the only thing that reads it. */
 #define NL_O_DIRECTORY 0200000
 
-int nl_open(const char *path, int flags, int mode) {
+int ifs_open(const char *path, int flags, int mode) {
     (void)mode;
     /* Read-only, and it says so: a write to a filesystem that lives in
      * the text segment cannot be honoured, and a caller that opened
@@ -173,9 +174,9 @@ static FsFile *fs_file(int fd) {
     return &fs_open_files[i];
 }
 
-int fs_is_file_fd(int fd) { return fs_file(fd) != 0; }
+int ifs_is_fd(int fd) { return fs_file(fd) != 0; }
 
-fs_ssize_t fs_read_fd(int fd, void *buf, fs_size_t n) {
+fs_ssize_t ifs_read(int fd, void *buf, fs_size_t n) {
     FsFile *f = fs_file(fd);
     unsigned char *out = (unsigned char *)buf;
     if (!f) { nl_errno_slot = 9 /* EBADF */; return -1; }
@@ -186,7 +187,7 @@ fs_ssize_t fs_read_fd(int fd, void *buf, fs_size_t n) {
     return (fs_ssize_t)take;
 }
 
-long long fs_lseek_fd(int fd, long long off, int whence) {
+long long ifs_lseek(int fd, long long off, int whence) {
     FsFile *f = fs_file(fd);
     long long base;
     if (!f) { nl_errno_slot = 9; return -1; }
@@ -200,7 +201,7 @@ long long fs_lseek_fd(int fd, long long off, int whence) {
     return pos;
 }
 
-int fs_close_fd(int fd) {
+int ifs_close(int fd) {
     FsFile *f = fs_file(fd);
     if (!f) { nl_errno_slot = 9; return -1; }
     f->used = 0;
@@ -212,7 +213,7 @@ int fs_close_fd(int fd) {
  * shared with the archive, and free. `std/fs.nu`'s POSIX read path
  * maps rather than reads, so without this every `read_file` on this
  * machine returns whatever the bump allocator handed back. */
-const unsigned char *fs_map_fd(int fd, fs_size_t off) {
+const unsigned char *ifs_map(int fd, fs_size_t off) {
     FsFile *f = fs_file(fd);
     if (!f || off > f->size) return 0;
     return f->data + off;
@@ -224,7 +225,7 @@ const unsigned char *fs_map_fd(int fd, fs_size_t off) {
  * becomes somebody's bug report: swarm-mcp asked whether its baked-in
  * certificate was there, was told no, and tried to generate one onto a
  * read-only filesystem. */
-int fs_exists(const char *path) {
+int ifs_exists(const char *path) {
     fs_size_t size = 0;
     return fs_lookup(path, &size) != 0;
 }
