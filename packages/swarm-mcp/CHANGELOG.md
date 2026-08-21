@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.25.0
+
+**Workers run wasm in-process — and therefore inside a unikernel.** The
+pure-NURL wasmtime is now a package dependency (`deps/wasmtime`) and the
+default engine for CPU wasm chunks: the worker decodes the chunk's bytes and
+runs `_start` under `interp_capture`, with no runtime on PATH, no subprocess,
+no writable filesystem and no disk cache. That is what lets the swarm-mcp
+appliance boot as a NURL unikernel guest (a machine with no processes) and
+still execute compiled kernels — verified end to end: a guest worker joins a
+host relay over virtio-net, runs both an expression task and a wasm-kernel
+task, and the reduce comes back exact (`unikernel/tests/swarm_gate.sh` gates
+it in CI, cold-start-to-first-answer measured).
+
+- `$WASMTIME` still selects an external runtime over the unchanged CLI
+  contract (`wasmtime run <module> <lo> <hi>`); GPU chunks always use the
+  external contract and `--gpu` still requires it.
+- `wasmtime_probe` answers without spawning anything when the engine is
+  in-process, so a worker's preflight no longer needs processes at all.
+- Fixed two error-path leaks: both stderr-capture sites bound and freed the
+  intermediate `string_trim` argument instead of leaking it per failed chunk.
+
 ## 0.24.0
 
 **Everything an agent-experience pass found, fixed.** A full run against the

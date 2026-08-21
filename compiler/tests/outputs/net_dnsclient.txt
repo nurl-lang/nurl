@@ -1,0 +1,23 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+query length 28:        YES
+query id:               YES
+query RD flag:          YES
+qname first label len:  YES
+qtype A, class IN:      YES
+empty name refused:     YES
+double dot refused:     YES
+one A answer:           YES
+case-folded match:      YES
+wrong id:               YES
+CNAME chased to A:      YES
+stray A ignored:        YES
+TC bit is an error:     YES
+NXDOMAIN reported:      YES
+question refused:       YES
+short response:         YES
+pointer loop is error:  YES
+overlong rdata is error:YES
+net_dnsclient done

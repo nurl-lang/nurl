@@ -20,6 +20,13 @@
 #  NURL_UNIKERNEL_CACHE / NURL_JOBS respected. Programs are built in
 #  parallel; the shared object cache is flocked (U0), so the first
 #  builder populates it and the rest read it.
+#
+#  NURL_UNIKERNEL_ARCH=x86_64 (default) | aarch64 | riscv64 selects
+#  which arch's builder measures. One manifest per architecture is the
+#  honest shape — "the missing symbols are the same everywhere" was an
+#  assumption until this flag let it be measured (and it held: the
+#  three manifests came out identical, because capability is decided
+#  by the LINK's symbol set, which is arch-independent by design).
 # ============================================================
 set -uo pipefail
 
@@ -27,6 +34,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIR="${1:?usage: measure_capability.sh <dir> <out.json>}"
 OUT="${2:?usage: measure_capability.sh <dir> <out.json>}"
 JOBS="${NURL_JOBS:-$(nproc 2>/dev/null || echo 4)}"
+case "${NURL_UNIKERNEL_ARCH:-x86_64}" in
+    x86_64)  BUILDER="$ROOT/unikernel/build_unikernel.sh" ;;
+    aarch64) BUILDER="$ROOT/unikernel/build_unikernel_arm64.sh" ;;
+    riscv64) BUILDER="$ROOT/unikernel/build_unikernel_riscv64.sh" ;;
+    *) echo "measure_capability: unknown NURL_UNIKERNEL_ARCH '${NURL_UNIKERNEL_ARCH}'" >&2; exit 2 ;;
+esac
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -36,7 +49,7 @@ one() {
     name="$(basename "$f")"
     o="$work/${name%.nu}"
     mkdir -p "$o"
-    if NURL_COMPILE_QUIET=1 "$ROOT/unikernel/build_unikernel.sh" "$f" \
+    if NURL_COMPILE_QUIET=1 "$BUILDER" "$f" \
             --out-dir "$o" -o "$o/img.elf" >/dev/null 2>"$o/err"; then
         printf '{"name":%s,"unikernel":true,"reason":""}\n' "\"$name\"" > "$o/verdict"
         return 0
@@ -57,7 +70,7 @@ one() {
     printf '{"name":%s,"unikernel":false,"reason":%s}\n' "\"$name\"" "\"$reason\"" > "$o/verdict"
 }
 export -f one
-export ROOT work
+export ROOT work BUILDER
 
 find "$DIR" -maxdepth 1 -name '*.nu' -print0 | sort -z \
     | xargs -0 -P "$JOBS" -I{} bash -c 'one "$@"' _ {}

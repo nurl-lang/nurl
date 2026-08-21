@@ -15,6 +15,39 @@
 // `receiver_index` is the index the *recipient* assigned and advertised,
 // so a node maps an incoming datagram to a session in O(1)-ish by its own
 // index. The mesh PSK is node-wide for now (per-peer PSK is a follow-up).
+//
+// INSIDE the AEAD, every transport payload carries one framing byte —
+// the answer to "UDP does no MTU chunking" that kept the unikernel
+// worker pinned to the relay leg (plan B10's v1 decision, now lifted):
+//   [0][payload…]                                whole message
+//   [1][msg_id:4][idx:2][cnt:2][chunk bytes…]     one chunk of a big one
+// A message longer than securedgram_chunk_bytes is split; the receiver
+// reassembles and securedgram_recv returns only WHOLE messages. The
+// chunk header is inside the AEAD, so a forged chunk cannot enter a
+// reassembly; what a hostile peer can still do is bounded on purpose:
+// at most __sdg_max_partials messages reassemble per peer (oldest is
+// evicted), a message is capped at securedgram_max_msg, and a chunk
+// whose length or indices disagree with its header is dropped. Loss
+// semantics stay datagram: a lost chunk is a lost MESSAGE, never a
+// stall — there is no ARQ here, the layers above already own retries.
+// (Wire format bump: both ends must speak the framing byte.)
+//
+// WHAT CHUNKING DOES AND DOES NOT BUY, stated because the difference
+// decides which leg a payload should take. It removes the MTU as a
+// size limit. It does NOT add reliability: with no ARQ, ONE lost
+// chunk loses the whole message, and the chance of that grows with
+// the chunk count — a thousand-chunk message on a path that drops one
+// datagram in a thousand essentially never arrives. Nor does it make
+// a burst fit: chunks go out back to back, so the receiver's socket
+// buffer must hold whatever it has not drained yet (a receiver
+// sitting in a recv loop drains as they land; one that sends first
+// and reads afterwards does not, and FreeBSD's default UDP receive
+// space is a fifth of Linux's — this is why the cap below is modest
+// rather than the relay leg's 16 MiB). So: securedgram_max_msg is the
+// size at which a direct datagram is still a REASONABLE bet, and
+// net/transport routes anything larger over the relay leg, where TCP
+// owns segmentation and retransmission. That is a routing decision,
+// not an error.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -63,6 +96,57 @@ $ `stdlib/net/session.nu`
     s hs  // *Handshake during the handshake, else 0
     s session  // *NoiseSession once established, else 0
     i established
+    i tx_msg_id  // last chunked-message id sent to this peer
+    ( Vec s ) partials  // *Partial — messages mid-reassembly, oldest first
+}
+
+// One message mid-reassembly. `chunks` holds a *ChunkBox per index
+// (0 = not yet arrived) so out-of-order arrival needs no sorting and a
+// duplicate is a filled slot, not a corruption. The box exists because
+// a Vec handle is a by-value struct: parking one in a `( Vec s )` slot
+// means boxing it, not casting it.
+: ChunkBox {
+    ( Vec u ) v
+}
+
+: Partial {
+    i msg_id
+    i cnt
+    i got
+    i bytes
+    ( Vec s ) chunks
+}
+
+// The plaintext bytes one chunk carries. 1152 + the 9-byte inner
+// header + the 13-byte wire header + the 16-byte AEAD tag + IP/UDP
+// stays under 1200 — clear of the 1280 IPv6 floor and every MTU this
+// project has met in the wild (a 1440-MTU path once blackholed
+// package publishes).
+@ securedgram_chunk_bytes → i { ^ 1152 }
+
+// The biggest message this leg will send or reassemble: 256 KiB, i.e.
+// 228 chunks. Chosen against loss rather than against the header's
+// range — see the note above; the relay leg carries anything bigger
+// and net/transport routes it there. A send past this is refused up
+// front (NetWrite), never truncated and never half-sent.
+@ securedgram_max_msg → i { ^ 262144 }
+
+@ __sdg_max_partials → i { ^ 4 }
+
+@ __partial_free * Partial q → v {
+    : i n ( vec_len [s] . q chunks )
+    : ~ i k 0
+    ~ < k n {
+        : s cp ?? ( vec_get [s] . q chunks k ) { T x → x F → # s 0 }
+        ? != # i cp 0 {
+            : *ChunkBox cbx # *ChunkBox cp
+            ( vec_free [u] . cbx v )
+            ( nurl_free cp )
+        } {}
+        = k + k 1
+    }
+    ( vec_free [s] . q chunks )
+    ( nurl_free # s q )
 }
 
 : SecureNode {
@@ -124,6 +208,8 @@ $ `stdlib/net/session.nu`
     = . p hs # s 0
     = . p session # s 0
     = . p established 0
+    = . p tx_msg_id 0
+    = . p partials ( vec_new [s] )
     ( vec_push [s] . n peers # s p )
 }
 
@@ -205,14 +291,11 @@ $ `stdlib/net/session.nu`
     ^ @ !v NetErr { T 0 }
 }
 
-@ securedgram_send * SecureNode n ( Vec u ) peer_pk ( Vec u ) data → !v NetErr {
-    : s pp ( __find_pk n peer_pk )
-    ? == # i pp 0 { ^ @ !v NetErr { F @ NetErr { NetOther } } } {}
-    : *PeerState p # *PeerState pp
-    ? == . p established 0 { ^ @ !v NetErr { F @ NetErr { NetOther } } } {}
+// Seal one inner frame and put it on the wire. BORROWS `inner`.
+@ __send_inner * SecureNode n * PeerState p ( Vec u ) inner → v {
     : *NoiseSession sess # *NoiseSession . p session
     : ( Vec u ) ad ( vec_new [u] )
-    : Sealed sealed ( session_seal sess ad data )
+    : Sealed sealed ( session_seal sess ad inner )
     ( vec_free [u] ad )
     : ( Vec u ) pkt ( vec_new [u] )
     ( vec_push [u] pkt # u 4 )
@@ -222,6 +305,43 @@ $ `stdlib/net/session.nu`
     ( sealed_free sealed )
     ( __send_pkt n p pkt )
     ( vec_free [u] pkt )
+}
+
+@ securedgram_send * SecureNode n ( Vec u ) peer_pk ( Vec u ) data → !v NetErr {
+    : s pp ( __find_pk n peer_pk )
+    ? == # i pp 0 { ^ @ !v NetErr { F @ NetErr { NetOther } } } {}
+    : *PeerState p # *PeerState pp
+    ? == . p established 0 { ^ @ !v NetErr { F @ NetErr { NetOther } } } {}
+    : i len ( vec_len [u] data )
+    : i cb ( securedgram_chunk_bytes )
+    ? <= len cb {
+        // one datagram: [0][payload]
+        : ( Vec u ) inner ( vec_with_cap [u] + len 1 )
+        ( vec_push [u] inner # u 0 )
+        ( vec_extend [u] inner data )
+        ( __send_inner n p inner )
+        ( vec_free [u] inner )
+        ^ @ !v NetErr { T 0 }
+    } {}
+    ? > len ( securedgram_max_msg ) { ^ @ !v NetErr { F @ NetErr { NetWrite } } } {}
+    = . p tx_msg_id + . p tx_msg_id 1
+    : i msg_id & . p tx_msg_id 4294967295
+    : i cnt / + len - cb 1 cb
+    : ~ i idx 0
+    ~ < idx cnt {
+        : i off * idx cb
+        : i take ? > + off cb len - len off cb
+        : ( Vec u ) inner ( vec_with_cap [u] + take 9 )
+        ( vec_push [u] inner # u 1 )
+        ( bytes_push_u32_be inner # u32 msg_id )
+        ( bytes_push_u16_be inner # u16 idx )
+        ( bytes_push_u16_be inner # u16 cnt )
+        : ~ i j 0
+        ~ < j take { ( vec_push [u] inner # u ?? ( vec_get [u] data + off j ) { T x → # i x F → 0 } ) = j + j 1 }
+        ( __send_inner n p inner )
+        ( vec_free [u] inner )
+        = idx + idx 1
+    }
     ^ @ !v NetErr { T 0 }
 }
 
@@ -321,10 +441,115 @@ $ `stdlib/net/session.nu`
     ^ ?? opened {
         T pt → {
             ( __roam p src )
-            @ ?RecvData { T @ RecvData { ( __cpy . p pubkey ) pt } }
+            ( __handle_inner p pt )
         }
         F → @ ?RecvData { F # RecvData 0 }
     }
+}
+
+// The framing byte inside the AEAD (see the header). CONSUMES `pt`.
+@ __handle_inner * PeerState p ( Vec u ) pt → ?RecvData {
+    : i len ( vec_len [u] pt )
+    ? < len 1 { ( vec_free [u] pt ) ^ @ ?RecvData { F # RecvData 0 } } {}
+    : i tag ?? ( vec_get [u] pt 0 ) { T x → # i x F → 255 }
+    ? == tag 0 {
+        : ( Vec u ) body ( __slc pt 1 - len 1 )
+        ( vec_free [u] pt )
+        ^ @ ?RecvData { T @ RecvData { ( __cpy . p pubkey ) body } }
+    } {}
+    ? != tag 1 { ( vec_free [u] pt ) ^ @ ?RecvData { F # RecvData 0 } } {}
+    ? < len 10 { ( vec_free [u] pt ) ^ @ ?RecvData { F # RecvData 0 } } {}
+    : i msg_id ( __sdg_u32 pt 1 )
+    : i idx ?? ( bytes_read_u16_be pt 5 ) { T x → # i x F → 0 }
+    : i cnt ?? ( bytes_read_u16_be pt 7 ) { T x → # i x F → 0 }
+    : ( Vec u ) body ( __slc pt 9 - len 9 )
+    ( vec_free [u] pt )
+    : ?( Vec u ) whole ( __sdg_reasm p msg_id idx cnt body )
+    ^ ?? whole {
+        T w → @ ?RecvData { T @ RecvData { ( __cpy . p pubkey ) w } }
+        F → @ ?RecvData { F # RecvData 0 }
+    }
+}
+
+// Feed one authenticated chunk into the peer's reassembly. CONSUMES
+// `body`. Returns the whole message when this chunk completed it.
+// Every bound here is a refusal of a hostile-but-authentic peer's
+// worst case, never a crash: a chunk that disagrees with its own
+// header is dropped, and the partial table cannot grow past
+// __sdg_max_partials in-flight messages (oldest evicted).
+@ __sdg_reasm * PeerState p i msg_id i idx i cnt ( Vec u ) body → ?( Vec u ) {
+    : i cb ( securedgram_chunk_bytes )
+    : i blen ( vec_len [u] body )
+    : i max_cnt / + ( securedgram_max_msg ) - cb 1 cb
+    : ~ b bad F
+    ? | < cnt 2 > cnt max_cnt { = bad T } {}
+    ? >= idx cnt { = bad T } {}
+    // every chunk but the last is exactly full; the last is 1..cb
+    ? && < idx - cnt 1 != blen cb { = bad T } {}
+    ? && == idx - cnt 1 | == blen 0 > blen cb { = bad T } {}
+    ? bad { ( vec_free [u] body ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    // find (or open) the partial for this msg_id
+    : ~ s qp # s 0
+    : i qn ( vec_len [s] . p partials )
+    : ~ i qk 0
+    ~ & == # i qp 0 < qk qn {
+        : s c ?? ( vec_get [s] . p partials qk ) { T x → x F → # s 0 }
+        ? != # i c 0 { ? == . # *Partial c msg_id msg_id { = qp c } {} } {}
+        = qk + qk 1
+    }
+    ? == # i qp 0 {
+        ? >= qn ( __sdg_max_partials ) {
+            // full: the OLDEST in-flight message pays for the new one
+            : s old ?? ( vec_get [s] . p partials 0 ) { T x → x F → # s 0 }
+            ? != # i old 0 { ( __partial_free # *Partial old ) } {}
+            ( vec_remove [s] . p partials 0 )
+        } {}
+        : *Partial q # *Partial ( nurl_alloc Z Partial )
+        = . q msg_id msg_id
+        = . q cnt cnt
+        = . q got 0
+        = . q bytes 0
+        = . q chunks ( vec_new [s] )
+        : ~ i z 0
+        ~ < z cnt { ( vec_push [s] . q chunks # s 0 ) = z + z 1 }
+        ( vec_push [s] . p partials # s q )
+        = qp # s q
+    } {}
+    : *Partial q # *Partial qp
+    // a chunk whose cnt disagrees with the one that opened the entry
+    // is not the same message, whatever its id claims
+    ? != . q cnt cnt { ( vec_free [u] body ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    : s slot ?? ( vec_get [s] . q chunks idx ) { T x → x F → # s 0 }
+    ? != # i slot 0 { ( vec_free [u] body ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    : *ChunkBox nb # *ChunkBox ( nurl_alloc Z ChunkBox )
+    = . nb v body
+    : b _w ( vec_set [s] . q chunks idx # s nb )
+    = . q got + . q got 1
+    = . q bytes + . q bytes blen
+    ? < . q got . q cnt { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    // complete: splice in index order, drop the partial
+    : ( Vec u ) whole ( vec_with_cap [u] . q bytes )
+    : ~ i a 0
+    ~ < a cnt {
+        : s cp ?? ( vec_get [s] . q chunks a ) { T x → x F → # s 0 }
+        ? != # i cp 0 {
+            : *ChunkBox cbx # *ChunkBox cp
+            ( vec_extend [u] whole . cbx v )
+        } {}
+        = a + a 1
+    }
+    // remove q from the partials list, then free it
+    : i pn2 ( vec_len [s] . p partials )
+    : ~ i r 0
+    : ~ i found -1
+    ~ & < r pn2 < found 0 {
+        : s c2 ?? ( vec_get [s] . p partials r ) { T x → x F → # s 0 }
+        ? == c2 qp { = found r } {}
+        = r + r 1
+    }
+    ? >= found 0 { ( vec_remove [s] . p partials found ) } {}
+    ( __partial_free q )
+    ^ @ ?( Vec u ) { T whole }
 }
 
 // Receive one datagram and process it. Returns app data (with the sender's
@@ -348,6 +573,14 @@ $ `stdlib/net/session.nu`
 }
 
 @ __peer_free * PeerState p → v {
+    : i qn ( vec_len [s] . p partials )
+    : ~ i qk 0
+    ~ < qk qn {
+        : s qp ?? ( vec_get [s] . p partials qk ) { T x → x F → # s 0 }
+        ? != # i qp 0 { ( __partial_free # *Partial qp ) } {}
+        = qk + qk 1
+    }
+    ( vec_free [s] . p partials )
     ( vec_free [u] . p pubkey )
     ( string_free . p ehost )
     ? != # i . p hs 0 { ( noise_free # *Handshake . p hs ) } {}

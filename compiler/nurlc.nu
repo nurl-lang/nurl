@@ -16594,7 +16594,70 @@
                 ( nurl_set_last_type dt )
                 ^ res
             }
-            { ? & src_ptr dst_ptr
+            {  // Pointer → NAMED STRUCT, before the chain below: meaningful
+                // exactly when the struct's field 0 IS a pointer (the
+                // handle-wrapper shape — %Vec, %String); then the cast is the
+                // inverse of reading the handle out: bitcast to f0's type,
+                // insertvalue at 0. Any other field-0 shape has no honest
+                // packing for an address — and this case used to fall
+                // through the chain and hand `val` (a ptr) straight to a
+                // struct-typed use: IR clang rejects, met by the USER as
+                // `%rN defined with type ptr but expected %Vec__u8`, far
+                // from the cast that caused it.
+                ? & & src_ptr ! dst_ptr == ( nurl_str_get dt 0 ) 37
+                { : s sname_p ( nurl_str_slice dt 1 - dtlen 1 )
+                    : s f0_typ ( nurl_sym_get syms ( nurl_str_cat3 sname_p `__idx_0` `__type` ) )
+                    : b f0p_ptr & != 0 ( nurl_str_len f0_typ )
+                    == ( nurl_str_get f0_typ - ( nurl_str_len f0_typ ) 1 ) 42
+                    ? ! f0p_ptr
+                    { ( die lex ( nurl_str_cat ( nurl_str_cat3
+                        `cannot cast a pointer to '` dt
+                        `' — that type's first field is not a pointer, so there is no slot the address could honestly fill.` )
+                        ` A handle type like ( Vec u ) wraps a pointer and CAN be rebuilt this way; for anything else construct the value with '@ T { ... }'.` ) ) }
+                    {}
+                    : s pv_p ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print pv_p )
+                    ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty st ) )
+                    ( nurl_print ` ` ) ( nurl_print val )
+                    ( nurl_print ` to ` ) ( nurl_print ( nurl_llty f0_typ ) ) ( nurl_print `\n` )
+                    ( nurl_print `  ` ) ( nurl_print res )
+                    ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty dt ) )
+                    ( nurl_print ` undef, ` ) ( nurl_print ( nurl_llty f0_typ ) )
+                    ( nurl_print ` ` ) ( nurl_print pv_p ) ( nurl_print `, 0\n` )
+                    ( nurl_set_last_type dt )
+                    ^ res
+                }
+                {}
+                // The INVERSE: a named handle-wrapper struct → pointer.
+                // `# s v` on a Vec/String reads the handle out — extract
+                // field 0, bitcast to the destination. Same rule as above:
+                // meaningful only when field 0 IS a pointer; and the same
+                // hole: this used to fall through with no conversion and
+                // die in clang as invalid IR, not here as a diagnostic.
+                : b src_named_struct & > stlen 1 == ( nurl_str_get st 0 ) 37
+                ? & & dst_ptr ! src_ptr src_named_struct
+                { : s sname_x ( nurl_str_slice st 1 - stlen 1 )
+                    : s f0_tyx ( nurl_sym_get syms ( nurl_str_cat3 sname_x `__idx_0` `__type` ) )
+                    : b f0x_ptr & != 0 ( nurl_str_len f0_tyx )
+                    == ( nurl_str_get f0_tyx - ( nurl_str_len f0_tyx ) 1 ) 42
+                    ? f0x_ptr
+                    { : s xv_p ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print xv_p )
+                        ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty st ) )
+                        ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+                        ( nurl_print `  ` ) ( nurl_print res )
+                        ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty f0_tyx ) )
+                        ( nurl_print ` ` ) ( nurl_print xv_p )
+                        ( nurl_print ` to ` ) ( nurl_print ( nurl_llty dt ) ) ( nurl_print `\n` )
+                        ( nurl_set_last_type dt )
+                        ^ res
+                    }
+                    { ( die lex ( nurl_str_cat3
+                        `cannot cast '` st
+                        `' to a pointer — that type's first field is not a pointer, so there is no address to read out of it. Handle types like ( Vec u ) carry a pointer as field 0 and CAN be read this way.` ) ) }
+                }
+                {}
+                ? & src_ptr dst_ptr
                 {  // pointer → pointer: bitcast
                     ( nurl_print `  ` ) ( nurl_print res )
                     ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty st ) )

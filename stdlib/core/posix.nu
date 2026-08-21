@@ -87,41 +87,55 @@ $ `stdlib/core/cell.nu`
 
 // ── Process lifecycle ─────────────────────────────────────────────
 
+// Return and parameter widths on this page are the C prototypes',
+// stated exactly: pid_t, an fd and every plain `int` are 32-bit, and a
+// declaration that says `i` (i64) for them reads the register WIDER
+// than the callee wrote it. That is not pedantry: a C function
+// returning `int -1` typically zeroes the upper half of the register
+// (`movl $-1, %eax`), so the misdeclared value arrives as 4294967295,
+// `< 0` answers no, and every error return in this file silently turns
+// into a large success. On the unikernel — where nosys.c refuses all
+// of these with -1 — that misread every refusal as success and hung
+// process_run inside a machine with no processes; the hosted build has
+// the same hole on any path where these calls actually fail.
+// `→ i32` makes nurlc emit the matching LLVM declare and sign-extend
+// the result, which is the same contract `open` below always stated.
+
 // fork(2): returns 0 in child, child pid > 0 in parent, -1 on error.
 // errno is set on -1.
-& `c` @ fork → i
+& `c` @ fork → i32
 
 // execvp(3): replace the process image. Returns -1 (and sets errno)
 // only on failure — on success it does not return.
-& `c` @ execvp s file *u argv → i
+& `c` @ execvp s file *u argv → i32
 
 // _exit(2): immediate process termination, no atexit handlers.
-& `c` @ _exit i status → v
+& `c` @ _exit i32 status → v
 
 // waitpid(2): block (options = 0) or poll (options = WNOHANG) for a
 // child. Writes the raw status through `*status_buf`. Returns child
 // pid on success, 0 on WNOHANG-with-no-state-change, -1 on error.
-& `c` @ waitpid i pid *u status_buf i options → i
+& `c` @ waitpid i32 pid *u status_buf i32 options → i32
 
 // kill(2): send `sig` to `pid`. 0-signal probes for existence.
 // Returns 0 on success, -1 with errno on failure.
-& `c` @ kill i pid i sig → i
+& `c` @ kill i32 pid i32 sig → i32
 
 // getpid(2): current process id.
-& `c` @ getpid → i
+& `c` @ getpid → i32
 
 // ── File descriptor primitives ────────────────────────────────────
 
 // pipe(2): writes the read end into `fds[0]` and the write end into
 // `fds[1]` (int-sized slots in caller-owned buffer of >= 2 ints).
-& `c` @ pipe *u fds → i
+& `c` @ pipe *u fds → i32
 
 // dup2(2): duplicate `oldfd` onto `newfd`, closing `newfd` first if
 // it was open. Returns `newfd` on success, -1 with errno on failure.
-& `c` @ dup2 i oldfd i newfd → i
+& `c` @ dup2 i32 oldfd i32 newfd → i32
 
 // close(2): release a file descriptor. Returns 0 / -1.
-& `c` @ close i fd → i
+& `c` @ close i32 fd → i32
 
 // fcntl(2) — only the 3-arg integer form (used for F_GETFL/F_SETFL/
 // F_GETFD/F_SETFD with O_NONBLOCK / FD_CLOEXEC). Returns int.
@@ -139,13 +153,15 @@ $ `stdlib/core/cell.nu`
 // past execvp and the parent's read waited for an EOF that could not
 // come. Sockets stayed blocking for the same reason (__set_nonblock is
 // the same call), which stalled every async server on a worker thread.
-& `c` @ fcntl i fd i cmd ... → i
+& `c` @ fcntl i32 fd i32 cmd ... → i32
 
 // read(2) / write(2): bytes through `*u` buffer. Return count
-// (positive), 0 (EOF on read), -1 with errno on error.
-& `c` @ read i fd *u buf i n → i
+// (positive), 0 (EOF on read), -1 with errno on error. The count is
+// ssize_t — genuinely 64-bit — so the return stays `i`; only the fd
+// is an int.
+& `c` @ read i32 fd *u buf i n → i
 
-& `c` @ write i fd *u buf i n → i
+& `c` @ write i32 fd *u buf i n → i
 
 // Buffered binary read from stdin (NURL runtime `fread(stdin)`). Shares
 // nurl_read_line's stdio buffer so framed stdio protocols (LSP/DAP) can
@@ -205,7 +221,7 @@ $ `stdlib/core/cell.nu`
 // SIG_DFL (from posix_const) or a NURL closure's fn pointer. Caveat:
 // signal(2)'s semantics are platform-tweaky; for robust handling use
 // sigaction(2) once we expose it.
-& `c` @ signal i signum *u handler → *u
+& `c` @ signal i32 signum *u handler → *u
 
 // ── poll(2) ────────────────────────────────────────────────────────
 
@@ -213,7 +229,7 @@ $ `stdlib/core/cell.nu`
 // timeout_ms elapses (-1 = wait forever, 0 = immediate poll).
 // Returns number of fds with revents set, 0 on timeout, -1 on error.
 // `fds` is a caller-owned `struct pollfd` array of `nfds` entries.
-& `c` @ poll *u fds i nfds i timeout_ms → i
+& `c` @ poll *u fds i nfds i32 timeout_ms → i32
 
 // ── struct pollfd helpers ──────────────────────────────────────────
 //

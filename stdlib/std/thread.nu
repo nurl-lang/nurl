@@ -69,35 +69,35 @@ $ `stdlib/core/marker.nu`
 // a held mutex) or an OOM the caller can't recover from. thread_spawn
 // IS error-checking because pthread_create's EAGAIN ("would exceed
 // thread cap") is a real recoverable condition.
-& `c` @ pthread_mutex_init *u m *u attr → i
+& `c` @ pthread_mutex_init *u m *u attr → i32
 
-& `c` @ pthread_mutex_lock *u m → i
+& `c` @ pthread_mutex_lock *u m → i32
 
-& `c` @ pthread_mutex_unlock *u m → i
+& `c` @ pthread_mutex_unlock *u m → i32
 
-& `c` @ pthread_mutex_destroy *u m → i
+& `c` @ pthread_mutex_destroy *u m → i32
 
-& `c` @ pthread_cond_init *u cv *u attr → i
+& `c` @ pthread_cond_init *u cv *u attr → i32
 
-& `c` @ pthread_cond_wait *u cv *u m → i
+& `c` @ pthread_cond_wait *u cv *u m → i32
 
-& `c` @ pthread_cond_signal *u cv → i
+& `c` @ pthread_cond_signal *u cv → i32
 
-& `c` @ pthread_cond_broadcast *u cv → i
+& `c` @ pthread_cond_broadcast *u cv → i32
 
-& `c` @ pthread_cond_destroy *u cv → i
+& `c` @ pthread_cond_destroy *u cv → i32
 
 // pthread_create's start_routine signature is `void *(*)(void *)`.
 // NURL closures compile to `void(*)(void *env)` — same arg shape; the
 // return is discarded at the OS layer because the runtime trampolines
 // below always pass NULL for the join's value pointer. ABI-compatible
 // on every System V target (x86_64 / aarch64 / riscv64).
-& `c` @ pthread_create *u t *u attr *u start *u arg → i
+& `c` @ pthread_create *u t *u attr *u start *u arg → i32
 
 // pthread_t is by-value and 16-byte struct on winpthreads — NURL has
 // no struct-by-value FFI. These two trampolines (runtime.c §19) take
 // pthread_t* and dereference inside C.
-& `c` @ nurl_pthread_join_ptr *u t → i
+& `c` @ nurl_pthread_join_ptr *u t → i32
 
 & `c` @ nurl_pthread_detach_ptr *u t → v
 

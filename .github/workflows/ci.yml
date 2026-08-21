@@ -364,6 +364,12 @@ jobs:
         # otherwise — except for the TSC frequency, which no leaf
         # reports there, so run_qemu.sh states it on the kernel command
         # line the way the plan says the host states the epoch.
+        # NURL_ZIG: swarm_gate.sh's wasm half has the coordinator
+        # compile a kernel through wasmbuilder, which resolves zig from
+        # this variable — without it the wasm half SKIPs (loudly) and
+        # B10's in-process engine would go ungated.
+        env:
+          NURL_ZIG: /opt/zig/zig
         run: ./unikernel/run_qemu_tests.sh
 
 

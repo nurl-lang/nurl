@@ -57,6 +57,7 @@ $ `stdlib/net/tcpseg.nu`
 $ `stdlib/net/tcp.nu`
 $ `stdlib/net/tcpstack.nu`
 $ `stdlib/net/socket.nu`
+$ `stdlib/net/dnsclient.nu`
 
 // The interface, whichever one this build has: netdev_virtio.nu in the
 // guest, netdev_none.nu everywhere else. Two implementations of three
@@ -109,6 +110,8 @@ $ `stdlib/net/socket.nu`
     ( Vec i ) w_wr
     ( Vec i ) w_coro
     i has_device
+    i dns_ip  // the resolver: dns= cmdline key, else DHCP option 6; 0 = none
+    i dns_port  // 53 unless dns=ip:port said otherwise
 }
 
 : ~ i g_shim 0
@@ -146,6 +149,10 @@ $ `stdlib/net/socket.nu`
     = . sh w_wr ( vec_new [i] )
     = . sh w_coro ( vec_new [i] )
     = . sh has_device have
+    // nurl_alloc Z is sizeof-and-malloc, NOT calloc — a recycled block
+    // arrives holding the last one's bytes, so every field is written.
+    = . sh dns_ip 0
+    = . sh dns_port 53
     // An interface knows its own MAC. Without this the first connect
     // to 127.0.0.1 ARPs for itself and waits a retransmit timeout for
     // the answer.
@@ -157,8 +164,46 @@ $ `stdlib/net/socket.nu`
     // 0.0.0.0 checksums every segment against the wrong pseudo-header
     // and goes unanswered.
     ? != have 0 { ( __dhcp_configure sh ) } {}
+    // `dns=ip[:port]` on the kernel command line overrides whatever
+    // DHCP said — the same contract as wallclock=: the host states a
+    // fact the guest cannot discover. Stated but unparseable is a
+    // configuration error and panics like a bad wallclock would,
+    // rather than quietly resolving against the wrong server.
+    ( __dns_cmdline_override sh )
     ? != have 0 { ( __start_poller ) } {}
     ^ sh
+}
+
+& `c` @ getenv s name → s
+
+@ __dns_cmdline_override * Shim sh → v {
+    : s v ( getenv `dns` )
+    ? == # i v 0 { ^ } {}
+    : i n ( nurl_str_len v )
+    : ~ i colon -1
+    : ~ i k 0
+    ~ < k n { ? == ( nurl_str_get v k ) 58 { = colon k } {} = k + k 1 }
+    : ~ s ip_part v
+    : ~ i port 53
+    ? >= colon 0 {
+        : s ipbuf ( nurl_alloc + colon 1 )
+        ( nurl_memcpy ipbuf v colon )
+        : *u zp # *u + # i ipbuf colon
+        = . zp 0 # u 0
+        = ip_part ipbuf
+        = port ( nurl_str_to_int # s + # i v + colon 1 )
+    } {}
+    : ~ i ok 0
+    ?? ( ipv4_parse ip_part ) {
+        T a → { ? && > port 0 < port 65536 { = . sh dns_ip a = . sh dns_port port = ok 1 } {} }
+        F → {}
+    }
+    ? >= colon 0 { ( nurl_free ip_part ) } {}
+    ? == ok 0 {
+        ( nurl_print `nurl: dns= on the kernel command line is not ip[:port]\n` )
+        ( nurl_flush_stdout )
+        ( nurl_exit 127 )
+    } {}
 }
 
 // A device needs somebody to ask it. Every socket wait drives the
@@ -176,9 +221,21 @@ $ `stdlib/net/socket.nu`
 // a device — a loopback-only program keeps the deadlock detector's proof
 // intact, because for it "nothing runnable, no timer" really is the end.
 @ __poll_forever → v {
+    // Adaptive cadence: 1 ms while traffic moves, backing off to
+    // 16 ms when nothing has for a while. The backoff is what lets
+    // the tickless idle actually idle — a fixed 1 ms poll is a
+    // thousand wakeups a second whether or not a frame has arrived
+    // all day — and the price is bounded and stated: the FIRST frame
+    // after a quiet spell waits at most 16 ms before the machine
+    // notices; everything after it is back at 1 ms. A parked TCP
+    // handshake retransmits in seconds, so 16 ms is noise there.
+    : ~ i cadence 1
     ~ T {
-        : i _m ( __drive ( __ms ) )
-        ( nurl_fiber_sleep_ms 1 )
+        : i moved ( __drive ( __ms ) )
+        ? != moved 0 { = cadence 1 } {
+            ? < cadence 16 { = cadence * cadence 2 } {}
+        }
+        ( nurl_fiber_sleep_ms cadence )
     }
 }
 
@@ -205,6 +262,10 @@ $ `stdlib/net/socket.nu`
         ( stack_set_address net . c our_ip . c subnet . c router )
         ( sock_set_our_ip . sh st . c our_ip )
         ( sock_seed_addr . sh st . c our_ip ( __ms ) )
+        // Option 6 — the resolver this network says to use. Kept on
+        // the shim: name resolution is a socket-layer service here,
+        // exactly where getaddrinfo keeps it on a hosted machine.
+        = . sh dns_ip . c dns
     } {}
     ( dhcp_client_free c )
 }
@@ -911,13 +972,114 @@ $ `stdlib/net/socket.nu`
     ^ F
 }
 
+// The query id must be unpredictable — it is the only thing an
+// off-path attacker has to guess to poison an answer — and this
+// machine's entropy rule is "a real source or a panic", so the id is
+// as good as the machine's RDRAND / virtio-rng.
+& `c` @ nurl_rand_fill *u buf i n → i
+
+// Ask the DHCP-announced resolver for `host`'s A records over UDP.
+// Returns the "ip\n"-joined list the resolve ABI speaks, or an empty
+// string when there is no resolver, no answer inside the deadline, or
+// the response refuses/garbles (net/dnsclient.nu owns that judgement —
+// including that a TC-bit answer is an error, not a TCP retry).
+// Two attempts with a fresh id each: one lost datagram should not turn
+// a resolvable name into a refusal, but this is a stub resolver, not a
+// retry ladder — the second timeout is the answer.
+@ __dns_query * Shim sh s host → s {
+    : i dns . sh dns_ip
+    ? == dns 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : *SockTab st . sh st
+    : i fd ( sock_udp_bind st 0 0 )
+    ? < fd 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s out ( nurl_str_cat `` `` )
+    : ~ i attempt 0
+    : ~ b answered F
+    ~ && < attempt 2 ! answered {
+        : s idb ( nurl_alloc 2 )
+        : i _r ( nurl_rand_fill # *u idb 2 )
+        : *u up # *u idb
+        : i id | << & # i . up 0 255 8 & # i . up 1 255
+        ( nurl_free idb )
+        ?? ( dns_build_query id host ) {
+            F e → { = attempt 2 }
+            T q → {
+                : i _s ( sock_udp_send_to st fd dns . sh dns_port q 0 ( vec_len [u] q ) ( __ms ) )
+                ( vec_free [u] q )
+                ? < _s 0 {
+                    // The first send can fail with `again` while the
+                    // gateway's ARP entry is still resolving — nothing
+                    // will answer a query that never left, so do not
+                    // spend the listen window on it: pause a beat and
+                    // let the next attempt resend.
+                    : i _z ( nurl_fiber_sleep_ms 100 )
+                } {
+                    // recv first, wait on `again` — the same discipline as
+                    // __udp_recv, so the answer that raced ahead of the
+                    // first wait is picked up rather than waited past.
+                    : i deadline + ( __ms ) 1500
+                    : ~ b waiting T
+                    ~ waiting {
+                        : ( Vec u ) resp ( vec_new [u] )
+                        : i got ( sock_udp_recv_from st fd resp 512 )
+                        ? > got 0 {
+                            ?? ( dns_parse_a resp id host ) {
+                                T ips → {
+                                    : ~ i k 0
+                                    : i n ( vec_len [i] ips )
+                                    ~ < k n {
+                                        : String one ( ipv4_str ?? ( vec_get [i] ips k ) { T x → x F → 0 } )
+                                        // reassigning a tracked owned `s`
+                                        // already drops the superseded
+                                        // buffer — a manual free here is
+                                        // the documented double-free trap
+                                        = out ( nurl_str_cat3 out ( string_data one ) `\n` )
+                                        ( string_free one )
+                                        = k + k 1
+                                    }
+                                    ( vec_free [i] ips )
+                                    = answered T
+                                    = waiting F
+                                }
+                                F e → {
+                                    // a wrong-id datagram may be a stale
+                                    // answer racing a retry — keep
+                                    // listening; anything else ends this
+                                    // attempt
+                                    ? == ( nurl_str_eq ( dns_err_name e ) `wrong-id` ) 0 { = waiting F } {}
+                                }
+                            }
+                        } {}
+                        ( vec_free [u] resp )
+                        ? && waiting ! answered {
+                            : i left - deadline ( __ms )
+                            ? <= left 0 { = waiting F } {
+                                ? != ( __wait fd 0 left ) 1 { = waiting F } {}
+                            }
+                        } {}
+                    }
+                }
+            }
+        }
+        = attempt + attempt 1
+    }
+    ( sock_close st fd ( __ms ) )
+    ^ out
+}
+
 @ nurl_dns_resolve s host → s {
     ? ( __dns_is_local host ) { ^ ( nurl_str_cat `127.0.0.1` `\n` ) } {}
     ? ( __dns_is_v6_literal host ) { ^ ( nurl_str_cat host `\n` ) } {}
     ?? ( ipv4_parse host ) {
-        T _a → ( nurl_str_cat host `\n` )
-        F → ( nurl_str_cat `` `` )
+        T _a → { ^ ( nurl_str_cat host `\n` ) }
+        F → {}
     }
+    // A NAME, on a machine with an interface: ask the resolver the
+    // network announced (DHCP option 6) — net/dnsclient over the same
+    // UDP sockets everything else uses. No resolver, no answer, or a
+    // refused response all come back empty, which std/dns.nu turns
+    // into the error the caller already handles.
+    ^ ( __dns_query ( __shim ) host )
 }
 
 @ nurl_dns_resolve_port s host i port → s {

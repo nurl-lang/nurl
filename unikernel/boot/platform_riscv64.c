@@ -680,8 +680,17 @@ void kmain(unsigned long dtb) {
     time_init();
     nl_tls_init_guest();
 
-    no_argv[0] = 0;
-    nl_environ = no_argv;
+    /* Plan B7: getenv reads the cmdline's key=value pairs (args="…"
+     * stays argv's) — boot/cmdenv.c, shared with the other boards. */
+    {
+        static char env_buf[1024];
+        static char *envv[33];
+        extern int nl_env_from_cmdline(const char *, char *,
+                                       unsigned long, char **, int);
+        nl_env_from_cmdline(cmdline, env_buf, sizeof env_buf, envv, 32);
+        nl_environ = envv;
+        (void)no_argv;
+    }
 
     int argc = build_argv(cmdline);
     exit(main(argc, guest_argv));

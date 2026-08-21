@@ -247,6 +247,12 @@ rather than guessed:
 | `wallclock=N` | the boot epoch, seconds | whenever X.509 validity is checked: TLS client verification, and a server whose certificate has dates |
 | `virtio_mmio.device=…` | where the devices are | appended by the hypervisor; the guest parses it, and a guest with no match reports "no device" rather than probing blindly |
 | `args="…"` | the program's argv | when the program takes arguments. ONE key, quoted, because QEMU appends its own entries after `-append` and a program that read the tail of the line would be handed them |
+| `dns=ip[:port]` | the resolver | when a name must resolve and DHCP's option 6 is absent or wrong; stated-but-unparseable exits 127 rather than resolving against a guessed server |
+
+Every other `key=value` token on the line is the guest's ENVIRONMENT:
+`getenv("key")` answers it (boot/cmdenv.c; plan B7 always promised
+this and the environment was left empty). `args="…"` stays argv's,
+and a bare word is not an assignment.
 
 **How small it goes.** Measured, by asking QEMU for less and less until
 the answer stopped coming:
@@ -276,12 +282,14 @@ on somebody's Firecracker host.
 | | |
 |---|---|
 | vCPUs | one. Fibers are cooperative; there is no preemption and no SMP |
+| idle | `hlt`, woken by the local-APIC timer — TSC-deadline mode where the CPU has it, a TSC-calibrated one-shot where it does not (TCG). Devices stay POLLED (the B0 decision stands; the interrupt exists only to end a sleep, so deadlock stays decidable), and the poller's cadence backs off 1 → 16 ms when no traffic moves — the first frame after a quiet spell waits at most 16 ms. Measured on an idle joined worker appliance under TCG: a full host core before, 5.6 % after. `demos/idle.nu` gates that the machine really halts |
 | memory | whatever the hypervisor reports; 256 MiB is what the gates run with, 4 MiB is what a server needs (see above) |
 | MTU | 1500. Frames are refused above 2036 bytes rather than truncated |
-| IP fragments | dropped, counted, never reassembled. A datagram over the MTU does not arrive |
+| IP fragments | dropped, counted, never reassembled. A datagram over the MTU does not arrive — and the direct leg no longer needs one to: `net/securedgram` chunks its messages under the MTU itself (reassembled above the AEAD), which is what lifted plan B10's "worker pins relay mode" restriction. Chunking removes the MTU limit, not packet loss: with no ARQ one lost chunk loses the message, so the direct leg caps a message at 256 KiB and `net/transport` routes anything larger over the relay leg, where TCP owns segmentation and retransmission |
 | open files | 16, from the baked-in archive, read-only |
+| TCP | immediate ACKs, no Nagle, fixed 64 KB window (the peer's window scaling is honored), slow start + fast retransmit; **no SACK, no delayed ACK, no cwnd beyond slow start** — and that list is now MEASURED as a non-limit, not assumed: a 4 MiB bulk transfer over virtio moves 1.56 MiB/s under TCG with the guest CPU at 93 % of a core — the interpreter is the ceiling, while the 64 KB window at sub-millisecond RTT allows two orders of magnitude more. SACK pays only on lossy paths, which neither virtio nor this gate's topology has; it returns when a real deployment on one measures a need |
 | sockets | 1024 open at once (`sock_set_max_fds` to change it); past that `accept` refuses and leaves the connection in the backlog rather than the machine running out. Ephemeral ports are per-protocol; TCP and UDP have separate spaces |
-| name resolution | literals and `localhost`. Anything else is refused, not guessed |
+| name resolution | literals, `localhost`, and A records from the resolver the network announced — DHCP option 6, or a `dns=ip[:port]` cmdline key (the same host-states-a-fact contract as `wallclock=`; unparseable = exit 127). The query rides `stdlib/net/dnsclient.nu` over the pure UDP stack: stub-resolver scope, so a TC-bit answer is an error (no TCP retry), CNAMEs are followed only inside the one response, and hostile compression pointers run out of hop budget rather than time. No resolver → a name is refused, not guessed |
 | processes, signals | none. `fork`/`exec` report unsupported; there is one address space and nothing to fork |
 | GPU | none in a microVM; a swarm node advertises CPU-wasm capability only |
 
@@ -294,13 +302,14 @@ unikernel/run_qemu.sh myserver.elf -t 60 -- \
     -device virtio-net-device,netdev=n0
 ```
 
-Firecracker should take the same ELF as `--kernel-image` with `boot-args`
+Firecracker takes the same ELF as `--kernel-image` with `boot-args`
 carrying the same keys — PVH is its boot protocol too, and the exit
 sentinel exists because Firecracker has no channel for an exit code.
-**Not gated, and therefore not claimed**: every measurement and every
-gate in this directory is QEMU microvm. The plan has Firecracker as a
-later step, and until a job boots one, treat the paragraph above as a
-design intent rather than a tested path.
+How much of that is gated is stated in the hypervisor section below:
+the PVH note's structure always, a real cloud-hypervisor/Firecracker
+boot wherever `/dev/kvm` is usable (CI's runner is), and **every
+MEASUREMENT in this file is QEMU microvm** — the other two boot the
+image, but no throughput or boot-time figure is claimed for them.
 
 **The threat model, stated.** The hypervisor and whoever writes the
 kernel command line are TRUSTED — they choose the image, its
@@ -351,6 +360,27 @@ validity is checked against arrives on the kernel command line, and the
 bytes travel over the pure TCP stack and the virtio-net driver. The
 handshake is `stdlib/std/tls.nu` — pure NURL, no libssl, which is why
 it links here at all.
+
+## The endpoint milestone: a swarm compute appliance
+
+The plan's acceptance test (B10) was a unikernel that boots straight
+into a running **swarm-mcp** node, and `unikernel/tests/swarm_gate.sh`
+now runs it on every commit. The SAME `packages/swarm-mcp` source
+builds both ways: hosted (a relay and the MCP control surface on the
+host) and as a guest image. The guest boots, `--connect`s OUT through
+the pure TCP stack and virtio-net, appears in `swarm_census`, and
+completes both kernel flavours end-to-end — an expression task
+(sum of x² over [0,1000) = 332833500) and a **compiled-wasm task**:
+the coordinator compiles the NURL kernel to wasm32-wasi on the host
+and the guest executes the chunks **in-process on the pure-NURL
+wasmtime**, because a machine with no processes cannot shell out to a
+runtime and now does not need to.
+
+Measured on this gate (TCG, an interpreter floor): census join 6 s
+after launch, cold start to the first completed tool answer 9 s. A
+guest advertises CPU-wasm capability only; a GPU request answers
+exactly like a hosted machine with no NVIDIA driver, because the
+image links the same `cuda_stubs.c` that nurl.sh uses there.
 
 ## Which hypervisors, and what the artifact actually is
 

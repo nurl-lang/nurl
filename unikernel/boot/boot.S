@@ -328,12 +328,39 @@ isr_common:
     pushq   %r14
     pushq   %r15
 
-    movq    %cr2, %rsi              /* the faulting address, if there is one */
+    /* Two kinds of vector share these stubs now. Below 32 is a CPU
+     * exception: report and die, as always. 32 and up is an INTERRUPT
+     * — the tickless idle's timer — and an interrupt RESUMES: ack it
+     * in C, restore every register, drop the vector and error slots,
+     * iretq. The vector sits above the 15 saved GPRs. */
+    movq    120(%rsp), %rax         /* the pushed vector (15 * 8 bytes up) */
+    cmpq    $32, %rax
+    jb      1f
+    movq    %rax, %rdi
+    call    pf_irq                  /* EOI; returns */
+    popq    %r15
+    popq    %r14
+    popq    %r13
+    popq    %r12
+    popq    %r11
+    popq    %r10
+    popq    %r9
+    popq    %r8
+    popq    %rbp
+    popq    %rdi
+    popq    %rsi
+    popq    %rdx
+    popq    %rcx
+    popq    %rbx
+    popq    %rax
+    addq    $16, %rsp               /* the vector and the error code */
+    iretq
+1:  movq    %cr2, %rsi              /* the faulting address, if there is one */
     movq    %rsp, %rdi              /* the frame we just built */
     call    pf_exception            /* does not return */
-1:  cli
+2:  cli
     hlt
-    jmp     1b
+    jmp     2b
 
     .section .data
     .align 16

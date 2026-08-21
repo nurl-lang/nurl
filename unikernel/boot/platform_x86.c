@@ -793,6 +793,121 @@ int clock_gettime(int clk, void *tsp) {
     return 0;
 }
 
+/* ── the tickless idle ────────────────────────────────────────────
+ *
+ * "Fully polling" (plan B0) turned out to mean an IDLE worker
+ * appliance burning a full host core: every sleep in the machine
+ * funnels through nanosleep, and nanosleep spun on `pause` until the
+ * TSC caught up — measured at 1002/1000 ticks of one core over an
+ * idle 10 s. The fix is the smallest interrupt the design allows: the
+ * local APIC timer in TSC-deadline mode, one vector (32), one ISR
+ * that acknowledges and resumes, and `sti; hlt` in the one place the
+ * machine waits. Devices stay POLLED — the B0 decision stands; the
+ * only thing an interrupt is used for is ending a sleep, so the
+ * deadlock-decidability story is untouched (a sleep always has a
+ * deadline, and the detector already refuses an unbounded idle).
+ *
+ * sti;hlt is the load-bearing pair: sti's one-instruction shadow
+ * means an interrupt cannot slip in between the two and leave hlt
+ * sleeping past its own wakeup.
+ */
+
+static inline u64 rdmsr(u32 msr) {
+    u32 lo, hi;
+    __asm__ __volatile__("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((u64)hi << 32) | lo;
+}
+
+static inline void wrmsr(u32 msr, u64 v) {
+    __asm__ __volatile__("wrmsr" : : "c"(msr),
+                         "a"((u32)v), "d"((u32)(v >> 32)));
+}
+
+#define MSR_APIC_BASE    0x1Bu
+#define MSR_X2_SVR       0x80Fu
+#define MSR_X2_EOI       0x80Bu
+#define MSR_X2_LVT_TIMER 0x832u
+#define MSR_TSC_DEADLINE 0x6E0u
+#define IDLE_VECTOR      32u
+
+static volatile u32 *lapic_mmio;   /* xAPIC; null when x2APIC or absent */
+static int lapic_x2;
+static int lapic_deadline_ok;      /* CPUID says TSC-deadline exists   */
+static u64 idle_hlt_count;
+
+static void lapic_wr(u32 reg, u32 v) {
+    if (lapic_x2) wrmsr(0x800u + (reg >> 4), v);
+    else if (lapic_mmio) lapic_mmio[reg >> 2] = v;
+}
+
+static u32 lapic_rd(u32 reg) {
+    if (lapic_x2) return (u32)rdmsr(0x800u + (reg >> 4));
+    if (lapic_mmio) return lapic_mmio[reg >> 2];
+    return 0;
+}
+
+void pf_irq(u64 vec);
+void pf_irq(u64 vec) {
+    (void)vec;                     /* only IDLE_VECTOR is ever armed */
+    if (lapic_x2) wrmsr(MSR_X2_EOI, 0);
+    else if (lapic_mmio) lapic_mmio[0xB0 >> 2] = 0;
+}
+
+void lapic_init(void);
+void lapic_init(void) {
+    u32 a, b, c, d;
+    cpuid(1, &a, &b, &c, &d);
+    if (!(d & (1u << 9))) return;             /* no local APIC at all */
+    lapic_deadline_ok = (c >> 24) & 1;        /* TSC-deadline timer   */
+    /* The legacy PICs first: on real hardware (the Multiboot2 path)
+     * they power up delivering IRQs at vectors 8–15 — ON TOP of the
+     * CPU exceptions — the moment IF opens. Mask everything; the only
+     * interrupt this machine wants is its own timer. Harmless where
+     * no PIC exists. */
+    __asm__ __volatile__("outb %%al, $0xA1" : : "a"((unsigned char)0xFF));
+    __asm__ __volatile__("outb %%al, $0x21" : : "a"((unsigned char)0xFF));
+    u64 base = rdmsr(MSR_APIC_BASE);
+    lapic_x2 = (base >> 10) & 1;
+    if (!lapic_x2)
+        lapic_mmio = (volatile u32 *)(base & 0xFFFFF000ULL);
+    /* Software-enable via the spurious-vector register; 0xFF for the
+     * spurious slot, which this machine never expects to see. */
+    lapic_wr(0xF0, 0x100u | 0xFFu);
+    if (lapic_deadline_ok)
+        lapic_wr(0x320, (2u << 17) | IDLE_VECTOR);   /* TSC-deadline mode */
+}
+
+/* The one-shot fallback's unit: APIC-timer counts per millisecond,
+ * measured against the TSC once, lazily — the TSC frequency is not
+ * known until time_init, which runs after lapic_init. TCG is the
+ * customer: its -cpu max has a local APIC but no TSC-deadline. */
+static u32 apic_counts_per_ms;
+
+static void lapic_calibrate(void) {
+    if (apic_counts_per_ms || !tsc_khz) return;
+    lapic_wr(0x3E0, 0x3);                    /* divide by 16 */
+    lapic_wr(0x320, (1u << 16) | IDLE_VECTOR);   /* masked while measuring */
+    lapic_wr(0x380, 0xFFFFFFFFu);
+    u64 t0 = rdtsc();
+    u64 span = tsc_khz * 10ULL;              /* a 10 ms window */
+    while (rdtsc() - t0 < span) __asm__ __volatile__("pause");
+    u32 used = 0xFFFFFFFFu - lapic_rd(0x390);
+    lapic_wr(0x380, 0);                      /* stop the count */
+    apic_counts_per_ms = used / 10 ? used / 10 : 1;
+}
+
+/* Exposed to NURL for the gate: a machine that claims to idle on hlt
+ * should be able to show it did. */
+long long nurl_idle_hlt_count(void);
+long long nurl_idle_hlt_count(void) { return (long long)idle_hlt_count; }
+
+/* Which idle the machine ended up with, for the gate's diagnostics:
+ * bit 0 = TSC-deadline capable, bit 1 = xAPIC mapped, bit 2 = x2APIC. */
+long long nurl_idle_mode(void);
+long long nurl_idle_mode(void) {
+    return (lapic_x2 ? 4 : 0) | (lapic_mmio ? 2 : 0) | (lapic_deadline_ok ? 1 : 0);
+}
+
 int nanosleep(const void *req, void *rem) {
     const u64 *ts = (const u64 *)req;
     (void)rem;
@@ -800,9 +915,40 @@ int nanosleep(const void *req, void *rem) {
     u64 want = ts[0] * 1000000000ULL + ts[1];
     u64 start = rdtsc();
     u64 ticks = (want / 1000) * (tsc_khz / 1000 ? tsc_khz / 1000 : 1);
-    /* hlt would need a timer interrupt, and v1 has no IDT vectors
-     * wired. Spinning is what "fully polling" costs, and it is bounded
-     * by the deadline the caller asked for. */
+    u64 deadline = start + ticks;
+    if (lapic_deadline_ok && (lapic_mmio || lapic_x2)) {
+        while (rdtsc() < deadline) {
+            wrmsr(MSR_TSC_DEADLINE, deadline);
+            __asm__ __volatile__("sti; hlt; cli");
+            idle_hlt_count++;
+        }
+        return 0;
+    }
+    if (lapic_mmio || lapic_x2) {
+        /* No TSC-deadline (TCG): the classic one-shot, in units the
+         * calibration measured. Undershoot is fine — the loop re-arms
+         * for the remainder; an interrupt that fires early only costs
+         * one more lap. */
+        lapic_calibrate();
+        if (apic_counts_per_ms) {
+            u64 now;
+            while ((now = rdtsc()) < deadline) {
+                u64 left_ms = (deadline - now) / (tsc_khz ? tsc_khz : 1);
+                u64 counts = (left_ms ? left_ms : 1) * apic_counts_per_ms;
+                if (counts > 0xFFFFFFFFu) counts = 0xFFFFFFFFu;
+                lapic_wr(0x320, IDLE_VECTOR);        /* one-shot, unmasked */
+                lapic_wr(0x3E0, 0x3);
+                lapic_wr(0x380, (u32)counts);
+                __asm__ __volatile__("sti; hlt; cli");
+                idle_hlt_count++;
+                lapic_wr(0x380, 0);                  /* quiet between laps */
+            }
+            return 0;
+        }
+    }
+    /* No usable APIC timer: the polling spin, bounded by the deadline
+     * the caller asked for — the pre-idle behaviour, kept as the
+     * honest fallback rather than a silent requirement. */
     while (rdtsc() - start < ticks) __asm__ __volatile__("pause");
     return 0;
 }
@@ -1162,6 +1308,9 @@ void kmain(unsigned long start_info_paddr) {
      * installed after the first mistake describes nothing. */
     tss_init();
     idt_init();
+    /* The idle timer's half of the IDT: vector 32 resumes instead of
+     * reporting. Init after the IDT so a fault in here is a report. */
+    lapic_init();
 
     /* The screen, and only on real hardware. It comes after the IDT
      * because it is the first code to touch an address the firmware
@@ -1190,8 +1339,18 @@ void kmain(unsigned long start_info_paddr) {
     time_init();
     nl_tls_init_guest();          /* before the first __thread access */
 
-    no_argv[0] = 0;
-    nl_environ = no_argv;         /* an empty environment, terminated */
+    /* Plan B7: getenv reads the cmdline's key=value pairs (args="…"
+     * stays argv's). boot/cmdenv.c owns the grammar for all three
+     * platforms. */
+    {
+        static char env_buf[1024];
+        static char *envv[33];
+        extern int nl_env_from_cmdline(const char *, char *,
+                                       unsigned long, char **, int);
+        nl_env_from_cmdline(cmdline, env_buf, sizeof env_buf, envv, 32);
+        nl_environ = envv;
+        (void)no_argv;
+    }
 
     int argc = build_argv(cmdline);
     exit(main(argc, guest_argv));
