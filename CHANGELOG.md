@@ -8,6 +8,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The unikernel has a disk.** A guest built with
+  `build_unikernel.sh --disk` carries a virtio-blk driver
+  (`unikernel/drivers/virtioblk.nu`), a FAT12/16/32 filesystem
+  (`stdlib/fs/fat.nu` + `fatfs.nu`, read AND write: long names,
+  subdirectories, rename, truncate, readdir, fsync) and a VFS
+  (`unikernel/boot/vfs.c`) that dispatches `open`/`read`/`write`/
+  `lseek`/`unlink`/`rename`/`mkdir`/`truncate`/`fsync`/`access`/
+  `getdents64` to the baked-in archive first and the disk second — so
+  `write_file`, `read_file`, `dir_list` and the rest of `std/fs.nu`
+  work unchanged in a guest. Until now every write was refused with
+  EROFS, which is correct for a machine with nowhere to put the bytes
+  and fatal for anything stateful. New cmdline key `disk=rw|ro|format|
+  off`; `format` writes a filesystem only onto a device that does not
+  mount, so it is not a reformat-on-every-boot switch. Measured cost:
+  **+72 KiB** of image over the same program built without `--disk`.
+  Gated by `unikernel/tests/disk_gate.sh` (guest suite now 29/29) — a
+  `mkfs.vfat` volume mounted, written across three boots, validated by
+  `fsck.vfat`, and read back by `unikernel/tests/fatread.py`, a reader
+  in another language that shares no code with the guest — and by
+  `compiler/tests/fat_fs.nu`, 140 assertions over both layouts.
+
+- **`stdlib/fs/fatfmt.nu` — `mkfs.vfat` for a machine with no host.** A
+  guest handed a blank disk can format it itself. TRAP found writing
+  it: sizing a FAT is a recurrence that does not generally have a fixed
+  point — on a 64 MiB disk it oscillates between 1008 and 1009 sectors
+  for ever — so the criterion has to be safety (grow until the table
+  covers the clusters, then shrink while it still does), not equality.
+  A loop looking for equality returns whichever value it stopped on,
+  and the smaller one is a table one entry short of the volume's own
+  cluster count.
+
+- **`nurlc --keep=a,b`** — extra dead-code-elimination roots. The DCE
+  pass roots at `main`, which is complete for a program whose entry
+  points are all reachable from it and wrong for a module linked with C
+  that calls into it: nothing in the IR recorded that `boot/vfs.c`
+  calls `nurl_disk_open`, so the whole disk layer was dropped, the
+  image linked (the C side's references are weak), booted, and reported
+  "no filesystem" about a filesystem it was carrying.
+
+- **`nurl_native_constant` now answers `O_RDONLY`, `O_WRONLY`,
+  `O_RDWR`, `O_CREAT`, `O_EXCL`, `O_TRUNC` and `O_APPEND`.** They are
+  not the same numbers on every target — `O_CREAT` is `0100` on Linux
+  and `0x0200` on macOS — so NURL code that needed them had no correct
+  way to spell them and had to avoid `open(2)` entirely.
+
 ### Changed
 
 - **`nurl_api`'s exact-module replies never truncate mid-module, and
