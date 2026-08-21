@@ -114,7 +114,7 @@ $ `module.nu`
     ( Vec u ) trapmsg
     i pending_call  // callee set by call/call_indirect for the driver (-1 none)
     i max_depth  // frame-stack depth limit (trap when exceeded)
-    i fuel  // remaining instruction budget (-1 = unlimited)
+    i fuel  // remaining budget in predecoded records (-1 = unlimited)
     b gpu_ok  // env/CUDA host imports enabled (opt-in; default off)
     b cap  // capture stdout/stderr into capout/caperr instead of the host streams
     ( Vec u ) capout  // captured module stdout (raw bytes, NULs preserved)
@@ -148,7 +148,12 @@ $ `module.nu`
 // value stack: the record copies their operands from slots onto it.vs, runs
 // the existing executor arm, and copies the result back — correctness
 // identical, speed unchanged for them, and no duplicated semantics.
-: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots i nparams ( Vec s ) pool }
+// `nparams` / `nresults` are the callee's arity, copied out of the type
+// section once at predecode time. Every call and every return needs them,
+// and re-deriving them per call means walking funcs → typeidx → types and
+// two `vec_len`s inside `module_func_type` — pure repeat work on a value
+// that is fixed for the life of the module.
+: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots i nparams i nresults i code_start i sbase ( Vec i ) kv ( Vec s ) pool }
 
 @ __page → i { ^ 65536 }
 
@@ -715,9 +720,6 @@ $ `module.nu`
 // arguments straight from the caller's slots, so only the outermost frame
 // touches the value stack.
 @ __frame_new * Interp it * Module m i fidx i ret_dst → s {
-    : s fp ?? ( vec_get [s] . m funcs - fidx . m num_import_funcs ) { T x → x F → # s 0 }
-    ? == # i fp 0 { ( __trap it `bad function index` ) ^ # s 0 } {}
-    : *WFunc f # *WFunc fp
     : s pins ( __pfunc_for it m fidx )
     ? == # i pins 0 { ( __trap it `bad function index` ) ^ # s 0 } {}
     : *PFunc pfc # *PFunc pins
@@ -733,18 +735,14 @@ $ `module.nu`
         ( vec_pop [s] . pfc pool )
         ? != # i rf 0 {
             : *Frame rfr # *Frame rf
-            : s rb # s ( vec_data [i] . rfr regs )
+            : *i rb ( vec_data [i] . rfr regs )
             : ~ i zk . pfc nparams
-            ~ < zk . pfc nlocals { ( nurl_poke rb zk 0 ) = zk + zk 1 }
+            ~ < zk . pfc nlocals { = . rb zk 0 = zk + zk 1 }
             = . rfr pos 0
             = . rfr ret_dst ret_dst
             ? < ret_dst 0 {
-                : s tp0 ?? ( vec_get [s] . m types . f typeidx ) { T x → x F → # s 0 }
-                ? != # i tp0 0 {
-                    : *FuncType ft0 # *FuncType tp0
-                    : ~ i pk0 ( vec_len [i] . ft0 params )
-                    ~ > pk0 0 { = pk0 - pk0 1 ( nurl_poke rb pk0 ( __pop it ) ) }
-                } {}
+                : ~ i pk0 . pfc nparams
+                ~ > pk0 0 { = pk0 - pk0 1 = . rb pk0 ( __pop it ) }
             } {}
             ^ rf
         } {}
@@ -752,21 +750,27 @@ $ `module.nu`
     : ( Vec i ) regs ( vec_new [i] )
     : ~ i k 0
     ~ < k . pfc nslots { ( vec_push [i] regs 0 ) = k + k 1 }
+    // The constant pool, once per frame rather than once per execution of
+    // the `i32.const` that used to build it. Recycled frames keep it: no
+    // record writes above the locals except into the operand stack.
+    : i knum ( vec_len [i] . pfc kv )
+    ? > knum 0 {
+        : *i kb ( vec_data [i] regs )
+        : i kbase . pfc nlocals
+        : ~ i kk 0
+        ~ < kk knum { = . kb + kbase kk ?? ( vec_get [i] . pfc kv kk ) { T x → x F → 0 } = kk + kk 1 }
+    } {}
     ? < ret_dst 0 {
         // outermost: pop the arguments off the value stack, last first
-        : s tp ?? ( vec_get [s] . m types . f typeidx ) { T x → x F → # s 0 }
-        ? != # i tp 0 {
-            : *FuncType ft # *FuncType tp
-            : ~ i pk ( vec_len [i] . ft params )
-            ~ > pk 0 { = pk - pk 1 ( vec_set [i] regs pk ( __pop it ) ) }
-        } {}
+        : ~ i pk . pfc nparams
+        ~ > pk 0 { = pk - pk 1 ( vec_set [i] regs pk ( __pop it ) ) }
     } {}
     : *Frame fr # *Frame ( nurl_alloc Z Frame )
     = . fr fidx fidx
     = . fr regs regs
     = . fr pos 0
     = . fr end . pfc count
-    = . fr code_start . f code_start
+    = . fr code_start . pfc code_start
     = . fr pins pins
     = . fr ret_dst ret_dst
     ^ # s fr
@@ -805,6 +809,7 @@ $ `module.nu`
     ( vec_free [s] . pf pool )
     ( vec_free [i] . pf code )
     ( vec_free [i] . pf aux )
+    ( vec_free [i] . pf kv )
     ( nurl_free # s pf )
 }
 
@@ -878,15 +883,15 @@ $ `module.nu`
 // condition slot for br_if (-1 = unconditional). `h` is the height AFTER any
 // condition pop. Fills patch sites for forward targets. Returns nothing; the
 // caller handles liveness.
-@ __emit_branch * PFunc pf ( Vec s ) open i k i cond i L i h i byte → v {
+@ __emit_branch * PFunc pf ( Vec s ) open i k i cond i sb i h i byte → v {
     : i n ( vec_len [s] open )
     ? >= k n { ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) ^ v } {}
     : s bp ?? ( vec_get [s] open - - n 1 k ) { T x → x F → # s 0 }
     ? == # i bp 0 { ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) ^ v } {}
     : *PBlk blk # *PBlk bp
     : i arity ? == . blk kind 1 . blk params . blk results
-    : i dst + L . blk base
-    : i src + L - h arity
+    : i dst + sb . blk base
+    : i src + sb - h arity
     : i tgt ? == . blk kind 1 . blk t0 -1
     : ~ i rec 0
     ? | == arity 0 == dst src {
@@ -897,6 +902,142 @@ $ `module.nu`
         { = rec ( __pf_emit . pf code ( __R_BRIFM ) tgt cond | << dst 20 src arity byte ) }
     }
     ? != . blk kind 1 { ( vec_push [i] . blk patches * rec 2 ) } {}
+}
+
+// ── operand forwarding (the height → slot map) ───────────────────
+// `local.get` used to emit a MOV copying the local into the stack slot for
+// its height. On the benchmark corpus that one record was 45 % of every
+// instruction the interpreter executed, and it buys nothing: operands are
+// absolute slot indices, so a consumer can read the local's own slot.
+//
+// `vm` maps a stack height to the slot that actually holds that value, with
+// `-1` meaning "canonical" (`L + height`). `local.get` records the alias and
+// emits nothing; every operand read goes through `__vg`, so the consumer
+// addresses the local directly. Destinations stay canonical — a record only
+// ever writes `L + height` or a local — which is what keeps the map from
+// having to track aliases of aliases.
+//
+// An alias holds only while the slot it names still holds that value, so it
+// is materialised again ("flushed") wherever the layout has to be the
+// canonical one: before any control transfer, because branch targets move
+// results between canonical slots; before a call or a value-stack bridge,
+// because both need their operands contiguous; and, in `__vkill`, before a
+// `local.set` overwrites a local that a live stack entry is aliasing.
+//
+// Invariant: while `live` is 0 the map is all-canonical — every transition
+// to dead code goes through a flush, and no alias is recorded when dead.
+@ __vg ( Vec i ) vm i sb i k → i {
+    : i sl ?? ( vec_get [i] vm k ) { T x → x F → -1 }
+    ^ ? < sl 0 + sb k sl
+}
+
+// ── the per-function constant pool ───────────────────────────────
+// After operand forwarding, `i32.const` was the biggest single record class
+// left. It is the same redundancy one level down: the value is fixed for the
+// life of the module, so copying it into a stack slot at run time is work the
+// predecoder can do once. A pre-scan of the body interns the distinct
+// constants; the frame reserves a slot for each, right after the locals, and
+// `i32.const K` becomes an alias to that slot — a `local.get` of a read-only
+// local, handled by the map that already exists. Nothing writes those slots
+// after the frame is built, so a recycled frame keeps them.
+//
+// Reserving them between the locals and the operand stack is what keeps this
+// free: both bases are known before the pass, so every slot index is final
+// when it is emitted. A pool after the stack would need `maxh`, which is not
+// known until the pass ends.
+//
+// The pool is capped: interning is a linear scan, and a frame carries one
+// word per entry. Past the cap a constant falls back to the CONST record the
+// predecoder always emitted, so the behaviour degrades rather than breaking.
+@ __kcap → i { ^ 128 }
+
+@ __kfind ( Vec i ) kv i cv → i {
+    : i n ( vec_len [i] kv )
+    : ~ i k 0
+    ~ < k n {
+        : i x ?? ( vec_get [i] kv k ) { T x → x F → 0 }
+        ? == x cv { ^ k } {}
+        = k + k 1
+    }
+    ^ -1
+}
+
+@ __kintern ( Vec i ) kv i cv → v {
+    ? >= ( __kfind kv cv ) 0 { ^ v } {}
+    ? >= ( vec_len [i] kv ) ( __kcap ) { ^ v } {}
+    ( vec_push [i] kv cv )
+}
+
+// One structural walk of the body collecting the distinct constants. Every
+// other opcode is stepped over by `__skip_imm`, the same routine the decoder
+// already trusts for immediate layout, so this cannot desynchronise.
+@ __const_pool * Module m * WFunc f ( Vec i ) kv → v {
+    : *Wc c ( wc_new . m code )
+    = . c pos . f code_start
+    = . c len . f code_end
+    ~ < . c pos . f code_end {
+        : i p0 . c pos
+        : i op ( wc_u8 c )
+        ? == op 65 { : i cv ( wc_sleb c ) ( __kintern kv ( __w32 cv ) ) } {
+            ? == op 66 { : i cv ( wc_sleb c ) ( __kintern kv cv ) } {
+                ? == op 67 { : i cv ( __read_le c 4 ) ( __kintern kv cv ) } {
+                    ? == op 68 { : i cv ( __read_le c 8 ) ( __kintern kv cv ) } {
+                        ( __skip_imm c op ) } } } }
+        // A hostile immediate can decode to a length that moves the cursor
+        // backwards; this scan only reads, so it just has to end. Forcing it
+        // forward makes termination a property of the loop rather than of
+        // every immediate encoding it walks past.
+        ? <= . c pos p0 { = . c pos + p0 1 } {}
+    }
+    ( wc_free c )
+}
+
+// Bind height `h` to the constant `cv`: the pool slot when the pre-scan
+// interned it, otherwise the CONST record into the canonical slot.
+@ __kbind * PFunc pf ( Vec i ) vm ( Vec i ) kv i L i sb i h i cv i live i byte → v {
+    : i idx ( __kfind kv cv )
+    ? >= idx 0 { ( __vset vm h + L idx ) } {
+        ? != 0 live { ( __pf_emit . pf code ( __R_CONST ) + sb h cv 0 0 byte ) } {}
+        ( __vset vm h -1 )
+    }
+}
+
+@ __vset ( Vec i ) vm i k i slot → v {
+    ~ <= ( vec_len [i] vm ) k { ( vec_push [i] vm -1 ) }
+    ( vec_set [i] vm k slot )
+}
+
+// Materialise every alias below `h` into its canonical slot, then reset the
+// whole map. `h` = 0 makes it a pure reset; `live` = 0 means nothing was
+// aliased in the first place, so the reset alone is the whole job.
+@ __vflush * PFunc pf ( Vec i ) vm i sb i h i live i byte → v {
+    : i n ( vec_len [i] vm )
+    : ~ i k 0
+    ~ < k n {
+        : i sl ?? ( vec_get [i] vm k ) { T x → x F → -1 }
+        ? >= sl 0 {
+            ? & < k h != 0 live { ( __pf_emit . pf code ( __R_MOV ) + sb k sl 0 0 byte ) } {}
+            ( vec_set [i] vm k -1 )
+        } {}
+        = k + k 1
+    }
+}
+
+// A write to local `li` invalidates every live stack entry aliasing it:
+// those are copied to their canonical slots first, while `li` still holds
+// the old value.
+@ __vkill * PFunc pf ( Vec i ) vm i sb i h i li i live i byte → v {
+    : i n ( vec_len [i] vm )
+    : i lim ? < h n h n
+    : ~ i k 0
+    ~ < k lim {
+        : i sl ?? ( vec_get [i] vm k ) { T x → x F → -1 }
+        ? == sl li {
+            ? != 0 live { ( __pf_emit . pf code ( __R_MOV ) + sb k li 0 0 byte ) } {}
+            ( vec_set [i] vm k -1 )
+        } {}
+        = k + k 1
+    }
 }
 
 // ── the predecoder ───────────────────────────────────────────────
@@ -920,6 +1061,14 @@ $ `module.nu`
     } {}
     : i L + nparams ( vec_len [i] . f locals )
     = . pf nlocals L
+    // Locals occupy [0, L); the constant pool [L, L + |kv|); the operand
+    // stack everything above. Both boundaries are fixed before the pass, so
+    // every slot a record carries is final the moment it is emitted.
+    : ( Vec i ) kv ( vec_new [i] )
+    ( __const_pool m f kv )
+    : i SB + L ( vec_len [i] kv )
+    = . pf sbase SB
+    = . pf kv kv
     : ( Vec s ) open ( vec_new [s] )
     // the function body behaves as one enclosing block returning the results
     ( vec_push [s] open ( __pblk_new 0 0 0 nresults 1 -1 ) )
@@ -929,10 +1078,12 @@ $ `module.nu`
     : ~ i h 0
     : ~ i maxh 0
     : ~ i live 1
+    : ( Vec i ) vm ( vec_new [i] )
     ~ & < . c pos . f code_end > ( vec_len [s] open ) 0 {
         : i byte . c pos
         : i op ( wc_u8 c )
         ? | == op 2 == op 3 {  // block / loop
+            ( __vflush pf vm SB h live byte )
             : i bt ( wc_sleb c )
             : i p ( __bt_params m bt )
             : i r ( __bt_results m bt )
@@ -945,12 +1096,15 @@ $ `module.nu`
                 : i r ( __bt_results m bt )
                 ? != 0 live {
                     = h - h 1
-                    : i rec ( __pf_emit . pf code ( __R_IFZ ) -1 + L h 0 0 byte )
+                    : i cnd ( __vg vm SB h )
+                    ( __vflush pf vm SB h live byte )
+                    : i rec ( __pf_emit . pf code ( __R_IFZ ) -1 cnd 0 0 byte )
                     : s kp ( __pblk_new 2 - h p p r 1 rec )
                     ( vec_push [s] open kp )
                 } { ( vec_push [s] open ( __pblk_new 2 h p r 0 -1 ) ) }
             } {
                 ? == op 5 {  // else
+                    ( __vflush pf vm SB h live byte )
                     : i n ( vec_len [s] open )
                     : s bp ?? ( vec_get [s] open - n 1 ) { T x → x F → # s 0 }
                     ? != # i bp 0 {
@@ -966,6 +1120,7 @@ $ `module.nu`
                     } {}
                 } {
                     ? == op 11 {  // end: close the frame, patch all forward targets here
+                        ( __vflush pf vm SB h live byte )
                         : i n ( vec_len [s] open )
                         : s bp ?? ( vec_get [s] open - n 1 ) { T x → x F → # s 0 }
                         ( vec_pop [s] open )
@@ -994,19 +1149,23 @@ $ `module.nu`
                     } {
                         ? == op 12 {  // br
                             : i k ( wc_uleb c )
-                            ? != 0 live { ( __emit_branch pf open k -1 L h byte ) = live 0 } {}
+                            ? != 0 live { ( __vflush pf vm SB h live byte ) ( __emit_branch pf open k -1 SB h byte ) = live 0 } {}
                         } {
                             ? == op 13 {  // br_if: pop cond, branch on it, fall through otherwise
                                 : i k ( wc_uleb c )
                                 ? != 0 live {
                                     = h - h 1
-                                    ( __emit_branch pf open k + L h L h byte )
+                                    : i cnd ( __vg vm SB h )
+                                    ( __vflush pf vm SB h live byte )
+                                    ( __emit_branch pf open k cnd SB h byte )
                                 } {}
                             } {
                                 ? == op 14 {  // br_table
                                     : i nl ( wc_uleb c )
                                     ? == 0 live { : ~ i sk 0 ~ <= sk nl { ( wc_uleb c ) = sk + sk 1 } } {
                                         = h - h 1
+                                        : i idxs ( __vg vm SB h )
+                                        ( __vflush pf vm SB h live byte )
                                         : i astart ( vec_len [i] . pf aux )
                                         : i non ( vec_len [s] open )
                                         : ~ i lk 0
@@ -1019,31 +1178,33 @@ $ `module.nu`
                                                 : i tg ? == . b2 kind 1 . b2 t0 -1
                                                 : i auxpos ( vec_len [i] . pf aux )
                                                 ( vec_push [i] . pf aux tg )
-                                                ( vec_push [i] . pf aux + L . b2 base )
-                                                ( vec_push [i] . pf aux + L - h ar )
+                                                ( vec_push [i] . pf aux + SB . b2 base )
+                                                ( vec_push [i] . pf aux + SB - h ar )
                                                 ( vec_push [i] . pf aux ar )
                                                 ? != . b2 kind 1 { ( vec_push [i] . b2 patches + * auxpos 2 1 ) } {}
                                             }
                                             = lk + lk 1
                                         }
-                                        ( __pf_emit . pf code ( __R_BRTBL ) astart + L h nl 0 byte )
+                                        ( __pf_emit . pf code ( __R_BRTBL ) astart idxs nl 0 byte )
                                         = live 0
                                     }
                                 } {
                                     ? == op 15 {  // return
                                         ? != 0 live {
-                                            ( __pf_emit . pf code ( __R_RET ) + L - h nresults nresults 0 0 byte )
+                                            ( __vflush pf vm SB h live byte )
+                                            ( __pf_emit . pf code ( __R_RET ) + SB - h nresults nresults 0 0 byte )
                                             = live 0
                                         } {}
                                     } {
                                         ? == op 16 {  // call
                                             : i fi ( wc_uleb c )
                                             ? != 0 live {
+                                                ( __vflush pf vm SB h live byte )
                                                 : s ct ( module_func_type m fi )
                                                 : ~ i cp 0
                                                 : ~ i cr 0
                                                 ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
-                                                ( __pf_emit . pf code ( __R_CALL ) fi + L - h cp 0 0 byte )
+                                                ( __pf_emit . pf code ( __R_CALL ) fi + SB - h cp 0 0 byte )
                                                 = h + - h cp cr
                                                 ? > h maxh { = maxh h } {}
                                             } {}
@@ -1052,67 +1213,70 @@ $ `module.nu`
                                                 : i ti ( wc_uleb c ) ( wc_uleb c )
                                                 ? != 0 live {
                                                     = h - h 1
+                                                    : i idxs ( __vg vm SB h )
+                                                    ( __vflush pf vm SB h live byte )
                                                     : s ct ?? ( vec_get [s] . m types ti ) { T x → x F → # s 0 }
                                                     : ~ i cp 0
                                                     : ~ i cr 0
                                                     ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
-                                                    ( __pf_emit . pf code ( __R_CALLIND ) ti + L - h cp + L h 0 byte )
+                                                    ( __pf_emit . pf code ( __R_CALLIND ) ti + SB - h cp idxs 0 byte )
                                                     = h + - h cp cr
                                                     ? > h maxh { = maxh h } {}
                                                 } {}
                                             } {
-                                                ? == op 0 { ? != 0 live { ( __pf_emit . pf code ( __R_UNREACH ) 0 0 0 0 byte ) = live 0 } {} } {
+                                                ? == op 0 { ? != 0 live { ( __vflush pf vm SB 0 live byte ) ( __pf_emit . pf code ( __R_UNREACH ) 0 0 0 0 byte ) = live 0 } {} } {
                                                     ? == op 1 {} {  // nop
                                                         ? == op 26 { ? != 0 live { = h - h 1 } {} } {  // drop
                                                             ? | == op 27 == op 28 {  // select (typed select folds to the same record)
                                                                 ? == op 28 { : i tc ( wc_uleb c ) ( wc_skip c tc ) } {}
                                                                 ? != 0 live {
-                                                                    ( __pf_emit . pf code ( __R_SEL ) + L - h 3 + L - h 3 + L - h 2 + L - h 1 byte )
+                                                                    ( __pf_emit . pf code ( __R_SEL ) + SB - h 3 ( __vg vm SB - h 3 ) ( __vg vm SB - h 2 ) ( __vg vm SB - h 1 ) byte ) ( __vset vm - h 3 -1 )
                                                                     = h - h 2
                                                                 } {}
                                                             } {
-                                                                ? == op 32 { : i li ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_MOV ) + L h li 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                    ? == op 33 { : i li ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_MOV ) li + L - h 1 0 0 byte ) = h - h 1 } {} } {
-                                                                        ? == op 34 { : i li ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_MOV ) li + L - h 1 0 0 byte ) } {} } {
-                                                                            ? == op 35 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_GG ) + L h gi 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                                ? == op 36 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_GS ) gi + L - h 1 0 0 byte ) = h - h 1 } {} } {
-                                                                                    ? == op 37 { ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_TABGET ) + L - h 1 + L - h 1 0 0 byte ) } {} } {
-                                                                                        ? == op 38 { ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_TABSET ) + L - h 2 + L - h 1 0 0 byte ) = h - h 2 } {} } {
-                                                                                            ? == op 65 { : i cv ( wc_sleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_CONST ) + L h ( __w32 cv ) 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                                                ? == op 66 { : i cv ( wc_sleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_CONST ) + L h cv 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                                                    ? == op 67 { : i cv ( __read_le c 4 ) ? != 0 live { ( __pf_emit . pf code ( __R_CONST ) + L h cv 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                                                        ? == op 68 { : i cv ( __read_le c 8 ) ? != 0 live { ( __pf_emit . pf code ( __R_CONST ) + L h cv 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                ? == op 32 { : i li ( wc_uleb c ) ? != 0 live { ( __vset vm h li ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                    ? == op 33 { : i li ( wc_uleb c ) ? != 0 live { : i sv ( __vg vm SB - h 1 ) ( __vkill pf vm SB - h 1 li live byte ) ( __pf_emit . pf code ( __R_MOV ) li sv 0 0 byte ) = h - h 1 } {} } {
+                                                                        ? == op 34 { : i li ( wc_uleb c ) ? != 0 live { : i sv ( __vg vm SB - h 1 ) ( __vkill pf vm SB - h 1 li live byte ) ( __pf_emit . pf code ( __R_MOV ) li sv 0 0 byte ) ( __vset vm - h 1 li ) } {} } {
+                                                                            ? == op 35 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_GG ) + SB h gi 0 0 byte ) ( __vset vm h -1 ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                ? == op 36 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_GS ) gi ( __vg vm SB - h 1 ) 0 0 byte ) = h - h 1 } {} } {
+                                                                                    ? == op 37 { ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_TABGET ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
+                                                                                        ? == op 38 { ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_TABSET ) ( __vg vm SB - h 2 ) ( __vg vm SB - h 1 ) 0 0 byte ) = h - h 2 } {} } {
+                                                                                            ? == op 65 { : i cv ( wc_sleb c ) ? != 0 live { ( __kbind pf vm kv L SB h ( __w32 cv ) live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                ? == op 66 { : i cv ( wc_sleb c ) ? != 0 live { ( __kbind pf vm kv L SB h cv live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                    ? == op 67 { : i cv ( __read_le c 4 ) ? != 0 live { ( __kbind pf vm kv L SB h cv live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                        ? == op 68 { : i cv ( __read_le c 8 ) ? != 0 live { ( __kbind pf vm kv L SB h cv live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
                                                                                                             ? & >= op 40 <= op 53 {  // loads: A=dst B=addr C=off
                                                                                                                 ( wc_uleb c )
                                                                                                                 : i off & ( wc_uleb c ) 4294967295
-                                                                                                                ? != 0 live { ( __pf_emit . pf code op + L - h 1 + L - h 1 off 0 byte ) } {}
+                                                                                                                ? != 0 live { ( __pf_emit . pf code op + SB - h 1 ( __vg vm SB - h 1 ) off 0 byte ) ( __vset vm - h 1 -1 ) } {}
                                                                                                             } {
                                                                                                                 ? & >= op 54 <= op 62 {  // stores: A=addr B=val C=off
                                                                                                                     ( wc_uleb c )
                                                                                                                     : i off & ( wc_uleb c ) 4294967295
-                                                                                                                    ? != 0 live { ( __pf_emit . pf code op + L - h 2 + L - h 1 off 0 byte ) = h - h 2 } {}
+                                                                                                                    ? != 0 live { ( __pf_emit . pf code op ( __vg vm SB - h 2 ) ( __vg vm SB - h 1 ) off 0 byte ) = h - h 2 } {}
                                                                                                                 } {
-                                                                                                                    ? == op 63 { ( wc_u8 c ) ? != 0 live { ( __pf_emit . pf code ( __R_MEMSZ ) + L h 0 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                                                                        ? == op 64 { ( wc_u8 c ) ? != 0 live { ( __pf_emit . pf code ( __R_MEMGROW ) + L - h 1 + L - h 1 0 0 byte ) } {} } {
+                                                                                                                    ? == op 63 { ( wc_u8 c ) ? != 0 live { ( __pf_emit . pf code ( __R_MEMSZ ) + SB h 0 0 0 byte ) ( __vset vm h -1 ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                                        ? == op 64 { ( wc_u8 c ) ? != 0 live { ( __pf_emit . pf code ( __R_MEMGROW ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
                                                                                                                             ? | == op 69 | == op 80 | & >= op 103 <= op 105 | & >= op 121 <= op 123 & >= op 192 <= op 196 {
                                                                                                                                 // integer unary: in place at the top slot
-                                                                                                                                ? != 0 live { ( __pf_emit . pf code op + L - h 1 + L - h 1 0 0 byte ) } {}
+                                                                                                                                ? != 0 live { ( __pf_emit . pf code op + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {}
                                                                                                                             } {
                                                                                                                                 ? | & >= op 70 <= op 79 | & >= op 81 <= op 90 | & >= op 106 <= op 120 & >= op 124 <= op 138 {
                                                                                                                                     // integer binary: dst = h-2, operands h-2 / h-1
-                                                                                                                                    ? != 0 live { ( __pf_emit . pf code op + L - h 2 + L - h 2 + L - h 1 0 byte ) = h - h 1 } {}
+                                                                                                                                    ? != 0 live { ( __pf_emit . pf code op + SB - h 2 ( __vg vm SB - h 2 ) ( __vg vm SB - h 1 ) 0 byte ) ( __vset vm - h 2 -1 ) = h - h 1 } {}
                                                                                                                                 } {
                                                                                                                                     ? | & >= op 91 <= op 102 & >= op 139 <= op 191 {  // float / conversion: vs bridge
                                                                                                                                         ? != 0 live {
                                                                                                                                             : i np ( __float_pops op )
-                                                                                                                                            ( __pf_emit . pf code ( __R_FLOATB ) op + L - h np np 0 byte )
+                                                                                                                                            ( __vflush pf vm SB h live byte )
+                                                                                                                                            ( __pf_emit . pf code ( __R_FLOATB ) op + SB - h np np 0 byte )
                                                                                                                                             = h + - h np 1
                                                                                                                                             ? > h maxh { = maxh h } {}
                                                                                                                                         } {}
                                                                                                                                     } {
-                                                                                                                                        ? == op 208 { ( wc_u8 c ) ? != 0 live { ( __pf_emit . pf code ( __R_CONST ) + L h -1 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                                                                                            ? == op 209 { ? != 0 live { ( __pf_emit . pf code ( __R_ISNULL ) + L - h 1 + L - h 1 0 0 byte ) } {} } {
-                                                                                                                                                ? == op 210 { : i rfi ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_CONST ) + L h rfi 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                                                        ? == op 208 { ( wc_u8 c ) ? != 0 live { ( __kbind pf vm kv L SB h -1 live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                                                            ? == op 209 { ? != 0 live { ( __pf_emit . pf code ( __R_ISNULL ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
+                                                                                                                                                ? == op 210 { : i rfi ( wc_uleb c ) ? != 0 live { ( __kbind pf vm kv L SB h rfi live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
                                                                                                                                                     ? == op 252 {  // 0xfc family: vs bridge, pops/pushes per sub
                                                                                                                                                         : i sub ( wc_uleb c )
                                                                                                                                                         : ~ i bop 0
@@ -1131,7 +1295,8 @@ $ `module.nu`
                                                                                                                                                                 ? | == sub 8 | == sub 10 | == sub 11 | == sub 12 | == sub 14 == sub 17 { = pops 3 } {
                                                                                                                                                                     ? == sub 15 { = pops 2 = push 1 } {
                                                                                                                                                                         ? == sub 16 { = push 1 } {} } } }
-                                                                                                                                                            ( __pf_emit . pf code ( __R_FCB ) sub bop + L - h pops | << pops 1 push byte )
+                                                                                                                                                            ( __vflush pf vm SB h live byte )
+                                                                                                                                                            ( __pf_emit . pf code ( __R_FCB ) sub bop + SB - h pops | << pops 1 push byte )
                                                                                                                                                             = h + - h pops push
                                                                                                                                                             ? > h maxh { = maxh h } {}
                                                                                                                                                         } {}
@@ -1139,23 +1304,29 @@ $ `module.nu`
                                                                                                                                                         // unsupported (0xfd/0xfe and anything unknown): keep alignment,
                                                                                                                                                         // trap if ever executed
                                                                                                                                                         ? | == op 253 == op 254 { ( __skip_imm c op ) } {}
-                                                                                                                                                        ? != 0 live { ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) } {}
+                                                                                                                                                        ? != 0 live { ( __vflush pf vm SB 0 live byte ) ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) } {}
                                                                                                                                                     } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
     }
     : i on ( vec_len [s] open )
     : ~ i ok 0
     ~ < ok on { ?? ( vec_get [s] open ok ) { T pp → ( __pblk_free pp ) F → {} } = ok + ok 1 }
     ( vec_free [s] open )
+    ( vec_free [i] vm )
     ( wc_free c )
     = . pf count / ( vec_len [i] . pf code ) 6
-    = . pf nslots + L + maxh 4
+    = . pf nslots + SB + maxh 4
     = . pf nparams nparams
+    = . pf nresults nresults
+    = . pf code_start . f code_start
     = . pf pool ( vec_new [s] )
     ^ # s pf
 }
 // Get-or-build the PFunc for defined function `fidx`.
 @ __pfunc_for * Interp it * Module m i fidx → s {
     : i di - fidx . m num_import_funcs
+    // Bound first: `di` comes from a call record, i.e. straight out of the
+    // module, so a hostile index must not be allowed to grow the cache.
+    ? | < di 0 >= di ( vec_len [s] . m funcs ) { ^ # s 0 } {}
     ~ <= ( vec_len [s] . it pfuncs ) di { ( vec_push [s] . it pfuncs # s 0 ) }
     : s have ?? ( vec_get [s] . it pfuncs di ) { T x → x F → # s 0 }
     ? != # i have 0 { ^ have } {}
@@ -1233,7 +1404,6 @@ $ `module.nu`
     : ( Vec s ) frames ( vec_new [s] )
     : s fr0 ( __frame_new it m fidx -1 )
     ? != # i fr0 0 { ( vec_push [s] frames fr0 ) } {}
-    : *Wc c ( wc_new . m code )
     // Register-form driver. The cursor is the pc in record units; `rbase` is
     // the raw base of the top frame's flat register array (locals first,
     // stack slots after), refreshed only when the frame stack moves. Every
@@ -1241,118 +1411,127 @@ $ `module.nu`
     // There is no runtime control stack — branches carry their targets and
     // their statically-computed result moves in the record.
     : ~ s tp # s 0
-    : ~ s pbase # s 0
-    : ~ s abase # s 0
-    : ~ s rbase # s 0
+    : ~ * i pbase # *i 0
+    : ~ * i abase # *i 0
+    : ~ * i rbase # *i 0
+    : ~ i pc 0
+    : ~ i pend 0
+    // Fuel is a plain countdown here, never the sentinel: `-1` (unlimited)
+    // becomes a budget nothing can outlive, so the per-instruction cost is
+    // `dec` + `js` instead of a load, a zero-test, a conditional decrement
+    // and a store. Decrement-then-test still executes exactly `fuel`
+    // instructions before trapping, and the sentinel is restored on the
+    // way out so the field keeps its public meaning.
+    : i fuel0 . it fuel
+    : ~ i fuel ? < fuel0 0 4611686018427387904 fuel0
     : ~ i lloc 0
+    : ~ i nres 0
     : ~ i reload 1
     ~ & & > ( vec_len [s] frames ) 0 ! . it exited ! . it trap {
         ? != reload 0 {
             = tp ?? ( vec_get [s] frames - ( vec_len [s] frames ) 1 ) { T x → x F → # s 0 }
             : *Frame nfr # *Frame tp
             : *PFunc npf # *PFunc . nfr pins
-            = pbase # s ( vec_data [i] . npf code )
-            = abase # s ( vec_data [i] . npf aux )
-            = rbase # s ( vec_data [i] . nfr regs )
-            = lloc . npf nlocals
-            = . c pos . nfr pos
-            = . c len . nfr end
+            = pbase ( vec_data [i] . npf code )
+            = abase ( vec_data [i] . npf aux )
+            = rbase ( vec_data [i] . nfr regs )
+            = lloc . npf sbase
+            = nres . npf nresults
+            = pc . nfr pos
+            = pend . nfr end
             = reload 0
         } {}
         : *Frame fr # *Frame tp
-        ? >= . c pos . c len {
+        ? >= pc pend {
             // fell off the end → return: results sit at slots lloc.. by
             // construction (the body ends at height = result count)
-            : s ct ( module_func_type m . fr fidx )
-            : ~ i nres 0
-            ? != # i ct 0 { : *FuncType ctt # *FuncType ct = nres ( vec_len [i] . ctt results ) } {}
             : i rdst . fr ret_dst
             ( vec_pop [s] frames )
             ? < rdst 0 {
                 // outermost frame: results leave on the value stack
                 : ~ i rk 0
-                ~ < rk nres { ( __push it ( nurl_peek rbase + lloc rk ) ) = rk + rk 1 }
+                ~ < rk nres { ( __push it . rbase + lloc rk ) = rk + rk 1 }
             } {
                 : s cp2 ?? ( vec_get [s] frames - ( vec_len [s] frames ) 1 ) { T x → x F → # s 0 }
                 ? != # i cp2 0 {
                     : *Frame cfr # *Frame cp2
-                    : s crb # s ( vec_data [i] . cfr regs )
+                    : *i crb ( vec_data [i] . cfr regs )
                     : ~ i rk 0
-                    ~ < rk nres { ( nurl_poke crb + rdst rk ( nurl_peek rbase + lloc rk ) ) = rk + rk 1 }
+                    ~ < rk nres { = . crb + rdst rk . rbase + lloc rk = rk + rk 1 }
                 } {}
             }
             ( __frame_recycle tp )
             = reload 1
         } {
-            ? == . it fuel 0 { ( __trap it `fuel exhausted` ) } {
-                ? > . it fuel 0 { = . it fuel - . it fuel 1 } {}
-                : i rrec * . c pos 6
-                : i op ( nurl_peek pbase rrec )
-                : i ra ( nurl_peek pbase + rrec 1 )
-                : i rb ( nurl_peek pbase + rrec 2 )
-                : i rc ( nurl_peek pbase + rrec 3 )
-                = . c pos + . c pos 1
+            = fuel - fuel 1
+            ? < fuel 0 { ( __trap it `fuel exhausted` ) } {
+                : i rrec * pc 6
+                : i op . pbase rrec
+                : i ra . pbase + rrec 1
+                : i rb . pbase + rrec 2
+                : i rc . pbase + rrec 3
+                = pc + pc 1
                 // ── hot register ops, inline ──
-                ? == op 300 { ( nurl_poke rbase ra ( nurl_peek rbase rb ) ) } {  // MOV
-                    ? == op 301 { ( nurl_poke rbase ra rb ) } {  // CONST
+                ? == op 300 { = . rbase ra . rbase rb } {  // MOV
+                    ? == op 301 { = . rbase ra rb } {  // CONST
                         ? & >= op 124 <= op 138 {  // i64 arithmetic/bitwise
-                            : i x ( nurl_peek rbase rb )
-                            : i y ( nurl_peek rbase rc )
-                            ( nurl_poke rbase ra ( __rnum64 it op x y ) )
+                            : i x . rbase rb
+                            : i y . rbase rc
+                            = . rbase ra ( __rnum64 it op x y )
                         } {
                             ? & >= op 106 <= op 120 {  // i32 arithmetic/bitwise
-                                : i x ( nurl_peek rbase rb )
-                                : i y ( nurl_peek rbase rc )
-                                ( nurl_poke rbase ra ( __rnum32 it op x y ) )
+                                : i x . rbase rb
+                                : i y . rbase rc
+                                = . rbase ra ( __rnum32 it op x y )
                             } {
                                 ? | & >= op 70 <= op 79 & >= op 81 <= op 90 {  // comparisons
-                                    : i x ( nurl_peek rbase rb )
-                                    : i y ( nurl_peek rbase rc )
-                                    ( nurl_poke rbase ra ( __rcmp op x y ) )
+                                    : i x . rbase rb
+                                    : i y . rbase rc
+                                    = . rbase ra ( __rcmp op x y )
                                 } {
-                                    ? == op 322 { ? == ( nurl_peek rbase rb ) 0 { = . c pos ra } {} } {  // IFZ
-                                        ? == op 310 { = . c pos ra } {  // BR
-                                            ? == op 312 { ? != ( nurl_peek rbase rb ) 0 { = . c pos ra } {} } {  // BRIF
+                                    ? == op 322 { ? == . rbase rb 0 { = pc ra } {} } {  // IFZ
+                                        ? == op 310 { = pc ra } {  // BR
+                                            ? == op 312 { ? != . rbase rb 0 { = pc ra } {} } {  // BRIF
                                                 ? == op 311 {  // BR_MOVE
-                                                    : i dd ( nurl_peek pbase + rrec 4 )
+                                                    : i dd . pbase + rrec 4
                                                     : ~ i mk 0
-                                                    ~ < mk dd { ( nurl_poke rbase + rb mk ( nurl_peek rbase + rc mk ) ) = mk + mk 1 }
-                                                    = . c pos ra
+                                                    ~ < mk dd { = . rbase + rb mk . rbase + rc mk = mk + mk 1 }
+                                                    = pc ra
                                                 } {
                                                     ? == op 313 {  // BRIF_MOVE
-                                                        ? != ( nurl_peek rbase rb ) 0 {
-                                                            : i dd ( nurl_peek pbase + rrec 4 )
+                                                        ? != . rbase rb 0 {
+                                                            : i dd . pbase + rrec 4
                                                             : i mdst >> rc 20
                                                             : i msrc & rc 1048575
                                                             : ~ i mk 0
-                                                            ~ < mk dd { ( nurl_poke rbase + mdst mk ( nurl_peek rbase + msrc mk ) ) = mk + mk 1 }
-                                                            = . c pos ra
+                                                            ~ < mk dd { = . rbase + mdst mk . rbase + msrc mk = mk + mk 1 }
+                                                            = pc ra
                                                         } {}
                                                     } {
                                                         ? & >= op 40 <= op 53 {  // loads
-                                                            : i ea + & ( nurl_peek rbase rb ) 4294967295 rc
-                                                            ( nurl_poke rbase ra ( __rload it op ea ) )
+                                                            : i ea + & . rbase rb 4294967295 rc
+                                                            = . rbase ra ( __rload it op ea )
                                                         } {
                                                             ? & >= op 54 <= op 62 {  // stores
-                                                                : i ea + & ( nurl_peek rbase ra ) 4294967295 rc
-                                                                ( __rstore it op ea ( nurl_peek rbase rb ) )
+                                                                : i ea + & . rbase ra 4294967295 rc
+                                                                ( __rstore it op ea . rbase rb )
                                                             } {
-                                                                ? | == op 69 == op 80 { : i x ( nurl_peek rbase rb ) ( nurl_poke rbase ra ? == x 0 1 0 ) } {  // eqz
+                                                                ? | == op 69 == op 80 { : i x . rbase rb = . rbase ra ? == x 0 1 0 } {  // eqz
                                                                     ? | & >= op 103 <= op 105 | & >= op 121 <= op 123 & >= op 192 <= op 196 {
-                                                                        ( nurl_poke rbase ra ( __runary op ( nurl_peek rbase rb ) ) )
+                                                                        = . rbase ra ( __runary op . rbase rb )
                                                                     } {
                                                                         ? == op 304 {  // SELECT
-                                                                            : i dd ( nurl_peek pbase + rrec 4 )
-                                                                            : i cond ( nurl_peek rbase dd )
-                                                                            ( nurl_poke rbase ra ? != cond 0 ( nurl_peek rbase rb ) ( nurl_peek rbase rc ) )
+                                                                            : i dd . pbase + rrec 4
+                                                                            : i cond . rbase dd
+                                                                            = . rbase ra ? != cond 0 . rbase rb . rbase rc
                                                                         } {
                                                                             ? == op 316 {  // CALL
-                                                                                = . fr pos . c pos
+                                                                                = . fr pos pc
                                                                                 ( __rdo_call it m frames ra rb rbase )
                                                                                 = reload 1
                                                                             } {
                                                                                 ? == op 317 {  // CALL_INDIRECT
-                                                                                    : i ei & ( nurl_peek rbase rc ) 4294967295
+                                                                                    : i ei & . rbase rc 4294967295
                                                                                     ? | < ei 0 >= ei ( vec_len [i] . it table ) { ( __trap it `call_indirect: index out of range` ) } {
                                                                                         : i cfi ?? ( vec_get [i] . it table ei ) { T x → x F → -1 }
                                                                                         ? < cfi 0 { ( __trap it `call_indirect: null table element` ) } {
@@ -1360,7 +1539,7 @@ $ `module.nu`
                                                                                             : s have ( module_func_type m cfi )
                                                                                             ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) } {
                                                                                                 ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) } {
-                                                                                                    = . fr pos . c pos
+                                                                                                    = . fr pos pc
                                                                                                     ( __rdo_call it m frames cfi rb rbase )
                                                                                                     = reload 1
                                                                                                 }
@@ -1370,49 +1549,49 @@ $ `module.nu`
                                                                                 } {
                                                                                     ? == op 315 {  // RETURN: move results to the canonical slots, fall off
                                                                                         : ~ i rk 0
-                                                                                        ~ < rk rb { ( nurl_poke rbase + lloc rk ( nurl_peek rbase + ra rk ) ) = rk + rk 1 }
-                                                                                        = . c pos . c len
+                                                                                        ~ < rk rb { = . rbase + lloc rk . rbase + ra rk = rk + rk 1 }
+                                                                                        = pc pend
                                                                                     } {
                                                                                         ? == op 314 {  // BR_TABLE: aux rows of (target, dst, src, n)
-                                                                                            : i ui ( __u32 ( nurl_peek rbase rb ) )
+                                                                                            : i ui ( __u32 . rbase rb )
                                                                                             : i pick ? < ui rc ui rc
                                                                                             : i rowb + ra * pick 4
-                                                                                            : i tgt ( nurl_peek abase rowb )
-                                                                                            : i mdst ( nurl_peek abase + rowb 1 )
-                                                                                            : i msrc ( nurl_peek abase + rowb 2 )
-                                                                                            : i mn ( nurl_peek abase + rowb 3 )
+                                                                                            : i tgt . abase rowb
+                                                                                            : i mdst . abase + rowb 1
+                                                                                            : i msrc . abase + rowb 2
+                                                                                            : i mn . abase + rowb 3
                                                                                             : ~ i mk 0
-                                                                                            ~ < mk mn { ( nurl_poke rbase + mdst mk ( nurl_peek rbase + msrc mk ) ) = mk + mk 1 }
-                                                                                            = . c pos tgt
+                                                                                            ~ < mk mn { = . rbase + mdst mk . rbase + msrc mk = mk + mk 1 }
+                                                                                            = pc tgt
                                                                                         } {
-                                                                                            ? == op 302 { ( nurl_poke rbase ra ?? ( vec_get [i] . it globals rb ) { T x → x F → 0 } ) } {  // global.get
-                                                                                                ? == op 303 { ( vec_set [i] . it globals ra ( nurl_peek rbase rb ) ) } {  // global.set
-                                                                                                    ? == op 305 { ( nurl_poke rbase ra . it mem_pages ) } {  // memory.size
-                                                                                                        ? == op 306 { ( nurl_poke rbase ra ( __mem_grow it ( __u32 ( nurl_peek rbase rb ) ) ) ) } {  // memory.grow
+                                                                                            ? == op 302 { = . rbase ra ?? ( vec_get [i] . it globals rb ) { T x → x F → 0 } } {  // global.get
+                                                                                                ? == op 303 { ( vec_set [i] . it globals ra . rbase rb ) } {  // global.set
+                                                                                                    ? == op 305 { = . rbase ra . it mem_pages } {  // memory.size
+                                                                                                        ? == op 306 { = . rbase ra ( __mem_grow it ( __u32 . rbase rb ) ) } {  // memory.grow
                                                                                                             ? == op 307 {  // table.get
-                                                                                                                : i ei ( __u32 ( nurl_peek rbase rb ) )
+                                                                                                                : i ei ( __u32 . rbase rb )
                                                                                                                 ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) } {
-                                                                                                                    ( nurl_poke rbase ra ?? ( vec_get [i] . it table ei ) { T x → x F → -1 } ) }
+                                                                                                                    = . rbase ra ?? ( vec_get [i] . it table ei ) { T x → x F → -1 } }
                                                                                                             } {
                                                                                                                 ? == op 308 {  // table.set
-                                                                                                                    : i ei ( __u32 ( nurl_peek rbase ra ) )
+                                                                                                                    : i ei ( __u32 . rbase ra )
                                                                                                                     ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) } {
-                                                                                                                        ( vec_set [i] . it table ei ( nurl_peek rbase rb ) ) }
+                                                                                                                        ( vec_set [i] . it table ei . rbase rb ) }
                                                                                                                 } {
-                                                                                                                    ? == op 309 { ( nurl_poke rbase ra ? == ( nurl_peek rbase rb ) -1 1 0 ) } {  // ref.is_null
+                                                                                                                    ? == op 309 { = . rbase ra ? == . rbase rb -1 1 0 } {  // ref.is_null
                                                                                                                         ? == op 320 {  // float / conversion bridge through the value stack
                                                                                                                             : ~ i bk 0
-                                                                                                                            ~ < bk rc { ( __push it ( nurl_peek rbase + rb bk ) ) = bk + bk 1 }
+                                                                                                                            ~ < bk rc { ( __push it . rbase + rb bk ) = bk + bk 1 }
                                                                                                                             ( __exec_float it ra )
-                                                                                                                            ? ! . it trap { ( nurl_poke rbase rb ( __pop it ) ) } {}
+                                                                                                                            ? ! . it trap { = . rbase rb ( __pop it ) } {}
                                                                                                                         } {
                                                                                                                             ? == op 321 {  // 0xfc bridge through the value stack
-                                                                                                                                : i dd ( nurl_peek pbase + rrec 4 )
+                                                                                                                                : i dd . pbase + rrec 4
                                                                                                                                 : i pops >> dd 1
                                                                                                                                 : ~ i bk 0
-                                                                                                                                ~ < bk pops { ( __push it ( nurl_peek rbase + rc bk ) ) = bk + bk 1 }
+                                                                                                                                ~ < bk pops { ( __push it . rbase + rc bk ) = bk + bk 1 }
                                                                                                                                 ( __exec_fc it ra rb )
-                                                                                                                                ? & != 0 & dd 1 ! . it trap { ( nurl_poke rbase rc ( __pop it ) ) } {}
+                                                                                                                                ? & != 0 & dd 1 ! . it trap { = . rbase rc ( __pop it ) } {}
                                                                                                                             } {
                                                                                                                                 ? == op 318 { ( __trap it `unreachable` ) } {
                                                                                                                                     ? == op 319 { ( __trap it `unsupported opcode` ) } {
@@ -1424,7 +1603,7 @@ $ `module.nu`
     ? . it trap {
         ? & == reload 0 > ( vec_len [s] frames ) 0 {
             : s ttp ?? ( vec_get [s] frames - ( vec_len [s] frames ) 1 ) { T x → x F → # s 0 }
-            ? != # i ttp 0 { : *Frame ftr # *Frame ttp = . ftr pos - . c pos 1 } {}
+            ? != # i ttp 0 { : *Frame ftr # *Frame ttp = . ftr pos - pc 1 } {}
         } {}
         ( __trap_backtrace it m frames )
     } {}
@@ -1432,25 +1611,25 @@ $ `module.nu`
     : ~ i fi 0
     ~ < fi fn { ?? ( vec_get [s] frames fi ) { T pp → ( __frame_free pp ) F → {} } = fi + fi 1 }
     ( vec_free [s] frames )
-    ( wc_free c )
+    = . it fuel ? < fuel0 0 -1 ? < fuel 0 0 fuel
 }
 
 // Perform a call from the register driver: `argbase` is the caller slot of
 // the first argument (and the destination of the results). Imports bridge
 // through the value stack; defined functions get a fresh frame with the
 // arguments copied straight into their first locals.
-@ __rdo_call * Interp it * Module m ( Vec s ) frames i callee i argbase s caller_rbase → v {
+@ __rdo_call * Interp it * Module m ( Vec s ) frames i callee i argbase * i caller_rbase → v {
     ? < callee . m num_import_funcs {
         : s wt ( module_func_type m callee )
         : ~ i np 0
         : ~ i nr 0
         ? != # i wt 0 { : *FuncType wft # *FuncType wt = np ( vec_len [i] . wft params ) = nr ( vec_len [i] . wft results ) } {}
         : ~ i ak 0
-        ~ < ak np { ( __push it ( nurl_peek caller_rbase + argbase ak ) ) = ak + ak 1 }
+        ~ < ak np { ( __push it . caller_rbase + argbase ak ) = ak + ak 1 }
         ( __call_import it m callee )
         ? ! . it trap {
             : ~ i rk nr
-            ~ > rk 0 { = rk - rk 1 ( nurl_poke caller_rbase + argbase rk ( __pop it ) ) }
+            ~ > rk 0 { = rk - rk 1 = . caller_rbase + argbase rk ( __pop it ) }
         } {}
         ^ v
     } {}
@@ -1458,12 +1637,11 @@ $ `module.nu`
     : s nf ( __frame_new it m callee argbase )
     ? == # i nf 0 { ^ v } {}
     : *Frame nfr # *Frame nf
-    : s nrb # s ( vec_data [i] . nfr regs )
-    : s ct ( module_func_type m callee )
-    : ~ i np 0
-    ? != # i ct 0 { : *FuncType ctt # *FuncType ct = np ( vec_len [i] . ctt params ) } {}
+    : *i nrb ( vec_data [i] . nfr regs )
+    : *PFunc npf # *PFunc . nfr pins
+    : i np . npf nparams
     : ~ i ak 0
-    ~ < ak np { ( nurl_poke nrb ak ( nurl_peek caller_rbase + argbase ak ) ) = ak + ak 1 }
+    ~ < ak np { = . nrb ak . caller_rbase + argbase ak = ak + ak 1 }
     ( vec_push [s] frames nf )
 }
 

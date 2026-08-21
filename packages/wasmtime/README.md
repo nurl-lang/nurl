@@ -37,17 +37,27 @@ wasmtime run --invoke <export> <module.wasm> [args…]
   Function bodies are **predecoded on first call into register form**:
   wasm validation guarantees a static stack height everywhere, so the
   value at height h lives in slot (locals+h) of one flat per-frame array
-  and every record carries absolute slot indices. `local.get`/`set`
-  become register moves, `block`/`loop`/`end` emit nothing, branches are
-  direct jumps carrying statically-computed result moves — no value-stack
-  traffic and no runtime control stack; ~56 host instructions per wasm
-  instruction. (This landed in two steps: flat records first — which
-  alone took the JSON-parse benchmark from 31 s to 5.7 s by deleting the
-  per-execution `end`-scans — then register form, roughly 2x again on
-  straight-line code. A full compiler self-host on this runtime went
-  5m45s → 30.5 s across the two, byte-identical throughout.) Each record
-  keeps its original byte offset, so trap backtraces still point into
-  the module image:
+  and every record carries absolute slot indices. `local.get` is
+  **forwarded** — it records that this stack height *is* the local's slot
+  and emits nothing, so the consumer reads the local directly —
+  `i32.const` likewise names no record: a pre-scan interns the body's
+  distinct constants into a **constant pool** the frame reserves between
+  the locals and the operand stack, and the const becomes an alias to
+  that slot. `block`/`loop`/`end` emit nothing, branches are direct jumps
+  carrying statically-computed result moves — no value-stack traffic and
+  no runtime control stack.
+  (This landed in four steps: flat records first — which alone took the
+  JSON-parse benchmark from 31 s to 5.7 s by deleting the per-execution
+  `end`-scans — then register form, roughly 2x again on straight-line
+  code, then operand forwarding and the constant pool, which between them
+  deleted **43 %** of the records the benchmark corpus dispatches and
+  39 % of the host instructions it runs. `local.get` had been 45 % of all
+  records and `i32.const` 22 % of what was left. The first two took a full
+  compiler self-host on this runtime from 5m45s to 30.5 s; the last two
+  took another 42 % off it, byte-identical throughout. Cost per surviving
+  record went *up*, 56 → 60 host instructions, which is the shape you want:
+  what was deleted was the cheapest work.) Each record keeps its original
+  byte offset, so trap backtraces still point into the module image:
   - structured control flow: `block`, `loop`, `if`/`else`, `br`, `br_if`,
     `br_table`, `return`, `end` — **multi-value** block types included
     (s33-encoded type-section indices; branches carry a loop's params / a
@@ -83,7 +93,10 @@ wasmtime run --invoke <export> <module.wasm> [args…]
     writes flush on close/sync/`proc_exit`/normal exit
   - **diagnostics**: traps carry a message plus a wasm **backtrace** (name
     section names when present); `--fuel N` bounds runaway guests
-    deterministically
+    deterministically — the unit is one predecoded record, which is
+    fewer than one wasm instruction (a forwarded `local.get`, a
+    `block`/`loop`/`end` all cost nothing), so a budget buys more of a
+    guest here than the same number would on a byte-code interpreter
 
 ```sh
 # WASI command: prints to stdout, exits with the program's code
