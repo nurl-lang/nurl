@@ -313,6 +313,12 @@ void nurl_flush_stderr(void) { fflush(stderr); }
  * on Windows 10+ consoles, a no-op everywhere else. */
 #ifdef _WIN32
 #  include <io.h>
+/* `<fcntl.h>` for the `_O_*` flags `nurl_native_constant` hands out.
+ * It is included again further down for MSVC, but only there — and
+ * this file is compiled BOTH ways on Windows (MinGW via zig for
+ * `runtime.mingw.o`, and MSVC), so a MinGW-only build would not see
+ * the macros at all. Include it where both branches reach it. */
+#  include <fcntl.h>
 #  ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 #    define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #  endif
@@ -1609,6 +1615,61 @@ long long nurl_file_sync(void *h) {
 #endif
 }
 
+/* Positional read/write and a durability barrier, on a raw descriptor.
+ *
+ * `pread`/`pwrite`/`fsync` are POSIX and the MSVC CRT has none of the
+ * three, so a NURL caller spelling them directly links everywhere
+ * except Windows — which is how `stdlib/fs/blkdev_file.nu` passed on
+ * this machine and failed in CI with three unresolved externals. Same
+ * shim reasoning as `nurl_file_sync` above: one C function per
+ * operation, the platform difference resolved here rather than at every
+ * call site.
+ *
+ * POSITIONAL, not seek-then-read, because the offset belongs to the
+ * call: a block device served by two interleaved requests has no file
+ * position anyone can reason about. On Windows that has to be emulated
+ * with a seek, which is why `_lseeki64` appears in a function whose
+ * whole point is not seeking — the emulation is confined to the branch
+ * that needs it. */
+long long nurl_pread(int fd, void *buf, long long n, long long off) {
+    if (!buf || n < 0 || off < 0) return -1;
+#ifdef _WIN32
+    if (_lseeki64(fd, (__int64)off, SEEK_SET) < 0) return -1;
+    return (long long)_read(fd, buf, (unsigned int)n);
+#elif defined(__wasi__)
+    if (lseek(fd, (off_t)off, SEEK_SET) < 0) return -1;
+    return (long long)read(fd, buf, (size_t)n);
+#else
+    return (long long)pread(fd, buf, (size_t)n, (off_t)off);
+#endif
+}
+
+long long nurl_pwrite(int fd, const void *buf, long long n, long long off) {
+    if (!buf || n < 0 || off < 0) return -1;
+#ifdef _WIN32
+    if (_lseeki64(fd, (__int64)off, SEEK_SET) < 0) return -1;
+    return (long long)_write(fd, buf, (unsigned int)n);
+#elif defined(__wasi__)
+    if (lseek(fd, (off_t)off, SEEK_SET) < 0) return -1;
+    return (long long)write(fd, buf, (size_t)n);
+#else
+    return (long long)pwrite(fd, buf, (size_t)n, (off_t)off);
+#endif
+}
+
+/* `fsync` for a descriptor. WASI answers 0 because there is no
+ * durability barrier to reach for — not because the bytes are safe. */
+long long nurl_fd_sync(int fd) {
+#ifdef _WIN32
+    return _commit(fd) == 0 ? 0 : -1;
+#elif defined(__wasi__)
+    (void)fd;
+    return 0;
+#else
+    return fsync(fd) == 0 ? 0 : -1;
+#endif
+}
+
 /* Cut a file down to `len` bytes (or extend it with zeros). Returns 0 on
  * success, -1 on failure.
  *
@@ -2679,6 +2740,24 @@ long long nurl_native_constant(const char *name) {
     if (strcmp(name, "SIGFPE")      == 0) return SIGFPE;
     if (strcmp(name, "SIGILL")      == 0) return SIGILL;
     if (strcmp(name, "SIGSEGV")     == 0) return SIGSEGV;
+    /* The open(2) flags. The CRT spells them with a leading underscore
+     * and the numbers are NOT the POSIX ones — O_CREAT is 0100 on Linux
+     * and 0x0100 here — which is exactly why they are asked for by name
+     * rather than written as literals. */
+    if (strcmp(name, "O_RDONLY")    == 0) return _O_RDONLY;
+    if (strcmp(name, "O_WRONLY")    == 0) return _O_WRONLY;
+    if (strcmp(name, "O_RDWR")      == 0) return _O_RDWR;
+    if (strcmp(name, "O_CREAT")     == 0) return _O_CREAT;
+    if (strcmp(name, "O_EXCL")      == 0) return _O_EXCL;
+    if (strcmp(name, "O_TRUNC")     == 0) return _O_TRUNC;
+    if (strcmp(name, "O_APPEND")    == 0) return _O_APPEND;
+    if (strcmp(name, "O_BINARY")    == 0) return _O_BINARY;
+#endif
+#if !defined(_WIN32)
+    /* Zero everywhere else: only the Windows CRT has a text mode to opt
+     * out of. A caller ORs it in unconditionally, which is what makes
+     * the caller portable rather than conditional. */
+    if (strcmp(name, "O_BINARY")    == 0) return 0;
 #endif
     if (strcmp(name, "ENOENT")      == 0) return ENOENT;
     if (strcmp(name, "EACCES")      == 0) return EACCES;

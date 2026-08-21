@@ -282,8 +282,6 @@ $ `stdlib/fs/fat.nu`
 
 // ── names ───────────────────────────────────────────────────────────
 
-@ __cb ( Vec u ) v i k → i { ^ # i ?? ( vec_get [u] v k ) { T x → x F → # u 0 } }
-
 @ __upper i c → i { ^ ? && >= c 97 <= c 122 - c 32 c }
 
 @ __is_sfn_char i c → b {
@@ -762,7 +760,7 @@ $ `stdlib/fs/fat.nu`
                     : ~ i k 0
                     ~ < k 11 {
                         : i c ( fat_rd8 v lba + off k )
-                        ? != c ( __cb name11 k ) { = same F = k 11 } { = k + k 1 }
+                        ? != c ( fat_vb name11 k ) { = same F = k 11 } { = k + k 1 }
                     }
                     ? same { = hit T = . p done T } {}
                 } {}
@@ -829,7 +827,7 @@ $ `stdlib/fs/fat.nu`
     }
     // 0xE5 as the first byte means "deleted"; the format's own escape
     // for a name that really starts with it is 0x05.
-    ? == ( __cb out11 0 ) 229 { ( __name11_set out11 0 5 ) } {}
+    ? == ( fat_vb out11 0 ) 229 { ( __name11_set out11 0 5 ) } {}
     ^ | ? b_lower 8 0 ? e_lower 16 0
 }
 
@@ -908,7 +906,7 @@ $ `stdlib/fs/fat.nu`
 @ __write_short * FatVol v i lba i off ( Vec u ) name11 i ntflags i attr i first i size → b {
     : ~ i k 0
     ~ < k 11 {
-        ? ! ( fat_wr8 v lba + off k ( __cb name11 k ) ) { ^ F } {}
+        ? ! ( fat_wr8 v lba + off k ( fat_vb name11 k ) ) { ^ F } {}
         = k + k 1
     }
     ? ! ( fat_wr8 v lba + off 11 attr ) { ^ F } {}
@@ -999,7 +997,7 @@ $ `stdlib/fs/fat.nu`
         : ~ i sum 0
         : ~ i k 0
         ~ < k 11 {
-            = sum & + | & >> sum 1 127 & << sum 7 255 ( __cb name11 k ) 255
+            = sum & + | & >> sum 1 127 & << sum 7 255 ( fat_vb name11 k ) 255
             = k + k 1
         }
         : ~ i j 0

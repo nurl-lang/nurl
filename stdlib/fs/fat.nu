@@ -147,7 +147,11 @@ $ `stdlib/hal/blockdev.nu`
 
 @ __ci ( Vec i ) v i k → i { ^ ?? ( vec_get [i] v k ) { T x → x F → 0 } }
 
-@ __cb ( Vec u ) v i k → i { ^ # i ?? ( vec_get [u] v k ) { T x → x F → # u 0 } }
+// One byte out of a Vec, as an integer. Public and shared with
+// `fatfs.nu` rather than duplicated there: NURL's namespace is flat, so
+// two files with a private `__cb` are a collision the stdlib gate
+// rejects — a `__` name is file-SCOPED, not file-local at link time.
+@ fat_vb ( Vec u ) v i k → i { ^ # i ?? ( vec_get [u] v k ) { T x → x F → # u 0 } }
 
 @ __cache_writeback * FatVol v i slot → b {
     ? == ( __ci . v cdirty slot ) 0 { ^ T } {}
@@ -230,7 +234,7 @@ $ `stdlib/hal/blockdev.nu`
 @ fat_rd8 * FatVol v i lba i off → i {
     : i slot ( __cache_slot v lba )
     ? < slot 0 { ^ - 0 1 } {}
-    ^ ( __cb . v cbuf + * slot ( blk_sector_size ) off )
+    ^ ( fat_vb . v cbuf + * slot ( blk_sector_size ) off )
 }
 
 @ fat_wr8 * FatVol v i lba i off i val → b {
@@ -279,7 +283,7 @@ $ `stdlib/hal/blockdev.nu`
 }
 
 @ __le16 ( Vec u ) b i off → i {
-    ^ | ( __cb b off ) << ( __cb b + off 1 ) 8
+    ^ | ( fat_vb b off ) << ( fat_vb b + off 1 ) 8
 }
 
 @ __le32 ( Vec u ) b i off → i {
@@ -302,9 +306,9 @@ $ `stdlib/hal/blockdev.nu`
     ? ! ( __read_boot sec ) { ( vec_free [u] sec ) ^ F } {}
 
     : i bps ( __le16 sec 11 )
-    : i spc ( __cb sec 13 )
+    : i spc ( fat_vb sec 13 )
     : i rsvd ( __le16 sec 14 )
-    : i nfats ( __cb sec 16 )
+    : i nfats ( fat_vb sec 16 )
     : i root_ents ( __le16 sec 17 )
     : i tot16 ( __le16 sec 19 )
     : i spf16 ( __le16 sec 22 )
@@ -320,7 +324,7 @@ $ `stdlib/hal/blockdev.nu`
     ? != bps ( blk_sector_size ) { ^ F } {}
     ? != sig 43605 { ^ F } {}  // 0xAA55
     ? == spc 0 { ^ F } {}
-    ? != ( __pow2 spc ) T { ^ F } {}
+    ? != ( __fat_pow2 spc ) T { ^ F } {}
     ? > spc 128 { ^ F } {}
     ? == rsvd 0 { ^ F } {}
     ? || == nfats 0 > nfats 4 { ^ F } {}
@@ -390,7 +394,7 @@ $ `stdlib/hal/blockdev.nu`
     ^ T
 }
 
-@ __pow2 i n → b {
+@ __fat_pow2 i n → b {
     ? <= n 0 { ^ F } {}
     ^ == & n - n 1 0
 }

@@ -12,18 +12,27 @@
 // here, so the image handed to `-drive` was written by the reader that
 // will read it.
 //
-// `pread`/`pwrite` rather than seek-then-read: the offset is part of
-// the call, so there is no file position to get out of step with a
-// caller that interleaved two requests.
+// `nurl_pread`/`nurl_pwrite`/`nurl_fd_sync` rather than the POSIX names:
+// the offset is part of the call, so there is no file position to get
+// out of step with a caller that interleaved two requests — and the
+// MSVC CRT has none of `pread`, `pwrite` or `fsync`, so spelling them
+// directly links everywhere except Windows. The shims are in
+// `stdlib/runtime_core.c`, beside `nurl_file_sync`, which exists for
+// the same reason.
+//
+// O_BINARY is ORed in unconditionally. It is 0 on every platform that
+// has no text mode, and on the one that does, a device image read in
+// text mode has its 0x0A bytes mangled — which is not a filesystem bug
+// anyone would find by reading filesystem code.
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/posix.nu`
 $ `stdlib/hal/blockdev.nu`
 
-& `libc` @ pread i32 fd *u buf i n i off → i
+& `c` @ nurl_pread i32 fd *u buf i n i off → i
 
-& `libc` @ pwrite i32 fd *u buf i n i off → i
+& `c` @ nurl_pwrite i32 fd *u buf i n i off → i
 
-& `libc` @ fsync i32 fd → i32
+& `c` @ nurl_fd_sync i32 fd → i
 
 : ~ i g_blkfd - 0 1
 : ~ i g_blksectors 0
@@ -37,7 +46,7 @@ $ `stdlib/hal/blockdev.nu`
     ( blkfile_close )
     : i o_rdonly ( posix_const `O_RDONLY` )
     : i o_rdwr ( posix_const `O_RDWR` )
-    : i fd # i ( open path # i32 ? writable o_rdwr o_rdonly )
+    : i fd # i ( open path # i32 | ( posix_const `O_BINARY` ) ? writable o_rdwr o_rdonly )
     ? < fd 0 { ^ F } {}
     : i size ( lseek # i32 fd 0 # i32 2 )
     ? < size 0 { : i32 _c ( close # i32 fd ) ^ F } {}
@@ -54,7 +63,7 @@ $ `stdlib/hal/blockdev.nu`
 @ blkfile_create s path i sectors → b {
     ( blkfile_close )
     ? <= sectors 0 { ^ F } {}
-    : i flags | | ( posix_const `O_RDWR` ) ( posix_const `O_CREAT` ) ( posix_const `O_TRUNC` )
+    : i flags | | | ( posix_const `O_RDWR` ) ( posix_const `O_CREAT` ) ( posix_const `O_TRUNC` ) ( posix_const `O_BINARY` )
     : i fd # i ( open path # i32 flags # i32 420 )
     ? < fd 0 { ^ F } {}
     // One zero sector written at the very end gives the file its full
@@ -64,7 +73,7 @@ $ `stdlib/hal/blockdev.nu`
     : ~ i k 0
     ~ < k ( blk_sector_size ) { ( vec_push [u] z # u 0 ) = k + k 1 }
     : i want ( blk_sector_size )
-    : i wrote ( pwrite # i32 fd # *u ( vec_data [u] z ) want * - sectors 1 want )
+    : i wrote ( nurl_pwrite # i32 fd # *u ( vec_data [u] z ) want * - sectors 1 want )
     ( vec_free [u] z )
     ? != wrote want { : i32 _c ( close # i32 fd ) ^ F } {}
     = g_blkfd fd
@@ -75,7 +84,7 @@ $ `stdlib/hal/blockdev.nu`
 
 @ blkfile_close → v {
     ? >= g_blkfd 0 {
-        : i32 _s ( fsync # i32 g_blkfd )
+        : i _s ( nurl_fd_sync # i32 g_blkfd )
         : i32 _c ( close # i32 g_blkfd )
     } {}
     = g_blkfd - 0 1
@@ -90,7 +99,7 @@ $ `stdlib/hal/blockdev.nu`
 @ nurl_blk_read i lba s buf i nsec → i {
     ? < g_blkfd 0 { ^ - 0 1 } {}
     : i want * nsec ( blk_sector_size )
-    : i got ( pread # i32 g_blkfd # *u buf want * lba ( blk_sector_size ) )
+    : i got ( nurl_pread # i32 g_blkfd # *u buf want * lba ( blk_sector_size ) )
     ? != got want { ^ - 0 1 } {}
     ^ nsec
 }
@@ -99,7 +108,7 @@ $ `stdlib/hal/blockdev.nu`
     ? < g_blkfd 0 { ^ - 0 1 } {}
     ? g_blkro { ^ - 0 1 } {}
     : i want * nsec ( blk_sector_size )
-    : i put ( pwrite # i32 g_blkfd # *u buf want * lba ( blk_sector_size ) )
+    : i put ( nurl_pwrite # i32 g_blkfd # *u buf want * lba ( blk_sector_size ) )
     ? != put want { ^ - 0 1 } {}
     ^ nsec
 }
@@ -107,5 +116,5 @@ $ `stdlib/hal/blockdev.nu`
 @ nurl_blk_flush → i {
     ? < g_blkfd 0 { ^ - 0 1 } {}
     ? g_blkro { ^ 0 } {}
-    ^ # i ( fsync # i32 g_blkfd )
+    ^ ( nurl_fd_sync # i32 g_blkfd )
 }

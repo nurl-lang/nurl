@@ -249,6 +249,36 @@ int fs_fsync_fd(int fd) {
     return -1;
 }
 
+/* Positional read/write, which `stdlib/runtime_core.c` calls through its
+ * `nurl_pread`/`nurl_pwrite` shims — so runtime_core.o references them
+ * and the guest has to define them. `nolibc/syscall_linux.c` has the
+ * syscall versions for the Linux -nostdlib build, and the guest does
+ * not link that file: the platform replaces it, which is exactly the
+ * twin-drift this directory exists to catch.
+ *
+ * Emulated with a seek because there is no positional primitive
+ * underneath. The position is SAVED AND RESTORED: a positional read is
+ * defined not to move the file offset, and a caller interleaving one
+ * with ordinary reads would otherwise find its cursor moved by a call
+ * that promised not to touch it. */
+long long pread(int fd, void *buf, unsigned long n, long long off) {
+    long long keep = fs_lseek_fd(fd, 0, 1 /* SEEK_CUR */);
+    if (keep < 0) return -1;
+    if (fs_lseek_fd(fd, off, 0 /* SEEK_SET */) < 0) return -1;
+    long long got = (long long)fs_read_fd(fd, buf, (vfs_size_t)n);
+    (void)fs_lseek_fd(fd, keep, 0);
+    return got;
+}
+
+long long pwrite(int fd, const void *buf, unsigned long n, long long off) {
+    long long keep = fs_lseek_fd(fd, 0, 1);
+    if (keep < 0) return -1;
+    if (fs_lseek_fd(fd, off, 0) < 0) return -1;
+    long long put = (long long)fs_write_fd(fd, buf, (vfs_size_t)n);
+    (void)fs_lseek_fd(fd, keep, 0);
+    return put;
+}
+
 /* ── the POSIX names that used to be refusals ────────────────────── */
 /*
  * Each of these was a stub in `platform_*.c` or `nosys.c` that returned
