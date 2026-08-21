@@ -82,9 +82,9 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
 # The zig the ecosystem ships (install.sh, the playground image, the
 # aarch64 cross builds) — same version, same place the unikernel job
 # used to unpack it, so NURL_ZIG=/opt/zig/zig keeps working unchanged.
-ARG ZIG_VERSION=0.13.0
+ARG ZIG_VERSION=0.16.0
 RUN curl -fsSL --retry 5 -o /tmp/zig.tar.xz \
-        "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
+        "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
     && mkdir -p /opt/zig \
     && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1 \
     && rm /tmp/zig.tar.xz \
@@ -97,7 +97,7 @@ RUN curl -fsSL --retry 5 -o /tmp/zig.tar.xz \
 RUN git config --system --add safe.directory '*'
 
 # Deliberately NO global NURL_ZIG. nurl.sh prefers a bundled zig when it
-# sees one, and zig 0.13's own ASan runtime is a different LLVM
+# sees one, and zig's own ASan runtime is a different LLVM
 # generation from system clang 18's instrumentation — a runtime_san.o
 # compiled by one and linked by the other dies with "undefined symbol:
 # __asan_unregister_elf_globals". On the bare runners NURL_ZIG was only

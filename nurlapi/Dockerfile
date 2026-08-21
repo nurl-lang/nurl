@@ -70,9 +70,9 @@ RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/curl.tar.xz 
     && rm -rf /tmp/curl.tar.xz /tmp/curl-src
 
 # --- Zig toolchain (for macOS cross-compile) ------------------
-ARG ZIG_VERSION=0.13.0
+ARG ZIG_VERSION=0.16.0
 RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/zig.tar.xz \
-        "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
+        "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
     && mkdir -p /opt/zig \
     && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1 \
     && rm /tmp/zig.tar.xz

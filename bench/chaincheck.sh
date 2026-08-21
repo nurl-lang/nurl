@@ -36,6 +36,12 @@
 # ============================================================
 set -u
 
+# wall_ms_of reads $EPOCHREALTIME and hands it to awk as a number; both
+# follow the locale, so under e.g. fi_FI awk stops at the comma and every
+# wall reading collapses to a whole second. Pin the run to C, as bench.sh
+# does. (CI runs under C.UTF-8 and never saw it; a workstation does.)
+export LC_ALL=C
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH="$ROOT/bench"
 BUILD="$BENCH/_build"

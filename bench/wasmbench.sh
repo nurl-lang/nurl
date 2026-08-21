@@ -51,6 +51,12 @@
 # ============================================================
 set -u
 
+# $EPOCHREALTIME's decimal separator and awk's %f output both follow the
+# locale; under e.g. fi_FI a comma where time_ms expects a dot turns
+# compile times negative. Pin the whole run to C. (Same line bench.sh
+# carries — CI runs under C.UTF-8 and never saw it, a workstation does.)
+export LC_ALL=C
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH="$ROOT/bench"
 BUILD="$BENCH/_wasmbuild"

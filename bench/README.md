@@ -232,6 +232,21 @@ tree. What it additionally needs on the host is `zig` (wasi-libc +
 wasm32-wasip1`, and a reference `wasmtime`, which is deliberately *not*
 vendored here: its whole job is to be the outside opinion.
 
+Point `$WASMTIME` at that reference binary explicitly. Left to its PATH
+lookup the script takes whatever `wasmtime` resolves to, and on a box with
+the NURL toolchain installed that is `$NURL_HOME/bin/wasmtime` — the
+pure-NURL interpreter — which would fill the reference-JIT column with the
+runtime the column exists to compare against. The report's environment
+table names both runtimes, so check it if a run looks odd.
+
+[`.github/workflows/wasm-bench.yml`](../.github/workflows/wasm-bench.yml)
+runs all of the above on a fixed `ubuntu-latest` runner and commits the
+refreshed report, the same way `bench.yml` does for `RESULTS.md`. It is
+manual-only — trigger it from the Actions tab, as with `http-bench` and
+`pq-bench` — because the interpreter column makes a full run hours long.
+Its `quick` input smoke-tests the harness at one repetition per cell and
+skips the commit.
+
 ## Beyond wall clock
 
 [`perfstat.sh`](perfstat.sh) builds the NURL binaries and reports

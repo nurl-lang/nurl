@@ -97,11 +97,11 @@ jobs:
         if: ${{ !inputs.update_goldens }}
         shell: pwsh
         run: |
-          $zigVer = "0.13.0"
-          $url = "https://ziglang.org/download/$zigVer/zig-windows-x86_64-$zigVer.zip"
+          $zigVer = "0.16.0"
+          $url = "https://ziglang.org/download/$zigVer/zig-x86_64-windows-$zigVer.zip"
           Invoke-WebRequest $url -OutFile zig.zip
           Expand-Archive zig.zip -DestinationPath vendor
-          Move-Item "vendor/zig-windows-x86_64-$zigVer" vendor/zig
+          Move-Item "vendor/zig-x86_64-windows-$zigVer" vendor/zig
 
       - name: build.bat (bootstrap fixed point + Windows golden corpus)
         # pwsh 7 is preinstalled on windows-latest, so build.bat runs

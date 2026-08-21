@@ -11,7 +11,7 @@
 #    3. wasmbuilder src/wasm_detect.nu + the kernel object → .wasm
 #
 #  Needs: a built ./build/nurlc, zig (wasmbuilder auto-provisions
-#  0.13.0 into ~/.nurl/zig if absent), and node for the smoke test.
+#  0.16.0 into ~/.nurl/zig if absent), and node for the smoke test.
 #
 #  Run from the package dir:  ./tools/build_wasm.sh
 #  Env: NURL_ZIG (zig path), OUT (default web/yoloe_detect.wasm)

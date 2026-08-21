@@ -37,7 +37,7 @@ $ `stdlib/ext/http_cli.nu`
 // The zig release wasmbuilder provisions when none is found. Matches the
 // version the release workflow bundles (.github/workflows/release.yml
 // ZIG_VER) so a provisioned zig behaves exactly like a bundled one.
-@ __wb_zig_version → s { ^ `0.13.0` }
+@ __wb_zig_version → s { ^ `0.16.0` }
 
 @ wb_is_windows → b {
     : ?String ev ( env_get `OS` )
@@ -163,7 +163,7 @@ $ `stdlib/ext/http_cli.nu`
             F e → { ^ @ !WbCompiler String { F e } }
         }
     } {}
-    ^ @ !WbCompiler String { F ( string_from `no wasm compiler found: no bundled zig ($NURL_HOME/zig/zig), no zig on PATH, no $WASI_CLANG — and downloads are disabled. Unset NURL_WASM_NO_DOWNLOAD, or install zig 0.13.0 and set $NURL_ZIG.` ) }
+    ^ @ !WbCompiler String { F ( string_from `no wasm compiler found: no bundled zig ($NURL_HOME/zig/zig), no zig on PATH, no $WASI_CLANG — and downloads are disabled. Unset NURL_WASM_NO_DOWNLOAD, or install zig 0.16.0 and set $NURL_ZIG.` ) }
 }
 
 // ── zig provisioning ──────────────────────────────────────────────────
@@ -287,7 +287,7 @@ $ `stdlib/ext/http_cli.nu`
     : ~ String key ( string_new )
     ?? pk { T k → { ( string_free key ) = key k } F e → { ^ @ !String String { F e } } }
 
-    ( nurl_eprintln `wasmbuilder: no zig found — downloading zig 0.13.0 (one-time, sha256-verified) into $NURL_HOME/zig ...` )
+    ( nurl_eprintln `wasmbuilder: no zig found — downloading zig 0.16.0 (one-time, sha256-verified) into $NURL_HOME/zig ...` )
 
     // 1. index.json → tarball URL + shasum for (version, platform).
     : !HttpcResp HttpcErr ir ( httpc_get `https://ziglang.org/download/index.json` )
@@ -320,11 +320,11 @@ $ `stdlib/ext/http_cli.nu`
         }
         F _ → {
             ( string_free key )
-            ^ @ !String String { F ( string_from `could not reach ziglang.org (curl missing or offline). Install zig 0.13.0 manually and set $NURL_ZIG, or re-install the toolchain (Linux releases bundle zig).` ) }
+            ^ @ !String String { F ( string_from `could not reach ziglang.org (curl missing or offline). Install zig 0.16.0 manually and set $NURL_ZIG, or re-install the toolchain (Linux releases bundle zig).` ) }
         }
     }
     ? | == ( string_len tarball ) 0 == ( string_len shasum ) 0 {
-        : String msg ( string_from `zig 0.13.0 has no build for platform ` )
+        : String msg ( string_from `zig 0.16.0 has no build for platform ` )
         ( string_push_str msg ( string_data key ) )
         ( string_free key ) ( string_free tarball ) ( string_free shasum )
         ^ @ !String String { F msg }

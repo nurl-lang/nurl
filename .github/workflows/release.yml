@@ -133,22 +133,22 @@ jobs:
 
       # Bundle a self-contained zig so the installed toolchain can build
       # programs (and `nurlpkg install`) with no system clang and immune to
-      # the box's LLVM version. zig 0.13 ships LLVM 18; keep it >= the clang
+      # the box's LLVM version. zig 0.16 ships LLVM 21; keep it >= the clang
       # used above so `zig cc -flto` can read the shipped runtime.o bitcode.
       - name: Fetch bundled zig backend
         run: |
-          ZIG_VER=0.13.0
+          ZIG_VER=0.16.0
           case "${{ matrix.target }}" in
             linux-x86_64-glibc) ZA=x86_64 ;;
             linux-arm64-glibc)  ZA=aarch64 ;;
             *) echo "no zig mapping for ${{ matrix.target }}" >&2; exit 1 ;;
           esac
-          url="https://ziglang.org/download/${ZIG_VER}/zig-linux-${ZA}-${ZIG_VER}.tar.xz"
+          url="https://ziglang.org/download/${ZIG_VER}/zig-${ZA}-linux-${ZIG_VER}.tar.xz"
           echo "Downloading $url"
           curl -fsSL "$url" -o /tmp/zig.tar.xz
           mkdir -p vendor
           tar -xf /tmp/zig.tar.xz -C vendor
-          mv "vendor/zig-linux-${ZA}-${ZIG_VER}" vendor/zig
+          mv "vendor/zig-${ZA}-linux-${ZIG_VER}" vendor/zig
           vendor/zig/zig version
 
       # The CI runner's glibc (2.39) is newer than many target boxes (e.g.
@@ -301,11 +301,11 @@ jobs:
       - name: Fetch bundled zig backend
         shell: pwsh
         run: |
-          $zigVer = "0.13.0"
-          $url = "https://ziglang.org/download/$zigVer/zig-windows-x86_64-$zigVer.zip"
+          $zigVer = "0.16.0"
+          $url = "https://ziglang.org/download/$zigVer/zig-x86_64-windows-$zigVer.zip"
           Invoke-WebRequest $url -OutFile zig.zip
           Expand-Archive zig.zip -DestinationPath vendor
-          Move-Item "vendor/zig-windows-x86_64-$zigVer" vendor/zig
+          Move-Item "vendor/zig-x86_64-windows-$zigVer" vendor/zig
           & vendor/zig/zig.exe version
 
       - name: Build toolchain (nurlc + nurlpkg)
