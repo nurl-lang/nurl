@@ -136,6 +136,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is still the wasm target name, and `zig cc`'s LLVM 21 stays ≥ the
   system clang 18 used for the shipped `runtime.o` bitcode.
 
+  The CI image was rebuilt and pushed for it —
+  `nurllang/ci:ubuntu24-20260821`, which `ci.yml`'s three Linux jobs now
+  pin. A `containers/ci/Dockerfile` edit alone changes nothing: the image
+  is built by hand and the workflow pins a dated tag, so the two move
+  together or the bump is inert. Validated inside the new image before
+  publishing it, since `/opt/zig` is what the unikernel job's `$NURL_ZIG`
+  points at: the nolibc corpus is 506 PASS / 0 FAIL, and the two gates
+  that actually drive zig through wasmbuilder both hold — `wasmc_gate`
+  compiles `nurlc.wasm` in the guest with all 8 programs byte-identical
+  to native, and `swarm_gate` carries census + expr + wasm through it.
+
 - **`nurl_api`'s exact-module replies never truncate mid-module, and
   every query term is accounted for.** A grab-bag query like
   `vec sort string split lowercase contains` used to split the byte cap
