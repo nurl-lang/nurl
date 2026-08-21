@@ -95,10 +95,20 @@ TARGET=riscv64-linux-musl
 # -mgeneral-regs-only is NOT set: the runtime uses floating point, and
 # the boot code un-traps FP/SIMD before C runs. What IS set is the same
 # freestanding discipline as x86 — no stack protector, no builtins that
-# assume a libc, small code model to match the linker script's single
-# 2 MiB-aligned load address.
+# assume a libc.
+#
+# medany, not small: the guest is linked at 0x8020_0000 (the virt board
+# puts RAM at 0x8000_0000), and RISC-V's medlow — which is what `small`
+# means here — addresses globals with a bare `lui`, whose R_RISCV_HI20
+# field is a SIGNED 20-bit value and so cannot reach past 0x7FFF_F800.
+# medany emits `auipc`, PC-relative, and reaches anywhere. This said
+# `small` until zig 0.16: LLVM 18 did not recognise the alias for RISC-V
+# and left the PC-relative default in place, so the flag was inert and
+# the build worked by accident. LLVM 21 honours it, medlow took effect,
+# and every nolibc object failed to link with "R_RISCV_HI20 out of
+# range". x86-64 and AArch64 keep `small` — it is the right model there.
 KFLAGS="-target $TARGET -ffreestanding -fno-stack-protector -fno-builtin
-        -mcmodel=small -fno-pie -O2"
+        -mcmodel=medany -fno-pie -O2"
 
 cache_inputs() {
     printf '%s\n' \

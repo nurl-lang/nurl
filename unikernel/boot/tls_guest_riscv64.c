@@ -44,6 +44,18 @@ static unsigned char tls_block[TLS_MAX] __attribute__((aligned(64)));
  * constant-folded from the initializer. */
 static __thread volatile unsigned long tls_canary = 0x4E55524CC0FFEEULL;
 
+/* Read the canary through the compiler's own TLS addressing — in its own
+ * function, and one the optimiser may not inline. Same reason as the
+ * AArch64 port: LLVM treats the thread pointer as invariant, nothing
+ * tells it the `mv tp` below installs the value the read depends on, and
+ * LLVM 21 (zig 0.16) materialises the address before the install where
+ * LLVM 18 did not. The guest faulted on the stale address before
+ * printing a line. The function boundary is the fix — the address is
+ * formed in this function, which runs after the call. */
+static __attribute__((noinline)) int tls_canary_agrees(void) {
+    return tls_canary == 0x4E55524CC0FFEEULL;
+}
+
 void nl_tls_init_guest(void) {
     unsigned long filesz = (unsigned long)(__tls_image_end - __tls_image_start);
     unsigned long memsz  = (unsigned long)(__tls_memsz_end - __tls_image_start);
@@ -51,7 +63,7 @@ void nl_tls_init_guest(void) {
     unsigned long cand;
     unsigned long i;
 
-    __asm__ __volatile__("mv tp, %0" :: "r"((unsigned long)tp));
+    __asm__ __volatile__("mv tp, %0" :: "r"((unsigned long)tp) : "memory");
 
     /* tp + 16 rounded up to the alignment the linker picked. 16 is the
      * unrounded case; the rest are the alignments a PT_TLS segment
@@ -70,7 +82,7 @@ void nl_tls_init_guest(void) {
         unsigned char *img = tp + cand;
         for (i = 0; i < filesz; i++) img[i] = __tls_image_start[i];
         for (i = filesz; i < memsz; i++) img[i] = 0;
-        if (tls_canary == 0x4E55524CC0FFEEULL) return;   /* the compiler agrees */
+        if (tls_canary_agrees()) return;   /* the compiler agrees */
     }
     pf_panic("cannot place the TLS image where this build addresses it "
              "— no candidate offset from the thread pointer holds the "

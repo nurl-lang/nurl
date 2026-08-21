@@ -43,6 +43,27 @@ static unsigned char tls_block[TLS_MAX] __attribute__((aligned(64)));
  * constant-folded from the initializer. */
 static __thread volatile unsigned long tls_canary = 0x4E55524CC0FFEEULL;
 
+/* Read the canary through the compiler's own TLS addressing — in its own
+ * function, and one the optimiser may not inline.
+ *
+ * The thread pointer is invariant as far as LLVM is concerned: an
+ * AArch64 TLS reference lowers to `mrs TPIDR_EL0` plus a constant, and
+ * nothing tells it that the `msr` below installs the value that read
+ * depends on. LLVM 18 happened to leave the `mrs` where the source put
+ * it; LLVM 21 (zig 0.16) hoists it to the function entry, ABOVE the
+ * `msr`, so the canary is addressed off the boot-time TPIDR_EL0 — zero.
+ * The guest then faulted on a read of 0x40, the canary's tprel offset
+ * with no thread pointer added, before printing a single line.
+ *
+ * A "memory" clobber does not fix it, because the read is not a memory
+ * load LLVM can see; the function boundary is what fixes it. The `mrs`
+ * is emitted in this function's own prologue, which is necessarily
+ * after the call, which is necessarily after the `msr`. (Nothing here
+ * is built with LTO, so the boundary is real at link time too.) */
+static __attribute__((noinline)) int tls_canary_agrees(void) {
+    return tls_canary == 0x4E55524CC0FFEEULL;
+}
+
 void nl_tls_init_guest(void) {
     unsigned long filesz = (unsigned long)(__tls_image_end - __tls_image_start);
     unsigned long memsz  = (unsigned long)(__tls_memsz_end - __tls_image_start);
@@ -52,7 +73,7 @@ void nl_tls_init_guest(void) {
 
     ((void **)tp)[0] = 0;              /* the two reserved words */
     ((void **)tp)[1] = 0;
-    __asm__ __volatile__("msr TPIDR_EL0, %0" :: "r"((unsigned long)tp));
+    __asm__ __volatile__("msr TPIDR_EL0, %0" :: "r"((unsigned long)tp) : "memory");
 
     /* tp + 16 rounded up to the alignment the linker picked. 16 is the
      * unrounded case; the rest are the alignments a PT_TLS segment
@@ -66,7 +87,7 @@ void nl_tls_init_guest(void) {
         unsigned char *img = tp + cand;
         for (i = 0; i < filesz; i++) img[i] = __tls_image_start[i];
         for (i = filesz; i < memsz; i++) img[i] = 0;
-        if (tls_canary == 0x4E55524CC0FFEEULL) return;   /* the compiler agrees */
+        if (tls_canary_agrees()) return;   /* the compiler agrees */
     }
     pf_panic("cannot place the TLS image where this build addresses it "
              "— no candidate offset from the thread pointer holds the "

@@ -6,6 +6,50 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The AArch64 and RISC-V guests boot again under zig 0.16.** v0.48.0
+  bundled zig 0.16, and both zig-built unikernel ports broke with it —
+  invisibly, because CI was still running the 0.13 container image. Two
+  separate faults, one behind the other.
+
+  RISC-V would not link: `build_unikernel_riscv64.sh` has always passed
+  `-mcmodel=small`, and LLVM 18 did not recognise that alias for RISC-V,
+  so the flag was inert and the PC-relative default stood. LLVM 21
+  honours it, medlow takes effect, and a bare `lui` cannot reach the
+  0x8020_0000 the guest is linked at — every nolibc object failed with
+  `relocation R_RISCV_HI20 out of range`. Now `-mcmodel=medany`, which is
+  what the port always meant. x86-64 and AArch64 keep `small`.
+
+  Then both arches faulted before printing a line, in
+  `nl_tls_init_guest`. It installs the thread pointer with inline asm and
+  then reads a canary through the compiler's own TLS addressing, to
+  *measure* where the linker put the PT_TLS image rather than assume it.
+  But LLVM treats the thread pointer as invariant — nothing connects the
+  `msr TPIDR_EL0` / `mv tp` to the read that depends on it — and LLVM 21
+  hoists that read to the function entry, above the install. The
+  disassembly is unambiguous: `mrs x10, TPIDR_EL0` at +0x24, `msr
+  TPIDR_EL0, x9` at +0x60. The canary was addressed off the boot-time
+  thread pointer, zero, so the guest died reading 0x40 — the canary's
+  tprel offset with nothing added. The canary read now lives in a
+  `noinline` function, so the `mrs` is emitted in *its* prologue, after
+  the call and therefore after the install; a `"memory"` clobber cannot
+  fix this on its own, because the read is not a load LLVM can see.
+
+  Both guest suites are green on both compilers: RV64 20/20 and AArch64
+  19/19 under zig 0.13 and 0.16 alike.
+
+### Changed
+
+- **The CI image is rebuilt on zig 0.16** —
+  `nurllang/ci:ubuntu24-20260821`, which `ci.yml`'s three Linux jobs now
+  pin. A `containers/ci/Dockerfile` edit alone changes nothing: the image
+  is built by hand and the workflow pins a dated tag, so the two move
+  together or the bump is inert — which is exactly how v0.48.0 shipped a
+  zig its own CI never ran.
+
 ## [0.48.0] — 2026-08-21
 
 ### Added
