@@ -4,7 +4,7 @@
 #  bootable RV64 kernel image for QEMU's `virt` machine.
 #
 #  Usage:  build_unikernel_riscv64.sh prog.nu [-o out.elf]
-#              [--fs dir] [--out-dir dir]
+#              [--fs dir] [--disk] [--out-dir dir]
 #
 #  Everything above the bottom edge is the SAME code the x86_64 image
 #  runs — runtime_core.c, runtime_bare.c, nolibc, the NURL program.
@@ -39,18 +39,24 @@ command -v "$ZIG" >/dev/null 2>&1 || ZIG="$HOME/.nurl/zig/zig"
 SRC=""
 OUT=""
 FSDIR=""
+# Whether the image carries a filesystem for a block device. Opt-in,
+# because the disk layer is NURL a program with no disk should not pay
+# for — and because a machine that was not given a disk and a machine
+# told to ignore one should behave identically.
+DISK=""
 OUTDIR="${NURL_UNIKERNEL_OUT:-$ROOT/build/unikernel-riscv64}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         -o) OUT="$2"; shift 2 ;;
         --fs) FSDIR="$2"; shift 2 ;;
+        --disk) DISK=1; shift ;;
         --out-dir) OUTDIR="$2"; shift 2 ;;
         *)  SRC="$1"; shift ;;
     esac
 done
 [ -n "$SRC" ] || {
-    echo "usage: build_unikernel_riscv64.sh prog.nu [-o out.elf] [--fs dir] [--out-dir dir]" >&2
+    echo "usage: build_unikernel_riscv64.sh prog.nu [-o out.elf] [--fs dir] [--disk] [--out-dir dir]" >&2
     exit 2
 }
 [ -x "$ROOT/build/nurlc" ] || {
@@ -102,7 +108,7 @@ cache_inputs() {
         "$NOLIBC"/dtoa.c "$NOLIBC"/math.c "$NOLIBC"/misc.c \
         "$NOLIBC"/setjmp_riscv64.S \
         "$BOOT"/platform_riscv64.c "$BOOT"/initfs.c "$BOOT"/pagealloc.c \
-        "$BOOT"/nosys.c "$BOOT"/fdt.c "$BOOT"/cmdenv.c "$BOOT"/virtio_rng.c \
+        "$BOOT"/nosys.c "$BOOT"/vfs.c "$BOOT"/fdt.c "$BOOT"/cmdenv.c "$BOOT"/virtio_rng.c \
         "$BOOT"/tls_guest_riscv64.c "$BOOT"/boot_riscv64.S \
         "$ROOT/stdlib/cuda_stubs.c" "$ROOT/stdlib/nvrtc_stubs.c" \
         "${BASH_SOURCE[0]}"
@@ -120,6 +126,7 @@ cache_build() {
     $ZIG cc $KFLAGS -c "$BOOT/initfs.c"          -o "$CACHE/boot_initfs.o"
     $ZIG cc $KFLAGS -c "$BOOT/pagealloc.c"       -o "$CACHE/boot_pagealloc.o"
     $ZIG cc $KFLAGS -c "$BOOT/nosys.c"           -o "$CACHE/boot_nosys.o"
+    $ZIG cc $KFLAGS -c "$BOOT/vfs.c"           -o "$CACHE/boot_vfs.o"
     # CUDA/NVRTC driver-API stubs — the same no-GPU answers nurl.sh links
     # on a host with no NVIDIA driver (see build_unikernel.sh).
     $ZIG cc $KFLAGS -c "$ROOT/stdlib/cuda_stubs.c"  -o "$CACHE/cuda_stubs.o"
@@ -154,6 +161,8 @@ want_key="ZIG=$ZIG KFLAGS=$(echo $KFLAGS)"
 # says the program needs it; NURL_NM points it at a cross-capable nm so
 # the measurement is made on THIS architecture's object.
 NURL_NETDEV="$ROOT/unikernel/net/netdev_virtio.nu" \
+NURL_DISK="$DISK" \
+NURL_BLKDEV="$ROOT/unikernel/fs/blkdev_virtio.nu" \
 NURL_TARGET_CC="$ZIG cc -target $TARGET" \
     "$ROOT/unikernel/compile_nu.sh" "$SRC" "$OUTDIR/$base.ll" "$OUTDIR"
 # shellcheck disable=SC2086
@@ -200,7 +209,7 @@ $ZIG cc -target $TARGET -nostdlib -static -Wl,-T,"$BOOT/link_riscv64.ld" \
     "$CACHE/boot.o" "$OUTDIR/$base.o" \
     "$CACHE/runtime_core.o" "$CACHE/runtime_ctx.o" "$CACHE/runtime_bare.o" \
     "$CACHE/platform.o" "$CACHE/tls_guest.o" \
-    "$CACHE/boot_initfs.o" "$CACHE/boot_pagealloc.o" "$CACHE/boot_nosys.o" \
+    "$CACHE/boot_initfs.o" "$CACHE/boot_pagealloc.o" "$CACHE/boot_nosys.o" "$CACHE/boot_vfs.o" \
     "$CACHE/boot_fdt.o" "$CACHE/boot_virtio_rng.o" "$CACHE/boot_cmdenv.o" \
     "$CACHE/cuda_stubs.o" "$CACHE/nvrtc_stubs.o" \
     "$OUTDIR/$base.initfs_data.o" \

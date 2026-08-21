@@ -41,6 +41,14 @@ $ `stdlib/core/cell.nu`
 // Look up a platform integer constant (O_NONBLOCK, F_GETFL, POLLIN,
 // SIGTERM, …). Returns -1 for unknown names on every target, and -1
 // for POSIX names on Win32 / WASI. See runtime.c §2 for the full list.
+// Does this build have a REAL opendir/readdir/closedir? Win32 and WASI
+// do not — `stdlib/runtime_core.c` stubs them with ENOSYS — so a caller
+// that can go either way asks here rather than inferring a platform
+// from whether some constant happens to be published.
+& `c` @ nurl_have_posix_dirent → i
+
+@ posix_have_dirent → b { ^ != 0 ( nurl_have_posix_dirent ) }
+
 & `c` @ nurl_native_constant s name → i
 
 @ posix_const s name → i { ^ ( nurl_native_constant name ) }

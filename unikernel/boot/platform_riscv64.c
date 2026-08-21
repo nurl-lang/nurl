@@ -271,17 +271,23 @@ static void mem_init(void) {
 
 int fs_is_file_fd(int fd);
 pf_ssize_t fs_read_fd(int fd, void *buf, pf_size_t n);
+pf_ssize_t fs_write_fd(int fd, const void *buf, pf_size_t n);
 long long fs_lseek_fd(int fd, long long off, int whence);
 int fs_close_fd(int fd);
 const unsigned char *fs_map_fd(int fd, unsigned long off);
 int fs_exists(const char *path);
+/* `boot/vfs.c` also owns the POSIX names that used to be refusals here
+ * — unlink, mkdir, access, rename, rmdir, truncate, fsync — because
+ * with a disk attached their answer is a fact about the filesystem
+ * rather than about the machine, and it is the same fact on all three
+ * architectures. */
+long vfs_syscall(long n, long a, long b, long c);
+void *vfs_map_file(int fd, unsigned long len, long off);
+int vfs_sync_all(void);
 
 void *mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) {
     (void)addr; (void)prot; (void)flags;
-    if (fd >= 0 && fs_is_file_fd(fd)) {
-        const unsigned char *p = fs_map_fd(fd, (unsigned long)off);
-        return p ? (void *)p : (void *)-1;
-    }
+    if (fd >= 0 && fs_is_file_fd(fd)) return vfs_map_file(fd, len, off);
     unsigned long p = pa_alloc(len);
     return p ? (void *)p : (void *)-1;
 }
@@ -520,9 +526,13 @@ long long getrandom(void *buf, unsigned long len, unsigned int flags) {
 int nl_errno_slot;
 int *__errno_location(void) { return &nl_errno_slot; }
 
+/* A descriptor naming a file goes to the filesystem; everything else is
+ * the console, where stdout and stderr are the same wire. Until there
+ * was a disk this function had no reason to look at `fd` at all — the
+ * only writable thing on the machine was the serial port. */
 long long write(int fd, const void *buf, unsigned long n) {
     const char *p = (const char *)buf;
-    (void)fd;
+    if (fs_is_file_fd(fd)) return (long long)fs_write_fd(fd, buf, n);
     for (unsigned long i = 0; i < n; i++) uart_putc(p[i]);
     return (long long)n;
 }
@@ -557,30 +567,30 @@ void *nl_map(pf_size_t len) {
 int nl_unmap(void *p, pf_size_t len) { return munmap(p, len); }
 void nl_exit_group(int code) { pf_shutdown(code); for (;;) { } }
 
-int unlink(const char *p) { (void)p; return -1; }
-
 long nl_syscall6(long n, long a, long b, long c, long d, long e, long f) {
-    (void)n; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
-    return -38;                                        /* -ENOSYS */
+    (void)d; (void)e; (void)f;
+    /* `vfs_syscall` answers getdents64 when a disk is mounted and
+     * -ENOSYS otherwise, which is what this whole function used to
+     * return unconditionally. */
+    return vfs_syscall(n, a, b, c);
 }
 
 long nl_ret(long r) {
     if (r < 0 && r > -4096) { nl_errno_slot = (int)-r; return -1; }
     return r;
 }
-int mkdir(const char *p, int mode) { (void)p; (void)mode; return -1; }
 
-int access(const char *p, int mode) {
-    if (!p) return -1;
-    if (mode & 3) { nl_errno_slot = 13 /* EACCES */; return -1; }
-    if (!fs_exists(p)) { nl_errno_slot = 2 /* ENOENT */; return -1; }
-    return 0;
-}
 int getpid(void) { return 1; }
 
 /* ── shutdown ────────────────────────────────────────────────────── */
 
 static void pf_shutdown(int code) {
+    /* Whatever is still only in the filesystem's cache goes onto the
+     * medium before the machine stops. A guest that was shut down
+     * cleanly and lost its last writes would be a guest whose `fsync`
+     * was the only way to keep anything — which is a filesystem people
+     * would be right not to trust. */
+    (void)vfs_sync_all();
     uart_puts("[nurl-exit] ");
     uart_putu((unsigned long)(code & 0xff));
     uart_putc('\n');

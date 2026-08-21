@@ -460,5 +460,19 @@ if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
     fi
 fi
 
+# ── the disk ────────────────────────────────────────────────────
+# A block device, a filesystem on it, and the state still there after
+# the machine stopped. disk_gate.sh prints its own detail lines: the
+# cost of the layer, fsck.vfat's verdict, and what an independent
+# reader on the host found in the guest's files.
+if [ $# -eq 0 ]; then
+    demos=$((demos + 1))
+    if "$ROOT/unikernel/tests/disk_gate.sh"; then
+        echo "PASS disk (virtio-blk + FAT, across three boots)"
+    else
+        echo "FAIL disk"; fails=$((fails + 1))
+    fi
+fi
+
 echo "── QEMU guest run: $((${#names[@]} + demos - fails))/$((${#names[@]} + demos)) ──"
 [ "$fails" -eq 0 ]
