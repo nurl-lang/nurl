@@ -2489,10 +2489,21 @@
     // worst case every byte escapes to three chars, plus NUL
     : s out # s ( nurl_alloc + * n 3 1 )
     : *u op # *u out
+    // Read the source through a `*u` rather than `nurl_str_get`: that
+    // helper calls `strlen` on EVERY call to bounds-check, which is
+    // O(1) reasoning and O(n) work, so a loop over n characters is
+    // O(n²) — and this loop is the one embedded assets go through.
+    // Measured on the native compiler: a 20k-char literal took 9 ms,
+    // 40k 26 ms, 80k 81 ms, 160k 290 ms, with 98.6 % of the profile in
+    // __strlen_avx2. Under the wasm build (no AVX2 strlen, an
+    // interpreter on top) the same 20k literal took 11 SECONDS, which
+    // is what made a 164 kB corpus test impossible to run in the
+    // guest. The bounds this loop needs it already has: [pos, end).
+    : *u vp # *u val
     : ~ i w 0
     : ~ i p pos
     ~ < p end {
-        : i c ( nurl_str_get val p )
+        : i c & # i . vp p 255
         ? | | < c 32 > c 126 | == c 34 == c 92 {
             = . op w # u 92 = w + w 1
             = . op w # u ( __hex_digit_ch / c 16 ) = w + w 1
