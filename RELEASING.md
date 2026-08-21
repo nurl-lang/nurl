@@ -16,10 +16,68 @@ Distribution model (the rustup / Zig / Bun shape):
 
 ## Cutting a release
 
+A release is a PR first and a tag second. The tag is the *last* step,
+because pushing one starts an irreversible chain — the release workflow
+publishes archives and the web deploy re-reads the top `CHANGELOG.md`
+section — and a tag on an unreviewed tree cannot be taken back, only
+superseded.
+
+### 1. Make `CHANGELOG.md` describe everything since the last tag
+
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git fetch origin --tags
+git log --oneline $(git describe --tags --abbrev=0)..origin/main
 ```
+
+Read that list against the `[Unreleased]` section and close the gaps.
+**This is not a formality** — merged PRs go undocumented routinely,
+because the CHANGELOG entry is written by whoever remembers to write
+one, and the release is where that gets noticed or never does. Ignore
+the `bench: refresh measured numbers [skip ci]` commits; they are
+automation.
+
+Then rename `[Unreleased]` to `[X.Y.Z] — YYYY-MM-DD`, newest first.
+Choose the number the usual way: a new capability is a minor bump, a
+fix-only run is a patch. The version is read from this heading by
+`tools/gen-site-facts.sh`, so the heading IS the released version as far
+as `nurl-lang.org` is concerned.
+
+### 2. Check `ROADMAP.md` and `docs/`
+
+Anything the release *finishes* or *changes the shape of* is likely
+described in prose somewhere that no test covers:
+
+- `ROADMAP.md` — a milestone this release closed still listed as future
+  work is the most common miss.
+- `docs/` — `PLATFORMS.md`, `LIMITATIONS.md`, `NETWORKING.md`,
+  `MEMORY.md`, `TOOLING.md`, `spec.md`. A limitation that has stopped
+  being true is worse than one that was never written down: it is
+  actively wrong, and the `docs/` tree ships **inside the toolchain
+  archive** (the nurl-mcp `nurl_docs` tool serves it), so a stale
+  sentence is installed on every user's machine.
+
+### 3. Branch and PR
+
+```bash
+git switch -c Release-vX.Y.Z
+git commit -am "Release vX.Y.Z"
+gh pr create --title "Release vX.Y.Z" --fill
+```
+
+Same review and same CI as any other change — Windows, FreeBSD, arm64,
+ASan and the unikernel gates all run.
+
+### 4. Tag, once it is merged and CI is green on `main`
+
+```bash
+git switch main && git pull --ff-only
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+Tag the merge commit on `main`, never the branch: the tag is what users
+download, and it should name a commit that passed CI in the state it
+was merged.
 
 `.github/workflows/release.yml` then builds, on a `v*` tag:
 

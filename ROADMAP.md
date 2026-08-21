@@ -252,9 +252,18 @@ platform-specific shims.
   microvm had a serial port, and a PIT-calibrated TSC where no firmware
   states the frequency. Per-arch QEMU gates run the hosted corpus
   against the same goldens (19–20 each, including the SIMD corpus),
-  with virtio net/rng drivers, TLS handshakes in the guest, native fiber
-  switches on all three ISAs, and CI booting every architecture on every
-  commit.
+  with virtio net/rng/blk drivers, TLS handshakes in the guest, native
+  fiber switches on all three ISAs, and CI booting every architecture on
+  every commit.
+  Since 0.48.0 a guest can also **keep state**: `--disk` links in a
+  virtio-blk driver and a read/write FAT12/16/32 filesystem, so the
+  ordinary `std/fs.nu` calls reach a volume any host can read — checked
+  by `fsck.vfat` and by an independent reader, across reboots. The same
+  release closed the endpoint milestone (a guest that boots straight
+  into a **swarm compute appliance**, answering expression and wasm
+  tasks) and ran the compiler itself inside the machine: `nurlc.wasm`
+  compiles in the guest to output byte-identical to native, and takes
+  the bootstrap fixed point there.
   The playground builds and boots these images (`POST /build_unikernel`
   + target dropdown), and agents do the same over MCP
   (`nurl_build_unikernel`).
