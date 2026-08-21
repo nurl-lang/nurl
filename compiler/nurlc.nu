@@ -25483,6 +25483,72 @@
 // resolved path — same behaviour as before, just a weaker key. The
 // as-written path stays in use for reading and diagnostics, so error
 // messages and goldens are unchanged.
+// Resolve '.', '..' and repeated '/' in `path` TEXTUALLY — no
+// filesystem, no libc. This is the dedup key's floor: `realpath(3)`
+// does this and resolves symlinks too, but it is a POSIX call, and a
+// target without one (wasm32-wasi stubs it to NULL) fell back to the
+// path AS WRITTEN. Two spellings of one file were then two keys, so
+// `stdlib/core/vec.nu` and `stdlib/std/../core/vec.nu` both compiled
+// and every symbol in vec.nu collided with itself — import_diamond,
+// which exists to pin exactly that, failed under nurlc.wasm and
+// passed natively. A leading '..' that cannot be popped stays: it is
+// still meaningful relative to a cwd this function does not know.
+@ __lex_normalize s path → s {
+    : i n ( nurl_str_len path )
+    ? == n 0 { ^ ( nurl_str_cat path `` ) } {}
+    : *u pp # *u path
+    // The result is never longer than the input; +2 covers a "." for
+    // a fully-collapsing path and the NUL.
+    : s out # s ( nurl_alloc + n 2 )
+    : *u op # *u out
+    // Where each kept component starts in `out`, so ".." can pop one.
+    : s stk # s ( nurl_alloc * + / n 2 2 8 )
+    : *i sp # *i stk
+    : ~ i sn 0
+    : ~ i w 0
+    : b absolute == & # i . pp 0 255 47
+    ? absolute { = . op 0 # u 47 = w 1 } {}
+    : ~ i i 0
+    ~ < i n {
+        : ~ i j i
+        ~ & < j n != & # i . pp j 255 47 { = j + j 1 }
+        : i clen - j i
+        : b is_dot & == clen 1 == & # i . pp i 255 46
+        : b is_dotdot & & == clen 2 == & # i . pp i 255 46 == & # i . pp + i 1 255 46
+        ? | == clen 0 is_dot {} {
+            : ~ b popped F
+            ? & is_dotdot > sn 0 {
+                // Pop unless what is on top is itself a '..' — those
+                // are the components no amount of text can resolve.
+                : i last . sp - sn 1
+                : b last_dd & & == - w last 3
+                == & # i . op last 255 46 == & # i . op + last 1 255 46
+                ? ! last_dd { = w last = sn - sn 1 = popped T } {}
+            } {}
+            ? popped {} {
+                = . sp sn w
+                = sn + sn 1
+                : ~ i c 0
+                ~ < c clen { = . op + w c # u & # i . pp + i c 255 = c + c 1 }
+                = w + w clen
+                = . op w # u 47
+                = w + w 1
+            }
+        }
+        = i + j 1
+    }
+    // Strip the trailing '/' a component always writes — but never the
+    // root's own leading one.
+    ? & > w 0 == & # i . op - w 1 255 47 { ? ! & absolute == w 1 { = w - w 1 } {} } {}
+    // "a/.." and "." collapse to nothing, which is the current
+    // directory — "." — never the empty string, which is not a path
+    // and would collide with itself as a key.
+    ? == w 0 { = . op 0 # u 46 = w 1 } {}
+    = . op w # u 0
+    ( nurl_free stk )
+    ^ out
+}
+
 @ __canon_import_key s path → s {
     : s r ( realpath path # *u 0 )
     // realpath(3) mallocs its result ONLY when the second argument is
@@ -25496,7 +25562,10 @@
         ( nurl_free # s r )
         ^ out }
     {}
-    ^ ( nurl_str_cat path `` )
+    // No realpath on this target (wasm32-wasi stubs it): normalise
+    // what the text alone can settle, which is every case that does
+    // not involve a symlink.
+    ^ ( __lex_normalize path )
 }
 
 @ mem_is_imported i syms s path → b {
