@@ -58,7 +58,7 @@ $ `stdlib/std/bytes.nu`
     : ~ i cur 0
     : ~ b indig F
     ~ < k n {
-        : i c ( nurl_str_get s k )
+        : i c ( nurl_str_at s n k )
         ? & >= c 48 <= c 57
         { = cur + * cur 10 - c 48 = indig T }
         { ? indig { ( vec_push [u] out # u cur ) = cur 0 = indig F } {} }

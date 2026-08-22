@@ -39,6 +39,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   26.3 per record. A nurlc.wasm self-compile stays byte-identical to the
   native compiler's output.
 
+  **That 17.5 % is one microarchitecture.** The two halves of the change do
+  not travel together. Measured against the reference JIT on the same runner,
+  on the unchanged C module, the corpus is a wash on an EPYC 7763 (geomean
+  1.03 against a same-machine noise floor of 0.98) — and bimodal underneath:
+  the rows the address fold moves are 0.74–0.94, and `sort_window`,
+  `prefix_scan`, `lcg` and `sieve` are 1.44–1.56. Those four are the ones
+  whose host instruction count and branch misses do not change between builds
+  at all; what moves them is where the optimiser happens to place the
+  dispatch, which lands well on one front end and badly on another. The
+  algorithmic half — one record fewer per address computation — travels; the
+  layout half is luck, and `bench/wasmbench.sh` cannot currently tell the two
+  apart because it measures one revision on one runner.
+
 - **The wasm `strlen` is no longer a byte loop.** `zig cc
   --target=wasm32-wasi` resolves `strlen` from its own compiler_rt shim
   before wasi-libc's, and that shim is `while (s[n] != 0) n += 1;`. NURL's
@@ -57,6 +70,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   untouched: there libc's vectorised routine is the one you want.
 
 ### Fixed
+
+- **`sha256_hex` was quadratic: 3.5 s to hash a 383 KB file, 1 ms after.**
+  `stdlib/std/hash.nu`'s `s` → `( Vec u )` converter pushed byte by byte
+  through `nurl_str_get`, which re-runs `strlen` on every call — the trap
+  that accessor's own doc comment names, and that `bytes.nu` had already
+  fixed in `bytes_from_str` and `bytes_extend_str`. This copy of it was
+  missed, so every `sha256_hex` and `hmac_sha256_hex` caller paid O(n²):
+  the SHA-256 transform over 383 KB is 8 ms, the conversion into it was
+  3494. One `strlen` and one `memcpy` now, a **3500×** speedup on that
+  input, same digest.
+
+  `wasmbuilder` 0.1.8 walked straight into it — hashing the whole runtime
+  translation unit for its cache key put that 3.5 s in front of every wasm
+  build, which is what the refreshed WASMRESULTS showed as a **45× jump in
+  the NURL → wasm compile column** while every other compile column moved
+  only with the runner. A wasm compile is 67 ms again, with the correct
+  key kept. A new test hashes 512 KB under a wall-clock budget with a
+  three-orders-of-magnitude margin, so the shape cannot come back quietly.
+
+  The same per-byte shape is fixed in `stdlib/ext/crypto.nu`,
+  `stdlib/std/hkdf.nu` and `stdlib/std/hash_blake2b.nu`. It survives
+  elsewhere in the stdlib — `stdlib/ext/mcp_search.nu` and the HTTP header
+  and body parsers walk their inputs this way — where the inputs are
+  usually short but not always. Not audited here.
 
 - **`wasmbuilder` 0.1.8: the cached wasm runtime object could be stale.** The
   cache key was the content hash of `stdlib/runtime.c` — a three-line

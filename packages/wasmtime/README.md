@@ -164,7 +164,23 @@ wasmtime run --invoke <export> <module.wasm> [args…]
   Over the round the corpus went 8.35 s → 6.93 s — **17.5 %** by geometric
   mean, every benchmark faster, nbody −32 %, ring_write −36 %,
   bloom_filter −36 % — at 96.0G host instructions → 78.3G over 3.12G →
-  2.98G records, which is 30.8 → **26.3 per record**. The self-host went
+  2.98G records, which is 30.8 → **26.3 per record**.
+  That number is one microarchitecture, and the round after it says so.
+  Measured against the reference JIT on one runner, on the C module (which
+  did not change, so the comparison is of runtimes and nothing else), the
+  same change is a wash on an EPYC 7763: geomean 1.03, against a
+  same-machine noise floor of 0.98 established from two consecutive
+  refreshes of this report. Underneath that wash it is bimodal. The rows
+  the address fold moves are 0.74–0.94 there too — bloom_filter 0.74,
+  matmul 0.76, nbody 0.86, hash_join 0.94 — so **that half travels**. The
+  rows at 1.44–1.56 are `sort_window`, `prefix_scan`, `lcg` and `sieve`:
+  the four whose host instruction count and branch misses do not change
+  between these builds at all, and which moved ±10–25 % during this round
+  on placement alone. **That half is luck**, and it landed on one front end
+  and not the other. Read the corpus number as "this is what one machine
+  did", not as a property of the runtime — and note that `wasmbench.sh`
+  cannot yet separate the two, because it measures one revision on one
+  runner and a runner swap moves every column by more than the effect. The self-host went
   26.7 s → 25.5 s on the same module, and 21.7 s once the module itself
   was rebuilt with a toolchain fix this round turned up: `zig cc
   --target=wasm32-wasi` resolves `strlen` from its own compiler_rt shim,
