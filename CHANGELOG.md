@@ -43,6 +43,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`packages/wasmtime` 0.9.0 — the interpreter is 30–49 % faster, and the
+  reason was visible only once the executed opcodes were counted.** A
+  histogram of every record the benchmark corpus dispatches said that
+  45 % of them were `R_MOV`. Register form had kept the one thing that
+  makes a stack machine a stack machine: `local.get x` emitted a copy of
+  local `x` into the slot for the current stack height, so the consumer
+  could find it at a statically known place. A register machine does not
+  need that — the consumer can address `x` itself.
+
+  The predecoder now keeps a **height → slot map**: `local.get` records
+  that this height *is* the local's slot and emits nothing, and every
+  operand read resolves through the map. Destinations stay canonical, so
+  no alias ever names another alias. An alias is materialised again
+  wherever the layout has to be the canonical one — before a control
+  transfer (branch targets move results between canonical slots), before
+  a call or a value-stack bridge (both want their operands contiguous),
+  and before a `local.set` overwrites a local some live stack entry is
+  aliasing. That deleted 27 % of the records the corpus dispatches
+  (`local.get` fell from 45 % of them to 24 %) and 31 % of the host
+  instructions.
+
+  The rest was the driver's per-record overhead, which was paying for
+  things it could have hoisted. The pc, the code base and the frame's
+  register base now live in loop-locals typed `*i` instead of being
+  re-read through the `Wc` cursor and addressed with `nurl_peek` /
+  `nurl_poke` — the runtime helpers NULL-check their base, so every
+  operand access carried a branch the type system already ruled out.
+  Fuel became a plain countdown: `-1` (unlimited) maps to a budget
+  nothing can outlive, so metering costs a `dec` and a `js` rather than a
+  load, a zero-test, a conditional decrement and a store — and `--fuel N`
+  still stops at exactly the same instruction. `PFunc` now carries the
+  arity and body offset it already knew, so a call no longer walks
+  funcs → typeidx → types twice to re-derive them.
+
+  With `local.get` gone, `i32.const` was the biggest class left at 22 %
+  of what remained — and it is the same redundancy one level down. The
+  value is fixed for the life of the module, so copying it into a stack
+  slot at run time is work the predecoder can do once. A pre-scan interns
+  the body's distinct constants; the frame reserves a slot for each
+  **between the locals and the operand stack**, and `i32.const K` becomes
+  an alias to that slot, handled by the map operand forwarding already
+  built. Placing the pool there is the whole trick: both boundaries are
+  known before the pass, so every slot index a record carries is final
+  when it is emitted — a pool *after* the stack would need `maxh`, which
+  is not known until the pass ends.
+
+  The first attempt did it the other way, carrying the constant as an
+  immediate in the record with a flag bit. It deleted 91 % of the CONST
+  records and was *slower*: the flag turns the hot arithmetic arm into an
+  unpredictable branch, and the immediate cannot be speculated into a
+  load index. Making the operand an ordinary slot costs the driver
+  nothing at all, which is why that is the version that shipped.
+
+  Together the two passes delete **43 %** of the records the corpus
+  dispatches and 39 % of the host instructions it runs. Cost per
+  surviving record went 56 → 60, which is the shape to want: what was
+  deleted was the cheapest work.
+
+  Measured on the wasm benchmark corpus: `packet_classifier` −59 %,
+  `ring_write` −59 %, `affine_mix` −57 %, `prefix_scan` −56 %,
+  `lcg` −53 %, `sort_window` −50 %, `sieve` −47 %, `binary_search` −43 %,
+  `matmul` −43 %, and the full 65k-line compiler self-host on the
+  interpreter 57.8 s → 33.7 s. Every benchmark's output is byte-identical
+  to the old runtime's, all seven package test suites pass, and
+  `nurlc.wasm` compiling `nurlc.nu` under this interpreter still produces
+  LLVM IR byte-identical to the native compiler's.
+
+  One behavioural note, deliberate: `--fuel N` meters predecoded
+  records, and there are now fewer of them per unit of guest, so a given
+  budget runs a guest further than it did. The bound is the same kind of
+  bound; the unit is documented in the README.
+
+- **The constant pre-scan cannot hang on a hostile immediate.** It walks
+  the body with `__skip_imm`, the routine the decoder already trusts for
+  immediate layout, and a malformed length there can decode to a cursor
+  move that goes backwards. The scan only reads, so it just has to end:
+  the loop now forces the cursor forward, making termination a property
+  of the loop rather than of every encoding it steps past.
+
+- **`__pfunc_for` bounds the function index before it can grow the
+  predecode cache.** It is reached from a call record — i.e. straight
+  out of the module — and the old order relied on `__frame_new` having
+  checked the module's own function table first. The check now lives
+  where the index is used.
+
 - **The CI image is rebuilt on zig 0.16** —
   `nurllang/ci:ubuntu24-20260821`, which `ci.yml`'s three Linux jobs now
   pin. A `containers/ci/Dockerfile` edit alone changes nothing: the image
