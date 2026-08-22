@@ -113,7 +113,7 @@ $ `interp.nu`
                     }
                     ( interp_run_start it )
                     ( exec_func it fidx )
-                    ? . it trap {
+                    ? ( interp_trapped it ) {
                         ( nurl_print `wasmtime: trap: ` ) ( nurl_print ( string_data ( bytes_to_str . it trapmsg ) ) ) ( nurl_print `\n` )
                         = rc 1
                     } {
@@ -169,7 +169,7 @@ $ `interp.nu`
                     ( interp_run_start it )
                     ( exec_func it fidx )
                     ( interp_flush it )  // _start may return without proc_exit
-                    ? . it trap {
+                    ? ( interp_trapped it ) {
                         ( nurl_eprint `wasmtime: trap: ` ) ( nurl_eprintln ( string_data ( bytes_to_str . it trapmsg ) ) )
                         = rc 1
                     } { = rc . it exit_code }

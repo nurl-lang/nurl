@@ -35,8 +35,8 @@ $ `src/interp.nu`
                 ? != 0 ( nurl_str_len dir ) { ( interp_set_preopen it dir dir ) } {}
                 ( interp_push_arg it label )
                 ( exec_func it ( module_export_func m `_start` ) )
-                ? . it trap { ( nurl_print `FAIL: ` ) ( nurl_print label ) ( nurl_print ` trapped\n` ) = fail 1 } {}
-                ? ! . it exited { ( nurl_print `FAIL: ` ) ( nurl_print label ) ( nurl_print ` no proc_exit\n` ) = fail 1 } {}
+                ? ( interp_trapped it ) { ( nurl_print `FAIL: ` ) ( nurl_print label ) ( nurl_print ` trapped\n` ) = fail 1 } {}
+                ? ! ( interp_exited it ) { ( nurl_print `FAIL: ` ) ( nurl_print label ) ( nurl_print ` no proc_exit\n` ) = fail 1 } {}
                 ? != 0 . it exit_code { ( nurl_print `FAIL: ` ) ( nurl_print label ) ( nurl_print ` nonzero exit\n` ) = fail 1 } {}
                 ( interp_free it )
             } { ( nurl_print `FAIL: decode\n` ) = fail 1 }
@@ -60,8 +60,8 @@ $ `src/interp.nu`
                 ( interp_push_arg it `wasitest` )
                 ( exec_func it fidx )
                 // the module writes "hi from wasi" to stdout above this line
-                ? . it trap { ( nurl_print `FAIL: trapped\n` ) = fails + fails 1 } {}
-                ? ! . it exited { ( nurl_print `FAIL: did not call proc_exit\n` ) = fails + fails 1 } {}
+                ? ( interp_trapped it ) { ( nurl_print `FAIL: trapped\n` ) = fails + fails 1 } {}
+                ? ! ( interp_exited it ) { ( nurl_print `FAIL: did not call proc_exit\n` ) = fails + fails 1 } {}
                 ( nurl_print `exit_code 42:    ` ) ( nurl_print_int . it exit_code )
                 ( nurl_print ? == . it exit_code 42 ` == ` ` != ` ) ( nurl_print `42\n` )
                 ? != . it exit_code 42 { = fails + fails 1 } {}

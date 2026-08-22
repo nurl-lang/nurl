@@ -54,9 +54,9 @@ $ `src/interp.nu`
                     ~ < k na { ( vec_push [i] . it vs ?? ( vec_get [i] args k ) { T x → x F → 0 } ) = k + k 1 }
                     ( exec_func it fidx )
                     ? want_trap {
-                        = r ? . it trap 1 0
+                        = r ? ( interp_trapped it ) 1 0
                     } {
-                        ? ! . it trap {
+                        ? ! ( interp_trapped it ) {
                             : i n ( vec_len [i] . it vs )
                             ? > n 0 { = r ?? ( vec_get [i] . it vs - n 1 ) { T x → x F → 0 } } {}
                         } {}

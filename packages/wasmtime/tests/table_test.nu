@@ -28,7 +28,7 @@ $ `src/interp.nu`
                     : ~ i k 0
                     ~ < k na { ( vec_push [i] . it vs ?? ( vec_get [i] args k ) { T x → x F → 0 } ) = k + k 1 }
                     ( exec_func it fidx )
-                    ? ! . it trap {
+                    ? ! ( interp_trapped it ) {
                         : i n ( vec_len [i] . it vs )
                         ? > n 0 { = r ?? ( vec_get [i] . it vs - n 1 ) { T x → x F → 0 } } {}
                     } {}
