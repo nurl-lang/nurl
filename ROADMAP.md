@@ -7,8 +7,8 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-20 · Current release: **0.47.0** · Language: **Grammar
-v2.6** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
+_Last reviewed: 2026-08-22 · Current release: **0.49.0** · Language: **Grammar
+v2.7** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
 
@@ -21,7 +21,7 @@ stage2). The only build dependency is clang / LLVM 15+.
 
 What is solid today:
 
-- **Language (Grammar v2.6).** Sum types (`|`) and product types (structs),
+- **Language (Grammar v2.7).** Sum types (`|`) and product types (structs),
   generics over structs and functions (incl. generics over option/result
   types), pattern matching with **match guards**, **or-patterns**, and
   **N-ary payloads**, **trait bounds** on type parameters (`[A: Ord]`), **compile-time constant
@@ -40,7 +40,12 @@ What is solid today:
   (grammar v2.6, §3.3b) — nurlc emits one clone of the function per
   instruction-set tier and dispatches on CPUID once per process, so a
   kernel written once runs AVX2 where it exists and baseline where it does
-  not, with no `#ifdef` and no separate build. The grammar decision
+  not, with no `#ifdef` and no separate build. 0.49.0 adds the second
+  declaration prefix, **`inline`** (grammar v2.7, §3.3c): LLVM's
+  `alwaysinline`, for the case where the cost model is structurally wrong
+  — a helper whose arguments are constants at every call site, scored on
+  its whole body, called from a caller large enough to push the decision
+  the other way. The grammar decision
   for prefix-arity (no grouping delimiter) is formally locked, and since
   0.37.0 the n-ary `&`/`|` arity trap it makes possible is a **hard error
   by default** (`--no-strict-arity` demotes it to a warning) — the shape
@@ -100,13 +105,14 @@ A high-level map of what exists. Dates and per-feature detail are in
 - Self-hosted compiler (`compiler/nurlc.nu`) with a deterministic, byte-identical
   bootstrap; stage-0 links the committed `nurlc_lastgood.ll` snapshot (no
   Python in the toolchain).
-- Grammar evolved v0.1 → **v2.6** (snapshots in [`spec/`](spec/)). v2.x added:
+- Grammar evolved v0.1 → **v2.7** (snapshots in [`spec/`](spec/)). v2.x added:
   visibility (`pub`) enforcement across functions, types, consts, and enum
   variants; trait bounds; match guards + or-patterns; const folding; channel
   select; **dynamic trait objects** (`%Trait` + `( dyn Trait v )`, v2.3);
   **`break` / `continue`** as reserved identifiers (v2.4); the **`v128`**
   SIMD lane type (v2.5); the **`simd` CPU-dispatch prefix** on `@`
-  declarations (v2.6); and locked the prefix-arity grouping decision.
+  declarations (v2.6); the **`inline` always-inline prefix** (v2.7); and
+  locked the prefix-arity grouping decision.
 - Type system: strong, static, inferred, algebraic; no subtyping, no implicit
   conversions. Sized integer/float types with **signedness carried in the
   type representation itself** (`u`/`u16`/`u32`/`u64` distinct from the
