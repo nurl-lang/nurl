@@ -165,8 +165,15 @@ $ `module.nu`
     = . it mod # s m
     = . it pfuncs ( vec_new [s] )
     = . it vs ( vec_new [i] )
-    = . it mem ( vec_new [u] )
-    = . it mem_pages 0
+    // Linear memory is ONE zero-filled block of the declared minimum.
+    // `vec_zeroed` hands the whole size to calloc, so the pages arrive
+    // from the kernel already zero and stay untouched until the guest
+    // writes them. The push-a-zero-per-byte loop this replaces ran
+    // 16.8 million bounds-checked pushes for the 257-page minimum a
+    // wasi command module declares — 78 % of the wall clock of a run
+    // whose guest printed one line and exited.
+    = . it mem ( vec_zeroed [u] ? == . m has_mem 1 * . m mem_min ( __page ) 0 )
+    = . it mem_pages ? == . m has_mem 1 . m mem_min 0
     = . it globals ( vec_new [i] )
     = . it argv ( vec_new [s] )
     = . it envp ( vec_new [s] )
@@ -215,11 +222,17 @@ $ `module.nu`
         = ee + ee 1
     }
     ? == . m has_mem 1 {
-        : i bytes * . m mem_min ( __page )
-        : ~ i k 0
-        ~ < k bytes { ( vec_push [u] . it mem # u 0 ) = k + k 1 }
-        = . it mem_pages . m mem_min
-        // copy active data segments into memory
+        // Copy active data segments into memory: one memcpy per segment.
+        // Per byte this used to cost a bounds check, an Option unwrap and
+        // a bounds-checked store, and a module carries as much data as it
+        // has initialised globals — nurlc.wasm ships 110 KB of it.
+        //
+        // A segment that does not fit is an instantiation error, as the
+        // spec says and as the reference runtime reports it. The loop
+        // this replaces silently dropped the overhanging bytes, and for a
+        // negative offset it wrote the segment's tail at the wrong
+        // address instead of rejecting the module.
+        : i cap ( vec_len [u] . it mem )
         : i nd ( vec_len [s] . m datas )
         : ~ i di 0
         ~ < di nd {
@@ -227,13 +240,16 @@ $ `module.nu`
             ? & != # i dp 0 == . # *DataSeg dp passive 0 {  // passive: memory.init only
                 : *DataSeg ds # *DataSeg dp
                 : i dn ( vec_len [u] . ds bytes )
-                : ~ i bi 0
-                ~ < bi dn {
-                    : i tgt + . ds offset bi
-                    ? < tgt ( vec_len [u] . it mem ) {
-                        ( vec_set [u] . it mem tgt ?? ( vec_get [u] . ds bytes bi ) { T x → x F → # u 0 } )
+                : i off . ds offset
+                // `off > cap - dn` rather than `off + dn > cap`: the offset
+                // is a number the module chose, and the sum can wrap.
+                ? | < off 0 > off - cap dn {
+                    ( __trap it `data segment does not fit in linear memory` )
+                } {
+                    ? > dn 0 {
+                        : s dst # s + # i ( vec_data [u] . it mem ) off
+                        ( nurl_memcpy dst # s ( vec_data [u] . ds bytes ) dn )
                     } {}
-                    = bi + bi 1
                 }
             } {}
             = di + di 1
@@ -672,9 +688,9 @@ $ `module.nu`
     : ~ i limit 65536
     ? & > . m mem_max 0 < . m mem_max limit { = limit . m mem_max } {}
     ? | < delta 0 > + old delta limit { ^ -1 } {}
-    : i add * delta ( __page )
-    : ~ i k 0
-    ~ < k add { ( vec_push [u] . it mem # u 0 ) = k + k 1 }
+    // One resize, zero-filling the new tail in a single memset, instead of
+    // a push per byte: growing by a single page was 65 536 pushes.
+    : b _ok ( vec_resize_zeroed [u] . it mem * + old delta ( __page ) )
     = . it mem_pages + old delta
     ^ old
 }
@@ -756,9 +772,11 @@ $ `module.nu`
             ^ rf
         } {}
     } {}
-    : ( Vec i ) regs ( vec_new [i] )
-    : ~ i k 0
-    ~ < k . pfc nslots { ( vec_push [i] regs 0 ) = k + k 1 }
+    // One zeroed block for the whole slot array. The slot count is
+    // locals + constant pool + max stack height and the decoder lets it
+    // reach 2^20, so a push per slot is both slower on every cold call
+    // and the shape a hostile module would aim at.
+    : ( Vec i ) regs ( vec_zeroed [i] . pfc nslots )
     // The constant pool, once per frame rather than once per execution of
     // the `i32.const` that used to build it. Recycled frames keep it: no
     // record writes above the locals except into the operand stack.

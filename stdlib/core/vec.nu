@@ -31,6 +31,8 @@
 // API:
 //   ( vec_new [A] )                → ( Vec A )   empty, no alloc
 //   ( vec_with_cap [A] n )         → ( Vec A )   preallocated
+//   ( vec_zeroed [A] n )           → ( Vec A )   n zero-filled elements,
+//                                                len == n, one calloc
 //   ( vec_len [A] v )              → i          current length
 //   ( vec_cap [A] v )              → i          current capacity
 //   ( vec_is_empty [A] v )         → b          len == 0
@@ -53,6 +55,9 @@
 //   ( vec_swap [A] v i j )         → b          swaps two slots
 //   ( vec_reverse [A] v )          → v          in-place reverse
 //   ( vec_reserve [A] v n )        → v          ensure cap ≥ len + n
+//   ( vec_resize_zeroed [A] v n )  → b          set len to exactly n;
+//                                                a longer n zero-fills the
+//                                                new tail in one memset
 //   ( vec_shrink_to_fit [A] v )    → v          release unused capacity
 //   ( vec_extend [A] dst src )     → v          bitwise copy of src's elements
 //                                                onto dst (trivial element types
@@ -167,6 +172,26 @@
     : s ctl ( nurl_zalloc 24 )
     : i want ? > n 0 n 0
     ? > want 0 { ( __vec_grow [A] ctl want ) } {}
+    ^ @ ( Vec A ) { ctl }
+}
+
+// `n` zero-filled elements in ONE allocation, with `len` already at n —
+// the calloc-shaped sibling of `vec_with_cap`. Reaching the same state
+// by pushing a zero n times costs n bounds checks, n length stores and
+// log2(n) reallocations, and it writes every page; this hands the size
+// straight to `nurl_zalloc`, so a large buffer arrives as untouched
+// zero pages from the kernel and costs nothing until it is written.
+//
+// Bitwise zero has to be a valid A — the same trivial-element-type rule
+// as `vec_extend` / `vec_map`. `n <= 0` is an empty Vec with no buffer.
+@ vec_zeroed [A] i n → ( Vec A ) {
+    : s ctl ( nurl_zalloc 24 )
+    ? > n 0 {
+        : s data ( nurl_zalloc * Z A n )
+        ( nurl_poke ctl 0 # i data )
+        ( nurl_poke ctl 1 n )
+        ( nurl_poke ctl 2 n )
+    } {}
     ^ @ ( Vec A ) { ctl }
 }
 
@@ -357,6 +382,24 @@
         : i len ( __vec_len_raw ctl )
         ( __vec_grow [A] ctl + len n )
     } {}
+}
+
+// Set the length to exactly `n`. Growing zero-fills the new tail with a
+// single `nurl_memset` instead of a push-a-zero loop; shrinking only
+// lowers the length, running no per-element drop, so the same
+// trivial-element-type rule as `vec_extend` applies. Returns F — and
+// changes nothing — for a negative `n`.
+@ vec_resize_zeroed [A] ( Vec A ) v i n → b {
+    ? < n 0 { ^ F } {}
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? <= n len { ( nurl_poke ctl 1 n ) ^ T } {}
+    ( __vec_grow [A] ctl n )
+    : s data ( __vec_data_raw ctl )
+    : s tail # s + # i data * Z A len
+    ( nurl_memset tail 0 * Z A - n len )
+    ( nurl_poke ctl 1 n )
+    ^ T
 }
 
 // Release any unused capacity. If len == 0 the buffer is freed entirely

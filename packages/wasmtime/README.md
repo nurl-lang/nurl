@@ -88,7 +88,14 @@ wasmtime run --invoke <export> <module.wasm> [args…]
   - **linear memory**: all sized loads/stores, `memory.size`/`memory.grow`
     (declared max + wasm32 limit honoured, −1 past them), **bulk memory**
     (`memory.copy`/`fill`/`init` with up-front bounds checks, `data.drop`,
-    passive data segments), active data segments applied at instantiation
+    passive data segments), active data segments applied at instantiation.
+    Instantiation is one `calloc` of the declared minimum plus one `memcpy`
+    per data segment, so the pages arrive from the kernel already zero and
+    untouched: a wasi command module declares 257 pages, and filling that
+    16.8 MB a byte at a time used to be **78 % of the wall clock** of a run
+    whose guest printed one line. Hello-world on this runtime went 50.1 ms
+    → 6.7 ms on that one change, and every longer run in the corpus kept
+    the same ~43 ms.
   - **globals**, **tables** + reference types: `table.get/set/grow/size/`
     `fill/copy/init`, `elem.drop`, `ref.null`/`ref.is_null`/`ref.func`,
     typed `select`; all element-segment encodings (active/passive/declared,
@@ -145,7 +152,17 @@ decoder or corrupts memory. Concretely:
 - every vector length / count is validated against the bytes physically
   remaining before anything is allocated (a 10-byte module can no longer
   request a 2³²-element buffer), and `mem.min` / `table.min` / per-function
-  locals are capped to architectural limits;
+  locals are capped to architectural limits — the bound is applied to the
+  count *itself*, never to a sum containing it, because a count near 2⁶³
+  makes `so_far + count` wrap negative and slip past a ceiling written as
+  a sum, which is a 2⁶³-iteration loop rather than a decode error;
+- a LEB128 stops contributing after ten groups: past that the value cannot
+  fit in 64 bits anyway, and `<< x 64` is poison in LLVM — a corrupted
+  continuation byte turning a terminal group into a running one is exactly
+  how a module reaches that shift;
+- an active data segment that would run past the declared initial memory is
+  refused at decode, where the offset, the length and `mem.min` are all in
+  hand; instantiation refuses it again rather than copying what fits;
 - section sizes and constant-init expressions are bounded — an over-long LEB
   size (which decodes to a negative offset) or an unterminated init expression
   is a clean decode error, not an infinite loop;
@@ -159,8 +176,9 @@ decoder or corrupts memory. Concretely:
 - the `env`/GPU import surface is opt-in (`--allow-gpu`), off by default.
 
 This was validated by an ASan-instrumented mutation fuzzer plus an exhaustive
-prefix (truncation) sweep of the whole corpus — **zero crashes, zero hangs** —
-and locked in by `tests/hardening_test.nu`. The sweep is re-run against every
+prefix (truncation) sweep of the whole corpus — 7 206 runs over six modules in
+the last pass, **zero crashes, zero hangs** — and locked in by
+`tests/hardening_test.nu`. The sweep is re-run against every
 change to the decoder or the predecoder, the two places a malformed module
 reaches first. (Note: `--fuel N` still bounds
 runaway *valid* guests; an unbounded `loop` runs forever exactly as it does on
