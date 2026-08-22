@@ -73,7 +73,25 @@ wasmtime run --invoke <export> <module.wasm> [args…]
   after — a **35 % cut** — at 68.5 → 51.6 host instructions each, 321G
   instructions in total against 156G. What the earlier rounds deleted was
   work per record; what this one also deleted was the per-record price of
-  the loop around them.) Each record keeps its original
+  the loop around them.
+  Then the dispatch became **one jump table over every opcode**. It had
+  been a chain of range tests in measured frequency order — i64 arithmetic
+  first, then the register/control forms, then i32 arithmetic, compares,
+  loads, floats — so a record paid between one and seven range tests
+  before its table, and then paid a *second* dispatch inside the helper it
+  called (`__farith` picked one of six families, each of which picked one
+  of seven ops). Written flat, one `? == op K` arm per opcode with the
+  work in the arm, LLVM builds a single table: one bounds check and one
+  indirect jump, and the float and integer helpers disappear into their
+  arms. The corpus went 12.16 s → 9.44 s on one workstation — **22 %**,
+  with nbody at −38 % and sort_window at −31 % — and 145.9G host
+  instructions → 113.2G, which is 48.2 → **37.4 per record** over the same
+  3.03G records. The self-host went 39.9 s → 32.4 s, byte-identical.
+  A negative worth recording: doing the same to the *fused* `cmp; br_if`,
+  which is 8.6 % of all records and the last caller of `__rcmp`, made the
+  whole corpus **7.6 % slower**. Twenty more arms inside an existing arm
+  is not the same shape as twenty arms in the table, and the driver's
+  register allocation is the thing that pays.) Each record keeps its original
   byte offset, so trap backtraces still point into the module image:
   - structured control flow: `block`, `loop`, `if`/`else`, `br`, `br_if`,
     `br_table`, `return`, `end` — **multi-value** block types included
