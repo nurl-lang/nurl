@@ -37,6 +37,11 @@
           "name": "storage.modifier.visibility.nurl"
         },
         {
+          "comment": "Declaration prefixes on `@`: `simd` (grammar v2.6) selects CPU-dispatched code generation, `inline` (v2.7) emits LLVM's alwaysinline. Both are reserved words everywhere, not contextual, so a bare match is correct.",
+          "match": "(?<![A-Za-z0-9_])(simd|inline)(?![A-Za-z0-9_])",
+          "name": "storage.modifier.nurl"
+        },
+        {
           "match": "(?<![A-Za-z0-9_])(inout|sink|in)(?![A-Za-z0-9_])",
           "name": "storage.modifier.param.nurl"
         },

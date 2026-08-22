@@ -82,7 +82,7 @@ $ `packages/wasmtime/src/interp.nu`
             ( interp_run_start it )
             ( exec_func it fidx )
             ( interp_flush it )
-            ? . it trap {
+            ? ( interp_trapped it ) {
                 ( string_free err )
                 = err ( bytes_to_str . it trapmsg )
             } {

@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+plain 4 5:        23
+ ok
+marked 4 5:       23
+ ok
+pub_first 6:      60
+ ok
+inline_first 6:   13
+ ok
+fact 10:          3628800
+ ok
+lane 0x0102 byte1:1
+ ok
+lane 0x0102 byte0:2
+ ok

@@ -1,5 +1,5 @@
 (* NURL — Neural Unified Representation Language
-   Grammar v2.6 — complete language specification
+   Grammar v2.7 — complete language specification
    File extension: .nu
 
    All expressions use PREFIX NOTATION.
@@ -61,13 +61,19 @@ decl = import_decl                 (*  $                             *)
      | ('pub')? const_decl         (*  :  type                       *)
      ;
 
-(* A function declaration may carry both prefixes, in either order
-   (grammar v2.6). `simd` is accepted ONLY on `@` — on any other decl
-   it is a diagnostic, not a silent no-op, because a prefix left
-   pending drifts onto the next `@` the parser reaches, which after an
-   import boundary is a function in a different file. `pub` had exactly
-   that bug before v2.0 made it read-and-clear. *)
-decl_prefix = 'pub' | 'simd' ;
+(* A function declaration may carry any of these prefixes, in any order
+   (`simd` grammar v2.6, `inline` v2.7). `simd` and `inline` are accepted
+   ONLY on `@` — on any other decl either is a diagnostic, not a silent
+   no-op, because a prefix left pending drifts onto the next `@` the
+   parser reaches, which after an import boundary is a function in a
+   different file. `pub` had exactly that bug before v2.0 made it
+   read-and-clear.
+
+   `inline` puts LLVM's `alwaysinline` on the definition. It is rejected
+   on a generic (the prefix does not survive monomorphisation) and in
+   combination with `simd` (which replaces the function with a
+   CPU-dispatching stub — the opaque call `inline` asks to remove). *)
+decl_prefix = 'pub' | 'simd' | 'inline' ;
 
 
 (* $ `path` IDENT?
@@ -809,6 +815,7 @@ IDENT       = IDENT_PLAIN ( '::' IDENT_PLAIN )* ;
      Z                       →  sizeof keyword            (TT_SIZEOF)
      pub                     →  visibility prefix         (TT_PUB)
      simd                    →  CPU-dispatch prefix (v2.6) (TT_SIMD)
+     inline                  →  always-inline prefix (v2.7) (TT_INLINE)
      break                   →  leave innermost loop      (TT_BREAK)
      continue                →  next iteration            (TT_CONTINUE)
 

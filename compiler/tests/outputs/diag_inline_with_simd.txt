@@ -1,0 +1,10 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_inline_with_simd.nu:8:13: error: 'inline' and 'simd' cannot both be applied to one function — 'simd' replaces the function with a CPU-dispatching stub, which is exactly the opaque call 'inline' asks to remove
+inline simd @ scale * i32 r * i32 a i n → v {
+            ^
+compiler/tests/diag_inline_with_simd.nu:13:1: error: 'inline' and 'simd' cannot both be applied to one function — 'simd' replaces the function with a CPU-dispatching stub, which is exactly the opaque call 'inline' asks to remove
+@ main → i { ^ 0 }
+^
+error: aborting due to 2 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

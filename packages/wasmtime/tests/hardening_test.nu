@@ -49,6 +49,13 @@ $ `src/module.nu`
     ( ck_reject `memory min over limit: ` `0061736d0100000005050100f0a204` )
     // Data-segment byte length larger than the whole module.
     ( ck_reject `huge data seg length:  ` `0061736d010000000b04010041000bffffffff0f` )
+    // A local run whose count is 2^63-1, declared after a run that already
+    // pushed one local: `locals_so_far + count` wraps to a negative and slips
+    // past a ceiling test written as a sum, leaving a 2^63-iteration push loop.
+    ( ck_reject `overflowing local run: ` `0061736d01000000010401600000030201000a10010e02017fffffffffffffffff7f7f0b` )
+    // Active data segment running past the declared initial memory: 10 bytes
+    // at offset 65530 of a one-page memory.
+    ( ck_reject `data seg past memory:  ` `0061736d0100000005030100010b12010041faff030b0a00000000000000000000` )
 
     ? == g_fail 0 { ( nurl_print `all hardening tests passed\n` ) ^ 0 } {}
     ( nurl_print `HARDENING FAILURES: ` ) ( nurl_print_int g_fail ) ( nurl_print `\n` )

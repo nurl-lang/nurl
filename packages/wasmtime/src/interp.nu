@@ -108,9 +108,12 @@ $ `module.nu`
     ( Vec s ) argv  // *Arg — WASI program arguments (argv[0] = program)
     ( Vec s ) envp  // *Arg — WASI environment entries ("NAME=VALUE")
     ( Vec s ) fds  // *WFd — file-descriptor table (0/1/2 stdio, 3 preopen, …)
-    b exited  // set after proc_exit
+    // Why execution stopped, as one word so the driver's hot loop tests one
+    // load instead of two byte fields: bit 0 = trapped, bit 1 = exited (via
+    // proc_exit). `interp_trapped` / `interp_exited` are the readers; nothing
+    // outside `__trap` and `__wasi_proc_exit` sets it.
+    i halt
     i exit_code
-    b trap
     ( Vec u ) trapmsg
     i pending_call  // callee set by call/call_indirect for the driver (-1 none)
     i max_depth  // frame-stack depth limit (trap when exceeded)
@@ -162,8 +165,15 @@ $ `module.nu`
     = . it mod # s m
     = . it pfuncs ( vec_new [s] )
     = . it vs ( vec_new [i] )
-    = . it mem ( vec_new [u] )
-    = . it mem_pages 0
+    // Linear memory is ONE zero-filled block of the declared minimum.
+    // `vec_zeroed` hands the whole size to calloc, so the pages arrive
+    // from the kernel already zero and stay untouched until the guest
+    // writes them. The push-a-zero-per-byte loop this replaces ran
+    // 16.8 million bounds-checked pushes for the 257-page minimum a
+    // wasi command module declares — 78 % of the wall clock of a run
+    // whose guest printed one line and exited.
+    = . it mem ( vec_zeroed [u] ? == . m has_mem 1 * . m mem_min ( __page ) 0 )
+    = . it mem_pages ? == . m has_mem 1 . m mem_min 0
     = . it globals ( vec_new [i] )
     = . it argv ( vec_new [s] )
     = . it envp ( vec_new [s] )
@@ -171,9 +181,8 @@ $ `module.nu`
     // fds 0/1/2 = stdin/stdout/stderr (kind 1); higher slots filled by preopen.
     : ~ i sfd 0
     ~ < sfd 3 { ( vec_push [s] . it fds # s ( __mkfd 1 ) ) = sfd + sfd 1 }
-    = . it exited F
+    = . it halt 0
     = . it exit_code 0
-    = . it trap F
     = . it trapmsg ( vec_new [u] )
     = . it pending_call -1
     = . it max_depth 65536
@@ -213,11 +222,17 @@ $ `module.nu`
         = ee + ee 1
     }
     ? == . m has_mem 1 {
-        : i bytes * . m mem_min ( __page )
-        : ~ i k 0
-        ~ < k bytes { ( vec_push [u] . it mem # u 0 ) = k + k 1 }
-        = . it mem_pages . m mem_min
-        // copy active data segments into memory
+        // Copy active data segments into memory: one memcpy per segment.
+        // Per byte this used to cost a bounds check, an Option unwrap and
+        // a bounds-checked store, and a module carries as much data as it
+        // has initialised globals — nurlc.wasm ships 110 KB of it.
+        //
+        // A segment that does not fit is an instantiation error, as the
+        // spec says and as the reference runtime reports it. The loop
+        // this replaces silently dropped the overhanging bytes, and for a
+        // negative offset it wrote the segment's tail at the wrong
+        // address instead of rejecting the module.
+        : i cap ( vec_len [u] . it mem )
         : i nd ( vec_len [s] . m datas )
         : ~ i di 0
         ~ < di nd {
@@ -225,13 +240,16 @@ $ `module.nu`
             ? & != # i dp 0 == . # *DataSeg dp passive 0 {  // passive: memory.init only
                 : *DataSeg ds # *DataSeg dp
                 : i dn ( vec_len [u] . ds bytes )
-                : ~ i bi 0
-                ~ < bi dn {
-                    : i tgt + . ds offset bi
-                    ? < tgt ( vec_len [u] . it mem ) {
-                        ( vec_set [u] . it mem tgt ?? ( vec_get [u] . ds bytes bi ) { T x → x F → # u 0 } )
+                : i off . ds offset
+                // `off > cap - dn` rather than `off + dn > cap`: the offset
+                // is a number the module chose, and the sum can wrap.
+                ? | < off 0 > off - cap dn {
+                    ( __trap it `data segment does not fit in linear memory` )
+                } {
+                    ? > dn 0 {
+                        : s dst # s + # i ( vec_data [u] . it mem ) off
+                        ( nurl_memcpy dst # s ( vec_data [u] . ds bytes ) dn )
                     } {}
-                    = bi + bi 1
                 }
             } {}
             = di + di 1
@@ -303,6 +321,13 @@ $ `module.nu`
 @ interp_stdout_bytes * Interp it → ( Vec u ) { ^ . it capout }
 
 @ interp_stderr_bytes * Interp it → ( Vec u ) { ^ . it caperr }
+
+// Did the guest trap? Did it call proc_exit? The two halves of `halt`.
+// Both can be set: a trap while unwinding an exiting module leaves the
+// trap visible, which is what an embedder wants to report.
+@ interp_trapped * Interp it → b { ^ != 0 & . it halt 1 }
+
+@ interp_exited * Interp it → b { ^ != 0 & . it halt 2 }
 
 // Append a program argument (copied from a NUL-terminated host string).
 @ interp_push_arg * Interp it s str → v {
@@ -453,7 +478,7 @@ $ `module.nu`
 
 // Set the trap flag with a message (the uniform way every trap is raised).
 @ __trap * Interp it s msg → v {
-    = . it trap T
+    = . it halt | . it halt 1
     ( vec_free [u] . it trapmsg )
     = . it trapmsg ( bytes_from_str msg )
 }
@@ -592,7 +617,14 @@ $ `module.nu`
 // containing words, still one raw load per byte and zero per-byte checks.
 // The base pointer is re-fetched from the Vec every call (one dereference)
 // so memory.grow can never leave a stale pointer behind.
-@ __mem_load * Interp it i ea i n i signed → i {
+//
+// `inline` (grammar v2.7): every driver arm calls this with `n` and
+// `signed` as literals, so an inlined copy folds to a bounds check, one
+// load and a shift — but LLVM scores the callee's whole body, sees the
+// byte-crossing path and the sign-extension it will never reach from that
+// site, and declines. Forcing it was 9.5 % off the benchmark corpus, 24 %
+// off nbody and matmul, 19 % off sieve.
+inline @ __mem_load * Interp it i ea i n i signed → i {
     ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
         ( __trap it `memory load out of bounds` ) ^ 0
     } {}
@@ -625,7 +657,7 @@ $ `module.nu`
 }
 
 // Write the low n bytes of val little-endian to mem[ea].
-@ __mem_store * Interp it i ea i n i val → v {
+inline @ __mem_store * Interp it i ea i n i val → v {
     ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
         ( __trap it `memory store out of bounds` ) ^ v
     } {}
@@ -663,9 +695,9 @@ $ `module.nu`
     : ~ i limit 65536
     ? & > . m mem_max 0 < . m mem_max limit { = limit . m mem_max } {}
     ? | < delta 0 > + old delta limit { ^ -1 } {}
-    : i add * delta ( __page )
-    : ~ i k 0
-    ~ < k add { ( vec_push [u] . it mem # u 0 ) = k + k 1 }
+    // One resize, zero-filling the new tail in a single memset, instead of
+    // a push per byte: growing by a single page was 65 536 pushes.
+    : b _ok ( vec_resize_zeroed [u] . it mem * + old delta ( __page ) )
     = . it mem_pages + old delta
     ^ old
 }
@@ -747,9 +779,11 @@ $ `module.nu`
             ^ rf
         } {}
     } {}
-    : ( Vec i ) regs ( vec_new [i] )
-    : ~ i k 0
-    ~ < k . pfc nslots { ( vec_push [i] regs 0 ) = k + k 1 }
+    // One zeroed block for the whole slot array. The slot count is
+    // locals + constant pool + max stack height and the decoder lets it
+    // reach 2^20, so a push per slot is both slower on every cold call
+    // and the shape a hostile module would aim at.
+    : ( Vec i ) regs ( vec_zeroed [i] . pfc nslots )
     // The constant pool, once per frame rather than once per execution of
     // the `i32.const` that used to build it. Recycled frames keep it: no
     // record writes above the locals except into the operand stack.
@@ -769,7 +803,7 @@ $ `module.nu`
     = . fr fidx fidx
     = . fr regs regs
     = . fr pos 0
-    = . fr end . pfc count
+    = . fr end * . pfc count 6
     = . fr code_start . pfc code_start
     = . fr pins pins
     = . fr ret_dst ret_dst
@@ -838,9 +872,17 @@ $ `module.nu`
 @ __R_UNREACH → i { ^ 318 }
 
 @ __R_TRAPUN → i { ^ 319 }  // unsupported opcode (0xfd/0xfe/unknown)
-@ __R_FLOATB → i { ^ 320 }  // vs bridge: A=wasm op B=srcbase C=npops (dst=srcbase)
 @ __R_FCB → i { ^ 321 }  // vs bridge: A=sub B=idx-imm C=srcbase D=pops<<1|push
 @ __R_IFZ → i { ^ 322 }  // A=target B=cond — jump when cond == 0
+@ __R_BRIFC → i { ^ 323 }  // A=target B=lhs C=rhs D=compare op — jump when it holds
+
+// A `br_if` that also moves block results packs its destination and source
+// slot indices into one word, so a slot index has to fit in 20 bits. A
+// function needing more than a million slots is not one a compiler emits —
+// a ten-byte function CAN declare a million locals, though, so this is an
+// architectural limit like the memory and table minimums the decoder
+// already enforces, not an assumption.
+@ __slot_cap → i { ^ 1048576 }
 
 // Emit one 6-slot record; returns its index.
 @ __pf_emit ( Vec i ) code i op i a i b i cc i dd i byte → i {
@@ -879,11 +921,51 @@ $ `module.nu`
     ^ 1
 }
 
+// `cmp; br_if L` is two records where one will do: the compare writes a 0/1
+// into a slot the very next record reads and then throws away. When the
+// compare is the record just emitted and the branch needs no result move,
+// the compare is rewritten IN PLACE into a branch that does its own test,
+// and no branch record is emitted at all.
+//
+// `i32.eqz x; br_if L` needs no new opcode: it is exactly `br_if_zero x`,
+// the record `if` already uses.
+//
+// The safety argument is `__fold_set`'s: `lastp` is only non-negative when
+// the previous instruction was straight-line, and no control opcode is, so
+// no label can sit between the compare and the branch — which is the only
+// way a path could reach the branch without the compare.
+@ __fuse_branch * PFunc pf i lastp i cond i tgt i byte → b {
+    ? < lastp 0 { ^ F } {}
+    ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ F } {}
+    : i base * lastp 6
+    : i lop ?? ( vec_get [i] . pf code base ) { T x → x F → 0 }
+    ? != ?? ( vec_get [i] . pf code + base 1 ) { T x → x F → -1 } cond { ^ F } {}
+    : i lb ?? ( vec_get [i] . pf code + base 2 ) { T x → x F → 0 }
+    : i lc ?? ( vec_get [i] . pf code + base 3 ) { T x → x F → 0 }
+    ? | == lop 69 == lop 80 {  // eqz → branch when the operand itself is zero
+        ( vec_set [i] . pf code base ( __R_IFZ ) )
+        ( vec_set [i] . pf code + base 1 tgt )
+        ( vec_set [i] . pf code + base 2 lb )
+        ( vec_set [i] . pf code + base 5 byte )
+        ^ T
+    } {}
+    ? | & >= lop 70 <= lop 79 & >= lop 81 <= lop 90 {  // the integer compares
+        ( vec_set [i] . pf code base ( __R_BRIFC ) )
+        ( vec_set [i] . pf code + base 1 tgt )
+        ( vec_set [i] . pf code + base 2 lb )
+        ( vec_set [i] . pf code + base 3 lc )
+        ( vec_set [i] . pf code + base 4 lop )
+        ( vec_set [i] . pf code + base 5 byte )
+        ^ T
+    } {}
+    ^ F
+}
+
 // Emit a branch to label depth `k` (top of `open` = depth 0). `cond` is the
 // condition slot for br_if (-1 = unconditional). `h` is the height AFTER any
 // condition pop. Fills patch sites for forward targets. Returns nothing; the
 // caller handles liveness.
-@ __emit_branch * PFunc pf ( Vec s ) open i k i cond i sb i h i byte → v {
+@ __emit_branch * PFunc pf ( Vec s ) open i k i cond i sb i h i byte i lastp → v {
     : i n ( vec_len [s] open )
     ? >= k n { ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) ^ v } {}
     : s bp ?? ( vec_get [s] open - - n 1 k ) { T x → x F → # s 0 }
@@ -892,11 +974,15 @@ $ `module.nu`
     : i arity ? == . blk kind 1 . blk params . blk results
     : i dst + sb . blk base
     : i src + sb - h arity
-    : i tgt ? == . blk kind 1 . blk t0 -1
+    // `t0` is a record index (it doubles as a patch site for `if`); a stored
+    // jump target is the same thing scaled to the driver's word cursor.
+    : i tgt ? == . blk kind 1 * . blk t0 6 -1
     : ~ i rec 0
     ? | == arity 0 == dst src {
-        ? < cond 0 { = rec ( __pf_emit . pf code ( __R_BR ) tgt 0 0 0 byte ) }
-        { = rec ( __pf_emit . pf code ( __R_BRIF ) tgt cond 0 0 byte ) }
+        ? < cond 0 { = rec ( __pf_emit . pf code ( __R_BR ) tgt 0 0 0 byte ) } {
+            ? ( __fuse_branch pf lastp cond tgt byte ) { = rec lastp }
+            { = rec ( __pf_emit . pf code ( __R_BRIF ) tgt cond 0 0 byte ) }
+        }
     } {
         ? < cond 0 { = rec ( __pf_emit . pf code ( __R_BRM ) tgt dst src arity byte ) }
         { = rec ( __pf_emit . pf code ( __R_BRIFM ) tgt cond | << dst 20 src arity byte ) }
@@ -1023,6 +1109,67 @@ $ `module.nu`
     }
 }
 
+// ── folding `local.set` into its producer ────────────────────────
+// After operand forwarding and the constant pool, `MOV` was the biggest
+// record class left — 31 % of everything the benchmark corpus dispatched,
+// and 46 % of nbody's. Most of them are `local.set` / `local.tee`: the
+// producing instruction writes the stack slot for its height and the very
+// next record copies that slot into a local. The slot is dead the instant
+// the copy is made, so the producer can be told to write the local instead
+// and the copy deleted.
+//
+// The fold is legal only when nothing can observe the slot it stops writing
+// and nothing can reach the copy without the producer:
+//   * the producer must be the record just emitted, by the instruction just
+//     decoded, and that instruction must be straight-line — a label can sit
+//     only where a control opcode put it, and no control opcode is
+//     straight-line, so `lastp` is -1 across every merge point;
+//   * the value must be the fresh canonical one, not an alias: a
+//     `local.get`/const source is a genuine copy;
+//   * no live stack entry may alias `li`, because `__vkill` would have to
+//     materialise it *from the old* `li` — and that read would be emitted
+//     after the retargeted write.
+
+// True while `op`'s record is a straight-line value producer: its only
+// effect is the write to slot A, and no label can land between it and the
+// next instruction.
+@ __straightline i op → b {
+    ? & >= op 40 <= op 53 { ^ T } {}  // loads
+    ? | == op 27 == op 28 { ^ T } {}  // select (typed select folds to the same record)
+    ? | == op 35 == op 37 { ^ T } {}  // global.get / table.get
+    ? | == op 63 == op 64 { ^ T } {}  // memory.size / memory.grow
+    ? | == op 69 == op 80 { ^ T } {}  // eqz
+    ? & >= op 70 <= op 79 { ^ T } {}  // i32 compares
+    ? & >= op 81 <= op 138 { ^ T } {}  // i64 compares, float compares, int arithmetic + unary
+    ? & >= op 139 <= op 196 { ^ T } {}  // float arithmetic, conversions, sign extensions
+    ? == op 209 { ^ T } {}  // ref.is_null
+    ^ F
+}
+
+// Does any live stack entry below `lim` alias local `li`?
+@ __valias ( Vec i ) vm i lim i li → b {
+    : i n ( vec_len [i] vm )
+    : i m ? < lim n lim n
+    : ~ i k 0
+    ~ < k m {
+        ? == ?? ( vec_get [i] vm k ) { T x → x F → -1 } li { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
+// Retarget the last record's destination to local `li`, or report that the
+// move has to be a real MOV after all. `hm1` is the height of the value.
+@ __fold_set * PFunc pf ( Vec i ) vm i lastp i sb i hm1 i li → b {
+    ? < lastp 0 { ^ F } {}
+    ? >= ?? ( vec_get [i] vm hm1 ) { T x → x F → -1 } 0 { ^ F } {}
+    : i dstat + * lastp 6 1
+    ? != ?? ( vec_get [i] . pf code dstat ) { T x → x F → -1 } + sb hm1 { ^ F } {}
+    ? ( __valias vm hm1 li ) { ^ F } {}
+    ( vec_set [i] . pf code dstat li )
+    ^ T
+}
+
 // A write to local `li` invalidates every live stack entry aliasing it:
 // those are copied to their canonical slots first, while `li` still holds
 // the old value.
@@ -1078,6 +1225,8 @@ $ `module.nu`
     : ~ i h 0
     : ~ i maxh 0
     : ~ i live 1
+    // index of the record a `local.set` may fold into, or -1 (see __fold_set)
+    : ~ i lastp -1
     : ( Vec i ) vm ( vec_new [i] )
     ~ & < . c pos . f code_end > ( vec_len [s] open ) 0 {
         : i byte . c pos
@@ -1113,7 +1262,7 @@ $ `module.nu`
                             // end of a live then-arm jumps past the else arm
                             ? != 0 live { = . blk else_br ( __pf_emit . pf code ( __R_BR ) -1 0 0 0 byte ) } {}
                             // the cond==0 edge lands here
-                            ? >= . blk t0 0 { ( vec_set [i] . pf code + * . blk t0 6 1 / ( vec_len [i] . pf code ) 6 ) = . blk t0 -1 } {}
+                            ? >= . blk t0 0 { ( vec_set [i] . pf code + * . blk t0 6 1 ( vec_len [i] . pf code ) ) = . blk t0 -1 } {}
                             = h + . blk base . blk params
                             = live 1
                         } {}
@@ -1126,7 +1275,9 @@ $ `module.nu`
                         ( vec_pop [s] open )
                         ? != # i bp 0 {
                             : *PBlk blk # *PBlk bp
-                            : i here / ( vec_len [i] . pf code ) 6
+                            // the word offset just past this frame — what a jump to
+                            // the end of the construct has to land on
+                            : i here ( vec_len [i] . pf code )
                             : ~ i out live
                             // no-else if: the cond==0 edge lands past the construct
                             ? & == . blk kind 2 >= . blk t0 0 {
@@ -1149,7 +1300,7 @@ $ `module.nu`
                     } {
                         ? == op 12 {  // br
                             : i k ( wc_uleb c )
-                            ? != 0 live { ( __vflush pf vm SB h live byte ) ( __emit_branch pf open k -1 SB h byte ) = live 0 } {}
+                            ? != 0 live { ( __vflush pf vm SB h live byte ) ( __emit_branch pf open k -1 SB h byte -1 ) = live 0 } {}
                         } {
                             ? == op 13 {  // br_if: pop cond, branch on it, fall through otherwise
                                 : i k ( wc_uleb c )
@@ -1157,7 +1308,7 @@ $ `module.nu`
                                     = h - h 1
                                     : i cnd ( __vg vm SB h )
                                     ( __vflush pf vm SB h live byte )
-                                    ( __emit_branch pf open k cnd SB h byte )
+                                    ( __emit_branch pf open k cnd SB h byte lastp )
                                 } {}
                             } {
                                 ? == op 14 {  // br_table
@@ -1175,7 +1326,7 @@ $ `module.nu`
                                                 : s bp2 ?? ( vec_get [s] open - - non 1 dep ) { T x → x F → # s 0 }
                                                 : *PBlk b2 # *PBlk bp2
                                                 : i ar ? == . b2 kind 1 . b2 params . b2 results
-                                                : i tg ? == . b2 kind 1 . b2 t0 -1
+                                                : i tg ? == . b2 kind 1 * . b2 t0 6 -1
                                                 : i auxpos ( vec_len [i] . pf aux )
                                                 ( vec_push [i] . pf aux tg )
                                                 ( vec_push [i] . pf aux + SB . b2 base )
@@ -1235,8 +1386,8 @@ $ `module.nu`
                                                                 } {}
                                                             } {
                                                                 ? == op 32 { : i li ( wc_uleb c ) ? != 0 live { ( __vset vm h li ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                    ? == op 33 { : i li ( wc_uleb c ) ? != 0 live { : i sv ( __vg vm SB - h 1 ) ( __vkill pf vm SB - h 1 li live byte ) ( __pf_emit . pf code ( __R_MOV ) li sv 0 0 byte ) = h - h 1 } {} } {
-                                                                        ? == op 34 { : i li ( wc_uleb c ) ? != 0 live { : i sv ( __vg vm SB - h 1 ) ( __vkill pf vm SB - h 1 li live byte ) ( __pf_emit . pf code ( __R_MOV ) li sv 0 0 byte ) ( __vset vm - h 1 li ) } {} } {
+                                                                    ? == op 33 { : i li ( wc_uleb c ) ? != 0 live { ? ( __fold_set pf vm lastp SB - h 1 li ) {} { : i sv ( __vg vm SB - h 1 ) ( __vkill pf vm SB - h 1 li live byte ) ( __pf_emit . pf code ( __R_MOV ) li sv 0 0 byte ) } = h - h 1 } {} } {
+                                                                        ? == op 34 { : i li ( wc_uleb c ) ? != 0 live { ? ( __fold_set pf vm lastp SB - h 1 li ) {} { : i sv ( __vg vm SB - h 1 ) ( __vkill pf vm SB - h 1 li live byte ) ( __pf_emit . pf code ( __R_MOV ) li sv 0 0 byte ) } ( __vset vm - h 1 li ) } {} } {
                                                                             ? == op 35 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_GG ) + SB h gi 0 0 byte ) ( __vset vm h -1 ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
                                                                                 ? == op 36 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_GS ) gi ( __vg vm SB - h 1 ) 0 0 byte ) = h - h 1 } {} } {
                                                                                     ? == op 37 { ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_TABGET ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
@@ -1265,13 +1416,15 @@ $ `module.nu`
                                                                                                                                     // integer binary: dst = h-2, operands h-2 / h-1
                                                                                                                                     ? != 0 live { ( __pf_emit . pf code op + SB - h 2 ( __vg vm SB - h 2 ) ( __vg vm SB - h 1 ) 0 byte ) ( __vset vm - h 2 -1 ) = h - h 1 } {}
                                                                                                                                 } {
-                                                                                                                                    ? | & >= op 91 <= op 102 & >= op 139 <= op 191 {  // float / conversion: vs bridge
+                                                                                                                                    ? | & >= op 91 <= op 102 & >= op 139 <= op 191 {
+                                                                                                                                        // float arithmetic / compares and the int↔float conversions:
+                                                                                                                                        // the same register shape as the integer unary and binary arms
+                                                                                                                                        // above, dst = the slot of the first operand.
                                                                                                                                         ? != 0 live {
                                                                                                                                             : i np ( __float_pops op )
-                                                                                                                                            ( __vflush pf vm SB h live byte )
-                                                                                                                                            ( __pf_emit . pf code ( __R_FLOATB ) op + SB - h np np 0 byte )
+                                                                                                                                            ( __pf_emit . pf code op + SB - h np ( __vg vm SB - h np ) ? == np 2 ( __vg vm SB - h 1 ) 0 0 byte )
+                                                                                                                                            ( __vset vm - h np -1 )
                                                                                                                                             = h + - h np 1
-                                                                                                                                            ? > h maxh { = maxh h } {}
                                                                                                                                         } {}
                                                                                                                                     } {
                                                                                                                                         ? == op 208 { ( wc_u8 c ) ? != 0 live { ( __kbind pf vm kv L SB h -1 live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
@@ -1306,6 +1459,12 @@ $ `module.nu`
                                                                                                                                                         ? | == op 253 == op 254 { ( __skip_imm c op ) } {}
                                                                                                                                                         ? != 0 live { ( __vflush pf vm SB 0 live byte ) ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) } {}
                                                                                                                                                     } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
+        // Arm the fold for the next instruction. Every arm above that is
+        // straight-line emitted exactly one record when live, and it is the
+        // last one; everything else — control flow, calls, the bridges, the
+        // instructions that emit nothing — leaves -1, so no fold can reach
+        // across a label or a record that is not a pure producer.
+        = lastp ? & != 0 live ( __straightline op ) - / ( vec_len [i] . pf code ) 6 1 -1
     }
     : i on ( vec_len [s] open )
     : ~ i ok 0
@@ -1313,6 +1472,28 @@ $ `module.nu`
     ( vec_free [s] open )
     ( vec_free [i] vm )
     ( wc_free c )
+    // Past the slot cap the packed operand fields would wrap, so the body is
+    // replaced by a single trap: the module still loads and still decodes,
+    // and says so cleanly if the function is ever called. The frame is
+    // rebuilt to the shape that trap needs and nothing more — room for the
+    // arguments the caller copies in, no declared locals to zero and no
+    // constant pool to fill, so nothing writes past it.
+    ? >= + SB + maxh 4 ( __slot_cap ) {
+        ( vec_free [i] . pf code )
+        ( vec_free [i] . pf kv )
+        = . pf code ( vec_new [i] )
+        = . pf kv ( vec_new [i] )
+        ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 . f code_start )
+        = . pf count 1
+        = . pf nlocals nparams
+        = . pf sbase nparams
+        = . pf nslots + nparams 4
+        = . pf nparams nparams
+        = . pf nresults nresults
+        = . pf code_start . f code_start
+        = . pf pool ( vec_new [s] )
+        ^ # s pf
+    } {}
     = . pf count / ( vec_len [i] . pf code ) 6
     = . pf nslots + SB + maxh 4
     = . pf nparams nparams
@@ -1356,15 +1537,16 @@ $ `module.nu`
             ( __msg_push_str msg ` (func ` )
             ( __msg_push_int msg . fr fidx )
             ( __msg_push_str msg `, +` )
-            // fr.pos is a record index; the record's BYTE slot maps it back
-            // to the module image so the offset stays meaningful against a
-            // wasm-objdump of the file. pos can sit one past the last record
-            // (fell off the end) — clamp before reading.
+            // fr.pos is a word offset into `code` (6 words per record); the
+            // record's BYTE slot maps it back to the module image so the
+            // offset stays meaningful against a wasm-objdump of the file.
+            // pos can sit one past the last record (fell off the end) —
+            // clamp before reading.
             : *PFunc bpf # *PFunc . fr pins
             : ~ i bpos . fr pos
-            ? >= bpos . bpf count { = bpos - . bpf count 1 } {}
+            ? >= bpos * . bpf count 6 { = bpos - * . bpf count 6 6 } {}
             : ~ i boff 0
-            ? >= bpos 0 { = boff - ?? ( vec_get [i] . bpf code + * bpos 6 5 ) { T x → x F → . fr code_start } . fr code_start } {}
+            ? >= bpos 0 { = boff - ?? ( vec_get [i] . bpf code + bpos 5 ) { T x → x F → . fr code_start } . fr code_start } {}
             ( __msg_push_int msg boff )
             ( __msg_push_str msg `)` )
         } {}
@@ -1396,23 +1578,34 @@ $ `module.nu`
 // Execute function `fidx` to completion on an EXPLICIT frame stack — guest
 // recursion depth is bounded by max_depth, not by the host's native stack.
 // Arguments are already on the value stack; results are left on top.
+//
+// Two loops, not one. The outer loop owns the frame stack: it loads the top
+// frame's bases into registers and, when the inner loop comes back, either
+// returns from that frame or picks up the one a call just pushed. The inner
+// loop owns the records of a single frame and its condition is one compare —
+// everything that has to leave a frame (a call, a return, a trap, exhausted
+// fuel) parks the cursor at `pend` and falls out of it. That is what the old
+// single loop paid for on *every record*: a `vec_len` on the frame stack, a
+// `reload` test, and two byte loads for the trap and exit flags, none of
+// which can change between two records of the same basic block.
 @ exec_func * Interp it i fidx → v {
-    ? | . it trap . it exited { ^ v } {}
+    ? != 0 . it halt { ^ v } {}
     : *Module m # *Module . it mod
     // Imported functions occupy the low indices → dispatch to the host (WASI).
     ? < fidx . m num_import_funcs { ( __call_import it m fidx ) ^ v } {}
     : ( Vec s ) frames ( vec_new [s] )
     : s fr0 ( __frame_new it m fidx -1 )
     ? != # i fr0 0 { ( vec_push [s] frames fr0 ) } {}
-    // Register-form driver. The cursor is the pc in record units; `rbase` is
-    // the raw base of the top frame's flat register array (locals first,
-    // stack slots after), refreshed only when the frame stack moves. Every
-    // hot op is three raw word accesses: read operands, write the result.
-    // There is no runtime control stack — branches carry their targets and
-    // their statically-computed result moves in the record.
+    // Register-form driver. `pc` is a WORD offset into the frame's record
+    // array (6 words per record), so fetching a record is four loads off one
+    // index and stepping is one add — branch targets are stored pre-scaled by
+    // the predecoder. `rbase` is the raw base of the top frame's flat register
+    // array (locals first, stack slots after). Every hot op is three raw word
+    // accesses: read operands, write the result. There is no runtime control
+    // stack — branches carry their targets and their statically-computed
+    // result moves in the record.
     : ~ s tp # s 0
     : ~ * i pbase # *i 0
-    : ~ * i abase # *i 0
     : ~ * i rbase # *i 0
     : ~ i pc 0
     : ~ i pend 0
@@ -1424,27 +1617,298 @@ $ `module.nu`
     // way out so the field keeps its public meaning.
     : i fuel0 . it fuel
     : ~ i fuel ? < fuel0 0 4611686018427387904 fuel0
-    : ~ i lloc 0
-    : ~ i nres 0
-    : ~ i reload 1
-    ~ & & > ( vec_len [s] frames ) 0 ! . it exited ! . it trap {
-        ? != reload 0 {
-            = tp ?? ( vec_get [s] frames - ( vec_len [s] frames ) 1 ) { T x → x F → # s 0 }
-            : *Frame nfr # *Frame tp
-            : *PFunc npf # *PFunc . nfr pins
-            = pbase ( vec_data [i] . npf code )
-            = abase ( vec_data [i] . npf aux )
-            = rbase ( vec_data [i] . nfr regs )
-            = lloc . npf sbase
-            = nres . npf nresults
-            = pc . nfr pos
-            = pend . nfr end
-            = reload 0
-        } {}
+    // 1 once a call has moved the frame stack: the inner loop then ended at
+    // a call, not at the end of the body, so there is nothing to return.
+    : ~ i tail 0
+    ~ & > ( vec_len [s] frames ) 0 == 0 . it halt {
+        = tp ?? ( vec_get [s] frames - ( vec_len [s] frames ) 1 ) { T x → x F → # s 0 }
         : *Frame fr # *Frame tp
-        ? >= pc pend {
+        : *PFunc npf # *PFunc . fr pins
+        = pbase ( vec_data [i] . npf code )
+        = rbase ( vec_data [i] . fr regs )
+        = pc . fr pos
+        = pend . fr end
+        = tail 0
+        ~ < pc pend {
+            : i r0 pc
+            = fuel - fuel 1
+            ? < fuel 0 { ( __trap it `fuel exhausted` ) = . fr pos r0 = pc pend } {
+                : i op . pbase r0
+                : i ra . pbase + r0 1
+                : i rb . pbase + r0 2
+                : i rc . pbase + r0 3
+                = pc + pc 6
+                // ── the dispatch: one jump table over every opcode ──
+                ? >= op 300 {  // the register/control forms, one dense table
+                    ? == op 312 { ? != . rbase rb 0 { = pc ra } {} } {  // br_if
+                        ? == op 323 {  // br_if fused with the compare that produced its condition
+                            ? != 0 ( __rcmp . pbase + r0 4 . rbase rb . rbase rc ) { = pc ra } {}
+                        } {
+                            ? == op 304 {  // select
+                                : i cond . rbase . pbase + r0 4
+                                = . rbase ra ? != cond 0 . rbase rb . rbase rc
+                            } {
+                                ? == op 300 { = . rbase ra . rbase rb } {  // mov
+                                    ? == op 301 { = . rbase ra rb } {  // const
+                                        ? == op 322 { ? == . rbase rb 0 { = pc ra } {} } {  // if-zero
+                                            ? == op 310 { = pc ra } {  // br
+                                                ? == op 313 {  // br_if + result move
+                                                    ? != . rbase rb 0 {
+                                                        : i dd . pbase + r0 4
+                                                        : i mdst >> rc 20
+                                                        : i msrc & rc 1048575
+                                                        : ~ i mk 0
+                                                        ~ < mk dd { = . rbase + mdst mk . rbase + msrc mk = mk + mk 1 }
+                                                        = pc ra
+                                                    } {}
+                                                } {
+                                                    ? == op 311 {  // br + result move
+                                                        : i dd . pbase + r0 4
+                                                        : ~ i mk 0
+                                                        ~ < mk dd { = . rbase + rb mk . rbase + rc mk = mk + mk 1 }
+                                                        = pc ra
+                                                    } {
+                                                        ? == op 316 {  // call
+                                                            = . fr pos pc
+                                                            ( __rdo_call it m frames ra rb rbase )
+                                                            = tail 1
+                                                            = pc pend
+                                                            ? != 0 . it halt { = . fr pos r0 } {}
+                                                        } {
+                                                            ? == op 315 {  // return: results to the canonical slots, fall off
+                                                                : *PFunc rpf # *PFunc . fr pins
+                                                                : i lloc . rpf sbase
+                                                                : ~ i rk 0
+                                                                ~ < rk rb { = . rbase + lloc rk . rbase + ra rk = rk + rk 1 }
+                                                                = pc pend
+                                                            } {
+                                                                ? == op 314 {  // br_table: aux rows of (target, dst, src, n)
+                                                                    : *PFunc tpf # *PFunc . fr pins
+                                                                    : *i abase ( vec_data [i] . tpf aux )
+                                                                    : i ui ( __u32 . rbase rb )
+                                                                    : i pick ? < ui rc ui rc
+                                                                    : i rowb + ra * pick 4
+                                                                    : i tgt . abase rowb
+                                                                    : i mdst . abase + rowb 1
+                                                                    : i msrc . abase + rowb 2
+                                                                    : i mn . abase + rowb 3
+                                                                    : ~ i mk 0
+                                                                    ~ < mk mn { = . rbase + mdst mk . rbase + msrc mk = mk + mk 1 }
+                                                                    = pc tgt
+                                                                } {
+                                                                    ? == op 302 { = . rbase ra ?? ( vec_get [i] . it globals rb ) { T x → x F → 0 } } {  // global.get
+                                                                        ? == op 303 { ( vec_set [i] . it globals ra . rbase rb ) } {  // global.set
+                                                                            ? == op 305 { = . rbase ra . it mem_pages } {  // memory.size
+                                                                                ? == op 306 { = . rbase ra ( __mem_grow it ( __u32 . rbase rb ) ) } {  // memory.grow
+                                                                                    ? == op 307 {  // table.get
+                                                                                        : i ei ( __u32 . rbase rb )
+                                                                                        ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) = . fr pos r0 = pc pend } {
+                                                                                            = . rbase ra ?? ( vec_get [i] . it table ei ) { T x → x F → -1 } }
+                                                                                    } {
+                                                                                        ? == op 308 {  // table.set
+                                                                                            : i ei ( __u32 . rbase ra )
+                                                                                            ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) = . fr pos r0 = pc pend } {
+                                                                                                ( vec_set [i] . it table ei . rbase rb ) }
+                                                                                        } {
+                                                                                            ? == op 309 { = . rbase ra ? == . rbase rb -1 1 0 } {  // ref.is_null
+                                                                                                ? == op 317 {  // call_indirect
+                                                                                                    : i ei & . rbase rc 4294967295
+                                                                                                    ? | < ei 0 >= ei ( vec_len [i] . it table ) { ( __trap it `call_indirect: index out of range` ) = . fr pos r0 = pc pend } {
+                                                                                                        : i cfi ?? ( vec_get [i] . it table ei ) { T x → x F → -1 }
+                                                                                                        ? < cfi 0 { ( __trap it `call_indirect: null table element` ) = . fr pos r0 = pc pend } {
+                                                                                                            : s want ?? ( vec_get [s] . m types ra ) { T x → x F → # s 0 }
+                                                                                                            : s have ( module_func_type m cfi )
+                                                                                                            ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) = . fr pos r0 = pc pend } {
+                                                                                                                ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) = . fr pos r0 = pc pend } {
+                                                                                                                    = . fr pos pc
+                                                                                                                    ( __rdo_call it m frames cfi rb rbase )
+                                                                                                                    = tail 1
+                                                                                                                    = pc pend
+                                                                                                                    ? != 0 . it halt { = . fr pos r0 } {}
+                                                                                                                }
+                                                                                                            }
+                                                                                                        }
+                                                                                                    }
+                                                                                                } {
+                                                                                                    ? == op 321 {  // the 0xfc family, bridged through the value stack
+                                                                                                        : i dd . pbase + r0 4
+                                                                                                        : i pops >> dd 1
+                                                                                                        : ~ i bk 0
+                                                                                                        ~ < bk pops { ( __push it . rbase + rc bk ) = bk + bk 1 }
+                                                                                                        ( __exec_fc it ra rb )
+                                                                                                        ? & != 0 & dd 1 ! ( interp_trapped it ) { = . rbase rc ( __pop it ) } {}
+                                                                                                        ? != 0 . it halt { = . fr pos r0 = pc pend } {}
+                                                                                                    } {
+                                                                                                        ? == op 318 { ( __trap it `unreachable` ) } { ( __trap it `unsupported opcode` ) }  // 319
+                                                                                                        = . fr pos r0
+                                                                                                        = pc pend
+                                                                                                    } } } } } } } } } } } } } } } } } } } } }
+                } {
+                    ? == op 40 { = . rbase ra ( __w32 ( __mem_load it + & . rbase rb 4294967295 rc 4 0 ) ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                        ? == op 41 { = . rbase ra ( __mem_load it + & . rbase rb 4294967295 rc 8 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                            ? == op 42 { = . rbase ra ( __mem_load it + & . rbase rb 4294967295 rc 4 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                ? == op 43 { = . rbase ra ( __mem_load it + & . rbase rb 4294967295 rc 8 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                    ? == op 44 { = . rbase ra ( __w32 ( __mem_load it + & . rbase rb 4294967295 rc 1 1 ) ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                        ? == op 45 { = . rbase ra ( __mem_load it + & . rbase rb 4294967295 rc 1 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                            ? == op 46 { = . rbase ra ( __w32 ( __mem_load it + & . rbase rb 4294967295 rc 2 1 ) ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                ? == op 47 { = . rbase ra ( __mem_load it + & . rbase rb 4294967295 rc 2 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                    ? == op 48 { = . rbase ra ( __mem_load it + & . rbase rb 4294967295 rc 1 1 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                        ? == op 49 { = . rbase ra ( __mem_load it + & . rbase rb 4294967295 rc 1 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                            ? == op 50 { = . rbase ra ( __mem_load it + & . rbase rb 4294967295 rc 2 1 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                ? == op 51 { = . rbase ra ( __mem_load it + & . rbase rb 4294967295 rc 2 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                    ? == op 52 { = . rbase ra ( __mem_load it + & . rbase rb 4294967295 rc 4 1 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                        ? == op 53 { = . rbase ra ( __mem_load it + & . rbase rb 4294967295 rc 4 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                            ? == op 54 { ( __mem_store it + & . rbase ra 4294967295 rc 4 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                ? == op 55 { ( __mem_store it + & . rbase ra 4294967295 rc 8 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                    ? == op 56 { ( __mem_store it + & . rbase ra 4294967295 rc 4 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                        ? == op 57 { ( __mem_store it + & . rbase ra 4294967295 rc 8 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                            ? == op 58 { ( __mem_store it + & . rbase ra 4294967295 rc 1 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                ? == op 59 { ( __mem_store it + & . rbase ra 4294967295 rc 2 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                    ? == op 60 { ( __mem_store it + & . rbase ra 4294967295 rc 1 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                        ? == op 61 { ( __mem_store it + & . rbase ra 4294967295 rc 2 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                            ? == op 62 { ( __mem_store it + & . rbase ra 4294967295 rc 4 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                ? == op 69 { = . rbase ra ? == . rbase rb 0 1 0 } {
+                                                                                                                    ? == op 70 { = . rbase ra ? == ( __w32 . rbase rb ) ( __w32 . rbase rc ) 1 0 } {
+                                                                                                                        ? == op 71 { = . rbase ra ? != ( __w32 . rbase rb ) ( __w32 . rbase rc ) 1 0 } {
+                                                                                                                            ? == op 72 { = . rbase ra ? < ( __w32 . rbase rb ) ( __w32 . rbase rc ) 1 0 } {
+                                                                                                                                ? == op 73 { = . rbase ra ? < ( __u32 . rbase rb ) ( __u32 . rbase rc ) 1 0 } {
+                                                                                                                                    ? == op 74 { = . rbase ra ? > ( __w32 . rbase rb ) ( __w32 . rbase rc ) 1 0 } {
+                                                                                                                                        ? == op 75 { = . rbase ra ? > ( __u32 . rbase rb ) ( __u32 . rbase rc ) 1 0 } {
+                                                                                                                                            ? == op 76 { = . rbase ra ? <= ( __w32 . rbase rb ) ( __w32 . rbase rc ) 1 0 } {
+                                                                                                                                                ? == op 77 { = . rbase ra ? <= ( __u32 . rbase rb ) ( __u32 . rbase rc ) 1 0 } {
+                                                                                                                                                    ? == op 78 { = . rbase ra ? >= ( __w32 . rbase rb ) ( __w32 . rbase rc ) 1 0 } {
+                                                                                                                                                        ? == op 79 { = . rbase ra ? >= ( __u32 . rbase rb ) ( __u32 . rbase rc ) 1 0 } {
+                                                                                                                                                            ? == op 80 { = . rbase ra ? == . rbase rb 0 1 0 } {
+                                                                                                                                                                ? == op 81 { = . rbase ra ? == . rbase rb . rbase rc 1 0 } {
+                                                                                                                                                                    ? == op 82 { = . rbase ra ? != . rbase rb . rbase rc 1 0 } {
+                                                                                                                                                                        ? == op 83 { = . rbase ra ? < . rbase rb . rbase rc 1 0 } {
+                                                                                                                                                                            ? == op 84 { = . rbase ra ? ( __ultb . rbase rb . rbase rc ) 1 0 } {
+                                                                                                                                                                                ? == op 85 { = . rbase ra ? > . rbase rb . rbase rc 1 0 } {
+                                                                                                                                                                                    ? == op 86 { = . rbase ra ? ( __ultb . rbase rc . rbase rb ) 1 0 } {
+                                                                                                                                                                                        ? == op 87 { = . rbase ra ? <= . rbase rb . rbase rc 1 0 } {
+                                                                                                                                                                                            ? == op 88 { = . rbase ra ? ! ( __ultb . rbase rc . rbase rb ) 1 0 } {
+                                                                                                                                                                                                ? == op 89 { = . rbase ra ? >= . rbase rb . rbase rc 1 0 } {
+                                                                                                                                                                                                    ? == op 90 { = . rbase ra ? ! ( __ultb . rbase rb . rbase rc ) 1 0 } {
+                                                                                                                                                                                                        ? == op 91 { = . rbase ra ( __f32_cmp op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                            ? == op 92 { = . rbase ra ( __f32_cmp op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                ? == op 93 { = . rbase ra ( __f32_cmp op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                    ? == op 94 { = . rbase ra ( __f32_cmp op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                        ? == op 95 { = . rbase ra ( __f32_cmp op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                            ? == op 96 { = . rbase ra ( __f32_cmp op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                ? == op 97 { = . rbase ra ( __f64_cmp op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                    ? == op 98 { = . rbase ra ( __f64_cmp op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                        ? == op 99 { = . rbase ra ( __f64_cmp op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                            ? == op 100 { = . rbase ra ( __f64_cmp op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                ? == op 101 { = . rbase ra ( __f64_cmp op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                    ? == op 102 { = . rbase ra ( __f64_cmp op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                        ? == op 103 { = . rbase ra ( __runary op . rbase rb ) } {
+                                                                                                                                                                                                                                                            ? == op 104 { = . rbase ra ( __runary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                ? == op 105 { = . rbase ra ( __runary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                    ? == op 106 { = . rbase ra ( __w32 + . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                        ? == op 107 { = . rbase ra ( __w32 - . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                            ? == op 108 { = . rbase ra ( __w32 * . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                ? == op 109 { = . rbase ra ( __rdiv it op . rbase rb . rbase rc ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                    ? == op 110 { = . rbase ra ( __rdiv it op . rbase rb . rbase rc ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                        ? == op 111 { = . rbase ra ( __rdiv it op . rbase rb . rbase rc ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                            ? == op 112 { = . rbase ra ( __rdiv it op . rbase rb . rbase rc ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                ? == op 113 { = . rbase ra ( __w32 & . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                    ? == op 114 { = . rbase ra ( __w32 | . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                        ? == op 115 { = . rbase ra ( __w32 ^^ . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                            ? == op 116 { = . rbase ra ( __w32 << . rbase rb & . rbase rc 31 ) } {
+                                                                                                                                                                                                                                                                                                                ? == op 117 { = . rbase ra ( __w32 >> ( __w32 . rbase rb ) & . rbase rc 31 ) } {
+                                                                                                                                                                                                                                                                                                                    ? == op 118 { = . rbase ra ( __w32 >> ( __u32 . rbase rb ) & . rbase rc 31 ) } {
+                                                                                                                                                                                                                                                                                                                        ? == op 119 { = . rbase ra ( __rotl32 . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                                            ? == op 120 { = . rbase ra ( __rotr32 . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                                                ? == op 121 { = . rbase ra ( __runary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                    ? == op 122 { = . rbase ra ( __runary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                        ? == op 123 { = . rbase ra ( __runary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                            ? == op 124 { = . rbase ra + . rbase rb . rbase rc } {
+                                                                                                                                                                                                                                                                                                                                                ? == op 125 { = . rbase ra - . rbase rb . rbase rc } {
+                                                                                                                                                                                                                                                                                                                                                    ? == op 126 { = . rbase ra * . rbase rb . rbase rc } {
+                                                                                                                                                                                                                                                                                                                                                        ? == op 127 { = . rbase ra ( __rdiv it op . rbase rb . rbase rc ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                            ? == op 128 { = . rbase ra ( __rdiv it op . rbase rb . rbase rc ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                ? == op 129 { = . rbase ra ( __rdiv it op . rbase rb . rbase rc ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                    ? == op 130 { = . rbase ra ( __rdiv it op . rbase rb . rbase rc ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                        ? == op 131 { = . rbase ra & . rbase rb . rbase rc } {
+                                                                                                                                                                                                                                                                                                                                                                            ? == op 132 { = . rbase ra | . rbase rb . rbase rc } {
+                                                                                                                                                                                                                                                                                                                                                                                ? == op 133 { = . rbase ra ^^ . rbase rb . rbase rc } {
+                                                                                                                                                                                                                                                                                                                                                                                    ? == op 134 { = . rbase ra << . rbase rb & . rbase rc 63 } {
+                                                                                                                                                                                                                                                                                                                                                                                        ? == op 135 { = . rbase ra >> . rbase rb & . rbase rc 63 } {
+                                                                                                                                                                                                                                                                                                                                                                                            ? == op 136 { = . rbase ra ( __lshr64 . rbase rb & . rbase rc 63 ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                ? == op 137 { = . rbase ra ( __rotl64 . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 138 { = . rbase ra ( __rotr64 . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 139 { = . rbase ra ( __f32_unary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 140 { = . rbase ra ( __f32_unary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 141 { = . rbase ra ( __f32_unary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 142 { = . rbase ra ( __f32_unary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 143 { = . rbase ra ( __f32_unary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 144 { = . rbase ra ( __f32_unary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 145 { = . rbase ra ( __f32_unary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 146 { = . rbase ra ( __f32_binary op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 147 { = . rbase ra ( __f32_binary op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 148 { = . rbase ra ( __f32_binary op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 149 { = . rbase ra ( __f32_binary op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 150 { = . rbase ra ( __f32_binary op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 151 { = . rbase ra ( __f32_binary op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 152 { = . rbase ra ( __f32_binary op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 153 { = . rbase ra & . rbase rb 9223372036854775807 } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 154 { = . rbase ra ^^ . rbase rb -9223372036854775808 } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 155 { = . rbase ra ( __f64_unary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 156 { = . rbase ra ( __f64_unary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 157 { = . rbase ra ( __f64_unary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 158 { = . rbase ra ( __f64_unary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 159 { = . rbase ra ( f64_to_bits ( sqrt ( bits_to_f64 . rbase rb ) ) ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 160 { = . rbase ra ( f64_to_bits + ( bits_to_f64 . rbase rb ) ( bits_to_f64 . rbase rc ) ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 161 { = . rbase ra ( f64_to_bits - ( bits_to_f64 . rbase rb ) ( bits_to_f64 . rbase rc ) ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 162 { = . rbase ra ( f64_to_bits * ( bits_to_f64 . rbase rb ) ( bits_to_f64 . rbase rc ) ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 163 { = . rbase ra ( f64_to_bits / ( bits_to_f64 . rbase rb ) ( bits_to_f64 . rbase rc ) ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 164 { = . rbase ra ( __f64_binary op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 165 { = . rbase ra ( __f64_binary op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 166 { = . rbase ra ( __f64_binary op . rbase rb . rbase rc ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 167 { = . rbase ra ( __w32 . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 168 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 169 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 170 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 171 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 172 { = . rbase ra ( __w32 . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 173 { = . rbase ra & . rbase rb 4294967295 } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 174 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 175 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 176 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 177 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 178 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 179 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 180 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 181 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 182 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 183 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 184 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 185 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 186 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 187 { = . rbase ra ( __convert it op . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 188 { = . rbase ra . rbase rb } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 189 { = . rbase ra . rbase rb } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 190 { = . rbase ra . rbase rb } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 191 { = . rbase ra . rbase rb } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 192 { = . rbase ra ( __runary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 193 { = . rbase ra ( __runary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 194 { = . rbase ra ( __runary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 195 { = . rbase ra ( __runary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 196 { = . rbase ra ( __runary op . rbase rb ) } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ( __trap it `unsupported opcode` ) = . fr pos r0 = pc pend
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
+                }
+            }
+        }
+        ? & == tail 0 == 0 . it halt {
             // fell off the end → return: results sit at slots lloc.. by
             // construction (the body ends at height = result count)
+            // `sbase` / `nresults` are read from the frame being left rather
+            // than carried in the driver: two loads on a frame transition
+            // instead of two registers held across every record.
+            : *PFunc dpf # *PFunc . fr pins
+            : i lloc . dpf sbase
+            : i nres . dpf nresults
             : i rdst . fr ret_dst
             ( vec_pop [s] frames )
             ? < rdst 0 {
@@ -1461,152 +1925,9 @@ $ `module.nu`
                 } {}
             }
             ( __frame_recycle tp )
-            = reload 1
-        } {
-            = fuel - fuel 1
-            ? < fuel 0 { ( __trap it `fuel exhausted` ) } {
-                : i rrec * pc 6
-                : i op . pbase rrec
-                : i ra . pbase + rrec 1
-                : i rb . pbase + rrec 2
-                : i rc . pbase + rrec 3
-                = pc + pc 1
-                // ── hot register ops, inline ──
-                ? == op 300 { = . rbase ra . rbase rb } {  // MOV
-                    ? == op 301 { = . rbase ra rb } {  // CONST
-                        ? & >= op 124 <= op 138 {  // i64 arithmetic/bitwise
-                            : i x . rbase rb
-                            : i y . rbase rc
-                            = . rbase ra ( __rnum64 it op x y )
-                        } {
-                            ? & >= op 106 <= op 120 {  // i32 arithmetic/bitwise
-                                : i x . rbase rb
-                                : i y . rbase rc
-                                = . rbase ra ( __rnum32 it op x y )
-                            } {
-                                ? | & >= op 70 <= op 79 & >= op 81 <= op 90 {  // comparisons
-                                    : i x . rbase rb
-                                    : i y . rbase rc
-                                    = . rbase ra ( __rcmp op x y )
-                                } {
-                                    ? == op 322 { ? == . rbase rb 0 { = pc ra } {} } {  // IFZ
-                                        ? == op 310 { = pc ra } {  // BR
-                                            ? == op 312 { ? != . rbase rb 0 { = pc ra } {} } {  // BRIF
-                                                ? == op 311 {  // BR_MOVE
-                                                    : i dd . pbase + rrec 4
-                                                    : ~ i mk 0
-                                                    ~ < mk dd { = . rbase + rb mk . rbase + rc mk = mk + mk 1 }
-                                                    = pc ra
-                                                } {
-                                                    ? == op 313 {  // BRIF_MOVE
-                                                        ? != . rbase rb 0 {
-                                                            : i dd . pbase + rrec 4
-                                                            : i mdst >> rc 20
-                                                            : i msrc & rc 1048575
-                                                            : ~ i mk 0
-                                                            ~ < mk dd { = . rbase + mdst mk . rbase + msrc mk = mk + mk 1 }
-                                                            = pc ra
-                                                        } {}
-                                                    } {
-                                                        ? & >= op 40 <= op 53 {  // loads
-                                                            : i ea + & . rbase rb 4294967295 rc
-                                                            = . rbase ra ( __rload it op ea )
-                                                        } {
-                                                            ? & >= op 54 <= op 62 {  // stores
-                                                                : i ea + & . rbase ra 4294967295 rc
-                                                                ( __rstore it op ea . rbase rb )
-                                                            } {
-                                                                ? | == op 69 == op 80 { : i x . rbase rb = . rbase ra ? == x 0 1 0 } {  // eqz
-                                                                    ? | & >= op 103 <= op 105 | & >= op 121 <= op 123 & >= op 192 <= op 196 {
-                                                                        = . rbase ra ( __runary op . rbase rb )
-                                                                    } {
-                                                                        ? == op 304 {  // SELECT
-                                                                            : i dd . pbase + rrec 4
-                                                                            : i cond . rbase dd
-                                                                            = . rbase ra ? != cond 0 . rbase rb . rbase rc
-                                                                        } {
-                                                                            ? == op 316 {  // CALL
-                                                                                = . fr pos pc
-                                                                                ( __rdo_call it m frames ra rb rbase )
-                                                                                = reload 1
-                                                                            } {
-                                                                                ? == op 317 {  // CALL_INDIRECT
-                                                                                    : i ei & . rbase rc 4294967295
-                                                                                    ? | < ei 0 >= ei ( vec_len [i] . it table ) { ( __trap it `call_indirect: index out of range` ) } {
-                                                                                        : i cfi ?? ( vec_get [i] . it table ei ) { T x → x F → -1 }
-                                                                                        ? < cfi 0 { ( __trap it `call_indirect: null table element` ) } {
-                                                                                            : s want ?? ( vec_get [s] . m types ra ) { T x → x F → # s 0 }
-                                                                                            : s have ( module_func_type m cfi )
-                                                                                            ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) } {
-                                                                                                ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) } {
-                                                                                                    = . fr pos pc
-                                                                                                    ( __rdo_call it m frames cfi rb rbase )
-                                                                                                    = reload 1
-                                                                                                }
-                                                                                            }
-                                                                                        }
-                                                                                    }
-                                                                                } {
-                                                                                    ? == op 315 {  // RETURN: move results to the canonical slots, fall off
-                                                                                        : ~ i rk 0
-                                                                                        ~ < rk rb { = . rbase + lloc rk . rbase + ra rk = rk + rk 1 }
-                                                                                        = pc pend
-                                                                                    } {
-                                                                                        ? == op 314 {  // BR_TABLE: aux rows of (target, dst, src, n)
-                                                                                            : i ui ( __u32 . rbase rb )
-                                                                                            : i pick ? < ui rc ui rc
-                                                                                            : i rowb + ra * pick 4
-                                                                                            : i tgt . abase rowb
-                                                                                            : i mdst . abase + rowb 1
-                                                                                            : i msrc . abase + rowb 2
-                                                                                            : i mn . abase + rowb 3
-                                                                                            : ~ i mk 0
-                                                                                            ~ < mk mn { = . rbase + mdst mk . rbase + msrc mk = mk + mk 1 }
-                                                                                            = pc tgt
-                                                                                        } {
-                                                                                            ? == op 302 { = . rbase ra ?? ( vec_get [i] . it globals rb ) { T x → x F → 0 } } {  // global.get
-                                                                                                ? == op 303 { ( vec_set [i] . it globals ra . rbase rb ) } {  // global.set
-                                                                                                    ? == op 305 { = . rbase ra . it mem_pages } {  // memory.size
-                                                                                                        ? == op 306 { = . rbase ra ( __mem_grow it ( __u32 . rbase rb ) ) } {  // memory.grow
-                                                                                                            ? == op 307 {  // table.get
-                                                                                                                : i ei ( __u32 . rbase rb )
-                                                                                                                ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) } {
-                                                                                                                    = . rbase ra ?? ( vec_get [i] . it table ei ) { T x → x F → -1 } }
-                                                                                                            } {
-                                                                                                                ? == op 308 {  // table.set
-                                                                                                                    : i ei ( __u32 . rbase ra )
-                                                                                                                    ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) } {
-                                                                                                                        ( vec_set [i] . it table ei . rbase rb ) }
-                                                                                                                } {
-                                                                                                                    ? == op 309 { = . rbase ra ? == . rbase rb -1 1 0 } {  // ref.is_null
-                                                                                                                        ? == op 320 {  // float / conversion bridge through the value stack
-                                                                                                                            : ~ i bk 0
-                                                                                                                            ~ < bk rc { ( __push it . rbase + rb bk ) = bk + bk 1 }
-                                                                                                                            ( __exec_float it ra )
-                                                                                                                            ? ! . it trap { = . rbase rb ( __pop it ) } {}
-                                                                                                                        } {
-                                                                                                                            ? == op 321 {  // 0xfc bridge through the value stack
-                                                                                                                                : i dd . pbase + rrec 4
-                                                                                                                                : i pops >> dd 1
-                                                                                                                                : ~ i bk 0
-                                                                                                                                ~ < bk pops { ( __push it . rbase + rc bk ) = bk + bk 1 }
-                                                                                                                                ( __exec_fc it ra rb )
-                                                                                                                                ? & != 0 & dd 1 ! . it trap { = . rbase rc ( __pop it ) } {}
-                                                                                                                            } {
-                                                                                                                                ? == op 318 { ( __trap it `unreachable` ) } {
-                                                                                                                                    ? == op 319 { ( __trap it `unsupported opcode` ) } {
-                                                                                                                                        ( __trap it `unsupported opcode` )
-                                                                                                                                    } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
-            }
-        }
-    }
-    ? . it trap {
-        ? & == reload 0 > ( vec_len [s] frames ) 0 {
-            : s ttp ?? ( vec_get [s] frames - ( vec_len [s] frames ) 1 ) { T x → x F → # s 0 }
-            ? != # i ttp 0 { : *Frame ftr # *Frame ttp = . ftr pos - pc 1 } {}
         } {}
-        ( __trap_backtrace it m frames )
-    } {}
+    }
+    ? ( interp_trapped it ) { ( __trap_backtrace it m frames ) } {}
     : i fn ( vec_len [s] frames )
     : ~ i fi 0
     ~ < fi fn { ?? ( vec_get [s] frames fi ) { T pp → ( __frame_free pp ) F → {} } = fi + fi 1 }
@@ -1627,7 +1948,7 @@ $ `module.nu`
         : ~ i ak 0
         ~ < ak np { ( __push it . caller_rbase + argbase ak ) = ak + ak 1 }
         ( __call_import it m callee )
-        ? ! . it trap {
+        ? ! ( interp_trapped it ) {
             : ~ i rk nr
             ~ > rk 0 { = rk - rk 1 = . caller_rbase + argbase rk ( __pop it ) }
         } {}
@@ -1649,14 +1970,14 @@ $ `module.nu`
 // out, traps via `it`. Ported arm-for-arm from the old stack-form
 // __exec_num; the semantics comments live with the arms.
 
-@ __rnum64 * Interp it i op i a i b → i {  // 0x7c..0x8a
+// 0x7c..0x8a without div/rem. `it` is deliberately not a parameter: eight
+// of the thirty integer arithmetic opcodes can trap, and making the other
+// twenty-two carry the interpreter pointer keeps it live across the hot
+// arm — which is a register the frame's slot base wants.
+@ __rnum64 i op i a i b → i {
     ? == op 124 { ^ + a b } {}
     ? == op 125 { ^ - a b } {}
     ? == op 126 { ^ * a b } {}
-    ? == op 127 { ^ ( __div_s it a b -9223372036854775808 ) } {}
-    ? == op 128 { ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {} ^ ( __udiv64 a b ) } {}  // div_u
-    ? == op 129 { ^ ( __rem_s it a b ) } {}
-    ? == op 130 { ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {} ^ ( __urem64 a b ) } {}  // rem_u
     ? == op 131 { ^ & a b } {}
     ? == op 132 { ^ | a b } {}
     ? == op 133 { ^ ^^ a b } {}
@@ -1667,14 +1988,11 @@ $ `module.nu`
     ^ ( __rotr64 a b )  // 138 rotr
 }
 
-@ __rnum32 * Interp it i op i a i b → i {  // 0x6a..0x78 → wrap 32
+// 0x6a..0x78 → wrap 32, without div/rem (see __rnum64).
+@ __rnum32 i op i a i b → i {
     ? == op 106 { ^ ( __w32 + a b ) } {}
     ? == op 107 { ^ ( __w32 - a b ) } {}
     ? == op 108 { ^ ( __w32 * a b ) } {}
-    ? == op 109 { ^ ( __w32 ( __div_s it ( __w32 a ) ( __w32 b ) -2147483648 ) ) } {}
-    ? == op 110 { ^ ( __w32 ( __div_u it ( __u32 a ) ( __u32 b ) ) ) } {}  // div_u
-    ? == op 111 { ^ ( __w32 ( __rem_s it ( __w32 a ) ( __w32 b ) ) ) } {}
-    ? == op 112 { ^ ( __w32 ( __rem_u it ( __u32 a ) ( __u32 b ) ) ) } {}  // rem_u
     ? == op 113 { ^ ( __w32 & a b ) } {}
     ? == op 114 { ^ ( __w32 | a b ) } {}
     ? == op 115 { ^ ( __w32 ^^ a b ) } {}
@@ -1683,6 +2001,20 @@ $ `module.nu`
     ? == op 118 { ^ ( __w32 >> ( __u32 a ) & b 31 ) } {}  // shr_u
     ? == op 119 { ^ ( __rotl32 a b ) } {}  // rotl
     ^ ( __rotr32 a b )  // 120 rotr
+}
+
+// The integer arithmetic that traps: i32 div/rem (0x6d..0x70) and i64
+// div/rem (0x7f..0x82). Split out of the two above so the twenty-two that
+// cannot trap need neither `it` nor the halt test after them.
+@ __rdiv * Interp it i op i a i b → i {
+    ? == op 127 { ^ ( __div_s it a b -9223372036854775808 ) } {}
+    ? == op 128 { ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {} ^ ( __udiv64 a b ) } {}  // i64.div_u
+    ? == op 129 { ^ ( __rem_s it a b ) } {}
+    ? == op 130 { ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {} ^ ( __urem64 a b ) } {}  // i64.rem_u
+    ? == op 109 { ^ ( __w32 ( __div_s it ( __w32 a ) ( __w32 b ) -2147483648 ) ) } {}
+    ? == op 110 { ^ ( __w32 ( __div_u it ( __u32 a ) ( __u32 b ) ) ) } {}  // i32.div_u
+    ? == op 111 { ^ ( __w32 ( __rem_s it ( __w32 a ) ( __w32 b ) ) ) } {}
+    ^ ( __w32 ( __rem_u it ( __u32 a ) ( __u32 b ) ) )  // 112 i32.rem_u
 }
 
 @ __rcmp i op i a i b → i {  // i32 0x46..0x4f, i64 0x51..0x5a → 0/1
@@ -1725,169 +2057,155 @@ $ `module.nu`
 // ── floats (values held as their IEEE-754 bit pattern in the i64 cell) ──
 // abs/neg/copysign are done on the bits (NaN-sign correct); the rest reinterpret
 // via std/floatbits, compute with libm / native float arithmetic, and re-encode.
+//
+// Value form, exactly like the integer core: operands in, result bits out.
+// These used to be stack form, reached through a record that copied the
+// operands from slots onto `it.vs` and the result back — two `vec_push`, a
+// `vec_pop` and a second dispatch level per float instruction, plus the
+// operand flush the bridge forced on every `local.get` feeding it. On the
+// benchmark corpus that bridge was 5 % of all records dispatched and the
+// flush it forced was most of another 30 %; nbody spent 45 % of its records
+// moving values into place for it.
 
-@ __f64_unary * Interp it i op → v {
-    : i ab ( __pop it )
-    ? == op 153 { ( __push it & ab 9223372036854775807 ) ^ v } {}  // f64.abs (clear sign)
-    ? == op 154 { ( __push it ^^ ab -9223372036854775808 ) ^ v } {}  // f64.neg (flip sign)
+@ __f64_unary i op i ab → i {
+    ? == op 153 { ^ & ab 9223372036854775807 } {}  // f64.abs (clear sign)
+    ? == op 154 { ^ ^^ ab -9223372036854775808 } {}  // f64.neg (flip sign)
     : f x ( bits_to_f64 ab )
-    ? == op 155 { ( __push it ( f64_to_bits ( ceil x ) ) ) ^ v } {}  // f64.ceil
-    ? == op 156 { ( __push it ( f64_to_bits ( floor x ) ) ) ^ v } {}  // f64.floor
-    ? == op 157 { ( __push it ( f64_to_bits ( trunc x ) ) ) ^ v } {}  // f64.trunc
-    ? == op 158 { ( __push it ( f64_to_bits ( rint x ) ) ) ^ v } {}  // f64.nearest
-    ? == op 159 { ( __push it ( f64_to_bits ( sqrt x ) ) ) ^ v } {}  // f64.sqrt
+    ? == op 155 { ^ ( f64_to_bits ( ceil x ) ) } {}  // f64.ceil
+    ? == op 156 { ^ ( f64_to_bits ( floor x ) ) } {}  // f64.floor
+    ? == op 157 { ^ ( f64_to_bits ( trunc x ) ) } {}  // f64.trunc
+    ? == op 158 { ^ ( f64_to_bits ( rint x ) ) } {}  // f64.nearest
+    ^ ( f64_to_bits ( sqrt x ) )  // 159 f64.sqrt
 }
 
-@ __f64_binary * Interp it i op → v {
-    : i bb ( __pop it )
-    : i ab ( __pop it )
-    ? == op 166 { ( __push it | & ab 9223372036854775807 & bb -9223372036854775808 ) ^ v } {}  // copysign
+@ __f64_binary i op i ab i bb → i {
+    ? == op 166 { ^ | & ab 9223372036854775807 & bb -9223372036854775808 } {}  // copysign
     : f a ( bits_to_f64 ab )
     : f b ( bits_to_f64 bb )
-    ? == op 160 { ( __push it ( f64_to_bits + a b ) ) ^ v } {}
-    ? == op 161 { ( __push it ( f64_to_bits - a b ) ) ^ v } {}
-    ? == op 162 { ( __push it ( f64_to_bits * a b ) ) ^ v } {}
-    ? == op 163 { ( __push it ( f64_to_bits / a b ) ) ^ v } {}
+    ? == op 160 { ^ ( f64_to_bits + a b ) } {}
+    ? == op 161 { ^ ( f64_to_bits - a b ) } {}
+    ? == op 162 { ^ ( f64_to_bits * a b ) } {}
+    ? == op 163 { ^ ( f64_to_bits / a b ) } {}
     // min/max, wasm semantics: any NaN → canonical NaN; min(±0,∓0) = −0 (sign
     // OR on the bits), max(±0,∓0) = +0 (sign AND).
-    ? | ( __f64_nan ab ) ( __f64_nan bb ) { ( __push it 9221120237041090560 ) ^ v } {}
+    ? | ( __f64_nan ab ) ( __f64_nan bb ) { ^ 9221120237041090560 } {}
     ? & == & ab 9223372036854775807 0 == & bb 9223372036854775807 0 {
-        ? == op 164 { ( __push it | ab bb ) } { ( __push it & ab bb ) }
-        ^ v } {}
-    ? == op 164 { ( __push it ( f64_to_bits ? < a b a b ) ) ^ v } {}  // min
-    ? == op 165 { ( __push it ( f64_to_bits ? > a b a b ) ) ^ v } {}  // max
+        ^ ? == op 164 | ab bb & ab bb } {}
+    ? == op 164 { ^ ( f64_to_bits ? < a b a b ) } {}  // min
+    ^ ( f64_to_bits ? > a b a b )  // 165 max
 }
 
-@ __f64_cmp * Interp it i op → v {
-    : i bb ( __pop it )
-    : i ab ( __pop it )
+@ __f64_cmp i op i ab i bb → i {
     // unordered: NaN makes `ne` true and every other comparison false
-    ? | ( __f64_nan ab ) ( __f64_nan bb ) { ( __push it ? == op 98 1 0 ) ^ v } {}
+    ? | ( __f64_nan ab ) ( __f64_nan bb ) { ^ ? == op 98 1 0 } {}
     : f a ( bits_to_f64 ab )
     : f b ( bits_to_f64 bb )
-    ? == op 97 { ( __push it ? == a b 1 0 ) ^ v } {}
-    ? == op 98 { ( __push it ? != a b 1 0 ) ^ v } {}
-    ? == op 99 { ( __push it ? < a b 1 0 ) ^ v } {}
-    ? == op 100 { ( __push it ? > a b 1 0 ) ^ v } {}
-    ? == op 101 { ( __push it ? <= a b 1 0 ) ^ v } {}
-    ? == op 102 { ( __push it ? >= a b 1 0 ) ^ v } {}
+    ? == op 97 { ^ ? == a b 1 0 } {}
+    ? == op 98 { ^ ? != a b 1 0 } {}
+    ? == op 99 { ^ ? < a b 1 0 } {}
+    ? == op 100 { ^ ? > a b 1 0 } {}
+    ? == op 101 { ^ ? <= a b 1 0 } {}
+    ^ ? >= a b 1 0  // 102
 }
 
-@ __f32_unary * Interp it i op → v {
-    : i ab ( __pop it )
-    ? == op 139 { ( __push it & ab 2147483647 ) ^ v } {}  // f32.abs
-    ? == op 140 { ( __push it & ^^ ab 2147483648 4294967295 ) ^ v } {}  // f32.neg
+@ __f32_unary i op i ab → i {
+    ? == op 139 { ^ & ab 2147483647 } {}  // f32.abs
+    ? == op 140 { ^ & ^^ ab 2147483648 4294967295 } {}  // f32.neg
     : f x # f ( bits_to_f32 ab )
-    ? == op 141 { ( __push it ( f32_to_bits # f32 ( ceil x ) ) ) ^ v } {}
-    ? == op 142 { ( __push it ( f32_to_bits # f32 ( floor x ) ) ) ^ v } {}
-    ? == op 143 { ( __push it ( f32_to_bits # f32 ( trunc x ) ) ) ^ v } {}
-    ? == op 144 { ( __push it ( f32_to_bits # f32 ( rint x ) ) ) ^ v } {}
-    ? == op 145 { ( __push it ( f32_to_bits # f32 ( sqrt x ) ) ) ^ v } {}
+    ? == op 141 { ^ ( f32_to_bits # f32 ( ceil x ) ) } {}
+    ? == op 142 { ^ ( f32_to_bits # f32 ( floor x ) ) } {}
+    ? == op 143 { ^ ( f32_to_bits # f32 ( trunc x ) ) } {}
+    ? == op 144 { ^ ( f32_to_bits # f32 ( rint x ) ) } {}
+    ^ ( f32_to_bits # f32 ( sqrt x ) )  // 145
 }
 
-@ __f32_binary * Interp it i op → v {
-    : i bb ( __pop it )
-    : i ab ( __pop it )
-    ? == op 152 { ( __push it & | & ab 2147483647 & bb 2147483648 4294967295 ) ^ v } {}  // copysign
+@ __f32_binary i op i ab i bb → i {
+    ? == op 152 { ^ & | & ab 2147483647 & bb 2147483648 4294967295 } {}  // copysign
     : f32 a ( bits_to_f32 ab )
     : f32 b ( bits_to_f32 bb )
-    ? == op 146 { ( __push it ( f32_to_bits + a b ) ) ^ v } {}
-    ? == op 147 { ( __push it ( f32_to_bits - a b ) ) ^ v } {}
-    ? == op 148 { ( __push it ( f32_to_bits * a b ) ) ^ v } {}
-    ? == op 149 { ( __push it ( f32_to_bits / a b ) ) ^ v } {}
+    ? == op 146 { ^ ( f32_to_bits + a b ) } {}
+    ? == op 147 { ^ ( f32_to_bits - a b ) } {}
+    ? == op 148 { ^ ( f32_to_bits * a b ) } {}
+    ? == op 149 { ^ ( f32_to_bits / a b ) } {}
     // min/max, wasm semantics (see the f64 twin)
-    ? | ( __f32_nan ab ) ( __f32_nan bb ) { ( __push it 2143289344 ) ^ v } {}
+    ? | ( __f32_nan ab ) ( __f32_nan bb ) { ^ 2143289344 } {}
     ? & == & ab 2147483647 0 == & bb 2147483647 0 {
-        ? == op 150 { ( __push it | ab bb ) } { ( __push it & ab bb ) }
-        ^ v } {}
-    ? == op 150 { ( __push it ( f32_to_bits ? < a b a b ) ) ^ v } {}
-    ? == op 151 { ( __push it ( f32_to_bits ? > a b a b ) ) ^ v } {}
+        ^ ? == op 150 | ab bb & ab bb } {}
+    ? == op 150 { ^ ( f32_to_bits ? < a b a b ) } {}
+    ^ ( f32_to_bits ? > a b a b )  // 151
 }
 
-@ __f32_cmp * Interp it i op → v {
-    : i bb ( __pop it )
-    : i ab ( __pop it )
+@ __f32_cmp i op i ab i bb → i {
     // unordered: NaN makes `ne` true and every other comparison false
-    ? | ( __f32_nan ab ) ( __f32_nan bb ) { ( __push it ? == op 92 1 0 ) ^ v } {}
+    ? | ( __f32_nan ab ) ( __f32_nan bb ) { ^ ? == op 92 1 0 } {}
     : f32 b ( bits_to_f32 bb )
     : f32 a ( bits_to_f32 ab )
-    ? == op 91 { ( __push it ? == a b 1 0 ) ^ v } {}
-    ? == op 92 { ( __push it ? != a b 1 0 ) ^ v } {}
-    ? == op 93 { ( __push it ? < a b 1 0 ) ^ v } {}
-    ? == op 94 { ( __push it ? > a b 1 0 ) ^ v } {}
-    ? == op 95 { ( __push it ? <= a b 1 0 ) ^ v } {}
-    ? == op 96 { ( __push it ? >= a b 1 0 ) ^ v } {}
+    ? == op 91 { ^ ? == a b 1 0 } {}
+    ? == op 92 { ^ ? != a b 1 0 } {}
+    ? == op 93 { ^ ? < a b 1 0 } {}
+    ? == op 94 { ^ ? > a b 1 0 } {}
+    ? == op 95 { ^ ? <= a b 1 0 } {}
+    ^ ? >= a b 1 0  // 96
 }
 
-// Float ops + all int/float conversions. Reinterpret (0xbc..0xbf) is a no-op
-// because values already live as their bit pattern.
-@ __exec_float * Interp it i op → v {
-    ? == op 167 { ( __push it ( __w32 ( __pop it ) ) ) ^ v } {}  // i32.wrap_i64
-    ? == op 172 { ( __push it ( __w32 ( __pop it ) ) ) ^ v } {}  // i64.extend_i32_s
-    ? == op 173 { ( __push it & ( __pop it ) 4294967295 ) ^ v } {}  // i64.extend_i32_u
-    ? & >= op 188 <= op 191 { ^ v } {}  // *.reinterpret_* : no-op
+// The int↔float conversions (0xa7..0xbf). Reinterpret (0xbc..0xbf) is the
+// identity because a value already lives as its bit pattern; the trapping
+// truncations report through `it` and their result is then dead.
+@ __convert * Interp it i op i ab → i {
+    ? == op 167 { ^ ( __w32 ab ) } {}  // i32.wrap_i64
+    ? == op 172 { ^ ( __w32 ab ) } {}  // i64.extend_i32_s
+    ? == op 173 { ^ & ab 4294967295 } {}  // i64.extend_i32_u
+    ? & >= op 188 <= op 191 { ^ ab } {}  // *.reinterpret_* : no-op
     // trapping float→int truncation (NaN / out-of-range → trap, per spec)
     ? == op 168 {  // i32.trunc_f32_s
-        : i ab ( __pop it )
-        : f t ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) -2147483648.0 2147483648.0 )
-        ( __push it ( __w32 # i t ) ) ^ v } {}
+        ^ ( __w32 # i ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) -2147483648.0 2147483648.0 ) ) } {}
     ? == op 169 {  // i32.trunc_f32_u  (trunc(-0.9) = -0.0 ≥ 0.0 → valid 0)
-        : i ab ( __pop it )
-        : f t ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) 0.0 4294967296.0 )
-        ( __push it ( __w32 # i t ) ) ^ v } {}
+        ^ ( __w32 # i ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) 0.0 4294967296.0 ) ) } {}
     ? == op 170 {  // i32.trunc_f64_s
-        : i ab ( __pop it )
-        : f t ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) -2147483648.0 2147483648.0 )
-        ( __push it ( __w32 # i t ) ) ^ v } {}
+        ^ ( __w32 # i ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) -2147483648.0 2147483648.0 ) ) } {}
     ? == op 171 {  // i32.trunc_f64_u
-        : i ab ( __pop it )
-        : f t ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) 0.0 4294967296.0 )
-        ( __push it ( __w32 # i t ) ) ^ v } {}
+        ^ ( __w32 # i ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) 0.0 4294967296.0 ) ) } {}
     ? == op 174 {  // i64.trunc_f32_s
-        : i ab ( __pop it )
-        : f t ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) - 0.0 ( __f_2p63 ) ( __f_2p63 ) )
-        ( __push it # i t ) ^ v } {}
+        ^ # i ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) - 0.0 ( __f_2p63 ) ( __f_2p63 ) ) } {}
     ? == op 175 {  // i64.trunc_f32_u
-        : i ab ( __pop it )
-        : f t ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) 0.0 ( __f_2p64 ) )
-        ( __push it ( __f_to_u64 t ) ) ^ v } {}
+        ^ ( __f_to_u64 ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) 0.0 ( __f_2p64 ) ) ) } {}
     ? == op 176 {  // i64.trunc_f64_s
-        : i ab ( __pop it )
-        : f t ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) - 0.0 ( __f_2p63 ) ( __f_2p63 ) )
-        ( __push it # i t ) ^ v } {}
+        ^ # i ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) - 0.0 ( __f_2p63 ) ( __f_2p63 ) ) } {}
     ? == op 177 {  // i64.trunc_f64_u
-        : i ab ( __pop it )
-        : f t ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) 0.0 ( __f_2p64 ) )
-        ( __push it ( __f_to_u64 t ) ) ^ v } {}
-    ? == op 178 { ( __push it ( f32_to_bits # f32 ( __w32 ( __pop it ) ) ) ) ^ v } {}  // f32.convert_i32_s
-    ? == op 179 { ( __push it ( f32_to_bits # f32 & ( __pop it ) 4294967295 ) ) ^ v } {}  // f32.convert_i32_u
-    ? == op 180 { ( __push it ( f32_to_bits # f32 ( __pop it ) ) ) ^ v } {}  // f32.convert_i64_s
+        ^ ( __f_to_u64 ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) 0.0 ( __f_2p64 ) ) ) } {}
+    ? == op 178 { ^ ( f32_to_bits # f32 ( __w32 ab ) ) } {}  // f32.convert_i32_s
+    ? == op 179 { ^ ( f32_to_bits # f32 & ab 4294967295 ) } {}  // f32.convert_i32_u
+    ? == op 180 { ^ ( f32_to_bits # f32 ab ) } {}  // f32.convert_i64_s
     ? == op 181 {  // f32.convert_i64_u — u64 ≥ 2^63 via halve-with-sticky-bit + double
-        : i a ( __pop it )
-        ? >= a 0 { ( __push it ( f32_to_bits # f32 a ) ) } {
-            : i h | ( __lshr64 a 1 ) & a 1
-            : f32 t # f32 h
-            ( __push it ( f32_to_bits + t t ) ) }
-        ^ v } {}
-    ? == op 182 { ( __push it ( f32_to_bits # f32 ( bits_to_f64 ( __pop it ) ) ) ) ^ v } {}  // f32.demote_f64
-    ? == op 183 { ( __push it ( f64_to_bits # f ( __w32 ( __pop it ) ) ) ) ^ v } {}  // f64.convert_i32_s
-    ? == op 184 { ( __push it ( f64_to_bits # f & ( __pop it ) 4294967295 ) ) ^ v } {}  // f64.convert_i32_u
-    ? == op 185 { ( __push it ( f64_to_bits # f ( __pop it ) ) ) ^ v } {}  // f64.convert_i64_s
+        ? >= ab 0 { ^ ( f32_to_bits # f32 ab ) } {}
+        : f32 t # f32 | ( __lshr64 ab 1 ) & ab 1
+        ^ ( f32_to_bits + t t ) } {}
+    ? == op 182 { ^ ( f32_to_bits # f32 ( bits_to_f64 ab ) ) } {}  // f32.demote_f64
+    ? == op 183 { ^ ( f64_to_bits # f ( __w32 ab ) ) } {}  // f64.convert_i32_s
+    ? == op 184 { ^ ( f64_to_bits # f & ab 4294967295 ) } {}  // f64.convert_i32_u
+    ? == op 185 { ^ ( f64_to_bits # f ab ) } {}  // f64.convert_i64_s
     ? == op 186 {  // f64.convert_i64_u — u64 ≥ 2^63 via halve-with-sticky-bit + double
-        : i a ( __pop it )
-        ? >= a 0 { ( __push it ( f64_to_bits # f a ) ) } {
-            : i h | ( __lshr64 a 1 ) & a 1
-            : f t # f h
-            ( __push it ( f64_to_bits + t t ) ) }
-        ^ v } {}
-    ? == op 187 { ( __push it ( f64_to_bits # f # f ( bits_to_f32 ( __pop it ) ) ) ) ^ v } {}  // f64.promote_f32
-    ? & >= op 153 <= op 159 { ( __f64_unary it op ) ^ v } {}
-    ? & >= op 160 <= op 166 { ( __f64_binary it op ) ^ v } {}
-    ? & >= op 97 <= op 102 { ( __f64_cmp it op ) ^ v } {}
-    ? & >= op 139 <= op 145 { ( __f32_unary it op ) ^ v } {}
-    ? & >= op 146 <= op 152 { ( __f32_binary it op ) ^ v } {}
-    ? & >= op 91 <= op 96 { ( __f32_cmp it op ) ^ v } {}
+        ? >= ab 0 { ^ ( f64_to_bits # f ab ) } {}
+        : f t # f | ( __lshr64 ab 1 ) & ab 1
+        ^ ( f64_to_bits + t t ) } {}
+    ? == op 187 { ^ ( f64_to_bits # f # f ( bits_to_f32 ab ) ) } {}  // f64.promote_f32
     ( __trap it `unsupported float opcode` )
+    ^ 0
+}
+
+// Float arithmetic, unary and compares (0x5b..0x66, 0x8b..0xa6): the half of
+// the float set that needs neither the interpreter (none of it traps) nor a
+// single floating-point constant. That is what makes it safe to inline into
+// the driver — `__convert`, which carries 2^63, 2^64 and the truncation
+// bounds, stays a call precisely so those constants keep out of the hot
+// loop's register allocation. `b` is unused by the unary forms.
+@ __farith i op i a i b → i {
+    ? & >= op 160 <= op 166 { ^ ( __f64_binary op a b ) } {}
+    ? & >= op 97 <= op 102 { ^ ( __f64_cmp op a b ) } {}
+    ? & >= op 153 <= op 159 { ^ ( __f64_unary op a ) } {}
+    ? & >= op 146 <= op 152 { ^ ( __f32_binary op a b ) } {}
+    ? & >= op 139 <= op 145 { ^ ( __f32_unary op a ) } {}
+    ^ ( __f32_cmp op a b )  // 91..96
 }
 
 // ── WASI host functions (wasi_snapshot_preview1) ─────────────────
@@ -1956,7 +2274,7 @@ $ `module.nu`
 
 @ __wasi_proc_exit * Interp it → v {
     = . it exit_code ( __pop it )
-    = . it exited T
+    = . it halt | . it halt 2
     ( interp_flush it )
 }
 
@@ -1971,7 +2289,7 @@ $ `module.nu`
     : i maxio ( vec_len [u] . it mem )
     : ~ i total 0
     : ~ i i 0
-    ~ & & ! . it trap < i iovs_len <= i maxio {
+    ~ & & ! ( interp_trapped it ) < i iovs_len <= i maxio {
         : i bufp ( __m_get_u32 it + iovs * i 8 )
         : i buflen ( __m_get_u32 it + + iovs * i 8 4 )
         ( __wasi_write_bytes it fd bufp buflen )
@@ -2141,7 +2459,7 @@ $ `module.nu`
     : ~ i at offset
     : ~ i total 0
     : ~ i iv 0
-    ~ & & ! . it trap < iv iovs_len <= iv maxio {
+    ~ & & ! ( interp_trapped it ) < iv iovs_len <= iv maxio {
         : i bufp ( __m_get_u32 it + iovs * iv 8 )
         : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
         : ~ i c 0
@@ -2171,7 +2489,7 @@ $ `module.nu`
     : ~ i at offset
     : ~ i total 0
     : ~ i iv 0
-    ~ & & ! . it trap < iv iovs_len <= iv maxio {
+    ~ & & ! ( interp_trapped it ) < iv iovs_len <= iv maxio {
         : i bufp ( __m_get_u32 it + iovs * iv 8 )
         : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
         : ( Vec u ) chunk ( __mem_slice it bufp buflen )
@@ -2369,7 +2687,7 @@ $ `module.nu`
     : i maxio ( vec_len [u] . it mem )
     : ~ i total 0
     : ~ i iv 0
-    ~ & & ! . it trap < iv iovs_len <= iv maxio {
+    ~ & & ! ( interp_trapped it ) < iv iovs_len <= iv maxio {
         : i bufp ( __m_get_u32 it + iovs * iv 8 )
         : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
         : ~ i c 0
@@ -2613,7 +2931,7 @@ $ `module.nu`
 
 // Trap with a message that carries a dynamic name (import module/field).
 @ __trap_named * Interp it s prefix ( Vec u ) name → v {
-    = . it trap T
+    = . it halt | . it halt 1
     ( vec_free [u] . it trapmsg )
     : ( Vec u ) msg ( bytes_from_str prefix )
     : i n ( vec_len [u] name )

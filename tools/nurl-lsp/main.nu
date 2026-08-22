@@ -512,20 +512,37 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                     ? ( __is_space c ) { = pos + pos 1 } {
                                         // Non-whitespace, non-comment, non-string, top-level?
                                         ? & == depth 0 != at_line_start 0 {
-                                            // Decl-start scan.
+                                            // Decl-start scan. A declaration may
+                                            // carry any run of the `pub` (v2.0),
+                                            // `simd` (v2.6) and `inline` (v2.7)
+                                            // prefixes, in any order, so consume
+                                            // whatever run precedes the sigil.
+                                            //
+                                            // This used to read one identifier
+                                            // and test `starts_with "pub"` under
+                                            // a guard that reduces to `p == 0` —
+                                            // so past the first byte of the file
+                                            // the prefix was never skipped and
+                                            // every `pub @ f` went unindexed:
+                                            // no go-to-definition, no symbol, no
+                                            // rename, for exactly the functions
+                                            // marked as another file's API.
                                             : i sp ( __skip_ws content pos n )
                                             : ~ i p sp
-                                            : ~ b pub_seen F
-                                            // Optional `pub` keyword.
-                                            : i ie ( __scan_ident content p n )
-                                            ? > ie p {
-                                                : String tok ( __substr content p ie )
-                                                ? ( __string_starts_with tok `pub` ) {
-                                                    ? == ie - ie p { = pub_seen T = p ( __skip_ws content ie n ) } {}
+                                            : ~ b more T
+                                            ~ more {
+                                                = more F
+                                                : i ie ( __scan_ident content p n )
+                                                ? > ie p {
+                                                    : String tok ( __substr content p ie )
+                                                    : s td ( string_data tok )
+                                                    ? | | != 0 ( nurl_str_eq td `pub` ) != 0 ( nurl_str_eq td `simd` ) != 0 ( nurl_str_eq td `inline` ) {
+                                                        = p ( __skip_ws content ie n )
+                                                        = more T
+                                                    } {}
+                                                    ( string_free tok )
                                                 } {}
-                                                ( string_free tok )
-                                            } {}
-                                            // (pub-check above is robust only when token == "pub"; covered below.)
+                                            }
                                             ? < p n {
                                                 : i c2 ( nurl_str_get content p )
                                                 ? == c2 64 {
@@ -1840,6 +1857,8 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ? != 0 ( nurl_str_eq name `T` ) { ^ T } {}
     ? != 0 ( nurl_str_eq name `F` ) { ^ T } {}
     ? != 0 ( nurl_str_eq name `pub` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `simd` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `inline` ) { ^ T } {}
     ^ F
 }
 

@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_inline_on_generic.nu:8:13: error: 'inline' cannot be applied to a generic function — a generic is monomorphised after the whole program is parsed, and the prefix does not survive to its instantiations
+inline @ id [A] A x → A { ^ x }
+            ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

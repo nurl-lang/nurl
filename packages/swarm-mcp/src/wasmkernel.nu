@@ -524,7 +524,7 @@ $ `token.nu`
             ( interp_run_start it )
             ( exec_func it fidx )
             ( interp_flush it )
-            ? . it trap {
+            ? ( interp_trapped it ) {
                 : String tm ( bytes_to_str . it trapmsg )
                 ( string_free err )
                 = err ( string_concat ( string_from `wasm trap: ` ) ( string_from ( string_data tm ) ) )

@@ -43,20 +43,64 @@ wasmtime run --invoke <export> <module.wasm> [args…]
   `i32.const` likewise names no record: a pre-scan interns the body's
   distinct constants into a **constant pool** the frame reserves between
   the locals and the operand stack, and the const becomes an alias to
-  that slot. `block`/`loop`/`end` emit nothing, branches are direct jumps
-  carrying statically-computed result moves — no value-stack traffic and
-  no runtime control stack.
-  (This landed in four steps: flat records first — which alone took the
+  that slot. `local.set` writes no record either: the instruction that
+  produced the value is retargeted to write the local, so the copy
+  disappears into its producer. `block`/`loop`/`end` emit nothing, branches
+  are direct jumps carrying statically-computed result moves, and a
+  compare feeding a `br_if` is **rewritten in place** into a branch that
+  does its own test — no value-stack traffic and no runtime control stack.
+  Execution runs two loops, not one: the outer owns the frame stack, the
+  inner owns the records of a single frame and its condition is a single
+  compare.
+  (This landed in six steps. Flat records first — which alone took the
   JSON-parse benchmark from 31 s to 5.7 s by deleting the per-execution
   `end`-scans — then register form, roughly 2x again on straight-line
   code, then operand forwarding and the constant pool, which between them
-  deleted **43 %** of the records the benchmark corpus dispatches and
-  39 % of the host instructions it runs. `local.get` had been 45 % of all
-  records and `i32.const` 22 % of what was left. The first two took a full
-  compiler self-host on this runtime from 5m45s to 30.5 s; the last two
-  took another 42 % off it, byte-identical throughout. Cost per surviving
-  record went *up*, 56 → 60 host instructions, which is the shape you want:
-  what was deleted was the cheapest work.) Each record keeps its original
+  deleted 43 % of the records the benchmark corpus dispatches. `local.get`
+  had been 45 % of all records and `i32.const` 22 % of what was left.
+  Those four took a full compiler self-host on this runtime from 5m45s to
+  30.5 s and then 42 % off that again.
+  Then floats and the int↔float conversions left the value stack
+  for register form — they were the last records bridging through it, and
+  the bridge also forced an operand flush that turned every `local.get`
+  feeding a float op back into a move; then `local.set` folded into its
+  producer, which took `MOV` from 31 % of everything dispatched to 3 %;
+  then `cmp; br_if` became one record, and the driver split into two
+  loops. Measured on one workstation so the two ends are comparable, the
+  benchmark corpus went 25.3 s → 13.3 s and the self-host 47.2 s → 22.7 s,
+  byte-identical throughout. This round is the first where cost per record
+  went *down* as well: the corpus dispatches 4.69G records before and 3.03G
+  after — a **35 % cut** — at 68.5 → 51.6 host instructions each, 321G
+  instructions in total against 156G. What the earlier rounds deleted was
+  work per record; what this one also deleted was the per-record price of
+  the loop around them.
+  Then the dispatch became **one jump table over every opcode**. It had
+  been a chain of range tests in measured frequency order — i64 arithmetic
+  first, then the register/control forms, then i32 arithmetic, compares,
+  loads, floats — so a record paid between one and seven range tests
+  before its table, and then paid a *second* dispatch inside the helper it
+  called (`__farith` picked one of six families, each of which picked one
+  of seven ops). Written flat, one `? == op K` arm per opcode with the
+  work in the arm, LLVM builds a single table: one bounds check and one
+  indirect jump, and the float and integer helpers disappear into their
+  arms. The corpus went 12.16 s → 9.44 s on one workstation — **22 %**,
+  with nbody at −38 % and sort_window at −31 % — and 145.9G host
+  instructions → 113.2G, which is 48.2 → **37.4 per record** over the same
+  3.03G records. The self-host went 39.9 s → 32.4 s, byte-identical.
+  A negative worth recording: doing the same to the *fused* `cmp; br_if`,
+  which is 8.6 % of all records and the last caller of `__rcmp`, made the
+  whole corpus **7.6 % slower**. Twenty more arms inside an existing arm
+  is not the same shape as twenty arms in the table, and the driver's
+  register allocation is the thing that pays.
+  Last, the two linear-memory accessors are `inline` (grammar v2.7): every
+  arm calls them with `n` and `signed` as literals, so an inlined copy
+  folds to a bounds check, one load and a shift — but LLVM scores the
+  whole callee, sees the byte-crossing path and the sign extension that
+  site will never reach, and declines. Forcing it took another **9.6 %**
+  off the corpus, 22 % off nbody and matmul, 14 % off sieve. Over the
+  round the corpus went 12.81 s → 8.17 s — **1.57x**, nbody 2.16x, sieve
+  1.86x, matmul 1.76x — and the self-host 32.6 s → 29.3 s, byte-identical
+  throughout.) Each record keeps its original
   byte offset, so trap backtraces still point into the module image:
   - structured control flow: `block`, `loop`, `if`/`else`, `br`, `br_if`,
     `br_table`, `return`, `end` — **multi-value** block types included
@@ -66,17 +110,25 @@ wasmtime run --invoke <export> <module.wasm> [args…]
     `INT_MIN/−1` trap, `INT_MIN rem −1` is 0; signed **and** unsigned
     `div`/`rem`/`shr`/compares, `rotl`/`rotr`, `clz`/`ctz`/`popcnt`,
     sign-extension ops, i32 results wrapped to 32 bits
-  - `call` / `call_indirect` (the latter with the runtime **signature check**)
+  - `call` / `call_indirect` (the latter with the runtime **signature check**);
+    a call leaves the inner loop, so nothing on the record path pays for it
   - **linear memory**: all sized loads/stores, `memory.size`/`memory.grow`
     (declared max + wasm32 limit honoured, −1 past them), **bulk memory**
     (`memory.copy`/`fill`/`init` with up-front bounds checks, `data.drop`,
-    passive data segments), active data segments applied at instantiation
+    passive data segments), active data segments applied at instantiation.
+    Instantiation is one `calloc` of the declared minimum plus one `memcpy`
+    per data segment, so the pages arrive from the kernel already zero and
+    untouched: a wasi command module declares 257 pages, and filling that
+    16.8 MB a byte at a time used to be **78 % of the wall clock** of a run
+    whose guest printed one line. Hello-world on this runtime went 50.1 ms
+    → 6.7 ms on that one change, and every longer run in the corpus kept
+    the same ~43 ms.
   - **globals**, **tables** + reference types: `table.get/set/grow/size/`
     `fill/copy/init`, `elem.drop`, `ref.null`/`ref.is_null`/`ref.func`,
     typed `select`; all element-segment encodings (active/passive/declared,
     index- and expression-form)
-  - **floats** — full f32/f64 arithmetic and conversions with IEEE-correct
-    semantics: NaN-aware comparisons (`ne` true on unordered), canonical-NaN
+  - **floats** — register form like the integer core, full f32/f64
+    arithmetic and conversions with IEEE-correct semantics: NaN-aware comparisons (`ne` true on unordered), canonical-NaN
     `min`/`max` with ±0 ordering, **trapping** float→int truncation (NaN /
     out-of-range) and true **saturating** `trunc_sat` forms, unsigned
     `convert_i64_u` via halve-with-sticky-bit (matches LLVM's lowering)
@@ -127,18 +179,35 @@ decoder or corrupts memory. Concretely:
 - every vector length / count is validated against the bytes physically
   remaining before anything is allocated (a 10-byte module can no longer
   request a 2³²-element buffer), and `mem.min` / `table.min` / per-function
-  locals are capped to architectural limits;
+  locals are capped to architectural limits — the bound is applied to the
+  count *itself*, never to a sum containing it, because a count near 2⁶³
+  makes `so_far + count` wrap negative and slip past a ceiling written as
+  a sum, which is a 2⁶³-iteration loop rather than a decode error;
+- a LEB128 stops contributing after ten groups: past that the value cannot
+  fit in 64 bits anyway, and `<< x 64` is poison in LLVM — a corrupted
+  continuation byte turning a terminal group into a running one is exactly
+  how a module reaches that shift;
+- an active data segment that would run past the declared initial memory is
+  refused at decode, where the offset, the length and `mem.min` are all in
+  hand; instantiation refuses it again rather than copying what fits;
 - section sizes and constant-init expressions are bounded — an over-long LEB
   size (which decodes to a negative offset) or an unterminated init expression
   is a clean decode error, not an infinite loop;
 - memarg offsets are masked to `u32` so an out-of-bounds access traps rather
   than silently wrapping past the bounds check, and WASI iovec counts / buffer
   lengths are clamped to memory size;
+- a function whose frame would need more than 2²⁰ slots is refused with a
+  trap rather than predecoded: a ten-byte function can declare a million
+  locals, and a record that packs two slot indices into one word needs the
+  index to fit in twenty bits — an architectural limit, not an assumption;
 - the `env`/GPU import surface is opt-in (`--allow-gpu`), off by default.
 
 This was validated by an ASan-instrumented mutation fuzzer plus an exhaustive
-prefix (truncation) sweep of the whole corpus — **zero crashes, zero hangs** —
-and locked in by `tests/hardening_test.nu`. (Note: `--fuel N` still bounds
+prefix (truncation) sweep of the whole corpus — 7 206 runs over six modules in
+the last pass, **zero crashes, zero hangs** — and locked in by
+`tests/hardening_test.nu`. The sweep is re-run against every
+change to the decoder or the predecoder, the two places a malformed module
+reaches first. (Note: `--fuel N` still bounds
 runaway *valid* guests; an unbounded `loop` runs forever exactly as it does on
 the reference runtime.)
 

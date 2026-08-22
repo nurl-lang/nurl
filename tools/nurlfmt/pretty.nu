@@ -95,6 +95,9 @@ $ `tools/nurlfmt/tokenize.nu`
     // Grammar v2.6 CPU-dispatch prefix — same gluing rule as `pub`,
     // and the two may appear in either order (`pub simd @`, `simd pub @`).
     ? ( __pp_text_eq text `simd` ) { ^ T } {}
+    // Grammar v2.7 always-inline prefix — same rule again; any of the
+    // three may precede an `@` in any order.
+    ? ( __pp_text_eq text `inline` ) { ^ T } {}
     ^ F
 }
 
@@ -416,7 +419,7 @@ $ `tools/nurlfmt/tokenize.nu`
                     // to glue. `pub` inside a comment/string never
                     // reaches this path (those are non-IDENT kinds).
                     ? & & == bd 0 == pd 0
-                    | ( __pp_text_eq text `pub` ) ( __pp_text_eq text `simd` ) {
+                    | | ( __pp_text_eq text `pub` ) ( __pp_text_eq text `simd` ) ( __pp_text_eq text `inline` ) {
                         = prev_was_pub T
                     } {
                         = prev_was_pub F

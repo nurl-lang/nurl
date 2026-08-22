@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`inline`: the always-inline prefix on a function (grammar v2.7)** —
+  `inline @ f …` puts LLVM's `alwaysinline` on the definition, which makes
+  the inliner skip its cost model for that callee. `pub`, `simd` and
+  `inline` are order-independent, and `inline` is accepted on `@`
+  declarations only.
+
+  The cost model is usually right, and this is not a knob to reach for
+  casually: an inlined body is duplicated at every call site, which costs
+  instruction cache and changes the caller's register pressure. It earns
+  its place where the model is structurally wrong — a helper whose
+  arguments are *constants at every call site*, so an inlined copy folds
+  to a few instructions, but which is scored on its whole body, called
+  from a caller large enough to push the decision the other way. An
+  interpreter's dispatch loop is that shape exactly: marking
+  `packages/wasmtime`'s two linear-memory accessors took 9.5 % off the
+  whole wasm benchmark corpus, 24 % off nbody and matmul, 19 % off sieve.
+
+  Two combinations nurlc rejects rather than leaving to the backend:
+  `inline` on a **generic** (a generic is monomorphised after the whole
+  program is parsed, and the prefix does not survive to its instantiations
+  — the rule `simd` already has), and `inline` together with **`simd`**
+  (which replaces the function with a CPU-dispatching stub, the opaque
+  call `inline` asks to remove). A directly recursive `inline` function is
+  accepted: LLVM inlines the call sites it can and leaves the self-call.
+
+  `nurlfmt` learned the prefix in the same change — without it the
+  formatter read `inline` as a stray identifier and broke it onto its own
+  line, which is a parse of a different program.
+
 ### Fixed
 
 - **The AArch64 and RISC-V guests boot again under zig 0.16.** v0.48.0

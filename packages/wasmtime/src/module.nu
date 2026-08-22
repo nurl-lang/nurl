@@ -36,13 +36,21 @@ $ `stdlib/std/bytes.nu`
 @ wc_peek * Wc c → i { ^ ?? ( vec_get [u] . c buf . c pos ) { T x → # i x F → 0 } }
 
 // Unsigned LEB128 → i (NURL i is 64-bit, covers u32/u64).
+//
+// Only the first ten groups can carry a 64-bit value. A longer encoding
+// is malformed wasm, and `<< x shift` with shift >= 64 is poison in LLVM
+// (docs/spec.md, § operators) — a corrupted continuation byte turning a
+// terminal group into a running one is exactly how a module reaches it.
+// Groups past the tenth are consumed, so `pos` still lands after the
+// encoding, but they contribute nothing: the value stays inside 64 bits
+// and every caller's range check still sees a number it can judge.
 @ wc_uleb * Wc c → i {
     : ~ i result 0
     : ~ i shift 0
     : ~ b more T
     ~ more {
         : i b ( wc_u8 c )
-        = result | result << & b 127 shift
+        ? < shift 64 { = result | result << & b 127 shift } {}
         = shift + shift 7
         ? == 0 & b 128 { = more F } {}
     }
@@ -57,7 +65,7 @@ $ `stdlib/std/bytes.nu`
     : ~ b more T
     ~ more {
         = b ( wc_u8 c )
-        = result | result << & b 127 shift
+        ? < shift 64 { = result | result << & b 127 shift } {}
         = shift + shift 7
         ? == 0 & b 128 { = more F } {}
     }
@@ -129,36 +137,36 @@ $ `stdlib/std/bytes.nu`
 @ module_free * Module m → v {
     : i tn ( vec_len [s] . m types )
     : ~ i k 0
-    ~ < k tn { ?? ( vec_get [s] . m types k ) { T pp → ?!= # i pp 0 { ( __ft_free # *FuncType pp ) } {} F → {} } = k + k 1 }
+    ~ < k tn { ?? ( vec_get [s] . m types k ) { T pp → ? != # i pp 0 { ( __ft_free # *FuncType pp ) } {} F → {} } = k + k 1 }
     ( vec_free [s] . m types )
     ( vec_free [i] . m functypes )
     : i fn ( vec_len [s] . m funcs )
     : ~ i j 0
-    ~ < j fn { ?? ( vec_get [s] . m funcs j ) { T pp → ?!= # i pp 0 { : *WFunc f # *WFunc pp ( vec_free [i] . f locals ) ( nurl_free # s f ) } {} F → {} } = j + j 1 }
+    ~ < j fn { ?? ( vec_get [s] . m funcs j ) { T pp → ? != # i pp 0 { : *WFunc f # *WFunc pp ( vec_free [i] . f locals ) ( nurl_free # s f ) } {} F → {} } = j + j 1 }
     ( vec_free [s] . m funcs )
     : i en ( vec_len [s] . m exports )
     : ~ i e 0
-    ~ < e en { ?? ( vec_get [s] . m exports e ) { T pp → ?!= # i pp 0 { : *WExport x # *WExport pp ( vec_free [u] . x name ) ( nurl_free # s x ) } {} F → {} } = e + e 1 }
+    ~ < e en { ?? ( vec_get [s] . m exports e ) { T pp → ? != # i pp 0 { : *WExport x # *WExport pp ( vec_free [u] . x name ) ( nurl_free # s x ) } {} F → {} } = e + e 1 }
     ( vec_free [s] . m exports )
     : i dn ( vec_len [s] . m datas )
     : ~ i d 0
-    ~ < d dn { ?? ( vec_get [s] . m datas d ) { T pp → ?!= # i pp 0 { : *DataSeg ds # *DataSeg pp ( vec_free [u] . ds bytes ) ( nurl_free # s ds ) } {} F → {} } = d + d 1 }
+    ~ < d dn { ?? ( vec_get [s] . m datas d ) { T pp → ? != # i pp 0 { : *DataSeg ds # *DataSeg pp ( vec_free [u] . ds bytes ) ( nurl_free # s ds ) } {} F → {} } = d + d 1 }
     ( vec_free [s] . m datas )
     ( vec_free [i] . m global_init )
     ( vec_free [i] . m global_mut )
     ( vec_free [i] . m table )
     : i eln ( vec_len [s] . m elems )
     : ~ i el 0
-    ~ < el eln { ?? ( vec_get [s] . m elems el ) { T pp → ?!= # i pp 0 { : *ElemSeg es # *ElemSeg pp ( vec_free [i] . es funcs ) ( nurl_free # s es ) } {} F → {} } = el + el 1 }
+    ~ < el eln { ?? ( vec_get [s] . m elems el ) { T pp → ? != # i pp 0 { : *ElemSeg es # *ElemSeg pp ( vec_free [i] . es funcs ) ( nurl_free # s es ) } {} F → {} } = el + el 1 }
     ( vec_free [s] . m elems )
     : i in ( vec_len [s] . m imports )
     : ~ i ii 0
-    ~ < ii in { ?? ( vec_get [s] . m imports ii ) { T pp → ?!= # i pp 0 { : *WImport w # *WImport pp ( vec_free [u] . w module ) ( vec_free [u] . w field ) ( nurl_free # s w ) } {} F → {} } = ii + ii 1 }
+    ~ < ii in { ?? ( vec_get [s] . m imports ii ) { T pp → ? != # i pp 0 { : *WImport w # *WImport pp ( vec_free [u] . w module ) ( vec_free [u] . w field ) ( nurl_free # s w ) } {} F → {} } = ii + ii 1 }
     ( vec_free [s] . m imports )
     ( vec_free [i] . m name_idx )
     : i nn ( vec_len [s] . m name_str )
     : ~ i ni 0
-    ~ < ni nn { ?? ( vec_get [s] . m name_str ni ) { T pp → ?!= # i pp 0 { : *NameBuf nb # *NameBuf pp ( vec_free [u] . nb bytes ) ( nurl_free # s nb ) } {} F → {} } = ni + ni 1 }
+    ~ < ni nn { ?? ( vec_get [s] . m name_str ni ) { T pp → ? != # i pp 0 { : *NameBuf nb # *NameBuf pp ( vec_free [u] . nb bytes ) ( nurl_free # s nb ) } {} F → {} } = ni + ni 1 }
     ( vec_free [s] . m name_str )
     ( vec_free [u] . m code )
     ( vec_free [u] . m err )
@@ -283,9 +291,27 @@ $ `stdlib/std/bytes.nu`
         ? == flag 2 { ( wc_uleb c ) } {}  // explicit memidx
         : i offset ? != flag 1 ( __const_expr c m ) 0
         : i blen ( __chk_count c m ( wc_uleb c ) `bad data segment length` )
+        // One memcpy for the payload. `__chk_count` has already bounded
+        // blen by the bytes that remain, so the source range is in-bounds;
+        // a push per byte cost nurlc.wasm 110 000 of them.
         : ( Vec u ) bytes ( vec_with_cap [u] blen )
-        : ~ i bi 0
-        ~ < bi blen { ( vec_push [u] bytes ( wc_u8 c ) ) = bi + bi 1 }
+        ? > blen 0 {
+            : s src # s + # i ( vec_data [u] . c buf ) . c pos
+            ( nurl_memcpy # s ( vec_data [u] bytes ) src blen )
+            : b _ok ( vec_set_len [u] bytes blen )
+            ( wc_skip c blen )
+        } {}
+        // An active segment is copied into the INITIAL memory at
+        // instantiation, so whether it fits is decidable right here: the
+        // offset and the length are both in hand and the declared minimum
+        // cannot shrink. The spec makes an overhanging segment an
+        // instantiation failure; saying so at decode keeps it one clean
+        // rejection instead of a half-built instance.
+        ? == flag 1 {} {
+            ? | < offset 0 > offset - * . m mem_min 65536 blen {
+                ( __mod_err m `data segment does not fit in linear memory` )
+            } {}
+        }
         : *DataSeg ds # *DataSeg ( nurl_alloc Z DataSeg )
         = . ds offset offset
         = . ds bytes bytes
@@ -443,11 +469,16 @@ $ `stdlib/std/bytes.nu`
         : ( Vec i ) locals ( vec_new [i] )
         : ~ i d 0
         ~ < d ndecl {
-            : ~ i cnt ( wc_uleb c )
+            // A local run expands to `cnt` slots. Route the count through
+            // `__chk_count` first: it is a LEB the module chose, so without
+            // the bytes-remaining bound `vec_len + cnt` can overflow to a
+            // negative and walk straight past the ceiling below — 2^62
+            // pushes, which is a hang, not a decode error.
+            : ~ i cnt ( __chk_count c m ( wc_uleb c ) `bad local run length` )
             : i ty ( wc_u8 c )
-            // A local run expands to `cnt` slots; cap the running total so a
-            // huge count cannot exhaust memory building the locals vector.
-            ? | < cnt 0 > + ( vec_len [i] locals ) cnt 1000000 { ( __mod_err m `too many locals` ) = cnt 0 } {}
+            // Cap the running total so a huge count cannot exhaust memory
+            // building the locals vector.
+            ? > + ( vec_len [i] locals ) cnt 1000000 { ( __mod_err m `too many locals` ) = cnt 0 } {}
             : ~ i j 0
             ~ < j cnt { ( vec_push [i] locals ty ) = j + j 1 }
             = d + d 1
@@ -477,24 +508,24 @@ $ `stdlib/std/bytes.nu`
         // A negative (overlong-LEB) or over-long subsection size would drive
         // sub_end before pos and spin this loop; abandon the name section then.
         ? | < ssize 0 > ssize ( wc_avail c ) { = . c pos sec_end } {
-        : i sub_end + . c pos ssize
-        ? == sub 1 {  // function names: count, then (funcidx, name) pairs
-            : i n ( __chk_count c m ( wc_uleb c ) `bad name count` )
-            : ~ i k 0
-            ~ < k n {
-                : i fi ( wc_uleb c )
-                : i ln ( __chk_count c m ( wc_uleb c ) `bad name length` )
-                : ( Vec u ) nm ( vec_with_cap [u] ln )
-                : ~ i a 0
-                ~ < a ln { ( vec_push [u] nm ( wc_u8 c ) ) = a + a 1 }
-                : *NameBuf nb # *NameBuf ( nurl_alloc Z NameBuf )
-                = . nb bytes nm
-                ( vec_push [i] . m name_idx fi )
-                ( vec_push [s] . m name_str # s nb )
-                = k + k 1
-            }
-        } {}
-        = . c pos sub_end }
+            : i sub_end + . c pos ssize
+            ? == sub 1 {  // function names: count, then (funcidx, name) pairs
+                : i n ( __chk_count c m ( wc_uleb c ) `bad name count` )
+                : ~ i k 0
+                ~ < k n {
+                    : i fi ( wc_uleb c )
+                    : i ln ( __chk_count c m ( wc_uleb c ) `bad name length` )
+                    : ( Vec u ) nm ( vec_with_cap [u] ln )
+                    : ~ i a 0
+                    ~ < a ln { ( vec_push [u] nm ( wc_u8 c ) ) = a + a 1 }
+                    : *NameBuf nb # *NameBuf ( nurl_alloc Z NameBuf )
+                    = . nb bytes nm
+                    ( vec_push [i] . m name_idx fi )
+                    ( vec_push [s] . m name_str # s nb )
+                    = k + k 1
+                }
+            } {}
+            = . c pos sub_end }
     }
 }
 
@@ -564,15 +595,15 @@ $ `stdlib/std/bytes.nu`
         ? == id 0 { ( __decode_custom_sec c m sec_end ) } {}
         ? == id 1 { ( __decode_type_sec c m ) } {
             ? == id 2 { ( __decode_import_sec c m ) } {
-            ? == id 3 { ( __decode_func_sec c m ) } {
-                ? == id 4 { ( __decode_table_sec c m ) } {
-                    ? == id 5 { ( __decode_mem_sec c m ) } {
-                        ? == id 6 { ( __decode_global_sec c m ) } {
-                            ? == id 7 { ( __decode_export_sec c m ) } {
-                                ? == id 8 { = . m start_func ( wc_uleb c ) } {
-                                ? == id 9 { ( __decode_elem_sec c m ) } {
-                                    ? == id 10 { ( __decode_code_sec c m ) } {
-                                        ? == id 11 { ( __decode_data_sec c m ) } {} } } } } } } } } } }
+                ? == id 3 { ( __decode_func_sec c m ) } {
+                    ? == id 4 { ( __decode_table_sec c m ) } {
+                        ? == id 5 { ( __decode_mem_sec c m ) } {
+                            ? == id 6 { ( __decode_global_sec c m ) } {
+                                ? == id 7 { ( __decode_export_sec c m ) } {
+                                    ? == id 8 { = . m start_func ( wc_uleb c ) } {
+                                        ? == id 9 { ( __decode_elem_sec c m ) } {
+                                            ? == id 10 { ( __decode_code_sec c m ) } {
+                                                ? == id 11 { ( __decode_data_sec c m ) } {} } } } } } } } } } }
         = . c pos sec_end  // robust against partially-read / skipped sections
     }
     ( wc_free c )
