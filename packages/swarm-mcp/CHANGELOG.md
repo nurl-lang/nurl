@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.25.1
+
+**0.25.0 shipped announcing itself as 0.24.0.** `sm_version` is a
+hand-written literal and the 0.25.0 release bumped the manifest without it,
+so `initialize`, `server/discover` and `--version` all reported a version
+that was never published. Fixed here, and — more to the point —
+`tools/check_package_version_strings.sh` now reads that spelling, so the
+next release cannot repeat it. (0.31.1 of the toolchain fixed this same
+drift once before by unifying three literals onto one `sm_version`; that
+addressed the symptom, not the fact that nothing checked the survivor.)
+
+The dependency pin follows the pure-NURL runtime to `wasmtime ^0.11.0`,
+which is 3.1x faster over the wasm benchmark corpus and 7.5x on start-up
+than the 0.9.0 line 0.25.0 was pinned to — a worker's wasm chunks get all
+of it with no change here.
+
 ## 0.25.0
 
 **Workers run wasm in-process — and therefore inside a unikernel.** The
