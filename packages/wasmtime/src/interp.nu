@@ -851,6 +851,14 @@ $ `module.nu`
 @ __R_IFZ → i { ^ 322 }  // A=target B=cond — jump when cond == 0
 @ __R_BRIFC → i { ^ 323 }  // A=target B=lhs C=rhs D=compare op — jump when it holds
 
+// A `br_if` that also moves block results packs its destination and source
+// slot indices into one word, so a slot index has to fit in 20 bits. A
+// function needing more than a million slots is not one a compiler emits —
+// a ten-byte function CAN declare a million locals, though, so this is an
+// architectural limit like the memory and table minimums the decoder
+// already enforces, not an assumption.
+@ __slot_cap → i { ^ 1048576 }
+
 // Emit one 6-slot record; returns its index.
 @ __pf_emit ( Vec i ) code i op i a i b i cc i dd i byte → i {
     : i idx / ( vec_len [i] code ) 6
@@ -1439,6 +1447,28 @@ $ `module.nu`
     ( vec_free [s] open )
     ( vec_free [i] vm )
     ( wc_free c )
+    // Past the slot cap the packed operand fields would wrap, so the body is
+    // replaced by a single trap: the module still loads and still decodes,
+    // and says so cleanly if the function is ever called. The frame is
+    // rebuilt to the shape that trap needs and nothing more — room for the
+    // arguments the caller copies in, no declared locals to zero and no
+    // constant pool to fill, so nothing writes past it.
+    ? >= + SB + maxh 4 ( __slot_cap ) {
+        ( vec_free [i] . pf code )
+        ( vec_free [i] . pf kv )
+        = . pf code ( vec_new [i] )
+        = . pf kv ( vec_new [i] )
+        ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 . f code_start )
+        = . pf count 1
+        = . pf nlocals nparams
+        = . pf sbase nparams
+        = . pf nslots + nparams 4
+        = . pf nparams nparams
+        = . pf nresults nresults
+        = . pf code_start . f code_start
+        = . pf pool ( vec_new [s] )
+        ^ # s pf
+    } {}
     = . pf count / ( vec_len [i] . pf code ) 6
     = . pf nslots + SB + maxh 4
     = . pf nparams nparams

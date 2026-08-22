@@ -43,20 +43,37 @@ wasmtime run --invoke <export> <module.wasm> [args…]
   `i32.const` likewise names no record: a pre-scan interns the body's
   distinct constants into a **constant pool** the frame reserves between
   the locals and the operand stack, and the const becomes an alias to
-  that slot. `block`/`loop`/`end` emit nothing, branches are direct jumps
-  carrying statically-computed result moves — no value-stack traffic and
-  no runtime control stack.
-  (This landed in four steps: flat records first — which alone took the
+  that slot. `local.set` writes no record either: the instruction that
+  produced the value is retargeted to write the local, so the copy
+  disappears into its producer. `block`/`loop`/`end` emit nothing, branches
+  are direct jumps carrying statically-computed result moves, and a
+  compare feeding a `br_if` is **rewritten in place** into a branch that
+  does its own test — no value-stack traffic and no runtime control stack.
+  Execution runs two loops, not one: the outer owns the frame stack, the
+  inner owns the records of a single frame and its condition is a single
+  compare.
+  (This landed in six steps. Flat records first — which alone took the
   JSON-parse benchmark from 31 s to 5.7 s by deleting the per-execution
   `end`-scans — then register form, roughly 2x again on straight-line
   code, then operand forwarding and the constant pool, which between them
-  deleted **43 %** of the records the benchmark corpus dispatches and
-  39 % of the host instructions it runs. `local.get` had been 45 % of all
-  records and `i32.const` 22 % of what was left. The first two took a full
-  compiler self-host on this runtime from 5m45s to 30.5 s; the last two
-  took another 42 % off it, byte-identical throughout. Cost per surviving
-  record went *up*, 56 → 60 host instructions, which is the shape you want:
-  what was deleted was the cheapest work.) Each record keeps its original
+  deleted 43 % of the records the benchmark corpus dispatches. `local.get`
+  had been 45 % of all records and `i32.const` 22 % of what was left.
+  Those four took a full compiler self-host on this runtime from 5m45s to
+  30.5 s and then 42 % off that again.
+  Then floats and the int↔float conversions left the value stack
+  for register form — they were the last records bridging through it, and
+  the bridge also forced an operand flush that turned every `local.get`
+  feeding a float op back into a move; then `local.set` folded into its
+  producer, which took `MOV` from 31 % of everything dispatched to 3 %;
+  then `cmp; br_if` became one record, and the driver split into two
+  loops. Measured on one workstation so the two ends are comparable, the
+  benchmark corpus went 25.3 s → 13.3 s and the self-host 47.2 s → 22.7 s,
+  byte-identical throughout. This round is the first where cost per record
+  went *down* as well: the corpus dispatches 4.69G records before and 3.03G
+  after — a **35 % cut** — at 68.5 → 51.6 host instructions each, 321G
+  instructions in total against 156G. What the earlier rounds deleted was
+  work per record; what this one also deleted was the per-record price of
+  the loop around them.) Each record keeps its original
   byte offset, so trap backtraces still point into the module image:
   - structured control flow: `block`, `loop`, `if`/`else`, `br`, `br_if`,
     `br_table`, `return`, `end` — **multi-value** block types included
@@ -66,7 +83,8 @@ wasmtime run --invoke <export> <module.wasm> [args…]
     `INT_MIN/−1` trap, `INT_MIN rem −1` is 0; signed **and** unsigned
     `div`/`rem`/`shr`/compares, `rotl`/`rotr`, `clz`/`ctz`/`popcnt`,
     sign-extension ops, i32 results wrapped to 32 bits
-  - `call` / `call_indirect` (the latter with the runtime **signature check**)
+  - `call` / `call_indirect` (the latter with the runtime **signature check**);
+    a call leaves the inner loop, so nothing on the record path pays for it
   - **linear memory**: all sized loads/stores, `memory.size`/`memory.grow`
     (declared max + wasm32 limit honoured, −1 past them), **bulk memory**
     (`memory.copy`/`fill`/`init` with up-front bounds checks, `data.drop`,
@@ -75,8 +93,8 @@ wasmtime run --invoke <export> <module.wasm> [args…]
     `fill/copy/init`, `elem.drop`, `ref.null`/`ref.is_null`/`ref.func`,
     typed `select`; all element-segment encodings (active/passive/declared,
     index- and expression-form)
-  - **floats** — full f32/f64 arithmetic and conversions with IEEE-correct
-    semantics: NaN-aware comparisons (`ne` true on unordered), canonical-NaN
+  - **floats** — register form like the integer core, full f32/f64
+    arithmetic and conversions with IEEE-correct semantics: NaN-aware comparisons (`ne` true on unordered), canonical-NaN
     `min`/`max` with ±0 ordering, **trapping** float→int truncation (NaN /
     out-of-range) and true **saturating** `trunc_sat` forms, unsigned
     `convert_i64_u` via halve-with-sticky-bit (matches LLVM's lowering)
@@ -134,11 +152,17 @@ decoder or corrupts memory. Concretely:
 - memarg offsets are masked to `u32` so an out-of-bounds access traps rather
   than silently wrapping past the bounds check, and WASI iovec counts / buffer
   lengths are clamped to memory size;
+- a function whose frame would need more than 2²⁰ slots is refused with a
+  trap rather than predecoded: a ten-byte function can declare a million
+  locals, and a record that packs two slot indices into one word needs the
+  index to fit in twenty bits — an architectural limit, not an assumption;
 - the `env`/GPU import surface is opt-in (`--allow-gpu`), off by default.
 
 This was validated by an ASan-instrumented mutation fuzzer plus an exhaustive
 prefix (truncation) sweep of the whole corpus — **zero crashes, zero hangs** —
-and locked in by `tests/hardening_test.nu`. (Note: `--fuel N` still bounds
+and locked in by `tests/hardening_test.nu`. The sweep is re-run against every
+change to the decoder or the predecoder, the two places a malformed module
+reaches first. (Note: `--fuel N` still bounds
 runaway *valid* guests; an unbounded `loop` runs forever exactly as it does on
 the reference runtime.)
 
