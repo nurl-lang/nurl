@@ -70,6 +70,31 @@ for toml in packages/*/nurl.toml; do
         done < <(sed 's://.*::' "$src" \
                  | grep -o "\`$pkg [0-9]\+\.[0-9]\+\.[0-9]\+" \
                  | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+$')
+
+        # …and a THIRD spelling: the literal sits in a one-line accessor,
+        # `@ sm_version → s { ^ \`0.24.0\` }`, and every announcement calls
+        # it. Neither rule above can see through that indirection, and both
+        # MCP servers drifted behind it — swarm-mcp's manifest went to
+        # 0.25.0 while its `initialize` reply kept saying 0.24.0, and
+        # nurl-mcp's kept saying 0.10.0 through two releases. Resolve one
+        # level: collect the accessors that return a bare semver, then
+        # accept only those NAMED ALONGSIDE THE PACKAGE'S OWN NAME at a
+        # call site (`mcp_initialize_result \`swarm-mcp\` ( sm_version )`).
+        # That keying is what keeps wasmbuilder's `__wb_zig_version` — a
+        # genuine version, of something else — out of it.
+        stripped=$(sed 's://.*::' "$src")
+        while IFS='|' read -r fn lit; do
+            [ -n "$fn" ] || continue
+            printf '%s\n' "$stripped" \
+                | grep -q "\`$pkg\`.*( *$fn *)" || continue
+            checked=$((checked + 1))
+            if [ "$lit" != "$manifest" ]; then
+                echo "MISMATCH: $pkg — nurl.toml says '$manifest' but $src returns '$lit' from $fn"
+                fail=1
+            fi
+        done < <(printf '%s\n' "$stripped" \
+                 | grep -oE '@ [A-Za-z_][A-Za-z0-9_]* → s \{ \^ `[0-9]+\.[0-9]+\.[0-9]+` \}' \
+                 | sed -E 's/@ ([A-Za-z_][A-Za-z0-9_]*) → s \{ \^ `([0-9]+\.[0-9]+\.[0-9]+)` \}/\1|\2/')
     done
 done
 
