@@ -46,15 +46,17 @@ $ `stdlib/std/hash_sha512.nu`
 $ `stdlib/std/hash_blake3.nu`
 
 // Helper: copy a NUL-terminated raw `s` into an owned Vec[u].
+//
+// One `strlen` + one `nurl_memcpy`, via `bytes_from_str`. The previous
+// body pushed byte by byte through `nurl_str_get`, which re-runs strlen
+// on EVERY call — and with the `vec_push` storing in the same loop, LLVM
+// cannot hoist it, so the converter was O(n²). Every `sha256_hex` and
+// `hmac_sha256_hex` call went through it: hashing a 383 KB file took
+// **3.5 s**, essentially all of it here, and the transform itself is
+// 8 ms. bytes.nu had already fixed this exact shape in `bytes_from_str`
+// and `bytes_extend_str`; this copy of it was missed.
 @ __hash_str_to_bytes s str → ( Vec u ) {
-    : ( Vec u ) v ( vec_new [u] )
-    : i n ( nurl_str_len str )
-    : ~ i i 0
-    ~ < i n {
-        ( vec_push [u] v # u & ( nurl_str_get str i ) 255 )
-        = i + i 1
-    }
-    ^ v
+    ^ ( bytes_from_str str )
 }
 
 @ sha256_hex s str → String {

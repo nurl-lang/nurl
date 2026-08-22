@@ -19,10 +19,10 @@ $ `stdlib/std/hash_sha256.nu`
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 }
 }
 
+// `bytes_extend_str` is one strlen + one memcpy; the per-byte
+// `nurl_str_get` loop this replaced re-ran strlen per call (O(n²)).
 @ __push_str ( Vec u ) v s str → v {
-    : i n ( nurl_str_len str )
-    : ~ i k 0
-    ~ < k n { ( vec_push [u] v # u ( nurl_str_get str k ) ) = k + k 1 }
+    ( bytes_extend_str v str )
 }
 
 // HKDF-Extract → a 32-byte pseudo-random key.

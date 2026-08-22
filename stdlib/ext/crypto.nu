@@ -74,12 +74,11 @@ $ `stdlib/std/scrypt.nu`
     ^ v
 }
 
+// One `strlen` + one `nurl_memcpy`, via `bytes_from_str`. A per-byte
+// `nurl_str_get` loop re-runs strlen on every call and is O(n²) — the
+// trap `nurl_str_get`'s own doc comment names.
 @ __cr_str_vec s str → ( Vec u ) {
-    : i n ( nurl_str_len str )
-    : ( Vec u ) v ( vec_with_cap [u] ? > n 0 n 1 )
-    : ~ i k 0
-    ~ < k n { ( vec_push [u] v # u ( nurl_str_get str k ) ) = k + k 1 }
-    ^ v
+    ^ ( bytes_from_str str )
 }
 
 // ── AEAD ────────────────────────────────────────────────────────────
