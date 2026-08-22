@@ -92,6 +92,14 @@
 // emit_multiversion for why this is opt-in and coarse-grained.
 : i TT_SIMD 50
 
+// `inline` — the always-inline prefix on a function declaration, lexed
+// exactly like `pub` and `simd`. Emits LLVM's `alwaysinline` on the
+// definition, which makes the inliner ignore its cost model for that
+// callee. For a small helper on a hot path inside a very large caller
+// — an interpreter's dispatch loop is the shape — the cost model says
+// no and the measurement says otherwise; this is how to say so.
+: i TT_INLINE 51
+
 // ── Abort helpers ─────────────────────────────────────────────────
 
 // Multi-error mode (rustc-style): while parse_program's per-declaration
@@ -1897,6 +1905,11 @@
 // and cleared by gen_fn_decl_concrete at the matching `@`.
 : ~ i g_pending_simd 0
 
+// g_pending_inline is the `inline` prefix's counterpart to
+// g_pending_simd: set when the parser consumes a TT_INLINE ahead of a
+// declaration, read-and-cleared at the matching '@'.
+: ~ i g_pending_inline 0
+
 // Set by emit_multiversion the first time it runs. The splitter reads
 // it and declines to partition the module — see split_emit_module.
 : ~ i g_have_simd_fn 0
@@ -3478,6 +3491,7 @@
     ? == tt TT_CONTINUE { ^ ( nurl_str_cat `'continue'` `` ) } {}
     ? == tt TT_PUB { ^ ( nurl_str_cat `'pub'` `` ) } {}
     ? == tt TT_SIMD { ^ ( nurl_str_cat `'simd'` `` ) } {}
+    ? == tt TT_INLINE { ^ ( nurl_str_cat `'inline'` `` ) } {}
     ? != 0 ( nurl_str_len val ) { ^ ( nurl_str_cat3 `'` val `'` ) } {}
     ( nurl_str_cat `this token` `` )
 }
@@ -6204,6 +6218,19 @@
                 & == & # i . idp 1 255 117
                 == & # i . idp 2 255 98 {
                     = ttype TT_PUB
+                } {}
+            } {}
+            // `inline` (6) — the always-inline prefix, classified here for
+            // the same reason `pub` and `simd` are: parse_toplevel_decl has
+            // to recognise it BEFORE it dispatches on the declaration token.
+            ? & == ttype TT_IDENT == n 6 {
+                ? & & & & & == & # i . idp 0 255 105
+                == & # i . idp 1 255 110
+                == & # i . idp 2 255 108
+                == & # i . idp 3 255 105
+                == & # i . idp 4 255 110
+                == & # i . idp 5 255 101 {
+                    = ttype TT_INLINE
                 } {}
             } {}
             // `break` (5) and `continue` (8) — loop control.
@@ -15399,11 +15426,13 @@
             { ( die lex `expected variable name in let — 'pub' is a reserved keyword (the visibility prefix on top-level declarations) and cannot name a binding` ) }
             { ? == ( nurl_lex_type lex ) TT_SIMD
                 { ( die lex `expected variable name in let — 'simd' is a reserved keyword (the CPU-dispatch prefix on function declarations) and cannot name a binding` ) }
-                { ? == ( nurl_lex_type lex ) TT_BOOL
-                    { ( die lex `expected variable name in let — 'T' and 'F' are the boolean literals and cannot name a binding; pick another name` ) }
-                    { ( die lex ( nurl_str_cat3
-                        `expected a binding name, found ` ( tok_here lex )
-                        `. A binding is ': type name value' — the TYPE comes before the name, and ': ~' makes it mutable. E.g. ': i n 0', ': ~ String s ( string_new )'. The type may be omitted only when the value's type is inferable: ': n 0'.` ) ) } } } }
+                { ? == ( nurl_lex_type lex ) TT_INLINE
+                    { ( die lex `expected variable name in let — 'inline' is a reserved keyword (the always-inline prefix on function declarations) and cannot name a binding` ) }
+                    { ? == ( nurl_lex_type lex ) TT_BOOL
+                        { ( die lex `expected variable name in let — 'T' and 'F' are the boolean literals and cannot name a binding; pick another name` ) }
+                        { ( die lex ( nurl_str_cat3
+                            `expected a binding name, found ` ( tok_here lex )
+                            `. A binding is ': type name value' — the TYPE comes before the name, and ': ~' makes it mutable. E.g. ': i n 0', ': ~ String s ( string_new )'. The type may be omitted only when the value's type is inferable: ': n 0'.` ) ) } } } } }
     }
 }
 
@@ -21953,6 +21982,11 @@
                 ? != g_pending_simd 0
                 { ( die lex `'simd' cannot be applied to a generic function — a generic is monomorphised after the whole program is parsed, and the CPU-dispatch prefix does not survive to its instantiations. Mark the concrete function that calls it instead` ) }
                 {}
+                // Same reason for `inline`: the prefix is read and cleared
+                // here, and the monomorphisations are emitted later.
+                ? != g_pending_inline 0
+                { ( die lex `'inline' cannot be applied to a generic function — a generic is monomorphised after the whole program is parsed, and the prefix does not survive to its instantiations` ) }
+                {}
                 ( gen_generic_fn_store lex syms fname ) }
             { ( gen_fn_decl_concrete fname lex syms cg ) }
         }
@@ -21972,6 +22006,9 @@
     // `simd` on a generic rather than letting it silently do nothing.
     : i __fn_simd g_pending_simd
     = g_pending_simd 0
+    // Same read-and-clear discipline for `inline`.
+    : i __fn_inline g_pending_inline
+    = g_pending_inline 0
     // Fresh per-function deferred arm-local drop list (see
     // mem_defer_new_strings) — slot names are function-local SSA.
     ( nurl_sym_set g_fn_escapes `__deferred_drops__` `` )
@@ -22104,6 +22141,10 @@
     ( nurl_print `define ` ) ( nurl_print ( nurl_llty ret_ty ) )
     ( nurl_print ` @` ) ( nurl_print lname )
     ( nurl_print `(` ) ( nurl_print params_str ) ( nurl_print `)` )
+    // `inline @ f …` — LLVM's `alwaysinline`, which makes the inliner skip
+    // its cost model for this callee. The attribute goes on the define line
+    // before the `!dbg` reference and the opening brace.
+    ? != __fn_inline 0 { ( nurl_print ` alwaysinline` ) } {}
     // DWARF: attach `!dbg !N` to the define line (referencing this fn's
     // !DISubprogram) and seed g_dbg_current_loc with a DILocation at
     // fn-entry. emit_dbg_eol then attaches `!dbg` to every call/ret/br
@@ -24004,8 +24045,8 @@
                             }
                             {}
                         }
-                        { ? & == depth 0 | == tt TT_PUB == tt TT_SIMD
-                            {  // `pub` / `simd` prefix on any decl — skip the
+                        { ? & == depth 0 | | == tt TT_PUB == tt TT_SIMD == tt TT_INLINE
+                            {  // `pub` / `simd` / `inline` prefix on any decl — skip the
                                 // keyword, the following decl will be picked up
                                 // by its own branch on the next iteration.
                                 ( nurl_lex_advance lx )
@@ -27400,10 +27441,12 @@
                     // ternary chain below sees the post-pub token.
                     // Grammar v2.6 adds `simd`, and the two may appear in either
                     // order — hence a loop rather than two sequential tests.
-                    ~ | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD
+                    ~ | | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD == ( nurl_lex_type lex ) TT_INLINE
                     { ? == ( nurl_lex_type lex ) TT_PUB
                         { = g_pending_pub 1 }
-                        { = g_pending_simd 1 }
+                        { ? == ( nurl_lex_type lex ) TT_SIMD
+                            { = g_pending_simd 1 }
+                            { = g_pending_inline 1 } }
                         ( nurl_lex_advance lex )
                     }
                     : i tt ( nurl_lex_type lex )
@@ -27429,6 +27472,7 @@
                     // survive into the codegen pass and multiversion whichever
                     // function it reached first.
                     = g_pending_simd 0
+                    = g_pending_inline 0
                     ? == tt TT_AT
                     { ( nurl_lex_advance lex )
                         ? ( is_ident_tok ( nurl_lex_type lex ) )
@@ -27834,10 +27878,12 @@
     // Grammar v2.6 adds the `simd` CPU-dispatch prefix alongside `pub`;
     // both are optional and order-independent, so consume whatever run
     // of them precedes the declaration token.
-    ~ | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD
+    ~ | | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD == ( nurl_lex_type lex ) TT_INLINE
     { ? == ( nurl_lex_type lex ) TT_PUB
         { = g_pending_pub 1 }
-        { = g_pending_simd 1 }
+        { ? == ( nurl_lex_type lex ) TT_SIMD
+            { = g_pending_simd 1 }
+            { = g_pending_inline 1 } }
         ( nurl_lex_advance lex )
     }
     : i tt ( nurl_lex_type lex )
@@ -27847,6 +27893,17 @@
     // reject it here rather than let it drift.
     ? & != g_pending_simd 0 != tt TT_AT
     { ( die lex `'simd' is a prefix on function declarations only — it selects CPU-dispatched code generation for an '@' declaration, and has no meaning on a const, struct, enum, import, trait or FFI declaration` ) }
+    {}
+    // Same rule for `inline`: it is an attribute on a definition, and the
+    // only declaration that has one is '@'.
+    ? & != g_pending_inline 0 != tt TT_AT
+    { ( die lex `'inline' is a prefix on function declarations only — it puts LLVM's 'alwaysinline' on an '@' definition, and has no meaning on a const, struct, enum, import, trait or FFI declaration` ) }
+    {}
+    // `simd` clones the body under decorated names and puts a CPU-dispatching
+    // stub under the real one. There is nothing coherent to always-inline
+    // there — the stub is the opaque call the prefix exists to place.
+    ? & != g_pending_inline 0 != g_pending_simd 0
+    { ( die lex `'inline' and 'simd' cannot both be applied to one function — 'simd' replaces the function with a CPU-dispatching stub, which is exactly the opaque call 'inline' asks to remove` ) }
     {}
     ? == tt TT_AT { ( gen_fn_decl lex syms cg ) }
     ? == tt TT_COLON { ( gen_const_or_struct lex syms ) }
@@ -27918,6 +27975,7 @@
     ? == tt TT_PERCENT { ^ T } {}
     ? == tt TT_PUB { ^ T } {}
     ? == tt TT_SIMD { ^ T } {}
+    ? == tt TT_INLINE { ^ T } {}
     ^ F
 }
 

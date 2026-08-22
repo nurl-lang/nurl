@@ -617,7 +617,14 @@ $ `module.nu`
 // containing words, still one raw load per byte and zero per-byte checks.
 // The base pointer is re-fetched from the Vec every call (one dereference)
 // so memory.grow can never leave a stale pointer behind.
-@ __mem_load * Interp it i ea i n i signed → i {
+//
+// `inline` (grammar v2.7): every driver arm calls this with `n` and
+// `signed` as literals, so an inlined copy folds to a bounds check, one
+// load and a shift — but LLVM scores the callee's whole body, sees the
+// byte-crossing path and the sign-extension it will never reach from that
+// site, and declines. Forcing it was 9.5 % off the benchmark corpus, 24 %
+// off nbody and matmul, 19 % off sieve.
+inline @ __mem_load * Interp it i ea i n i signed → i {
     ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
         ( __trap it `memory load out of bounds` ) ^ 0
     } {}
@@ -650,7 +657,7 @@ $ `module.nu`
 }
 
 // Write the low n bytes of val little-endian to mem[ea].
-@ __mem_store * Interp it i ea i n i val → v {
+inline @ __mem_store * Interp it i ea i n i val → v {
     ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
         ( __trap it `memory store out of bounds` ) ^ v
     } {}

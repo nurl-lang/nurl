@@ -1,6 +1,6 @@
 # NURL Language Reference
 
-**Status:** language specification, grammar v2.6. This document is the
+**Status:** language specification, grammar v2.7. This document is the
 normative reference for the NURL — Neural Unified Representation Language —
 source language as implemented by `compiler/nurlc.nu`.
 
@@ -78,6 +78,7 @@ used as variable, parameter, field, or function names:
 | `TT_TYPE_KW` | `v128` | 128-bit SIMD vector (v2.5, §4.1b) |
 | `TT_TYPE_KW` | `v256` | 256-bit SIMD vector (v2.6, §4.1c) |
 | `TT_SIMD` | `simd` | CPU-dispatch prefix on a function (v2.6, §3.3b) |
+| `TT_INLINE` | `inline` | always-inline prefix on a function (v2.7, §3.3c) |
 | `TT_BOOL` | `T` `F` | boolean literals |
 | `TT_SIZEOF` | `Z` | sizeof operator |
 | `TT_PUB` | `pub` | visibility prefix (v2.0) |
@@ -320,6 +321,41 @@ Generic functions may not be marked: a generic is monomorphised after the
 whole program is parsed, so the prefix would not survive to its
 instantiations. nurlc rejects `simd` there rather than accept a prefix
 that does nothing.
+
+### 3.3c `inline` always-inline (grammar v2.7)
+
+A **function** declaration may carry a leading `inline` prefix. nurlc puts
+LLVM's `alwaysinline` on the definition, which makes the inliner skip its
+cost model for that callee. `pub`, `simd` and `inline` are order-
+independent, and `inline` is accepted on `@` declarations only.
+
+```
+inline @ mem_load * Interp it i ea i n i signed → i { … }
+pub inline @ lane i v i k → i { ^ & ( __lshr64 v * k 8 ) 255 }
+```
+
+The cost model is usually right, and a small callee gets inlined without
+being asked. Ask when it is not: a helper whose arguments are *constants
+at every call site* collapses to a handful of instructions once inlined,
+but is scored on its whole body — and a very large caller (an interpreter
+dispatch loop is the shape) pushes the decision the wrong way. In
+`packages/wasmtime`, `inline` on the two linear-memory accessors was 9.5 %
+off the whole benchmark corpus and 24 % off its float benchmark.
+
+It is a request the backend cannot refuse, so it is also a way to make a
+program slower: an inlined body is duplicated at every call site, which
+costs instruction cache, and it changes the caller's register pressure.
+Measure both ways. Two rules nurlc enforces rather than leaving to LLVM:
+
+- **not on a generic** — a generic is monomorphised after the whole
+  program is parsed, and the prefix does not survive to its instantiations
+  (the same reason `simd` is rejected there);
+- **not together with `simd`** — `simd` replaces the function with a
+  CPU-dispatching stub, which is exactly the opaque call `inline` asks to
+  remove.
+
+A directly recursive `inline` function is accepted and compiles: LLVM
+inlines the non-recursive call sites and leaves the self-call alone.
 
 ### 3.4 Constants and globals
 
@@ -1792,15 +1828,16 @@ Four new diagnostics shipped 2026-05-25 closing the remaining
 
 ### 11.1 Grammar version
 
-This document corresponds to **grammar v2.6** (the `simd` CPU-dispatch
-prefix, §3.3b; v2.5 added the `v128` SIMD lane type, §4.1b; v2.4
+This document corresponds to **grammar v2.7** (the `inline` always-inline
+prefix, §3.3c; v2.6 added the `simd` CPU-dispatch prefix, §3.3b, and the
+`v256` lane type; v2.5 the `v128` SIMD lane type, §4.1b; v2.4
 `break` / `continue`; v2.3 dynamic trait objects). The authoritative grammar lives in
 [`spec/grammar.ebnf`](../spec/grammar.ebnf); changes since v1.x are
 tracked in that file's prelude.
 
-A compiler is "v2.6 conformant" if it accepts every program the EBNF
+A compiler is "v2.7 conformant" if it accepts every program the EBNF
 generates and rejects every program the EBNF does not generate, with
-the semantics defined here. A program is "v2.6 portable" if it relies
+the semantics defined here. A program is "v2.7 portable" if it relies
 only on features documented in this spec or in
 [`spec/grammar.ebnf`](../spec/grammar.ebnf) — not on
 compiler-internal accidents.

@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_inline_on_const.nu:9:8: error: 'inline' is a prefix on function declarations only — it puts LLVM's 'alwaysinline' on an '@' definition, and has no meaning on a const, struct, enum, import, trait or FFI declaration
+inline : i LIMIT 4096
+       ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

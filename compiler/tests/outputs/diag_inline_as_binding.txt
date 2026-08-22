@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_inline_as_binding.nu:8:9: error: expected variable name in let — 'inline' is a reserved keyword (the always-inline prefix on function declarations) and cannot name a binding
+    : i inline 3
+        ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

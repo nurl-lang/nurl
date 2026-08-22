@@ -91,7 +91,16 @@ wasmtime run --invoke <export> <module.wasm> [args…]
   which is 8.6 % of all records and the last caller of `__rcmp`, made the
   whole corpus **7.6 % slower**. Twenty more arms inside an existing arm
   is not the same shape as twenty arms in the table, and the driver's
-  register allocation is the thing that pays.) Each record keeps its original
+  register allocation is the thing that pays.
+  Last, the two linear-memory accessors are `inline` (grammar v2.7): every
+  arm calls them with `n` and `signed` as literals, so an inlined copy
+  folds to a bounds check, one load and a shift — but LLVM scores the
+  whole callee, sees the byte-crossing path and the sign extension that
+  site will never reach, and declines. Forcing it took another **9.6 %**
+  off the corpus, 22 % off nbody and matmul, 14 % off sieve. Over the
+  round the corpus went 12.81 s → 8.17 s — **1.57x**, nbody 2.16x, sieve
+  1.86x, matmul 1.76x — and the self-host 32.6 s → 29.3 s, byte-identical
+  throughout.) Each record keeps its original
   byte offset, so trap backtraces still point into the module image:
   - structured control flow: `block`, `loop`, `if`/`else`, `br`, `br_if`,
     `br_table`, `return`, `end` — **multi-value** block types included

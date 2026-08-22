@@ -158,10 +158,19 @@ done
 WASMBUILDER="$BUILD/wasmbuilder"
 WT="$BUILD/wt"
 
+#
+# NURL_SPLIT=0: `nurl.sh` defaults to lowering a large program as one module
+# per core so the clang step parallelises, and ThinLTO cannot import every
+# callee back across a part boundary — docs/BUILDING.md puts the cost at
+# 3.4 % of the program's own speed and says to turn it off for a release
+# build. `wt` is not an incidental tool here, it is the subject of section 3,
+# and the reference runtime it is measured against is a release build; a
+# split `wt` measured 5.0 % slower over this corpus. Build time is not timed,
+# so the trade has nothing to buy here.
 echo "  building packages/wasmbuilder and packages/wasmtime …" >&2
 for pkg in "wasmbuilder:$WASMBUILDER" "wasmtime:$WT"; do
     name="${pkg%%:*}"; out="${pkg##*:}"
-    if ! (cd "$ROOT" && ./nurl.sh "packages/$name/src/main.nu" "$out") >"$out.buildlog" 2>&1; then
+    if ! (cd "$ROOT" && NURL_SPLIT=0 ./nurl.sh "packages/$name/src/main.nu" "$out") >"$out.buildlog" 2>&1; then
         echo "wasmbench.sh: failed to build packages/$name — see $out.buildlog" >&2
         exit 1
     fi
@@ -699,7 +708,7 @@ emit_md() {
     printf '| C → wasm | `%s cc --target=%s` |\n' "$ZIG_VERSION" "$WASM_TARGET_C"
     printf '| Rust → wasm | `rustc --target %s` |\n' "$WASM_TARGET_RS"
     printf '| wasm runtime (reference) | `%s` — Cranelift JIT |\n' "$WASMTIME_VERSION"
-    printf '| wasm runtime (NURL) | `packages/wasmtime` (%s) — interpreter, built from this repo |\n' "$WT_VERSION"
+    printf '| wasm runtime (NURL) | `packages/wasmtime` (%s) — interpreter, built from this repo, `NURL_SPLIT=0` (release build; see below) |\n' "$WT_VERSION"
     printf '\n'
     printf '| Setting | Value |\n|---|---|\n'
     printf '| Optimisation | NURL/C `%s`, Rust `-C opt-level=2`, both targets |\n' "$OPT"
@@ -708,6 +717,7 @@ emit_md() {
     printf '| Per-run timeout | %s s |\n' "$TIMEOUT_S"
     printf '| C/Rust on the NURL interpreter | %s |\n' "$( (( WT_ALL_LANGS )) && echo 'yes' || echo 'no (add --wt-all-langs)' )"
     printf '| Reference runtime cache | **off** (`-C cache=n`) — every cell is decode + compile + run |\n'
+    printf '| `wt` build | `NURL_SPLIT=0` — `nurl.sh` otherwise lowers a large program as one module per core, and ThinLTO cannot import every callee back across a part boundary. `wt` is the subject of section 3, and the reference runtime it is measured against is a release build; a split `wt` measured 5.0%% slower over this corpus. |\n'
     printf '\n'
 
     printf '## 1. What wasm costs — native vs the same module on a JIT\n\n'
