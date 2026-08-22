@@ -6,7 +6,7 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.49.0] — 2026-08-22
 
 ### Added
 
@@ -39,7 +39,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   formatter read `inline` as a stray identifier and broke it onto its own
   line, which is a parse of a different program.
 
+- **`vec_zeroed` and `vec_resize_zeroed`** in `stdlib/core/vec.nu`.
+  `vec_zeroed [A] n` is the `calloc`-shaped sibling of `vec_with_cap`: `n`
+  zero-filled elements in one allocation with `len` already at `n`, so a
+  large buffer arrives as untouched zero pages from the kernel and costs
+  nothing until it is written. `vec_resize_zeroed [A] v n` sets the length
+  to exactly `n`, zero-filling any new tail in a single `memset`. Both
+  carry the same trivial-element-type rule `vec_extend` documents: bitwise
+  zero has to be a valid `A`. Reaching either state by pushing a zero `n`
+  times costs `n` bounds checks, `n` length stores and log2(n)
+  reallocations, and touches every page — which is what the wasm runtime
+  was doing to 16.8 MB of guest memory on every start-up.
+
 ### Fixed
+
+- **Three ways a malformed wasm module could hang or mis-address
+  `packages/wasmtime`**, all found by the ASan/UBSan mutation sweep and all
+  now in `tests/hardening_test.nu`:
+
+  * **A count bound has to apply to the count, not to a sum containing
+    it.** A local run declares `count` slots and the ceiling read
+    `locals_so_far + count > 1_000_000`. With `count` at 2⁶³−1 and one
+    local already pushed, that sum wraps negative and the test passes,
+    leaving a 2⁶³-iteration push loop. It surfaced as a timeout on a
+    mutated module; the count now goes through `__chk_count` like every
+    other, bounded by the bytes that physically remain.
+  * **A LEB128 stops contributing after ten groups.** Past ten the value
+    cannot fit in 64 bits and `<< x 64` is poison in LLVM
+    (docs/spec.md, § operators). A corrupted continuation byte turning a
+    terminal group into a running one is exactly how a module reaches that
+    shift.
+  * **An active data segment that overhangs the declared initial memory is
+    refused**, at decode where the offset, the length and `mem.min` are all
+    in hand, and again at instantiation rather than copying what fits. The
+    loop this replaces silently dropped the overhanging bytes and, for a
+    negative offset, wrote the segment's tail at the wrong address. Both
+    fit tests are written `off > cap - len`, never `off + len > cap`: the
+    offset is a number the module chose and the sum can wrap.
+
+- **`nurl-lsp` indexed no prefixed declaration at all.** Its
+  declaration scanner read one identifier and tested `starts_with "pub"`
+  under a guard that reduces to `p == 0`, so past the first byte of the
+  file the prefix was never skipped. A `pub @ f` therefore had no document
+  symbol, no go-to-definition and no rename — for exactly the functions
+  marked as another file's API. It now consumes any run of `pub` / `simd`
+  / `inline`, and all three are reserved words for the rename check.
+  (Measured against the old binary on a four-declaration file: one symbol
+  out of four.)
+
+- **The VS Code grammar highlighted `pub` but not `simd`.** Both, and
+  `inline`, are `storage.modifier` now.
+
+- **Both MCP servers were announcing a version that does not exist.**
+  `swarm-mcp`'s manifest went to 0.25.0 on 2026-08-21 while its
+  `initialize` reply kept saying 0.24.0; `nurl-mcp`'s went to 0.11.0 and
+  then 0.12.0 while its reply kept saying 0.10.0 — through two releases.
+  `check_package_version_strings.sh` knew two spellings and neither can see
+  through one level of indirection; both servers use a third, where the
+  literal sits in a one-line accessor (``@ sm_version → s { ^ `0.24.0` }``)
+  that every announcement calls. The gate now resolves that, keyed on the
+  package's own name at the call site — which is what keeps
+  `wasmbuilder`'s `__wb_zig_version`, a real version of something that is
+  not the package, out of the check. 14 checked literals → 16.
+
+  swarm-mcp did this once before: 0.31.1 fixed a handshake reporting
+  0.20.0 from a package at 0.21.1 by unifying three hand-written literals
+  onto one `sm_version`. That addressed the symptom. The cause is that the
+  one remaining literal is hand-written and no gate could read it, so it
+  drifted again the moment a release bumped the manifest without it. This
+  time the gate reads it.
 
 - **The AArch64 and RISC-V guests boot again under zig 0.16.** v0.48.0
   bundled zig 0.16, and both zig-built unikernel ports broke with it —
@@ -73,6 +141,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   19/19 under zig 0.13 and 0.16 alike.
 
 ### Changed
+
+- **`packages/wasmtime` 0.11.0 — the interpreter is 3.1x faster over the
+  benchmark corpus and 7.5x on start-up.** Three rounds on top of the
+  0.9.0 work below, measured on one workstation so the ends are
+  comparable: corpus 25.3 s → **8.17 s**, `nbody` 5.39 s → 0.93 s, hello
+  world 50.1 ms → **6.7 ms**, the 65k-line compiler self-host on the
+  interpreter 47.2 s → **29.3 s**, and host instructions per dispatched
+  record 68.5 → **30.5**. Output is byte-identical at every step: all 15
+  benchmarks, the seven package test suites (64 expectations, each one
+  produced by the reference `wasmtime`), and `nurlc.wasm` still compiling
+  `nurlc.nu` to an LLVM IR file identical to the native compiler's.
+
+  * **Floats and the int↔float conversions left the value stack** for
+    register form — they were the last records bridging through it, and
+    the bridge forced an operand flush that turned every `local.get`
+    feeding a float op back into a move. `local.set` **folded into its
+    producer** (the producing record is retargeted to write the local and
+    the copy is deleted), taking `MOV` from 31 % of everything dispatched
+    to 3 %; `cmp; br_if` became **one record**; and the driver split into
+    **two loops**, the outer owning the frame stack and the inner one
+    frame's records with a single compare as its condition.
+
+  * **A function's frame slot count is capped at 2²⁰.** `__emit_branch`
+    packs a destination and a source slot index into one word, and nothing
+    bounded the indices: a ten-byte function can declare a million locals,
+    and any stack height on top of the decoder's cap wraps the field. Past
+    2²⁰ slots the body is replaced by a single trap record — the module
+    still loads and still decodes, and the function says so cleanly if it
+    is ever called.
+
+  * **Instantiation stopped scaling with the guest's heap.** A wasi
+    command module declares 257 pages — 16.8 MB — and `interp_new` filled
+    it with a `vec_push` of a zero byte *per byte*: **78 % of the wall
+    clock** of a run whose guest printed one line and exited. Linear
+    memory is now one `calloc`, data segments one `memcpy` each,
+    `memory.grow` one resize, and a frame's slot array one zeroed block.
+    Hello world went 50.1 ms → 6.7 ms and every longer run kept the same
+    ~43 ms.
+
+  * **The dispatch became one jump table over every opcode.** It had been
+    a chain of range tests in measured frequency order, and each arm then
+    paid a *second* dispatch inside the helper it called — `f64.mul` cost
+    seven range tests, a call to `__farith`, six more range tests to pick
+    the family, a call to `__f64_binary`, and a jump table, to reach one
+    `mulsd`. Written flat, one `? == op K` arm per opcode with the work in
+    the arm, LLVM builds a single table and the integer, compare, float,
+    load and store helpers disappear into their arms. Corpus 12.16 s →
+    9.44 s; 145.9G → 113.2G host instructions.
+
+  * **The two linear-memory accessors are `inline`.** Every arm calls them
+    with `n` and `signed` as literals, so an inlined copy folds to a
+    bounds check, one load and a shift — but LLVM scores the whole callee
+    and declines. Another 9.6 % off the corpus, 22 % off `nbody` and
+    `matmul`.
+
+  Three measured **negatives**, recorded so they are not re-tried. Inlining
+  the *fused* `cmp; br_if` — 8.6 % of all records — made the corpus 7.6 %
+  slower: twenty arms inside an existing arm is not the shape twenty arms
+  in the table is, and what pays for it is the driver's register
+  allocation. Merging the register/control opcodes into the same table was
+  8.8 % slower, because LLVM partitioned the merged chain differently
+  rather than building the one table it was asked for. And emitting the
+  chain hottest-first was exactly neutral — LLVM partitions by value
+  range, not by source order.
+
+  A fourth is worth more than the three: forcing the whole numeric chain
+  into a **single LLVM `switch`** by hand, at the IR level, does produce
+  one table — three levels of range test collapse to one, verified in the
+  disassembly — and it removes 1.28 host instructions per record, and the
+  corpus does not move at all (ratio 1.000). Those range tests issue
+  alongside the real work and the predictor gets them right 99.9 % of the
+  time; IPC simply rises from 3.23 to 3.31. The dispatch path is not what
+  this loop is waiting on, so further instruction-shaving there will not
+  pay — and a NURL construct for demanding a dense switch, which is what
+  that experiment was scouting, would buy nothing. `nurlc`'s own token
+  dispatch already lowers to one jump table with no help at all.
+
+- **`bench/wasmbench.sh` builds `wt` with `NURL_SPLIT=0`.** `nurl.sh`
+  defaults to lowering a large program as one module per core so the clang
+  step parallelises, and ThinLTO cannot import every callee back across a
+  part boundary — `docs/BUILDING.md` puts the cost at 3.4 % of the
+  program's own speed and says to turn it off for a release build. `wt` is
+  the subject of section 3 of the report and the reference runtime it is
+  measured against is a release build; the split one measured **5.0 %
+  slower** over the corpus, for a build-time saving a benchmark harness
+  never spends.
 
 - **`packages/wasmtime` 0.9.0 — the interpreter is 30–49 % faster, and the
   reason was visible only once the executed opcodes were counted.** A

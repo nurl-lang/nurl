@@ -100,7 +100,23 @@ wasmtime run --invoke <export> <module.wasm> [args…]
   off the corpus, 22 % off nbody and matmul, 14 % off sieve. Over the
   round the corpus went 12.81 s → 8.17 s — **1.57x**, nbody 2.16x, sieve
   1.86x, matmul 1.76x — and the self-host 32.6 s → 29.3 s, byte-identical
-  throughout.) Each record keeps its original
+  throughout.
+  Two more negatives, and the second is the useful one. **Merging the
+  register/control opcodes into the same table** — renumbering them out of
+  the 300s so one chain covers everything — was 8.8 % *slower*: LLVM
+  partitioned the merged chain differently instead of building the one
+  table it was handed. **Emitting the chain hottest-first** was exactly
+  neutral; LLVM partitions by value range, not by source order. And when
+  the single table was finally forced by hand, at the IR level, by
+  replacing the whole compare chain with one LLVM `switch` — it *works*,
+  the three levels of range test collapse to one in the disassembly, it
+  removes **1.28 host instructions per record** — and the corpus does not
+  move at all, ratio **1.000**. Those range tests issue alongside the real
+  work and the predictor gets them right 99.9 % of the time; IPC just
+  rises from 3.23 to 3.31. **The dispatch path is not what this loop is
+  waiting on.** Whatever is left is in the dependency chains through the
+  record loads and the slot array, and further instruction-shaving on the
+  dispatch will not pay.) Each record keeps its original
   byte offset, so trap backtraces still point into the module image:
   - structured control flow: `block`, `loop`, `if`/`else`, `br`, `br_if`,
     `br_table`, `return`, `end` — **multi-value** block types included
