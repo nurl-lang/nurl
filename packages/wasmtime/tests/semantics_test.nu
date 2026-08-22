@@ -33,6 +33,13 @@ $ `src/interp.nu`
 // init active0 activeb drop2 grow size (memory.init/data.drop/grow limits)
 @ wasm_bulk → s { ^ `0061736d01000000010a026000017f60017f017f03070600000000010005040101010207320604696e6974000007616374697665300001076163746976656200020564726f703200030467726f7700040473697a6500050c01020a4406130041e40041004104fc08010041e4002d00000b070041002d00000b070041082d00000b1200fc090141c80141004101fc08010041000b0600200040000b04003f000b0b16020041080b0641435449564501085041535349564521000b046e616d65090401010170` }
 
+// memory 1 + data 01..08 @0; exports fused kept loopfuse off oob — the
+// address-add fold (`__fuse_addr`): the case it fires on, the case it must
+// decline because the address is also a local, the case where the add is a
+// loop body's first record, a folded address under a memarg offset, and a
+// folded address that still has to fail the bounds check.
+@ wasm_addrfold → s { ^ `0061736d01000000010b0260017f017f60017f017e030605000000010005030100010727050566757365640000046b6570740001086c6f6f70667573650002036f66660003036f6f6200040a62050a00200041036a2d00000b1301017f200041036a210120012d000020016a0b2901027f0240034020014104460d012002200020016a2d00006a2102200141016a21010c000b0b20020b0a00200041016a3100020b0c00200041ffff036a2d00000b0b0e010041000b0801020304050607080012046e616d65030b01020200036f757401016c` }
+
 // start section sets a global to 99; export g reads it back
 @ wasm_start → s { ^ `0061736d010000000108026000006000017f03030200010606017f0141000b070501016700010801000a0e02070041e30024000b040023000b0011046e616d65010401000173070401000167` }
 
@@ -161,6 +168,13 @@ $ `src/interp.nu`
 
     // ── start section runs at instantiation ──
     ( ck `start section:  ` ( ev0 ( wasm_start ) `g` ) 99 )
+
+    // ── the address add folded into the load ──
+    ( ck `fold fires:     ` ( ev1 ( wasm_addrfold ) `fused` 0 ) 4 )
+    ( ck `fold declined:  ` ( ev1 ( wasm_addrfold ) `kept` 0 ) 7 )
+    ( ck `fold at loop t0:` ( ev1 ( wasm_addrfold ) `loopfuse` 0 ) 10 )
+    ( ck `fold + memarg:  ` ( ev1 ( wasm_addrfold ) `off` 0 ) 4 )
+    ( ck `fold oob traps: ` ( trap1 ( wasm_addrfold ) `oob` 1 ) 1 )
 
     ? > g_fail 0 { ( nurl_print `FAILURES: ` ) ( nurl_print_int g_fail ) ( nurl_print `\n` ) ^ 1 } {}
     ( nurl_print `all semantics tests passed\n` )
