@@ -1,7 +1,7 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_match_mixed_arms.nu:24:5: error: '# i64' has no value to convert — the operand produces nothing. '#' converts a VALUE, so its operand must be an expression that yields one; a call returning 'v', an assignment or a block does not. — the '??' arms yield values of different types ('f' vs 'i'), so the match degrades to a statement and produces NO value — make the arms agree (e.g. cast inside the arm: 'T x → # T2 x')
-    : i lo2 ?? ( vec_get [f] d 0 ) { T x → x F → 0 }
-    ^
+compiler/tests/diag_match_mixed_arms.nu:22:12: error: '# i64' has no value to convert — the operand produces nothing. '#' converts a VALUE, so its operand must be an expression that yields one; a call returning 'v', an assignment or a block does not. — the '??' arms yield values of different types ('f' vs 'i'), so the match degrades to a statement and produces NO value — make the arms agree (e.g. cast inside the arm: 'T x → # T2 x')
+    : i lo # i ?? ( vec_get [f] d 0 ) { T x → x F → 0 }
+           ^
 error: aborting due to 1 previous error
 note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

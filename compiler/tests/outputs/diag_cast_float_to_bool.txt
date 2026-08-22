@@ -1,7 +1,7 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_cast_float_to_bool.nu:6:5: error: '# b' of a float value is not a truth test — an i1 holds only 0 or 1, so the conversion is poison for any other value (LLVM 'fptosi double 3.5 to i1'). Write the comparison you mean: ': b nz != 0.0 x' (non-zero), or compare against the threshold you have in mind.
-    ^ 0
-    ^
+compiler/tests/diag_cast_float_to_bool.nu:5:11: error: '# b' of a float value is not a truth test — an i1 holds only 0 or 1, so the conversion is poison for any other value (LLVM 'fptosi double 3.5 to i1'). Write the comparison you mean: ': b nz != 0.0 x' (non-zero), or compare against the threshold you have in mind.
+    : b z # b 3.5
+          ^
 error: aborting due to 1 previous error
 note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

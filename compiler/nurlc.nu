@@ -2570,6 +2570,31 @@
 
 // ── Expression generation ─────────────────────────────────────────
 
+// True when `name` has the shape `nurl_cg_reg` hands out: `r` followed by
+// one or more digits and nothing else.
+//
+// A by-value parameter keeps its source name as its SSA name, and the code
+// generator's temporaries live in the same LLVM local namespace. A parameter
+// named `r3` therefore collides with whichever temporary happens to get that
+// number: nurlc emits `%r3 = alloca i64` inside `define … (i64 %r3)`, exits
+// 0, and clang rejects the generated file with `multiple definition of local
+// value named 'r3'` — a diagnostic against a file the user never wrote, with
+// no line in their source. Reserving the shape at the parameter list keeps
+// the report where the mistake is. Locals need no such rule: the generator
+// names them, the user's spelling never reaches the IR.
+@ __reserved_reg_name s name → b {
+    : i n ( nurl_str_len name )
+    ? < n 2 { ^ F } {}
+    ? != ( nurl_str_get name 0 ) 114 { ^ F } {}  // 'r'
+    : ~ i k 1
+    ~ < k n {
+        : i c ( nurl_str_get name k )
+        ? | < c 48 > c 57 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
 @ nurl_cg_reg i h → s {
     : s p # s h
     : i n ( nurl_peek p 0 )
@@ -10267,6 +10292,14 @@
             // raw text (LLVM would read `0x…` as a hex float). Decimal
             // text passes through unchanged.
             : s pattern_name ? is_int_pat ( __norm_int_lit ( nurl_lex_val lex ) ) ( nurl_lex_val lex )
+            // Where the arm's pattern token IS, captured before it is
+            // consumed. Both checks below — "not a match arm of an
+            // option/result" and "not a variant of enum" — fire long after
+            // the arm's body has been parsed, so a plain `die lex` anchored
+            // wherever the lexer had got to: inside the NEXT arm's body, or
+            // past the end of the echoed line entirely.
+            : i pat_line ( nurl_lex_line lex )
+            : i pat_col ( nurl_lex_col lex )
             ( nurl_lex_advance lex )
 
             // Or-patterns: `A | B | C → body`. Several tag-only variants
@@ -10467,7 +10500,7 @@
                         : b __mp_optres & >= ( nurl_str_len match_type ) 6
                         ( seq ( nurl_str_slice match_type 0 6 ) `{ i1, ` )
                         ? & __mp_optres ! | ( seq pattern_name `T` ) ( seq pattern_name `F` )
-                        { ( die lex ( nurl_str_cat4
+                        { ( die_pos lex pat_line pat_col ( nurl_str_cat4
                             ( nurl_str_cat3 `'` pattern_name `' is not a match arm of an option/result. ` )
                             `NURL spells them 'T' and 'F', not 'Ok'/'Err'/'Some'/'None': `
                             `'?? r { T v → <v is the value / Ok payload>  F e → <e is the error> }' `
@@ -10480,7 +10513,7 @@
                             : s __mp_vl ( nurl_sym_get2 syms __mp_en `__variants` )
                             ? & != 0 ( nurl_str_len __mp_vl )
                             ! ( str_contains_word __mp_vl pattern_name )
-                            { ( die lex ( nurl_str_cat4
+                            { ( die_pos lex pat_line pat_col ( nurl_str_cat4
                                 ( nurl_str_cat3 `'` pattern_name `' is not a variant of enum '` )
                                 ( nurl_str_cat3 __mp_en `'. Its variants are: ` __mp_vl )
                                 `. Check the spelling, or add '_ → body' to absorb the rest — a match must be `
@@ -15162,13 +15195,15 @@
     }
     // Explicit type annotation.
     { ( nurl_sym_def g_res_type_syms `__last_res_nurl__` `` )
+        : i __bt_line ( nurl_lex_line lex )
+        : i __bt_col ( nurl_lex_col lex )
         : s ptype ( parse_type lex )
         // A binding's type went unchecked while parameter, field, return
         // and FFI types were all validated — so `: Foo x 0` against an
         // undeclared Foo built a `%Foo` binding and failed later as
         // "use of undefined identifier 'x'", blaming the NAME. Same
         // helper, same wording as the parameter case, so the two agree.
-        ( check_type_known lex syms ptype `a binding type` )
+        ( check_type_known lex syms ptype `a binding type` __bt_line __bt_col )
         // Capture the NURL form of `! T E` when present, so gen_match can
         // recover the inner T (e.g. `Json`) for struct-handle reconstruction.
         // parse_type's recursive descent through parse_type_res leaves the
@@ -16332,6 +16367,12 @@
 }
 
 @ gen_cast i lex i syms i cg → s {
+    // Where the '#' IS, captured before it is consumed. Every check from
+    // the operand onward fires once that operand has been parsed, so a
+    // plain `die lex` anchored on the NEXT statement — the caret landed
+    // under the line after the cast in all four baselined cast messages.
+    : i __cast_line ( nurl_lex_line lex )
+    : i __cast_col ( nurl_lex_col lex )
     ( nurl_lex_advance lex )
     // The cast TARGET's signedness is in the parsed type itself (A1):
     // `# u …` yields dt = `u8`, and every integer-result return path
@@ -16389,7 +16430,7 @@
     ? ( seq st `void` )
     { : ~ s vr ``
         ? != 0 ( nurl_str_len g_void_reason ) { = vr ( nurl_str_cat ` — ` g_void_reason ) } {}
-        ( die lex ( nurl_str_cat ( nurl_str_cat3
+        ( die_pos lex __cast_line __cast_col ( nurl_str_cat ( nurl_str_cat3
         `'# ` dt `' has no value to convert — the operand produces nothing. '#' converts a VALUE, so its operand must be an expression that yields one; a call returning 'v', an assignment or a block does not.` ) vr ) ) }
     {}
     : s res ( nurl_cg_reg cg )
@@ -16491,7 +16532,7 @@
         : s f0t ? != 0 ( nurl_str_len is_enum_c ) `i64`
         ( nurl_sym_get syms ( nurl_str_cat3 sname_c `__idx_0` `__type` ) )
         ? == 0 ( nurl_str_len f0t )
-        { ( die lex ( nurl_str_cat3 `cannot cast '` st `' to an integer — '# i expr' converts numbers and pointers, not this type. There are no implicit conversions in NURL.` ) ) }
+        { ( die_pos lex __cast_line __cast_col ( nurl_str_cat3 `cannot cast '` st `' to an integer — '# i expr' converts numbers and pointers, not this type. There are no implicit conversions in NURL.` ) ) }
         {}
         : s xv ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print xv )
@@ -16508,7 +16549,7 @@
             ( nurl_set_last_type dt ) ^ res }
         {}
         ? & & ! f0_is_fp ! f0_is_ptr == f0iw 0
-        { ( die lex ( nurl_str_cat3 `cannot cast '` st `' to an integer: its first field is itself an aggregate, so there is no scalar to take. Convert the inner field explicitly.` ) ) }
+        { ( die_pos lex __cast_line __cast_col ( nurl_str_cat3 `cannot cast '` st `' to an integer: its first field is itself an aggregate, so there is no scalar to take. Convert the inner field explicitly.` ) ) }
         {}
         : s norm ? & ! f0_is_ptr == f0iw 64 xv ( nurl_cg_reg cg )
         ? f0_is_ptr
@@ -16565,7 +16606,7 @@
         // meaning of "cast a float to bool" that a reader could rely on.
         // Demand the comparison instead.
         ? ( seq ( nurl_llty dt ) `i1` )
-        { ( die lex `'# b' of a float value is not a truth test — an i1 holds only 0 or 1, so the conversion is poison for any other value (LLVM 'fptosi double 3.5 to i1'). Write the comparison you mean: ': b nz != 0.0 x' (non-zero), or compare against the threshold you have in mind.` ) }
+        { ( die_pos lex __cast_line __cast_col `'# b' of a float value is not a truth test — an i1 holds only 0 or 1, so the conversion is poison for any other value (LLVM 'fptosi double 3.5 to i1'). Write the comparison you mean: ': b nz != 0.0 x' (non-zero), or compare against the threshold you have in mind.` ) }
         {}
         // …and only an INTEGER target takes a float at all. A pointer or
         // aggregate target emitted `fptosi double … to i8*` / `to %S` —
@@ -16573,7 +16614,7 @@
         // (Width off the LLVM spelling: int_width does not read the
         // `u8`/`u16`/`u32` source spellings.)
         ? == 0 ( int_width ( nurl_llty dt ) )
-        { ( die lex ( nurl_str_cat3
+        { ( die_pos lex __cast_line __cast_col ( nurl_str_cat3
             `a float value does not cast to '` ( llvm_to_nurl dt )
             `' — only integer targets take a float ('# i x' truncates toward zero). Format to text with ( nurl_str_float x ), or construct the aggregate you mean from its fields.` ) ) }
         {}
@@ -16603,8 +16644,8 @@
         // target-side note.)
         ? & == ( nurl_str_get val 0 ) 37 == 0 ( int_width ( nurl_llty st ) )
         { ? ( is_ptr_ty st )
-            { ( die lex `'# f' of a pointer/string value — an address's bytes have no numeric meaning. Parse a string's TEXT with ( nurl_str_to_float s ), or read the numeric field you mean first.` ) }
-            { ( die lex ( nurl_str_cat3
+            { ( die_pos lex __cast_line __cast_col `'# f' of a pointer/string value — an address's bytes have no numeric meaning. Parse a string's TEXT with ( nurl_str_to_float s ), or read the numeric field you mean first.` ) }
+            { ( die_pos lex __cast_line __cast_col ( nurl_str_cat3
                 `'# f' of an aggregate value of type '` ( llvm_to_nurl st )
                 `' — an option/result/struct/enum does not convert to a number by cast. Extract or '??'-destructure the numeric payload first ('# i x' reads an ENUM's tag; a float payload needs no cast at all).` ) ) } }
         {}
@@ -16624,7 +16665,7 @@
         // `# u8 p` — fell through every branch and emitted a nonsense
         // cast only clang rejected, location-free.
         ? & & src_ptr > ( int_width ( nurl_llty dt ) ) 0 != ( int_width ( nurl_llty dt ) ) 64
-        { ( die lex ( nurl_str_cat3
+        { ( die_pos lex __cast_line __cast_col ( nurl_str_cat3
             `cannot cast a pointer/string to '` ( llvm_to_nurl ( nurl_llty dt ) )
             `' — an address converts to a 64-bit integer only ('# i p'), then narrow that if you mean the low bits. For a null test write the comparison: '!= 0 # i p'.` ) ) }
         {}
@@ -16660,7 +16701,7 @@
                     : b f0p_ptr & != 0 ( nurl_str_len f0_typ )
                     == ( nurl_str_get f0_typ - ( nurl_str_len f0_typ ) 1 ) 42
                     ? ! f0p_ptr
-                    { ( die lex ( nurl_str_cat ( nurl_str_cat3
+                    { ( die_pos lex __cast_line __cast_col ( nurl_str_cat ( nurl_str_cat3
                         `cannot cast a pointer to '` dt
                         `' — that type's first field is not a pointer, so there is no slot the address could honestly fill.` )
                         ` A handle type like ( Vec u ) wraps a pointer and CAN be rebuilt this way; for anything else construct the value with '@ T { ... }'.` ) ) }
@@ -16702,7 +16743,7 @@
                         ( nurl_set_last_type dt )
                         ^ res
                     }
-                    { ( die lex ( nurl_str_cat3
+                    { ( die_pos lex __cast_line __cast_col ( nurl_str_cat3
                         `cannot cast '` st
                         `' to a pointer — that type's first field is not a pointer, so there is no address to read out of it. Handle types like ( Vec u ) carry a pointer as field 0 and CAN be read this way.` ) ) }
                 }
@@ -16791,7 +16832,7 @@
                         // meant to be unwrapped first — `# i ( vec_get v 0 )`.
                         ? & > stlen 0 & | == ( nurl_str_get st 0 ) 123 == ( nurl_str_get st 0 ) 91
                         ! ( seq st dt )
-                        { ( die lex ( nurl_str_cat ( nurl_str_cat3
+                        { ( die_pos lex __cast_line __cast_col ( nurl_str_cat ( nurl_str_cat3
                             `cannot cast '` st ( nurl_str_cat3 `' to '` dt `'` ) )
                             ` — the operand is an aggregate (option / result / slice), not a scalar. Unwrap it first: '?? expr { T x → … F _ → … }'.` ) ) }
                         {}
@@ -19397,6 +19438,11 @@
         {}
 
         : s pname ( nurl_lex_val lex )
+        // Same reservation as a function's parameter list: a closure body
+        // stores its parameters from `%<name>` too. See __reserved_reg_name.
+        ? ( __reserved_reg_name pname )
+        { ( die lex ( nurl_str_cat3 `parameter name '` pname `' is reserved: a closure parameter keeps its name as its LLVM SSA register, and the code generator's temporaries are %r0, %r1, … in that same namespace — an 'r' followed by digits collides with one of them. Rename the parameter.` ) ) }
+        {}
         ( nurl_lex_advance lex )
 
         // Add to parameter lists
@@ -21506,6 +21552,10 @@
     F
 }
 
+// `tline` / `tcol` are where the type was WRITTEN, captured by the caller
+// before `parse_type` consumed it. Every check here fires once the type is
+// fully parsed, so `die lex` anchored on whatever came after it — for a
+// declaration's last member, the closing brace.
 // check_type_known: scan an emitted LLVM type string for `%Name` references
 // and reject any that names no declared type. A bare unknown type name (a
 // typo, or a missing `$` import) otherwise leaks into the IR as an undefined
@@ -21516,7 +21566,7 @@
 // `%Vec__i64` instantiation). `syms` carries every declared struct/enum from
 // the pre-scan, so the registry lookup is reliable regardless of declaration
 // order. `ctx` names the position for the diagnostic.
-@ check_type_known i lex i syms s llvm_ty s ctx → v {
+@ check_type_known i lex i syms s llvm_ty s ctx i tline i tcol → v {
     : i n ( nurl_str_len llvm_ty )
     : ~ i i 0
     ~ < i n {
@@ -21551,14 +21601,14 @@
                             // far from the source.
                             ? & != 0 g_generic_struct_syms
                             != 0 ( nurl_sym_len2 g_generic_struct_syms name `__stparams` )
-                            { ( die lex ( nurl_str_cat
+                            { ( die_pos lex tline tcol ( nurl_str_cat
                                 ( nurl_str_cat4 `generic struct '` name `' used without type arguments in ` ctx )
                                 ( nurl_str_cat3 ` — a generic names a family of types, not a type. Instantiate it in parentheses with concrete type argument(s): '( ` name ` i )' — the parenthesised form, one argument per type parameter.` ) ) ) }
                             {}
                             : s sv ( nurl_sym_get syms name )
                             ? & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
                             {}
-                            { ( die lex ( nurl_str_cat
+                            { ( die_pos lex tline tcol ( nurl_str_cat
                                 ( nurl_str_cat3 `unknown type '` name `' in ` )
                                 ( nurl_str_cat ctx ` — no struct or enum with this name is declared (a typo, or a missing '$' import?)` ) ) ) } } } }
                 {} }
@@ -22105,8 +22155,10 @@
     ( nurl_sym_def g_res_type_syms `__last_res_t_llvm__` `` )
     ( nurl_sym_def g_res_type_syms `__last_res_err_llvm__` `` )
     ( nurl_sym_def g_res_type_syms `__last_opt_nurl_t__` `` )
+    : i __rt_line ( nurl_lex_line lex )
+    : i __rt_col ( nurl_lex_col lex )
     : s ret_ty ( parse_type lex )
-    ( check_type_known lex syms ret_ty `the return type` )
+    ( check_type_known lex syms ret_ty `the return type` __rt_line __rt_col )
     : s nurl_ret ( nurl_sym_get g_res_type_syms `__last_res_nurl__` )
     // LLVM type of the Ok-payload T (e.g. `%Vec__i8` for `! ( Vec u ) s`,
     // `i8*` for `! s E`). Recorded per-function — mirrors `<fname>__nurl_ret`
@@ -22656,8 +22708,10 @@
     ( nurl_sym_def g_res_type_syms `__last_res_t_llvm__` `` )
     ( nurl_sym_def g_res_type_syms `__last_res_err_llvm__` `` )
     ( nurl_sym_def g_res_type_syms `__last_opt_nurl_t__` `` )
+    : i __pt_line ( nurl_lex_line lex )
+    : i __pt_col ( nurl_lex_col lex )
     : s lt ( parse_type lex )
-    ( check_type_known lex syms lt `a parameter type` )
+    ( check_type_known lex syms lt `a parameter type` __pt_line __pt_col )
     // Capture the `! T E` / `? T` payload metadata for this parameter so a
     // `?? <param> { T x → … }` match can reconstruct a struct / pointer
     // payload from its i64 slot — exactly as gen_let_or_struct does for a
@@ -22683,6 +22737,11 @@
         // check (`<fname>__has_inout`) exact.
         ? ( seq pname `inout` )
         { ( die lex `'inout' is a parameter CONVENTION, not a name: it goes before the type, as in '@ f inout ( Vec i ) v → v'. Rename this parameter to something else.` ) }
+        {}
+        // `r` + digits is the code generator's own SSA namespace — see
+        // __reserved_reg_name.
+        ? ( __reserved_reg_name pname )
+        { ( die lex ( nurl_str_cat3 `parameter name '` pname `' is reserved: a by-value parameter keeps its name as its LLVM SSA register, and the code generator's temporaries are %r0, %r1, … in that same namespace — an 'r' followed by digits collides with one of them. Rename the parameter (r0 → r_0, or something that says what it holds).` ) ) }
         {}
         ( nurl_lex_advance lex )
         // Default value `= <single-token>` (keyword-args). The callee does
@@ -22938,6 +22997,8 @@
     : ~ i first 1
     : ~ i fidx 0
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        : i __ft_line ( nurl_lex_line lex )
+        : i __ft_col ( nurl_lex_col lex )
         : s flt ( parse_type lex )
         // A field whose type is the struct itself BY VALUE makes the struct
         // infinitely sized (`: Node { i v  Node next }`). LLVM only rejects the
@@ -22949,7 +23010,7 @@
             `recursive struct '` sname `' has infinite size — a field holds the struct itself by value. Box it as a pointer: '* ` )
             ( nurl_str_cat sname `'` ) ) ) }
         {}
-        ( check_type_known lex syms flt `a struct field type` )
+        ( check_type_known lex syms flt `a struct field type` __ft_line __ft_col )
         ? ( is_ident_tok ( nurl_lex_type lex ) )
         { : s fname ( nurl_lex_val lex )
             ( nurl_lex_advance lex )
@@ -23048,6 +23109,12 @@
 }
 
 @ gen_const_decl s ty_tok b is_mutable i lex i syms → v {
+    // Where to anchor a bad type: the caller consumed the type token before
+    // handing it over, so this is the NAME slot that follows it — one token
+    // to the right of the mistake and on its line, which is what the reader
+    // needs and what `check_type_known` cannot work out for itself.
+    : i __ct_line ( nurl_lex_line lex )
+    : i __ct_col ( nurl_lex_col lex )
     : s lt ( llvm_type ty_tok )
     // Grammar v2.0+: consume staged `pub` flag, record origin + public
     // marker. Read BEFORE the cname is known so a stray pub on a
@@ -23070,7 +23137,7 @@
                 ( nurl_str_cat ( nurl_str_cat4
                 `', which is a type keyword. A declaration is ': TYPE name value' — the type comes FIRST. Swap them: ': ` cname ` ` ty_tok )
                 ` <value>'.` ) ) ) }
-            { ( check_type_known lex syms lt `a global declaration's type` ) }
+            { ( check_type_known lex syms lt `a global declaration's type` __ct_line __ct_col ) }
         }
         {}
         // Flat-namespace guard for globals, twin of the struct one above: a
@@ -23336,8 +23403,10 @@
             // which LLVM requires for a correct variadic ABI.
             ( nurl_sym_def syms ( nurl_str_cat fname `__variadic_sig` ) params_str )
         }
-        { : s lt ( parse_type lex )
-            ( check_type_known lex syms lt `an FFI parameter type` )
+        { : i __ff_line ( nurl_lex_line lex )
+            : i __ff_col ( nurl_lex_col lex )
+            : s lt ( parse_type lex )
+            ( check_type_known lex syms lt `an FFI parameter type` __ff_line __ff_col )
             ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
             // params_str is IR text (the `declare` line + variadic call
             // sigs) — lowered; ptypes keeps the raw internal types so
@@ -23350,8 +23419,10 @@
         }
     }
     ( expect lex TT_ARROW )
+    : i __fr_line ( nurl_lex_line lex )
+    : i __fr_col ( nurl_lex_col lex )
     : s ret_ty ( parse_type lex )
-    ( check_type_known lex syms ret_ty `the FFI return type` )
+    ( check_type_known lex syms ret_ty `the FFI return type` __fr_line __fr_col )
     ( nurl_sym_def syms fname ret_ty )
     // Mark this name as a callable FFI symbol. gen_stmt's bare-ident-
     // as-statement check (critic v0.9.0 §1) uses this to die on
@@ -23917,13 +23988,15 @@
         // IDENT → payload only if it is a known struct type (starts with '%' in syms).
         : ~ i pcount 0
         ~ & != ( nurl_lex_type lex ) TT_RBRACE ( could_be_payload_type lex syms ) {
+            : i __ep_line ( nurl_lex_line lex )
+            : i __ep_col ( nurl_lex_col lex )
             : s pt ( parse_type lex )
             // `JArr Vec` (a bare generic-template name as the payload
             // type) parsed to `%Vec` — an undefined, unsized named type
             // whose alloca only the LLVM verifier rejected. Same check
             // as fields/params/returns; instantiated forms
             // (`( Vec Json )` → `%Vec__Json`) pass untouched.
-            ( check_type_known lex syms pt `an enum variant's payload type` )
+            ( check_type_known lex syms pt `an enum variant's payload type` __ep_line __ep_col )
             ( nurl_sym_def syms ( nurl_str_cat vname ( nurl_str_cat `__payload__` ( nurl_str_int pcount ) ) ) pt )
             // pt is the raw internal payload type — a `u`-family payload
             // stays unsigned end to end and the match binding widens

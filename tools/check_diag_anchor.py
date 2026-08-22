@@ -47,11 +47,15 @@ AT_EOF_OK = re.compile(
     r"\b(unterminated|unclosed|end of (file|input)|reached EOF|missing '\}')",
     re.I)
 
-# A message that reports FINDING the closing delimiter is anchored on its
-# own subject, not on the token after it. `^ . s` at the end of a block
+# A message that NAMES the closing delimiter as its own subject is anchored
+# on that subject, not on the token after it. `^ . s` at the end of a block
 # really does run out of source at the '}', and "found '}'" is the honest
-# answer — so the closing-delimiter rule must not fire on it.
-NAMES_CLOSER = re.compile(r"found '[)\]}]'")
+# answer; so is "unexpected '}' at the top level" for a stray brace, where
+# the brace is not where the parser noticed — it is the mistake. Either
+# verb, immediately followed by the quoted delimiter, is the marker: a
+# message that merely mentions a brace somewhere in its cure text ("box it
+# as '* T'") does not match and is still checked.
+NAMES_CLOSER = re.compile(r"\b(found|unexpected) '[)\]}]'")
 
 # `<path>:<line>:<col>: error|warning: <msg>` — the shape all four
 # emitters print. die_at has no column and is skipped: with no column
