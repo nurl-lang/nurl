@@ -1,7 +1,7 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_generic_bare_type_use.nu:13:17: error: generic struct 'Pair' used without type arguments in a struct field type — a generic names a family of types, not a type. Instantiate it in parentheses with concrete type argument(s): '( Pair i )' — the parenthesised form, one argument per type parameter.
+compiler/tests/diag_generic_bare_type_use.nu:13:12: error: generic struct 'Pair' used without type arguments in a struct field type — a generic names a family of types, not a type. Instantiate it in parentheses with concrete type argument(s): '( Pair i )' — the parenthesised form, one argument per type parameter.
 : Holder { Pair p }
-                ^
+           ^
 error: aborting due to 1 previous error
 note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

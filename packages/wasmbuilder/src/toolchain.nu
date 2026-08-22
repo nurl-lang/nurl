@@ -452,25 +452,79 @@ $ `stdlib/ext/http_cli.nu`
 // the source's content hash: runtime.c changes with the toolchain, so an
 // upgrade automatically produces a fresh object that matches it.
 // Returns the cached object path.
+// Append the text of one translation unit to `out`: the file `name` under
+// `dir`, then every file it pulls in with a quoted `#include`, depth-first
+// and each visited once (`seen` also breaks include cycles). A name that
+// does not resolve to a readable file contributes nothing — the compiler
+// will report it far better than a cache key can.
+//
+// This is what the object cache below is keyed on. It used to hash the one
+// named file, and stdlib/runtime.c is a three-line aggregator: every line of
+// the runtime lives in the files it includes. The key was therefore blind to
+// every change that matters — an edit to runtime_core.c silently reused the
+// object compiled before it, and the module kept the old runtime until
+// something happened to touch the aggregator itself.
+@ wb_tu_text s dir s name ( Vec String ) seen String out → v {
+    : i ns ( vec_len [String] seen )
+    : ~ i sk 0
+    ~ < sk ns {
+        ?? ( vec_get [String] seen sk ) { T x → { ? != 0 ( nurl_str_eq ( string_data x ) name ) { ^ v } {} } F _ → {} }
+        = sk + sk 1
+    }
+    ( vec_push [String] seen ( string_from name ) )
+    : String p ( path_join dir name )
+    : !String IoErr r ( read_file ( string_data p ) )
+    ( string_free p )
+    ?? r {
+        F _ → {}
+        T src → {
+            ( string_push_str out ( string_data src ) )
+            : i slen ( string_len src )
+            : ~ i pos 0
+            ~ < pos slen {
+                : s tailp # s + # i ( string_data src ) pos
+                : i rel ( nurl_str_find tailp `#include "` )
+                ? < rel 0 { = pos slen } {
+                    : i st + + pos rel 10
+                    : s namep # s + # i ( string_data src ) st
+                    : i q ( nurl_str_find namep `"` )
+                    ? >= q 0 {
+                        : String inc ( string_substr src st q )
+                        ( wb_tu_text dir ( string_data inc ) seen out )
+                        ( string_free inc )
+                        = pos + st q
+                    } { = pos st }
+                }
+            }
+            ( string_free src )
+        }
+    }
+}
+
 @ wb_ensure_wasm_obj WbCompiler cc s src_c → !String String {
     : String sdir ( wb_stdlib_dir )
     : String csrc ( path_join ( string_data sdir ) src_c )
-    ( string_free sdir )
     ? ( file_exists ( string_data csrc ) ) {} {
         : String msg ( string_from `stdlib C source not found: ` )
         ( string_push_str msg ( string_data csrc ) )
         ( string_push_str msg ` (is the toolchain installed? set $NURL_STDLIB)` )
-        ( string_free csrc )
+        ( string_free csrc ) ( string_free sdir )
         ^ @ !String String { F msg }
     }
-    : !String IoErr srcr ( read_file ( string_data csrc ) )
-    : ~ String src ( string_new )
-    ?? srcr { T sc → { ( string_free src ) = src sc } F _ → {
-            ( string_free csrc )
-            ^ @ !String String { F ( string_from `could not read the stdlib C source` ) }
-        } }
-    : String hex ( sha256_hex ( string_data src ) )
-    ( string_free src )
+    : ( Vec String ) seen ( vec_new [String] )
+    : String tu ( string_new )
+    ( wb_tu_text ( string_data sdir ) src_c seen tu )
+    ( string_free sdir )
+    : i nseen ( vec_len [String] seen )
+    : ~ i fk 0
+    ~ < fk nseen { ?? ( vec_get [String] seen fk ) { T x → ( string_free x ) F _ → {} } = fk + fk 1 }
+    ( vec_free [String] seen )
+    ? == ( string_len tu ) 0 {
+        ( string_free tu ) ( string_free csrc )
+        ^ @ !String String { F ( string_from `could not read the stdlib C source` ) }
+    } {}
+    : String hex ( sha256_hex ( string_data tu ) )
+    ( string_free tu )
     : String tag ( string_substr hex 0 16 )
     ( string_free hex )
 

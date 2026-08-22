@@ -84,6 +84,45 @@
 #  define NURL_HAVE_EXECINFO 1
 #endif
 
+/* ── strlen, word at a time (wasm32-wasi only) ──────────────────
+ * `zig cc --target=wasm32-wasi` resolves `strlen` from its own
+ * compiler_rt shim before wasi-libc's, and that shim is a byte loop:
+ * `while (s[n] != 0) n += 1;`. NURL's runtime calls strlen on every
+ * strdup and every symbol-table key, so a compiled NURL module spends
+ * most of its time there — a nurlc.wasm self-compile executed 4.7 of its
+ * 7.8 billion wasm instructions inside `compiler_rt.strlen`, 60 % of the
+ * whole run, and the same loop is the top frame under the reference JIT.
+ *
+ * A definition here wins the link: runtime.wasm.o is a plain object on
+ * the command line, so the archive member is never pulled and there is
+ * no duplicate symbol. This is the musl algorithm — align, then scan a
+ * word at a time with the has-zero trick, which wasm32 does in one i32
+ * load and three arithmetic ops per four bytes.
+ *
+ * wasm only. On every native target libc's strlen is a vectorised
+ * routine this could not beat, and overriding it would be a pessimisation
+ * as well as a surprise. */
+#ifdef __wasi__
+#include <limits.h>
+size_t strlen(const char *s) {
+    const char *a = s;
+    for (; (uintptr_t)s % sizeof(size_t); s++)
+        if (!*s) return (size_t)(s - a);
+    const size_t *w = (const size_t *)(const void *)s;
+#define NURL__ONES    ((size_t)-1 / UCHAR_MAX)
+#define NURL__HIGHS   (NURL__ONES * (UCHAR_MAX / 2 + 1))
+#define NURL__HASZERO(x) (((x) - NURL__ONES) & ~(x) & NURL__HIGHS)
+    for (; !NURL__HASZERO(*w); w++)
+        ;
+#undef NURL__HASZERO
+#undef NURL__HIGHS
+#undef NURL__ONES
+    for (s = (const char *)w; *s; s++)
+        ;
+    return (size_t)(s - a);
+}
+#endif
+
 /* ── OOM is fatal, loudly — runtime-wide ────────────────────────
  * Returning NULL into NURL code would be UB-ish on every target, but on
  * wasm32 it is INSIDIOUS: address 0 is ordinary writable linear memory,

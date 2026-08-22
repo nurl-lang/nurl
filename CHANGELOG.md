@@ -6,6 +6,99 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`packages/wasmtime` 0.12.0 — 17.5 % off the wasm benchmark corpus, every
+  benchmark faster.** The interpreter's dispatch is a chain of equality tests
+  on the record's opcode, and LLVM folds such a chain into jump tables in
+  batches of 64 arms, in source order, each behind the previous batch's range
+  check. Over the wasm opcode byte that space is sparse and in an order
+  nothing chose, so it came out as three chained tables: an arm in the third
+  paid twelve dispatch instructions where one in the first paid five.
+
+  The record now carries a **dense internal opcode ordered by measured
+  frequency** (`__iop`, one table lookup per instruction at predecode time,
+  never at run time). The 56 opcodes that are 99 % of what a compiled module
+  executes land in the first batch — one bounds check, one table — and
+  everything else in the second. No arm's body changed; the corpus went
+  8.35 s → 7.22 s.
+
+  On top of that, **the address add folds into the load**: 57 % of every
+  `i32.add` a module executes is the address for the instruction immediately
+  after it, so a load record grew an index-slot operand and `__fuse_addr`
+  deletes the add. An unfused access names constant-pool slot 0, which now
+  always holds zero, so the arm adds a slot rather than branching on whether
+  it has an index. And the **byte-crossing paths** of the two linear-memory
+  accessors moved out of line — a path no wasm compiler ever emits, which
+  inlined put a loop that never runs inside all twenty-odd access arms; that
+  alone was 1.9 % with the host instruction count unchanged to the digit.
+
+  Corpus: 96.0G host instructions → 78.3G over 3.12G → 2.98G records, 30.8 →
+  26.3 per record. A nurlc.wasm self-compile stays byte-identical to the
+  native compiler's output.
+
+- **The wasm `strlen` is no longer a byte loop.** `zig cc
+  --target=wasm32-wasi` resolves `strlen` from its own compiler_rt shim
+  before wasi-libc's, and that shim is `while (s[n] != 0) n += 1;`. NURL's
+  runtime calls `strlen` on every strdup and every symbol-table key, so a
+  compiled NURL module spends most of its time there: a nurlc.wasm
+  self-compile executed 4.7 of its 7.8 billion wasm instructions inside
+  `compiler_rt.strlen`, and it was the top frame under the reference JIT too.
+
+  `stdlib/runtime_core.c` now defines a word-at-a-time `strlen` for
+  `__wasi__` only — the musl algorithm, which wasm32 does in one load and
+  three arithmetic ops per four bytes. runtime.wasm.o is a plain object on
+  the link line, so the definition wins and no archive member is pulled. The
+  same self-compile executes **5.19G wasm instructions instead of 7.83G**,
+  runs **12 % faster on the reference JIT** and 15 % faster on
+  `packages/wasmtime`, byte-identical throughout. Native targets are
+  untouched: there libc's vectorised routine is the one you want.
+
+### Fixed
+
+- **`wasmbuilder` 0.1.8: the cached wasm runtime object could be stale.** The
+  cache key was the content hash of `stdlib/runtime.c` — a three-line
+  aggregator whose `#include`s are where every line of the runtime actually
+  lives. An edit to `runtime_core.c`, `runtime_ctx.c` or `runtime_ffi.c`
+  therefore did not invalidate it, and the next build silently linked the
+  object compiled before the edit. The key is now the whole translation
+  unit: the named file plus every file it pulls in with a quoted `#include`,
+  depth-first, each visited once. Found while measuring the `strlen` change
+  above, which the stale object hid.
+
+- **Ten diagnostics pointed at the line after the mistake.** A check that can
+  only fire once its operands are consumed leaves the lexer past the
+  statement, so a plain `die lex` anchors on whatever came next — the closing
+  brace when the mistake was a block's last member, or a caret past the end
+  of the echoed line. Every cast diagnostic (`# b` of a float, `# f` of a
+  string, `# i` of a nested aggregate, …) reported the *next* statement; a
+  match arm naming an unknown variant reported the arm after it; a bad type
+  in a struct field, parameter, return, FFI, global or enum-payload position
+  reported the declaration's `}`. All of them now anchor at a position
+  captured before the token was consumed (`die_pos`): the `#`, the arm's
+  pattern, the type. `check_type_known` takes that position from its caller.
+
+- **`check_diag_anchor.sh` failed a diagnostic whose subject really is a
+  brace.** The gate exempts a message that names the closing delimiter it
+  found, but only matched the verb "found" — so "unexpected '}' at the top
+  level", which is *about* a stray brace, was reported as mis-anchored. The
+  exemption now matches either verb immediately followed by the quoted
+  delimiter, and still checks a message that merely mentions a brace in its
+  cure text.
+
+- **A parameter named `r0`, `r3`, … produced invalid LLVM IR.** A by-value
+  parameter keeps its source name as its SSA register, and the code
+  generator's temporaries are `%r0`, `%r1`, … in the same LLVM local
+  namespace — so `@ f i r0 → i { ^ + r0 1 }` emitted `%r0 = alloca i64`
+  inside `define i64 @f(i64 %r0)`. nurlc exited 0 and clang rejected the
+  generated file with `multiple definition of local value named 'r0'`, a
+  diagnostic against a file the user never wrote. nurlc now reserves the
+  shape — `r` followed by digits — in both function and closure parameter
+  lists, and says why, at the parameter. Locals are unaffected: the
+  generator names them, the user's spelling never reaches the IR.
+
 ## [0.49.0] — 2026-08-22
 
 ### Added

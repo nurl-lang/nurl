@@ -1,10 +1,10 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_match_arm_not_a_variant.nu:31:20: error: 'Ok' is not a match arm of an option/result. NURL spells them 'T' and 'F', not 'Ok'/'Err'/'Some'/'None': '?? r { T v → <v is the value / Ok payload>  F e → <e is the error> }' (an option's F arm binds nothing: 'F → …'). Add '_ → …' for a catch-all.
+compiler/tests/diag_match_arm_not_a_variant.nu:31:9: error: 'Ok' is not a match arm of an option/result. NURL spells them 'T' and 'F', not 'Ok'/'Err'/'Some'/'None': '?? r { T v → <v is the value / Ok payload>  F e → <e is the error> }' (an option's F arm binds nothing: 'F → …'). Add '_ → …' for a catch-all.
         Ok val → val
-                   ^
-compiler/tests/diag_match_arm_not_a_variant.nu:39:20: error: 'Purple' is not a variant of enum 'Color'. Its variants are: Red Green Blue. Check the spelling, or add '_ → body' to absorb the rest — a match must be exhaustive, and an unknown name here is not a catch-all.
+        ^
+compiler/tests/diag_match_arm_not_a_variant.nu:39:9: error: 'Purple' is not a variant of enum 'Color'. Its variants are: Red Green Blue. Check the spelling, or add '_ → body' to absorb the rest — a match must be exhaustive, and an unknown name here is not a catch-all.
         Purple → 2
-                   ^
+        ^
 error: aborting due to 2 previous errors
 note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

@@ -113,10 +113,68 @@ wasmtime run --invoke <export> <module.wasm> [args…]
   removes **1.28 host instructions per record** — and the corpus does not
   move at all, ratio **1.000**. Those range tests issue alongside the real
   work and the predictor gets them right 99.9 % of the time; IPC just
-  rises from 3.23 to 3.31. **The dispatch path is not what this loop is
-  waiting on.** Whatever is left is in the dependency chains through the
-  record loads and the slot array, and further instruction-shaving on the
-  dispatch will not pay.) Each record keeps its original
+  rises from 3.23 to 3.31. IPC is not what that round was waiting on;
+  the round after found what was.
+  Then the table stopped being one over *wasm opcodes*. What LLVM builds
+  from a chain of equality tests on the same value is not one switch: it
+  folds them in batches of 64, in source order, and each batch becomes its
+  own jump table behind the previous batch's range check. On the wasm byte
+  the used space is 0x28..0x53, 0x45..0xc4 and the register forms above it
+  — sparse, in an order nothing chose — so it came out as three chained
+  tables and an arm in the third paid twelve dispatch instructions where
+  one in the first paid five. Renumbering the whole space **dense and in
+  measured frequency order** — `__iop`, one table lookup per instruction
+  at predecode time — puts the 56 opcodes that are 99 % of what a compiled
+  module executes in the first batch and everything else in the second.
+  No arm's body changed. Measured on one workstation, so the two ends of
+  this round are comparable: the corpus went 8.35 s → 7.22 s, **15 %** by
+  geometric mean, every benchmark faster, and 96.0G host instructions →
+  81.4G.
+  That is the same experiment the paragraph above records as neutral, with
+  one thing added, and the one thing is the whole result. Merging the
+  register/control forms into the numeric space and leaving the space
+  sparse only moves where LLVM partitions it — which is why it measured
+  8.8 % slower. (And it partitions by *source order*, in batches, not by
+  value range: the earlier reading of the hottest-first experiment was
+  wrong. Hottest-first over a sparse space measures neutral because it
+  trades one group of arms into the first table for another; over a dense
+  one it decides which 64 arms the first table holds.) Forcing a single `switch` by hand at the IR level does get
+  the one table, and then spills the record's operands to the stack to
+  make room for it — which is why it measured 1.000. Dense *and* ordered
+  is what makes the table small enough to be free.
+  Then the address add folded into the load. 57 % of every `i32.add` a
+  compiled module executes is the address for the instruction immediately
+  after it, so a load record grew a fourth operand — an index slot — and
+  `__fuse_addr` deletes the add, handing the load its two operands
+  instead. An access with nothing folded into it names pool slot 0, which
+  the constant pool now reserves holding zero, so the arm adds a slot that
+  is always zero rather than branching on whether it has an index at all.
+  The corpus dispatches 3.12G records before and 2.98G after, and the
+  memory-bound half of it moved, in cycles: bloom_filter −15 %,
+  hash_join −10 %, binary_search −8 %, matmul −6 %.
+  Last, the byte-crossing paths of the two accessors went out of line. An
+  access whose bytes straddle two 8-byte words is a path no wasm compiler
+  ever emits, and inlined it put a loop that never runs inside all
+  twenty-odd access arms. Hoisting it out was another **1.9 %** with the
+  host instruction count unchanged to the digit — this loop is
+  instruction-cache bound, not issue bound. The same measurement from the
+  other side: deleting the `--fuel` countdown outright removes 9.7 % of
+  the host instructions the corpus executes and 0.3 % of its cycles, so
+  the metering is free and stays exact.
+  Over the round the corpus went 8.35 s → 6.93 s — **17.5 %** by geometric
+  mean, every benchmark faster, nbody −32 %, ring_write −36 %,
+  bloom_filter −36 % — at 96.0G host instructions → 78.3G over 3.12G →
+  2.98G records, which is 30.8 → **26.3 per record**. The self-host went
+  26.7 s → 25.5 s on the same module, and 21.7 s once the module itself
+  was rebuilt with a toolchain fix this round turned up: `zig cc
+  --target=wasm32-wasi` resolves `strlen` from its own compiler_rt shim,
+  which is a byte loop, and NURL's runtime calls it on every strdup and
+  every symbol-table key. A nurlc.wasm self-compile spent 4.7 of its 7.8
+  billion wasm instructions inside it. The NURL runtime now defines a
+  word-at-a-time `strlen` for wasm32 only (stdlib/runtime_core.c); the
+  same self-compile executes 5.19G wasm instructions instead of 7.83G and
+  is 12 % faster on the reference JIT as well. Byte-identical
+  throughout.) Each record keeps its original
   byte offset, so trap backtraces still point into the module image:
   - structured control flow: `block`, `loop`, `if`/`else`, `br`, `br_if`,
     `br_table`, `return`, `end` — **multi-value** block types included

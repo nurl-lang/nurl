@@ -153,6 +153,11 @@ type_params = '[' ( IDENT ( ':' IDENT )* )+ ']' ;
    `in` / `inout` / `sink` are contextual keywords: recognised only as
    a parameter's leading token. `inout` is additionally banned as a
    parameter name.
+   A parameter name may not be `r` followed only by digits (`r0`, `r12`).
+   A by-value parameter keeps its source name as its LLVM SSA register and
+   the code generator's temporaries are `%r0`, `%r1`, … in the same local
+   namespace, so the two would collide. Locals carry no such rule: the
+   generator names them. Closure parameter lists follow the same rule.
    Example:  @ add i a i b → i { ^ + a b }
    Example:  @ id [T] T x → T { ^ x }          — generic
    Example:  @ bump inout Counter c → v { = . c n + . c n 1 } *)

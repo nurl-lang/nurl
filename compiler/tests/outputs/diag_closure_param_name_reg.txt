@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_param_name_reg.nu:4:25: error: parameter name 'r2' is reserved: a closure parameter keeps its name as its LLVM SSA register, and the code generator's temporaries are %r0, %r1, … in that same namespace — an 'r' followed by digits collides with one of them. Rename the parameter.
+    : ( @ i i ) inc \ i r2 → i { ^ + r2 1 }
+                        ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

@@ -1,7 +1,7 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_cast_string_to_float.nu:8:5: error: '# f' of a pointer/string value — an address's bytes have no numeric meaning. Parse a string's TEXT with ( nurl_str_to_float s ), or read the numeric field you mean first.
-    ^ 0
-    ^
+compiler/tests/diag_cast_string_to_float.nu:7:11: error: '# f' of a pointer/string value — an address's bytes have no numeric meaning. Parse a string's TEXT with ( nurl_str_to_float s ), or read the numeric field you mean first.
+    : f z # f t
+          ^
 error: aborting due to 1 previous error
 note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
