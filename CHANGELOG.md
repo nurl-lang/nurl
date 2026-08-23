@@ -8,6 +8,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.0] — 2026-08-23
+
+### Added
+
+- **Sockets on wasm: a guest's `connect` is the host's `connect`.** WASI
+  preview1 has no way to open a socket — it can only accept on one the host
+  preopened — so stdlib's socket layer under `__wasi__` was a set of stubs
+  that answered every call with `NetOther`. It is now a set of thin wrappers
+  over wasm imports in the module `nurl_net`, and `packages/wasmtime`
+  answers them with the very same `nurl_tcp_*` / `nurl_udp_*` /
+  `nurl_dns_*` runtime entry points a native build links directly. A NURL
+  program that listens, connects, resolves and serves works compiled to wasm
+  exactly as it does natively — **including TLS**, because stdlib's TLS 1.3
+  is pure NURL and runs inside the guest over these plaintext sockets.
+
+  The guest never sees a host handle: it gets an index into a per-instance
+  table, so a forged handle can only miss. That is also what makes handles
+  work at all on wasm32 — a host handle is a 64-bit pointer and the guest's
+  stdlib keeps socket handles in a pointer-sized field, four bytes there, so
+  the real thing came back truncated. Every guest pointer is bounds-checked
+  before the host sees it, and host-produced text (peer and local addresses,
+  DNS answers) is copied into a guest-supplied buffer with an explicit cap.
+
+  The surface is off by default: `wasmtime run --allow-net` enables it
+  (embedder API `interp_allow_net`), and without it a `nurl_net` import
+  traps with a message that says so. The bridge is linked only into a module
+  that actually calls a socket entry point, so a program that never opens
+  one carries no import and still runs on any plain WASI runtime.
+  `packages/wasmtime/tests/net_test.sh` builds the same program native and
+  as wasm and compares the two runs.
+
+- **Threads on wasm (wasi-threads): `wasmbuilder --threads`.** A module built
+  with it declares a shared memory, imports `wasi.thread-spawn` and exports
+  `wasi_thread_start`; `packages/wasmtime` runs it with one interpreter
+  instance per thread — its own value stack, frames and globals, and
+  therefore its own `__stack_pointer`, which the host sets from the guest's
+  start block because C cannot assign a wasm global — over one linear
+  memory, table and module. The whole `0xfe` atomics family executes:
+  load/store at every width, the six read-modify-write groups, cmpxchg,
+  `wait32`/`wait64`/`notify` and `fence`, each under one process-wide lock,
+  which is what makes them sequentially consistent in an interpreter that
+  performs a read-modify-write in three steps. A shared memory is reserved
+  at its declared maximum when the module is instantiated and `memory.grow`
+  only raises the addressable bound, so growth never moves a buffer another
+  thread is reading.
+
+  The guest side brings what wasm32's libc does not have: pthreads built on
+  the atomics (futex mutex, condvar, join), per-thread TLS via
+  `__wasm_init_tls` — without it every `__thread` variable, `errno`
+  included, is one shared word — a locked heap in
+  `stdlib/runtime_wasm_alloc.c` (wasm32's libc allocator is single-threaded
+  by design and cannot be locked from outside), and a 1:1 backend for the
+  stdlib's M:N async runtime, where a fiber is a thread. That last one is
+  what makes `spawn` + `runtime_run` work at all: a relay's accept loop is a
+  fiber.
+
+  The measured result: `packages/swarm-mcp`, unmodified, compiled to one
+  wasm module and run with `wasmtime run --allow-net` — relay, three worker
+  threads and the MCP coordinator in a single instance — mints its own TLS
+  certificate, answers MCP over HTTPS and serves compute requests, correct
+  every time. `packages/wasmtime/tests/threads_test.sh` builds a four-thread
+  program native and as wasm and compares the runs.
+
+- **`poll_oneoff`.** The one WASI call a server cannot do without: libc's
+  `sleep`, `nanosleep` and every timeout go through it. Clock subscriptions
+  sleep for the shortest deadline; file and stdio subscriptions are ready
+  immediately, which is what `poll(2)` says about a regular file too. Before
+  it, a worker thread trapped on its first `sleep_ms`. `fd_write` also
+  flushes now, so a guest that never exits — a server, which is most of the
+  point of having sockets — produces output while it runs.
+
 ### Changed
 
 - **`packages/wasmtime` 0.12.0 — 17.5 % off the wasm benchmark corpus, every
@@ -70,6 +141,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   untouched: there libc's vectorised routine is the one you want.
 
 ### Fixed
+
+- **A narrow store to a shared memory rewrote its neighbours' bytes.** The
+  wasm interpreter's fast path for storing fewer than eight bytes read the
+  containing 64-bit word, patched the bytes it owned and wrote the whole word
+  back. Exact on one thread. On a shared memory it is not: wasm says those
+  bytes are independent locations, and two threads writing neighbouring bytes
+  of one word — two malloc headers, a length beside a flag, adjacent struct
+  fields — each write back a word carrying their own stale copy of the
+  other's byte, so one update is simply lost. The damage surfaced far from
+  where it was made, as a wild pointer inside the guest's own `free`: a size
+  field that never took its new value, and an allocator handing out a block
+  computed from it. Narrow stores to a shared memory are byte-wise now;
+  single-threaded modules keep the word path untouched.
+
+- **`nurl_rand_fill` had no CSPRNG on wasi.** It fell through to its LCG
+  fallback and returned 0 — which means "degraded" to every caller — so
+  `std/x509_gen` and the pure TLS stack panicked on a target that has
+  perfectly good entropy. wasi-libc's `getentropy()` *is*
+  `wasi_snapshot_preview1`'s `random_get`; the wasi build uses it.
+
+- **`dir_create_all` could not create any absolute path on wasm.** It
+  insisted on creating every prefix, and under a capability filesystem "/"
+  and "/tmp" live outside every preopen, so `mkdir` answers ENOENT and
+  `opendir` cannot prove they exist even when the leaf's parent is perfectly
+  reachable. Only the final component decides the verdict now; the first
+  intermediate error is kept and reported if the final step fails too, since
+  it is the one closer to the real cause.
+
+- **A POSIX stub could trap instead of returning its error sentinel.**
+  `wasmbuilder` stubs the POSIX symbols wasi-libc does not ship, and the
+  stub table hardcoded `i64` returns — but `std/thread.nu` declares
+  `pthread_create → i32`. wasm-ld answers a signature mismatch with a stub
+  whose body is a single `unreachable`, so `thread_spawn` trapped where it
+  had promised to return -1. The stubs are built from the declaration in the
+  IR now, exactly as the libc width-shims already were; only the sentinel
+  value stays tabulated.
+
+- **`wasmbuilder`'s `@` mask was not a bijection.** The IR rewriter masks
+  `@` inside `c"…"` constants so symbol renames cannot corrupt emitted-IR
+  data, then unmasks at the end — and a program whose own data contains the
+  sentinel had that constant rewritten without its `[N x i8]` length
+  changing, which clang rejects. Every program that embeds `wasmbuilder`
+  carries the sentinel as a literal. The token is escaped before use now, so
+  the round trip is exact.
+
+- **`wasmtime`'s own flags were read out of the guest's argv.** `--help`,
+  `--version` and `--allow-gpu` were scanned across all of argv, so
+  `wt run app.wasm --help` printed the runtime's usage and never started the
+  module. Options are read up to the module path; everything after it is the
+  guest's own argv, and `--` ends the runtime's options explicitly.
+
+- **A write into a directory that does not exist reported success.**
+  `wasmtime`'s `path_open` buffered a created file and only wrote it at
+  flush, where the error was swallowed. O_CREAT creates on the host at open
+  time now, and `fd_close` / `fd_sync` return the errno. An out-of-bounds
+  trap also names the address, the access width and the limit — the two
+  numbers that separate a wild pointer from a stale bound.
+
+- **`packages/swarm-mcp` 0.25.1 announced a version that did not exist.**
+  0.25.0 shipped and reported 0.24.0 from `initialize`, `server/discover`
+  and `--version` alike: `sm_version` is a hand-written literal and the
+  release bumped the manifest without it. A published version can be yanked
+  but never replaced, so the fix shipped as 0.25.1 — and the gate that
+  should have caught it now can, since v0.49.0 taught
+  `check_package_version_strings.sh` to resolve a one-line version accessor.
+
+- **`wasmbuilder` could link yesterday's runtime object.** The cache key for
+  `runtime.wasm.o` is a walk of `#include "…"` lines matched as that exact
+  literal, so an indented `#  include` inside an `#if` was invisible: changes
+  to that file did not change the key. The scan accepts whitespace between
+  `#`, `include` and the quote now.
 
 - **`sha256_hex` was quadratic: 3.5 s to hash a 383 KB file, 1 ms after.**
   `stdlib/std/hash.nu`'s `s` → `( Vec u )` converter pushed byte by byte
@@ -14957,7 +15099,10 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.47.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.50.0...HEAD
+[0.50.0]: https://github.com/nurl-lang/nurl/compare/v0.49.0...v0.50.0
+[0.49.0]: https://github.com/nurl-lang/nurl/compare/v0.48.0...v0.49.0
+[0.48.0]: https://github.com/nurl-lang/nurl/compare/v0.47.0...v0.48.0
 [0.47.0]: https://github.com/nurl-lang/nurl/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/nurl-lang/nurl/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/nurl-lang/nurl/compare/v0.44.2...v0.45.0
