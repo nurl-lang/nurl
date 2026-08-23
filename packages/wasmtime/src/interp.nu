@@ -3850,11 +3850,18 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ^ n
 }
 
-// Register a fresh host handle and return the guest's index (0 when the
-// call failed, which is what the stdlib reads as "no socket").
+// The handle table is per-INSTANCE, so every thread of a threaded guest
+// shares it — and they open sockets concurrently (a relay's accept
+// fibers, a worker, an MCP coordinator, all in one module). Without a
+// lock two registrations race for the same free slot: one handle
+// overwrites the other, and the loser then reads a socket that belongs
+// to somebody else. That surfaced far away as a wild pointer inside the
+// guest's own frame parser. The critical sections here are table-only —
+// no blocking host call happens while the lock is held.
 @ __net_reg * Interp it0 i h i kind → i {
     ? == h 0 { ^ 0 } {}
     : *Interp it ( __host it0 )
+    ( __atom_lock )
     : i n ( vec_len [i] . it nethandles )
     : ~ i slot 0
     : ~ i k 1
@@ -3865,10 +3872,12 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ? == slot 0 {
         ( vec_push [i] . it nethandles h )
         ( vec_push [i] . it netkinds kind )
+        ( __atom_unlock )
         ^ n
     } {}
     ( vec_set [i] . it nethandles slot h )
     ( vec_set [i] . it netkinds slot kind )
+    ( __atom_unlock )
     ^ slot
 }
 
@@ -3876,16 +3885,23 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 @ __net_h * Interp it0 i idx → i {
     : *Interp it ( __host it0 )
     ? <= idx 0 { ^ 0 } {}
-    ? >= idx ( vec_len [i] . it nethandles ) { ^ 0 } {}
-    ^ ?? ( vec_get [i] . it nethandles idx ) { T v → v F → 0 }
+    ( __atom_lock )
+    : ~ i h 0
+    ? < idx ( vec_len [i] . it nethandles ) {
+        = h ?? ( vec_get [i] . it nethandles idx ) { T v → v F → 0 }
+    } {}
+    ( __atom_unlock )
+    ^ h
 }
 
 // Retire an index — the host handle is already closed by the caller.
 @ __net_drop * Interp it0 i idx → v {
     : *Interp it ( __host it0 )
-    ? | <= idx 0 >= idx ( vec_len [i] . it nethandles ) { ^ v } {}
+    ( __atom_lock )
+    ? | <= idx 0 >= idx ( vec_len [i] . it nethandles ) { ( __atom_unlock ) ^ v } {}
     ( vec_set [i] . it nethandles idx 0 )
     ( vec_set [i] . it netkinds idx 0 )
+    ( __atom_unlock )
 }
 
 // Close every socket the guest left open. A wasm module that exits (or
