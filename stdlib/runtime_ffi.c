@@ -2722,6 +2722,7 @@ static void nurl__wake(_Atomic int32_t *addr, int32_t count) {
  * thread gets its own block or every `__thread` variable — errno among
  * them — would be one shared word. */
 extern void __wasm_init_tls(void *);
+extern void nurl_eprint(const char *);
 
 __attribute__((export_name("wasi_thread_start")))
 void wasi_thread_start(int32_t tid, void *start_arg) {
@@ -2741,6 +2742,12 @@ void wasi_thread_start(int32_t tid, void *start_arg) {
     }
     void (*entry)(void*) = (void (*)(void*))(uintptr_t)ts->fn;
     entry((void*)(uintptr_t)ts->arg);
+    {
+        const unsigned char *guard = (const unsigned char*)(uintptr_t)ts->stack_base;
+        int broken = 0;
+        for (int i = 0; i < 4096; i++) if (guard[i] != 0xA5) { broken = 1; break; }
+        if (broken) nurl_eprint("nurl: wasm thread stack overflow (canary broken)\n");
+    }
     ts->ret = 0;
     atomic_store(&ts->done, 1);
     nurl__wake(&ts->done, -1);
@@ -2751,13 +2758,19 @@ int pthread_create(void *t, void *a, void *start, void *arg) {
     if (!t || !start) return 22;  /* EINVAL */
     NurlWasmThread *ts = (NurlWasmThread*)calloc(1, sizeof *ts);
     if (!ts) return 11;  /* EAGAIN */
-    unsigned char *stack = (unsigned char*)malloc(NURL_WASM_TSTACK);
+    /* wasm has no guard page, so a stack that runs off its end writes
+     * into whatever heap block sits below it and the damage shows up
+     * somewhere else entirely. A canary under the stack turns that into
+     * a diagnosis instead of a mystery. */
+    unsigned char *stack = (unsigned char*)malloc(NURL_WASM_TSTACK + 4096);
     if (!stack) { free(ts); return 11; }
+    memset(stack, 0xA5, 4096);
     ts->fn         = (int32_t)(uintptr_t)start;
     ts->arg        = (int32_t)(uintptr_t)arg;
     ts->stack_base = (int32_t)(uintptr_t)stack;
-    /* The stack grows down from the top, 16-byte aligned. */
-    ts->stack_top  = (int32_t)(((uintptr_t)stack + NURL_WASM_TSTACK) & ~(uintptr_t)15);
+    /* The stack grows down from the top, 16-byte aligned; the low 4 KiB
+     * is the canary, so the usable stack starts above it. */
+    ts->stack_top  = (int32_t)(((uintptr_t)stack + 4096 + NURL_WASM_TSTACK) & ~(uintptr_t)15);
     atomic_store(&ts->done, 0);
     if (__nurl_wasi_thread_spawn(ts) < 0) { free(stack); free(ts); return 11; }
     *(void**)t = ts;   /* pthread_t is this block's address */

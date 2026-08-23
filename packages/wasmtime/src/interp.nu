@@ -993,21 +993,31 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 // the declared maximum (or the wasm32 hard limit of 65536 pages) would be
 // exceeded — the value memory.grow pushes.
 @ __mem_grow * Interp it i delta → i {
-    : i old . it mem_pages
-    ? == delta 0 { ^ old } {}
     : *Module m # *Module . it mod
     : ~ i limit 65536
     ? & > . m mem_max 0 < . m mem_max limit { = limit . m mem_max } {}
-    ? | < delta 0 > + old delta limit { ^ -1 } {}
     // A shared memory already owns its maximum: growing is only raising
     // the addressable bound, never a realloc — another thread may be
-    // holding the buffer's base pointer right now.
+    // holding the buffer's base pointer right now. The WHOLE operation
+    // has to be atomic, current size included: two threads that each read
+    // the old size before either published would both grow from the same
+    // base, one growth would be lost, and both guests would take the same
+    // pages for their own — one heap on top of another, and addresses
+    // past a bound that never moved. (memory.grow returns the OLD size,
+    // which is exactly what the guest allocator uses as its new arena.)
     ? != . m mem_shared 0 {
         ( __atom_lock )
-        ( __mem_publish ( __host it ) + old delta * + old delta ( __page ) )
+        : *Interp ho ( __host it )
+        : i old . ho mem_pages
+        ? == delta 0 { ( __atom_unlock ) ^ old } {}
+        ? | < delta 0 > + old delta limit { ( __atom_unlock ) ^ -1 } {}
+        ( __mem_publish ho + old delta * + old delta ( __page ) )
         ( __atom_unlock )
         ^ old
     } {}
+    : i old . it mem_pages
+    ? == delta 0 { ^ old } {}
+    ? | < delta 0 > + old delta limit { ^ -1 } {}
     // One resize, zero-filling the new tail in a single memset, instead of
     // a push per byte: growing by a single page was 65 536 pushes.
     : b _ok ( vec_resize_zeroed [u] . it mem * + old delta ( __page ) )

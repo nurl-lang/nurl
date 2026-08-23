@@ -483,17 +483,32 @@ $ `stdlib/ext/http_cli.nu`
             : ~ i pos 0
             ~ < pos slen {
                 : s tailp # s + # i ( string_data src ) pos
-                : i rel ( nurl_str_find tailp `#include "` )
+                // The directive may be indented and spaced out — runtime.c
+                // guards one include inside an `#if`, as `#  include "…"`.
+                // Matching the literal `#include "` missed it, so that file
+                // stayed out of the cache key and its object went stale the
+                // moment only it changed: a build that linked yesterday's
+                // runtime and failed on a symbol added today.
+                : i rel ( nurl_str_find tailp `#` )
                 ? < rel 0 { = pos slen } {
-                    : i st + + pos rel 10
-                    : s namep # s + # i ( string_data src ) st
-                    : i q ( nurl_str_find namep `"` )
-                    ? >= q 0 {
-                        : String inc ( string_substr src st q )
-                        ( wb_tu_text dir ( string_data inc ) seen out )
-                        ( string_free inc )
-                        = pos + st q
-                    } { = pos st }
+                    : ~ i k + + pos rel 1
+                    ~ & < k slen | == ( string_get src k ) 32 == ( string_get src k ) 9 { = k + k 1 }
+                    : b is_inc & < + k 7 slen ( string_starts_with ( string_substr src k 7 ) `include` )
+                    ? ! is_inc { = pos + + pos rel 1 } {
+                        = k + k 7
+                        ~ & < k slen | == ( string_get src k ) 32 == ( string_get src k ) 9 { = k + k 1 }
+                        ? & < k slen == ( string_get src k ) 34 {
+                            : i st + k 1
+                            : s namep # s + # i ( string_data src ) st
+                            : i q ( nurl_str_find namep `"` )
+                            ? >= q 0 {
+                                : String inc ( string_substr src st q )
+                                ( wb_tu_text dir ( string_data inc ) seen out )
+                                ( string_free inc )
+                                = pos + st q
+                            } { = pos st }
+                        } { = pos k }
+                    }
                 }
             }
             ( string_free src )
