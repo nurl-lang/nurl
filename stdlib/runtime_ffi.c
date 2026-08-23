@@ -607,6 +607,9 @@ void nurl_proc_spawn_free(long long h) {
 #if defined(__linux__)
 #  include <sys/random.h>
 #endif
+#if defined(__wasi__)
+#  include <unistd.h>            /* getentropy — wasi-libc's random_get */
+#endif
 
 /* Fill buf with n cryptographically-strong bytes; return 1 on success.
  * 0 only on degraded fallback (LCG over time+clock) — shouldn't happen
@@ -637,6 +640,24 @@ long long nurl_rand_fill(unsigned char *buf, long long n) {
         size_t r2 = fread(buf, 1, want, f);
         fclose(f);
         if (r2 == want) return 1;
+    }
+#elif defined(__wasi__)
+    /* WASI's CSPRNG is a first-class import: wasi-libc's getentropy() is
+     * wasi_snapshot_preview1's random_get, which every runtime backs with
+     * the host CSPRNG. Without this the wasi build fell through to the
+     * LCG below and returned 0 — and 0 means "degraded" to every caller,
+     * so std/x509_gen and the pure TLS stack panicked on a wasm target
+     * that in fact has perfectly good entropy. getentropy() takes at most
+     * 256 bytes per call (GETENTROPY_MAX). */
+    {
+        size_t got = 0;
+        while (got < want) {
+            size_t chunk = want - got;
+            if (chunk > 256) chunk = 256;
+            if (getentropy(buf + got, chunk) != 0) break;
+            got += chunk;
+        }
+        if (got == want) return 1;
     }
 #else
     FILE *f = fopen("/dev/urandom", "rb");
@@ -2415,76 +2436,197 @@ char *nurl_dns_reverse(const char *ip) {
     return strdup(host);
 }
 
-#else  /* __wasi__: no socket support — every call returns NetOther. */
+#else  /* __wasi__ */
+/*
+ * WASI has no socket layer of its own (preview1 can only accept on a
+ * socket the host preopened), so the sockets come from the host as wasm
+ * IMPORTS in the `nurl_net` module. Each function below is a thin
+ * wrapper over one import, keeping the ABI the NURL side already
+ * declares in stdlib/core/builtins.nu; the handle is the host's own
+ * handle, opaque to the guest.
+ *
+ * Two properties make this safe to have in every build:
+ *   • wasm-ld's --gc-sections drops a wrapper no one calls, and an
+ *     import referenced by nothing is not emitted — so a module that
+ *     never touches std/net.nu carries no `nurl_net` import at all and
+ *     still runs on a plain WASI runtime.
+ *   • A module that DOES open sockets now says so in its import
+ *     section. That is the honest statement of what it needs; a host
+ *     without sockets refuses to instantiate it instead of pretending
+ *     every connect failed.
+ *
+ * TLS needs nothing here: stdlib's TLS 1.3 is pure NURL and runs inside
+ * the guest over these plaintext sockets.
+ *
+ * Strings that the host produces (peer/local address, DNS answers) are
+ * written into a caller-supplied buffer and the import returns the
+ * length — the host cannot allocate in the guest's linear memory.
+ */
+
+#define NURL_NET_IMPORT(nm) \
+    __attribute__((import_module("nurl_net"), import_name(nm)))
+
+NURL_NET_IMPORT("tcp_listen")   extern long long nurl__ni_tcp_listen(const char*, long long, long long);
+NURL_NET_IMPORT("tcp_connect")  extern long long nurl__ni_tcp_connect(const char*, long long);
+NURL_NET_IMPORT("tcp_accept")   extern long long nurl__ni_tcp_accept(long long);
+NURL_NET_IMPORT("tcp_read")     extern long long nurl__ni_tcp_read(long long, const char*, long long);
+NURL_NET_IMPORT("tcp_write")    extern long long nurl__ni_tcp_write(long long, const char*, long long);
+NURL_NET_IMPORT("tcp_close")    extern void      nurl__ni_tcp_close(long long);
+NURL_NET_IMPORT("tcp_shutdown") extern void      nurl__ni_tcp_shutdown(long long);
+NURL_NET_IMPORT("tcp_err_kind") extern long long nurl__ni_tcp_err_kind(long long);
+NURL_NET_IMPORT("tcp_set_timeout") extern void   nurl__ni_tcp_set_timeout(long long, long long);
+NURL_NET_IMPORT("tcp_timeout_ms")  extern long long nurl__ni_tcp_timeout_ms(long long);
+NURL_NET_IMPORT("tcp_peer_addr")   extern long long nurl__ni_tcp_peer_addr(long long, char*, long long);
+NURL_NET_IMPORT("tcp_local_addr")  extern long long nurl__ni_tcp_local_addr(long long, char*, long long);
+NURL_NET_IMPORT("tcp_get_fd")      extern long long nurl__ni_tcp_get_fd(long long);
+NURL_NET_IMPORT("tcp_set_nonblock") extern void  nurl__ni_tcp_set_nonblock(long long, long long);
+NURL_NET_IMPORT("tcp_ref")      extern void      nurl__ni_tcp_ref(long long);
+NURL_NET_IMPORT("tcp_unref")    extern void      nurl__ni_tcp_unref(long long);
+
+NURL_NET_IMPORT("udp_bind")     extern long long nurl__ni_udp_bind(const char*, long long);
+NURL_NET_IMPORT("udp_connect")  extern long long nurl__ni_udp_connect(long long, const char*, long long);
+NURL_NET_IMPORT("udp_send")     extern long long nurl__ni_udp_send(long long, const char*, long long);
+NURL_NET_IMPORT("udp_recv")     extern long long nurl__ni_udp_recv(long long, char*, long long);
+NURL_NET_IMPORT("udp_send_to")  extern long long nurl__ni_udp_send_to(long long, const char*, long long, const char*, long long);
+NURL_NET_IMPORT("udp_recv_from") extern long long nurl__ni_udp_recv_from(long long, char*, long long);
+NURL_NET_IMPORT("udp_close")    extern void      nurl__ni_udp_close(long long);
+NURL_NET_IMPORT("udp_err_kind") extern long long nurl__ni_udp_err_kind(long long);
+NURL_NET_IMPORT("udp_peer_addr")  extern long long nurl__ni_udp_peer_addr(long long, char*, long long);
+NURL_NET_IMPORT("udp_local_addr") extern long long nurl__ni_udp_local_addr(long long, char*, long long);
+NURL_NET_IMPORT("udp_set_timeout")  extern void   nurl__ni_udp_set_timeout(long long, long long);
+NURL_NET_IMPORT("udp_set_nonblock") extern void   nurl__ni_udp_set_nonblock(long long, long long);
+NURL_NET_IMPORT("udp_family")   extern long long nurl__ni_udp_family(long long);
+NURL_NET_IMPORT("udp_get_fd")   extern long long nurl__ni_udp_get_fd(long long);
+NURL_NET_IMPORT("udp_set_broadcast") extern long long nurl__ni_udp_set_broadcast(long long, long long);
+NURL_NET_IMPORT("udp_join_group")    extern long long nurl__ni_udp_join_group(long long, const char*, const char*);
+NURL_NET_IMPORT("udp_leave_group")   extern long long nurl__ni_udp_leave_group(long long, const char*, const char*);
+NURL_NET_IMPORT("udp_set_multicast_ttl")  extern long long nurl__ni_udp_set_multicast_ttl(long long, long long);
+NURL_NET_IMPORT("udp_set_multicast_loop") extern long long nurl__ni_udp_set_multicast_loop(long long, long long);
+
+NURL_NET_IMPORT("dns_resolve")      extern long long nurl__ni_dns_resolve(const char*, char*, long long);
+NURL_NET_IMPORT("dns_resolve_port") extern long long nurl__ni_dns_resolve_port(const char*, long long, char*, long long);
+NURL_NET_IMPORT("dns_reverse")      extern long long nurl__ni_dns_reverse(const char*, char*, long long);
+
+/* An address is at most "[<45-char v6>]:65535"; DNS answers are a
+ * comma-joined list, so give those room and truncate rather than grow. */
+#define NURL_NET_ADDR_CAP 128
+#define NURL_NET_DNS_CAP  2048
+
+static char *nurl__net_take(const char *buf, long long n) {
+    if (n < 0) n = 0;
+    char *out = (char*)malloc((size_t)n + 1);
+    if (!out) return NULL;
+    if (n > 0) memcpy(out, buf, (size_t)n);
+    out[n] = 0;
+    return out;
+}
 
 long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
-    (void)host; (void)port; (void)backlog;
-    return 0;
+    return nurl__ni_tcp_listen(host ? host : "", port, backlog);
 }
+/* The TLS listener is the pure-NURL stack over a plaintext socket
+ * (std/net.nu builds the handshake itself); the PEM arguments are the
+ * NURL side's business, not the host's. */
 long long nurl_tcp_listen_tls(const char *host, long long port, long long backlog,
                               const char *cert, const char *key) {
-    (void)host; (void)port; (void)backlog; (void)cert; (void)key;
-    return 0;
+    (void)cert; (void)key;
+    return nurl__ni_tcp_listen(host ? host : "", port, backlog);
 }
-long long nurl_tcp_accept(long long listener) { (void)listener; return 0; }
+long long nurl_tcp_connect(const char *host, long long port) {
+    return nurl__ni_tcp_connect(host ? host : "", port);
+}
+long long nurl_tcp_accept(long long listener) { return nurl__ni_tcp_accept(listener); }
 long long nurl_tcp_read(long long h, const char *buf, long long n) {
-    (void)h; (void)buf; (void)n; return -1;
+    return nurl__ni_tcp_read(h, buf, n);
 }
 long long nurl_tcp_write(long long h, const char *buf, long long n) {
-    (void)h; (void)buf; (void)n; return -1;
+    return nurl__ni_tcp_write(h, buf, n);
 }
-void nurl_tcp_close(long long h) { (void)h; }
-void nurl_tcp_shutdown(long long h) { (void)h; }
-long long nurl_tcp_err_kind(long long h) { (void)h; return NURL_NET_ERR_OTHER; }
-const char *nurl_tcp_peer_addr(long long h) { (void)h; return ""; }
-char       *nurl_tcp_local_addr(long long h) { (void)h; return strdup(""); }
-void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
-/* Async-runtime hooks. The non-WASI variants live above the #else gate;
- * mirror them as no-ops here so wasm-ld doesn't fail with undefined
- * symbols for any example that imports the async/HTTP-server stack
- * (which references these unconditionally — they just never fire under
- * WASI because the underlying tcp_listen/_accept returned 0). */
-long long nurl_tcp_get_fd(long long h)                 { (void)h; return -1; }
-void nurl_tcp_set_nonblock(long long h, long long on)  { (void)h; (void)on; }
-void nurl_tcp_ref(long long h)                         { (void)h; }
-void nurl_tcp_unref(long long h)                       { (void)h; }
+void nurl_tcp_close(long long h)    { nurl__ni_tcp_close(h); }
+void nurl_tcp_shutdown(long long h) { nurl__ni_tcp_shutdown(h); }
+long long nurl_tcp_err_kind(long long h) { return nurl__ni_tcp_err_kind(h); }
+/* Borrowed, as on every other platform: valid until the next call. */
+const char *nurl_tcp_peer_addr(long long h) {
+    static char buf[NURL_NET_ADDR_CAP];
+    long long n = nurl__ni_tcp_peer_addr(h, buf, (long long)sizeof(buf) - 1);
+    if (n < 0) n = 0;
+    buf[n] = 0;
+    return buf;
+}
+char *nurl_tcp_local_addr(long long h) {
+    char buf[NURL_NET_ADDR_CAP];
+    long long n = nurl__ni_tcp_local_addr(h, buf, (long long)sizeof(buf));
+    return nurl__net_take(buf, n);
+}
+void nurl_tcp_set_timeout(long long h, long long ms) { nurl__ni_tcp_set_timeout(h, ms); }
+long long nurl_tcp_timeout_ms(long long h)           { return nurl__ni_tcp_timeout_ms(h); }
+long long nurl_tcp_get_fd(long long h)                { return nurl__ni_tcp_get_fd(h); }
+void nurl_tcp_set_nonblock(long long h, long long on) { nurl__ni_tcp_set_nonblock(h, on); }
+void nurl_tcp_ref(long long h)                        { nurl__ni_tcp_ref(h); }
+void nurl_tcp_unref(long long h)                      { nurl__ni_tcp_unref(h); }
 
-/* §18b / §18c WASI stubs — wasi-libc has no socket layer. */
 long long nurl_udp_bind(const char *h, long long p) {
-    (void)h; (void)p; return 0;
+    return nurl__ni_udp_bind(h ? h : "", p);
 }
 long long nurl_udp_connect(long long h, const char *host, long long p) {
-    (void)h; (void)host; (void)p; return -1;
+    return nurl__ni_udp_connect(h, host ? host : "", p);
 }
 long long nurl_udp_send_to(long long h, const char *b, long long n,
                            const char *host, long long p) {
-    (void)h; (void)b; (void)n; (void)host; (void)p; return -1;
+    return nurl__ni_udp_send_to(h, b, n, host ? host : "", p);
 }
 long long nurl_udp_recv_from(long long h, char *b, long long n) {
-    (void)h; (void)b; (void)n; return -1;
+    return nurl__ni_udp_recv_from(h, b, n);
 }
 long long nurl_udp_send(long long h, const char *b, long long n) {
-    (void)h; (void)b; (void)n; return -1;
+    return nurl__ni_udp_send(h, b, n);
 }
 long long nurl_udp_recv(long long h, char *b, long long n) {
-    (void)h; (void)b; (void)n; return -1;
+    return nurl__ni_udp_recv(h, b, n);
 }
-const char *nurl_udp_peer_addr(long long h)            { (void)h; return ""; }
-char       *nurl_udp_local_addr(long long h)           { (void)h; return strdup(""); }
-long long nurl_udp_err_kind(long long h)               { (void)h; return NURL_NET_ERR_OTHER; }
-long long nurl_udp_get_fd(long long h)                 { (void)h; return -1; }
-long long nurl_udp_family(long long h)                 { (void)h; return -1; }
-void nurl_udp_set_nonblock(long long h, long long on)  { (void)h; (void)on; }
-void nurl_udp_set_timeout(long long h, long long ms)   { (void)h; (void)ms; }
-void nurl_udp_close(long long h)                       { (void)h; }
-long long nurl_udp_set_broadcast(long long h, long long on)            { (void)h; (void)on; return -1; }
-long long nurl_udp_join_group(long long h, const char *g, const char *i){ (void)h; (void)g; (void)i; return -1; }
-long long nurl_udp_leave_group(long long h, const char *g, const char *i){ (void)h; (void)g; (void)i; return -1; }
-long long nurl_udp_set_multicast_ttl(long long h, long long t)         { (void)h; (void)t; return -1; }
-long long nurl_udp_set_multicast_loop(long long h, long long on)       { (void)h; (void)on; return -1; }
-char *nurl_dns_resolve(const char *h)                  { (void)h; return strdup(""); }
-char *nurl_dns_resolve_port(const char *h, long long p){ (void)h; (void)p; return strdup(""); }
-char *nurl_dns_reverse(const char *ip)                 { (void)ip; return strdup(""); }
+const char *nurl_udp_peer_addr(long long h) {
+    static char buf[NURL_NET_ADDR_CAP];
+    long long n = nurl__ni_udp_peer_addr(h, buf, (long long)sizeof(buf) - 1);
+    if (n < 0) n = 0;
+    buf[n] = 0;
+    return buf;
+}
+char *nurl_udp_local_addr(long long h) {
+    char buf[NURL_NET_ADDR_CAP];
+    long long n = nurl__ni_udp_local_addr(h, buf, (long long)sizeof(buf));
+    return nurl__net_take(buf, n);
+}
+long long nurl_udp_err_kind(long long h)               { return nurl__ni_udp_err_kind(h); }
+long long nurl_udp_get_fd(long long h)                 { return nurl__ni_udp_get_fd(h); }
+long long nurl_udp_family(long long h)                 { return nurl__ni_udp_family(h); }
+void nurl_udp_set_nonblock(long long h, long long on)  { nurl__ni_udp_set_nonblock(h, on); }
+void nurl_udp_set_timeout(long long h, long long ms)   { nurl__ni_udp_set_timeout(h, ms); }
+void nurl_udp_close(long long h)                       { nurl__ni_udp_close(h); }
+long long nurl_udp_set_broadcast(long long h, long long on) { return nurl__ni_udp_set_broadcast(h, on); }
+long long nurl_udp_join_group(long long h, const char *g, const char *i) {
+    return nurl__ni_udp_join_group(h, g ? g : "", i ? i : "");
+}
+long long nurl_udp_leave_group(long long h, const char *g, const char *i) {
+    return nurl__ni_udp_leave_group(h, g ? g : "", i ? i : "");
+}
+long long nurl_udp_set_multicast_ttl(long long h, long long t)   { return nurl__ni_udp_set_multicast_ttl(h, t); }
+long long nurl_udp_set_multicast_loop(long long h, long long on) { return nurl__ni_udp_set_multicast_loop(h, on); }
+
+char *nurl_dns_resolve(const char *h) {
+    char buf[NURL_NET_DNS_CAP];
+    long long n = nurl__ni_dns_resolve(h ? h : "", buf, (long long)sizeof(buf));
+    return nurl__net_take(buf, n);
+}
+char *nurl_dns_resolve_port(const char *h, long long p) {
+    char buf[NURL_NET_DNS_CAP];
+    long long n = nurl__ni_dns_resolve_port(h ? h : "", p, buf, (long long)sizeof(buf));
+    return nurl__net_take(buf, n);
+}
+char *nurl_dns_reverse(const char *ip) {
+    char buf[NURL_NET_ADDR_CAP];
+    long long n = nurl__ni_dns_reverse(ip ? ip : "", buf, (long long)sizeof(buf));
+    return nurl__net_take(buf, n);
+}
 
 #endif /* __wasi__ guard for §18 */
 

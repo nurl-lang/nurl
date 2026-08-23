@@ -41,47 +41,22 @@ $ `interp.nu`
 
 // Keep in step with nurl.toml's [package] version — `--version` is what a
 // bug report quotes, so a stale literal here misattributes the bug.
-@ __wt_version → s { ^ `wasmtime 0.12.0 (pure NURL)` }
+@ __wt_version → s { ^ `wasmtime 0.13.0 (pure NURL)` }
 
 @ usage → v {
     ( nurl_print `wasmtime — a WebAssembly runtime in pure NURL\n\n` )
-    ( nurl_print `  wasmtime run [--dir <path>]… [--env NAME=VALUE]… [--fuel N] [--allow-gpu] <module.wasm> [args…]\n` )
+    ( nurl_print `  wasmtime run [--dir <path>]… [--env NAME=VALUE]… [--fuel N] [--allow-gpu] [--allow-net] <module.wasm> [args…]\n` )
     ( nurl_print `  wasmtime run --invoke <export> <module.wasm> [args…]\n` )
     ( nurl_print `  wasmtime --version | --help\n\n` )
     ( nurl_print `Command mode runs a wasm32-wasi module's _start with the given preopened\n` )
     ( nurl_print `directories and environment. Invoke mode calls an exported function with\n` )
-    ( nurl_print `integer / floating-point arguments and prints the result.\n` )
+    ( nurl_print `integer / floating-point arguments and prints the result.\n\n` )
+    ( nurl_print `Options are read up to the module path; everything after it is the guest's\n` )
+    ( nurl_print `own argv (so its --help is its own). Use -- before a module path that\n` )
+    ( nurl_print `starts with a dash.\n` )
 }
 
-// Is `flag` anywhere in argv, position 1 included? __arg_index starts at 2
-// because every flag it looks for follows the `run` subcommand; `--version`
-// and `--help` are the two that stand in the subcommand's place instead.
-@ __has_flag i argc s flag → i {
-    : ~ i found 0
-    : ~ i k 1
-    ~ & == found 0 < k argc {
-        : String a ( env_arg k )
-        ? != 0 ( nurl_str_eq ( string_data a ) flag ) { = found 1 } {}
-        ( string_free a )
-        = k + k 1
-    }
-    ^ found
-}
-
-// Find the index of `flag` in argv (after position 1); -1 if absent.
-@ __arg_index i argc s flag → i {
-    : ~ i found -1
-    : ~ i k 2
-    ~ & == found -1 < k argc {
-        : String a ( env_arg k )
-        ? != 0 ( nurl_str_eq ( string_data a ) flag ) { = found k } {}
-        ( string_free a )
-        = k + k 1
-    }
-    ^ found
-}
-
-@ run_invoke s export s path i first_arg i argc i allow_gpu → i {
+@ run_invoke s export s path i first_arg i argc i allow_gpu i allow_net → i {
     : !( Vec u ) IoErr fr ( read_file_bytes path )
     : ~ i rc 0
     ?? fr {
@@ -99,6 +74,7 @@ $ `interp.nu`
                 } {
                     : *Interp it ( interp_new m )
                     ? != allow_gpu 0 { ( interp_allow_gpu it ) } {}
+                    ? != allow_net 0 { ( interp_allow_net it ) } {}
                     : s ftp ( __functype m fidx )
                     // push args, parsed per parameter type (i32/i64 decimal,
                     // f32/f64 floating-point → stored as their bit pattern)
@@ -138,7 +114,7 @@ $ `interp.nu`
 
 // WASI command: run the module's `_start` with argv = [module, prog args…],
 // the given preopened directories and environment entries.
-@ run_command s path i prog_start i argc ( Vec String ) dirs ( Vec String ) envs i fuel i allow_gpu → i {
+@ run_command s path i prog_start i argc ( Vec String ) dirs ( Vec String ) envs i fuel i allow_gpu i allow_net → i {
     : !( Vec u ) IoErr fr ( read_file_bytes path )
     : ~ i rc 0
     ?? fr {
@@ -157,6 +133,7 @@ $ `interp.nu`
                     : *Interp it ( interp_new m )
                     ? > fuel 0 { = . it fuel fuel } {}
                     ? != allow_gpu 0 { ( interp_allow_gpu it ) } {}
+                    ? != allow_net 0 { ( interp_allow_net it ) } {}
                     : i nd ( vec_len [String] dirs )
                     : ~ i d 0
                     ~ < d nd { ?? ( vec_get [String] dirs d ) { T ds → ( interp_set_preopen it ( string_data ds ) ( string_data ds ) ) F → {} } = d + d 1 }
@@ -182,54 +159,79 @@ $ `interp.nu`
     ^ rc
 }
 
+// Every host option is read from the argv PREFIX that ends at the module
+// path — a guest's own `--help`, `--version` or `--allow-gpu` belongs to
+// the guest. (Scanning all of argv for those three meant `wt run app.wasm
+// --help` printed the RUNTIME's usage and never started the module; the
+// bug surfaced on the first guest with a CLI of its own.) `--` ends the
+// host options explicitly, for a module path that starts with a dash.
 @ main → i {
     : i argc ( env_args_count )
-    ? != 0 ( __has_flag argc `--version` ) { ( nurl_print ( __wt_version ) ) ( nurl_print `\n` ) ^ 0 } {}
-    ? != 0 ( __has_flag argc `--help` ) { ( usage ) ^ 0 } {}
-    ? != 0 ( __has_flag argc `-h` ) { ( usage ) ^ 0 } {}
-    ? < argc 2 { ( usage ) ^ 1 } {}
-    // Direct-call mode: `[run] --invoke <export> <module> [args]`.
-    : i allow_gpu ? >= ( __arg_index argc `--allow-gpu` ) 0 1 0
-    : i ii ( __arg_index argc `--invoke` )
-    ? >= ii 0 {
-        ? < argc + ii 3 { ( nurl_print `usage: wasmtime run --invoke <export> <module.wasm> [args…]\n` ) ^ 1 } {}
-        : String export ( env_arg + ii 1 )
-        : String path ( env_arg + ii 2 )
-        : i rc ( run_invoke ( string_data export ) ( string_data path ) + ii 3 argc allow_gpu )
-        ( string_free export ) ( string_free path )
-        ^ rc
-    } {}
-    // WASI command mode:
-    //   `[run] [--dir <path>]… [--env NAME=VALUE]… <module.wasm> [args…]`
     : ( Vec String ) dirs ( vec_new [String] )
     : ( Vec String ) envs ( vec_new [String] )
+    : ~ String invoke ( string_new )
+    : ~ i have_invoke 0
+    : ~ i allow_gpu 0
+    : ~ i allow_net 0
+    : ~ i want_help 0
+    : ~ i want_version 0
+    : ~ i bad_opt 0
     : ~ i fuel -1
     : ~ i mi -1
     : ~ i k 1
     ~ & == mi -1 < k argc {
         : String a ( env_arg k )
         : s str ( string_data a )
-        ? != 0 ( nurl_str_eq str `--dir` ) {
+        : ~ b done F
+        ? != 0 ( nurl_str_eq str `--` ) {
+            = done T
+            ? < + k 1 argc { = mi + k 1 } { = k argc }
+        } {}
+        ? & ! done != 0 ( nurl_str_eq str `--dir` ) {
+            = done T
             ? < + k 1 argc { ( vec_push [String] dirs ( env_arg + k 1 ) ) = k + k 2 } { = k + k 1 }
-        } {
-            ? != 0 ( nurl_str_eq str `--env` ) {
-                ? < + k 1 argc { ( vec_push [String] envs ( env_arg + k 1 ) ) = k + k 2 } { = k + k 1 }
-            } {
-                ? != 0 ( nurl_str_eq str `--fuel` ) {
-                    ? < + k 1 argc { : String fa ( env_arg + k 1 ) = fuel ( nurl_str_to_int ( string_data fa ) ) ( string_free fa ) = k + k 2 } { = k + k 1 }
-                } {
-                    ? & == 0 ( nurl_str_eq str `run` ) != 45 ( nurl_str_get str 0 ) { = mi k } { = k + k 1 }
-                }
+        } {}
+        ? & ! done != 0 ( nurl_str_eq str `--env` ) {
+            = done T
+            ? < + k 1 argc { ( vec_push [String] envs ( env_arg + k 1 ) ) = k + k 2 } { = k + k 1 }
+        } {}
+        ? & ! done != 0 ( nurl_str_eq str `--fuel` ) {
+            = done T
+            ? < + k 1 argc { : String fa ( env_arg + k 1 ) = fuel ( nurl_str_to_int ( string_data fa ) ) ( string_free fa ) = k + k 2 } { = k + k 1 }
+        } {}
+        ? & ! done != 0 ( nurl_str_eq str `--invoke` ) {
+            = done T
+            ? < + k 1 argc { ( string_free invoke ) = invoke ( env_arg + k 1 ) = have_invoke 1 = k + k 2 } { = k + k 1 }
+        } {}
+        ? & ! done != 0 ( nurl_str_eq str `--allow-gpu` ) { = done T = allow_gpu 1 = k + k 1 } {}
+        ? & ! done != 0 ( nurl_str_eq str `--allow-net` ) { = done T = allow_net 1 = k + k 1 } {}
+        ? & ! done | != 0 ( nurl_str_eq str `--help` ) != 0 ( nurl_str_eq str `-h` ) { = done T = want_help 1 = k + k 1 } {}
+        ? & ! done != 0 ( nurl_str_eq str `--version` ) { = done T = want_version 1 = k + k 1 } {}
+        ? & ! done != 0 ( nurl_str_eq str `run` ) { = done T = k + k 1 } {}
+        ? ! done {
+            ? != 45 ( nurl_str_get str 0 ) { = mi k } {
+                ( nurl_eprint `wasmtime: unknown option ` ) ( nurl_eprintln str )
+                = bad_opt 1
+                = k argc
             }
-        }
+        } {}
         ( string_free a )
     }
     : ~ i rc 1
-    ? < mi 0 { ( usage ) } {
-        : String path ( env_arg mi )
-        = rc ( run_command ( string_data path ) + mi 1 argc dirs envs fuel allow_gpu )
-        ( string_free path )
-    }
+    ? != 0 bad_opt { ( usage ) } {
+        ? != 0 want_version { ( nurl_print ( __wt_version ) ) ( nurl_print `\n` ) = rc 0 } {
+            ? != 0 want_help { ( usage ) = rc 0 } {
+                ? < argc 2 { ( usage ) } {
+                    ? < mi 0 { ( usage ) } {
+                        : String path ( env_arg mi )
+                        ? != 0 have_invoke {
+                            = rc ( run_invoke ( string_data invoke ) ( string_data path ) + mi 1 argc allow_gpu allow_net )
+                        } {
+                            = rc ( run_command ( string_data path ) + mi 1 argc dirs envs fuel allow_gpu allow_net )
+                        }
+                        ( string_free path )
+                    } } } } }
+    ( string_free invoke )
     : i nd ( vec_len [String] dirs )
     : ~ i fd 0
     ~ < fd nd { ?? ( vec_get [String] dirs fd ) { T ds → ( string_free ds ) F → {} } = fd + fd 1 }

@@ -31,6 +31,69 @@ $ `module.nu`
 // unlink(2): path_unlink_file must NOT remove directories (remove(3) would).
 & `c` @ unlink s path → i32
 
+// ── raw sockets, for the "nurl_net" host-import bridge ────────────
+// The listen/accept/read/write/close/err_kind/peer_addr/set_timeout half
+// of this ABI is preamble-declared by the compiler; the rest lives in
+// stdlib FFI declares, so name it here the same way std/dns.nu and
+// ext/http_pure.nu do.
+& `c` @ nurl_tcp_connect s host i port → i
+
+& `c` @ nurl_tcp_timeout_ms i handle → i
+
+& `c` @ nurl_tcp_get_fd i handle → i
+
+& `c` @ nurl_tcp_set_nonblock i handle i on → v
+
+& `c` @ nurl_tcp_ref i handle → v
+
+& `c` @ nurl_tcp_unref i handle → v
+
+& `c` @ nurl_tcp_local_addr i handle → s
+
+& `c` @ nurl_udp_bind s host i port → i
+
+& `c` @ nurl_udp_connect i handle s host i port → i
+
+& `c` @ nurl_udp_send i handle s buf i n → i
+
+& `c` @ nurl_udp_recv i handle s buf i n → i
+
+& `c` @ nurl_udp_send_to i handle s buf i n s host i port → i
+
+& `c` @ nurl_udp_recv_from i handle s buf i n → i
+
+& `c` @ nurl_udp_close i handle → v
+
+& `c` @ nurl_udp_err_kind i handle → i
+
+& `c` @ nurl_udp_peer_addr i handle → s
+
+& `c` @ nurl_udp_local_addr i handle → s
+
+& `c` @ nurl_udp_set_timeout i handle i ms → v
+
+& `c` @ nurl_udp_set_nonblock i handle i on → v
+
+& `c` @ nurl_udp_family i handle → i
+
+& `c` @ nurl_udp_get_fd i handle → i
+
+& `c` @ nurl_udp_set_broadcast i handle i on → i
+
+& `c` @ nurl_udp_join_group i handle s group s iface → i
+
+& `c` @ nurl_udp_leave_group i handle s group s iface → i
+
+& `c` @ nurl_udp_set_multicast_ttl i handle i ttl → i
+
+& `c` @ nurl_udp_set_multicast_loop i handle i on → i
+
+& `c` @ nurl_dns_resolve s host → s
+
+& `c` @ nurl_dns_resolve_port s host i port → s
+
+& `c` @ nurl_dns_reverse s ip → s
+
 // ── CUDA driver + NVRTC (the GPU host-import bridge) ──────────────
 // A wasm module built from a GPU-using NURL package (packages/gpu →
 // onnx → objdet) imports these under module "env"; wasmtime resolves them
@@ -119,6 +182,13 @@ $ `module.nu`
     i max_depth  // frame-stack depth limit (trap when exceeded)
     i fuel  // remaining budget in predecoded records (-1 = unlimited)
     b gpu_ok  // env/CUDA host imports enabled (opt-in; default off)
+    b net_ok  // nurl_net host imports (real sockets) enabled (opt-in; default off)
+    // Guest socket handle → host handle. The guest never sees a host
+    // pointer: it gets an index into this table, so a forged handle can
+    // only miss, never become a host address the runtime dereferences.
+    // Slot 0 is reserved — the stdlib reads handle 0 as "failed".
+    ( Vec i ) nethandles
+    ( Vec i ) netkinds  // 1 = TCP, 2 = UDP (which close the runtime owes it)
     b cap  // capture stdout/stderr into capout/caperr instead of the host streams
     ( Vec u ) capout  // captured module stdout (raw bytes, NULs preserved)
     ( Vec u ) caperr  // captured module stderr
@@ -190,6 +260,11 @@ $ `module.nu`
     = . it max_depth 65536
     = . it fuel -1
     = . it gpu_ok F
+    = . it net_ok F
+    = . it nethandles ( vec_new [i] )
+    = . it netkinds ( vec_new [i] )
+    ( vec_push [i] . it nethandles 0 )
+    ( vec_push [i] . it netkinds 0 )
     = . it cap F
     = . it capout ( vec_new [u] )
     = . it caperr ( vec_new [u] )
@@ -282,6 +357,9 @@ $ `module.nu`
 }
 
 @ interp_free * Interp it → v {
+    ( interp_net_close_all it )
+    ( vec_free [i] . it nethandles )
+    ( vec_free [i] . it netkinds )
     ( vec_free [i] . it vs )
     ( vec_free [u] . it mem )
     ( vec_free [i] . it globals )
@@ -350,6 +428,12 @@ $ `module.nu`
 // to libcuda, so they are only safe for trusted compute — the embedder must
 // opt in explicitly (the CLI does so with --allow-gpu).
 @ interp_allow_gpu * Interp it → v { = . it gpu_ok T }
+
+// Enable the module "nurl_net" socket bridge — the guest's TCP/UDP/DNS
+// calls become this process's. Off by default for the same reason the
+// GPU bridge is: it is the guest reaching the network through us (the
+// CLI opts in with --allow-net).
+@ interp_allow_net * Interp it → v { = . it net_ok T }
 
 // Grant the module one preopened host directory, visible to it as `guest_name`
 // (the path it resolves opens against). Installed as fd 3.
@@ -2596,7 +2680,17 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ? != rc 0 { ( __freefd # s nf ) ( string_free hs ) ( __push it rc ) ^ v } {}
     = . nf writable ? != want_write 0 T F
     = . nf append ? != & fdflags 1 0 T F
-    ? & != creat 0 == exists 0 { = . nf dirty T } {}  // a created empty file must exist on disk
+    // O_CREAT on a new name: create it on the host NOW, not at flush time.
+    // The open is where the guest's libc learns whether the file can exist
+    // at all — deferring it meant a write into a directory that does not
+    // exist answered "ok" all the way through fd_close.
+    ? & != creat 0 == exists 0 {
+        : ( Vec u ) empty ( vec_new [u] )
+        : !v IoErr cr ( write_file_bytes ( string_data hs ) empty )
+        ( vec_free [u] empty )
+        ?? cr { T x → {} F e → { = rc ( __ioerr_errno e ) } }
+        ? != rc 0 { ( __freefd # s nf ) ( string_free hs ) ( __push it rc ) ^ v } {}
+    } {}
     ( __m_put_u32 it ofd_p ( vec_len [s] . it fds ) )
     ( vec_push [s] . it fds # s nf )
     ( string_free hs )
@@ -2975,13 +3069,21 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 
 // Flush a dirty written file to disk (fd_close / fd_sync / proc_exit / normal
 // program exit all funnel through here).
-@ __fd_flush * WFd f → v {
+// Write the buffer back to the host file. Returns an errno (0 = ok) —
+// a flush is the moment every buffered write of this fd actually reaches
+// the disk, so its failure is the ONLY chance the guest has to learn that
+// the write did not happen. Swallowing it made `write_file` report
+// success for a file the host never created.
+@ __fd_flush * WFd f → i {
     ? & . f writable . f dirty {
         : String hs ( bytes_to_str . f host )
         : !v IoErr wr ( write_file_bytes ( string_data hs ) . f data )
-        ?? wr { T x → { = . f dirty F } F e → {} }
+        : ~ i rc 0
+        ?? wr { T x → { = . f dirty F } F e → { = rc ( __ioerr_errno e ) } }
         ( string_free hs )
+        ^ rc
     } {}
+    ^ 0
 }
 
 // Flush every open dirty file — called on proc_exit and when _start returns,
@@ -2995,20 +3097,20 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 @ __wasi_fd_close * Interp it → v {
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
+    : ~ i rc 0
     ? != # i fp 0 {
         : *WFd f # *WFd fp
-        ( __fd_flush f )
+        = rc ( __fd_flush f )
         ? >= fd 3 { ( __freefd fp ) ( vec_set [s] . it fds fd # s 0 ) } {}  // keep stdio
     } {}
-    ( __push it 0 )
+    ( __push it rc )
 }
 
 @ __wasi_fd_sync * Interp it → v {
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
     ? == # i fp 0 { ( __push it 8 ) ^ v } {}  // EBADF
-    ( __fd_flush # *WFd fp )
-    ( __push it 0 )
+    ( __push it ( __fd_flush # *WFd fp ) )
 }
 
 // fd_tell(fd, off_p): current offset as u64.
@@ -3355,7 +3457,270 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ^ F
 }
 
+// ── module "nurl_net": the guest's sockets are this process's ──────
+//
+// stdlib's runtime_ffi.c has no socket layer under __wasi__ (WASI
+// preview1 can only accept on a socket the host preopened), so a NURL
+// program compiled to wasm imports one function per raw socket call.
+// Here they land on the very same runtime entry points a host build
+// links directly — `nurl_tcp_listen` and friends are preamble-declared,
+// so the guest's connect IS our connect. TLS needs nothing extra:
+// stdlib's TLS 1.3 is pure NURL and runs inside the guest over these
+// plaintext sockets.
+//
+// The guest is handed a TABLE INDEX, never the host's handle. Two
+// reasons, and both are load-bearing:
+//   • The host handle is a 64-bit pointer, and the guest's stdlib keeps
+//     socket handles in an `s` field — 4 bytes on wasm32. A real handle
+//     came back truncated and the next call dereferenced rubble.
+//   • A handle the guest can forge is a host pointer the runtime would
+//     dereference on demand. An index can only miss.
+
+// Guest (ptr,len) span → host pointer; 0 when it leaves linear memory.
+@ __net_span * Interp it i off i len → s {
+    : i o & off 4294967295
+    : i n ( vec_len [u] . it mem )
+    ? | < len 0 > + o len n { ^ # s 0 } {}
+    ^ # s + # i ( vec_data [u] . it mem ) o
+}
+
+// Guest pointer to a NUL-terminated string → host `s`. A string with no
+// terminator inside linear memory reads as empty rather than running off
+// the end of the buffer.
+@ __net_cstr * Interp it i off → s {
+    : i o & off 4294967295
+    : i n ( vec_len [u] . it mem )
+    ? >= o n { ^ `` } {}
+    : ~ i k o
+    : ~ b term F
+    ~ & < k n ! term {
+        ?? ( vec_get [u] . it mem k ) {
+            T c → { ? == # i c 0 { = term T } { = k + k 1 } }
+            F → { = k n }
+        }
+    }
+    ? term { ^ # s + # i ( vec_data [u] . it mem ) o } {}
+    ^ ``
+}
+
+// Copy a host string into the guest's buffer, truncating at `cap`, and
+// answer the byte count — the import ABI for every host call that
+// produces text (addresses, DNS answers), because the host cannot
+// allocate inside the guest's linear memory.
+@ __net_put_str * Interp it i off i cap s src → i {
+    ? == # i src 0 { ^ 0 } {}
+    : i n ( nurl_str_len src )
+    : ~ i m n
+    ? > m cap { = m cap } {}
+    ? < m 0 { = m 0 } {}
+    : ~ i k 0
+    ~ < k m { ( __mem_store it + off k 1 ( nurl_str_get src k ) ) = k + k 1 }
+    ^ m
+}
+
+// Same, for an OWNED host string: copied out, then freed.
+@ __net_put_owned * Interp it i off i cap s src → i {
+    ? == # i src 0 { ^ 0 } {}
+    : i n ( __net_put_str it off cap src )
+    ( nurl_free src )
+    ^ n
+}
+
+// Register a fresh host handle and return the guest's index (0 when the
+// call failed, which is what the stdlib reads as "no socket").
+@ __net_reg * Interp it i h i kind → i {
+    ? == h 0 { ^ 0 } {}
+    : i n ( vec_len [i] . it nethandles )
+    : ~ i slot 0
+    : ~ i k 1
+    ~ & < k n == slot 0 {
+        ?? ( vec_get [i] . it nethandles k ) { T v → { ? == v 0 { = slot k } {} } F → {} }
+        = k + k 1
+    }
+    ? == slot 0 {
+        ( vec_push [i] . it nethandles h )
+        ( vec_push [i] . it netkinds kind )
+        ^ n
+    } {}
+    ( vec_set [i] . it nethandles slot h )
+    ( vec_set [i] . it netkinds slot kind )
+    ^ slot
+}
+
+// Guest index → host handle; 0 for anything the guest made up.
+@ __net_h * Interp it i idx → i {
+    ? <= idx 0 { ^ 0 } {}
+    ? >= idx ( vec_len [i] . it nethandles ) { ^ 0 } {}
+    ^ ?? ( vec_get [i] . it nethandles idx ) { T v → v F → 0 }
+}
+
+// Retire an index — the host handle is already closed by the caller.
+@ __net_drop * Interp it i idx → v {
+    ? | <= idx 0 >= idx ( vec_len [i] . it nethandles ) { ^ v } {}
+    ( vec_set [i] . it nethandles idx 0 )
+    ( vec_set [i] . it netkinds idx 0 )
+}
+
+// Close every socket the guest left open. A wasm module that exits (or
+// traps) mid-flight would otherwise leak the host's descriptors, which
+// matters most for the embedded case: swarm-mcp runs kernels in-process.
+@ interp_net_close_all * Interp it → v {
+    : i n ( vec_len [i] . it nethandles )
+    : ~ i k 1
+    ~ < k n {
+        : i h ?? ( vec_get [i] . it nethandles k ) { T v → v F → 0 }
+        ? != h 0 {
+            : i kind ?? ( vec_get [i] . it netkinds k ) { T v → v F → 0 }
+            ? == kind 2 { ( nurl_udp_close h ) } { ( nurl_tcp_close h ) }
+            ( vec_set [i] . it nethandles k 0 )
+            ( vec_set [i] . it netkinds k 0 )
+        } {}
+        = k + k 1
+    }
+}
+
+@ __net_dispatch * Interp it ( Vec u ) field → b {
+    // ── TCP ──
+    ? ( __feq field `tcp_listen` ) {
+        : i backlog ( __pop it ) : i port ( __pop it ) : i hp ( __pop it )
+        ( __push it ( __net_reg it ( nurl_tcp_listen ( __net_cstr it hp ) port backlog ) 1 ) ) ^ T } {}
+    ? ( __feq field `tcp_connect` ) {
+        : i port ( __pop it ) : i hp ( __pop it )
+        ( __push it ( __net_reg it ( nurl_tcp_connect ( __net_cstr it hp ) port ) 1 ) ) ^ T } {}
+    ? ( __feq field `tcp_accept` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 0 ( __net_reg it ( nurl_tcp_accept h ) 1 ) ) ^ T } {}
+    ? ( __feq field `tcp_read` ) {
+        : i n ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        : s p ( __net_span it bp n )
+        ( __push it ? | == h 0 == # i p 0 -1 ( nurl_tcp_read h p n ) ) ^ T } {}
+    ? ( __feq field `tcp_write` ) {
+        : i n ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        : s p ( __net_span it bp n )
+        ( __push it ? | == h 0 == # i p 0 -1 ( nurl_tcp_write h p n ) ) ^ T } {}
+    ? ( __feq field `tcp_close` ) {
+        : i idx ( __pop it ) : i h ( __net_h it idx )
+        ? != h 0 { ( nurl_tcp_close h ) ( __net_drop it idx ) } {}
+        ^ T } {}
+    ? ( __feq field `tcp_shutdown` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ? != h 0 { ( nurl_tcp_shutdown h ) } {}
+        ^ T } {}
+    ? ( __feq field `tcp_err_kind` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 8 ( nurl_tcp_err_kind h ) ) ^ T } {}
+    ? ( __feq field `tcp_set_timeout` ) {
+        : i ms ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ? != h 0 { ( nurl_tcp_set_timeout h ms ) } {}
+        ^ T } {}
+    ? ( __feq field `tcp_timeout_ms` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 0 ( nurl_tcp_timeout_ms h ) ) ^ T } {}
+    ? ( __feq field `tcp_peer_addr` ) {
+        : i cap ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 0 ( __net_put_str it bp cap ( nurl_tcp_peer_addr h ) ) ) ^ T } {}
+    ? ( __feq field `tcp_local_addr` ) {
+        : i cap ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 0 ( __net_put_owned it bp cap ( nurl_tcp_local_addr h ) ) ) ^ T } {}
+    ? ( __feq field `tcp_get_fd` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_tcp_get_fd h ) ) ^ T } {}
+    ? ( __feq field `tcp_set_nonblock` ) {
+        : i on ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ? != h 0 { ( nurl_tcp_set_nonblock h on ) } {}
+        ^ T } {}
+    ? ( __feq field `tcp_ref` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ? != h 0 { ( nurl_tcp_ref h ) } {}
+        ^ T } {}
+    ? ( __feq field `tcp_unref` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ? != h 0 { ( nurl_tcp_unref h ) } {}
+        ^ T } {}
+    // ── UDP ──
+    ? ( __feq field `udp_bind` ) {
+        : i port ( __pop it ) : i hp ( __pop it )
+        ( __push it ( __net_reg it ( nurl_udp_bind ( __net_cstr it hp ) port ) 2 ) ) ^ T } {}
+    ? ( __feq field `udp_connect` ) {
+        : i port ( __pop it ) : i hp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_connect h ( __net_cstr it hp ) port ) ) ^ T } {}
+    ? ( __feq field `udp_send` ) {
+        : i n ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        : s p ( __net_span it bp n )
+        ( __push it ? | == h 0 == # i p 0 -1 ( nurl_udp_send h p n ) ) ^ T } {}
+    ? ( __feq field `udp_recv` ) {
+        : i n ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        : s p ( __net_span it bp n )
+        ( __push it ? | == h 0 == # i p 0 -1 ( nurl_udp_recv h p n ) ) ^ T } {}
+    ? ( __feq field `udp_send_to` ) {
+        : i port ( __pop it ) : i hp ( __pop it ) : i n ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        : s p ( __net_span it bp n )
+        ( __push it ? | == h 0 == # i p 0 -1 ( nurl_udp_send_to h p n ( __net_cstr it hp ) port ) ) ^ T } {}
+    ? ( __feq field `udp_recv_from` ) {
+        : i n ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        : s p ( __net_span it bp n )
+        ( __push it ? | == h 0 == # i p 0 -1 ( nurl_udp_recv_from h p n ) ) ^ T } {}
+    ? ( __feq field `udp_close` ) {
+        : i idx ( __pop it ) : i h ( __net_h it idx )
+        ? != h 0 { ( nurl_udp_close h ) ( __net_drop it idx ) } {}
+        ^ T } {}
+    ? ( __feq field `udp_err_kind` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 8 ( nurl_udp_err_kind h ) ) ^ T } {}
+    ? ( __feq field `udp_peer_addr` ) {
+        : i cap ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 0 ( __net_put_str it bp cap ( nurl_udp_peer_addr h ) ) ) ^ T } {}
+    ? ( __feq field `udp_local_addr` ) {
+        : i cap ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 0 ( __net_put_owned it bp cap ( nurl_udp_local_addr h ) ) ) ^ T } {}
+    ? ( __feq field `udp_set_timeout` ) {
+        : i ms ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ? != h 0 { ( nurl_udp_set_timeout h ms ) } {}
+        ^ T } {}
+    ? ( __feq field `udp_set_nonblock` ) {
+        : i on ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ? != h 0 { ( nurl_udp_set_nonblock h on ) } {}
+        ^ T } {}
+    ? ( __feq field `udp_family` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_family h ) ) ^ T } {}
+    ? ( __feq field `udp_get_fd` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_get_fd h ) ) ^ T } {}
+    ? ( __feq field `udp_set_broadcast` ) {
+        : i on ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_set_broadcast h on ) ) ^ T } {}
+    ? ( __feq field `udp_join_group` ) {
+        : i ip ( __pop it ) : i gp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_join_group h ( __net_cstr it gp ) ( __net_cstr it ip ) ) ) ^ T } {}
+    ? ( __feq field `udp_leave_group` ) {
+        : i ip ( __pop it ) : i gp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_leave_group h ( __net_cstr it gp ) ( __net_cstr it ip ) ) ) ^ T } {}
+    ? ( __feq field `udp_set_multicast_ttl` ) {
+        : i ttl ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_set_multicast_ttl h ttl ) ) ^ T } {}
+    ? ( __feq field `udp_set_multicast_loop` ) {
+        : i on ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_set_multicast_loop h on ) ) ^ T } {}
+    // ── DNS ──
+    ? ( __feq field `dns_resolve` ) {
+        : i cap ( __pop it ) : i bp ( __pop it ) : i hp ( __pop it )
+        ( __push it ( __net_put_owned it bp cap ( nurl_dns_resolve ( __net_cstr it hp ) ) ) ) ^ T } {}
+    ? ( __feq field `dns_resolve_port` ) {
+        : i cap ( __pop it ) : i bp ( __pop it ) : i port ( __pop it ) : i hp ( __pop it )
+        ( __push it ( __net_put_owned it bp cap ( nurl_dns_resolve_port ( __net_cstr it hp ) port ) ) ) ^ T } {}
+    ? ( __feq field `dns_reverse` ) {
+        : i cap ( __pop it ) : i bp ( __pop it ) : i ip ( __pop it )
+        ( __push it ( __net_put_owned it bp cap ( nurl_dns_reverse ( __net_cstr it ip ) ) ) ) ^ T } {}
+    ^ F
+}
+
 @ __wasi_dispatch * Interp it ( Vec u ) mod ( Vec u ) field → v {
+    ? ( __feq mod `nurl_net` ) {
+        ? ! . it net_ok { ( __trap it `nurl_net host imports are disabled (pass --allow-net to enable)` ) ^ v } {}
+        ? ( __net_dispatch it field ) { ^ v } {}
+        ( __trap_named it `unsupported nurl_net import: ` field ) ^ v
+    } {}
     ? ( __feq mod `env` ) {
         ? ! . it gpu_ok { ( __trap it `env/GPU host imports are disabled (pass --allow-gpu to enable)` ) ^ v } {}
         ? ( __gpu_dispatch it field ) { ^ v } {}

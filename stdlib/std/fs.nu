@@ -686,13 +686,26 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 }
 
 // Create `path` and every missing parent directory. An existing leaf or
-// parent is not an error. The first component that genuinely fails
-// (permission denied, a file in the way) aborts and surfaces that error.
+// parent is not an error.
+//
+// Only the FINAL component decides the verdict: an intermediate prefix
+// that can neither be created nor opened is not fatal on its own,
+// because a genuinely missing parent makes the next step fail anyway.
+// That is what makes this work under a capability filesystem — on WASI
+// an absolute path's outer prefixes ("/", "/tmp") live outside every
+// preopen, so mkdir answers ENOENT and opendir cannot prove they exist,
+// even though the leaf's parent is perfectly reachable. Aborting at the
+// first refusal meant `dir_create_all` could not create ANY absolute
+// path on wasm. The first intermediate error is kept and reported if the
+// final step fails too, since it is the one closer to the real cause
+// (an EACCES ancestor beats the leaf's derived ENOENT).
 @ dir_create_all s path → !v IoErr {
     : i n ( nurl_str_len path )
     ? == n 0 { ^ @ !v IoErr { F @ IoErr { NotFound } } } {}
     : *u pb # *u path
     : String prefix ( string_new )
+    : ~ b have_first F
+    : ~ IoErr first @ IoErr { Other }
     : ~ i idx 0
     ~ < idx n {
         : i c & # i . pb idx 255
@@ -702,10 +715,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
             ? > ( string_len prefix ) 0 {
                 ?? ( __dir_create_step ( string_data prefix ) ) {
                     T → {}
-                    F e → {
-                        ( string_free prefix )
-                        ^ @ !v IoErr { F e }
-                    }
+                    F e → { ? have_first {} { = first e = have_first T } }
                 }
             } {}
         } {}
@@ -715,7 +725,10 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     // Final component (the path itself, with no trailing separator).
     : !v IoErr last ( __dir_create_step ( string_data prefix ) )
     ( string_free prefix )
-    ^ last
+    ?? last {
+        T → { ^ @ !v IoErr { T 0 } }
+        F e → { ^ @ !v IoErr { F ? have_first first e } }
+    }
 }
 
 // unlink a non-directory entry, mapping errno to IoErr.
