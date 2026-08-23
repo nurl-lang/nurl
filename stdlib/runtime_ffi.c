@@ -2686,7 +2686,7 @@ extern int32_t __nurl_wasi_thread_spawn(void *start_arg);
 
 /* 1 MiB per thread, matching the default the main stack gets. Keep the
  * field order: the host reads stack_top at offset 8. */
-#define NURL_WASM_TSTACK (1024 * 1024)
+#define NURL_WASM_TSTACK (8 * 1024 * 1024)
 
 typedef struct NurlWasmThread {
     int32_t          fn;          /* 0: void *(*)(void *) */
@@ -2882,7 +2882,15 @@ static _Atomic int32_t nurl__wf_gen  = 0;   /* bumped when one finishes */
 static void nurl__wf_body(void *arg) {
     NurlWasmFiber *f = (NurlWasmFiber*)arg;
     f->fn(f->env);
-    if (f->own_env && f->env) free(f->env);
+    /* nurl_free, NOT free: an owned closure environment came from
+     * nurl_alloc, which also records the pointer in the panic-unwind
+     * journal and recycles the block through the per-thread size-class
+     * caches. Releasing it with libc's free leaves a dangling journal
+     * entry and hands a block back to the wrong allocator — which is
+     * how a relay connection fiber ended up freeing a wild pointer,
+     * intermittently, depending on whether the block had come from a
+     * cache. The M:N backend frees it exactly this way. */
+    if (f->own_env && f->env) { nurl_free((char*)f->env); f->env = NULL; }
     atomic_store(&f->done, 1);
     nurl__wake(&f->done, -1);
     atomic_fetch_sub(&nurl__wf_live, 1);
