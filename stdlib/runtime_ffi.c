@@ -2874,13 +2874,33 @@ typedef struct NurlWasmFiber {
     _Atomic int32_t   done;
     _Atomic int32_t   parked;    /* futex word for park/unpark */
     void             *tid;       /* pthread_t block, when joinable */
+    struct NurlWfGroup *group;   /* the runtime_run that waits for it */
 } NurlWasmFiber;
 
-static _Atomic int32_t nurl__wf_live = 0;   /* fibers still running */
-static _Atomic int32_t nurl__wf_gen  = 0;   /* bumped when one finishes */
+/* Fibers belong to the thread that started them, exactly as the M:N
+ * runtime's scheduler is per worker. One PROCESS-wide counter made
+ * `runtime_run` wait for every fiber anywhere — so a worker thread that
+ * ran the runtime blocked on the relay's accept loop, a fiber that by
+ * design never ends. Every thread parked, 1660 bytes sat unread, and the
+ * node wedged. A group is created by the first spawn on a root thread
+ * and inherited by the fibers it starts. */
+typedef struct NurlWfGroup {
+    _Atomic int32_t live;
+    _Atomic int32_t gen;
+} NurlWfGroup;
+
+static __thread NurlWfGroup *nurl__wf_group = NULL;
+
+static NurlWfGroup *nurl__wf_group_get(void) {
+    if (!nurl__wf_group) {
+        nurl__wf_group = (NurlWfGroup*)calloc(1, sizeof *nurl__wf_group);
+    }
+    return nurl__wf_group;
+}
 
 static void nurl__wf_body(void *arg) {
     NurlWasmFiber *f = (NurlWasmFiber*)arg;
+    nurl__wf_group = f->group;   /* inherit, so nested spawns count here */
     f->fn(f->env);
     /* nurl_free, NOT free: an owned closure environment came from
      * nurl_alloc, which also records the pointer in the panic-unwind
@@ -2893,9 +2913,14 @@ static void nurl__wf_body(void *arg) {
     if (f->own_env && f->env) { nurl_free((char*)f->env); f->env = NULL; }
     atomic_store(&f->done, 1);
     nurl__wake(&f->done, -1);
-    atomic_fetch_sub(&nurl__wf_live, 1);
-    atomic_fetch_add(&nurl__wf_gen, 1);
-    nurl__wake(&nurl__wf_gen, -1);
+    {
+        NurlWfGroup *g = f->group;
+        if (g) {
+            atomic_fetch_sub(&g->live, 1);
+            atomic_fetch_add(&g->gen, 1);
+            nurl__wake(&g->gen, -1);
+        }
+    }
     if (!f->joinable) {
         if (f->tid) { free(f->tid); }
         free(f);
@@ -2913,9 +2938,11 @@ static long long nurl__wf_spawn(void *fn, void *env, int own_env, int joinable) 
     void **tid = (void**)calloc(1, sizeof(void*));
     if (!tid) { free(f); return 0; }
     f->tid = tid;
-    atomic_fetch_add(&nurl__wf_live, 1);
+    NurlWfGroup *g = nurl__wf_group_get();
+    f->group = g;
+    if (g) atomic_fetch_add(&g->live, 1);
     if (pthread_create(tid, NULL, (void*)nurl__wf_body, f) != 0) {
-        atomic_fetch_sub(&nurl__wf_live, 1);
+        if (g) atomic_fetch_sub(&g->live, 1);
         free(tid); free(f);
         return 0;
     }
@@ -2958,11 +2985,12 @@ void nurl_runtime_init(long long worker_count) { (void)worker_count; }
  * M:N runtime has, and the reason a relay's `runtime_run` never returns:
  * its accept loop is a fiber that runs forever. */
 void nurl_runtime_run(void) {
+    NurlWfGroup *g = nurl__wf_group;   /* no spawn here → nothing to wait for */
+    if (!g) return;
     for (;;) {
-        int32_t live = atomic_load(&nurl__wf_live);
-        if (live <= 0) return;
-        int32_t gen = atomic_load(&nurl__wf_gen);
-        nurl__wait32(&nurl__wf_gen, gen);
+        if (atomic_load(&g->live) <= 0) return;
+        int32_t gen = atomic_load(&g->gen);
+        nurl__wait32(&g->gen, gen);
     }
 }
 

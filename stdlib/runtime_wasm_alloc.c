@@ -223,3 +223,37 @@ int posix_memalign(void **out, size_t align, size_t n) {
     *out = p;
     return 0;
 }
+
+/* ── the stdio lock ───────────────────────────────────────────────
+ *
+ * wasm32's libc is built single-threaded, so its stdio locking is
+ * compiled out: `flockfile` is a no-op and two threads writing the same
+ * FILE tear each other's buffer. The visible symptom is interleaved
+ * output mid-line; the invisible one is a corrupted FILE buffer, and a
+ * FILE buffer is a heap block — which is how a print race turns into a
+ * wild pointer inside `free` somewhere else entirely.
+ *
+ * The runtime's own print paths take this lock (runtime_core.c), which
+ * covers everything a NURL program writes. It lives here so it is
+ * defined before the rest of the runtime is included.
+ */
+static _Atomic int32_t nurl_wa_iolock = 0;
+
+void nurl__io_acquire(void) {
+    int32_t expected = 0;
+    if (atomic_compare_exchange_strong(&nurl_wa_iolock, &expected, 1)) return;
+    do {
+        expected = 1;
+        if (atomic_load(&nurl_wa_iolock) == 2 ||
+            atomic_compare_exchange_strong(&nurl_wa_iolock, &expected, 2))
+            __builtin_wasm_memory_atomic_wait32((int32_t*)&nurl_wa_iolock, 2, -1);
+        expected = 0;
+    } while (!atomic_compare_exchange_strong(&nurl_wa_iolock, &expected, 2));
+}
+
+void nurl__io_release(void) {
+    if (atomic_fetch_sub(&nurl_wa_iolock, 1) != 1) {
+        atomic_store(&nurl_wa_iolock, 0);
+        __builtin_wasm_memory_atomic_notify((int32_t*)&nurl_wa_iolock, 1);
+    }
+}
