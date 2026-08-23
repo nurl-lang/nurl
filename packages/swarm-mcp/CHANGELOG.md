@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.26.0
+
+**The pins follow the runtime onto a wasm that has threads and sockets.**
+`wasmtime ^0.14.0` and `wasmbuilder ^0.2.0` are what the v0.50.0 toolchain
+released: a module can now declare a shared memory, spawn threads through
+`wasi.thread-spawn` and open real sockets through the `nurl_net` host
+imports (off by default, `--allow-net` enables them). For a worker running
+CPU wasm chunks in-process that is not a new interface — the engine is the
+same `interp_capture` call — but it is a strictly larger set of kernels that
+can run: one that sleeps, one that uses `errno`, one built `--threads`, one
+that talks to the network. The line these pins left behind could not run any
+of them.
+
+It also carries the fix underneath all of that: the interpreter's fast path
+for stores narrower than eight bytes was a 64-bit read-modify-write, which
+is exact on one thread and loses a neighbour's byte on a shared memory. A
+worker never hit it — it had no second thread — but a swarm-mcp compiled to
+one wasm module and run as relay + workers + MCP inside a single instance
+did, as a wild pointer in the guest's own `free`.
+
+No source change here beyond the pins and the version: the caret is at the
+minor, so this is the release that lets an installed swarm-mcp resolve them
+at all.
+
 ## 0.25.1
 
 **0.25.0 shipped announcing itself as 0.24.0.** `sm_version` is a
