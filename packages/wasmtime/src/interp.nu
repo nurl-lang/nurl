@@ -243,7 +243,7 @@ $ `module.nu`
 // its control stack, and the instruction cursor [pos, end) — pos/end are
 // *record indices* into the function's predecoded instruction array, not byte
 // positions; `pins` borrows the *PFunc owned by it.pfuncs.
-: Frame { i fidx ( Vec i ) regs i pos i end i code_start s pins i ret_dst }
+: Frame { i fidx ( Vec i ) regs i pos i end i code_start s pins i ret_dst s prev i depth }
 
 // A predecoded function body in REGISTER FORM. wasm validation guarantees a
 // static stack height at every instruction, so the value at stack position h
@@ -272,7 +272,7 @@ $ `module.nu`
 // and re-deriving them per call means walking funcs → typeidx → types and
 // two `vec_len`s inside `module_func_type` — pure repeat work on a value
 // that is fixed for the life of the module.
-: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots i nparams i nresults i code_start i sbase ( Vec i ) kv ( Vec s ) pool }
+: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots i nparams i nresults i code_start i sbase ( Vec i ) kv s free }
 
 @ __page → i { ^ 65536 }
 
@@ -1079,10 +1079,10 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     // caller and stack slots are written before they are read (register
     // form guarantees it), so only [nparams, nlocals) needs clearing —
     // wasm requires declared locals to read as zero.
-    : i pooln ( vec_len [s] . pfc pool )
-    ? > pooln 0 {
-        : s rf ?? ( vec_get [s] . pfc pool - pooln 1 ) { T x → x F → # s 0 }
-        ( vec_pop [s] . pfc pool )
+    : s rf . pfc free
+    ? != # i rf 0 {
+        : *Frame rf9 # *Frame rf
+        = . pfc free . rf9 prev
         ? != # i rf 0 {
             : *Frame rfr # *Frame rf
             : *i rb ( vec_data [i] . rfr regs )
@@ -1142,23 +1142,21 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ? == # i pp 0 { ^ v } {}
     : *Frame fr # *Frame pp
     : *PFunc pf # *PFunc . fr pins
-    ( vec_push [s] . pf pool pp )
+    = . fr prev . pf free
+    = . pf free pp
 }
 
 @ __pf_free s pp → v {
     ? == # i pp 0 { ^ v } {}
     : *PFunc pf # *PFunc pp
-    : i pn ( vec_len [s] . pf pool )
-    : ~ i pk 0
-    ~ < pk pn {
-        ?? ( vec_get [s] . pf pool pk ) { T fp → ? != # i fp 0 {
-                : *Frame fr # *Frame fp
-                ( vec_free [i] . fr regs )
-                ( nurl_free fp )
-            } {} F → {} }
-        = pk + pk 1
+    : ~ s fp . pf free
+    ~ != # i fp 0 {
+        : *Frame fr # *Frame fp
+        : s nx . fr prev
+        ( vec_free [i] . fr regs )
+        ( nurl_free fp )
+        = fp nx
     }
-    ( vec_free [s] . pf pool )
     ( vec_free [i] . pf code )
     ( vec_free [i] . pf aux )
     ( vec_free [i] . pf kv )
@@ -2394,7 +2392,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         = . pf nparams nparams
         = . pf nresults nresults
         = . pf code_start . f code_start
-        = . pf pool ( vec_new [s] )
+        = . pf free # s 0
         ^ # s pf
     } {}
     = . pf count / ( vec_len [i] . pf code ) 6
@@ -2402,7 +2400,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     = . pf nparams nparams
     = . pf nresults nresults
     = . pf code_start . f code_start
-    = . pf pool ( vec_new [s] )
+    = . pf free # s 0
     ^ # s pf
 }
 // Get-or-build the PFunc for defined function `fidx`.
@@ -2424,13 +2422,11 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 
 // On trap: append a wasm backtrace (innermost first) to the trap message,
 // naming frames from the module's name section when present.
-@ __trap_backtrace * Interp it * Module m ( Vec s ) frames → v {
+@ __trap_backtrace * Interp it * Module m s top → v {
     : ( Vec u ) msg . it trapmsg
-    : i n ( vec_len [s] frames )
-    : ~ i k - n 1
+    : ~ s pp top
     : ~ i shown 0
-    ~ & >= k 0 < shown 16 {
-        : s pp ?? ( vec_get [s] frames k ) { T x → x F → # s 0 }
+    ~ & != # i pp 0 < shown 16 {
         ? != # i pp 0 {
             : *Frame fr # *Frame pp
             ( __msg_push_str msg `\n  at ` )
@@ -2459,9 +2455,10 @@ inline @ __mem_store * Interp it i ea i n i val → v {
             ( __msg_push_str msg `)` )
         } {}
         = shown + shown 1
-        = k - k 1
+        : *Frame pfr # *Frame pp
+        = pp . pfr prev
     }
-    ? >= k 0 { ( __msg_push_str msg `\n  …` ) } {}
+    ? != # i pp 0 { ( __msg_push_str msg `\n  …` ) } {}
     = . it trapmsg msg
 }
 
@@ -2501,9 +2498,16 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     : *Module m # *Module . it mod
     // Imported functions occupy the low indices → dispatch to the host (WASI).
     ? < fidx . m num_import_funcs { ( __call_import it m fidx ) ^ v } {}
-    : ( Vec s ) frames ( vec_new [s] )
+    // The activation stack is the frames themselves: `prev` links each to
+    // its caller (and doubles as the recycle freelist link while parked),
+    // `depth` bounds recursion — no vector, no counter register, and a
+    // call or return is a handful of raw loads and stores.
     : s fr0 ( __frame_new it m fidx -1 )
-    ? != # i fr0 0 { ( vec_push [s] frames fr0 ) } {}
+    ? != # i fr0 0 {
+        : *Frame f00 # *Frame fr0
+        = . f00 prev # s 0
+        = . f00 depth 1
+    } {}
     // Register-form driver. `pc` is a WORD offset into the frame's record
     // array (6 words per record), so fetching a record is four loads off one
     // index and stepping is one add — branch targets are stored pre-scaled by
@@ -2528,8 +2532,8 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     // 1 once a call has moved the frame stack: the inner loop then ended at
     // a call, not at the end of the body, so there is nothing to return.
     : ~ i tail 0
-    ~ & > ( vec_len [s] frames ) 0 == 0 . it halt {
-        = tp ?? ( vec_get [s] frames - ( vec_len [s] frames ) 1 ) { T x → x F → # s 0 }
+    = tp fr0
+    ~ & != # i tp 0 == 0 . it halt {
         : *Frame fr # *Frame tp
         : *PFunc npf # *PFunc . fr pins
         = pbase ( vec_data [i] . npf code )
@@ -2610,7 +2614,8 @@ inline @ __mem_store * Interp it i ea i n i val → v {
                                                                                                                                                                                                                     ? == op 50 {  // __R_CALL
                                                                                                                                                                                                                         = . fr pos pc
                                                                                                                                                                                                                         = fuel - fuel 1
-                                                                                                                                                                                                                        ( __rdo_call it m frames ra rb rbase )
+                                                                                                                                                                                                                        : s nf9 ( __rdo_call it m tp ra rb rbase )
+                                                                                                                                                                                                                        ? != # i nf9 0 { = tp nf9 } {}
                                                                                                                                                                                                                         = tail 1
                                                                                                                                                                                                                         = pc pend
                                                                                                                                                                                                                         ? != 0 . it halt { = . fr pos r0 } {}
@@ -2789,7 +2794,8 @@ inline @ __mem_store * Interp it i ea i n i val → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) = . fr pos r0 = pc pend } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         = . fr pos pc
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         = fuel - fuel 1
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ( __rdo_call it m frames cfi rb rbase )
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        : s nf9 ( __rdo_call it m tp cfi rb rbase )
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? != # i nf9 0 { = tp nf9 } {}
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         = tail 1
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         = pc pend
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ? != 0 . it halt { = . fr pos r0 } {}
@@ -2897,13 +2903,12 @@ inline @ __mem_store * Interp it i ea i n i val → v {
             : i lloc . dpf sbase
             : i nres . dpf nresults
             : i rdst . fr ret_dst
-            ( vec_pop [s] frames )
+            : s cp2 . fr prev
             ? < rdst 0 {
                 // outermost frame: results leave on the value stack
                 : ~ i rk 0
                 ~ < rk nres { ( __push it . rbase + lloc rk ) = rk + rk 1 }
             } {
-                : s cp2 ?? ( vec_get [s] frames - ( vec_len [s] frames ) 1 ) { T x → x F → # s 0 }
                 ? != # i cp2 0 {
                     : *Frame cfr # *Frame cp2
                     : *i crb ( vec_data [i] . cfr regs )
@@ -2912,13 +2917,17 @@ inline @ __mem_store * Interp it i ea i n i val → v {
                 } {}
             }
             ( __frame_recycle tp )
+            = tp cp2
         } {}
     }
-    ? ( interp_trapped it ) { ( __trap_backtrace it m frames ) } {}
-    : i fn ( vec_len [s] frames )
-    : ~ i fi 0
-    ~ < fi fn { ?? ( vec_get [s] frames fi ) { T pp → ( __frame_free pp ) F → {} } = fi + fi 1 }
-    ( vec_free [s] frames )
+    ? ( interp_trapped it ) { ( __trap_backtrace it m tp ) } {}
+    : ~ s cw tp
+    ~ != # i cw 0 {
+        : *Frame cf # *Frame cw
+        : s nx . cf prev
+        ( __frame_free cw )
+        = cw nx
+    }
     = . it fuel ? < fuel0 0 -1 ? < fuel 0 0 fuel
 }
 
@@ -2926,7 +2935,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 // the first argument (and the destination of the results). Imports bridge
 // through the value stack; defined functions get a fresh frame with the
 // arguments copied straight into their first locals.
-@ __rdo_call * Interp it * Module m ( Vec s ) frames i callee i argbase * i caller_rbase → v {
+@ __rdo_call * Interp it * Module m s caller i callee i argbase * i caller_rbase → s {
     ? < callee . m num_import_funcs {
         : s wt ( module_func_type m callee )
         : ~ i np 0
@@ -2939,18 +2948,21 @@ inline @ __mem_store * Interp it i ea i n i val → v {
             : ~ i rk nr
             ~ > rk 0 { = rk - rk 1 = . caller_rbase + argbase rk ( __pop it ) }
         } {}
-        ^ v
+        ^ # s 0
     } {}
-    ? >= ( vec_len [s] frames ) . it max_depth { ( __trap it `call stack exhausted` ) ^ v } {}
+    : *Frame cfr9 # *Frame caller
+    ? >= . cfr9 depth . it max_depth { ( __trap it `call stack exhausted` ) ^ # s 0 } {}
     : s nf ( __frame_new it m callee argbase )
-    ? == # i nf 0 { ^ v } {}
+    ? == # i nf 0 { ^ # s 0 } {}
     : *Frame nfr # *Frame nf
     : *i nrb ( vec_data [i] . nfr regs )
     : *PFunc npf # *PFunc . nfr pins
     : i np . npf nparams
     : ~ i ak 0
     ~ < ak np { = . nrb ak . caller_rbase + argbase ak = ak + ak 1 }
-    ( vec_push [s] frames nf )
+    = . nfr prev caller
+    = . nfr depth + . cfr9 depth 1
+    ^ nf
 }
 
 // The integer arithmetic that traps: i32 div/rem (0x6d..0x70) and i64
