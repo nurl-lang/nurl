@@ -206,6 +206,9 @@ $ `module.nu`
     i fuel  // remaining budget in predecoded records (-1 = unlimited)
     b gpu_ok  // env/CUDA host imports enabled (opt-in; default off)
     b net_ok  // nurl_net host imports (real sockets) enabled (opt-in; default off)
+    // Shared memory changes what a narrow store is allowed to touch: see
+    // __mem_store. Cached here because every store reads it.
+    b shared_mem
     // Guest socket handle → host handle. The guest never sees a host
     // pointer: it gets an index into this table, so a forged handle can
     // only miss, never become a host address the runtime dereferences.
@@ -308,6 +311,7 @@ $ `module.nu`
     = . it fuel -1
     = . it gpu_ok F
     = . it net_ok F
+    = . it shared_mem ? & == . m has_mem 1 != . m mem_shared 0 T F
     = . it nethandles ( vec_new [i] )
     = . it netkinds ( vec_new [i] )
     ( vec_push [i] . it nethandles 0 )
@@ -577,6 +581,7 @@ $ `module.nu`
     = . it fuel -1
     = . it gpu_ok . ho gpu_ok
     = . it net_ok . ho net_ok
+    = . it shared_mem . ho shared_mem
     = . it nethandles ( vec_new [i] )
     = . it netkinds ( vec_new [i] )
     = . it cap . ho cap
@@ -970,12 +975,31 @@ inline @ __mem_load * Interp it i ea i n i signed → i {
     ^ v
 }
 
+// Store the low n bytes one byte at a time. On a SHARED memory this is
+// the only correct way to write fewer than eight bytes: the fast path
+// below reads the containing 64-bit word, patches its own bytes and
+// writes the word back, and two threads writing NEIGHBOURING bytes of one
+// word then lose one of the two updates. wasm says those bytes are
+// independent locations, and guests rely on it — two malloc headers, two
+// struct fields, a length beside a flag. The symptom is a heap that grows
+// a wrong size field and hands out a wild pointer somewhere else.
+@ __mem_store_bytes * Interp it i ea i n i val → v {
+    : ~ i k 0
+    ~ < k n {
+        ( vec_set [u] . it mem + ea k # u & ( __lshr64 val * 8 k ) 255 )
+        = k + k 1
+    }
+}
+
 // Write the low n bytes of val little-endian to mem[ea].
 inline @ __mem_store * Interp it i ea i n i val → v {
     ? | < ea 0 > + ea n . it mem_bytes {
         ( __trap_oob it `memory store out of bounds` ea n )
         ^ v
     } {}
+    // A shared memory takes the byte-wise path for anything narrower than
+    // the word it would otherwise rewrite.
+    ? & . it shared_mem < n 8 { ( __mem_store_bytes it ea n val ) ^ v } {}
     : s base # s ( vec_data [u] . it mem )
     : i lo & ea 7
     ? <= + lo n 8 {
@@ -988,6 +1012,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         ( nurl_poke base wi | cleared << & val mask sh )
         ^ v
     } {}
+    ? . it shared_mem { ( __mem_store_bytes it ea n val ) ^ v } {}
     ( __mem_store_split base ea n val )
 }
 
