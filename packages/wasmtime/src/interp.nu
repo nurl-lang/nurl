@@ -28,6 +28,21 @@ $ `module.nu`
 // OS entropy (runtime helper; getrandom/urandom under the hood).
 & `c` @ nurl_rand_fill *u buf i n → i
 
+// The one lock behind the 0xfe atomics (see __atom_init). Declared here
+// rather than taken from std/thread.nu because the handles live in file
+// globals, and a NURL global holds a pointer as an integer.
+& `c` @ pthread_mutex_init *u m *u attr → i32
+
+& `c` @ pthread_mutex_lock *u m → i32
+
+& `c` @ pthread_mutex_unlock *u m → i32
+
+& `c` @ pthread_cond_init *u c *u attr → i32
+
+& `c` @ pthread_cond_wait *u c *u m → i32
+
+& `c` @ pthread_cond_broadcast *u c → i32
+
 // unlink(2): path_unlink_file must NOT remove directories (remove(3) would).
 & `c` @ unlink s path → i32
 
@@ -164,6 +179,13 @@ $ `module.nu`
     ( Vec i ) vs  // value stack
     ( Vec u ) mem  // linear memory (bytes)
     i mem_pages  // current size in 64 KiB pages
+    // Bytes the guest may address = mem_pages * 64 KiB. Usually the whole
+    // buffer, but a SHARED memory reserves its declared maximum up front —
+    // growth must never move the buffer, because another thread is reading
+    // it through the same pointer — so there the buffer is larger than
+    // what the guest may touch, and every bounds check reads this instead
+    // of the Vec's length.
+    i mem_bytes
     ( Vec i ) globals  // mutable global values
     ( Vec i ) table  // runtime funcref table (mutable via table.set/grow/…)
     ( Vec i ) data_dropped  // 1 per data segment once dropped / active
@@ -244,8 +266,14 @@ $ `module.nu`
     // 16.8 million bounds-checked pushes for the 257-page minimum a
     // wasi command module declares — 78 % of the wall clock of a run
     // whose guest printed one line and exited.
-    = . it mem ( vec_zeroed [u] ? == . m has_mem 1 * . m mem_min ( __page ) 0 )
-    = . it mem_pages ? == . m has_mem 1 . m mem_min 0
+    // A shared memory is allocated at its declared maximum immediately: the
+    // threads proposal lets several threads hold the same buffer, so a
+    // reallocating grow would pull it out from under them.
+    : i __mpages ? == . m has_mem 1 . m mem_min 0
+    : i __mreserve ? & == . m has_mem 1 != . m mem_shared 0 . m mem_max __mpages
+    = . it mem ( vec_zeroed [u] * __mreserve ( __page ) )
+    = . it mem_pages __mpages
+    = . it mem_bytes * __mpages ( __page )
     = . it globals ( vec_new [i] )
     = . it argv ( vec_new [s] )
     = . it envp ( vec_new [s] )
@@ -309,7 +337,7 @@ $ `module.nu`
         // this replaces silently dropped the overhanging bytes, and for a
         // negative offset it wrote the segment's tail at the wrong
         // address instead of rejecting the module.
-        : i cap ( vec_len [u] . it mem )
+        : i cap . it mem_bytes
         : i nd ( vec_len [s] . m datas )
         : ~ i di 0
         ~ < di nd {
@@ -745,7 +773,7 @@ $ `module.nu`
 // it was 9.5 % off the benchmark corpus, 24 % off nbody and matmul, 19 %
 // off sieve.
 inline @ __mem_load * Interp it i ea i n i signed → i {
-    ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
+    ? | < ea 0 > + ea n . it mem_bytes {
         ( __trap it `memory load out of bounds` ) ^ 0
     } {}
     // The memory Vec is always a whole number of 64 KiB pages, so any
@@ -770,7 +798,7 @@ inline @ __mem_load * Interp it i ea i n i signed → i {
 
 // Write the low n bytes of val little-endian to mem[ea].
 inline @ __mem_store * Interp it i ea i n i val → v {
-    ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
+    ? | < ea 0 > + ea n . it mem_bytes {
         ( __trap it `memory store out of bounds` ) ^ v
     } {}
     : s base # s ( vec_data [u] . it mem )
@@ -798,10 +826,19 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     : ~ i limit 65536
     ? & > . m mem_max 0 < . m mem_max limit { = limit . m mem_max } {}
     ? | < delta 0 > + old delta limit { ^ -1 } {}
+    // A shared memory already owns its maximum: growing is only raising
+    // the addressable bound, never a realloc — another thread may be
+    // holding the buffer's base pointer right now.
+    ? != . m mem_shared 0 {
+        = . it mem_pages + old delta
+        = . it mem_bytes * . it mem_pages ( __page )
+        ^ old
+    } {}
     // One resize, zero-filling the new tail in a single memset, instead of
     // a push per byte: growing by a single page was 65 536 pushes.
     : b _ok ( vec_resize_zeroed [u] . it mem * + old delta ( __page ) )
     = . it mem_pages + old delta
+    = . it mem_bytes * . it mem_pages ( __page )
     ^ old
 }
 
@@ -943,7 +980,9 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 @ __R_CALLIND → i { ^ 170 }  // A=typeidx B=argbase C=idxslot
 @ __R_UNREACH → i { ^ 172 }
 
-@ __R_TRAPUN → i { ^ 173 }  // unsupported opcode (0xfd/0xfe/unknown)
+@ __R_TRAPUN → i { ^ 173 }  // unsupported opcode (0xfd/unknown)
+
+@ __R_ATOM → i { ^ 174 }  // vs bridge: A=sub B=memarg offset C=srcbase D=pops<<1|push
 @ __R_FCB → i { ^ 171 }  // vs bridge: A=sub B=idx-imm C=srcbase D=pops<<1|push
 @ __R_IFZ → i { ^ 48 }  // A=target B=cond — jump when cond == 0
 @ __R_BRIFC → i { ^ 45 }  // A=target B=lhs C=rhs D=compare op — jump when it holds
@@ -1737,10 +1776,25 @@ inline @ __mem_store * Interp it i ea i n i val → v {
                                                                                                                                                             ? > h maxh { = maxh h } {}
                                                                                                                                                         } {}
                                                                                                                                                     } {
-                                                                                                                                                        // unsupported (0xfd/0xfe and anything unknown): keep alignment,
-                                                                                                                                                        // trap if ever executed
-                                                                                                                                                        ? | == op 253 == op 254 { ( __skip_imm c op ) } {}
-                                                                                                                                                        ? != 0 live { ( __vflush pf vm SB 0 live byte ) ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) } {}
+                                                                                                                                                        ? == op 254 {  // 0xfe family (atomics): vs bridge, like 0xfc
+                                                                                                                                                            : i asub ( wc_uleb c )
+                                                                                                                                                            : ~ i aoff 0
+                                                                                                                                                            ? == asub 3 { ( wc_u8 c ) } { ( wc_uleb c ) = aoff ( wc_uleb c ) }
+                                                                                                                                                            ? != 0 live {
+                                                                                                                                                                : i shape ( __atom_shape asub )
+                                                                                                                                                                : i pops >> shape 1
+                                                                                                                                                                : i push & shape 1
+                                                                                                                                                                ( __vflush pf vm SB h live byte )
+                                                                                                                                                                ( __pf_emit . pf code ( __R_ATOM ) asub aoff + SB - h pops | << pops 1 push byte )
+                                                                                                                                                                = h + - h pops push
+                                                                                                                                                                ? > h maxh { = maxh h } {}
+                                                                                                                                                            } {}
+                                                                                                                                                        } {
+                                                                                                                                                            // unsupported (0xfd and anything unknown): keep alignment,
+                                                                                                                                                            // trap if ever executed
+                                                                                                                                                            ? == op 253 { ( __skip_imm c op ) } {}
+                                                                                                                                                            ? != 0 live { ( __vflush pf vm SB 0 live byte ) ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) } {}
+                                                                                                                                                        }
                                                                                                                                                     } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
         // Arm the fold for the next instruction. Every arm above that is
         // straight-line emitted exactly one record when live, and it is the
@@ -2174,10 +2228,19 @@ inline @ __mem_store * Interp it i ea i n i val → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ? & != 0 & dd 1 ! ( interp_trapped it ) { = . rbase rc ( __pop it ) } {}
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ? != 0 . it halt { = . fr pos r0 = pc pend } {}
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             } {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 172 { ( __trap it `unreachable` ) = . fr pos r0 = pc pend } {  // __R_UNREACH
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 173 { ( __trap it `unsupported opcode` ) = . fr pos r0 = pc pend } {  // __R_TRAPUN
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ( __trap it `unsupported opcode` ) = . fr pos r0 = pc pend
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 174 {  // __R_ATOM
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    : i dd . pbase + r0 4
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    : i pops >> dd 1
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    : ~ i bk 0
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ~ < bk pops { ( __push it . rbase + rc bk ) = bk + bk 1 }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ( __exec_atomic it ra rb )
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? & != 0 & dd 1 ! ( interp_trapped it ) { = . rbase rc ( __pop it ) } {}
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? != 0 . it halt { = . fr pos r0 = pc pend } {}
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 172 { ( __trap it `unreachable` ) = . fr pos r0 = pc pend } {  // __R_UNREACH
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 173 { ( __trap it `unsupported opcode` ) = . fr pos r0 = pc pend } {  // __R_TRAPUN
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ( __trap it `unsupported opcode` ) = . fr pos r0 = pc pend
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                     } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
                                                                                                                                                                                                                                                                                                                                     } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
@@ -2487,7 +2550,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ? <= len 0 { ^ v } {}
     // A write cannot cover more bytes than linear memory holds; a larger length
     // is a hostile iovec — trap rather than pre-allocate gigabytes for it.
-    ? > len ( vec_len [u] . it mem ) { ( __trap it `fd_write length exceeds memory` ) ^ v } {}
+    ? > len . it mem_bytes { ( __trap it `fd_write length exceeds memory` ) ^ v } {}
     : ( Vec u ) buf ( vec_with_cap [u] len )
     : ~ i k 0
     ~ < k len { ( vec_push [u] buf # u & ( __mem_load it + ptr k 1 0 ) 255 ) = k + k 1 }
@@ -2530,7 +2593,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     // The iovec array cannot hold more entries than linear memory has bytes;
     // clamp so a bogus iovs_len can neither loop unboundedly nor over-read. The
     // trap guard stops the loop the moment an iovec header is out of bounds.
-    : i maxio ( vec_len [u] . it mem )
+    : i maxio . it mem_bytes
     : ~ i total 0
     : ~ i i 0
     ~ & & ! ( interp_trapped it ) < i iovs_len <= i maxio {
@@ -2557,7 +2620,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     // the end still trap in __mem_load, so this only bounds the up-front cap.
     : ~ i n len
     ? < n 0 { = n 0 } {}
-    ? > n ( vec_len [u] . it mem ) { = n ( vec_len [u] . it mem ) } {}
+    ? > n . it mem_bytes { = n . it mem_bytes } {}
     : ( Vec u ) b ( vec_with_cap [u] ? > n 0 n 1 )
     : ~ i k 0
     ~ < k n { ( vec_push [u] b # u & ( __mem_load it + ptr k 1 0 ) 255 ) = k + k 1 }
@@ -2709,7 +2772,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     : *WFd f # *WFd fp
     ? != . f kind 3 { ( __m_put_u32 it nread_p 0 ) ( __push it 0 ) ^ v } {}
     : i dn ( vec_len [u] . f data )
-    : i maxio ( vec_len [u] . it mem )
+    : i maxio . it mem_bytes
     : ~ i at offset
     : ~ i total 0
     : ~ i iv 0
@@ -2739,7 +2802,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ? == # i fp 0 { ( __push it 8 ) ^ v } {}
     : *WFd f # *WFd fp
     ? ! . f writable { ( __push it 8 ) ^ v } {}
-    : i maxio ( vec_len [u] . it mem )
+    : i maxio . it mem_bytes
     : ~ i at offset
     : ~ i total 0
     : ~ i iv 0
@@ -2938,7 +3001,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     : *WFd f # *WFd fp
     ? != . f kind 3 { ( __m_put_u32 it nread_p 0 ) ( __push it 0 ) ^ v } {}  // stdin/dir → EOF
     : i dn ( vec_len [u] . f data )
-    : i maxio ( vec_len [u] . it mem )
+    : i maxio . it mem_bytes
     : ~ i total 0
     : ~ i iv 0
     ~ & & ! ( interp_trapped it ) < iv iovs_len <= iv maxio {
@@ -3178,7 +3241,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     : i buf ( __pop it )
     // The destination buffer lives in linear memory, so a length larger than
     // memory is bogus — trap instead of allocating it.
-    ? > len ( vec_len [u] . it mem ) { ( __trap it `random_get length exceeds memory` ) ( __push it 0 ) ^ v } {}
+    ? > len . it mem_bytes { ( __trap it `random_get length exceeds memory` ) ( __push it 0 ) ^ v } {}
     ? > len 0 {
         : ( Vec u ) tmp ( vec_with_cap [u] len )
         : ~ i z 0
@@ -3333,7 +3396,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     // Build a host void** by translating each guest entry (guest ptr → host
     // ptr) into a fresh host buffer. Entry i lives at guest offset poff+i*8.
     : *u hostp ( nurl_alloc * ( __GPU_MAX_ARGS ) 8 )
-    : i memlen ( vec_len [u] . it mem )
+    : i memlen . it mem_bytes
     : ~ i k 0
     ~ & < k ( __GPU_MAX_ARGS ) <= + + poff * k 8 8 memlen {
         : i ent & ( __mem_load it + poff * k 8 8 0 ) 4294967295
@@ -3382,7 +3445,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ? > n 256 { ( __trap it `nvrtcCompileProgram: too many options` ) ^ v } {}
     : i base ( __gpu_base it )
     : *u hostp ( nurl_alloc * n 8 )
-    : i memlen ( vec_len [u] . it mem )
+    : i memlen . it mem_bytes
     : ~ i k 0
     ~ < k n {
         : ~ i ent 0
@@ -3479,7 +3542,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 // Guest (ptr,len) span → host pointer; 0 when it leaves linear memory.
 @ __net_span * Interp it i off i len → s {
     : i o & off 4294967295
-    : i n ( vec_len [u] . it mem )
+    : i n . it mem_bytes
     ? | < len 0 > + o len n { ^ # s 0 } {}
     ^ # s + # i ( vec_data [u] . it mem ) o
 }
@@ -3489,7 +3552,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 // the end of the buffer.
 @ __net_cstr * Interp it i off → s {
     : i o & off 4294967295
-    : i n ( vec_len [u] . it mem )
+    : i n . it mem_bytes
     ? >= o n { ^ `` } {}
     : ~ i k o
     : ~ b term F
@@ -3796,6 +3859,187 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 }
 
 // `sub` and the one index operand some subops carry (`bop`) arrive predecoded.
+// ── 0xfe: the threads proposal's atomics ──────────────────────────
+//
+// Guest threads run on real host threads over one shared linear memory,
+// so "atomic" has to mean atomic on the host too. An interpreter cannot
+// lean on the CPU's atomics for a read-modify-write it performs as three
+// separate steps, so every atomic op takes one process-wide lock. That
+// makes the whole family sequentially consistent by construction —
+// slower than a JIT's lock-free lowering, and the semantics the guest
+// was promised.
+//
+// `wait` / `notify` are the futex pair the guest's mutexes and joins are
+// built from. Waiters block on a single condvar and re-check their own
+// address on wake, which is why a notify may wake more sleepers than it
+// names: spurious wakeups are explicitly allowed, and the guest already
+// re-tests its condition in a loop.
+
+: ~ i g_atom_mx 0  // *pthread_mutex_t, the one atomics lock
+: ~ i g_atom_cv 0  // *pthread_cond_t, where waiters sleep
+: ~ i g_atom_gen 0  // bumped by every notify; a waiter watches it change
+: ~ i g_atom_waiters 0  // sleepers right now, for notify's return value
+
+// Created once, from the thread that instantiates — before any guest
+// thread exists, so this is not itself a race.
+@ __atom_init → v {
+    ? != g_atom_mx 0 { ^ v } {}
+    : s m ( nurl_zalloc ( nurl_native_sizeof `pthread_mutex_t` ) )
+    ( pthread_mutex_init # *u m # *u 0 )
+    = g_atom_mx # i m
+    : s c ( nurl_zalloc ( nurl_native_sizeof `pthread_cond_t` ) )
+    ( pthread_cond_init # *u c # *u 0 )
+    = g_atom_cv # i c
+}
+
+@ __atom_lock → v { ( __atom_init ) ( pthread_mutex_lock # *u # s g_atom_mx ) }
+
+@ __atom_unlock → v { ( pthread_mutex_unlock # *u # s g_atom_mx ) }
+
+// Natural alignment is required by the spec: an unaligned atomic traps
+// rather than being emulated.
+@ __atom_check * Interp it i ea i w → b {
+    ? != 0 % ea w { ( __trap it `unaligned atomic access` ) ^ F } {}
+    ? | < ea 0 > + ea w . it mem_bytes { ( __trap it `atomic access out of bounds` ) ^ F } {}
+    ^ T
+}
+
+// Mask a value to `w` bytes (w = 8 leaves it alone).
+@ __atom_mask i v i w → i {
+    ? >= w 8 { ^ v } {}
+    ^ & v - << 1 * 8 w 1
+}
+
+@ __atom_notify i count → i {
+    ( __atom_lock )
+    = g_atom_gen + g_atom_gen 1
+    : i woke ? < count g_atom_waiters count g_atom_waiters
+    ( pthread_cond_broadcast # *u # s g_atom_cv )
+    ( __atom_unlock )
+    ^ ? < woke 0 0 woke
+}
+
+// 0 = woken, 1 = the value had already changed, 2 = timed out.
+// `timeout` is nanoseconds, negative for "no timeout".
+@ __atom_wait * Interp it i ea i w i expected i timeout → i {
+    ( __atom_lock )
+    : i cur ( __mem_load it ea w 0 )
+    ? != cur ( __atom_mask expected w ) { ( __atom_unlock ) ^ 1 } {}
+    : i g0 g_atom_gen
+    = g_atom_waiters + g_atom_waiters 1
+    : ~ i res 0
+    ? < timeout 0 {
+        ~ == g_atom_gen g0 { ( pthread_cond_wait # *u # s g_atom_cv # *u # s g_atom_mx ) }
+    } {
+        // A finite timeout polls rather than using pthread_cond_timedwait:
+        // one less FFI surface (and one less struct timespec) for a path
+        // the guest's own mutexes take only when they gave up spinning.
+        : i deadline + ( monotonic_ns ) timeout
+        ~ & == g_atom_gen g0 == res 0 {
+            ( __atom_unlock )
+            ( sleep_ms 1 )
+            ( __atom_lock )
+            ? >= ( monotonic_ns ) deadline { = res 2 } {}
+        }
+    }
+    = g_atom_waiters - g_atom_waiters 1
+    ( __atom_unlock )
+    ^ res
+}
+
+// Byte width of an atomic load/store/rmw sub-opcode's access, given the
+// position inside its seven-op group: [.rmw, i64.rmw, rmw8_u, rmw16_u,
+// i64.rmw8_u, i64.rmw16_u, i64.rmw32_u].
+@ __atom_rmw_width i k → i {
+    ? == k 0 { ^ 4 } {}
+    ? == k 1 { ^ 8 } {}
+    ? == k 2 { ^ 1 } {}
+    ? == k 3 { ^ 2 } {}
+    ? == k 4 { ^ 1 } {}
+    ? == k 5 { ^ 2 } {}
+    ^ 4
+}
+
+// Operand counts, so the predecoder can size the bridge. Returns
+// pops << 1 | push.
+@ __atom_shape i sub → i {
+    ? == sub 0 { ^ 5 } {}  // notify: 2 pops, 1 push
+    ? | == sub 1 == sub 2 { ^ 7 } {}  // wait32/wait64: 3 pops, 1 push
+    ? == sub 3 { ^ 0 } {}  // fence
+    ? & >= sub 16 <= sub 22 { ^ 3 } {}  // load: 1 pop, 1 push
+    ? & >= sub 23 <= sub 29 { ^ 4 } {}  // store: 2 pops, no push
+    ? & >= sub 72 <= sub 78 { ^ 7 } {}  // cmpxchg: 3 pops, 1 push
+    ^ 5  // rmw: 2 pops, 1 push
+}
+
+@ __exec_atomic * Interp it i sub i off → v {
+    ? == sub 3 { ^ v } {}  // atomic.fence — the lock is the fence
+    ? == sub 0 {  // memory.atomic.notify
+        : i count ( __pop it )
+        : i ea + & ( __pop it ) 4294967295 off
+        ? ( __atom_check it ea 4 ) {} { ^ v }
+        ( __push it ( __atom_notify count ) )
+        ^ v
+    } {}
+    ? | == sub 1 == sub 2 {  // memory.atomic.wait32 / wait64
+        : i w ? == sub 1 4 8
+        : i timeout ( __pop it )
+        : i expected ( __pop it )
+        : i ea + & ( __pop it ) 4294967295 off
+        ? ( __atom_check it ea w ) {} { ^ v }
+        ( __push it ( __atom_wait it ea w expected timeout ) )
+        ^ v
+    } {}
+    ? & >= sub 16 <= sub 22 {  // atomic loads — zero-extended
+        : i w ? == sub 16 4 ? == sub 17 8 ? == sub 18 1 ? == sub 19 2 ? == sub 20 1 ? == sub 21 2 4
+        : i ea + & ( __pop it ) 4294967295 off
+        ? ( __atom_check it ea w ) {} { ^ v }
+        ( __atom_lock )
+        : i got ( __mem_load it ea w 0 )
+        ( __atom_unlock )
+        ( __push it got )
+        ^ v
+    } {}
+    ? & >= sub 23 <= sub 29 {  // atomic stores
+        : i w ? == sub 23 4 ? == sub 24 8 ? == sub 25 1 ? == sub 26 2 ? == sub 27 1 ? == sub 28 2 4
+        : i val ( __pop it )
+        : i ea + & ( __pop it ) 4294967295 off
+        ? ( __atom_check it ea w ) {} { ^ v }
+        ( __atom_lock )
+        ( __mem_store it ea w val )
+        ( __atom_unlock )
+        ^ v
+    } {}
+    ? & >= sub 72 <= sub 78 {  // atomic cmpxchg
+        : i w ( __atom_rmw_width - sub 72 )
+        : i replacement ( __pop it )
+        : i expected ( __pop it )
+        : i ea + & ( __pop it ) 4294967295 off
+        ? ( __atom_check it ea w ) {} { ^ v }
+        ( __atom_lock )
+        : i old ( __mem_load it ea w 0 )
+        ? == old ( __atom_mask expected w ) { ( __mem_store it ea w replacement ) } {}
+        ( __atom_unlock )
+        ( __push it old )
+        ^ v
+    } {}
+    ? & >= sub 30 <= sub 71 {  // add/sub/and/or/xor/xchg, seven ops each
+        : i group / - sub 30 7
+        : i w ( __atom_rmw_width % - sub 30 7 )
+        : i val ( __pop it )
+        : i ea + & ( __pop it ) 4294967295 off
+        ? ( __atom_check it ea w ) {} { ^ v }
+        ( __atom_lock )
+        : i old ( __mem_load it ea w 0 )
+        : i nv ? == group 0 + old val ? == group 1 - old val ? == group 2 & old val ? == group 3 | old val ? == group 4 ^^ old val val
+        ( __mem_store it ea w ( __atom_mask nv w ) )
+        ( __atom_unlock )
+        ( __push it old )
+        ^ v
+    } {}
+    ( __trap it `unsupported atomic opcode` )
+}
+
 @ __exec_fc * Interp it i sub i bop → v {
     ? == sub 8 {  // memory.init dataidx: copy from a passive data segment
         : i didx bop
@@ -3807,7 +4051,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         : i dropped ?? ( vec_get [i] . it data_dropped didx ) { T x → x F → 1 }
         ? | == # i dp 0 & == dropped 1 > n 0 { ( __trap it `memory.init: dropped or bad data segment` ) ^ v } {}
         : *DataSeg ds # *DataSeg dp
-        ? | > + src n ( vec_len [u] . ds bytes ) > + dst n ( vec_len [u] . it mem ) {
+        ? | > + src n ( vec_len [u] . ds bytes ) > + dst n . it mem_bytes {
             ( __trap it `out of bounds memory access` ) ^ v } {}
         : ~ i k 0
         ~ < k n {
@@ -3825,7 +4069,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         : i n ( __u32 ( __pop it ) )
         : i src ( __u32 ( __pop it ) )
         : i dst ( __u32 ( __pop it ) )
-        : i mn ( vec_len [u] . it mem )
+        : i mn . it mem_bytes
         ? | > + src n mn > + dst n mn { ( __trap it `out of bounds memory access` ) ^ v } {}
         ( __mem_copy it dst src n )
         ^ v
@@ -3834,7 +4078,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         : i n ( __u32 ( __pop it ) )
         : i val & ( __pop it ) 255
         : i dst ( __u32 ( __pop it ) )
-        ? > + dst n ( vec_len [u] . it mem ) { ( __trap it `out of bounds memory access` ) ^ v } {}
+        ? > + dst n . it mem_bytes { ( __trap it `out of bounds memory access` ) ^ v } {}
         ( __mem_fill it dst val n )
         ^ v
     } {}
