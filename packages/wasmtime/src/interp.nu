@@ -947,7 +947,8 @@ $ `module.nu`
 // off sieve.
 inline @ __mem_load * Interp it i ea i n i signed → i {
     ? | < ea 0 > + ea n . it mem_bytes {
-        ( __trap it `memory load out of bounds` ) ^ 0
+        ( __trap_oob it `memory load out of bounds` ea n )
+        ^ 0
     } {}
     // The memory Vec is always a whole number of 64 KiB pages, so any
     // in-bounds byte's containing 8-byte word is in-bounds too — word reads
@@ -972,7 +973,8 @@ inline @ __mem_load * Interp it i ea i n i signed → i {
 // Write the low n bytes of val little-endian to mem[ea].
 inline @ __mem_store * Interp it i ea i n i val → v {
     ? | < ea 0 > + ea n . it mem_bytes {
-        ( __trap it `memory store out of bounds` ) ^ v
+        ( __trap_oob it `memory store out of bounds` ea n )
+        ^ v
     } {}
     : s base # s ( vec_data [u] . it mem )
     : i lo & ea 7
@@ -3523,6 +3525,26 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         ( vec_free [u] tmp )
     } {}
     ( __push it 0 )
+}
+
+// An out-of-bounds access says WHICH address and against what bound: with
+// threads those two numbers separate "the guest computed a wild pointer"
+// from "this thread's view of the memory size is behind the others".
+@ __trap_oob * Interp it s what i ea i n → v {
+    = . it halt | . it halt 1
+    ( vec_free [u] . it trapmsg )
+    : String m ( string_from what )
+    ( string_push_str m ` (addr ` )
+    ( string_push_int m ea )
+    ( string_push_str m `+` )
+    ( string_push_int m n )
+    ( string_push_str m `, limit ` )
+    ( string_push_int m . it mem_bytes )
+    ( string_push_str m `, pages ` )
+    ( string_push_int m . it mem_pages )
+    ( string_push_char m 41 )
+    = . it trapmsg ( bytes_from_str ( string_data m ) )
+    ( string_free m )
 }
 
 // Trap with a message that carries a dynamic name (import module/field).
