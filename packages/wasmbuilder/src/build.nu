@@ -195,7 +195,24 @@ $ `toolchain.nu`
     : ~ WbCompiler cc @ WbCompiler { ( string_new ) T }
     ?? cr { T c → { ( wb_compiler_free cc ) = cc c } F e → { ( string_free ir_fixed ) ^ @ !v String { F e } } }
 
-    : !String String ror ( wb_ensure_wasm_obj_feat cc `runtime.c` ? . opts threads `threads` `` )
+    // Does this program reach the socket layer at all? The runtime object
+    // gets the `nurl_net` import bridge only then — otherwise the module
+    // would declare imports it never calls, and a runtime that cannot
+    // resolve them (the reference wasmtime, a browser) refuses to
+    // instantiate it. --gc-sections used to hide that by dropping the
+    // unused wrappers; --no-gc-sections did not, which is how a socket-free
+    // benchmark ended up unrunnable.
+    // A CALL, not a declare: nurlc's preamble declares the whole raw socket
+    // ABI in every program, so matching the declaration would turn the
+    // bridge on for a program that never opens anything.
+    : b uses_net ( __wb_ir_uses `call [^@\n]*@nurl_(tcp|udp|dns)_[a-z_0-9]+\(` ir_fixed )
+    : ~ String feat ( string_new )
+    ? uses_net { ( string_push_str feat `net` ) } {}
+    ? . opts threads {
+        ? > ( string_len feat ) 0 { ( string_push_char feat 45 ) } {}
+        ( string_push_str feat `threads` )
+    } {}
+    : !String String ror ( wb_ensure_wasm_obj_feat cc `runtime.c` ( string_data feat ) )
     : ~ String runtime_o ( string_new )
     ?? ror { T p → { ( string_free runtime_o ) = runtime_o p } F e → {
             ( string_free ir_fixed ) ( wb_compiler_free cc )

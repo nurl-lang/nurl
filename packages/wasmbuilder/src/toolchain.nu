@@ -577,9 +577,16 @@ $ `stdlib/ext/http_cli.nu`
     ? . cc is_zig { ( vec_push [s] args `cc` ) } {}
     ( vec_push [s] args `--target=wasm32-wasi` )
     ( vec_push [s] args `-O2` )
-    ? != 0 ( nurl_str_eq feat `threads` ) {
+    // Feature tags are `-`-joined, so a build can be both: `net-threads`.
+    ? ( string_contains ( string_from feat ) `threads` ) {
         ( vec_push [s] args `-matomics` )
         ( vec_push [s] args `-mbulk-memory` )
+    } {}
+    // The socket bridge is opt-in per PROGRAM, not per linker flag: a
+    // module that never opens a socket must carry no `nurl_net` import,
+    // or a runtime without one refuses to instantiate it.
+    ? ( string_contains ( string_from feat ) `net` ) {
+        ( vec_push [s] args `-DNURL_WASM_NET` )
     } {}
     ( vec_push [s] args `-c` )
     ( vec_push [s] args ( string_data csrc ) )

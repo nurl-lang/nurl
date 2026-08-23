@@ -2436,7 +2436,7 @@ char *nurl_dns_reverse(const char *ip) {
     return strdup(host);
 }
 
-#else  /* __wasi__ */
+#elif defined(NURL_WASM_NET)
 /*
  * WASI has no socket layer of its own (preview1 can only accept on a
  * socket the host preopened), so the sockets come from the host as wasm
@@ -2628,6 +2628,91 @@ char *nurl_dns_reverse(const char *ip) {
     return nurl__net_take(buf, n);
 }
 
+
+#else  /* __wasi__ without the socket bridge — every call returns NetOther.
+        * wasmbuilder links this variant unless the program actually uses
+        * std/net.nu: a module with no socket call must not carry a
+        * `nurl_net` import, or a runtime that does not provide one refuses
+        * to instantiate it — which is exactly what happened to every
+        * benchmark once --no-gc-sections stopped dropping the wrappers. */
+
+long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
+    (void)host; (void)port; (void)backlog;
+    return 0;
+}
+long long nurl_tcp_listen_tls(const char *host, long long port, long long backlog,
+                              const char *cert, const char *key) {
+    (void)host; (void)port; (void)backlog; (void)cert; (void)key;
+    return 0;
+}
+long long nurl_tcp_accept(long long listener) { (void)listener; return 0; }
+long long nurl_tcp_read(long long h, const char *buf, long long n) {
+    (void)h; (void)buf; (void)n; return -1;
+}
+long long nurl_tcp_write(long long h, const char *buf, long long n) {
+    (void)h; (void)buf; (void)n; return -1;
+}
+void nurl_tcp_close(long long h) { (void)h; }
+void nurl_tcp_shutdown(long long h) { (void)h; }
+long long nurl_tcp_err_kind(long long h) { (void)h; return NURL_NET_ERR_OTHER; }
+const char *nurl_tcp_peer_addr(long long h) { (void)h; return ""; }
+char       *nurl_tcp_local_addr(long long h) { (void)h; return strdup(""); }
+void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
+/* Async-runtime hooks. The non-WASI variants live above the #else gate;
+ * mirror them as no-ops here so wasm-ld doesn't fail with undefined
+ * symbols for any example that imports the async/HTTP-server stack
+ * (which references these unconditionally — they just never fire under
+ * WASI because the underlying tcp_listen/_accept returned 0). */
+long long nurl_tcp_get_fd(long long h)                 { (void)h; return -1; }
+void nurl_tcp_set_nonblock(long long h, long long on)  { (void)h; (void)on; }
+void nurl_tcp_ref(long long h)                         { (void)h; }
+void nurl_tcp_unref(long long h)                       { (void)h; }
+
+/* §18b / §18c WASI stubs — wasi-libc has no socket layer. */
+long long nurl_udp_bind(const char *h, long long p) {
+    (void)h; (void)p; return 0;
+}
+long long nurl_udp_connect(long long h, const char *host, long long p) {
+    (void)h; (void)host; (void)p; return -1;
+}
+long long nurl_udp_send_to(long long h, const char *b, long long n,
+                           const char *host, long long p) {
+    (void)h; (void)b; (void)n; (void)host; (void)p; return -1;
+}
+long long nurl_udp_recv_from(long long h, char *b, long long n) {
+    (void)h; (void)b; (void)n; return -1;
+}
+long long nurl_udp_send(long long h, const char *b, long long n) {
+    (void)h; (void)b; (void)n; return -1;
+}
+long long nurl_udp_recv(long long h, char *b, long long n) {
+    (void)h; (void)b; (void)n; return -1;
+}
+const char *nurl_udp_peer_addr(long long h)            { (void)h; return ""; }
+char       *nurl_udp_local_addr(long long h)           { (void)h; return strdup(""); }
+long long nurl_udp_err_kind(long long h)               { (void)h; return NURL_NET_ERR_OTHER; }
+long long nurl_udp_get_fd(long long h)                 { (void)h; return -1; }
+long long nurl_udp_family(long long h)                 { (void)h; return -1; }
+void nurl_udp_set_nonblock(long long h, long long on)  { (void)h; (void)on; }
+void nurl_udp_set_timeout(long long h, long long ms)   { (void)h; (void)ms; }
+void nurl_udp_close(long long h)                       { (void)h; }
+long long nurl_udp_set_broadcast(long long h, long long on)            { (void)h; (void)on; return -1; }
+long long nurl_udp_join_group(long long h, const char *g, const char *i){ (void)h; (void)g; (void)i; return -1; }
+long long nurl_udp_leave_group(long long h, const char *g, const char *i){ (void)h; (void)g; (void)i; return -1; }
+long long nurl_udp_set_multicast_ttl(long long h, long long t)         { (void)h; (void)t; return -1; }
+long long nurl_udp_set_multicast_loop(long long h, long long on)       { (void)h; (void)on; return -1; }
+char *nurl_dns_resolve(const char *h)                  { (void)h; return strdup(""); }
+char *nurl_dns_resolve_port(const char *h, long long p){ (void)h; (void)p; return strdup(""); }
+char *nurl_dns_reverse(const char *ip)                 { (void)ip; return strdup(""); }
+
+
+/* These two were missing from the original stub set, which is why they
+ * leaked out as `env` imports and made even a socket-free program need a
+ * host that could answer them. */
+long long nurl_tcp_connect(const char *host, long long port) {
+    (void)host; (void)port; return 0;
+}
+long long nurl_tcp_timeout_ms(long long h) { (void)h; return 0; }
 #endif /* __wasi__ guard for §18 */
 
 
