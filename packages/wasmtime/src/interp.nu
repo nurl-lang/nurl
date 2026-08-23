@@ -1205,6 +1205,46 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 @ __R_ADDBRIFC64 → i { ^ 38 }  // A=target B=dst C=s1 D=s2 W5=cmpop<<53|rhs<<32|byte: dst=s1+s2, branch on the compare
 @ __R_ADDBRIFC32 → i { ^ 177 }  // the i32.add spelling of the same
 
+// ── fused i64 ALU pairs ─────────────────────────────────────────
+// `t = s1 OP1 s2; dst = x OP2 t` (or `t OP2 x`) is two records where one
+// will do whenever `t` is a single-use stack temp — which adjacency plus
+// `A == the consumed slot` proves, `__fuse_selc`-style. The eight pairs
+// below are the measured top of the corpus (mul→add alone is a quarter of
+// packet_classifier, lcg and prefix_scan); they take the hot dispatch
+// numbers of eight ops the same corpus shows at ≤0.05 % — those move to
+// the cold table (178+), keeping the compare block 56..75 untouched.
+// Record: A=dst B=s1 C=s2 D=x.
+@ __R_MULADD64 → i { ^ 13 }  // dst = (s1*s2) + x
+@ __R_ADDAND64 → i { ^ 14 }  // dst = (s1+s2) & x
+@ __R_ADDMUL64 → i { ^ 15 }  // dst = (s1+s2) * x
+@ __R_ADDSHRU64 → i { ^ 16 }  // dst = (s1+s2) >>u x — t-left only
+@ __R_SHRUAND64 → i { ^ 17 }  // dst = (s1 >>u s2) & x
+@ __R_ADDADD64 → i { ^ 22 }  // dst = (s1+s2) + x
+@ __R_SHRUXOR64 → i { ^ 30 }  // dst = (s1 >>u s2) ^ x
+@ __R_XORMUL64 → i { ^ 33 }  // dst = (s1^s2) * x
+
+// The pair table: micro-op of the producer × micro-op of the consumer →
+// fused op, or -1. Only commutative consumers accept the temp on either
+// side; ADDSHRU is the one measured non-commutative shape (lcg's
+// `(v*a+c) >> 16`) and its caller enforces t-left.
+@ __alu2 i lop i io → i {
+    ? == lop 0 {  // i64.add feeding …
+        ? == io 0 { ^ ( __R_ADDADD64 ) } {}
+        ? == io 1 { ^ ( __R_ADDMUL64 ) } {}
+        ? == io 2 { ^ ( __R_ADDAND64 ) } {}
+        ? == io 3 { ^ ( __R_ADDSHRU64 ) } {}
+        ^ -1
+    } {}
+    ? == lop 1 { ^ ? == io 0 ( __R_MULADD64 ) -1 } {}  // i64.mul → i64.add
+    ? == lop 3 {  // i64.shr_u feeding …
+        ? == io 2 { ^ ( __R_SHRUAND64 ) } {}
+        ? == io 4 { ^ ( __R_SHRUXOR64 ) } {}
+        ^ -1
+    } {}
+    ? == lop 4 { ^ ? == io 1 ( __R_XORMUL64 ) -1 } {}  // i64.xor → i64.mul
+    ^ -1
+}
+
 // A `br_if` that also moves block results packs its destination and source
 // slot indices into one word, so a slot index has to fit in 20 bits. A
 // function needing more than a million slots is not one a compiler emits —
@@ -1248,13 +1288,13 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ? == op 50 { ^ 79 } {}  // i64.load16_s
     ? == op 51 { ^ 26 } {}  // i64.load16_u
     ? == op 52 { ^ 80 } {}  // i64.load32_s
-    ? == op 53 { ^ 22 } {}  // i64.load32_u
-    ? == op 54 { ^ 30 } {}  // i32.store
+    ? == op 53 { ^ 182 } {}  // i64.load32_u (demoted — 22 = __R_ADDADD64)
+    ? == op 54 { ^ 183 } {}  // i32.store (demoted — 30 = __R_SHRUXOR64)
     ? == op 55 { ^ 27 } {}  // i64.store
     ? == op 56 { ^ 31 } {}  // f32.store
     ? == op 57 { ^ 28 } {}  // f64.store
     ? == op 58 { ^ 29 } {}  // i32.store8
-    ? == op 59 { ^ 33 } {}  // i32.store16
+    ? == op 59 { ^ 178 } {}  // i32.store16 (demoted — 33 = __R_XORMUL64)
     ? == op 60 { ^ 34 } {}  // i64.store8
     ? == op 61 { ^ 35 } {}  // i64.store16
     ? == op 62 { ^ 32 } {}  // i64.store32
@@ -1296,17 +1336,17 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ? == op 104 { ^ 94 } {}  // i32.ctz
     ? == op 105 { ^ 95 } {}  // i32.popcnt
     ? == op 106 { ^ 9 } {}  // i32.add
-    ? == op 107 { ^ 13 } {}  // i32.sub
-    ? == op 108 { ^ 17 } {}  // i32.mul
+    ? == op 107 { ^ 185 } {}  // i32.sub (demoted — 13 = __R_MULADD64)
+    ? == op 108 { ^ 181 } {}  // i32.mul (demoted — 17 = __R_SHRUAND64)
     ? == op 109 { ^ 96 } {}  // i32.div_s
     ? == op 110 { ^ 97 } {}  // i32.div_u
     ? == op 111 { ^ 98 } {}  // i32.rem_s
     ? == op 112 { ^ 99 } {}  // i32.rem_u
     ? == op 113 { ^ 11 } {}  // i32.and
-    ? == op 114 { ^ 14 } {}  // i32.or
-    ? == op 115 { ^ 15 } {}  // i32.xor
+    ? == op 114 { ^ 184 } {}  // i32.or (demoted — 14 = __R_ADDAND64)
+    ? == op 115 { ^ 180 } {}  // i32.xor (demoted — 15 = __R_ADDMUL64)
     ? == op 116 { ^ 10 } {}  // i32.shl
-    ? == op 117 { ^ 16 } {}  // i32.shr_s
+    ? == op 117 { ^ 179 } {}  // i32.shr_s (demoted — 16 = __R_ADDSHRU64)
     ? == op 118 { ^ 12 } {}  // i32.shr_u
     ? == op 119 { ^ 100 } {}  // i32.rotl
     ? == op 120 { ^ 101 } {}  // i32.rotr
@@ -1698,6 +1738,8 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 // next instruction.
 @ __straightline i op → b {
     ? & >= op 40 <= op 53 { ^ T } {}  // loads
+    ? & >= op 65 <= op 68 { ^ T } {}  // consts (pooled: no record; else one CONST)
+    ? | | == op 32 == op 208 == op 210 { ^ T } {}  // local.get / ref.null / ref.func: alias only
     ? | == op 27 == op 28 { ^ T } {}  // select (typed select folds to the same record)
     ? | == op 35 == op 37 { ^ T } {}  // global.get / table.get
     ? | == op 63 == op 64 { ^ T } {}  // memory.size / memory.grow
@@ -1807,6 +1849,34 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 // value, so a `local.set` fold that reaches it stores exactly what the
 // extend would have; for the wrap, the gate below admits only consumers
 // whose arms never read `lastp`.
+// Try to fold the record just emitted (an i64 ALU producer) into the
+// binary op now being emitted, per the __alu2 table. `dst` is the
+// consumer's canonical destination, `x1`/`x2` its two operand slots; the
+// producer's A must be one of them AND a stack slot (>= sb) — the same
+// single-use argument as __fuse_selc, with __fuse_addr's stack-slot
+// clause. The `other == tA` rejection covers `t OP t`, where the second
+// read has no slot to read from once the temp is never written.
+@ __fuse_alu2 * PFunc pf i lastp i io i sb i dst i x1 i x2 i byte → b {
+    ? < lastp 0 { ^ F } {}
+    ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ F } {}
+    : i base * lastp 6
+    : i lop ?? ( vec_get [i] . pf code base ) { T x → x F → -1 }
+    : i fop ( __alu2 lop io )
+    ? < fop 0 { ^ F } {}
+    : i tA ?? ( vec_get [i] . pf code + base 1 ) { T x → x F → -1 }
+    ? < tA sb { ^ F } {}
+    : ~ i other -2
+    ? == tA x1 { = other x2 } { ? == tA x2 { = other x1 } {} }
+    ? == other -2 { ^ F } {}
+    ? == other tA { ^ F } {}
+    ? & == fop ( __R_ADDSHRU64 ) != tA x1 { ^ F } {}
+    ( vec_set [i] . pf code base fop )
+    ( vec_set [i] . pf code + base 1 dst )
+    ( vec_set [i] . pf code + base 4 other )
+    ( vec_set [i] . pf code + base 5 byte )
+    ^ T
+}
+
 @ __wrap_skippable * Module m * Wc c → b {
     ? >= . c pos . c len { ^ F } {}
     : i nx # i ?? ( vec_get [u] . m code . c pos ) { T x → x F → # u 0 }
@@ -1857,6 +1927,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     : ( Vec i ) vm ( vec_new [i] )
     ~ & < . c pos . f code_end > ( vec_len [s] open ) 0 {
         : i byte . c pos
+        : i recs0 ( vec_len [i] . pf code )
         : i op ( wc_u8 c )
         ? | == op 2 == op 3 {  // block / loop
             = labfloor / ( vec_len [i] . pf code ) 6
@@ -2050,7 +2121,17 @@ inline @ __mem_store * Interp it i ea i n i val → v {
                                                                                                                             } {
                                                                                                                                 ? | & >= op 70 <= op 79 | & >= op 81 <= op 90 | & >= op 106 <= op 120 & >= op 124 <= op 138 {
                                                                                                                                     // integer binary: dst = h-2, operands h-2 / h-1
-                                                                                                                                    ? != 0 live { ( __pf_emit . pf code ( __iop op ) + SB - h 2 ( __vg vm SB - h 2 ) ( __vg vm SB - h 1 ) 0 byte ) ( __vset vm - h 2 -1 ) = h - h 1 } {}
+                                                                                                                                    ? != 0 live {
+                                                                                                                                        : i bio ( __iop op )
+                                                                                                                                        : i bdst + SB - h 2
+                                                                                                                                        : i bx1 ( __vg vm SB - h 2 )
+                                                                                                                                        : i bx2 ( __vg vm SB - h 1 )
+                                                                                                                                        ? ( __fuse_alu2 pf lastp bio SB bdst bx1 bx2 byte ) {} {
+                                                                                                                                            ( __pf_emit . pf code bio bdst bx1 bx2 0 byte )
+                                                                                                                                        }
+                                                                                                                                        ( __vset vm - h 2 -1 )
+                                                                                                                                        = h - h 1
+                                                                                                                                    } {}
                                                                                                                                 } {
                                                                                                                                     ? | & >= op 91 <= op 102 & >= op 139 <= op 191 {
                                                                                                                                         // float arithmetic / compares and the int↔float conversions:
@@ -2119,10 +2200,14 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         // last one; everything else — control flow, calls, the bridges, the
         // instructions that emit nothing — leaves -1, so no fold can reach
         // across a label or a record that is not a pure producer.
-        // (A skipped extend/wrap leaves lastp on the PREVIOUS producer —
-        // __wrap_skippable's comment argues why every fold that can then
-        // fire is still correct.)
-        = lastp ? & != 0 live ( __straightline op ) - / ( vec_len [i] . pf code ) 6 1 -1
+        // (A skipped extend/wrap, a pooled const or a local.get emits
+        // nothing: lastp then stays on the PREVIOUS producer, so a fold
+        // can reach across them. Every fold guards itself by slot
+        // identity — the producer's A must equal the very slot being
+        // consumed, and be a stack slot — so an alias sitting in between
+        // can enable a fold but never corrupt one; __wrap_skippable's
+        // comment covers the skipped-wrap case.)
+        = lastp ? & != 0 live ( __straightline op ) ? == recs0 ( vec_len [i] . pf code ) lastp - / ( vec_len [i] . pf code ) 6 1 -1
     }
     : i on ( vec_len [s] open )
     : ~ i ok 0
@@ -2314,16 +2399,16 @@ inline @ __mem_store * Interp it i ea i n i val → v {
                                                         ? == op 10 { = . rbase ra ( __w32 << . rbase rb & . rbase rc 31 ) } {  // i32.shl
                                                             ? == op 11 { = . rbase ra ( __w32 & . rbase rb . rbase rc ) } {  // i32.and
                                                                 ? == op 12 { = . rbase ra ( __w32 >> ( __u32 . rbase rb ) & . rbase rc 31 ) } {  // i32.shr_u
-                                                                    ? == op 13 { = . rbase ra ( __w32 - . rbase rb . rbase rc ) } {  // i32.sub
-                                                                        ? == op 14 { = . rbase ra ( __w32 | . rbase rb . rbase rc ) } {  // i32.or
-                                                                            ? == op 15 { = . rbase ra ( __w32 ^^ . rbase rb . rbase rc ) } {  // i32.xor
-                                                                                ? == op 16 { = . rbase ra ( __w32 >> ( __w32 . rbase rb ) & . rbase rc 31 ) } {  // i32.shr_s
-                                                                                    ? == op 17 { = . rbase ra ( __w32 * . rbase rb . rbase rc ) } {  // i32.mul
+                                                                    ? == op 13 { = . rbase ra + * . rbase rb . rbase rc . rbase . pbase + r0 4 } {  // __R_MULADD64
+                                                                        ? == op 14 { = . rbase ra & + . rbase rb . rbase rc . rbase . pbase + r0 4 } {  // __R_ADDAND64
+                                                                            ? == op 15 { = . rbase ra * + . rbase rb . rbase rc . rbase . pbase + r0 4 } {  // __R_ADDMUL64
+                                                                                ? == op 16 { = . rbase ra ( __lshr64 + . rbase rb . rbase rc & . rbase . pbase + r0 4 63 ) } {  // __R_ADDSHRU64
+                                                                                    ? == op 17 { = . rbase ra & ( __lshr64 . rbase rb & . rbase rc 63 ) . rbase . pbase + r0 4 } {  // __R_SHRUAND64
                                                                                         ? == op 18 { = . rbase ra ( __mem_load it + & + . rbase rb . rbase . pbase + r0 4 4294967295 rc 8 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i64.load
                                                                                             ? == op 19 { = . rbase ra ( __mem_load it + & + . rbase rb . rbase . pbase + r0 4 4294967295 rc 8 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // f64.load
                                                                                                 ? == op 20 { = . rbase ra ( __w32 ( __mem_load it + & + . rbase rb . rbase . pbase + r0 4 4294967295 rc 4 0 ) ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i32.load
                                                                                                     ? == op 21 { = . rbase ra ( __mem_load it + & + . rbase rb . rbase . pbase + r0 4 4294967295 rc 1 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i32.load8_u
-                                                                                                        ? == op 22 { = . rbase ra ( __mem_load it + & + . rbase rb . rbase . pbase + r0 4 4294967295 rc 4 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i64.load32_u
+                                                                                                        ? == op 22 { = . rbase ra + + . rbase rb . rbase rc . rbase . pbase + r0 4 } {  // __R_ADDADD64
                                                                                                             ? == op 23 { = . rbase ra ( __mem_load it + & + . rbase rb . rbase . pbase + r0 4 4294967295 rc 2 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i32.load16_u
                                                                                                                 ? == op 24 { = . rbase ra ( __mem_load it + & + . rbase rb . rbase . pbase + r0 4 4294967295 rc 4 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // f32.load
                                                                                                                     ? == op 25 { = . rbase ra ( __mem_load it + & + . rbase rb . rbase . pbase + r0 4 4294967295 rc 1 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i64.load8_u
@@ -2331,10 +2416,10 @@ inline @ __mem_store * Interp it i ea i n i val → v {
                                                                                                                             ? == op 27 { ( __mem_store it + & . rbase ra 4294967295 rc 8 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i64.store
                                                                                                                                 ? == op 28 { ( __mem_store it + & . rbase ra 4294967295 rc 8 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // f64.store
                                                                                                                                     ? == op 29 { ( __mem_store it + & . rbase ra 4294967295 rc 1 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i32.store8
-                                                                                                                                        ? == op 30 { ( __mem_store it + & . rbase ra 4294967295 rc 4 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i32.store
+                                                                                                                                        ? == op 30 { = . rbase ra ^^ ( __lshr64 . rbase rb & . rbase rc 63 ) . rbase . pbase + r0 4 } {  // __R_SHRUXOR64
                                                                                                                                             ? == op 31 { ( __mem_store it + & . rbase ra 4294967295 rc 4 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // f32.store
                                                                                                                                                 ? == op 32 { ( __mem_store it + & . rbase ra 4294967295 rc 4 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i64.store32
-                                                                                                                                                    ? == op 33 { ( __mem_store it + & . rbase ra 4294967295 rc 2 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i32.store16
+                                                                                                                                                    ? == op 33 { = . rbase ra * ^^ . rbase rb . rbase rc . rbase . pbase + r0 4 } {  // __R_XORMUL64
                                                                                                                                                         ? == op 34 { ( __mem_store it + & . rbase ra 4294967295 rc 1 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i64.store8
                                                                                                                                                             ? == op 35 { ( __mem_store it + & . rbase ra 4294967295 rc 2 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i64.store16
                                                                                                                                                                 ? == op 36 { = . rbase ra ( __w32 . rbase rb ) } {  // i32.wrap_i64
@@ -2563,17 +2648,25 @@ inline @ __mem_store * Interp it i ea i n i val → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ? & != 0 & dd 1 ! ( interp_trapped it ) { = . rbase rc ( __pop it ) } {}
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ? != 0 . it halt { = . fr pos r0 = pc pend } {}
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 } {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 175 { = . rbase ra ( __w32 . rbase rb ) } {  // i64.extend_i32_s (not emitted today — see __wrap_skippable)
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 177 {  // __R_ADDBRIFC32
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            : i v ( __w32 + . rbase rc . rbase . pbase + r0 4 )
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            = . rbase rb v
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            : i w5 . pbase + r0 5
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? != 0 ( __rcmp >> w5 53 v . rbase & >> w5 32 2097151 ) { = pc ra } {}
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        } {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 172 { ( __trap it `unreachable` ) = . fr pos r0 = pc pend } {  // __R_UNREACH
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 173 { ( __trap it `unsupported opcode` ) = . fr pos r0 = pc pend } {  // __R_TRAPUN
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ( __trap it `unsupported opcode` ) = . fr pos r0 = pc pend
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 185 { = . rbase ra ( __w32 - . rbase rb . rbase rc ) } {  // i32.sub (demoted)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 184 { = . rbase ra ( __w32 | . rbase rb . rbase rc ) } {  // i32.or (demoted)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 180 { = . rbase ra ( __w32 ^^ . rbase rb . rbase rc ) } {  // i32.xor (demoted)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 179 { = . rbase ra ( __w32 >> ( __w32 . rbase rb ) & . rbase rc 31 ) } {  // i32.shr_s (demoted)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 181 { = . rbase ra ( __w32 * . rbase rb . rbase rc ) } {  // i32.mul (demoted)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 182 { = . rbase ra ( __mem_load it + & + . rbase rb . rbase . pbase + r0 4 4294967295 rc 4 0 ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i64.load32_u (demoted)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 183 { ( __mem_store it + & . rbase ra 4294967295 rc 4 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i32.store (demoted)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 178 { ( __mem_store it + & . rbase ra 4294967295 rc 2 . rbase rb ) ? != 0 . it halt { = . fr pos r0 = pc pend } {} } {  // i32.store16 (demoted)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 175 { = . rbase ra ( __w32 . rbase rb ) } {  // i64.extend_i32_s (not emitted today — see __wrap_skippable)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 177 {  // __R_ADDBRIFC32
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            : i v ( __w32 + . rbase rc . rbase . pbase + r0 4 )
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            = . rbase rb v
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            : i w5 . pbase + r0 5
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? != 0 ( __rcmp >> w5 53 v . rbase & >> w5 32 2097151 ) { = pc ra } {}
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 172 { ( __trap it `unreachable` ) = . fr pos r0 = pc pend } {  // __R_UNREACH
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 173 { ( __trap it `unsupported opcode` ) = . fr pos r0 = pc pend } {  // __R_TRAPUN
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ( __trap it `unsupported opcode` ) = . fr pos r0 = pc pend
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                     } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
                                                                                                                                                                                                                                                                                                                                     } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
