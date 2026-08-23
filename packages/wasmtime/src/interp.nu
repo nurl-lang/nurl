@@ -1722,6 +1722,42 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ^ | << s1 21 s2
 }
 
+// ── narrowing/widening moves that need no record ─────────────────
+// Every i32-typed slot holds the CANONICAL form: the low 32 bits
+// sign-extended to 64. Every producer guarantees it — i32 arithmetic wraps
+// its result through `__w32`, i32 loads sign- or zero-extend into it,
+// `i32.const` is interned wrapped, and a copy of a canonical value is
+// canonical. The interpreter already banks on this: `i32.eqz` tests the
+// whole word against zero. Two conversions collapse under that invariant:
+//
+//   * `i64.extend_i32_s` IS the identity on the canonical form — the wide
+//     value it must produce is bit-for-bit what the slot already holds. It
+//     emits nothing, unconditionally. (`extend_i32_u` is not: a negative
+//     canonical i32 has high bits the zero-extension must clear.)
+//   * `i32.wrap_i64` genuinely truncates — but when the NEXT instruction is
+//     the wrap's only consumer (stack discipline: adjacent means the value
+//     lands in its operand slot) and that consumer reads the operand
+//     insensitively to bits 32.. — it masks the address, wraps the result,
+//     canonicalises the input, or stores only the low bytes — the unwrapped
+//     value is indistinguishable from the wrapped one, and the wrap emits
+//     nothing.
+//
+// A skipped record leaves `lastp` pointing at the previous producer. That is
+// safe: for the extend, the producer's canonical result IS the extended
+// value, so a `local.set` fold that reaches it stores exactly what the
+// extend would have; for the wrap, the gate below admits only consumers
+// whose arms never read `lastp`.
+@ __wrap_skippable * Module m * Wc c → b {
+    ? >= . c pos . c len { ^ F } {}
+    : i nx # i ?? ( vec_get [u] . m code . c pos ) { T x → x F → # u 0 }
+    ? & >= nx 70 <= nx 79 { ^ T } {}  // i32 compares: both inputs canonicalised
+    ? & >= nx 40 <= nx 53 { ^ T } {}  // loads: the address is masked to u32
+    ? & >= nx 106 <= nx 108 { ^ T } {}  // i32 add/sub/mul: result re-wrapped
+    ? & >= nx 113 <= nx 118 { ^ T } {}  // i32 and/or/xor/shl/shr_s/shr_u
+    ? | | == nx 54 == nx 58 == nx 59 { ^ T } {}  // i32.store/8/16: low bytes only
+    ^ F
+}
+
 @ __predecode * Module m * WFunc f → s {
     : *PFunc pf # *PFunc ( nurl_alloc Z PFunc )
     = . pf code ( vec_new [i] )
@@ -1954,10 +1990,14 @@ inline @ __mem_store * Interp it i ea i n i val → v {
                                                                                                                                         // the same register shape as the integer unary and binary arms
                                                                                                                                         // above, dst = the slot of the first operand.
                                                                                                                                         ? != 0 live {
-                                                                                                                                            : i np ( __float_pops op )
-                                                                                                                                            ( __pf_emit . pf code ( __iop op ) + SB - h np ( __vg vm SB - h np ) ? == np 2 ( __vg vm SB - h 1 ) 0 0 byte )
-                                                                                                                                            ( __vset vm - h np -1 )
-                                                                                                                                            = h + - h np 1
+                                                                                                                                            // extend_i32_s / a wrap the next consumer cannot
+                                                                                                                                            // observe: no record (see __wrap_skippable)
+                                                                                                                                            ? | == op 172 & == op 167 ( __wrap_skippable m c ) {} {
+                                                                                                                                                : i np ( __float_pops op )
+                                                                                                                                                ( __pf_emit . pf code ( __iop op ) + SB - h np ( __vg vm SB - h np ) ? == np 2 ( __vg vm SB - h 1 ) 0 0 byte )
+                                                                                                                                                ( __vset vm - h np -1 )
+                                                                                                                                                = h + - h np 1
+                                                                                                                                            }
                                                                                                                                         } {}
                                                                                                                                     } {
                                                                                                                                         ? == op 208 { ( wc_u8 c ) ? != 0 live { ( __kbind pf vm kv L SB h -1 live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
@@ -2012,6 +2052,9 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         // last one; everything else — control flow, calls, the bridges, the
         // instructions that emit nothing — leaves -1, so no fold can reach
         // across a label or a record that is not a pure producer.
+        // (A skipped extend/wrap leaves lastp on the PREVIOUS producer —
+        // __wrap_skippable's comment argues why every fold that can then
+        // fire is still correct.)
         = lastp ? & != 0 live ( __straightline op ) - / ( vec_len [i] . pf code ) 6 1 -1
     }
     : i on ( vec_len [s] open )
