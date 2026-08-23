@@ -25,7 +25,7 @@ $ `build.nu`
 
 // Keep in step with nurl.toml's [package] version — `--version` is what a
 // bug report quotes, so a stale literal here misattributes the bug.
-@ __wbc_version → s { ^ `wasmbuilder 0.1.8` }
+@ __wbc_version → s { ^ `wasmbuilder 0.2.0` }
 
 // --doctor: print every resolution step so a broken setup explains itself.
 @ __wbc_doctor → i {
@@ -76,6 +76,7 @@ $ `build.nu`
     ( args_opt p `opt` 79 `LEVEL` `optimisation level 0..3 or z (default 2)` )
     ( args_flag p `emit-ll` 0 `keep the rewritten wasm32 .ll next to the output` )
     ( args_flag p `asyncify` 0 `wasm-opt asyncify wrap for canvas programs (needs binaryen)` )
+    ( args_flag p `threads` 0 `build for wasi-threads: shared memory + atomics + real pthreads (needs a runtime that implements the proposal)` )
     ( args_opt p `obj` 0 `FILE` `extra wasm object linked into the module (e.g. kernels_static.wasm.o)` )
     ( args_opt p `cflags` 0 `FLAGS` `extra compile/link flags, space-separated (e.g. "-msimd128")` )
     ( args_opt p `asyncify-imports` 0 `LIST` `comma-separated async import names (e.g. env.wgpu_download); implies --asyncify` )
@@ -140,6 +141,7 @@ $ `build.nu`
     ? ( args_present p `no-host-imports` ) { = . opts host_imports F } {}
     ? ( args_present p `emit-ll` ) { = . opts keep_ll T } {}
     ? ( args_present p `asyncify` ) { = . opts asyncify T } {}
+    ? ( args_present p `threads` ) { = . opts threads T } {}
     ? ( args_present p `no-gc-sections` ) { = . opts no_gc_sections T } {}
     : ~ String objv ( string_new )
     ?? ( args_value p `obj` ) { T v → { ( string_free objv ) = objv v = . opts extra_obj ( string_data objv ) } F _ → {} }

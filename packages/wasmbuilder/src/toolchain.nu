@@ -483,17 +483,32 @@ $ `stdlib/ext/http_cli.nu`
             : ~ i pos 0
             ~ < pos slen {
                 : s tailp # s + # i ( string_data src ) pos
-                : i rel ( nurl_str_find tailp `#include "` )
+                // The directive may be indented and spaced out — runtime.c
+                // guards one include inside an `#if`, as `#  include "…"`.
+                // Matching the literal `#include "` missed it, so that file
+                // stayed out of the cache key and its object went stale the
+                // moment only it changed: a build that linked yesterday's
+                // runtime and failed on a symbol added today.
+                : i rel ( nurl_str_find tailp `#` )
                 ? < rel 0 { = pos slen } {
-                    : i st + + pos rel 10
-                    : s namep # s + # i ( string_data src ) st
-                    : i q ( nurl_str_find namep `"` )
-                    ? >= q 0 {
-                        : String inc ( string_substr src st q )
-                        ( wb_tu_text dir ( string_data inc ) seen out )
-                        ( string_free inc )
-                        = pos + st q
-                    } { = pos st }
+                    : ~ i k + + pos rel 1
+                    ~ & < k slen | == ( string_get src k ) 32 == ( string_get src k ) 9 { = k + k 1 }
+                    : b is_inc & < + k 7 slen ( string_starts_with ( string_substr src k 7 ) `include` )
+                    ? ! is_inc { = pos + + pos rel 1 } {
+                        = k + k 7
+                        ~ & < k slen | == ( string_get src k ) 32 == ( string_get src k ) 9 { = k + k 1 }
+                        ? & < k slen == ( string_get src k ) 34 {
+                            : i st + k 1
+                            : s namep # s + # i ( string_data src ) st
+                            : i q ( nurl_str_find namep `"` )
+                            ? >= q 0 {
+                                : String inc ( string_substr src st q )
+                                ( wb_tu_text dir ( string_data inc ) seen out )
+                                ( string_free inc )
+                                = pos + st q
+                            } { = pos st }
+                        } { = pos k }
+                    }
                 }
             }
             ( string_free src )
@@ -501,7 +516,11 @@ $ `stdlib/ext/http_cli.nu`
     }
 }
 
-@ wb_ensure_wasm_obj WbCompiler cc s src_c → !String String {
+// `feat` names a feature-flavoured build of the same source (`` = the
+// plain one, `threads` = -matomics -mbulk-memory). It is part of the
+// cache key, because an object built without the atomics feature cannot
+// be linked into a module that has it.
+@ wb_ensure_wasm_obj_feat WbCompiler cc s src_c s feat → !String String {
     : String sdir ( wb_stdlib_dir )
     : String csrc ( path_join ( string_data sdir ) src_c )
     ? ( file_exists ( string_data csrc ) ) {} {
@@ -543,6 +562,7 @@ $ `stdlib/ext/http_cli.nu`
     } {}
     ( string_push_str oname `-` )
     ( string_push_str oname ( string_data tag ) )
+    ? > ( nurl_str_len feat ) 0 { ( string_push_char oname 45 ) ( string_push_str oname feat ) } {}
     ( string_push_str oname `.wasm.o` )
     ( string_free tag )
     : String opath ( path_join ( string_data cdir ) ( string_data oname ) )
@@ -557,6 +577,10 @@ $ `stdlib/ext/http_cli.nu`
     ? . cc is_zig { ( vec_push [s] args `cc` ) } {}
     ( vec_push [s] args `--target=wasm32-wasi` )
     ( vec_push [s] args `-O2` )
+    ? != 0 ( nurl_str_eq feat `threads` ) {
+        ( vec_push [s] args `-matomics` )
+        ( vec_push [s] args `-mbulk-memory` )
+    } {}
     ( vec_push [s] args `-c` )
     ( vec_push [s] args ( string_data csrc ) )
     ( vec_push [s] args `-o` )
@@ -582,4 +606,9 @@ $ `stdlib/ext/http_cli.nu`
             ^ @ !String String { F ( string_from `could not run the wasm compiler` ) }
         }
     }
+}
+
+// The plain (no extra features) object — what every non-threads build wants.
+@ wb_ensure_wasm_obj WbCompiler cc s src_c → !String String {
+    ^ ( wb_ensure_wasm_obj_feat cc src_c `` )
 }

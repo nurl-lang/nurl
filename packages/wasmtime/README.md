@@ -20,7 +20,7 @@ exit code matching the reference wasmtime.
 
 ```sh
 # WASI command mode: run a wasm32-wasi module's _start (argv = module + args)
-wasmtime run [--dir <path>]… [--env NAME=VALUE]… [--fuel N] [--allow-gpu] hello.wasm [args…]
+wasmtime run [--dir <path>]… [--env NAME=VALUE]… [--fuel N] [--allow-gpu] [--allow-net] hello.wasm [args…]
 
 # Direct mode: invoke an exported function with integer / float args
 wasmtime run --invoke <export> <module.wasm> [args…]
@@ -301,6 +301,83 @@ reaches first. (Note: `--fuel N` still bounds
 runaway *valid* guests; an unbounded `loop` runs forever exactly as it does on
 the reference runtime.)
 
+## Threads (wasi-threads)
+
+A module built for threads — `wasmbuilder --threads` — declares a SHARED
+memory, imports `wasi.thread-spawn` and exports `wasi_thread_start`.
+This runtime implements that: a spawn creates a host thread with its own
+Interp — own value stack, own frames, own globals, and therefore its own
+`__stack_pointer` — over the *same* linear memory, table and module. The
+host sets that stack pointer from the block the guest passes, because C
+cannot assign a wasm global; everything else about the thread is the
+guest's own libc code in `stdlib/runtime_ffi.c`.
+
+- **Atomics** (the `0xfe` family) execute: load/store at every width, the
+  six read-modify-write groups, cmpxchg, `wait32`/`wait64`/`notify` and
+  `fence`. An interpreter cannot borrow the CPU's atomicity for an RMW it
+  performs in three steps, so every atomic op takes one process-wide
+  lock — sequentially consistent by construction. Unaligned or
+  out-of-bounds atomics trap, as the spec says.
+- **A shared memory is reserved at its declared maximum** when the module
+  is instantiated, and `memory.grow` only raises the addressable bound:
+  growth must never move a buffer another thread is reading. The new
+  bound is published to every thread of the instance under the same lock.
+- **The host-side tables are shared**: file descriptors, socket handles
+  and captured output belong to the instantiating Interp, so a file
+  opened by one thread is the same fd in another.
+- **`poll_oneoff`** is implemented (clock subscriptions sleep, fd
+  subscriptions on files and stdio are ready immediately), which is what
+  libc's `sleep`/`nanosleep` and every timeout go through.
+- A thread that traps says so on stderr and ends that thread only — the
+  guest's `join` on it simply never completes, exactly as a native
+  runtime would leave a crashed thread.
+
+The guest side is worth knowing about: wasm32's libc allocator is
+single-threaded by design and cannot be locked from outside, so a
+threads build brings its own — `stdlib/runtime_wasm_alloc.c` defines the
+whole C allocation surface behind one futex — and the stdlib's M:N async
+runtime (fibers) is backed by one thread per fiber, which is what makes
+`spawn` + `runtime_run` (the relay's accept loop, the HTTP server) work.
+
+```sh
+wasmbuilder --threads server.nu -o server.wasm
+wasmtime run --allow-net server.wasm
+```
+
+## Sockets (`nurl_net` host imports)
+
+WASI preview1 has no way to open a socket — it can only accept on one the
+host preopened — so stdlib's socket layer under `__wasi__` is a set of thin
+wrappers over wasm imports in the module `nurl_net`, and this runtime
+answers them with the very same `nurl_tcp_*` / `nurl_udp_*` / `nurl_dns_*`
+runtime entry points a native build links directly. A NURL program that
+listens, connects, resolves and serves works compiled to wasm exactly as it
+does natively — **including TLS**, because stdlib's TLS 1.3 is pure NURL and
+runs inside the guest over these plaintext sockets.
+
+Two details make the bridge safe to hand an untrusted module:
+
+- **The guest never sees a host handle.** It gets an index into a per-instance
+  table; a forged handle can only miss. (It is also what makes handles work at
+  all on wasm32: a host handle is a 64-bit pointer and the guest's stdlib keeps
+  socket handles in a pointer-sized field, so the real thing came back
+  truncated.)
+- **Every guest pointer is bounds-checked** against linear memory before the
+  host sees it, and host-produced text (peer/local address, DNS answers) is
+  copied into a guest-supplied buffer with an explicit cap.
+
+The surface is **off by default**: pass `--allow-net` (embedder API:
+`interp_allow_net`), otherwise a `nurl_net` import traps with a message that
+says so. Sockets the guest leaves open are closed when the instance is freed.
+
+```sh
+wasmtime run --allow-net server.wasm     # the guest's listen/accept is ours
+```
+
+A module that never touches `std/net.nu` carries no `nurl_net` import at all
+(`--gc-sections` drops the unused wrappers), so it still runs on any plain
+WASI runtime.
+
 ## GPU host imports (CUDA / NVRTC)
 
 A wasm module built from a GPU-using NURL package (`packages/gpu` →
@@ -395,7 +472,14 @@ src/main.nu     CLI: WASI command mode (run _start) and direct --invoke mode
 ```sh
 NURL_STDLIB=<repo> ../../nurl.sh tests/interp_test.nu /tmp/it && /tmp/it
 NURL_STDLIB=<repo> ../../nurl.sh tests/wasi_test.nu  /tmp/wt && /tmp/wt
-# (also: mem_test, table_test, float_test)
+# (also: mem_test, table_test, float_test, semantics_test, hardening_test)
+
+# End-to-end: the same NURL program built native and as wasm, both talking
+# to real sockets, output compared. Needs ../wasmbuilder.
+./tests/net_test.sh
+
+# Same idea for wasi-threads: four threads over one shared heap.
+./tests/threads_test.sh
 ```
 
 ## License

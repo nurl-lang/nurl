@@ -607,6 +607,9 @@ void nurl_proc_spawn_free(long long h) {
 #if defined(__linux__)
 #  include <sys/random.h>
 #endif
+#if defined(__wasi__)
+#  include <unistd.h>            /* getentropy — wasi-libc's random_get */
+#endif
 
 /* Fill buf with n cryptographically-strong bytes; return 1 on success.
  * 0 only on degraded fallback (LCG over time+clock) — shouldn't happen
@@ -637,6 +640,24 @@ long long nurl_rand_fill(unsigned char *buf, long long n) {
         size_t r2 = fread(buf, 1, want, f);
         fclose(f);
         if (r2 == want) return 1;
+    }
+#elif defined(__wasi__)
+    /* WASI's CSPRNG is a first-class import: wasi-libc's getentropy() is
+     * wasi_snapshot_preview1's random_get, which every runtime backs with
+     * the host CSPRNG. Without this the wasi build fell through to the
+     * LCG below and returned 0 — and 0 means "degraded" to every caller,
+     * so std/x509_gen and the pure TLS stack panicked on a wasm target
+     * that in fact has perfectly good entropy. getentropy() takes at most
+     * 256 bytes per call (GETENTROPY_MAX). */
+    {
+        size_t got = 0;
+        while (got < want) {
+            size_t chunk = want - got;
+            if (chunk > 256) chunk = 256;
+            if (getentropy(buf + got, chunk) != 0) break;
+            got += chunk;
+        }
+        if (got == want) return 1;
     }
 #else
     FILE *f = fopen("/dev/urandom", "rb");
@@ -2415,76 +2436,197 @@ char *nurl_dns_reverse(const char *ip) {
     return strdup(host);
 }
 
-#else  /* __wasi__: no socket support — every call returns NetOther. */
+#else  /* __wasi__ */
+/*
+ * WASI has no socket layer of its own (preview1 can only accept on a
+ * socket the host preopened), so the sockets come from the host as wasm
+ * IMPORTS in the `nurl_net` module. Each function below is a thin
+ * wrapper over one import, keeping the ABI the NURL side already
+ * declares in stdlib/core/builtins.nu; the handle is the host's own
+ * handle, opaque to the guest.
+ *
+ * Two properties make this safe to have in every build:
+ *   • wasm-ld's --gc-sections drops a wrapper no one calls, and an
+ *     import referenced by nothing is not emitted — so a module that
+ *     never touches std/net.nu carries no `nurl_net` import at all and
+ *     still runs on a plain WASI runtime.
+ *   • A module that DOES open sockets now says so in its import
+ *     section. That is the honest statement of what it needs; a host
+ *     without sockets refuses to instantiate it instead of pretending
+ *     every connect failed.
+ *
+ * TLS needs nothing here: stdlib's TLS 1.3 is pure NURL and runs inside
+ * the guest over these plaintext sockets.
+ *
+ * Strings that the host produces (peer/local address, DNS answers) are
+ * written into a caller-supplied buffer and the import returns the
+ * length — the host cannot allocate in the guest's linear memory.
+ */
+
+#define NURL_NET_IMPORT(nm) \
+    __attribute__((import_module("nurl_net"), import_name(nm)))
+
+NURL_NET_IMPORT("tcp_listen")   extern long long nurl__ni_tcp_listen(const char*, long long, long long);
+NURL_NET_IMPORT("tcp_connect")  extern long long nurl__ni_tcp_connect(const char*, long long);
+NURL_NET_IMPORT("tcp_accept")   extern long long nurl__ni_tcp_accept(long long);
+NURL_NET_IMPORT("tcp_read")     extern long long nurl__ni_tcp_read(long long, const char*, long long);
+NURL_NET_IMPORT("tcp_write")    extern long long nurl__ni_tcp_write(long long, const char*, long long);
+NURL_NET_IMPORT("tcp_close")    extern void      nurl__ni_tcp_close(long long);
+NURL_NET_IMPORT("tcp_shutdown") extern void      nurl__ni_tcp_shutdown(long long);
+NURL_NET_IMPORT("tcp_err_kind") extern long long nurl__ni_tcp_err_kind(long long);
+NURL_NET_IMPORT("tcp_set_timeout") extern void   nurl__ni_tcp_set_timeout(long long, long long);
+NURL_NET_IMPORT("tcp_timeout_ms")  extern long long nurl__ni_tcp_timeout_ms(long long);
+NURL_NET_IMPORT("tcp_peer_addr")   extern long long nurl__ni_tcp_peer_addr(long long, char*, long long);
+NURL_NET_IMPORT("tcp_local_addr")  extern long long nurl__ni_tcp_local_addr(long long, char*, long long);
+NURL_NET_IMPORT("tcp_get_fd")      extern long long nurl__ni_tcp_get_fd(long long);
+NURL_NET_IMPORT("tcp_set_nonblock") extern void  nurl__ni_tcp_set_nonblock(long long, long long);
+NURL_NET_IMPORT("tcp_ref")      extern void      nurl__ni_tcp_ref(long long);
+NURL_NET_IMPORT("tcp_unref")    extern void      nurl__ni_tcp_unref(long long);
+
+NURL_NET_IMPORT("udp_bind")     extern long long nurl__ni_udp_bind(const char*, long long);
+NURL_NET_IMPORT("udp_connect")  extern long long nurl__ni_udp_connect(long long, const char*, long long);
+NURL_NET_IMPORT("udp_send")     extern long long nurl__ni_udp_send(long long, const char*, long long);
+NURL_NET_IMPORT("udp_recv")     extern long long nurl__ni_udp_recv(long long, char*, long long);
+NURL_NET_IMPORT("udp_send_to")  extern long long nurl__ni_udp_send_to(long long, const char*, long long, const char*, long long);
+NURL_NET_IMPORT("udp_recv_from") extern long long nurl__ni_udp_recv_from(long long, char*, long long);
+NURL_NET_IMPORT("udp_close")    extern void      nurl__ni_udp_close(long long);
+NURL_NET_IMPORT("udp_err_kind") extern long long nurl__ni_udp_err_kind(long long);
+NURL_NET_IMPORT("udp_peer_addr")  extern long long nurl__ni_udp_peer_addr(long long, char*, long long);
+NURL_NET_IMPORT("udp_local_addr") extern long long nurl__ni_udp_local_addr(long long, char*, long long);
+NURL_NET_IMPORT("udp_set_timeout")  extern void   nurl__ni_udp_set_timeout(long long, long long);
+NURL_NET_IMPORT("udp_set_nonblock") extern void   nurl__ni_udp_set_nonblock(long long, long long);
+NURL_NET_IMPORT("udp_family")   extern long long nurl__ni_udp_family(long long);
+NURL_NET_IMPORT("udp_get_fd")   extern long long nurl__ni_udp_get_fd(long long);
+NURL_NET_IMPORT("udp_set_broadcast") extern long long nurl__ni_udp_set_broadcast(long long, long long);
+NURL_NET_IMPORT("udp_join_group")    extern long long nurl__ni_udp_join_group(long long, const char*, const char*);
+NURL_NET_IMPORT("udp_leave_group")   extern long long nurl__ni_udp_leave_group(long long, const char*, const char*);
+NURL_NET_IMPORT("udp_set_multicast_ttl")  extern long long nurl__ni_udp_set_multicast_ttl(long long, long long);
+NURL_NET_IMPORT("udp_set_multicast_loop") extern long long nurl__ni_udp_set_multicast_loop(long long, long long);
+
+NURL_NET_IMPORT("dns_resolve")      extern long long nurl__ni_dns_resolve(const char*, char*, long long);
+NURL_NET_IMPORT("dns_resolve_port") extern long long nurl__ni_dns_resolve_port(const char*, long long, char*, long long);
+NURL_NET_IMPORT("dns_reverse")      extern long long nurl__ni_dns_reverse(const char*, char*, long long);
+
+/* An address is at most "[<45-char v6>]:65535"; DNS answers are a
+ * comma-joined list, so give those room and truncate rather than grow. */
+#define NURL_NET_ADDR_CAP 128
+#define NURL_NET_DNS_CAP  2048
+
+static char *nurl__net_take(const char *buf, long long n) {
+    if (n < 0) n = 0;
+    char *out = (char*)malloc((size_t)n + 1);
+    if (!out) return NULL;
+    if (n > 0) memcpy(out, buf, (size_t)n);
+    out[n] = 0;
+    return out;
+}
 
 long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
-    (void)host; (void)port; (void)backlog;
-    return 0;
+    return nurl__ni_tcp_listen(host ? host : "", port, backlog);
 }
+/* The TLS listener is the pure-NURL stack over a plaintext socket
+ * (std/net.nu builds the handshake itself); the PEM arguments are the
+ * NURL side's business, not the host's. */
 long long nurl_tcp_listen_tls(const char *host, long long port, long long backlog,
                               const char *cert, const char *key) {
-    (void)host; (void)port; (void)backlog; (void)cert; (void)key;
-    return 0;
+    (void)cert; (void)key;
+    return nurl__ni_tcp_listen(host ? host : "", port, backlog);
 }
-long long nurl_tcp_accept(long long listener) { (void)listener; return 0; }
+long long nurl_tcp_connect(const char *host, long long port) {
+    return nurl__ni_tcp_connect(host ? host : "", port);
+}
+long long nurl_tcp_accept(long long listener) { return nurl__ni_tcp_accept(listener); }
 long long nurl_tcp_read(long long h, const char *buf, long long n) {
-    (void)h; (void)buf; (void)n; return -1;
+    return nurl__ni_tcp_read(h, buf, n);
 }
 long long nurl_tcp_write(long long h, const char *buf, long long n) {
-    (void)h; (void)buf; (void)n; return -1;
+    return nurl__ni_tcp_write(h, buf, n);
 }
-void nurl_tcp_close(long long h) { (void)h; }
-void nurl_tcp_shutdown(long long h) { (void)h; }
-long long nurl_tcp_err_kind(long long h) { (void)h; return NURL_NET_ERR_OTHER; }
-const char *nurl_tcp_peer_addr(long long h) { (void)h; return ""; }
-char       *nurl_tcp_local_addr(long long h) { (void)h; return strdup(""); }
-void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
-/* Async-runtime hooks. The non-WASI variants live above the #else gate;
- * mirror them as no-ops here so wasm-ld doesn't fail with undefined
- * symbols for any example that imports the async/HTTP-server stack
- * (which references these unconditionally — they just never fire under
- * WASI because the underlying tcp_listen/_accept returned 0). */
-long long nurl_tcp_get_fd(long long h)                 { (void)h; return -1; }
-void nurl_tcp_set_nonblock(long long h, long long on)  { (void)h; (void)on; }
-void nurl_tcp_ref(long long h)                         { (void)h; }
-void nurl_tcp_unref(long long h)                       { (void)h; }
+void nurl_tcp_close(long long h)    { nurl__ni_tcp_close(h); }
+void nurl_tcp_shutdown(long long h) { nurl__ni_tcp_shutdown(h); }
+long long nurl_tcp_err_kind(long long h) { return nurl__ni_tcp_err_kind(h); }
+/* Borrowed, as on every other platform: valid until the next call. */
+const char *nurl_tcp_peer_addr(long long h) {
+    static char buf[NURL_NET_ADDR_CAP];
+    long long n = nurl__ni_tcp_peer_addr(h, buf, (long long)sizeof(buf) - 1);
+    if (n < 0) n = 0;
+    buf[n] = 0;
+    return buf;
+}
+char *nurl_tcp_local_addr(long long h) {
+    char buf[NURL_NET_ADDR_CAP];
+    long long n = nurl__ni_tcp_local_addr(h, buf, (long long)sizeof(buf));
+    return nurl__net_take(buf, n);
+}
+void nurl_tcp_set_timeout(long long h, long long ms) { nurl__ni_tcp_set_timeout(h, ms); }
+long long nurl_tcp_timeout_ms(long long h)           { return nurl__ni_tcp_timeout_ms(h); }
+long long nurl_tcp_get_fd(long long h)                { return nurl__ni_tcp_get_fd(h); }
+void nurl_tcp_set_nonblock(long long h, long long on) { nurl__ni_tcp_set_nonblock(h, on); }
+void nurl_tcp_ref(long long h)                        { nurl__ni_tcp_ref(h); }
+void nurl_tcp_unref(long long h)                      { nurl__ni_tcp_unref(h); }
 
-/* §18b / §18c WASI stubs — wasi-libc has no socket layer. */
 long long nurl_udp_bind(const char *h, long long p) {
-    (void)h; (void)p; return 0;
+    return nurl__ni_udp_bind(h ? h : "", p);
 }
 long long nurl_udp_connect(long long h, const char *host, long long p) {
-    (void)h; (void)host; (void)p; return -1;
+    return nurl__ni_udp_connect(h, host ? host : "", p);
 }
 long long nurl_udp_send_to(long long h, const char *b, long long n,
                            const char *host, long long p) {
-    (void)h; (void)b; (void)n; (void)host; (void)p; return -1;
+    return nurl__ni_udp_send_to(h, b, n, host ? host : "", p);
 }
 long long nurl_udp_recv_from(long long h, char *b, long long n) {
-    (void)h; (void)b; (void)n; return -1;
+    return nurl__ni_udp_recv_from(h, b, n);
 }
 long long nurl_udp_send(long long h, const char *b, long long n) {
-    (void)h; (void)b; (void)n; return -1;
+    return nurl__ni_udp_send(h, b, n);
 }
 long long nurl_udp_recv(long long h, char *b, long long n) {
-    (void)h; (void)b; (void)n; return -1;
+    return nurl__ni_udp_recv(h, b, n);
 }
-const char *nurl_udp_peer_addr(long long h)            { (void)h; return ""; }
-char       *nurl_udp_local_addr(long long h)           { (void)h; return strdup(""); }
-long long nurl_udp_err_kind(long long h)               { (void)h; return NURL_NET_ERR_OTHER; }
-long long nurl_udp_get_fd(long long h)                 { (void)h; return -1; }
-long long nurl_udp_family(long long h)                 { (void)h; return -1; }
-void nurl_udp_set_nonblock(long long h, long long on)  { (void)h; (void)on; }
-void nurl_udp_set_timeout(long long h, long long ms)   { (void)h; (void)ms; }
-void nurl_udp_close(long long h)                       { (void)h; }
-long long nurl_udp_set_broadcast(long long h, long long on)            { (void)h; (void)on; return -1; }
-long long nurl_udp_join_group(long long h, const char *g, const char *i){ (void)h; (void)g; (void)i; return -1; }
-long long nurl_udp_leave_group(long long h, const char *g, const char *i){ (void)h; (void)g; (void)i; return -1; }
-long long nurl_udp_set_multicast_ttl(long long h, long long t)         { (void)h; (void)t; return -1; }
-long long nurl_udp_set_multicast_loop(long long h, long long on)       { (void)h; (void)on; return -1; }
-char *nurl_dns_resolve(const char *h)                  { (void)h; return strdup(""); }
-char *nurl_dns_resolve_port(const char *h, long long p){ (void)h; (void)p; return strdup(""); }
-char *nurl_dns_reverse(const char *ip)                 { (void)ip; return strdup(""); }
+const char *nurl_udp_peer_addr(long long h) {
+    static char buf[NURL_NET_ADDR_CAP];
+    long long n = nurl__ni_udp_peer_addr(h, buf, (long long)sizeof(buf) - 1);
+    if (n < 0) n = 0;
+    buf[n] = 0;
+    return buf;
+}
+char *nurl_udp_local_addr(long long h) {
+    char buf[NURL_NET_ADDR_CAP];
+    long long n = nurl__ni_udp_local_addr(h, buf, (long long)sizeof(buf));
+    return nurl__net_take(buf, n);
+}
+long long nurl_udp_err_kind(long long h)               { return nurl__ni_udp_err_kind(h); }
+long long nurl_udp_get_fd(long long h)                 { return nurl__ni_udp_get_fd(h); }
+long long nurl_udp_family(long long h)                 { return nurl__ni_udp_family(h); }
+void nurl_udp_set_nonblock(long long h, long long on)  { nurl__ni_udp_set_nonblock(h, on); }
+void nurl_udp_set_timeout(long long h, long long ms)   { nurl__ni_udp_set_timeout(h, ms); }
+void nurl_udp_close(long long h)                       { nurl__ni_udp_close(h); }
+long long nurl_udp_set_broadcast(long long h, long long on) { return nurl__ni_udp_set_broadcast(h, on); }
+long long nurl_udp_join_group(long long h, const char *g, const char *i) {
+    return nurl__ni_udp_join_group(h, g ? g : "", i ? i : "");
+}
+long long nurl_udp_leave_group(long long h, const char *g, const char *i) {
+    return nurl__ni_udp_leave_group(h, g ? g : "", i ? i : "");
+}
+long long nurl_udp_set_multicast_ttl(long long h, long long t)   { return nurl__ni_udp_set_multicast_ttl(h, t); }
+long long nurl_udp_set_multicast_loop(long long h, long long on) { return nurl__ni_udp_set_multicast_loop(h, on); }
+
+char *nurl_dns_resolve(const char *h) {
+    char buf[NURL_NET_DNS_CAP];
+    long long n = nurl__ni_dns_resolve(h ? h : "", buf, (long long)sizeof(buf));
+    return nurl__net_take(buf, n);
+}
+char *nurl_dns_resolve_port(const char *h, long long p) {
+    char buf[NURL_NET_DNS_CAP];
+    long long n = nurl__ni_dns_resolve_port(h ? h : "", p, buf, (long long)sizeof(buf));
+    return nurl__net_take(buf, n);
+}
+char *nurl_dns_reverse(const char *ip) {
+    char buf[NURL_NET_ADDR_CAP];
+    long long n = nurl__ni_dns_reverse(ip ? ip : "", buf, (long long)sizeof(buf));
+    return nurl__net_take(buf, n);
+}
 
 #endif /* __wasi__ guard for §18 */
 
@@ -2518,7 +2660,356 @@ void nurl_pthread_detach_ptr(pthread_t *t) {
     if (t) pthread_detach(*t);
 }
 
-#else  /* WASI — no threading. */
+#elif defined(__wasm_atomics__)  /* WASI + the threads proposal */
+/*
+ * wasi-threads, guest side. wasi-libc ships no pthread implementation
+ * for this target, so the whole surface stdlib/std/thread.nu declares is
+ * built here on the two things the proposal does give us: the
+ * `wasi.thread-spawn` import, and atomics on shared linear memory.
+ *
+ * Spawning: the guest allocates the new thread's stack and start block,
+ * hands the block to the host, and the host gives the thread a fresh
+ * instance of this module — its own stacks and globals — over the same
+ * memory, with `__stack_pointer` set from the block. That last part is
+ * the host's job because C cannot assign a wasm global; everything else
+ * is here.
+ *
+ * Mutex and condvar are the textbook futex pair over
+ * memory.atomic.wait32 / notify. Join is the same futex on a done flag.
+ */
+
+#include <stdatomic.h>
+#include <stdint.h>
+
+__attribute__((import_module("wasi"), import_name("thread-spawn")))
+extern int32_t __nurl_wasi_thread_spawn(void *start_arg);
+
+/* 1 MiB per thread, matching the default the main stack gets. Keep the
+ * field order: the host reads stack_top at offset 8. */
+#define NURL_WASM_TSTACK (8 * 1024 * 1024)
+
+typedef struct NurlWasmThread {
+    int32_t          fn;          /* 0: void *(*)(void *) */
+    int32_t          arg;         /* 4 */
+    int32_t          stack_top;   /* 8: the host sets __stack_pointer here */
+    int32_t          tid;         /* 12 */
+    _Atomic int32_t  done;        /* 16 */
+    int32_t          ret;         /* 20 */
+    int32_t          stack_base;  /* 24: freed by join */
+} NurlWasmThread;
+
+static void nurl__wait32(_Atomic int32_t *addr, int32_t expected) {
+    __builtin_wasm_memory_atomic_wait32((int32_t*)addr, expected, -1);
+}
+
+static void nurl__wake(_Atomic int32_t *addr, int32_t count) {
+    __builtin_wasm_memory_atomic_notify((int32_t*)addr, count);
+}
+
+/*
+ * The host calls this on the new thread with the block it was given.
+ *
+ * The entry point is called as `void (*)(void *)`, which is the shape a
+ * NURL closure compiles to — and on this target that is the only thing
+ * that ever reaches pthread_create (stdlib/std/thread.nu decomposes the
+ * closure into fn + env). Elsewhere the mismatch with POSIX's
+ * `void *(*)(void *)` is harmless because the caller discards the
+ * return; wasm type-checks call_indirect exactly, so here it is not a
+ * matter of taste: calling it with the POSIX shape traps with a
+ * signature mismatch before the thread body runs.
+ */
+/* wasm-ld synthesises this when the module has thread-local data; each
+ * thread gets its own block or every `__thread` variable — errno among
+ * them — would be one shared word. */
+extern void __wasm_init_tls(void *);
+extern void nurl_eprint(const char *);
+
+__attribute__((export_name("wasi_thread_start")))
+void wasi_thread_start(int32_t tid, void *start_arg) {
+    NurlWasmThread *ts = (NurlWasmThread*)start_arg;
+    ts->tid = tid;
+    {
+        size_t tls_size = __builtin_wasm_tls_size();
+        if (tls_size) {
+            size_t tls_align = __builtin_wasm_tls_align();
+            if (tls_align < 16) tls_align = 16;
+            unsigned char *raw = (unsigned char*)malloc(tls_size + tls_align);
+            if (raw) {
+                uintptr_t base = ((uintptr_t)raw + tls_align - 1) & ~(uintptr_t)(tls_align - 1);
+                __wasm_init_tls((void*)base);
+            }
+        }
+    }
+    void (*entry)(void*) = (void (*)(void*))(uintptr_t)ts->fn;
+    entry((void*)(uintptr_t)ts->arg);
+    {
+        const unsigned char *guard = (const unsigned char*)(uintptr_t)ts->stack_base;
+        int broken = 0;
+        for (int i = 0; i < 4096; i++) if (guard[i] != 0xA5) { broken = 1; break; }
+        if (broken) nurl_eprint("nurl: wasm thread stack overflow (canary broken)\n");
+    }
+    ts->ret = 0;
+    atomic_store(&ts->done, 1);
+    nurl__wake(&ts->done, -1);
+}
+
+int pthread_create(void *t, void *a, void *start, void *arg) {
+    (void)a;
+    if (!t || !start) return 22;  /* EINVAL */
+    NurlWasmThread *ts = (NurlWasmThread*)calloc(1, sizeof *ts);
+    if (!ts) return 11;  /* EAGAIN */
+    /* wasm has no guard page, so a stack that runs off its end writes
+     * into whatever heap block sits below it and the damage shows up
+     * somewhere else entirely. A canary under the stack turns that into
+     * a diagnosis instead of a mystery. */
+    unsigned char *stack = (unsigned char*)malloc(NURL_WASM_TSTACK + 4096);
+    if (!stack) { free(ts); return 11; }
+    memset(stack, 0xA5, 4096);
+    ts->fn         = (int32_t)(uintptr_t)start;
+    ts->arg        = (int32_t)(uintptr_t)arg;
+    ts->stack_base = (int32_t)(uintptr_t)stack;
+    /* The stack grows down from the top, 16-byte aligned; the low 4 KiB
+     * is the canary, so the usable stack starts above it. */
+    ts->stack_top  = (int32_t)(((uintptr_t)stack + 4096 + NURL_WASM_TSTACK) & ~(uintptr_t)15);
+    atomic_store(&ts->done, 0);
+    if (__nurl_wasi_thread_spawn(ts) < 0) { free(stack); free(ts); return 11; }
+    *(void**)t = ts;   /* pthread_t is this block's address */
+    return 0;
+}
+
+int nurl_pthread_join_ptr(void *tp) {
+    if (!tp) return -1;
+    NurlWasmThread *ts = *(NurlWasmThread**)tp;
+    if (!ts) return -1;
+    while (atomic_load(&ts->done) == 0) nurl__wait32(&ts->done, 0);
+    free((void*)(uintptr_t)ts->stack_base);
+    free(ts);
+    *(void**)tp = NULL;
+    return 0;
+}
+
+/* Detach cannot free the block — the thread is still running out of it —
+ * so it only forgets it. The stack is reclaimed when the process exits;
+ * a thread that is never joined is a thread whose stack is live anyway. */
+void nurl_pthread_detach_ptr(void *tp) { if (tp) *(void**)tp = NULL; }
+
+/* 0 = free, 1 = held, 2 = held and someone is waiting. */
+int pthread_mutex_init(void *m, void *a) {
+    (void)a;
+    if (m) atomic_store((_Atomic int32_t*)m, 0);
+    return 0;
+}
+
+int pthread_mutex_lock(void *mp) {
+    _Atomic int32_t *m = (_Atomic int32_t*)mp;
+    if (!m) return 0;
+    int32_t expected = 0;
+    if (atomic_compare_exchange_strong(m, &expected, 1)) return 0;
+    do {
+        expected = 1;
+        if (atomic_load(m) == 2 || atomic_compare_exchange_strong(m, &expected, 2))
+            nurl__wait32(m, 2);
+        expected = 0;
+    } while (!atomic_compare_exchange_strong(m, &expected, 2));
+    return 0;
+}
+
+int pthread_mutex_unlock(void *mp) {
+    _Atomic int32_t *m = (_Atomic int32_t*)mp;
+    if (!m) return 0;
+    if (atomic_fetch_sub(m, 1) != 1) {
+        atomic_store(m, 0);
+        nurl__wake(m, 1);
+    }
+    return 0;
+}
+
+int pthread_mutex_destroy(void *m) { (void)m; return 0; }
+
+/* A condvar is a sequence counter: a waiter reads it, drops the mutex,
+ * and sleeps until the counter moves. */
+int pthread_cond_init(void *c, void *a) {
+    (void)a;
+    if (c) atomic_store((_Atomic int32_t*)c, 0);
+    return 0;
+}
+
+int pthread_cond_wait(void *cp, void *mp) {
+    _Atomic int32_t *c = (_Atomic int32_t*)cp;
+    if (!c) return 0;
+    int32_t seq = atomic_load(c);
+    pthread_mutex_unlock(mp);
+    nurl__wait32(c, seq);
+    pthread_mutex_lock(mp);
+    return 0;
+}
+
+int pthread_cond_signal(void *cp) {
+    _Atomic int32_t *c = (_Atomic int32_t*)cp;
+    if (!c) return 0;
+    atomic_fetch_add(c, 1);
+    nurl__wake(c, 1);
+    return 0;
+}
+
+int pthread_cond_broadcast(void *cp) {
+    _Atomic int32_t *c = (_Atomic int32_t*)cp;
+    if (!c) return 0;
+    atomic_fetch_add(c, 1);
+    nurl__wake(c, -1);
+    return 0;
+}
+
+int pthread_cond_destroy(void *c) { (void)c; return 0; }
+
+/* ── the async runtime, as one thread per fiber ──────────────────
+ *
+ * stdlib's M:N runtime needs a stackful context switch, which wasm has
+ * no way to express (the stack-switching proposal is not here yet). But
+ * the API it exports does not actually require M:N — it requires that a
+ * spawned body runs concurrently and that `runtime_run` returns when
+ * they are all done. With wasi-threads that is a 1:1 backend: a fiber IS
+ * a thread. Cheaper multiplexing can come later; correct concurrency is
+ * what the relay, the HTTP server and every `spawn` in the stdlib are
+ * actually asking for.
+ *
+ * The reactor stays stubbed on this target: sockets here are blocking,
+ * so `nurl_reactor_wait_*` answering "not on a fiber" makes the async
+ * paths take their blocking fallback, which is exactly right when each
+ * fiber owns a thread.
+ */
+
+typedef struct NurlWasmFiber {
+    void            (*fn)(void*);
+    void             *env;
+    int32_t           own_env;   /* free env after the body returns */
+    int32_t           joinable;
+    _Atomic int32_t   done;
+    _Atomic int32_t   parked;    /* futex word for park/unpark */
+    void             *tid;       /* pthread_t block, when joinable */
+    struct NurlWfGroup *group;   /* the runtime_run that waits for it */
+} NurlWasmFiber;
+
+/* Fibers belong to the thread that started them, exactly as the M:N
+ * runtime's scheduler is per worker. One PROCESS-wide counter made
+ * `runtime_run` wait for every fiber anywhere — so a worker thread that
+ * ran the runtime blocked on the relay's accept loop, a fiber that by
+ * design never ends. Every thread parked, 1660 bytes sat unread, and the
+ * node wedged. A group is created by the first spawn on a root thread
+ * and inherited by the fibers it starts. */
+typedef struct NurlWfGroup {
+    _Atomic int32_t live;
+    _Atomic int32_t gen;
+} NurlWfGroup;
+
+static __thread NurlWfGroup *nurl__wf_group = NULL;
+
+static NurlWfGroup *nurl__wf_group_get(void) {
+    if (!nurl__wf_group) {
+        nurl__wf_group = (NurlWfGroup*)calloc(1, sizeof *nurl__wf_group);
+    }
+    return nurl__wf_group;
+}
+
+static void nurl__wf_body(void *arg) {
+    NurlWasmFiber *f = (NurlWasmFiber*)arg;
+    nurl__wf_group = f->group;   /* inherit, so nested spawns count here */
+    f->fn(f->env);
+    /* nurl_free, NOT free: an owned closure environment came from
+     * nurl_alloc, which also records the pointer in the panic-unwind
+     * journal and recycles the block through the per-thread size-class
+     * caches. Releasing it with libc's free leaves a dangling journal
+     * entry and hands a block back to the wrong allocator — which is
+     * how a relay connection fiber ended up freeing a wild pointer,
+     * intermittently, depending on whether the block had come from a
+     * cache. The M:N backend frees it exactly this way. */
+    if (f->own_env && f->env) { nurl_free((char*)f->env); f->env = NULL; }
+    atomic_store(&f->done, 1);
+    nurl__wake(&f->done, -1);
+    {
+        NurlWfGroup *g = f->group;
+        if (g) {
+            atomic_fetch_sub(&g->live, 1);
+            atomic_fetch_add(&g->gen, 1);
+            nurl__wake(&g->gen, -1);
+        }
+    }
+    if (!f->joinable) {
+        if (f->tid) { free(f->tid); }
+        free(f);
+    }
+}
+
+static long long nurl__wf_spawn(void *fn, void *env, int own_env, int joinable) {
+    if (!fn) return 0;
+    NurlWasmFiber *f = (NurlWasmFiber*)calloc(1, sizeof *f);
+    if (!f) return 0;
+    f->fn = (void (*)(void*))fn;
+    f->env = env;
+    f->own_env = own_env;
+    f->joinable = joinable;
+    void **tid = (void**)calloc(1, sizeof(void*));
+    if (!tid) { free(f); return 0; }
+    f->tid = tid;
+    NurlWfGroup *g = nurl__wf_group_get();
+    f->group = g;
+    if (g) atomic_fetch_add(&g->live, 1);
+    if (pthread_create(tid, NULL, (void*)nurl__wf_body, f) != 0) {
+        if (g) atomic_fetch_sub(&g->live, 1);
+        free(tid); free(f);
+        return 0;
+    }
+    return (long long)(uintptr_t)f;
+}
+
+long long nurl_fiber_spawn(void *fn, void *env)          { return nurl__wf_spawn(fn, env, 0, 0); }
+long long nurl_fiber_spawn_owned(void *fn, void *env)    { return nurl__wf_spawn(fn, env, 1, 0); }
+long long nurl_fiber_spawn_joinable(void *fn, void *env) { return nurl__wf_spawn(fn, env, 0, 1); }
+
+void nurl_fiber_join(long long fiber) {
+    NurlWasmFiber *f = (NurlWasmFiber*)(uintptr_t)fiber;
+    if (!f) return;
+    while (atomic_load(&f->done) == 0) nurl__wait32(&f->done, 0);
+    if (f->tid) { nurl_pthread_join_ptr(f->tid); free(f->tid); }
+    free(f);
+}
+
+/* Nothing to yield to: the OS is the scheduler here. */
+void nurl_fiber_yield(void) {}
+
+long long nurl_fiber_current(void)   { return 0; }
+long long nurl_fiber_worker_id(void) { return -1; }
+
+/* park/unpark are the futex pair again, on the fiber's own word. */
+void nurl_fiber_park_with_mutex(long long mutex_h) {
+    (void)mutex_h;
+}
+
+void nurl_fiber_unpark(long long fiber) {
+    NurlWasmFiber *f = (NurlWasmFiber*)(uintptr_t)fiber;
+    if (!f) return;
+    atomic_store(&f->parked, 0);
+    nurl__wake(&f->parked, -1);
+}
+
+void nurl_runtime_init(long long worker_count) { (void)worker_count; }
+
+/* Block until every spawned fiber has finished — the same contract the
+ * M:N runtime has, and the reason a relay's `runtime_run` never returns:
+ * its accept loop is a fiber that runs forever. */
+void nurl_runtime_run(void) {
+    NurlWfGroup *g = nurl__wf_group;   /* no spawn here → nothing to wait for */
+    if (!g) return;
+    for (;;) {
+        if (atomic_load(&g->live) <= 0) return;
+        int32_t gen = atomic_load(&g->gen);
+        nurl__wait32(&g->gen, gen);
+    }
+}
+
+void nurl_runtime_shutdown(void) {}
+
+#else  /* WASI without atomics — no threading. */
 
 int  pthread_create(void *t, void *a, void *s, void *arg) {
     (void)t; (void)a; (void)s; (void)arg; return -1;
@@ -3695,7 +4186,8 @@ void nurl_runtime_shutdown(void) {
 #  pragma clang diagnostic pop
 #endif
 
-#else  /* no fiber backend (WASI, Windows) — stubs until a later phase */
+#elif !(defined(__wasi__) && defined(__wasm_atomics__))
+/* no fiber backend (Windows, wasm without threads) — stubs */
 
 long long nurl_fiber_spawn(void *fn, void *env) {
     (void)fn; (void)env; return 0;

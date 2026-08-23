@@ -37,7 +37,24 @@ $ `stdlib/core/vec.nu`
 // and the gate checks (`string_contains res ...`) stop seeing
 // string-constant occurrences too — so we only shim symbols that are
 // genuinely referenced as code.
+//
+// The mask has to be a BIJECTION, because a program's own data can
+// contain the sentinel text: this very source carries it as a literal,
+// so every program that embeds wasmbuilder (swarm-mcp does) emits
+// `c"__NURL_IR_AT_SENTINEL__\00"` in its IR. An unmask that maps the
+// sentinel back to `@` unconditionally rewrote that constant's contents
+// to `@` without touching its `[24 x i8]` length — clang then rejected
+// the whole module ("constant expression type mismatch"). So the token
+// is escaped before it is used: `TOKEN` → `TOKEN E`, then `@` → `TOKEN A`.
+// After that every TOKEN in the line is followed by `E`, so `TOKEN A`
+// only ever means "a masked `@`"; unmasking reverses the two steps in
+// order (`TOKEN A` → `@`, then `TOKEN E` → `TOKEN`) and restores data
+// byte for byte.
 @ __wb_ir_at_sentinel → s { ^ `__NURL_IR_AT_SENTINEL__` }
+
+@ __wb_ir_at_mask → s { ^ `__NURL_IR_AT_SENTINEL__A` }
+
+@ __wb_ir_at_esc → s { ^ `__NURL_IR_AT_SENTINEL__E` }
 
 @ __wb_mask_ir_str_consts String ir → String {
     : ( Vec String ) lines ( string_split ir `\n` )
@@ -50,7 +67,9 @@ $ `stdlib/core/vec.nu`
             T line → {
                 ? > i 0 { ( string_push_char out 10 ) } {}
                 ? ( string_contains line `c"` ) {
-                    : String m ( string_replace line `@` ( __wb_ir_at_sentinel ) )
+                    : String e ( string_replace line ( __wb_ir_at_sentinel ) ( __wb_ir_at_esc ) )
+                    : String m ( string_replace e `@` ( __wb_ir_at_mask ) )
+                    ( string_free e )
                     ( string_push_str out ( string_data m ) ) ( string_free m )
                 } { ( string_push_str out ( string_data line ) ) }
             }
@@ -323,7 +342,55 @@ $ `stdlib/core/vec.nu`
     ( string_push_str shims `}\n` )
 }
 
+// A POSIX stub definition that mirrors `decl`'s own signature — the
+// return and parameter types come from the IR, only the returned
+// sentinel comes from the caller's letter (see the table below).
+@ __wb_posix_stub_body String decl s sym s sent → String {
+    : String ret ( __wb_ir_decl_ret decl )
+    : ( Vec String ) pms ( __wb_ir_decl_params decl )
+    : String out ( string_new )
+    ? == ( string_len ret ) 0 {
+        ( string_free ret ) ( vec_free_with [String] pms \ String s → v { ( string_free s ) } )
+        ^ out
+    } {}
+    : s r ( string_data ret )
+    ( string_push_str out r )
+    ( string_push_str out ` @` )
+    ( string_push_str out sym )
+    ( string_push_char out 40 )
+    : ~ i k 0
+    ~ < k ( vec_len [String] pms ) {
+        ? > k 0 { ( string_push_str out `, ` ) } {}
+        ?? ( vec_get [String] pms k ) { T p → { ( string_push_str out ( string_data p ) ) } F → {} }
+        = k + k 1
+    }
+    ( string_push_str out `) {\n  ` )
+    ? != 0 ( nurl_str_eq r `void` ) { ( string_push_str out `ret void` ) } {
+        ? ( string_ends_with ret `*` ) {
+            ? != 0 ( nurl_str_eq sent `m` ) {
+                ( string_push_str out `%p = inttoptr i64 -1 to ` ) ( string_push_str out r )
+                ( string_push_str out `\n  ret ` ) ( string_push_str out r ) ( string_push_str out ` %p` )
+            } { ( string_push_str out `ret ` ) ( string_push_str out r ) ( string_push_str out ` null` ) }
+        } {
+            ( string_push_str out `ret ` ) ( string_push_str out r )
+            ( string_push_str out ? != 0 ( nurl_str_eq sent `e` ) ` -1` ? != 0 ( nurl_str_eq sent `o` ) ` 1` ` 0` )
+        }
+    }
+    ( string_push_str out `\n}` )
+    ( string_free ret )
+    ( vec_free_with [String] pms \ String s → v { ( string_free s ) } )
+    ^ out
+}
+
 @ wb_prepare_ir_for_wasi String ir → String {
+    ^ ( wb_prepare_ir_for_wasi_opts ir F )
+}
+
+// `threads` = the module is being built for wasi-threads, where
+// runtime.c DEFINES the pthread surface on top of atomics. Stubbing it
+// here would rename those call sites away from the real implementation,
+// so the pthread family is left alone in that build.
+@ wb_prepare_ir_for_wasi_opts String ir b threads → String {
     : ~ String res ( string_from ( string_data ir ) )
 
     // 0. Mask `@` inside string constants so the symbol rewrites below
@@ -524,8 +591,16 @@ $ `stdlib/core/vec.nu`
     // clang refuses `define @mmap` / `@munmap` etc as "invalid
     // redefinition" because libc builtins are recognised by name.
     //
-    // Signatures must match the `declare`s nurlc emits exactly. Check
-    // with `grep '@<fn>(' < nurlc-output.ll` if a new one is added.
+    // The stub's signature is READ BACK OUT OF THE IR, exactly as the
+    // libc width-shims above do it — a hardcoded one is a guess about
+    // widths the NURL source decides. `std/thread.nu` declares
+    // `pthread_create … → i32`, so a table that hardcoded `i64` produced
+    // `call i32 @…stub` against `define i64 @…stub`: wasm-ld answers a
+    // signature mismatch with a stub whose body is `unreachable`, and
+    // swarm-mcp's first `thread_spawn` TRAPPED instead of returning the
+    // documented -1. Only the sentinel VALUE is tabulated here; the
+    // return and parameter types come from the declaration.
+    //
     // POSIX-only fn → stub renaming. Strategy:
     //   1. Replace ` @<name>(` with ` @__nurl_<name>_stub(` everywhere
     //      in the IR. This rewrites both the declare line and every call
@@ -536,56 +611,61 @@ $ `stdlib/core/vec.nu`
     //      clang/wasi-sdk treats libc builtin names (mmap/munmap/fork…)
     //      as already-defined and rejects user `define @mmap`.
     //
-    // Parallel arrays: posix_names[i] gets the matching stub body
-    // posix_bodies[i] when ` @<posix_names[i]>(` is found in the IR.
+    // Parallel arrays: posix_names[i] gets the sentinel posix_sent[i]
+    // when ` @<posix_names[i]>(` is found in the IR. Sentinel letters:
+    //   `e` → -1 (the POSIX error return)   `z` → 0 (success no-op)
+    //   `o` → 1                             `n` → a null pointer
+    //   `m` → MAP_FAILED, i.e. (void*)-1
     : ( Vec s ) posix_names ( vec_new [s] )
-    : ( Vec s ) posix_bodies ( vec_new [s] )
-    ( vec_push [s] posix_names `mmap` ) ( vec_push [s] posix_bodies `i8* @__nurl_mmap_stub(i8*, i64, i32, i32, i32, i64) {\n  %p = inttoptr i64 -1 to i8*\n  ret i8* %p\n}` )
-    ( vec_push [s] posix_names `munmap` ) ( vec_push [s] posix_bodies `i32 @__nurl_munmap_stub(i8*, i64) { ret i32 0 }` )
-    ( vec_push [s] posix_names `madvise` ) ( vec_push [s] posix_bodies `i32 @__nurl_madvise_stub(i8*, i64, i32) { ret i32 0 }` )
-    ( vec_push [s] posix_names `fork` ) ( vec_push [s] posix_bodies `i64 @__nurl_fork_stub() { ret i64 -1 }` )
-    ( vec_push [s] posix_names `execvp` ) ( vec_push [s] posix_bodies `i64 @__nurl_execvp_stub(i8*, i8*) { ret i64 -1 }` )
-    ( vec_push [s] posix_names `waitpid` ) ( vec_push [s] posix_bodies `i64 @__nurl_waitpid_stub(i64, i8*, i64) { ret i64 -1 }` )
-    ( vec_push [s] posix_names `pipe` ) ( vec_push [s] posix_bodies `i64 @__nurl_pipe_stub(i8*) { ret i64 -1 }` )
-    ( vec_push [s] posix_names `dup2` ) ( vec_push [s] posix_bodies `i64 @__nurl_dup2_stub(i64, i64) { ret i64 -1 }` )
-    ( vec_push [s] posix_names `signal` ) ( vec_push [s] posix_bodies `i8* @__nurl_signal_stub(i64, i8*) { ret i8* null }` )
+    : ( Vec s ) posix_sent ( vec_new [s] )
+    ( vec_push [s] posix_names `mmap` ) ( vec_push [s] posix_sent `m` )
+    ( vec_push [s] posix_names `munmap` ) ( vec_push [s] posix_sent `z` )
+    ( vec_push [s] posix_names `madvise` ) ( vec_push [s] posix_sent `z` )
+    ( vec_push [s] posix_names `fork` ) ( vec_push [s] posix_sent `e` )
+    ( vec_push [s] posix_names `execvp` ) ( vec_push [s] posix_sent `e` )
+    ( vec_push [s] posix_names `waitpid` ) ( vec_push [s] posix_sent `e` )
+    ( vec_push [s] posix_names `pipe` ) ( vec_push [s] posix_sent `e` )
+    ( vec_push [s] posix_names `dup2` ) ( vec_push [s] posix_sent `e` )
+    ( vec_push [s] posix_names `signal` ) ( vec_push [s] posix_sent `n` )
     // realpath(3) — wasi-libc doesn't ship it (no symlink story on wasi).
     // stdlib/std/path.nu's path_canonical treats a NULL return as "path not
     // resolvable" and answers None, which is the honest wasm answer. Without
     // this stub the symbol becomes an env import and the reference wasmtime
     // refuses to *instantiate* the module — nurlc.wasm broke this way the
     // moment path_canonical entered the compiler's import graph.
-    ( vec_push [s] posix_names `realpath` ) ( vec_push [s] posix_bodies `i8* @__nurl_realpath_stub(i8*, i8*) { ret i8* null }` )
+    ( vec_push [s] posix_names `realpath` ) ( vec_push [s] posix_sent `n` )
     // pthread family — wasi-libc doesn't ship pthread at all. std/thread.nu
     // + std/arc.nu + the M:N async runtime declare these unconditionally.
     // Single-threaded wasm stubs: lock/unlock/signal/broadcast/wait become
     // no-ops returning 0 (success); create returns -1 so any code that
     // actually tries to spawn fails gracefully.
-    ( vec_push [s] posix_names `pthread_mutex_init` ) ( vec_push [s] posix_bodies `i64 @__nurl_pthread_mutex_init_stub(i8*, i8*) { ret i64 0 }` )
-    ( vec_push [s] posix_names `pthread_mutex_lock` ) ( vec_push [s] posix_bodies `i64 @__nurl_pthread_mutex_lock_stub(i8*) { ret i64 0 }` )
-    ( vec_push [s] posix_names `pthread_mutex_unlock` ) ( vec_push [s] posix_bodies `i64 @__nurl_pthread_mutex_unlock_stub(i8*) { ret i64 0 }` )
-    ( vec_push [s] posix_names `pthread_mutex_destroy` ) ( vec_push [s] posix_bodies `i64 @__nurl_pthread_mutex_destroy_stub(i8*) { ret i64 0 }` )
-    ( vec_push [s] posix_names `pthread_cond_init` ) ( vec_push [s] posix_bodies `i64 @__nurl_pthread_cond_init_stub(i8*, i8*) { ret i64 0 }` )
-    ( vec_push [s] posix_names `pthread_cond_wait` ) ( vec_push [s] posix_bodies `i64 @__nurl_pthread_cond_wait_stub(i8*, i8*) { ret i64 0 }` )
-    ( vec_push [s] posix_names `pthread_cond_signal` ) ( vec_push [s] posix_bodies `i64 @__nurl_pthread_cond_signal_stub(i8*) { ret i64 0 }` )
-    ( vec_push [s] posix_names `pthread_cond_broadcast` ) ( vec_push [s] posix_bodies `i64 @__nurl_pthread_cond_broadcast_stub(i8*) { ret i64 0 }` )
-    ( vec_push [s] posix_names `pthread_cond_destroy` ) ( vec_push [s] posix_bodies `i64 @__nurl_pthread_cond_destroy_stub(i8*) { ret i64 0 }` )
-    ( vec_push [s] posix_names `pthread_create` ) ( vec_push [s] posix_bodies `i64 @__nurl_pthread_create_stub(i8*, i8*, i8*, i8*) { ret i64 -1 }` )
-    ( vec_push [s] posix_names `pthread_join` ) ( vec_push [s] posix_bodies `i64 @__nurl_pthread_join_stub(i8*, i8*) { ret i64 0 }` )
-    ( vec_push [s] posix_names `pthread_self` ) ( vec_push [s] posix_bodies `i8* @__nurl_pthread_self_stub() { ret i8* null }` )
-    ( vec_push [s] posix_names `pthread_detach` ) ( vec_push [s] posix_bodies `i64 @__nurl_pthread_detach_stub(i8*) { ret i64 0 }` )
+    ? threads {} {
+        ( vec_push [s] posix_names `pthread_mutex_init` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_mutex_lock` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_mutex_unlock` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_mutex_destroy` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_cond_init` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_cond_wait` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_cond_signal` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_cond_broadcast` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_cond_destroy` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_create` ) ( vec_push [s] posix_sent `e` )
+        ( vec_push [s] posix_names `pthread_join` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_self` ) ( vec_push [s] posix_sent `n` )
+        ( vec_push [s] posix_names `pthread_detach` ) ( vec_push [s] posix_sent `z` )
+    }
     // Misc POSIX a thread / IPC example may pull in. kill/getpid live in
     // wasi-libc but only sometimes (depends on sysroot); stub them too so
     // we get a consistent build regardless of which wasi-sdk version
     // happens to be in the image.
-    ( vec_push [s] posix_names `kill` ) ( vec_push [s] posix_bodies `i64 @__nurl_kill_stub(i64, i64) { ret i64 -1 }` )
-    ( vec_push [s] posix_names `getpid` ) ( vec_push [s] posix_bodies `i64 @__nurl_getpid_stub() { ret i64 1 }` )
+    ( vec_push [s] posix_names `kill` ) ( vec_push [s] posix_sent `e` )
+    ( vec_push [s] posix_names `getpid` ) ( vec_push [s] posix_sent `o` )
 
     ( string_push_str shims `\n; ── wasi POSIX-only stubs ──\n` )
     : ~ i pi 0
     ~ < pi ( vec_len [s] posix_names ) {
         : ?s name_o ( vec_get [s] posix_names pi )
-        : ?s body_o ( vec_get [s] posix_bodies pi )
+        : ?s sent_o ( vec_get [s] posix_sent pi )
         ?? name_o { T name → {
                 : String needle ( string_from ` @` ) ( string_push_str needle name ) ( string_push_char needle 40 )
                 ? ( string_contains res ( string_data needle ) ) {
@@ -611,8 +691,10 @@ $ `stdlib/core/vec.nu`
                     //    place and failing every wasm build of a program whose
                     //    import graph reached path_canonical. __wb_ir_decl_line
                     //    locates the actual line by symbol, whatever its spacing.
-                    ?? body_o { T body → {
+                    ?? sent_o { T sent → {
                             : String decl ( __wb_ir_decl_line res ( string_data repl_name ) )
+                            // 3. Append a stub whose signature is the declare's own.
+                            : String body ( __wb_posix_stub_body decl ( string_data repl_name ) sent )
                             ? > ( string_len decl ) 0 {
                                 : String decl_nl ( string_from ( string_data decl ) )
                                 ( string_push_char decl_nl 10 )
@@ -622,10 +704,12 @@ $ `stdlib/core/vec.nu`
                             } {}
                             ( string_free decl )
 
-                            // 3. Append the stub definition.
-                            ( string_push_str shims `define internal ` )
-                            ( string_push_str shims body )
-                            ( string_push_str shims `\n` )
+                            ? > ( string_len body ) 0 {
+                                ( string_push_str shims `define internal ` )
+                                ( string_push_str shims ( string_data body ) )
+                                ( string_push_str shims `\n` )
+                            } {}
+                            ( string_free body )
                         } F _ → {} }
                     ( string_free repl_name )
                 } {}
@@ -633,7 +717,7 @@ $ `stdlib/core/vec.nu`
             } F _ → {} }
         = pi + pi 1
     }
-    ( vec_free [s] posix_names ) ( vec_free [s] posix_bodies )
+    ( vec_free [s] posix_names ) ( vec_free [s] posix_sent )
 
     : String joined ( string_concat res shims )
     ( string_free res ) ( string_free shims )
@@ -695,9 +779,11 @@ $ `stdlib/core/vec.nu`
         ( string_push_str marked `@main = alias i32 (i32, i8**), i32 (i32, i8**)* @__main_argc_argv\n` )
     } {}
 
-    // Restore the `@` masked in step 0. The sentinel only exists inside
-    // string constants we masked; the appended shims never contain it.
-    : String final ( string_replace marked ( __wb_ir_at_sentinel ) `@` )
+    // Restore step 0, innermost first: masked `@`s, then the escaped
+    // occurrences of the token that were already in the program's data.
+    : String unmasked ( string_replace marked ( __wb_ir_at_mask ) `@` )
     ( string_free marked )
+    : String final ( string_replace unmasked ( __wb_ir_at_esc ) ( __wb_ir_at_sentinel ) )
+    ( string_free unmasked )
     ^ final
 }

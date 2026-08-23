@@ -33,6 +33,14 @@
  * All functions use the "nurl_" prefix to avoid colliding with libc.
  */
 
+/* wasi-threads: the C allocation surface has to be ours before anything
+ * else in the runtime allocates — see the file's header for why libc's
+ * cannot be locked from outside. Plain wasm32 and every native target
+ * skip this entirely. */
+#if defined(__wasi__) && defined(__wasm_atomics__)
+#  include "runtime_wasm_alloc.c"
+#endif
+
 #include "runtime_core.c"
 #include "runtime_ctx.c"
 #include "runtime_ffi.c"

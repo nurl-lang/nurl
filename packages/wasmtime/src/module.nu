@@ -116,6 +116,7 @@ $ `stdlib/std/bytes.nu`
     i has_mem
     i mem_min  // initial pages (64 KiB each)
     i mem_max  // 0 if unbounded
+    i mem_shared  // 1 = threads-proposal shared memory (max is mandatory)
     ( Vec s ) datas  // *DataSeg
     ( Vec i ) global_init  // initial value per global
     ( Vec i ) global_mut  // 1 if mutable
@@ -265,18 +266,23 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Memory section: limits (flag, min [, max]). Records the first memory.
+// flag bit 0 = a maximum follows; bit 1 = SHARED (the threads proposal),
+// where the maximum is mandatory because every thread must agree on where
+// the buffer can end.
 @ __decode_mem_sec * Wc c * Module m → v {
     : i n ( __chk_count c m ( wc_uleb c ) `bad memory count` )
     : ~ i k 0
     ~ < k n {
         : i flag ( wc_u8 c )
         : ~ i mn ( wc_uleb c )
-        : i mx ? == flag 1 ( wc_uleb c ) 0
+        : i mx ? != 0 & flag 1 ( wc_uleb c ) 0
+        : i shared ? != 0 & flag 2 1 0
+        ? & != shared 0 == mx 0 { ( __mod_err m `shared memory without a maximum` ) } {}
         // wasm32 caps a memory at 65536 pages (4 GiB). A larger declared
         // minimum would make instantiation allocate past the address space —
         // reject it here rather than OOM/hang trying to zero-fill it.
         ? | < mn 0 > mn 65536 { ( __mod_err m `memory minimum exceeds wasm32 limit` ) = mn 0 } {}
-        ? == k 0 { = . m has_mem 1 = . m mem_min mn = . m mem_max mx } {}
+        ? == k 0 { = . m has_mem 1 = . m mem_min mn = . m mem_max mx = . m mem_shared shared } {}
         = k + k 1
     }
 }
@@ -562,6 +568,7 @@ $ `stdlib/std/bytes.nu`
     = . m has_mem 0
     = . m mem_min 0
     = . m mem_max 0
+    = . m mem_shared 0
     = . m datas ( vec_new [s] )
     = . m global_init ( vec_new [i] )
     = . m global_mut ( vec_new [i] )
@@ -608,6 +615,24 @@ $ `stdlib/std/bytes.nu`
     }
     ( wc_free c )
     ^ m
+}
+
+// Find an exported GLOBAL's index by name (-1 if absent). wasi-threads
+// needs one: `__stack_pointer` is what gives a spawned thread its own
+// stack, and only the host can set it before the thread's first call.
+@ module_export_global * Module m s name → i {
+    : i n ( vec_len [s] . m exports )
+    : ~ i found -1
+    : ~ i k 0
+    ~ & == found -1 < k n {
+        : s pp ?? ( vec_get [s] . m exports k ) { T x → x F → # s 0 }
+        ? != # i pp 0 {
+            : *WExport x # *WExport pp
+            ? & == . x kind 3 ( __name_eq . x name name ) { = found . x index } {}
+        } {}
+        = k + k 1
+    }
+    ^ found
 }
 
 // Find an exported function index by name (-1 if absent).

@@ -355,8 +355,17 @@ long long nurl_stdin_read(void *buf, long long n) {
     return (long long)fread(buf, 1, (size_t)n, stdin);
 }
 
+/* NURL_IO_LOCK is defined further down (with nurl_print); these two are
+ * declared before it, so they take the lock through the same helpers. */
+#if defined(__wasi__) && defined(__wasm_atomics__)
+void nurl__io_acquire(void);
+void nurl__io_release(void);
+void nurl_flush_stdout(void) { nurl__io_acquire(); fflush(stdout); nurl__io_release(); }
+void nurl_flush_stderr(void) { nurl__io_acquire(); fflush(stderr); nurl__io_release(); }
+#else
 void nurl_flush_stdout(void) { fflush(stdout); }
 void nurl_flush_stderr(void) { fflush(stderr); }
+#endif
 
 /* ── Terminal / ANSI colour support ──────────────────────────────
  * Two small helpers so callers can colourise output safely on both
@@ -576,8 +585,23 @@ void nurl_print_buf_unwind(void) {
  * `nurl_flush_stdout` is exported for anything else that needs it. */
 static int g_stdout_tty = -1;
 
+/* Serialised on the wasi-threads target: see runtime_wasm_alloc.c —
+ * that libc's stdio does no locking of its own, and a torn FILE buffer
+ * is heap corruption, not just ugly output. Every other target relies on
+ * libc's own stream locks, so these are empty there. */
+#if defined(__wasi__) && defined(__wasm_atomics__)
+void nurl__io_acquire(void);
+void nurl__io_release(void);
+#  define NURL_IO_LOCK()   nurl__io_acquire()
+#  define NURL_IO_UNLOCK() nurl__io_release()
+#else
+#  define NURL_IO_LOCK()   ((void)0)
+#  define NURL_IO_UNLOCK() ((void)0)
+#endif
+
 /* Print without a trailing newline. */
 void nurl_print(const char *s) {
+    NURL_IO_LOCK();
     if (g_outbuf_mode) {
         size_t n = strlen(s);
         outbuf_reserve(n);
@@ -588,6 +612,7 @@ void nurl_print(const char *s) {
         fputs(s, stdout);
         if (g_stdout_tty) fflush(stdout);
     }
+    NURL_IO_UNLOCK();
 }
 /* Write `n` raw bytes to stdout — NUL bytes included.
  *
@@ -599,6 +624,7 @@ void nurl_print(const char *s) {
  * rule as nurl_print, so ordering and output capture are identical. */
 void nurl_print_bytes(const char *p, long long n) {
     if (!p || n <= 0) return;
+    NURL_IO_LOCK();
     if (g_outbuf_mode) {
         outbuf_reserve((size_t)n);
         memcpy(g_outbuf + g_outbuf_len, p, (size_t)n);
@@ -609,6 +635,7 @@ void nurl_print_bytes(const char *p, long long n) {
         fwrite(p, 1, (size_t)n, stdout);
         if (g_stdout_tty) fflush(stdout);
     }
+    NURL_IO_UNLOCK();
 }
 
 /* Print with a trailing newline. Routed through nurl_print so the
@@ -622,8 +649,8 @@ void nurl_println(const char *s)  { nurl_print(s); nurl_print("\n"); }
  * produced them. The extra fflush is free when nothing is pending, and
  * stderr writes are diagnostics — orders of magnitude rarer than the
  * stdout prints this buffering is here to make cheap. */
-void nurl_eprint(const char *s)   { fflush(stdout); fputs(s, stderr); fflush(stderr); }
-void nurl_eprintln(const char *s) { fflush(stdout); fputs(s, stderr); fputc('\n', stderr); fflush(stderr); }
+void nurl_eprint(const char *s)   { NURL_IO_LOCK(); fflush(stdout); fputs(s, stderr); fflush(stderr); NURL_IO_UNLOCK(); }
+void nurl_eprintln(const char *s) { NURL_IO_LOCK(); fflush(stdout); fputs(s, stderr); fputc('\n', stderr); fflush(stderr); NURL_IO_UNLOCK(); }
 
 
 /* ── §2  String operations ─────────────────────────────────────── */

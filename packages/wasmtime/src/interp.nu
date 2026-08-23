@@ -19,6 +19,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `module.nu`
 
@@ -28,8 +29,86 @@ $ `module.nu`
 // OS entropy (runtime helper; getrandom/urandom under the hood).
 & `c` @ nurl_rand_fill *u buf i n → i
 
+// The one lock behind the 0xfe atomics (see __atom_init). Declared here
+// rather than taken from std/thread.nu because the handles live in file
+// globals, and a NURL global holds a pointer as an integer.
+& `c` @ pthread_mutex_init *u m *u attr → i32
+
+& `c` @ pthread_mutex_lock *u m → i32
+
+& `c` @ pthread_mutex_unlock *u m → i32
+
+& `c` @ pthread_cond_init *u c *u attr → i32
+
+& `c` @ pthread_cond_wait *u c *u m → i32
+
+& `c` @ pthread_cond_broadcast *u c → i32
+
 // unlink(2): path_unlink_file must NOT remove directories (remove(3) would).
 & `c` @ unlink s path → i32
+
+// ── raw sockets, for the "nurl_net" host-import bridge ────────────
+// The listen/accept/read/write/close/err_kind/peer_addr/set_timeout half
+// of this ABI is preamble-declared by the compiler; the rest lives in
+// stdlib FFI declares, so name it here the same way std/dns.nu and
+// ext/http_pure.nu do.
+& `c` @ nurl_tcp_connect s host i port → i
+
+& `c` @ nurl_tcp_timeout_ms i handle → i
+
+& `c` @ nurl_tcp_get_fd i handle → i
+
+& `c` @ nurl_tcp_set_nonblock i handle i on → v
+
+& `c` @ nurl_tcp_ref i handle → v
+
+& `c` @ nurl_tcp_unref i handle → v
+
+& `c` @ nurl_tcp_local_addr i handle → s
+
+& `c` @ nurl_udp_bind s host i port → i
+
+& `c` @ nurl_udp_connect i handle s host i port → i
+
+& `c` @ nurl_udp_send i handle s buf i n → i
+
+& `c` @ nurl_udp_recv i handle s buf i n → i
+
+& `c` @ nurl_udp_send_to i handle s buf i n s host i port → i
+
+& `c` @ nurl_udp_recv_from i handle s buf i n → i
+
+& `c` @ nurl_udp_close i handle → v
+
+& `c` @ nurl_udp_err_kind i handle → i
+
+& `c` @ nurl_udp_peer_addr i handle → s
+
+& `c` @ nurl_udp_local_addr i handle → s
+
+& `c` @ nurl_udp_set_timeout i handle i ms → v
+
+& `c` @ nurl_udp_set_nonblock i handle i on → v
+
+& `c` @ nurl_udp_family i handle → i
+
+& `c` @ nurl_udp_get_fd i handle → i
+
+& `c` @ nurl_udp_set_broadcast i handle i on → i
+
+& `c` @ nurl_udp_join_group i handle s group s iface → i
+
+& `c` @ nurl_udp_leave_group i handle s group s iface → i
+
+& `c` @ nurl_udp_set_multicast_ttl i handle i ttl → i
+
+& `c` @ nurl_udp_set_multicast_loop i handle i on → i
+
+& `c` @ nurl_dns_resolve s host → s
+
+& `c` @ nurl_dns_resolve_port s host i port → s
+
+& `c` @ nurl_dns_reverse s ip → s
 
 // ── CUDA driver + NVRTC (the GPU host-import bridge) ──────────────
 // A wasm module built from a GPU-using NURL package (packages/gpu →
@@ -101,6 +180,13 @@ $ `module.nu`
     ( Vec i ) vs  // value stack
     ( Vec u ) mem  // linear memory (bytes)
     i mem_pages  // current size in 64 KiB pages
+    // Bytes the guest may address = mem_pages * 64 KiB. Usually the whole
+    // buffer, but a SHARED memory reserves its declared maximum up front —
+    // growth must never move the buffer, because another thread is reading
+    // it through the same pointer — so there the buffer is larger than
+    // what the guest may touch, and every bounds check reads this instead
+    // of the Vec's length.
+    i mem_bytes
     ( Vec i ) globals  // mutable global values
     ( Vec i ) table  // runtime funcref table (mutable via table.set/grow/…)
     ( Vec i ) data_dropped  // 1 per data segment once dropped / active
@@ -119,11 +205,39 @@ $ `module.nu`
     i max_depth  // frame-stack depth limit (trap when exceeded)
     i fuel  // remaining budget in predecoded records (-1 = unlimited)
     b gpu_ok  // env/CUDA host imports enabled (opt-in; default off)
+    b net_ok  // nurl_net host imports (real sockets) enabled (opt-in; default off)
+    // Shared memory changes what a narrow store is allowed to touch: see
+    // __mem_store. Cached here because every store reads it.
+    b shared_mem
+    // Guest socket handle → host handle. The guest never sees a host
+    // pointer: it gets an index into this table, so a forged handle can
+    // only miss, never become a host address the runtime dereferences.
+    // Slot 0 is reserved — the stdlib reads handle 0 as "failed".
+    ( Vec i ) nethandles
+    ( Vec i ) netkinds  // 1 = TCP, 2 = UDP (which close the runtime owes it)
     b cap  // capture stdout/stderr into capout/caperr instead of the host streams
     ( Vec u ) capout  // captured module stdout (raw bytes, NULs preserved)
     ( Vec u ) caperr  // captured module stderr
     ( Vec s ) pfuncs  // *PFunc per defined function, predecoded lazily (#s 0 until first call)
+    // Threads (wasi-threads). A spawned thread runs its OWN Interp — own
+    // value stack, frames, globals and therefore its own `__stack_pointer`,
+    // exactly as the proposal's "one instance per thread" says — over the
+    // SHARED linear memory, table and module. `owner` points at the
+    // instantiating Interp (0 in it), and the host-side tables that must
+    // stay common (file descriptors, socket handles, captured output) are
+    // reached through it; `__host` is that hop.
+    s owner  // *Interp of the instantiating thread, 0 when this IS it
+    i next_tid  // owner only: thread ids handed to wasi.thread-spawn
+    ( Vec s ) thread_holders  // owner only: *TStart, keeping spawn closures alive
+    ( Vec i ) thread_kids  // owner only: live child *Interp, for memory.grow
+    ( Vec i ) thread_joins  // owner only: host Thread handles, joined before free
+    i tstart_fidx  // cached export index of `wasi_thread_start` (-2 = not looked up)
+    i sp_global  // cached global index of `__stack_pointer` (-2 = not looked up)
 }
+
+// One spawned thread's closure, heap-held so it outlives the host call
+// that created it (thread_spawn borrows the closure and its captures).
+: TStart { ( @ v ) f }
 
 // One activation record on the explicit call stack: the function, its locals,
 // its control stack, and the instruction cursor [pos, end) — pos/end are
@@ -174,8 +288,14 @@ $ `module.nu`
     // 16.8 million bounds-checked pushes for the 257-page minimum a
     // wasi command module declares — 78 % of the wall clock of a run
     // whose guest printed one line and exited.
-    = . it mem ( vec_zeroed [u] ? == . m has_mem 1 * . m mem_min ( __page ) 0 )
-    = . it mem_pages ? == . m has_mem 1 . m mem_min 0
+    // A shared memory is allocated at its declared maximum immediately: the
+    // threads proposal lets several threads hold the same buffer, so a
+    // reallocating grow would pull it out from under them.
+    : i __mpages ? == . m has_mem 1 . m mem_min 0
+    : i __mreserve ? & == . m has_mem 1 != . m mem_shared 0 . m mem_max __mpages
+    = . it mem ( vec_zeroed [u] * __mreserve ( __page ) )
+    = . it mem_pages __mpages
+    = . it mem_bytes * __mpages ( __page )
     = . it globals ( vec_new [i] )
     = . it argv ( vec_new [s] )
     = . it envp ( vec_new [s] )
@@ -190,9 +310,22 @@ $ `module.nu`
     = . it max_depth 65536
     = . it fuel -1
     = . it gpu_ok F
+    = . it net_ok F
+    = . it shared_mem ? & == . m has_mem 1 != . m mem_shared 0 T F
+    = . it nethandles ( vec_new [i] )
+    = . it netkinds ( vec_new [i] )
+    ( vec_push [i] . it nethandles 0 )
+    ( vec_push [i] . it netkinds 0 )
     = . it cap F
     = . it capout ( vec_new [u] )
     = . it caperr ( vec_new [u] )
+    = . it owner # s 0
+    = . it next_tid 1
+    = . it thread_holders ( vec_new [s] )
+    = . it thread_kids ( vec_new [i] )
+    = . it thread_joins ( vec_new [i] )
+    = . it tstart_fidx -2
+    = . it sp_global -2
     // copy global initial values
     : i ng ( vec_len [i] . m global_init )
     : ~ i gi 0
@@ -234,7 +367,7 @@ $ `module.nu`
         // this replaces silently dropped the overhanging bytes, and for a
         // negative offset it wrote the segment's tail at the wrong
         // address instead of rejecting the module.
-        : i cap ( vec_len [u] . it mem )
+        : i cap . it mem_bytes
         : i nd ( vec_len [s] . m datas )
         : ~ i di 0
         ~ < di nd {
@@ -282,6 +415,49 @@ $ `module.nu`
 }
 
 @ interp_free * Interp it → v {
+    // A spawned thread owns only what interp_thread_new made for it: the
+    // memory, table, argv/envp and every host table belong to the Interp
+    // that instantiated, and are freed exactly once, there.
+    ? != # i . it owner 0 {
+        ( __thread_unregister it )
+        ( vec_free [i] . it vs )
+        ( vec_free [i] . it thread_kids )
+        ( vec_free [i] . it thread_joins )
+        ( vec_free [i] . it globals )
+        ( vec_free [i] . it nethandles )
+        ( vec_free [i] . it netkinds )
+        ( vec_free [s] . it fds )
+        ( vec_free [s] . it thread_holders )
+        ( vec_free [u] . it trapmsg )
+        ( vec_free [u] . it capout )
+        ( vec_free [u] . it caperr )
+        : i tpn ( vec_len [s] . it pfuncs )
+        : ~ i tpi 0
+        ~ < tpi tpn { ?? ( vec_get [s] . it pfuncs tpi ) { T pp → ( __pf_free pp ) F → {} } = tpi + tpi 1 }
+        ( vec_free [s] . it pfuncs )
+        ( nurl_free # s it )
+        ^ v
+    } {}
+    // Wait for the threads before dropping what they run on. The guest's
+    // own join only proves the thread's BODY finished; the host thread is
+    // still inside the interpreter for a moment after that, and it reads
+    // this Interp's memory and table.
+    : i tjn ( vec_len [i] . it thread_joins )
+    : ~ i tji 0
+    ~ < tji tjn {
+        : i raw ?? ( vec_get [i] . it thread_joins tji ) { T x → x F → 0 }
+        ? != raw 0 { ( thread_join @ Thread { # s raw } ) } {}
+        = tji + tji 1
+    }
+    ( vec_free [i] . it thread_joins )
+    ( interp_net_close_all it )
+    ( vec_free [i] . it nethandles )
+    ( vec_free [i] . it netkinds )
+    : i thn ( vec_len [s] . it thread_holders )
+    : ~ i thi 0
+    ~ < thi thn { ?? ( vec_get [s] . it thread_holders thi ) { T pp → ? != # i pp 0 { ( nurl_free pp ) } {} F → {} } = thi + thi 1 }
+    ( vec_free [s] . it thread_holders )
+    ( vec_free [i] . it thread_kids )
     ( vec_free [i] . it vs )
     ( vec_free [u] . it mem )
     ( vec_free [i] . it globals )
@@ -351,17 +527,131 @@ $ `module.nu`
 // opt in explicitly (the CLI does so with --allow-gpu).
 @ interp_allow_gpu * Interp it → v { = . it gpu_ok T }
 
+// Enable the module "nurl_net" socket bridge — the guest's TCP/UDP/DNS
+// calls become this process's. Off by default for the same reason the
+// GPU bridge is: it is the guest reaching the network through us (the
+// CLI opts in with --allow-net).
+@ interp_allow_net * Interp it → v { = . it net_ok T }
+
 // Grant the module one preopened host directory, visible to it as `guest_name`
 // (the path it resolves opens against). Installed as fd 3.
 @ interp_set_preopen * Interp it s host_path s guest_name → v {
     : *WFd f # *WFd ( __mkfd 2 )
     ( vec_free [u] . f host ) = . f host ( bytes_from_str host_path )
     ( vec_free [u] . f name ) = . f name ( bytes_from_str guest_name )
-    ( vec_push [s] . it fds # s f )
+    ( vec_push [s] . ( __host it ) fds # s f )
 }
 
 // Run the module's start-section function, if any — the final instantiation
 // step, before any export is invoked.
+// The Interp that owns the shared host state — this one, or the thread
+// that instantiated it. File descriptors, socket handles and captured
+// output are per-INSTANCE in wasm terms but per-PROCESS in the guest's:
+// a file opened by one thread has to be the same fd in another.
+@ __host * Interp it → *Interp {
+    ? == # i . it owner 0 { ^ it } {}
+    ^ # *Interp . it owner
+}
+
+// A fresh Interp for a spawned thread: its own stacks and globals over
+// the owner's memory, table and module. The shared Vecs are copied by
+// HANDLE — safe because a threaded module's memory is allocated at its
+// maximum up front and never moves — and `interp_free` on a thread
+// releases only what the thread itself owns.
+@ interp_thread_new * Interp parent → *Interp {
+    : *Interp ho ( __host parent )
+    : *Module m # *Module . ho mod
+    : *Interp it # *Interp ( nurl_alloc Z Interp )
+    = . it mod . ho mod
+    = . it vs ( vec_new [i] )
+    = . it mem . ho mem
+    = . it mem_pages . ho mem_pages
+    = . it mem_bytes . ho mem_bytes
+    = . it table . ho table
+    = . it data_dropped . ho data_dropped
+    = . it elem_dropped . ho elem_dropped
+    = . it argv . ho argv
+    = . it envp . ho envp
+    = . it fds ( vec_new [s] )  // unused in a thread: __host redirects
+    = . it halt 0
+    = . it exit_code 0
+    = . it trapmsg ( vec_new [u] )
+    = . it pending_call -1
+    = . it max_depth . ho max_depth
+    = . it fuel -1
+    = . it gpu_ok . ho gpu_ok
+    = . it net_ok . ho net_ok
+    = . it shared_mem . ho shared_mem
+    = . it nethandles ( vec_new [i] )
+    = . it netkinds ( vec_new [i] )
+    = . it cap . ho cap
+    = . it capout ( vec_new [u] )
+    = . it caperr ( vec_new [u] )
+    = . it owner # s ho
+    = . it next_tid 0
+    = . it thread_holders ( vec_new [s] )
+    = . it thread_kids ( vec_new [i] )
+    = . it thread_joins ( vec_new [i] )
+    = . it tstart_fidx -2
+    = . it sp_global -2
+    // Mutable globals are per-instance, which is precisely what gives the
+    // thread its own __stack_pointer. They start from the module's
+    // initialisers, as a fresh instantiation would.
+    = . it globals ( vec_new [i] )
+    : i ng ( vec_len [i] . m global_init )
+    : ~ i gi 0
+    ~ < gi ng { ( vec_push [i] . it globals ?? ( vec_get [i] . m global_init gi ) { T x → x F → 0 } ) = gi + gi 1 }
+    // Predecoded bodies are per-Interp (the cache is filled lazily and
+    // mutated in place), so a thread decodes what it actually runs.
+    = . it pfuncs ( vec_new [s] )
+    : i nf ( vec_len [s] . m funcs )
+    : ~ i fi 0
+    ~ < fi nf { ( vec_push [s] . it pfuncs # s 0 ) = fi + fi 1 }
+    // How much memory is addressable is per-Interp (the bounds check is on
+    // the hot path and must stay one field read), so a growing thread has
+    // to publish the new bound to its siblings. Joining the group and
+    // growing both happen under the atomics lock, so a thread can never
+    // start life with a bound that was already raised.
+    ( __atom_lock )
+    = . it mem_pages . ho mem_pages
+    = . it mem_bytes . ho mem_bytes
+    ( vec_push [i] . ho thread_kids # i it )
+    ( __atom_unlock )
+    ^ it
+}
+
+// Publish a new memory size to every Interp in the group. Called with the
+// atomics lock held.
+@ __mem_publish * Interp ho i pages i bytes → v {
+    = . ho mem_pages pages
+    = . ho mem_bytes bytes
+    : i n ( vec_len [i] . ho thread_kids )
+    : ~ i k 0
+    ~ < k n {
+        : i kp ?? ( vec_get [i] . ho thread_kids k ) { T x → x F → 0 }
+        ? != kp 0 {
+            : *Interp kid # *Interp # s kp
+            = . kid mem_pages pages
+            = . kid mem_bytes bytes
+        } {}
+        = k + k 1
+    }
+}
+
+// Leave the group (the thread is done with its Interp).
+@ __thread_unregister * Interp it → v {
+    ? == # i . it owner 0 { ^ v } {}
+    : *Interp ho ( __host it )
+    ( __atom_lock )
+    : i n ( vec_len [i] . ho thread_kids )
+    : ~ i k 0
+    ~ < k n {
+        ? == ?? ( vec_get [i] . ho thread_kids k ) { T x → x F → 0 } # i it { ( vec_set [i] . ho thread_kids k 0 ) } {}
+        = k + k 1
+    }
+    ( __atom_unlock )
+}
+
 @ interp_run_start * Interp it → v {
     : *Module m # *Module . it mod
     ? >= . m start_func 0 { ( exec_func it . m start_func ) } {}
@@ -661,8 +951,9 @@ $ `module.nu`
 // it was 9.5 % off the benchmark corpus, 24 % off nbody and matmul, 19 %
 // off sieve.
 inline @ __mem_load * Interp it i ea i n i signed → i {
-    ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
-        ( __trap it `memory load out of bounds` ) ^ 0
+    ? | < ea 0 > + ea n . it mem_bytes {
+        ( __trap_oob it `memory load out of bounds` ea n )
+        ^ 0
     } {}
     // The memory Vec is always a whole number of 64 KiB pages, so any
     // in-bounds byte's containing 8-byte word is in-bounds too — word reads
@@ -684,11 +975,31 @@ inline @ __mem_load * Interp it i ea i n i signed → i {
     ^ v
 }
 
+// Store the low n bytes one byte at a time. On a SHARED memory this is
+// the only correct way to write fewer than eight bytes: the fast path
+// below reads the containing 64-bit word, patches its own bytes and
+// writes the word back, and two threads writing NEIGHBOURING bytes of one
+// word then lose one of the two updates. wasm says those bytes are
+// independent locations, and guests rely on it — two malloc headers, two
+// struct fields, a length beside a flag. The symptom is a heap that grows
+// a wrong size field and hands out a wild pointer somewhere else.
+@ __mem_store_bytes * Interp it i ea i n i val → v {
+    : ~ i k 0
+    ~ < k n {
+        ( vec_set [u] . it mem + ea k # u & ( __lshr64 val * 8 k ) 255 )
+        = k + k 1
+    }
+}
+
 // Write the low n bytes of val little-endian to mem[ea].
 inline @ __mem_store * Interp it i ea i n i val → v {
-    ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
-        ( __trap it `memory store out of bounds` ) ^ v
+    ? | < ea 0 > + ea n . it mem_bytes {
+        ( __trap_oob it `memory store out of bounds` ea n )
+        ^ v
     } {}
+    // A shared memory takes the byte-wise path for anything narrower than
+    // the word it would otherwise rewrite.
+    ? & . it shared_mem < n 8 { ( __mem_store_bytes it ea n val ) ^ v } {}
     : s base # s ( vec_data [u] . it mem )
     : i lo & ea 7
     ? <= + lo n 8 {
@@ -701,6 +1012,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         ( nurl_poke base wi | cleared << & val mask sh )
         ^ v
     } {}
+    ? . it shared_mem { ( __mem_store_bytes it ea n val ) ^ v } {}
     ( __mem_store_split base ea n val )
 }
 
@@ -708,16 +1020,36 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 // the declared maximum (or the wasm32 hard limit of 65536 pages) would be
 // exceeded — the value memory.grow pushes.
 @ __mem_grow * Interp it i delta → i {
-    : i old . it mem_pages
-    ? == delta 0 { ^ old } {}
     : *Module m # *Module . it mod
     : ~ i limit 65536
     ? & > . m mem_max 0 < . m mem_max limit { = limit . m mem_max } {}
+    // A shared memory already owns its maximum: growing is only raising
+    // the addressable bound, never a realloc — another thread may be
+    // holding the buffer's base pointer right now. The WHOLE operation
+    // has to be atomic, current size included: two threads that each read
+    // the old size before either published would both grow from the same
+    // base, one growth would be lost, and both guests would take the same
+    // pages for their own — one heap on top of another, and addresses
+    // past a bound that never moved. (memory.grow returns the OLD size,
+    // which is exactly what the guest allocator uses as its new arena.)
+    ? != . m mem_shared 0 {
+        ( __atom_lock )
+        : *Interp ho ( __host it )
+        : i old . ho mem_pages
+        ? == delta 0 { ( __atom_unlock ) ^ old } {}
+        ? | < delta 0 > + old delta limit { ( __atom_unlock ) ^ -1 } {}
+        ( __mem_publish ho + old delta * + old delta ( __page ) )
+        ( __atom_unlock )
+        ^ old
+    } {}
+    : i old . it mem_pages
+    ? == delta 0 { ^ old } {}
     ? | < delta 0 > + old delta limit { ^ -1 } {}
     // One resize, zero-filling the new tail in a single memset, instead of
     // a push per byte: growing by a single page was 65 536 pushes.
     : b _ok ( vec_resize_zeroed [u] . it mem * + old delta ( __page ) )
     = . it mem_pages + old delta
+    = . it mem_bytes * . it mem_pages ( __page )
     ^ old
 }
 
@@ -859,7 +1191,9 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 @ __R_CALLIND → i { ^ 170 }  // A=typeidx B=argbase C=idxslot
 @ __R_UNREACH → i { ^ 172 }
 
-@ __R_TRAPUN → i { ^ 173 }  // unsupported opcode (0xfd/0xfe/unknown)
+@ __R_TRAPUN → i { ^ 173 }  // unsupported opcode (0xfd/unknown)
+
+@ __R_ATOM → i { ^ 174 }  // vs bridge: A=sub B=memarg offset C=srcbase D=pops<<1|push
 @ __R_FCB → i { ^ 171 }  // vs bridge: A=sub B=idx-imm C=srcbase D=pops<<1|push
 @ __R_IFZ → i { ^ 48 }  // A=target B=cond — jump when cond == 0
 @ __R_BRIFC → i { ^ 45 }  // A=target B=lhs C=rhs D=compare op — jump when it holds
@@ -1653,10 +1987,25 @@ inline @ __mem_store * Interp it i ea i n i val → v {
                                                                                                                                                             ? > h maxh { = maxh h } {}
                                                                                                                                                         } {}
                                                                                                                                                     } {
-                                                                                                                                                        // unsupported (0xfd/0xfe and anything unknown): keep alignment,
-                                                                                                                                                        // trap if ever executed
-                                                                                                                                                        ? | == op 253 == op 254 { ( __skip_imm c op ) } {}
-                                                                                                                                                        ? != 0 live { ( __vflush pf vm SB 0 live byte ) ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) } {}
+                                                                                                                                                        ? == op 254 {  // 0xfe family (atomics): vs bridge, like 0xfc
+                                                                                                                                                            : i asub ( wc_uleb c )
+                                                                                                                                                            : ~ i aoff 0
+                                                                                                                                                            ? == asub 3 { ( wc_u8 c ) } { ( wc_uleb c ) = aoff ( wc_uleb c ) }
+                                                                                                                                                            ? != 0 live {
+                                                                                                                                                                : i shape ( __atom_shape asub )
+                                                                                                                                                                : i pops >> shape 1
+                                                                                                                                                                : i push & shape 1
+                                                                                                                                                                ( __vflush pf vm SB h live byte )
+                                                                                                                                                                ( __pf_emit . pf code ( __R_ATOM ) asub aoff + SB - h pops | << pops 1 push byte )
+                                                                                                                                                                = h + - h pops push
+                                                                                                                                                                ? > h maxh { = maxh h } {}
+                                                                                                                                                            } {}
+                                                                                                                                                        } {
+                                                                                                                                                            // unsupported (0xfd and anything unknown): keep alignment,
+                                                                                                                                                            // trap if ever executed
+                                                                                                                                                            ? == op 253 { ( __skip_imm c op ) } {}
+                                                                                                                                                            ? != 0 live { ( __vflush pf vm SB 0 live byte ) ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) } {}
+                                                                                                                                                        }
                                                                                                                                                     } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
         // Arm the fold for the next instruction. Every arm above that is
         // straight-line emitted exactly one record when live, and it is the
@@ -2090,10 +2439,19 @@ inline @ __mem_store * Interp it i ea i n i val → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ? & != 0 & dd 1 ! ( interp_trapped it ) { = . rbase rc ( __pop it ) } {}
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ? != 0 . it halt { = . fr pos r0 = pc pend } {}
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             } {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 172 { ( __trap it `unreachable` ) = . fr pos r0 = pc pend } {  // __R_UNREACH
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 173 { ( __trap it `unsupported opcode` ) = . fr pos r0 = pc pend } {  // __R_TRAPUN
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ( __trap it `unsupported opcode` ) = . fr pos r0 = pc pend
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 174 {  // __R_ATOM
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    : i dd . pbase + r0 4
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    : i pops >> dd 1
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    : ~ i bk 0
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ~ < bk pops { ( __push it . rbase + rc bk ) = bk + bk 1 }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ( __exec_atomic it ra rb )
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? & != 0 & dd 1 ! ( interp_trapped it ) { = . rbase rc ( __pop it ) } {}
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? != 0 . it halt { = . fr pos r0 = pc pend } {}
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? == op 172 { ( __trap it `unreachable` ) = . fr pos r0 = pc pend } {  // __R_UNREACH
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 173 { ( __trap it `unsupported opcode` ) = . fr pos r0 = pc pend } {  // __R_TRAPUN
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ( __trap it `unsupported opcode` ) = . fr pos r0 = pc pend
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                     } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
                                                                                                                                                                                                                                                                                                                                     } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
@@ -2403,7 +2761,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ? <= len 0 { ^ v } {}
     // A write cannot cover more bytes than linear memory holds; a larger length
     // is a hostile iovec — trap rather than pre-allocate gigabytes for it.
-    ? > len ( vec_len [u] . it mem ) { ( __trap it `fd_write length exceeds memory` ) ^ v } {}
+    ? > len . it mem_bytes { ( __trap it `fd_write length exceeds memory` ) ^ v } {}
     : ( Vec u ) buf ( vec_with_cap [u] len )
     : ~ i k 0
     ~ < k len { ( vec_push [u] buf # u & ( __mem_load it + ptr k 1 0 ) 255 ) = k + k 1 }
@@ -2412,7 +2770,8 @@ inline @ __mem_store * Interp it i ea i n i val → v {
             // An embedder asked for the output as a value: raw bytes,
             // appended, NULs preserved — bytes_to_str would truncate at
             // the first NUL a binary-printing module emits.
-            : ( Vec u ) dst ? == fd 2 . it caperr . it capout
+            : *Interp hoc ( __host it )
+            : ( Vec u ) dst ? == fd 2 . hoc caperr . hoc capout
             : ~ i c 0
             ~ < c len { ( vec_push [u] dst # u ?? ( vec_get [u] buf c ) { T x → # i x F → 0 } ) = c + c 1 }
         } {
@@ -2446,7 +2805,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     // The iovec array cannot hold more entries than linear memory has bytes;
     // clamp so a bogus iovs_len can neither loop unboundedly nor over-read. The
     // trap guard stops the loop the moment an iovec header is out of bounds.
-    : i maxio ( vec_len [u] . it mem )
+    : i maxio . it mem_bytes
     : ~ i total 0
     : ~ i i 0
     ~ & & ! ( interp_trapped it ) < i iovs_len <= i maxio {
@@ -2457,13 +2816,20 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         = i + i 1
     }
     ( __m_put_u32 it nwritten total )
+    // A write is a write: push it out of the host's buffer now. A guest
+    // that never exits — a server, which is most of the point of having
+    // sockets — otherwise produces no output at all, because the host's
+    // stdio buffer is only drained when the process ends.
+    ? == fd 1 { ( nurl_flush_stdout ) } {}
+    ? == fd 2 { ( nurl_flush_stderr ) } {}
     ( __push it 0 )
 }
 
 // Fetch the fd record for descriptor `fd`, or #s 0 if out of range / closed.
 @ __fd_at * Interp it i fd → s {
-    ? | < fd 0 >= fd ( vec_len [s] . it fds ) { ^ # s 0 } {}
-    ^ ?? ( vec_get [s] . it fds fd ) { T x → x F → # s 0 }
+    : *Interp ho ( __host it )
+    ? | < fd 0 >= fd ( vec_len [s] . ho fds ) { ^ # s 0 } {}
+    ^ ?? ( vec_get [s] . ho fds fd ) { T x → x F → # s 0 }
 }
 
 // Read `len` bytes of linear memory at `ptr` into a fresh byte vector.
@@ -2473,7 +2839,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     // the end still trap in __mem_load, so this only bounds the up-front cap.
     : ~ i n len
     ? < n 0 { = n 0 } {}
-    ? > n ( vec_len [u] . it mem ) { = n ( vec_len [u] . it mem ) } {}
+    ? > n . it mem_bytes { = n . it mem_bytes } {}
     : ( Vec u ) b ( vec_with_cap [u] ? > n 0 n 1 )
     : ~ i k 0
     ~ < k n { ( vec_push [u] b # u & ( __mem_load it + ptr k 1 0 ) 255 ) = k + k 1 }
@@ -2563,8 +2929,9 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         ? ( __is_dir ( string_data hs ) ) {
             : *WFd nf # *WFd ( __mkfd 4 )
             ( vec_free [u] . nf host ) = . nf host ( bytes_from_str ( string_data hs ) )
-            ( __m_put_u32 it ofd_p ( vec_len [s] . it fds ) )
-            ( vec_push [s] . it fds # s nf )
+            : *Interp ho1 ( __host it )
+            ( __m_put_u32 it ofd_p ( vec_len [s] . ho1 fds ) )
+            ( vec_push [s] . ho1 fds # s nf )
         } { = rc ? != 0 ( nurl_file_exists ( string_data hs ) ) 54 44 }  // ENOTDIR / ENOENT
         ( string_free hs )
         ( __push it rc )
@@ -2576,8 +2943,9 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         // an existing directory opened without O_DIRECTORY: readable as a dir fd
         : *WFd nf # *WFd ( __mkfd 4 )
         ( vec_free [u] . nf host ) = . nf host ( bytes_from_str ( string_data hs ) )
-        ( __m_put_u32 it ofd_p ( vec_len [s] . it fds ) )
-        ( vec_push [s] . it fds # s nf )
+        : *Interp ho2 ( __host it )
+        ( __m_put_u32 it ofd_p ( vec_len [s] . ho2 fds ) )
+        ( vec_push [s] . ho2 fds # s nf )
         ( string_free hs )
         ( __push it 0 )
         ^ v
@@ -2596,9 +2964,20 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ? != rc 0 { ( __freefd # s nf ) ( string_free hs ) ( __push it rc ) ^ v } {}
     = . nf writable ? != want_write 0 T F
     = . nf append ? != & fdflags 1 0 T F
-    ? & != creat 0 == exists 0 { = . nf dirty T } {}  // a created empty file must exist on disk
-    ( __m_put_u32 it ofd_p ( vec_len [s] . it fds ) )
-    ( vec_push [s] . it fds # s nf )
+    // O_CREAT on a new name: create it on the host NOW, not at flush time.
+    // The open is where the guest's libc learns whether the file can exist
+    // at all — deferring it meant a write into a directory that does not
+    // exist answered "ok" all the way through fd_close.
+    ? & != creat 0 == exists 0 {
+        : ( Vec u ) empty ( vec_new [u] )
+        : !v IoErr cr ( write_file_bytes ( string_data hs ) empty )
+        ( vec_free [u] empty )
+        ?? cr { T x → {} F e → { = rc ( __ioerr_errno e ) } }
+        ? != rc 0 { ( __freefd # s nf ) ( string_free hs ) ( __push it rc ) ^ v } {}
+    } {}
+    : *Interp ho3 ( __host it )
+    ( __m_put_u32 it ofd_p ( vec_len [s] . ho3 fds ) )
+    ( vec_push [s] . ho3 fds # s nf )
     ( string_free hs )
     ( __push it 0 )
 }
@@ -2615,7 +2994,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     : *WFd f # *WFd fp
     ? != . f kind 3 { ( __m_put_u32 it nread_p 0 ) ( __push it 0 ) ^ v } {}
     : i dn ( vec_len [u] . f data )
-    : i maxio ( vec_len [u] . it mem )
+    : i maxio . it mem_bytes
     : ~ i at offset
     : ~ i total 0
     : ~ i iv 0
@@ -2645,7 +3024,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ? == # i fp 0 { ( __push it 8 ) ^ v } {}
     : *WFd f # *WFd fp
     ? ! . f writable { ( __push it 8 ) ^ v } {}
-    : i maxio ( vec_len [u] . it mem )
+    : i maxio . it mem_bytes
     : ~ i at offset
     : ~ i total 0
     : ~ i iv 0
@@ -2844,7 +3223,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     : *WFd f # *WFd fp
     ? != . f kind 3 { ( __m_put_u32 it nread_p 0 ) ( __push it 0 ) ^ v } {}  // stdin/dir → EOF
     : i dn ( vec_len [u] . f data )
-    : i maxio ( vec_len [u] . it mem )
+    : i maxio . it mem_bytes
     : ~ i total 0
     : ~ i iv 0
     ~ & & ! ( interp_trapped it ) < iv iovs_len <= iv maxio {
@@ -2975,40 +3354,49 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 
 // Flush a dirty written file to disk (fd_close / fd_sync / proc_exit / normal
 // program exit all funnel through here).
-@ __fd_flush * WFd f → v {
+// Write the buffer back to the host file. Returns an errno (0 = ok) —
+// a flush is the moment every buffered write of this fd actually reaches
+// the disk, so its failure is the ONLY chance the guest has to learn that
+// the write did not happen. Swallowing it made `write_file` report
+// success for a file the host never created.
+@ __fd_flush * WFd f → i {
     ? & . f writable . f dirty {
         : String hs ( bytes_to_str . f host )
         : !v IoErr wr ( write_file_bytes ( string_data hs ) . f data )
-        ?? wr { T x → { = . f dirty F } F e → {} }
+        : ~ i rc 0
+        ?? wr { T x → { = . f dirty F } F e → { = rc ( __ioerr_errno e ) } }
         ( string_free hs )
+        ^ rc
     } {}
+    ^ 0
 }
 
 // Flush every open dirty file — called on proc_exit and when _start returns,
 // so buffered writes are never lost to a missing fd_close.
 @ interp_flush * Interp it → v {
-    : i n ( vec_len [s] . it fds )
+    : *Interp ho ( __host it )
+    : i n ( vec_len [s] . ho fds )
     : ~ i k 3
-    ~ < k n { ?? ( vec_get [s] . it fds k ) { T pp → ? != # i pp 0 { ( __fd_flush # *WFd pp ) } {} F → {} } = k + k 1 }
+    ~ < k n { ?? ( vec_get [s] . ho fds k ) { T pp → ? != # i pp 0 { ( __fd_flush # *WFd pp ) } {} F → {} } = k + k 1 }
 }
 
 @ __wasi_fd_close * Interp it → v {
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
+    : ~ i rc 0
     ? != # i fp 0 {
         : *WFd f # *WFd fp
-        ( __fd_flush f )
-        ? >= fd 3 { ( __freefd fp ) ( vec_set [s] . it fds fd # s 0 ) } {}  // keep stdio
+        = rc ( __fd_flush f )
+        ? >= fd 3 { ( __freefd fp ) ( vec_set [s] . ( __host it ) fds fd # s 0 ) } {}  // keep stdio
     } {}
-    ( __push it 0 )
+    ( __push it rc )
 }
 
 @ __wasi_fd_sync * Interp it → v {
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
     ? == # i fp 0 { ( __push it 8 ) ^ v } {}  // EBADF
-    ( __fd_flush # *WFd fp )
-    ( __push it 0 )
+    ( __push it ( __fd_flush # *WFd fp ) )
 }
 
 // fd_tell(fd, off_p): current offset as u64.
@@ -3070,13 +3458,88 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ( __push it 0 )
 }
 
+// poll_oneoff(in, out, nsubs, nevents_p) → errno.
+//
+// The one WASI call a server cannot do without: libc's sleep, nanosleep
+// and every timeout is a clock subscription here. Regular files and the
+// stdio streams are always ready — which is what poll(2) says about a
+// regular file too — so an fd subscription answers immediately and only
+// a pure clock wait actually sleeps.
+//
+// Subscription is 48 bytes: userdata(0) tag(8), then for a clock
+// clock_id(16) timeout(24) precision(32) flags(40) — flag bit 0 means
+// the timeout is ABSOLUTE — and for an fd subscription fd(16).
+// Event is 32 bytes: userdata(0) error(8) type(10) nbytes(16) flags(24).
+@ __wasi_poll_oneoff * Interp it → v {
+    : i nev_p ( __pop it )
+    : i nsubs ( __pop it )
+    : i out ( __pop it )
+    : i in ( __pop it )
+    ? | < nsubs 0 > * nsubs 48 . it mem_bytes { ( __m_put_u32 it nev_p 0 ) ( __push it 28 ) ^ v } {}  // EINVAL
+    : ~ i nev 0
+    : ~ i sleep_ns -1  // shortest clock wait seen, -1 = none
+    : ~ i k 0
+    ~ & < k nsubs ! ( interp_trapped it ) {
+        : i sub + in * k 48
+        : i userdata ( __mem_load it sub 8 0 )
+        : i tag ( __mem_load it + sub 8 1 0 )
+        ? == tag 0 {
+            : i clock_id ( __m_get_u32 it + sub 16 )
+            : i timeout ( __mem_load it + sub 24 8 0 )
+            : i flags ( __mem_load it + sub 40 2 0 )
+            : ~ i rel timeout
+            ? != 0 & flags 1 {
+                : i now ? == clock_id 0 * ( now_ms ) 1000000 ( monotonic_ns )
+                = rel - timeout now
+            } {}
+            ? < rel 0 { = rel 0 } {}
+            ? | == sleep_ns -1 < rel sleep_ns { = sleep_ns rel } {}
+        } {
+            // fd_read (1) / fd_write (2): ready now, or EBADF for a
+            // descriptor the guest never opened.
+            : i fd ( __m_get_u32 it + sub 16 )
+            : s fp ( __fd_at it fd )
+            : i ev + out * nev 32
+            ( __mem_store it ev 8 userdata )
+            ( __mem_store it + ev 8 2 ? == # i fp 0 8 0 )
+            ( __mem_store it + ev 10 1 tag )
+            ( __mem_store it + ev 16 8 0 )
+            ( __mem_store it + ev 24 2 0 )
+            = nev + nev 1
+        }
+        = k + k 1
+    }
+    // Only a wait with nothing else to report actually sleeps.
+    ? & == nev 0 >= sleep_ns 0 {
+        ? > sleep_ns 0 { ( sleep_ms / + sleep_ns 999999 1000000 ) } {}
+        // Report every clock subscription as fired: they all shared the
+        // one wait, and the shortest of them has certainly elapsed.
+        : ~ i j 0
+        ~ < j nsubs {
+            : i sub + in * j 48
+            ? == ( __mem_load it + sub 8 1 0 ) 0 {
+                : i ev + out * nev 32
+                ( __mem_store it ev 8 ( __mem_load it sub 8 0 ) )
+                ( __mem_store it + ev 8 2 0 )
+                ( __mem_store it + ev 10 1 0 )
+                ( __mem_store it + ev 16 8 0 )
+                ( __mem_store it + ev 24 2 0 )
+                = nev + nev 1
+            } {}
+            = j + j 1
+        }
+    } {}
+    ( __m_put_u32 it nev_p nev )
+    ( __push it 0 )
+}
+
 // random_get(buf, len): real OS entropy via the runtime CSPRNG.
 @ __wasi_random_get * Interp it → v {
     : i len ( __pop it )
     : i buf ( __pop it )
     // The destination buffer lives in linear memory, so a length larger than
     // memory is bogus — trap instead of allocating it.
-    ? > len ( vec_len [u] . it mem ) { ( __trap it `random_get length exceeds memory` ) ( __push it 0 ) ^ v } {}
+    ? > len . it mem_bytes { ( __trap it `random_get length exceeds memory` ) ( __push it 0 ) ^ v } {}
     ? > len 0 {
         : ( Vec u ) tmp ( vec_with_cap [u] len )
         : ~ i z 0
@@ -3087,6 +3550,26 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         ( vec_free [u] tmp )
     } {}
     ( __push it 0 )
+}
+
+// An out-of-bounds access says WHICH address and against what bound: with
+// threads those two numbers separate "the guest computed a wild pointer"
+// from "this thread's view of the memory size is behind the others".
+@ __trap_oob * Interp it s what i ea i n → v {
+    = . it halt | . it halt 1
+    ( vec_free [u] . it trapmsg )
+    : String m ( string_from what )
+    ( string_push_str m ` (addr ` )
+    ( string_push_int m ea )
+    ( string_push_str m `+` )
+    ( string_push_int m n )
+    ( string_push_str m `, limit ` )
+    ( string_push_int m . it mem_bytes )
+    ( string_push_str m `, pages ` )
+    ( string_push_int m . it mem_pages )
+    ( string_push_char m 41 )
+    = . it trapmsg ( bytes_from_str ( string_data m ) )
+    ( string_free m )
 }
 
 // Trap with a message that carries a dynamic name (import module/field).
@@ -3231,7 +3714,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     // Build a host void** by translating each guest entry (guest ptr → host
     // ptr) into a fresh host buffer. Entry i lives at guest offset poff+i*8.
     : *u hostp ( nurl_alloc * ( __GPU_MAX_ARGS ) 8 )
-    : i memlen ( vec_len [u] . it mem )
+    : i memlen . it mem_bytes
     : ~ i k 0
     ~ & < k ( __GPU_MAX_ARGS ) <= + + poff * k 8 8 memlen {
         : i ent & ( __mem_load it + poff * k 8 8 0 ) 4294967295
@@ -3280,7 +3763,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ? > n 256 { ( __trap it `nvrtcCompileProgram: too many options` ) ^ v } {}
     : i base ( __gpu_base it )
     : *u hostp ( nurl_alloc * n 8 )
-    : i memlen ( vec_len [u] . it mem )
+    : i memlen . it mem_bytes
     : ~ i k 0
     ~ < k n {
         : ~ i ent 0
@@ -3355,7 +3838,354 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ^ F
 }
 
+// ── module "nurl_net": the guest's sockets are this process's ──────
+//
+// stdlib's runtime_ffi.c has no socket layer under __wasi__ (WASI
+// preview1 can only accept on a socket the host preopened), so a NURL
+// program compiled to wasm imports one function per raw socket call.
+// Here they land on the very same runtime entry points a host build
+// links directly — `nurl_tcp_listen` and friends are preamble-declared,
+// so the guest's connect IS our connect. TLS needs nothing extra:
+// stdlib's TLS 1.3 is pure NURL and runs inside the guest over these
+// plaintext sockets.
+//
+// The guest is handed a TABLE INDEX, never the host's handle. Two
+// reasons, and both are load-bearing:
+//   • The host handle is a 64-bit pointer, and the guest's stdlib keeps
+//     socket handles in an `s` field — 4 bytes on wasm32. A real handle
+//     came back truncated and the next call dereferenced rubble.
+//   • A handle the guest can forge is a host pointer the runtime would
+//     dereference on demand. An index can only miss.
+
+// Guest (ptr,len) span → host pointer; 0 when it leaves linear memory.
+@ __net_span * Interp it i off i len → s {
+    : i o & off 4294967295
+    : i n . it mem_bytes
+    ? | < len 0 > + o len n { ^ # s 0 } {}
+    ^ # s + # i ( vec_data [u] . it mem ) o
+}
+
+// Guest pointer to a NUL-terminated string → host `s`. A string with no
+// terminator inside linear memory reads as empty rather than running off
+// the end of the buffer.
+@ __net_cstr * Interp it i off → s {
+    : i o & off 4294967295
+    : i n . it mem_bytes
+    ? >= o n { ^ `` } {}
+    : ~ i k o
+    : ~ b term F
+    ~ & < k n ! term {
+        ?? ( vec_get [u] . it mem k ) {
+            T c → { ? == # i c 0 { = term T } { = k + k 1 } }
+            F → { = k n }
+        }
+    }
+    ? term { ^ # s + # i ( vec_data [u] . it mem ) o } {}
+    ^ ``
+}
+
+// Copy a host string into the guest's buffer, truncating at `cap`, and
+// answer the byte count — the import ABI for every host call that
+// produces text (addresses, DNS answers), because the host cannot
+// allocate inside the guest's linear memory.
+@ __net_put_str * Interp it i off i cap s src → i {
+    ? == # i src 0 { ^ 0 } {}
+    : i n ( nurl_str_len src )
+    : ~ i m n
+    ? > m cap { = m cap } {}
+    ? < m 0 { = m 0 } {}
+    : ~ i k 0
+    ~ < k m { ( __mem_store it + off k 1 ( nurl_str_get src k ) ) = k + k 1 }
+    ^ m
+}
+
+// Same, for an OWNED host string: copied out, then freed.
+@ __net_put_owned * Interp it i off i cap s src → i {
+    ? == # i src 0 { ^ 0 } {}
+    : i n ( __net_put_str it off cap src )
+    ( nurl_free src )
+    ^ n
+}
+
+// The handle table is per-INSTANCE, so every thread of a threaded guest
+// shares it — and they open sockets concurrently (a relay's accept
+// fibers, a worker, an MCP coordinator, all in one module). Without a
+// lock two registrations race for the same free slot: one handle
+// overwrites the other, and the loser then reads a socket that belongs
+// to somebody else. That surfaced far away as a wild pointer inside the
+// guest's own frame parser. The critical sections here are table-only —
+// no blocking host call happens while the lock is held.
+@ __net_reg * Interp it0 i h i kind → i {
+    ? == h 0 { ^ 0 } {}
+    : *Interp it ( __host it0 )
+    ( __atom_lock )
+    : i n ( vec_len [i] . it nethandles )
+    : ~ i slot 0
+    : ~ i k 1
+    ~ & < k n == slot 0 {
+        ?? ( vec_get [i] . it nethandles k ) { T v → { ? == v 0 { = slot k } {} } F → {} }
+        = k + k 1
+    }
+    ? == slot 0 {
+        ( vec_push [i] . it nethandles h )
+        ( vec_push [i] . it netkinds kind )
+        ( __atom_unlock )
+        ^ n
+    } {}
+    ( vec_set [i] . it nethandles slot h )
+    ( vec_set [i] . it netkinds slot kind )
+    ( __atom_unlock )
+    ^ slot
+}
+
+// Guest index → host handle; 0 for anything the guest made up.
+@ __net_h * Interp it0 i idx → i {
+    : *Interp it ( __host it0 )
+    ? <= idx 0 { ^ 0 } {}
+    ( __atom_lock )
+    : ~ i h 0
+    ? < idx ( vec_len [i] . it nethandles ) {
+        = h ?? ( vec_get [i] . it nethandles idx ) { T v → v F → 0 }
+    } {}
+    ( __atom_unlock )
+    ^ h
+}
+
+// Retire an index — the host handle is already closed by the caller.
+@ __net_drop * Interp it0 i idx → v {
+    : *Interp it ( __host it0 )
+    ( __atom_lock )
+    ? | <= idx 0 >= idx ( vec_len [i] . it nethandles ) { ( __atom_unlock ) ^ v } {}
+    ( vec_set [i] . it nethandles idx 0 )
+    ( vec_set [i] . it netkinds idx 0 )
+    ( __atom_unlock )
+}
+
+// Close every socket the guest left open. A wasm module that exits (or
+// traps) mid-flight would otherwise leak the host's descriptors, which
+// matters most for the embedded case: swarm-mcp runs kernels in-process.
+@ interp_net_close_all * Interp it → v {
+    : i n ( vec_len [i] . it nethandles )
+    : ~ i k 1
+    ~ < k n {
+        : i h ?? ( vec_get [i] . it nethandles k ) { T v → v F → 0 }
+        ? != h 0 {
+            : i kind ?? ( vec_get [i] . it netkinds k ) { T v → v F → 0 }
+            ? == kind 2 { ( nurl_udp_close h ) } { ( nurl_tcp_close h ) }
+            ( vec_set [i] . it nethandles k 0 )
+            ( vec_set [i] . it netkinds k 0 )
+        } {}
+        = k + k 1
+    }
+}
+
+@ __net_dispatch * Interp it ( Vec u ) field → b {
+    // ── TCP ──
+    ? ( __feq field `tcp_listen` ) {
+        : i backlog ( __pop it ) : i port ( __pop it ) : i hp ( __pop it )
+        ( __push it ( __net_reg it ( nurl_tcp_listen ( __net_cstr it hp ) port backlog ) 1 ) ) ^ T } {}
+    ? ( __feq field `tcp_connect` ) {
+        : i port ( __pop it ) : i hp ( __pop it )
+        ( __push it ( __net_reg it ( nurl_tcp_connect ( __net_cstr it hp ) port ) 1 ) ) ^ T } {}
+    ? ( __feq field `tcp_accept` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 0 ( __net_reg it ( nurl_tcp_accept h ) 1 ) ) ^ T } {}
+    ? ( __feq field `tcp_read` ) {
+        : i n ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        : s p ( __net_span it bp n )
+        ( __push it ? | == h 0 == # i p 0 -1 ( nurl_tcp_read h p n ) ) ^ T } {}
+    ? ( __feq field `tcp_write` ) {
+        : i n ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        : s p ( __net_span it bp n )
+        ( __push it ? | == h 0 == # i p 0 -1 ( nurl_tcp_write h p n ) ) ^ T } {}
+    ? ( __feq field `tcp_close` ) {
+        : i idx ( __pop it ) : i h ( __net_h it idx )
+        ? != h 0 { ( nurl_tcp_close h ) ( __net_drop it idx ) } {}
+        ^ T } {}
+    ? ( __feq field `tcp_shutdown` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ? != h 0 { ( nurl_tcp_shutdown h ) } {}
+        ^ T } {}
+    ? ( __feq field `tcp_err_kind` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 8 ( nurl_tcp_err_kind h ) ) ^ T } {}
+    ? ( __feq field `tcp_set_timeout` ) {
+        : i ms ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ? != h 0 { ( nurl_tcp_set_timeout h ms ) } {}
+        ^ T } {}
+    ? ( __feq field `tcp_timeout_ms` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 0 ( nurl_tcp_timeout_ms h ) ) ^ T } {}
+    ? ( __feq field `tcp_peer_addr` ) {
+        : i cap ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 0 ( __net_put_str it bp cap ( nurl_tcp_peer_addr h ) ) ) ^ T } {}
+    ? ( __feq field `tcp_local_addr` ) {
+        : i cap ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 0 ( __net_put_owned it bp cap ( nurl_tcp_local_addr h ) ) ) ^ T } {}
+    ? ( __feq field `tcp_get_fd` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_tcp_get_fd h ) ) ^ T } {}
+    ? ( __feq field `tcp_set_nonblock` ) {
+        : i on ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ? != h 0 { ( nurl_tcp_set_nonblock h on ) } {}
+        ^ T } {}
+    ? ( __feq field `tcp_ref` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ? != h 0 { ( nurl_tcp_ref h ) } {}
+        ^ T } {}
+    ? ( __feq field `tcp_unref` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ? != h 0 { ( nurl_tcp_unref h ) } {}
+        ^ T } {}
+    // ── UDP ──
+    ? ( __feq field `udp_bind` ) {
+        : i port ( __pop it ) : i hp ( __pop it )
+        ( __push it ( __net_reg it ( nurl_udp_bind ( __net_cstr it hp ) port ) 2 ) ) ^ T } {}
+    ? ( __feq field `udp_connect` ) {
+        : i port ( __pop it ) : i hp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_connect h ( __net_cstr it hp ) port ) ) ^ T } {}
+    ? ( __feq field `udp_send` ) {
+        : i n ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        : s p ( __net_span it bp n )
+        ( __push it ? | == h 0 == # i p 0 -1 ( nurl_udp_send h p n ) ) ^ T } {}
+    ? ( __feq field `udp_recv` ) {
+        : i n ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        : s p ( __net_span it bp n )
+        ( __push it ? | == h 0 == # i p 0 -1 ( nurl_udp_recv h p n ) ) ^ T } {}
+    ? ( __feq field `udp_send_to` ) {
+        : i port ( __pop it ) : i hp ( __pop it ) : i n ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        : s p ( __net_span it bp n )
+        ( __push it ? | == h 0 == # i p 0 -1 ( nurl_udp_send_to h p n ( __net_cstr it hp ) port ) ) ^ T } {}
+    ? ( __feq field `udp_recv_from` ) {
+        : i n ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        : s p ( __net_span it bp n )
+        ( __push it ? | == h 0 == # i p 0 -1 ( nurl_udp_recv_from h p n ) ) ^ T } {}
+    ? ( __feq field `udp_close` ) {
+        : i idx ( __pop it ) : i h ( __net_h it idx )
+        ? != h 0 { ( nurl_udp_close h ) ( __net_drop it idx ) } {}
+        ^ T } {}
+    ? ( __feq field `udp_err_kind` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 8 ( nurl_udp_err_kind h ) ) ^ T } {}
+    ? ( __feq field `udp_peer_addr` ) {
+        : i cap ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 0 ( __net_put_str it bp cap ( nurl_udp_peer_addr h ) ) ) ^ T } {}
+    ? ( __feq field `udp_local_addr` ) {
+        : i cap ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 0 ( __net_put_owned it bp cap ( nurl_udp_local_addr h ) ) ) ^ T } {}
+    ? ( __feq field `udp_set_timeout` ) {
+        : i ms ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ? != h 0 { ( nurl_udp_set_timeout h ms ) } {}
+        ^ T } {}
+    ? ( __feq field `udp_set_nonblock` ) {
+        : i on ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ? != h 0 { ( nurl_udp_set_nonblock h on ) } {}
+        ^ T } {}
+    ? ( __feq field `udp_family` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_family h ) ) ^ T } {}
+    ? ( __feq field `udp_get_fd` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_get_fd h ) ) ^ T } {}
+    ? ( __feq field `udp_set_broadcast` ) {
+        : i on ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_set_broadcast h on ) ) ^ T } {}
+    ? ( __feq field `udp_join_group` ) {
+        : i ip ( __pop it ) : i gp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_join_group h ( __net_cstr it gp ) ( __net_cstr it ip ) ) ) ^ T } {}
+    ? ( __feq field `udp_leave_group` ) {
+        : i ip ( __pop it ) : i gp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_leave_group h ( __net_cstr it gp ) ( __net_cstr it ip ) ) ) ^ T } {}
+    ? ( __feq field `udp_set_multicast_ttl` ) {
+        : i ttl ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_set_multicast_ttl h ttl ) ) ^ T } {}
+    ? ( __feq field `udp_set_multicast_loop` ) {
+        : i on ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_udp_set_multicast_loop h on ) ) ^ T } {}
+    // ── DNS ──
+    ? ( __feq field `dns_resolve` ) {
+        : i cap ( __pop it ) : i bp ( __pop it ) : i hp ( __pop it )
+        ( __push it ( __net_put_owned it bp cap ( nurl_dns_resolve ( __net_cstr it hp ) ) ) ) ^ T } {}
+    ? ( __feq field `dns_resolve_port` ) {
+        : i cap ( __pop it ) : i bp ( __pop it ) : i port ( __pop it ) : i hp ( __pop it )
+        ( __push it ( __net_put_owned it bp cap ( nurl_dns_resolve_port ( __net_cstr it hp ) port ) ) ) ^ T } {}
+    ? ( __feq field `dns_reverse` ) {
+        : i cap ( __pop it ) : i bp ( __pop it ) : i ip ( __pop it )
+        ( __push it ( __net_put_owned it bp cap ( nurl_dns_reverse ( __net_cstr it ip ) ) ) ) ^ T } {}
+    ^ F
+}
+
+// ── module "wasi": thread-spawn ───────────────────────────────────
+//
+// wasi-threads' one import. The guest hands over a pointer to its own
+// start-argument block; the runtime creates a thread, gives it a fresh
+// instance of the module (own stacks, own globals) over the SAME linear
+// memory, and calls the module's exported `wasi_thread_start(tid, arg)`.
+//
+// The one thing done here that the proposal leaves to the guest's libc
+// is setting `__stack_pointer`: a thread needs a stack of its own, and
+// C cannot assign a wasm global. So the guest allocates the stack, writes
+// its top into the start block (offset 8, our runtime_ffi.c layout), and
+// the host sets the new instance's exported `__stack_pointer` from it
+// before the first call. Without the export the spawn is refused rather
+// than letting two threads share one stack.
+@ __wasi_thread_spawn * Interp it → v {
+    : i start_arg ( __pop it )
+    : *Interp ho ( __host it )
+    : *Module m # *Module . ho mod
+    ? == . ho tstart_fidx -2 {
+        = . ho tstart_fidx ( module_export_func m `wasi_thread_start` )
+        = . ho sp_global ( module_export_global m `__stack_pointer` )
+    } {}
+    : i fidx . ho tstart_fidx
+    : i spg . ho sp_global
+    ? | < fidx 0 < spg 0 { ( __push it -1 ) ^ v } {}
+    : i stack_top ( __m_get_u32 it + start_arg 8 )
+    ? == stack_top 0 { ( __push it -1 ) ^ v } {}
+    ( __atom_lock )
+    : i tid . ho next_tid
+    = . ho next_tid + tid 1
+    ( __atom_unlock )
+    : *TStart th # *TStart ( nurl_alloc Z TStart )
+    = . th f \ → v {
+        : *Interp child ( interp_thread_new ho )
+        ( vec_set [i] . child globals spg stack_top )
+        ( vec_push [i] . child vs tid )
+        ( vec_push [i] . child vs start_arg )
+        ( exec_func child fidx )
+        // A trap kills only this thread, so it has to be reported here or
+        // it is silent: the guest's join just never completes.
+        ? ( interp_trapped child ) {
+            ( nurl_eprint `wasmtime: thread trap: ` )
+            ( nurl_eprintln ( string_data ( bytes_to_str . child trapmsg ) ) )
+        } {}
+        ( interp_flush child )
+        ( interp_free child )
+    }
+    ( __atom_lock )
+    ( vec_push [s] . ho thread_holders # s th )
+    ( __atom_unlock )
+    ?? ( thread_spawn . th f ) {
+        T t → {
+            ( __atom_lock )
+            ( vec_push [i] . ho thread_joins # i . t raw )
+            ( __atom_unlock )
+            ( __push it tid )
+        }
+        F e → { ( __push it -1 ) }
+    }
+}
+
 @ __wasi_dispatch * Interp it ( Vec u ) mod ( Vec u ) field → v {
+    ? ( __feq mod `wasi` ) {
+        ? ( __feq field `thread-spawn` ) { ( __wasi_thread_spawn it ) ^ v } {}
+        ( __trap_named it `unsupported wasi import: ` field ) ^ v
+    } {}
+    ? ( __feq mod `nurl_net` ) {
+        ? ! . it net_ok { ( __trap it `nurl_net host imports are disabled (pass --allow-net to enable)` ) ^ v } {}
+        ? ( __net_dispatch it field ) { ^ v } {}
+        ( __trap_named it `unsupported nurl_net import: ` field ) ^ v
+    } {}
     ? ( __feq mod `env` ) {
         ? ! . it gpu_ok { ( __trap it `env/GPU host imports are disabled (pass --allow-gpu to enable)` ) ^ v } {}
         ? ( __gpu_dispatch it field ) { ^ v } {}
@@ -3390,6 +4220,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ? ( __feq field `environ_get` ) { ( __wasi_environ_get it ) ^ v } {}
     ? ( __feq field `clock_time_get` ) { ( __wasi_clock_time_get it ) ^ v } {}
     ? ( __feq field `random_get` ) { ( __wasi_random_get it ) ^ v } {}
+    ? ( __feq field `poll_oneoff` ) { ( __wasi_poll_oneoff it ) ^ v } {}
     ? ( __feq field `fd_fdstat_set_flags` ) { ( __pop it ) ( __pop it ) ( __push it 0 ) ^ v } {}
     ? ( __feq field `sched_yield` ) { ( __push it 0 ) ^ v } {}
     ( __trap_named it `unsupported wasi import: ` field )
@@ -3431,6 +4262,187 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 }
 
 // `sub` and the one index operand some subops carry (`bop`) arrive predecoded.
+// ── 0xfe: the threads proposal's atomics ──────────────────────────
+//
+// Guest threads run on real host threads over one shared linear memory,
+// so "atomic" has to mean atomic on the host too. An interpreter cannot
+// lean on the CPU's atomics for a read-modify-write it performs as three
+// separate steps, so every atomic op takes one process-wide lock. That
+// makes the whole family sequentially consistent by construction —
+// slower than a JIT's lock-free lowering, and the semantics the guest
+// was promised.
+//
+// `wait` / `notify` are the futex pair the guest's mutexes and joins are
+// built from. Waiters block on a single condvar and re-check their own
+// address on wake, which is why a notify may wake more sleepers than it
+// names: spurious wakeups are explicitly allowed, and the guest already
+// re-tests its condition in a loop.
+
+: ~ i g_atom_mx 0  // *pthread_mutex_t, the one atomics lock
+: ~ i g_atom_cv 0  // *pthread_cond_t, where waiters sleep
+: ~ i g_atom_gen 0  // bumped by every notify; a waiter watches it change
+: ~ i g_atom_waiters 0  // sleepers right now, for notify's return value
+
+// Created once, from the thread that instantiates — before any guest
+// thread exists, so this is not itself a race.
+@ __atom_init → v {
+    ? != g_atom_mx 0 { ^ v } {}
+    : s m ( nurl_zalloc ( nurl_native_sizeof `pthread_mutex_t` ) )
+    ( pthread_mutex_init # *u m # *u 0 )
+    = g_atom_mx # i m
+    : s c ( nurl_zalloc ( nurl_native_sizeof `pthread_cond_t` ) )
+    ( pthread_cond_init # *u c # *u 0 )
+    = g_atom_cv # i c
+}
+
+@ __atom_lock → v { ( __atom_init ) ( pthread_mutex_lock # *u # s g_atom_mx ) }
+
+@ __atom_unlock → v { ( pthread_mutex_unlock # *u # s g_atom_mx ) }
+
+// Natural alignment is required by the spec: an unaligned atomic traps
+// rather than being emulated.
+@ __atom_check * Interp it i ea i w → b {
+    ? != 0 % ea w { ( __trap it `unaligned atomic access` ) ^ F } {}
+    ? | < ea 0 > + ea w . it mem_bytes { ( __trap it `atomic access out of bounds` ) ^ F } {}
+    ^ T
+}
+
+// Mask a value to `w` bytes (w = 8 leaves it alone).
+@ __atom_mask i v i w → i {
+    ? >= w 8 { ^ v } {}
+    ^ & v - << 1 * 8 w 1
+}
+
+@ __atom_notify i count → i {
+    ( __atom_lock )
+    = g_atom_gen + g_atom_gen 1
+    : i woke ? < count g_atom_waiters count g_atom_waiters
+    ( pthread_cond_broadcast # *u # s g_atom_cv )
+    ( __atom_unlock )
+    ^ ? < woke 0 0 woke
+}
+
+// 0 = woken, 1 = the value had already changed, 2 = timed out.
+// `timeout` is nanoseconds, negative for "no timeout".
+@ __atom_wait * Interp it i ea i w i expected i timeout → i {
+    ( __atom_lock )
+    : i cur ( __mem_load it ea w 0 )
+    ? != cur ( __atom_mask expected w ) { ( __atom_unlock ) ^ 1 } {}
+    : i g0 g_atom_gen
+    = g_atom_waiters + g_atom_waiters 1
+    : ~ i res 0
+    ? < timeout 0 {
+        ~ == g_atom_gen g0 { ( pthread_cond_wait # *u # s g_atom_cv # *u # s g_atom_mx ) }
+    } {
+        // A finite timeout polls rather than using pthread_cond_timedwait:
+        // one less FFI surface (and one less struct timespec) for a path
+        // the guest's own mutexes take only when they gave up spinning.
+        : i deadline + ( monotonic_ns ) timeout
+        ~ & == g_atom_gen g0 == res 0 {
+            ( __atom_unlock )
+            ( sleep_ms 1 )
+            ( __atom_lock )
+            ? >= ( monotonic_ns ) deadline { = res 2 } {}
+        }
+    }
+    = g_atom_waiters - g_atom_waiters 1
+    ( __atom_unlock )
+    ^ res
+}
+
+// Byte width of an atomic load/store/rmw sub-opcode's access, given the
+// position inside its seven-op group: [.rmw, i64.rmw, rmw8_u, rmw16_u,
+// i64.rmw8_u, i64.rmw16_u, i64.rmw32_u].
+@ __atom_rmw_width i k → i {
+    ? == k 0 { ^ 4 } {}
+    ? == k 1 { ^ 8 } {}
+    ? == k 2 { ^ 1 } {}
+    ? == k 3 { ^ 2 } {}
+    ? == k 4 { ^ 1 } {}
+    ? == k 5 { ^ 2 } {}
+    ^ 4
+}
+
+// Operand counts, so the predecoder can size the bridge. Returns
+// pops << 1 | push.
+@ __atom_shape i sub → i {
+    ? == sub 0 { ^ 5 } {}  // notify: 2 pops, 1 push
+    ? | == sub 1 == sub 2 { ^ 7 } {}  // wait32/wait64: 3 pops, 1 push
+    ? == sub 3 { ^ 0 } {}  // fence
+    ? & >= sub 16 <= sub 22 { ^ 3 } {}  // load: 1 pop, 1 push
+    ? & >= sub 23 <= sub 29 { ^ 4 } {}  // store: 2 pops, no push
+    ? & >= sub 72 <= sub 78 { ^ 7 } {}  // cmpxchg: 3 pops, 1 push
+    ^ 5  // rmw: 2 pops, 1 push
+}
+
+@ __exec_atomic * Interp it i sub i off → v {
+    ? == sub 3 { ^ v } {}  // atomic.fence — the lock is the fence
+    ? == sub 0 {  // memory.atomic.notify
+        : i count ( __pop it )
+        : i ea + & ( __pop it ) 4294967295 off
+        ? ( __atom_check it ea 4 ) {} { ^ v }
+        ( __push it ( __atom_notify count ) )
+        ^ v
+    } {}
+    ? | == sub 1 == sub 2 {  // memory.atomic.wait32 / wait64
+        : i w ? == sub 1 4 8
+        : i timeout ( __pop it )
+        : i expected ( __pop it )
+        : i ea + & ( __pop it ) 4294967295 off
+        ? ( __atom_check it ea w ) {} { ^ v }
+        ( __push it ( __atom_wait it ea w expected timeout ) )
+        ^ v
+    } {}
+    ? & >= sub 16 <= sub 22 {  // atomic loads — zero-extended
+        : i w ? == sub 16 4 ? == sub 17 8 ? == sub 18 1 ? == sub 19 2 ? == sub 20 1 ? == sub 21 2 4
+        : i ea + & ( __pop it ) 4294967295 off
+        ? ( __atom_check it ea w ) {} { ^ v }
+        ( __atom_lock )
+        : i got ( __mem_load it ea w 0 )
+        ( __atom_unlock )
+        ( __push it got )
+        ^ v
+    } {}
+    ? & >= sub 23 <= sub 29 {  // atomic stores
+        : i w ? == sub 23 4 ? == sub 24 8 ? == sub 25 1 ? == sub 26 2 ? == sub 27 1 ? == sub 28 2 4
+        : i val ( __pop it )
+        : i ea + & ( __pop it ) 4294967295 off
+        ? ( __atom_check it ea w ) {} { ^ v }
+        ( __atom_lock )
+        ( __mem_store it ea w val )
+        ( __atom_unlock )
+        ^ v
+    } {}
+    ? & >= sub 72 <= sub 78 {  // atomic cmpxchg
+        : i w ( __atom_rmw_width - sub 72 )
+        : i replacement ( __pop it )
+        : i expected ( __pop it )
+        : i ea + & ( __pop it ) 4294967295 off
+        ? ( __atom_check it ea w ) {} { ^ v }
+        ( __atom_lock )
+        : i old ( __mem_load it ea w 0 )
+        ? == old ( __atom_mask expected w ) { ( __mem_store it ea w replacement ) } {}
+        ( __atom_unlock )
+        ( __push it old )
+        ^ v
+    } {}
+    ? & >= sub 30 <= sub 71 {  // add/sub/and/or/xor/xchg, seven ops each
+        : i group / - sub 30 7
+        : i w ( __atom_rmw_width % - sub 30 7 )
+        : i val ( __pop it )
+        : i ea + & ( __pop it ) 4294967295 off
+        ? ( __atom_check it ea w ) {} { ^ v }
+        ( __atom_lock )
+        : i old ( __mem_load it ea w 0 )
+        : i nv ? == group 0 + old val ? == group 1 - old val ? == group 2 & old val ? == group 3 | old val ? == group 4 ^^ old val val
+        ( __mem_store it ea w ( __atom_mask nv w ) )
+        ( __atom_unlock )
+        ( __push it old )
+        ^ v
+    } {}
+    ( __trap it `unsupported atomic opcode` )
+}
+
 @ __exec_fc * Interp it i sub i bop → v {
     ? == sub 8 {  // memory.init dataidx: copy from a passive data segment
         : i didx bop
@@ -3442,7 +4454,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         : i dropped ?? ( vec_get [i] . it data_dropped didx ) { T x → x F → 1 }
         ? | == # i dp 0 & == dropped 1 > n 0 { ( __trap it `memory.init: dropped or bad data segment` ) ^ v } {}
         : *DataSeg ds # *DataSeg dp
-        ? | > + src n ( vec_len [u] . ds bytes ) > + dst n ( vec_len [u] . it mem ) {
+        ? | > + src n ( vec_len [u] . ds bytes ) > + dst n . it mem_bytes {
             ( __trap it `out of bounds memory access` ) ^ v } {}
         : ~ i k 0
         ~ < k n {
@@ -3460,7 +4472,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         : i n ( __u32 ( __pop it ) )
         : i src ( __u32 ( __pop it ) )
         : i dst ( __u32 ( __pop it ) )
-        : i mn ( vec_len [u] . it mem )
+        : i mn . it mem_bytes
         ? | > + src n mn > + dst n mn { ( __trap it `out of bounds memory access` ) ^ v } {}
         ( __mem_copy it dst src n )
         ^ v
@@ -3469,7 +4481,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         : i n ( __u32 ( __pop it ) )
         : i val & ( __pop it ) 255
         : i dst ( __u32 ( __pop it ) )
-        ? > + dst n ( vec_len [u] . it mem ) { ( __trap it `out of bounds memory access` ) ^ v } {}
+        ? > + dst n . it mem_bytes { ( __trap it `out of bounds memory access` ) ^ v } {}
         ( __mem_fill it dst val n )
         ^ v
     } {}
