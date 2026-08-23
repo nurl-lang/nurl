@@ -2660,7 +2660,307 @@ void nurl_pthread_detach_ptr(pthread_t *t) {
     if (t) pthread_detach(*t);
 }
 
-#else  /* WASI — no threading. */
+#elif defined(__wasm_atomics__)  /* WASI + the threads proposal */
+/*
+ * wasi-threads, guest side. wasi-libc ships no pthread implementation
+ * for this target, so the whole surface stdlib/std/thread.nu declares is
+ * built here on the two things the proposal does give us: the
+ * `wasi.thread-spawn` import, and atomics on shared linear memory.
+ *
+ * Spawning: the guest allocates the new thread's stack and start block,
+ * hands the block to the host, and the host gives the thread a fresh
+ * instance of this module — its own stacks and globals — over the same
+ * memory, with `__stack_pointer` set from the block. That last part is
+ * the host's job because C cannot assign a wasm global; everything else
+ * is here.
+ *
+ * Mutex and condvar are the textbook futex pair over
+ * memory.atomic.wait32 / notify. Join is the same futex on a done flag.
+ */
+
+#include <stdatomic.h>
+#include <stdint.h>
+
+__attribute__((import_module("wasi"), import_name("thread-spawn")))
+extern int32_t __nurl_wasi_thread_spawn(void *start_arg);
+
+/* 1 MiB per thread, matching the default the main stack gets. Keep the
+ * field order: the host reads stack_top at offset 8. */
+#define NURL_WASM_TSTACK (1024 * 1024)
+
+typedef struct NurlWasmThread {
+    int32_t          fn;          /* 0: void *(*)(void *) */
+    int32_t          arg;         /* 4 */
+    int32_t          stack_top;   /* 8: the host sets __stack_pointer here */
+    int32_t          tid;         /* 12 */
+    _Atomic int32_t  done;        /* 16 */
+    int32_t          ret;         /* 20 */
+    int32_t          stack_base;  /* 24: freed by join */
+} NurlWasmThread;
+
+static void nurl__wait32(_Atomic int32_t *addr, int32_t expected) {
+    __builtin_wasm_memory_atomic_wait32((int32_t*)addr, expected, -1);
+}
+
+static void nurl__wake(_Atomic int32_t *addr, int32_t count) {
+    __builtin_wasm_memory_atomic_notify((int32_t*)addr, count);
+}
+
+/*
+ * The host calls this on the new thread with the block it was given.
+ *
+ * The entry point is called as `void (*)(void *)`, which is the shape a
+ * NURL closure compiles to — and on this target that is the only thing
+ * that ever reaches pthread_create (stdlib/std/thread.nu decomposes the
+ * closure into fn + env). Elsewhere the mismatch with POSIX's
+ * `void *(*)(void *)` is harmless because the caller discards the
+ * return; wasm type-checks call_indirect exactly, so here it is not a
+ * matter of taste: calling it with the POSIX shape traps with a
+ * signature mismatch before the thread body runs.
+ */
+/* wasm-ld synthesises this when the module has thread-local data; each
+ * thread gets its own block or every `__thread` variable — errno among
+ * them — would be one shared word. */
+extern void __wasm_init_tls(void *);
+
+__attribute__((export_name("wasi_thread_start")))
+void wasi_thread_start(int32_t tid, void *start_arg) {
+    NurlWasmThread *ts = (NurlWasmThread*)start_arg;
+    ts->tid = tid;
+    {
+        size_t tls_size = __builtin_wasm_tls_size();
+        if (tls_size) {
+            size_t tls_align = __builtin_wasm_tls_align();
+            if (tls_align < 16) tls_align = 16;
+            unsigned char *raw = (unsigned char*)malloc(tls_size + tls_align);
+            if (raw) {
+                uintptr_t base = ((uintptr_t)raw + tls_align - 1) & ~(uintptr_t)(tls_align - 1);
+                __wasm_init_tls((void*)base);
+            }
+        }
+    }
+    void (*entry)(void*) = (void (*)(void*))(uintptr_t)ts->fn;
+    entry((void*)(uintptr_t)ts->arg);
+    ts->ret = 0;
+    atomic_store(&ts->done, 1);
+    nurl__wake(&ts->done, -1);
+}
+
+int pthread_create(void *t, void *a, void *start, void *arg) {
+    (void)a;
+    if (!t || !start) return 22;  /* EINVAL */
+    NurlWasmThread *ts = (NurlWasmThread*)calloc(1, sizeof *ts);
+    if (!ts) return 11;  /* EAGAIN */
+    unsigned char *stack = (unsigned char*)malloc(NURL_WASM_TSTACK);
+    if (!stack) { free(ts); return 11; }
+    ts->fn         = (int32_t)(uintptr_t)start;
+    ts->arg        = (int32_t)(uintptr_t)arg;
+    ts->stack_base = (int32_t)(uintptr_t)stack;
+    /* The stack grows down from the top, 16-byte aligned. */
+    ts->stack_top  = (int32_t)(((uintptr_t)stack + NURL_WASM_TSTACK) & ~(uintptr_t)15);
+    atomic_store(&ts->done, 0);
+    if (__nurl_wasi_thread_spawn(ts) < 0) { free(stack); free(ts); return 11; }
+    *(void**)t = ts;   /* pthread_t is this block's address */
+    return 0;
+}
+
+int nurl_pthread_join_ptr(void *tp) {
+    if (!tp) return -1;
+    NurlWasmThread *ts = *(NurlWasmThread**)tp;
+    if (!ts) return -1;
+    while (atomic_load(&ts->done) == 0) nurl__wait32(&ts->done, 0);
+    free((void*)(uintptr_t)ts->stack_base);
+    free(ts);
+    *(void**)tp = NULL;
+    return 0;
+}
+
+/* Detach cannot free the block — the thread is still running out of it —
+ * so it only forgets it. The stack is reclaimed when the process exits;
+ * a thread that is never joined is a thread whose stack is live anyway. */
+void nurl_pthread_detach_ptr(void *tp) { if (tp) *(void**)tp = NULL; }
+
+/* 0 = free, 1 = held, 2 = held and someone is waiting. */
+int pthread_mutex_init(void *m, void *a) {
+    (void)a;
+    if (m) atomic_store((_Atomic int32_t*)m, 0);
+    return 0;
+}
+
+int pthread_mutex_lock(void *mp) {
+    _Atomic int32_t *m = (_Atomic int32_t*)mp;
+    if (!m) return 0;
+    int32_t expected = 0;
+    if (atomic_compare_exchange_strong(m, &expected, 1)) return 0;
+    do {
+        expected = 1;
+        if (atomic_load(m) == 2 || atomic_compare_exchange_strong(m, &expected, 2))
+            nurl__wait32(m, 2);
+        expected = 0;
+    } while (!atomic_compare_exchange_strong(m, &expected, 2));
+    return 0;
+}
+
+int pthread_mutex_unlock(void *mp) {
+    _Atomic int32_t *m = (_Atomic int32_t*)mp;
+    if (!m) return 0;
+    if (atomic_fetch_sub(m, 1) != 1) {
+        atomic_store(m, 0);
+        nurl__wake(m, 1);
+    }
+    return 0;
+}
+
+int pthread_mutex_destroy(void *m) { (void)m; return 0; }
+
+/* A condvar is a sequence counter: a waiter reads it, drops the mutex,
+ * and sleeps until the counter moves. */
+int pthread_cond_init(void *c, void *a) {
+    (void)a;
+    if (c) atomic_store((_Atomic int32_t*)c, 0);
+    return 0;
+}
+
+int pthread_cond_wait(void *cp, void *mp) {
+    _Atomic int32_t *c = (_Atomic int32_t*)cp;
+    if (!c) return 0;
+    int32_t seq = atomic_load(c);
+    pthread_mutex_unlock(mp);
+    nurl__wait32(c, seq);
+    pthread_mutex_lock(mp);
+    return 0;
+}
+
+int pthread_cond_signal(void *cp) {
+    _Atomic int32_t *c = (_Atomic int32_t*)cp;
+    if (!c) return 0;
+    atomic_fetch_add(c, 1);
+    nurl__wake(c, 1);
+    return 0;
+}
+
+int pthread_cond_broadcast(void *cp) {
+    _Atomic int32_t *c = (_Atomic int32_t*)cp;
+    if (!c) return 0;
+    atomic_fetch_add(c, 1);
+    nurl__wake(c, -1);
+    return 0;
+}
+
+int pthread_cond_destroy(void *c) { (void)c; return 0; }
+
+/* ── the async runtime, as one thread per fiber ──────────────────
+ *
+ * stdlib's M:N runtime needs a stackful context switch, which wasm has
+ * no way to express (the stack-switching proposal is not here yet). But
+ * the API it exports does not actually require M:N — it requires that a
+ * spawned body runs concurrently and that `runtime_run` returns when
+ * they are all done. With wasi-threads that is a 1:1 backend: a fiber IS
+ * a thread. Cheaper multiplexing can come later; correct concurrency is
+ * what the relay, the HTTP server and every `spawn` in the stdlib are
+ * actually asking for.
+ *
+ * The reactor stays stubbed on this target: sockets here are blocking,
+ * so `nurl_reactor_wait_*` answering "not on a fiber" makes the async
+ * paths take their blocking fallback, which is exactly right when each
+ * fiber owns a thread.
+ */
+
+typedef struct NurlWasmFiber {
+    void            (*fn)(void*);
+    void             *env;
+    int32_t           own_env;   /* free env after the body returns */
+    int32_t           joinable;
+    _Atomic int32_t   done;
+    _Atomic int32_t   parked;    /* futex word for park/unpark */
+    void             *tid;       /* pthread_t block, when joinable */
+} NurlWasmFiber;
+
+static _Atomic int32_t nurl__wf_live = 0;   /* fibers still running */
+static _Atomic int32_t nurl__wf_gen  = 0;   /* bumped when one finishes */
+
+static void nurl__wf_body(void *arg) {
+    NurlWasmFiber *f = (NurlWasmFiber*)arg;
+    f->fn(f->env);
+    if (f->own_env && f->env) free(f->env);
+    atomic_store(&f->done, 1);
+    nurl__wake(&f->done, -1);
+    atomic_fetch_sub(&nurl__wf_live, 1);
+    atomic_fetch_add(&nurl__wf_gen, 1);
+    nurl__wake(&nurl__wf_gen, -1);
+    if (!f->joinable) {
+        if (f->tid) { free(f->tid); }
+        free(f);
+    }
+}
+
+static long long nurl__wf_spawn(void *fn, void *env, int own_env, int joinable) {
+    if (!fn) return 0;
+    NurlWasmFiber *f = (NurlWasmFiber*)calloc(1, sizeof *f);
+    if (!f) return 0;
+    f->fn = (void (*)(void*))fn;
+    f->env = env;
+    f->own_env = own_env;
+    f->joinable = joinable;
+    void **tid = (void**)calloc(1, sizeof(void*));
+    if (!tid) { free(f); return 0; }
+    f->tid = tid;
+    atomic_fetch_add(&nurl__wf_live, 1);
+    if (pthread_create(tid, NULL, (void*)nurl__wf_body, f) != 0) {
+        atomic_fetch_sub(&nurl__wf_live, 1);
+        free(tid); free(f);
+        return 0;
+    }
+    return (long long)(uintptr_t)f;
+}
+
+long long nurl_fiber_spawn(void *fn, void *env)          { return nurl__wf_spawn(fn, env, 0, 0); }
+long long nurl_fiber_spawn_owned(void *fn, void *env)    { return nurl__wf_spawn(fn, env, 1, 0); }
+long long nurl_fiber_spawn_joinable(void *fn, void *env) { return nurl__wf_spawn(fn, env, 0, 1); }
+
+void nurl_fiber_join(long long fiber) {
+    NurlWasmFiber *f = (NurlWasmFiber*)(uintptr_t)fiber;
+    if (!f) return;
+    while (atomic_load(&f->done) == 0) nurl__wait32(&f->done, 0);
+    if (f->tid) { nurl_pthread_join_ptr(f->tid); free(f->tid); }
+    free(f);
+}
+
+/* Nothing to yield to: the OS is the scheduler here. */
+void nurl_fiber_yield(void) {}
+
+long long nurl_fiber_current(void)   { return 0; }
+long long nurl_fiber_worker_id(void) { return -1; }
+
+/* park/unpark are the futex pair again, on the fiber's own word. */
+void nurl_fiber_park_with_mutex(long long mutex_h) {
+    (void)mutex_h;
+}
+
+void nurl_fiber_unpark(long long fiber) {
+    NurlWasmFiber *f = (NurlWasmFiber*)(uintptr_t)fiber;
+    if (!f) return;
+    atomic_store(&f->parked, 0);
+    nurl__wake(&f->parked, -1);
+}
+
+void nurl_runtime_init(long long worker_count) { (void)worker_count; }
+
+/* Block until every spawned fiber has finished — the same contract the
+ * M:N runtime has, and the reason a relay's `runtime_run` never returns:
+ * its accept loop is a fiber that runs forever. */
+void nurl_runtime_run(void) {
+    for (;;) {
+        int32_t live = atomic_load(&nurl__wf_live);
+        if (live <= 0) return;
+        int32_t gen = atomic_load(&nurl__wf_gen);
+        nurl__wait32(&nurl__wf_gen, gen);
+    }
+}
+
+void nurl_runtime_shutdown(void) {}
+
+#else  /* WASI without atomics — no threading. */
 
 int  pthread_create(void *t, void *a, void *s, void *arg) {
     (void)t; (void)a; (void)s; (void)arg; return -1;
@@ -3837,7 +4137,8 @@ void nurl_runtime_shutdown(void) {
 #  pragma clang diagnostic pop
 #endif
 
-#else  /* no fiber backend (WASI, Windows) — stubs until a later phase */
+#elif !(defined(__wasi__) && defined(__wasm_atomics__))
+/* no fiber backend (Windows, wasm without threads) — stubs */
 
 long long nurl_fiber_spawn(void *fn, void *env) {
     (void)fn; (void)env; return 0;

@@ -617,6 +617,24 @@ $ `stdlib/std/bytes.nu`
     ^ m
 }
 
+// Find an exported GLOBAL's index by name (-1 if absent). wasi-threads
+// needs one: `__stack_pointer` is what gives a spawned thread its own
+// stack, and only the host can set it before the thread's first call.
+@ module_export_global * Module m s name → i {
+    : i n ( vec_len [s] . m exports )
+    : ~ i found -1
+    : ~ i k 0
+    ~ & == found -1 < k n {
+        : s pp ?? ( vec_get [s] . m exports k ) { T x → x F → # s 0 }
+        ? != # i pp 0 {
+            : *WExport x # *WExport pp
+            ? & == . x kind 3 ( __name_eq . x name name ) { = found . x index } {}
+        } {}
+        = k + k 1
+    }
+    ^ found
+}
+
 // Find an exported function index by name (-1 if absent).
 @ module_export_func * Module m s name → i {
     : i n ( vec_len [s] . m exports )

@@ -61,6 +61,13 @@ $ `toolchain.nu`
     // — e.g. `-msimd128` for wasm SIMD
     s asyncify_imports  // comma-separated async import names (`` = none);
     // e.g. `env.wgpu_download` for the WebGPU backend's async readback
+    b threads  // build for wasi-threads: shared memory, atomics, and the
+    // guest-side pthread implementation in runtime.c. The module
+    // then imports `wasi.thread-spawn` and exports
+    // `wasi_thread_start` + `__stack_pointer`, so it needs a
+    // runtime that implements the proposal (packages/wasmtime
+    // does). Off by default: a shared memory is a different
+    // memory model, not a free upgrade.
     b no_gc_sections  // link with --no-gc-sections instead of the default
     // --gc-sections — the escape hatch if a call_indirect trap
     // ever points at table renumbering again (see the link-flags
@@ -95,7 +102,7 @@ $ `toolchain.nu`
 }
 
 @ wb_opts_default → WbOpts {
-    ^ @ WbOpts { `-O2` T F F F `` `` `` F }
+    ^ @ WbOpts { `-O2` T F F F `` `` `` F F }
 }
 
 @ __wb_say b quiet s msg → v {
@@ -177,7 +184,7 @@ $ `toolchain.nu`
 
     // 2. retarget for wasm32-wasi
     ( __wb_say . opts quiet `wasmbuilder: rewriting IR for wasm32-wasi` )
-    : String ir_fixed ( wb_prepare_ir_for_wasi ir )
+    : String ir_fixed ( wb_prepare_ir_for_wasi_opts ir . opts threads )
     ( string_free ir )
 
     : b uses_canvas ( __wb_ir_uses `@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\(` ir_fixed )
@@ -188,7 +195,7 @@ $ `toolchain.nu`
     : ~ WbCompiler cc @ WbCompiler { ( string_new ) T }
     ?? cr { T c → { ( wb_compiler_free cc ) = cc c } F e → { ( string_free ir_fixed ) ^ @ !v String { F e } } }
 
-    : !String String ror ( wb_ensure_wasm_obj cc `runtime.c` )
+    : !String String ror ( wb_ensure_wasm_obj_feat cc `runtime.c` ? . opts threads `threads` `` )
     : ~ String runtime_o ( string_new )
     ?? ror { T p → { ( string_free runtime_o ) = runtime_o p } F e → {
             ( string_free ir_fixed ) ( wb_compiler_free cc )
@@ -240,6 +247,20 @@ $ `toolchain.nu`
     // wasm side of it. `-Xclang <level>` goes straight to cc1 and survives.
     ? . cc is_zig { ( vec_push [s] args `-Xclang` ) ( vec_push [s] args . opts opt ) } {}
     ( vec_push [s] args `-Wno-override-module` )
+    // wasi-threads: atomics + a shared memory the runtime reserves at its
+    // maximum, and the stack pointer exported so the host can give each
+    // thread its own. (The heap is handled inside runtime.c, which
+    // defines the whole C allocation surface for this build — wasm32's
+    // libc allocator is single-threaded and cannot be locked from
+    // outside.)
+    ? . opts threads {
+        ( vec_push [s] args `-matomics` )
+        ( vec_push [s] args `-mbulk-memory` )
+        ( vec_push [s] args `-Wl,--shared-memory` )
+        ( vec_push [s] args `-Wl,--max-memory=1073741824` )
+        ( vec_push [s] args `-Wl,--export=__stack_pointer` )
+        ( vec_push [s] args `-Wl,--export=wasi_thread_start` )
+    } {}
     // Section GC is a single explicit choice, not a flag-string fight: a
     // caller layering `-Wl,--(no-)gc-sections` through extra_cflags would
     // be relying on wasm-ld's last-one-wins ordering to defeat the one we

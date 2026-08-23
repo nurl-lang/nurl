@@ -19,6 +19,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `module.nu`
 
@@ -215,7 +216,25 @@ $ `module.nu`
     ( Vec u ) capout  // captured module stdout (raw bytes, NULs preserved)
     ( Vec u ) caperr  // captured module stderr
     ( Vec s ) pfuncs  // *PFunc per defined function, predecoded lazily (#s 0 until first call)
+    // Threads (wasi-threads). A spawned thread runs its OWN Interp — own
+    // value stack, frames, globals and therefore its own `__stack_pointer`,
+    // exactly as the proposal's "one instance per thread" says — over the
+    // SHARED linear memory, table and module. `owner` points at the
+    // instantiating Interp (0 in it), and the host-side tables that must
+    // stay common (file descriptors, socket handles, captured output) are
+    // reached through it; `__host` is that hop.
+    s owner  // *Interp of the instantiating thread, 0 when this IS it
+    i next_tid  // owner only: thread ids handed to wasi.thread-spawn
+    ( Vec s ) thread_holders  // owner only: *TStart, keeping spawn closures alive
+    ( Vec i ) thread_kids  // owner only: live child *Interp, for memory.grow
+    ( Vec i ) thread_joins  // owner only: host Thread handles, joined before free
+    i tstart_fidx  // cached export index of `wasi_thread_start` (-2 = not looked up)
+    i sp_global  // cached global index of `__stack_pointer` (-2 = not looked up)
 }
+
+// One spawned thread's closure, heap-held so it outlives the host call
+// that created it (thread_spawn borrows the closure and its captures).
+: TStart { ( @ v ) f }
 
 // One activation record on the explicit call stack: the function, its locals,
 // its control stack, and the instruction cursor [pos, end) — pos/end are
@@ -296,6 +315,13 @@ $ `module.nu`
     = . it cap F
     = . it capout ( vec_new [u] )
     = . it caperr ( vec_new [u] )
+    = . it owner # s 0
+    = . it next_tid 1
+    = . it thread_holders ( vec_new [s] )
+    = . it thread_kids ( vec_new [i] )
+    = . it thread_joins ( vec_new [i] )
+    = . it tstart_fidx -2
+    = . it sp_global -2
     // copy global initial values
     : i ng ( vec_len [i] . m global_init )
     : ~ i gi 0
@@ -385,9 +411,49 @@ $ `module.nu`
 }
 
 @ interp_free * Interp it → v {
+    // A spawned thread owns only what interp_thread_new made for it: the
+    // memory, table, argv/envp and every host table belong to the Interp
+    // that instantiated, and are freed exactly once, there.
+    ? != # i . it owner 0 {
+        ( __thread_unregister it )
+        ( vec_free [i] . it vs )
+        ( vec_free [i] . it thread_kids )
+        ( vec_free [i] . it thread_joins )
+        ( vec_free [i] . it globals )
+        ( vec_free [i] . it nethandles )
+        ( vec_free [i] . it netkinds )
+        ( vec_free [s] . it fds )
+        ( vec_free [s] . it thread_holders )
+        ( vec_free [u] . it trapmsg )
+        ( vec_free [u] . it capout )
+        ( vec_free [u] . it caperr )
+        : i tpn ( vec_len [s] . it pfuncs )
+        : ~ i tpi 0
+        ~ < tpi tpn { ?? ( vec_get [s] . it pfuncs tpi ) { T pp → ( __pf_free pp ) F → {} } = tpi + tpi 1 }
+        ( vec_free [s] . it pfuncs )
+        ( nurl_free # s it )
+        ^ v
+    } {}
+    // Wait for the threads before dropping what they run on. The guest's
+    // own join only proves the thread's BODY finished; the host thread is
+    // still inside the interpreter for a moment after that, and it reads
+    // this Interp's memory and table.
+    : i tjn ( vec_len [i] . it thread_joins )
+    : ~ i tji 0
+    ~ < tji tjn {
+        : i raw ?? ( vec_get [i] . it thread_joins tji ) { T x → x F → 0 }
+        ? != raw 0 { ( thread_join @ Thread { # s raw } ) } {}
+        = tji + tji 1
+    }
+    ( vec_free [i] . it thread_joins )
     ( interp_net_close_all it )
     ( vec_free [i] . it nethandles )
     ( vec_free [i] . it netkinds )
+    : i thn ( vec_len [s] . it thread_holders )
+    : ~ i thi 0
+    ~ < thi thn { ?? ( vec_get [s] . it thread_holders thi ) { T pp → ? != # i pp 0 { ( nurl_free pp ) } {} F → {} } = thi + thi 1 }
+    ( vec_free [s] . it thread_holders )
+    ( vec_free [i] . it thread_kids )
     ( vec_free [i] . it vs )
     ( vec_free [u] . it mem )
     ( vec_free [i] . it globals )
@@ -469,11 +535,118 @@ $ `module.nu`
     : *WFd f # *WFd ( __mkfd 2 )
     ( vec_free [u] . f host ) = . f host ( bytes_from_str host_path )
     ( vec_free [u] . f name ) = . f name ( bytes_from_str guest_name )
-    ( vec_push [s] . it fds # s f )
+    ( vec_push [s] . ( __host it ) fds # s f )
 }
 
 // Run the module's start-section function, if any — the final instantiation
 // step, before any export is invoked.
+// The Interp that owns the shared host state — this one, or the thread
+// that instantiated it. File descriptors, socket handles and captured
+// output are per-INSTANCE in wasm terms but per-PROCESS in the guest's:
+// a file opened by one thread has to be the same fd in another.
+@ __host * Interp it → *Interp {
+    ? == # i . it owner 0 { ^ it } {}
+    ^ # *Interp . it owner
+}
+
+// A fresh Interp for a spawned thread: its own stacks and globals over
+// the owner's memory, table and module. The shared Vecs are copied by
+// HANDLE — safe because a threaded module's memory is allocated at its
+// maximum up front and never moves — and `interp_free` on a thread
+// releases only what the thread itself owns.
+@ interp_thread_new * Interp parent → *Interp {
+    : *Interp ho ( __host parent )
+    : *Module m # *Module . ho mod
+    : *Interp it # *Interp ( nurl_alloc Z Interp )
+    = . it mod . ho mod
+    = . it vs ( vec_new [i] )
+    = . it mem . ho mem
+    = . it mem_pages . ho mem_pages
+    = . it mem_bytes . ho mem_bytes
+    = . it table . ho table
+    = . it data_dropped . ho data_dropped
+    = . it elem_dropped . ho elem_dropped
+    = . it argv . ho argv
+    = . it envp . ho envp
+    = . it fds ( vec_new [s] )  // unused in a thread: __host redirects
+    = . it halt 0
+    = . it exit_code 0
+    = . it trapmsg ( vec_new [u] )
+    = . it pending_call -1
+    = . it max_depth . ho max_depth
+    = . it fuel -1
+    = . it gpu_ok . ho gpu_ok
+    = . it net_ok . ho net_ok
+    = . it nethandles ( vec_new [i] )
+    = . it netkinds ( vec_new [i] )
+    = . it cap . ho cap
+    = . it capout ( vec_new [u] )
+    = . it caperr ( vec_new [u] )
+    = . it owner # s ho
+    = . it next_tid 0
+    = . it thread_holders ( vec_new [s] )
+    = . it thread_kids ( vec_new [i] )
+    = . it thread_joins ( vec_new [i] )
+    = . it tstart_fidx -2
+    = . it sp_global -2
+    // Mutable globals are per-instance, which is precisely what gives the
+    // thread its own __stack_pointer. They start from the module's
+    // initialisers, as a fresh instantiation would.
+    = . it globals ( vec_new [i] )
+    : i ng ( vec_len [i] . m global_init )
+    : ~ i gi 0
+    ~ < gi ng { ( vec_push [i] . it globals ?? ( vec_get [i] . m global_init gi ) { T x → x F → 0 } ) = gi + gi 1 }
+    // Predecoded bodies are per-Interp (the cache is filled lazily and
+    // mutated in place), so a thread decodes what it actually runs.
+    = . it pfuncs ( vec_new [s] )
+    : i nf ( vec_len [s] . m funcs )
+    : ~ i fi 0
+    ~ < fi nf { ( vec_push [s] . it pfuncs # s 0 ) = fi + fi 1 }
+    // How much memory is addressable is per-Interp (the bounds check is on
+    // the hot path and must stay one field read), so a growing thread has
+    // to publish the new bound to its siblings. Joining the group and
+    // growing both happen under the atomics lock, so a thread can never
+    // start life with a bound that was already raised.
+    ( __atom_lock )
+    = . it mem_pages . ho mem_pages
+    = . it mem_bytes . ho mem_bytes
+    ( vec_push [i] . ho thread_kids # i it )
+    ( __atom_unlock )
+    ^ it
+}
+
+// Publish a new memory size to every Interp in the group. Called with the
+// atomics lock held.
+@ __mem_publish * Interp ho i pages i bytes → v {
+    = . ho mem_pages pages
+    = . ho mem_bytes bytes
+    : i n ( vec_len [i] . ho thread_kids )
+    : ~ i k 0
+    ~ < k n {
+        : i kp ?? ( vec_get [i] . ho thread_kids k ) { T x → x F → 0 }
+        ? != kp 0 {
+            : *Interp kid # *Interp # s kp
+            = . kid mem_pages pages
+            = . kid mem_bytes bytes
+        } {}
+        = k + k 1
+    }
+}
+
+// Leave the group (the thread is done with its Interp).
+@ __thread_unregister * Interp it → v {
+    ? == # i . it owner 0 { ^ v } {}
+    : *Interp ho ( __host it )
+    ( __atom_lock )
+    : i n ( vec_len [i] . ho thread_kids )
+    : ~ i k 0
+    ~ < k n {
+        ? == ?? ( vec_get [i] . ho thread_kids k ) { T x → x F → 0 } # i it { ( vec_set [i] . ho thread_kids k 0 ) } {}
+        = k + k 1
+    }
+    ( __atom_unlock )
+}
+
 @ interp_run_start * Interp it → v {
     : *Module m # *Module . it mod
     ? >= . m start_func 0 { ( exec_func it . m start_func ) } {}
@@ -830,8 +1003,9 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     // the addressable bound, never a realloc — another thread may be
     // holding the buffer's base pointer right now.
     ? != . m mem_shared 0 {
-        = . it mem_pages + old delta
-        = . it mem_bytes * . it mem_pages ( __page )
+        ( __atom_lock )
+        ( __mem_publish ( __host it ) + old delta * + old delta ( __page ) )
+        ( __atom_unlock )
         ^ old
     } {}
     // One resize, zero-filling the new tail in a single memset, instead of
@@ -2559,7 +2733,8 @@ inline @ __mem_store * Interp it i ea i n i val → v {
             // An embedder asked for the output as a value: raw bytes,
             // appended, NULs preserved — bytes_to_str would truncate at
             // the first NUL a binary-printing module emits.
-            : ( Vec u ) dst ? == fd 2 . it caperr . it capout
+            : *Interp hoc ( __host it )
+            : ( Vec u ) dst ? == fd 2 . hoc caperr . hoc capout
             : ~ i c 0
             ~ < c len { ( vec_push [u] dst # u ?? ( vec_get [u] buf c ) { T x → # i x F → 0 } ) = c + c 1 }
         } {
@@ -2604,13 +2779,20 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         = i + i 1
     }
     ( __m_put_u32 it nwritten total )
+    // A write is a write: push it out of the host's buffer now. A guest
+    // that never exits — a server, which is most of the point of having
+    // sockets — otherwise produces no output at all, because the host's
+    // stdio buffer is only drained when the process ends.
+    ? == fd 1 { ( nurl_flush_stdout ) } {}
+    ? == fd 2 { ( nurl_flush_stderr ) } {}
     ( __push it 0 )
 }
 
 // Fetch the fd record for descriptor `fd`, or #s 0 if out of range / closed.
 @ __fd_at * Interp it i fd → s {
-    ? | < fd 0 >= fd ( vec_len [s] . it fds ) { ^ # s 0 } {}
-    ^ ?? ( vec_get [s] . it fds fd ) { T x → x F → # s 0 }
+    : *Interp ho ( __host it )
+    ? | < fd 0 >= fd ( vec_len [s] . ho fds ) { ^ # s 0 } {}
+    ^ ?? ( vec_get [s] . ho fds fd ) { T x → x F → # s 0 }
 }
 
 // Read `len` bytes of linear memory at `ptr` into a fresh byte vector.
@@ -2710,8 +2892,9 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         ? ( __is_dir ( string_data hs ) ) {
             : *WFd nf # *WFd ( __mkfd 4 )
             ( vec_free [u] . nf host ) = . nf host ( bytes_from_str ( string_data hs ) )
-            ( __m_put_u32 it ofd_p ( vec_len [s] . it fds ) )
-            ( vec_push [s] . it fds # s nf )
+            : *Interp ho1 ( __host it )
+            ( __m_put_u32 it ofd_p ( vec_len [s] . ho1 fds ) )
+            ( vec_push [s] . ho1 fds # s nf )
         } { = rc ? != 0 ( nurl_file_exists ( string_data hs ) ) 54 44 }  // ENOTDIR / ENOENT
         ( string_free hs )
         ( __push it rc )
@@ -2723,8 +2906,9 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         // an existing directory opened without O_DIRECTORY: readable as a dir fd
         : *WFd nf # *WFd ( __mkfd 4 )
         ( vec_free [u] . nf host ) = . nf host ( bytes_from_str ( string_data hs ) )
-        ( __m_put_u32 it ofd_p ( vec_len [s] . it fds ) )
-        ( vec_push [s] . it fds # s nf )
+        : *Interp ho2 ( __host it )
+        ( __m_put_u32 it ofd_p ( vec_len [s] . ho2 fds ) )
+        ( vec_push [s] . ho2 fds # s nf )
         ( string_free hs )
         ( __push it 0 )
         ^ v
@@ -2754,8 +2938,9 @@ inline @ __mem_store * Interp it i ea i n i val → v {
         ?? cr { T x → {} F e → { = rc ( __ioerr_errno e ) } }
         ? != rc 0 { ( __freefd # s nf ) ( string_free hs ) ( __push it rc ) ^ v } {}
     } {}
-    ( __m_put_u32 it ofd_p ( vec_len [s] . it fds ) )
-    ( vec_push [s] . it fds # s nf )
+    : *Interp ho3 ( __host it )
+    ( __m_put_u32 it ofd_p ( vec_len [s] . ho3 fds ) )
+    ( vec_push [s] . ho3 fds # s nf )
     ( string_free hs )
     ( __push it 0 )
 }
@@ -3152,9 +3337,10 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 // Flush every open dirty file — called on proc_exit and when _start returns,
 // so buffered writes are never lost to a missing fd_close.
 @ interp_flush * Interp it → v {
-    : i n ( vec_len [s] . it fds )
+    : *Interp ho ( __host it )
+    : i n ( vec_len [s] . ho fds )
     : ~ i k 3
-    ~ < k n { ?? ( vec_get [s] . it fds k ) { T pp → ? != # i pp 0 { ( __fd_flush # *WFd pp ) } {} F → {} } = k + k 1 }
+    ~ < k n { ?? ( vec_get [s] . ho fds k ) { T pp → ? != # i pp 0 { ( __fd_flush # *WFd pp ) } {} F → {} } = k + k 1 }
 }
 
 @ __wasi_fd_close * Interp it → v {
@@ -3164,7 +3350,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ? != # i fp 0 {
         : *WFd f # *WFd fp
         = rc ( __fd_flush f )
-        ? >= fd 3 { ( __freefd fp ) ( vec_set [s] . it fds fd # s 0 ) } {}  // keep stdio
+        ? >= fd 3 { ( __freefd fp ) ( vec_set [s] . ( __host it ) fds fd # s 0 ) } {}  // keep stdio
     } {}
     ( __push it rc )
 }
@@ -3232,6 +3418,81 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     : i id ( __pop it )
     : i ns ? == id 0 * ( now_ms ) 1000000 ( monotonic_ns )
     ( __mem_store it t_p 8 ns )
+    ( __push it 0 )
+}
+
+// poll_oneoff(in, out, nsubs, nevents_p) → errno.
+//
+// The one WASI call a server cannot do without: libc's sleep, nanosleep
+// and every timeout is a clock subscription here. Regular files and the
+// stdio streams are always ready — which is what poll(2) says about a
+// regular file too — so an fd subscription answers immediately and only
+// a pure clock wait actually sleeps.
+//
+// Subscription is 48 bytes: userdata(0) tag(8), then for a clock
+// clock_id(16) timeout(24) precision(32) flags(40) — flag bit 0 means
+// the timeout is ABSOLUTE — and for an fd subscription fd(16).
+// Event is 32 bytes: userdata(0) error(8) type(10) nbytes(16) flags(24).
+@ __wasi_poll_oneoff * Interp it → v {
+    : i nev_p ( __pop it )
+    : i nsubs ( __pop it )
+    : i out ( __pop it )
+    : i in ( __pop it )
+    ? | < nsubs 0 > * nsubs 48 . it mem_bytes { ( __m_put_u32 it nev_p 0 ) ( __push it 28 ) ^ v } {}  // EINVAL
+    : ~ i nev 0
+    : ~ i sleep_ns -1  // shortest clock wait seen, -1 = none
+    : ~ i k 0
+    ~ & < k nsubs ! ( interp_trapped it ) {
+        : i sub + in * k 48
+        : i userdata ( __mem_load it sub 8 0 )
+        : i tag ( __mem_load it + sub 8 1 0 )
+        ? == tag 0 {
+            : i clock_id ( __m_get_u32 it + sub 16 )
+            : i timeout ( __mem_load it + sub 24 8 0 )
+            : i flags ( __mem_load it + sub 40 2 0 )
+            : ~ i rel timeout
+            ? != 0 & flags 1 {
+                : i now ? == clock_id 0 * ( now_ms ) 1000000 ( monotonic_ns )
+                = rel - timeout now
+            } {}
+            ? < rel 0 { = rel 0 } {}
+            ? | == sleep_ns -1 < rel sleep_ns { = sleep_ns rel } {}
+        } {
+            // fd_read (1) / fd_write (2): ready now, or EBADF for a
+            // descriptor the guest never opened.
+            : i fd ( __m_get_u32 it + sub 16 )
+            : s fp ( __fd_at it fd )
+            : i ev + out * nev 32
+            ( __mem_store it ev 8 userdata )
+            ( __mem_store it + ev 8 2 ? == # i fp 0 8 0 )
+            ( __mem_store it + ev 10 1 tag )
+            ( __mem_store it + ev 16 8 0 )
+            ( __mem_store it + ev 24 2 0 )
+            = nev + nev 1
+        }
+        = k + k 1
+    }
+    // Only a wait with nothing else to report actually sleeps.
+    ? & == nev 0 >= sleep_ns 0 {
+        ? > sleep_ns 0 { ( sleep_ms / + sleep_ns 999999 1000000 ) } {}
+        // Report every clock subscription as fired: they all shared the
+        // one wait, and the shortest of them has certainly elapsed.
+        : ~ i j 0
+        ~ < j nsubs {
+            : i sub + in * j 48
+            ? == ( __mem_load it + sub 8 1 0 ) 0 {
+                : i ev + out * nev 32
+                ( __mem_store it ev 8 ( __mem_load it sub 8 0 ) )
+                ( __mem_store it + ev 8 2 0 )
+                ( __mem_store it + ev 10 1 0 )
+                ( __mem_store it + ev 16 8 0 )
+                ( __mem_store it + ev 24 2 0 )
+                = nev + nev 1
+            } {}
+            = j + j 1
+        }
+    } {}
+    ( __m_put_u32 it nev_p nev )
     ( __push it 0 )
 }
 
@@ -3591,8 +3852,9 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 
 // Register a fresh host handle and return the guest's index (0 when the
 // call failed, which is what the stdlib reads as "no socket").
-@ __net_reg * Interp it i h i kind → i {
+@ __net_reg * Interp it0 i h i kind → i {
     ? == h 0 { ^ 0 } {}
+    : *Interp it ( __host it0 )
     : i n ( vec_len [i] . it nethandles )
     : ~ i slot 0
     : ~ i k 1
@@ -3611,14 +3873,16 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 }
 
 // Guest index → host handle; 0 for anything the guest made up.
-@ __net_h * Interp it i idx → i {
+@ __net_h * Interp it0 i idx → i {
+    : *Interp it ( __host it0 )
     ? <= idx 0 { ^ 0 } {}
     ? >= idx ( vec_len [i] . it nethandles ) { ^ 0 } {}
     ^ ?? ( vec_get [i] . it nethandles idx ) { T v → v F → 0 }
 }
 
 // Retire an index — the host handle is already closed by the caller.
-@ __net_drop * Interp it i idx → v {
+@ __net_drop * Interp it0 i idx → v {
+    : *Interp it ( __host it0 )
     ? | <= idx 0 >= idx ( vec_len [i] . it nethandles ) { ^ v } {}
     ( vec_set [i] . it nethandles idx 0 )
     ( vec_set [i] . it netkinds idx 0 )
@@ -3778,7 +4042,72 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ^ F
 }
 
+// ── module "wasi": thread-spawn ───────────────────────────────────
+//
+// wasi-threads' one import. The guest hands over a pointer to its own
+// start-argument block; the runtime creates a thread, gives it a fresh
+// instance of the module (own stacks, own globals) over the SAME linear
+// memory, and calls the module's exported `wasi_thread_start(tid, arg)`.
+//
+// The one thing done here that the proposal leaves to the guest's libc
+// is setting `__stack_pointer`: a thread needs a stack of its own, and
+// C cannot assign a wasm global. So the guest allocates the stack, writes
+// its top into the start block (offset 8, our runtime_ffi.c layout), and
+// the host sets the new instance's exported `__stack_pointer` from it
+// before the first call. Without the export the spawn is refused rather
+// than letting two threads share one stack.
+@ __wasi_thread_spawn * Interp it → v {
+    : i start_arg ( __pop it )
+    : *Interp ho ( __host it )
+    : *Module m # *Module . ho mod
+    ? == . ho tstart_fidx -2 {
+        = . ho tstart_fidx ( module_export_func m `wasi_thread_start` )
+        = . ho sp_global ( module_export_global m `__stack_pointer` )
+    } {}
+    : i fidx . ho tstart_fidx
+    : i spg . ho sp_global
+    ? | < fidx 0 < spg 0 { ( __push it -1 ) ^ v } {}
+    : i stack_top ( __m_get_u32 it + start_arg 8 )
+    ? == stack_top 0 { ( __push it -1 ) ^ v } {}
+    ( __atom_lock )
+    : i tid . ho next_tid
+    = . ho next_tid + tid 1
+    ( __atom_unlock )
+    : *TStart th # *TStart ( nurl_alloc Z TStart )
+    = . th f \ → v {
+        : *Interp child ( interp_thread_new ho )
+        ( vec_set [i] . child globals spg stack_top )
+        ( vec_push [i] . child vs tid )
+        ( vec_push [i] . child vs start_arg )
+        ( exec_func child fidx )
+        // A trap kills only this thread, so it has to be reported here or
+        // it is silent: the guest's join just never completes.
+        ? ( interp_trapped child ) {
+            ( nurl_eprint `wasmtime: thread trap: ` )
+            ( nurl_eprintln ( string_data ( bytes_to_str . child trapmsg ) ) )
+        } {}
+        ( interp_flush child )
+        ( interp_free child )
+    }
+    ( __atom_lock )
+    ( vec_push [s] . ho thread_holders # s th )
+    ( __atom_unlock )
+    ?? ( thread_spawn . th f ) {
+        T t → {
+            ( __atom_lock )
+            ( vec_push [i] . ho thread_joins # i . t raw )
+            ( __atom_unlock )
+            ( __push it tid )
+        }
+        F e → { ( __push it -1 ) }
+    }
+}
+
 @ __wasi_dispatch * Interp it ( Vec u ) mod ( Vec u ) field → v {
+    ? ( __feq mod `wasi` ) {
+        ? ( __feq field `thread-spawn` ) { ( __wasi_thread_spawn it ) ^ v } {}
+        ( __trap_named it `unsupported wasi import: ` field ) ^ v
+    } {}
     ? ( __feq mod `nurl_net` ) {
         ? ! . it net_ok { ( __trap it `nurl_net host imports are disabled (pass --allow-net to enable)` ) ^ v } {}
         ? ( __net_dispatch it field ) { ^ v } {}
@@ -3818,6 +4147,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     ? ( __feq field `environ_get` ) { ( __wasi_environ_get it ) ^ v } {}
     ? ( __feq field `clock_time_get` ) { ( __wasi_clock_time_get it ) ^ v } {}
     ? ( __feq field `random_get` ) { ( __wasi_random_get it ) ^ v } {}
+    ? ( __feq field `poll_oneoff` ) { ( __wasi_poll_oneoff it ) ^ v } {}
     ? ( __feq field `fd_fdstat_set_flags` ) { ( __pop it ) ( __pop it ) ( __push it 0 ) ^ v } {}
     ? ( __feq field `sched_yield` ) { ( __push it 0 ) ^ v } {}
     ( __trap_named it `unsupported wasi import: ` field )

@@ -383,6 +383,14 @@ $ `stdlib/core/vec.nu`
 }
 
 @ wb_prepare_ir_for_wasi String ir → String {
+    ^ ( wb_prepare_ir_for_wasi_opts ir F )
+}
+
+// `threads` = the module is being built for wasi-threads, where
+// runtime.c DEFINES the pthread surface on top of atomics. Stubbing it
+// here would rename those call sites away from the real implementation,
+// so the pthread family is left alone in that build.
+@ wb_prepare_ir_for_wasi_opts String ir b threads → String {
     : ~ String res ( string_from ( string_data ir ) )
 
     // 0. Mask `@` inside string constants so the symbol rewrites below
@@ -631,19 +639,21 @@ $ `stdlib/core/vec.nu`
     // Single-threaded wasm stubs: lock/unlock/signal/broadcast/wait become
     // no-ops returning 0 (success); create returns -1 so any code that
     // actually tries to spawn fails gracefully.
-    ( vec_push [s] posix_names `pthread_mutex_init` ) ( vec_push [s] posix_sent `z` )
-    ( vec_push [s] posix_names `pthread_mutex_lock` ) ( vec_push [s] posix_sent `z` )
-    ( vec_push [s] posix_names `pthread_mutex_unlock` ) ( vec_push [s] posix_sent `z` )
-    ( vec_push [s] posix_names `pthread_mutex_destroy` ) ( vec_push [s] posix_sent `z` )
-    ( vec_push [s] posix_names `pthread_cond_init` ) ( vec_push [s] posix_sent `z` )
-    ( vec_push [s] posix_names `pthread_cond_wait` ) ( vec_push [s] posix_sent `z` )
-    ( vec_push [s] posix_names `pthread_cond_signal` ) ( vec_push [s] posix_sent `z` )
-    ( vec_push [s] posix_names `pthread_cond_broadcast` ) ( vec_push [s] posix_sent `z` )
-    ( vec_push [s] posix_names `pthread_cond_destroy` ) ( vec_push [s] posix_sent `z` )
-    ( vec_push [s] posix_names `pthread_create` ) ( vec_push [s] posix_sent `e` )
-    ( vec_push [s] posix_names `pthread_join` ) ( vec_push [s] posix_sent `z` )
-    ( vec_push [s] posix_names `pthread_self` ) ( vec_push [s] posix_sent `n` )
-    ( vec_push [s] posix_names `pthread_detach` ) ( vec_push [s] posix_sent `z` )
+    ? threads {} {
+        ( vec_push [s] posix_names `pthread_mutex_init` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_mutex_lock` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_mutex_unlock` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_mutex_destroy` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_cond_init` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_cond_wait` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_cond_signal` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_cond_broadcast` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_cond_destroy` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_create` ) ( vec_push [s] posix_sent `e` )
+        ( vec_push [s] posix_names `pthread_join` ) ( vec_push [s] posix_sent `z` )
+        ( vec_push [s] posix_names `pthread_self` ) ( vec_push [s] posix_sent `n` )
+        ( vec_push [s] posix_names `pthread_detach` ) ( vec_push [s] posix_sent `z` )
+    }
     // Misc POSIX a thread / IPC example may pull in. kill/getpid live in
     // wasi-libc but only sometimes (depends on sysroot); stub them too so
     // we get a consistent build regardless of which wasi-sdk version

@@ -301,6 +301,49 @@ reaches first. (Note: `--fuel N` still bounds
 runaway *valid* guests; an unbounded `loop` runs forever exactly as it does on
 the reference runtime.)
 
+## Threads (wasi-threads)
+
+A module built for threads — `wasmbuilder --threads` — declares a SHARED
+memory, imports `wasi.thread-spawn` and exports `wasi_thread_start`.
+This runtime implements that: a spawn creates a host thread with its own
+Interp — own value stack, own frames, own globals, and therefore its own
+`__stack_pointer` — over the *same* linear memory, table and module. The
+host sets that stack pointer from the block the guest passes, because C
+cannot assign a wasm global; everything else about the thread is the
+guest's own libc code in `stdlib/runtime_ffi.c`.
+
+- **Atomics** (the `0xfe` family) execute: load/store at every width, the
+  six read-modify-write groups, cmpxchg, `wait32`/`wait64`/`notify` and
+  `fence`. An interpreter cannot borrow the CPU's atomicity for an RMW it
+  performs in three steps, so every atomic op takes one process-wide
+  lock — sequentially consistent by construction. Unaligned or
+  out-of-bounds atomics trap, as the spec says.
+- **A shared memory is reserved at its declared maximum** when the module
+  is instantiated, and `memory.grow` only raises the addressable bound:
+  growth must never move a buffer another thread is reading. The new
+  bound is published to every thread of the instance under the same lock.
+- **The host-side tables are shared**: file descriptors, socket handles
+  and captured output belong to the instantiating Interp, so a file
+  opened by one thread is the same fd in another.
+- **`poll_oneoff`** is implemented (clock subscriptions sleep, fd
+  subscriptions on files and stdio are ready immediately), which is what
+  libc's `sleep`/`nanosleep` and every timeout go through.
+- A thread that traps says so on stderr and ends that thread only — the
+  guest's `join` on it simply never completes, exactly as a native
+  runtime would leave a crashed thread.
+
+The guest side is worth knowing about: wasm32's libc allocator is
+single-threaded by design and cannot be locked from outside, so a
+threads build brings its own — `stdlib/runtime_wasm_alloc.c` defines the
+whole C allocation surface behind one futex — and the stdlib's M:N async
+runtime (fibers) is backed by one thread per fiber, which is what makes
+`spawn` + `runtime_run` (the relay's accept loop, the HTTP server) work.
+
+```sh
+wasmbuilder --threads server.nu -o server.wasm
+wasmtime run --allow-net server.wasm
+```
+
 ## Sockets (`nurl_net` host imports)
 
 WASI preview1 has no way to open a socket — it can only accept on one the
@@ -434,6 +477,9 @@ NURL_STDLIB=<repo> ../../nurl.sh tests/wasi_test.nu  /tmp/wt && /tmp/wt
 # End-to-end: the same NURL program built native and as wasm, both talking
 # to real sockets, output compared. Needs ../wasmbuilder.
 ./tests/net_test.sh
+
+# Same idea for wasi-threads: four threads over one shared heap.
+./tests/threads_test.sh
 ```
 
 ## License

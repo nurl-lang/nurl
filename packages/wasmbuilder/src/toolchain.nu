@@ -501,7 +501,11 @@ $ `stdlib/ext/http_cli.nu`
     }
 }
 
-@ wb_ensure_wasm_obj WbCompiler cc s src_c → !String String {
+// `feat` names a feature-flavoured build of the same source (`` = the
+// plain one, `threads` = -matomics -mbulk-memory). It is part of the
+// cache key, because an object built without the atomics feature cannot
+// be linked into a module that has it.
+@ wb_ensure_wasm_obj_feat WbCompiler cc s src_c s feat → !String String {
     : String sdir ( wb_stdlib_dir )
     : String csrc ( path_join ( string_data sdir ) src_c )
     ? ( file_exists ( string_data csrc ) ) {} {
@@ -543,6 +547,7 @@ $ `stdlib/ext/http_cli.nu`
     } {}
     ( string_push_str oname `-` )
     ( string_push_str oname ( string_data tag ) )
+    ? > ( nurl_str_len feat ) 0 { ( string_push_char oname 45 ) ( string_push_str oname feat ) } {}
     ( string_push_str oname `.wasm.o` )
     ( string_free tag )
     : String opath ( path_join ( string_data cdir ) ( string_data oname ) )
@@ -557,6 +562,10 @@ $ `stdlib/ext/http_cli.nu`
     ? . cc is_zig { ( vec_push [s] args `cc` ) } {}
     ( vec_push [s] args `--target=wasm32-wasi` )
     ( vec_push [s] args `-O2` )
+    ? != 0 ( nurl_str_eq feat `threads` ) {
+        ( vec_push [s] args `-matomics` )
+        ( vec_push [s] args `-mbulk-memory` )
+    } {}
     ( vec_push [s] args `-c` )
     ( vec_push [s] args ( string_data csrc ) )
     ( vec_push [s] args `-o` )
@@ -582,4 +591,9 @@ $ `stdlib/ext/http_cli.nu`
             ^ @ !String String { F ( string_from `could not run the wasm compiler` ) }
         }
     }
+}
+
+// The plain (no extra features) object — what every non-threads build wants.
+@ wb_ensure_wasm_obj WbCompiler cc s src_c → !String String {
+    ^ ( wb_ensure_wasm_obj_feat cc src_c `` )
 }
