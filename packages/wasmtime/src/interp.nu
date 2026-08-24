@@ -2572,26 +2572,63 @@ inline @ __fr_setpos s tp i v → v {
 @ __jit_movslq ( Vec u ) buf → v { ( __jit_b buf 72 ) ( __jit_b buf 99 ) ( __jit_b buf 192 ) }  // movslq rax,eax
 
 // Is every record templatable? Returns 1 if so (single trailing RET).
+// True if op is templatable (tier 0 straight-line + tier 1 branches and
+// value-producing compares). Anything else — memory, calls, trapping
+// divide, the vs-bridge, select — leaves the whole function on the
+// interpreter.
+@ __jit_op_ok i op → i {
+    ? & >= op 0 <= op 17 { ^ 1 } {}  // i64/i32 arithmetic + shifts
+    ? | == op 47 == op 51 { ^ 1 } {}  // MOV, CONST
+    ? == op 55 { ^ 1 } {}  // RET
+    ? | == op 43 == op 44 { ^ 1 } {}  // i32/i64 eqz
+    ? & >= op 56 <= op 75 { ^ 1 } {}  // integer compares
+    ? | | | == op 48 == op 49 == op 54 == op 45 { ^ 1 } {}  // IFZ BR BRIF BRIFC
+    ? | == op 38 == op 177 { ^ 1 } {}  // ADDBRIFC64/32
+    ^ 0
+}
+
+// Is every record templatable, and does every branch target a real
+// record? Targets are word-offsets (record*6); a target past the last
+// record aborts the JIT (the always-emitted trailing RET makes it
+// unreachable in practice). JIT only unlimited-fuel runs: a metered run
+// keeps the interpreter, which charges fuel exactly, so no fuel
+// accounting is emitted.
 @ __jit_ok * PFunc pf → i {
     : i n . pf count
     ? == n 0 { ^ 0 } {}
     : ( Vec i ) code . pf code
     : ~ i r 0
     ~ < r n {
-        : i op ?? ( vec_get [i] code * r 6 ) { T x → x F → -1 }
-        : ~ i good 0
-        ? & >= op 0 <= op 17 { = good 1 } {}  // i64/i32 add sub mul and or xor shl shr_*
-        ? == op 47 { = good 1 } {}  // MOV
-        ? == op 51 { = good 1 } {}  // CONST
-        ? == op 55 { = good ? == r - n 1 1 0 } {}  // RET only as the last record
-        ? == 0 good { ^ 0 } {}
-        // a RET before the end (multiple returns ⇒ branches) is out
-        ? & == op 55 != r - n 1 { ^ 0 } {}
+        : i base * r 6
+        : i op ?? ( vec_get [i] code base ) { T x → x F → -1 }
+        ? == 0 ( __jit_op_ok op ) { ^ 0 } {}
+        ? | | | == op 48 == op 49 == op 54 | == op 45 | == op 38 == op 177 {
+            : i tgt / ?? ( vec_get [i] code + base 1 ) { T x → x F → 0 } 6
+            ? | < tgt 0 >= tgt n { ^ 0 } {}
+        } {}
         = r + r 1
     }
-    // the last record must be the RET
     ^ ? == ?? ( vec_get [i] code * - n 1 6 ) { T x → x F → -1 } 55 1 0
 }
+
+// __rcmp code → the x86 condition nibble for `jcc` (0F 8x) and `setcc`
+// (0F 9x). Codes 56..65 are the i32 compares, 66..75 the i64 ones, each
+// in the order eq ne lt_s lt_u gt_s gt_u le_s le_u ge_s ge_u.
+@ __jit_cctab → ( Vec i ) {
+    : ( Vec i ) t ( vec_new [i] )
+    ( vec_push [i] t 132 ) ( vec_push [i] t 133 ) ( vec_push [i] t 140 ) ( vec_push [i] t 130 ) ( vec_push [i] t 143 )
+    ( vec_push [i] t 135 ) ( vec_push [i] t 142 ) ( vec_push [i] t 134 ) ( vec_push [i] t 141 ) ( vec_push [i] t 131 )
+    ^ t
+}
+
+@ __jit_settab → ( Vec i ) {
+    : ( Vec i ) t ( vec_new [i] )
+    ( vec_push [i] t 148 ) ( vec_push [i] t 149 ) ( vec_push [i] t 156 ) ( vec_push [i] t 146 ) ( vec_push [i] t 159 )
+    ( vec_push [i] t 151 ) ( vec_push [i] t 158 ) ( vec_push [i] t 150 ) ( vec_push [i] t 157 ) ( vec_push [i] t 147 )
+    ^ t
+}
+
+@ __jit_jcc ( Vec i ) tab i code → i { ^ ?? ( vec_get [i] tab % - code 56 10 ) { T x → x F → 132 } }
 
 // Emit the i64/i32 binary or shift body for op into buf (operands already
 // mirror the interpreter's arms exactly, shifts masked by CL width).
@@ -2626,30 +2663,113 @@ inline @ __fr_setpos s tp i v → v {
 // Build the machine code for `pf`, seal a page, store the handle. Sets
 // jit to -1 (do not retry) when the function is not templatable or no
 // executable memory is available.
+// Emit `test rax,rax` then a conditional jump on jcc-nibble to record
+// `tgt`, deferring the rel32 to the patch list. `cond`<0 means the flags
+// are already set (a fused compare); otherwise rax holds the tested slot.
+@ __jit_jmp ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i jcc i tgt → v {
+    ? == jcc 233 { ( __jit_b buf 233 ) } { ( __jit_b buf 15 ) ( __jit_b buf jcc ) }  // jmp rel32 vs 0F 8x rel32
+    ( vec_push [i] pat_at ( vec_len [u] buf ) )
+    ( vec_push [i] pat_rec tgt )
+    ( __jit_d buf 0 )
+}
+// cmp of two slots (i64 or i32), leaving flags for a following jcc/setcc.
+@ __jit_cmp ( Vec u ) buf i b i c i is32 → v {
+    ( __jit_ldrax buf b ) ( __jit_ldrcx buf c )
+    ? != 0 is32 { ( __jit_b buf 57 ) ( __jit_b buf 200 ) } { ( __jit_b buf 72 ) ( __jit_b buf 57 ) ( __jit_b buf 200 ) }  // cmp e/rax, e/rcx
+}
+
 @ __jit_try * PFunc pf → v {
     ? != # i . pf jit 0 { ^ v } {}  // already tried (handle or -1)
     ? == 0 ( __jit_ok pf ) { = . pf jit # s -1 ^ v } {}
     : ( Vec u ) buf ( vec_new [u] )
     : ( Vec i ) code . pf code
     : i n . pf count
+    : i sb . pf sbase
+    : ( Vec i ) cctab ( __jit_cctab )
+    : ( Vec i ) lab ( vec_new [i] )  // record index → code offset
+    : ( Vec i ) pat_at ( vec_new [i] )  // rel32 site → …
+    : ( Vec i ) pat_rec ( vec_new [i] )  // … target record
     : ~ i r 0
     ~ < r n {
+        ( vec_push [i] lab ( vec_len [u] buf ) )  // this record starts here
         : i base * r 6
         : i op ?? ( vec_get [i] code base ) { T x → x F → 0 }
         : i a ?? ( vec_get [i] code + base 1 ) { T x → x F → 0 }
         : i b ?? ( vec_get [i] code + base 2 ) { T x → x F → 0 }
         : i c ?? ( vec_get [i] code + base 3 ) { T x → x F → 0 }
-        ? == op 51 { ( __jit_b buf 72 ) ( __jit_b buf 184 ) ( __jit_q buf b ) ( __jit_strax buf a ) } {  // CONST: mov rax,imm64; store
+        : i d ?? ( vec_get [i] code + base 4 ) { T x → x F → 0 }
+        : i w5 ?? ( vec_get [i] code + base 5 ) { T x → x F → 0 }
+        ? == op 51 { ( __jit_b buf 72 ) ( __jit_b buf 184 ) ( __jit_q buf b ) ( __jit_strax buf a ) } {  // CONST
             ? == op 47 { ( __jit_ldrax buf b ) ( __jit_strax buf a ) } {  // MOV
                 ? == op 55 {  // RET: results to sbase, then ret
-                    : i sb . pf sbase
                     : ~ i k 0
                     ~ < k b { ( __jit_ldrax buf + a k ) ( __jit_strax buf + sb k ) = k + k 1 }
                     ( __jit_b buf 195 )
-                } { ( __jit_alu buf op a b c ) }
+                } {
+                    ? | == op 43 == op 44 {  // eqz: dst = (src == 0) ? 1 : 0
+                        ( __jit_ldrax buf b )
+                        ? == op 43 { ( __jit_b buf 133 ) ( __jit_b buf 192 ) } { ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 ) }  // test e/rax,e/rax
+                        ( __jit_b buf 15 ) ( __jit_b buf 148 ) ( __jit_b buf 192 )  // sete al
+                        ( __jit_b buf 15 ) ( __jit_b buf 182 ) ( __jit_b buf 192 )  // movzx eax,al
+                        ( __jit_strax buf a )
+                    } {
+                        ? & >= op 56 <= op 75 {  // compare → 0/1 in dst
+                            ( __jit_cmp buf b c ? < op 66 1 0 )
+                            ( __jit_b buf 15 ) ( __jit_b buf ?? ( vec_get [i] ( __jit_settab ) % - op 56 10 ) { T x → x F → 148 } ) ( __jit_b buf 192 )  // setcc al
+                            ( __jit_b buf 15 ) ( __jit_b buf 182 ) ( __jit_b buf 192 )  // movzx eax,al
+                            ( __jit_strax buf a )
+                        } {
+                            ? == op 49 { ( __jit_jmp buf pat_at pat_rec 233 / a 6 ) } {  // BR
+                                ? == op 48 {  // IFZ: jump if rbase[b]==0
+                                    ( __jit_ldrax buf b ) ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test rax,rax
+                                    ( __jit_jmp buf pat_at pat_rec 132 / a 6 )  // je
+                                } {
+                                    ? == op 54 {  // BRIF: jump if rbase[b]!=0
+                                        ( __jit_ldrax buf b ) ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 )
+                                        ( __jit_jmp buf pat_at pat_rec 133 / a 6 )  // jne
+                                    } {
+                                        ? == op 45 {  // BRIFC: cmp lhs,rhs; jcc target (cmpop in d)
+                                            ( __jit_cmp buf b c ? < d 66 1 0 )
+                                            ( __jit_jmp buf pat_at pat_rec ( __jit_jcc cctab d ) / a 6 )
+                                        } {
+                                            ? | == op 38 == op 177 {  // ADDBRIFC: v=s1+s2; dst=v; cmp v,rhs; jcc
+                                                : i cmpop >> w5 21
+                                                : i rhs & w5 2097151
+                                                ? == op 38 {  // i64
+                                                    ( __jit_ldrax buf c ) ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 135 ) ( __jit_d buf * d 8 )  // add rax,[rdi+s2]
+                                                    ( __jit_strax buf b )
+                                                    ( __jit_b buf 72 ) ( __jit_b buf 59 ) ( __jit_b buf 135 ) ( __jit_d buf * rhs 8 )  // cmp rax,[rdi+rhs]
+                                                } {  // i32
+                                                    ( __jit_ldrax buf c ) ( __jit_b buf 3 ) ( __jit_b buf 135 ) ( __jit_d buf * d 8 )  // add eax,[rdi+s2]
+                                                    ( __jit_movslq buf ) ( __jit_strax buf b )
+                                                    ( __jit_b buf 59 ) ( __jit_b buf 135 ) ( __jit_d buf * rhs 8 )  // cmp eax,[rdi+rhs]
+                                                }
+                                                ( __jit_jmp buf pat_at pat_rec ( __jit_jcc cctab cmpop ) / a 6 )
+                                            } { ( __jit_alu buf op a b c ) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         = r + r 1
+    }
+    // resolve forward/backward rel32s now that every record's offset is known
+    : i np ( vec_len [i] pat_at )
+    : ~ i pk 0
+    ~ < pk np {
+        : i at ?? ( vec_get [i] pat_at pk ) { T x → x F → 0 }
+        : i trec ?? ( vec_get [i] pat_rec pk ) { T x → x F → 0 }
+        : i dst ?? ( vec_get [i] lab trec ) { T x → x F → 0 }
+        : i rel - dst + at 4
+        ( vec_set [u] buf at # u & rel 255 )
+        ( vec_set [u] buf + at 1 # u & ( __lshr64 rel 8 ) 255 )
+        ( vec_set [u] buf + at 2 # u & ( __lshr64 rel 16 ) 255 )
+        ( vec_set [u] buf + at 3 # u & ( __lshr64 rel 24 ) 255 )
+        = pk + pk 1
     }
     : i len ( vec_len [u] buf )
     : *u page ( nurl_code_alloc + len 16 )
