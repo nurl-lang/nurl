@@ -708,7 +708,7 @@ emit_md() {
     printf '| C → wasm | `%s cc --target=%s` |\n' "$ZIG_VERSION" "$WASM_TARGET_C"
     printf '| Rust → wasm | `rustc --target %s` |\n' "$WASM_TARGET_RS"
     printf '| wasm runtime (reference) | `%s` — Cranelift JIT |\n' "$WASMTIME_VERSION"
-    printf '| wasm runtime (NURL) | `packages/wasmtime` (%s) — interpreter, built from this repo, `NURL_SPLIT=0` (release build; see below) |\n' "$WT_VERSION"
+    printf '| wasm runtime (NURL) | `packages/wasmtime` (%s) — template JIT + interpreter, built from this repo, `NURL_SPLIT=0` (release build; see below) |\n' "$WT_VERSION"
     printf '\n'
     printf '| Setting | Value |\n|---|---|\n'
     printf '| Optimisation | NURL/C `%s`, Rust `-C opt-level=2`, both targets |\n' "$OPT"
@@ -769,18 +769,19 @@ emit_md() {
     printf '\n'
 
     printf '## 3. The pure-NURL runtime (`packages/wasmtime`)\n\n'
-    printf 'The identical modules from section 1, executed by an interpreter written\n'
-    printf 'in NURL instead of by a JIT written in Rust. `vs JIT` is the cost of the\n'
-    printf 'runtime; `vs native` is the end-to-end cost of choosing this way to ship.\n'
-    printf 'Losing orders of magnitude to a JIT is the shape an interpreter has; the\n'
-    printf 'point of the column is that the size of the gap is measured rather than\n'
-    printf 'assumed, per benchmark, so it can be aimed at.\n\n'
+    printf 'The identical modules from section 1, executed by a runtime written in\n'
+    printf 'NURL instead of in Rust: a register-record interpreter with a template\n'
+    printf 'JIT on top (on by default; `NURL_WT_JIT=0` keeps the pure interpreter,\n'
+    printf 'and metered or shared-memory runs fall back to it on their own).\n'
+    printf '`vs JIT` is the cost of the runtime; `vs native` is the end-to-end\n'
+    printf 'cost of choosing this way to ship. The size of the gap is measured\n'
+    printf 'rather than assumed, per benchmark, so it can be aimed at.\n\n'
     printf 'Read the floor row first, because it goes the other way: on a program\n'
-    printf 'that does nothing the interpreter *beats* the JIT. Nothing surprising is\n'
-    printf 'happening — the JIT compiles the whole module before `_start`, and the\n'
-    printf 'interpreter only decodes it and walks the handful of instructions that\n'
-    printf 'run. That crossover is the honest answer to "which runtime should I\n'
-    printf 'use": it depends entirely on how long the guest runs.\n\n'
+    printf 'that does nothing this runtime *beats* the reference. Nothing surprising\n'
+    printf 'is happening — the reference compiles the whole module before `_start`,\n'
+    printf 'and `wt` only decodes it, compiling nothing but what runs. That\n'
+    printf 'crossover is the honest answer to "which runtime should I use": it\n'
+    printf 'depends entirely on how long the guest runs.\n\n'
     printf '| Benchmark | NURL on `wt` | vs JIT | vs native | C on `wt` | Rust on `wt` |\n'
     printf '|---|---:|---:|---:|---:|---:|\n'
     printf '| _(floor: empty program)_ | _%s_ | _%s_ | _%s_ | _%s_ | _%s_ |\n' \
