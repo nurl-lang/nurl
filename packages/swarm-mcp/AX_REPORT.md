@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-13 · **Tester:** Claude (agent-driven, over the MCP surface itself)
 **Setup:** `nurl upgrade` → v0.40.0 toolchain, `nurlpkg install swarm-mcp` → 0.22.0
-(registry), `nurlpkg install wasmtime` → 0.8.1. Host: Linux x86_64, LAN address
+(registry), `nurlpkg install nwasm` → 0.8.1. Host: Linux x86_64, LAN address
 192.168.1.30, GPUs: RTX 4090 + GTX 970. Everything below was driven the way a
 language model would drive it: `initialize` → `tools/list` → `tools/call` over
 HTTPS JSON-RPC, plus the dev CLI.
@@ -116,7 +116,7 @@ recovery now settle in ~80 s with exact results, where they previously hung.
 | d | A dead worker leaves **expression** tasks `running` forever — no deadline, no re-dispatch (observed >45 min) | critic #5 |
 | e | Unknown `reduce` (`"avg"`) silently runs as `sum` | critic #6 |
 | f | `failed_chunks` carries no cause anywhere, not even in `-v` logs | critic #7 |
-| g | `--gpu` workers do no preflight (no wasmtime / no libcuda → task-time mystery) | critic #8 |
+| g | `--gpu` workers do no preflight (no wasm runtime / no libcuda → task-time mystery) | critic #8 |
 | h | `GET /mcp` (any path, any method) → 200 + `"server":"nurl-mcp"`; non-standard `resultType`; no auth on the MCP surface | critic #9 |
 | i | Port-bind failure keeps the process alive with the surviving roles | critic #10 |
 | j | `-v` output from a worker-only node never reaches a redirected log (block buffering) | critic #10 |

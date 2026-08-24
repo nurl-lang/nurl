@@ -28,7 +28,7 @@
 // The program's cuda/nvrtc FFI declarations mirror packages/gpu/src/cuda.nu's
 // ABI exactly. Compiled with --ffi-host-imports (the wasm build API always
 // does), every cu*/nvrtc* symbol becomes an `env` import that the pure-NURL
-// wasmtime's GPU bridge resolves against the worker's real libcuda/libnvrtc
+// nwasm's GPU bridge resolves against the worker's real libcuda/libnvrtc
 // under --allow-gpu. The same source also compiles native (nurl.sh auto-links
 // cuda/nvrtc), so a kernel can be smoke-tested off-cluster.
 //
@@ -412,7 +412,7 @@ $ `wasmkernel.nu`
     ( __pimport w `stdlib/core/io.nu` )
     ( __pimport w `stdlib/core/string.nu` )
     ( __pimport w `stdlib/std/floatbits.nu` )
-    // FFI: identical ABI to packages/gpu/src/cuda.nu (and the wt GPU bridge).
+    // FFI: identical ABI to packages/gpu/src/cuda.nu (and the nwasm GPU bridge).
     ( string_push_str w `& ` ) ( __pq w `cuda` ) ( __pl w ` @ cuInit i32 flags → i32` )
     ( string_push_str w `& ` ) ( __pq w `cuda` ) ( __pl w ` @ cuDeviceGet *u device i32 ordinal → i32` )
     ( string_push_str w `& ` ) ( __pq w `cuda` ) ( __pl w ` @ cuCtxCreate *u pctx i32 flags i32 dev → i32` )
@@ -565,7 +565,7 @@ $ `wasmkernel.nu`
                 ( __pl w `    : i dout ( nurl_peek os 0 )` )
             } } }
     // kernel argument cells + the void** layer (identical layout to
-    // packages/gpu gpu_launch — the wt bridge translates each guest entry).
+    // packages/gpu gpu_launch — the nwasm bridge translates each guest entry).
     // Cell order mirrors the kernel signature: lo, hi, out, [K], [in], [p].
     : b hist == mode ( gpu_mode_hist )
     : i ncells + 3 + ? needk 1 0 + hd ? != has_params 0 1 0

@@ -1,4 +1,4 @@
-// packages/wasmtime/tests/hardening_test.nu — hostile-input regression tests.
+// packages/nwasm/tests/hardening_test.nu — hostile-input regression tests.
 //
 // Every module below is malformed in a way that, before the hardening pass,
 // either hung the decoder (unbounded / backward cursor loop) or drove an

@@ -29,7 +29,7 @@ $ `stdlib/dist/ring.nu`
 @ role_worker → i { ^ 1 }
 
 // Capability bits a worker advertises in HELLO. cap_gpu: the worker runs wasm
-// chunks with GPU host imports enabled (wt --allow-gpu on real hardware).
+// chunks with GPU host imports enabled (nwasm --allow-gpu on real hardware).
 @ cap_gpu → i { ^ 1 }
 
 // HELLO wire: [3][id:8][role:1][want:1][pklen:2][pubkey…][caps:1]

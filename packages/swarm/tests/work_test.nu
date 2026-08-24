@@ -5,7 +5,7 @@
 // sharding partitions a range exactly (no gap, no overlap) so the sum of the
 // chunk results equals the whole-range result. Run from the package root:
 //
-//   NURL_STDLIB=<repo> ./nurl.sh tests/work_test.nu /tmp/wt && /tmp/wt
+//   NURL_STDLIB=<repo> ./nurl.sh tests/work_test.nu /tmp/wtest && /tmp/wtest
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

@@ -13,10 +13,11 @@
 #  Rust. Each of those three is compiled twice — native and wasm32-wasi —
 #  and every wasm module is then run on two runtimes:
 #
-#    reference wasmtime   Cranelift JIT, the industry baseline. The
-#                         wasm-vs-native gap it shows is the cost of the
-#                         *target*, with the compiler quality controlled for.
-#    packages/wasmtime    `wt`, a WebAssembly interpreter written in pure
+#    reference wasmtime   The external Bytecode Alliance runtime (Cranelift
+#                         JIT), the industry baseline. The wasm-vs-native gap
+#                         it shows is the cost of the *target*, with the
+#                         compiler quality controlled for.
+#    packages/nwasm       `nwasm`, a WebAssembly runtime written in pure
 #                         NURL. Same modules, same outputs; the gap to the
 #                         column on its left is the cost of *this runtime*.
 #
@@ -33,20 +34,21 @@
 #      ./bench/wasmbench.sh                    # full suite, write both files
 #      ./bench/wasmbench.sh --quick            # 1 rep/cell, for a smoke test
 #      ./bench/wasmbench.sh --bench lcg --bench sieve
-#      ./bench/wasmbench.sh --wt-all-langs      # + C/Rust on the interpreter
+#      ./bench/wasmbench.sh --nwasm-all-langs   # + C/Rust on the interpreter
 #      ./bench/wasmbench.sh --stdout           # print the report, touch nothing
 #
 #  Everything but the interpreter costs about what bench.sh does. The
 #  interpreter is ~500x slower than native, so its column alone is ~15
 #  minutes for NURL — that is the measurement, not a defect of the harness.
-#  --wt-all-langs adds the C and Rust modules to it (the cross-frontend
+#  --nwasm-all-langs adds the C and Rust modules to it (the cross-frontend
 #  control) and triples that, so it is opt-in rather than the default.
 #
 #  Requires nurlc (./build.sh), clang, rustc + the wasm32-wasip1 target,
-#  zig (the toolchain's bundled one is fine) and a reference wasmtime.
+#  zig (the toolchain's bundled one is fine) and the external reference
+#  wasmtime.
 #  A missing toolchain is a hard error: a table with a hole in it is worse
 #  than no table, because the hole is invisible once the numbers are copied
-#  out. `wasmbuilder` and `wt` are compiled from packages/ by this script,
+#  out. `wasmbuilder` and `nwasm` are compiled from packages/ by this script,
 #  so they always match the repo they are measuring.
 # ============================================================
 set -u
@@ -73,7 +75,7 @@ WASM_TARGET_RS="wasm32-wasip1"    # rustc's spelling
 JSON_OUT="$BENCH/results/wasm-latest.json"
 MD_OUT="$BENCH/WASMRESULTS.md"
 WRITE=1
-WT_ALL_LANGS=0        # also run C/Rust on the interpreter (--wt-all-langs)
+NWASM_ALL_LANGS=0        # also run C/Rust on the interpreter (--nwasm-all-langs)
 SELECTED=()
 
 usage() { sed -n '4,50p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
@@ -88,7 +90,7 @@ while (( $# > 0 )); do
         --json)          JSON_OUT="$2"; shift 2 ;;
         --md)            MD_OUT="$2"; shift 2 ;;
         --stdout)        WRITE=0; shift ;;
-        --wt-all-langs)  WT_ALL_LANGS=1; shift ;;
+        --nwasm-all-langs)  NWASM_ALL_LANGS=1; shift ;;
         --quick)         MAX_REPS=1; BUDGET_MS=1; COMPILE_REPS=1; shift ;;
         -h|--help)       usage 0 ;;
         *)               echo "wasmbench.sh: unknown argument '$1'" >&2; usage 2 ;;
@@ -150,25 +152,25 @@ for pair in "runtime.curl:libcurl" "runtime.openssl:openssl" "runtime.sqlite3:sq
 done
 
 # ── build the two packages under test ────────────────────────────
-# wasmbuilder compiles the wasm; wt runs it. Both are NURL programs living
+# wasmbuilder compiles the wasm; nwasm runs it. Both are NURL programs living
 # in packages/, and both are rebuilt from source here rather than taken from
 # an installed toolchain — a benchmark of this repo has to measure this
 # repo's compiler, runtime and packages, not whatever happens to be in
 # $NURL_HOME.
 WASMBUILDER="$BUILD/wasmbuilder"
-WT="$BUILD/wt"
+NWASM="$BUILD/nwasm"
 
 #
 # NURL_SPLIT=0: `nurl.sh` defaults to lowering a large program as one module
 # per core so the clang step parallelises, and ThinLTO cannot import every
 # callee back across a part boundary — docs/BUILDING.md puts the cost at
 # 3.4 % of the program's own speed and says to turn it off for a release
-# build. `wt` is not an incidental tool here, it is the subject of section 3,
+# build. `nwasm` is not an incidental tool here, it is the subject of section 3,
 # and the reference runtime it is measured against is a release build; a
-# split `wt` measured 5.0 % slower over this corpus. Build time is not timed,
+# split `nwasm` measured 5.0 % slower over this corpus. Build time is not timed,
 # so the trade has nothing to buy here.
-echo "  building packages/wasmbuilder and packages/wasmtime …" >&2
-for pkg in "wasmbuilder:$WASMBUILDER" "wasmtime:$WT"; do
+echo "  building packages/wasmbuilder and packages/nwasm …" >&2
+for pkg in "wasmbuilder:$WASMBUILDER" "nwasm:$NWASM"; do
     name="${pkg%%:*}"; out="${pkg##*:}"
     if ! (cd "$ROOT" && NURL_SPLIT=0 ./nurl.sh "packages/$name/src/main.nu" "$out") >"$out.buildlog" 2>&1; then
         echo "wasmbench.sh: failed to build packages/$name — see $out.buildlog" >&2
@@ -194,7 +196,7 @@ RUSTC_VERSION="$(rustc --version)"
 ZIG_VERSION="zig $("$ZIG" version 2>/dev/null)"
 WASMTIME_VERSION="$("$WASMTIME" --version 2>/dev/null | head -1)"
 WASMBUILDER_VERSION="$("$WASMBUILDER" --version 2>/dev/null | head -1)"
-WT_VERSION="$("$WT" --version 2>/dev/null | head -1)"
+NWASM_VERSION="$("$NWASM" --version 2>/dev/null | head -1)"
 
 HOST_KERNEL="$(uname -srm)"
 HOST_CPU="$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | sed 's/.*: //')"
@@ -384,14 +386,14 @@ fi
 # — measured once — could still be a cold one. Ratios computed across that
 # boundary are nonsense (a benchmark came out ten times *faster* than its
 # own empty program). With the cache off, every reference cell is
-# decode + compile + run, exactly like every `wt` cell, both runtimes are
+# decode + compile + run, exactly like every `nwasm` cell, both runtimes are
 # measured doing the same work, and the floor row subtracts cleanly.
 #
 # These are argv prefixes rather than shell functions on purpose: time_ms
 # runs its command under `timeout`, which execs a real binary and cannot see
 # a function defined in this shell.
 REF_RUN=("$WASMTIME" run -C cache=n --dir .)
-WT_RUN=("$WT" run --dir .)
+NWASM_RUN=("$NWASM" run --dir .)
 
 # ── process-start-up floor ───────────────────────────────────────
 # What each cell costs for a program that does nothing. On the two wasm
@@ -422,12 +424,12 @@ read -r floor_nurl_ref _  <<<"$(cd "$ROOT" && time_cell "${REF_RUN[@]}" "$floor_
 read -r floor_nurl_ref_nogc _ <<<"$(cd "$ROOT" && time_cell "${REF_RUN[@]}" "$floor_dir/floor.nunogc.wasm")"
 read -r floor_c_ref _     <<<"$(cd "$ROOT" && time_cell "${REF_RUN[@]}" "$floor_dir/floor.c.wasm")"
 read -r floor_rust_ref _  <<<"$(cd "$ROOT" && time_cell "${REF_RUN[@]}" "$floor_dir/floor.rs.wasm")"
-read -r floor_nurl_wt _   <<<"$(cd "$ROOT" && time_cell "${WT_RUN[@]}" "$floor_dir/floor.nu.wasm")"
-if (( WT_ALL_LANGS )); then
-    read -r floor_c_wt _    <<<"$(cd "$ROOT" && time_cell "${WT_RUN[@]}" "$floor_dir/floor.c.wasm")"
-    read -r floor_rust_wt _ <<<"$(cd "$ROOT" && time_cell "${WT_RUN[@]}" "$floor_dir/floor.rs.wasm")"
+read -r floor_nurl_nw _   <<<"$(cd "$ROOT" && time_cell "${NWASM_RUN[@]}" "$floor_dir/floor.nu.wasm")"
+if (( NWASM_ALL_LANGS )); then
+    read -r floor_c_nw _    <<<"$(cd "$ROOT" && time_cell "${NWASM_RUN[@]}" "$floor_dir/floor.c.wasm")"
+    read -r floor_rust_nw _ <<<"$(cd "$ROOT" && time_cell "${NWASM_RUN[@]}" "$floor_dir/floor.rs.wasm")"
 else
-    floor_c_wt=SKIPPED; floor_rust_wt=SKIPPED
+    floor_c_nw=SKIPPED; floor_rust_nw=SKIPPED
 fi
 
 # ── measure ──────────────────────────────────────────────────────
@@ -435,10 +437,10 @@ fi
 r_checksum=(); r_verified=(); r_detail=()
 r_nurl=(); r_c=(); r_rust=()
 r_nurl_ref=(); r_c_ref=(); r_rust_ref=()
-r_nurl_wt=(); r_c_wt=(); r_rust_wt=()
+r_nurl_nw=(); r_c_nw=(); r_rust_nw=()
 r_nurl_reps=(); r_c_reps=(); r_rust_reps=()
 r_nurl_ref_reps=(); r_c_ref_reps=(); r_rust_ref_reps=()
-r_nurl_wt_reps=(); r_c_wt_reps=(); r_rust_wt_reps=()
+r_nurl_nw_reps=(); r_c_nw_reps=(); r_rust_nw_reps=()
 r_cc_nurl_fe=(); r_cc_nurl=(); r_cc_nurl_wasm=()
 r_cc_c=(); r_cc_c_wasm=(); r_cc_rust=(); r_cc_rust_wasm=()
 r_sz_nurl=(); r_sz_nurl_wasm=(); r_sz_c=(); r_sz_c_wasm=(); r_sz_rust=(); r_sz_rust_wasm=()
@@ -475,7 +477,7 @@ for idx in "${!names[@]}"; do
     # ── the gate ──
     # Ten cells, one expected line. The native NURL output is the reference
     # the other nine are compared against; the interpreter is included in
-    # the gate, so a wrong answer from `wt` drops the row rather than being
+    # the gate, so a wrong answer from `nwasm` drops the row rather than being
     # reported as a fast cell.
     progress "$b" "verifying native + JIT…"
     out_nurl="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "$BUILD/$b.nurl.bin" 2>/dev/null)"
@@ -487,19 +489,19 @@ for idx in "${!names[@]}"; do
     out_nurl_ref_nogc="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "${REF_RUN[@]}" "$BUILD/$b.nunogc.wasm" 2>/dev/null)"
 
     progress "$b" "verifying interpreter…"
-    out_nurl_wt="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "${WT_RUN[@]}" "$BUILD/$b.nu.wasm" 2>/dev/null)"
-    if (( WT_ALL_LANGS )); then
-        out_c_wt="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "${WT_RUN[@]}" "$BUILD/$b.c.wasm" 2>/dev/null)"
-        out_rust_wt="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "${WT_RUN[@]}" "$BUILD/$b.rs.wasm" 2>/dev/null)"
+    out_nurl_nw="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "${NWASM_RUN[@]}" "$BUILD/$b.nu.wasm" 2>/dev/null)"
+    if (( NWASM_ALL_LANGS )); then
+        out_c_nw="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "${NWASM_RUN[@]}" "$BUILD/$b.c.wasm" 2>/dev/null)"
+        out_rust_nw="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "${NWASM_RUN[@]}" "$BUILD/$b.rs.wasm" 2>/dev/null)"
     else
-        out_c_wt="$out_nurl"; out_rust_wt="$out_nurl"   # not run: excluded from the gate
+        out_c_nw="$out_nurl"; out_rust_nw="$out_nurl"   # not run: excluded from the gate
     fi
 
     verified=true; detail=""
     for pair in "NURL:$out_nurl" "C:$out_c" "Rust:$out_rust" \
                 "NURL/wasm:$out_nurl_ref" "C/wasm:$out_c_ref" "Rust/wasm:$out_rust_ref" \
                 "NURL/wasm+nogc:$out_nurl_ref_nogc" \
-                "NURL/wt:$out_nurl_wt" "C/wt:$out_c_wt" "Rust/wt:$out_rust_wt"; do
+                "NURL/nwasm:$out_nurl_nw" "C/nwasm:$out_c_nw" "Rust/nwasm:$out_rust_nw"; do
         lang="${pair%%:*}"; got="${pair#*:}"
         # An empty line fails the gate even when every cell agrees on it:
         # nine programs that all printed nothing agree about nothing.
@@ -515,11 +517,11 @@ for idx in "${!names[@]}"; do
         printf '\r\033[K  %-18s MISMATCH — %s\n' "$b" "$detail" >&2
         r_nurl+=(SKIPPED); r_c+=(SKIPPED); r_rust+=(SKIPPED)
         r_nurl_ref+=(SKIPPED); r_c_ref+=(SKIPPED); r_rust_ref+=(SKIPPED)
-        r_nurl_wt+=(SKIPPED); r_c_wt+=(SKIPPED); r_rust_wt+=(SKIPPED)
+        r_nurl_nw+=(SKIPPED); r_c_nw+=(SKIPPED); r_rust_nw+=(SKIPPED)
         r_nurl_ref_nogc+=(SKIPPED); r_nurl_ref_nogc_reps+=(0)
         r_nurl_reps+=(0); r_c_reps+=(0); r_rust_reps+=(0)
         r_nurl_ref_reps+=(0); r_c_ref_reps+=(0); r_rust_ref_reps+=(0)
-        r_nurl_wt_reps+=(0); r_c_wt_reps+=(0); r_rust_wt_reps+=(0)
+        r_nurl_nw_reps+=(0); r_c_nw_reps+=(0); r_rust_nw_reps+=(0)
         continue
     fi
 
@@ -539,20 +541,20 @@ for idx in "${!names[@]}"; do
     progress "$b" "timing NURL wasm+nogc (JIT)…"; read -r ms reps <<<"$(cd "$ROOT" && time_cell "${REF_RUN[@]}" "$BUILD/$b.nunogc.wasm")"
     r_nurl_ref_nogc+=("$ms"); r_nurl_ref_nogc_reps+=("$reps")
 
-    progress "$b" "timing NURL wasm (wt)…"; read -r ms reps <<<"$(cd "$ROOT" && time_cell "${WT_RUN[@]}" "$BUILD/$b.nu.wasm")"
-    r_nurl_wt+=("$ms"); r_nurl_wt_reps+=("$reps")
-    if (( WT_ALL_LANGS )); then
-        progress "$b" "timing C wasm (wt)…";    read -r ms reps <<<"$(cd "$ROOT" && time_cell "${WT_RUN[@]}" "$BUILD/$b.c.wasm")"
-        r_c_wt+=("$ms"); r_c_wt_reps+=("$reps")
-        progress "$b" "timing Rust wasm (wt)…"; read -r ms reps <<<"$(cd "$ROOT" && time_cell "${WT_RUN[@]}" "$BUILD/$b.rs.wasm")"
-        r_rust_wt+=("$ms"); r_rust_wt_reps+=("$reps")
+    progress "$b" "timing NURL wasm (nwasm)…"; read -r ms reps <<<"$(cd "$ROOT" && time_cell "${NWASM_RUN[@]}" "$BUILD/$b.nu.wasm")"
+    r_nurl_nw+=("$ms"); r_nurl_nw_reps+=("$reps")
+    if (( NWASM_ALL_LANGS )); then
+        progress "$b" "timing C wasm (nwasm)…"; read -r ms reps <<<"$(cd "$ROOT" && time_cell "${NWASM_RUN[@]}" "$BUILD/$b.c.wasm")"
+        r_c_nw+=("$ms"); r_c_nw_reps+=("$reps")
+        progress "$b" "timing Rust wasm (nwasm)…"; read -r ms reps <<<"$(cd "$ROOT" && time_cell "${NWASM_RUN[@]}" "$BUILD/$b.rs.wasm")"
+        r_rust_nw+=("$ms"); r_rust_nw_reps+=("$reps")
     else
-        r_c_wt+=(SKIPPED); r_c_wt_reps+=(0)
-        r_rust_wt+=(SKIPPED); r_rust_wt_reps+=(0)
+        r_c_nw+=(SKIPPED); r_c_nw_reps+=(0)
+        r_rust_nw+=(SKIPPED); r_rust_nw_reps+=(0)
     fi
 
-    printf '\r\033[K  %-18s native %8s  jit %8s  wt %10s   (nurl)\n' \
-        "$b" "${r_nurl[$idx]}" "${r_nurl_ref[$idx]}" "${r_nurl_wt[$idx]}" >&2
+    printf '\r\033[K  %-18s native %8s  jit %8s  nwasm %10s   (nurl)\n' \
+        "$b" "${r_nurl[$idx]}" "${r_nurl_ref[$idx]}" "${r_nurl_nw[$idx]}" >&2
 done
 printf '\r\033[K' >&2
 
@@ -602,8 +604,8 @@ emit_json() {
     printf '    "rustc": "%s",\n'       "$(jstr "$RUSTC_VERSION")"
     printf '    "zig": "%s",\n'         "$(jstr "$ZIG_VERSION")"
     printf '    "wasmbuilder": "%s",\n' "$(jstr "$WASMBUILDER_VERSION")"
-    printf '    "wasmtime_ref": "%s",\n' "$(jstr "$WASMTIME_VERSION")"
-    printf '    "wasmtime_nurl": "%s"\n' "$(jstr "$WT_VERSION")"
+    printf '    "wasm_runtime_ref": "%s",\n' "$(jstr "$WASMTIME_VERSION")"
+    printf '    "wasm_runtime_nurl": "%s"\n' "$(jstr "$NWASM_VERSION")"
     printf '  },\n'
     printf '  "settings": {\n'
     printf '    "opt": "%s",\n' "$(jstr "$OPT")"
@@ -613,7 +615,7 @@ emit_json() {
     printf '    "budget_ms": %s,\n' "$BUDGET_MS"
     printf '    "timeout_s": %s,\n' "$TIMEOUT_S"
     printf '    "compile_reps": %s,\n' "$COMPILE_REPS"
-    printf '    "interpreter_all_languages": %s\n' "$( (( WT_ALL_LANGS )) && echo true || echo false )"
+    printf '    "interpreter_all_languages": %s\n' "$( (( NWASM_ALL_LANGS )) && echo true || echo false )"
     printf '  },\n'
     printf '  "floor_ms": {\n'
     printf '    "native": { "nurl": %s, "c": %s, "rust": %s },\n' \
@@ -621,8 +623,8 @@ emit_json() {
     printf '    "wasm_ref": { "nurl": %s, "c": %s, "rust": %s, "nurl_no_gc_sections": %s },\n' \
         "$(jnum "$floor_nurl_ref")" "$(jnum "$floor_c_ref")" "$(jnum "$floor_rust_ref")" \
         "$(jnum "$floor_nurl_ref_nogc")"
-    printf '    "wasm_wt": { "nurl": %s, "c": %s, "rust": %s }\n' \
-        "$(jnum "$floor_nurl_wt")" "$(jnum "$floor_c_wt")" "$(jnum "$floor_rust_wt")"
+    printf '    "wasm_nwasm": { "nurl": %s, "c": %s, "rust": %s }\n' \
+        "$(jnum "$floor_nurl_nw")" "$(jnum "$floor_c_nw")" "$(jnum "$floor_rust_nw")"
     printf '  },\n'
     printf '  "floor_compile_ms": { "nurl_frontend": %s, "nurl_native": %s, "nurl_wasm": %s, "nurl_wasm_no_gc_sections": %s, "c_native": %s, "c_wasm": %s, "rust_native": %s, "rust_wasm": %s },\n' \
         "$(jnum "$floor_cc_nurl_fe")" "$(jnum "$floor_cc_nurl")" "$(jnum "$floor_cc_nurl_wasm")" \
@@ -644,8 +646,8 @@ emit_json() {
         printf '        "wasm_ref": { "nurl": %s, "c": %s, "rust": %s, "nurl_no_gc_sections": %s },\n' \
             "$(jnum "${r_nurl_ref[$i]}")" "$(jnum "${r_c_ref[$i]}")" "$(jnum "${r_rust_ref[$i]}")" \
             "$(jnum "${r_nurl_ref_nogc[$i]}")"
-        printf '        "wasm_wt":  { "nurl": %s, "c": %s, "rust": %s }\n' \
-            "$(jnum "${r_nurl_wt[$i]}")" "$(jnum "${r_c_wt[$i]}")" "$(jnum "${r_rust_wt[$i]}")"
+        printf '        "wasm_nwasm":  { "nurl": %s, "c": %s, "rust": %s }\n' \
+            "$(jnum "${r_nurl_nw[$i]}")" "$(jnum "${r_c_nw[$i]}")" "$(jnum "${r_rust_nw[$i]}")"
         printf '      },\n'
         printf '      "reps": {\n'
         printf '        "native":   { "nurl": %s, "c": %s, "rust": %s },\n' \
@@ -653,8 +655,8 @@ emit_json() {
         printf '        "wasm_ref": { "nurl": %s, "c": %s, "rust": %s, "nurl_no_gc_sections": %s },\n' \
             "${r_nurl_ref_reps[$i]}" "${r_c_ref_reps[$i]}" "${r_rust_ref_reps[$i]}" \
             "${r_nurl_ref_nogc_reps[$i]}"
-        printf '        "wasm_wt":  { "nurl": %s, "c": %s, "rust": %s }\n' \
-            "${r_nurl_wt_reps[$i]}" "${r_c_wt_reps[$i]}" "${r_rust_wt_reps[$i]}"
+        printf '        "wasm_nwasm":  { "nurl": %s, "c": %s, "rust": %s }\n' \
+            "${r_nurl_nw_reps[$i]}" "${r_c_nw_reps[$i]}" "${r_rust_nw_reps[$i]}"
         printf '      },\n'
         printf '      "compile_ms": { "nurl_frontend": %s, "nurl_native": %s, "nurl_wasm": %s, "nurl_wasm_no_gc_sections": %s, "c_native": %s, "c_wasm": %s, "rust_native": %s, "rust_wasm": %s },\n' \
             "$(jnum "${r_cc_nurl_fe[$i]}")" "$(jnum "${r_cc_nurl[$i]}")" "$(jnum "${r_cc_nurl_wasm[$i]}")" \
@@ -708,16 +710,16 @@ emit_md() {
     printf '| C → wasm | `%s cc --target=%s` |\n' "$ZIG_VERSION" "$WASM_TARGET_C"
     printf '| Rust → wasm | `rustc --target %s` |\n' "$WASM_TARGET_RS"
     printf '| wasm runtime (reference) | `%s` — Cranelift JIT |\n' "$WASMTIME_VERSION"
-    printf '| wasm runtime (NURL) | `packages/wasmtime` (%s) — template JIT + interpreter, built from this repo, `NURL_SPLIT=0` (release build; see below) |\n' "$WT_VERSION"
+    printf '| wasm runtime (NURL) | `packages/nwasm` (%s) — template JIT + interpreter, built from this repo, `NURL_SPLIT=0` (release build; see below) |\n' "$NWASM_VERSION"
     printf '\n'
     printf '| Setting | Value |\n|---|---|\n'
     printf '| Optimisation | NURL/C `%s`, Rust `-C opt-level=2`, both targets |\n' "$OPT"
     printf '| Timed runs per cell | up to %s, adaptive: as many as fit in %s ms |\n' "$MAX_REPS" "$BUDGET_MS"
     printf '| Timed compiles per cell | %s (median) |\n' "$COMPILE_REPS"
     printf '| Per-run timeout | %s s |\n' "$TIMEOUT_S"
-    printf '| C/Rust on the NURL interpreter | %s |\n' "$( (( WT_ALL_LANGS )) && echo 'yes' || echo 'no (add --wt-all-langs)' )"
+    printf '| C/Rust on the NURL interpreter | %s |\n' "$( (( NWASM_ALL_LANGS )) && echo 'yes' || echo 'no (add --nwasm-all-langs)' )"
     printf '| Reference runtime cache | **off** (`-C cache=n`) — every cell is decode + compile + run |\n'
-    printf '| `wt` build | `NURL_SPLIT=0` — `nurl.sh` otherwise lowers a large program as one module per core, and ThinLTO cannot import every callee back across a part boundary. `wt` is the subject of section 3, and the reference runtime it is measured against is a release build; a split `wt` measured 5.0%% slower over this corpus. |\n'
+    printf '| `nwasm` build | `NURL_SPLIT=0` — `nurl.sh` otherwise lowers a large program as one module per core, and ThinLTO cannot import every callee back across a part boundary. `nwasm` is the subject of section 3, and the reference runtime it is measured against is a release build; a split `nwasm` measured 5.0%% slower over this corpus. |\n'
     printf '\n'
 
     printf '## 1. What wasm costs — native vs the same module on a JIT\n\n'
@@ -768,10 +770,10 @@ emit_md() {
     done
     printf '\n'
 
-    printf '## 3. The pure-NURL runtime (`packages/wasmtime`)\n\n'
+    printf '## 3. The pure-NURL runtime (`packages/nwasm`)\n\n'
     printf 'The identical modules from section 1, executed by a runtime written in\n'
     printf 'NURL instead of in Rust: a register-record interpreter with a template\n'
-    printf 'JIT on top (on by default; `NURL_WT_JIT=0` keeps the pure interpreter,\n'
+    printf 'JIT on top (on by default; `NURL_NWASM_JIT=0` keeps the pure interpreter,\n'
     printf 'and metered or shared-memory runs fall back to it on their own).\n'
     printf '`vs JIT` is the cost of the runtime; `vs native` is the end-to-end\n'
     printf 'cost of choosing this way to ship. The size of the gap is measured\n'
@@ -779,23 +781,23 @@ emit_md() {
     printf 'Read the floor row first, because it goes the other way: on a program\n'
     printf 'that does nothing this runtime *beats* the reference. Nothing surprising\n'
     printf 'is happening — the reference compiles the whole module before `_start`,\n'
-    printf 'and `wt` only decodes it, compiling nothing but what runs. That\n'
+    printf 'and `nwasm` only decodes it, compiling nothing but what runs. That\n'
     printf 'crossover is the honest answer to "which runtime should I use": it\n'
     printf 'depends entirely on how long the guest runs.\n\n'
-    printf '| Benchmark | NURL on `wt` | vs JIT | vs native | C on `wt` | Rust on `wt` |\n'
+    printf '| Benchmark | NURL on `nwasm` | vs JIT | vs native | C on `nwasm` | Rust on `nwasm` |\n'
     printf '|---|---:|---:|---:|---:|---:|\n'
     printf '| _(floor: empty program)_ | _%s_ | _%s_ | _%s_ | _%s_ | _%s_ |\n' \
-        "$floor_nurl_wt" "$(ratio "$floor_nurl_wt" "$floor_nurl_ref")" \
-        "$(ratio "$floor_nurl_wt" "$floor_nurl")" "$floor_c_wt" "$floor_rust_wt"
+        "$floor_nurl_nw" "$(ratio "$floor_nurl_nw" "$floor_nurl_ref")" \
+        "$(ratio "$floor_nurl_nw" "$floor_nurl")" "$floor_c_nw" "$floor_rust_nw"
     for i in "${!names[@]}"; do
         printf '| `%s` | %s | %s | %s | %s | %s |\n' "${names[$i]}" \
-            "${r_nurl_wt[$i]}" \
-            "$(ratio "${r_nurl_wt[$i]}" "${r_nurl_ref[$i]}")" \
-            "$(ratio "${r_nurl_wt[$i]}" "${r_nurl[$i]}")" \
-            "${r_c_wt[$i]}" "${r_rust_wt[$i]}"
+            "${r_nurl_nw[$i]}" \
+            "$(ratio "${r_nurl_nw[$i]}" "${r_nurl_ref[$i]}")" \
+            "$(ratio "${r_nurl_nw[$i]}" "${r_nurl[$i]}")" \
+            "${r_c_nw[$i]}" "${r_rust_nw[$i]}"
     done
     printf '\n'
-    if (( WT_ALL_LANGS )); then
+    if (( NWASM_ALL_LANGS )); then
         printf 'The C and Rust columns are the control. They are modules this runtime\n'
         printf 'never saw during development, emitted by two other LLVM frontends; that\n'
         printf 'they run at all is a correctness result, and that they run at a similar\n'
@@ -804,7 +806,7 @@ emit_md() {
         printf 'The C and Rust columns are `SKIPPED`: they are the cross-frontend\n'
         printf 'control — modules this runtime never saw during development, from two\n'
         printf 'other LLVM frontends — and running them costs about three times the\n'
-        printf 'whole rest of the suite, so they are opt-in. `--wt-all-langs` fills\n'
+        printf 'whole rest of the suite, so they are opt-in. `--nwasm-all-langs` fills\n'
         printf 'them in. Until it is run, this section says what the interpreter does\n'
         printf 'with NURL output and nothing about whether it is tuned for it.\n\n'
     fi
@@ -882,7 +884,7 @@ emit_md() {
         if [[ "${r_verified[$i]}" == true ]]; then
             printf '| `%s` | `%s` | identical: 3 languages x {native, JIT%s}, + NURL wasm `--no-gc-sections` |\n' \
                 "${names[$i]}" "${r_checksum[$i]}" \
-                "$( (( WT_ALL_LANGS )) && echo ', interpreter' || echo ', interpreter (NURL only)' )"
+                "$( (( NWASM_ALL_LANGS )) && echo ', interpreter' || echo ', interpreter (NURL only)' )"
         else
             printf '| `%s` | — | **MISMATCH** — %s |\n' "${names[$i]}" "${r_detail[$i]}"
         fi

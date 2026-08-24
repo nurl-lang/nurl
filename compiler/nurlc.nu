@@ -1104,7 +1104,7 @@
 // resolved by the embedder) rather than by a native link line, so the
 // build-time `stdlib/runtime.<lib>` sentinel gate is skipped. Set by the
 // wasm build path (nurlapi) — a wasm module's undefined FFI symbols become
-// imports the host runtime (e.g. packages/wasmtime) provides.
+// imports the host runtime (e.g. packages/nwasm) provides.
 : ~ i g_ffi_host_imports 0
 // `--strict-borrowck` (off by default) enables three additional checks:
 // (1) aliased mutation through `. obj field` arguments at the same

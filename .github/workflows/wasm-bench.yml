@@ -3,8 +3,9 @@ name: wasm-bench
 # Runs the WebAssembly benchmark — the same corpus bench.yml measures, one
 # axis rotated: every benchmark compiled to a native binary AND a
 # wasm32-wasi module in NURL, C and Rust, each module then run on the
-# reference wasmtime (Cranelift JIT) and on packages/wasmtime (`wt`, the
-# interpreter written in pure NURL) — on a fixed `ubuntu-latest` runner,
+# external reference wasmtime (Cranelift JIT) and on packages/nwasm
+# (`nwasm`, the runtime written in pure NURL) — on a fixed `ubuntu-latest`
+# runner,
 # and commits the refreshed report back to the repository:
 #
 #   bench/results/wasm-latest.json   machine-readable
@@ -29,7 +30,7 @@ on:
         description: 'Smoke test (1 rep/cell) — verifies the harness, does NOT commit'
         type: boolean
         default: false
-      wt_all_langs:
+      nwasm_all_langs:
         description: 'Also run C/Rust on the NURL interpreter (roughly triples the run)'
         type: boolean
         default: false
@@ -48,7 +49,7 @@ jobs:
     # The interpreter is ~500x slower than native — that is the
     # measurement, not a defect of the harness — and wasmbench.sh keeps it
     # finite per cell (--budget-ms, --timeout) rather than per suite. On a
-    # shared 2-vCPU VM the whole matrix needs hours, and --wt-all-langs
+    # shared 2-vCPU VM the whole matrix needs hours, and --nwasm-all-langs
     # roughly triples the interpreter's share of it.
     timeout-minutes: 300
 
@@ -93,7 +94,7 @@ jobs:
         #
         # On PATH rather than in $NURL_ZIG on purpose: wasmbench.sh and
         # wasmbuilder both fall through to a PATH zig, while nurl.sh keeps
-        # using system clang to build `wt` and `wasmbuilder` — and `wt`'s
+        # using system clang to build `nwasm` and `wasmbuilder` — and `nwasm`'s
         # own compiler is part of what the interpreter column measures, so
         # it has to match how the repo builds it everywhere else.
         run: |
@@ -110,12 +111,12 @@ jobs:
         # target costs, with compiler quality controlled for.
         #
         # $WASMTIME is pinned to the installed path rather than left to
-        # wasmbench.sh's PATH lookup. On a developer box `wasmtime` on PATH
-        # is usually $NURL_HOME/bin/wasmtime — the PURE-NURL interpreter
-        # installed by the toolchain — and the lookup would then fill the
-        # "reference JIT" column with the very runtime the column exists to
-        # compare against. The runner has no such install today; pinning
-        # keeps that true if it ever gains one.
+        # wasmbench.sh's PATH lookup. That lookup used to be a hazard: the
+        # pure-NURL runtime installed itself as $NURL_HOME/bin/wasmtime, so
+        # on a developer box the "reference JIT" column could be filled by
+        # the very runtime it exists to compare against. It is now installed
+        # as `nwasm` and the names cannot collide, but pinning stays — it
+        # documents which binary the column measured.
         run: |
           curl https://wasmtime.dev/install.sh -sSf | bash
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
@@ -147,8 +148,8 @@ jobs:
           if [[ '${{ inputs.quick }}' == 'true' ]]; then
             args+=(--quick)
           fi
-          if [[ '${{ inputs.wt_all_langs }}' == 'true' ]]; then
-            args+=(--wt-all-langs)
+          if [[ '${{ inputs.nwasm_all_langs }}' == 'true' ]]; then
+            args+=(--nwasm-all-langs)
           fi
           echo "running: ./bench/wasmbench.sh ${args[*]}"
           ./bench/wasmbench.sh "${args[@]}"

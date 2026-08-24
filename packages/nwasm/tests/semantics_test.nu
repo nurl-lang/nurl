@@ -1,4 +1,4 @@
-// packages/wasmtime/tests/semantics_test.nu — spec-semantics edge cases,
+// packages/nwasm/tests/semantics_test.nu — spec-semantics edge cases,
 // hand-authored in WAT, compiled with wasm-tools, and cross-checked against
 // the reference wasmtime (every expected value below was produced by it).
 // Covers: multi-value blocks/branches, integer div/rem traps, trapping and

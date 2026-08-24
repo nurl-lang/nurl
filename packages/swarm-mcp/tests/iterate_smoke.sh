@@ -22,14 +22,14 @@ fi
 PORT="${SWARM_PORT:-47894}"; MCPP="${SWARM_MCP_PORT:-48457}"
 TOKEN="iterate-smoke-secret"
 TMP="$(mktemp -d)"; export HOME="$TMP"; export TMPDIR="$TMP"
-BIN="$TMP/swarm-mcp"; WT="$TMP/wt"; node_pid=""
+BIN="$TMP/swarm-mcp"; NWASM="$TMP/nwasm"; node_pid=""
 cleanup() { [ -n "$node_pid" ] && kill -TERM "$node_pid" 2>/dev/null; sleep 0.3; [ -n "$node_pid" ] && kill -9 "$node_pid" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 MCP() { curl -sk -m 180 "https://127.0.0.1:$MCPP/mcp" -H 'Content-Type: application/json' -d "$1"; }
 
-echo "[iterate-smoke] building swarm-mcp + wasmtime"
+echo "[iterate-smoke] building swarm-mcp + nwasm"
 "$NURL_SH" "$HERE/src/main.nu" "$BIN" >/dev/null 2>&1 || { echo "[iterate-smoke] FAIL build swarm-mcp"; exit 1; }
-"$NURL_SH" "$REPO/packages/wasmtime/src/main.nu" "$WT" >/dev/null 2>&1 || { echo "[iterate-smoke] FAIL build wt"; exit 1; }
+"$NURL_SH" "$REPO/packages/nwasm/src/main.nu" "$NWASM" >/dev/null 2>&1 || { echo "[iterate-smoke] FAIL build nwasm"; exit 1; }
 
 # dataset: 3M values sampled from a fixed ramp; mean = (N-1)/2 * 1e-3
 N=3000000
@@ -44,7 +44,7 @@ MEAN="$(python3 -c "n=$N; print('%.4f' % (sum(k*1e-3 for k in range(n))/n))")"
 echo "[iterate-smoke] target mean = $MEAN"
 
 echo "[iterate-smoke] starting node on :$PORT / :$MCPP"
-WASMTIME="$WT" "$BIN" --token "$TOKEN" --relay --worker --gpu --mcp \
+NURL_WASM_RUNTIME="$NWASM" "$BIN" --token "$TOKEN" --relay --worker --gpu --mcp \
     --listen 127.0.0.1:"$PORT" --mcp-listen 127.0.0.1:"$MCPP" >"$TMP/node.log" 2>&1 &
 node_pid=$!; sleep 2.5
 fail=0

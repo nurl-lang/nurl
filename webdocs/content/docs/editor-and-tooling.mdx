@@ -86,10 +86,10 @@ counterpart to the hosted MCP endpoint. That endpoint is covered in
 
 ```bash
 nurlpkg install wasmbuilder     # NURL → wasm32-wasi, fully local
-nurlpkg install wasmtime        # pure-NURL wasm runtime
+nurlpkg install nwasm           # pure-NURL wasm runtime
 
 wasmbuilder program.nu          # → program.wasm
-wasmtime run program.wasm
+nwasm run program.wasm
 ```
 
 `wasmbuilder` drives `nurlc`. It retargets the emitted IR for wasm32-wasi.

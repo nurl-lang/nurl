@@ -58,7 +58,7 @@ $ `deps/wasmbuilder/src/build.nu`
 // to bump (previously the banners drifted to a stale 0.2.0 while the
 // handshake reported 0.4.0).
 
-@ nm_version → s { ^ `0.12.0` }
+@ nm_version → s { ^ `0.12.1` }
 
 // Log a startup banner "nurl-mcp <version> <suffix>" through mcp_log,
 // building the line from the single-source version so the banners can
@@ -533,7 +533,7 @@ version = "0.0.0"
                         ( json_obj_set res `wasm_bytes` ( json_int sz ) )
                         ( json_obj_set res `wasm_path` ( json_str_lit ( string_data outp ) ) )
                         ( json_obj_set res `ll_path` ( json_str_lit ( string_data ll_p ) ) )
-                        : String hint ( string_from `run: wt run ` )
+                        : String hint ( string_from `run: nwasm run ` )
                         ( string_push_str hint ( string_data outp ) )
                         ( json_obj_set res `note` ( json_str_lit ( string_data hint ) ) )
                         ( string_free hint )
@@ -549,7 +549,7 @@ version = "0.0.0"
                         ( string_push_str msg ( string_data outp ) )
                         ( string_push_str msg ` (` )
                         ( string_push_int msg sz )
-                        ( string_push_str msg ` bytes of wasm32-wasi). Run it: wt run ` )
+                        ( string_push_str msg ` bytes of wasm32-wasi). Run it: nwasm run ` )
                         ( string_push_str msg ( string_data outp ) )
                         ( string_free outp )
                         : Json j ( mcp_tool_result_text ( string_data msg ) )

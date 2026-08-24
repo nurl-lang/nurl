@@ -8,7 +8,7 @@
 #  comparing the IR it emits with the IR it was itself built from:
 #  `cmp build/nurlc_self.ll build/nurlc_self2.ll`. This gate is that
 #  same equality with the compiler running as wasm, in-process on
-#  `packages/wasmtime`, inside a unikernel:
+#  `packages/nwasm`, inside a unikernel:
 #
 #    1. wasmbuilder compiles compiler/nurlc.nu → nurlc.wasm. Native
 #       nurlc emits the IR, zig's wasm-ld links it — the one part of

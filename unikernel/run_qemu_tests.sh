@@ -448,7 +448,7 @@ fi
 # ── B10: the swarm-mcp appliance — the plan's endpoint milestone ──
 # The same package that runs hosted boots as the guest, joins the
 # cluster through the relay leg, and completes an expression task and
-# a compiled-wasm task (run in-process on the pure-NURL wasmtime — a
+# a compiled-wasm task (run in-process on the pure-NURL nwasm — a
 # guest has no processes). swarm_gate.sh prints its own detail lines,
 # including the measured cold-start-to-first-answer figure.
 if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then

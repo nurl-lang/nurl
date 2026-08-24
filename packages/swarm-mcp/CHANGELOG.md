@@ -1,12 +1,35 @@
 # Changelog
 
+## 0.28.0
+
+**The pure-NURL wasm runtime is now `nwasm`.** `packages/wasmtime` was
+renamed to [`packages/nwasm`](../nwasm) and published as `nwasm` 1.0.0 —
+the old name is a third-party trademark and reading it as *our* runtime
+was a standing source of confusion, especially on a box where both were
+installed. Nothing about the engine changed with the rename.
+
+**Breaking:** the environment variable that selects an external wasm
+runtime is now **`$NURL_WASM_RUNTIME`**; `$WASMTIME` is no longer read.
+A `--gpu` worker, which always uses the external CLI contract, must set
+the new name (or have `nwasm` on `PATH` — that is the new default binary
+the variable falls back to, replacing `wasmtime`).
+
+- Dependency pin: `wasmtime ^0.15.0` → `nwasm ^1.0.0`. The in-process
+  engine is the same code under a new name; the `interp_capture` call
+  this package makes is unchanged.
+- `__wasmtime` → `__wasm_runtime`, `wasmtime_probe` →
+  `wasm_runtime_probe`, `wasmtime_gpu_capable` →
+  `wasm_runtime_gpu_capable`. These are internal to the package.
+- The diagnostics a worker prints when it finds no runtime now say
+  `nurlpkg install nwasm`.
+
 ## 0.27.0
 
-**Follows `wasmtime` to 0.15.0.** The in-process wasm engine picks up
-`wasmtime` 0.15.0: predecoder pair fusion across the integer and f64
+**Follows `nwasm` to 0.15.0.** The in-process wasm engine picks up
+`nwasm` 0.15.0: predecoder pair fusion across the integer and f64
 op families, fuel metered at loop back edges, an intrusive frame chain
 with calls and returns inside the inner loop, and an experimental,
-opt-in (`NURL_WT_JIT`) template-JIT tier that lowers hot integer kernels
+opt-in (`NURL_NWASM_JIT`) template-JIT tier that lowers hot integer kernels
 to x86-64. All behaviour-preserving for the engine `interp_capture`
 call this package makes — the pin moves so a worker built against this
 release gets the faster runtime. No swarm-mcp API change.
@@ -14,7 +37,7 @@ release gets the faster runtime. No swarm-mcp API change.
 ## 0.26.0
 
 **The pins follow the runtime onto a wasm that has threads and sockets.**
-`wasmtime ^0.14.0` and `wasmbuilder ^0.2.0` are what the v0.50.0 toolchain
+`nwasm ^0.14.0` and `wasmbuilder ^0.2.0` are what the v0.50.0 toolchain
 released: a module can now declare a shared memory, spawn threads through
 `wasi.thread-spawn` and open real sockets through the `nurl_net` host
 imports (off by default, `--allow-net` enables them). For a worker running
@@ -46,7 +69,7 @@ next release cannot repeat it. (0.31.1 of the toolchain fixed this same
 drift once before by unifying three literals onto one `sm_version`; that
 addressed the symptom, not the fact that nothing checked the survivor.)
 
-The dependency pin follows the pure-NURL runtime to `wasmtime ^0.11.0`,
+The dependency pin follows the pure-NURL runtime to `nwasm ^0.11.0`,
 which is 3.1x faster over the wasm benchmark corpus and 7.5x on start-up
 than the 0.9.0 line 0.25.0 was pinned to — a worker's wasm chunks get all
 of it with no change here.
@@ -54,7 +77,7 @@ of it with no change here.
 ## 0.25.0
 
 **Workers run wasm in-process — and therefore inside a unikernel.** The
-pure-NURL wasmtime is now a package dependency (`deps/wasmtime`) and the
+pure-NURL `nwasm` is now a package dependency (`deps/nwasm`) and the
 default engine for CPU wasm chunks: the worker decodes the chunk's bytes and
 runs `_start` under `interp_capture`, with no runtime on PATH, no subprocess,
 no writable filesystem and no disk cache. That is what lets the swarm-mcp
@@ -64,10 +87,10 @@ host relay over virtio-net, runs both an expression task and a wasm-kernel
 task, and the reduce comes back exact (`unikernel/tests/swarm_gate.sh` gates
 it in CI, cold-start-to-first-answer measured).
 
-- `$WASMTIME` still selects an external runtime over the unchanged CLI
-  contract (`wasmtime run <module> <lo> <hi>`); GPU chunks always use the
+- `$NURL_WASM_RUNTIME` still selects an external runtime over the unchanged
+  CLI contract (`<runtime> run <module> <lo> <hi>`); GPU chunks always use the
   external contract and `--gpu` still requires it.
-- `wasmtime_probe` answers without spawning anything when the engine is
+- `wasm_runtime_probe` answers without spawning anything when the engine is
   in-process, so a worker's preflight no longer needs processes at all.
 - Fixed two error-path leaks: both stderr-capture sites bound and freed the
   intermediate `string_trim` argument instead of leaking it per failed chunk.

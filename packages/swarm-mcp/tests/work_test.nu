@@ -1,7 +1,7 @@
 // packages/swarm-mcp/tests/work_test.nu — offline tests for the map-reduce.
 // Verifies the kernel handler and that sharding reproduces the whole-range
 // answer for every reduce op. Run from the package root:
-//   NURL_STDLIB=<repo> ../../nurl.sh tests/work_test.nu /tmp/wt && /tmp/wt
+//   NURL_STDLIB=<repo> ../../nurl.sh tests/work_test.nu /tmp/wtest && /tmp/wtest
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

@@ -1,4 +1,4 @@
-// packages/wasmtime/tests/mem_test.nu — offline tests for linear memory:
+// packages/nwasm/tests/mem_test.nu — offline tests for linear memory:
 // load/store round-trips, sized byte access, the data section, and memory.size.
 // Hand-encoded modules, expected results cross-checked against real wasmtime.
 //   NURL_STDLIB=<repo> ../../nurl.sh tests/mem_test.nu /tmp/mt && /tmp/mt

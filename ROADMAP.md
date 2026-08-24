@@ -239,12 +239,12 @@ platform-specific shims.
   backend). Live YOLOE segmentation and tiny-YOLOv2 detection run in a tab
   with no server inference (`packages/yoloe-demo`, the playground objdet
   demo).
-- A **WebAssembly runtime written in pure NURL** (`packages/wasmtime`) that
+- A **WebAssembly runtime written in pure NURL** (`packages/nwasm`) that
   decodes and executes real `wasm32-wasi` modules (full int/float instruction
   set, linear/bulk memory, tables + `call_indirect`, WASI + `--dir` file ops),
   with no external runtime — and the compiler **self-hosts on wasm**: `nurlc`
   compiled to `wasm32-wasi` recompiles `nurlc.nu` to byte-identical IR, both
-  under the reference `wasmtime` and under this pure-NURL runtime.
+  under the external reference `wasmtime` and under this pure-NURL runtime.
 - Static cross-compiles: Linux ARM64 / RISC-V64 (musl). Milk-V Duo (RISC-V
   C906) validated on-device.
 - **Unikernel: a NURL program boots as its own kernel** — no host OS, no

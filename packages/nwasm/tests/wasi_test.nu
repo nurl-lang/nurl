@@ -1,11 +1,11 @@
-// packages/wasmtime/tests/wasi_test.nu — offline test for the WASI import
+// packages/nwasm/tests/wasi_test.nu — offline test for the WASI import
 // surface. Embeds a hand-assembled wasm32-wasi module that imports
 // `wasi_snapshot_preview1.fd_write` and `.proc_exit`, writes "hi from wasi\n"
 // to stdout (fd 1) via an iovec in linear memory, then exits with code 42.
 // The expected output + exit code are cross-checked against the reference
 // wasmtime. Verifies imports dispatch, the data section, fd_write's iovec
 // walk, and proc_exit setting the exit code.
-//   NURL_STDLIB=<repo> ../../nurl.sh tests/wasi_test.nu /tmp/wt && /tmp/wt
+//   NURL_STDLIB=<repo> ../../nurl.sh tests/wasi_test.nu /tmp/nwasm && /tmp/nwasm
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

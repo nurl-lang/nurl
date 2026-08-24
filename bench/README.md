@@ -193,7 +193,7 @@ wasm on **NURL's own runtime** costs:
 
 ```sh
 ./bench/wasmbench.sh                 # the whole suite (~15 min)
-./bench/wasmbench.sh --wt-all-langs  # + C/Rust on the interpreter (~45 min)
+./bench/wasmbench.sh --nwasm-all-langs  # + C/Rust on the interpreter (~45 min)
 ./bench/wasmbench.sh --quick --bench lcg
 ```
 
@@ -204,9 +204,9 @@ it is opt-in.
 
 Each benchmark's NURL, C and Rust sources are compiled **twice** — native
 and `wasm32-wasi` — and each module is run on **two** runtimes: the
-reference `wasmtime` (Cranelift JIT) and
-[`packages/wasmtime`](../packages/wasmtime), a WebAssembly interpreter
-written in pure NURL. Ten timed cells per row, all gated on printing the
+external reference `wasmtime` (Cranelift JIT) and
+[`packages/nwasm`](../packages/nwasm), a WebAssembly runtime written in
+pure NURL. Ten timed cells per row, all gated on printing the
 same line as the native NURL binary — the interpreter is *inside* the
 gate, because a runtime that gets the wrong answer quickly is not a fast
 runtime. Results: [`WASMRESULTS.md`](WASMRESULTS.md) and
@@ -226,18 +226,20 @@ honest test of a runtime written against NURL's own output.
 The pieces are all built from this repo rather than from an installed
 toolchain — `nurlc`, `stdlib/runtime.o`,
 [`packages/wasmbuilder`](../packages/wasmbuilder) (NURL → wasm) and
-`packages/wasmtime` (the runtime) — so the numbers describe this working
+`packages/nwasm` (the runtime) — so the numbers describe this working
 tree. What it additionally needs on the host is `zig` (wasi-libc +
 `wasm-ld`, and the NURL toolchain bundles one), `rustup target add
-wasm32-wasip1`, and a reference `wasmtime`, which is deliberately *not*
-vendored here: its whole job is to be the outside opinion.
+wasm32-wasip1`, and the external reference `wasmtime`, which is
+deliberately *not* vendored here: its whole job is to be the outside
+opinion.
 
-Point `$WASMTIME` at that reference binary explicitly. Left to its PATH
-lookup the script takes whatever `wasmtime` resolves to, and on a box with
-the NURL toolchain installed that is `$NURL_HOME/bin/wasmtime` — the
-pure-NURL interpreter — which would fill the reference-JIT column with the
-runtime the column exists to compare against. The report's environment
-table names both runtimes, so check it if a run looks odd.
+`$WASMTIME` points at that reference binary; left unset, the script takes
+whatever `wasmtime` resolves to on `PATH`. That lookup used to be a real
+hazard — the pure-NURL runtime installed itself as `$NURL_HOME/bin/wasmtime`
+and would quietly fill the reference-JIT column with the runtime the column
+exists to compare against. It is now installed as `nwasm`, so the two names
+cannot collide. The report's environment table still names both runtimes,
+so check it if a run looks odd.
 
 [`.github/workflows/wasm-bench.yml`](../.github/workflows/wasm-bench.yml)
 runs all of the above on a fixed `ubuntu-latest` runner and commits the

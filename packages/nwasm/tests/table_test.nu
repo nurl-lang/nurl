@@ -1,4 +1,4 @@
-// packages/wasmtime/tests/table_test.nu — offline tests for globals and
+// packages/nwasm/tests/table_test.nu — offline tests for globals and
 // call_indirect (tables + element segments). Hand-encoded modules, expected
 // results cross-checked against the reference wasmtime.
 //   NURL_STDLIB=<repo> ../../nurl.sh tests/table_test.nu /tmp/tt && /tmp/tt

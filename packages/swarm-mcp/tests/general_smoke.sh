@@ -25,14 +25,14 @@ fi
 PORT="${SWARM_PORT:-47896}"; MCPP="${SWARM_MCP_PORT:-48459}"
 TOKEN="general-smoke-secret"
 TMP="$(mktemp -d)"; export HOME="$TMP"; export TMPDIR="$TMP"
-BIN="$TMP/swarm-mcp"; WT="$TMP/wt"; node_pid=""
+BIN="$TMP/swarm-mcp"; NWASM="$TMP/nwasm"; node_pid=""
 cleanup() { [ -n "$node_pid" ] && kill -TERM "$node_pid" 2>/dev/null; sleep 0.3; [ -n "$node_pid" ] && kill -9 "$node_pid" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 MCP() { curl -sk -m 180 "https://127.0.0.1:$MCPP/mcp" -H 'Content-Type: application/json' -d "$1"; }
 
-echo "[general-smoke] building swarm-mcp + wasmtime"
+echo "[general-smoke] building swarm-mcp + nwasm"
 "$NURL_SH" "$HERE/src/main.nu" "$BIN" >/dev/null 2>&1 || { echo "[general-smoke] FAIL build swarm-mcp"; exit 1; }
-"$NURL_SH" "$REPO/packages/wasmtime/src/main.nu" "$WT" >/dev/null 2>&1 || { echo "[general-smoke] FAIL build wt"; exit 1; }
+"$NURL_SH" "$REPO/packages/nwasm/src/main.nu" "$NWASM" >/dev/null 2>&1 || { echo "[general-smoke] FAIL build nwasm"; exit 1; }
 
 # Deterministic two-cluster data + the numpy Lloyd oracle over the SAME bytes.
 INIT0=0.0; INIT1=50.0; ROUNDS=25
@@ -63,7 +63,7 @@ read -r O0 O1 < "$TMP/oracle.txt"
 echo "[general-smoke] numpy Lloyd oracle: c0=$O0 c1=$O1"
 
 echo "[general-smoke] starting node on :$PORT / :$MCPP"
-WASMTIME="$WT" "$BIN" --token "$TOKEN" --relay --worker --gpu --mcp \
+NURL_WASM_RUNTIME="$NWASM" "$BIN" --token "$TOKEN" --relay --worker --gpu --mcp \
     --listen 127.0.0.1:"$PORT" --mcp-listen 127.0.0.1:"$MCPP" >"$TMP/node.log" 2>&1 &
 node_pid=$!; sleep 2.5
 fail=0

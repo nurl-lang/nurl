@@ -5,16 +5,17 @@
 // expression — and compiles it (via the NURL build service) to a wasm32-wasi
 // module whose `main` reads `lo hi` from argv, folds the kernel over [lo, hi),
 // and prints the partial. The coordinator ships that module plus a sub-range to
-// each worker; the worker runs it under `wasmtime` and returns the partial,
+// each worker; the worker runs it under the wasm runtime and returns the
 // which the coordinator combines with the reduce op exactly as in phase 1.
 //
-// The runtime is the pure-NURL wasmtime, compiled INTO this binary
-// (deps/wasmtime) and run in-process by default: a worker needs no
+// The runtime is `nwasm`, the pure-NURL WebAssembly runtime, compiled
+// INTO this binary (deps/nwasm) and run in-process by default: a worker
+// needs no
 // external runtime, no subprocess and no writable filesystem — which is
-// what lets a unikernel guest run wasm chunks at all. Setting $WASMTIME
+// what lets a unikernel guest run wasm chunks at all. Setting $NURL_WASM_RUNTIME
 // switches CPU chunks to an external binary over the CLI contract
-// `wasmtime run <module> <lo> <hi>` (partial on stdout) — the
-// Bytecode-Alliance wasmtime for its JIT, or the pure-NURL CLI; GPU
+// `<runtime> run <module> <lo> <hi>` (partial on stdout) — the external
+// Bytecode-Alliance wasmtime for its JIT, or the `nwasm` CLI; GPU
 // chunks always use that external contract.
 //
 //   CPU chunk (kind_wasm)     : [lo:8 BE][hi:8 BE][wasm…]
@@ -39,8 +40,8 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/ext/env.nu`
-$ `deps/wasmtime/src/module.nu`
-$ `deps/wasmtime/src/interp.nu`
+$ `deps/nwasm/src/module.nu`
+$ `deps/nwasm/src/interp.nu`
 $ `token.nu`
 
 @ kind_wasm → i { ^ 2 }
@@ -319,63 +320,63 @@ $ `token.nu`
 }
 
 // ── the engine: in-process by default, external by request ───────
-// The pure-NURL wasmtime is a dependency of this package
-// (deps/wasmtime), so a worker runs CPU wasm chunks IN-PROCESS by
+// `nwasm`, the pure-NURL runtime, is a dependency of this package
+// (deps/nwasm), so a worker runs CPU wasm chunks IN-PROCESS by
 // default: no runtime on PATH, no subprocess, no writable filesystem
 // and no disk cache — which is what lets a unikernel guest, a machine
-// with none of those, run them at all. Setting $WASMTIME selects an
-// external runtime binary instead (the Bytecode-Alliance wasmtime for
-// its JIT, or the pure-NURL CLI) over the unchanged `wasmtime run
+// with none of those, run them at all. Setting $NURL_WASM_RUNTIME selects an
+// external runtime binary instead (the external Bytecode-Alliance
+// wasmtime for its JIT, or the `nwasm` CLI) over the unchanged `<runtime> run
 // <module> <lo> <hi>` contract. GPU chunks always use the external
 // binary: their out_file modes and the CUDA bridge are exercised and
 // supported there, and a --gpu worker already requires it.
-@ __wasm_external → String { ^ ( env_var_or `WASMTIME` `` ) }
+@ __wasm_external → String { ^ ( env_var_or `NURL_WASM_RUNTIME` `` ) }
 
 // The external runtime binary for the paths that always use one (GPU
-// chunks, and every path when $WASMTIME is set).
-@ __wasmtime → String { ^ ( env_var_or `WASMTIME` `wasmtime` ) }
+// chunks, and every path when $NURL_WASM_RUNTIME is set).
+@ __wasm_runtime → String { ^ ( env_var_or `NURL_WASM_RUNTIME` `nwasm` ) }
 
 // Can this node actually run wasm modules? A worker used to accept chunks with
 // no runtime installed and only reveal it as an unexplained failed chunk once a
 // task arrived; the node knows the answer at startup, so it should say so then.
 // Returns "" when the runtime works, else the reason it does not.
-@ wasmtime_probe → String {
+@ wasm_runtime_probe → String {
     // In-process engine: the runtime is compiled into this binary, so
     // there is nothing to probe and nothing that can be missing.
     : String ext ( __wasm_external )
     ? == ( string_len ext ) 0 { ( string_free ext ) ^ ( string_new ) } {}
     ( string_free ext )
-    : String wt ( __wasmtime )
+    : String rt ( __wasm_runtime )
     : ( Vec s ) args ( vec_new [s] )
     ( vec_push [s] args `--version` )
     : ~ String out ( string_new )
-    ?? ( process_run ( string_data wt ) args `` ) {
+    ?? ( process_run ( string_data rt ) args `` ) {
         T o → {
             ? == ( output_exit_code o ) 0 {} {
                 ( string_free out )
-                = out ( string_concat ( string_from `'` ) ( string_concat ( string_from ( string_data wt ) ) ( string_from `' is not a working wasm runtime (it exited non-zero on --version)` ) ) )
+                = out ( string_concat ( string_from `'` ) ( string_concat ( string_from ( string_data rt ) ) ( string_from `' is not a working wasm runtime (it exited non-zero on --version)` ) ) )
             }
             ( output_free o )
         }
         F e → {
             ( string_free out )
-            = out ( string_concat ( string_from `no wasm runtime: could not execute '` ) ( string_concat ( string_from ( string_data wt ) ) ( string_from `'` ) ) )
+            = out ( string_concat ( string_from `no wasm runtime: could not execute '` ) ( string_concat ( string_from ( string_data rt ) ) ( string_from `'` ) ) )
         }
     }
     ( vec_free [s] args )
-    ( string_free wt )
+    ( string_free rt )
     ^ out
 }
 
 // Does the resolved runtime understand --allow-gpu? Only the pure-NURL
-// wasmtime bridges CUDA/NVRTC host imports, and a --gpu worker without it can
+// nwasm bridges CUDA/NVRTC host imports, and a --gpu worker without it can
 // never run a GPU chunk. Checked by asking for its help text.
-@ wasmtime_gpu_capable → b {
-    : String wt ( __wasmtime )
+@ wasm_runtime_gpu_capable → b {
+    : String rt ( __wasm_runtime )
     : ( Vec s ) args ( vec_new [s] )
     ( vec_push [s] args `--help` )
     : ~ b ok F
-    ?? ( process_run ( string_data wt ) args `` ) {
+    ?? ( process_run ( string_data rt ) args `` ) {
         T o → {
             : String h ( string_from ( output_stdout o ) )
             ? ( string_contains h `--allow-gpu` ) { = ok T } {}
@@ -385,13 +386,13 @@ $ `token.nu`
         F e → {}
     }
     ( vec_free [s] args )
-    ( string_free wt )
+    ( string_free rt )
     ^ ok
 }
 
 // ── why a chunk failed ───────────────────────────────────────────
 // A failed chunk used to be a bare ok=0: the coordinator could count failures
-// but never say why, and the worker's real reason (no wasmtime on PATH, a
+// but never say why, and the worker's real reason (no wasm runtime on PATH, a
 // module trap, a CUDA error) was thrown away — leaving "failed_chunks: 2" as
 // the whole story an agent gets. The reason now rides home as a TRAILING
 // suffix on the result frame:
@@ -436,10 +437,10 @@ $ `token.nu`
 }
 
 // Run a cached module over [lo, hi). ok=1 iff the runtime ran the module to a
-// zero exit — a failed chunk (missing wasmtime, module trap, GPU error path
+// zero exit — a failed chunk (missing runtime, module trap, GPU error path
 // exiting non-zero) is REPORTED, not folded into the reduce as a silent zero.
 // allow_gpu≠0 passes --allow-gpu so the module's env imports (CUDA/NVRTC)
-// resolve to real hardware — this needs the pure-NURL packages/wasmtime.
+// resolve to real hardware — this needs the pure-NURL packages/nwasm.
 : WasmRun { i ok i value String err }
 
 @ __wasm_run String path i lo i hi i allow_gpu → WasmRun {
@@ -451,11 +452,11 @@ $ `token.nu`
     : s his ( nurl_str_int hi )
     ( vec_push [s] args los )
     ( vec_push [s] args his )
-    : String wt ( __wasmtime )
+    : String rt ( __wasm_runtime )
     : ~ i v 0
     : ~ i ok 0
     : ~ String err ( string_new )
-    ?? ( process_run ( string_data wt ) args `` ) {
+    ?? ( process_run ( string_data rt ) args `` ) {
         T out → {
             ? == ( output_exit_code out ) 0 { = ok 1 = v ( nurl_str_to_int ( output_stdout out ) ) } {
                 // The runtime's own words (a trap, a CUDA error) are the most
@@ -475,10 +476,10 @@ $ `token.nu`
         }
         F e → {
             ( string_free err )
-            = err ( string_concat ( string_from `could not run the wasm runtime '` ) ( string_concat ( string_from ( string_data wt ) ) ( string_from `' — put a wasmtime on PATH or set $WASMTIME (the pure-NURL 'nurlpkg install wasmtime' is a drop-in)` ) ) )
+            = err ( string_concat ( string_from `could not run the wasm runtime '` ) ( string_concat ( string_from ( string_data rt ) ) ( string_from `' — put a wasm runtime on PATH or set $NURL_WASM_RUNTIME (the pure-NURL 'nurlpkg install nwasm' is a drop-in)` ) ) )
         }
     }
-    ( string_free wt )
+    ( string_free rt )
     ( vec_free [s] args )
     ^ @ WasmRun { ok v err }
 }
@@ -554,7 +555,7 @@ $ `token.nu`
 }
 
 // The worker handler for a (CPU) wasm chunk: verify the cluster HMAC tag,
-// cache the module by content hash, run it under wasmtime, return the partial
+// cache the module by content hash, run it under the wasm runtime, return the partial
 // tagged for the coordinator. An untrusted/forged payload yields a tagged
 // ok=0 — a stranger can't make a worker fetch-and-run an arbitrary module.
 // `key` is the cluster HMAC key (token_key), captured by the handler closure.
@@ -580,7 +581,7 @@ $ `token.nu`
                     ( string_free why )
                     = why . wr err
                 } {
-                    // External runtime ($WASMTIME): the CLI contract needs
+                    // External runtime ($NURL_WASM_RUNTIME): the CLI contract needs
                     // a file, so cache the module by content hash.
                     : String hex ( _wasm_hash wasm )
                     : String path ( __wasm_cache_path hex )
@@ -630,7 +631,7 @@ $ `token.nu`
 
 : GpuOut { i ok i scalar ( Vec u ) bytes String err }
 
-// Run a cached module for one GPU chunk under `wt run --allow-gpu`.
+// Run a cached module for one GPU chunk under `nwasm run --allow-gpu`.
 // Scalar mode: the partial's f64 bits on stdout (as before). Sample/hist
 // modes: the module writes raw LITTLE-ENDIAN f64s to an output file the
 // worker names under $TMPDIR (preopened into the sandbox via --dir); the
@@ -702,17 +703,17 @@ $ `token.nu`
         ( vec_push [s] args # s + base ?? ( vec_get [i] offs + 2 t ) { T x → x F → 0 } )
         = t + t 1
     }
-    : String wt ( __wasmtime )
+    : String rt ( __wasm_runtime )
     : ~ i ok 0
     : ~ i scalar 0
     : ~ ( Vec u ) outb ( vec_new [u] )
     : ~ String gerr ( string_new )
     ? ! inp_ok {
-        ( string_free wt ) ( vec_free [s] args ) ( vec_free [i] offs ) ( string_free blob ) ( string_free inp ) ( string_free outp ) ( string_free tmp )
+        ( string_free rt ) ( vec_free [s] args ) ( vec_free [i] offs ) ( string_free blob ) ( string_free inp ) ( string_free outp ) ( string_free tmp )
         ( string_free gerr )
         ^ @ GpuOut { 0 0 outb ( string_from `could not stage the chunk's input data in $TMPDIR` ) }
     } {}
-    ?? ( process_run ( string_data wt ) args `` ) {
+    ?? ( process_run ( string_data rt ) args `` ) {
         T out → {
             ? == ( output_exit_code out ) 0 {
                 ? vecmode {
@@ -751,13 +752,13 @@ $ `token.nu`
         }
         F e → {
             ( string_free gerr )
-            = gerr ( string_concat ( string_from `could not run the wasm runtime '` ) ( string_concat ( string_from ( string_data wt ) ) ( string_from `' — a --gpu worker needs the pure-NURL wasmtime on PATH or in $WASMTIME` ) ) )
+            = gerr ( string_concat ( string_from `could not run the wasm runtime '` ) ( string_concat ( string_from ( string_data rt ) ) ( string_from `' — a --gpu worker needs the pure-NURL nwasm on PATH or in $NURL_WASM_RUNTIME` ) ) )
         }
     }
     ? vecmode { ?? ( file_delete ( string_data outp ) ) { T _ → {} F _ → {} } } {}
     ? hasdata { ?? ( file_delete ( string_data inp ) ) { T _ → {} F _ → {} } } {}
     ( vec_free [s] args ) ( vec_free [i] offs )
-    ( string_free blob ) ( string_free inp ) ( string_free outp ) ( string_free wt ) ( string_free tmp )
+    ( string_free blob ) ( string_free inp ) ( string_free outp ) ( string_free rt ) ( string_free tmp )
     ^ @ GpuOut { ok scalar outb gerr }
 }
 

@@ -8,6 +8,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`packages/wasmtime` is now `packages/nwasm`, published as `nwasm`
+  1.0.0.** The old name is a third-party trademark (the Bytecode Alliance
+  runtime), and using it for NURL's own runtime was a standing source of
+  confusion — most concretely in `bench/wasmbench.sh`, where a developer
+  box with the toolchain installed had `$NURL_HOME/bin/wasmtime` on
+  `PATH` and the harness could fill the *reference JIT* column with the
+  very runtime that column exists to compare against. Two different
+  binaries can no longer answer to one name.
+
+  Nothing about the engine changed. The CLI is unchanged apart from the
+  program name, and still mirrors the subset of the reference wasmtime's
+  interface it covers (`run --dir/--env/--fuel/--invoke`), so it remains
+  a drop-in for that usage. References to the external wasmtime as the
+  benchmark baseline and the semantics cross-check oracle stay — that is
+  a factual citation of another project, and the reason its expectations
+  are trustworthy.
+
+  What moved:
+  - `nurlpkg install wasmtime` → `nurlpkg install nwasm`; the installed
+    binary is `nwasm`, and `nwasm --version` reports `nwasm 1.0.0 (pure
+    NURL)`.
+  - Environment: `NURL_WT_JIT` / `NURL_WT_PIN` / `NURL_WT_GUARD` /
+    `NURL_WT_JIT_DUMP` → `NURL_NWASM_*`.
+  - `packages/swarm-mcp` 0.28.0 follows the pin (`nwasm ^1.0.0`) and, as
+    a **breaking change**, reads `$NURL_WASM_RUNTIME` instead of
+    `$WASMTIME` when selecting an external runtime; the binary that
+    variable falls back to is `nwasm`, not `wasmtime`.
+  - `bench/wasmbench.sh`: the `--wt-all-langs` flag is now
+    `--nwasm-all-langs` (and the workflow input `wt_all_langs` is
+    `nwasm_all_langs`); report and JSON label the column `nwasm`, and the
+    JSON keys `wasm_wt` / `wasmtime_ref` / `wasmtime_nurl` became
+    `wasm_nwasm` / `wasm_runtime_ref` / `wasm_runtime_nurl`. `$WASMTIME`
+    still names the reference binary the harness measures against.
+  - The package README dropped its accumulated optimisation narrative;
+    what the runtime does now is documented, what it cost to get there
+    lives in this file.
+
+  Existing changelog entries were rewritten to the new name so the repo
+  reads consistently; the published `wasmtime` package versions are
+  untouched and what to do with them is a separate decision.
+
 ## [0.50.0] — 2026-08-23
 
 ### Added
@@ -16,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preview1 has no way to open a socket — it can only accept on one the host
   preopened — so stdlib's socket layer under `__wasi__` was a set of stubs
   that answered every call with `NetOther`. It is now a set of thin wrappers
-  over wasm imports in the module `nurl_net`, and `packages/wasmtime`
+  over wasm imports in the module `nurl_net`, and `packages/nwasm`
   answers them with the very same `nurl_tcp_*` / `nurl_udp_*` /
   `nurl_dns_*` runtime entry points a native build links directly. A NURL
   program that listens, connects, resolves and serves works compiled to wasm
@@ -31,17 +74,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before the host sees it, and host-produced text (peer and local addresses,
   DNS answers) is copied into a guest-supplied buffer with an explicit cap.
 
-  The surface is off by default: `wasmtime run --allow-net` enables it
+  The surface is off by default: `nwasm run --allow-net` enables it
   (embedder API `interp_allow_net`), and without it a `nurl_net` import
   traps with a message that says so. The bridge is linked only into a module
   that actually calls a socket entry point, so a program that never opens
   one carries no import and still runs on any plain WASI runtime.
-  `packages/wasmtime/tests/net_test.sh` builds the same program native and
+  `packages/nwasm/tests/net_test.sh` builds the same program native and
   as wasm and compares the two runs.
 
 - **Threads on wasm (wasi-threads): `wasmbuilder --threads`.** A module built
   with it declares a shared memory, imports `wasi.thread-spawn` and exports
-  `wasi_thread_start`; `packages/wasmtime` runs it with one interpreter
+  `wasi_thread_start`; `packages/nwasm` runs it with one interpreter
   instance per thread — its own value stack, frames and globals, and
   therefore its own `__stack_pointer`, which the host sets from the guest's
   start block because C cannot assign a wasm global — over one linear
@@ -65,10 +108,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fiber.
 
   The measured result: `packages/swarm-mcp`, unmodified, compiled to one
-  wasm module and run with `wasmtime run --allow-net` — relay, three worker
+  wasm module and run with `nwasm run --allow-net` — relay, three worker
   threads and the MCP coordinator in a single instance — mints its own TLS
   certificate, answers MCP over HTTPS and serves compute requests, correct
-  every time. `packages/wasmtime/tests/threads_test.sh` builds a four-thread
+  every time. `packages/nwasm/tests/threads_test.sh` builds a four-thread
   program native and as wasm and compares the runs.
 
 - **`poll_oneoff`.** The one WASI call a server cannot do without: libc's
@@ -81,7 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`packages/wasmtime` 0.12.0 — 17.5 % off the wasm benchmark corpus, every
+- **`packages/nwasm` 0.12.0 — 17.5 % off the wasm benchmark corpus, every
   benchmark faster.** The interpreter's dispatch is a chain of equality tests
   on the record's opcode, and LLVM folds such a chain into jump tables in
   batches of 64 arms, in source order, each behind the previous batch's range
@@ -137,7 +180,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the link line, so the definition wins and no archive member is pulled. The
   same self-compile executes **5.19G wasm instructions instead of 7.83G**,
   runs **12 % faster on the reference JIT** and 15 % faster on
-  `packages/wasmtime`, byte-identical throughout. Native targets are
+  `packages/nwasm`, byte-identical throughout. Native targets are
   untouched: there libc's vectorised routine is the one you want.
 
 ### Fixed
@@ -186,14 +229,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries the sentinel as a literal. The token is escaped before use now, so
   the round trip is exact.
 
-- **`wasmtime`'s own flags were read out of the guest's argv.** `--help`,
+- **`nwasm`'s own flags were read out of the guest's argv.** `--help`,
   `--version` and `--allow-gpu` were scanned across all of argv, so
-  `wt run app.wasm --help` printed the runtime's usage and never started the
+  `nwasm run app.wasm --help` printed the runtime's usage and never started the
   module. Options are read up to the module path; everything after it is the
   guest's own argv, and `--` ends the runtime's options explicitly.
 
 - **A write into a directory that does not exist reported success.**
-  `wasmtime`'s `path_open` buffered a created file and only wrote it at
+  `nwasm`'s `path_open` buffered a created file and only wrote it at
   flush, where the error was swallowed. O_CREAT creates on the host at open
   time now, and `fd_close` / `fd_sync` return the errno. An out-of-bounds
   trap also names the address, the access width and the limit — the two
@@ -296,7 +339,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to a few instructions, but which is scored on its whole body, called
   from a caller large enough to push the decision the other way. An
   interpreter's dispatch loop is that shape exactly: marking
-  `packages/wasmtime`'s two linear-memory accessors took 9.5 % off the
+  `packages/nwasm`'s two linear-memory accessors took 9.5 % off the
   whole wasm benchmark corpus, 24 % off nbody and matmul, 19 % off sieve.
 
   Two combinations nurlc rejects rather than leaving to the backend:
@@ -326,7 +369,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Three ways a malformed wasm module could hang or mis-address
-  `packages/wasmtime`**, all found by the ASan/UBSan mutation sweep and all
+  `packages/nwasm`**, all found by the ASan/UBSan mutation sweep and all
   now in `tests/hardening_test.nu`:
 
   * **A count bound has to apply to the count, not to a sum containing
@@ -414,7 +457,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`packages/wasmtime` 0.11.0 — the interpreter is 3.1x faster over the
+- **`packages/nwasm` 0.11.0 — the interpreter is 3.1x faster over the
   benchmark corpus and 7.5x on start-up.** Three rounds on top of the
   0.9.0 work below, measured on one workstation so the ends are
   comparable: corpus 25.3 s → **8.17 s**, `nbody` 5.39 s → 0.93 s, hello
@@ -490,17 +533,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that experiment was scouting, would buy nothing. `nurlc`'s own token
   dispatch already lowers to one jump table with no help at all.
 
-- **`bench/wasmbench.sh` builds `wt` with `NURL_SPLIT=0`.** `nurl.sh`
+- **`bench/wasmbench.sh` builds `nwasm` with `NURL_SPLIT=0`.** `nurl.sh`
   defaults to lowering a large program as one module per core so the clang
   step parallelises, and ThinLTO cannot import every callee back across a
   part boundary — `docs/BUILDING.md` puts the cost at 3.4 % of the
-  program's own speed and says to turn it off for a release build. `wt` is
+  program's own speed and says to turn it off for a release build. `nwasm` is
   the subject of section 3 of the report and the reference runtime it is
   measured against is a release build; the split one measured **5.0 %
   slower** over the corpus, for a build-time saving a benchmark harness
   never spends.
 
-- **`packages/wasmtime` 0.9.0 — the interpreter is 30–49 % faster, and the
+- **`packages/nwasm` 0.9.0 — the interpreter is 30–49 % faster, and the
   reason was visible only once the executed opcodes were counted.** A
   histogram of every record the benchmark corpus dispatches said that
   45 % of them were `R_MOV`. Register form had kept the one thing that
@@ -613,7 +656,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `wt_all_langs` adds the C and Rust modules to the interpreter column.
   `$WASMTIME` is pinned to the installed reference binary rather than
   left to a PATH lookup, because on any box with the NURL toolchain
-  installed `wasmtime` on PATH is the *pure-NURL interpreter*, which
+  installed `wasmtime` on PATH was then the *pure-NURL interpreter*, which
   would quietly fill the reference-JIT column with the runtime that
   column exists to compare against.
 
@@ -621,7 +664,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is byte-identical to native.** `unikernel/demos/wasmc.nu` bakes
   `nurlc.wasm`, eight import-free corpus programs and the NATIVE
   compiler's IR for each into an image; the guest decodes the module on
-  `packages/wasmtime`, runs it IN-PROCESS (a unikernel has no subprocess
+  `packages/nwasm`, runs it IN-PROCESS (a unikernel has no subprocess
   to run it in) and compares byte for byte. All eight agree, 23 s under
   TCG. `unikernel/tests/wasmc_gate.sh` runs the whole chain from
   `nurlc.nu` to the comparison and is wired into the guest suite; it
@@ -644,8 +687,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   appliance.** The same `packages/swarm-mcp` that runs hosted builds as
   a guest, `--connect`s to the relay, appears in the census and answers
   both expression and compiled-wasm tasks. Wasm runs IN-PROCESS on the
-  pure-NURL wasmtime (now a dependency and the default engine;
-  `$WASMTIME` still selects an external one, which GPU work needs).
+  pure-NURL nwasm runtime (now a dependency and the default engine;
+  `$NURL_WASM_RUNTIME` selects an external one, which GPU work needs).
   Measured under TCG: join 6 s, cold start to first answer 8–9 s.
   `unikernel/tests/swarm_gate.sh` runs it on every commit. Also from
   that work: a DNS resolver over the pure UDP stack
@@ -5827,11 +5870,11 @@ an honest measurement of what that costs — and building one turned up the
 reason nobody had noticed the cost was wrong.
 
 `bench/wasmbench.sh` compiles every benchmark in the corpus to native *and*
-wasm in three languages and runs each module on two runtimes: the reference
-`wasmtime` and `packages/wasmtime`. Running both is what earns its keep. A
-JIT re-optimises whatever it is handed, so it reports about the same number
-for a good module and a bad one; an interpreter executes exactly what is in
-the module. That asymmetry exposed `zig cc` silently dropping `-O` for LLVM
+wasm in three languages and runs each module on two runtimes: the external
+reference `wasmtime` and `packages/nwasm`. Running both is what earns its
+keep. A JIT re-optimises whatever it is handed, so it reports about the same
+number for a good module and a bad one; an interpreter executes exactly what
+is in the module. That asymmetry exposed `zig cc` silently dropping `-O` for LLVM
 IR inputs — **every wasm module the toolchain had ever produced shipped
 unoptimised**, invisible in the reference column and a 5.5× gap in the
 interpreter's.
@@ -5855,7 +5898,7 @@ prefix, and `./build.sh` never building `nurlpkg`.
 
 ### Changed
 
-- **`packages/wasmtime`: linear-memory access in words, frames from a
+- **`packages/nwasm`: linear-memory access in words, frames from a
   pool.** Two follow-ups to the register core, measured separately. Memory
   first: `__mem_load`/`__mem_store` did a bounds-checked `Vec` access per
   *byte* — an `i64.load` was eight of them. Now one bounds check up front,
@@ -5872,7 +5915,7 @@ prefix, and `./build.sh` never building `nurlpkg`.
   30.5 s → 24.0 s, still byte-identical. The pool's high-water mark is the
   deepest recursion into that one function, already capped by max_depth.
 
-- **`packages/wasmtime` executes in register form — the value stack is gone
+- **`packages/nwasm` executes in register form — the value stack is gone
   from the hot path.** wasm validation guarantees a static stack height at
   every instruction, so predecode now assigns the value at height h to slot
   (locals + h) of one flat per-frame array and resolves every operand to an
@@ -5896,7 +5939,7 @@ prefix, and `./build.sh` never building `nurlpkg`.
   start of the cycle — 11x across the two rewrites). All 7 package suites
   pass unchanged.
 
-- **`packages/wasmtime` executes predecoded function bodies.** The
+- **`packages/nwasm` executes predecoded function bodies.** The
   interpreter used to walk raw bytes: every operand LEB128-decoded again on
   every execution, and — much worse — every `block`/`loop`/`if` *scanned
   forward through its own body* to find the matching `end` each time it
@@ -5932,7 +5975,7 @@ prefix, and `./build.sh` never building `nurlpkg`.
   functions. Before flipping, that blocker was re-tested at exactly the
   documented scale — a `--gc-sections`-linked `nurlc.wasm` **self-compiles
   the 65k-line compiler byte-identically to the native binary** under both
-  the reference `wasmtime` and the pure-NURL `wt`, and the closure corpus
+  the reference `wasmtime` and the pure-NURL `nwasm`, and the closure corpus
   (`test_05_closures_and_capture`, `test_06_torture_chamber`) passes.
   Whatever produced the historical trap, today's `wasm-ld` relocates
   address-taken functions correctly through GC.
@@ -5992,7 +6035,7 @@ prefix, and `./build.sh` never building `nurlpkg`.
   **NURL's own runtime** costs. Every benchmark's NURL, C and Rust sources
   are compiled twice — native and `wasm32-wasi` — and each module is run
   on two runtimes: the reference `wasmtime` (Cranelift JIT) and
-  `packages/wasmtime`, the WebAssembly interpreter written in pure NURL.
+  `packages/nwasm`, the WebAssembly interpreter written in pure NURL.
   Ten timed cells per row, all gated on printing the same line as the
   native NURL binary, the interpreter *inside* the gate rather than beside
   it — a runtime that gets the wrong answer quickly is not a fast runtime.
@@ -6001,10 +6044,10 @@ prefix, and `./build.sh` never building `nurlpkg`.
     wasm-vs-native ratio cannot tell "wasm is slower here" from "NURL's
     wasm pipeline is slower here". And modules emitted by two other LLVM
     frontends are the only honest test of a runtime developed against
-    NURL's own output: `packages/wasmtime` runs all 15 benchmarks from all
+    NURL's own output: `packages/nwasm` runs all 15 benchmarks from all
     three languages with output identical to native.
   - **Everything under test is built from the working tree** — `nurlc`,
-    `stdlib/runtime.o`, `packages/wasmbuilder` and `packages/wasmtime` —
+    `stdlib/runtime.o`, `packages/wasmbuilder` and `packages/nwasm` —
     so the numbers describe this repo and not whatever is in `$NURL_HOME`.
   - **Running both runtimes is what found the bug.** A JIT re-optimises
     whatever it is given, so it reports roughly the same number for a good
@@ -6030,7 +6073,7 @@ prefix, and `./build.sh` never building `nurlpkg`.
   costs stays a measured number: ~25 % more module and most of a JIT
   runtime's module-load floor.
 
-- **`wasmtime --version` / `--help`.** The package had neither, while its
+- **`nwasm --version` / `--help`.** The package had neither, while its
   sibling `wasmbuilder` had both, so nothing that shelled out to it could
   record which runtime produced a result.
 
@@ -6101,13 +6144,13 @@ prefix, and `./build.sh` never building `nurlpkg`.
 
   A JIT hid this completely, which is why it lasted: Cranelift re-optimises
   whatever it is handed, so the reference `wasmtime` timings moved by
-  nothing. An interpreter cannot — `packages/wasmtime` ran `lcg` at 1M
+  nothing. An interpreter cannot — `packages/nwasm` ran `lcg` at 1M
   iterations in 1.09 s before and 0.20 s after, and the full 20M-iteration
   benchmark went **17.86 s → 2.77 s**. The gap between those two columns is
   what made the bug visible at all, and it is the reason the wasm suite runs
   both runtimes rather than only the fast one.
 
-- **`packages/wasmtime`: the interpreter loop re-read its frame on every
+- **`packages/nwasm`: the interpreter loop re-read its frame on every
   instruction.** The frame stack only moves on a call, a return, or falling
   off the end of a body, but the loop did a bounds-checked `vec_get`, an
   Option unwrap and a dependent load per *instruction*, then copied
@@ -6130,7 +6173,7 @@ prefix, and `./build.sh` never building `nurlpkg`.
 
 - **`wasmbuilder --version` reported 0.1.1 when the package was 0.1.3.** A
   version string is what a bug report quotes; a stale one misattributes the
-  bug. Both this and the new `wasmtime` version literal carry a comment
+  bug. Both this and the new `nwasm` version literal carry a comment
   saying to keep them in step with `nurl.toml`.
 
 - **`wasmbuilder`'s `--cflags`, `--obj` and `--asyncify-imports` were
@@ -8542,7 +8585,7 @@ uploaded datasets).
   symbols become host-resolved wasm imports; defined symbols win), now
   expressed in the IR. A `@main` alias keeps zig's debug-mode wasi-libc
   linking at `-O0`. Corpus-tested: 13 repo examples byte-identical to their
-  native builds under both the reference wasmtime and the pure-NURL `wt`;
+  native builds under both the reference wasmtime and the pure-NURL `nwasm`;
   the compiler itself (65k lines) built through wasmbuilder compiles
   programs byte-identically to its native twin.
 
@@ -8602,7 +8645,7 @@ uploaded datasets).
   `fwrite`) instead of stdout, and the result frame `[ok][count][f64…]` keeps
   chunk failures visible. All-in-one nodes with `--gpu` require a same-version
   cluster for GPU tasks (CPU task wires are unchanged).
-- **`packages/wasmtime` v0.6.1**: `nvrtcCompileProgram`'s options array is now
+- **`packages/nwasm` v0.6.1**: `nvrtcCompileProgram`'s options array is now
   marshalled correctly — each guest `char*` entry is translated to a host
   pointer (bounded, NULL for out-of-range), mirroring `cuLaunchKernel`'s
   void** handling. Previously any nonzero option count handed libnvrtc guest
@@ -8618,7 +8661,7 @@ uploaded datasets).
   Workers started with `--gpu` advertise a capability bit in the HELLO gossip
   (a trailing byte older nodes ignore); every node folds GPU workers into a
   GPU-only ring and the GPU wasm task kind routes on it, so mixed CPU/GPU
-  clusters just work. GPU chunks run under the pure-NURL wasmtime with
+  clusters just work. GPU chunks run under the pure-NURL nwasm runtime with
   `--allow-gpu`, executing CUDA/NVRTC host imports on the worker's real GPU.
   New MCP tool **`compute_submit_cuda`**: the model writes only a CUDA-C
   `__device__ double f(long long x)`; the server generates the complete kernel
@@ -8638,7 +8681,7 @@ uploaded datasets).
 
 ## [0.10.9] — 2026-07-02
 
-A **wasm toolchain** release. The pure-NURL `packages/wasmtime` runtime grows
+A **wasm toolchain** release. The pure-NURL `packages/nwasm` runtime grows
 from a proof-of-concept into a spec-faithful, hostile-input-hardened WebAssembly
 engine — real traps and multi-value blocks, bulk memory + reference types, a
 bounded explicit frame stack with fuel metering and name-section backtraces, a
@@ -8660,7 +8703,7 @@ bootstrap core and the stdlib FFI shims.
   imports; a genuinely missing symbol traps at run time with its name. This is
   what lets a GPU package (objdet → onnx → gpu) compile to a wasm module the host
   resolves against real libcuda/libnvrtc.
-- **`packages/wasmtime` — WASI expansion.** `environ_get`/`_sizes_get` from
+- **`packages/nwasm` — WASI expansion.** `environ_get`/`_sizes_get` from
   repeatable `--env NAME=VALUE` (capability-style; the host environment is never
   inherited implicitly); real `clock_time_get` (wall + monotonic, ns) and
   `random_get` from the OS CSPRNG (both previously returned zeros); a `path_open`
@@ -8669,18 +8712,18 @@ bootstrap core and the stdlib FFI shims.
   `fd_write`, a directory surface (`fd_readdir`, `path_create_directory`,
   `path_remove_directory`, `path_unlink_file`, `path_rename`,
   `path_filestat_get`), and multiple preopens via repeatable `--dir`.
-- **`packages/wasmtime` — bulk memory + reference types.** Passive data/element
+- **`packages/nwasm` — bulk memory + reference types.** Passive data/element
   segments (`memory.init`/`data.drop`, `table.init`/`elem.drop`), a runtime
   funcref table mutable via `table.get`/`set`/`grow`/`size`/`fill`/`copy`,
   `ref.null`/`ref.is_null`/`ref.func` and typed `select`, and up-front
   bounds-checked `memory.copy`/`fill`/`init` (no partial writes before a trap).
-- **`packages/wasmtime` — explicit frame stack, fuel metering, backtraces.**
+- **`packages/nwasm` — explicit frame stack, fuel metering, backtraces.**
   `exec_func` drives an explicit frame stack, so guest calls no longer recurse on
   the host native stack — deep guest recursion is bounded by `max_depth` (65536
   frames, trap `call stack exhausted`) instead of a host stack overflow (verified
   1M-deep). Optional `--fuel N` traps a runaway guest after N instructions; the
   custom `name` section is decoded and traps append a wasm backtrace.
-- **`packages/wasmtime` — CUDA/NVRTC GPU host-import bridge.** Resolves a GPU wasm
+- **`packages/nwasm` — CUDA/NVRTC GPU host-import bridge.** Resolves a GPU wasm
   module's `cuda`/`nvrtc` imports to real libcuda/libnvrtc, marshalling guest
   linear memory ↔ host (every `*u` param is a guest offset → host address;
   opaque handles and `CUdeviceptr` travel as raw `i64`; `cuLaunchKernel`'s guest
@@ -8709,17 +8752,17 @@ bootstrap core and the stdlib FFI shims.
   now *defines the core symbol set* a bootstrap/`no_std` target must
   provide (unblocks ROADMAP D2). Organisational only: no behavioural
   change, self-host fixed point held, full corpus + sanitizer suite green.
-- **`packages/wasmtime` — core semantics: multi-value, real traps, checked
+- **`packages/nwasm` — core semantics: multi-value, real traps, checked
   `call_indirect`.** Block types decode as signed-LEB `s33` (multi-value
   blocks/loops/ifs), `call_indirect` performs the runtime structural signature
   check, the `start` section runs at instantiation, integer divide-by-zero and
   `INT_MIN/-1` overflow trap, float→int truncation traps on NaN / out-of-range
   (with saturating `0xfc` forms), and float min/max/compare are NaN-correct.
-- **`packages/wasmtime` — import layer strictness.** Imports record their module
+- **`packages/nwasm` — import layer strictness.** Imports record their module
   name and dispatch verifies `wasi_snapshot_preview1`; a table/memory/global
   import (or `global.get` in a const expression) is now a hard decode error
   instead of being silently skipped.
-- **`packages/wasmtime` — hardened against hostile input (v0.6.0).** Audited
+- **`packages/nwasm` — hardened against hostile input (v0.6.0).** Audited
   against malformed/adversarial wasm (ASan-fuzz + exhaustive prefix sweep): every
   vector count is validated against the bytes physically remaining before
   allocating (`__chk_count`), negative/over-long section and name-subsection
@@ -8979,8 +9022,8 @@ run them across the cluster.
 
 ### Added
 
-- **`packages/wasmtime` — a WebAssembly runtime written in pure NURL.** No
-  libwasm, no embedded interpreter, no external `wasmtime` binary: it decodes a
+- **`packages/nwasm` — a WebAssembly runtime written in pure NURL.** No
+  libwasm, no embedded interpreter, no external runtime binary: it decodes a
   wasm binary (LEB128, every standard section) and interprets the full integer +
   float instruction set — structured control flow (`block`/`loop`/`if`/`else`/
   `br`/`br_if`/`br_table`/`return`), `i32`/`i64` arithmetic / comparison /
@@ -8998,7 +9041,7 @@ run them across the cluster.
 - **NURL self-hosts on WebAssembly.** The compiler compiled to `wasm32-wasi`
   (`nurlc.wasm`) compiles NURL source — up to and including the full compiler
   `nurlc.nu` itself — to IR **byte-identical to the native `nurlc`**, under both
-  the reference `wasmtime` and the pure-NURL `packages/wasmtime` runtime above
+  the reference `wasmtime` and the pure-NURL `packages/nwasm` runtime above
   (the 2.4 MB / 65530-line self-compile is md5-verified). The borrow-checker
   analysis is skipped for the wasm self-compile (`--no-borrowck`); it emits no
   IR, so the output is identical. Reaching this required the three `wasm32` ABI

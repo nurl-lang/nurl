@@ -11,12 +11,12 @@ nurlpkg install wasmbuilder
 wasmbuilder program.nu            # → program.wasm
 ```
 
-Run the result with any wasm runtime — the reference `wasmtime`, or the
+Run the result with any wasm runtime — the external `wasmtime`, or the
 pure-NURL one from this registry:
 
 ```sh
-nurlpkg install wasmtime
-wt run program.wasm
+nurlpkg install nwasm
+nwasm run program.wasm
 ```
 
 ## How it works
@@ -83,7 +83,7 @@ Since 0.1.4 modules are linked with `-Wl,--gc-sections`: unreachable
 code — mostly the part of the NURL runtime a program never calls — is
 dropped at link time. It is worth ~25 % of the module (`bench/lcg.nu`:
 1064 KiB → 820 KiB) and most of a JIT runtime's load-the-module floor
-(an empty program under the reference `wasmtime`: ~60 ms → ~10 ms),
+(an empty program under the external `wasmtime`: ~60 ms → ~10 ms),
 because the runtime stops translating code nothing reaches.
 
 Earlier versions defaulted to `--no-gc-sections`, citing a real trap:
@@ -92,8 +92,8 @@ table, and `nurlc.wasm` (>150 functions) was observed to `call_indirect`
 -trap under it. That blocker was re-tested at exactly the documented
 scale on 2026-07-27 and does not reproduce: a `--gc-sections`-linked
 `nurlc.wasm` **self-compiles the 65k-line compiler byte-identically to
-the native binary** under both the reference `wasmtime` and the
-pure-NURL `wt`, and the closure corpus (`test_05_closures_and_capture`,
+the native binary** under both the external `wasmtime` and the
+pure-NURL `nwasm`, and the closure corpus (`test_05_closures_and_capture`,
 `test_06_torture_chamber`) passes. Today's `wasm-ld` relocates
 address-taken functions correctly through GC.
 
@@ -156,4 +156,4 @@ next to its native twin and diffs the output byte-for-byte, then
 exercises the library API. The pipeline is also validated at scale: the
 NURL compiler itself (65k lines) built through wasmbuilder produces
 byte-identical output to its native twin under both the reference
-wasmtime and the pure-NURL `wt`.
+wasmtime and the pure-NURL `nwasm`.

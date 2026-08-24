@@ -1,4 +1,4 @@
-// packages/wasmtime/src/module.nu — WebAssembly binary decoder (pure NURL).
+// packages/nwasm/src/module.nu — WebAssembly binary decoder (pure NURL).
 //
 // Decodes a wasm32 module's structure: the magic/version header and the
 // sections this runtime understands (type, function, table, memory, global,

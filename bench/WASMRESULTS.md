@@ -32,7 +32,7 @@ row, all gated on printing the same line (section 7).
 | C → wasm | `zig 0.16.0 cc --target=wasm32-wasi` |
 | Rust → wasm | `rustc --target wasm32-wasip1` |
 | wasm runtime (reference) | `wasmtime 48.0.0 (f1412a598 2026-08-20)` — Cranelift JIT |
-| wasm runtime (NURL) | `packages/wasmtime` (wasmtime 0.15.0 (pure NURL)) — template JIT + interpreter, built from this repo, `NURL_SPLIT=0` (release build; see below) |
+| wasm runtime (NURL) | `packages/nwasm` (nwasm 0.15.0 (pure NURL)) — template JIT + interpreter, built from this repo, `NURL_SPLIT=0` (release build; see below) |
 
 | Setting | Value |
 |---|---|
@@ -40,9 +40,9 @@ row, all gated on printing the same line (section 7).
 | Timed runs per cell | up to 5, adaptive: as many as fit in 8000 ms |
 | Timed compiles per cell | 3 (median) |
 | Per-run timeout | 900 s |
-| C/Rust on the NURL interpreter | no (add --wt-all-langs) |
+| C/Rust on the NURL interpreter | no (add --nwasm-all-langs) |
 | Reference runtime cache | **off** (`-C cache=n`) — every cell is decode + compile + run |
-| `wt` build | `NURL_SPLIT=0` — `nurl.sh` otherwise lowers a large program as one module per core, and ThinLTO cannot import every callee back across a part boundary. `wt` is the subject of section 3, and the reference runtime it is measured against is a release build; a split `wt` measured 5.0% slower over this corpus. |
+| `nwasm` build | `NURL_SPLIT=0` — `nurl.sh` otherwise lowers a large program as one module per core, and ThinLTO cannot import every callee back across a part boundary. `nwasm` is the subject of section 3, and the reference runtime it is measured against is a release build; a split `nwasm` measured 5.0% slower over this corpus. |
 
 ## 1. What wasm costs — native vs the same module on a JIT
 
@@ -110,11 +110,11 @@ the reasons it is no longer the default.
 | `json_parse` | 5.3 | — | 4.7 | — |
 | `nbody` | 1.7 | — | 1.6 | 1.2 |
 
-## 3. The pure-NURL runtime (`packages/wasmtime`)
+## 3. The pure-NURL runtime (`packages/nwasm`)
 
 The identical modules from section 1, executed by a runtime written in
 NURL instead of in Rust: a register-record interpreter with a template
-JIT on top (on by default; `NURL_WT_JIT=0` keeps the pure interpreter,
+JIT on top (on by default; `NURL_NWASM_JIT=0` keeps the pure interpreter,
 and metered or shared-memory runs fall back to it on their own).
 `vs JIT` is the cost of the runtime; `vs native` is the end-to-end
 cost of choosing this way to ship. The size of the gap is measured
@@ -123,11 +123,11 @@ rather than assumed, per benchmark, so it can be aimed at.
 Read the floor row first, because it goes the other way: on a program
 that does nothing this runtime *beats* the reference. Nothing surprising
 is happening — the reference compiles the whole module before `_start`,
-and `wt` only decodes it, compiling nothing but what runs. That
+and `nwasm` only decodes it, compiling nothing but what runs. That
 crossover is the honest answer to "which runtime should I use": it
 depends entirely on how long the guest runs.
 
-| Benchmark | NURL on `wt` | vs JIT | vs native | C on `wt` | Rust on `wt` |
+| Benchmark | NURL on `nwasm` | vs JIT | vs native | C on `nwasm` | Rust on `nwasm` |
 |---|---:|---:|---:|---:|---:|
 | _(floor: empty program)_ | _3.359_ | _0.3_ | _2.3_ | _SKIPPED_ | _SKIPPED_ |
 | `lcg` | 41.854 | 0.6 | 1.1 | SKIPPED | SKIPPED |
@@ -149,7 +149,7 @@ depends entirely on how long the guest runs.
 The C and Rust columns are `SKIPPED`: they are the cross-frontend
 control — modules this runtime never saw during development, from two
 other LLVM frontends — and running them costs about three times the
-whole rest of the suite, so they are opt-in. `--wt-all-langs` fills
+whole rest of the suite, so they are opt-in. `--nwasm-all-langs` fills
 them in. Until it is run, this section says what the interpreter does
 with NURL output and nothing about whether it is tuned for it.
 

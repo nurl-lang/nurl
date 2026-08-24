@@ -203,7 +203,7 @@ installs programs from the registry at
 away: `nurl-lsp` + the VS Code extension come with a source checkout's
 `./install.sh`; `nurlpkg install nurl-mcp` drives the local toolchain from
 an LLM agent over MCP; `nurlpkg install wasmbuilder` compiles NURL to
-wasm32-wasi locally and `nurlpkg install wasmtime` runs it with a
+wasm32-wasi locally and `nurlpkg install nwasm` runs it with a
 pure-NURL runtime. Details: [`docs/TOOLING.md`](docs/TOOLING.md).
 
 ---

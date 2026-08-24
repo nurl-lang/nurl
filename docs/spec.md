@@ -339,7 +339,7 @@ being asked. Ask when it is not: a helper whose arguments are *constants
 at every call site* collapses to a handful of instructions once inlined,
 but is scored on its whole body — and a very large caller (an interpreter
 dispatch loop is the shape) pushes the decision the wrong way. In
-`packages/wasmtime`, `inline` on the two linear-memory accessors was 9.5 %
+`packages/nwasm`, `inline` on the two linear-memory accessors was 9.5 %
 off the whole benchmark corpus and 24 % off its float benchmark.
 
 It is a request the backend cannot refuse, so it is also a way to make a
