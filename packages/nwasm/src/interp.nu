@@ -2860,6 +2860,34 @@ inline @ __fr_setpos s tp i v → v {
     ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
 }
 
+// lea eax,[base + idx<<k]: the whole guest-address computation — shift,
+// add and the u32 wrap — in one instruction (the 32-bit destination IS
+// the mask). Register numbers use the emitter's convention: 0 = rax,
+// 1 = rcx, 4..7 = the pinned r12..r15 (raw __jit_pr values).
+@ __jit_lea32 ( Vec u ) buf i k i idx i base → v {
+    : i rex + 64 + ? >= idx 4 2 0 ? >= base 4 1 0
+    ? != rex 64 { ( __jit_b buf rex ) } {}
+    ( __jit_b buf 141 )
+    ? == & base 7 5 {  // r13 base: SIB base 101 means disp32 under mod00 — use mod01 + 0
+        ( __jit_b buf 68 ) ( __jit_b buf + * k 64 + * & idx 7 8 & base 7 ) ( __jit_b buf 0 )
+    } {
+        ( __jit_b buf 4 ) ( __jit_b buf + * k 64 + * & idx 7 8 & base 7 )
+    }
+}
+
+// lea eax,[idx<<k] (no base register)
+@ __jit_lea32nb ( Vec u ) buf i k i idx → v {
+    ? >= idx 4 { ( __jit_b buf 66 ) } {}
+    ( __jit_b buf 141 ) ( __jit_b buf 4 ) ( __jit_b buf + * k 64 + * & idx 7 8 5 ) ( __jit_d buf 0 )
+}
+
+// lea eax,[r_pb + disp32] (pinned base, constant index)
+@ __jit_lea32bd ( Vec u ) buf i base i disp → v {
+    ( __jit_b buf 65 ) ( __jit_b buf 141 )
+    ? == & base 7 4 { ( __jit_b buf 132 ) ( __jit_b buf 36 ) } { ( __jit_b buf + 128 & base 7 ) }  // r12 needs a SIB
+    ( __jit_d buf disp )
+}
+
 // Pad with multi-byte NOPs to the next 16-byte boundary (loop heads).
 @ __jit_align16 ( Vec u ) buf → v {
     : ~ i pad & - 16 & ( vec_len [u] buf ) 15 15
@@ -3658,6 +3686,15 @@ inline @ __fr_setpos s tp i v → v {
     } {}
     ? | == op 205 == op 206 {  // LOADSHL64/32: dst = mem[(x<<k) w32 + off]; b=x d=kslot
         : i kc ( __jit_pr pmap d )
+        : i kv5 ? == kc -2 ( __jit_cv cvals d ) -1
+        ? & & != 0 guard >= kv5 0 <= kv5 3 {  // guard mode: one lea replaces shift+wrap
+            : i px5 ( __jit_pr pmap b )
+            : ~ i idx5 1
+            ? >= px5 0 { = idx5 px5 } { ( __jit_ldrcx_m buf pmap xmap cvals b ) }
+            ( __jit_lea32nb buf kv5 idx5 )
+            ? == op 205 { ( __jit_mem buf 0 0 139 0 c ) } { ( __jit_mem buf 0 0 99 0 c ) }
+            ( __jit_strax_m buf pmap xmap cvals a ) ^ v
+        } {}
         ? != kc -2 { ( __jit_ldrcx_m buf pmap xmap cvals d ) } {}  // k (shl masks cl by 31)
         : i px ( __jit_pr pmap b )
         ? >= px 0 { ( __jit_opeax_pr buf 139 px ) } {  // mov eax,r1Xd
@@ -3665,7 +3702,6 @@ inline @ __fr_setpos s tp i v → v {
         }
         ? == kc -2 { ( __jit_b buf 193 ) ( __jit_b buf 224 ) ( __jit_b buf & ( __jit_cv cvals d ) 31 ) } {  // shl eax,imm8
             ( __jit_b buf 211 ) ( __jit_b buf 224 ) }  // shl eax,cl
-        ( __jit_movslq buf )  // __w32
         ( __jit_bc buf pat_at pat_rec trap_rec c ? == op 205 8 4 guard )
         ? == op 205 { ( __jit_mem buf 0 0 139 0 c ) } { ( __jit_mem buf 0 0 99 0 c ) }  // mov rax,[mem] / movsxd rax,dword[mem]
         ( __jit_strax_m buf pmap xmap cvals a ) ^ v
@@ -3815,6 +3851,21 @@ inline @ __fr_setpos s tp i v → v {
     } {}
     ? | == op 207 == op 208 {  // LOADSHLADD64/32: dst = mem[(base + (x<<k)) w32 + off]; b=base d=x w5=kslot
         : i kc2 ( __jit_pr pmap w5 )
+        : i kcv ? == kc2 -2 ( __jit_cv cvals w5 ) -1
+        // guard mode + scale-compatible constant k: one 32-bit lea IS the
+        // shift, the add and the wrap — the pointer-chase critical path
+        // collapses to lea + load.
+        ? & & != 0 guard >= kcv 0 <= kcv 3 {
+            : i ps9 ( __jit_pr pmap d )
+            : ~ i idx9 1
+            ? >= ps9 0 { = idx9 ps9 } { ( __jit_ldrcx_m buf pmap xmap cvals d ) }
+            : i pb9 ( __jit_pr pmap b )
+            : ~ i bas9 0
+            ? >= pb9 0 { = bas9 pb9 } { ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {} }
+            ( __jit_lea32 buf kcv idx9 bas9 )
+            ? == op 207 { ( __jit_mem buf 0 0 139 0 c ) } { ( __jit_mem buf 0 0 99 0 c ) }  // mov rax,[mem] / movsxd rax,dword[mem]
+            ( __jit_strax_m buf pmap xmap cvals a ) ^ v
+        } {}
         ? != kc2 -2 { ( __jit_ldrcx_m buf pmap xmap cvals w5 ) } {}  // k
         : i ps ( __jit_pr pmap d )
         ? >= ps 0 { ( __jit_opeax_pr buf 139 ps ) } {  // mov eax,r1Xd
@@ -3822,7 +3873,6 @@ inline @ __fr_setpos s tp i v → v {
         }
         ? == kc2 -2 { ( __jit_b buf 193 ) ( __jit_b buf 224 ) ( __jit_b buf & ( __jit_cv cvals w5 ) 31 ) } {  // shl eax,imm8
             ( __jit_b buf 211 ) ( __jit_b buf 224 ) }  // shl eax,cl
-        ( __jit_movslq buf )  // __w32
         : i pb ( __jit_pr pmap b )
         ? >= pb 0 { ( __jit_oprax_pr buf 3 pb ) } {  // add rax,r1X
             ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // add rax,[rbx+base]
@@ -4420,14 +4470,25 @@ inline @ __fr_setpos s tp i v → v {
                                                 : i mk ( __jit_memkind op )
                                                 : i wid >> mk 2
                                                 ? == 0 & mk 1 {  // ── load: a=dst b=base c=off d=index ──
-                                                    ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+                                                    : i pbL ( __jit_pr pmap b )
                                                     : i pix ( __jit_pr pmap d )
-                                                    ? >= pix 0 { ( __jit_oprax_pr buf 3 pix ) } {  // add rax,r1X
-                                                        : ~ i ixd 0
-                                                        ? == pix -2 { = ixd ( __jit_alu_ci64 buf 0 ( __jit_cv cvals d ) ) } {}
-                                                        ? == 0 ixd { ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * d 8 ) } {}  // add rax,[rbx+d]
-                                                    }
-                                                    ( __jit_bc buf pat_at pat_rec n c wid guard )
+                                                    : ~ i addr9 0  // 1 = a 32-bit lea already computed the wrapped address
+                                                    ? & != 0 guard >= pbL 0 {
+                                                        ? >= pix 0 { ( __jit_lea32 buf 0 pix pbL ) = addr9 1 } {
+                                                            ? == pix -2 {
+                                                                : i div9 ( __jit_cv cvals d )
+                                                                ? != 0 ( __jit_imm32 div9 ) { ( __jit_lea32bd buf pbL div9 ) = addr9 1 } {}
+                                                            } {} }
+                                                    } {}
+                                                    ? == 0 addr9 {
+                                                        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+                                                        ? >= pix 0 { ( __jit_oprax_pr buf 3 pix ) } {  // add rax,r1X
+                                                            : ~ i ixd 0
+                                                            ? == pix -2 { = ixd ( __jit_alu_ci64 buf 0 ( __jit_cv cvals d ) ) } {}
+                                                            ? == 0 ixd { ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * d 8 ) } {}  // add rax,[rbx+d]
+                                                        }
+                                                        ( __jit_bc buf pat_at pat_rec n c wid guard )
+                                                    } {}
                                                     ? == wid 8 { ( __jit_mem buf 0 0 139 0 c ) } {}  // mov rax,[mem]
                                                     ? & == wid 4 == 0 & mk 2 { ( __jit_mem32 buf 0 0 139 0 c ) } {}  // mov eax,[mem] (zero-ext)
                                                     ? & == wid 4 != 0 & mk 2 { ( __jit_mem buf 0 0 99 0 c ) } {}  // movsxd rax,[mem]
@@ -4437,8 +4498,13 @@ inline @ __fr_setpos s tp i v → v {
                                                     ? & == wid 1 != 0 & mk 2 { ( __jit_mem buf 0 1 190 0 c ) } {}  // movsx rax,byte[mem]
                                                     ( __jit_strax_m buf pmap xmap cvals a )
                                                 } {  // ── store: a=addr b=val c=off ──
-                                                    ? != raxslot a { ( __jit_ldrax_m buf pmap xmap cvals a ) } {}
-                                                    ( __jit_bc buf pat_at pat_rec n c wid guard )
+                                                    : i paS ( __jit_pr pmap a )
+                                                    ? & != 0 guard >= paS 0 {
+                                                        ( __jit_b buf 65 ) ( __jit_b buf 139 ) ( __jit_b buf + 192 & paS 7 )  // mov eax,r_pa d — the wrap
+                                                    } {
+                                                        ? != raxslot a { ( __jit_ldrax_m buf pmap xmap cvals a ) } {}
+                                                        ( __jit_bc buf pat_at pat_rec n c wid guard )
+                                                    }
                                                     ( __jit_ldrcx_m buf pmap xmap cvals b )  // value → rcx
                                                     ? == wid 8 { ( __jit_mem buf 0 0 137 1 c ) } {}  // mov [mem],rcx
                                                     ? == wid 4 { ( __jit_mem32 buf 0 0 137 1 c ) } {}  // mov [mem],ecx
