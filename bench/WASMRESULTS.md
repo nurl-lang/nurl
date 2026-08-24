@@ -1,6 +1,6 @@
 # WebAssembly benchmark results — NURL native vs NURL wasm
 
-Generated `2026-08-24T07:31:05Z` by `bench/wasmbench.sh`. **Do not edit by hand** —
+Generated `2026-08-24T10:39:32Z` by `bench/wasmbench.sh`. **Do not edit by hand** —
 the next run overwrites it. The machine-readable form of this same run
 is [`results/wasm-latest.json`](results/wasm-latest.json).
 
@@ -19,10 +19,10 @@ row, all gated on printing the same line (section 7).
 | Host | `GitHub Actions ubuntu-latest runner` |
 | Kernel | `Linux 6.17.0-1022-azure x86_64` |
 | CPU | AMD EPYC 7763 64-Core Processor (4 logical cores) |
-| Memory | 16373448 KiB |
-| Commit | `948fbb197a9f23d814047bc325624e63512e22e9` |
-| CI run | https://github.com/nurl-lang/nurl/actions/runs/32701469867 |
-| NURL | `v0.50.0-5-g948fbb19` |
+| Memory | 16373452 KiB |
+| Commit | `24ed72a33d35716118872a3f9bf4a881a75329b1` |
+| CI run | https://github.com/nurl-lang/nurl/actions/runs/32717573118 |
+| NURL | `v0.50.0-9-g24ed72a3` |
 | C | Ubuntu clang version 18.1.3 (1ubuntu1) |
 | Rust | rustc 1.98.0 (88d9e12ae 2026-08-18) |
 
@@ -32,7 +32,7 @@ row, all gated on printing the same line (section 7).
 | C → wasm | `zig 0.16.0 cc --target=wasm32-wasi` |
 | Rust → wasm | `rustc --target wasm32-wasip1` |
 | wasm runtime (reference) | `wasmtime 48.0.0 (f1412a598 2026-08-20)` — Cranelift JIT |
-| wasm runtime (NURL) | `packages/wasmtime` (wasmtime 0.15.0 (pure NURL)) — interpreter, built from this repo, `NURL_SPLIT=0` (release build; see below) |
+| wasm runtime (NURL) | `packages/wasmtime` (wasmtime 0.15.0 (pure NURL)) — template JIT + interpreter, built from this repo, `NURL_SPLIT=0` (release build; see below) |
 
 | Setting | Value |
 |---|---|
@@ -55,22 +55,22 @@ NURL's wasm pipeline or to wasm itself.
 
 | Benchmark | NURL native | NURL wasm | x | C native | C wasm | x | Rust native | Rust wasm | x |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| _(floor: empty program)_ | _1.452_ | _12.477_ | _8.6_ | _1.566_ | _6.875_ | _4.4_ | _1.630_ | _35.261_ | _21.6_ |
-| `lcg` | 39.175 | 67.186 | 1.7 | 39.427 | 66.246 | 1.7 | 39.454 | 74.461 | 1.9 |
-| `packet_classifier` | 56.286 | 80.765 | 1.4 | 56.409 | 79.241 | 1.4 | 56.545 | 87.555 | 1.5 |
-| `ring_write` | 42.495 | 80.168 | 1.9 | 42.343 | 78.927 | 1.9 | 42.479 | 86.836 | 2.0 |
-| `histogram_bins` | 39.623 | 79.315 | 2.0 | 41.438 | 77.043 | 1.9 | 41.402 | 88.108 | 2.1 |
-| `prefix_scan` | 21.861 | 40.623 | 1.9 | 21.806 | 38.388 | 1.8 | 21.785 | 48.502 | 2.2 |
-| `binary_search` | 39.824 | 90.170 | 2.3 | 38.290 | 92.498 | 2.4 | 38.268 | 98.576 | 2.6 |
-| `sort_window` | 27.353 | 80.522 | 2.9 | 27.585 | 58.887 | 2.1 | 27.098 | 69.418 | 2.6 |
-| `bloom_filter` | 17.656 | 46.409 | 2.6 | 18.161 | 46.866 | 2.6 | 18.526 | 53.590 | 2.9 |
-| `hash_join` | 28.146 | 68.681 | 2.4 | 30.448 | 81.610 | 2.7 | 30.057 | 88.615 | 2.9 |
-| `sieve` | 18.790 | 58.143 | 3.1 | 20.272 | 65.106 | 3.2 | 18.284 | 63.286 | 3.5 |
-| `fib` | 25.357 | 74.783 | 2.9 | 30.140 | 77.501 | 2.6 | 25.379 | 77.948 | 3.1 |
-| `collatz` | 12.301 | 48.547 | 3.9 | 12.346 | 46.007 | 3.7 | 12.525 | 54.593 | 4.4 |
-| `matmul` | 33.809 | 56.567 | 1.7 | 34.239 | 51.807 | 1.5 | 33.725 | 62.880 | 1.9 |
-| `json_parse` | 9.067 | 51.303 | 5.7 | 8.714 | 42.311 | 4.9 | 11.661 | 60.388 | 5.2 |
-| `nbody` | 41.072 | 78.801 | 1.9 | 40.936 | 69.573 | 1.7 | 39.093 | 80.913 | 2.1 |
+| _(floor: empty program)_ | _1.450_ | _11.742_ | _8.1_ | _1.535_ | _7.587_ | _4.9_ | _1.619_ | _38.077_ | _23.5_ |
+| `lcg` | 39.230 | 67.007 | 1.7 | 39.327 | 65.838 | 1.7 | 39.389 | 74.048 | 1.9 |
+| `packet_classifier` | 56.420 | 81.314 | 1.4 | 56.578 | 78.704 | 1.4 | 56.599 | 87.765 | 1.6 |
+| `ring_write` | 42.132 | 78.963 | 1.9 | 42.214 | 78.344 | 1.9 | 42.350 | 86.815 | 2.0 |
+| `histogram_bins` | 39.510 | 78.212 | 2.0 | 41.102 | 75.206 | 1.8 | 41.178 | 86.409 | 2.1 |
+| `prefix_scan` | 21.630 | 41.024 | 1.9 | 21.741 | 40.084 | 1.8 | 21.876 | 47.269 | 2.2 |
+| `binary_search` | 39.576 | 91.600 | 2.3 | 38.311 | 88.978 | 2.3 | 38.103 | 102.692 | 2.7 |
+| `sort_window` | 27.412 | 72.918 | 2.7 | 27.423 | 60.448 | 2.2 | 26.899 | 68.884 | 2.6 |
+| `bloom_filter` | 17.661 | 48.061 | 2.7 | 18.315 | 45.099 | 2.5 | 18.483 | 51.967 | 2.8 |
+| `hash_join` | 27.964 | 67.392 | 2.4 | 30.017 | 80.533 | 2.7 | 29.965 | 89.628 | 3.0 |
+| `sieve` | 20.943 | 63.647 | 3.0 | 20.152 | 67.079 | 3.3 | 20.396 | 61.453 | 3.0 |
+| `fib` | 25.075 | 74.640 | 3.0 | 30.006 | 70.294 | 2.3 | 25.399 | 78.305 | 3.1 |
+| `collatz` | 12.236 | 47.337 | 3.9 | 12.212 | 45.604 | 3.7 | 12.385 | 55.121 | 4.5 |
+| `matmul` | 33.649 | 58.422 | 1.7 | 33.629 | 51.212 | 1.5 | 33.867 | 64.703 | 1.9 |
+| `json_parse` | 8.919 | 56.089 | 6.3 | 8.647 | 39.071 | 4.5 | 11.716 | 62.519 | 5.3 |
+| `nbody` | 40.702 | 88.061 | 2.2 | 40.963 | 67.441 | 1.6 | 39.151 | 75.696 | 1.9 |
 
 The floor row matters more here than in `RESULTS.md`. A wasm cell pays
 for the runtime compiling the whole module before `_start` runs, and a
@@ -94,56 +94,57 @@ the reasons it is no longer the default.
 
 | Benchmark | NURL x | NURL no-gc x | C x | Rust x |
 |---|---:|---:|---:|---:|
-| `lcg` | 1.5 | — | 1.6 | 1.0 |
-| `packet_classifier` | 1.2 | — | 1.3 | 1.0 |
-| `ring_write` | 1.6 | — | 1.8 | 1.3 |
-| `histogram_bins` | 1.8 | — | 1.8 | 1.3 |
-| `prefix_scan` | 1.4 | — | 1.6 | — |
-| `binary_search` | 2.0 | — | 2.3 | 1.7 |
-| `sort_window` | 2.6 | — | 2.0 | — |
-| `bloom_filter` | 2.1 | — | 2.4 | — |
-| `hash_join` | 2.1 | — | 2.6 | 1.9 |
-| `sieve` | 2.6 | — | 3.1 | — |
-| `fib` | 2.6 | — | 2.5 | 1.8 |
+| `lcg` | 1.5 | — | 1.5 | — |
+| `packet_classifier` | 1.3 | — | 1.3 | 0.9 |
+| `ring_write` | 1.7 | — | 1.7 | 1.2 |
+| `histogram_bins` | 1.7 | — | 1.7 | 1.2 |
+| `prefix_scan` | 1.5 | — | 1.6 | — |
+| `binary_search` | 2.1 | — | 2.2 | 1.8 |
+| `sort_window` | 2.4 | — | 2.0 | — |
+| `bloom_filter` | 2.2 | — | 2.2 | — |
+| `hash_join` | 2.1 | — | 2.6 | 1.8 |
+| `sieve` | 2.7 | — | 3.2 | — |
+| `fib` | 2.7 | — | 2.2 | 1.7 |
 | `collatz` | 3.3 | — | 3.6 | — |
 | `matmul` | 1.4 | — | 1.4 | — |
-| `json_parse` | 5.1 | — | 5.0 | — |
-| `nbody` | 1.7 | — | 1.6 | 1.2 |
+| `json_parse` | 5.9 | — | 4.4 | — |
+| `nbody` | 1.9 | — | 1.5 | — |
 
 ## 3. The pure-NURL runtime (`packages/wasmtime`)
 
-The identical modules from section 1, executed by an interpreter written
-in NURL instead of by a JIT written in Rust. `vs JIT` is the cost of the
-runtime; `vs native` is the end-to-end cost of choosing this way to ship.
-Losing orders of magnitude to a JIT is the shape an interpreter has; the
-point of the column is that the size of the gap is measured rather than
-assumed, per benchmark, so it can be aimed at.
+The identical modules from section 1, executed by a runtime written in
+NURL instead of in Rust: a register-record interpreter with a template
+JIT on top (on by default; `NURL_WT_JIT=0` keeps the pure interpreter,
+and metered or shared-memory runs fall back to it on their own).
+`vs JIT` is the cost of the runtime; `vs native` is the end-to-end
+cost of choosing this way to ship. The size of the gap is measured
+rather than assumed, per benchmark, so it can be aimed at.
 
 Read the floor row first, because it goes the other way: on a program
-that does nothing the interpreter *beats* the JIT. Nothing surprising is
-happening — the JIT compiles the whole module before `_start`, and the
-interpreter only decodes it and walks the handful of instructions that
-run. That crossover is the honest answer to "which runtime should I
-use": it depends entirely on how long the guest runs.
+that does nothing this runtime *beats* the reference. Nothing surprising
+is happening — the reference compiles the whole module before `_start`,
+and `wt` only decodes it, compiling nothing but what runs. That
+crossover is the honest answer to "which runtime should I use": it
+depends entirely on how long the guest runs.
 
 | Benchmark | NURL on `wt` | vs JIT | vs native | C on `wt` | Rust on `wt` |
 |---|---:|---:|---:|---:|---:|
-| _(floor: empty program)_ | _2.445_ | _0.2_ | _1.7_ | _2.470_ | _2.806_ |
-| `lcg` | 119.272 | 1.8 | 3.0 | 186.538 | 190.013 |
-| `packet_classifier` | 326.265 | 4.0 | 5.8 | 311.682 | 362.013 |
-| `ring_write` | 442.659 | 5.5 | 10.4 | 443.424 | 452.079 |
-| `histogram_bins` | 527.111 | 6.6 | 13.3 | 576.526 | 527.315 |
-| `prefix_scan` | 122.051 | 3.0 | 5.6 | 105.957 | 126.125 |
-| `binary_search` | 864.635 | 9.6 | 21.7 | 868.852 | 1003.314 |
-| `sort_window` | 760.532 | 9.4 | 27.8 | 496.908 | 507.131 |
-| `bloom_filter` | 301.027 | 6.5 | 17.0 | 342.239 | 313.333 |
-| `hash_join` | 833.200 | 12.1 | 29.6 | 925.491 | 941.632 |
-| `sieve` | 500.403 | 8.6 | 26.6 | 484.273 | 435.587 |
-| `fib` | 526.132 | 7.0 | 20.7 | 473.602 | 427.279 |
-| `collatz` | 191.074 | 3.9 | 15.5 | 180.448 | 193.721 |
-| `matmul` | 277.279 | 4.9 | 8.2 | 310.140 | 307.097 |
-| `json_parse` | 329.667 | 6.4 | 36.4 | 142.990 | 235.238 |
-| `nbody` | 820.310 | 10.4 | 20.0 | 822.232 | 901.137 |
+| _(floor: empty program)_ | _2.822_ | _0.2_ | _1.9_ | _2.625_ | _3.302_ |
+| `lcg` | 41.127 | 0.6 | 1.0 | 41.168 | 41.804 |
+| `packet_classifier` | 67.156 | 0.8 | 1.2 | 62.274 | 63.685 |
+| `ring_write` | 59.204 | 0.7 | 1.4 | 58.569 | 56.224 |
+| `histogram_bins` | 75.315 | 1.0 | 1.9 | 82.060 | 75.652 |
+| `prefix_scan` | 31.808 | 0.8 | 1.5 | 30.489 | 32.339 |
+| `binary_search` | 217.908 | 2.4 | 5.5 | 206.687 | 248.777 |
+| `sort_window` | 275.041 | 3.8 | 10.0 | 232.871 | 233.757 |
+| `bloom_filter` | 57.055 | 1.2 | 3.2 | 65.126 | 55.698 |
+| `hash_join` | 138.140 | 2.0 | 4.9 | 147.465 | 145.332 |
+| `sieve` | 84.599 | 1.3 | 4.0 | 84.516 | 69.374 |
+| `fib` | 499.074 | 6.7 | 19.9 | 520.528 | 483.663 |
+| `collatz` | 28.018 | 0.6 | 2.3 | 27.770 | 28.669 |
+| `matmul` | 50.186 | 0.9 | 1.5 | 50.500 | 49.223 |
+| `json_parse` | 126.387 | 2.3 | 14.2 | 53.660 | 157.787 |
+| `nbody` | 251.952 | 2.9 | 6.2 | 819.658 | 890.587 |
 
 The C and Rust columns are the control. They are modules this runtime
 never saw during development, emitted by two other LLVM frontends; that
@@ -189,22 +190,22 @@ pay in bytes and module-load time if you ever have to reach for it.
 
 | Benchmark | Size | Size no-gc | Δ | JIT | JIT no-gc | Δ |
 |---|---:|---:|---:|---:|---:|---:|
-| _(floor: empty program)_ | _1072_ | _1393_ | _+30 %_ | _12.477_ | _141.289_ | _+1032 %_ |
-| `lcg` | 1092 | 1393 | +28 % | 67.186 | 178.265 | +165 % |
-| `packet_classifier` | 1092 | 1393 | +28 % | 80.765 | 190.972 | +136 % |
-| `ring_write` | 1092 | 1393 | +28 % | 80.168 | 189.600 | +137 % |
-| `histogram_bins` | 1092 | 1393 | +28 % | 79.315 | 188.394 | +138 % |
-| `prefix_scan` | 1092 | 1393 | +28 % | 40.623 | 151.237 | +272 % |
-| `binary_search` | 1092 | 1393 | +28 % | 90.170 | 199.364 | +121 % |
-| `sort_window` | 1092 | 1394 | +28 % | 80.522 | 182.741 | +127 % |
-| `bloom_filter` | 1092 | 1393 | +28 % | 46.409 | 160.657 | +246 % |
-| `hash_join` | 1094 | 1396 | +28 % | 68.681 | 179.748 | +162 % |
-| `sieve` | 1092 | 1393 | +28 % | 58.143 | 180.632 | +211 % |
-| `fib` | 1092 | 1393 | +28 % | 74.783 | 192.257 | +157 % |
-| `collatz` | 1092 | 1393 | +28 % | 48.547 | 159.117 | +228 % |
-| `matmul` | 1092 | 1393 | +28 % | 56.567 | 166.472 | +194 % |
-| `json_parse` | 1118 | 1416 | +27 % | 51.303 | 164.773 | +221 % |
-| `nbody` | 1094 | 1395 | +27 % | 78.801 | 186.679 | +137 % |
+| _(floor: empty program)_ | _1072_ | _1393_ | _+30 %_ | _11.742_ | _146.280_ | _+1146 %_ |
+| `lcg` | 1092 | 1393 | +28 % | 67.007 | 176.998 | +164 % |
+| `packet_classifier` | 1092 | 1393 | +28 % | 81.314 | 193.020 | +137 % |
+| `ring_write` | 1092 | 1393 | +28 % | 78.963 | 189.138 | +140 % |
+| `histogram_bins` | 1092 | 1393 | +28 % | 78.212 | 188.354 | +141 % |
+| `prefix_scan` | 1092 | 1393 | +28 % | 41.024 | 146.817 | +258 % |
+| `binary_search` | 1092 | 1393 | +28 % | 91.600 | 197.251 | +115 % |
+| `sort_window` | 1092 | 1394 | +28 % | 72.918 | 183.720 | +152 % |
+| `bloom_filter` | 1092 | 1393 | +28 % | 48.061 | 154.500 | +221 % |
+| `hash_join` | 1094 | 1396 | +28 % | 67.392 | 179.010 | +166 % |
+| `sieve` | 1092 | 1393 | +28 % | 63.647 | 175.974 | +176 % |
+| `fib` | 1092 | 1393 | +28 % | 74.640 | 188.876 | +153 % |
+| `collatz` | 1092 | 1393 | +28 % | 47.337 | 158.396 | +235 % |
+| `matmul` | 1092 | 1393 | +28 % | 58.422 | 165.786 | +184 % |
+| `json_parse` | 1118 | 1416 | +27 % | 56.089 | 174.229 | +211 % |
+| `nbody` | 1094 | 1395 | +27 % | 88.061 | 187.815 | +113 % |
 
 The cost is almost all fixed, so it is largest where the benchmark
 itself is smallest — compare each row against the floor. It is reported
@@ -223,22 +224,22 @@ it and to the C and Rust wasm columns.
 
 | Benchmark | NURL `nurlc` | NURL native | NURL wasm | C native | C wasm | Rust native | Rust wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| _(floor: empty program)_ | _2.666_ | _97.041_ | _59.612_ | _57.849_ | _41.334_ | _55.527_ | _69.083_ |
-| `lcg` | 2.807 | 102.139 | 60.230 | 67.766 | 42.744 | 60.557 | 74.909 |
-| `packet_classifier` | 2.856 | 104.318 | 59.786 | 68.268 | 41.956 | 60.872 | 74.906 |
-| `ring_write` | 3.037 | 107.263 | 59.328 | 69.710 | 41.413 | 62.162 | 76.391 |
-| `histogram_bins` | 3.127 | 108.184 | 60.086 | 71.985 | 42.454 | 64.045 | 77.695 |
-| `prefix_scan` | 3.109 | 109.357 | 61.753 | 74.634 | 42.335 | 65.914 | 78.970 |
-| `binary_search` | 3.232 | 107.701 | 65.887 | 70.751 | 42.281 | 66.828 | 81.040 |
-| `sort_window` | 3.281 | 115.757 | 61.536 | 77.503 | 42.751 | 73.365 | 86.058 |
-| `bloom_filter` | 3.670 | 116.341 | 64.187 | 80.182 | 43.096 | 69.774 | 83.082 |
-| `hash_join` | 6.065 | 233.524 | 72.819 | 122.175 | 43.681 | 105.659 | 120.125 |
-| `sieve` | 3.260 | 111.131 | 60.861 | 79.489 | 42.968 | 71.068 | 82.624 |
-| `fib` | 2.863 | 102.520 | 61.270 | 67.609 | 41.879 | 59.807 | 73.329 |
-| `collatz` | 3.051 | 108.099 | 61.431 | 71.310 | 42.264 | 65.300 | 77.604 |
-| `matmul` | 3.419 | 115.201 | 63.477 | 84.122 | 42.271 | 86.704 | 95.816 |
-| `json_parse` | 52.450 | 620.599 | 150.074 | 126.635 | 44.129 | 170.297 | 152.147 |
-| `nbody` | 4.774 | 126.524 | 70.935 | 97.281 | 42.068 | 87.052 | 99.698 |
+| _(floor: empty program)_ | _2.721_ | _97.216_ | _61.003_ | _58.470_ | _41.626_ | _55.068_ | _68.006_ |
+| `lcg` | 2.950 | 106.472 | 62.803 | 69.755 | 42.615 | 62.218 | 76.246 |
+| `packet_classifier` | 2.900 | 103.833 | 63.680 | 69.290 | 42.340 | 61.810 | 74.827 |
+| `ring_write` | 2.966 | 104.953 | 60.066 | 69.961 | 41.730 | 61.356 | 75.646 |
+| `histogram_bins` | 3.040 | 104.245 | 59.333 | 69.750 | 40.563 | 62.813 | 75.563 |
+| `prefix_scan` | 3.078 | 105.690 | 58.944 | 71.570 | 40.896 | 63.066 | 77.204 |
+| `binary_search` | 3.201 | 105.433 | 59.753 | 68.532 | 41.368 | 65.832 | 79.960 |
+| `sort_window` | 3.277 | 115.207 | 62.030 | 75.575 | 42.764 | 71.467 | 84.377 |
+| `bloom_filter` | 3.537 | 112.607 | 62.155 | 77.423 | 42.163 | 67.464 | 81.474 |
+| `hash_join` | 6.079 | 230.793 | 73.204 | 120.856 | 42.587 | 103.559 | 117.582 |
+| `sieve` | 3.101 | 108.231 | 71.633 | 78.578 | 42.215 | 69.760 | 82.899 |
+| `fib` | 2.853 | 101.930 | 59.260 | 67.924 | 42.563 | 60.178 | 74.264 |
+| `collatz` | 2.999 | 101.588 | 59.258 | 67.027 | 41.763 | 62.333 | 76.256 |
+| `matmul` | 3.377 | 111.358 | 63.602 | 81.184 | 42.003 | 84.584 | 95.169 |
+| `json_parse` | 52.462 | 608.932 | 146.613 | 123.611 | 42.933 | 165.235 | 149.087 |
+| `nbody` | 4.676 | 123.595 | 67.856 | 96.195 | 41.232 | 84.987 | 97.943 |
 
 ## 7. Correctness gate
 
