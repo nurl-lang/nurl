@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.27.0
+
+**Follows `wasmtime` to 0.15.0.** The in-process wasm engine picks up
+`wasmtime` 0.15.0: predecoder pair fusion across the integer and f64
+op families, fuel metered at loop back edges, an intrusive frame chain
+with calls and returns inside the inner loop, and an experimental,
+opt-in (`NURL_WT_JIT`) template-JIT tier that lowers hot integer kernels
+to x86-64. All behaviour-preserving for the engine `interp_capture`
+call this package makes — the pin moves so a worker built against this
+release gets the faster runtime. No swarm-mcp API change.
+
 ## 0.26.0
 
 **The pins follow the runtime onto a wasm that has threads and sockets.**
