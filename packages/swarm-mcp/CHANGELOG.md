@@ -1,9 +1,9 @@
 # Changelog
 
-## 0.28.0
+## 0.28.1
 
 **The pure-NURL wasm runtime is now `nwasm`.** `packages/wasmtime` was
-renamed to [`packages/nwasm`](../nwasm) and published as `nwasm` 1.0.0 —
+renamed to [`packages/nwasm`](../nwasm) and published as `nwasm` 1.0.1 —
 the old name is a third-party trademark and reading it as *our* runtime
 was a standing source of confusion, especially on a box where both were
 installed. Nothing about the engine changed with the rename.
@@ -14,7 +14,8 @@ A `--gpu` worker, which always uses the external CLI contract, must set
 the new name (or have `nwasm` on `PATH` — that is the new default binary
 the variable falls back to, replacing `wasmtime`).
 
-- Dependency pin: `wasmtime ^0.15.0` → `nwasm ^1.0.0`. The in-process
+- Dependency pin: `wasmtime ^0.15.0` → `nwasm ^1` — the major, so a
+  patch release of the runtime needs no release here. The in-process
   engine is the same code under a new name; the `interp_capture` call
   this package makes is unchanged.
 - `__wasmtime` → `__wasm_runtime`, `wasmtime_probe` →
@@ -22,6 +23,12 @@ the variable falls back to, replacing `wasmtime`).
   `wasm_runtime_gpu_capable`. These are internal to the package.
 - The diagnostics a worker prints when it finds no runtime now say
   `nurlpkg install nwasm`.
+
+0.28.0 was published before the toolchain release that ships the wasm
+JIT's runtime primitives (`nurl_code_alloc` / `nurl_code_seal` /
+`nurl_guard_code_add`) and cannot be built from the registry — the
+embedded interpreter fails to link. That version number is spent; this
+is the same change on top of a toolchain that can build it.
 
 ## 0.27.0
 
