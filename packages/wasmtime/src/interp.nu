@@ -2621,6 +2621,7 @@ inline @ __fr_setpos s tp i v → v {
     ? & >= op 153 <= op 156 { ^ 1 } {}  // reinterprets (slot copies)
     ? & >= op 157 <= op 161 { ^ 1 } {}  // extendN_s family
     ? | == op 162 == op 163 { ^ 1 } {}  // memory.size / memory.grow (call-out)
+    ? | == op 169 == op 171 { ^ 1 } {}  // br_table (jump table) / FCB bridge (call-out)
     ^ 0
 }
 
@@ -2642,6 +2643,17 @@ inline @ __fr_setpos s tp i v → v {
         ? | | | == op 48 == op 49 == op 54 | == op 45 | == op 38 == op 177 {
             : i tgt / ?? ( vec_get [i] code + base 1 ) { T x → x F → 0 } 6
             ? | < tgt 0 >= tgt n { ^ 0 } {}
+        } {}
+        ? == op 169 {  // br_table: every row target must be a real record
+            : ( Vec i ) auxok . pf aux
+            : i ab7 ?? ( vec_get [i] code + base 1 ) { T x → x F → 0 }
+            : i rows7 + ?? ( vec_get [i] code + base 3 ) { T x → x F → 0 } 1
+            : ~ i rw7 0
+            ~ < rw7 rows7 {
+                : i t7 / ?? ( vec_get [i] auxok + ab7 * rw7 4 ) { T x → x F → -6 } 6
+                ? | < t7 0 >= t7 n { ^ 0 } {}
+                = rw7 + rw7 1
+            }
         } {}
         = r + r 1
     }
@@ -2826,7 +2838,7 @@ inline @ __fr_setpos s tp i v → v {
 // The ops beyond the original tier set: extend/wrap, select, and the
 // fused memory/f64 records the predecoder emits. Falls through to the
 // plain ALU emitter for everything else.
-@ __jit_ext ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot → v {
+@ __jit_ext ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot ( Vec i ) auxv ( Vec i ) pta_off ( Vec i ) pta_stub → v {
     ? == op 36 {  // i32.wrap_i64: dst = sign-extended low 32 of src
         ? == raxslot b { ( __jit_movslq buf ) } {  // rax already holds the slot
             ( __jit_b buf 72 ) ( __jit_b buf 99 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // movsxd rax,dword[rbx+b]
@@ -2964,6 +2976,7 @@ inline @ __fr_setpos s tp i v → v {
     ? == op 163 {  // memory.grow: call-out (status 6) — the driver reallocs and resumes
         // ctx[4]=delta(src b) ctx[6]=resume ctx[7]=dst slot(a)
         ? != raxslot b { ( __jit_ldrax buf b ) } {}
+        ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax — keep ctx[4]'s upper bytes zero
         ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 71 ) ( __jit_b buf 32 )  // mov [rdi+32], rax
         ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 48 ) ( __jit_d buf 0 )  // mov [rdi+48], resume (patched)
         : i gimm_at - ( vec_len [u] buf ) 4
@@ -2982,9 +2995,60 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
         ^ v
     } {}
+    ? == op 169 {  // BRTBL: clamp the index, jump through an absolute table; each row = slot moves + jmp
+        ? != raxslot b { ( __jit_ldrax buf b ) } {}
+        ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax (u32)
+        ( __jit_b buf 185 ) ( __jit_d buf c )  // mov ecx, n (default row index)
+        ( __jit_b buf 72 ) ( __jit_b buf 57 ) ( __jit_b buf 200 )  // cmp rax,rcx
+        ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf 67 ) ( __jit_b buf 193 )  // cmovae rax,rcx
+        ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 13 ) ( __jit_d buf 3 )  // lea rcx,[rip+3] → the table below
+        ( __jit_b buf 255 ) ( __jit_b buf 36 ) ( __jit_b buf 193 )  // jmp [rcx+rax*8]
+        : i tabo ( vec_len [u] buf )
+        : i rows + c 1
+        : ~ i rw 0
+        ~ < rw rows { ( __jit_q buf 0 ) = rw + rw 1 }
+        = rw 0
+        ~ < rw rows {
+            ( vec_push [i] pta_off + tabo * rw 8 )
+            ( vec_push [i] pta_stub ( vec_len [u] buf ) )
+            : i rowb + a * rw 4
+            : i stgt ?? ( vec_get [i] auxv rowb ) { T x → x F → 0 }
+            : i mdst ?? ( vec_get [i] auxv + rowb 1 ) { T x → x F → 0 }
+            : i msrc ?? ( vec_get [i] auxv + rowb 2 ) { T x → x F → 0 }
+            : i mn ?? ( vec_get [i] auxv + rowb 3 ) { T x → x F → 0 }
+            : ~ i mk 0
+            ~ < mk mn { ( __jit_ldrax buf + msrc mk ) ( __jit_strax buf + mdst mk ) = mk + mk 1 }
+            ( __jit_jmp buf pat_at pat_rec 233 / stgt 6 )
+            = rw + rw 1
+        }
+        ^ v
+    } {}
+    ? == op 171 {  // FCB bridge: hand the record's operands to the driver (status 7)
+        // ctx[4]=fcode(a) ctx[5]=idx-imm(b) ctx[6]=resume ctx[7]=pops<<33|push<<32|srcbase(c,d)
+        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 32 ) ( __jit_d buf a )  // mov [rdi+32], a
+        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf b )  // mov [rdi+40], b
+        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf c )  // mov [rdi+56], srcbase
+        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 60 ) ( __jit_d buf d )  // mov [rdi+60], pops<<1|push
+        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 48 ) ( __jit_d buf 0 )  // mov [rdi+48], resume (patched)
+        : i fimm_at - ( vec_len [u] buf ) 4
+        ( __jit_b buf 184 ) ( __jit_d buf 7 )  // mov eax,7 (FCB call-out)
+        ( __jit_b buf 91 ) ( __jit_b buf 195 )  // pop rbx; ret
+        : i fresume ( vec_len [u] buf )
+        ( vec_set [u] buf fimm_at # u & fresume 255 )
+        ( vec_set [u] buf + fimm_at 1 # u & ( __lshr64 fresume 8 ) 255 )
+        ( vec_set [u] buf + fimm_at 2 # u & ( __lshr64 fresume 16 ) 255 )
+        ( vec_set [u] buf + fimm_at 3 # u & ( __lshr64 fresume 24 ) 255 )
+        ( __jit_b buf 83 )  // push rbx — balance the eventual pop rbx;ret
+        ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 31 )  // mov rbx,[rdi]
+        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 95 ) ( __jit_b buf 8 )  // mov r11,[rdi+8]
+        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 )  // mov r10,[rdi+16]
+        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
+        ^ v
+    } {}
     ? == op 170 {  // CALLIND: hand the runtime-resolved index to the driver
         // ctx[4]=table-index value (from slot c) ctx[5]=argbase(b) ctx[6]=resume ctx[7]=typeidx(a); return 5
         ? != raxslot c { ( __jit_ldrax buf c ) } {}
+        ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax — keep ctx[4]'s upper bytes zero (CALL writes only a dword there)
         ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 71 ) ( __jit_b buf 32 )  // mov [rdi+32], rax
         ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf b )  // mov [rdi+40], argbase
         ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 48 ) ( __jit_d buf 0 )  // mov [rdi+48], resume (patched)
@@ -3023,6 +3087,7 @@ inline @ __fr_setpos s tp i v → v {
 @ __jit_newrax i op i a i b i prev → i {
     ? | | | == op 55 == op 172 | == op 50 == op 210 == op 170 { ^ -1 } {}  // terminal / call-out clobbers
     ? == op 163 { ^ -1 } {}  // memory.grow call-out
+    ? | == op 169 == op 171 { ^ -1 } {}  // br_table dispatch / FCB call-out
     ? & >= op 194 <= op 197 { ^ -1 } {}  // membc leaves rax = host address
     ? >= ( __jit_memkind op ) 0 { ^ ? == 0 & ( __jit_memkind op ) 1 a -1 } {}  // load → dst; store leaves an address
     ? | & >= op 39 <= op 42 | & >= op 198 <= op 201 == op 131 { ^ ? == a prev -1 prev } {}  // xmm-only writers: rax untouched, dst may go stale
@@ -3044,6 +3109,9 @@ inline @ __fr_setpos s tp i v → v {
     : ( Vec i ) lab ( vec_new [i] )  // record index → code offset
     : ( Vec i ) pat_at ( vec_new [i] )  // rel32 site → …
     : ( Vec i ) pat_rec ( vec_new [i] )  // … target record
+    : ( Vec i ) pta_off ( vec_new [i] )  // jump-table entry byte offset → …
+    : ( Vec i ) pta_stub ( vec_new [i] )  // … stub code offset (absolute address patched post-copy)
+    : ( Vec i ) auxe . pf aux  // br_table rows live here
     // Prologue: rdi points at [rbase, mem_base, mem_bytes]. rbx holds the
     // frame's register base (callee-saved, restored on every exit); r11 =
     // memory base, r10 = memory byte count — both re-read from the context
@@ -3064,6 +3132,17 @@ inline @ __fr_setpos s tp i v → v {
         ? | | | | == top 48 == top 49 == top 54 == top 45 | == top 38 == top 177 {
             : i ta / ?? ( vec_get [i] code + * trr 6 1 ) { T x → x F → 0 } 6
             ? & >= ta 0 < ta n { ( vec_set [i] tgt ta 1 ) } {}
+        } {}
+        ? == top 169 {  // br_table: mark every row target
+            : ( Vec i ) auxpp . pf aux
+            : i abp ?? ( vec_get [i] code + * trr 6 1 ) { T x → x F → 0 }
+            : i rowsp + ?? ( vec_get [i] code + * trr 6 3 ) { T x → x F → 0 } 1
+            : ~ i rwp 0
+            ~ < rwp rowsp {
+                : i tap / ?? ( vec_get [i] auxpp + abp * rwp 4 ) { T x → x F → 0 } 6
+                ? & >= tap 0 < tap n { ( vec_set [i] tgt tap 1 ) } {}
+                = rwp + rwp 1
+            }
         } {}
         = trr + trr 1
     }
@@ -3199,7 +3278,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                             ( __jit_b buf 59 ) ( __jit_b buf 131 ) ( __jit_d buf * rhs 8 )  // cmp eax,[rbx+rhs]
                                                                         }
                                                                         ( __jit_jmp buf pat_at pat_rec ( __jit_jcc cctab cmpop ) / a 6 )
-                                                                    } { ( __jit_ext buf pat_at pat_rec n op a b c d w5 raxslot ) }
+                                                                    } { ( __jit_ext buf pat_at pat_rec n op a b c d w5 raxslot auxe pta_off pta_stub ) }
                                                                 }
                                                             }
                                                         }
@@ -3246,6 +3325,16 @@ inline @ __fr_setpos s tp i v → v {
     ? == # i page 0 { = . pf jit # s -1 ^ v } {}  // no executable memory (wasm)
     : ~ i k 0
     ~ < k len { = . page k ?? ( vec_get [u] buf k ) { T x → x F → # u 0 } = k + k 1 }
+    // jump-table entries become absolute addresses now that the page is known
+    : i npt ( vec_len [i] pta_off )
+    : ~ i ptk 0
+    ~ < ptk npt {
+        : i eo ?? ( vec_get [i] pta_off ptk ) { T x → x F → 0 }
+        : i av + # i page ?? ( vec_get [i] pta_stub ptk ) { T x → x F → 0 }
+        : ~ i bb 0
+        ~ < bb 8 { = . page + eo bb # u & ( __lshr64 av * bb 8 ) 255 = bb + bb 1 }
+        = ptk + ptk 1
+    }
     ? != 0 ( nurl_code_seal page + len 16 ) { ( nurl_code_free page + len 16 ) = . pf jit # s -1 ^ v } {}
     = . pf jit # s page
     = . pf jitlen + len 16
@@ -3267,30 +3356,40 @@ inline @ __fr_setpos s tp i v → v {
     = . cd 3 # i ( vec_data [i] . it globals )
     = . cd 4 0 = . cd 5 0 = . cd 6 0 = . cd 7 0
     : ~ i status ( nurl_call_code # *u jh # *u cd )
-    ~ | | == status 2 == status 5 == status 6 {
+    ~ | | | == status 2 == status 5 == status 6 == status 7 {
         : ~ i callee . cd 4
         : i argbase . cd 5
         : i resume . cd 6
-        ? == status 6 {  // memory.grow: realloc on the host side, result to the dst slot
-            = . jrb . cd 7 ( __mem_grow it ( __u32 callee ) )
-        } {
-            ? == status 5 {  // call_indirect: resolve through the table, trapping like the interpreter
-                : i ei & callee 4294967295
-                ? | < ei 0 >= ei ( vec_len [i] . it table ) { ( __trap it `call_indirect: index out of range` ) ( __jit_ctx_put it cd ) ^ 0 } {}
-                = callee ?? ( vec_get [i] . it table ei ) { T x → x F → -1 }
-                ? < callee 0 { ( __trap it `call_indirect: null table element` ) ( __jit_ctx_put it cd ) ^ 0 } {}
-                : s want ?? ( vec_get [s] . m types . cd 7 ) { T x → x F → # s 0 }
-                : s have ( module_func_type m callee )
-                ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) ( __jit_ctx_put it cd ) ^ 0 } {}
-                ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) ( __jit_ctx_put it cd ) ^ 0 } {}
-            } {}
-            // A non-zero tr means the callee trapped — the message is already
-            // recorded, so return 0 and let the caller's halt check see it
-            // (returning 1 would relabel it "out of bounds").
-            : i tr ( __jit_callee it m callee jrb argbase )
-            ? != 0 tr { ( __jit_ctx_put it cd ) ^ 0 } {}
+        ? == status 7 {  // FCB bridge: run the fc op through the interpreter's own handler
+            : i fc7 & . cd 7 4294967295
+            : i fdd ( __lshr64 . cd 7 32 )
+            : i fpops >> fdd 1
+            : ~ i fbk 0
+            ~ < fbk fpops { ( __push it . jrb + fc7 fbk ) = fbk + fbk 1 }
+            ( __exec_fc it callee argbase )
+            ? & != 0 & fdd 1 ! ( interp_trapped it ) { = . jrb fc7 ( __pop it ) } {}
             ? | ( interp_trapped it ) != 0 . it halt { ( __jit_ctx_put it cd ) ^ 0 } {}
-        }
+        } {
+            ? == status 6 {  // memory.grow: realloc on the host side, result to the dst slot
+                = . jrb . cd 7 ( __mem_grow it ( __u32 callee ) )
+            } {
+                ? == status 5 {  // call_indirect: resolve through the table, trapping like the interpreter
+                    : i ei & callee 4294967295
+                    ? | < ei 0 >= ei ( vec_len [i] . it table ) { ( __trap it `call_indirect: index out of range` ) ( __jit_ctx_put it cd ) ^ 0 } {}
+                    = callee ?? ( vec_get [i] . it table ei ) { T x → x F → -1 }
+                    ? < callee 0 { ( __trap it `call_indirect: null table element` ) ( __jit_ctx_put it cd ) ^ 0 } {}
+                    : s want ?? ( vec_get [s] . m types . cd 7 ) { T x → x F → # s 0 }
+                    : s have ( module_func_type m callee )
+                    ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) ( __jit_ctx_put it cd ) ^ 0 } {}
+                    ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) ( __jit_ctx_put it cd ) ^ 0 } {}
+                } {}
+                // A non-zero tr means the callee trapped — the message is already
+                // recorded, so return 0 and let the caller's halt check see it
+                // (returning 1 would relabel it "out of bounds").
+                : i tr ( __jit_callee it m callee jrb argbase )
+                ? != 0 tr { ( __jit_ctx_put it cd ) ^ 0 } {}
+                ? | ( interp_trapped it ) != 0 . it halt { ( __jit_ctx_put it cd ) ^ 0 } {}
+            } }
         = . cd 1 # i ( vec_data [u] . it mem )
         = . cd 2 . it mem_bytes
         = status ( nurl_call_code_at # *u jh # *u cd resume )
