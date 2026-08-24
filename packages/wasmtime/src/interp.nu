@@ -46,6 +46,28 @@ $ `module.nu`
 
 & `c` @ nurl_code_free *u p i n → v
 
+// Guard-page linear memory: an 8 GiB PROT_NONE reservation swallows every
+// address a 32-bit index + 32-bit offset can form, so JIT code needs no
+// bounds checks — an out-of-bounds access faults and the runtime's SIGSEGV
+// handler steers the faulting frame to its function's trap stub. Reserve
+// returning 0 means the platform has no fault-to-trap plumbing and the
+// bounds-checked path stays — a capability probe, like nurl_code_alloc.
+& `c` @ nurl_vmem_reserve i span → *u
+
+& `c` @ nurl_vmem_commit *u base i old i new → i
+
+& `c` @ nurl_vmem_release *u base i span → v
+
+& `c` @ nurl_guard_mem_add *u base i span → i
+
+& `c` @ nurl_guard_mem_del *u base → v
+
+& `c` @ nurl_guard_code_room → i
+
+& `c` @ nurl_guard_code_add *u code i len *u stub → i
+
+& `c` @ nurl_guard_code_del *u code → v
+
 // The one lock behind the 0xfe atomics (see __atom_init). Declared here
 // rather than taken from std/thread.nu because the handles live in file
 // globals, and a NURL global holds a pointer as an integer.
@@ -204,6 +226,11 @@ $ `module.nu`
     // what the guest may touch, and every bounds check reads this instead
     // of the Vec's length.
     i mem_bytes
+    // Guard-page mode: the raw base of an 8 GiB PROT_NONE reservation
+    // (0 = the memory lives in the `mem` Vec instead). Growth commits
+    // pages in place, so this address never moves; every reader goes
+    // through __mem_base, which picks whichever representation is live.
+    i mem_raw
     ( Vec i ) globals  // mutable global values
     ( Vec i ) table  // runtime funcref table (mutable via table.set/grow/…)
     ( Vec i ) data_dropped  // 1 per data segment once dropped / active
@@ -311,6 +338,22 @@ $ `module.nu`
 
 @ __page → i { ^ 65536 }
 
+// The guard reservation: 4 GiB of index + 4 GiB of constant offset + the
+// widest access, rounded up a page. Every address wasm32 can form from
+// a masked index and a u32 offset lands inside it.
+@ __vmem_span → i { ^ + 17179869184 65536 }
+
+// Guard-page memory is on wherever the runtime supports it; main.nu turns
+// it off for NURL_WT_GUARD=0 (the A/B and debugging escape).
+: ~ i g_guard 1
+
+@ interp_disable_guard → v { = g_guard 0 }
+
+// The linear memory's base address, whichever representation is live.
+inline @ __mem_base * Interp it → i {
+    ? != 0 . it mem_raw { ^ . it mem_raw } { ^ # i ( vec_data [u] . it mem ) }
+}
+
 @ interp_new * Module m → *Interp {
     : *Interp it # *Interp ( nurl_alloc Z Interp )
     = . it mod # s m
@@ -328,7 +371,23 @@ $ `module.nu`
     // reallocating grow would pull it out from under them.
     : i __mpages ? == . m has_mem 1 . m mem_min 0
     : i __mreserve ? & == . m has_mem 1 != . m mem_shared 0 . m mem_max __mpages
-    = . it mem ( vec_zeroed [u] * __mreserve ( __page ) )
+    // Guard-page mode first (non-shared memory only): reserve 8 GiB of
+    // PROT_NONE, commit the declared minimum, register the region with
+    // the fault-to-trap handler. Any step failing falls back to the Vec —
+    // the two representations are behaviour-identical, guard mode just
+    // lets the JIT drop its bounds checks.
+    = . it mem_raw 0
+    ? & & == . m has_mem 1 == . m mem_shared 0 != 0 g_guard {
+        : *u gbase ( nurl_vmem_reserve ( __vmem_span ) )
+        ? != # i gbase 0 {
+            ? == 0 ( nurl_vmem_commit gbase 0 * __mpages ( __page ) ) {
+                ? == 0 ( nurl_guard_mem_add gbase ( __vmem_span ) ) {
+                    = . it mem_raw # i gbase
+                } { ( nurl_vmem_release gbase ( __vmem_span ) ) }
+            } { ( nurl_vmem_release gbase ( __vmem_span ) ) }
+        } {}
+    } {}
+    = . it mem ? != 0 . it mem_raw ( vec_new [u] ) ( vec_zeroed [u] * __mreserve ( __page ) )
     = . it mem_pages __mpages
     = . it mem_bytes * __mpages ( __page )
     = . it globals ( vec_new [i] )
@@ -426,7 +485,7 @@ $ `module.nu`
                     ( __trap it `data segment does not fit in linear memory` )
                 } {
                     ? > dn 0 {
-                        : s dst # s + # i ( vec_data [u] . it mem ) off
+                        : s dst # s + ( __mem_base it ) off
                         ( nurl_memcpy dst # s ( vec_data [u] . ds bytes ) dn )
                     } {}
                 }
@@ -509,6 +568,11 @@ $ `module.nu`
     ( vec_free [i] . it thread_kids )
     ( vec_free [i] . it vs )
     ( vec_free [u] . it mem )
+    ? != 0 . it mem_raw {
+        ( nurl_guard_mem_del # *u . it mem_raw )
+        ( nurl_vmem_release # *u . it mem_raw ( __vmem_span ) )
+        = . it mem_raw 0
+    } {}
     ( vec_free [i] . it globals )
     ( vec_free [i] . it table )
     ( vec_free [i] . it data_dropped )
@@ -1007,7 +1071,7 @@ inline @ __mem_load * Interp it i ea i n i signed → i {
     // The memory Vec is always a whole number of 64 KiB pages, so any
     // in-bounds byte's containing 8-byte word is in-bounds too — word reads
     // below can never run past the buffer.
-    : s base # s ( vec_data [u] . it mem )
+    : s base # s ( __mem_base it )
     : i lo & ea 7
     : ~ i v 0
     ? <= + lo n 8 {
@@ -1033,9 +1097,10 @@ inline @ __mem_load * Interp it i ea i n i signed → i {
 // struct fields, a length beside a flag. The symptom is a heap that grows
 // a wrong size field and hands out a wild pointer somewhere else.
 @ __mem_store_bytes * Interp it i ea i n i val → v {
+    : *u mb # *u ( __mem_base it )
     : ~ i k 0
     ~ < k n {
-        ( vec_set [u] . it mem + ea k # u & ( __lshr64 val * 8 k ) 255 )
+        = . mb + ea k # u & ( __lshr64 val * 8 k ) 255
         = k + k 1
     }
 }
@@ -1049,7 +1114,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     // A shared memory takes the byte-wise path for anything narrower than
     // the word it would otherwise rewrite.
     ? & . it shared_mem < n 8 { ( __mem_store_bytes it ea n val ) ^ v } {}
-    : s base # s ( vec_data [u] . it mem )
+    : s base # s ( __mem_base it )
     : i lo & ea 7
     ? <= + lo n 8 {
         // within one word: read-modify-write it once
@@ -1094,9 +1159,15 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     : i old . it mem_pages
     ? == delta 0 { ^ old } {}
     ? | < delta 0 > + old delta limit { ^ -1 } {}
-    // One resize, zero-filling the new tail in a single memset, instead of
-    // a push per byte: growing by a single page was 65 536 pushes.
-    : b _ok ( vec_resize_zeroed [u] . it mem * + old delta ( __page ) )
+    ? != 0 . it mem_raw {
+        // Guard-page mode: commit the new pages in place — the base
+        // never moves, the pages arrive zeroed from the kernel.
+        ? != 0 ( nurl_vmem_commit # *u . it mem_raw * old ( __page ) * + old delta ( __page ) ) { ^ -1 } {}
+    } {
+        // One resize, zero-filling the new tail in a single memset, instead
+        // of a push per byte: growing by a single page was 65 536 pushes.
+        : b _ok ( vec_resize_zeroed [u] . it mem * + old delta ( __page ) )
+    }
     = . it mem_pages + old delta
     = . it mem_bytes * . it mem_pages ( __page )
     ^ old
@@ -1218,7 +1289,10 @@ inline @ __fr_setpos s tp i v → v {
     ( vec_free [i] . pf aux )
     ( vec_free [i] . pf kv )
     ( vec_free [i] . pf bytes )
-    ? > . pf jitlen 0 { ( nurl_code_free # *u . pf jit . pf jitlen ) } {}
+    ? > . pf jitlen 0 {
+        ( nurl_guard_code_del # *u . pf jit )  // no-op when never registered
+        ( nurl_code_free # *u . pf jit . pf jitlen )
+    } {}
     ( nurl_free # s pf )
 }
 
@@ -2669,6 +2743,17 @@ inline @ __fr_setpos s tp i v → v {
         : i base * r 6
         : i op ?? ( vec_get [i] code base ) { T x → x F → -1 }
         ? == 0 ( __jit_op_ok op ) { ^ 0 } {}
+        // Offset-magnitude gate for every memory template: the SIB access
+        // and the bounds check both encode the constant offset as a
+        // sign-extended disp32, so an offset at or past 2^31 (legal wasm —
+        // predecode also folds constant indexes in) would flip negative in
+        // the encoding. Those functions stay on the interpreter, which is
+        // exact at any offset.
+        : i offw ? == op 197 4 3  // ADDSTOREF64 keeps its offset in D, the rest in C
+        ? | >= ( __jit_memkind op ) 0 | | & >= op 194 <= op 197 & >= op 205 <= op 208 | == op 211 == op 212 {
+            : i moff ?? ( vec_get [i] code + base offw ) { T x → x F → 0 }
+            ? | < moff 0 > moff 2147483639 { ^ 0 } {}  // 2^31-1-8: off+wid must fit disp32
+        } {}
         ? | | | == op 48 == op 49 == op 54 | == op 45 | == op 38 == op 177 {
             : i tgt / ?? ( vec_get [i] code + base 1 ) { T x → x F → 0 } 6
             ? | < tgt 0 >= tgt n { ^ 0 } {}
@@ -2820,17 +2905,25 @@ inline @ __fr_setpos s tp i v → v {
 // Effective-address + bounds check shared by every memory template:
 // rax = r11 + ((slot & 0xffffffff) + off), trapping when off+wid runs
 // past r10 (the byte count). Mirrors the plain load/store emitters.
-@ __jit_membc ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i baseslot i off i wid i raxslot → v {
+@ __jit_membc ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i baseslot i off i wid i raxslot i guard → v {
     ? != raxslot baseslot { ( __jit_ldrax buf baseslot ) } {}
-    ( __jit_bc buf pat_at pat_rec trap_rec off wid )
+    ( __jit_bc buf pat_at pat_rec trap_rec off wid guard )
 }
 
 // The same check when the caller has already computed the unmasked
 // address into rax (the shifted-index load templates).
 // Leaves rax = the masked guest index; the access itself is one SIB
 // instruction [rax + r11 + off] emitted via __jit_mem below.
-@ __jit_bc ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i off i wid → v {
+// Guard-page mode keeps only the index mask: with r11 the base of an
+// 8 GiB PROT_NONE reservation, every (masked index + u32 offset) lands
+// inside it, and an access past the committed pages faults into the
+// runtime's SIGSEGV handler, which steers this frame to the same trap
+// stub the explicit check jumps to. The mask is NOT optional — a slot
+// holds a canonically sign-extended i32, and a negative index without
+// it would reach 2 GiB below the reservation.
+@ __jit_bc ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i off i wid i guard → v {
     ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax (& 0xffffffff)
+    ? != 0 guard { ^ v } {}
     ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 136 ) ( __jit_d buf + off wid )  // lea rcx,[rax+off+wid]
     ( __jit_b buf 73 ) ( __jit_b buf 57 ) ( __jit_b buf 202 )  // cmp r10,rcx
     ( __jit_jmp buf pat_at pat_rec 130 trap_rec )  // jb trap
@@ -2910,7 +3003,7 @@ inline @ __fr_setpos s tp i v → v {
 // The ops beyond the original tier set: extend/wrap, select, and the
 // fused memory/f64 records the predecoder emits. Falls through to the
 // plain ALU emitter for everything else.
-@ __jit_ext ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot ( Vec i ) auxv ( Vec i ) pta_off ( Vec i ) pta_stub i chaincell → v {
+@ __jit_ext ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot ( Vec i ) auxv ( Vec i ) pta_off ( Vec i ) pta_stub i chaincell i guard → v {
     ? == op 36 {  // i32.wrap_i64: dst = sign-extended low 32 of src
         ? == raxslot b { ( __jit_movslq buf ) } {  // rax already holds the slot
             ( __jit_b buf 72 ) ( __jit_b buf 99 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // movsxd rax,dword[rbx+b]
@@ -2932,19 +3025,19 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_strax buf a ) ^ v
     } {}
     ? | == op 211 == op 212 {  // LOADMULI64 / LOADADDI64: dst = mem64[b+off] OP x(d)
-        ( __jit_membc buf pat_at pat_rec trap_rec b c 8 raxslot )
+        ( __jit_membc buf pat_at pat_rec trap_rec b c 8 raxslot guard )
         ( __jit_mem buf 0 0 139 0 c )  // mov rax,[mem]
         ? == op 211 { ( __jit_rax_imul_slot buf d ) } { ( __jit_rax_op_slot buf 1 d ) }
         ( __jit_strax buf a ) ^ v
     } {}
     ? | == op 194 == op 195 {  // LOADMULF64 / LOADADDF64: dst = mem[f64] OP x(d)
-        ( __jit_membc buf pat_at pat_rec trap_rec b c 8 raxslot )
+        ( __jit_membc buf pat_at pat_rec trap_rec b c 8 raxslot guard )
         ( __jit_mem32 buf 242 1 16 0 c )  // movsd xmm0,[mem]
         ( __jit_sd_op buf ? == op 194 89 88 d )  // mulsd / addsd
         ( __jit_movsd_st buf a ) ^ v
     } {}
     ? == op 196 {  // LOADSUBBF64: dst = x(d) - mem[f64]
-        ( __jit_membc buf pat_at pat_rec trap_rec b c 8 raxslot )
+        ( __jit_membc buf pat_at pat_rec trap_rec b c 8 raxslot guard )
         ( __jit_mem32 buf 242 1 16 0 c )  // movsd xmm0,[mem]
         ( __jit_movsd_x1x0 buf )
         ( __jit_movsd_ld buf d )
@@ -2954,7 +3047,7 @@ inline @ __fr_setpos s tp i v → v {
     ? == op 197 {  // ADDSTOREF64: mem[a+off(d)] = s1(b) + s2(c)
         ( __jit_movsd_ld buf b )
         ( __jit_sd_op buf 88 c )  // addsd
-        ( __jit_membc buf pat_at pat_rec trap_rec a d 8 raxslot )
+        ( __jit_membc buf pat_at pat_rec trap_rec a d 8 raxslot guard )
         ( __jit_mem32 buf 242 1 17 0 d )  // movsd [mem],xmm0
         ^ v
     } {}
@@ -3017,7 +3110,7 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_b buf 139 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // mov eax,dword[rbx+b] (low 32 of x)
         ( __jit_b buf 211 ) ( __jit_b buf 224 )  // shl eax,cl
         ( __jit_movslq buf )  // __w32
-        ( __jit_bc buf pat_at pat_rec trap_rec c ? == op 205 8 4 )
+        ( __jit_bc buf pat_at pat_rec trap_rec c ? == op 205 8 4 guard )
         ? == op 205 { ( __jit_mem buf 0 0 139 0 c ) } { ( __jit_mem buf 0 0 99 0 c ) }  // mov rax,[mem] / movsxd rax,dword[mem]
         ( __jit_strax buf a ) ^ v
     } {}
@@ -3168,7 +3261,7 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_b buf 211 ) ( __jit_b buf 224 )  // shl eax,cl
         ( __jit_movslq buf )  // __w32
         ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // add rax,[rbx+base]
-        ( __jit_bc buf pat_at pat_rec trap_rec c ? == op 207 8 4 )
+        ( __jit_bc buf pat_at pat_rec trap_rec c ? == op 207 8 4 guard )
         ? == op 207 { ( __jit_mem buf 0 0 139 0 c ) } { ( __jit_mem buf 0 0 99 0 c ) }  // mov rax,[mem] / movsxd rax,dword[mem]
         ( __jit_strax buf a ) ^ v
     } {}
@@ -3218,6 +3311,11 @@ inline @ __fr_setpos s tp i v → v {
     ? != # i . pf jit 0 { ^ v } {}  // already tried (handle or -1)
     ? == 0 ( __jit_ok pf ) { = . pf jit # s -1 ^ v } {}
     ( __jit_state_init it m )
+    // Guard-page mode: bounds checks stay out of the emitted code, and the
+    // sealed page is registered with the fault-to-trap handler below. The
+    // registry pre-check keeps a full table from producing a function whose
+    // faults nobody converts — such a function keeps its explicit checks.
+    : i guard ? & != 0 . it mem_raw != 0 ( nurl_guard_code_room ) 1 0
     : i spcell . it jit_spcell
     : i chaincell . it jit_chain_cell
     : i slab_end . it jit_slab_end
@@ -3468,7 +3566,7 @@ inline @ __fr_setpos s tp i v → v {
                                             ? == 0 & mk 1 {  // ── load: a=dst b=base c=off d=index ──
                                                 ? != raxslot b { ( __jit_ldrax buf b ) } {}
                                                 ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * d 8 )  // add rax,[rbx+d]
-                                                ( __jit_bc buf pat_at pat_rec n c wid )
+                                                ( __jit_bc buf pat_at pat_rec n c wid guard )
                                                 ? == wid 8 { ( __jit_mem buf 0 0 139 0 c ) } {}  // mov rax,[mem]
                                                 ? & == wid 4 == 0 & mk 2 { ( __jit_mem32 buf 0 0 139 0 c ) } {}  // mov eax,[mem] (zero-ext)
                                                 ? & == wid 4 != 0 & mk 2 { ( __jit_mem buf 0 0 99 0 c ) } {}  // movsxd rax,[mem]
@@ -3479,7 +3577,7 @@ inline @ __fr_setpos s tp i v → v {
                                                 ( __jit_strax buf a )
                                             } {  // ── store: a=addr b=val c=off ──
                                                 ? != raxslot a { ( __jit_ldrax buf a ) } {}
-                                                ( __jit_bc buf pat_at pat_rec n c wid )
+                                                ( __jit_bc buf pat_at pat_rec n c wid guard )
                                                 ( __jit_ldrcx buf b )  // value → rcx
                                                 ? == wid 8 { ( __jit_mem buf 0 0 137 1 c ) } {}  // mov [mem],rcx
                                                 ? == wid 4 { ( __jit_mem32 buf 0 0 137 1 c ) } {}  // mov [mem],ecx
@@ -3526,7 +3624,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                             ( __jit_b buf 59 ) ( __jit_b buf 131 ) ( __jit_d buf * rhs 8 )  // cmp eax,[rbx+rhs]
                                                                         }
                                                                         ( __jit_jmp buf pat_at pat_rec ( __jit_jcc cctab cmpop ) / a 6 )
-                                                                    } { ( __jit_ext buf pat_at pat_rec n op a b c d w5 raxslot auxe pta_off pta_stub chaincell ) }
+                                                                    } { ( __jit_ext buf pat_at pat_rec n op a b c d w5 raxslot auxe pta_off pta_stub chaincell guard ) }
                                                                 }
                                                             }
                                                         }
@@ -3594,6 +3692,17 @@ inline @ __fr_setpos s tp i v → v {
         = ptk + ptk 1
     }
     ? != 0 ( nurl_code_seal page + len 16 ) { ( nurl_code_free page + len 16 ) = . pf jit # s -1 ^ v } {}
+    // Register the sealed page for fault-to-trap conversion: a guest
+    // access past the committed pages faults, and the handler steers the
+    // frame to this function's out-of-bounds stub (label n). Room was
+    // checked before emitting; failing here anyway would leave unguarded
+    // uncheckable code, so the page is dropped instead.
+    ? != 0 guard {
+        : i oobs ?? ( vec_get [i] lab n ) { T x → x F → 0 }
+        ? != 0 ( nurl_guard_code_add page + len 16 # *u + # i page oobs ) {
+            ( nurl_code_free page + len 16 ) = . pf jit # s -1 ^ v
+        } {}
+    } {}
     = . pf jit # s page
     = . pf jitlen + len 16
 }
@@ -3663,7 +3772,7 @@ inline @ __fr_setpos s tp i v → v {
         : i erbx . e 2
         : i eargs . e 3
         = . cd 0 erbx
-        = . cd 1 # i ( vec_data [u] . it mem )
+        = . cd 1 ( __mem_base it )
         = . cd 2 . it mem_bytes
         : i st ( nurl_call_code_at2 # *u ejh eres # *u cd # *u eargs )
         ? >= st 16 {
@@ -3696,7 +3805,7 @@ inline @ __fr_setpos s tp i v → v {
     : i sp0 . spc 0
     : i chain0 . chc 0
     = . cd 0 0  // the entry writes its own slab frame base here
-    = . cd 1 # i ( vec_data [u] . it mem )
+    = . cd 1 ( __mem_base it )
     = . cd 2 . it mem_bytes
     = . cd 3 # i ( vec_data [i] . it globals )
     = . cd 4 0 = . cd 5 0 = . cd 6 0 = . cd 7 0
@@ -5474,7 +5583,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // Host base address of the guest linear memory (recomputed per call — a
 // memory.grow between host calls may relocate the backing).
-@ __gpu_base * Interp it → i { ^ # i ( vec_data [u] . it mem ) }
+@ __gpu_base * Interp it → i { ^ ( __mem_base it ) }
 
 // Guest offset → host pointer (NULL stays NULL).
 @ __gpu_ptr * Interp it i off → *u {
@@ -5739,7 +5848,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     : i o & off 4294967295
     : i n . it mem_bytes
     ? | < len 0 > + o len n { ^ # s 0 } {}
-    ^ # s + # i ( vec_data [u] . it mem ) o
+    ^ # s + ( __mem_base it ) o
 }
 
 // Guest pointer to a NUL-terminated string → host `s`. A string with no
@@ -5749,15 +5858,13 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     : i o & off 4294967295
     : i n . it mem_bytes
     ? >= o n { ^ `` } {}
+    : *u mb # *u ( __mem_base it )
     : ~ i k o
     : ~ b term F
     ~ & < k n ! term {
-        ?? ( vec_get [u] . it mem k ) {
-            T c → { ? == # i c 0 { = term T } { = k + k 1 } }
-            F → { = k n }
-        }
+        ? == # i . mb k 0 { = term T } { = k + k 1 }
     }
-    ? term { ^ # s + # i ( vec_data [u] . it mem ) o } {}
+    ? term { ^ # s + ( __mem_base it ) o } {}
     ^ ``
 }
 
@@ -6117,13 +6224,13 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // nurl_memmove is the overlap-safe one — memory.copy allows aliasing.
 @ __mem_copy * Interp it i dst i src i n → v {
     ? <= n 0 { ^ v } {}
-    : s base # s ( vec_data [u] . it mem )
+    : s base # s ( __mem_base it )
     ( nurl_memmove # s + # i base dst # s + # i base src n )
 }
 
 @ __mem_fill * Interp it i dst i val i n → v {
     ? <= n 0 { ^ v } {}
-    : s base # s ( vec_data [u] . it mem )
+    : s base # s ( __mem_base it )
     ( nurl_memset # s + # i base dst & val 255 n )
 }
 
@@ -6333,9 +6440,10 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
         : *DataSeg ds # *DataSeg dp
         ? | > + src n ( vec_len [u] . ds bytes ) > + dst n . it mem_bytes {
             ( __trap it `out of bounds memory access` ) ^ v } {}
+        : *u mb # *u ( __mem_base it )
         : ~ i k 0
         ~ < k n {
-            ( vec_set [u] . it mem + dst k ?? ( vec_get [u] . ds bytes + src k ) { T x → x F → # u 0 } )
+            = . mb + dst k ?? ( vec_get [u] . ds bytes + src k ) { T x → x F → # u 0 }
             = k + k 1
         }
         ^ v

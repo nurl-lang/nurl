@@ -3412,3 +3412,175 @@ long long nurl_call_code_at2(void *fn, long long off, void *a0, void *a1) {
     if (!fn) return 0;
     return ((long long (*)(void *, void *))((char *)fn + off))(a0, a1);
 }
+
+/* ── guard-page linear memory ───────────────────────────────────────
+ * A wasm32 effective address is a 32-bit index plus a 32-bit constant
+ * offset: with the base of an 8 GiB PROT_NONE reservation, every
+ * possible address the guest can form lands inside the reservation, so
+ * generated code needs no bounds check at all — an out-of-bounds access
+ * faults on a PROT_NONE page and the SIGSEGV handler converts it into
+ * the same trap the explicit check would have raised, by steering the
+ * faulting frame to its function's out-of-bounds stub. Growing commits
+ * pages in place; the base never moves.
+ *
+ * Platform gate: the fault-to-trap conversion is Linux/x86-64 signal
+ * plumbing, and under ASan the runtime's own SEGV reporting owns the
+ * handler — everywhere else nurl_vmem_reserve reports failure and the
+ * caller keeps its bounds-checked path (a capability probe, like
+ * nurl_code_alloc above). */
+#if defined(__SANITIZE_ADDRESS__)
+#define NURL__GUARD_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define NURL__GUARD_ASAN 1
+#endif
+#endif
+#if defined(__linux__) && defined(__x86_64__) && !defined(_WIN32) && \
+    !defined(__wasm__) && !defined(NURL__GUARD_ASAN) && \
+    defined(__GLIBC__) && \
+    !(defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 0)
+
+#include <signal.h>
+#include <ucontext.h>
+#ifndef REG_RIP /* glibc/musl expose it only under _GNU_SOURCE */
+#define REG_RIP 16
+#endif
+
+typedef struct { unsigned long long base, end; } nurl__gmem_t;
+typedef struct { unsigned long long base, end, stub; } nurl__gcode_t;
+#define NURL__GMEM_CAP 64
+#define NURL__GCODE_CAP 65536
+static nurl__gmem_t *nurl__gmems;
+static nurl__gcode_t *nurl__gcodes;
+static int nurl__gmem_n, nurl__gcode_n;
+static volatile int nurl__guard_spin;
+static int nurl__guard_installed;
+static struct sigaction nurl__guard_prev;
+
+/* A spinlock, not a mutex: the SEGV handler takes it too, and the only
+ * writers (register/unregister) never fault while holding it. */
+static void nurl__guard_lock(void) {
+    while (__sync_lock_test_and_set(&nurl__guard_spin, 1)) {}
+}
+static void nurl__guard_unlock(void) { __sync_lock_release(&nurl__guard_spin); }
+
+static void nurl__guard_handler(int sig, siginfo_t *si, void *uctx) {
+    (void)sig;
+    unsigned long long addr = (unsigned long long)si->si_addr;
+    ucontext_t *uc = (ucontext_t *)uctx;
+    unsigned long long rip = (unsigned long long)uc->uc_mcontext.gregs[REG_RIP];
+    nurl__guard_lock();
+    int inmem = 0;
+    for (int i = 0; i < nurl__gmem_n; i++)
+        if (addr >= nurl__gmems[i].base && addr < nurl__gmems[i].end) { inmem = 1; break; }
+    if (inmem)
+        for (int i = 0; i < nurl__gcode_n; i++)
+            if (rip >= nurl__gcodes[i].base && rip < nurl__gcodes[i].end) {
+                uc->uc_mcontext.gregs[REG_RIP] = (long long)nurl__gcodes[i].stub;
+                nurl__guard_unlock();
+                return;
+            }
+    nurl__guard_unlock();
+    /* Not a guest access: put the previous handler back and return, so
+     * the instruction re-faults into it — a real crash stays a crash. */
+    sigaction(SIGSEGV, &nurl__guard_prev, 0);
+}
+
+void *nurl_vmem_reserve(long long span) {
+    void *p = mmap(0, (size_t)span, PROT_NONE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    return p == MAP_FAILED ? 0 : p;
+}
+long long nurl_vmem_commit(void *base, long long old_bytes, long long new_bytes) {
+    if (new_bytes <= old_bytes) return 0;
+    return mprotect((char *)base + old_bytes, (size_t)(new_bytes - old_bytes),
+                    PROT_READ | PROT_WRITE) == 0 ? 0 : -1;
+}
+void nurl_vmem_release(void *base, long long span) {
+    if (base) munmap(base, (size_t)span);
+}
+
+long long nurl_guard_mem_add(void *base, long long span) {
+    nurl__guard_lock();
+    if (!nurl__gmems) {
+        nurl__gmems = malloc(NURL__GMEM_CAP * sizeof *nurl__gmems);
+        nurl__gcodes = malloc(NURL__GCODE_CAP * sizeof *nurl__gcodes);
+        if (!nurl__gmems || !nurl__gcodes) {
+            free(nurl__gmems); free(nurl__gcodes);
+            nurl__gmems = 0; nurl__gcodes = 0;
+            nurl__guard_unlock();
+            return -1;
+        }
+    }
+    if (nurl__gmem_n >= NURL__GMEM_CAP) { nurl__guard_unlock(); return -1; }
+    if (!nurl__guard_installed) {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_sigaction = nurl__guard_handler;
+        sa.sa_flags = SA_SIGINFO;
+        sigemptyset(&sa.sa_mask);
+        if (sigaction(SIGSEGV, &sa, &nurl__guard_prev) != 0) {
+            nurl__guard_unlock();
+            return -1;
+        }
+        nurl__guard_installed = 1;
+    }
+    nurl__gmems[nurl__gmem_n].base = (unsigned long long)base;
+    nurl__gmems[nurl__gmem_n].end = (unsigned long long)base + (unsigned long long)span;
+    nurl__gmem_n++;
+    nurl__guard_unlock();
+    return 0;
+}
+void nurl_guard_mem_del(void *base) {
+    nurl__guard_lock();
+    for (int i = 0; i < nurl__gmem_n; i++)
+        if (nurl__gmems[i].base == (unsigned long long)base) {
+            nurl__gmems[i] = nurl__gmems[--nurl__gmem_n];
+            break;
+        }
+    nurl__guard_unlock();
+}
+long long nurl_guard_code_room(void) {
+    return nurl__gcode_n < NURL__GCODE_CAP ? 1 : 0;
+}
+long long nurl_guard_code_add(void *code, long long len, void *stub) {
+    nurl__guard_lock();
+    if (!nurl__gcodes || nurl__gcode_n >= NURL__GCODE_CAP) {
+        nurl__guard_unlock();
+        return -1;
+    }
+    nurl__gcodes[nurl__gcode_n].base = (unsigned long long)code;
+    nurl__gcodes[nurl__gcode_n].end = (unsigned long long)code + (unsigned long long)len;
+    nurl__gcodes[nurl__gcode_n].stub = (unsigned long long)stub;
+    nurl__gcode_n++;
+    nurl__guard_unlock();
+    return 0;
+}
+void nurl_guard_code_del(void *code) {
+    nurl__guard_lock();
+    for (int i = 0; i < nurl__gcode_n; i++)
+        if (nurl__gcodes[i].base == (unsigned long long)code) {
+            nurl__gcodes[i] = nurl__gcodes[--nurl__gcode_n];
+            break;
+        }
+    nurl__guard_unlock();
+}
+
+#else /* no guard-page support: capability probe reports failure */
+
+void *nurl_vmem_reserve(long long span) { (void)span; return 0; }
+long long nurl_vmem_commit(void *base, long long old_bytes, long long new_bytes) {
+    (void)base; (void)old_bytes; (void)new_bytes; return -1;
+}
+void nurl_vmem_release(void *base, long long span) { (void)base; (void)span; }
+long long nurl_guard_mem_add(void *base, long long span) {
+    (void)base; (void)span; return -1;
+}
+void nurl_guard_mem_del(void *base) { (void)base; }
+long long nurl_guard_code_room(void) { return 0; }
+long long nurl_guard_code_add(void *code, long long len, void *stub) {
+    (void)code; (void)len; (void)stub; return -1;
+}
+void nurl_guard_code_del(void *code) { (void)code; }
+
+#endif /* guard-page linear memory */

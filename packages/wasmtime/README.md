@@ -451,6 +451,17 @@ remains the semantic reference. `NURL_WT_JIT=0` turns the JIT off.
 - **Traps carry their real message** (`unreachable`, `integer divide by
   zero`, bounds), same text as the interpreter; JIT frames don't record
   positions, so backtraces come from interpreted frames only.
+- **Guard-page memory.** On Linux/x86-64 (glibc, non-ASan) a non-shared
+  linear memory is an 8 GiB `PROT_NONE` reservation with the live pages
+  committed in place, so the emitted code carries no bounds checks at
+  all: every address a masked 32-bit index plus a u32 offset can form
+  lands inside the reservation, an access past the committed pages
+  faults, and the runtime's `SIGSEGV` handler steers the faulting frame
+  to that function's out-of-bounds stub — the same trap, the same
+  message, the explicit check just never executes. Growth never moves
+  the base (`memory.grow` is an `mprotect`, not a realloc). Where the
+  plumbing is unavailable the memory falls back to a heap buffer and
+  the JIT emits its checks; `NURL_WT_GUARD=0` forces that path.
 
 Measured over `bench/wasmbench.sh`'s corpus (local, best-of-3): 0.41×
 the interpreter's wall clock — histogram/hash_join/bloom around 0.25×,

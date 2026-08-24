@@ -72,6 +72,9 @@ $ `interp.nu`
                     ( nurl_print `wasmtime: no exported function '` ) ( nurl_print export ) ( nurl_print `'\n` )
                     ( module_free m ) = rc 1
                 } {
+                    // Guard-page memory is on wherever the runtime supports it;
+                    // NURL_WT_GUARD=0 keeps the bounds-checked Vec path (A/B, debug).
+                    ?? ( env_get `NURL_WT_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} ( string_free gv ) } F → {} }
                     : *Interp it ( interp_new m )
                     ? != allow_gpu 0 { ( interp_allow_gpu it ) } {}
                     ? != allow_net 0 { ( interp_allow_net it ) } {}
@@ -133,6 +136,9 @@ $ `interp.nu`
                     ( nurl_eprintln `wasmtime: module has no _start export (not a WASI command)` )
                     ( module_free m ) = rc 1
                 } {
+                    // Guard-page memory is on wherever the runtime supports it;
+                    // NURL_WT_GUARD=0 keeps the bounds-checked Vec path (A/B, debug).
+                    ?? ( env_get `NURL_WT_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} ( string_free gv ) } F → {} }
                     : *Interp it ( interp_new m )
                     ? > fuel 0 { = . it fuel fuel } {}
                     ? != allow_gpu 0 { ( interp_allow_gpu it ) } {}
