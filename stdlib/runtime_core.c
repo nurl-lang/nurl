@@ -3355,7 +3355,10 @@ void nurl_panic(const char *msg) {
  * with no executable memory (wasm32) alloc reports failure and the
  * caller stays on its interpreter — a capability probe, not an error.
  */
-#if defined(__wasm__)
+#if defined(__wasm__) || defined(_WIN32)
+/* No JIT here: wasm32 has no executable memory, and Windows keeps the
+ * interpreter (its mmap shim in runtime_ffi.c is not an executable-page
+ * allocator). alloc reports failure and the caller stays interpreted. */
 void *nurl_code_alloc(long long n) { (void)n; return 0; }
 long long nurl_code_seal(void *p, long long n) { (void)p; (void)n; return -1; }
 void nurl_code_free(void *p, long long n) { (void)p; (void)n; }
