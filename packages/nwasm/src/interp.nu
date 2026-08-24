@@ -2855,6 +2855,7 @@ inline @ __fr_setpos s tp i v → v {
     ? | == op 125 == op 126 { ^ 1 } {}  // f64.abs / f64.neg — sign-bit ops on the raw slot
     ? == op 93 { ^ 1 } {}  // i32.clz
     ? | == op 99 == op 108 { ^ 1 } {}  // i32/i64.rem_u
+    ? | | & >= op 96 <= op 98 == op 105 | == op 106 == op 107 { ^ 1 } {}  // div_s/div_u/rem_s, i32+i64
     ? == op 170 { ^ 1 } {}  // call_indirect (tier 5b)
     ? & >= op 153 <= op 156 { ^ 1 } {}  // reinterprets (slot copies)
     ? & >= op 157 <= op 161 { ^ 1 } {}  // extendN_s family
@@ -3308,6 +3309,84 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_movslq buf )  // canonical i32
         ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
+    ? == op 106 {  // i64.div_u — trap on zero divisor
+        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+        ( __jit_ldrcx_m buf pmap xmap cvals c )
+        ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 201 )  // test rcx,rcx
+        ( __jit_jmp buf pat_at pat_rec 132 + trap_rec 1 )  // jz div-trap
+        ( __jit_b buf 49 ) ( __jit_b buf 210 )  // xor edx,edx
+        ( __jit_b buf 72 ) ( __jit_b buf 247 ) ( __jit_b buf 241 )  // div rcx → rax=quot
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
+    } {}
+    ? == op 105 {  // i64.div_s — trap on zero divisor and on MIN/-1
+        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+        ( __jit_ldrcx_m buf pmap xmap cvals c )
+        ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 201 )  // test rcx,rcx
+        ( __jit_jmp buf pat_at pat_rec 132 + trap_rec 1 )  // jz div-trap
+        ( __jit_b buf 72 ) ( __jit_b buf 131 ) ( __jit_b buf 249 ) ( __jit_b buf 255 )  // cmp rcx,-1
+        ( __jit_b buf 117 ) ( __jit_b buf 19 )  // jne +19 — over the movabs/cmp/je below
+        ( __jit_b buf 72 ) ( __jit_b buf 186 ) ( __jit_q buf -9223372036854775808 )  // movabs rdx,INT64_MIN
+        ( __jit_b buf 72 ) ( __jit_b buf 57 ) ( __jit_b buf 208 )  // cmp rax,rdx
+        ( __jit_jmp buf pat_at pat_rec 132 + trap_rec 4 )  // je overflow-trap
+        ( __jit_b buf 72 ) ( __jit_b buf 153 )  // cqo
+        ( __jit_b buf 72 ) ( __jit_b buf 247 ) ( __jit_b buf 249 )  // idiv rcx → rax=quot
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
+    } {}
+    ? == op 107 {  // i64.rem_s — trap on zero divisor; MIN rem -1 = 0, no trap
+        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+        ( __jit_ldrcx_m buf pmap xmap cvals c )
+        ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 201 )  // test rcx,rcx
+        ( __jit_jmp buf pat_at pat_rec 132 + trap_rec 1 )  // jz div-trap
+        ( __jit_b buf 72 ) ( __jit_b buf 131 ) ( __jit_b buf 249 ) ( __jit_b buf 255 )  // cmp rcx,-1
+        ( __jit_b buf 117 ) ( __jit_b buf 4 )  // jne +4 — to the cqo
+        ( __jit_b buf 49 ) ( __jit_b buf 192 )  // xor eax,eax — x rem -1 = 0
+        ( __jit_b buf 235 ) ( __jit_b buf 8 )  // jmp +8 — over cqo/idiv/mov
+        ( __jit_b buf 72 ) ( __jit_b buf 153 )  // cqo
+        ( __jit_b buf 72 ) ( __jit_b buf 247 ) ( __jit_b buf 249 )  // idiv rcx
+        ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 208 )  // mov rax,rdx
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
+    } {}
+    ? == op 97 {  // i32.div_u — trap on zero divisor
+        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+        ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax — unsigned view
+        ( __jit_ldrcx_m buf pmap xmap cvals c )
+        ( __jit_b buf 137 ) ( __jit_b buf 201 )  // mov ecx,ecx
+        ( __jit_b buf 133 ) ( __jit_b buf 201 )  // test ecx,ecx
+        ( __jit_jmp buf pat_at pat_rec 132 + trap_rec 1 )  // jz div-trap
+        ( __jit_b buf 49 ) ( __jit_b buf 210 )  // xor edx,edx
+        ( __jit_b buf 247 ) ( __jit_b buf 241 )  // div ecx → eax=quot
+        ( __jit_movslq buf )  // canonical i32
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
+    } {}
+    ? == op 96 {  // i32.div_s — trap on zero divisor and on MIN/-1
+        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+        ( __jit_ldrcx_m buf pmap xmap cvals c )
+        ( __jit_b buf 133 ) ( __jit_b buf 201 )  // test ecx,ecx
+        ( __jit_jmp buf pat_at pat_rec 132 + trap_rec 1 )  // jz div-trap
+        ( __jit_b buf 131 ) ( __jit_b buf 249 ) ( __jit_b buf 255 )  // cmp ecx,-1
+        ( __jit_b buf 117 ) ( __jit_b buf 11 )  // jne +11 — over the cmp/je below
+        ( __jit_b buf 61 ) ( __jit_d buf -2147483648 )  // cmp eax,INT32_MIN
+        ( __jit_jmp buf pat_at pat_rec 132 + trap_rec 4 )  // je overflow-trap
+        ( __jit_b buf 153 )  // cdq
+        ( __jit_b buf 247 ) ( __jit_b buf 249 )  // idiv ecx → eax=quot
+        ( __jit_movslq buf )  // canonical i32
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
+    } {}
+    ? == op 98 {  // i32.rem_s — trap on zero divisor; MIN rem -1 = 0, no trap
+        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+        ( __jit_ldrcx_m buf pmap xmap cvals c )
+        ( __jit_b buf 133 ) ( __jit_b buf 201 )  // test ecx,ecx
+        ( __jit_jmp buf pat_at pat_rec 132 + trap_rec 1 )  // jz div-trap
+        ( __jit_b buf 131 ) ( __jit_b buf 249 ) ( __jit_b buf 255 )  // cmp ecx,-1
+        ( __jit_b buf 117 ) ( __jit_b buf 4 )  // jne +4 — to the cdq
+        ( __jit_b buf 49 ) ( __jit_b buf 192 )  // xor eax,eax
+        ( __jit_b buf 235 ) ( __jit_b buf 5 )  // jmp +5 — over cdq/idiv/mov
+        ( __jit_b buf 153 )  // cdq
+        ( __jit_b buf 247 ) ( __jit_b buf 249 )  // idiv ecx
+        ( __jit_b buf 137 ) ( __jit_b buf 208 )  // mov eax,edx
+        ( __jit_movslq buf )  // canonical i32
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
+    } {}
     ? == op 108 {  // i64.rem_u — trap on zero divisor
         ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
         ( __jit_ldrcx_m buf pmap xmap cvals c )
@@ -3629,6 +3708,7 @@ inline @ __fr_setpos s tp i v → v {
     ? == op 93 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_hd_add hd b ) ^ 0 } {}  // i32.clz: 32-bit read
     ? == op 99 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_sc_add sc c wt ) ( __jit_hd_add hd b ) ( __jit_hd_add hd c ) ^ 0 } {}  // i32.rem_u: 32-bit reads
     ? == op 108 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_sc_add sc c wt ) ^ 0 } {}  // i64.rem_u
+    ? | | & >= op 96 <= op 98 == op 105 | == op 106 == op 107 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_sc_add sc c wt ) ^ 0 } {}  // div family (i32 forms consume via full loads)
     ? | == op 205 == op 206 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_sc_add sc d wt ) ( __jit_hd_add hd b ) ^ 0 } {}  // LOADSHL: 32-bit read of x
     ? | == op 207 == op 208 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_sc_add sc d wt ) ( __jit_sc_add sc w5 wt ) ( __jit_hd_add hd b ) ( __jit_hd_add hd d ) ^ 0 } {}  // LOADSHLADD: fused base + 32-bit x
     ? & >= op 153 <= op 156 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ^ 0 } {}  // reinterprets: raw 64-bit copies
@@ -4237,6 +4317,10 @@ inline @ __fr_setpos s tp i v → v {
     ( vec_push [i] lab ( vec_len [u] buf ) )
     ( __jit_b buf 184 ) ( __jit_d buf 8 )  // mov eax,8
     ( __jit_retseq buf npin )
+    // n+4: signed-division overflow — status 10, through the freeing exit.
+    ( vec_push [i] lab ( vec_len [u] buf ) )
+    ( __jit_b buf 184 ) ( __jit_d buf 10 )  // mov eax,10
+    ( __jit_jmp buf pat_at pat_rec 233 + n 2 )
     // resolve forward/backward rel32s now that every record's offset is known
     : i np ( vec_len [i] pat_at )
     : ~ i pk 0
@@ -4476,6 +4560,7 @@ inline @ __fr_setpos s tp i v → v {
     } {}
     ? == st 3 { ( __trap it `unreachable` ) ^ 1 } {}
     ? == st 4 { ( __trap it `integer divide by zero` ) ^ 1 } {}
+    ? == st 10 { ( __trap it `integer overflow` ) ^ 1 } {}
     ? == st 1 { ( __trap it `memory access out of bounds` ) ^ 1 } {}
     ? | ( interp_trapped it ) != 0 . it halt { ^ 1 } {}
     ^ 0
@@ -4524,6 +4609,7 @@ inline @ __fr_setpos s tp i v → v {
             ? != status 8 {
                 ? == status 3 { ( __trap it `unreachable` ) ( __frame_recycle fr0 ) ^ v } {}
                 ? == status 4 { ( __trap it `integer divide by zero` ) ( __frame_recycle fr0 ) ^ v } {}
+                ? == status 10 { ( __trap it `integer overflow` ) ( __frame_recycle fr0 ) ^ v } {}
                 ? != 0 status { ( __trap it `memory access out of bounds` ) ( __frame_recycle fr0 ) ^ v } {}
                 ? | ( interp_trapped it ) != 0 . it halt { ( __frame_recycle fr0 ) ^ v } {}
                 // outermost: the entry wrote the results back to the args area
