@@ -146,12 +146,24 @@ double rint(double x) {
     return t;
 }
 
-/* The float entries the wasm interpreter's f32 ops link against.
- * truncf: truncating a float's value yields a float-representable
- * value, so going through the double path is exact. sqrtf: hardware,
- * like sqrt — the single-precision instruction rounds once, which is
- * the correct answer by definition. */
+/* The float entries the wasm interpreter's f32 ops link against —
+ * directly, and via LLVM, which folds (float)floor((double)x) into a
+ * floorf() call whenever inlining exposes the pattern, so the whole
+ * rounding family has to exist under its f32 names. Each one goes
+ * through the double path exactly: every float is exactly a double,
+ * the double result is integer-valued, and every integer a float
+ * rounds to is float-representable (floats at or above 2^23 already
+ * are integers). sqrtf: hardware, like sqrt — the single-precision
+ * instruction rounds once, which is the correct answer by
+ * definition. */
 float truncf(float x) { return (float)trunc(x); }
+float floorf(float x) { return (float)floor(x); }
+float ceilf(float x) { return (float)ceil(x); }
+float rintf(float x) { return (float)rint(x); }
+float nearbyintf(float x) { return (float)rint(x); }
+float roundf(float x) { return (float)round(x); }
+float fabsf(float x) { return (float)fabs(x); }
+float copysignf(float x, float y) { return (float)copysign(x, y); }
 
 float sqrtf(float x) {
     float r;
