@@ -217,6 +217,7 @@ $ `module.nu`
     i pending_call  // callee set by call/call_indirect for the driver (-1 none)
     i max_depth  // frame-stack depth limit (trap when exceeded)
     i fuel  // remaining budget in predecoded records (-1 = unlimited)
+    i jit_ctx_free  // freelist of reusable 7-word JIT call contexts (0 = empty)
     b gpu_ok  // env/CUDA host imports enabled (opt-in; default off)
     b net_ok  // nurl_net host imports (real sockets) enabled (opt-in; default off)
     // Shared memory changes what a narrow store is allowed to touch: see
@@ -322,6 +323,7 @@ $ `module.nu`
     = . it pending_call -1
     = . it max_depth 65536
     = . it fuel -1
+    = . it jit_ctx_free 0
     = . it gpu_ok F
     = . it net_ok F
     = . it shared_mem ? & == . m has_mem 1 != . m mem_shared 0 T F
@@ -442,6 +444,7 @@ $ `module.nu`
         ( vec_free [s] . it fds )
         ( vec_free [s] . it thread_holders )
         ( vec_free [u] . it trapmsg )
+        ~ != 0 . it jit_ctx_free { : *i cb # *i . it jit_ctx_free = . it jit_ctx_free . cb 0 ( nurl_free # s cb ) }
         ( vec_free [u] . it capout )
         ( vec_free [u] . it caperr )
         : i tpn ( vec_len [s] . it pfuncs )
@@ -2759,6 +2762,24 @@ inline @ __fr_setpos s tp i v → v {
     ? != 0 is32 { ( __jit_b buf 57 ) ( __jit_b buf 200 ) } { ( __jit_b buf 72 ) ( __jit_b buf 57 ) ( __jit_b buf 200 ) }  // cmp e/rax, e/rcx
 }
 
+// A reusable 7-word JIT call context from the per-Interp freelist (word 0
+// links the free chain). This replaces a Vec per call-out — the profile
+// showed vec_new/push/grow/free dominating recursive guest calls.
+@ __jit_ctx_get * Interp it → *i {
+    : i h . it jit_ctx_free
+    ? != h 0 {
+        : *i b # *i h
+        = . it jit_ctx_free . b 0
+        ^ b
+    } {}
+    ^ # *i ( nurl_zalloc 56 )
+}
+
+@ __jit_ctx_put * Interp it * i b → v {
+    = . b 0 . it jit_ctx_free
+    = . it jit_ctx_free # i b
+}
+
 @ __jit_try * PFunc pf → v {
     ? != # i . pf jit 0 { ^ v } {}  // already tried (handle or -1)
     ? == 0 ( __jit_ok pf ) { = . pf jit # s -1 ^ v } {}
@@ -2991,13 +3012,12 @@ inline @ __fr_setpos s tp i v → v {
             // resume ] — the mem words are re-read each (re-)entry so a
             // callee that grew memory is seen; the last three carry a
             // call-out back to the interpreter (status 2).
-            : ( Vec i ) ctx ( vec_new [i] )
-            ( vec_push [i] ctx # i jrb )
-            ( vec_push [i] ctx # i ( vec_data [u] . it mem ) )
-            ( vec_push [i] ctx . it mem_bytes )
-            ( vec_push [i] ctx # i ( vec_data [i] . it globals ) )  // ctx[3] = globals base → r9
-            ( vec_push [i] ctx 0 ) ( vec_push [i] ctx 0 ) ( vec_push [i] ctx 0 )
-            : *i cd ( vec_data [i] ctx )
+            : *i cd ( __jit_ctx_get it )
+            = . cd 0 # i jrb
+            = . cd 1 # i ( vec_data [u] . it mem )
+            = . cd 2 . it mem_bytes
+            = . cd 3 # i ( vec_data [i] . it globals )  // globals base → r9
+            = . cd 4 0 = . cd 5 0 = . cd 6 0
             : ~ i status ( nurl_call_code # *u jh # *u cd )
             ~ == status 2 {  // a guest call: run the callee, then resume
                 : i callee . cd 4
@@ -3015,8 +3035,8 @@ inline @ __fr_setpos s tp i v → v {
                 ( exec_func it callee )
                 ? != 0 capped { = g_jit 1 } {}
                 = g_jit_depth - g_jit_depth 1
-                ? ( interp_trapped it ) { ( vec_free [i] ctx ) ( __frame_free fr0 ) ^ v } {}
-                ? != 0 . it halt { ( vec_free [i] ctx ) ( __frame_free fr0 ) ^ v } {}
+                ? ( interp_trapped it ) { ( __jit_ctx_put it cd ) ( __frame_recycle fr0 ) ^ v } {}
+                ? != 0 . it halt { ( __jit_ctx_put it cd ) ( __frame_recycle fr0 ) ^ v } {}
                 // results are on the value stack, last on top → into argbase
                 : ~ i rk cr
                 ~ > rk 0 { = rk - rk 1 = . jrb + argbase rk ( __pop it ) }
@@ -3024,14 +3044,14 @@ inline @ __fr_setpos s tp i v → v {
                 = . cd 2 . it mem_bytes
                 = status ( nurl_call_code_at # *u jh # *u cd resume )
             }
-            ( vec_free [i] ctx )
-            ? == status 3 { ( __trap it `unreachable` ) ( __frame_free fr0 ) ^ v } {}
-            ? != 0 status { ( __trap it `memory access out of bounds` ) ( __frame_free fr0 ) ^ v } {}
+            ( __jit_ctx_put it cd )
+            ? == status 3 { ( __trap it `unreachable` ) ( __frame_recycle fr0 ) ^ v } {}
+            ? != 0 status { ( __trap it `memory access out of bounds` ) ( __frame_recycle fr0 ) ^ v } {}
             : i lloc . pfj sbase
             : i nres . pfj nresults
             : ~ i rk 0
             ~ < rk nres { ( __push it . jrb + lloc rk ) = rk + rk 1 }
-            ( __frame_free fr0 )
+            ( __frame_recycle fr0 )
             ^ v
         } {}
     } {}
