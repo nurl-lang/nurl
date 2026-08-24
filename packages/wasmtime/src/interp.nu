@@ -3562,9 +3562,11 @@ inline @ __fr_setpos s tp i v → v {
         = callw + callw ( __jit_pin_scan1 sc ex auxv op a b c d w5 wt )
         = r + r 1
     }
-    // break-even: each pinned register pays a sync and a reload at every
-    // call site, plus the entry push/reload and exit pop.
-    : i thr + * 2 callw 6
+    // Break-even: each pinned register pays a sync and a reload at every
+    // call site, and when the calls recurse, every call is also a fresh
+    // entry paying the push/reload/pop trio — so the call weight carries
+    // the entry cost too (measured: fib regressed 4% at 2*callw+6).
+    : i thr + * 4 callw 6
     : ~ i pk 0
     ~ < pk 4 {
         : ~ i best -1
