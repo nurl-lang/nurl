@@ -3398,3 +3398,17 @@ long long nurl_call_code_at(void *fn, void *a0, long long off) {
     if (!fn) return 0;
     return ((long long (*)(void *))((char *)fn + off))(a0);
 }
+
+/* The two-argument spellings: rdi = context, rsi = the caller's argument
+ * slots. The self-allocating JIT entry (tier 6) reads its parameters
+ * through rsi and writes its results back there, so both the first call
+ * and every resume re-entry must carry the pointer. */
+long long nurl_call_code2(void *fn, void *a0, void *a1) {
+    if (!fn) return 0;
+    return ((long long (*)(void *, void *))fn)(a0, a1);
+}
+
+long long nurl_call_code_at2(void *fn, long long off, void *a0, void *a1) {
+    if (!fn) return 0;
+    return ((long long (*)(void *, void *))((char *)fn + off))(a0, a1);
+}
