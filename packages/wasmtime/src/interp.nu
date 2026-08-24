@@ -2585,6 +2585,8 @@ inline @ __fr_setpos s tp i v → v {
 @ __jit_movsd_ld ( Vec u ) buf i s → v { ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf 16 ) ( __jit_b buf 131 ) ( __jit_d buf * s 8 ) }  // movsd xmm0,[rbx+s]
 @ __jit_movsd_st ( Vec u ) buf i s → v { ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf 17 ) ( __jit_b buf 131 ) ( __jit_d buf * s 8 ) }  // movsd [rbx+s],xmm0
 @ __jit_sd_op ( Vec u ) buf i opc i s → v { ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf opc ) ( __jit_b buf 131 ) ( __jit_d buf * s 8 ) }  // <op>sd xmm0,[rbx+s]
+@ __jit_movsd_x1x0 ( Vec u ) buf → v { ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf 16 ) ( __jit_b buf 200 ) }  // movsd xmm1,xmm0
+@ __jit_subsd_x0x1 ( Vec u ) buf → v { ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf 92 ) ( __jit_b buf 193 ) }  // subsd xmm0,xmm1
 
 // Is every record templatable? Returns 1 if so (single trailing RET).
 // True if op is templatable (tier 0 straight-line + tier 1 branches and
@@ -2607,6 +2609,15 @@ inline @ __fr_setpos s tp i v → v {
     ? | == op 52 == op 53 { ^ 1 } {}  // global.get/set (tier 4)
     ? & >= op 39 <= op 42 { ^ 1 } {}  // f64 mul/add/sub/div (tier 4b)
     ? == op 172 { ^ 1 } {}  // unreachable → status 3
+    ? | == op 36 == op 37 { ^ 1 } {}  // i32.wrap_i64 / i64.extend_i32_u
+    ? == op 46 { ^ 1 } {}  // SEL
+    ? | == op 211 == op 212 { ^ 1 } {}  // LOADMULI64 / LOADADDI64
+    ? & >= op 194 <= op 201 { ^ 1 } {}  // fused f64 family
+    ? & >= op 205 <= op 208 { ^ 1 } {}  // LOADSHL / LOADSHLADD
+    ? == op 131 { ^ 1 } {}  // f64.sqrt
+    ? == op 93 { ^ 1 } {}  // i32.clz
+    ? | == op 99 == op 108 { ^ 1 } {}  // i32/i64.rem_u
+    ? == op 170 { ^ 1 } {}  // call_indirect (tier 5b)
     ^ 0
 }
 
@@ -2760,6 +2771,26 @@ inline @ __fr_setpos s tp i v → v {
     ( vec_push [i] pat_rec tgt )
     ( __jit_d buf 0 )
 }
+// Effective-address + bounds check shared by every memory template:
+// rax = r11 + ((slot & 0xffffffff) + off), trapping when off+wid runs
+// past r10 (the byte count). Mirrors the plain load/store emitters.
+@ __jit_membc ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i baseslot i off i wid → v {
+    ( __jit_ldrax buf baseslot )
+    ( __jit_bc buf pat_at pat_rec trap_rec off wid )
+}
+
+// The same check when the caller has already computed the unmasked
+// address into rax (the shifted-index load templates).
+@ __jit_bc ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i off i wid → v {
+    ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax (& 0xffffffff)
+    ( __jit_b buf 185 ) ( __jit_d buf off )  // mov ecx, off
+    ( __jit_b buf 72 ) ( __jit_b buf 1 ) ( __jit_b buf 200 )  // add rax,rcx
+    ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 72 ) ( __jit_b buf wid )  // lea rcx,[rax+wid]
+    ( __jit_b buf 73 ) ( __jit_b buf 57 ) ( __jit_b buf 202 )  // cmp r10,rcx
+    ( __jit_jmp buf pat_at pat_rec 130 trap_rec )  // jb trap
+    ( __jit_b buf 76 ) ( __jit_b buf 1 ) ( __jit_b buf 216 )  // add rax,r11
+}
+
 // cmp of two slots (i64 or i32), leaving flags for a following jcc/setcc.
 @ __jit_cmp ( Vec u ) buf i b i c i is32 → v {
     ( __jit_ldrax buf b ) ( __jit_ldrcx buf c )
@@ -2776,12 +2807,157 @@ inline @ __fr_setpos s tp i v → v {
         = . it jit_ctx_free . b 0
         ^ b
     } {}
-    ^ # *i ( nurl_zalloc 56 )
+    ^ # *i ( nurl_zalloc 64 )
 }
 
 @ __jit_ctx_put * Interp it * i b → v {
     = . b 0 . it jit_ctx_free
     = . it jit_ctx_free # i b
+}
+
+// The ops beyond the original tier set: extend/wrap, select, and the
+// fused memory/f64 records the predecoder emits. Falls through to the
+// plain ALU emitter for everything else.
+@ __jit_ext ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 → v {
+    ? == op 36 {  // i32.wrap_i64: dst = sign-extended low 32 of src
+        ( __jit_b buf 72 ) ( __jit_b buf 99 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // movsxd rax,dword[rbx+b]
+        ( __jit_strax buf a ) ^ v
+    } {}
+    ? == op 37 {  // i64.extend_i32_u: dst = src & 0xffffffff
+        ( __jit_b buf 139 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // mov eax,dword[rbx+b] (zero-extends)
+        ( __jit_strax buf a ) ^ v
+    } {}
+    ? == op 46 {  // SEL: dst = cond(d) != 0 ? srcT(b) : srcF(c)
+        ( __jit_ldrax buf d )
+        ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test rax,rax
+        ( __jit_ldrax buf c )  // srcF (mov leaves flags)
+        ( __jit_ldrcx buf b )  // srcT
+        ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf 69 ) ( __jit_b buf 193 )  // cmovne rax,rcx
+        ( __jit_strax buf a ) ^ v
+    } {}
+    ? | == op 211 == op 212 {  // LOADMULI64 / LOADADDI64: dst = mem64[b+off] OP x(d)
+        ( __jit_membc buf pat_at pat_rec trap_rec b c 8 )
+        ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 0 )  // mov rax,[rax]
+        ? == op 211 { ( __jit_rax_imul_slot buf d ) } { ( __jit_rax_op_slot buf 1 d ) }
+        ( __jit_strax buf a ) ^ v
+    } {}
+    ? | == op 194 == op 195 {  // LOADMULF64 / LOADADDF64: dst = mem[f64] OP x(d)
+        ( __jit_membc buf pat_at pat_rec trap_rec b c 8 )
+        ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf 16 ) ( __jit_b buf 0 )  // movsd xmm0,[rax]
+        ( __jit_sd_op buf ? == op 194 89 88 d )  // mulsd / addsd
+        ( __jit_movsd_st buf a ) ^ v
+    } {}
+    ? == op 196 {  // LOADSUBBF64: dst = x(d) - mem[f64]
+        ( __jit_membc buf pat_at pat_rec trap_rec b c 8 )
+        ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf 16 ) ( __jit_b buf 0 )  // movsd xmm0,[rax]
+        ( __jit_movsd_x1x0 buf )
+        ( __jit_movsd_ld buf d )
+        ( __jit_subsd_x0x1 buf )
+        ( __jit_movsd_st buf a ) ^ v
+    } {}
+    ? == op 197 {  // ADDSTOREF64: mem[a+off(d)] = s1(b) + s2(c)
+        ( __jit_movsd_ld buf b )
+        ( __jit_sd_op buf 88 c )  // addsd
+        ( __jit_membc buf pat_at pat_rec trap_rec a d 8 )
+        ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf 17 ) ( __jit_b buf 0 )  // movsd [rax],xmm0
+        ^ v
+    } {}
+    ? | == op 198 == op 199 {  // MULADDF64 / MULSUBAF64: dst = (s1*s2) ± x
+        ( __jit_movsd_ld buf b )
+        ( __jit_sd_op buf 89 c )  // mulsd
+        ( __jit_sd_op buf ? == op 198 88 92 d )  // addsd / subsd
+        ( __jit_movsd_st buf a ) ^ v
+    } {}
+    ? == op 200 {  // MULSUBBF64: dst = x - (s1*s2)
+        ( __jit_movsd_ld buf b )
+        ( __jit_sd_op buf 89 c )  // mulsd
+        ( __jit_movsd_x1x0 buf )
+        ( __jit_movsd_ld buf d )
+        ( __jit_subsd_x0x1 buf )
+        ( __jit_movsd_st buf a ) ^ v
+    } {}
+    ? == op 201 {  // SUBMULF64: dst = (s1-s2) * x
+        ( __jit_movsd_ld buf b )
+        ( __jit_sd_op buf 92 c )  // subsd
+        ( __jit_sd_op buf 89 d )  // mulsd
+        ( __jit_movsd_st buf a ) ^ v
+    } {}
+    ? == op 131 {  // f64.sqrt
+        ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf 81 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // sqrtsd xmm0,[rbx+b]
+        ( __jit_movsd_st buf a ) ^ v
+    } {}
+    ? == op 93 {  // i32.clz — bsr+cmov (baseline x86-64, no lzcnt)
+        ( __jit_b buf 139 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // mov eax,dword[rbx+b]
+        ( __jit_b buf 186 ) ( __jit_d buf -1 )  // mov edx,-1
+        ( __jit_b buf 15 ) ( __jit_b buf 189 ) ( __jit_b buf 200 )  // bsr ecx,eax (ZF=1 on zero)
+        ( __jit_b buf 15 ) ( __jit_b buf 68 ) ( __jit_b buf 202 )  // cmovz ecx,edx
+        ( __jit_b buf 184 ) ( __jit_d buf 31 )  // mov eax,31
+        ( __jit_b buf 41 ) ( __jit_b buf 200 )  // sub eax,ecx → 31-bsr, or 32 when src==0
+        ( __jit_strax buf a ) ^ v
+    } {}
+    ? == op 99 {  // i32.rem_u — trap on zero divisor
+        ( __jit_b buf 139 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // mov eax,dword[rbx+b]
+        ( __jit_b buf 139 ) ( __jit_b buf 139 ) ( __jit_d buf * c 8 )  // mov ecx,dword[rbx+c]
+        ( __jit_b buf 133 ) ( __jit_b buf 201 )  // test ecx,ecx
+        ( __jit_jmp buf pat_at pat_rec 132 + trap_rec 1 )  // jz div-trap
+        ( __jit_b buf 49 ) ( __jit_b buf 210 )  // xor edx,edx
+        ( __jit_b buf 247 ) ( __jit_b buf 241 )  // div ecx → edx=rem
+        ( __jit_b buf 137 ) ( __jit_b buf 208 )  // mov eax,edx
+        ( __jit_movslq buf )  // canonical i32
+        ( __jit_strax buf a ) ^ v
+    } {}
+    ? == op 108 {  // i64.rem_u — trap on zero divisor
+        ( __jit_ldrax buf b ) ( __jit_ldrcx buf c )
+        ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 201 )  // test rcx,rcx
+        ( __jit_jmp buf pat_at pat_rec 132 + trap_rec 1 )  // jz div-trap
+        ( __jit_b buf 49 ) ( __jit_b buf 210 )  // xor edx,edx
+        ( __jit_b buf 72 ) ( __jit_b buf 247 ) ( __jit_b buf 241 )  // div rcx → rdx=rem
+        ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 208 )  // mov rax,rdx
+        ( __jit_strax buf a ) ^ v
+    } {}
+    ? | == op 205 == op 206 {  // LOADSHL64/32: dst = mem[(x<<k) w32 + off]; b=x d=kslot
+        ( __jit_ldrcx buf d )  // k (shl masks cl by 31)
+        ( __jit_b buf 139 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // mov eax,dword[rbx+b] (low 32 of x)
+        ( __jit_b buf 211 ) ( __jit_b buf 224 )  // shl eax,cl
+        ( __jit_movslq buf )  // __w32
+        ( __jit_bc buf pat_at pat_rec trap_rec c ? == op 205 8 4 )
+        ? == op 205 { ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 0 ) } { ( __jit_b buf 72 ) ( __jit_b buf 99 ) ( __jit_b buf 0 ) }  // mov rax,[rax] / movsxd rax,dword[rax]
+        ( __jit_strax buf a ) ^ v
+    } {}
+    ? == op 170 {  // CALLIND: hand the runtime-resolved index to the driver
+        // ctx[4]=table-index value (from slot c) ctx[5]=argbase(b) ctx[6]=resume ctx[7]=typeidx(a); return 5
+        ( __jit_ldrax buf c )
+        ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 71 ) ( __jit_b buf 32 )  // mov [rdi+32], rax
+        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf b )  // mov [rdi+40], argbase
+        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 48 ) ( __jit_d buf 0 )  // mov [rdi+48], resume (patched)
+        : i imm_at - ( vec_len [u] buf ) 4
+        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf a )  // mov [rdi+56], typeidx
+        ( __jit_b buf 184 ) ( __jit_d buf 5 )  // mov eax,5 (indirect call-out)
+        ( __jit_b buf 91 ) ( __jit_b buf 195 )  // pop rbx; ret
+        : i resume ( vec_len [u] buf )
+        ( vec_set [u] buf imm_at # u & resume 255 )
+        ( vec_set [u] buf + imm_at 1 # u & ( __lshr64 resume 8 ) 255 )
+        ( vec_set [u] buf + imm_at 2 # u & ( __lshr64 resume 16 ) 255 )
+        ( vec_set [u] buf + imm_at 3 # u & ( __lshr64 resume 24 ) 255 )
+        // resume point: reload the frame/memory/globals registers
+        ( __jit_b buf 83 )  // push rbx — balance the eventual pop rbx;ret
+        ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 31 )  // mov rbx,[rdi]
+        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 95 ) ( __jit_b buf 8 )  // mov r11,[rdi+8]
+        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 )  // mov r10,[rdi+16]
+        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
+        ^ v
+    } {}
+    ? | == op 207 == op 208 {  // LOADSHLADD64/32: dst = mem[(base + (x<<k)) w32 + off]; b=base d=x w5=kslot
+        ( __jit_ldrcx buf w5 )  // k
+        ( __jit_b buf 139 ) ( __jit_b buf 131 ) ( __jit_d buf * d 8 )  // mov eax,dword[rbx+d] (low 32 of x)
+        ( __jit_b buf 211 ) ( __jit_b buf 224 )  // shl eax,cl
+        ( __jit_movslq buf )  // __w32
+        ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // add rax,[rbx+base]
+        ( __jit_bc buf pat_at pat_rec trap_rec c ? == op 207 8 4 )
+        ? == op 207 { ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 0 ) } { ( __jit_b buf 72 ) ( __jit_b buf 99 ) ( __jit_b buf 0 ) }  // mov rax,[rax] / movsxd rax,dword[rax]
+        ( __jit_strax buf a ) ^ v
+    } {}
+    ( __jit_alu buf op a b c d )
 }
 
 @ __jit_try * PFunc pf → v {
@@ -2934,7 +3110,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                             ( __jit_b buf 59 ) ( __jit_b buf 131 ) ( __jit_d buf * rhs 8 )  // cmp eax,[rbx+rhs]
                                                                         }
                                                                         ( __jit_jmp buf pat_at pat_rec ( __jit_jcc cctab cmpop ) / a 6 )
-                                                                    } { ( __jit_alu buf op a b c d ) }
+                                                                    } { ( __jit_ext buf pat_at pat_rec n op a b c d w5 ) }
                                                                 }
                                                             }
                                                         }
@@ -2956,6 +3132,10 @@ inline @ __fr_setpos s tp i v → v {
     // return 1 in eax so the caller raises the out-of-bounds trap.
     ( vec_push [i] lab ( vec_len [u] buf ) )
     ( __jit_b buf 184 ) ( __jit_d buf 1 )  // mov eax,1
+    ( __jit_b buf 91 ) ( __jit_b buf 195 )  // pop rbx; ret
+    // The divide-by-zero stub, at label index n+1: status 4.
+    ( vec_push [i] lab ( vec_len [u] buf ) )
+    ( __jit_b buf 184 ) ( __jit_d buf 4 )  // mov eax,4
     ( __jit_b buf 91 ) ( __jit_b buf 195 )  // pop rbx; ret
     // resolve forward/backward rel32s now that every record's offset is known
     : i np ( vec_len [i] pat_at )
@@ -2995,14 +3175,27 @@ inline @ __fr_setpos s tp i v → v {
     = . cd 1 # i ( vec_data [u] . it mem )
     = . cd 2 . it mem_bytes
     = . cd 3 # i ( vec_data [i] . it globals )
-    = . cd 4 0 = . cd 5 0 = . cd 6 0
+    = . cd 4 0 = . cd 5 0 = . cd 6 0 = . cd 7 0
     : ~ i status ( nurl_call_code # *u jh # *u cd )
-    ~ == status 2 {
-        : i callee . cd 4
+    ~ | == status 2 == status 5 {
+        : ~ i callee . cd 4
         : i argbase . cd 5
         : i resume . cd 6
+        ? == status 5 {  // call_indirect: resolve through the table, trapping like the interpreter
+            : i ei & callee 4294967295
+            ? | < ei 0 >= ei ( vec_len [i] . it table ) { ( __trap it `call_indirect: index out of range` ) ( __jit_ctx_put it cd ) ^ 0 } {}
+            = callee ?? ( vec_get [i] . it table ei ) { T x → x F → -1 }
+            ? < callee 0 { ( __trap it `call_indirect: null table element` ) ( __jit_ctx_put it cd ) ^ 0 } {}
+            : s want ?? ( vec_get [s] . m types . cd 7 ) { T x → x F → # s 0 }
+            : s have ( module_func_type m callee )
+            ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) ( __jit_ctx_put it cd ) ^ 0 } {}
+            ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) ( __jit_ctx_put it cd ) ^ 0 } {}
+        } {}
+        // A non-zero tr means the callee trapped — the message is already
+        // recorded, so return 0 and let the caller's halt check see it
+        // (returning 1 would relabel it "out of bounds").
         : i tr ( __jit_callee it m callee jrb argbase )
-        ? != 0 tr { ( __jit_ctx_put it cd ) ^ tr } {}
+        ? != 0 tr { ( __jit_ctx_put it cd ) ^ 0 } {}
         ? | ( interp_trapped it ) != 0 . it halt { ( __jit_ctx_put it cd ) ^ 0 } {}
         = . cd 1 # i ( vec_data [u] . it mem )
         = . cd 2 . it mem_bytes
@@ -3073,6 +3266,7 @@ inline @ __fr_setpos s tp i v → v {
         ^ 0
     } {}
     ? == st 3 { ( __trap it `unreachable` ) ( __frame_recycle fj ) ^ 1 } {}
+    ? == st 4 { ( __trap it `integer divide by zero` ) ( __frame_recycle fj ) ^ 1 } {}
     ? == st 1 { ( __trap it `memory access out of bounds` ) ( __frame_recycle fj ) ^ 1 } {}
     ? | ( interp_trapped it ) != 0 . it halt { ( __frame_recycle fj ) ^ 1 } {}
     // copy results (frame's sbase..) back to the caller slots
@@ -3116,6 +3310,7 @@ inline @ __fr_setpos s tp i v → v {
         ? & != # i jh 0 != # i jh -1 {
             : i status ( __jit_run it m pfj fr0 )
             ? == status 3 { ( __trap it `unreachable` ) ( __frame_recycle fr0 ) ^ v } {}
+            ? == status 4 { ( __trap it `integer divide by zero` ) ( __frame_recycle fr0 ) ^ v } {}
             ? != 0 status { ( __trap it `memory access out of bounds` ) ( __frame_recycle fr0 ) ^ v } {}
             ? | ( interp_trapped it ) != 0 . it halt { ( __frame_recycle fr0 ) ^ v } {}
             // outermost: results (frame's sbase..) leave on the value stack
