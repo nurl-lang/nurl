@@ -3345,3 +3345,56 @@ void nurl_panic(const char *msg) {
 }
 
 #endif  /* __wasi__ panic stubs */
+
+
+/* ── executable code pages ──────────────────────────────────────────
+ * The primitives a runtime-code generator (packages/wasmtime's jit
+ * tier) needs and the language cannot spell: a page the CPU may
+ * execute, and a call through a raw address. W^X discipline: the page
+ * is writable until sealed, executable after, never both. On targets
+ * with no executable memory (wasm32) alloc reports failure and the
+ * caller stays on its interpreter — a capability probe, not an error.
+ */
+/* The JIT emits x86-64, and its executable pages need a hosted mmap/
+ * mprotect. Everywhere else — wasm32 (no executable memory), Windows
+ * (its mmap shim is file-backed), any non-x86-64 host, and every
+ * freestanding target (the unikernel/nolibc guests, __STDC_HOSTED__ == 0,
+ * whose bare runtime supplies no executable-page allocator) — the
+ * primitives are stubs: alloc reports failure and the runtime stays on
+ * the interpreter. This keeps runtime_core.c's freestanding half from
+ * pulling mmap/mprotect on targets that do not link them. */
+#if defined(__wasm__) || defined(_WIN32) || !defined(__x86_64__) || (defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 0)
+void *nurl_code_alloc(long long n) { (void)n; return 0; }
+long long nurl_code_seal(void *p, long long n) { (void)p; (void)n; return -1; }
+void nurl_code_free(void *p, long long n) { (void)p; (void)n; }
+#else
+#include <sys/mman.h>
+void *nurl_code_alloc(long long n) {
+    void *p = mmap(0, (size_t)n, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return p == MAP_FAILED ? 0 : p;
+}
+long long nurl_code_seal(void *p, long long n) {
+    if (mprotect(p, (size_t)n, PROT_READ | PROT_EXEC) != 0) return -1;
+#if defined(__GNUC__) || defined(__clang__)
+    __builtin___clear_cache((char *)p, (char *)p + n);
+#endif
+    return 0;
+}
+void nurl_code_free(void *p, long long n) { if (p) munmap(p, (size_t)n); }
+#endif
+
+/* Call generated code: one pointer argument in, one word out — the
+ * whole jit calling convention, so the templates stay trivial. */
+long long nurl_call_code(void *fn, void *a0) {
+    if (!fn) return 0;
+    return ((long long (*)(void *))fn)(a0);
+}
+
+/* Re-enter generated code at a byte offset from its base — the JIT's
+ * resume path: a call-out returns to the interpreter, which performs the
+ * guest call and re-enters the sealed code just past the call site. */
+long long nurl_call_code_at(void *fn, void *a0, long long off) {
+    if (!fn) return 0;
+    return ((long long (*)(void *))((char *)fn + off))(a0);
+}

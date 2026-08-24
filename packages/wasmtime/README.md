@@ -159,8 +159,10 @@ wasmtime run --invoke <export> <module.wasm> [args…]
   host instruction count unchanged to the digit — this loop is
   instruction-cache bound, not issue bound. The same measurement from the
   other side: deleting the `--fuel` countdown outright removes 9.7 % of
-  the host instructions the corpus executes and 0.3 % of its cycles, so
-  the metering is free and stays exact.
+  the host instructions the corpus executes and 0.3 % of its cycles.
+  (That measurement eventually won the argument: metering has since moved
+  to loop back edges and calls — see the diagnostics note below — and the
+  per-record countdown is gone from the dispatch path entirely.)
   Over the round the corpus went 8.35 s → 6.93 s — **17.5 %** by geometric
   mean, every benchmark faster, nbody −32 %, ring_write −36 %,
   bloom_filter −36 % — at 96.0G host instructions → 78.3G over 3.12G →
@@ -235,9 +237,11 @@ wasmtime run --invoke <export> <module.wasm> [args…]
     writes flush on close/sync/`proc_exit`/normal exit
   - **diagnostics**: traps carry a message plus a wasm **backtrace** (name
     section names when present); `--fuel N` bounds runaway guests
-    deterministically — the unit is one predecoded record, which is
-    fewer than one wasm instruction (a forwarded `local.get`, a
-    `block`/`loop`/`end` all cost nothing), so a budget buys more of a
+    deterministically — the unit is one predecoded record, charged where
+    time actually accumulates: each backward branch pays its loop body's
+    record count and each call pays one, so straight-line code between
+    them runs uncharged (it is bounded by the module itself). The trap
+    lands on the back edge rather than mid-body, and a budget buys more of a
     guest here than the same number would on a byte-code interpreter
 
 ```sh

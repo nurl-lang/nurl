@@ -41,7 +41,7 @@ $ `interp.nu`
 
 // Keep in step with nurl.toml's [package] version — `--version` is what a
 // bug report quotes, so a stale literal here misattributes the bug.
-@ __wt_version → s { ^ `wasmtime 0.14.0 (pure NURL)` }
+@ __wt_version → s { ^ `wasmtime 0.15.0 (pure NURL)` }
 
 @ usage → v {
     ( nurl_print `wasmtime — a WebAssembly runtime in pure NURL\n\n` )
@@ -88,6 +88,7 @@ $ `interp.nu`
                         = k + k 1
                     }
                     ( interp_run_start it )
+                    ?? ( env_get `NURL_WT_JIT` ) { T jv → { ( interp_enable_jit ) ( string_free jv ) } F → {} }
                     ( exec_func it fidx )
                     ? ( interp_trapped it ) {
                         ( nurl_print `wasmtime: trap: ` ) ( nurl_print ( string_data ( bytes_to_str . it trapmsg ) ) ) ( nurl_print `\n` )
@@ -144,6 +145,7 @@ $ `interp.nu`
                     : ~ i k prog_start
                     ~ < k argc { : String a ( env_arg k ) ( interp_push_arg it ( string_data a ) ) ( string_free a ) = k + k 1 }
                     ( interp_run_start it )
+                    ?? ( env_get `NURL_WT_JIT` ) { T jv → { ( interp_enable_jit ) ( string_free jv ) } F → {} }
                     ( exec_func it fidx )
                     ( interp_flush it )  // _start may return without proc_exit
                     ? ( interp_trapped it ) {
