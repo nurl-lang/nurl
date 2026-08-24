@@ -2695,7 +2695,7 @@ inline @ __fr_setpos s tp i v → v {
 @ __jit_movsd_st ( Vec u ) buf i s → v { ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf 17 ) ( __jit_b buf 131 ) ( __jit_d buf * s 8 ) }  // movsd [rbx+s],xmm0
 @ __jit_sd_op ( Vec u ) buf i opc i s → v { ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf opc ) ( __jit_b buf 131 ) ( __jit_d buf * s 8 ) }  // <op>sd xmm0,[rbx+s]
 // The xmm twins of the pinned-slot accessors: slots whose every access
-// is an xmm-path operand can live in xmm8..xmm11 (xmap[slot] = 0..3).
+// is an xmm-path operand can live in xmm8..xmm15 (xmap[slot] = 0..7).
 // movsd reg,reg copies only the low 64 bits — exactly a slot's width.
 @ __jit_xr ( Vec i ) xmap i s → i { ^ ?? ( vec_get [i] xmap s ) { T x → x F → -1 } }
 
@@ -3656,7 +3656,7 @@ inline @ __fr_setpos s tp i v → v {
 // level, capped), against the protocol cost of syncing around every
 // call site. At most four integer winners (r12 first) in the returned
 // vec; slots whose every access is an xmm-path operand compete for
-// xmm8..xmm11 instead and land in `xpins`. NURL_WT_PIN=0 turns the
+// xmm8..xmm15 instead and land in `xpins`. NURL_WT_PIN=0 turns the
 // whole tier off (A/B and debugging).
 @ __jit_pin_select * PFunc pf ( Vec i ) xpins → ( Vec i ) {
     : i kvbase . pf nlocals
@@ -3747,9 +3747,11 @@ inline @ __fr_setpos s tp i v → v {
     // one reload — hence the smaller constant.
     : i xthr + * 4 callw 4
     : ~ i xk 0
-    ~ < xk 4 {
+    ~ < xk 8 {  // xmm8..xmm15 — all caller-saved, none used elsewhere
         : ~ i xbest -1
-        : ~ i xbsc xthr
+        // the fifth register on are luxury seats: each one still costs a
+        // sync+reload at every call site, so they must earn double
+        : ~ i xbsc ? < xk 4 xthr + xthr xthr
         : ~ i xi 0
         ~ < xi ns {
             : i xev ?? ( vec_get [i] ex xi ) { T x → x F → 0 }
@@ -3760,7 +3762,7 @@ inline @ __fr_setpos s tp i v → v {
             ? & & > xev xbsc > xev xsv == 0 xhv { = xbest xi = xbsc xev } {}
             = xi + xi 1
         }
-        ? < xbest 0 { = xk 4 } {
+        ? < xbest 0 { = xk 8 } {
             ( vec_push [i] xpins xbest )
             ( vec_set [i] ex xbest 0 )
             = xk + xk 1
