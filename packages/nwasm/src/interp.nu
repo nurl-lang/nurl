@@ -3204,10 +3204,52 @@ inline @ __fr_setpos s tp i v → v {
     ( __jit_prm buf ropc pa c ) ^ 1  // memory rhs (wide constants keep their slot write)
 }
 
+// The i32 twin: 32-bit op on the pinned register, then re-canonicalize
+// with movsxd. One instruction longer than the i64 forms but still
+// beats the rax round trip and keeps the rax cache alive.
+@ __jit_alu_pin32 ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i op i a i b i c i raxslot → i {
+    : i pa ( __jit_pr pmap a )
+    ? & == c a != b a { ^ 0 } {}
+    ? >= ( __jit_xr xmap b ) 0 { ^ 0 } {}
+    ? >= ( __jit_xr xmap c ) 0 { ^ 0 } {}
+    : i pc ( __jit_pr pmap c )
+    : i ccv ? == pc -2 ( __jit_cv cvals c ) 0
+    ? != b a { ? == 0 ( __jit_pmovsrc buf pmap xmap cvals pa b raxslot ) { ^ 0 } {} } {}
+    ? | | == op 10 == op 12 == op 179 {  // shifts
+        : i sext ? == op 10 4 ? == op 12 5 7
+        ? == pc -2 { ( __jit_b buf 65 ) ( __jit_b buf 193 ) ( __jit_b buf + 192 + * sext 8 & pa 7 ) ( __jit_b buf & ccv 31 ) } {
+            ( __jit_ldrcx_m buf pmap xmap cvals c )
+            ( __jit_b buf 65 ) ( __jit_b buf 211 ) ( __jit_b buf + 192 + * sext 8 & pa 7 ) }  // sh r_pa d,cl
+    } {
+        ? == op 181 {  // imul32
+            ? >= pc 0 { ( __jit_b buf 69 ) ( __jit_b buf 15 ) ( __jit_b buf 175 ) ( __jit_b buf + 192 + * & pa 7 8 & pc 7 ) } {
+                ? == pc -2 {
+                    ? != 0 ( __jit_imm8 ccv ) { ( __jit_b buf 69 ) ( __jit_b buf 107 ) ( __jit_b buf + 192 + * & pa 7 8 & pa 7 ) ( __jit_b buf & ccv 255 ) } {
+                        ( __jit_b buf 69 ) ( __jit_b buf 105 ) ( __jit_b buf + 192 + * & pa 7 8 & pa 7 ) ( __jit_d buf ccv ) }  // imul r_pa d,r_pa d,imm
+                } {
+                    ( __jit_b buf 68 ) ( __jit_b buf 15 ) ( __jit_b buf 175 ) ( __jit_b buf + 131 * & pa 7 8 ) ( __jit_d buf * c 8 ) } }  // imul r_pa d,[rbx+c]
+        } {
+            : i ropc ? == op 9 3 ? == op 185 43 ? == op 11 35 ? == op 184 11 51  // add/sub/and/or/xor reg-form
+            ? >= pc 0 { ( __jit_b buf 69 ) ( __jit_b buf ropc ) ( __jit_b buf + 192 + * & pa 7 8 & pc 7 ) } {
+                ? == pc -2 {
+                    : i iext ? == op 9 0 ? == op 185 5 ? == op 11 4 ? == op 184 1 6
+                    ? != 0 ( __jit_imm8 ccv ) { ( __jit_b buf 65 ) ( __jit_b buf 131 ) ( __jit_b buf + 192 + * iext 8 & pa 7 ) ( __jit_b buf & ccv 255 ) } {
+                        ( __jit_b buf 65 ) ( __jit_b buf 129 ) ( __jit_b buf + 192 + * iext 8 & pa 7 ) ( __jit_d buf ccv ) }  // <op> r_pa d,imm
+                } {
+                    ( __jit_b buf 68 ) ( __jit_b buf ropc ) ( __jit_b buf + 131 * & pa 7 8 ) ( __jit_d buf * c 8 ) } }  // <op> r_pa d,[rbx+c]
+        }
+    }
+    ( __jit_b buf 77 ) ( __jit_b buf 99 ) ( __jit_b buf + 192 + * & pa 7 8 & pa 7 )  // movsxd r_pa,r_pa d — canonical i32
+    ^ 1
+}
+
 @ __jit_alu ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i op i a i b i c i d i raxslot → v {
     // pin-direct i64 forms first: dst pinned + plain op → no rax at all
     ? & & >= op 0 <= op 8 >= ( __jit_pr pmap a ) 0 {
         ? != 0 ( __jit_alu_pin buf pmap xmap cvals op a b c raxslot ) { = g_jit_noax 1 ^ v } {}
+    } {}
+    ? & | & >= op 9 <= op 12 | == op 179 | == op 180 | == op 181 | == op 184 == op 185 >= ( __jit_pr pmap a ) 0 {
+        ? != 0 ( __jit_alu_pin32 buf pmap xmap cvals op a b c raxslot ) { = g_jit_noax 1 ^ v } {}
     } {}
     // every arm consumes s1 from rax first — one shared, cache-aware load
     ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}

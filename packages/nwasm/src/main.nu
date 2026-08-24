@@ -32,10 +32,16 @@ $ `interp.nu`
     ^ ?? ( vec_get [i] . ft params k ) { T x → x F → 127 }
 }
 
-@ __result_ty s ftp → i {
+@ __result_ty_at s ftp i k → i {
     ? == # i ftp 0 { ^ 127 } {}
     : *FuncType ft # *FuncType ftp
-    ^ ?? ( vec_get [i] . ft results 0 ) { T x → x F → 127 }
+    ^ ?? ( vec_get [i] . ft results k ) { T x → x F → 127 }
+}
+
+@ __result_count s ftp → i {
+    ? == # i ftp 0 { ^ 0 } {}
+    : *FuncType ft # *FuncType ftp
+    ^ ( vec_len [i] . ft results )
 }
 
 // Keep in step with nurl.toml's [package] version — `--version` is what a
@@ -101,14 +107,23 @@ $ `interp.nu`
                         ( nurl_print `nwasm: trap: ` ) ( nurl_print ( string_data ( bytes_to_str . it trapmsg ) ) ) ( nurl_print `\n` )
                         = rc 1
                     } {
+                        // every result, in order, one per line, printed by its
+                        // declared type (mirrors the reference CLI)
                         : i n ( vec_len [i] . it vs )
-                        ? > n 0 {
-                            : i top ?? ( vec_get [i] . it vs - n 1 ) { T x → x F → 0 }
-                            : i rty ( __result_ty ftp )
-                            ? == rty 124 { ( nurl_print ( nurl_str_float ( bits_to_f64 top ) ) ) } {
-                                ? == rty 125 { ( nurl_print ( nurl_str_float # f ( bits_to_f32 top ) ) ) } {
-                                    ( nurl_print_int top ) } }
-                            ( nurl_print `\n` )
+                        : ~ i nres ( __result_count ftp )
+                        ? > nres n { = nres n } {}
+                        ? > nres 0 {
+                            : ~ i rj 0
+                            ~ < rj nres {
+                                : i rv ?? ( vec_get [i] . it vs + - n nres rj ) { T x → x F → 0 }
+                                : i rty ( __result_ty_at ftp rj )
+                                ? == rty 124 { ( nurl_print ( nurl_str_float ( bits_to_f64 rv ) ) ) } {
+                                    ? == rty 125 { ( nurl_print ( nurl_str_float # f ( bits_to_f32 rv ) ) ) } {
+                                        ? | == rty 111 == rty 112 { ( nurl_print ? < rv 0 `<null reference>` `<reference>` ) } {
+                                            ( nurl_print ( nurl_str_int rv ) ) } } }
+                                ( nurl_print `\n` )
+                                = rj + rj 1
+                            }
                         } { ( nurl_print `(no result)\n` ) }
                     }
                     ( interp_free it )
