@@ -2827,14 +2827,36 @@ inline @ __fr_setpos s tp i v → v {
 
 // The same check when the caller has already computed the unmasked
 // address into rax (the shifted-index load templates).
+// Leaves rax = the masked guest index; the access itself is one SIB
+// instruction [rax + r11 + off] emitted via __jit_mem below.
 @ __jit_bc ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i off i wid → v {
     ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax (& 0xffffffff)
-    ( __jit_b buf 185 ) ( __jit_d buf off )  // mov ecx, off
-    ( __jit_b buf 72 ) ( __jit_b buf 1 ) ( __jit_b buf 200 )  // add rax,rcx
-    ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 72 ) ( __jit_b buf wid )  // lea rcx,[rax+wid]
+    ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 136 ) ( __jit_d buf + off wid )  // lea rcx,[rax+off+wid]
     ( __jit_b buf 73 ) ( __jit_b buf 57 ) ( __jit_b buf 202 )  // cmp r10,rcx
     ( __jit_jmp buf pat_at pat_rec 130 trap_rec )  // jb trap
-    ( __jit_b buf 76 ) ( __jit_b buf 1 ) ( __jit_b buf 216 )  // add rax,r11
+}
+
+// One bounds-checked access: optional prefix byte, optional 0F escape,
+// opcode, then ModRM/SIB for [rax + r11*1 + off]; 64-bit operand size.
+@ __jit_mem ( Vec u ) buf i pfx i esc i opc i reg i off → v {
+    ? != 0 pfx { ( __jit_b buf pfx ) } {}
+    ( __jit_b buf 74 )  // REX.W+X
+    ? != 0 esc { ( __jit_b buf 15 ) } {}
+    ( __jit_b buf opc )
+    ( __jit_b buf | 132 << reg 3 )  // ModRM: mod10 reg rm=100 (SIB)
+    ( __jit_b buf 24 )  // SIB: base=rax, index=r11, scale=1
+    ( __jit_d buf off )
+}
+
+// The 32/16/8-bit-operand spelling (REX.X only).
+@ __jit_mem32 ( Vec u ) buf i pfx i esc i opc i reg i off → v {
+    ? != 0 pfx { ( __jit_b buf pfx ) } {}
+    ( __jit_b buf 66 )  // REX.X
+    ? != 0 esc { ( __jit_b buf 15 ) } {}
+    ( __jit_b buf opc )
+    ( __jit_b buf | 132 << reg 3 )
+    ( __jit_b buf 24 )
+    ( __jit_d buf off )
 }
 
 // cmp of two slots (i64 or i32), leaving flags for a following jcc/setcc.
@@ -2911,19 +2933,19 @@ inline @ __fr_setpos s tp i v → v {
     } {}
     ? | == op 211 == op 212 {  // LOADMULI64 / LOADADDI64: dst = mem64[b+off] OP x(d)
         ( __jit_membc buf pat_at pat_rec trap_rec b c 8 raxslot )
-        ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 0 )  // mov rax,[rax]
+        ( __jit_mem buf 0 0 139 0 c )  // mov rax,[mem]
         ? == op 211 { ( __jit_rax_imul_slot buf d ) } { ( __jit_rax_op_slot buf 1 d ) }
         ( __jit_strax buf a ) ^ v
     } {}
     ? | == op 194 == op 195 {  // LOADMULF64 / LOADADDF64: dst = mem[f64] OP x(d)
         ( __jit_membc buf pat_at pat_rec trap_rec b c 8 raxslot )
-        ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf 16 ) ( __jit_b buf 0 )  // movsd xmm0,[rax]
+        ( __jit_mem32 buf 242 1 16 0 c )  // movsd xmm0,[mem]
         ( __jit_sd_op buf ? == op 194 89 88 d )  // mulsd / addsd
         ( __jit_movsd_st buf a ) ^ v
     } {}
     ? == op 196 {  // LOADSUBBF64: dst = x(d) - mem[f64]
         ( __jit_membc buf pat_at pat_rec trap_rec b c 8 raxslot )
-        ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf 16 ) ( __jit_b buf 0 )  // movsd xmm0,[rax]
+        ( __jit_mem32 buf 242 1 16 0 c )  // movsd xmm0,[mem]
         ( __jit_movsd_x1x0 buf )
         ( __jit_movsd_ld buf d )
         ( __jit_subsd_x0x1 buf )
@@ -2933,7 +2955,7 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_movsd_ld buf b )
         ( __jit_sd_op buf 88 c )  // addsd
         ( __jit_membc buf pat_at pat_rec trap_rec a d 8 raxslot )
-        ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf 17 ) ( __jit_b buf 0 )  // movsd [rax],xmm0
+        ( __jit_mem32 buf 242 1 17 0 d )  // movsd [mem],xmm0
         ^ v
     } {}
     ? | == op 198 == op 199 {  // MULADDF64 / MULSUBAF64: dst = (s1*s2) ± x
@@ -2996,7 +3018,7 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_b buf 211 ) ( __jit_b buf 224 )  // shl eax,cl
         ( __jit_movslq buf )  // __w32
         ( __jit_bc buf pat_at pat_rec trap_rec c ? == op 205 8 4 )
-        ? == op 205 { ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 0 ) } { ( __jit_b buf 72 ) ( __jit_b buf 99 ) ( __jit_b buf 0 ) }  // mov rax,[rax] / movsxd rax,dword[rax]
+        ? == op 205 { ( __jit_mem buf 0 0 139 0 c ) } { ( __jit_mem buf 0 0 99 0 c ) }  // mov rax,[mem] / movsxd rax,dword[mem]
         ( __jit_strax buf a ) ^ v
     } {}
     ? & >= op 153 <= op 156 {  // reinterprets: raw slot copy
@@ -3147,7 +3169,7 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_movslq buf )  // __w32
         ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // add rax,[rbx+base]
         ( __jit_bc buf pat_at pat_rec trap_rec c ? == op 207 8 4 )
-        ? == op 207 { ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 0 ) } { ( __jit_b buf 72 ) ( __jit_b buf 99 ) ( __jit_b buf 0 ) }  // mov rax,[rax] / movsxd rax,dword[rax]
+        ? == op 207 { ( __jit_mem buf 0 0 139 0 c ) } { ( __jit_mem buf 0 0 99 0 c ) }  // mov rax,[mem] / movsxd rax,dword[mem]
         ( __jit_strax buf a ) ^ v
     } {}
     ( __jit_alu buf op a b c d raxslot )
@@ -3446,35 +3468,23 @@ inline @ __fr_setpos s tp i v → v {
                                             ? == 0 & mk 1 {  // ── load: a=dst b=base c=off d=index ──
                                                 ? != raxslot b { ( __jit_ldrax buf b ) } {}
                                                 ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * d 8 )  // add rax,[rbx+d]
-                                                ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax (& 0xffffffff)
-                                                ( __jit_b buf 185 ) ( __jit_d buf c )  // mov ecx, off
-                                                ( __jit_b buf 72 ) ( __jit_b buf 1 ) ( __jit_b buf 200 )  // add rax,rcx
-                                                ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 72 ) ( __jit_b buf wid )  // lea rcx,[rax+wid]
-                                                ( __jit_b buf 73 ) ( __jit_b buf 57 ) ( __jit_b buf 202 )  // cmp r10,rcx
-                                                ( __jit_jmp buf pat_at pat_rec 130 n )  // jb trap  (r10 < ea+n ⇒ OOB)
-                                                ( __jit_b buf 76 ) ( __jit_b buf 1 ) ( __jit_b buf 216 )  // add rax,r11
-                                                ? == wid 8 { ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 0 ) } {}  // mov rax,[rax]
-                                                ? & == wid 4 == 0 & mk 2 { ( __jit_b buf 139 ) ( __jit_b buf 0 ) } {}  // mov eax,[rax] (zero-ext)
-                                                ? & == wid 4 != 0 & mk 2 { ( __jit_b buf 72 ) ( __jit_b buf 99 ) ( __jit_b buf 0 ) } {}  // movsxd rax,[rax]
-                                                ? & == wid 2 == 0 & mk 2 { ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf 183 ) ( __jit_b buf 0 ) } {}  // movzx rax,word[rax]
-                                                ? & == wid 2 != 0 & mk 2 { ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf 191 ) ( __jit_b buf 0 ) } {}  // movsx rax,word[rax]
-                                                ? & == wid 1 == 0 & mk 2 { ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf 182 ) ( __jit_b buf 0 ) } {}  // movzx rax,byte[rax]
-                                                ? & == wid 1 != 0 & mk 2 { ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf 190 ) ( __jit_b buf 0 ) } {}  // movsx rax,byte[rax]
+                                                ( __jit_bc buf pat_at pat_rec n c wid )
+                                                ? == wid 8 { ( __jit_mem buf 0 0 139 0 c ) } {}  // mov rax,[mem]
+                                                ? & == wid 4 == 0 & mk 2 { ( __jit_mem32 buf 0 0 139 0 c ) } {}  // mov eax,[mem] (zero-ext)
+                                                ? & == wid 4 != 0 & mk 2 { ( __jit_mem buf 0 0 99 0 c ) } {}  // movsxd rax,[mem]
+                                                ? & == wid 2 == 0 & mk 2 { ( __jit_mem buf 0 1 183 0 c ) } {}  // movzx rax,word[mem]
+                                                ? & == wid 2 != 0 & mk 2 { ( __jit_mem buf 0 1 191 0 c ) } {}  // movsx rax,word[mem]
+                                                ? & == wid 1 == 0 & mk 2 { ( __jit_mem buf 0 1 182 0 c ) } {}  // movzx rax,byte[mem]
+                                                ? & == wid 1 != 0 & mk 2 { ( __jit_mem buf 0 1 190 0 c ) } {}  // movsx rax,byte[mem]
                                                 ( __jit_strax buf a )
                                             } {  // ── store: a=addr b=val c=off ──
                                                 ? != raxslot a { ( __jit_ldrax buf a ) } {}
-                                                ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax
-                                                ( __jit_b buf 185 ) ( __jit_d buf c )  // mov ecx, off
-                                                ( __jit_b buf 72 ) ( __jit_b buf 1 ) ( __jit_b buf 200 )  // add rax,rcx
-                                                ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 72 ) ( __jit_b buf wid )  // lea rcx,[rax+wid]
-                                                ( __jit_b buf 73 ) ( __jit_b buf 57 ) ( __jit_b buf 202 )  // cmp r10,rcx
-                                                ( __jit_jmp buf pat_at pat_rec 130 n )  // jb trap
-                                                ( __jit_b buf 76 ) ( __jit_b buf 1 ) ( __jit_b buf 216 )  // add rax,r11
+                                                ( __jit_bc buf pat_at pat_rec n c wid )
                                                 ( __jit_ldrcx buf b )  // value → rcx
-                                                ? == wid 8 { ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 8 ) } {}  // mov [rax],rcx
-                                                ? == wid 4 { ( __jit_b buf 137 ) ( __jit_b buf 8 ) } {}  // mov [rax],ecx
-                                                ? == wid 2 { ( __jit_b buf 102 ) ( __jit_b buf 137 ) ( __jit_b buf 8 ) } {}  // mov [rax],cx
-                                                ? == wid 1 { ( __jit_b buf 136 ) ( __jit_b buf 8 ) } {}  // mov [rax],cl
+                                                ? == wid 8 { ( __jit_mem buf 0 0 137 1 c ) } {}  // mov [mem],rcx
+                                                ? == wid 4 { ( __jit_mem32 buf 0 0 137 1 c ) } {}  // mov [mem],ecx
+                                                ? == wid 2 { ( __jit_mem32 buf 102 0 137 1 c ) } {}  // mov [mem],cx
+                                                ? == wid 1 { ( __jit_mem32 buf 0 0 136 1 c ) } {}  // mov [mem],cl
                                             }
                                         } {
                                             ? | == op 43 == op 44 {  // eqz: dst = (src == 0) ? 1 : 0
