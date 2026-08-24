@@ -3398,3 +3398,11 @@ long long nurl_call_code(void *fn, void *a0) {
     if (!fn) return 0;
     return ((long long (*)(void *))fn)(a0);
 }
+
+/* Re-enter generated code at a byte offset from its base — the JIT's
+ * resume path: a call-out returns to the interpreter, which performs the
+ * guest call and re-enters the sealed code just past the call site. */
+long long nurl_call_code_at(void *fn, void *a0, long long off) {
+    if (!fn) return 0;
+    return ((long long (*)(void *))((char *)fn + off))(a0);
+}
