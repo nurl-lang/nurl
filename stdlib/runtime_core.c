@@ -3355,31 +3355,20 @@ void nurl_panic(const char *msg) {
  * with no executable memory (wasm32) alloc reports failure and the
  * caller stays on its interpreter — a capability probe, not an error.
  */
-#if defined(__wasm__) || defined(_WIN32)
-/* No JIT here: wasm32 has no executable memory, and Windows keeps the
- * interpreter (its mmap shim in runtime_ffi.c is not an executable-page
- * allocator). alloc reports failure and the caller stays interpreted. */
+/* The JIT emits x86-64, and its executable pages need a hosted mmap/
+ * mprotect. Everywhere else — wasm32 (no executable memory), Windows
+ * (its mmap shim is file-backed), any non-x86-64 host, and every
+ * freestanding target (the unikernel/nolibc guests, __STDC_HOSTED__ == 0,
+ * whose bare runtime supplies no executable-page allocator) — the
+ * primitives are stubs: alloc reports failure and the runtime stays on
+ * the interpreter. This keeps runtime_core.c's freestanding half from
+ * pulling mmap/mprotect on targets that do not link them. */
+#if defined(__wasm__) || defined(_WIN32) || !defined(__x86_64__) || (defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 0)
 void *nurl_code_alloc(long long n) { (void)n; return 0; }
 long long nurl_code_seal(void *p, long long n) { (void)p; (void)n; return -1; }
 void nurl_code_free(void *p, long long n) { (void)p; (void)n; }
 #else
-#if defined(__has_include)
-#  if __has_include(<sys/mman.h>)
-#    include <sys/mman.h>
-#    define NURL_HAVE_MMAN 1
-#  endif
-#endif
-#ifndef NURL_HAVE_MMAN
-extern void *mmap(void *, unsigned long, int, int, int, long);
-extern int munmap(void *, unsigned long);
-extern int mprotect(void *, unsigned long, int);
-#define PROT_READ 1
-#define PROT_WRITE 2
-#define PROT_EXEC 4
-#define MAP_PRIVATE 2
-#define MAP_ANONYMOUS 0x20
-#define MAP_FAILED ((void *)-1)
-#endif
+#include <sys/mman.h>
 void *nurl_code_alloc(long long n) {
     void *p = mmap(0, (size_t)n, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
