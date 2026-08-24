@@ -218,6 +218,8 @@ $ `module.nu`
     i max_depth  // frame-stack depth limit (trap when exceeded)
     i fuel  // remaining budget in predecoded records (-1 = unlimited)
     i jit_ctx_free  // freelist of reusable 7-word JIT call contexts (0 = empty)
+    i jit_lc_fidx  // last JIT callee fidx (-1 = none) and its resolved PFunc
+    i jit_lc_pf
     b gpu_ok  // env/CUDA host imports enabled (opt-in; default off)
     b net_ok  // nurl_net host imports (real sockets) enabled (opt-in; default off)
     // Shared memory changes what a narrow store is allowed to touch: see
@@ -324,6 +326,8 @@ $ `module.nu`
     = . it max_depth 65536
     = . it fuel -1
     = . it jit_ctx_free 0
+    = . it jit_lc_fidx -1
+    = . it jit_lc_pf 0
     = . it gpu_ok F
     = . it net_ok F
     = . it shared_mem ? & == . m has_mem 1 != . m mem_shared 0 T F
@@ -3020,10 +3024,15 @@ inline @ __fr_setpos s tp i v → v {
         ( __rdo_import it m callee argbase caller_rbase )
         ^ ? ( interp_trapped it ) 1 0
     } {}
-    : s cpins ( __pfunc_for it m callee )
-    ? == # i cpins 0 { ( __trap it `bad function index` ) ^ 1 } {}
+    : ~ s cpins ? == callee . it jit_lc_fidx # s . it jit_lc_pf # s 0
+    ? == # i cpins 0 {
+        = cpins ( __pfunc_for it m callee )
+        ? == # i cpins 0 { ( __trap it `bad function index` ) ^ 1 } {}
+        = . it jit_lc_fidx callee
+        = . it jit_lc_pf # i cpins
+    } {}
     : *PFunc pfc # *PFunc cpins
-    ( __jit_try pfc )
+    ? == # i . pfc jit 0 { ( __jit_try pfc ) } {}
     : s jh . pfc jit
     ? | == # i jh 0 == # i jh -1 {
         // not JIT-able: interpret it, bridging args/results through the vs
