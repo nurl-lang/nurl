@@ -2654,9 +2654,12 @@ inline @ __fr_setpos s tp i v → v {
 : ~ i g_jit 0  // tier-0 JIT opt-in (NURL_WT_JIT); off by default
 : ~ i g_jit_depth 0  // JIT call-out nesting; beyond a cap, callees interpret (1M-deep-safe)
 : ~ i g_pin 1  // tier-7 slot pinning (NURL_WT_PIN=0 keeps every slot in memory; A/B, debug)
+: ~ i g_jitdump 0  // NURL_WT_JIT_DUMP=1: emit every sealed page as decimal bytes on stderr
 @ interp_enable_jit → v { = g_jit 1 }
 
 @ interp_disable_pin → v { = g_pin 0 }
+
+@ interp_enable_jitdump → v { = g_jitdump 1 }
 
 // ── template JIT (x86-64), tier above the interpreter ────────────
 // The predecoder's register-form records are already the IR a template
@@ -2745,23 +2748,37 @@ inline @ __fr_setpos s tp i v → v {
 // pmap[slot] = the register's low 3 bits (4..7 for r12..r15), -1 unpinned.
 @ __jit_pr ( Vec i ) pmap i s → i { ^ ?? ( vec_get [i] pmap s ) { T x → x F → -1 } }
 
-@ __jit_ldrax_m ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap i s → v {
+@ __jit_cv ( Vec i ) cvals i s → i { ^ ?? ( vec_get [i] cvals s ) { T x → x F → 0 } }
+// Does v encode as a sign-extended imm32?
+@ __jit_imm32 i v → i { ^ ? & >= v -2147483648 <= v 2147483647 1 0 }
+
+@ __jit_ldrax_m ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i s → v {
     : i p ( __jit_pr pmap s )
     ? >= p 0 { ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf + 192 p ) ^ v } {}  // mov rax,r1X
+    ? == p -2 {  // compact constant: materialize instead of loading
+        : i cv ( __jit_cv cvals s )
+        ? & >= cv 0 <= cv 4294967295 { ( __jit_b buf 184 ) ( __jit_d buf cv ) ^ v } {}  // mov eax,imm32 (zero-extends)
+        ? != 0 ( __jit_imm32 cv ) { ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 192 ) ( __jit_d buf cv ) ^ v } {}  // mov rax,sign-ext imm32
+    } {}
     : i x ( __jit_xr xmap s )
     ? >= x 0 { ( __jit_b buf 102 ) ( __jit_b buf 76 ) ( __jit_b buf 15 ) ( __jit_b buf 126 ) ( __jit_b buf + 192 * x 8 ) ^ v } {}  // movq rax,xmm8+x
     ( __jit_ldrax buf s )
 }
 
-@ __jit_ldrcx_m ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap i s → v {
+@ __jit_ldrcx_m ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i s → v {
     : i p ( __jit_pr pmap s )
     ? >= p 0 { ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf + 200 p ) ^ v } {}  // mov rcx,r1X
+    ? == p -2 {
+        : i cv ( __jit_cv cvals s )
+        ? & >= cv 0 <= cv 4294967295 { ( __jit_b buf 185 ) ( __jit_d buf cv ) ^ v } {}  // mov ecx,imm32 (zero-extends)
+        ? != 0 ( __jit_imm32 cv ) { ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 193 ) ( __jit_d buf cv ) ^ v } {}  // mov rcx,sign-ext imm32
+    } {}
     : i x ( __jit_xr xmap s )
     ? >= x 0 { ( __jit_b buf 102 ) ( __jit_b buf 76 ) ( __jit_b buf 15 ) ( __jit_b buf 126 ) ( __jit_b buf + 193 * x 8 ) ^ v } {}  // movq rcx,xmm8+x
     ( __jit_ldrcx buf s )
 }
 
-@ __jit_strax_m ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap i s → v {
+@ __jit_strax_m ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i s → v {
     : i p ( __jit_pr pmap s )
     ? >= p 0 { ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf + 192 p ) ^ v } {}  // mov r1X,rax
     : i x ( __jit_xr xmap s )
@@ -2952,36 +2969,85 @@ inline @ __fr_setpos s tp i v → v {
 // mirror the interpreter's arms exactly, shifts masked by CL width).
 // A load of a slot into rcx as the second operand, then a 64-bit ALU op
 // rax OP= rcx, for the fused-pair emitters below.
-@ __jit_rax_op_slot ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap i opc i s → v {
-    ( __jit_ldrcx_m buf pmap xmap s )
+// reg-reg opcode byte → the 81 /ext extension for the imm32 spelling
+@ __jit_op_ext i opc → i {
+    ? == opc 1 { ^ 0 } {}  // add
+    ? == opc 9 { ^ 1 } {}  // or
+    ? == opc 33 { ^ 4 } {}  // and
+    ? == opc 41 { ^ 5 } {}  // sub
+    ? == opc 49 { ^ 6 } {}  // xor
+    ^ -1
+}
+
+@ __jit_rax_op_slot ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i opc i s → v {
+    ? == -2 ( __jit_pr pmap s ) {
+        : i ov ( __jit_cv cvals s )
+        ? & == opc 33 == ov 4294967295 { ( __jit_b buf 137 ) ( __jit_b buf 192 ) ^ v } {}  // and rax,0xffffffff = mov eax,eax
+        : i oe ( __jit_op_ext opc )
+        ? & >= oe 0 != 0 ( __jit_imm32 ov ) {
+            ( __jit_b buf 72 ) ( __jit_b buf 129 ) ( __jit_b buf + 192 * oe 8 ) ( __jit_d buf ov ) ^ v  // <op> rax,imm32
+        } {}
+    } {}
+    ( __jit_ldrcx_m buf pmap xmap cvals s )
     ( __jit_b buf 72 ) ( __jit_b buf opc ) ( __jit_b buf 200 )  // <op> rax,rcx
 }
 
-@ __jit_rax_imul_slot ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap i s → v {
-    ( __jit_ldrcx_m buf pmap xmap s )
+@ __jit_rax_imul_slot ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i s → v {
+    ? == -2 ( __jit_pr pmap s ) {
+        : i mv ( __jit_cv cvals s )
+        ? != 0 ( __jit_imm32 mv ) { ( __jit_b buf 72 ) ( __jit_b buf 105 ) ( __jit_b buf 192 ) ( __jit_d buf mv ) ^ v } {}  // imul rax,rax,imm32
+    } {}
+    ( __jit_ldrcx_m buf pmap xmap cvals s )
     ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf 175 ) ( __jit_b buf 193 )  // imul rax,rcx
 }
 
-@ __jit_rax_shr_slot ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap i s → v {
-    ( __jit_ldrcx_m buf pmap xmap s )
+@ __jit_rax_shr_slot ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i s → v {
+    ? == -2 ( __jit_pr pmap s ) {
+        ( __jit_b buf 72 ) ( __jit_b buf 193 ) ( __jit_b buf 232 ) ( __jit_b buf & ( __jit_cv cvals s ) 63 ) ^ v  // shr rax,imm8
+    } {}
+    ( __jit_ldrcx_m buf pmap xmap cvals s )
     ( __jit_b buf 72 ) ( __jit_b buf 211 ) ( __jit_b buf 232 )  // shr rax,cl
 }
 
-@ __jit_alu ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap i op i a i b i c i d i raxslot → v {
+@ __jit_alu_ci64 ( Vec u ) buf i op i cv → i {
+    ? == op 1 { ? != 0 ( __jit_imm32 cv ) { ( __jit_b buf 72 ) ( __jit_b buf 105 ) ( __jit_b buf 192 ) ( __jit_d buf cv ) ^ 1 } {} ^ 0 } {}  // imul rax,rax,imm32
+    ? == op 8 { ( __jit_b buf 72 ) ( __jit_b buf 193 ) ( __jit_b buf 224 ) ( __jit_b buf & cv 63 ) ^ 1 } {}  // shl rax,imm8
+    ? == op 3 { ( __jit_b buf 72 ) ( __jit_b buf 193 ) ( __jit_b buf 232 ) ( __jit_b buf & cv 63 ) ^ 1 } {}  // shr rax,imm8
+    ? == op 6 { ( __jit_b buf 72 ) ( __jit_b buf 193 ) ( __jit_b buf 248 ) ( __jit_b buf & cv 63 ) ^ 1 } {}  // sar rax,imm8
+    ? & == op 2 == cv 4294967295 { ( __jit_b buf 137 ) ( __jit_b buf 192 ) ^ 1 } {}  // and rax,0xffffffff = mov eax,eax
+    : i ext ? == op 0 0 ? == op 5 5 ? == op 2 4 ? == op 7 1 ? == op 4 6 -1
+    ? >= ext 0 { ? != 0 ( __jit_imm32 cv ) { ( __jit_b buf 72 ) ( __jit_b buf 129 ) ( __jit_b buf + 192 * ext 8 ) ( __jit_d buf cv ) ^ 1 } {} } {}
+    ^ 0
+}
+
+@ __jit_alu_ci32 ( Vec u ) buf i op i cv → i {
+    ? == op 181 { ( __jit_b buf 105 ) ( __jit_b buf 192 ) ( __jit_d buf cv ) ^ 1 } {}  // imul eax,eax,imm32
+    ? == op 10 { ( __jit_b buf 193 ) ( __jit_b buf 224 ) ( __jit_b buf & cv 31 ) ^ 1 } {}  // shl eax,imm8
+    ? == op 12 { ( __jit_b buf 193 ) ( __jit_b buf 232 ) ( __jit_b buf & cv 31 ) ^ 1 } {}  // shr eax,imm8
+    ? == op 179 { ( __jit_b buf 193 ) ( __jit_b buf 248 ) ( __jit_b buf & cv 31 ) ^ 1 } {}  // sar eax,imm8
+    : i ext ? == op 9 0 ? == op 185 5 ? == op 11 4 ? == op 184 1 ? == op 180 6 -1
+    ? >= ext 0 { ( __jit_b buf 129 ) ( __jit_b buf + 192 * ext 8 ) ( __jit_d buf cv ) ^ 1 } {}  // <op> eax,imm32 — low 32 bits only, always encodable
+    ^ 0
+}
+
+@ __jit_alu ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i op i a i b i c i d i raxslot → v {
     // every arm consumes s1 from rax first — one shared, cache-aware load
-    ? != raxslot b { ( __jit_ldrax_m buf pmap xmap b ) } {}
+    ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
     // fused i64 pairs (a=dst b=s1 c=s2 d=x): dst = (s1 OP1 s2) OP2 x
-    ? == op 13 { ( __jit_rax_imul_slot buf pmap xmap c ) ( __jit_rax_op_slot buf pmap xmap 1 d ) ( __jit_strax_m buf pmap xmap a ) ^ v } {}  // MULADD: *,+
-    ? == op 14 { ( __jit_rax_op_slot buf pmap xmap 1 c ) ( __jit_rax_op_slot buf pmap xmap 33 d ) ( __jit_strax_m buf pmap xmap a ) ^ v } {}  // ADDAND: +,&
-    ? == op 15 { ( __jit_rax_op_slot buf pmap xmap 1 c ) ( __jit_rax_imul_slot buf pmap xmap d ) ( __jit_strax_m buf pmap xmap a ) ^ v } {}  // ADDMUL: +,*
-    ? == op 16 { ( __jit_rax_op_slot buf pmap xmap 1 c ) ( __jit_rax_shr_slot buf pmap xmap d ) ( __jit_strax_m buf pmap xmap a ) ^ v } {}  // ADDSHRU: +,>>u
-    ? == op 17 { ( __jit_rax_shr_slot buf pmap xmap c ) ( __jit_rax_op_slot buf pmap xmap 33 d ) ( __jit_strax_m buf pmap xmap a ) ^ v } {}  // SHRUAND: >>u,&
-    ? == op 22 { ( __jit_rax_op_slot buf pmap xmap 1 c ) ( __jit_rax_op_slot buf pmap xmap 1 d ) ( __jit_strax_m buf pmap xmap a ) ^ v } {}  // ADDADD: +,+
-    ? == op 30 { ( __jit_rax_shr_slot buf pmap xmap c ) ( __jit_rax_op_slot buf pmap xmap 49 d ) ( __jit_strax_m buf pmap xmap a ) ^ v } {}  // SHRUXOR: >>u,^
-    ? == op 33 { ( __jit_rax_op_slot buf pmap xmap 49 c ) ( __jit_rax_imul_slot buf pmap xmap d ) ( __jit_strax_m buf pmap xmap a ) ^ v } {}  // XORMUL: ^,*
+    ? == op 13 { ( __jit_rax_imul_slot buf pmap xmap cvals c ) ( __jit_rax_op_slot buf pmap xmap cvals 1 d ) ( __jit_strax_m buf pmap xmap cvals a ) ^ v } {}  // MULADD: *,+
+    ? == op 14 { ( __jit_rax_op_slot buf pmap xmap cvals 1 c ) ( __jit_rax_op_slot buf pmap xmap cvals 33 d ) ( __jit_strax_m buf pmap xmap cvals a ) ^ v } {}  // ADDAND: +,&
+    ? == op 15 { ( __jit_rax_op_slot buf pmap xmap cvals 1 c ) ( __jit_rax_imul_slot buf pmap xmap cvals d ) ( __jit_strax_m buf pmap xmap cvals a ) ^ v } {}  // ADDMUL: +,*
+    ? == op 16 { ( __jit_rax_op_slot buf pmap xmap cvals 1 c ) ( __jit_rax_shr_slot buf pmap xmap cvals d ) ( __jit_strax_m buf pmap xmap cvals a ) ^ v } {}  // ADDSHRU: +,>>u
+    ? == op 17 { ( __jit_rax_shr_slot buf pmap xmap cvals c ) ( __jit_rax_op_slot buf pmap xmap cvals 33 d ) ( __jit_strax_m buf pmap xmap cvals a ) ^ v } {}  // SHRUAND: >>u,&
+    ? == op 22 { ( __jit_rax_op_slot buf pmap xmap cvals 1 c ) ( __jit_rax_op_slot buf pmap xmap cvals 1 d ) ( __jit_strax_m buf pmap xmap cvals a ) ^ v } {}  // ADDADD: +,+
+    ? == op 30 { ( __jit_rax_shr_slot buf pmap xmap cvals c ) ( __jit_rax_op_slot buf pmap xmap cvals 49 d ) ( __jit_strax_m buf pmap xmap cvals a ) ^ v } {}  // SHRUXOR: >>u,^
+    ? == op 33 { ( __jit_rax_op_slot buf pmap xmap cvals 49 c ) ( __jit_rax_imul_slot buf pmap xmap cvals d ) ( __jit_strax_m buf pmap xmap cvals a ) ^ v } {}  // XORMUL: ^,*
     // i32 family (9-12 base, 179/180/181/184/185 demoted): 32-bit op then movslq
     ? | & >= op 9 <= op 12 & >= op 179 <= op 185 {
-        ( __jit_ldrcx_m buf pmap xmap c )
+        : ~ i cdone 0
+        ? == -2 ( __jit_pr pmap c ) { = cdone ( __jit_alu_ci32 buf op ( __jit_cv cvals c ) ) } {}
+        ? != 0 cdone { ( __jit_movslq buf ) ( __jit_strax_m buf pmap xmap cvals a ) ^ v } {}
+        ( __jit_ldrcx_m buf pmap xmap cvals c )
         ? == op 9 { ( __jit_b buf 1 ) ( __jit_b buf 200 ) } {}  // add eax,ecx
         ? == op 185 { ( __jit_b buf 41 ) ( __jit_b buf 200 ) } {}  // sub
         ? == op 181 { ( __jit_b buf 15 ) ( __jit_b buf 175 ) ( __jit_b buf 193 ) } {}  // imul
@@ -2991,9 +3057,12 @@ inline @ __fr_setpos s tp i v → v {
         ? == op 10 { ( __jit_b buf 211 ) ( __jit_b buf 224 ) } {}  // shl eax,cl
         ? == op 12 { ( __jit_b buf 211 ) ( __jit_b buf 232 ) } {}  // shr eax,cl
         ? == op 179 { ( __jit_b buf 211 ) ( __jit_b buf 248 ) } {}  // sar eax,cl
-        ( __jit_movslq buf ) ( __jit_strax_m buf pmap xmap a )
+        ( __jit_movslq buf ) ( __jit_strax_m buf pmap xmap cvals a )
     } {
-        ( __jit_ldrcx_m buf pmap xmap c )
+        : ~ i cdone 0
+        ? == -2 ( __jit_pr pmap c ) { = cdone ( __jit_alu_ci64 buf op ( __jit_cv cvals c ) ) } {}
+        ? != 0 cdone { ( __jit_strax_m buf pmap xmap cvals a ) ^ v } {}
+        ( __jit_ldrcx_m buf pmap xmap cvals c )
         ? == op 0 { ( __jit_b buf 72 ) ( __jit_b buf 1 ) ( __jit_b buf 200 ) } {}  // add rax,rcx
         ? == op 5 { ( __jit_b buf 72 ) ( __jit_b buf 41 ) ( __jit_b buf 200 ) } {}  // sub
         ? == op 1 { ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf 175 ) ( __jit_b buf 193 ) } {}  // imul
@@ -3003,7 +3072,7 @@ inline @ __fr_setpos s tp i v → v {
         ? == op 8 { ( __jit_b buf 72 ) ( __jit_b buf 211 ) ( __jit_b buf 224 ) } {}  // shl rax,cl
         ? == op 3 { ( __jit_b buf 72 ) ( __jit_b buf 211 ) ( __jit_b buf 232 ) } {}  // shr rax,cl
         ? == op 6 { ( __jit_b buf 72 ) ( __jit_b buf 211 ) ( __jit_b buf 248 ) } {}  // sar rax,cl
-        ( __jit_strax_m buf pmap xmap a )
+        ( __jit_strax_m buf pmap xmap cvals a )
     }
 }
 
@@ -3022,8 +3091,8 @@ inline @ __fr_setpos s tp i v → v {
 // Effective-address + bounds check shared by every memory template:
 // rax = r11 + ((slot & 0xffffffff) + off), trapping when off+wid runs
 // past r10 (the byte count). Mirrors the plain load/store emitters.
-@ __jit_membc ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i baseslot i off i wid i raxslot i guard → v {
-    ? != raxslot baseslot { ( __jit_ldrax_m buf pmap xmap baseslot ) } {}
+@ __jit_membc ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i baseslot i off i wid i raxslot i guard → v {
+    ? != raxslot baseslot { ( __jit_ldrax_m buf pmap xmap cvals baseslot ) } {}
     ( __jit_bc buf pat_at pat_rec trap_rec off wid guard )
 }
 
@@ -3072,9 +3141,17 @@ inline @ __fr_setpos s tp i v → v {
 // cmp of two slots (i64 or i32), leaving flags for a following jcc/setcc.
 // `raxslot` is the emitter's one-register cache: the slot whose value rax
 // already holds (-1 = none) — a matching load is skipped.
-@ __jit_cmp ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap i b i c i is32 i raxslot → v {
-    ? != raxslot b { ( __jit_ldrax_m buf pmap xmap b ) } {}
-    ( __jit_ldrcx_m buf pmap xmap c )
+@ __jit_cmp ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i b i c i is32 i raxslot → v {
+    ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+    : i pcc ( __jit_pr pmap c )
+    ? == pcc -2 {
+        : i ccv ( __jit_cv cvals c )
+        ? != 0 ( __jit_imm32 ccv ) {
+            ? == 0 is32 { ( __jit_b buf 72 ) } {}
+            ( __jit_b buf 129 ) ( __jit_b buf 248 ) ( __jit_d buf ccv ) ^ v  // cmp e/rax, imm32
+        } {}
+    } {}
+    ( __jit_ldrcx_m buf pmap xmap cvals c )
     ? != 0 is32 { ( __jit_b buf 57 ) ( __jit_b buf 200 ) } { ( __jit_b buf 72 ) ( __jit_b buf 57 ) ( __jit_b buf 200 ) }  // cmp e/rax, e/rcx
 }
 
@@ -3120,7 +3197,7 @@ inline @ __fr_setpos s tp i v → v {
 // The ops beyond the original tier set: extend/wrap, select, and the
 // fused memory/f64 records the predecoder emits. Falls through to the
 // plain ALU emitter for everything else.
-@ __jit_ext ( Vec u ) buf ( Vec i ) pmap ( Vec i ) pins i npin ( Vec i ) xmap ( Vec i ) xpins ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot ( Vec i ) auxv ( Vec i ) pta_off ( Vec i ) pta_stub i chaincell i guard i xmmslot → v {
+@ __jit_ext ( Vec u ) buf ( Vec i ) pmap ( Vec i ) pins i npin ( Vec i ) xmap ( Vec i ) xpins ( Vec i ) cvals ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot ( Vec i ) auxv ( Vec i ) pta_off ( Vec i ) pta_stub i chaincell i guard i xmmslot → v {
     ? == op 36 {  // i32.wrap_i64: dst = sign-extended low 32 of src
         ? == raxslot b { ( __jit_movslq buf ) } {  // rax already holds the slot
             : i pw ( __jit_pr pmap b )
@@ -3128,7 +3205,7 @@ inline @ __fr_setpos s tp i v → v {
                 ( __jit_b buf 72 ) ( __jit_b buf 99 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // movsxd rax,dword[rbx+b]
             }
         }
-        ( __jit_strax_m buf pmap xmap a ) ^ v
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
     ? == op 37 {  // i64.extend_i32_u: dst = src & 0xffffffff
         ? == raxslot b { ( __jit_b buf 137 ) ( __jit_b buf 192 ) } {  // mov eax,eax
@@ -3137,30 +3214,30 @@ inline @ __fr_setpos s tp i v → v {
                 ( __jit_b buf 139 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // mov eax,dword[rbx+b] (zero-extends)
             }
         }
-        ( __jit_strax_m buf pmap xmap a ) ^ v
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
     ? == op 46 {  // SEL: dst = cond(d) != 0 ? srcT(b) : srcF(c)
-        ? != raxslot d { ( __jit_ldrax_m buf pmap xmap d ) } {}
+        ? != raxslot d { ( __jit_ldrax_m buf pmap xmap cvals d ) } {}
         ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test rax,rax
-        ( __jit_ldrax_m buf pmap xmap c )  // srcF (mov leaves flags)
-        ( __jit_ldrcx_m buf pmap xmap b )  // srcT
+        ( __jit_ldrax_m buf pmap xmap cvals c )  // srcF (mov leaves flags)
+        ( __jit_ldrcx_m buf pmap xmap cvals b )  // srcT
         ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf 69 ) ( __jit_b buf 193 )  // cmovne rax,rcx
-        ( __jit_strax_m buf pmap xmap a ) ^ v
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
     ? | == op 211 == op 212 {  // LOADMULI64 / LOADADDI64: dst = mem64[b+off] OP x(d)
-        ( __jit_membc buf pmap xmap pat_at pat_rec trap_rec b c 8 raxslot guard )
+        ( __jit_membc buf pmap xmap cvals pat_at pat_rec trap_rec b c 8 raxslot guard )
         ( __jit_mem buf 0 0 139 0 c )  // mov rax,[mem]
-        ? == op 211 { ( __jit_rax_imul_slot buf pmap xmap d ) } { ( __jit_rax_op_slot buf pmap xmap 1 d ) }
-        ( __jit_strax_m buf pmap xmap a ) ^ v
+        ? == op 211 { ( __jit_rax_imul_slot buf pmap xmap cvals d ) } { ( __jit_rax_op_slot buf pmap xmap cvals 1 d ) }
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
     ? | == op 194 == op 195 {  // LOADMULF64 / LOADADDF64: dst = mem[f64] OP x(d)
-        ( __jit_membc buf pmap xmap pat_at pat_rec trap_rec b c 8 raxslot guard )
+        ( __jit_membc buf pmap xmap cvals pat_at pat_rec trap_rec b c 8 raxslot guard )
         ( __jit_mem32 buf 242 1 16 0 c )  // movsd xmm0,[mem]
         ( __jit_sd_op_m buf xmap ? == op 194 89 88 d )  // mulsd / addsd
         ( __jit_movsd_st_m buf xmap a ) ^ v
     } {}
     ? == op 196 {  // LOADSUBBF64: dst = x(d) - mem[f64]
-        ( __jit_membc buf pmap xmap pat_at pat_rec trap_rec b c 8 raxslot guard )
+        ( __jit_membc buf pmap xmap cvals pat_at pat_rec trap_rec b c 8 raxslot guard )
         ( __jit_mem32 buf 242 1 16 0 c )  // movsd xmm0,[mem]
         ( __jit_movsd_x1x0 buf )
         ( __jit_movsd_ld_m buf xmap d )
@@ -3170,7 +3247,7 @@ inline @ __fr_setpos s tp i v → v {
     ? == op 197 {  // ADDSTOREF64: mem[a+off(d)] = s1(b) + s2(c)
         ? != xmmslot b { ( __jit_movsd_ld_m buf xmap b ) } {}
         ( __jit_sd_op_m buf xmap 88 c )  // addsd
-        ( __jit_membc buf pmap xmap pat_at pat_rec trap_rec a d 8 raxslot guard )
+        ( __jit_membc buf pmap xmap cvals pat_at pat_rec trap_rec a d 8 raxslot guard )
         ( __jit_mem32 buf 242 1 17 0 d )  // movsd [mem],xmm0
         ^ v
     } {}
@@ -3211,7 +3288,7 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_b buf 15 ) ( __jit_b buf 68 ) ( __jit_b buf 202 )  // cmovz ecx,edx
         ( __jit_b buf 184 ) ( __jit_d buf 31 )  // mov eax,31
         ( __jit_b buf 41 ) ( __jit_b buf 200 )  // sub eax,ecx → 31-bsr, or 32 when src==0
-        ( __jit_strax_m buf pmap xmap a ) ^ v
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
     ? == op 99 {  // i32.rem_u — trap on zero divisor
         : i pn ( __jit_pr pmap b )
@@ -3228,33 +3305,35 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_b buf 247 ) ( __jit_b buf 241 )  // div ecx → edx=rem
         ( __jit_b buf 137 ) ( __jit_b buf 208 )  // mov eax,edx
         ( __jit_movslq buf )  // canonical i32
-        ( __jit_strax_m buf pmap xmap a ) ^ v
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
     ? == op 108 {  // i64.rem_u — trap on zero divisor
-        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap b ) } {}
-        ( __jit_ldrcx_m buf pmap xmap c )
+        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+        ( __jit_ldrcx_m buf pmap xmap cvals c )
         ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 201 )  // test rcx,rcx
         ( __jit_jmp buf pat_at pat_rec 132 + trap_rec 1 )  // jz div-trap
         ( __jit_b buf 49 ) ( __jit_b buf 210 )  // xor edx,edx
         ( __jit_b buf 72 ) ( __jit_b buf 247 ) ( __jit_b buf 241 )  // div rcx → rdx=rem
         ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 208 )  // mov rax,rdx
-        ( __jit_strax_m buf pmap xmap a ) ^ v
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
     ? | == op 205 == op 206 {  // LOADSHL64/32: dst = mem[(x<<k) w32 + off]; b=x d=kslot
-        ( __jit_ldrcx_m buf pmap xmap d )  // k (shl masks cl by 31)
+        : i kc ( __jit_pr pmap d )
+        ? != kc -2 { ( __jit_ldrcx_m buf pmap xmap cvals d ) } {}  // k (shl masks cl by 31)
         : i px ( __jit_pr pmap b )
         ? >= px 0 { ( __jit_opeax_pr buf 139 px ) } {  // mov eax,r1Xd
             ( __jit_b buf 139 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // mov eax,dword[rbx+b] (low 32 of x)
         }
-        ( __jit_b buf 211 ) ( __jit_b buf 224 )  // shl eax,cl
+        ? == kc -2 { ( __jit_b buf 193 ) ( __jit_b buf 224 ) ( __jit_b buf & ( __jit_cv cvals d ) 31 ) } {  // shl eax,imm8
+            ( __jit_b buf 211 ) ( __jit_b buf 224 ) }  // shl eax,cl
         ( __jit_movslq buf )  // __w32
         ( __jit_bc buf pat_at pat_rec trap_rec c ? == op 205 8 4 guard )
         ? == op 205 { ( __jit_mem buf 0 0 139 0 c ) } { ( __jit_mem buf 0 0 99 0 c ) }  // mov rax,[mem] / movsxd rax,dword[mem]
-        ( __jit_strax_m buf pmap xmap a ) ^ v
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
     ? & >= op 153 <= op 156 {  // reinterprets: raw slot copy
-        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap b ) } {}
-        ( __jit_strax_m buf pmap xmap a ) ^ v
+        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
     ? | | == op 157 == op 159 | == op 158 == op 160 {  // extend8/16_s (i32+i64): movsx from the slot's low byte/word
         : i is8 ? | == op 157 == op 159 1 0
@@ -3266,7 +3345,7 @@ inline @ __fr_setpos s tp i v → v {
                 ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf ? != 0 is8 190 191 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // movsx rax,byte/word[rbx+b]
             }
         }
-        ( __jit_strax_m buf pmap xmap a ) ^ v
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
     ? == op 161 {  // i64.extend32_s
         ? == raxslot b { ( __jit_movslq buf ) } {
@@ -3275,17 +3354,17 @@ inline @ __fr_setpos s tp i v → v {
                 ( __jit_b buf 72 ) ( __jit_b buf 99 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // movsxd rax,dword[rbx+b]
             }
         }
-        ( __jit_strax_m buf pmap xmap a ) ^ v
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
     ? == op 162 {  // memory.size: pages = r10 >> 16
         ( __jit_b buf 76 ) ( __jit_b buf 137 ) ( __jit_b buf 208 )  // mov rax,r10
         ( __jit_b buf 72 ) ( __jit_b buf 193 ) ( __jit_b buf 232 ) ( __jit_b buf 16 )  // shr rax,16
-        ( __jit_strax_m buf pmap xmap a ) ^ v
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
     ? == op 163 {  // memory.grow: call-out (status 6) — the driver reallocs and resumes
         // ctx[4]=delta(src b) ctx[6]=resume ctx[7]=dst slot(a)
         ( __jit_sync_pins buf pins ) ( __jit_sync_xpins buf xpins )  // the driver writes the dst slot in memory
-        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap b ) } {}
+        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
         ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax — keep ctx[4]'s upper bytes zero
         ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 71 ) ( __jit_b buf 32 )  // mov [rdi+32], rax
         ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 48 ) ( __jit_d buf 0 )  // mov [rdi+48], resume (patched)
@@ -3315,7 +3394,7 @@ inline @ __fr_setpos s tp i v → v {
         ^ v
     } {}
     ? == op 169 {  // BRTBL: clamp the index, jump through an absolute table; each row = slot moves + jmp
-        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap b ) } {}
+        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
         ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax (u32)
         ( __jit_b buf 185 ) ( __jit_d buf c )  // mov ecx, n (default row index)
         ( __jit_b buf 72 ) ( __jit_b buf 57 ) ( __jit_b buf 200 )  // cmp rax,rcx
@@ -3336,7 +3415,7 @@ inline @ __fr_setpos s tp i v → v {
             : i msrc ?? ( vec_get [i] auxv + rowb 2 ) { T x → x F → 0 }
             : i mn ?? ( vec_get [i] auxv + rowb 3 ) { T x → x F → 0 }
             : ~ i mk 0
-            ~ < mk mn { ( __jit_ldrax_m buf pmap xmap + msrc mk ) ( __jit_strax_m buf pmap xmap + mdst mk ) = mk + mk 1 }
+            ~ < mk mn { ( __jit_ldrax_m buf pmap xmap cvals + msrc mk ) ( __jit_strax_m buf pmap xmap cvals + mdst mk ) = mk + mk 1 }
             ( __jit_jmp buf pat_at pat_rec 233 / stgt 6 )
             = rw + rw 1
         }
@@ -3377,7 +3456,7 @@ inline @ __fr_setpos s tp i v → v {
     ? == op 170 {  // CALLIND: hand the runtime-resolved index to the driver
         // ctx[4]=table-index value (from slot c) ctx[5]=argbase(b) ctx[6]=resume ctx[7]=typeidx(a); return 5
         ( __jit_sync_pins buf pins ) ( __jit_sync_xpins buf xpins )  // the callee's arguments live in this frame's memory
-        ? != raxslot c { ( __jit_ldrax_m buf pmap xmap c ) } {}
+        ? != raxslot c { ( __jit_ldrax_m buf pmap xmap cvals c ) } {}
         ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax — keep ctx[4]'s upper bytes zero (CALL writes only a dword there)
         ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 71 ) ( __jit_b buf 32 )  // mov [rdi+32], rax
         ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf b )  // mov [rdi+40], argbase
@@ -3409,12 +3488,14 @@ inline @ __fr_setpos s tp i v → v {
         ^ v
     } {}
     ? | == op 207 == op 208 {  // LOADSHLADD64/32: dst = mem[(base + (x<<k)) w32 + off]; b=base d=x w5=kslot
-        ( __jit_ldrcx_m buf pmap xmap w5 )  // k
+        : i kc2 ( __jit_pr pmap w5 )
+        ? != kc2 -2 { ( __jit_ldrcx_m buf pmap xmap cvals w5 ) } {}  // k
         : i ps ( __jit_pr pmap d )
         ? >= ps 0 { ( __jit_opeax_pr buf 139 ps ) } {  // mov eax,r1Xd
             ( __jit_b buf 139 ) ( __jit_b buf 131 ) ( __jit_d buf * d 8 )  // mov eax,dword[rbx+d] (low 32 of x)
         }
-        ( __jit_b buf 211 ) ( __jit_b buf 224 )  // shl eax,cl
+        ? == kc2 -2 { ( __jit_b buf 193 ) ( __jit_b buf 224 ) ( __jit_b buf & ( __jit_cv cvals w5 ) 31 ) } {  // shl eax,imm8
+            ( __jit_b buf 211 ) ( __jit_b buf 224 ) }  // shl eax,cl
         ( __jit_movslq buf )  // __w32
         : i pb ( __jit_pr pmap b )
         ? >= pb 0 { ( __jit_oprax_pr buf 3 pb ) } {  // add rax,r1X
@@ -3422,9 +3503,9 @@ inline @ __fr_setpos s tp i v → v {
         }
         ( __jit_bc buf pat_at pat_rec trap_rec c ? == op 207 8 4 guard )
         ? == op 207 { ( __jit_mem buf 0 0 139 0 c ) } { ( __jit_mem buf 0 0 99 0 c ) }  // mov rax,[mem] / movsxd rax,dword[mem]
-        ( __jit_strax_m buf pmap xmap a ) ^ v
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
-    ( __jit_alu buf pmap xmap op a b c d raxslot )
+    ( __jit_alu buf pmap xmap cvals op a b c d raxslot )
 }
 
 // Lazy tier-6 state: the frame slab, its top-of-stack cell and the
@@ -3578,6 +3659,8 @@ inline @ __fr_setpos s tp i v → v {
 // xmm8..xmm11 instead and land in `xpins`. NURL_WT_PIN=0 turns the
 // whole tier off (A/B and debugging).
 @ __jit_pin_select * PFunc pf ( Vec i ) xpins → ( Vec i ) {
+    : i kvbase . pf nlocals
+    : i kvn ( vec_len [i] . pf kv )
     : ( Vec i ) pins ( vec_new [i] )
     ? == 0 g_pin { ^ pins } {}
     : i n . pf count
@@ -3622,6 +3705,18 @@ inline @ __fr_setpos s tp i v → v {
         : i wt ?? ( vec_get [i] w r ) { T x → x F → 1 }
         = callw + callw ( __jit_pin_scan1 sc ex hd auxv op a b c d w5 wt )
         = r + r 1
+    }
+    // Constants the code stream can carry as immediates never earn a
+    // register; a constant too wide for imm32 competes like any slot.
+    : ~ i cz 0
+    ~ < cz kvn {
+        : i czs + kvbase cz
+        : i czv ?? ( vec_get [i] . pf kv cz ) { T x → x F → 0 }
+        : ~ i imm 0
+        ? & >= czv 0 <= czv 4294967295 { = imm 1 } {}
+        ? != 0 ( __jit_imm32 czv ) { = imm 1 } {}
+        ? & < czs ns != 0 imm { ( vec_set [i] sc czs 0 ) ( vec_set [i] ex czs 0 ) } {}
+        = cz + cz 1
     }
     // Break-even: each pinned register pays a sync and a reload at every
     // call site, and when the calls recurse, every call is also a fresh
@@ -3707,6 +3802,22 @@ inline @ __fr_setpos s tp i v → v {
     : i nl . pf nlocals
     : i knum ( vec_len [i] . pf kv )
     : i kvdata # i ( vec_data [i] . pf kv )
+    // Constant slots become immediates at their use sites: mark them in
+    // pmap (-2) and keep their values at hand. The prologue still writes
+    // the pool to memory — the f64 templates and any site without an
+    // immediate form read the slot as before.
+    : ( Vec i ) cvals ( vec_new [i] )
+    : ~ i cvk 0
+    ~ < cvk nsl { ( vec_push [i] cvals 0 ) = cvk + cvk 1 }
+    = cvk 0
+    ~ < cvk knum {
+        : i cslot + . pf nlocals cvk
+        ? & < cslot nsl == -1 ( __jit_pr pmap cslot ) {
+            ( vec_set [i] cvals cslot ?? ( vec_get [i] . pf kv cvk ) { T x → x F → 0 } )
+            ( vec_set [i] pmap cslot -2 )
+        } {}
+        = cvk + cvk 1
+    }
     : ( Vec u ) buf ( vec_new [u] )
     : ( Vec i ) code . pf code
     : i n . pf count
@@ -3827,13 +3938,13 @@ inline @ __fr_setpos s tp i v → v {
         : i c ?? ( vec_get [i] code + base 3 ) { T x → x F → 0 }
         : i d ?? ( vec_get [i] code + base 4 ) { T x → x F → 0 }
         : i w5 ?? ( vec_get [i] code + base 5 ) { T x → x F → 0 }
-        ? == op 51 { ( __jit_b buf 72 ) ( __jit_b buf 184 ) ( __jit_q buf b ) ( __jit_strax_m buf pmap xmap a ) } {  // CONST
-            ? == op 47 { ? != raxslot b { ( __jit_ldrax_m buf pmap xmap b ) } {} ( __jit_strax_m buf pmap xmap a ) } {  // MOV
+        ? == op 51 { ( __jit_b buf 72 ) ( __jit_b buf 184 ) ( __jit_q buf b ) ( __jit_strax_m buf pmap xmap cvals a ) } {  // CONST
+            ? == op 47 { ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {} ( __jit_strax_m buf pmap xmap cvals a ) } {  // MOV
                 ? == op 55 {  // RET: results to the caller's args area, free the frame
                     ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 52 ) ( __jit_b buf 36 )  // mov rsi,[rsp] — saved args ptr
                     : ~ i k 0
                     ~ < k b {
-                        ( __jit_ldrax_m buf pmap xmap + a k )
+                        ( __jit_ldrax_m buf pmap xmap cvals + a k )
                         ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 134 ) ( __jit_d buf * k 8 )  // mov [rsi+k*8],rax
                         = k + k 1
                     }
@@ -3853,10 +3964,10 @@ inline @ __fr_setpos s tp i v → v {
                         } {
                             ? == op 52 {  // global.get: rax=[r9+gidx*8]; store dst
                                 ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 129 ) ( __jit_d buf * b 8 )
-                                ( __jit_strax_m buf pmap xmap a )
+                                ( __jit_strax_m buf pmap xmap cvals a )
                             } {
                                 ? == op 53 {  // global.set: [r9+gidx*8]=rax(src)
-                                    ? != raxslot b { ( __jit_ldrax_m buf pmap xmap b ) } {}
+                                    ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
                                     ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 129 ) ( __jit_d buf * a 8 )
                                 } {
                                     ? | == op 50 == op 210 {  // CALL / CALLIMP
@@ -3960,10 +4071,12 @@ inline @ __fr_setpos s tp i v → v {
                                             : i mk ( __jit_memkind op )
                                             : i wid >> mk 2
                                             ? == 0 & mk 1 {  // ── load: a=dst b=base c=off d=index ──
-                                                ? != raxslot b { ( __jit_ldrax_m buf pmap xmap b ) } {}
+                                                ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
                                                 : i pix ( __jit_pr pmap d )
                                                 ? >= pix 0 { ( __jit_oprax_pr buf 3 pix ) } {  // add rax,r1X
-                                                    ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * d 8 )  // add rax,[rbx+d]
+                                                    : ~ i ixd 0
+                                                    ? == pix -2 { = ixd ( __jit_alu_ci64 buf 0 ( __jit_cv cvals d ) ) } {}
+                                                    ? == 0 ixd { ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * d 8 ) } {}  // add rax,[rbx+d]
                                                 }
                                                 ( __jit_bc buf pat_at pat_rec n c wid guard )
                                                 ? == wid 8 { ( __jit_mem buf 0 0 139 0 c ) } {}  // mov rax,[mem]
@@ -3973,11 +4086,11 @@ inline @ __fr_setpos s tp i v → v {
                                                 ? & == wid 2 != 0 & mk 2 { ( __jit_mem buf 0 1 191 0 c ) } {}  // movsx rax,word[mem]
                                                 ? & == wid 1 == 0 & mk 2 { ( __jit_mem buf 0 1 182 0 c ) } {}  // movzx rax,byte[mem]
                                                 ? & == wid 1 != 0 & mk 2 { ( __jit_mem buf 0 1 190 0 c ) } {}  // movsx rax,byte[mem]
-                                                ( __jit_strax_m buf pmap xmap a )
+                                                ( __jit_strax_m buf pmap xmap cvals a )
                                             } {  // ── store: a=addr b=val c=off ──
-                                                ? != raxslot a { ( __jit_ldrax_m buf pmap xmap a ) } {}
+                                                ? != raxslot a { ( __jit_ldrax_m buf pmap xmap cvals a ) } {}
                                                 ( __jit_bc buf pat_at pat_rec n c wid guard )
-                                                ( __jit_ldrcx_m buf pmap xmap b )  // value → rcx
+                                                ( __jit_ldrcx_m buf pmap xmap cvals b )  // value → rcx
                                                 ? == wid 8 { ( __jit_mem buf 0 0 137 1 c ) } {}  // mov [mem],rcx
                                                 ? == wid 4 { ( __jit_mem32 buf 0 0 137 1 c ) } {}  // mov [mem],ecx
                                                 ? == wid 2 { ( __jit_mem32 buf 102 0 137 1 c ) } {}  // mov [mem],cx
@@ -3985,29 +4098,29 @@ inline @ __fr_setpos s tp i v → v {
                                             }
                                         } {
                                             ? | == op 43 == op 44 {  // eqz: dst = (src == 0) ? 1 : 0
-                                                ? != raxslot b { ( __jit_ldrax_m buf pmap xmap b ) } {}
+                                                ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
                                                 ? == op 43 { ( __jit_b buf 133 ) ( __jit_b buf 192 ) } { ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 ) }  // test e/rax,e/rax
                                                 ( __jit_b buf 15 ) ( __jit_b buf 148 ) ( __jit_b buf 192 )  // sete al
                                                 ( __jit_b buf 15 ) ( __jit_b buf 182 ) ( __jit_b buf 192 )  // movzx eax,al
-                                                ( __jit_strax_m buf pmap xmap a )
+                                                ( __jit_strax_m buf pmap xmap cvals a )
                                             } {
                                                 ? & >= op 56 <= op 75 {  // compare → 0/1 in dst
-                                                    ( __jit_cmp buf pmap xmap b c ? < op 66 1 0 raxslot )
+                                                    ( __jit_cmp buf pmap xmap cvals b c ? < op 66 1 0 raxslot )
                                                     ( __jit_b buf 15 ) ( __jit_b buf ?? ( vec_get [i] ( __jit_settab ) % - op 56 10 ) { T x → x F → 148 } ) ( __jit_b buf 192 )  // setcc al
                                                     ( __jit_b buf 15 ) ( __jit_b buf 182 ) ( __jit_b buf 192 )  // movzx eax,al
-                                                    ( __jit_strax_m buf pmap xmap a )
+                                                    ( __jit_strax_m buf pmap xmap cvals a )
                                                 } {
                                                     ? == op 49 { ( __jit_jmp buf pat_at pat_rec 233 / a 6 ) } {  // BR
                                                         ? == op 48 {  // IFZ: jump if rbase[b]==0
-                                                            ? != raxslot b { ( __jit_ldrax_m buf pmap xmap b ) } {} ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test rax,rax
+                                                            ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {} ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test rax,rax
                                                             ( __jit_jmp buf pat_at pat_rec 132 / a 6 )  // je
                                                         } {
                                                             ? == op 54 {  // BRIF: jump if rbase[b]!=0
-                                                                ? != raxslot b { ( __jit_ldrax_m buf pmap xmap b ) } {} ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 )
+                                                                ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {} ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 )
                                                                 ( __jit_jmp buf pat_at pat_rec 133 / a 6 )  // jne
                                                             } {
                                                                 ? == op 45 {  // BRIFC: cmp lhs,rhs; jcc target (cmpop in d)
-                                                                    ( __jit_cmp buf pmap xmap b c ? < d 66 1 0 raxslot )
+                                                                    ( __jit_cmp buf pmap xmap cvals b c ? < d 66 1 0 raxslot )
                                                                     ( __jit_jmp buf pat_at pat_rec ( __jit_jcc cctab d ) / a 6 )
                                                                 } {
                                                                     ? | == op 38 == op 177 {  // ADDBRIFC: v=s1+s2; dst=v; cmp v,rhs; jcc
@@ -4016,22 +4129,29 @@ inline @ __fr_setpos s tp i v → v {
                                                                         : i pd2 ( __jit_pr pmap d )
                                                                         : i pr2 ( __jit_pr pmap rhs )
                                                                         ? == op 38 {  // i64
-                                                                            ? != raxslot c { ( __jit_ldrax_m buf pmap xmap c ) } {}
+                                                                            ? != raxslot c { ( __jit_ldrax_m buf pmap xmap cvals c ) } {}
                                                                             ? >= pd2 0 { ( __jit_oprax_pr buf 3 pd2 ) } {  // add rax,r1X
-                                                                                ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * d 8 ) }  // add rax,[rbx+s2]
-                                                                            ( __jit_strax_m buf pmap xmap b )
+                                                                                : ~ i ad64 0
+                                                                                ? == pd2 -2 { = ad64 ( __jit_alu_ci64 buf 0 ( __jit_cv cvals d ) ) } {}
+                                                                                ? == 0 ad64 { ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * d 8 ) } {} }  // add rax,[rbx+s2]
+                                                                            ( __jit_strax_m buf pmap xmap cvals b )
                                                                             ? >= pr2 0 { ( __jit_oprax_pr buf 59 pr2 ) } {  // cmp rax,r1X
-                                                                                ( __jit_b buf 72 ) ( __jit_b buf 59 ) ( __jit_b buf 131 ) ( __jit_d buf * rhs 8 ) }  // cmp rax,[rbx+rhs]
+                                                                                : ~ i cr64 0
+                                                                                ? == pr2 -2 { : i rv64 ( __jit_cv cvals rhs ) ? != 0 ( __jit_imm32 rv64 ) { ( __jit_b buf 72 ) ( __jit_b buf 129 ) ( __jit_b buf 248 ) ( __jit_d buf rv64 ) = cr64 1 } {} } {}
+                                                                                ? == 0 cr64 { ( __jit_b buf 72 ) ( __jit_b buf 59 ) ( __jit_b buf 131 ) ( __jit_d buf * rhs 8 ) } {} }  // cmp rax,[rbx+rhs]
                                                                         } {  // i32
-                                                                            ? != raxslot c { ( __jit_ldrax_m buf pmap xmap c ) } {}
+                                                                            ? != raxslot c { ( __jit_ldrax_m buf pmap xmap cvals c ) } {}
                                                                             ? >= pd2 0 { ( __jit_opeax_pr buf 3 pd2 ) } {  // add eax,r1Xd
-                                                                                ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * d 8 ) }  // add eax,[rbx+s2]
-                                                                            ( __jit_movslq buf ) ( __jit_strax_m buf pmap xmap b )
+                                                                                : ~ i ad32 0
+                                                                                ? == pd2 -2 { = ad32 ( __jit_alu_ci32 buf 9 ( __jit_cv cvals d ) ) } {}
+                                                                                ? == 0 ad32 { ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * d 8 ) } {} }  // add eax,[rbx+s2]
+                                                                            ( __jit_movslq buf ) ( __jit_strax_m buf pmap xmap cvals b )
                                                                             ? >= pr2 0 { ( __jit_opeax_pr buf 59 pr2 ) } {  // cmp eax,r1Xd
-                                                                                ( __jit_b buf 59 ) ( __jit_b buf 131 ) ( __jit_d buf * rhs 8 ) }  // cmp eax,[rbx+rhs]
+                                                                                ? == pr2 -2 { ( __jit_b buf 129 ) ( __jit_b buf 248 ) ( __jit_d buf ( __jit_cv cvals rhs ) ) } {  // cmp eax,imm32
+                                                                                    ( __jit_b buf 59 ) ( __jit_b buf 131 ) ( __jit_d buf * rhs 8 ) } }  // cmp eax,[rbx+rhs]
                                                                         }
                                                                         ( __jit_jmp buf pat_at pat_rec ( __jit_jcc cctab cmpop ) / a 6 )
-                                                                    } { ( __jit_ext buf pmap pins npin xmap xpins pat_at pat_rec n op a b c d w5 raxslot auxe pta_off pta_stub chaincell guard xmmslot ) }
+                                                                    } { ( __jit_ext buf pmap pins npin xmap xpins cvals pat_at pat_rec n op a b c d w5 raxslot auxe pta_off pta_stub chaincell guard xmmslot ) }
                                                                 }
                                                             }
                                                         }
@@ -4100,6 +4220,18 @@ inline @ __fr_setpos s tp i v → v {
         = ptk + ptk 1
     }
     ? != 0 ( nurl_code_seal page + len 16 ) { ( nurl_code_free page + len 16 ) = . pf jit # s -1 ^ v } {}
+    ? != 0 g_jitdump {  // decimal byte stream; tools/jitdump.py turns it back into objdump input
+        ( nurl_eprint `[jitdump] cs=` ) ( nurl_eprint ( nurl_str_int . pf code_start ) )
+        ( nurl_eprint ` len=` ) ( nurl_eprint ( nurl_str_int len ) )
+        ( nurl_eprint ` bytes=` )
+        : ~ i jdk 0
+        ~ < jdk len {
+            ? > jdk 0 { ( nurl_eprint `,` ) } {}
+            ( nurl_eprint ( nurl_str_int # i . page jdk ) )
+            = jdk + jdk 1
+        }
+        ( nurl_eprint `\n` )
+    } {}
     // Register the sealed page for fault-to-trap conversion: a guest
     // access past the committed pages faults, and the handler steers the
     // frame to this function's out-of-bounds stub (label n). Room was

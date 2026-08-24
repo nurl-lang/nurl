@@ -96,6 +96,7 @@ $ `interp.nu`
                     // NURL_WT_PIN=0 keeps every slot in memory (A/B, debug).
                     ?? ( env_get `NURL_WT_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} ( string_free jv ) } F → { ( interp_enable_jit ) } }
                     ?? ( env_get `NURL_WT_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} ( string_free pv ) } F → {} }
+                    ?? ( env_get `NURL_WT_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} ( string_free dv ) } F → {} }
                     ( exec_func it fidx )
                     ? ( interp_trapped it ) {
                         ( nurl_print `wasmtime: trap: ` ) ( nurl_print ( string_data ( bytes_to_str . it trapmsg ) ) ) ( nurl_print `\n` )
@@ -160,6 +161,7 @@ $ `interp.nu`
                     // NURL_WT_PIN=0 keeps every slot in memory (A/B, debug).
                     ?? ( env_get `NURL_WT_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} ( string_free jv ) } F → { ( interp_enable_jit ) } }
                     ?? ( env_get `NURL_WT_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} ( string_free pv ) } F → {} }
+                    ?? ( env_get `NURL_WT_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} ( string_free dv ) } F → {} }
                     ( exec_func it fidx )
                     ( interp_flush it )  // _start may return without proc_exit
                     ? ( interp_trapped it ) {
