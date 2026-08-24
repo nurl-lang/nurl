@@ -2814,9 +2814,11 @@ inline @ __fr_setpos s tp i v → v {
                             ( vec_set [u] buf + imm_at 2 # u & ( __lshr64 resume 16 ) 255 )
                             ( vec_set [u] buf + imm_at 3 # u & ( __lshr64 resume 24 ) 255 )
                             // resume point: reload rbx/r11/r10 (memory may have grown)
+                            ( __jit_b buf 83 )  // push rbx — balance the eventual pop rbx;ret (prologue push skipped on call_code_at re-entry)
                             ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 31 )  // mov rbx,[rdi]
                             ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 95 ) ( __jit_b buf 8 )  // mov r11,[rdi+8]
                             ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 )  // mov r10,[rdi+16]
+                            ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24] (globals base; caller-clobbered across the round trip)
                         } {
                             ? >= ( __jit_memkind op ) 0 {  // load / store, bounds-checked
                                 : i mk ( __jit_memkind op )
