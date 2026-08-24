@@ -2977,6 +2977,104 @@ inline @ __fr_setpos s tp i v → v {
     = . pf jitlen + len 16
 }
 
+// Run an already-built, JIT-compiled frame `fj` to completion, handling
+// its guest calls without leaving for the interpreter's driver. Returns
+// 0 (done), 1 (out-of-bounds trap), 3 (unreachable); it.halt / trapmsg
+// may also be set. Results are left in the frame's slots for the caller
+// to read.
+@ __jit_run * Interp it * Module m * PFunc pfj s fj → i {
+    : s jh . pfj jit
+    : *Frame fjr # *Frame fj
+    : *i jrb ( vec_data [i] . fjr regs )
+    : *i cd ( __jit_ctx_get it )
+    = . cd 0 # i jrb
+    = . cd 1 # i ( vec_data [u] . it mem )
+    = . cd 2 . it mem_bytes
+    = . cd 3 # i ( vec_data [i] . it globals )
+    = . cd 4 0 = . cd 5 0 = . cd 6 0
+    : ~ i status ( nurl_call_code # *u jh # *u cd )
+    ~ == status 2 {
+        : i callee . cd 4
+        : i argbase . cd 5
+        : i resume . cd 6
+        : i tr ( __jit_callee it m callee jrb argbase )
+        ? != 0 tr { ( __jit_ctx_put it cd ) ^ tr } {}
+        ? | ( interp_trapped it ) != 0 . it halt { ( __jit_ctx_put it cd ) ^ 0 } {}
+        = . cd 1 # i ( vec_data [u] . it mem )
+        = . cd 2 . it mem_bytes
+        = status ( nurl_call_code_at # *u jh # *u cd resume )
+    }
+    ( __jit_ctx_put it cd )
+    ^ status
+}
+
+// Invoke guest function `callee` from a JIT'd caller: args are in
+// `caller_rbase[argbase..]`, results go back there. A JIT-compilable
+// callee runs directly through __jit_run on a pooled frame — no
+// interpreter driver, no value-stack traffic; anything else (imports,
+// non-templatable bodies, or past the recursion cap) falls back to the
+// interpreter. Returns 0 on success, non-zero on trap/halt.
+@ __jit_callee * Interp it * Module m i callee * i caller_rbase i argbase → i {
+    // imports and the depth cap take the interpreter's bridge
+    ? < callee . m num_import_funcs {
+        ( __rdo_import it m callee argbase caller_rbase )
+        ^ ? ( interp_trapped it ) 1 0
+    } {}
+    : s cpins ( __pfunc_for it m callee )
+    ? == # i cpins 0 { ( __trap it `bad function index` ) ^ 1 } {}
+    : *PFunc pfc # *PFunc cpins
+    ( __jit_try pfc )
+    : s jh . pfc jit
+    ? | == # i jh 0 == # i jh -1 {
+        // not JIT-able: interpret it, bridging args/results through the vs
+        : s ct ( module_func_type m callee )
+        : ~ i cp 0
+        : ~ i cr 0
+        ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
+        : ~ i ak 0
+        ~ < ak cp { ( __push it . caller_rbase + argbase ak ) = ak + ak 1 }
+        ( exec_func it callee )
+        ? | ( interp_trapped it ) != 0 . it halt { ^ 1 } {}
+        : ~ i rk cr
+        ~ > rk 0 { = rk - rk 1 = . caller_rbase + argbase rk ( __pop it ) }
+        ^ 0
+    } {}
+    // JIT-able: build a frame, copy args in, run, copy results out
+    : s fj ( __frame_new it m callee 0 )  // ret_dst>=0: no vs-pop; args copied below
+    ? == # i fj 0 { ^ 1 } {}
+    : *Frame fjr # *Frame fj
+    : *i crb ( vec_data [i] . fjr regs )
+    : i np . pfc nparams
+    : ~ i ak 0
+    ~ < ak np { = . crb ak . caller_rbase + argbase ak = ak + ak 1 }
+    = g_jit_depth + g_jit_depth 1
+    : i st ? > g_jit_depth 100000 9 ( __jit_run it m pfc fj )
+    = g_jit_depth - g_jit_depth 1
+    ? == st 9 {  // past the cap: fall back to the interpreter for depth safety
+        ( __frame_recycle fj )
+        : ~ i ak2 0
+        ~ < ak2 np { ( __push it . caller_rbase + argbase ak2 ) = ak2 + ak2 1 }
+        ( exec_func it callee )
+        ? | ( interp_trapped it ) != 0 . it halt { ^ 1 } {}
+        : s ct2 ( module_func_type m callee )
+        : ~ i cr2 0
+        ? != # i ct2 0 { : *FuncType ctt2 # *FuncType ct2 = cr2 ( vec_len [i] . ctt2 results ) } {}
+        : ~ i rk2 cr2
+        ~ > rk2 0 { = rk2 - rk2 1 = . caller_rbase + argbase rk2 ( __pop it ) }
+        ^ 0
+    } {}
+    ? == st 3 { ( __trap it `unreachable` ) ( __frame_recycle fj ) ^ 1 } {}
+    ? == st 1 { ( __trap it `memory access out of bounds` ) ( __frame_recycle fj ) ^ 1 } {}
+    ? | ( interp_trapped it ) != 0 . it halt { ( __frame_recycle fj ) ^ 1 } {}
+    // copy results (frame's sbase..) back to the caller slots
+    : i lloc . pfc sbase
+    : i nres . pfc nresults
+    : ~ i rk 0
+    ~ < rk nres { = . caller_rbase + argbase rk . crb + lloc rk = rk + rk 1 }
+    ( __frame_recycle fj )
+    ^ 0
+}
+
 @ exec_func * Interp it i fidx → v {
     ? != 0 . it halt { ^ v } {}
     : *Module m # *Module . it mod
@@ -3007,46 +3105,12 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_try pfj )
         : s jh . pfj jit
         ? & != # i jh 0 != # i jh -1 {
-            : *i jrb ( vec_data [i] . fj regs )
-            // context: [ rbase, mem_base, mem_bytes, _, callee, argbase,
-            // resume ] — the mem words are re-read each (re-)entry so a
-            // callee that grew memory is seen; the last three carry a
-            // call-out back to the interpreter (status 2).
-            : *i cd ( __jit_ctx_get it )
-            = . cd 0 # i jrb
-            = . cd 1 # i ( vec_data [u] . it mem )
-            = . cd 2 . it mem_bytes
-            = . cd 3 # i ( vec_data [i] . it globals )  // globals base → r9
-            = . cd 4 0 = . cd 5 0 = . cd 6 0
-            : ~ i status ( nurl_call_code # *u jh # *u cd )
-            ~ == status 2 {  // a guest call: run the callee, then resume
-                : i callee . cd 4
-                : i argbase . cd 5
-                : i resume . cd 6
-                : s ct ( module_func_type m callee )
-                : ~ i cp 0
-                : ~ i cr 0
-                ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
-                : ~ i ak 0
-                ~ < ak cp { ( __push it . jrb + argbase ak ) = ak + ak 1 }
-                = g_jit_depth + g_jit_depth 1
-                : i capped ? > g_jit_depth 4000 1 0
-                ? != 0 capped { = g_jit 0 } {}
-                ( exec_func it callee )
-                ? != 0 capped { = g_jit 1 } {}
-                = g_jit_depth - g_jit_depth 1
-                ? ( interp_trapped it ) { ( __jit_ctx_put it cd ) ( __frame_recycle fr0 ) ^ v } {}
-                ? != 0 . it halt { ( __jit_ctx_put it cd ) ( __frame_recycle fr0 ) ^ v } {}
-                // results are on the value stack, last on top → into argbase
-                : ~ i rk cr
-                ~ > rk 0 { = rk - rk 1 = . jrb + argbase rk ( __pop it ) }
-                = . cd 1 # i ( vec_data [u] . it mem )
-                = . cd 2 . it mem_bytes
-                = status ( nurl_call_code_at # *u jh # *u cd resume )
-            }
-            ( __jit_ctx_put it cd )
+            : i status ( __jit_run it m pfj fr0 )
             ? == status 3 { ( __trap it `unreachable` ) ( __frame_recycle fr0 ) ^ v } {}
             ? != 0 status { ( __trap it `memory access out of bounds` ) ( __frame_recycle fr0 ) ^ v } {}
+            ? | ( interp_trapped it ) != 0 . it halt { ( __frame_recycle fr0 ) ^ v } {}
+            // outermost: results (frame's sbase..) leave on the value stack
+            : *i jrb ( vec_data [i] . fj regs )
             : i lloc . pfj sbase
             : i nres . pfj nresults
             : ~ i rk 0
