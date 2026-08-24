@@ -426,6 +426,37 @@ to wasm with FFI symbols as host imports).
 > would additionally add an id↔pointer handle table in the bridge; the seam is
 > a single `__gpu_ptr` / handle-passthrough boundary.
 
+## The template JIT
+
+On a hosted x86-64 build the predecoded records are lowered to machine
+code per function and run natively; everything else — other
+architectures, wasm32 builds of `wt` itself, metered (`--fuel`) and
+shared-memory (threads) runs — executes on the interpreter, which
+remains the semantic reference. `NURL_WT_JIT=0` turns the JIT off.
+
+- **Templates, not an optimizer.** Each record maps to a fixed x86-64
+  sequence against the frame's register file (`disp32(%rbx)` slots);
+  branches patch rel32s over a per-function label table, `br_table`
+  becomes a clamped indirect jump through a table of absolute
+  addresses, and a one-register cache elides the reload when a record's
+  first operand is the value the previous record just stored.
+- **The interpreter handles what templates can't.** A function with any
+  record outside the template set stays interpreted — per function, not
+  per module. Calls out of JIT code (imports, `memory.grow`, the
+  bulk-memory/`fc` bridge, `call_indirect` resolution) return to a
+  driver that does the work with the interpreter's own machinery and
+  re-enters the code at a resume point, so both engines always agree —
+  the correctness gate is byte-identical output across both, including
+  a `nurlc.wasm` self-compile.
+- **Traps carry their real message** (`unreachable`, `integer divide by
+  zero`, bounds), same text as the interpreter; JIT frames don't record
+  positions, so backtraces come from interpreted frames only.
+
+Measured over `bench/wasmbench.sh`'s corpus (local, best-of-3): 0.41×
+the interpreter's wall clock — histogram/hash_join/bloom around 0.25×,
+call-dominated fib at parity (the per-call driver round trip is the
+next structural target).
+
 ## Roadmap
 
 The integer + float core and the WASI command surface are done; hosting larger

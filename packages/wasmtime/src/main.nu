@@ -88,7 +88,9 @@ $ `interp.nu`
                         = k + k 1
                     }
                     ( interp_run_start it )
-                    ?? ( env_get `NURL_WT_JIT` ) { T jv → { ( interp_enable_jit ) ( string_free jv ) } F → {} }
+                    // JIT on by default on capable hosts (code_alloc probes the
+                    // capability); NURL_WT_JIT=0 keeps the pure interpreter.
+                    ?? ( env_get `NURL_WT_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} ( string_free jv ) } F → { ( interp_enable_jit ) } }
                     ( exec_func it fidx )
                     ? ( interp_trapped it ) {
                         ( nurl_print `wasmtime: trap: ` ) ( nurl_print ( string_data ( bytes_to_str . it trapmsg ) ) ) ( nurl_print `\n` )
@@ -145,7 +147,9 @@ $ `interp.nu`
                     : ~ i k prog_start
                     ~ < k argc { : String a ( env_arg k ) ( interp_push_arg it ( string_data a ) ) ( string_free a ) = k + k 1 }
                     ( interp_run_start it )
-                    ?? ( env_get `NURL_WT_JIT` ) { T jv → { ( interp_enable_jit ) ( string_free jv ) } F → {} }
+                    // JIT on by default on capable hosts (code_alloc probes the
+                    // capability); NURL_WT_JIT=0 keeps the pure interpreter.
+                    ?? ( env_get `NURL_WT_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} ( string_free jv ) } F → { ( interp_enable_jit ) } }
                     ( exec_func it fidx )
                     ( interp_flush it )  // _start may return without proc_exit
                     ? ( interp_trapped it ) {
