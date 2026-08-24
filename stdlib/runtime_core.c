@@ -3515,10 +3515,9 @@ long long nurl_guard_mem_add(void *base, long long span) {
     if (nurl__gmem_n >= NURL__GMEM_CAP) { nurl__guard_unlock(); return -1; }
     if (!nurl__guard_installed) {
         struct sigaction sa;
-        memset(&sa, 0, sizeof sa);
+        memset(&sa, 0, sizeof sa);  /* zeroes sa_mask too — the empty set */
         sa.sa_sigaction = nurl__guard_handler;
         sa.sa_flags = SA_SIGINFO;
-        sigemptyset(&sa.sa_mask);
         if (sigaction(SIGSEGV, &sa, &nurl__guard_prev) != 0) {
             nurl__guard_unlock();
             return -1;

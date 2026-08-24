@@ -44,6 +44,18 @@ void abort(void) {
     for (;;) { }
 }
 
+/* A freestanding target delivers no signals, so a handler can never be
+ * installed. Reporting failure makes the runtime's guard-page memory
+ * treat this like any other host without the plumbing (nurl_vmem_reserve
+ * already answers 0 there) and keep its bounds-checked path — the same
+ * capability-probe contract as the executable-page allocator. The
+ * struct layout is irrelevant to a call that only fails, so the
+ * prototype takes opaque pointers rather than dragging in signal.h. */
+int sigaction(int sig, const void *act, void *oldact) {
+    (void)sig; (void)act; (void)oldact;
+    return -1;
+}
+
 char *getenv(const char *name) {
     nl_size_t n = strlen(name);
     char **e = nl_environ;
