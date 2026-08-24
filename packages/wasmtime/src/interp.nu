@@ -3003,7 +3003,7 @@ inline @ __fr_setpos s tp i v → v {
 // The ops beyond the original tier set: extend/wrap, select, and the
 // fused memory/f64 records the predecoder emits. Falls through to the
 // plain ALU emitter for everything else.
-@ __jit_ext ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot ( Vec i ) auxv ( Vec i ) pta_off ( Vec i ) pta_stub i chaincell i guard → v {
+@ __jit_ext ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot ( Vec i ) auxv ( Vec i ) pta_off ( Vec i ) pta_stub i chaincell i guard i xmmslot → v {
     ? == op 36 {  // i32.wrap_i64: dst = sign-extended low 32 of src
         ? == raxslot b { ( __jit_movslq buf ) } {  // rax already holds the slot
             ( __jit_b buf 72 ) ( __jit_b buf 99 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // movsxd rax,dword[rbx+b]
@@ -3045,20 +3045,20 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_movsd_st buf a ) ^ v
     } {}
     ? == op 197 {  // ADDSTOREF64: mem[a+off(d)] = s1(b) + s2(c)
-        ( __jit_movsd_ld buf b )
+        ? != xmmslot b { ( __jit_movsd_ld buf b ) } {}
         ( __jit_sd_op buf 88 c )  // addsd
         ( __jit_membc buf pat_at pat_rec trap_rec a d 8 raxslot guard )
         ( __jit_mem32 buf 242 1 17 0 d )  // movsd [mem],xmm0
         ^ v
     } {}
     ? | == op 198 == op 199 {  // MULADDF64 / MULSUBAF64: dst = (s1*s2) ± x
-        ( __jit_movsd_ld buf b )
+        ? != xmmslot b { ( __jit_movsd_ld buf b ) } {}
         ( __jit_sd_op buf 89 c )  // mulsd
         ( __jit_sd_op buf ? == op 198 88 92 d )  // addsd / subsd
         ( __jit_movsd_st buf a ) ^ v
     } {}
     ? == op 200 {  // MULSUBBF64: dst = x - (s1*s2)
-        ( __jit_movsd_ld buf b )
+        ? != xmmslot b { ( __jit_movsd_ld buf b ) } {}
         ( __jit_sd_op buf 89 c )  // mulsd
         ( __jit_movsd_x1x0 buf )
         ( __jit_movsd_ld buf d )
@@ -3066,13 +3066,14 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_movsd_st buf a ) ^ v
     } {}
     ? == op 201 {  // SUBMULF64: dst = (s1-s2) * x
-        ( __jit_movsd_ld buf b )
+        ? != xmmslot b { ( __jit_movsd_ld buf b ) } {}
         ( __jit_sd_op buf 92 c )  // subsd
         ( __jit_sd_op buf 89 d )  // mulsd
         ( __jit_movsd_st buf a ) ^ v
     } {}
     ? == op 131 {  // f64.sqrt
-        ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf 81 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // sqrtsd xmm0,[rbx+b]
+        ? == xmmslot b { ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf 81 ) ( __jit_b buf 192 ) } {  // sqrtsd xmm0,xmm0
+            ( __jit_b buf 242 ) ( __jit_b buf 15 ) ( __jit_b buf 81 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 ) }  // sqrtsd xmm0,[rbx+b]
         ( __jit_movsd_st buf a ) ^ v
     } {}
     ? == op 93 {  // i32.clz — bsr+cmov (baseline x86-64, no lzcnt)
@@ -3293,6 +3294,21 @@ inline @ __fr_setpos s tp i v → v {
 
 // After a record is emitted, which slot does rax hold (-1 = none)?
 // Drives the one-register load-elision cache; must match the emitters.
+// After a record is emitted, which slot's value does xmm0 hold (-1 =
+// none)? The f64 twin of __jit_newrax: every f64 writer ends with a
+// movsd to its dst slot, so xmm0 = dst; a native call or any call-out
+// clobbers xmm0 (caller-saved); anything that writes the cached slot
+// through rax makes the cache stale.
+@ __jit_newxmm i op i a i b i prev → i {
+    ? | | & >= op 39 <= op 42 & >= op 194 <= op 196 | & >= op 198 <= op 201 == op 131 { ^ a } {}
+    ? == op 197 { ^ -1 } {}  // stored a sum to memory; no slot holds it
+    ? | | | == op 50 == op 210 | == op 170 == op 171 | == op 163 == op 169 { ^ -1 } {}  // calls / call-outs / br_table
+    ? | == op 55 == op 172 { ^ -1 } {}  // terminal
+    ? & | == op 38 == op 177 == b prev { ^ -1 } {}  // ADDBRIFC writes b
+    ? == a prev { ^ -1 } {}  // this record wrote the cached slot
+    ^ prev
+}
+
 @ __jit_newrax i op i a i b i prev → i {
     ? | | | == op 55 == op 172 | == op 50 == op 210 == op 170 { ^ -1 } {}  // terminal / call-out clobbers
     ? == op 163 { ^ -1 } {}  // memory.grow call-out
@@ -3429,10 +3445,11 @@ inline @ __fr_setpos s tp i v → v {
         = trr + trr 1
     }
     : ~ i raxslot -1
+    : ~ i xmmslot -1
     : ~ i r 0
     ~ < r n {
         ( vec_push [i] lab ( vec_len [u] buf ) )  // this record starts here
-        ? != 0 ?? ( vec_get [i] tgt r ) { T x → x F → 1 } { = raxslot -1 } {}
+        ? != 0 ?? ( vec_get [i] tgt r ) { T x → x F → 1 } { = raxslot -1 = xmmslot -1 } {}
         : i base * r 6
         : i op ?? ( vec_get [i] code base ) { T x → x F → 0 }
         : i a ?? ( vec_get [i] code + base 1 ) { T x → x F → 0 }
@@ -3460,7 +3477,7 @@ inline @ __fr_setpos s tp i v → v {
                         ( __jit_jmp buf pat_at pat_rec 233 + n 2 )
                     } {
                         ? & >= op 39 <= op 42 {  // f64 mul/add/sub/div
-                            ( __jit_movsd_ld buf b )
+                            ? != xmmslot b { ( __jit_movsd_ld buf b ) } {}
                             ( __jit_sd_op buf ? == op 39 89 ? == op 40 88 ? == op 41 92 94 c )
                             ( __jit_movsd_st buf a )
                         } {
@@ -3624,7 +3641,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                             ( __jit_b buf 59 ) ( __jit_b buf 131 ) ( __jit_d buf * rhs 8 )  // cmp eax,[rbx+rhs]
                                                                         }
                                                                         ( __jit_jmp buf pat_at pat_rec ( __jit_jcc cctab cmpop ) / a 6 )
-                                                                    } { ( __jit_ext buf pat_at pat_rec n op a b c d w5 raxslot auxe pta_off pta_stub chaincell guard ) }
+                                                                    } { ( __jit_ext buf pat_at pat_rec n op a b c d w5 raxslot auxe pta_off pta_stub chaincell guard xmmslot ) }
                                                                 }
                                                             }
                                                         }
@@ -3641,6 +3658,7 @@ inline @ __fr_setpos s tp i v → v {
             }
         }
         = raxslot ( __jit_newrax op a b raxslot )
+        = xmmslot ( __jit_newxmm op a b xmmslot )
         = r + r 1
     }
     // The trap stub, at label index n (where every bounds check jumps):
