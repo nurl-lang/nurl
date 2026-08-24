@@ -145,6 +145,7 @@ $ `interp.nu`
                     : ~ i k prog_start
                     ~ < k argc { : String a ( env_arg k ) ( interp_push_arg it ( string_data a ) ) ( string_free a ) = k + k 1 }
                     ( interp_run_start it )
+                    ?? ( env_get `NURL_WT_JIT` ) { T jv → { ( interp_enable_jit ) ( string_free jv ) } F → {} }
                     ( exec_func it fidx )
                     ( interp_flush it )  // _start may return without proc_exit
                     ? ( interp_trapped it ) {
