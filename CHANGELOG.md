@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`packages/wasmtime` is now `packages/nwasm`, published as `nwasm`
-  1.0.0.** The old name is a third-party trademark (the Bytecode Alliance
+  1.0.1.** The old name is a third-party trademark (the Bytecode Alliance
   runtime), and using it for NURL's own runtime was a standing source of
   confusion — most concretely in `bench/wasmbench.sh`, where a developer
   box with the toolchain installed had `$NURL_HOME/bin/wasmtime` on
@@ -29,11 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   What moved:
   - `nurlpkg install wasmtime` → `nurlpkg install nwasm`; the installed
-    binary is `nwasm`, and `nwasm --version` reports `nwasm 1.0.0 (pure
+    binary is `nwasm`, and `nwasm --version` reports `nwasm 1.0.1 (pure
     NURL)`.
   - Environment: `NURL_WT_JIT` / `NURL_WT_PIN` / `NURL_WT_GUARD` /
     `NURL_WT_JIT_DUMP` → `NURL_NWASM_*`.
-  - `packages/swarm-mcp` 0.28.0 follows the pin (`nwasm ^1.0.0`) and, as
+  - `packages/swarm-mcp` 0.28.1 follows the pin (`nwasm ^1` — the major,
+    so a patch release of the runtime needs no release here) and, as
     a **breaking change**, reads `$NURL_WASM_RUNTIME` instead of
     `$WASMTIME` when selecting an external runtime; the binary that
     variable falls back to is `nwasm`, not `wasmtime`.
@@ -50,6 +51,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Existing changelog entries were rewritten to the new name so the repo
   reads consistently; the published `wasmtime` package versions are
   untouched and what to do with them is a separate decision.
+
+  `nwasm` 1.0.0 and `swarm-mcp` 0.28.0 were published before this release
+  existed and cannot be built from the registry: the template JIT calls
+  `nurl_code_alloc` / `nurl_code_seal` / `nurl_guard_code_add`, which
+  `stdlib/runtime_core.c` gained after the v0.50.0 tag, so `nurlpkg
+  install` fails at link. `nurlpkg publish`'s fifth gate is a front-end
+  typecheck and cannot see a missing C-runtime symbol. Those two version
+  numbers are spent — a version can be yanked but never replaced — so the
+  runtime republishes as 1.0.1 and the engine as 0.28.1 on top of this
+  release.
 
 ## [0.50.0] — 2026-08-23
 
