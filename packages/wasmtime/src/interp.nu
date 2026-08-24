@@ -272,7 +272,7 @@ $ `module.nu`
 // and re-deriving them per call means walking funcs → typeidx → types and
 // two `vec_len`s inside `module_func_type` — pure repeat work on a value
 // that is fixed for the life of the module.
-: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots i nparams i nresults i code_start i sbase ( Vec i ) kv s free }
+: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots i nparams i nresults i code_start i sbase ( Vec i ) kv s free ( Vec i ) bytes }
 
 @ __page → i { ^ 65536 }
 
@@ -1168,6 +1168,7 @@ inline @ __fr_setpos s tp i v → v {
     ( vec_free [i] . pf code )
     ( vec_free [i] . pf aux )
     ( vec_free [i] . pf kv )
+    ( vec_free [i] . pf bytes )
     ( nurl_free # s pf )
 }
 
@@ -1329,7 +1330,7 @@ inline @ __fr_setpos s tp i v → v {
     ( vec_set [i] . pf code + base 2 other )
     ( vec_set [i] . pf code + base 3 off )
     ( vec_set [i] . pf code + base 4 x )
-    ( vec_set [i] . pf code + base 5 | << kslot 32 byte )
+    ( vec_set [i] . pf code + base 5 kslot )
     ^ T
 }
 
@@ -1553,10 +1554,14 @@ inline @ __fr_setpos s tp i v → v {
 }
 
 // Emit one 6-slot record; returns its index.
-@ __pf_emit ( Vec i ) code i op i a i b i cc i dd i byte → i {
+// Emit one record; the source byte offset goes to the SIDE table (read
+// only by the trap backtrace), so every record word is operand payload.
+@ __pf_emit * PFunc pf i op i a i b i cc i dd i byte → i {
+    : ( Vec i ) code . pf code
     : i idx / ( vec_len [i] code ) 6
     ( vec_push [i] code op ) ( vec_push [i] code a ) ( vec_push [i] code b )
-    ( vec_push [i] code cc ) ( vec_push [i] code dd ) ( vec_push [i] code byte )
+    ( vec_push [i] code cc ) ( vec_push [i] code dd ) ( vec_push [i] code 0 )
+    ( vec_push [i] . pf bytes byte )
     ^ idx
 }
 
@@ -1611,8 +1616,7 @@ inline @ __fr_setpos s tp i v → v {
 // site — forward targets filled at a later `end` are the record count at
 // that `end`, which is past the fused record, never inside the pair.
 //
-// W5 packs cmpop<<53 | rhs-slot<<32 | byte; the byte offset must fit in
-// 32 bits (a >4 GiB module cannot — refuse and keep the pair).
+// W5 packs cmpop<<21 | rhs-slot; the byte offset lives in the side table.
 @ __fuse_addbr * PFunc pf i lastp i labfloor i tgt i lop i lb i lc i byte → i {
     ? | < lastp 1 > labfloor - lastp 1 { ^ -1 } {}
     ? | < byte 0 >= byte 4294967296 { ^ -1 } {}
@@ -1628,8 +1632,9 @@ inline @ __fr_setpos s tp i v → v {
     ( vec_set [i] . pf code + abase 2 lb )
     ( vec_set [i] . pf code + abase 3 as1 )
     ( vec_set [i] . pf code + abase 4 as2 )
-    ( vec_set [i] . pf code + abase 5 | | << lop 53 << lc 32 byte )
+    ( vec_set [i] . pf code + abase 5 | << lop 21 lc )
     : b _ok ( vec_set_len [i] . pf code * lastp 6 )
+    : b _ok2 ( vec_set_len [i] . pf bytes lastp )
     ^ - lastp 1
 }
 
@@ -1687,9 +1692,9 @@ inline @ __fr_setpos s tp i v → v {
 // caller handles liveness.
 @ __emit_branch * PFunc pf ( Vec s ) open i k i cond i sb i h i byte i lastp i labfloor → v {
     : i n ( vec_len [s] open )
-    ? >= k n { ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) ^ v } {}
+    ? >= k n { ( __pf_emit pf ( __R_TRAPUN ) 0 0 0 0 byte ) ^ v } {}
     : s bp ?? ( vec_get [s] open - - n 1 k ) { T x → x F → # s 0 }
-    ? == # i bp 0 { ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) ^ v } {}
+    ? == # i bp 0 { ( __pf_emit pf ( __R_TRAPUN ) 0 0 0 0 byte ) ^ v } {}
     : *PBlk blk # *PBlk bp
     : i arity ? == . blk kind 1 . blk params . blk results
     : i dst + sb . blk base
@@ -1699,14 +1704,14 @@ inline @ __fr_setpos s tp i v → v {
     : i tgt ? == . blk kind 1 * . blk t0 6 -1
     : ~ i rec 0
     ? | == arity 0 == dst src {
-        ? < cond 0 { = rec ( __pf_emit . pf code ( __R_BR ) tgt 0 0 0 byte ) } {
+        ? < cond 0 { = rec ( __pf_emit pf ( __R_BR ) tgt 0 0 0 byte ) } {
             : i fb ( __fuse_branch pf lastp labfloor cond tgt byte )
             ? >= fb 0 { = rec fb }
-            { = rec ( __pf_emit . pf code ( __R_BRIF ) tgt cond 0 0 byte ) }
+            { = rec ( __pf_emit pf ( __R_BRIF ) tgt cond 0 0 byte ) }
         }
     } {
-        ? < cond 0 { = rec ( __pf_emit . pf code ( __R_BRM ) tgt dst src arity byte ) }
-        { = rec ( __pf_emit . pf code ( __R_BRIFM ) tgt cond | << dst 20 src arity byte ) }
+        ? < cond 0 { = rec ( __pf_emit pf ( __R_BRM ) tgt dst src arity byte ) }
+        { = rec ( __pf_emit pf ( __R_BRIFM ) tgt cond | << dst 20 src arity byte ) }
     }
     ? != . blk kind 1 { ( vec_push [i] . blk patches * rec 2 ) } {}
 }
@@ -1809,7 +1814,7 @@ inline @ __fr_setpos s tp i v → v {
 @ __kbind * PFunc pf ( Vec i ) vm ( Vec i ) kv i L i sb i h i cv i live i byte → v {
     : i idx ( __kfind kv cv )
     ? >= idx 0 { ( __vset vm h + L idx ) } {
-        ? != 0 live { ( __pf_emit . pf code ( __R_CONST ) + sb h cv 0 0 byte ) } {}
+        ? != 0 live { ( __pf_emit pf ( __R_CONST ) + sb h cv 0 0 byte ) } {}
         ( __vset vm h -1 )
     }
 }
@@ -1828,7 +1833,7 @@ inline @ __fr_setpos s tp i v → v {
     ~ < k n {
         : i sl ?? ( vec_get [i] vm k ) { T x → x F → -1 }
         ? >= sl 0 {
-            ? & < k h != 0 live { ( __pf_emit . pf code ( __R_MOV ) + sb k sl 0 0 byte ) } {}
+            ? & < k h != 0 live { ( __pf_emit pf ( __R_MOV ) + sb k sl 0 0 byte ) } {}
             ( vec_set [i] vm k -1 )
         } {}
         = k + k 1
@@ -1908,7 +1913,7 @@ inline @ __fr_setpos s tp i v → v {
     ~ < k lim {
         : i sl ?? ( vec_get [i] vm k ) { T x → x F → -1 }
         ? == sl li {
-            ? != 0 live { ( __pf_emit . pf code ( __R_MOV ) + sb k li 0 0 byte ) } {}
+            ? != 0 live { ( __pf_emit pf ( __R_MOV ) + sb k li 0 0 byte ) } {}
             ( vec_set [i] vm k -1 )
         } {}
         = k + k 1
@@ -1944,6 +1949,7 @@ inline @ __fr_setpos s tp i v → v {
     : i s1 ?? ( vec_get [i] . pf code + base 2 ) { T x → x F → 0 }
     : i s2 ?? ( vec_get [i] . pf code + base 3 ) { T x → x F → 0 }
     : b _ok ( vec_set_len [i] . pf code base )
+    : b _ok2 ( vec_set_len [i] . pf bytes lastp )
     ^ | << s1 21 s2
 }
 
@@ -2049,6 +2055,7 @@ inline @ __fr_setpos s tp i v → v {
     : *PFunc pf # *PFunc ( nurl_alloc Z PFunc )
     = . pf code ( vec_new [i] )
     = . pf aux ( vec_new [i] )
+    = . pf bytes ( vec_new [i] )
     : s ftp ?? ( vec_get [s] . m types . f typeidx ) { T x → x F → # s 0 }
     : ~ i nparams 0
     : ~ i nresults 0
@@ -2104,7 +2111,7 @@ inline @ __fr_setpos s tp i v → v {
                     = h - h 1
                     : i cnd ( __vg vm SB h )
                     ( __vflush pf vm SB h live byte )
-                    : i rec ( __pf_emit . pf code ( __R_IFZ ) -1 cnd 0 0 byte )
+                    : i rec ( __pf_emit pf ( __R_IFZ ) -1 cnd 0 0 byte )
                     : s kp ( __pblk_new 2 - h p p r 1 rec )
                     ( vec_push [s] open kp )
                 } { ( vec_push [s] open ( __pblk_new 2 h p r 0 -1 ) ) }
@@ -2118,7 +2125,7 @@ inline @ __fr_setpos s tp i v → v {
                         : *PBlk blk # *PBlk bp
                         ? != 0 . blk live_entry {
                             // end of a live then-arm jumps past the else arm
-                            ? != 0 live { = . blk else_br ( __pf_emit . pf code ( __R_BR ) -1 0 0 0 byte ) } {}
+                            ? != 0 live { = . blk else_br ( __pf_emit pf ( __R_BR ) -1 0 0 0 byte ) } {}
                             // the cond==0 edge lands here
                             ? >= . blk t0 0 { ( vec_set [i] . pf code + * . blk t0 6 1 ( vec_len [i] . pf code ) ) = . blk t0 -1 } {}
                             = h + . blk base . blk params
@@ -2195,14 +2202,14 @@ inline @ __fr_setpos s tp i v → v {
                                             }
                                             = lk + lk 1
                                         }
-                                        ( __pf_emit . pf code ( __R_BRTBL ) astart idxs nl 0 byte )
+                                        ( __pf_emit pf ( __R_BRTBL ) astart idxs nl 0 byte )
                                         = live 0
                                     }
                                 } {
                                     ? == op 15 {  // return
                                         ? != 0 live {
                                             ( __vflush pf vm SB h live byte )
-                                            ( __pf_emit . pf code ( __R_RET ) + SB - h nresults nresults 0 0 byte )
+                                            ( __pf_emit pf ( __R_RET ) + SB - h nresults nresults 0 0 byte )
                                             = live 0
                                         } {}
                                     } {
@@ -2214,7 +2221,7 @@ inline @ __fr_setpos s tp i v → v {
                                                 : ~ i cp 0
                                                 : ~ i cr 0
                                                 ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
-                                                ( __pf_emit . pf code ? < fi . m num_import_funcs ( __R_CALLIMP ) ( __R_CALL ) fi + SB - h cp 0 0 byte )
+                                                ( __pf_emit pf ? < fi . m num_import_funcs ( __R_CALLIMP ) ( __R_CALL ) fi + SB - h cp 0 0 byte )
                                                 = h + - h cp cr
                                                 ? > h maxh { = maxh h } {}
                                             } {}
@@ -2229,28 +2236,28 @@ inline @ __fr_setpos s tp i v → v {
                                                     : ~ i cp 0
                                                     : ~ i cr 0
                                                     ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
-                                                    ( __pf_emit . pf code ( __R_CALLIND ) ti + SB - h cp idxs 0 byte )
+                                                    ( __pf_emit pf ( __R_CALLIND ) ti + SB - h cp idxs 0 byte )
                                                     = h + - h cp cr
                                                     ? > h maxh { = maxh h } {}
                                                 } {}
                                             } {
-                                                ? == op 0 { ? != 0 live { ( __vflush pf vm SB 0 live byte ) ( __pf_emit . pf code ( __R_UNREACH ) 0 0 0 0 byte ) = live 0 } {} } {
+                                                ? == op 0 { ? != 0 live { ( __vflush pf vm SB 0 live byte ) ( __pf_emit pf ( __R_UNREACH ) 0 0 0 0 byte ) = live 0 } {} } {
                                                     ? == op 1 {} {  // nop
                                                         ? == op 26 { ? != 0 live { = h - h 1 } {} } {  // drop
                                                             ? | == op 27 == op 28 {  // select (typed select folds to the same record)
                                                                 ? == op 28 { : i tc ( wc_uleb c ) ( wc_skip c tc ) } {}
                                                                 ? != 0 live {
-                                                                    ( __pf_emit . pf code ( __R_SEL ) + SB - h 3 ( __vg vm SB - h 3 ) ( __vg vm SB - h 2 ) ( __vg vm SB - h 1 ) byte ) ( __vset vm - h 3 -1 )
+                                                                    ( __pf_emit pf ( __R_SEL ) + SB - h 3 ( __vg vm SB - h 3 ) ( __vg vm SB - h 2 ) ( __vg vm SB - h 1 ) byte ) ( __vset vm - h 3 -1 )
                                                                     = h - h 2
                                                                 } {}
                                                             } {
                                                                 ? == op 32 { : i li ( wc_uleb c ) ? != 0 live { ( __vset vm h li ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                    ? == op 33 { : i li ( wc_uleb c ) ? != 0 live { ? ( __fold_set pf vm lastp SB - h 1 li ) {} { : i sv ( __vg vm SB - h 1 ) ( __vkill pf vm SB - h 1 li live byte ) ( __pf_emit . pf code ( __R_MOV ) li sv 0 0 byte ) } = h - h 1 } {} } {
-                                                                        ? == op 34 { : i li ( wc_uleb c ) ? != 0 live { ? ( __fold_set pf vm lastp SB - h 1 li ) {} { : i sv ( __vg vm SB - h 1 ) ( __vkill pf vm SB - h 1 li live byte ) ( __pf_emit . pf code ( __R_MOV ) li sv 0 0 byte ) } ( __vset vm - h 1 li ) } {} } {
-                                                                            ? == op 35 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_GG ) + SB h gi 0 0 byte ) ( __vset vm h -1 ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                                ? == op 36 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_GS ) gi ( __vg vm SB - h 1 ) 0 0 byte ) = h - h 1 } {} } {
-                                                                                    ? == op 37 { ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_TABGET ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
-                                                                                        ? == op 38 { ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_TABSET ) ( __vg vm SB - h 2 ) ( __vg vm SB - h 1 ) 0 0 byte ) = h - h 2 } {} } {
+                                                                    ? == op 33 { : i li ( wc_uleb c ) ? != 0 live { ? ( __fold_set pf vm lastp SB - h 1 li ) {} { : i sv ( __vg vm SB - h 1 ) ( __vkill pf vm SB - h 1 li live byte ) ( __pf_emit pf ( __R_MOV ) li sv 0 0 byte ) } = h - h 1 } {} } {
+                                                                        ? == op 34 { : i li ( wc_uleb c ) ? != 0 live { ? ( __fold_set pf vm lastp SB - h 1 li ) {} { : i sv ( __vg vm SB - h 1 ) ( __vkill pf vm SB - h 1 li live byte ) ( __pf_emit pf ( __R_MOV ) li sv 0 0 byte ) } ( __vset vm - h 1 li ) } {} } {
+                                                                            ? == op 35 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit pf ( __R_GG ) + SB h gi 0 0 byte ) ( __vset vm h -1 ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                ? == op 36 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit pf ( __R_GS ) gi ( __vg vm SB - h 1 ) 0 0 byte ) = h - h 1 } {} } {
+                                                                                    ? == op 37 { ( wc_uleb c ) ? != 0 live { ( __pf_emit pf ( __R_TABGET ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
+                                                                                        ? == op 38 { ( wc_uleb c ) ? != 0 live { ( __pf_emit pf ( __R_TABSET ) ( __vg vm SB - h 2 ) ( __vg vm SB - h 1 ) 0 0 byte ) = h - h 2 } {} } {
                                                                                             ? == op 65 { : i cv ( wc_sleb c ) ? != 0 live { ( __kbind pf vm kv L SB h ( __w32 cv ) live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
                                                                                                 ? == op 66 { : i cv ( wc_sleb c ) ? != 0 live { ( __kbind pf vm kv L SB h cv live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
                                                                                                     ? == op 67 { : i cv ( __read_le c 4 ) ? != 0 live { ( __kbind pf vm kv L SB h cv live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
@@ -2265,7 +2272,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                                                                     ? ( __fuse_loadshl pf lastp lio SB ldst adr off ) {} {
                                                                                                                         : i fz ( __fuse_addr pf lastp adr SB )
                                                                                                                         ? & >= fz 0 ( __fuse_loadshladd pf labfloor lio SB ldst fz off byte ) {} {
-                                                                                                                            ( __pf_emit . pf code lio ldst ? < fz 0 adr >> fz 21 off ? < fz 0 L & fz 2097151 byte )
+                                                                                                                            ( __pf_emit pf lio ldst ? < fz 0 adr >> fz 21 off ? < fz 0 L & fz 2097151 byte )
                                                                                                                         }
                                                                                                                     }
                                                                                                                     ( __vset vm - h 1 -1 )
@@ -2278,16 +2285,16 @@ inline @ __fr_setpos s tp i v → v {
                                                                                                                         : i sad ( __vg vm SB - h 2 )
                                                                                                                         : i sva ( __vg vm SB - h 1 )
                                                                                                                         ? & == op 57 ( __fuse_addstoref pf lastp SB sad sva off ) {} {
-                                                                                                                            ( __pf_emit . pf code ( __iop op ) sad sva off 0 byte )
+                                                                                                                            ( __pf_emit pf ( __iop op ) sad sva off 0 byte )
                                                                                                                         }
                                                                                                                         = h - h 2
                                                                                                                     } {}
                                                                                                                 } {
-                                                                                                                    ? == op 63 { ( wc_u8 c ) ? != 0 live { ( __pf_emit . pf code ( __R_MEMSZ ) + SB h 0 0 0 byte ) ( __vset vm h -1 ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                                                                        ? == op 64 { ( wc_u8 c ) ? != 0 live { ( __pf_emit . pf code ( __R_MEMGROW ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
+                                                                                                                    ? == op 63 { ( wc_u8 c ) ? != 0 live { ( __pf_emit pf ( __R_MEMSZ ) + SB h 0 0 0 byte ) ( __vset vm h -1 ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                                        ? == op 64 { ( wc_u8 c ) ? != 0 live { ( __pf_emit pf ( __R_MEMGROW ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
                                                                                                                             ? | == op 69 | == op 80 | & >= op 103 <= op 105 | & >= op 121 <= op 123 & >= op 192 <= op 196 {
                                                                                                                                 // integer unary: in place at the top slot
-                                                                                                                                ? != 0 live { ( __pf_emit . pf code ( __iop op ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {}
+                                                                                                                                ? != 0 live { ( __pf_emit pf ( __iop op ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {}
                                                                                                                             } {
                                                                                                                                 ? | & >= op 70 <= op 79 | & >= op 81 <= op 90 | & >= op 106 <= op 120 & >= op 124 <= op 138 {
                                                                                                                                     // integer binary: dst = h-2, operands h-2 / h-1
@@ -2297,7 +2304,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                                                                                         : i bx1 ( __vg vm SB - h 2 )
                                                                                                                                         : i bx2 ( __vg vm SB - h 1 )
                                                                                                                                         ? ( __fuse_alu2 pf lastp bio SB bdst bx1 bx2 byte ) {} {
-                                                                                                                                            ( __pf_emit . pf code bio bdst bx1 bx2 0 byte )
+                                                                                                                                            ( __pf_emit pf bio bdst bx1 bx2 0 byte )
                                                                                                                                         }
                                                                                                                                         ( __vset vm - h 2 -1 )
                                                                                                                                         = h - h 1
@@ -2317,7 +2324,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                                                                                                 : i fx1 ( __vg vm SB - h np )
                                                                                                                                                 : i fx2 ? == np 2 ( __vg vm SB - h 1 ) 0
                                                                                                                                                 ? & == np 2 ( __fuse_aluf pf lastp fio SB fdst fx1 fx2 . pf nlocals ) {} {
-                                                                                                                                                    ( __pf_emit . pf code fio fdst fx1 fx2 0 byte )
+                                                                                                                                                    ( __pf_emit pf fio fdst fx1 fx2 0 byte )
                                                                                                                                                 }
                                                                                                                                                 ( __vset vm - h np -1 )
                                                                                                                                                 = h + - h np 1
@@ -2325,7 +2332,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                                                                                         } {}
                                                                                                                                     } {
                                                                                                                                         ? == op 208 { ( wc_u8 c ) ? != 0 live { ( __kbind pf vm kv L SB h -1 live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                                                                                            ? == op 209 { ? != 0 live { ( __pf_emit . pf code ( __R_ISNULL ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
+                                                                                                                                            ? == op 209 { ? != 0 live { ( __pf_emit pf ( __R_ISNULL ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
                                                                                                                                                 ? == op 210 { : i rfi ( wc_uleb c ) ? != 0 live { ( __kbind pf vm kv L SB h rfi live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
                                                                                                                                                     ? == op 252 {  // 0xfc family: vs bridge, pops/pushes per sub
                                                                                                                                                         : i sub ( wc_uleb c )
@@ -2346,7 +2353,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                                                                                                                     ? == sub 15 { = pops 2 = push 1 } {
                                                                                                                                                                         ? == sub 16 { = push 1 } {} } } }
                                                                                                                                                             ( __vflush pf vm SB h live byte )
-                                                                                                                                                            ( __pf_emit . pf code ( __R_FCB ) sub bop + SB - h pops | << pops 1 push byte )
+                                                                                                                                                            ( __pf_emit pf ( __R_FCB ) sub bop + SB - h pops | << pops 1 push byte )
                                                                                                                                                             = h + - h pops push
                                                                                                                                                             ? > h maxh { = maxh h } {}
                                                                                                                                                         } {}
@@ -2360,7 +2367,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                                                                                                                 : i pops >> shape 1
                                                                                                                                                                 : i push & shape 1
                                                                                                                                                                 ( __vflush pf vm SB h live byte )
-                                                                                                                                                                ( __pf_emit . pf code ( __R_ATOM ) asub aoff + SB - h pops | << pops 1 push byte )
+                                                                                                                                                                ( __pf_emit pf ( __R_ATOM ) asub aoff + SB - h pops | << pops 1 push byte )
                                                                                                                                                                 = h + - h pops push
                                                                                                                                                                 ? > h maxh { = maxh h } {}
                                                                                                                                                             } {}
@@ -2368,7 +2375,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                                                                                                             // unsupported (0xfd and anything unknown): keep alignment,
                                                                                                                                                             // trap if ever executed
                                                                                                                                                             ? == op 253 { ( __skip_imm c op ) } {}
-                                                                                                                                                            ? != 0 live { ( __vflush pf vm SB 0 live byte ) ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) } {}
+                                                                                                                                                            ? != 0 live { ( __vflush pf vm SB 0 live byte ) ( __pf_emit pf ( __R_TRAPUN ) 0 0 0 0 byte ) } {}
                                                                                                                                                         }
                                                                                                                                                     } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
         // Arm the fold for the next instruction. Every arm above that is
@@ -2389,7 +2396,7 @@ inline @ __fr_setpos s tp i v → v {
     // `end` was reachable — the return arm performs the whole frame
     // transition inline, so falling off the end (an outer-loop round
     // trip) is left to hostile modules only.
-    ? != 0 live { ( __pf_emit . pf code ( __R_RET ) + SB - h nresults nresults 0 0 . f code_end ) } {}
+    ? != 0 live { ( __pf_emit pf ( __R_RET ) + SB - h nresults nresults 0 0 . f code_end ) } {}
     : i on ( vec_len [s] open )
     : ~ i ok 0
     ~ < ok on { ?? ( vec_get [s] open ok ) { T pp → ( __pblk_free pp ) F → {} } = ok + ok 1 }
@@ -2405,9 +2412,11 @@ inline @ __fr_setpos s tp i v → v {
     ? >= + SB + maxh 4 ( __slot_cap ) {
         ( vec_free [i] . pf code )
         ( vec_free [i] . pf kv )
+        ( vec_free [i] . pf bytes )
         = . pf code ( vec_new [i] )
         = . pf kv ( vec_new [i] )
-        ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 . f code_start )
+        = . pf bytes ( vec_new [i] )
+        ( __pf_emit pf ( __R_TRAPUN ) 0 0 0 0 . f code_start )
         = . pf count 1
         = . pf nlocals nparams
         = . pf sbase nparams
@@ -2469,10 +2478,8 @@ inline @ __fr_setpos s tp i v → v {
             ? >= bpos * . bpf count 6 { = bpos - * . bpf count 6 6 } {}
             : ~ i boff 0
             ? >= bpos 0 {
-                // W5 may carry a fused operand in its high half — the byte
-                // offset lives in the low 32 bits (see __fuse_loadshladd)
-                : i bw5 ?? ( vec_get [i] . bpf code + bpos 5 ) { T x → x F → . fr code_start }
-                = boff - & bw5 4294967295 . fr code_start
+                : i bw5 ?? ( vec_get [i] . bpf bytes / bpos 6 ) { T x → x F → . fr code_start }
+                = boff - bw5 . fr code_start
             } {}
             ( __msg_push_int msg boff )
             ( __msg_push_str msg `)` )
@@ -2618,7 +2625,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                                                                                                                         : i v + . rbase rc . rbase . pbase + r0 4
                                                                                                                                                                         = . rbase rb v
                                                                                                                                                                         : i w5 . pbase + r0 5
-                                                                                                                                                                        ? != 0 ( __rcmp >> w5 53 v . rbase & >> w5 32 2097151 ) { = pc ra ? <= ra r0 { = fuel - fuel + / - r0 ra 6 1 ? < fuel 0 { ( __trap it `fuel exhausted` ) ( __fr_setpos tp r0 ) = pc pend } {} } {} } {}
+                                                                                                                                                                        ? != 0 ( __rcmp >> w5 21 v . rbase & w5 2097151 ) { = pc ra ? <= ra r0 { = fuel - fuel + / - r0 ra 6 1 ? < fuel 0 { ( __trap it `fuel exhausted` ) ( __fr_setpos tp r0 ) = pc pend } {} } {} } {}
                                                                                                                                                                     } {
                                                                                                                                                                         ? == op 39 { = . rbase ra ( f64_to_bits * ( bits_to_f64 . rbase rb ) ( bits_to_f64 . rbase rc ) ) } {  // f64.mul
                                                                                                                                                                             ? == op 40 { = . rbase ra ( f64_to_bits + ( bits_to_f64 . rbase rb ) ( bits_to_f64 . rbase rc ) ) } {  // f64.add
@@ -2887,13 +2894,13 @@ inline @ __fr_setpos s tp i v → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ? == op 207 {  // __R_LOADSHLADD64: dst = mem64[(base + (x<<k)) w32 + off]
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             : i w5 . pbase + r0 5
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            : i ax + . rbase rb ( __w32 << . rbase . pbase + r0 4 & . rbase >> w5 32 31 )
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            : i ax + . rbase rb ( __w32 << . rbase . pbase + r0 4 & . rbase w5 31 )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             : i v ( __mem_load it + & ax 4294967295 rc 8 0 )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ? != 0 . it halt { ( __fr_setpos tp r0 ) = pc pend } { = . rbase ra v }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ? == op 208 {  // __R_LOADSHLADD32
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 : i w5 . pbase + r0 5
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                : i ax + . rbase rb ( __w32 << . rbase . pbase + r0 4 & . rbase >> w5 32 31 )
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                : i ax + . rbase rb ( __w32 << . rbase . pbase + r0 4 & . rbase w5 31 )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 : i v ( __mem_load it + & ax 4294967295 rc 4 0 )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ? != 0 . it halt { ( __fr_setpos tp r0 ) = pc pend } { = . rbase ra ( __w32 v ) }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             } {
@@ -2950,7 +2957,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     : i v ( __w32 + . rbase rc . rbase . pbase + r0 4 )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     = . rbase rb v
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     : i w5 . pbase + r0 5
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? != 0 ( __rcmp >> w5 53 v . rbase & >> w5 32 2097151 ) { = pc ra ? <= ra r0 { = fuel - fuel + / - r0 ra 6 1 ? < fuel 0 { ( __trap it `fuel exhausted` ) ( __fr_setpos tp r0 ) = pc pend } {} } {} } {}
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? != 0 ( __rcmp >> w5 21 v . rbase & w5 2097151 ) { = pc ra ? <= ra r0 { = fuel - fuel + / - r0 ra 6 1 ? < fuel 0 { ( __trap it `fuel exhausted` ) ( __fr_setpos tp r0 ) = pc pend } {} } {} } {}
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ? == op 172 { ( __trap it `unreachable` ) ( __fr_setpos tp r0 ) = pc pend } {  // __R_UNREACH
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ? == op 173 { ( __trap it `unsupported opcode` ) ( __fr_setpos tp r0 ) = pc pend } {  // __R_TRAPUN
