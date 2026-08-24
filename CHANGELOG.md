@@ -8,6 +8,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.51.0] — 2026-08-24
+
+### Added
+
+- **A template JIT for the pure-NURL wasm runtime — it now matches a
+  production Cranelift JIT over the benchmark corpus.** `packages/nwasm`
+  lowers its predecoded records to x86-64 per function and runs them
+  natively; the interpreter remains the semantic reference and still
+  executes everything the templates decline, plus every metered
+  (`--fuel`), shared-memory and non-x86-64 run. On by default;
+  `NURL_NWASM_JIT=0` keeps the pure interpreter.
+
+  Measured over `bench/wasmbench.sh`'s 15-benchmark corpus against the
+  reference wasmtime running the *same modules*: **geometric mean 0.78×**
+  its wall clock, **11 of 15 rows at or below parity** (`prefix_scan`
+  0.39×, `matmul` 0.48×, `bloom_filter` and `collatz` 0.61×), and the
+  worst row `fib` at 1.44× — a call-dominated benchmark, which is where
+  a template JIT's per-call protocol still shows.
+
+  The C and Rust columns of the same table are the control — modules from
+  two other LLVM frontends, never seen during development. On 14 of 15
+  rows they track NURL within a few points (geometric mean 0.90 and 0.89
+  against NURL's 0.78), so this is not a NURL-shaped fast path. The
+  exception is worth naming rather than averaging away: **`nbody` is
+  9.98× on C and 10.06× on Rust** where NURL is 1.28×. A function
+  containing any record outside the template set stays interpreted, per
+  function — those two modules emit f64 shapes the templates decline, and
+  fall back wholesale. That is the JIT's coverage boundary, and it is
+  where the next round of templates belongs.
+
+  The tiers, each forced by the one before it:
+  - **Tiers 0–2** — a fixed x86-64 sequence per record against the
+    frame's slot file (`disp32(%rbx)`), rel32 branch patching over a
+    per-function label table, `br_table` as a clamped indirect jump, and
+    a one-register cache that elides the reload when a record's first
+    operand is what the previous record just stored.
+  - **Call-out cost** — the 7-word call context comes from a per-Interp
+    freelist instead of a `Vec`, and the JIT hook recycles its frame to
+    the function's pool rather than freeing it. Recursive `fib` went
+    1893 ms → 626 ms on that alone.
+  - **Tier 6: direct JIT-to-JIT native calls.** A guest call between two
+    compiled functions is one native `call` — no driver round trip, no
+    `Frame` object, no per-call context. The entry allocates its own
+    frame from a per-Interp slab, copies params through `rsi`, and writes
+    results back through the saved args pointer on `RET`. A call-out's
+    status return unwinds the native stack, so each direct frame parks
+    `(page, resume, rbx, args)` on a chain the driver resumes
+    innermost-first; the final entry of a segment tail-iterates, so a
+    loop that calls out N times uses constant chain space. Slab overflow
+    degrades to the interpreter instead of trapping.
+  - **Guard-page linear memory.** On Linux/x86-64 (glibc, non-ASan) a
+    non-shared memory is an 8 GiB `PROT_NONE` reservation with the live
+    pages committed in place, so the memory templates emit **no bounds
+    check at all**: every address a masked 32-bit index plus a u32 offset
+    can form lands inside the reservation, a fault is steered by the
+    runtime's `SIGSEGV` handler to that function's existing
+    out-of-bounds stub — same trap, same message — and `memory.grow` is
+    an `mprotect` that never moves the base. A fault outside every
+    registered region or page reinstalls the previous handler and
+    re-faults, so a real crash stays a crash. `NURL_NWASM_GUARD=0` forces
+    the checked path.
+  - **Tier 7: function-wide slot pinning.** `__jit_pin_select` scores
+    each slot's static accesses (weighted 8× per backward-branch nesting
+    level), subtracts the sync cost at call sites, and pins the winners
+    into callee-saved `r12`–`r15` for the whole function — no block-edge
+    spills, because the map never changes inside a function. Memory stays
+    each slot's home: pinned registers sync before anything that reads
+    the frame from outside and reload at every resume and post-call join.
+    `NURL_NWASM_PIN=0` keeps every slot in memory, and with it the
+    emitted code is byte-for-byte what tier 6 produced.
+  - **Tier 7b: pure-f64 slots in `xmm8`–`xmm15`.** A slot whose accesses
+    are xmm-dominant and never hit a fused or partial-width integer site
+    rides an xmm register for the whole function; plain integer reads and
+    writes go through `movq`, so a couple of slot copies no longer
+    disqualify a hot f64 slot. Register-to-register copies are `movaps`,
+    not `movsd` — `movsd` merges into the destination's upper half and
+    the false dependency serialized `nbody`'s inner loop (174 ms → 136
+    ms). Seating past the fourth register must clear twice the threshold,
+    because each one still costs a sync and a reload at every call site.
+  - **Constants as immediates.** A constant-pool slot is marked in the
+    pin map and its use sites carry the value in the instruction stream
+    — `shl`/`shr`/`sar` by `imm8`, `add`/`sub`/`and`/`or`/`xor`/`cmp`
+    with a sign-extended `imm32`, `imul r,r,imm32`, `mov e/rax,imm32`.
+    Only compact spellings qualify; a constant too wide for `imm32` keeps
+    its plain load. The immediate-servable ones leave the scoring pool,
+    freeing `r12`–`r15` for real variables.
+  - **A compare's flags feed the `SEL`s behind it.** `setcc`, `movzx` and
+    `mov` leave the flags alone, so when the records right after a
+    compare are `SEL`s keyed by its destination, their `cmov`s issue on
+    the still-live flags. The chain stops at the first non-`SEL`, at a
+    branch target, or after a `SEL` that overwrites the condition slot.
+    Paired corpus 1226 → 1158 ms; `binary_search` −21 %.
+
+  The correctness gate throughout is byte-identical output across the
+  interpreter, the JIT, and every A/B flag combination — including a
+  `nurlc.wasm` self-compile of the full 65k-line compiler — plus trap
+  parity (message and all) and the ASan/UBSan build running the whole
+  JIT path.
+
+- **Runtime primitives for generated code** (`stdlib/runtime_core.c`):
+  `nurl_code_alloc` / `nurl_code_seal` allocate and seal W^X executable
+  pages, `nurl_guard_code_add` registers a sealed page with the
+  guard-page fault handler, and `nurl_call_code*` enter generated code.
+  A NURL program can now emit and run machine code without leaving the
+  language. **These are what a package's JIT links against, so a package
+  that uses them needs this release** — `nwasm` 1.0.0 and `swarm-mcp`
+  0.28.0 were published before it existed and cannot be built from the
+  registry.
+
+- **`NURL_NWASM_JIT_DUMP=1`** streams every sealed page as decimal bytes
+  on stderr for objdump-based inspection. It is how the immediate-operand
+  and `movaps` findings were diagnosed, and stays as a tool.
+
 ### Changed
 
 - **`packages/wasmtime` is now `packages/nwasm`, published as `nwasm`
@@ -61,6 +174,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   numbers are spent — a version can be yanked but never replaced — so the
   runtime republishes as 1.0.1 and the engine as 0.28.1 on top of this
   release.
+
+- **The wasm interpreter, independently, went to its measured maximum
+  (−20 % over the corpus) before the JIT existed.** Two record-level
+  wins, both invisible to the JIT tiers above because they happen at
+  predecode:
+  - Every i32-typed slot holds the canonical form (low 32 bits
+    sign-extended) — the invariant `i32.eqz` already banked on. Under it
+    `i64.extend_i32_s` is the identity and emits no record at all, and
+    `i32.wrap_i64` emits nothing either when the adjacent consumer masks
+    the address, re-wraps, canonicalises its input, or stores only the
+    low bytes.
+  - `i = i + k; branch while i <> n` fuses into **one** `ADDBRIFC`
+    record: the add keeps its write, the compare and branch fold in
+    behind it, and two dispatches disappear per back edge. A `labfloor`
+    watermark — the record count at the most recent
+    `block`/`loop`/`if`/`else`/`end` — proves no label can point at the
+    compare.
+
+  Measured with all 15 corpus rows byte-identical: `prefix_scan`
+  −11.9 %, `packet_classifier` −8.7 %, `lcg` −7.3 %, `ring_write`
+  −5.8 %, none slower.
+
+- **`packages/swarm-mcp` 0.26.0** moved its pins to the runtime that has
+  threads and sockets (`^0.14.0` / `wasmbuilder ^0.2.0`). The caret sits
+  at the minor, so an installed swarm-mcp could not resolve either until
+  that release; for a worker running CPU wasm chunks in-process the
+  interface is unchanged, but the set of kernels that can run is strictly
+  larger — one that sleeps, one that touches `errno`, one built
+  `--threads`, one that opens a socket.
+
+### Fixed
+
+- **A memory record whose constant offset reaches 2³¹ sign-extends in the
+  `disp32` encoding**, so the emitted bounds check could pass while the
+  SIB access wrapped *below* the buffer — legal wasm, wrong code, and a
+  heap write in the Vec-backed mode. `__jit_ok` now rejects such
+  functions to the interpreter, which is exact at any offset. Found by
+  the guard-page audit.
+- **The JIT function table was sized from the lazily-grown `pfuncs` vec
+  instead of the module**, leaving garbage entries that could be called;
+  and **call-out context words written as dwords were read with stale
+  upper halves** from earlier 64-bit writes (an FCB before a
+  `memory.grow` corrupted the grow's destination slot). Both were found
+  by the byte-identical gates rather than by a failing test.
+- **`NURL_SAN=1` crashed on the first JIT call.** UBSan's
+  `-fsanitize=function` verifies an indirect call by reading the callee's
+  clang-emitted type hash at `fn-4`; a JIT entry is the first byte of an
+  `mmap` page, so the read falls off the front of the mapping. Generated
+  code will never carry that hash, so the check can only fault or
+  false-positive here. The five `nurl_call_code*` wrappers — the only
+  indirect calls into generated code — now carry
+  `no_sanitize("function")`, and nothing else is exempted; the ASan+UBSan
+  build runs the full JIT.
+- **The interpreter's fast path for stores narrower than eight bytes was
+  a 64-bit read-modify-write** — exact on one thread, and it loses a
+  neighbour's byte on a shared memory. A single-threaded worker never hit
+  it; a swarm-mcp compiled to one wasm module and run as relay + workers
+  + MCP inside a single instance did, as a wild pointer in the guest's
+  own `free`.
 
 ## [0.50.0] — 2026-08-23
 

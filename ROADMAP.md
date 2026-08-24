@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-23 · Current release: **0.50.0** · Language: **Grammar
+_Last reviewed: 2026-08-24 · Current release: **0.51.0** · Language: **Grammar
 v2.7** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -241,10 +241,16 @@ platform-specific shims.
   demo).
 - A **WebAssembly runtime written in pure NURL** (`packages/nwasm`) that
   decodes and executes real `wasm32-wasi` modules (full int/float instruction
-  set, linear/bulk memory, tables + `call_indirect`, WASI + `--dir` file ops),
-  with no external runtime — and the compiler **self-hosts on wasm**: `nurlc`
-  compiled to `wasm32-wasi` recompiles `nurlc.nu` to byte-identical IR, both
-  under the external reference `wasmtime` and under this pure-NURL runtime.
+  set, linear/bulk memory, tables + `call_indirect`, threads + atomics,
+  sockets, WASI + `--dir` file ops), with no external runtime — and with a
+  **template JIT** on top that emits x86-64 for hot functions over
+  guard-page linear memory. Over `bench/wasmbench.sh`'s corpus it runs the
+  same modules at a **geometric mean 0.78×** the reference Cranelift JIT's
+  wall clock, 11 of 15 rows at or below parity. The compiler **self-hosts
+  on wasm**: `nurlc` compiled to `wasm32-wasi` recompiles `nurlc.nu` to
+  byte-identical IR, both under the external reference `wasmtime` and under
+  this pure-NURL runtime — and identically under its interpreter and its
+  JIT.
 - Static cross-compiles: Linux ARM64 / RISC-V64 (musl). Milk-V Duo (RISC-V
   C906) validated on-device.
 - **Unikernel: a NURL program boots as its own kernel** — no host OS, no
