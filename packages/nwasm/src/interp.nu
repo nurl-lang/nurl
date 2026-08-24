@@ -2852,6 +2852,7 @@ inline @ __fr_setpos s tp i v → v {
     ? & >= op 194 <= op 201 { ^ 1 } {}  // fused f64 family
     ? & >= op 205 <= op 208 { ^ 1 } {}  // LOADSHL / LOADSHLADD
     ? == op 131 { ^ 1 } {}  // f64.sqrt
+    ? | == op 125 == op 126 { ^ 1 } {}  // f64.abs / f64.neg — sign-bit ops on the raw slot
     ? == op 93 { ^ 1 } {}  // i32.clz
     ? | == op 99 == op 108 { ^ 1 } {}  // i32/i64.rem_u
     ? == op 170 { ^ 1 } {}  // call_indirect (tier 5b)
@@ -3331,6 +3332,11 @@ inline @ __fr_setpos s tp i v → v {
         ? == op 205 { ( __jit_mem buf 0 0 139 0 c ) } { ( __jit_mem buf 0 0 99 0 c ) }  // mov rax,[mem] / movsxd rax,dword[mem]
         ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
+    ? | == op 125 == op 126 {  // f64.abs / f64.neg: clear/flip the sign bit of the raw slot
+        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+        ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf 186 ) ( __jit_b buf ? == op 125 240 248 ) ( __jit_b buf 63 )  // btr/btc rax,63
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
+    } {}
     ? & >= op 153 <= op 156 {  // reinterprets: raw slot copy
         ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
         ( __jit_strax_m buf pmap xmap cvals a ) ^ v
@@ -3619,6 +3625,7 @@ inline @ __fr_setpos s tp i v → v {
     ? == op 197 { ( __jit_sc_add sc a wt ) ( __jit_ex_add ex b wt ) ( __jit_ex_add ex c wt ) ^ 0 } {}  // ADDSTOREF64: int addr, f64 sources
     ? & >= op 198 <= op 201 { ( __jit_ex_add ex a wt ) ( __jit_ex_add ex b wt ) ( __jit_ex_add ex c wt ) ( __jit_ex_add ex d wt ) ^ 0 } {}  // fused f64
     ? == op 131 { ( __jit_ex_add ex a wt ) ( __jit_ex_add ex b wt ) ^ 0 } {}  // f64.sqrt
+    ? | == op 125 == op 126 { ( __jit_ex_add ex a wt ) ( __jit_ex_add ex b wt ) ^ 0 } {}  // f64.abs/neg: served via movq when pinned
     ? == op 93 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_hd_add hd b ) ^ 0 } {}  // i32.clz: 32-bit read
     ? == op 99 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_sc_add sc c wt ) ( __jit_hd_add hd b ) ( __jit_hd_add hd c ) ^ 0 } {}  // i32.rem_u: 32-bit reads
     ? == op 108 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_sc_add sc c wt ) ^ 0 } {}  // i64.rem_u
