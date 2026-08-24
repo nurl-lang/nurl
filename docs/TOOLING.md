@@ -142,6 +142,10 @@ nwasm run program.wasm
 `wasmbuilder` drives nurlc, retargets the emitted IR for wasm32-wasi, and
 links with the toolchain's bundled `zig cc` (wasi-libc + wasm-ld built in);
 `wasmbuilder --doctor` shows how everything resolves on your machine.
-`nwasm` runs wasm32-wasi modules (preopened dirs, `--allow-gpu` for the
-CUDA host bridge); its CLI is a drop-in for the reference `wasmtime`'s
-`run` subset. Both packages' READMEs carry the full option surface.
+`nwasm` runs wasm32-wasi modules (preopened dirs, `--allow-net` for
+sockets, `--allow-gpu` for the CUDA host bridge) on a register-record
+interpreter with a **template JIT** on top — on by default,
+`NURL_NWASM_JIT=0` keeps the pure interpreter, and metered (`--fuel`),
+shared-memory and non-x86-64 runs fall back to it on their own. Its CLI
+is a drop-in for the reference `wasmtime`'s `run` subset. Both packages'
+READMEs carry the full option surface.
