@@ -2592,6 +2592,7 @@ inline @ __fr_setpos s tp i v → v {
     ? | == op 38 == op 177 { ^ 1 } {}  // ADDBRIFC64/32
     ? >= ( __jit_memkind op ) 0 { ^ 1 } {}  // loads/stores (tier 2)
     ? | == op 50 == op 210 { ^ 1 } {}  // CALL / CALLIMP (tier 3)
+    ? | == op 52 == op 53 { ^ 1 } {}  // global.get/set (tier 4)
     ^ 0
 }
 
@@ -2769,6 +2770,7 @@ inline @ __fr_setpos s tp i v → v {
     ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 31 )  // mov rbx,[rdi]
     ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 95 ) ( __jit_b buf 8 )  // mov r11,[rdi+8]
     ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 )  // mov r10,[rdi+16]
+    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
     : ~ i r 0
     ~ < r n {
         ( vec_push [i] lab ( vec_len [u] buf ) )  // this record starts here
