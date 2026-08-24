@@ -1,4 +1,4 @@
-// packages/wasmtime/tests/atomics_test.nu — the threads proposal's 0xfe
+// packages/nwasm/tests/atomics_test.nu — the threads proposal's 0xfe
 // atomics, hand-authored in WAT and assembled with wasm-tools. Covers the
 // shared-memory declaration, atomic load/store, every read-modify-write
 // group at every width, cmpxchg (taken and not), wait/notify's three

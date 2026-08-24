@@ -80,7 +80,7 @@ pins. Adding a workload is one handler in `work.nu` plus a kind constant.
 
 ```sh
 # pure logic (workloads, exact sharding, codecs) — deterministic, ASan-clean
-NURL_STDLIB=<repo> ../../nurl.sh tests/work_test.nu /tmp/wt && /tmp/wt
+NURL_STDLIB=<repo> ../../nurl.sh tests/work_test.nu /tmp/wtest && /tmp/wtest
 
 # end-to-end over a local relay + worker set
 ./tests/live_smoke.sh

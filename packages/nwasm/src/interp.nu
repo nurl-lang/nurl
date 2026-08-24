@@ -1,4 +1,4 @@
-// packages/wasmtime/src/interp.nu — a small WebAssembly interpreter (pure NURL).
+// packages/nwasm/src/interp.nu — a small WebAssembly interpreter (pure NURL).
 //
 // Executes wasm: i32/i64/f32/f64 const, locals, globals, the integer and float
 // arithmetic/comparison/bitwise ops, all int↔float conversions, structured
@@ -151,10 +151,10 @@ $ `module.nu`
 
 // ── CUDA driver + NVRTC (the GPU host-import bridge) ──────────────
 // A wasm module built from a GPU-using NURL package (packages/gpu →
-// onnx → objdet) imports these under module "env"; wasmtime resolves them
+// onnx → objdet) imports these under module "env"; nwasm resolves them
 // to the real libcuda/libnvrtc here, marshalling guest linear memory ↔
 // host. nurl.sh auto-links libcuda/libnvrtc when these symbols appear, and
-// links stub objects on a GPU-less host (so wasmtime always builds; the
+// links stub objects on a GPU-less host (so nwasm always builds; the
 // guest then just sees nonzero CUresult codes). Handle types match the
 // portable i64 model in packages/gpu/src/cuda.nu.
 & `cuda` @ cuInit i32 flags → i32
@@ -344,7 +344,7 @@ $ `module.nu`
 @ __vmem_span → i { ^ + 17179869184 65536 }
 
 // Guard-page memory is on wherever the runtime supports it; main.nu turns
-// it off for NURL_WT_GUARD=0 (the A/B and debugging escape).
+// it off for NURL_NWASM_GUARD=0 (the A/B and debugging escape).
 : ~ i g_guard 1
 
 @ interp_disable_guard → v { = g_guard 0 }
@@ -2651,10 +2651,10 @@ inline @ __fr_setpos s tp i v → v {
 // single loop paid for on *every record*: a `vec_len` on the frame stack, a
 // `reload` test, and two byte loads for the trap and exit flags, none of
 // which can change between two records of the same basic block.
-: ~ i g_jit 0  // tier-0 JIT opt-in (NURL_WT_JIT); off by default
+: ~ i g_jit 0  // tier-0 JIT opt-in (NURL_NWASM_JIT); off by default
 : ~ i g_jit_depth 0  // JIT call-out nesting; beyond a cap, callees interpret (1M-deep-safe)
-: ~ i g_pin 1  // tier-7 slot pinning (NURL_WT_PIN=0 keeps every slot in memory; A/B, debug)
-: ~ i g_jitdump 0  // NURL_WT_JIT_DUMP=1: emit every sealed page as decimal bytes on stderr
+: ~ i g_pin 1  // tier-7 slot pinning (NURL_NWASM_PIN=0 keeps every slot in memory; A/B, debug)
+: ~ i g_jitdump 0  // NURL_NWASM_JIT_DUMP=1: emit every sealed page as decimal bytes on stderr
 @ interp_enable_jit → v { = g_jit 1 }
 
 @ interp_disable_pin → v { = g_pin 0 }
@@ -3656,7 +3656,7 @@ inline @ __fr_setpos s tp i v → v {
 // level, capped), against the protocol cost of syncing around every
 // call site. At most four integer winners (r12 first) in the returned
 // vec; slots whose every access is an xmm-path operand compete for
-// xmm8..xmm15 instead and land in `xpins`. NURL_WT_PIN=0 turns the
+// xmm8..xmm15 instead and land in `xpins`. NURL_NWASM_PIN=0 turns the
 // whole tier off (A/B and debugging).
 @ __jit_pin_select * PFunc pf ( Vec i ) xpins → ( Vec i ) {
     : i kvbase . pf nlocals
@@ -6720,7 +6720,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
         // A trap kills only this thread, so it has to be reported here or
         // it is silent: the guest's join just never completes.
         ? ( interp_trapped child ) {
-            ( nurl_eprint `wasmtime: thread trap: ` )
+            ( nurl_eprint `nwasm: thread trap: ` )
             ( nurl_eprintln ( string_data ( bytes_to_str . child trapmsg ) ) )
         } {}
         ( interp_flush child )

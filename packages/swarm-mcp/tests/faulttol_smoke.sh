@@ -32,7 +32,7 @@ fi
 PORT="${SWARM_PORT:-47898}"; MCPP="${SWARM_MCP_PORT:-48461}"
 TOKEN="faulttol-smoke-secret"
 TMP="$(mktemp -d)"; export HOME="$TMP"; export TMPDIR="$TMP"
-BIN="$TMP/swarm-mcp"; WT="$TMP/wt"; a_pid=""; b_pid=""
+BIN="$TMP/swarm-mcp"; NWASM="$TMP/nwasm"; a_pid=""; b_pid=""
 cleanup() {
     for p in "$a_pid" "$b_pid"; do [ -n "$p" ] && kill -9 "$p" 2>/dev/null; done
     rm -rf "$TMP"
@@ -40,17 +40,17 @@ cleanup() {
 trap cleanup EXIT
 MCP() { curl -sk -m 180 "https://127.0.0.1:$MCPP/mcp" -H 'Content-Type: application/json' -d "$1"; }
 
-echo "[faulttol-smoke] building swarm-mcp + wasmtime"
+echo "[faulttol-smoke] building swarm-mcp + nwasm"
 "$NURL_SH" "$HERE/src/main.nu" "$BIN" >/dev/null 2>&1 || { echo "[faulttol-smoke] FAIL build swarm-mcp"; exit 1; }
-"$NURL_SH" "$REPO/packages/wasmtime/src/main.nu" "$WT" >/dev/null 2>&1 || { echo "[faulttol-smoke] FAIL build wt"; exit 1; }
+"$NURL_SH" "$REPO/packages/nwasm/src/main.nu" "$NWASM" >/dev/null 2>&1 || { echo "[faulttol-smoke] FAIL build nwasm"; exit 1; }
 
 echo "[faulttol-smoke] node A (relay+gpu worker+mcp) on device 0"
-CUDA_VISIBLE_DEVICES=0 WASMTIME="$WT" "$BIN" --token "$TOKEN" --relay --worker --gpu --mcp \
+CUDA_VISIBLE_DEVICES=0 NURL_WASM_RUNTIME="$NWASM" "$BIN" --token "$TOKEN" --relay --worker --gpu --mcp \
     --listen 127.0.0.1:"$PORT" --mcp-listen 127.0.0.1:"$MCPP" >"$TMP/a.log" 2>&1 &
 a_pid=$!; sleep 2.5
 
 echo "[faulttol-smoke] node B (gpu worker, the victim) on device 1"
-CUDA_VISIBLE_DEVICES=1 WASMTIME="$WT" "$BIN" --token "$TOKEN" --worker --gpu \
+CUDA_VISIBLE_DEVICES=1 NURL_WASM_RUNTIME="$NWASM" "$BIN" --token "$TOKEN" --worker --gpu \
     --connect 127.0.0.1:"$PORT" >"$TMP/b.log" 2>&1 &
 b_pid=$!; sleep 5
 

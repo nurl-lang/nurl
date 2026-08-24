@@ -20,7 +20,7 @@ fi
 RA="${RELAY_A:-47910}"; RB="${RELAY_B:-47911}"; MCPP="${SWARM_MCP_PORT:-48470}"
 TOKEN="failover-smoke-secret"
 TMP="$(mktemp -d)"; export HOME="$TMP"; export TMPDIR="$TMP"
-BIN="$TMP/swarm-mcp"; WT="$TMP/wt"
+BIN="$TMP/swarm-mcp"; NWASM="$TMP/nwasm"
 ra_pid=""; rb_pid=""; worker_pid=""; mcp_pid=""
 cleanup() { for p in "$ra_pid" "$rb_pid" "$worker_pid" "$mcp_pid"; do [ -n "$p" ] && kill -9 "$p" 2>/dev/null; done; rm -rf "$TMP"; }
 trap cleanup EXIT
@@ -28,7 +28,7 @@ MCP() { curl -sk -m 180 "https://127.0.0.1:$MCPP/mcp" -H 'Content-Type: applicat
 
 echo "[failover-smoke] building"
 "$NURL_SH" "$HERE/src/main.nu" "$BIN" >/dev/null 2>&1 || { echo "[failover-smoke] FAIL build swarm-mcp"; exit 1; }
-"$NURL_SH" "$REPO/packages/wasmtime/src/main.nu" "$WT" >/dev/null 2>&1 || { echo "[failover-smoke] FAIL build wt"; exit 1; }
+"$NURL_SH" "$REPO/packages/nwasm/src/main.nu" "$NWASM" >/dev/null 2>&1 || { echo "[failover-smoke] FAIL build nwasm"; exit 1; }
 
 RELAYS="127.0.0.1:$RA,127.0.0.1:$RB"
 echo "[failover-smoke] starting two relays ($RA, $RB)"
@@ -36,7 +36,7 @@ echo "[failover-smoke] starting two relays ($RA, $RB)"
 "$BIN" --token "$TOKEN" --relay --listen 127.0.0.1:"$RB" >"$TMP/rb.log" 2>&1 & rb_pid=$!
 sleep 1.5
 echo "[failover-smoke] starting a gpu worker and an mcp node, both --connect both relays"
-WASMTIME="$WT" "$BIN" --token "$TOKEN" --worker --gpu --connect "$RELAYS" -v >"$TMP/w.log" 2>&1 & worker_pid=$!
+NURL_WASM_RUNTIME="$NWASM" "$BIN" --token "$TOKEN" --worker --gpu --connect "$RELAYS" -v >"$TMP/w.log" 2>&1 & worker_pid=$!
 "$BIN" --token "$TOKEN" --mcp --connect "$RELAYS" --mcp-listen 127.0.0.1:"$MCPP" >"$TMP/m.log" 2>&1 & mcp_pid=$!
 sleep 3
 

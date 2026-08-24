@@ -23,12 +23,12 @@ elif [ -x "$REPO_ROOT/nurl.sh" ]; then
     if [ -x "$REPO_ROOT/build/nurlc" ]; then export NURLC="${NURLC:-$REPO_ROOT/build/nurlc}"; fi
 else NURL="nurl"; fi
 
-WORK="$(mktemp -d -t wt-threads-test.XXXXXX)"
+WORK="$(mktemp -d -t nwasm-threads-test.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 PASS=0; FAIL=0
 
-echo "[1/3] build wt + the probe (native)"
-$NURL src/main.nu "$WORK/wt" >/dev/null 2>"$WORK/wt.err" || { echo "FAIL: could not build wt:"; tail -5 "$WORK/wt.err"; exit 1; }
+echo "[1/3] build nwasm + the probe (native)"
+$NURL src/main.nu "$WORK/nwasm" >/dev/null 2>"$WORK/nwasm.err" || { echo "FAIL: could not build nwasm:"; tail -5 "$WORK/nwasm.err"; exit 1; }
 $NURL tests/progs/threadprobe.nu "$WORK/probe.native" >/dev/null 2>"$WORK/n.err" || { echo "FAIL: native probe:"; tail -5 "$WORK/n.err"; exit 1; }
 
 echo "[2/3] build the probe for wasi-threads"
@@ -43,7 +43,7 @@ fi
 
 echo "[3/3] native vs wasm output"
 "$WORK/probe.native" > "$WORK/n.out" 2>&1; nrc=$?
-timeout 600 "$WORK/wt" run "$WORK/probe.wasm" > "$WORK/w.out" 2>&1; wrc=$?
+timeout 600 "$WORK/nwasm" run "$WORK/probe.wasm" > "$WORK/w.out" 2>&1; wrc=$?
 # Both must actually have run four threads — two identical failures would
 # otherwise "match" and pass a runtime that spawns nothing at all.
 if ! grep -q "^threads: 4$" "$WORK/n.out" || ! grep -q "^total: 640000$" "$WORK/n.out"; then
@@ -54,5 +54,5 @@ else
     echo "  FAIL (native rc=$nrc, wasm rc=$wrc)"; diff "$WORK/n.out" "$WORK/w.out" | head -10; FAIL=$((FAIL+1))
 fi
 
-echo "== wasmtime threads tests: PASS=$PASS FAIL=$FAIL"
+echo "== nwasm threads tests: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" = 0 ]

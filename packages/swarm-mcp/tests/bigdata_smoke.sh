@@ -27,14 +27,14 @@ fi
 PORT="${SWARM_PORT:-47900}"; MCPP="${SWARM_MCP_PORT:-48463}"
 TOKEN="bigdata-smoke-secret"
 TMP="$(mktemp -d)"; export HOME="$TMP"; export TMPDIR="$TMP"
-BIN="$TMP/swarm-mcp"; WT="$TMP/wt"; node_pid=""
+BIN="$TMP/swarm-mcp"; NWASM="$TMP/nwasm"; node_pid=""
 cleanup() { [ -n "$node_pid" ] && kill -9 "$node_pid" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 MCP() { curl -sk -m 600 "https://127.0.0.1:$MCPP/mcp" -H 'Content-Type: application/json' -d "$1"; }
 
-echo "[bigdata-smoke] building swarm-mcp + wasmtime"
+echo "[bigdata-smoke] building swarm-mcp + nwasm"
 "$NURL_SH" "$HERE/src/main.nu" "$BIN" >/dev/null 2>&1 || { echo "[bigdata-smoke] FAIL build swarm-mcp"; exit 1; }
-"$NURL_SH" "$REPO/packages/wasmtime/src/main.nu" "$WT" >/dev/null 2>&1 || { echo "[bigdata-smoke] FAIL build wt"; exit 1; }
+"$NURL_SH" "$REPO/packages/nwasm/src/main.nu" "$NWASM" >/dev/null 2>&1 || { echo "[bigdata-smoke] FAIL build nwasm"; exit 1; }
 
 # A 320 MiB dataset (> the old 256 MiB cap): 40M f64 values, all 1.0 → sum = 40M.
 NVAL=41943040   # 40 * 1024 * 1024 → 320 MiB exactly
@@ -53,7 +53,7 @@ PY
 FSZ=$(stat -c %s "$DS"); echo "[bigdata-smoke] file is $FSZ bytes ($((FSZ/1024/1024)) MiB), old cap was 256 MiB"
 
 echo "[bigdata-smoke] starting node on :$PORT / :$MCPP"
-WASMTIME="$WT" "$BIN" --token "$TOKEN" --relay --worker --gpu --mcp \
+NURL_WASM_RUNTIME="$NWASM" "$BIN" --token "$TOKEN" --relay --worker --gpu --mcp \
     --listen 127.0.0.1:"$PORT" --mcp-listen 127.0.0.1:"$MCPP" >"$TMP/node.log" 2>&1 &
 node_pid=$!; sleep 2.5
 fail=0

@@ -630,7 +630,7 @@ $ `stdlib/core/vec.nu`
     // realpath(3) — wasi-libc doesn't ship it (no symlink story on wasi).
     // stdlib/std/path.nu's path_canonical treats a NULL return as "path not
     // resolvable" and answers None, which is the honest wasm answer. Without
-    // this stub the symbol becomes an env import and the reference wasmtime
+    // this stub the symbol becomes an env import and the external wasmtime
     // refuses to *instantiate* the module — nurlc.wasm broke this way the
     // moment path_canonical entered the compiler's import graph.
     ( vec_push [s] posix_names `realpath` ) ( vec_push [s] posix_sent `n` )
@@ -728,7 +728,7 @@ $ `stdlib/core/vec.nu`
     // symbol that is still undefined at link time becomes a wasm import
     // from module "env" (import name defaults to the symbol name), which
     // the host runtime resolves — WASI, canvas/audio, and the GPU
-    // package's cuda/nvrtc bridge in the pure-NURL wasmtime. Symbols that
+    // package's cuda/nvrtc bridge in the pure-NURL nwasm runtime. Symbols that
     // ARE defined (runtime.wasm.o, wasi-libc) resolve normally; wasm-ld
     // only consults the attribute for undefined ones, so blanket-marking
     // is safe (verified: an attributed @puts still binds to wasi-libc).

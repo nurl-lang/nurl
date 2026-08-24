@@ -816,7 +816,7 @@ $ `cudakernel.nu`
 }
 
 // Chunk count for a wasm task: fewer chunks than the expression path (each
-// chunk ships the module and spawns a wasmtime process), but enough to spread
+// chunk ships the module and spawns a runtime process), but enough to spread
 // across the ring.
 @ nchunks_wasm i nworkers → i { ^ ? > nworkers 0 * nworkers 2 2 }
 
@@ -1661,7 +1661,7 @@ $ `cudakernel.nu`
     ? == nworkers 0 {
         ( vec_free [u] wasm )
         ^ ? != gpu 0
-        ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu' (needs the pure-NURL wasmtime and an NVIDIA GPU)` )
+        ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu' (needs the pure-NURL nwasm runtime and an NVIDIA GPU)` )
         ( mcp_tool_result_error `no workers in the cluster — start some with 'swarm-mcp worker'` )
     } {}
     : i nchunks ( nchunks_wasm nworkers )
@@ -1867,7 +1867,7 @@ $ `cudakernel.nu`
     : i ngpu ( roster_count_caps # *Roster . sw roster ( cap_gpu ) )
     ? == ngpu 0 {
         ( vec_free [i] params ) ( vec_free [u] wasm )
-        ^ ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu' (needs the pure-NURL wasmtime and an NVIDIA GPU)` )
+        ^ ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu' (needs the pure-NURL nwasm runtime and an NVIDIA GPU)` )
     } {}
     // chunk count: spread over the GPU workers; never shard an empty range.
     // With a dataset the split is BLOCK-ALIGNED inside the v4 submit — the
@@ -3351,7 +3351,7 @@ $ `cudakernel.nu`
 }
 
 @ __help_gpu → s {
-    ^ `GPU work needs workers started with --worker --gpu (and a wasmtime on PATH — the toolchain's pure-NURL packages/wasmtime is a drop-in). A --gpu worker advertises a capability bit, and GPU tasks route ONLY to such workers on a GPU-only consistent-hash ring, so a mixed CPU/GPU cluster just works; a CUDA tool on a CPU-only cluster returns a clear "no GPU workers" error.\nNo CUDA toolkit is needed on any node — only the driver's libcuda + libnvrtc. Kernels JIT at run time via NVRTC. Select the device with CUDA_VISIBLE_DEVICES in the worker's environment (the kernel binds device ordinal 0).\nTrust boundary: GPU host imports pierce the wasm sandbox by design (device pointers are raw host handles), so they are per-worker (--gpu) and, for the hand-written wasm paths, per-task (gpu:true) opt-in, on top of the cluster token — only token-authentic tasks reach a worker at all. Enable --gpu only for clusters whose token holders you trust.`
+    ^ `GPU work needs workers started with --worker --gpu (and a wasm runtime on PATH — the toolchain's pure-NURL packages/nwasm is a drop-in). A --gpu worker advertises a capability bit, and GPU tasks route ONLY to such workers on a GPU-only consistent-hash ring, so a mixed CPU/GPU cluster just works; a CUDA tool on a CPU-only cluster returns a clear "no GPU workers" error.\nNo CUDA toolkit is needed on any node — only the driver's libcuda + libnvrtc. Kernels JIT at run time via NVRTC. Select the device with CUDA_VISIBLE_DEVICES in the worker's environment (the kernel binds device ordinal 0).\nTrust boundary: GPU host imports pierce the wasm sandbox by design (device pointers are raw host handles), so they are per-worker (--gpu) and, for the hand-written wasm paths, per-task (gpu:true) opt-in, on top of the cluster token — only token-authentic tasks reach a worker at all. Enable --gpu only for clusters whose token holders you trust.`
 }
 
 @ __help_limits → s {
@@ -3460,7 +3460,7 @@ $ `cudakernel.nu`
 // Single source of truth for the server version — the MCP handshake,
 // server/discover, and the --version banner all read this (the
 // handshake had drifted to a stale hand-written 0.20.0).
-@ sm_version → s { ^ `0.27.0` }
+@ sm_version → s { ^ `0.28.0` }
 
 @ handle_initialize Json id ? Json params → Json {
     : Json result ( mcp_initialize_result `swarm-mcp` ( sm_version ) )
@@ -3918,7 +3918,7 @@ $ `cudakernel.nu`
     ( nurl_print `  --tls-cert FILE --tls-key FILE  PEM cert+key (default: self-signed in ~/.swarm-mcp)\n` )
     ( nurl_print `  --workers N              worker threads   (default 1)\n` )
     ( nurl_print `  --gpu                    workers run GPU wasm kernels (--allow-gpu; needs the\n` )
-    ( nurl_print `                           pure-NURL wasmtime as $WASMTIME + an NVIDIA GPU/CUDA)\n` )
+    ( nurl_print `                           pure-NURL nwasm as $NURL_WASM_RUNTIME + an NVIDIA GPU/CUDA)\n` )
     ( nurl_print `  -v, --verbose\n` )
     ( nurl_print `  --version                print the version and exit\n` )
     ( nurl_print `  --help, -h               this\n\n` )
@@ -4010,16 +4010,16 @@ $ `cudakernel.nu`
     ( nurl_flush_stdout )
 
     // Preflight the worker's runtime before anything joins the cluster. A
-    // worker with no wasmtime (or, with --gpu, one that cannot bridge GPU host
+    // worker with no wasm runtime (or, with --gpu, one that cannot bridge GPU host
     // imports) accepts chunks it can never run, and the operator only finds out
     // as an unexplained failed_chunks on some later task.
     ? worker_on {
-        : String wprobe ( wasmtime_probe )
+        : String wprobe ( wasm_runtime_probe )
         ? > ( string_len wprobe ) 0 {
             ? != gpuflag 0 {
                 ( nurl_eprint `swarm-mcp: --gpu needs a wasm runtime and this node has none — ` )
                 ( nurl_eprintln ( string_data wprobe ) )
-                ( nurl_eprintln `swarm-mcp: install one with 'nurlpkg install wasmtime' (the pure-NURL runtime, required for GPU) or set $WASMTIME` )
+                ( nurl_eprintln `swarm-mcp: install one with 'nurlpkg install nwasm' (the pure-NURL runtime, required for GPU) or set $NURL_WASM_RUNTIME` )
                 ( string_free wprobe )
                 ^ 1
             } {
@@ -4027,12 +4027,12 @@ $ `cudakernel.nu`
                 // this is a warning, not a refusal.
                 ( nurl_eprint `swarm-mcp: warning — ` )
                 ( nurl_eprintln ( string_data wprobe ) )
-                ( nurl_eprintln `swarm-mcp: expression kernels still run here; wasm kernels will fail until a runtime is installed ('nurlpkg install wasmtime')` )
+                ( nurl_eprintln `swarm-mcp: expression kernels still run here; wasm kernels will fail until a runtime is installed ('nurlpkg install nwasm')` )
             }
         } {
-            ? & != gpuflag 0 ! ( wasmtime_gpu_capable ) {
+            ? & != gpuflag 0 ! ( wasm_runtime_gpu_capable ) {
                 ( nurl_eprintln `swarm-mcp: --gpu needs a runtime with GPU host imports, and the one on this node has no --allow-gpu` )
-                ( nurl_eprintln `swarm-mcp: install the pure-NURL runtime ('nurlpkg install wasmtime') or point $WASMTIME at it` )
+                ( nurl_eprintln `swarm-mcp: install the pure-NURL runtime ('nurlpkg install nwasm') or point $NURL_WASM_RUNTIME at it` )
                 ( string_free wprobe )
                 ^ 1
             } {}

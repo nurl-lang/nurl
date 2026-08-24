@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # packages/swarm-mcp/tests/gpu_smoke.sh — live GPU end-to-end: build swarm-mcp
-# and the pure-NURL wasmtime, start a --gpu node, and drive compute_submit_cuda
+# and the pure-NURL nwasm runtime, start a --gpu node, and drive compute_submit_cuda
 # over MCP HTTPS (the model-facing path): the server generates a CUDA kernel
 # program around a __device__ map function, compiles it to wasm via the build
-# API, and the GPU worker runs it under `wt --allow-gpu` on real hardware.
+# API, and the GPU worker runs it under `nwasm --allow-gpu` on real hardware.
 #
 #   ./tests/gpu_smoke.sh          # from the package root
 #
@@ -26,19 +26,19 @@ TOKEN="gpu-smoke-secret"
 TMP="$(mktemp -d)"
 export HOME="$TMP"
 BIN="$TMP/swarm-mcp"
-WT="$TMP/wt"
+NWASM="$TMP/nwasm"
 node_pid=""
 cleanup() { [ -n "$node_pid" ] && kill -TERM "$node_pid" 2>/dev/null; sleep 0.3; [ -n "$node_pid" ] && kill -9 "$node_pid" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 
 MCP() { curl -sk -m 180 "https://127.0.0.1:$MCPP/mcp" -H 'Content-Type: application/json' -d "$1"; }
 
-echo "[gpu-smoke] building swarm-mcp + pure-NURL wasmtime"
+echo "[gpu-smoke] building swarm-mcp + the pure-NURL nwasm"
 "$NURL_SH" "$HERE/src/main.nu" "$BIN" >/dev/null 2>&1 || { echo "[gpu-smoke] FAIL build swarm-mcp"; exit 1; }
-"$NURL_SH" "$REPO/packages/wasmtime/src/main.nu" "$WT" >/dev/null 2>&1 || { echo "[gpu-smoke] FAIL build wt"; exit 1; }
+"$NURL_SH" "$REPO/packages/nwasm/src/main.nu" "$NWASM" >/dev/null 2>&1 || { echo "[gpu-smoke] FAIL build nwasm"; exit 1; }
 
 echo "[gpu-smoke] starting node (relay + gpu worker + mcp) on :$PORT / :$MCPP"
-WASMTIME="$WT" "$BIN" --token "$TOKEN" --relay --worker --gpu --mcp \
+NURL_WASM_RUNTIME="$NWASM" "$BIN" --token "$TOKEN" --relay --worker --gpu --mcp \
     --listen 127.0.0.1:"$PORT" --mcp-listen 127.0.0.1:"$MCPP" >"$TMP/node.log" 2>&1 &
 node_pid=$!
 sleep 2.5
@@ -46,7 +46,7 @@ sleep 2.5
 fail=0
 
 # 1. compute_submit_cuda: ∫₀¹ 4/(1+t²) dt · 1e8 = π·1e8 — the whole chain:
-#    generate → build API → wasm → GPU domain routing → wt --allow-gpu → CUDA.
+#    generate → build API → wasm → GPU domain routing → nwasm --allow-gpu → CUDA.
 sub="$(MCP '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"compute_submit_cuda","arguments":{"cuda":"__device__ double f(long long x) { double t = (double)x * 1e-8; return 4.0 / (1.0 + t*t); }","lo":0,"hi":100000000,"reduce":"sum"}}}')"
 tid="$(printf '%s' "$sub" | grep -oE 'task_id[^0-9]*[0-9]+' | grep -oE '[0-9]+' | head -1)"
 [ -z "$tid" ] && tid=1

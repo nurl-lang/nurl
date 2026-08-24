@@ -1,11 +1,10 @@
-// packages/wasmtime/src/main.nu — wasmtime: a WebAssembly runtime in pure NURL.
+// packages/nwasm/src/main.nu — nwasm: a WebAssembly runtime in pure NURL.
 //
-//   wasmtime run --invoke <export> <module.wasm> [int args…]
+//   nwasm run --invoke <export> <module.wasm> [int args…]
 //
-// Loads a wasm module, invokes an exported function with integer arguments, and
-// prints the integer result. This is the foundation — the integer interpreter
-// core (module.nu + interp.nu). Linear memory, floats, and the WASI surface
-// (incl. `--dir`) build on top in later milestones.
+// Loads a wasm module and either runs its `_start` as a wasm32-wasi command
+// or invokes one exported function directly, printing the result. The engine
+// itself is module.nu (decoder) + interp.nu (interpreter and template JIT).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -41,13 +40,13 @@ $ `interp.nu`
 
 // Keep in step with nurl.toml's [package] version — `--version` is what a
 // bug report quotes, so a stale literal here misattributes the bug.
-@ __wt_version → s { ^ `wasmtime 0.15.0 (pure NURL)` }
+@ __nwasm_version → s { ^ `nwasm 1.0.0 (pure NURL)` }
 
 @ usage → v {
-    ( nurl_print `wasmtime — a WebAssembly runtime in pure NURL\n\n` )
-    ( nurl_print `  wasmtime run [--dir <path>]… [--env NAME=VALUE]… [--fuel N] [--allow-gpu] [--allow-net] <module.wasm> [args…]\n` )
-    ( nurl_print `  wasmtime run --invoke <export> <module.wasm> [args…]\n` )
-    ( nurl_print `  wasmtime --version | --help\n\n` )
+    ( nurl_print `nwasm — a WebAssembly runtime in pure NURL\n\n` )
+    ( nurl_print `  nwasm run [--dir <path>]… [--env NAME=VALUE]… [--fuel N] [--allow-gpu] [--allow-net] <module.wasm> [args…]\n` )
+    ( nurl_print `  nwasm run --invoke <export> <module.wasm> [args…]\n` )
+    ( nurl_print `  nwasm --version | --help\n\n` )
     ( nurl_print `Command mode runs a wasm32-wasi module's _start with the given preopened\n` )
     ( nurl_print `directories and environment. Invoke mode calls an exported function with\n` )
     ( nurl_print `integer / floating-point arguments and prints the result.\n\n` )
@@ -60,21 +59,21 @@ $ `interp.nu`
     : !( Vec u ) IoErr fr ( read_file_bytes path )
     : ~ i rc 0
     ?? fr {
-        F e → { ( nurl_print `wasmtime: cannot read module file\n` ) = rc 1 }
+        F e → { ( nurl_print `nwasm: cannot read module file\n` ) = rc 1 }
         T bytes → {
             : *Module m ( module_decode bytes )
             ? ! . m ok {
-                ( nurl_print `wasmtime: ` ) ( nurl_print ( string_data ( bytes_to_str . m err ) ) ) ( nurl_print `\n` )
+                ( nurl_print `nwasm: ` ) ( nurl_print ( string_data ( bytes_to_str . m err ) ) ) ( nurl_print `\n` )
                 ( module_free m ) = rc 1
             } {
                 : i fidx ( module_export_func m export )
                 ? < fidx 0 {
-                    ( nurl_print `wasmtime: no exported function '` ) ( nurl_print export ) ( nurl_print `'\n` )
+                    ( nurl_print `nwasm: no exported function '` ) ( nurl_print export ) ( nurl_print `'\n` )
                     ( module_free m ) = rc 1
                 } {
                     // Guard-page memory is on wherever the runtime supports it;
-                    // NURL_WT_GUARD=0 keeps the bounds-checked Vec path (A/B, debug).
-                    ?? ( env_get `NURL_WT_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} ( string_free gv ) } F → {} }
+                    // NURL_NWASM_GUARD=0 keeps the bounds-checked Vec path (A/B, debug).
+                    ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} ( string_free gv ) } F → {} }
                     : *Interp it ( interp_new m )
                     ? != allow_gpu 0 { ( interp_allow_gpu it ) } {}
                     ? != allow_net 0 { ( interp_allow_net it ) } {}
@@ -92,14 +91,14 @@ $ `interp.nu`
                     }
                     ( interp_run_start it )
                     // JIT on by default on capable hosts (code_alloc probes the
-                    // capability); NURL_WT_JIT=0 keeps the pure interpreter,
-                    // NURL_WT_PIN=0 keeps every slot in memory (A/B, debug).
-                    ?? ( env_get `NURL_WT_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} ( string_free jv ) } F → { ( interp_enable_jit ) } }
-                    ?? ( env_get `NURL_WT_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} ( string_free pv ) } F → {} }
-                    ?? ( env_get `NURL_WT_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} ( string_free dv ) } F → {} }
+                    // capability); NURL_NWASM_JIT=0 keeps the pure interpreter,
+                    // NURL_NWASM_PIN=0 keeps every slot in memory (A/B, debug).
+                    ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} ( string_free jv ) } F → { ( interp_enable_jit ) } }
+                    ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} ( string_free pv ) } F → {} }
+                    ?? ( env_get `NURL_NWASM_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} ( string_free dv ) } F → {} }
                     ( exec_func it fidx )
                     ? ( interp_trapped it ) {
-                        ( nurl_print `wasmtime: trap: ` ) ( nurl_print ( string_data ( bytes_to_str . it trapmsg ) ) ) ( nurl_print `\n` )
+                        ( nurl_print `nwasm: trap: ` ) ( nurl_print ( string_data ( bytes_to_str . it trapmsg ) ) ) ( nurl_print `\n` )
                         = rc 1
                     } {
                         : i n ( vec_len [i] . it vs )
@@ -127,21 +126,21 @@ $ `interp.nu`
     : !( Vec u ) IoErr fr ( read_file_bytes path )
     : ~ i rc 0
     ?? fr {
-        F e → { ( nurl_eprintln `wasmtime: cannot read module file` ) = rc 1 }
+        F e → { ( nurl_eprintln `nwasm: cannot read module file` ) = rc 1 }
         T bytes → {
             : *Module m ( module_decode bytes )
             ? ! . m ok {
-                ( nurl_eprint `wasmtime: ` ) ( nurl_eprintln ( string_data ( bytes_to_str . m err ) ) )
+                ( nurl_eprint `nwasm: ` ) ( nurl_eprintln ( string_data ( bytes_to_str . m err ) ) )
                 ( module_free m ) = rc 1
             } {
                 : i fidx ( module_export_func m `_start` )
                 ? < fidx 0 {
-                    ( nurl_eprintln `wasmtime: module has no _start export (not a WASI command)` )
+                    ( nurl_eprintln `nwasm: module has no _start export (not a WASI command)` )
                     ( module_free m ) = rc 1
                 } {
                     // Guard-page memory is on wherever the runtime supports it;
-                    // NURL_WT_GUARD=0 keeps the bounds-checked Vec path (A/B, debug).
-                    ?? ( env_get `NURL_WT_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} ( string_free gv ) } F → {} }
+                    // NURL_NWASM_GUARD=0 keeps the bounds-checked Vec path (A/B, debug).
+                    ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} ( string_free gv ) } F → {} }
                     : *Interp it ( interp_new m )
                     ? > fuel 0 { = . it fuel fuel } {}
                     ? != allow_gpu 0 { ( interp_allow_gpu it ) } {}
@@ -157,15 +156,15 @@ $ `interp.nu`
                     ~ < k argc { : String a ( env_arg k ) ( interp_push_arg it ( string_data a ) ) ( string_free a ) = k + k 1 }
                     ( interp_run_start it )
                     // JIT on by default on capable hosts (code_alloc probes the
-                    // capability); NURL_WT_JIT=0 keeps the pure interpreter,
-                    // NURL_WT_PIN=0 keeps every slot in memory (A/B, debug).
-                    ?? ( env_get `NURL_WT_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} ( string_free jv ) } F → { ( interp_enable_jit ) } }
-                    ?? ( env_get `NURL_WT_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} ( string_free pv ) } F → {} }
-                    ?? ( env_get `NURL_WT_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} ( string_free dv ) } F → {} }
+                    // capability); NURL_NWASM_JIT=0 keeps the pure interpreter,
+                    // NURL_NWASM_PIN=0 keeps every slot in memory (A/B, debug).
+                    ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} ( string_free jv ) } F → { ( interp_enable_jit ) } }
+                    ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} ( string_free pv ) } F → {} }
+                    ?? ( env_get `NURL_NWASM_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} ( string_free dv ) } F → {} }
                     ( exec_func it fidx )
                     ( interp_flush it )  // _start may return without proc_exit
                     ? ( interp_trapped it ) {
-                        ( nurl_eprint `wasmtime: trap: ` ) ( nurl_eprintln ( string_data ( bytes_to_str . it trapmsg ) ) )
+                        ( nurl_eprint `nwasm: trap: ` ) ( nurl_eprintln ( string_data ( bytes_to_str . it trapmsg ) ) )
                         = rc 1
                     } { = rc . it exit_code }
                     ( interp_free it )
@@ -179,7 +178,7 @@ $ `interp.nu`
 
 // Every host option is read from the argv PREFIX that ends at the module
 // path — a guest's own `--help`, `--version` or `--allow-gpu` belongs to
-// the guest. (Scanning all of argv for those three meant `wt run app.wasm
+// the guest. (Scanning all of argv for those three meant `nwasm run app.wasm
 // --help` printed the RUNTIME's usage and never started the module; the
 // bug surfaced on the first guest with a CLI of its own.) `--` ends the
 // host options explicitly, for a module path that starts with a dash.
@@ -228,7 +227,7 @@ $ `interp.nu`
         ? & ! done != 0 ( nurl_str_eq str `run` ) { = done T = k + k 1 } {}
         ? ! done {
             ? != 45 ( nurl_str_get str 0 ) { = mi k } {
-                ( nurl_eprint `wasmtime: unknown option ` ) ( nurl_eprintln str )
+                ( nurl_eprint `nwasm: unknown option ` ) ( nurl_eprintln str )
                 = bad_opt 1
                 = k argc
             }
@@ -237,7 +236,7 @@ $ `interp.nu`
     }
     : ~ i rc 1
     ? != 0 bad_opt { ( usage ) } {
-        ? != 0 want_version { ( nurl_print ( __wt_version ) ) ( nurl_print `\n` ) = rc 0 } {
+        ? != 0 want_version { ( nurl_print ( __nwasm_version ) ) ( nurl_print `\n` ) = rc 0 } {
             ? != 0 want_help { ( usage ) = rc 0 } {
                 ? < argc 2 { ( usage ) } {
                     ? < mi 0 { ( usage ) } {

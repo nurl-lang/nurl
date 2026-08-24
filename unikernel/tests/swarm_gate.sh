@@ -11,7 +11,7 @@
 #           so this half isolates boot + relay + census + dispatch.
 #    wasm   the coordinator compiles `@ kernel i x → i { ^ * x x }`
 #           to wasm32-wasi and the GUEST runs the chunks IN-PROCESS
-#           on the pure-NURL wasmtime — a guest has no processes to
+#           on the pure-NURL nwasm — a guest has no processes to
 #           run an external runtime with, which is what the
 #           in-process engine exists for. sum over [0,100) = 328350.
 #
@@ -191,7 +191,7 @@ else
     done
 fi
 if ! printf '%s' "$res" | grep -q '328350'; then
-    say "FAIL: wasm task did not answer 328350 (the guest runs chunks on the in-process pure-NURL wasmtime)"
+    say "FAIL: wasm task did not answer 328350 (the guest runs chunks on the in-process pure-NURL nwasm)"
     printf 'swarm_gate:   %.300s\n' "$res"
     tail -8 "$guest_log" | sed 's/^/swarm_gate:   /'
     exit 1

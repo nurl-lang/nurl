@@ -3348,7 +3348,7 @@ void nurl_panic(const char *msg) {
 
 
 /* ── executable code pages ──────────────────────────────────────────
- * The primitives a runtime-code generator (packages/wasmtime's jit
+ * The primitives a runtime-code generator (packages/nwasm's jit
  * tier) needs and the language cannot spell: a page the CPU may
  * execute, and a call through a raw address. W^X discipline: the page
  * is writable until sealed, executable after, never both. On targets

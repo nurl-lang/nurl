@@ -1,4 +1,4 @@
-// packages/wasmtime/tests/interp_test.nu — offline tests for the decoder +
+// packages/nwasm/tests/interp_test.nu — offline tests for the decoder +
 // interpreter, against hand-encoded modules whose results are cross-checked
 // against the real wasmtime. Run from the package root:
 //   NURL_STDLIB=<repo> ../../nurl.sh tests/interp_test.nu /tmp/it && /tmp/it

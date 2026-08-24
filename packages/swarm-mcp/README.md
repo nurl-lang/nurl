@@ -30,7 +30,7 @@ swarm-mcp --token <secret> [--relay] [--worker] [--mcp] [options]
 
 Add **`--gpu`** to a worker and it also advertises the **GPU capability**: it
 registers the GPU wasm handler and runs those chunks with GPU host imports
-live (`wt --allow-gpu`), so CUDA/NVRTC calls inside a kernel module execute on
+live (`nwasm --allow-gpu`), so CUDA/NVRTC calls inside a kernel module execute on
 the node's real GPU. GPU tasks are routed **only** to `--gpu` workers — a mixed
 CPU/GPU cluster just works (see *GPU compute* below).
 
@@ -47,11 +47,12 @@ deterministically (no coordination):
 
 > **Requires NURL ≥ v0.10.12** (built from source against your installed stdlib
 > at install time). **CPU wasm kernels run in-process** on the pure-NURL
-> wasmtime that is compiled into the binary (`deps/wasmtime`) — no runtime on
-> `PATH`, no subprocess, no writable filesystem, which is what lets a worker
-> be a NURL **unikernel guest**. Set `$WASMTIME` to run CPU chunks under an
-> external runtime instead (the Bytecode-Alliance `wasmtime` for its JIT, or
-> the pure-NURL CLI); **`--gpu` still requires that external runtime** — GPU
+> [`nwasm`](../nwasm) runtime that is compiled into the binary (`deps/nwasm`) —
+> no runtime on `PATH`, no subprocess, no writable filesystem, which is what
+> lets a worker be a NURL **unikernel guest**. Set `$NURL_WASM_RUNTIME` to run
+> CPU chunks under an external runtime instead (the external Bytecode-Alliance
+> `wasmtime` for its JIT, or the `nwasm` CLI); **`--gpu` still requires that
+> external runtime** — GPU
 > chunks always use the CLI contract. `--mcp` auto-mints a self-signed TLS
 > cert on first run **in pure NURL** (`std/x509_gen` — no `openssl`, no
 > subprocess), or pass your own with `--tls-cert`/`--tls-key`.
@@ -243,7 +244,7 @@ over the dumb (opaque) relay.
 `compute_submit`'s expression language can't loop or call helpers. **Phase 2**
 lifts that: the model writes a kernel as **ordinary NURL** and compiles it to a
 `wasm32-wasi` module, which the cluster ships to the workers and runs under
-`wasmtime` — exactly the same shard / run / combine pipeline, just with a real
+the wasm runtime — exactly the same shard / run / combine pipeline, just with a real
 program per element instead of an interpreted expression.
 
 The kernel program's `main` reads `lo` and `hi` from argv, folds the kernel over
@@ -512,13 +513,13 @@ module**. No CUDA toolkit is needed on any node (only the driver's `libcuda` +
 `libnvrtc`), and non-GPU nodes need nothing at all.
 
 ```sh
-# a GPU compute node: the pure-NURL wasmtime as the runtime + --gpu
+# a GPU compute node: the pure-NURL nwasm as the runtime + --gpu
 swarm-mcp --token mysecret --worker --gpu --connect <relay-host>:47700
 ```
 
 A `--worker` **preflights its wasm runtime at startup**: `--gpu` refuses to
 start unless the resolved runtime exists and supports `--allow-gpu` (only the
-pure-NURL `wasmtime` bridges CUDA/NVRTC host imports), and a CPU worker warns
+pure-NURL `nwasm` bridges CUDA/NVRTC host imports), and a CPU worker warns
 if it has none. A misconfigured node says so immediately instead of accepting
 chunks it can never run.
 
@@ -619,7 +620,7 @@ How the pieces fit (each is independently reusable):
 * **FFI as imports.** The generated kernel program declares the CUDA/NVRTC FFI
   directly (the same ABI as `packages/gpu`); built with `--ffi-host-imports`
   those symbols become wasm `env` imports.
-* **The GPU bridge.** The pure-NURL `wasmtime` resolves those imports against
+* **The GPU bridge.** The pure-NURL `nwasm` resolves those imports against
   the worker's real `libcuda`/`libnvrtc` — but only under `--allow-gpu`, which
   is exactly what a `--gpu` worker passes for GPU chunks (and *only* for GPU
   chunks; plain wasm kernels keep the sealed sandbox).
@@ -680,7 +681,7 @@ The envelope, stated plainly (and queryable at run time via `swarm_help
 # kernel language (parse + eval), map-reduce + sharding (HMAC round-trip),
 # and the cluster token (group isolation + HMAC auth) — ASan-clean
 NURL_STDLIB=<repo> ../../nurl.sh tests/expr_test.nu  /tmp/et && /tmp/et
-NURL_STDLIB=<repo> ../../nurl.sh tests/work_test.nu  /tmp/wt && /tmp/wt
+NURL_STDLIB=<repo> ../../nurl.sh tests/work_test.nu  /tmp/wtest && /tmp/wtest
 NURL_STDLIB=<repo> ../../nurl.sh tests/token_test.nu /tmp/tt && /tmp/tt
 
 # membership liveness: the heartbeat stamp, eviction from roster AND ring,
@@ -727,7 +728,7 @@ NURL_STDLIB=<repo> ../../nurl.sh tests/cudakernel_test.nu /tmp/ck && /tmp/ck
 # node, restart with the same $HOME, and reduce over the recovered dataset
 ./tests/persist_smoke.sh
 
-# wasm path (needs wasmtime): compile a kernel to module.wasm, then
+# wasm path (needs a wasm runtime): compile a kernel to module.wasm, then
 swarm-mcp runwasm 127.0.0.1 47700 sum 1 1000000 module.wasm --token mysecret
 ```
 
@@ -737,7 +738,7 @@ swarm-mcp runwasm 127.0.0.1 47700 sum 1 1000000 module.wasm --token mysecret
 src/token.nu       cluster token → group-id isolation + HMAC payload/result auth
 src/expr.nu        the expression kernel language: tokenizer, parser, evaluator
 src/work.nu        map-reduce: reduce ops, the expression handler, sharding
-src/wasmkernel.nu  ship + run a compiled wasm kernel under wasmtime (± --allow-gpu)
+src/wasmkernel.nu  ship + run a compiled wasm kernel under nwasm (± --allow-gpu)
 src/buildwasm.nu   compile NURL source → wasm (local wasmbuilder, build-API fallback); kernel wrappers
 src/cudakernel.nu  CUDA-C map fn → a complete generated GPU chunk-kernel program
 src/census.nu      HELLO membership gossip (+ capability bits) → consistent-hash rings

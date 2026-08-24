@@ -7,7 +7,7 @@ Host tools alongside the compiler: a formatter (`nurlfmt`, built by
 An editor extension wires the LSP into VS Code / Cursor / Windsurf. On
 top of those, registry packages extend the toolchain itself:
 `nurl-mcp` (LLM agents drive the local compiler over MCP) and the wasm pair
-`wasmbuilder` / `wasmtime` (compile NURL to wasm32-wasi and run it, fully
+`wasmbuilder` / `nwasm` (compile NURL to wasm32-wasi and run it, fully
 locally).
 
 ## Editor support
@@ -126,21 +126,22 @@ default (`claude mcp add nurl -- nurl-mcp`); `--http` adds a
 token-authenticated network transport with code execution gated behind
 `--allow-run`, and `--read-only` strips everything but the analysis tools.
 
-## WebAssembly (`wasmbuilder` + `wasmtime`)
+## WebAssembly (`wasmbuilder` + `nwasm`)
 
 The wasm toolchain is two registry packages away — no wasi-sdk, no build
 service:
 
 ```bash
 nurlpkg install wasmbuilder     # NURL → wasm32-wasi, fully local
-nurlpkg install wasmtime        # pure-NURL wasm runtime
+nurlpkg install nwasm           # pure-NURL wasm runtime
 
 wasmbuilder program.nu          # → program.wasm
-wasmtime run program.wasm
+nwasm run program.wasm
 ```
 
 `wasmbuilder` drives nurlc, retargets the emitted IR for wasm32-wasi, and
 links with the toolchain's bundled `zig cc` (wasi-libc + wasm-ld built in);
 `wasmbuilder --doctor` shows how everything resolves on your machine.
-`wasmtime` runs wasm32-wasi modules (preopened dirs, `--allow-gpu` for the
-CUDA host bridge). Both packages' READMEs carry the full option surface.
+`nwasm` runs wasm32-wasi modules (preopened dirs, `--allow-gpu` for the
+CUDA host bridge); its CLI is a drop-in for the reference `wasmtime`'s
+`run` subset. Both packages' READMEs carry the full option surface.

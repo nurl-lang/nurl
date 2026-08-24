@@ -10,7 +10,7 @@
 #       container, no network).
 #    2. the native compiler emits the IR for a handful of corpus
 #       programs; both the programs and that IR go into the image.
-#    3. the guest boots, decodes nurlc.wasm on `packages/wasmtime`
+#    3. the guest boots, decodes nurlc.wasm on `packages/nwasm`
 #       (in-process — a unikernel has no subprocess to run it in),
 #       compiles each program, and compares its output BYTE FOR BYTE
 #       with the native IR baked in beside it.

@@ -1,4 +1,4 @@
-// packages/wasmtime/tests/float_test.nu — offline tests for f32/f64 ops and
+// packages/nwasm/tests/float_test.nu — offline tests for f32/f64 ops and
 // int↔float conversions. Args/results are passed as IEEE-754 bit patterns
 // (via std/floatbits) so checks are exact; the expected bit constants are
 // cross-checked against struct.pack and the reference wasmtime.

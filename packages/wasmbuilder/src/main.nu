@@ -7,8 +7,8 @@
 //   wasmbuilder program.nu --emit-ll          # keep the rewritten .ll too
 //   wasmbuilder --doctor                      # explain what is resolved
 //
-// Run the result with any wasm runtime — the reference wasmtime, or the
-// pure-NURL one: `nurlpkg install wasmtime && wt run program.wasm`.
+// Run the result with any wasm runtime — the external wasmtime, or the
+// pure-NURL one: `nurlpkg install nwasm && nwasm run program.wasm`.
 //
 // The first build on a machine without a bundled zig downloads a pinned,
 // sha256-verified zig 0.16.0 into $NURL_HOME/zig (set
@@ -25,7 +25,7 @@ $ `build.nu`
 
 // Keep in step with nurl.toml's [package] version — `--version` is what a
 // bug report quotes, so a stale literal here misattributes the bug.
-@ __wbc_version → s { ^ `wasmbuilder 0.2.0` }
+@ __wbc_version → s { ^ `wasmbuilder 0.2.1` }
 
 // --doctor: print every resolution step so a broken setup explains itself.
 @ __wbc_doctor → i {
@@ -66,7 +66,7 @@ $ `build.nu`
     ( nurl_print `  object cache: ` ) ( nurl_print ( string_data cdir ) ) ( nurl_print `\n` )
     ( string_free cdir )
 
-    ( nurl_print `\nRun a wasm module with the pure-NURL runtime: nurlpkg install wasmtime && wt run app.wasm\n` )
+    ( nurl_print `\nRun a wasm module with the pure-NURL runtime: nurlpkg install nwasm && nwasm run app.wasm\n` )
     ^ 0
 }
 

@@ -968,7 +968,7 @@ s combined_stdout s combined_stderr → v {
                     // runtime resolves (WASI, and — via the GPU
                     // package's cuda/nvrtc FFI — a CUDA host bridge).
                     // A genuinely missing symbol then traps at run
-                    // time with its name, under our wasmtime.
+                    // time with its name, under our nwasm runtime.
                     ( vec_push [s] clang_args `-Wl,--allow-undefined` )
                     ( vec_push [s] clang_args ( string_data ll_path ) )
                     ( vec_push [s] clang_args ( string_data ( get_runtime_wasm_o ) ) )
@@ -5179,7 +5179,7 @@ s combined_stdout s combined_stderr → v {
     `Compile NURL source to an x86_64 Linux ELF. Returns status, compiler stderr, and download URLs for the binary + .ll. run=true also executes it and returns exit code + output (see the run parameter for when that is allowed).`
     ( __mcp_schema_build_native ) ) )
     ( json_arr_push arr ( __mcp_tool_build `nurl_build_wasm`
-    `Compile NURL source to a wasm32-wasi module. Returns status, compile logs, and download URLs for the .wasm + .ll (no inline base64). The module runs in-browser via a WASI shim or with wasmtime.`
+    `Compile NURL source to a wasm32-wasi module. Returns status, compile logs, and download URLs for the .wasm + .ll (no inline base64). The module runs in-browser via a WASI shim or with any WASI runtime (nwasm, wasmtime).`
     ( __mcp_schema_source_filename ) ) )
     ( json_arr_push arr ( __mcp_tool_build `nurl_build_windows`
     `Cross-compile NURL source to a Windows x86_64 .exe (mingw-w64; static libcurl + Schannel TLS). Returns status, stderr, and a download URL.`

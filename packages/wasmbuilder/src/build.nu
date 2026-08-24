@@ -15,8 +15,8 @@
 //                          nurlc.wasm >150 fns"; re-tested 2026-07-27 at
 //                          exactly that scale — a --gc-sections nurlc.wasm
 //                          SELF-COMPILES byte-identically to the native
-//                          compiler under both the reference wasmtime and
-//                          the pure-NURL wt, and the closure corpus
+//                          compiler under both the external wasmtime and
+//                          the pure-NURL nwasm, and the closure corpus
 //                          (test_05/test_06) passes. Wherever that trap came
 //                          from, today's wasm-ld relocates address-taken
 //                          functions correctly through GC. `--no-gc-sections`
@@ -65,7 +65,7 @@ $ `toolchain.nu`
     // guest-side pthread implementation in runtime.c. The module
     // then imports `wasi.thread-spawn` and exports
     // `wasi_thread_start` + `__stack_pointer`, so it needs a
-    // runtime that implements the proposal (packages/wasmtime
+    // runtime that implements the proposal (packages/nwasm
     // does). Off by default: a shared memory is a different
     // memory model, not a free upgrade.
     b no_gc_sections  // link with --no-gc-sections instead of the default
@@ -198,7 +198,7 @@ $ `toolchain.nu`
     // Does this program reach the socket layer at all? The runtime object
     // gets the `nurl_net` import bridge only then — otherwise the module
     // would declare imports it never calls, and a runtime that cannot
-    // resolve them (the reference wasmtime, a browser) refuses to
+    // resolve them (the external wasmtime, a browser) refuses to
     // instantiate it. --gc-sections used to hide that by dropping the
     // unused wrappers; --no-gc-sections did not, which is how a socket-free
     // benchmark ended up unrunnable.
@@ -257,8 +257,8 @@ $ `toolchain.nu`
     // wasm module wasmbuilder produced shipped UNOPTIMISED user code: no
     // mem2reg, so a loop counter stayed a linear-memory load/store pair.
     // A JIT hides it (Cranelift re-optimises what it is given, so the
-    // reference wasmtime timings barely moved) and an interpreter cannot:
-    // bench/lcg.nu at 1M iterations ran 1.09 s on packages/wasmtime before
+    // external wasmtime timings barely moved) and an interpreter cannot:
+    // bench/lcg.nu at 1M iterations ran 1.09 s on packages/nwasm before
     // this line and 0.20 s after it — 5.5x, from two argv tokens.
     // `nurl.sh` carries the same workaround for native builds; this is the
     // wasm side of it. `-Xclang <level>` goes straight to cc1 and survives.

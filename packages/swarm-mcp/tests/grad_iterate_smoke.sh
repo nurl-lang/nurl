@@ -25,7 +25,7 @@ fi
 PORT="${SWARM_PORT:-47895}"; MCPP="${SWARM_MCP_PORT:-48458}"
 TOKEN="grad-iterate-secret"
 TMP="$(mktemp -d)"; export HOME="$TMP"; export TMPDIR="$TMP"
-BIN="$TMP/swarm-mcp"; WT="$TMP/wt"; node_pid=""
+BIN="$TMP/swarm-mcp"; NWASM="$TMP/nwasm"; node_pid=""
 cleanup() { [ -n "$node_pid" ] && kill -TERM "$node_pid" 2>/dev/null; sleep 0.3; [ -n "$node_pid" ] && kill -9 "$node_pid" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 MCP() { curl -sk -m 180 "https://127.0.0.1:$MCPP/mcp" -H 'Content-Type: application/json' -d "$1"; }
@@ -42,9 +42,9 @@ LR="$(awk '/===CFG===/{getline; getline; print; exit}' "$TMP/dump.txt")"
 ROUNDS="$(awk '/===CFG===/{getline; getline; getline; print; exit}' "$TMP/dump.txt")"
 echo "[grad-iterate] emitted kernel: $(wc -l < "$TMP/grad.cu") lines · local tape ref a=$REF_A b=$REF_B (N=$N lr=$LR rounds=$ROUNDS)"
 
-echo "[grad-iterate] building swarm-mcp + wasmtime"
+echo "[grad-iterate] building swarm-mcp + nwasm"
 "$NURL_SH" "$HERE/src/main.nu" "$BIN" >/dev/null 2>&1 || { echo "[grad-iterate] FAIL build swarm-mcp"; exit 1; }
-"$NURL_SH" "$REPO/packages/wasmtime/src/main.nu" "$WT" >/dev/null 2>&1 || { echo "[grad-iterate] FAIL build wt"; exit 1; }
+"$NURL_SH" "$REPO/packages/nwasm/src/main.nu" "$NWASM" >/dev/null 2>&1 || { echo "[grad-iterate] FAIL build nwasm"; exit 1; }
 
 # the dataset the dump's reference used: v_k = 2.5·(k·0.001) − 1.2
 python3 - "$TMP/ds.f64" "$N" <<'PY'
@@ -55,7 +55,7 @@ with open(path, "wb") as f:
 PY
 
 echo "[grad-iterate] starting node on :$PORT / :$MCPP"
-WASMTIME="$WT" "$BIN" --token "$TOKEN" --relay --worker --gpu --mcp \
+NURL_WASM_RUNTIME="$NWASM" "$BIN" --token "$TOKEN" --relay --worker --gpu --mcp \
     --listen 127.0.0.1:"$PORT" --mcp-listen 127.0.0.1:"$MCPP" >"$TMP/node.log" 2>&1 &
 node_pid=$!; sleep 2.5
 

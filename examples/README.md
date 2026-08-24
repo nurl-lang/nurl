@@ -163,7 +163,7 @@ public WASM playground can run as-is — they read at most stdin and
 argv, write to stdout / stderr, and use no network / no SDL / no
 secrets. Paste the source into the editor at
 [play.nurl-lang.org](https://play.nurl-lang.org), click *Run*, and the
-container compiles + runs your code under wasmtime.
+container compiles it and the browser runs it in a WASI shim.
 
 "local" examples need a feature the WASM sandbox does not (yet)
 expose: outbound network, a listening socket, an `ANTHROPIC_API_KEY`,

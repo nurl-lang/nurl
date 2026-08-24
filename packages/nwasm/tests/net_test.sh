@@ -29,13 +29,13 @@ elif [ -x "$REPO_ROOT/nurl.sh" ]; then
     if [ -x "$REPO_ROOT/build/nurlc" ]; then export NURLC="${NURLC:-$REPO_ROOT/build/nurlc}"; fi
 else NURL="nurl"; fi
 
-WORK="$(mktemp -d -t wt-net-test.XXXXXX)"
+WORK="$(mktemp -d -t nwasm-net-test.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 PASS=0; FAIL=0
 
-echo "[1/4] build wt + the probe (native)"
-if ! $NURL src/main.nu "$WORK/wt" >/dev/null 2>"$WORK/wt.err"; then
-    echo "FAIL: could not build wt:"; tail -5 "$WORK/wt.err"; exit 1
+echo "[1/4] build nwasm + the probe (native)"
+if ! $NURL src/main.nu "$WORK/nwasm" >/dev/null 2>"$WORK/nwasm.err"; then
+    echo "FAIL: could not build nwasm:"; tail -5 "$WORK/nwasm.err"; exit 1
 fi
 if ! $NURL tests/progs/netprobe.nu "$WORK/netprobe.native" >/dev/null 2>"$WORK/n.err"; then
     echo "FAIL: could not build the native probe:"; tail -5 "$WORK/n.err"; exit 1
@@ -60,7 +60,7 @@ fi
 
 echo "[3/4] capability gate: no --allow-net must trap"
 if [ -f "$WORK/netprobe.wasm" ]; then
-    gate="$("$WORK/wt" run "$WORK/netprobe.wasm" 2>&1)"
+    gate="$("$WORK/nwasm" run "$WORK/netprobe.wasm" 2>&1)"
     case "$gate" in
         *"--allow-net"*) echo "  PASS gate (trapped: sockets are opt-in)"; PASS=$((PASS+1)) ;;
         *) echo "  FAIL gate — expected a trap naming --allow-net, got:"; echo "$gate" | head -3; FAIL=$((FAIL+1)) ;;
@@ -70,7 +70,7 @@ fi
 echo "[4/4] native vs wasm output"
 if [ -f "$WORK/netprobe.wasm" ]; then
     "$WORK/netprobe.native" > "$WORK/n.out" 2>&1; nrc=$?
-    timeout 600 "$WORK/wt" run --allow-net "$WORK/netprobe.wasm" > "$WORK/w.out" 2>&1; wrc=$?
+    timeout 600 "$WORK/nwasm" run --allow-net "$WORK/netprobe.wasm" > "$WORK/w.out" 2>&1; wrc=$?
     # The probe must actually have done the round trip — a pair of empty
     # outputs would otherwise "match" and pass a broken bridge.
     if ! grep -q "server read: ping over wasm" "$WORK/n.out"; then
@@ -82,5 +82,5 @@ if [ -f "$WORK/netprobe.wasm" ]; then
     fi
 fi
 
-echo "== wasmtime net tests: PASS=$PASS FAIL=$FAIL"
+echo "== nwasm net tests: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" = 0 ]

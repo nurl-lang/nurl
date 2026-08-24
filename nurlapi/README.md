@@ -50,7 +50,7 @@
     -H 'Content-Type: application/json' \
     -d '{"source":"@ main → i { ^ 0 }\n","return_format":"binary"}' \
     -o main.wasm
-  wasmtime main.wasm
+  nwasm run main.wasm      # or any WASI runtime
   ```
 
   ## MCP client config

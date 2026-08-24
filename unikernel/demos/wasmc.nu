@@ -4,7 +4,7 @@
 // The image carries three things in its baked-in filesystem: the
 // compiler compiled to wasm32-wasi (`nurlc.wasm`), one or more NURL
 // programs to compile, and the LLVM IR the NATIVE compiler produced
-// for each. The guest decodes the module with `packages/wasmtime`,
+// for each. The guest decodes the module with `packages/nwasm`,
 // runs it IN-PROCESS over each program — no subprocess exists here to
 // run it any other way — captures the IR it writes to stdout, and
 // compares it BYTE FOR BYTE with the native compiler's.
@@ -27,8 +27,8 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
-$ `packages/wasmtime/src/module.nu`
-$ `packages/wasmtime/src/interp.nu`
+$ `packages/nwasm/src/module.nu`
+$ `packages/nwasm/src/interp.nu`
 
 // The programs to compile, and the native IR to match. Named on the
 // kernel command line (argv), so one image serves any corpus baked

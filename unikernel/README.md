@@ -480,8 +480,8 @@ completes both kernel flavours end-to-end — an expression task
 (sum of x² over [0,1000) = 332833500) and a **compiled-wasm task**:
 the coordinator compiles the NURL kernel to wasm32-wasi on the host
 and the guest executes the chunks **in-process on the pure-NURL
-wasmtime**, because a machine with no processes cannot shell out to a
-runtime and now does not need to.
+`nwasm` runtime**, because a machine with no processes cannot shell out
+to a runtime and now does not need to.
 
 Measured on this gate (TCG, an interpreter floor): census join 6 s
 after launch, cold start to the first completed tool answer 9 s. A
@@ -504,7 +504,7 @@ wasmc_gate: verified: 8 programs compiled by nurlc.wasm IN THE GUEST,
 locally — native nurlc for the IR, zig's wasm-ld for the link) is baked
 into an image beside a handful of corpus programs and the IR the NATIVE
 compiler produced for them. The guest decodes the module on
-`packages/wasmtime` and runs it IN-PROCESS, because a machine with no
+`packages/nwasm` and runs it IN-PROCESS, because a machine with no
 processes has no other way to run it, and compares its output BYTE FOR
 BYTE with the native compiler's. All eight agree.
 
