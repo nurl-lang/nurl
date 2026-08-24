@@ -3385,7 +3385,24 @@ void nurl_code_free(void *p, long long n) { if (p) munmap(p, (size_t)n); }
 #endif
 
 /* Call generated code: one pointer argument in, one word out — the
- * whole jit calling convention, so the templates stay trivial. */
+ * whole jit calling convention, so the templates stay trivial.
+ *
+ * UBSan's function sanitizer verifies an indirect call by reading the
+ * callee's clang-emitted type hash at fn-4. A JIT entry is the first
+ * byte of an mmap page — the read falls off the front of the mapping
+ * and SEGVs — and generated code will never carry that hash anyway, so
+ * the check can only ever fault or false-positive here. These five
+ * wrappers are the only indirect calls into generated code; exempting
+ * exactly them keeps the sanitizer armed everywhere else. */
+#if defined(__has_attribute)
+#if __has_attribute(no_sanitize)
+#define NURL__CALL_JIT __attribute__((no_sanitize("function")))
+#endif
+#endif
+#ifndef NURL__CALL_JIT
+#define NURL__CALL_JIT
+#endif
+NURL__CALL_JIT
 long long nurl_call_code(void *fn, void *a0) {
     if (!fn) return 0;
     return ((long long (*)(void *))fn)(a0);
@@ -3394,6 +3411,7 @@ long long nurl_call_code(void *fn, void *a0) {
 /* Re-enter generated code at a byte offset from its base — the JIT's
  * resume path: a call-out returns to the interpreter, which performs the
  * guest call and re-enters the sealed code just past the call site. */
+NURL__CALL_JIT
 long long nurl_call_code_at(void *fn, void *a0, long long off) {
     if (!fn) return 0;
     return ((long long (*)(void *))((char *)fn + off))(a0);
@@ -3403,11 +3421,13 @@ long long nurl_call_code_at(void *fn, void *a0, long long off) {
  * slots. The self-allocating JIT entry (tier 6) reads its parameters
  * through rsi and writes its results back there, so both the first call
  * and every resume re-entry must carry the pointer. */
+NURL__CALL_JIT
 long long nurl_call_code2(void *fn, void *a0, void *a1) {
     if (!fn) return 0;
     return ((long long (*)(void *, void *))fn)(a0, a1);
 }
 
+NURL__CALL_JIT
 long long nurl_call_code_at2(void *fn, long long off, void *a0, void *a1) {
     if (!fn) return 0;
     return ((long long (*)(void *, void *))((char *)fn + off))(a0, a1);
