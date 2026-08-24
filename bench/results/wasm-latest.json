@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "kind": "wasm",
-  "generated_utc": "2026-08-24T15:09:55Z",
-  "commit": "0274ba0f35f84e0a12021ad953022e0297200765",
-  "run_url": "https://github.com/nurl-lang/nurl/actions/runs/32742798495",
+  "generated_utc": "2026-08-24T17:09:18Z",
+  "commit": "fedfb4c4a199e2efdb9aed1ae65760ac9543d0da",
+  "run_url": "https://github.com/nurl-lang/nurl/actions/runs/32754701519",
   "host": {
     "label": "GitHub Actions ubuntu-latest runner",
     "kernel": "Linux 6.17.0-1022-azure x86_64",
@@ -12,7 +12,7 @@
     "mem_kb": 16373452
   },
   "toolchains": {
-    "nurl": "v0.50.0-16-g0274ba0f",
+    "nurl": "v0.50.0-21-gfedfb4c4",
     "clang": "Ubuntu clang version 18.1.3 (1ubuntu1)",
     "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
     "zig": "zig 0.16.0",
@@ -31,11 +31,11 @@
     "interpreter_all_languages": true
   },
   "floor_ms": {
-    "native": { "nurl": 1.555, "c": 1.630, "rust": 1.758 },
-    "wasm_ref": { "nurl": 11.137, "c": 7.998, "rust": 34.910, "nurl_no_gc_sections": 137.042 },
-    "wasm_wt": { "nurl": 2.752, "c": 2.785, "rust": 3.058 }
+    "native": { "nurl": 1.230, "c": 1.268, "rust": 1.444 },
+    "wasm_ref": { "nurl": 10.401, "c": 6.214, "rust": 29.310, "nurl_no_gc_sections": 117.961 },
+    "wasm_wt": { "nurl": 2.854, "c": 2.696, "rust": 2.523 }
   },
-  "floor_compile_ms": { "nurl_frontend": 29.231, "nurl_native": 139.437, "nurl_wasm": 64.252, "nurl_wasm_no_gc_sections": 64.285, "c_native": 65.518, "c_wasm": 45.468, "rust_native": 65.189, "rust_wasm": 73.581 },
+  "floor_compile_ms": { "nurl_frontend": 2.340, "nurl_native": 81.113, "nurl_wasm": 50.653, "nurl_wasm_no_gc_sections": 50.168, "c_native": 52.653, "c_wasm": 45.483, "rust_native": 57.862, "rust_wasm": 64.624 },
   "benchmarks": [
     {
       "name": "lcg",
@@ -44,16 +44,16 @@
       "checksum": "-7585129161289236796",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 44.028, "c": 44.149, "rust": 44.231 },
-        "wasm_ref": { "nurl": 72.290, "c": 71.180, "rust": 78.771, "nurl_no_gc_sections": 177.810 },
-        "wasm_wt":  { "nurl": 46.237, "c": 46.362, "rust": 46.867 }
+        "native":   { "nurl": 35.536, "c": 35.417, "rust": 35.309 },
+        "wasm_ref": { "nurl": 60.391, "c": 58.341, "rust": 62.756, "nurl_no_gc_sections": 140.679 },
+        "wasm_wt":  { "nurl": 35.844, "c": 36.132, "rust": 36.424 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_wt":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 3.146, "nurl_native": 111.268, "nurl_wasm": 64.997, "nurl_wasm_no_gc_sections": 65.356, "c_native": 73.441, "c_wasm": 45.965, "rust_native": 65.817, "rust_wasm": 78.792 },
+      "compile_ms": { "nurl_frontend": 2.686, "nurl_native": 105.181, "nurl_wasm": 53.363, "nurl_wasm_no_gc_sections": 53.504, "c_native": 67.363, "c_wasm": 35.777, "rust_native": 54.898, "rust_wasm": 65.333 },
       "bytes": { "nurl_native": 16256, "nurl_wasm": 1119449, "nurl_wasm_no_gc_sections": 1427853, "c_native": 16008, "c_wasm": 936975, "rust_native": 4508344, "rust_wasm": 2133670 }
     },
     {
@@ -63,16 +63,16 @@
       "checksum": "4205972061",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 63.382, "c": 63.539, "rust": 63.653 },
-        "wasm_ref": { "nurl": 87.628, "c": 86.605, "rust": 93.625, "nurl_no_gc_sections": 195.165 },
-        "wasm_wt":  { "nurl": 76.096, "c": 76.741, "rust": 76.610 }
+        "native":   { "nurl": 49.246, "c": 49.295, "rust": 49.405 },
+        "wasm_ref": { "nurl": 68.598, "c": 67.570, "rust": 73.334, "nurl_no_gc_sections": 149.931 },
+        "wasm_wt":  { "nurl": 56.913, "c": 59.499, "rust": 65.717 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_wt":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 3.220, "nurl_native": 110.383, "nurl_wasm": 63.258, "nurl_wasm_no_gc_sections": 65.385, "c_native": 75.928, "c_wasm": 45.045, "rust_native": 64.104, "rust_wasm": 77.781 },
+      "compile_ms": { "nurl_frontend": 2.533, "nurl_native": 89.536, "nurl_wasm": 53.443, "nurl_wasm_no_gc_sections": 50.532, "c_native": 60.768, "c_wasm": 36.310, "rust_native": 52.764, "rust_wasm": 62.913 },
       "bytes": { "nurl_native": 16256, "nurl_wasm": 1119389, "nurl_wasm_no_gc_sections": 1427718, "c_native": 16024, "c_wasm": 936996, "rust_native": 4508920, "rust_wasm": 2133582 }
     },
     {
@@ -82,16 +82,16 @@
       "checksum": "8299504528805184357",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 47.730, "c": 47.670, "rust": 47.856 },
-        "wasm_ref": { "nurl": 87.346, "c": 98.946, "rust": 107.650, "nurl_no_gc_sections": 225.442 },
-        "wasm_wt":  { "nurl": 75.953, "c": 76.040, "rust": 74.327 }
+        "native":   { "nurl": 36.950, "c": 36.998, "rust": 37.038 },
+        "wasm_ref": { "nurl": 67.570, "c": 68.389, "rust": 79.474, "nurl_no_gc_sections": 153.548 },
+        "wasm_wt":  { "nurl": 51.855, "c": 48.939, "rust": 48.845 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_wt":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 3.307, "nurl_native": 109.858, "nurl_wasm": 63.414, "nurl_wasm_no_gc_sections": 64.567, "c_native": 75.375, "c_wasm": 44.649, "rust_native": 66.432, "rust_wasm": 79.271 },
+      "compile_ms": { "nurl_frontend": 2.821, "nurl_native": 98.183, "nurl_wasm": 53.791, "nurl_wasm_no_gc_sections": 54.418, "c_native": 62.788, "c_wasm": 37.720, "rust_native": 55.866, "rust_wasm": 64.160 },
       "bytes": { "nurl_native": 16352, "nurl_wasm": 1119466, "nurl_wasm_no_gc_sections": 1427890, "c_native": 16064, "c_wasm": 937286, "rust_native": 4508960, "rust_wasm": 2133623 }
     },
     {
@@ -101,16 +101,16 @@
       "checksum": "1215643728",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 51.972, "c": 52.025, "rust": 52.248 },
-        "wasm_ref": { "nurl": 98.097, "c": 96.815, "rust": 103.761, "nurl_no_gc_sections": 217.030 },
-        "wasm_wt":  { "nurl": 83.306, "c": 88.259, "rust": 83.403 }
+        "native":   { "nurl": 35.703, "c": 36.182, "rust": 35.991 },
+        "wasm_ref": { "nurl": 68.016, "c": 65.028, "rust": 72.378, "nurl_no_gc_sections": 148.285 },
+        "wasm_wt":  { "nurl": 46.428, "c": 49.408, "rust": 53.164 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_wt":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 3.865, "nurl_native": 129.077, "nurl_wasm": 75.333, "nurl_wasm_no_gc_sections": 88.824, "c_native": 87.492, "c_wasm": 53.095, "rust_native": 77.295, "rust_wasm": 91.434 },
+      "compile_ms": { "nurl_frontend": 2.866, "nurl_native": 99.258, "nurl_wasm": 53.962, "nurl_wasm_no_gc_sections": 55.282, "c_native": 66.948, "c_wasm": 37.580, "rust_native": 60.475, "rust_wasm": 68.310 },
       "bytes": { "nurl_native": 16352, "nurl_wasm": 1119536, "nurl_wasm_no_gc_sections": 1428018, "c_native": 16072, "c_wasm": 937476, "rust_native": 4509208, "rust_wasm": 2133727 }
     },
     {
@@ -120,16 +120,16 @@
       "checksum": "492982549",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 29.117, "c": 28.596, "rust": 28.726 },
-        "wasm_ref": { "nurl": 45.782, "c": 44.879, "rust": 56.814, "nurl_no_gc_sections": 166.880 },
-        "wasm_wt":  { "nurl": 27.280, "c": 27.669, "rust": 27.857 }
+        "native":   { "nurl": 18.982, "c": 18.985, "rust": 19.094 },
+        "wasm_ref": { "nurl": 34.889, "c": 30.687, "rust": 36.324, "nurl_no_gc_sections": 114.073 },
+        "wasm_wt":  { "nurl": 13.738, "c": 13.276, "rust": 14.178 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_wt":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 3.927, "nurl_native": 129.616, "nurl_wasm": 75.842, "nurl_wasm_no_gc_sections": 76.384, "c_native": 87.434, "c_wasm": 52.977, "rust_native": 75.992, "rust_wasm": 93.809 },
+      "compile_ms": { "nurl_frontend": 2.729, "nurl_native": 93.570, "nurl_wasm": 51.903, "nurl_wasm_no_gc_sections": 51.816, "c_native": 64.018, "c_wasm": 35.461, "rust_native": 55.157, "rust_wasm": 66.332 },
       "bytes": { "nurl_native": 16256, "nurl_wasm": 1119846, "nurl_wasm_no_gc_sections": 1428032, "c_native": 16016, "c_wasm": 938209, "rust_native": 4509168, "rust_wasm": 2133982 }
     },
     {
@@ -139,16 +139,16 @@
       "checksum": "805907445",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 41.333, "c": 41.720, "rust": 47.741 },
-        "wasm_ref": { "nurl": 114.982, "c": 110.224, "rust": 116.784, "nurl_no_gc_sections": 235.256 },
-        "wasm_wt":  { "nurl": 197.567, "c": 180.635, "rust": 244.002 }
+        "native":   { "nurl": 27.672, "c": 27.813, "rust": 31.737 },
+        "wasm_ref": { "nurl": 73.494, "c": 77.800, "rust": 80.190, "nurl_no_gc_sections": 161.741 },
+        "wasm_wt":  { "nurl": 108.255, "c": 97.418, "rust": 134.772 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_wt":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 4.110, "nurl_native": 130.706, "nurl_wasm": 75.732, "nurl_wasm_no_gc_sections": 76.459, "c_native": 85.391, "c_wasm": 51.686, "rust_native": 81.009, "rust_wasm": 96.003 },
+      "compile_ms": { "nurl_frontend": 2.864, "nurl_native": 94.759, "nurl_wasm": 63.635, "nurl_wasm_no_gc_sections": 56.147, "c_native": 74.720, "c_wasm": 37.788, "rust_native": 62.816, "rust_wasm": 69.494 },
       "bytes": { "nurl_native": 16352, "nurl_wasm": 1119576, "nurl_wasm_no_gc_sections": 1427762, "c_native": 16016, "c_wasm": 937999, "rust_native": 4509816, "rust_wasm": 2134471 }
     },
     {
@@ -158,16 +158,16 @@
       "checksum": "2815490238",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 35.755, "c": 35.735, "rust": 35.204 },
-        "wasm_ref": { "nurl": 86.779, "c": 73.573, "rust": 80.945, "nurl_no_gc_sections": 214.669 },
-        "wasm_wt":  { "nurl": 139.509, "c": 134.599, "rust": 135.723 }
+        "native":   { "nurl": 23.811, "c": 23.812, "rust": 23.409 },
+        "wasm_ref": { "nurl": 58.443, "c": 51.622, "rust": 55.318, "nurl_no_gc_sections": 140.271 },
+        "wasm_wt":  { "nurl": 71.877, "c": 87.114, "rust": 85.744 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_wt":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 4.182, "nurl_native": 135.730, "nurl_wasm": 76.835, "nurl_wasm_no_gc_sections": 76.997, "c_native": 90.410, "c_wasm": 51.964, "rust_native": 84.732, "rust_wasm": 100.250 },
+      "compile_ms": { "nurl_frontend": 2.965, "nurl_native": 117.861, "nurl_wasm": 52.982, "nurl_wasm_no_gc_sections": 53.871, "c_native": 75.367, "c_wasm": 36.770, "rust_native": 66.732, "rust_wasm": 74.250 },
       "bytes": { "nurl_native": 16256, "nurl_wasm": 1119847, "nurl_wasm_no_gc_sections": 1428431, "c_native": 16016, "c_wasm": 938503, "rust_native": 4509280, "rust_wasm": 2134080 }
     },
     {
@@ -177,16 +177,16 @@
       "checksum": "2351703",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 22.978, "c": 23.720, "rust": 24.094 },
-        "wasm_ref": { "nurl": 56.493, "c": 55.941, "rust": 64.166, "nurl_no_gc_sections": 177.257 },
-        "wasm_wt":  { "nurl": 58.062, "c": 71.450, "rust": 59.843 }
+        "native":   { "nurl": 16.370, "c": 16.705, "rust": 16.944 },
+        "wasm_ref": { "nurl": 40.051, "c": 40.845, "rust": 47.722, "nurl_no_gc_sections": 122.773 },
+        "wasm_wt":  { "nurl": 32.782, "c": 29.820, "rust": 33.914 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_wt":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 4.511, "nurl_native": 137.007, "nurl_wasm": 76.140, "nurl_wasm_no_gc_sections": 77.019, "c_native": 93.042, "c_wasm": 53.014, "rust_native": 80.609, "rust_wasm": 95.310 },
+      "compile_ms": { "nurl_frontend": 3.244, "nurl_native": 112.963, "nurl_wasm": 62.194, "nurl_wasm_no_gc_sections": 57.751, "c_native": 78.535, "c_wasm": 38.557, "rust_native": 64.785, "rust_wasm": 74.930 },
       "bytes": { "nurl_native": 16352, "nurl_wasm": 1119712, "nurl_wasm_no_gc_sections": 1428232, "c_native": 16072, "c_wasm": 938554, "rust_native": 4509128, "rust_wasm": 2133841 }
     },
     {
@@ -196,16 +196,16 @@
       "checksum": "6152419568754618368",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 33.940, "c": 35.900, "rust": 36.295 },
-        "wasm_ref": { "nurl": 80.794, "c": 89.778, "rust": 103.910, "nurl_no_gc_sections": 212.063 },
-        "wasm_wt":  { "nurl": 120.332, "c": 136.533, "rust": 131.949 }
+        "native":   { "nurl": 22.551, "c": 23.770, "rust": 24.042 },
+        "wasm_ref": { "nurl": 64.619, "c": 58.904, "rust": 72.024, "nurl_no_gc_sections": 145.544 },
+        "wasm_wt":  { "nurl": 64.672, "c": 66.692, "rust": 63.985 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_wt":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 7.505, "nurl_native": 266.256, "nurl_wasm": 85.950, "nurl_wasm_no_gc_sections": 92.484, "c_native": 139.560, "c_wasm": 52.188, "rust_native": 120.343, "rust_wasm": 135.104 },
+      "compile_ms": { "nurl_frontend": 5.045, "nurl_native": 181.693, "nurl_wasm": 58.681, "nurl_wasm_no_gc_sections": 59.300, "c_native": 98.574, "c_wasm": 36.227, "rust_native": 85.183, "rust_wasm": 95.980 },
       "bytes": { "nurl_native": 20448, "nurl_wasm": 1121621, "nurl_wasm_no_gc_sections": 1430838, "c_native": 16064, "c_wasm": 945656, "rust_native": 4511328, "rust_wasm": 2136125 }
     },
     {
@@ -215,16 +215,16 @@
       "checksum": "664579",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 23.464, "c": 23.026, "rust": 22.979 },
-        "wasm_ref": { "nurl": 67.614, "c": 69.580, "rust": 69.312, "nurl_no_gc_sections": 198.031 },
-        "wasm_wt":  { "nurl": 78.805, "c": 78.506, "rust": 63.267 }
+        "native":   { "nurl": 15.779, "c": 15.612, "rust": 15.711 },
+        "wasm_ref": { "nurl": 51.181, "c": 49.507, "rust": 47.568, "nurl_no_gc_sections": 139.013 },
+        "wasm_wt":  { "nurl": 38.404, "c": 39.558, "rust": 33.817 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_wt":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 3.963, "nurl_native": 133.125, "nurl_wasm": 77.002, "nurl_wasm_no_gc_sections": 76.160, "c_native": 95.727, "c_wasm": 52.583, "rust_native": 84.466, "rust_wasm": 97.584 },
+      "compile_ms": { "nurl_frontend": 2.710, "nurl_native": 93.667, "nurl_wasm": 50.449, "nurl_wasm_no_gc_sections": 50.970, "c_native": 68.306, "c_wasm": 35.943, "rust_native": 60.651, "rust_wasm": 69.430 },
       "bytes": { "nurl_native": 16408, "nurl_wasm": 1119470, "nurl_wasm_no_gc_sections": 1427941, "c_native": 16112, "c_wasm": 938217, "rust_native": 4508376, "rust_wasm": 2133559 }
     },
     {
@@ -234,16 +234,16 @@
       "checksum": "9227465",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 32.563, "c": 38.750, "rust": 32.654 },
-        "wasm_ref": { "nurl": 90.870, "c": 84.641, "rust": 93.044, "nurl_no_gc_sections": 212.862 },
-        "wasm_wt":  { "nurl": 148.353, "c": 142.534, "rust": 127.420 }
+        "native":   { "nurl": 21.624, "c": 25.807, "rust": 21.788 },
+        "wasm_ref": { "nurl": 56.726, "c": 55.793, "rust": 69.759, "nurl_no_gc_sections": 149.138 },
+        "wasm_wt":  { "nurl": 102.765, "c": 98.469, "rust": 85.223 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_wt":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 3.633, "nurl_native": 120.936, "nurl_wasm": 72.626, "nurl_wasm_no_gc_sections": 79.218, "c_native": 80.884, "c_wasm": 51.252, "rust_native": 71.158, "rust_wasm": 86.909 },
+      "compile_ms": { "nurl_frontend": 2.481, "nurl_native": 88.587, "nurl_wasm": 50.170, "nurl_wasm_no_gc_sections": 51.258, "c_native": 60.700, "c_wasm": 35.608, "rust_native": 52.888, "rust_wasm": 62.917 },
       "bytes": { "nurl_native": 16304, "nurl_wasm": 1119357, "nurl_wasm_no_gc_sections": 1427575, "c_native": 16040, "c_wasm": 936783, "rust_native": 4508032, "rust_wasm": 2133180 }
     },
     {
@@ -253,16 +253,16 @@
       "checksum": "350",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 15.903, "c": 16.009, "rust": 16.130 },
-        "wasm_ref": { "nurl": 56.866, "c": 55.115, "rust": 64.109, "nurl_no_gc_sections": 177.022 },
-        "wasm_wt":  { "nurl": 39.718, "c": 38.876, "rust": 42.074 }
+        "native":   { "nurl": 10.784, "c": 12.724, "rust": 10.833 },
+        "wasm_ref": { "nurl": 41.802, "c": 39.291, "rust": 46.759, "nurl_no_gc_sections": 127.175 },
+        "wasm_wt":  { "nurl": 24.429, "c": 24.433, "rust": 24.977 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_wt":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 3.787, "nurl_native": 125.020, "nurl_wasm": 74.296, "nurl_wasm_no_gc_sections": 73.769, "c_native": 81.190, "c_wasm": 50.636, "rust_native": 74.644, "rust_wasm": 92.471 },
+      "compile_ms": { "nurl_frontend": 2.624, "nurl_native": 89.070, "nurl_wasm": 50.795, "nurl_wasm_no_gc_sections": 52.098, "c_native": 60.671, "c_wasm": 35.387, "rust_native": 54.117, "rust_wasm": 65.155 },
       "bytes": { "nurl_native": 16256, "nurl_wasm": 1119363, "nurl_wasm_no_gc_sections": 1427748, "c_native": 16016, "c_wasm": 937015, "rust_native": 4507976, "rust_wasm": 2133195 }
     },
     {
@@ -272,16 +272,16 @@
       "checksum": "393199",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 52.489, "c": 53.537, "rust": 53.693 },
-        "wasm_ref": { "nurl": 75.485, "c": 65.410, "rust": 74.746, "nurl_no_gc_sections": 196.308 },
-        "wasm_wt":  { "nurl": 53.163, "c": 55.642, "rust": 55.684 }
+        "native":   { "nurl": 35.170, "c": 35.819, "rust": 36.456 },
+        "wasm_ref": { "nurl": 52.667, "c": 44.219, "rust": 51.268, "nurl_no_gc_sections": 132.034 },
+        "wasm_wt":  { "nurl": 25.634, "c": 28.725, "rust": 29.154 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_wt":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 4.247, "nurl_native": 132.908, "nurl_wasm": 76.250, "nurl_wasm_no_gc_sections": 75.967, "c_native": 94.621, "c_wasm": 51.255, "rust_native": 99.354, "rust_wasm": 110.325 },
+      "compile_ms": { "nurl_frontend": 2.917, "nurl_native": 95.501, "nurl_wasm": 52.580, "nurl_wasm_no_gc_sections": 51.674, "c_native": 69.372, "c_wasm": 35.334, "rust_native": 71.701, "rust_wasm": 78.428 },
       "bytes": { "nurl_native": 16408, "nurl_wasm": 1119735, "nurl_wasm_no_gc_sections": 1427921, "c_native": 16160, "c_wasm": 938832, "rust_native": 4509120, "rust_wasm": 2134298 }
     },
     {
@@ -291,16 +291,16 @@
       "checksum": "20",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 10.023, "c": 10.385, "rust": 14.000 },
-        "wasm_ref": { "nurl": 60.784, "c": 45.160, "rust": 69.094, "nurl_no_gc_sections": 191.241 },
-        "wasm_wt":  { "nurl": 82.699, "c": 34.247, "rust": 146.986 }
+        "native":   { "nurl": 6.724, "c": 7.098, "rust": 9.238 },
+        "wasm_ref": { "nurl": 45.731, "c": 38.086, "rust": 46.345, "nurl_no_gc_sections": 133.159 },
+        "wasm_wt":  { "nurl": 47.239, "c": 25.629, "rust": 93.502 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_wt":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 61.376, "nurl_native": 672.565, "nurl_wasm": 178.741, "nurl_wasm_no_gc_sections": 178.692, "c_native": 140.941, "c_wasm": 51.959, "rust_native": 196.433, "rust_wasm": 177.334 },
+      "compile_ms": { "nurl_frontend": 40.036, "nurl_native": 457.772, "nurl_wasm": 123.751, "nurl_wasm_no_gc_sections": 124.503, "c_native": 99.033, "c_wasm": 36.483, "rust_native": 135.967, "rust_wasm": 123.277 },
       "bytes": { "nurl_native": 35864, "nurl_wasm": 1145952, "nurl_wasm_no_gc_sections": 1451314, "c_native": 16632, "c_wasm": 1031448, "rust_native": 4522712, "rust_wasm": 2161788 }
     },
     {
@@ -310,16 +310,16 @@
       "checksum": "4595260366167553674",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 53.783, "c": 53.815, "rust": 51.303 },
-        "wasm_ref": { "nurl": 93.937, "c": 85.112, "rust": 94.442, "nurl_no_gc_sections": 208.371 },
-        "wasm_wt":  { "nurl": 302.763, "c": 817.763, "rust": 894.131 }
+        "native":   { "nurl": 36.643, "c": 35.771, "rust": 34.112 },
+        "wasm_ref": { "nurl": 61.010, "c": 58.424, "rust": 63.718, "nurl_no_gc_sections": 142.887 },
+        "wasm_wt":  { "nurl": 104.534, "c": 570.148, "rust": 626.843 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_wt":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 5.930, "nurl_native": 148.971, "nurl_wasm": 86.009, "nurl_wasm_no_gc_sections": 86.297, "c_native": 113.009, "c_wasm": 50.676, "rust_native": 101.493, "rust_wasm": 116.890 },
+      "compile_ms": { "nurl_frontend": 4.222, "nurl_native": 115.725, "nurl_wasm": 63.326, "nurl_wasm_no_gc_sections": 60.099, "c_native": 87.541, "c_wasm": 36.883, "rust_native": 74.575, "rust_wasm": 84.587 },
       "bytes": { "nurl_native": 16352, "nurl_wasm": 1121335, "nurl_wasm_no_gc_sections": 1429521, "c_native": 16480, "c_wasm": 941070, "rust_native": 4509832, "rust_wasm": 2134887 }
     }
   ]
