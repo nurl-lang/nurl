@@ -88,6 +88,7 @@ $ `interp.nu`
                         = k + k 1
                     }
                     ( interp_run_start it )
+                    ?? ( env_get `NURL_WT_JIT` ) { T jv → { ( interp_enable_jit ) ( string_free jv ) } F → {} }
                     ( exec_func it fidx )
                     ? ( interp_trapped it ) {
                         ( nurl_print `wasmtime: trap: ` ) ( nurl_print ( string_data ( bytes_to_str . it trapmsg ) ) ) ( nurl_print `\n` )

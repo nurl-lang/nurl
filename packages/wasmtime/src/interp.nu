@@ -29,6 +29,17 @@ $ `module.nu`
 // OS entropy (runtime helper; getrandom/urandom under the hood).
 & `c` @ nurl_rand_fill *u buf i n → i
 
+// The JIT substrate: an executable page and a call through a raw address.
+// On wasm32 alloc returns 0 (no executable memory) and the runtime stays
+// on the interpreter — a capability probe, not an error.
+& `c` @ nurl_code_alloc i n → *u
+
+& `c` @ nurl_code_seal *u p i n → i
+
+& `c` @ nurl_call_code *u fn *u a → i
+
+& `c` @ nurl_code_free *u p i n → v
+
 // The one lock behind the 0xfe atomics (see __atom_init). Declared here
 // rather than taken from std/thread.nu because the handles live in file
 // globals, and a NURL global holds a pointer as an integer.
@@ -272,7 +283,7 @@ $ `module.nu`
 // and re-deriving them per call means walking funcs → typeidx → types and
 // two `vec_len`s inside `module_func_type` — pure repeat work on a value
 // that is fixed for the life of the module.
-: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots i nparams i nresults i code_start i sbase ( Vec i ) kv s free ( Vec i ) bytes }
+: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots i nparams i nresults i code_start i sbase ( Vec i ) kv s free ( Vec i ) bytes s jit i jitlen }
 
 @ __page → i { ^ 65536 }
 
@@ -1169,6 +1180,7 @@ inline @ __fr_setpos s tp i v → v {
     ( vec_free [i] . pf aux )
     ( vec_free [i] . pf kv )
     ( vec_free [i] . pf bytes )
+    ? > . pf jitlen 0 { ( nurl_code_free # *u . pf jit . pf jitlen ) } {}
     ( nurl_free # s pf )
 }
 
@@ -2425,6 +2437,8 @@ inline @ __fr_setpos s tp i v → v {
         = . pf nresults nresults
         = . pf code_start . f code_start
         = . pf free # s 0
+        = . pf jit # s 0
+        = . pf jitlen 0
         ^ # s pf
     } {}
     = . pf count / ( vec_len [i] . pf code ) 6
@@ -2433,6 +2447,8 @@ inline @ __fr_setpos s tp i v → v {
     = . pf nresults nresults
     = . pf code_start . f code_start
     = . pf free # s 0
+    = . pf jit # s 0
+    = . pf jitlen 0
     ^ # s pf
 }
 // Get-or-build the PFunc for defined function `fidx`.
@@ -2523,6 +2539,128 @@ inline @ __fr_setpos s tp i v → v {
 // single loop paid for on *every record*: a `vec_len` on the frame stack, a
 // `reload` test, and two byte loads for the trap and exit flags, none of
 // which can change between two records of the same basic block.
+: ~ i g_jit 0  // tier-0 JIT opt-in (NURL_WT_JIT); off by default
+@ interp_enable_jit → v { = g_jit 1 }
+
+// ── template JIT (x86-64), tier above the interpreter ────────────
+// The predecoder's register-form records are already the IR a template
+// JIT lowers: the micro-op is the tag, and every operand is an absolute
+// slot index — so slot `k` is `disp32(%rdi)` when %rdi holds the frame's
+// register base, which is exactly the one argument the JIT calling
+// convention (nurl_call_code) passes. A function whose records are all in
+// the straight-line integer set below (no memory, no calls, no branches,
+// no trapping divide) compiles to a flat run of loads, one ALU op and a
+// store each, then a return; anything else leaves `jit` at -1 and the
+// whole function stays on the interpreter. This is tier 0 — leaf integer
+// kernels — and it grows one record class at a time, each gated on
+// byte-identical output against the interpreter it falls back to.
+@ __jit_b ( Vec u ) buf i x → v { ( vec_push [u] buf # u & x 255 ) }
+
+@ __jit_d ( Vec u ) buf i x → v {
+    ( __jit_b buf x ) ( __jit_b buf ( __lshr64 x 8 ) )
+    ( __jit_b buf ( __lshr64 x 16 ) ) ( __jit_b buf ( __lshr64 x 24 ) )
+}
+
+@ __jit_q ( Vec u ) buf i x → v { ( __jit_d buf x ) ( __jit_d buf ( __lshr64 x 32 ) ) }
+// mov rax,[rdi+s*8] / mov rcx,[rdi+s*8] / mov [rdi+s*8],rax
+@ __jit_ldrax ( Vec u ) buf i s → v { ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 135 ) ( __jit_d buf * s 8 ) }
+
+@ __jit_ldrcx ( Vec u ) buf i s → v { ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 143 ) ( __jit_d buf * s 8 ) }
+
+@ __jit_strax ( Vec u ) buf i s → v { ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 135 ) ( __jit_d buf * s 8 ) }
+
+@ __jit_movslq ( Vec u ) buf → v { ( __jit_b buf 72 ) ( __jit_b buf 99 ) ( __jit_b buf 192 ) }  // movslq rax,eax
+
+// Is every record templatable? Returns 1 if so (single trailing RET).
+@ __jit_ok * PFunc pf → i {
+    : i n . pf count
+    ? == n 0 { ^ 0 } {}
+    : ( Vec i ) code . pf code
+    : ~ i r 0
+    ~ < r n {
+        : i op ?? ( vec_get [i] code * r 6 ) { T x → x F → -1 }
+        : ~ i good 0
+        ? & >= op 0 <= op 17 { = good 1 } {}  // i64/i32 add sub mul and or xor shl shr_*
+        ? == op 47 { = good 1 } {}  // MOV
+        ? == op 51 { = good 1 } {}  // CONST
+        ? == op 55 { = good ? == r - n 1 1 0 } {}  // RET only as the last record
+        ? == 0 good { ^ 0 } {}
+        // a RET before the end (multiple returns ⇒ branches) is out
+        ? & == op 55 != r - n 1 { ^ 0 } {}
+        = r + r 1
+    }
+    // the last record must be the RET
+    ^ ? == ?? ( vec_get [i] code * - n 1 6 ) { T x → x F → -1 } 55 1 0
+}
+
+// Emit the i64/i32 binary or shift body for op into buf (operands already
+// mirror the interpreter's arms exactly, shifts masked by CL width).
+@ __jit_alu ( Vec u ) buf i op i a i b i c → v {
+    ? & >= op 9 <= op 17 {  // i32 family: 32-bit op then sign-extend
+        ( __jit_ldrax buf b ) ( __jit_ldrcx buf c )
+        ? == op 9 { ( __jit_b buf 1 ) ( __jit_b buf 200 ) } {}  // add eax,ecx
+        ? == op 13 { ( __jit_b buf 41 ) ( __jit_b buf 200 ) } {}  // sub
+        ? == op 17 { ( __jit_b buf 15 ) ( __jit_b buf 175 ) ( __jit_b buf 193 ) } {}  // imul eax,ecx
+        ? == op 11 { ( __jit_b buf 33 ) ( __jit_b buf 200 ) } {}  // and
+        ? == op 14 { ( __jit_b buf 9 ) ( __jit_b buf 200 ) } {}  // or
+        ? == op 15 { ( __jit_b buf 49 ) ( __jit_b buf 200 ) } {}  // xor
+        ? == op 10 { ( __jit_b buf 211 ) ( __jit_b buf 224 ) } {}  // shl eax,cl
+        ? == op 12 { ( __jit_b buf 211 ) ( __jit_b buf 232 ) } {}  // shr eax,cl
+        ? == op 16 { ( __jit_b buf 211 ) ( __jit_b buf 248 ) } {}  // sar eax,cl
+        ( __jit_movslq buf ) ( __jit_strax buf a )
+    } {
+        ( __jit_ldrax buf b ) ( __jit_ldrcx buf c )
+        ? == op 0 { ( __jit_b buf 72 ) ( __jit_b buf 1 ) ( __jit_b buf 200 ) } {}  // add rax,rcx
+        ? == op 5 { ( __jit_b buf 72 ) ( __jit_b buf 41 ) ( __jit_b buf 200 ) } {}  // sub
+        ? == op 1 { ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf 175 ) ( __jit_b buf 193 ) } {}  // imul
+        ? == op 2 { ( __jit_b buf 72 ) ( __jit_b buf 33 ) ( __jit_b buf 200 ) } {}  // and
+        ? == op 7 { ( __jit_b buf 72 ) ( __jit_b buf 9 ) ( __jit_b buf 200 ) } {}  // or
+        ? == op 4 { ( __jit_b buf 72 ) ( __jit_b buf 49 ) ( __jit_b buf 200 ) } {}  // xor
+        ? == op 8 { ( __jit_b buf 72 ) ( __jit_b buf 211 ) ( __jit_b buf 224 ) } {}  // shl rax,cl
+        ? == op 3 { ( __jit_b buf 72 ) ( __jit_b buf 211 ) ( __jit_b buf 232 ) } {}  // shr rax,cl
+        ? == op 6 { ( __jit_b buf 72 ) ( __jit_b buf 211 ) ( __jit_b buf 248 ) } {}  // sar rax,cl
+        ( __jit_strax buf a )
+    }
+}
+
+// Build the machine code for `pf`, seal a page, store the handle. Sets
+// jit to -1 (do not retry) when the function is not templatable or no
+// executable memory is available.
+@ __jit_try * PFunc pf → v {
+    ? != # i . pf jit 0 { ^ v } {}  // already tried (handle or -1)
+    ? == 0 ( __jit_ok pf ) { = . pf jit # s -1 ^ v } {}
+    : ( Vec u ) buf ( vec_new [u] )
+    : ( Vec i ) code . pf code
+    : i n . pf count
+    : ~ i r 0
+    ~ < r n {
+        : i base * r 6
+        : i op ?? ( vec_get [i] code base ) { T x → x F → 0 }
+        : i a ?? ( vec_get [i] code + base 1 ) { T x → x F → 0 }
+        : i b ?? ( vec_get [i] code + base 2 ) { T x → x F → 0 }
+        : i c ?? ( vec_get [i] code + base 3 ) { T x → x F → 0 }
+        ? == op 51 { ( __jit_b buf 72 ) ( __jit_b buf 184 ) ( __jit_q buf b ) ( __jit_strax buf a ) } {  // CONST: mov rax,imm64; store
+            ? == op 47 { ( __jit_ldrax buf b ) ( __jit_strax buf a ) } {  // MOV
+                ? == op 55 {  // RET: results to sbase, then ret
+                    : i sb . pf sbase
+                    : ~ i k 0
+                    ~ < k b { ( __jit_ldrax buf + a k ) ( __jit_strax buf + sb k ) = k + k 1 }
+                    ( __jit_b buf 195 )
+                } { ( __jit_alu buf op a b c ) }
+            }
+        }
+        = r + r 1
+    }
+    : i len ( vec_len [u] buf )
+    : *u page ( nurl_code_alloc + len 16 )
+    ? == # i page 0 { = . pf jit # s -1 ^ v } {}  // no executable memory (wasm)
+    : ~ i k 0
+    ~ < k len { = . page k ?? ( vec_get [u] buf k ) { T x → x F → # u 0 } = k + k 1 }
+    ? != 0 ( nurl_code_seal page + len 16 ) { ( nurl_code_free page + len 16 ) = . pf jit # s -1 ^ v } {}
+    = . pf jit # s page
+    = . pf jitlen + len 16
+}
+
 @ exec_func * Interp it i fidx → v {
     ? != 0 . it halt { ^ v } {}
     : *Module m # *Module . it mod
@@ -2537,6 +2675,28 @@ inline @ __fr_setpos s tp i v → v {
         : *Frame f00 # *Frame fr0
         = . f00 prev # s 0
         = . f00 depth 1
+    } {}
+    // Tier-0 JIT: a templatable leaf integer function runs as sealed
+    // machine code instead of the record loop. Correctness-preserving —
+    // __jit_try leaves jit at -1 for anything it cannot lower, and the
+    // interpreter below runs unchanged. Only the outermost frame is
+    // routed here for now (no loops/calls in the tier, so termination is
+    // the function's own straight-line length; fuel is unmetered).
+    ? & != 0 g_jit != # i fr0 0 {
+        : *Frame fj # *Frame fr0
+        : *PFunc pfj # *PFunc . fj pins
+        ( __jit_try pfj )
+        : s jh . pfj jit
+        ? & != # i jh 0 != # i jh -1 {
+            : *i jrb ( vec_data [i] . fj regs )
+            ( nurl_call_code # *u jh # *u jrb )
+            : i lloc . pfj sbase
+            : i nres . pfj nresults
+            : ~ i rk 0
+            ~ < rk nres { ( __push it . jrb + lloc rk ) = rk + rk 1 }
+            ( __frame_free fr0 )
+            ^ v
+        } {}
     } {}
     // Register-form driver. `pc` is a WORD offset into the frame's record
     // array (6 words per record), so fetching a record is four loads off one
