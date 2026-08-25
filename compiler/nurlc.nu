@@ -6729,6 +6729,18 @@
     ^ ( nurl_peek p + LX_PEEK2 TF_TYPE )
 }
 
+// Companion to nurl_lex_peek2_type, mirroring nurl_lex_peek_val one slot
+// further out. `= . . . o a b v` puts the base identifier two tokens ahead
+// of the current `.`, and gen_field_store has to decide whether the path is
+// an aggregate chain BEFORE consuming anything — a decision it cannot take
+// back. strdup'd, owned by the caller.
+@ nurl_lex_peek2_val i h → s {
+    : s p # s h
+    ? == 0 ( nurl_peek p + LX_PEEK TF_VALID ) { ( __lex_one # i p LX_PEEK ) } {}
+    ? == 0 ( nurl_peek p + LX_PEEK2 TF_VALID ) { ( __lex_one # i p LX_PEEK2 ) } {}
+    ^ # s ( nurl_strdup # s ( nurl_peek p + LX_PEEK2 TF_VAL ) )
+}
+
 @ nurl_lex_peek3_type i h → i {
     : s p # s h
     ? == 0 ( nurl_peek p + LX_PEEK TF_VALID ) { ( __lex_one # i p LX_PEEK ) } {}
@@ -15949,15 +15961,159 @@
     ^ __fs_v
 }
 
+// gen_nested_field_store: `= . . obj f g VALUE` — a store whose TARGET is
+// reached through more than one field hop.
+//
+// The single-hop path takes the object's address from `<name>__ptr`, the
+// alloca a `:`-bound struct owns. A nested path has no such name: the object
+// is `. obj f`, which `gen_expr` evaluates to a by-value register, and a
+// register is not somewhere a store can land. The result was
+//
+//     = . . o inner x 7
+//       error: cannot assign to a field of '': it is a by-value NIn with no
+//              storage to write through …
+//
+// — and the empty name in that message is the tell, because the code read
+// the object's name from a token that was a `.`, not an identifier. Reading
+// the same path (`. . o inner x`) always worked, so a nested struct was
+// writable only by copying the inner struct out, mutating it and writing it
+// back whole.
+//
+// Walk it by ADDRESS instead: start at the base alloca and emit one GEP per
+// navigation field, so the last field is stored into in place. Applies when
+// every hop is a by-value aggregate (`%S`); anything else — a pointer hop, a
+// slice, an unknown base — falls through to the paths that already handle
+// those shapes.
+// __nested_lvalue_ok: may `= . . …` be walked by ADDRESS?
+//
+// Only when the path is rooted in a struct binding that owns its storage.
+// The decision has to be taken BEFORE consuming anything — the lexer does
+// not rewind — so the base identifier is read out of the peek slots: one
+// `.` ahead for `= . . o …`, two for `= . . . o …`. Deeper roots keep the
+// old by-value path, which is what they had before.
+@ __nested_lvalue_ok i lex i syms → b {
+    : ~ s base ``
+    ? ( is_ident_tok ( nurl_lex_peek_type lex ) )
+    { = base ( nurl_lex_peek_val lex ) }
+    { ? & == ( nurl_lex_peek_type lex ) TT_DOT
+        ( is_ident_tok ( nurl_lex_peek2_type lex ) )
+        { = base ( nurl_lex_peek2_val lex ) }
+        {} }
+    ? == 0 ( nurl_str_len base ) { ^ F } {}
+    : s bty ( nurl_sym_get syms base )
+    : s bptr ( nurl_sym_get2 syms base `__ptr` )
+    // A by-value aggregate (`%S`, no trailing `*`) with an alloca behind it.
+    // A pointer binding already works through gen_expr, and a by-value
+    // parameter has nothing to write through — both keep the old path and
+    // the old diagnostics. An `inout` parameter's `__ptr` IS the caller's
+    // address, so it qualifies.
+    : i blen ( nurl_str_len bty )
+    ? | | == 0 blen == 0 ( nurl_str_len bptr ) != ( nurl_str_get bty 0 ) 37 { ^ F } {}
+    ? == ( nurl_str_get bty - blen 1 ) 42 { ^ F } {}
+    ? & != 0 ( nurl_sym_len2 syms base `__param` )
+    == 0 ( nurl_sym_len2 syms base `__inout` ) { ^ F } {}
+    ^ T
+}
+
+// gen_nested_lvalue_addr: consume `.^n base f1 … fn` and leave the lexer on
+// the TARGET field, returning something the ordinary store dispatch can use.
+//
+// Reading a nested path always worked; writing one did not. The single-hop
+// store takes the object's address from the `<name>__ptr` alloca a `:`-bound
+// struct owns, and a nested path has no such name — its object is a field
+// path that gen_expr turns into a by-value register, which is not somewhere
+// a store can land. The result was
+//
+//     = . . o inner x 7
+//     error: cannot assign to a field of '': it is a by-value NIn with no
+//            storage to write through …
+//
+// and the empty name is the tell: the object's name was read from a token
+// that was a `.`, not an identifier. So a struct inside a struct could only
+// be written by copying the inner one out, mutating it, and storing it back.
+//
+// Walk it by address: one GEP per navigation field.
+//
+//   * every hop aggregate → return the last container's ADDRESS as `%S*`,
+//     with the lexer on the target field name. The existing "struct pointer"
+//     branch then does the store, coercion and diagnostics unchanged.
+//   * a hop that is NOT an aggregate → that field IS the object (`. . d op
+//     idx v` stores through a `*u` field at an index). Emit GEP + load and
+//     return the VALUE with its own type; the dispatch handles the pointer,
+//     slice and struct-pointer spellings exactly as it always has.
+//
+// Either way this function only produces the object; nothing about the store
+// itself is duplicated.
+@ gen_nested_lvalue_addr i lex i syms i cg → s {
+    : ~ i dots 0
+    ~ == ( nurl_lex_type lex ) TT_DOT { ( nurl_lex_advance lex ) = dots + dots 1 }
+    : s base ( nurl_lex_val lex )
+    ( nurl_lex_advance lex )
+    ( nurl_sym_def syms `__last_field_obj__` base )
+    : ~ s cur_ptr ( nurl_sym_get2 syms base `__ptr` )
+    : ~ s cur_ty ( nurl_sym_get syms base )
+    : ~ i hop 0
+    ~ < hop dots {
+        ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+        { ( die lex `expected a field name in this nested field path — each '.' takes exactly one field, so '= . . o a b v' writes field 'b' of field 'a' of 'o'.` ) }
+        {}
+        : s hname ( nurl_lex_val lex )
+        ( nurl_lex_advance lex )
+        : s hsname ( nurl_str_slice cur_ty 1 - ( nurl_str_len cur_ty ) 1 )
+        : s hidx ( nurl_sym_get2 syms hsname ( nurl_str_cat `__` ( nurl_str_cat hname `__idx` ) ) )
+        : s hty ( nurl_sym_get2 syms hsname ( nurl_str_cat `__` ( nurl_str_cat hname `__type` ) ) )
+        ? == 0 ( nurl_str_len hidx )
+        { ( die lex ( nurl_str_cat4 `type '` hsname `' has no field '` ( nurl_str_cat hname `' — check the field name against the struct's declaration.` ) ) ) }
+        {}
+        : s gep ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print gep )
+        ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty cur_ty ) )
+        ( nurl_print `, ` ) ( nurl_print ( nurl_llty cur_ty ) )
+        ( nurl_print `* ` ) ( nurl_print cur_ptr )
+        ( nurl_print `, i32 0, i32 ` ) ( nurl_print hidx ) ( nurl_print `\n` )
+        : i htlen ( nurl_str_len hty )
+        : b h_aggregate & & > htlen 0 == ( nurl_str_get hty 0 ) 37
+        != ( nurl_str_get hty - htlen 1 ) 42
+        ? h_aggregate
+        {  // Still inside the aggregate: keep the address, keep walking.
+            = cur_ptr gep
+            = cur_ty hty
+            = hop + hop 1
+        }
+        {  // This field is the object itself — load it and hand the value
+            // to the ordinary dispatch, positioned on whatever follows.
+            : s ld ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print ld )
+            ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty hty ) )
+            ( nurl_print `, ` ) ( nurl_print ( nurl_llty hty ) )
+            ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
+            ( nurl_set_last_type hty )
+            ^ ld
+        }
+    }
+    // Every hop was an aggregate: the target's container is at `cur_ptr`.
+    ( nurl_set_last_type ( nurl_str_cat cur_ty `*` ) )
+    ^ cur_ptr
+}
+
 @ gen_field_store i lex i syms i cg → s {
     ( nurl_lex_advance lex )  // consume '.'
+    // A second '.' means the object is itself a field path. When that path
+    // is rooted in a struct binding with storage, walk it by ADDRESS —
+    // gen_expr would load the intermediate struct by value, and a register
+    // is not somewhere a store can land. The walk hands back either the
+    // container's address (`%S*`) or, when a hop is not an aggregate, that
+    // field's value; either way the dispatch below is unchanged. Anything
+    // else keeps the by-value path and its diagnostics.
+    : b nested & == ( nurl_lex_type lex ) TT_DOT ( __nested_lvalue_ok lex syms )
     // Save object name before gen_expr consumes the token (needed for struct-by-value alloca lookup)
     : s obj_name ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ``
     // …and publish it for gen_field_rhs's escape hook (§2.3), which sees
     // only the RHS. Every branch below routes its RHS through that one
     // function, so the target binding has to travel on a side-channel.
     ( nurl_sym_def syms `__last_field_obj__` obj_name )
-    : s pv ( gen_expr lex syms cg )  // pointer/aggregate value
+    : s pv ? nested ( gen_nested_lvalue_addr lex syms cg )
+    ( gen_expr lex syms cg )  // pointer/aggregate value
     : s pt ( nurl_get_last_type )  // LLVM type, e.g. "%Node*", "i64*", "{ T*, i64 }", or "%Pair"
 
     // Slice aggregate "{ T*, i64 }": extract data ptr, then GEP + store.
@@ -16248,10 +16404,17 @@
                 // which nurlc printed with status 0 and only clang
                 // rejected, as "expected value token" against generated
                 // IR. Reject it at the source instead.
+                // `obj_name` is empty when the object was not a plain
+                // identifier — a nested path (`= . . m dm dx v`) whose root
+                // has no storage, or a call result. Saying "a field of ''"
+                // then names nothing at all; say what the object IS instead.
                 ? == 0 ( nurl_str_len alloca_ptr )
                 { ( die lex ( nurl_str_cat ( nurl_str_cat4
-                    `cannot assign to a field of '` obj_name `': it is a by-value ` ( llvm_to_nurl pt ) )
-                    ` with no storage to write through — a parameter (parameters are immutable bindings and arrive by value), or a temporary. Take the argument as 'inout' if the caller should see the write ('@ f inout S s → v'), or copy it into a mutable local first (': ~ S t s', then '= . t <field> <value>').` ) ) }
+                    ? == 0 ( nurl_str_len obj_name )
+                    `cannot assign through this field path: the object is a by-value `
+                    ( nurl_str_cat3 `cannot assign to a field of '` obj_name `': it is a by-value ` )
+                    ( llvm_to_nurl pt ) ` with no storage to write through` `` )
+                    ` — a parameter (parameters are immutable bindings and arrive by value), or a temporary. Take the argument as 'inout' if the caller should see the write ('@ f inout S s → v'), or copy it into a mutable local first (': ~ S t s', then '= . t <field> <value>').` ) ) }
                 {}
                 : s pt_ptr ( nurl_str_cat pt `*` )
                 : s sname ( nurl_str_slice pt 1 - ptlen 1 )

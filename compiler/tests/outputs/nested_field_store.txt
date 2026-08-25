@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+dx=-56 dy=60000 mz=70000 tw=5
+dx=7 dy=4464 mz=-3 tw=42
+after inout: dx=9 mz=-3
+done
