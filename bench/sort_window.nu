@@ -7,9 +7,16 @@
 // unroll the sort and if-convert every swap to cmov) with a loop-carried
 // dependency through the state.
 //
-// NURL has no fixed-size stack array: the window lives in a `malloc`ed
-// `*u64` block, where the C and Rust peers use `uint64_t window[8]` /
-// `[u64; 8]` on the stack.
+// NURL has no fixed-size stack array, so the source allocates the window
+// as a `malloc`ed `*u64` block where the C and Rust peers use
+// `uint64_t window[8]` / `[u64; 8]` on the stack. This does NOT survive
+// to the optimized artifacts: LLVM's -O2 heap-to-stack elides the
+// malloc/free pair, inlines the sort, and SROAs the window into
+// registers (native) / locals (wasm), so all five implementations run
+// the mill out of registers. Measured 2026-08-25: hand-promoting the
+// malloc to an alloca in nurlc changed nothing on the wasm artifact and
+// made the native binary ~19 % slower (LLVM picks a worse canonical
+// form for the pre-promoted IR).
 //
 // Contract: the process prints exactly one line — the checksum in
 // decimal, masked to 63 bits — and nothing else. `bench/bench.sh` gates
