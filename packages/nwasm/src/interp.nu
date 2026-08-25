@@ -3358,6 +3358,130 @@ inline @ __fr_setpos s tp i v → v {
     ( __jit_inline_call buf pat_at pat_rec trap_rec kind spcell cofn coenv )
 }
 
+// May record (op,a..w5) read slot s? Conservative: 1 for anything the
+// classifier does not fully understand (calls, br_table, the bridges).
+@ __jit_slot_reads i op i a i b i c i d i w5 i s → i {
+    ? == op 51 { ^ 0 } {}  // CONST
+    ? | == op 47 == op 53 { ^ ? == b s 1 0 } {}  // MOV / global.set
+    ? == op 52 { ^ 0 } {}  // global.get
+    ? | | == op 43 == op 44 | == op 48 == op 54 { ^ ? == b s 1 0 } {}
+    ? & >= op 56 <= op 75 { ^ ? | == b s == c s 1 0 } {}
+    ? == op 45 { ^ ? | == b s == c s 1 0 } {}
+    ? | == op 38 == op 177 { ^ ? | | == c s == d s == & w5 2097151 s 1 0 } {}
+    ? & >= op 13 <= op 17 { ^ ? | | == b s == c s == d s 1 0 } {}
+    ? | == op 22 | == op 30 == op 33 { ^ ? | | == b s == c s == d s 1 0 } {}
+    ? | & >= op 0 <= op 12 & >= op 179 <= op 185 {
+        ? >= ( __jit_memkind op ) 0 { ^ ? | == a s == b s 1 0 } {}  // demoted stores read addr+value
+        ^ ? | == b s == c s 1 0 } {}
+    ? >= ( __jit_memkind op ) 0 {
+        ? == 0 & ( __jit_memkind op ) 1 { ^ ? | == b s == d s 1 0 } {}  // load: base+index
+        ^ ? | == a s == b s 1 0 } {}  // store: addr+value
+    ? | == op 36 | == op 37 | == op 93 | == op 131 | == op 125 | == op 126 & >= op 153 <= op 161 { ^ ? == b s 1 0 } {}
+    ? | | & >= op 96 <= op 99 & >= op 105 <= op 108 == op 162 { ? == op 162 { ^ 0 } {} ^ ? | == b s == c s 1 0 } {}
+    ? | == op 205 == op 206 { ^ ? | == b s == d s 1 0 } {}
+    ? | == op 207 == op 208 { ^ ? | | == b s == d s == w5 s 1 0 } {}
+    ? | == op 211 == op 212 { ^ ? | == b s == d s 1 0 } {}
+    ? & >= op 194 <= op 196 { ^ ? | == b s == d s 1 0 } {}
+    ? == op 197 { ^ ? | | == a s == b s == c s 1 0 } {}
+    ? & >= op 198 <= op 201 { ^ ? | | == b s == c s == d s 1 0 } {}
+    ? == op 46 { ^ ? | | == b s == c s == d s 1 0 } {}
+    ? == op 55 { ^ ? & >= s a < s + a b 1 0 } {}  // RET reads its result window
+    ? == op 172 { ^ 0 } {}
+    ? == op 163 { ^ ? == b s 1 0 } {}  // memory.grow reads its delta (dst write handled as unknown: stop)
+    ^ 1  // the FCB bridge and anything new: assume it reads
+}
+
+// Does the record UNCONDITIONALLY overwrite slot s (full width)?
+@ __jit_slot_writes i op i a i b i s → i {
+    ? | == op 38 == op 177 { ^ ? == b s 1 0 } {}  // ADDBRIFC writes b
+    ? | == op 49 | == op 55 | == op 172 | == op 53 | == op 45 | == op 48 | == op 54 == op 197 { ^ 0 } {}
+    ? >= ( __jit_memkind op ) 0 { ? != 0 & ( __jit_memkind op ) 1 { ^ 0 } {} ^ ? == a s 1 0 } {}  // stores write memory only
+    ? | == op 50 | == op 210 | == op 170 | == op 163 | == op 169 == op 171 { ^ 0 } {}  // handled by the walker
+    ^ ? == a s 1 0  // every remaining value producer writes its dst
+}
+
+// Argument/result window of a call record: nargs*65536+nres (or -1 when
+// the type cannot be resolved — the walker then treats it as a full read).
+@ __jit_call_win * Module m i op i a → i {
+    : ~ s ct # s 0
+    ? | == op 50 == op 210 { = ct ( module_func_type m a ) } {
+        ? == op 170 { = ct ?? ( vec_get [s] . m types a ) { T x → x F → # s 0 } } {} }
+    ? == # i ct 0 { ^ -1 } {}
+    : *FuncType cf # *FuncType ct
+    ^ + * ( vec_len [i] . cf params ) 65536 ( vec_len [i] . cf results )
+}
+
+// Is slot s provably dead at record `start` — overwritten before any
+// read on every path? DFS over the record CFG; anything the walker does
+// not understand counts as a read.
+@ __jit_slot_dead * Module m ( Vec i ) auxv ( Vec i ) code i n i start i s → i {
+    ? | < start 0 >= start n { ^ 1 } {}  // fell off the end: the trailing RET reads nothing
+    : ( Vec i ) seen ( vec_new [i] )
+    : ~ i z 0
+    ~ < z n { ( vec_push [i] seen 0 ) = z + z 1 }
+    : ( Vec i ) stk ( vec_new [i] )
+    ( vec_push [i] stk start )
+    : ~ i dead 1
+    ~ & != 0 dead > ( vec_len [i] stk ) 0 {
+        : i r ?? ( vec_pop [i] stk ) { T x → x F → n }
+        ? | | >= r n < r 0 != 0 ?? ( vec_get [i] seen r ) { T x → x F → 1 } {} {
+            ( vec_set [i] seen r 1 )
+            : i base * r 6
+            : i op ?? ( vec_get [i] code base ) { T x → x F → -1 }
+            : i a ?? ( vec_get [i] code + base 1 ) { T x → x F → 0 }
+            : i b ?? ( vec_get [i] code + base 2 ) { T x → x F → 0 }
+            : i c ?? ( vec_get [i] code + base 3 ) { T x → x F → 0 }
+            : i d ?? ( vec_get [i] code + base 4 ) { T x → x F → 0 }
+            : i w5 ?? ( vec_get [i] code + base 5 ) { T x → x F → 0 }
+            : ~ i acted 0
+            ? | == op 50 | == op 210 == op 170 {  // calls: read the arg window, write the result window
+                = acted 1
+                ? & == op 170 == c s { = dead 0 } {}  // call_indirect reads its selector slot
+                : i cw ( __jit_call_win m op a )
+                ? < cw 0 { = dead 0 } {
+                    : i cargs / cw 65536
+                    : i cres % cw 65536
+                    ? & >= s b < s + b cargs { = dead 0 } {
+                        ? & >= s b < s + b cres {} { ( vec_push [i] stk + r 1 ) } }  // result overwrote it, or fall through
+                }
+            } {}
+            ? & == op 169 == 0 acted {  // br_table: per-row moves and targets
+                = acted 1
+                : ~ i rw + c 1
+                : ~ i rk 0
+                ~ & != 0 dead <= rk c {
+                    : i rb9 + a * rk 4
+                    : i stg ?? ( vec_get [i] auxv rb9 ) { T x → x F → 0 }
+                    : i mdst ?? ( vec_get [i] auxv + rb9 1 ) { T x → x F → 0 }
+                    : i msrc ?? ( vec_get [i] auxv + rb9 2 ) { T x → x F → 0 }
+                    : i mn ?? ( vec_get [i] auxv + rb9 3 ) { T x → x F → 0 }
+                    ? == b s { = dead 0 } {}  // the selector
+                    ? & >= s msrc < s + msrc mn { = dead 0 } {}
+                    ? & >= s mdst < s + mdst mn {} { ( vec_push [i] stk / stg 6 ) }  // row move overwrote it, or follow the target
+                    = rk + rk 1
+                }
+            } {}
+            ? != 0 acted {} {
+                ? != 0 ( __jit_slot_reads op a b c d w5 s ) { = dead 0 } {
+                    ? != 0 ( __jit_slot_writes op a b s ) {} {  // killed on this path
+                        ? == op 49 { ( vec_push [i] stk / a 6 ) } {
+                            ? | == op 48 | == op 54 | == op 45 | == op 38 == op 177 {
+                                ( vec_push [i] stk / a 6 )
+                                ( vec_push [i] stk + r 1 )
+                            } {
+                                ? | == op 55 == op 172 {} { ( vec_push [i] stk + r 1 ) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ( vec_free [i] seen )
+    ( vec_free [i] stk )
+    ^ dead
+}
+
 @ __jit_kvw_mark ( Vec i ) need i s → v {
     ? & >= s 0 < s ( vec_len [i] need ) { ( vec_set [i] need s 1 ) } {}
 }
@@ -3569,7 +3693,7 @@ inline @ __fr_setpos s tp i v → v {
 // The ops beyond the original tier set: extend/wrap, select, and the
 // fused memory/f64 records the predecoder emits. Falls through to the
 // plain ALU emitter for everything else.
-@ __jit_ext ( Vec u ) buf ( Vec i ) pmap ( Vec i ) pins i npin ( Vec i ) xmap ( Vec i ) xpins ( Vec i ) cvals ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot ( Vec i ) auxv ( Vec i ) pta_off ( Vec i ) pta_stub i spcell i cofn i coenv i guard i xmmslot → v {
+@ __jit_ext ( Vec u ) buf ( Vec i ) pmap ( Vec i ) pins i npin ( Vec i ) xmap ( Vec i ) xpins ( Vec i ) cvals ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot ( Vec i ) auxv ( Vec i ) pta_off ( Vec i ) pta_stub i spcell i cofn i coenv i nsl9 i guard i xmmslot → v {
     ? == op 36 {  // i32.wrap_i64: dst = sign-extended low 32 of src
         ? == raxslot b { ( __jit_movslq buf ) } {  // rax already holds the slot
             : i pw ( __jit_pr pmap b )
@@ -3831,6 +3955,8 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax — keep ctx[4]'s upper bytes zero
         ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 71 ) ( __jit_b buf 32 )  // mov [rdi+32], rax
         ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf a )  // mov qword[rdi+56], dst slot
+        ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 139 ) ( __jit_d buf * nsl9 8 )  // lea rcx,[rbx+nslots*8]
+        ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 8 )  // mov [r8],rcx — the driver may run guest code above this frame
         ( __jit_inline_call buf pat_at pat_rec trap_rec 18 spcell cofn coenv )
         ( __jit_reload_pins buf pins 0 ) ( __jit_reload_xpins buf xpins )  // the dst slot may be pinned; memory is fresher
         ^ v
@@ -3870,6 +3996,8 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf b )  // mov qword[rdi+40], b
         ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf c )  // mov dword[rdi+56], srcbase
         ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 60 ) ( __jit_d buf d )  // mov dword[rdi+60], pops<<1|push
+        ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 139 ) ( __jit_d buf * nsl9 8 )  // lea rcx,[rbx+nslots*8]
+        ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 8 )  // mov [r8],rcx — the driver may run guest code above this frame
         ( __jit_inline_call buf pat_at pat_rec trap_rec 19 spcell cofn coenv )
         ( __jit_reload_pins buf pins 0 ) ( __jit_reload_xpins buf xpins )  // the dst slot may be pinned; memory is fresher
         ^ v
@@ -3882,6 +4010,8 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 71 ) ( __jit_b buf 32 )  // mov [rdi+32], rax
         ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf b )  // mov qword[rdi+40], argbase
         ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf a )  // mov qword[rdi+56], typeidx
+        ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 139 ) ( __jit_d buf * nsl9 8 )  // lea rcx,[rbx+nslots*8]
+        ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 8 )  // mov [r8],rcx — the driver may run guest code above this frame
         ( __jit_inline_call buf pat_at pat_rec trap_rec 17 spcell cofn coenv )
         ( __jit_reload_pins buf pins 0 ) ( __jit_reload_xpins buf xpins )  // result slots were written in memory
         ^ v
@@ -4324,15 +4454,15 @@ inline @ __fr_setpos s tp i v → v {
     ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
     ? == np 1 { ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 22 ) } {  // mov rdx,[rsi] — arg0
         ( __jit_b buf 15 ) ( __jit_b buf 31 ) ( __jit_b buf 0 ) }  // 3-byte nop
-    // Direct entry (offset 25):
+    ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 8 )  // mov rcx,[r8] — driver calls carry the frame base here
+    // Direct entry (offset 28):
     ( __jit_push_pins buf npin )
     ( __jit_b buf 83 )  // push rbx
     ( __jit_b buf 86 )  // push rsi (args pointer, read back at RET)
-    ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 24 )  // mov rbx,[r8] — frame base
+    ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 203 )  // mov rbx,rcx — the frame base rides the call in a register
     ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 139 ) ( __jit_d buf * . pf nslots 8 )  // lea rcx,[rbx+nslots*8]
     ( __jit_b buf 73 ) ( __jit_b buf 59 ) ( __jit_b buf 72 ) ( __jit_b buf 8 )  // cmp rcx,[r8+8] — slab end
-    ( __jit_jmp buf pat_at pat_rec 135 + n 3 )  // ja overflow stub (status 8, nothing allocated)
-    ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 8 )  // mov [r8],rcx — bump
+    ( __jit_jmp buf pat_at pat_rec 135 + n 3 )  // ja overflow stub (nothing allocated)
     // Small counts unroll to plain moves — `rep` has a fixed start-up
     // cost that dwarfs a couple of copies, and this runs per call.
     ? > np 0 {
@@ -4462,7 +4592,6 @@ inline @ __fr_setpos s tp i v → v {
                         }
                         ? != 0 hasup10 { ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 ) } {}  // mov r10,[rdi+16] — invariant back
                         ? != 0 hasup9 { ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 ) } {}  // mov r9,[rdi+24]
-                        ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 24 )  // mov [r8],rbx — free frame
                         ( __jit_retseq buf npin )
                     } {
                         ? == op 172 {  // unreachable → status 3, via the longjmp gate
@@ -4513,6 +4642,8 @@ inline @ __fr_setpos s tp i v → v {
                                             ? != 0 hasup9 { ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 ) } {}  // mov r9,[rdi+24]
                                             ( __jit_sync_xpins buf xpins )
                                             ? == op 210 {  // import: call the bridge closure inline — no parking
+                                                ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 139 ) ( __jit_d buf * . pf nslots 8 )  // lea rcx,[rbx+nslots*8]
+                                                ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 8 )  // mov [r8],rcx — the driver may run guest code
                                                 ( __jit_inline_callout buf pat_at pat_rec n a b 16 spcell cofn9 coenv9 npin )
                                                 ? != 0 pinw { ( __jit_reload_pins buf pins 0 ) } { ( __jit_reload_pins buf pins 4 ) }
                                                 ( __jit_reload_xpins buf xpins )
@@ -4532,6 +4663,7 @@ inline @ __fr_setpos s tp i v → v {
                                                         : *FuncType ctt9 # *FuncType ct9
                                                         ? == 1 ( vec_len [i] . ctt9 params ) { ( __jit_ldrdx_m buf pmap xmap cvals b raxslot ) } {}
                                                     } {}
+                                                    ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 139 ) ( __jit_d buf * . pf nslots 8 )  // lea rcx,[rbx+nslots*8] — the callee's frame base
                                                     : i fto + 16 * - a nimp 8  // anchor offset of ftab[di]
                                                     ? <= fto 127 { ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 64 ) ( __jit_b buf fto ) } {  // mov rax,[r8+fto]
                                                         ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 128 ) ( __jit_d buf fto ) }
@@ -4548,7 +4680,9 @@ inline @ __fr_setpos s tp i v → v {
                                                     ( vec_set [u] buf + jz_at 2 # u & ( __lshr64 - co_here + jz_at 4 16 ) 255 )
                                                     ( vec_set [u] buf + jz_at 3 # u & ( __lshr64 - co_here + jz_at 4 24 ) 255 )
                                                 } {}
-                                                // the bridge: uncompiled or slab-full callee runs via the driver
+                                                // the bridge: uncompiled or slab-full callee runs via the driver,
+                                                // which reads the slab top from the anchor — publish it first
+                                                ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 8 )  // mov [r8],rcx
                                                 ( __jit_inline_callout buf pat_at pat_rec n a b 16 spcell cofn9 coenv9 npin )
                                                 ? >= jok_at 0 {  // land the direct path's success jump here
                                                     : i after ( vec_len [u] buf )
@@ -4620,14 +4754,47 @@ inline @ __fr_setpos s tp i v → v {
                                                 } {
                                                     ? & >= op 56 <= op 75 {  // compare → 0/1 in dst
                                                         ( __jit_cmp buf pmap xmap cvals b c ? < op 66 1 0 raxslot )
-                                                        = g_jit_noax 0  // setcc/movzx below write rax whatever the compare did
-                                                        ( __jit_b buf 15 ) ( __jit_b buf ?? ( vec_get [i] ( __jit_settab ) % - op 56 10 ) { T x → x F → 148 } ) ( __jit_b buf 192 )  // setcc al
-                                                        ( __jit_b buf 15 ) ( __jit_b buf 182 ) ( __jit_b buf 192 )  // movzx eax,al
-                                                        ( __jit_strax_m buf pmap xmap cvals a )
+                                                        // Pre-scan the fused-SEL chain: when every consumer of the
+                                                        // 0/1 is a cmov on the live flags and the slot is dead
+                                                        // beyond the chain (overwritten before read on all paths),
+                                                        // the setcc/movzx/store materialisation is skipped.
+                                                        : ~ i pfr + r 1
+                                                        : ~ i pcnt 0
+                                                        : ~ i psrc 0
+                                                        : ~ i pgo 1
+                                                        ~ & != 0 pgo < pfr n {
+                                                            : i qbase * pfr 6
+                                                            : i qop ?? ( vec_get [i] code qbase ) { T x → x F → 0 }
+                                                            : i qa ?? ( vec_get [i] code + qbase 1 ) { T x → x F → 0 }
+                                                            : i qb ?? ( vec_get [i] code + qbase 2 ) { T x → x F → 0 }
+                                                            : i qc ?? ( vec_get [i] code + qbase 3 ) { T x → x F → 0 }
+                                                            : i qd ?? ( vec_get [i] code + qbase 4 ) { T x → x F → 0 }
+                                                            : i qt ?? ( vec_get [i] tgt pfr ) { T x → x F → 1 }
+                                                            = pgo 0
+                                                            ? & & == qop 46 == qd a == 0 qt {
+                                                                ? | == qb a == qc a { = psrc 1 } {}
+                                                                = pcnt + pcnt 1
+                                                                = pgo 1
+                                                                = pfr + pfr 1
+                                                                ? == qa a { = pgo 0 } {}
+                                                            } {}
+                                                        }
+                                                        : ~ i boolskip 0
+                                                        ? & & > pcnt 0 == 0 psrc != 0 ( __jit_slot_dead m auxe code n pfr a ) { = boolskip 1 } {}
+                                                        ? == 0 boolskip {
+                                                            = g_jit_noax 0  // setcc/movzx below write rax whatever the compare did
+                                                            ( __jit_b buf 15 ) ( __jit_b buf ?? ( vec_get [i] ( __jit_settab ) % - op 56 10 ) { T x → x F → 148 } ) ( __jit_b buf 192 )  // setcc al
+                                                            ( __jit_b buf 15 ) ( __jit_b buf 182 ) ( __jit_b buf 192 )  // movzx eax,al
+                                                            ( __jit_strax_m buf pmap xmap cvals a )
+                                                            = fseldst a  // rax holds the compare's 0/1
+                                                        } {
+                                                            // rax untouched: it still holds whatever the compare left
+                                                            = fseldst ? != 0 g_jit_noax raxslot b
+                                                            = g_jit_noax 0
+                                                        }
                                                         // setcc/movzx/mov leave the flags alone: a SEL right
                                                         // behind us keyed by this result can cmov on them and
                                                         // skip its own load-test round trip.
-                                                        = fseldst a  // rax holds the compare's 0/1; pin-direct SELs below leave it there
                                                         : ~ i fr + r 1
                                                         : ~ i fgo 1
                                                         ~ & != 0 fgo < fr n {
@@ -4737,7 +4904,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                                         ( __jit_b buf 59 ) ( __jit_b buf 131 ) ( __jit_d buf * rhs 8 ) } }  // cmp eax,[rbx+rhs]
                                                                             }
                                                                             ( __jit_jmp buf pat_at pat_rec ( __jit_jcc cctab cmpop ) / a 6 )
-                                                                        } { ( __jit_ext buf pmap pins npin xmap xpins cvals pat_at pat_rec n op a b c d w5 raxslot auxe pta_off pta_stub spcell cofn9 coenv9 guard xmmslot ) }
+                                                                        } { ( __jit_ext buf pmap pins npin xmap xpins cvals pat_at pat_rec n op a b c d w5 raxslot auxe pta_off pta_stub spcell cofn9 coenv9 . pf nslots guard xmmslot ) }
                                                                     }
                                                                 }
                                                             }
@@ -4967,9 +5134,9 @@ inline @ __fr_setpos s tp i v → v {
         // callers stop coming through this driver at all
         : s njh . pfc jit
         ? & != # i njh 0 != # i njh -1 {
-            // publish the DIRECT entry: page + the 25-byte driver preamble
+            // publish the DIRECT entry: page + the 28-byte driver preamble
             : *i ftw # *i + . it jit_spcell 16
-            = . ftw - callee . m num_import_funcs + # i njh 25
+            = . ftw - callee . m num_import_funcs + # i njh 28
         } {}
     } {}
     : s jh . pfc jit
@@ -5045,9 +5212,9 @@ inline @ __fr_setpos s tp i v → v {
             ( __jit_try it m pfj fidx )
             : s njh . pfj jit
             ? & != # i njh 0 != # i njh -1 {
-                // publish the DIRECT entry: page + the 25-byte driver preamble
+                // publish the DIRECT entry: page + the 28-byte driver preamble
                 : *i ftw2 # *i + . it jit_spcell 16
-                = . ftw2 - fidx . m num_import_funcs + # i njh 25
+                = . ftw2 - fidx . m num_import_funcs + # i njh 28
             } {}
         } {}
         : s jh . pfj jit
