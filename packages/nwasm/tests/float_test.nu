@@ -7,6 +7,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/ext/env.nu`
 $ `src/module.nu`
 $ `src/interp.nu`
 
@@ -62,6 +63,12 @@ $ `src/interp.nu`
 }
 
 @ main → i {
+    // Mirror the CLI's engine-mode switches so the suite exercises the
+    // same tier the user runs: JIT on by default, NURL_NWASM_JIT=0 keeps
+    // the pure interpreter, PIN=0 unpins, GUARD=0 keeps bounds checks.
+    ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} ( string_free jv ) } F → { ( interp_enable_jit ) } }
+    ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} ( string_free pv ) } F → {} }
+    ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} ( string_free gv ) } F → {} }
     // bit patterns: 1.5, 2.25, 3.75, 3.375, 2.0, sqrt2, 7.9, 7.0
     // f64.add(1.5, 2.25) → 3.75
     ( pi `fadd 1.5+2.25:  ` ( run2 ( wasm_fadd ) `fadd` 4609434218613702656 4612248968380809216 ) 4615626668101337088 )
