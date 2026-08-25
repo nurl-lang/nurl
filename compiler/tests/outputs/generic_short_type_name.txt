@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+len=2
+total=59950
+box=41
+box2=7
+done

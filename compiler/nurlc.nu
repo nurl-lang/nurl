@@ -21539,6 +21539,28 @@
     ? & >= c1 48 <= c1 57 { ^ T } { ^ F }
 }
 
+// is_abstract_tparam: `is_tparam_like`, corrected by what is actually in
+// scope. The shape test above cannot tell a still-abstract type parameter
+// from a CONCRETE user type that happens to be spelled like one — `P`,
+// `Q3` and `A1` are perfectly legal struct/enum names. Treating those as
+// abstract skipped the instantiation entirely, so `( Vec P )` referenced a
+// `%Vec__P` nothing ever defined and the user got `type 'Vec__P' has no
+// field 'ctl'` pointing into stdlib/core/vec.nu — a name-length-dependent
+// failure with no hint of the real cause.
+//
+// A declared struct or enum maps to `%Name` in `syms` (the pre-scan sets
+// it, before any instantiation runs), so a `%`-valued lookup means the
+// token names a real type and the instantiation must proceed. A genuine
+// tparam has no binding at all: inside a template body the substitution
+// has not happened yet, and at a nested instantiation site (`( Vec A )`
+// within a generic function) `A` is not a type in scope.
+@ is_abstract_tparam i syms s tok → b {
+    ? ! ( is_tparam_like tok ) { ^ F } {}
+    : s sv ( nurl_sym_get syms tok )
+    ? & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37 { ^ F } {}
+    ^ T
+}
+
 // __has_dunder: true if `str` contains "__" — the mark of a compiler-mangled
 // name (a generic instantiation like `Vec__i64`, an aliased import). Such
 // names are always compiler-produced, never a user-typed type name.
@@ -21650,12 +21672,15 @@
         // where A/B are still abstract. The concrete instantiation emerges
         // when the function is called with concrete type args at parse
         // time and re-enters scan_generic_structs / parse_type_paren.
+        // `is_abstract_tparam` (not the bare spelling test) so a concrete
+        // struct whose NAME is tparam-shaped — `: P { … }`, `( Vec P )` —
+        // instantiates like any other type argument.
         : ~ s ta_chk ( nurl_str_cat ta_list `` )
         : ~ b skip F
         ~ & != 0 ( nurl_str_len ta_chk ) ! skip {
             : s ta ( str_first_word ta_chk )
             = ta_chk ( str_skip_word ta_chk )
-            ? ( is_tparam_like ta ) { = skip T } {}
+            ? ( is_abstract_tparam syms ta ) { = skip T } {}
         }
         ? ! skip {
             // Compute mangled name by walking tparams + ta_list in parallel.
@@ -29076,6 +29101,16 @@
     ( nurl_print_buf_start )
     ? != g_dbg_enabled 0 { ( dbg_init path ) } {}
     ( init_syms syms )
+    // Type NAMES first: the generic-struct scan below has to tell a
+    // still-abstract type argument (`( Vec A )` inside a template) from a
+    // concrete one, and the only sound test is "is this name a type in
+    // scope?" — a spelling heuristic silently skipped `( Vec P )` for
+    // every struct whose name is one or two tparam-shaped characters.
+    // scan_type_names is purely lexical (registers `Name → %Name`, prints
+    // no IR), so running it first is free and changes nothing else.
+    : i lex_tn ( nurl_lex_new src path )
+    ( scan_type_names lex_tn syms )
+    ( nurl_lex_free lex_tn )
     : i lex0 ( nurl_lex_new src path )
     ( scan_generic_structs lex0 syms )
     ( nurl_lex_free lex0 )
@@ -29091,9 +29126,6 @@
     // Every impl across the program is now registered — enforce that each
     // implemented subtrait's supertraits are implemented for the same type.
     ( verify_super_obligations )
-    : i lex_tn ( nurl_lex_new src path )
-    ( scan_type_names lex_tn syms )
-    ( nurl_lex_free lex_tn )
     // Dynamic trait objects (docs/spec.md §4.9): collect every trait used as a
     // `%Trait` object (body-aware, after __istrait markers exist) and emit the
     // `%dyn.<T>` fat-pointer type defs + synthesized Drop functions at module
