@@ -20,6 +20,17 @@ name: fuzz
 #      finding.
 # Any finding fails the run and uploads the reproducer inputs as artifacts.
 #
+# Findings are SHRUNK before they are filed: tools/fuzz/reduce.py deletes
+# statements while the same failure survives, so the artifact carries a
+# `*.min.nu` of a few dozen lines beside the full 150–400-line seed. The
+# property is fingerprinted from the original failure (normalised error
+# message / ASan report kind / the specific expectation that disagreed) so the
+# reducer cannot drift onto an unrelated breakage of its own making.
+#
+# Every knob the legs take is a workflow_dispatch input. `seed_start` is the
+# one worth moving: a weekly run pinned at seed 1 re-tests the same programs
+# forever, while walking the start covers ground no run has seen.
+#
 # Every run also renders FUZZRESULTS.md (tools/fuzz/report.py) and commits it
 # to main — the same publish-the-evidence flow bench.yml uses for RESULTS.md —
 # so the repo always carries the latest fuzzing status + the curated findings
@@ -39,6 +50,27 @@ on:
       parser_iters:
         description: 'parser fuzzer: iterations per RNG seed'
         default: '4000'
+      # A weekly run that starts at seed 1 re-tests the same programs every
+      # week. Moving the start walks the corpus into ground no run has
+      # covered; keeping it pinned re-tests a range a finding came from.
+      seed_start:
+        description: 'first seed for both differential legs'
+        default: '1'
+      struct_stmts:
+        description: 'structural: statements per program (breadth per seed)'
+        default: '14'
+      struct_depth:
+        description: 'structural: expression depth'
+        default: '3'
+      san_every:
+        description: 'sanitize every Nth structural seed (0 = off)'
+        default: '5'
+      wasm_every:
+        description: 'run every Nth seed on wasm32-wasi (0 = off)'
+        default: '5'
+      reduce_tests:
+        description: 'reducer budget per finding, in compiles (0 = no reduction)'
+        default: '400'
 
 concurrency:
   group: fuzz-${{ github.ref }}
@@ -88,17 +120,32 @@ jobs:
           echo "FUZZ_WASMBUILDER=$RUNNER_TEMP/wasmbuilder" >> "$GITHUB_ENV"
 
       - name: Differential miscompile fuzzer (integer)
+        env:
+          SEED_START: ${{ github.event.inputs.seed_start || '1' }}
+          SEEDS: ${{ github.event.inputs.diff_seeds || '1500' }}
+          WASM_EVERY: ${{ github.event.inputs.wasm_every || '5' }}
+          REDUCE_TESTS: ${{ github.event.inputs.reduce_tests || '400' }}
         run: |
-          FUZZ_WASM_EVERY=10 \
+          FUZZ_WASM_EVERY=$(( WASM_EVERY == 0 ? 0 : WASM_EVERY * 2 )) \
+          FUZZ_REDUCE_TESTS="$REDUCE_TESTS" \
           FUZZ_SUMMARY="$RUNNER_TEMP/fuzz-summaries/int.json" \
-            ./tools/fuzz/fuzz.sh 1 "${{ github.event.inputs.diff_seeds || '1500' }}"
+            ./tools/fuzz/fuzz.sh "$SEED_START" "$SEEDS"
 
       - name: Differential miscompile fuzzer (structural + sanitizer leg)
         if: success() || failure()          # run even if the int leg found something
+        env:
+          SEED_START: ${{ github.event.inputs.seed_start || '1' }}
+          SEEDS: ${{ github.event.inputs.struct_seeds || '600' }}
+          STMTS: ${{ github.event.inputs.struct_stmts || '14' }}
+          DEPTH: ${{ github.event.inputs.struct_depth || '3' }}
+          SAN_EVERY: ${{ github.event.inputs.san_every || '5' }}
+          WASM_EVERY: ${{ github.event.inputs.wasm_every || '5' }}
+          REDUCE_TESTS: ${{ github.event.inputs.reduce_tests || '400' }}
         run: |
-          FUZZ_GEN=struct FUZZ_SAN_EVERY=5 FUZZ_WASM_EVERY=5 \
+          FUZZ_GEN=struct FUZZ_SAN_EVERY="$SAN_EVERY" FUZZ_WASM_EVERY="$WASM_EVERY" \
+          FUZZ_REDUCE_TESTS="$REDUCE_TESTS" \
           FUZZ_SUMMARY="$RUNNER_TEMP/fuzz-summaries/struct.json" \
-            ./tools/fuzz/fuzz.sh 1 "${{ github.event.inputs.struct_seeds || '600' }}" 14 3
+            ./tools/fuzz/fuzz.sh "$SEED_START" "$SEEDS" "$STMTS" "$DEPTH"
 
       - name: Parser fuzzer (ASan + UBSan)
         if: success() || failure()

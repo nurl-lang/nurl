@@ -62,9 +62,10 @@ def norm_ty(ty):
 
 
 class Prog:
-    def __init__(self, rng, depth):
+    def __init__(self, rng, depth, selfcheck=False):
         self.rng = rng
         self.depth = depth
+        self.selfcheck = selfcheck
         self.lines = []           # main body source lines
         self.decls = []           # top-level declaration lines
         self.out = []             # expected stdout lines (hex16)
@@ -75,6 +76,8 @@ class Prog:
         self.enums = []           # (ename, [(vname, [ptypes])])
         self.drop_used = False
         self.drops = 0            # oracle count of fired %Drop destructors
+        self.once = set()         # one-shot declaration blocks already emitted
+        self.traits = []          # (trait, method, default, [(struct, fty, field)])
 
     # ── plumbing ─────────────────────────────────────────────────
 
@@ -112,8 +115,23 @@ class Prog:
                  ">=": va >= vb, "==": va == vb, "!=": va != vb}[op]
         return f"{op} {a.render()} {b.render()}", truth
 
+    def chk(self, node_render, value_bits, cast=True):
+        """The rendered observation call for one value.
+
+        Normal mode prints the 64-bit pattern and `fuzz.sh` compares the
+        whole stdout against the separately-generated oracle. Self-check mode
+        carries the expectation INSIDE the program as a 16-hex-digit string
+        literal and compares there — which is what makes the reducer sound:
+        deleting a line cannot invalidate the checks that remain, the way
+        deleting a line would desynchronise an external oracle."""
+        bits = value_bits & ((1 << 64) - 1)
+        wide = f"# i64 {node_render}" if cast else node_render
+        if self.selfcheck:
+            return f"( fzchk {wide} `{bits:016x}` )"
+        return f"( phex {wide} )"
+
     def phex(self, node_render, value_bits):
-        self.emit(f"    ( phex # i64 {node_render} )")
+        self.emit("    " + self.chk(node_render, value_bits))
         self.expect_i64_bits(value_bits)
 
     # ── features ─────────────────────────────────────────────────
@@ -370,15 +388,93 @@ class Prog:
             x.value = arg
             self.phex(f"( {f} {arg} )", to_u64_bits(body.eval(), "i64"))
 
+    def stmt_nested_closure(self):
+        """A closure literal inside a closure literal, and a closure that owns
+        a `% Drop` value of its own while one is live in the frame around it.
+
+        The lifted-function boundary is where ownership bookkeeping goes
+        wrong: the outer frame's rosters were visible inside the closure body
+        until 2026-08-26, so its `^` dropped values belonging to its caller.
+        Nesting asks the same question one level deeper, and the `% Drop`
+        variant asks whether the closure's OWN values still get released."""
+        f = self.fresh("nc")
+        inner = self.fresh("ni")
+        k = self.rng.randrange(1 << 20)
+        m = self.rng.randint(2, 7)
+        own_drop = self.drop_used and self.rng.random() < 0.5
+        body = [f"        : ( @ i i ) {inner} \\ i y → i {{ ^ * y {m} }}"]
+        if own_drop:
+            h = self.fresh("nh")
+            body.append(f"        : DH {h} @ DH {{ x }}")
+        body.append(f"        ^ + ( {inner} x ) {k}")
+        self.emit(f"    : ( @ i i ) {f} \\ i x → i {{")
+        self.lines.extend(body)
+        self.emit("    }")
+        for _ in range(self.rng.randint(1, 2)):
+            arg = self.rng.randrange(1 << 24)
+            self.phex(f"( {f} {arg} )", to_u64_bits(wrap(arg * m + k, "i64"), "i64"))
+            if own_drop:
+                self.drops += 1
+
+    def stmt_early_return(self):
+        """A helper that returns from INSIDE a loop with owned values live.
+
+        `^` is not the block's normal exit: it skips the code the
+        fall-through would have run, so the compiler has to emit the whole
+        drop sequence — for the loop body's values AND the function's — at
+        the return. One value is created before the loop and one per
+        iteration, so the oracle knows exactly how many destructors must
+        have fired by the time control leaves."""
+        if not self.drop_used:
+            self.stmt_helper_call()          # nothing to count without % Drop
+            return
+        fn = self.fresh("erf")
+        n = self.rng.randint(2, 7)
+        thr = self.rng.randint(1, n + 1)     # > n means "never taken"
+        bonus = self.rng.randrange(1 << 16)
+        self.decls += [
+            f"@ {fn} i seed → i {{",
+            "    : DH outer @ DH { seed }",
+            "    : ~ i acc seed",
+            "    : ~ i k 0",
+            f"    ~ < k {n} {{",
+            "        = k + k 1",
+            "        : DH inner @ DH { k }",
+            f"        ? == k {thr} {{ ^ + acc {bonus} }} {{}}",
+            "        = acc + acc k",
+            "    }",
+            "    ^ acc",
+            "}",
+        ]
+        seed = self.rng.randrange(1 << 20)
+        acc = seed
+        fired = 1                            # `outer`, on whichever exit
+        for k in range(1, n + 1):
+            fired += 1                       # `inner`, this iteration
+            if k == thr:
+                acc = wrap(acc + bonus, "i64")
+                break
+            acc = wrap(acc + k, "i64")
+        self.drops += fired
+        # Bind before observing: the call has SIDE EFFECTS (each invocation
+        # fires its destructors), so a leaf that re-renders as the call would
+        # run it again every time an expression tree picked it up and the
+        # drop count would stop matching.
+        rv = self.fresh("er")
+        self.emit(f"    : i {rv} ( {fn} {seed} )")
+        self.phex(rv, to_u64_bits(acc, "i64"))
+        self.env.append(Var("i64", rv, acc))
+
     def stmt_defer(self):
         lit = self.rng.randrange(1 << 32)
+        call = self.chk(str(lit), lit, cast=False)
         if self.rng.random() < 0.6:
-            self.emit(f"    ; {{ ( phex {lit} ) }}")
+            self.emit(f"    ; {{ {call} }}")
             self.deferred.append(lit)
         else:
             # defer inside a conditional arm: armed iff the arm runs
             crender, truth = self.cond()
-            self.emit(f"    ? {crender} {{ ; {{ ( phex {lit} ) }} }} {{}}")
+            self.emit(f"    ? {crender} {{ ; {{ {call} }} }} {{}}")
             if truth:
                 self.deferred.append(lit)
 
@@ -485,6 +581,307 @@ class Prog:
         self.phex(r, to_u64_bits(val, ty))
         self.env.append(Var(ty, r, val))
 
+    # ── generics ─────────────────────────────────────────────────
+
+    def decl_generics(self):
+        """Generic functions + a generic struct, declared once per program.
+
+        `Q7` is a CONCRETE struct whose name is deliberately spelled like a
+        type parameter. Instantiation used to be decided by spelling, so
+        `( GBox Q7 )` was skipped as "still abstract" and the program died
+        on a `%GBox__Q7` nothing defined — a failure that depended on the
+        length of the user's own type name (fixed 2026-08-25)."""
+        if "gen" in self.once:
+            return
+        self.once.add("gen")
+        self.decls += [
+            ": Q7 { i8 qa  u16 qb }",
+            ": GBox [T] { T slot }",
+            "@ g_id [T] T x → T { ^ x }",
+            "@ g_add [T] T a T b → T { ^ + a b }",
+            "@ g_div [T] T a T b → T { ^ / a b }",
+            "@ g_shr [T] T a T b → T { ^ >> a b }",
+            "@ g_box [T] T x → ( GBox T ) { ^ @ ( GBox T ) { x } }",
+        ]
+
+    def stmt_generic(self):
+        """A generic call or generic-struct instantiation at a random type.
+
+        The type argument decides signedness AFTER monomorphisation, which
+        is the interesting part: `g_div` must pick sdiv for `[i8]` and udiv
+        for `[u]` from the same template body."""
+        self.decl_generics()
+        kind = self.rng.choice(["id", "add", "div", "shr", "box", "qbox"])
+        if kind == "qbox":
+            a = self.rng.randrange(1 << 8)
+            b = self.rng.randrange(1 << 16)
+            gb = self.fresh("gq")
+            self.emit(f"    : ( GBox Q7 ) {gb} "
+                      f"( g_box [Q7] @ Q7 {{ # i8 {a} # u16 {b} }} )")
+            self.phex(f". . {gb} slot qa", to_u64_bits(wrap(a, "i8"), "i8"))
+            self.phex(f". . {gb} slot qb", to_u64_bits(wrap(b, "u16"), "u16"))
+            return
+        ty = self.rng.choice(INT_PAYLOADS)
+        w, _signed = TYPES[ty]
+        a = Lit(ty, self.rng.randrange(1 << min(w, 62)))
+        if kind == "id":
+            self.phex(f"( g_id [{ty}] {a.render()} )", to_u64_bits(a.eval(), ty))
+            return
+        if kind == "box":
+            gb = self.fresh("gb")
+            self.emit(f"    : ( GBox {ty} ) {gb} ( g_box [{ty}] {a.render()} )")
+            self.phex(f". {gb} slot", to_u64_bits(a.eval(), ty))
+            self.env.append(gen.FieldRead(ty, gb, "slot", a.eval()))
+            return
+        if kind == "div":
+            # A small POSITIVE divisor in every type: no /0, and no
+            # INT_MIN/-1 (the one signed division that traps).
+            b = Lit(ty, self.rng.randint(1, min(9, (1 << w) - 1)))
+        elif kind == "shr":
+            b = Lit(ty, self.rng.randrange(w))       # shift amount < width
+        else:
+            b = Lit(ty, self.rng.randrange(1 << min(w, 62)))
+        op = {"add": "+", "div": "/", "shr": ">>"}[kind]
+        node = Bin(ty, op, a, b)
+        self.phex(f"( g_{kind} [{ty}] {a.render()} {b.render()} )",
+                  to_u64_bits(node.eval(), ty))
+
+    # ── option / result ──────────────────────────────────────────
+
+    def stmt_option(self):
+        """`?T` construction, `??` destructure, and a stdlib combinator."""
+        fn = self.fresh("optf")
+        thr = self.rng.randrange(1 << 16)
+        self.decls.append(
+            f"@ {fn} i n → ?i {{ ? > n {thr} "
+            f"{{ ^ @ ?i {{ T * n 3 }} }} {{ ^ @ ?i {{ F 0 }} }} }}")
+        arg = self.rng.randrange(1 << 17)
+        alt = self.rng.randrange(1 << 20)
+        ov = self.fresh("ov")
+        bnd = self.fresh("ob")
+        res = self.fresh("orv")
+        self.emit(f"    : ?i {ov} ( {fn} {arg} )")
+        self.emit(f"    : i {res} ?? {ov} {{")
+        self.emit(f"        T {bnd} → * {bnd} 2")
+        self.emit(f"        F      → {alt}")
+        self.emit("    }")
+        val = wrap(arg * 3 * 2, "i64") if arg > thr else alt
+        self.phex(res, to_u64_bits(val, "i64"))
+        self.env.append(Var("i64", res, val))
+        d = self.rng.randrange(1 << 20)
+        got = wrap(arg * 3, "i64") if arg > thr else d
+        self.phex(f"( opt_unwrap_or [i] ( {fn} {arg} ) {d} )",
+                  to_u64_bits(got, "i64"))
+
+    def stmt_result(self):
+        """`!T E` through a `\\` try-propagation chain, then destructured.
+
+        The propagating wrapper is the point: the Err path has to return
+        early out of the middle of a function whose own Ok payload is built
+        afterwards."""
+        fn = self.fresh("resf")
+        use = self.fresh("resu")
+        thr = self.rng.randrange(1 << 16)
+        k = self.rng.randrange(1 << 10)
+        self.decls.append(
+            f"@ {fn} i n → !i i {{ ? > n {thr} "
+            f"{{ ^ @ !i i {{ T * n 2 }} }} {{ ^ @ !i i {{ F - 0 n }} }} }}")
+        self.decls.append(
+            f"@ {use} i n → !i i {{ : i q \\ ( {fn} n )  ^ @ !i i {{ T + q {k} }} }}")
+        arg = self.rng.randrange(1 << 17)
+        rv = self.fresh("rv")
+        ok = self.fresh("rok")
+        er = self.fresh("rer")
+        out = self.fresh("rout")
+        self.emit(f"    : !i i {rv} ( {use} {arg} )")
+        self.emit(f"    : i {out} ?? {rv} {{")
+        self.emit(f"        T {ok} → {ok}")
+        self.emit(f"        F {er} → {er}")
+        self.emit("    }")
+        val = wrap(arg * 2 + k, "i64") if arg > thr else wrap(-arg, "i64")
+        self.phex(out, to_u64_bits(val, "i64"))
+        self.env.append(Var("i64", out, val))
+
+    # ── traits ───────────────────────────────────────────────────
+
+    def decl_trait(self):
+        """A trait with one required method and one default, implemented for
+        two or three structs of different field types, plus a bounded
+        generic that reaches the default through the bound."""
+        n = len(self.traits) + 1
+        tr, m1, m2 = f"Tr{n}", f"tm{n}base", f"tm{n}scaled"
+        impls = []
+        self.decls.append(f"% {tr} [T] {{")
+        self.decls.append(f"    @ {m1} T self → i")
+        self.decls.append(f"    @ {m2} T self i k → i {{ ^ * ( {m1} self ) k }}")
+        self.decls.append("}")
+        for j in range(self.rng.randint(2, 3)):
+            sname, fty, fld = f"{tr}S{j}", self.rng.choice(INT_PAYLOADS), f"fv{j}"
+            self.decls.append(f": {sname} {{ {fty} {fld} }}")
+            impls.append((sname, fty, fld))
+        for sname, fty, fld in impls:
+            read = f". self {fld}" if fty == "i64" else f"# i . self {fld}"
+            self.decls.append(
+                f"% {tr} {sname} {{ @ {m1} {sname} self → i {{ ^ {read} }} }}")
+        self.decls.append(
+            f"@ {tr}_via [X: {tr}] X x i k → i {{ ^ ( {m2} x k ) }}")
+        self.traits.append((tr, m1, m2, impls))
+
+    def stmt_trait(self):
+        if not self.traits or self.rng.random() < 0.5:
+            self.decl_trait()
+        tr, m1, m2, impls = self.rng.choice(self.traits)
+        sname, fty, _fld = self.rng.choice(impls)
+        w, _ = TYPES[fty]
+        val = wrap(self.rng.randrange(1 << min(w, 62)), fty)
+        inst = self.fresh("ti")
+        self.emit(f"    : {sname} {inst} @ {sname} {{ # {fty} {val & ((1 << w) - 1)} }}")
+        base = to_u64_bits(val, fty)              # widened per the field's sign
+        self.phex(f"( {m1} {inst} )", base)
+        k = self.rng.randrange(1 << 12)
+        widened = wrap(val, fty) if TYPES[fty][1] else val & ((1 << w) - 1)
+        scaled = to_u64_bits(wrap(widened * k, "i64"), "i64")
+        self.phex(f"( {m2} {inst} {k} )", scaled)          # default method
+        self.phex(f"( {tr}_via [{sname}] {inst} {k} )", scaled)  # via the bound
+
+    # ── nested aggregates ────────────────────────────────────────
+
+    def decl_nested(self):
+        if "nest" in self.once:
+            return
+        self.once.add("nest")
+        self.decls += [
+            ": NIn { i8 nx  u16 ny }",
+            ": NOut { NIn ninner  i32 nz }",
+            ": | NShape {",
+            "    NPt NIn",
+            "    NSeg NIn NIn",
+            "    NNil",
+            "}",
+        ]
+
+    def _nin(self):
+        """One `NIn` literal + its (nx, ny) oracle values."""
+        a, b = self.rng.randrange(1 << 8), self.rng.randrange(1 << 16)
+        return f"@ NIn {{ # i8 {a} # u16 {b} }}", wrap(a, "i8"), b & 0xffff
+
+    def stmt_nested(self):
+        """A struct inside a struct, and a struct as an enum payload —
+        aggregates whose members are themselves aggregates, read through a
+        two-hop `. . o inner field` path and through match bindings."""
+        self.decl_nested()
+        lit, nx, ny = self._nin()
+        c = self.rng.randrange(1 << 32)
+        o = self.fresh("no")
+        self.emit(f"    : NOut {o} @ NOut {{ {lit} # i32 {c} }}")
+        self.phex(f". . {o} ninner nx", to_u64_bits(nx, "i8"))
+        self.phex(f". . {o} ninner ny", to_u64_bits(ny, "u16"))
+        self.phex(f". {o} nz", to_u64_bits(wrap(c, "i32"), "i32"))
+        self.env.append(Var("i64", f"# i . {o} nz", wrap(c, "i32")))
+
+        which = self.rng.choice(["NPt", "NSeg", "NNil"])
+        ev = self.fresh("ns")
+        if which == "NPt":
+            l1, x1, y1 = self._nin()
+            self.emit(f"    : NShape {ev} @ NShape {{ NPt {l1} }}")
+            val = wrap(x1 + y1, "i64")
+        elif which == "NSeg":
+            l1, x1, y1 = self._nin()
+            l2, x2, y2 = self._nin()
+            self.emit(f"    : NShape {ev} @ NShape {{ NSeg {l1} {l2} }}")
+            val = wrap(x1 + y1 + x2 + y2, "i64")
+        else:
+            self.emit(f"    : NShape {ev} @ NShape {{ NNil }}")
+            val = 0
+        rv = self.fresh("nm")
+        self.emit(f"    : i {rv} ?? {ev} {{")
+        self.emit("        NPt np1        → + # i . np1 nx # i . np1 ny")
+        self.emit("        NSeg np1 np2   → + + # i . np1 nx # i . np1 ny "
+                  "+ # i . np2 nx # i . np2 ny")
+        self.emit("        NNil           → 0")
+        self.emit("    }")
+        self.phex(rv, to_u64_bits(val, "i64"))
+        self.env.append(Var("i64", rv, val))
+
+    # ── loop control ─────────────────────────────────────────────
+
+    def stmt_loopctl(self):
+        """A loop whose body jumps: `continue` on one predicate, `break` on
+        another, over both loop forms. A `% Drop` value built at the top of
+        the body must be released exactly once on every path out — the
+        jump skips the block's own cleanup, so the jump has to emit it."""
+        n = self.rng.randint(2, 9)
+        skip = self.rng.randint(1, 4)
+        stop = self.rng.randint(1, n + 2)
+        acc = self.fresh("lacc")
+        drop_here = self.drop_used and self.rng.random() < 0.5
+        self.emit(f"    : ~ i {acc} 0")
+        if self.rng.random() < 0.5:
+            xs = self.fresh("lxs")
+            self.emit(f"    : [i {xs} [ i | {' '.join(str(e) for e in range(1, n + 1))} ]")
+            var = self.fresh("lel")
+            self.emit(f"    ~ {var} {xs} {{")
+        else:
+            var = self.fresh("lk")
+            self.emit(f"    : ~ i {var} 0")
+            self.emit(f"    ~ < {var} {n} {{")
+            self.emit(f"        = {var} + {var} 1")
+        if drop_here:
+            h = self.fresh("lh")
+            self.emit(f"        : DH {h} @ DH {{ {var} }}")
+        self.emit(f"        ? == % {var} {skip} 0 {{ continue }} {{}}")
+        self.emit(f"        ? == {var} {stop} {{ break }} {{}}")
+        self.emit(f"        = {acc} + {acc} {var}")
+        self.emit("    }")
+        total = 0
+        for k in range(1, n + 1):
+            if drop_here:
+                self.drops += 1
+            if k % skip == 0:
+                continue
+            if k == stop:
+                break
+            total = wrap(total + k, "i64")
+        self.phex(acc, to_u64_bits(total, "i64"))
+        self.env.append(Var("i64", acc, total))
+
+    # ── containers of aggregates ─────────────────────────────────
+
+    def stmt_vec_struct(self):
+        """A Vec and a slice whose ELEMENT is a struct — the generic
+        instantiation, the element-sized GEP, and the by-value load out of
+        `vec_get`'s `?A` all at once."""
+        self.decl_generics()
+        items = [(self.rng.randrange(1 << 8), self.rng.randrange(1 << 16))
+                 for _ in range(self.rng.randint(1, 4))]
+        total = 0
+        for a, b in items:
+            total = wrap(total + wrap(a, "i8") + (b & 0xffff), "i64")
+
+        if self.rng.random() < 0.5:
+            vv = self.fresh("vq")
+            self.emit(f"    : ( Vec Q7 ) {vv} ( vec_new [Q7] )")
+            for a, b in items:
+                self.emit(f"    ( vec_push [Q7] {vv} @ Q7 {{ # i8 {a} # u16 {b} }} )")
+            self.phex(f"( vec_len [Q7] {vv} )", len(items))
+            sm, j, e = self.fresh("vs"), self.fresh("vj"), self.fresh("ve")
+            self.emit(f"    : ~ i {sm} 0")
+            self.emit(f"    : ~ i {j} 0")
+            self.emit(f"    ~ < {j} ( vec_len [Q7] {vv} ) {{")
+            self.emit(f"        : Q7 {e} ( opt_unwrap [Q7] ( vec_get [Q7] {vv} {j} ) )")
+            self.emit(f"        = {sm} + {sm} + # i . {e} qa # i . {e} qb")
+            self.emit(f"        = {j} + {j} 1")
+            self.emit("    }")
+            self.emit(f"    ( vec_free [Q7] {vv} )")
+        else:
+            xs, sm, e = self.fresh("sq"), self.fresh("ss"), self.fresh("se")
+            lits = " ".join(f"@ Q7 {{ # i8 {a} # u16 {b} }}" for a, b in items)
+            self.emit(f"    : [Q7 {xs} [ Q7 | {lits} ]")
+            self.emit(f"    : ~ i {sm} 0")
+            self.emit(f"    ~ {e} {xs} {{ = {sm} + {sm} + # i . {e} qa # i . {e} qb }}")
+        self.phex(sm, to_u64_bits(total, "i64"))
+        self.env.append(Var("i64", sm, total))
+
 
 def to_i64(bits, ty):
     """Widen a non-negative bit pattern of type ty to its i64 value."""
@@ -496,12 +893,39 @@ FEATURES = [
     ("while", 2), ("foreach", 2), ("closure", 2), ("defer", 2),
     ("drop_scope", 2), ("string", 2), ("vec", 1), ("helper_call", 2),
     ("recursion", 1), ("ternary", 2),
+    # The second wave: the surface the first wave never reached.
+    ("generic", 3), ("option", 2), ("result", 2), ("trait", 2),
+    ("nested", 3), ("loopctl", 2), ("vec_struct", 2),
+    ("nested_closure", 2), ("early_return", 2),
 ]
 
 
-def build(seed, n_stmts, depth):
+SELFCHECK_PRELUDE = """\
+// Self-check mode: the program carries its own expectations, so a reducer
+// may delete any line without desynchronising the rest. Exit status is
+// nonzero iff some observation disagreed with what the generator computed.
+: ~ i g_fail 0
+
+@ fzchk i v s want → v {
+    : String hs ( string_new )
+    : ~ i k 15
+    ~ >= k 0 {
+        ( string_push_char hs ( hexd & 15 >> v * k 4 ) )
+        = k - k 1
+    }
+    ? ( nurl_str_eq ( string_data hs ) want ) {} {
+        = g_fail + g_fail 1
+        ( nurl_print `MISMATCH got=` ) ( nurl_print ( string_data hs ) )
+        ( nurl_print ` want=` ) ( nurl_print want ) ( nurl_print `\\n` )
+    }
+    ( string_free hs )
+}
+"""
+
+
+def build(seed, n_stmts, depth, selfcheck=False):
     rng = random.Random(seed)
-    p = Prog(rng, depth)
+    p = Prog(rng, depth, selfcheck)
     weighted = [name for name, w in FEATURES for _ in range(w)]
     # decide up front whether %Drop is in play so the decls exist
     p.drop_used = rng.random() < 0.6
@@ -523,6 +947,8 @@ def emit_program(p):
     out.append("$ `stdlib/core/vec.nu`")
     out.append("$ `stdlib/core/option.nu`")
     out.append("")
+    if p.selfcheck:
+        out.append(SELFCHECK_PRELUDE)
     if p.drop_used:
         out.append(": ~ i g_drops 0")
         out.append("")
@@ -533,7 +959,7 @@ def emit_program(p):
     out.append("")
     out.append("@ main → i {")
     out.extend(p.lines)
-    out.append("    ^ 0")
+    out.append("    ^ ? != g_fail 0 1 0" if p.selfcheck else "    ^ 0")
     out.append("}")
     return "\n".join(out) + "\n"
 
@@ -545,7 +971,8 @@ def emit_oracle(p):
 def main():
     args = sys.argv[1:]
     if not args:
-        sys.exit("usage: genprog.py SEED [--oracle] [--stmts N] [--depth D]")
+        sys.exit("usage: genprog.py SEED [--oracle] [--selfcheck] "
+                 "[--stmts N] [--depth D]")
     seed = int(args[0])
     n_stmts = 14
     depth = 3
@@ -553,7 +980,7 @@ def main():
         n_stmts = int(args[args.index("--stmts") + 1])
     if "--depth" in args:
         depth = int(args[args.index("--depth") + 1])
-    p = build(seed, n_stmts, depth)
+    p = build(seed, n_stmts, depth, selfcheck="--selfcheck" in args)
     sys.stdout.write(emit_oracle(p) if "--oracle" in args else emit_program(p))
 
 

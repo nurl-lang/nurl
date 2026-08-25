@@ -29,10 +29,14 @@ FAMILY_DESC = {
     "differential-struct":
         "`genprog.py` — whole structural programs (enums with N-ary mixed "
         "payloads, match guards/or-patterns/literal constraints, struct "
-        "field writes, closures, while/foreach, defer, `% Drop`, "
-        "string/Vec/slice ownership, helper calls, recursion) with a "
-        "statement-level oracle; `-O0` vs `-O2` vs oracle, plus an "
-        "ASan+LSan leg and a wasm32-wasi/wasmtime leg on sampled seeds",
+        "field writes, nested aggregates and struct-payload enums, generic "
+        "functions and generic structs, `?T` / `!T E` with `\\` "
+        "propagation, traits with default methods and bounds, closures, "
+        "while/foreach with `break`/`continue`, defer, `% Drop`, "
+        "string/Vec/slice ownership incl. containers of structs, helper "
+        "calls, recursion) with a statement-level oracle; `-O0` vs `-O2` vs "
+        "oracle, plus an ASan+LSan leg and a wasm32-wasi/wasmtime leg on "
+        "sampled seeds",
     "parser-mutational":
         "`fuzz_parsers.py` — mutated inputs for the untrusted-input "
         "parsers (x509/DER, cbor, msgpack, json, yaml, xml, toml) against "
@@ -111,6 +115,18 @@ def main():
     a("ASan/LSan/UBSan report. Reproducers are")
     a("uploaded as workflow artifacts and land in `tools/fuzz/failures/`.")
     a("")
+    a("Every finding is **shrunk before it is filed**: `tools/fuzz/reduce.py`")
+    a("deletes statements while the same failure survives, so the artifact")
+    a("carries a `*.min.nu` of a few dozen lines next to the full seed. The")
+    a("property it reduces against is fingerprinted from the original failure")
+    a("(the normalised error message, the ASan report kind, or the specific")
+    a("expectation that disagreed), so the reducer cannot drift onto an")
+    a("unrelated breakage it introduced itself. Oracle mismatches reduce")
+    a("through `genprog.py --selfcheck`, which puts each expected value inside")
+    a("the program next to the expression that produces it — the external")
+    a("oracle file cannot survive line deletion, and a self-checking program")
+    a("can.")
+    a("")
     a("## Findings log — real bugs the fuzzers have caught")
     a("")
     a("| date | family | severity | finding | status |")
@@ -126,6 +142,10 @@ def main():
     a("FUZZ_GEN=struct FUZZ_SAN_EVERY=5 FUZZ_WASM_EVERY=5 \\")
     a("    tools/fuzz/fuzz.sh 1 300 14 3               # structural + sanitizer + wasm legs")
     a("tools/fuzz/fuzz_parsers.sh 1 4000 8             # parser mutational")
+    a("")
+    a("# reproduce and shrink one seed by hand")
+    a("python3 tools/fuzz/genprog.py 684 --selfcheck > bug.nu")
+    a("tools/fuzz/reduce.py bug.nu --mode check -o bug.min.nu")
     a("```")
     a("")
 

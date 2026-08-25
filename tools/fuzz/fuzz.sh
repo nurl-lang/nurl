@@ -65,6 +65,68 @@ case "$GEN_KIND" in
 esac
 
 mkdir -p "$FAILDIR"
+
+# reduce_finding SEED REASON PROGRAM — shrink a finding to a reproducer a
+# human can read. A raw seed is 150–400 lines across a dozen unrelated
+# features and the bug is usually two of them interacting; working out which
+# two by hand costs more than the fix does. tools/fuzz/reduce.py deletes
+# statements while the failure survives, so what lands in failures/ is the
+# small program, next to the full one.
+#
+# The property has to survive line deletion or the reducer converges on a
+# different bug, so the mode is chosen from the reason:
+#
+#   build failure     → the program does not compile (no oracle needed)
+#   nonzero exit      → it compiles and exits nonzero (likewise)
+#   sanitizer leg     → an ASan/LSan/UBSan report under NURL_SAN=1
+#   oracle mismatch   → regenerate the seed with --selfcheck, which puts the
+#                       expected value INSIDE the program next to the
+#                       expression that produces it. Deleting a line then
+#                       cannot desynchronise the checks that remain, which
+#                       is exactly what deleting a line from the external
+#                       oracle file would do.
+#
+# The wasm leg is not reduced: its property needs wasmbuilder + wasmtime in
+# the loop, so those findings keep the full program only. FUZZ_REDUCE=0 turns
+# reduction off; FUZZ_REDUCE_TESTS bounds the compile budget per finding.
+REDUCE="${FUZZ_REDUCE:-1}"
+REDUCE_TESTS="${FUZZ_REDUCE_TESTS:-400}"
+
+reduce_finding() {
+    local seed="$1" reason="$2" prog="$3" opt="${4:--O0}"
+    # Either knob turns reduction off; a zero budget means "don't", not
+    # "unbounded" (reduce.py's own --max-tests 0 is the unbounded spelling,
+    # which is not a thing to hand a CI job).
+    [[ "$REDUCE" == "0" || "$REDUCE_TESTS" == "0" ]] && return 0
+    local base="$FAILDIR/${GEN_KIND}_seed_${seed}"
+    local mode="" src="$prog"
+    case "$reason" in
+        *"BUILD FAIL"*|*"build fail"*) mode="build" ;;
+        *"nonzero exit"*)              mode="crash" ;;
+        *"sanitizer leg"*)             mode="sanitize" ;;
+        *"wasm leg"*)                  return 0 ;;
+        *"oracle"*)
+            if [[ "$GEN_KIND" == "struct" ]]; then
+                mode="check"
+                src="$TMP/selfcheck.nu"
+                python3 "$GEN" "$seed" $SIZE_FLAG "$EXPRS" --depth "$DEPTH" \
+                    --selfcheck > "$src" 2>/dev/null || return 0
+            else
+                # gen.py has no --selfcheck; an expression-tree finding is
+                # reducible only when the two opt levels disagree with each
+                # other, which needs no oracle at all.
+                mode="diverge"
+            fi
+            ;;
+        *) return 0 ;;
+    esac
+    echo "  reducing (mode=$mode) …"
+    python3 "$ROOT/tools/fuzz/reduce.py" "$src" --mode "$mode" --opt "$opt" \
+        --max-tests "$REDUCE_TESTS" -o "${base}.min.nu" --quiet >/dev/null 2>&1 \
+        && echo "  → ${base}.min.nu ($(grep -c '' "${base}.min.nu") lines)" \
+        || echo "  → not reducible under mode=$mode (kept the full program)"
+}
+
 pass=0
 fail=0
 buildfail=0
@@ -107,11 +169,13 @@ for seed in $(seq "$START" "$end"); do
     if ! "$NURL" -O0 "$prog" "$TMP/o0" >"$TMP/b0.log" 2>&1; then
         echo "SEED $seed [$GEN_KIND]: -O0 BUILD FAIL"; buildfail=$((buildfail+1))
         cp "$prog" "$FAILDIR/${GEN_KIND}_seed_${seed}_buildfail.nu"; cp "$TMP/b0.log" "$FAILDIR/${GEN_KIND}_seed_${seed}_build.log"
+        reduce_finding "$seed" "BUILD FAIL" "$prog"
         continue
     fi
     if ! "$NURL" -O2 "$prog" "$TMP/o2" >"$TMP/b2.log" 2>&1; then
         echo "SEED $seed [$GEN_KIND]: -O2 BUILD FAIL"; buildfail=$((buildfail+1))
         cp "$prog" "$FAILDIR/${GEN_KIND}_seed_${seed}_buildfail.nu"; cp "$TMP/b2.log" "$FAILDIR/${GEN_KIND}_seed_${seed}_build.log"
+        reduce_finding "$seed" "BUILD FAIL" "$prog" -O2
         continue
     fi
 
@@ -170,6 +234,7 @@ for seed in $(seq "$START" "$end"); do
         cp "$TMP/out0" "$FAILDIR/${GEN_KIND}_seed_${seed}.out0" 2>/dev/null
         cp "$TMP/out2" "$FAILDIR/${GEN_KIND}_seed_${seed}.out2" 2>/dev/null
         diff "$exp" "$TMP/out0" > "$FAILDIR/${GEN_KIND}_seed_${seed}.diff_o0" 2>&1
+        reduce_finding "$seed" "$reason" "$prog"
     fi
 done
 
