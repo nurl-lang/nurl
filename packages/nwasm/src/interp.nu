@@ -3569,7 +3569,7 @@ inline @ __fr_setpos s tp i v → v {
 // The ops beyond the original tier set: extend/wrap, select, and the
 // fused memory/f64 records the predecoder emits. Falls through to the
 // plain ALU emitter for everything else.
-@ __jit_ext ( Vec u ) buf ( Vec i ) pmap ( Vec i ) pins i npin ( Vec i ) xmap ( Vec i ) xpins ( Vec i ) cvals ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot ( Vec i ) auxv ( Vec i ) pta_off ( Vec i ) pta_stub i spcell i cofn i coenv i guard i xmmslot → v {
+@ __jit_ext ( Vec u ) buf ( Vec i ) pmap ( Vec i ) pins i npin ( Vec i ) xmap ( Vec i ) xpins ( Vec i ) cvals ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot ( Vec i ) auxv ( Vec i ) pta_off ( Vec i ) pta_stub i spcell i cofn i coenv i nsl9 i guard i xmmslot → v {
     ? == op 36 {  // i32.wrap_i64: dst = sign-extended low 32 of src
         ? == raxslot b { ( __jit_movslq buf ) } {  // rax already holds the slot
             : i pw ( __jit_pr pmap b )
@@ -3831,6 +3831,8 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax — keep ctx[4]'s upper bytes zero
         ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 71 ) ( __jit_b buf 32 )  // mov [rdi+32], rax
         ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf a )  // mov qword[rdi+56], dst slot
+        ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 139 ) ( __jit_d buf * nsl9 8 )  // lea rcx,[rbx+nslots*8]
+        ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 8 )  // mov [r8],rcx — the driver may run guest code above this frame
         ( __jit_inline_call buf pat_at pat_rec trap_rec 18 spcell cofn coenv )
         ( __jit_reload_pins buf pins 0 ) ( __jit_reload_xpins buf xpins )  // the dst slot may be pinned; memory is fresher
         ^ v
@@ -3870,6 +3872,8 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf b )  // mov qword[rdi+40], b
         ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf c )  // mov dword[rdi+56], srcbase
         ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 60 ) ( __jit_d buf d )  // mov dword[rdi+60], pops<<1|push
+        ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 139 ) ( __jit_d buf * nsl9 8 )  // lea rcx,[rbx+nslots*8]
+        ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 8 )  // mov [r8],rcx — the driver may run guest code above this frame
         ( __jit_inline_call buf pat_at pat_rec trap_rec 19 spcell cofn coenv )
         ( __jit_reload_pins buf pins 0 ) ( __jit_reload_xpins buf xpins )  // the dst slot may be pinned; memory is fresher
         ^ v
@@ -3882,6 +3886,8 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 71 ) ( __jit_b buf 32 )  // mov [rdi+32], rax
         ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf b )  // mov qword[rdi+40], argbase
         ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf a )  // mov qword[rdi+56], typeidx
+        ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 139 ) ( __jit_d buf * nsl9 8 )  // lea rcx,[rbx+nslots*8]
+        ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 8 )  // mov [r8],rcx — the driver may run guest code above this frame
         ( __jit_inline_call buf pat_at pat_rec trap_rec 17 spcell cofn coenv )
         ( __jit_reload_pins buf pins 0 ) ( __jit_reload_xpins buf xpins )  // result slots were written in memory
         ^ v
@@ -4324,15 +4330,15 @@ inline @ __fr_setpos s tp i v → v {
     ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
     ? == np 1 { ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 22 ) } {  // mov rdx,[rsi] — arg0
         ( __jit_b buf 15 ) ( __jit_b buf 31 ) ( __jit_b buf 0 ) }  // 3-byte nop
-    // Direct entry (offset 25):
+    ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 8 )  // mov rcx,[r8] — driver calls carry the frame base here
+    // Direct entry (offset 28):
     ( __jit_push_pins buf npin )
     ( __jit_b buf 83 )  // push rbx
     ( __jit_b buf 86 )  // push rsi (args pointer, read back at RET)
-    ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 24 )  // mov rbx,[r8] — frame base
+    ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 203 )  // mov rbx,rcx — the frame base rides the call in a register
     ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 139 ) ( __jit_d buf * . pf nslots 8 )  // lea rcx,[rbx+nslots*8]
     ( __jit_b buf 73 ) ( __jit_b buf 59 ) ( __jit_b buf 72 ) ( __jit_b buf 8 )  // cmp rcx,[r8+8] — slab end
-    ( __jit_jmp buf pat_at pat_rec 135 + n 3 )  // ja overflow stub (status 8, nothing allocated)
-    ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 8 )  // mov [r8],rcx — bump
+    ( __jit_jmp buf pat_at pat_rec 135 + n 3 )  // ja overflow stub (nothing allocated)
     // Small counts unroll to plain moves — `rep` has a fixed start-up
     // cost that dwarfs a couple of copies, and this runs per call.
     ? > np 0 {
@@ -4462,7 +4468,6 @@ inline @ __fr_setpos s tp i v → v {
                         }
                         ? != 0 hasup10 { ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 ) } {}  // mov r10,[rdi+16] — invariant back
                         ? != 0 hasup9 { ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 ) } {}  // mov r9,[rdi+24]
-                        ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 24 )  // mov [r8],rbx — free frame
                         ( __jit_retseq buf npin )
                     } {
                         ? == op 172 {  // unreachable → status 3, via the longjmp gate
@@ -4513,6 +4518,8 @@ inline @ __fr_setpos s tp i v → v {
                                             ? != 0 hasup9 { ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 ) } {}  // mov r9,[rdi+24]
                                             ( __jit_sync_xpins buf xpins )
                                             ? == op 210 {  // import: call the bridge closure inline — no parking
+                                                ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 139 ) ( __jit_d buf * . pf nslots 8 )  // lea rcx,[rbx+nslots*8]
+                                                ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 8 )  // mov [r8],rcx — the driver may run guest code
                                                 ( __jit_inline_callout buf pat_at pat_rec n a b 16 spcell cofn9 coenv9 npin )
                                                 ? != 0 pinw { ( __jit_reload_pins buf pins 0 ) } { ( __jit_reload_pins buf pins 4 ) }
                                                 ( __jit_reload_xpins buf xpins )
@@ -4532,6 +4539,7 @@ inline @ __fr_setpos s tp i v → v {
                                                         : *FuncType ctt9 # *FuncType ct9
                                                         ? == 1 ( vec_len [i] . ctt9 params ) { ( __jit_ldrdx_m buf pmap xmap cvals b raxslot ) } {}
                                                     } {}
+                                                    ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 139 ) ( __jit_d buf * . pf nslots 8 )  // lea rcx,[rbx+nslots*8] — the callee's frame base
                                                     : i fto + 16 * - a nimp 8  // anchor offset of ftab[di]
                                                     ? <= fto 127 { ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 64 ) ( __jit_b buf fto ) } {  // mov rax,[r8+fto]
                                                         ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 128 ) ( __jit_d buf fto ) }
@@ -4548,7 +4556,9 @@ inline @ __fr_setpos s tp i v → v {
                                                     ( vec_set [u] buf + jz_at 2 # u & ( __lshr64 - co_here + jz_at 4 16 ) 255 )
                                                     ( vec_set [u] buf + jz_at 3 # u & ( __lshr64 - co_here + jz_at 4 24 ) 255 )
                                                 } {}
-                                                // the bridge: uncompiled or slab-full callee runs via the driver
+                                                // the bridge: uncompiled or slab-full callee runs via the driver,
+                                                // which reads the slab top from the anchor — publish it first
+                                                ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 8 )  // mov [r8],rcx
                                                 ( __jit_inline_callout buf pat_at pat_rec n a b 16 spcell cofn9 coenv9 npin )
                                                 ? >= jok_at 0 {  // land the direct path's success jump here
                                                     : i after ( vec_len [u] buf )
@@ -4737,7 +4747,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                                         ( __jit_b buf 59 ) ( __jit_b buf 131 ) ( __jit_d buf * rhs 8 ) } }  // cmp eax,[rbx+rhs]
                                                                             }
                                                                             ( __jit_jmp buf pat_at pat_rec ( __jit_jcc cctab cmpop ) / a 6 )
-                                                                        } { ( __jit_ext buf pmap pins npin xmap xpins cvals pat_at pat_rec n op a b c d w5 raxslot auxe pta_off pta_stub spcell cofn9 coenv9 guard xmmslot ) }
+                                                                        } { ( __jit_ext buf pmap pins npin xmap xpins cvals pat_at pat_rec n op a b c d w5 raxslot auxe pta_off pta_stub spcell cofn9 coenv9 . pf nslots guard xmmslot ) }
                                                                     }
                                                                 }
                                                             }
@@ -4967,9 +4977,9 @@ inline @ __fr_setpos s tp i v → v {
         // callers stop coming through this driver at all
         : s njh . pfc jit
         ? & != # i njh 0 != # i njh -1 {
-            // publish the DIRECT entry: page + the 25-byte driver preamble
+            // publish the DIRECT entry: page + the 28-byte driver preamble
             : *i ftw # *i + . it jit_spcell 16
-            = . ftw - callee . m num_import_funcs + # i njh 25
+            = . ftw - callee . m num_import_funcs + # i njh 28
         } {}
     } {}
     : s jh . pfc jit
@@ -5045,9 +5055,9 @@ inline @ __fr_setpos s tp i v → v {
             ( __jit_try it m pfj fidx )
             : s njh . pfj jit
             ? & != # i njh 0 != # i njh -1 {
-                // publish the DIRECT entry: page + the 25-byte driver preamble
+                // publish the DIRECT entry: page + the 28-byte driver preamble
                 : *i ftw2 # *i + . it jit_spcell 16
-                = . ftw2 - fidx . m num_import_funcs + # i njh 25
+                = . ftw2 - fidx . m num_import_funcs + # i njh 28
             } {}
         } {}
         : s jh . pfj jit
