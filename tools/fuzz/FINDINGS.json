@@ -3,6 +3,34 @@
   "findings": [
     {
       "date": "2026-08-26",
+      "family": "reject-inverse",
+      "title": "Borrow-checker blind spot: a definite double free inside a closure body was accepted — one flag meant both 'this belongs to the closure' and 'record nothing', so the checker was off for everything written in a closure. The body now gets its own recording context and its own analyze pass",
+      "severity": "unsoundness",
+      "status": "fixed (borrow_closure_body_double_free)"
+    },
+    {
+      "date": "2026-08-26",
+      "family": "reject-inverse",
+      "title": "Borrow-checker blind spot: a definite double free inside a `??` arm was accepted — arms were a state-preserving black box because payload bindings have no `let` row. Each arm is now walked from an EMPTY state, so only arm-local bindings are tracked and nothing can be conflated",
+      "severity": "unsoundness",
+      "status": "fixed (borrow_match_arm_double_free)"
+    },
+    {
+      "date": "2026-08-26",
+      "family": "reject-inverse",
+      "title": "A generic named `[T]` has its VALUE-position `T` — the boolean literal — rewritten by monomorphisation, so `? T { … }` becomes `? i { … }` and the instantiation fails against source nobody wrote. The diagnostic now names the collision",
+      "severity": "diagnostic",
+      "status": "fixed (diag_generic_tparam_bool_name); the underlying lexer ambiguity remains"
+    },
+    {
+      "date": "2026-08-26",
+      "family": "hand-probe",
+      "title": "A nested field could be READ but not WRITTEN: `= . . o inner x v` died with \"cannot assign to a field of ''\" because the object of a nested path is a by-value register, not a binding with an alloca. The chain is now walked by address",
+      "severity": "language-gap",
+      "status": "fixed (nested_field_store)"
+    },
+    {
+      "date": "2026-08-26",
       "family": "differential-struct",
       "title": "A closure body emitted the ENCLOSING frame's drop battery: a `^`-bodied closure literal written after an owned value (`% Drop`, String, owned struct field) ended the lifted function with `load %DH, %DH* %r2` against an alloca that only exists in the caller — invalid IR at best, use-after-scope plus a double drop had the register resolved",
       "severity": "miscompile",

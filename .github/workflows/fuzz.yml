@@ -14,6 +14,12 @@ name: fuzz
 #      (packages/wasmbuilder + reference wasmtime) — a third independent
 #      execution environment against the same oracle, catching
 #      target-dependent codegen (32-bit pointers, i64 payload slots).
+#   2b. INVERSE oracle (FUZZ_GEN=reject, tools/fuzz/genreject.py): programs
+#      that are ownership violations by construction, crossed with every
+#      context the language offers. The compiler must reject each one, with
+#      the diagnostic that violation deserves. A missed rejection is the one
+#      failure mode nothing else catches — the program compiles, runs, and
+#      corrupts the heap.
 #   3. mutational parser fuzzer (tools/fuzz/fuzz_parsers.sh): mutate seeds for
 #      the untrusted-input parsers (x509/DER, cbor, msgpack, json, yaml, xml,
 #      toml) against an ASan+UBSan harness; any crash / OOB / UB / hang is a
@@ -71,6 +77,12 @@ on:
       reduce_tests:
         description: 'reducer budget per finding, in compiles (0 = no reduction)'
         default: '400'
+      reject_seeds:
+        description: 'inverse oracle: number of must-be-rejected programs'
+        default: '400'
+      reject_depth:
+        description: 'inverse oracle: max nested contexts around the violation'
+        default: '3'
 
 concurrency:
   group: fuzz-${{ github.ref }}
@@ -146,6 +158,23 @@ jobs:
           FUZZ_REDUCE_TESTS="$REDUCE_TESTS" \
           FUZZ_SUMMARY="$RUNNER_TEMP/fuzz-summaries/struct.json" \
             ./tools/fuzz/fuzz.sh "$SEED_START" "$SEEDS" "$STMTS" "$DEPTH"
+
+      - name: Inverse oracle (programs the compiler MUST reject)
+        if: success() || failure()
+        # The other legs emit VALID programs and ask whether the answer is
+        # right. This one emits ownership violations by construction and asks
+        # whether they are caught — the question a borrow checker is actually
+        # judged on, and the only one whose failures are silent (the program
+        # compiles, runs, and corrupts the heap). No sanitizer or wasm leg:
+        # nothing here is meant to run.
+        env:
+          SEED_START: ${{ github.event.inputs.seed_start || '1' }}
+          SEEDS: ${{ github.event.inputs.reject_seeds || '400' }}
+          DEPTH: ${{ github.event.inputs.reject_depth || '3' }}
+        run: |
+          FUZZ_GEN=reject \
+          FUZZ_SUMMARY="$RUNNER_TEMP/fuzz-summaries/reject.json" \
+            ./tools/fuzz/fuzz.sh "$SEED_START" "$SEEDS" 0 "$DEPTH"
 
       - name: Parser fuzzer (ASan + UBSan)
         if: success() || failure()

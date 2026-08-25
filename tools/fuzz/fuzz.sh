@@ -61,8 +61,71 @@ RUN_TIMEOUT="${FUZZ_RUN_TIMEOUT:-40}"
 case "$GEN_KIND" in
     int)    GEN="$ROOT/tools/fuzz/gen.py";     SIZE_FLAG="--exprs" ;;
     struct) GEN="$ROOT/tools/fuzz/genprog.py"; SIZE_FLAG="--stmts" ;;
-    *) echo "fuzz.sh: unknown FUZZ_GEN '$GEN_KIND' (int|struct)" >&2; exit 2 ;;
+    reject) GEN="$ROOT/tools/fuzz/genreject.py"; SIZE_FLAG="" ;;
+    *) echo "fuzz.sh: unknown FUZZ_GEN '$GEN_KIND' (int|struct|reject)" >&2; exit 2 ;;
 esac
+
+# ── the INVERSE oracle ───────────────────────────────────────────────
+# FUZZ_GEN=reject flips the contract. The other two generators emit VALID
+# programs and ask whether the answer is right; this one emits programs that
+# are ownership violations by construction and asks whether they are caught.
+# A missed rejection is silent — the program compiles, runs and corrupts the
+# heap — so nothing but a deliberate hunt finds it, and the two holes this
+# found (a `??` arm and a closure body) had both been silent for as long as
+# the constructs existed.
+#
+# The oracle is a diagnostic MARKER, not an output: the compile must fail and
+# the message must be the one this violation deserves. Rejecting it for an
+# unrelated reason does not count as catching it — that would let a syntax
+# error in the generator pass for a working checker.
+if [[ "$GEN_KIND" == "reject" ]]; then
+    end=$((START + COUNT - 1))
+    caught=0
+    missed=0
+    for seed in $(seq "$START" "$end"); do
+        prog="$TMP/r.nu"
+        python3 "$GEN" "$seed" --depth "$DEPTH" > "$prog"
+        marker="$(python3 "$GEN" "$seed" --oracle)"
+        out="$("$NURL" -O0 "$prog" "$TMP/r.bin" 2>&1)"
+        if grep -qF "$marker" <<<"$out"; then
+            caught=$((caught+1))
+        else
+            missed=$((missed+1))
+            if grep -qE "^[^ ]*error:" <<<"$out" || grep -q "error:" <<<"$out"; then
+                echo "SEED $seed [reject]: FINDING — rejected, but not as '$marker'"
+            else
+                echo "SEED $seed [reject]: FINDING — ACCEPTED an invalid program (want '$marker')"
+            fi
+            cp "$prog" "$FAILDIR/reject_seed_${seed}.nu"
+            printf '%s\n' "$marker" > "$FAILDIR/reject_seed_${seed}.marker"
+            printf '%s\n' "$out"    > "$FAILDIR/reject_seed_${seed}.log"
+        fi
+    done
+    echo "─────────────────────────────────────────"
+    echo "[reject] seeds $START..$end   caught=$caught findings=$missed"
+    if [[ -n "$SUMMARY" ]]; then
+        mkdir -p "$(dirname "$SUMMARY")"
+        cat > "$SUMMARY" <<JSON
+{
+  "family": "reject-inverse",
+  "generator": "genreject.py",
+  "seed_start": $START,
+  "seed_count": $COUNT,
+  "size": $COUNT,
+  "depth": $DEPTH,
+  "pass": $caught,
+  "findings": $missed,
+  "buildfail": 0,
+  "san_runs": 0,
+  "san_findings": 0,
+  "wasm_runs": 0,
+  "wasm_findings": 0
+}
+JSON
+    fi
+    [[ $missed -eq 0 ]]
+    exit $?
+fi
 
 mkdir -p "$FAILDIR"
 

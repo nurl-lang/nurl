@@ -37,6 +37,15 @@ FAMILY_DESC = {
         "calls, recursion) with a statement-level oracle; `-O0` vs `-O2` vs "
         "oracle, plus an ASan+LSan leg and a wasm32-wasi/wasmtime leg on "
         "sampled seeds",
+    "reject-inverse":
+        "`genreject.py` — the inverse oracle: programs that are ownership "
+        "violations by construction (alias double free, use after move, "
+        "loop-carried free, iterator invalidation), crossed with every "
+        "context the language offers (`?` arms, loops, foreach, bare "
+        "blocks, defers, `??` arms, helpers, generic bodies, trait methods, "
+        "closure bodies) and nested. Each MUST be rejected, with the "
+        "diagnostic that violation deserves — a program that compiles, or "
+        "one rejected for an unrelated reason, is the finding",
     "parser-mutational":
         "`fuzz_parsers.py` — mutated inputs for the untrusted-input "
         "parsers (x509/DER, cbor, msgpack, json, yaml, xml, toml) against "
@@ -94,6 +103,11 @@ def main():
         if fam.startswith("parser"):
             cfg = f"iters={r.get('size')} rng-seed={r.get('seed_start')}"
             execs = r.get("size", 0)
+        elif fam == "reject-inverse":
+            cfg = (f"seeds {r.get('seed_start')}–"
+                   f"{r.get('seed_start', 1) + r.get('seed_count', 0) - 1}, "
+                   f"depth={r.get('depth')}")
+            execs = r.get("seed_count", 0)
         else:
             cfg = (f"seeds {r.get('seed_start')}–"
                    f"{r.get('seed_start', 1) + r.get('seed_count', 0) - 1}, "
@@ -114,6 +128,10 @@ def main():
     a("(always-valid) program, a nonzero exit, a hang, or an")
     a("ASan/LSan/UBSan report. Reproducers are")
     a("uploaded as workflow artifacts and land in `tools/fuzz/failures/`.")
+    a("")
+    a("The inverse family reads the other way round: its programs are invalid")
+    a("by construction, so a **compile that succeeds** is the finding, as is a")
+    a("rejection carrying the wrong diagnostic.")
     a("")
     a("Every finding is **shrunk before it is filed**: `tools/fuzz/reduce.py`")
     a("deletes statements while the same failure survives, so the artifact")
@@ -141,6 +159,7 @@ def main():
     a("tools/fuzz/fuzz.sh 1 500                        # integer differential")
     a("FUZZ_GEN=struct FUZZ_SAN_EVERY=5 FUZZ_WASM_EVERY=5 \\")
     a("    tools/fuzz/fuzz.sh 1 300 14 3               # structural + sanitizer + wasm legs")
+    a("FUZZ_GEN=reject tools/fuzz/fuzz.sh 1 400 0 3   # inverse oracle")
     a("tools/fuzz/fuzz_parsers.sh 1 4000 8             # parser mutational")
     a("")
     a("# reproduce and shrink one seed by hand")
