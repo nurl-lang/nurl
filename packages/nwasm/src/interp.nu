@@ -2824,6 +2824,22 @@ inline @ __fr_setpos s tp i v → v {
     ( __jit_ldrcx buf s )
 }
 
+// rdx ← slot s (the direct-call argument register; raxslot-aware)
+@ __jit_ldrdx_m ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i s i raxslot → v {
+    ? == raxslot s { ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 194 ) ^ v } {}  // mov rdx,rax
+    : i p ( __jit_pr pmap s )
+    ? >= p 0 { ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf + 208 p ) ^ v } {}  // mov rdx,r1X
+    ? == p -2 {
+        : i cv ( __jit_cv cvals s )
+        ? & >= cv 0 <= cv 4294967295 { ( __jit_b buf 186 ) ( __jit_d buf cv ) ^ v } {}  // mov edx,imm32
+        ? != 0 ( __jit_imm32 cv ) { ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 194 ) ( __jit_d buf cv ) ^ v } {}
+        ( __jit_b buf 72 ) ( __jit_b buf 186 ) ( __jit_q buf cv ) ^ v  // movabs rdx,imm64
+    } {}
+    : i x ( __jit_xr xmap s )
+    ? >= x 0 { ( __jit_b buf 102 ) ( __jit_b buf 76 ) ( __jit_b buf 15 ) ( __jit_b buf 126 ) ( __jit_b buf + 194 * x 8 ) ^ v } {}  // movq rdx,xmm8+x
+    ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 147 ) ( __jit_d buf * s 8 )  // mov rdx,[rbx+s*8]
+}
+
 @ __jit_strax_m ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i s → v {
     : i p ( __jit_pr pmap s )
     ? >= p 0 { ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf + 192 p ) ^ v } {}  // mov r1X,rax
@@ -4263,12 +4279,18 @@ inline @ __fr_setpos s tp i v → v {
     // Driver entry (page base): establish the invariant registers —
     // r8 = the anchor block, r11/r10/r9 = memory base/bytes/globals.
     // A direct JIT-to-JIT call inherits all four and enters at the
-    // fixed 22-byte offset just past them (the ftab publishers add it).
+    // fixed 25-byte offset just past them (the ftab publishers add it).
+    // A one-parameter function additionally takes arg0 in rdx on the
+    // direct path — one store-forward hop less on a recursion's
+    // critical path — so the driver preamble loads rdx from the args
+    // pointer; other arities pad, keeping the direct offset uniform.
     ( __jit_b buf 73 ) ( __jit_b buf 184 ) ( __jit_q buf spcell )  // movabs r8, anchor
     ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 95 ) ( __jit_b buf 8 )  // mov r11,[rdi+8]
     ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 )  // mov r10,[rdi+16]
     ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
-    // Direct entry (offset 22):
+    ? == np 1 { ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 22 ) } {  // mov rdx,[rsi] — arg0
+        ( __jit_b buf 15 ) ( __jit_b buf 31 ) ( __jit_b buf 0 ) }  // 3-byte nop
+    // Direct entry (offset 25):
     ( __jit_push_pins buf npin )
     ( __jit_b buf 83 )  // push rbx
     ( __jit_b buf 86 )  // push rsi (args pointer, read back at RET)
@@ -4280,20 +4302,23 @@ inline @ __fr_setpos s tp i v → v {
     // Small counts unroll to plain moves — `rep` has a fixed start-up
     // cost that dwarfs a couple of copies, and this runs per call.
     ? > np 0 {
-        ? <= np 4 {
-            : ~ i pk 0
-            ~ < pk np {
-                ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 134 ) ( __jit_d buf * pk 8 )  // mov rax,[rsi+k*8]
-                ( __jit_strax buf pk )
-                = pk + pk 1
-            }
+        ? == np 1 {
+            ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 19 )  // mov [rbx],rdx — arg0 came in a register
         } {
-            ( __jit_b buf 87 )  // push rdi
-            ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 223 )  // mov rdi,rbx
-            ( __jit_b buf 185 ) ( __jit_d buf np )  // mov ecx, nparams
-            ( __jit_b buf 243 ) ( __jit_b buf 72 ) ( __jit_b buf 165 )  // rep movsq — params from [rsi]
-            ( __jit_b buf 95 )  // pop rdi
-        }
+            ? <= np 4 {
+                : ~ i pk 0
+                ~ < pk np {
+                    ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 134 ) ( __jit_d buf * pk 8 )  // mov rax,[rsi+k*8]
+                    ( __jit_strax buf pk )
+                    = pk + pk 1
+                }
+            } {
+                ( __jit_b buf 87 )  // push rdi
+                ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 223 )  // mov rdi,rbx
+                ( __jit_b buf 185 ) ( __jit_d buf np )  // mov ecx, nparams
+                ( __jit_b buf 243 ) ( __jit_b buf 72 ) ( __jit_b buf 165 )  // rep movsq — params from [rsi]
+                ( __jit_b buf 95 )  // pop rdi
+            } }
     } {}
     ? > nl np {
         ( __jit_b buf 49 ) ( __jit_b buf 192 )  // xor eax,eax
@@ -4434,6 +4459,13 @@ inline @ __fr_setpos s tp i v → v {
                                             : ~ i skip_at -1
                                             : ~ i jok_at -1
                                             ? & == op 50 >= a nimp {
+                                                // a one-parameter callee takes arg0 in rdx on the direct
+                                                // path (the memory copy still backs the call-out fallback)
+                                                : s ct9 ( module_func_type m a )
+                                                ? != # i ct9 0 {
+                                                    : *FuncType ctt9 # *FuncType ct9
+                                                    ? == 1 ( vec_len [i] . ctt9 params ) { ( __jit_ldrdx_m buf pmap xmap cvals b raxslot ) } {}
+                                                } {}
                                                 : i fto + 16 * - a nimp 8  // anchor offset of ftab[di]
                                                 ? <= fto 127 { ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 64 ) ( __jit_b buf fto ) } {  // mov rax,[r8+fto]
                                                     ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 128 ) ( __jit_d buf fto ) }
@@ -4935,9 +4967,9 @@ inline @ __fr_setpos s tp i v → v {
         // callers stop coming through this driver at all
         : s njh . pfc jit
         ? & != # i njh 0 != # i njh -1 {
-            // publish the DIRECT entry: page + the 22-byte driver preamble
+            // publish the DIRECT entry: page + the 25-byte driver preamble
             : *i ftw # *i + . it jit_spcell 16
-            = . ftw - callee . m num_import_funcs + # i njh 22
+            = . ftw - callee . m num_import_funcs + # i njh 25
         } {}
     } {}
     : s jh . pfc jit
@@ -5013,9 +5045,9 @@ inline @ __fr_setpos s tp i v → v {
             ( __jit_try it m pfj )
             : s njh . pfj jit
             ? & != # i njh 0 != # i njh -1 {
-                // publish the DIRECT entry: page + the 22-byte driver preamble
+                // publish the DIRECT entry: page + the 25-byte driver preamble
                 : *i ftw2 # *i + . it jit_spcell 16
-                = . ftw2 - fidx . m num_import_funcs + # i njh 22
+                = . ftw2 - fidx . m num_import_funcs + # i njh 25
             } {}
         } {}
         : s jh . pfj jit
