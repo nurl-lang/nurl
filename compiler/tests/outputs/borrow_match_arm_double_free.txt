@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_match_arm_double_free.nu:60: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 59 by an alias copy. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+            ( vec_free [i] a )
+compiler/tests/borrow_match_arm_double_free.nu:71: error: use of moved value 'c' — a heap handle has exactly one owner, and this one was consumed at line 70 by an alias copy. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+            ( vec_free [i] c )
+error: compilation aborted — 2 borrow-checker violations (re-run with --no-borrowck to bypass)
