@@ -50,6 +50,24 @@ $ `prompt.nu`
     String env  // environment-variable fallback (empty = none)
 }
 
+// Passed to every command handler; wraps the parsed args plus a back-ref to
+// the Cli so accessors can resolve env fallbacks and defaults.
+//
+// Declared BEFORE CliCmd on purpose. CliCmd's `handler` field is a function
+// type taking a CliCtx BY VALUE, and nurlc emits `%Name = type` as it parses,
+// so declaration order here IS emission order in the .ll. Some LLVM IR
+// parsers reject a forward-referenced named struct in that position with
+// "invalid type for function argument" — observed on Windows, where moving
+// this below CliCmd fails every binary that links cli. clang 18 on Linux
+// accepts the forward reference, so the ordering is belt-and-braces there
+// rather than load-bearing; keep it anyway, it costs nothing and the
+// by-pointer back-ref to Cli below stays legal in either direction.
+: CliCtx {
+    ArgParser parser
+    * Cli cli
+    String cmdname
+}
+
 : CliCmd {
     String name
     String help
@@ -62,14 +80,6 @@ $ `prompt.nu`
     String version
     ( Vec CliFlag ) globals
     ( Vec CliCmd ) cmds
-}
-
-// Passed to every command handler; wraps the parsed args plus a back-ref to
-// the Cli so accessors can resolve env fallbacks and defaults.
-: CliCtx {
-    ArgParser parser
-    * Cli cli
-    String cmdname
 }
 
 // ── Colour (decided once per run: stdout is a TTY and $NO_COLOR unset) ──

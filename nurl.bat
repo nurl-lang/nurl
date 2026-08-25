@@ -284,6 +284,97 @@ if not errorlevel 1 (
     )
 )
 
+REM ── Auto-link the CUDA Driver API + NVRTC ────────────────────
+REM Mirrors nurl.sh §"Auto-link the CUDA Driver API (libcuda) and NVRTC".
+REM packages\gpu binds the driver (& `cuda` @ cu…) and NVRTC
+REM (& `nvrtc` @ nvrtc…) directly, with no runtime.c bridge, so those ~40
+REM symbols must come from somewhere at link time or lld reports every one
+REM as undefined. Two sources:
+REM   - a CUDA Toolkit (cuda.lib + nvrtc.lib under %CUDA_PATH%\lib\x64) —
+REM     GPU compute runs for real. Both are needed: packages\gpu has no
+REM     precompiled kernels, it feeds CUDA-C through NVRTC at runtime
+REM     (cuda_compile → PTX/CUBIN → cuModuleLoadData), so the driver alone
+REM     buys nothing. The driver's own nvcuda.dll is NOT a substitute: it
+REM     ships no NVRTC, and its export directory names itself
+REM     `nvcuda_loader.dll`, so linking the DLL directly yields an import of
+REM     a file that does not exist and the exe dies at load with a missing-
+REM     DLL error rather than anything diagnosable.
+REM   - the fallback stubs (stdlib\{cuda,nvrtc}_stubs.c) otherwise: the
+REM     program links and loads, every CUDA call returns a non-zero
+REM     CUresult, and gpu_open falls back to the CPU backend
+REM     (packages\gpu\src\cpu.nu). This is the path a package that only
+REM     pulls in gpu transitively — anomaly → tensor → gpukit → gpu — takes,
+REM     and it wants no GPU at all.
+REM The stubs go in as SOURCE rather than a prebuilt object because this
+REM script links MSVC-ABI under clang and MinGW-ABI under the bundled zig;
+REM handing %CC% the .c compiles the translation unit with whichever ABI
+REM this particular link is using, so one file serves both.
+REM `set NURL_GPU_STUBS=1` forces the stub path (same knob as nurl.sh).
+set "CUDA_LIBDIR="
+if not defined NURL_GPU_STUBS if defined CUDA_PATH if exist "%CUDA_PATH%\lib\x64\nvrtc.lib" (
+    REM Those are MSVC import libs, so they can only go into an MSVC-ABI
+    REM image — the same constraint canvas.o + SDL2.lib carry above. Under
+    REM the bundled zig, say so and fall through to the stubs rather than
+    REM emit a link the user cannot act on.
+    if "!MINGW_ABI!"=="1" (
+        echo [info] CUDA Toolkit found, but its import libs are MSVC-ABI and the
+        echo        bundled zig links MinGW — using the CPU-fallback stubs. For real
+        echo        GPU compute, build with clang instead: install LLVM and re-run
+        echo        with NURL_ZIG pointing at a path that does not exist, e.g.
+        echo            set NURL_ZIG=none
+    ) else (
+        set "CUDA_LIBDIR=%CUDA_PATH%\lib\x64"
+    )
+)
+findstr /R /C:"@cu[A-Z]" "%LLFILE%" >nul 2>&1
+if not errorlevel 1 (
+    if defined CUDA_LIBDIR (
+        set EXTRA_LIBS=!EXTRA_LIBS! -L"!CUDA_LIBDIR!" -lcuda
+        echo [info] CUDA driver linked from "!CUDA_LIBDIR!"
+    ) else (
+        if not exist "%SCRIPTDIR%stdlib\cuda_stubs.c" (
+            echo ERROR: program uses the CUDA FFI but %SCRIPTDIR%stdlib\cuda_stubs.c
+            echo        is missing. Run build.bat to build the NURL stdlib first.
+            exit /b 1
+        )
+        set EXTRA_OBJS=!EXTRA_OBJS! "%SCRIPTDIR%stdlib\cuda_stubs.c"
+        echo [info] no linkable CUDA Toolkit - cu* uses stubs; packages\gpu runs on the CPU
+    )
+)
+findstr /R /C:"@nvrtc[A-Z]" "%LLFILE%" >nul 2>&1
+if not errorlevel 1 (
+    if defined CUDA_LIBDIR (
+        set EXTRA_LIBS=!EXTRA_LIBS! -lnvrtc
+    ) else (
+        if not exist "%SCRIPTDIR%stdlib\nvrtc_stubs.c" (
+            echo ERROR: program uses the NVRTC FFI but %SCRIPTDIR%stdlib\nvrtc_stubs.c
+            echo        is missing. Run build.bat to build the NURL stdlib first.
+            exit /b 1
+        )
+        set EXTRA_OBJS=!EXTRA_OBJS! "%SCRIPTDIR%stdlib\nvrtc_stubs.c"
+    )
+)
+
+REM ── Win32 dynamic-loader shims (dlopen / dlsym / dlclose) ────
+REM packages\gpu's CPU backend binds the POSIX loader (& `c` @ dlopen …) to
+REM load the host object it JIT-builds its kernels into. Those three symbols
+REM are in libdl/libc on any POSIX host, so nurl.sh needs no equivalent of
+REM this block; Windows has none of them, and a program that merely IMPORTS
+REM packages\gpu — anomaly → tensor → gpukit → gpu, none of which asks for a
+REM GPU — died with "undefined symbol: dlopen" out of cpu_compile. Compile
+REM the LoadLibraryA forwarders in when the IR reaches for them. Source, not
+REM an object, for the same ABI reason as the CUDA stubs above.
+findstr /R /C:"@dlopen\>" /C:"@dlsym\>" /C:"@dlclose\>" "%LLFILE%" >nul 2>&1
+if not errorlevel 1 (
+    if not exist "%SCRIPTDIR%stdlib\dl_win32.c" (
+        echo ERROR: program uses the POSIX dynamic loader ^(dlopen/dlsym/dlclose^)
+        echo        but %SCRIPTDIR%stdlib\dl_win32.c is missing. Run build.bat
+        echo        to build the NURL stdlib first.
+        exit /b 1
+    )
+    set EXTRA_OBJS=!EXTRA_OBJS! "%SCRIPTDIR%stdlib\dl_win32.c"
+)
+
 REM Auto-link the FFI libs build.bat detected (issue #229). These are for
 REM programs whose own IR declares an FFI; the runtime itself no longer
 REM needs them, since gzip/deflate became pure NURL in §8 P6 and zstd in
