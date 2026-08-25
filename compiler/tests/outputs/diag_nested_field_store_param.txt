@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_nested_field_store_param.nu:20:16: error: cannot assign through this field path: the object is a by-value Deep with no storage to write through — a parameter (parameters are immutable bindings and arrive by value), or a temporary. Take the argument as 'inout' if the caller should see the write ('@ f inout S s → v'), or copy it into a mutable local first (': ~ S t s', then '= . t <field> <value>').
+    = . . m dm dx 5
+               ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
