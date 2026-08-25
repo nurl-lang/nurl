@@ -388,6 +388,83 @@ class Prog:
             x.value = arg
             self.phex(f"( {f} {arg} )", to_u64_bits(body.eval(), "i64"))
 
+    def stmt_nested_closure(self):
+        """A closure literal inside a closure literal, and a closure that owns
+        a `% Drop` value of its own while one is live in the frame around it.
+
+        The lifted-function boundary is where ownership bookkeeping goes
+        wrong: the outer frame's rosters were visible inside the closure body
+        until 2026-08-26, so its `^` dropped values belonging to its caller.
+        Nesting asks the same question one level deeper, and the `% Drop`
+        variant asks whether the closure's OWN values still get released."""
+        f = self.fresh("nc")
+        inner = self.fresh("ni")
+        k = self.rng.randrange(1 << 20)
+        m = self.rng.randint(2, 7)
+        own_drop = self.drop_used and self.rng.random() < 0.5
+        body = [f"        : ( @ i i ) {inner} \\ i y → i {{ ^ * y {m} }}"]
+        if own_drop:
+            h = self.fresh("nh")
+            body.append(f"        : DH {h} @ DH {{ x }}")
+        body.append(f"        ^ + ( {inner} x ) {k}")
+        self.emit(f"    : ( @ i i ) {f} \\ i x → i {{")
+        self.lines.extend(body)
+        self.emit("    }")
+        for _ in range(self.rng.randint(1, 2)):
+            arg = self.rng.randrange(1 << 24)
+            self.phex(f"( {f} {arg} )", to_u64_bits(wrap(arg * m + k, "i64"), "i64"))
+            if own_drop:
+                self.drops += 1
+
+    def stmt_early_return(self):
+        """A helper that returns from INSIDE a loop with owned values live.
+
+        `^` is not the block's normal exit: it skips the code the
+        fall-through would have run, so the compiler has to emit the whole
+        drop sequence — for the loop body's values AND the function's — at
+        the return. One value is created before the loop and one per
+        iteration, so the oracle knows exactly how many destructors must
+        have fired by the time control leaves."""
+        if not self.drop_used:
+            self.stmt_helper_call()          # nothing to count without % Drop
+            return
+        fn = self.fresh("erf")
+        n = self.rng.randint(2, 7)
+        thr = self.rng.randint(1, n + 1)     # > n means "never taken"
+        bonus = self.rng.randrange(1 << 16)
+        self.decls += [
+            f"@ {fn} i seed → i {{",
+            "    : DH outer @ DH { seed }",
+            "    : ~ i acc seed",
+            "    : ~ i k 0",
+            f"    ~ < k {n} {{",
+            "        = k + k 1",
+            "        : DH inner @ DH { k }",
+            f"        ? == k {thr} {{ ^ + acc {bonus} }} {{}}",
+            "        = acc + acc k",
+            "    }",
+            "    ^ acc",
+            "}",
+        ]
+        seed = self.rng.randrange(1 << 20)
+        acc = seed
+        fired = 1                            # `outer`, on whichever exit
+        for k in range(1, n + 1):
+            fired += 1                       # `inner`, this iteration
+            if k == thr:
+                acc = wrap(acc + bonus, "i64")
+                break
+            acc = wrap(acc + k, "i64")
+        self.drops += fired
+        # Bind before observing: the call has SIDE EFFECTS (each invocation
+        # fires its destructors), so a leaf that re-renders as the call would
+        # run it again every time an expression tree picked it up and the
+        # drop count would stop matching.
+        rv = self.fresh("er")
+        self.emit(f"    : i {rv} ( {fn} {seed} )")
+        self.phex(rv, to_u64_bits(acc, "i64"))
+        self.env.append(Var("i64", rv, acc))
+
     def stmt_defer(self):
         lit = self.rng.randrange(1 << 32)
         call = self.chk(str(lit), lit, cast=False)
@@ -819,6 +896,7 @@ FEATURES = [
     # The second wave: the surface the first wave never reached.
     ("generic", 3), ("option", 2), ("result", 2), ("trait", 2),
     ("nested", 3), ("loopctl", 2), ("vec_struct", 2),
+    ("nested_closure", 2), ("early_return", 2),
 ]
 
 
