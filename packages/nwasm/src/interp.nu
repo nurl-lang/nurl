@@ -252,20 +252,20 @@ $ `module.nu`
     i jit_lc_fidx  // last JIT callee fidx (-1 = none) and its resolved PFunc
     i jit_lc_pf
     // Tier-6 direct-call state. The slab is a bump stack of raw slot
-    // frames for JIT execution; the sp cell holds the absolute address of
-    // the next free slot; ftab has one direct-entry address per defined
-    // function (0 = call through the driver); jit_pure memoizes the
-    // no-call-out fixpoint (0 unknown, 1 pure, 2 impure, 3 in progress).
+    // frames for JIT execution. jit_spcell is the JIT anchor block, held
+    // in r8 for the whole native execution: word 0 = the absolute
+    // address of the next free slab slot, word 1 = the slab end, words
+    // 2.. = one direct-entry address per defined function (0 = call
+    // through the driver).
     i jit_slab  // raw slab base address (0 = not yet allocated)
     i jit_slab_end  // slab base + byte length
-    i jit_spcell  // address of the 8-byte top-of-stack cell
+    i jit_spcell  // address of the anchor block [sp, slab end, ftab..]
     // The pause chain: when JIT code needs the driver (imports, grow,
     // call_indirect, the fc bridge), every native frame between the
     // call-out and the driver parks itself here as (page, resume, rbx,
     // args) and returns, so the driver can resume them innermost-first.
     i jit_chain  // chain base address
     i jit_chain_cell  // address of the 8-byte chain-top cell
-    ( Vec i ) jit_ftab
     b gpu_ok  // env/CUDA host imports enabled (opt-in; default off)
     b net_ok  // nurl_net host imports (real sockets) enabled (opt-in; default off)
     // Shared memory changes what a narrow store is allowed to touch: see
@@ -410,7 +410,6 @@ inline @ __mem_base * Interp it → i {
     = . it jit_spcell 0
     = . it jit_chain 0
     = . it jit_chain_cell 0
-    = . it jit_ftab ( vec_new [i] )
     = . it jit_lc_pf 0
     = . it gpu_ok F
     = . it net_ok F
@@ -2752,6 +2751,53 @@ inline @ __fr_setpos s tp i v → v {
 // Does v encode as a sign-extended imm32?
 @ __jit_imm32 i v → i { ^ ? & >= v -2147483648 <= v 2147483647 1 0 }
 
+// Set by an emitter that used a pin-direct form: the record ran without
+// touching rax, so the walk keeps its rax cache instead of assuming the
+// result went through it. Consumed (and reset) once per record.
+: ~ i g_jit_noax 0
+
+// The rax-cache update for a record that did NOT touch rax: keep the
+// cached slot unless this record overwrote it (then the register is
+// stale). Mirrors the write-sets __jit_newrax knows about.
+@ __jit_newrax_noax i op i a i b i prev → i {
+    ? & | == op 38 == op 177 == b prev { ^ -1 } {}  // ADDBRIFC writes b
+    ? == a prev { ^ -1 } {}  // this record wrote the cached slot
+    ^ prev
+}
+
+// ── pin-direct emitters: operate on r12+p without going through rax ──
+// <op> r_pd, r_ps (reg-form opcode: add 3, sub 43, and 35, or 11,
+// xor 51, cmp 59); both operands pinned.
+@ __jit_prr ( Vec u ) buf i opc i pd i ps → v { ( __jit_b buf 77 ) ( __jit_b buf opc ) ( __jit_b buf + 192 + * pd 8 ps ) }
+// <op> r_pd, [rbx+s*8]
+@ __jit_prm ( Vec u ) buf i opc i pd i s → v { ( __jit_b buf 76 ) ( __jit_b buf opc ) ( __jit_b buf + 131 * pd 8 ) ( __jit_d buf * s 8 ) }
+// <op> r_pd, imm (ALU /ext form; imm8 when it fits)
+@ __jit_pri ( Vec u ) buf i ext i pd i iv → v {
+    ? != 0 ( __jit_imm8 iv ) { ( __jit_b buf 73 ) ( __jit_b buf 131 ) ( __jit_b buf + 192 + * ext 8 pd ) ( __jit_b buf & iv 255 ) } {
+        ( __jit_b buf 73 ) ( __jit_b buf 129 ) ( __jit_b buf + 192 + * ext 8 pd ) ( __jit_d buf iv ) }
+}
+// mov r_pd, imm64 (shortest form; flags untouched)
+@ __jit_pmovi ( Vec u ) buf i pd i iv → v {
+    ? & >= iv 0 <= iv 4294967295 { ( __jit_b buf 65 ) ( __jit_b buf + 184 pd ) ( __jit_d buf iv ) ^ v } {}  // mov r_pd d,imm32 (zero-extends)
+    ( __jit_b buf 73 ) ( __jit_b buf 199 ) ( __jit_b buf + 192 pd ) ( __jit_d buf iv )  // mov r_pd,sign-ext imm32 (callers ensure imm32)
+}
+// mov r_pd, rax
+@ __jit_pmovrax ( Vec u ) buf i pd → v { ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf + 192 pd ) }
+// mov r_pd ← slot s through whatever home it has; emits nothing rax-touching.
+// Returns 1 on success, 0 when the source needs the rax path (xmm home).
+@ __jit_pmovsrc ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i pd i s i raxslot → i {
+    : i p ( __jit_pr pmap s )
+    ? >= p 0 { ? != p pd { ( __jit_prr buf 139 pd p ) } {} ^ 1 } {}  // mov r_pd,r_ps (139 = 8B mov reg,rm)
+    ? == p -2 {
+        : i cv ( __jit_cv cvals s )
+        ? != 0 ( __jit_imm32 cv ) { ( __jit_pmovi buf pd cv ) ^ 1 } {}
+        ? & >= cv 0 <= cv 4294967295 { ( __jit_pmovi buf pd cv ) ^ 1 } {}
+    } {}
+    ? >= ( __jit_xr xmap s ) 0 { ^ 0 } {}  // xmm home: leave to the rax path
+    ? == raxslot s { ( __jit_pmovrax buf pd ) ^ 1 } {}
+    ( __jit_prm buf 139 pd s ) ^ 1  // mov r_pd,[rbx+s*8]
+}
+
 @ __jit_ldrax_m ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i s → v {
     : i p ( __jit_pr pmap s )
     ? >= p 0 { ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf + 192 p ) ^ v } {}  // mov rax,r1X
@@ -2798,6 +2844,66 @@ inline @ __fr_setpos s tp i v → v {
 @ __jit_push_pins ( Vec u ) buf i npin → v {
     : ~ i k 0
     ~ < k npin { ( __jit_b buf 65 ) ( __jit_b buf + 84 k ) = k + k 1 }  // push r12+k
+}
+
+// A driver-side resume entry: rebalance the stack and re-establish
+// every invariant register (r8 = anchor, rbx = frame base, r11/r10/r9 =
+// memory base/bytes/globals) — the driver round trip clobbers them all.
+@ __jit_resume_entry ( Vec u ) buf i npin i spcell → v {
+    ( __jit_push_pins buf npin )
+    ( __jit_b buf 83 )  // push rbx
+    ( __jit_b buf 86 )  // push rsi (args ptr, from call_code_at2)
+    ( __jit_b buf 73 ) ( __jit_b buf 184 ) ( __jit_q buf spcell )  // movabs r8, anchor
+    ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 31 )  // mov rbx,[rdi]
+    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 95 ) ( __jit_b buf 8 )  // mov r11,[rdi+8]
+    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 )  // mov r10,[rdi+16]
+    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
+}
+
+// lea eax,[base + idx<<k]: the whole guest-address computation — shift,
+// add and the u32 wrap — in one instruction (the 32-bit destination IS
+// the mask). Register numbers use the emitter's convention: 0 = rax,
+// 1 = rcx, 4..7 = the pinned r12..r15 (raw __jit_pr values).
+@ __jit_lea32 ( Vec u ) buf i k i idx i base → v {
+    : i rex + 64 + ? >= idx 4 2 0 ? >= base 4 1 0
+    ? != rex 64 { ( __jit_b buf rex ) } {}
+    ( __jit_b buf 141 )
+    ? == & base 7 5 {  // r13 base: SIB base 101 means disp32 under mod00 — use mod01 + 0
+        ( __jit_b buf 68 ) ( __jit_b buf + * k 64 + * & idx 7 8 & base 7 ) ( __jit_b buf 0 )
+    } {
+        ( __jit_b buf 4 ) ( __jit_b buf + * k 64 + * & idx 7 8 & base 7 )
+    }
+}
+
+// lea eax,[idx<<k] (no base register)
+@ __jit_lea32nb ( Vec u ) buf i k i idx → v {
+    ? >= idx 4 { ( __jit_b buf 66 ) } {}
+    ( __jit_b buf 141 ) ( __jit_b buf 4 ) ( __jit_b buf + * k 64 + * & idx 7 8 5 ) ( __jit_d buf 0 )
+}
+
+// lea eax,[r_pb + disp32] (pinned base, constant index)
+@ __jit_lea32bd ( Vec u ) buf i base i disp → v {
+    ( __jit_b buf 65 ) ( __jit_b buf 141 )
+    ? == & base 7 4 { ( __jit_b buf 132 ) ( __jit_b buf 36 ) } { ( __jit_b buf + 128 & base 7 ) }  // r12 needs a SIB
+    ( __jit_d buf disp )
+}
+
+// Pad with multi-byte NOPs to the next 16-byte boundary (loop heads).
+@ __jit_align16 ( Vec u ) buf → v {
+    : ~ i pad & - 16 & ( vec_len [u] buf ) 15 15
+    ~ > pad 0 {
+        : i ch ? > pad 9 9 pad
+        ? == ch 1 { ( __jit_b buf 144 ) } {}
+        ? == ch 2 { ( __jit_b buf 102 ) ( __jit_b buf 144 ) } {}
+        ? == ch 3 { ( __jit_b buf 15 ) ( __jit_b buf 31 ) ( __jit_b buf 0 ) } {}
+        ? == ch 4 { ( __jit_b buf 15 ) ( __jit_b buf 31 ) ( __jit_b buf 64 ) ( __jit_b buf 0 ) } {}
+        ? == ch 5 { ( __jit_b buf 15 ) ( __jit_b buf 31 ) ( __jit_b buf 68 ) ( __jit_b buf 0 ) ( __jit_b buf 0 ) } {}
+        ? == ch 6 { ( __jit_b buf 102 ) ( __jit_b buf 15 ) ( __jit_b buf 31 ) ( __jit_b buf 68 ) ( __jit_b buf 0 ) ( __jit_b buf 0 ) } {}
+        ? == ch 7 { ( __jit_b buf 15 ) ( __jit_b buf 31 ) ( __jit_b buf 128 ) ( __jit_d buf 0 ) } {}
+        ? == ch 8 { ( __jit_b buf 15 ) ( __jit_b buf 31 ) ( __jit_b buf 132 ) ( __jit_b buf 0 ) ( __jit_d buf 0 ) } {}
+        ? == ch 9 { ( __jit_b buf 102 ) ( __jit_b buf 15 ) ( __jit_b buf 31 ) ( __jit_b buf 132 ) ( __jit_b buf 0 ) ( __jit_d buf 0 ) } {}
+        = pad - pad ch
+    }
 }
 
 @ __jit_retseq ( Vec u ) buf i npin → v {
@@ -3011,28 +3117,140 @@ inline @ __fr_setpos s tp i v → v {
     ( __jit_b buf 72 ) ( __jit_b buf 211 ) ( __jit_b buf 232 )  // shr rax,cl
 }
 
+@ __jit_imm8 i v → i { ^ ? & >= v -128 <= v 127 1 0 }
+
+// rax ← imm64 in the shortest mov spelling (flags untouched by all three)
+@ __jit_movrax_imm ( Vec u ) buf i iv → v {
+    ? & >= iv 0 <= iv 4294967295 { ( __jit_b buf 184 ) ( __jit_d buf iv ) ^ v } {}  // mov eax,imm32 (zero-extends)
+    ? != 0 ( __jit_imm32 iv ) { ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 192 ) ( __jit_d buf iv ) ^ v } {}  // mov rax,sign-ext imm32
+    ( __jit_b buf 72 ) ( __jit_b buf 184 ) ( __jit_q buf iv )  // movabs rax,imm64
+}
+
 @ __jit_alu_ci64 ( Vec u ) buf i op i cv → i {
-    ? == op 1 { ? != 0 ( __jit_imm32 cv ) { ( __jit_b buf 72 ) ( __jit_b buf 105 ) ( __jit_b buf 192 ) ( __jit_d buf cv ) ^ 1 } {} ^ 0 } {}  // imul rax,rax,imm32
+    ? == op 1 {
+        ? != 0 ( __jit_imm8 cv ) { ( __jit_b buf 72 ) ( __jit_b buf 107 ) ( __jit_b buf 192 ) ( __jit_b buf & cv 255 ) ^ 1 } {}  // imul rax,rax,imm8
+        ? != 0 ( __jit_imm32 cv ) { ( __jit_b buf 72 ) ( __jit_b buf 105 ) ( __jit_b buf 192 ) ( __jit_d buf cv ) ^ 1 } {} ^ 0 } {}  // imul rax,rax,imm32
     ? == op 8 { ( __jit_b buf 72 ) ( __jit_b buf 193 ) ( __jit_b buf 224 ) ( __jit_b buf & cv 63 ) ^ 1 } {}  // shl rax,imm8
     ? == op 3 { ( __jit_b buf 72 ) ( __jit_b buf 193 ) ( __jit_b buf 232 ) ( __jit_b buf & cv 63 ) ^ 1 } {}  // shr rax,imm8
     ? == op 6 { ( __jit_b buf 72 ) ( __jit_b buf 193 ) ( __jit_b buf 248 ) ( __jit_b buf & cv 63 ) ^ 1 } {}  // sar rax,imm8
     ? & == op 2 == cv 4294967295 { ( __jit_b buf 137 ) ( __jit_b buf 192 ) ^ 1 } {}  // and rax,0xffffffff = mov eax,eax
     : i ext ? == op 0 0 ? == op 5 5 ? == op 2 4 ? == op 7 1 ? == op 4 6 -1
-    ? >= ext 0 { ? != 0 ( __jit_imm32 cv ) { ( __jit_b buf 72 ) ( __jit_b buf 129 ) ( __jit_b buf + 192 * ext 8 ) ( __jit_d buf cv ) ^ 1 } {} } {}
+    ? >= ext 0 {
+        ? != 0 ( __jit_imm8 cv ) { ( __jit_b buf 72 ) ( __jit_b buf 131 ) ( __jit_b buf + 192 * ext 8 ) ( __jit_b buf & cv 255 ) ^ 1 } {}  // <op> rax,imm8
+        ? != 0 ( __jit_imm32 cv ) { ( __jit_b buf 72 ) ( __jit_b buf 129 ) ( __jit_b buf + 192 * ext 8 ) ( __jit_d buf cv ) ^ 1 } {} } {}
     ^ 0
 }
 
 @ __jit_alu_ci32 ( Vec u ) buf i op i cv → i {
-    ? == op 181 { ( __jit_b buf 105 ) ( __jit_b buf 192 ) ( __jit_d buf cv ) ^ 1 } {}  // imul eax,eax,imm32
+    ? == op 181 {
+        ? != 0 ( __jit_imm8 cv ) { ( __jit_b buf 107 ) ( __jit_b buf 192 ) ( __jit_b buf & cv 255 ) ^ 1 } {}  // imul eax,eax,imm8
+        ( __jit_b buf 105 ) ( __jit_b buf 192 ) ( __jit_d buf cv ) ^ 1 } {}  // imul eax,eax,imm32
     ? == op 10 { ( __jit_b buf 193 ) ( __jit_b buf 224 ) ( __jit_b buf & cv 31 ) ^ 1 } {}  // shl eax,imm8
     ? == op 12 { ( __jit_b buf 193 ) ( __jit_b buf 232 ) ( __jit_b buf & cv 31 ) ^ 1 } {}  // shr eax,imm8
     ? == op 179 { ( __jit_b buf 193 ) ( __jit_b buf 248 ) ( __jit_b buf & cv 31 ) ^ 1 } {}  // sar eax,imm8
     : i ext ? == op 9 0 ? == op 185 5 ? == op 11 4 ? == op 184 1 ? == op 180 6 -1
-    ? >= ext 0 { ( __jit_b buf 129 ) ( __jit_b buf + 192 * ext 8 ) ( __jit_d buf cv ) ^ 1 } {}  // <op> eax,imm32 — low 32 bits only, always encodable
+    ? >= ext 0 {
+        ? != 0 ( __jit_imm8 cv ) { ( __jit_b buf 131 ) ( __jit_b buf + 192 * ext 8 ) ( __jit_b buf & cv 255 ) ^ 1 } {}  // <op> eax,imm8
+        ( __jit_b buf 129 ) ( __jit_b buf + 192 * ext 8 ) ( __jit_d buf cv ) ^ 1 } {}  // <op> eax,imm32 — low 32 bits only, always encodable
     ^ 0
 }
 
+// Pin-direct i64 ALU: dst pinned → run the whole record in r12..r15
+// without touching rax. Returns 1 when emitted, 0 to take the rax path.
+// The compact-constant discipline matches __jit_kv_writes: a -2 slot is
+// only read from memory when its value is not imm-encodable (those keep
+// their prologue write).
+@ __jit_alu_pin ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i op i a i b i c i raxslot → i {
+    : i pa ( __jit_pr pmap a )
+    ? & == c a != b a { ^ 0 } {}  // mov r_pa ← b would clobber the rhs
+    ? >= ( __jit_xr xmap b ) 0 { ^ 0 } {}  // xmm-homed operands stay on the rax path
+    ? >= ( __jit_xr xmap c ) 0 { ^ 0 } {}
+    : i pc ( __jit_pr pmap c )
+    : i ccv ? == pc -2 ( __jit_cv cvals c ) 0
+    // imul by a compact constant: one 3-operand instruction, any b home
+    ? & & == op 1 == pc -2 != 0 ( __jit_imm32 ccv ) {
+        : i pb1 ( __jit_pr pmap b )
+        ? >= pb1 0 {
+            ? != 0 ( __jit_imm8 ccv ) { ( __jit_b buf 77 ) ( __jit_b buf 107 ) ( __jit_b buf + 192 + * pa 8 pb1 ) ( __jit_b buf & ccv 255 ) } {
+                ( __jit_b buf 77 ) ( __jit_b buf 105 ) ( __jit_b buf + 192 + * pa 8 pb1 ) ( __jit_d buf ccv ) }  // imul r_pa,r_pb,imm
+            ^ 1
+        } {}
+        ? == pb1 -1 {
+            ? != 0 ( __jit_imm8 ccv ) { ( __jit_b buf 76 ) ( __jit_b buf 107 ) ( __jit_b buf + 131 * pa 8 ) ( __jit_d buf * b 8 ) ( __jit_b buf & ccv 255 ) } {
+                ( __jit_b buf 76 ) ( __jit_b buf 105 ) ( __jit_b buf + 131 * pa 8 ) ( __jit_d buf * b 8 ) ( __jit_d buf ccv ) }  // imul r_pa,[rbx+b],imm
+            ^ 1
+        } {}
+    } {}
+    // r_pa ← b (skipped when accumulating in place)
+    ? != b a { ? == 0 ( __jit_pmovsrc buf pmap xmap cvals pa b raxslot ) { ^ 0 } {} } {}
+    ? | | == op 8 == op 3 == op 6 {  // shifts: count in cl, or imm8 for constants
+        : i sext ? == op 8 4 ? == op 3 5 7
+        ? == pc -2 { ( __jit_b buf 73 ) ( __jit_b buf 193 ) ( __jit_b buf + 192 + * sext 8 pa ) ( __jit_b buf & ccv 63 ) ^ 1 } {}  // sh r_pa,imm8
+        ( __jit_ldrcx_m buf pmap xmap cvals c )
+        ( __jit_b buf 73 ) ( __jit_b buf 211 ) ( __jit_b buf + 192 + * sext 8 pa ) ^ 1  // sh r_pa,cl
+    } {}
+    ? == op 1 {  // imul
+        ? >= pc 0 { ( __jit_b buf 77 ) ( __jit_b buf 15 ) ( __jit_b buf 175 ) ( __jit_b buf + 192 + * pa 8 pc ) ^ 1 } {}  // imul r_pa,r_pc
+        ? & == pc -2 != 0 ( __jit_imm32 ccv ) {
+            ( __jit_b buf 77 ) ( __jit_b buf 105 ) ( __jit_b buf + 192 + * pa 8 pa ) ( __jit_d buf ccv ) ^ 1 } {}  // imul r_pa,r_pa,imm
+        ( __jit_b buf 76 ) ( __jit_b buf 15 ) ( __jit_b buf 175 ) ( __jit_b buf + 131 * pa 8 ) ( __jit_d buf * c 8 ) ^ 1  // imul r_pa,[rbx+c]
+    } {}
+    : i ropc ? == op 0 3 ? == op 5 43 ? == op 2 35 ? == op 7 11 51  // reg-form add/sub/and/or/xor
+    ? >= pc 0 { ( __jit_prr buf ropc pa pc ) ^ 1 } {}
+    ? & == pc -2 != 0 ( __jit_imm32 ccv ) {
+        : i iext ? == op 0 0 ? == op 5 5 ? == op 2 4 ? == op 7 1 6
+        ( __jit_pri buf iext pa ccv ) ^ 1
+    } {}
+    ( __jit_prm buf ropc pa c ) ^ 1  // memory rhs (wide constants keep their slot write)
+}
+
+// The i32 twin: 32-bit op on the pinned register, then re-canonicalize
+// with movsxd. One instruction longer than the i64 forms but still
+// beats the rax round trip and keeps the rax cache alive.
+@ __jit_alu_pin32 ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i op i a i b i c i raxslot → i {
+    : i pa ( __jit_pr pmap a )
+    ? & == c a != b a { ^ 0 } {}
+    ? >= ( __jit_xr xmap b ) 0 { ^ 0 } {}
+    ? >= ( __jit_xr xmap c ) 0 { ^ 0 } {}
+    : i pc ( __jit_pr pmap c )
+    : i ccv ? == pc -2 ( __jit_cv cvals c ) 0
+    ? != b a { ? == 0 ( __jit_pmovsrc buf pmap xmap cvals pa b raxslot ) { ^ 0 } {} } {}
+    ? | | == op 10 == op 12 == op 179 {  // shifts
+        : i sext ? == op 10 4 ? == op 12 5 7
+        ? == pc -2 { ( __jit_b buf 65 ) ( __jit_b buf 193 ) ( __jit_b buf + 192 + * sext 8 & pa 7 ) ( __jit_b buf & ccv 31 ) } {
+            ( __jit_ldrcx_m buf pmap xmap cvals c )
+            ( __jit_b buf 65 ) ( __jit_b buf 211 ) ( __jit_b buf + 192 + * sext 8 & pa 7 ) }  // sh r_pa d,cl
+    } {
+        ? == op 181 {  // imul32
+            ? >= pc 0 { ( __jit_b buf 69 ) ( __jit_b buf 15 ) ( __jit_b buf 175 ) ( __jit_b buf + 192 + * & pa 7 8 & pc 7 ) } {
+                ? == pc -2 {
+                    ? != 0 ( __jit_imm8 ccv ) { ( __jit_b buf 69 ) ( __jit_b buf 107 ) ( __jit_b buf + 192 + * & pa 7 8 & pa 7 ) ( __jit_b buf & ccv 255 ) } {
+                        ( __jit_b buf 69 ) ( __jit_b buf 105 ) ( __jit_b buf + 192 + * & pa 7 8 & pa 7 ) ( __jit_d buf ccv ) }  // imul r_pa d,r_pa d,imm
+                } {
+                    ( __jit_b buf 68 ) ( __jit_b buf 15 ) ( __jit_b buf 175 ) ( __jit_b buf + 131 * & pa 7 8 ) ( __jit_d buf * c 8 ) } }  // imul r_pa d,[rbx+c]
+        } {
+            : i ropc ? == op 9 3 ? == op 185 43 ? == op 11 35 ? == op 184 11 51  // add/sub/and/or/xor reg-form
+            ? >= pc 0 { ( __jit_b buf 69 ) ( __jit_b buf ropc ) ( __jit_b buf + 192 + * & pa 7 8 & pc 7 ) } {
+                ? == pc -2 {
+                    : i iext ? == op 9 0 ? == op 185 5 ? == op 11 4 ? == op 184 1 6
+                    ? != 0 ( __jit_imm8 ccv ) { ( __jit_b buf 65 ) ( __jit_b buf 131 ) ( __jit_b buf + 192 + * iext 8 & pa 7 ) ( __jit_b buf & ccv 255 ) } {
+                        ( __jit_b buf 65 ) ( __jit_b buf 129 ) ( __jit_b buf + 192 + * iext 8 & pa 7 ) ( __jit_d buf ccv ) }  // <op> r_pa d,imm
+                } {
+                    ( __jit_b buf 68 ) ( __jit_b buf ropc ) ( __jit_b buf + 131 * & pa 7 8 ) ( __jit_d buf * c 8 ) } }  // <op> r_pa d,[rbx+c]
+        }
+    }
+    ( __jit_b buf 77 ) ( __jit_b buf 99 ) ( __jit_b buf + 192 + * & pa 7 8 & pa 7 )  // movsxd r_pa,r_pa d — canonical i32
+    ^ 1
+}
+
 @ __jit_alu ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i op i a i b i c i d i raxslot → v {
+    // pin-direct i64 forms first: dst pinned + plain op → no rax at all
+    ? & & >= op 0 <= op 8 >= ( __jit_pr pmap a ) 0 {
+        ? != 0 ( __jit_alu_pin buf pmap xmap cvals op a b c raxslot ) { = g_jit_noax 1 ^ v } {}
+    } {}
+    ? & | & >= op 9 <= op 12 | == op 179 | == op 180 | == op 181 | == op 184 == op 185 >= ( __jit_pr pmap a ) 0 {
+        ? != 0 ( __jit_alu_pin32 buf pmap xmap cvals op a b c raxslot ) { = g_jit_noax 1 ^ v } {}
+    } {}
     // every arm consumes s1 from rax first — one shared, cache-aware load
     ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
     // fused i64 pairs (a=dst b=s1 c=s2 d=x): dst = (s1 OP1 s2) OP2 x
@@ -3076,6 +3294,88 @@ inline @ __fr_setpos s tp i v → v {
         ? == op 6 { ( __jit_b buf 72 ) ( __jit_b buf 211 ) ( __jit_b buf 248 ) } {}  // sar rax,cl
         ( __jit_strax_m buf pmap xmap cvals a )
     }
+}
+
+@ __jit_kvw_mark ( Vec i ) need i s → v {
+    ? & >= s 0 < s ( vec_len [i] need ) { ( vec_set [i] need s 1 ) } {}
+}
+
+// Which constant-pool slots must the prologue still write to memory?
+// A compact (-2-marked) constant is materialized as an immediate at
+// every use site that goes through the mapped accessors, so its frame
+// slot is never read and the per-call write is pure waste. A use that
+// falls back to a raw [rbx+slot] read keeps the write: wide values,
+// xmm-path operands (the f64 templates read slots directly), the raw
+// slot templates (wrap/extend/clz/rem_u/shifted loads), call arguments
+// (the callee reads them through the args pointer), and the FCB operand
+// window (the driver reads it from frame memory). Unknown ops keep
+// every write. Returns 0/1 per slot (1 = must write).
+@ __jit_kv_writes * PFunc pf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals → ( Vec i ) {
+    : i nsl . pf nslots
+    : i nl . pf nlocals
+    : i knum ( vec_len [i] . pf kv )
+    : ( Vec i ) need ( vec_new [i] )
+    : ~ i s 0
+    ~ < s nsl { ( vec_push [i] need 0 ) = s + s 1 }
+    // pinned, xmm-pinned or wide slots always keep the write
+    : ~ i kk 0
+    ~ < kk knum {
+        : i cs + nl kk
+        ? < cs nsl {
+            : ~ i keep 0
+            ? != -2 ( __jit_pr pmap cs ) { = keep 1 } {}
+            ? >= ( __jit_xr xmap cs ) 0 { = keep 1 } {}
+            ? == 0 ( __jit_imm32 ( __jit_cv cvals cs ) ) { = keep 1 } {}
+            ? != 0 keep { ( vec_set [i] need cs 1 ) } {}
+        } {}
+        = kk + kk 1
+    }
+    : ( Vec i ) code . pf code
+    : i n . pf count
+    : ~ i markall 0
+    : ~ i r 0
+    ~ & < r n == 0 markall {
+        : i base * r 6
+        : i op ?? ( vec_get [i] code base ) { T x → x F → -1 }
+        : i b ?? ( vec_get [i] code + base 2 ) { T x → x F → 0 }
+        : i c ?? ( vec_get [i] code + base 3 ) { T x → x F → 0 }
+        : i d ?? ( vec_get [i] code + base 4 ) { T x → x F → 0 }
+        // raw-slot readers of b: wrap/extend_u (36,37), clz (93), sqrt
+        // (131), extendN_s (157-161), LOADSHL (205,206)
+        ? | == op 36 | == op 37 | == op 93 | == op 131 | & >= op 157 <= op 161 | == op 205 == op 206 { ( __jit_kvw_mark need b ) } {}
+        ? == op 99 { ( __jit_kvw_mark need b ) ( __jit_kvw_mark need c ) } {}  // i32.rem_u: raw 32-bit loads
+        ? | & >= op 39 <= op 42 == op 197 { ( __jit_kvw_mark need b ) ( __jit_kvw_mark need c ) } {}  // f64 alu / ADDSTOREF64
+        ? & >= op 194 <= op 196 { ( __jit_kvw_mark need d ) } {}  // LOADMUL/ADD/SUBBF64: x from the slot
+        ? & >= op 198 <= op 201 { ( __jit_kvw_mark need b ) ( __jit_kvw_mark need c ) ( __jit_kvw_mark need d ) } {}  // fused f64 triples
+        ? | == op 207 == op 208 { ( __jit_kvw_mark need b ) ( __jit_kvw_mark need d ) } {}  // LOADSHLADD: base + x raw
+        ? | | == op 50 == op 210 == op 170 {  // calls: the callee reads [argbase..] from memory
+            : ~ i ck 0
+            ~ < ck knum { ? >= + nl ck b { ( __jit_kvw_mark need + nl ck ) } {} = ck + ck 1 }
+        } {}
+        ? == op 171 {  // FCB: the driver reads slots [c, c+pops) from memory
+            : i fpops ( __lshr64 d 1 )
+            : ~ i fk 0
+            ~ < fk fpops { ( __jit_kvw_mark need + c fk ) = fk + fk 1 }
+        } {}
+        // every op the scan understands (marked above or read via mapped
+        // accessors only); anything else keeps every write
+        : ~ i known 0
+        ? & >= op 0 <= op 17 { = known 1 } {}
+        ? | == op 22 | == op 30 == op 33 { = known 1 } {}
+        ? & >= op 36 <= op 75 { = known 1 } {}
+        ? & >= op 179 <= op 185 { = known 1 } {}
+        ? | == op 93 | & >= op 96 <= op 99 | & >= op 105 <= op 108 | == op 125 == op 126 { = known 1 } {}
+        ? | == op 131 | & >= op 153 <= op 156 | & >= op 157 <= op 163 & >= op 169 <= op 172 { = known 1 } {}
+        ? | & >= op 194 <= op 201 | & >= op 205 <= op 208 | == op 177 | | == op 210 == op 211 == op 212 { = known 1 } {}
+        ? >= ( __jit_memkind op ) 0 { = known 1 } {}
+        ? == 0 known { = markall 1 } {}
+        = r + r 1
+    }
+    ? != 0 markall {
+        = s 0
+        ~ < s nsl { ( vec_set [i] need s 1 ) = s + s 1 }
+    } {}
+    ^ need
 }
 
 // Build the machine code for `pf`, seal a page, store the handle. Sets
@@ -3144,10 +3444,39 @@ inline @ __fr_setpos s tp i v → v {
 // `raxslot` is the emitter's one-register cache: the slot whose value rax
 // already holds (-1 = none) — a matching load is skipped.
 @ __jit_cmp ( Vec u ) buf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals i b i c i is32 i raxslot → v {
+    // pin-direct: compare r_pb against the rhs without loading rax.
+    // Callers that go on to write rax (setcc paths) clear g_jit_noax.
+    : i pbd ( __jit_pr pmap b )
+    ? >= pbd 0 {
+        : i pcd ( __jit_pr pmap c )
+        ? >= pcd 0 {
+            ? == 0 is32 { ( __jit_prr buf 59 pbd pcd ) } {
+                ( __jit_b buf 69 ) ( __jit_b buf 59 ) ( __jit_b buf + 192 + * pbd 8 pcd ) }  // cmp r_pb d,r_pc d
+            = g_jit_noax 1 ^ v
+        } {}
+        ? == pcd -2 {
+            : i dcv ( __jit_cv cvals c )
+            ? != 0 ( __jit_imm32 dcv ) {
+                ? == 0 is32 { ( __jit_pri buf 7 pbd dcv ) } {
+                    ? != 0 ( __jit_imm8 dcv ) { ( __jit_b buf 65 ) ( __jit_b buf 131 ) ( __jit_b buf + 248 pbd ) ( __jit_b buf & dcv 255 ) } {
+                        ( __jit_b buf 65 ) ( __jit_b buf 129 ) ( __jit_b buf + 248 pbd ) ( __jit_d buf dcv ) } }  // cmp r_pb d,imm
+                = g_jit_noax 1 ^ v
+            } {}
+        } {}
+        ? < ( __jit_xr xmap c ) 0 {  // memory rhs (xmm-homed slots stay on the rax path)
+            ? == 0 is32 { ( __jit_prm buf 59 pbd c ) } {
+                ( __jit_b buf 68 ) ( __jit_b buf 59 ) ( __jit_b buf + 131 * pbd 8 ) ( __jit_d buf * c 8 ) }  // cmp r_pb d,dword[rbx+c]
+            = g_jit_noax 1 ^ v
+        } {}
+    } {}
     ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
     : i pcc ( __jit_pr pmap c )
     ? == pcc -2 {
         : i ccv ( __jit_cv cvals c )
+        ? != 0 ( __jit_imm8 ccv ) {
+            ? == 0 is32 { ( __jit_b buf 72 ) } {}
+            ( __jit_b buf 131 ) ( __jit_b buf 248 ) ( __jit_b buf & ccv 255 ) ^ v  // cmp e/rax, imm8
+        } {}
         ? != 0 ( __jit_imm32 ccv ) {
             ? == 0 is32 { ( __jit_b buf 72 ) } {}
             ( __jit_b buf 129 ) ( __jit_b buf 248 ) ( __jit_d buf ccv ) ^ v  // cmp e/rax, imm32
@@ -3199,7 +3528,7 @@ inline @ __fr_setpos s tp i v → v {
 // The ops beyond the original tier set: extend/wrap, select, and the
 // fused memory/f64 records the predecoder emits. Falls through to the
 // plain ALU emitter for everything else.
-@ __jit_ext ( Vec u ) buf ( Vec i ) pmap ( Vec i ) pins i npin ( Vec i ) xmap ( Vec i ) xpins ( Vec i ) cvals ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot ( Vec i ) auxv ( Vec i ) pta_off ( Vec i ) pta_stub i chaincell i guard i xmmslot → v {
+@ __jit_ext ( Vec u ) buf ( Vec i ) pmap ( Vec i ) pins i npin ( Vec i ) xmap ( Vec i ) xpins ( Vec i ) cvals ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot ( Vec i ) auxv ( Vec i ) pta_off ( Vec i ) pta_stub i chaincell i spcell i guard i xmmslot → v {
     ? == op 36 {  // i32.wrap_i64: dst = sign-extended low 32 of src
         ? == raxslot b { ( __jit_movslq buf ) } {  // rax already holds the slot
             : i pw ( __jit_pr pmap b )
@@ -3399,6 +3728,15 @@ inline @ __fr_setpos s tp i v → v {
     } {}
     ? | == op 205 == op 206 {  // LOADSHL64/32: dst = mem[(x<<k) w32 + off]; b=x d=kslot
         : i kc ( __jit_pr pmap d )
+        : i kv5 ? == kc -2 ( __jit_cv cvals d ) -1
+        ? & & != 0 guard >= kv5 0 <= kv5 3 {  // guard mode: one lea replaces shift+wrap
+            : i px5 ( __jit_pr pmap b )
+            : ~ i idx5 1
+            ? >= px5 0 { = idx5 px5 } { ( __jit_ldrcx_m buf pmap xmap cvals b ) }
+            ( __jit_lea32nb buf kv5 idx5 )
+            ? == op 205 { ( __jit_mem buf 0 0 139 0 c ) } { ( __jit_mem buf 0 0 99 0 c ) }
+            ( __jit_strax_m buf pmap xmap cvals a ) ^ v
+        } {}
         ? != kc -2 { ( __jit_ldrcx_m buf pmap xmap cvals d ) } {}  // k (shl masks cl by 31)
         : i px ( __jit_pr pmap b )
         ? >= px 0 { ( __jit_opeax_pr buf 139 px ) } {  // mov eax,r1Xd
@@ -3406,7 +3744,6 @@ inline @ __fr_setpos s tp i v → v {
         }
         ? == kc -2 { ( __jit_b buf 193 ) ( __jit_b buf 224 ) ( __jit_b buf & ( __jit_cv cvals d ) 31 ) } {  // shl eax,imm8
             ( __jit_b buf 211 ) ( __jit_b buf 224 ) }  // shl eax,cl
-        ( __jit_movslq buf )  // __w32
         ( __jit_bc buf pat_at pat_rec trap_rec c ? == op 205 8 4 guard )
         ? == op 205 { ( __jit_mem buf 0 0 139 0 c ) } { ( __jit_mem buf 0 0 99 0 c ) }  // mov rax,[mem] / movsxd rax,dword[mem]
         ( __jit_strax_m buf pmap xmap cvals a ) ^ v
@@ -3468,13 +3805,7 @@ inline @ __fr_setpos s tp i v → v {
         ( vec_set [u] buf + prim 1 # u & ( __lshr64 gresume 8 ) 255 )
         ( vec_set [u] buf + prim 2 # u & ( __lshr64 gresume 16 ) 255 )
         ( vec_set [u] buf + prim 3 # u & ( __lshr64 gresume 24 ) 255 )
-        ( __jit_push_pins buf npin )
-        ( __jit_b buf 83 )  // push rbx
-        ( __jit_b buf 86 )  // push rsi (args ptr, from call_code_at2)
-        ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 31 )  // mov rbx,[rdi]
-        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 95 ) ( __jit_b buf 8 )  // mov r11,[rdi+8]
-        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 )  // mov r10,[rdi+16]
-        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
+        ( __jit_resume_entry buf npin spcell )
         ( __jit_reload_pins buf pins ) ( __jit_reload_xpins buf xpins )  // the dst slot may be pinned; memory is fresher
         ^ v
     } {}
@@ -3528,13 +3859,7 @@ inline @ __fr_setpos s tp i v → v {
         ( vec_set [u] buf + prim 1 # u & ( __lshr64 fresume 8 ) 255 )
         ( vec_set [u] buf + prim 2 # u & ( __lshr64 fresume 16 ) 255 )
         ( vec_set [u] buf + prim 3 # u & ( __lshr64 fresume 24 ) 255 )
-        ( __jit_push_pins buf npin )
-        ( __jit_b buf 83 )  // push rbx
-        ( __jit_b buf 86 )  // push rsi (args ptr, from call_code_at2)
-        ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 31 )  // mov rbx,[rdi]
-        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 95 ) ( __jit_b buf 8 )  // mov r11,[rdi+8]
-        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 )  // mov r10,[rdi+16]
-        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
+        ( __jit_resume_entry buf npin spcell )
         ( __jit_reload_pins buf pins ) ( __jit_reload_xpins buf xpins )  // the dst slot may be pinned; memory is fresher
         ^ v
     } {}
@@ -3562,18 +3887,27 @@ inline @ __fr_setpos s tp i v → v {
         ( vec_set [u] buf + prim 2 # u & ( __lshr64 resume 16 ) 255 )
         ( vec_set [u] buf + prim 3 # u & ( __lshr64 resume 24 ) 255 )
         // resume point: reload the frame/memory/globals registers
-        ( __jit_push_pins buf npin )
-        ( __jit_b buf 83 )  // push rbx
-        ( __jit_b buf 86 )  // push rsi (args ptr, from call_code_at2)
-        ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 31 )  // mov rbx,[rdi]
-        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 95 ) ( __jit_b buf 8 )  // mov r11,[rdi+8]
-        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 )  // mov r10,[rdi+16]
-        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
+        ( __jit_resume_entry buf npin spcell )
         ( __jit_reload_pins buf pins ) ( __jit_reload_xpins buf xpins )  // result slots were written in memory
         ^ v
     } {}
     ? | == op 207 == op 208 {  // LOADSHLADD64/32: dst = mem[(base + (x<<k)) w32 + off]; b=base d=x w5=kslot
         : i kc2 ( __jit_pr pmap w5 )
+        : i kcv ? == kc2 -2 ( __jit_cv cvals w5 ) -1
+        // guard mode + scale-compatible constant k: one 32-bit lea IS the
+        // shift, the add and the wrap — the pointer-chase critical path
+        // collapses to lea + load.
+        ? & & != 0 guard >= kcv 0 <= kcv 3 {
+            : i ps9 ( __jit_pr pmap d )
+            : ~ i idx9 1
+            ? >= ps9 0 { = idx9 ps9 } { ( __jit_ldrcx_m buf pmap xmap cvals d ) }
+            : i pb9 ( __jit_pr pmap b )
+            : ~ i bas9 0
+            ? >= pb9 0 { = bas9 pb9 } { ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {} }
+            ( __jit_lea32 buf kcv idx9 bas9 )
+            ? == op 207 { ( __jit_mem buf 0 0 139 0 c ) } { ( __jit_mem buf 0 0 99 0 c ) }  // mov rax,[mem] / movsxd rax,dword[mem]
+            ( __jit_strax_m buf pmap xmap cvals a ) ^ v
+        } {}
         ? != kc2 -2 { ( __jit_ldrcx_m buf pmap xmap cvals w5 ) } {}  // k
         : i ps ( __jit_pr pmap d )
         ? >= ps 0 { ( __jit_opeax_pr buf 139 ps ) } {  // mov eax,r1Xd
@@ -3581,7 +3915,6 @@ inline @ __fr_setpos s tp i v → v {
         }
         ? == kc2 -2 { ( __jit_b buf 193 ) ( __jit_b buf 224 ) ( __jit_b buf & ( __jit_cv cvals w5 ) 31 ) } {  // shl eax,imm8
             ( __jit_b buf 211 ) ( __jit_b buf 224 ) }  // shl eax,cl
-        ( __jit_movslq buf )  // __w32
         : i pb ( __jit_pr pmap b )
         ? >= pb 0 { ( __jit_oprax_pr buf 3 pb ) } {  // add rax,r1X
             ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * b 8 )  // add rax,[rbx+base]
@@ -3602,18 +3935,19 @@ inline @ __fr_setpos s tp i v → v {
     : i bytes 16777216
     = . it jit_slab # i ( nurl_zalloc bytes )
     = . it jit_slab_end + . it jit_slab bytes
-    = . it jit_spcell # i ( nurl_zalloc 8 )
+    // anchor block, held in r8 by the emitted code: [sp, slab end,
+    // direct-entry table]; sized from the MODULE — pfuncs grows lazily
+    // and may still be short
+    : i nf ( vec_len [s] . m funcs )
+    = . it jit_spcell # i ( nurl_zalloc + 16 * nf 8 )
     : *i spc # *i . it jit_spcell
     = . spc 0 . it jit_slab
+    = . spc 1 . it jit_slab_end
     // one 32-byte pause entry per (at worst one-slot) frame
     = . it jit_chain # i ( nurl_zalloc * bytes 4 )
     = . it jit_chain_cell # i ( nurl_zalloc 8 )
     : *i chc # *i . it jit_chain_cell
     = . chc 0 . it jit_chain
-    // sized from the MODULE — pfuncs grows lazily and may still be short
-    : i nf ( vec_len [s] . m funcs )
-    : ~ i k 0
-    ~ < k nf { ( vec_push [i] . it jit_ftab 0 ) = k + k 1 }
 }
 
 // After a record is emitted, which slot does rax hold (-1 = none)?
@@ -3882,10 +4216,8 @@ inline @ __fr_setpos s tp i v → v {
     // registry pre-check keeps a full table from producing a function whose
     // faults nobody converts — such a function keeps its explicit checks.
     : i guard ? & != 0 . it mem_raw != 0 ( nurl_guard_code_room ) 1 0
-    : i spcell . it jit_spcell
+    : i spcell . it jit_spcell  // anchor block, held in r8: [sp, slab end, ftab..]
     : i chaincell . it jit_chain_cell
-    : i slab_end . it jit_slab_end
-    : i ftab_data # i ( vec_data [i] . it jit_ftab )
     : i nimp . m num_import_funcs
     : i np . pf nparams
     : i nl . pf nlocals
@@ -3907,6 +4239,8 @@ inline @ __fr_setpos s tp i v → v {
         } {}
         = cvk + cvk 1
     }
+    // pool slots whose every use is an immediate skip their per-call write
+    : ( Vec i ) kvwr ( __jit_kv_writes pf pmap xmap cvals )
     : ( Vec u ) buf ( vec_new [u] )
     : ( Vec i ) code . pf code
     : i n . pf count
@@ -3926,17 +4260,23 @@ inline @ __fr_setpos s tp i v → v {
     // is kept at [rsp] for the RET result copy. Pinned registers are
     // callee-saved: pushed here (and at every resume entry), popped on
     // every exit — the extra pushes sit below [rsp]'s args pointer.
+    // Driver entry (page base): establish the invariant registers —
+    // r8 = the anchor block, r11/r10/r9 = memory base/bytes/globals.
+    // A direct JIT-to-JIT call inherits all four and enters at the
+    // fixed 22-byte offset just past them (the ftab publishers add it).
+    ( __jit_b buf 73 ) ( __jit_b buf 184 ) ( __jit_q buf spcell )  // movabs r8, anchor
+    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 95 ) ( __jit_b buf 8 )  // mov r11,[rdi+8]
+    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 )  // mov r10,[rdi+16]
+    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
+    // Direct entry (offset 22):
     ( __jit_push_pins buf npin )
     ( __jit_b buf 83 )  // push rbx
     ( __jit_b buf 86 )  // push rsi (args pointer, read back at RET)
-    ( __jit_b buf 72 ) ( __jit_b buf 184 ) ( __jit_q buf spcell )  // mov rax, &sp
-    ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 24 )  // mov rbx,[rax] — frame base
+    ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 24 )  // mov rbx,[r8] — frame base
     ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 139 ) ( __jit_d buf * . pf nslots 8 )  // lea rcx,[rbx+nslots*8]
-    ( __jit_b buf 72 ) ( __jit_b buf 186 ) ( __jit_q buf slab_end )  // mov rdx, slab_end
-    ( __jit_b buf 72 ) ( __jit_b buf 57 ) ( __jit_b buf 209 )  // cmp rcx,rdx
+    ( __jit_b buf 73 ) ( __jit_b buf 59 ) ( __jit_b buf 72 ) ( __jit_b buf 8 )  // cmp rcx,[r8+8] — slab end
     ( __jit_jmp buf pat_at pat_rec 135 + n 3 )  // ja overflow stub (status 8, nothing allocated)
-    ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 8 )  // mov [rax],rcx — bump
-    ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 31 )  // mov [rdi],rbx — ctx[0] = frame base
+    ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 8 )  // mov [r8],rcx — bump
     // Small counts unroll to plain moves — `rep` has a fixed start-up
     // cost that dwarfs a couple of copies, and this runs per call.
     ? > np 0 {
@@ -3969,11 +4309,16 @@ inline @ __fr_setpos s tp i v → v {
         }
     } {}
     ? > knum 0 {
-        ? <= knum 8 {  // constants are known here — materialize them directly
+        : ~ i kneed 0  // pool slots that still need their memory write
+        : ~ i kkc 0
+        ~ < kkc knum { ? != 0 ?? ( vec_get [i] kvwr + nl kkc ) { T x → x F → 1 } { = kneed + kneed 1 } {} = kkc + kkc 1 }
+        ? <= kneed 8 {  // constants are known here — materialize the needed ones directly
             : ~ i kk 0
             ~ < kk knum {
-                ( __jit_b buf 72 ) ( __jit_b buf 184 ) ( __jit_q buf ?? ( vec_get [i] . pf kv kk ) { T x → x F → 0 } )  // mov rax, kv[k]
-                ( __jit_strax buf + nl kk )
+                ? != 0 ?? ( vec_get [i] kvwr + nl kk ) { T x → x F → 1 } {
+                    ( __jit_movrax_imm buf ?? ( vec_get [i] . pf kv kk ) { T x → x F → 0 } )  // rax ← kv[k], shortest form
+                    ( __jit_strax buf + nl kk )
+                } {}
                 = kk + kk 1
             }
         } {
@@ -3985,12 +4330,11 @@ inline @ __fr_setpos s tp i v → v {
             ( __jit_b buf 95 )  // pop rdi
         }
     } {}
-    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 95 ) ( __jit_b buf 8 )  // mov r11,[rdi+8]
-    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 )  // mov r10,[rdi+16]
-    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
     ( __jit_reload_pins buf pins ) ( __jit_reload_xpins buf xpins )  // params/locals/constants are in memory now — lift the pinned ones
     // Branch-target prepass for the rax cache: a record entered by a jump
-    // must not trust what fell through in rax.
+    // must not trust what fell through in rax. A BACKWARD target (2) is a
+    // loop head: its emission is padded to a 16-byte boundary so a loop's
+    // speed stops depending on where earlier code happened to end.
     : ( Vec i ) tgt ( vec_new [i] )
     : ~ i tk 0
     ~ < tk n { ( vec_push [i] tgt 0 ) = tk + tk 1 }
@@ -3999,7 +4343,10 @@ inline @ __fr_setpos s tp i v → v {
         : i top ?? ( vec_get [i] code * trr 6 ) { T x → x F → 0 }
         ? | | | | == top 48 == top 49 == top 54 == top 45 | == top 38 == top 177 {
             : i ta / ?? ( vec_get [i] code + * trr 6 1 ) { T x → x F → 0 } 6
-            ? & >= ta 0 < ta n { ( vec_set [i] tgt ta 1 ) } {}
+            ? & >= ta 0 < ta n {
+                ? & <= ta trr != 2 ?? ( vec_get [i] tgt ta ) { T x → x F → 0 } { ( vec_set [i] tgt ta 2 ) } {
+                    ? == 0 ?? ( vec_get [i] tgt ta ) { T x → x F → 0 } { ( vec_set [i] tgt ta 1 ) } {} }
+            } {}
         } {}
         ? == top 169 {  // br_table: mark every row target
             : ( Vec i ) auxpp . pf aux
@@ -4008,7 +4355,10 @@ inline @ __fr_setpos s tp i v → v {
             : ~ i rwp 0
             ~ < rwp rowsp {
                 : i tap / ?? ( vec_get [i] auxpp + abp * rwp 4 ) { T x → x F → 0 } 6
-                ? & >= tap 0 < tap n { ( vec_set [i] tgt tap 1 ) } {}
+                ? & >= tap 0 < tap n {
+                    ? & <= tap trr != 2 ?? ( vec_get [i] tgt tap ) { T x → x F → 0 } { ( vec_set [i] tgt tap 2 ) } {
+                        ? == 0 ?? ( vec_get [i] tgt tap ) { T x → x F → 0 } { ( vec_set [i] tgt tap 1 ) } {} }
+                } {}
                 = rwp + rwp 1
             }
         } {}
@@ -4016,6 +4366,7 @@ inline @ __fr_setpos s tp i v → v {
     }
     : ~ i raxslot -1
     : ~ i xmmslot -1
+    = g_jit_noax 0  // belt: never inherit a stale flag from a previous function
     // cmp+SEL fusion: when a compare's only consumer is the SEL right
     // after it, the select is emitted on the live flags inside the
     // compare's own iteration and the SEL record is skipped here.
@@ -4023,6 +4374,7 @@ inline @ __fr_setpos s tp i v → v {
     : ~ i fseldst -1
     : ~ i r 0
     ~ < r n {
+        ? == 2 ?? ( vec_get [i] tgt r ) { T x → x F → 0 } { ( __jit_align16 buf ) } {}  // loop head: fixed alignment
         ( vec_push [i] lab ( vec_len [u] buf ) )  // this record starts here
         ? > selskip 0 { = selskip - selskip 1 = r + r 1 } {
             ? != 0 ?? ( vec_get [i] tgt r ) { T x → x F → 1 } { = raxslot -1 = xmmslot -1 } {}
@@ -4033,18 +4385,23 @@ inline @ __fr_setpos s tp i v → v {
             : i c ?? ( vec_get [i] code + base 3 ) { T x → x F → 0 }
             : i d ?? ( vec_get [i] code + base 4 ) { T x → x F → 0 }
             : i w5 ?? ( vec_get [i] code + base 5 ) { T x → x F → 0 }
-            ? == op 51 { ( __jit_b buf 72 ) ( __jit_b buf 184 ) ( __jit_q buf b ) ( __jit_strax_m buf pmap xmap cvals a ) } {  // CONST
-                ? == op 47 { ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {} ( __jit_strax_m buf pmap xmap cvals a ) } {  // MOV
+            ? == op 51 { ( __jit_movrax_imm buf b ) ( __jit_strax_m buf pmap xmap cvals a ) } {  // CONST
+                ? == op 47 {  // MOV: pin-direct when the dst is pinned, else through rax
+                    : i mvp ( __jit_pr pmap a )
+                    : ~ i mvd 0
+                    ? >= mvp 0 { = mvd ( __jit_pmovsrc buf pmap xmap cvals mvp b raxslot ) } {}
+                    ? != 0 mvd { = g_jit_noax 1 } {
+                        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {} ( __jit_strax_m buf pmap xmap cvals a ) }
+                } {  // MOV
                     ? == op 55 {  // RET: results to the caller's args area, free the frame
                         ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 52 ) ( __jit_b buf 36 )  // mov rsi,[rsp] — saved args ptr
                         : ~ i k 0
                         ~ < k b {
-                            ( __jit_ldrax_m buf pmap xmap cvals + a k )
+                            ? | != k 0 != raxslot + a k { ( __jit_ldrax_m buf pmap xmap cvals + a k ) } {}  // first result may already be in rax
                             ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 134 ) ( __jit_d buf * k 8 )  // mov [rsi+k*8],rax
                             = k + k 1
                         }
-                        ( __jit_b buf 72 ) ( __jit_b buf 185 ) ( __jit_q buf spcell )  // mov rcx,&sp
-                        ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 25 )  // mov [rcx],rbx — free frame
+                        ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 24 )  // mov [r8],rbx — free frame
                         ( __jit_b buf 49 ) ( __jit_b buf 192 )  // xor eax,eax (rc = 0, no trap)
                         ( __jit_retseq buf npin )
                     } {
@@ -4077,19 +4434,20 @@ inline @ __fr_setpos s tp i v → v {
                                             : ~ i skip_at -1
                                             : ~ i jok_at -1
                                             ? & == op 50 >= a nimp {
-                                                ( __jit_b buf 72 ) ( __jit_b buf 184 ) ( __jit_q buf + ftab_data * - a nimp 8 )  // mov rax,&ftab[di]
-                                                ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 0 )  // mov rax,[rax]
+                                                : i fto + 16 * - a nimp 8  // anchor offset of ftab[di]
+                                                ? <= fto 127 { ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 64 ) ( __jit_b buf fto ) } {  // mov rax,[r8+fto]
+                                                    ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 128 ) ( __jit_d buf fto ) }
                                                 ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test rax,rax
                                                 ( __jit_b buf 15 ) ( __jit_b buf 132 ) ( __jit_d buf 0 )  // jz call-out (patched)
                                                 = jz_at - ( vec_len [u] buf ) 4
                                                 ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 179 ) ( __jit_d buf * b 8 )  // lea rsi,[rbx+argbase*8]
                                                 ( __jit_b buf 255 ) ( __jit_b buf 208 )  // call rax
+                                                ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test eax,eax — the common case first
+                                                ( __jit_b buf 15 ) ( __jit_b buf 132 ) ( __jit_d buf 0 )  // jz → after the call-out (patched with skip_at)
+                                                = jok_at - ( vec_len [u] buf ) 4
                                                 ( __jit_b buf 131 ) ( __jit_b buf 248 ) ( __jit_b buf 8 )  // cmp eax,8
                                                 ( __jit_b buf 15 ) ( __jit_b buf 132 ) ( __jit_d buf 0 )  // je call-out (slab full: retry through the driver)
                                                 = je8_at - ( vec_len [u] buf ) 4
-                                                ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test eax,eax
-                                                ( __jit_b buf 15 ) ( __jit_b buf 132 ) ( __jit_d buf 0 )  // jz → after the call-out (patched with skip_at)
-                                                = jok_at - ( vec_len [u] buf ) 4
                                                 ( __jit_b buf 131 ) ( __jit_b buf 248 ) ( __jit_b buf 16 )  // cmp eax,16
                                                 ( __jit_jmp buf pat_at pat_rec 130 + n 2 )  // jb: terminal — propagate the trap status
                                                 // resumable status from the callee: park this frame too and
@@ -4101,13 +4459,7 @@ inline @ __fr_setpos s tp i v → v {
                                                 ( vec_set [u] buf + primp 1 # u & ( __lshr64 prop_resume 8 ) 255 )
                                                 ( vec_set [u] buf + primp 2 # u & ( __lshr64 prop_resume 16 ) 255 )
                                                 ( vec_set [u] buf + primp 3 # u & ( __lshr64 prop_resume 24 ) 255 )
-                                                ( __jit_push_pins buf npin )
-                                                ( __jit_b buf 83 )  // push rbx
-                                                ( __jit_b buf 86 )  // push rsi
-                                                ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 31 )  // mov rbx,[rdi]
-                                                ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 95 ) ( __jit_b buf 8 )  // mov r11,[rdi+8]
-                                                ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 )  // mov r10,[rdi+16]
-                                                ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
+                                                ( __jit_resume_entry buf npin spcell )
                                                 ( __jit_b buf 233 ) ( __jit_d buf 0 )  // jmp past the call-out (patched)
                                                 = skip_at - ( vec_len [u] buf ) 4
                                                 : i co_here ( vec_len [u] buf )
@@ -4139,13 +4491,7 @@ inline @ __fr_setpos s tp i v → v {
                                             ( vec_set [u] buf + prim2 2 # u & ( __lshr64 resume 16 ) 255 )
                                             ( vec_set [u] buf + prim2 3 # u & ( __lshr64 resume 24 ) 255 )
                                             // resume point: rebalance the stack, reload the frame registers
-                                            ( __jit_push_pins buf npin )
-                                            ( __jit_b buf 83 )  // push rbx
-                                            ( __jit_b buf 86 )  // push rsi (args ptr, from call_code_at2)
-                                            ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 31 )  // mov rbx,[rdi]
-                                            ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 95 ) ( __jit_b buf 8 )  // mov r11,[rdi+8]
-                                            ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 )  // mov r10,[rdi+16]
-                                            ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24] (globals base; caller-clobbered across the round trip)
+                                            ( __jit_resume_entry buf npin spcell )
                                             ? >= skip_at 0 {  // land the direct path's jumps here
                                                 : i after ( vec_len [u] buf )
                                                 ( vec_set [u] buf skip_at # u & - after + skip_at 4 255 )
@@ -4166,14 +4512,25 @@ inline @ __fr_setpos s tp i v → v {
                                                 : i mk ( __jit_memkind op )
                                                 : i wid >> mk 2
                                                 ? == 0 & mk 1 {  // ── load: a=dst b=base c=off d=index ──
-                                                    ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+                                                    : i pbL ( __jit_pr pmap b )
                                                     : i pix ( __jit_pr pmap d )
-                                                    ? >= pix 0 { ( __jit_oprax_pr buf 3 pix ) } {  // add rax,r1X
-                                                        : ~ i ixd 0
-                                                        ? == pix -2 { = ixd ( __jit_alu_ci64 buf 0 ( __jit_cv cvals d ) ) } {}
-                                                        ? == 0 ixd { ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * d 8 ) } {}  // add rax,[rbx+d]
-                                                    }
-                                                    ( __jit_bc buf pat_at pat_rec n c wid guard )
+                                                    : ~ i addr9 0  // 1 = a 32-bit lea already computed the wrapped address
+                                                    ? & != 0 guard >= pbL 0 {
+                                                        ? >= pix 0 { ( __jit_lea32 buf 0 pix pbL ) = addr9 1 } {
+                                                            ? == pix -2 {
+                                                                : i div9 ( __jit_cv cvals d )
+                                                                ? != 0 ( __jit_imm32 div9 ) { ( __jit_lea32bd buf pbL div9 ) = addr9 1 } {}
+                                                            } {} }
+                                                    } {}
+                                                    ? == 0 addr9 {
+                                                        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+                                                        ? >= pix 0 { ( __jit_oprax_pr buf 3 pix ) } {  // add rax,r1X
+                                                            : ~ i ixd 0
+                                                            ? == pix -2 { = ixd ( __jit_alu_ci64 buf 0 ( __jit_cv cvals d ) ) } {}
+                                                            ? == 0 ixd { ( __jit_b buf 72 ) ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * d 8 ) } {}  // add rax,[rbx+d]
+                                                        }
+                                                        ( __jit_bc buf pat_at pat_rec n c wid guard )
+                                                    } {}
                                                     ? == wid 8 { ( __jit_mem buf 0 0 139 0 c ) } {}  // mov rax,[mem]
                                                     ? & == wid 4 == 0 & mk 2 { ( __jit_mem32 buf 0 0 139 0 c ) } {}  // mov eax,[mem] (zero-ext)
                                                     ? & == wid 4 != 0 & mk 2 { ( __jit_mem buf 0 0 99 0 c ) } {}  // movsxd rax,[mem]
@@ -4183,8 +4540,13 @@ inline @ __fr_setpos s tp i v → v {
                                                     ? & == wid 1 != 0 & mk 2 { ( __jit_mem buf 0 1 190 0 c ) } {}  // movsx rax,byte[mem]
                                                     ( __jit_strax_m buf pmap xmap cvals a )
                                                 } {  // ── store: a=addr b=val c=off ──
-                                                    ? != raxslot a { ( __jit_ldrax_m buf pmap xmap cvals a ) } {}
-                                                    ( __jit_bc buf pat_at pat_rec n c wid guard )
+                                                    : i paS ( __jit_pr pmap a )
+                                                    ? & != 0 guard >= paS 0 {
+                                                        ( __jit_b buf 65 ) ( __jit_b buf 139 ) ( __jit_b buf + 192 & paS 7 )  // mov eax,r_pa d — the wrap
+                                                    } {
+                                                        ? != raxslot a { ( __jit_ldrax_m buf pmap xmap cvals a ) } {}
+                                                        ( __jit_bc buf pat_at pat_rec n c wid guard )
+                                                    }
                                                     ( __jit_ldrcx_m buf pmap xmap cvals b )  // value → rcx
                                                     ? == wid 8 { ( __jit_mem buf 0 0 137 1 c ) } {}  // mov [mem],rcx
                                                     ? == wid 4 { ( __jit_mem32 buf 0 0 137 1 c ) } {}  // mov [mem],ecx
@@ -4201,12 +4563,14 @@ inline @ __fr_setpos s tp i v → v {
                                                 } {
                                                     ? & >= op 56 <= op 75 {  // compare → 0/1 in dst
                                                         ( __jit_cmp buf pmap xmap cvals b c ? < op 66 1 0 raxslot )
+                                                        = g_jit_noax 0  // setcc/movzx below write rax whatever the compare did
                                                         ( __jit_b buf 15 ) ( __jit_b buf ?? ( vec_get [i] ( __jit_settab ) % - op 56 10 ) { T x → x F → 148 } ) ( __jit_b buf 192 )  // setcc al
                                                         ( __jit_b buf 15 ) ( __jit_b buf 182 ) ( __jit_b buf 192 )  // movzx eax,al
                                                         ( __jit_strax_m buf pmap xmap cvals a )
                                                         // setcc/movzx/mov leave the flags alone: a SEL right
                                                         // behind us keyed by this result can cmov on them and
                                                         // skip its own load-test round trip.
+                                                        = fseldst a  // rax holds the compare's 0/1; pin-direct SELs below leave it there
                                                         : ~ i fr + r 1
                                                         : ~ i fgo 1
                                                         ~ & != 0 fgo < fr n {
@@ -4219,12 +4583,46 @@ inline @ __fr_setpos s tp i v → v {
                                                             : i st2 ?? ( vec_get [i] tgt fr ) { T x → x F → 1 }
                                                             = fgo 0
                                                             ? & & == sop 46 == sd a == 0 st2 {
-                                                                ( __jit_ldrax_m buf pmap xmap cvals sc )  // srcF (mov leaves flags)
-                                                                ( __jit_ldrcx_m buf pmap xmap cvals sb )  // srcT
-                                                                ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf | 64 & ( __jit_jcc cctab op ) 15 ) ( __jit_b buf 193 )  // cmov<cc> rax,rcx — flags stay live for the next SEL
-                                                                ( __jit_strax_m buf pmap xmap cvals sa )
+                                                                : i cc4 & ( __jit_jcc cctab op ) 15
+                                                                : i pselp ( __jit_pr pmap sa )
+                                                                : ~ i seld 0  // 1 = emitted pin-direct (rax untouched)
+                                                                ? >= pselp 0 {  // pin-direct: cmov straight into r_sa (mov/cmov only — flags stay live)
+                                                                    ? == sa sc {  // dst == srcF: cmov<cc> r_sa, srcT
+                                                                        : i pt ( __jit_pr pmap sb )
+                                                                        ? >= pt 0 { ( __jit_b buf 77 ) ( __jit_b buf 15 ) ( __jit_b buf + 64 cc4 ) ( __jit_b buf + 192 + * pselp 8 pt ) } {
+                                                                            ( __jit_ldrcx_m buf pmap xmap cvals sb )
+                                                                            ( __jit_b buf 76 ) ( __jit_b buf 15 ) ( __jit_b buf + 64 cc4 ) ( __jit_b buf + 193 * pselp 8 ) }  // cmov r_sa,rcx
+                                                                        = seld 1
+                                                                    } {
+                                                                        ? == sa sb {  // dst == srcT: cmov<!cc> r_sa, srcF
+                                                                            : i icc ? == % cc4 2 0 + cc4 1 - cc4 1
+                                                                            : i pf2 ( __jit_pr pmap sc )
+                                                                            ? >= pf2 0 { ( __jit_b buf 77 ) ( __jit_b buf 15 ) ( __jit_b buf + 64 icc ) ( __jit_b buf + 192 + * pselp 8 pf2 ) } {
+                                                                                ( __jit_ldrcx_m buf pmap xmap cvals sc )
+                                                                                ( __jit_b buf 76 ) ( __jit_b buf 15 ) ( __jit_b buf + 64 icc ) ( __jit_b buf + 193 * pselp 8 ) }
+                                                                            = seld 1
+                                                                        } {  // dst distinct: mov r_sa ← srcF, then cmov<cc> r_sa ← srcT
+                                                                            ? != 0 ( __jit_pmovsrc buf pmap xmap cvals pselp sc -1 ) {
+                                                                                : i pt2 ( __jit_pr pmap sb )
+                                                                                ? >= pt2 0 { ( __jit_b buf 77 ) ( __jit_b buf 15 ) ( __jit_b buf + 64 cc4 ) ( __jit_b buf + 192 + * pselp 8 pt2 ) } {
+                                                                                    ( __jit_ldrcx_m buf pmap xmap cvals sb )
+                                                                                    ( __jit_b buf 76 ) ( __jit_b buf 15 ) ( __jit_b buf + 64 cc4 ) ( __jit_b buf + 193 * pselp 8 ) }
+                                                                                = seld 1
+                                                                            } {}
+                                                                        }
+                                                                    }
+                                                                } {}
+                                                                ? == 0 seld {  // through rax as before
+                                                                    ( __jit_ldrax_m buf pmap xmap cvals sc )  // srcF (mov leaves flags)
+                                                                    ( __jit_ldrcx_m buf pmap xmap cvals sb )  // srcT
+                                                                    ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf + 64 cc4 ) ( __jit_b buf 193 )  // cmov<cc> rax,rcx — flags stay live for the next SEL
+                                                                    ( __jit_strax_m buf pmap xmap cvals sa )
+                                                                    = fseldst sa  // rax now holds the SEL result
+                                                                } {
+                                                                    ? == sa fseldst { = fseldst -1 } {}  // rax kept its old value; stale if this SEL overwrote that slot
+                                                                }
+                                                                ? == xmmslot sa { = xmmslot -1 } {}
                                                                 = selskip + selskip 1
-                                                                = fseldst sa
                                                                 = fgo 1
                                                                 = fr + fr 1
                                                                 ? == sa a { = fgo 0 } {}  // the SEL overwrote the condition — later SELs read the new value
@@ -4233,11 +4631,15 @@ inline @ __fr_setpos s tp i v → v {
                                                     } {
                                                         ? == op 49 { ( __jit_jmp buf pat_at pat_rec 233 / a 6 ) } {  // BR
                                                             ? == op 48 {  // IFZ: jump if rbase[b]==0
-                                                                ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {} ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test rax,rax
+                                                                : i zp ( __jit_pr pmap b )
+                                                                ? >= zp 0 { ( __jit_b buf 77 ) ( __jit_b buf 133 ) ( __jit_b buf + 192 * zp 9 ) = g_jit_noax 1 } {  // test r_pb,r_pb
+                                                                    ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {} ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 ) }  // test rax,rax
                                                                 ( __jit_jmp buf pat_at pat_rec 132 / a 6 )  // je
                                                             } {
                                                                 ? == op 54 {  // BRIF: jump if rbase[b]!=0
-                                                                    ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {} ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 )
+                                                                    : i np2 ( __jit_pr pmap b )
+                                                                    ? >= np2 0 { ( __jit_b buf 77 ) ( __jit_b buf 133 ) ( __jit_b buf + 192 * np2 9 ) = g_jit_noax 1 } {
+                                                                        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {} ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 ) }
                                                                     ( __jit_jmp buf pat_at pat_rec 133 / a 6 )  // jne
                                                                 } {
                                                                     ? == op 45 {  // BRIFC: cmp lhs,rhs; jcc target (cmpop in d)
@@ -4258,7 +4660,10 @@ inline @ __fr_setpos s tp i v → v {
                                                                                 ( __jit_strax_m buf pmap xmap cvals b )
                                                                                 ? >= pr2 0 { ( __jit_oprax_pr buf 59 pr2 ) } {  // cmp rax,r1X
                                                                                     : ~ i cr64 0
-                                                                                    ? == pr2 -2 { : i rv64 ( __jit_cv cvals rhs ) ? != 0 ( __jit_imm32 rv64 ) { ( __jit_b buf 72 ) ( __jit_b buf 129 ) ( __jit_b buf 248 ) ( __jit_d buf rv64 ) = cr64 1 } {} } {}
+                                                                                    ? == pr2 -2 {
+                                                                                        : i rv64 ( __jit_cv cvals rhs )
+                                                                                        ? != 0 ( __jit_imm8 rv64 ) { ( __jit_b buf 72 ) ( __jit_b buf 131 ) ( __jit_b buf 248 ) ( __jit_b buf & rv64 255 ) = cr64 1 } {
+                                                                                            ? != 0 ( __jit_imm32 rv64 ) { ( __jit_b buf 72 ) ( __jit_b buf 129 ) ( __jit_b buf 248 ) ( __jit_d buf rv64 ) = cr64 1 } {} } } {}
                                                                                     ? == 0 cr64 { ( __jit_b buf 72 ) ( __jit_b buf 59 ) ( __jit_b buf 131 ) ( __jit_d buf * rhs 8 ) } {} }  // cmp rax,[rbx+rhs]
                                                                             } {  // i32
                                                                                 ? != raxslot c { ( __jit_ldrax_m buf pmap xmap cvals c ) } {}
@@ -4268,11 +4673,14 @@ inline @ __fr_setpos s tp i v → v {
                                                                                     ? == 0 ad32 { ( __jit_b buf 3 ) ( __jit_b buf 131 ) ( __jit_d buf * d 8 ) } {} }  // add eax,[rbx+s2]
                                                                                 ( __jit_movslq buf ) ( __jit_strax_m buf pmap xmap cvals b )
                                                                                 ? >= pr2 0 { ( __jit_opeax_pr buf 59 pr2 ) } {  // cmp eax,r1Xd
-                                                                                    ? == pr2 -2 { ( __jit_b buf 129 ) ( __jit_b buf 248 ) ( __jit_d buf ( __jit_cv cvals rhs ) ) } {  // cmp eax,imm32
+                                                                                    ? == pr2 -2 {
+                                                                                        : i rv32 ( __jit_cv cvals rhs )
+                                                                                        ? != 0 ( __jit_imm8 rv32 ) { ( __jit_b buf 131 ) ( __jit_b buf 248 ) ( __jit_b buf & rv32 255 ) } {  // cmp eax,imm8
+                                                                                            ( __jit_b buf 129 ) ( __jit_b buf 248 ) ( __jit_d buf rv32 ) } } {  // cmp eax,imm32
                                                                                         ( __jit_b buf 59 ) ( __jit_b buf 131 ) ( __jit_d buf * rhs 8 ) } }  // cmp eax,[rbx+rhs]
                                                                             }
                                                                             ( __jit_jmp buf pat_at pat_rec ( __jit_jcc cctab cmpop ) / a 6 )
-                                                                        } { ( __jit_ext buf pmap pins npin xmap xpins cvals pat_at pat_rec n op a b c d w5 raxslot auxe pta_off pta_stub chaincell guard xmmslot ) }
+                                                                        } { ( __jit_ext buf pmap pins npin xmap xpins cvals pat_at pat_rec n op a b c d w5 raxslot auxe pta_off pta_stub chaincell spcell guard xmmslot ) }
                                                                     }
                                                                 }
                                                             }
@@ -4288,12 +4696,19 @@ inline @ __fr_setpos s tp i v → v {
                     }
                 }
             }
-            ? != 0 selskip {  // the SEL's result is in rax and in its slot
+            ? != 0 selskip {  // fseldst tracks what rax holds across the fused chain
                 = raxslot fseldst
                 ? == xmmslot fseldst { = xmmslot -1 } {}
+                = g_jit_noax 0
             } {
-                = raxslot ( __jit_newrax op a b raxslot )
-                = xmmslot ( __jit_newxmm op a b xmmslot )
+                ? != 0 g_jit_noax {  // pin-direct record: rax untouched, cache survives
+                    = g_jit_noax 0
+                    = raxslot ( __jit_newrax_noax op a b raxslot )
+                    = xmmslot ( __jit_newxmm op a b xmmslot )
+                } {
+                    = raxslot ( __jit_newrax op a b raxslot )
+                    = xmmslot ( __jit_newxmm op a b xmmslot )
+                }
             }
             = r + r 1
         }
@@ -4310,8 +4725,7 @@ inline @ __fr_setpos s tp i v → v {
     // n+2: exit with whatever status eax holds, freeing this frame —
     // also the propagation target when a direct callee returns a trap.
     ( vec_push [i] lab ( vec_len [u] buf ) )
-    ( __jit_b buf 72 ) ( __jit_b buf 185 ) ( __jit_q buf spcell )  // mov rcx,&sp
-    ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 25 )  // mov [rcx],rbx
+    ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 24 )  // mov [r8],rbx — free frame
     ( __jit_retseq buf npin )
     // n+3: prologue overflow — status 8, nothing was allocated.
     ( vec_push [i] lab ( vec_len [u] buf ) )
@@ -4521,7 +4935,9 @@ inline @ __fr_setpos s tp i v → v {
         // callers stop coming through this driver at all
         : s njh . pfc jit
         ? & != # i njh 0 != # i njh -1 {
-            ( vec_set [i] . it jit_ftab - callee . m num_import_funcs # i njh )
+            // publish the DIRECT entry: page + the 22-byte driver preamble
+            : *i ftw # *i + . it jit_spcell 16
+            = . ftw - callee . m num_import_funcs + # i njh 22
         } {}
     } {}
     : s jh . pfc jit
@@ -4597,7 +5013,9 @@ inline @ __fr_setpos s tp i v → v {
             ( __jit_try it m pfj )
             : s njh . pfj jit
             ? & != # i njh 0 != # i njh -1 {
-                ( vec_set [i] . it jit_ftab - fidx . m num_import_funcs # i njh )
+                // publish the DIRECT entry: page + the 22-byte driver preamble
+                : *i ftw2 # *i + . it jit_spcell 16
+                = . ftw2 - fidx . m num_import_funcs + # i njh 22
             } {}
         } {}
         : s jh . pfj jit

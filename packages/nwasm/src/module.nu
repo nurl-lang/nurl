@@ -205,8 +205,16 @@ $ `stdlib/std/bytes.nu`
 @ __const_expr * Wc c * Module m → i {
     : i op0 ( wc_u8 c )
     : ~ i val 0
+    // Every immediate must be CONSUMED, not scanned over: an f32/f64 bit
+    // pattern (or a ref.func index) may contain 0x0b, and a scanner that
+    // stops there desyncs the whole section — every later global reads
+    // garbage. Floats keep their raw bit patterns (the slot convention).
     ? | == op0 65 == op0 66 { = val ( wc_sleb c ) } {
-        ? == op0 35 { ( wc_uleb c ) ( __mod_err m `constant expression uses global.get (imported globals unsupported)` ) } {} }
+        ? == op0 67 { : ~ i fk 0 ~ < fk 4 { = val | val << ( wc_u8 c ) * fk 8 = fk + fk 1 } } {  // f32.const: 4 raw bytes
+            ? == op0 68 { : ~ i dk 0 ~ < dk 8 { = val | val << ( wc_u8 c ) * dk 8 = dk + dk 1 } } {  // f64.const: 8 raw bytes
+                ? == op0 208 { ( wc_u8 c ) = val -1 } {  // ref.null ht → null
+                    ? == op0 210 { = val ( wc_uleb c ) } {  // ref.func n
+                        ? == op0 35 { ( wc_uleb c ) ( __mod_err m `constant expression uses global.get (imported globals unsupported)` ) } {} } } } } }
     // Consume through the terminating 0x0b `end`. Bounded by EOF: past the end
     // of input wc_u8 returns 0 forever, so an unterminated expression must not
     // spin — a truncated global/data/elem offset expr is a decode error.
@@ -382,14 +390,16 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Table section: allocate the first table (size = min, slots null = −1),
-// recording its declared maximum for table.grow. Only funcref tables are
-// supported — an externref table is a decode error.
+// recording its declared maximum for table.grow. funcref and externref
+// tables share the representation: entries are function indices or −1
+// for null — and without the GC proposal a module can only ever put
+// null (ref.null extern) into an externref table, so −1 covers it.
 @ __decode_table_sec * Wc c * Module m → v {
     : i n ( __chk_count c m ( wc_uleb c ) `bad table count` )
     : ~ i k 0
     ~ < k n {
         : i et ( wc_u8 c )  // elemtype: 0x70 funcref / 0x6f externref
-        ? != et 112 { ( __mod_err m `unsupported table element type (externref)` ) } {}
+        ? & != et 112 != et 111 { ( __mod_err m `unsupported table element type` ) } {}
         : i flag ( wc_u8 c )
         : ~ i mn ( wc_uleb c )
         : i mx ? == flag 1 ( wc_uleb c ) 0
