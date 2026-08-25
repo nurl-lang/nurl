@@ -3433,6 +3433,47 @@ long long nurl_call_code_at2(void *fn, long long off, void *a0, void *a1) {
     return ((long long (*)(void *, void *))((char *)fn + off))(a0, a1);
 }
 
+/* setjmp-guarded entry: generated code raises a trap by CALLING the
+ * address from nurl_code_trap_addr with the status in the first
+ * argument — the whole native call chain unwinds in one longjmp instead
+ * of every frame returning and checking a status. Nested entries stack
+ * through the thread-local buffer pointer. On targets with no JIT the
+ * entry never runs generated code, so the stubs only have to link. */
+#if defined(__wasm__)
+long long nurl_call_code2_sj(void *fn, void *a0, void *a1) {
+    (void)fn; (void)a0; (void)a1;
+    return 0;
+}
+void *nurl_code_trap_addr(void) { return 0; }
+#else
+#include <setjmp.h>
+static __thread jmp_buf *nurl__code_jb = NULL;
+
+static void nurl__code_trap(long long st) {
+    longjmp(*nurl__code_jb, (int)st);
+}
+
+NURL__CALL_JIT
+long long nurl_call_code2_sj(void *fn, void *a0, void *a1) {
+    if (!fn) return 0;
+    jmp_buf jb;
+    jmp_buf *old = nurl__code_jb;
+    nurl__code_jb = &jb;
+    long long rc;
+    int j = setjmp(jb);
+    if (j == 0) {
+        ((void (*)(void *, void *))fn)(a0, a1);
+        rc = 0;
+    } else {
+        rc = j;
+    }
+    nurl__code_jb = old;
+    return rc;
+}
+
+void *nurl_code_trap_addr(void) { return (void *)&nurl__code_trap; }
+#endif
+
 /* ── guard-page linear memory ───────────────────────────────────────
  * A wasm32 effective address is a 32-bit index plus a 32-bit constant
  * offset: with the base of an 8 GiB PROT_NONE reservation, every

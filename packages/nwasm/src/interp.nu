@@ -42,6 +42,10 @@ $ `module.nu`
 
 & `c` @ nurl_call_code2 *u fn *u a *u b → i
 
+& `c` @ nurl_call_code2_sj *u fn *u a *u b → i
+
+& `c` @ nurl_code_trap_addr → i
+
 & `c` @ nurl_call_code_at2 *u fn i off *u a *u b → i
 
 & `c` @ nurl_code_free *u p i n → v
@@ -3336,8 +3340,8 @@ inline @ __fr_setpos s tp i v → v {
     ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 71 ) ( __jit_b buf 48 )  // mov rax,[rdi+48] — 0 ok / 1 trap recorded
     ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test rax,rax
     ( __jit_b buf 116 ) ( __jit_b buf 10 )  // je +10 — over the trap exit
-    ( __jit_b buf 184 ) ( __jit_d buf 11 )  // mov eax,11 (trap already recorded)
-    ( __jit_jmp buf pat_at pat_rec 233 + trap_rec 2 )  // jmp the freeing exit
+    ( __jit_b buf 191 ) ( __jit_d buf 11 )  // mov edi,11 (trap already recorded)
+    ( __jit_jmp buf pat_at pat_rec 233 + trap_rec 2 )  // jmp the longjmp gate
 }
 
 // CALL/CALLIMP flavour: constant fidx + argbase.
@@ -4197,7 +4201,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ pins
 }
 
-@ __jit_try * Interp it * Module m * PFunc pf → v {
+@ __jit_try * Interp it * Module m * PFunc pf i fidx9 → v {
     ? != # i . pf jit 0 { ^ v } {}  // already tried (handle or -1)
     ? == 0 ( __jit_ok pf ) { = . pf jit # s -1 ^ v } {}
     ( __jit_state_init it m )
@@ -4222,6 +4226,7 @@ inline @ __fr_setpos s tp i v → v {
     // faults nobody converts — such a function keeps its explicit checks.
     : i guard ? & != 0 . it mem_raw != 0 ( nurl_guard_code_room ) 1 0
     : i spcell . it jit_spcell  // anchor block, held in r8: [sp, slab end, ftab..]
+    : i trapfn ( nurl_code_trap_addr )  // traps CALL here (edi = status) and longjmp back to the entry
     : i cofn9 . it jit_co_fn  // the inline call-out bridge (fn, env)
     : i coenv9 . it jit_co_env
     : i nimp . m num_import_funcs
@@ -4417,11 +4422,10 @@ inline @ __fr_setpos s tp i v → v {
                             = k + k 1
                         }
                         ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 24 )  // mov [r8],rbx — free frame
-                        ( __jit_b buf 49 ) ( __jit_b buf 192 )  // xor eax,eax (rc = 0, no trap)
                         ( __jit_retseq buf npin )
                     } {
-                        ? == op 172 {  // unreachable → status 3, via the freeing exit stub
-                            ( __jit_b buf 184 ) ( __jit_d buf 3 )
+                        ? == op 172 {  // unreachable → status 3, via the longjmp gate
+                            ( __jit_b buf 191 ) ( __jit_d buf 3 )
                             ( __jit_jmp buf pat_at pat_rec 233 + n 2 )
                         } {
                             ? & >= op 39 <= op 42 {  // f64 mul/add/sub/div
@@ -4442,11 +4446,32 @@ inline @ __fr_setpos s tp i v → v {
                                             // callee is one native call. ftab[di] is 0 until the callee is
                                             // compiled and proven pure — then the same site goes direct.
                                             // Either path reads the arguments from this frame's memory.
-                                            ( __jit_sync_pins buf pins )
+                                            // Int pins are callee-saved and no callee can touch another
+                                            // frame's slots, so they only need the memory round trip when
+                                            // one overlaps the argument/result window. xmm pins are
+                                            // caller-saved: they always sync and reload.
+                                            : s ctw ( module_func_type m a )
+                                            : ~ i wargs 0
+                                            : ~ i wres 0
+                                            ? != # i ctw 0 {
+                                                : *FuncType ctwf # *FuncType ctw
+                                                = wargs ( vec_len [i] . ctwf params )
+                                                = wres ( vec_len [i] . ctwf results )
+                                            } {}
+                                            : i wspan ? > wargs wres wargs wres
+                                            : ~ i pinw 0  // 1 = some int pin lives in [b, b+wspan)
+                                            : ~ i pwk 0
+                                            : i pwn ( vec_len [i] pins )
+                                            ~ < pwk pwn {
+                                                : i pws ?? ( vec_get [i] pins pwk ) { T x → x F → -1 }
+                                                ? & >= pws b < pws + b wspan { = pinw 1 } {}
+                                                = pwk + pwk 1
+                                            }
+                                            ? != 0 pinw { ( __jit_sync_pins buf pins ) } {}
                                             ( __jit_sync_xpins buf xpins )
                                             ? == op 210 {  // import: call the bridge closure inline — no parking
                                                 ( __jit_inline_callout buf pat_at pat_rec n a b 16 spcell cofn9 coenv9 npin )
-                                                ( __jit_reload_pins buf pins )
+                                                ? != 0 pinw { ( __jit_reload_pins buf pins ) } {}
                                                 ( __jit_reload_xpins buf xpins )
                                             } {
                                                 // Defined callee. Direct path when the ftab entry is live; the
@@ -4455,7 +4480,6 @@ inline @ __fr_setpos s tp i v → v {
                                                 // callee can only return 0 or a trap status (< 16), which is
                                                 // handed straight to the freeing exit.
                                                 : ~ i jz_at -1
-                                                : ~ i je8_at -1
                                                 : ~ i jok_at -1
                                                 ? >= a nimp {
                                                     // a one-parameter callee takes arg0 in rdx on the direct
@@ -4472,23 +4496,14 @@ inline @ __fr_setpos s tp i v → v {
                                                     ( __jit_b buf 15 ) ( __jit_b buf 132 ) ( __jit_d buf 0 )  // jz → the bridge (patched)
                                                     = jz_at - ( vec_len [u] buf ) 4
                                                     ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 179 ) ( __jit_d buf * b 8 )  // lea rsi,[rbx+argbase*8]
-                                                    ( __jit_b buf 255 ) ( __jit_b buf 208 )  // call rax
-                                                    ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test eax,eax — the common case first
-                                                    ( __jit_b buf 15 ) ( __jit_b buf 132 ) ( __jit_d buf 0 )  // jz → after (patched)
+                                                    ( __jit_b buf 255 ) ( __jit_b buf 208 )  // call rax — a trap longjmps past us; a return IS success
+                                                    ( __jit_b buf 233 ) ( __jit_d buf 0 )  // jmp → after (patched)
                                                     = jok_at - ( vec_len [u] buf ) 4
-                                                    ( __jit_b buf 131 ) ( __jit_b buf 248 ) ( __jit_b buf 8 )  // cmp eax,8
-                                                    ( __jit_b buf 15 ) ( __jit_b buf 132 ) ( __jit_d buf 0 )  // je → the bridge (slab full: run through the driver)
-                                                    = je8_at - ( vec_len [u] buf ) 4
-                                                    ( __jit_jmp buf pat_at pat_rec 233 + n 2 )  // a trap status: the freeing exit
                                                     : i co_here ( vec_len [u] buf )
                                                     ( vec_set [u] buf jz_at # u & - co_here + jz_at 4 255 )
                                                     ( vec_set [u] buf + jz_at 1 # u & ( __lshr64 - co_here + jz_at 4 8 ) 255 )
                                                     ( vec_set [u] buf + jz_at 2 # u & ( __lshr64 - co_here + jz_at 4 16 ) 255 )
                                                     ( vec_set [u] buf + jz_at 3 # u & ( __lshr64 - co_here + jz_at 4 24 ) 255 )
-                                                    ( vec_set [u] buf je8_at # u & - co_here + je8_at 4 255 )
-                                                    ( vec_set [u] buf + je8_at 1 # u & ( __lshr64 - co_here + je8_at 4 8 ) 255 )
-                                                    ( vec_set [u] buf + je8_at 2 # u & ( __lshr64 - co_here + je8_at 4 16 ) 255 )
-                                                    ( vec_set [u] buf + je8_at 3 # u & ( __lshr64 - co_here + je8_at 4 24 ) 255 )
                                                 } {}
                                                 // the bridge: uncompiled or slab-full callee runs via the driver
                                                 ( __jit_inline_callout buf pat_at pat_rec n a b 16 spcell cofn9 coenv9 npin )
@@ -4499,9 +4514,11 @@ inline @ __fr_setpos s tp i v → v {
                                                     ( vec_set [u] buf + jok_at 2 # u & ( __lshr64 - after + jok_at 4 16 ) 255 )
                                                     ( vec_set [u] buf + jok_at 3 # u & ( __lshr64 - after + jok_at 4 24 ) 255 )
                                                 } {}
-                                                // both paths join here: the callee wrote its results into
-                                                // this frame's memory, so memory is the fresher copy.
-                                                ( __jit_reload_pins buf pins )
+                                                // both paths join here: results landed in this frame's
+                                                // memory, so an int pin reloads only when the window
+                                                // could have touched its slot; xmm pins are caller-saved
+                                                // and always round-trip.
+                                                ? != 0 pinw { ( __jit_reload_pins buf pins ) } {}
                                                 ( __jit_reload_xpins buf xpins )
                                             }
                                         } {
@@ -4711,26 +4728,35 @@ inline @ __fr_setpos s tp i v → v {
         }
     }
     // The trap stub, at label index n (where every bounds check jumps):
-    // status 1 (out of bounds), through the freeing exit below.
+    // status 1 (out of bounds), into the longjmp gate below.
     ( vec_push [i] lab ( vec_len [u] buf ) )
-    ( __jit_b buf 184 ) ( __jit_d buf 1 )  // mov eax,1
+    ( __jit_b buf 191 ) ( __jit_d buf 1 )  // mov edi,1
     ( __jit_jmp buf pat_at pat_rec 233 + n 2 )
     // The divide-by-zero stub, at label index n+1: status 4.
     ( vec_push [i] lab ( vec_len [u] buf ) )
-    ( __jit_b buf 184 ) ( __jit_d buf 4 )  // mov eax,4
+    ( __jit_b buf 191 ) ( __jit_d buf 4 )  // mov edi,4
     ( __jit_jmp buf pat_at pat_rec 233 + n 2 )
-    // n+2: exit with whatever status eax holds, freeing this frame —
-    // also the propagation target when a direct callee returns a trap.
+    // n+2: the longjmp gate — every trap lands here with its status in
+    // edi and CALLS the runtime's trap entry, which longjmps the whole
+    // native chain back to nurl_call_code2_sj. The slab pointer is
+    // restored wholesale there, so no per-frame freeing is needed.
     ( vec_push [i] lab ( vec_len [u] buf ) )
-    ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 24 )  // mov [r8],rbx — free frame
+    ( __jit_b buf 72 ) ( __jit_b buf 131 ) ( __jit_b buf 228 ) ( __jit_b buf 240 )  // and rsp,-16 — C ABI alignment (never returns)
+    ( __jit_b buf 72 ) ( __jit_b buf 184 ) ( __jit_q buf trapfn )  // movabs rax, trap entry
+    ( __jit_b buf 255 ) ( __jit_b buf 208 )  // call rax
+    // n+3: prologue overflow — the slab is full, so THIS call runs on
+    // the interpreter through the bridge (kind 20): rbx carries the raw
+    // args pointer as the frame base, argbase 0. The frame was never
+    // allocated, so a plain return balances the entry pushes.
+    ( vec_push [i] lab ( vec_len [u] buf ) )
+    ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 28 ) ( __jit_b buf 36 )  // mov rbx,[rsp] — the saved args pointer
+    ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 32 ) ( __jit_d buf fidx9 )  // mov qword[rdi+32], own fidx
+    ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf 0 )  // mov qword[rdi+40], 0
+    ( __jit_inline_call buf pat_at pat_rec n 20 spcell cofn9 coenv9 )
     ( __jit_retseq buf npin )
-    // n+3: prologue overflow — status 8, nothing was allocated.
+    // n+4: signed-division overflow — status 10, into the gate.
     ( vec_push [i] lab ( vec_len [u] buf ) )
-    ( __jit_b buf 184 ) ( __jit_d buf 8 )  // mov eax,8
-    ( __jit_retseq buf npin )
-    // n+4: signed-division overflow — status 10, through the freeing exit.
-    ( vec_push [i] lab ( vec_len [u] buf ) )
-    ( __jit_b buf 184 ) ( __jit_d buf 10 )  // mov eax,10
+    ( __jit_b buf 191 ) ( __jit_d buf 10 )  // mov edi,10
     ( __jit_jmp buf pat_at pat_rec 233 + n 2 )
     // resolve forward/backward rel32s now that every record's offset is known
     : i np ( vec_len [i] pat_at )
@@ -4826,6 +4852,25 @@ inline @ __fr_setpos s tp i v → v {
         ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) ^ 1 } {}
         ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) ^ 1 } {}
     } {}
+    ? == st 20 {  // slab exhausted at an entry: run this call on the interpreter
+        // jrb is the raw args pointer (the entry passed it as the frame
+        // base, argbase 0). g_jit off for the subtree — the slab stays
+        // full for exactly as long as this call is running.
+        : s ct20 ( module_func_type m callee )
+        : ~ i cp20 0
+        : ~ i cr20 0
+        ? != # i ct20 0 { : *FuncType ctt20 # *FuncType ct20 = cp20 ( vec_len [i] . ctt20 params ) = cr20 ( vec_len [i] . ctt20 results ) } {}
+        : ~ i ak20 0
+        ~ < ak20 cp20 { ( __push it . jrb + argbase ak20 ) = ak20 + ak20 1 }
+        : i sg20 g_jit
+        = g_jit 0
+        ( exec_func it callee )
+        = g_jit sg20
+        ? | ( interp_trapped it ) != 0 . it halt { ^ 1 } {}
+        : ~ i rk20 cr20
+        ~ > rk20 0 { = rk20 - rk20 1 = . jrb + argbase rk20 ( __pop it ) }
+        ^ 0
+    } {}
     // A non-zero tr means the callee trapped — the message is already
     // recorded; the halt check in the resume walk sees it.
     : i tr ( __jit_callee it m callee jrb argbase )
@@ -4845,7 +4890,7 @@ inline @ __fr_setpos s tp i v → v {
     = . cd 4 0 = . cd 5 0 = . cd 6 0 = . cd 7 0
     : i occ0 . it jit_cur_cd
     = . it jit_cur_cd # i cd
-    : i status ( nurl_call_code2 # *u jh # *u cd # *u argsp )
+    : i status ( nurl_call_code2_sj # *u jh # *u cd # *u argsp )
     = . it jit_cur_cd occ0
     // whatever this invocation allocated is reclaimed here
     = . spc 0 sp0
@@ -4874,7 +4919,7 @@ inline @ __fr_setpos s tp i v → v {
     } {}
     : *PFunc pfc # *PFunc cpins
     ? == # i . pfc jit 0 {
-        ( __jit_try it m pfc )
+        ( __jit_try it m pfc callee )
         // compiled and call-out-free: publish the direct entry so JIT
         // callers stop coming through this driver at all
         : s njh . pfc jit
@@ -4903,9 +4948,9 @@ inline @ __fr_setpos s tp i v → v {
     // through the pointer and writes results back there — no Frame.
     : i argsp + # i caller_rbase * argbase 8
     = g_jit_depth + g_jit_depth 1
-    : i st ? > g_jit_depth 100000 9 ( __jit_run it m pfc argsp )
+    : i st ? > g_jit_depth 12000 9 ( __jit_run it m pfc argsp )
     = g_jit_depth - g_jit_depth 1
-    ? | == st 9 == st 8 {  // depth cap or slab full: the interpreter has no such limits
+    ? == st 9 {  // depth cap: the interpreter has no such limit
         : ~ i ak2 0
         : i np . pfc nparams
         ~ < ak2 np { ( __push it . caller_rbase + argbase ak2 ) = ak2 + ak2 1 }
@@ -4954,7 +4999,7 @@ inline @ __fr_setpos s tp i v → v {
         : *Frame fj # *Frame fr0
         : *PFunc pfj # *PFunc . fj pins
         ? == # i . pfj jit 0 {
-            ( __jit_try it m pfj )
+            ( __jit_try it m pfj fidx )
             : s njh . pfj jit
             ? & != # i njh 0 != # i njh -1 {
                 // publish the DIRECT entry: page + the 25-byte driver preamble
