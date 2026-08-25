@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+noclosure=6 drops=1
+withclosure=8 drops=2
+string=2
+field=7 drops=3
