@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+odds=9
+mixed=8
+drops=5
+fe-in-while=18
+while-in-fe=24
+vec=10
+done

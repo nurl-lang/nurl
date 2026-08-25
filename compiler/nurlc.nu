@@ -11676,6 +11676,14 @@
     : s lc ( nurl_cg_lbl cg `foreach_check` )
     : s lb ( nurl_cg_lbl cg `foreach_body` )
     : s le ( nurl_cg_lbl cg `foreach_exit` )
+    // The index bump is a block of its own — the `continue` landing pad.
+    // A while loop can send `continue` straight at its check block
+    // because the induction variable is the program's own binding; a
+    // foreach owns a hidden index, and the bump used to live in the
+    // body's fall-through. Branching a `continue` at `lc` would skip it
+    // and spin forever, which is why `continue` was rejected here at
+    // all. Give the bump its own label and both paths reach it.
+    : s lcont ( nurl_cg_lbl cg `foreach_cont` )
     ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
     // Check: idx < len
     ( emit ( nurl_str_cat lc `:` ) )
@@ -11721,6 +11729,26 @@
         ( nurl_sym_push syms )
     } {}
     = g_did_ret 0
+    // Publish this loop's exit / continue labels and the drop snapshots
+    // taken above, exactly as gen_loop does, so a `break` or `continue`
+    // anywhere in the body emits the same drop sequence the normal
+    // fall-through emits below and then branches. Saved and restored
+    // around the body so the innermost loop wins — a foreach nested in
+    // a while (or vice versa) shadows the outer one and restores it.
+    : s old_bc_exit ( nurl_sym_get syms `__loop_exit__` )
+    : s old_bc_check ( nurl_sym_get syms `__loop_check__` )
+    : s old_bc_strs ( nurl_sym_get syms `__loop_snap_strs__` )
+    : s old_bc_structs ( nurl_sym_get syms `__loop_snap_structs__` )
+    : s old_bc_user ( nurl_sym_get syms `__loop_snap_user__` )
+    : s old_bc_slices ( nurl_sym_get syms `__loop_snap_slices__` )
+    : s old_bc_cenv ( nurl_sym_get syms `__loop_snap_cenv__` )
+    ( nurl_sym_def syms `__loop_exit__` le )
+    ( nurl_sym_def syms `__loop_check__` lcont )
+    ( nurl_sym_def syms `__loop_snap_strs__` old_strs_fe )
+    ( nurl_sym_def syms `__loop_snap_structs__` old_structs_fe )
+    ( nurl_sym_def syms `__loop_snap_user__` old_user_fe )
+    ( nurl_sym_def syms `__loop_snap_slices__` old_slices_fe )
+    ( nurl_sym_def syms `__loop_snap_cenv__` old_closure_fe )
     // Borrow checker (Phase 0c): a `~ x xs` body is a back-edge, and
     // (Phase 6) borrows the iterated container `xs` for the body's
     // duration — bck_iter_enter records it so gen_call rejects any
@@ -11729,6 +11757,13 @@
     : s fe_iter_saved ( bck_iter_enter fe_cont )
     ( gen_block_stmts lex syms cg )
     ( bck_iter_exit fe_iter_saved )
+    ( nurl_sym_def syms `__loop_exit__` old_bc_exit )
+    ( nurl_sym_def syms `__loop_check__` old_bc_check )
+    ( nurl_sym_def syms `__loop_snap_strs__` old_bc_strs )
+    ( nurl_sym_def syms `__loop_snap_structs__` old_bc_structs )
+    ( nurl_sym_def syms `__loop_snap_user__` old_bc_user )
+    ( nurl_sym_def syms `__loop_snap_slices__` old_bc_slices )
+    ( nurl_sym_def syms `__loop_snap_cenv__` old_bc_cenv )
     ? == g_did_ret 0
     { ? != 0 g_auto_drop_strings
         { ( mem_drop_new_strings syms cg old_strs_fe )
@@ -11736,15 +11771,25 @@
             ( mem_drop_new_user_drops syms cg old_user_fe )
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_fe ) } {} } {}
         ( mem_drop_new_closure_envs syms cg old_closure_fe )
-        : s next_idx ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print next_idx )
-        ( nurl_print ` = add i64 ` ) ( nurl_print idx_cur ) ( nurl_print `, 1\n` )
-        ( nurl_print `  store i64 ` ) ( nurl_print next_idx )
-        ( nurl_print `, i64* ` ) ( nurl_print idx_ptr ) ( nurl_print `\n` )
-        ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
+        ( nurl_print `  br label %` ) ( nurl_print lcont ) ( emit_dbg_eol )
     }
     {}
     ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
+    // The bump. Reached by the body's fall-through and by every
+    // `continue`; re-loads the index rather than reusing `idx_cur` from
+    // the check block, so the block reads correctly on its own terms
+    // whichever predecessor arrived (-O2 folds the reload away).
+    ( emit ( nurl_str_cat lcont `:` ) )
+    ( nurl_sym_def syms `__cur_lbl__` lcont )
+    : s idx_now ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print idx_now )
+    ( nurl_print ` = load i64, i64* ` ) ( nurl_print idx_ptr ) ( nurl_print `\n` )
+    : s next_idx ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print next_idx )
+    ( nurl_print ` = add i64 ` ) ( nurl_print idx_now ) ( nurl_print `, 1\n` )
+    ( nurl_print `  store i64 ` ) ( nurl_print next_idx )
+    ( nurl_print `, i64* ` ) ( nurl_print idx_ptr ) ( nurl_print `\n` )
+    ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
     ( emit ( nurl_str_cat le `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` le )
     ( nurl_set_last_type `void` )
