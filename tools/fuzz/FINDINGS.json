@@ -2,6 +2,27 @@
   "_comment": "Curated log of real compiler/runtime bugs found by the fuzzers. Newest first. report.py renders this into FUZZRESULTS.md — keep entries short; the fix commit/PR carries the detail.",
   "findings": [
     {
+      "date": "2026-08-26",
+      "family": "differential-struct",
+      "title": "A closure body emitted the ENCLOSING frame's drop battery: a `^`-bodied closure literal written after an owned value (`% Drop`, String, owned struct field) ended the lifted function with `load %DH, %DH* %r2` against an alloca that only exists in the caller — invalid IR at best, use-after-scope plus a double drop had the register resolved",
+      "severity": "miscompile",
+      "status": "fixed (3 of the first 25 seeds; closure_body_outer_drops)"
+    },
+    {
+      "date": "2026-08-26",
+      "family": "hand-probe",
+      "title": "`break` / `continue` were rejected in every foreach body — the spec scopes both to \"the innermost enclosing `~` loop body\" and a foreach is one, but only the while form published the labels; the foreach's hidden index bump lived in the body's fall-through, so a `continue` would have skipped it. The bump now has its own landing pad",
+      "severity": "language-gap",
+      "status": "fixed (foreach_break_continue)"
+    },
+    {
+      "date": "2026-08-26",
+      "family": "hand-probe",
+      "title": "A struct whose NAME is tparam-shaped (`P`, `Q3`) could not be a generic type argument: instantiation was decided by spelling, so `( Vec P )` was skipped as still-abstract and died on `type 'Vec__P' has no field 'ctl'` inside the stdlib. Now decided by scope",
+      "severity": "miscompile",
+      "status": "fixed (generic_short_type_name)"
+    },
+    {
       "date": "2026-08-03",
       "family": "differential-struct",
       "title": "Constant out-of-range shift in a match guard (`>> <i32-payload> 34`): -O0 \"worked\", -O1 aborted, -O2 segfaulted with a wild jump — branch-on-poison UB; now a compile error, and mixed-width binop registers (24 build-fails/1000 seeds as invalid IR) are rejected like the float/bool/pointer mixes",

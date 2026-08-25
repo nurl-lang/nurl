@@ -13,18 +13,28 @@ of real bugs lives in [`FINDINGS.json`](FINDINGS.json).
 2. **Differential miscompile fuzzer, structural** (`FUZZ_GEN=struct fuzz.sh`
    + `genprog.py`) — whole programs over the structural surface: enums with
    N-ary mixed payloads (`i8…u64`, `f`, `s`), match with guards / literal
-   constraints / or-patterns, struct field writes, closures (creation-time
-   scalar capture), while/foreach loops, `;` defer (reachability-armed,
-   LIFO), `% Drop` destructors across scope shapes, string/Vec/slice
-   ownership traffic, helper calls and self-recursion. The same script is
-   the statement-level oracle. `FUZZ_SAN_EVERY=N` additionally builds every
-   Nth seed with ASan+LSan+UBSan and runs it leak-detection-on: a leak or
-   UAF in the generated ownership traffic is a finding even when stdout
-   matches — this is the leg that hunts auto-drop bugs. `FUZZ_WASM_EVERY=N`
-   compiles every Nth seed to wasm32-wasi (`packages/wasmbuilder`) and runs
-   it under the reference wasmtime — a THIRD independent execution
-   environment against the same oracle, hunting target-dependent codegen
-   (32-bit pointers, i64 payload slots). Requires zig + wasmtime.
+   constraints / or-patterns, struct field writes, **nested aggregates and
+   struct-payload enums**, **generic functions and generic structs**
+   instantiated at every sized type (and at a concrete struct whose *name*
+   is tparam-shaped), **`?T` and `!T E` with `\` try-propagation**,
+   **traits** with a required method, a default method and a bounded
+   generic, closures (creation-time scalar capture), while/foreach loops
+   **with `break` and `continue`**, `;` defer (reachability-armed, LIFO),
+   `% Drop` destructors across scope shapes, string/Vec/slice ownership
+   traffic **including containers whose element is a struct**, helper calls
+   and self-recursion. The same script is the statement-level oracle.
+   `FUZZ_SAN_EVERY=N` additionally builds every Nth seed with
+   ASan+LSan+UBSan and runs it leak-detection-on: a leak or UAF in the
+   generated ownership traffic is a finding even when stdout matches — this
+   is the leg that hunts auto-drop bugs. `FUZZ_WASM_EVERY=N` compiles every
+   Nth seed to wasm32-wasi (`packages/wasmbuilder`) and runs it under the
+   reference wasmtime — a THIRD independent execution environment against
+   the same oracle, hunting target-dependent codegen (32-bit pointers, i64
+   payload slots). Requires zig + wasmtime.
+2b. **Reducer** (`reduce.py`) — not a fuzzer: the thing that makes a finding
+   usable. Called automatically by `fuzz.sh` on every finding; see
+   [Reducing a finding](#reducing-a-finding-reducepy) below.
+
 3. **Mutational parser fuzzer** (`fuzz_parsers.sh` + `fuzz_parsers.py` +
    `parse_harness.nu`) — mutates seeds for the untrusted-input parsers
    (x509/DER, cbor, msgpack, json, yaml, xml, toml) against an ASan+UBSan
@@ -34,6 +44,54 @@ of real bugs lives in [`FINDINGS.json`](FINDINGS.json).
 All are deterministic per seed, so a finding reproduces. Seed corpora live
 in-tree (`gen.py` / `genprog.py` generators; `fuzz_parsers.py`'s
 `TEXT_SEEDS`/`BINARY_SEEDS`).
+
+## Reducing a finding (`reduce.py`)
+
+A raw seed is 150–400 lines across a dozen unrelated features, and the bug is
+usually two of them interacting. Working out which two by hand costs more than
+the fix does, so `fuzz.sh` shrinks every finding before filing it: alongside
+`failures/struct_seed_N.nu` you get `failures/struct_seed_N.min.nu`, typically
+a few dozen lines. The closure-drop miscompile of 2026-08-26 came out of a
+397-line seed as 23 lines in 19 seconds — the enum, the closure and nothing
+else.
+
+Reduction is ddmin over **statements** (brace-balanced groups, so a five-line
+`??` block is one deletable item) and then over lines, repeated until a whole
+sweep changes nothing.
+
+The property must survive line deletion or the reducer converges on a
+different bug, so it is fingerprinted from the *original* failure — the
+normalised error message, the ASan report kind, or the specific expectation
+that disagreed — and every candidate must reproduce **that**. Without the
+fingerprint, "does not compile" is true of almost any mangled program and
+ddmin cheerfully reports a four-line file whose only problem is an undefined
+identifier it created itself.
+
+| mode | property | used for |
+|---|---|---|
+| `build` | fails to compile with the same error | build failures (the largest class) |
+| `crash` | compiles, exits with the same nonzero status | runtime aborts |
+| `diverge` | `-O0` and `-O2` disagree with each other | opt-sensitive miscompiles; needs no oracle |
+| `check` | the self-checking program reports the same failed expectation | oracle mismatches, including *wrong at every opt level* |
+| `sanitize` | same ASan/LSan/UBSan report under `NURL_SAN=1` | leaks, UAF, double free |
+
+`check` is why `genprog.py --selfcheck` exists. It emits the same program with
+each expected value embedded next to the expression that produces it, so the
+program is its own oracle and exits nonzero on a mismatch. Deleting a line
+then cannot desynchronise the checks that remain — which is exactly what
+deleting a line would do to the external oracle file, and why a "wrong at
+every optimisation level" miscompile could not be reduced before.
+
+```bash
+python3 tools/fuzz/genprog.py 684 --selfcheck > bug.nu
+tools/fuzz/reduce.py bug.nu --mode check -o bug.min.nu
+```
+
+`--max-tests` bounds the compile budget (default 400, ~20–60 s); it stops with
+whatever it has rather than running unbounded, so CI can always call it.
+`FUZZ_REDUCE=0` turns reduction off, `FUZZ_REDUCE_TESTS` sets the budget. The
+wasm leg is not reduced — its property needs wasmbuilder and wasmtime in the
+loop — so those findings keep the full program only.
 
 ## Differential fuzzer — how it works
 
@@ -138,12 +196,40 @@ cleanup block (invalid IR), field/element stores skipping width coercion
 match literal constraint disagree with the arm's own payload binding
 (miscompile class).
 
+## Bugs found (2026-08-26, structural surface wave 2)
+
+Extending `genprog.py` past scalars — nested aggregates, generic
+instantiation, `?T`/`!T E`, traits, loop control, containers of structs —
+turned up three more, each fixed at the root with its own regression test:
+
+1. **A closure body dropped the enclosing frame's values.** A `^`-bodied
+   closure literal written after an owned value (`% Drop`, String, owned
+   struct field) ended the *lifted* function with the outer frame's drop
+   battery, loading an alloca that only exists in the caller. Invalid IR at
+   best; use-after-scope plus a double drop had the register resolved. Found
+   in 3 of the first 25 seeds, as soon as the generator started putting
+   droppable aggregates at function scope. (`closure_body_outer_drops.nu`)
+2. **`break` / `continue` were rejected in every foreach body**, though the
+   spec scopes both to "the innermost enclosing `~` loop body". The foreach's
+   hidden index bump lived in the body's fall-through, so a `continue` would
+   have skipped it; the bump now has its own landing pad.
+   (`foreach_break_continue.nu`)
+3. **A struct whose NAME is tparam-shaped** (`P`, `Q3`) could not be a
+   generic type argument: instantiation was decided by spelling, so
+   `( Vec P )` was skipped as still-abstract and the program died on
+   `type 'Vec__P' has no field 'ctl'` pointing into the stdlib. Now decided
+   by scope. (`generic_short_type_name.nu`)
+
+The last two were found by hand-probing the surface while writing the
+generators for it — which is the honest reason to write the generators.
+
 ## Scope / future
 
 Covers integer + int↔float value semantics (`gen.py`) and the structural
 surface (`genprog.py`), each executed natively at `-O0`/`-O2` and, on
-sampled seeds, sanitized and on wasm32-wasi. Natural extensions (tracked
-in TODO.md): float *arithmetic* with a rounding-aware oracle,
-generic-function instantiations + `?T`/`!T E` propagation chains in
-generated programs, trait-object dispatch, and borrow-checker soundness
-fuzzing (generate programs that MUST be rejected).
+sampled seeds, sanitized and on wasm32-wasi, with every finding reduced
+before it is filed. Natural extensions (tracked in TODO.md): float
+*arithmetic* with a rounding-aware oracle, trait-object (`dyn`) dispatch,
+threads / `Arc` traffic against a deterministic oracle, and borrow-checker
+soundness fuzzing (generate programs that MUST be rejected — the inverse
+oracle, where a program that *compiles* is the finding).
