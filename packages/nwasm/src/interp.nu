@@ -251,6 +251,12 @@ $ `module.nu`
     i jit_ctx_free  // freelist of reusable 7-word JIT call contexts (0 = empty)
     i jit_lc_fidx  // last JIT callee fidx (-1 = none) and its resolved PFunc
     i jit_lc_pf
+    // Inline call-out bridge: a capture-decomposed closure the emitted
+    // code calls C-ABI-style instead of parking the whole native frame
+    // chain. cur_cd is the live JIT context for the innermost run.
+    i jit_co_fn
+    i jit_co_env
+    i jit_cur_cd
     // Tier-6 direct-call state. The slab is a bump stack of raw slot
     // frames for JIT execution. jit_spcell is the JIT anchor block, held
     // in r8 for the whole native execution: word 0 = the absolute
@@ -260,12 +266,6 @@ $ `module.nu`
     i jit_slab  // raw slab base address (0 = not yet allocated)
     i jit_slab_end  // slab base + byte length
     i jit_spcell  // address of the anchor block [sp, slab end, ftab..]
-    // The pause chain: when JIT code needs the driver (imports, grow,
-    // call_indirect, the fc bridge), every native frame between the
-    // call-out and the driver parks itself here as (page, resume, rbx,
-    // args) and returns, so the driver can resume them innermost-first.
-    i jit_chain  // chain base address
-    i jit_chain_cell  // address of the 8-byte chain-top cell
     b gpu_ok  // env/CUDA host imports enabled (opt-in; default off)
     b net_ok  // nurl_net host imports (real sockets) enabled (opt-in; default off)
     // Shared memory changes what a narrow store is allowed to touch: see
@@ -408,9 +408,10 @@ inline @ __mem_base * Interp it → i {
     = . it jit_slab 0
     = . it jit_slab_end 0
     = . it jit_spcell 0
-    = . it jit_chain 0
-    = . it jit_chain_cell 0
     = . it jit_lc_pf 0
+    = . it jit_co_fn 0
+    = . it jit_co_env 0
+    = . it jit_cur_cd 0
     = . it gpu_ok F
     = . it net_ok F
     = . it shared_mem ? & == . m has_mem 1 != . m mem_shared 0 T F
@@ -534,8 +535,7 @@ inline @ __mem_base * Interp it → i {
         ~ != 0 . it jit_ctx_free { : *i cb # *i . it jit_ctx_free = . it jit_ctx_free . cb 0 ( nurl_free # s cb ) }
         ? != 0 . it jit_slab { ( nurl_free # s . it jit_slab ) = . it jit_slab 0 } {}
         ? != 0 . it jit_spcell { ( nurl_free # s . it jit_spcell ) = . it jit_spcell 0 } {}
-        ? != 0 . it jit_chain { ( nurl_free # s . it jit_chain ) = . it jit_chain 0 } {}
-        ? != 0 . it jit_chain_cell { ( nurl_free # s . it jit_chain_cell ) = . it jit_chain_cell 0 } {}
+        ? != 0 . it jit_co_env { ( nurl_free # s . it jit_co_env ) = . it jit_co_env 0 } {}
         ( vec_free [u] . it capout )
         ( vec_free [u] . it caperr )
         : i tpn ( vec_len [s] . it pfuncs )
@@ -595,6 +595,13 @@ inline @ __mem_base * Interp it → i {
     : ~ i pi 0
     ~ < pi pn { ?? ( vec_get [s] . it pfuncs pi ) { T pp → ( __pf_free pp ) F → {} } = pi + pi 1 }
     ( vec_free [s] . it pfuncs )
+    // Tier-6/7 state is allocated lazily on the owner; free it here too
+    // (the thread branch above frees the same fields, but a child never
+    // JITs, so before this the owner leaked them all).
+    ~ != 0 . it jit_ctx_free { : *i ocb # *i . it jit_ctx_free = . it jit_ctx_free . ocb 0 ( nurl_free # s ocb ) }
+    ? != 0 . it jit_slab { ( nurl_free # s . it jit_slab ) = . it jit_slab 0 } {}
+    ? != 0 . it jit_spcell { ( nurl_free # s . it jit_spcell ) = . it jit_spcell 0 } {}
+    ? != 0 . it jit_co_env { ( nurl_free # s . it jit_co_env ) = . it jit_co_env 0 } {}
     ( nurl_free # s it )
 }
 
@@ -2862,20 +2869,6 @@ inline @ __fr_setpos s tp i v → v {
     ~ < k npin { ( __jit_b buf 65 ) ( __jit_b buf + 84 k ) = k + k 1 }  // push r12+k
 }
 
-// A driver-side resume entry: rebalance the stack and re-establish
-// every invariant register (r8 = anchor, rbx = frame base, r11/r10/r9 =
-// memory base/bytes/globals) — the driver round trip clobbers them all.
-@ __jit_resume_entry ( Vec u ) buf i npin i spcell → v {
-    ( __jit_push_pins buf npin )
-    ( __jit_b buf 83 )  // push rbx
-    ( __jit_b buf 86 )  // push rsi (args ptr, from call_code_at2)
-    ( __jit_b buf 73 ) ( __jit_b buf 184 ) ( __jit_q buf spcell )  // movabs r8, anchor
-    ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 31 )  // mov rbx,[rdi]
-    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 95 ) ( __jit_b buf 8 )  // mov r11,[rdi+8]
-    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 )  // mov r10,[rdi+16]
-    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
-}
-
 // lea eax,[base + idx<<k]: the whole guest-address computation — shift,
 // add and the u32 wrap — in one instruction (the 32-bit destination IS
 // the mask). Register numbers use the emitter's convention: 0 = rax,
@@ -3312,6 +3305,48 @@ inline @ __fr_setpos s tp i v → v {
     }
 }
 
+// Inline call-out: hand this record to the driver by CALLING the bridge
+// closure C-ABI-style, right here, with every native frame intact — no
+// parking, no resume labels. ctx[4]=fidx, ctx[5]=argbase, ctx[6]=kind in,
+// status out (0 ok / 1 trap-recorded → exit with status 11). The bridge
+// clobbers the volatile registers; rdi survives on the stack and the
+// invariants (r8..r11) are reconstructed from it. rbp aligns rsp for the
+// C ABI (nothing else uses it).
+// The shared tail of every inline call-out: frame base into ctx, an
+// aligned C-ABI call to the bridge closure, the invariant registers
+// reconstructed from the (possibly grown) ctx, and the status check.
+// The op-specific ctx words ([rdi+32..]) are written by the caller.
+@ __jit_inline_call ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i kind i spcell i cofn i coenv → v {
+    ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 48 ) ( __jit_d buf kind )  // mov qword[rdi+48], kind
+    ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 31 )  // mov [rdi],rbx — the handler reads the frame base here
+    ( __jit_b buf 87 )  // push rdi
+    ( __jit_b buf 85 )  // push rbp
+    ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 229 )  // mov rbp,rsp
+    ( __jit_b buf 72 ) ( __jit_b buf 131 ) ( __jit_b buf 228 ) ( __jit_b buf 240 )  // and rsp,-16
+    ( __jit_b buf 72 ) ( __jit_b buf 191 ) ( __jit_q buf coenv )  // movabs rdi, closure env
+    ( __jit_b buf 72 ) ( __jit_b buf 184 ) ( __jit_q buf cofn )  // movabs rax, closure fn
+    ( __jit_b buf 255 ) ( __jit_b buf 208 )  // call rax
+    ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 236 )  // mov rsp,rbp
+    ( __jit_b buf 93 )  // pop rbp
+    ( __jit_b buf 95 )  // pop rdi
+    ( __jit_b buf 73 ) ( __jit_b buf 184 ) ( __jit_q buf spcell )  // movabs r8, anchor
+    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 95 ) ( __jit_b buf 8 )  // mov r11,[rdi+8] — refreshed by the handler if memory grew
+    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 )  // mov r10,[rdi+16]
+    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 )  // mov r9,[rdi+24]
+    ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 71 ) ( __jit_b buf 48 )  // mov rax,[rdi+48] — 0 ok / 1 trap recorded
+    ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test rax,rax
+    ( __jit_b buf 116 ) ( __jit_b buf 10 )  // je +10 — over the trap exit
+    ( __jit_b buf 184 ) ( __jit_d buf 11 )  // mov eax,11 (trap already recorded)
+    ( __jit_jmp buf pat_at pat_rec 233 + trap_rec 2 )  // jmp the freeing exit
+}
+
+// CALL/CALLIMP flavour: constant fidx + argbase.
+@ __jit_inline_callout ( Vec u ) buf ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i fidx i argbase i kind i spcell i cofn i coenv i npin → v {
+    ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 32 ) ( __jit_d buf fidx )  // mov qword[rdi+32], fidx
+    ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf argbase )  // mov qword[rdi+40], argbase
+    ( __jit_inline_call buf pat_at pat_rec trap_rec kind spcell cofn coenv )
+}
+
 @ __jit_kvw_mark ( Vec i ) need i s → v {
     ? & >= s 0 < s ( vec_len [i] need ) { ( vec_set [i] need s 1 ) } {}
 }
@@ -3520,31 +3555,10 @@ inline @ __fr_setpos s tp i v → v {
     = . it jit_ctx_free # i b
 }
 
-// Park this native frame on the pause chain: (page, resume, rbx, args).
-// Preserves rax (the propagate path carries the callee's status in it);
-// clobbers rcx/rdx/r8. The page address is patched post-copy (pta lists,
-// stub offset 0 = page base); the resume imm is patched by the caller —
-// its byte offset is returned.
-@ __jit_pause ( Vec u ) buf i chaincell ( Vec i ) pta_off ( Vec i ) pta_stub → i {
-    ( __jit_b buf 72 ) ( __jit_b buf 185 ) ( __jit_q buf chaincell )  // mov rcx,&chain-top
-    ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 17 )  // mov rdx,[rcx]
-    ( vec_push [i] pta_off + ( vec_len [u] buf ) 2 )  // imm64 operand of the next insn
-    ( vec_push [i] pta_stub 0 )  // page base
-    ( __jit_b buf 73 ) ( __jit_b buf 184 ) ( __jit_q buf 0 )  // mov r8, SELF (patched)
-    ( __jit_b buf 76 ) ( __jit_b buf 137 ) ( __jit_b buf 2 )  // mov [rdx],r8
-    ( __jit_b buf 199 ) ( __jit_b buf 66 ) ( __jit_b buf 8 ) ( __jit_d buf 0 )  // mov dword[rdx+8], resume (patched; driver masks)
-    : i rimm - ( vec_len [u] buf ) 4
-    ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 90 ) ( __jit_b buf 16 )  // mov [rdx+16],rbx
-    ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 4 ) ( __jit_b buf 36 )  // mov r8,[rsp] — the saved args ptr
-    ( __jit_b buf 76 ) ( __jit_b buf 137 ) ( __jit_b buf 66 ) ( __jit_b buf 24 )  // mov [rdx+24],r8
-    ( __jit_b buf 72 ) ( __jit_b buf 131 ) ( __jit_b buf 1 ) ( __jit_b buf 32 )  // add qword[rcx],32
-    ^ rimm
-}
-
 // The ops beyond the original tier set: extend/wrap, select, and the
 // fused memory/f64 records the predecoder emits. Falls through to the
 // plain ALU emitter for everything else.
-@ __jit_ext ( Vec u ) buf ( Vec i ) pmap ( Vec i ) pins i npin ( Vec i ) xmap ( Vec i ) xpins ( Vec i ) cvals ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot ( Vec i ) auxv ( Vec i ) pta_off ( Vec i ) pta_stub i chaincell i spcell i guard i xmmslot → v {
+@ __jit_ext ( Vec u ) buf ( Vec i ) pmap ( Vec i ) pins i npin ( Vec i ) xmap ( Vec i ) xpins ( Vec i ) cvals ( Vec i ) pat_at ( Vec i ) pat_rec i trap_rec i op i a i b i c i d i w5 i raxslot ( Vec i ) auxv ( Vec i ) pta_off ( Vec i ) pta_stub i spcell i cofn i coenv i guard i xmmslot → v {
     ? == op 36 {  // i32.wrap_i64: dst = sign-extended low 32 of src
         ? == raxslot b { ( __jit_movslq buf ) } {  // rax already holds the slot
             : i pw ( __jit_pr pmap b )
@@ -3799,29 +3813,14 @@ inline @ __fr_setpos s tp i v → v {
         ( __jit_b buf 72 ) ( __jit_b buf 193 ) ( __jit_b buf 232 ) ( __jit_b buf 16 )  // shr rax,16
         ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
-    ? == op 163 {  // memory.grow: call-out (status 6) — the driver reallocs and resumes
-        // ctx[4]=delta(src b) ctx[6]=resume ctx[7]=dst slot(a)
+    ? == op 163 {  // memory.grow: inline call-out — the bridge reallocs, we reload
+        // ctx[4]=delta(src b) ctx[6]=kind ctx[7]=dst slot(a)
         ( __jit_sync_pins buf pins ) ( __jit_sync_xpins buf xpins )  // the driver writes the dst slot in memory
         ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
         ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax — keep ctx[4]'s upper bytes zero
         ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 71 ) ( __jit_b buf 32 )  // mov [rdi+32], rax
-        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 48 ) ( __jit_d buf 0 )  // mov [rdi+48], resume (patched)
-        : i gimm_at - ( vec_len [u] buf ) 4
-        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf a )  // mov [rdi+56], dst slot
-        ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 31 )  // mov [rdi],rbx — the handler reads the frame base here
-        : i prim ( __jit_pause buf chaincell pta_off pta_stub )
-        ( __jit_b buf 184 ) ( __jit_d buf 18 )  // mov eax,18 (grow call-out)
-        ( __jit_retseq buf npin )
-        : i gresume ( vec_len [u] buf )
-        ( vec_set [u] buf gimm_at # u & gresume 255 )
-        ( vec_set [u] buf + gimm_at 1 # u & ( __lshr64 gresume 8 ) 255 )
-        ( vec_set [u] buf + gimm_at 2 # u & ( __lshr64 gresume 16 ) 255 )
-        ( vec_set [u] buf + gimm_at 3 # u & ( __lshr64 gresume 24 ) 255 )
-        ( vec_set [u] buf prim # u & gresume 255 )
-        ( vec_set [u] buf + prim 1 # u & ( __lshr64 gresume 8 ) 255 )
-        ( vec_set [u] buf + prim 2 # u & ( __lshr64 gresume 16 ) 255 )
-        ( vec_set [u] buf + prim 3 # u & ( __lshr64 gresume 24 ) 255 )
-        ( __jit_resume_entry buf npin spcell )
+        ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf a )  // mov qword[rdi+56], dst slot
+        ( __jit_inline_call buf pat_at pat_rec trap_rec 18 spcell cofn coenv )
         ( __jit_reload_pins buf pins ) ( __jit_reload_xpins buf xpins )  // the dst slot may be pinned; memory is fresher
         ^ v
     } {}
@@ -3853,57 +3852,26 @@ inline @ __fr_setpos s tp i v → v {
         }
         ^ v
     } {}
-    ? == op 171 {  // FCB bridge: hand the record's operands to the driver (status 7)
-        // ctx[4]=fcode(a) ctx[5]=idx-imm(b) ctx[6]=resume ctx[7]=pops<<33|push<<32|srcbase(c,d)
+    ? == op 171 {  // FCB bridge: inline call-out to the interpreter's own handler
+        // ctx[4]=fcode(a) ctx[5]=idx-imm(b) ctx[6]=kind ctx[7]=pops<<33|push<<32|srcbase(c,d)
         ( __jit_sync_pins buf pins ) ( __jit_sync_xpins buf xpins )  // the driver reads the operand slots from memory
-        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 32 ) ( __jit_d buf a )  // mov [rdi+32], a
-        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf b )  // mov [rdi+40], b
-        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf c )  // mov [rdi+56], srcbase
-        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 60 ) ( __jit_d buf d )  // mov [rdi+60], pops<<1|push
-        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 48 ) ( __jit_d buf 0 )  // mov [rdi+48], resume (patched)
-        : i fimm_at - ( vec_len [u] buf ) 4
-        ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 31 )  // mov [rdi],rbx — the handler reads the frame base here
-        : i prim ( __jit_pause buf chaincell pta_off pta_stub )
-        ( __jit_b buf 184 ) ( __jit_d buf 19 )  // mov eax,19 (FCB call-out)
-        ( __jit_retseq buf npin )
-        : i fresume ( vec_len [u] buf )
-        ( vec_set [u] buf fimm_at # u & fresume 255 )
-        ( vec_set [u] buf + fimm_at 1 # u & ( __lshr64 fresume 8 ) 255 )
-        ( vec_set [u] buf + fimm_at 2 # u & ( __lshr64 fresume 16 ) 255 )
-        ( vec_set [u] buf + fimm_at 3 # u & ( __lshr64 fresume 24 ) 255 )
-        ( vec_set [u] buf prim # u & fresume 255 )
-        ( vec_set [u] buf + prim 1 # u & ( __lshr64 fresume 8 ) 255 )
-        ( vec_set [u] buf + prim 2 # u & ( __lshr64 fresume 16 ) 255 )
-        ( vec_set [u] buf + prim 3 # u & ( __lshr64 fresume 24 ) 255 )
-        ( __jit_resume_entry buf npin spcell )
+        ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 32 ) ( __jit_d buf a )  // mov qword[rdi+32], a
+        ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf b )  // mov qword[rdi+40], b
+        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf c )  // mov dword[rdi+56], srcbase
+        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 60 ) ( __jit_d buf d )  // mov dword[rdi+60], pops<<1|push
+        ( __jit_inline_call buf pat_at pat_rec trap_rec 19 spcell cofn coenv )
         ( __jit_reload_pins buf pins ) ( __jit_reload_xpins buf xpins )  // the dst slot may be pinned; memory is fresher
         ^ v
     } {}
-    ? == op 170 {  // CALLIND: hand the runtime-resolved index to the driver
-        // ctx[4]=table-index value (from slot c) ctx[5]=argbase(b) ctx[6]=resume ctx[7]=typeidx(a); return 5
+    ? == op 170 {  // CALLIND: inline call-out with the runtime-resolved index
+        // ctx[4]=table-index value (from slot c) ctx[5]=argbase(b) ctx[6]=kind ctx[7]=typeidx(a)
         ( __jit_sync_pins buf pins ) ( __jit_sync_xpins buf xpins )  // the callee's arguments live in this frame's memory
         ? != raxslot c { ( __jit_ldrax_m buf pmap xmap cvals c ) } {}
-        ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax — keep ctx[4]'s upper bytes zero (CALL writes only a dword there)
+        ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax — keep ctx[4]'s upper bytes zero
         ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 71 ) ( __jit_b buf 32 )  // mov [rdi+32], rax
-        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf b )  // mov [rdi+40], argbase
-        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 48 ) ( __jit_d buf 0 )  // mov [rdi+48], resume (patched)
-        : i imm_at - ( vec_len [u] buf ) 4
-        ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf a )  // mov [rdi+56], typeidx
-        ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 31 )  // mov [rdi],rbx — the handler reads the frame base here
-        : i prim ( __jit_pause buf chaincell pta_off pta_stub )
-        ( __jit_b buf 184 ) ( __jit_d buf 17 )  // mov eax,17 (indirect call-out)
-        ( __jit_retseq buf npin )
-        : i resume ( vec_len [u] buf )
-        ( vec_set [u] buf imm_at # u & resume 255 )
-        ( vec_set [u] buf + imm_at 1 # u & ( __lshr64 resume 8 ) 255 )
-        ( vec_set [u] buf + imm_at 2 # u & ( __lshr64 resume 16 ) 255 )
-        ( vec_set [u] buf + imm_at 3 # u & ( __lshr64 resume 24 ) 255 )
-        ( vec_set [u] buf prim # u & resume 255 )
-        ( vec_set [u] buf + prim 1 # u & ( __lshr64 resume 8 ) 255 )
-        ( vec_set [u] buf + prim 2 # u & ( __lshr64 resume 16 ) 255 )
-        ( vec_set [u] buf + prim 3 # u & ( __lshr64 resume 24 ) 255 )
-        // resume point: reload the frame/memory/globals registers
-        ( __jit_resume_entry buf npin spcell )
+        ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf b )  // mov qword[rdi+40], argbase
+        ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf a )  // mov qword[rdi+56], typeidx
+        ( __jit_inline_call buf pat_at pat_rec trap_rec 17 spcell cofn coenv )
         ( __jit_reload_pins buf pins ) ( __jit_reload_xpins buf xpins )  // result slots were written in memory
         ^ v
     } {}
@@ -3942,6 +3910,24 @@ inline @ __fr_setpos s tp i v → v {
     ( __jit_alu buf pmap xmap cvals op a b c d raxslot )
 }
 
+// The inline call-out handler: emitted code calls this through the
+// decomposed closure (C ABI) instead of parking the native frame chain.
+// The live JIT context rides in it.jit_cur_cd; the call-out kind is in
+// cd[6] on entry, and the result status is written back there: 0 = done,
+// 1 = trap/halt recorded (the code exits with status 11, "already
+// recorded", which every driver maps to a plain trapped return).
+@ __jit_inline_co * Interp it → v {
+    : *i cd # *i . it jit_cur_cd
+    : i st . cd 6
+    : *Module m # *Module . it mod
+    : i tr ( __jit_callout it m st cd )
+    // memory.grow moved the guest memory: the emitted code reloads its
+    // base/limit registers from these words after the call returns
+    = . cd 1 ( __mem_base it )
+    = . cd 2 . it mem_bytes
+    = . cd 6 ? != 0 tr 1 ? | ( interp_trapped it ) != 0 . it halt 1 0
+}
+
 // Lazy tier-6 state: the frame slab, its top-of-stack cell and the
 // direct-call table, sized once per Interp. 4 MiB of slots; a frame that
 // does not fit returns status 8 and the driver bridges to the
@@ -3959,11 +3945,14 @@ inline @ __fr_setpos s tp i v → v {
     : *i spc # *i . it jit_spcell
     = . spc 0 . it jit_slab
     = . spc 1 . it jit_slab_end
-    // one 32-byte pause entry per (at worst one-slot) frame
-    = . it jit_chain # i ( nurl_zalloc * bytes 4 )
-    = . it jit_chain_cell # i ( nurl_zalloc 8 )
-    : *i chc # *i . it jit_chain_cell
-    = . chc 0 . it jit_chain
+    // The inline call-out bridge: decompose a capturing closure into
+    // (fn, env) the way recover/thread_spawn do — the emitted code calls
+    // fn(env) directly. env is freed in interp_free, not here.
+    : ( @ v ) co \ → v { ( __jit_inline_co it ) }
+    : *u cofn # *u co 0
+    : *u coenv # *u co 1
+    = . it jit_co_fn # i cofn
+    = . it jit_co_env # i coenv
 }
 
 // After a record is emitted, which slot does rax hold (-1 = none)?
@@ -4233,7 +4222,8 @@ inline @ __fr_setpos s tp i v → v {
     // faults nobody converts — such a function keeps its explicit checks.
     : i guard ? & != 0 . it mem_raw != 0 ( nurl_guard_code_room ) 1 0
     : i spcell . it jit_spcell  // anchor block, held in r8: [sp, slab end, ftab..]
-    : i chaincell . it jit_chain_cell
+    : i cofn9 . it jit_co_fn  // the inline call-out bridge (fn, env)
+    : i coenv9 . it jit_co_env
     : i nimp . m num_import_funcs
     : i np . pf nparams
     : i nl . pf nlocals
@@ -4454,91 +4444,66 @@ inline @ __fr_setpos s tp i v → v {
                                             // Either path reads the arguments from this frame's memory.
                                             ( __jit_sync_pins buf pins )
                                             ( __jit_sync_xpins buf xpins )
-                                            : ~ i jz_at -1
-                                            : ~ i je8_at -1
-                                            : ~ i skip_at -1
-                                            : ~ i jok_at -1
-                                            ? & == op 50 >= a nimp {
-                                                // a one-parameter callee takes arg0 in rdx on the direct
-                                                // path (the memory copy still backs the call-out fallback)
-                                                : s ct9 ( module_func_type m a )
-                                                ? != # i ct9 0 {
-                                                    : *FuncType ctt9 # *FuncType ct9
-                                                    ? == 1 ( vec_len [i] . ctt9 params ) { ( __jit_ldrdx_m buf pmap xmap cvals b raxslot ) } {}
+                                            ? == op 210 {  // import: call the bridge closure inline — no parking
+                                                ( __jit_inline_callout buf pat_at pat_rec n a b 16 spcell cofn9 coenv9 npin )
+                                                ( __jit_reload_pins buf pins )
+                                                ( __jit_reload_xpins buf xpins )
+                                            } {
+                                                // Defined callee. Direct path when the ftab entry is live; the
+                                                // uncompiled and slab-full cases go through the SAME inline
+                                                // bridge (kind 16) — nothing parks, nothing resumes, and a
+                                                // callee can only return 0 or a trap status (< 16), which is
+                                                // handed straight to the freeing exit.
+                                                : ~ i jz_at -1
+                                                : ~ i je8_at -1
+                                                : ~ i jok_at -1
+                                                ? >= a nimp {
+                                                    // a one-parameter callee takes arg0 in rdx on the direct
+                                                    // path (the memory copy still backs the call-out fallback)
+                                                    : s ct9 ( module_func_type m a )
+                                                    ? != # i ct9 0 {
+                                                        : *FuncType ctt9 # *FuncType ct9
+                                                        ? == 1 ( vec_len [i] . ctt9 params ) { ( __jit_ldrdx_m buf pmap xmap cvals b raxslot ) } {}
+                                                    } {}
+                                                    : i fto + 16 * - a nimp 8  // anchor offset of ftab[di]
+                                                    ? <= fto 127 { ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 64 ) ( __jit_b buf fto ) } {  // mov rax,[r8+fto]
+                                                        ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 128 ) ( __jit_d buf fto ) }
+                                                    ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test rax,rax
+                                                    ( __jit_b buf 15 ) ( __jit_b buf 132 ) ( __jit_d buf 0 )  // jz → the bridge (patched)
+                                                    = jz_at - ( vec_len [u] buf ) 4
+                                                    ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 179 ) ( __jit_d buf * b 8 )  // lea rsi,[rbx+argbase*8]
+                                                    ( __jit_b buf 255 ) ( __jit_b buf 208 )  // call rax
+                                                    ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test eax,eax — the common case first
+                                                    ( __jit_b buf 15 ) ( __jit_b buf 132 ) ( __jit_d buf 0 )  // jz → after (patched)
+                                                    = jok_at - ( vec_len [u] buf ) 4
+                                                    ( __jit_b buf 131 ) ( __jit_b buf 248 ) ( __jit_b buf 8 )  // cmp eax,8
+                                                    ( __jit_b buf 15 ) ( __jit_b buf 132 ) ( __jit_d buf 0 )  // je → the bridge (slab full: run through the driver)
+                                                    = je8_at - ( vec_len [u] buf ) 4
+                                                    ( __jit_jmp buf pat_at pat_rec 233 + n 2 )  // a trap status: the freeing exit
+                                                    : i co_here ( vec_len [u] buf )
+                                                    ( vec_set [u] buf jz_at # u & - co_here + jz_at 4 255 )
+                                                    ( vec_set [u] buf + jz_at 1 # u & ( __lshr64 - co_here + jz_at 4 8 ) 255 )
+                                                    ( vec_set [u] buf + jz_at 2 # u & ( __lshr64 - co_here + jz_at 4 16 ) 255 )
+                                                    ( vec_set [u] buf + jz_at 3 # u & ( __lshr64 - co_here + jz_at 4 24 ) 255 )
+                                                    ( vec_set [u] buf je8_at # u & - co_here + je8_at 4 255 )
+                                                    ( vec_set [u] buf + je8_at 1 # u & ( __lshr64 - co_here + je8_at 4 8 ) 255 )
+                                                    ( vec_set [u] buf + je8_at 2 # u & ( __lshr64 - co_here + je8_at 4 16 ) 255 )
+                                                    ( vec_set [u] buf + je8_at 3 # u & ( __lshr64 - co_here + je8_at 4 24 ) 255 )
                                                 } {}
-                                                : i fto + 16 * - a nimp 8  // anchor offset of ftab[di]
-                                                ? <= fto 127 { ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 64 ) ( __jit_b buf fto ) } {  // mov rax,[r8+fto]
-                                                    ( __jit_b buf 73 ) ( __jit_b buf 139 ) ( __jit_b buf 128 ) ( __jit_d buf fto ) }
-                                                ( __jit_b buf 72 ) ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test rax,rax
-                                                ( __jit_b buf 15 ) ( __jit_b buf 132 ) ( __jit_d buf 0 )  // jz call-out (patched)
-                                                = jz_at - ( vec_len [u] buf ) 4
-                                                ( __jit_b buf 72 ) ( __jit_b buf 141 ) ( __jit_b buf 179 ) ( __jit_d buf * b 8 )  // lea rsi,[rbx+argbase*8]
-                                                ( __jit_b buf 255 ) ( __jit_b buf 208 )  // call rax
-                                                ( __jit_b buf 133 ) ( __jit_b buf 192 )  // test eax,eax — the common case first
-                                                ( __jit_b buf 15 ) ( __jit_b buf 132 ) ( __jit_d buf 0 )  // jz → after the call-out (patched with skip_at)
-                                                = jok_at - ( vec_len [u] buf ) 4
-                                                ( __jit_b buf 131 ) ( __jit_b buf 248 ) ( __jit_b buf 8 )  // cmp eax,8
-                                                ( __jit_b buf 15 ) ( __jit_b buf 132 ) ( __jit_d buf 0 )  // je call-out (slab full: retry through the driver)
-                                                = je8_at - ( vec_len [u] buf ) 4
-                                                ( __jit_b buf 131 ) ( __jit_b buf 248 ) ( __jit_b buf 16 )  // cmp eax,16
-                                                ( __jit_jmp buf pat_at pat_rec 130 + n 2 )  // jb: terminal — propagate the trap status
-                                                // resumable status from the callee: park this frame too and
-                                                // hand the same status up; the driver resumes us afterwards.
-                                                : i primp ( __jit_pause buf chaincell pta_off pta_stub )
-                                                ( __jit_retseq buf npin )  // eax carries the status up
-                                                : i prop_resume ( vec_len [u] buf )
-                                                ( vec_set [u] buf primp # u & prop_resume 255 )
-                                                ( vec_set [u] buf + primp 1 # u & ( __lshr64 prop_resume 8 ) 255 )
-                                                ( vec_set [u] buf + primp 2 # u & ( __lshr64 prop_resume 16 ) 255 )
-                                                ( vec_set [u] buf + primp 3 # u & ( __lshr64 prop_resume 24 ) 255 )
-                                                ( __jit_resume_entry buf npin spcell )
-                                                ( __jit_b buf 233 ) ( __jit_d buf 0 )  // jmp past the call-out (patched)
-                                                = skip_at - ( vec_len [u] buf ) 4
-                                                : i co_here ( vec_len [u] buf )
-                                                ( vec_set [u] buf jz_at # u & - co_here + jz_at 4 255 )
-                                                ( vec_set [u] buf + jz_at 1 # u & ( __lshr64 - co_here + jz_at 4 8 ) 255 )
-                                                ( vec_set [u] buf + jz_at 2 # u & ( __lshr64 - co_here + jz_at 4 16 ) 255 )
-                                                ( vec_set [u] buf + jz_at 3 # u & ( __lshr64 - co_here + jz_at 4 24 ) 255 )
-                                                ( vec_set [u] buf je8_at # u & - co_here + je8_at 4 255 )
-                                                ( vec_set [u] buf + je8_at 1 # u & ( __lshr64 - co_here + je8_at 4 8 ) 255 )
-                                                ( vec_set [u] buf + je8_at 2 # u & ( __lshr64 - co_here + je8_at 4 16 ) 255 )
-                                                ( vec_set [u] buf + je8_at 3 # u & ( __lshr64 - co_here + je8_at 4 24 ) 255 )
-                                            } {}
-                                            // ctx[4]=callee(a) ctx[5]=argbase(b) ctx[6]=resume; park; return 16
-                                            ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 32 ) ( __jit_d buf a )  // mov [rdi+32], fidx
-                                            ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf b )  // mov [rdi+40], argbase
-                                            ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 48 ) ( __jit_d buf 0 )  // mov [rdi+48], resume (patched)
-                                            : i imm_at - ( vec_len [u] buf ) 4
-                                            ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 31 )  // mov [rdi],rbx — the handler reads the frame base here
-                                            : i prim2 ( __jit_pause buf chaincell pta_off pta_stub )
-                                            ( __jit_b buf 184 ) ( __jit_d buf 16 )  // mov eax,16 (call-out)
-                                            ( __jit_retseq buf npin )
-                                            : i resume ( vec_len [u] buf )
-                                            ( vec_set [u] buf imm_at # u & resume 255 )
-                                            ( vec_set [u] buf + imm_at 1 # u & ( __lshr64 resume 8 ) 255 )
-                                            ( vec_set [u] buf + imm_at 2 # u & ( __lshr64 resume 16 ) 255 )
-                                            ( vec_set [u] buf + imm_at 3 # u & ( __lshr64 resume 24 ) 255 )
-                                            ( vec_set [u] buf prim2 # u & resume 255 )
-                                            ( vec_set [u] buf + prim2 1 # u & ( __lshr64 resume 8 ) 255 )
-                                            ( vec_set [u] buf + prim2 2 # u & ( __lshr64 resume 16 ) 255 )
-                                            ( vec_set [u] buf + prim2 3 # u & ( __lshr64 resume 24 ) 255 )
-                                            // resume point: rebalance the stack, reload the frame registers
-                                            ( __jit_resume_entry buf npin spcell )
-                                            ? >= skip_at 0 {  // land the direct path's jumps here
-                                                : i after ( vec_len [u] buf )
-                                                ( vec_set [u] buf skip_at # u & - after + skip_at 4 255 )
-                                                ( vec_set [u] buf + skip_at 1 # u & ( __lshr64 - after + skip_at 4 8 ) 255 )
-                                                ( vec_set [u] buf + skip_at 2 # u & ( __lshr64 - after + skip_at 4 16 ) 255 )
-                                                ( vec_set [u] buf + skip_at 3 # u & ( __lshr64 - after + skip_at 4 24 ) 255 )
-                                                ( vec_set [u] buf jok_at # u & - after + jok_at 4 255 )
-                                                ( vec_set [u] buf + jok_at 1 # u & ( __lshr64 - after + jok_at 4 8 ) 255 )
-                                                ( vec_set [u] buf + jok_at 2 # u & ( __lshr64 - after + jok_at 4 16 ) 255 )
-                                                ( vec_set [u] buf + jok_at 3 # u & ( __lshr64 - after + jok_at 4 24 ) 255 )
-                                            } {}
-                                            // both paths join here: the callee wrote its results into
-                                            // this frame's memory, so memory is the fresher copy.
-                                            ( __jit_reload_pins buf pins )
-                                            ( __jit_reload_xpins buf xpins )
+                                                // the bridge: uncompiled or slab-full callee runs via the driver
+                                                ( __jit_inline_callout buf pat_at pat_rec n a b 16 spcell cofn9 coenv9 npin )
+                                                ? >= jok_at 0 {  // land the direct path's success jump here
+                                                    : i after ( vec_len [u] buf )
+                                                    ( vec_set [u] buf jok_at # u & - after + jok_at 4 255 )
+                                                    ( vec_set [u] buf + jok_at 1 # u & ( __lshr64 - after + jok_at 4 8 ) 255 )
+                                                    ( vec_set [u] buf + jok_at 2 # u & ( __lshr64 - after + jok_at 4 16 ) 255 )
+                                                    ( vec_set [u] buf + jok_at 3 # u & ( __lshr64 - after + jok_at 4 24 ) 255 )
+                                                } {}
+                                                // both paths join here: the callee wrote its results into
+                                                // this frame's memory, so memory is the fresher copy.
+                                                ( __jit_reload_pins buf pins )
+                                                ( __jit_reload_xpins buf xpins )
+                                            }
                                         } {
                                             ? >= ( __jit_memkind op ) 0 {  // load / store, bounds-checked
                                                 : i mk ( __jit_memkind op )
@@ -4712,7 +4677,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                                         ( __jit_b buf 59 ) ( __jit_b buf 131 ) ( __jit_d buf * rhs 8 ) } }  // cmp eax,[rbx+rhs]
                                                                             }
                                                                             ( __jit_jmp buf pat_at pat_rec ( __jit_jcc cctab cmpop ) / a 6 )
-                                                                        } { ( __jit_ext buf pmap pins npin xmap xpins cvals pat_at pat_rec n op a b c d w5 raxslot auxe pta_off pta_stub chaincell spcell guard xmmslot ) }
+                                                                        } { ( __jit_ext buf pmap pins npin xmap xpins cvals pat_at pat_rec n op a b c d w5 raxslot auxe pta_off pta_stub spcell cofn9 coenv9 guard xmmslot ) }
                                                                     }
                                                                 }
                                                             }
@@ -4868,75 +4833,22 @@ inline @ __fr_setpos s tp i v → v {
     ^ ? | ( interp_trapped it ) != 0 . it halt 1 0
 }
 
-// Resume the parked frames in [lo, hi) innermost-first. Before resuming
-// a non-final entry the chain top is parked at `hi` so re-parks land in
-// a fresh nested segment (walked recursively — depth is bounded by how
-// many frames sit between a call-out and the driver, not by how many
-// call-outs run). The FINAL entry re-parks over its own consumed
-// segment and the walk tail-iterates in place, so a loop that calls out
-// a million times uses constant chain space and constant driver depth.
-@ __jit_resume * Interp it * Module m * i cd i lo0 i hi0 → i {
-    : *i chc # *i . it jit_chain_cell
-    : ~ i lo lo0
-    : ~ i hi hi0
-    : ~ i pos lo0
-    ~ < pos hi {
-        : i last ? == + pos 32 hi 1 0
-        = . chc 0 ? != 0 last pos hi
-        : *i e # *i pos
-        : i ejh . e 0
-        : i eres & . e 1 4294967295
-        : i erbx . e 2
-        : i eargs . e 3
-        = . cd 0 erbx
-        = . cd 1 ( __mem_base it )
-        = . cd 2 . it mem_bytes
-        : i st ( nurl_call_code_at2 # *u ejh eres # *u cd # *u eargs )
-        ? >= st 16 {
-            : i segend . chc 0
-            ? != 0 ( __jit_callout it m st cd ) { ^ 0 } {}  // trap recorded
-            ? != 0 last {
-                = lo pos
-                = hi segend
-                = pos lo
-            } {
-                : i st2 ( __jit_resume it m cd hi segend )
-                ? != 0 st2 { ^ st2 } {}
-                ? | ( interp_trapped it ) != 0 . it halt { ^ 0 } {}
-                = pos + pos 32
-            }
-        } {
-            ? != 0 st { ^ st } {}
-            ? | ( interp_trapped it ) != 0 . it halt { ^ 0 } {}
-            = pos + pos 32
-        }
-    }
-    ^ 0
-}
-
 @ __jit_run * Interp it * Module m * PFunc pfj i argsp → i {
     : s jh . pfj jit
     : *i cd ( __jit_ctx_get it )
     : *i spc # *i . it jit_spcell
-    : *i chc # *i . it jit_chain_cell
     : i sp0 . spc 0
-    : i chain0 . chc 0
-    = . cd 0 0  // the entry writes its own slab frame base here
+    = . cd 0 0
     = . cd 1 ( __mem_base it )
     = . cd 2 . it mem_bytes
     = . cd 3 # i ( vec_data [i] . it globals )
     = . cd 4 0 = . cd 5 0 = . cd 6 0 = . cd 7 0
-    : ~ i status ( nurl_call_code2 # *u jh # *u cd # *u argsp )
-    ? >= status 16 {
-        : i segend . chc 0
-        ? != 0 ( __jit_callout it m status cd ) { = status 0 } {  // trap recorded; the halt check catches it
-            = status ( __jit_resume it m cd chain0 segend )
-            ? >= status 16 { = status 0 } {}  // cannot happen; guard against relabeling
-        }
-    } {}
-    // whatever this invocation allocated or parked is reclaimed here
+    : i occ0 . it jit_cur_cd
+    = . it jit_cur_cd # i cd
+    : i status ( nurl_call_code2 # *u jh # *u cd # *u argsp )
+    = . it jit_cur_cd occ0
+    // whatever this invocation allocated is reclaimed here
     = . spc 0 sp0
-    = . chc 0 chain0
     ( __jit_ctx_put it cd )
     ^ status
 }
@@ -5060,6 +4972,7 @@ inline @ __fr_setpos s tp i v → v {
                 ? == status 3 { ( __trap it `unreachable` ) ( __frame_recycle fr0 ) ^ v } {}
                 ? == status 4 { ( __trap it `integer divide by zero` ) ( __frame_recycle fr0 ) ^ v } {}
                 ? == status 10 { ( __trap it `integer overflow` ) ( __frame_recycle fr0 ) ^ v } {}
+                ? == status 11 { ( __frame_recycle fr0 ) ^ v } {}  // trap/halt already recorded by an inline call-out
                 ? != 0 status { ( __trap it `memory access out of bounds` ) ( __frame_recycle fr0 ) ^ v } {}
                 ? | ( interp_trapped it ) != 0 . it halt { ( __frame_recycle fr0 ) ^ v } {}
                 // outermost: the entry wrote the results back to the args area
