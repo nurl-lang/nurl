@@ -14401,16 +14401,54 @@
     ( bck_join_state s_then s_else )
 }
 
-// `??` — Phase 1 does NOT descend into match arms. A `??` arm binds
-// payload variables (`T v -> ...`) that have no `let` row, so the
-// flat name-keyed state cannot tell an arm's `v` from a same-named
-// binding in an enclosing scope — analysing the arm would conflate
-// them and false-positive. The whole match is therefore treated as a
-// state-preserving black box: its scrutinee is still move-checked (on
-// the `match` row, before this is called), but nothing inside the
-// arms is. Use-after-move *within* a `??` arm is a known Phase 1 gap
-// — closing it needs scope-qualified state (a later phase).
+// `??` — walk each arm in ISOLATION, then leave the outer state alone.
+//
+// A `??` arm binds payload variables (`T v -> ...`) that have no `let`
+// row, so the flat name-keyed state cannot tell an arm's `v` from a
+// same-named binding in an enclosing scope. Descending with the outer
+// state would conflate them and false-positive, which is why the whole
+// match used to be a state-preserving black box — and why a double free
+// written inside an arm compiled clean and segfaulted at run time,
+// while the identical code inside a `?` arm, a loop, a bare block or a
+// helper was rejected.
+//
+// The conflation is avoidable without scope-qualified state: walk each
+// arm from an EMPTY state, where every id reads Uninit. Then only a
+// binding that gets its own `let` row inside the arm becomes tracked,
+// and such a binding is arm-local by construction — nothing outside can
+// be confused with it. A payload name, or an outer name the arm merely
+// touches, starts Uninit and is ignored, so no diagnostic can fire on
+// it. Moving one twice WITHIN the arm is still caught, because the
+// first move is what makes it tracked.
+//
+// The arm's exit state is discarded and the entry state returned
+// unchanged: what an arm did to an outer binding remains out of scope
+// here (the scrutinee itself is still move-checked on the `match` row,
+// before this is called). This closes the intra-arm hole without
+// widening the lattice, and cannot report anything that was not a
+// definite bug.
 @ bck_handle_match i mi i em s state → s {
+    : ~ i j + mi 1
+    ~ < j em {
+        : s rec ( bck_rec j )
+        : s k ( bck_field rec 0 )
+        : ~ b adv F
+        // Step over a nested conditional / match wholesale, so its own
+        // arm-blocks are not mistaken for this match's arms.
+        ? ( seq k `cond` ) { = j + ( bck_match_close j `cond` `endcond` ) 1 = adv T } {}
+        ? & ! adv ( seq k `match` ) { = j + ( bck_match_close j `match` `endmatch` ) 1 = adv T } {}
+        ? & ! adv ( seq k `block` ) {
+            : i eb ( bck_match_close j `block` `endblock` )
+            ? ( seq ( bck_field rec 1 ) `match-arm` )
+            { : s armfinal ( bck_walk_seq + j 1 eb `` )
+                // The walk reports as it goes; its result is not needed.
+                ? != 0 ( nurl_str_len armfinal ) {} {} }
+            {}
+            = j + eb 1
+            = adv T
+        } {}
+        ? ! adv { = j + j 1 } {}
+    }
     ( nurl_str_cat state `` )
 }
 
