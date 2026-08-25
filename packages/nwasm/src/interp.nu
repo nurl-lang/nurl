@@ -2869,8 +2869,9 @@ inline @ __fr_setpos s tp i v → v {
 // every exit (RET, trap/overflow stubs, each call-out park) pops them —
 // the stack layout keeps [rsp] = the saved args pointer either way.
 @ __jit_push_pins ( Vec u ) buf i npin → v {
+    : i np4 ? > npin 4 4 npin  // only the callee-saved r12..r15 are pushed
     : ~ i k 0
-    ~ < k npin { ( __jit_b buf 65 ) ( __jit_b buf + 84 k ) = k + k 1 }  // push r12+k
+    ~ < k np4 { ( __jit_b buf 65 ) ( __jit_b buf + 84 k ) = k + k 1 }  // push r12+k
 }
 
 // lea eax,[base + idx<<k]: the whole guest-address computation — shift,
@@ -2921,25 +2922,31 @@ inline @ __fr_setpos s tp i v → v {
 
 @ __jit_retseq ( Vec u ) buf i npin → v {
     ( __jit_b buf 94 ) ( __jit_b buf 91 )  // pop rsi; pop rbx
-    : ~ i k npin
+    : ~ i k ? > npin 4 4 npin
     ~ > k 0 { = k - k 1 ( __jit_b buf 65 ) ( __jit_b buf + 92 k ) }  // pop r12+k, innermost first
     ( __jit_b buf 195 )  // ret
 }
 
-@ __jit_sync_pins ( Vec u ) buf ( Vec i ) pins → v {
+// Pin vec entries are slot*16 + register field: fields 4..7 are the
+// callee-saved r12..r15, 2 is r10 (guard mode, no memory.size) and 1 is
+// r9 (no global ops) — both caller-saved, so they round-trip at every
+// call site (`from` 4 selects just them at the windowed call paths).
+@ __jit_sync_pins ( Vec u ) buf ( Vec i ) pins i from → v {
     : i n ( vec_len [i] pins )
-    : ~ i k 0
-    ~ < k n {  // mov [rbx+slot*8], r12+k
-        ( __jit_b buf 76 ) ( __jit_b buf 137 ) ( __jit_b buf + 163 * k 8 ) ( __jit_d buf * ?? ( vec_get [i] pins k ) { T x → x F → 0 } 8 )
+    : ~ i k from
+    ~ < k n {  // mov [rbx+slot*8], r_field
+        : i pe ?? ( vec_get [i] pins k ) { T x → x F → 0 }
+        ( __jit_b buf 76 ) ( __jit_b buf 137 ) ( __jit_b buf + 131 * % pe 16 8 ) ( __jit_d buf * / pe 16 8 )
         = k + k 1
     }
 }
 
-@ __jit_reload_pins ( Vec u ) buf ( Vec i ) pins → v {
+@ __jit_reload_pins ( Vec u ) buf ( Vec i ) pins i from → v {
     : i n ( vec_len [i] pins )
-    : ~ i k 0
-    ~ < k n {  // mov r12+k, [rbx+slot*8]
-        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf + 163 * k 8 ) ( __jit_d buf * ?? ( vec_get [i] pins k ) { T x → x F → 0 } 8 )
+    : ~ i k from
+    ~ < k n {  // mov r_field, [rbx+slot*8]
+        : i pe ?? ( vec_get [i] pins k ) { T x → x F → 0 }
+        ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf + 131 * % pe 16 8 ) ( __jit_d buf * / pe 16 8 )
         = k + k 1
     }
 }
@@ -3766,7 +3773,7 @@ inline @ __fr_setpos s tp i v → v {
         ? & & != 0 guard >= kv5 0 <= kv5 3 {  // guard mode: one lea replaces shift+wrap
             : i px5 ( __jit_pr pmap b )
             : ~ i idx5 1
-            ? >= px5 0 { = idx5 px5 } { ( __jit_ldrcx_m buf pmap xmap cvals b ) }
+            ? >= px5 4 { = idx5 px5 } { ( __jit_ldrcx_m buf pmap xmap cvals b ) }  // fields 4..7 only for lea
             ( __jit_lea32nb buf kv5 idx5 )
             ? == op 205 { ( __jit_mem buf 0 0 139 0 c ) } { ( __jit_mem buf 0 0 99 0 c ) }
             ( __jit_strax_m buf pmap xmap cvals a ) ^ v
@@ -3819,13 +3826,13 @@ inline @ __fr_setpos s tp i v → v {
     } {}
     ? == op 163 {  // memory.grow: inline call-out — the bridge reallocs, we reload
         // ctx[4]=delta(src b) ctx[6]=kind ctx[7]=dst slot(a)
-        ( __jit_sync_pins buf pins ) ( __jit_sync_xpins buf xpins )  // the driver writes the dst slot in memory
+        ( __jit_sync_pins buf pins 0 ) ( __jit_sync_xpins buf xpins )  // the driver writes the dst slot in memory
         ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
         ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax — keep ctx[4]'s upper bytes zero
         ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 71 ) ( __jit_b buf 32 )  // mov [rdi+32], rax
         ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf a )  // mov qword[rdi+56], dst slot
         ( __jit_inline_call buf pat_at pat_rec trap_rec 18 spcell cofn coenv )
-        ( __jit_reload_pins buf pins ) ( __jit_reload_xpins buf xpins )  // the dst slot may be pinned; memory is fresher
+        ( __jit_reload_pins buf pins 0 ) ( __jit_reload_xpins buf xpins )  // the dst slot may be pinned; memory is fresher
         ^ v
     } {}
     ? == op 169 {  // BRTBL: clamp the index, jump through an absolute table; each row = slot moves + jmp
@@ -3858,25 +3865,25 @@ inline @ __fr_setpos s tp i v → v {
     } {}
     ? == op 171 {  // FCB bridge: inline call-out to the interpreter's own handler
         // ctx[4]=fcode(a) ctx[5]=idx-imm(b) ctx[6]=kind ctx[7]=pops<<33|push<<32|srcbase(c,d)
-        ( __jit_sync_pins buf pins ) ( __jit_sync_xpins buf xpins )  // the driver reads the operand slots from memory
+        ( __jit_sync_pins buf pins 0 ) ( __jit_sync_xpins buf xpins )  // the driver reads the operand slots from memory
         ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 32 ) ( __jit_d buf a )  // mov qword[rdi+32], a
         ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf b )  // mov qword[rdi+40], b
         ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf c )  // mov dword[rdi+56], srcbase
         ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 60 ) ( __jit_d buf d )  // mov dword[rdi+60], pops<<1|push
         ( __jit_inline_call buf pat_at pat_rec trap_rec 19 spcell cofn coenv )
-        ( __jit_reload_pins buf pins ) ( __jit_reload_xpins buf xpins )  // the dst slot may be pinned; memory is fresher
+        ( __jit_reload_pins buf pins 0 ) ( __jit_reload_xpins buf xpins )  // the dst slot may be pinned; memory is fresher
         ^ v
     } {}
     ? == op 170 {  // CALLIND: inline call-out with the runtime-resolved index
         // ctx[4]=table-index value (from slot c) ctx[5]=argbase(b) ctx[6]=kind ctx[7]=typeidx(a)
-        ( __jit_sync_pins buf pins ) ( __jit_sync_xpins buf xpins )  // the callee's arguments live in this frame's memory
+        ( __jit_sync_pins buf pins 0 ) ( __jit_sync_xpins buf xpins )  // the callee's arguments live in this frame's memory
         ? != raxslot c { ( __jit_ldrax_m buf pmap xmap cvals c ) } {}
         ( __jit_b buf 137 ) ( __jit_b buf 192 )  // mov eax,eax — keep ctx[4]'s upper bytes zero
         ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 71 ) ( __jit_b buf 32 )  // mov [rdi+32], rax
         ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf b )  // mov qword[rdi+40], argbase
         ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 56 ) ( __jit_d buf a )  // mov qword[rdi+56], typeidx
         ( __jit_inline_call buf pat_at pat_rec trap_rec 17 spcell cofn coenv )
-        ( __jit_reload_pins buf pins ) ( __jit_reload_xpins buf xpins )  // result slots were written in memory
+        ( __jit_reload_pins buf pins 0 ) ( __jit_reload_xpins buf xpins )  // result slots were written in memory
         ^ v
     } {}
     ? | == op 207 == op 208 {  // LOADSHLADD64/32: dst = mem[(base + (x<<k)) w32 + off]; b=base d=x w5=kslot
@@ -3888,10 +3895,10 @@ inline @ __fr_setpos s tp i v → v {
         ? & & != 0 guard >= kcv 0 <= kcv 3 {
             : i ps9 ( __jit_pr pmap d )
             : ~ i idx9 1
-            ? >= ps9 0 { = idx9 ps9 } { ( __jit_ldrcx_m buf pmap xmap cvals d ) }
+            ? >= ps9 4 { = idx9 ps9 } { ( __jit_ldrcx_m buf pmap xmap cvals d ) }  // fields 4..7 only for lea
             : i pb9 ( __jit_pr pmap b )
             : ~ i bas9 0
-            ? >= pb9 0 { = bas9 pb9 } { ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {} }
+            ? >= pb9 4 { = bas9 pb9 } { ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {} }
             ( __jit_lea32 buf kcv idx9 bas9 )
             ? == op 207 { ( __jit_mem buf 0 0 139 0 c ) } { ( __jit_mem buf 0 0 99 0 c ) }  // mov rax,[mem] / movsxd rax,dword[mem]
             ( __jit_strax_m buf pmap xmap cvals a ) ^ v
@@ -4088,7 +4095,7 @@ inline @ __fr_setpos s tp i v → v {
 // vec; slots whose every access is an xmm-path operand compete for
 // xmm8..xmm15 instead and land in `xpins`. NURL_NWASM_PIN=0 turns the
 // whole tier off (A/B and debugging).
-@ __jit_pin_select * PFunc pf ( Vec i ) xpins → ( Vec i ) {
+@ __jit_pin_select * PFunc pf ( Vec i ) xpins i guard → ( Vec i ) {
     : i kvbase . pf nlocals
     : i kvn ( vec_len [i] . pf kv )
     : ( Vec i ) pins ( vec_new [i] )
@@ -4123,10 +4130,14 @@ inline @ __fr_setpos s tp i v → v {
     ~ < k1 ns { ( vec_push [i] sc 0 ) ( vec_push [i] ex 0 ) ( vec_push [i] hd 0 ) = k1 + k1 1 }
     : ( Vec i ) auxv . pf aux
     : ~ i callw 0
+    : ~ i has162 0  // memory.size reads r10 as the byte count
+    : ~ i hasglob 0  // global.get/set read r9 as the globals base
     : ~ i r 0
     ~ < r n {
         : i base * r 6
         : i op ?? ( vec_get [i] code base ) { T x → x F → 0 }
+        ? == op 162 { = has162 1 } {}
+        ? | == op 52 == op 53 { = hasglob 1 } {}
         : i a ?? ( vec_get [i] code + base 1 ) { T x → x F → 0 }
         : i b ?? ( vec_get [i] code + base 2 ) { T x → x F → 0 }
         : i c ?? ( vec_get [i] code + base 3 ) { T x → x F → 0 }
@@ -4153,10 +4164,17 @@ inline @ __fr_setpos s tp i v → v {
     // entry paying the push/reload/pop trio — so the call weight carries
     // the entry cost too (measured: fib regressed 4% at 2*callw+6).
     : i thr + * 4 callw 6
+    // Registers 5 and 6 are r10 (guard mode, no memory.size) and r9 (no
+    // global ops): same encoding class as r12..r15 but caller-saved, so
+    // they pay a sync+reload at every call site and must earn double.
+    : ( Vec i ) upf ( vec_new [i] )
+    ? & != 0 guard == 0 has162 { ( vec_push [i] upf 2 ) } {}
+    ? == 0 hasglob { ( vec_push [i] upf 1 ) } {}
+    : i pcap + 4 ( vec_len [i] upf )
     : ~ i pk 0
-    ~ < pk 4 {
+    ~ < pk pcap {
         : ~ i best -1
-        : ~ i bsc thr
+        : ~ i bsc ? < pk 4 thr + thr thr
         : ~ i si 0
         ~ < si ns {
             : i sv ?? ( vec_get [i] sc si ) { T x → x F → 0 }
@@ -4164,12 +4182,14 @@ inline @ __fr_setpos s tp i v → v {
             ? & > sv bsc == 0 ev { = best si = bsc sv } {}
             = si + si 1
         }
-        ? < best 0 { = pk 4 } {
-            ( vec_push [i] pins best )
+        ? < best 0 { = pk pcap } {
+            : i pf9 ? < pk 4 + 4 pk ?? ( vec_get [i] upf - pk 4 ) { T x → x F → 1 }
+            ( vec_push [i] pins + * best 16 pf9 )
             ( vec_set [i] sc best 0 )
             = pk + pk 1
         }
     }
+    ( vec_free [i] upf )
     // The xmm winners: xmm-dominant slots never read at a fused or
     // partial-width integer site (plain integer accesses go through
     // movq; a slot picked above had ex = 0, so no overlap with pins).
@@ -4205,10 +4225,13 @@ inline @ __fr_setpos s tp i v → v {
     ? != # i . pf jit 0 { ^ v } {}  // already tried (handle or -1)
     ? == 0 ( __jit_ok pf ) { = . pf jit # s -1 ^ v } {}
     ( __jit_state_init it m )
-    // Tier 7: the hottest slots ride in r12.. (and pure-f64 slots in
-    // xmm8..) for the whole function.
+    // Guard-page mode decides r10's availability as a pin, so it is
+    // settled before pin selection.
+    : i guard ? & != 0 . it mem_raw != 0 ( nurl_guard_code_room ) 1 0
+    // Tier 7: the hottest slots ride in r12.. (plus r10/r9 when free,
+    // and pure-f64 slots in xmm8..) for the whole function.
     : ( Vec i ) xpins ( vec_new [i] )
-    : ( Vec i ) pins ( __jit_pin_select pf xpins )
+    : ( Vec i ) pins ( __jit_pin_select pf xpins guard )
     : i npin ( vec_len [i] pins )
     : i nxpin ( vec_len [i] xpins )
     : ( Vec i ) pmap ( vec_new [i] )
@@ -4217,14 +4240,30 @@ inline @ __fr_setpos s tp i v → v {
     : ~ i pmk 0
     ~ < pmk nsl { ( vec_push [i] pmap -1 ) ( vec_push [i] xmap -1 ) = pmk + pmk 1 }
     = pmk 0
-    ~ < pmk npin { ( vec_set [i] pmap ?? ( vec_get [i] pins pmk ) { T x → x F → 0 } + 4 pmk ) = pmk + pmk 1 }
+    ~ < pmk npin {
+        : i pme ?? ( vec_get [i] pins pmk ) { T x → x F → 0 }
+        ( vec_set [i] pmap / pme 16 % pme 16 )
+        = pmk + pmk 1
+    }
     = pmk 0
     ~ < pmk nxpin { ( vec_set [i] xmap ?? ( vec_get [i] xpins pmk ) { T x → x F → 0 } pmk ) = pmk + pmk 1 }
+    // r9/r10 double as cross-call invariants (globals base, byte count)
+    // on the direct path: a function that pins them must re-establish
+    // the invariant from the context before every direct call and at
+    // every return the direct path can reach.
+    : ~ i hasup9 0
+    : ~ i hasup10 0
+    = pmk 0
+    ~ < pmk npin {
+        : i upe % ?? ( vec_get [i] pins pmk ) { T x → x F → 0 } 16
+        ? == upe 1 { = hasup9 1 } {}
+        ? == upe 2 { = hasup10 1 } {}
+        = pmk + pmk 1
+    }
     // Guard-page mode: bounds checks stay out of the emitted code, and the
     // sealed page is registered with the fault-to-trap handler below. The
     // registry pre-check keeps a full table from producing a function whose
     // faults nobody converts — such a function keeps its explicit checks.
-    : i guard ? & != 0 . it mem_raw != 0 ( nurl_guard_code_room ) 1 0
     : i spcell . it jit_spcell  // anchor block, held in r8: [sp, slab end, ftab..]
     : i trapfn ( nurl_code_trap_addr )  // traps CALL here (edi = status) and longjmp back to the entry
     : i cofn9 . it jit_co_fn  // the inline call-out bridge (fn, env)
@@ -4350,7 +4389,7 @@ inline @ __fr_setpos s tp i v → v {
             ( __jit_b buf 95 )  // pop rdi
         }
     } {}
-    ( __jit_reload_pins buf pins ) ( __jit_reload_xpins buf xpins )  // params/locals/constants are in memory now — lift the pinned ones
+    ( __jit_reload_pins buf pins 0 ) ( __jit_reload_xpins buf xpins )  // params/locals/constants are in memory now — lift the pinned ones
     // Branch-target prepass for the rax cache: a record entered by a jump
     // must not trust what fell through in rax. A BACKWARD target (2) is a
     // loop head: its emission is padded to a 16-byte boundary so a loop's
@@ -4421,6 +4460,8 @@ inline @ __fr_setpos s tp i v → v {
                             ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 134 ) ( __jit_d buf * k 8 )  // mov [rsi+k*8],rax
                             = k + k 1
                         }
+                        ? != 0 hasup10 { ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 ) } {}  // mov r10,[rdi+16] — invariant back
+                        ? != 0 hasup9 { ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 ) } {}  // mov r9,[rdi+24]
                         ( __jit_b buf 73 ) ( __jit_b buf 137 ) ( __jit_b buf 24 )  // mov [r8],rbx — free frame
                         ( __jit_retseq buf npin )
                     } {
@@ -4463,15 +4504,17 @@ inline @ __fr_setpos s tp i v → v {
                                             : ~ i pwk 0
                                             : i pwn ( vec_len [i] pins )
                                             ~ < pwk pwn {
-                                                : i pws ?? ( vec_get [i] pins pwk ) { T x → x F → -1 }
+                                                : i pws / ?? ( vec_get [i] pins pwk ) { T x → x F → -1 } 16
                                                 ? & >= pws b < pws + b wspan { = pinw 1 } {}
                                                 = pwk + pwk 1
                                             }
-                                            ? != 0 pinw { ( __jit_sync_pins buf pins ) } {}
+                                            ? != 0 pinw { ( __jit_sync_pins buf pins 0 ) } { ( __jit_sync_pins buf pins 4 ) }
+                                            ? != 0 hasup10 { ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 87 ) ( __jit_b buf 16 ) } {}  // mov r10,[rdi+16] — the callee expects the invariant
+                                            ? != 0 hasup9 { ( __jit_b buf 76 ) ( __jit_b buf 139 ) ( __jit_b buf 79 ) ( __jit_b buf 24 ) } {}  // mov r9,[rdi+24]
                                             ( __jit_sync_xpins buf xpins )
                                             ? == op 210 {  // import: call the bridge closure inline — no parking
                                                 ( __jit_inline_callout buf pat_at pat_rec n a b 16 spcell cofn9 coenv9 npin )
-                                                ? != 0 pinw { ( __jit_reload_pins buf pins ) } {}
+                                                ? != 0 pinw { ( __jit_reload_pins buf pins 0 ) } { ( __jit_reload_pins buf pins 4 ) }
                                                 ( __jit_reload_xpins buf xpins )
                                             } {
                                                 // Defined callee. Direct path when the ftab entry is live; the
@@ -4518,7 +4561,7 @@ inline @ __fr_setpos s tp i v → v {
                                                 // memory, so an int pin reloads only when the window
                                                 // could have touched its slot; xmm pins are caller-saved
                                                 // and always round-trip.
-                                                ? != 0 pinw { ( __jit_reload_pins buf pins ) } {}
+                                                ? != 0 pinw { ( __jit_reload_pins buf pins 0 ) } { ( __jit_reload_pins buf pins 4 ) }
                                                 ( __jit_reload_xpins buf xpins )
                                             }
                                         } {
@@ -4529,8 +4572,8 @@ inline @ __fr_setpos s tp i v → v {
                                                     : i pbL ( __jit_pr pmap b )
                                                     : i pix ( __jit_pr pmap d )
                                                     : ~ i addr9 0  // 1 = a 32-bit lea already computed the wrapped address
-                                                    ? & != 0 guard >= pbL 0 {
-                                                        ? >= pix 0 { ( __jit_lea32 buf 0 pix pbL ) = addr9 1 } {
+                                                    ? & != 0 guard >= pbL 4 {  // fields 4..7 only: lea32 reads 0/1 as rax/rcx
+                                                        ? >= pix 4 { ( __jit_lea32 buf 0 pix pbL ) = addr9 1 } {
                                                             ? == pix -2 {
                                                                 : i div9 ( __jit_cv cvals d )
                                                                 ? != 0 ( __jit_imm32 div9 ) { ( __jit_lea32bd buf pbL div9 ) = addr9 1 } {}
