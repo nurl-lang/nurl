@@ -12,6 +12,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
+$ `stdlib/ext/env.nu`
 $ `src/module.nu`
 $ `src/interp.nu`
 
@@ -39,6 +40,17 @@ $ `src/interp.nu`
 // loop body's first record, a folded address under a memarg offset, and a
 // folded address that still has to fail the bounds check.
 @ wasm_addrfold → s { ^ `0061736d01000000010b0260017f017f60017f017e030605000000010005030100010727050566757365640000046b6570740001086c6f6f70667573650002036f66660003036f6f6200040a62050a00200041036a2d00000b1301017f200041036a210120012d000020016a0b2901027f0240034020014104460d012002200020016a2d00006a2102200141016a21010c000b0b20020b0a00200041016a3100020b0c00200041ffff036a2d00000b0b0e010041000b0801020304050607080012046e616d65030b01020200036f757401016c` }
+
+// Constant-expression regression module: f64/f32 globals whose bit
+// patterns contain 0x0b bytes (a scanner that stops at the first 0x0b
+// desyncs the whole section), plus ref.func / ref.null inits, an i64 and
+// two i32 globals AFTER them as desync canaries, and a two-result
+// function. Exports b0 b1 b2 g3 g4 g5 ge callf mv; every expectation
+// from the reference wasmtime.
+@ wasm_gconst → s { ^ `0061736d01000000010e036000017f6000017e6000027f7e030b0a00010100010000000002040401700001063f087c004400000000000004400b7c00440b0b0b0b0b0b0b400b7d0043b0b0300b0b7e00428b96acd8000b7f0141e8070b7000d2000b6f00d06f0b7f00412a0b07310902623000010262310002026232000302673300040267340005026735000602676500070563616c6c660008026d760009090501030001000a420a0400410a0b05002300bd0b05002301bd0b05002302bc0b040023030b040023040b040023070b05002306d10b0d0041002305260041001100000b0600410742770b0030046e616d65010601000374656e0721080002673001026731020267320302673304026734050267660602676507026735` }
+
+// (table 3 externref): decodes, sizes, entries read as null.
+@ wasm_exttab → s { ^ `0061736d010000000105016000017f03030200000404016f000307110205746e756c6c0000057473697a6500010a0f02070041012500d10b0500fc10000b` }
 
 // start section sets a global to 99; export g reads it back
 @ wasm_start → s { ^ `0061736d010000000108026000006000017f03030200010606017f0141000b070501016700010801000a0e02070041e30024000b040023000b0011046e616d65010401000173070401000167` }
@@ -92,6 +104,33 @@ $ `src/interp.nu`
     : i r ( ev hex export a F ) ( vec_free [i] a ) ^ r
 }
 
+// No-arg call, SECOND-from-top of the result stack (multi-value order).
+@ ev0b s hex s export → i {
+    : !( Vec u ) ParseErr dr ( bytes_from_hex hex )
+    : ~ i r -999999
+    ?? dr {
+        T bytes → {
+            : *Module m ( module_decode bytes )
+            ? . m ok {
+                : i fidx ( module_export_func m export )
+                ? >= fidx 0 {
+                    : *Interp it ( interp_new m )
+                    ( interp_run_start it )
+                    ( exec_func it fidx )
+                    ? ! ( interp_trapped it ) {
+                        : i n ( vec_len [i] . it vs )
+                        ? > n 1 { = r ?? ( vec_get [i] . it vs - n 2 ) { T x → x F → 0 } } {}
+                    } {}
+                    ( interp_free it )
+                } {}
+            } {}
+            ( module_free m )
+        }
+        F → {}
+    }
+    ^ r
+}
+
 // 1 if the call traps, 0 if not.
 @ trap0 s hex s export → i {
     : ( Vec i ) a ( vec_new [i] ) : i r ( ev hex export a T ) ( vec_free [i] a ) ^ r
@@ -116,6 +155,12 @@ $ `src/interp.nu`
 }
 
 @ main → i {
+    // Mirror the CLI's engine-mode switches so the suite exercises the
+    // same tier the user runs: JIT on by default, NURL_NWASM_JIT=0 keeps
+    // the pure interpreter, PIN=0 unpins, GUARD=0 keeps bounds checks.
+    ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} ( string_free jv ) } F → { ( interp_enable_jit ) } }
+    ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} ( string_free pv ) } F → {} }
+    ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} ( string_free gv ) } F → {} }
     // ── multi-value blocks / branches ──
     ( ck `mvblock:        ` ( ev0 ( wasm_mv ) `mvblock` ) 7 )
     ( ck `mvloop 10:      ` ( ev1 ( wasm_mv ) `mvloop` 10 ) 55 )
@@ -168,6 +213,22 @@ $ `src/interp.nu`
 
     // ── start section runs at instantiation ──
     ( ck `start section:  ` ( ev0 ( wasm_start ) `g` ) 99 )
+
+    // ── const-expr immediates: every kind, 0x0b-byte patterns included ──
+    ( ck `f64 global 2.5: ` ( ev0 ( wasm_gconst ) `b0` ) 4612811918334230528 )
+    ( ck `f64 0x0b bytes: ` ( ev0 ( wasm_gconst ) `b1` ) 4614794385229024011 )
+    ( ck `f32 0x0b bytes: ` ( ev0 ( wasm_gconst ) `b2` ) 187740336 )
+    ( ck `i64 after refs: ` ( ev0 ( wasm_gconst ) `g3` ) 185273099 )
+    ( ck `mut i32 1000:   ` ( ev0 ( wasm_gconst ) `g4` ) 1000 )
+    ( ck `i32 after refs: ` ( ev0 ( wasm_gconst ) `g5` ) 42 )
+    ( ck `externref null: ` ( ev0 ( wasm_gconst ) `ge` ) 1 )
+    ( ck `ref.func init:  ` ( ev0 ( wasm_gconst ) `callf` ) 10 )
+    ( ck `mv top:         ` ( ev0 ( wasm_gconst ) `mv` ) -9 )
+    ( ck `mv second:      ` ( ev0b ( wasm_gconst ) `mv` ) 7 )
+
+    // ── externref table decodes and holds null ──
+    ( ck `extern tnull:   ` ( ev0 ( wasm_exttab ) `tnull` ) 1 )
+    ( ck `extern tsize:   ` ( ev0 ( wasm_exttab ) `tsize` ) 3 )
 
     // ── the address add folded into the load ──
     ( ck `fold fires:     ` ( ev1 ( wasm_addrfold ) `fused` 0 ) 4 )
