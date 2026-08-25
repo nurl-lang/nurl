@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-24 · Current release: **0.51.0** · Language: **Grammar
+_Last reviewed: 2026-08-25 · Current release: **0.52.0** · Language: **Grammar
 v2.7** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -246,11 +246,14 @@ platform-specific shims.
   **template JIT** on top that emits x86-64 for hot functions over
   guard-page linear memory. Over `bench/wasmbench.sh`'s corpus it runs the
   same modules at a **geometric mean 0.78×** the reference Cranelift JIT's
-  wall clock, 11 of 15 rows at or below parity. The compiler **self-hosts
-  on wasm**: `nurlc` compiled to `wasm32-wasi` recompiles `nurlc.nu` to
-  byte-identical IR, both under the external reference `wasmtime` and under
-  this pure-NURL runtime — and identically under its interpreter and its
-  JIT.
+  wall clock, 12 of 15 rows at or below parity — and the control columns
+  say this is not a NURL-shaped fast path: the same corpus emitted by
+  **clang and rustc** runs at 0.73× and 0.73×, the foreign frontends
+  slightly ahead of the one that wrote the runtime. The compiler
+  **self-hosts on wasm**: `nurlc` compiled to `wasm32-wasi` recompiles
+  `nurlc.nu` to byte-identical IR, both under the external reference
+  `wasmtime` and under this pure-NURL runtime — and identically under its
+  interpreter and its JIT.
 - Static cross-compiles: Linux ARM64 / RISC-V64 (musl). Milk-V Duo (RISC-V
   C906) validated on-device.
 - **Unikernel: a NURL program boots as its own kernel** — no host OS, no

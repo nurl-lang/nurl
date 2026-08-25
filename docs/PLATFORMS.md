@@ -30,9 +30,19 @@ verifies — not by intent:
 On **Windows**, building a program works with no Visual Studio and no
 LLVM: the archive bundles a `zig cc`, and carries a MinGW-ABI runtime
 object (`stdlib\runtime.mingw.o`) for it alongside the MSVC one that a
-system clang uses — the two ABIs cannot share an object. Programs built
-through the bundled zig cannot use the canvas or zstd FFI (both need MSVC
-import libs); everything else, gzip included, is unaffected.
+system clang uses — the two ABIs cannot share an object. Compression is
+not affected either way: gzip, deflate and zstd are all pure NURL and
+link nothing.
+
+Two things are MSVC-ABI only, because the library each needs is an MSVC
+import lib, and the driver says so rather than leaving it to the linker:
+the **canvas** FFI (`canvas.o` + `SDL2.lib`), and **real GPU compute**
+(`cuda.lib` / `nvrtc.lib` from a CUDA Toolkit). Under the bundled zig a
+program using `packages/gpu` still builds and runs — it falls through to
+the driverless stubs and reports the CPU backend — so a package that
+merely pulls `gpu` in transitively (`anomaly` → `tensor` → `gpukit` →
+`gpu`) needs nothing installed. For GPU compute on the device, build with
+a system clang.
 
 The shipped `nurlc` / `nurlpkg` binaries link **libc only** (optional FFI
 libraries are pulled in `--as-needed`, so a program that uses none stays

@@ -178,11 +178,14 @@ Consequences worth knowing:
 - The zig fetch must come **before** `build.bat` in any workflow that
   builds a shippable prefix, or the MinGW object is silently absent and
   everything still passes on a runner that has LLVM installed.
-- One thing stays MSVC-only, because its library is an MSVC import lib:
-  the **canvas** FFI (`canvas.o` + `SDL2.lib`). A program using it needs
-  clang; the driver refuses with that message rather than leaving it to
-  the linker. Compression is unaffected — gzip, deflate and zstd are all
-  pure NURL.
+- Two things stay MSVC-only, because the library each needs is an MSVC
+  import lib: the **canvas** FFI (`canvas.o` + `SDL2.lib`) and **real GPU
+  compute** (`cuda.lib` / `nvrtc.lib` from a CUDA Toolkit). Canvas needs
+  clang and the driver refuses with that message rather than leaving it
+  to the linker; `gpu` instead falls through to the driverless stubs and
+  runs on the CPU backend, so a program that only pulls `gpu` in
+  transitively builds under the bundled zig. Compression is unaffected —
+  gzip, deflate and zstd are all pure NURL.
 
 `nurl.sh` also links a feature library (`-lcurl` / `-lssl` / `-lsqlite3` /
 `-lpq`) **only when the emitted IR actually references
