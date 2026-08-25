@@ -396,6 +396,9 @@ $ `stdlib/std/bytes.nu`
 // null (ref.null extern) into an externref table, so −1 covers it.
 @ __decode_table_sec * Wc c * Module m → v {
     : i n ( __chk_count c m ( wc_uleb c ) `bad table count` )
+    // One table is materialised; accepting more would let table-1 ops
+    // silently operate on table 0 — reject instead of misexecute.
+    ? > n 1 { ( __mod_err m `multiple tables unsupported` ) } {}
     : ~ i k 0
     ~ < k n {
         : i et ( wc_u8 c )  // elemtype: 0x70 funcref / 0x6f externref
@@ -442,7 +445,7 @@ $ `stdlib/std/bytes.nu`
         : i active ? == & flag 1 0 1 0
         : ~ i off 0
         ? == active 1 {
-            ? == & flag 2 2 { ( wc_uleb c ) } {}  // explicit table index (0)
+            ? == & flag 2 2 { ? != 0 ( wc_uleb c ) { ( __mod_err m `element segment targets a nonzero table` ) } {} } {}  // explicit table index
             = off ( __const_expr c m )
         } {}
         // elemkind / reftype byte is present unless flag is 0 or 4
@@ -455,13 +458,20 @@ $ `stdlib/std/bytes.nu`
             = j + j 1
         }
         ? == active 1 {
-            : ~ i a 0
-            ~ < a cnt {
-                : i tgt + off a
-                ? & >= tgt 0 < tgt ( vec_len [i] . m table ) {
-                    ( vec_set [i] . m table tgt ?? ( vec_get [i] funcs a ) { T x → x F → -1 } )
-                } {}
-                = a + a 1
+            // The spec makes an overhanging active segment an instantiation
+            // failure — the offset is a u32, so a negative canonical i32 is
+            // far out of bounds, and even an EMPTY segment must trap when
+            // its offset lies past the table end. Same shape as the data-
+            // segment check: decidable here, rejected here.
+            : i uoff & off 4294967295
+            ? > + uoff cnt ( vec_len [i] . m table ) {
+                ( __mod_err m `element segment does not fit its table` )
+            } {
+                : ~ i a 0
+                ~ < a cnt {
+                    ( vec_set [i] . m table + uoff a ?? ( vec_get [i] funcs a ) { T x → x F → -1 } )
+                    = a + a 1
+                }
             }
         } {}
         : *ElemSeg es # *ElemSeg ( nurl_alloc Z ElemSeg )
