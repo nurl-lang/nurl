@@ -1146,6 +1146,17 @@
 //  from earlier functions read as misses without any
 //  table clearing
 : ~ i g_bck_inn 0  // next dense binding id within the current function
+// >0 while the borrow checker's capture hooks must not record. Used to be
+// spelled `g_bck_closure_depth != 0`, which conflated two different things:
+// "this statement belongs to a closure, not to the enclosing function"
+// (still `g_bck_closure_depth`, and still what the capture/summary logic
+// asks) with "record nothing at all". The second reading meant a closure
+// body was never analysed — a double free written inside one compiled clean
+// and segfaulted at run time, while the same code in a `?` arm, a loop, a
+// helper or a bare block was rejected. A closure body is its own function,
+// so it now gets its own recording context and its own analyze pass, and
+// this flag is left for the places that genuinely want recording off.
+: ~ i g_bck_rec_off 0
 : ~ i g_bck_closure_depth 0  // >0 while parsing a closure body — the bck
 //  capture hooks no-op so closure statements do not
 //  inline into the enclosing function's list (so
@@ -13375,7 +13386,7 @@
 // Note that the current statement reads identifier `name`. Hooked
 // into gen_ident, so it fires for every value-position identifier.
 @ bck_note_read s name → v {
-    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+    ? & != g_borrowck 0 == g_bck_rec_off 0 {
         : s cur ( nurl_sym_get g_bck `reads` )
         ( nurl_sym_set g_bck `reads`
         ? == 0 ( nurl_str_len cur ) ( nurl_str_cat name `` ) ( nurl_str_cat3 cur ` ` name ) )
@@ -13389,7 +13400,7 @@
 // side map keyed by name+line: line numbers repeat across files, and
 // these rows outlive their function (the walk runs after the module).
 @ bck_record2 s kind s wname i line s x5 s x6 → v {
-    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+    ? & != g_borrowck 0 == g_bck_rec_off 0 {
         : s reads ( nurl_sym_get g_bck `reads` )
         : s head ( nurl_str_cat4 kind `\t` wname `\t` )
         : s body ( nurl_str_cat4 head reads `\t` ( nurl_str_int line ) )
@@ -13403,7 +13414,7 @@
 }
 
 @ bck_record s kind s wname i line → v {
-    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+    ? & != g_borrowck 0 == g_bck_rec_off 0 {
         : s reads ( nurl_sym_get g_bck `reads` )
         : s head ( nurl_str_cat4 kind `\t` wname `\t` )
         : s body ( nurl_str_cat4 head reads `\t` ( nurl_str_int line ) )
@@ -13668,7 +13679,7 @@
             ( nurl_str_cat name `` )
             ( nurl_str_cat3 g_closure_consumed ` ` name ) } }
     {}
-    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+    ? & != g_borrowck 0 == g_bck_rec_off 0 {
         // Remember WHAT consumed it, keyed by name+line — the pair the
         // diagnostic already resolves. "consumed at line 3" makes a
         // reader scan that line for the operation; naming it removes the
@@ -13694,7 +13705,7 @@
 // carrying one of these rows is deferred to the end of the module
 // (borrowck_fn_end → g_deferred_bck) so every summary is final.
 @ bck_stash_pending_call s name i line s callee i argidx → v {
-    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+    ? & != g_borrowck 0 == g_bck_rec_off 0 {
         : s cur ( nurl_sym_get g_bck `ppends` )
         : s add ( nurl_str_cat3
         ( nurl_str_cat3 name ` ` ( nurl_str_int line ) )
@@ -13713,7 +13724,7 @@
 // discipline as bck_stash_move, a separate list so the walk can tell
 // a definite consume from a conditional one.
 @ bck_stash_maybe_move s name i line s cause → v {
-    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+    ? & != g_borrowck 0 == g_bck_rec_off 0 {
         ( nurl_sym_set g_bck ( nurl_str_cat3 `qc_` name ( nurl_str_int line ) ) cause )
         : s cur ( nurl_sym_get g_bck `pmaybes` )
         : s add ( nurl_str_cat3 name ` ` ( nurl_str_int line ) )
@@ -13725,7 +13736,7 @@
 // Drain the per-statement move stash into `move` rows. Called by
 // gen_stmt once the enclosing statement's own record is in place.
 @ bck_flush_moves → v {
-    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+    ? & != g_borrowck 0 == g_bck_rec_off 0 {
         : ~ s qrest ( nurl_sym_get g_bck `pmaybes` )
         ( nurl_sym_set g_bck `pmaybes` `` )
         : ~ s rest ( nurl_sym_get g_bck `pmoves` )
@@ -13787,7 +13798,7 @@
 // kind onto an unrelated sibling block. gen_loop/gen_foreach need no
 // disarm — their body parser always opens a block, always consuming.
 @ bck_set_block_kind s kind → v {
-    ? & != g_borrowck 0 == g_bck_closure_depth 0
+    ? & != g_borrowck 0 == g_bck_rec_off 0
     { ( nurl_sym_set g_bck `pending_kind` kind ) } {}
 }
 
@@ -13796,7 +13807,7 @@
 // reads field, and the armed block kind in the wname field) then
 // descends a level; exit ascends then records `endblock`.
 @ bck_block_enter i line → v {
-    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+    ? & != g_borrowck 0 == g_bck_rec_off 0 {
         : s kind ( nurl_sym_get g_bck `pending_kind` )
         ( bck_record `block`
         ? == 0 ( nurl_str_len kind ) `plain` kind
@@ -13807,7 +13818,7 @@
 }
 
 @ bck_block_exit → v {
-    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+    ? & != g_borrowck 0 == g_bck_rec_off 0 {
         ? > g_bck_depth 0 { = g_bck_depth - g_bck_depth 1 } {}
         ( bck_record `endblock` `` 0 )
     } {}
@@ -20060,8 +20071,49 @@
     ( nurl_sym_set g_fn_escapes `__dsnap_cenv__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_slice__` `` )
     ( nurl_sym_set g_fn_escapes `__dret_skips__` `` )
+    // Borrow checker: the closure body is its OWN function, so it gets its
+    // own recording context and its own analyze pass. Recording used to be
+    // switched off outright in here, which kept the closure's statements out
+    // of the enclosing function's list — correct, and the reason the flag
+    // exists — but also meant nothing inside a closure was ever checked. A
+    // double free written in a closure body compiled clean and segfaulted at
+    // run time, while the identical code in a `?` arm, a loop, a bare block
+    // or a helper was rejected.
+    //
+    // Save the enclosing function's capture state, start a fresh one, let
+    // the body record into it, walk it, and put the outer one back. The
+    // closure's parameters seed the walk exactly as a function's do; a
+    // capture is not seeded, so it starts Uninit and cannot be reported —
+    // what the closure does to a captured handle is the enclosing frame's
+    // question, and the consumed-capture replay below already answers it.
+    : s __cl_bck_stmts ( nurl_sym_get g_bck `stmts` )
+    : s __cl_bck_reads ( nurl_sym_get g_bck `reads` )
+    : s __cl_bck_kind ( nurl_sym_get g_bck `pending_kind` )
+    : s __cl_bck_pmoves ( nurl_sym_get g_bck `pmoves` )
+    : s __cl_bck_pmaybes ( nurl_sym_get g_bck `pmaybes` )
+    : s __cl_bck_warnset ( nurl_sym_get g_bck `warnset` )
+    : s __cl_bck_deferred ( nurl_sym_get g_bck `deferred` )
+    : i __cl_bck_depth g_bck_depth
+    ( bck_fn_begin )
+    ( nurl_sym_set g_bck `deferred` `` )
     : ~ s body_val ( gen_stmt lex body_syms cg )
     : s __cl_tail_lt ( nurl_get_last_type )
+    ? != g_borrowck 0 {
+        // Same rule borrowck_fn_end follows: a body whose verdict depends on
+        // a summary that does not exist yet is parked and walked after the
+        // module, never walked twice.
+        ? != 0 ( nurl_sym_len g_bck `deferred` )
+        { ( bck_defer_fn ( nurl_sym_get body_syms `__fn_param_names__` ) ) }
+        { ( bck_analyze ( nurl_sym_get body_syms `__fn_param_names__` ) ) }
+    } {}
+    ( nurl_sym_set g_bck `stmts` __cl_bck_stmts )
+    ( nurl_sym_set g_bck `reads` __cl_bck_reads )
+    ( nurl_sym_set g_bck `pending_kind` __cl_bck_kind )
+    ( nurl_sym_set g_bck `pmoves` __cl_bck_pmoves )
+    ( nurl_sym_set g_bck `pmaybes` __cl_bck_pmaybes )
+    ( nurl_sym_set g_bck `warnset` __cl_bck_warnset )
+    ( nurl_sym_set g_bck `deferred` __cl_bck_deferred )
+    = g_bck_depth __cl_bck_depth
     = g_bck_closure_depth - g_bck_closure_depth 1
     = g_fn_arc_mut_witness __cl_arcmut_saved
     = g_fn_mutates_witness __cl_mut_saved
