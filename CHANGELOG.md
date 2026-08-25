@@ -8,6 +8,207 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.52.0] — 2026-08-25
+
+### Added
+
+- **CUDA, NVRTC and the POSIX loader work on Windows, so `packages/gpu`
+  and everything stacked on it links there.** Three separate holes, each
+  of which stopped a program at the linker rather than at a diagnostic:
+
+  - `build.bat` never wrote the `runtime.cuda` / `runtime.nvrtc`
+    sentinels. `build.sh` writes both unconditionally — both libraries
+    have stub fallbacks, so the sentinel says "this declaration is
+    allowed", not "a Toolkit is installed" — but without them `nurlc`
+    rejected every ``& `cuda` `` declaration on any Windows box lacking a
+    Toolkit, which is most of them.
+  - `nurl.bat` now links CUDA/NVRTC the way `nurl.sh` does: a real
+    Toolkit gives `-lcuda -lnvrtc`, and otherwise `stdlib/cuda_stubs.c`
+    goes in **as source**, so the stub ABI follows whichever compiler the
+    driver selected (clang/MSVC or the bundled `zig cc`/MinGW). The
+    display driver's `nvcuda.dll` is *not* a Toolkit substitute and is
+    deliberately not used: its export directory names itself
+    `nvcuda_loader.dll`, so linking the DLL directly imports a filename
+    that does not exist and the `.exe` dies at load.
+  - `stdlib/dl_win32.c` (new) forwards `dlopen` / `dlsym` / `dlclose` to
+    `LoadLibraryA` / `GetProcAddress` / `FreeLibrary`. `gpu`'s **CPU**
+    backend binds the POSIX loader, so a program that merely *imports*
+    `gpu` — `anomaly` → `tensor` → `gpukit` → `gpu`, none of them asking
+    for a GPU — died at link with `undefined symbol: dlopen`. The file is
+    `#ifdef _WIN32`, so the translation unit defines nothing on Linux.
+
+### Changed
+
+- **The wasm template JIT's call path becomes register-to-register, and
+  the two foreign frontends catch up with NURL's own.** `packages/nwasm`
+  1.0.1 → 1.0.8, seven releases of the JIT introduced in 0.51.0.
+
+  The 0.51.0 entry named its own coverage boundary: a function containing
+  one record outside the template set falls back wholesale, and the C and
+  Rust `nbody` modules each tripped a single opcode in their hot loop and
+  ran interpreted — **9.98× and 10.06×** the reference Cranelift JIT
+  where the NURL module was 1.28×. That boundary is where this round
+  went. Over the same `bench/wasmbench.sh` corpus, same protocol, same CI
+  runner class:
+
+  | Column | 0.51.0 | now |
+  |---|---:|---:|
+  | NURL geometric mean vs reference | 0.78× | 0.78× |
+  | NURL rows at or below parity | 11/15 | **12/15** |
+  | NURL `fib` (worst row then) | 1.44× | **1.09×** |
+  | C geometric mean | 0.90× | **0.73×** |
+  | Rust geometric mean | 0.89× | **0.73×** |
+  | C / Rust `nbody` | 9.98× / 10.06× | **1.04× / 0.95×** |
+
+  NURL's own geometric mean is unchanged — the rows shuffled and the
+  call-dominated worst row improved — but the control columns moved a
+  long way, which is the point: the runtime is no longer measurably
+  better at modules from the frontend that wrote it.
+
+  What got it there, in order:
+
+  - **Template coverage.** `f64.abs` / `f64.neg` as sign-bit arithmetic
+    on the raw slot (`btr`/`btc`, no xmm), then the whole trapping
+    division family — `i32`/`i64` `div_s`, `div_u`, `rem_s` — mirroring
+    the interpreter's exact trap semantics, including the `div_s`
+    `INT_MIN / -1` overflow stub and `MIN rem -1` not trapping. Those
+    were the last integer operators that dropped a function to the
+    interpreter; they sit in libc formatting code today and in someone's
+    hot loop tomorrow.
+  - **A shorter emitted encoding.** Post-call status checks test the
+    common case first, ALU immediates use the `imm8` spellings, constant
+    pool slots whose every use is an immediate skip their prologue write
+    (proved by a scan, not assumed), and a per-`Interp` anchor block
+    rides in `r8` so the slab bump, the frame free and the direct-call
+    table load lose their `movabs`+indirection pairs. The templates are
+    front-end bound, so encoded bytes are cycles.
+  - **The pause chain is gone.** Call-outs — imports, `memory.grow`,
+    `call_indirect`, the FCB bridge — used to park every native frame and
+    resume it from the driver, and the mere *possibility* forced every
+    direct call site to carry a status-propagation tail and two resume
+    entry points. They now happen **in place**, through a C-ABI bridge
+    closure with the native frames intact. Traps take the same shortcut:
+    generated code enters through a `setjmp`-guarded runtime entry, and a
+    trap stub `longjmp`s the whole native chain back to it instead of
+    returning a status frame by frame. The guard-page `SIGSEGV` handler
+    composes with it — it still steers the faulting frame to that
+    function's out-of-bounds stub, and the stub longjmps. A direct call
+    site is now `call`+`jmp`.
+  - **Arguments and the frame base travel in registers.** A one-parameter
+    direct call passes `arg0` in `rdx`, and the callee's frame base
+    arrives in `rcx` instead of round-tripping through the anchor block —
+    a store-forward on the recursion critical path, once per call depth,
+    feeding the register every slot access depends on. Locally `fib`
+    100–107 ms → 94–98 ms on the frame-base change alone.
+  - **A wider pin register file.** `r10` (byte count) and `r9` (globals
+    base) join `r12`–`r15` when the function provably cannot need them
+    for their standing role — no `memory.size` under guard pages, no
+    `global.get`/`set`. Both are caller-saved *and* cross-call
+    invariants, so they must earn double the pin threshold to cover the
+    sync traffic. Locally `binary_search` 111–119 → 106 ms, `hash_join`
+    103 → 95 ms.
+  - **Dead compare results are not materialised.** A compare feeding
+    fused `SEL`s used to `setcc`/`movzx`/store its 0/1 for the benefit of
+    distant readers; a per-slot liveness walk over the record CFG now
+    proves when there are none, and the store disappears. Locally
+    `binary_search` 106–113 → 98 ms, `sieve` −5%.
+
+  Every step is gated the same way: 15/15 corpus outputs byte-identical,
+  all suites in all four engine modes, `nurlc.wasm` self-compiling to
+  byte-identical IR, differential fuzzing against the reference runtime,
+  and 400k-deep guest recursion still degrading to the interpreter
+  cleanly.
+
+  The toolchain side of this release is what makes it installable:
+  `nurl_call_code2_sj` and `nurl_code_trap_addr` are new
+  `stdlib/runtime_core.c` primitives, so `nwasm` ≥ 1.0.6 cannot be
+  published to the registry until this toolchain ships — the same
+  dependency that held `nwasm` 1.0.1 back behind 0.51.0.
+
+### Fixed
+
+- **`fs_rename` honoured its documented replace contract on POSIX only.**
+  The doc comment promises "an existing `to` is replaced (POSIX rename
+  semantics)"; Windows' CRT `rename(2)` fails `EEXIST` and leaves **both**
+  files where they were (measured: `rc=-1 errno=17`, destination
+  unchanged). That silently breaks the write-to-`.tmp`-then-rename-over
+  pattern the function exists to serve, and breaks it in the worst
+  shape — the caller sees a successful write, a stale file, and a `.tmp`
+  accumulating beside it. Every atomic writer in the tree rides on it:
+  `anomaly`, `cas`, `gpu`'s kernel cache, `hub`, `lsmdb`, `nurllama`,
+  `nwasm`, `wasmbuilder`. The symptom that found it was an `anomaly`
+  train that succeeded and then crashed, because its metadata never
+  reached disk.
+
+  The divergence is absorbed in `fs_rename` rather than at each call
+  site: on `EEXIST` specifically — not on "did it fail" — drop the
+  destination and retry. The gate is what makes that safe. The only
+  POSIX `rename` reporting `EEXIST` is a directory onto a **non-empty**
+  directory, and `remove(3)` refuses exactly that (verified: `rc=-1
+  ENOTEMPTY`), so the retry cannot destroy a destination on POSIX either;
+  `EXDEV`/`EACCES`/`EBUSY` map to other kinds and never enter the branch.
+  Verified byte-identical behaviour on Linux across replace-existing,
+  fresh rename, missing source (still `NotFound`) and
+  dir-onto-non-empty-dir (destination intact).
+
+  The retry is **not** atomic the way `rename(2)` is: a crash between the
+  remove and the rename loses `to` while leaving `from` in place, so the
+  new content survives under the temp name and a concurrent reader is the
+  one that loses. `MoveFileExA` with `MOVEFILE_REPLACE_EXISTING` closes
+  that window but needs a kernel32 FFI declaration behind a build-time
+  sentinel no POSIX build has reason to produce; the comment says so
+  rather than leaving the caveat unwritten.
+
+- **31 of `cuda_stubs.c`'s 41 bound symbols were missing — and this broke
+  Linux too.** `packages/gpu/src/cuda.nu` binds 41 ``& `cuda` `` symbols;
+  the driverless stub file defined 16. It linked only because dead-code
+  elimination dropped the declarations nothing called: a program that
+  actually calls `gpu_open` fails on Linux with undefined references to
+  `cuDevicePrimaryCtxRetain`, `cuMemGetInfo_v2`, `cuEventCreate`,
+  `cuStreamCreate` and more. Now 41/41 plus the legacy pre-`_v2` aliases,
+  and the file carries the `grep` that keeps the two lists in sync. The
+  same program now links and runs, reporting the CPU backend.
+
+- **Active element segments hanging off the end of a table were clamped
+  instead of trapping.** Found by the differential fuzzer (seed 30047):
+  the segment offset is a `u32`, so a negative canonical `i32` is far out
+  of bounds, and even an *empty* segment past the table end must fail
+  instantiation — as the reference runtime does. It is now a decode
+  error, matching the existing data-segment check. Two adjacent holes
+  closed the same way rather than misexecuting: a module declaring more
+  than one table (only table 0 is materialised, so table-1 operations
+  silently hit table 0) and an element segment targeting a nonzero table.
+
+- **`nwasm`'s "mode matrix" test runs were four copies of the same
+  pure-interpreter run.** The suites constructed `Interp`s directly and
+  never called `interp_enable_jit` — `NURL_NWASM_JIT`/`PIN`/`GUARD` are
+  read by the CLI, not the library — so `NURL_NWASM_JIT=0` changed
+  nothing and the 41 semantics edges never touched the JIT at all. Each
+  wasm-executing suite now mirrors the CLI's engine-mode switches, so the
+  matrix means what it says. Two regression modules pin the const-expr
+  fuzz findings behind it: `f64`/`f32` globals whose bit patterns contain
+  `0x0b` bytes (the old const-expr scanner desynced on them), `ref.func`
+  and `ref.null` inits with integer globals after them as desync
+  canaries, a two-result function checked in stack order, and an
+  `externref` table that decodes, sizes and reads null.
+
+- **`packages/cli`'s `CliCtx` is declared before `CliCmd`.** `CliCmd`'s
+  handler takes a `CliCtx` by value and `nurlc` emits `%Name = type` in
+  source order, so the IR forward-referenced it — rejected on the Windows
+  toolchain with "invalid type for function argument". clang 18 on Linux
+  accepts the forward reference, so the reorder is defensive rather than
+  load-bearing there, and the comment says that rather than overstating
+  the rule.
+
+- **`bench/sort_window.nu`'s header claimed a cost the benchmark does not
+  pay.** It said the NURL implementation buys a heap window where C and
+  Rust use a stack array. Measured: LLVM `-O2` already elides the
+  `malloc`/`free` pair and SROAs the window into registers in both the
+  native and the wasm artifact, so the claim does not describe what
+  executes. A prototype heap-to-stack pass in `nurlc` confirmed it from
+  the other side — no change on wasm, ~19% *regression* on native, LLVM
+  optimising the malloc form better than a pre-promoted `alloca`.
+
 ## [0.51.0] — 2026-08-24
 
 ### Added
