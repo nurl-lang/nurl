@@ -4377,6 +4377,35 @@
 // subst_source_raw: replace whole-identifier occurrences of 'from' with 'to'
 // in a raw source string (preserves whitespace, backticks, punctuation).
 // Identifier chars: alpha, digit, underscore (95).
+// __word_after_cond_sigil: does `src` spell the whole word `w` directly after
+// a `?`, `~` or `^` — the three prefixes that take a VALUE and are how a
+// boolean literal is realistically written (`? T { … }`, `~ T { … }`,
+// `^ T`)?
+//
+// Used to decide whether a generic named `[T]` / `[F]` deserves the
+// boolean-collision note. `[T]` is fine in a template that never writes a
+// boolean, and most templates do not, so the note has to be earned or it
+// buries the real error under a guess.
+@ __word_after_cond_sigil s src s w → b {
+    : i n ( nurl_str_len src )
+    : i wl ( nurl_str_len w )
+    : ~ i i 0
+    ~ < i n {
+        : i c ( nurl_str_get src i )
+        ? | | == c 63 == c 126 == c 94 {  // '?' '~' '^'
+            : ~ i j + i 1
+            ~ & < j n | | == ( nurl_str_get src j ) 32 == ( nurl_str_get src j ) 9
+            == ( nurl_str_get src j ) 10 { = j + j 1 }
+            ? & <= + j wl n ( seq ( nurl_str_slice src j wl ) w )
+            { ? | == + j wl n ! ( __is_ident_char ( nurl_str_get src + j wl ) )
+                { ^ T } {} }
+            {}
+        } {}
+        = i + i 1
+    }
+    F
+}
+
 @ subst_source_raw s src s from s to → s {
     : ~ s result ``
     : i slen ( nurl_str_len src )
@@ -24744,6 +24773,33 @@
     = g_diag_ctx ( nurl_str_cat3
     ` [while instantiating '` mangled
     ( nurl_str_cat3 `' — the error may depend on the concrete type arguments` __ctx_from `]` ) )
+    // `T` and `F` are the boolean literals, and the lexer is context-free:
+    // a bare `T` is TT_BOOL wherever it appears. Monomorphisation rewrites
+    // the type parameter through the body by whole word, so a template
+    // written `[T]` has every VALUE-position `T` rewritten too — `? T { … }`
+    // becomes `? i { … }`, and the instantiation dies on "use of undefined
+    // identifier 'i'" against source the user never wrote. The stdlib avoids
+    // this by convention (`vec.nu` names its parameter `A` and says why);
+    // nothing warned anyone else. Any diagnostic raised inside this re-parse
+    // now carries the reason, since this is exactly when it matters.
+    : ~ s __tp_scan ( nurl_sym_get2 g_generic_syms fname `__tparams` )
+    : ~ s __tp_bool ``
+    ~ != 0 ( nurl_str_len __tp_scan ) {
+        : s __tp1 ( str_first_word __tp_scan )
+        = __tp_scan ( str_skip_word __tp_scan )
+        // …and only when the body actually spells it as a CONDITION. `[T]`
+        // is perfectly fine in a template that never writes a boolean, and
+        // most do not — attaching the note to every `[T]` instantiation
+        // failure would bury the real error under a guess.
+        ? & & == 0 ( nurl_str_len __tp_bool ) | ( seq __tp1 `T` ) ( seq __tp1 `F` )
+        ( __word_after_cond_sigil ( nurl_sym_get2 g_generic_syms fname `__gsrc` ) __tp1 )
+        { = __tp_bool ( nurl_str_cat __tp1 `` ) } {}
+    }
+    ? != 0 ( nurl_str_len __tp_bool )
+    { = g_diag_ctx ( nurl_str_cat g_diag_ctx ( nurl_str_cat3
+        ` [note: this generic's type parameter is named '` __tp_bool
+        `', which is also a boolean literal. Monomorphisation rewrites the parameter through the body by whole word, so a value-position use of it — '? T { … }' — is rewritten into the type argument too. Rename the parameter; the stdlib uses '[A]', '[K V]', '[E]'.]` ) ) }
+    {}
     // DWARF Phase 7: stash the original generic-decl line so
     // gen_fn_decl_concrete points this mono's !DISubprogram at the
     // real source, not the synthetic `<generic>:1`. Cleared in a

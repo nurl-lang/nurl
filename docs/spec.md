@@ -690,6 +690,17 @@ copy:
 ( id [s] `hi` )     // → @id__i8ptr
 ```
 
+**Do not name a type parameter `T` or `F` if its body uses that boolean
+literal.** Monomorphisation substitutes the parameter through the body by
+whole word, before the body is parsed, and the lexer is context-free: a bare
+`T` is the boolean literal `true` wherever it appears. So in a template
+written `[T]`, a value-position `T` is rewritten along with the type
+positions — `? T { … }` becomes `? i { … }`, and the instantiation fails
+against source that was never written. The stdlib names its type variables
+`A`, `K`/`V`, `E` for this reason (see `stdlib/core/vec.nu`); `[T]` is fine
+in a body that never spells a boolean. The compiler names the collision in
+the diagnostic when an instantiation of a `[T]` / `[F]` template fails.
+
 Type arguments at call sites may be *compound types*, not just base
 identifiers: a base IDENT (type keyword or named type), a pointer / option
 (`*T`, `?T`, `??T`), or a nested generic / closure application

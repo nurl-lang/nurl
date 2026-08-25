@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_generic_tparam_bool_name.nu:29:3: error: use of undefined identifier 'i' — no binding, parameter, constant, enum variant, or function with this name is in scope [while instantiating 'g__i64' — the error may depend on the concrete type arguments; first call site: compiler/tests/diag_generic_tparam_bool_name.nu:34] [note: this generic's type parameter is named 'T', which is also a boolean literal. Monomorphisation rewrites the parameter through the body by whole word, so a value-position use of it — '? T { … }' — is rewritten into the type argument too. Rename the parameter; the stdlib uses '[A]', '[K V]', '[E]'.]
+? i { ^ 1 } { } 
+  ^
