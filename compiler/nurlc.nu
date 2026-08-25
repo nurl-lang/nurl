@@ -19617,6 +19617,22 @@
     // only ITS closures — never the outer frame's (whose allocas don't
     // exist in this lifted function). Restored on sym_pop (§7.4).
     ( nurl_sym_def body_syms `__owned_closure_envs__` `` )
+    // …and the same argument for the other three owned-value rosters,
+    // which were left visible. A closure body is a SEPARATE function:
+    // its `^` runs gen_ret, gen_ret drains whatever these lists hold,
+    // and they held the ENCLOSING frame's values. A `% Drop` value (or
+    // an owned String, or an owned struct field) live at the point the
+    // literal appears therefore had its drop emitted inside the lifted
+    // function, against an alloca register that only exists in the
+    // caller — `%r7 = load %DH, %DH* %r2` where `%r2` is undefined
+    // here. clang rejected it as "use of undefined value"; had the
+    // register resolved it would have been a use-after-scope and a
+    // second drop of a value the outer frame drops again on its own
+    // exit. Only a closure body with an explicit `^` reached this,
+    // which is why an expression-bodied literal looked fine.
+    ( nurl_sym_def body_syms `__owned_strings__` `` )
+    ( nurl_sym_def body_syms `__owned_struct_fields__` `` )
+    ( nurl_sym_def body_syms `__user_drops__` `` )
     ( nurl_sym_def body_syms `__in_call_arg__` `` )
     // The closure body's `^` returns from the CLOSURE, not the enclosing
     // function — shadow the return-type key with the closure's own return
