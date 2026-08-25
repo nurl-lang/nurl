@@ -1,6 +1,6 @@
 # tools/fuzz — fuzzing for nurlc and the stdlib parsers
 
-Three fuzzers, all run weekly (and on demand) by
+Four fuzzers, all run weekly (and on demand) by
 [`.github/workflows/fuzz.yml`](../../.github/workflows/fuzz.yml), never as a
 per-PR gate. Any finding fails the run and uploads its reproducer inputs
 from `failures/` as an artifact. After every run the workflow renders
@@ -31,11 +31,32 @@ of real bugs lives in [`FINDINGS.json`](FINDINGS.json).
    reference wasmtime — a THIRD independent execution environment against
    the same oracle, hunting target-dependent codegen (32-bit pointers, i64
    payload slots). Requires zig + wasmtime.
+3. **Inverse oracle** (`FUZZ_GEN=reject fuzz.sh` + `genreject.py`) — the
+   other direction. The differential fuzzers emit VALID programs and ask
+   whether the answer is right; this emits programs that are **ownership
+   violations by construction** and asks whether they are caught. That is
+   the question a borrow checker is actually judged on, and the only one
+   whose failures are silent: a missed rejection compiles, runs, and
+   corrupts the heap.
+
+   A small set of violation CORES (alias double free, one binding freed
+   twice, use after move, `String` double free, loop-carried free, iterator
+   invalidation) is crossed with every CONTEXT the language offers (`?`
+   arms, `~` loops, foreach bodies, bare blocks, `;` defers, `??` arms,
+   helpers, generic bodies, trait methods, closure bodies) and nested: one
+   bug written every way the language allows.
+
+   The oracle is a diagnostic **marker**, not an output — the compile must
+   fail *and* the message must be the one that violation deserves, so a
+   syntax error in the generator cannot pass for a working checker. Both
+   holes it found (§ Bugs found 2026-08-26) had been silent for as long as
+   the constructs existed.
+
 2b. **Reducer** (`reduce.py`) — not a fuzzer: the thing that makes a finding
    usable. Called automatically by `fuzz.sh` on every finding; see
    [Reducing a finding](#reducing-a-finding-reducepy) below.
 
-3. **Mutational parser fuzzer** (`fuzz_parsers.sh` + `fuzz_parsers.py` +
+4. **Mutational parser fuzzer** (`fuzz_parsers.sh` + `fuzz_parsers.py` +
    `parse_harness.nu`) — mutates seeds for the untrusted-input parsers
    (x509/DER, cbor, msgpack, json, yaml, xml, toml) against an ASan+UBSan
    harness; a crash / out-of-bounds / UB / hang is a bug. Run it locally with
@@ -195,6 +216,29 @@ cleanup block (invalid IR), field/element stores skipping width coercion
 (invalid IR), and non-canonical narrow-int enum payload slots making a
 match literal constraint disagree with the arm's own payload binding
 (miscompile class).
+
+## Bugs found (2026-08-26, inverse oracle)
+
+Two borrow-checker soundness holes, each a **definite** double free that the
+checker rejects everywhere else and accepted here — compiling clean and
+segfaulting in the allocator at run time:
+
+1. **Inside a `??` arm.** Arms bind payload variables with no `let` row, so
+   descending with the outer flat name-keyed state would conflate an arm's
+   `v` with a same-named binding outside; the whole match was a black box.
+   Fixed by walking each arm from an EMPTY state — only a binding with its
+   own `let` row inside the arm is tracked, and that is arm-local by
+   construction. (`borrow_match_arm_double_free.nu`)
+2. **Inside a closure body.** One flag meant both "this belongs to the
+   closure, not the enclosing function" and "record nothing", so the checker
+   was off for everything written in a closure. Fixed by giving the body its
+   own recording context and its own analyze pass — a closure is its own
+   function. (`borrow_closure_body_double_free.nu`)
+
+The same sweep also turned up a language trap: a generic named `[T]` has its
+value-position `T` — the boolean literal — rewritten by monomorphisation, so
+`? T { … }` becomes `? i { … }` and fails against source nobody wrote. The
+diagnostic now names the collision (`diag_generic_tparam_bool_name.nu`).
 
 ## Bugs found (2026-08-26, structural surface wave 2)
 

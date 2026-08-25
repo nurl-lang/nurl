@@ -752,7 +752,9 @@ class Prog:
         self.once.add("nest")
         self.decls += [
             ": NIn { i8 nx  u16 ny }",
+            ": NMid { NIn nm  i32 nk }",
             ": NOut { NIn ninner  i32 nz }",
+            ": NTop { NMid nt  i64 nw }",
             ": | NShape {",
             "    NPt NIn",
             "    NSeg NIn NIn",
@@ -764,6 +766,37 @@ class Prog:
         """One `NIn` literal + its (nx, ny) oracle values."""
         a, b = self.rng.randrange(1 << 8), self.rng.randrange(1 << 16)
         return f"@ NIn {{ # i8 {a} # u16 {b} }}", wrap(a, "i8"), b & 0xffff
+
+    def stmt_nested_store(self):
+        """Three levels of aggregate, WRITTEN at every depth.
+
+        Reading a nested path always worked; writing one was rejected until
+        2026-08-26, because the object of a nested path is a by-value
+        register rather than a binding with an alloca. Each write is read
+        back, and its neighbours are read back too — a store that lands one
+        field over is exactly what a GEP chain gets wrong."""
+        self.decl_nested()
+        a0, b0 = self.rng.randrange(1 << 8), self.rng.randrange(1 << 16)
+        k0 = self.rng.randrange(1 << 32)
+        w0 = self.rng.randrange(1 << 40)
+        t = self.fresh("nt")
+        self.emit(f"    : ~ NTop {t} @ NTop {{ @ NMid {{ "
+                  f"@ NIn {{ # i8 {a0} # u16 {b0} }} # i32 {k0} }} {w0} }}")
+        vals = {"nx": wrap(a0, "i8"), "ny": b0 & 0xffff,
+                "nk": wrap(k0, "i32"), "nw": wrap(w0, "i64")}
+        paths = {"nx": f". . . {t} nt nm nx", "ny": f". . . {t} nt nm ny",
+                 "nk": f". . {t} nt nk", "nw": f". {t} nw"}
+        types = {"nx": "i8", "ny": "u16", "nk": "i32", "nw": "i64"}
+        for _ in range(self.rng.randint(1, 4)):
+            f = self.rng.choice(["nx", "ny", "nk", "nw"])
+            ty = types[f]
+            w, _signed = TYPES[ty]
+            bits = self.rng.randrange(1 << min(w, 62))
+            self.emit(f"    = {paths[f]} # {ty} {bits}")
+            vals[f] = wrap(bits, ty)
+        for f in ["nx", "ny", "nk", "nw"]:
+            self.phex(paths[f], to_u64_bits(vals[f], types[f]))
+        self.env.append(Var("i64", paths["nw"], vals["nw"]))
 
     def stmt_nested(self):
         """A struct inside a struct, and a struct as an enum payload —
@@ -896,7 +929,7 @@ FEATURES = [
     # The second wave: the surface the first wave never reached.
     ("generic", 3), ("option", 2), ("result", 2), ("trait", 2),
     ("nested", 3), ("loopctl", 2), ("vec_struct", 2),
-    ("nested_closure", 2), ("early_return", 2),
+    ("nested_closure", 2), ("early_return", 2), ("nested_store", 2),
 ]
 
 
