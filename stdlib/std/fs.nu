@@ -994,8 +994,37 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 // existing `to` is replaced (POSIX rename semantics). Cross-device
 // moves surface as IoErr {Other} (EXDEV) — copy + delete instead.
 @ fs_rename s from s to → !v IoErr {
-    : i32 rc ( rename from to )
+    : ~ i32 rc ( rename from to )
     ? == rc # i32 0 { ^ @ !v IoErr { T 0 } } {}
+    // Windows' CRT rename(2) does not implement the POSIX replace: handed an
+    // existing `to` it fails EEXIST and leaves BOTH files where they were.
+    // That breaks the write-to-`.tmp`-then-rename-over pattern this function
+    // exists to serve — and breaks it silently, because the caller sees a
+    // successful write followed by a stale file and a `.tmp` accumulating
+    // beside it. Every atomic writer in the tree rides on this (packages
+    // anomaly, cas, gpu's kernel cache, hub, lsmdb, nurllama, nwasm,
+    // wasmbuilder), so the divergence has to be absorbed here rather than at
+    // each call site. Drop the destination and retry.
+    //
+    // Gated on EEXIST specifically, and not on "did it fail": the only POSIX
+    // rename that reports EEXIST is a directory onto a NON-EMPTY directory,
+    // and `remove` refuses exactly that (it unlinks files and empty
+    // directories only), so the retry cannot destroy a `to` here either. A
+    // real failure — EXDEV, EACCES, EBUSY — maps to a different kind and
+    // never reaches this branch, leaving `to` alone.
+    //
+    // The retry is NOT atomic the way rename(2) is: a crash in the window
+    // between the remove and the rename loses `to`. `from` is untouched
+    // there, so the new content is still on disk under the temp name; a
+    // reader is the one that loses, seeing neither file. Win32 MoveFileExA
+    // with MOVEFILE_REPLACE_EXISTING closes that window, but it is a
+    // kernel32 FFI, and its declaration would need a build-time sentinel
+    // that no POSIX build has any reason to produce.
+    ? == ( errno_kind ) 2 {
+        : i32 _rm ( remove to )
+        = rc ( rename from to )
+        ? == rc # i32 0 { ^ @ !v IoErr { T 0 } } {}
+    } {}
     ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
 }
 

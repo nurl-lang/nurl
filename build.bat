@@ -112,6 +112,28 @@ if defined ZLIB_LIBNAME (
 REM zstd is pure NURL over stdlib\std\zstd.nu now - no library, no sentinel.
 if exist stdlib\runtime.zstd del /q stdlib\runtime.zstd
 
+REM ── CUDA driver + NVRTC sentinels (ALWAYS on — stub-backed) ──
+REM Mirrors build.sh §"CUDA driver + NVRTC sentinels". packages\gpu binds
+REM the CUDA Driver API (& `cuda` @ cu…) and NVRTC (& `nvrtc` @ nvrtc…)
+REM directly, with no runtime.c bridge. These are the two FFI libs that
+REM have FALLBACK STUB SOURCES (stdlib\{cuda,nvrtc}_stubs.c), which
+REM nurl.bat compiles into the image when no CUDA Toolkit is installed —
+REM so a gpu-importing program links and runs on a driverless box and
+REM packages\gpu falls back to its CPU backend. Because the fallback always
+REM exists, the COMPILE-TIME sentinel must not depend on any probe: gate it
+REM on the host and every Windows user without a Toolkit gets 40-odd
+REM "no build-time sentinel 'stdlib/runtime.cuda'" errors from nurlc for a
+REM package (anomaly, tensor, gpukit) that never needed a GPU in the first
+REM place. Stub-backed libs get an unconditional sentinel; nurl.bat decides
+REM real-vs-stub at LINK time, where the answer actually matters.
+> stdlib\runtime.cuda echo 1
+> stdlib\runtime.nvrtc echo 1
+if defined CUDA_PATH (
+    echo [info] CUDA Toolkit at "%CUDA_PATH%" - nurl.bat links the real driver + NVRTC
+) else (
+    echo [info] no CUDA Toolkit - cu*/nvrtc* link against stubs; packages\gpu uses its CPU backend
+)
+
 REM ── version header (mirrors build.sh) ────────────────────────
 REM Bake the toolchain version into runtime.o so `nurlc --version` /
 REM `nurlpkg --version` report the real version instead of "unknown".
