@@ -907,8 +907,9 @@ enumerable class of data races — every route by which an `Rc` or a
 ### 6.6 The gates — how the guarantees are checked
 
 Everything above is enforced by two CI jobs
-(`.github/workflows/ci.yml`), a diagnostic-coverage harness, and a
-targeted leak tool. This subsection
+(`.github/workflows/ci.yml`), a diagnostic-coverage harness, a targeted
+leak tool, and a weekly inverse-oracle fuzzer
+(`.github/workflows/fuzz.yml`). This subsection
 is the single source of truth for *what is actually run*; other
 sections point here rather than re-describe it.
 
@@ -1013,6 +1014,24 @@ on; they are not two separate tools or two separate builds.
    `tools/leakgate.sh` runs in the sanitizers job — reusing its
    `--san` build, and only when `compiler/nurlc.nu` itself changed. So a
    leak regression in the pinned surface fails CI, not just a manual audit.
+
+5. **Inverse-oracle fuzzing** — `tools/fuzz/genreject.py`
+   (`FUZZ_GEN=reject`), in the weekly `fuzz.yml` run rather than on every
+   PR, because its value is breadth over time. Gates 1–4 ask whether an
+   *accepted* program behaves; this one asks the question a checker is
+   actually judged on — does an **invalid** program get caught? It crosses
+   a set of violation cores (alias double free, one binding freed twice,
+   use after move, `String` double free, loop-carried free, iterator
+   invalidation) with every context the language offers (`?` arms, `~`
+   loops, foreach bodies, bare blocks, `;` defers, `??` arms, helpers,
+   generic bodies, trait methods, closure bodies) and nests them. The
+   oracle is the **diagnostic marker**, not the exit status: the compile
+   must fail *and* carry the message that violation deserves, so a
+   rejection for an unrelated reason does not count. A missed rejection is
+   the one failure mode nothing else here catches — the program compiles,
+   runs, and corrupts the heap. Its first sweep (0.53.0) found exactly
+   that in two contexts, a `??` arm and a closure body; both are now
+   analysed, and 400 seeds at depth 4 are clean.
 
 ## 7. Leaks versus memory safety
 

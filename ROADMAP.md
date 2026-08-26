@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-25 · Current release: **0.52.0** · Language: **Grammar
+_Last reviewed: 2026-08-26 · Current release: **0.53.0** · Language: **Grammar
 v2.7** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -59,7 +59,15 @@ What is solid today:
   Since 0.44.0 **no rule depends on definition order**: every check that
   consults a per-function summary parks what it cannot answer and
   resolves it after the module, so where a helper is written can no
-  longer change a verdict.
+  longer change a verdict. Since 0.53.0 the coverage is measured from the
+  other direction: an **inverse-oracle fuzzer**
+  ([`tools/fuzz/genreject.py`](tools/fuzz/genreject.py)) writes one
+  ownership violation into every context the language offers and demands
+  the diagnostic that violation deserves, not merely a failed compile. Its
+  first sweep found the two contexts where a *definite* double free still
+  compiled clean and segfaulted at run time — a `??` arm and a closure
+  body, the latter because the checker was switched off wholesale inside
+  one — and both are now analysed.
 - **Concurrency.** A stackful M:N work-stealing async runtime with **no
   `async`/`await` colouring** — ordinary code runs unchanged under the
   scheduler — plus threads/mutex/cond, typed channels, and Go-style `??`

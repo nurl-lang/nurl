@@ -979,6 +979,18 @@ The index form is chosen by the LHS LLVM type:
 | raw pointer `T*` | expression | array slot, computed index |
 | slice `{ T*, i64 }` | INT or expr | slice element via data ptr |
 
+The object may itself be a **field path**, so a struct inside a struct is
+written in place — `= . . o inner x 7` — one GEP per navigation hop down to
+the last container, which then takes the ordinary store (same width
+coercion, same diagnostics). The chain is walked by **type**, not by
+counting dots: a hop that is not an aggregate *is* the object and is loaded
+as a value, which is how `= . . d op + . d olen k # u byte` — a `*u` field
+indexed by an expression — keeps its meaning. Writing through a nested path
+requires a base binding that owns its storage: a `:`-bound struct, or an
+`inout` parameter (whose `__ptr` is the caller's address). A by-value
+parameter has nothing to write through and is rejected, as it is for a
+single-hop store.
+
 ### 5.3 Defer `;`
 
 ```
@@ -1047,6 +1059,11 @@ every loop written `~ > cond { … }`.
 
 Using either outside a `~` body is a compile error naming the reason,
 not a silent no-op.
+
+Both spellings of a `~` body qualify — the while loop and the foreach. A
+foreach owns a hidden index, so its `continue` lands on the index bump
+rather than on the loop check: the iteration advances exactly as a
+fall-through does, and the two paths share one landing pad.
 
 Note the interaction with §7 (ownership): a jump leaves the block
 *without* running the code the normal path would, so the compiler emits
