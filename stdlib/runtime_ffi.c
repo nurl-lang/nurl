@@ -1391,6 +1391,13 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
              * still return immediately for the reactor. */
             int we = WSAGetLastError();
             if (wn < 0 && we == WSAETIMEDOUT && ++stalls <= 2) continue;
+            /* Would-block on a non-blocking socket is PROGRESS, not
+             * failure — see the POSIX branch below for why -1 here
+             * corrupts the caller's stream. */
+            if (wn < 0 && we == WSAEWOULDBLOCK && total > 0) {
+                h->err_kind = NURL_NET_ERR_OK;
+                return total;
+            }
             h->err_kind = nurl__net_map_wsa(we, NURL_NET_ERR_WRITE);
 #else
             /* On POSIX a SO_SNDTIMEO expiry and a nonblocking would-block
@@ -1403,6 +1410,28 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
                            0)) {
                 int fl = fcntl(h->fd, F_GETFL, 0);
                 if (fl >= 0 && !(fl & O_NONBLOCK) && ++stalls <= 2) continue;
+                /* NON-BLOCKING would-block after a PARTIAL send: those
+                 * bytes are already on the wire, so this is progress,
+                 * and the count is the only record of it. Returning -1
+                 * threw it away — the async wrapper in std/net.nu then
+                 * parked on the reactor and retried from its own `sent`,
+                 * which had never advanced, so it re-sent the buffer
+                 * from the front. The peer got the prefix again instead
+                 * of the continuation, and since callers frame their
+                 * writes (relay.nu's 5-byte type+length header), reading
+                 * the announced length spliced a repeat into the middle
+                 * of the message: a frame of exactly the right size with
+                 * the wrong bytes, and every frame after it garbage.
+                 * Measured before the fix: a 1.1 MB relay frame put
+                 * 37.7 MB on the wire, ~17 copies of its own prefix.
+                 * Loopback hid it completely — the peer drains as fast
+                 * as we fill, so send() never blocks and the whole
+                 * buffer goes in one call. Report the count; -1 is for
+                 * "nothing was written". */
+                if (total > 0) {
+                    h->err_kind = NURL_NET_ERR_OK;
+                    return total;
+                }
             }
             h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_WRITE);
 #endif

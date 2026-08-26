@@ -803,15 +803,40 @@ $ `stdlib/std/pkey.nu`
     ? != fcur 0 { ^ ( tcp_write_all_async c bytes ) } {}
     : s rp . c raw
     : i raw # i rp
-    : i n ( vec_len [u] bytes )
-    ? <= n 0 { ^ @ !v NetErr { T 0 } } {}
+    : i total ( vec_len [u] bytes )
+    ? <= total 0 { ^ @ !v NetErr { T 0 } } {}
     : *u p ( vec_data [u] bytes )
     : s pbuf # s p
-    : i wn ( nurl_tcp_write raw pbuf n )
-    ? < wn 0 {
-        : i ek ( nurl_tcp_err_kind raw )
-        ^ @ !v NetErr { F ( _net_err_of ek ) }
-    } {}
+    // write(2) on a blocking socket is NOT all-or-nothing: it returns as soon
+    // as it has copied SOME bytes into the send buffer, and with SO_SNDTIMEO
+    // set (tcp_set_timeout) it returns a short count when the timer fires with
+    // the peer's window full. Writing once and reporting success left the rest
+    // of the buffer unsent, and — because the frame header had already
+    // announced the full length — DESYNCED the stream: the peer's next
+    // read_exact spliced the tail of one frame onto the head of the next and
+    // handed up a frame of the right length with the wrong bytes. Loopback
+    // hides it (the receiver drains as fast as the sender fills, so one write
+    // takes everything); a real network path with an autotuned 64 KiB initial
+    // send buffer does not, past a few hundred KiB. Loop until it is all gone,
+    // exactly as tcp_write_all_async already does.
+    : ~ i sent 0
+    : ~ i idle 0
+    ~ < sent total {
+        : i remaining - total sent
+        : s slice # s + # i pbuf sent
+        : i wn ( nurl_tcp_write raw slice remaining )
+        ? > wn 0 { = sent + sent wn = idle 0 } {
+            : i ek ( nurl_tcp_err_kind raw )
+            // ek 7 is EAGAIN / SO_SNDTIMEO. The peer is still connected and
+            // the rest still has to go, so retry — bounded, so a peer that
+            // stops draining forever cannot wedge us. wn == 0 with no error
+            // is the same situation: no progress, do not spin on it.
+            ? | == ek 7 == wn 0 {
+                = idle + idle 1
+                ? > idle 2400 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
+            } { ^ @ !v NetErr { F ( _net_err_of ek ) } }
+        }
+    }
     ^ @ !v NetErr { T 0 }
 }
 
@@ -827,13 +852,26 @@ $ `stdlib/std/pkey.nu`
     } {}
     : s rp . c raw
     : i raw # i rp
-    : i n ( nurl_str_len text )
-    ? <= n 0 { ^ @ !v NetErr { T 0 } } {}
-    : i wn ( nurl_tcp_write raw text n )
-    ? < wn 0 {
-        : i ek ( nurl_tcp_err_kind raw )
-        ^ @ !v NetErr { F ( _net_err_of ek ) }
-    } {}
+    : i total ( nurl_str_len text )
+    ? <= total 0 { ^ @ !v NetErr { T 0 } } {}
+    // Same short-write rule as tcp_write_all — see the note there. Status
+    // lines and headers are small enough that one write almost always takes
+    // them, which is exactly why a partial one here would be a rare,
+    // load-dependent corruption rather than an outright failure.
+    : ~ i sent 0
+    : ~ i idle 0
+    ~ < sent total {
+        : i remaining - total sent
+        : s slice # s + # i text sent
+        : i wn ( nurl_tcp_write raw slice remaining )
+        ? > wn 0 { = sent + sent wn = idle 0 } {
+            : i ek ( nurl_tcp_err_kind raw )
+            ? | == ek 7 == wn 0 {
+                = idle + idle 1
+                ? > idle 2400 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
+            } { ^ @ !v NetErr { F ( _net_err_of ek ) } }
+        }
+    }
     ^ @ !v NetErr { T 0 }
 }
 
@@ -1005,19 +1043,38 @@ $ `stdlib/std/async_ffi.nu`
     : *u p ( vec_data [u] bytes )
     : s pbuf # s p
     : ~ i sent 0
+    // Once ANY byte of this buffer is on the wire, giving up is not an
+    // option the caller can recover from. Callers frame their writes
+    // (relay.nu puts a 5-byte type+length header in front of every
+    // message), so a half-written buffer does not lose a message — it
+    // DESYNCS the stream: the peer reads the announced length, takes the
+    // tail from whatever is written next, and every frame after that is
+    // garbage of plausible length. It surfaces far away as an integrity
+    // failure, not as a write error.
+    //
+    // So a reactor timeout is fatal only while `sent` is still 0. Past
+    // that we keep waiting, bounded exactly like __read_exact's mirror of
+    // this rule on the reading side — the peer is still connected and the
+    // rest of the buffer still has to go. A peer that never drains ends
+    // the loop with an error, and the caller drops the connection, which
+    // is the only correct way out of a partial frame.
+    : ~ i idle 0
     ~ < sent total {
         : i remaining - total sent
         : s slice # s + # i pbuf sent
         : i n ( nurl_tcp_write raw slice remaining )
         ? > n 0 {
             = sent + sent n
+            = idle 0
         } {
             ? < n 0 {
                 : i ek ( nurl_tcp_err_kind raw )
                 ? == ek 7 {
                     : i rc ( nurl_reactor_wait_write fd ( __wait_ms raw ) )
                     ? <= rc 0 {
-                        ^ @ !v NetErr { F # NetErr NetTimeout }
+                        ? == sent 0 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
+                        = idle + idle 1
+                        ? > idle 2400 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
                     } {}
                 } {
                     ^ @ !v NetErr { F ( _net_err_of ek ) }
@@ -1026,7 +1083,11 @@ $ `stdlib/std/async_ffi.nu`
                 // n == 0 — kernel says "wrote nothing" without error.
                 // Treat as EAGAIN to avoid spinning.
                 : i rc ( nurl_reactor_wait_write fd ( __wait_ms raw ) )
-                ? <= rc 0 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
+                ? <= rc 0 {
+                    ? == sent 0 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
+                    = idle + idle 1
+                    ? > idle 2400 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
+                } {}
             }
         }
     }
