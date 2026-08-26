@@ -8,6 +8,306 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.53.0] — 2026-08-26
+
+### Added
+
+- **`break` and `continue` work inside a foreach body.**
+  [`docs/spec.md`](docs/spec.md) §5.4.1 scopes both to "the innermost
+  enclosing `~` loop body", and a foreach *is* a `~` loop body — but only
+  the while form ever published the labels `gen_loop_jump` reads, so every
+  foreach rejected both outright:
+
+  ```
+  ~ x xs { ? > x 3 { break } {}  = s + s x }
+                     ^ 'break' outside a loop — there is nothing to leave.
+  ```
+
+  leaving no way to stop an iteration early other than rewriting the loop
+  as an index-counted `~ < k ( vec_len … )`.
+
+  The reason it was never wired up is real: a while loop can send
+  `continue` straight at its check block, because the induction variable is
+  the program's own binding, while a foreach owns a hidden index whose bump
+  lived in the body's fall-through — a `continue` branching at the check
+  block would skip the bump and spin forever. So the bump gets its own
+  label, the continue landing pad, reached by both the fall-through and
+  every `continue`; it re-loads the index rather than reusing the check
+  block's register, so the block reads correctly whichever predecessor
+  arrived (`-O2` folds the reload away). With that in place the foreach
+  publishes exit/continue labels and the same five drop snapshots
+  `gen_loop` does, saved and restored around the body so the innermost loop
+  wins and the outer one comes back — a `% Drop` value at the top of the
+  body is released exactly once on each of the three paths out.
+
+- **A nested field can be written directly: `= . . o inner x 7`.** Reading
+  a nested path always worked; writing one did not:
+
+  ```
+  = . . o inner x 7
+  error: cannot assign to a field of '': it is a by-value NIn with no
+         storage to write through …
+  ```
+
+  The empty name is the tell — the object's name was read from a token that
+  was a `.`, not an identifier. The single-hop store takes the object's
+  address from the `<name>__ptr` alloca a `:`-bound struct owns, and a
+  nested path has no such name, because its object is a field path that
+  `gen_expr` turns into a by-value register — which is not somewhere a
+  store can land. A struct inside a struct could therefore only be written
+  by copying the inner one out, mutating it, and storing it back whole.
+
+  `gen_nested_lvalue_addr` walks the chain by **address**: one GEP per
+  navigation field, handing the last container's address to the ordinary
+  store dispatch, which does the store, the width coercion and the
+  diagnostics exactly as it does for a one-hop store — nothing about the
+  store itself is duplicated. The walk is driven by **types**, not by
+  counting dots: `= . . d op + . d olen k # u byte` in
+  [`stdlib/std/zstd.nu`](stdlib/std/zstd.nu) is also two dots, but there
+  the field is a `*u` and what follows is an index expression, so a hop
+  that is not an aggregate IS the object and gets loaded and handed over as
+  a value. That is how the pointer, slice and struct-pointer spellings keep
+  working unchanged. Whether to walk at all is decided before anything is
+  consumed, since the lexer does not rewind — the base identifier is read
+  out of the peek slots (`nurl_lex_peek2_val` is new, one slot further out
+  than `nurl_lex_peek_val`) and the walk is taken only for a by-value
+  struct binding that owns its storage. A pointer binding, a by-value
+  parameter or a deeper root keeps the old path and the old diagnostics, so
+  nothing that compiled before takes a different route. An `inout`
+  parameter does qualify: its `__ptr` IS the caller's address, so writing
+  through it is the point.
+
+- **An inverse oracle for the differential fuzzer — programs the compiler
+  MUST reject** ([`tools/fuzz/genreject.py`](tools/fuzz/genreject.py),
+  `FUZZ_GEN=reject`). The two existing generators emit *valid* programs and
+  ask whether the answer is right. Nothing asked the opposite question,
+  which is the one a borrow checker is actually judged on: does an
+  **invalid** program get caught? That failure mode is silent — the program
+  compiles, runs, and corrupts the heap — so only a deliberate hunt finds
+  it. The generator crosses a small set of violation **cores** (alias
+  double free, one binding freed twice, use after move, `String` double
+  free, loop-carried free, iterator invalidation) with the **contexts** the
+  language offers (`?` then/else arms, `~` loops, foreach bodies, bare
+  blocks, `;` defers, `??` arms, helpers, generic bodies, trait methods,
+  closure bodies) and nests them: one bug written every way the language
+  allows. The oracle is a diagnostic **marker**, not an output — the
+  compile must fail *and* the message must be the one that violation
+  deserves, because rejecting the program for an unrelated reason would let
+  a syntax error in the generator pass for a working checker. It found two
+  soundness holes on its first sweep (both fixed below, each accepted by
+  the compiler and each segfaulting in the allocator at run time) and a
+  third finding that became the `[T]` diagnostic. 400 seeds at depth 4 are
+  clean now.
+
+- **The structural generator reaches the surface it never generated, and
+  findings shrink to minimal reproducers.** The structural fuzzer had gone
+  quiet — 250 seeds, zero findings — not because `nurlc` is clean there,
+  but because the generator's grammar stopped at scalars: a struct of sized
+  ints, an enum of scalar payloads, a while loop and a closure. Nine new
+  statement kinds, each with an exact oracle, reach the rest: `generic`
+  (instantiated at every sized type, so one template body must pick `sdiv`
+  for `[i8]` and `udiv` for `[u]`, and at a concrete struct whose *name* is
+  tparam-shaped), `option`, `result` through a `\` try-propagation chain,
+  `trait` (required method, default method, several impls, a bounded
+  generic reaching the default through the bound), `nested`, `loopctl`,
+  `vec_struct`, `nested_closure` and `early_return` — the last two aimed at
+  the lifted-function boundary and the drop-on-jump machinery. It found a
+  miscompile in 3 of the first 25 seeds (fixed below).
+
+  A finding is worth what its reproducer is worth, and a raw seed is
+  150–400 lines across a dozen unrelated features, so
+  [`tools/fuzz/reduce.py`](tools/fuzz/reduce.py) deletes statements while
+  the same failure survives and `fuzz.sh` calls it on every finding —
+  `failures/` now carries a `*.min.nu` beside the full seed. The closure
+  miscompile came out of a 397-line seed as 23 lines in 19 seconds. Two
+  things make it work rather than merely run: the property is
+  **fingerprinted from the original failure** (the normalised error
+  message, the ASan report kind, or the specific expectation that
+  disagreed) and every candidate must reproduce *that* — "does not compile"
+  is true of almost any mangled program — and `genprog.py --selfcheck`
+  emits the program with each expected value embedded next to the
+  expression that produces it, so the program is its own oracle and
+  deleting a line cannot desynchronise it. That is the only way to shrink a
+  "wrong at every optimisation level" miscompile, which is the class this
+  fuzzer exists for. Every knob is a `workflow_dispatch` input now,
+  `seed_start` included — a weekly run pinned at seed 1 re-tests the same
+  programs forever.
+
+### Changed
+
+- **The instantiation diagnostic names the `[T]`-is-also-`true`
+  collision.** `T` and `F` are the boolean literals and the lexer is
+  context-free, so a bare `T` is `TT_BOOL` in type position and value
+  position alike. Monomorphisation rewrites a type parameter through the
+  body by whole word, *before* the body is parsed, so a template written
+  `[T]` has its value-position `T`s rewritten along with the type
+  positions:
+
+  ```
+  @ g [T] T x → i { ? T { ^ 1 } {}  ^ 0 }
+  ( g [i] 1 )
+
+  error: use of undefined identifier 'i'
+  @ g__i64 i x → i { ? i { ^ 1 } { } ^ 0 }
+  ```
+
+  — an error against source the user never wrote, naming a token they never
+  typed, where renaming the parameter to `A` makes the identical program
+  compile. The stdlib avoids the collision by convention
+  ([`stdlib/core/vec.nu`](stdlib/core/vec.nu) names its type variable `A`
+  and says why); nothing warned anyone else, and spec §4.8 spells its own
+  canonical example `[T]`. The diagnostic now names the cause and the spec
+  says not to name a parameter `T` or `F` when the body uses that literal.
+  The note is earned rather than blanket — it appears only when the
+  parameter is `T`/`F` **and** the body actually spells it after a `?`, `~`
+  or `^`, the three prefixes that take a value — so an unrelated error
+  inside a generic is not buried under a guess. What is **not** fixed is
+  the ambiguity itself: removing it means resolving `T` by position in the
+  parser instead of rewriting the body textually before parsing it, which
+  is a rework of monomorphisation and is left for its own work.
+
+### Fixed
+
+- **A partial non-blocking send was reported as failure, so a large frame
+  was re-sent from the front — 1.1 MB of payload put 37.7 MB on the wire.**
+  A wasm compute kernel dispatched to a `swarm-mcp` worker on **another
+  machine** always failed with `payload failed the cluster HMAC check
+  (wrong --token?)`. The token was fine. Measured on a three-node swarm
+  (Linux x86-64, FreeBSD 14.3, ARM64): a worker co-located with the relay
+  always passed, a worker on a different host always failed, on every
+  platform and in both directions; expression kernels (a few bytes) never
+  reproduced it, only wasm kernels (~1.1 MB) did.
+
+  `nurl_tcp_write` loops internally and counts what it has sent in `total`.
+  On a **non-blocking** socket — which the fiber write path sets — `send()`
+  returns `EAGAIN` partway through a large buffer, and the `EAGAIN` branch
+  returned `-1`, discarding `total`. The bytes were already on the wire;
+  the count was the only record that they had gone. `tcp_write_all_async`
+  then saw an error, parked on the reactor, and retried from its own
+  `sent`, which had never advanced — so it re-sent the buffer from the
+  front. Because callers frame their writes (`relay.nu` puts a 5-byte
+  type+length header in front of every message), reading the announced
+  length spliced that repeat into the middle of the message: a frame of
+  exactly the right size with the wrong bytes, and every frame after it
+  garbage. The integrity check caught it and blamed the token, which is why
+  this read as an auth problem. Loopback hides all of it — the peer drains
+  as fast as we fill, `send()` never blocks, the whole buffer goes in one
+  call — which is why every single-machine test passed.
+
+  [`stdlib/runtime_ffi.c`](stdlib/runtime_ffi.c) now reports `total` when a
+  non-blocking send would block after partial progress; `-1` means "nothing
+  was written", and Windows gets the same rule for `WSAEWOULDBLOCK`.
+  [`stdlib/std/net.nu`](stdlib/std/net.nu) had three related gaps on the
+  NURL side, each of which could desync a framed stream on its own:
+  `tcp_write_all` (sync) issued **one** write and reported success without
+  comparing it to the length — its async twin already looped, so the name
+  promised the loop and the body did not have it — `tcp_write_str` had the
+  same single-write shape, and `tcp_write_all_async` gave up on a reactor
+  timeout even after putting part of a frame on the wire, where a timeout
+  is now fatal only while nothing has been sent yet (the mirror of the rule
+  `__read_exact` already applies on the reading side). Measured on one
+  1.1 MB relay frame: 37,713,045 bytes reached the peer where 2,249,298
+  were asked for, about 17 copies of the prefix; after the fix, 2,248,717,
+  and the received module is byte-correct where it used to diverge exactly
+  64 KiB in, at the first socket-buffer boundary. Verified with 5/5
+  consecutive remote jobs across three physical machines and two
+  architectures.
+
+- **A double free inside a `??` arm compiled clean and segfaulted in the
+  allocator at run time.** The checker rejected the shape inside a `?` arm,
+  a `~` loop, a foreach body, a bare `{ }` block, a helper, a generic body,
+  a trait method and a defer — but not inside a match arm. The reason was
+  principled, and the code said so: a `??` arm binds payload variables
+  (`T v → …`) that have no `let` row, so descending into an arm with the
+  outer, flat name-keyed state would conflate an arm's `v` with a
+  same-named binding outside and report a bug that is not one. The whole
+  match was therefore a state-preserving black box.
+
+  The conflation is avoidable without widening the lattice: walk each arm
+  from an **empty** state. Only a binding that gets its own `let` row
+  inside the arm becomes tracked, and such a binding is arm-local by
+  construction, so nothing outside can be confused with it; a payload name,
+  or an outer name the arm merely touches, starts `Uninit` and is ignored,
+  while moving an arm-local binding twice is still caught because the first
+  move is what makes it tracked. The arm's exit state is discarded and the
+  entry state returned unchanged, so what an arm does to an outer binding
+  stays out of scope exactly as before, and the no-false-positive contract
+  holds: everything reported is still a definite bug.
+
+- **The borrow checker was switched off entirely inside a closure body.**
+  Same list of contexts, same silent failure — a double free written into a
+  closure body compiled clean and segfaulted in the allocator, confirmed
+  under AddressSanitizer. The cause was one flag doing two jobs.
+  `g_bck_closure_depth != 0` meant both "this statement belongs to the
+  closure, not to the enclosing function" — true, and what the capture and
+  summary logic asks — and "record nothing at all", which switched the
+  checker off for everything written inside a closure. The code's own
+  comment said as much: *"Phase 1 must segregate closure scopes."*
+
+  Segregate them, rather than suppress them. A closure body is its own
+  function, so it gets its own recording context and its own analyze pass:
+  save the enclosing function's capture state, start a fresh one, let the
+  body record into it, walk it, put the outer one back. The ten capture
+  hooks now gate on a separate `g_bck_rec_off`, leaving
+  `g_bck_closure_depth` to the places that genuinely ask about closure
+  ownership. The closure's parameters seed the walk exactly as a function's
+  do; a capture deliberately does **not**, because what a closure does to a
+  captured handle is the enclosing frame's question and the
+  consumed-capture replay already answers it — so a capture starts `Uninit`
+  and cannot be reported. A body whose verdict depends on a not-yet-known
+  summary is parked with `bck_defer_fn`, the same rule `borrowck_fn_end`
+  follows, so nothing is walked twice.
+
+- **A closure body emitted the enclosing frame's drop battery.** A closure
+  literal is lifted to its own `define`, but it is emitted in the middle of
+  the enclosing function's emission and inherits that function's symbol
+  table. `gen_closure_expr` shadows the slice and closure-env rosters with
+  empty lists for exactly this reason — and left the other three visible:
+  `__owned_strings__`, `__owned_struct_fields__` and `__user_drops__`. So a
+  `^` inside the closure body ran `gen_ret`, `gen_ret` drained those lists,
+  and the lifted function ended by dropping values that belong to the outer
+  frame:
+
+  ```
+  define i64 @__closure_1(i8* %__env, i64 %x) {
+    …
+    %r7 = load %DH, %DH* %r2        ; %r2 is main's alloca — not here
+    call void @drop__DH(%DH %r7)
+  ```
+
+  clang rejected that as "use of undefined value"; had the register
+  resolved it would have been a use-after-scope plus a second drop of a
+  value the outer frame drops again on its own exit. The shape needs an
+  owned value live at the point the literal appears **and** an explicit `^`
+  in its body — an expression-bodied closure never reaches `gen_ret` —
+  which is why it survived: nothing in the corpus put a `% Drop` value at
+  function scope and then wrote `\ i x → i { ^ … }` after it. All three
+  rosters are now shadowed the way the other two already were.
+
+- **A struct named like a type parameter was not instantiated.**
+  `is_tparam_like` answers a question about spelling — one uppercase
+  letter, optionally followed by a digit, the project's tparam convention
+  (`[A]`, `[K V]`, `[T1 T2]`) — and `ensure_struct_instantiated` used that
+  answer to skip instantiations whose arguments are "still abstract". So a
+  user struct named `P` or `Q3`, both legal names, was mistaken for a type
+  parameter and its instantiation was never materialised: `( Vec P )` then
+  referenced a `%Vec__P` that nothing defined, and the program died with
+  `stdlib/core/vec.nu:201: type 'Vec__P' has no field 'ctl'` — pointing
+  into the stdlib, with the real cause (the length of the user's own struct
+  name) nowhere in the message, and renaming the struct to `Quux` making
+  the same program compile.
+
+  Ask scope instead of spelling: `is_abstract_tparam` treats a
+  tparam-shaped token as abstract only when it is **not** a type in `syms`.
+  A declared struct or enum maps to `%Name` there; a genuine tparam has no
+  binding at all, either inside a template body (substitution has not run
+  yet) or at a nested instantiation site such as `( Vec A )` in a generic
+  function. That required the names to be in `syms` before the
+  instantiation scan reads them, so the purely-lexical `scan_type_names`
+  pass now runs ahead of `scan_generic_structs` instead of after
+  `emit_header` — it prints no IR and only writes `Name → %Name`, so
+  nothing else moves.
+
 ## [0.52.0] — 2026-08-25
 
 ### Added
