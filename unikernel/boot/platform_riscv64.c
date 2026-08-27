@@ -240,6 +240,11 @@ static unsigned char *heap_end;
 void          pa_init(unsigned long base, unsigned long len);
 unsigned long pa_alloc(unsigned long want);
 int           pa_free(unsigned long p, unsigned long len);
+int  pa_owns(unsigned long p, unsigned long len);
+
+/* Defined below; declared here because `munmap` restores a range's
+ * protection before returning it to the allocator. */
+int mprotect(void *p, unsigned long len, int prot);
 void          pa_stats(unsigned long *live, unsigned long *peak, unsigned long *avail,
                        unsigned long *largest, unsigned long *lost, int *holes);
 
@@ -293,7 +298,31 @@ void *mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off)
 }
 
 int munmap(void *p, unsigned long len) {
-    return pa_free((unsigned long)p, len) == 0 ? 0 : 0;
+    /* A page goes back to the allocator MAPPED, and that is an
+     * invariant rather than a courtesy.
+     *
+     * A coroutine's stack is allocated here and its guard page is then
+     * mprotect'ed PROT_NONE — the present bit cleared in its PTE. When
+     * the coroutine ends, this used to return the whole range to the
+     * page allocator with that bit still clear, so the guard page went
+     * back into the pool unmapped. Nothing noticed until something else
+     * was handed it: nolibc's malloc carved an arena across it and the
+     * first write to a block landing on that page took a #PF on a
+     * not-present page, INSIDE malloc, long after the coroutine that
+     * protected it had gone. Measured cost of finding that from the
+     * fault alone: an afternoon. Twenty connections that send one byte
+     * and hang up were enough to kill a server.
+     *
+     * So: restore before releasing, and only for ranges that are ours —
+     * a mapping of the baked-in filesystem points into the image, and
+     * rewriting page tables for it would be a write into somebody
+     * else's business. `pa_free` rejects those by address; `pa_owns`
+     * asks the same question first, because the order matters: a range
+     * must never be on the free list while it is still unmapped. */
+    if (!pa_owns((unsigned long)p, len)) return 0;
+    (void)mprotect(p, len, 0x1 | 0x2);   /* PROT_READ | PROT_WRITE */
+    (void)pa_free((unsigned long)p, len);
+    return 0;
 }
 
 long long nurl_guest_mem(int which) {
