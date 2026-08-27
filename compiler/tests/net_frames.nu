@@ -19,6 +19,8 @@ $ `stdlib/net/ipv4.nu`
 $ `stdlib/net/arp.nu`
 $ `stdlib/net/icmp.nu`
 $ `stdlib/net/udp4.nu`
+$ `stdlib/net/pktbuf.nu`
+$ `stdlib/net/stack.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
 
@@ -29,6 +31,65 @@ $ `stdlib/net/udp4.nu`
 @ our_ip → i { ^ ( ipv4_make 10 0 2 15 ) }
 
 @ peer_ip → i { ^ ( ipv4_make 10 0 2 2 ) }
+
+// A second peer on our own subnet that we have never exchanged a
+// packet with, and a host beyond the router that we have not either.
+@ stranger_ip → i { ^ ( ipv4_make 10 0 2 77 ) }
+
+@ stranger_mac → i { ^ 2199023255629 }  // 02:00:00:00:00:4d
+
+@ far_ip → i { ^ ( ipv4_make 198 51 100 9 ) }
+
+@ router_mac → i { ^ 2199023255551 }  // 02:00:00:00:00:ff
+
+@ our_mask → i { ^ ( ipv4_mask_from_prefix 24 ) }
+
+@ our_gw → i { ^ ( ipv4_make 10 0 2 1 ) }
+
+// Build an Ethernet+IPv4 frame from an arbitrary sender — the sender's
+// MAC and IP separately, because the whole question below is whether
+// the two get bound together.
+@ mk_udp_frame_from i src_mac i src_ip → ( Vec u ) {
+    : ( Vec u ) pay ( vec_new [u] )
+    ( vec_push [u] pay # u 1 )
+    : ( Vec u ) dg ( vec_new [u] )
+    ( udp4_push dg src_ip ( our_ip ) 4243 53 pay 0 1 )
+    : ( Vec u ) f ( vec_new [u] )
+    ( eth_push_header f ( our_mac ) src_mac ( ethertype_ipv4 ) )
+    ( ip4_push_header f src_ip ( our_ip ) ( ip_proto_udp ) ( vec_len [u] dg ) 4661 64 T )
+    ( vec_extend [u] f dg )
+    ~ < ( vec_len [u] f ) 60 { ( vec_push [u] f # u 0 ) }
+    ( vec_free [u] dg )
+    ( vec_free [u] pay )
+    ^ f
+}
+
+// How long the stack takes to put an answer to `dst` on the wire,
+// measured the way the wire measures it: the caller is TCP, so a
+// datagram that did not go out is retried when the retransmit timer
+// fires and not before. Answers the simulated milliseconds between the
+// request arriving and the answer leaving, or -1 if it never left.
+//
+// This is the (delta-t, frame) shape the golden keeps. Recording only
+// the frame passes whether the answer left at once or a second later,
+// which is exactly the bug that hid here: the ARP resolved in 0.3 ms
+// and the SYN-ACK it displaced left 856 ms after that, measured on a
+// Firecracker tap with no DHCP and no slirp in the picture.
+@ answer_delay_ms * NetStack st i dst i t0 → i {
+    : ( Vec u ) dg ( vec_new [u] )
+    ( vec_push [u] dg # u 7 )
+    : ~ i now t0
+    : ~ i sent_at -1
+    : *PktBuf out ( pktbuf_new )
+    ~ && == sent_at -1 <= now + t0 4000 {
+        ( pktbuf_clear out )
+        : TxResult t ( stack_tx_ip4 st 0 dst ( ip_proto_udp ) dg 0 1 now out )
+        ? == . t status ( tx_sent ) { = sent_at now } { = now + now 1000 }
+    }
+    ( pktbuf_free out )
+    ( vec_free [u] dg )
+    ^ ? == sent_at -1 -1 - sent_at t0
+}
 
 // Build a full Ethernet+IPv4 frame carrying `payload`, as a peer would.
 @ mk_ip_frame i proto ( Vec u ) payload i pad_to → ( Vec u ) {
@@ -255,6 +316,64 @@ $ `stdlib/net/udp4.nu`
     ( pb `cache stays bounded at max: ` == ( vec_len [ArpEntry] . c entries ) 4 )
     ( pb `most recent insert survived: ` ?? ( arp_cache_lookup c ( ipv4_make 10 0 9 19 ) 80000 ) { T m → == m 1019 F → F } )
     ( arp_cache_free c )
+
+    // ── (delta-t, frame): WHEN the answer goes out ───────────────
+    //
+    // A peer on our own subnet that the cache has never heard of sends
+    // us a datagram, and we answer it. The frame that comes back is
+    // the same frame either way; the question the golden has to keep
+    // is how long it took, because the whole defect was invisible to a
+    // golden that kept only the frame.
+
+    : *NetStack ls ( stack_new ( our_mac ) ( our_ip ) ( our_mask ) ( our_gw ) )
+    : ( Vec u ) from_stranger ( mk_udp_frame_from ( stranger_mac ) ( stranger_ip ) )
+    : *PktBuf lout ( pktbuf_new )
+    : RxResult lr ( stack_rx ls from_stranger 1000 lout )
+    ( pb `stranger's datagram accepted: ` == . lr kind ( rx_udp ) )
+    ( pktbuf_clear lout )
+    ( pb `answer to the stranger leaves at once (delta-t 0 ms): `
+    == ( answer_delay_ms ls ( stranger_ip ) 1000 ) 0 )
+
+    // The same measurement against a peer that has said nothing, so the
+    // assertion above cannot pass for the wrong reason. Here the first
+    // attempt emits an ARP request in the datagram's place; the peer
+    // answers it three milliseconds later; and the datagram itself does
+    // not leave until the caller retries, which for TCP is a
+    // retransmit timer away. Delta-t 1000, for a resolution that took 3.
+    : *NetStack qs ( stack_new ( our_mac ) ( our_ip ) ( our_mask ) ( our_gw ) )
+    : i silent ( ipv4_make 10 0 2 88 )
+    : ( Vec u ) qdg ( vec_new [u] )
+    ( vec_push [u] qdg # u 7 )
+    : *PktBuf qout ( pktbuf_new )
+    : TxResult q1 ( stack_tx_ip4 qs 0 silent ( ip_proto_udp ) qdg 0 1 1000 qout )
+    ( pb `a silent peer displaces the datagram with an ARP request: `
+    == . q1 status ( tx_arp_pending ) )
+    ( pktbuf_clear qout )
+    : ( Vec u ) qrep ( vec_new [u] )
+    ( arp_push_frame qrep ( arp_op_reply ) ( our_mac ) 2199023255630 silent ( our_mac ) ( our_ip ) )
+    : RxResult qr ( stack_rx qs qrep 1003 qout )
+    ( pb `the ARP reply lands 3 ms later: ` == . qr kind ( rx_arp_handled ) )
+    ( pktbuf_clear qout )
+    : TxResult q2 ( stack_tx_ip4 qs 0 silent ( ip_proto_udp ) qdg 0 1 2000 qout )
+    ( pb `and the datagram waits for the retry, not for the ARP (delta-t 1000 ms): `
+    == . q2 status ( tx_sent ) )
+    ( pktbuf_free qout )
+    ( vec_free [u] qdg ) ( vec_free [u] qrep )
+    ( stack_free qs )
+
+    // And the lie we must not learn: a datagram from beyond the router
+    // arrives with the ROUTER's MAC in the Ethernet header. Binding the
+    // far host's IP to it records a next hop that is not one.
+    : ( Vec u ) from_far ( mk_udp_frame_from ( router_mac ) ( far_ip ) )
+    : RxResult fr ( stack_rx ls from_far 1000 lout )
+    ( pb `off-subnet datagram accepted: ` == . fr kind ( rx_udp ) )
+    ( pktbuf_clear lout )
+    ( pb `off-subnet sender is NOT learned: `
+    ?? ( arp_cache_lookup . ls arp ( far_ip ) 1000 ) { T m → F F → T } )
+
+    ( pktbuf_free lout )
+    ( vec_free [u] from_stranger ) ( vec_free [u] from_far )
+    ( stack_free ls )
 
     // Vec is a manually-managed handle (docs/MEMORY.md §7.4).
     ( vec_free [u] small ) ( vec_free [u] runt ) ( vec_free [u] udp_pay )

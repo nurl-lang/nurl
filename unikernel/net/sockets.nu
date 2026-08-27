@@ -163,7 +163,11 @@ $ `stdlib/net/dnsclient.nu`
     // before the first bind: a listener with a source address of
     // 0.0.0.0 checksums every segment against the wrong pseudo-header
     // and goes unanswered.
-    ? != have 0 { ( __dhcp_configure sh ) } {}
+    // Told, or asked — in that order. `ip=` is the host stating a fact,
+    // and a machine that was told does not then go and ask.
+    ? != have 0 {
+        ? ( __ip_cmdline sh ) {} { ( __dhcp_configure sh ) }
+    } {}
     // `dns=ip[:port]` on the kernel command line overrides whatever
     // DHCP said — the same contract as wallclock=: the host states a
     // fact the guest cannot discover. Stated but unparseable is a
@@ -298,6 +302,71 @@ $ `stdlib/net/dnsclient.nu`
         } {}
     }
     ( pktbuf_free out )
+}
+
+// `ip=A.B.C.D/prefix` (with optional `gw=A.B.C.D`) on the kernel
+// command line: a machine told what it is, instead of asking. Answers T
+// when it configured the stack, F when the key is absent.
+//
+// This is not a convenience alternative to DHCP. It is what a machine
+// needs on a network that has no DHCP server — a Firecracker tap with
+// three static addresses on it, for instance — and it exists because
+// measuring the stack's own behaviour means removing everything that
+// answers on its behalf. Stated but unparseable panics like a bad
+// `dns=` does, rather than quietly falling back to asking.
+@ __ip_cmdline * Shim sh → b {
+    : s v ( getenv `ip` )
+    ? == # i v 0 { ^ F } {}
+    : i n ( nurl_str_len v )
+    : ~ i slash -1
+    : ~ i k 0
+    ~ < k n { ? == ( nurl_str_get v k ) 47 { = slash k } {} = k + k 1 }
+    : ~ i ok 0
+    : ~ i addr 0
+    : ~ i mask 0
+    ? >= slash 0 {
+        : s ipbuf ( nurl_alloc + slash 1 )
+        ( nurl_memcpy ipbuf v slash )
+        : *u zp # *u + # i ipbuf slash
+        = . zp 0 # u 0
+        : i bits ( nurl_str_to_int # s + # i v + slash 1 )
+        ?? ( ipv4_parse ipbuf ) {
+            T a → {
+                ? && && > bits 0 <= bits 32 ( ipv4_is_assignable a ) {
+                    = addr a
+                    = mask ( ipv4_mask_from_prefix bits )
+                    = ok 1
+                } {}
+            }
+            F → {}
+        }
+        ( nurl_free ipbuf )
+    } {}
+    ? == ok 0 {
+        ( nurl_print `nurl: ip= on the kernel command line is not A.B.C.D/prefix\n` )
+        ( nurl_flush_stdout )
+        ( nurl_exit 127 )
+    } {}
+    // A gateway is optional: a machine whose peers are all on its own
+    // subnet needs none, and inventing one would send its first
+    // off-subnet packet to a host that is not there.
+    : ~ i gw 0
+    : s gv ( getenv `gw` )
+    ? != # i gv 0 {
+        ?? ( ipv4_parse gv ) {
+            T g → = gw g
+            F → {
+                ( nurl_print `nurl: gw= on the kernel command line is not A.B.C.D\n` )
+                ( nurl_flush_stdout )
+                ( nurl_exit 127 )
+            }
+        }
+    } {}
+    ( stack_set_address . sh net addr mask gw )
+    ( sock_set_our_ip . sh st addr )
+    ( sock_seed_addr . sh st addr ( __ms ) )
+    ? != gw 0 { ( __arp_warm sh ) } {}
+    ^ T
 }
 
 // Run the DHCP client — the same state machine `net/dhcp.nu` covers
