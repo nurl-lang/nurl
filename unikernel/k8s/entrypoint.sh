@@ -57,7 +57,15 @@ tsc_khz() {
 # The program cannot find that out, and a program that asserts it
 # anyway is one whose banner stops being checkable the day the same
 # source is built the other way — which it now is.
-APPEND="tsc_khz=$(tsc_khz) wallclock=$(date +%s) pod=${POD} port=${GUEST_PORT} platform=unikernel"
+# TLS when the image was built with --tls and the deployment asks for
+# it. Two keys rather than one flag: a program told "use TLS" that then
+# guesses where its certificate lives has a failure mode you cannot see.
+TLS_KEYS=""
+if [ "${TLS:-0}" = "1" ]; then
+    TLS_KEYS=" cert=${TLS_CERT:-etc/tls/cert.pem} key=${TLS_KEY:-etc/tls/key.pem}"
+fi
+
+APPEND="tsc_khz=$(tsc_khz) wallclock=$(date +%s) pod=${POD} port=${GUEST_PORT} platform=unikernel${TLS_KEYS}"
 echo "entrypoint: accel=${ACCEL} append=[${APPEND}] forwarding :${PORT} -> guest:${GUEST_PORT}" >&2
 
 # exec, so QEMU is PID 1 and Kubernetes' SIGTERM reaches the hypervisor

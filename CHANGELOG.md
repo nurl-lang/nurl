@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **TLS 1.3 from the unikernel on Kubernetes** —
+  `unikernel/k8s/deploy-kvm.yaml`, built by `build_image.sh --tls`. The
+  same `server.nu` serves TLS when the launcher hands it `cert=` and
+  `key=`; the handshake is `stdlib/std/tls.nu`, pure NURL with no
+  libssl, which is why it links into a machine with no operating system.
+  It is also the workload that justifies the KVM device plugin: a
+  handshake is where a guest spends real cycles.
+
+  The server key is P-256 and that is not a preference. Measured in the
+  guest, same image, same handshake, only the key type differing:
+  **RSA-2048 costs ~490 ms per handshake, P-256 costs 4–11 ms** — ninety
+  times, and the difference between a TLS endpoint and a demonstration
+  that TLS is possible. `--tls` generates a self-signed P-256 key per
+  build, so no private key is ever committed.
+
+  TLS handshakes in six seconds, same image and key: **KVM 856, TCG
+  469**.
+
 ### Fixed
 
 - **A page returned to the guest's allocator came back unmapped.** Every
