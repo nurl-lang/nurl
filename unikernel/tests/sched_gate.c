@@ -46,6 +46,22 @@ int  pthread_create(void *t, void *attr, void *start, void *arg);
 int  nurl_pthread_join_ptr(void *t);
 void nurl_pthread_detach_ptr(void *t);
 
+/* runtime_bare frees an owned closure environment through the NURL
+ * allocator, which lives in runtime_core.c — a file this gate
+ * deliberately does not link, because the scheduler is what is under
+ * test and the allocator is not. Nothing here spawns an owned fiber,
+ * so the symbol exists only to satisfy the link. It aborts rather than
+ * no-ops: a gate that grows an owned spawn should fail loudly here
+ * instead of quietly leaking whatever it captured.
+ */
+void nurl_free(char *p);
+void nurl_free(char *p) {
+    (void)p;
+    fprintf(stderr, "sched_gate: nurl_free reached — this gate links no "
+                    "allocator; link runtime_core.o if it now needs one\n");
+    abort();
+}
+
 long long nurl_fiber_spawn(void *fn, void *env);
 long long nurl_fiber_spawn_joinable(void *fn, void *env);
 void      nurl_fiber_join(long long h);

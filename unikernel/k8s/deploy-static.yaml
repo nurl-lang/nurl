@@ -1,0 +1,96 @@
+# unikernel/k8s/deploy-static.yaml — the same server with the node's
+# kernel underneath it, deployed beside the one that brings its own.
+#
+# Proof of concept: it exists to be compared with `deploy.yaml`, not to
+# replace it. Everything the other manifest needs and this one does not
+# is the point — no hypervisor in the image, no architecture pin (once
+# an arm64 image exists), no TSC frequency to derive, no boot to wait
+# for.
+#
+# Same image-reference note as deploy.yaml: bare local tag, load it
+# into a local cluster or retag for a registry.
+#
+#   kubectl apply -f unikernel/k8s/deploy-static.yaml
+#   kubectl -n nurl-static port-forward svc/nurl-static 8080:80
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nurl-static
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nurl-static
+  namespace: nurl-static
+  labels:
+    app: nurl-static
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nurl-static
+  template:
+    metadata:
+      labels:
+        app: nurl-static
+    spec:
+      # Still amd64-only, and for a duller reason than the other
+      # manifest's: the image holds whatever binary the build host
+      # linked. An arm64 build needs a cross-compiler (zig, as in
+      # containers/dev) — and unlike the unikernel, nothing about this
+      # one is architecture-bound in principle.
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      containers:
+        - name: server
+          image: nurl-static-httpd:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Same keys the guest reads off the kernel command line —
+            # here they are just environment, because here there is a
+            # kernel that has one.
+            - name: pod
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: platform
+              value: linux
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 1
+            failureThreshold: 10
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          # Measured idle: 0.4–1.4 MB resident, no measurable CPU.
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: "1", memory: 64Mi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nurl-static
+  namespace: nurl-static
+spec:
+  selector:
+    app: nurl-static
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

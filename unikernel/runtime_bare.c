@@ -178,7 +178,13 @@ struct NbCoro {
     int          last_park_result;
     int          wake_pending;    /* an unpark that arrived before the
                                    * park — consumed by the next park   */
+    int          owns_env;        /* free env after the body returns    */
 };
+
+/* The NURL allocator, not free(): an owned closure environment came out
+ * of nurl_alloc and its header is not malloc's. Declared rather than
+ * included because this file has no libc to include it from. */
+extern void nurl_free(char *p);
 
 /* Defined in §8 — named here because §7's scheduler step performs the
  * parked-with-mutex handoff. A forward declaration, not an `extern`
@@ -338,6 +344,12 @@ static void nb_entry(void *arg) {
     nurl_ctx_asan_finish_switch(0, &nb_loop_lo, &nb_loop_size);
 #endif
     if (c->fn) c->fn(c->env);
+    /* Same point in the lifecycle as runtime_ffi.c's fiber body: after
+     * the body returns and before anything can observe the coroutine as
+     * done. A fiber spawned per connection captures its connection in a
+     * heap environment nobody else holds, so "nobody frees it" is one
+     * leak per request. */
+    if (c->owns_env && c->env) { nurl_free((char *)c->env); c->env = 0; }
     c->finished = 1;
     c->state = NB_DONE;
 #ifdef NURL_BARE_ASAN
@@ -885,6 +897,23 @@ long long nurl_fiber_spawn(void *fn, void *env) {
     if (!nb_initialized) nurl_runtime_init(0);
     NbCoro *c = nb_coro_new(fn, env, 0);
     if (!c) nb_spawn_failed();
+    nb_live++;
+    nb_rq_push(c);
+    return (long long)(unsigned long)c;
+}
+
+/* Spawn a fiber that owns its closure environment. `server_run_async`
+ * and every other per-item `spawn` in std/async.nu builds a closure
+ * whose env exists only for that fiber; without this entry point a
+ * freestanding program links against the hosted runtime's name and
+ * fails, which is how it was found — the guest simply could not run
+ * the async server at all. */
+long long nurl_fiber_spawn_owned(void *fn, void *env) {
+    if (!fn) return 0;
+    if (!nb_initialized) nurl_runtime_init(0);
+    NbCoro *c = nb_coro_new(fn, env, 0);
+    if (!c) nb_spawn_failed();
+    c->owns_env = 1;
     nb_live++;
     nb_rq_push(c);
     return (long long)(unsigned long)c;

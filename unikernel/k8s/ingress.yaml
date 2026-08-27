@@ -1,0 +1,36 @@
+# unikernel/k8s/ingress.yaml — an EXAMPLE front door, kept separate
+# from deploy.yaml because putting a machine with no operating system
+# on a network is a deliberate act, and because an Ingress is the one
+# object here that cannot be written portably.
+#
+# Two edits before this applies anywhere:
+#   1. `ingressClassName` — whatever your cluster runs (`nginx`,
+#      `traefik`, `alb`, …). `kubectl get ingressclass` tells you.
+#   2. `host` — a name that resolves to your ingress controller.
+#      Locally, `*.localtest.me` resolves to 127.0.0.1 without any
+#      /etc/hosts editing, which is why it is the default here.
+#
+# TLS is left out rather than guessed: it depends on whether you run
+# cert-manager, a wildcard secret, or terminate somewhere else. Add
+# a `tls:` block naming your own secret if you need one.
+#
+# You do not need this to try the server — `kubectl port-forward` is
+# the shorter path and the README leads with it.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nurl-unikernel
+  namespace: nurl-unikernel
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: unikernel.localtest.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nurl-unikernel
+                port:
+                  number: 80

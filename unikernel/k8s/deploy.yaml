@@ -1,0 +1,99 @@
+# unikernel/k8s/deploy.yaml — an ordinary Kubernetes workload whose
+# process happens to be a hypervisor.
+#
+# Nothing in this manifest is special-cased for virtual machines: no
+# privileged flag, no /dev/kvm device, no CAP_NET_ADMIN, no runtimeClass.
+# QEMU's user-mode network stack lives entirely in userspace, so the pod
+# is as unprivileged as a static file server — and the thing it serves
+# is a machine with no operating system.
+#
+# The image reference is a bare local tag, which is what a local
+# cluster wants: build it, load it (`kind load docker-image
+# nurl-unikernel-httpd:0.1.0`, or `minikube image load ...`), apply.
+# For a real cluster, retag and push to your registry, put that
+# reference here, and add an `imagePullSecrets:` entry if it needs one.
+#
+#   kubectl apply -f unikernel/k8s/deploy.yaml
+#   kubectl -n nurl-unikernel port-forward svc/nurl-unikernel 8080:80
+#   curl localhost:8080/info
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nurl-unikernel
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nurl-unikernel
+  namespace: nurl-unikernel
+  labels:
+    app: nurl-unikernel
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nurl-unikernel
+  template:
+    metadata:
+      labels:
+        app: nurl-unikernel
+    spec:
+      # The guest is an x86_64 PVH kernel — the boot protocol is x86
+      # only, so this is a hard constraint and not a preference. On a
+      # single-architecture cluster the selector is a no-op; on a mixed
+      # one it is the difference between running and CrashLoopBackOff.
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      containers:
+        - name: qemu
+          image: nurl-unikernel-httpd:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Becomes a kernel command line key, which cmdenv.c presents
+            # to the guest as an environment variable. The guest prints
+            # it; that is how you tell the two replicas apart.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          # The guest boots to a served request in well under two
+          # seconds, so the readiness gate is short and honest rather
+          # than a generous guess.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 1
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits:   { cpu: "1",  memory: 512Mi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nurl-unikernel
+  namespace: nurl-unikernel
+spec:
+  selector:
+    app: nurl-unikernel
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

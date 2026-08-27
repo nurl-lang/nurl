@@ -10,6 +10,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A NURL server on Kubernetes, with and without a machine under it** —
+  [`unikernel/k8s/`](unikernel/k8s/README.md). One `server.nu` builds two
+  ways and not a line of it differs between them: `build_image.sh` makes
+  it a 616 KB bootable PVH kernel with a hypervisor in the container,
+  `build_static_image.sh` makes it a 1.5 MB static binary in a `FROM
+  scratch` container of 1.56 MB. Both run as ordinary pods —
+  `runAsNonRoot`, all capabilities dropped, no privileged flag, no
+  `/dev/kvm`, no `runtimeClass` — because QEMU's user-mode network stack
+  is userspace code and needs no tap device.
+
+  Three defects, none of which a "does it answer" test could see, and
+  all three found by deploying rather than by testing:
+
+  * `dhcp_handle` moved SELECTING → REQUESTING on an OFFER and set
+    `next_send_ms = now + dhcp_retry_base_ms`, so the REQUEST — the
+    answer to an offer already in hand — went out four seconds later.
+    Sixty-eight state-machine assertions passed the whole time: the
+    client bound, with the right address, lease and timers. Nothing
+    asserted *when*. `compiler/tests/net_dhcp.nu` now does.
+  * The first frame to an unresolved next hop is never the frame:
+    `stack_tx_ip4` sends the ARP request in its place and leaves the
+    retry to the caller, "which for TCP is free, because a segment that
+    did not go out is exactly what its retransmit timer is already
+    for". Free only when someone is already waiting — for a server that
+    segment is the SYN-ACK of the first connection it ever accepts, and
+    a machine that had been listening for 40 ms answered its first
+    client 1000 ms later. New `stack_arp_prime` resolves a hop with
+    nothing pending; the guest primes its gateway at the end of DHCP.
+  * `server_run` serves one connection at a time, keep-alive, to a 30 s
+    idle timeout. A pod has two clients before it has any users — the
+    readiness probe and the liveness probe — and one idle `curl` was
+    enough to time the kubelet out and get the pod replaced. Both
+    builds now use `server_run_async`, which needed
+    `nurl_fiber_spawn_owned` in `unikernel/runtime_bare.c`: without it
+    the freestanding target could not link the async server at all.
+
+  Together the first two took the cold start from 5.1 s to a first
+  answer down to 66 ms. `unikernel/k8s/smoke.sh` asserts the budget and
+  the held-open connection rather than printing them.
+
+  Also here: the TSC frequency under TCG is the *host's*, not QEMU's
+  documented 1 GHz, so `entrypoint.sh` derives it — passing 1000000 on a
+  3.5 GHz host made every guest timer run 3.5× fast, which is what made
+  the DHCP delay look like a working boot.
+
 - **A development container** —
   [`containers/dev/`](containers/dev/README.md), with a
   `.devcontainer/` wired to the same image. `./containers/dev/run.sh`
