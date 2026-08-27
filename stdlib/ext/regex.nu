@@ -22,7 +22,9 @@
 //
 // `.` matches any byte except `\n`. Anchors `^` and `$` are zero-width
 // and match only at text start / end (no multiline mode). All
-// quantifiers are greedy; submatch capture is not supported.
+// quantifiers are greedy. Capture groups ARE supported: `(` … `)` both
+// groups for precedence and records the span, readable through
+// `regex_find_caps` and substitutable through `regex_expand`.
 //
 // ── API ─────────────────────────────────────────────────────────────
 //
@@ -30,6 +32,9 @@
 //   ( regex_test    r text )        → b              any match anywhere
 //   ( regex_match   r text )        → b              entire text matches
 //   ( regex_find    r text )        → ? Match        leftmost match
+//   ( regex_find_caps r text slots ) → ? Match       …with capture groups
+//   ( regex_ngroups r )             → i              capture groups in it
+//   ( regex_expand  text slots tmpl ) → String       expand `&` / `\1`
 //   ( regex_find_all r text )       → ( Vec Match )  non-overlapping
 //   ( regex_replace  r text repl )  → String         non-overlapping replace
 //   ( regex_split    r text )       → ( Vec String ) split on matches
@@ -58,6 +63,9 @@ $ `stdlib/core/vec.nu`
 // 4 = Anchor (a = 0 for '^', 1 for '$'; out1 = next, zero-width)
 // 5 = Split  (out1, out2 are both ε-successors)
 // 6 = Eps    (out1 = next, zero-width)
+// 7 = Save   (a = capture slot; out1 = next, zero-width) — records the
+//            current position into the thread's slot array, which is how
+//            a group's span survives to the end of the match
 
 // ── Public types ────────────────────────────────────────────────────
 
@@ -71,6 +79,7 @@ $ `stdlib/core/vec.nu`
     ( Vec i ) classes  // class store, packed
     ( Vec i ) class_starts  // class_idx → offset in classes
     i start
+    i ngroups  // capture groups, numbered by opening paren
 }
 
 : Regex { s ctl }
@@ -83,6 +92,7 @@ $ `stdlib/core/vec.nu`
     ( Vec i ) states
     ( Vec i ) classes
     ( Vec i ) class_starts
+    i ngroups
 }
 
 // ── State table helpers ─────────────────────────────────────────────
@@ -466,11 +476,20 @@ $ `stdlib/core/vec.nu`
             } {
                 ? == c 40 {  // '('
                     = . p pos + . p pos 1
+                    // Number the group at its OPENING paren, before the
+                    // body is parsed, so nested groups number the way
+                    // every regex dialect promises: `((a)(b))` is 1, 2, 3.
+                    = . p ngroups + . p ngroups 1
+                    : i g . p ngroups
                     : i inner ( __parse_alt p )
                     ? < inner 0 { ^ -1 } {}
                     ? != ( __rx_peek p ) 41 { ^ -1 } {}
                     = . p pos + . p pos 1
-                    = frag inner
+                    : i s_open ( __rx_add_state p 7 * 2 g -1 -1 )
+                    : i s_close ( __rx_add_state p 7 + * 2 g 1 -1 -1 )
+                    : i f_open ( __frag s_open s_open )
+                    : i f_close ( __frag s_close s_close )
+                    = frag ( __emit_concat p ( __emit_concat p f_open inner ) f_close )
                 } {
                     ? == c 91 {  // '['
                         = . p pos + . p pos 1
@@ -564,6 +583,7 @@ $ `stdlib/core/vec.nu`
     = . p states ( vec_new [i] )
     = . p classes ( vec_new [i] )
     = . p class_starts ( vec_new [i] )
+    = . p ngroups 0
     : i frag ( __parse_alt p )
     ? < frag 0 {
         ( vec_free [i] . p states )
@@ -589,6 +609,7 @@ $ `stdlib/core/vec.nu`
     = . impl classes . p classes
     = . impl class_starts . p class_starts
     = . impl start start_idx
+    = . impl ngroups . p ngroups
     : Regex r @ Regex { # s impl }
     ( nurl_free # s p )
     ^ @ !Regex ParseErr { T r }
@@ -613,36 +634,65 @@ $ `stdlib/core/vec.nu`
 // land on the active list; Eps/Split/Anchor are zero-width and walked
 // transitively.
 
-@ __rx_add_active_v ( Vec i ) states ( Vec i ) active ( Vec i ) marked i s_idx i text_pos i text_len → v {
-    ? >= s_idx 0 {
-        : i was ( __vi_get marked s_idx )
-        ? == was 0 {
-            ( __vi_set marked s_idx 1 )
-            : i kind ( __rx_state_kind states s_idx )
-            ? == kind 6 {
-                : i o1 ( __rx_state_out1 states s_idx )
-                ( __rx_add_active_v states active marked o1 text_pos text_len )
-            } {
-                ? == kind 5 {
-                    : i o1 ( __rx_state_out1 states s_idx )
-                    : i o2 ( __rx_state_out2 states s_idx )
-                    ( __rx_add_active_v states active marked o1 text_pos text_len )
-                    ( __rx_add_active_v states active marked o2 text_pos text_len )
-                } {
-                    ? == kind 4 {
-                        : i a ( __rx_state_a states s_idx )
-                        : b matches ? == a 0 == text_pos 0 == text_pos text_len
-                        ? matches {
-                            : i o1 ( __rx_state_out1 states s_idx )
-                            ( __rx_add_active_v states active marked o1 text_pos text_len )
-                        } {}
-                    } {
-                        ( vec_push [i] active s_idx )
-                    }
-                }
-            }
-        } {}
+@ __vi_fill ( Vec i ) v i n i val → v {
+    : ~ i k 0
+    ~ < k n { ( __vi_set v k val ) = k + k 1 }
+}
+
+// Copy one thread's slot array out of the flat list, and back in.
+@ __rx_caps_load ( Vec i ) caps ( Vec i ) work i base i nslots → v {
+    : ~ i k 0
+    ~ < k nslots { ( __vi_set work k ( __vi_get caps + base k ) ) = k + k 1 }
+}
+
+// ε-closure with capture slots — a Pike VM's `addthread`.
+//
+// `work` is the caller's slot array for the thread being added; a Save
+// state writes into it, recurses, and writes the old value back, so one
+// array serves the whole depth-first walk instead of a copy per branch.
+// The copy happens once, at the leaf, when the thread is appended.
+//
+// Dedup is still by state, and the FIRST thread to reach a state keeps
+// it. Since Split's out1 is walked before out2 and out1 is the greedy
+// branch, that ordering is what makes `(a*)(a*)` put everything in the
+// first group rather than splitting arbitrarily.
+@ __rx_add_thread ( Vec i ) states ( Vec i ) active ( Vec i ) marked ( Vec i ) caps ( Vec i ) work i nslots i s_idx i text_pos i text_len → v {
+    ? < s_idx 0 { ^ } {}
+    ? != 0 ( __vi_get marked s_idx ) { ^ } {}
+    ( __vi_set marked s_idx 1 )
+    : i kind ( __rx_state_kind states s_idx )
+    ? == kind 6 {
+        ( __rx_add_thread states active marked caps work nslots ( __rx_state_out1 states s_idx ) text_pos text_len )
+        ^
     } {}
+    ? == kind 5 {
+        ( __rx_add_thread states active marked caps work nslots ( __rx_state_out1 states s_idx ) text_pos text_len )
+        ( __rx_add_thread states active marked caps work nslots ( __rx_state_out2 states s_idx ) text_pos text_len )
+        ^
+    } {}
+    ? == kind 4 {
+        : i a ( __rx_state_a states s_idx )
+        : b matches ? == a 0 == text_pos 0 == text_pos text_len
+        ? matches {
+            ( __rx_add_thread states active marked caps work nslots ( __rx_state_out1 states s_idx ) text_pos text_len )
+        } {}
+        ^
+    } {}
+    ? == kind 7 {
+        : i slot ( __rx_state_a states s_idx )
+        ? < slot nslots {
+            : i old ( __vi_get work slot )
+            ( __vi_set work slot text_pos )
+            ( __rx_add_thread states active marked caps work nslots ( __rx_state_out1 states s_idx ) text_pos text_len )
+            ( __vi_set work slot old )
+        } {
+            ( __rx_add_thread states active marked caps work nslots ( __rx_state_out1 states s_idx ) text_pos text_len )
+        }
+        ^
+    } {}
+    ( vec_push [i] active s_idx )
+    : ~ i k 0
+    ~ < k nslots { ( vec_push [i] caps ( __vi_get work k ) ) = k + k 1 }
 }
 
 @ __rx_clear_marked ( Vec i ) marked i n → v {
@@ -653,26 +703,40 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-// Per-search scratch: the four Vec[i] the NFA simulation needs. These
-// used to be allocated (and freed) inside __rx_run_at, i.e. once per
-// START POSITION — 8005 allocations for a 2 KB subject in
-// `regex_replace`. They carry no state between runs, so every public
-// entry point now builds one scratch up front and reuses it across the
-// whole scan. Passing it explicitly (rather than caching it in the
-// Regex) keeps a compiled Regex reentrant: two searches can run over
-// the same Regex at once, each with its own scratch.
+// Per-search scratch: the Vec[i] the NFA simulation needs. These used to
+// be allocated (and freed) inside __rx_run_at, i.e. once per START
+// POSITION — 8005 allocations for a 2 KB subject in `regex_replace`.
+// They carry no state between runs, so every public entry point builds
+// one scratch up front and reuses it across the whole scan. Passing it
+// explicitly (rather than caching it in the Regex) keeps a compiled
+// Regex reentrant: two searches can run over the same Regex at once,
+// each with its own scratch.
 : RxScratch {
     ( Vec i ) cur
     ( Vec i ) nxt
     ( Vec i ) marked_cur
     ( Vec i ) marked_nxt
+    ( Vec i ) caps_cur  // flat: thread k owns [k*nslots, (k+1)*nslots)
+    ( Vec i ) caps_nxt
+    ( Vec i ) work  // one thread's slots, during the ε-closure
+    ( Vec i ) best  // the winning thread's slots
     i nstates
+    i nslots
 }
 
 @ __rx_nstates Regex r → i {
     : *RegexImpl impl # *RegexImpl . r ctl
     ^ / ( vec_len [i] . impl states ) 4
 }
+
+// Capture groups in the pattern. Group `k` occupies slots 2k and 2k+1;
+// slots 0 and 1 are the whole match, filled in by the caller.
+@ regex_ngroups Regex r → i {
+    : *RegexImpl impl # *RegexImpl . r ctl
+    ^ . impl ngroups
+}
+
+@ __rx_nslots Regex r → i { ^ * 2 + ( regex_ngroups r ) 1 }
 
 // A Vec[i] of `n` zeros — the marked-set shape __vi_set writes into.
 @ __rx_zeros i n → ( Vec i ) {
@@ -684,12 +748,18 @@ $ `stdlib/core/vec.nu`
 
 @ __rx_scratch_new Regex r → RxScratch {
     : i ns ( __rx_nstates r )
+    : i nsl ( __rx_nslots r )
     ^ @ RxScratch {
         ( vec_with_cap [i] ns )
         ( vec_with_cap [i] ns )
         ( __rx_zeros ns )
         ( __rx_zeros ns )
+        ( vec_with_cap [i] * ns nsl )
+        ( vec_with_cap [i] * ns nsl )
+        ( __rx_zeros nsl )
+        ( __rx_zeros nsl )
         ns
+        nsl
     }
 }
 
@@ -698,12 +768,18 @@ $ `stdlib/core/vec.nu`
     ( vec_free [i] . sc nxt )
     ( vec_free [i] . sc marked_cur )
     ( vec_free [i] . sc marked_nxt )
+    ( vec_free [i] . sc caps_cur )
+    ( vec_free [i] . sc caps_nxt )
+    ( vec_free [i] . sc work )
+    ( vec_free [i] . sc best )
 }
 
 // Try to match starting at text_pos. Returns the longest match length
 // found at this start (≥0), or -1 if no match. `sc` is scratch owned by
 // the caller; its contents are reset here, so the same scratch can be
-// handed to every start position of a scan.
+// handed to every start position of a scan. On success `sc.best` holds
+// the winning thread's capture slots (absolute offsets, -1 for a group
+// that did not take part).
 @ __rx_run_at Regex r s text i text_len i text_pos RxScratch sc → i {
     : *RegexImpl impl # *RegexImpl . r ctl
     : ( Vec i ) states . impl states
@@ -711,22 +787,34 @@ $ `stdlib/core/vec.nu`
     : ( Vec i ) class_starts . impl class_starts
     : i start . impl start
     : i nstates . sc nstates
+    : i nslots . sc nslots
     : ~ ( Vec i ) cur . sc cur
     : ~ ( Vec i ) nxt . sc nxt
     : ~ ( Vec i ) marked_cur . sc marked_cur
     : ~ ( Vec i ) marked_nxt . sc marked_nxt
+    : ~ ( Vec i ) caps_cur . sc caps_cur
+    : ~ ( Vec i ) caps_nxt . sc caps_nxt
+    : ( Vec i ) work . sc work
+    : ( Vec i ) best_caps . sc best
     ( vec_clear [i] cur )
     ( vec_clear [i] nxt )
+    ( vec_clear [i] caps_cur )
+    ( vec_clear [i] caps_nxt )
     ( __rx_clear_marked marked_cur nstates )
     ( __rx_clear_marked marked_nxt nstates )
-    ( __rx_add_active_v states cur marked_cur start text_pos text_len )
+    ( __vi_fill work nslots -1 )
+    ( __vi_fill best_caps nslots -1 )
+    ( __rx_add_thread states cur marked_cur caps_cur work nslots start text_pos text_len )
 
     : ~ i best -1
-    // Check if start state itself is the match (zero-length match).
+    // The start state may itself be the match (a zero-length match).
     : ~ i k2 0
     ~ < k2 ( vec_len [i] cur ) {
         : i sx ( __vi_get cur k2 )
-        ? == ( __rx_state_kind states sx ) 0 { = best 0 } {}
+        ? & == ( __rx_state_kind states sx ) 0 < best 0 {
+            = best 0
+            ( __rx_caps_load caps_cur best_caps * k2 nslots nslots )
+        } {}
         = k2 + k2 1
     }
 
@@ -737,6 +825,7 @@ $ `stdlib/core/vec.nu`
             : i ch ( nurl_str_at text text_len pos )
             ( __rx_clear_marked marked_nxt nstates )
             ( vec_clear [i] nxt )
+            ( vec_clear [i] caps_nxt )
             : ~ i ki 0
             ~ < ki ( vec_len [i] cur ) {
                 : i si ( __vi_get cur ki )
@@ -756,24 +845,31 @@ $ `stdlib/core/vec.nu`
                 }
                 ? consumes {
                     : i nxt_state ( __rx_state_out1 states si )
-                    ( __rx_add_active_v states nxt marked_nxt nxt_state + pos 1 text_len )
+                    ( __rx_caps_load caps_cur work * ki nslots nslots )
+                    ( __rx_add_thread states nxt marked_nxt caps_nxt work nslots nxt_state + pos 1 text_len )
                 } {}
                 = ki + ki 1
             }
             = pos + pos 1
-            // Swap cur/nxt and their marked sets.
+            // Swap cur/nxt, their marked sets and their capture stores.
             : ( Vec i ) tmp cur
             = cur nxt
             = nxt tmp
             : ( Vec i ) tmpm marked_cur
             = marked_cur marked_nxt
             = marked_nxt tmpm
-            // After consuming a byte, check if any state in the new cur is
-            // a Match — record longest.
+            : ( Vec i ) tmpc caps_cur
+            = caps_cur caps_nxt
+            = caps_nxt tmpc
+            // After consuming a byte, check whether any state in the new
+            // cur is a Match — record the longest.
             : ~ i kj 0
             ~ < kj ( vec_len [i] cur ) {
                 : i sk ( __vi_get cur kj )
-                ? == ( __rx_state_kind states sk ) 0 { = best - pos text_pos } {}
+                ? & == ( __rx_state_kind states sk ) 0 > - pos text_pos best {
+                    = best - pos text_pos
+                    ( __rx_caps_load caps_cur best_caps * kj nslots nslots )
+                } {}
                 = kj + kj 1
             }
             ? == ( vec_len [i] cur ) 0 { = done T } {}
@@ -819,6 +915,107 @@ $ `stdlib/core/vec.nu`
     ( __rx_scratch_free sc )
     ? >= hit_at 0 { ^ @ ?Match { T @ Match { hit_at hit_len } } } {}
     ^ @ ?Match { F @ Match { 0 0 } }
+}
+
+// The leftmost match, WITH its capture groups.
+//
+// `slots` is cleared and refilled with `2 * (ngroups + 1)` entries of
+// absolute byte offsets into `text`: slots 0 and 1 are the whole match's
+// start and end, and group k occupies 2k and 2k+1. A group that did not
+// take part in the match (the untaken side of an alternation, a `?` that
+// matched nothing) reads -1 in BOTH of its slots — the caller must test
+// for it rather than assume a span.
+//
+//     : ( Vec i ) slots ( vec_new [i] )
+//     ?? ( regex_find_caps r line slots ) {
+//       T m → { : i g1s ( __vi_get slots 2 ) … }
+//       F _ → { }
+//     }
+@ regex_find_caps Regex r s text ( Vec i ) slots → ?Match {
+    : i n ( nurl_str_len text )
+    : RxScratch sc ( __rx_scratch_new r )
+    : i nslots . sc nslots
+    ( vec_clear [i] slots )
+    : ~ i k 0
+    ~ < k nslots { ( vec_push [i] slots -1 ) = k + k 1 }
+    : ~ i pos 0
+    : ~ i hit_at -1
+    : ~ i hit_len 0
+    ~ & < hit_at 0 <= pos n {
+        : i m ( __rx_run_at r text n pos sc )
+        ? >= m 0 {
+            = hit_at pos
+            = hit_len m
+            : ~ i j 0
+            ~ < j nslots { ( __vi_set slots j ( __vi_get . sc best j ) ) = j + j 1 }
+            ( __vi_set slots 0 pos )
+            ( __vi_set slots 1 + pos m )
+        } { = pos + pos 1 }
+    }
+    ( __rx_scratch_free sc )
+    ? >= hit_at 0 { ^ @ ?Match { T @ Match { hit_at hit_len } } } {}
+    ^ @ ?Match { F @ Match { 0 0 } }
+}
+
+// Expand a replacement template against a match's capture slots — the
+// `s///` right-hand side every editor and every sed writes:
+//
+//   &        the whole match          \1 … \9   capture group 1 … 9
+//   \&       a literal ampersand      \\        a literal backslash
+//   \n \t \r the usual escapes        \0        the whole match
+//
+// A reference to a group that did not participate expands to nothing,
+// which is what makes `s/(a)|(b)/[\1\2]/` produce `[a]` and `[b]`
+// rather than one of them failing.
+//
+// `regex_replace` deliberately does NOT do this — it inserts its
+// replacement verbatim, which is what a caller substituting arbitrary
+// user text needs. Use this when the template is a pattern language.
+@ regex_expand s text ( Vec i ) slots s tmpl → String {
+    : String out ( string_new )
+    : i tn ( nurl_str_len tmpl )
+    : i nslots ( vec_len [i] slots )
+    : ~ i i 0
+    ~ < i tn {
+        : i c ( nurl_str_at tmpl tn i )
+        ? == c 38 {
+            ( __rx_push_slot out text slots 0 nslots )
+            = i + i 1
+        } {
+            ? & == c 92 < + i 1 tn {
+                : i e ( nurl_str_at tmpl tn + i 1 )
+                = i + i 2
+                ? & >= e 48 <= e 57 {
+                    ( __rx_push_slot out text slots - e 48 nslots )
+                } {
+                    ? == e 110 { ( string_push_char out 10 ) } {
+                        ? == e 116 { ( string_push_char out 9 ) } {
+                            ? == e 114 { ( string_push_char out 13 ) } {
+                                ( string_push_char out e )
+                            } } }
+                }
+            } {
+                ( string_push_char out c )
+                = i + i 1
+            }
+        }
+    }
+    ^ out
+}
+
+@ __rx_push_slot String out s text ( Vec i ) slots i group i nslots → v {
+    : i a * 2 group
+    : i b + a 1
+    ? >= b nslots { ^ } {}
+    : i from ( __vi_get slots a )
+    : i to ( __vi_get slots b )
+    ? | < from 0 < to from { ^ } {}
+    : i n ( nurl_str_len text )
+    : ~ i k from
+    ~ & < k to < k n {
+        ( string_push_char out ( nurl_str_at text n k ) )
+        = k + k 1
+    }
 }
 
 @ regex_find_all Regex r s text → ( Vec Match ) {

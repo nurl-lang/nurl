@@ -481,6 +481,19 @@ $ `stdlib/std/async_ffi.nu`
 // a recognised directive, F otherwise (the caller then emits the `%`
 // and the byte verbatim). Supported: %Y %y %m %d %H %M %S %j %a %A
 // %b %B %%.
+// Space-padded 2-digit — `%e` and `%k` pad with a space where `%d` and
+// `%H` pad with a zero.
+@ __push_2space String out i n → v {
+    ? < n 10 { ( string_push_char out 32 ) } {}
+    ( string_push_int out n )
+}
+
+// 12-hour clock: midnight and noon are both 12, not 0.
+@ __hour12 i h → i {
+    : i r ( __i_mod h 12 )
+    ^ ? == r 0 12 r
+}
+
 @ __time_emit_directive String out Time t i d → b {
     ? == d 37 { ( string_push_char out 37 ) ^ T } {}
     ? == d 89 { ( __push_4digit out . t year ) ^ T } {}
@@ -494,15 +507,72 @@ $ `stdlib/std/async_ffi.nu`
     ? == d 97 { ( string_push_str out ( __wday_name . t wday ) ) ^ T } {}
     ? == d 65 { ( string_push_str out ( __wday_full . t wday ) ) ^ T } {}
     ? == d 98 { ( string_push_str out ( __month_name . t month ) ) ^ T } {}
+    ? == d 104 { ( string_push_str out ( __month_name . t month ) ) ^ T } {}
     ? == d 66 { ( string_push_str out ( __month_full . t month ) ) ^ T } {}
+    ? == d 101 { ( __push_2space out . t day ) ^ T } {}
+    ? == d 107 { ( __push_2space out . t hour ) ^ T } {}
+    ? == d 73 { ( __push_2digit out ( __hour12 . t hour ) ) ^ T } {}
+    ? == d 108 { ( __push_2space out ( __hour12 . t hour ) ) ^ T } {}
+    ? == d 112 { ( string_push_str out ? < . t hour 12 `AM` `PM` ) ^ T } {}
+    ? == d 80 { ( string_push_str out ? < . t hour 12 `am` `pm` ) ^ T } {}
+    ? == d 67 { ( __push_2digit out ( __i_floor_div . t year 100 ) ) ^ T } {}
+    ? == d 119 { ( string_push_int out . t wday ) ^ T } {}
+    ? == d 117 { ( string_push_int out ? == . t wday 0 7 . t wday ) ^ T } {}
+    ? == d 110 { ( string_push_char out 10 ) ^ T } {}
+    ? == d 116 { ( string_push_char out 9 ) ^ T } {}
+    ? == d 70 {
+        ( __push_4digit out . t year )
+        ( string_push_char out 45 )
+        ( __push_2digit out . t month )
+        ( string_push_char out 45 )
+        ( __push_2digit out . t day )
+        ^ T
+    } {}
+    ? == d 68 {
+        ( __push_2digit out . t month )
+        ( string_push_char out 47 )
+        ( __push_2digit out . t day )
+        ( string_push_char out 47 )
+        ( __push_2digit out ( __i_mod . t year 100 ) )
+        ^ T
+    } {}
+    ? == d 84 {
+        ( __push_2digit out . t hour )
+        ( string_push_char out 58 )
+        ( __push_2digit out . t min )
+        ( string_push_char out 58 )
+        ( __push_2digit out . t sec )
+        ^ T
+    } {}
+    ? == d 82 {
+        ( __push_2digit out . t hour )
+        ( string_push_char out 58 )
+        ( __push_2digit out . t min )
+        ^ T
+    } {}
     ^ F
 }
 
 // strftime-style formatter. `fmt` is a borrowed raw `s`; the result is
-// a fresh owned String. Directives: %Y (4-digit year), %y (2-digit
-// year), %m %d %H %M %S (zero-padded 2-digit), %j (3-digit day of
-// year), %a/%A (abbreviated/full weekday), %b/%B (abbreviated/full
-// month), %% (literal percent). An unrecognised %X is copied verbatim.
+// a fresh owned String. Directives:
+//
+//   %Y %y %C   year (4-digit, 2-digit, century)
+//   %m %d %e   month, day (zero-padded), day (space-padded)
+//   %H %k      hour 00-23, hour  0-23 space-padded
+//   %I %l %p %P  hour 01-12, space-padded, AM/PM, am/pm
+//   %M %S      minute, second
+//   %j         day of year, 3 digits
+//   %a %A      weekday, abbreviated / full
+//   %b %h %B   month name, abbreviated / abbreviated / full
+//   %w %u      weekday number (0-6 from Sunday / 1-7 from Monday)
+//   %F %D      %Y-%m-%d  /  %m/%d/%y
+//   %T %R      %H:%M:%S  /  %H:%M
+//   %n %t %%   newline, tab, literal percent
+//
+// The zone directives (%Z, %z) are deliberately absent: a `Time` carries
+// a calendar, not an offset, so it cannot answer them — see `tz_offset`
+// and `tz_name`, which take the epoch second the zone question needs.
+// An unrecognised %X is copied verbatim.
 // For the two common fixed shapes prefer `time_format_iso` /
 // `time_format_http` — they skip the directive scan.
 @ time_format Time t s fmt → String {
@@ -524,6 +594,51 @@ $ `stdlib/std/async_ffi.nu`
         }
     }
     ^ out
+}
+
+// ── Local time ────────────────────────────────────────────────────────
+//
+// Everything above is UTC and pure — the calendar is arithmetic, so it
+// is the same on every machine. Local time is not: the offset from UTC
+// at a given instant comes from a zone database ($TZ, /etc/localtime)
+// that changes twice a year per zone, and owning a copy of tzdata in
+// NURL would be a large thing that is quietly wrong the season after it
+// ships. The platform is asked instead, once per conversion.
+//
+//   ( tz_offset secs )   → i        seconds EAST of UTC at that instant
+//   ( tz_name secs )     → ?String  `CET` / `EEST` / None
+//   ( time_local secs )  → Time     the local calendar at that instant
+//   ( time_now_local )   → Time
+//
+// A platform with no zone database (Windows without a set zone, the
+// unikernel) answers 0 / None, which is UTC — the truthful answer, not
+// a guess. A caller that must distinguish "UTC" from "unknown" reads
+// `tz_name`.
+
+& `c` @ nurl_tz_offset i secs → i
+
+& `c` @ nurl_tz_name i secs → s
+
+@ tz_offset i secs → i { ^ ( nurl_tz_offset secs ) }
+
+@ tz_name i secs → ?String {
+    : s raw ( nurl_tz_name secs )
+    ? == # i raw 0 { ^ @ ?String { F # String 0 } } {}
+    : String out ( string_from raw )
+    ( nurl_free raw )
+    ^ @ ?String { T out }
+}
+
+// The local calendar at a Unix instant. The returned `Time` carries
+// local wall-clock fields; `time_to_unix` on it would give the WRONG
+// instant back (it reads its fields as UTC), so keep the epoch second
+// if you need to convert again.
+@ time_local i secs → Time {
+    ^ ( time_from_unix + secs ( nurl_tz_offset secs ) )
+}
+
+@ time_now_local → Time {
+    ^ ( time_local ( now_seconds ) )
 }
 
 // ── Parsing ───────────────────────────────────────────────────────────

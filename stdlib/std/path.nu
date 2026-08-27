@@ -11,7 +11,7 @@
 //
 //   ( path_join a b )       → String  drops a trailing sep on `a`, leading sep on `b`
 //   ( path_basename p )     → String  segment after the last separator
-//   ( path_dirname p )      → String  everything before the last separator (no trailing sep)
+//   ( path_dirname p )      → String  everything before the last component (POSIX: `.` when there is none)
 //   ( path_extension p )    → String  text after the last '.' in the basename, "" if none
 //   ( path_is_absolute p )  → b       starts with '/' / '\\' or matches X: drive prefix
 //   ( path_normalize p )    → String  collapses '.', '..', and duplicate separators
@@ -113,50 +113,81 @@ $ `stdlib/core/vec.nu`
     ^ out
 }
 
+// Index of the last byte of `p` that is not a trailing separator, or 0
+// when `p` is empty or made of separators only. POSIX basename and
+// dirname both begin here: `/a/b/` names `b`, not the empty string
+// after the final slash.
+@ __trimmed_end s p → i {
+    : i n ( nurl_str_len p )
+    : ~ i e n
+    ~ & > e 0 ( __is_sep ( nurl_str_at p n - e 1 ) ) { = e - e 1 }
+    ^ e
+}
+
+// Last separator strictly before `end`, or -1.
+@ __sep_before s p i end → i {
+    : i n ( nurl_str_len p )
+    : ~ i i - end 1
+    : ~ i out -1
+    ~ >= i 0 {
+        ? ( __is_sep ( nurl_str_at p n i ) ) {
+            = out i
+            = i -1
+        } { = i - i 1 }
+    }
+    ^ out
+}
+
+@ __one_slash → String {
+    : String r ( string_with_cap 1 )
+    ( string_push_char r 47 )
+    ^ r
+}
+
+// POSIX basename(3): the final component, with trailing separators
+// ignored. `/a/b/` → `b`, `/` → `/`, `foo` → `foo`. The empty path
+// stays empty (POSIX says `.`; every shell's `basename ""` prints an
+// empty line, and that is what callers here expect).
 @ path_basename s p → String {
     : i n ( nurl_str_len p )
     ? == n 0 { ^ ( string_new ) } {}
-    : i idx ( __last_sep_idx p )
+    : i end ( __trimmed_end p )
+    // All separators: the path names the root, and the root's name is
+    // the root.
+    ? == end 0 { ^ ( __one_slash ) } {}
+    : i idx ( __sep_before p end )
     ? < idx 0 {
-        ? ( __has_drive p ) {
-            ^ ( __substr_to_string p 2 - n 2 )
-        } {}
-        ^ ( __substr_to_string p 0 n )
+        ? ( __has_drive p ) { ^ ( __substr_to_string p 2 - end 2 ) } {}
+        ^ ( __substr_to_string p 0 end )
     } {}
     : i start + idx 1
-    ^ ( __substr_to_string p start - n start )
+    ^ ( __substr_to_string p start - end start )
 }
 
+// POSIX dirname(3): everything before the final component, with
+// trailing separators ignored and no trailing separator on the result.
+// `/a/b/c` → `/a/b`, `/a/b/` → `/a`, `foo` → `.`, `/foo` → `/`.
+//
+// A path with no separator answers `.`, not the empty string: the
+// result is meant to be usable as a path, and `""` is not one — a
+// caller that joined it back on would address the filesystem root.
 @ path_dirname s p → String {
     : i n ( nurl_str_len p )
-    ? == n 0 { ^ ( string_new ) } {}
-    : i idx ( __last_sep_idx p )
+    ? == n 0 { ^ ( string_from `.` ) } {}
+    : i end ( __trimmed_end p )
+    ? == end 0 { ^ ( __one_slash ) } {}
+    : i idx ( __sep_before p end )
     ? < idx 0 {
-        ? ( __has_drive p ) {
-            ^ ( __substr_to_string p 0 2 )
-        } {}
-        ^ ( string_new )
+        ? ( __has_drive p ) { ^ ( __substr_to_string p 0 2 ) } {}
+        ^ ( string_from `.` )
     } {}
-    ? == idx 0 {
-        : String r ( string_with_cap 1 )
-        ( string_push_char r 47 )
-        ^ r
-    } {}
-    // Strip trailing separators ("a//b" → "a") but keep "C:/" → "C:/".
-    : ~ i end idx
-    : ~ b going T
-    ~ going {
-        ? <= end 0 { = going F } {
-            : i c ( nurl_str_at p n - end 1 )
-            ? ( __is_sep c ) {
-                = end - end 1
-            } { = going F }
-        }
-    }
-    ? & == end 2 ( __has_drive p ) {
-        ^ ( __substr_to_string p 0 3 )
-    } {}
-    ^ ( __substr_to_string p 0 end )
+    ? == idx 0 { ^ ( __one_slash ) } {}
+    // Collapse the run of separators before the last component.
+    : ~ i cut idx
+    ~ & > cut 0 ( __is_sep ( nurl_str_at p n - cut 1 ) ) { = cut - cut 1 }
+    ? == cut 0 { ^ ( __one_slash ) } {}
+    ? & == cut 2 ( __has_drive p ) { ^ ( __substr_to_string p 0 3 ) } {}
+    ^ ( __substr_to_string p 0 cut )
 }
 
 @ path_extension s p → String {

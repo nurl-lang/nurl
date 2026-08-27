@@ -1,0 +1,17 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+(a+)(b+) | xxaaabbyy | 2 groups @2+5 → <aaa|bb>
+([a-z]+)@([a-z]+) | mail ada@example org | 2 groups @5+11 → example:ada
+foo | a foo b | 0 groups @2+3 → [foo]
+(x)?(y) | y | 2 groups @0+1 → 1=[] 2=[y]
+((a)(b))c | abc | 3 groups @0+3 → ab a b
+a|ab | abc | 0 groups @0+2 → ab
+^(\w+)\s+(\w+)$ | hello world | 2 groups @0+11 → world hello
+(a)(b)(c)(d)(e)(f)(g)(h)(i) | abcdefghi | 9 groups @0+9 → ihgfedcba
+(no) | yes | no match
+x(y*)z | xz | 1 groups @0+2 → []
+(a|b)+ | abab | 1 groups @0+4 → abab/b
+q | q | 0 groups @0+1 → &amp \ slash 
+ newline

@@ -649,7 +649,7 @@ void _exit(int code) { pf_shutdown(code); for (;;) { } }
 
 /* ── entry ───────────────────────────────────────────────────────── */
 
-extern char **nl_environ;
+extern char **environ;          /* nolibc/misc.c owns the storage */
 extern void nl_tls_init_guest(void);
 extern int main(int argc, char **argv);
 
@@ -722,7 +722,7 @@ void kmain(unsigned long x0) {
         extern int nl_env_from_cmdline(const char *, char *,
                                        unsigned long, char **, int);
         nl_env_from_cmdline(cmdline, env_buf, sizeof env_buf, envv, 32);
-        nl_environ = envv;
+        environ = envv;
         (void)no_argv;
     }
 

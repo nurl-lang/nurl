@@ -45,6 +45,8 @@
  * genuinely does not have either — into 21 failures.
  */
 
+#include "../../stdlib/nurl_version_gen.h"
+
 typedef unsigned long ns_size_t;
 
 extern int nl_errno_slot;
@@ -53,6 +55,85 @@ extern int nl_errno_slot;
 #define NS_EROFS  30
 
 static int ns_refuse(int err) { nl_errno_slot = err; return -1; }
+
+/* ── the filesystem calls this machine does not have ─────────────
+ *
+ * The image's filesystem is a tar in the text segment plus, when there
+ * is one, a FAT volume on a virtio disk. Neither carries POSIX
+ * permission bits or symlinks, so `chmod` and the link calls refuse
+ * rather than pretend: a script that believes it just made a key file
+ * unreadable, on a machine where it did nothing of the sort, is the
+ * failure this whole file exists to prevent. */
+int chmod(const char *p, int mode)   { (void)p; (void)mode; return ns_refuse(NS_EROFS); }
+int link(const char *a, const char *b) { (void)a; (void)b; return ns_refuse(NS_ENOSYS); }
+int symlink(const char *t, const char *l) { (void)t; (void)l; return ns_refuse(NS_ENOSYS); }
+long readlink(const char *p, char *b, unsigned long n) {
+    (void)p; (void)b; (void)n;
+    /* EINVAL, not ENOSYS: "that is not a symlink" is the true answer on
+     * a filesystem that has none, and it is the answer `readlink` and
+     * `ls -l` already know how to handle. */
+    return ns_refuse(22);
+}
+
+/* ── the working directory ───────────────────────────────────────
+ * There is exactly one namespace and the program starts at its root, so
+ * `/` is not a placeholder here — it is the answer. */
+char *getcwd(char *buf, unsigned long size) {
+    if (!buf || size < 2) { nl_errno_slot = 34 /* ERANGE */; return 0; }
+    buf[0] = '/';
+    buf[1] = 0;
+    return buf;
+}
+
+/* ── credentials ─────────────────────────────────────────────────
+ * One program, one address space, nothing above it: it is uid 0 in the
+ * only sense the word can have here. There is no user database to give
+ * that number a name — nurl_user_name answers NULL and every caller
+ * prints the number, which is what `ls -l` on an unmapped NFS id does
+ * on any machine. */
+int getuid(void)  { return 0; }
+int getgid(void)  { return 0; }
+int geteuid(void) { return 0; }
+int getegid(void) { return 0; }
+
+int getgroups(int size, unsigned int *list) {
+    (void)size; (void)list;
+    return 0;                       /* no supplementary groups, truthfully */
+}
+
+/* ── uname(2) ────────────────────────────────────────────────────
+ * A guest CAN answer this, and should: `uname -a` is the first thing
+ * anyone types to find out where they are, and "unknown" would be a
+ * worse answer than the true one. `struct utsname` is six fixed 65-byte
+ * fields on Linux, which is the layout runtime_core.c was compiled
+ * against. */
+static void ns_field(char *base, int idx, const char *text) {
+    char *p = base + idx * 65;
+    int i = 0;
+    while (text[i] && i < 64) { p[i] = text[i]; i++; }
+    p[i] = 0;
+}
+
+int uname(void *buf) {
+    char *b = (char *)buf;
+    if (!b) return ns_refuse(14 /* EFAULT */);
+    ns_field(b, 0, "NURL");
+    ns_field(b, 1, "unikernel");
+    ns_field(b, 2, NURL_VERSION);
+    ns_field(b, 3, "#1 NURL unikernel");
+#if defined(__aarch64__)
+    ns_field(b, 4, "aarch64");
+#elif defined(__riscv)
+    ns_field(b, 4, "riscv64");
+#else
+    ns_field(b, 4, "x86_64");
+#endif
+    ns_field(b, 5, "");
+    return 0;
+}
+
+/* sysconf(3) — one vCPU, which is the machine v1 is. */
+long sysconf(int name) { return name == 84 ? 1 : -1; }
 
 /* ── processes ───────────────────────────────────────────────── */
 

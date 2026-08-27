@@ -1132,7 +1132,7 @@ static void pf_shutdown(int code) {
     for (;;) __asm__ __volatile__("cli; hlt");
 }
 
-/* `exit`, `abort` and `nl_environ` belong to nolibc/misc.c, which this
+/* `exit`, `abort` and `environ` belong to nolibc/misc.c, which this
  * target keeps verbatim: exit runs the atexit chain and flushes stdio
  * before calling `nl_exit_group`, and abort prints its line first.
  * Defining them here would duplicate the symbols AND skip both. The
@@ -1211,7 +1211,7 @@ const char *nurl_console_kind(void) { return console_kind_name(); }
 
 /* ── entry ───────────────────────────────────────────────────────── */
 
-extern char **nl_environ;          /* nolibc/misc.c owns the storage */
+extern char **environ;          /* nolibc/misc.c owns the storage */          /* nolibc/misc.c owns the storage */
 extern void nl_tls_init_guest(void);
 extern int main(int argc, char **argv);
 
@@ -1358,7 +1358,7 @@ void kmain(unsigned long start_info_paddr) {
         extern int nl_env_from_cmdline(const char *, char *,
                                        unsigned long, char **, int);
         nl_env_from_cmdline(cmdline, env_buf, sizeof env_buf, envv, 32);
-        nl_environ = envv;
+        environ = envv;
         (void)no_argv;
     }
 

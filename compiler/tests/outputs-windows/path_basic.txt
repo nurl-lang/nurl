@@ -7,13 +7,18 @@ absolute foo/bar: F
 absolute C:/x: T
 absolute foo: F
 basename /a/b/c.txt: c.txt
-basename /a/b/: 
+basename /a/b/: b
 basename foo: foo
 basename .bashrc: .bashrc
+basename /: /
+basename a//b: b
 dirname /a/b/c.txt: /a/b
-dirname /a/b/: /a/b
-dirname foo: 
+dirname /a/b/: /a
+dirname foo: .
 dirname /foo: /
+dirname /: /
+dirname a//b: a
+dirname /a/: /
 ext file.tar.gz: gz
 ext .bashrc: 
 ext noext: 

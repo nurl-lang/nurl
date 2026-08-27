@@ -71,6 +71,43 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get
     ^ out
 }
 
+// ── Enumerating the environment ─────────────────────────────────────
+//
+// `env_get` answers about a name you already know. Listing what is
+// actually set — which `env` / `printenv` / a shell's `export -p` needs,
+// and which a program logging its own configuration wants — needs the
+// vector itself, and that is a C *variable* (`environ`, `_environ` on
+// Windows), not something NURL can bind through FFI. The runtime
+// enumerates it: `nurl_env_count` / `nurl_env_at`.
+
+& `c` @ nurl_env_count → i
+
+& `c` @ nurl_env_at i idx → s
+
+@ env_count → i { ^ ( nurl_env_count ) }
+
+// The `NAME=value` entry at `idx`, as an owned String; the empty string
+// past the end.
+@ env_entry i idx → String {
+    : s raw ( nurl_env_at idx )
+    ? == # i raw 0 { ^ ( string_new ) } {}
+    ^ ( string_from raw )
+}
+
+// Every `NAME=value` currently set, in the process's own order. The
+// caller owns the Vec and every String in it (vec_free_with).
+@ env_list → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : i n ( nurl_env_count )
+    : ~ i i 0
+    ~ < i n {
+        : s raw ( nurl_env_at i )
+        ? != # i raw 0 { ( vec_push [String] out ( string_from raw ) ) } {}
+        = i + i 1
+    }
+    ^ out
+}
+
 @ env_get s name → ?String {
     ? == # i name 0 { ^ @ ?String { F # String 0 } } {}
     // getenv returns a libc-owned pointer; do not free. `string_from`
