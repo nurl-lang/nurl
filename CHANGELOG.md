@@ -6,7 +6,7 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.54.0] — 2026-08-27
 
 ### Added
 
@@ -150,6 +150,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its differential oracle and *skips* when it is absent, which reads
   exactly like a suite that passed.
 
+- **A busybox-shaped userland, in pure NURL** —
+  [`packages/nurlbox`](packages/nurlbox/README.md). One multi-call binary
+  carrying **100** of the everyday UNIX utilities, dispatching on `argv[0]`
+  exactly as busybox does; `nurlbox --install [-s] DIR` fills a directory
+  with one entry per applet, which is how one file becomes a userland. It
+  builds for every target the toolchain has, and it **boots as its own
+  kernel** on the unikernel one.
+
+  The applet that matters most is `sh`, and it is a real one: per-byte
+  quote tracking (so `"$@"` and `echo "a b"` are right), `${VAR:-…}` /
+  `${VAR#pat}` / `${#VAR}`, `$(…)`, backticks, `$((…))`, globbing, field
+  splitting on `IFS`, pipelines, redirections including `2>&1` and
+  heredocs, `&&` / `||`, `if` / `while` / `until` / `for` / `case`,
+  functions, and the builtins a script cannot be written without.
+
+  ONE DECISION SHAPES IT: an applet runs **in-process**. When a command
+  names one of nurlbox's own, the shell calls it directly instead of
+  exec'ing itself. That is busybox's standalone-shell trick, and here it is
+  what makes the shell work on a machine with no `fork` at all.
+
+  The specification is the original, and the suite says so: **348
+  differential cases** — 48 of them through `sh` — run the same command
+  line through nurlbox and through the system busybox and require the two
+  to agree on stdout, on the bytes, and on the exit status. The mutating
+  applets are compared by the resulting **tree** — names, contents,
+  permission bits — because that is what a `cp` actually outputs. Where
+  busybox does not implement an option (`cat -E`, `cat -s`, `nl -n`,
+  `cksum`) the reference is GNU coreutils instead. Leak-clean under
+  AddressSanitizer with `detect_leaks=1` across every applet and every
+  shell construct.
+
+- **Writing a userland is a way of finding out what a language is
+  missing.** Every hole nurlbox hit was closed where it actually was — in
+  the stdlib, for every caller — rather than worked around in the package:
+
+  * [`stdlib/std/fs.nu`](stdlib/std/fs.nu) — `stat(2)` did not exist at
+    all. `FileStat` plus `fs_stat` / `fs_lstat` / `fs_fstat` over a new
+    fixed-layout runtime thunk, `stat_mode_string`, `fs_set_times`,
+    `fs_user_name` / `fs_group_name`; and `FsStat` + `fs_statfs` — `df`'s
+    question — through a `statvfs` thunk. Plus `fs_match` /
+    `fs_match_glob`, the wildcard matcher that was private to `fs_glob`.
+  * [`stdlib/ext/regex.nu`](stdlib/ext/regex.nu) — no capture groups. The
+    engine is now a **Pike VM with capture slots**: `regex_find_caps`,
+    `regex_ngroups`, `regex_expand` (`&`, `\1`..`\9`). `sed`'s back
+    references are the reason; every caller gets them.
+  * [`stdlib/std/time.nu`](stdlib/std/time.nu) — UTC only. `tz_offset` /
+    `tz_name` / `time_local` ask the platform for the one thing that is not
+    arithmetic; `time_format` grew `%e %F %T %D %R %I %p %C %u %w %k %l %h
+    %n %t`.
+  * [`stdlib/std/sysinfo.nu`](stdlib/std/sysinfo.nu) — new: `uname`
+    fields, host name, processor count.
+  * [`stdlib/ext/env.nu`](stdlib/ext/env.nu) — the environment could not be
+    enumerated: `env_count` / `env_entry` / `env_list`.
+  * [`stdlib/std/bufio.nu`](stdlib/std/bufio.nu) —
+    `bufreader_read_line_raw`, a line WITH its terminator, so a filter can
+    copy a CRLF file without rewriting it.
+
+- **The guest grew the libc and kernel surface a userland asks for.** A
+  shell on a machine with no host OS needs more than a serial port, so
+  [`unikernel/`](unikernel/README.md) gained:
+
+  * `stat(2)` and directory listing over the baked-in archive, as a
+    **union** with the disk — read resolution is archive-first, so the
+    listing is too. `ls -l`, `find`, `du`, `stat` and `test -d` answer
+    there, and `uname -a` says `NURL unikernel`.
+  * a working directory, with every path-taking entry point resolving
+    against it and folding `.` / `..` — which is what `cd` is, and what
+    made `mkstemp`'s `./tmp.XXXXXX` openable.
+  * a redirection table for descriptors 0–2 behind `dup` / `dup2` /
+    `fcntl(F_DUPFD)`, so `>`, `2>&1`, `$(…)` and pipelines work in the
+    guest. A pipeline there runs stage by stage through a temporary file
+    and *says so*, because a machine with one address space cannot run two
+    things at once and should not pretend to.
+  * the rest of the libc surface, each real where the target can be real
+    and refusing out loud where it cannot: `realpath`, `fdopen`,
+    `link`/`symlink`/`readlink`, `chmod`, `getcwd`, the uid/gid quartet,
+    `getgroups`, `uname`, `sysconf`, `statvfs`, `utimensat`, `localtime_r`.
+
+  The nolibc corpus goes from 505 to **516 PASS / 0 FAIL** and the
+  NEEDS-NOLIBC list from 9 to 5; the QEMU guest suite stays 29/29.
+
+### Changed
+
+- **Three registry packages published past the source they had drifted
+  from** — `cli` 0.2.1, `http` 0.4.0, `yoloe` 0.6.9. Every in-tree
+  manifest version equalled its published version; these were the three
+  whose *source* had moved after the last bump and nobody bumped again.
+  `cli` carries the `CliCtx`-before-`CliCmd` declaration order that the
+  Windows toolchain requires (0.2.0 forward-references it, and every
+  dependent — `psql`, `redis`, `yoloe` — inherited that). `http` publishes
+  `http_app_async`, fiber-per-connection serving on the M:N runtime — new
+  public API, so a minor; dependents pinned `^0.3` keep resolving 0.3.2 and
+  opt in when they choose. `yoloe` declares `tensor`, `gpukit` and `gpu` in
+  its manifest instead of making the resolver infer them.
+
+  A published version can never be replaced, which is what made 0.6.8 cost
+  0.6.9: the bump touched the manifest but not `cli_new`'s hardcoded
+  version literal, so `--help` announced a version that was already stale.
+  The literal follows the manifest — grep it before bumping.
 
 ### Fixed
 
@@ -162,6 +261,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says `PASS firecracker booted the unchanged image`, which is the first
   time anything in this repository has watched a hypervisor other than
   QEMU boot the image rather than only checking the PVH note.
+
+- **An owned temporary handed to a COPYING consumer was never dropped.**
+  `( string_from ( nurl_str_slice … ) )` leaked its inner buffer — in
+  every program that wrote it, which after a userland's worth of string
+  handling is a great many. `mem_consumer_copy_safe` in
+  [`compiler/nurlc.nu`](compiler/nurlc.nu) now covers `string_from`, the
+  `path_*` family, the string inspectors and `nurl_eprint`, audited one by
+  one, with `string_from_take` deliberately excluded because it has
+  `string_from`'s shape exactly and ADOPTS the buffer instead of copying
+  it. The bootstrap fixed point holds across the change.
+  [`docs/MEMORY.md`](docs/MEMORY.md) §7.4 gains the seam that cost an
+  afternoon to find: a CAPTURING closure passed straight to a generic
+  callee is not proven invoke-only, so its environment is the caller's to
+  free.
+
+- **`file_delete` could not remove a dangling symlink.** It probed with
+  `access(2)` first, which FOLLOWS the link, so a broken one was "not
+  found" and never unlinked — and every `rm -r` over a tree containing one
+  then failed at the directory with `ENOTEMPTY`. In the same sweep:
+  `nurl_dir_create` hard-coded `0755`, overriding the umask, and
+  `fs_tempfile` emitted `//tmp.XXXXXX` for a root directory.
+
+- **Three path answers that were not POSIX** — `path_dirname "foo"`
+  answered `""`, `path_basename "/a/b/"` answered `""`, and
+  `path_join "/" "x"` answered `"//x"`. Each is what a path caller then
+  joins back on, so each was a wrong path rather than a wrong string.
+  `compiler/tests/path_basic.nu` covers the new cases.
 
 ## [0.53.0] — 2026-08-26
 
