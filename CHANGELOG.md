@@ -6,6 +6,62 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **TLS 1.3 from the unikernel on Kubernetes** —
+  `unikernel/k8s/deploy-kvm.yaml`, built by `build_image.sh --tls`. The
+  same `server.nu` serves TLS when the launcher hands it `cert=` and
+  `key=`; the handshake is `stdlib/std/tls.nu`, pure NURL with no
+  libssl, which is why it links into a machine with no operating system.
+  It is also the workload that justifies the KVM device plugin: a
+  handshake is where a guest spends real cycles.
+
+  The server key is P-256 and that is not a preference. Measured in the
+  guest, same image, same handshake, only the key type differing:
+  **RSA-2048 costs ~490 ms per handshake, P-256 costs 4–11 ms** — ninety
+  times, and the difference between a TLS endpoint and a demonstration
+  that TLS is possible. `--tls` generates a self-signed P-256 key per
+  build, so no private key is ever committed.
+
+  TLS handshakes in six seconds, same image and key: **KVM 856, TCG
+  469**.
+
+### Fixed
+
+- **A page returned to the guest's allocator came back unmapped.** Every
+  coroutine stack is allocated with a guard page below it, and arming
+  that guard clears the present bit in its PTE. When the coroutine
+  ended, `munmap` returned the whole range to the page allocator — and
+  touched no page tables, so the guard page went back into the pool with
+  that bit still clear. The pool handed it to somebody else, nolibc's
+  `malloc` carved an arena across it, and the first write to a block
+  that landed there took a page fault **inside malloc**, long after the
+  coroutine that protected it had gone.
+
+  Reachable by anyone who could open a TCP connection: twenty
+  connections that sent one byte and hung up killed a server. Narrowed
+  by measurement rather than reading — the same attack against the
+  sequential `server_run` did nothing, which put it on the fiber path;
+  it survived swapping `spawn_owned` for `spawn`, which cleared the
+  closure-environment free; and `nm` put the faulting instruction inside
+  `malloc`, on a write to a not-present page in the middle of an
+  ordinary heap. Guest memory size made no difference, so it was
+  corruption and not exhaustion.
+
+  `munmap` now restores a range's protection before releasing it, in
+  that order, so a range is never on the free list while it is
+  unmapped — with a new `pa_owns` to ask the ownership question first,
+  because a file mapping points into the image and its page tables are
+  not ours to rewrite. All three architectures had the same `munmap`.
+
+  `unikernel/demos/guardpages.nu` is the gate, and it needs no network,
+  no TLS and no timing: coroutines come and go, then the memory they
+  gave back is allocated and **written**. The write is the assertion.
+  Against the old `munmap` it faults; against the fixed one it prints
+  what it wrote.
+
 ## [0.54.0] — 2026-08-27
 
 ### Added

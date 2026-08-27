@@ -94,7 +94,7 @@ $ `stdlib/ext/env.nu`
     ^ ( response_text 200 `ok\n` )
 }
 
-@ h_info ( Vec i ) c i boot_ns String pod String platform → HttpResponse {
+@ h_info ( Vec i ) c i boot_ns String pod String platform b use_tls → HttpResponse {
     : i n ( stat_bump c 0 )
     : Json j ( json_obj_new )
     ( json_obj_set j `server` ( json_str_lit `nurl-http` ) )
@@ -105,6 +105,7 @@ $ `stdlib/ext/env.nu`
     // when the node's kernel exec'd the binary, `unknown` when nobody
     // said.
     ( json_obj_set j `platform` ( json_str_lit ( string_data platform ) ) )
+    ( json_obj_set j `tls` ? use_tls ( json_str_lit `1.3` ) ( json_str_lit `none` ) )
     ( json_obj_set j `uptime_ms` ( json_int ( uptime_ms boot_ns ) ) )
     ( json_obj_set j `requests` ( json_int n ) )
     ( json_obj_set j `unix_time` ( json_int ( now_seconds ) ) )
@@ -158,7 +159,23 @@ $ `stdlib/ext/env.nu`
     : ( Vec i ) counters ( vec_new [i] )
     ( vec_push [i] counters 0 )
 
-    ?? ( tcp_listen `0.0.0.0` port ) {
+    // TLS when the launcher supplied a certificate, plaintext when it
+    // did not. Same program, same routes, same everything above the
+    // listener — `tcp_listen_tls` reads two files and the layers below
+    // do the rest, and those layers are `stdlib/std/tls.nu`: pure NURL,
+    // no libssl, which is why this links into a machine with no
+    // operating system at all.
+    //
+    // Two keys rather than one flag, because a program that is told
+    // "use TLS" and then guesses where the certificate lives is a
+    // program whose failure mode is a path you cannot see.
+    : String cert ( env_var_or `cert` `` )
+    : String key ( env_var_or `key` `` )
+    : b use_tls && > ( nurl_str_len ( string_data cert ) ) 0 > ( nurl_str_len ( string_data key ) ) 0
+    : !TcpListener NetErr lr ? use_tls
+    ( tcp_listen_tls `0.0.0.0` port ( string_data cert ) ( string_data key ) )
+    ( tcp_listen `0.0.0.0` port )
+    ?? lr {
         F e → {
             ( nurl_print `listen failed: ` )
             ( nurl_print ( net_err_name e ) )
@@ -172,7 +189,7 @@ $ `stdlib/ext/env.nu`
             ( router_get rt `/healthz`
             \ HttpRequest req Params ps → HttpResponse { ^ ( h_health counters ) } )
             ( router_get rt `/info`
-            \ HttpRequest req Params ps → HttpResponse { ^ ( h_info counters boot_ns pod platform ) } )
+            \ HttpRequest req Params ps → HttpResponse { ^ ( h_info counters boot_ns pod platform use_tls ) } )
             ( router_get rt `/metrics`
             \ HttpRequest req Params ps → HttpResponse { ^ ( h_metrics counters boot_ns ) } )
 
@@ -182,6 +199,7 @@ $ `stdlib/ext/env.nu`
 
             ( nurl_print `nurl unikernel serving on 0.0.0.0:` )
             ( nurl_print ( nurl_str_int port ) )
+            ( nurl_print ? use_tls ` (TLS)` `` )
             ( nurl_print `\n` )
 
             : !v NetErr rr ( server_run_async srv )
@@ -199,6 +217,8 @@ $ `stdlib/ext/env.nu`
     }
     ( string_free pod )
     ( string_free platform )
+    ( string_free cert )
+    ( string_free key )
     ( vec_free [i] counters )
     ^ 0
 }

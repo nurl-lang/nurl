@@ -141,6 +141,19 @@ static void pa_absorb_tail(void) {
  * length than it allocated is a bug in the caller, and this allocator
  * has no header to check it against, which is the price of not spending
  * a word on every page. */
+/* Is this range one of ours? The same bounds test `pa_free` makes,
+ * exposed because the caller has something to do BEFORE handing a range
+ * back — see `munmap` in the platform files: a page that was protected
+ * while it was in use has to be made writable again before it returns
+ * to the pool, and doing that to a mapping that is not ours would be a
+ * write to somebody else's page tables. */
+int pa_owns(pa_size_t p, pa_size_t len) {
+    pa_size_t n = pa_round(len);
+    if (p == 0 || n == 0) return 0;
+    if (p < pa_base || p + n > pa_end || p + n < p) return 0;
+    return 1;
+}
+
 int pa_free(pa_size_t p, pa_size_t len) {
     pa_size_t n = pa_round(len);
     if (p == 0 || n == 0) return 0;

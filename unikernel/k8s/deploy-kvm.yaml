@@ -1,0 +1,108 @@
+# unikernel/k8s/deploy-kvm.yaml — the same server, over TLS 1.3, in a
+# machine with no operating system, on a vCPU the node actually gave it.
+#
+# This is what `kvm-device-plugin.yaml` is for. The workload it enables
+# is deliberately the CPU-bound one: a TLS handshake is where a guest
+# spends real cycles, so it is where hardware virtualisation stops being
+# a nice-to-have. Measured in the guest, same image, same key:
+#
+#     TLS 1.3 handshakes in 6 s     KVM 856      TCG 469
+#
+# The certificate is baked into the image's read-only filesystem by
+# `build_image.sh --tls`, self-signed and generated per build. The
+# handshake itself is `stdlib/std/tls.nu` — pure NURL, no libssl, which
+# is why it links into a freestanding image at all.
+#
+#   unikernel/k8s/build_image.sh --tls -t nurl-kvm:0.1.0
+#   kubectl apply -f unikernel/k8s/deploy-kvm.yaml
+#   kubectl -n nurl-kvm port-forward svc/nurl-kvm 8443:443
+#   curl -k https://localhost:8443/info
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nurl-kvm
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nurl-kvm
+  namespace: nurl-kvm
+  labels:
+    app: nurl-kvm
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nurl-kvm
+  template:
+    metadata:
+      labels:
+        app: nurl-kvm
+    spec:
+      # No nodeSelector: the `devic.es/kvm` request below IS the node
+      # selector, and it is one the scheduler keeps up to date. What it
+      # costs is stated in kvm-device-plugin.yaml — a deployment that
+      # asks for the device can only run where the device is.
+      securityContext:
+        # The gid of the `kvm` group ON THE NODE (`getent group kvm`),
+        # not a constant. The device arrives owned by root:kvm 0660 and
+        # this container is not root. Get it wrong and nothing breaks:
+        # QEMU falls back to emulation and the pod serves correct
+        # answers more slowly. `kubectl logs` line 1 says which.
+        supplementalGroups: [993]
+      containers:
+        - name: qemu
+          image: nurl-kvm:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: https
+              containerPort: 8443
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: TLS
+              value: "1"
+            - name: PORT
+              value: "8443"
+            - name: GUEST_PORT
+              value: "8443"
+          startupProbe:
+            httpGet: { path: /healthz, port: https, scheme: HTTPS }
+            periodSeconds: 1
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /healthz, port: https, scheme: HTTPS }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: https, scheme: HTTPS }
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits:
+              cpu: "1"
+              memory: 512Mi
+              devic.es/kvm: 1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nurl-kvm
+  namespace: nurl-kvm
+spec:
+  selector:
+    app: nurl-kvm
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
