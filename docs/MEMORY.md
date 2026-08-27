@@ -1152,6 +1152,16 @@ yours to release. This is the complete list; nothing else leaks.
     (and, in a loop body, each iteration) unless it escapes — covering
     the `: f \ …` then `( hof f )` callback pattern.
 
+  One seam inside this: the invoke-only set is keyed on the callee's
+  name, and a **generic** callee is instantiated per type argument, so
+  an inline closure that CAPTURES something and is passed straight to
+  one (`( sort_by [T] v \ T a T b → i { … flags … } )`) is not proven
+  invoke-only, and its env is left to the caller. A closure that
+  captures nothing allocates no env at all and is unaffected, which is
+  why the stdlib's own comparators read their configuration from a
+  binding at the call site rather than closing over it — and why
+  `packages/nurlbox`'s `ls` comparator does the same.
+
   An env is left for *you* only when the closure genuinely outlives the
   frame: it is returned (`^ \ …` / `^ f`), stored into a struct field or
   container, captured into another closure, detached onto a thread

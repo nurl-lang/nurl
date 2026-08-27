@@ -328,6 +328,16 @@ char *realpath(const char *path, char *resolved) {
     }
 }
 
+/* statvfs(3) — a freestanding target has no filesystem statistics to
+ * report. The archive is a fixed span of the text segment and the FAT
+ * layer does not surface free-cluster counts, so `df` there must say
+ * "not supported" rather than print an empty disk. */
+int statvfs(const char *path, void *buf) {
+    (void)path; (void)buf;
+    errno = 38 /* ENOSYS */;
+    return -1;
+}
+
 /* localtime_r(3) — there is no zone database on a machine whose whole
  * filesystem may be its own text segment, and a -nostdlib Linux build
  * has no /etc/localtime reader either. The honest answer is "no local

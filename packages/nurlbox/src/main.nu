@@ -27,49 +27,74 @@ $ `hash.nu`
 $ `grep.nu`
 $ `shell.nu`
 $ `sed.nu`
+$ `textmisc.nu`
+$ `binio.nu`
+$ `archive.nu`
+$ `proc.nu`
+$ `sh.nu`
 
-: s NURLBOX_VERSION `0.1.0`
+: s NURLBOX_VERSION `0.2.0`
 
 // Every applet, in the order `nurlbox` lists them.
 @ __applet_names → ( Vec String ) {
     : ( Vec String ) v ( vec_new [String] )
     ( vec_push [String] v ( string_from `[` ) )
     ( vec_push [String] v ( string_from `arch` ) )
+    ( vec_push [String] v ( string_from `ash` ) )
     ( vec_push [String] v ( string_from `base64` ) )
     ( vec_push [String] v ( string_from `basename` ) )
     ( vec_push [String] v ( string_from `cat` ) )
     ( vec_push [String] v ( string_from `chmod` ) )
     ( vec_push [String] v ( string_from `cksum` ) )
     ( vec_push [String] v ( string_from `clear` ) )
+    ( vec_push [String] v ( string_from `cmp` ) )
+    ( vec_push [String] v ( string_from `comm` ) )
     ( vec_push [String] v ( string_from `cp` ) )
     ( vec_push [String] v ( string_from `crc32` ) )
     ( vec_push [String] v ( string_from `cut` ) )
     ( vec_push [String] v ( string_from `date` ) )
+    ( vec_push [String] v ( string_from `dd` ) )
+    ( vec_push [String] v ( string_from `df` ) )
     ( vec_push [String] v ( string_from `dirname` ) )
+    ( vec_push [String] v ( string_from `dos2unix` ) )
     ( vec_push [String] v ( string_from `du` ) )
     ( vec_push [String] v ( string_from `echo` ) )
     ( vec_push [String] v ( string_from `egrep` ) )
     ( vec_push [String] v ( string_from `env` ) )
+    ( vec_push [String] v ( string_from `expand` ) )
     ( vec_push [String] v ( string_from `expr` ) )
+    ( vec_push [String] v ( string_from `factor` ) )
     ( vec_push [String] v ( string_from `false` ) )
     ( vec_push [String] v ( string_from `fgrep` ) )
     ( vec_push [String] v ( string_from `find` ) )
+    ( vec_push [String] v ( string_from `fold` ) )
+    ( vec_push [String] v ( string_from `free` ) )
     ( vec_push [String] v ( string_from `grep` ) )
     ( vec_push [String] v ( string_from `groups` ) )
+    ( vec_push [String] v ( string_from `gunzip` ) )
+    ( vec_push [String] v ( string_from `gzip` ) )
     ( vec_push [String] v ( string_from `head` ) )
+    ( vec_push [String] v ( string_from `hexdump` ) )
     ( vec_push [String] v ( string_from `hostname` ) )
     ( vec_push [String] v ( string_from `id` ) )
+    ( vec_push [String] v ( string_from `kill` ) )
+    ( vec_push [String] v ( string_from `killall` ) )
     ( vec_push [String] v ( string_from `ln` ) )
     ( vec_push [String] v ( string_from `logname` ) )
     ( vec_push [String] v ( string_from `ls` ) )
     ( vec_push [String] v ( string_from `md5sum` ) )
     ( vec_push [String] v ( string_from `mkdir` ) )
     ( vec_push [String] v ( string_from `mktemp` ) )
+    ( vec_push [String] v ( string_from `mount` ) )
     ( vec_push [String] v ( string_from `mv` ) )
     ( vec_push [String] v ( string_from `nl` ) )
     ( vec_push [String] v ( string_from `nproc` ) )
+    ( vec_push [String] v ( string_from `od` ) )
+    ( vec_push [String] v ( string_from `paste` ) )
+    ( vec_push [String] v ( string_from `pidof` ) )
     ( vec_push [String] v ( string_from `printenv` ) )
     ( vec_push [String] v ( string_from `printf` ) )
+    ( vec_push [String] v ( string_from `ps` ) )
     ( vec_push [String] v ( string_from `pwd` ) )
     ( vec_push [String] v ( string_from `readlink` ) )
     ( vec_push [String] v ( string_from `realpath` ) )
@@ -78,15 +103,21 @@ $ `sed.nu`
     ( vec_push [String] v ( string_from `rmdir` ) )
     ( vec_push [String] v ( string_from `sed` ) )
     ( vec_push [String] v ( string_from `seq` ) )
+    ( vec_push [String] v ( string_from `sh` ) )
     ( vec_push [String] v ( string_from `sha1sum` ) )
     ( vec_push [String] v ( string_from `sha256sum` ) )
     ( vec_push [String] v ( string_from `sha512sum` ) )
+    ( vec_push [String] v ( string_from `shuf` ) )
     ( vec_push [String] v ( string_from `sleep` ) )
     ( vec_push [String] v ( string_from `sort` ) )
+    ( vec_push [String] v ( string_from `split` ) )
     ( vec_push [String] v ( string_from `stat` ) )
+    ( vec_push [String] v ( string_from `strings` ) )
+    ( vec_push [String] v ( string_from `sum` ) )
     ( vec_push [String] v ( string_from `sync` ) )
     ( vec_push [String] v ( string_from `tac` ) )
     ( vec_push [String] v ( string_from `tail` ) )
+    ( vec_push [String] v ( string_from `tar` ) )
     ( vec_push [String] v ( string_from `tee` ) )
     ( vec_push [String] v ( string_from `test` ) )
     ( vec_push [String] v ( string_from `touch` ) )
@@ -95,13 +126,18 @@ $ `sed.nu`
     ( vec_push [String] v ( string_from `truncate` ) )
     ( vec_push [String] v ( string_from `tty` ) )
     ( vec_push [String] v ( string_from `uname` ) )
+    ( vec_push [String] v ( string_from `unexpand` ) )
     ( vec_push [String] v ( string_from `uniq` ) )
+    ( vec_push [String] v ( string_from `unix2dos` ) )
+    ( vec_push [String] v ( string_from `uptime` ) )
     ( vec_push [String] v ( string_from `usleep` ) )
     ( vec_push [String] v ( string_from `wc` ) )
     ( vec_push [String] v ( string_from `which` ) )
     ( vec_push [String] v ( string_from `whoami` ) )
     ( vec_push [String] v ( string_from `xargs` ) )
+    ( vec_push [String] v ( string_from `xxd` ) )
     ( vec_push [String] v ( string_from `yes` ) )
+    ( vec_push [String] v ( string_from `zcat` ) )
     ^ v
 }
 
@@ -120,45 +156,65 @@ $ `sed.nu`
 
 // The dispatcher. `argv` is the applet's own argument vector: argv[0]
 // is the applet name, exactly as a directly-executed utility sees it.
-@ __run s name ( Vec String ) argv → i {
+@ bx_run_applet s name ( Vec String ) argv → i {
     ( bx_set_name name )
     ? ( bx_streq name `[` ) { ^ ( ap_test argv ) } {}
     ? ( bx_streq name `arch` ) { ^ ( ap_arch argv ) } {}
+    ? ( bx_streq name `ash` ) { ^ ( ap_sh argv ) } {}
     ? ( bx_streq name `base64` ) { ^ ( ap_base64 argv ) } {}
     ? ( bx_streq name `basename` ) { ^ ( ap_basename argv ) } {}
     ? ( bx_streq name `cat` ) { ^ ( ap_cat argv ) } {}
     ? ( bx_streq name `chmod` ) { ^ ( ap_chmod argv ) } {}
     ? ( bx_streq name `cksum` ) { ^ ( ap_cksum argv ) } {}
     ? ( bx_streq name `clear` ) { ^ ( ap_clear argv ) } {}
+    ? ( bx_streq name `cmp` ) { ^ ( ap_cmp argv ) } {}
+    ? ( bx_streq name `comm` ) { ^ ( ap_comm argv ) } {}
     ? ( bx_streq name `cp` ) { ^ ( ap_cp argv ) } {}
     ? ( bx_streq name `crc32` ) { ^ ( ap_crc32 argv ) } {}
     ? ( bx_streq name `cut` ) { ^ ( ap_cut argv ) } {}
     ? ( bx_streq name `date` ) { ^ ( ap_date argv ) } {}
+    ? ( bx_streq name `dd` ) { ^ ( ap_dd argv ) } {}
+    ? ( bx_streq name `df` ) { ^ ( ap_df argv ) } {}
     ? ( bx_streq name `dirname` ) { ^ ( ap_dirname argv ) } {}
+    ? ( bx_streq name `dos2unix` ) { ^ ( ap_dos2unix argv ) } {}
     ? ( bx_streq name `du` ) { ^ ( ap_du argv ) } {}
     ? ( bx_streq name `echo` ) { ^ ( ap_echo argv ) } {}
     ? ( bx_streq name `egrep` ) { ^ ( ap_grep argv ) } {}
     ? ( bx_streq name `env` ) { ^ ( ap_env argv ) } {}
+    ? ( bx_streq name `expand` ) { ^ ( ap_expand argv ) } {}
     ? ( bx_streq name `expr` ) { ^ ( ap_expr argv ) } {}
+    ? ( bx_streq name `factor` ) { ^ ( ap_factor argv ) } {}
     ? ( bx_streq name `false` ) { ^ 1 } {}
     ? ( bx_streq name `fgrep` ) { ^ ( ap_grep argv ) } {}
     ? ( bx_streq name `find` ) { ^ ( ap_find argv ) } {}
+    ? ( bx_streq name `fold` ) { ^ ( ap_fold argv ) } {}
+    ? ( bx_streq name `free` ) { ^ ( ap_free argv ) } {}
     ? ( bx_streq name `grep` ) { ^ ( ap_grep argv ) } {}
     ? ( bx_streq name `groups` ) { ^ ( ap_groups argv ) } {}
+    ? ( bx_streq name `gunzip` ) { ^ ( ap_gzip argv ) } {}
+    ? ( bx_streq name `gzip` ) { ^ ( ap_gzip argv ) } {}
     ? ( bx_streq name `head` ) { ^ ( ap_head argv ) } {}
+    ? ( bx_streq name `hexdump` ) { ^ ( ap_hexdump argv ) } {}
     ? ( bx_streq name `hostname` ) { ^ ( ap_hostname argv ) } {}
     ? ( bx_streq name `id` ) { ^ ( ap_id argv ) } {}
+    ? ( bx_streq name `kill` ) { ^ ( ap_kill argv ) } {}
+    ? ( bx_streq name `killall` ) { ^ ( ap_killall argv ) } {}
     ? ( bx_streq name `ln` ) { ^ ( ap_ln argv ) } {}
     ? ( bx_streq name `logname` ) { ^ ( ap_logname argv ) } {}
     ? ( bx_streq name `ls` ) { ^ ( ap_ls argv ) } {}
     ? ( bx_streq name `md5sum` ) { ^ ( ap_md5sum argv ) } {}
     ? ( bx_streq name `mkdir` ) { ^ ( ap_mkdir argv ) } {}
     ? ( bx_streq name `mktemp` ) { ^ ( ap_mktemp argv ) } {}
+    ? ( bx_streq name `mount` ) { ^ ( ap_mount argv ) } {}
     ? ( bx_streq name `mv` ) { ^ ( ap_mv argv ) } {}
     ? ( bx_streq name `nl` ) { ^ ( ap_nl argv ) } {}
     ? ( bx_streq name `nproc` ) { ^ ( ap_nproc argv ) } {}
+    ? ( bx_streq name `od` ) { ^ ( ap_od argv ) } {}
+    ? ( bx_streq name `paste` ) { ^ ( ap_paste argv ) } {}
+    ? ( bx_streq name `pidof` ) { ^ ( ap_pidof argv ) } {}
     ? ( bx_streq name `printenv` ) { ^ ( ap_printenv argv ) } {}
     ? ( bx_streq name `printf` ) { ^ ( ap_printf argv ) } {}
+    ? ( bx_streq name `ps` ) { ^ ( ap_ps argv ) } {}
     ? ( bx_streq name `pwd` ) { ^ ( ap_pwd argv ) } {}
     ? ( bx_streq name `readlink` ) { ^ ( ap_readlink argv ) } {}
     ? ( bx_streq name `realpath` ) { ^ ( ap_realpath argv ) } {}
@@ -167,15 +223,21 @@ $ `sed.nu`
     ? ( bx_streq name `rmdir` ) { ^ ( ap_rmdir argv ) } {}
     ? ( bx_streq name `sed` ) { ^ ( ap_sed argv ) } {}
     ? ( bx_streq name `seq` ) { ^ ( ap_seq argv ) } {}
+    ? ( bx_streq name `sh` ) { ^ ( ap_sh argv ) } {}
     ? ( bx_streq name `sha1sum` ) { ^ ( ap_sha1sum argv ) } {}
     ? ( bx_streq name `sha256sum` ) { ^ ( ap_sha256sum argv ) } {}
     ? ( bx_streq name `sha512sum` ) { ^ ( ap_sha512sum argv ) } {}
+    ? ( bx_streq name `shuf` ) { ^ ( ap_shuf argv ) } {}
     ? ( bx_streq name `sleep` ) { ^ ( ap_sleep argv ) } {}
     ? ( bx_streq name `sort` ) { ^ ( ap_sort argv ) } {}
+    ? ( bx_streq name `split` ) { ^ ( ap_split argv ) } {}
     ? ( bx_streq name `stat` ) { ^ ( ap_stat argv ) } {}
+    ? ( bx_streq name `strings` ) { ^ ( ap_strings argv ) } {}
+    ? ( bx_streq name `sum` ) { ^ ( ap_sum argv ) } {}
     ? ( bx_streq name `sync` ) { ^ ( ap_sync argv ) } {}
     ? ( bx_streq name `tac` ) { ^ ( ap_tac argv ) } {}
     ? ( bx_streq name `tail` ) { ^ ( ap_tail argv ) } {}
+    ? ( bx_streq name `tar` ) { ^ ( ap_tar argv ) } {}
     ? ( bx_streq name `tee` ) { ^ ( ap_tee argv ) } {}
     ? ( bx_streq name `test` ) { ^ ( ap_test argv ) } {}
     ? ( bx_streq name `touch` ) { ^ ( ap_touch argv ) } {}
@@ -184,13 +246,18 @@ $ `sed.nu`
     ? ( bx_streq name `truncate` ) { ^ ( ap_truncate argv ) } {}
     ? ( bx_streq name `tty` ) { ^ ( ap_tty argv ) } {}
     ? ( bx_streq name `uname` ) { ^ ( ap_uname argv ) } {}
+    ? ( bx_streq name `unexpand` ) { ^ ( ap_unexpand argv ) } {}
     ? ( bx_streq name `uniq` ) { ^ ( ap_uniq argv ) } {}
+    ? ( bx_streq name `unix2dos` ) { ^ ( ap_dos2unix argv ) } {}
+    ? ( bx_streq name `uptime` ) { ^ ( ap_uptime argv ) } {}
     ? ( bx_streq name `usleep` ) { ^ ( ap_usleep argv ) } {}
     ? ( bx_streq name `wc` ) { ^ ( ap_wc argv ) } {}
     ? ( bx_streq name `which` ) { ^ ( ap_which argv ) } {}
     ? ( bx_streq name `whoami` ) { ^ ( ap_whoami argv ) } {}
     ? ( bx_streq name `xargs` ) { ^ ( ap_xargs argv ) } {}
+    ? ( bx_streq name `xxd` ) { ^ ( ap_xxd argv ) } {}
     ? ( bx_streq name `yes` ) { ^ ( ap_yes argv ) } {}
+    ? ( bx_streq name `zcat` ) { ^ ( ap_gzip argv ) } {}
     ( bx_set_name `nurlbox` )
     ( bx_err_at name `applet not found` )
     ^ 127
@@ -222,7 +289,7 @@ $ `sed.nu`
 // implement is the MULTIPLEXER — that is how `nurlbox` behaves when the
 // unikernel's loader calls it `main`, and how a copy named anything else
 // still works.
-@ __is_applet s name → b {
+@ bx_is_applet s name → b {
     : ( Vec String ) names ( __applet_names )
     : i n ( vec_len [String] names )
     : ~ b found F
@@ -239,39 +306,130 @@ $ `sed.nu`
     : ( Vec String ) argv ( env_args_list )
     : String me ( __invoked_as argv )
     : ~ i rc 0
-    ? ! ( __is_applet ( string_data me ) ) {
+    ? ! ( bx_is_applet ( string_data me ) ) {
         ? < ( vec_len [String] argv ) 2 {
             ( __list_applets )
             = rc 0
         } {
             : s sub ( bx_at argv 1 )
-            ? | ( bx_streq sub `--help` ) ( bx_streq sub `-h` ) {
-                ( __list_applets )
-                = rc 0
+            ? ( bx_streq sub `--install` ) {
+                : ~ b symlink F
+                : ~ s dir ``
+                : ~ i k 2
+                ~ < k ( vec_len [String] argv ) {
+                    : s a ( bx_at argv k )
+                    ? ( bx_streq a `-s` ) { = symlink T } { = dir a }
+                    = k + k 1
+                }
+                ? == ( nurl_str_len dir ) 0 {
+                    // No directory given: next to the binary itself,
+                    // which is the only place we can name without
+                    // guessing at the caller's $PATH.
+                    : String me2 ( path_dirname ( bx_at argv 0 ) )
+                    = rc ( __install ( string_data me2 ) symlink )
+                    ( string_free me2 )
+                } { = rc ( __install dir symlink ) }
             } {
-                ? | ( bx_streq sub `--version` ) ( bx_streq sub `-V` ) {
-                    ( nurl_print `nurlbox ` )
-                    ( nurl_print NURLBOX_VERSION )
-                    ( nurl_print `\n` )
+                ? | ( bx_streq sub `--help` ) ( bx_streq sub `-h` ) {
+                    ( __list_applets )
                     = rc 0
                 } {
-                    // shift: the applet sees argv[0] = its own name
-                    : ( Vec String ) sub_argv ( vec_new [String] )
-                    : i n ( vec_len [String] argv )
-                    : ~ i i 1
-                    ~ < i n {
-                        ( vec_push [String] sub_argv ( string_from ( bx_at argv i ) ) )
-                        = i + i 1
+                    ? | ( bx_streq sub `--version` ) ( bx_streq sub `-V` ) {
+                        ( nurl_print `nurlbox ` )
+                        ( nurl_print NURLBOX_VERSION )
+                        ( nurl_print `\n` )
+                        = rc 0
+                    } {
+                        // shift: the applet sees argv[0] = its own name
+                        : ( Vec String ) sub_argv ( vec_new [String] )
+                        : i n ( vec_len [String] argv )
+                        : ~ i i 1
+                        ~ < i n {
+                            ( vec_push [String] sub_argv ( string_from ( bx_at argv i ) ) )
+                            = i + i 1
+                        }
+                        = rc ( bx_run_applet sub sub_argv )
+                        ( vec_free_with [String] sub_argv \ String x → v { ( string_free x ) } )
                     }
-                    = rc ( __run sub sub_argv )
-                    ( vec_free_with [String] sub_argv \ String x → v { ( string_free x ) } )
                 }
             }
         }
     } {
-        = rc ( __run ( string_data me ) argv )
+        = rc ( bx_run_applet ( string_data me ) argv )
     }
     ( string_free me )
     ( vec_free_with [String] argv \ String x → v { ( string_free x ) } )
+    ^ rc
+}
+
+// `nurlbox --install [-s] [DIR]` — one entry per applet pointing back
+// at this binary, which is how a single file becomes a userland.
+//
+// Hard links by default and symlinks with -s, the same split busybox
+// makes: a hard link costs nothing and survives the original being
+// moved, a symlink crosses filesystems. An entry that already exists is
+// left alone and reported, because silently replacing a system `cat` is
+// not a thing a tool should do without being asked twice.
+//
+// Kept at the end of the file, below the generated applet table, so a
+// regeneration of that table cannot take it with it.
+@ __install s dir b symlink → i {
+    : ( Vec String ) argv0 ( env_args_list )
+    : String self ( string_new )
+    : Path me ( path_new ( bx_at argv0 0 ) )
+    ?? ( path_canonical me ) {
+        T c → {
+            ( string_push_str self ( path_str c ) )
+            ( path_free c )
+        }
+        F _ → { ( string_push_str self ( bx_at argv0 0 ) ) }
+    }
+    ( path_free me )
+    ( vec_free_with [String] argv0 \ String x → v { ( string_free x ) } )
+    : ( Vec String ) names ( __applet_names )
+    : i n ( vec_len [String] names )
+    : ~ i rc 0
+    : ~ i made 0
+    : ~ i i 0
+    ~ < i n {
+        : String target ( path_join dir ( bx_at names i ) )
+        : ~ b exists F
+        ?? ( fs_lstat ( string_data target ) ) {
+            T _ → { = exists T }
+            F _ → {}
+        }
+        ? exists {
+            ( nurl_eprint `nurlbox: ` )
+            ( nurl_eprint ( string_data target ) )
+            ( nurl_eprint `: exists, left alone\n` )
+        } {
+            : ~ b ok T
+            ? symlink {
+                ?? ( fs_symlink ( string_data self ) ( string_data target ) ) {
+                    T _ → {}
+                    F e → {
+                        ( bx_err_at ( string_data target ) ( bx_ioerr e ) )
+                        = ok F
+                    }
+                }
+            } {
+                : i32 lr ( link ( string_data self ) ( string_data target ) )
+                ? != # i lr 0 {
+                    ( bx_err_at ( string_data target ) ( bx_ioerr ( _io_err_of_kind ( errno_kind ) ) ) )
+                    = ok F
+                } {}
+            }
+            ? ok { = made + made 1 } { = rc 1 }
+        }
+        ( string_free target )
+        = i + i 1
+    }
+    ( nurl_print `nurlbox: ` )
+    ( nurl_print ( nurl_str_int made ) )
+    ( nurl_print ` applets installed into ` )
+    ( nurl_print dir )
+    ( nurl_print `\n` )
+    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
+    ( string_free self )
     ^ rc
 }

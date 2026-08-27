@@ -27,6 +27,8 @@ join a b: a/b
 join a/ /b: /b
 join . b: ./b
 join a /abs: /abs
+join / d: /d
+join /a/ b: /a/b
 normalize a/./b: a/b
 normalize a/b/../c: a/c
 normalize /a/../../b: /b

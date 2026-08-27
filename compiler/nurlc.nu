@@ -4714,7 +4714,7 @@
 // real: released compilers freed the temp handed to vec_push [s].
 @ mem_consumer_copy_safe s fname → b {
     ( str_contains_word
-    `nurl_sym_def nurl_sym_set nurl_sym_append nurl_sym_get nurl_sym_get2 nurl_sym_len nurl_sym_len2 nurl_set_last_type nurl_print nurl_println nurl_eprintln puts nurl_str_len nurl_str_to_int nurl_str_to_float nurl_str_find nurl_str_starts nurl_str_ends seq str_contains_word str_word_index count_words nurl_str_cat nurl_str_cat3 nurl_str_cat4 nurl_str_slice nurl_str_int nurl_read_file nurl_lex_new nurl_file_exists emit die die_stmt warn bck_esc_warn bck_emit_error nurl_str_eq nurl_str_get int_width ty_is_unsigned mem_is_slice_ty is_int_ty nurl_llty llvm_type ty_to_unsigned mangle_type demangle_type str_first_word str_skip_word compound_field_type convert_closure_arg`
+    `nurl_sym_def nurl_sym_set nurl_sym_append nurl_sym_get nurl_sym_get2 nurl_sym_len nurl_sym_len2 nurl_set_last_type nurl_print nurl_println nurl_eprint nurl_eprintln nurl_print_str nurl_print_bytes puts nurl_str_len nurl_str_to_int nurl_str_to_float nurl_str_find nurl_str_starts nurl_str_ends seq str_contains_word str_word_index count_words nurl_str_cat nurl_str_cat3 nurl_str_cat4 nurl_str_slice nurl_str_int nurl_read_file nurl_lex_new nurl_file_exists emit die die_stmt warn bck_esc_warn bck_emit_error nurl_str_eq nurl_str_get int_width ty_is_unsigned mem_is_slice_ty is_int_ty nurl_llty llvm_type ty_to_unsigned mangle_type demangle_type str_first_word str_skip_word compound_field_type convert_closure_arg string_from string_push_str string_starts_with string_ends_with string_contains string_index_of path_new path_join path_basename path_dirname path_extension path_normalize path_is_absolute fs_match fs_match_glob`
     fname )
 }
 
@@ -8625,11 +8625,20 @@
         //     for THIS argument position), or
         //   - a hand-audited copy/read-only consumer
         //     (mem_consumer_copy_safe) — the diagnostic printers (they
-        //     only read the message) and the type/string INSPECTORS,
-        //     which either answer with a scalar or build a fresh string
-        //     and so can neither retain the pointer nor hand back an
-        //     alias of it. Both families are defined below their call
-        //     sites, so they have no body summary to trust.
+        //     only read the message), the type/string INSPECTORS, which
+        //     either answer with a scalar or build a fresh string, and
+        //     the stdlib's COPYING constructors (`string_from`,
+        //     `path_join`, …), which memcpy their argument's bytes into
+        //     a buffer of their own. None of them can retain the pointer
+        //     or hand back an alias of it. Both families are defined
+        //     below their call sites, so they have no body summary to
+        //     trust.
+        //
+        //     `string_from_take` is deliberately NOT on that list, and
+        //     is the reason the list is hand-audited rather than derived
+        //     from the signature: it has `string_from`'s shape exactly
+        //     and ADOPTS the buffer instead of copying it. The two
+        //     cannot be told apart from outside their bodies.
         // Everything else keeps the temp alive: into a storing callee
         // (vec_push) the temp's ownership has MOVED — freeing it left
         // the container holding freed memory in released compilers —

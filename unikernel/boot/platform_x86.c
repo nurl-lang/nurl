@@ -995,9 +995,19 @@ int *__errno_location(void) { return &nl_errno_slot; }
  * the console, where stdout and stderr are the same wire. Until there
  * was a disk this function had no reason to look at `fd` at all — the
  * only writable thing on the machine was the serial port. */
+int vfs_std_of(int fd);
+int vfs_is_std_target(int fd);
+int vfs_close_saved(int fd);
+
 long long write(int fd, const void *buf, unsigned long n) {
     const char *p = (const char *)buf;
     if (fs_is_file_fd(fd)) return (long long)fs_write_fd(fd, buf, n);
+    /* A standard descriptor may have been pointed at a file — that is
+     * what `cmd > file` is, and vfs.c owns the table that says so. */
+    if (fd >= 0 && fd <= 2) {
+        int t = vfs_std_of(fd);
+        if (t >= 0) return (long long)fs_write_fd(t, buf, n);
+    }
     for (unsigned long i = 0; i < n; i++) pf_putc(p[i]);
     return (long long)n;
 }
@@ -1013,6 +1023,10 @@ long long write(int fd, const void *buf, unsigned long n) {
  * opened. */
 long long read(int fd, void *buf, unsigned long n) {
     if (fs_is_file_fd(fd)) return (long long)fs_read_fd(fd, buf, n);
+    if (fd >= 0 && fd <= 2) {
+        int t = vfs_std_of(fd);
+        if (t >= 0) return (long long)fs_read_fd(t, buf, n);
+    }
     (void)buf; (void)n;
     return 0;
 }
@@ -1020,6 +1034,11 @@ long long read(int fd, void *buf, unsigned long n) {
 int nl_open(const char *path, int flags, int mode);
 int open(const char *p, int fl, int mode) { return nl_open(p, fl, mode); }
 int close(int fd) {
+    if (vfs_close_saved(fd)) return 0;
+    /* A descriptor standing in for a standard one stays open: the shell
+     * closes it right after `dup2`, and closing it for real there would
+     * make the redirect it just installed point at nothing. */
+    if (vfs_is_std_target(fd)) return 0;
     if (fs_is_file_fd(fd)) return fs_close_fd(fd);
     return 0;
 }

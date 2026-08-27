@@ -105,6 +105,8 @@ $ `stdlib/core/string.nu`
     ( test_join `a/` `/b` )
     ( test_join `.` `b` )
     ( test_join `a` `/abs` )
+    ( test_join `/` `d` )
+    ( test_join `/a/` `b` )
 
     ( test_normalize `a/./b` `a/b` )
     ( test_normalize `a/b/../c` `a/c` )
