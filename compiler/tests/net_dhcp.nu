@@ -115,6 +115,14 @@ $ `stdlib/net/dhcp.nu`
     ( pb `offer accepted: ` ( dhcp_handle c om 13000 ) )
     ( pb `now requesting: ` == . c state ( dhcp_state_requesting ) )
     ( pb `not bound yet: ` ! ( dhcp_bound c ) )
+    // The REQUEST is the answer to an OFFER already in hand, so it goes
+    // out on the next turn — the retransmit timer starts after we have
+    // asked, not before. Charging it a backoff here is invisible to a
+    // state-machine assertion (the client still binds, still with the
+    // right address) and costs a full `dhcp_retry_base_ms` of every
+    // boot; it did, for four seconds, until this line existed.
+    ( pb `request goes out at once: ` == ( dhcp_tick c 13000 ) ( dhcp_msg_request ) )
+    ( pb `then quiet until the timer: ` == ( dhcp_tick c 16999 ) 0 )
     ( pb `request retransmits: ` == ( dhcp_tick c 17000 ) ( dhcp_msg_request ) )
 
     // ── ACK → BOUND ──────────────────────────────────────────────

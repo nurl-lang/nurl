@@ -321,8 +321,22 @@ $ `stdlib/net/udp4.nu`
         ^ ( dhcp_msg_request )
     } {}
     ? < now . c next_send_ms { ^ 0 } {}
-    // Retransmit whatever this state sends.
-    = . c backoff_ms ? >= * . c backoff_ms 2 ( dhcp_retry_max_ms ) ( dhcp_retry_max_ms ) * . c backoff_ms 2
+    // First transmission of a state, or a retransmission of one.
+    //
+    // `sends == 0` means nothing has gone out for the state we are in,
+    // which happens when the state was entered by a REPLY rather than
+    // by this function: `dhcp_handle` moves SELECTING → REQUESTING on
+    // an OFFER and leaves the sending to us. That first REQUEST is not
+    // a retransmission and must not be charged a backoff — RFC 2131
+    // sends it immediately and starts the timer afterwards. Doubling
+    // here instead put a full `dhcp_retry_base_ms` between the OFFER
+    // and the REQUEST, which is four seconds of a boot spent waiting
+    // for a server that had already answered.
+    ? == . c sends 0 {
+        = . c backoff_ms ( dhcp_retry_base_ms )
+    } {
+        = . c backoff_ms ? >= * . c backoff_ms 2 ( dhcp_retry_max_ms ) ( dhcp_retry_max_ms ) * . c backoff_ms 2
+    }
     = . c next_send_ms + now . c backoff_ms
     = . c sends + . c sends 1
     ? == . c state ( dhcp_state_selecting ) { ^ ( dhcp_msg_discover ) } {}
@@ -356,8 +370,11 @@ $ `stdlib/net/udp4.nu`
         = . c server_id . m server_id
         = . c state ( dhcp_state_requesting )
         = . c backoff_ms ( dhcp_retry_base_ms )
-        = . c next_send_ms + now ( dhcp_retry_base_ms )
-        = . c sends 1
+        // Send the REQUEST on the next turn, not one backoff from now.
+        // The offer is in hand; the timer exists for the case where the
+        // server does not answer, and it starts once we have asked.
+        = . c next_send_ms now
+        = . c sends 0
         ^ T
     } {}
     ? == . m msg_type ( dhcp_msg_ack ) {

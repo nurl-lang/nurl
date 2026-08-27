@@ -21,10 +21,24 @@
  */
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 extern const unsigned long nurl__bare_sizeof_mutex;
 extern const unsigned long nurl__bare_sizeof_cond;
 extern const unsigned long nurl__bare_sizeof_coro;
+
+/* Same reason as sched_gate.c: runtime_bare frees an owned closure
+ * environment through the NURL allocator, and this gate links the bare
+ * runtime without runtime_core.c. Nothing here spawns an owned fiber,
+ * so the definition exists to satisfy the link and aborts if that ever
+ * stops being true. */
+void nurl_free(char *p);
+void nurl_free(char *p) {
+    (void)p;
+    fprintf(stderr, "pthread_layout: nurl_free reached — this gate links "
+                    "no allocator\n");
+    abort();
+}
 
 int main(void) {
     int bad = 0;

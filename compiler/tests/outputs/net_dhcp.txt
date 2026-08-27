@@ -25,6 +25,8 @@ offer server id: YES
 offer accepted: YES
 now requesting: YES
 not bound yet: YES
+request goes out at once: YES
+then quiet until the timer: YES
 request retransmits: YES
 ack accepted: YES
 bound: YES

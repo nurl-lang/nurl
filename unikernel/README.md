@@ -36,6 +36,7 @@ Decided by coupling, not convenience:
 | `run_qemu_arm64.sh` · `run_qemu_arm64_tests.sh` | the AArch64 twins of those two |
 | `compile_nu.sh` | compile one program, pulling in `net/sockets.nu` when (and only when) it calls the socket ABI |
 | `demos/` | the programs that only make sense in the guest: devices, DHCP, a filesystem, a server, an MCP endpoint, TLS — and the two that are about failure, `fault.nu` and `soak.nu` |
+| `k8s/` | the guest as an ordinary Kubernetes workload: an HTTP server, a container that carries a hypervisor and the image, and the manifests — unprivileged, no `/dev/kvm`, [its own README](k8s/README.md) |
 | `tests/` | the unit gates — differentials against glibc for strings, float formatting and libm; two allocator fuzzers; the scheduler's schedule and its deadlock detector |
 | `build_nolibc.sh` | build one `.nu` program against nolibc with `-nostdlib` |
 | `run_nolibc_tests.sh` | build and run the **whole corpus** that way |

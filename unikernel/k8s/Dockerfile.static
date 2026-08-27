@@ -1,0 +1,12 @@
+# unikernel/k8s/Dockerfile.static — the whole image is one file.
+#
+# No base layer, no shell, no package manager, no entrypoint script:
+# a statically linked binary and the metadata that names it. There is
+# nothing in here to shell into, and nothing to keep up to date.
+#
+# Build: unikernel/k8s/build_static_image.sh
+FROM scratch
+COPY server /server
+USER 65532:65532
+EXPOSE 8080
+ENTRYPOINT ["/server"]

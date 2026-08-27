@@ -340,6 +340,33 @@ $ `stdlib/net/pktbuf.nu`
 // talk to itself over loopback at all, and nothing anywhere reported a
 // drop, because a TCP segment failing its checksum is not a frame-level
 // drop. Zero means "whatever this interface's address is".
+// Resolve a next hop before anything needs it. Answers T when the MAC
+// is already known, F when a request has just gone out (or one is
+// still in flight) and the caller should ask again.
+//
+// `stack_tx_ip4` already does this on the way past — but by then a
+// datagram exists that will not be sent, because on a miss the ARP
+// request goes out in its place and the retry is the caller's. For a
+// server the first such datagram is the SYN-ACK of the first
+// connection ever accepted, and the caller that retries it is TCP's
+// retransmit timer: one second, paid by a machine that had been
+// listening for forty milliseconds. Priming a hop while nobody is
+// waiting moves that round trip somewhere it costs nothing.
+@ stack_arp_prime * NetStack st i dst_ip i now * PktBuf out → b {
+    : i hop ( __next_hop st dst_ip )
+    ? || ( ipv4_is_broadcast hop ) ( ipv4_is_multicast hop ) { ^ T } {}
+    : ?i found ( arp_cache_lookup . st arp hop now )
+    : ~ b known F
+    ?? found { T _m → { = known T } F → {} }
+    ? known { ^ T } {}
+    ? ( arp_cache_should_request . st arp hop now ) {
+        ( arp_push_request . out bytes . st our_mac . st our_ip hop )
+        ( pktbuf_mark out )
+        = . st tx_frames + . st tx_frames 1
+    } {}
+    ^ F
+}
+
 @ stack_tx_ip4 * NetStack st i src_ip i dst_ip i proto ( Vec u ) dg i dg_off i dg_len i now * PktBuf out → TxResult {
     : i src ? != src_ip 0 src_ip . st our_ip
     ? == src 0 { ^ @ TxResult { ( tx_no_address ) 0 } } {}

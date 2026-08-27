@@ -246,6 +246,60 @@ $ `stdlib/net/dnsclient.nu`
     : i _f ( nurl_fiber_spawn fnp env )
 }
 
+// Put every frame the stack built onto the wire, then empty the buffer.
+@ __flush_frames * PktBuf out → v {
+    : i n ( pktbuf_count out )
+    : ~ i k 0
+    ~ < k n {
+        : ( Vec u ) f ( vec_new [u] )
+        ( pktbuf_copy_to f out k )
+        : i _t ( netdev_tx # s ( vec_data [u] f ) ( vec_len [u] f ) )
+        ( vec_free [u] f )
+        = k + k 1
+    }
+    ( pktbuf_clear out )
+}
+
+// Ask for the gateway's MAC while the boot is still in `main`.
+//
+// The machine's first outbound frame to an unresolved next hop is not
+// the frame — it is an ARP request, and the frame is the caller's to
+// send again. For a server the first one is the SYN-ACK of the first
+// connection it ever accepts, and the caller that sends it again is
+// TCP's retransmit timer: the first client of a freshly booted machine
+// waited a full second to be answered by a machine that had been
+// listening for forty milliseconds. Off-subnet clients — which through
+// a hypervisor's user-mode network is all of them — all route via the
+// gateway, so one resolution covers them.
+//
+// Bounded and best-effort: a network with no gateway, or one that does
+// not answer, costs the deadline once and nothing afterwards. The
+// address still works; the first client just pays the second again.
+@ __arp_warm * Shim sh → v {
+    : *NetStack net . sh net
+    : i gw . net gateway
+    ? == gw 0 { ^ v } {}
+    : *PktBuf out ( pktbuf_new )
+    : i deadline + ( __ms ) 250
+    : ~ b done F
+    ~ && ! done < ( __ms ) deadline {
+        = done ( stack_arp_prime net gw ( __ms ) out )
+        ? ! done {
+            ( __flush_frames out )
+            : ( Vec u ) in ( vec_with_cap [u] 2048 )
+            ( vec_set_len [u] in 2048 )
+            : i len ( netdev_rx # s ( vec_data [u] in ) 2048 )
+            ? > len 0 {
+                ( vec_set_len [u] in len )
+                : RxResult _r ( stack_rx net in ( __ms ) out )
+                ( __flush_frames out )
+            } {}
+            ( vec_free [u] in )
+        } {}
+    }
+    ( pktbuf_free out )
+}
+
 // Run the DHCP client — the same state machine `net/dhcp.nu` covers
 // with 62 host assertions — until it holds a lease or the deadline
 // passes. Bounded by the CLOCK, not by a round count: the retransmit
@@ -266,6 +320,7 @@ $ `stdlib/net/dnsclient.nu`
         // the shim: name resolution is a socket-layer service here,
         // exactly where getaddrinfo keeps it on a hosted machine.
         = . sh dns_ip . c dns
+        ( __arp_warm sh )
     } {}
     ( dhcp_client_free c )
 }
@@ -281,16 +336,7 @@ $ `stdlib/net/dnsclient.nu`
         : i _n ( stack_tx_udp_broadcast . sh net ( dhcp_src_ip c ) ( dhcp_client_port )
         ( dhcp_server_port ) ( dhcp_dest_ip c ) msg 0 ( vec_len [u] msg ) out )
         ( vec_free [u] msg )
-        : i n ( pktbuf_count out )
-        : ~ i k 0
-        ~ < k n {
-            : ( Vec u ) f ( vec_new [u] )
-            ( pktbuf_copy_to f out k )
-            : i _t ( netdev_tx # s ( vec_data [u] f ) ( vec_len [u] f ) )
-            ( vec_free [u] f )
-            = k + k 1
-        }
-        ( pktbuf_clear out )
+        ( __flush_frames out )
     } {}
     : ~ b more T
     ~ more {
