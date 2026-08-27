@@ -1,0 +1,93 @@
+# unikernel/k8s/kvm-device-plugin.yaml — so that /dev/kvm can be
+# REQUESTED rather than taken.
+#
+# `deploy.yaml` deliberately does not ask for KVM: asking means either a
+# privileged container with a hostPath onto /dev/kvm — which hands that
+# pod the whole node — or a device plugin. This is the device plugin.
+# After it, a workload adds one resource request and stays as
+# unprivileged as it was, and the SCHEDULER knows which nodes have the
+# device instead of a nodeSelector somebody has to maintain.
+#
+# Apply, label the nodes that actually have /dev/kvm, then ask for it:
+#
+#   kubectl apply -f unikernel/k8s/kvm-device-plugin.yaml
+#   kubectl label node <node> devic.es/kvm=true
+#   kubectl -n nurl-unikernel patch deploy nurl-unikernel --type strategic -p '
+#     {"spec":{"template":{"spec":{
+#        "securityContext":{"supplementalGroups":[<gid of the kvm group on that node>]},
+#        "containers":[{"name":"qemu","resources":{"limits":{"devic.es/kvm":"1"}}}]}}}}'
+#
+# TWO THINGS THAT WILL BITE:
+#
+#   * The device arrives in the container with the HOST's ownership,
+#     typically `root:kvm 0660`. A container that runs as a non-root
+#     user is not in that group and gets EACCES — and QEMU's fallback is
+#     to emulate, so the pod comes up, serves correctly, and is simply
+#     slower. `supplementalGroups` is the fix, and the gid is a property
+#     of the node (`getent group kvm`), not of this manifest.
+#
+#   * Requesting the resource collapses the deployment onto the nodes
+#     that have it. On a cluster where one node has vmx and the rest do
+#     not, that is a trade of availability for speed, made silently by
+#     adding a resource request. Say it out loud or leave KVM alone.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: device-plugins
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kvm-device-plugin
+  namespace: device-plugins
+  labels:
+    app: kvm-device-plugin
+spec:
+  selector:
+    matchLabels:
+      app: kvm-device-plugin
+  template:
+    metadata:
+      labels:
+        app: kvm-device-plugin
+    spec:
+      # Only where the device exists. The label is set by hand because
+      # the fact it records — this node's CPU has vmx/svm and the kernel
+      # exposed /dev/kvm — is not something a plugin can advertise
+      # before it has been scheduled onto the node.
+      nodeSelector:
+        devic.es/kvm: "true"
+      priorityClassName: system-node-critical
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: plugin
+          image: ghcr.io/squat/generic-device-plugin:latest
+          args:
+            - --device
+            - |
+              {"name": "kvm", "groups": [{"count": 8, "paths": [{"path": "/dev/kvm"}]}]}
+          # count: 8 — /dev/kvm is not consumed by being opened, so the
+          # number is a policy about how many VM-shaped pods this node
+          # should run at once, not a property of the hardware.
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: 100m, memory: 64Mi }
+          ports:
+            - containerPort: 8080
+              name: http
+          # The one privileged thing in this directory, and the reason
+          # everything else here is not: a node-level component so that
+          # workloads can stay ordinary.
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+            - name: dev
+              mountPath: /dev
+      volumes:
+        - name: device-plugin
+          hostPath: { path: /var/lib/kubelet/device-plugins }
+        - name: dev
+          hostPath: { path: /dev }
