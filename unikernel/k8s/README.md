@@ -107,9 +107,11 @@ seccomp, no privileged flag, no `/dev/kvm`, no `runtimeClass`. It is as
 unprivileged as a static file server, and what it serves is a machine.
 
 `/dev/kvm` is used *if the node hands it over* — `entrypoint.sh` checks
-and falls back to TCG — but the manifest does not ask for it, because
-asking means either a privileged container or a device plugin, and the
-measurements below are the ones without it.
+and falls back to TCG — but `deploy.yaml` does not ask for it, because
+asking means either a privileged container or a device plugin. The
+measurements below are the ones without it;
+[**giving the guest KVM**](#optional-giving-the-guest-kvm) is a section
+of its own, with the numbers it buys and the two things that bite.
 
 The one hard constraint is `nodeSelector: kubernetes.io/arch: amd64`.
 PVH is an x86 boot protocol; on AArch64 the same build emits a flat
@@ -244,3 +246,58 @@ the static manifest) and the program repeats it.
   longer runs in production — and the isolation boundary, which is the
   only reason left to pay for a hypervisor once a workload is
   stateless.
+
+## Optional: giving the guest KVM
+
+`kvm-device-plugin.yaml` runs a device plugin on the nodes that have
+`/dev/kvm`, after which a workload asks for `devic.es/kvm: 1` and stays
+exactly as unprivileged as it was — no privileged flag, no hostPath, no
+capability added. The scheduler, rather than a hand-maintained
+nodeSelector, knows where the device is.
+
+```sh
+kubectl apply -f unikernel/k8s/kvm-device-plugin.yaml
+kubectl label node <node> devic.es/kvm=true
+kubectl -n nurl-unikernel patch deploy nurl-unikernel --type strategic -p '
+  {"spec":{"template":{"spec":{
+     "securityContext":{"supplementalGroups":[993]},
+     "containers":[{"name":"qemu","resources":{"limits":{"devic.es/kvm":"1"}}}]}}}}'
+```
+
+`993` is the gid of the `kvm` group **on that node** (`getent group
+kvm`), not a constant. The device arrives in the container with the
+host's ownership — `root:kvm 0660` — and a container running as a
+non-root user is not in that group. What makes this worth spelling out
+is the failure mode: QEMU's answer to `EACCES` on `/dev/kvm` is to
+emulate instead, so the pod comes up, passes its probes, serves correct
+answers, and is simply slower. `entrypoint.sh` logs `accel=kvm` or
+`accel=tcg` on its first line; that line is the check.
+
+### What it buys, measured
+
+Same image, same node, same pod spec, one with the device and one
+without. Latency and CPU are 2000 sequential keep-alive requests to
+`/healthz`; the CPU figure is the container's own cgroup accounting
+(`cpu.stat usage_usec`), not a sampled estimate. Idle is 30 s with only
+the kubelet's probes.
+
+| | KVM | TCG |
+|---|---|---|
+| boot: `entrypoint` → listening | 35–45 ms | 53–97 ms |
+| wall time per request | 1.15–1.17 ms | 1.48–1.82 ms |
+| **container CPU per request** | **276–306 µs** | **940–991 µs** |
+| idle | 5 millicores | 22 millicores |
+
+The wall-clock difference is the least interesting number here — it is
+mostly client and network path. The CPU is the one that decides whether
+this is a resident or a demo: **~3.3× less CPU per request and ~4× less
+at idle**, on a workload whose guest is halting between poller ticks
+either way.
+
+### The trade nobody announces
+
+Requesting the resource collapses the deployment onto the nodes that
+have it. On a cluster where one node has `vmx` and the others do not,
+adding one line to a manifest converts a two-node deployment into a
+single-node one — availability traded for speed, silently, unless
+somebody says so. This section is that somebody.

@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`unikernel/k8s/kvm-device-plugin.yaml`** — a device plugin so the
+  guest can be given `/dev/kvm` without giving its pod the node. A
+  workload adds `devic.es/kvm: 1` to its limits and stays exactly as
+  unprivileged as it was; the scheduler, not a hand-maintained
+  nodeSelector, knows which nodes have the device.
+
+  Measured on one node, same image and same pod spec with and without
+  it — 2000 sequential requests, CPU read from the container's own
+  cgroup rather than sampled: **276–306 µs of CPU per request against
+  940–991 µs**, idle 5 millicores against 22, boot 35–45 ms against
+  53–97 ms. The wall-clock difference (1.15 ms against 1.48–1.82 ms) is
+  the least interesting number of the set.
+
+  Two things the README says out loud because both fail quietly. The
+  device arrives owned by `root:kvm 0660`, so a container running as a
+  non-root user needs `supplementalGroups` with that node's gid — and
+  without it QEMU simply emulates: the pod comes up, passes its probes,
+  serves correct answers, and is slower. And requesting the resource
+  collapses a deployment onto the nodes that have it, trading
+  availability for speed in a one-line diff.
+
 - **The machine learns who is talking to it** — `stack_arp_prime` in
   [PR #1018](https://github.com/nurl-lang/nurl/pull/1018) resolved the
   gateway before anyone needed it, which covers every peer that arrives
