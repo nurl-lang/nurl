@@ -83,11 +83,17 @@ static const char *fs_norm(const char *p) {
     return p;
 }
 
+static int fs_norm_dir(const char *path, char *out, int cap);
+
 /* Find `name` in the archive. Returns its bytes and size, or 0. */
 static const unsigned char *fs_lookup(const char *name, fs_size_t *size_out) {
     const unsigned char *p = nurl_initfs_start;
     const unsigned char *end = nurl_initfs_end;
-    const char *want = fs_norm(name);
+    /* Fold `.` / `..` here as well: a program that opens `etc/../etc/x`
+     * gets the same file it would on any other machine. */
+    static char folded[256];
+    const char *want = name;
+    if (fs_norm_dir(name, folded, (int)sizeof folded) >= 0) want = folded;
 
     while (p + 512 <= end) {
         const char *hdr = (const char *)p;
@@ -217,6 +223,195 @@ const unsigned char *ifs_map(int fd, fs_size_t off) {
     FsFile *f = fs_file(fd);
     if (!f || off > f->size) return 0;
     return f->data + off;
+}
+
+/* ── the archive as a DIRECTORY TREE ─────────────────────────────
+ *
+ * A tar is a flat list of paths, but the paths spell a tree, and a
+ * userland needs that tree: `ls`, `find`, `du`, `test -d` and every
+ * `stat` on a directory are otherwise answered "I/O error" on a machine
+ * whose image demonstrably contains the files.
+ *
+ * Nothing is indexed up front — the archive is small, in memory, and
+ * walking it is a few hundred instructions. Directories are derived
+ * from the paths rather than requiring `tar` to have written explicit
+ * '5' entries, because `tar cf` does not always emit them and a
+ * directory that exists only as a prefix of its children is still a
+ * directory.
+ */
+
+/* Copy the header's name field into `out` (bounded, NUL-terminated),
+ * normalised the same way a lookup normalises the caller's path.
+ * Returns the length. */
+static int fs_hdr_name(const char *hdr, char *out, int cap) {
+    const char *n = fs_norm(hdr);
+    int room = 100 - (int)(n - hdr);
+    int i = 0;
+    while (i < room && i < cap - 1 && n[i]) { out[i] = n[i]; i++; }
+    out[i] = 0;
+    return i;
+}
+
+/* Does `name` sit inside directory `dir`, and if so where does its next
+ * component end? `dir` is normalised and may be "" for the root.
+ * Returns the component's length, or -1 when `name` is not under `dir`.
+ * `*is_dir` says whether the component has anything after it. */
+static int fs_child_of(const char *dir, int dirlen, const char *name, int *is_dir) {
+    int i = 0;
+    if (dirlen > 0) {
+        for (i = 0; i < dirlen; i++) if (name[i] != dir[i]) return -1;
+        if (name[dirlen] != '/') return -1;
+        i = dirlen + 1;
+    }
+    if (name[i] == 0) return -1;                 /* the directory itself */
+    {
+        int start = i;
+        while (name[i] && name[i] != '/') i++;
+        *is_dir = (name[i] == '/');
+        return i - start;
+    }
+}
+
+/* Normalise a caller's directory path into `out`: drop the leading
+ * "./" or "/", fold every "." and ".." component, and drop trailing
+ * slashes. Returns the length.
+ *
+ * The folding is not cosmetic. On a hosted system the KERNEL resolves
+ * `etc/.` and `etc/..`; here nothing does, so `ls -a` — which stats
+ * exactly those two names — asked the archive about paths it could
+ * never contain and was told they did not exist. A listing whose first
+ * two entries are reported as neither file nor directory is the shape
+ * of that bug. */
+static int fs_norm_dir(const char *path, char *out, int cap) {
+    const char *p = fs_norm(path);
+    int i = 0, n = 0;
+    for (;;) {
+        int start, seglen;
+        while (p[i] == '/') i++;
+        if (!p[i]) break;
+        start = i;
+        while (p[i] && p[i] != '/') i++;
+        seglen = i - start;
+        if (seglen == 1 && p[start] == '.') continue;
+        if (seglen == 2 && p[start] == '.' && p[start + 1] == '.') {
+            while (n > 0 && out[n - 1] != '/') n--;
+            if (n > 0) n--;                       /* the separator too */
+            out[n] = 0;
+            continue;
+        }
+        if (n > 0) { if (n < cap - 1) out[n++] = '/'; }
+        {
+            int k = 0;
+            while (k < seglen && n < cap - 1) out[n++] = p[start + k++];
+        }
+        out[n] = 0;
+    }
+    return n;
+}
+
+/* 0 = missing, 1 = regular file, 2 = directory. Sets *size for a file. */
+int ifs_kind(const char *path, fs_size_t *size_out) {
+    char dir[256];
+    char name[256];
+    int dirlen = fs_norm_dir(path, dir, sizeof dir);
+    const unsigned char *p = nurl_initfs_start;
+    const unsigned char *end = nurl_initfs_end;
+
+    if (dirlen == 0) return 2;                   /* the archive's root */
+
+    while (p + 512 <= end) {
+        const char *hdr = (const char *)p;
+        fs_size_t size, stride;
+        char type;
+        int nlen, is_dir;
+        if (hdr[0] == 0) break;
+        size = tar_octal(hdr + 124, 12);
+        type = hdr[156];
+        if (size > (fs_size_t)(end - (p + 512))) break;
+        stride = 512 + ((size + 511) & ~(fs_size_t)511);
+        nlen = fs_hdr_name(hdr, name, sizeof name);
+        /* Trailing slash on a '5' entry: `etc/` names `etc`. */
+        while (nlen > 0 && name[nlen - 1] == '/') name[--nlen] = 0;
+        if (nlen == dirlen) {
+            int i = 0;
+            while (i < nlen && name[i] == dir[i]) i++;
+            if (i == nlen) {
+                if (type == '5') return 2;
+                if (size_out) *size_out = size;
+                return 1;
+            }
+        }
+        /* Anything under it makes it a directory, explicit entry or not. */
+        if (fs_child_of(dir, dirlen, name, &is_dir) > 0) return 2;
+        p += stride;
+    }
+    return 0;
+}
+
+/* The `index`-th immediate child of `path`, deduplicated. Returns 1 and
+ * fills `out` / `*is_dir`, or 0 past the end. O(entries) per call, which
+ * an archive of a few dozen files does not notice. */
+int ifs_dirent(const char *path, int index, char *out, int cap, int *is_dir) {
+    char dir[256];
+    char name[256];
+    char seen[256];
+    int dirlen = fs_norm_dir(path, dir, sizeof dir);
+    const unsigned char *p = nurl_initfs_start;
+    const unsigned char *end = nurl_initfs_end;
+    int found = 0;
+
+    while (p + 512 <= end) {
+        const char *hdr = (const char *)p;
+        fs_size_t size, stride;
+        int nlen, child_is_dir = 0, clen;
+        if (hdr[0] == 0) break;
+        size = tar_octal(hdr + 124, 12);
+        if (size > (fs_size_t)(end - (p + 512))) break;
+        stride = 512 + ((size + 511) & ~(fs_size_t)511);
+        nlen = fs_hdr_name(hdr, name, sizeof name);
+        while (nlen > 0 && name[nlen - 1] == '/') name[--nlen] = 0;
+        clen = fs_child_of(dir, dirlen, name, &child_is_dir);
+        if (clen > 0 && clen < (int)sizeof seen) {
+            int start = dirlen == 0 ? 0 : dirlen + 1;
+            int dup = 0;
+            const unsigned char *q = nurl_initfs_start;
+            int i;
+            for (i = 0; i < clen; i++) seen[i] = name[start + i];
+            seen[clen] = 0;
+            /* Emitted already? A directory appears once per file under
+             * it, and a listing must name it once. */
+            while (q < p && q + 512 <= end) {
+                const char *h2 = (const char *)q;
+                char n2[256];
+                fs_size_t s2, st2;
+                int l2, d2 = 0, c2;
+                if (h2[0] == 0) break;
+                s2 = tar_octal(h2 + 124, 12);
+                if (s2 > (fs_size_t)(end - (q + 512))) break;
+                st2 = 512 + ((s2 + 511) & ~(fs_size_t)511);
+                l2 = fs_hdr_name(h2, n2, sizeof n2);
+                while (l2 > 0 && n2[l2 - 1] == '/') n2[--l2] = 0;
+                c2 = fs_child_of(dir, dirlen, n2, &d2);
+                if (c2 == clen) {
+                    int j = 0;
+                    while (j < clen && n2[start + j] == seen[j]) j++;
+                    if (j == clen) { dup = 1; break; }
+                }
+                q += st2;
+            }
+            if (!dup) {
+                if (found == index) {
+                    for (i = 0; i < clen && i < cap - 1; i++) out[i] = seen[i];
+                    out[i] = 0;
+                    if (is_dir) *is_dir = child_is_dir;
+                    return 1;
+                }
+                found++;
+            }
+        }
+        p += stride;
+    }
+    return 0;
 }
 
 /* Is this path a file in the image? `access(2)` is how a program asks —

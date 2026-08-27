@@ -45,6 +45,7 @@ typedef unsigned long vfs_size_t;
 typedef long          vfs_ssize_t;
 
 extern int nl_errno_slot;
+long long nurl_initfs_size(void);
 
 /* ── the archive, one layer down ─────────────────────────────────── */
 
@@ -55,6 +56,8 @@ long long            ifs_lseek(int fd, long long off, int whence);
 int                  ifs_close(int fd);
 const unsigned char *ifs_map(int fd, vfs_size_t off);
 int                  ifs_exists(const char *path);
+int                  ifs_kind(const char *path, vfs_size_t *size_out);
+int                  ifs_dirent(const char *path, int index, char *out, int cap, int *is_dir);
 
 /* ── the disk, when one is linked ────────────────────────────────── */
 
@@ -97,6 +100,57 @@ static int disk_live(void) {
 
 static int disk_is_fd(int fd) { return fd >= VFS_DISK_FD_BASE && fd < VFS_DISK_FD_MAX; }
 
+/* Archive directories get their own range above the disk's: an
+ * `opendir` on the image is a cursor over tar headers, not a file. */
+#define VFS_IFSDIR_FD_BASE 256
+#define VFS_IFSDIR_MAX     8
+
+/* A directory handle over the UNION of the two filesystems: the
+ * archive's entries first, then the disk's, with a name the archive
+ * already supplied skipped so a file that exists in both is listed
+ * once. Reads resolve archive-first (see nl_open), and a listing that
+ * disagreed with that would show a name whose `open` returns different
+ * bytes. */
+typedef struct {
+    char      path[256];
+    int       cursor;      /* next archive entry to emit */
+    int       archive_done;
+    long long disk_h;      /* the disk's own handle, or -1 */
+    int       used;
+} VfsIfsDir;
+
+static VfsIfsDir vfs_ifsdirs[VFS_IFSDIR_MAX];
+
+static int ifsdir_is_fd(int fd) {
+    int i = fd - VFS_IFSDIR_FD_BASE;
+    return i >= 0 && i < VFS_IFSDIR_MAX && vfs_ifsdirs[i].used;
+}
+
+static int ifsdir_open(const char *path, int have_archive) {
+    int i, n;
+    long long h = -1;
+    if (disk_live() && nurl_disk_opendir) {
+        h = nurl_disk_opendir(path);
+        if (h < 0) h = -1;
+    }
+    /* Neither side has it: that is ENOENT, not an empty directory. */
+    if (!have_archive && h < 0) return -1;
+    for (i = 0; i < VFS_IFSDIR_MAX; i++) {
+        if (vfs_ifsdirs[i].used) continue;
+        for (n = 0; path[n] && n < (int)sizeof vfs_ifsdirs[i].path - 1; n++)
+            vfs_ifsdirs[i].path[n] = path[n];
+        vfs_ifsdirs[i].path[n] = 0;
+        vfs_ifsdirs[i].cursor = 0;
+        vfs_ifsdirs[i].archive_done = !have_archive;
+        vfs_ifsdirs[i].disk_h = h;
+        vfs_ifsdirs[i].used = 1;
+        return VFS_IFSDIR_FD_BASE + i;
+    }
+    if (h >= 0 && nurl_disk_closedir) (void)nurl_disk_closedir(h);
+    nl_errno_slot = 24 /* EMFILE */;
+    return -1;
+}
+
 /* A negative errno from NURL becomes -1 plus `errno`, which is the
  * shape every caller of these POSIX names already handles. */
 static int posix_ret(long long rc) {
@@ -128,6 +182,20 @@ int nl_open(const char *path, int flags, int mode) {
     if (!wants_write && !(flags & VFS_O_DIRECTORY)) {
         int fd = ifs_open(path, flags, mode);
         if (fd >= 0) return fd;
+    }
+
+    /* A directory the IMAGE holds is a directory: the archive's paths
+     * spell a tree, and refusing to open it would make `ls` and every
+     * "is this a directory?" predicate wrong about files that are
+     * plainly there. Checked before the disk, for the same reason a
+     * file read is. */
+    if (flags & VFS_O_DIRECTORY) {
+        /* An EMPTY archive has no root to speak of — it must not
+         * shadow the disk's. */
+        int have_arch = ifs_kind(path, 0) == 2 && nurl_initfs_size() > 0;
+        int fd = ifsdir_open(path, have_arch);
+        if (fd >= 0) return fd;
+        if (!disk_live()) { nl_errno_slot = 2 /* ENOENT */; return -1; }
     }
 
     if (disk_live()) {
@@ -178,6 +246,13 @@ long long fs_lseek_fd(int fd, long long off, int whence) {
 }
 
 int fs_close_fd(int fd) {
+    if (ifsdir_is_fd(fd)) {
+        VfsIfsDir *d = &vfs_ifsdirs[fd - VFS_IFSDIR_FD_BASE];
+        if (d->disk_h >= 0 && nurl_disk_closedir) (void)nurl_disk_closedir(d->disk_h);
+        d->disk_h = -1;
+        d->used = 0;
+        return 0;
+    }
     if (ifs_is_fd(fd)) return ifs_close(fd);
     if (disk_is_fd(fd) && nurl_disk_close)
         return posix_ret(nurl_disk_close(fd - VFS_DISK_FD_BASE));
@@ -236,6 +311,10 @@ void *vfs_map_file(int fd, unsigned long len, long off) {
 
 int fs_exists(const char *path) {
     if (!path) return 0;
+    /* A directory exists as surely as a file does; `ifs_exists` only
+     * answers about regular entries, which made `access` say no about
+     * every directory in the image. */
+    if (ifs_kind(path, 0) != 0) return 1;
     if (ifs_exists(path)) return 1;
     if (disk_live() && nurl_disk_exists) return nurl_disk_exists(path) == 1;
     return 0;
@@ -471,10 +550,182 @@ int mkstemp(char *tmpl) {
     return -1;
 }
 
-/* The one syscall this machine answers. Everything else is -ENOSYS,
- * which is what a Linux kernel says about a syscall it does not
- * implement, so every caller already knows the shape. */
+/* ── stat(2) ─────────────────────────────────────────────────────
+ *
+ * `struct stat` on x86_64 is a fixed layout, and runtime_core.c was
+ * compiled against exactly that header — so this fills it by offset
+ * rather than by declaring a struct nobody here can see.
+ *
+ *   0 st_dev   8 st_ino  16 st_nlink  24 st_mode(u32)  28 st_uid(u32)
+ *  32 st_gid   40 st_rdev 48 st_size   56 st_blksize    64 st_blocks
+ *  72 atime    88 mtime  104 ctime                     (144 bytes)
+ *
+ * The timestamps are ZERO, deliberately: the archive is baked at link
+ * time and the FAT layer does not surface a modification time, so `ls
+ * -l` shows the epoch. That is the machine saying "I do not know",
+ * which is a thing a reader can act on; a boot-time value would be a
+ * plausible-looking number that means nothing.
+ */
+#define VFS_S_IFREG 0100000
+#define VFS_S_IFDIR 0040000
+
+static void vfs_put_u32(char *p, unsigned int v) {
+    p[0] = (char)(v & 0xff); p[1] = (char)((v >> 8) & 0xff);
+    p[2] = (char)((v >> 16) & 0xff); p[3] = (char)((v >> 24) & 0xff);
+}
+
+static void vfs_fill_stat(void *st, int is_dir, long long size) {
+    char *p = (char *)st;
+    unsigned long i;
+    for (i = 0; i < 144; i++) p[i] = 0;
+    vfs_put_u64(p, 1);                                   /* st_dev  */
+    vfs_put_u64(p + 8, 1);                               /* st_ino  */
+    vfs_put_u64(p + 16, 1);                              /* st_nlink */
+    /* Read-only for the archive; the disk's FAT has no permission bits
+     * either, so 0555 / 0444 is the truth about both. */
+    vfs_put_u32(p + 24, (unsigned int)(is_dir ? (VFS_S_IFDIR | 0555)
+                                              : (VFS_S_IFREG | 0444)));
+    vfs_put_u64(p + 48, (unsigned long long)size);       /* st_size */
+    vfs_put_u64(p + 56, 512);                            /* st_blksize */
+    vfs_put_u64(p + 64, (unsigned long long)((size + 511) / 512)); /* st_blocks */
+}
+
+static long vfs_stat_path(const char *path, void *st) {
+    vfs_size_t size = 0;
+    int kind;
+    if (!path || !st) return -14 /* EFAULT */;
+    kind = ifs_kind(path, &size);
+    /* The archive's ROOT is a directory only when the archive has
+     * something in it; an empty image must not shadow the disk's `/`. */
+    if (kind == 2 && nurl_initfs_size() == 0) kind = 0;
+    if (kind != 0) {
+        vfs_fill_stat(st, kind == 2, (long long)size);
+        return 0;
+    }
+    if (disk_live() && nurl_disk_exists && nurl_disk_exists(path) == 1) {
+        int is_dir = nurl_disk_is_dir && nurl_disk_is_dir(path) == 1;
+        long long sz = (!is_dir && nurl_disk_stat_size) ? nurl_disk_stat_size(path) : 0;
+        vfs_fill_stat(st, is_dir, sz < 0 ? 0 : sz);
+        return 0;
+    }
+    return -2 /* ENOENT */;
+}
+
+static long vfs_fstat_fd(int fd, void *st) {
+    if (!st) return -14;
+    if (ifsdir_is_fd(fd)) { vfs_fill_stat(st, 1, 0); return 0; }
+    if (ifs_is_fd(fd)) {
+        /* The archive's own size, via the seek the handle already
+         * supports — no second index to keep in step. */
+        long long cur = ifs_lseek(fd, 0, 1);
+        long long end = ifs_lseek(fd, 0, 2);
+        (void)ifs_lseek(fd, cur, 0);
+        vfs_fill_stat(st, 0, end < 0 ? 0 : end);
+        return 0;
+    }
+    if (disk_is_fd(fd) && nurl_disk_size) {
+        long long sz = nurl_disk_size(fd - VFS_DISK_FD_BASE);
+        vfs_fill_stat(st, 0, sz < 0 ? 0 : sz);
+        return 0;
+    }
+    /* stdin/stdout/stderr: a character device, which is what they are. */
+    if (fd >= 0 && fd <= 2) {
+        char *p = (char *)st;
+        unsigned long i;
+        for (i = 0; i < 144; i++) p[i] = 0;
+        vfs_put_u32(p + 24, 020000 | 0620);              /* S_IFCHR */
+        vfs_put_u64(p + 56, 1024);
+        return 0;
+    }
+    return -9 /* EBADF */;
+}
+
+/* getdents64 over the union directory — the same record layout the
+ * disk-only path emits, so nolibc's readdir cannot tell them apart. */
+static int vfs_ifs_has(const char *dir, const char *name) {
+    char probe[256];
+    int i = 0, is_dir = 0;
+    while (ifs_dirent(dir, i, probe, (int)sizeof probe, &is_dir)) {
+        int k = 0;
+        while (probe[k] && probe[k] == name[k]) k++;
+        if (!probe[k] && !name[k]) return 1;
+        i++;
+    }
+    return 0;
+}
+
+static long vfs_ifs_getdents(int fd, void *buf, unsigned long len) {
+    VfsIfsDir *d = &vfs_ifsdirs[fd - VFS_IFSDIR_FD_BASE];
+    char *out = (char *)buf;
+    unsigned long used = 0;
+    char name[256];
+
+    for (;;) {
+        int is_dir = 0;
+        unsigned long reclen, n = 0;
+        int from_disk = 0;
+        if (used + 19 + 1 + 8 > len) break;
+
+        if (!d->archive_done) {
+            if (!ifs_dirent(d->path, d->cursor, name, (int)sizeof name, &is_dir)) {
+                d->archive_done = 1;
+                continue;
+            }
+            d->cursor++;
+        } else if (d->disk_h >= 0 && nurl_disk_readdir_name) {
+            unsigned long room = len - used - 19 - 1;
+            long long got;
+            if (room > sizeof name - 1) room = sizeof name - 1;
+            got = nurl_disk_readdir_name(d->disk_h, name, (long long)room + 1);
+            if (got == 0) break;
+            if (got < 0) {
+                if (used == 0) { nl_errno_slot = 22; return -22; }
+                break;
+            }
+            name[got] = 0;
+            is_dir = nurl_disk_dirent_is_dir && nurl_disk_dirent_is_dir();
+            from_disk = 1;
+            /* Already listed from the archive: read resolution is
+             * archive-first, so the listing must be too. */
+            if (vfs_ifs_has(d->path, name)) continue;
+        } else {
+            break;
+        }
+        (void)from_disk;
+
+        while (name[n]) n++;
+        reclen = (19 + n + 1 + 7) & ~7UL;
+        if (used + reclen > len) break;
+        {
+            char *rec = out + used;
+            unsigned long i;
+            vfs_put_u64(rec, (unsigned long long)(used + 1));
+            vfs_put_u64(rec + 8, (unsigned long long)(used + reclen));
+            vfs_put_u16(rec + 16, (unsigned short)reclen);
+            rec[18] = (char)(is_dir ? VFS_DT_DIR : VFS_DT_REG);
+            for (i = 0; i < n; i++) rec[19 + i] = name[i];
+            for (i = 19 + n; i < reclen; i++) rec[i] = 0;
+        }
+        used += reclen;
+    }
+    return (long)used;
+}
+
+/* The syscalls this machine answers. Everything else is -ENOSYS, which
+ * is what a Linux kernel says about a syscall it does not implement, so
+ * every caller already knows the shape. */
+#define VFS_SYS_STAT   4
+#define VFS_SYS_FSTAT  5
+#define VFS_SYS_LSTAT  6
+
 long vfs_syscall(long n, long a, long b, long c) {
-    if (n == VFS_SYS_GETDENTS64) return vfs_getdents64((int)a, (void *)b, (unsigned long)c);
+    if (n == VFS_SYS_GETDENTS64) {
+        if (ifsdir_is_fd((int)a)) return vfs_ifs_getdents((int)a, (void *)b, (unsigned long)c);
+        return vfs_getdents64((int)a, (void *)b, (unsigned long)c);
+    }
+    /* lstat is stat here: neither the archive nor a FAT volume has
+     * symlinks, so there is nothing for the two to disagree about. */
+    if (n == VFS_SYS_STAT || n == VFS_SYS_LSTAT) return vfs_stat_path((const char *)a, (void *)b);
+    if (n == VFS_SYS_FSTAT) return vfs_fstat_fd((int)a, (void *)b);
     return -38;
 }

@@ -387,6 +387,29 @@ FILE *fopen(const char *path, const char *mode) {
     return f;
 }
 
+/* fdopen(3) — wrap an already-open descriptor in a stream. stdlib's
+ * bufio uses it for stdin, so a guest that could not do this had no
+ * buffered line reader at all. The stream OWNS the fd afterwards, the
+ * same contract fopen's does, so fclose closes it. */
+FILE *fdopen(int fd, const char *mode) {
+    int sflags, plus = 0, i;
+    FILE *f;
+    if (fd < 0) return 0;
+    for (i = 1; mode && mode[i]; i++) if (mode[i] == '+') plus = 1;
+    switch (mode ? mode[0] : 'r') {
+    case 'w':
+    case 'a': sflags = plus ? (NL_F_READ | NL_F_WRITE) : NL_F_WRITE; break;
+    default:  sflags = plus ? (NL_F_READ | NL_F_WRITE) : NL_F_READ; break;
+    }
+    f = (FILE *)malloc(sizeof(FILE));
+    if (!f) return 0;
+    memset(f, 0, sizeof(FILE));
+    f->fd = fd;
+    f->ungot = -1;
+    f->flags = sflags | NL_F_ALLOC;
+    return f;
+}
+
 int fclose(FILE *f) {
     int r;
     if (!f) return -1;

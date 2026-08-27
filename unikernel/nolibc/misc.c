@@ -24,7 +24,7 @@ extern int  nl_open(const char *path, int flags, int mode);
 extern int  nl_close(int fd);
 extern long nl_ret(long r);
 
-char **nl_environ;
+char **environ;                     /* nl_environ is a macro for this */
 
 void exit(int code) {
     fflush(stdout);
@@ -179,6 +179,170 @@ int stat(const char *path, void *st) {
 int fstat(int fd, void *st) {
     return (int)nl_ret(nl_syscall6(NL_SYS_fstat, fd, (long)st, 0, 0, 0, 0));
 }
+
+/* utimensat(2) — what `touch` needs to set a timestamp. The syscall is
+ * there on Linux; on the guest, nl_syscall6 answers -ENOSYS and the
+ * caller reports it, which is the truth about a machine whose filesystem
+ * may be a read-only image in its own text segment. */
+#define NL_SYS_utimensat 280
+
+int utimensat(int dirfd, const char *path, const void *times, int flags) {
+    return (int)nl_ret(nl_syscall6(NL_SYS_utimensat, dirfd, (long)path,
+                                   (long)times, flags, 0, 0));
+}
+
+extern char *getcwd(char *buf, unsigned long size);
+extern long  readlink(const char *path, char *buf, unsigned long size);
+extern int   access(const char *path, int mode);
+
+/* The filesystem and credential calls this file BUILDS ON — chmod,
+ * link, symlink, readlink, getcwd, the uid/gid quartet, getgroups,
+ * uname and sysconf — are the bottom edge, and the bottom edge is
+ * per-target: `syscall_linux.c` makes them syscalls, and the guest's
+ * `boot/nosys.c` answers them for a machine with one address space and
+ * no user database. Everything below is written against those and is
+ * the same code on both.
+ */
+
+/* realpath(3) — libc's, not a syscall, so it is written out here.
+ *
+ * Absolutise against the working directory, then consume the path one
+ * component at a time: `.` is dropped, `..` pops the resolved prefix,
+ * and anything that turns out to be a symlink is replaced by its target
+ * followed by whatever of the path is still unconsumed. The link budget
+ * is 40, matching Linux's own ELOOP threshold, because a symlink cycle
+ * must terminate as an error rather than as a hang.
+ *
+ * On the guest there are no symlinks, so this reduces to the lexical
+ * normalisation — which is the right answer there, not an approximation
+ * of one.
+ */
+#define NL_PATH_MAX 4096
+
+static int nl_rp_push(char *out, int *len, const char *seg, int seglen) {
+    if (*len + seglen + 2 >= NL_PATH_MAX) return -1;
+    out[(*len)++] = '/';
+    memcpy(out + *len, seg, (nl_size_t)seglen);
+    *len += seglen;
+    out[*len] = 0;
+    return 0;
+}
+
+char *realpath(const char *path, char *resolved) {
+    static char left[2][NL_PATH_MAX];   /* the path still to consume */
+    static char out[NL_PATH_MAX];       /* the resolved prefix */
+    static char link_buf[NL_PATH_MAX];
+    int which = 0, li = 0, llen = 0, olen = 0, links = 0;
+
+    if (!path || !*path) { errno = 2 /* ENOENT */; return 0; }
+
+    if (path[0] == '/') {
+        nl_size_t n = strlen(path);
+        if (n >= NL_PATH_MAX) { errno = 36 /* ENAMETOOLONG */; return 0; }
+        memcpy(left[0], path, n + 1);
+        llen = (int)n;
+    } else {
+        nl_size_t n;
+        if (!getcwd(left[0], NL_PATH_MAX)) return 0;
+        llen = (int)strlen(left[0]);
+        if (llen == 1 && left[0][0] == '/') llen = 0;
+        n = strlen(path);
+        if (llen + 1 + (int)n >= NL_PATH_MAX) { errno = 36; return 0; }
+        left[0][llen++] = '/';
+        memcpy(left[0] + llen, path, n + 1);
+        llen += (int)n;
+    }
+
+    out[0] = 0;
+    for (;;) {
+        char *cur = left[which];
+        int start, seglen;
+        while (li < llen && cur[li] == '/') li++;
+        if (li >= llen) break;
+        start = li;
+        while (li < llen && cur[li] != '/') li++;
+        seglen = li - start;
+
+        if (seglen == 1 && cur[start] == '.') continue;
+        if (seglen == 2 && cur[start] == '.' && cur[start + 1] == '.') {
+            while (olen > 0 && out[olen - 1] != '/') olen--;
+            if (olen > 0) olen--;               /* drop the '/' as well */
+            out[olen] = 0;
+            continue;
+        }
+        if (nl_rp_push(out, &olen, cur + start, seglen) != 0) {
+            errno = 36;
+            return 0;
+        }
+        {
+            long n = readlink(out, link_buf, NL_PATH_MAX - 1);
+            if (n > 0) {
+                char *next = left[which ^ 1];
+                int rest = llen - li;
+                int nlen = 0;
+                if (++links > 40) { errno = 40 /* ELOOP */; return 0; }
+                link_buf[n] = 0;
+                if ((int)n + rest + 2 >= NL_PATH_MAX) { errno = 36; return 0; }
+                /* The link's target, then whatever of the path we have
+                 * not walked yet, becomes the new work list. */
+                memcpy(next, link_buf, (nl_size_t)n);
+                nlen = (int)n;
+                if (rest > 0) {
+                    next[nlen++] = '/';
+                    memcpy(next + nlen, cur + li, (nl_size_t)rest);
+                    nlen += rest;
+                }
+                next[nlen] = 0;
+                /* An absolute target restarts from the root; a relative
+                 * one is resolved against the link's own directory, so
+                 * the last component pops off first. */
+                while (olen > 0 && out[olen - 1] != '/') olen--;
+                if (olen > 0) olen--;
+                out[olen] = 0;
+                if (link_buf[0] == '/') { olen = 0; out[0] = 0; }
+                which ^= 1;
+                llen = nlen;
+                li = 0;
+            }
+        }
+    }
+    if (olen == 0) { out[olen++] = '/'; out[olen] = 0; }
+    /* POSIX: every component must exist, and a caller distinguishes
+     * "this is where that path would be" from "this is where it IS" by
+     * whether realpath answered at all. The lexical result of a missing
+     * path is a plausible string, which is worse than no answer —
+     * `path_canonical` is specified to say None. */
+    if (access(out, 0 /* F_OK */) != 0) {
+        errno = 2 /* ENOENT */;
+        return 0;
+    }
+    if (resolved) {
+        memcpy(resolved, out, (nl_size_t)olen + 1);
+        return resolved;
+    }
+    {
+        char *heap = (char *)malloc((nl_size_t)olen + 1);
+        if (!heap) return 0;
+        memcpy(heap, out, (nl_size_t)olen + 1);
+        return heap;
+    }
+}
+
+/* localtime_r(3) — there is no zone database on a machine whose whole
+ * filesystem may be its own text segment, and a -nostdlib Linux build
+ * has no /etc/localtime reader either. The honest answer is "no local
+ * time", and runtime_core.c's nurl_tz_offset turns that into 0, i.e.
+ * UTC. Reporting a fabricated offset would put every timestamp an hour
+ * off, twice a year, silently. */
+void *localtime_r(const void *t, void *tm) { (void)t; (void)tm; return 0; }
+
+/* ── the user database ──────────────────────────────────────────
+ * There isn't one. A machine with no /etc/passwd has no name for a uid,
+ * and saying so is what makes `ls -l` print the number instead of
+ * inventing `root`. runtime_core.c's nurl_user_name / nurl_group_name
+ * treat NULL exactly that way. */
+void *getpwuid(unsigned int uid) { (void)uid; return 0; }
+void *getgrgid(unsigned int gid) { (void)gid; return 0; }
 
 /* ── backtrace ──────────────────────────────────────────────────── */
 /* glibc's backtrace walks .eh_frame; a -nostdlib link has no unwinder,

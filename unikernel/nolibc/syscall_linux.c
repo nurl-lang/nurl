@@ -162,6 +162,60 @@ int   rename(const char *a, const char *b)          { return (int)nl_ret(nl_sysc
 int   chdir(const char *p)                          { return (int)nl_ret(nl_syscall6(SYS_chdir_, (long)p, 0, 0, 0, 0, 0)); }
 int   chmod(const char *p, int mode)                { return (int)nl_ret(nl_syscall6(SYS_chmod_, (long)p, mode, 0, 0, 0, 0)); }
 int   madvise(void *p, unsigned long len, int adv)  { return (int)nl_ret(nl_syscall6(SYS_madvise_, (long)p, (long)len, adv, 0, 0, 0)); }
+
+/* ── the calls a userland needs, at x86_64's numbers ─────────────
+ * The guest answers these differently (boot/nosys.c): it has one
+ * address space, one program and no user database, so `getcwd` is `/`
+ * and `getuid` is 0 there. Here they are the kernel's. */
+#define SYS_link_        86
+#define SYS_symlink_     88
+#define SYS_readlink_    89
+#define SYS_getcwd_      79
+#define SYS_getuid_     102
+#define SYS_getgid_     104
+#define SYS_geteuid_    107
+#define SYS_getegid_    108
+#define SYS_getgroups_  115
+#define SYS_uname_       63
+#define SYS_sched_getaffinity_ 204
+
+int   link(const char *a, const char *b)            { return (int)nl_ret(nl_syscall6(SYS_link_, (long)a, (long)b, 0, 0, 0, 0)); }
+int   symlink(const char *t, const char *l)         { return (int)nl_ret(nl_syscall6(SYS_symlink_, (long)t, (long)l, 0, 0, 0, 0)); }
+long  readlink(const char *p, char *b, unsigned long n) { return nl_ret(nl_syscall6(SYS_readlink_, (long)p, (long)b, (long)n, 0, 0, 0)); }
+int   uname(void *buf)                              { return (int)nl_ret(nl_syscall6(SYS_uname_, (long)buf, 0, 0, 0, 0, 0)); }
+int   getuid(void)                                  { return (int)nl_syscall6(SYS_getuid_, 0, 0, 0, 0, 0, 0); }
+int   getgid(void)                                  { return (int)nl_syscall6(SYS_getgid_, 0, 0, 0, 0, 0, 0); }
+int   geteuid(void)                                 { return (int)nl_syscall6(SYS_geteuid_, 0, 0, 0, 0, 0, 0); }
+int   getegid(void)                                 { return (int)nl_syscall6(SYS_getegid_, 0, 0, 0, 0, 0, 0); }
+int   getgroups(int size, unsigned int *list)       { return (int)nl_ret(nl_syscall6(SYS_getgroups_, size, (long)list, 0, 0, 0, 0)); }
+
+/* getcwd(3) returns the BUFFER; the syscall returns the length. Callers
+ * test the pointer, so the two must not be confused. */
+char *getcwd(char *buf, unsigned long size) {
+    long r = nl_ret(nl_syscall6(SYS_getcwd_, (long)buf, (long)size, 0, 0, 0, 0));
+    return r < 0 ? 0 : buf;
+}
+
+/* sysconf(3) — only _SC_NPROCESSORS_ONLN (84 on glibc), which is what
+ * the runtime asks for. Counted from the affinity mask rather than
+ * guessed: that is the number of CPUs this process may actually run on,
+ * which is the number a thread pool should be sized against, and it is
+ * right inside a container where /proc/cpuinfo is not. */
+long sysconf(int name) {
+    if (name != 84) return -1;
+    {
+        unsigned long mask[16];
+        long r = nl_ret(nl_syscall6(SYS_sched_getaffinity_, 0, (long)sizeof mask, (long)mask, 0, 0, 0));
+        long n = 0;
+        unsigned long i;
+        if (r <= 0) return 1;
+        for (i = 0; i < (unsigned long)r / sizeof mask[0]; i++) {
+            unsigned long w = mask[i];
+            while (w) { n += (long)(w & 1UL); w >>= 1; }
+        }
+        return n > 0 ? n : 1;
+    }
+}
 /* The two durability primitives. A freestanding target cannot borrow
  * them from a host, and they are exactly one syscall each: fsync(2) is
  * the barrier a write-ahead log needs before it may acknowledge a write,

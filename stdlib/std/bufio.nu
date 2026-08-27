@@ -31,6 +31,19 @@
 //                                                     Reuse one `dst`
 //                                                     across the loop for
 //                                                     zero-allocation ETL.
+//   ( bufreader_read_line_raw br dst )  → b         the same, but VERBATIM:
+//                                                     the line's own
+//                                                     terminator is kept
+//                                                     ('\n', '\r\n', or
+//                                                     none at a final
+//                                                     unterminated line),
+//                                                     so writing every
+//                                                     `dst` back out
+//                                                     reproduces the input
+//                                                     byte for byte. What a
+//                                                     filter that must not
+//                                                     rewrite line endings
+//                                                     needs.
 //   ( bufreader_eof br )               → b          T once fully drained
 //   ( bufreader_close br )             → v          free buffer + handle
 //
@@ -240,6 +253,30 @@ $ `stdlib/std/fs.nu`  // nurl_file_open / nurl_file_close
     : *u buf # *u ( nurl_peek ctl 1 )
     : i off ( nurl_peek ctl 7 )
     ( string_push_bytes dst # *u + # i buf off len )
+    ^ T
+}
+
+// Byte-exact twin of `bufreader_read_line_into`: `dst` receives the line
+// AND the terminator the input actually carried — `\n`, `\r\n`, or
+// nothing at all for a final unterminated line. Concatenating every
+// `dst` reproduces the stream exactly, which is the difference between a
+// filter (`head`, `grep`, `sed`) that preserves a CRLF file and one that
+// silently rewrites it to LF and drops or adds a trailing newline.
+//
+// The stripped form is the right default for parsing; this one is the
+// right default for copying. Same zero-allocation loop shape — reuse one
+// `dst`.
+@ bufreader_read_line_raw BufReader br String dst → b {
+    : s ctl . br ctl
+    : i len ( __bufreader_next_line ctl )
+    ( string_clear dst )
+    ? < len 0 { ^ F } {}
+    : *u buf # *u ( nurl_peek ctl 1 )
+    : i off ( nurl_peek ctl 7 )
+    // word 3 is the next unconsumed byte, so the span [off, start) is
+    // the line plus whatever terminated it.
+    : i raw - ( nurl_peek ctl 3 ) off
+    ( string_push_bytes dst # *u + # i buf off raw )
     ^ T
 }
 

@@ -1,0 +1,8 @@
+[package]
+name = "nurlbox"
+version = "0.1.0"
+description = "The Swiss Army knife of NURL — a single multi-call binary carrying tiny, POSIX-shaped implementations of the everyday UNIX utilities (cat, ls, cp, mv, rm, grep, sed, sort, wc, head, tail, find, tar, gzip, sha256sum, …). One `nurlbox` binary dispatches on argv[0], exactly as busybox does, so a directory of symlinks becomes a complete userland. Pure NURL over the shipped stdlib: no libc utilities, no shell-outs. Builds for Linux, macOS, Windows and wasm32-wasi, and boots as its own kernel on the unikernel target."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nurl-lang/nurl/tree/main/packages/nurlbox"
+
+[dependencies]

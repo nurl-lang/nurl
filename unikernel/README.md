@@ -51,17 +51,24 @@ from a baked-in image) and the second (the boot shim enters at
 with a different bottom edge, which is what makes testing it on Linux
 worth anything.
 
-## State (2026-08-21)
+## State (2026-08-27)
 
 ```
-  PASS         505    corpus tests that build and run with no libc at all
+  PASS         516    corpus tests that build and run with no libc at all
   FAIL           0
   NEEDS-BARE    23    processes and signals — a unikernel has neither
   NEEDS-LIBM     0
-  NEEDS-NOLIBC   9    realpath, inotify, execvp, unix sockets
+  NEEDS-NOLIBC   5    inotify, execvp, unix sockets
   NEEDS-LIB      3    libsqlite3 — third-party C libraries
-  SKIP         344    compile-fail tests and tests with no standalone build
+  SKIP         355    compile-fail tests and tests with no standalone build
 ```
+
+`realpath` left that column when `packages/nurlbox` — a busybox-shaped
+userland — was built for this target and found the holes: nolibc gained
+`realpath`, `fdopen`, `link`/`symlink`/`readlink`, `chmod`, `getcwd`, the
+uid/gid quartet, `getgroups`, `uname`, `sysconf` and `utimensat`, and the
+guest's VFS gained `stat` and directory listing over the baked-in
+archive. `ls -l`, `find`, `du` and `test -d` answer in the guest now.
 
 The guest suite (`unikernel/run_qemu_tests.sh`) is **29/29**.
 

@@ -1619,6 +1619,18 @@ const char* nurl_read_file(const char *path) {
 #  include <fcntl.h>
 #  include <unistd.h>
 #  include <sys/ioctl.h>
+/* The user database and the timestamp setter, for nurl_user_name /
+ * nurl_group_name / nurl_utimes_set below. The freestanding target has
+ * neither a passwd file nor a utimensat: unikernel/nolibc/misc.c answers
+ * both, saying "no such user" and ENOSYS out loud rather than letting
+ * the link fail. */
+#  include <pwd.h>
+#  include <grp.h>
+#  include <sys/time.h>
+#  include <sys/utsname.h>
+#endif
+#ifdef _WIN32
+#  include <sys/utime.h>
 #endif
 
 /* Classify entry at `path` WITHOUT following a final symlink (lstat).
@@ -1670,6 +1682,317 @@ long long nurl_path_type_follow(const char *path) {
     if (S_ISDIR(st.st_mode)) return 2;
     if (S_ISREG(st.st_mode)) return 1;
     return 4;
+}
+
+/* ── stat(2), as a fixed-layout answer ──────────────────────────────
+ *
+ * `struct stat` is the least portable struct in POSIX: the field order,
+ * the widths and the timestamp spelling differ per platform, and on
+ * Windows it is a different struct under a different name. Reading it
+ * from NURL through `nurl_native_sizeof`/offset arithmetic would bake a
+ * per-platform offset table into the stdlib, which is exactly the kind
+ * of thing that compiles everywhere and is wrong somewhere.
+ *
+ * So the runtime does the reading, and hands back ONE layout the whole
+ * toolchain agrees on: sixteen int64 slots, documented here and mirrored
+ * by `FileStat` in stdlib/std/fs.nu.
+ *
+ *    0  mode        11  blksize
+ *    1  size        12  atime (seconds)
+ *    2  mtime       13  atime nanoseconds
+ *    3  mtime ns    14  ctime (seconds)
+ *    4  uid         15  ctime nanoseconds
+ *    5  gid
+ *    6  nlink
+ *    7  ino
+ *    8  dev
+ *    9  rdev
+ *   10  blocks (512-byte units)
+ *
+ * A field the platform does not have reads 0 — never a fabricated value.
+ * Returns 0 on success and -1 with errno set on failure, the same
+ * contract stat(2) itself has.
+ *
+ * `mode` carries the raw st_mode: the permission bits AND the file-type
+ * bits. The type bits are NOT portable constants either, so the classify
+ * helpers below answer the question rather than exporting S_IFMT. */
+#define NURL_STAT_SLOTS 16
+
+static void nurl__stat_fill(const struct stat *st, long long *out) {
+    int i;
+    for (i = 0; i < NURL_STAT_SLOTS; i++) out[i] = 0;
+    out[0]  = (long long)st->st_mode;
+    out[1]  = (long long)st->st_size;
+    out[2]  = (long long)st->st_mtime;
+    out[4]  = (long long)st->st_uid;
+    out[5]  = (long long)st->st_gid;
+    out[6]  = (long long)st->st_nlink;
+    out[7]  = (long long)st->st_ino;
+    out[8]  = (long long)st->st_dev;
+    out[9]  = (long long)st->st_rdev;
+    out[12] = (long long)st->st_atime;
+    out[14] = (long long)st->st_ctime;
+#if !defined(_WIN32)
+    out[10] = (long long)st->st_blocks;
+    out[11] = (long long)st->st_blksize;
+#endif
+#if defined(__linux__) || defined(__unix__)
+#  if defined(st_mtime) || defined(__USE_XOPEN2K8) || defined(_BSD_SOURCE) || defined(__linux__)
+    out[3]  = (long long)st->st_mtim.tv_nsec;
+    out[13] = (long long)st->st_atim.tv_nsec;
+    out[15] = (long long)st->st_ctim.tv_nsec;
+#  endif
+#elif defined(__APPLE__)
+    out[3]  = (long long)st->st_mtimespec.tv_nsec;
+    out[13] = (long long)st->st_atimespec.tv_nsec;
+    out[15] = (long long)st->st_ctimespec.tv_nsec;
+#endif
+}
+
+long long nurl_stat_into(const char *path, long long *out) {
+    struct stat st;
+    if (!path || !out) return -1;
+    if (stat(path, &st) != 0) return -1;
+    nurl__stat_fill(&st, out);
+    return 0;
+}
+
+/* The link itself, never what it points at. On Windows there is no
+ * lstat(2) and this is stat(2) — the same degradation nurl_path_type
+ * already documents. */
+long long nurl_lstat_into(const char *path, long long *out) {
+    struct stat st;
+    if (!path || !out) return -1;
+#ifdef _WIN32
+    if (stat(path, &st) != 0) return -1;
+#else
+    if (lstat(path, &st) != 0) return -1;
+#endif
+    nurl__stat_fill(&st, out);
+    return 0;
+}
+
+long long nurl_fstat_into(long long fd, long long *out) {
+    struct stat st;
+    if (!out) return -1;
+    if (fstat((int)fd, &st) != 0) return -1;
+    nurl__stat_fill(&st, out);
+    return 0;
+}
+
+/* Classify a raw st_mode. The S_IF* constants are not values NURL can
+ * portably name, so the question is asked here instead of the bits being
+ * exported: 1 file / 2 dir / 3 symlink / 4 chardev / 5 blockdev /
+ * 6 fifo / 7 socket / 0 unknown. */
+long long nurl_stat_kind(long long mode) {
+    unsigned m = (unsigned)mode;
+    if (S_ISREG(m))  return 1;
+    if (S_ISDIR(m))  return 2;
+#ifdef S_ISLNK
+    if (S_ISLNK(m))  return 3;
+#endif
+#ifdef S_ISCHR
+    if (S_ISCHR(m))  return 4;
+#endif
+#ifdef S_ISBLK
+    if (S_ISBLK(m))  return 5;
+#endif
+#ifdef S_ISFIFO
+    if (S_ISFIFO(m)) return 6;
+#endif
+#ifdef S_ISSOCK
+    if (S_ISSOCK(m)) return 7;
+#endif
+    return 0;
+}
+
+/* Set a file's access + modification times. Nanoseconds are honoured
+ * where the platform has utimensat(2) and rounded to microseconds where
+ * only utimes(2) exists. `follow` = 0 acts on a symlink itself.
+ * Returns 0 / -1 with errno, like the syscall. */
+long long nurl_utimes_set(const char *path, long long atime, long long ansec,
+                          long long mtime, long long mnsec, long long follow) {
+    if (!path) return -1;
+#if defined(__linux__) || (defined(__unix__) && defined(AT_FDCWD))
+    {
+        struct timespec ts[2];
+        ts[0].tv_sec = (time_t)atime; ts[0].tv_nsec = (long)ansec;
+        ts[1].tv_sec = (time_t)mtime; ts[1].tv_nsec = (long)mnsec;
+        return utimensat(AT_FDCWD, path, ts, follow ? 0 : AT_SYMLINK_NOFOLLOW) == 0 ? 0 : -1;
+    }
+#elif defined(_WIN32)
+    {
+        struct _utimbuf tb;
+        tb.actime  = (time_t)atime;
+        tb.modtime = (time_t)mtime;
+        (void)ansec; (void)mnsec; (void)follow;
+        return _utime(path, &tb) == 0 ? 0 : -1;
+    }
+#else
+    (void)atime; (void)ansec; (void)mtime; (void)mnsec; (void)follow;
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
+/* The name behind a uid / gid, or NULL when the platform has no user
+ * database (Windows, the unikernel) or the id is unknown. The caller
+ * owns the returned string. `ls -l` is the reason this exists: printing
+ * a bare number where every other `ls` prints a name is a difference
+ * people notice immediately. */
+char *nurl_user_name(long long uid) {
+#if defined(__unix__) || defined(__APPLE__)
+    struct passwd *pw = getpwuid((uid_t)uid);
+    if (pw && pw->pw_name) return strdup(pw->pw_name);
+#else
+    (void)uid;
+#endif
+    return NULL;
+}
+
+char *nurl_group_name(long long gid) {
+#if defined(__unix__) || defined(__APPLE__)
+    struct group *gr = getgrgid((gid_t)gid);
+    if (gr && gr->gr_name) return strdup(gr->gr_name);
+#else
+    (void)gid;
+#endif
+    return NULL;
+}
+
+/* ── the machine, and the environment it handed us ──────────────────
+ *
+ * Three things every `env` / `uname` / `nproc` needs and NURL cannot
+ * spell portably: the environment VECTOR (a variable, not a function,
+ * and named `_environ` on Windows), utsname (a struct whose field width
+ * is a per-kernel constant), and the processor count (a sysconf key on
+ * POSIX, a struct field on Windows).
+ *
+ * Each answers with a heap copy the caller frees, or NULL / 0 when the
+ * platform genuinely cannot say — never an invented value. */
+#if defined(_WIN32)
+extern char **_environ;
+#  define NURL_ENVIRON _environ
+#elif defined(__APPLE__)
+#  include <crt_externs.h>
+#  define NURL_ENVIRON (*_NSGetEnviron())
+#else
+extern char **environ;
+#  define NURL_ENVIRON environ
+#endif
+
+long long nurl_env_count(void) {
+    char **e = NURL_ENVIRON;
+    long long n = 0;
+    if (!e) return 0;
+    while (e[n]) n++;
+    return n;
+}
+
+/* Borrowed `NAME=value` at index `i`, or NULL past the end. Borrowed
+ * because the vector is live for the process's whole life and a copy at
+ * every step would make listing the environment allocate once per
+ * entry for nothing. */
+const char *nurl_env_at(long long i) {
+    char **e = NURL_ENVIRON;
+    long long n = 0;
+    if (!e || i < 0) return NULL;
+    while (e[n]) n++;
+    if (i >= n) return NULL;
+    return e[i];
+}
+
+/* One field of utsname, as a heap copy the caller frees:
+ * 0 sysname, 1 nodename, 2 release, 3 version, 4 machine.
+ * NULL where the platform has no answer. */
+char *nurl_uname_field(long long which) {
+#if defined(__unix__) || defined(__APPLE__)
+    struct utsname u;
+    const char *p = NULL;
+    if (uname(&u) != 0) return NULL;
+    switch (which) {
+        case 0: p = u.sysname;  break;
+        case 1: p = u.nodename; break;
+        case 2: p = u.release;  break;
+        case 3: p = u.version;  break;
+        case 4: p = u.machine;  break;
+        default: return NULL;
+    }
+    return p ? strdup(p) : NULL;
+#else
+    (void)which;
+    return NULL;
+#endif
+}
+
+/* ── local time ─────────────────────────────────────────────────────
+ *
+ * stdlib/std/time.nu does its own calendar arithmetic and is therefore
+ * pure and deterministic — but the offset between UTC and the machine's
+ * local time is not arithmetic, it is a database ($TZ, /etc/localtime)
+ * that changes twice a year per zone. Reimplementing tzdata in NURL
+ * would be a large, quietly-wrong thing to own; asking the platform for
+ * the offset at one instant is exact and costs a call.
+ *
+ * Returns seconds EAST of UTC at `secs` (so CET is 3600, CEST 7200,
+ * and a machine with no zone database answers 0 — which is UTC, the
+ * truthful answer for a unikernel rather than a guess). */
+long long nurl_tz_offset(long long secs) {
+#if defined(_WIN32)
+    {
+        long bias = 0;
+        (void)secs;
+        _get_timezone(&bias);        /* seconds WEST of UTC */
+        return -(long long)bias;
+    }
+#elif defined(__unix__) || defined(__APPLE__)
+    {
+        time_t t = (time_t)secs;
+        struct tm lt;
+        if (!localtime_r(&t, &lt)) return 0;
+#  if defined(__USE_MISC) || defined(__APPLE__) || defined(BSD) || defined(__linux__)
+        return (long long)lt.tm_gmtoff;
+#  else
+        return 0;
+#  endif
+    }
+#else
+    (void)secs;
+    return 0;
+#endif
+}
+
+/* The zone's abbreviation at `secs` (`CET`, `EEST`, `UTC`), as a heap
+ * copy the caller frees, or NULL where there is no zone database. */
+char *nurl_tz_name(long long secs) {
+#if defined(__unix__) || defined(__APPLE__)
+    {
+        time_t t = (time_t)secs;
+        struct tm lt;
+        if (!localtime_r(&t, &lt)) return NULL;
+#  if defined(__USE_MISC) || defined(__APPLE__) || defined(BSD) || defined(__linux__)
+        return lt.tm_zone ? strdup(lt.tm_zone) : NULL;
+#  else
+        return NULL;
+#  endif
+    }
+#else
+    (void)secs;
+    return NULL;
+#endif
+}
+
+long long nurl_cpu_count(void) {
+#if defined(_SC_NPROCESSORS_ONLN)
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? (long long)n : 1;
+#elif defined(_WIN32)
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return si.dwNumberOfProcessors > 0 ? (long long)si.dwNumberOfProcessors : 1;
+#else
+    return 1;
+#endif
 }
 
 /* Force a file's bytes out of the kernel's page cache onto the storage

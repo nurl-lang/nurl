@@ -87,6 +87,7 @@ int   fgetc(FILE *f);
 int   getc(FILE *f);
 int   ungetc(int c, FILE *f);
 FILE *fopen(const char *path, const char *mode);
+FILE *fdopen(int fd, const char *mode);
 int   fclose(FILE *f);
 nl_size_t fread(void *p, nl_size_t sz, nl_size_t n, FILE *f);
 nl_size_t fwrite(const void *p, nl_size_t sz, nl_size_t n, FILE *f);
@@ -102,7 +103,13 @@ int  *__errno_location(void);
 
 /* Set by _start from the process stack; getenv reads it and the runtime
  * never sees it. */
-extern char **nl_environ;
+/* libc's spelling of the environment vector. It is ONE variable under
+ * two names: runtime_core.c enumerates `environ` (nurl_env_at, so `env`
+ * and `printenv` can list it), while everything in nolibc was written
+ * against `nl_environ`. Two variables would drift the moment setenv
+ * reallocated one of them. */
+extern char **environ;
+#define nl_environ environ
 
 /* ── the pieces with no portable form ───────────────────────────── */
 long nl_syscall6(long n, long a, long b, long c, long d, long e, long f);

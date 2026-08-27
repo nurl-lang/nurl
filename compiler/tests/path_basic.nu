@@ -85,11 +85,16 @@ $ `stdlib/core/string.nu`
     ( test_basename `/a/b/` )
     ( test_basename `foo` )
     ( test_basename `.bashrc` )
+    ( test_basename `/` )
+    ( test_basename `a//b` )
 
     ( test_dirname `/a/b/c.txt` )
     ( test_dirname `/a/b/` )
     ( test_dirname `foo` )
     ( test_dirname `/foo` )
+    ( test_dirname `/` )
+    ( test_dirname `a//b` )
+    ( test_dirname `/a/` )
 
     ( test_ext `file.tar.gz` )
     ( test_ext `.bashrc` )

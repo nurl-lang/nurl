@@ -312,12 +312,18 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 // Best-effort delete. `nurl_file_del` (libc `remove`) doesn't surface
 // errno reliably across platforms, so callers wanting to distinguish
 // "did not exist" from "still there" should call `file_exists` first.
+// Delete a directory entry.
+//
+// It does NOT pre-check with `file_exists`, and that is the point: that
+// check is `access(2)`, which FOLLOWS a symlink, so a link whose target
+// is gone answered "not there" and was never unlinked. Every `rm -r`
+// over a tree containing a broken symlink then failed at the directory
+// itself, with ENOTEMPTY, having reported the wrong reason twice. The
+// syscall's own return value knows better than a probe before it.
 @ file_delete s path → !v IoErr {
-    ? == ( nurl_file_exists path ) 0 {
-        ^ @ !v IoErr { F @ IoErr { NotFound } }
-    } {}
-    ( nurl_file_del path )
-    ^ @ !v IoErr { T 0 }
+    ? == ( nurl_file_del_rc path ) 0 { ^ @ !v IoErr { T 0 } } {}
+    : IoErr e ( _io_err_of_kind ( errno_kind ) )
+    ^ @ !v IoErr { F e }
 }
 
 @ dir_create s path → !v IoErr {
@@ -353,6 +359,202 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     } {}
     : IoErr e ( _io_err_of_kind ( errno_kind ) )
     ^ @ !v IoErr { F e }
+}
+
+// ── stat(2) ─────────────────────────────────────────────────────────
+//
+// Everything a listing, a copy that preserves metadata, or a `find`
+// predicate needs to know about an entry, in one call.
+//
+// `struct stat` is not a portable layout, so the runtime reads it and
+// hands back sixteen int64 slots in an order the whole toolchain agrees
+// on (`nurl_stat_into`, stdlib/runtime_core.c). This module mirrors
+// those slots as `FileStat` and never touches the C struct itself.
+//
+//   ( fs_stat path )    → !FileStat IoErr   follows symlinks
+//   ( fs_lstat path )   → !FileStat IoErr   the link itself
+//   ( fs_fstat fd )     → !FileStat IoErr   an already-open descriptor
+//
+// A field the platform does not carry reads 0 rather than a made-up
+// value: Windows has no st_blocks and no user database, and the
+// unikernel has neither plus no nanosecond timestamps.
+
+& `c` @ nurl_stat_into s path s out → i
+
+& `c` @ nurl_lstat_into s path s out → i
+
+& `c` @ nurl_fstat_into i fd s out → i
+
+& `c` @ nurl_stat_kind i mode → i
+
+& `c` @ nurl_utimes_set s path i atime i ansec i mtime i mnsec i follow → i
+
+& `c` @ nurl_user_name i uid → s
+
+& `c` @ nurl_group_name i gid → s
+
+: FileStat {
+    i mode  // raw st_mode: permission bits AND type bits
+    i size
+    i mtime  // seconds since the epoch
+    i mtime_ns
+    i uid
+    i gid
+    i nlink
+    i ino
+    i dev
+    i rdev
+    i blocks  // 512-byte units, 0 where unsupported
+    i blksize
+    i atime
+    i atime_ns
+    i ctime
+    i ctime_ns
+}
+
+// What `stat_kind` answers. The S_IF* bits are not portable values, so
+// the runtime classifies and these name the answer.
+: i FS_KIND_UNKNOWN 0
+: i FS_KIND_FILE 1
+: i FS_KIND_DIR 2
+: i FS_KIND_SYMLINK 3
+: i FS_KIND_CHARDEV 4
+: i FS_KIND_BLOCKDEV 5
+: i FS_KIND_FIFO 6
+: i FS_KIND_SOCKET 7
+
+@ __fs_stat_decode s buf → FileStat {
+    ^ @ FileStat {
+        ( nurl_peek buf 0 )
+        ( nurl_peek buf 1 )
+        ( nurl_peek buf 2 )
+        ( nurl_peek buf 3 )
+        ( nurl_peek buf 4 )
+        ( nurl_peek buf 5 )
+        ( nurl_peek buf 6 )
+        ( nurl_peek buf 7 )
+        ( nurl_peek buf 8 )
+        ( nurl_peek buf 9 )
+        ( nurl_peek buf 10 )
+        ( nurl_peek buf 11 )
+        ( nurl_peek buf 12 )
+        ( nurl_peek buf 13 )
+        ( nurl_peek buf 14 )
+        ( nurl_peek buf 15 )
+    }
+}
+
+@ __fs_stat_at s path i follow → !FileStat IoErr {
+    ? == # i path 0 { ^ @ !FileStat IoErr { F @ IoErr { NotFound } } } {}
+    : s buf ( nurl_zalloc 128 )
+    : i rc ? != follow 0 ( nurl_stat_into path buf ) ( nurl_lstat_into path buf )
+    ? != rc 0 {
+        : IoErr e ( _io_err_of_kind ( errno_kind ) )
+        ( nurl_free buf )
+        ^ @ !FileStat IoErr { F e }
+    } {}
+    : FileStat st ( __fs_stat_decode buf )
+    ( nurl_free buf )
+    ^ @ !FileStat IoErr { T st }
+}
+
+// Metadata for `path`, following a final symlink.
+@ fs_stat s path → !FileStat IoErr { ^ ( __fs_stat_at path 1 ) }
+
+// Metadata for the symlink itself. This is the one to use when walking
+// a tree: `fs_stat` on a dangling link is an error, and on a link to a
+// directory it says "directory", which is how a recursive delete follows
+// a link out of the tree it was given.
+@ fs_lstat s path → !FileStat IoErr { ^ ( __fs_stat_at path 0 ) }
+
+@ fs_fstat i fd → !FileStat IoErr {
+    : s buf ( nurl_zalloc 128 )
+    : i rc ( nurl_fstat_into fd buf )
+    ? != rc 0 {
+        : IoErr e ( _io_err_of_kind ( errno_kind ) )
+        ( nurl_free buf )
+        ^ @ !FileStat IoErr { F e }
+    } {}
+    : FileStat st ( __fs_stat_decode buf )
+    ( nurl_free buf )
+    ^ @ !FileStat IoErr { T st }
+}
+
+// ── Interpreting a FileStat ─────────────────────────────────────────
+
+@ stat_kind FileStat st → i { ^ ( nurl_stat_kind . st mode ) }
+
+@ stat_is_file FileStat st → b { ^ == ( stat_kind st ) FS_KIND_FILE }
+
+@ stat_is_dir FileStat st → b { ^ == ( stat_kind st ) FS_KIND_DIR }
+
+@ stat_is_symlink FileStat st → b { ^ == ( stat_kind st ) FS_KIND_SYMLINK }
+
+// The permission bits alone — 0777 plus setuid / setgid / sticky (07777).
+@ stat_mode_bits FileStat st → i { ^ & . st mode 4095 }
+
+@ __fs_rwx String out i bits i setid i setid_char → v {
+    ( string_push_char out ? != 0 & bits 4 114 45 )
+    ( string_push_char out ? != 0 & bits 2 119 45 )
+    ? != setid 0 {
+        ( string_push_char out ? != 0 & bits 1 setid_char - setid_char 32 )
+    } {
+        ( string_push_char out ? != 0 & bits 1 120 45 )
+    }
+}
+
+// The ten-character listing form: `drwxr-xr-x`, `-rw-r--r--`,
+// `lrwxrwxrwx`. setuid / setgid / sticky replace the matching execute
+// character with `s` / `s` / `t`, upper-cased when the execute bit
+// itself is clear — the convention every `ls` follows.
+@ stat_mode_string FileStat st → String {
+    : String out ( string_with_cap 12 )
+    : i k ( stat_kind st )
+    ( string_push_char out ? == k FS_KIND_DIR 100
+    ? == k FS_KIND_SYMLINK 108
+    ? == k FS_KIND_CHARDEV 99
+    ? == k FS_KIND_BLOCKDEV 98
+    ? == k FS_KIND_FIFO 112
+    ? == k FS_KIND_SOCKET 115 45 )
+    : i m ( stat_mode_bits st )
+    ( __fs_rwx out & >> m 6 7 & m 2048 115 )
+    ( __fs_rwx out & >> m 3 7 & m 1024 115 )
+    ( __fs_rwx out & m 7 & m 512 116 )
+    ^ out
+}
+
+// ── Timestamps ──────────────────────────────────────────────────────
+
+// Set access + modification times. Nanoseconds are honoured where the
+// platform has utimensat(2). `follow` = F acts on a symlink itself.
+@ fs_set_times s path i atime i atime_ns i mtime i mtime_ns b follow → !v IoErr {
+    : i rc ( nurl_utimes_set path atime atime_ns mtime mtime_ns ? follow 1 0 )
+    ? == rc 0 { ^ @ !v IoErr { T 0 } } {}
+    : IoErr e ( _io_err_of_kind ( errno_kind ) )
+    ^ @ !v IoErr { F e }
+}
+
+// ── The user database ───────────────────────────────────────────────
+//
+// The name behind a uid / gid, or None where the platform has no user
+// database (Windows, the unikernel) or the id is unknown. A caller that
+// gets None prints the number, which is what `ls -l` does on an NFS
+// mount whose ids do not resolve.
+
+@ fs_user_name i uid → ?String {
+    : s raw ( nurl_user_name uid )
+    ? == # i raw 0 { ^ @ ?String { F # String 0 } } {}
+    : String out ( string_from raw )
+    ( nurl_free raw )
+    ^ @ ?String { T out }
+}
+
+@ fs_group_name i gid → ?String {
+    : s raw ( nurl_group_name gid )
+    ? == # i raw 0 { ^ @ ?String { F # String 0 } } {}
+    : String out ( string_from raw )
+    ( nurl_free raw )
+    ^ @ ?String { T out }
 }
 
 // POSIX symlink(2) — `target` is what the link points TO (stored
@@ -652,9 +854,24 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ? != 0 # i path { : i32 _ ( remove path ) } {}
 }
 
+// remove(2)'s own answer: 0 on success, -1 with errno set. The `v`
+// spelling above predates the C-runtime purge and is kept because the
+// compiler's preamble still declares that symbol; new code wants the
+// status, so `file_delete` can report WHY a delete failed instead of
+// guessing.
+@ nurl_file_del_rc s path → i {
+    ? == 0 # i path { ^ -1 } {}
+    : i32 rc ( remove path )
+    ^ ? == # i rc 0 0 -1
+}
+
+// 0777, not 0755: mkdir(2) subtracts the process umask, and that is
+// where the answer belongs. Hard-coding 0755 silently overrode a umask
+// of 002 — the group-writable setup every shared build directory uses —
+// and produced directories a colleague could not write into.
 @ nurl_dir_create s path → i {
     ? == # i path 0 { ^ -1 } {}
-    : i32 rc ( mkdir path # i32 493 )
+    : i32 rc ( mkdir path # i32 511 )
     ^ ? == # i rc 0 0 -1
 }
 
@@ -1106,6 +1323,35 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
         ? & > pn 0 != ( nurl_str_at pat pn 0 ) 46 { ^ F } {}
     } {}
     ^ ( __fnmatch_at pat 0 pn name 0 nn )
+}
+
+// ── Matching a name against a pattern ───────────────────────────────
+//
+// The matcher `fs_glob` drives, on its own — because the question "does
+// this name match `*.log`?" comes up without a directory to walk, and
+// re-implementing `*` / `?` / `[a-z]` per caller is how two of them end
+// up disagreeing about `[!x]`.
+//
+// Two rules, and the difference matters:
+//
+//   ( fs_match `*.log` name )       fnmatch(3): `*` matches ANY name,
+//                                   including one starting with a dot.
+//                                   This is `find -name`'s rule.
+//   ( fs_match_glob `*.log` name )  the shell's rule: `*`, `?` and `[`
+//                                   never match a leading `.`, so a
+//                                   pattern must spell the dot to see a
+//                                   hidden file. This is what `fs_glob`
+//                                   uses per path segment.
+//
+// Neither treats `/` specially — they match one NAME, not a path. A
+// pattern with no metacharacter is a plain equality test.
+
+@ fs_match s pattern s name → b {
+    ^ ( __fnmatch_at pattern 0 ( nurl_str_len pattern ) name 0 ( nurl_str_len name ) )
+}
+
+@ fs_match_glob s pattern s name → b {
+    ^ ( __fnmatch_seg pattern name )
 }
 
 // Recursive matcher over pat[pi..pn) vs name[ni..nn).
