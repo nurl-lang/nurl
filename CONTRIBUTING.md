@@ -127,6 +127,19 @@ directly into a working boot compiler. Windows users have `build.bat`;
 macOS builds with Homebrew LLVM (`brew install llvm`) but is not covered
 by CI.
 
+Work beyond the compiler proper — the unikernel (QEMU, GRUB, xorriso),
+the cross-compiled targets (zig), the Cloudflare Workers (Node, pnpm,
+wrangler), the benchmark comparisons (Rust) — needs more than clang. If
+you would rather not install all of that on your machine, there is a
+prepared container:
+
+```sh
+./containers/dev/run.sh          # shell with the whole toolchain
+```
+
+See [`containers/dev/README.md`](containers/dev/README.md); VS Code and
+Codespaces users can "Reopen in Container" instead.
+
 Compile and run a single program:
 
 ```sh

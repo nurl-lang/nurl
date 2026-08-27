@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A development container** —
+  [`containers/dev/`](containers/dev/README.md), with a
+  `.devcontainer/` wired to the same image. `./containers/dev/run.sh`
+  drops you into a shell with the whole toolchain and the repo
+  bind-mounted at `/work`.
+
+  The compiler itself asks for very little: clang, and the committed
+  bootstrap IR does the rest. Everything *around* it does not. The
+  unikernel wants QEMU, GRUB, xorriso and mtools; the cross targets want
+  zig; the Workers under `registry/`, `webdocs/` and `nurlweb/` want Node,
+  pnpm and wrangler; the benchmark comparisons want Rust; the metamorph
+  and reference gates want Python with numpy. That is a long afternoon of
+  installing before the first interesting failure.
+
+  It is deliberately NOT `containers/ci`, which stays the union of the
+  three Linux jobs' package lists and nothing else — a convenience
+  package added for a human must never change what CI tests. This image
+  starts from that same set and adds the rest of a working day, including
+  `gh`, a debugger and Claude Code.
+
+  Verified by running the real gates inside it against a real checkout:
+  `build.sh` (bootstrap fixed point + corpus), `run_nolibc_tests.sh`,
+  the nolibc unit gates, and the QEMU guest suites on x86 (29/29) and
+  AArch64 (19/19). 3.6 GB; three build ARGs (`INCLUDE_RUST`,
+  `INCLUDE_QEMU_CROSS`, `INCLUDE_WRANGLER`) trade capability for size.
+
+  Two of the three defects in it were only visible from running it.
+  `corepack`'s pnpm downloads itself on first use into `~/.cache`, which
+  the launcher then hides behind a named volume — so every fresh
+  container would have re-fetched it and an offline one would have had no
+  pnpm at all. And `busybox` was missing: `packages/nurlbox` uses it as
+  its differential oracle and *skips* when it is absent, which reads
+  exactly like a suite that passed.
+
 ## [0.53.0] — 2026-08-26
 
 ### Added

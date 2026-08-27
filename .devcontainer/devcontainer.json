@@ -1,0 +1,63 @@
+{
+  "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
+  "name": "nurl-lang dev",
+
+  // The image is defined once, in containers/dev/Dockerfile, and shared
+  // by this file and containers/dev/run.sh. VS Code / GitHub Codespaces
+  // read this; the script is the plain-docker path. Neither is the
+  // source of truth for what is installed — the Dockerfile is.
+  "build": {
+    "dockerfile": "../containers/dev/Dockerfile",
+    "context": "../containers/dev"
+  },
+
+  "workspaceFolder": "/work",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/work,type=bind,consistency=cached",
+
+  "remoteUser": "dev",
+  "updateRemoteUserUID": true,
+
+  "runArgs": [
+    // gdb / strace / valgrind on a build inside the container. Narrower
+    // than --privileged: the debugger capability and the syscall surface
+    // those tools need, nothing more.
+    "--cap-add=SYS_PTRACE",
+    "--security-opt", "seccomp=unconfined"
+  ],
+
+  "mounts": [
+    // State that must outlive the container. Same volume names as
+    // containers/dev/run.sh, so a login done through either is visible
+    // to the other.
+    "source=nurl-dev-claude,target=/home/dev/.claude,type=volume",
+    "source=nurl-dev-state,target=/home/dev/.local/state,type=volume",
+    "source=nurl-dev-cache,target=/home/dev/.cache,type=volume",
+    "source=nurl-dev-nurl,target=/home/dev/.nurl,type=volume"
+  ],
+
+  // Credentials are forwarded, never baked into the image.
+  "remoteEnv": {
+    "GH_TOKEN": "${localEnv:GH_TOKEN}",
+    "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "timonwong.shellcheck",
+        "ms-python.python"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "files.eol": "\n"
+      }
+    }
+  },
+
+  // The bind mount lands with the host's ownership; git refuses a repo
+  // it cannot vouch for, and every gate in this tree shells out to git.
+  // The image marks all directories safe system-wide, this is the
+  // belt-and-braces for a remapped uid.
+  "postCreateCommand": "git config --global --add safe.directory /work"
+}
