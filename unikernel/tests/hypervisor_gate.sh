@@ -250,6 +250,11 @@ boot_ch() {
 boot_fc() {
     command -v "$FC" >/dev/null 2>&1 || { skipped="$skipped firecracker"; return 0; }
     # Firecracker is API-driven; the one-shot form takes a JSON config.
+    # `drives` is required even when empty from v1.16 on — without it a
+    # modern Firecracker refuses the config with "missing field `drives`"
+    # and the gate reports a boot failure against a perfectly good image.
+    # Nothing here noticed, because the gate SKIPS when firecracker is
+    # not installed and CI does not install it.
     cfg=$(mktemp); log=$(mktemp)
     cat > "$cfg" <<EOF
 {
@@ -257,6 +262,7 @@ boot_fc() {
     "kernel_image_path": "$IMG",
     "boot_args": "tsc_khz=1000000 wallclock=$(date +%s)"
   },
+  "drives": [],
   "machine-config": { "vcpu_count": 1, "mem_size_mib": 64 }
 }
 EOF

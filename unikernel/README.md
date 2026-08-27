@@ -263,6 +263,8 @@ rather than guessed:
 | `wallclock=N` | the boot epoch, seconds | whenever X.509 validity is checked: TLS client verification, and a server whose certificate has dates |
 | `virtio_mmio.device=…` | where the devices are | appended by the hypervisor; the guest parses it, and a guest with no match reports "no device" rather than probing blindly |
 | `args="…"` | the program's argv | when the program takes arguments. ONE key, quoted, because QEMU appends its own entries after `-append` and a program that read the tail of the line would be handed them |
+| `ip=A.B.C.D/prefix` | the machine's own address | on a network with no DHCP server — a tap with static addresses, for instance. Told beats asked: with this key the guest does not run the DHCP client at all. Stated-but-unparseable exits 127 |
+| `gw=A.B.C.D` | the default route | with `ip=`, when peers are off-subnet. Optional: a machine whose peers are all on its own subnet needs none, and an invented gateway is a first packet sent to a host that is not there |
 | `dns=ip[:port]` | the resolver | when a name must resolve and DHCP's option 6 is absent or wrong; stated-but-unparseable exits 127 rather than resolving against a guessed server |
 | `disk=rw\|ro\|format\|off` | what to do with the block device | only to say something other than `rw`. `ro` refuses every write with EROFS; `format` writes a filesystem **only onto a device that does not mount**, so it is not a reformat-on-every-boot switch; `off` makes the machine behave exactly as one with no disk. A guest with no virtio-blk device ignores the key |
 

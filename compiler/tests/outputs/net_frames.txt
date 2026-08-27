@@ -77,3 +77,10 @@ expire reclaims 1: YES
 expire again reclaims 0: YES
 cache stays bounded at max: YES
 most recent insert survived: YES
+stranger's datagram accepted: YES
+answer to the stranger leaves at once (delta-t 0 ms): YES
+a silent peer displaces the datagram with an ARP request: YES
+the ARP reply lands 3 ms later: YES
+and the datagram waits for the retry, not for the ARP (delta-t 1000 ms): YES
+off-subnet datagram accepted: YES
+off-subnet sender is NOT learned: YES

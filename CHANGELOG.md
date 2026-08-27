@@ -10,6 +10,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The machine learns who is talking to it** — `stack_arp_prime` in
+  [PR #1018](https://github.com/nurl-lang/nurl/pull/1018) resolved the
+  gateway before anyone needed it, which covers every peer that arrives
+  through a router. It does nothing for a peer on the machine's own
+  subnet, and that case was measured rather than reasoned about:
+  Firecracker, a tap, three static addresses in one /24, `ip=` on the
+  kernel command line so no DHCP server answers on the stack's behalf,
+  and tcpdump timestamping both ends of the exchange
+  (`unikernel/tests/arp_learn_exp.sh`, manual — it needs root).
+
+  The first client cost nothing: Linux ARPs for the guest before it
+  sends anything, and the ARP handler already learns a sender that
+  asks for us — RFC 826's receive side, long since implemented. The
+  **second** client cost 858–1000 ms, because by then the host's
+  neighbour entry was valid, no second ARP went out, and the guest had
+  never heard of that address.
+
+  The wire says the interesting part. The ARP the guest sent in the
+  SYN-ACK's place was answered in 0.3 ms; the SYN-ACK itself left
+  856 ms after that, when TCP's retransmit timer fired. Resolution was
+  never the cost — the wait was entirely the timer.
+
+  `__learn_sender` now takes the sender's hardware address from any IP
+  frame addressed to us, under three guards: unicast sender MAC only,
+  on-subnet sender IP only (off-subnet, the Ethernet source is the
+  *router's* MAC and binding it to a host behind it records a next hop
+  that is not one), and never our own address. Second client: 3.7–7.9 ms,
+  and no ARP request for it at all.
+
+  `compiler/tests/net_frames.nu` keeps `(Δt, frame)` rather than the
+  frame: a golden that records only what came back passes whether the
+  answer left at once or a second later, which is exactly how this hid.
+  The new assertions report `NO` against the old code.
+
+- **`ip=A.B.C.D/prefix` and `gw=` on the kernel command line** — a guest
+  told what it is instead of asking. With `ip=` the DHCP client does not
+  run at all. Needed by any network with no DHCP server, and by any
+  measurement of the stack that wants nothing else answering for it.
+
+
 - **A NURL server on Kubernetes, with and without a machine under it** —
   [`unikernel/k8s/`](unikernel/k8s/README.md). One `server.nu` builds two
   ways and not a line of it differs between them: `build_image.sh` makes
@@ -88,6 +128,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pnpm at all. And `busybox` was missing: `packages/nurlbox` uses it as
   its differential oracle and *skips* when it is absent, which reads
   exactly like a suite that passed.
+
+
+### Fixed
+
+- **`unikernel/tests/hypervisor_gate.sh` could not actually boot
+  Firecracker.** From v1.16 the one-shot JSON config requires a `drives`
+  field even when it is empty, and without it Firecracker refuses the
+  config — which the gate reported as a failed boot of a perfectly good
+  image. Nothing noticed, because the gate SKIPs when firecracker is not
+  installed and CI does not install it. With the field present it now
+  says `PASS firecracker booted the unchanged image`, which is the first
+  time anything in this repository has watched a hypervisor other than
+  QEMU boot the image rather than only checking the PVH note.
 
 ## [0.53.0] — 2026-08-26
 

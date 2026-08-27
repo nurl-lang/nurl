@@ -253,6 +253,41 @@ $ `stdlib/net/pktbuf.nu`
     ^ @ RxResult { ( rx_icmp_echo ) 0 . ih src . ih dst . im id . im seq . im payload_off . im payload_len - ( pktbuf_total out ) before }
 }
 
+// Learn a peer's hardware address from a frame it sent us.
+//
+// RFC 826's receive side, one step further than the ARP handler takes
+// it: a frame that reached this machine already carries its sender's
+// hardware address in the header we just parsed, so a peer that talks
+// to us never has to be asked who it is. Without this the machine
+// answers an unknown on-subnet peer's SYN by ARPing for it — and the
+// ARP is not the cost. Measured on a tap, with Firecracker and no
+// DHCP: the ARP request went out 12 ms after the SYN, the reply came
+// back 0.3 ms later, and the SYN-ACK that had been dropped in the
+// request's place left 856 ms after that, when TCP's retransmit timer
+// fired. Resolution was instant; the wait was entirely the timer.
+//
+// Three guards, and each is the difference between learning and being
+// told a lie:
+//   * only from a frame addressed to us — the caller checks that
+//     before calling this;
+//   * only a unicast sender MAC, because a broadcast or multicast
+//     address is not one anybody can be reached at;
+//   * only an on-subnet sender IP. Off-subnet, the Ethernet source is
+//     the ROUTER's MAC and the IP source is a host behind it: binding
+//     those two together records a next hop that is not one, and the
+//     entry outlives whatever made it look right.
+@ __learn_sender * NetStack st i src_ip i src_mac i now → v {
+    ? == . st our_ip 0 { ^ v } {}
+    ? == . st netmask 0 { ^ v } {}
+    ? ( mac_is_broadcast src_mac ) { ^ v } {}
+    ? ( mac_is_multicast src_mac ) { ^ v } {}
+    ? == src_mac 0 { ^ v } {}
+    ? ! ( ipv4_is_assignable src_ip ) { ^ v } {}
+    ? == src_ip . st our_ip { ^ v } {}
+    ? ! ( ipv4_in_subnet src_ip . st our_ip . st netmask ) { ^ v } {}
+    ( arp_cache_insert . st arp src_ip src_mac now )
+}
+
 // Feed one received frame. Any reply is appended to `out`; the caller
 // transmits whatever `out` gained.
 @ stack_rx * NetStack st ( Vec u ) frame i now * PktBuf out → RxResult {
@@ -291,6 +326,7 @@ $ `stdlib/net/pktbuf.nu`
         ( __count_drop st ( drop_not_our_ip ) )
         ^ ( __rx_drop ( drop_not_our_ip ) )
     } {}
+    ( __learn_sender st . ih src . eh src now )
     ? == . ih proto ( ip_proto_icmp ) { ^ ( __rx_icmp st frame ih now out ) } {}
     ? == . ih proto ( ip_proto_tcp ) {
         ^ @ RxResult {
