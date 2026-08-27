@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-26 · Current release: **0.53.0** · Language: **Grammar
+_Last reviewed: 2026-08-27 · Current release: **0.54.0** · Language: **Grammar
 v2.7** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -184,8 +184,10 @@ platform-specific shims.
   `bigint` (arbitrary-precision integers), `decimal` (exact fixed-point).
 - **std/runtime services** — `async`, `thread`, `channel`, `arc`, `rc`,
   `arena`, `signal`, `panic`/`recover`, `process`, `unixsock` (local IPC),
-  `log` (text + JSON), `time` (incl. timezone/DST, HTTP/RFC 2822 dates), `args` (CLI parser),
-  `term` (POSIX termios, ANSI).
+  `log` (text + JSON), `time` (incl. local time via the platform's zone,
+  timezone/DST, HTTP/RFC 2822 dates), `args` (CLI parser),
+  `term` (POSIX termios, ANSI), `sysinfo` (`uname` fields, host name,
+  processor count).
 - **std/crypto & encoding** — **Post-Quantum Cryptography**: `mlkem` (ML-KEM-512/768/1024, FIPS 203),
   `mldsa` (ML-DSA-44/65/87 & HashML-DSA, FIPS 204), `slhdsa` (SLH-DSA, FIPS 205, SHAKE & SHA-2 families),
   `hash_sha3` (SHA-3 & SHAKE128/256, FIPS 202). **Classical & symmetric**: `x25519`, `ed25519`,
@@ -194,11 +196,12 @@ platform-specific shims.
   `hkdf`, `pbkdf2`, `scrypt`, `encode` (hex, base64, base32), `random` (OS CSPRNG `rand_bytes`), `rng` (xoshiro256\*\*).
 - **std/PKI & certificates** — `x509` (DER parser + chain/host validation, ML-DSA & SLH-DSA OIDs), `x509_gen` (self-signed P-256 & ML-DSA certificates, PKCS#8), `csr` (PKCS#10 RFC 2986 parser, generator, self-signature verifier, PEM round-trip, CA issuance from CSR), `pkey` (PEM private-key loading: SEC1/PKCS#8 P-256, RSA, and ML-DSA). A complete private CA built on them — classical or post-quantum, with enrollment, CSR signing, revocation and CRLs — is the `pki-server` registry package.
 - **std/compression** — `zstd` (pure-NURL RFC 8878 Zstandard decompressor & compressor up to level 19 optimal parser, no libzstd), `deflate` (RFC 1951 + table-driven CRC-32).
-- **std/IO & net** — `fs` (incl. streaming, `readlink`, `file_sync`, `dir_sync`,
-  `file_truncate`, `set_permissions`), `path` (typed),
+- **std/IO & net** — `fs` (incl. streaming, `stat`/`lstat`/`fstat` + `statvfs`,
+  glob matching, `readlink`, `file_sync`, `dir_sync`,
+  `file_truncate`, `set_permissions`, `set_times`), `path` (typed),
   `net` (TCP/TLS), `udp`, `dns`, `dos`.
 - **ext/serialization** — `json`, `toml`, `csv`, `msgpack`, `cbor`, `xml`, `yaml`,
-  `serde`, `regex`.
+  `serde`, `regex` (a Pike VM, with capture groups and back references).
 - **ext/web stack** — full HTTP/1.1 server (keep-alive, pipelining, static,
   auth, JWT bearer-auth with HS256/EdDSA/**ES256**, cookies, forms, multipart, router, middleware, access log + Prometheus
   metrics, DoS caps, graceful shutdown, per-request timeouts, panic recovery),
@@ -290,6 +293,14 @@ platform-specific shims.
   The playground builds and boots these images (`POST /build_unikernel`
   + target dropdown), and agents do the same over MCP
   (`nurl_build_unikernel`).
+- **A userland in one binary** — [`packages/nurlbox`](packages/nurlbox/README.md)
+  is a busybox-shaped multi-call executable: 100 of the everyday UNIX
+  utilities, `sh` among them, in pure NURL over the shipped stdlib with
+  nothing to link beyond libc. It builds for Linux, macOS, Windows and
+  `wasm32-wasi`, and boots as its own kernel on the unikernel target. 348
+  differential cases hold it to the original: the same command line
+  through nurlbox and through the system busybox, agreeing on stdout, on
+  the bytes, and on the exit status.
 - `nurlfmt` canonical formatter (idempotent, IR-preserving), `nurl-lsp`
   (completion, references, unused-symbol lint), `nurlpkg` package manager,
   DWARF debugging, VS Code extension, and the `nurlapi` compiler-as-a-service
