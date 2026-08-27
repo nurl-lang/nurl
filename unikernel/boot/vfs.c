@@ -172,8 +172,243 @@ static long long posix_ret_ll(long long rc) {
 #define VFS_O_EXCL      0200
 #define VFS_O_DIRECTORY 0200000
 
-int nl_open(const char *path, int flags, int mode) {
-    if (!path) { nl_errno_slot = 22 /* EINVAL */; return -1; }
+/* ── redirecting the standard descriptors ────────────────────────
+ *
+ * `cmd > file` is not an exotic feature, and a shell that could not do
+ * it would not be a shell. On Linux the kernel's descriptor table
+ * answers `dup2`; here there is no kernel, so the three standard
+ * descriptors get a redirection table of their own and `write` / `read`
+ * consult it.
+ *
+ * Scope, stated rather than discovered: only 0, 1 and 2 may be the
+ * TARGET of a `dup2`. That is what a shell redirects, and a general
+ * descriptor table would be a second filesystem layer for no caller.
+ *
+ * Ownership follows the shell's own idiom — `dup2(newfd, 1)` then
+ * `close(newfd)` — so a descriptor that has become a redirect target is
+ * NOT closed by that `close`; it is closed when the redirect is
+ * replaced or undone. Without that, every `>` would close the file it
+ * had just opened and the next write would go nowhere.
+ */
+#define VFS_SAVED_BASE 300
+#define VFS_SAVED_MAX  8
+
+static int vfs_std_target[3] = { -1, -1, -1 };
+static int vfs_std_alias[3]  = { 0, 0, 0 };   /* 2>&1: shares, does not own */
+
+typedef struct {
+    int used;
+    int target;
+    int alias;
+} VfsSaved;
+
+static VfsSaved vfs_saved[VFS_SAVED_MAX];
+
+int fs_is_file_fd(int fd);
+int fs_close_fd(int fd);
+
+/* Where should a write to `fd` actually go? -1 means the console. */
+int vfs_std_of(int fd) {
+    if (fd < 0 || fd > 2) return -1;
+    return vfs_std_target[fd];
+}
+
+/* Is this descriptor currently standing in for a standard one? Then a
+ * `close` on it is the shell tidying up after `dup2`, not a request to
+ * drop the redirect. */
+int vfs_is_std_target(int fd) {
+    int i;
+    if (fd < 0) return 0;
+    for (i = 0; i < 3; i++) if (vfs_std_target[i] == fd) return 1;
+    for (i = 0; i < VFS_SAVED_MAX; i++)
+        if (vfs_saved[i].used && vfs_saved[i].target == fd) return 1;
+    return 0;
+}
+
+static int vfs_is_std_target_except(int fd, int skip);
+
+static void vfs_std_release(int stdfd) {
+    int t = vfs_std_target[stdfd];
+    if (t >= 0 && !vfs_std_alias[stdfd] && !vfs_is_std_target_except(t, stdfd))
+        (void)fs_close_fd(t);
+    vfs_std_target[stdfd] = -1;
+    vfs_std_alias[stdfd] = 0;
+}
+
+static int vfs_is_std_target_except(int fd, int skip) {
+    int i;
+    if (fd < 0) return 0;
+    for (i = 0; i < 3; i++) if (i != skip && vfs_std_target[i] == fd) return 1;
+    for (i = 0; i < VFS_SAVED_MAX; i++)
+        if (vfs_saved[i].used && vfs_saved[i].target == fd) return 1;
+    return 0;
+}
+
+int dup2(int oldfd, int newfd) {
+    if (newfd < 0 || newfd > 2) { nl_errno_slot = 9 /* EBADF */; return -1; }
+    if (oldfd >= VFS_SAVED_BASE && oldfd < VFS_SAVED_BASE + VFS_SAVED_MAX) {
+        /* Restoring a saved descriptor. */
+        VfsSaved *sv = &vfs_saved[oldfd - VFS_SAVED_BASE];
+        if (!sv->used) { nl_errno_slot = 9; return -1; }
+        vfs_std_release(newfd);
+        vfs_std_target[newfd] = sv->target;
+        vfs_std_alias[newfd] = sv->alias;
+        return newfd;
+    }
+    if (oldfd >= 0 && oldfd < 3) {           /* `2>&1` */
+        int t = vfs_std_target[oldfd];
+        vfs_std_release(newfd);
+        vfs_std_target[newfd] = t;
+        vfs_std_alias[newfd] = 1;
+        return newfd;
+    }
+    if (!fs_is_file_fd(oldfd)) { nl_errno_slot = 9; return -1; }
+    vfs_std_release(newfd);
+    vfs_std_target[newfd] = oldfd;
+    vfs_std_alias[newfd] = 0;
+    return newfd;
+}
+
+int dup(int fd) {
+    int i;
+    if (fd < 0 || fd > 2) { nl_errno_slot = 9; return -1; }
+    for (i = 0; i < VFS_SAVED_MAX; i++) {
+        if (vfs_saved[i].used) continue;
+        vfs_saved[i].used = 1;
+        vfs_saved[i].target = vfs_std_target[fd];
+        /* The save carries the OWNERSHIP with it. Recording it as a
+         * borrow instead loses track of who closes the file: restoring
+         * the descriptor would then leave the redirected file open and
+         * unflushed, which is how a `$(cmd | cmd)` came back empty —
+         * the capture file was still buffered when it was read. */
+        vfs_saved[i].alias = vfs_std_alias[fd];
+        return VFS_SAVED_BASE + i;
+    }
+    nl_errno_slot = 24 /* EMFILE */;
+    return -1;
+}
+
+/* fcntl(2), the F_DUPFD form only — which is how a shell saves a
+ * descriptor before redirecting it. Everything else is refused. */
+int fcntl(int fd, int cmd, long arg) {
+    (void)arg;
+    if (cmd != 0 /* F_DUPFD */) { nl_errno_slot = 38 /* ENOSYS */; return -1; }
+    return dup(fd);
+}
+
+/* Close a saved slot; ordinary descriptors go to fs_close_fd. */
+int vfs_close_saved(int fd) {
+    if (fd < VFS_SAVED_BASE || fd >= VFS_SAVED_BASE + VFS_SAVED_MAX) return 0;
+    vfs_saved[fd - VFS_SAVED_BASE].used = 0;
+    return 1;
+}
+
+/* ── the working directory ───────────────────────────────────────
+ *
+ * The guest has one namespace, and until now it had no cursor into it:
+ * every path was resolved from the root, so `cd` could not work and a
+ * shell script that changed directory and then opened a relative name
+ * opened the wrong thing — or nothing.
+ *
+ * One string, and one resolution step in front of every path-taking
+ * entry point. `..` and `.` are folded by the archive's own normaliser
+ * (initfs.c), so this only has to decide whether a path is absolute and
+ * prefix the cursor when it is not.
+ */
+#define VFS_CWD_MAX 512
+static char vfs_cwd[VFS_CWD_MAX] = "/";
+
+/* Make `path` absolute against the working directory AND fold away `.`
+ * and `..`. Both halves matter: the layers underneath — the archive's
+ * lookup and the FAT driver — walk the path component by component, and
+ * neither has a kernel in front of it to tidy `./tmp.abcdef` or
+ * `a/../b` first. `mkstemp` producing `./tmp.XXXXXX` is exactly how
+ * that showed up: a name the disk could not open, reported as "nowhere
+ * writable" on a machine with a perfectly good disk. */
+static const char *vfs_resolve(const char *path, char *buf, unsigned long cap) {
+    unsigned long n = 0, i = 0, out = 0;
+    static char tmp[VFS_CWD_MAX * 2];
+    const char *src;
+
+    if (!path) return path;
+    if (path[0] == '/') {
+        src = path;
+    } else {
+        while (vfs_cwd[n] && n + 2 < sizeof tmp) { tmp[n] = vfs_cwd[n]; n++; }
+        if (n == 0 || tmp[n - 1] != '/') tmp[n++] = '/';
+        while (path[i] && n + 1 < sizeof tmp) tmp[n++] = path[i++];
+        tmp[n] = 0;
+        src = tmp;
+    }
+
+    /* Fold the components. `..` at the root stays at the root, which is
+     * what every kernel does with `/..`. */
+    i = 0;
+    buf[out++] = '/';
+    for (;;) {
+        unsigned long start, len;
+        while (src[i] == '/') i++;
+        if (!src[i]) break;
+        start = i;
+        while (src[i] && src[i] != '/') i++;
+        len = i - start;
+        if (len == 1 && src[start] == '.') continue;
+        if (len == 2 && src[start] == '.' && src[start + 1] == '.') {
+            while (out > 1 && buf[out - 1] != '/') out--;
+            if (out > 1) out--;
+            continue;
+        }
+        if (out > 1 && out + 1 < cap) buf[out++] = '/';
+        {
+            unsigned long k = 0;
+            while (k < len && out + 1 < cap) buf[out++] = src[start + k++];
+        }
+    }
+    buf[out] = 0;
+    return buf;
+}
+
+char *getcwd(char *buf, unsigned long size) {
+    unsigned long n = 0;
+    if (!buf) { nl_errno_slot = 22 /* EINVAL */; return 0; }
+    while (vfs_cwd[n]) n++;
+    if (size < n + 1) { nl_errno_slot = 34 /* ERANGE */; return 0; }
+    for (n = 0; vfs_cwd[n]; n++) buf[n] = vfs_cwd[n];
+    buf[n] = 0;
+    return buf;
+}
+
+int chdir(const char *path) {
+    char tmp[VFS_CWD_MAX];
+    const char *full;
+    unsigned long n = 0;
+    if (!path) { nl_errno_slot = 22; return -1; }
+    full = vfs_resolve(path, tmp, sizeof tmp);
+    /* It has to BE a directory. A `cd` that succeeded onto a file would
+     * make every relative path after it fail for no visible reason. */
+    if (ifs_kind(full, 0) != 2) {
+        if (!(disk_live() && nurl_disk_is_dir && nurl_disk_is_dir(full) == 1)) {
+            nl_errno_slot = 2 /* ENOENT */;
+            return -1;
+        }
+    }
+    (void)n;
+    {
+        unsigned long i = 0, o = (full[0] == '/') ? 0 : 1;
+        if (o == 1) vfs_cwd[0] = '/';
+        while (full[i] && o + 1 < VFS_CWD_MAX) vfs_cwd[o++] = full[i++];
+        /* Strip a trailing slash so `cd /etc/` and `cd /etc` agree. */
+        while (o > 1 && vfs_cwd[o - 1] == '/') o--;
+        vfs_cwd[o] = 0;
+    }
+    return 0;
+}
+
+int nl_open(const char *path0, int flags, int mode) {
+    char rbuf[VFS_CWD_MAX];
+    const char *path;
+    if (!path0) { nl_errno_slot = 22 /* EINVAL */; return -1; }
+    path = vfs_resolve(path0, rbuf, sizeof rbuf);
 
     int wants_write = (flags & VFS_O_ACCMODE) != 0 || (flags & VFS_O_CREAT) != 0;
 
@@ -309,8 +544,11 @@ void *vfs_map_file(int fd, unsigned long len, long off) {
     return (void *)m;
 }
 
-int fs_exists(const char *path) {
-    if (!path) return 0;
+int fs_exists(const char *path0) {
+    char rbuf[VFS_CWD_MAX];
+    const char *path;
+    if (!path0) return 0;
+    path = vfs_resolve(path0, rbuf, sizeof rbuf);
     /* A directory exists as surely as a file does; `ifs_exists` only
      * answers about regular entries, which made `access` say no about
      * every directory in the image. */
@@ -368,21 +606,29 @@ long long pwrite(int fd, const void *buf, unsigned long n, long long off) {
  * reachable is a caller whose success path is now wrong.
  */
 
-int unlink(const char *p) {
+int unlink(const char *p0) {
+    char rbuf[VFS_CWD_MAX];
+    const char *p = vfs_resolve(p0, rbuf, sizeof rbuf);
     if (!p) { nl_errno_slot = 22; return -1; }
     if (disk_live() && nurl_disk_unlink) return posix_ret(nurl_disk_unlink(p));
     nl_errno_slot = ifs_exists(p) ? 30 /* EROFS */ : 2 /* ENOENT */;
     return -1;
 }
 
-int rename(const char *a, const char *b) {
+int rename(const char *a0, const char *b0) {
+    char rbuf_a[VFS_CWD_MAX];
+    char rbuf_b[VFS_CWD_MAX];
+    const char *a = vfs_resolve(a0, rbuf_a, sizeof rbuf_a);
+    const char *b = vfs_resolve(b0, rbuf_b, sizeof rbuf_b);
     if (!a || !b) { nl_errno_slot = 22; return -1; }
     if (disk_live() && nurl_disk_rename) return posix_ret(nurl_disk_rename(a, b));
     nl_errno_slot = 30;
     return -1;
 }
 
-int mkdir(const char *p, int mode) {
+int mkdir(const char *p0, int mode) {
+    char rbuf[VFS_CWD_MAX];
+    const char *p = vfs_resolve(p0, rbuf, sizeof rbuf);
     (void)mode;
     if (!p) { nl_errno_slot = 22; return -1; }
     if (disk_live() && nurl_disk_mkdir) return posix_ret(nurl_disk_mkdir(p));
@@ -390,14 +636,18 @@ int mkdir(const char *p, int mode) {
     return -1;
 }
 
-int rmdir(const char *p) {
+int rmdir(const char *p0) {
+    char rbuf[VFS_CWD_MAX];
+    const char *p = vfs_resolve(p0, rbuf, sizeof rbuf);
     if (!p) { nl_errno_slot = 22; return -1; }
     if (disk_live() && nurl_disk_rmdir) return posix_ret(nurl_disk_rmdir(p));
     nl_errno_slot = 30;
     return -1;
 }
 
-int truncate(const char *p, long long len) {
+int truncate(const char *p0, long long len) {
+    char rbuf[VFS_CWD_MAX];
+    const char *p = vfs_resolve(p0, rbuf, sizeof rbuf);
     if (!p) { nl_errno_slot = 22; return -1; }
     if (disk_live() && nurl_disk_truncate) return posix_ret(nurl_disk_truncate(p, len));
     nl_errno_slot = 30;
@@ -590,10 +840,13 @@ static void vfs_fill_stat(void *st, int is_dir, long long size) {
     vfs_put_u64(p + 64, (unsigned long long)((size + 511) / 512)); /* st_blocks */
 }
 
-static long vfs_stat_path(const char *path, void *st) {
+static long vfs_stat_path(const char *path0, void *st) {
+    char rbuf[VFS_CWD_MAX];
+    const char *path;
     vfs_size_t size = 0;
     int kind;
-    if (!path || !st) return -14 /* EFAULT */;
+    if (!path0 || !st) return -14 /* EFAULT */;
+    path = vfs_resolve(path0, rbuf, sizeof rbuf);
     kind = ifs_kind(path, &size);
     /* The archive's ROOT is a directory only when the archive has
      * something in it; an empty image must not shadow the disk's `/`. */

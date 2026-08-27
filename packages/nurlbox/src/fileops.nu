@@ -40,19 +40,37 @@ $ `bx.nu`
 
 @ __ent_of s dir s name b follow → BxEnt {
     : String full ? == ( nurl_str_len dir ) 0 ( string_from name ) ( path_join dir name )
-    : ~ BxEnt out @ BxEnt { ( string_from name ) 0 0 0 0 0 0 0 0 F }
+    : ~ i mode 0
+    : ~ i size 0
+    : ~ i mtime 0
+    : ~ i nlink 0
+    : ~ i uid 0
+    : ~ i gid 0
+    : ~ i blocks 0
+    : ~ i ino 0
+    : ~ b ok F
     : !FileStat IoErr r ? follow ( fs_stat ( string_data full ) ) ( fs_lstat ( string_data full ) )
     ?? r {
         T st → {
-            = out @ BxEnt {
-                ( string_from name ) . st mode . st size . st mtime . st nlink
-                . st uid . st gid . st blocks . st ino T
-            }
+            = mode . st mode
+            = size . st size
+            = mtime . st mtime
+            = nlink . st nlink
+            = uid . st uid
+            = gid . st gid
+            = blocks . st blocks
+            = ino . st ino
+            = ok T
         }
         F _ → {}
     }
     ( string_free full )
-    ^ out
+    // ONE struct literal, so exactly one name String is ever allocated.
+    // Building a blank entry first and reassigning it leaked that first
+    // String: auto-drop registers a struct field at the literal that
+    // allocated it, and a reassignment of the binding does not reach
+    // back for the fields of the value it replaced.
+    ^ @ BxEnt { ( string_from name ) mode size mtime nlink uid gid blocks ino ok }
 }
 
 // ── ls ────────────────────────────────────────────────────────────
@@ -362,8 +380,16 @@ $ `bx.nu`
     }
 }
 
+// The comparator's flags ride a global rather than a capture: a
+// capturing closure handed to a GENERIC callee cannot be proven
+// invoke-only, so its heap environment becomes the caller's to free —
+// one 16-byte block per `ls`, which LeakSanitizer duly reported. A
+// capture-free closure allocates nothing at all.
+: ~ i g_ls_sort_flags 0
+
 @ __ls_sort ( Vec BxEnt ) ents i flags → v {
-    ( sort_by [BxEnt] ents \ BxEnt a BxEnt b → i { ^ ( __ls_cmp a b flags ) } )
+    = g_ls_sort_flags flags
+    ( sort_by [BxEnt] ents \ BxEnt a BxEnt b → i { ^ ( __ls_cmp a b g_ls_sort_flags ) } )
 }
 
 @ __ls_dir s dir i flags i now b header b more_after → i {

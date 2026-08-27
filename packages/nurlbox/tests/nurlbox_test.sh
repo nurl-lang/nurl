@@ -188,6 +188,23 @@ dtfs() {
     fi
 }
 
+# One shell script, run by both shells. The reference is busybox's ash,
+# which is the `sh` a busybox userland actually gives you.
+dtsh() {
+    local desc="$1"
+    if [ "$HAVE_BB" = 0 ]; then SKIP=$((SKIP+1)); return; fi
+    local go bo gs bs
+    go="$(cd "$FX" && "$NB" sh -c "$1" 2>&1)"; gs=$?
+    bo="$(cd "$FX" && "$BUSYBOX" sh -c "$1" 2>&1)"; bs=$?
+    if [ "$go" = "$bo" ] && [ "$gs" = "$bs" ]; then
+        ok
+    else
+        bad "sh: $desc"
+        [ "$gs" != "$bs" ] && echo "    exit: got $gs want $bs"
+        diff <(printf '%s' "$bo") <(printf '%s' "$go") | head -6 | sed 's/^/    /'
+    fi
+}
+
 # Explicit expectation, for behaviour busybox does not have or where the
 # reference is unavailable.
 expect() {

@@ -480,6 +480,49 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ^ @ !FileStat IoErr { T st }
 }
 
+// ── Filesystem statistics ───────────────────────────────────────────
+//
+// How big is the filesystem holding this path, and how much of it is
+// free — `df`'s question, and a writer's before it starts.
+//
+// Sizes are in `frsize` units (the fragment size), which is what POSIX
+// specifies and what makes `blocks * frsize` the byte total. A platform
+// with no statvfs answers an error rather than zeroes: an empty disk and
+// an unanswerable question are different, and a caller that treats the
+// second as the first refuses to write for no reason.
+
+& `c` @ nurl_statfs_into s path s out → i
+
+: FsStat {
+    i bsize  // preferred I/O size
+    i frsize  // fragment size — the unit `blocks` counts
+    i blocks
+    i bfree  // free to root
+    i bavail  // free to an unprivileged writer
+    i files  // inodes
+    i ffree
+    i favail
+    i flag
+    i namemax
+}
+
+@ fs_statfs s path → !FsStat IoErr {
+    ? == # i path 0 { ^ @ !FsStat IoErr { F @ IoErr { NotFound } } } {}
+    : s buf ( nurl_zalloc 96 )
+    ? != 0 ( nurl_statfs_into path buf ) {
+        : IoErr e ( _io_err_of_kind ( errno_kind ) )
+        ( nurl_free buf )
+        ^ @ !FsStat IoErr { F e }
+    } {}
+    : FsStat st @ FsStat {
+        ( nurl_peek buf 0 ) ( nurl_peek buf 1 ) ( nurl_peek buf 2 ) ( nurl_peek buf 3 )
+        ( nurl_peek buf 4 ) ( nurl_peek buf 5 ) ( nurl_peek buf 6 ) ( nurl_peek buf 7 )
+        ( nurl_peek buf 8 ) ( nurl_peek buf 9 )
+    }
+    ( nurl_free buf )
+    ^ @ !FsStat IoErr { T st }
+}
+
 // ── Interpreting a FileStat ─────────────────────────────────────────
 
 @ stat_kind FileStat st → i { ^ ( nurl_stat_kind . st mode ) }
@@ -1286,7 +1329,10 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     : s d ? == 0 ( nurl_str_len dir ) `.` dir
     : String tmpl ( string_with_cap + + ( nurl_str_len d ) ( nurl_str_len prefix ) 10 )
     ( string_push_str tmpl d )
-    ( string_push_char tmpl 47 )  // '/'
+    // No second separator after a root `dir`: `//tmp.XXXXXX` is a
+    // different path on some systems and an unopenable one on a
+    // filesystem driver that walks components itself.
+    ? ! ( string_ends_with tmpl `/` ) { ( string_push_char tmpl 47 ) } {}
     ( string_push_str tmpl prefix )
     ( string_push_str tmpl `XXXXXX` )
     : i32 fd ( mkstemp ( string_data tmpl ) )

@@ -75,16 +75,6 @@ long readlink(const char *p, char *b, unsigned long n) {
     return ns_refuse(22);
 }
 
-/* ── the working directory ───────────────────────────────────────
- * There is exactly one namespace and the program starts at its root, so
- * `/` is not a placeholder here — it is the answer. */
-char *getcwd(char *buf, unsigned long size) {
-    if (!buf || size < 2) { nl_errno_slot = 34 /* ERANGE */; return 0; }
-    buf[0] = '/';
-    buf[1] = 0;
-    return buf;
-}
-
 /* ── credentials ─────────────────────────────────────────────────
  * One program, one address space, nothing above it: it is uid 0 in the
  * only sense the word can have here. There is no user database to give
@@ -148,8 +138,9 @@ int pipe(int fds[2]) {
 int fork(void)                          { return ns_refuse(NS_ENOSYS); }
 int execvp(const char *f, char *const a[]) { (void)f; (void)a; return ns_refuse(NS_ENOSYS); }
 int waitpid(int pid, int *st, int opt)  { (void)pid; (void)st; (void)opt; return ns_refuse(NS_ENOSYS); }
-int dup2(int a, int b)                  { (void)a; (void)b; return ns_refuse(NS_ENOSYS); }
-int fcntl(int fd, int cmd, long arg)    { (void)fd; (void)cmd; (void)arg; return ns_refuse(NS_ENOSYS); }
+/* `dup2` and `fcntl(F_DUPFD)` live in boot/vfs.c: on this machine they
+ * are not process plumbing, they are the redirection table for the three
+ * standard descriptors, and that table belongs with the filesystem. */
 
 /* poll over pipes to a child. The guest's own readiness lives in
  * unikernel/net/sockets.nu and never comes through here. */

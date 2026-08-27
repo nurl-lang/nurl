@@ -314,3 +314,103 @@ dtb sed '2a\APPENDED' four.txt
 dtb sed '2c\CHANGED' four.txt
 dtb --stdin four.txt sed 's/a/A/'
 dtb sed 's/x/y/' nonl.txt
+
+echo "[textmisc]"
+# `paste` over ragged inputs: busybox drops the delimiter for an
+# exhausted file, coreutils keeps it — the empty field is still a field,
+# so the reference here is coreutils.
+dtg comm four.txt dupes.txt
+dtg comm -12 four.txt four.txt
+dtg comm -3 four.txt dupes.txt
+dtg paste four.txt words.txt
+dtb paste -s four.txt
+dtg paste -d, four.txt words.txt
+dtb fold -w 4 four.txt
+dtb fold -w 6 -s words.txt
+dtb fold -3 four.txt
+dtb expand tabs.txt
+dtb expand -t 4 tabs.txt
+dtg unexpand -a four.txt
+dtg sum four.txt
+dtg sum -s four.txt
+dtb factor 90
+dtb factor 97
+dtb factor 1 2 3 4 100 101
+
+echo "[binio]"
+dtb od four.txt
+dtb od -c four.txt
+dtb od -b four.txt
+dtb od -tx1 four.txt
+dtb od -An -tx1 four.txt
+dtb od -Ad -td2 four.txt
+dtb od binary.bin
+dtb hexdump -C four.txt
+dtb hexdump four.txt
+dtb hexdump -C binary.bin
+dtb xxd four.txt
+dtb xxd -p four.txt
+dtb xxd -c 8 four.txt
+dtb xxd binary.bin
+dt  cmp four.txt four.txt
+dt  cmp four.txt words.txt
+dt  cmp -l four.txt words.txt
+dt  cmp -s four.txt words.txt
+dtb strings binary.bin
+dtb strings -n 2 four.txt
+
+echo "[archive/proc]"
+dt  kill -l
+
+echo "[sh]"
+dtsh 'echo hello'
+dtsh 'echo "a b" c'
+dtsh "echo 'a b' c"
+dtsh 'x=5; echo $x'
+dtsh 'x=5; echo "${x}0"'
+dtsh 'echo $((2+3*4))'
+dtsh 'echo $(( (2+3) * 4 ))'
+dtsh 'x=3; echo $((x*x))'
+dtsh 'echo ${UNDEF:-fallback}'
+dtsh 'v=abc; echo ${#v}'
+dtsh 'v=hello; echo ${v%llo}; echo ${v#he}'
+dtsh 'v=a.b.c; echo ${v##*.}; echo ${v%%.*}'
+dtsh 'true && echo yes'
+dtsh 'false || echo no'
+dtsh 'if true; then echo t; else echo f; fi'
+dtsh 'if false; then echo a; elif true; then echo b; else echo c; fi'
+dtsh 'for i in a b c; do echo $i; done'
+dtsh 'i=0; while [ $i -lt 3 ]; do echo $i; i=$((i+1)); done'
+dtsh 'x=1; until [ $x -gt 3 ]; do echo $x; x=$((x+1)); done'
+dtsh 'for i in 1 2 3 4; do if [ $i = 3 ]; then break; fi; echo $i; done'
+dtsh 'for i in 1 2 3; do if [ $i = 2 ]; then continue; fi; echo $i; done'
+dtsh 'case abc in a*) echo matched;; *) echo no;; esac'
+dtsh 'case zzz in a*) echo matched;; *) echo no;; esac'
+dtsh 'f() { echo "in f $1"; }; f arg'
+dtsh 'f() { return 3; }; f; echo $?'
+dtsh 'echo $(echo nested)'
+dtsh 'echo `echo backtick`'
+dtsh 'echo a | tr a-z A-Z'
+dtsh 'echo one | cat | tr a-z A-Z'
+dtsh 'echo $?; false; echo $?'
+dtsh 'set a b c; echo $#; echo $1 $3; shift; echo $1'
+dtsh 'set a b c; for x in "$@"; do echo [$x]; done'
+dtsh 'set "a b" c; for x in "$@"; do echo [$x]; done'
+dtsh 'echo *.txt'
+dtsh 'echo nomatch-glob*'
+dtsh 'for f in *.txt; do echo "f=$f"; done'
+dtsh 'x=outer; ( x=inner ); echo $x'
+dtsh 'x=outer; { x=inner; }; echo $x'
+dtsh 'ls nonexistent-entry 2>/dev/null; echo rc=$?'
+dtsh 'echo out 2>&1 | cat'
+dtsh 'seq 3 | while read n; do echo "got $n"; done'
+dtsh 'a=1 b=2; echo $a$b'
+dtsh 'FOO=bar; unset FOO; echo "[${FOO}]"'
+dtsh 'echo a; exit 5; echo b'
+dtsh 'cat <<EOF
+one
+two
+EOF'
+dtsh 'printf "%s-%s\n" x y'
+dtsh 'wc -l < four.txt'
+dtsh 'grep alpha four.txt | wc -l'

@@ -247,7 +247,11 @@ $ `stdlib/core/vec.nu`
         ( string_push_char out ( nurl_str_at a la i ) )
         = i + i 1
     }
-    ( string_push_char out 47 )
+    // The trim keeps at least one byte, so a root `a` — `/` or `C:/` —
+    // still ends in a separator. Adding a second one produced `//d`,
+    // which is a different path on some systems and an ugly one on all
+    // of them.
+    ? ! ( __is_sep ( nurl_str_at a la - ae 1 ) ) { ( string_push_char out 47 ) } {}
     : ~ i j bs
     ~ < j lb {
         ( string_push_char out ( nurl_str_at b lb j ) )

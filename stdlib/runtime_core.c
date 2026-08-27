@@ -1628,6 +1628,7 @@ const char* nurl_read_file(const char *path) {
 #  include <grp.h>
 #  include <sys/time.h>
 #  include <sys/utsname.h>
+#  include <sys/statvfs.h>
 #endif
 #ifdef _WIN32
 #  include <sys/utime.h>
@@ -1858,6 +1859,45 @@ char *nurl_group_name(long long gid) {
     (void)gid;
 #endif
     return NULL;
+}
+
+/* ── filesystem statistics ──────────────────────────────────────────
+ *
+ * `df`'s question — how big is the filesystem holding this path, and how
+ * much of it is free — through statvfs(3), whose struct is POSIX but
+ * whose field ORDER is not something NURL can rely on. Same treatment as
+ * stat: the runtime reads it and hands back a fixed slot layout.
+ *
+ *   0 bsize     3 bfree     6 ffree      9 namemax
+ *   1 frsize    4 bavail    7 favail
+ *   2 blocks    5 files     8 flag
+ *
+ * Returns 0 / -1 with errno. A platform with no statvfs (Windows, the
+ * freestanding target) answers -1 rather than zeroes, so `df` reports
+ * "not supported" instead of an empty disk. */
+long long nurl_statfs_into(const char *path, long long *out) {
+#if defined(__unix__) || defined(__APPLE__)
+    struct statvfs vfs;
+    int i;
+    if (!path || !out) return -1;
+    if (statvfs(path, &vfs) != 0) return -1;
+    for (i = 0; i < 10; i++) out[i] = 0;
+    out[0] = (long long)vfs.f_bsize;
+    out[1] = (long long)vfs.f_frsize;
+    out[2] = (long long)vfs.f_blocks;
+    out[3] = (long long)vfs.f_bfree;
+    out[4] = (long long)vfs.f_bavail;
+    out[5] = (long long)vfs.f_files;
+    out[6] = (long long)vfs.f_ffree;
+    out[7] = (long long)vfs.f_favail;
+    out[8] = (long long)vfs.f_flag;
+    out[9] = (long long)vfs.f_namemax;
+    return 0;
+#else
+    (void)path; (void)out;
+    errno = ENOSYS;
+    return -1;
+#endif
 }
 
 /* ── the machine, and the environment it handed us ──────────────────
