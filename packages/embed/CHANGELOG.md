@@ -78,7 +78,14 @@ looked.
   checks auth, both body spellings, a batch, `normalize`, and serial vs
   16-way-concurrent agreement.
 
-- Requires gpukit `^0.6.5` and gpu `^0.11.2`.
+- Requires gpukit `^0.6.5`, gpu `^0.11.2` and http `^0`. The http
+  requirement had drifted: the local copy this package is built and
+  tested against has been 0.4.0 since it was published, while the
+  manifest still said `^0.3` — so everyone installing from the registry
+  resolved 0.3.2 and compiled against different code than the tests ran
+  on. `nurlpkg publish` refuses on exactly that, which is how it
+  surfaced. The caret sits on the major so a 0.x minor release of http
+  cannot silently re-open the same gap.
 
 ## 0.1.5
 

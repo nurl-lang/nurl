@@ -2,6 +2,18 @@
 
 All notable changes to the `nurllama` package.
 
+## 0.17.2
+
+- Requires `http ^0` instead of `^0.3`. http has been 0.4.0 since #1014
+  and 0.4.0 is what this package is built and tested against in the
+  repo, but the manifest still asked for `^0.3` — so an install from the
+  registry resolved http 0.3.2 and compiled against different code than
+  anything here was tested on. `nurlpkg publish` refuses on exactly that
+  mismatch, which is how it surfaced. The caret sits on the major so a
+  0.x minor release of http cannot silently re-open the same gap in
+  every consumer.
+- `--version` reports the manifest version.
+
 ## 0.17.1 — 2026-08-11
 
 - Republish of 0.17.0: the 0.17.0 upload to the registry was corrupted
