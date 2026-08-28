@@ -3,7 +3,6 @@ LINK OK
 EXIT 0
 OUTPUT
 count: 1
-
 ok: true
 result: 49
 

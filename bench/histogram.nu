@@ -27,7 +27,7 @@ $ `stdlib/core/string.nu`
         ? > v maxc { = maxc v } {}
         = k + k 1
     }
-    ( nurl_print_int maxc )
+    ( nurl_println_int maxc )
     ( free hist )
     ^ 0
 }

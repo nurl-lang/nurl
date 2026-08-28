@@ -26,7 +26,7 @@ explicit = { version = "2.0", registry = "https://other.example/" }
         T m → {
             ( nurl_print `registry=` ) ( nurl_print ( string_data . m registry ) ) ( nurl_print `\n` )
             : i n ( vec_len [Dep] . m dependencies )
-            ( nurl_print `deps=` ) ( nurl_print_int n ) ( nurl_print `\n` )
+            ( nurl_print `deps=` ) ( nurl_println_int n )
             : ~ i k 0
             ~ < k n {
                 : ?Dep dk ( vec_get [Dep] . m dependencies k )

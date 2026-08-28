@@ -37,7 +37,7 @@ $ `stdlib/net/stun.nu`
     // ── request build ────────────────────────────────────────────
     : ( Vec u ) txid ( fixed_txid )
     : ( Vec u ) req ( stun_build_request_with txid )
-    ( nurl_print `req len: ` ) ( nurl_print_int ( vec_len [u] req ) ) ( nurl_print `\n` )
+    ( nurl_print `req len: ` ) ( nurl_println_int ( vec_len [u] req ) )
     ( pb `req type is Binding: ` & == ?? ( vec_get [u] req 0 ) { T x → # i x F → -1 } 0
     == ?? ( vec_get [u] req 1 ) { T x → # i x F → -1 } 1 )
     ( pb `req has magic cookie: ` & & & == ?? ( vec_get [u] req 4 ) { T x → # i x F → -1 } 33
@@ -51,7 +51,7 @@ $ `stdlib/net/stun.nu`
     ?? a {
         T sa → {
             ( nurl_print `reflexive: ` ) ( nurl_print ( string_data . sa host ) )
-            ( nurl_print `:` ) ( nurl_print_int . sa port ) ( nurl_print `\n` )
+            ( nurl_print `:` ) ( nurl_println_int . sa port )
             ( pb `decode correct: ` & != 0 ( nurl_str_eq ( string_data . sa host ) `203.0.113.5` ) == . sa port 54321 )
             ( stun_addr_free sa )
         }

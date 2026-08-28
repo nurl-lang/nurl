@@ -81,17 +81,17 @@ $ `stdlib/ext/dchannel.nu`
 
     // ── depth ────────────────────────────────────────────────────
     : Json el ( disp reg `dchan/len` ( name_args ) )
-    ( nurl_print `len: ` ) ( nurl_print_int ( result_field_int el `len` ) )
+    ( nurl_print `len: ` ) ( nurl_println_int ( result_field_int el `len` ) )
     ( json_free el )
 
     // ── drain (FIFO) ─────────────────────────────────────────────
     : Json r1 ( disp reg `dchan/recv` ( name_args ) )
     ( nurl_print `recv: ` ) ( nurl_print ( result_field_str r1 `status` ) )
-    ( nurl_print ` v=` ) ( nurl_print_int ( result_field_int r1 `v` ) )
+    ( nurl_print ` v=` ) ( nurl_println_int ( result_field_int r1 `v` ) )
     ( json_free r1 )
     : Json r2 ( disp reg `dchan/recv` ( name_args ) )
     ( nurl_print `recv: ` ) ( nurl_print ( result_field_str r2 `status` ) )
-    ( nurl_print ` v=` ) ( nurl_print_int ( result_field_int r2 `v` ) )
+    ( nurl_print ` v=` ) ( nurl_println_int ( result_field_int r2 `v` ) )
     ( json_free r2 )
     : Json r3 ( disp reg `dchan/recv` ( name_args ) )
     ( pstatus `recv: ` r3 ) ( json_free r3 )  // empty
@@ -105,10 +105,10 @@ $ `stdlib/ext/dchannel.nu`
     ( pstatus `send after close: ` e4 ) ( json_free e4 )  // closed
 
     // ── DSend variant names ──────────────────────────────────────
-    ( nurl_print_str ( dsend_name # DSend DSendOk ) )
-    ( nurl_print_str ( dsend_name # DSend DSendFull ) )
-    ( nurl_print_str ( dsend_name # DSend DSendClosed ) )
-    ( nurl_print_str ( dsend_name # DSend DSendErr ) )
+    ( nurl_println ( dsend_name # DSend DSendOk ) )
+    ( nurl_println ( dsend_name # DSend DSendFull ) )
+    ( nurl_println ( dsend_name # DSend DSendClosed ) )
+    ( nurl_println ( dsend_name # DSend DSendErr ) )
 
     ( registry_free reg )
     ( dstore_free store )

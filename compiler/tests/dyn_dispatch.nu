@@ -26,8 +26,8 @@
     : %Speaker sr ( dyn Speaker r )
     : i a ( announce sd 5 )  // Dog.speak: 10 + 5 = 15
     : i b ( announce sr 4 )  // Robot.speak: 3 * 4 = 12
-    ( nurl_print_int a )
-    ( nurl_print_int b )
-    ( nurl_print_int + a b )  // 27
+    ( nurl_println_int a )
+    ( nurl_println_int b )
+    ( nurl_println_int + a b )  // 27
     ^ 0
 }

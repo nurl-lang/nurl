@@ -25,7 +25,7 @@ $ `stdlib/core/vec.nu`
     : *u p ( vec_data [u] v )
     ( grow v )
     : i x # i . p 0
-    ( nurl_print_int x )
+    ( nurl_println_int x )
     ( vec_free [u] v )
     ^ 0
 }

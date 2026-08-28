@@ -33,6 +33,6 @@ $ `stdlib/core/string.nu`
             ( panic_info_free p )
         }
     }
-    ( nurl_print `ok: ` ) ( nurl_print_int / 20 4 ) ( nurl_print `\n` )
+    ( nurl_print `ok: ` ) ( nurl_println_int / 20 4 )
     ^ 0
 }

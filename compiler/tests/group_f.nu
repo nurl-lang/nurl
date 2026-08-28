@@ -31,5 +31,5 @@ $ `stdlib/core/string.nu`
     ( nurl_print s1 )
     ( nurl_print `\n` )
     : n1 ( numify `123` )
-    ( nurl_print_int n1 )
+    ( nurl_println_int n1 )
 }

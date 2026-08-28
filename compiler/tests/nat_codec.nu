@@ -23,7 +23,7 @@ $ `stdlib/net/nat.nu`
     : ( Vec u ) tok ( mk_token )
     : ( Vec u ) ping ( nat_punch_build ( punch_ping ) tok )
     : ( Vec u ) pong ( nat_punch_build ( punch_pong ) tok )
-    ( nurl_print `ping len: ` ) ( nurl_print_int ( vec_len [u] ping ) ) ( nurl_print `\n` )  // 4+1+8
+    ( nurl_print `ping len: ` ) ( nurl_println_int ( vec_len [u] ping ) )  // 4+1+8
     ( pb `ping is punch: ` ( nat_is_punch ping ) )
     ( pb `pong is punch: ` ( nat_is_punch pong ) )
 

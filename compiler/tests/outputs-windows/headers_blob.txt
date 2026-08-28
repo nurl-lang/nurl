@@ -6,7 +6,6 @@ blob: Authorization: Bearer xyz
 
 END
 len=27
-
 http_request: HttpInvalidUrl
 http_get: HttpInvalidUrl
 http_post+ct: HttpInvalidUrl

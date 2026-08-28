@@ -21,6 +21,6 @@
 
 @ main → v {
     : Point p ( origin )
-    ( nurl_print_int . p x )
-    ( nurl_print_int . p y )
+    ( nurl_println_int . p x )
+    ( nurl_println_int . p y )
 }

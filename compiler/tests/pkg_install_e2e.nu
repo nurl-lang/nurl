@@ -198,7 +198,7 @@ version = "1.0.0"
                 ?? rr {
                     F e → ( nurl_print `resolve_err\n` )
                     T locked → {
-                        ( nurl_print `resolved=` ) ( nurl_print_int ( vec_len [LockPkg] locked ) ) ( nurl_print `\n` )
+                        ( nurl_print `resolved=` ) ( nurl_println_int ( vec_len [LockPkg] locked ) )
                         : ?LockPkg p0 ( vec_get [LockPkg] locked 0 )
                         ?? p0 {
                             T p → {

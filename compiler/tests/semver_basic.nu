@@ -21,7 +21,7 @@ $ `stdlib/core/vec.nu`
 
 @ pi s label i v → v {
     ( nurl_print label )
-    ( nurl_print_int v )
+    ( nurl_println_int v )
 }
 
 // cmp sign of two version strings, as -1/0/1.

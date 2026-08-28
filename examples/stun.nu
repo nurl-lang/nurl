@@ -28,7 +28,7 @@ $ `stdlib/net/stun.nu`
                 T sa → {
                     ( nurl_print `public endpoint: ` )
                     ( nurl_print ( string_data . sa host ) )
-                    ( nurl_print `:` ) ( nurl_print_int . sa port ) ( nurl_print `\n` )
+                    ( nurl_print `:` ) ( nurl_println_int . sa port )
                     ( stun_addr_free sa )
                 }
                 F → ( nurl_print `no STUN response (no internet / DNS / blocked)\n` )

@@ -3,7 +3,6 @@ LINK OK
 EXIT 0
 OUTPUT
 resolved=1
-
 install=ok
 badcheck=PkgChecksumMismatch
 nosig=PkgBadSig

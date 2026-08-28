@@ -48,6 +48,6 @@
 
     : u64 result ^^ state checksum
     ( free values )
-    ( nurl_print_int # i & result 0x7fffffffffffffff )
+    ( nurl_println_int # i & result 0x7fffffffffffffff )
     ^ 0
 }

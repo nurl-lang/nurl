@@ -12,6 +12,6 @@
 : | Wrapped { Empty Full Pair }
 
 @ main → v {
-    ( nurl_print_int Empty )  // 0
-    ( nurl_print_int Full )  // 1  (would fail if Full were consumed as payload)
+    ( nurl_println_int Empty )  // 0
+    ( nurl_println_int Full )  // 1  (would fail if Full were consumed as payload)
 }

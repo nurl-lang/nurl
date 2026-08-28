@@ -23,8 +23,7 @@ $ `stdlib/std/supervisor.nu`
 @ report s label * i ctr Supervisor s2 → v {
     ( nurl_print label )
     ( nurl_print `counter=` ) ( nurl_print_int ( nurl_peek ctr 0 ) )
-    ( nurl_print ` restarts=` ) ( nurl_print_int ( child_restarts s2 0 ) )
-    ( nurl_print `\n` )
+    ( nurl_print ` restarts=` ) ( nurl_println_int ( child_restarts s2 0 ) )
 }
 
 @ main → i {
@@ -71,8 +70,8 @@ $ `stdlib/std/supervisor.nu`
     ( nurl_free # s c3 )
 
     // ── policy names ─────────────────────────────────────────────
-    ( nurl_print_str ( restart_policy_name # RestartPolicy RPermanent ) )
-    ( nurl_print_str ( restart_policy_name # RestartPolicy RTransient ) )
-    ( nurl_print_str ( restart_policy_name # RestartPolicy RTemporary ) )
+    ( nurl_println ( restart_policy_name # RestartPolicy RPermanent ) )
+    ( nurl_println ( restart_policy_name # RestartPolicy RTransient ) )
+    ( nurl_println ( restart_policy_name # RestartPolicy RTemporary ) )
     ^ 0
 }

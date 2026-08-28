@@ -36,7 +36,7 @@ $ `stdlib/core/vec.nu`
     : i n ( vec_len [QueryPair] pairs )
     ( nurl_print prefix )
     ( nurl_print ` n=` )
-    ( nurl_print_int n )
+    ( nurl_println_int n )
     : *QueryPair data ( vec_data [QueryPair] pairs )
     : ~ i k 0
     ~ < k n {

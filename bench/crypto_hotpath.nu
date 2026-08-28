@@ -41,7 +41,7 @@ $ `stdlib/std/ecdsa_p256.nu`
 // leftover from when the AES suite ran at 0.3 MB/s and whole numbers
 // printed it as `0`; it stays because a tenth of a MB/s is still the
 // resolution at which a regression here shows up first.
-// (`nurl_print_int` ends its own line, so the digits go through
+// (`nurl_println_int` ends its own line, so the digits go through
 // `nurl_str_int` instead.)
 @ report_mbps s label i ns_per_op → v {
     : i tenths ? > ns_per_op 0 / * ( record_size ) 10000 ns_per_op 0

@@ -35,7 +35,7 @@ $ `stdlib/ext/json.nu`
         F e → {
             ( nurl_print tag )
             ( nurl_print ` ERR=` )
-            ( nurl_print_str ( http_err_name # HttpErr e ) )
+            ( nurl_println ( http_err_name # HttpErr e ) )
         }
     }
 }

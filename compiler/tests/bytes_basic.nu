@@ -27,12 +27,12 @@ $ `stdlib/ext/env.nu`
     ( vec_push [u] v # u 1 )
     ( vec_push [u] v # u 2 )
     ( vec_push [u] v # u 3 )
-    ( nurl_print_int ( vec_len [u] v ) )  // 3
+    ( nurl_println_int ( vec_len [u] v ) )  // 3
     ( vec_free [u] v )
 
     // ── bytes_from_str / bytes_to_str round-trip ─────────────────────
     : ( Vec u ) hello ( bytes_from_str `hello` )
-    ( nurl_print_int ( vec_len [u] hello ) )  // 5
+    ( nurl_println_int ( vec_len [u] hello ) )  // 5
     : String back ( bytes_to_str hello )
     ( nurl_print ( string_data back ) )
     ( nurl_print `\n` )
@@ -53,7 +53,7 @@ $ `stdlib/ext/env.nu`
     : !( Vec u ) ParseErr decoded ( bytes_from_hex ( string_data hex ) )
     ?? decoded {
         T dv → {
-            ( nurl_print_int ( vec_len [u] dv ) )  // 11
+            ( nurl_println_int ( vec_len [u] dv ) )  // 11
             : b same ( bytes_eq hello dv )
             ? same ( nurl_print `roundtrip ok\n` )
             ( nurl_print `roundtrip MISMATCH\n` )
@@ -150,10 +150,10 @@ $ `stdlib/ext/env.nu`
     : String sl5s ( bytes_to_str sl5 )
     ( nurl_print ( string_data sl1s ) ) ( nurl_print `\n` )
     ( nurl_print ( string_data sl2s ) ) ( nurl_print `\n` )
-    ( nurl_print_int ( vec_len [u] sl3 ) )  // 0\n built-in
+    ( nurl_println_int ( vec_len [u] sl3 ) )  // 0\n built-in
     ( nurl_print ( string_data sl4s ) ) ( nurl_print `\n` )
     ( nurl_print ( string_data sl5s ) ) ( nurl_print `\n` )
-    ( nurl_print_int ( vec_len [u] sl6 ) )  // 0\n built-in
+    ( nurl_println_int ( vec_len [u] sl6 ) )  // 0\n built-in
     ( string_free sl1s ) ( string_free sl2s )
     ( string_free sl4s ) ( string_free sl5s )
     ( vec_free [u] sl1 ) ( vec_free [u] sl2 ) ( vec_free [u] sl3 )
@@ -201,7 +201,7 @@ $ `stdlib/ext/env.nu`
             : b same ( bytes_eq hello rv )
             ? same ( nurl_print `read ok\n` )
             ( nurl_print `read MISMATCH\n` )
-            ( nurl_print_int ( vec_len [u] rv ) )
+            ( nurl_println_int ( vec_len [u] rv ) )
             ( vec_free [u] rv )
         }
         F e → {

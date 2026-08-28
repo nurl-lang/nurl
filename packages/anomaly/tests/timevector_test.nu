@@ -255,6 +255,6 @@ $ `src/dynamic.nu`
     ( store_free st )
     ( string_free root )
     ( nurl_print `pass ` ) ( nurl_print_int g_pass )
-    ( nurl_print ` fail ` ) ( nurl_print_int g_fail ) ( nurl_print `\n` )
+    ( nurl_print ` fail ` ) ( nurl_println_int g_fail )
     ^ ? > g_fail 0 1 0
 }

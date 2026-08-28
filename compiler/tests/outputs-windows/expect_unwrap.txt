@@ -3,17 +3,11 @@ LINK OK
 EXIT 0
 OUTPUT
 expect ok: 42
-
 unwrap ok: 42
-
 opt expect struct: 7
-
 res or_else: -1
-
 opt or_else: -2
-
 res_ok some: 42
-
 res_err some: boom
 ok_or err: was-none
 expect panicked: parse the config

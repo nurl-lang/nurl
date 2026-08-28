@@ -3,10 +3,8 @@ LINK OK
 EXIT 0
 OUTPUT
 req len: 20
-
 req type is Binding: YES
 req has magic cookie: YES
 reflexive: 203.0.113.5:54321
-
 decode correct: YES
 wrong txid rejected: YES

@@ -193,7 +193,7 @@ $ `stdlib/std/mlkem.nu`
     ( __run_encapdecap ed t )
     ( json_free ed )
 
-    // Assembled as one String: `nurl_print_int` ends its own line, which
+    // Assembled as one String: `nurl_println_int` ends its own line, which
     // would break this summary across four of them.
     : String sum ( string_new )
     ( string_push_str sum `ACVP ML-KEM: ` )

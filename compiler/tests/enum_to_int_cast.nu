@@ -19,14 +19,14 @@
 
 @ main → v {
     : Col a Red
-    ( nurl_print_int # i a )  // 0 — first variant
+    ( nurl_println_int # i a )  // 0 — first variant
 
     : Col b Blu
-    ( nurl_print_int # i b )  // 2 — third variant
+    ( nurl_println_int # i b )  // 2 — third variant
 
     : Col c Grn
-    ( nurl_print_int # i # i8 c )  // 1 — tag truncs to i8, widens back
+    ( nurl_println_int # i # i8 c )  // 1 — tag truncs to i8, widens back
 
     : Sig s @ Sig { Hi 7 }
-    ( nurl_print_int # i s )  // 1 — wide-enum variant tag
+    ( nurl_println_int # i s )  // 1 — wide-enum variant tag
 }

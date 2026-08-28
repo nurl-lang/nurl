@@ -25,8 +25,8 @@ $ `stdlib/ext/http_response.nu`
 @ main → i {
     : HttpResponse a ( pick T )
     : HttpResponse b2 ( pick F )
-    ( nurl_print_int . a status ) ( nurl_print `\n` )
-    ( nurl_print_int . b2 status ) ( nurl_print `\n` )
+    ( nurl_println_int . a status )
+    ( nurl_println_int . b2 status )
     ( http_response_free a ) ( http_response_free b2 )
     ^ 0
 }

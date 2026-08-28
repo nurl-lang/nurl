@@ -253,8 +253,8 @@ const DEFAULT_SOURCE = `// Welcome to the NURL playground.
 // Output is collected via nurl_print* and flushed to stdout at exit.
 
 @ main → i {
-  ( nurl_print_str \`Hello from NURL -> wasm32-wasi!\\n\` )
-  ( nurl_print_int 42 )
+  ( nurl_print \`Hello from NURL -> wasm32-wasi!\\n\` )
+  ( nurl_println_int 42 )
   ^ 0
 }
 `;

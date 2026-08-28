@@ -12,7 +12,7 @@ $ `stdlib/ext/http.nu`
 @ check_invalid_url ! Response HttpErr res s tag → v {
     ?? res {
         T r → {
-            ( nurl_print_str `unexpected: live response on empty URL` )
+            ( nurl_println `unexpected: live response on empty URL` )
             ( response_free r )
         }
         F e → {
@@ -20,7 +20,7 @@ $ `stdlib/ext/http.nu`
             : s name ( http_err_name he )
             ( nurl_print tag )
             ( nurl_print `: ` )
-            ( nurl_print_str name )
+            ( nurl_println name )
         }
     }
 }
@@ -33,10 +33,9 @@ $ `stdlib/ext/http.nu`
     // header_blob_one already terminates with \r\n. Print a trailing
     // marker so the baseline captures stable bytes regardless of
     // terminal CR handling.
-    ( nurl_print_str `END` )
+    ( nurl_println `END` )
     ( nurl_print `len=` )
-    ( nurl_print_int ( string_len h ) )
-    ( nurl_print `\n` )
+    ( nurl_println_int ( string_len h ) )
     ( string_free h )
 
     // ── 2. http_request with empty URL → HttpInvalidUrl ──────────
@@ -67,12 +66,12 @@ $ `stdlib/ext/http.nu`
     ( check_invalid_url r7 `http_delete` )
 
     // ── 7. http_err_name renders all variants ────────────────────
-    ( nurl_print_str ( http_err_name # HttpErr HttpConnect ) )
-    ( nurl_print_str ( http_err_name # HttpErr HttpTimeout ) )
-    ( nurl_print_str ( http_err_name # HttpErr HttpTls ) )
-    ( nurl_print_str ( http_err_name # HttpErr HttpDns ) )
-    ( nurl_print_str ( http_err_name # HttpErr HttpInvalidUrl ) )
-    ( nurl_print_str ( http_err_name # HttpErr HttpOther ) )
+    ( nurl_println ( http_err_name # HttpErr HttpConnect ) )
+    ( nurl_println ( http_err_name # HttpErr HttpTimeout ) )
+    ( nurl_println ( http_err_name # HttpErr HttpTls ) )
+    ( nurl_println ( http_err_name # HttpErr HttpDns ) )
+    ( nurl_println ( http_err_name # HttpErr HttpInvalidUrl ) )
+    ( nurl_println ( http_err_name # HttpErr HttpOther ) )
 
     ^ 0
 }

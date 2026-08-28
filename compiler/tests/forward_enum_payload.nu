@@ -37,12 +37,12 @@
 @ main → v {
     : Geom g @ Geom { 3 5 }
     : Shape a @ Shape { Box g }
-    ( nurl_print_int ( shape_val a ) )  // 3 — struct payload field
+    ( nurl_println_int ( shape_val a ) )  // 3 — struct payload field
 
     : Color c Green
     : Shape b @ Shape { Hue c }
-    ( nurl_print_int ( shape_val b ) )  // 200 — enum payload, nested match
+    ( nurl_println_int ( shape_val b ) )  // 200 — enum payload, nested match
 
     : Shape d Dot
-    ( nurl_print_int ( shape_val d ) )  // 0 — tag-only variant
+    ( nurl_println_int ( shape_val d ) )  // 0 — tag-only variant
 }

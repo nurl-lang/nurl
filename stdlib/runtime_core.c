@@ -287,9 +287,44 @@ char *realpath(const char *path, char *resolved) {
 
 /* ── §1  Basic I/O ─────────────────────────────────────────────── */
 
-void nurl_print_int(long long n)  { printf("%lld\n", n); }
-void nurl_print_str(const char *s){ puts(s); }
-void nurl_print_bool(int b)       { puts(b ? "true" : "false"); }
+void nurl_print(const char *s);   /* §1, below */
+
+/* Decimal text for `n`, with NO trailing newline — the integer sibling
+ * of `nurl_print`, and what `nurl_print_int` now means.
+ *
+ * It did not used to. `nurl_print_int` printed a newline while the
+ * `nurl_print` it reads as a sibling of explicitly does not, and 186 of
+ * its 421 call sites used it as if it did not: 60 followed it with an
+ * explicit "\n" (emitting a blank line) and 126 followed it with text
+ * beginning in a space (splitting one line into two). The printing form
+ * is now spelled `nurl_println_int`.
+ *
+ * Same stack digit loop as `nurl_str_int`, so an inline integer costs no
+ * allocation, and routed through `nurl_print` so the output-capture
+ * buffer (nurl_print_buf_*) and NURL_IO_LOCK see it. */
+void nurl_print_int(long long n) {
+    char buf[24];
+    char *end = buf + sizeof buf - 1;
+    char *p = end;
+    unsigned long long u = n < 0 ? 0ULL - (unsigned long long)n
+                                 : (unsigned long long)n;
+    *end = '\0';
+    do { *--p = (char)('0' + (u % 10ULL)); u /= 10ULL; } while (u);
+    if (n < 0) *--p = '-';
+    nurl_print(p);
+}
+
+/* Decimal text for `n` followed by a newline. Built on nurl_print_int
+ * for the same reason nurl_println is built on nurl_print. */
+void nurl_println_int(long long n) { nurl_print_int(n); nurl_print("\n"); }
+
+/* That completes the print family: `print` = no newline, `println` =
+ * newline, `_int` = the integer overload, `eprint`/`eprintln` = the same
+ * pair on stderr. `nurl_print_str` (a `nurl_println` duplicate) and
+ * `nurl_print_bool` (`nurl_println` of `? b "true" "false"`) were
+ * removed with the rename — both also wrote straight to stdio, invisible
+ * to the capture buffer and NURL_IO_LOCK. Everything else formats with
+ * `nurl_str_*` and prints with this family. */
 
 /* Read an integer from stdin, equivalent to scanf("%lld") but built from
  * getchar/ungetc so it does not pull in scanf — whose glibc >= 2.38 C23

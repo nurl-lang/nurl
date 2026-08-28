@@ -3,7 +3,6 @@ LINK OK
 EXIT 0
 OUTPUT
 ping len: 13
-
 ping is punch: YES
 pong is punch: YES
 parsed kind=ping: YES

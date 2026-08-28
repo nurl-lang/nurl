@@ -671,11 +671,11 @@ CLASSES = [
         "spellings": {
             "match-arm-rust-habit": prog(
                 "    : i n ?? ( int_parse `12` ) { Ok v → v  _ → -1 }\n"
-                "    ( nurl_print_int n )", prelude="$ `stdlib/std/int`\n"),
+                "    ( nurl_println_int n )", prelude="$ `stdlib/std/int`\n"),
             "match-arm-unknown-variant": prog(
                 "    : Color c Red\n"
                 "    : i n ?? c { Red → 1  Purple → 2  _ → 0 }\n"
-                "    ( nurl_print_int n )",
+                "    ( nurl_println_int n )",
                 prelude="", extra=": | Color { Red Green Blue }\n"),
             "payload-int-into-string": prog(
                 "    : ?s o @ ?s { T 42 }\n"
@@ -689,21 +689,21 @@ CLASSES = [
             "cast-aggregate-to-float": prog(
                 "    : ?i o @ ?i { T 1 }\n"
                 "    : f x # f o\n"
-                "    ( nurl_print_int # i x )", prelude=""),
+                "    ( nurl_println_int # i x )", prelude=""),
             "unknown-function": prog(
                 "    ( no_such_function_here 1 )", prelude=""),
             "assign-to-immutable": prog(
                 "    : i k 1\n"
                 "    = k 2\n"
-                "    ( nurl_print_int k )", prelude=""),
+                "    ( nurl_println_int k )", prelude=""),
             "return-type-mismatch": prog(
                 "    ^ ( vec_new [i] )"),
             "aggregate-literal-on-pointer": prog(
                 "    : *i p @ *i { 1 }\n"
-                "    ( nurl_print_int # i p )", prelude=""),
+                "    ( nurl_println_int # i p )", prelude=""),
             "string-into-int-binding": prog(
                 "    : i k `x`\n"
-                "    ( nurl_print_int k )", prelude=""),
+                "    ( nurl_println_int k )", prelude=""),
             "enum-payload-string-into-int": prog(
                 "    : E e @ E { A `s` }\n"
                 "    ^ ?? e { A v → v  B → 0 }",
@@ -1449,7 +1449,7 @@ CLASSES = [
             # and broke five tests that use it deliberately.
             "struct-partial-init": prog(
                 "    : P p @ P { 7 }\n"
-                "    ( nurl_print_int . p z )",
+                "    ( nurl_println_int . p z )",
                 prelude="", extra=": P { i x  i y  i z }\n"),
             "match-binds-payload-prefix": prog(
                 "    : E e @ E { A 11 22 }\n"

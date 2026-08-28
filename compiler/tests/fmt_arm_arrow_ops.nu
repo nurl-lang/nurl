@@ -50,18 +50,18 @@
 }
 
 @ main → i {
-    ( nurl_print_int ( tern @ ?i { T 7 } 1 ) )
-    ( nurl_print_int ( tern @ ?i { T 7 } 0 ) )
-    ( nurl_print_int ( neq @ ?i { T 5 } ) )
-    ( nurl_print_int ( neq @ ?i { T 0 } ) )
-    ( nurl_print_int ( dbl @ ?i { T 21 } ) )
-    ( nurl_print_int ( inv @ ?b { T F } ) )
-    ( nurl_print_int ( rem @ ?i { T 10 } ) )
+    ( nurl_println_int ( tern @ ?i { T 7 } 1 ) )
+    ( nurl_println_int ( tern @ ?i { T 7 } 0 ) )
+    ( nurl_println_int ( neq @ ?i { T 5 } ) )
+    ( nurl_println_int ( neq @ ?i { T 0 } ) )
+    ( nurl_println_int ( dbl @ ?i { T 21 } ) )
+    ( nurl_println_int ( inv @ ?b { T F } ) )
+    ( nurl_println_int ( rem @ ?i { T 10 } ) )
     : ( @ i i ) f \ i x → i { ^ + x 1 }
-    ( nurl_print_int ( f 41 ) )
+    ( nurl_println_int ( f 41 ) )
     ?? ( opt_ret 3 ) {
-        T got → ( nurl_print_int got )
-        F → ( nurl_print_int 0 )
+        T got → ( nurl_println_int got )
+        F → ( nurl_println_int 0 )
     }
     ^ 0
 }

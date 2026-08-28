@@ -123,8 +123,7 @@ $ `deps/gpukit/src/dev.nu`
                     ( nurl_print `  top-1: tape ` )
                     ( nurl_print_int targ )
                     ( nurl_print ` engine ` )
-                    ( nurl_print_int earg )
-                    ( nurl_print `\n` )
+                    ( nurl_println_int earg )
                     ( check == targ earg `WIRING ORACLE: tape top-1 == inference engine top-1` )
                     : f fe ( llm_logit lm targ )
                     : ~ f rel / ( float_abs - tbest fe ) ? > ( float_abs fe ) 1.0 ( float_abs fe ) 1.0

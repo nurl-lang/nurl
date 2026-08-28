@@ -4,7 +4,7 @@
 // token. Binary MINUS still works as before (whitespace between '-' and
 // its operand).
 
-@ show_i i n → v { ( nurl_print_int n ) }
+@ show_i i n → v { ( nurl_println_int n ) }
 
 @ show_f f x → v { ( nurl_print ( nurl_str_float x ) ) }
 

@@ -101,7 +101,7 @@ $ `deps/tensor/src/tensor.nu`
     ( nurl_print name )
     ( nurl_print ` (worst rel ` )
     ( nurl_print ( nurl_str_float worst ) )
-    ? >= wi 0 { ( nurl_print ` @` ) ( nurl_print_int wi ) } {}
+    ? >= wi 0 { ( nurl_print ` @` ) ( nurl_println_int wi ) } {}
     ( nurl_print `)\n` )
 }
 

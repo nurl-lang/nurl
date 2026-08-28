@@ -23,8 +23,8 @@ $ `stdlib/core/vec.nu`
     }
 
     : ( Vec u ) r ( apply dbl v )
-    ( nurl_print_int ?? ( vec_get [u] r 0 ) { T x → # i x F → -1 } )  // 6
-    ( nurl_print_int ?? ( vec_get [u] r 1 ) { T x → # i x F → -1 } )  // 8
+    ( nurl_println_int ?? ( vec_get [u] r 0 ) { T x → # i x F → -1 } )  // 6
+    ( nurl_println_int ?? ( vec_get [u] r 1 ) { T x → # i x F → -1 } )  // 8
 
     // free the closure env (capture-less closures still allocate one)
     : *u env # *u dbl 1

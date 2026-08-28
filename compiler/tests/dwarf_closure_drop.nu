@@ -36,7 +36,6 @@ $ `stdlib/core/io.nu`
         ( string_free s )
     } )
     ( nurl_print `total_len=` )
-    ( nurl_print_int total )
-    ( nurl_print `\n` )
+    ( nurl_println_int total )
     ^ 0
 }

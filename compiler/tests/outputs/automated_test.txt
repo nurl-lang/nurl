@@ -101,7 +101,6 @@ TEST: Float Operations (Basic)
 ========================================
 TESTIEN YHTEENVETO
 ========================================
-Onnistuneet testit: 12
-/12
+Onnistuneet testit: 12/12
 ✓ KAIKKI TESTIT ONNISTUIVAT!
 ✓ NURL kääntäjä toimii oikein.

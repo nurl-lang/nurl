@@ -29,7 +29,7 @@ $ `deps/mlp/src/mlp.nu`
     }
     ( nurl_print label )
     ? == bad 0 { ( nurl_print ` BIT-EXACT (` ) ( nurl_print_int n ) ( nurl_print ` values)\n` ) ^ T } {
-        ( nurl_print ` MISMATCH: ` ) ( nurl_print_int bad ) ( nurl_print ` of ` ) ( nurl_print_int n ) ( nurl_print `\n` ) ^ F
+        ( nurl_print ` MISMATCH: ` ) ( nurl_print_int bad ) ( nurl_print ` of ` ) ( nurl_println_int n ) ^ F
     }
 }
 

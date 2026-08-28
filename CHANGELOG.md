@@ -64,6 +64,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the macOS ARM64 runner, which also runs `./build.sh`, is
   unaffected.
 
+### Changed
+
+- **The print family now says what it does** — one rule everywhere:
+  `print` = no trailing newline, `println` = trailing newline, `_int` =
+  the integer form; `eprint`/`eprintln` are the same pair on stderr.
+
+  `nurl_print_int` used to append a newline while reading as the sibling
+  of `nurl_print` (which does not), and 186 of its 421 call sites in
+  this tree used it as if it did not — 60 followed it with an explicit
+  `\n` (a blank line on every value) and 126 followed it with text meant
+  for the same line, splitting one line into two. The printing spelling
+  is now **`nurl_println_int`**, and **`nurl_print_int`** prints the
+  integer with no newline. Every broken call site was converted and 22
+  test goldens now show the line each test always meant to print
+  (`524288 bytes`, `Onnistuneet testit: 12/12`, …).
+
+  All three legacy printers also wrote straight to stdio, bypassing the
+  `nurl_print_buf_*` capture buffer and the wasi-threads IO lock. The
+  int pair is now routed through `nurl_print` (no allocation — stack
+  digit buffer), so captured output finally contains what was printed,
+  in order.
+
+  **Removed:** `nurl_print_str` (it was `nurl_println` under another
+  name) and `nurl_print_bool` (write
+  `( nurl_println ? x \`true\` \`false\` )`). Calling any removed or
+  renamed spelling is a compile error with the replacement named in the
+  message — nothing changes meaning silently.
+
+- **`. x 0` on an option/result extracts the `i1` tag, typed `b`** — so
+  `: is_ok . r 0` and `? . r 0 … …` now work like every other numeric
+  field access (`. r 1` already gave the payload). It used to return the
+  whole aggregate, which type-checked only when handed straight to an
+  FFI scalar parameter and then read the tag by ABI coincidence —
+  `call @f({ i1, i64 } %v)` against a declared `i1`. The emitted IR now
+  carries an explicit `extractvalue …, 0`.
+
 ## [0.54.0] — 2026-08-27
 
 ### Added

@@ -801,7 +801,7 @@ $ `cudakernel.nu`
             ~ & ! ( tids_ready sw tids ) < rnd 400 { ( swarm_pump sw 200 ) = rnd + rnd 1 }
             : Combined cb ( tids_combine sw 0 op tids )
             : i total . cb value
-            // nurl_print_int appends a newline (it is puts-shaped), so building
+            // nurl_println_int appends a newline (it is puts-shaped), so building
             // a one-line summary out of it printed the range across four lines.
             ? > . cb nfail 0 { ( nurl_print `swarm-mcp: WARNING ` ) ( nurl_print ( nurl_str_int . cb nfail ) ) ( nurl_print ` chunk(s) failed\n` ) } {}
             ( nurl_print ( reduce_op_name op ) ) ( nurl_print ` of (` ) ( nurl_print expr )

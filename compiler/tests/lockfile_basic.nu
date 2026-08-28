@@ -23,7 +23,7 @@ $ `stdlib/ext/lockfile.nu`
     ?? pr {
         F e → ( nurl_print ( lock_err_name e ) )
         T got → {
-            ( nurl_print `count=` ) ( nurl_print_int ( vec_len [LockPkg] got ) ) ( nurl_print `\n` )
+            ( nurl_print `count=` ) ( nurl_println_int ( vec_len [LockPkg] got ) )
             : i n ( vec_len [LockPkg] got )
             : ~ i k 0
             ~ < k n {

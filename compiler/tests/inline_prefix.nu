@@ -35,7 +35,7 @@ inline @ lane i v i k → i { ^ & ( __lshr64_t v * k 8 ) 255 }
 
 @ show s label i got i want → v {
     ( nurl_print label )
-    ( nurl_print_int got )
+    ( nurl_println_int got )
     ( nurl_print ? == got want ` ok\n` ` MISMATCH\n` )
 }
 

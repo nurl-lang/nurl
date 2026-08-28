@@ -3,6 +3,4 @@ LINK OK
 EXIT 0
 OUTPUT
 200
-
 200
-

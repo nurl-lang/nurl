@@ -101,7 +101,7 @@ $ `deps/wasmbuilder/src/build.nu`
     ( string_push_str w `  : ~ i acc ` ) ( string_push_str w ( __red_identity_src op ) ) ( string_push_str w `\n` )
     ( string_push_str w `  : ~ i x lo\n` )
     ( string_push_str w `  ~ < x hi { : i kv ( kernel x ) = acc ` ) ( string_push_str w ( __red_combine_src op ) ) ( string_push_str w ` = x + x 1 }\n` )
-    ( string_push_str w `  ( nurl_print_int acc )\n  ^ 0\n}\n` )
+    ( string_push_str w `  ( nurl_println_int acc )\n  ^ 0\n}\n` )
     ( string_push_str w `@ main → i { ^ ( __swarmk_main ) }\n` )
     ^ w
 }
@@ -126,9 +126,9 @@ $ `deps/wasmbuilder/src/build.nu`
     ( string_push_str w `  : i lo ( nurl_str_to_int ( nurl_argv_get 1 ) )\n` )
     ( string_push_str w `  : i hi ( nurl_str_to_int ( nurl_argv_get 2 ) )\n` )
     ? == dtype 1 {
-        ( string_push_str w `  ( nurl_print_int ( f64_to_bits ( kernel lo hi ) ) )\n` )
+        ( string_push_str w `  ( nurl_println_int ( f64_to_bits ( kernel lo hi ) ) )\n` )
     } {
-        ( string_push_str w `  ( nurl_print_int ( kernel lo hi ) )\n` )
+        ( string_push_str w `  ( nurl_println_int ( kernel lo hi ) )\n` )
     }
     ( string_push_str w `  ^ 0\n}\n` )
     ( string_push_str w `@ main → i { ^ ( __swarmk_main ) }\n` )
@@ -153,7 +153,7 @@ $ `deps/wasmbuilder/src/build.nu`
     ( string_push_str w `  : ~ f acc ` ) ( string_push_str w ( __red_identity_src_f op ) ) ( string_push_str w `\n` )
     ( string_push_str w `  : ~ i x lo\n` )
     ( string_push_str w `  ~ < x hi { : f kv ( kernel x ) = acc ` ) ( string_push_str w ( __red_combine_src_f op ) ) ( string_push_str w ` = x + x 1 }\n` )
-    ( string_push_str w `  ( nurl_print_int ( f64_to_bits acc ) )\n  ^ 0\n}\n` )
+    ( string_push_str w `  ( nurl_println_int ( f64_to_bits acc ) )\n  ^ 0\n}\n` )
     ( string_push_str w `@ main → i { ^ ( __swarmk_main ) }\n` )
     ^ w
 }

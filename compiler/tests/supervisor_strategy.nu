@@ -54,8 +54,8 @@ $ `stdlib/std/supervisor.nu`
     ( run_strategy `one-for-one ` @ SupStrategy { OneForOne } )
     ( run_strategy `rest-for-one` @ SupStrategy { RestForOne } )
 
-    ( nurl_print_str ( sup_strategy_name # SupStrategy OneForOne ) )
-    ( nurl_print_str ( sup_strategy_name # SupStrategy OneForAll ) )
-    ( nurl_print_str ( sup_strategy_name # SupStrategy RestForOne ) )
+    ( nurl_println ( sup_strategy_name # SupStrategy OneForOne ) )
+    ( nurl_println ( sup_strategy_name # SupStrategy OneForAll ) )
+    ( nurl_println ( sup_strategy_name # SupStrategy RestForOne ) )
     ^ 0
 }

@@ -149,9 +149,9 @@ $ `src/interp.nu`
 : ~ i g_fail 0
 
 @ ck s label i got i want → v {
-    ( nurl_print label ) ( nurl_print_int got )
+    ( nurl_print label ) ( nurl_println_int got )
     ? == got want { ( nurl_print ` == ` ) } { ( nurl_print ` != ` ) = g_fail + g_fail 1 }
-    ( nurl_print_int want ) ( nurl_print `\n` )
+    ( nurl_println_int want )
 }
 
 @ main → i {
@@ -237,7 +237,7 @@ $ `src/interp.nu`
     ( ck `fold + memarg:  ` ( ev1 ( wasm_addrfold ) `off` 0 ) 4 )
     ( ck `fold oob traps: ` ( trap1 ( wasm_addrfold ) `oob` 1 ) 1 )
 
-    ? > g_fail 0 { ( nurl_print `FAILURES: ` ) ( nurl_print_int g_fail ) ( nurl_print `\n` ) ^ 1 } {}
+    ? > g_fail 0 { ( nurl_print `FAILURES: ` ) ( nurl_println_int g_fail ) ^ 1 } {}
     ( nurl_print `all semantics tests passed\n` )
     ^ 0
 }

@@ -11,7 +11,7 @@ $ `stdlib/core/char`
 
 @ main → i {
     // 'a'=97 → 'A'=65; is_upper(65) → 1
-    ( nurl_print_int ( to_upper_ascii 97 ) )
-    ( nurl_print_int ( is_upper 65 ) )
+    ( nurl_println_int ( to_upper_ascii 97 ) )
+    ( nurl_println_int ( is_upper 65 ) )
     ^ 0
 }

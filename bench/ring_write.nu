@@ -35,6 +35,6 @@
 
     : u64 result ^^ | << state 32 state . buf 0
     ( free buf )
-    ( nurl_print_int # i & result 0x7fffffffffffffff )
+    ( nurl_println_int # i & result 0x7fffffffffffffff )
     ^ 0
 }

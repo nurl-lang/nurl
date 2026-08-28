@@ -9,6 +9,6 @@ $ `stdlib/core/string.nu`
     = . p r 255
     = . p g 128
     = . p n 99
-    ( nurl_print_int + + # i . p r # i . p g . p n )
+    ( nurl_println_int + + # i . p r # i . p g . p n )
     ^ 0
 }

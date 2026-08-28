@@ -22,7 +22,7 @@ $ `stdlib/core/string.nu`
         T t → {
             ?? {
                 [i] ints → oi {
-                    ?? oi { T v → { ( nurl_print `blk int=` ) ( nurl_print_int v ) } F → { ( nurl_print `blk ints closed\n` ) } }
+                    ?? oi { T v → { ( nurl_print `blk int=` ) ( nurl_println_int v ) } F → { ( nurl_print `blk ints closed\n` ) } }
                 }
                 [String] strs → os {
                     ?? os { T s → { ( nurl_print `blk str=` ) ( nurl_print ( string_data s ) ) ( nurl_print `\n` ) ( string_free s ) } F → { ( nurl_print `blk strs closed\n` ) } }
@@ -46,14 +46,14 @@ $ `stdlib/core/string.nu`
 
     // 1) empty channel + default → the default arm runs (non-blocking).
     ?? {
-        [i] ch → o { ?? o { T v → { ( nurl_print `unexpected ` ) ( nurl_print_int v ) } F → { ( nurl_print `none\n` ) } } }
+        [i] ch → o { ?? o { T v → { ( nurl_print `unexpected ` ) ( nurl_println_int v ) } F → { ( nurl_print `none\n` ) } } }
         _ → { ( nurl_print `default\n` ) }
     }
 
     // 2) a queued value → the channel arm wins, binding Some(v).
     ( chan_send [i] ch 7 )
     ?? {
-        [i] ch → o { ?? o { T v → { ( nurl_print `got ` ) ( nurl_print_int v ) } F → { ( nurl_print `none\n` ) } } }
+        [i] ch → o { ?? o { T v → { ( nurl_print `got ` ) ( nurl_println_int v ) } F → { ( nurl_print `none\n` ) } } }
         _ → { ( nurl_print `default\n` ) }
     }
 
@@ -63,8 +63,8 @@ $ `stdlib/core/string.nu`
     ( chan_send [i] a 1 )
     ( chan_send [i] b 2 )
     ?? {
-        [i] a → oa { ?? oa { T v → { ( nurl_print `prio a=` ) ( nurl_print_int v ) } F → {} } }
-        [i] b → ob { ?? ob { T v → { ( nurl_print `prio b=` ) ( nurl_print_int v ) } F → {} } }
+        [i] a → oa { ?? oa { T v → { ( nurl_print `prio a=` ) ( nurl_println_int v ) } F → {} } }
+        [i] b → ob { ?? ob { T v → { ( nurl_print `prio b=` ) ( nurl_println_int v ) } F → {} } }
         _ → { ( nurl_print `prio default\n` ) }
     }
     ( chan_close [i] a ) ( chan_close [i] b )
@@ -73,7 +73,7 @@ $ `stdlib/core/string.nu`
     // 4) closed + empty channel → recv yields None, the None branch runs.
     ( chan_close [i] ch )
     ?? {
-        [i] ch → o { ?? o { T v → { ( nurl_print `v=` ) ( nurl_print_int v ) } F → { ( nurl_print `closed\n` ) } } }
+        [i] ch → o { ?? o { T v → { ( nurl_print `v=` ) ( nurl_println_int v ) } F → { ( nurl_print `closed\n` ) } } }
         _ → { ( nurl_print `default\n` ) }
     }
     ( chan_free [i] ch )

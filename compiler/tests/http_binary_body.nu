@@ -75,9 +75,9 @@ $ `stdlib/core/vec.nu`
             ?? ct { T t → { ( thread_join t ) } F _ → {} }
 
             ( nurl_print `server_saw_len=` )
-            ( nurl_print_int g_saw_len )
+            ( nurl_println_int g_saw_len )
             ( nurl_print `client_status=` )
-            ( nurl_print_int g_client_status )
+            ( nurl_println_int g_client_status )
             ( nurl_print `done\n` )
         }
         F e → {

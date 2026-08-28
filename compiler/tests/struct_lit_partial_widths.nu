@@ -9,7 +9,7 @@ $ `stdlib/core/string.nu`
 @ main → i {
     : A a @ A { 7 }
     : P p @ P { 255 128 0 }
-    ( nurl_print_int + + . a x . a y . a z )
-    ( nurl_print_int + + # i . p r # i . p g # i . p b )
+    ( nurl_println_int + + . a x . a y . a z )
+    ( nurl_println_int + + # i . p r # i . p g # i . p b )
     ^ 0
 }

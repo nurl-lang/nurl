@@ -22,14 +22,14 @@ $ `stdlib/std/trace.nu`
     ( string_free tp )
     ( nurl_print `parsed ok=` ) ( nurl_print_int . p ok )
     ( nurl_print ` trace=` ) ( nurl_print_int . p trace )
-    ( nurl_print ` span=` ) ( nurl_print_int . p span ) ( nurl_print `\n` )
+    ( nurl_print ` span=` ) ( nurl_println_int . p span )
     ( pb `round-trip: ` & == . p trace tid == . p span sid )
 
     // ── current-context globals ──────────────────────────────────
     ( pb `active (fresh): ` ( trace_active ) )
     ( trace_set tid sid )
     ( pb `active (set): ` ( trace_active ) )
-    ( nurl_print `cur trace=` ) ( nurl_print_int ( trace_current_trace ) ) ( nurl_print `\n` )
+    ( nurl_print `cur trace=` ) ( nurl_println_int ( trace_current_trace ) )
     ( trace_clear )
     ( pb `active (cleared): ` ( trace_active ) )
 
@@ -43,6 +43,6 @@ $ `stdlib/std/trace.nu`
 
     // ── malformed header rejected ────────────────────────────────
     : TraceParsed bp ( traceparent_parse `not-a-traceparent` )
-    ( nurl_print `bad ok=` ) ( nurl_print_int . bp ok ) ( nurl_print `\n` )
+    ( nurl_print `bad ok=` ) ( nurl_println_int . bp ok )
     ^ 0
 }

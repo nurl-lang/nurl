@@ -164,7 +164,7 @@ $ `work.nu`
             // also matched the field would be parsed as an array-index store.
             = . p verbose vflag
             ( nurl_print `swarm relay listening on ` ) ( nurl_print host )
-            ( nurl_print `:` ) ( nurl_print_int port )
+            ( nurl_print `:` ) ( nurl_println_int port )
             ? == vflag 1 { ( nurl_print ` (verbose: logging peer connect/disconnect)` ) } {}
             ( nurl_print `\n` )
             ( relay_server_run p )

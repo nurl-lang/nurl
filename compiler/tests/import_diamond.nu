@@ -10,6 +10,6 @@ $ `stdlib/std/../core/vec.nu`
 @ main → i {
     : ( Vec i ) v ( vec_new [i] )
     ( vec_push [i] v 42 )
-    ( nurl_print_int ?? ( vec_get [i] v 0 ) { T x → x F _ → 0 } )
+    ( nurl_println_int ?? ( vec_get [i] v 0 ) { T x → x F _ → 0 } )
     ^ 0
 }

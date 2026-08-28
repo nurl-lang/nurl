@@ -25,9 +25,9 @@ $ `stdlib/core/string.nu`
 }
 
 @ main → i {
-    ( nurl_print `max(3,7)=` ) ( nurl_print_int ( my_max [i] 3 7 ) ) ( nurl_print `\n` )
-    ( nurl_print `min(3,7)=` ) ( nurl_print_int ( my_min [i] 3 7 ) ) ( nurl_print `\n` )
-    ( nurl_print `max(9,2)=` ) ( nurl_print_int ( my_max [i] 9 2 ) ) ( nurl_print `\n` )
+    ( nurl_print `max(3,7)=` ) ( nurl_println_int ( my_max [i] 3 7 ) )
+    ( nurl_print `min(3,7)=` ) ( nurl_println_int ( my_min [i] 3 7 ) )
+    ( nurl_print `max(9,2)=` ) ( nurl_println_int ( my_max [i] 9 2 ) )
     : String a ( string_from `apple` )
     : String b ( string_from `pear` )
     ( nurl_print `max(apple,pear)=` ) ( nurl_print ( string_data ( my_max [String] a b ) ) ) ( nurl_print `\n` )

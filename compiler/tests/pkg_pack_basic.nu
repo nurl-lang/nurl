@@ -62,7 +62,7 @@ version = "0.1.0"
                     ?? tp {
                         F e → ( nurl_print ( tar_err_name e ) )
                         T ents → {
-                            ( nurl_print `count=` ) ( nurl_print_int ( vec_len [TarEntry] ents ) ) ( nurl_print `\n` )
+                            ( nurl_print `count=` ) ( nurl_println_int ( vec_len [TarEntry] ents ) )
                             ( pb `has_nurl.toml` ( has_entry ents `nurl.toml` ) )
                             ( pb `has_src/lib.nu` ( has_entry ents `src/lib.nu` ) )
                             ( pb `excl_deps` ( has_entry ents `deps/foo/junk.nu` ) )

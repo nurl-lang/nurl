@@ -14,13 +14,13 @@ $ `stdlib/core/io.nu`
     : ( Vec u ) b ( vec_with_cap [u] 32 )
     ( vec_set_len [u] b 32 )
     : i r ( nurl_rand_fill ( vec_data [u] b ) 32 )
-    ( nurl_print `rand_fill=` ) ( nurl_print_int r ) ( nurl_print `\n` )
+    ( nurl_print `rand_fill=` ) ( nurl_println_int r )
     // Two draws must differ, and neither may be all zeroes — the two
     // ways a fake entropy source looks plausible.
     : ~ i zeros 0
     : ~ i k 0
     ~ < k 32 { ? == # i . ( vec_data [u] b ) k 0 { = zeros + zeros 1 } {} = k + k 1 }
-    ( nurl_print `zeros=` ) ( nurl_print_int zeros ) ( nurl_print `\n` )
+    ( nurl_print `zeros=` ) ( nurl_println_int zeros )
     : ( Vec u ) c ( vec_with_cap [u] 32 )
     ( vec_set_len [u] c 32 )
     : i r2 ( nurl_rand_fill ( vec_data [u] c ) 32 )
@@ -30,7 +30,7 @@ $ `stdlib/core/io.nu`
         ? == # i . ( vec_data [u] b ) j # i . ( vec_data [u] c ) j { = same + same 1 } {}
         = j + j 1
     }
-    ( nurl_print `same_bytes=` ) ( nurl_print_int same ) ( nurl_print `\n` )
+    ( nurl_print `same_bytes=` ) ( nurl_println_int same )
     ( vec_free [u] b ) ( vec_free [u] c )
     ^ 0
 }

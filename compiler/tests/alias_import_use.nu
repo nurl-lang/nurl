@@ -13,7 +13,7 @@
 $ `compiler/tests/should_fail_alias_import_mod.nu` m
 
 @ main → v {
-    ( nurl_print_int ( m::ai_add 2 3 ) )  // 5
-    ( nurl_print_int ( m::ai_mul 3 4 ) )  // 12
-    ( nurl_print_int ( m::ai_double 7 ) )  // 14 (internal ai_add call was rewritten too)
+    ( nurl_println_int ( m::ai_add 2 3 ) )  // 5
+    ( nurl_println_int ( m::ai_mul 3 4 ) )  // 12
+    ( nurl_println_int ( m::ai_double 7 ) )  // 14 (internal ai_add call was rewritten too)
 }

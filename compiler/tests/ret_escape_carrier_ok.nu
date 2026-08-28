@@ -55,8 +55,8 @@ $ `stdlib/core/vec.nu`
     : i r ( runit twice )
     : Outer o ( mk2 4 )
     : Inner n . o it
-    ( nurl_print_int ( vec_len [i] xs ) )
-    ( nurl_print_int + r . n x )
+    ( nurl_println_int ( vec_len [i] xs ) )
+    ( nurl_println_int + r . n x )
     ( vec_free [i] xs )
     ^ 0
 }

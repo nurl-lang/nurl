@@ -35,7 +35,7 @@ $ `stdlib/net/rendezvous.nu`
             = . p lst . rs lst
             = . p records . rs records
             ( nurl_print `rendezvous listening on ` ) ( nurl_print ( string_data host ) )
-            ( nurl_print `:` ) ( nurl_print_int port )
+            ( nurl_print `:` ) ( nurl_println_int port )
             ( rz_server_run p )
             ( rz_server_free p )
         }

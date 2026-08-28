@@ -17,19 +17,19 @@ $ `stdlib/std/swim.nu`
         ( string_from `host-a` ) 60000 ( string_from `host-t` ) 60001 g }
 
     : ( Vec u ) wire ( swim_msg_encode m )
-    ( nurl_print `bytes=` ) ( nurl_print_int ( vec_len [u] wire ) )
+    ( nurl_print `bytes=` ) ( nurl_println_int ( vec_len [u] wire ) )
 
     : !SwimMsg SwimErr d ( swim_msg_decode wire )
     ?? d {
         T m2 → {
-            ( nurl_print `type=` ) ( nurl_print_int ( _mtype_code . m2 mtype ) )
-            ( nurl_print `seq=` ) ( nurl_print_int . m2 seq )
+            ( nurl_print `type=` ) ( nurl_println_int ( _mtype_code . m2 mtype ) )
+            ( nurl_print `seq=` ) ( nurl_println_int . m2 seq )
             ( nurl_print `from=` ) ( nurl_print ( string_data . m2 from_host ) )
-            ( nurl_print `:` ) ( nurl_print_int . m2 from_port )
+            ( nurl_print `:` ) ( nurl_println_int . m2 from_port )
             ( nurl_print `tgt=` ) ( nurl_print ( string_data . m2 target_host ) )
-            ( nurl_print `:` ) ( nurl_print_int . m2 target_port )
+            ( nurl_print `:` ) ( nurl_println_int . m2 target_port )
             : i gn ( vec_len [Member] . m2 gossip )
-            ( nurl_print `gossip=` ) ( nurl_print_int gn )
+            ( nurl_print `gossip=` ) ( nurl_println_int gn )
             : ~ i k 0
             ~ < k gn {
                 ?? ( vec_get [Member] . m2 gossip k ) {

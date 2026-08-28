@@ -25,6 +25,7 @@ $ `pttvoice/audio.nu`
 $ `pttvoice/proto.nu`
 
 @ pk_for i id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + id k ) = k + k 1 } ^ v }
+
 @ group_id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + 200 k ) = k + k 1 } ^ v }
 
 // A synth talkspurt frame (sawtooth) for hosts with no microphone, so a
@@ -39,7 +40,7 @@ $ `pttvoice/proto.nu`
 
 // Drain + play every inbound voice frame currently available. Returns how many
 // frames were played.
-@ pump_playback *Transport tr s dec s play → i {
+@ pump_playback * Transport tr s dec s play → i {
     : ~ i played 0
     : ~ b more T
     ~ more {
@@ -127,7 +128,7 @@ $ `pttvoice/proto.nu`
             }
 
             ( nurl_print `frames sent=` ) ( nurl_print_int sent )
-            ( nurl_print ` frames played=` ) ( nurl_print_int recvd ) ( nurl_print `\n` )
+            ( nurl_print ` frames played=` ) ( nurl_println_int recvd )
 
             ( opus_enc_free enc ) ( opus_dec_free dec )
             ( audio_close cap ) ( audio_close play )

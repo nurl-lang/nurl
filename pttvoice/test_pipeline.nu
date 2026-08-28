@@ -49,7 +49,7 @@ $ `pttvoice/proto.nu`
     : ( Vec u ) empty ( vec_new [u] )
     ( yn `non-voice payload rejected by proto_decode: ` ?? ( proto_decode empty ) { T vm → { ( voicemsg_free vm ) F } F → T } )
     ( vec_free [u] empty )
-    ( nurl_print `frames that survived encode→frame→decode→pcm: ` ) ( nurl_print_int frames_ok )
+    ( nurl_print `frames that survived encode→frame→decode→pcm: ` ) ( nurl_println_int frames_ok )
     ( yn `all 5 frames round-tripped (seq + energy): ` & all_ok == frames_ok 5 )
 
     ( opus_enc_free enc ) ( opus_dec_free dec )

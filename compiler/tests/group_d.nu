@@ -43,27 +43,27 @@ $ `compiler/tests/should_fail_group_d_lib.nu`
 
 @ main → v {
     // ── ffi_decl test ────────────────────────────────────────────────
-    ( nurl_print_int ( strlen `hello` ) )  // strlen("hello") = 5
+    ( nurl_println_int ( strlen `hello` ) )  // strlen("hello") = 5
 
     // ── enum test ────────────────────────────────────────────────────
-    ( nurl_print_int North )  // 0
-    ( nurl_print_int South )  // 1
+    ( nurl_println_int North )  // 0
+    ( nurl_println_int South )  // 1
     ? == North South
-    ( nurl_print_str `equal` )
-    ( nurl_print_str `not equal` )  // not equal
+    ( nurl_println `equal` )
+    ( nurl_println `not equal` )  // not equal
 
     // ── try_expr: success path ───────────────────────────────────────
     // safe_div(10,2) = Some(5), compute adds 2 → Some(7)
     : ok ( compute 10 2 )
-    ( nurl_print_bool . ok 0 )  // true
-    ( nurl_print_int . ok 1 )  // 7
+    ( nurl_println ? . ok 0 `true` `false` )  // true
+    ( nurl_println_int . ok 1 )  // 7
 
     // ── try_expr: failure path ───────────────────────────────────────
     // safe_div(10,0) = None, \ propagates → compute returns zeroinitializer
     : no ( compute 10 0 )
-    ( nurl_print_bool . no 0 )  // false
+    ( nurl_println ? . no 0 `true` `false` )  // false
 
     // ── import_decl test ─────────────────────────────────────────────
-    ( nurl_print_str ( lib_greet ) )  // imported
-    ( nurl_print_int ( lib_mul 5 6 ) )  // 30
+    ( nurl_println ( lib_greet ) )  // imported
+    ( nurl_println_int ( lib_mul 5 6 ) )  // 30
 }

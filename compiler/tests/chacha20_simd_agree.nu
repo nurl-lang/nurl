@@ -45,7 +45,7 @@ $ `stdlib/std/chacha20poly1305.nu`
                     ( nurl_print `MISMATCH ctr=` ) ( nurl_print_int counter )
                     ( nurl_print ` doff=` ) ( nurl_print_int doff )
                     ( nurl_print ` n=` ) ( nurl_print_int n )
-                    ( nurl_print ` at=` ) ( nurl_print_int j )
+                    ( nurl_print ` at=` ) ( nurl_println_int j )
                     ( nurl_println `` )
                 } {}
                 = g_bad + g_bad 1

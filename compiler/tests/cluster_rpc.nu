@@ -36,8 +36,7 @@ $ `stdlib/ext/cluster.nu`
     \ Json a → !Json ClusterErr { ^ ( h_square a ) } )
 
     ( nurl_print `count: ` )
-    ( nurl_print_int ( registry_count reg ) )
-    ( nurl_print `\n` )
+    ( nurl_println_int ( registry_count reg ) )
 
     // ── 1. Hit: square of 7 → 49 ─────────────────────────────────
     : Json req ( json_obj_new )
@@ -53,7 +52,7 @@ $ `stdlib/ext/cluster.nu`
     ?? resj {
         T rj → {
             ( nurl_print `result: ` )
-            ( nurl_print_int ( json_as_int rj ) )
+            ( nurl_println_int ( json_as_int rj ) )
         }
         F → {}
     }
@@ -82,12 +81,12 @@ $ `stdlib/ext/cluster.nu`
     ( json_free env2 )
 
     // ── 3. cluster_err_name renders every variant ────────────────
-    ( nurl_print_str ( cluster_err_name # ClusterErr ClNet ) )
-    ( nurl_print_str ( cluster_err_name # ClusterErr ClTimeout ) )
-    ( nurl_print_str ( cluster_err_name # ClusterErr ClNoSuchFn ) )
-    ( nurl_print_str ( cluster_err_name # ClusterErr ClBadResp ) )
-    ( nurl_print_str ( cluster_err_name # ClusterErr ClRemote ) )
-    ( nurl_print_str ( cluster_err_name # ClusterErr ClSerialize ) )
+    ( nurl_println ( cluster_err_name # ClusterErr ClNet ) )
+    ( nurl_println ( cluster_err_name # ClusterErr ClTimeout ) )
+    ( nurl_println ( cluster_err_name # ClusterErr ClNoSuchFn ) )
+    ( nurl_println ( cluster_err_name # ClusterErr ClBadResp ) )
+    ( nurl_println ( cluster_err_name # ClusterErr ClRemote ) )
+    ( nurl_println ( cluster_err_name # ClusterErr ClSerialize ) )
 
     ( registry_free reg )
     ^ 0

@@ -22,7 +22,7 @@ Match it with `??`, using `T` / `F` as the tag pattern:
 
 ```nu
 ?? maybe_n {
-    T n → ( nurl_print_int n )
+    T n → ( nurl_println_int n )
     F   → ( nurl_print `nothing\n` )
 }
 ```
