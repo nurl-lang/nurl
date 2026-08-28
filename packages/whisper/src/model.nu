@@ -109,8 +109,11 @@ $ `src/kernels.nu`
     i dao_d
     i dtmp_d
     i dff_d
-    i dsc_d  // scores: n_head × max(n_ctx_dec, n_ctx_enc)
+    i dsc_d  // decoder attention scratch: the composed path's score row, or
+    // the one-query fused path's per-chunk partials
     i logits_d
+    i argmax_d
+    b oom  // a device allocation came back empty — see __wh_scratch
     * u logits_host
     // scratch
     i mel_d  // 3000 × n_mels
@@ -230,6 +233,7 @@ $ `src/kernels.nu`
         : i ge ( gg_nelems gg gi )
         ? == gt 0 {
             : GpuBuffer gb ( gpu_alloc . w g * ge 4 )
+            ? == . gb dptr 0 { = . w oom T ^ -1 } {}
             : i _g ( gpu_upload gb ( gg_ptr gg gi ) )
             ( vec_push [i] . w bufs . gb dptr )
             ( vec_push [i] . w bufsz . gb bytes )
@@ -239,14 +243,17 @@ $ `src/kernels.nu`
         // exactly like the safetensors path
         ? & keep16 . w w_half {
             : GpuBuffer gh ( gpu_alloc . w g * ge 2 )
+            ? == . gh dptr 0 { = . w oom T ^ -1 } {}
             : i _h ( gpu_upload gh ( gg_ptr gg gi ) )
             ( vec_push [i] . w bufs . gh dptr )
             ( vec_push [i] . w bufsz . gh bytes )
             ^ . gh dptr
         } {}
         : GpuBuffer graw ( gpu_alloc . w g * ge 2 )
+        ? == . graw dptr 0 { = . w oom T ^ -1 } {}
         : i _r ( gpu_upload graw ( gg_ptr gg gi ) )
         : GpuBuffer gf ( gpu_alloc . w g * ge 4 )
+        ? == . gf dptr 0 { ( gpu_free graw ) = . w oom T ^ -1 } {}
         ( wk_cvt . w ks . graw dptr . gf dptr ge T )
         ( gpu_free graw )
         ( vec_push [i] . w bufs . gf dptr )
@@ -268,6 +275,7 @@ $ `src/kernels.nu`
         T t → {
             ? == . t dtype ST_F32 {
                 : GpuBuffer b ( gpu_alloc . w g . t nbytes )
+                ? == . b dptr 0 { = . w oom T ^ -1 } {}
                 : i _u ( gpu_upload b ( st_tensor_ptr st t ) )
                 ( vec_push [i] . w bufs . b dptr )
                 ( vec_push [i] . w bufsz . b bytes )
@@ -277,6 +285,7 @@ $ `src/kernels.nu`
             // half mode there is nothing to widen — the halves are the model.
             ? & & keep16 . w w_half == . t dtype ST_F16 {
                 : GpuBuffer hb ( gpu_alloc . w g . t nbytes )
+                ? == . hb dptr 0 { = . w oom T ^ -1 } {}
                 : i _uh ( gpu_upload hb ( st_tensor_ptr st t ) )
                 ( vec_push [i] . w bufs . hb dptr )
                 ( vec_push [i] . w bufsz . hb bytes )
@@ -288,8 +297,10 @@ $ `src/kernels.nu`
             // it instead of one host loop doing 378 million iterations.
             ? | == . t dtype ST_F16 == . t dtype ST_BF16 {
                 : GpuBuffer raw ( gpu_alloc . w g . t nbytes )
+                ? == . raw dptr 0 { = . w oom T ^ -1 } {}
                 : i _u2 ( gpu_upload raw ( st_tensor_ptr st t ) )
                 : GpuBuffer b ( gpu_alloc . w g * . t nelems 4 )
+                ? == . b dptr 0 { ( gpu_free raw ) = . w oom T ^ -1 } {}
                 ( wk_cvt . w ks . raw dptr . b dptr . t nelems == . t dtype ST_F16 )
                 ( gpu_free raw )
                 ( vec_push [i] . w bufs . b dptr )
@@ -304,6 +315,7 @@ $ `src/kernels.nu`
         T raw → {
             : i n ( vec_len [u] raw )
             : GpuBuffer b ( gpu_alloc . w g n )
+            ? == . b dptr 0 { ( vec_free [u] raw ) = . w oom T ^ -1 } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
             ( vec_free [u] raw )
             ( vec_push [i] . w bufs . b dptr )
@@ -351,11 +363,37 @@ $ `src/kernels.nu`
     ^ >= d 0
 }
 
+// A device scratch buffer — and the thing that has to be said out loud when
+// there isn't one. A failed cudaMalloc returns a null pointer, and a kernel
+// handed a null pointer does not crash: it writes nowhere and reads zeros, so
+// the encoder produces a constant, the decoder emits the same token five
+// hundred times, and the transcript is confident nonsense. That is what a full
+// card looked like from the outside. Every allocation is checked now, and the
+// model refuses to open instead.
 @ __wh_scratch * Whisper w i nfloats → i {
     : GpuBuffer b ( gpu_alloc . w g * nfloats 4 )
+    ? == . b dptr 0 { = . w oom T ^ -1 } {}
     ( vec_push [i] . w bufs . b dptr )
     ( vec_push [i] . w bufsz . b bytes )
     ^ . b dptr
+}
+
+// "there was not enough room", with the numbers that make it actionable.
+@ __wh_oom_err * Whisper w → !*Whisper String {
+    : String m ( string_from `whisper: out of device memory loading the model` )
+    : i fr ( gpu_mem_free . w g )
+    : i to ( gpu_mem_total . w g )
+    ? > to 0 {
+        ( string_push_str m ` (` )
+        ( string_push_int m / fr 1048576 )
+        ( string_push_str m ` MiB free of ` )
+        ( string_push_int m / to 1048576 )
+        ( string_push_str m ` MiB` )
+        ( string_push_str m `; NURL_GPU_DEVICE picks another card, NURL_GPU=cpu the host backend)` )
+    } {}
+    : String d ( string_from ( string_data m ) )
+    ( string_free m )
+    ^ @ !*Whisper String { F d }
 }
 
 // config.json — the hyperparameters live next to the weights, not inside them
@@ -530,6 +568,7 @@ $ `src/kernels.nu`
         = L + L 1
     }
     ? ok {} {
+        ? . w oom { : !*Whisper String e ( __wh_oom_err w ) ( wh_close w ) ^ e } {}
         ( wh_close w )
         ^ ( __wh_err `whisper: the checkpoint is missing encoder tensors` )
     }
@@ -600,6 +639,7 @@ $ `src/kernels.nu`
         = L + L 1
     }
     ? ok {} {
+        ? . w oom { : !*Whisper String e ( __wh_oom_err w ) ( wh_close w ) ^ e } {}
         ( wh_close w )
         ^ ( __wh_err `whisper: the checkpoint is missing decoder tensors` )
     }
@@ -616,7 +656,13 @@ $ `src/kernels.nu`
     = . w ao_d ( __wh_scratch w * . w n_ctx_enc dm )
     = . w tmp_d ( __wh_scratch w * . w n_ctx_enc dm )
     = . w ff_d ( __wh_scratch w * . w n_ctx_enc * 4 dm )
-    = . w sc_d ( __wh_scratch w * * . w n_head . w n_ctx_enc . w n_ctx_enc )
+    // The encoder's score matrix: only the COMPOSED attention writes one. Where
+    // the fused kernel runs, nothing does — and at nh = 20 over 1500 keys that
+    // buffer is 180 MB of device memory allocated to be read by nobody. It is
+    // also, on a card that is already half full, exactly the difference between
+    // the model fitting and not.
+    : b fused & . . w ks warp == . w d_head_dim 64
+    = . w sc_d ? fused { 0 } { ( __wh_scratch w * * . w n_head . w n_ctx_enc . w n_ctx_enc ) }
     = . w enc_out ( __wh_scratch w * . w n_ctx_enc dm )
 
     // how many tokens the decoder can hold — its positional embedding's own
@@ -640,9 +686,19 @@ $ `src/kernels.nu`
     = . w dao_d ( __wh_scratch w dm )
     = . w dtmp_d ( __wh_scratch w dm )
     = . w dff_d ( __wh_scratch w * 4 dm )
-    = . w dsc_d ( __wh_scratch w * . w n_head ? > . w n_ctx_enc . w n_ctx_dec . w n_ctx_enc . w n_ctx_dec )
+    // The decoder's attention scratch, big enough for BOTH shapes it can take:
+    // the composed path's score row (n_head x the longest key run) and the
+    // fused one-query path's per-chunk partials (WH_HD + 2 floats per chunk,
+    // at most 32 chunks per head — see __wk_attn_d).
+    : i dsc_composed * . w n_head ? > . w n_ctx_enc . w n_ctx_dec . w n_ctx_enc . w n_ctx_dec
+    : i dsc_split * . w n_head * 32 66
+    = . w dsc_d ( __wh_scratch w ? > dsc_composed dsc_split { dsc_composed } { dsc_split } )
     = . w logits_d ( __wh_scratch w . w n_vocab )
+    // one int: greedy decoding's answer, so a step does not have to fetch
+    // 51865 floats to find out which of them is largest
+    = . w argmax_d ( __wh_scratch w 1 )
     = . w logits_host ( gpu_host_alloc * . w n_vocab 4 )
+    ? . w oom { : !*Whisper String e ( __wh_oom_err w ) ( wh_close w ) ^ e } {}
     ^ @ !*Whisper String { T w }
 }
 
@@ -807,8 +863,6 @@ $ `src/kernels.nu`
 
     // token embedding + the position's own vector (a matrix, one row each)
     ( wk_getrow . w ks . w tok_embd . w dx_d tok dm ? . w w_half 1 0 )
-    : ( Vec i ) _unused ( vec_new [i] )
-    ( vec_free [i] _unused )
     ( wk_addv_row w pos )
 
     : ~ i L 0
@@ -870,6 +924,16 @@ $ `src/kernels.nu`
         = k + k 1
     }
     ^ out
+}
+
+// The greedy pick, without fetching the logits: the reduction runs on the
+// device and one integer comes back. Ties go to the lower index in the kernel
+// exactly as they do in wh_argmax below, so the token stream is the same one.
+@ wh_argmax_dev * Whisper w → i {
+    ( wk_argmax . w ks . w logits_d . w n_vocab . w argmax_d )
+    : GpuBuffer b @ GpuBuffer { . w argmax_d 4 }
+    : i _d ( gpu_download . w logits_host b )
+    ^ ( __wh_u32 . w logits_host 0 )
 }
 
 // argmax — greedy decoding is what whisper does by default, and what the

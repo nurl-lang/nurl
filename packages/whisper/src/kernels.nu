@@ -35,6 +35,8 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel gelu
     GpuKernel conv1d
     GpuKernel attn_f  // fused attention, online softmax (CUDA, hd = 64)
+    GpuKernel attn_d  // the same, shaped for ONE query (CUDA, hd = 64)
+    GpuKernel attn_dm  // and the merge of its per-chunk partials
     GpuKernel attn_sc  // scores = q·k / sqrt(hd), NO causal mask
     GpuKernel attn_out  // softmax(scores) · v
     GpuKernel addv
@@ -44,6 +46,7 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel cvt_bf16
     GpuKernel getrow  // one row of the embedding table → the activation
     GpuKernel setrow  // write a row INTO the KV cache
+    GpuKernel argmaxk  // greedy decoding's argmax, on the device
     b ok
 }
 
@@ -502,6 +505,143 @@ $ `deps/gpu/src/gpu.nu`
     }`
 }
 
+// ── Attention, fused, for ONE query ─────────────────────────────────
+//
+// attn_f amortises the key/value stream over 64 queries. The DECODER has one
+// query — there is nothing to amortise — so it took the two-kernel path, and
+// that path is the wrong shape twice over at nq = 1:
+//
+//   attn_sc  launches nh*1*nkey threads that each read a whole key row to
+//            produce one score, and writes an nh x nkey score matrix.
+//   attn_out launches nh*1*hd threads — 384 of them on whisper-tiny, 1280 on
+//            large — and each ONE walks the whole score row twice (max, then
+//            sum) and strides through V with a stride of nh*hd. A 4090 has 128
+//            SMs; this uses twelve warps, and every load is its own
+//            transaction.
+//
+// Measured on whisper-tiny: 95 us for one cross-attention (nkey = 1500), 33 us
+// for one self-attention — 54% of the whole decode step, against 31 us for the
+// 51865-row vocabulary projection that does sixty times the arithmetic.
+//
+// The shape the machine wants is a SPLIT over the keys. One query and one head
+// is a few hundred kilobytes of K and V to stream; handing it to one block
+// leaves 122 of 128 SMs idle, which is why simply widening that block from 256
+// threads to 1024 bought nothing (62 us to 55). So the keys are cut into
+// chunks, one block per (query, head, chunk):
+//
+//   * scoring: thread t scores key kbeg+t, so a whole pass of keys is scored at
+//     once and each key row is read once, by one thread, sequentially.
+//   * accumulating: the block splits into WH_S sub-blocks of hd threads; thread
+//     d of sub-block s owns output element d and walks its own share of the
+//     chunk's keys, reading V[key][d] — CONSECUTIVE d across the sub-block, so
+//     the row lands in one transaction.
+//   * every sub-block keeps its own online-softmax state (running max, running
+//     denominator, accumulator); the sub-blocks merge into one partial, and
+//     attn_dm merges the chunks' partials the same way — rescale by
+//     exp(m - M). Merging partial softmaxes is associative, so the split is
+//     invisible in the answer.
+//
+// Like attn_f this is NOT bit-identical to the composed path — an online
+// softmax rescales a running sum instead of dividing a finished one — and like
+// attn_f it is the same value to f32 rounding.
+@ __wk_attn_d → s {
+    ^ `
+    #define WH_HD 64
+    #define WH_S  4
+    #define WH_NT (WH_HD*WH_S)
+    extern "C" __global__ void attn_d(
+        const float* __restrict__ q, const float* __restrict__ K,
+        const float* __restrict__ V, float* __restrict__ part,
+        int nh, int hd, int nq, int nkey, float qscale, int causal,
+        int chunk, int nchunk) {
+        __shared__ float qs[WH_HD];
+        __shared__ float sc[WH_NT];
+        __shared__ float pm[WH_S], pl[WH_S], pacc[WH_S][WH_HD];
+        int b  = blockIdx.x;
+        int c  = b % nchunk;
+        int qh = b / nchunk;
+        int h  = qh % nh;
+        int i  = qh / nh;
+        int t  = threadIdx.x;
+        int sb = t / WH_HD, d = t % WH_HD;
+        if (t < WH_HD) qs[t] = q[(long long)i*nh*WH_HD + (long long)h*WH_HD + t];
+        __syncthreads();
+        int lim = causal ? (i + 1) : nkey;
+        if (lim > nkey) lim = nkey;
+        int kbeg = c*chunk;
+        int kend = kbeg + chunk; if (kend > lim) kend = lim;
+        float m = -1e30f, l = 0.f, acc = 0.f;
+        for (int k0 = kbeg; k0 < kend; k0 += WH_NT) {
+            int nn = kend - k0; if (nn > WH_NT) nn = WH_NT;
+            float sv = -1e30f;
+            if (t < nn) {
+                const float* kv = K + (long long)(k0+t)*nh*WH_HD + (long long)h*WH_HD;
+                float a = 0.f;
+                for (int j = 0; j < WH_HD; ++j) a += qs[j]*kv[j];
+                sv = a * qscale;
+            }
+            sc[t] = sv;
+            __syncthreads();
+            int base = sb*WH_HD;
+            int cnt = nn - base; if (cnt > WH_HD) cnt = WH_HD; if (cnt < 0) cnt = 0;
+            for (int j = 0; j < cnt; ++j) {
+                float sj   = sc[base+j];
+                float mn   = sj > m ? sj : m;
+                float corr = expf(m - mn);
+                float p    = expf(sj - mn);
+                l   = l*corr + p;
+                acc = acc*corr + p*V[(long long)(k0+base+j)*nh*WH_HD + (long long)h*WH_HD + d];
+                m   = mn;
+            }
+            __syncthreads();
+        }
+        pacc[sb][d] = acc;
+        if (d == 0) { pm[sb] = m; pl[sb] = l; }
+        __syncthreads();
+        if (t < WH_HD) {
+            float M = -1e30f;
+            for (int u = 0; u < WH_S; ++u) if (pm[u] > M) M = pm[u];
+            float L = 0.f, A = 0.f;
+            for (int u = 0; u < WH_S; ++u) {
+                float cf = expf(pm[u] - M);
+                L += pl[u]*cf;
+                A += pacc[u][d]*cf;
+            }
+            float* po = part + (long long)b*(WH_HD+2);
+            po[d] = A;
+            if (d == 0) { po[WH_HD] = M; po[WH_HD+1] = L; }
+        }
+    }`
+}
+
+// The chunks' partial softmaxes, merged: one block per (query, head), one
+// thread per output element.
+@ __wk_attn_dm → s {
+    ^ `
+    #define WH_HD 64
+    extern "C" __global__ void attn_dm(
+        const float* __restrict__ part, float* __restrict__ out,
+        int nh, int hd, int nq, int nchunk) {
+        int qh = blockIdx.x;
+        int h  = qh % nh;
+        int i  = qh / nh;
+        int d  = threadIdx.x;
+        float M = -1e30f;
+        for (int c = 0; c < nchunk; ++c) {
+            float mc = part[(long long)(qh*nchunk + c)*(WH_HD+2) + WH_HD];
+            if (mc > M) M = mc;
+        }
+        float L = 0.f, A = 0.f;
+        for (int c = 0; c < nchunk; ++c) {
+            const float* po = part + (long long)(qh*nchunk + c)*(WH_HD+2);
+            float cf = expf(po[WH_HD] - M);
+            L += po[WH_HD+1]*cf;
+            A += po[d]*cf;
+        }
+        out[(long long)i*nh*WH_HD + (long long)h*WH_HD + d] = A / L;
+    }`
+}
+
 @ __wk_attn_sc → s {
     ^ `extern "C" __global__ void attn_sc(
         const float* __restrict__ q, const float* __restrict__ K,
@@ -666,18 +806,59 @@ $ `deps/gpu/src/gpu.nu`
     }`
 }
 
+// ── Greedy decoding's argmax, on the device ─────────────────────────
+//
+// Whisper decodes greedily, and the only thing greedy decoding wants from a
+// step is WHICH row of the logits is largest. Fetching the row to find out
+// costs a 51865-float transfer and a 51865-iteration host loop — measured at
+// 185 us for the fetch and conversion and another 180 for the scan, per token,
+// against a 477 us decode step. Reduce it where it already lives and the answer
+// is one integer.
+//
+// Ties go to the LOWER index, in the thread loop and in the reduction both,
+// which is what the host scan's `>` gives — so the token stream is unchanged,
+// not merely equivalent.
+@ __wk_argmax → s {
+    ^ `
+    #define WH_AT 256
+    extern "C" __global__ void argmaxk(const float* __restrict__ x, int n,
+                                       int* __restrict__ out) {
+        __shared__ float sv[WH_AT];
+        __shared__ int   si[WH_AT];
+        int t = threadIdx.x;
+        float bv = -1e30f; int bi = 0;
+        for (int i = t; i < n; i += WH_AT) {
+            float v = x[i];
+            if (v > bv) { bv = v; bi = i; }
+        }
+        sv[t] = bv; si[t] = bi;
+        __syncthreads();
+        for (int s = WH_AT/2; s > 0; s >>= 1) {
+            if (t < s) {
+                if (sv[t+s] > sv[t] || (sv[t+s] == sv[t] && si[t+s] < si[t])) {
+                    sv[t] = sv[t+s]; si[t] = si[t+s];
+                }
+            }
+            __syncthreads();
+        }
+        if (t == 0) out[0] = si[0];
+    }`
+}
+
 @ wk_build Gpu g → WhKernels {
     : GpuKernel k1 ( gpu_compile g ( __wk_matvec ) `matvec` )
     : b want_warp == ( gpu_backend ) 0
     : GpuKernel k1w ? want_warp ( gpu_compile g ( __wk_matvec_w ) `matvec_w` ) @ GpuKernel { 0 0 }
     : GpuKernel k1t ? want_warp ( gpu_compile g ( __wk_matvec_t ) `matvec_t` ) @ GpuKernel { 0 0 }
     : GpuKernel k1m ? want_warp ( gpu_compile g ( __wk_matmul ) `matmul` ) @ GpuKernel { 0 0 }
-    : b warp & want_warp & & ( gpu_kernel_ok k1w ) ( gpu_kernel_ok k1t ) ( gpu_kernel_ok k1m )
+    : ~ b warp & want_warp & & ( gpu_kernel_ok k1w ) ( gpu_kernel_ok k1t ) ( gpu_kernel_ok k1m )
     : GpuKernel k2 ( gpu_compile g ( __wk_layernorm ) `layernorm` )
     : GpuKernel k2b ? want_warp ( gpu_compile g ( __wk_layernorm_b ) `layernorm_b` ) @ GpuKernel { 0 0 }
     : GpuKernel k3 ( gpu_compile g ( __wk_gelu ) `gelu` )
     : GpuKernel k4 ( gpu_compile g ( __wk_conv1d ) `conv1d` )
     : GpuKernel k5f ? want_warp ( gpu_compile g ( __wk_attn_f ) `attn_f` ) @ GpuKernel { 0 0 }
+    : GpuKernel k5d ? want_warp ( gpu_compile g ( __wk_attn_d ) `attn_d` ) @ GpuKernel { 0 0 }
+    : GpuKernel k5m ? want_warp ( gpu_compile g ( __wk_attn_dm ) `attn_dm` ) @ GpuKernel { 0 0 }
     : GpuKernel k5 ( gpu_compile g ( __wk_attn_sc ) `attn_sc` )
     : GpuKernel k6 ( gpu_compile g ( __wk_attn_out ) `attn_out` )
     : GpuKernel k7 ( gpu_compile g ( __wk_addv ) `addv` )
@@ -687,12 +868,17 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel k13 ( gpu_compile g ( __wk_cvt_bf16 ) `cvt_bf16` )
     : GpuKernel k10 ( gpu_compile g ( __wk_getrow ) `getrow` )
     : GpuKernel k11 ( gpu_compile g ( __wk_setrow ) `setrow` )
+    : GpuKernel k14 ( gpu_compile g ( __wk_argmax ) `argmaxk` )
     : b ok1 & & ( gpu_kernel_ok k1 ) ( gpu_kernel_ok k2 ) & ( gpu_kernel_ok k3 ) ( gpu_kernel_ok k4 )
     : b ok2 & & ( gpu_kernel_ok k5 ) ( gpu_kernel_ok k6 ) & ( gpu_kernel_ok k7 ) ( gpu_kernel_ok k8 )
     : b ok3 & ( gpu_kernel_ok k9 ) & ( gpu_kernel_ok k10 ) ( gpu_kernel_ok k11 )
-    : b ok4 & ( gpu_kernel_ok k12 ) ( gpu_kernel_ok k13 )
+    : b ok4 & & ( gpu_kernel_ok k12 ) ( gpu_kernel_ok k13 ) ( gpu_kernel_ok k14 )
     : b ok & & ok1 ok2 & ok3 ok4
-    ^ @ WhKernels { k1 k1w k1t k1m warp k2 k2b k3 k4 k5f k5 k6 k7 k8 k9 k12 k13 k10 k11 ok }
+    // the fused attentions are part of the warp path: if either failed to
+    // compile, the composed one must run, and the scratch the caller sizes
+    // from `warp` has to exist
+    = warp & warp & ( gpu_kernel_ok k5f ) & ( gpu_kernel_ok k5d ) ( gpu_kernel_ok k5m )
+    ^ @ WhKernels { k1 k1w k1t k1m warp k2 k2b k3 k4 k5f k5d k5m k5 k6 k7 k8 k9 k12 k13 k10 k11 k14 ok }
 }
 
 @ wk_free WhKernels ks → v {
@@ -702,6 +888,8 @@ $ `deps/gpu/src/gpu.nu`
         ( gpu_kernel_free . ks matvec_t )
         ( gpu_kernel_free . ks matmul )
         ( gpu_kernel_free . ks attn_f )
+        ( gpu_kernel_free . ks attn_d )
+        ( gpu_kernel_free . ks attn_dm )
         ( gpu_kernel_free . ks layernorm_b )
     } {}
     ( gpu_kernel_free . ks layernorm )
@@ -716,6 +904,7 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_kernel_free . ks cvt_bf16 )
     ( gpu_kernel_free . ks getrow )
     ( gpu_kernel_free . ks setrow )
+    ( gpu_kernel_free . ks argmaxk )
 }
 
 // ── launchers ───────────────────────────────────────────────────────
@@ -809,6 +998,41 @@ $ `deps/gpu/src/gpu.nu`
     // The encoder: many queries, no mask, head_dim 64 — one fused kernel, no
     // score matrix. The decoder (one query at a time, causal) has nothing to
     // amortise and takes the two-kernel path.
+    // One query — the decoder, every step of it. Its own fused kernel: no
+    // score matrix, and the keys split across blocks so the work reaches more
+    // than a handful of SMs. `scd` carries the per-chunk partials.
+    ? & & . ks warp == hd 64 < nq 64 {
+        : i lim ? != causal 0 nkey nkey
+        : ~ i chunk 128
+        : ~ i nchunk / + lim - chunk 1 chunk
+        ? < nchunk 1 { = nchunk 1 } {}
+        ? > nchunk 32 { = nchunk 32 = chunk / + lim 31 32 } {}
+        : ( Vec i ) ad ( vec_new [i] )
+        ( vec_push [i] ad ( gpu_arg_i64 qd ) )
+        ( vec_push [i] ad ( gpu_arg_i64 kd ) )
+        ( vec_push [i] ad ( gpu_arg_i64 vd ) )
+        ( vec_push [i] ad ( gpu_arg_i64 scd ) )
+        ( vec_push [i] ad ( gpu_arg_i32 nh ) )
+        ( vec_push [i] ad ( gpu_arg_i32 hd ) )
+        ( vec_push [i] ad ( gpu_arg_i32 nq ) )
+        ( vec_push [i] ad ( gpu_arg_i32 nkey ) )
+        ( vec_push [i] ad ( gpu_arg_f32 qscale ) )
+        ( vec_push [i] ad ( gpu_arg_i32 causal ) )
+        ( vec_push [i] ad ( gpu_arg_i32 chunk ) )
+        ( vec_push [i] ad ( gpu_arg_i32 nchunk ) )
+        : i _rd ( gpu_launch . ks attn_d * * nh nq nchunk 256 ad )
+        ( vec_free [i] ad )
+        : ( Vec i ) am ( vec_new [i] )
+        ( vec_push [i] am ( gpu_arg_i64 scd ) )
+        ( vec_push [i] am ( gpu_arg_i64 outd ) )
+        ( vec_push [i] am ( gpu_arg_i32 nh ) )
+        ( vec_push [i] am ( gpu_arg_i32 hd ) )
+        ( vec_push [i] am ( gpu_arg_i32 nq ) )
+        ( vec_push [i] am ( gpu_arg_i32 nchunk ) )
+        : i _rm ( gpu_launch . ks attn_dm * nh nq 64 am )
+        ( vec_free [i] am )
+        ^ {}
+    } {}
     ? & & & . ks warp == causal 0 == hd 64 >= nq 64 {
         : ( Vec i ) af ( vec_new [i] )
         ( vec_push [i] af ( gpu_arg_i64 qd ) )
@@ -898,6 +1122,16 @@ $ `deps/gpu/src/gpu.nu`
 }
 
 // `half` = 1 for f16, 0 for bf16.
+// The index of the largest logit, written as one int to `outd`.
+@ wk_argmax WhKernels ks i xd i n i outd → v {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 xd ) )
+    ( vec_push [i] a ( gpu_arg_i32 n ) )
+    ( vec_push [i] a ( gpu_arg_i64 outd ) )
+    : i _r ( gpu_launch . ks argmaxk 1 256 a )
+    ( vec_free [i] a )
+}
+
 @ wk_cvt WhKernels ks i srcd i dstd i n b half → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 srcd ) )
