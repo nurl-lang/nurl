@@ -6,6 +6,7 @@
 // existing clients work unchanged:
 //
 //   POST /create_embedding   {"text": "..." | ["...", …], "normalize": true}
+//                            {"texts": ["...", …]}          (same thing)
 //                            → {"embeddings": [[…]], "model": "…", "dimension": N}
 //   GET  /create_embedding?text=…&normalize=true      (single text)
 //   GET  /health             {"status":"healthy", "model", "model_loaded",
@@ -16,8 +17,26 @@
 // Auth: no --token → open server (bind loopback!). With a token, requests
 // must carry `Authorization: Bearer <t>` (or `?token=<t>` for clients that
 // cannot set headers); the compare is constant-time over the configured
-// token. A batch loops single-text forwards — exact per-row numerics, and
-// the forward pass dominates at embedding sizes anyway.
+// token.
+//
+// Concurrency. One model on one device can run one forward at a time —
+// that part is not a choice. Everything ELSE about a request is: reading
+// the socket, parsing the JSON, tokenizing (the Unigram engine is
+// read-only, so it is re-entrant), and serialising a few thousand floats
+// back out, which for a batch is the larger half of the work. So the
+// server is fiber-per-connection on the async runtime, and the forward
+// is handed to ONE dedicated model thread over a queue. A single worker
+// used to mean a slow or idle client stalled every other client behind
+// it; now it does not, and a batch's tokenizing and JSON overlap with
+// another request's arithmetic.
+//
+// The forward runs on a thread rather than on the requesting fiber for
+// a hard reason, not a stylistic one: async fibers get 64 KB stacks, and
+// NVRTC — which the first forward at a new sequence length still calls —
+// wants far more than that. Compiling a kernel on a fiber segfaults
+// inside libnvrtc. One model thread with an ordinary 8 MB stack also
+// keeps every CUDA call on one thread, which is where a context wants
+// to be.
 //
 // Handlers are top-level functions over module globals, not closures —
 // closure environments are manual in NURL and a server's handlers live
@@ -25,6 +44,8 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
+$ `stdlib/core/cell.nu`
+$ `stdlib/std/thread.nu`
 $ `stdlib/std/url.nu`
 $ `stdlib/ext/json.nu`
 $ `deps/http/src/http.nu`
@@ -34,6 +55,93 @@ $ `model.nu`
 : ~ s g_em_token ``
 : ~ s g_em_name ``
 : ~ i g_em_reqs 0
+
+// ── The model queue ───────────────────────────────────────────────────
+//
+// One job per waiting request, linked through the jobs themselves — a
+// module global cannot hold a Vec (or a Mutex) built by a call, so the
+// queue is two pointers and the synchronisation primitives are kept as
+// the two words of each one's Cell. The submitting fiber owns the job
+// and frees it once it has seen `done`; the model thread only fills it
+// in.
+: EmJob {
+    i next
+    ( Vec i ) ids
+    ( Vec f ) out
+    b normalize
+    b done
+    b ok
+}
+
+: ~ i g_q_head 0
+: ~ i g_q_tail 0
+: ~ b g_q_stop F
+: ~ i g_q_m_ptr 0
+: ~ i g_q_m_bytes 0
+: ~ i g_q_req_ptr 0
+: ~ i g_q_req_bytes 0
+: ~ i g_q_done_ptr 0
+: ~ i g_q_done_bytes 0
+
+@ __em_qm → Mutex { ^ @ Mutex { @ Cell { # s g_q_m_ptr g_q_m_bytes } } }
+
+@ __em_qreq → Cond { ^ @ Cond { @ Cell { # s g_q_req_ptr g_q_req_bytes } } }
+
+@ __em_qdone → Cond { ^ @ Cond { @ Cell { # s g_q_done_ptr g_q_done_bytes } } }
+
+// Run one forward on the model thread and wait for it. `ids` and `out`
+// stay owned by the caller — the job only borrows them for the length
+// of the call, which is exactly how long the caller blocks.
+@ __em_submit ( Vec i ) ids ( Vec f ) out b normalize → b {
+    ? != g_q_m_ptr 0 {} { ^ F }
+    : *EmJob j # *EmJob ( nurl_alloc Z EmJob )
+    = . j next 0
+    = . j ids ids
+    = . j out out
+    = . j normalize normalize
+    = . j done F
+    = . j ok F
+    ( mutex_lock ( __em_qm ) )
+    ? == g_q_tail 0 {
+        = g_q_head # i j
+        = g_q_tail # i j
+    } {
+        : *EmJob t # *EmJob g_q_tail
+        = . t next # i j
+        = g_q_tail # i j
+    }
+    ( cond_signal ( __em_qreq ) )
+    ~ ! . j done { ( cond_wait ( __em_qdone ) ( __em_qm ) ) }
+    ( mutex_unlock ( __em_qm ) )
+    : b r . j ok
+    ( nurl_free # *u j )
+    ^ r
+}
+
+// The model thread: take jobs, run them, wake the waiter.
+@ __em_model_loop → v {
+    : *Embed e # *Embed g_em
+    : ~ b run T
+    ~ run {
+        ( mutex_lock ( __em_qm ) )
+        ~ & == g_q_head 0 ! g_q_stop { ( cond_wait ( __em_qreq ) ( __em_qm ) ) }
+        ? == g_q_head 0 {
+            ( mutex_unlock ( __em_qm ) )
+            = run F
+        } {
+            : *EmJob j # *EmJob g_q_head
+            = g_q_head . j next
+            ? == g_q_head 0 { = g_q_tail 0 } {}
+            ( mutex_unlock ( __em_qm ) )
+            : b r ( embed_encode_ids_norm e . j ids . j out . j normalize )
+            ( mutex_lock ( __em_qm ) )
+            = . j ok r
+            = . j done T
+            ( cond_broadcast ( __em_qdone ) )
+            ( mutex_unlock ( __em_qm ) )
+        }
+    }
+}
 
 // Constant-time-ish token compare (every byte of the CONFIGURED token is
 // examined; a length mismatch folds in).
@@ -100,67 +208,115 @@ $ `model.nu`
     ^ r
 }
 
+@ __em_free_texts ( Vec String ) texts → v {
+    : ~ i k 0
+    ~ < k ( vec_len [String] texts ) {
+        ?? ( vec_get [String] texts k ) { T t → { ( string_free t ) } F → {} }
+        = k + k 1
+    }
+    ( vec_free [String] texts )
+}
+
 // Embed `texts` (owned Vec of owned Strings; freed here) → the response.
+//
+// Tokenizing is done outside the model lock — the Unigram engine only
+// reads — and so is building the response, which for a batch of long
+// vectors is thousands of float conversions. The lock covers exactly the
+// device forward, which is the part that cannot overlap with itself.
 @ __em_run ( Vec String ) texts b normalize → HttpResponse {
     : *Embed e # *Embed g_em
     : i nt ( vec_len [String] texts )
+    : i dim ( embed_dim e )
     : ~ b ok T
-    : Json arr ( json_arr_new )
+    : ( Vec f ) flat ( vec_new [f] )
     : ( Vec f ) emb ( vec_new [f] )
     : ~ i k 0
     ~ & ok < k nt {
         ?? ( vec_get [String] texts k ) {
             T t → {
-                ( vec_clear [f] emb )
-                ? ( embed_encode e ( string_data t ) emb ) {
-                    : Json row ( json_arr_new )
+                : ( Vec i ) ids ( vec_new [i] )
+                ? ( embed_tokenize e ( string_data t ) ids ) {} { = ok F }
+                ? ok { = ok ( __em_submit ids emb normalize ) } {}
+                ( vec_free [i] ids )
+                ? ok {
                     : ~ i j 0
-                    : i dn ( vec_len [f] emb )
-                    ~ < j dn {
-                        ?? ( vec_get [f] emb j ) {
-                            T x → { : b _p ( json_arr_push row ( json_float x ) ) }
-                            F → {}
-                        }
+                    ~ < j dim {
+                        ?? ( vec_get [f] emb j ) { T x → { ( vec_push [f] flat x ) } F → { = ok F } }
                         = j + j 1
                     }
-                    : b _p2 ( json_arr_push arr row )
-                } { = ok F }
+                } {}
             }
             F → { = ok F }
         }
         = k + k 1
     }
     ( vec_free [f] emb )
-    = k 0
-    ~ < k nt {
-        ?? ( vec_get [String] texts k ) { T t → { ( string_free t ) } F → {} }
-        = k + k 1
-    }
-    ( vec_free [String] texts )
+    ( __em_free_texts texts )
     ? ok {} {
-        ( json_free arr )
+        ( vec_free [f] flat )
         ^ ( __em_jerr 500 `embedding failed` )
     }
+    // one per served request, not per text in a batch — the queue mutex
+    // is what makes it a count and not a race
+    ( mutex_lock ( __em_qm ) )
     = g_em_reqs + g_em_reqs 1
+    ( mutex_unlock ( __em_qm ) )
+    : Json arr ( json_arr_new )
+    = k 0
+    ~ < k nt {
+        : Json row ( json_arr_new )
+        : ~ i j 0
+        ~ < j dim {
+            ?? ( vec_get [f] flat + * k dim j ) {
+                T x → { : b _p ( json_arr_push row ( json_float x ) ) }
+                F → {}
+            }
+            = j + j 1
+        }
+        : b _p2 ( json_arr_push arr row )
+        = k + k 1
+    }
+    ( vec_free [f] flat )
     : Json o ( json_obj_new )
     : b _s1 ( json_obj_set o `embeddings` arr )
     : b _s2 ( json_obj_set o `model` ( json_str_lit g_em_name ) )
-    : b _s3 ( json_obj_set o `dimension` ( json_int ( embed_dim e ) ) )
+    : b _s3 ( json_obj_set o `dimension` ( json_int dim ) )
     : HttpResponse r ( response_json 200 o )
     ( json_free o )
     ^ r
 }
 
-// The temporary normalize override: flip, run, restore. The server is
-// single-worker, so no other request can observe the flipped state.
-@ __em_run_norm ( Vec String ) texts b normalize → HttpResponse {
-    : *Embed e # *Embed g_em
-    : EmbedCfg c . e cfg
-    : b saved . c normalize
-    ( embed_set_pooling e . c pool normalize )
-    : HttpResponse r ( __em_run texts normalize )
-    ( embed_set_pooling e . c pool saved )
-    ^ r
+// Collect the strings under `key` — a bare string or an array of them —
+// into `texts`. Returns T when the key was there and yielded something.
+@ __em_collect Json root s key ( Vec String ) texts → b {
+    : ~ b have F
+    ?? ( json_obj_get root key ) {
+        T tv → {
+            ? ( json_is_str tv ) {
+                ( vec_push [String] texts ( string_from ( json_str_data tv ) ) )
+                = have T
+            } {
+                ? ( json_is_arr tv ) {
+                    : i n ( json_arr_len tv )
+                    : ~ i k 0
+                    ~ < k n {
+                        ?? ( json_arr_get tv k ) {
+                            T el → {
+                                ? ( json_is_str el ) {
+                                    ( vec_push [String] texts ( string_from ( json_str_data el ) ) )
+                                    = have T
+                                } {}
+                            }
+                            F → {}
+                        }
+                        = k + k 1
+                    }
+                } {}
+            }
+        }
+        F → {}
+    }
+    ^ have
 }
 
 @ __em_post HttpRequest req → HttpResponse {
@@ -173,33 +329,12 @@ $ `model.nu`
     ?? parsed {
         T root → {
             : ( Vec String ) texts ( vec_new [String] )
-            : ~ b have F
-            ?? ( json_obj_get root `text` ) {
-                T tv → {
-                    ? ( json_is_str tv ) {
-                        ( vec_push [String] texts ( string_from ( json_str_data tv ) ) )
-                        = have T
-                    } {
-                        ? ( json_is_arr tv ) {
-                            : i n ( json_arr_len tv )
-                            : ~ i k 0
-                            ~ < k n {
-                                ?? ( json_arr_get tv k ) {
-                                    T el → {
-                                        ? ( json_is_str el ) {
-                                            ( vec_push [String] texts ( string_from ( json_str_data el ) ) )
-                                            = have T
-                                        } {}
-                                    }
-                                    F → {}
-                                }
-                                = k + k 1
-                            }
-                        } {}
-                    }
-                }
-                F → {}
-            }
+            // "text" is what this server has always taken; "texts" is
+            // what the reference service (and this package's own
+            // description) documents. Both, then — the plural first, so
+            // a body carrying only it is not a 400.
+            : ~ b have ( __em_collect root `texts` texts )
+            ? ( __em_collect root `text` texts ) { = have T } {}
             : ~ b normalize T
             ?? ( json_obj_get root `normalize` ) {
                 T nv → { = normalize ( json_as_bool nv ) }
@@ -207,15 +342,10 @@ $ `model.nu`
             }
             ( json_free root )
             ? & have > ( vec_len [String] texts ) 0 {} {
-                : ~ i k2 0
-                ~ < k2 ( vec_len [String] texts ) {
-                    ?? ( vec_get [String] texts k2 ) { T t → { ( string_free t ) } F → {} }
-                    = k2 + k2 1
-                }
-                ( vec_free [String] texts )
+                ( __em_free_texts texts )
                 ^ ( __em_jerr 400 `no text provided — body must be {"text": "..."} or {"text": ["...", ...]}` )
             }
-            ^ ( __em_run_norm texts normalize )
+            ^ ( __em_run texts normalize )
         }
         F je → {
             ^ ( __em_jerr 400 `request body is not valid JSON` )
@@ -235,7 +365,7 @@ $ `model.nu`
     ( string_free nq )
     : ( Vec String ) texts ( vec_new [String] )
     ( vec_push [String] texts txt )
-    ^ ( __em_run_norm texts normalize )
+    ^ ( __em_run texts normalize )
 }
 
 @ __em_health HttpRequest req → HttpResponse {
@@ -247,6 +377,15 @@ $ `model.nu`
     : b _s4 ( json_obj_set o `device` ( json_str_lit ( embed_backend e ) ) )
     : b _s5 ( json_obj_set o `dimension` ( json_int ( embed_dim e ) ) )
     : b _s6 ( json_obj_set o `requests` ( json_int g_em_reqs ) )
+    : b _s7 ( json_obj_set o `max_seq` ( json_int ( embed_maxseq e ) ) )
+    : b _s8 ( json_obj_set o `device_name` ( json_str_lit ( embed_device_name e ) ) )
+    // What the device-buffer pool is holding, so "where did the VRAM go"
+    // is a question the server answers instead of one an operator has to
+    // reverse-engineer from nvidia-smi. Two plain integer loads while the
+    // model thread may be allocating: a health report is allowed to be
+    // one request stale, and nothing here dereferences the pool table.
+    : b _s9 ( json_obj_set o `pool_blocks` ( json_int ( gk_pool_count ) ) )
+    : b _s10 ( json_obj_set o `pool_idle_bytes` ( json_int ( gk_pool_idle_bytes ) ) )
     : HttpResponse r ( response_json 200 o )
     ( json_free o )
     ^ r
@@ -259,19 +398,38 @@ $ `model.nu`
     = g_em_token ( strdup token )
     ? > ( nurl_str_len g_em_name ) 0 { ( nurl_free g_em_name ) } {}
     = g_em_name ( strdup name )
+    : Mutex qm ( mutex_new )
+    : Cell qmc . qm c
+    = g_q_m_ptr # i . qmc ptr
+    = g_q_m_bytes . qmc bytes
+    : Cond qreq ( cond_new )
+    : Cell qrc . qreq c
+    = g_q_req_ptr # i . qrc ptr
+    = g_q_req_bytes . qrc bytes
+    : Cond qdone ( cond_new )
+    : Cell qdc . qdone c
+    = g_q_done_ptr # i . qdc ptr
+    = g_q_done_bytes . qdc bytes
+    : ( @ v ) modelfn \ → v { ( __em_model_loop ) }
+    ?? ( thread_spawn modelfn ) {
+        T th → { ( thread_detach th ) }
+        F _te → {
+            ( nurl_eprint `embed: cannot start the model thread\n` )
+            ^ 1
+        }
+    }
 
     : *HttpApp a ( http_app_new )
-    // One forward runs one model on one device; a second concurrent
-    // request would serialise on it anyway — a single worker is the
-    // honest shape. Hardening: bounded bodies (16 MB of JSON text is
-    // ~2000 full-length documents), a head cap, slowloris idle cut, a
-    // per-request deadline, and panic → 500 (never down the server).
-    ( http_app_workers a 1 )
+    // Fiber-per-connection: connections are cheap, and the one thing
+    // that must not overlap — the forward — has its own lock (__em_run).
+    // Hardening: bounded bodies (16 MB of JSON text is ~2000 full-length
+    // documents), a head cap, slowloris idle cut, a per-request
+    // deadline, and panic → 500 (never down the server).
+    ( http_app_async a 0 )
     ( http_app_body_max a 16777216 )
     ( http_app_head_max a 65536 )
     ( http_app_idle_ms a 30000 )
     ( http_app_request_timeout a 600000 )
-    ( http_app_recover a T )
     ( http_app_post a `/create_embedding` \ HttpRequest rq Params ps → HttpResponse { ^ ( __em_post rq ) } )
     ( http_app_get a `/create_embedding` \ HttpRequest rq Params ps → HttpResponse { ^ ( __em_get rq ) } )
     ( http_app_get a `/health` \ HttpRequest rq Params ps → HttpResponse { ^ ( __em_health rq ) } )
@@ -288,6 +446,10 @@ $ `model.nu`
     ( string_free msg )
 
     : i rc ( http_app_listen a host port )
+    ( mutex_lock qm )
+    = g_q_stop T
+    ( cond_broadcast qreq )
+    ( mutex_unlock qm )
     = g_em 0
     ^ rc
 }

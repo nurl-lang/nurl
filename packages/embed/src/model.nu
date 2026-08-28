@@ -17,9 +17,11 @@
 //   ( embed_encode e text out )     → b     out = the embedding vector
 //   ( embed_dim e ) ( embed_close e )
 //
-// Inference is per text (batch 1): no padding, no attention mask, and
-// the numbers match sentence-transformers row for row. A batch endpoint
-// loops — at embedding sizes the forward pass dominates regardless.
+// Inference is per text (batch 1). The sequence is padded to a
+// quantised length and the padding masked out of attention and pooling
+// (see __em_bucket) — the numbers are the numbers of the unpadded run,
+// and what the quantisation buys is a forward that stops compiling
+// kernels and allocating device memory after the first few requests.
 //
 // Numerics are true float32 on the device. Verified against
 // sentence-transformers (BGE-M3): cosine ≥ 0.9999 on a multilingual
@@ -195,8 +197,12 @@ $ `deps/tokenizer/src/unigram.nu`
         ^ @ !*Embed String { F tokerr }
     }
     ( string_free tokerr )
-    // device
-    = . e kit ( gk_open 0 )
+    // device: the BEST one, not driver ordinal 0. On a box with an old
+    // card in front of a new one — a 4 GB GTX 970 ahead of a 24 GB RTX
+    // 4090 — ordinal 0 is where 2.3 GB of weights plus activations do
+    // not fit, and gk_open_best is exactly the answer to that.
+    // $NURL_GPU_DEVICE still overrides.
+    = . e kit ( gk_open_best )
     ? ( gk_ok . e kit ) {} { ( embed_close e ) ^ ( __em_err `embed: no compute device (CUDA or CPU backend)` ) }
     // weights
     : String stp ( __em_path dir `model.safetensors` )
@@ -268,6 +274,10 @@ $ `deps/tokenizer/src/unigram.nu`
 
 @ embed_backend * Embed e → s { ^ ( gk_backend . e kit ) }
 
+@ embed_device_name * Embed e → s { ^ ( gk_device_name . e kit ) }
+
+@ embed_maxseq * Embed e → i { ^ . . e cfg maxseq }
+
 @ __em_free_buf GkBuf b → v { ( gk_dbuf_free b ) }
 
 @ embed_close * Embed e → v {
@@ -299,6 +309,35 @@ $ `deps/tokenizer/src/unigram.nu`
 
 // ── forward ──────────────────────────────────────────────────────────
 
+// The padded length a sequence of `n` tokens actually runs at.
+//
+// Every buffer and every shape-specialised kernel in the forward is a
+// function of the sequence length, and BOTH are cached by shape: gpukit
+// pools device blocks by exact byte size, and gkd_perm bakes its dims
+// into the kernel name. Run one text per length and the cache is a
+// ratchet — an NVRTC compile per new length (measured: 350 ms of the
+// 385 ms a "cold" request took, against 36 ms warm) and a pool that
+// grew from 4 GB to 10.8 GB over two hundred requests, until the driver
+// refused and the whole pool was dumped and re-allocated. From outside
+// that reads as the model being offloaded and loaded again.
+//
+// So the length is quantised: four steps per octave, i.e. at most 25%
+// padding for anything past 32 tokens, and about forty distinct lengths
+// over the model's whole 8192-token range. The padding is not free —
+// the linear layers do run on it — but 25% of a 36 ms forward is 9 ms
+// against the 350 ms stall it removes, and after the first few requests
+// a server compiles nothing and allocates nothing at all.
+//
+// Padding is only sound because it is masked: see __em_attn.
+@ __em_bucket i n → i {
+    ? <= n 8 { ^ 8 } {}
+    : ~ i p 8
+    ~ <= * p 2 n { = p * p 2 }
+    : ~ i step / p 4
+    ? < step 8 { = step 8 } {}
+    ^ * / + n - step 1 step step
+}
+
 // y[n,dim] = x[n,in] · W[dim,in]ᵀ + bias — the HF Linear shape.
 @ __em_linear * Embed e GkBuf y GkBuf x GkBuf w GkBuf bb i n i dout i din → b {
     ^ ( gkd_gemm . e kit y x w bb 1 n dout din 1.0 1.0 1 )
@@ -313,9 +352,72 @@ $ `deps/tokenizer/src/unigram.nu`
     ^ ( gk_dbuf_new . e kit nfloats GK_F32 )
 }
 
+// "Effectively −∞" as an additive score bias: large enough that
+// expf(bias − max) is exactly 0 in f32, small enough to stay finite.
+// (NURL has no exponent float literal, so it is built, once, here.)
+@ __em_neg_inf → f { ^ - 0.0 ( float_pow 10.0 30.0 ) }
+
+// Scaled dot-product attention over q/k/v laid out [heads, n, hd], with
+// `mask` a per-key additive bias of n floats shared by every head (0 for
+// a real token, −1e30 for padding).
+//
+// The masked key never enters the row maximum and contributes exactly
+// zero to the denominator, so a padded row of keys leaves every real
+// row's output the row it would have had without the padding — that is
+// what makes the quantised length above a change of shape only, not of
+// numbers.
+//
+// The fused kernel is preferred: it never materialises [heads, n, n],
+// which at 8192 tokens is 4.3 GB per buffer and was the reason a long
+// text needed several gigabytes of scratch. Where it will not run (the
+// CPU backend, or a head width its register tile is not sized for) the
+// composed bmm/softmax/bmm path runs instead, with the same mask added
+// to the scores.
+@ __em_attn * Embed e GkBuf ctx GkBuf qh GkBuf kh GkBuf vh GkBuf mask i n → b {
+    : i dim . . e cfg dim
+    : i heads . . e cfg heads
+    : i hd / dim heads
+    : f scale / 1.0 ( float_sqrt # f hd )
+    ? ( gkd_attention_ok . e kit hd ) {
+        ^ ( gkd_attention_masked . e kit ctx qh kh vh mask heads n n hd heads scale )
+    } {}
+    : ~ b ok T
+    // kt[heads, hd, n]
+    : GkBuf kt ( __em_new e * n dim )
+    : ( Vec i ) d3 ( vec_new [i] )
+    ( vec_push [i] d3 heads ) ( vec_push [i] d3 n ) ( vec_push [i] d3 hd )
+    : ( Vec i ) p021 ( vec_new [i] )
+    ( vec_push [i] p021 0 ) ( vec_push [i] p021 2 ) ( vec_push [i] p021 1 )
+    = ok ( gkd_perm . e kit kt kh d3 p021 )
+    : GkBuf sc ( __em_new e * * heads n n )
+    ? ok { = ok ( gkd_bmm . e kit sc qh kt heads n hd n 1 1 ) } {}
+    // scale, then the mask — both in place: every one of these is an
+    // elementwise write whose input index IS its output index.
+    : GkBuf inv ( __em_new e 1 )
+    : ( Vec f ) hinv ( vec_new [f] )
+    ( vec_push [f] hinv scale )
+    ? ok { = ok ( gk_dbuf_upload . e kit inv hinv ) } {}
+    ( vec_free [f] hinv )
+    ? ok { = ok ( gkd_mul . e kit sc sc inv ) } {}
+    : ( Vec i ) od ( vec_new [i] )
+    ( vec_push [i] od * heads n ) ( vec_push [i] od n )
+    : ( Vec i ) sa ( vec_new [i] )
+    ( vec_push [i] sa n ) ( vec_push [i] sa 1 )
+    : ( Vec i ) sb ( vec_new [i] )
+    ( vec_push [i] sb 0 ) ( vec_push [i] sb 1 )
+    ? ok { = ok ( gkd_ew_bc . e kit `add` `+` sc sc mask od sa sb ) } {}
+    : GkBuf pr ( __em_new e * * heads n n )
+    ? ok { = ok ( gkd_softmax_ax . e kit pr sc * heads n n 1 ) } {}
+    ? ok { = ok ( gkd_bmm . e kit ctx pr vh heads n n hd 1 1 ) } {}
+    ( gk_dbuf_free kt ) ( gk_dbuf_free sc ) ( gk_dbuf_free inv ) ( gk_dbuf_free pr )
+    ( vec_free [i] d3 ) ( vec_free [i] p021 )
+    ( vec_free [i] od ) ( vec_free [i] sa ) ( vec_free [i] sb )
+    ^ ok
+}
+
 // One transformer block over hidden[n,dim] (replaces `hid` content by
 // writing into it at the residual+LN steps). Returns F on any failure.
-@ __em_block * Embed e EmbedLayer l GkBuf hid i n → b {
+@ __em_block * Embed e EmbedLayer l GkBuf hid GkBuf mask i n → b {
     : i dim . . e cfg dim
     : i heads . . e cfg heads
     : i hd / dim heads
@@ -328,7 +430,7 @@ $ `deps/tokenizer/src/unigram.nu`
     ? ok { = ok ( __em_linear e q hid . l qw . l qb n dim dim ) } {}
     ? ok { = ok ( __em_linear e k hid . l kw . l kb n dim dim ) } {}
     ? ok { = ok ( __em_linear e v hid . l vw . l vb n dim dim ) } {}
-    // heads: [n,heads,hd] → q,v: [heads,n,hd]; k: [heads,hd,n]
+    // heads: [n,heads,hd] → [heads,n,hd] for all three
     : GkBuf qh ( __em_new e * n dim )
     : GkBuf kh ( __em_new e * n dim )
     : GkBuf vh ( __em_new e * n dim )
@@ -336,27 +438,12 @@ $ `deps/tokenizer/src/unigram.nu`
     ( vec_push [i] dims n ) ( vec_push [i] dims heads ) ( vec_push [i] dims hd )
     : ( Vec i ) p102 ( vec_new [i] )
     ( vec_push [i] p102 1 ) ( vec_push [i] p102 0 ) ( vec_push [i] p102 2 )
-    : ( Vec i ) p120 ( vec_new [i] )
-    ( vec_push [i] p120 1 ) ( vec_push [i] p120 2 ) ( vec_push [i] p120 0 )
     ? ok { = ok ( gkd_perm . e kit qh q dims p102 ) } {}
-    ? ok { = ok ( gkd_perm . e kit kh k dims p120 ) } {}
+    ? ok { = ok ( gkd_perm . e kit kh k dims p102 ) } {}
     ? ok { = ok ( gkd_perm . e kit vh v dims p102 ) } {}
-    // scores[heads,n,n] = qh·kh / sqrt(hd)
-    : GkBuf sc ( __em_new e * * heads n n )
-    ? ok { = ok ( gkd_bmm . e kit sc qh kh heads n hd n 1 1 ) } {}
-    : GkBuf scs ( __em_new e * * heads n n )
-    : GkBuf inv ( __em_new e 1 )
-    : ( Vec f ) hinv ( vec_new [f] )
-    ( vec_push [f] hinv / 1.0 ( float_sqrt # f hd ) )
-    ? ok { = ok ( gk_dbuf_upload . e kit inv hinv ) } {}
-    ( vec_free [f] hinv )
-    ? ok { = ok ( gkd_mul . e kit scs sc inv ) } {}
-    // softmax over the last axis
-    : GkBuf pr ( __em_new e * * heads n n )
-    ? ok { = ok ( gkd_softmax_ax . e kit pr scs * heads n n 1 ) } {}
-    // ctx[heads,n,hd] = pr·vh → merge back to [n,dim]
     : GkBuf ctx ( __em_new e * n dim )
-    ? ok { = ok ( gkd_bmm . e kit ctx pr vh heads n n hd 1 1 ) } {}
+    ? ok { = ok ( __em_attn e ctx qh kh vh mask n ) } {}
+    // merge the heads back: [heads,n,hd] → [n,heads,hd]
     : GkBuf mrg ( __em_new e * n dim )
     : ( Vec i ) dims2 ( vec_new [i] )
     ( vec_push [i] dims2 heads ) ( vec_push [i] dims2 n ) ( vec_push [i] dims2 hd )
@@ -379,12 +466,10 @@ $ `deps/tokenizer/src/unigram.nu`
     ? ok { = ok ( gkd_layernorm . e kit hid res2 . l ln2w . l ln2b n dim eps ) } {}
     ( gk_dbuf_free q ) ( gk_dbuf_free k ) ( gk_dbuf_free v )
     ( gk_dbuf_free qh ) ( gk_dbuf_free kh ) ( gk_dbuf_free vh )
-    ( gk_dbuf_free sc ) ( gk_dbuf_free scs ) ( gk_dbuf_free inv )
-    ( gk_dbuf_free pr ) ( gk_dbuf_free ctx ) ( gk_dbuf_free mrg )
+    ( gk_dbuf_free ctx ) ( gk_dbuf_free mrg )
     ( gk_dbuf_free ao ) ( gk_dbuf_free res )
     ( gk_dbuf_free h1 ) ( gk_dbuf_free h1g ) ( gk_dbuf_free h2 ) ( gk_dbuf_free res2 )
-    ( vec_free [i] dims ) ( vec_free [i] dims2 )
-    ( vec_free [i] p102 ) ( vec_free [i] p120 )
+    ( vec_free [i] dims ) ( vec_free [i] dims2 ) ( vec_free [i] p102 )
     ^ ok
 }
 
@@ -393,85 +478,131 @@ $ `deps/tokenizer/src/unigram.nu`
 // style.
 @ embed_tokenize * Embed e s text ( Vec i ) out → b {
     ? ( uni_encode . e tok text T out ) {} { ^ F }
-    : i n ( vec_len [i] out )
     : i cap . . e cfg maxseq
-    ? > n cap {
+    ? > ( vec_len [i] out ) cap {
         : i eos ( uni_eos . e tok )
         : ~ b okt T
-        ~ > ( vec_len [i] out ) - cap 1 { ?? ( vec_pop [i] out ) { T _ → {} F → { = okt F } } }
+        ~ & okt > ( vec_len [i] out ) - cap 1 {
+            ?? ( vec_pop [i] out ) { T _ → {} F → { = okt F } }
+        }
         ? & okt >= eos 0 { ( vec_push [i] out eos ) } {}
     } {}
     ^ T
 }
 
-// The embedding for one text. `out` receives embed_dim floats.
+// The embedding for one text, normalized per the engine's configuration.
+// `out` receives embed_dim floats.
 @ embed_encode * Embed e s text ( Vec f ) out → b {
+    ^ ( embed_encode_norm e text out . . e cfg normalize )
+}
+
+// The same, with the L2 normalize decided by the caller — a request
+// carrying "normalize": false must not have to reconfigure the engine
+// (and a concurrent server must not be able to observe it doing so).
+@ embed_encode_norm * Embed e s text ( Vec f ) out b normalize → b {
     ? . e ok {} { ^ F }
     : ( Vec i ) ids ( vec_new [i] )
     ? ( embed_tokenize e text ids ) {} { ( vec_free [i] ids ) ^ F }
-    : b r ( embed_encode_ids e ids out )
+    : b r ( embed_encode_ids_norm e ids out normalize )
     ( vec_free [i] ids )
     ^ r
 }
 
-// Forward over an already-tokenized id sequence.
 @ embed_encode_ids * Embed e ( Vec i ) ids ( Vec f ) out → b {
+    ^ ( embed_encode_ids_norm e ids out . . e cfg normalize )
+}
+
+// Forward over an already-tokenized id sequence.
+//
+// The CUDA context is thread-local, and this may be called from a
+// server's worker rather than from whatever thread opened the model, so
+// the device is bound to the caller first. It is a no-op on the CPU
+// backend and a pointer store on CUDA.
+@ embed_encode_ids_norm * Embed e ( Vec i ) ids ( Vec f ) out b normalize → b {
     ? . e ok {} { ^ F }
+    ? ( gk_bind_thread . e kit ) {} { ^ F }
     : i n ( vec_len [i] ids )
     ? > n 0 {} { ^ F }
     : i dim . . e cfg dim
+    : i padid . . e cfg padid
+    : i lim - - . . e cfg maxpos padid 1
+    : ~ i np ( __em_bucket n )
+    ? > np lim { = np lim } {}
+    ? >= np n {} { ^ F }
     : ~ b ok T
     // chain launches; one sync at the end of the walk
     ( gk_autosync F )
-    // ids to the device
-    : GkBuf idb ( gk_dbuf_new . e kit n GK_I64 )
-    = ok ( gk_dbuf_upload_i . e kit idb ids )
-    // hidden = word[ids] + positions[pad+1 .. pad+1+n) + type0
-    : GkBuf hid ( __em_new e * n dim )
-    ? ok { = ok ( gkd_gather . e kit hid . e wemb idb 1 . . e cfg vocab dim n ) } {}
-    : GkBuf pos ( __em_new e * n dim )
-    ? ok { = ok ( gkd_slice_ax . e kit pos . e pemb 1 n dim . . e cfg maxpos + . . e cfg padid 1 ) } {}
-    : GkBuf sum1 ( __em_new e * n dim )
+    // ids to the device, padded out to the bucket with the pad token
+    : ( Vec i ) pids ( vec_with_cap [i] np )
+    : ~ i k 0
+    ~ < k np {
+        ( vec_push [i] pids ? < k n {
+            ?? ( vec_get [i] ids k ) { T x → x F → padid }
+        } { padid } )
+        = k + k 1
+    }
+    : GkBuf idb ( gk_dbuf_new . e kit np GK_I64 )
+    = ok ( gk_dbuf_upload_i . e kit idb pids )
+    ( vec_free [i] pids )
+    // the additive attention mask: 0 for a real token, −∞ for padding
+    : GkBuf mask ( __em_new e np )
+    : ( Vec f ) hmask ( vec_with_cap [f] np )
+    : f ninf ( __em_neg_inf )
+    = k 0
+    ~ < k np { ( vec_push [f] hmask ? < k n { 0.0 } { ninf } ) = k + k 1 }
+    ? ok { = ok ( gk_dbuf_upload . e kit mask hmask ) } {}
+    ( vec_free [f] hmask )
+    // hidden = word[ids] + positions[pad+1 .. pad+1+np) + type0
+    : GkBuf hid ( __em_new e * np dim )
+    ? ok { = ok ( gkd_gather . e kit hid . e wemb idb 1 . . e cfg vocab dim np ) } {}
+    : GkBuf pos ( __em_new e * np dim )
+    ? ok { = ok ( gkd_slice_ax . e kit pos . e pemb 1 np dim . . e cfg maxpos + padid 1 ) } {}
+    : GkBuf sum1 ( __em_new e * np dim )
     ? ok { = ok ( gkd_add . e kit sum1 hid pos ) } {}
     // + token_type_embeddings[0] broadcast over rows
-    : GkBuf sum2 ( __em_new e * n dim )
+    : GkBuf sum2 ( __em_new e * np dim )
     : ( Vec i ) od ( vec_new [i] )
-    ( vec_push [i] od n ) ( vec_push [i] od dim )
+    ( vec_push [i] od np ) ( vec_push [i] od dim )
     : ( Vec i ) sa ( vec_new [i] )
     ( vec_push [i] sa dim ) ( vec_push [i] sa 1 )
     : ( Vec i ) sb ( vec_new [i] )
     ( vec_push [i] sb 0 ) ( vec_push [i] sb 1 )
     ? ok { = ok ( gkd_ew_bc . e kit `add` `+` sum2 sum1 . e temb od sa sb ) } {}
     ( vec_free [i] od ) ( vec_free [i] sa ) ( vec_free [i] sb )
-    ? ok { = ok ( gkd_layernorm . e kit hid sum2 . e elnw . e elnb n dim . . e cfg eps ) } {}
+    ? ok { = ok ( gkd_layernorm . e kit hid sum2 . e elnw . e elnb np dim . . e cfg eps ) } {}
     ( gk_dbuf_free pos ) ( gk_dbuf_free sum1 ) ( gk_dbuf_free sum2 )
     // blocks
     : i nl ( vec_len [EmbedLayer] . e layers )
     : ~ i l 0
     ~ & ok < l nl {
         ?? ( vec_get [EmbedLayer] . e layers l ) {
-            T lay → { = ok ( __em_block e lay hid n ) }
+            T lay → { = ok ( __em_block e lay hid mask np ) }
             F → { = ok F }
         }
         = l + l 1
     }
-    // pooling → a [1,dim] device vector
+    // Pooling is one row-weight vector times the hidden states: a
+    // one-hot at row 0 is CLS, 1-over-the-real-rows is the mean, and
+    // padding weighs 0 either way. Written as a single [1,np]x[np,dim]
+    // gemm it is bit-identical to the slice-row-0 / scaled-ones-row
+    // forms it replaces — adding an exact 0.0 to a running f32 sum
+    // changes nothing, and the alpha is applied to the finished sum.
     : GkBuf pooled ( __em_new e dim )
+    : GkBuf pw ( __em_new e np )
+    : b meanpool == . . e cfg pool EM_POOL_MEAN
+    : ( Vec f ) hpw ( vec_with_cap [f] np )
+    = k 0
+    ~ < k np {
+        ( vec_push [f] hpw ? meanpool
+        { ? < k n { 1.0 } { 0.0 } }
+        { ? == k 0 { 1.0 } { 0.0 } } )
+        = k + k 1
+    }
+    ? ok { = ok ( gk_dbuf_upload . e kit pw hpw ) } {}
+    ( vec_free [f] hpw )
     ? ok {
-        ? == . . e cfg pool EM_POOL_MEAN {
-            // mean over rows: ones[1,n]·hidden[n,dim] · (1/n)
-            : GkBuf ones ( __em_new e n )
-            : ( Vec f ) h1 ( vec_with_cap [f] n )
-            : ~ i k 0
-            ~ < k n { ( vec_push [f] h1 1.0 ) = k + k 1 }
-            = ok ( gk_dbuf_upload . e kit ones h1 )
-            ( vec_free [f] h1 )
-            ? ok { = ok ( gkd_gemm . e kit pooled ones hid pooled 0 1 dim n / 1.0 # f n 0.0 0 ) } {}
-            ( gk_dbuf_free ones )
-        } {
-            // CLS: row 0
-            = ok ( gkd_slice_ax . e kit pooled hid 1 1 dim n 0 )
-        }
+        = ok ( gkd_gemm . e kit pooled pw hid pooled 0 1 dim np
+        ? meanpool { / 1.0 # f n } { 1.0 } 0.0 0 )
     } {}
     ( gk_autosync T )
     // download + optional L2 normalize on the host
@@ -479,7 +610,7 @@ $ `deps/tokenizer/src/unigram.nu`
     : ~ i k2 0
     ~ < k2 dim { ( vec_push [f] out 0.0 ) = k2 + k2 1 }
     ? ok { = ok ( gk_dbuf_download . e kit pooled out ) } {}
-    ? & ok . . e cfg normalize {
+    ? & ok normalize {
         : ~ f ss 0.0
         = k2 0
         ~ < k2 dim {
@@ -495,6 +626,7 @@ $ `deps/tokenizer/src/unigram.nu`
             }
         } {}
     } {}
-    ( gk_dbuf_free idb ) ( gk_dbuf_free hid ) ( gk_dbuf_free pooled )
+    ( gk_dbuf_free idb ) ( gk_dbuf_free mask ) ( gk_dbuf_free hid )
+    ( gk_dbuf_free pooled ) ( gk_dbuf_free pw )
     ^ ok
 }
