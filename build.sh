@@ -610,6 +610,14 @@ if (( RUN_TESTS == 1 )); then
     # answers are right; nothing in it can notice the wide clone
     # silently disappearing, which is the regression that costs 1.7x.
     step "simd dispatch IR" bash compiler/tests/simd_dispatch_ir.sh
+    # And the clone the dispatcher did NOT pick. simd_dispatch_ir.sh
+    # proves both are built; the corpus only ever runs the one this
+    # CPU selects, which on every x86-64 runner here is the wide one.
+    # This builds the vector corpus a second time with
+    # --no-cpu-dispatch and requires the baseline lowering to produce
+    # the same goldens — the ML-KEM / ML-DSA keys are the same keys on
+    # a machine without AVX2 or they are not, and nothing else asks.
+    step "simd baseline agree" bash compiler/tests/simd_baseline_agree.sh
 fi
 
 # ── nurlfmt ──────────────────────────────────────────────────

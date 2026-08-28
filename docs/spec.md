@@ -317,6 +317,17 @@ Three consequences worth knowing:
   target must pass this flag, and `nurl.sh`, the unikernel scripts and the
   build API all do.
 
+**Both clones are tested, not just the one this CPU picks.** A
+behavioural test can only ever run the clone the dispatcher selects, so
+on an AVX2 host the baseline lowering of every marked function is
+compiled and never executed — and every function the prefix marks today
+is post-quantum cryptography, where a divergence between the two is a
+wrong key on the machines that were never tested rather than a slow
+path. `compiler/tests/simd_baseline_agree.sh` builds the vector corpus a
+second time with `--no-cpu-dispatch` and requires the baseline lowering
+to produce the same goldens, and it reads the marked set out of
+`stdlib/` so a newly marked function with no driver fails by name.
+
 Generic functions may not be marked: a generic is monomorphised after the
 whole program is parsed, so the prefix would not survive to its
 instantiations. nurlc rejects `simd` there rather than accept a prefix
