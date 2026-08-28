@@ -157,7 +157,25 @@ $ `stdlib/core/string.nu`
 
 // ── driver wrappers (return raw i64 handles / addresses) ──────────
 
-@ cuda_init → i { ^ # i ( cuInit 0 ) }
+// cuInit exactly ONCE per process, with the result remembered.
+//
+// The driver's own contract says cuInit is idempotent, and on a working
+// CUDA install a second call is a no-op. It is not harmless everywhere:
+// in a sanitized build, where the first cuInit fails (ASan's allocator
+// makes the driver's pinned-memory setup return CUDA_ERROR_OUT_OF_MEMORY),
+// the SECOND call blocks for exactly 180 seconds and leaves a 408-byte
+// allocation behind — which is what a `gk_open_best` (device probe, then
+// open) turned every sanitized run of a GPU program into. One call, one
+// answer, handed to every later caller.
+: ~ i __cuda_init_done 0
+: ~ i __cuda_init_rc 0
+
+@ cuda_init → i {
+    ? != __cuda_init_done 0 { ^ __cuda_init_rc } {}
+    = __cuda_init_rc # i ( cuInit 0 )
+    = __cuda_init_done 1
+    ^ __cuda_init_rc
+}
 
 @ cuda_device_count → i {
     : *u s ( __outslot )
@@ -205,6 +223,16 @@ $ `stdlib/core/string.nu`
     : i n ( nurl_peek s 0 )
     ( nurl_free s )
     ^ n
+}
+
+// Make an already-created context current on THIS thread. A CUDA
+// context is thread-local state: a thread that has not been told about
+// it fails every driver call with CUDA_ERROR_INVALID_CONTEXT, which is
+// what a server that opens the device on its main thread and then runs
+// the model from a worker sees. Cheap enough to do per call.
+@ cuda_ctx_bind i ctx → b {
+    ? == ctx 0 { ^ F } {}
+    ^ == # i ( cuCtxSetCurrent ctx ) 0
 }
 
 // Retain the device's PRIMARY context and make it current → CUcontext
