@@ -17,7 +17,7 @@ $ `ply.nu`
 $ `view.nu`
 
 // Kept in step with nurl.toml by the test suite, which compares the two.
-@ __pc_version → v { ( nurl_print `ply 0.2.2\n` ) }
+@ __pc_version → v { ( nurl_print `ply 0.2.3\n` ) }
 
 @ __pc_usage → i {
     ( nurl_print `ply — write and view PLY point clouds\n\n` )

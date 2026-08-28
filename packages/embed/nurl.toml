@@ -9,6 +9,6 @@ tokenizer = { path = "../tokenizer", version = "^0.3" }
 safetensor = { path = "../safetensor", version = "^0.3" }
 gpukit = { path = "../gpukit", version = "^0.6.5" }
 gpu = { path = "../gpu", version = "^0.11.2" }
-http = { path = "../http", version = "^0.3" }
+http = { path = "../http", version = "^0" }
 
 hub = { path = "../hub", version = "^0.1" }

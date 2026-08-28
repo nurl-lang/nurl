@@ -1,11 +1,11 @@
 [package]
 name = "registry"
-version = "0.4.0"
+version = "0.4.1"
 description = "The NURL package registry, served by NURL itself — a self-hostable registry speaking exactly the wire protocol nurlpkg already drives: GET /index/<name>.json + GET /pkgs/<name>/<name>-<v>.tar.gz on the read side, bearer-authenticated POST /api/v1/publish (+ yank/unyank/revoke) on the write side, /api/v1/search + /api/v1/stats, and a server-rendered catalog UI with per-package pages that render the published README straight out of the tarball, plus a browsable API-docs page per release (nurldoc over the tarball's src/*.nu, public functions and type definitions, at /packages/<name>/<version>/api). SQLite is the single source of truth (users, tokens, packages, versions, deps — the index JSON is rendered from it, never dual-written); tarballs live on disk, checksummed with SHA-256 recomputed server-side. Tokens are peppered-SHA-256 hashed at rest; mint them locally with `registry token new <login>` or via the config-gated GitHub OAuth flow. Built on the http package (HttpApp), the template package (embedded server-rendered pages) and md2html (README rendering) — the registry that hosts NURL packages is itself three NURL packages deep."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/nurl-lang/nurl-lang"
 
 [dependencies]
-http = { path = "../http", version = "^0.3" }
+http = { path = "../http", version = "^0" }
 template = { path = "../template", version = "^0.1" }
 md2html = { path = "../md2html", version = "^0.1" }
