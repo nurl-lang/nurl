@@ -157,6 +157,17 @@ OpenMP.
 | 292 s recording, 8 % speech, distil + `--vad` | ~1.3 s |
 | large-v3 server VRAM | 4.9 GB (f16 weights stay f16 on the device) |
 
+A generated token costs **456 us** on whisper-tiny (RTX 4090). Getting
+there took two things, both found by measuring rather than reading: the
+decoder's attention was 54 % of a step — the fused encoder kernel
+amortises the key/value stream over 64 queries and a decode step has
+one, so every token fell back to a path that launched `nh*hd` threads to
+walk a 1500-key score row — and greedy decoding was fetching all 51865
+logits per token to find the largest. The one-query attention splits the
+keys across blocks and merges the partial softmaxes (cross-attention
+95 us → 11, self-attention 33 → 10); the argmax reduces on the device
+and returns one integer. Together: 1180 us a token → 456.
+
 An f16 checkpoint's matrix weights are never widened to f32 in device
 memory — the kernels widen at the point of use, exactly, so transcripts
 are unchanged and the memory halves. This is what fits full large-v3 on
@@ -165,6 +176,11 @@ would not survive f16.)
 
 ## Implementation notes
 
+* A device allocation that fails is reported, not run past. A null
+  pointer does not crash a kernel — it writes nowhere and reads zeros —
+  so a full card used to produce a confident transcript of nothing at
+  all. `whisper` now refuses to open the model and says how much memory
+  the device had.
 * Whisper differs from the decoder-only shape in almost every kernel:
   LayerNorm (with bias) rather than RMSNorm, erf-GELU rather than tanh,
   two conv1d layers in front of the encoder, non-causal encoder

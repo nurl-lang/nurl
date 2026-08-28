@@ -364,9 +364,13 @@ $ `src/serve.nu`
     : ~ i last2 -1
     : ~ i mints ts0
     ~ & ! done < made maxtok {
-        : ( Vec f ) lg ( wh_logits w )
         : ~ i nt 0
+        // Greedy decoding wants ONE number out of a step — which logit is
+        // largest — and fetching 51865 floats to find out cost more than a
+        // third of the step. The constrained timestamp decoding below does
+        // need the whole row; plain greedy does not, and does not ask.
         ? with_ts {
+            : ( Vec f ) lg ( wh_logits w )
             // openai's exact framing: with FEWER than two sampled tokens the
             // penultimate counts as a timestamp — getting this edge wrong makes
             // the "pair or end" rule fire right after the opening <|0.00|> and
@@ -374,10 +378,10 @@ $ `src/serve.nu`
             : b lts & >= made 1 >= last ts0
             : b pts | < made 2 >= last2 ts0
             = nt ( __wh_next_ts lg ts0 eot == made 0 lts pts mints )
+            ( vec_free [f] lg )
         } {
-            = nt ( wh_argmax lg )
+            = nt ( wh_argmax_dev w )
         }
-        ( vec_free [f] lg )
         ? == nt eot { = done T } {
             = last2 last
             = last nt
