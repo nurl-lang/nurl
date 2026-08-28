@@ -4,15 +4,18 @@
 // `nurl.lock` lockfile shaped like Cargo's. Excludes parts of the
 // 1.0 spec not used by the package manager:
 //
-//   * Float, datetime, multi-line / literal strings.
-//   * Hex / octal / binary integer literals.
+//   * Datetime, multi-line / literal strings.
+//   * Hex / octal / binary integer literals, `inf` / `nan`.
 //   * Dotted keys outside `[section]` headers (no `a.b = 1` at scope).
 //
 // Included:
 //
 //   * Bare keys `[a-zA-Z0-9_-]+` and quoted `"..."` keys.
 //   * String values with `\\`, `\"`, `\n`, `\t`, `\r` escapes.
-//   * Signed decimal integers.
+//   * Decimal integers and floats, either sign, with `_` digit
+//     separators: `-7`, `+1_000`, `1.5`, `6.02e23`, `-1E-9`. A value
+//     carrying a fraction or an exponent parses as `TFloat`, everything
+//     else as `TInt`.
 //   * Booleans `true` / `false`.
 //   * Arrays `[a, b, c]` (homogeneous + inline-table elements).
 //   * Inline tables `{ k = v, k2 = v2 }`.
@@ -25,6 +28,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/std/float.nu`
 
 : TomlEntry {
     String key
@@ -34,6 +38,7 @@ $ `stdlib/core/vec.nu`
 : | TomlValue {
     TStr String
     TInt i
+    TFloat f
     TBool b
     TArr ( Vec TomlValue )
     TTable ( Vec TomlEntry )
@@ -61,6 +66,7 @@ $ `stdlib/core/vec.nu`
     ?? v {
         TStr s → ( string_free s )
         TInt _ → {}
+        TFloat _ → {}
         TBool _ → {}
         TArr arr → {
             : i n ( vec_len [TomlValue] arr )
@@ -313,28 +319,9 @@ $ `stdlib/core/vec.nu`
         } {}
         ^ ( __valresult_err # TomlErr TomlSyntax p )
     } {}
-    // Integer (signed decimal).
-    ? | == c 45 ( __t_is_digit c ) {
-        : ~ i k p
-        ? == c 45 { = k + k 1 } {}
-        ? ! ( __t_is_digit ( __t_get src k n ) ) {
-            ^ ( __valresult_err # TomlErr TomlSyntax p )
-        } {}
-        ~ & < k n ( __t_is_digit ( nurl_str_at src n k ) ) {
-            = k + k 1
-        }
-        : String num_s ( string_with_cap - k p )
-        : ~ i j p
-        ~ < j k {
-            ( string_push_char num_s ( nurl_str_at src n j ) )
-            = j + j 1
-        }
-        : !i ParseErr nr ( string_to_int num_s )
-        ( string_free num_s )
-        ?? nr {
-            T iv → ^ ( __valresult_ok @ TomlValue { TInt iv } k )
-            F _ → ^ ( __valresult_err # TomlErr TomlSyntax p )
-        }
+    // Number: decimal integer or float, either sign, `_` separators.
+    ? | | == c 45 == c 43 ( __t_is_digit c ) {
+        ^ ( __t_parse_number src n p )
     } {}
     // Array.
     ? == c 91 {
@@ -345,6 +332,105 @@ $ `stdlib/core/vec.nu`
         ^ ( __t_parse_inline_table src n p )
     } {}
     ^ ( __valresult_err # TomlErr TomlSyntax p )
+}
+
+// ── Numbers ──────────────────────────────────────────────────────
+//
+// One scanner for both integer and float, because TOML only tells them
+// apart at the end: a fraction or an exponent makes the value a float,
+// nothing else does. `_` may separate digits (`1_000_000`) and is dropped
+// from the text handed to the numeric conversion — TOML requires it to sit
+// BETWEEN digits, which is exactly what `__t_digits` enforces.
+
+// Copy the digit run at `pos` into `out`, dropping `_` separators. Returns
+// the position after the run, or -1 when there is no digit there or when a
+// separator is not surrounded by digits.
+@ __t_digits s src i n String out i pos → i {
+    : ~ i k pos
+    : ~ i count 0
+    : ~ b bad F
+    ~ & ! bad < k n {
+        : i c ( nurl_str_at src n k )
+        ? ( __t_is_digit c ) {
+            ( string_push_char out c )
+            = count + count 1
+            = k + k 1
+        } {
+            ? == c 95 {
+                // A separator needs a digit on both sides.
+                ? | == count 0 ! ( __t_is_digit ( __t_get src + k 1 n ) ) {
+                    = bad T
+                } { = k + k 1 }
+            } { ^ ? > count 0 k - 0 1 }
+        }
+    }
+    ? bad { ^ - 0 1 } {}
+    ^ ? > count 0 k - 0 1
+}
+
+@ __t_parse_number s src i n i pos → ValueResult {
+    : String txt ( string_with_cap 24 )
+    : ~ i k pos
+    : ~ b is_float F
+
+    : i c0 ( __t_get src k n )
+    ? | == c0 45 == c0 43 {
+        ( string_push_char txt c0 )
+        = k + k 1
+    } {}
+
+    = k ( __t_digits src n txt k )
+    ? < k 0 {
+        ( string_free txt )
+        ^ ( __valresult_err # TomlErr TomlSyntax pos )
+    } {}
+
+    // Fraction.
+    ? & == ( __t_get src k n ) 46 ( __t_is_digit ( __t_get src + k 1 n ) ) {
+        ( string_push_char txt 46 )
+        = k ( __t_digits src n txt + k 1 )
+        ? < k 0 {
+            ( string_free txt )
+            ^ ( __valresult_err # TomlErr TomlSyntax pos )
+        } {}
+        = is_float T
+    } {}
+
+    // Exponent.
+    : i ce ( __t_get src k n )
+    ? | == ce 101 == ce 69 {
+        : i cs ( __t_get src + k 1 n )
+        : i cd ? | == cs 45 == cs 43 ( __t_get src + k 2 n ) cs
+        ? ( __t_is_digit cd ) {
+            ( string_push_char txt 101 )
+            : ~ i j + k 1
+            ? | == cs 45 == cs 43 {
+                ( string_push_char txt cs )
+                = j + j 1
+            } {}
+            = k ( __t_digits src n txt j )
+            ? < k 0 {
+                ( string_free txt )
+                ^ ( __valresult_err # TomlErr TomlSyntax pos )
+            } {}
+            = is_float T
+        } {}
+    } {}
+
+    ? is_float {
+        : !f ParseErr fr ( float_parse ( string_data txt ) )
+        ( string_free txt )
+        ?? fr {
+            T fv → ^ ( __valresult_ok @ TomlValue { TFloat fv } k )
+            F _ → ^ ( __valresult_err # TomlErr TomlSyntax pos )
+        }
+    } {}
+    : !i ParseErr nr ( string_to_int txt )
+    ( string_free txt )
+    ?? nr {
+        T iv → ^ ( __valresult_ok @ TomlValue { TInt iv } k )
+        F _ → ^ ( __valresult_err # TomlErr TomlSyntax pos )
+    }
 }
 
 @ __t_parse_array s src i n i pos → ValueResult {
@@ -731,6 +817,17 @@ $ `stdlib/core/vec.nu`
     ^ @ ?i { F 0 }
 }
 
+// A float value. An integer widens — a config that writes `pad = 2` where
+// the reader wants a float should not have to write `2.0`.
+@ toml_as_float TomlValue v → ?f {
+    ?? v {
+        TFloat x → ^ @ ?f { T x }
+        TInt n → ^ @ ?f { T # f n }
+        _ → {}
+    }
+    ^ @ ?f { F 0.0 }
+}
+
 @ toml_as_bool TomlValue v → ?b {
     ?? v {
         TBool x → ^ @ ?b { T x }
@@ -773,11 +870,30 @@ $ `stdlib/core/vec.nu`
     ^ out
 }
 
+// A float must come back as a FLOAT: `float_to_string` prints an integral
+// double as `3`, which `toml_parse` would then read as a TInt, so a `.0`
+// is appended when the exact rendering carries neither `.` nor `e`.
+@ __toml_emit_float String out f x → v {
+    : s raw ( float_to_string x )
+    ( string_push_str out raw )
+    : i n ( nurl_str_len raw )
+    : ~ b plain T
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_at raw n k )
+        ? | | == c 46 == c 101 == c 69 { = plain F } {}
+        ? | == c 110 == c 105 { = plain F } {}  // nan / inf
+        = k + k 1
+    }
+    ? plain { ( string_push_str out `.0` ) } {}
+}
+
 // Emit one value in its inline form.
 @ __toml_emit_value String out TomlValue v → v {
     ?? v {
         TStr s → ( __toml_emit_str out ( string_data s ) )
         TInt n → ( string_push_int out n )
+        TFloat x → ( __toml_emit_float out x )
         TBool x → {
             ? x { ( string_push_str out `true` ) } { ( string_push_str out `false` ) }
         }

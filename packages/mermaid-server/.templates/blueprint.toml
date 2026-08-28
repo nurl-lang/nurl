@@ -1,0 +1,65 @@
+# blueprint.toml — a drafting-table look: white ink on blueprint blue,
+# every node the same shape-neutral outline, dashed grid-like links.
+#
+# Written mostly with the general [node] / [edge] tables to show how far a
+# template gets without per-shape overrides.
+
+name = "blueprint"
+description = "White ink on blueprint blue."
+
+[canvas]
+background = "#0f3d6e"
+padding = 32
+font_family = "'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
+font_size = 13
+css = ".mmd-nodes text{letter-spacing:.04em} .mmd-bg{filter:none}"
+
+[layout]
+rank_gap = 84
+node_gap = 40
+pad_x = 20
+pad_y = 13
+min_width = 70
+min_height = 44
+line_height = 18
+char_scale = 108       # the mono face is wider than the sans estimate
+
+[node]
+fill = "#0f3d6e"
+stroke = "#cfe3ff"
+stroke_width = 1.4
+radius = 2
+text = "#eaf3ff"
+font_weight = "400"
+inset = 16
+
+[node.diamond]
+stroke = "#ffd479"
+text = "#ffe9b8"
+
+[node.circle]
+stroke = "#8ef0c0"
+text = "#d5ffe9"
+
+[node.cylinder]
+rim = 8
+
+[edge]
+stroke = "#9dc4f0"
+stroke_width = 1.2
+arrow = "#cfe3ff"
+arrow_size = 10
+text = "#cfe3ff"
+font_size = 11
+label_fill = "#0f3d6e"
+label_stroke = "#4a7fb5"
+label_radius = 2
+label_pad = 5
+loop_size = 24
+
+[edge.dotted]
+dash = "3 4"
+
+[edge.thick]
+stroke_width = 2.6
+stroke = "#eaf3ff"

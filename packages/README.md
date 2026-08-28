@@ -268,6 +268,31 @@ Stdio by default; an optional `--http` transport adds bearer-token auth
 execution with no sandbox — hence those guards. See
 [`nurl-mcp/README.md`](nurl-mcp/README.md).
 
+## `mermaid-server/` — mermaid flowcharts to SVG (installable program)
+
+An HTTP server that renders mermaid `flowchart` source to an SVG image,
+and — in the same process, on the same port — an MCP server that does the
+same for an agent. Pure NURL: no headless browser, no `node_modules`, no
+mermaid.js. Multi-threaded, one worker per CPU.
+
+```
+nurlpkg install mermaid-server
+mermaid-server                                     # HTTP + MCP on :8808
+curl -s --data-binary @flow.mmd :8808/render > flow.svg
+claude mcp add mermaid -- mermaid-server --stdio   # or wire it into an agent
+```
+
+Nothing about the look is compiled in: every colour, width, radius, font
+and gap comes from a *template* — a TOML file read from an external
+directory at startup and picked per request by name, with per-shape and
+per-line-style overrides and a raw-CSS escape hatch. Adding a look is
+adding a file. `default`, `dark` and `blueprint` ship with the package.
+
+Also a one-shot CLI (`mermaid-server render diagram.mmd -o diagram.svg`)
+and a self-contained live playground at `/`. See
+[`mermaid-server/README.md`](mermaid-server/README.md) for the supported
+mermaid subset, the layout passes and the template key set.
+
 ## The full loop
 
 ```bash

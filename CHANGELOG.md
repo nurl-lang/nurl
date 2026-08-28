@@ -10,6 +10,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`nurl_free` on a binding the compiler already drops is now an
+  `error:`** — borrow-check rule §2.1b.
+
+  `nurl_free` sits outside the destructor move rule because it normally
+  reclaims raw `nurl_alloc` memory that nothing tracks. When its argument
+  names a binding auto-drop *did* register — an owned string from
+  `nurl_str_slice` / `nurl_str_cat`, an owned slice, a `Drop` value, a
+  struct with owned fields — the scope exit frees that pointer a second
+  time. docs/MEMORY.md §1 has stated the rule in prose since the auto-drop
+  layer landed ("do not then also free it by hand"); until now the
+  compiler let the program say it anyway, and the double free surfaced
+  only under ASan, in whatever unrelated allocation reused the block.
+
+  The binding is identified from the identifier the argument expression
+  loaded rather than from its first token, so the cast spelling every FFI
+  pointer uses — `( nurl_free # s piece )` — is covered as exactly as the
+  bare one. There is no legitimate counter-case: reassigning an owned
+  binding already frees its previous value, and a binding whose ownership
+  has left it is no longer registered. The whole tree — bootstrap fixed
+  point, 921-test corpus, 102 examples — is clean under the new rule.
+  Regression `compiler/tests/should_fail_free_autodropped.nu`.
+
+- **`--lint` reports an allocation owned by nothing.**
+
+  A fresh allocation handed straight to another call's argument list is
+  bound to nothing, so nothing ever frees it — the shape docs/MEMORY.md §1
+  has always warned about in prose, and the one that leaked a string per
+  HTTP request out of `ext/http_router.nu` and `ext/http_middleware.nu`
+  until 0.46.0. It is invisible without LSan, and it grows.
+
+  The lint fires at the call site only when the outer callee provably does
+  NOT take the value over: a destructor, a `sink` parameter, a position the
+  callee embeds in an aggregate (`vec_push`, `json_obj_set`, …) and an
+  escaping position are all silent, because each is a legitimate way for a
+  temporary to end its life there. A callee that hands back a *view* rather
+  than a fresh handle is silent too — which needed one gap closed on the
+  way: the §2.2 returned-handle summary recorded `^ p` but not `^ . p
+  field`, so a function returning a handle stored inside a parameter looked
+  like it minted a new one. Both call paths now publish that summary as
+  view provenance. Zero findings across the stdlib and the compiler's own
+  sources; regression `compiler/tests/lint_owned_temp.nu`.
+
+- **TOML floats** — `stdlib/ext/toml.nu` parses them, and integers grew
+  the two spellings the 1.0 spec has and the parser did not.
+
+  The number scanner was integers-only and sign-only-negative, so
+  `stroke_width = 1.5` in a config file was a `TomlSyntax` error and a
+  caller wanting a non-integer had to quote it and parse the string back.
+  One scanner now reads both: a fraction or an exponent makes the value a
+  `TFloat`, nothing else does, either sign is accepted, and `_` may
+  separate digits (`+1_000_000`, `6.02e23`, `-1E-9`) — with the spec's
+  own requirement that a separator sit *between* digits enforced, so
+  `1__0` and `1.` stay syntax errors. `toml_as_float` widens an integer,
+  because a config that writes `2` where the reader wants a float is not
+  a format error; `toml_stringify` round-trips, appending the `.0` that
+  keeps an integral float a float on re-parse. `TomlSerialize f` and
+  `from_toml_f` join the serde side. Regression
+  `compiler/tests/toml_float.nu`.
+
+- **`packages/mermaid-server` 0.1.0** — mermaid flowcharts to SVG, as a
+  multi-threaded HTTP server that is also an MCP server: one process, one
+  port, both protocols, and no headless browser or mermaid.js anywhere.
+
+  Parses the `graph` / `flowchart` dialect (thirteen node shapes, the
+  three line styles, arrow / circle / cross heads, bidirectional links,
+  `&` groups, both label spellings, `<br/>` breaks), lays it out with a
+  layered Sugiyama-style pass — back-edge-tolerant ranking, dummy-node
+  splitting so a link crossing several layers gets its own corridor,
+  barycentre crossing reduction — and renders SVG, all in integer
+  arithmetic.
+
+  Nothing about the look is compiled in: every colour, width, radius,
+  font and gap is read from an external directory of TOML templates at
+  startup and chosen per request by name, with per-shape and
+  per-line-style overrides and a raw-CSS escape hatch. HTTP serves
+  `/render`, `/render.json`, `/templates` and a live playground at `/`;
+  MCP serves `mermaid_render`, `mermaid_templates` and `mermaid_validate`
+  at `/mcp` or over `--stdio`.
+
 - **The `simd` clone the dispatcher never picks is now run against the
   goldens** — `compiler/tests/simd_baseline_agree.sh`, wired into
   `./build.sh` next to `simd_dispatch_ir.sh`.

@@ -72,16 +72,30 @@ nothing, so nothing frees it:
 ( nurl_eprint st )
 ```
 
-Both compile, neither warns, and the difference is invisible until you
-run under LSan. It is a leak rather than a bug in the usual sense — the
-program is correct, it just grows — which is why it survives in code
+Both compile, and the difference used to be invisible until you ran
+under LSan. It is a leak rather than a bug in the usual sense — the
+program is correct, it just grows — which is why it survived in code
 that is otherwise well tested: `ext/http_router.nu` and
 `ext/http_middleware.nu` each leaked one such string *per HTTP request*
-until 0.46.0, in servers meant to run for months.
+until 0.46.0, in servers meant to run for months. **`--lint` now reports
+it** at the call site:
+
+```
+warning: this allocation is owned by nothing - 'nurl_eprint' only reads
+         it, so nothing frees it. Bind it first (': T x ( ... )') and
+         pass the binding
+```
+
+Only when the callee provably does not take the value over: a
+destructor, a `sink` parameter, a position the callee embeds in an
+aggregate (`vec_push`, `json_obj_set`, …) and an escaping position are
+all silent, and so is a callee that hands back a *view* rather than a
+fresh handle. Regression `compiler/tests/lint_owned_temp.nu`.
 
 Bind first, then use. And do **not** then also free it by hand: the
 binding already carries a drop, so an explicit `nurl_free` on top is a
-double-free.
+double-free. That one is now an `error:` — see §2.1b; the rest of this
+section is still advice you have to follow yourself.
 
 The same shape appears one level up in `??` matches — unwrapping result
 B *inside* result A's `T` arm means B is never reached, and never
@@ -196,7 +210,7 @@ diagnostics and never lowers anything, a borrow-clean program produces
 the exact same IR either way — the bootstrap fixed point is
 unaffected.
 
-All eight rules below (§2.1–§2.8) emit `error:`. Use `--no-borrowck`
+All nine rules below (§2.1–§2.8, plus §2.1b) emit `error:`. Use `--no-borrowck`
 for the escape hatch if a corner case slips through, and
 `--strict-borrowck` (off by default) to add three opt-in checks on top —
 see §2.9.
@@ -221,6 +235,29 @@ error: use of moved value 'v' - it was consumed at line N
 Re-binding the name (`: ...` or `= ...`) revives it. A binding moved
 on only one arm of a `?` is *maybe-moved* and deliberately not
 flagged, to keep the rule false-positive-free.
+
+### 2.1b Freeing what the compiler already frees
+
+`nurl_free` is excluded from the move rule above because it normally
+reclaims raw `nurl_alloc` memory that nothing tracks. When its argument
+names a binding auto-drop **did** register, though — an owned string, an
+owned slice, a `Drop` value, a struct with owned fields — the scope exit
+frees that pointer a second time:
+
+```
+error: 'piece' is auto-dropped at the end of its scope, so freeing it
+       here frees it twice - delete this call. Only memory the compiler
+       does NOT track (a raw 'nurl_alloc' buffer, an FFI pointer) needs
+       a hand-written 'nurl_free'
+```
+
+The binding is identified from the identifier the argument expression
+loaded, not from its first token, so the cast spelling every FFI pointer
+uses — `( nurl_free # s piece )` — is covered as exactly as the bare one.
+There is no legitimate counter-case: reassigning an owned binding already
+frees its previous value, and a binding whose ownership has left it is no
+longer registered. Regression:
+`compiler/tests/should_fail_free_autodropped.nu`.
 
 ### 2.2 Alias and double-free detection
 
@@ -516,7 +553,7 @@ same fixed point as the escape ones.
 
 ### 2.9 `--strict-borrowck` — three opt-in checks
 
-The eight rules above run by default. `--strict-borrowck` (off by
+The nine rules above run by default. `--strict-borrowck` (off by
 default) adds three further checks, all diagnostic-only and all emitting
 `error:` like the rest:
 
@@ -544,7 +581,7 @@ default) adds three further checks, all diagnostic-only and all emitting
 It is **off by default** because the extensions have a meaningful
 false-positive rate against existing stdlib code; it is a tightening
 knob for auditing a specific module, not part of the standard contract.
-The default-on eight rules remain the guarantee everything else in this
+The default-on nine rules remain the guarantee everything else in this
 document refers to.
 
 ### 2.10 Stale container borrows (`vec_data` / `string_data`)
