@@ -40,6 +40,7 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
+$ `stdlib/ext/env.nu`
 $ `deps/gpu/src/gpu.nu`
 
 // A single argument to a kernel launch.
@@ -94,6 +95,14 @@ $ `deps/gpu/src/gpu.nu`
 
 @ gk_device_name * GpuKit kit → s { ^ ( gpu_name . kit gpu ) }
 
+// Make the kit's device current on the CALLING thread — see
+// gpu_bind_thread. A single-threaded program never needs it; anything
+// that hands device work to a pool or a fiber runtime does.
+@ gk_bind_thread * GpuKit kit → b {
+    ? ( gk_ok kit ) {} { ^ F }
+    ^ ( gpu_bind_thread . kit gpu )
+}
+
 // Free / total device memory in bytes; 0 means the backend cannot say.
 // CUDA asks the driver; the CPU backends report host RAM.
 @ gk_mem_free * GpuKit kit → i { ^ ( gpu_mem_free . kit gpu ) }
@@ -130,10 +139,26 @@ $ `deps/gpu/src/gpu.nu`
 // gk_pool F turns caching off (blocks freed after that go straight to
 // the driver); gk_pool_release hands every idle block back, which is
 // also what gk_dbuf_new does before reporting an out-of-memory.
-: ~ i g_pool_mem 0  // *u — three i64 per entry: dptr, bytes, inuse
+//
+// A BUDGET bounds what the idle side may hold. Without one the table is
+// a ratchet: a server whose tensor shapes follow the request — an
+// encoder padding to the length of the text it was handed — retires a
+// block of a size nothing asks for again, and the pool keeps it
+// forever. Measured on an embedding server: 4 GB after startup, 10.8 GB
+// after two hundred requests of distinct lengths, and the growth only
+// stops when the driver refuses, at which point gk_dbuf_new dumps the
+// WHOLE pool and re-allocates — a stall that reads, from outside, as the
+// model being unloaded and loaded again. So an idle block that pushes
+// the idle total over the budget evicts the least recently used idle
+// blocks until it fits. Blocks in use are never touched, and a pool
+// under its budget behaves exactly as before.
+: ~ i g_pool_mem 0  // *u — four i64 per entry: dptr, bytes, inuse, stamp
 : ~ i g_pool_n 0
 : ~ i g_pool_cap 0
 : ~ b g_pool_on T
+: ~ i g_pool_idle 0  // bytes currently held idle
+: ~ i g_pool_max -1  // budget in bytes; <0 = not set yet, 0 = unlimited
+: ~ i g_pool_clock 0  // LRU stamp source
 
 @ gk_pool b on → v { = g_pool_on on }
 
@@ -143,15 +168,42 @@ $ `deps/gpu/src/gpu.nu`
 // wondering where the VRAM went.
 @ gk_pool_count → i { ^ g_pool_n }
 
+// Bytes the pool is holding that nothing is using.
+@ gk_pool_idle_bytes → i { ^ g_pool_idle }
+
+// Cap the idle side at `bytes` (0 = unlimited). Trims immediately.
+@ gk_pool_budget * GpuKit kit i bytes → v {
+    = g_pool_max ? < bytes 0 { 0 } { bytes }
+    ( __gk_pool_trim )
+}
+
+@ gk_pool_budget_bytes → i { ^ ? < g_pool_max 0 { 0 } { g_pool_max } }
+
+// The budget a caller who never sets one gets: $NURL_GK_POOL_MAX (bytes)
+// when set, else a quarter of the device's memory — enough that a steady
+// shape mix never evicts, small enough that a drifting one cannot eat the
+// card. Resolved once, on the first free, when a kit exists to ask.
+@ _gk_pool_default * GpuKit kit → v {
+    ? >= g_pool_max 0 { ^ } {}
+    : ~ i fromenv 0
+    ?? ( env_get `NURL_GK_POOL_MAX` ) {
+        T ev → { = fromenv ( nurl_str_to_int ( string_data ev ) ) ( string_free ev ) }
+        F → {}
+    }
+    ? > fromenv 0 { = g_pool_max fromenv ^ } {}
+    : i tot ( gk_mem_total kit )
+    = g_pool_max ? > tot 0 { / tot 4 } { 0 }
+}
+
 @ __gk_pool_reserve i want → b {
     ? <= want g_pool_cap { ^ T } {}
     : ~ i ncap * 2 g_pool_cap
     ? < ncap want { = ncap want } {}
     ? < ncap 16 { = ncap 16 } {}
-    : *u nb ( nurl_alloc * ncap 24 )
+    : *u nb ( nurl_alloc * ncap 32 )
     ? == # i nb 0 { ^ F } {}
     : ~ i k 0
-    ~ < k * g_pool_n 3 {
+    ~ < k * g_pool_n 4 {
         ( nurl_poke nb k ( nurl_peek # *u g_pool_mem k ) )
         = k + k 1
     }
@@ -161,15 +213,56 @@ $ `deps/gpu/src/gpu.nu`
     ^ T
 }
 
+// Drop entry `k`, moving the last one into its slot.
+@ __gk_pool_drop i k → v {
+    : *u m # *u g_pool_mem
+    : i last - g_pool_n 1
+    ? < k last {
+        : i d * k 4
+        : i sfrom * last 4
+        : ~ i j 0
+        ~ < j 4 { ( nurl_poke m + d j ( nurl_peek m + sfrom j ) ) = j + j 1 }
+    } {}
+    = g_pool_n last
+}
+
+// Evict least-recently-idled blocks until the idle side is inside the
+// budget. Called on every give, and whenever the budget changes.
+@ __gk_pool_trim → v {
+    ? > g_pool_max 0 {} { ^ }
+    ~ > g_pool_idle g_pool_max {
+        : *u m # *u g_pool_mem
+        : ~ i best - 0 1
+        : ~ i beststamp 0
+        : ~ i k 0
+        ~ < k g_pool_n {
+            : i o * k 4
+            ? == ( nurl_peek m + o 2 ) 0 {
+                : i st ( nurl_peek m + o 3 )
+                ? | < best 0 < st beststamp { = best k = beststamp st } {}
+            } {}
+            = k + k 1
+        }
+        ? < best 0 { ^ } {}
+        : i o2 * best 4
+        : i dptr ( nurl_peek m o2 )
+        : i bytes ( nurl_peek m + o2 1 )
+        ( gpu_free @ GpuBuffer { dptr bytes } )
+        = g_pool_idle - g_pool_idle bytes
+        ( __gk_pool_drop best )
+    }
+}
+
 // An idle block of exactly `bytes`, marked in-use — or 0.
 @ _gk_pool_take i bytes → i {
     ? g_pool_on {} { ^ 0 }
     : *u m # *u g_pool_mem
     : ~ i k 0
     ~ < k g_pool_n {
-        : i o * k 3
+        : i o * k 4
         ? & == ( nurl_peek m + o 1 ) bytes == ( nurl_peek m + o 2 ) 0 {
             ( nurl_poke m + o 2 1 )
+            = g_pool_idle - g_pool_idle bytes
             ^ ( nurl_peek m o )
         } {}
         = k + k 1
@@ -182,10 +275,11 @@ $ `deps/gpu/src/gpu.nu`
     ? & g_pool_on != dptr 0 {} { ^ }
     ? ( __gk_pool_reserve + g_pool_n 1 ) {} { ^ }
     : *u m # *u g_pool_mem
-    : i o * g_pool_n 3
+    : i o * g_pool_n 4
     ( nurl_poke m o dptr )
     ( nurl_poke m + o 1 bytes )
     ( nurl_poke m + o 2 1 )
+    ( nurl_poke m + o 3 0 )
     = g_pool_n + g_pool_n 1
 }
 
@@ -196,10 +290,14 @@ $ `deps/gpu/src/gpu.nu`
     : *u m # *u g_pool_mem
     : ~ i k 0
     ~ < k g_pool_n {
-        : i o * k 3
+        : i o * k 4
         ? & & == ( nurl_peek m o ) dptr == ( nurl_peek m + o 1 ) bytes
         == ( nurl_peek m + o 2 ) 1 {
             ( nurl_poke m + o 2 0 )
+            = g_pool_clock + g_pool_clock 1
+            ( nurl_poke m + o 3 g_pool_clock )
+            = g_pool_idle + g_pool_idle bytes
+            ( __gk_pool_trim )
             ^ T
         } {}
         = k + k 1
@@ -215,21 +313,23 @@ $ `deps/gpu/src/gpu.nu`
     : ~ i keep 0
     : ~ i k 0
     ~ < k g_pool_n {
-        : i o * k 3
+        : i o * k 4
         : i dptr ( nurl_peek m o )
         : i bytes ( nurl_peek m + o 1 )
         ? == ( nurl_peek m + o 2 ) 0 {
             ( gpu_free @ GpuBuffer { dptr bytes } )
         } {
-            : i d * keep 3
+            : i d * keep 4
             ( nurl_poke m d dptr )
             ( nurl_poke m + d 1 bytes )
             ( nurl_poke m + d 2 1 )
+            ( nurl_poke m + d 3 0 )
             = keep + keep 1
         }
         = k + k 1
     }
     = g_pool_n keep
+    = g_pool_idle 0
 }
 
 @ gk_close * GpuKit kit → v {

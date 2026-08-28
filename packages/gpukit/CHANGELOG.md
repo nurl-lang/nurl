@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.6.5
+
+- **`gkd_attention_masked`** — the fused attention with a per-key
+  additive bias. `mask` holds `heads/hpb` rows of `nkv` floats, head `h`
+  reading row `h/hpb`, added to the score before the softmax: 0 keeps a
+  key, -1e30 drops it. That is how a PADDED sequence says "these
+  positions are not there" — the masked key never reaches the running
+  maximum and contributes exactly zero to the denominator, so every real
+  row is the row it would have been unpadded. `gkd_attention` is now a
+  wrapper that passes no mask, and the kernel it generates is
+  character-for-character the one it always generated, so nothing
+  already compiled is invalidated. First consumer: packages/embed, whose
+  forward pads to a quantised length so that it stops compiling kernels
+  and allocating device memory after the first few requests.
+- **`gkd_attention_ok` no longer says yes to head widths the call
+  rejects.** The register tile is sized for exactly `BQ*hd == 16*256`
+  accumulators and the call fails closed below that, but the predicate
+  only checked `hd % 16`. A caller that trusts it — map-anything sizes
+  its score workspace from it — allocated nothing for the composed
+  fallback and then had no workspace to fall back INTO.
+- **The device-buffer pool has a budget.** Without one the table is a
+  ratchet: a server whose tensor shapes follow the request retires a
+  block of a size nothing asks for again, and the pool keeps it forever.
+  Measured on an embedding server: 4 GB after startup, 10.8 GB after two
+  hundred requests of distinct lengths, ending when the driver refuses
+  and `gk_dbuf_new` dumps the whole pool and re-allocates — a stall that
+  reads, from outside, as the model being unloaded and loaded again. An
+  idle block that pushes the idle total over the budget now evicts the
+  least recently used ones until it fits. The budget is
+  `$NURL_GK_POOL_MAX` bytes, else a quarter of device memory;
+  `gk_pool_budget kit bytes` sets it (0 = unlimited, the old behaviour),
+  `gk_pool_idle_bytes` reports what is held. Blocks in use are never
+  touched and a pool under its budget behaves exactly as before.
+- **`gk_bind_thread kit → b`** (gpu 0.11.2's `gpu_bind_thread`): make
+  the kit's device current on the calling thread, for anything that
+  hands device work to a pool or a fiber runtime.
+
 ## 0.6.4
 
 - Internal rename, no API change: `_gkd_ceil` and `_gkd_gemm_tiled` were
