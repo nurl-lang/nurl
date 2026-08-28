@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.2.0
+
+A server that looked like it was reloading the model at random, and that
+served one client at a time. Both were real, and neither was where it
+looked.
+
+- **The forward pads to a quantised sequence length.** Every buffer and
+  every shape-specialised kernel in the forward is a function of the
+  token count, and both are cached BY SHAPE: gpukit pools device blocks
+  by exact byte size, and `gkd_perm` bakes its dims into the kernel name.
+  One text per length meant a new set of both, every request. Measured
+  against BGE-M3 on a 4090: a request at a length never seen before took
+  **385 ms against 36 ms warm**, three NVRTC compiles of it, and the
+  device-buffer pool grew **4 GB → 10.8 GB over two hundred requests**
+  and kept going — until the driver refused, at which point the whole
+  pool was dumped and re-allocated. That dump is what "it offloads and
+  reloads the model" looks like from outside.
+
+  Sequence lengths are now quantised to four steps per octave (at most
+  25% padding past 32 tokens, ~40 distinct lengths over the model's whole
+  8192-token range) and the padding is masked out of attention and of
+  pooling. The same two hundred varied-length requests: **8.2 s instead
+  of 68.5 s**, and device memory flat at +236 MB instead of +6.7 GB. A
+  500-request random-length soak reaches a steady state after ~200
+  requests and does not move again.
+
+  The padding is invisible in the numbers, not merely small: the
+  committed golden — taken with the unpadded, composed-attention
+  implementation and verified against sentence-transformers at cosine
+  1.0000000 — still reproduces at **cosine 1.00000000 per row**.
+
+- **Attention is the fused kernel** (`gkd_attention_masked`, gpukit
+  0.6.5) with the padding mask, instead of bmm + scale + softmax + bmm.
+  The composed form materialised three `[heads, n, n]` buffers, which at
+  8192 tokens is 4.3 GB each; nothing of that size is allocated now.
+  Resident scratch after startup dropped from 4.0 GB to 2.5 GB and the
+  warm forward from 36 ms to 30 ms. The composed path remains, with the
+  same mask, for the CPU backend and for head widths the fused kernel is
+  not sized for.
+
+- **Serving is fiber-per-connection with one model thread.** One model
+  on one device runs one forward at a time and that is not a choice, but
+  reading the socket, parsing JSON, tokenizing (the Unigram engine is
+  read-only, so it is re-entrant) and serialising a few thousand floats
+  are, and for a batch they are the larger half. A single worker meant a
+  slow or idle client stalled every other client behind it. Throughput
+  on 2000-word texts: **3.1 req/s against 2.1**, and flat from 1 to 32
+  concurrent clients where it used to be strictly serial. Sixteen
+  concurrent requests return byte-identical vectors to the same sixteen
+  run one at a time (now a test).
+
+  The forward runs on a thread rather than on the requesting fiber for a
+  hard reason: async fibers get 64 KB stacks and NVRTC wants far more,
+  so compiling a kernel on a fiber segfaults inside libnvrtc.
+
+- **The device is `gk_open_best`, not ordinal 0.** On a box with an old
+  card in front of a new one — a 4 GB GTX 970 ahead of a 24 GB RTX 4090
+  — ordinal 0 is where 2.3 GB of weights plus activations do not fit.
+  `$NURL_GPU_DEVICE` still overrides.
+
+- **`{"texts": [...]}` is accepted**, alongside `{"text": ...}`. The
+  package has described both since 0.1.0; only one of them worked.
+
+- **`normalize: false` no longer reconfigures the engine.** It used to
+  flip the engine's pooling config around the call and flip it back —
+  which a panic could leave flipped, and which no concurrent server could
+  be allowed to do at all. It is a parameter now.
+
+- `/health` also reports `device_name`, `max_seq`, `pool_blocks` and
+  `pool_idle_bytes`, so "where did the VRAM go" is a question the server
+  answers.
+
+- New test `tests/embed_shapes.nu`: many distinct lengths must stop
+  growing the pool and stop compiling kernels — the regression test for
+  the bug above. `tests/embed_test.sh` also stands a real server up and
+  checks auth, both body spellings, a batch, `normalize`, and serial vs
+  16-way-concurrent agreement.
+
+- Requires gpukit `^0.6.5` and gpu `^0.11.2`.
+
 ## 0.1.5
 
 - Requirements widened to gpu `^0.11` / gpukit `^0.6`. No source change.

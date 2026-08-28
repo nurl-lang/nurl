@@ -259,6 +259,17 @@ $ `cpu.nu`
 // The CPU backend runs kernels synchronously, so there is nothing to await.
 @ gpu_sync Gpu g → i { ? != __gpu_backend 0 { ^ 0 } { ^ ( cuda_sync ) } }
 
+// Make this device usable from the CALLING thread. On CUDA the context
+// is thread-local, so a program that opens the device on one thread and
+// launches from another has to say so; the CPU/static/WebGPU backends
+// have no such state and answer T. Idempotent and cheap — call it at the
+// top of any work item that may run on a thread the device was not
+// opened on.
+@ gpu_bind_thread Gpu g → b {
+    ? != __gpu_backend 0 { ^ T } {}
+    ^ ( cuda_ctx_bind . g ctx )
+}
+
 // ── Timers (CUDA backend only; every other backend reports 0) ─────────
 // A begin/end pair of events recorded on the launch stream. Timing a
 // launch from the host measures the launch; these measure the GPU. The

@@ -63,6 +63,7 @@ Lifecycle:
 | `( gk_open ordinal )` → `GpuKit` | open a device (CUDA, else CPU backend) |
 | `( gk_open_best )` → `GpuKit` | the device a caller who does not care should get: `$NURL_GPU_DEVICE`, else highest compute capability, memory breaking ties |
 | `( gk_ok kit )` → `b`, `( gk_backend kit )` → `s`, `( gk_device_name kit )` → `s` | |
+| `( gk_bind_thread kit )` → `b` | make the device current on THIS thread (CUDA contexts are thread-local) |
 | `( gk_close kit )` | free cached kernels + close the device |
 | `( gk_grid n block )` → `i` | grid size for `n` threads |
 
@@ -99,7 +100,12 @@ to the driver — a forward pass that allocates its scratch per layer was
 otherwise spending a third of its time in the allocator with the device
 idle. `gk_pool F` turns it off; `gk_pool_release kit` hands idle blocks
 back, which is also what an allocation failure does before reporting
-out-of-memory.
+out-of-memory. The idle side is **bounded**: `$NURL_GK_POOL_MAX` bytes,
+else a quarter of device memory, else whatever `gk_pool_budget kit
+bytes` says (0 = unlimited). Past it the least recently idled blocks go
+back to the driver, so a caller whose shapes follow its input cannot
+ratchet the card full; `gk_pool_count` and `gk_pool_idle_bytes` say what
+is held.
 
 **You can see where the time went.** `gk_prof kit T` brackets every
 launch with a CUDA event pair and accumulates device time per kernel;
@@ -140,7 +146,10 @@ bmm/scale/softmax/bmm it is 3.8x at `nkv = n` and 6.2x at `nkv = 4n`
 — and at a 72-frame streaming window the score
 matrix it does not allocate is 2.8 GB. `gkd_attention_ok kit hd` reports
 in advance whether it will run, so a caller can size its workspace
-before the first call.
+before the first call. `gkd_attention_masked` is the same kernel with a
+per-key additive bias (`heads/hpb` rows of `nkv` floats, 0 keeps a key,
+-1e30 drops it) — what a padded batch needs to leave its real rows
+unchanged.
 
 ## Numerics
 

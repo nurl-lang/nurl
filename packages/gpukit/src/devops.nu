@@ -687,14 +687,39 @@ $ `dev.nu`
 // difference between a long sequence fitting and not.
 @ gkd_attention_ok * GpuKit kit i hd → b {
     ? ( nurl_str_eq ( gk_backend kit ) `cuda` ) {} { ^ F }
-    ^ & > hd 0 == % hd 16 0
+    ? & > hd 0 == % hd 16 0 {} { ^ F }
+    // The register tile is sized for exactly QT*DT = 16 accumulators per
+    // thread, i.e. BQ*hd == 16*256; the call below fails closed when the
+    // head is too narrow to fill it, and this predicate has to say so
+    // BEFORE a caller decides it does not need the score buffer.
+    ^ >= * ? <= hd 64 { 64 } { 32 } hd * 16 256
 }
 
+// Unmasked: every key is visible to every query.
 @ gkd_attention * GpuKit kit GkBuf o GkBuf q GkBuf k GkBuf v
 i heads i n i nkv i hd f scale → b {
+    ^ ( gkd_attention_masked kit o q k v @ GkBuf { 0 0 . o dtype } heads n nkv hd 1 scale )
+}
+
+// With a per-key additive bias: `mask` holds (heads/hpb) rows of `nkv`
+// floats, head h reading row h/hpb, and the bias is added to the score
+// before the softmax — 0 keeps a key, -1e30 drops it. That is how a
+// padded batch says "these positions are not there": the key never
+// reaches the running maximum and contributes exactly zero to the
+// denominator, so the row is the row it would have been without the
+// padding. Pass a zero GkBuf (dptr 0) for `mask` to run unmasked — the
+// kernel is then character-for-character the one gkd_attention has
+// always generated, so nothing already compiled is invalidated.
+@ gkd_attention_masked * GpuKit kit GkBuf o GkBuf q GkBuf k GkBuf v GkBuf mask
+i heads i n i nkv i hd i hpb f scale → b {
     ? & & ( __gkd_isfloat o ) ( gk_buf_ok q ) & ( gk_buf_ok k ) ( gk_buf_ok v ) {} { ^ F }
     ? & & == . o dtype . q dtype == . q dtype . k dtype == . k dtype . v dtype {} { ^ F }
     ? & & & > heads 0 > n 0 > nkv 0 > hd 0 {} { ^ F }
+    : b masked ( gk_buf_ok mask )
+    ? masked {
+        ? & & > hpb 0 == % heads hpb 0 == . mask dtype . o dtype {} { ^ F }
+        ? >= . mask n * / heads hpb nkv {} { ^ F }
+    } {}
     // BQ x hd and BQ x BK both have to divide the 256-thread block
     ? == % hd 16 0 {} { ^ F }
     ? & & == . q n * heads * n hd == . o n * heads * n hd
@@ -725,6 +750,7 @@ i heads i n i nkv i hd f scale → b {
     ( string_push_int kname hd )
     ( string_push_char kname 95 )
     ( string_push_int kname bk )
+    ? masked { ( string_push_str kname `_m` ) } {}
     : String src ( string_from `extern "C" __global__ void ` )
     ( string_push_str src ( string_data kname ) )
     ( string_push_str src `(const ` ) ( string_push_str src tn )
@@ -732,6 +758,10 @@ i heads i n i nkv i hd f scale → b {
     ( string_push_str src `* K, const ` ) ( string_push_str src tn )
     ( string_push_str src `* V, ` ) ( string_push_str src tn )
     ( string_push_str src `* O, long long heads, long long n, long long nkv, ` )
+    ? masked {
+        ( string_push_str src `const ` ) ( string_push_str src tn )
+        ( string_push_str src `* M, long long hpb, ` )
+    } {}
     ( string_push_str src tn ) ( string_push_str src ` scale){` )
     ( string_push_str src `enum{BQ=` )
     ( string_push_int src bq )
@@ -755,6 +785,10 @@ i heads i n i nkv i hd f scale → b {
     ( string_push_str src `* Qh=Q+h*n*HD;const ` ) ( string_push_str src tn )
     ( string_push_str src `* Kh=K+h*nkv*HD;const ` ) ( string_push_str src tn )
     ( string_push_str src `* Vh=V+h*nkv*HD;` )
+    ? masked {
+        ( string_push_str src `const ` ) ( string_push_str src tn )
+        ( string_push_str src `* Mh=M+(h/hpb)*nkv;` )
+    } {}
     ( string_push_str src `int tid=threadIdx.x;` )
     ( string_push_str src `for(int idx=tid;idx<BQ*HD;idx+=NT){int i=idx/HD,d=idx%HD;` )
     ( string_push_str src `long long gq=qb+i;Qs[i][d]=(gq<n)?Qh[gq*HD+d]:(` )
@@ -788,7 +822,9 @@ i heads i n i nkv i hd f scale → b {
     ( string_push_str src `for(int t=0;t<SK;t++)kv[t]=Ks[j0+t][d];` )
     ( string_push_str src `for(int q=0;q<QT;q++)for(int t=0;t<SK;t++)sc[q][t]+=qv[q]*kv[t];}` )
     ( string_push_str src `for(int q=0;q<QT;q++)for(int t=0;t<SK;t++)` )
-    ( string_push_str src `S[i0+q][j0+t]=(k0+j0+t<nkv)?sc[q][t]*scale:` )
+    ( string_push_str src `S[i0+q][j0+t]=(k0+j0+t<nkv)?sc[q][t]*scale` )
+    ? masked { ( string_push_str src `+Mh[k0+j0+t]` ) } {}
+    ( string_push_str src `:` )
     ( string_push_str src ( __gkd_neg . o dtype ) )
     ( string_push_str src `;}__syncthreads();` )
     // online softmax bookkeeping, one thread per query row
@@ -834,6 +870,10 @@ i heads i n i nkv i hd f scale → b {
     ( vec_push [i] args ( gpu_arg_i64 heads ) )
     ( vec_push [i] args ( gpu_arg_i64 n ) )
     ( vec_push [i] args ( gpu_arg_i64 nkv ) )
+    ? masked {
+        ( vec_push [i] args ( gk_arg_dev mask ) )
+        ( vec_push [i] args ( gpu_arg_i64 hpb ) )
+    } {}
     ( vec_push [i] args ( _gk_scal . o dtype scale ) )
     ^ ( __gkd_launch kit src kname * heads ( _gkd_ceil n bq ) args )
 }

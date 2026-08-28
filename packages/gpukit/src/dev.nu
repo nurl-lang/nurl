@@ -78,6 +78,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 @ gk_dbuf_new * GpuKit kit i n i dtype → GkBuf {
     ? & ( gk_ok kit ) > n 0 {} { ^ @ GkBuf { 0 0 dtype } }
+    ( _gk_pool_default kit )
     : i bytes * n ( __gk_esz dtype )
     // a block this size that an earlier gk_dbuf_free retired
     : i cached ( _gk_pool_take bytes )

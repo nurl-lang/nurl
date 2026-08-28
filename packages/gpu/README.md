@@ -106,6 +106,7 @@ backend (ROCm/HIP, OpenCL, a CPU fallback) slots in behind the same names.
 | `gpu_launch GpuKernel i grid i block (Vec i) args → i` | 1-D launch |
 | `gpu_grid i n i block → i` | ceil-div grid size |
 | `gpu_sync Gpu → i` | block until work completes |
+| `gpu_bind_thread Gpu → b` | make the device current on THIS thread (CUDA contexts are thread-local; no-op T elsewhere) |
 | `gpu_free` / `gpu_kernel_free` / `gpu_close` | release |
 
 ## Example

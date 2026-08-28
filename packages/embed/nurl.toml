@@ -1,14 +1,14 @@
 [package]
 name = "embed"
-version = "0.1.5"
-description = "The embedding server, in pure NURL — load an XLM-RoBERTa-family text encoder (BGE-M3, multilingual-e5, …) from a Hugging Face model directory and serve embeddings over HTTP, with no Python, no PyTorch and no ONNX export. The tokenizer is the tokenizer package's Unigram engine (sentencepiece Precompiled charsmap normalization, true Viterbi segmentation — token-for-token identical to Hugging Face tokenizers); weights load straight from model.safetensors via the safetensor package (mmap, f32); the 24-block bidirectional transformer (embeddings + LayerNorm, self-attention, exact-erf GELU FFN, CLS or mean pooling, L2 normalize) runs on gpukit's dtype-generic dev-layer kernels — the same library the tensor and onnx packages use — on CUDA or the CPU/OpenMP backend. Verified against sentence-transformers: cosine 1.0000000 per row on a multilingual corpus, and byte-level API compatibility with the reference FastAPI embedding service (POST/GET /create_embedding with text | texts, normalize flag, Bearer-token auth with a constant-time compare, /health). The model can be a local directory or a Hugging Face ref — `embed serve BAAI/bge-m3` fetches it on demand into the shared ~/.nurl/models cache (via the hub package) and serves it. One `embed serve <model>` starts it; `embed text` embeds from the CLI. Hardened serving: single honest worker, bounded body/head, slowloris idle cut, per-request deadline, panic-to-500."
+version = "0.2.0"
+description = "The embedding server, in pure NURL — load an XLM-RoBERTa-family text encoder (BGE-M3, multilingual-e5, …) from a Hugging Face model directory and serve embeddings over HTTP, with no Python, no PyTorch and no ONNX export. The tokenizer is the tokenizer package's Unigram engine (sentencepiece Precompiled charsmap normalization, true Viterbi segmentation — token-for-token identical to Hugging Face tokenizers); weights load straight from model.safetensors via the safetensor package (mmap, f32); the 24-block bidirectional transformer (embeddings + LayerNorm, self-attention, exact-erf GELU FFN, CLS or mean pooling, L2 normalize) runs on gpukit's dtype-generic dev-layer kernels — the same library the tensor and onnx packages use — on CUDA or the CPU/OpenMP backend. Verified against sentence-transformers: cosine 1.0000000 per row on a multilingual corpus, and byte-level API compatibility with the reference FastAPI embedding service (POST/GET /create_embedding with text | texts, normalize flag, Bearer-token auth with a constant-time compare, /health). The model can be a local directory or a Hugging Face ref — `embed serve BAAI/bge-m3` fetches it on demand into the shared ~/.nurl/models cache (via the hub package) and serves it. One `embed serve <model>` starts it; `embed text` embeds from the CLI. The forward pads to a quantised sequence length and masks the padding out of attention and pooling, so a server stops compiling kernels and stops allocating device memory after its first few requests instead of stalling ~350 ms at every new text length and ratcheting the card full. Serving is fiber-per-connection with the forward on one model thread, so tokenizing and JSON overlap the arithmetic. Hardened: bounded body/head, slowloris idle cut, per-request deadline, panic-to-500."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
 tokenizer = { path = "../tokenizer", version = "^0.3" }
 safetensor = { path = "../safetensor", version = "^0.3" }
-gpukit = { path = "../gpukit", version = "^0.6" }
-gpu = { path = "../gpu", version = "^0.11" }
+gpukit = { path = "../gpukit", version = "^0.6.5" }
+gpu = { path = "../gpu", version = "^0.11.2" }
 http = { path = "../http", version = "^0.3" }
 
 hub = { path = "../hub", version = "^0.1" }

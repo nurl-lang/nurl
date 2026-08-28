@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.2
+
+- **`cuInit` runs once per process.** The driver's contract calls it
+  idempotent, and on a working CUDA install a second call is free. It is
+  not free where the first one FAILS: in a sanitized build ASan's
+  allocator makes the driver's setup return `CUDA_ERROR_OUT_OF_MEMORY`,
+  and the second `cuInit` then blocks for exactly 180 seconds and leaves
+  a 408-byte allocation behind. Any program that probes for a device and
+  then opens one — `gk_open_best` is precisely that — paid it on every
+  sanitized run. `cuda_init` now remembers its answer.
+- **`gpu_bind_thread Gpu → b`** makes the device current on the CALLING
+  thread. A CUDA context is thread-local state, so a program that opens
+  the device on its main thread and launches from a worker got
+  `CUDA_ERROR_INVALID_CONTEXT` out of every driver call with nothing to
+  say why. The CPU/static/WebGPU backends have no such state and answer
+  T, so a caller need not branch on the backend.
+
 ## 0.11.1
 
 - `gpu_mem_free` / `gpu_mem_total`: device memory as the driver
