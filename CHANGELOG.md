@@ -8,6 +8,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The `simd` clone the dispatcher never picks is now run against the
+  goldens** — `compiler/tests/simd_baseline_agree.sh`, wired into
+  `./build.sh` next to `simd_dispatch_ir.sh`.
+
+  The `simd` prefix emits every marked function twice and chooses on a
+  cached CPUID answer. `simd_dispatch_ir.sh` proves both clones are
+  *built* — two definitions, feature bits on the wide one only, a
+  dispatcher owning the undecorated symbol, `ymm` in the object code.
+  What nothing proved is that the other one *computes the right
+  answer*, because no test can run it: on a host with AVX2 — every
+  x86-64 runner this project uses — the dispatcher picks the wide clone
+  every time, and on a host without, the wide clone is what never runs.
+  `--no-cpu-dispatch` appeared in no build script and no workflow.
+
+  Every one of the eleven functions the prefix marks today is
+  post-quantum cryptography: `__ntt`, `__invntt`, `__poly_basemul`,
+  `__cbd_batch` and the three `__kpke_*` in `mlkem.nu`,
+  `mldsa_keygen_derand` / `mldsa_sign_mu` / `mldsa_verify_mu` in
+  `mldsa.nu`, and `__kf1600x4`, the x4 Keccak sponge under both. A
+  divergence between the two lowerings there is not a slow path; it is
+  a wrong key on the half of a fleet that was never tested.
+
+  The gate builds `mlkem_vectors`, `mldsa_vectors` and `sha3x4_vectors`
+  a second time with `--no-cpu-dispatch` and requires **both** lowerings
+  to produce the committed golden — all three ML-KEM levels, all three
+  ML-DSA levels, and the x4 sponge either side of both rates. They
+  agree today; that is now a fact a build checks rather than an
+  assumption.
+
+  Two things it does that a naive version would not. It first proves
+  the two legs are *different machine code* — 2057 `ymm` instructions
+  inside the wide clones of `mlkem_vectors` against 0 anywhere in the
+  baseline build, 2315 against 0 for `mldsa_vectors` — because
+  "the outputs match" is equally true of two builds of identical code,
+  which is exactly what a silently-dropped clone produces. And it reads
+  the marked set out of `stdlib/` rather than carrying a list, so
+  marking a twelfth function without giving it a driver fails the build
+  by name.
+
+  Verified by breaking it three ways: forcing both legs to
+  `--no-cpu-dispatch` (the "clone silently stopped being emitted"
+  regression) fails the different-code assertion on all three drivers
+  and reports all eleven functions uncovered, while every output still
+  matches its golden — which is precisely the regression no existing
+  test could see; changing `3329` to `3330` in `__ntt`'s modulus
+  broadcast fails both lowerings of `mlkem_vectors`; and appending an
+  undriven `simd` function to `mlkem.nu` fails the coverage assertion
+  by name.
+
+  ~10 s. Skips with a message on non-x86-64 hosts, where there is only
+  one lowering to begin with and `--no-cpu-dispatch` is mandatory —
+  so the macOS ARM64 runner, which also runs `./build.sh`, is
+  unaffected.
+
 ## [0.54.0] — 2026-08-27
 
 ### Added
