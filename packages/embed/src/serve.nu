@@ -25,10 +25,12 @@
 // read-only, so it is re-entrant), and serialising a few thousand floats
 // back out, which for a batch is the larger half of the work. So the
 // server is fiber-per-connection on the async runtime, and the forward
-// is handed to ONE dedicated model thread over a queue. A single worker
-// used to mean a slow or idle client stalled every other client behind
-// it; now it does not, and a batch's tokenizing and JSON overlap with
-// another request's arithmetic.
+// is handed to ONE dedicated model thread over a queue — one job per
+// REQUEST, so a request's texts reach the model together and run as a
+// few padded batched forwards (embed_encode_batch), not text by text. A
+// single worker used to mean a slow or idle client stalled every other
+// client behind it; now it does not, and a batch's tokenizing and JSON
+// overlap with another request's arithmetic.
 //
 // The forward runs on a thread rather than on the requesting fiber for
 // a hard reason, not a stylistic one: async fibers get 64 KB stacks, and
@@ -66,8 +68,9 @@ $ `model.nu`
 // in.
 : EmJob {
     i next
-    ( Vec i ) ids
-    ( Vec f ) out
+    ( Vec i ) ids  // flat tokens for the whole request
+    ( Vec i ) offs  // B+1 offsets into ids
+    ( Vec f ) out  // B*dim floats, written in place
     b normalize
     b done
     b ok
@@ -89,14 +92,16 @@ $ `model.nu`
 
 @ __em_qdone → Cond { ^ @ Cond { @ Cell { # s g_q_done_ptr g_q_done_bytes } } }
 
-// Run one forward on the model thread and wait for it. `ids` and `out`
-// stay owned by the caller — the job only borrows them for the length
-// of the call, which is exactly how long the caller blocks.
-@ __em_submit ( Vec i ) ids ( Vec f ) out b normalize → b {
+// Run one request's forward — the WHOLE batch, one job — on the model
+// thread and wait for it. `ids`, `offs` and `out` stay owned by the
+// caller — the job only borrows them for the length of the call, which
+// is exactly how long the caller blocks.
+@ __em_submit ( Vec i ) ids ( Vec i ) offs ( Vec f ) out b normalize → b {
     ? != g_q_m_ptr 0 {} { ^ F }
     : *EmJob j # *EmJob ( nurl_alloc Z EmJob )
     = . j next 0
     = . j ids ids
+    = . j offs offs
     = . j out out
     = . j normalize normalize
     = . j done F
@@ -133,7 +138,7 @@ $ `model.nu`
             = g_q_head . j next
             ? == g_q_head 0 { = g_q_tail 0 } {}
             ( mutex_unlock ( __em_qm ) )
-            : b r ( embed_encode_ids_norm e . j ids . j out . j normalize )
+            : b r ( embed_encode_batch e . j ids . j offs . j out . j normalize )
             ( mutex_lock ( __em_qm ) )
             = . j ok r
             = . j done T
@@ -222,35 +227,46 @@ $ `model.nu`
 // Tokenizing is done outside the model lock — the Unigram engine only
 // reads — and so is building the response, which for a batch of long
 // vectors is thousands of float conversions. The lock covers exactly the
-// device forward, which is the part that cannot overlap with itself.
+// device forward — and the whole request is ONE job: the model thread
+// sees every text of the batch at once and runs them as a few padded
+// batched forwards (embed_encode_batch), not one forward per text.
 @ __em_run ( Vec String ) texts b normalize → HttpResponse {
     : *Embed e # *Embed g_em
     : i nt ( vec_len [String] texts )
     : i dim ( embed_dim e )
     : ~ b ok T
-    : ( Vec f ) flat ( vec_new [f] )
-    : ( Vec f ) emb ( vec_new [f] )
+    // tokenize everything into one flat ids + offsets pair
+    : ( Vec i ) ids ( vec_new [i] )
+    : ( Vec i ) offs ( vec_new [i] )
+    ( vec_push [i] offs 0 )
     : ~ i k 0
     ~ & ok < k nt {
         ?? ( vec_get [String] texts k ) {
             T t → {
-                : ( Vec i ) ids ( vec_new [i] )
-                ? ( embed_tokenize e ( string_data t ) ids ) {} { = ok F }
-                ? ok { = ok ( __em_submit ids emb normalize ) } {}
-                ( vec_free [i] ids )
-                ? ok {
+                // per text into a fresh vec — embed_tokenize's maxseq
+                // truncation is over the whole vec it is handed
+                : ( Vec i ) tid ( vec_new [i] )
+                ? ( embed_tokenize e ( string_data t ) tid ) {
+                    : i tn ( vec_len [i] tid )
                     : ~ i j 0
-                    ~ < j dim {
-                        ?? ( vec_get [f] emb j ) { T x → { ( vec_push [f] flat x ) } F → { = ok F } }
+                    ~ < j tn {
+                        ?? ( vec_get [i] tid j ) { T x → { ( vec_push [i] ids x ) } F → {} }
                         = j + j 1
                     }
-                } {}
+                    ( vec_push [i] offs ( vec_len [i] ids ) )
+                } { = ok F }
+                ( vec_free [i] tid )
             }
             F → { = ok F }
         }
         = k + k 1
     }
-    ( vec_free [f] emb )
+    : ( Vec f ) flat ( vec_with_cap [f] * nt dim )
+    : ~ i z 0
+    ~ < z * nt dim { ( vec_push [f] flat 0.0 ) = z + z 1 }
+    ? ok { = ok ( __em_submit ids offs flat normalize ) } {}
+    ( vec_free [i] ids )
+    ( vec_free [i] offs )
     ( __em_free_texts texts )
     ? ok {} {
         ( vec_free [f] flat )
@@ -261,28 +277,45 @@ $ `model.nu`
     ( mutex_lock ( __em_qm ) )
     = g_em_reqs + g_em_reqs 1
     ( mutex_unlock ( __em_qm ) )
-    : Json arr ( json_arr_new )
+    // The body is built as ONE string, not a Json tree. A 64-text batch
+    // is ~65k floats; as json_float nodes that is 65k allocations whose
+    // frees each walk the panic-unwind journal the handler's panic→500
+    // guard keeps — O(allocations²), measured at 3.8 s of a 3.9 s
+    // request. The numbers go through the same nurl_str_float formatter
+    // json_stringify uses, so the body is byte-identical to the tree's;
+    // only the tree is gone. (json_str_lit still escapes the model
+    // name — the one field that needs it.)
+    : String bs ( string_from `{"embeddings":[` )
     = k 0
     ~ < k nt {
-        : Json row ( json_arr_new )
+        ? > k 0 { ( string_push_char bs 44 ) } {}
+        ( string_push_char bs 91 )
         : ~ i j 0
         ~ < j dim {
+            ? > j 0 { ( string_push_char bs 44 ) } {}
             ?? ( vec_get [f] flat + * k dim j ) {
-                T x → { : b _p ( json_arr_push row ( json_float x ) ) }
+                T x → { ( string_push_float bs x ) }
                 F → {}
             }
             = j + j 1
         }
-        : b _p2 ( json_arr_push arr row )
+        ( string_push_char bs 93 )
         = k + k 1
     }
     ( vec_free [f] flat )
-    : Json o ( json_obj_new )
-    : b _s1 ( json_obj_set o `embeddings` arr )
-    : b _s2 ( json_obj_set o `model` ( json_str_lit g_em_name ) )
-    : b _s3 ( json_obj_set o `dimension` ( json_int dim ) )
-    : HttpResponse r ( response_json 200 o )
-    ( json_free o )
+    ( string_push_str bs `],"model":` )
+    : Json mn ( json_str_lit g_em_name )
+    : String mns ( json_stringify mn )
+    ( json_free mn )
+    ( string_push_str bs ( string_data mns ) )
+    ( string_free mns )
+    ( string_push_str bs `,"dimension":` )
+    ( string_push_int bs dim )
+    ( string_push_char bs 125 )
+    : HttpResponse r ( response_new 200 )
+    ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+    ( response_set_body_str r ( string_data bs ) )
+    ( string_free bs )
     ^ r
 }
 

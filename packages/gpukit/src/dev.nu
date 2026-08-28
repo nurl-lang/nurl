@@ -739,7 +739,14 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 : i GKD_TM 4
 : i GKD_TN 4
 
-@ _gkd_smem_body s tn i dtype i transb i batched → String {
+// `big` swaps the 64x64/4x4 tile for 128x64 with an 8x4 register tile —
+// the shape the comment above argues for and gkd_gemm now picks when M
+// is deep enough to keep every SM busy at it: 8x4 halves the
+// shared-reads-per-MAC ratio (12 per 32 against 8 per 16), which is the
+// bound the 64x64 tile runs into on Ada. Same staging, same ascending-k
+// accumulation, so the value is still bit-identical to the per-element
+// kernel — only the blocking changes.
+@ _gkd_smem_body s tn i dtype i transb i batched i big → String {
     // 16-byte shared loads on f32. Two things at once: `Bs[kk][tc*4+j]`
     // read one float at a time makes threads tc and tc+8 hit the same
     // bank (4 floats apart, 32 banks) on EVERY read of the inner loop,
@@ -748,7 +755,9 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     // shared rows 16-byte aligned, hence the +4 pad rather than the +1
     // that only separates banks.
     : b vec4 == dtype GK_F32
-    : String s ( string_from `enum{BM=64,BN=64,BK=16,TM=4,TN=4,NT=256};` )
+    : String s ( string_from ? != big 0
+    `enum{BM=128,BN=64,BK=16,TM=8,TN=4,NT=256};`
+    `enum{BM=64,BN=64,BK=16,TM=4,TN=4,NT=256};` )
     // __align__(16) is not decoration: the float4 reads below are only
     // defined if the array base is 16-byte aligned, and a __shared__
     // array is only guaranteed its element's alignment.
@@ -789,16 +798,26 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( string_push_str s tn ) ( string_push_str s `)0;}` )
     ( string_push_str s `__syncthreads();` )
     ( string_push_str s `for(int kk=0;kk<BK;kk++){` )
-    ? vec4 {
+    ? & vec4 != big 0 {
+        // TM=8 is two float4 reads; tr*TM is 32-byte aligned so both are
+        // 16-byte aligned loads.
         ( string_push_str s `float4 av4=*(const float4*)&As[kk][tr*TM];` )
+        ( string_push_str s `float4 av4b=*(const float4*)&As[kk][tr*TM+4];` )
         ( string_push_str s `float4 bv4=*(const float4*)&Bs[kk][tc*TN];` )
-        ( string_push_str s `float av[TM]={av4.x,av4.y,av4.z,av4.w};` )
+        ( string_push_str s `float av[TM]={av4.x,av4.y,av4.z,av4.w,av4b.x,av4b.y,av4b.z,av4b.w};` )
         ( string_push_str s `float bv[TN]={bv4.x,bv4.y,bv4.z,bv4.w};` )
     } {
-        ( string_push_str s tn ) ( string_push_str s ` av[TM];` )
-        ( string_push_str s tn ) ( string_push_str s ` bv[TN];` )
-        ( string_push_str s `for(int i=0;i<TM;i++)av[i]=As[kk][tr*TM+i];` )
-        ( string_push_str s `for(int j=0;j<TN;j++)bv[j]=Bs[kk][tc*TN+j];` )
+        ? vec4 {
+            ( string_push_str s `float4 av4=*(const float4*)&As[kk][tr*TM];` )
+            ( string_push_str s `float4 bv4=*(const float4*)&Bs[kk][tc*TN];` )
+            ( string_push_str s `float av[TM]={av4.x,av4.y,av4.z,av4.w};` )
+            ( string_push_str s `float bv[TN]={bv4.x,bv4.y,bv4.z,bv4.w};` )
+        } {
+            ( string_push_str s tn ) ( string_push_str s ` av[TM];` )
+            ( string_push_str s tn ) ( string_push_str s ` bv[TN];` )
+            ( string_push_str s `for(int i=0;i<TM;i++)av[i]=As[kk][tr*TM+i];` )
+            ( string_push_str s `for(int j=0;j<TN;j++)bv[j]=Bs[kk][tc*TN+j];` )
+        }
     }
     ( string_push_str s `for(int i=0;i<TM;i++)` )
     ( string_push_str s `for(int j=0;j<TN;j++)` )
@@ -894,7 +913,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( string_push_str src tn ) ( string_push_str src `* Y, long long M, long long N, long long K, long long as, long long bs, long long total){` )
     ? smem {
         ( string_push_str src `(void)total;` )
-        : String body ( _gkd_smem_body tn . y dtype 0 1 )
+        : String body ( _gkd_smem_body tn . y dtype 0 1 0 )
         ( string_push_str src ( string_data body ) )
         ( string_free body )
     } {

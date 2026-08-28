@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.7.0
+
+Batched attention, and two tile choices that were sized for the wrong
+thing.
+
+- **`gkd_attention_batch`** — the fused attention over a BATCH of
+  sequences, reading Q/K/V in the layout a transformer's linear layers
+  actually produce: `[batch·n, heads·hd]`, token rows with the heads
+  interleaved inside the row. `gkd_attention` wants `[heads, n, hd]`, so
+  a caller running batch 1 paid two `gkd_perm` round trips per tensor
+  per block to get in and out of head-major order — and a caller running
+  a real batch would have needed a 4-D permute, whose dims `gkd_perm`
+  bakes into the kernel name, i.e. a fresh NVRTC compile per
+  (batch, length) pair. This entry removes both: the loads along `d`
+  stay contiguous and coalesced exactly as before, and no permuted copy
+  of Q/K/V/O is ever materialised. `mask` is one additive row of `nkv`
+  floats per batch element, so a padded batch says "these positions are
+  not there" per sequence. Same tile, same online softmax, same
+  accumulation order as `gkd_attention_masked` — a sequence embedded at
+  batch `b` is bit-identical to the same sequence permuted through the
+  head-major entry. First consumer: packages/embed, whose forward is now
+  batched.
+
+- **The attention key tile is sized for three resident blocks, not for
+  one block's 48 KB ceiling.** Filling the ceiling is the obvious read
+  of "how big a key tile fits", and it is the wrong one: at `hd=64` it
+  picks `BK=32`, which is 41 KB per block, and 41 KB lets only two
+  blocks share an Ada SM's 100 KB — sixteen warps to hide the
+  shared-memory latency of a kernel that is nothing but shared-memory
+  traffic. A third of that budget picks `BK=16` (29 KB, three blocks,
+  twenty-four warps) and the same work runs faster on both shapes an
+  encoder produces. Measured on a 4090, BGE-M3 head width: one
+  3072-token sequence **1862 → 1689 µs**, sixteen 192-token ones
+  **133 → 122 µs**. The K/V tile is read once either way — only how much
+  of it a block holds at a time changes, so nothing about the numbers
+  moves except the last bits that any change of blocking moves.
+
+  (Raising `SK` from 2 to 4 — halving the shared reads per score MAC —
+  was measured too, and is *not* an improvement: 1862 → 1896 µs. The
+  score loop is latency-bound, not bandwidth-bound, which is what made
+  occupancy the thing to fix.)
+
+- **`gkd_gemm` gets a 128×64 tile with an 8×4 register block** for
+  shapes deep enough to keep a big card busy at it (`m ≥ 512` and at
+  least 128 blocks). The 64×64/4×4 tile reads 8 floats from shared per
+  `k` step to do 16 MACs, and Ada's shared bandwidth cannot keep 128 FMA
+  lanes fed at that ratio — the comment in `_gkd_smem_body` has said so
+  since the tile was written, with `M ≈ 800` as the reason not to act on
+  it. A batched or long-sequence encoder forward is not 800 rows, it is
+  3072, and there the wider tile is the right one: measured on a 4090 at
+  f32, `3072×1024×1024` **27.2 TFLOP/s** and `3072×4096×1024`
+  **32.2 TFLOP/s**, against ~11.5 for the old tile's own published
+  figure at its own shape. The ~800-row single forwards keep the 64×64
+  tile. Accumulation is still one ascending sum over `k`, only blocked,
+  so both tiles are bit-identical to the per-element kernel.
+
 ## 0.6.5
 
 - **`gkd_attention_masked`** — the fused attention with a per-key

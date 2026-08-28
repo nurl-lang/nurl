@@ -35,10 +35,12 @@ $ `deps/hub/src/hub.nu`
 @ __cli_usage → v {
     ( nurl_print `embed — pure-NURL embedding server (XLM-RoBERTa family: BGE-M3, multilingual-e5, …)\n\n` )
     ( nurl_print `  embed serve <model> [--addr HOST:PORT] [--token T] [--maxseq N]\n` )
-    ( nurl_print `                      [--pool cls|mean] [--no-normalize]\n` )
-    ( nurl_print `  embed text  <model> <text…>\n\n` )
+    ( nurl_print `                      [--pool cls|mean] [--no-normalize] [--gpu N]\n` )
+    ( nurl_print `  embed text  <model> <text…>          (same --gpu/--pool/… flags)\n\n` )
     ( nurl_print `model: a local directory (config.json + tokenizer.json + model.safetensors, f32)\n` )
     ( nurl_print `       or a Hugging Face ref (e.g. BAAI/bge-m3), fetched into ~/.nurl/models\n` )
+    ( nurl_print `--gpu N: CUDA device ordinal (CUDA order, fastest first — not nvidia-smi's\n` )
+    ( nurl_print `         PCI order); default: the best device, or $NURL_GPU_DEVICE\n` )
     ( nurl_print `default addr 127.0.0.1:8000; no --token = open server (loopback only!)\n` )
 }
 
@@ -100,6 +102,13 @@ $ `deps/hub/src/hub.nu`
     ? > ( nurl_str_len ms ) 0 { ( embed_set_maxseq e ( nurl_str_to_int ms ) ) } {}
 }
 
+// --gpu N (a CUDA ordinal), or -1 for "the caller did not say"
+@ __cli_gpu ( Vec String ) av i from → i {
+    : s g ( __cli_opt av from `--gpu` )
+    ? > ( nurl_str_len g ) 0 { ^ ( nurl_str_to_int g ) } {}
+    ^ - 0 1
+}
+
 @ main → i {
     : ( Vec String ) av ( env_args_list )
     : i n ( vec_len [String] av )
@@ -109,7 +118,7 @@ $ `deps/hub/src/hub.nu`
         : String dirS ( __embed_resolve ( __cli_arg av 2 ) )
         ? == ( string_len dirS ) 0 { = rc 1 } {
             : s dir ( string_data dirS )
-            ?? ( embed_open dir ) {
+            ?? ( embed_open_dev dir ( __cli_gpu av 3 ) ) {
                 T e → {
                     ( __cli_apply_opts e av 3 )
                     : String host ( string_new )
@@ -133,7 +142,7 @@ $ `deps/hub/src/hub.nu`
             : String dirS ( __embed_resolve ( __cli_arg av 2 ) )
             ? == ( string_len dirS ) 0 { = rc 1 } {
                 : s dir ( string_data dirS )
-                ?? ( embed_open dir ) {
+                ?? ( embed_open_dev dir ( __cli_gpu av 4 ) ) {
                     T e → {
                         ( __cli_apply_opts e av 4 )
                         : ( Vec f ) emb ( vec_new [f] )
