@@ -84,8 +84,7 @@ $ `deps/gpukit/src/dev.nu`
             ( nurl_print ` n_layer ` ) ( nurl_print_int . m n_layer )
             ( nurl_print ` n_head ` ) ( nurl_print_int . m n_head )
             ( nurl_print ` n_kv ` ) ( nurl_print_int . m n_kv )
-            ( nurl_print ` head_dim ` ) ( nurl_print_int . m head_dim )
-            ( nurl_print `\n` )
+            ( nurl_print ` head_dim ` ) ( nurl_println_int . m head_dim )
             ( check == . m rope_style 1 `qwen3 → NEOX rope` )
             ( check != . m head_dim / . m n_embd . m n_head
             `head_dim is READ (key_length), not n_embd/n_head` )
@@ -144,7 +143,7 @@ $ `deps/gpukit/src/dev.nu`
                         = c + c 1
                     }
                     ( nurl_print `  top-1: tape ` ) ( nurl_print_int targ )
-                    ( nurl_print ` engine ` ) ( nurl_print_int earg ) ( nurl_print `\n` )
+                    ( nurl_print ` engine ` ) ( nurl_println_int earg )
                     ( check == targ earg `WIRING ORACLE: tape top-1 == inference engine top-1` )
                     : f fe ( llm_logit lm targ )
                     : ~ f rel / ( float_abs - tbest fe ) ? > ( float_abs fe ) 1.0 ( float_abs fe ) 1.0

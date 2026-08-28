@@ -7,9 +7,9 @@
 @ main → i {
     : ~ i flag F
     ? ! flag {
-        ( nurl_print_int 1 )
+        ( nurl_println_int 1 )
     } {
-        ( nurl_print_int 2 )
+        ( nurl_println_int 2 )
     }
     ^ 0
 }

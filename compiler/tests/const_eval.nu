@@ -22,7 +22,7 @@
 @ ck s label i got i want → v {
     ( nurl_print label )
     ( nurl_print ? == got want ` ok = ` ` MISMATCH = ` )
-    ( nurl_print_int got )
+    ( nurl_println_int got )
 }
 
 @ main → i {

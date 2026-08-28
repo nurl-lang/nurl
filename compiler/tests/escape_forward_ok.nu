@@ -19,6 +19,6 @@
 }
 
 @ main → i {
-    ( nurl_print_int ( caller ) )
+    ( nurl_println_int ( caller ) )
     ^ 0
 }

@@ -161,7 +161,7 @@
     = . fp 0 e
     : *i ip # *i fp
     : i bits . ip 0
-    ( nurl_print_int & bits 9223372036854775807 )
+    ( nurl_println_int & bits 9223372036854775807 )
 
     ( free x )
     ( free y )

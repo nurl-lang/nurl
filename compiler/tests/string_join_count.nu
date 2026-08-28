@@ -18,7 +18,7 @@ $ `stdlib/core/vec.nu`
 @ show_int s label i v → v {
     ( nurl_print label )
     ( nurl_print ` ` )
-    ( nurl_print_int v )
+    ( nurl_println_int v )
 }
 
 @ main → i {

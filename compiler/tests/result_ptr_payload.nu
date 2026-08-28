@@ -30,8 +30,8 @@ $ `stdlib/core/string.nu`
     : !*Box Boom r ( mk_ok 21 )
     ?? r {
         T p → {
-            ( nurl_print `a=` ) ( nurl_print_int . p a )
-            ( nurl_print `b=` ) ( nurl_print_int . p b )
+            ( nurl_print `a=` ) ( nurl_println_int . p a )
+            ( nurl_print `b=` ) ( nurl_println_int . p b )
             ( nurl_free # s p )
         }
         F e → ( nurl_print `unexpected err\n` )

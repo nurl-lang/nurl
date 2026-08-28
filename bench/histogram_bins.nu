@@ -43,6 +43,6 @@
     }
 
     ( free bins )
-    ( nurl_print_int # i & checksum 0x7fffffffffffffff )
+    ( nurl_println_int # i & checksum 0x7fffffffffffffff )
     ^ 0
 }

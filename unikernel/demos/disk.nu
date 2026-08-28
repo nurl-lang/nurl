@@ -30,8 +30,7 @@ $ `stdlib/std/fs.nu`
 @ kvn s k i n → v {
     ( nurl_print k )
     ( nurl_print `=` )
-    ( nurl_print_int n )
-    ( nurl_print `\n` )
+    ( nurl_println_int n )
 }
 
 @ counter_path → s { ^ `/boots.txt` }

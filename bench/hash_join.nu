@@ -224,6 +224,6 @@
     ( free keys )
     ( free ctrl )
     ( free st )
-    ( nurl_print_int # i & sum 0x7fffffffffffffff )
+    ( nurl_println_int # i & sum 0x7fffffffffffffff )
     ^ 0
 }

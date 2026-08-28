@@ -15,7 +15,7 @@ declare the matching import as the first line, or it will not compile:
 $ `stdlib/core/string.nu`     // REQUIRED before any nurl_str_* call
 ```
 
-`nurl_print_int`, `nurl_print`, and the arithmetic / pointer operators are
+`nurl_println_int`, `nurl_print`, and the arithmetic / pointer operators are
 built in and need no import. `nurl_str_*` and other stdlib helpers **do** — if
 you call one, the matching `$` import must be at the top of the file.
 
@@ -25,7 +25,7 @@ you call one, the matching `$` import must be at the top of the file.
 // line comment
 
 @ main → i {
-    ( nurl_print_int 42 )   // prints an i64 followed by a newline
+    ( nurl_println_int 42 )   // prints an i64 followed by a newline
     ^ 0                     // main returns i (0 = success)
 }
 ```
@@ -106,8 +106,10 @@ Example loop:
 
 ## Printing
 
-- `( nurl_print_int n )` — print an i64 then a newline.
-- `( nurl_print s )` — print a raw string, no newline.
+The rule: `print` = no newline, `println` = newline; `_int` is the integer form.
+
+- `( nurl_print s )` / `( nurl_println s )` — print a raw string.
+- `( nurl_print_int n )` / `( nurl_println_int n )` — print an i64.
 
 ## Pointers / flat arrays
 
@@ -156,7 +158,7 @@ $ `stdlib/core/string.nu`              // REQUIRED: this program calls nurl_str_
         ? == ( nurl_str_get text i ) 32 { = spaces + spaces 1 } {}
         = i + i 1
     }
-    ( nurl_print_int spaces )
+    ( nurl_println_int spaces )
     ^ 0
 }
 ```

@@ -35,7 +35,7 @@ $ `stdlib/net/relay.nu`
 
     // ── REGISTER ─────────────────────────────────────────────────
     : ( Vec u ) reg ( relay_build_register pk )
-    ( nurl_print `register frame len: ` ) ( nurl_print_int ( vec_len [u] reg ) )  // 1+4+32 = 37
+    ( nurl_print `register frame len: ` ) ( nurl_println_int ( vec_len [u] reg ) )  // 1+4+32 = 37
     : ?RelayFrame rf ( relay_parse reg )
     ?? rf {
         T f → {

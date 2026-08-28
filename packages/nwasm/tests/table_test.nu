@@ -54,8 +54,8 @@ $ `src/interp.nu`
 }
 
 @ pi s label i a i b → v {
-    ( nurl_print label ) ( nurl_print_int a )
-    ( nurl_print ? == a b ` == ` ` != ` ) ( nurl_print_int b ) ( nurl_print `\n` )
+    ( nurl_print label ) ( nurl_println_int a )
+    ( nurl_print ? == a b ` == ` ` != ` ) ( nurl_println_int b )
 }
 
 @ main → i {

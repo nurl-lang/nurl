@@ -18,6 +18,6 @@
         ? > s best { = best s } {}
         = k + k 1
     }
-    ( nurl_print_int best )
+    ( nurl_println_int best )
     ^ 0
 }

@@ -601,7 +601,7 @@ $ `wasmkernel.nu`
         ( __pl w `    : ~ i k 0` )
         ( string_push_str w `    ~ < k 256 { : f v ( bits_to_f64 ( nurl_peek host k ) ) = acc ` )
         ( string_push_str w ( __host_fold_src op ) ) ( __pl w ` = k + k 1 }` )
-        ( __pl w `    ( nurl_print_int ( f64_to_bits acc ) )` )
+        ( __pl w `    ( nurl_println_int ( f64_to_bits acc ) )` )
     }
     ( __pl w `    ^ 0` )
     ( __pl w `}` )

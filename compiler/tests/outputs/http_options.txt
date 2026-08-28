@@ -2,17 +2,7 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-default  tmo=0
- cto=0
- follow=T maxr=-1
- verify=T ua=[]
-custom   tmo=5000
- cto=2000
- follow=F maxr=3
- verify=F ua=[my-agent/1.0]
-eff(default) tmo=30000
- cto=10000
- ua=nurl-http/0.1
-eff(custom)  tmo=5000
- cto=2000
- ua=my-agent/1.0
+default  tmo=0 cto=0 follow=T maxr=-1 verify=T ua=[]
+custom   tmo=5000 cto=2000 follow=F maxr=3 verify=F ua=[my-agent/1.0]
+eff(default) tmo=30000 cto=10000 ua=nurl-http/0.1
+eff(custom)  tmo=5000 cto=2000 ua=my-agent/1.0

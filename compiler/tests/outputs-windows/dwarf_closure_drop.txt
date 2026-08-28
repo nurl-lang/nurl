@@ -3,4 +3,3 @@ LINK OK
 EXIT 0
 OUTPUT
 total_len=0
-

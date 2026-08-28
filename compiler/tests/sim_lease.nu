@@ -26,7 +26,7 @@ $ `stdlib/dist/sim.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
 
-@ pi s label i v → v { ( nurl_print label ) ( nurl_print_int v ) }
+@ pi s label i v → v { ( nurl_print label ) ( nurl_println_int v ) }
 
 @ bytes4 i a i b i c i d → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) ( vec_push [u] v # u a ) ( vec_push [u] v # u b ) ( vec_push [u] v # u c ) ( vec_push [u] v # u d ) ^ v }
 

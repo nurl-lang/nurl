@@ -28,7 +28,7 @@ $ `stdlib/ext/serde.nu`
 
     : !i ParseErr ri ( from_json_i ji )
     ?? ri {
-        T n → ( nurl_print_int n )
+        T n → ( nurl_println_int n )
         F _ → ( nurl_print `i FAIL\n` )
     }
     : !b ParseErr rb ( from_json_b jb )

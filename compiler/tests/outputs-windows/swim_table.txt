@@ -7,14 +7,11 @@ A state: alive
 suspect A: T
 A state: suspect
 swept dead: 1
-
 A state: dead
 refute self: T
 self inc: 1
-
 revive A inc1: T
 A state: alive
 stale suspect A: F
 A state: alive
 count: 1
-

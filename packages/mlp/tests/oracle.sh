@@ -168,7 +168,7 @@ $ `src/gradfit.nu`
         = r + r 1
     }
     ( nurl_print `outliers_flagged ` ) ( nurl_print_int flagged )
-    ( nurl_print ` / ` ) ( nurl_print_int no ) ( nurl_print `\n` )
+    ( nurl_print ` / ` ) ( nurl_println_int no )
     ( nurl_print `flags ` ) ( nurl_print ( string_data fl ) ) ( nurl_print `\n` )
     ( string_free fl )
     ( vec_free [f] mses ) ( vec_free [i] sz )

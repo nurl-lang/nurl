@@ -69,7 +69,7 @@ $ `src/interp.nu`
                 // the module writes "hi from wasi" to stdout above this line
                 ? ( interp_trapped it ) { ( nurl_print `FAIL: trapped\n` ) = fails + fails 1 } {}
                 ? ! ( interp_exited it ) { ( nurl_print `FAIL: did not call proc_exit\n` ) = fails + fails 1 } {}
-                ( nurl_print `exit_code 42:    ` ) ( nurl_print_int . it exit_code )
+                ( nurl_print `exit_code 42:    ` ) ( nurl_println_int . it exit_code )
                 ( nurl_print ? == . it exit_code 42 ` == ` ` != ` ) ( nurl_print `42\n` )
                 ? != . it exit_code 42 { = fails + fails 1 } {}
                 ( interp_free it )

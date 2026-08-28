@@ -35,14 +35,11 @@
 // Print a string to stderr followed by a newline.
 & `c` @ nurl_eprintln s text → v
 
-// Print an integer to stdout followed by a newline.
+// Print an integer to stdout with NO trailing newline.
 & `c` @ nurl_print_int i n → v
 
-// Print a string to stdout followed by a newline (libc puts).
-& `c` @ nurl_print_str s text → v
-
-// Print `true` or `false` to stdout followed by a newline.
-& `c` @ nurl_print_bool b x → v
+// Print an integer to stdout followed by a newline.
+& `c` @ nurl_println_int i n → v
 
 // Flush buffered stdout / stderr explicitly.
 & `c` @ nurl_flush_stdout → v

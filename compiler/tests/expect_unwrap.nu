@@ -31,35 +31,29 @@ $ `stdlib/core/string.nu`
 @ main → i {
     // ── happy paths ──────────────────────────────────────────────
     ( nurl_print `expect ok: ` )
-    ( nurl_print_int ( res_expect [i s] ( ok_i ) `should not fire` ) )
-    ( nurl_print `\n` )
+    ( nurl_println_int ( res_expect [i s] ( ok_i ) `should not fire` ) )
     ( nurl_print `unwrap ok: ` )
-    ( nurl_print_int ( res_unwrap [i s] ( ok_i ) ) )
-    ( nurl_print `\n` )
+    ( nurl_println_int ( res_unwrap [i s] ( ok_i ) ) )
     : Point p ( opt_expect [Point] ( some_p ) `should not fire` )
     ( nurl_print `opt expect struct: ` )
-    ( nurl_print_int + . p x . p y )
-    ( nurl_print `\n` )
+    ( nurl_println_int + . p x . p y )
 
     // ── or_else fallbacks ────────────────────────────────────────
     ( nurl_print `res or_else: ` )
-    ( nurl_print_int ( res_unwrap_or_else [i s] ( err_i ) \ s _e → i { ^ -1 } ) )
-    ( nurl_print `\n` )
+    ( nurl_println_int ( res_unwrap_or_else [i s] ( err_i ) \ s _e → i { ^ -1 } ) )
     ( nurl_print `opt or_else: ` )
-    ( nurl_print_int ( opt_unwrap_or_else [i] ( none_i ) \ → i { ^ -2 } ) )
-    ( nurl_print `\n` )
+    ( nurl_println_int ( opt_unwrap_or_else [i] ( none_i ) \ → i { ^ -2 } ) )
 
     // ── bridges ──────────────────────────────────────────────────
     ( nurl_print `res_ok some: ` )
-    ( nurl_print_int ( opt_unwrap_or [i] ( res_ok [i s] ( ok_i ) ) 0 ) )
-    ( nurl_print `\n` )
+    ( nurl_println_int ( opt_unwrap_or [i] ( res_ok [i s] ( ok_i ) ) 0 ) )
     ( nurl_print `res_err some: ` )
     ( nurl_print ( opt_unwrap_or [s] ( res_err [i s] ( err_i ) ) `none` ) )
     ( nurl_print `\n` )
     ( nurl_print `ok_or err: ` )
     : !i s bridged ( opt_ok_or [i s] ( none_i ) `was-none` )
     ?? bridged {
-        T v → ( nurl_print_int v )
+        T v → ( nurl_println_int v )
         F e → ( nurl_print e )
     }
     ( nurl_print `\n` )

@@ -91,7 +91,7 @@ $ `stdlib/ext/env.nu`
     }
 }
 
-// `nurl_print_int` ends its own line, which is right for a bare number
+// `nurl_println_int` ends its own line, which is right for a bare number
 // and wrong for a number inside a sentence. Lines with a number in the
 // middle are assembled as a String and printed once.
 @ __line_new s head → String {

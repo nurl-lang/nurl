@@ -39,7 +39,7 @@
         = sum + sum * + k 1 . a k
         = k + k 1
     }
-    ( nurl_print_int sum )
+    ( nurl_println_int sum )
     ( free a )
     ^ 0
 }

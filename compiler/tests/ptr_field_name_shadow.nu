@@ -26,9 +26,9 @@
 
     : Box v @ Box { 7 0 }
 
-    ( nurl_print_int ( via_ptr p 3 ) )  // field 7 + 100*3 = 307
-    ( nurl_print_int ( via_val v 3 ) )  // 307
-    ( nurl_print_int ( via_local p ) )  // field 7 + local 9 = 16
+    ( nurl_println_int ( via_ptr p 3 ) )  // field 7 + 100*3 = 307
+    ( nurl_println_int ( via_val v 3 ) )  // 307
+    ( nurl_println_int ( via_local p ) )  // field 7 + local 9 = 16
     ( nurl_free # s p )
     ^ 0
 }

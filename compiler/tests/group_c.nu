@@ -23,25 +23,25 @@
 @ main → v {
     // ── Type inference ────────────────────────────────────────────────
     : x ( add 3 4 )  // x inferred as i
-    ( nurl_print_int x )  // 7
+    ( nurl_println_int x )  // 7
     : msg `hello`  // msg inferred as s
-    ( nurl_print_str msg )  // hello
+    ( nurl_println msg )  // hello
     : flag T  // flag inferred as b
-    ( nurl_print_bool flag )  // true
+    ( nurl_println ? flag `true` `false` )  // true
 
     // ── fn_type sizeof: (@ i i) ───────────────────────────────────────
-    ( nurl_print_int Z ( @ i i ) )  // sizeof fn ptr → 8
+    ( nurl_println_int Z ( @ i i ) )  // sizeof fn ptr → 8
 
     // ── Aggregate construction + numeric field access ─────────────────
     // @ ? i { T 42 }  builds { i1=true, i64=42 }  (Some(42))
     : opt @ ?i { T 42 }
     : is_some . opt 0  // extractvalue field 0 → i1
-    ( nurl_print_bool is_some )  // true
+    ( nurl_println ? is_some `true` `false` )  // true
     : val . opt 1  // extractvalue field 1 → i64
-    ( nurl_print_int val )  // 42
+    ( nurl_println_int val )  // 42
 
     // @ ? i { F 0 }  builds { i1=false, i64=0 }  (None)
     : none @ ?i { F 0 }
     : none_tag . none 0
-    ( nurl_print_bool none_tag )  // false
+    ( nurl_println ? none_tag `true` `false` )  // false
 }

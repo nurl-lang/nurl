@@ -24,10 +24,10 @@ $ `stdlib/core/string.nu`
     : Req a @ Req { ( string_from `/mcp` ) }
     : Req b @ Req { ( string_from `/other` ) }
     : Req c @ Req { ( string_from `/` ) }
-    ( nurl_print_int ( run h a ) )
-    ( nurl_print_int ( run h b ) )
-    ( nurl_print_int ( run h c ) )
-    ( nurl_print_int seed )
+    ( nurl_println_int ( run h a ) )
+    ( nurl_println_int ( run h b ) )
+    ( nurl_println_int ( run h c ) )
+    ( nurl_println_int seed )
     ( string_free . a path ) ( string_free . b path ) ( string_free . c path )
     ^ 0
 }

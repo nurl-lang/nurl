@@ -20,6 +20,6 @@
         = x ^^ x >> x 33
         = k + k 1
     }
-    ( nurl_print_int # i x )
+    ( nurl_println_int # i x )
     ^ 0
 }

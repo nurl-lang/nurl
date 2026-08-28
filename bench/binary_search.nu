@@ -55,6 +55,6 @@
 
     : u64 checksum ^^ state hits
     ( free values )
-    ( nurl_print_int # i & checksum 0x7fffffffffffffff )
+    ( nurl_println_int # i & checksum 0x7fffffffffffffff )
     ^ 0
 }

@@ -23,7 +23,7 @@ $ `stdlib/ext/cluster.nu`
     // incoming traceparent by registry_handler).
     ( registry_register reg `trace_echo`
     \ Json a → !Json ClusterErr { ^ @ !Json ClusterErr { T ( json_int ( trace_current_trace ) ) } } )
-    ( nurl_print `trace server on 127.0.0.1:` ) ( nurl_print_int port ) ( nurl_print `\n` )
+    ( nurl_print `trace server on 127.0.0.1:` ) ( nurl_println_int port )
     : !v NetErr sr ( cluster_serve `127.0.0.1` port reg )
     ?? sr { T _ → {} F _ → {} }
     ( registry_free reg )

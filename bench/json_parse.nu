@@ -14,6 +14,6 @@ $ `stdlib/ext/json.nu`
         }
         = iters - iters 1
     }
-    ( nurl_print_int ok )
+    ( nurl_println_int ok )
     ^ 0
 }

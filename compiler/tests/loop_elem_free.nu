@@ -58,6 +58,6 @@ $ `stdlib/core/string.nu`
     : i a ( free_elems )
     : i b ( free_locals 4 )
     : i c ( free_rebind 3 )
-    ( nurl_print_int + + a b c )
+    ( nurl_println_int + + a b c )
     ^ 0
 }

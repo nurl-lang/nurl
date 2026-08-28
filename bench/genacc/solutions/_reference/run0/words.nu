@@ -24,6 +24,6 @@ $ `stdlib/core/string.nu`
         }
         = i + i 1
     }
-    ( nurl_print_int count )
+    ( nurl_println_int count )
     ^ 0
 }

@@ -2,18 +2,9 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-one-for-all : a=2
- b=2
- c=2
- stable=T
-one-for-one : a=1
- b=2
- c=1
- stable=T
-rest-for-one: a=1
- b=2
- c=2
- stable=T
+one-for-all : a=2 b=2 c=2 stable=T
+one-for-one : a=1 b=2 c=1 stable=T
+rest-for-one: a=1 b=2 c=2 stable=T
 one-for-one
 one-for-all
 rest-for-one

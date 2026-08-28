@@ -78,6 +78,6 @@
 
     ( free filter )
     ( free st )
-    ( nurl_print_int # i & hits 0x7fffffffffffffff )
+    ( nurl_println_int # i & hits 0x7fffffffffffffff )
     ^ 0
 }

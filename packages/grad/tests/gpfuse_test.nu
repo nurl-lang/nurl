@@ -118,14 +118,14 @@ $ `deps/gpukit/src/dev.nu`
     : *GpPlan pl ( gpfuse_plan pg )
     ( check . pl ok `fusion plan builds` )
     : i nseg / ( vec_len [i] . pl segs ) 2
-    ( nurl_print `  segments ` ) ( nurl_print_int nseg )
+    ( nurl_print `  segments ` ) ( nurl_println_int nseg )
     : ~ i fused 0
     = k 0
     ~ < k nseg {
         = fused + fused + - ( _ti . pl segs + * k 2 1 ) ( _ti . pl segs * k 2 ) 1
         = k + k 1
     }
-    ( nurl_print ` fused-nodes ` ) ( nurl_print_int fused ) ( nurl_print `\n` )
+    ( nurl_print ` fused-nodes ` ) ( nurl_println_int fused )
     ( check >= nseg 1 `at least one row-space segment found` )
     ( check >= fused 10 `the whole forward chain fuses (>= 10 nodes)` )
 
@@ -181,7 +181,7 @@ $ `deps/gpukit/src/dev.nu`
         = k + k 1
     }
     ? allbits {} {
-        ( nurl_print `  first fused-vs-pernode mismatch at node ` ) ( nurl_print_int badid ) ( nurl_print `
+        ( nurl_print `  first fused-vs-pernode mismatch at node ` ) ( nurl_println_int badid ) ( nurl_print `
 ` )
     }
     ( check allbits `fused == per-node device replay, BIT-IDENTICAL (every node)` )
@@ -287,7 +287,7 @@ $ `deps/gpukit/src/dev.nu`
         = k + k 1
     }
     ? gbits {} {
-        ( nurl_print `  first fused-vs-pernode GRAD mismatch at node ` ) ( nurl_print_int gbad ) ( nurl_print `\n` )
+        ( nurl_print `  first fused-vs-pernode GRAD mismatch at node ` ) ( nurl_println_int gbad )
     }
     ( check gbits `fused backward == per-node backward, BIT-IDENTICAL (every grad)` )
 

@@ -98,7 +98,7 @@ $ `stdlib/core/io.nu`
         F e → {
             : ClaudeErr ce # ClaudeErr e
             ( nurl_print `error: ` )
-            ( nurl_print_str ( claude_err_name ce ) )
+            ( nurl_println ( claude_err_name ce ) )
             ^ 1
         }
     }

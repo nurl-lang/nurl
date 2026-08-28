@@ -68,7 +68,7 @@ $ `stdlib/dist/identity.nu`
             }
 
             ( nurl_print `replica ` ) ( nurl_print_int rid )
-            ( nurl_print ` converged value = ` ) ( nurl_print_int ( pncounter_value ctr ) ) ( nurl_print `\n` )
+            ( nurl_print ` converged value = ` ) ( nurl_println_int ( pncounter_value ctr ) )
 
             ( pncounter_free ctr )
             ( vec_free [u] self_pk ) ( vec_free [u] g )

@@ -15,6 +15,6 @@
     : ~ Counter c @ Counter { 0 5 }
     : ( @ v ) f \ → v { = . c n + . c n 1 }
     ( run_twice f )
-    ( nurl_print_int . c n )
+    ( nurl_println_int . c n )
     ^ 0
 }

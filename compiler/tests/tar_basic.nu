@@ -19,7 +19,7 @@ $ `stdlib/core/string.nu`
 
 @ println_i s prefix i v → v {
     ( nurl_print prefix )
-    ( nurl_print_int v )
+    ( nurl_println_int v )
 }
 
 @ println_s s prefix s v → v {

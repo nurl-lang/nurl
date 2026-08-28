@@ -18,13 +18,13 @@
 @ main → v {
     // i64 literals land in narrow fields without explicit casts
     : Mix m @ Mix { -3 1000 7 300 }
-    ( nurl_print_int # i . m a )  // -3   (i8, sign preserved)
-    ( nurl_print_int # i . m b )  // 1000 (i16)
-    ( nurl_print_int # i . m c )  // 7    (i32)
-    ( nurl_print_int . m wide )  // 300  (i64, unchanged)
+    ( nurl_println_int # i . m a )  // -3   (i8, sign preserved)
+    ( nurl_println_int # i . m b )  // 1000 (i16)
+    ( nurl_println_int # i . m c )  // 7    (i32)
+    ( nurl_println_int . m wide )  // 300  (i64, unchanged)
 
     // a narrow value sign-extends into a wider field
     : i8 sm # i8 -5
     : Wrap w @ Wrap { sm }
-    ( nurl_print_int . w big )  // -5
+    ( nurl_println_int . w big )  // -5
 }

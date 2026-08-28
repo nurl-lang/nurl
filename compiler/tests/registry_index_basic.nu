@@ -37,7 +37,7 @@ $ `stdlib/ext/registry_index.nu`
         F e → ( nurl_print ( regindex_err_name e ) )
         T idx → {
             ( nurl_print `name=` ) ( nurl_print ( string_data . idx name ) ) ( nurl_print `\n` )
-            ( nurl_print `versions=` ) ( nurl_print_int ( vec_len [IdxVersion] . idx versions ) ) ( nurl_print `\n` )
+            ( nurl_print `versions=` ) ( nurl_println_int ( vec_len [IdxVersion] . idx versions ) )
 
             ( sel idx `^1.0.0` )  // 1.2.0 (1.4.0 yanked, 2.0.0 out of range)
             ( sel idx `>=1.0.0` )  // 2.0.0
@@ -50,7 +50,7 @@ $ `stdlib/ext/registry_index.nu`
             ?? v2 {
                 T v → {
                     ( nurl_print `v120_checksum=` ) ( nurl_print ( string_data . v checksum ) ) ( nurl_print `\n` )
-                    ( nurl_print `v120_deps=` ) ( nurl_print_int ( vec_len [IdxDep] . v deps ) ) ( nurl_print `\n` )
+                    ( nurl_print `v120_deps=` ) ( nurl_println_int ( vec_len [IdxDep] . v deps ) )
                     : ?IdxDep d0 ( vec_get [IdxDep] . v deps 0 )
                     ?? d0 {
                         T d → { ( nurl_print `dep0=` ) ( nurl_print ( string_data . d name ) ) ( nurl_print ` ` ) ( nurl_print ( string_data . d req ) ) ( nurl_print `\n` ) }

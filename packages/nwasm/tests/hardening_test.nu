@@ -58,6 +58,6 @@ $ `src/module.nu`
     ( ck_reject `data seg past memory:  ` `0061736d0100000005030100010b12010041faff030b0a00000000000000000000` )
 
     ? == g_fail 0 { ( nurl_print `all hardening tests passed\n` ) ^ 0 } {}
-    ( nurl_print `HARDENING FAILURES: ` ) ( nurl_print_int g_fail ) ( nurl_print `\n` )
+    ( nurl_print `HARDENING FAILURES: ` ) ( nurl_println_int g_fail )
     ^ 1
 }

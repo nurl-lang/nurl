@@ -4714,7 +4714,7 @@
 // real: released compilers freed the temp handed to vec_push [s].
 @ mem_consumer_copy_safe s fname → b {
     ( str_contains_word
-    `nurl_sym_def nurl_sym_set nurl_sym_append nurl_sym_get nurl_sym_get2 nurl_sym_len nurl_sym_len2 nurl_set_last_type nurl_print nurl_println nurl_eprint nurl_eprintln nurl_print_str nurl_print_bytes puts nurl_str_len nurl_str_to_int nurl_str_to_float nurl_str_find nurl_str_starts nurl_str_ends seq str_contains_word str_word_index count_words nurl_str_cat nurl_str_cat3 nurl_str_cat4 nurl_str_slice nurl_str_int nurl_read_file nurl_lex_new nurl_file_exists emit die die_stmt warn bck_esc_warn bck_emit_error nurl_str_eq nurl_str_get int_width ty_is_unsigned mem_is_slice_ty is_int_ty nurl_llty llvm_type ty_to_unsigned mangle_type demangle_type str_first_word str_skip_word compound_field_type convert_closure_arg string_from string_push_str string_starts_with string_ends_with string_contains string_index_of path_new path_join path_basename path_dirname path_extension path_normalize path_is_absolute fs_match fs_match_glob`
+    `nurl_sym_def nurl_sym_set nurl_sym_append nurl_sym_get nurl_sym_get2 nurl_sym_len nurl_sym_len2 nurl_set_last_type nurl_print nurl_println nurl_eprint nurl_eprintln nurl_print_bytes puts nurl_str_len nurl_str_to_int nurl_str_to_float nurl_str_find nurl_str_starts nurl_str_ends seq str_contains_word str_word_index count_words nurl_str_cat nurl_str_cat3 nurl_str_cat4 nurl_str_slice nurl_str_int nurl_read_file nurl_lex_new nurl_file_exists emit die die_stmt warn bck_esc_warn bck_emit_error nurl_str_eq nurl_str_get int_width ty_is_unsigned mem_is_slice_ty is_int_ty nurl_llty llvm_type ty_to_unsigned mangle_type demangle_type str_first_word str_skip_word compound_field_type convert_closure_arg string_from string_push_str string_starts_with string_ends_with string_contains string_index_of path_new path_join path_basename path_dirname path_extension path_normalize path_is_absolute fs_match fs_match_glob`
     fname )
 }
 
@@ -8756,7 +8756,16 @@
             ( nurl_str_cat3 `generic function '` fname `' needs explicit type argument(s): write ( ` )
             ( nurl_str_cat3 fname ` [` ( nurl_str_cat __gtp `] … ) ` ) )
             `— NURL does not infer generic type arguments from value arguments.` ) ) }
-        { : s __sugg ( __suggest_ident syms fname )
+        {  // Removed builtins carry a migration hint (edit distance alone
+            // would not reach the replacement): the print family is
+            // 'print'/'println' (+ '_int'), one behaviour per name.
+            ? ( seq fname `nurl_print_str` )
+            { ( die lex `'nurl_print_str' was removed — it printed the string plus a newline, which is exactly 'nurl_println'. Write ( nurl_println s ).` ) }
+            {}
+            ? ( seq fname `nurl_print_bool` )
+            { ( die lex `'nurl_print_bool' was removed — print the words yourself: ( nurl_println ? x 'true' 'false' ), with backtick string literals as the ternary arms.` ) }
+            {}
+            : s __sugg ( __suggest_ident syms fname )
             ? != 0 ( nurl_str_len __sugg )
             { ( die lex ( nurl_str_cat ( nurl_str_cat3
                 `call to unknown function '` fname
@@ -17294,14 +17303,20 @@
         {  // Integer literal index for aggregate types
             : i idx ( nurl_lex_inum lex )
             ( nurl_lex_advance lex )
-            : b ot_is_opt_res & >= ( nurl_str_len ot ) 6
-            ( seq ( nurl_str_slice ot 0 6 ) `{ i1, ` )
-            ? & | == ( nurl_str_get ot 0 ) 37 ot_is_opt_res
+            ? & == ( nurl_str_get ot 0 ) 37
             == idx 0
-            {  // Named struct/enum (%T) or opt/res aggregate ({ i1, T }) at index 0:
-                // Return the whole value — consumed by `??` which extractvalues the tag itself.
-                // Slices `{ T*, i64 }` are NOT matched here: `. slice 0` must extract
-                // the data pointer via the `else` branch below.
+            {  // Named struct/enum (%T) at index 0: return the whole value —
+                // consumed by `??` which extractvalues the tag itself.
+                // Opt/res aggregates ({ i1, T }) are NOT matched here (they
+                // used to be): `. x 0` on them now extracts the i1 tag via
+                // the general branch below, typed b, so `? . x 0 …` and
+                // `: flag . x 0` behave like every other numeric field
+                // access. The old whole-value return only ever "worked"
+                // when the aggregate was handed to an FFI scalar param —
+                // `call @f({ i1, i64 } %v)` against a declared i1 — which
+                // read the tag by ABI coincidence, not by design.
+                // Slices `{ T*, i64 }` are NOT matched here either: `. slice 0`
+                // must extract the data pointer via the branch below.
                 ( nurl_set_last_type ot )
                 ^ ov
             }
@@ -25569,8 +25584,7 @@
     ( __emit_rt_decl syms `declare void @nurl_eprint(i8*)` )
     ( __emit_rt_decl syms `declare void @nurl_eprintln(i8*)` )
     ( __emit_rt_decl syms `declare void @nurl_print_int(i64)` )
-    ( __emit_rt_decl syms `declare void @nurl_print_str(i8*)` )
-    ( __emit_rt_decl syms `declare void @nurl_print_bool(i1)` )
+    ( __emit_rt_decl syms `declare void @nurl_println_int(i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_read_int()` )
     ( __emit_rt_decl syms `declare i8*  @nurl_read_line()` )
     // nurl_read_n_bytes lives as pure NURL `read_n_bytes` in
@@ -26487,8 +26501,7 @@
     ( nurl_sym_def syms `nurl_eprint` `void` )
     ( nurl_sym_def syms `nurl_eprintln` `void` )
     ( nurl_sym_def syms `nurl_print_int` `void` )
-    ( nurl_sym_def syms `nurl_print_str` `void` )
-    ( nurl_sym_def syms `nurl_print_bool` `void` )
+    ( nurl_sym_def syms `nurl_println_int` `void` )
     // nurl_lex_advance, nurl_sym_def / _push / _pop, nurl_cg_reset
     // and nurl_set_last_type are pure-NURL @-fns; their types come
     // from the @-fn declarations.

@@ -31,7 +31,7 @@ $ `stdlib/core/vec.nu`
 
 @ println_i s prefix i v → v {
     ( nurl_print prefix )
-    ( nurl_print_int v )
+    ( nurl_println_int v )
 }
 
 @ make_req s method s path s query → HttpRequest {

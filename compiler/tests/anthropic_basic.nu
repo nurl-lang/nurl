@@ -13,27 +13,27 @@ $ `stdlib/ext/anthropic.nu`
     ( claude_messages `` `claude-opus-4-7` `` `hi` 64 )
     ?? r {
         T j → {
-            ( nurl_print_str `unexpected: live response with empty api_key` )
+            ( nurl_println `unexpected: live response with empty api_key` )
             ( claude_response_free j )
         }
         F e → {
             : ClaudeErr ce # ClaudeErr e
             ( nurl_print `auth: ` )
-            ( nurl_print_str ( claude_err_name ce ) )
+            ( nurl_println ( claude_err_name ce ) )
         }
     }
 
     // ── 2. claude_err_name renders every variant ─────────────────
-    ( nurl_print_str ( claude_err_name # ClaudeErr ClaudeAuth ) )
-    ( nurl_print_str ( claude_err_name # ClaudeErr ClaudeHttpConnect ) )
-    ( nurl_print_str ( claude_err_name # ClaudeErr ClaudeHttpTimeout ) )
-    ( nurl_print_str ( claude_err_name # ClaudeErr ClaudeHttpTls ) )
-    ( nurl_print_str ( claude_err_name # ClaudeErr ClaudeHttpDns ) )
-    ( nurl_print_str ( claude_err_name # ClaudeErr ClaudeHttpInvalidUrl ) )
-    ( nurl_print_str ( claude_err_name # ClaudeErr ClaudeHttpOther ) )
-    ( nurl_print_str ( claude_err_name # ClaudeErr ClaudeJson ) )
-    ( nurl_print_str ( claude_err_name # ClaudeErr ClaudeApi ) )
-    ( nurl_print_str ( claude_err_name # ClaudeErr ClaudeShape ) )
+    ( nurl_println ( claude_err_name # ClaudeErr ClaudeAuth ) )
+    ( nurl_println ( claude_err_name # ClaudeErr ClaudeHttpConnect ) )
+    ( nurl_println ( claude_err_name # ClaudeErr ClaudeHttpTimeout ) )
+    ( nurl_println ( claude_err_name # ClaudeErr ClaudeHttpTls ) )
+    ( nurl_println ( claude_err_name # ClaudeErr ClaudeHttpDns ) )
+    ( nurl_println ( claude_err_name # ClaudeErr ClaudeHttpInvalidUrl ) )
+    ( nurl_println ( claude_err_name # ClaudeErr ClaudeHttpOther ) )
+    ( nurl_println ( claude_err_name # ClaudeErr ClaudeJson ) )
+    ( nurl_println ( claude_err_name # ClaudeErr ClaudeApi ) )
+    ( nurl_println ( claude_err_name # ClaudeErr ClaudeShape ) )
 
     ^ 0
 }

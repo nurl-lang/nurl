@@ -12,7 +12,7 @@ $ `stdlib/core/string.nu`
     : E e @ E { V ( string_from `x` ) }
     ?? e {
         V s → { ( nurl_print `v\n` ) }
-        W n → { ( nurl_print_int n ) }
+        W n → { ( nurl_println_int n ) }
         Strng → { ( nurl_print `ghost\n` ) }
         Nil → { ( nurl_print `nil\n` ) }
     }

@@ -30,7 +30,7 @@
         ? == & 255 # i . p k 0 { = count + count 1 } {}
         = k + k 1
     }
-    ( nurl_print_int count )
+    ( nurl_println_int count )
     ( free buf )
     ^ 0
 }

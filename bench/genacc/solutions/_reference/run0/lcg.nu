@@ -9,6 +9,6 @@
         = x + * x 6364136223846793005 1442695040888963407
         = k + k 1
     }
-    ( nurl_print_int x )
+    ( nurl_println_int x )
     ^ 0
 }

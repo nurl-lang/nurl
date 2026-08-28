@@ -59,9 +59,9 @@ $ `src/interp.nu`
 : ~ i g_fail 0
 
 @ ck s label i got i want → v {
-    ( nurl_print label ) ( nurl_print_int got )
+    ( nurl_print label ) ( nurl_println_int got )
     ? == got want { ( nurl_print ` == ` ) } { ( nurl_print ` != ` ) = g_fail + g_fail 1 }
-    ( nurl_print_int want ) ( nurl_print `\n` )
+    ( nurl_println_int want )
 }
 
 @ main → i {

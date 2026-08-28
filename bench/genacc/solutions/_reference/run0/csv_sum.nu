@@ -19,6 +19,6 @@ $ `stdlib/core/string.nu`
         = i + i 1
     }
     = sum + sum cur
-    ( nurl_print_int sum )
+    ( nurl_println_int sum )
     ^ 0
 }

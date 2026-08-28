@@ -27,9 +27,9 @@
 }
 
 @ main → v {
-    ( nurl_print_str `Hello, NURL!` )
-    ( nurl_print_int ( double 21 ) )
-    ( nurl_print_bool T )
-    ( nurl_print_bool F )
-    ( nurl_print_int ( sumto 10 ) )
+    ( nurl_println `Hello, NURL!` )
+    ( nurl_println_int ( double 21 ) )
+    ( nurl_println ? T `true` `false` )
+    ( nurl_println ? F `true` `false` )
+    ( nurl_println_int ( sumto 10 ) )
 }

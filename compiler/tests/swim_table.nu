@@ -34,14 +34,14 @@ $ `stdlib/std/swim.nu`
     ( pb `suspect A: ` ( mtable_suspect t `A` 8001 ) )
     ( pst `A state: ` ( mtable_state_of t `A` 8001 ) )
     : ( Vec Member ) d ( mtable_sweep t )
-    ( nurl_print `swept dead: ` ) ( nurl_print_int ( vec_len [Member] d ) ) ( nurl_print `\n` )
+    ( nurl_print `swept dead: ` ) ( nurl_println_int ( vec_len [Member] d ) )
     ( vec_free_with [Member] d \ Member mm → v { ( member_free mm ) } )
     ( pst `A state: ` ( mtable_state_of t `A` 8001 ) )
 
     // ── self-refutation: a Suspect-about-self bumps our incarnation ─
     ( apply_m t `self` 7000 0 @ MemberState { MSuspect } `refute self: ` )
     : Member sm ( mtable_self t )
-    ( nurl_print `self inc: ` ) ( nurl_print_int . sm incarnation ) ( nurl_print `\n` )
+    ( nurl_print `self inc: ` ) ( nurl_println_int . sm incarnation )
     ( member_free sm )
 
     // ── precedence: higher-inc Alive revives dead A ──────────────
@@ -52,7 +52,7 @@ $ `stdlib/std/swim.nu`
     ( apply_m t `A` 8001 0 @ MemberState { MSuspect } `stale suspect A: ` )
     ( pst `A state: ` ( mtable_state_of t `A` 8001 ) )
 
-    ( nurl_print `count: ` ) ( nurl_print_int ( mtable_count t ) ) ( nurl_print `\n` )
+    ( nurl_print `count: ` ) ( nurl_println_int ( mtable_count t ) )
     ( mtable_free t )
     ^ 0
 }

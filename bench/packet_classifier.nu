@@ -23,6 +23,6 @@
         = k + k 1
     }
 
-    ( nurl_print_int # i & state 0x7fffffffffffffff )
+    ( nurl_println_int # i & state 0x7fffffffffffffff )
     ^ 0
 }

@@ -17,8 +17,8 @@ $ `src/census.nu`
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
 
 @ pi s label i a i b → v {
-    ( nurl_print label ) ( nurl_print_int a )
-    ( nurl_print ? == a b ` == ` ` != ` ) ( nurl_print_int b ) ( nurl_print `\n` )
+    ( nurl_print label ) ( nurl_println_int a )
+    ( nurl_print ? == a b ` == ` ` != ` ) ( nurl_println_int b )
 }
 
 // Sum a workload over a sharded range — the exact thing the coordinator does.

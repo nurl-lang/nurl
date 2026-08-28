@@ -30,7 +30,7 @@ Chained conditionals read top to bottom. Each `else` slot holds the next
 { ( nurl_print `Fizz\n` ) }
 ? div5
 { ( nurl_print `Buzz\n` ) }
-{ ( nurl_print_int i ) }
+{ ( nurl_println_int i ) }
 ```
 
 <Callout type="warn" title="Count the operands">
@@ -49,7 +49,7 @@ inside a condition wrong. See [Binary operators](#binary-operators) below.
 ```nu
 : ~ i i 1
 ~ <= i 10 {
-    ( nurl_print_int i )
+    ( nurl_println_int i )
     = i + i 1
 }
 ```
@@ -135,7 +135,7 @@ or `_` to cover the case where the guard is false.
 
     ```nu
     ?? maybe_n {
-        T n → ( nurl_print_int n )
+        T n → ( nurl_println_int n )
         F   → ( nurl_print `nothing\n` )
     }
     ```

@@ -13,10 +13,10 @@ $ `stdlib/core/builtins.nu`
 @ main → i {
     ( nurl_println ( nurl_str_float 2.5 ) )
     ( nurl_println ( nurl_str_int -42 ) )
-    ( nurl_print_int ( nurl_count_byte `abcabc` 6 97 ) )
-    ( nurl_print_int ( nurl_byte_substr `hello world` 11 `world` 5 ) )
-    ( nurl_print_bool F )
-    ( nurl_print_int # i ( strcmp `same` `same` ) )
-    ( nurl_print_int ( nurl_is_nan 1.5 ) )
+    ( nurl_println_int ( nurl_count_byte `abcabc` 6 97 ) )
+    ( nurl_println_int ( nurl_byte_substr `hello world` 11 `world` 5 ) )
+    ( nurl_println ? F `true` `false` )
+    ( nurl_println_int # i ( strcmp `same` `same` ) )
+    ( nurl_println_int ( nurl_is_nan 1.5 ) )
     ^ 0
 }

@@ -28,8 +28,8 @@
         { ( nurl_print `Buzz\n` ) }
         // nurl_str_cat lives in stdlib/core/string.nu — call without
         // importing it would emit `@nurl_str_cat` without a `declare`
-        // and fail at link. Use the runtime's nurl_print_int instead.
-        { ( nurl_print_int i ) ( nurl_print `\n` ) }
+        // and fail at link. Use the runtime's nurl_println_int instead.
+        { ( nurl_println_int i ) }
 
         = i + i 1
     }

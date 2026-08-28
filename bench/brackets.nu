@@ -36,7 +36,7 @@ $ `stdlib/core/string.nu`
     }
     : ~ i result 0
     ? & == sp 0 == bad 0 { = result maxd } {}
-    ( nurl_print_int result )
+    ( nurl_println_int result )
     ( free stack )
     ^ 0
 }

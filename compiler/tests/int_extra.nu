@@ -8,7 +8,7 @@ $ `stdlib/std/int.nu`
 @ ck s label i got i want → v {
     ( nurl_print label )
     ( nurl_print ` = ` )
-    ( nurl_print_int got )
+    ( nurl_println_int got )
     ( nurl_print ? == got want ` ok\n` ` MISMATCH!\n` )
 }
 

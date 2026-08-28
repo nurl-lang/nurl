@@ -83,7 +83,7 @@ $ `stdlib/std/simd.nu`
         ? < g_fail 12 {
             ( nurl_print `FAIL ` ) ( nurl_print what )
             ( nurl_print ` want=` ) ( nurl_print_int want )
-            ( nurl_print ` got=` ) ( nurl_print_int got )
+            ( nurl_print ` got=` ) ( nurl_println_int got )
             ( nurl_println `` )
         } {}
     } {}

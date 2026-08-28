@@ -31,7 +31,7 @@ $ `stdlib/ext/cluster.nu`
     ( json_free req )
     ?? renc {
         T rbytes → {
-            ( nurl_print `req wire bytes: ` ) ( nurl_print_int ( vec_len [u] rbytes ) )
+            ( nurl_print `req wire bytes: ` ) ( nurl_println_int ( vec_len [u] rbytes ) )
             : !Json MsgpackErr rdec ( msgpack_decode rbytes )
             ( vec_free [u] rbytes )
             ?? rdec {
@@ -52,7 +52,7 @@ $ `stdlib/ext/cluster.nu`
                                     ?? rj {
                                         T rv → {
                                             ( nurl_print `result: ` )
-                                            ( nurl_print_int ( json_as_int rv ) )
+                                            ( nurl_println_int ( json_as_int rv ) )
                                         }
                                         F → ( nurl_print `no result\n` )
                                     }

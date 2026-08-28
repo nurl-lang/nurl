@@ -32,7 +32,7 @@
 
     // NOT warned: value-block tail — the block result feeds the binding.
     : i b ? > a 0 { + a 10 } { 0 }
-    ( nurl_print_int b )
+    ( nurl_println_int b )
 
     // NOT warned: call statement (effects) and `^` return operand.
     ( nurl_print `ok\n` )

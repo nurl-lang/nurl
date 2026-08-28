@@ -14,7 +14,7 @@ $ `src/build.nu`
     ( string_push_str src `  : ~ i acc 0\n` )
     ( string_push_str src `  : ~ i x 0\n` )
     ( string_push_str src `  ~ < x 10 { = acc + acc ( kernel x ) = x + x 1 }\n` )
-    ( string_push_str src `  ( nurl_print_int acc )\n` )
+    ( string_push_str src `  ( nurl_println_int acc )\n` )
     ( string_push_str src `  ^ 0\n}\n` )
 
     : ~ WbOpts opts ( wb_opts_default )

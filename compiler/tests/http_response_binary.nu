@@ -63,9 +63,9 @@ $ `stdlib/core/vec.nu`
             ?? sr { T _ → {} F e → { ( nurl_print `server_err=` ) ( nurl_print ( net_err_name e ) ) ( nurl_print `\n` ) } }
             ?? ct { T t → ( thread_join t ) F _ → {} }
 
-            ( nurl_print `status=` ) ( nurl_print_int g_status )
-            ( nurl_print `body_len=` ) ( nurl_print_int g_len )
-            ( nurl_print `nul_at2=` ) ( nurl_print_int g_nul )
+            ( nurl_print `status=` ) ( nurl_println_int g_status )
+            ( nurl_print `body_len=` ) ( nurl_println_int g_len )
+            ( nurl_print `nul_at2=` ) ( nurl_println_int g_nul )
             ( nurl_print `done\n` )
         }
         F e → { ( nurl_print `listen_fail=` ) ( nurl_print ( net_err_name e ) ) ( nurl_print `\n` ) }

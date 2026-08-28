@@ -35,11 +35,11 @@ $ `stdlib/ext/anthropic.nu`
     // ── 1. Frame-end detection ───────────────────────────────────────
     : s s1 `event: hi\ndata: 1\n\nevent: bye\n\n`
     ( nurl_print `frame_end=` )
-    ( nurl_print_int ( sse_frame_end s1 ( nurl_str_len s1 ) ) )
+    ( nurl_println_int ( sse_frame_end s1 ( nurl_str_len s1 ) ) )
 
     : s partial `data: x\nevent: y`
     ( nurl_print `partial=` )
-    ( nurl_print_int ( sse_frame_end partial ( nurl_str_len partial ) ) )
+    ( nurl_println_int ( sse_frame_end partial ( nurl_str_len partial ) ) )
 
     // ── 2. Single-frame parse with all three fields ──────────────────
     : s frame1 `event: message\nid: 42\ndata: hello world`
@@ -176,7 +176,7 @@ $ `stdlib/ext/anthropic.nu`
         F e → {
             : ClaudeErr ce # ClaudeErr e
             ( nurl_print `auth_stream: ` )
-            ( nurl_print_str ( claude_err_name ce ) )
+            ( nurl_println ( claude_err_name ce ) )
         }
     }
 

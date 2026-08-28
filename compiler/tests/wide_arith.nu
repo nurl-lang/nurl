@@ -20,7 +20,7 @@ $ `stdlib/core/vec.nu`
         ? < g_fail 10 {
             ( nurl_print `FAIL ` ) ( nurl_print what )
             ( nurl_print ` want=` ) ( nurl_print_int # i want )
-            ( nurl_print ` got=` ) ( nurl_print_int # i got )
+            ( nurl_print ` got=` ) ( nurl_println_int # i got )
             ( nurl_println `` )
         } {}
     } {}

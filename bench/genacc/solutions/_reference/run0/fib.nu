@@ -7,6 +7,6 @@
 }
 
 @ main → i {
-    ( nurl_print_int ( fib 35 ) )
+    ( nurl_println_int ( fib 35 ) )
     ^ 0
 }

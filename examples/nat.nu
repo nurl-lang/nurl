@@ -17,7 +17,7 @@ $ `stdlib/net/nat.nu`
 
 @ kind_name i k → s { ^ ? == k 0 `host ` ? == k 1 `srflx` `relay` }
 
-// Build "<host>:<port>" without nurl_print_int (which forces a newline).
+// Build "<host>:<port>" without nurl_println_int (which forces a newline).
 @ endpoint_str String host i port → String {
     : String s ( string_with_cap 48 )
     ( string_push_str s ( string_data host ) )

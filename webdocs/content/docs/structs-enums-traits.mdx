@@ -66,7 +66,7 @@ Build a value by prefixing the payload with the variant name inside
 : Ast n @ Ast { Num 3 }
 
 ?? n {
-    Num v        → ( nurl_print_int v )
+    Num v        → ( nurl_println_int v )
     Neg inner    → ( puts `negated\n` )
     Bin op l r   → ( puts `binary\n` )
 }

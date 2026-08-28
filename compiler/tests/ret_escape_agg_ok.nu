@@ -31,6 +31,6 @@
 
 @ main → i {
     : Point p ( mk 3 4 )
-    ( nurl_print_int + ( use_inscope ) . p x )
+    ( nurl_println_int + ( use_inscope ) . p x )
     ^ 0
 }

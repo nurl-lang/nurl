@@ -37,6 +37,6 @@
 }
 
 @ main → i {
-    ( nurl_print_int + ( use_inscope ) ( fresh_with_ref ) )
+    ( nurl_println_int + ( use_inscope ) ( fresh_with_ref ) )
     ^ 0
 }

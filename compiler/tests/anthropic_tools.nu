@@ -317,7 +317,7 @@ $ `stdlib/ext/anthropic.nu`
         F e → {
             : ClaudeErr ce # ClaudeErr e
             ( nurl_print `auth_full: ` )
-            ( nurl_print_str ( claude_err_name ce ) )
+            ( nurl_println ( claude_err_name ce ) )
         }
     }
 

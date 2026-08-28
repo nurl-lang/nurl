@@ -44,7 +44,7 @@
         = tr + tr . c + * d N d
         = d + d 1
     }
-    ( nurl_print_int tr )
+    ( nurl_println_int tr )
     ( free a )
     ( free b )
     ( free c )
