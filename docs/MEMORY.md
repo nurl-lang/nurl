@@ -114,6 +114,14 @@ aggregate (`vec_push`, `json_obj_set`, …) and an escaping position are
 all silent, and so is a callee that hands back a *view* rather than a
 fresh handle. Regression `compiler/tests/lint_owned_temp.nu`.
 
+For the specific case above there is now a shorter answer than binding:
+`( nurl_eprint_int . resp status )` allocates nothing at all. The `_int`
+overloads exist on both streams — `print_int` / `println_int` /
+`eprint_int` / `eprintln_int` — and format on the stack, so a diagnostic
+that prints a number never needs `nurl_str_int` and never had a string to
+own. Binding remains the general rule; not needing a string is better
+than owning one.
+
 Bind first, then use. And do **not** then also free it by hand: the
 binding already carries a drop, so an explicit `nurl_free` on top is a
 double-free. That one is now an `error:` — see §2.1b; the rest of this
