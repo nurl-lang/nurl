@@ -2598,9 +2598,10 @@ $ `cudakernel.nu`
     } {}
     : Json go ( json_obj_new )
     ( map_each [i f] groups \ i kk f vv → v {
+        // `ks` is auto-dropped at the end of the closure body — json_obj_set
+        // clones the key, so nothing else owns it.
         : s ks ( nurl_str_int kk )
         : b _o ( json_obj_set go ks ( __jf vv ) )
-        ( nurl_free # s ks )
     } )
     ( map_free [i f] groups )
     : Json o ( json_obj_new )

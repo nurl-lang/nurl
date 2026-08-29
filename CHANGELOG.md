@@ -194,6 +194,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A closure body that fell off its end dropped nothing** — one leaked
+  allocation per call, in the shape a callback is usually written in.
+
+  ```nurl
+  ( each v \ i x → v { : s k ( nurl_str_int x ) ( nurl_print k ) } )
+  ```
+
+  A closure is lifted into its own function, so its body is a scope whose
+  end emits the drop epilogue like any other — except only ONE of its two
+  ends did. `gen_ret_term` ran the epilogue for a body ending in `^`; a
+  body ending by falling off emitted a bare `ret` and ran only the deferred
+  drain, so every owned value it bound leaked. Measured under LSan: three
+  iterations of the loop above, three allocations outstanding; the same
+  body written with `^` clean.
+
+  `gen_closure_expr`'s fall-off exit now runs the same epilogue. The
+  rosters it walks were already shadowed to empty when the body's scope is
+  pushed, so a closure drops its own values and never the enclosing
+  frame's; when the body falls off WITH a value and that value is a bare
+  identifier, the binding's drop is skipped, because its handle is the
+  closure's result — the rule `gen_ret` applies to a returned ident, and
+  the same conservative direction (a missed skip leaks, it cannot dangle).
+
+  Two consequences, both carried here. §2.1b — `nurl_free` on a binding
+  the compiler already drops — was scoped out of closure bodies precisely
+  because the fall-off exit dropped nothing there; it now reaches inside
+  them, since registration is a proof at both exits.
+  `packages/swarm-mcp`'s hand-written free of a map key inside a
+  `map_each` closure was what kept that key from leaking and is now the
+  second free, so it is deleted.
+
+  Verified: the sanitized corpus (885 tests under ASan / UBSan / LSan, 0
+  SAN_FAIL) — the load-bearing gate for a change that ADDS frees — plus
+  the bootstrap fixed point, 885 tests, 102 examples, the stdlib symbol
+  gate, the swarm appliance the unikernel job builds, and
+  `packages/mermaid-server`'s suite under LSan. Swept the restored §2.1b
+  over every package, the stdlib, the examples and the compiler: zero
+  findings. Regressions `compiler/tests/closure_falloff_drop.nu` (the
+  shape reclaimed with no hand-written free, an enclosing-frame string
+  live across every call so an over-reaching epilogue would show) and
+  `should_fail_free_in_closure.nu`.
+
 - **`--no-borrowck` was an internal compiler panic on any program with a
   closure.** Fixed, and the flag is now exercised.
 

@@ -60,6 +60,28 @@ matching `nurl_free` / `drop`. Reassigning an owned binding frees the
 previous value first. Returning a fresh allocation **transfers
 ownership** to the caller and suppresses the local drop.
 
+### A closure body has two exits, and both drop
+
+A closure is lifted into its own function, so its body is a scope whose
+end emits the epilogue like any other. It has two ends:
+
+```nurl
+( each v \ i x → v { : s k ( nurl_str_int x ) ( nurl_print k ) } )   // falls off
+( fold v \ i x → i { : s k ( nurl_str_int x ) ^ ( nurl_str_len k ) } )  // returns
+```
+
+Both reclaim `k`. Until 0.55 only the second did: the fall-off exit
+emitted a bare `ret` and dropped nothing, so the first leaked one
+allocation per call — in exactly the shape a callback is usually written
+in. A hand-written `nurl_free` was the only way to keep such a body from
+growing, and is now a double free (§2.1b rejects it).
+
+The rosters the epilogue walks are shadowed to empty when the body's scope
+is pushed, so a closure drops its OWN values and never the enclosing
+frame's — whose allocas do not exist in the lifted function. When the body
+falls off with a value and that value is a bare identifier, the binding's
+drop is skipped: its handle is the closure's result.
+
 ### A `:` binding, and only a `:` binding
 
 The word doing the work above is **binding**. An allocating call whose
@@ -258,24 +280,15 @@ Reassigning an owned binding already frees its previous value, and a
 binding whose ownership has left it is no longer registered, so at
 function scope there is no legitimate counter-case.
 
-**The rule stops at a closure body**, because there registration is not
-yet a proof that a drop is emitted:
-
-| closure body ends with | epilogue | an owned `s` binding |
-| --- | --- | --- |
-| `^ value` | `gen_ret_term` | dropped |
-| falling off the end | a bare `ret` | **leaks** |
-
-So inside a closure the hand-written free is what keeps the second row
-from leaking, and rejecting it would reject correct code. Closing the gap
-means running the same epilogue at the closure's fall-off terminator —
-which first needs `__owned_strings__` to be saved and restored across the
-body the way `gen_cond` does across a `?` arm, since the closure's scope
-currently inherits the ENCLOSING function's list and would free it too.
-Until then the rule is scoped to `g_bck_closure_depth == 0`. Regressions:
-`compiler/tests/should_fail_free_autodropped.nu` (rejected at function
-scope) and `compiler/tests/free_in_closure_ok.nu` (accepted inside a
-closure).
+The rule reaches inside a closure body too. It did not while only ONE of a
+closure's two exits ran the drop epilogue — a body returning through `^`
+freed what it registered, a body falling off its end emitted a bare `ret`
+and freed nothing, so a hand-written free there was what kept the binding
+from leaking. `gen_closure_expr`'s fall-off exit now runs the epilogue as
+well (§1, "A closure body has two exits"), so registration is a proof in
+both. Regressions: `compiler/tests/should_fail_free_autodropped.nu` and
+`should_fail_free_in_closure.nu` (rejected), `closure_falloff_drop.nu` (the
+same shape WITHOUT the free, reclaimed anyway).
 
 ### 2.2 Alias and double-free detection
 

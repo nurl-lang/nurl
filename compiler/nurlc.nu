@@ -8318,14 +8318,11 @@
         // reassigning an owned binding already frees its previous value,
         // and a binding whose ownership left it is not registered.
         //
-        // NOT inside a closure body. There, registration is not yet a
-        // proof that a drop is emitted: a closure that returns through
-        // `^` runs the epilogue (gen_ret_term), but one that falls off
-        // its end emits a bare `ret` and drops nothing, so the hand-
-        // written free is what keeps that binding from leaking. Until
-        // the two exits agree, the rule is only sound outside them.
-        ? & & & != g_borrowck 0 == g_bck_closure_depth 0
-        ( seq fname `nurl_free` ) == arg_idx 0
+        // Inside a closure body too, since gen_closure_expr's fall-off
+        // exit runs the drop epilogue: both closure exits now free what
+        // they registered, so registration is a proof there as well. The
+        // rule was scoped out of closures while only the `^` exit did.
+        ? & & != g_borrowck 0 ( seq fname `nurl_free` ) == arg_idx 0
         { : s nf_id ( nurl_sym_get syms `__last_ident_name__` )
             ? != 0 ( nurl_str_len nf_id )
             { : s nf_ptr ( nurl_sym_get2 syms nf_id `__ptr` )
@@ -20301,7 +20298,44 @@
             `a closure that captured it frees it` ) }
         {}
     }
-    ? == g_did_ret 0 { ( mem_drain_deferred cg ) } {}
+    // Fall-off exit. A closure body that ends WITHOUT `^` reached the
+    // `ret` below having dropped nothing: `gen_ret_term` runs the whole
+    // epilogue for a body that returns, and this site ran only the
+    // deferred drain. Every owned value such a body bound therefore
+    // leaked — one allocation per call, forever, in exactly the
+    // `( each v \ i x → v { : s k ( nurl_str_int x ) … } )` shape a
+    // callback is usually written in.
+    //
+    // The rosters were shadowed to empty when the body's scope was
+    // pushed (see `__owned_strings__` above), so this drops the
+    // CLOSURE's own values and never the enclosing frame's.
+    //
+    // A non-void tail whose last expression is a bare identifier hands
+    // that binding's handle out as the closure's result, so its drop is
+    // skipped — the same rule `gen_ret` applies to a returned ident, and
+    // the same conservative direction: a missed skip would leak, never
+    // dangle. `mem_drain_deferred` stays last, as in gen_ret_term.
+    ? == g_did_ret 0
+    { : ~ s __cl_skip ( nurl_str_cat `` `` )
+        ? ! ( seq ret_type `void` )
+        { : i __cl_tail_tt ( nurl_str_to_int ( nurl_sym_get body_syms `__tail_first_tt__` ) )
+            ? ( is_ident_tok __cl_tail_tt )
+            { = __cl_skip ( nurl_sym_get body_syms `__tail_first_val__` ) }
+            {} }
+        {}
+        : s __cl_skip_ptr ? != 0 ( nurl_str_len __cl_skip )
+        ( nurl_sym_get2 body_syms __cl_skip `__ptr` )
+        ( nurl_str_cat `` `` )
+        ( mem_drop_owned body_syms cg __cl_skip )
+        ? != 0 g_auto_drop_strings
+        { ( mem_drop_owned_strings body_syms cg __cl_skip_ptr )
+            ( mem_drop_owned_struct_fields body_syms cg __cl_skip_ptr )
+            ( mem_drop_user_drops body_syms cg __cl_skip_ptr ) }
+        {}
+        ( mem_own_closure_remove body_syms __cl_skip )
+        ( mem_drop_closure_envs body_syms cg )
+        ( mem_drain_deferred cg ) }
+    {}
     ( nurl_sym_set g_fn_escapes `__deferred_drops__` __cl_defer_saved )
     ( nurl_sym_set g_fn_escapes `__defer_top_fn__` __cl_dtop_saved )
     ( nurl_sym_set g_fn_escapes `__dsnap_str__` __cl_snapstr_saved )
