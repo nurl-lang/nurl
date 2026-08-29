@@ -159,6 +159,23 @@ Cursor, Windsurf, Zed and other MCP-capable IDEs accept the same URL
 run the server binary directly. `nurlapi/main.nu` is a NURL program — no
 Python or Node runtime involved.
 
+**Asking the compiler to check harder.** Every build tool takes `flags`,
+a space-separated string of nurlc flags from a fixed allow-list:
+
+| Flag | What it does |
+|---|---|
+| `--lint` | report an allocation nothing owns (docs/MEMORY.md §1) |
+| `--no-borrowck` | compile with the borrow checker off |
+| `--strict-borrowck` | the stricter §2.4 argument rules |
+| `--no-strict-arity` | accept the n-ary `&` / `\|` spellings |
+| `--no-cpu-dispatch` | no x86-64-v3 clone for `simd` functions |
+
+`--lint`'s findings arrive in `nurlc_stderr` of an ordinary successful
+build, so a lint run is a normal build you read the stderr of. It is an
+allow-list rather than a passthrough because nurlc also takes `--keep=`
+and `--split-out=`, which name paths inside the container; anything not
+on the list is a 400 naming what is, never a silently dropped flag.
+
 **Running what you built.** `nurl_build_native` takes `run=true` to
 execute the program and return its exit code, stdout and stderr in the
 same call — one round trip from source to output. It is **off** on the

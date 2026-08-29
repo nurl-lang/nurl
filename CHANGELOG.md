@@ -6,7 +6,7 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.56.0] — 2026-08-29
 
 ### Added
 
@@ -16639,7 +16639,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.55.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.56.0...HEAD
+[0.56.0]: https://github.com/nurl-lang/nurl/compare/v0.55.0...v0.56.0
 [0.55.0]: https://github.com/nurl-lang/nurl/compare/v0.54.0...v0.55.0
 [0.54.0]: https://github.com/nurl-lang/nurl/compare/v0.53.0...v0.54.0
 [0.53.0]: https://github.com/nurl-lang/nurl/compare/v0.52.0...v0.53.0

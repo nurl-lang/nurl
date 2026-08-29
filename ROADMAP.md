@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-29 · Current release: **0.55.0** · Language: **Grammar
+_Last reviewed: 2026-08-29 · Current release: **0.56.0** · Language: **Grammar
 v2.7** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -87,7 +87,9 @@ What is solid today:
   spanning collections, hashing, serialization, a full HTTP/1.1+2 + WebSocket
   stack, database clients, distributed systems (p2p overlay, CRDTs), MCP, and the Anthropic Claude API.
 - **Targets.** Linux x86_64 (primary, CI-tested), Windows x86_64 (CI-tested:
-  bootstrap fixed point + the Windows golden corpus on every push and PR),
+  bootstrap fixed point + the Windows golden corpus on every push and PR,
+  plus a Linux-side mingw-w64 cross-link gate, since the Windows runner's
+  two toolchains are both UCRT and the cross one is not),
   macOS ARM64 (CI-tested on Apple Silicon: bootstrap fixed point + the
   full corpus against the same goldens as Linux, on every push and PR;
   needs Homebrew LLVM, no prebuilt toolchain) and macOS x86_64
