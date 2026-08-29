@@ -9,10 +9,14 @@
 // `( nurl_free # s x )`, and a check keyed on the argument's first token
 // would see the cast rather than the binding and wave it through.
 //
-// The companion `free_in_closure_ok.nu` locks the other half: inside a
-// closure body the same shape must stay ACCEPTED, because a closure that
-// falls off its end drops nothing and the hand-written free is what keeps
-// its binding from leaking.
+// The companion `should_fail_free_in_closure.nu` locks the other half:
+// the rule reaches INSIDE a closure body too. It did not always — while
+// only one of a closure's two exits ran the drop epilogue, a body that
+// fell off its end dropped nothing and the hand-written free was what
+// kept its binding from leaking, so the shape had to stay accepted
+// there. Since #1032 both exits free what they registered, and the
+// accepting companion (`free_in_closure_ok.nu`) is gone with the reason
+// for it.
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`

@@ -8,7 +8,146 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`nurl_eprint_int` / `nurl_eprintln_int`** — the print family is now
+  one rule on both streams.
+
+  0.55.0's own comment said it was: "`print` = no newline, `println` =
+  newline, `_int` = the integer overload, `eprint`/`eprintln` = the same
+  pair on stderr". Three quarters of that was true. The `_int` overload
+  existed only on stdout, so printing a number to stderr meant
+  `( nurl_eprint ( nurl_str_int n ) )` — an allocation per diagnostic,
+  and a leak unless the caller bound and freed it, which is the exact
+  footgun `nurlc.nu`'s own comment at the `nurl_eprint` call sites warns
+  about. The claim of one rule everywhere was written a release before it
+  was true.
+
+  All four `_int` printers now share one stack digit loop
+  (`nurl__int_digits`), so the stdout and stderr halves cannot drift, and
+  neither allocates. Regression `compiler/tests/eprint_int_family.nu`,
+  whose golden also pins the stdout/stderr interleaving.
+
+- **`flags` on the build endpoints and the build MCP tools** — an
+  allow-listed subset of nurlc's flags: `--lint`, `--no-borrowck`,
+  `--strict-borrowck`, `--no-strict-arity`, `--no-cpu-dispatch`.
+
+  Two of 0.55.0's headline items had no way to be reached through the
+  API: `--lint` (the report on an allocation nothing owns) and the
+  `--no-borrowck` panic fix are compiler flags, and the build tools took
+  no flag parameter at all. An agent could read the changelog entry for
+  the lint and had no way to make the lint speak — which is the audience
+  it was written for. The lint's findings arrive in `nurlc_stderr` on an
+  otherwise ordinary build.
+
+  An allow-list, not a passthrough: nurlc also takes `--keep=a,b`,
+  `--split-out=PREFIX` and a file argument, and a free-form flag string
+  on an unauthenticated compile farm would let a caller name paths inside
+  the container. Every accepted flag changes only how the compiler CHECKS
+  the one source it was handed. An unknown flag is a 400 naming the
+  allowed set, not a silent drop — for the same reason `run` refuses
+  loudly: a caller that asked for the lint and got a plain build would
+  read the silence as "no findings".
+
 ### Fixed
+
+- **Every Windows cross build failed to link, hello world included.**
+
+  ```
+  x86_64-w64-mingw32-ld: runtime.win.o:runtime.c:(.text$nurl_tz_offset+0x13):
+      undefined reference to `__imp__get_timezone'
+  ```
+
+  `nurl_tz_offset` arrived in 0.54.0 with the `time_local` work and asked
+  the CRT for the zone with `_get_timezone`. That is a UCRT export. There
+  are three Windows toolchains in this project's life and the one nothing
+  tested is the distro `mingw-w64` the hosted playground's
+  `/build_windows` cross-compiles with, which targets the older
+  `msvcrt.dll` — `windows-tests.yml` builds with LLVM clang (MSVC ABI,
+  UCRT) and with a bundled zig, whose windows-gnu target links zig's own
+  UCRT mingw. Since mingw links the whole runtime object, the missing
+  symbol had nothing to do with what the program called: the failure was
+  every program, for two releases, while every Windows gate stayed green.
+
+  `_get_timezone` was also wrong on its own terms — it reports the zone's
+  STANDARD bias and ignores the instant, so it answered 3600 for a
+  Helsinki summer timestamp where the Unix path answers 7200. The
+  replacement converts the instant to a `SYSTEMTIME`, asks Windows for
+  the local wall clock at THAT instant
+  (`SystemTimeToTzSpecificLocalTime`) and takes the difference: DST-aware
+  per instant like `tm_gmtoff`, and entirely in kernel32, which every
+  Windows toolchain links.
+
+  The gate that was missing is `tools/check_mingw_cross.sh`, run by
+  `ci.yml`: compile `stdlib/runtime.c` for mingw-w64, link a trivial
+  `main` against it. Ten seconds, no Windows, no emulator, no nurlc — and
+  it fails on the pre-fix tree with exactly the message above.
+
+- **A removal diagnostic showed an example that does not compile.**
+
+  ```
+  'nurl_print_bool' was removed — … ( nurl_println ? x 'true' 'false' ),
+  with backtick string literals as the ternary arms.
+  ```
+
+  Single quotes are not NURL string syntax anywhere, so the cure the
+  message named had to be repaired by the reader before it could be
+  pasted — and the trailing clause existed only to say so. The reason it
+  was written that way is real: a NURL diagnostic is itself a
+  backtick-delimited literal, and docs/spec.md §2.5 gives the backtick no
+  escape, so a message physically cannot contain one. `__diag_lit` pokes
+  the two quotes in at runtime instead, and the message now reads
+  `( nurl_println ? x `true` `false` )`. Regression
+  `compiler/tests/diag_removed_print_bool.nu` (with
+  `diag_removed_print_str.nu` for its sibling, which was correct and now
+  has a golden holding it that way).
+
+- **`true` and `false` got the generic undefined-identifier message.**
+
+  NURL spells the boolean literals `T` and `F`. The words every other
+  language uses are not near-misses of any identifier, so the "did you
+  mean" suggester had nothing to offer and the reader got "no binding,
+  parameter, constant, enum variant, or function with this name is in
+  scope" — which sends them looking for a missing declaration. A file
+  that writes TOML or JSON has just seen `true` as *data* a line earlier,
+  which is what makes this the common mistake rather than a rare one.
+  `diag_bind_bool_literal_name.nu` already locked the opposite direction
+  (`T` used as a binding NAME); this is the one that gets written first.
+  Regression `compiler/tests/diag_bool_literal_words.nu`.
+
+- **The AArch64 unikernel response advised using a file it had not
+  built.** `build_unikernel_arm64.sh` skips the flat `.Image` when no
+  `llvm-objcopy` is on PATH and says so in its stderr, but the response's
+  `boot.notes` told the reader to hand that `.Image` to Firecracker or
+  cloud-hypervisor regardless. The notes now branch on the same fact the
+  artifact list is built from, and say what to do instead. The playground
+  container also gains `binutils-aarch64-linux-gnu` (~10 MB, providing
+  the third name the script probes for) so the file usually exists.
+
+- **Documentation and comments that outlived what they describe.**
+
+  * The 0.55.0 "Added" entry for borrow-check rule §2.1b said the rule
+    stops at a closure body and cited a regression
+    (`free_in_closure_ok.nu`) that the same release's "Fixed" entry had
+    deleted. The two halves of one release contradicted each other; the
+    "Fixed" half is the true one, and the "Added" entry now points at it.
+  * `compiler/tests/should_fail_free_autodropped.nu` still described that
+    deleted companion and claimed the shape stays ACCEPTED inside a
+    closure. It is now rejected there.
+  * `stdlib/std/time.nu`'s `time_make` warned that a wide-payload
+    `! T E` is silently truncated when matched directly as
+    `?? ( call ) { … }` and told the reader to bind to a `:` variable
+    first. That compiler bug is fixed — the direct and the bound spelling
+    agree for a narrow `! i ParseErr` and for a multi-field struct
+    payload alike — and the warning was routing readers through a detour
+    for nothing.
+  * `stdlib/std/float.nu`'s `float_to_string` was documented as "String →
+    float without error info (legacy convenience)", the description of
+    its inverse.
+  * docs/spec.md §6.6's member-access table listed opt and res together
+    as `{ i1, T }` with indices 0/1, while §4.5 defines the result as
+    `{ i1, T, E }` with `. r 2` for the Err payload. The table now has a
+    row of its own for the result.
 
 - **The packer decided what counts as package source in silence, and got
   it wrong in both directions.** `nurlpkg publish` shipped build output
@@ -47,7 +186,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `compiler/tests/pkg_pack_basic.nu` now states the contract in full —
   what ships, what does not, and by which rule.
 
-
 ## [0.55.0] — 2026-08-29
 
 ### Added
@@ -72,19 +210,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reassigning an owned binding already frees its previous value, and a
   binding whose ownership has left it is no longer registered.
 
-  The rule stops at a CLOSURE body, and the reason is a second finding
-  worth its own line: a closure that returns through `^` runs the drop
-  epilogue, but one that FALLS OFF ITS END emits a bare `ret` and drops
-  nothing, so an owned `s` binding there leaks unless the body frees it by
-  hand — which `packages/swarm-mcp` does, and which the first draft of
-  this rule therefore rejected. Closing that gap means running the same
-  epilogue at the closure's fall-off terminator, which first needs
-  `__owned_strings__` saved and restored across a closure body the way
-  `gen_cond` does across a `?` arm — the closure's scope currently
-  inherits the enclosing function's list. Until then the rule is scoped to
-  `g_bck_closure_depth == 0`; docs/MEMORY.md §2.1b carries the table.
-  Regressions `compiler/tests/should_fail_free_autodropped.nu` (rejected
-  at function scope) and `compiler/tests/free_in_closure_ok.nu` (accepted
+  The rule reaches into a CLOSURE body too, and the reason it very nearly
+  did not is a second finding worth its own line: a closure that returns
+  through `^` runs the drop epilogue, but one that FALLS OFF ITS END used
+  to emit a bare `ret` and drop nothing, so an owned `s` binding there
+  leaked unless the body freed it by hand — which `packages/swarm-mcp`
+  did, and which the first draft of this rule therefore rejected. The
+  "Fixed" entry below closes that gap by running the same epilogue at the
+  closure's fall-off terminator, so registration is a proof at both exits
+  and the hand-written free inside a closure is the second one, exactly as
+  at function scope. docs/MEMORY.md §2.1b carries the table. Regressions
+  `compiler/tests/should_fail_free_autodropped.nu` (rejected at function
+  scope) and `compiler/tests/should_fail_free_in_closure.nu` (rejected
   inside a closure).
 
 - **`--lint` reports an allocation owned by nothing.**

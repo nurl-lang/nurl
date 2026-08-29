@@ -1438,7 +1438,8 @@ The compilation rule is chosen by the LLVM type of `obj`:
 | struct pointer `%T*` | IDENT | GEP field lookup + load |
 | raw pointer `T*` | INT | array slot, constant index |
 | raw pointer `T*` | expr | array slot, computed index |
-| `{ i1, T }` (opt / res) | 0 / 1 | tag / payload |
+| `{ i1, T }` (opt `?T`) | 0 / 1 | tag / payload |
+| `{ i1, T, E }` (res `!T E`) | 0 / 1 / 2 | tag / Ok payload / Err payload |
 | slice `{ T*, i64 }` | 0 / 1 | data ptr / length |
 | named struct `%T` | IDENT | extractvalue by registered field idx |
 | enum value `%T` | 0 | whole value (for `??` match input) |

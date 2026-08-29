@@ -237,7 +237,10 @@ $ `stdlib/core/errors.nu`
     ^ @ !f ParseErr { T v }
 }
 
-// String → float without error info (legacy convenience).
+// Float → string: the shortest decimal that round-trips back to exactly
+// `x` (Ryū, via `nurl_str_float`), so `3.141592653589793` and
+// `1.0000000000000002` survive a write/read cycle unchanged and an
+// integral value keeps its `.0`. Returns an owned string.
 @ float_to_string f x → s {
     ^ ( nurl_str_float x )
 }

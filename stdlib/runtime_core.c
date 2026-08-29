@@ -302,16 +302,23 @@ void nurl_print(const char *s);   /* §1, below */
  * Same stack digit loop as `nurl_str_int`, so an inline integer costs no
  * allocation, and routed through `nurl_print` so the output-capture
  * buffer (nurl_print_buf_*) and NURL_IO_LOCK see it. */
-void nurl_print_int(long long n) {
-    char buf[24];
-    char *end = buf + sizeof buf - 1;
+/* Decimal digits of `n` written BACKWARDS from `end` (which must point
+ * at the last byte of a >= 24-byte buffer), returning the start. Shared
+ * by all four `_int` printers so the stdout and stderr halves of the
+ * family cannot drift. */
+static char *nurl__int_digits(long long n, char *end) {
     char *p = end;
     unsigned long long u = n < 0 ? 0ULL - (unsigned long long)n
                                  : (unsigned long long)n;
     *end = '\0';
     do { *--p = (char)('0' + (u % 10ULL)); u /= 10ULL; } while (u);
     if (n < 0) *--p = '-';
-    nurl_print(p);
+    return p;
+}
+
+void nurl_print_int(long long n) {
+    char buf[24];
+    nurl_print(nurl__int_digits(n, buf + sizeof buf - 1));
 }
 
 /* Decimal text for `n` followed by a newline. Built on nurl_print_int
@@ -320,7 +327,14 @@ void nurl_println_int(long long n) { nurl_print_int(n); nurl_print("\n"); }
 
 /* That completes the print family: `print` = no newline, `println` =
  * newline, `_int` = the integer overload, `eprint`/`eprintln` = the same
- * pair on stderr. `nurl_print_str` (a `nurl_println` duplicate) and
+ * pair on stderr — including `eprint_int` / `eprintln_int`. The claim
+ * that the family is one rule everywhere was written a release before it
+ * was true: `_int` existed only on stdout, so printing a number to
+ * stderr meant `( nurl_eprint ( nurl_str_int n ) )` — an allocation per
+ * diagnostic, and a leak unless the caller bound and freed it, which is
+ * the footgun nurlc.nu's own comment at those call sites warns about.
+ * The stderr definitions are below, next to their string siblings.
+ * `nurl_print_str` (a `nurl_println` duplicate) and
  * `nurl_print_bool` (`nurl_println` of `? b "true" "false"`) were
  * removed with the rename — both also wrote straight to stdio, invisible
  * to the capture buffer and NURL_IO_LOCK. Everything else formats with
@@ -686,6 +700,19 @@ void nurl_println(const char *s)  { nurl_print(s); nurl_print("\n"); }
  * stdout prints this buffering is here to make cheap. */
 void nurl_eprint(const char *s)   { NURL_IO_LOCK(); fflush(stdout); fputs(s, stderr); fflush(stderr); NURL_IO_UNLOCK(); }
 void nurl_eprintln(const char *s) { NURL_IO_LOCK(); fflush(stdout); fputs(s, stderr); fputc('\n', stderr); fflush(stderr); NURL_IO_UNLOCK(); }
+
+/* The integer overloads on stderr. Same stack digit loop as
+ * nurl_print_int — no allocation, so a diagnostic that prints a count
+ * cannot leak one — and routed through nurl_eprint so the stdout drain
+ * and NURL_IO_LOCK apply to them exactly as to the string forms. */
+void nurl_eprint_int(long long n) {
+    char buf[24];
+    nurl_eprint(nurl__int_digits(n, buf + sizeof buf - 1));
+}
+void nurl_eprintln_int(long long n) {
+    char buf[24];
+    nurl_eprintln(nurl__int_digits(n, buf + sizeof buf - 1));
+}
 
 
 /* ── §2  String operations ─────────────────────────────────────── */
@@ -2014,11 +2041,35 @@ char *nurl_uname_field(long long which) {
  * truthful answer for a unikernel rather than a guess). */
 long long nurl_tz_offset(long long secs) {
 #if defined(_WIN32)
+    /* Win32, not the CRT. `_get_timezone` was the obvious call and it is
+     * wrong twice over: it is a UCRT export, so a mingw-w64 toolchain
+     * targeting the older msvcrt.dll cannot link the whole runtime object
+     * ("undefined reference to `__imp__get_timezone'"), which took every
+     * Windows cross build down regardless of what the program did; and it
+     * reports the zone's STANDARD bias, ignoring `secs`, so it answered
+     * 3600 for a Helsinki summer instant where the Unix path answers 7200.
+     *
+     * Converting the instant to a SYSTEMTIME, asking Windows for the local
+     * wall clock at THAT instant, and taking the difference is DST-aware
+     * per-instant like `tm_gmtoff`, and lives entirely in kernel32 — which
+     * every Windows toolchain links. */
     {
-        long bias = 0;
-        (void)secs;
-        _get_timezone(&bias);        /* seconds WEST of UTC */
-        return -(long long)bias;
+        /* 100-ns ticks between 1601-01-01 and 1970-01-01. */
+        const long long EPOCH_DELTA = 116444736000000000LL;
+        long long ticks = secs * 10000000LL + EPOCH_DELTA;
+        FILETIME    ftu, ftl;
+        SYSTEMTIME  stu, stl;
+        ULARGE_INTEGER u;
+        if (ticks < 0) return 0;            /* before 1601: no zone answer */
+        u.QuadPart = (unsigned long long)ticks;
+        ftu.dwLowDateTime  = u.LowPart;
+        ftu.dwHighDateTime = u.HighPart;
+        if (!FileTimeToSystemTime(&ftu, &stu)) return 0;
+        if (!SystemTimeToTzSpecificLocalTime(NULL, &stu, &stl)) return 0;
+        if (!SystemTimeToFileTime(&stl, &ftl)) return 0;
+        u.LowPart  = ftl.dwLowDateTime;
+        u.HighPart = ftl.dwHighDateTime;
+        return ((long long)u.QuadPart - ticks) / 10000000LL;
     }
 #elif defined(__unix__) || defined(__APPLE__)
     {

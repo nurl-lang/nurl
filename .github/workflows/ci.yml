@@ -210,6 +210,21 @@ jobs:
         # differ only in case.
         run: ./tools/check_windows_paths.sh
 
+      - name: the Windows runtime links on msvcrt, not only on UCRT
+        # windows-tests.yml builds with LLVM clang and with zig — both
+        # UCRT. nurlapi's /build_windows cross-compiles with the DISTRO
+        # mingw-w64, which targets the older msvcrt.dll, and nothing ran
+        # that toolchain. So `_get_timezone` (a UCRT export, added with
+        # time_local in 0.54.0) took down EVERY Windows cross build,
+        # hello world included — mingw links the whole runtime object —
+        # for two releases while every Windows gate stayed green.
+        # Ten seconds: compile stdlib/runtime.c for mingw, link a
+        # trivial main against it. No Windows, no emulator, no nurlc.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+          ./tools/check_mingw_cross.sh
+
       - name: nurlfmt --check (canonical-form gate)
         # Every first-party .nu file must be in canonical nurlfmt
         # form. build.sh above already produced build/nurlfmt, so

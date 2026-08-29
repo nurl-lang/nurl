@@ -82,6 +82,109 @@ $ `nurlapi/pptws.nu`
     ^ r
 }
 
+// ── Caller-selectable nurlc flags ────────────────────────────────────
+//
+// The build endpoints ran nurlc with a fixed argv, and that made two of
+// 0.55.0's headline features unreachable through the API: `--lint` (the
+// report on an allocation nothing owns) and the `--no-borrowck` panic fix
+// have no other entry point here. An agent driving this server could read
+// the changelog entry for the lint and had no way to make the lint speak
+// — which is precisely the audience the lint was written for.
+//
+// An ALLOW-LIST, not a passthrough. `nurlc` also takes `--keep=a,b`,
+// `--split-out=PREFIX` and a file argument, so a free-form flag string
+// would let an unauthenticated caller name paths inside the container.
+// Every flag below changes only how the compiler CHECKS the one source
+// it was handed; none of them names a path or writes a file.
+//
+// The match returns the STATIC literal rather than the caller's bytes,
+// so what lands in argv outlives the request's split parts and cannot be
+// a substring the allow-list read differently than the compiler will.
+@ nurlc_flag_literal s f → s {
+    ? != 0 ( nurl_str_eq f `--lint` ) { ^ `--lint` } {}
+    ? != 0 ( nurl_str_eq f `--no-borrowck` ) { ^ `--no-borrowck` } {}
+    ? != 0 ( nurl_str_eq f `--strict-borrowck` ) { ^ `--strict-borrowck` } {}
+    ? != 0 ( nurl_str_eq f `--no-strict-arity` ) { ^ `--no-strict-arity` } {}
+    ? != 0 ( nurl_str_eq f `--no-cpu-dispatch` ) { ^ `--no-cpu-dispatch` } {}
+    ^ ``
+}
+
+// The same list as prose, for the schema and the rejection message.
+@ nurlc_flags_allowed_list → s {
+    ^ `--lint --no-borrowck --strict-borrowck --no-strict-arity --no-cpu-dispatch`
+}
+
+// The FIRST word of `flags` that is not on the list, or an empty String
+// when every word is. Validation is separate from pushing so a handler
+// can refuse at the top — where an early `^` is already the shape — and
+// the argv assembly further down stays a straight line. Refusing loudly
+// matters for the same reason `run` does: a caller that asked for the
+// lint and got a plain build would read the silence as "no findings".
+@ bad_nurlc_flag s flags → String {
+    : String bad ( string_new )
+    ? == 0 ( nurl_str_len flags ) { ^ bad } {}
+    : String fs ( string_from flags )
+    : ( Vec String ) parts ( string_split fs ` ` )
+    : i n ( vec_len [String] parts )
+    : ~ i i 0
+    ~ < i n {
+        ?? ( vec_get [String] parts i ) {
+            T part → {
+                : s f ( string_data part )
+                ? & != 0 ( nurl_str_len f ) == 0 ( nurl_str_len ( nurlc_flag_literal f ) )
+                { ? == 0 ( string_len bad ) { ( string_push_str bad f ) } {} } {}
+            }
+            F → {}
+        }
+        = i + i 1
+    }
+    ( vec_free_with [String] parts \ String l → v { ( string_free l ) } )
+    ( string_free fs )
+    ^ bad
+}
+
+// Push the static literal for each recognised word of `flags` onto
+// `args`. Unrecognised words are skipped — bad_nurlc_flag has already
+// refused the request by the time this runs.
+@ push_nurlc_flags ( Vec s ) args s flags → v {
+    ? == 0 ( nurl_str_len flags ) { ^ v } {}
+    : String fs ( string_from flags )
+    : ( Vec String ) parts ( string_split fs ` ` )
+    : i n ( vec_len [String] parts )
+    : ~ i i 0
+    ~ < i n {
+        ?? ( vec_get [String] parts i ) {
+            T part → {
+                : s lit ( nurlc_flag_literal ( string_data part ) )
+                ? != 0 ( nurl_str_len lit ) { ( vec_push [s] args lit ) } {}
+            }
+            F → {}
+        }
+        = i + i 1
+    }
+    ( vec_free_with [String] parts \ String l → v { ( string_free l ) } )
+    ( string_free fs )
+}
+
+// The 400 for a flag that is not on the list. Built through the JSON
+// writer rather than string-pasted, because `bad` is caller bytes.
+@ bad_flag_response String bad → HttpResponse {
+    : String m ( string_with_cap 200 )
+    ( string_push_str m `unsupported compiler flag '` )
+    ( string_push_str m ( string_data bad ) )
+    ( string_push_str m `' — 'flags' accepts only: ` )
+    ( string_push_str m ( nurlc_flags_allowed_list ) )
+    : Json e ( json_obj_new )
+    ( json_obj_set e `error` ( json_str_lit ( string_data m ) ) )
+    : String body ( json_stringify e )
+    : HttpResponse hr ( response_text 400 ( string_data body ) )
+    ( response_set_header hr `Content-Type` `application/json` )
+    ( json_free e )
+    ( string_free body )
+    ( string_free m )
+    ^ hr
+}
+
 // Execute a just-built binary under the same timeout(1) wrapper every
 // build tool uses, and fold the result into the response.
 @ __run_built_binary Json res s bin_path → v {
@@ -715,6 +818,15 @@ s combined_stdout s combined_stderr → v {
             ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
             : s opt ( get_common_json root `opt` `-O2` )
+            // Caller-selectable compiler flags (allow-listed). Validated
+            // here, at the top, so a bad one is a 400 rather than a build
+            // that quietly did not do what was asked.
+            : s __flags ( get_common_json root `flags` `` )
+            : String __badf ( bad_nurlc_flag __flags )
+            ? != 0 ( string_len __badf )
+            { ( json_free root ) ( string_free body_str )
+                ^ ( bad_flag_response __badf ) } {}
+            ( string_free __badf )
 
             : String build_id ( create_build_id )
             : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
@@ -732,7 +844,7 @@ s combined_stdout s combined_stderr → v {
 
                     : b uses_canvas >= ( nurl_str_find source `stdlib/ext/canvas.nu` ) 0
 
-                    : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
+                    : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( push_nurlc_flags nurlc_args __flags )
                     : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
 
                     ?? nurlc_res {
@@ -842,6 +954,15 @@ s combined_stdout s combined_stderr → v {
             ? != 0 ( nurl_str_len __wasm_nodep )
             { ( json_free root ) ( string_free body_str )
                 ^ ( unsupported_target_response filename __wasm_nodep `WebAssembly` ) } {}
+            // Caller-selectable compiler flags (allow-listed). Validated
+            // here, at the top, so a bad one is a 400 rather than a build
+            // that quietly did not do what was asked.
+            : s __flags ( get_common_json root `flags` `` )
+            : String __badf ( bad_nurlc_flag __flags )
+            ? != 0 ( string_len __badf )
+            { ( json_free root ) ( string_free body_str )
+                ^ ( bad_flag_response __badf ) } {}
+            ( string_free __badf )
             : b emit_ll ( get_common_bool root `emit_ll` F )
             // links_only:true (the MCP tool sets it) omits the inline
             // wasm_base64 payload and the inline llvm_ir blob — the caller
@@ -902,7 +1023,7 @@ s combined_stdout s combined_stderr → v {
                         // left on, every marked function draws one "not a
                         // recognized feature for this target" line per
                         // feature.
-                        : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( vec_push [s] nurlc_args `--ffi-host-imports` ) ( vec_push [s] nurlc_args `--no-cpu-dispatch` )
+                        : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( push_nurlc_flags nurlc_args __flags ) ( vec_push [s] nurlc_args `--ffi-host-imports` ) ( vec_push [s] nurlc_args `--no-cpu-dispatch` )
                         : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
                         ?? nurlc_res {
                             T n_out → {
@@ -1124,6 +1245,15 @@ s combined_stdout s combined_stderr → v {
             ? != 0 ( nurl_str_len __win_nodep )
             { ( json_free root ) ( string_free body_str )
                 ^ ( unsupported_target_response filename __win_nodep `Windows` ) } {}
+            // Caller-selectable compiler flags (allow-listed). Validated
+            // here, at the top, so a bad one is a 400 rather than a build
+            // that quietly did not do what was asked.
+            : s __flags ( get_common_json root `flags` `` )
+            : String __badf ( bad_nurlc_flag __flags )
+            ? != 0 ( string_len __badf )
+            { ( json_free root ) ( string_free body_str )
+                ^ ( bad_flag_response __badf ) } {}
+            ( string_free __badf )
             : s opt ( get_common_json root `opt` `-O2` )
             : String build_id ( create_build_id )
             : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
@@ -1137,7 +1267,7 @@ s combined_stdout s combined_stderr → v {
                     ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
                     ( string_push_str bin_name `.exe` )
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
-                    : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
+                    : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( push_nurlc_flags nurlc_args __flags )
                     : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
                     ?? nurlc_res {
                         T n_out → {
@@ -1309,6 +1439,15 @@ s combined_stdout s combined_stderr → v {
             ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
             : s opt ( get_common_json root `opt` `-O2` )
+            // Caller-selectable compiler flags (allow-listed). Validated
+            // here, at the top, so a bad one is a 400 rather than a build
+            // that quietly did not do what was asked.
+            : s __flags ( get_common_json root `flags` `` )
+            : String __badf ( bad_nurlc_flag __flags )
+            ? != 0 ( string_len __badf )
+            { ( json_free root ) ( string_free body_str )
+                ^ ( bad_flag_response __badf ) } {}
+            ( string_free __badf )
             : String build_id ( create_build_id )
             : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
             : !v IoErr dr ( dir_create ( string_data build_dir ) )
@@ -1320,7 +1459,7 @@ s combined_stdout s combined_stderr → v {
                     : ~ String bin_name ( string_from filename )
                     ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
-                    : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
+                    : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( push_nurlc_flags nurlc_args __flags )
                     : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
                     ?? nurlc_res {
                         T n_out → {
@@ -3517,6 +3656,15 @@ s combined_stdout s combined_stderr → v {
                 ( json_free root ) ( string_free body_str )
                 ^ ( response_text 400 `{"error":"unknown target id (see GET /targets)"}\n` )
             } {}
+            // Caller-selectable compiler flags (allow-listed). Validated
+            // here, at the top, so a bad one is a 400 rather than a build
+            // that quietly did not do what was asked.
+            : s __flags ( get_common_json root `flags` `` )
+            : String __badf ( bad_nurlc_flag __flags )
+            ? != 0 ( string_len __badf )
+            { ( json_free root ) ( string_free body_str )
+                ^ ( bad_flag_response __badf ) } {}
+            ( string_free __badf )
             : b is_static ( __zig_is_static target )
             : b is_linux ( __zig_is_linux target )
 
@@ -3533,7 +3681,7 @@ s combined_stdout s combined_stderr → v {
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
                     : String rt_o ( get_runtime_target_o target )
 
-                    : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
+                    : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( push_nurlc_flags nurlc_args __flags )
                     ? ! ( __zig_is_x86_64 target ) { ( vec_push [s] nurlc_args `--no-cpu-dispatch` ) } {}
                     : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
                     ?? nurlc_res {
@@ -3985,6 +4133,7 @@ s combined_stdout s combined_stderr → v {
                                 // where x86 gives them the ELF's PVH note.
                                 // Same program, second wrapper; offered only
                                 // when the build actually produced one.
+                                : ~ b have_image F
                                 ? ( __uk_is_arm arch ) {
                                     : ~ String img_name ( string_from ( string_data elf_name ) )
                                     ? ( string_ends_with img_name `.elf` ) {
@@ -3998,6 +4147,7 @@ s combined_stdout s combined_stderr → v {
                                         ( json_obj_set res `image_artifact`
                                         ( make_artifact_json ( string_data img_name )
                                         ?? isz { T sz → sz F _ → 0 } ( string_data build_id ) ) )
+                                        = have_image T
                                     } {}
                                     ( string_free img_path )
                                     ( string_free img_name )
@@ -4010,8 +4160,20 @@ s combined_stdout s combined_stderr → v {
                                 : String bn ( __uk_boot_cmd arch ( string_data elf_name ) uargs T )
                                 ( json_obj_set boot `qemu` ( json_str_lit ( string_data bc ) ) )
                                 ( json_obj_set boot `qemu_net` ( json_str_lit ( string_data bn ) ) )
+                                // The AArch64 notes come in two spellings,
+                                // and which one is true depends on whether
+                                // llvm-objcopy was on the builder's PATH.
+                                // The build says so in its stderr ("no
+                                // llvm-objcopy — skipped the flat Image")
+                                // and then the notes told the reader to use
+                                // an .Image that is not in the response —
+                                // advice for a file that was never produced.
+                                // `have_image` is the same fact the artifact
+                                // list was already built from.
                                 ( json_obj_set boot `notes` ( json_str_lit ? ( __uk_is_arm arch )
+                                ? have_image
                                 `Use -accel tcg on a machine without /dev/kvm. The hostfwd in qemu_net forwards host 127.0.0.1:8080 to guest port 8080 — edit both to your program's port. QEMU takes the .elf shown here; Firecracker and cloud-hypervisor take the .Image beside it (the flat container this architecture uses, where x86 uses the ELF's PVH note) and need an AArch64 host.`
+                                `Use -accel tcg on a machine without /dev/kvm. The hostfwd in qemu_net forwards host 127.0.0.1:8080 to guest port 8080 — edit both to your program's port. QEMU takes the .elf shown here. This build produced NO flat .Image — llvm-objcopy was not on the builder's PATH (the build stderr says so) — so Firecracker and cloud-hypervisor, which take the .Image on this architecture, have nothing to boot from here: rebuild where llvm-objcopy exists, or objcopy -O binary the .elf yourself.`
                                 `Use -accel tcg on a machine without /dev/kvm. Memory floor: a hello answers on -m 3, an HTTPS server on -m 4; -m 64 leaves headroom. The hostfwd in qemu_net forwards host 127.0.0.1:8080 to guest port 8080 — edit both to your program's port. The same .elf boots under Firecracker and cloud-hypervisor unchanged — all three read its PVH note.` ) )
                                 ( string_free bc )
                                 ( string_free bn )
@@ -4142,6 +4304,8 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_prop `string` `NURL source code (full file contents)` ) )
     ( json_obj_set props `filename`
     ( __mcp_prop `string` `Logical filename for diagnostics (default main.nu)` ) )
+    ( json_obj_set props `flags`
+    ( __mcp_prop `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --no-borrowck, --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` ) )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `source` ) )
@@ -4167,6 +4331,8 @@ s combined_stdout s combined_stderr → v {
     ( vec_free [s] targets )
     ( json_obj_set props `filename`
     ( __mcp_prop `string` `Logical filename for diagnostics (default main.nu)` ) )
+    ( json_obj_set props `flags`
+    ( __mcp_prop `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --no-borrowck, --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` ) )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `source` ) )
@@ -4283,6 +4449,8 @@ s combined_stdout s combined_stderr → v {
     ( json_obj_set body `source` ( json_str_lit source ) )
     ( json_obj_set body `filename` ( json_str_lit filename ) )
     ? ( __mcp_args_get_bool `run` args F ) { ( json_obj_set body `run` ( json_bool T ) ) } {}
+    : s __flags ( __mcp_args_get `flags` args `` )
+    ? != 0 ( nurl_str_len __flags ) { ( json_obj_set body `flags` ( json_str_lit __flags ) ) } {}
     ? links_only { ( json_obj_set body `links_only` ( json_bool T ) ) } {}
     : Json result ( __mcp_build_endpoint endpoint body )
     ( json_free body )
@@ -4300,6 +4468,8 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_prop `string` `Logical filename for diagnostics (default main.nu)` ) )
     ( json_obj_set props `run`
     ( __mcp_prop `boolean` `Also run the compiled binary and return exit code, stdout, stderr. Unsandboxed code execution — disabled unless the operator set NURL_ALLOW_RUN=1 (asking while off returns an error, not a silent build). nurl_build_unikernel is the sandboxed alternative.` ) )
+    ( json_obj_set props `flags`
+    ( __mcp_prop `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --no-borrowck, --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` ) )
     ( json_obj_set schema `properties` props )
     ^ schema
 }
@@ -4366,6 +4536,8 @@ s combined_stdout s combined_stderr → v {
     ( json_obj_set body `source` ( json_str_lit source ) )
     ( json_obj_set body `target` ( json_str_lit target ) )
     ( json_obj_set body `filename` ( json_str_lit filename ) )
+    : s __flags ( __mcp_args_get `flags` args `` )
+    ? != 0 ( nurl_str_len __flags ) { ( json_obj_set body `flags` ( json_str_lit __flags ) ) } {}
     : Json result ( __mcp_build_endpoint `/build_target` body )
     ( json_free body )
     ^ result

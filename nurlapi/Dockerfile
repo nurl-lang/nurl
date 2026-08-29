@@ -170,6 +170,15 @@ FROM debian:bookworm-slim
 # qemu-system-x86: the smoke boot (U3) — `boot: true` on
 # POST /build_unikernel boots the built image under TCG (the container
 # has no /dev/kvm), no network device, killed by timeout(1).
+#
+# binutils-aarch64-linux-gnu: for `aarch64-linux-gnu-objcopy`, the third
+# name unikernel/build_unikernel_arm64.sh probes for. Without one of the
+# three the arm64 build silently skips the flat `.Image` — the container
+# Firecracker and cloud-hypervisor take on that architecture — and the
+# response then offered boot advice for a file it had not produced. The
+# stock `binutils` objcopy above is built for x86 only and cannot read a
+# foreign ELF, which is why the plain package is not enough. It is ~10 MB
+# against `llvm-16`'s ~100 MB for the same one command.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         clang-16 \
         libcurl4-openssl-dev \
@@ -181,6 +190,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         binaryen \
         binutils \
+        binutils-aarch64-linux-gnu \
         qemu-system-x86 \
         qemu-system-arm \
         gcc-mingw-w64-x86-64 \
