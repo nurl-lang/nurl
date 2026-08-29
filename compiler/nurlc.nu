@@ -8317,7 +8317,15 @@
         // exactly as the bare one. There is no legitimate counter-case:
         // reassigning an owned binding already frees its previous value,
         // and a binding whose ownership left it is not registered.
-        ? & & != g_borrowck 0 ( seq fname `nurl_free` ) == arg_idx 0
+        //
+        // NOT inside a closure body. There, registration is not yet a
+        // proof that a drop is emitted: a closure that returns through
+        // `^` runs the epilogue (gen_ret_term), but one that falls off
+        // its end emits a bare `ret` and drops nothing, so the hand-
+        // written free is what keeps that binding from leaking. Until
+        // the two exits agree, the rule is only sound outside them.
+        ? & & & != g_borrowck 0 == g_bck_closure_depth 0
+        ( seq fname `nurl_free` ) == arg_idx 0
         { : s nf_id ( nurl_sym_get syms `__last_ident_name__` )
             ? != 0 ( nurl_str_len nf_id )
             { : s nf_ptr ( nurl_sym_get2 syms nf_id `__ptr` )

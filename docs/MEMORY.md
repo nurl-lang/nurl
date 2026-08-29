@@ -254,10 +254,28 @@ error: 'piece' is auto-dropped at the end of its scope, so freeing it
 The binding is identified from the identifier the argument expression
 loaded, not from its first token, so the cast spelling every FFI pointer
 uses — `( nurl_free # s piece )` — is covered as exactly as the bare one.
-There is no legitimate counter-case: reassigning an owned binding already
-frees its previous value, and a binding whose ownership has left it is no
-longer registered. Regression:
-`compiler/tests/should_fail_free_autodropped.nu`.
+Reassigning an owned binding already frees its previous value, and a
+binding whose ownership has left it is no longer registered, so at
+function scope there is no legitimate counter-case.
+
+**The rule stops at a closure body**, because there registration is not
+yet a proof that a drop is emitted:
+
+| closure body ends with | epilogue | an owned `s` binding |
+| --- | --- | --- |
+| `^ value` | `gen_ret_term` | dropped |
+| falling off the end | a bare `ret` | **leaks** |
+
+So inside a closure the hand-written free is what keeps the second row
+from leaking, and rejecting it would reject correct code. Closing the gap
+means running the same epilogue at the closure's fall-off terminator —
+which first needs `__owned_strings__` to be saved and restored across the
+body the way `gen_cond` does across a `?` arm, since the closure's scope
+currently inherits the ENCLOSING function's list and would free it too.
+Until then the rule is scoped to `g_bck_closure_depth == 0`. Regressions:
+`compiler/tests/should_fail_free_autodropped.nu` (rejected at function
+scope) and `compiler/tests/free_in_closure_ok.nu` (accepted inside a
+closure).
 
 ### 2.2 Alias and double-free detection
 

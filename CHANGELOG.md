@@ -26,11 +26,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The binding is identified from the identifier the argument expression
   loaded rather than from its first token, so the cast spelling every FFI
   pointer uses — `( nurl_free # s piece )` — is covered as exactly as the
-  bare one. There is no legitimate counter-case: reassigning an owned
-  binding already frees its previous value, and a binding whose ownership
-  has left it is no longer registered. The whole tree — bootstrap fixed
-  point, 921-test corpus, 102 examples — is clean under the new rule.
-  Regression `compiler/tests/should_fail_free_autodropped.nu`.
+  bare one. At function scope there is no legitimate counter-case:
+  reassigning an owned binding already frees its previous value, and a
+  binding whose ownership has left it is no longer registered.
+
+  The rule stops at a CLOSURE body, and the reason is a second finding
+  worth its own line: a closure that returns through `^` runs the drop
+  epilogue, but one that FALLS OFF ITS END emits a bare `ret` and drops
+  nothing, so an owned `s` binding there leaks unless the body frees it by
+  hand — which `packages/swarm-mcp` does, and which the first draft of
+  this rule therefore rejected. Closing that gap means running the same
+  epilogue at the closure's fall-off terminator, which first needs
+  `__owned_strings__` saved and restored across a closure body the way
+  `gen_cond` does across a `?` arm — the closure's scope currently
+  inherits the enclosing function's list. Until then the rule is scoped to
+  `g_bck_closure_depth == 0`; docs/MEMORY.md §2.1b carries the table.
+  Regressions `compiler/tests/should_fail_free_autodropped.nu` (rejected
+  at function scope) and `compiler/tests/free_in_closure_ok.nu` (accepted
+  inside a closure).
 
 - **`--lint` reports an allocation owned by nothing.**
 

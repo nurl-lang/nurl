@@ -8,6 +8,11 @@
 // The cast spelling is the one that matters: every FFI pointer is freed as
 // `( nurl_free # s x )`, and a check keyed on the argument's first token
 // would see the cast rather than the binding and wave it through.
+//
+// The companion `free_in_closure_ok.nu` locks the other half: inside a
+// closure body the same shape must stay ACCEPTED, because a closure that
+// falls off its end drops nothing and the hand-written free is what keeps
+// its binding from leaking.
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
