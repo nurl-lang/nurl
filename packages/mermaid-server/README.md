@@ -106,7 +106,10 @@ wins:
 1. `--templates DIR`
 2. `$MERMAID_TEMPLATES`
 3. `./.templates`
-4. `$NURL_HOME/share/mermaid-server/templates` (default `~/.nurl/…`)
+4. `$NURL_HOME/share/mermaid-server/.templates` (default `~/.nurl/…`)
+
+`nurlpkg install mermaid-server` stages the three shipped templates into
+(4), so an installed server starts with no further setup.
 
 (1) and (2) are *explicit*: if either names a directory that cannot be
 loaded, the server says so and exits rather than quietly serving a

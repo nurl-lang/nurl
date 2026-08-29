@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.1
+
+`nurlpkg install mermaid-server` installed a binary that could not start:
+it builds `src/main.nu` and puts the binary on `$PATH`, and nothing else
+in the package comes with it — so the templates the server loads at
+startup were never there, and it exited with "no template directory
+found".
+
+- **The templates are declared as install assets** (`[install] assets`),
+  which stages them to `$NURL_HOME/share/mermaid-server/.templates` — the
+  last entry in the resolution chain, so an installed server finds its
+  three looks with no further setup. The postinstall hint says what was
+  installed instead of asking the user to copy files by hand.
+- **`http` is required as `^0`**, the major-only form the rest of the
+  registry moved to in #1027, rather than `^0.4.0`.
+
 ## 0.1.0
 
 First release.
