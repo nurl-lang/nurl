@@ -55,13 +55,12 @@ $ `stdlib/core/vec.nu`
     : i total ( fold v \ i x → i { ^ * x 2 } )
     ( nurl_print_int total ) ( nurl_print `\n` )
 
-    // Body that binds an owned string and frees it by hand — a closure
-    // that falls off its end drops nothing, so this is what keeps it
-    // from leaking (docs/MEMORY.md §2.1b).
+    // Body that binds an owned string: the fall-off exit's drop epilogue
+    // reclaims it, and the auto-drop bookkeeping is per-body state the
+    // closure path has to keep straight in both checker modes.
     ( each v \ i x → v {
         : s ks ( nurl_str_int x )
         ( nurl_print ks )
-        ( nurl_free # s ks )
     } )
     ( nurl_print `\n` )
 
