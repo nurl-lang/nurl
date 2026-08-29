@@ -41,6 +41,13 @@
 // Print an integer to stdout followed by a newline.
 & `c` @ nurl_println_int i n → v
 
+// The same two on stderr. Without them a diagnostic that prints a number
+// had to build a string first — `( nurl_eprint ( nurl_str_int n ) )` —
+// which allocates, and leaks unless the caller binds and frees it.
+& `c` @ nurl_eprint_int i n → v
+
+& `c` @ nurl_eprintln_int i n → v
+
 // Flush buffered stdout / stderr explicitly.
 & `c` @ nurl_flush_stdout → v
 

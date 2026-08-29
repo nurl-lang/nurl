@@ -25731,6 +25731,8 @@
     ( __emit_rt_decl syms `declare void @nurl_eprintln(i8*)` )
     ( __emit_rt_decl syms `declare void @nurl_print_int(i64)` )
     ( __emit_rt_decl syms `declare void @nurl_println_int(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_eprint_int(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_eprintln_int(i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_read_int()` )
     ( __emit_rt_decl syms `declare i8*  @nurl_read_line()` )
     // nurl_read_n_bytes lives as pure NURL `read_n_bytes` in
@@ -26648,6 +26650,8 @@
     ( nurl_sym_def syms `nurl_eprintln` `void` )
     ( nurl_sym_def syms `nurl_print_int` `void` )
     ( nurl_sym_def syms `nurl_println_int` `void` )
+    ( nurl_sym_def syms `nurl_eprint_int` `void` )
+    ( nurl_sym_def syms `nurl_eprintln_int` `void` )
     // nurl_lex_advance, nurl_sym_def / _push / _pop, nurl_cg_reset
     // and nurl_set_last_type are pure-NURL @-fns; their types come
     // from the @-fn declarations.
