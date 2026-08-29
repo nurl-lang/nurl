@@ -149,6 +149,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `{ i1, T, E }` with `. r 2` for the Err payload. The table now has a
     row of its own for the result.
 
+- **The packer decided what counts as package source in silence, and got
+  it wrong in both directions.** `nurlpkg publish` shipped build output
+  and dropped shipped data, and `--dry-run` reported every gate passed
+  either way.
+
+  Two holes, found publishing `mermaid-server`:
+
+  *A built binary walked in.* `__pack_build_output` lists extensions —
+  `.ll`, `.o`, `.exe` — but the binary `nurlpkg build` produces on Linux
+  and macOS is named after its package and has none. A 540 KB ELF went
+  into the tarball, and its checksum then depended on whether the
+  publisher happened to have built in that checkout: the same drift the
+  `.ll` rule was written for, through the door it left open. An
+  extensionless file whose first bytes are an executable image (ELF,
+  Mach-O, PE) is now build output too — the bytes are already read, so it
+  costs no extra I/O, and the test is only applied to extensionless names
+  so a `.wasm` fixture a package deliberately ships is untouched.
+
+  *A shipped directory was dropped.* Every dot-prefixed name was excluded,
+  which took `mermaid-server`'s `.templates/` — the themes the server
+  loads at startup — and produced a package that installed and then
+  refused to run. Only VCS, editor and toolchain names are excluded by
+  name now; a package's own dot-prefixed data is source like any other.
+  What a package itself calls non-source is honoured instead, from its
+  `.gitignore`, read **per directory** as the walk descends the way git
+  applies it — which is how `yoloe-demo`'s generated 900 KB test frame,
+  ignored in `tests/`, stays out.
+
+  And the silence itself: `--dry-run` now lists the files it would ship.
+  The packer's whole job is deciding what is source, and a wrong answer
+  in either direction used to look exactly like success.
+
+  Swept all 51 packages: only `mermaid-server` (binary out, templates in)
+  and `yoloe-demo` (its own ignored build products out) change.
+  `compiler/tests/pkg_pack_basic.nu` now states the contract in full —
+  what ships, what does not, and by which rule.
 
 ## [0.55.0] — 2026-08-29
 

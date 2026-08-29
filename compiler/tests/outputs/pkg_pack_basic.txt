@@ -3,9 +3,16 @@ LINK OK
 EXIT 0
 OUTPUT
 gz_nonempty=T
-count=2
+count=4
 has_nurl.toml=T
 has_src/lib.nu=T
+has_tests/smoke.nu=T
+has_dot_dir_data=T
 excl_deps=F
-excl_dotfile=F
+excl_lock=F
+excl_git_dir=F
+excl_gitignore=F
+excl_ll=F
+excl_bare_binary=F
+excl_gitignored_nested=F
 done

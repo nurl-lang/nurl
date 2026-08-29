@@ -125,27 +125,179 @@ $ `stdlib/ext/http_cli.nu`
     ^ F
 }
 
-// Names never packaged (installed deps, VCS, build output, dotfiles).
+// True iff `name` has no extension — no `.` anywhere. A built binary on
+// Linux and macOS is named after its package and carries none; a source
+// file or a data fixture essentially always does.
+@ __pack_extensionless s name → b {
+    : i n ( nurl_str_len name )
+    : ~ i k 0
+    ~ < k n {
+        ? == ( nurl_str_get name k ) 46 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// Version control, editor and local-toolchain noise. NOT "every name
+// starting with a dot": that rule dropped whole directories a package
+// meant to ship — `mermaid-server` keeps its themes in `.templates/`, and
+// publishing it silently produced a tarball that installed and then
+// refused to start, with `--dry-run` reporting every gate passed. A
+// package's own dot-prefixed data is source like any other; only the
+// things below are never part of one.
 @ __pack_ignored s name → b {
     ? != 0 ( nurl_str_eq name `deps` ) { ^ T } {}
     ? != 0 ( nurl_str_eq name `nurl.lock` ) { ^ T } {}
     ? != 0 ( nurl_str_eq name `target` ) { ^ T } {}
     ? != 0 ( nurl_str_eq name `build` ) { ^ T } {}
     ? ( __pack_build_output name ) { ^ T } {}
-    : i n ( nurl_str_len name )
-    ? > n 0 { ? == ( nurl_str_get name 0 ) 46 { ^ T } {} } {}  // leading '.'
+    ? != 0 ( nurl_str_eq name `.git` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `.github` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `.gitignore` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `.gitattributes` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `.gitmodules` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `.hg` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `.svn` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `.DS_Store` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `.nurl-bin` ) { ^ T } {}
+    ^ F
+}
+
+// An executable image, by its first bytes. The extension list above names
+// the build output a Windows or intermediate artefact carries; the binary
+// `nurlpkg build` produces on Linux and macOS carries NONE — it is named
+// after the package — so it walked straight into the tarball. Publishing
+// `mermaid-server` would have shipped a 540 KB Linux ELF to every user,
+// and the tarball's checksum would have depended on whether the publisher
+// happened to have built in that checkout: the same drift the `.ll` rule
+// above was written for, through the door it left open.
+//
+// Only consulted for an EXTENSIONLESS file, so a `.wasm` fixture or a
+// `.so` a package deliberately ships is not caught by a magic number it
+// legitimately has.
+@ __pack_is_executable_image ( Vec u ) bytes → b {
+    ? < ( vec_len [u] bytes ) 4 { ^ F } {}
+    : i b0 ( __pack_byte bytes 0 )
+    : i b1 ( __pack_byte bytes 1 )
+    : i b2 ( __pack_byte bytes 2 )
+    : i b3 ( __pack_byte bytes 3 )
+    // ELF
+    ? & & & == b0 127 == b1 69 == b2 76 == b3 70 { ^ T } {}
+    // PE / MZ
+    ? & == b0 77 == b1 90 { ^ T } {}
+    // Mach-O, both endians and the fat header
+    ? & & & == b0 254 == b1 237 == b2 250 | == b3 206 == b3 207 { ^ T } {}
+    ? & & & == b0 207 == b1 250 == b2 237 == b3 254 { ^ T } {}
+    ? & & & == b0 202 == b1 254 == b2 186 == b3 190 { ^ T } {}
+    ^ F
+}
+
+@ __pack_byte ( Vec u ) bytes i idx → i {
+    ?? ( vec_get [u] bytes idx ) {
+        T b → ^ # i b
+        F _ → {}
+    }
+    ^ - 0 1
+}
+
+// The package's own `.gitignore`, as a list of patterns. It is the
+// author's existing statement of what in this directory is NOT source,
+// which is exactly the question the packer has to answer — and it is
+// already written, in every package, without a second manifest key to
+// keep in sync.
+//
+// Read per DIRECTORY as the walk descends and merged with what the
+// parents said, the way git applies them — `yoloe-demo` keeps the
+// `.gitignore` covering its generated 900 KB test frame in `tests/`, not
+// at the package root.
+//
+// Supported: a bare name (`nurl.lock`), a rooted name (`/mermaid-server`)
+// and an extension glob (`*.ll`, `*.svg`). Anything else is kept, because
+// a pattern the packer misreads must fail towards SHIPPING the file: a
+// tarball with one file too many is a nuisance, one missing the templates
+// the program loads at startup is a package that installs and then cannot
+// run.
+@ __pack_read_ignores s dir → ( Vec String ) {
+    : ( Vec String ) pats ( vec_new [String] )
+    : String path ( string_from dir )
+    ( string_push_str path `/.gitignore` )
+    ?? ( read_file ( string_data path ) ) {
+        T text → {
+            : ( Vec String ) lines ( string_split text `\n` )
+            : i n ( vec_len [String] lines )
+            : ~ i k 0
+            ~ < k n {
+                ?? ( vec_get [String] lines k ) {
+                    T raw → {
+                        : String t ( string_trim raw )
+                        : i tl ( string_len t )
+                        : b keep & > tl 0 & != ( string_get t 0 ) 35 != ( string_get t 0 ) 33
+                        ? keep {
+                            : ~ i from ? == ( string_get t 0 ) 47 1 0
+                            : ~ i to tl
+                            ? & > to from == ( string_get t - to 1 ) 47 { = to - to 1 } {}
+                            ( vec_push [String] pats ( string_substr t from - to from ) )
+                        } {}
+                        ( string_free t )
+                        ( string_free raw )
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( vec_free [String] lines )
+            ( string_free text )
+        }
+        F _ → {}
+    }
+    ( string_free path )
+    ^ pats
+}
+
+@ __pack_gitignored ( Vec String ) pats s name → b {
+    : i n ( vec_len [String] pats )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] pats k ) {
+            T pat → {
+                : s ps ( string_data pat )
+                ? != 0 ( nurl_str_eq ps name ) { ^ T } {}
+                // `*.ext`
+                ? & > ( nurl_str_len ps ) 1 == ( nurl_str_get ps 0 ) 42 {
+                    : s ext ( nurl_str_slice ps 1 - ( nurl_str_len ps ) 1 )
+                    : b hit ( __pack_has_ext name ext )
+                    ? hit { ^ T } {}
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
     ^ F
 }
 
 // Recursively collect files under `root`/`rel` into `out` as TarEntries
 // keyed by their path relative to `root`. Returns 0 on success, 1 on I/O
 // failure.
-@ __pack_collect s root s rel ( Vec TarEntry ) out → i {
+@ __pack_collect s root s rel ( Vec TarEntry ) out ( Vec String ) ignores → i {
     : String dir ( string_from root )
     ? > ( nurl_str_len rel ) 0 {
         ( string_push_char dir 47 )
         ( string_push_str dir rel )
     } {}
+    // This directory's own `.gitignore`, on top of what the parents said.
+    : ( Vec String ) here ( __pack_read_ignores ( string_data dir ) )
+    : ( Vec String ) scope ( vec_new [String] )
+    : ~ i ci 0
+    ~ < ci ( vec_len [String] ignores ) {
+        ?? ( vec_get [String] ignores ci ) {
+            T pp → ( vec_push [String] scope ( string_clone pp ) )
+            F _ → {}
+        }
+        = ci + ci 1
+    }
+    ( vec_extend [String] scope here )
+    ( vec_free [String] here )
     : !( Vec String ) IoErr lr ( dir_list ( string_data dir ) )
     : ~ i rc 0
     ?? lr {
@@ -158,7 +310,8 @@ $ `stdlib/ext/http_cli.nu`
                 ?? eo {
                     T nm → {
                         : s nm_s ( string_data nm )
-                        ? ! ( __pack_ignored nm_s ) {
+                        : b skip | ( __pack_ignored nm_s ) ( __pack_gitignored scope nm_s )
+                        ? ! skip {
                             : String relpath ( string_new )
                             ? > ( nurl_str_len rel ) 0 {
                                 ( string_push_str relpath rel )
@@ -172,12 +325,21 @@ $ `stdlib/ext/http_cli.nu`
                             ? == t 1 {
                                 : !( Vec u ) IoErr fb ( read_file_bytes ( string_data full ) )
                                 ?? fb {
-                                    T bytes → ( vec_push [TarEntry] out ( tar_entry_file ( string_data relpath ) bytes ) )
+                                    T bytes → {
+                                        // The extensionless-binary test needs the
+                                        // CONTENT, so it runs here rather than in
+                                        // __pack_ignored — the bytes are already
+                                        // read, so it costs no extra I/O.
+                                        ? & ( __pack_extensionless nm_s )
+                                        ( __pack_is_executable_image bytes )
+                                        { ( vec_free [u] bytes ) }
+                                        { ( vec_push [TarEntry] out ( tar_entry_file ( string_data relpath ) bytes ) ) }
+                                    }
                                     F _ → { = rc 1 }
                                 }
                             } {
                                 ? == t 2 {
-                                    : i sub ( __pack_collect root ( string_data relpath ) out )
+                                    : i sub ( __pack_collect root ( string_data relpath ) out scope )
                                     ? != sub 0 { = rc 1 } {}
                                 } {}
                             }
@@ -193,13 +355,44 @@ $ `stdlib/ext/http_cli.nu`
             ( vec_free [String] entries )
         }
     }
+    ( vec_free_with [String] scope \ String p → v { ( string_free p ) } )
     ( string_free dir )
     ^ rc
 }
 
+// The paths `pkg_pack` would put in the tarball, in walk order. What a
+// publisher actually needs to see before uploading: the packer's job is
+// deciding what is source, and it used to make that decision in total
+// silence — a shipped `.templates/` dropped and a 540 KB binary added
+// both looked exactly like success.
+@ pkg_pack_list s root → !( Vec String ) PackErr {
+    : ( Vec TarEntry ) ents ( vec_new [TarEntry] )
+    : ( Vec String ) ignores ( __pack_read_ignores root )
+    : i cr ( __pack_collect root `` ents ignores )
+    ( vec_free_with [String] ignores \ String p → v { ( string_free p ) } )
+    ? != cr 0 {
+        ( tar_entries_free ents )
+        ^ @ !( Vec String ) PackErr { F # PackErr PackReadFailed }
+    } {}
+    : ( Vec String ) names ( vec_new [String] )
+    : i n ( vec_len [TarEntry] ents )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [TarEntry] ents k ) {
+            T e → ( vec_push [String] names ( string_clone . e path ) )
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( tar_entries_free ents )
+    ^ @ !( Vec String ) PackErr { T names }
+}
+
 @ pkg_pack s root → !( Vec u ) PackErr {
     : ( Vec TarEntry ) ents ( vec_new [TarEntry] )
-    : i cr ( __pack_collect root `` ents )
+    : ( Vec String ) ignores ( __pack_read_ignores root )
+    : i cr ( __pack_collect root `` ents ignores )
+    ( vec_free_with [String] ignores \ String p → v { ( string_free p ) } )
     ? != cr 0 {
         ( tar_entries_free ents )
         ^ @ !( Vec u ) PackErr { F # PackErr PackReadFailed }

@@ -3029,6 +3029,32 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                         ( nurl_print ( string_data reg ) )
                         ( nurl_print `\n` )
                         ? dry {
+                            // What is IN the tarball, not just how big it is.
+                            // The packer decides what counts as source, and a
+                            // wrong answer in either direction used to look
+                            // exactly like success.
+                            ?? ( pkg_pack_list `.` ) {
+                                T files → {
+                                    ( nurl_print `dry-run: ` )
+                                    ( nurl_print ( nurl_str_int ( vec_len [String] files ) ) )
+                                    ( nurl_print ` files:\n` )
+                                    : i fn ( vec_len [String] files )
+                                    : ~ i fk 0
+                                    ~ < fk fn {
+                                        ?? ( vec_get [String] files fk ) {
+                                            T fp → {
+                                                ( nurl_print `  ` )
+                                                ( nurl_print ( string_data fp ) )
+                                                ( nurl_print `\n` )
+                                            }
+                                            F _ → {}
+                                        }
+                                        = fk + fk 1
+                                    }
+                                    ( vec_free_with [String] files \ String q → v { ( string_free q ) } )
+                                }
+                                F _ → {}
+                            }
                             ( nurl_print `dry-run: every gate passed; nothing was uploaded.\n` )
                             ( vec_free [u] digest )
                             ( string_free hex )
