@@ -1,0 +1,88 @@
+# default.toml — the stock light look.
+#
+# Every key the renderer reads is listed here, so this file doubles as the
+# reference for writing another one. Any key may be omitted; the renderer
+# falls back to the value shown in the comment.
+#
+# Per-shape overrides live under [node.<shape>] and per-line-style overrides
+# under [edge.<style>]; a lookup tries the specific table first and the
+# general one second. Shapes: rect round stadium subroutine cylinder circle
+# diamond hexagon parallelogram parallelogram-alt trapezoid trapezoid-alt
+# flag. Line styles: solid dotted thick.
+
+name = "default"
+description = "Indigo on white — the stock look."
+default = true
+
+[canvas]
+background = "#ffffff"
+padding = 28
+font_family = "system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+font_size = 14
+css = ".mmd-node{transition:none}"
+
+[layout]
+rank_gap = 74          # distance between two layers
+node_gap = 34          # distance between siblings in one layer
+pad_x = 18             # label inset, horizontal
+pad_y = 12             # label inset, vertical
+min_width = 62
+min_height = 42
+line_height = 19
+char_scale = 100       # percent applied to the estimated glyph widths
+
+[node]
+fill = "#eef2ff"
+stroke = "#4f46e5"
+stroke_width = 1.6
+radius = 7
+text = "#1e1b4b"
+font_weight = "500"
+inset = 18             # slant/notch depth for the angled shapes
+
+[node.diamond]
+fill = "#fef3c7"
+stroke = "#d97706"
+text = "#78350f"
+
+[node.circle]
+fill = "#dcfce7"
+stroke = "#16a34a"
+text = "#14532d"
+
+[node.cylinder]
+fill = "#e0f2fe"
+stroke = "#0284c7"
+text = "#0c4a6e"
+rim = 9                # depth of the cylinder's top ellipse
+
+[node.hexagon]
+fill = "#fae8ff"
+stroke = "#a21caf"
+text = "#4a044e"
+
+[node.stadium]
+fill = "#e0e7ff"
+
+[node.subroutine]
+bar = 8                # inset of the two vertical rules
+
+[edge]
+stroke = "#64748b"
+stroke_width = 1.6
+arrow = "#475569"
+arrow_size = 11
+text = "#334155"
+font_size = 12
+label_fill = "#ffffff"
+label_stroke = "#e2e8f0"
+label_radius = 4
+label_pad = 5
+loop_size = 26         # bulge of a self-link
+
+[edge.dotted]
+dash = "5 5"
+
+[edge.thick]
+stroke_width = 3
+stroke = "#475569"

@@ -3090,7 +3090,19 @@
     // expression (`^ + p 1`, `^ ( f p )`).
     : i ret_first_tt ( nurl_lex_type lex )
     : s ret_first_val ( nurl_lex_val lex )
+    // `^ . p field` hands back a handle stored INSIDE a parameter — an
+    // alias of the caller's value, exactly like `^ p`. The root has to be
+    // peeked before gen_operand consumes the expression. Ownership only;
+    // the §2.8 refdepth summary stays on the strict `^ p` form.
+    : ~ s ret_first_root ( nurl_str_cat `` `` )
+    ? == ret_first_tt TT_DOT
+    { : i __rr_pk ( nurl_lex_peek_type lex )
+        ? ( is_ident_tok __rr_pk ) { = ret_first_root ( nurl_lex_peek_val lex ) } {} }
+    {}
     : ~ s val ( gen_operand lex syms cg )
+    ? & != g_borrowck 0 != 0 ( nurl_str_len ret_first_root )
+    { ( bck_record_ret_alias syms ret_first_root ) }
+    {}
     // If the returned value WAS exactly that bare identifier and it
     // names a parameter, record the parameter index: callers then learn
     // this function may return that argument, propagating a passed-in
@@ -4878,9 +4890,13 @@
     != 0 ( nurl_str_starts cn `vec_get` ) `1` `` )
     // Lint-only view provenance — the sibling of the channel set on the
     // other call path; both have to publish it or the summary reaches
-    // only half the call sites.
+    // only half the call sites. The §2.2 returned-handle summary answers
+    // the same question for a callee that hands back a parameter's own
+    // handle, so it counts as a view here too.
+    : s __rvw ( nurl_sym_get g_fn_ret_view cn )
     ( nurl_sym_def syms `__last_call_ret_view__`
-    ( nurl_sym_get g_fn_ret_view cn ) )
+    ? != 0 ( nurl_str_len __rvw ) __rvw
+    ( nurl_sym_get g_fn_ret_alias cn ) )
 }
 
 // gen_inout_field_addr: lex is positioned at the TT_DOT of an
@@ -7353,9 +7369,16 @@
     != 0 ( nurl_str_starts fname `vec_get` ) `1` `` )
     // Lint-only view provenance (see g_fn_ret_view): kept in its own
     // channel so it cannot reach the auto-drop decision that
-    // __last_value_borrow__ drives.
+    // __last_value_borrow__ drives. The §2.2 returned-handle summary
+    // answers the same question one shape further out — a function that
+    // may hand back a PARAMETER's handle (`@ f Holder h → String { ^ . h
+    // s }`) returns an alias, not a fresh allocation — so it counts as a
+    // view here too. Without it the owned-temporary lint reads such a
+    // result as a leak the caller has to bind.
+    : s __rview ( nurl_sym_get g_fn_ret_view fname )
     ( nurl_sym_def syms `__last_call_ret_view__`
-    ( nurl_sym_get g_fn_ret_view fname ) )
+    ? != 0 ( nurl_str_len __rview ) __rview
+    ( nurl_sym_get g_fn_ret_alias fname ) )
     : s rl ( nurl_sym_get syms fname )
     : s rlt ? == 0 ( nurl_str_len rl ) `i64` rl
     ? ( seq rlt `void` )
@@ -7909,6 +7932,7 @@
         : i bck_arg_tt ( nurl_lex_type lex )
         : s bck_arg_val ( nurl_lex_val lex )
         : i bck_arg_line ( nurl_lex_line lex )
+        : i bck_arg_col ( nurl_lex_col lex )
         // Dangling-borrow tracking (see __ptr_kill): the FIRST argument of
         // a borrow producer names the container the pointer will point
         // into; the first argument of a container mutator names the
@@ -8247,6 +8271,75 @@
         : b builtin_escape_slot & is_escape_call ! & vec_family_call == arg_idx 0
         : b arg_pos_escapes | builtin_escape_slot
         ( str_contains_word callee_escapes ( nurl_str_int arg_idx ) )
+        // Lint: an allocation owned by nothing (docs/MEMORY.md §1).
+        //
+        // `( f ( g x ) )` where `g` returns a FRESH handle and `f` only
+        // reads it leaves that handle owned by no binding, so nothing ever
+        // frees it — `( nurl_eprint ( nurl_str_int n ) )` leaks one string
+        // per call. The cure is one line: bind it, pass the binding.
+        //
+        // Only flagged when the outer callee provably does NOT take the
+        // value over: not a destructor, not a `sink` position, not one the
+        // callee embeds in an aggregate (`vec_push`, `json_obj_set`, …),
+        // not an escaping position. Those are the routes by which a fresh
+        // allocation legitimately ends its life at a call site.
+        ? & & & & != g_lint 0 == bck_arg_tt TT_LPAREN
+        ( lint_in_top_file )
+        ! | | is_consume_call arg_pos_escapes
+        | ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+        ( str_contains_word ( nurl_sym_get g_fn_embeds fname ) ( nurl_str_int arg_idx ) )
+        == 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_view__` ) )
+        { ? | ( lint_is_manual_handle at )
+            != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
+            { ( lint_warn ( vis_current_src_file ) bck_arg_line bck_arg_col
+                ( nurl_str_cat3
+                `this allocation is owned by nothing - '` fname
+                `' only reads it, so nothing frees it. Bind it first (': T x ( ... )') and pass the binding` ) ) }
+            {} }
+        {}
+        // §2.1b Freeing what the compiler already frees.
+        //
+        // `nurl_free` is excluded from the destructor move rule above
+        // because it usually reclaims raw `nurl_alloc` memory that
+        // nothing tracks. But when its argument names a binding the
+        // auto-drop layer DID register — an owned string from
+        // `nurl_str_slice` / `nurl_str_cat`, an owned slice, a `Drop`
+        // value, a struct with owned fields — the scope exit will free
+        // that same pointer again. docs/MEMORY.md §1 states the rule in
+        // prose ("do not then also free it by hand"); until this check
+        // the compiler let the program say it anyway and the double
+        // free surfaced only under ASan, in whatever unrelated code
+        // reused the block.
+        //
+        // The identifier comes from `__last_ident_name__` rather than
+        // the argument's first token, so the cast spelling every FFI
+        // pointer uses — `( nurl_free # s piece )` — is covered as
+        // exactly as the bare one. There is no legitimate counter-case:
+        // reassigning an owned binding already frees its previous value,
+        // and a binding whose ownership left it is not registered.
+        //
+        // NOT inside a closure body. There, registration is not yet a
+        // proof that a drop is emitted: a closure that returns through
+        // `^` runs the epilogue (gen_ret_term), but one that falls off
+        // its end emits a bare `ret` and drops nothing, so the hand-
+        // written free is what keeps that binding from leaking. Until
+        // the two exits agree, the rule is only sound outside them.
+        ? & & & != g_borrowck 0 == g_bck_closure_depth 0
+        ( seq fname `nurl_free` ) == arg_idx 0
+        { : s nf_id ( nurl_sym_get syms `__last_ident_name__` )
+            ? != 0 ( nurl_str_len nf_id )
+            { : s nf_ptr ( nurl_sym_get2 syms nf_id `__ptr` )
+                ? & != 0 ( nurl_str_len nf_ptr )
+                | | ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) nf_ptr )
+                ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) nf_id )
+                | ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) nf_ptr )
+                ( str_contains_word ( nurl_sym_get syms `__owned_struct_fields__` ) nf_ptr )
+                { ( die lex ( nurl_str_cat3
+                    `'` nf_id
+                    `' is auto-dropped at the end of its scope, so freeing it here frees it twice - delete this call. Only memory the compiler does NOT track (a raw 'nurl_alloc' buffer, an FFI pointer) needs a hand-written 'nurl_free'` ) ) }
+                {} }
+            {} }
+        {}
         // Ownership, not lifetime: an argument the callee stores into an
         // aggregate belongs to that structure now, so the caller has
         // nothing left to free. Kept apart from the escape check below

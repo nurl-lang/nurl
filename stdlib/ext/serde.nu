@@ -157,8 +157,7 @@ $ `stdlib/ext/msgpack.nu`
 // Mirrors JsonSerialize. A user type ships `% TomlSerialize Foo {
 // @ to_toml Foo x → TomlValue { ... } }`, building a TTable with
 // `@ TomlEntry { key value }` rows. Pair `to_toml` with
-// `toml_stringify` to reach TOML text. There is no `f` impl —
-// TomlValue (toml.nu's parser AST) has no float variant.
+// `toml_stringify` to reach TOML text.
 
 % TomlSerialize [T] {
     @ to_toml T x → TomlValue
@@ -166,6 +165,10 @@ $ `stdlib/ext/msgpack.nu`
 
 % TomlSerialize i {
     @ to_toml i n → TomlValue { ^ @ TomlValue { TInt n } }
+}
+
+% TomlSerialize f {
+    @ to_toml f x → TomlValue { ^ @ TomlValue { TFloat x } }
 }
 
 % TomlSerialize b {
@@ -190,6 +193,16 @@ $ `stdlib/ext/msgpack.nu`
     ^ ?? v {
         TInt n → @ !i ParseErr { T n }
         _ → @ !i ParseErr { F @ ParseErr { BadFormat } }
+    }
+}
+
+// An integer widens, matching `toml_as_float`: a config that writes a
+// whole number where the reader wants a float is not a format error.
+@ from_toml_f TomlValue v → !f ParseErr {
+    ^ ?? v {
+        TFloat x → @ !f ParseErr { T x }
+        TInt n → @ !f ParseErr { T # f n }
+        _ → @ !f ParseErr { F @ ParseErr { BadFormat } }
     }
 }
 

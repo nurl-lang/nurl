@@ -1,0 +1,5 @@
+# Built locally by `../../nurl.sh src/main.nu mermaid-server`; the registry
+# ships sources only.
+/mermaid-server
+*.ll
+*.svg

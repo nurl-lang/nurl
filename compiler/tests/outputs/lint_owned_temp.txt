@@ -1,0 +1,6 @@
+COMPILE OK
+WARNINGS
+compiler/tests/lint_owned_temp.nu:52:25: warning: this allocation is owned by nothing - 'takes' only reads it, so nothing frees it. Bind it first (': T x ( ... )') and pass the binding
+compiler/tests/lint_owned_temp.nu:53:32: warning: this allocation is owned by nothing - 'nurl_str_len' only reads it, so nothing frees it. Bind it first (': T x ( ... )') and pass the binding
+compiler/tests/lint_owned_temp.nu:55:25: warning: this allocation is owned by nothing - 'takes' only reads it, so nothing frees it. Bind it first (': T x ( ... )') and pass the binding
+compiler/tests/lint_owned_temp.nu:56:32: warning: this allocation is owned by nothing - 'nurl_str_len' only reads it, so nothing frees it. Bind it first (': T x ( ... )') and pass the binding

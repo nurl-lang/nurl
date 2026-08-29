@@ -1,0 +1,69 @@
+# dark.toml — slate on near-black, for dark READMEs and terminals.
+
+name = "dark"
+description = "Slate on near-black."
+
+[canvas]
+background = "#0b1120"
+padding = 28
+font_family = "system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+font_size = 14
+
+[layout]
+rank_gap = 74
+node_gap = 34
+pad_x = 18
+pad_y = 12
+min_width = 62
+min_height = 42
+line_height = 19
+
+[node]
+fill = "#1e293b"
+stroke = "#818cf8"
+stroke_width = 1.6
+radius = 7
+text = "#e2e8f0"
+font_weight = "500"
+inset = 18
+
+[node.diamond]
+fill = "#422006"
+stroke = "#f59e0b"
+text = "#fde68a"
+
+[node.circle]
+fill = "#052e16"
+stroke = "#4ade80"
+text = "#bbf7d0"
+
+[node.cylinder]
+fill = "#082f49"
+stroke = "#38bdf8"
+text = "#bae6fd"
+rim = 9
+
+[node.hexagon]
+fill = "#3b0764"
+stroke = "#d946ef"
+text = "#f5d0fe"
+
+[edge]
+stroke = "#94a3b8"
+stroke_width = 1.6
+arrow = "#cbd5e1"
+arrow_size = 11
+text = "#cbd5e1"
+font_size = 12
+label_fill = "#0b1120"
+label_stroke = "#334155"
+label_radius = 4
+label_pad = 5
+loop_size = 26
+
+[edge.dotted]
+dash = "5 5"
+
+[edge.thick]
+stroke_width = 3
+stroke = "#e2e8f0"
