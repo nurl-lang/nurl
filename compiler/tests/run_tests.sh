@@ -195,6 +195,17 @@ run_one() {
 
     if [[ -n "$(is_skipped "$name")" ]]; then echo SKIP; return; fi
 
+    # ── nobck_* — the `--no-borrowck` escape hatch, exercised. The
+    #             checker is a diagnostic pass, so switching it off must
+    #             change nothing but the diagnostics: the program still
+    #             compiles, links and runs, and the record below is the
+    #             ordinary one. Nothing in the tree ran this flag until a
+    #             closure body's unguarded save/restore of the checker's
+    #             own state turned it into an internal compiler panic on
+    #             every program containing a closure.
+    local nbflag=""
+    [[ "$name" == nobck_* ]] && nbflag="--no-borrowck"
+
     # ── borrow_* — violations are compile errors; the diagnostic is
     #               baselined. borrow_strict_* only fire under the
     #               stricter checker flag.
@@ -256,7 +267,7 @@ run_one() {
         local werr=""
         [[ "$name" == should_warn_* ]] && werr="$WORKDIR/$name.werr" && rm -f "$werr"
         local cerr="${werr:-$err}"
-        if ! "$NURLC" "$src" > "$ll" 2>"$cerr"; then
+        if ! "$NURLC" $nbflag "$src" > "$ll" 2>"$cerr"; then
             strip_root "$cerr"
             { echo "COMPILE FAIL"; echo "ERRORS"; } > "$act"; append_capped "$act" "$cerr"
         elif ! "$CLANG" -O2 -flto $OPAQUE_FLAGS "$ll" "$RUNTIME" $LINK_LIBS -o "$bin" 2>"$err"; then

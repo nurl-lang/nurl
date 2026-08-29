@@ -194,6 +194,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--no-borrowck` was an internal compiler panic on any program with a
+  closure.** Fixed, and the flag is now exercised.
+
+  ```
+  internal compiler error: nurlc itself panicked
+    panic message: remainder by zero
+  ```
+
+  `gen_closure_expr` saves the borrow checker's per-function state around a
+  closure body and restores it after — the closure is its own function for
+  checking purposes. That save/restore reached for `g_bck` without the gate
+  every other site uses, and `g_bck` only *exists* when the checker is on
+  (`main` builds it under the same flag). With `--no-borrowck` the handle
+  was 0, so `nurl_sym_get` hashed the key modulo a zero-capacity table.
+  Twelve lines of NURL and one closure were enough to reproduce it.
+
+  The escape hatch documented for "bisecting a suspected false positive"
+  therefore could not be used on most real programs. It survived because
+  nothing in the tree ran the flag: not `build.sh`, not the 906-file
+  corpus, not a workflow. `compiler/tests/nobck_closure.nu` now runs it
+  over five closure shapes — statement body, value body, an owned-string
+  binding, a capture, and a closure nested in a closure — and the runner
+  gives any `nobck_*` test the ordinary COMPILE / LINK / EXIT / OUTPUT
+  record, because the flag has to leave a program not just compiling but
+  running. Verified the test panics on the pre-fix compiler and passes on
+  the fixed one, and swept `--no-borrowck` over the corpus, the stdlib, the
+  examples and every package source: 1413 files, zero panics.
+
 - **`nurl_free` was quadratic in the number of live allocations inside a
   `recover` extent.** The panic-unwind journal records every owned heap
   value registered for auto-drop while a recover frame is active, and
