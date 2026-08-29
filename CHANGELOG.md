@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.55.0] — 2026-08-29
+
 ### Added
 
 - **`nurl_free` on a binding the compiler already drops is now an
@@ -101,6 +103,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/render`, `/render.json`, `/templates` and a live playground at `/`;
   MCP serves `mermaid_render`, `mermaid_templates` and `mermaid_validate`
   at `/mcp` or over `--stdio`.
+
+- **Four registry packages, and the manifest gate that stopped one of
+  them.** `whisper` 1.1.0 fused a decode-step attention shaped for ONE
+  query — the composed path cost 95 us per cross-attention and 33 us per
+  self-attention, 54 % of a decode step, against 31 us for the vocabulary
+  projection that does sixty times the arithmetic. `embed` 0.2.0 stopped
+  recompiling NVRTC per input shape (385 ms vs 36 ms) and put a bound on
+  its exact-size buffer pool; 0.3.0 made a batch of texts one forward
+  instead of N, taking a 16-text request from 28 to ~500 texts/s.
+  `gpukit` grew the batch-native attention and the device-ops both lean
+  on, and `tokenizer` its share of the unigram path.
+
+  Publishing `embed` surfaced the rest: `nurlpkg`'s
+  publish gate refuses a package whose dependency requirement excludes the
+  version it was built against, and **ten manifests still asked for
+  `http ^0.3`** while `http` has been 0.4.0 since #1014 — so every install
+  from the registry compiled against different code than anything in this
+  tree was tested on. The gate only fires on the package being published,
+  which is why it stayed invisible until one went up. All ten now ask for
+  `^0`, the major-only form `swarm-mcp` already used.
 
 - **The `simd` clone the dispatcher never picks is now run against the
   goldens** — `compiler/tests/simd_baseline_agree.sh`, wired into
@@ -16440,7 +16462,12 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.50.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.55.0...HEAD
+[0.55.0]: https://github.com/nurl-lang/nurl/compare/v0.54.0...v0.55.0
+[0.54.0]: https://github.com/nurl-lang/nurl/compare/v0.53.0...v0.54.0
+[0.53.0]: https://github.com/nurl-lang/nurl/compare/v0.52.0...v0.53.0
+[0.52.0]: https://github.com/nurl-lang/nurl/compare/v0.51.0...v0.52.0
+[0.51.0]: https://github.com/nurl-lang/nurl/compare/v0.50.0...v0.51.0
 [0.50.0]: https://github.com/nurl-lang/nurl/compare/v0.49.0...v0.50.0
 [0.49.0]: https://github.com/nurl-lang/nurl/compare/v0.48.0...v0.49.0
 [0.48.0]: https://github.com/nurl-lang/nurl/compare/v0.47.0...v0.48.0

@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-27 · Current release: **0.54.0** · Language: **Grammar
+_Last reviewed: 2026-08-29 · Current release: **0.55.0** · Language: **Grammar
 v2.7** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -67,7 +67,10 @@ What is solid today:
   first sweep found the two contexts where a *definite* double free still
   compiled clean and segfaulted at run time — a `??` arm and a closure
   body, the latter because the checker was switched off wholesale inside
-  one — and both are now analysed.
+  one — and both are now analysed. Since 0.55.0 a closure body's two
+  exits agree: one that falls off its end reclaims what it bound, where
+  only one that returned through `^` did, and `--no-borrowck` is a flag
+  the corpus runs rather than one nothing had ever exercised.
 - **Concurrency.** A stackful M:N work-stealing async runtime with **no
   `async`/`await` colouring** — ordinary code runs unchanged under the
   scheduler — plus threads/mutex/cond, typed channels, and Go-style `??`
