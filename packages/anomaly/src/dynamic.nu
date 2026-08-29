@@ -269,27 +269,6 @@ $ `src/store.nu`
 
 // ── Scoring ───────────────────────────────────────────────────────────
 
-// The live decision margin of a version comes from the CURRENT metadata,
-// not from the forest blob — so margin changes (fine-tune, config PUT)
-// take effect immediately, without a retrain. The blob's stored margin is
-// only the fallback for versions no longer present in the metadata.
-@ __an_margin_of * Meta mm s vname f dflt → f {
-    : i nv ( vec_len [VerCfg] . mm versions )
-    : ~ i k 0
-    ~ < k nv {
-        ?? ( vec_get [VerCfg] . mm versions k ) {
-            T vc → {
-                ? == ( nurl_str_eq ( string_data . vc vname ) vname ) 1 {
-                    ^ . vc decision_margin
-                } {}
-            }
-            F _ → {}
-        }
-        = k + k 1
-    }
-    ^ dflt
-}
-
 // Score an encoded point against every trained version. `ready` is false
 // until the model has trained at least once AND the ring holds min_points.
 // The last window_size−1 ring points before the current one, projected and
@@ -366,7 +345,7 @@ $ `src/store.nu`
                             ( vec_extend [f] tail x )
                             ? == ( vec_len [f] tail ) . vm n_cols {
                                 : f dfw ( anom_decision vm tail )
-                                : f marginw ( __an_margin_of mm ( string_data . vm vname ) . vm margin )
+                                : f marginw ( meta_version_margin mm ( string_data . vm vname ) . vm margin )
                                 : b hitw <= dfw - 0.0 marginw
                                 ? hitw { = any T } {}
                                 ? || first < dfw worst { = worst dfw } {}
@@ -386,7 +365,7 @@ $ `src/store.nu`
                     }
                 } {
                     : f df ( anom_decision vm x )
-                    : f margin ( __an_margin_of mm ( string_data . vm vname ) . vm margin )
+                    : f margin ( meta_version_margin mm ( string_data . vm vname ) . vm margin )
                     : b hit <= df - 0.0 margin
                     ? hit { = any T } {}
                     ? || first < df worst { = worst df } {}
@@ -405,12 +384,14 @@ $ `src/store.nu`
     }
     // The autoencoder verdict: reconstruction error against the trained
     // threshold, on the point projected onto the AE's OWN frozen feature
-    // order (independent of the forests' scaler and current feats).
+    // order (independent of the forests' scaler and current feats). Muted
+    // while its VerCfg is disabled — the net is kept, only the verdict
+    // goes away, because re-training it is not a checkbox-priced action.
     : AeModel cae . mo ae
-    ? . cae trained {
+    ? & . cae trained ( meta_version_enabled mm `autoencoder` T ) {
         : ( Vec f ) araw ( anomaly_project p . cae feats )
         : f adf ( ae_decision cae araw )
-        : f amargin ( __an_margin_of mm `autoencoder` 0.05 )
+        : f amargin ( meta_version_margin mm `autoencoder` 0.05 )
         : b ahit <= adf - 0.0 amargin
         ? ahit { = any T } {}
         ? || first < adf worst { = worst adf } {}
@@ -865,7 +846,7 @@ $ `src/store.nu`
                     = r + r 1
                 }
                 ( vec_free [f] dfs )
-                : f old ( __an_margin_of mm ( string_data . vm vname ) . vm margin )
+                : f old ( meta_version_margin mm ( string_data . vm vname ) . vm margin )
                 : f adjusted * ( float_abs lowest ) 0.95
                 : b applied ( model_set_margin mo ( string_data . vm vname ) adjusted )
                 ( vec_push [FtVer] items @ FtVer {
@@ -967,4 +948,145 @@ $ `src/store.nu`
         = . mo next_train_at + . mm last_trained ( __an_sched_step mo )
     } {}
     ( store_save_meta . mo store ( string_data . mo mname ) mm )
+}
+
+// ── Editing a live model's metadata ───────────────────────────────────
+
+// Drop `vname`'s forest, in memory and on disk. A disabled version starts
+// from scratch when it is re-enabled: keeping the blob would resurrect a
+// forest trained against a feature order and scaler the model has since
+// moved past, and a stale width reads as a timevector window at scoring
+// time — a wrong verdict rather than an absent one.
+@ __an_drop_forest * Model mo s vname → v {
+    : ( Vec VerModel ) kept ( vec_new [VerModel] )
+    : i nf ( vec_len [VerModel] . mo forests )
+    : ~ i k 0
+    ~ < k nf {
+        ?? ( vec_get [VerModel] . mo forests k ) {
+            T vm → {
+                ? == ( nurl_str_eq ( string_data . vm vname ) vname ) 1 {
+                    ( anom_vermodel_free vm )
+                } { ( vec_push [VerModel] kept vm ) }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free [VerModel] . mo forests )
+    = . mo forests kept
+    ( store_delete_forest . mo store ( string_data . mo mname ) vname )
+}
+
+// Every forest whose version is now off (or gone from the metadata) loses
+// its blob. The autoencoder has no forest, so it is never touched here.
+@ __an_prune_disabled * Model mo → v {
+    : *Meta mm . mo meta
+    : ( Vec String ) doomed ( vec_new [String] )
+    : i nf ( vec_len [VerModel] . mo forests )
+    : ~ i k 0
+    ~ < k nf {
+        ?? ( vec_get [VerModel] . mo forests k ) {
+            T vm → {
+                ? ( meta_version_enabled mm ( string_data . vm vname ) F ) {} {
+                    ( vec_push [String] doomed ( string_from ( string_data . vm vname ) ) )
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    : i nd ( vec_len [String] doomed )
+    = k 0
+    ~ < k nd {
+        ?? ( vec_get [String] doomed k ) {
+            T d → { ( __an_drop_forest mo ( string_data d ) ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] doomed \ String x → v { ( string_free x ) } )
+}
+
+// Turn one version on or off (persisted immediately). Disabling drops the
+// version's forest, so its verdict is gone from the very next detect and
+// re-enabling it costs a retrain. The `autoencoder` version is only muted:
+// its net carries its OWN frozen feature order, so it stays valid across
+// retrains and is far too expensive to throw away on a checkbox. Returns F
+// for an unknown version name.
+@ model_set_version_enabled * Model mo s vname b on → b {
+    : *Meta mm . mo meta
+    : i at ( meta_find_version mm vname )
+    ? < at 0 { ^ F } {}
+    ?? ( vec_get [VerCfg] . mm versions at ) {
+        T vc → {
+            : ~ VerCfg upd vc
+            = . upd enabled on
+            : b _o ( vec_set [VerCfg] . mm versions at upd )
+        }
+        F _ → {}
+    }
+    ? on {} {
+        ? == ( nurl_str_eq vname `autoencoder` ) 1 {} { ( __an_drop_forest mo vname ) }
+    }
+    ( store_save_meta . mo store ( string_data . mo mname ) mm )
+    ^ T
+}
+
+// Apply an editable-metadata patch:
+//
+//   { "schedule": { "below_max": N, "at_max": N },
+//     "versions": { "<name>": { <any VerCfg field> }, ... },
+//     "replace_versions": bool }
+//
+// Both top-level keys are optional but at least one must be present. The
+// learned parts of the metadata (columns, categories, feature order,
+// scaler) are never taken from the client — see prep.nu. Per-version
+// fields split two ways: `enabled` and `decision_margin` bite at the very
+// next detect, the geometry and forest-size fields at the next retrain.
+// Returns "" on success, else the reason (400-worthy).
+@ model_apply_meta_patch * Model mo Json patch → String {
+    ? ( json_is_obj patch ) {} { ^ ( string_from `metadata must be a JSON object` ) }
+    : *Meta mm . mo meta
+    : ~ b touched F
+
+    ?? ( json_obj_get patch `schedule` ) {
+        T sj → {
+            ? ( json_is_obj sj ) {} { ^ ( string_from `schedule must be a JSON object` ) }
+            : i below ( _an_jint sj `below_max` . mm sched_below )
+            : i atmax ( _an_jint sj `at_max` . mm sched_at_max )
+            ? & > below 0 > atmax 0 {} {
+                ^ ( string_from `schedule.below_max and schedule.at_max must be positive` )
+            }
+            = . mm sched_below below
+            = . mm sched_at_max atmax
+            = touched T
+        }
+        F _ → {}
+    }
+
+    ?? ( json_obj_get patch `versions` ) {
+        T vj → {
+            : ~ b repl F
+            ?? ( json_obj_get patch `replace_versions` ) {
+                T rj → { = repl ( json_as_bool rj ) }
+                F _ → {}
+            }
+            ? < ( meta_apply_versions_json mm vj repl ) 0 {
+                ^ ( string_from `versions must be a JSON object of version configs` )
+            } {}
+            = touched T
+        }
+        F _ → {}
+    }
+
+    ? touched {} {
+        ^ ( string_from `nothing to update: expected a schedule and/or versions object` )
+    }
+
+    ( __an_prune_disabled mo )
+    ? ( model_is_trained mo ) {
+        = . mo next_train_at + . mm last_trained ( __an_sched_step mo )
+    } {}
+    ( store_save_meta . mo store ( string_data . mo mname ) mm )
+    ^ ( string_new )
 }

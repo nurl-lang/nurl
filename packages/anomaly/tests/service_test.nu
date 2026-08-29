@@ -216,6 +216,76 @@ $ `src/service.nu`
     ( check == . sch2 status 400 `svc: empty schedule -> 400` )
     ( json_free . sch2 body )
 
+    // Editable metadata: PUT /models/dynamic/<m>/metadata.
+    : SvcOut mu ( fire r `PUT` `/models/dynamic/svc/metadata` ``
+    `{"versions":{"weekly":{"enabled":false},"daily":{"decision_margin":0.44}},"schedule":{"below_max":30,"at_max":600}}` )
+    ( check == . mu status 200 `svc: metadata PUT -> 200` )
+    : ~ b patch_applied F
+    : ~ b weekly_off F
+    : ~ i below2 -1
+    ?? ( json_obj_get . mu body `metadata` ) {
+        T md → {
+            ?? ( json_obj_get md `versions` ) {
+                T vs → {
+                    ?? ( json_obj_get vs `daily` ) {
+                        T d → {
+                            ?? ( json_obj_get d `decision_margin` ) {
+                                T dm → {
+                                    ?? ( json_num_as_f dm ) {
+                                        T x → { = patch_applied < ( float_abs - x 0.44 ) 0.000001 }
+                                        F _ → {}
+                                    }
+                                }
+                                F _ → {}
+                            }
+                        }
+                        F _ → {}
+                    }
+                    ?? ( json_obj_get vs `weekly` ) {
+                        T w → { = weekly_off == ( jbool_of w `enabled` ) F }
+                        F _ → {}
+                    }
+                }
+                F _ → {}
+            }
+            ?? ( json_obj_get md `schedule` ) {
+                T sc → { = below2 ( jint_of sc `below_max` ) }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check patch_applied `svc: metadata PUT sets a version margin` )
+    ( check weekly_off `svc: metadata PUT disables a version` )
+    ( check == below2 30 `svc: metadata PUT sets the schedule` )
+    ( json_free . mu body )
+
+    : SvcOut mu2 ( fire r `PUT` `/models/dynamic/svc/metadata` `` `{"versions":[]}` )
+    ( check == . mu2 status 400 `svc: metadata PUT rejects a non-object versions` )
+    ( json_free . mu2 body )
+    : SvcOut mu3 ( fire r `PUT` `/models/dynamic/svc/metadata` `` `{}` )
+    ( check == . mu3 status 400 `svc: an empty metadata patch -> 400` )
+    ( json_free . mu3 body )
+    : SvcOut mu4 ( fire r `PUT` `/models/dynamic/nope/metadata` `` `{"schedule":{"below_max":5,"at_max":5}}` )
+    ( check == . mu4 status 404 `svc: metadata PUT on an unknown model -> 404` )
+    ( json_free . mu4 body )
+
+    // The metadata GET carries the autoencoder's own state.
+    : SvcOut aem ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
+    : ~ b ae_block F
+    ?? ( json_obj_get . aem body `autoencoder` ) {
+        T ab → { = ae_block == ( jbool_of ab `trained` ) F }
+        F _ → {}
+    }
+    ( check ae_block `svc: metadata carries an autoencoder block` )
+    ( json_free . aem body )
+
+    // Put weekly back so the routes below see the default version set.
+    : SvcOut mu5 ( fire r `PUT` `/models/dynamic/svc/metadata` ``
+    `{"versions":{"weekly":{"enabled":true},"daily":{"decision_margin":0.12}},"schedule":{"below_max":25,"at_max":1000}}` )
+    ( check == . mu5 status 200 `svc: metadata PUT restores the defaults` )
+    ( json_free . mu5 body )
+
     // Fine-tune.
     : SvcOut ft ( fire r `POST` `/api/dynamic/svc/finetune` `` `{}` )
     ( check == . ft status 200 `svc: finetune -> 200` )

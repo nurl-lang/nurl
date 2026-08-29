@@ -153,6 +153,16 @@ Persisted as JSON (`std/ext/json`). Fields:
 }
 ```
 
+**Editable vs learned.** `schedule` and `versions` are the user's to set
+(§6, `PUT /models/dynamic/<m>/metadata`, `model_apply_meta_patch`); everything
+else — `column_types`, `categories`, `feature_names`, `scaler` — is learned at
+each train and is never accepted from a client, because a hand-written copy
+would desync every trained forest. Within a version config, `enabled` and
+`decision_margin` take effect at the next detect; the window geometry and the
+forest size take effect at the next retrain. Disabling a forest version deletes
+its forest blob, so re-enabling costs a retrain; the `autoencoder` version is
+only muted, because its net carries its own frozen feature order.
+
 **Feature-order stability rule.** `feature_names` is authoritative once a model
 is first trained. At scoring time a point is projected onto exactly that vector:
 missing features default to `0`, unknown extras are dropped. This mirrors the
@@ -238,6 +248,19 @@ service so existing dashboards and the `modelmanager` UI keep working:
 - `POST /detect_anomalies` body = `{ file_path, model_name? }` → batch report:
   `anomaly_count`, `anomaly_percentage`, `anomaly_indices`, `has_anomalies`,
   `anomaly_details` (first 100).
+- `GET /models/dynamic/<model>/metadata` — §4.3 metadata plus an
+  `autoencoder` block (its own state lives in `autoencoder.json`, not the
+  metadata): `trained`, `enabled`, `reconstruction_threshold`,
+  `training_data_points`, `filtered_anomalies`, `decision_margin`,
+  `feature_names`, `layer_sizes`.
+- `PUT /models/dynamic/<model>/metadata` body = `{ schedule?, versions?,
+  replace_versions? }`, every field within optional (an omitted field keeps
+  its value; an unknown version name adds a version; `replace_versions`
+  deletes the versions the object omits). 400 on a shape that is not a JSON
+  object of objects, or on an empty patch. Response echoes the full metadata.
+- `POST /train/autoencoder/<model>` optional body = `{ hidden?: [int],
+  contamination?: float }` → `training_data_points`, `filtered_anomalies`,
+  `reconstruction_threshold`.
 - model-name validation: `^[a-zA-Z0-9_]+$` (reject otherwise, mirrors reference).
 
 The service is thin: parse JSON → call the library → serialise. It is

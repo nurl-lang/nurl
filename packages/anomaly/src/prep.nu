@@ -653,7 +653,7 @@ $ `stdlib/ext/json.nu`
 }
 
 // ( Vec String ) → JSON array of strings.
-@ __an_jarr_of_strs ( Vec String ) xs → Json {
+@ _an_jarr_of_strs ( Vec String ) xs → Json {
     : Json a ( json_arr_new )
     : i n ( vec_len [String] xs )
     : ~ i k 0
@@ -727,7 +727,7 @@ $ `stdlib/ext/json.nu`
                 ( json_obj_set types ( string_data c ) ( json_str_lit ( __an_kind_str kind ) ) )
                 ? == kind COL_CATEGORICAL {
                     ?? ( vec_get [( Vec String )] . m cats k ) {
-                        T cv → { ( json_obj_set cats ( string_data c ) ( __an_jarr_of_strs cv ) ) }
+                        T cv → { ( json_obj_set cats ( string_data c ) ( _an_jarr_of_strs cv ) ) }
                         F _ → {}
                     }
                 } {}
@@ -738,7 +738,7 @@ $ `stdlib/ext/json.nu`
     }
     ( json_obj_set o `column_types` types )
     ( json_obj_set o `categories` cats )
-    ( json_obj_set o `feature_names` ( __an_jarr_of_strs . m feats ) )
+    ( json_obj_set o `feature_names` ( _an_jarr_of_strs . m feats ) )
 
     : Json sc ( json_obj_new )
     ( json_obj_set sc `mean` ( __an_jarr_of_floats . m sc_mean ) )
@@ -1033,4 +1033,165 @@ $ `stdlib/ext/json.nu`
         }
         F _ → { ^ @ ?*Meta { F } }
     }
+}
+
+// ── Editable metadata (dashboard / API) ───────────────────────────────
+//
+// Two parts of the metadata are the user's to set: the retrain schedule
+// and the per-version configs. Everything else — column kinds, category
+// vocabularies, the authoritative feature order, the scaler — is learned
+// from the data at each train, and a hand-edited copy would silently
+// desync every trained forest. The helpers below therefore only ever
+// touch `versions`; the schedule lives on Meta directly.
+
+// Index of the version named `vname`, or -1.
+@ meta_find_version * Meta m s vname → i {
+    : i nv ( vec_len [VerCfg] . m versions )
+    : ~ i k 0
+    ~ < k nv {
+        ?? ( vec_get [VerCfg] . m versions k ) {
+            T vc → { ? == ( nurl_str_eq ( string_data . vc vname ) vname ) 1 { ^ k } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ -1
+}
+
+// Is version `vname` enabled? `dflt` when there is no such version.
+@ meta_version_enabled * Meta m s vname b dflt → b {
+    : i at ( meta_find_version m vname )
+    ? < at 0 { ^ dflt } {}
+    ?? ( vec_get [VerCfg] . m versions at ) { T vc → { ^ . vc enabled } F _ → { ^ dflt } }
+}
+
+// Version `vname`'s decision margin; `dflt` when there is no such version.
+// The live margin of a version always comes from the CURRENT metadata, not
+// from its forest blob — so margin changes (fine-tune, a config PUT) take
+// effect immediately, without a retrain. The blob's stored margin is only
+// the fallback for versions no longer present in the metadata.
+@ meta_version_margin * Meta m s vname f dflt → f {
+    : i at ( meta_find_version m vname )
+    ? < at 0 { ^ dflt } {}
+    ?? ( vec_get [VerCfg] . m versions at ) { T vc → { ^ . vc decision_margin } F _ → { ^ dflt } }
+}
+
+// Clamp a config into the range the trainer can actually honour, so a
+// hand-written JSON patch can never produce a version that fails to train
+// (or trains something nonsensical). `contamination` < 0 means "auto".
+@ _an_vercfg_sane VerCfg vc → VerCfg {
+    : ~ VerCfg o vc
+    ? < . o window_min 0 { = . o window_min 0 } {}
+    ? < . o window_pts 0 { = . o window_pts 0 } {}
+    ? < . o window_size 0 { = . o window_size 0 } {}
+    ? > . o window_size 0 {
+        ? < . o step_size 1 { = . o step_size 1 } {}
+    } { = . o step_size 0 }
+    // The autoencoder version has no forest: its tree counts stay 0 so the
+    // config round-trips unchanged. Every other version must be trainable.
+    ? == ( nurl_str_eq ( string_data . o vname ) `autoencoder` ) 1 {
+        ? < . o n_estimators 0 { = . o n_estimators 0 } {}
+        ? < . o max_samples 0 { = . o max_samples 0 } {}
+    } {
+        ? < . o n_estimators 1 { = . o n_estimators 1 } {}
+        ? > . o n_estimators 5000 { = . o n_estimators 5000 } {}
+        ? < . o max_samples 1 { = . o max_samples 1 } {}
+    }
+    ? <= . o contamination 0.0 { = . o contamination -1.0 } {
+        ? > . o contamination 0.5 { = . o contamination 0.5 } {}
+    }
+    ? < . o decision_margin 0.0 { = . o decision_margin 0.0 } {}
+    ^ o
+}
+
+// Patch one version config from a JSON object. Every field is optional:
+// what the object omits keeps its current value, so the dashboard can PUT
+// `{"enabled": false}` without restating the whole config.
+@ _an_vercfg_patch VerCfg vc Json vo → VerCfg {
+    : ~ VerCfg o vc
+    = . o window_min ( _an_jint vo `window_minutes` . vc window_min )
+    = . o window_pts ( _an_jint vo `window_points` . vc window_pts )
+    = . o window_size ( _an_jint vo `window_size` . vc window_size )
+    = . o step_size ( _an_jint vo `step_size` . vc step_size )
+    = . o n_estimators ( _an_jint vo `n_estimators` . vc n_estimators )
+    = . o max_samples ( _an_jint vo `max_samples` . vc max_samples )
+    ?? ( json_obj_get vo `contamination` ) {
+        T cj → {
+            ? ( json_is_num cj ) {
+                : ?f cf ( json_num_as_f cj )
+                ?? cf { T x → { = . o contamination x } F _ → {} }
+            } { = . o contamination -1.0 }
+        }
+        F _ → {}
+    }
+    ?? ( json_obj_get vo `decision_margin` ) {
+        T dj → {
+            : ?f df ( json_num_as_f dj )
+            ?? df { T x → { = . o decision_margin x } F _ → {} }
+        }
+        F _ → {}
+    }
+    ?? ( json_obj_get vo `enabled` ) { T ej → { = . o enabled ( json_as_bool ej ) } F _ → {} }
+    ^ ( _an_vercfg_sane o )
+}
+
+// Apply a `versions` JSON object (the shape meta_to_json emits) to the
+// metadata. Each key names a version and its value is a PARTIAL config;
+// a key naming no existing version ADDS one, with `_an_vercfg_of_json`'s
+// defaults filling the gaps. With `replace`, the resulting list is exactly
+// the keys given — versions the object omits are dropped, which is how the
+// advanced JSON editor deletes one. Returns the version count afterwards,
+// or -1 when `vers` is not a JSON object.
+@ meta_apply_versions_json * Meta m Json vers b replace → i {
+    ? ( json_is_obj vers ) {} { ^ -1 }
+    : ( Vec String ) keys ( json_obj_keys vers )
+    : i nk ( vec_len [String] keys )
+    : ~ i k 0
+    ~ < k nk {
+        ?? ( vec_get [String] keys k ) {
+            T vn → {
+                ?? ( json_obj_get vers ( string_data vn ) ) {
+                    T vo → {
+                        ? ( json_is_obj vo ) {
+                            : i at ( meta_find_version m ( string_data vn ) )
+                            ? >= at 0 {
+                                ?? ( vec_get [VerCfg] . m versions at ) {
+                                    T cur → {
+                                        : b _o ( vec_set [VerCfg] . m versions at ( _an_vercfg_patch cur vo ) )
+                                    }
+                                    F _ → {}
+                                }
+                            } {
+                                ( vec_push [VerCfg] . m versions
+                                ( _an_vercfg_sane ( _an_vercfg_of_json ( string_data vn ) vo ) ) )
+                            }
+                        } {}
+                    }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ? replace {
+        : ( Vec VerCfg ) kept ( vec_new [VerCfg] )
+        : i nv ( vec_len [VerCfg] . m versions )
+        = k 0
+        ~ < k nv {
+            ?? ( vec_get [VerCfg] . m versions k ) {
+                T vc → {
+                    ? ( json_obj_has vers ( string_data . vc vname ) ) {
+                        ( vec_push [VerCfg] kept vc )
+                    } { ( _an_vercfg_free vc ) }
+                }
+                F _ → {}
+            }
+            = k + k 1
+        }
+        ( vec_free [VerCfg] . m versions )
+        = . m versions kept
+    } {}
+    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
+    ^ ( vec_len [VerCfg] . m versions )
 }

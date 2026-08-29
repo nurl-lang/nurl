@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.6.0
+
+- **The metadata is editable from the dashboard.** `PUT
+  /models/dynamic/<model>/metadata` takes the editable half of the
+  metadata — the retrain schedule and the per-version configs — as a
+  patch in which every field is optional: what the body omits keeps its
+  value, an unknown version name adds a version, and
+  `"replace_versions": true` deletes the ones the body omits. Values are
+  clamped into a trainable range rather than rejected, so a hand-written
+  JSON edit cannot produce a version that fails to train. The learned
+  half (column kinds, categories, feature order, scaler) is still never
+  accepted from a client: it is refitted at every train and a
+  hand-written copy would silently desync every forest. Library:
+  `model_apply_meta_patch`, `model_set_version_enabled`,
+  `meta_apply_versions_json`, `meta_find_version`,
+  `meta_version_enabled`, `meta_version_margin`.
+- The Model Manager drawer now edits what it used to only print: a
+  checkbox and a margin field per version (the two settings that bite at
+  the very next detect), and an *Advanced · edit metadata as JSON* box
+  holding the same document the route takes, for the geometry and forest
+  sizes that take effect at the next retrain. The retrain-schedule form
+  goes through the same route.
+- **The autoencoder is visible.** It has been trainable since 0.4.0
+  (`anomaly train-ae`, `POST /train/autoencoder/<model>`) and its verdict
+  has ridden along in every detect, but nothing in the dashboard ever
+  said so, so a model's most interesting version was invisible unless you
+  read the JSON. `GET .../metadata` now carries an `autoencoder` block
+  (trained, enabled, threshold, points trained on, anomalies filtered,
+  margin, feature names, layer sizes) — its state lives in
+  `autoencoder.json`, not the metadata, which is why it had no place in
+  `meta_to_json` — and the drawer has an Autoencoder section that shows
+  it and trains or retrains it, hidden geometry and contamination
+  included. `POST /train/autoencoder/<model>` accepts an optional
+  `{"hidden": [..], "contamination": x}` body instead of always using
+  64-32-64 and automatic contamination.
+- Disabling the `autoencoder` version now actually mutes it. The verdict
+  was gated on the trained net alone and ignored the `enabled` flag its
+  own `VerCfg` has carried since 0.4.0, so the one version you could not
+  turn off was the one the UI never showed. Disabling it keeps the net —
+  unlike a forest version, whose blob is deleted, because a resurrected
+  forest would be scoring against a feature order and scaler the model
+  has since moved past, and the autoencoder's net carries its own frozen
+  feature order.
+- Every path dependency is pinned on the major (`^0`) instead of the
+  minor, the way `http` already was since 0.5.6. A 0.x minor release of
+  `iforest`, `gpu`, `gpukit`, `cli` or `mlp` no longer leaves this
+  package resolving an older copy from the registry than the one it is
+  built and tested against here.
+- Internal: `__an_margin_of` moved to `src/prep.nu` as the shared
+  `meta_version_margin`, and `__an_jarr_of_strs` took the
+  single-underscore shared spelling — both were about to be called across
+  files, which is the compiler's obsolete `__` path.
+- `tests/anomaly_test.sh` gained the `metaedit` unit suite (55 checks)
+  and live-HTTP coverage of the metadata route; its CLI batch check now
+  sorts under `LC_ALL=C`, because `sort -g` reads `0.15` as `0` in a
+  comma-decimal locale and silently ranked every row equal.
+
 ## 0.5.6
 
 - Requires `http ^0` instead of `^0.3`. http has been 0.4.0 since #1014
