@@ -284,17 +284,18 @@ $ `stdlib/std/async_ffi.nu`
 // against the actual month length, so 2023-02-29 is rejected but
 // 2024-02-29 is accepted); out-of-range input → `ParseErr.BadFormat`.
 //
-// Returns the **Unix timestamp** (seconds), not a `Time`. A wide-payload
-// `! T E` value is silently truncated when matched directly as
-// `?? ( call ) { … }` (a compiler bug — binding the result to a `:`
-// variable first is the working form); an `! i ParseErr` carries a
-// narrow `i` payload and is immune. Pass the result to `time_from_unix`
-// for the broken-down fields:
-//   : !i ParseErr r ( time_make 2026 5 21 14 39 0 )
-//   ?? r {
+// Returns the **Unix timestamp** (seconds), not a `Time`. Pass it to
+// `time_from_unix` for the broken-down fields:
+//   ?? ( time_make 2026 5 21 14 39 0 ) {
 //     T secs → { : Time t ( time_from_unix secs )  … }
 //     F e → …
 //   }
+// This comment used to warn that a wide-payload `! T E` is silently
+// truncated when matched directly as `?? ( call ) { … }`, and to bind
+// the call to a `:` variable first. That compiler bug is fixed: the
+// direct and the bound spelling now produce the same value for an
+// `! i ParseErr` and for a multi-field struct payload alike. The
+// warning outlived the bug and was sending readers down a detour.
 @ time_make i year i month i day i hour i min i sec → !i ParseErr {
     ? | < month 1 > month 12
     { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
