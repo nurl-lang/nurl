@@ -84,6 +84,13 @@ $ `dev.nu`
     : b tiled & on_cpu == transb 0
     : b on_cuda ( nurl_str_eq ( gk_backend kit ) `cuda` )
     : b smem & & & on_cuda >= m 16 >= n 32 >= k 16
+    // The 128x64 tile with an 8x4 register block (see _gkd_smem_body):
+    // double the arithmetic intensity per shared read, but half the
+    // blocks — so only where M is deep enough that ceil(M/128)*ceil(N/64)
+    // still covers a big card's SMs. A batched or long-sequence encoder
+    // forward lives here; the ~800-row single forwards the 64x64 tile
+    // was sized for do not, and keep it.
+    : b big & & smem >= m 512 >= * ( _gkd_ceil m 128 ) ( _gkd_ceil n 64 ) 128
     // Too few rows for a tile — a pose head's [1,K]x[K,N]. The
     // per-element kernel runs those as M*N threads, which for a 2048-wide
     // projection is eight blocks on a 128-SM card: 94% of the machine
@@ -96,6 +103,8 @@ $ `dev.nu`
     : b gemv & & on_cuda ! smem >= k 128
     : String kname ( __gkd_name . y dtype )
     : String src ( __gkd_head kname ? smem
+    ? big
+    ? != transb 0 `gemm_smem2_t` `gemm_smem2`
     ? != transb 0 `gemm_smem_t` `gemm_smem`
     ? gemv `gemv` ? tiled `gemm_tiled` `gemm` )
     ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* A, const ` )
@@ -106,7 +115,7 @@ $ `dev.nu`
     ( string_push_str src tn ) ( string_push_str src ` beta, long long transB){` )
     ( string_push_str src `(void)transB;` )
     ? smem {
-        : String body ( _gkd_smem_body tn . y dtype transb 0 )
+        : String body ( _gkd_smem_body tn . y dtype transb 0 ? big { 1 } { 0 } )
         ( string_push_str src ( string_data body ) )
         ( string_free body )
     } {
@@ -158,10 +167,13 @@ $ `dev.nu`
     ( vec_push [i] args ( _gk_scal . y dtype alpha ) )
     ( vec_push [i] args ( _gk_scal . y dtype beta ) )
     ( vec_push [i] args ( gpu_arg_i64 transb ) )
-    // The smem body maps ONE BLOCK to a 64x64 tile, so its launch is a
-    // block count, not a thread count — gk_grid would divide it by 256.
+    // The smem body maps ONE BLOCK to a 64x64 (or 128x64) tile, so its
+    // launch is a block count, not a thread count — gk_grid would divide
+    // it by 256.
     ? smem {
-        : i nb * ( _gkd_ceil m GKD_BM ) ( _gkd_ceil n GKD_BN )
+        : i nb ? big
+        { * ( _gkd_ceil m 128 ) ( _gkd_ceil n 64 ) }
+        { * ( _gkd_ceil m GKD_BM ) ( _gkd_ceil n GKD_BN ) }
         ^ ( __gkd_launch kit src kname nb args )
     } {}
     // one block per output element, not one thread
@@ -685,6 +697,10 @@ $ `dev.nu`
 // [heads, n, nkv] score buffer the composed fallback would want. At a
 // 72-frame window of 783 tokens that buffer is 2.8 GB, and it is the
 // difference between a long sequence fitting and not.
+// Shared-memory budget one attention block may take: a third of the
+// 100 KB an Ada SM can carve out, so three blocks stay resident.
+: i GKD_ATTN_SMEM 33792
+
 @ gkd_attention_ok * GpuKit kit i hd → b {
     ? ( nurl_str_eq ( gk_backend kit ) `cuda` ) {} { ^ F }
     ? & > hd 0 == % hd 16 0 {} { ^ F }
@@ -738,7 +754,18 @@ i heads i n i nkv i hd i hpb f scale → b {
     : i bq ? <= hd 64 64 32
     : i fixed + * * bq + hd 1 esz * bq esz
     : i per * + * 2 + hd 1 bq esz
-    : ~ i bk / - 49152 fixed per
+    // Sized for THREE resident blocks per SM, not for one block's 48 KB
+    // ceiling. Filling the ceiling is the obvious read of "how big a key
+    // tile fits", and it is the wrong one: at hd=64 it picks BK=32, which
+    // is 41 KB per block, and 41 KB lets only two blocks share an Ada
+    // SM's 100 KB — sixteen warps to hide the shared-memory latency of a
+    // kernel that is nothing but shared-memory traffic. A third of that
+    // budget picks BK=16 (29 KB, three blocks, 24 warps) and the same
+    // work runs measurably faster on both shapes an encoder produces:
+    // one 3072-token sequence 1862 -> 1689 us, sixteen 192-token ones
+    // 133 -> 122 us, on a 4090. The K/V tile is read once either way —
+    // only how much of it a block holds at a time changes.
+    : ~ i bk / - GKD_ATTN_SMEM fixed per
     = bk * / bk 16 16
     ? > bk 64 { = bk 64 } {}
     ? < bk 16 { = bk 16 } {}
@@ -876,6 +903,188 @@ i heads i n i nkv i hd i hpb f scale → b {
     } {}
     ( vec_push [i] args ( _gk_scal . o dtype scale ) )
     ^ ( __gkd_launch kit src kname * heads ( _gkd_ceil n bq ) args )
+}
+
+// The fused attention over a BATCH of sequences in the layout a
+// transformer's linear layers actually produce: Q, K, V and O are
+// [batch·n, heads·hd] — token rows, heads interleaved within the row —
+// NOT the [heads, n, hd] gkd_attention wants. A caller running batch=1
+// used two gkd_perm round trips per tensor per block to get in and out
+// of head-major layout; a caller running a real batch would also need a
+// 4-D permute whose dims gkd_perm bakes into the kernel name, i.e. an
+// NVRTC compile per (batch, length) pair. This entry removes both: the
+// kernel reads the interleaved layout directly (row stride heads·hd,
+// head offset h·hd — the loads along `d` stay contiguous and coalesced
+// exactly as before), and no permuted copy of Q/K/V/O ever exists.
+//
+// `mask` is one additive row of `nkv` floats PER BATCH ELEMENT
+// ([batch, nkv]; 0 keeps a key, -1e30 drops it), or a zero GkBuf to run
+// unmasked. Same tile, same online softmax, same accumulation order as
+// gkd_attention_masked — a sequence embedded at batch b is bit-identical
+// to the same sequence permuted through the head-major entry.
+// gkd_attention_ok answers for this entry too (the tile constraint is
+// the same).
+@ gkd_attention_batch * GpuKit kit GkBuf o GkBuf q GkBuf k GkBuf v GkBuf mask
+i batch i heads i n i nkv i hd f scale → b {
+    ? & & ( __gkd_isfloat o ) ( gk_buf_ok q ) & ( gk_buf_ok k ) ( gk_buf_ok v ) {} { ^ F }
+    ? & & == . o dtype . q dtype == . q dtype . k dtype == . k dtype . v dtype {} { ^ F }
+    ? & & & & > batch 0 > heads 0 > n 0 > nkv 0 > hd 0 {} { ^ F }
+    : b masked ( gk_buf_ok mask )
+    ? masked {
+        ? & == . mask dtype . o dtype >= . mask n * batch nkv {} { ^ F }
+    } {}
+    ? == % hd 16 0 {} { ^ F }
+    ? & & == . q n * * * batch n heads hd == . o n * * * batch n heads hd
+    & == . k n * * * batch nkv heads hd == . v n * * * batch nkv heads hd {} { ^ F }
+    ? ( nurl_str_eq ( gk_backend kit ) `cuda` ) {} { ^ F }
+    : i esz ( gk_buf_esz o )
+    // identical tile sizing to gkd_attention_masked — see there
+    : i bq ? <= hd 64 64 32
+    : i fixed + * * bq + hd 1 esz * bq esz
+    : i per * + * 2 + hd 1 bq esz
+    // Sized for THREE resident blocks per SM, not for one block's 48 KB
+    // ceiling. Filling the ceiling is the obvious read of "how big a key
+    // tile fits", and it is the wrong one: at hd=64 it picks BK=32, which
+    // is 41 KB per block, and 41 KB lets only two blocks share an Ada
+    // SM's 100 KB — sixteen warps to hide the shared-memory latency of a
+    // kernel that is nothing but shared-memory traffic. A third of that
+    // budget picks BK=16 (29 KB, three blocks, 24 warps) and the same
+    // work runs measurably faster on both shapes an encoder produces:
+    // one 3072-token sequence 1862 -> 1689 us, sixteen 192-token ones
+    // 133 -> 122 us, on a 4090. The K/V tile is read once either way —
+    // only how much of it a block holds at a time changes.
+    : ~ i bk / - GKD_ATTN_SMEM fixed per
+    = bk * / bk 16 16
+    ? > bk 64 { = bk 64 } {}
+    ? < bk 16 { = bk 16 } {}
+    ? >= * bq hd * 16 256 {} { ^ F }
+    : s tn ( _gk_tname . o dtype )
+    : s sfx ( __gkd_sfx . o dtype )
+    : String kname ( __gkd_name . o dtype )
+    ( string_push_str kname `attnx` )
+    ( string_push_int kname hd )
+    ( string_push_char kname 95 )
+    ( string_push_int kname bk )
+    ? masked { ( string_push_str kname `_m` ) } {}
+    : String src ( string_from `extern "C" __global__ void ` )
+    ( string_push_str src ( string_data kname ) )
+    ( string_push_str src `(const ` ) ( string_push_str src tn )
+    ( string_push_str src `* Q, const ` ) ( string_push_str src tn )
+    ( string_push_str src `* K, const ` ) ( string_push_str src tn )
+    ( string_push_str src `* V, ` ) ( string_push_str src tn )
+    ( string_push_str src `* O, long long heads, long long n, long long nkv, ` )
+    ? masked {
+        ( string_push_str src `const ` ) ( string_push_str src tn )
+        ( string_push_str src `* M, ` )
+    } {}
+    ( string_push_str src tn ) ( string_push_str src ` scale){` )
+    ( string_push_str src `enum{BQ=` )
+    ( string_push_int src bq )
+    ( string_push_str src `,NT=256,HD=` )
+    ( string_push_int src hd )
+    ( string_push_str src `,BK=` )
+    ( string_push_int src bk )
+    ( string_push_str src `,DT=4,QT=4,SK=2,NK=BK/SK,ND=HD/DT};` )
+    ( string_push_str src `__shared__ ` ) ( string_push_str src tn )
+    ( string_push_str src ` Qs[BQ][HD+1];__shared__ ` )
+    ( string_push_str src tn ) ( string_push_str src ` Ks[BK][HD+1];__shared__ ` )
+    ( string_push_str src tn ) ( string_push_str src ` Vs[BK][HD+1];__shared__ ` )
+    ( string_push_str src tn ) ( string_push_str src ` S[BQ][BK+1];__shared__ ` )
+    ( string_push_str src tn ) ( string_push_str src ` mrow[BQ];__shared__ ` )
+    ( string_push_str src tn ) ( string_push_str src ` lrow[BQ];__shared__ ` )
+    ( string_push_str src tn ) ( string_push_str src ` crow[BQ];` )
+    ( string_push_str src `long long nqb=(n+BQ-1)/BQ;` )
+    // grid = batch·heads·nqb; decompose to (batch element, head, q tile)
+    ( string_push_str src `long long hb=blockIdx.x/nqb,qb=(blockIdx.x%nqb)*BQ;` )
+    ( string_push_str src `long long bi=hb/heads,h=hb%heads;` )
+    // the interleaved layout: token row stride RS, head offset h·HD
+    ( string_push_str src `long long RS=heads*HD;` )
+    ( string_push_str src `const ` ) ( string_push_str src tn )
+    ( string_push_str src `* Qh=Q+bi*n*RS+h*HD;const ` ) ( string_push_str src tn )
+    ( string_push_str src `* Kh=K+bi*nkv*RS+h*HD;const ` ) ( string_push_str src tn )
+    ( string_push_str src `* Vh=V+bi*nkv*RS+h*HD;` )
+    ? masked {
+        ( string_push_str src `const ` ) ( string_push_str src tn )
+        ( string_push_str src `* Mh=M+bi*nkv;` )
+    } {}
+    ( string_push_str src `int tid=threadIdx.x;` )
+    ( string_push_str src `for(int idx=tid;idx<BQ*HD;idx+=NT){int i=idx/HD,d=idx%HD;` )
+    ( string_push_str src `long long gq=qb+i;Qs[i][d]=(gq<n)?Qh[gq*RS+d]:(` )
+    ( string_push_str src tn ) ( string_push_str src `)0;}` )
+    ( string_push_str src tn ) ( string_push_str src ` acc[QT*DT];` )
+    ( string_push_str src `for(int t=0;t<QT*DT;t++)acc[t]=0;` )
+    ( string_push_str src `for(int r=tid;r<BQ;r+=NT)mrow[r]=` )
+    ( string_push_str src ( __gkd_neg . o dtype ) )
+    ( string_push_str src `,lrow[r]=0;__syncthreads();` )
+    ( string_push_str src `for(long long k0=0;k0<nkv;k0+=BK){` )
+    ( string_push_str src `for(int idx=tid;idx<BK*HD;idx+=NT){int j=idx/HD,d=idx%HD;` )
+    ( string_push_str src `long long gk=k0+j;` )
+    ( string_push_str src `Ks[j][d]=(gk<nkv)?Kh[gk*RS+d]:(` )
+    ( string_push_str src tn ) ( string_push_str src `)0;` )
+    ( string_push_str src `Vs[j][d]=(gk<nkv)?Vh[gk*RS+d]:(` )
+    ( string_push_str src tn ) ( string_push_str src `)0;}__syncthreads();` )
+    // scores, online softmax and the accumulator update are
+    // character-for-character the gkd_attention_masked body — only the
+    // global loads above and the store below know about the layout
+    ( string_push_str src `for(int idx=tid;idx<(BQ/QT)*NK;idx+=NT){` )
+    ( string_push_str src `int i0=(idx/NK)*QT,j0=(idx%NK)*SK;` )
+    ( string_push_str src tn ) ( string_push_str src ` sc[QT][SK];` )
+    ( string_push_str src `for(int q=0;q<QT;q++)for(int t=0;t<SK;t++)sc[q][t]=0;` )
+    ( string_push_str src `for(int d=0;d<HD;d++){` )
+    ( string_push_str src tn ) ( string_push_str src ` qv[QT];` )
+    ( string_push_str src `for(int q=0;q<QT;q++)qv[q]=Qs[i0+q][d];` )
+    ( string_push_str src tn ) ( string_push_str src ` kv[SK];` )
+    ( string_push_str src `for(int t=0;t<SK;t++)kv[t]=Ks[j0+t][d];` )
+    ( string_push_str src `for(int q=0;q<QT;q++)for(int t=0;t<SK;t++)sc[q][t]+=qv[q]*kv[t];}` )
+    ( string_push_str src `for(int q=0;q<QT;q++)for(int t=0;t<SK;t++)` )
+    ( string_push_str src `S[i0+q][j0+t]=(k0+j0+t<nkv)?sc[q][t]*scale` )
+    ? masked { ( string_push_str src `+Mh[k0+j0+t]` ) } {}
+    ( string_push_str src `:` )
+    ( string_push_str src ( __gkd_neg . o dtype ) )
+    ( string_push_str src `;}__syncthreads();` )
+    ( string_push_str src `for(int r=tid;r<BQ;r+=NT){` )
+    ( string_push_str src tn ) ( string_push_str src ` m=mrow[r],l=lrow[r],mt=` )
+    ( string_push_str src ( __gkd_neg . o dtype ) )
+    ( string_push_str src `;for(int j=0;j<BK;j++)if(S[r][j]>mt)mt=S[r][j];` )
+    ( string_push_str src tn ) ( string_push_str src ` mn=(mt>m)?mt:m;` )
+    ( string_push_str src tn ) ( string_push_str src ` corr=exp` )
+    ( string_push_str src sfx ) ( string_push_str src `(m-mn);` )
+    ( string_push_str src tn ) ( string_push_str src ` sum=0;` )
+    ( string_push_str src `for(int j=0;j<BK;j++){` )
+    ( string_push_str src tn ) ( string_push_str src ` p=exp` )
+    ( string_push_str src sfx ) ( string_push_str src `(S[r][j]-mn);S[r][j]=p;sum+=p;}` )
+    ( string_push_str src `mrow[r]=mn;lrow[r]=l*corr+sum;crow[r]=corr;}` )
+    ( string_push_str src `__syncthreads();` )
+    ( string_push_str src `{int idx=tid;int i0=(idx/ND)*QT,d0=(idx%ND)*DT;` )
+    ( string_push_str src tn ) ( string_push_str src ` a[QT][DT];` )
+    ( string_push_str src `for(int q=0;q<QT;q++){` )
+    ( string_push_str src tn ) ( string_push_str src ` cr=crow[i0+q];` )
+    ( string_push_str src `for(int u=0;u<DT;u++)a[q][u]=acc[q*DT+u]*cr;}` )
+    ( string_push_str src `for(int j=0;j<BK;j++){` )
+    ( string_push_str src tn ) ( string_push_str src ` pv[QT];` )
+    ( string_push_str src `for(int q=0;q<QT;q++)pv[q]=S[i0+q][j];` )
+    ( string_push_str src tn ) ( string_push_str src ` vv[DT];` )
+    ( string_push_str src `for(int u=0;u<DT;u++)vv[u]=Vs[j][d0+u];` )
+    ( string_push_str src `for(int q=0;q<QT;q++)for(int u=0;u<DT;u++)a[q][u]+=pv[q]*vv[u];}` )
+    ( string_push_str src `for(int q=0;q<QT;q++)for(int u=0;u<DT;u++)acc[q*DT+u]=a[q][u];}` )
+    ( string_push_str src `__syncthreads();}` )
+    ( string_push_str src `{int idx=tid;int i0=(idx/ND)*QT,d0=(idx%ND)*DT;` )
+    ( string_push_str src `for(int q=0;q<QT;q++){long long gq=qb+i0+q;if(gq<n){` )
+    ( string_push_str src tn ) ( string_push_str src ` li=lrow[i0+q];` )
+    ( string_push_str src `for(int u=0;u<DT;u++)O[(bi*n+gq)*RS+h*HD+d0+u]=acc[q*DT+u]/li;}}}}` )
+    : ( Vec i ) args ( vec_new [i] )
+    ( vec_push [i] args ( gk_arg_dev q ) )
+    ( vec_push [i] args ( gk_arg_dev k ) )
+    ( vec_push [i] args ( gk_arg_dev v ) )
+    ( vec_push [i] args ( gk_arg_dev o ) )
+    ( vec_push [i] args ( gpu_arg_i64 heads ) )
+    ( vec_push [i] args ( gpu_arg_i64 n ) )
+    ( vec_push [i] args ( gpu_arg_i64 nkv ) )
+    ? masked {
+        ( vec_push [i] args ( gk_arg_dev mask ) )
+    } {}
+    ( vec_push [i] args ( _gk_scal . o dtype scale ) )
+    ^ ( __gkd_launch kit src kname * * batch heads ( _gkd_ceil n bq ) args )
 }
 
 @ gkd_softmax_ax * GpuKit kit GkBuf y GkBuf x i outer i ax i inner → b {

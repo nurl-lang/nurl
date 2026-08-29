@@ -100,6 +100,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `call @f({ i1, i64 } %v)` against a declared `i1`. The emitted IR now
   carries an explicit `extractvalue …, 0`.
 
+### Fixed
+
+- **`nurl_free` was quadratic in the number of live allocations inside a
+  `recover` extent.** The panic-unwind journal records every owned heap
+  value registered for auto-drop while a recover frame is active, and
+  `nurl_free` removes the pointer again — by scanning the array and
+  NULLing every match. The indices are load-bearing (recover frames hold
+  marks into the array), so removal could not compact, and the entries
+  were left in place. Under LIFO churn — which is what a request handler
+  *is*: a temporary pushed, freed a few instructions later — the tail of
+  the journal became a growing run of dead slots that every subsequent
+  free walked again.
+
+  Measured on an embedding server whose handler serialised a 65 000-float
+  response inside its panic→500 guard: the journal reached 65 000
+  mostly-NULL slots and `nurl_free`'s scan was **95 % of a 3.9 s
+  request** (`perf` put 94.9 % of cycles on the `cmpq`/`jne` pair of that
+  loop). It now pops the trailing NULLs after every removal, so the
+  journal stays the size of the LIVE set — one entry, in that server's
+  steady state, instead of 65 000. The same request: **3.9 s → 55 ms**.
+
+  Only *trailing* dead slots are dropped, so no live entry ever moves and
+  no mark is invalidated: a mark above the shrunken length has nothing
+  left to truncate or drain, which is exactly what it had before.
+  `compiler/tests/recover_basic`, `recover_unwind` and
+  `div_by_zero_recover` reproduce their goldens unchanged, under ASan too.
+
 ## [0.54.0] — 2026-08-27
 
 ### Added

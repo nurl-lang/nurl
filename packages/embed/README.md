@@ -71,7 +71,7 @@ cut, 10 min request deadline, handler panics become 500s.
 
 ```
 embed serve <model-dir> [--addr HOST:PORT] [--token T] [--maxseq N]
-                        [--pool cls|mean] [--no-normalize]
+                        [--pool cls|mean] [--no-normalize] [--gpu N]
 embed text  <model-dir> <text>          # one-shot: vector as CSV on stdout
 ```
 
@@ -89,7 +89,9 @@ on; this package contains **no kernel sources**. Launches chain on the
 stream with one sync per forward. CUDA when a device is present (the
 *best* device, not driver ordinal 0 — `$NURL_GPU_DEVICE` overrides), the
 gpu package's CPU/OpenMP backend otherwise (identical results, cosine
-1.0 between backends). A short text embeds in ~20 ms on an RTX 4090 —
+1.0 between backends). `--gpu N` names a CUDA device explicitly — the
+ordinal is CUDA's, fastest first, which is *not* `nvidia-smi`'s PCI
+order. A short text embeds in ~20 ms on an RTX 4090 —
 after a one-time model load (~2.3 GB of weights) at startup.
 
 **The sequence length is quantised.** Every buffer and every
@@ -114,9 +116,67 @@ golden — taken before any of this, and verified against
 sentence-transformers at cosine 1.0000000 — still reproduces at cosine
 1.00000000 per row.
 
-Batching: a batch request loops single-text forwards. That keeps every
-row's numerics exactly equal to the single-text case, and the forward
-pass dominates at embedding sizes anyway.
+**A request's texts are embedded as a batch.** They are sorted
+longest-first and packed greedily into length-homogeneous chunks under a
+device-row budget, and each chunk is ONE forward — every kernel sees all
+of its sequences at once, on a batch-native fused attention that reads
+Q/K/V in the `[batch·n, heads·hd]` layout the linear layers already
+produce (so no permute round trips, and no 4-D permute kernel compiled
+per batch shape). The batch count is quantised like the sequence length,
+and the filler is whole dummy sequences, fully masked and pooled by a
+zero weight row. Chunks stay length-homogeneous because a text whose own
+bucket is under half the chunk's would spend more than half its rows on
+padding.
+
+Every row is still byte-for-byte what it would be alone: twenty-six
+texts of mixed length embed identically batched and one at a time.
+
+## Binary or container?
+
+This package is a **single 800 KB executable** that links libcuda and
+libc and nothing else. The reference implementation of this same API —
+FastAPI + sentence-transformers + PyTorch in a CUDA container — is a
+17.6 GB image. Both hold the same 2.3 GB of weights on the card, so the
+difference is entirely host-side and start-up:
+
+| | container | `embed` |
+|---|---|---|
+| host RAM | ~1.8 GB | **~350 MB** |
+| VRAM | 2.9 GB | **2.8 GB** |
+| on disk | 17.6 GB image (model baked in) | **800 KB** + the model dir |
+| cold start to first request | ~16 s | **~1.5 s** |
+| deps | CUDA image, Python, PyTorch, sentence-transformers | libcuda, libc |
+
+On throughput neither wins everywhere, and the shape of the difference
+is the useful part (RTX 4090, BGE-M3, f32, same box; median of a dense
+run after warm-up):
+
+| | container | `embed` |
+|---|---|---|
+| one short text | **24 ms** | 27 ms |
+| one ~120-word text | 25 ms | **21 ms** |
+| one ~2000-word text | **75 ms** | 126 ms |
+| 16 short texts, one request | 417 texts/s | **~500 texts/s** |
+| 16 × 120 words, one request | **245 texts/s** | ~150 texts/s |
+| 16 concurrent clients, one text each | 43 req/s | **~70 req/s** |
+
+`embed` is ahead on concurrent clients — fiber-per-connection with the
+forward on its own thread overlaps tokenizing and JSON with the
+arithmetic, where a GIL and one model thread do not — and on batches of
+short texts. PyTorch's kernels are ahead once a single forward is the
+whole job: one long sequence, or a batch of longer ones. The container
+is also the steadier of the two; `embed`'s timings spread more from
+request to request.
+
+So: if the workload is interactive queries or many concurrent clients,
+the binary is faster and four orders of magnitude smaller to ship. If it
+is bulk-indexing long documents, the container's kernels still have an
+edge. Nothing about the numbers each produces differs — the two agree at
+cosine 1.0000000 per row.
+
+(Benchmarking either on this hardware needs a warm-up: the card idles at
+210 MHz and ramps to ~2.8 GHz under load, so a cold measurement reports
+the clock rather than the code.)
 
 ## Tests
 

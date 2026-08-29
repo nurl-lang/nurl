@@ -2541,12 +2541,30 @@ void nurl_journal_push_drop(void *slot, void (*fn)(void*)) {
     nurl__jrnl_len++;
 }
 
+/* Removed entries are NULLed in place (indices are load-bearing: recover
+ * frames hold marks into this array), which leaves the tail of the
+ * journal as a growing run of dead slots under LIFO churn — and LIFO
+ * churn is exactly what a request handler is: a temporary is pushed,
+ * freed a few instructions later, and the next free's scan walks the
+ * whole dead run again. Measured on an embedding server whose handler
+ * built a 65k-float response: the journal reached 65k mostly-NULL slots
+ * and nurl_free's scan was 95% of a 3.9 s request. Popping the trailing
+ * NULLs after every removal keeps the journal at the size of the LIVE
+ * set instead. Only trailing dead slots are dropped, so no live entry
+ * moves; a mark above the shrunken length simply has nothing left to
+ * truncate or drain, which is exactly what it had before. */
+static void nurl__jrnl_pop_nulls(void) {
+    while (nurl__jrnl_len > 0 && nurl__jrnl[nurl__jrnl_len - 1] == NULL)
+        nurl__jrnl_len--;
+}
+
 /* Drop every recorded occurrence of `p` without running its dropper —
  * used at an escape sink, and at a typed value's normal drop site. */
 void nurl_journal_forget(void *p) {
     if (nurl__jrnl_len == 0 || !p) return;
     for (long long i = nurl__jrnl_len; i-- > 0; )
         if (nurl__jrnl[i] == p) nurl__jrnl[i] = NULL;
+    nurl__jrnl_pop_nulls();
 }
 
 /* nurl_free removal — every occurrence, so a value can never resurface
@@ -2554,6 +2572,7 @@ void nurl_journal_forget(void *p) {
 static void nurl__jrnl_remove(void *p) {
     for (long long i = nurl__jrnl_len; i-- > 0; )
         if (nurl__jrnl[i] == p) nurl__jrnl[i] = NULL;
+    nurl__jrnl_pop_nulls();
 }
 
 /* Current journal depth — captured by a recover frame as its mark. */
@@ -2562,6 +2581,7 @@ static long long nurl__jrnl_mark(void) { return nurl__jrnl_len; }
 /* Forget entries back to `mark` without dropping (normal completion). */
 static void nurl__jrnl_truncate(long long mark) {
     if (mark < nurl__jrnl_len) nurl__jrnl_len = mark;
+    nurl__jrnl_pop_nulls();
 }
 
 /* Reclaim every still-live entry recorded since `mark`, deduping aliased
@@ -2581,6 +2601,7 @@ static void nurl__jrnl_drain(long long mark) {
         else    free(p);   /* already removed from the journal above */
     }
     nurl__jrnl_len = mark;
+    nurl__jrnl_pop_nulls();
 }
 
 void  nurl_free(void *ptr)                     { if (!ptr) return; nurl__actr_bump(&nurl__actr_slot()->freed); if (nurl__jrnl_len) nurl__jrnl_remove(ptr); if (!nurl__sc_push(ptr)) free(ptr); }

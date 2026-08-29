@@ -37,6 +37,19 @@ $ `stdlib/ext/json.nu`
     ( Vec String ) pieces
     ( Vec f ) scores
     ( HashMap s i ) lookup
+    // fast piece lookup for the Viterbi inner loop: open-addressed,
+    // power-of-2 table with the FNV-1a hash STORED per slot, probing
+    // against raw text bytes — no substring copy, no re-hash, and a
+    // memcmp only when the 64-bit hashes already agree. `lookup` stays
+    // for the cold callers (added-token names).
+    //
+    // Hash and id are INTERLEAVED in one array — slot s is ft[2s] and
+    // ft[2s+1] — not two parallel Vecs. At 250k pieces the table is 8 MB,
+    // so every probe is a cache miss, and two arrays make it two misses
+    // for what fits in one 64-byte line. ft[2s+1] holds id+1; 0 is an
+    // empty slot.
+    ( Vec i ) ft
+    i ft_mask
     i unk_id
     f unk_score
     i max_piece  // longest piece, in bytes
@@ -60,6 +73,85 @@ $ `stdlib/ext/json.nu`
 
 @ __uni_get ( HashMap s i ) m s key → ?i {
     ^ ( map_get [s i] m key \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
+}
+
+// FNV-1a 64-bit — extendable one byte at a time, which is what lets the
+// Viterbi loop keep ONE rolling hash per start position instead of
+// re-hashing every substring from scratch.
+: i UNI_FNV_OFF -3750763034362895579
+: i UNI_FNV_PRIME 1099511628211
+
+@ __uni_fnv s ptr i len → i {
+    : ~ i h UNI_FNV_OFF
+    : ~ i k 0
+    ~ < k len {
+        = h ^^ h ( nurl_str_at ptr len k )
+        = h * h UNI_FNV_PRIME
+        = k + k 1
+    }
+    ^ h
+}
+
+@ __uni_ft_build * Unigram u → v {
+    : i nv ( vec_len [String] . u pieces )
+    : ~ i cap 16
+    ~ < cap * nv 2 { = cap * cap 2 }
+    = . u ft_mask - cap 1
+    ( vec_clear [i] . u ft )
+    ( vec_reserve [i] . u ft * cap 2 )
+    : ~ i k 0
+    ~ < k * cap 2 { ( vec_push [i] . u ft 0 ) = k + k 1 }
+    = k 0
+    ~ < k nv {
+        ?? ( vec_get [String] . u pieces k ) {
+            T pc → {
+                : i h ( __uni_fnv ( string_data pc ) ( string_len pc ) )
+                : ~ i sl & h . u ft_mask
+                : ~ b put F
+                ~ ! put {
+                    ? == ( __uni_geti . u ft + * sl 2 1 0 ) 0 {
+                        ( vec_set [i] . u ft * sl 2 h )
+                        ( vec_set [i] . u ft + * sl 2 1 + k 1 )
+                        = put T
+                    } {
+                        = sl & + sl 1 . u ft_mask
+                    }
+                }
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+}
+
+// id of the piece equal to text[off .. off+len), or -1 — `h` is the
+// caller's rolling FNV over exactly those bytes.
+@ __uni_ft_get * Unigram u i h s text i off i len → i {
+    : *u ftp # *u ( vec_data [i] . u ft )
+    : ~ i sl & h . u ft_mask
+    : ~ i found -1
+    : ~ b run T
+    ~ run {
+        : i base * sl 2
+        : i ide ( nurl_peek ftp + base 1 )
+        ? == ide 0 { = run F } {
+            : ~ b hit F
+            ? == ( nurl_peek ftp base ) h {
+                ?? ( vec_get [String] . u pieces - ide 1 ) {
+                    T pc → {
+                        ? == ( string_len pc ) len {
+                            ? == 0 # i ( memcmp ( string_data pc ) # s + # i text off len ) {
+                                = hit T
+                            } {}
+                        } {}
+                    }
+                    F → {}
+                }
+            } {}
+            ? hit { = found - ide 1 = run F } { = sl & + sl 1 . u ft_mask }
+        }
+    }
+    ^ found
 }
 
 @ __uni_geti ( Vec i ) v i k i def → i {
@@ -242,29 +334,30 @@ $ `stdlib/ext/json.nu`
         = k + k 1
     }
     ( vec_set [f] best 0 0.0 )
-    : String probe ( string_new )
     = p 0
     ~ < p n {
         ? & == ( __uni_geti bnd p 1 ) 1 > ( __uni_getf best p ) -1.0e29 {
             : f base ( __uni_getf best p )
-            // pieces starting at p, ending on a later char boundary
+            // pieces starting at p, ending on a later char boundary —
+            // one rolling FNV per start position, extended a byte per
+            // step, probed against the stored-hash table (__uni_ft_get):
+            // nothing is copied and no substring is ever re-hashed
             : ~ i q + p 1
             : i qmax ? < + p . u max_piece n { + p . u max_piece } { n }
+            : ~ i h UNI_FNV_OFF
             ~ <= q qmax {
+                = h ^^ h ( nurl_str_at e n - q 1 )
+                = h * h UNI_FNV_PRIME
                 ? == ( __uni_geti bnd q 1 ) 1 {
-                    ( string_clear probe )
-                    ( string_push_bytes probe # *u + # i e p - q p )
-                    ?? ( __uni_get . u lookup ( string_data probe ) ) {
-                        T id → {
-                            : f sc + base ( __uni_getf . u scores id )
-                            ? > sc ( __uni_getf best q ) {
-                                ( vec_set [f] best q sc )
-                                ( vec_set [i] bpos q p )
-                                ( vec_set [i] bid q id )
-                            } {}
-                        }
-                        F → {}
-                    }
+                    : i id ( __uni_ft_get u h e p - q p )
+                    ? >= id 0 {
+                        : f sc + base ( __uni_getf . u scores id )
+                        ? > sc ( __uni_getf best q ) {
+                            ( vec_set [f] best q sc )
+                            ( vec_set [i] bpos q p )
+                            ( vec_set [i] bid q id )
+                        } {}
+                    } {}
                 } {}
                 = q + q 1
             }
@@ -282,7 +375,6 @@ $ `stdlib/ext/json.nu`
         } {}
         = p + p 1
     }
-    ( string_free probe )
     // backtrack (collect reversed, then emit fused)
     : ( Vec i ) rev ( vec_new [i] )
     : ~ i cur n
@@ -478,6 +570,8 @@ $ `stdlib/ext/json.nu`
                         = . u pieces ( vec_new [String] )
                         = . u scores ( vec_new [f] )
                         = . u lookup ( map_new [s i] )
+                        = . u ft ( vec_new [i] )
+                        = . u ft_mask 0
                         = . u trie ( vec_new [u] )
                         = . u pool ( vec_new [u] )
                         = . u added ( vec_new [String] )
@@ -495,6 +589,7 @@ $ `stdlib/ext/json.nu`
                         : ~ b okv F
                         ?? model { T m → { = okv ( __uni_load_vocab m u ) } F → {} }
                         ? okv {
+                            ( __uni_ft_build u )
                             ?? ( json_obj_get root `normalizer` ) { T nrm → { ( __uni_load_charsmap nrm u ) } F → {} }
                             : b apfx ?? ( json_get root `pre_tokenizer.add_prefix_space` ) { T x → ( json_as_bool x ) F → T }
                             = . u add_prefix apfx
@@ -534,6 +629,7 @@ $ `stdlib/ext/json.nu`
     ( vec_free [String] . u pieces )
     ( vec_free [f] . u scores )
     ( map_free [s i] . u lookup )
+    ( vec_free [i] . u ft )
     ( vec_free [u] . u trie )
     ( vec_free [u] . u pool )
     = k 0
@@ -610,14 +706,14 @@ $ `stdlib/ext/json.nu`
             // lstrip: whitespace before the token belongs to it
             : ~ i segend p
             ? == ( __uni_geti . u added_lstrip ai 0 ) 1 {
-                ~ & > segend seg ( __uni_is_ws ( nurl_str_get text - segend 1 ) ) { = segend - segend 1 }
+                ~ & > segend seg ( __uni_is_ws ( nurl_str_at text n - segend 1 ) ) { = segend - segend 1 }
             } {}
             ( __uni_segment u text seg - segend seg out )
             ( vec_push [i] out ( __uni_geti . u added_ids ai -1 ) )
             : i al ?? ( vec_get [String] . u added ai ) { T x → ( string_len x ) F → 1 }
             = p + p al
             ? == ( __uni_geti . u added_rstrip ai 0 ) 1 {
-                ~ & < p n ( __uni_is_ws ( nurl_str_get text p ) ) { = p + p 1 }
+                ~ & < p n ( __uni_is_ws ( nurl_str_at text n p ) ) { = p + p 1 }
             } {}
             = seg p
         } {

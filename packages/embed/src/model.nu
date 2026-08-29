@@ -14,14 +14,23 @@
 //   model.safetensors   f32 weights (packages/safetensor, mmap-backed)
 //
 //   ( embed_open dir )              → !*Embed String
+//   ( embed_open_dev dir gpu )      → !*Embed String   (gpu -1 = best)
 //   ( embed_encode e text out )     → b     out = the embedding vector
+//   ( embed_encode_batch e ids offs out norm ) → b     B texts, one call
 //   ( embed_dim e ) ( embed_close e )
 //
-// Inference is per text (batch 1). The sequence is padded to a
-// quantised length and the padding masked out of attention and pooling
-// (see __em_bucket) — the numbers are the numbers of the unpadded run,
-// and what the quantisation buys is a forward that stops compiling
-// kernels and allocating device memory after the first few requests.
+// Inference is BATCHED where the fused attention runs (CUDA): texts are
+// grouped longest-first into chunks of at most EM_ROWS_BUDGET padded
+// device rows, and a chunk is ONE forward — every kernel sees all of its
+// sequences at once, which is what turns thirty short texts from thirty
+// launch-bound forwards into one. Sequences are padded to a quantised
+// length, batches to a quantised count, and every bit of padding is
+// masked out of attention and pooling (see __em_bucket) — the numbers
+// are the numbers of the unpadded, unbatched run, and what the
+// quantisation buys is a forward that stops compiling kernels and
+// allocating device memory after the first few requests. On the CPU
+// backend (or a head width the fused kernel refuses) each text runs
+// alone through the composed path, exactly as before.
 //
 // Numerics are true float32 on the device. Verified against
 // sentence-transformers (BGE-M3): cosine ≥ 0.9999 on a multilingual
@@ -145,6 +154,16 @@ $ `deps/tokenizer/src/unigram.nu`
 // Open a model directory. Pooling defaults to CLS + normalize (the BGE
 // convention); callers can override with embed_set_pooling.
 @ embed_open s dir → !*Embed String {
+    ^ ( embed_open_dev dir - 0 1 )
+}
+
+// The same, with the device chosen by the caller: `gpu` is a CUDA
+// device ordinal (CUDA enumeration order — fastest first by default —
+// not nvidia-smi's PCI order), or -1 for the best device / the
+// $NURL_GPU_DEVICE override. A named ordinal must BE a CUDA device:
+// falling back to the CPU backend behind an explicit --gpu would be
+// hiding exactly the mistake the flag exists to make loud.
+@ embed_open_dev s dir i gpu → !*Embed String {
     : *Embed e # *Embed ( nurl_alloc Z Embed )
     = . e ok T
     = . e has_tok F
@@ -197,13 +216,22 @@ $ `deps/tokenizer/src/unigram.nu`
         ^ @ !*Embed String { F tokerr }
     }
     ( string_free tokerr )
-    // device: the BEST one, not driver ordinal 0. On a box with an old
-    // card in front of a new one — a 4 GB GTX 970 ahead of a 24 GB RTX
-    // 4090 — ordinal 0 is where 2.3 GB of weights plus activations do
-    // not fit, and gk_open_best is exactly the answer to that.
-    // $NURL_GPU_DEVICE still overrides.
-    = . e kit ( gk_open_best )
-    ? ( gk_ok . e kit ) {} { ( embed_close e ) ^ ( __em_err `embed: no compute device (CUDA or CPU backend)` ) }
+    // device: the one the caller named, else the BEST one — not driver
+    // ordinal 0. On a box with an old card in front of a new one — a
+    // 4 GB GTX 970 ahead of a 24 GB RTX 4090 — ordinal 0 is where 2.3 GB
+    // of weights plus activations do not fit, and gk_open_best is
+    // exactly the answer to that. $NURL_GPU_DEVICE still overrides the
+    // default; an explicit `gpu` ordinal overrides everything.
+    ? >= gpu 0 {
+        = . e kit ( gk_open gpu )
+        ? & ( gk_ok . e kit ) != 0 ( nurl_str_eq ( gk_backend . e kit ) `cuda` ) {} {
+            ( embed_close e )
+            ^ ( __em_err `embed: --gpu: not a usable CUDA device ordinal (note: CUDA order is fastest-first, not nvidia-smi's PCI order)` )
+        }
+    } {
+        = . e kit ( gk_open_best )
+        ? ( gk_ok . e kit ) {} { ( embed_close e ) ^ ( __em_err `embed: no compute device (CUDA or CPU backend)` ) }
+    }
     // weights
     : String stp ( __em_path dir `model.safetensors` )
     : ~ b st_ok F
@@ -336,6 +364,47 @@ $ `deps/tokenizer/src/unigram.nu`
     : ~ i step / p 4
     ? < step 8 { = step 8 } {}
     ^ * / + n - step 1 step step
+}
+
+// The batch count a chunk of `n` sequences actually runs at — the same
+// four-steps-per-octave quantisation as __em_bucket, floored at 1, for
+// the same reason: buffer sizes are a function of rows = batch·np, and
+// a pool keyed by exact byte size wants FEW distinct row counts, not one
+// per request shape. The filler is whole dummy sequences (all padding,
+// fully masked, pooled by a zero weight row), at most 25% of the chunk.
+@ __em_bucket_b i n → i {
+    ? <= n 2 { ^ n } {}
+    : ~ i p 2
+    ~ <= * p 2 n { = p * p 2 }
+    : ~ i step / p 4
+    ? < step 1 { = step 1 } {}
+    ^ * / + n - step 1 step step
+}
+
+// A fused-attention chunk holds at most this many padded device rows
+// (batch · padded length). 16384 rows of BGE-M3 activations peak around
+// 1.5 GB of pooled device buffers — and two full-length 8192-token
+// texts still share one forward.
+: i EM_ROWS_BUDGET 16384
+
+// … and at most this many sequences, so a flood of tiny texts still
+// produces a forward whose per-sequence host work (padding, masks,
+// pooling rows) stays a rounding error.
+: i EM_BATCH_MAX 64
+
+// vec_get with a default — index arithmetic below is all pre-validated,
+// so a miss is unreachable; 0 keeps the type checker honest.
+@ __em_vi ( Vec i ) v i k → i {
+    ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ 0 } }
+}
+
+@ __em_vf ( Vec f ) v i k → f {
+    ?? ( vec_get [f] v k ) { T x → { ^ x } F → { ^ 0.0 } }
+}
+
+// token count of text `t` in a flat ids+offsets batch
+@ __em_len ( Vec i ) offs i t → i {
+    ^ - ( __em_vi offs + t 1 ) ( __em_vi offs t )
 }
 
 // y[n,dim] = x[n,in] · W[dim,in]ᵀ + bias — the HF Linear shape.
@@ -473,6 +542,54 @@ $ `deps/tokenizer/src/unigram.nu`
     ^ ok
 }
 
+// One transformer block over hidden[bq·np, dim] for a whole batch, on
+// gkd_attention_batch — the fused attention that reads Q/K/V in the
+// layout the linear layers produce ([token row, heads·hd] interleaved)
+// and writes ctx back the same way. No head split, no merge, no
+// gkd_perm anywhere: the eight permute round trips __em_block pays per
+// block do not exist here, and neither does the 4-D permute kernel a
+// batched split would have baked a fresh NVRTC compile for per
+// (batch, length) pair. `mask` is [bq, np] additive rows, one per
+// sequence.
+@ __em_block_x * Embed e EmbedLayer l GkBuf hid GkBuf mask i bq i np → b {
+    : i dim . . e cfg dim
+    : i heads . . e cfg heads
+    : i hd / dim heads
+    : i ffn . . e cfg ffn
+    : f eps . . e cfg eps
+    : i rows * bq np
+    : f scale / 1.0 ( float_sqrt # f hd )
+    : ~ b ok T
+    : GkBuf q ( __em_new e * rows dim )
+    : GkBuf k ( __em_new e * rows dim )
+    : GkBuf v ( __em_new e * rows dim )
+    ? ok { = ok ( __em_linear e q hid . l qw . l qb rows dim dim ) } {}
+    ? ok { = ok ( __em_linear e k hid . l kw . l kb rows dim dim ) } {}
+    ? ok { = ok ( __em_linear e v hid . l vw . l vb rows dim dim ) } {}
+    : GkBuf ctx ( __em_new e * rows dim )
+    ? ok { = ok ( gkd_attention_batch . e kit ctx q k v mask bq heads np np hd scale ) } {}
+    // attention out + residual + LN
+    : GkBuf ao ( __em_new e * rows dim )
+    ? ok { = ok ( __em_linear e ao ctx . l ow . l ob rows dim dim ) } {}
+    : GkBuf res ( __em_new e * rows dim )
+    ? ok { = ok ( gkd_add . e kit res ao hid ) } {}
+    ? ok { = ok ( gkd_layernorm . e kit hid res . l ln1w . l ln1b rows dim eps ) } {}
+    // FFN + residual + LN
+    : GkBuf h1 ( __em_new e * rows ffn )
+    ? ok { = ok ( __em_linear e h1 hid . l iw . l ib rows ffn dim ) } {}
+    : GkBuf h1g ( __em_new e * rows ffn )
+    ? ok { = ok ( __em_gelu e h1g h1 ) } {}
+    : GkBuf h2 ( __em_new e * rows dim )
+    ? ok { = ok ( __em_linear e h2 h1g . l dw . l db rows dim ffn ) } {}
+    : GkBuf res2 ( __em_new e * rows dim )
+    ? ok { = ok ( gkd_add . e kit res2 h2 hid ) } {}
+    ? ok { = ok ( gkd_layernorm . e kit hid res2 . l ln2w . l ln2b rows dim eps ) } {}
+    ( gk_dbuf_free q ) ( gk_dbuf_free k ) ( gk_dbuf_free v )
+    ( gk_dbuf_free ctx ) ( gk_dbuf_free ao ) ( gk_dbuf_free res )
+    ( gk_dbuf_free h1 ) ( gk_dbuf_free h1g ) ( gk_dbuf_free h2 ) ( gk_dbuf_free res2 )
+    ^ ok
+}
+
 // Tokenize (Unigram, <s>…</s>) with truncation to cfg.maxseq: the head
 // of the sequence is kept and </s> re-appended, sentence-transformers
 // style.
@@ -512,16 +629,12 @@ $ `deps/tokenizer/src/unigram.nu`
     ^ ( embed_encode_ids_norm e ids out . . e cfg normalize )
 }
 
-// Forward over an already-tokenized id sequence.
-//
-// The CUDA context is thread-local, and this may be called from a
-// server's worker rather than from whatever thread opened the model, so
-// the device is bound to the caller first. It is a no-op on the CPU
-// backend and a pointer store on CUDA.
-@ embed_encode_ids_norm * Embed e ( Vec i ) ids ( Vec f ) out b normalize → b {
-    ? . e ok {} { ^ F }
-    ? ( gk_bind_thread . e kit ) {} { ^ F }
-    : i n ( vec_len [i] ids )
+// The single-text forward on the composed/permute path — what runs
+// where the fused batch attention will not (the CPU backend, a head
+// width gkd_attention_ok refuses). Reads ids[from .. from+n) and writes
+// its dim floats into out at row `orow`. Callers hold the device bound
+// and `e` verified.
+@ __em_fwd_one * Embed e ( Vec i ) ids i from i n ( Vec f ) out i orow b normalize → b {
     ? > n 0 {} { ^ F }
     : i dim . . e cfg dim
     : i padid . . e cfg padid
@@ -537,7 +650,7 @@ $ `deps/tokenizer/src/unigram.nu`
     : ~ i k 0
     ~ < k np {
         ( vec_push [i] pids ? < k n {
-            ?? ( vec_get [i] ids k ) { T x → x F → padid }
+            ?? ( vec_get [i] ids + from k ) { T x → x F → padid }
         } { padid } )
         = k + k 1
     }
@@ -605,28 +718,300 @@ $ `deps/tokenizer/src/unigram.nu`
         ? meanpool { / 1.0 # f n } { 1.0 } 0.0 0 )
     } {}
     ( gk_autosync T )
-    // download + optional L2 normalize on the host
-    ( vec_clear [f] out )
+    // download + optional L2 normalize on the host, into out row `orow`
+    : ( Vec f ) hp ( vec_with_cap [f] dim )
     : ~ i k2 0
-    ~ < k2 dim { ( vec_push [f] out 0.0 ) = k2 + k2 1 }
-    ? ok { = ok ( gk_dbuf_download . e kit pooled out ) } {}
-    ? & ok normalize {
+    ~ < k2 dim { ( vec_push [f] hp 0.0 ) = k2 + k2 1 }
+    ? ok { = ok ( gk_dbuf_download . e kit pooled hp ) } {}
+    ? ok {
         : ~ f ss 0.0
-        = k2 0
-        ~ < k2 dim {
-            ?? ( vec_get [f] out k2 ) { T x → { = ss + ss * x x } F → {} }
-            = k2 + k2 1
-        }
-        : f nrm ( float_sqrt ss )
-        ? > nrm 0.0 {
+        ? normalize {
             = k2 0
             ~ < k2 dim {
-                ?? ( vec_get [f] out k2 ) { T x → { ( vec_set [f] out k2 / x nrm ) } F → {} }
+                : f x ( __em_vf hp k2 )
+                = ss + ss * x x
                 = k2 + k2 1
             }
         } {}
+        : f nrm ( float_sqrt ss )
+        : b div & normalize > nrm 0.0
+        = k2 0
+        ~ < k2 dim {
+            : f x ( __em_vf hp k2 )
+            ( vec_set [f] out + * orow dim k2 ? div { / x nrm } { x } )
+            = k2 + k2 1
+        }
     } {}
+    ( vec_free [f] hp )
     ( gk_dbuf_free idb ) ( gk_dbuf_free mask ) ( gk_dbuf_free hid )
     ( gk_dbuf_free pooled ) ( gk_dbuf_free pw )
     ^ ok
+}
+
+// One padded, masked, fused forward over `take` real texts —
+// ord[at .. at+take), longest first — plus (bq − take) dummy sequences,
+// every sequence at padded length np. The dummies exist for the buffer
+// pool (see __em_bucket_b); their rows run the arithmetic and are then
+// pooled by an all-zero weight row and never copied out. Each real
+// text's vector lands in `out` at its ORIGINAL index — ord carries it.
+@ __em_fwd_batch * Embed e ( Vec i ) ids ( Vec i ) offs ( Vec i ) ord i at i take i bq i np b normalize ( Vec f ) out → b {
+    : i dim . . e cfg dim
+    : i padid . . e cfg padid
+    : i rows * bq np
+    : ~ b ok T
+    ( gk_autosync F )
+    // token ids, each sequence padded to np (dummies all padding)
+    : ( Vec i ) pids ( vec_with_cap [i] rows )
+    : ~ i bi 0
+    ~ < bi bq {
+        : b real < bi take
+        : i n ? real { ( __em_len offs ( __em_vi ord + at bi ) ) } { 0 }
+        : i o0 ? real { ( __em_vi offs ( __em_vi ord + at bi ) ) } { 0 }
+        : ~ i k 0
+        ~ < k np {
+            ( vec_push [i] pids ? < k n { ( __em_vi ids + o0 k ) } { padid } )
+            = k + k 1
+        }
+        = bi + bi 1
+    }
+    : GkBuf idb ( gk_dbuf_new . e kit rows GK_I64 )
+    = ok ( gk_dbuf_upload_i . e kit idb pids )
+    ( vec_free [i] pids )
+    // the additive attention mask, one row per sequence: 0 for a real
+    // token, −∞ for padding (a dummy is −∞ across; see gkd_attention_batch)
+    : GkBuf mask ( __em_new e rows )
+    : ( Vec f ) hmask ( vec_with_cap [f] rows )
+    : f ninf ( __em_neg_inf )
+    = bi 0
+    ~ < bi bq {
+        : i n ? < bi take { ( __em_len offs ( __em_vi ord + at bi ) ) } { 0 }
+        : ~ i k 0
+        ~ < k np { ( vec_push [f] hmask ? < k n { 0.0 } { ninf } ) = k + k 1 }
+        = bi + bi 1
+    }
+    ? ok { = ok ( gk_dbuf_upload . e kit mask hmask ) } {}
+    ( vec_free [f] hmask )
+    // hidden = word[ids] + positions[pad+1 .. pad+1+np) + type0, LN —
+    // the position table is one [np,dim] slice broadcast over the batch
+    : GkBuf hid ( __em_new e * rows dim )
+    ? ok { = ok ( gkd_gather . e kit hid . e wemb idb 1 . . e cfg vocab dim rows ) } {}
+    : GkBuf pos ( __em_new e * np dim )
+    ? ok { = ok ( gkd_slice_ax . e kit pos . e pemb 1 np dim . . e cfg maxpos + padid 1 ) } {}
+    : GkBuf sum1 ( __em_new e * rows dim )
+    : ( Vec i ) od1 ( vec_new [i] )
+    ( vec_push [i] od1 bq ) ( vec_push [i] od1 * np dim )
+    : ( Vec i ) sa1 ( vec_new [i] )
+    ( vec_push [i] sa1 * np dim ) ( vec_push [i] sa1 1 )
+    : ( Vec i ) sb1 ( vec_new [i] )
+    ( vec_push [i] sb1 0 ) ( vec_push [i] sb1 1 )
+    ? ok { = ok ( gkd_ew_bc . e kit `add` `+` sum1 hid pos od1 sa1 sb1 ) } {}
+    ( vec_free [i] od1 ) ( vec_free [i] sa1 ) ( vec_free [i] sb1 )
+    // + token_type_embeddings[0] broadcast over every row
+    : GkBuf sum2 ( __em_new e * rows dim )
+    : ( Vec i ) od ( vec_new [i] )
+    ( vec_push [i] od rows ) ( vec_push [i] od dim )
+    : ( Vec i ) sa ( vec_new [i] )
+    ( vec_push [i] sa dim ) ( vec_push [i] sa 1 )
+    : ( Vec i ) sb ( vec_new [i] )
+    ( vec_push [i] sb 0 ) ( vec_push [i] sb 1 )
+    ? ok { = ok ( gkd_ew_bc . e kit `add` `+` sum2 sum1 . e temb od sa sb ) } {}
+    ( vec_free [i] od ) ( vec_free [i] sa ) ( vec_free [i] sb )
+    ? ok { = ok ( gkd_layernorm . e kit hid sum2 . e elnw . e elnb rows dim . . e cfg eps ) } {}
+    ( gk_dbuf_free pos ) ( gk_dbuf_free sum1 ) ( gk_dbuf_free sum2 )
+    // blocks
+    : i nl ( vec_len [EmbedLayer] . e layers )
+    : ~ i l 0
+    ~ & ok < l nl {
+        ?? ( vec_get [EmbedLayer] . e layers l ) {
+            T lay → { = ok ( __em_block_x e lay hid mask bq np ) }
+            F → { = ok F }
+        }
+        = l + l 1
+    }
+    // Pooling: one weight row of np floats per sequence — a one-hot at
+    // row 0 for CLS, ones over the real rows for mean, all zero for a
+    // dummy — as a [bq,1,np]·[bq,np,dim] bmm. The mean's 1/n is applied
+    // to the FINISHED sum as a per-sequence multiply, exactly where the
+    // single-text path's gemm alpha put it, so the value is bit-identical.
+    : GkBuf pooled ( __em_new e * bq dim )
+    : GkBuf pw ( __em_new e rows )
+    : b meanpool == . . e cfg pool EM_POOL_MEAN
+    : ( Vec f ) hpw ( vec_with_cap [f] rows )
+    = bi 0
+    ~ < bi bq {
+        : b real < bi take
+        : i n ? real { ( __em_len offs ( __em_vi ord + at bi ) ) } { 0 }
+        : ~ i k 0
+        ~ < k np {
+            : b on ? meanpool { < k n } { & real == k 0 }
+            ( vec_push [f] hpw ? on { 1.0 } { 0.0 } )
+            = k + k 1
+        }
+        = bi + bi 1
+    }
+    ? ok { = ok ( gk_dbuf_upload . e kit pw hpw ) } {}
+    ( vec_free [f] hpw )
+    ? ok { = ok ( gkd_bmm . e kit pooled pw hid bq 1 np dim 1 1 ) } {}
+    ? & ok meanpool {
+        : GkBuf inv ( __em_new e bq )
+        : ( Vec f ) hinv ( vec_with_cap [f] bq )
+        = bi 0
+        ~ < bi bq {
+            : i n ? < bi take { ( __em_len offs ( __em_vi ord + at bi ) ) } { 1 }
+            ( vec_push [f] hinv / 1.0 # f ? > n 0 { n } { 1 } )
+            = bi + bi 1
+        }
+        = ok ( gk_dbuf_upload . e kit inv hinv )
+        ( vec_free [f] hinv )
+        : ( Vec i ) odm ( vec_new [i] )
+        ( vec_push [i] odm bq ) ( vec_push [i] odm dim )
+        : ( Vec i ) sam ( vec_new [i] )
+        ( vec_push [i] sam dim ) ( vec_push [i] sam 1 )
+        : ( Vec i ) sbm ( vec_new [i] )
+        ( vec_push [i] sbm 1 ) ( vec_push [i] sbm 0 )
+        ? ok { = ok ( gkd_ew_bc . e kit `mul` `*` pooled pooled inv odm sam sbm ) } {}
+        ( vec_free [i] odm ) ( vec_free [i] sam ) ( vec_free [i] sbm )
+        ( gk_dbuf_free inv )
+    } {}
+    ( gk_autosync T )
+    // download, then normalize + scatter each real row to its text's slot
+    : ( Vec f ) hp ( vec_with_cap [f] * bq dim )
+    : ~ i z 0
+    ~ < z * bq dim { ( vec_push [f] hp 0.0 ) = z + z 1 }
+    ? ok { = ok ( gk_dbuf_download . e kit pooled hp ) } {}
+    ? ok {
+        = bi 0
+        ~ < bi take {
+            : i t ( __em_vi ord + at bi )
+            : ~ f ss 0.0
+            : ~ i j 0
+            ? normalize {
+                ~ < j dim {
+                    : f x ( __em_vf hp + * bi dim j )
+                    = ss + ss * x x
+                    = j + j 1
+                }
+            } {}
+            : f nrm ( float_sqrt ss )
+            : b div & normalize > nrm 0.0
+            = j 0
+            ~ < j dim {
+                : f x ( __em_vf hp + * bi dim j )
+                ( vec_set [f] out + * t dim j ? div { / x nrm } { x } )
+                = j + j 1
+            }
+            = bi + bi 1
+        }
+    } {}
+    ( vec_free [f] hp )
+    ( gk_dbuf_free idb ) ( gk_dbuf_free mask ) ( gk_dbuf_free hid )
+    ( gk_dbuf_free pooled ) ( gk_dbuf_free pw )
+    ^ ok
+}
+
+// Embed B already-tokenized texts in one call. `ids` is flat token
+// storage — text t occupies ids[offs[t] .. offs[t+1]), offs has B+1
+// entries — and `out` must already hold B·dim floats; text t's vector is
+// written in place at row t.
+//
+// Where the fused attention runs (CUDA, a supported head width), texts
+// are sorted longest-first and packed greedily into chunks — a chunk's
+// padded length is its LONGEST member's bucket, so the sort is what
+// keeps short texts from being padded out to a long stranger's length —
+// and each chunk is one batched forward (__em_fwd_batch). Everywhere
+// else each text runs alone on the composed path, as it always has.
+//
+// The CUDA context is thread-local and this may be called from a
+// server's worker rather than the thread that opened the model, so the
+// device is bound to the caller first.
+@ embed_encode_batch * Embed e ( Vec i ) ids ( Vec i ) offs ( Vec f ) out b normalize → b {
+    ? . e ok {} { ^ F }
+    ? ( gk_bind_thread . e kit ) {} { ^ F }
+    : i nb - ( vec_len [i] offs ) 1
+    ? > nb 0 {} { ^ F }
+    : i dim . . e cfg dim
+    ? >= ( vec_len [f] out ) * nb dim {} { ^ F }
+    : ~ b ok T
+    : ~ i t 0
+    ~ < t nb {
+        ? > ( __em_len offs t ) 0 {} { = ok F }
+        = t + t 1
+    }
+    ? ok {} { ^ F }
+    : i hd / dim . . e cfg heads
+    ? ( gkd_attention_ok . e kit hd ) {} {
+        = t 0
+        ~ & ok < t nb {
+            = ok ( __em_fwd_one e ids ( __em_vi offs t ) ( __em_len offs t ) out t normalize )
+            = t + t 1
+        }
+        ^ ok
+    }
+    // longest first (insertion sort; a request batch is small)
+    : ( Vec i ) ord ( vec_with_cap [i] nb )
+    = t 0
+    ~ < t nb { ( vec_push [i] ord t ) = t + t 1 }
+    = t 1
+    ~ < t nb {
+        : i cur ( __em_vi ord t )
+        : i cl ( __em_len offs cur )
+        : ~ i j t
+        : ~ b walk T
+        ~ & walk > j 0 {
+            ? < ( __em_len offs ( __em_vi ord - j 1 ) ) cl {
+                ( vec_set [i] ord j ( __em_vi ord - j 1 ) )
+                = j - j 1
+            } { = walk F }
+        }
+        ( vec_set [i] ord j cur )
+        = t + t 1
+    }
+    // greedy chunks under the row budget
+    : i lim - - . . e cfg maxpos . . e cfg padid 1
+    : ~ i at 0
+    ~ & ok < at nb {
+        : i l0 ( __em_len offs ( __em_vi ord at ) )
+        : ~ i np ( __em_bucket l0 )
+        ? > np lim { = np lim } {}
+        ? >= np l0 {} { = ok F }
+        ? ok {
+            : ~ i take 1
+            : ~ b grow T
+            ~ & grow < + at take nb {
+                // A chunk stays length-homogeneous: a text whose own
+                // bucket is under half the chunk's np would spend more
+                // than half its rows on padding — at 16 real tokens in a
+                // 192-row slot that is 12x the arithmetic — and sorted
+                // longest-first it (and everything after it) opens a
+                // cheaper chunk of its own instead. Below 32 rows the
+                // padding is launch-overhead noise, so tiny chunks merge
+                // freely.
+                : i cl ( __em_bucket ( __em_len offs ( __em_vi ord + at take ) ) )
+                ? & & < take EM_BATCH_MAX <= * ( __em_bucket_b + take 1 ) np EM_ROWS_BUDGET
+                | <= np 32 >= * cl 2 np {
+                    = take + take 1
+                } { = grow F }
+            }
+            : i bq ( __em_bucket_b take )
+            = ok ( __em_fwd_batch e ids offs ord at take bq np normalize out )
+            = at + at take
+        } {}
+    }
+    ( vec_free [i] ord )
+    ^ ok
+}
+
+// Forward over one already-tokenized id sequence — a batch of one.
+@ embed_encode_ids_norm * Embed e ( Vec i ) ids ( Vec f ) out b normalize → b {
+    ? . e ok {} { ^ F }
+    : i dim . . e cfg dim
+    ( vec_clear [f] out )
+    : ~ i k 0
+    ~ < k dim { ( vec_push [f] out 0.0 ) = k + k 1 }
+    : ( Vec i ) offs ( vec_new [i] )
+    ( vec_push [i] offs 0 )
+    ( vec_push [i] offs ( vec_len [i] ids ) )
+    : b r ( embed_encode_batch e ids offs out normalize )
+    ( vec_free [i] offs )
+    ^ r
 }
