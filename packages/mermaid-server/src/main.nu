@@ -39,7 +39,7 @@ $ `service.nu`
         = base ( path_join ( string_data h ) `.nurl` )
         ( string_free h )
     }
-    : String share ( path_join ( string_data base ) `share/mermaid-server/templates` )
+    : String share ( path_join ( string_data base ) `share/mermaid-server/.templates` )
     ( string_free base )
     ^ share
 }
