@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_bool_literal_words.nu:17:14: error: use of undefined identifier 'true' — NURL spells the boolean literals 'T' and 'F'. Write 'T' here. The type is 'b'.
+    : b flag true
+             ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

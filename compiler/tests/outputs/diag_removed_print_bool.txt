@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_removed_print_bool.nu:17:25: error: 'nurl_print_bool' was removed — print the words yourself: ( nurl_println ? x `true` `false` ). One behaviour per name: 'nurl_println' takes a string, and the bool has no printed form the compiler gets to choose.
+    ( nurl_print_bool T )
+                        ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

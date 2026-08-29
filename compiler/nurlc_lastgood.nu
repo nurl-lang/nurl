@@ -180,6 +180,30 @@
     ( __diag_abort )
 }
 
+// __diag_lit: `text` wrapped in the backticks a NURL string literal is
+// written with.
+//
+// A diagnostic that shows source has to be able to show a string, and a
+// NURL diagnostic is itself a backtick-delimited literal — which cannot
+// contain a backtick, because the backtick is what terminates it and
+// docs/spec.md §2.5 gives it no escape. So the messages that needed to
+// quote a literal wrote `'true'` instead and produced an example that
+// does not compile: single quotes are not NURL string syntax anywhere.
+// That defeats the point of naming the cure, which is that the reader
+// can paste it. Poke the two quotes in at runtime instead.
+@ __diag_lit s text → s {
+    : i n ( nurl_str_len text )
+    : s buf # s ( nurl_alloc + n 3 )
+    : *u bp # *u buf
+    : *u tp # *u text
+    = . bp 0 # u 96  // opening `
+    : ~ i k 0
+    ~ < k n { = . bp + k 1 # u . tp k = k + k 1 }
+    = . bp + n 1 # u 96  // closing `
+    = . bp + n 2 # u 0
+    ^ buf
+}
+
 // die_at: a fatal diagnostic for a deferred (post-scan) check that has only a
 // stored "file:line" location, not a live lexer — so no column, caret, or
 // source-line echo, but the same parseable "loc: msg" prefix. Used by the
@@ -3090,7 +3114,19 @@
     // expression (`^ + p 1`, `^ ( f p )`).
     : i ret_first_tt ( nurl_lex_type lex )
     : s ret_first_val ( nurl_lex_val lex )
+    // `^ . p field` hands back a handle stored INSIDE a parameter — an
+    // alias of the caller's value, exactly like `^ p`. The root has to be
+    // peeked before gen_operand consumes the expression. Ownership only;
+    // the §2.8 refdepth summary stays on the strict `^ p` form.
+    : ~ s ret_first_root ( nurl_str_cat `` `` )
+    ? == ret_first_tt TT_DOT
+    { : i __rr_pk ( nurl_lex_peek_type lex )
+        ? ( is_ident_tok __rr_pk ) { = ret_first_root ( nurl_lex_peek_val lex ) } {} }
+    {}
     : ~ s val ( gen_operand lex syms cg )
+    ? & != g_borrowck 0 != 0 ( nurl_str_len ret_first_root )
+    { ( bck_record_ret_alias syms ret_first_root ) }
+    {}
     // If the returned value WAS exactly that bare identifier and it
     // names a parameter, record the parameter index: callers then learn
     // this function may return that argument, propagating a passed-in
@@ -3775,10 +3811,28 @@
         ? & & == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len glb )
         == 0 ( nurl_sym_len2 syms name `__param` )
         { : s __sugg ( __suggest_ident syms name )
-            ? != 0 ( nurl_str_len __sugg )
-            { ( die_pos lex __id_line __id_col ( nurl_str_cat ( nurl_str_cat3 `use of undefined identifier '` name `' — did you mean '` )
-                ( nurl_str_cat3 __sugg `'? No binding, parameter, constant, enum variant, or ` `function with this name is in scope` ) ) ) }
-            { ( die_pos lex __id_line __id_col ( nurl_str_cat3 `use of undefined identifier '` name `' — no binding, parameter, constant, enum variant, or function with this name is in scope` ) ) } }
+            // `true` / `false` are not near-misses of anything, so the
+            // suggester has nothing to offer and the generic message
+            // ("no binding, parameter, constant, ... is in scope") sends
+            // the reader looking for a missing declaration. They are the
+            // spelling every other language uses, which makes this the
+            // single most common word-level mistake in NURL — and the
+            // TOML/JSON writers in the stdlib print the words `true` and
+            // `false` as DATA, so the reader has just seen them in a
+            // NURL file. diag_bind_bool_literal_name.nu locks the
+            // opposite direction (`T` used as a binding NAME); this is
+            // the one a model actually writes first.
+            ? || != 0 ( nurl_str_eq name `true` ) != 0 ( nurl_str_eq name `false` )
+            { ( die_pos lex __id_line __id_col ( nurl_str_cat3
+                `use of undefined identifier '` name
+                ( nurl_str_cat3 `' — NURL spells the boolean literals 'T' and 'F'. Write '`
+                ? != 0 ( nurl_str_eq name `true` ) `T` `F`
+                `' here. The type is 'b'.` ) ) ) }
+            {
+                ? != 0 ( nurl_str_len __sugg )
+                { ( die_pos lex __id_line __id_col ( nurl_str_cat ( nurl_str_cat3 `use of undefined identifier '` name `' — did you mean '` )
+                    ( nurl_str_cat3 __sugg `'? No binding, parameter, constant, enum variant, or ` `function with this name is in scope` ) ) ) }
+                { ( die_pos lex __id_line __id_col ( nurl_str_cat3 `use of undefined identifier '` name `' — no binding, parameter, constant, enum variant, or function with this name is in scope` ) ) } } }
         {}
         ^ ? != 0 ( nurl_str_len ptr )
         ( load_var cg lt ptr )
@@ -4878,9 +4932,13 @@
     != 0 ( nurl_str_starts cn `vec_get` ) `1` `` )
     // Lint-only view provenance — the sibling of the channel set on the
     // other call path; both have to publish it or the summary reaches
-    // only half the call sites.
+    // only half the call sites. The §2.2 returned-handle summary answers
+    // the same question for a callee that hands back a parameter's own
+    // handle, so it counts as a view here too.
+    : s __rvw ( nurl_sym_get g_fn_ret_view cn )
     ( nurl_sym_def syms `__last_call_ret_view__`
-    ( nurl_sym_get g_fn_ret_view cn ) )
+    ? != 0 ( nurl_str_len __rvw ) __rvw
+    ( nurl_sym_get g_fn_ret_alias cn ) )
 }
 
 // gen_inout_field_addr: lex is positioned at the TT_DOT of an
@@ -7353,9 +7411,16 @@
     != 0 ( nurl_str_starts fname `vec_get` ) `1` `` )
     // Lint-only view provenance (see g_fn_ret_view): kept in its own
     // channel so it cannot reach the auto-drop decision that
-    // __last_value_borrow__ drives.
+    // __last_value_borrow__ drives. The §2.2 returned-handle summary
+    // answers the same question one shape further out — a function that
+    // may hand back a PARAMETER's handle (`@ f Holder h → String { ^ . h
+    // s }`) returns an alias, not a fresh allocation — so it counts as a
+    // view here too. Without it the owned-temporary lint reads such a
+    // result as a leak the caller has to bind.
+    : s __rview ( nurl_sym_get g_fn_ret_view fname )
     ( nurl_sym_def syms `__last_call_ret_view__`
-    ( nurl_sym_get g_fn_ret_view fname ) )
+    ? != 0 ( nurl_str_len __rview ) __rview
+    ( nurl_sym_get g_fn_ret_alias fname ) )
     : s rl ( nurl_sym_get syms fname )
     : s rlt ? == 0 ( nurl_str_len rl ) `i64` rl
     ? ( seq rlt `void` )
@@ -7909,6 +7974,7 @@
         : i bck_arg_tt ( nurl_lex_type lex )
         : s bck_arg_val ( nurl_lex_val lex )
         : i bck_arg_line ( nurl_lex_line lex )
+        : i bck_arg_col ( nurl_lex_col lex )
         // Dangling-borrow tracking (see __ptr_kill): the FIRST argument of
         // a borrow producer names the container the pointer will point
         // into; the first argument of a container mutator names the
@@ -8247,6 +8313,72 @@
         : b builtin_escape_slot & is_escape_call ! & vec_family_call == arg_idx 0
         : b arg_pos_escapes | builtin_escape_slot
         ( str_contains_word callee_escapes ( nurl_str_int arg_idx ) )
+        // Lint: an allocation owned by nothing (docs/MEMORY.md §1).
+        //
+        // `( f ( g x ) )` where `g` returns a FRESH handle and `f` only
+        // reads it leaves that handle owned by no binding, so nothing ever
+        // frees it — `( nurl_eprint ( nurl_str_int n ) )` leaks one string
+        // per call. The cure is one line: bind it, pass the binding.
+        //
+        // Only flagged when the outer callee provably does NOT take the
+        // value over: not a destructor, not a `sink` position, not one the
+        // callee embeds in an aggregate (`vec_push`, `json_obj_set`, …),
+        // not an escaping position. Those are the routes by which a fresh
+        // allocation legitimately ends its life at a call site.
+        ? & & & & != g_lint 0 == bck_arg_tt TT_LPAREN
+        ( lint_in_top_file )
+        ! | | is_consume_call arg_pos_escapes
+        | ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+        ( str_contains_word ( nurl_sym_get g_fn_embeds fname ) ( nurl_str_int arg_idx ) )
+        == 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_view__` ) )
+        { ? | ( lint_is_manual_handle at )
+            != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
+            { ( lint_warn ( vis_current_src_file ) bck_arg_line bck_arg_col
+                ( nurl_str_cat3
+                `this allocation is owned by nothing - '` fname
+                `' only reads it, so nothing frees it. Bind it first (': T x ( ... )') and pass the binding` ) ) }
+            {} }
+        {}
+        // §2.1b Freeing what the compiler already frees.
+        //
+        // `nurl_free` is excluded from the destructor move rule above
+        // because it usually reclaims raw `nurl_alloc` memory that
+        // nothing tracks. But when its argument names a binding the
+        // auto-drop layer DID register — an owned string from
+        // `nurl_str_slice` / `nurl_str_cat`, an owned slice, a `Drop`
+        // value, a struct with owned fields — the scope exit will free
+        // that same pointer again. docs/MEMORY.md §1 states the rule in
+        // prose ("do not then also free it by hand"); until this check
+        // the compiler let the program say it anyway and the double
+        // free surfaced only under ASan, in whatever unrelated code
+        // reused the block.
+        //
+        // The identifier comes from `__last_ident_name__` rather than
+        // the argument's first token, so the cast spelling every FFI
+        // pointer uses — `( nurl_free # s piece )` — is covered as
+        // exactly as the bare one. There is no legitimate counter-case:
+        // reassigning an owned binding already frees its previous value,
+        // and a binding whose ownership left it is not registered.
+        //
+        // Inside a closure body too, since gen_closure_expr's fall-off
+        // exit runs the drop epilogue: both closure exits now free what
+        // they registered, so registration is a proof there as well. The
+        // rule was scoped out of closures while only the `^` exit did.
+        ? & & != g_borrowck 0 ( seq fname `nurl_free` ) == arg_idx 0
+        { : s nf_id ( nurl_sym_get syms `__last_ident_name__` )
+            ? != 0 ( nurl_str_len nf_id )
+            { : s nf_ptr ( nurl_sym_get2 syms nf_id `__ptr` )
+                ? & != 0 ( nurl_str_len nf_ptr )
+                | | ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) nf_ptr )
+                ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) nf_id )
+                | ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) nf_ptr )
+                ( str_contains_word ( nurl_sym_get syms `__owned_struct_fields__` ) nf_ptr )
+                { ( die lex ( nurl_str_cat3
+                    `'` nf_id
+                    `' is auto-dropped at the end of its scope, so freeing it here frees it twice - delete this call. Only memory the compiler does NOT track (a raw 'nurl_alloc' buffer, an FFI pointer) needs a hand-written 'nurl_free'` ) ) }
+                {} }
+            {} }
+        {}
         // Ownership, not lifetime: an argument the callee stores into an
         // aggregate belongs to that structure now, so the caller has
         // nothing left to free. Kept apart from the escape check below
@@ -8763,7 +8895,16 @@
             { ( die lex `'nurl_print_str' was removed — it printed the string plus a newline, which is exactly 'nurl_println'. Write ( nurl_println s ).` ) }
             {}
             ? ( seq fname `nurl_print_bool` )
-            { ( die lex `'nurl_print_bool' was removed — print the words yourself: ( nurl_println ? x 'true' 'false' ), with backtick string literals as the ternary arms.` ) }
+            {  // The ternary arms are string LITERALS, so the example
+                // has to show them in backticks — see __diag_lit for why
+                // that costs two pokes rather than two characters.
+                : s __lt ( __diag_lit `true` )
+                : s __lf ( __diag_lit `false` )
+                : s __arms ( nurl_str_cat3 __lt ` ` __lf )
+                ( die lex ( nurl_str_cat3
+                `'nurl_print_bool' was removed — print the words yourself: ( nurl_println ? x `
+                __arms
+                ` ). One behaviour per name: 'nurl_println' takes a string, and the bool has no printed form the compiler gets to choose.` ) ) }
             {}
             : s __sugg ( __suggest_ident syms fname )
             ? != 0 ( nurl_str_len __sugg )
@@ -20139,16 +20280,33 @@
     // capture is not seeded, so it starts Uninit and cannot be reported —
     // what the closure does to a captured handle is the enclosing frame's
     // question, and the consumed-capture replay below already answers it.
-    : s __cl_bck_stmts ( nurl_sym_get g_bck `stmts` )
-    : s __cl_bck_reads ( nurl_sym_get g_bck `reads` )
-    : s __cl_bck_kind ( nurl_sym_get g_bck `pending_kind` )
-    : s __cl_bck_pmoves ( nurl_sym_get g_bck `pmoves` )
-    : s __cl_bck_pmaybes ( nurl_sym_get g_bck `pmaybes` )
-    : s __cl_bck_warnset ( nurl_sym_get g_bck `warnset` )
-    : s __cl_bck_deferred ( nurl_sym_get g_bck `deferred` )
+    //
+    // `g_bck` only EXISTS when the checker is on (`main` builds it under
+    // the same flag), so every touch of it belongs inside the gate — the
+    // analyze call below already is, and this save/restore pair was the
+    // one place that reached for it unconditionally. With
+    // `--no-borrowck` the handle is 0, and `nurl_sym_get` hashed the key
+    // modulo a zero-capacity table: `remainder by zero`, an internal
+    // compiler panic on any program containing a closure.
+    : ~ s __cl_bck_stmts ( nurl_str_cat `` `` )
+    : ~ s __cl_bck_reads ( nurl_str_cat `` `` )
+    : ~ s __cl_bck_kind ( nurl_str_cat `` `` )
+    : ~ s __cl_bck_pmoves ( nurl_str_cat `` `` )
+    : ~ s __cl_bck_pmaybes ( nurl_str_cat `` `` )
+    : ~ s __cl_bck_warnset ( nurl_str_cat `` `` )
+    : ~ s __cl_bck_deferred ( nurl_str_cat `` `` )
+    ? != g_borrowck 0 {
+        = __cl_bck_stmts ( nurl_sym_get g_bck `stmts` )
+        = __cl_bck_reads ( nurl_sym_get g_bck `reads` )
+        = __cl_bck_kind ( nurl_sym_get g_bck `pending_kind` )
+        = __cl_bck_pmoves ( nurl_sym_get g_bck `pmoves` )
+        = __cl_bck_pmaybes ( nurl_sym_get g_bck `pmaybes` )
+        = __cl_bck_warnset ( nurl_sym_get g_bck `warnset` )
+        = __cl_bck_deferred ( nurl_sym_get g_bck `deferred` )
+    } {}
     : i __cl_bck_depth g_bck_depth
     ( bck_fn_begin )
-    ( nurl_sym_set g_bck `deferred` `` )
+    ? != g_borrowck 0 { ( nurl_sym_set g_bck `deferred` `` ) } {}
     : ~ s body_val ( gen_stmt lex body_syms cg )
     : s __cl_tail_lt ( nurl_get_last_type )
     ? != g_borrowck 0 {
@@ -20159,13 +20317,15 @@
         { ( bck_defer_fn ( nurl_sym_get body_syms `__fn_param_names__` ) ) }
         { ( bck_analyze ( nurl_sym_get body_syms `__fn_param_names__` ) ) }
     } {}
-    ( nurl_sym_set g_bck `stmts` __cl_bck_stmts )
-    ( nurl_sym_set g_bck `reads` __cl_bck_reads )
-    ( nurl_sym_set g_bck `pending_kind` __cl_bck_kind )
-    ( nurl_sym_set g_bck `pmoves` __cl_bck_pmoves )
-    ( nurl_sym_set g_bck `pmaybes` __cl_bck_pmaybes )
-    ( nurl_sym_set g_bck `warnset` __cl_bck_warnset )
-    ( nurl_sym_set g_bck `deferred` __cl_bck_deferred )
+    ? != g_borrowck 0 {
+        ( nurl_sym_set g_bck `stmts` __cl_bck_stmts )
+        ( nurl_sym_set g_bck `reads` __cl_bck_reads )
+        ( nurl_sym_set g_bck `pending_kind` __cl_bck_kind )
+        ( nurl_sym_set g_bck `pmoves` __cl_bck_pmoves )
+        ( nurl_sym_set g_bck `pmaybes` __cl_bck_pmaybes )
+        ( nurl_sym_set g_bck `warnset` __cl_bck_warnset )
+        ( nurl_sym_set g_bck `deferred` __cl_bck_deferred )
+    } {}
     = g_bck_depth __cl_bck_depth
     = g_bck_closure_depth - g_bck_closure_depth 1
     = g_fn_arc_mut_witness __cl_arcmut_saved
@@ -20189,7 +20349,44 @@
             `a closure that captured it frees it` ) }
         {}
     }
-    ? == g_did_ret 0 { ( mem_drain_deferred cg ) } {}
+    // Fall-off exit. A closure body that ends WITHOUT `^` reached the
+    // `ret` below having dropped nothing: `gen_ret_term` runs the whole
+    // epilogue for a body that returns, and this site ran only the
+    // deferred drain. Every owned value such a body bound therefore
+    // leaked — one allocation per call, forever, in exactly the
+    // `( each v \ i x → v { : s k ( nurl_str_int x ) … } )` shape a
+    // callback is usually written in.
+    //
+    // The rosters were shadowed to empty when the body's scope was
+    // pushed (see `__owned_strings__` above), so this drops the
+    // CLOSURE's own values and never the enclosing frame's.
+    //
+    // A non-void tail whose last expression is a bare identifier hands
+    // that binding's handle out as the closure's result, so its drop is
+    // skipped — the same rule `gen_ret` applies to a returned ident, and
+    // the same conservative direction: a missed skip would leak, never
+    // dangle. `mem_drain_deferred` stays last, as in gen_ret_term.
+    ? == g_did_ret 0
+    { : ~ s __cl_skip ( nurl_str_cat `` `` )
+        ? ! ( seq ret_type `void` )
+        { : i __cl_tail_tt ( nurl_str_to_int ( nurl_sym_get body_syms `__tail_first_tt__` ) )
+            ? ( is_ident_tok __cl_tail_tt )
+            { = __cl_skip ( nurl_sym_get body_syms `__tail_first_val__` ) }
+            {} }
+        {}
+        : s __cl_skip_ptr ? != 0 ( nurl_str_len __cl_skip )
+        ( nurl_sym_get2 body_syms __cl_skip `__ptr` )
+        ( nurl_str_cat `` `` )
+        ( mem_drop_owned body_syms cg __cl_skip )
+        ? != 0 g_auto_drop_strings
+        { ( mem_drop_owned_strings body_syms cg __cl_skip_ptr )
+            ( mem_drop_owned_struct_fields body_syms cg __cl_skip_ptr )
+            ( mem_drop_user_drops body_syms cg __cl_skip_ptr ) }
+        {}
+        ( mem_own_closure_remove body_syms __cl_skip )
+        ( mem_drop_closure_envs body_syms cg )
+        ( mem_drain_deferred cg ) }
+    {}
     ( nurl_sym_set g_fn_escapes `__deferred_drops__` __cl_defer_saved )
     ( nurl_sym_set g_fn_escapes `__defer_top_fn__` __cl_dtop_saved )
     ( nurl_sym_set g_fn_escapes `__dsnap_str__` __cl_snapstr_saved )
@@ -25585,6 +25782,8 @@
     ( __emit_rt_decl syms `declare void @nurl_eprintln(i8*)` )
     ( __emit_rt_decl syms `declare void @nurl_print_int(i64)` )
     ( __emit_rt_decl syms `declare void @nurl_println_int(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_eprint_int(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_eprintln_int(i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_read_int()` )
     ( __emit_rt_decl syms `declare i8*  @nurl_read_line()` )
     // nurl_read_n_bytes lives as pure NURL `read_n_bytes` in
@@ -26502,6 +26701,8 @@
     ( nurl_sym_def syms `nurl_eprintln` `void` )
     ( nurl_sym_def syms `nurl_print_int` `void` )
     ( nurl_sym_def syms `nurl_println_int` `void` )
+    ( nurl_sym_def syms `nurl_eprint_int` `void` )
+    ( nurl_sym_def syms `nurl_eprintln_int` `void` )
     // nurl_lex_advance, nurl_sym_def / _push / _pop, nurl_cg_reset
     // and nurl_set_last_type are pure-NURL @-fns; their types come
     // from the @-fn declarations.
@@ -29337,7 +29538,8 @@
     ( nurl_print `  --help, -h          print this help and exit\n` )
     ( nurl_print `  --version, -v       print the toolchain version and exit\n` )
     ( nurl_print `  --g, -g             emit DWARF debug info (nurl.sh --debug forwards this)\n` )
-    ( nurl_print `  --lint              run lint-only diagnostics (e.g. unused imports)\n` )
+    ( nurl_print `  --lint              run lint-only diagnostics: unused symbols and imports,\n` )
+    ( nurl_print `                      an unreleased handle, an allocation owned by nothing\n` )
     ( nurl_print `  --no-borrowck       disable the borrow-checker pass (on by default)\n` )
     ( nurl_print `  --strict-borrowck   run the borrow-checker in strict mode\n` )
     ( nurl_print `  --no-strict-arity   demote the n-ary '&'/'|' arity-trap error to a warning\n` )

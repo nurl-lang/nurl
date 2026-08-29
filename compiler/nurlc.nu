@@ -180,6 +180,30 @@
     ( __diag_abort )
 }
 
+// __diag_lit: `text` wrapped in the backticks a NURL string literal is
+// written with.
+//
+// A diagnostic that shows source has to be able to show a string, and a
+// NURL diagnostic is itself a backtick-delimited literal — which cannot
+// contain a backtick, because the backtick is what terminates it and
+// docs/spec.md §2.5 gives it no escape. So the messages that needed to
+// quote a literal wrote `'true'` instead and produced an example that
+// does not compile: single quotes are not NURL string syntax anywhere.
+// That defeats the point of naming the cure, which is that the reader
+// can paste it. Poke the two quotes in at runtime instead.
+@ __diag_lit s text → s {
+    : i n ( nurl_str_len text )
+    : s buf # s ( nurl_alloc + n 3 )
+    : *u bp # *u buf
+    : *u tp # *u text
+    = . bp 0 # u 96  // opening `
+    : ~ i k 0
+    ~ < k n { = . bp + k 1 # u . tp k = k + k 1 }
+    = . bp + n 1 # u 96  // closing `
+    = . bp + n 2 # u 0
+    ^ buf
+}
+
 // die_at: a fatal diagnostic for a deferred (post-scan) check that has only a
 // stored "file:line" location, not a live lexer — so no column, caret, or
 // source-line echo, but the same parseable "loc: msg" prefix. Used by the
@@ -3787,10 +3811,28 @@
         ? & & == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len glb )
         == 0 ( nurl_sym_len2 syms name `__param` )
         { : s __sugg ( __suggest_ident syms name )
-            ? != 0 ( nurl_str_len __sugg )
-            { ( die_pos lex __id_line __id_col ( nurl_str_cat ( nurl_str_cat3 `use of undefined identifier '` name `' — did you mean '` )
-                ( nurl_str_cat3 __sugg `'? No binding, parameter, constant, enum variant, or ` `function with this name is in scope` ) ) ) }
-            { ( die_pos lex __id_line __id_col ( nurl_str_cat3 `use of undefined identifier '` name `' — no binding, parameter, constant, enum variant, or function with this name is in scope` ) ) } }
+            // `true` / `false` are not near-misses of anything, so the
+            // suggester has nothing to offer and the generic message
+            // ("no binding, parameter, constant, ... is in scope") sends
+            // the reader looking for a missing declaration. They are the
+            // spelling every other language uses, which makes this the
+            // single most common word-level mistake in NURL — and the
+            // TOML/JSON writers in the stdlib print the words `true` and
+            // `false` as DATA, so the reader has just seen them in a
+            // NURL file. diag_bind_bool_literal_name.nu locks the
+            // opposite direction (`T` used as a binding NAME); this is
+            // the one a model actually writes first.
+            ? || != 0 ( nurl_str_eq name `true` ) != 0 ( nurl_str_eq name `false` )
+            { ( die_pos lex __id_line __id_col ( nurl_str_cat3
+                `use of undefined identifier '` name
+                ( nurl_str_cat3 `' — NURL spells the boolean literals 'T' and 'F'. Write '`
+                ? != 0 ( nurl_str_eq name `true` ) `T` `F`
+                `' here. The type is 'b'.` ) ) ) }
+            {
+                ? != 0 ( nurl_str_len __sugg )
+                { ( die_pos lex __id_line __id_col ( nurl_str_cat ( nurl_str_cat3 `use of undefined identifier '` name `' — did you mean '` )
+                    ( nurl_str_cat3 __sugg `'? No binding, parameter, constant, enum variant, or ` `function with this name is in scope` ) ) ) }
+                { ( die_pos lex __id_line __id_col ( nurl_str_cat3 `use of undefined identifier '` name `' — no binding, parameter, constant, enum variant, or function with this name is in scope` ) ) } } }
         {}
         ^ ? != 0 ( nurl_str_len ptr )
         ( load_var cg lt ptr )
@@ -8853,7 +8895,16 @@
             { ( die lex `'nurl_print_str' was removed — it printed the string plus a newline, which is exactly 'nurl_println'. Write ( nurl_println s ).` ) }
             {}
             ? ( seq fname `nurl_print_bool` )
-            { ( die lex `'nurl_print_bool' was removed — print the words yourself: ( nurl_println ? x 'true' 'false' ), with backtick string literals as the ternary arms.` ) }
+            {  // The ternary arms are string LITERALS, so the example
+                // has to show them in backticks — see __diag_lit for why
+                // that costs two pokes rather than two characters.
+                : s __lt ( __diag_lit `true` )
+                : s __lf ( __diag_lit `false` )
+                : s __arms ( nurl_str_cat3 __lt ` ` __lf )
+                ( die lex ( nurl_str_cat3
+                `'nurl_print_bool' was removed — print the words yourself: ( nurl_println ? x `
+                __arms
+                ` ). One behaviour per name: 'nurl_println' takes a string, and the bool has no printed form the compiler gets to choose.` ) ) }
             {}
             : s __sugg ( __suggest_ident syms fname )
             ? != 0 ( nurl_str_len __sugg )
