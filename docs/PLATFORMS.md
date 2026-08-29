@@ -22,7 +22,7 @@ verifies — not by intent:
 | Linux x86_64 (glibc ≥ 2.28) | **1** | `build.sh` bootstrap fixed point + full corpus + examples gate + ASan/UBSan/LSan + peak-RSS / symbol-collision / leak gates, every push and PR; release artifact smoke-tested | `install.sh` |
 | FreeBSD x86_64 | **1** | build + bootstrap + full corpus on a FreeBSD 14.2 VM in CI (hard gate); the *release* artifact leg is best-effort (`continue-on-error`) | `install.sh` |
 | Linux ARM64 (glibc) | **2** | release workflow builds natively on an ARM64 runner (`--no-tests`) and smoke-tests a hello-world; not in `ci.yml` | `install.sh` |
-| Windows x86_64 | **1** | the `windows-tests` workflow runs `build.bat` — bootstrap fixed point + the full Windows golden corpus (`run_tests.ps1`) — on every push to `main` **and every PR**, so a Windows-only regression cannot reach `main`; the release job builds with `--no-tests` | `install.ps1` |
+| Windows x86_64 | **1** | the `windows-tests` workflow runs `build.bat` — bootstrap fixed point + the full Windows golden corpus (`run_tests.ps1`) — on every push to `main` **and every PR**, so a Windows-only regression cannot reach `main`; the release job builds with `--no-tests`. `ci.yml` additionally links the runtime with the *distro* mingw-w64 (`tools/check_mingw_cross.sh`), because both Windows-runner toolchains target UCRT and the cross one does not | `install.ps1` |
 | macOS ARM64 (Apple Silicon) | **1** | the `macos-tests` workflow runs `./build.sh` — bootstrap fixed point + the full corpus, against the **same** `outputs/` goldens as Linux and FreeBSD — on every push to `main` **and every PR**, plus the `nurl.sh` driver end to end and the examples gate. Requires Homebrew LLVM: Xcode's clang cannot parse `nurlc`'s IR (see [`BUILDING.md`](BUILDING.md)). No release artifact yet — the installer still rejects Darwin, so the install route stays build-from-source | build from source |
 | macOS x86_64 (Intel) | **3** | no CI. GitHub's last Intel image (`macos-13`) never left the queue across ten attempted runs, and a required check that cannot schedule blocks every PR — so the leg was removed rather than left permanently pending. The code paths are the ARM64 ones plus a different codegen backend; unverified | build from source |
 | Alpine / musl | **3** | build from source only. The shipped Linux archives are glibc-linked and do **not** load under musl | build from source |
@@ -33,6 +33,16 @@ object (`stdlib\runtime.mingw.o`) for it alongside the MSVC one that a
 system clang uses — the two ABIs cannot share an object. Compression is
 not affected either way: gzip, deflate and zstd are all pure NURL and
 link nothing.
+
+There is a THIRD Windows toolchain, and for two releases nothing tested
+it: the distro `mingw-w64` (`x86_64-w64-mingw32-gcc`), which the hosted
+playground's `/build_windows` cross-compiles with. It targets the older
+`msvcrt.dll` rather than UCRT, so a runtime that calls a UCRT-only CRT
+export links on both toolchains above and on neither of that one — and
+because mingw pulls in the whole runtime object, the failure is total:
+hello world does not link either. `tools/check_mingw_cross.sh` compiles
+`stdlib/runtime.c` for that target and links a trivial `main` against it,
+in about ten seconds and with no Windows involved; `ci.yml` runs it.
 
 Two things are MSVC-ABI only, because the library each needs is an MSVC
 import lib, and the driver says so rather than leaving it to the linker:
