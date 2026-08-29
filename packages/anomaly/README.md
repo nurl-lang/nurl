@@ -151,15 +151,57 @@ command with `--store DIR`.
 | `GET\|POST /force_train/<model>` | retrain now |
 | `POST /detect_anomalies` | batch-score a CSV file (`{"file_path": ..., "has_header": ...}`) |
 | `GET /models/dynamic` | list models with metadata |
-| `GET /models/dynamic/<m>/metadata` | model metadata |
+| `GET /models/dynamic/<m>/metadata` | model metadata, plus the autoencoder's own state |
+| `PUT /models/dynamic/<m>/metadata` | edit the schedule and the per-version configs (see below) |
 | `GET /models/dynamic/<m>/data?limit=N\|all` | recent raw points |
 | `POST /models/dynamic/<m>/reset` | drop data + forests, keep the name |
 | `DELETE\|GET /delete_model/<m>` | delete entirely |
 | `PUT /api/dynamic/<m>/schedule` | `{"below_max_retrain_frequency": .., "at_max_retrain_frequency": ..}` |
 | `POST /api/dynamic/<m>/finetune` | recalibrate decision margins |
+| `POST /train/autoencoder/<m>` | train the autoencoder version — optional `{"hidden": [..], "contamination": x}` |
 
 Model names must match `^[a-zA-Z0-9_]+$`. The router is a plain function
 over `HttpRequest` — the test suite drives every route without a socket.
+
+### Editing the metadata
+
+`PUT /models/dynamic/<m>/metadata` takes the *editable half* of the
+metadata. Both keys are optional, but at least one must be present, and
+every field inside is optional too — what the patch omits keeps its value,
+so a checkbox can send one field:
+
+```jsonc
+{
+  "schedule": { "below_max": 50, "at_max": 1000 },
+  "versions": {
+    "weekly":      { "enabled": false },          // stop scoring, drop the forest
+    "daily":       { "decision_margin": 0.2 },    // effective at the next detect
+    "seasonal":    { "n_estimators": 500 },       // effective at the next retrain
+    "hourly":      { "window_minutes": 60 }       // an unknown name ADDS a version
+  },
+  "replace_versions": false                        // true ⇒ omitted versions are deleted
+}
+```
+
+The response echoes the whole updated metadata. Two fields bite
+immediately — `enabled` and `decision_margin`; the geometry
+(`window_minutes` / `window_points` / `window_size` / `step_size`) and the
+forest size (`n_estimators` / `max_samples` / `contamination`) take effect
+at the next retrain, so a config change can never desync a trained forest
+from the scoring path. Values are clamped into a trainable range rather
+than rejected.
+
+Disabling a forest version **deletes its forest**: its verdict is gone from
+the next detect and re-enabling it costs a retrain. That is deliberate —
+a kept blob would be resurrected trained against a feature order and scaler
+the model has since moved past. The `autoencoder` version is only *muted*:
+its net carries its own frozen feature order, stays valid across retrains,
+and is far too expensive to throw away on a checkbox.
+
+The *learned* half of the metadata — column kinds, category vocabularies,
+the authoritative feature order and the scaler — is never accepted from a
+client. It is refitted at every train, and a hand-written copy would
+silently desync every forest.
 
 ## Dashboard
 
@@ -168,7 +210,7 @@ build step — plain HTML/CSS/JS that talks to the routes above):
 
 | Page | What it does |
 | --- | --- |
-| `/` · `/modelmanager.html` | list models, train / finetune / reset / delete, edit retrain schedule, inspect metadata |
+| `/` · `/modelmanager.html` | list models, train / finetune / reset / delete, toggle versions and retune their margins, train the autoencoder, edit the retrain schedule — or the whole editable metadata as raw JSON |
 | `/modeltrainer.html` | feed points (`/detect`) one at a time or in bulk (paste JSON lines / generate synthetic), force-train |
 | `/visualize.html` | plot any numeric feature of a model's stored points over time |
 | `/anomalies.html` | re-score stored points via `/detect_only` and highlight the anomalies (chart + table with the flagging versions) |
@@ -190,8 +232,10 @@ $ `deps/anomaly/src/dynamic.nu`
 ```
 
 `model_open / model_ingest / model_detect_only / model_force_train /
-model_reset / model_delete / model_finetune / model_set_schedule /
-model_set_margin / model_metadata / model_free`, plus the layers beneath:
+model_reset / model_delete / model_finetune / model_train_autoencoder /
+model_set_schedule / model_set_margin / model_set_version_enabled /
+model_set_version_window / model_apply_meta_patch / model_metadata /
+model_free`, plus the layers beneath:
 preprocessing + scaler (`prep.nu`), the per-point decision core over
 `iforest` (`model.nu`), bulk/batch scoring + training with the GPU path
 (`score.nu`), persistence (`store.nu`), batch CSV (`csvdata.nu`) and the

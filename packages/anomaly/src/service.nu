@@ -9,12 +9,14 @@
 //   GET|POST /force_train/<model>             retrain now
 //   POST   /detect_anomalies                  batch-score a CSV file
 //   GET    /models/dynamic                    list models + metadata
-//   GET    /models/dynamic/<model>/metadata   metadata
+//   GET    /models/dynamic/<model>/metadata   metadata (+ autoencoder state)
+//   PUT    /models/dynamic/<model>/metadata   edit schedule / version configs
 //   GET    /models/dynamic/<model>/data       recent points (?limit=N|all)
 //   POST   /models/dynamic/<model>/reset      drop data+forests, keep name
 //   DELETE|GET /delete_model/<model>          delete entirely
 //   PUT    /api/dynamic/<model>/schedule      retraining schedule
 //   POST   /api/dynamic/<model>/finetune      recalibrate margins
+//   POST   /train/autoencoder/<model>         train the autoencoder version
 //
 // Model names must match ^[a-zA-Z0-9_]+$ (400 otherwise, same message as
 // the reference). Divergence from the reference: /detect_anomalies scores
@@ -437,6 +439,43 @@ $ `src/csvdata.nu`
     ^ r
 }
 
+// The autoencoder version's own state, which lives outside the metadata
+// (autoencoder.json, not meta.json) and so has no place in meta_to_json.
+// `enabled` is read back from the metadata: disabling the version mutes
+// the verdict but keeps the trained net.
+@ __an_ae_json Store st s name * Meta mm → Json {
+    : Json o ( json_obj_new )
+    ?? ( store_load_ae st name ) {
+        T ae → {
+            ( json_obj_set o `trained` ( json_bool . ae trained ) )
+            ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm `autoencoder` F ) ) )
+            ( json_obj_set o `reconstruction_threshold` ( json_float . ae threshold ) )
+            ( json_obj_set o `training_data_points` ( json_int . ae trained_on ) )
+            ( json_obj_set o `filtered_anomalies` ( json_int . ae filtered ) )
+            ( json_obj_set o `decision_margin` ( json_float ( meta_version_margin mm `autoencoder` 0.05 ) ) )
+            ( json_obj_set o `feature_names` ( _an_jarr_of_strs . ae feats ) )
+            : Json layers ( json_arr_new )
+            : Mlp net . ae net
+            : i nl ( vec_len [i] . net sizes )
+            : ~ i k 0
+            ~ < k nl {
+                ?? ( vec_get [i] . net sizes k ) {
+                    T sz → { ( json_arr_push layers ( json_int sz ) ) }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( json_obj_set o `layer_sizes` layers )
+            ( ae_free ae )
+        }
+        F → {
+            ( json_obj_set o `trained` ( json_bool F ) )
+            ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm `autoencoder` F ) ) )
+        }
+    }
+    ^ o
+}
+
 @ __an_h_metadata HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -450,6 +489,7 @@ $ `src/csvdata.nu`
         T mm → {
             : Json o ( meta_to_json mm )
             ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
+            ( json_obj_set o `autoencoder` ( __an_ae_json st ( string_data mname ) mm ) )
             ( http_response_free resp )
             = resp ( response_json 200 o )
             ( json_free o )
@@ -617,6 +657,58 @@ $ `src/csvdata.nu`
     }
 }
 
+@ __an_h_meta_update HttpRequest req Params p → HttpResponse {
+    : String mname ( __an_param_model p )
+    ? ( __an_name_ok ( string_data mname ) ) {} {
+        ( string_free mname )
+        ^ ( __an_bad_name )
+    }
+    : Store st ( store_open g_an_root )
+    ? ( store_exists st ( string_data mname ) ) {} {
+        : HttpResponse r404 ( __an_404_model ( string_data mname ) )
+        ( store_free st )
+        ( string_free mname )
+        ^ r404
+    }
+    : ?Json bodyo ( __an_body_json req )
+    ?? bodyo {
+        T body → {
+            : *Model mo ( model_open st ( string_data mname ) )
+            : String err ( model_apply_meta_patch mo body )
+            ( json_free body )
+            ? == ( string_len err ) 0 {} {
+                : HttpResponse rbad ( __an_json_err 400 ( string_data err ) )
+                ( string_free err )
+                ( model_free mo )
+                ( store_free st )
+                ( string_free mname )
+                ^ rbad
+            }
+            ( string_free err )
+            : *Meta mm ( model_metadata mo )
+            : String msg ( string_from `Metadata updated for model ` )
+            ( string_push_str msg ( string_data mname ) )
+            : Json o ( __an_ok_msg ( string_data msg ) )
+            ( string_free msg )
+            : Json meta ( meta_to_json mm )
+            ( json_obj_set meta `model_name` ( json_str_lit ( string_data mname ) ) )
+            ( json_obj_set meta `autoencoder` ( __an_ae_json st ( string_data mname ) mm ) )
+            ( json_obj_set o `metadata` meta )
+            : HttpResponse r ( response_json 200 o )
+            ( json_free o )
+            ( model_free mo )
+            ( store_free st )
+            ( string_free mname )
+            ^ r
+        }
+        F _ → {
+            ( store_free st )
+            ( string_free mname )
+            ^ ( __an_json_err 400 `No data provided` )
+        }
+    }
+}
+
 @ __an_h_train_ae HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -631,8 +723,46 @@ $ `src/csvdata.nu`
         ^ r404
     }
     : *Model mo ( model_open st ( string_data mname ) )
+    // Optional body: {"hidden": [64, 32, 64], "contamination": 0.1}.
+    // Absent (or empty / unparsable) → the 64-32-64 default and the
+    // pre-filter's own "auto" contamination.
     : ( Vec i ) hidden ( vec_new [i] )
-    : String err ( model_train_autoencoder mo hidden -1.0 )
+    : ~ f contam -1.0
+    ?? ( __an_body_json req ) {
+        T body → {
+            ?? ( json_obj_get body `hidden` ) {
+                T ha → {
+                    ? ( json_is_arr ha ) {
+                        : i nh ( json_arr_len ha )
+                        : ~ i k 0
+                        ~ < k nh {
+                            ?? ( json_arr_get ha k ) {
+                                T e → {
+                                    : ?i hv ( json_num_as_i e )
+                                    ?? hv { T x → { ? > x 0 { ( vec_push [i] hidden x ) } {} } F _ → {} }
+                                }
+                                F _ → {}
+                            }
+                            = k + k 1
+                        }
+                    } {}
+                }
+                F _ → {}
+            }
+            ?? ( json_obj_get body `contamination` ) {
+                T cj → {
+                    ? ( json_is_num cj ) {
+                        : ?f cf ( json_num_as_f cj )
+                        ?? cf { T x → { ? > x 0.0 { = contam x } {} } F _ → {} }
+                    } {}
+                }
+                F _ → {}
+            }
+            ( json_free body )
+        }
+        F _ → {}
+    }
+    : String err ( model_train_autoencoder mo hidden contam )
     ( vec_free [i] hidden )
     ? == ( string_len err ) 0 {
         : AeModel tae . mo ae
@@ -851,6 +981,7 @@ $ `src/csvdata.nu`
     ( router_post r `/detect_anomalies` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_batch req p ) } )
     ( router_get r `/models/dynamic` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_models req p ) } )
     ( router_get r `/models/dynamic/:model/metadata` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_metadata req p ) } )
+    ( router_put r `/models/dynamic/:model/metadata` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_meta_update req p ) } )
     ( router_get r `/models/dynamic/:model/data` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_data req p ) } )
     ( router_post r `/models/dynamic/:model/reset` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_reset req p ) } )
     ( router_delete r `/delete_model/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_delete req p ) } )

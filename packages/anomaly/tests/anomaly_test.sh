@@ -4,7 +4,7 @@
 # ============================================================
 #  tests/anomaly_test.sh — the package's full test suite:
 #    1. unit suites  : prep (M1), model (M2), store (M3),
-#                      dynamic (M4), versions (M5), service (M6)
+#                      dynamic (M4), versions (M5), metaedit, service (M6)
 #    2. CLI          : detect/score/train/ls/info/batch/reset/rm
 #    3. live HTTP    : `anomaly serve` + curl against the routes
 #
@@ -29,7 +29,7 @@ ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 
 echo "[1/3] unit suites"
-for t in prep model store dynamic versions timevector autoencoder service gpu; do
+for t in prep model store dynamic versions timevector autoencoder metaedit service gpu; do
     if ! $NURL "tests/${t}_test.nu" "$WORK/${t}_test" >/dev/null 2>"$WORK/build.err"; then
         echo "FAIL: could not build ${t}_test:"; tail -5 "$WORK/build.err"; exit 1
     fi
@@ -69,7 +69,9 @@ echo "$S" | grep -q '"anomaly":true' && ok "CLI score (detect-only)" || bad "CLI
 "$A" train s1 | grep -q 'trained on' && ok "CLI train" || bad "CLI train"
 B=$(printf 'a,b\n1,2\n1.1,2.1\n0.9,1.9\n50,50\n1,2\n1,2.2\n' | "$A" batch -H --margin 0.1 2>/dev/null)
 [ "$(echo "$B" | wc -l)" = 6 ] && ok "CLI batch scores every row" || bad "CLI batch rows"
-WORST=$(echo "$B" | sort -k2 -g | head -1 | cut -f1)
+# LC_ALL=C: `sort -g` reads "0.15" as 0 in a comma-decimal locale (fi_FI),
+# which silently ranks every row equal.
+WORST=$(echo "$B" | LC_ALL=C sort -k2 -g | head -1 | cut -f1)
 [ "$WORST" = "3" ] && ok "CLI batch ranks the outlier row worst" || bad "CLI batch outlier row ($WORST)"
 "$A" reset s1 >/dev/null && "$A" rm s1 >/dev/null && [ -z "$("$A" ls)" ] && ok "CLI reset + rm" || bad "CLI reset/rm"
 
@@ -102,6 +104,29 @@ CODE=$(curl -s -o "$WORK/rae" -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/
 [ "$CODE" = "200" ] && grep -q '"reconstruction_threshold"' "$WORK/rae" && ok "HTTP autoencoder train" || bad "HTTP AE train ($CODE: $(cat "$WORK/rae" | head -c 120))"
 curl -s -X POST "http://127.0.0.1:$PORT/detect_only/live" -d '{"temp": 24.5}' | grep -q '"autoencoder"' \
     && ok "HTTP detect carries the autoencoder version" || bad "HTTP AE version in detect"
+curl -s -X POST "http://127.0.0.1:$PORT/train/autoencoder/live" -d '{"hidden":[16,8,16]}' >/dev/null
+curl -s "http://127.0.0.1:$PORT/models/dynamic/live/metadata" | grep -q '"layer_sizes":\[1,16,8,16,1\]' \
+    && ok "HTTP AE train honours the requested hidden layers" || bad "HTTP AE hidden layers"
+# Editable metadata: the version editor and the advanced JSON box both
+# drive PUT /models/dynamic/<model>/metadata.
+curl -s "http://127.0.0.1:$PORT/models/dynamic/live/metadata" | grep -q '"autoencoder"' \
+    && ok "HTTP metadata carries the autoencoder state" || bad "HTTP metadata autoencoder block"
+CODE=$(curl -s -o "$WORK/rput" -w '%{http_code}' -X PUT \
+    "http://127.0.0.1:$PORT/models/dynamic/live/metadata" \
+    -d '{"versions":{"weekly":{"enabled":false},"daily":{"decision_margin":0.44}},"schedule":{"below_max":25,"at_max":500}}')
+{ [ "$CODE" = "200" ] && grep -q '"decision_margin":0.44' "$WORK/rput"; } \
+    && ok "HTTP metadata PUT applies a partial patch" || bad "HTTP metadata PUT ($CODE)"
+curl -s -X POST "http://127.0.0.1:$PORT/detect_only/live" -d '{"temp": 24.5}' | grep -q '"weekly"' \
+    && bad "HTTP disabled version still scores" || ok "HTTP a disabled version stops scoring"
+[ -f "$WORK/svcmodels/live/version_weekly.forest" ] \
+    && bad "HTTP disabled version kept its forest blob" || ok "HTTP disabling drops the forest blob"
+CODE=$(curl -s -o "$WORK/rput2" -w '%{http_code}' -X PUT \
+    "http://127.0.0.1:$PORT/models/dynamic/live/metadata" -d '{"versions":[]}')
+[ "$CODE" = "400" ] && ok "HTTP metadata PUT rejects a bad shape" || bad "HTTP metadata PUT shape ($CODE)"
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -X PUT \
+    "http://127.0.0.1:$PORT/models/dynamic/nosuch/metadata" -d '{"schedule":{"below_max":5,"at_max":5}}')
+[ "$CODE" = "404" ] && ok "HTTP metadata PUT 404s an unknown model" || bad "HTTP metadata PUT 404 ($CODE)"
+
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "http://127.0.0.1:$PORT/delete_model/live")
 [ "$CODE" = "200" ] && ok "HTTP delete" || bad "HTTP delete ($CODE)"
 

@@ -88,6 +88,38 @@
   .vtable { width: 100%; font-size: 12px; }
   .vtable th, .vtable td { padding: 5px 8px; text-align: right; }
   .vtable th:first-child, .vtable td:first-child { text-align: left; font-family: var(--mono); }
+  .vtable input[type=number] { width: 84px; padding: 3px 6px; font-size: 12px; text-align: right; }
+  .vtable input[type=checkbox] { accent-color: var(--accent); cursor: pointer; }
+  .vtable tr.off td:first-child { color: var(--muted); }
+  .vtable td.dim { color: var(--muted); }
+  .section-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px; }
+  .section-head h3 { margin: 0; }
+  .section-head .spacer { flex: 1; }
+  .hint { color: var(--muted); font-size: 11.5px; margin: 8px 0 0; line-height: 1.45; }
+  textarea { width: 100%; min-height: 240px; font-family: var(--mono); font-size: 12px;
+             background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+             border-radius: 8px; padding: 10px; resize: vertical; line-height: 1.45; }
+  textarea:focus { outline: none; border-color: var(--accent); }
+  textarea.bad { border-color: var(--danger); }
+  details.adv { border: 1px solid var(--border); border-radius: var(--radius);
+                background: var(--panel2); padding: 0; }
+  details.adv > summary { cursor: pointer; padding: 10px 14px; font-size: 12px;
+                          font-weight: 600; color: var(--muted); list-style: none; }
+  details.adv > summary::-webkit-details-marker { display: none; }
+  details.adv > summary::before { content: "\25B8 "; color: var(--accent); }
+  details.adv[open] > summary::before { content: "\25BE "; }
+  details.adv > summary:hover { color: var(--fg); }
+  .adv-body { padding: 0 14px 14px; }
+  .ae-grid { display: grid; grid-template-columns: 130px 1fr; gap: 4px 12px; font-size: 13px;
+             margin-bottom: 12px; }
+  .ae-grid dt { color: var(--muted); }
+  .ae-grid dd { margin: 0; font-family: var(--mono); word-break: break-word; }
+  .ae-form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  .ae-form .field input { width: 130px; }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+         background: var(--muted); margin-right: 6px; vertical-align: 1px; }
+  .dot.on { background: var(--ok); }
+  .dot.off { background: var(--warn); }
   .sched-form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
   .field { display: flex; flex-direction: column; gap: 4px; }
   .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
@@ -300,6 +332,9 @@ function closeDrawer() {
   $("backdrop").classList.remove("open");
   render();
 }
+// Only these two version fields are editable inline: they bite at the very
+// next detect. Geometry and forest size live in the advanced JSON editor
+// because they only take effect at the next retrain.
 function renderDrawer(name) {
   const m = MODELS[name];
   $("dTitle").textContent = name;
@@ -307,6 +342,7 @@ function renderDrawer(name) {
   const feats = m.feature_names || [];
   const sched = m.schedule || { below_max: 0, at_max: 0 };
   const vers = m.versions || {};
+  const ae = m.autoencoder || { trained: false, enabled: false };
 
   let colChips = Object.keys(cols).map(c =>
     '<span class="chip">' + esc(c) + ' <span class="t">' + esc(cols[c]) + "</span></span>").join("");
@@ -314,12 +350,32 @@ function renderDrawer(name) {
 
   let vrows = Object.keys(vers).map(vn => {
     const v = vers[vn];
-    return "<tr><td>" + esc(vn) + "</td><td>" + (v.enabled ? "✓" : "–") + "</td>" +
-      "<td>" + (v.window_minutes || 0) + "m/" + (v.window_points || 0) + "p</td>" +
-      "<td>" + (v.n_estimators || 0) + "×" + (v.max_samples || 0) + "</td>" +
-      "<td>" + fmtNum(v.decision_margin) + "</td></tr>";
+    const isAe = vn === "autoencoder";
+    const win = isAe ? "–"
+      : (v.window_size > 0 ? v.window_size + "×" + (v.step_size || 1) + " pts"
+                           : (v.window_minutes || 0) + "m/" + (v.window_points || 0) + "p");
+    const trees = isAe ? "–" : (v.n_estimators || 0) + "×" + (v.max_samples || 0);
+    return '<tr' + (v.enabled ? "" : ' class="off"') + '><td>' + esc(vn) + "</td>" +
+      '<td><input type="checkbox" data-v="' + esc(vn) + '" data-f="enabled"' +
+        (v.enabled ? " checked" : "") + "></td>" +
+      '<td class="dim">' + esc(win) + "</td>" +
+      '<td class="dim">' + esc(trees) + "</td>" +
+      '<td><input type="number" step="0.001" min="0" data-v="' + esc(vn) + '" data-f="margin" value="' +
+        (Number(v.decision_margin) || 0) + '"></td></tr>';
   }).join("");
   if (!vrows) vrows = '<tr><td colspan="5" class="muted">no versions</td></tr>';
+
+  const aeState = ae.trained
+    ? (ae.enabled ? '<span class="dot on"></span>trained &amp; scoring'
+                  : '<span class="dot off"></span>trained, muted (version disabled)')
+    : '<span class="dot"></span>not trained';
+  const aeRows = ae.trained
+    ? "<dt>Threshold</dt><dd>" + fmtNum(ae.reconstruction_threshold) + "</dd>" +
+      "<dt>Trained on</dt><dd>" + (ae.training_data_points ?? 0).toLocaleString() +
+        " pts <span class=\"muted\">(" + (ae.filtered_anomalies ?? 0) + " filtered)</span></dd>" +
+      "<dt>Layers</dt><dd>" + esc((ae.layer_sizes || []).join(" → ") || "–") + "</dd>" +
+      "<dt>Margin</dt><dd>" + fmtNum(ae.decision_margin) + "</dd>"
+    : "";
 
   $("dBody").innerHTML =
     '<div class="section"><h3>Overview</h3><dl class="kv">' +
@@ -332,18 +388,58 @@ function renderDrawer(name) {
 
     '<div class="section"><h3>Columns</h3><div class="chips">' + colChips + "</div></div>" +
 
-    '<div class="section"><h3>Versions</h3><table class="vtable">' +
+    '<div class="section">' +
+      '<div class="section-head"><h3>Versions</h3><div class="spacer"></div>' +
+        '<button class="small primary" id="vSave">Save versions</button></div>' +
+      '<table class="vtable" id="vTbl">' +
       "<thead><tr><th>name</th><th>on</th><th>window</th><th>trees</th><th>margin</th></tr></thead>" +
-      "<tbody>" + vrows + "</tbody></table></div>" +
+      "<tbody>" + vrows + "</tbody></table>" +
+      '<p class="hint">A point is anomalous if <b>any</b> enabled version flags it ' +
+        "(score ≤ −margin). On/off and margin take effect at the next detect; " +
+        "disabling a forest version discards its forest, so re-enabling costs a retrain. " +
+        "The autoencoder is only muted — its net is kept.</p>" +
+    "</div>" +
+
+    '<div class="section"><h3>Autoencoder</h3>' +
+      '<div style="margin-bottom:10px">' + aeState + "</div>" +
+      (aeRows ? '<dl class="ae-grid">' + aeRows + "</dl>" : "") +
+      '<div class="ae-form">' +
+        '<div class="field"><label>hidden layers</label>' +
+          '<input type="text" id="aeHidden" placeholder="64,32,64"></div>' +
+        '<div class="field"><label>contamination</label>' +
+          '<input type="text" id="aeCont" placeholder="auto"></div>' +
+        '<button id="aeTrain">' + (ae.trained ? "Retrain" : "Train") + " autoencoder</button>" +
+      "</div>" +
+      '<p class="hint">Trains a reconstruction model on the ring after an isolation-forest ' +
+        "pre-filter drops the obvious outliers. Explicit only — never part of the retrain " +
+        "schedule. Leave the fields empty for 64-32-64 and automatic contamination.</p>" +
+    "</div>" +
 
     '<div class="section"><h3>Retrain schedule</h3>' +
       '<div class="sched-form">' +
         '<div class="field"><label>below max (every N pts)</label>' +
-          '<input type="number" id="schedBelow" min="0" value="' + (sched.below_max || 0) + '"></div>' +
+          '<input type="number" id="schedBelow" min="1" value="' + (sched.below_max || 0) + '"></div>' +
         '<div class="field"><label>at max (every N pts)</label>' +
-          '<input type="number" id="schedAt" min="0" value="' + (sched.at_max || 0) + '"></div>' +
-        '<button class="primary" onclick="saveSchedule(\'' + esc(name) + '\')">Save</button>' +
+          '<input type="number" id="schedAt" min="1" value="' + (sched.at_max || 0) + '"></div>' +
+        '<button class="primary" id="schedSave">Save</button>' +
       "</div></div>" +
+
+    '<div class="section"><details class="adv" id="advBox">' +
+      "<summary>Advanced · edit metadata as JSON</summary>" +
+      '<div class="adv-body">' +
+        '<textarea id="advText" spellcheck="false"></textarea>' +
+        '<div class="sched-form" style="margin-top:10px">' +
+          '<button class="primary" id="advApply">Apply JSON</button>' +
+          '<button id="advRevert">Revert</button>' +
+          '<label class="muted" style="display:flex;align-items:center;gap:6px;font-size:12px">' +
+            '<input type="checkbox" id="advReplace"> replace versions (delete the ones omitted)</label>' +
+        "</div>" +
+        '<p class="hint">This is the editable half of the metadata, exactly as ' +
+          "<code>PUT /models/dynamic/" + esc(name) + "/metadata</code> takes it. Omitted fields keep " +
+          "their value. The learned half — column kinds, categories, feature order, scaler — is " +
+          "not editable: it is refitted at every train and a hand-written copy would desync every " +
+          "forest.</p>" +
+      "</div></details></div>" +
 
     '<div class="section"><h3>Actions</h3><div class="actions" style="justify-content:flex-start">' +
       '<button onclick="doAction(\'train\',\'' + esc(name) + '\',this)">Force train</button>' +
@@ -351,26 +447,98 @@ function renderDrawer(name) {
       '<a class="btn" href="/visualize.html?model=' + enc(name) + '">Visualize →</a>' +
       '<a class="btn" href="/anomalies.html?model=' + enc(name) + '">Anomalies →</a>' +
     "</div></div>";
+
+  $("vSave").onclick    = (e) => saveVersions(name, e.currentTarget);
+  $("schedSave").onclick= (e) => saveSchedule(name, e.currentTarget);
+  $("aeTrain").onclick  = (e) => trainAE(name, e.currentTarget);
+  $("advApply").onclick = (e) => applyAdvanced(name, e.currentTarget);
+  $("advRevert").onclick= () => { $("advText").value = advSource(m); $("advText").classList.remove("bad"); };
+  $("advText").value = advSource(m);
+  $("vTbl").querySelectorAll("input").forEach(el =>
+    el.onchange = () => { const tr = el.closest("tr");
+                          if (el.dataset.f === "enabled") tr.classList.toggle("off", !el.checked); });
 }
+
+// The editable half of the metadata, pretty-printed for the JSON editor.
+function advSource(m) {
+  return JSON.stringify({ schedule: m.schedule || {}, versions: m.versions || {} }, null, 2);
+}
+
+// PUT a patch and adopt the metadata the service echoes back.
+async function putMeta(name, patch, btn, what) {
+  const orig = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span>'; }
+  try {
+    const d = await api("PUT", "/models/dynamic/" + enc(name) + "/metadata", patch);
+    if (d && d.metadata) MODELS[name] = d.metadata;
+    toast((d && d.message) || "Saved", "ok", what);
+    renderDrawer(name);
+    render();
+    return true;
+  } catch (e) {
+    toast(e.message, "err", what + " failed");
+    return false;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
+  }
+}
+
+function saveVersions(name, btn) {
+  const versions = {};
+  $("vTbl").querySelectorAll("input[data-v]").forEach(el => {
+    const v = versions[el.dataset.v] || (versions[el.dataset.v] = {});
+    if (el.dataset.f === "enabled") v.enabled = el.checked;
+    else {
+      const x = parseFloat(el.value);
+      if (isFinite(x)) v.decision_margin = x;
+    }
+  });
+  return putMeta(name, { versions }, btn, "versions");
+}
+
+function applyAdvanced(name, btn) {
+  const ta = $("advText");
+  let patch;
+  try { patch = JSON.parse(ta.value); }
+  catch (e) { ta.classList.add("bad"); toast(e.message, "err", "Invalid JSON"); return; }
+  ta.classList.remove("bad");
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+    toast("expected a JSON object", "err", "Invalid JSON"); return;
+  }
+  if ($("advReplace").checked) patch.replace_versions = true;
+  return putMeta(name, patch, btn, "metadata");
+}
+
+async function trainAE(name, btn) {
+  const body = {};
+  const hs = ($("aeHidden").value || "").split(",").map(x => parseInt(x, 10)).filter(x => x > 0);
+  if (hs.length) body.hidden = hs;
+  const c = parseFloat($("aeCont").value);
+  if (isFinite(c) && c > 0) body.contamination = c;
+  const orig = btn.textContent;
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try {
+    const d = await api("POST", "/train/autoencoder/" + enc(name), body);
+    toast("trained on " + (d.training_data_points ?? "?") + " pts, " +
+          (d.filtered_anomalies ?? 0) + " filtered", "ok", "autoencoder");
+    await openDrawer(name);
+  } catch (e) {
+    toast(e.message, "err", "Autoencoder failed");
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+
 function fmtNum(x) {
   if (x === null || x === undefined) return "–";
   if (typeof x !== "number") return esc(x);
   return Math.abs(x) < 1e-4 && x !== 0 ? x.toExponential(2) : x.toFixed(4).replace(/\.?0+$/, "");
 }
 
-async function saveSchedule(name) {
+function saveSchedule(name, btn) {
   const below = parseInt($("schedBelow").value, 10) || 0;
   const at = parseInt($("schedAt").value, 10) || 0;
-  try {
-    const d = await api("PUT", "/api/dynamic/" + enc(name) + "/schedule", {
-      below_max_retrain_frequency: below,
-      at_max_retrain_frequency: at,
-    });
-    toast((d && d.message) || "Schedule saved", "ok", "schedule");
-    await load();
-  } catch (e) {
-    toast(e.message, "err", "Schedule failed");
-  }
+  return putMeta(name, { schedule: { below_max: below, at_max: at } }, btn, "schedule");
 }
 
 $("auto").onchange = (e) => {
