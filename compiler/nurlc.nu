@@ -20232,16 +20232,33 @@
     // capture is not seeded, so it starts Uninit and cannot be reported —
     // what the closure does to a captured handle is the enclosing frame's
     // question, and the consumed-capture replay below already answers it.
-    : s __cl_bck_stmts ( nurl_sym_get g_bck `stmts` )
-    : s __cl_bck_reads ( nurl_sym_get g_bck `reads` )
-    : s __cl_bck_kind ( nurl_sym_get g_bck `pending_kind` )
-    : s __cl_bck_pmoves ( nurl_sym_get g_bck `pmoves` )
-    : s __cl_bck_pmaybes ( nurl_sym_get g_bck `pmaybes` )
-    : s __cl_bck_warnset ( nurl_sym_get g_bck `warnset` )
-    : s __cl_bck_deferred ( nurl_sym_get g_bck `deferred` )
+    //
+    // `g_bck` only EXISTS when the checker is on (`main` builds it under
+    // the same flag), so every touch of it belongs inside the gate — the
+    // analyze call below already is, and this save/restore pair was the
+    // one place that reached for it unconditionally. With
+    // `--no-borrowck` the handle is 0, and `nurl_sym_get` hashed the key
+    // modulo a zero-capacity table: `remainder by zero`, an internal
+    // compiler panic on any program containing a closure.
+    : ~ s __cl_bck_stmts ( nurl_str_cat `` `` )
+    : ~ s __cl_bck_reads ( nurl_str_cat `` `` )
+    : ~ s __cl_bck_kind ( nurl_str_cat `` `` )
+    : ~ s __cl_bck_pmoves ( nurl_str_cat `` `` )
+    : ~ s __cl_bck_pmaybes ( nurl_str_cat `` `` )
+    : ~ s __cl_bck_warnset ( nurl_str_cat `` `` )
+    : ~ s __cl_bck_deferred ( nurl_str_cat `` `` )
+    ? != g_borrowck 0 {
+        = __cl_bck_stmts ( nurl_sym_get g_bck `stmts` )
+        = __cl_bck_reads ( nurl_sym_get g_bck `reads` )
+        = __cl_bck_kind ( nurl_sym_get g_bck `pending_kind` )
+        = __cl_bck_pmoves ( nurl_sym_get g_bck `pmoves` )
+        = __cl_bck_pmaybes ( nurl_sym_get g_bck `pmaybes` )
+        = __cl_bck_warnset ( nurl_sym_get g_bck `warnset` )
+        = __cl_bck_deferred ( nurl_sym_get g_bck `deferred` )
+    } {}
     : i __cl_bck_depth g_bck_depth
     ( bck_fn_begin )
-    ( nurl_sym_set g_bck `deferred` `` )
+    ? != g_borrowck 0 { ( nurl_sym_set g_bck `deferred` `` ) } {}
     : ~ s body_val ( gen_stmt lex body_syms cg )
     : s __cl_tail_lt ( nurl_get_last_type )
     ? != g_borrowck 0 {
@@ -20252,13 +20269,15 @@
         { ( bck_defer_fn ( nurl_sym_get body_syms `__fn_param_names__` ) ) }
         { ( bck_analyze ( nurl_sym_get body_syms `__fn_param_names__` ) ) }
     } {}
-    ( nurl_sym_set g_bck `stmts` __cl_bck_stmts )
-    ( nurl_sym_set g_bck `reads` __cl_bck_reads )
-    ( nurl_sym_set g_bck `pending_kind` __cl_bck_kind )
-    ( nurl_sym_set g_bck `pmoves` __cl_bck_pmoves )
-    ( nurl_sym_set g_bck `pmaybes` __cl_bck_pmaybes )
-    ( nurl_sym_set g_bck `warnset` __cl_bck_warnset )
-    ( nurl_sym_set g_bck `deferred` __cl_bck_deferred )
+    ? != g_borrowck 0 {
+        ( nurl_sym_set g_bck `stmts` __cl_bck_stmts )
+        ( nurl_sym_set g_bck `reads` __cl_bck_reads )
+        ( nurl_sym_set g_bck `pending_kind` __cl_bck_kind )
+        ( nurl_sym_set g_bck `pmoves` __cl_bck_pmoves )
+        ( nurl_sym_set g_bck `pmaybes` __cl_bck_pmaybes )
+        ( nurl_sym_set g_bck `warnset` __cl_bck_warnset )
+        ( nurl_sym_set g_bck `deferred` __cl_bck_deferred )
+    } {}
     = g_bck_depth __cl_bck_depth
     = g_bck_closure_depth - g_bck_closure_depth 1
     = g_fn_arc_mut_witness __cl_arcmut_saved

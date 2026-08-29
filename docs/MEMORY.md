@@ -709,6 +709,15 @@ hits in practice. It deliberately does **not** cover:
   a genuine false positive, it is a compiler bug worth reporting — the
   corpus is verified clean.
 
+  The flag is now exercised, which it had not been: a closure body saved
+  and restored the checker's own per-function state without the gate every
+  other site uses, and that state only *exists* when the checker is on, so
+  `--no-borrowck` was an internal compiler panic on any program containing
+  a closure. `compiler/tests/nobck_closure.nu` runs the flag over five
+  closure shapes and its record is the ordinary COMPILE / LINK / EXIT /
+  OUTPUT one — the flag has to leave a program not just compiling but
+  RUNNING. The runner gives any `nobck_*` test that treatment.
+
 ## 5. Status
 
 | Bug class | Checked? |
