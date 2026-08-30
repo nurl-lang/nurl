@@ -79,6 +79,7 @@ $ `stdlib/ext/json.nu`
     i sched_at_max
     i n_seen
     i last_trained
+    i max_points
     ( Vec VerCfg ) versions
 }
 
@@ -144,6 +145,7 @@ $ `stdlib/ext/json.nu`
     = . m sched_at_max ANOM_SCHED_AT_MAX
     = . m n_seen 0
     = . m last_trained 0
+    = . m max_points ANOM_MAX_POINTS
     = . m versions ( meta_default_versions )
     ^ m
 }
@@ -780,6 +782,7 @@ $ `stdlib/ext/json.nu`
 
     ( json_obj_set o `n_points_seen` ( json_int . m n_seen ) )
     ( json_obj_set o `last_trained_at` ( json_int . m last_trained ) )
+    ( json_obj_set o `max_data_points` ( json_int . m max_points ) )
     ^ o
 }
 
@@ -1006,6 +1009,7 @@ $ `stdlib/ext/json.nu`
 
     = . m n_seen ( _an_jint j `n_points_seen` 0 )
     = . m last_trained ( _an_jint j `last_trained_at` 0 )
+    = . m max_points ( _an_jint j `max_data_points` ANOM_MAX_POINTS )
 
     ? ok {} {
         ( meta_free m )

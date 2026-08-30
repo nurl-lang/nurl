@@ -99,7 +99,9 @@ Key defaults observed in the reference implementation (carried over verbatim):
 
 - `MIN_DATA_POINTS = 50` — no detection before this many points; everything is
   "normal / warming up".
-- `MAX_DATA_POINTS = 150000` — ring capacity per model.
+- `MAX_DATA_POINTS = 150000` — ring capacity a NEW model starts with. It is
+  per-model metadata, not a constant: `max_data_points` is editable (§6) and
+  persists with the model.
 - Retraining schedule: every `50` points below capacity, every `1000` points at
   capacity.
 - Default model versions and their configs (`short_term` 180 min, `daily`
@@ -149,11 +151,12 @@ Persisted as JSON (`std/ext/json`). Fields:
   "schedule":        { "below_max": 50, "at_max": 1000 },
   "versions":        { version_name: <version config>, ... },
   "n_points_seen":   int,
-  "last_trained_at": int   // point count at last train
+  "last_trained_at": int,  // point count at last train
+  "max_data_points": int   // ring capacity, editable (§6)
 }
 ```
 
-**Editable vs learned.** `schedule` and `versions` are the user's to set
+**Editable vs learned.** `schedule`, `max_data_points` and `versions` are the user's to set
 (§6, `PUT /models/dynamic/<m>/metadata`, `model_apply_meta_patch`); everything
 else — `column_types`, `categories`, `feature_names`, `scaler` — is learned at
 each train and is never accepted from a client, because a hand-written copy
@@ -252,12 +255,22 @@ service so existing dashboards and the `modelmanager` UI keep working:
   `autoencoder` block (its own state lives in `autoencoder.json`, not the
   metadata): `trained`, `enabled`, `reconstruction_threshold`,
   `training_data_points`, `filtered_anomalies`, `decision_margin`,
-  `feature_names`, `layer_sizes`.
-- `PUT /models/dynamic/<model>/metadata` body = `{ schedule?, versions?,
-  replace_versions? }`, every field within optional (an omitted field keeps
-  its value; an unknown version name adds a version; `replace_versions`
-  deletes the versions the object omits). 400 on a shape that is not a JSON
-  object of objects, or on an empty patch. Response echoes the full metadata.
+  `feature_names`, `layer_sizes`. Every metadata response (this one, the
+  listing, and the PUT echo) also carries `editable_fields`: the top-level
+  keys the PUT below accepts, published so a client never has to keep its
+  own copy of the list. It is service-shaped and deliberately absent from
+  the stored `metadata.json`.
+- `PUT /models/dynamic/<model>/metadata` body = `{ schedule?,
+  max_data_points?, versions?, replace_versions? }`, every field within
+  optional (an omitted field keeps its value; an unknown version name adds
+  a version; `replace_versions` deletes the versions the object omits).
+  `max_data_points` is the raw-point ring size: it must be positive and at
+  least `min_data_points`, and lowering it below the current fill evicts
+  the oldest points and rewrites the log before the response, so the cap
+  holds immediately rather than converging one ingest at a time. 400 on a
+  shape that is not a JSON object of objects, on a rejected
+  `max_data_points`, or on an empty patch. Response echoes the full
+  metadata.
 - `POST /train/autoencoder/<model>` optional body = `{ hidden?: [int],
   contamination?: float }` → `training_data_points`, `filtered_anomalies`,
   `reconstruction_threshold`.

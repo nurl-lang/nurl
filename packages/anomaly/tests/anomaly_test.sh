@@ -4,7 +4,8 @@
 # ============================================================
 #  tests/anomaly_test.sh — the package's full test suite:
 #    1. unit suites  : prep (M1), model (M2), store (M3),
-#                      dynamic (M4), versions (M5), metaedit, service (M6)
+#                      dynamic (M4), versions (M5), metaedit, service (M6),
+#                      dashboard (the generated metadata editor; needs node)
 #    2. CLI          : detect/score/train/ls/info/batch/reset/rm
 #    3. live HTTP    : `anomaly serve` + curl against the routes
 #
@@ -46,6 +47,19 @@ if (cd "$WORK" && NURL_GPU=cpu ANOMALY_TEST_DIR="$WORK/store_gpu_cpu" ./gpu_test
     ok "gpu_test on the CPU backend ($(grep 'engine =' "$WORK/gpu_cpu.out" | head -1 | sed 's/.*= //'))"
 else
     bad "gpu_test on the CPU backend"; tail -8 "$WORK/gpu_cpu.out"
+fi
+
+# The dashboard's metadata editor is generated from `editable_fields`, so it
+# is logic with no server behind it. Node is not a build dependency of this
+# package — skip rather than fail when it is absent.
+if command -v node >/dev/null 2>&1; then
+    if node tests/dashboard_test.js >"$WORK/dash.out" 2>&1; then
+        ok "dashboard_test ($(tail -1 "$WORK/dash.out"))"
+    else
+        bad "dashboard_test"; tail -8 "$WORK/dash.out"
+    fi
+else
+    echo "  SKIP dashboard_test (node not installed)"
 fi
 
 echo "[2/3] CLI"
@@ -93,6 +107,11 @@ CODE=$(curl -s -o "$WORK/r2" -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/d
 [ "$CODE" = "200" ] && grep -q '"anomaly":true' "$WORK/r2" && ok "HTTP detect_only flags an outlier" || bad "HTTP outlier ($CODE: $(cat "$WORK/r2"))"
 curl -s "http://127.0.0.1:$PORT/models/dynamic" | grep -q '"live"' && ok "HTTP model listing" || bad "HTTP listing"
 curl -s "http://127.0.0.1:$PORT/models/dynamic/live/metadata" | grep -q '"model_name":"live"' && ok "HTTP metadata" || bad "HTTP metadata"
+# The dashboard generates its metadata editor from this list; an endpoint
+# that stops publishing it silently empties the editor.
+curl -s "http://127.0.0.1:$PORT/models/dynamic/live/metadata" \
+  | grep -q '"editable_fields"' && ok "HTTP metadata publishes editable_fields" \
+  || bad "HTTP metadata editable_fields"
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/detect/bad!name" -d '{"a":1}')
 [ "$CODE" = "400" ] && ok "HTTP invalid name rejected" || bad "HTTP invalid name ($CODE)"
 # top the ring up: the AE pre-filter drops ~10 %, and the survivor count

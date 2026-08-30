@@ -150,6 +150,7 @@ $ `src/store.nu`
         ( store_save_meta . mo store name . mo meta )
     }
     : *Meta mm . mo meta
+    = . mo max_points . mm max_points
 
     // Ring: adopt the stored lines wholesale, then stamp times from them.
     : ( Vec String ) pts ( store_load_points . mo store name )
@@ -1035,15 +1036,37 @@ $ `src/store.nu`
 // Apply an editable-metadata patch:
 //
 //   { "schedule": { "below_max": N, "at_max": N },
+//     "max_data_points": N,
 //     "versions": { "<name>": { <any VerCfg field> }, ... },
 //     "replace_versions": bool }
 //
-// Both top-level keys are optional but at least one must be present. The
+// All top-level keys are optional but at least one must be present. The
 // learned parts of the metadata (columns, categories, feature order,
-// scaler) are never taken from the client — see prep.nu. Per-version
+// scaler) are never taken from the client — see prep.nu. Lowering
+// `max_data_points` below the current fill evicts the oldest points and
+// rewrites the log before returning, so the cap holds at once instead of
+// converging one point per ingest. Per-version
 // fields split two ways: `enabled` and `decision_margin` bite at the very
 // next detect, the geometry and forest-size fields at the next retrain.
 // Returns "" on success, else the reason (400-worthy).
+// The top-level keys `model_apply_meta_patch` accepts, published with every
+// metadata response so a client does not have to keep its own copy of the
+// list. The dashboard kept one, and it went stale the moment
+// `max_data_points` became editable: the field was patchable through the
+// API and invisible in the JSON editor that exists to reach it. One list,
+// named here beside the code that reads the patch, is what stops that from
+// happening again — the editor is generated from it.
+//
+// Deliberately NOT part of `meta_to_json`: that is also the on-disk meta.json
+// writer, and a service-shaped descriptor has no business in the stored file.
+@ meta_editable_fields → Json {
+    : Json a ( json_arr_new )
+    ( json_arr_push a ( json_str_lit `schedule` ) )
+    ( json_arr_push a ( json_str_lit `max_data_points` ) )
+    ( json_arr_push a ( json_str_lit `versions` ) )
+    ^ a
+}
+
 @ model_apply_meta_patch * Model mo Json patch → String {
     ? ( json_is_obj patch ) {} { ^ ( string_from `metadata must be a JSON object` ) }
     : *Meta mm . mo meta
@@ -1059,6 +1082,34 @@ $ `src/store.nu`
             }
             = . mm sched_below below
             = . mm sched_at_max atmax
+            = touched T
+        }
+        F _ → {}
+    }
+
+    ?? ( json_obj_get patch `max_data_points` ) {
+        T _ → {
+            : i mx ( _an_jint patch `max_data_points` . mm max_points )
+            ? > mx 0 {} {
+                ^ ( string_from `max_data_points must be positive` )
+            }
+            ? >= mx . mo min_points {} {
+                ^ ( string_from `max_data_points must be at least min_points` )
+            }
+            = . mm max_points mx
+            = . mo max_points mx
+            : ~ b trimmed F
+            ~ > ( vec_len [String] . mo lines ) mx {
+                ?? ( vec_remove [String] . mo lines 0 ) {
+                    T old → { ( string_free old ) }
+                    F _ → {}
+                }
+                ?? ( vec_remove [i] . mo times 0 ) { T _ → {} F _ → {} }
+                = trimmed T
+            }
+            ? trimmed {
+                ( store_write_points . mo store ( string_data . mo mname ) . mo lines )
+            } {}
             = touched T
         }
         F _ → {}
@@ -1080,7 +1131,7 @@ $ `src/store.nu`
     }
 
     ? touched {} {
-        ^ ( string_from `nothing to update: expected a schedule and/or versions object` )
+        ^ ( string_from `nothing to update: expected schedule, max_data_points and/or versions` )
     }
 
     ( __an_prune_disabled mo )

@@ -1,0 +1,24 @@
+# Build products. `nurlpkg pack` already leaves these out of the tarball
+# (verified: the dry-run manifest is byte-identical with and without this
+# file), so this is git hygiene, not a packaging fix — without it the
+# 800 KB extensionless `anomaly` executable sits in `git status` as
+# untracked, one `git add -A` away from the history.
+/anomaly
+/src/main
+/tests/prep_test
+/tests/model_test
+/tests/store_test
+/tests/dynamic_test
+/tests/versions_test
+/tests/timevector_test
+/tests/autoencoder_test
+/tests/metaedit_test
+/tests/service_test
+/tests/gpu_test
+/tests/aegpu_parity_test
+*.ll
+
+# Dependency symlinks created by `nurlpkg install`
+deps/
+src/deps/
+tests/deps/

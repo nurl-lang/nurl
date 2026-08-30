@@ -417,7 +417,9 @@ $ `src/csvdata.nu`
                 : ?*Meta mload ( store_load_meta st ( string_data nm ) )
                 ?? mload {
                     T mm → {
-                        ( json_obj_set models ( string_data nm ) ( meta_to_json mm ) )
+                        : Json mj ( meta_to_json mm )
+                        ( json_obj_set mj `editable_fields` ( meta_editable_fields ) )
+                        ( json_obj_set models ( string_data nm ) mj )
                         ( meta_free mm )
                     }
                     F _ → {}
@@ -489,6 +491,7 @@ $ `src/csvdata.nu`
         T mm → {
             : Json o ( meta_to_json mm )
             ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
+            ( json_obj_set o `editable_fields` ( meta_editable_fields ) )
             ( json_obj_set o `autoencoder` ( __an_ae_json st ( string_data mname ) mm ) )
             ( http_response_free resp )
             = resp ( response_json 200 o )
@@ -692,6 +695,7 @@ $ `src/csvdata.nu`
             ( string_free msg )
             : Json meta ( meta_to_json mm )
             ( json_obj_set meta `model_name` ( json_str_lit ( string_data mname ) ) )
+            ( json_obj_set meta `editable_fields` ( meta_editable_fields ) )
             ( json_obj_set meta `autoencoder` ( __an_ae_json st ( string_data mname ) mm ) )
             ( json_obj_set o `metadata` meta )
             : HttpResponse r ( response_json 200 o )
