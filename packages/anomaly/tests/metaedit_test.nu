@@ -6,6 +6,8 @@
 //               and the forest-less `autoencoder` config round-trips as-is.
 //   toggle    — disabling a forest version drops its forest and its verdict;
 //               re-enabling costs a retrain. The autoencoder is only muted.
+//   maxpts    — the ring cap is metadata: lowering it evicts on the spot
+//               and rewrites the log, and the cap reloads with the model.
 //   errors    — the shapes model_apply_meta_patch refuses.
 // Store root: $ANOMALY_TEST_DIR (default ./anomaly_metaedit_test).
 
@@ -311,6 +313,50 @@ $ `src/dynamic.nu`
     ( model_free mo )
 }
 
+// ── Scenario 5: max_data_points is metadata, not a constant ───────────
+
+@ test_maxpoints Store st → v {
+    = g_lcg 11
+    : *Model mo ( model_open_at st `maxpts` T0 )
+    ( seed mo )
+    : *Meta mm ( model_metadata mo )
+    ( check == ( model_n_points mo ) 60 `maxpts: the ring starts at 60 points` )
+
+    // Lowering the cap below the current fill evicts at once. Before, the
+    // cap was a compile-time constant and the ring converged on it one
+    // point per ingest — a model told to keep 25 kept 60 until 35 more
+    // arrived.
+    : String e1 ( patch_text mo `{"max_data_points":25}` )
+    ( check == ( string_len e1 ) 0 `maxpts: a positive cap is accepted` )
+    ( string_free e1 )
+    ( check == . mm max_points 25 `maxpts: the metadata carries the new cap` )
+    ( check == ( model_n_points mo ) 25 `maxpts: the ring was trimmed on the spot` )
+    ( model_free mo )
+
+    // The trim reached the log, and the cap reloads with the model.
+    : *Model re ( model_open_at st `maxpts` T0 )
+    : *Meta rm ( model_metadata re )
+    ( check == . rm max_points 25 `maxpts: the cap survives a reopen` )
+    ( check == ( model_n_points re ) 25 `maxpts: the rewritten log reloads trimmed` )
+
+    // Raising it evicts nothing.
+    : String e2 ( patch_text re `{"max_data_points":90}` )
+    ( check == ( string_len e2 ) 0 `maxpts: raising the cap is accepted` )
+    ( string_free e2 )
+    ( check == ( model_n_points re ) 25 `maxpts: raising it evicts nothing` )
+
+    // Refusals: a cap of zero, and one below the warm-up minimum — which
+    // would leave the model unable to ever train.
+    : String e3 ( patch_text re `{"max_data_points":0}` )
+    ( check > ( string_len e3 ) 0 `maxpts: a non-positive cap is refused` )
+    ( string_free e3 )
+    : String e4 ( patch_text re `{"max_data_points":5}` )
+    ( check > ( string_len e4 ) 0 `maxpts: a cap below min_points is refused` )
+    ( string_free e4 )
+    ( check == . rm max_points 90 `maxpts: a refused cap leaves the old one` )
+    ( model_free re )
+}
+
 @ main → i {
     : ~ String root ( string_from `./anomaly_metaedit_test` )
     ?? ( env_get `ANOMALY_TEST_DIR` ) {
@@ -324,6 +370,7 @@ $ `src/dynamic.nu`
     ( test_patch st )
     ( test_clamp st )
     ( test_toggle st )
+    ( test_maxpoints st )
     ( test_errors st )
 
     ( store_free st )

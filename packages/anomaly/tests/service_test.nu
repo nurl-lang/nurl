@@ -83,6 +83,27 @@ $ `src/service.nu`
     }
 }
 
+// Does the array under `key` contain the string `want`? The dashboard
+// generates its whole metadata editor from `editable_fields`, so an
+// endpoint that stops publishing it silently empties that editor.
+@ jarr_has Json o s key s want → b {
+    ?? ( json_obj_get o key ) {
+        T a → {
+            : i n ( json_arr_len a )
+            : ~ i k 0
+            ~ < k n {
+                ?? ( json_arr_get a k ) {
+                    T e → { ? == ( nurl_str_eq ( json_str_data e ) want ) 1 { ^ T } {} }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ^ F
+        }
+        F _ → { ^ F }
+    }
+}
+
 @ jint_of Json o s key → i {
     ?? ( json_obj_get o key ) {
         T e → { ^ ( json_as_int e ) }
@@ -186,6 +207,10 @@ $ `src/service.nu`
     : SvcOut md ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
     ( check == . md status 200 `svc: metadata -> 200` )
     ( check ( jstr_eq . md body `model_name` `svc` ) `svc: metadata carries model_name` )
+    ( check ( jarr_has . md body `editable_fields` `max_data_points` )
+    `svc: metadata publishes the editable key list` )
+    ( check ( jarr_has . md body `editable_fields` `versions` )
+    `svc: the editable key list names versions` )
     ( json_free . md body )
     : SvcOut md4 ( fire r `GET` `/models/dynamic/nosuch/metadata` `` `` )
     ( check == . md4 status 404 `svc: metadata missing -> 404` )

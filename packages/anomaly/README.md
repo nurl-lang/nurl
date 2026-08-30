@@ -166,13 +166,14 @@ over `HttpRequest` — the test suite drives every route without a socket.
 ### Editing the metadata
 
 `PUT /models/dynamic/<m>/metadata` takes the *editable half* of the
-metadata. Both keys are optional, but at least one must be present, and
+metadata. Every key is optional, but at least one must be present, and
 every field inside is optional too — what the patch omits keeps its value,
 so a checkbox can send one field:
 
 ```jsonc
 {
   "schedule": { "below_max": 50, "at_max": 1000 },
+  "max_data_points": 50000,                        // ring size; see below
   "versions": {
     "weekly":      { "enabled": false },          // stop scoring, drop the forest
     "daily":       { "decision_margin": 0.2 },    // effective at the next detect
@@ -182,6 +183,18 @@ so a checkbox can send one field:
   "replace_versions": false                        // true ⇒ omitted versions are deleted
 }
 ```
+
+Which top-level keys are accepted is not something a client has to know
+in advance: every metadata response carries `editable_fields`, the same
+list the patch reader works from. The dashboard's editor is generated from
+it, which is why `max_data_points` appeared there the moment the service
+started accepting it.
+
+`max_data_points` is the size of the ring of raw points the model keeps
+(150 000 by default, and at least `min_data_points` — a smaller ring could
+never warm the model up). Lowering it below the current fill evicts the
+oldest points and rewrites the log **before the call returns**, so the new
+cap holds at once instead of converging on it one ingest at a time.
 
 The response echoes the whole updated metadata. Two fields bite
 immediately — `enabled` and `decision_margin`; the geometry
@@ -210,7 +223,7 @@ build step — plain HTML/CSS/JS that talks to the routes above):
 
 | Page | What it does |
 | --- | --- |
-| `/` · `/modelmanager.html` | list models, train / finetune / reset / delete, toggle versions and retune their margins, train the autoencoder, edit the retrain schedule — or the whole editable metadata as raw JSON |
+| `/` · `/modelmanager.html` | list models, train / finetune / reset / delete, toggle versions and retune their margins, train the autoencoder, edit the retrain schedule — or, under *Advanced*, the whole editable metadata, as a generated field form or as raw JSON |
 | `/modeltrainer.html` | feed points (`/detect`) one at a time or in bulk (paste JSON lines / generate synthetic), force-train |
 | `/visualize.html` | plot any numeric feature of a model's stored points over time |
 | `/anomalies.html` | re-score stored points via `/detect_only` and highlight the anomalies (chart + table with the flagging versions) |

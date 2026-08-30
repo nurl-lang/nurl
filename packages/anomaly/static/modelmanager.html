@@ -110,6 +110,19 @@
   details.adv[open] > summary::before { content: "\25BE "; }
   details.adv > summary:hover { color: var(--fg); }
   .adv-body { padding: 0 14px 14px; }
+  /* Generated metadata editor: one row per leaf, nested groups indented. */
+  .adv-tabs { display: flex; gap: 4px; margin: 0 0 10px; }
+  .adv-tabs .tab { font-size: 11.5px; padding: 4px 10px; }
+  .adv-tabs .tab.on { border-color: var(--accent); color: var(--fg); }
+  .advg { margin: 0 0 10px; }
+  .advg.sub { margin: 6px 0 6px 12px; padding-left: 10px;
+              border-left: 1px solid var(--border); }
+  .advg-h { font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+            margin: 0 0 4px; }
+  .advf { display: flex; align-items: center; gap: 10px; padding: 2px 0; }
+  .advf > span { flex: 0 0 46%; font-family: var(--mono); font-size: 11.5px;
+                 color: var(--fg); overflow-wrap: anywhere; }
+  .advf > input[type=text] { flex: 1; min-width: 0; }
   .ae-grid { display: grid; grid-template-columns: 130px 1fr; gap: 4px 12px; font-size: 13px;
              margin-bottom: 12px; }
   .ae-grid dt { color: var(--muted); }
@@ -164,7 +177,7 @@
     <div class="stat">
       <span><b id="statCount">0</b> models</span>
       <span>min pts <b id="statMin">–</b></span>
-      <span>max pts <b id="statMax">–</b></span>
+      <span>default max pts <b id="statMax">–</b></span>
     </div>
   </div>
 
@@ -381,6 +394,8 @@ function renderDrawer(name) {
     '<div class="section"><h3>Overview</h3><dl class="kv">' +
       "<dt>Status</dt><dd>" + (isTrained(m) ? "trained" : "warming up") + "</dd>" +
       "<dt>Points seen</dt><dd>" + (m.n_points_seen ?? 0).toLocaleString() + "</dd>" +
+      "<dt>Ring</dt><dd>" + (m.max_data_points ?? "–").toLocaleString?.() +
+        ' <span class="muted">points kept</span></dd>' +
       "<dt>Created</dt><dd>" + esc(m.created || "–") + "</dd>" +
       "<dt>Last trained</dt><dd>" + fmtTrained(m.last_trained_at) + "</dd>" +
       "<dt>Features</dt><dd>" + (feats.length ? esc(feats.join(", ")) : '<span class="muted">–</span>') + "</dd>" +
@@ -425,20 +440,28 @@ function renderDrawer(name) {
       "</div></div>" +
 
     '<div class="section"><details class="adv" id="advBox">' +
-      "<summary>Advanced · edit metadata as JSON</summary>" +
+      "<summary>Advanced · edit the whole metadata</summary>" +
       '<div class="adv-body">' +
-        '<textarea id="advText" spellcheck="false"></textarea>' +
+        '<div class="adv-tabs">' +
+          '<button class="tab on" id="advTabF">Fields</button>' +
+          '<button class="tab" id="advTabJ">JSON</button>' +
+        "</div>" +
+        '<div id="advFields">' + advForm(m) + "</div>" +
+        '<div id="advJsonBox" style="display:none">' +
+          '<textarea id="advText" spellcheck="false"></textarea></div>' +
         '<div class="sched-form" style="margin-top:10px">' +
           '<button class="primary" id="advApply">Apply JSON</button>' +
           '<button id="advRevert">Revert</button>' +
           '<label class="muted" style="display:flex;align-items:center;gap:6px;font-size:12px">' +
             '<input type="checkbox" id="advReplace"> replace versions (delete the ones omitted)</label>' +
         "</div>" +
-        '<p class="hint">This is the editable half of the metadata, exactly as ' +
-          "<code>PUT /models/dynamic/" + esc(name) + "/metadata</code> takes it. Omitted fields keep " +
-          "their value. The learned half — column kinds, categories, feature order, scaler — is " +
-          "not editable: it is refitted at every train and a hand-written copy would desync every " +
-          "forest.</p>" +
+        '<p class="hint">The editable half of the metadata, exactly as ' +
+          "<code>PUT /models/dynamic/" + esc(name) + "/metadata</code> takes it — the fields are " +
+          "generated from the metadata itself, over the key list the service publishes as " +
+          "<code>editable_fields</code>, so nothing here has to be kept in step by hand. " +
+          "An empty box is an omitted field and keeps its value. The learned half — column kinds, " +
+          "categories, feature order, scaler — is not editable: it is refitted at every train and " +
+          "a hand-written copy would desync every forest.</p>" +
       "</div></details></div>" +
 
     '<div class="section"><h3>Actions</h3><div class="actions" style="justify-content:flex-start">' +
@@ -452,16 +475,125 @@ function renderDrawer(name) {
   $("schedSave").onclick= (e) => saveSchedule(name, e.currentTarget);
   $("aeTrain").onclick  = (e) => trainAE(name, e.currentTarget);
   $("advApply").onclick = (e) => applyAdvanced(name, e.currentTarget);
-  $("advRevert").onclick= () => { $("advText").value = advSource(m); $("advText").classList.remove("bad"); };
+  $("advRevert").onclick= () => { advShow(m, ADV_TAB); };
+  $("advTabF").onclick  = () => advSwitch(m, "fields");
+  $("advTabJ").onclick  = () => advSwitch(m, "json");
   $("advText").value = advSource(m);
+  advSwitch(m, ADV_TAB, true);
   $("vTbl").querySelectorAll("input").forEach(el =>
     el.onchange = () => { const tr = el.closest("tr");
                           if (el.dataset.f === "enabled") tr.classList.toggle("off", !el.checked); });
 }
 
-// The editable half of the metadata, pretty-printed for the JSON editor.
-function advSource(m) {
-  return JSON.stringify({ schedule: m.schedule || {}, versions: m.versions || {} }, null, 2);
+// ── Advanced metadata editor ───────────────────────────────────
+//
+// Two views over ONE thing: the editable half of the metadata. Neither
+// view names a field. The top-level keys come from `editable_fields`,
+// which the service publishes beside the metadata (it is the same list
+// model_apply_meta_patch reads), and everything below them is walked out
+// of the metadata's own shape. That is the point: `max_data_points`
+// became patchable through the API and stayed invisible in the editor
+// that exists to reach it, because the editor kept its own hard-coded
+// copy of the key list.
+let ADV_LEAVES = [];        // [{ path: [...], bool: <is a checkbox> }]
+let ADV_TAB = "fields";
+
+function editableSlice(m) {
+  const keys = Array.isArray(m.editable_fields) && m.editable_fields.length
+    ? m.editable_fields : ["schedule", "versions"];
+  const out = {};
+  keys.forEach(k => { if (m[k] !== undefined) out[k] = m[k]; });
+  return out;
+}
+
+// The same slice, pretty-printed for the JSON view.
+function advSource(m) { return JSON.stringify(editableSlice(m), null, 2); }
+
+// One typed input per leaf, nested groups for objects. Rebuilt on every
+// render, so ADV_LEAVES always describes the inputs now on screen.
+function advForm(m) {
+  ADV_LEAVES = [];
+  const slice = editableSlice(m);
+  const body = Object.keys(slice).map(k => advNode(k, slice[k], [k], 0)).join("");
+  return body || '<p class="muted">nothing editable</p>';
+}
+
+function advNode(label, val, path, depth) {
+  if (val && typeof val === "object" && !Array.isArray(val)) {
+    const inner = Object.keys(val).map(k => advNode(k, val[k], path.concat(k), depth + 1)).join("");
+    return '<div class="advg' + (depth ? " sub" : "") + '">' +
+      '<div class="advg-h">' + esc(label) + "</div>" +
+      (inner || '<p class="muted">empty</p>') + "</div>";
+  }
+  const i = ADV_LEAVES.length;
+  ADV_LEAVES.push({ path, bool: typeof val === "boolean" });
+  const input = typeof val === "boolean"
+    ? '<input type="checkbox" data-adv="' + i + '"' + (val ? " checked" : "") + ">"
+    : '<input type="text" data-adv="' + i + '" value="' + esc(String(val ?? "")) + '">';
+  return '<label class="advf"><span>' + esc(label) + "</span>" + input + "</label>";
+}
+
+// Rebuild the patch from the generated form. A box left empty is an
+// OMITTED field, which is what the endpoint's "omitted fields keep their
+// value" contract means — not a zero. Text is sent as a number when it
+// reads as one and as itself when it does not, because `contamination` is
+// legitimately either 0.05 or "auto" and guessing either way would drop
+// half of that.
+function advCollect() {
+  const out = {};
+  document.querySelectorAll("#advFields [data-adv]").forEach(el => {
+    const leaf = ADV_LEAVES[+el.dataset.adv];
+    if (!leaf) return;
+    let v;
+    if (leaf.bool) v = el.checked;
+    else {
+      const raw = el.value.trim();
+      if (raw === "") return;
+      const x = Number(raw);
+      v = isFinite(x) ? x : el.value;
+    }
+    let o = out;
+    for (let k = 0; k < leaf.path.length - 1; k++) {
+      const key = leaf.path[k];
+      o = (o[key] && typeof o[key] === "object") ? o[key] : (o[key] = {});
+    }
+    o[leaf.path[leaf.path.length - 1]] = v;
+  });
+  return out;
+}
+
+// Switch views without losing what was typed: the form's current state is
+// what the JSON box is filled from, and the JSON box is what the form is
+// rebuilt from. `initial` skips that carry-over on first render.
+function advSwitch(m, tab, initial) {
+  if (!initial && tab !== ADV_TAB) {
+    if (tab === "json") $("advText").value = JSON.stringify(advCollect(), null, 2);
+    else {
+      let parsed = null;
+      try { parsed = JSON.parse($("advText").value); } catch (e) {}
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        $("advFields").innerHTML = advForm(Object.assign({}, parsed,
+          { editable_fields: Object.keys(parsed) }));
+      } else {
+        toast("the JSON does not parse — the fields still show the saved metadata",
+              "err", "Invalid JSON");
+      }
+    }
+  }
+  ADV_TAB = tab;
+  $("advFields").style.display  = tab === "fields" ? "" : "none";
+  $("advJsonBox").style.display = tab === "json" ? "" : "none";
+  $("advTabF").classList.toggle("on", tab === "fields");
+  $("advTabJ").classList.toggle("on", tab === "json");
+}
+
+// Revert: drop every edit in both views and show the saved metadata again.
+function advShow(m, tab) {
+  $("advFields").innerHTML = advForm(m);
+  $("advText").value = advSource(m);
+  $("advText").classList.remove("bad");
+  ADV_TAB = null;
+  advSwitch(m, tab || "fields", true);
 }
 
 // PUT a patch and adopt the metadata the service echoes back.
@@ -496,14 +628,22 @@ function saveVersions(name, btn) {
   return putMeta(name, { versions }, btn, "versions");
 }
 
+// Apply whichever view is showing — they produce the same patch shape.
 function applyAdvanced(name, btn) {
-  const ta = $("advText");
   let patch;
-  try { patch = JSON.parse(ta.value); }
-  catch (e) { ta.classList.add("bad"); toast(e.message, "err", "Invalid JSON"); return; }
-  ta.classList.remove("bad");
-  if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
-    toast("expected a JSON object", "err", "Invalid JSON"); return;
+  if (ADV_TAB === "fields") {
+    patch = advCollect();
+    if (!Object.keys(patch).length) {
+      toast("every field is empty — nothing to send", "err", "Nothing to update"); return;
+    }
+  } else {
+    const ta = $("advText");
+    try { patch = JSON.parse(ta.value); }
+    catch (e) { ta.classList.add("bad"); toast(e.message, "err", "Invalid JSON"); return; }
+    ta.classList.remove("bad");
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+      toast("expected a JSON object", "err", "Invalid JSON"); return;
+    }
   }
   if ($("advReplace").checked) patch.replace_versions = true;
   return putMeta(name, patch, btn, "metadata");
