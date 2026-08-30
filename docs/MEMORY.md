@@ -240,7 +240,7 @@ diagnostics and never lowers anything, a borrow-clean program produces
 the exact same IR either way — the bootstrap fixed point is
 unaffected.
 
-All nine rules below (§2.1–§2.8, plus §2.1b) emit `error:`. Use `--no-borrowck`
+All ten rules below (§2.1–§2.8, plus §2.1b and §2.11) emit `error:`. Use `--no-borrowck`
 for the escape hatch if a corner case slips through, and
 `--strict-borrowck` (off by default) to add three opt-in checks on top —
 see §2.9.
@@ -677,6 +677,68 @@ theory that mutable pointers miscompiled in long write loops; they do
 not, and `compiler/tests/mut_pointer.nu` pins that. The realloc above
 was the real bug all along.)
 
+### 2.11 Closure captures outlive the free
+
+A closure literal copies each captured binding's handle into its heap
+env. The closure therefore *holds* those handles for as long as it can
+be called, and freeing one through the original name leaves the closure
+pointing at released memory:
+
+```
+: ( Vec i ) v ( vec_new [i] )
+( vec_push [i] v 41 )
+: ( @ i ) f \ → i { ^ ( vec_len [i] v ) }
+( vec_free [i] v )
+( nurl_println_int ( f ) )     // error: use of moved value 'v' …
+                               //        The closure 'f' still holds 'v',
+                               //        so invoking it reads the freed
+                               //        buffer.
+```
+
+An **invocation of the closure is a read of everything it captured**.
+That is the whole rule; the report is the ordinary use-after-move of
+§2.1, and the diagnostic names the closure because the line it points at
+spells the call, not the handle.
+
+It applies to every spelling of the invocation, because the handle is
+what is at stake rather than the syntax:
+
+- a direct call, `( f )`;
+- a call one hop away, `( apply f )`, when the callee only ever *invokes*
+  that parameter — its invoke-only set (§7.4) is the positive signal.
+  A callee that stores or detaches the closure is not covered, and an
+  unknown or forward callee reports nothing;
+- a closure captured by another closure — the outer one reaches
+  everything the inner one holds, at any depth;
+- a mutation as much as a read: `\ → v { ( vec_push [i] w 7 ) }` after
+  `( vec_free [i] w )` is the same bug;
+- either binding form, `: ( @ i ) f \ …` and `= f \ …`.
+
+**Capturing** is a read too, so a closure that captures an
+already-freed binding is rejected at the literal itself, even if it is
+never called.
+
+The discriminator is invocation, not "the argument is a closure". Merely
+*loading* a closure value is not a use of its captures — that is how a
+closure's heap env is reclaimed once its fibers have drained
+(`( nurl_free # s # *u cb 1 )`, §7.4), which happens after the captured
+handles are freed and is correct.
+
+What is not covered is a closure that leaves the frame: stored into a
+struct field, returned, or handed to a callee that keeps it. That is the
+aggregate-conduit boundary in §3, and it is not specific to closures —
+a plain `Vec` stored into a struct field and freed through the original
+name is unchecked in exactly the same way (`--strict-borrowck` reports
+the handover itself, §2.9).
+
+Before this rule the whole family was invisible: a closure body is
+analysed as its own function, where a capture is never seeded and so can
+never be reported, and the enclosing function's walk never saw the
+body's reads at all. Nothing connected `( vec_free v )` to a later
+`( f )`, and the Vec form segfaulted while the String and HashMap forms
+quietly read a released control block.
+`compiler/tests/borrow_closure_capture_use_after_free.nu` pins it.
+
 ## 3. What is NOT checked
 
 The borrow checker targets the bug classes that ordinary NURL code
@@ -689,6 +751,13 @@ hits in practice. It deliberately does **not** cover:
   container that is then reallocated is warned about (§2.10), and
   `--strict-borrowck` reports a `# *T` escape from an owned binding
   (§2.9).
+- **Handles reached through an aggregate.** A heap handle stored into a
+  struct field (or a `Vec` element) and then freed through its original
+  name is not tracked to the reads that go through the container: the
+  checker records the handover as a *maybe*-move, and by default reads of
+  a maybe-moved binding are never flagged. `--strict-borrowck` reports
+  the second consume (§2.9). The same boundary is what stops §2.11 at a
+  closure that is stored into a struct rather than bound to a name.
 - **Aliased mutation beyond a single call.** The exclusive-access
   check (§2.4) covers a binding aliased among one call's arguments —
   by default the bare-identifier spelling, and under
@@ -754,6 +823,8 @@ hits in practice. It deliberately does **not** cover:
 | Aliased mutation via nested-argument reads | yes (`--strict-borrowck`, §2.9) |
 | Escape through a `?` / `??` join, or into a struct field | yes (`error:`) |
 | Return escape (through a field, a nested field, a closure env, a local name, a second helper, a forward / generic callee) | yes (`error:`) |
+| Use-after-free through a closure capture (invoke after the free) | yes (`error:`, §2.11) |
+| Handle read through a struct field after being freed by name | no (maybe-move; `--strict-borrowck` reports the handover, §2.9) |
 | Returned borrows / general lifetime inference | partial (§2.8) |
 | `*T` raw pointers | no (by design) |
 

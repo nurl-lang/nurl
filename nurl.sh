@@ -15,6 +15,15 @@
 #    --emit-ir | --emit=ir     Stop after stage 1, leave only the .ll
 #    --emit-asm | --emit=asm   Emit .s (native assembly), skip link
 #    -O0 | -O1 | -O2 | -O3     Clang optimisation level (default -O2)
+#    --no-borrowck             Forwarded to nurlc: bypass the borrow
+#                              checker (what its own error text tells you
+#                              to re-run with)
+#    --strict-borrowck         Forwarded to nurlc: the three opt-in
+#                              checks (aliased mutation through fields,
+#                              raw-pointer escape, consuming a
+#                              maybe-moved binding)
+#    --strict-arity |          Forwarded to nurlc: the n-ary `&`/`|`
+#    --no-strict-arity         arity trap as error (default) / warning
 #    -g | --debug              Pass -g to clang (DWARF line tables)
 #    --coverage                Line-coverage instrumentation (implies -g):
 #                              gcov-style -fprofile-arcs -ftest-coverage over
@@ -148,6 +157,12 @@ EMIT_ASM=0
 DEBUG_INFO=0
 COVERAGE=0
 CLI_OPT=""
+# Diagnostic flags this driver forwards verbatim to nurlc. Without the
+# pass-through, `--no-borrowck` — which the compiler's own borrow-checker
+# error tells the user to re-run with — was read as the source file name
+# ("Source file not found: --no-borrowck"), and `--strict-borrowck` was
+# unreachable through the driver entirely.
+NURLC_DIAG=""
 
 while [ $# -gt 0 ]; do
     case "${1:-}" in
@@ -159,6 +174,8 @@ while [ $# -gt 0 ]; do
         # GCOV notes survive — so it implies --debug.
         --coverage)            COVERAGE=1; DEBUG_INFO=1; shift ;;
         -O0|-O1|-O2|-O3)       CLI_OPT="$1"; shift ;;
+        --no-borrowck|--strict-borrowck|--strict-arity|--no-strict-arity)
+                               NURLC_DIAG="$NURLC_DIAG $1"; shift ;;
         *) break ;;
     esac
 done
@@ -167,6 +184,7 @@ if [ $# -eq 0 ]; then
     echo "Usage: $0 [flags] <file.nu> [output_name]" >&2
     echo "" >&2
     echo "  Flags: --emit-ir | --emit-asm | -O0..-O3 | -g | --debug | --coverage" >&2
+    echo "         --no-borrowck | --strict-borrowck | --strict-arity | --no-strict-arity" >&2
     echo "" >&2
     echo "  Compiles a NURL source file to a native binary." >&2
     echo "  The intermediate .ll file is kept alongside the output." >&2
@@ -292,7 +310,7 @@ if [ "$SPLIT_N" -gt 0 ]; then
     rm -f "$OUTBASE".[0-9]*.ll "$OUTBASE".[0-9]*.o
 fi
 # shellcheck disable=SC2086
-"$NURLC" $NURLC_G $NURLC_CPU $SPLIT_FLAGS "$SRCFILE" > "$LLFILE"
+"$NURLC" $NURLC_G $NURLC_CPU $NURLC_DIAG $SPLIT_FLAGS "$SRCFILE" > "$LLFILE"
 
 # `--split=N` is a ceiling, and nurlc holds the policy: it writes no
 # parts at all for a module too small for two of them to be worth it

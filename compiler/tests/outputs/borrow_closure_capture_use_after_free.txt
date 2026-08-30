@@ -1,0 +1,19 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_closure_capture_use_after_free.nu:79: error: use of moved value 'v' — a heap handle has exactly one owner, and this one was consumed at line 78 by vec_free. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value. The closure 'rd' still holds 'v', so invoking it reads the freed buffer.
+    ( nurl_print ( nurl_str_int ( rd ) ) )
+compiler/tests/borrow_closure_capture_use_after_free.nu:85: error: use of moved value 'w' — a heap handle has exactly one owner, and this one was consumed at line 84 by vec_free. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value. The closure 'mu' still holds 'w', so invoking it reads the freed buffer.
+    ( mu )
+compiler/tests/borrow_closure_capture_use_after_free.nu:90: error: use of moved value 's' — a heap handle has exactly one owner, and this one was consumed at line 89 by string_free. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value. The closure 'sl' still holds 's', so invoking it reads the freed buffer.
+    : ( @ i ) sl \ → i { ^ ( string_len s ) }
+compiler/tests/borrow_closure_capture_use_after_free.nu:91: error: use of moved value 's' — a heap handle has exactly one owner, and this one was consumed at line 89 by string_free. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value. The closure 'sl' still holds 's', so invoking it reads the freed buffer.
+    ( nurl_print ( nurl_str_int ( sl ) ) )
+compiler/tests/borrow_closure_capture_use_after_free.nu:97: error: use of moved value 'x' — a heap handle has exactly one owner, and this one was consumed at line 96 by vec_free. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value. The closure 'ix' still holds 'x', so invoking it reads the freed buffer.
+    ( nurl_print ( nurl_str_int ( apply ix ) ) )
+compiler/tests/borrow_closure_capture_use_after_free.nu:103: error: use of moved value 'y' — a heap handle has exactly one owner, and this one was consumed at line 102 by release. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value. The closure 'iy' still holds 'y', so invoking it reads the freed buffer.
+    ( nurl_print ( nurl_str_int ( iy ) ) )
+compiler/tests/borrow_closure_capture_use_after_free.nu:110: error: use of moved value 'z' — a heap handle has exactly one owner, and this one was consumed at line 109 by vec_free. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value. The closure 'outer' still holds 'z', so invoking it reads the freed buffer.
+    ( nurl_print ( nurl_str_int ( outer ) ) )
+compiler/tests/borrow_closure_capture_use_after_free.nu:117: error: use of moved value 'q' — a heap handle has exactly one owner, and this one was consumed at line 116 by vec_free. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value. The closure 'qc' still holds 'q', so invoking it reads the freed buffer.
+    ( nurl_print ( nurl_str_int ( qc ) ) )
+error: compilation aborted — 8 borrow-checker violations (re-run with --no-borrowck to bypass)

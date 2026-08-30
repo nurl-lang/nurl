@@ -6,6 +6,92 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A closure kept using a handle after it was freed, and nothing said
+  so** — the whole family, in every spelling.
+
+  ```nurl
+  : ( Vec i ) v ( vec_new [i] )
+  ( vec_push [i] v 41 )
+  : ( @ i ) f \ → i { ^ ( vec_len [i] v ) }
+  ( vec_free [i] v )
+  ( nurl_println_int ( f ) )    // compiled clean; segfaults
+  ```
+
+  The borrow checker rejects the same read written directly
+  (`( vec_len [i] v )` after the free) on the spot. Through a closure it
+  reported nothing, and the hole was structural rather than a missing
+  case: a closure body is analysed as its OWN function, where a capture
+  is never seeded and therefore can never be reported, and the enclosing
+  function's walk never saw the body's reads at all. Nothing connected
+  the free to the later call. Confirmed accepted, and wrong at run time,
+  for `Vec` (segfault), `String` and `HashMap` (a silent read of a
+  released control block), for a read and for a mutation, for a capture
+  taken AFTER the free, for a free through a `sink` parameter, for a
+  closure captured by another closure, and for both binding forms.
+
+  One fact now crosses the boundary: a closure binding holds a COPY of
+  every heap handle its body captured, so **invoking it reads those
+  handles**. `gen_closure_expr` publishes the capture list (already
+  expanded through captured closures), `gen_let` / `gen_assign` record it
+  on the binding, and the invocation sites expand it into the statement's
+  read set — after which the existing use-after-move machinery reports it
+  with no new state, no new walk and no new diagnostic path. Capturing is
+  a read too, so a closure over an already-freed binding is rejected at
+  the literal even if it is never called. The error names the closure,
+  because the line it points at spells the call and not the handle.
+
+  Invocation is the discriminator, not "the argument is a closure": a
+  plain VALUE load of a closure is not a use of its captures, which is
+  what `( nurl_free # s # *u cb 1 )` does to reclaim a drained closure's
+  env (§7.4) after freeing what it captured. Reading that as a use
+  rejected `async_mn` and `async_sleep`, two correct programs. One call
+  deep is covered through the callee's invoke-only set — the positive
+  signal that the parameter is only ever called.
+
+  Boundary, now written down (`docs/MEMORY.md` §2.11 and §3): a closure
+  that leaves the frame — stored into a struct field, returned, kept by a
+  callee — is not covered, and that is not a closure limitation. A plain
+  `Vec` stored into a struct field and freed through its original name is
+  unchecked in exactly the same way; `--strict-borrowck` reports the
+  handover itself.
+
+  Verified: the bootstrap fixed point, 891 tests, 102 examples, and a
+  differential sweep of old vs new compiler over all 1596 `.nu` files in
+  the tree (stdlib, examples, every package, tooling, unikernel, registry)
+  — zero diagnostic differences, so no false positive was introduced and
+  no existing program contained the bug. The emitted IR is byte-identical
+  between the two compilers over 400 of those files, which is the property
+  a diagnostic-only pass owes the bootstrap. The sanitized compiler under
+  LSan reports no new allocation on the new test: the two it does report
+  sit in `_nurl_main` and are the pre-existing pair any early error exit
+  leaks, identical on `borrow_double_free`. Regression
+  `compiler/tests/borrow_closure_capture_use_after_free.nu` pins eight
+  positives and four controls, the env-reclamation shape among them.
+
+- **`--no-borrowck` was not reachable through `nurl.sh` / `nurl.bat`** —
+  the compiler's own borrow-checker error ends with "re-run with
+  `--no-borrowck` to bypass", and the driver answered
+  `ERROR: Source file not found: --no-borrowck`. Its flag loop stops at
+  the first unrecognised argument and treats it as the source file, so
+  the documented escape hatch, `--strict-borrowck`, and the two
+  `--strict-arity` spellings were all unusable unless you invoked
+  `build/nurlc` directly. All four are now forwarded verbatim, and listed
+  in both drivers' usage text.
+
+- **Two nested-field-store diagnostics no test could reach** — the
+  "expected a field name in this nested field path" and "type 'T' has no
+  field 'f'" messages of `gen_nested_lvalue_addr`, both listed as
+  never-fired by `tools/check_diag_coverage.sh`. The first needs THREE
+  dots to reach at all: with two, the single remaining hop is the one
+  `__nested_lvalue_ok` already proved is an identifier, so the check
+  inside the walk can only fire from the second hop onwards — which is
+  why writing the obvious two-dot fixture reports something else.
+  `compiler/tests/diag_nested_field_path.nu` covers both.
+
 ## [0.56.0] — 2026-08-29
 
 ### Added
