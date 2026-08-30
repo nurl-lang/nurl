@@ -1,0 +1,10 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_nested_field_path.nu:27:19: error: expected a field name in this nested field path — each '.' takes exactly one field, so '= . . o a b v' writes field 'b' of field 'a' of 'o'.
+    = . . . o mid `x` b 7
+                  ^
+compiler/tests/diag_nested_field_path.nu:32:18: error: type 'Outer' has no field 'nope' — check the field name against the struct's declaration.
+    = . . o nope n 7
+                 ^
+error: aborting due to 2 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

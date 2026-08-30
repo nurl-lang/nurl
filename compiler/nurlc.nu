@@ -1108,6 +1108,27 @@
 // here instead, and replayed against the capture list once the body is
 // done and the depth is back to zero.
 : ~ s g_closure_consumed ``
+
+// Names of `:`-bound closures in the CURRENT function whose capture list
+// is non-empty — the allocation-free pre-filter in front of the
+// `<name>__closure_caps` symbol lookup, which gen_ident would otherwise
+// perform (two string allocations) for every identifier in the program.
+// Cleared per function by bck_fn_begin and saved/restored across a
+// closure body, which gets its own bck_fn_begin: without the restore the
+// enclosing function's list stayed empty after any later closure literal,
+// and every invocation past that point went unchecked again.
+: ~ s g_bck_cap_names ``
+
+// `<handle> <closure>` pairs for the current function: which closure
+// binding made a captured handle reachable at a use site. The reported
+// line is the INVOCATION (`( f )`), which does not mention the handle at
+// all, so without this the error named a binding the reader cannot see
+// on the line it points at. Same lifetime discipline as g_bck_cap_names
+// — cleared per function, saved/restored across a closure body — so it
+// can never attribute a closure from another function. A deferred walk
+// (parked to the end of the module) finds it empty and falls back to the
+// unattributed wording, which is the safe direction.
+: ~ s g_bck_cap_via ``
 : ~ i g_closure_defs 0  // Deferred closure function definitions
 : ~ i g_closure_types 0  // Deferred closure type definitions
 : ~ i g_type_count 0  // Count of closure types stored
@@ -8233,6 +8254,21 @@
                     call_name fname arg_idx ) }
                 {} } }
         {}
+        // Borrow checker: a closure binding handed to a parameter the
+        // callee INVOKES is invoked here, so this call reads every handle
+        // the closure captured — `( each cb )` after freeing what `cb`
+        // captured is the same use-after-free as calling `cb` inline.
+        //
+        // Invoke-only is the discriminator, not "the argument is a
+        // closure": a merely-loaded closure value is NOT a use of its
+        // captures. `( nurl_free # s # *u cb 1 )` reclaims the env of a
+        // closure whose fibers have all been drained (docs/MEMORY.md
+        // §7.4) — reading it as a use rejected async_mn/async_sleep, two
+        // programs that are correct.
+        ? & ( is_ident_tok bck_arg_tt )
+        ( str_contains_word ( nurl_sym_get g_fn_invoke_only call_name ) ( nurl_str_int arg_idx ) )
+        { ( bck_note_closure_caps syms bck_arg_val ) }
+        {}
         : s __cle ( nurl_sym_get syms `__last_closure_env__` )
         ? & != 0 ( nurl_str_len __cle )
         ( str_contains_word ( nurl_sym_get g_fn_invoke_only call_name ) ( nurl_str_int arg_idx ) )
@@ -9280,6 +9316,12 @@
 
     ? is_stored_closure
     {
+        // Borrow checker: an invocation reads the closure's captured
+        // handles. The callee position never reaches gen_ident (that is
+        // what keeps an invoke-only parameter invoke-only), so this is the
+        // only site that sees `( f )` — and it is the shape the whole
+        // use-after-free family is written in.
+        ( bck_note_closure_caps syms call_name )
         // This is a stored closure variable - load and call
         : s loaded_closure ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print loaded_closure )
@@ -13568,6 +13610,8 @@
         ( nurl_sym_set g_bck `pmoves` `` )
         ( nurl_sym_set g_bck `pmaybes` `` )
         = g_bck_depth 0
+        = g_bck_cap_names ``
+        = g_bck_cap_via ``
     } {}
 }
 
@@ -13579,6 +13623,82 @@
         ( nurl_sym_set g_bck `reads`
         ? == 0 ( nurl_str_len cur ) ( nurl_str_cat name `` ) ( nurl_str_cat3 cur ` ` name ) )
     } {}
+}
+
+// The closure binding through which `w` became reachable at a use site,
+// or "" when nothing recorded one. A linear pair-scan: the list holds one
+// entry per captured handle in one function, so it is a handful of words.
+@ bck_cap_via_of s w → s {
+    : ~ s rest ( nurl_str_cat g_bck_cap_via `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s k ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s cl ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( seq k w ) { ^ ( nurl_str_cat cl `` ) } {}
+    }
+    ^ ( nurl_str_cat `` `` )
+}
+
+// A closure binding holds a COPY of every heap handle its body captured,
+// so reading or invoking that binding READS those handles. Without this,
+// freeing a captured Vec / String / HashMap and then calling the closure
+// compiled clean and ran on freed memory — the same use-after-move the
+// checker rejects on the spot when the read is written directly.
+//
+// The hole was structural, not a missing case: a closure body is walked
+// as its OWN function, where a capture is never seeded and therefore
+// unreportable, and the enclosing function's walk never saw the body's
+// reads at all. Nothing connected the two, so every shape — read, mutate,
+// invoke through a helper, free through a `sink` parameter — was blind.
+//
+// The capture list is published by gen_closure_expr and recorded on the
+// binding by gen_let (`<name>__closure_caps`), already expanded through
+// captured closures so a closure holding a closure names the inner one's
+// handles too. Expanding at RECORD time (rather than in the analyze walk)
+// keeps the whole state machine, the diagnostic and the loop fixpoint
+// untouched: the invocation simply reads what the closure can reach.
+@ bck_note_closure_caps i syms s name → v {
+    ? == g_borrowck 0 { ^ v } {}
+    ? ! ( str_contains_word g_bck_cap_names name ) { ^ v } {}
+    // Walk a COPY: `caps` borrows the symbol-table entry and the cursor
+    // below reassigns itself with owned slices of it (bck_alias_from_phi
+    // idiom).
+    : ~ s rest ( nurl_str_cat ( nurl_sym_get2 syms name `__closure_caps` ) `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ( bck_note_read w )
+        // Bound, not inline: a freshly allocated result handed straight
+        // to a call is not collected as an owned argument temp, and this
+        // runs once per captured handle per invocation.
+        : s seen ( bck_cap_via_of w )
+        ? == 0 ( nurl_str_len seen )
+        { = g_bck_cap_via ? == 0 ( nurl_str_len g_bck_cap_via )
+            ( nurl_str_cat3 w ` ` name )
+            ( nurl_str_cat3 g_bck_cap_via ` ` ( nurl_str_cat3 w ` ` name ) ) }
+        {}
+    }
+}
+
+// The dual: `name` is being (re)bound to something that is NOT a
+// capturing closure, so whatever it used to hold is no longer reachable
+// through it. Shadowing the entry with an empty one is what stops a
+// stale list from turning a correct later use into a false positive.
+// Guarded by the pre-filter, so an ordinary binding costs one word scan
+// and no allocation.
+@ bck_clear_cap_name i syms s name → v {
+    ? ! ( str_contains_word g_bck_cap_names name ) { ^ v } {}
+    ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) `` )
+}
+
+// Remember that `name` is a closure binding carrying captures, for the
+// pre-filter above. Idempotent — a rebound name is already present.
+@ bck_add_cap_name s name → v {
+    ? ( str_contains_word g_bck_cap_names name ) { ^ v } {}
+    = g_bck_cap_names ? == 0 ( nurl_str_len g_bck_cap_names )
+    ( nurl_str_cat name `` )
+    ( nurl_str_cat3 g_bck_cap_names ` ` name )
 }
 
 // Append one statement record, then clear the read accumulator so the
@@ -14365,10 +14485,20 @@
         : s cause ( nurl_sym_get g_bck ( nurl_str_cat3 `mc_` name ml ) )
         : s by ? == 0 ( nurl_str_len cause ) ( nurl_str_cat `` `` )
         ( nurl_str_cat3 ` by ` cause `` )
+        // Name the closure when the handle is reachable here only through
+        // one: the line this error points at spells the invocation, not
+        // the binding, and the reader would otherwise hunt for a name that
+        // is not on it. "holds", not "captured": with a closure captured by
+        // a closure the named one holds the handle without having written
+        // its name.
+        : s via0 ( bck_cap_via_of name )
+        : s via ? == 0 ( nurl_str_len via0 ) ( nurl_str_cat `` `` )
+        ( nurl_str_cat3 ` The closure '` via0
+        ( nurl_str_cat3 `' still holds '` name `', so invoking it reads the freed buffer.` ) )
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
         ( nurl_str_cat4 `use of moved value '` name
         `' — a heap handle has exactly one owner, and this one was consumed at line ` ( nurl_str_cat3 ml
-        ( nurl_str_cat by `. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.` ) `` ) ) )
+        ( nurl_str_cat by ( nurl_str_cat `. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.` via ) ) `` ) ) )
     }
 }
 
@@ -14764,6 +14894,12 @@
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `p` ix ) params )
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `f` ix )
     ( nurl_sym_get g_bck `file` ) )
+    // Park the closure-attribution list with the rows. It is a global
+    // that the next function clears, and a parked walk runs after the
+    // whole module — without this the "which closure holds it" clause
+    // was present only for a function that was NOT deferred, i.e. almost
+    // never, since any generic call (`vec_get [i]`) defers the caller.
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `c` ix ) g_bck_cap_via )
     ( nurl_sym_def g_deferred_bck `n` ( nurl_str_int + n 1 ) )
 }
 
@@ -14780,6 +14916,7 @@
         ( nurl_sym_set g_bck `file` ( nurl_sym_get g_deferred_bck ( nurl_str_cat `f` ix ) ) )
         ( nurl_sym_set g_bck `stmts` ( nurl_sym_get g_deferred_bck ( nurl_str_cat `s` ix ) ) )
         ( nurl_sym_set g_bck `reads` `` )
+        = g_bck_cap_via ( nurl_sym_get g_deferred_bck ( nurl_str_cat `c` ix ) )
         ( bck_analyze ( nurl_sym_get g_deferred_bck ( nurl_str_cat `p` ix ) ) )
         = i + i 1
     }
@@ -15304,6 +15441,7 @@
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         ( nurl_sym_def syms `__last_value_borrow__` `` )
         ( nurl_sym_def syms `__last_closure_env__` `` )
+        ( nurl_sym_def syms `__last_closure_caps__` `` )
         ( nurl_sym_def syms `__last_slice_owned__` `` )
         ( nurl_sym_def syms `__last_phi_idents__` `` )
         ( nurl_sym_def syms `__last_phi_cause__` `` )
@@ -15367,6 +15505,16 @@
         // closure's env? Captured now, registered for the function-exit
         // free after the binding is recorded below.
         : s rhs_closure_env ( nurl_sym_get syms `__last_closure_env__` )
+        // Borrow checker: a closure binding holds the handles its
+        // body captured, so a later read or invocation of THIS name
+        // reads them too (bck_note_closure_caps). Gated on the RHS
+        // being a capturing closure, like the flags above, so a
+        // plain binding never inherits a sibling literal's list.
+        : s rhs_closure_caps ( nurl_sym_get syms `__last_closure_caps__` )
+        ? & != 0 ( nurl_str_len rhs_closure_env ) != 0 ( nurl_str_len rhs_closure_caps )
+        { ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) rhs_closure_caps )
+            ( bck_add_cap_name name ) }
+        { ( bck_clear_cap_name syms name ) }
         // Borrow provenance: did the RHS produce a borrow (a value aliasing
         // something the caller still owns)? If so, an auto-Drop binding here
         // must NOT register its drop — the owner reclaims it.
@@ -15570,6 +15718,7 @@
                 ( nurl_sym_def syms `__last_expr_refdepth__` `` )
                 ( nurl_sym_def syms `__last_value_borrow__` `` )
                 ( nurl_sym_def syms `__last_closure_env__` `` )
+                ( nurl_sym_def syms `__last_closure_caps__` `` )
                 ( nurl_sym_def syms `__last_slice_owned__` `` )
                 ( nurl_sym_def syms `__last_phi_idents__` `` )
                 ( nurl_sym_def syms `__last_phi_cause__` `` )
@@ -15616,6 +15765,16 @@
                 ? & != 0 ( nurl_str_len rhs_closure_env ) != 0 ( nurl_str_len g_last_closure_nonsend )
                 { ( nurl_sym_def syms ( nurl_str_cat name `__closure_nonsend` ) g_last_closure_nonsend ) }
                 {}
+                // Borrow checker: a closure binding holds the handles its
+                // body captured, so a later read or invocation of THIS name
+                // reads them too (bck_note_closure_caps). Gated on the RHS
+                // being a capturing closure, like the flags above, so a
+                // plain binding never inherits a sibling literal's list.
+                : s rhs_closure_caps ( nurl_sym_get syms `__last_closure_caps__` )
+                ? & != 0 ( nurl_str_len rhs_closure_env ) != 0 ( nurl_str_len rhs_closure_caps )
+                { ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) rhs_closure_caps )
+                    ( bck_add_cap_name name ) }
+                { ( bck_clear_cap_name syms name ) }
                 // Same carry for the shared-mutation flag (§6.5): a closure
                 // that mutates an Arc's contents is only a bug once it is
                 // detached onto a thread, and that is known at thread_spawn.
@@ -15850,8 +16009,21 @@
         ( nurl_sym_def syms `__last_phi_idents__` `` )
         ( nurl_sym_def syms `__last_phi_cause__` `` )
         ( nurl_sym_def syms `__last_phi_definite__` `` )
+        ( nurl_sym_def syms `__last_closure_env__` `` )
+        ( nurl_sym_def syms `__last_closure_caps__` `` )
         : ~ s val ( gen_operand lex syms cg )
         : s __asn_rt ( nurl_get_last_type )
+        // Borrow checker: `= f \ … { … v … }` rebinds `f` to a closure
+        // holding `v`, exactly as the `:` form does — without this the
+        // whole use-after-free family came back by spelling the binding
+        // with `=`. A non-closure RHS clears the list (the resets above),
+        // so a rebound `f` never keeps a stale capture set.
+        : s __asn_caps ( nurl_sym_get syms `__last_closure_caps__` )
+        ? & != 0 ( nurl_str_len ( nurl_sym_get syms `__last_closure_env__` ) )
+        != 0 ( nurl_str_len __asn_caps )
+        { ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) __asn_caps )
+            ( bck_add_cap_name name ) }
+        { ( bck_clear_cap_name syms name ) }
         // A fresh owned slice reaching the RHS through a `?` / `??` (whose
         // first token isn't `[`) still frees the old buffer below.
         : b rhs_slice_owned != 0 ( nurl_sym_len syms `__last_slice_owned__` )
@@ -19933,12 +20105,40 @@
     // the closure may outlive the call and carry the captured reference.
     // Mark each captured name value-read in the enclosing scope.
     : ~ s __cap_scan ( nurl_str_cat captured_vars `` )
+    // The heap handles this closure will hold, published below as
+    // `__last_closure_caps__` so the binding site can record them
+    // (bck_note_closure_caps). Built here because this is the one place
+    // that still sees the ENCLOSING scope's types — inside the body a
+    // capture is a fresh local of the closure's own frame.
+    : ~ s __cap_heap ( nurl_str_cat `` `` )
     ~ != 0 ( nurl_str_len __cap_scan ) {
         : s __cap_w ( str_first_word __cap_scan )
         ( bck_mark_param_valueread syms __cap_w )
         // A tracked closure captured into THIS closure escapes — the new
         // closure (and wherever it goes) owns the captured env now.
         ( mem_own_closure_remove syms __cap_w )
+        ? != g_borrowck 0 {
+            // Capturing a handle READS it, right here: `( vec_free v )`
+            // followed by a closure that captures `v` is a use-after-move
+            // even if the closure is never called, and this is the record
+            // that reports it.
+            : s __cap_ll ( nurl_llty ( nurl_sym_get syms __cap_w ) )
+            ? ( bck_is_heap_lty __cap_ll )
+            { ( bck_note_read __cap_w )
+                = __cap_heap ? == 0 ( nurl_str_len __cap_heap )
+                ( nurl_str_cat __cap_w `` )
+                ( nurl_str_cat3 __cap_heap ` ` __cap_w ) }
+            {}
+            // A captured CLOSURE reaches everything IT captured, so the
+            // handles travel one level out. The inner list is already
+            // expanded, so this stays a single hop at every depth.
+            : s __cap_in ( nurl_sym_get2 syms __cap_w `__closure_caps` )
+            ? != 0 ( nurl_str_len __cap_in )
+            { = __cap_heap ? == 0 ( nurl_str_len __cap_heap )
+                ( nurl_str_cat __cap_in `` )
+                ( nurl_str_cat3 __cap_heap ` ` __cap_in ) }
+            {}
+        } {}
         = __cap_scan ( str_skip_word __cap_scan )
     }
 
@@ -20236,6 +20436,10 @@
     = g_lock_depth 0
     : s __cl_consumed_saved ( nurl_str_cat g_closure_consumed `` )
     = g_closure_consumed ``
+    // bck_fn_begin below clears the capture-binding pre-filter; the
+    // enclosing function's list must survive the body.
+    : s __cl_capnames_saved ( nurl_str_cat g_bck_cap_names `` )
+    : s __cl_capvia_saved ( nurl_str_cat g_bck_cap_via `` )
     // A closure body is emitted as its OWN function, so it needs its own
     // deferred arm-drop list: the enclosing function's epilogue cannot
     // free slots that live in a different frame. Saving and clearing the
@@ -20327,6 +20531,8 @@
         ( nurl_sym_set g_bck `deferred` __cl_bck_deferred )
     } {}
     = g_bck_depth __cl_bck_depth
+    = g_bck_cap_names __cl_capnames_saved
+    = g_bck_cap_via __cl_capvia_saved
     = g_bck_closure_depth - g_bck_closure_depth 1
     = g_fn_arc_mut_witness __cl_arcmut_saved
     = g_fn_mutates_witness __cl_mut_saved
@@ -20512,6 +20718,12 @@
     ? > captured_count 0
     { ( nurl_sym_def syms `__last_closure_env__` env_ptr ) }
     { ( nurl_sym_def syms `__last_closure_env__` `` ) }
+
+    // Borrow checker: the heap handles this closure now holds. Always
+    // published — including empty — so a consuming `:` never reads a
+    // sibling closure's list (the same discipline
+    // `__last_closure_param_idents__` follows).
+    ( nurl_sym_def syms `__last_closure_caps__` __cap_heap )
 
     result2
 }

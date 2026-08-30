@@ -14,6 +14,10 @@ REM    --emit-ir            Stop after stage 1, leave only the .ll
 REM    --emit-asm           Emit .s (native assembly) next to the .ll
 REM    -O0 / -O1 / -O2 / -O3   Clang optimisation level (default -O2)
 REM    -g / --debug         Pass -g to clang (DWARF/CodeView line tables)
+REM    --no-borrowck        Forwarded to nurlc: bypass the borrow checker
+REM    --strict-borrowck    Forwarded to nurlc: the opt-in extra checks
+REM    --strict-arity /     Forwarded to nurlc: n-ary `&`/`|` arity trap
+REM    --no-strict-arity      as error (default) / warning
 REM
 REM  Examples:
 REM    nurl.bat hello.nu               → hello.exe
@@ -34,6 +38,7 @@ set "EMIT_IR=0"
 set "EMIT_ASM=0"
 set "DEBUG_INFO=0"
 set "CLI_OPT="
+set "NURLC_DIAG="
 
 REM -- version / upgrade: whole-toolchain commands, no source file --
 REM `nurl upgrade` is the canonical name for a toolchain upgrade (it is
@@ -60,11 +65,19 @@ if /i "%~1"=="-O0"        set "CLI_OPT=-O0"   & shift & goto parse_flags
 if /i "%~1"=="-O1"        set "CLI_OPT=-O1"   & shift & goto parse_flags
 if /i "%~1"=="-O2"        set "CLI_OPT=-O2"   & shift & goto parse_flags
 if /i "%~1"=="-O3"        set "CLI_OPT=-O3"   & shift & goto parse_flags
+REM Diagnostic flags forwarded verbatim — `--no-borrowck` is what the
+REM compiler's own borrow-checker error tells the user to re-run with,
+REM and without this it was read as the source file name.
+if /i "%~1"=="--no-borrowck"     set "NURLC_DIAG=%NURLC_DIAG% --no-borrowck"     & shift & goto parse_flags
+if /i "%~1"=="--strict-borrowck" set "NURLC_DIAG=%NURLC_DIAG% --strict-borrowck" & shift & goto parse_flags
+if /i "%~1"=="--strict-arity"    set "NURLC_DIAG=%NURLC_DIAG% --strict-arity"    & shift & goto parse_flags
+if /i "%~1"=="--no-strict-arity" set "NURLC_DIAG=%NURLC_DIAG% --no-strict-arity" & shift & goto parse_flags
 
 if "%~1"=="" (
     echo Usage: nurl.bat [flags] ^<file.nu^> [output_name]
     echo.
     echo  Flags: --emit-ir ^| --emit-asm ^| -O0..-O3 ^| -g ^| --debug
+    echo         --no-borrowck ^| --strict-borrowck ^| --strict-arity ^| --no-strict-arity
     echo.
     echo  Compiles a NURL source file to a native Windows executable.
     echo.
@@ -177,7 +190,7 @@ if "%EMIT_IR%"=="1" (
 ) else (
     echo [1/2] %SRCFILE% → %LLFILE%
 )
-"%NURLC%" "%SRCFILE%" > "%LLFILE%"
+"%NURLC%"%NURLC_DIAG% "%SRCFILE%" > "%LLFILE%"
 if !errorlevel! neq 0 (
     if exist "%LLFILE%" del "%LLFILE%"
     echo ERROR: NURL compilation failed
