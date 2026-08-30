@@ -1675,7 +1675,7 @@ with a count of violations after walking the whole program. The checker
 is **diagnostic-only** — emitted IR is byte-identical whether it runs or
 not.
 
-Eight rules are enforced. The semantic level is summarised here; for
+Nine rules are enforced. The semantic level is summarised here; for
 exact phrasing and the soundness contract see
 [`docs/MEMORY.md` §2 and §6](MEMORY.md).
 
@@ -1768,10 +1768,31 @@ carries the max referent depth of the arguments at those positions, so
 the existing escape sinks (§9.3 / §9.7) fire on it. A helper that returns
 a *fresh* value is not a passthrough and stays legal.
 
-### 9.9 What is NOT checked
+### 9.9 Closure captures
+
+A closure literal copies each captured binding's handle into its heap
+environment, so the closure *holds* those handles for as long as it can
+be called. **Invoking a closure is a read of everything it captured**:
+freeing a captured handle and then calling the closure is rejected as
+the use-after-move of §9.1, and so is capturing a binding that is
+already moved. The invocation may be direct (`( f )`) or one call deep,
+through a parameter the callee only ever invokes; a closure captured by
+another closure carries its handles outward at any depth.
+
+Merely *loading* a closure value is not a use of its captures — that is
+how a closure's heap environment is reclaimed once it is dead, which
+legitimately happens after the captured handles are freed.
+
+### 9.10 What is NOT checked
 
 - `*T` raw pointer lifetimes (the FFI escape hatch) — except the one
   narrow `# *T`-escape check `--strict-borrowck` adds (§9 intro).
+- A handle reached through an aggregate: one stored into a struct field
+  (or a `Vec` element) and then freed through its original name is
+  recorded as a *maybe*-move, and reads of a maybe-moved binding are not
+  flagged. `--strict-borrowck` reports the second consume. This is also
+  where §9.9 stops — a closure stored into a struct rather than bound to
+  a name is reached the same way, and is not a closure-specific gap.
 - Aliased mutation beyond a single call: longer-range "exclusive
   reference" analysis is not implemented. Within one call,
   `--strict-borrowck` flags a sibling read however it is spelled — a

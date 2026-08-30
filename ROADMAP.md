@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-29 · Current release: **0.56.0** · Language: **Grammar
+_Last reviewed: 2026-08-30 · Current release: **0.57.0** · Language: **Grammar
 v2.7** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -70,7 +70,12 @@ What is solid today:
   one — and both are now analysed. Since 0.55.0 a closure body's two
   exits agree: one that falls off its end reclaims what it bound, where
   only one that returned through `^` did, and `--no-borrowck` is a flag
-  the corpus runs rather than one nothing had ever exercised.
+  the corpus runs rather than one nothing had ever exercised. 0.57.0
+  closed the other direction across that same boundary: the checker knew
+  what a closure body *frees*, but nothing tied a handle the enclosing
+  frame freed to a later call of a closure holding it, so every spelling
+  of that use-after-free compiled clean. **Invoking a closure is now a
+  read of everything it captured.**
 - **Concurrency.** A stackful M:N work-stealing async runtime with **no
   `async`/`await` colouring** — ordinary code runs unchanged under the
   scheduler — plus threads/mutex/cond, typed channels, and Go-style `??`
