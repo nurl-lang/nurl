@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.6
+
+Dependency requirements now pin the **major**, matching the rest of the
+registry packages:
+
+- `grad` `^0.8` → `^0`
+- `tensor` `^0.4` → `^0`
+
+A minor release of a dependency is picked up on the next install now,
+instead of stranding this package on the minor its requirement happened
+to name. That was not hypothetical here: a registry install
+resolved `grad` to the 0.8 series while the monorepo builds this package
+against 0.10 — two different builds of the same commit.
+
+No source change.
+
 ## 0.3.4
 
 Widen the `grad` requirement to `^0.7` (megakernel fusion release). mlp's

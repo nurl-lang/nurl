@@ -3461,7 +3461,7 @@ $ `cudakernel.nu`
 // Single source of truth for the server version — the MCP handshake,
 // server/discover, and the --version banner all read this (the
 // handshake had drifted to a stale hand-written 0.20.0).
-@ sm_version → s { ^ `0.28.1` }
+@ sm_version → s { ^ `0.28.2` }
 
 @ handle_initialize Json id ? Json params → Json {
     : Json result ( mcp_initialize_result `swarm-mcp` ( sm_version ) )

@@ -519,7 +519,7 @@ $ `pg.nu`
 }
 
 @ main → i {
-    : *Cli c ( cli_new `psql` `a pure-NURL PostgreSQL client (no libpq, no OpenSSL); postgres://user:pass@host:port/db?sslmode=… as the argument` `0.3.0` )
+    : *Cli c ( cli_new `psql` `a pure-NURL PostgreSQL client (no libpq, no OpenSSL); postgres://user:pass@host:port/db?sslmode=… as the argument` `0.3.1` )
     ( cli_flag_str c `host` 104 `HOST` `server host` `localhost` `PGHOST` )
     ( cli_flag_int c `port` 112 `PORT` `server port` 5432 `PGPORT` )
     ( cli_flag_str c `user` 85 `USER` `user name` `postgres` `PGUSER` )
