@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.6
+
+**Do not use 0.9.5.** It shipped the pin change below with a stale
+`--version` literal — the binary announced `0.9.4`, a version whose
+contents it does not have. A published version can be yanked but never
+replaced, so the correction is this release: identical content, and
+`--version` prints `0.9.6`.
+
 ## 0.9.5
 
 Dependency requirements now pin the **major**, matching the rest of the

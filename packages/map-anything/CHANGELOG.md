@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.4
+
+**Do not use 0.4.3.** It shipped the pin change below with a stale
+`--version` literal — the binary announced `0.4.2`, a version whose
+contents it does not have. A published version can be yanked but never
+replaced, so the correction is this release: identical content, and
+`--version` prints `0.4.4`.
+
 ## 0.4.3
 
 Dependency requirements now pin the **major**, matching the rest of the
