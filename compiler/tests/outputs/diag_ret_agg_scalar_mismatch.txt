@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_ret_agg_scalar_mismatch.nu:10:5: error: return value type '{ i1, i64 }' does not match the declared return type 'i'. NURL has no implicit conversions between these shapes — a closure, option/result, slice, struct and scalar are each their own type, and emitting the 'ret' anyway would be invalid IR or a reinterpreted bit pattern. Return a value of the declared type, or fix the declaration.
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

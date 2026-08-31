@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_trait_arg_agg.nu:17:5: error: argument 2 to 'show' has type '{i1,i64}' but the invoked function type declares 'i' — an indirect or dispatched call carries its own signature under opaque pointers, so the mismatch assembles and the callee reads reinterpreted bits: silent garbage, not even a crash. Pass a value of the declared type (convert explicitly with '# T expr' where a conversion is meant), or fix the declaration.
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
