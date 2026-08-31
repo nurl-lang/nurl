@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_generic_arg_agg.nu:14:24: error: argument 1 to 'pick': value of type '{ i1, i64 }' passed where parameter expects 'i64' — an option/result/slice/closure aggregate is exactly its own type: nothing converts into or out of it implicitly, and emitting the call anyway would hand the callee reinterpreted bytes. Unwrap the value first ('?? v { … }', or propagate a result with the propagation suffix), or fix the declaration.
+    : i r ( pick [i] o 7 )
+                       ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

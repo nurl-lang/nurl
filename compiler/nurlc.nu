@@ -3021,6 +3021,33 @@
                     `' — an enum is a closed set of named variants, and no number converts into one implicitly (the value could name no variant at all). Return a variant by name ('^ Red'), or declare a numeric return type.` ) ) } }
             {} }
         {}
+        // Total-agreement backstop — the boundary law stated ONCE for
+        // every pair the branches above did not coerce, wrap, or
+        // reject: the value that reaches the `ret` must lower to the
+        // declared return type's exact LLVM spelling (pointer beside
+        // pointer excepted — opaque pointers are one LLVM type).
+        // Every shape that used to fall through here — a closure out
+        // of an integer function (`^ f` where f is a closure-typed
+        // PARAMETER: the c-style-call typo's landing spot), an option
+        // out of a pointer or struct function, an integer out of an
+        // option function — emitted a `ret` only the LLVM verifier
+        // rejected, three build stages later, with a .ll line number
+        // and no source location. A future shape that matches no
+        // pairwise branch lands here instead of minting a new hole.
+        : s __bk_lt ( nurl_llty lt )
+        : s __bk_rt ( nurl_llty fn_rt )
+        ? & ! ( seq ( __strip_spaces __bk_lt ) ( __strip_spaces __bk_rt ) )
+        ! & ( is_ptr_ty __bk_lt ) ( is_ptr_ty __bk_rt )
+        {  // A closure returned where its own result type is declared is
+            // almost always a call that lost its parens — say so.
+            : b __bk_cl & == ( nurl_str_get __bk_lt 0 ) 123 != -1 ( nurl_str_find __bk_lt `(` )
+            : s __bk_cure ? __bk_cl
+            `'. If you meant to CALL the closure, calls are parenthesised prefix form: '^ ( f args )' — 'f( args )' names the closure itself and hands it back uncalled. If you meant to return the closure, declare the matching '( @ … )' return type.`
+            `'. NURL has no implicit conversions between these shapes — a closure, option/result, slice, struct and scalar are each their own type, and emitting the 'ret' anyway would be invalid IR or a reinterpreted bit pattern. Return a value of the declared type, or fix the declaration.`
+            ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
+            __bk_cure ) ) }
+        {}
     }
     {}
     ( nurl_set_last_type lt )
@@ -4639,6 +4666,116 @@
         ( nurl_str_cat4 ` argument(s) but the declared closure/function type takes ` ( nurl_str_int want )
         ` — the emitted call would leave parameter registers unset (or drop values); the callee reads garbage. Match the declaration.` `` ) ) ) }
     {}
+}
+
+// The parameter LLVM spellings inside a closure / fn-ptr type's first
+// top-level `(…)`, `;`-joined, nesting-aware (an aggregate parameter
+// carries commas and braces of its own). `skip_first` drops the first
+// slot — a closure's environment / a dyn method's erased self — so the
+// result lines up with the USER arguments. Returns "" when the type has
+// no parameter list to read.
+@ __fnty_param_lltys s t b skip_first → s {
+    : i n ( nurl_str_len t )
+    : ~ i p 0
+    ~ & < p n != ( nurl_str_get t p ) 40 { = p + p 1 }
+    ? >= p n { ^ ( nurl_str_cat `` `` ) } {}
+    = p + p 1
+    : ~ i depth 0
+    : ~ i seg_start p
+    : ~ s out ``
+    : ~ b first T
+    ~ < p n {
+        : i c ( nurl_str_get t p )
+        ? & == c 41 == depth 0
+        {  // closing paren of the parameter list
+            ? & ! & first skip_first > p seg_start {
+                : s seg ( __strip_spaces ( nurl_str_slice t seg_start - p seg_start ) )
+                ? != 0 ( nurl_str_len seg ) {
+                    = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat seg `` ) ( nurl_str_cat3 out `;` seg )
+                } {}
+            } {}
+            ^ out
+        }
+        {}
+        ? | == c 40 == c 123 { = depth + depth 1 }
+        { ? | == c 41 == c 125 { = depth - depth 1 }
+            { ? & == c 44 == depth 0
+                { ? & first skip_first {} {
+                        : s seg ( __strip_spaces ( nurl_str_slice t seg_start - p seg_start ) )
+                        ? != 0 ( nurl_str_len seg ) {
+                            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat seg `` ) ( nurl_str_cat3 out `;` seg )
+                        } {}
+                    }
+                    = first F
+                    = seg_start + p 1 } {} } }
+        = p + p 1
+    }
+    out
+}
+
+// Die when an assembled call argstr (`<llty> <val>` pairs joined by
+// top-level `, `) disagrees in TYPE with a `;`-joined roster of declared
+// parameter LLVM spellings. This is the type companion of
+// __closure_arity_check, shared by every call path that assembles its
+// arguments before it knows the callee's `define` — closure and fn-ptr
+// invocations, dyn-trait dispatch, and static trait-method dispatch.
+// Under opaque pointers the emitted call carries its OWN signature, so
+// clang assembles any mismatch and the callee reads reinterpreted bits
+// — the same silent-garbage class the direct-call battery rejects.
+// Pointer beside pointer is exempt (one LLVM type); a count mismatch is
+// left to the arity check; an empty roster means "not recorded" and
+// checks nothing.
+@ __callargs_agree i lex s call_name s argstr s roster → v {
+    ? | == 0 ( nurl_str_len roster ) == 0 ( nurl_str_len argstr ) { ^ } {}
+    : i n ( nurl_str_len argstr )
+    : ~ i p 0
+    : ~ i depth 0
+    : ~ i seg_start 0
+    : ~ i idx 0
+    : ~ s want_rest ( nurl_str_cat roster `` )
+    ~ <= p n {
+        : i c ? == p n 44 ( nurl_str_get argstr p )
+        ? & == c 44 == depth 0
+        { : s seg ( nurl_str_slice argstr seg_start - p seg_start )
+            // The value is the last space-separated token; the type is
+            // everything before it (aggregate spellings contain spaces).
+            : ~ i sp -1
+            : ~ i k 0
+            : i sl ( nurl_str_len seg )
+            ~ < k sl { ? == ( nurl_str_get seg k ) 32 { = sp k } {} = k + k 1 }
+            : s want_raw ( seplist_first want_rest )
+            = want_rest ( __seplist_rest want_rest )
+            ? & > sp 0 != 0 ( nurl_str_len want_raw ) {
+                : s got ( __strip_spaces ( nurl_str_slice seg 0 sp ) )
+                : s want ( __strip_spaces want_raw )
+                ? & & != 0 ( nurl_str_len got ) ! ( seq got want )
+                ! & ( is_ptr_ty got ) ( is_ptr_ty want )
+                { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+                    `argument ` ( nurl_str_int + idx 1 ) ` to '` call_name )
+                    ( nurl_str_cat4 `' has type '` ( llvm_to_nurl got ) `' but the invoked function type declares '` ( nurl_str_cat ( llvm_to_nurl want ) `' — an indirect or dispatched call carries its own signature under opaque pointers, so the mismatch assembles and the callee reads reinterpreted bits: silent garbage, not even a crash. Pass a value of the declared type (convert explicitly with '# T expr' where a conversion is meant), or fix the declaration.` ) ) ) ) }
+                {}
+            } {}
+            = idx + idx 1
+            = seg_start + p 1
+            // skip the space after a separating comma
+            ? & < seg_start n == ( nurl_str_get argstr seg_start ) 32 { = seg_start + seg_start 1 } {}
+        }
+        { ? | == c 40 == c 123 { = depth + depth 1 }
+            { ? | == c 41 == c 125 { = depth - depth 1 } {} } }
+        = p + p 1
+    }
+}
+
+// Everything in a `;`-separated list after its first element ("" when
+// none) — the consuming cursor for seplist_first, fresh-owned like it.
+@ __seplist_rest s str → s {
+    : i n ( nurl_str_len str )
+    : ~ i i 0
+    ~ < i n {
+        ? == ( nurl_str_get str i ) 59 { ^ ( nurl_str_slice str + i 1 - n + i 1 ) } {}
+        = i + i 1
+    }
+    ^ ( nurl_str_cat `` `` )
 }
 
 // Call a closure function pointer (closure struct with function + environment)
@@ -7368,6 +7505,18 @@
         }
         : ~ s av ( gen_operand lex syms cg )
         : ~ s at ( nurl_get_last_type )
+        // A VOID argument has nothing to pass. The shapes that
+        // produce one — a call returning 'v', a '?' conditional
+        // whose arms disagree on type (gen_cond degrades it to
+        // void), a statement-form '??' — are all caught at the
+        // return boundary, but a call argument used to slide
+        // through and emit `call @f(void undef, …)`: invalid IR
+        // only the LLVM verifier saw. Same law, stated here.
+        ? ( seq at `void` )
+        { ( die lex ( nurl_str_cat
+            ( nurl_str_cat4 `argument ` ( nurl_str_int + slot 1 ) ` to '` fname )
+            `' has no value — the expression produces nothing (a call returning 'v', or a '?' conditional whose arms have different types, which degrades to no value). Pass an expression of the parameter's type. If this argument LOOKS like a value, a prefix operator just before it may have one operand too many — the surplus spills into the next argument slot (fixed arity, no closing bracket).` ) ) }
+        {}
         // The same per-argument type law as gen_call's positional path.
         // The kwargs reorder previously bypassed EVERY argument check —
         // `( scale x: 1.5 k: 2 )` slid a float into an 'i' parameter
@@ -7572,6 +7721,43 @@
     ^ ! ( seq ( __strip_spaces at ) ( __strip_spaces pt ) )
 }
 
+// Does `ll` contain `%name` as a complete token — `%A` in
+// `{ { i1, %A } (i8*, i64)*, i8* }` yes, `%App` no. Used to detect an
+// UNSUBSTITUTED tparam artifact in a parsed parameter spelling: an
+// unknown single-letter type name parses to a `%`-named aggregate, and
+// comparing an argument against that template is a false clash.
+@ __has_pct_token s ll s name → b {
+    : i n ( nurl_str_len ll )
+    : i m ( nurl_str_len name )
+    ? == m 0 { ^ F } {}
+    : ~ i p 0
+    ~ < p n {
+        ? == ( nurl_str_get ll p ) 37 {
+            : ~ i k 0
+            : ~ b hit T
+            ~ & < k m hit {
+                ? != ( nurl_str_get ll + p + k 1 ) ( nurl_str_get name k )
+                { = hit F } {}
+                = k + k 1
+            }
+            ? hit {
+                : i after + p + m 1
+                : ~ b endok T
+                ? < after n {
+                    : i ac ( nurl_str_get ll after )
+                    // token continues => not a whole-token match
+                    ? | | & >= ac 48 <= ac 57 & >= ac 65 <= ac 90
+                    | & >= ac 97 <= ac 122 == ac 95
+                    { = endok F } {}
+                } {}
+                ? endok { ^ T } {}
+            } {}
+        } {}
+        = p + p 1
+    }
+    F
+}
+
 // The per-argument never-legal-clash battery, shared by gen_call's
 // positional path and gen_call_kwargs (which previously bypassed every
 // one of these). `at` is the argument's type as gen_expr left it,
@@ -7618,11 +7804,31 @@
             `' — pointer-vs-scalar type mismatch; NURL has no implicit conversion between a pointer and an integer/float (convert explicitly with '# T expr' if this is intended)` ) ) }
         {} }
     {}
-    ? ( __arg_closure_mismatch ( nurl_llty at ) pllvm )
+    ? ( __arg_closure_mismatch ( nurl_llty at ) ( nurl_llty pllvm ) )
     { ( die lex ( nurl_str_cat3
         ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
         ( nurl_str_cat4 `': closure of LLVM type '` at `' passed where the parameter declares '` pllvm )
         `' — the closure's signature differs from the declared '(@ …)' parameter type. The callee invokes the closure with the DECLARED signature, so every argument and the return value would be reinterpreted bit patterns. Make the closure's parameter/return types match the declaration, or fix the declaration.` ) ) }
+    {}
+    // ANONYMOUS-aggregate agreement — the call-boundary dual of
+    // ret_ty_agree's total-agreement backstop. An option/result/slice/
+    // closure lowers to a `{…}` aggregate, and NOTHING converts into or
+    // out of one implicitly — but every pairwise check above asks about
+    // pointers, named types or two closures, so `{ i1, i64 }` beside a
+    // plain `i64` matched none of them and the call was emitted with the
+    // argument's own type: clang assembles it (the call carries its own
+    // function type under opaque pointers) and the callee reads
+    // reinterpreted bytes. One rule closes every such pair: if either
+    // side spells an anonymous aggregate, the spellings must agree.
+    : s __aa_at ( nurl_llty at )
+    : s __aa_pt ( nurl_llty pllvm )
+    ? & & != 0 ( nurl_str_len __aa_at ) != 0 ( nurl_str_len __aa_pt )
+    & | == ( nurl_str_get __aa_at 0 ) 123 == ( nurl_str_get __aa_pt 0 ) 123
+    ! ( seq ( __strip_spaces __aa_at ) ( __strip_spaces __aa_pt ) )
+    { ( die lex ( nurl_str_cat3
+        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
+        `' — an option/result/slice/closure aggregate is exactly its own type: nothing converts into or out of it implicitly, and emitting the call anyway would hand the callee reinterpreted bytes. Unwrap the value first ('?? v { … }', or propagate a result with the propagation suffix), or fix the declaration.` ) ) }
     {}
 }
 
@@ -8155,6 +8361,18 @@
             = av ( gen_operand lex syms cg )
             ( nurl_sym_def syms `__in_call_arg__` `` )
             = at ( nurl_get_last_type )
+            // A VOID argument has nothing to pass. The shapes that
+            // produce one — a call returning 'v', a '?' conditional
+            // whose arms disagree on type (gen_cond degrades it to
+            // void), a statement-form '??' — are all caught at the
+            // return boundary, but a call argument used to slide
+            // through and emit `call @f(void undef, …)`: invalid IR
+            // only the LLVM verifier saw. Same law, stated here.
+            ? ( seq at `void` )
+            { ( die lex ( nurl_str_cat
+                ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                `' has no value — the expression produces nothing (a call returning 'v', or a '?' conditional whose arms have different types, which degrades to no value). Pass an expression of the parameter's type. If this argument LOOKS like a value, a prefix operator just before it may have one operand too many — the surplus spills into the next argument slot (fixed arity, no closing bracket).` ) ) }
+            {}
             ? != g_strict_borrowck 0
             { : ~ s __al_rest ( nurl_str_cat g_arg_ident_log `` )
                 ~ != 0 ( nurl_str_len __al_rest ) {
@@ -8682,14 +8900,40 @@
                             = av __nv = at __want
                         } {
                             ? & > __ww 0 __hp {
-                                // pointer arg to an integer parameter: ptrtoint
-                                : s __nv ( nurl_cg_reg cg )
-                                ( nurl_print `  ` ) ( nurl_print __nv )
-                                ( nurl_print ` = ptrtoint ` ) ( nurl_print ( nurl_llty at ) ) ( nurl_print ` ` ) ( nurl_print av )
-                                ( nurl_print ` to ` ) ( nurl_print ( nurl_llty __want ) ) ( nurl_print `\n` )
-                                = av __nv = at __want
+                                // pointer arg to an INTEGER parameter. This was a
+                                // silent ptrtoint: `( labs \`hello\` )` compiled
+                                // clean and the callee read the string's ADDRESS
+                                // as its number — the same silent-garbage class
+                                // as `call i64 @f(double …)`. Passing an address
+                                // where C reads a number is almost never what the
+                                // call means, and when it is (uintptr_t), the
+                                // language already has the honest spelling.
+                                ( die lex ( nurl_str_cat3
+                                ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                                ( nurl_str_cat4 `' has pointer type '` ( llvm_to_nurl ( nurl_llty at ) ) `' but the FFI parameter is declared '` ( llvm_to_nurl ( nurl_llty __want ) ) )
+                                `' (an integer) — the callee would read the ADDRESS as its number: silent garbage, not even a crash. If the C function takes a pointer, declare the parameter with a pointer type ('s', '*u', …); if it really takes the address as an integer (uintptr_t), convert intentionally with '# i x'.` ) )
                             } {}
                         }
+                        // Total-agreement backstop, the FFI dual of
+                        // ret_ty_agree's: whatever the scalar agreement and
+                        // the inttoptr bridge above did not coerce or reject
+                        // must now match the `declare` exactly (pointer
+                        // beside pointer excepted — opaque pointers are one
+                        // LLVM type). Before this, an option/result/closure
+                        // aggregate slid into a scalar C parameter as
+                        // `call i64 @f({ i1, i64 } %v)` — textually valid
+                        // under opaque pointers, assembled by clang, and the
+                        // callee read whichever bytes the ABI happened to
+                        // put in the register.
+                        : s __bk_at ( nurl_llty at )
+                        : s __bk_wt ( nurl_llty __want )
+                        ? & ! ( seq ( __strip_spaces __bk_at ) ( __strip_spaces __bk_wt ) )
+                        ! & ( is_ptr_ty __bk_at ) ( is_ptr_ty __bk_wt )
+                        { ( die lex ( nurl_str_cat3
+                            ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                            ( nurl_str_cat4 `' has type '` ( llvm_to_nurl __bk_at ) `' but the FFI parameter is declared '` ( llvm_to_nurl __bk_wt ) )
+                            `' — an FFI call crosses the C ABI with exactly the declared types, and NURL has no implicit conversions: the emitted call would hand the callee reinterpreted bytes (an option/result/closure aggregate has no C scalar shape at all). Unwrap or convert the value to the declared type, or fix the FFI declaration.` ) ) }
+                        {}
                     }
                 } {}
             } {}
@@ -8779,6 +9023,36 @@
                         ? != 0 ( nurl_str_len __nsc ) {
                             = at ( str_first_word __nsc )
                             = av ( str_skip_word __nsc )
+                        } {}
+                        // A GENERIC callee (call_name carries the mangled
+                        // instantiation) skipped the per-argument battery,
+                        // which the direct-call path guards with
+                        // call_name == fname — so `( pick [i] o 7 )` with
+                        // o an option slid `{ i1, i64 }` into the i64
+                        // parameter of pick__i64. After the tparam
+                        // substitution above the spelling is concrete, so
+                        // the same battery applies verbatim.
+                        ? & & ! ( seq call_name fname ) __io_sub_ok
+                        != 0 ( nurl_str_len __psrc ) {
+                            : i __gplx ( nurl_lex_new __psrc `<param>` )
+                            : s __gpll ( parse_type __gplx )
+                            ( nurl_lex_free __gplx )
+                            // Sigil-attached tparams (`?A`, `[]A`, `( @ A B )`)
+                            // survive the word-level substitution above and
+                            // parse to a `%A` artifact — comparing against
+                            // that is a false clash, not a check. Skip when
+                            // any of the callee's tparams shows up as a
+                            // `%`-named token in the parsed spelling.
+                            : ~ b __gp_ok T
+                            : ~ s __gtpr ( nurl_sym_get2 g_generic_syms fname `__tparams` )
+                            ~ != 0 ( nurl_str_len __gtpr ) {
+                                : s __gtp ( str_first_word __gtpr )
+                                = __gtpr ( str_skip_word __gtpr )
+                                ? ( __has_pct_token __gpll __gtp ) { = __gp_ok F } {}
+                            }
+                            ? & __gp_ok != 0 ( nurl_str_len __gpll )
+                            { ( __arg_param_checks lex fname arg_idx at __gpll ) }
+                            {}
                         } {}
                     }
                 } {}
@@ -9188,6 +9462,7 @@
             // method ASSEMBLED — the indirect call carries its own
             // signature — and the thunk read an unset register.
             ( __closure_arity_check lex fname __fnty T - arg_idx 1 )
+            ( __callargs_agree lex fname rest_argstr ( __fnty_param_lltys __fnty T ) )
             : s __fnr ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __fnr ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print __fp ) ( nurl_print ` to ` ) ( nurl_print __fnty ) ( nurl_print `\n` )
             : s __cargs ? == 0 ( nurl_str_len rest_argstr ) ( nurl_str_cat `i8* ` __data ) ( nurl_str_cat4 `i8* ` __data `, ` rest_argstr )
@@ -9267,6 +9542,11 @@
             `call to method '` fname `' for receiver type '` ( llvm_to_nurl first_arg_type ) )
             ( nurl_str_cat4 `' passes ` ( nurl_str_int arg_idx ) ` argument(s) but the impl declares ` ( nurl_str_cat ( nurl_str_int ( nurl_str_to_int __im_ar ) ) ` (receiver included) — match the declaration.` ) ) ) ) }
         {}
+        // Type agreement against the impl's recorded parameter roster —
+        // `( show p o )` with o an option against `show P p i x` used to
+        // emit `call @show__P(%P …, { i1, i64 } …)`: assembled, garbage.
+        ( __callargs_agree lex fname argstr
+        ( nurl_sym_get g_impl_ret_syms ( nurl_str_cat impl_key `__ptypes` ) ) )
         : s impl_name ( nurl_str_cat fname ( nurl_str_cat `__` impl_mangle_key ) )
         // Publish the callee's return side-channels (ownership, borrow, signedness,
         // try-propagation types) exactly like the Regular-call path below — the
@@ -9334,11 +9614,13 @@
         {
             // Closure struct - extract function pointer and call with environment
             ( __closure_arity_check lex call_name call_type_ll T arg_idx )
+            ( __callargs_agree lex call_name argstr ( __fnty_param_lltys call_type_ll T ) )
             = final_result ( call_closure_function loaded_closure call_type argstr cg )
         }
         {
             // Simple function pointer - call directly
             ( __closure_arity_check lex call_name call_type_ll F arg_idx )
+            ( __callargs_agree lex call_name argstr ( __fnty_param_lltys call_type_ll F ) )
             : s fn_ret_type ( extract_fn_ptr_return_type rlt )
             : s res ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print res )
@@ -9358,10 +9640,12 @@
             ? ( str_contains call_type `{` )
             {  // Closure struct parameter
                 ( __closure_arity_check lex call_name call_type_ll T arg_idx )
+                ( __callargs_agree lex call_name argstr ( __fnty_param_lltys call_type_ll T ) )
                 = final_result ( call_closure_function var_llvm_val call_type argstr cg )
             }
             {  // Simple function pointer parameter - call directly
                 ( __closure_arity_check lex call_name call_type_ll F arg_idx )
+                ( __callargs_agree lex call_name argstr ( __fnty_param_lltys call_type_ll F ) )
                 : s fn_return_type ( extract_fn_ptr_return_type rlt )
                 : s res ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print res )
@@ -27323,12 +27607,25 @@
                         // `inout`/`sink` marker prefixes a param and is
                         // not one itself.
                         : ~ i __mpct 0
+                        : ~ s __mptys ``
                         ~ & != ( nurl_lex_type lex ) TT_ARROW
                         != ( nurl_lex_type lex ) TT_EOF
-                        { ? & ( is_ident_tok ( nurl_lex_type lex ) )
+                        { : ~ b __mpio F
+                            ? & ( is_ident_tok ( nurl_lex_type lex ) )
                             | ( seq ( nurl_lex_val lex ) `inout` ) ( seq ( nurl_lex_val lex ) `sink` )
-                            { ( nurl_lex_advance lex ) } {}
+                            { ? ( seq ( nurl_lex_val lex ) `inout` ) { = __mpio T } {}
+                                ( nurl_lex_advance lex ) } {}
                             : s __mpt ( parse_type lex )
+                            // Keep the parsed parameter type: the dispatch
+                            // site checks the assembled argstr against this
+                            // roster, the way the direct-call battery checks
+                            // each argument against __ptypes_src. An `inout`
+                            // parameter is passed by ADDRESS, so its roster
+                            // entry is the pointer spelling.
+                            : ~ s __mpll ( nurl_llty __mpt )
+                            ? __mpio { = __mpll ( nurl_str_cat __mpll `*` ) } {}
+                            = __mptys ? == 0 ( nurl_str_len __mptys )
+                            ( nurl_str_cat __mpll `` ) ( nurl_str_cat3 __mptys `;` __mpll )
                             ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
                             = __mpct + __mpct 1
                         }
@@ -27339,6 +27636,7 @@
                             ( __coherence_register lex mname impl_llvm impl_nurl tname )
                             ( nurl_sym_def g_impl_ret_syms key ret_ty )
                             ( nurl_sym_def g_impl_ret_syms ( nurl_str_cat key `__arity` ) ( nurl_str_int __mpct ) )
+                            ( nurl_sym_def g_impl_ret_syms ( nurl_str_cat key `__ptypes` ) __mptys )
                             ( nurl_sym_def g_impl_name_syms key impl_mangle )
                             // Mark the bare method name as impl-backed so
                             // gen_call's unknown-callee check lets it

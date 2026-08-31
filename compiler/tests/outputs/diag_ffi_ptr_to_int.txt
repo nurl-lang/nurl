@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_ffi_ptr_to_int.nu:13:26: error: argument 1 to 'labs' has pointer type 's' but the FFI parameter is declared 'i' (an integer) — the callee would read the ADDRESS as its number: silent garbage, not even a crash. If the C function takes a pointer, declare the parameter with a pointer type ('s', '*u', …); if it really takes the address as an integer (uintptr_t), convert intentionally with '# i x'.
+    : i r ( labs `hello` )
+                         ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

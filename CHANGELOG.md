@@ -6,6 +6,58 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Type agreement at every value boundary became one law instead of a
+  list of known pairs** — and the compiler now rejects code it used to
+  compile into silent garbage.
+
+  Both boundary checkers — return and call — were built as batteries of
+  pairwise checks: float beside integer, pointer beside scalar, two
+  named structs, two closures. Every pair nobody had enumerated fell
+  through to the emitter, and under opaque pointers the emitted
+  instruction *assembles*: `ret { i1, i64 } %o` out of an `i64`
+  function, `call i64 @f({ i1, i64 } %v)` against `declare i64 @f(i64)`.
+  clang accepts both (a call carries its own signature), and the callee
+  reads whichever bytes the ABI left in the register — garbage, not
+  even a crash.
+
+  Now every such boundary ends with a total-agreement backstop: after
+  the sanctioned coercions (integer/float widths, enum wraps, the FFI
+  NULL/handle `inttoptr` bridge), the value's LLVM type must equal the
+  declared one, pointer-beside-pointer excepted. A pair that matches no
+  branch is a diagnostic, not a hole. This closed, with one rule per
+  boundary:
+
+  * a closure returned where its own result type is declared (the
+    `^ f( r )` C-style-call typo — the diagnostic now spells out the
+    parenthesised prefix form);
+  * an option/result/slice/closure aggregate returned as a scalar,
+    pointer, or named struct — and each of those returned as an
+    aggregate (six invalid-IR shapes from one fuzz campaign's mutants);
+  * the same aggregates passed as arguments — through **every** call
+    path: direct calls, **generic instantiations** (the per-argument
+    battery was guarded with `call_name == fname`, so no generic callee
+    ever ran it), **trait-method dispatch** (the impl scan now records
+    each method's parameter roster and the dispatch site checks the
+    assembled arguments against it), **closure and fn-ptr invocations**
+    and **dyn-trait calls** (the arity check gained its type
+    companion);
+  * FFI fixed arguments: a pointer passed to an integer parameter was a
+    silent `ptrtoint` — the callee read the string's *address* as its
+    number — and is now a diagnostic pointing at the honest `# i x`
+    spelling (`( free 0 )` and handle-to-pointer stay legal);
+  * a `void` expression as a call argument (`? cond 1 `two``, arms
+    disagreeing, degrades to void — the return boundary caught it, the
+    argument boundary emitted `call @f(void undef)`).
+
+  The strictness immediately found real bugs in the tree: the
+  `compress_rawdeflate` test freed the whole `!ZInflate CompressErr`
+  RESULT value on its failure arms — heap corruption armed in dead
+  code, four sites.
+
 ## [0.57.0] — 2026-08-30
 
 ### Added

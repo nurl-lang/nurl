@@ -107,11 +107,11 @@ $ `stdlib/ext/compress.nu`
                     ( vec_free [u] p1 ) ( vec_free [u] p2 ) ( vec_free [u] p3 )
                     ( raw_inflate_free inflater )
                 }
-                F _ → { ( nurl_print `inflate_new failed\n` ) ( raw_inflate_free in ) }
+                F _ → { ( nurl_print `inflate_new failed\n` ) }
             }
             ( raw_deflate_free deflater )
         }
-        F _ → { ( nurl_print `deflate_new failed\n` ) ( raw_deflate_free dn ) }
+        F _ → { ( nurl_print `deflate_new failed\n` ) }
     }
 
     // ── §B no-context-takeover: reset between messages ──────────────
@@ -151,11 +151,11 @@ $ `stdlib/ext/compress.nu`
                     ( vec_free [u] empty ) ( vec_free [u] ce ) ( vec_free [u] pe )
                     ( raw_inflate_free inflater )
                 }
-                F _ → { ( nurl_print `in3 failed\n` ) ( raw_inflate_free in3 ) }
+                F _ → { ( nurl_print `in3 failed\n` ) }
             }
             ( raw_deflate_free deflater )
         }
-        F _ → { ( nurl_print `dn3 failed\n` ) ( raw_deflate_free dn3 ) }
+        F _ → { ( nurl_print `dn3 failed\n` ) }
     }
 
     // ── §D corrupt compressed input is rejected ─────────────────────
