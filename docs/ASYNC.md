@@ -35,11 +35,29 @@ $ `stdlib/std/async.nu`
   FIFO); an idle worker steals the front half of a victim's queue. This
   is deliberately simple — a lock-free deque is unnecessary at the
   scale the runtime currently serves.
-- **Reactor.** One dedicated thread runs a `poll(2)` loop plus a timer
-  wheel. A fiber that would block on a socket registers the fd and
-  parks; the reactor unparks it when the fd is ready or the timeout
-  fires. (`poll(2)` is POSIX-portable; an `epoll`/`kqueue` backend is a
-  known upgrade path if a 10k-connection consumer appears.)
+- **Netpoller (Linux).** There is no reactor thread on Linux: an IDLE
+  WORKER becomes the I/O poller (the Go netpoller / tokio driver
+  shape). It takes the poll lease and blocks in `epoll_wait` itself; a
+  ready fiber resumes directly on that worker — no queue hop, no
+  cross-thread wake chain, no core migration — and surplus ready
+  fibers go to the poller's own local queue, from which peers pull
+  work through the ordinary steal path (one wake per doubling, not one
+  per fiber). Sockets are registered once per fd lifetime
+  (`EPOLLIN|EPOLLOUT|EPOLLET`, persistent); readiness edges that
+  arrive while a fiber is busy are banked in per-fd ready bits, so
+  under load the next wait consumes the bit and skips the park
+  entirely. Deadlines live in a min-heap; an `eventfd` wakes a
+  sleeping poller when a nearer deadline or new runnable work appears.
+  The edge-triggered contract is safe because every stdlib wait runs
+  only after the fd answered `EAGAIN` — a fresh readiness transition
+  is always a fresh edge. Closing a socket routes through the
+  netpoller (`nurl_close_sock`), which wakes any parked waiter and
+  resets the per-fd slot before the fd number can be reused.
+- **Reactor (other POSIX).** On non-Linux POSIX a dedicated thread
+  runs the portable `poll(2)` loop plus a timer wheel: a fiber that
+  would block registers the fd and parks; the reactor unparks it when
+  the fd is ready or the timeout fires. (A `kqueue` netpoller is the
+  matching upgrade path for macOS/BSD.)
 
 ## 2. API surface (`stdlib/std/async.nu`)
 
@@ -143,8 +161,8 @@ has two backends:
 | OpenBSD | stubbed (removed `swapcontext`) |
 | Windows, WASI | stubbed |
 
-The reactor is POSIX-only (`poll(2)`); it starts only where fibers are
-enabled.
+The I/O backend is POSIX-only (`epoll` netpoller on Linux, `poll(2)`
+reactor thread elsewhere); it starts only where fibers are enabled.
 
 **What "stubbed" means, precisely.** The `*_async` I/O calls do degrade
 to their blocking forms and stay correct. `spawn` does **not**: with no
@@ -218,16 +236,27 @@ source-level traps.
   `NetTimeout`). A new TLS-reading runtime entry point must be annotated the
   same way.
 - **The spin-then-park window is sized for a TLS peer.**
-  `nurl__reactor_wait` spins before paying the two-thread park/wake
-  chain. That window was 64 probes (~25 µs), which a plaintext HTTP peer
-  answers inside but a TLS turnaround (decrypt + handle + encrypt,
-  ~35–45 µs on loopback) does not — so every keep-alive HTTPS request at
-  low concurrency missed the spin and ate a full park. It is 256 probes
-  since 0.46.0, and gated to ≤ 4 live fibers so a loaded server does not
-  burn cores spinning. Changing either number moves the low-concurrency
-  HTTPS cell in `bench/HTTP_RESULTS.md` and nothing else.
-- **Reactor park-vs-unpark ordering.** `nurl__reactor_wait` registers the
-  wait entry with `active = 0`; the worker loop flips it via
-  `nurl__reactor_activate` only after the parking fiber's `swapcontext`
-  completes, so an unpark cannot fire before the context is fully saved.
-  Channel-coordinated parks use the symmetric `pending_unlock` deferral.
+  `nurl__reactor_wait` spins before paying a park. That window was 64
+  probes (~25 µs), which a plaintext HTTP peer answers inside but a TLS
+  turnaround (decrypt + handle + encrypt, ~35–45 µs on loopback) does
+  not — so every keep-alive HTTPS request at low concurrency missed the
+  spin and ate a full park. It is 256 probes since 0.46.0, and gated to
+  ≤ 4 live fibers so a loaded server does not burn cores spinning.
+  Changing either number moves the low-concurrency HTTPS cell in
+  `bench/HTTP_RESULTS.md` and nothing else.
+- **Park-vs-unpark ordering.** `nurl__reactor_wait` fills the wait
+  entry but does not publish it; the worker loop hands it to
+  `nurl__reactor_activate` only after the parking fiber's context
+  switch completes, so an unpark cannot fire before the context is
+  fully saved. On Linux the activation IS the point the entry becomes
+  matchable (chain insert / ready-bit consume under the netpoller
+  lock); on the poll(2) backend it flips the entry's `active` flag.
+  Channel-coordinated parks use the symmetric `pending_unlock`
+  deferral.
+- **The netpoller's edge-triggered contract.** A wait may only follow
+  an `EAGAIN` (or a short write) on that fd — that is what makes a
+  banked ready bit trustworthy and a missed edge impossible. Every
+  `stdlib` async wrapper already has this shape (try, then wait);
+  a new wrapper must keep it. The reverse order (wait first, then
+  read) can hang under `EPOLLET`: data still in the buffer delivers
+  no new edge.
