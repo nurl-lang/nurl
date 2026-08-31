@@ -5,7 +5,7 @@
 > the same way `bench.yml` commits the benchmark numbers. Do not edit by hand;
 > curate the findings log in [`tools/fuzz/FINDINGS.json`](tools/fuzz/FINDINGS.json).
 
-_Last run: **2026-08-24** · toolchain `v0.50.0-4-g5404902a` · commit `5404902a`_
+_Last run: **2026-08-31** · toolchain `v0.57.0-1-g67091b9b` · commit `67091b9b`_
 
 **Latest run:** ✅ **clean** — no findings
 
@@ -14,12 +14,14 @@ _Last run: **2026-08-24** · toolchain `v0.50.0-4-g5404902a` · commit `5404902a
 | `differential-int` | seeds 1–1500, size=12, depth=4 | 1500 | 1500 | 0 | 0 | 150 |
 | `parser-mutational` | iters=4000 rng-seed=1 | 4000 | 4000 | 0 | 4000 | 0 |
 | `parser-mutational` | iters=4000 rng-seed=2 | 4000 | 4000 | 0 | 4000 | 0 |
+| `reject-inverse` | seeds 1–400, depth=3 | 400 | 400 | 0 | 0 | 0 |
 | `differential-struct` | seeds 1–600, size=14, depth=3 | 600 | 600 | 0 | 120 | 120 |
 
 ## What each family probes
 
 - **`differential-int`** — `gen.py` — random integer/float expression trees with a Python oracle; compiled at `-O0` and `-O2`, both outputs must equal the oracle bit for bit.
-- **`differential-struct`** — `genprog.py` — whole structural programs (enums with N-ary mixed payloads, match guards/or-patterns/literal constraints, struct field writes, closures, while/foreach, defer, `% Drop`, string/Vec/slice ownership, helper calls, recursion) with a statement-level oracle; `-O0` vs `-O2` vs oracle, plus an ASan+LSan leg and a wasm32-wasi/wasmtime leg on sampled seeds.
+- **`differential-struct`** — `genprog.py` — whole structural programs (enums with N-ary mixed payloads, match guards/or-patterns/literal constraints, struct field writes, nested aggregates and struct-payload enums, generic functions and generic structs, `?T` / `!T E` with `\` propagation, traits with default methods and bounds, closures, while/foreach with `break`/`continue`, defer, `% Drop`, string/Vec/slice ownership incl. containers of structs, helper calls, recursion) with a statement-level oracle; `-O0` vs `-O2` vs oracle, plus an ASan+LSan leg and a wasm32-wasi/wasmtime leg on sampled seeds.
+- **`reject-inverse`** — `genreject.py` — the inverse oracle: programs that are ownership violations by construction (alias double free, use after move, loop-carried free, iterator invalidation), crossed with every context the language offers (`?` arms, loops, foreach, bare blocks, defers, `??` arms, helpers, generic bodies, trait methods, closure bodies) and nested. Each MUST be rejected, with the diagnostic that violation deserves — a program that compiles, or one rejected for an unrelated reason, is the finding.
 - **`parser-mutational`** — `fuzz_parsers.py` — mutated inputs for the untrusted-input parsers (x509/DER, cbor, msgpack, json, yaml, xml, toml) against an ASan+UBSan harness; any crash / OOB / UB / hang is a finding.
 
 A **finding** is any of: output divergence from the oracle at either
@@ -29,10 +31,33 @@ environment run under wasmtime), a build failure on a generated
 ASan/LSan/UBSan report. Reproducers are
 uploaded as workflow artifacts and land in `tools/fuzz/failures/`.
 
+The inverse family reads the other way round: its programs are invalid
+by construction, so a **compile that succeeds** is the finding, as is a
+rejection carrying the wrong diagnostic.
+
+Every finding is **shrunk before it is filed**: `tools/fuzz/reduce.py`
+deletes statements while the same failure survives, so the artifact
+carries a `*.min.nu` of a few dozen lines next to the full seed. The
+property it reduces against is fingerprinted from the original failure
+(the normalised error message, the ASan report kind, or the specific
+expectation that disagreed), so the reducer cannot drift onto an
+unrelated breakage it introduced itself. Oracle mismatches reduce
+through `genprog.py --selfcheck`, which puts each expected value inside
+the program next to the expression that produces it — the external
+oracle file cannot survive line deletion, and a self-checking program
+can.
+
 ## Findings log — real bugs the fuzzers have caught
 
 | date | family | severity | finding | status |
 |---|---|---|---|---|
+| 2026-08-26 | `reject-inverse` | unsoundness | Borrow-checker blind spot: a definite double free inside a closure body was accepted — one flag meant both 'this belongs to the closure' and 'record nothing', so the checker was off for everything written in a closure. The body now gets its own recording context and its own analyze pass | fixed (borrow_closure_body_double_free) |
+| 2026-08-26 | `reject-inverse` | unsoundness | Borrow-checker blind spot: a definite double free inside a `??` arm was accepted — arms were a state-preserving black box because payload bindings have no `let` row. Each arm is now walked from an EMPTY state, so only arm-local bindings are tracked and nothing can be conflated | fixed (borrow_match_arm_double_free) |
+| 2026-08-26 | `reject-inverse` | diagnostic | A generic named `[T]` has its VALUE-position `T` — the boolean literal — rewritten by monomorphisation, so `? T { … }` becomes `? i { … }` and the instantiation fails against source nobody wrote. The diagnostic now names the collision | fixed (diag_generic_tparam_bool_name); the underlying lexer ambiguity remains |
+| 2026-08-26 | `hand-probe` | language-gap | A nested field could be READ but not WRITTEN: `= . . o inner x v` died with "cannot assign to a field of ''" because the object of a nested path is a by-value register, not a binding with an alloca. The chain is now walked by address | fixed (nested_field_store) |
+| 2026-08-26 | `differential-struct` | miscompile | A closure body emitted the ENCLOSING frame's drop battery: a `^`-bodied closure literal written after an owned value (`% Drop`, String, owned struct field) ended the lifted function with `load %DH, %DH* %r2` against an alloca that only exists in the caller — invalid IR at best, use-after-scope plus a double drop had the register resolved | fixed (3 of the first 25 seeds; closure_body_outer_drops) |
+| 2026-08-26 | `hand-probe` | language-gap | `break` / `continue` were rejected in every foreach body — the spec scopes both to "the innermost enclosing `~` loop body" and a foreach is one, but only the while form published the labels; the foreach's hidden index bump lived in the body's fall-through, so a `continue` would have skipped it. The bump now has its own landing pad | fixed (foreach_break_continue) |
+| 2026-08-26 | `hand-probe` | miscompile | A struct whose NAME is tparam-shaped (`P`, `Q3`) could not be a generic type argument: instantiation was decided by spelling, so `( Vec P )` was skipped as still-abstract and died on `type 'Vec__P' has no field 'ctl'` inside the stdlib. Now decided by scope | fixed (generic_short_type_name) |
 | 2026-08-03 | `differential-struct` | UB-at-O2 | Constant out-of-range shift in a match guard (`>> <i32-payload> 34`): -O0 "worked", -O1 aborted, -O2 segfaulted with a wild jump — branch-on-poison UB; now a compile error, and mixed-width binop registers (24 build-fails/1000 seeds as invalid IR) are rejected like the float/bool/pointer mixes | fixed (genprog seed 684; should_fail_shift_range, should_fail_binop_width_mix) |
 | 2026-08-03 | `differential-struct` | diagnostic | Assignment to an undefined identifier was silently discarded — RHS evaluated, no store, no diagnostic (exposed by the fuzzer's minimizer, whose deletions kept compiling through the hole) | fixed (should_fail_assign_undefined) |
 | 2026-08-03 | `differential-struct` | miscompile | Narrow-int enum payload slots stored non-canonically: `@ E { V 151 }` (i8 payload) kept raw 151 while the pattern binding reconstructed -105, so a literal constraint failed to match the value it names | fixed (genprog seed 20; enum_payload_canonical) |
@@ -49,5 +74,10 @@ uploaded as workflow artifacts and land in `tools/fuzz/failures/`.
 tools/fuzz/fuzz.sh 1 500                        # integer differential
 FUZZ_GEN=struct FUZZ_SAN_EVERY=5 FUZZ_WASM_EVERY=5 \
     tools/fuzz/fuzz.sh 1 300 14 3               # structural + sanitizer + wasm legs
+FUZZ_GEN=reject tools/fuzz/fuzz.sh 1 400 0 3   # inverse oracle
 tools/fuzz/fuzz_parsers.sh 1 4000 8             # parser mutational
+
+# reproduce and shrink one seed by hand
+python3 tools/fuzz/genprog.py 684 --selfcheck > bug.nu
+tools/fuzz/reduce.py bug.nu --mode check -o bug.min.nu
 ```
