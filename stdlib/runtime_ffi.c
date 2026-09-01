@@ -738,6 +738,7 @@ typedef SOCKET nurl_sockfd_t;
 #    define nurl_close_sock(fd) closesocket(fd)
 #  else
 #    include <sys/socket.h>
+#    include <sys/uio.h>            /* struct iovec — nurl_tcp_write2 */
 #    include <netinet/in.h>
 #    include <netinet/tcp.h>        /* TCP_NODELAY on accepted conns */
 #    include <arpa/inet.h>
@@ -1356,6 +1357,76 @@ long long nurl_tcp_read(long long handle, const char *buf, long long n) {
     return -1;
 }
 
+/* What a send() that moved nothing means for the write loop around it.
+ * Shared by nurl_tcp_write and nurl_tcp_write2 so the two cannot drift.
+ *
+ * SO_SNDTIMEO (set by nurl_tcp_set_timeout for the keep-alive idle
+ * deadline) also caps every blocking send(): when a SLOW-BUT-ALIVE
+ * client (a phone on WiFi pulling a 50 MB model) drains the socket
+ * more slowly than we fill it, send() can spend the whole window
+ * waiting for buffer space and fail with EAGAIN — which used to be
+ * treated as fatal, cutting the response mid-body. A send timeout
+ * is only a DEAD peer if there is no progress across consecutive
+ * windows: retry zero-progress timeouts up to twice (≈2-3× the
+ * idle deadline of total stall), and let any progress reset the
+ * allowance (the caller zeroes *stalls on progress). */
+enum { NURL_SEND_FAIL = 0, NURL_SEND_RETRY = 1, NURL_SEND_PROGRESS = 2 };
+static int nurl__tcp_short_send(NurlTcp *h, long long wn, long long total,
+                                int *stalls) {
+#ifdef _WIN32
+    /* WSAETIMEDOUT only fires on BLOCKING sockets (SO_SNDTIMEO);
+     * the async path's would-block is WSAEWOULDBLOCK and must
+     * still return immediately for the reactor. */
+    int we = WSAGetLastError();
+    if (wn < 0 && we == WSAETIMEDOUT && ++*stalls <= 2) return NURL_SEND_RETRY;
+    /* Would-block on a non-blocking socket is PROGRESS, not
+     * failure — see the POSIX branch below for why -1 here
+     * corrupts the caller's stream. */
+    if (wn < 0 && we == WSAEWOULDBLOCK && total > 0) {
+        h->err_kind = NURL_NET_ERR_OK;
+        return NURL_SEND_PROGRESS;
+    }
+    h->err_kind = nurl__net_map_wsa(we, NURL_NET_ERR_WRITE);
+#else
+    int err = errno;
+    /* On POSIX a SO_SNDTIMEO expiry and a nonblocking would-block
+     * are both EAGAIN — only retry on BLOCKING sockets, so the
+     * fiber reactor's park-on-EAGAIN contract stays intact. */
+    if (wn < 0 && (err == EAGAIN ||
+#  if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+                   err == EWOULDBLOCK ||
+#  endif
+                   0)) {
+        int fl = fcntl(h->fd, F_GETFL, 0);
+        if (fl >= 0 && !(fl & O_NONBLOCK) && ++*stalls <= 2) return NURL_SEND_RETRY;
+        /* NON-BLOCKING would-block after a PARTIAL send: those
+         * bytes are already on the wire, so this is progress,
+         * and the count is the only record of it. Returning -1
+         * threw it away — the async wrapper in std/net.nu then
+         * parked on the reactor and retried from its own `sent`,
+         * which had never advanced, so it re-sent the buffer
+         * from the front. The peer got the prefix again instead
+         * of the continuation, and since callers frame their
+         * writes (relay.nu's 5-byte type+length header), reading
+         * the announced length spliced a repeat into the middle
+         * of the message: a frame of exactly the right size with
+         * the wrong bytes, and every frame after it garbage.
+         * Measured before the fix: a 1.1 MB relay frame put
+         * 37.7 MB on the wire, ~17 copies of its own prefix.
+         * Loopback hid it completely — the peer drains as fast
+         * as we fill, so send() never blocks and the whole
+         * buffer goes in one call. Report the count; -1 is for
+         * "nothing was written". */
+        if (total > 0) {
+            h->err_kind = NURL_NET_ERR_OK;
+            return NURL_SEND_PROGRESS;
+        }
+    }
+    h->err_kind = nurl__net_map_errno(err, NURL_NET_ERR_WRITE);
+#endif
+    return NURL_SEND_FAIL;
+}
+
 long long nurl_tcp_write(long long handle, const char *buf, long long n) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return -1;
@@ -1370,17 +1441,7 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
     }
     if (h->timeo_dirty && !h->nonblock) nurl__tcp_apply_timeo(h);
     long long total = 0;
-    /* SO_SNDTIMEO (set by nurl_tcp_set_timeout for the keep-alive idle
-     * deadline) also caps every blocking send(): when a SLOW-BUT-ALIVE
-     * client (a phone on WiFi pulling a 50 MB model) drains the socket
-     * more slowly than we fill it, send() can spend the whole window
-     * waiting for buffer space and fail with EAGAIN — which used to be
-     * treated as fatal, cutting the response mid-body. A send timeout
-     * is only a DEAD peer if there is no progress across consecutive
-     * windows: retry zero-progress timeouts up to twice (≈2-3× the
-     * idle deadline of total stall), and let any progress reset the
-     * allowance. */
-    int stalls = 0;
+    int stalls = 0;   /* see nurl__tcp_short_send */
     while (total < n) {
         long long want = n - total;
 #ifdef _WIN32
@@ -1398,57 +1459,104 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
         } while (wn < 0 && errno == EINTR);
 #endif
         if (wn <= 0) {
+            int verdict = nurl__tcp_short_send(h, (long long)wn, total, &stalls);
+            if (verdict == NURL_SEND_RETRY) continue;
+            return verdict == NURL_SEND_PROGRESS ? total : -1;
+        }
+        stalls = 0;
+        total += (long long)wn;
+    }
+    h->err_kind = NURL_NET_ERR_OK;
+    return total;
+}
+
+/* Two-segment write: `head` then `body` leave through ONE sendmsg(2) /
+ * WSASend call, so a response head and its body do not have to be
+ * concatenated into a single buffer first. That concat was the HTTP
+ * server's second full copy of every response body (the first being
+ * response_set_body_*) — at 1 MB per response it was ~half the CPU
+ * gap to hyper, which writes its body slice by reference.
+ *
+ * Contract is nurl_tcp_write's, over the logical concatenation
+ * head‖body: returns the number of bytes written across BOTH segments
+ * (head first), which may be short; -1 with err_kind set when nothing
+ * was written. Either segment may be empty — with one empty segment
+ * this is exactly nurl_tcp_write (same send() call), so a caller that
+ * always goes through this entry point pays nothing for the generality. */
+long long nurl_tcp_write2(long long handle, const char *b1, long long n1,
+                          const char *b2, long long n2) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (n1 < 0) n1 = 0;
+    if (n2 < 0) n2 = 0;
+    if (n1 == 0) return nurl_tcp_write(handle, b2, n2);
+    if (n2 == 0) return nurl_tcp_write(handle, b1, n1);
+    if (h->fd == NURL_INVALID_SOCK) {
+        h->err_kind = NURL_NET_ERR_CLOSED;
+        return -1;
+    }
+    if (!b1 || !b2) {
+        h->err_kind = NURL_NET_ERR_WRITE;
+        return -1;
+    }
+    if (h->timeo_dirty && !h->nonblock) nurl__tcp_apply_timeo(h);
+    long long n = n1 + n2;
+    long long total = 0;
+    int stalls = 0;
+    while (total < n) {
+        /* Re-point the vector at whatever is still unsent. */
 #ifdef _WIN32
-            /* WSAETIMEDOUT only fires on BLOCKING sockets (SO_SNDTIMEO);
-             * the async path's would-block is WSAEWOULDBLOCK and must
-             * still return immediately for the reactor. */
-            int we = WSAGetLastError();
-            if (wn < 0 && we == WSAETIMEDOUT && ++stalls <= 2) continue;
-            /* Would-block on a non-blocking socket is PROGRESS, not
-             * failure — see the POSIX branch below for why -1 here
-             * corrupts the caller's stream. */
-            if (wn < 0 && we == WSAEWOULDBLOCK && total > 0) {
-                h->err_kind = NURL_NET_ERR_OK;
-                return total;
-            }
-            h->err_kind = nurl__net_map_wsa(we, NURL_NET_ERR_WRITE);
+        WSABUF bufs[2];
+        DWORD cnt = 0, sent = 0;
+        if (total < n1) {
+            long long r1 = n1 - total;
+            bufs[cnt].buf = (char*)b1 + total;
+            bufs[cnt].len = (ULONG)(r1 > 0x40000000 ? 0x40000000 : r1);
+            cnt++;
+            bufs[cnt].buf = (char*)b2;
+            bufs[cnt].len = (ULONG)(n2 > 0x40000000 ? 0x40000000 : n2);
+            cnt++;
+        } else {
+            long long r2 = n - total;
+            bufs[cnt].buf = (char*)b2 + (total - n1);
+            bufs[cnt].len = (ULONG)(r2 > 0x40000000 ? 0x40000000 : r2);
+            cnt++;
+        }
+        long long wn = WSASend(h->fd, bufs, cnt, &sent, 0, NULL, NULL) == 0
+                     ? (long long)sent : -1;
 #else
-            /* On POSIX a SO_SNDTIMEO expiry and a nonblocking would-block
-             * are both EAGAIN — only retry on BLOCKING sockets, so the
-             * fiber reactor's park-on-EAGAIN contract stays intact. */
-            if (wn < 0 && (errno == EAGAIN ||
-#  if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
-                           errno == EWOULDBLOCK ||
+        struct iovec iov[2];
+        int cnt = 0;
+        if (total < n1) {
+            iov[cnt].iov_base = (void*)(b1 + total);
+            iov[cnt].iov_len  = (size_t)(n1 - total);
+            cnt++;
+            iov[cnt].iov_base = (void*)b2;
+            iov[cnt].iov_len  = (size_t)n2;
+            cnt++;
+        } else {
+            iov[cnt].iov_base = (void*)(b2 + (total - n1));
+            iov[cnt].iov_len  = (size_t)(n - total);
+            cnt++;
+        }
+        struct msghdr msg;
+        memset(&msg, 0, sizeof msg);
+        msg.msg_iov    = iov;
+        msg.msg_iovlen = cnt;
+        ssize_t wn;
+        do {
+            wn = sendmsg(h->fd, &msg,
+#  ifdef MSG_NOSIGNAL
+                         MSG_NOSIGNAL);
+#  else
+                         0);
 #  endif
-                           0)) {
-                int fl = fcntl(h->fd, F_GETFL, 0);
-                if (fl >= 0 && !(fl & O_NONBLOCK) && ++stalls <= 2) continue;
-                /* NON-BLOCKING would-block after a PARTIAL send: those
-                 * bytes are already on the wire, so this is progress,
-                 * and the count is the only record of it. Returning -1
-                 * threw it away — the async wrapper in std/net.nu then
-                 * parked on the reactor and retried from its own `sent`,
-                 * which had never advanced, so it re-sent the buffer
-                 * from the front. The peer got the prefix again instead
-                 * of the continuation, and since callers frame their
-                 * writes (relay.nu's 5-byte type+length header), reading
-                 * the announced length spliced a repeat into the middle
-                 * of the message: a frame of exactly the right size with
-                 * the wrong bytes, and every frame after it garbage.
-                 * Measured before the fix: a 1.1 MB relay frame put
-                 * 37.7 MB on the wire, ~17 copies of its own prefix.
-                 * Loopback hid it completely — the peer drains as fast
-                 * as we fill, so send() never blocks and the whole
-                 * buffer goes in one call. Report the count; -1 is for
-                 * "nothing was written". */
-                if (total > 0) {
-                    h->err_kind = NURL_NET_ERR_OK;
-                    return total;
-                }
-            }
-            h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_WRITE);
+        } while (wn < 0 && errno == EINTR);
 #endif
-            return -1;
+        if (wn <= 0) {
+            int verdict = nurl__tcp_short_send(h, (long long)wn, total, &stalls);
+            if (verdict == NURL_SEND_RETRY) continue;
+            return verdict == NURL_SEND_PROGRESS ? total : -1;
         }
         stalls = 0;
         total += (long long)wn;
@@ -2584,6 +2692,20 @@ long long nurl_tcp_read(long long h, const char *buf, long long n) {
 long long nurl_tcp_write(long long h, const char *buf, long long n) {
     return nurl__ni_tcp_write(h, buf, n);
 }
+/* The bridge has no vectored write, and adding an import would refuse
+ * to instantiate every module on a host that predates it. Compose it
+ * from two writes under nurl_tcp_write2's contract: the count covers
+ * both segments, and a short first segment is a short total. */
+long long nurl_tcp_write2(long long h, const char *b1, long long n1,
+                          const char *b2, long long n2) {
+    if (n1 < 0) n1 = 0;
+    if (n2 < 0) n2 = 0;
+    if (n1 == 0) return nurl__ni_tcp_write(h, b2, n2);
+    long long w1 = nurl__ni_tcp_write(h, b1, n1);
+    if (w1 < n1 || n2 == 0) return w1;
+    long long w2 = nurl__ni_tcp_write(h, b2, n2);
+    return w2 < 0 ? w1 : w1 + w2;
+}
 void nurl_tcp_close(long long h)    { nurl__ni_tcp_close(h); }
 void nurl_tcp_shutdown(long long h) { nurl__ni_tcp_shutdown(h); }
 long long nurl_tcp_err_kind(long long h) { return nurl__ni_tcp_err_kind(h); }
@@ -2693,6 +2815,10 @@ long long nurl_tcp_read(long long h, const char *buf, long long n) {
 }
 long long nurl_tcp_write(long long h, const char *buf, long long n) {
     (void)h; (void)buf; (void)n; return -1;
+}
+long long nurl_tcp_write2(long long h, const char *b1, long long n1,
+                          const char *b2, long long n2) {
+    (void)h; (void)b1; (void)n1; (void)b2; (void)n2; return -1;
 }
 void nurl_tcp_close(long long h) { (void)h; }
 void nurl_tcp_shutdown(long long h) { (void)h; }
@@ -3848,6 +3974,12 @@ static NurlFiber *nurl__rq_take_global_batch(NurlWorker *w) {
     }
     int n = len / nurl__sched.worker_count + 1;
     if (n > 16) n = 16;
+    /* The share formula exceeds the queue when there is ONE worker
+     * (len/1 + 1 = len + 1): the walk below then steps past the last
+     * fiber and dereferences NULL. That is every single-core deploy —
+     * NURL_WORKERS=1 or a one-CPU container with the per-core default —
+     * the first time a fiber lands on the global queue. */
+    if (n > len) n = len;
     NurlFiber *head = nurl__sched.global_head;
     NurlFiber *tail = head;
     for (int i = 1; i < n; i++) tail = tail->next;

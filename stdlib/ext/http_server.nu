@@ -553,14 +553,21 @@ $ `stdlib/ext/http_response.nu`
 // connection-level scratch buffer (owned by _serve_keepalive_loop):
 // serialising into it instead of a fresh Vec saves an allocate/free
 // pair per response on the keep-alive hot path.
+//
+// Only the HEAD is serialised into `wire`; the body is written from
+// the response itself as the second segment of one `tcp_write_all2`
+// (a single sendmsg on plaintext). Copying the body into `wire` used to
+// be the second full copy of every response body — measured at 1 MB it
+// was about half of the per-request CPU gap to hyper, which writes its
+// body slice by reference.
 
 @ __write_response TcpConn conn HttpResponse r b force_close ( Vec u ) wire → !v NetErr {
     ? force_close {
         ( response_set_header r `Connection` `close` )
     } {}
     ( vec_clear [u] wire )
-    ( response_serialize_to r wire )
-    : !v NetErr wr ( tcp_write_all conn wire )
+    ( response_serialize_head_to r wire )
+    : !v NetErr wr ( tcp_write_all2 conn wire . r body )
     ( http_response_free r )
     ^ wr
 }
