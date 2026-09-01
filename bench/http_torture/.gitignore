@@ -1,0 +1,5 @@
+# Rust peer build output — rebuilt by the harness on demand.
+rust/target/
+# Generated scratch (the harness prints its scratch dir; nothing here is committed).
+*.pyc
+__pycache__/

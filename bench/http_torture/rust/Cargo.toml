@@ -1,0 +1,27 @@
+# bench/http_torture/rust — hyper/rustls peer for the torture harness.
+# Same server as bench/rust_http_server, extended with sized routes
+# (/1k /16k /1m) so both peers serve identical bodies.
+[package]
+name = "http_torture"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "http_torture"
+path = "src/main.rs"
+
+[dependencies]
+hyper = { version = "1.5", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "io-util"] }
+bytes = "1"
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
