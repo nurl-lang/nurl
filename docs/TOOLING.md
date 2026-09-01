@@ -107,7 +107,11 @@ exists, and the tarball still fails to build for everyone who installs
 it. If no installed compiler is found the gate WARNs and lets the
 publish through rather than passing silently — an unverifiable check
 should say so. `--dry-run` runs all five and uploads nothing (and needs
-no token).
+no token). Know what that gate does **not** cover: a **library** package
+has no `src/main.nu`, so the compile gate returns success without
+compiling anything — `every gate passed` on a library means the manifest
+and the imports agree, not that the code builds. Run `nurlpkg test`
+against a library before publishing it.
 
 `self-update` is the odd one out: it upgrades the **toolchain**, not a
 package, and `nurl upgrade` is its canonical spelling (that is what the
