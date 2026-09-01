@@ -39,10 +39,18 @@ $ `stdlib/std/async.nu`
   WORKER becomes the I/O poller (the Go netpoller / tokio driver
   shape). It takes the poll lease and blocks in `epoll_wait` itself; a
   ready fiber resumes directly on that worker — no queue hop, no
-  cross-thread wake chain, no core migration — and surplus ready
-  fibers go to the poller's own local queue, from which peers pull
-  work through the ordinary steal path (one wake per doubling, not one
-  per fiber). Sockets are registered once per fd lifetime
+  cross-thread wake chain, no core migration. Surplus ready fibers are
+  split: the oldest few stay on the poller's own local queue (warm
+  cache, no wake), and anything beyond that bounded share is appended
+  to the global FIFO as one pre-linked chain, which every worker
+  drains in fair batches (`len / workers + 1` per grab, one lock
+  acquisition). The split is what bounds tail latency: under
+  saturation stealing never fires (it needs an empty thief queue), so
+  an unbounded local haul would drain a 100-event burst at one core's
+  speed — measured as a multi-ms p99. Workers also run a cadence poll
+  (every 16th dispatch) so the epoll instance is drained continuously
+  instead of only when the queues run dry — without it the pool lives
+  in feast-famine cycles. Sockets are registered once per fd lifetime
   (`EPOLLIN|EPOLLOUT|EPOLLET`, persistent); readiness edges that
   arrive while a fiber is busy are banked in per-fd ready bits, so
   under load the next wait consumes the bit and skips the park
