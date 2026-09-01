@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.1
+
+Dependency requirements now pin the **major**, matching the rest of the
+registry packages:
+
+- `tokenizer` `^0.3.2` → `^0`
+- `safetensor` `^0.3` → `^0`
+- `gpukit` `^0.7.0` → `^0`
+- `gpu` `^0.11.2` → `^0`
+- `hub` `^0.1` → `^0`
+
+A minor release of a dependency is picked up on the next install now,
+instead of stranding this package on the minor its requirement happened
+to name.
+
+No source change.
+
 ## 0.3.0
 
 A batch of texts ran one forward per text, and the response was built a

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.5
+
+Dependency requirements now pin the **major**, matching the rest of the
+registry packages:
+
+- `gpukit` `^0.6` → `^0`
+
+A minor release of a dependency is picked up on the next install now,
+instead of stranding this package on the minor its requirement happened
+to name. That was not hypothetical here: a registry install
+resolved `gpukit` to a 0.6 series while the monorepo builds this package
+against 0.7 — two different builds of the same commit.
+
+No source change.
+
 ## 0.4.3
 
 - Requirement widened to gpukit `^0.6`. No source change.

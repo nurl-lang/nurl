@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.28.2
+
+**0.28.1 does not build on a current toolchain — this is that release
+republished against it.** Two v0.55.0 language changes landed after
+0.28.1 was packed, and both reach this package:
+
+- `nurl_free` on a binding the compiler already drops is an error
+  (§2.1b), and the rule now reaches inside closure bodies because a
+  closure that falls off its end drops what it bound. The hand-written
+  free of a map key in `tool_shuffle`'s `map_each` closure was what kept
+  that key from leaking; it is now the second free, so it goes. Straight
+  from the registry, 0.28.1 stops at:
+
+  ```
+  src/main.nu:2603:28: error: 'ks' is auto-dropped at the end of its scope,
+  so freeing it here frees it twice - delete this call
+  ```
+
+- The print family closed under one rule: `print` = no newline,
+  `println` = newline. The kernel programs this package **generates** and
+  compiles to wasm print their result with `nurl_print_int`, which no
+  longer ends the line — so on a toolchain that still compiled 0.28.1 the
+  generated kernels would have run and returned unparsable output. They
+  emit `nurl_println_int` now.
+
+Both fixes were already in the tree; only the release was missing.
+
+**Minimum toolchain is now NURL v0.55.0** (was v0.10.12) — that is the
+release that renamed `nurl_println_int`, and this package's sources and
+its generated kernels both use the new spelling.
+
+- Dependency pin: `wasmbuilder ^0.2.1` → `^0` — the major, matching the
+  `nwasm ^1` pin. A minor release of the wasm builder no longer needs a
+  release here.
+
 ## 0.28.1
 
 **The pure-NURL wasm runtime is now `nwasm`.** `packages/wasmtime` was

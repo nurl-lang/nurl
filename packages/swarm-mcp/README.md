@@ -45,7 +45,7 @@ deterministically (no coordination):
   result, so a worker only runs token-authentic jobs and a coordinator only
   accepts token-authentic results.
 
-> **Requires NURL ≥ v0.10.12** (built from source against your installed stdlib
+> **Requires NURL ≥ v0.55.0** (built from source against your installed stdlib
 > at install time). **CPU wasm kernels run in-process** on the pure-NURL
 > [`nwasm`](../nwasm) runtime that is compiled into the binary (`deps/nwasm`) —
 > no runtime on `PATH`, no subprocess, no writable filesystem, which is what

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.10.3
+
+Dependency requirements now pin the **major**, matching the rest of the
+registry packages:
+
+- `tensor` `^0.4` → `^0`
+- `gpukit` `^0.6` → `^0`
+- `gpu` `^0.11` → `^0`
+
+A minor release of a dependency is picked up on the next install now,
+instead of stranding this package on the minor its requirement happened
+to name. That was not hypothetical here: a registry install
+resolved `gpukit` to a 0.6 series while the monorepo builds this package
+against 0.7 — two different builds of the same commit.
+
+No source change.
+
 ## 0.10.2
 
 The 0.10.1 release note below describes TWO leaks, but the second fix

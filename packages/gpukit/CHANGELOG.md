@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.1
+
+Dependency requirements now pin the **major**, matching the rest of the
+registry packages:
+
+- `gpu` `^0.11.2` → `^0`
+
+A minor release of a dependency is picked up on the next install now,
+instead of stranding this package on the minor its requirement happened
+to name.
+
+No source change.
+
 ## 0.7.0
 
 Batched attention, and two tile choices that were sized for the wrong

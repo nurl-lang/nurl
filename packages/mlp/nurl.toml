@@ -1,9 +1,9 @@
 [package]
 name = "mlp"
-version = "0.3.5"
+version = "0.3.6"
 description = "Trainable multi-layer perceptron in pure NURL — dense layers, ReLU, Adam, minibatches, early stopping. The training-side counterpart to the ecosystem's inference packages: a seedable, deterministic MLP regressor faithful to sklearn's MLPRegressor semantics (Glorot init, squared loss with L2, Adam bias correction, validation-split early stopping with best-weight restore), plus a MinMax scaler. An autoencoder is just mlp_train with X as both input and target — reconstruction-error anomaly detection, embeddings, denoising. Models and scalers persist to JSON with bit-exact f64 round-trip. Two training engines: the hand-written backprop (default, no dependencies beyond flat buffers) and mlp_fit_grad, the same sklearn recipe driven by the grad autograd package — same API, same oracle bar, one loss expression instead of hand-derived layer deltas."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-grad = "^0.8"
-tensor = "^0.4"
+grad = "^0"
+tensor = "^0"

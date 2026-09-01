@@ -1,13 +1,13 @@
 [package]
 name = "yoloe-demo"
-version = "0.2.7"
+version = "0.2.8"
 description = "Live YOLOE in the browser, served by pure NURL — open your webcam on a web page and watch open-vocabulary detection + instance segmentation stream back at you. The browser posts JPEG frames to a NURL HTTP(S) server; every frame runs through the onnx package on the GPU (each layer a CUDA-C kernel compiled at runtime via NVRTC), the segmentation masks are composited onto the frame, and the masked JPEG + a JSON detection list come back — the page draws boxes/labels on top and loops. Interactive: toggle prompted classes, drag the confidence slider, flip masks on/off, or drop a still image. --tls generates a self-signed P-256 certificate at startup (std/x509_gen) so the camera also works from other machines on the LAN (getUserMedia needs a secure origin). Everything in the path is NURL: the HTTP/TLS server (http package), the page template (template package), the JPEG/PNG codecs (image package), the ONNX runtime (onnx package) and the YOLOE decode/mask stages (yoloe package). No Python, no OpenCV, no inference engine, no web framework."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/nurl-lang/nurl-lang"
 
 [dependencies]
-yoloe = { path = "../yoloe", version = "^0.6" }
-onnx = { path = "../onnx", version = "^0.8" }
-image = { path = "../image", version = "^0.6" }
+yoloe = { path = "../yoloe", version = "^0" }
+onnx = { path = "../onnx", version = "^0" }
+image = { path = "../image", version = "^0" }
 http = { path = "../http", version = "^0" }
-template = { path = "../template", version = "^0.1" }
+template = { path = "../template", version = "^0" }

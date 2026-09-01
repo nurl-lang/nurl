@@ -51,7 +51,7 @@ $ `src/sky.nu`
 : s MA_DEFAULT_REF `facebook/map-anything-apache`
 
 // Kept in step with nurl.toml by tests/version_test.sh.
-@ __ma_version → v { ( nurl_print `map-anything 0.4.2\n` ) }
+@ __ma_version → v { ( nurl_print `map-anything 0.4.4\n` ) }
 
 @ __ma_usage → v {
     ( nurl_print `map-anything - metric 3-D reconstruction from images, in pure NURL\n` )

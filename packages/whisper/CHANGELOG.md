@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.1
+
+Dependency requirements now pin the **major**, matching the rest of the
+registry packages:
+
+- `safetensor` `^0.3` → `^0`
+- `tokenizer` `^0.3` → `^0`
+- `audio` `^0.6` → `^0`
+- `hub` `^0.1` → `^0`
+
+A minor release of a dependency is picked up on the next install now,
+instead of stranding this package on the minor its requirement happened
+to name.
+
+No source change.
+
 ## 1.1.0
 
 The encoder's attention was fixed in 1.0.0. The decoder's was not, and it
