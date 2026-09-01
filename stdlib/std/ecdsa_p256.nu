@@ -1,13 +1,21 @@
-// stdlib/std/ecdsa_p256.nu — pure-NURL ECDSA verification on the NIST
-// P-256 (secp256r1) curve. No OpenSSL. Built on BigInt; points are held
-// in Jacobian coordinates so the double-and-add ladder needs only one
-// field inversion at the very end.
+// stdlib/std/ecdsa_p256.nu — pure-NURL ECDSA on the NIST P-256
+// (secp256r1) and P-384 (secp384r1) curves. No OpenSSL.
 //
 //   ( ecdsa_p256_verify point r s hash ) → b
+//   ( ecdsa_p384_verify point r s hash ) → b
+//   ( ecdsa_p256_sign priv hash )       → ( Vec u )
 //
-// point = 65-byte uncompressed public key (0x04 || X || Y).
+// point = uncompressed public key (0x04 || X || Y, 65 / 97 bytes).
 // r, s   = signature integers (big-endian bytes).
-// hash   = the message digest (SHA-256 → 32 bytes).
+// hash   = the message digest; a digest longer than the curve is
+//          truncated to its leftmost bits per FIPS 186-5 §6.4.1.
+//
+// The SECRET paths (signing nonce, ECDH) run on the constant-time
+// fixed-limb Montgomery field (std/p256_field); verification — public
+// data, one per certificate in a TLS chain, one per JWT-authenticated
+// request — runs on the same fixed-limb fields variable-time-free of
+// BigInt (P-384 core: std/p384_field). BigInt remains for parsing and
+// the cheap validation arithmetic only.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
@@ -15,6 +23,7 @@ $ `stdlib/std/bigint.nu`
 $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
 $ `stdlib/std/p256_field.nu`  // fully constant-time scalar mult (secret path)
 $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arithmetic
+$ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
 
 // ── curve constants (hex → BigInt) ────────────────────────────────
 @ __hx s h → BigInt {
@@ -28,17 +37,9 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
 
 @ __p256_n → BigInt { ^ ( __hx `ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551` ) }
 
-@ __p256_gx → BigInt { ^ ( __hx `6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296` ) }
-
-@ __p256_gy → BigInt { ^ ( __hx `4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5` ) }
-
 @ __p384_p → BigInt { ^ ( __hx `fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000ffffffff` ) }
 
 @ __p384_n → BigInt { ^ ( __hx `ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973` ) }
-
-@ __p384_gx → BigInt { ^ ( __hx `aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7` ) }
-
-@ __p384_gy → BigInt { ^ ( __hx `3617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f` ) }
 
 // Curve b coefficients (y² = x³ − 3x + b), for on-curve validation (M3).
 @ __p256_b → BigInt { ^ ( __hx `5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b` ) }
@@ -71,168 +72,6 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
 
 @ __fsqr BigInt a BigInt p → BigInt { ^ ( __fmul a a p ) }
 
-@ __f2 BigInt a BigInt p → BigInt { ^ ( __fadd a a p ) }
-
-@ __f3 BigInt a BigInt p → BigInt {
-    : BigInt d ( __f2 a p )
-    : BigInt r ( __fadd d a p )
-    ( bigint_free d )
-    ^ r
-}
-
-@ __f4 BigInt a BigInt p → BigInt {
-    : BigInt d ( __f2 a p )
-    : BigInt r ( __f2 d p )
-    ( bigint_free d )
-    ^ r
-}
-
-@ __f8 BigInt a BigInt p → BigInt {
-    : BigInt d ( __f4 a p )
-    : BigInt r ( __f2 d p )
-    ( bigint_free d )
-    ^ r
-}
-// a^(p-2) mod p — multiplicative inverse.
-@ __finv BigInt a BigInt p → BigInt {
-    : BigInt two ( bigint_from_i 2 )
-    : BigInt pm2 ( bigint_sub p two )
-    : BigInt r ( bigint_modpow a pm2 p )
-    ( bigint_free two )
-    ( bigint_free pm2 )
-    ^ r
-}
-
-// ── Jacobian point ────────────────────────────────────────────────
-: Jac { BigInt x BigInt y BigInt z b inf }
-
-@ __jinf → Jac {
-    ^ @ Jac { ( bigint_from_i 1 ) ( bigint_from_i 1 ) ( bigint_from_i 0 ) T }
-}
-
-@ _jfree Jac q → v {
-    ( bigint_free . q x )
-    ( bigint_free . q y )
-    ( bigint_free . q z )
-}
-
-@ __jclone Jac q → Jac {
-    ^ @ Jac { ( bigint_clone . q x ) ( bigint_clone . q y ) ( bigint_clone . q z ) . q inf }
-}
-
-// Point doubling (a = -3 form).
-@ __jdouble Jac q BigInt p → Jac {
-    ? . q inf { ^ ( __jclone q ) } {}
-    ? ( bigint_is_zero . q y ) { ^ ( __jinf ) } {}
-    : BigInt A ( __fsqr . q y p )
-    : BigInt xa ( __fmul . q x A p )
-    : BigInt B ( __f4 xa p )
-    : BigInt a2 ( __fsqr A p )
-    : BigInt C ( __f8 a2 p )
-    : BigInt zsq ( __fsqr . q z p )
-    : BigInt xm ( __fsub . q x zsq p )
-    : BigInt xp ( __fadd . q x zsq p )
-    : BigInt dm ( __fmul xm xp p )
-    : BigInt D ( __f3 dm p )
-    : BigInt dsq ( __fsqr D p )
-    : BigInt b2 ( __f2 B p )
-    : BigInt X3 ( __fsub dsq b2 p )
-    : BigInt bx ( __fsub B X3 p )
-    : BigInt dbx ( __fmul D bx p )
-    : BigInt Y3 ( __fsub dbx C p )
-    : BigInt yz ( __fmul . q y . q z p )
-    : BigInt Z3 ( __f2 yz p )
-    ( bigint_free A ) ( bigint_free xa ) ( bigint_free B ) ( bigint_free a2 )
-    ( bigint_free C ) ( bigint_free zsq ) ( bigint_free xm ) ( bigint_free xp )
-    ( bigint_free dm ) ( bigint_free D ) ( bigint_free dsq ) ( bigint_free b2 )
-    ( bigint_free bx ) ( bigint_free dbx ) ( bigint_free yz )
-    ^ @ Jac { X3 Y3 Z3 F }
-}
-
-// Point addition (general Jacobian + Jacobian).
-@ __jadd Jac p1 Jac p2 BigInt p → Jac {
-    ? . p1 inf { ^ ( __jclone p2 ) } {}
-    ? . p2 inf { ^ ( __jclone p1 ) } {}
-    : BigInt z1sq ( __fsqr . p1 z p )
-    : BigInt z2sq ( __fsqr . p2 z p )
-    : BigInt u1 ( __fmul . p1 x z2sq p )
-    : BigInt u2 ( __fmul . p2 x z1sq p )
-    : BigInt z2cu ( __fmul . p2 z z2sq p )
-    : BigInt z1cu ( __fmul . p1 z z1sq p )
-    : BigInt s1 ( __fmul . p1 y z2cu p )
-    : BigInt s2 ( __fmul . p2 y z1cu p )
-    : i ucmp ( bigint_cmp u1 u2 )
-    : i scmp ( bigint_cmp s1 s2 )
-    ? == ucmp 0 {
-        ( bigint_free z1sq ) ( bigint_free z2sq ) ( bigint_free u1 ) ( bigint_free u2 )
-        ( bigint_free z2cu ) ( bigint_free z1cu ) ( bigint_free s1 ) ( bigint_free s2 )
-        ? == scmp 0 { ^ ( __jdouble p1 p ) } { ^ ( __jinf ) }
-    } {}
-    : BigInt H ( __fsub u2 u1 p )
-    : BigInt R ( __fsub s2 s1 p )
-    : BigInt hsq ( __fsqr H p )
-    : BigInt hcu ( __fmul H hsq p )
-    : BigInt u1hsq ( __fmul u1 hsq p )
-    : BigInt rsq ( __fsqr R p )
-    : BigInt t1 ( __fsub rsq hcu p )
-    : BigInt u1hsq2 ( __f2 u1hsq p )
-    : BigInt X3 ( __fsub t1 u1hsq2 p )
-    : BigInt t2 ( __fsub u1hsq X3 p )
-    : BigInt rt2 ( __fmul R t2 p )
-    : BigInt s1hcu ( __fmul s1 hcu p )
-    : BigInt Y3 ( __fsub rt2 s1hcu p )
-    : BigInt z1z2 ( __fmul . p1 z . p2 z p )
-    : BigInt Z3 ( __fmul H z1z2 p )
-    ( bigint_free z1sq ) ( bigint_free z2sq ) ( bigint_free u1 ) ( bigint_free u2 )
-    ( bigint_free z2cu ) ( bigint_free z1cu ) ( bigint_free s1 ) ( bigint_free s2 )
-    ( bigint_free H ) ( bigint_free R ) ( bigint_free hsq ) ( bigint_free hcu )
-    ( bigint_free u1hsq ) ( bigint_free rsq ) ( bigint_free t1 ) ( bigint_free u1hsq2 )
-    ( bigint_free t2 ) ( bigint_free rt2 ) ( bigint_free s1hcu ) ( bigint_free z1z2 )
-    ^ @ Jac { X3 Y3 Z3 F }
-}
-
-// Constant-time select of one of two Jacobian points: `a` if bit==1 else `b`,
-// with no branch on `bit` (each coordinate via bigint_cselect; the inf flag
-// is a plain conditional move). Returns a fresh point.
-@ __jcselect i bit Jac a Jac b → Jac {
-    : BigInt nx ( bigint_cselect bit . a x . b x )
-    : BigInt ny ( bigint_cselect bit . a y . b y )
-    : BigInt nz ( bigint_cselect bit . a z . b z )
-    : b ninf ? != 0 bit . a inf . b inf
-    ^ @ Jac { nx ny nz ninf }
-}
-
-// k · P over the bits of k (big-endian byte view), MSB to LSB. Branchless
-// (Coron always-add): every bit performs BOTH a double and an add, then a
-// constant-time point select keeps the add iff the bit was set. This is the
-// PUBLIC-scalar path used only by ECDSA verify (P-256/P-384) — its scalars
-// are public, so the operand-time-dependent BigInt field ops are harmless.
-// The SECRET path (signing nonce, ECDHE) uses the fully constant-time
-// std/p256_field scalar multiply instead (see __p256_mul_affine).
-@ _jmul ( Vec u ) k Jac base BigInt p → Jac {
-    : ~ Jac acc ( __jinf )
-    : i n ( vec_len [u] k )
-    : ~ i bi 0
-    ~ < bi n {
-        : i byte ?? ( vec_get [u] k bi ) { T x → # i x F _ → 0 }
-        : ~ i bit 7
-        ~ >= bit 0 {
-            : Jac d ( __jdouble acc p )
-            ( _jfree acc )
-            = acc d
-            : i b1 & 1 >> byte bit
-            : Jac t ( __jadd acc base p )
-            : Jac sel ( __jcselect b1 t acc )
-            ( _jfree t )
-            ( _jfree acc )
-            = acc sel
-            = bit - bit 1
-        }
-        = bi + bi 1
-    }
-    ^ acc
-}
-
 // On-curve + in-field validation of an affine point (M3): 0 ≤ x,y < p,
 // (x,y) ≠ O, and y² ≡ x³ − 3x + b (mod p). P-256/P-384 have cofactor 1, so
 // this is a full subgroup membership check.
@@ -258,28 +97,6 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
     } {}
     ( bigint_free zero )
     ^ ok
-}
-
-// Affine x-coordinate of a Jacobian point: X / Z^2 mod p.
-@ _jaffine_x Jac q BigInt p → BigInt {
-    : BigInt zsq ( __fsqr . q z p )
-    : BigInt zinv ( __finv zsq p )
-    : BigInt x ( __fmul . q x zinv p )
-    ( bigint_free zsq )
-    ( bigint_free zinv )
-    ^ x
-}
-
-// Affine y-coordinate of a Jacobian point: Y / Z^3 mod p.
-@ _jaffine_y Jac q BigInt p → BigInt {
-    : BigInt zsq ( __fsqr . q z p )
-    : BigInt zcb ( __fmul zsq . q z p )
-    : BigInt zinv ( __finv zcb p )
-    : BigInt y ( __fmul . q y zinv p )
-    ( bigint_free zsq )
-    ( bigint_free zcb )
-    ( bigint_free zinv )
-    ^ y
 }
 
 // bigint (0 ≤ x < p, ≤ 256 bits) → 4 little-endian 64-bit plain limbs.
@@ -517,16 +334,108 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
 }
 
 // ── verify ────────────────────────────────────────────────────────
-// Both NIST P-256 and P-384 use a = -3, so the Jacobian point ops above
-// are curve-independent; this core takes the curve constants and the
-// coordinate byte length. It consumes p / nn / gx / gy.
-@ __ecdsa_verify BigInt p BigInt nn BigInt gx BigInt gy BigInt cb i clen ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
+// Signature verification runs entirely over PUBLIC data (a certificate's
+// key, the signature's r/s, a message digest), so it does not need the
+// operand-independent timing the signing path buys so carefully — it
+// needs to be fast, because a TLS client pays one verify per certificate
+// in the chain and a JWT server pays one per request. Both curves
+// therefore compute u1·G + u2·Q on their fixed-limb Montgomery fields:
+// P-256 on std/p256_field's comb + window ladder joined by ONE complete
+// (RCB) projective addition, P-384 on std/p384_field's double-scalar
+// core. The complete formula makes the join correct for EVERY relation
+// between the two halves — equal, negated, either at infinity — which
+// an adversarially crafted (r, s, Q) can otherwise steer into the
+// degenerate cases of the classic Jacobian add.
+//
+// The BigInt layer is kept for what it is good at: parsing, the r/s
+// range checks, and the on-curve validation (M3) — a handful of
+// operations, off the hot path.
+
+// The 64-byte X‖Y affine encoding both P-256 scalar multiplies return
+// uses all-zero for the identity; (0, 0) is not on the curve (b ≠ 0),
+// so the encoding is unambiguous.
+@ __p256_xy_is_identity ( Vec u ) xy → b {
+    : ~ i acc 0
+    : ~ i k 0
+    ~ < k 64 { = acc | acc ?? ( vec_get [u] xy k ) { T x → # i x F _ → 0 } = k + k 1 }
+    ^ == acc 0
+}
+
+// 64-byte affine X‖Y → Montgomery projective point (identity when the
+// scalar half vanished, i.e. the all-zero encoding).
+@ __p256_affine_to_pt P256Scratch scr ( Vec u ) xy → P256Pt {
+    : P256Pt pt ( _p256_pt_mag )
+    ? ( __p256_xy_is_identity xy ) { ( _p256_set_identity_d scr pt ) } {
+        : ( Vec i ) xl ( __p256_be32_to_limbs xy 0 )
+        : ( Vec i ) yl ( __p256_be32_to_limbs xy 32 )
+        ( _p256_to_mont_d scr . pt x xl )
+        ( _p256_to_mont_d scr . pt y yl )
+        ( _p256_one_mont_d scr . pt z )
+        ( vec_free [i] xl )
+        ( vec_free [i] yl )
+    }
+    ^ pt
+}
+
+// The P-256 verify core: u1 = z·s⁻¹, u2 = r·s⁻¹ over the fixed-width
+// GF(n) (std/p256_scalar), u1·G by the fixed-base comb, u2·Q by the
+// 4-bit window ladder, joined by one complete projective addition.
+// All inputs are 32-byte big-endian; r, s already range-checked and
+// (qx, qy) already validated on-curve by the caller.
+@ __p256_verify_core ( Vec u ) zb ( Vec u ) rb ( Vec u ) sb BigInt qx BigInt qy → b {
+    : ( Vec u ) w ( p256n_inv_be sb )
+    : ( Vec u ) u1 ( p256n_mulmod_be zb w )
+    : ( Vec u ) u2 ( p256n_mulmod_be rb w )
+    ( vec_free [u] w )
+    : ( Vec u ) a1 ( p256ct_scalarmult_base u1 )
+    : ( Vec u ) a2 ( __p256_mul_affine u2 qx qy )
+    ( vec_free [u] u1 )
+    ( vec_free [u] u2 )
+    : P256Scratch scr ( _p256_scr_new )
+    : P256Pt P1 ( __p256_affine_to_pt scr a1 )
+    : P256Pt P2 ( __p256_affine_to_pt scr a2 )
+    ( vec_free [u] a1 )
+    ( vec_free [u] a2 )
+    : ( Vec i ) aplain ( _p256_a_plain )
+    : ( Vec i ) am ( _p256_to_mont_s scr aplain )
+    ( vec_free [i] aplain )
+    : ( Vec i ) b3plain ( _p256_b3_plain )
+    : ( Vec i ) b3m ( _p256_to_mont_s scr b3plain )
+    ( vec_free [i] b3plain )
+    ( p256ct_padd_d scr P1 P1 P2 am b3m )
+    : ~ b result F
+    // R = ∞ (Z = 0) rejects; otherwise r =? x(R) mod n, as bytes.
+    ? == ( _p256_zmask . P1 z ) 0 {
+        : ( Vec i ) zinv ( _mag4 )
+        ( _p256_inv_d scr zinv . P1 z )
+        ( _p256_mul_d scr . P1 x . P1 x zinv )
+        ( _p256_from_mont_d scr . P1 x . P1 x )
+        ( vec_free [i] zinv )
+        : ( Vec u ) xb ( vec_with_cap [u] 32 )
+        ( _p256_limbs_to_be xb . P1 x )
+        : ( Vec u ) xr ( p256n_reduce_be xb )
+        = result ( bytes_eq xr rb )
+        ( vec_free [u] xb )
+        ( vec_free [u] xr )
+    } {}
+    ( p256pt_free P1 )
+    ( p256pt_free P2 )
+    ( vec_free [i] am )
+    ( vec_free [i] b3m )
+    ( _p256_scr_free scr )
+    ^ result
+}
+
+// Both NIST P-256 and P-384 use a = -3, so the validation layer above is
+// curve-independent; this entry takes the curve constants and the
+// coordinate byte length. It consumes p / nn / cb.
+@ __ecdsa_verify BigInt p BigInt nn BigInt cb i clen ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
     ? != ( vec_len [u] point ) + 1 * 2 clen {
-        ( bigint_free p ) ( bigint_free nn ) ( bigint_free gx ) ( bigint_free gy ) ( bigint_free cb )
+        ( bigint_free p ) ( bigint_free nn ) ( bigint_free cb )
         ^ F
     } {}
     ? != ?? ( vec_get [u] point 0 ) { T x → # i x F _ → 0 } 4 {
-        ( bigint_free p ) ( bigint_free nn ) ( bigint_free gx ) ( bigint_free gy ) ( bigint_free cb )
+        ( bigint_free p ) ( bigint_free nn ) ( bigint_free cb )
         ^ F
     } {}
 
@@ -534,18 +443,16 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
     : ( Vec u ) qyb ( bytes_slice point + 1 clen + 1 * 2 clen )
     : BigInt qx ( bigint_from_bytes_be qxb )
     : BigInt qy ( bigint_from_bytes_be qyb )
-    ( vec_free [u] qxb )
-    ( vec_free [u] qyb )
     // M3: reject a public key that is off-curve or out of field range.
     ? ! ( __on_curve qx qy p cb ) {
+        ( vec_free [u] qxb ) ( vec_free [u] qyb )
         ( bigint_free qx ) ( bigint_free qy )
-        ( bigint_free p ) ( bigint_free nn ) ( bigint_free gx ) ( bigint_free gy ) ( bigint_free cb )
+        ( bigint_free p ) ( bigint_free nn ) ( bigint_free cb )
         ^ F
     } {}
 
     : BigInt br ( bigint_from_bytes_be r )
     : BigInt bs ( bigint_from_bytes_be s )
-    : BigInt z ( bigint_from_bytes_be hash )
     : BigInt one ( bigint_from_i 1 )
 
     : ~ b ok T
@@ -557,47 +464,42 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
 
     : ~ b result F
     ? ok {
-        : BigInt zr ( bigint_rem z nn )
-        : BigInt w ( __finv bs nn )  // s^-1 mod n
-        : BigInt u1m ( bigint_mul zr w )
-        : BigInt u1 ( bigint_rem u1m nn )
-        : BigInt u2m ( bigint_mul br w )
-        : BigInt u2 ( bigint_rem u2m nn )
-        : ( Vec u ) u1b ( bigint_to_bytes_be u1 0 )
-        : ( Vec u ) u2b ( bigint_to_bytes_be u2 0 )
-
-        : Jac G @ Jac { gx gy ( bigint_from_i 1 ) F }
-        : Jac Q @ Jac { qx qy ( bigint_from_i 1 ) F }
-        : Jac p1 ( _jmul u1b G p )
-        : Jac p2 ( _jmul u2b Q p )
-        : Jac R ( __jadd p1 p2 p )
-        ? . R inf { = result F } {
-            : BigInt rx ( _jaffine_x R p )
-            : BigInt rxn ( bigint_rem rx nn )
-            = result == ( bigint_cmp rxn br ) 0
-            ( bigint_free rx )
-            ( bigint_free rxn )
+        // z = the LEFTMOST clen bytes of the digest (FIPS 186-5 §6.4.1:
+        // a digest longer than the group order is truncated to its
+        // leftmost qlen bits — NOT reduced as a full-width integer,
+        // which accepts a different value whenever the digest is longer
+        // than the curve, e.g. SHA-384 with P-256). A shorter digest is
+        // left-padded: same integer, fixed width.
+        : i hlen ( vec_len [u] hash )
+        : i m ? < hlen clen hlen clen
+        : ( Vec u ) zb ( vec_with_cap [u] clen )
+        : ~ i k m
+        ~ < k clen { ( vec_push [u] zb # u 0 ) = k + k 1 }
+        : ~ i j 0
+        ~ < j m {
+            ( vec_push [u] zb ?? ( vec_get [u] hash j ) { T x → x F _ → # u 0 } )
+            = j + j 1
         }
-        ( _jfree G ) ( _jfree Q ) ( _jfree p1 ) ( _jfree p2 ) ( _jfree R )
-        ( bigint_free zr ) ( bigint_free w ) ( bigint_free u1m ) ( bigint_free u1 )
-        ( bigint_free u2m ) ( bigint_free u2 ) ( vec_free [u] u1b ) ( vec_free [u] u2b )
-    } {
-        ( bigint_free qx )
-        ( bigint_free qy )
-        ( bigint_free gx )
-        ( bigint_free gy )
-    }
+        : ( Vec u ) rb ( bigint_to_bytes_be br clen )
+        : ( Vec u ) sb ( bigint_to_bytes_be bs clen )
+        ? == clen 32
+        { = result ( __p256_verify_core zb rb sb qx qy ) }
+        { = result ( p384_ecdsa_verify_core zb rb sb qxb qyb ) }
+        ( vec_free [u] zb ) ( vec_free [u] rb ) ( vec_free [u] sb )
+    } {}
+    ( vec_free [u] qxb ) ( vec_free [u] qyb )
+    ( bigint_free qx ) ( bigint_free qy )
     ( bigint_free p ) ( bigint_free nn ) ( bigint_free br ) ( bigint_free bs )
-    ( bigint_free z ) ( bigint_free one ) ( bigint_free cb )
+    ( bigint_free one ) ( bigint_free cb )
     ^ result
 }
 
 @ ecdsa_p256_verify ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
-    ^ ( __ecdsa_verify ( __p256_p ) ( __p256_n ) ( __p256_gx ) ( __p256_gy ) ( __p256_b ) 32 point r s hash )
+    ^ ( __ecdsa_verify ( __p256_p ) ( __p256_n ) ( __p256_b ) 32 point r s hash )
 }
 
 @ ecdsa_p384_verify ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
-    ^ ( __ecdsa_verify ( __p384_p ) ( __p384_n ) ( __p384_gx ) ( __p384_gy ) ( __p384_b ) 48 point r s hash )
+    ^ ( __ecdsa_verify ( __p384_p ) ( __p384_n ) ( __p384_b ) 48 point r s hash )
 }
 
 // ── ECDSA P-256 signing (RFC 6979 deterministic nonce) ──────────────
