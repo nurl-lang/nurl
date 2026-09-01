@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+surrogate then escaped quote rejected
+surrogate then bare escape-u rejected
+surrogate then 1-digit escape rejected
+surrogate then bad hex rejected
+incomplete low escape rejected
+escape after replaced high accepted: EF BF BD 0A
+high then real pair: EF BF BD F0 9D 84 9E
+nul after number rejected: bad format
+nul-free prefix still parses: 123

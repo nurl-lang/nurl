@@ -65,7 +65,10 @@
 //   ( json_type_name j )              → s    "null"/"bool"/"num"/"str"/"arr"/"obj"
 //
 // Parser / serializer:
-//   ( json_parse raw )                → ! Json JsonError
+//   ( json_parse raw )                → ! Json JsonError   raw as s; ends at NUL
+//   ( json_parse_n raw len )          → ! Json JsonError   exact byte range (the root
+//                                       entry — an embedded NUL is rejected, not truncated)
+//   ( json_parse_bytes buf )          → ! Json JsonError   ( Vec u ), borrowed
 //   ( json_stringify j )              → String  compact (always valid JSON)
 //   ( json_pretty    j )              → String  2-space indented
 //   ( json_format_error e )           → String  "<kind> at line L col C" (caller owns)
@@ -301,10 +304,10 @@ $ `stdlib/core/vec.nu`
     i depth
 }
 
-@ __jp_new s txt → *JsonParser {
+@ __jp_new s txt i len → *JsonParser {
     : *JsonParser p # *JsonParser ( nurl_alloc Z JsonParser )
     = . p src txt
-    = . p len ( nurl_str_len txt )
+    = . p len len
     = . p pos 0
     = . p depth 0
     ^ p
@@ -668,43 +671,50 @@ $ `stdlib/core/vec.nu`
                                         ? == esc 98 { ( string_push_char out 8 ) } {
                                             ? == esc 102 { ( string_push_char out 12 ) } {
                                                 ? == esc 117 {
-                                                    // \uXXXX — read 4 hex digits, decode to a UTF-8 byte sequence.
-                                                    // If the value is a high surrogate (0xD800..0xDBFF) the spec
-                                                    // requires a following `\uYYYY` low surrogate (0xDC00..0xDFFF);
-                                                    // combine them into a single supplementary code point. Any
-                                                    // other value (including a lone low surrogate or unmatched
-                                                    // high surrogate) is emitted as-is via the 3-byte path.
+                                                    // \uXXXX — read 4 hex digits, decode to a UTF-8 byte
+                                                    // sequence. A high surrogate (0xD800..0xDBFF) pairs with a
+                                                    // following `\uYYYY` low surrogate (0xDC00..0xDFFF) into one
+                                                    // supplementary code point. The pairing LOOKAHEAD is pure:
+                                                    // it consumes `\u` only after BOTH bytes matched, so a
+                                                    // `\uD800\"` leaves the `\"` escape intact for the ordinary
+                                                    // loop (the old code swallowed the backslash — JSONTestSuite
+                                                    // n_string_1_surrogate_then_escape parsed CLEAN with a stolen
+                                                    // quote). Once `\u` is consumed the four digits MUST be hex:
+                                                    // a malformed escape is a syntax error everywhere else, and
+                                                    // the old "best-effort" fallthrough silently dropped it (five
+                                                    // more n_ cases accepted). A complete-but-unpaired surrogate
+                                                    // is NOT a syntax error (RFC 8259 leaves it undefined) — it
+                                                    // becomes U+FFFD via __jp_push_utf8, and the value that broke
+                                                    // the pair re-enters the loop so `\uD800\uD834\uDD1E` still
+                                                    // pairs the clef. The i_ conformance class pins the policy.
                                                     : i h ( __jp_read_hex4 p )
                                                     ? < h 0 {
                                                         ( string_free out )
                                                         ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
                                                     } {}
-                                                    ? & >= h 55296 <= h 56319 {
-                                                        // Possible high surrogate — try to consume `\uYYYY`.
-                                                        ? & ! ( __jp_eof p ) == ( __jp_peek p ) 92 {
-                                                            = . p pos + . p pos 1
-                                                            ? & ! ( __jp_eof p ) == ( __jp_peek p ) 117 {
-                                                                = . p pos + . p pos 1
-                                                                : i l ( __jp_read_hex4 p )
-                                                                ? & >= l 56320 <= l 57343 {
-                                                                    : i cp + + 65536 << - h 55296 10 - l 56320
-                                                                    ( __jp_push_utf8 out cp )
-                                                                } {
-                                                                    // Not a valid low surrogate — emit the high alone,
-                                                                    // then re-process the second `\uXXXX` as a code point.
-                                                                    ( __jp_push_utf8 out h )
-                                                                    ? >= l 0 { ( __jp_push_utf8 out l ) } {}
-                                                                }
+                                                    : ~ i cur h
+                                                    : ~ b done F
+                                                    ~ ! done {
+                                                        ? & & >= cur 55296 <= cur 56319
+                                                        & == ( __jp_byte_at p . p pos ) 92 == ( __jp_byte_at p + . p pos 1 ) 117
+                                                        {
+                                                            = . p pos + . p pos 2
+                                                            : i l ( __jp_read_hex4 p )
+                                                            ? < l 0 {
+                                                                ( string_free out )
+                                                                ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
+                                                            } {}
+                                                            ? & >= l 56320 <= l 57343 {
+                                                                ( __jp_push_utf8 out + + 65536 << - cur 55296 10 - l 56320 )
+                                                                = done T
                                                             } {
-                                                                // After `\` was no `u` — emit high alone, the `\?` got
-                                                                // swallowed; best-effort recovery.
-                                                                ( __jp_push_utf8 out h )
+                                                                ( __jp_push_utf8 out cur )
+                                                                = cur l
                                                             }
                                                         } {
-                                                            ( __jp_push_utf8 out h )
+                                                            ( __jp_push_utf8 out cur )
+                                                            = done T
                                                         }
-                                                    } {
-                                                        ( __jp_push_utf8 out h )
                                                     }
                                                 } {
                                                     ( string_free out )
@@ -923,8 +933,28 @@ $ `stdlib/core/vec.nu`
     ^ @ !Json JsonError { T @ Json { JObj kvs } }
 }
 
+// Byte-buffer entry: parse exactly the buffer's bytes (a network
+// payload, a read_file_bytes result). BORROWS the Vec — the caller
+// still owns and frees it.
+@ json_parse_bytes ( Vec u ) buf → !Json JsonError {
+    ^ ( json_parse_n # s ( vec_data [u] buf ) ( vec_len [u] buf ) )
+}
+
+// C-string entry: the document ends at the first NUL. A payload that
+// may legitimately carry stray NUL bytes (a network buffer, a file
+// read as bytes) must go through json_parse_n / json_parse_bytes —
+// through this entry a `123\0garbage` payload would TRUNCATE at the
+// NUL and parse clean (JSONTestSuite n_multidigit_number_then_00).
 @ json_parse s src → !Json JsonError {
-    ? == ( nurl_str_len src ) 0 {
+    ^ ( json_parse_n src ( nurl_str_len src ) )
+}
+
+// Length-carrying entry — the root parser. Never reads past `len`, so
+// an embedded NUL is an ordinary byte: inside a string it is a bare
+// control character (BadFormat), between tokens it is an unexpected
+// byte (BadFormat) — rejected, never silently truncated.
+@ json_parse_n s src i len → !Json JsonError {
+    ? <= len 0 {
         : JsonError e @ JsonError {
             @ ParseErr { Empty }
             0
@@ -933,7 +963,7 @@ $ `stdlib/core/vec.nu`
         }
         ^ @ !Json JsonError { F e }
     } {}
-    : *JsonParser p ( __jp_new src )
+    : *JsonParser p ( __jp_new src len )
     : !Json JsonError r ( __jp_parse_value p )
     ?? r {
         T j → {
