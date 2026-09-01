@@ -10,6 +10,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The TLS handshake's crypto dropped a set of costs that bought
+  nothing — public-exponent inversions no longer pretend to be secret,
+  squarings no longer run as general multiplies, and per-call table
+  builds became process globals.** Measured on the handshake profile
+  (single-core µs/op before → after): X25519 keygen 43 → 30, ECDSA
+  P-256 sign 99 → 85, P-256 fixed-base comb 60 → 52, X25519 shared
+  secret 65 → 61; end to end the server answers ~9% more TLS
+  handshakes per second (loopback, `oha -c 20 --disable-keepalive`).
+  Five root fixes, each verified against the old path and the corpus
+  KATs (RFC 7748 vectors, ECDSA/TLS tests, 500-element differential
+  sqr/mul/inv sweeps):
+
+  * `std/p256_field` gains a dedicated Montgomery **squaring**
+    (`_p256_sqr_d`, 10 products against the multiply's 16); the point
+    doubling, mixed addition and affine conversions that spelled
+    `mul x x` now use it — 37% of a fixed-base comb's field ops are
+    squarings, and a Fermat inversion is ~95%.
+  * `_p256_inv_d` is a fixed **p−2 addition chain** (255 S + 13 M).
+    The old ladder ran 256 S + 256 M with a constant-time select per
+    bit — but the exponent is a public curve constant, so half of
+    those multiplies were computed to be discarded. The schedule
+    depends only on p−2; the data path stays branch-free either way.
+  * `std/p256_scalar`'s `p256n_inv_be` (the ECDSA k⁻¹) is a fixed
+    4-bit window over the public n−2 — one multiply per non-zero
+    nibble instead of per set bit, and no per-bit limb copies.
+  * `std/x25519`'s `_inv25519` is the standard ref10 chain
+    (254 S + 11 M; the tweetnacl-style ladder it replaces multiplied
+    on 252 of 254 steps). Two inversions per handshake.
+  * The X25519 keygen comb walks a **niels-form table** — cached, one
+    build per process — with a dedicated extended-coordinate doubling
+    (4M+4S) and ref10 `ge_madd` mixed addition (7M) in place of two
+    generic 9-M complete additions per iteration, and a 15-limb
+    constant-time scan in place of 20 (Z = 1 is implicit). The old
+    path re-materialised the 320-limb table on every public key.
+  * `std/hash_sha256` shares one process-global round-constant table;
+    it was rebuilt and heap-allocated on every `sha256_init`, one of
+    which runs per HMAC leg of the TLS key schedule and per RFC 6979
+    nonce step.
+
+  Constant-time discipline is unchanged where it matters: every value
+  derived from secret data still moves through branch-free, mask-merged
+  arithmetic; the only schedules that became data-dependent depend on
+  public curve constants alone.
+
 - **The netpoller's overload surplus now spills into a fair global FIFO,
   and workers drain the epoll instance on a fixed cadence — the p99 an
   HTTP service pays under saturation drops by a third (TLS: 40%) at no

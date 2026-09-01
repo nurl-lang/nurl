@@ -393,6 +393,183 @@ $ `stdlib/core/vec.nu`
 // (kept: the 9-limb staging cond-sub is gone — add/sub carry in
 // registers now and fold the conditional ±p inline, like the multiply.)
 
+// Montgomery SQUARE: dst ← (a·a·R^-1) mod p. The 16-product schoolbook
+// collapses to 10 — six cross products doubled by one carry-chained
+// shift, plus the four diagonals — followed by the same four rounds of
+// sparse-p Montgomery reduction the multiply runs and the same
+// constant-time conditional subtract. Everything the point formulas and
+// the Fermat inversion spell as `mul x x` comes through here: 37% of a
+// fixed-base comb's field ops are squarings, and an inversion is ~95%.
+// `dst` may alias `a` — the limbs are read into locals first.
+@ _p256_sqr_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
+    : *i ap ( vec_data [i] a )
+    : u64 a0 # u64 . ap 0
+    : u64 a1 # u64 . ap 1
+    : u64 a2 # u64 . ap 2
+    : u64 a3 # u64 . ap 3
+    // ── cross products: r1..r6 = a0a1, a0a2, a0a3(+a1a2), a1a3, a2a3 ──
+    : ~ u64 cr 0
+    : ~ u64 r1 ( nurl_mac_lo a0 a1 0 0 )
+    = cr ( nurl_mac_hi a0 a1 0 0 )
+    : ~ u64 r2 ( nurl_mac_lo a0 a2 0 cr )
+    = cr ( nurl_mac_hi a0 a2 0 cr )
+    : ~ u64 r3 ( nurl_mac_lo a0 a3 0 cr )
+    : ~ u64 r4 ( nurl_mac_hi a0 a3 0 cr )
+    : u64 s3 ( nurl_mac_lo a1 a2 r3 0 )
+    = cr ( nurl_mac_hi a1 a2 r3 0 )
+    = r3 s3
+    : u64 s4 ( nurl_mac_lo a1 a3 r4 cr )
+    : ~ u64 r5 ( nurl_mac_hi a1 a3 r4 cr )
+    = r4 s4
+    : u64 s5 ( nurl_mac_lo a2 a3 r5 0 )
+    : ~ u64 r6 ( nurl_mac_hi a2 a3 r5 0 )
+    = r5 s5
+    // ── double the cross terms, carry chaining into r7 ──
+    : u64 d1 ( nurl_addc_lo r1 r1 0 )
+    = cr ( nurl_addc_hi r1 r1 0 )
+    : u64 d2 ( nurl_addc_lo r2 r2 cr )
+    = cr ( nurl_addc_hi r2 r2 cr )
+    : u64 d3 ( nurl_addc_lo r3 r3 cr )
+    = cr ( nurl_addc_hi r3 r3 cr )
+    : u64 d4 ( nurl_addc_lo r4 r4 cr )
+    = cr ( nurl_addc_hi r4 r4 cr )
+    : u64 d5 ( nurl_addc_lo r5 r5 cr )
+    = cr ( nurl_addc_hi r5 r5 cr )
+    : u64 d6 ( nurl_addc_lo r6 r6 cr )
+    : ~ u64 r7 ( nurl_addc_hi r6 r6 cr )
+    // ── diagonals a0², a1², a2², a3² at the even positions ──
+    : ~ u64 r0 ( nurl_mac_lo a0 a0 0 0 )
+    = cr ( nurl_mac_hi a0 a0 0 0 )
+    = r1 ( nurl_addc_lo d1 cr 0 )
+    = cr ( nurl_addc_hi d1 cr 0 )
+    = r2 ( nurl_mac_lo a1 a1 d2 cr )
+    = cr ( nurl_mac_hi a1 a1 d2 cr )
+    = r3 ( nurl_addc_lo d3 cr 0 )
+    = cr ( nurl_addc_hi d3 cr 0 )
+    = r4 ( nurl_mac_lo a2 a2 d4 cr )
+    = cr ( nurl_mac_hi a2 a2 d4 cr )
+    = r5 ( nurl_addc_lo d5 cr 0 )
+    = cr ( nurl_addc_hi d5 cr 0 )
+    = r6 ( nurl_mac_lo a3 a3 d6 cr )
+    = cr ( nurl_mac_hi a3 a3 d6 cr )
+    // the full square is < 2^512, so this last add cannot overflow.
+    = r7 + r7 cr
+    // ── 4 rounds of Montgomery reduction: m = low word, add m·p, shift ──
+    // Same sparse-p folds as _p256_mul_d; the carry lands in r[i+4] and
+    // ripples upward through an extra top word `ex` (≤ 4 by the 2p bound).
+    : ~ u64 ex 0
+    : ~ u64 m 0
+    // round 0 — m·p added at r0..r3, carry into r4..r7,ex
+    = m r0
+    = cr ( nurl_mac_hi m 18446744073709551615 r0 0 )
+    : u64 u01 ( nurl_mac_lo m 4294967295 r1 cr )
+    = cr ( nurl_mac_hi m 4294967295 r1 cr )
+    = r1 u01
+    : u64 u02 ( nurl_addc_lo r2 cr 0 )
+    = cr ( nurl_addc_hi r2 cr 0 )
+    = r2 u02
+    : u64 u03 ( nurl_mac_lo m 18446744069414584321 r3 cr )
+    = cr ( nurl_mac_hi m 18446744069414584321 r3 cr )
+    = r3 u03
+    : u64 u04 ( nurl_addc_lo r4 cr 0 )
+    = cr ( nurl_addc_hi r4 cr 0 )
+    = r4 u04
+    : u64 u05 ( nurl_addc_lo r5 cr 0 )
+    = cr ( nurl_addc_hi r5 cr 0 )
+    = r5 u05
+    : u64 u06 ( nurl_addc_lo r6 cr 0 )
+    = cr ( nurl_addc_hi r6 cr 0 )
+    = r6 u06
+    : u64 u07 ( nurl_addc_lo r7 cr 0 )
+    = cr ( nurl_addc_hi r7 cr 0 )
+    = r7 u07
+    = ex + ex cr
+    // round 1 — at r1..r4, carry r5..r7,ex
+    = m r1
+    = cr ( nurl_mac_hi m 18446744073709551615 r1 0 )
+    : u64 u11 ( nurl_mac_lo m 4294967295 r2 cr )
+    = cr ( nurl_mac_hi m 4294967295 r2 cr )
+    = r2 u11
+    : u64 u12 ( nurl_addc_lo r3 cr 0 )
+    = cr ( nurl_addc_hi r3 cr 0 )
+    = r3 u12
+    : u64 u13 ( nurl_mac_lo m 18446744069414584321 r4 cr )
+    = cr ( nurl_mac_hi m 18446744069414584321 r4 cr )
+    = r4 u13
+    : u64 u14 ( nurl_addc_lo r5 cr 0 )
+    = cr ( nurl_addc_hi r5 cr 0 )
+    = r5 u14
+    : u64 u15 ( nurl_addc_lo r6 cr 0 )
+    = cr ( nurl_addc_hi r6 cr 0 )
+    = r6 u15
+    : u64 u16 ( nurl_addc_lo r7 cr 0 )
+    = cr ( nurl_addc_hi r7 cr 0 )
+    = r7 u16
+    = ex + ex cr
+    // round 2 — at r2..r5, carry r6..r7,ex
+    = m r2
+    = cr ( nurl_mac_hi m 18446744073709551615 r2 0 )
+    : u64 u21 ( nurl_mac_lo m 4294967295 r3 cr )
+    = cr ( nurl_mac_hi m 4294967295 r3 cr )
+    = r3 u21
+    : u64 u22 ( nurl_addc_lo r4 cr 0 )
+    = cr ( nurl_addc_hi r4 cr 0 )
+    = r4 u22
+    : u64 u23 ( nurl_mac_lo m 18446744069414584321 r5 cr )
+    = cr ( nurl_mac_hi m 18446744069414584321 r5 cr )
+    = r5 u23
+    : u64 u24 ( nurl_addc_lo r6 cr 0 )
+    = cr ( nurl_addc_hi r6 cr 0 )
+    = r6 u24
+    : u64 u25 ( nurl_addc_lo r7 cr 0 )
+    = cr ( nurl_addc_hi r7 cr 0 )
+    = r7 u25
+    = ex + ex cr
+    // round 3 — at r3..r6, carry r7,ex
+    = m r3
+    = cr ( nurl_mac_hi m 18446744073709551615 r3 0 )
+    : u64 u31 ( nurl_mac_lo m 4294967295 r4 cr )
+    = cr ( nurl_mac_hi m 4294967295 r4 cr )
+    = r4 u31
+    : u64 u32 ( nurl_addc_lo r5 cr 0 )
+    = cr ( nurl_addc_hi r5 cr 0 )
+    = r5 u32
+    : u64 u33 ( nurl_mac_lo m 18446744069414584321 r6 cr )
+    = cr ( nurl_mac_hi m 18446744069414584321 r6 cr )
+    = r6 u33
+    : u64 u34 ( nurl_addc_lo r7 cr 0 )
+    = cr ( nurl_addc_hi r7 cr 0 )
+    = r7 u34
+    = ex + ex cr
+    // ── result = r4..r7 (+ex), value < 2p: same ct subtract as the mul ──
+    : u64 d0 ( nurl_subb_lo r4 18446744073709551615 0 )
+    : ~ u64 bb ( nurl_subb_hi r4 18446744073709551615 0 )
+    : u64 e1 ( nurl_subb_lo r5 4294967295 bb )
+    = bb ( nurl_subb_hi r5 4294967295 bb )
+    : u64 e2 ( nurl_subb_lo r6 0 bb )
+    = bb ( nurl_subb_hi r6 0 bb )
+    : u64 e3 ( nurl_subb_lo r7 18446744069414584321 bb )
+    = bb ( nurl_subb_hi r7 18446744069414584321 bb )
+    : i topb - # i ex # i bb
+    : u64 mask ? < topb 0 0 18446744073709551615
+    : u64 imask ^^ mask 18446744073709551615
+    : u64 o0 | & mask d0 & imask r4
+    : u64 o1 | & mask e1 & imask r5
+    : u64 o2 | & mask e2 & imask r6
+    : u64 o3 | & mask e3 & imask r7
+    : *i op ( vec_data [i] dst )
+    = . op 0 # i o0
+    = . op 1 # i o1
+    = . op 2 # i o2
+    = . op 3 # i o3
+}
+
+// dst ← dst^(2^n) — n back-to-back Montgomery squarings.
+@ __p256_sqn P256Scratch scr ( Vec i ) x i n → v {
+    : ~ i k 0
+    ~ < k n { ( _p256_sqr_d scr x x ) = k + k 1 }
+}
+
 // (a + b) mod p, constant-time. a, b < p ⇒ a+b < 2p ⇒ one conditional sub.
 @ p256ct_add ( Vec i ) a ( Vec i ) b → ( Vec i ) {
     : P256Scratch scr ( _p256_scr_new )
@@ -591,34 +768,54 @@ $ `stdlib/core/vec.nu`
 // one scratch. UNLIKE the other `_d` workers, `dst` must NOT alias `a`:
 // `a` is read on every iteration, and `dst` is the running accumulator.
 @ _p256_inv_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
-    // p-2 = ffffffff00000001000000000000000000000000fffffffffffffffffffffffd
-    // Square-and-multiply, MSB→LSB, over the 256-bit exponent's limbs.
-    : ( Vec i ) e ( __p256_pm2 )
-    : ( Vec i ) prod . scr gp
-    ( _p256_one_mont_d scr dst )
-    : ~ i bit 255
-    ~ >= bit 0 {
-        ( _p256_mul_d scr dst dst dst )
-        : i li / bit 64
-        : i bp % bit 64
-        : i b1 & 1 # i >> # u64 ( __ctl e li ) bp
-        ( _p256_mul_d scr prod dst a )
-        // constant-time select prod (if bit) else the running value
-        : i mask - 0 b1
-        : i imask - 0 - 1 b1
-        ( __p256_lmerge_d dst mask imask prod dst )
-        = bit - bit 1
-    }
-    ( vec_free [i] e )
+    // dst ← a^(p−2) — Fermat. The exponent is a PUBLIC curve constant,
+    // so the old bit-scanned square-and-multiply with a constant-time
+    // select (256 S + 256 M, half of them discarded) bought nothing: the
+    // sequence of operations in a fixed addition chain is identical for
+    // every input, only the (public) exponent shapes it. This is the
+    // standard p−2 chain over p = 2^256 − 2^224 + 2^192 + 2^96 − 1:
+    // MSB-first the exponent is [32×1][31×0][1][96×0][94×1][0][1], built
+    // from the all-ones blocks x2..x32 — 255 squarings + 13 multiplies,
+    // all in the dedicated Montgomery squaring. Still branch-free in the
+    // DATA; verified against the old path over random field elements and
+    // by every ECDSA/ECDH KAT in the corpus.
+    : ( Vec i ) x2 ( _mag4 )
+    : ( Vec i ) x4 ( _mag4 )
+    : ( Vec i ) x8 ( _mag4 )
+    : ( Vec i ) x16 ( _mag4 )
+    : ( Vec i ) x32 ( _mag4 )
+    // x2 = a^(2^2−1), x4 = a^(2^4−1), … x32 = a^(2^32−1)
+    ( _p256_sqr_d scr x2 a ) ( _p256_mul_d scr x2 x2 a )
+    ( _p256_sqr_d scr x4 x2 ) ( _p256_sqr_d scr x4 x4 )
+    ( _p256_mul_d scr x4 x4 x2 )
+    ( __p256_cp x8 x4 ) ( __p256_sqn scr x8 4 )
+    ( _p256_mul_d scr x8 x8 x4 )
+    ( __p256_cp x16 x8 ) ( __p256_sqn scr x16 8 )
+    ( _p256_mul_d scr x16 x16 x8 )
+    ( __p256_cp x32 x16 ) ( __p256_sqn scr x32 16 )
+    ( _p256_mul_d scr x32 x32 x16 )
+    // assemble the exponent MSB→LSB
+    ( __p256_cp dst x32 )
+    ( __p256_sqn scr dst 32 ) ( _p256_mul_d scr dst dst a )
+    ( __p256_sqn scr dst 128 ) ( _p256_mul_d scr dst dst x32 )
+    ( __p256_sqn scr dst 32 ) ( _p256_mul_d scr dst dst x32 )
+    ( __p256_sqn scr dst 16 ) ( _p256_mul_d scr dst dst x16 )
+    ( __p256_sqn scr dst 8 ) ( _p256_mul_d scr dst dst x8 )
+    ( __p256_sqn scr dst 4 ) ( _p256_mul_d scr dst dst x4 )
+    ( __p256_sqn scr dst 2 ) ( _p256_mul_d scr dst dst x2 )
+    ( __p256_sqn scr dst 2 ) ( _p256_mul_d scr dst dst a )
+    ( vec_free [i] x2 ) ( vec_free [i] x4 ) ( vec_free [i] x8 )
+    ( vec_free [i] x16 ) ( vec_free [i] x32 )
 }
 
-// p − 2, little-endian 64-bit limbs.
-@ __p256_pm2 → ( Vec i ) {
-    : ( Vec i ) v ( _mag4 )
-    : *i q ( vec_data [i] v )
-    = . q 0 # i 0xFFFFFFFFFFFFFFFD = . q 1 # i 0x00000000FFFFFFFF
-    = . q 2 0 = . q 3 # i 0xFFFFFFFF00000001
-    ^ v
+// 4-limb copy.
+@ __p256_cp ( Vec i ) dst ( Vec i ) a → v {
+    : *i op ( vec_data [i] dst )
+    : *i ap ( vec_data [i] a )
+    = . op 0 . ap 0
+    = . op 1 . ap 1
+    = . op 2 . ap 2
+    = . op 3 . ap 3
 }
 
 @ p256ct_free ( Vec i ) a → v { ( vec_free [i] a ) }
@@ -832,8 +1029,8 @@ $ `stdlib/core/vec.nu`
     : ( Vec i ) alpha . scr g3
     : ( Vec i ) t4 . scr g4
     : ( Vec i ) t5 . scr g5
-    ( _p256_mul_d scr delta zr zr )
-    ( _p256_mul_d scr gamma yr yr )
+    ( _p256_sqr_d scr delta zr )
+    ( _p256_sqr_d scr gamma yr )
     ( _p256_mul_d scr beta xr gamma )
     // alpha = 3·(xr − delta)·(xr + delta)
     ( __p256_sub_d scr t4 xr delta )
@@ -843,11 +1040,11 @@ $ `stdlib/core/vec.nu`
     ( __p256_add_d scr alpha t4 alpha )
     // Z3 = (yr + zr)² − gamma − delta   (before xr/yr are overwritten)
     ( __p256_add_d scr t4 yr zr )
-    ( _p256_mul_d scr t4 t4 t4 )
+    ( _p256_sqr_d scr t4 t4 )
     ( __p256_sub_d scr t4 t4 gamma )
     ( __p256_sub_d scr zr t4 delta )
     // X3 = alpha² − 8·beta
-    ( _p256_mul_d scr t4 alpha alpha )
+    ( _p256_sqr_d scr t4 alpha )
     ( __p256_add_d scr t5 beta beta )
     ( __p256_add_d scr t5 t5 t5 )
     ( __p256_add_d scr delta t5 t5 )
@@ -855,7 +1052,7 @@ $ `stdlib/core/vec.nu`
     // Y3 = alpha·(4·beta − X3) − 8·gamma²
     ( __p256_sub_d scr t4 t5 xr )
     ( _p256_mul_d scr t4 alpha t4 )
-    ( _p256_mul_d scr t5 gamma gamma )
+    ( _p256_sqr_d scr t5 gamma )
     ( __p256_add_d scr t5 t5 t5 )
     ( __p256_add_d scr t5 t5 t5 )
     ( __p256_add_d scr t5 t5 t5 )
@@ -891,7 +1088,7 @@ $ `stdlib/core/vec.nu`
     : ( Vec i ) t . scr gp
     : i inf_mask ( _p256_zmask Z1 )
     // zz = Z1²; u2 = x2·zz; s2 = y2·Z1·zz
-    ( _p256_mul_d scr z3 Z1 Z1 )
+    ( _p256_sqr_d scr z3 Z1 )
     ( _p256_mul_d scr hreg x2 z3 )
     ( _p256_mul_d scr t z3 Z1 )
     ( _p256_mul_d scr rreg y2 t )
@@ -901,9 +1098,9 @@ $ `stdlib/core/vec.nu`
     // Z3 = Z1·H (into its own register — acc stays whole until commit)
     ( _p256_mul_d scr z3 Z1 hreg )
     // hh = H²; V = X1·hh; X3 = R² − H³ − 2V
-    ( _p256_mul_d scr hh hreg hreg )
+    ( _p256_sqr_d scr hh hreg )
     ( _p256_mul_d scr vv X1 hh )
-    ( _p256_mul_d scr x3 rreg rreg )
+    ( _p256_sqr_d scr x3 rreg )
     ( _p256_mul_d scr hh hreg hh )
     ( __p256_sub_d scr x3 x3 hh )
     ( __p256_sub_d scr x3 x3 vv )

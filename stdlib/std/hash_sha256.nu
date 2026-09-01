@@ -33,10 +33,24 @@ $ `stdlib/std/bytes.nu`
 
 // ── 64-entry round-constant table per FIPS 180-4 §4.2.2 ────────────
 
+// One process-wide copy of the round-constant table, built on first use
+// and BORROWED by every handle: the table is a public constant, and a TLS
+// key schedule runs one `sha256_init` per HMAC leg — a 64-word build and
+// a heap alloc/free per digest bought nothing. Benign init race: two
+// first callers may both build; one pointer wins, the losing 256-byte
+// copy leaks once (same discipline as the P-256 comb tables).
+: ~ i g_sha256_k 0
+
+@ __sha256_k_shared → ( Vec u32 ) {
+    ? == g_sha256_k 0 {
+        : ( Vec u32 ) k ( __sha256_K )
+        = g_sha256_k # i . k ctl
+    } {}
+    ^ @ ( Vec u32 ) { # s g_sha256_k }
+}
+
 @ __sha256_K → ( Vec u32 ) {
-    // Filled by index through a raw `*u32`: this table is rebuilt on every
-    // `sha256_init`, and TLS's key schedule runs one of those per HMAC leg,
-    // so sixty-four capacity-checked pushes are sixty-four too many.
+    // Filled by index through a raw `*u32`.
     : ( Vec u32 ) k ( vec_with_cap [u32] 64 )
     : b _l ( vec_set_len [u32] k 64 )
     : *u32 kp ( vec_data [u32] k )
@@ -170,7 +184,7 @@ $ `stdlib/std/bytes.nu`
     = . h state st
     = . h buf ( vec_new [u] )
     = . h total 0
-    = . h k ( __sha256_K )
+    = . h k ( __sha256_k_shared )
     : ( Vec u32 ) sched ( vec_with_cap [u32] 64 )
     : b _m ( vec_set_len [u32] sched 64 )
     = . h m sched
@@ -247,7 +261,7 @@ $ `stdlib/std/bytes.nu`
     }
     ( vec_free [u] tail )
     ( vec_free [u32] . h state )
-    ( vec_free [u32] . h k )
+    // h.k is the shared process-global constant table — never freed.
     ( vec_free [u32] . h m )
     ( nurl_free # s h )
     ^ out
@@ -264,7 +278,7 @@ $ `stdlib/std/bytes.nu`
     = . c state ( vec_clone [u32] . h state )
     = . c buf ( vec_clone [u] . h buf )
     = . c total . h total
-    = . c k ( vec_clone [u32] . h k )
+    = . c k . h k
     = . c m ( vec_clone [u32] . h m )
     ^ ( sha256_final c )
 }

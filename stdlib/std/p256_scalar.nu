@@ -379,29 +379,68 @@ $ `stdlib/core/vec.nu`
     ^ v
 }
 
-// a^-1 mod n, Fermat: a^(n-2), constant square-and-multiply schedule
-// over the Montgomery field (~256 squarings + the bits n-2 selects).
+// Flat 15-entry window table: entry k (1-based) at [ (k−1)·4, (k−1)·4+4 ).
+@ __sn_tbl_put ( Vec i ) tbl i k ( Vec i ) v → v {
+    : *i tp ( vec_data [i] tbl )
+    : *i vp ( vec_data [i] v )
+    : i base * - k 1 4
+    = . tp + base 0 . vp 0
+    = . tp + base 1 . vp 1
+    = . tp + base 2 . vp 2
+    = . tp + base 3 . vp 3
+}
+
+@ __sn_tbl_cp ( Vec i ) dst ( Vec i ) tbl i k → v {
+    : *i tp ( vec_data [i] tbl )
+    : *i dp ( vec_data [i] dst )
+    : i base * - k 1 4
+    = . dp 0 . tp + base 0
+    = . dp 1 . tp + base 1
+    = . dp 2 . tp + base 2
+    = . dp 3 . tp + base 3
+}
+
+// a^-1 mod n, Fermat: a^(n-2) with a fixed 4-bit window, MSB→LSB.
+// The exponent n−2 is a PUBLIC curve constant, so the schedule — and
+// every branch below, which reads only that constant — is identical for
+// all inputs; the data stays in branch-free Montgomery arithmetic. The
+// old bit-at-a-time ladder cost 256 squarings + ~170 multiplies plus two
+// 4-limb copies per bit; the window costs 14 (table) + 252 squarings +
+// one multiply per non-zero nibble (~59) and no per-bit copies.
 @ p256n_inv_be ( Vec u ) a → ( Vec u ) {
     : ( Vec i ) av ( __sn_from_be_raw a ) ( __sn_reduce av )
     : ( Vec i ) am ( __sn_to_mont av )
-    : ( Vec i ) r ( __sn_one_mont )
     : ( Vec u ) e ( __sn_nm2_be )
-    : ( Vec i ) sq ( __sn_mag4 )
-    : ( Vec i ) pr ( __sn_mag4 )
-    : ~ i bit 255
-    ~ >= bit 0 {
-        ( __sn_mul sq r r )
-        ( __sn_cp r sq )
-        : i byte ( _snbget e - 31 >> bit 3 )
-        ? & 1 >> byte & bit 7 {
-            ( __sn_mul pr r am )
-            ( __sn_cp r pr )
+    // tbl[k] = a^k (Montgomery), k = 1..15
+    : ( Vec i ) tbl ( vec_with_cap [i] 60 )
+    : b _l ( vec_set_len [i] tbl 60 )
+    : ( Vec i ) w ( __sn_mag4 )
+    ( __sn_cp w am )
+    ( __sn_tbl_put tbl 1 w )
+    : ~ i k 2
+    ~ <= k 15 {
+        ( __sn_mul w w am )
+        ( __sn_tbl_put tbl k w )
+        = k + k 1
+    }
+    // first nibble of n−2 is 0xf; then 63 windows of 4 squarings + mul
+    : ( Vec i ) r ( __sn_mag4 )
+    ( __sn_tbl_cp r tbl 15 )
+    : ~ i wi 1
+    ~ < wi 64 {
+        ( __sn_mul r r r ) ( __sn_mul r r r )
+        ( __sn_mul r r r ) ( __sn_mul r r r )
+        : i byte # i ?? ( vec_get [u] e / wi 2 ) { T x → # i x F _ → 0 }
+        : i nib ? == % wi 2 0 >> byte 4 & byte 15
+        ? > nib 0 {
+            ( __sn_tbl_cp w tbl nib )
+            ( __sn_mul r r w )
         } {}
-        = bit - bit 1
+        = wi + wi 1
     }
     : ( Vec i ) out ( __sn_from_mont r )
     : ( Vec u ) o ( __sn_to_be out )
     ( vec_free [i] av ) ( vec_free [i] am ) ( vec_free [i] r )
-    ( vec_free [u] e ) ( vec_free [i] sq ) ( vec_free [i] pr ) ( vec_free [i] out )
+    ( vec_free [u] e ) ( vec_free [i] tbl ) ( vec_free [i] w ) ( vec_free [i] out )
     ^ o
 }
