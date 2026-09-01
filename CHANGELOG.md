@@ -10,6 +10,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The Linux I/O reactor became a netpoller — and the HTTP facade now
+  outruns its tokio/hyper peer at every measured concurrency.**
+
+  The old design ran a dedicated `poll(2)` thread: every I/O park cost
+  a pipe poke to the reactor, an O(waiters) rebuild of the pollfd
+  array, a global-queue push and a cond-var wake of some worker —
+  measured at ~4.5 futex calls, ~1.5 wake-pipe reads/writes, ~1
+  `epoll_ctl`-equivalent and 0.44 CPU **migrations** per keep-alive
+  HTTP request, because the woken fiber resumed on whichever worker
+  won the global queue. Closed-loop throughput at c=10 sat 22–35 %
+  behind the Rust peer.
+
+  On Linux there is no reactor thread any more. An **idle worker
+  becomes the poller** (the Go netpoller / tokio driver shape): it
+  takes the poll lease and blocks in `epoll_wait` itself; a ready
+  fiber resumes **directly on that worker** — no queue hop, no
+  cross-thread wake chain, no migration — and surplus ready fibers go
+  to the poller's own local queue, fanned out through the existing
+  steal path with one wake per doubling (a first cut that pushed each
+  surplus fiber to the global queue with a wake apiece measurably made
+  c=50 *worse* than the old reactor; the stampede is the failure mode,
+  and the fix is the discipline, so it is written into the code). A
+  zero-timeout poll pass in the scheduler loop keeps events flowing
+  while every worker is busy. Sockets are registered **once per fd
+  lifetime** (`EPOLLIN|EPOLLOUT|EPOLLET`, persistent — the oneshot
+  re-arm was ~1 `epoll_ctl` per request); readiness edges that arrive
+  while the fiber is computing are banked in per-fd ready bits, and
+  the next wait consumes the bit and **skips the park entirely** —
+  under load this is the common case. Deadlines live in a min-heap;
+  an `eventfd` replaces the wake pipe; closing a socket routes through
+  the netpoller so parked waiters wake and the per-fd slot is clean
+  before the fd number is reused. The edge-triggered contract — a
+  wait may only follow an `EAGAIN` — is documented in
+  [`docs/ASYNC.md`](ASYNC.md), and every stdlib wrapper already has
+  that shape. Non-Linux POSIX keeps the portable `poll(2)` reactor
+  thread unchanged; a `kqueue` netpoller is the matching upgrade path.
+
+  Measured on the bench harness (12-core host, `oha`, keep-alive,
+  median of runs; `bench/http_server.nu` vs the tokio/hyper peer):
+
+  | c | before | after | Rust peer |
+  |---|---:|---:|---:|
+  | 1 | 20.2 k | **21.7 k** | 11.3 k |
+  | 10 | 91.3 k | **123.6 k** | 120.7 k |
+  | 50 | 178.8 k | **186.5 k** | 176.7 k |
+  | 200 | 208.4 k | **248.1 k** | 229.4 k |
+
+  Per request at c=200: context switches 0.64 → 0.09, scheduler
+  wakeups 0.38 → 0.05, `epoll_ctl` 0.97 → 0.001, CPU 27.9 → 20.3 µs
+  (the tokio peer: 19.2). p50/p99 latency improved at every
+  concurrency alongside the throughput.
+
 - **Type agreement at every value boundary became one law instead of a
   list of known pairs** — and the compiler now rejects code it used to
   compile into silent garbage.
