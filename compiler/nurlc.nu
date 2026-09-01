@@ -26439,81 +26439,94 @@
     // lo and hi are two functions rather than one returning a pair
     // because a NURL function returns one value, and a pointer out-param
     // would put the sum in memory — the one place a carry chain must not
-    // go. Both are alwaysinline over identical operands, so GVN CSEs the
-    // shared i128 computation and the pair costs one instruction. That
-    // CSE is why callers must load limbs into bindings FIRST and chain
-    // over those: called on `. p k` operands straight out of memory, the
-    // two halves reload through a possibly-aliasing pointer, GVN cannot
-    // merge them, and the chain collapses back to the tree.
+    // go. Each pair is two thin wrappers over ONE i128-returning core
+    // (`nurl_mac_w` / `nurl_addc_w` / `nurl_subb_w`): the wide expression
+    // must live behind its own call boundary, not be duplicated into the
+    // two wrappers, because the -O2 pipeline runs a function-level
+    // InstCombine BEFORE the inliner — a self-contained `_lo` body is
+    // `trunc` of a single-use i128 chain, which that pass narrows to
+    // 64-bit mul/add inside the definition, and the inliner then pastes
+    // a 64-bit lo next to a 128-bit hi that no later pass can merge
+    // (measured: 1.8× duplicated adds, +50% instructions on the p256
+    // CIOS kernel). A core whose RETURN TYPE is i128 has nothing to
+    // narrow; the inlined copies are identical wide chains, EarlyCSE
+    // merges them, and the shared add gets both a `trunc` and a `lshr`
+    // use — multi-use, so it stays wide and legalises to the one
+    // mul/add/adc chain both halves ride. That CSE is why callers must
+    // load limbs into bindings FIRST and chain over those: called on
+    // `. p k` operands straight out of memory, the two halves reload
+    // through a possibly-aliasing pointer, the inlined chains differ,
+    // and the pair collapses back to two.
     //
     // carry_in / borrow_in must be 0 or 1 (always a previous `_hi`).
     // i128 is target-independent IR, like umulhi: backends without wide
     // arithmetic legalise it (wasm32 → compiler-rt's __multi3, which
     // the bundled zig links by default).
+    ( emit `define linkonce_odr i128 @nurl_addc_w(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %aw.a = zext i64 %a to i128` )
+    ( emit `  %aw.b = zext i64 %b to i128` )
+    ( emit `  %aw.c = zext i64 %c to i128` )
+    ( emit `  %aw.s = add i128 %aw.a, %aw.b` )
+    ( emit `  %aw.t = add i128 %aw.s, %aw.c` )
+    ( emit `  ret i128 %aw.t` )
+    ( emit `}` )
     ( emit `define linkonce_odr i64 @nurl_addc_lo(i64 %a, i64 %b, i64 %c) alwaysinline {` )
     ( emit `entry:` )
-    ( emit `  %ac.a = zext i64 %a to i128` )
-    ( emit `  %ac.b = zext i64 %b to i128` )
-    ( emit `  %ac.c = zext i64 %c to i128` )
-    ( emit `  %ac.s = add i128 %ac.a, %ac.b` )
-    ( emit `  %ac.t = add i128 %ac.s, %ac.c` )
+    ( emit `  %ac.t = call i128 @nurl_addc_w(i64 %a, i64 %b, i64 %c)` )
     ( emit `  %ac.r = trunc i128 %ac.t to i64` )
     ( emit `  ret i64 %ac.r` )
     ( emit `}` )
     ( emit `define linkonce_odr i64 @nurl_addc_hi(i64 %a, i64 %b, i64 %c) alwaysinline {` )
     ( emit `entry:` )
-    ( emit `  %ah.a = zext i64 %a to i128` )
-    ( emit `  %ah.b = zext i64 %b to i128` )
-    ( emit `  %ah.c = zext i64 %c to i128` )
-    ( emit `  %ah.s = add i128 %ah.a, %ah.b` )
-    ( emit `  %ah.t = add i128 %ah.s, %ah.c` )
+    ( emit `  %ah.t = call i128 @nurl_addc_w(i64 %a, i64 %b, i64 %c)` )
     ( emit `  %ah.h = lshr i128 %ah.t, 64` )
     ( emit `  %ah.r = trunc i128 %ah.h to i64` )
     ( emit `  ret i64 %ah.r` )
     ( emit `}` )
+    ( emit `define linkonce_odr i128 @nurl_subb_w(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %sw.a = zext i64 %a to i128` )
+    ( emit `  %sw.b = zext i64 %b to i128` )
+    ( emit `  %sw.c = zext i64 %c to i128` )
+    ( emit `  %sw.d = sub i128 %sw.a, %sw.b` )
+    ( emit `  %sw.e = sub i128 %sw.d, %sw.c` )
+    ( emit `  ret i128 %sw.e` )
+    ( emit `}` )
     ( emit `define linkonce_odr i64 @nurl_subb_lo(i64 %a, i64 %b, i64 %c) alwaysinline {` )
     ( emit `entry:` )
-    ( emit `  %sc.a = zext i64 %a to i128` )
-    ( emit `  %sc.b = zext i64 %b to i128` )
-    ( emit `  %sc.c = zext i64 %c to i128` )
-    ( emit `  %sc.d = sub i128 %sc.a, %sc.b` )
-    ( emit `  %sc.e = sub i128 %sc.d, %sc.c` )
+    ( emit `  %sc.e = call i128 @nurl_subb_w(i64 %a, i64 %b, i64 %c)` )
     ( emit `  %sc.r = trunc i128 %sc.e to i64` )
     ( emit `  ret i64 %sc.r` )
     ( emit `}` )
     ( emit `define linkonce_odr i64 @nurl_subb_hi(i64 %a, i64 %b, i64 %c) alwaysinline {` )
     ( emit `entry:` )
-    ( emit `  %sh.a = zext i64 %a to i128` )
-    ( emit `  %sh.b = zext i64 %b to i128` )
-    ( emit `  %sh.c = zext i64 %c to i128` )
-    ( emit `  %sh.d = sub i128 %sh.a, %sh.b` )
-    ( emit `  %sh.e = sub i128 %sh.d, %sh.c` )
+    ( emit `  %sh.e = call i128 @nurl_subb_w(i64 %a, i64 %b, i64 %c)` )
     ( emit `  %sh.h = lshr i128 %sh.e, 64` )
     ( emit `  %sh.t = trunc i128 %sh.h to i64` )
     ( emit `  %sh.r = and i64 %sh.t, 1` )
     ( emit `  ret i64 %sh.r` )
     ( emit `}` )
+    ( emit `define linkonce_odr i128 @nurl_mac_w(i64 %a, i64 %b, i64 %c, i64 %d) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %mw.a = zext i64 %a to i128` )
+    ( emit `  %mw.b = zext i64 %b to i128` )
+    ( emit `  %mw.c = zext i64 %c to i128` )
+    ( emit `  %mw.d = zext i64 %d to i128` )
+    ( emit `  %mw.p = mul i128 %mw.a, %mw.b` )
+    ( emit `  %mw.s = add i128 %mw.p, %mw.c` )
+    ( emit `  %mw.t = add i128 %mw.s, %mw.d` )
+    ( emit `  ret i128 %mw.t` )
+    ( emit `}` )
     ( emit `define linkonce_odr i64 @nurl_mac_lo(i64 %a, i64 %b, i64 %c, i64 %d) alwaysinline {` )
     ( emit `entry:` )
-    ( emit `  %ml.a = zext i64 %a to i128` )
-    ( emit `  %ml.b = zext i64 %b to i128` )
-    ( emit `  %ml.c = zext i64 %c to i128` )
-    ( emit `  %ml.d = zext i64 %d to i128` )
-    ( emit `  %ml.p = mul i128 %ml.a, %ml.b` )
-    ( emit `  %ml.s = add i128 %ml.p, %ml.c` )
-    ( emit `  %ml.t = add i128 %ml.s, %ml.d` )
+    ( emit `  %ml.t = call i128 @nurl_mac_w(i64 %a, i64 %b, i64 %c, i64 %d)` )
     ( emit `  %ml.r = trunc i128 %ml.t to i64` )
     ( emit `  ret i64 %ml.r` )
     ( emit `}` )
     ( emit `define linkonce_odr i64 @nurl_mac_hi(i64 %a, i64 %b, i64 %c, i64 %d) alwaysinline {` )
     ( emit `entry:` )
-    ( emit `  %mv.a = zext i64 %a to i128` )
-    ( emit `  %mv.b = zext i64 %b to i128` )
-    ( emit `  %mv.c = zext i64 %c to i128` )
-    ( emit `  %mv.d = zext i64 %d to i128` )
-    ( emit `  %mv.p = mul i128 %mv.a, %mv.b` )
-    ( emit `  %mv.s = add i128 %mv.p, %mv.c` )
-    ( emit `  %mv.t = add i128 %mv.s, %mv.d` )
+    ( emit `  %mv.t = call i128 @nurl_mac_w(i64 %a, i64 %b, i64 %c, i64 %d)` )
     ( emit `  %mv.h = lshr i128 %mv.t, 64` )
     ( emit `  %mv.r = trunc i128 %mv.h to i64` )
     ( emit `  ret i64 %mv.r` )
