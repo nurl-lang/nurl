@@ -142,6 +142,56 @@ $ `stdlib/std/ecdsa_p256.nu`
     ( report_ms `p256_ecdh_keygen` . r6 ns_per_op )
     ( bench_result_free r6 )
 
+    // ── certificate signatures: what chain validation is made of ──
+    // A TLS client verifies one ECDSA signature per certificate in the
+    // chain plus the CertificateVerify, before the first byte moves —
+    // and the common Let's Encrypt ECDSA chain signs with a P-384
+    // intermediate, so both curves sit on that path. Sign is here for
+    // scale: it is the server's per-handshake cost.
+    ( nurl_print `Certificate signatures (per chain link / CertificateVerify):\n\n` )
+    : ( Vec u ) digest ( filled 32 13 )
+    : ( Vec u ) sig ( ecdsa_p256_sign scalar digest )
+    : ( Vec u ) vpk ( p256_ecdh_keygen scalar )
+    : ( Vec u ) sig_r ( bytes_slice sig 0 32 )
+    : ( Vec u ) sig_s ( bytes_slice sig 32 64 )
+
+    : ( @ v ) b_sign \ → v {
+        : ( Vec u ) sg ( ecdsa_p256_sign scalar digest )
+        ( vec_free [u] sg )
+    }
+    : BenchResult r7 ( bench_auto `ecdsa_p256_sign` b_sign )
+    ( bench_report r7 )
+    ( report_ms `ecdsa_p256_sign` . r7 ns_per_op )
+    ( bench_result_free r7 )
+
+    : ( @ v ) b_verify \ → v {
+        ? ( ecdsa_p256_verify vpk sig_r sig_s digest ) {} { ( nurl_print `VERIFY BROKEN\n` ) }
+    }
+    : BenchResult r8 ( bench_auto `ecdsa_p256_verify` b_verify )
+    ( bench_report r8 )
+    ( report_ms `ecdsa_p256_verify` . r8 ns_per_op )
+    ( bench_result_free r8 )
+
+    // P-384 has no signing path in the stdlib (nothing here holds a
+    // P-384 key); the tuple is an OpenSSL-generated known-answer from
+    // compiler/tests/ecdsa_verify_matrix.nu.
+    : ( Vec u ) pk384 ?? ( bytes_from_hex `049358c6c6edc4dc612f012a69be31b26ca69e79572075c77a628b0e2dae70a0dcd37e6d7a79d6f86953b4d517e752250c2c99a3af7cd313720ab7f0f6aaa543b8b588e68354679bb3162b8514000bc653064b5d76d19d275a9205a6d453072a95` ) { T v → v F _ → ( vec_new [u] ) }
+    : ( Vec u ) r384 ?? ( bytes_from_hex `2bd0066abf6c0d52ee63523e817c28a3add548e0d6d37009424c490bc34991fff4cc9c1fbfd08b161ae68313226d9eb4` ) { T v → v F _ → ( vec_new [u] ) }
+    : ( Vec u ) s384 ?? ( bytes_from_hex `a4ca62bdcd3ffd4ac7eecadcfca4f45d809a147f4c5dd14ecb69d53a40d0a2aded0d100f3a48eba4c2ff32ddf5745567` ) { T v → v F _ → ( vec_new [u] ) }
+    : ( Vec u ) h384 ?? ( bytes_from_hex `a0fba2e1092d35dfc5725cc634280913c6f33f1911027a92bcf5f9faf1bfa414da99e263b1195be8b3e10a4933d064a9` ) { T v → v F _ → ( vec_new [u] ) }
+
+    : ( @ v ) b_verify384 \ → v {
+        ? ( ecdsa_p384_verify pk384 r384 s384 h384 ) {} { ( nurl_print `VERIFY BROKEN\n` ) }
+    }
+    : BenchResult r9 ( bench_auto `ecdsa_p384_verify` b_verify384 )
+    ( bench_report r9 )
+    ( report_ms `ecdsa_p384_verify` . r9 ns_per_op )
+    ( bench_result_free r9 )
+
+    ( vec_free [u] digest ) ( vec_free [u] sig ) ( vec_free [u] vpk )
+    ( vec_free [u] sig_r ) ( vec_free [u] sig_s )
+    ( vec_free [u] pk384 ) ( vec_free [u] r384 ) ( vec_free [u] s384 ) ( vec_free [u] h384 )
+
     ( vec_free [u] scalar )
     ( vec_free [u] key32 )
     ( vec_free [u] key16 )

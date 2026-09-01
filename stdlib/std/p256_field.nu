@@ -863,7 +863,7 @@ $ `stdlib/core/vec.nu`
 }
 
 // Branch-free "all four limbs zero" mask: −1 when v == 0, else 0.
-@ __p256_zmask ( Vec i ) v → i {
+@ _p256_zmask ( Vec i ) v → i {
     : *i vp ( vec_data [i] v )
     : i zz | | | . vp 0 . vp 1 | . vp 2 . vp 3 0
     // (zz | −zz) has its top bit set exactly when zz ≠ 0.
@@ -889,7 +889,7 @@ $ `stdlib/core/vec.nu`
     : ( Vec i ) x3 . scr g4
     : ( Vec i ) vv . scr g5
     : ( Vec i ) t . scr gp
-    : i inf_mask ( __p256_zmask Z1 )
+    : i inf_mask ( _p256_zmask Z1 )
     // zz = Z1²; u2 = x2·zz; s2 = y2·Z1·zz
     ( _p256_mul_d scr z3 Z1 Z1 )
     ( _p256_mul_d scr hreg x2 z3 )

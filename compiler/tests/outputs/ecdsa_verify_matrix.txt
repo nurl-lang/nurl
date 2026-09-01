@@ -1,0 +1,19 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+p256+sha256 valid: PASS
+p256+sha384 valid (truncated digest): PASS
+p384+sha384 valid: PASS
+p384+sha256 valid (padded digest): PASS
+p256+sha1 valid: PASS
+p256 wrong digest rejected: PASS
+p256 swapped r/s rejected: PASS
+p256 foreign key rejected: PASS
+p384 wrong digest rejected: PASS
+p384 swapped r/s rejected: PASS
+p384 foreign key rejected: PASS
+p256 r=0 rejected: PASS
+p256 s=0 rejected: PASS
+p256 off-curve key rejected: PASS
+ecdsa-verify-matrix: all checks PASS

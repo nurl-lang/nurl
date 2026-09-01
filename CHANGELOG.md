@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ECDSA verification truncates a too-long digest instead of reducing it
+  as a full-width integer.** FIPS 186-5 §6.4.1 defines z as the LEFTMOST
+  qlen bits of the digest; the old BigInt path computed
+  `z = int(hash) mod n` over the whole digest, a different value whenever
+  the digest is longer than the curve — so every P-256 + SHA-384
+  signature the rest of the world accepts was rejected here (and an
+  off-standard value would have been accepted in its place). Found while
+  rebuilding the verify path below; pinned against OpenSSL across both
+  curves and five digest widths (SHA-1/256/384 × P-256/P-384) in
+  `compiler/tests/ecdsa_verify_matrix.nu`.
+
 - **`stdlib/ext/json.nu` passes the full JSONTestSuite — 283/283 must-accept /
   must-reject verdicts correct.** Six `n_` documents parsed clean before, from
   two roots:
@@ -45,6 +56,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Changed
+
+- **ECDSA verification left the BigInt field: P-256 verify is 93× faster
+  (37 ms → 0.4 ms), P-384 50× (85 ms → 1.7 ms).** Verification is the
+  public-data half of ECDSA — one per certificate in a TLS chain, one per
+  JWT-authenticated request — and it ran on the generic BigInt Jacobian
+  ladder: a branchless always-add walk (256 doublings + 256 additions +
+  256 clones per scalar, twice per verify) over a field whose every
+  multiply ends in schoolbook trial division. Constant-time discipline it
+  never needed, at a cost the callers felt: ~111 ms of CPU per TLS
+  handshake against a typical ECDSA chain, a ~27 req/s/core ceiling on
+  ES256 bearer auth.
+
+  Both curves now compute u1·G + u2·Q on fixed-limb Montgomery fields:
+
+  * **P-256** reuses the secret path's KAT-tested machinery end to end —
+    the Lim–Lee comb for u1·G, the 4-bit window ladder for u2·Q, the
+    fixed-width GF(n) for u1/u2, joined by ONE complete (RCB) projective
+    addition. New code is ~90 lines of glue.
+  * **P-384** gets `stdlib/std/p384_field.nu`: a generic 6-limb
+    Montgomery CIOS engine (`nurl_mac` carry chains, looped rather than
+    unrolled — verification is not the steady-state path), instantiated
+    for both GF(p) and GF(n), with the same RCB complete-addition
+    register schedule and a Straus double-scalar walk. The Let's Encrypt
+    ECDSA chain signs with a P-384 intermediate, so this curve sits on
+    the default web-PKI path.
+
+  The complete formula is load-bearing for correctness, not timing: an
+  adversarially crafted (r, s, Q) can steer the two halves of the sum
+  into any relation — equal, negated, either at infinity — exactly where
+  the classic Jacobian addition degenerates. The BigInt Jacobian ladder
+  moved into `compiler/tests/p256_ct_field.nu`, which used it as its
+  differential oracle and still does; `bench/crypto_hotpath.nu` now
+  reports sign/verify per curve next to the AEAD and key-exchange rows,
+  since chain validation is what a short-lived connection is made of.
 
 - **The Linux I/O reactor became a netpoller — and the HTTP facade now
   outruns its tokio/hyper peer at every measured concurrency.**
