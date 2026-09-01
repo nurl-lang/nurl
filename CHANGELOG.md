@@ -8,6 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The netpoller's overload surplus now spills into a fair global FIFO,
+  and workers drain the epoll instance on a fixed cadence — the p99 an
+  HTTP service pays under saturation drops by a third (TLS: 40%) at no
+  throughput cost.** Under load the poller handed every ready fiber to
+  its *own* local run queue. Work stealing never fires while the thief's
+  queue is non-empty, so at saturation a 100-event `epoll_wait` burst
+  drained at one core's speed and the fibers at its back waited multiple
+  milliseconds — measured directly (runtime instrumentation, one 6 s
+  c=200 run: ~25 000 of 1.4 M dispatches waited >2 ms in-queue while
+  the median in-queue wait was ~200 µs). Three coordinated changes, one policy (the Go
+  scheduler's `globrunqget` shape):
+
+  * `nurl__np_hand_out` keeps only the oldest `NP_LOCAL_SHARE` (8)
+    surplus fibers on the polling worker — small batches, the c≤50 case,
+    never leave the warm core — and appends the rest to the global queue
+    as one pre-linked chain in event order, with wakes batched under a
+    single `idle_lock` acquisition (`nurl__wake_n`).
+  * Workers take *fair batches* from the global queue —
+    `len / workers + 1`, capped at 16, one lock acquisition
+    (`nurl__rq_take_global_batch`) — instead of popping one fiber per
+    global-lock round trip.
+  * Every 16th dispatch runs a zero-timeout poll pass even while queued
+    work exists. Without it a saturated pool never polls until the
+    queues run dry, then stalls on one huge batch — the feast-famine
+    cycle was visible as 13× fewer `epoll_wait` calls and +0.7 ms p99.
+
+  Both extremes were measured and lost: everything-global with a wake
+  apiece is the stampede the first netpoller cut already hit (c=50
+  −15% throughput), everything-local is the tail above. Local 12-core
+  medians of 3 (`oha -z 5s`, vs the Rust hyper/tokio peer): plaintext
+  c=200 p99 3.09 ms → 2.17 ms and p99.9 5.16 → 3.85 at unchanged
+  throughput — NURL now leads req/s, p50, p95 *and* p99 at every
+  measured concurrency; TLS c=200 req/s +7.5%, p99 5.21 → 3.12 ms,
+  p99.9 9.09 → 5.37 ms. Non-Linux keeps the poll(2) reactor; it gains
+  the batched global take unchanged.
+
 ### Fixed
 
 - **ECDSA verification truncates a too-long digest instead of reducing it
