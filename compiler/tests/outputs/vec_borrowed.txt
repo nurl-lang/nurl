@@ -1,0 +1,34 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+view_len_1000=T
+view_cap_is_len=T
+view_data_is_source=T
+view_eq_source=T
+view_get_7=T
+set_len_grow_refused=T
+set_len_shrink_ok=T
+view_len_500=T
+view_len_still_500=T
+source_intact_after_view_free=T
+cow_len_1001=T
+cow_detached=T
+cow_kept_prefix=T
+cow_source_len_1000=T
+clear_extend_len_2=T
+clear_extend_detached=T
+clear_extend_source_byte0_still_0=T
+shrink_noop_on_view=T
+shrink_after_detach_cap_len=T
+empty_view_len_0=T
+empty_view_grows=T
+into_len_1000=T
+into_data_is_source=T
+into_again_len_10=T
+into_empty_len_0=T
+borrowed_body_is_source=T
+borrowed_wire_eq_owned=T
+wire_len_gt_body=T
+replaced_body_owned=T
+source_intact_after_response_free=T
