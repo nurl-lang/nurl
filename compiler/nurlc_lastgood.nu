@@ -1108,6 +1108,27 @@
 // here instead, and replayed against the capture list once the body is
 // done and the depth is back to zero.
 : ~ s g_closure_consumed ``
+
+// Names of `:`-bound closures in the CURRENT function whose capture list
+// is non-empty — the allocation-free pre-filter in front of the
+// `<name>__closure_caps` symbol lookup, which gen_ident would otherwise
+// perform (two string allocations) for every identifier in the program.
+// Cleared per function by bck_fn_begin and saved/restored across a
+// closure body, which gets its own bck_fn_begin: without the restore the
+// enclosing function's list stayed empty after any later closure literal,
+// and every invocation past that point went unchecked again.
+: ~ s g_bck_cap_names ``
+
+// `<handle> <closure>` pairs for the current function: which closure
+// binding made a captured handle reachable at a use site. The reported
+// line is the INVOCATION (`( f )`), which does not mention the handle at
+// all, so without this the error named a binding the reader cannot see
+// on the line it points at. Same lifetime discipline as g_bck_cap_names
+// — cleared per function, saved/restored across a closure body — so it
+// can never attribute a closure from another function. A deferred walk
+// (parked to the end of the module) finds it empty and falls back to the
+// unattributed wording, which is the safe direction.
+: ~ s g_bck_cap_via ``
 : ~ i g_closure_defs 0  // Deferred closure function definitions
 : ~ i g_closure_types 0  // Deferred closure type definitions
 : ~ i g_type_count 0  // Count of closure types stored
@@ -3000,6 +3021,33 @@
                     `' — an enum is a closed set of named variants, and no number converts into one implicitly (the value could name no variant at all). Return a variant by name ('^ Red'), or declare a numeric return type.` ) ) } }
             {} }
         {}
+        // Total-agreement backstop — the boundary law stated ONCE for
+        // every pair the branches above did not coerce, wrap, or
+        // reject: the value that reaches the `ret` must lower to the
+        // declared return type's exact LLVM spelling (pointer beside
+        // pointer excepted — opaque pointers are one LLVM type).
+        // Every shape that used to fall through here — a closure out
+        // of an integer function (`^ f` where f is a closure-typed
+        // PARAMETER: the c-style-call typo's landing spot), an option
+        // out of a pointer or struct function, an integer out of an
+        // option function — emitted a `ret` only the LLVM verifier
+        // rejected, three build stages later, with a .ll line number
+        // and no source location. A future shape that matches no
+        // pairwise branch lands here instead of minting a new hole.
+        : s __bk_lt ( nurl_llty lt )
+        : s __bk_rt ( nurl_llty fn_rt )
+        ? & ! ( seq ( __strip_spaces __bk_lt ) ( __strip_spaces __bk_rt ) )
+        ! & ( is_ptr_ty __bk_lt ) ( is_ptr_ty __bk_rt )
+        {  // A closure returned where its own result type is declared is
+            // almost always a call that lost its parens — say so.
+            : b __bk_cl & == ( nurl_str_get __bk_lt 0 ) 123 != -1 ( nurl_str_find __bk_lt `(` )
+            : s __bk_cure ? __bk_cl
+            `'. If you meant to CALL the closure, calls are parenthesised prefix form: '^ ( f args )' — 'f( args )' names the closure itself and hands it back uncalled. If you meant to return the closure, declare the matching '( @ … )' return type.`
+            `'. NURL has no implicit conversions between these shapes — a closure, option/result, slice, struct and scalar are each their own type, and emitting the 'ret' anyway would be invalid IR or a reinterpreted bit pattern. Return a value of the declared type, or fix the declaration.`
+            ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
+            __bk_cure ) ) }
+        {}
     }
     {}
     ( nurl_set_last_type lt )
@@ -4618,6 +4666,116 @@
         ( nurl_str_cat4 ` argument(s) but the declared closure/function type takes ` ( nurl_str_int want )
         ` — the emitted call would leave parameter registers unset (or drop values); the callee reads garbage. Match the declaration.` `` ) ) ) }
     {}
+}
+
+// The parameter LLVM spellings inside a closure / fn-ptr type's first
+// top-level `(…)`, `;`-joined, nesting-aware (an aggregate parameter
+// carries commas and braces of its own). `skip_first` drops the first
+// slot — a closure's environment / a dyn method's erased self — so the
+// result lines up with the USER arguments. Returns "" when the type has
+// no parameter list to read.
+@ __fnty_param_lltys s t b skip_first → s {
+    : i n ( nurl_str_len t )
+    : ~ i p 0
+    ~ & < p n != ( nurl_str_get t p ) 40 { = p + p 1 }
+    ? >= p n { ^ ( nurl_str_cat `` `` ) } {}
+    = p + p 1
+    : ~ i depth 0
+    : ~ i seg_start p
+    : ~ s out ``
+    : ~ b first T
+    ~ < p n {
+        : i c ( nurl_str_get t p )
+        ? & == c 41 == depth 0
+        {  // closing paren of the parameter list
+            ? & ! & first skip_first > p seg_start {
+                : s seg ( __strip_spaces ( nurl_str_slice t seg_start - p seg_start ) )
+                ? != 0 ( nurl_str_len seg ) {
+                    = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat seg `` ) ( nurl_str_cat3 out `;` seg )
+                } {}
+            } {}
+            ^ out
+        }
+        {}
+        ? | == c 40 == c 123 { = depth + depth 1 }
+        { ? | == c 41 == c 125 { = depth - depth 1 }
+            { ? & == c 44 == depth 0
+                { ? & first skip_first {} {
+                        : s seg ( __strip_spaces ( nurl_str_slice t seg_start - p seg_start ) )
+                        ? != 0 ( nurl_str_len seg ) {
+                            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat seg `` ) ( nurl_str_cat3 out `;` seg )
+                        } {}
+                    }
+                    = first F
+                    = seg_start + p 1 } {} } }
+        = p + p 1
+    }
+    out
+}
+
+// Die when an assembled call argstr (`<llty> <val>` pairs joined by
+// top-level `, `) disagrees in TYPE with a `;`-joined roster of declared
+// parameter LLVM spellings. This is the type companion of
+// __closure_arity_check, shared by every call path that assembles its
+// arguments before it knows the callee's `define` — closure and fn-ptr
+// invocations, dyn-trait dispatch, and static trait-method dispatch.
+// Under opaque pointers the emitted call carries its OWN signature, so
+// clang assembles any mismatch and the callee reads reinterpreted bits
+// — the same silent-garbage class the direct-call battery rejects.
+// Pointer beside pointer is exempt (one LLVM type); a count mismatch is
+// left to the arity check; an empty roster means "not recorded" and
+// checks nothing.
+@ __callargs_agree i lex s call_name s argstr s roster → v {
+    ? | == 0 ( nurl_str_len roster ) == 0 ( nurl_str_len argstr ) { ^ } {}
+    : i n ( nurl_str_len argstr )
+    : ~ i p 0
+    : ~ i depth 0
+    : ~ i seg_start 0
+    : ~ i idx 0
+    : ~ s want_rest ( nurl_str_cat roster `` )
+    ~ <= p n {
+        : i c ? == p n 44 ( nurl_str_get argstr p )
+        ? & == c 44 == depth 0
+        { : s seg ( nurl_str_slice argstr seg_start - p seg_start )
+            // The value is the last space-separated token; the type is
+            // everything before it (aggregate spellings contain spaces).
+            : ~ i sp -1
+            : ~ i k 0
+            : i sl ( nurl_str_len seg )
+            ~ < k sl { ? == ( nurl_str_get seg k ) 32 { = sp k } {} = k + k 1 }
+            : s want_raw ( seplist_first want_rest )
+            = want_rest ( __seplist_rest want_rest )
+            ? & > sp 0 != 0 ( nurl_str_len want_raw ) {
+                : s got ( __strip_spaces ( nurl_str_slice seg 0 sp ) )
+                : s want ( __strip_spaces want_raw )
+                ? & & != 0 ( nurl_str_len got ) ! ( seq got want )
+                ! & ( is_ptr_ty got ) ( is_ptr_ty want )
+                { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+                    `argument ` ( nurl_str_int + idx 1 ) ` to '` call_name )
+                    ( nurl_str_cat4 `' has type '` ( llvm_to_nurl got ) `' but the invoked function type declares '` ( nurl_str_cat ( llvm_to_nurl want ) `' — an indirect or dispatched call carries its own signature under opaque pointers, so the mismatch assembles and the callee reads reinterpreted bits: silent garbage, not even a crash. Pass a value of the declared type (convert explicitly with '# T expr' where a conversion is meant), or fix the declaration.` ) ) ) ) }
+                {}
+            } {}
+            = idx + idx 1
+            = seg_start + p 1
+            // skip the space after a separating comma
+            ? & < seg_start n == ( nurl_str_get argstr seg_start ) 32 { = seg_start + seg_start 1 } {}
+        }
+        { ? | == c 40 == c 123 { = depth + depth 1 }
+            { ? | == c 41 == c 125 { = depth - depth 1 } {} } }
+        = p + p 1
+    }
+}
+
+// Everything in a `;`-separated list after its first element ("" when
+// none) — the consuming cursor for seplist_first, fresh-owned like it.
+@ __seplist_rest s str → s {
+    : i n ( nurl_str_len str )
+    : ~ i i 0
+    ~ < i n {
+        ? == ( nurl_str_get str i ) 59 { ^ ( nurl_str_slice str + i 1 - n + i 1 ) } {}
+        = i + i 1
+    }
+    ^ ( nurl_str_cat `` `` )
 }
 
 // Call a closure function pointer (closure struct with function + environment)
@@ -7347,6 +7505,18 @@
         }
         : ~ s av ( gen_operand lex syms cg )
         : ~ s at ( nurl_get_last_type )
+        // A VOID argument has nothing to pass. The shapes that
+        // produce one — a call returning 'v', a '?' conditional
+        // whose arms disagree on type (gen_cond degrades it to
+        // void), a statement-form '??' — are all caught at the
+        // return boundary, but a call argument used to slide
+        // through and emit `call @f(void undef, …)`: invalid IR
+        // only the LLVM verifier saw. Same law, stated here.
+        ? ( seq at `void` )
+        { ( die lex ( nurl_str_cat
+            ( nurl_str_cat4 `argument ` ( nurl_str_int + slot 1 ) ` to '` fname )
+            `' has no value — the expression produces nothing (a call returning 'v', or a '?' conditional whose arms have different types, which degrades to no value). Pass an expression of the parameter's type. If this argument LOOKS like a value, a prefix operator just before it may have one operand too many — the surplus spills into the next argument slot (fixed arity, no closing bracket).` ) ) }
+        {}
         // The same per-argument type law as gen_call's positional path.
         // The kwargs reorder previously bypassed EVERY argument check —
         // `( scale x: 1.5 k: 2 )` slid a float into an 'i' parameter
@@ -7551,6 +7721,43 @@
     ^ ! ( seq ( __strip_spaces at ) ( __strip_spaces pt ) )
 }
 
+// Does `ll` contain `%name` as a complete token — `%A` in
+// `{ { i1, %A } (i8*, i64)*, i8* }` yes, `%App` no. Used to detect an
+// UNSUBSTITUTED tparam artifact in a parsed parameter spelling: an
+// unknown single-letter type name parses to a `%`-named aggregate, and
+// comparing an argument against that template is a false clash.
+@ __has_pct_token s ll s name → b {
+    : i n ( nurl_str_len ll )
+    : i m ( nurl_str_len name )
+    ? == m 0 { ^ F } {}
+    : ~ i p 0
+    ~ < p n {
+        ? == ( nurl_str_get ll p ) 37 {
+            : ~ i k 0
+            : ~ b hit T
+            ~ & < k m hit {
+                ? != ( nurl_str_get ll + p + k 1 ) ( nurl_str_get name k )
+                { = hit F } {}
+                = k + k 1
+            }
+            ? hit {
+                : i after + p + m 1
+                : ~ b endok T
+                ? < after n {
+                    : i ac ( nurl_str_get ll after )
+                    // token continues => not a whole-token match
+                    ? | | & >= ac 48 <= ac 57 & >= ac 65 <= ac 90
+                    | & >= ac 97 <= ac 122 == ac 95
+                    { = endok F } {}
+                } {}
+                ? endok { ^ T } {}
+            } {}
+        } {}
+        = p + p 1
+    }
+    F
+}
+
 // The per-argument never-legal-clash battery, shared by gen_call's
 // positional path and gen_call_kwargs (which previously bypassed every
 // one of these). `at` is the argument's type as gen_expr left it,
@@ -7597,11 +7804,31 @@
             `' — pointer-vs-scalar type mismatch; NURL has no implicit conversion between a pointer and an integer/float (convert explicitly with '# T expr' if this is intended)` ) ) }
         {} }
     {}
-    ? ( __arg_closure_mismatch ( nurl_llty at ) pllvm )
+    ? ( __arg_closure_mismatch ( nurl_llty at ) ( nurl_llty pllvm ) )
     { ( die lex ( nurl_str_cat3
         ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
         ( nurl_str_cat4 `': closure of LLVM type '` at `' passed where the parameter declares '` pllvm )
         `' — the closure's signature differs from the declared '(@ …)' parameter type. The callee invokes the closure with the DECLARED signature, so every argument and the return value would be reinterpreted bit patterns. Make the closure's parameter/return types match the declaration, or fix the declaration.` ) ) }
+    {}
+    // ANONYMOUS-aggregate agreement — the call-boundary dual of
+    // ret_ty_agree's total-agreement backstop. An option/result/slice/
+    // closure lowers to a `{…}` aggregate, and NOTHING converts into or
+    // out of one implicitly — but every pairwise check above asks about
+    // pointers, named types or two closures, so `{ i1, i64 }` beside a
+    // plain `i64` matched none of them and the call was emitted with the
+    // argument's own type: clang assembles it (the call carries its own
+    // function type under opaque pointers) and the callee reads
+    // reinterpreted bytes. One rule closes every such pair: if either
+    // side spells an anonymous aggregate, the spellings must agree.
+    : s __aa_at ( nurl_llty at )
+    : s __aa_pt ( nurl_llty pllvm )
+    ? & & != 0 ( nurl_str_len __aa_at ) != 0 ( nurl_str_len __aa_pt )
+    & | == ( nurl_str_get __aa_at 0 ) 123 == ( nurl_str_get __aa_pt 0 ) 123
+    ! ( seq ( __strip_spaces __aa_at ) ( __strip_spaces __aa_pt ) )
+    { ( die lex ( nurl_str_cat3
+        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
+        `' — an option/result/slice/closure aggregate is exactly its own type: nothing converts into or out of it implicitly, and emitting the call anyway would hand the callee reinterpreted bytes. Unwrap the value first ('?? v { … }', or propagate a result with the propagation suffix), or fix the declaration.` ) ) }
     {}
 }
 
@@ -8134,6 +8361,18 @@
             = av ( gen_operand lex syms cg )
             ( nurl_sym_def syms `__in_call_arg__` `` )
             = at ( nurl_get_last_type )
+            // A VOID argument has nothing to pass. The shapes that
+            // produce one — a call returning 'v', a '?' conditional
+            // whose arms disagree on type (gen_cond degrades it to
+            // void), a statement-form '??' — are all caught at the
+            // return boundary, but a call argument used to slide
+            // through and emit `call @f(void undef, …)`: invalid IR
+            // only the LLVM verifier saw. Same law, stated here.
+            ? ( seq at `void` )
+            { ( die lex ( nurl_str_cat
+                ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                `' has no value — the expression produces nothing (a call returning 'v', or a '?' conditional whose arms have different types, which degrades to no value). Pass an expression of the parameter's type. If this argument LOOKS like a value, a prefix operator just before it may have one operand too many — the surplus spills into the next argument slot (fixed arity, no closing bracket).` ) ) }
+            {}
             ? != g_strict_borrowck 0
             { : ~ s __al_rest ( nurl_str_cat g_arg_ident_log `` )
                 ~ != 0 ( nurl_str_len __al_rest ) {
@@ -8232,6 +8471,21 @@
                 { ( __ptr_kill_pending bck_arg_val bck_arg_line
                     call_name fname arg_idx ) }
                 {} } }
+        {}
+        // Borrow checker: a closure binding handed to a parameter the
+        // callee INVOKES is invoked here, so this call reads every handle
+        // the closure captured — `( each cb )` after freeing what `cb`
+        // captured is the same use-after-free as calling `cb` inline.
+        //
+        // Invoke-only is the discriminator, not "the argument is a
+        // closure": a merely-loaded closure value is NOT a use of its
+        // captures. `( nurl_free # s # *u cb 1 )` reclaims the env of a
+        // closure whose fibers have all been drained (docs/MEMORY.md
+        // §7.4) — reading it as a use rejected async_mn/async_sleep, two
+        // programs that are correct.
+        ? & ( is_ident_tok bck_arg_tt )
+        ( str_contains_word ( nurl_sym_get g_fn_invoke_only call_name ) ( nurl_str_int arg_idx ) )
+        { ( bck_note_closure_caps syms bck_arg_val ) }
         {}
         : s __cle ( nurl_sym_get syms `__last_closure_env__` )
         ? & != 0 ( nurl_str_len __cle )
@@ -8646,14 +8900,40 @@
                             = av __nv = at __want
                         } {
                             ? & > __ww 0 __hp {
-                                // pointer arg to an integer parameter: ptrtoint
-                                : s __nv ( nurl_cg_reg cg )
-                                ( nurl_print `  ` ) ( nurl_print __nv )
-                                ( nurl_print ` = ptrtoint ` ) ( nurl_print ( nurl_llty at ) ) ( nurl_print ` ` ) ( nurl_print av )
-                                ( nurl_print ` to ` ) ( nurl_print ( nurl_llty __want ) ) ( nurl_print `\n` )
-                                = av __nv = at __want
+                                // pointer arg to an INTEGER parameter. This was a
+                                // silent ptrtoint: `( labs \`hello\` )` compiled
+                                // clean and the callee read the string's ADDRESS
+                                // as its number — the same silent-garbage class
+                                // as `call i64 @f(double …)`. Passing an address
+                                // where C reads a number is almost never what the
+                                // call means, and when it is (uintptr_t), the
+                                // language already has the honest spelling.
+                                ( die lex ( nurl_str_cat3
+                                ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                                ( nurl_str_cat4 `' has pointer type '` ( llvm_to_nurl ( nurl_llty at ) ) `' but the FFI parameter is declared '` ( llvm_to_nurl ( nurl_llty __want ) ) )
+                                `' (an integer) — the callee would read the ADDRESS as its number: silent garbage, not even a crash. If the C function takes a pointer, declare the parameter with a pointer type ('s', '*u', …); if it really takes the address as an integer (uintptr_t), convert intentionally with '# i x'.` ) )
                             } {}
                         }
+                        // Total-agreement backstop, the FFI dual of
+                        // ret_ty_agree's: whatever the scalar agreement and
+                        // the inttoptr bridge above did not coerce or reject
+                        // must now match the `declare` exactly (pointer
+                        // beside pointer excepted — opaque pointers are one
+                        // LLVM type). Before this, an option/result/closure
+                        // aggregate slid into a scalar C parameter as
+                        // `call i64 @f({ i1, i64 } %v)` — textually valid
+                        // under opaque pointers, assembled by clang, and the
+                        // callee read whichever bytes the ABI happened to
+                        // put in the register.
+                        : s __bk_at ( nurl_llty at )
+                        : s __bk_wt ( nurl_llty __want )
+                        ? & ! ( seq ( __strip_spaces __bk_at ) ( __strip_spaces __bk_wt ) )
+                        ! & ( is_ptr_ty __bk_at ) ( is_ptr_ty __bk_wt )
+                        { ( die lex ( nurl_str_cat3
+                            ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                            ( nurl_str_cat4 `' has type '` ( llvm_to_nurl __bk_at ) `' but the FFI parameter is declared '` ( llvm_to_nurl __bk_wt ) )
+                            `' — an FFI call crosses the C ABI with exactly the declared types, and NURL has no implicit conversions: the emitted call would hand the callee reinterpreted bytes (an option/result/closure aggregate has no C scalar shape at all). Unwrap or convert the value to the declared type, or fix the FFI declaration.` ) ) }
+                        {}
                     }
                 } {}
             } {}
@@ -8743,6 +9023,36 @@
                         ? != 0 ( nurl_str_len __nsc ) {
                             = at ( str_first_word __nsc )
                             = av ( str_skip_word __nsc )
+                        } {}
+                        // A GENERIC callee (call_name carries the mangled
+                        // instantiation) skipped the per-argument battery,
+                        // which the direct-call path guards with
+                        // call_name == fname — so `( pick [i] o 7 )` with
+                        // o an option slid `{ i1, i64 }` into the i64
+                        // parameter of pick__i64. After the tparam
+                        // substitution above the spelling is concrete, so
+                        // the same battery applies verbatim.
+                        ? & & ! ( seq call_name fname ) __io_sub_ok
+                        != 0 ( nurl_str_len __psrc ) {
+                            : i __gplx ( nurl_lex_new __psrc `<param>` )
+                            : s __gpll ( parse_type __gplx )
+                            ( nurl_lex_free __gplx )
+                            // Sigil-attached tparams (`?A`, `[]A`, `( @ A B )`)
+                            // survive the word-level substitution above and
+                            // parse to a `%A` artifact — comparing against
+                            // that is a false clash, not a check. Skip when
+                            // any of the callee's tparams shows up as a
+                            // `%`-named token in the parsed spelling.
+                            : ~ b __gp_ok T
+                            : ~ s __gtpr ( nurl_sym_get2 g_generic_syms fname `__tparams` )
+                            ~ != 0 ( nurl_str_len __gtpr ) {
+                                : s __gtp ( str_first_word __gtpr )
+                                = __gtpr ( str_skip_word __gtpr )
+                                ? ( __has_pct_token __gpll __gtp ) { = __gp_ok F } {}
+                            }
+                            ? & __gp_ok != 0 ( nurl_str_len __gpll )
+                            { ( __arg_param_checks lex fname arg_idx at __gpll ) }
+                            {}
                         } {}
                     }
                 } {}
@@ -9152,6 +9462,7 @@
             // method ASSEMBLED — the indirect call carries its own
             // signature — and the thunk read an unset register.
             ( __closure_arity_check lex fname __fnty T - arg_idx 1 )
+            ( __callargs_agree lex fname rest_argstr ( __fnty_param_lltys __fnty T ) )
             : s __fnr ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __fnr ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print __fp ) ( nurl_print ` to ` ) ( nurl_print __fnty ) ( nurl_print `\n` )
             : s __cargs ? == 0 ( nurl_str_len rest_argstr ) ( nurl_str_cat `i8* ` __data ) ( nurl_str_cat4 `i8* ` __data `, ` rest_argstr )
@@ -9231,6 +9542,11 @@
             `call to method '` fname `' for receiver type '` ( llvm_to_nurl first_arg_type ) )
             ( nurl_str_cat4 `' passes ` ( nurl_str_int arg_idx ) ` argument(s) but the impl declares ` ( nurl_str_cat ( nurl_str_int ( nurl_str_to_int __im_ar ) ) ` (receiver included) — match the declaration.` ) ) ) ) }
         {}
+        // Type agreement against the impl's recorded parameter roster —
+        // `( show p o )` with o an option against `show P p i x` used to
+        // emit `call @show__P(%P …, { i1, i64 } …)`: assembled, garbage.
+        ( __callargs_agree lex fname argstr
+        ( nurl_sym_get g_impl_ret_syms ( nurl_str_cat impl_key `__ptypes` ) ) )
         : s impl_name ( nurl_str_cat fname ( nurl_str_cat `__` impl_mangle_key ) )
         // Publish the callee's return side-channels (ownership, borrow, signedness,
         // try-propagation types) exactly like the Regular-call path below — the
@@ -9280,6 +9596,12 @@
 
     ? is_stored_closure
     {
+        // Borrow checker: an invocation reads the closure's captured
+        // handles. The callee position never reaches gen_ident (that is
+        // what keeps an invoke-only parameter invoke-only), so this is the
+        // only site that sees `( f )` — and it is the shape the whole
+        // use-after-free family is written in.
+        ( bck_note_closure_caps syms call_name )
         // This is a stored closure variable - load and call
         : s loaded_closure ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print loaded_closure )
@@ -9292,11 +9614,13 @@
         {
             // Closure struct - extract function pointer and call with environment
             ( __closure_arity_check lex call_name call_type_ll T arg_idx )
+            ( __callargs_agree lex call_name argstr ( __fnty_param_lltys call_type_ll T ) )
             = final_result ( call_closure_function loaded_closure call_type argstr cg )
         }
         {
             // Simple function pointer - call directly
             ( __closure_arity_check lex call_name call_type_ll F arg_idx )
+            ( __callargs_agree lex call_name argstr ( __fnty_param_lltys call_type_ll F ) )
             : s fn_ret_type ( extract_fn_ptr_return_type rlt )
             : s res ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print res )
@@ -9316,10 +9640,12 @@
             ? ( str_contains call_type `{` )
             {  // Closure struct parameter
                 ( __closure_arity_check lex call_name call_type_ll T arg_idx )
+                ( __callargs_agree lex call_name argstr ( __fnty_param_lltys call_type_ll T ) )
                 = final_result ( call_closure_function var_llvm_val call_type argstr cg )
             }
             {  // Simple function pointer parameter - call directly
                 ( __closure_arity_check lex call_name call_type_ll F arg_idx )
+                ( __callargs_agree lex call_name argstr ( __fnty_param_lltys call_type_ll F ) )
                 : s fn_return_type ( extract_fn_ptr_return_type rlt )
                 : s res ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print res )
@@ -13568,6 +13894,8 @@
         ( nurl_sym_set g_bck `pmoves` `` )
         ( nurl_sym_set g_bck `pmaybes` `` )
         = g_bck_depth 0
+        = g_bck_cap_names ``
+        = g_bck_cap_via ``
     } {}
 }
 
@@ -13579,6 +13907,82 @@
         ( nurl_sym_set g_bck `reads`
         ? == 0 ( nurl_str_len cur ) ( nurl_str_cat name `` ) ( nurl_str_cat3 cur ` ` name ) )
     } {}
+}
+
+// The closure binding through which `w` became reachable at a use site,
+// or "" when nothing recorded one. A linear pair-scan: the list holds one
+// entry per captured handle in one function, so it is a handful of words.
+@ bck_cap_via_of s w → s {
+    : ~ s rest ( nurl_str_cat g_bck_cap_via `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s k ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s cl ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( seq k w ) { ^ ( nurl_str_cat cl `` ) } {}
+    }
+    ^ ( nurl_str_cat `` `` )
+}
+
+// A closure binding holds a COPY of every heap handle its body captured,
+// so reading or invoking that binding READS those handles. Without this,
+// freeing a captured Vec / String / HashMap and then calling the closure
+// compiled clean and ran on freed memory — the same use-after-move the
+// checker rejects on the spot when the read is written directly.
+//
+// The hole was structural, not a missing case: a closure body is walked
+// as its OWN function, where a capture is never seeded and therefore
+// unreportable, and the enclosing function's walk never saw the body's
+// reads at all. Nothing connected the two, so every shape — read, mutate,
+// invoke through a helper, free through a `sink` parameter — was blind.
+//
+// The capture list is published by gen_closure_expr and recorded on the
+// binding by gen_let (`<name>__closure_caps`), already expanded through
+// captured closures so a closure holding a closure names the inner one's
+// handles too. Expanding at RECORD time (rather than in the analyze walk)
+// keeps the whole state machine, the diagnostic and the loop fixpoint
+// untouched: the invocation simply reads what the closure can reach.
+@ bck_note_closure_caps i syms s name → v {
+    ? == g_borrowck 0 { ^ v } {}
+    ? ! ( str_contains_word g_bck_cap_names name ) { ^ v } {}
+    // Walk a COPY: `caps` borrows the symbol-table entry and the cursor
+    // below reassigns itself with owned slices of it (bck_alias_from_phi
+    // idiom).
+    : ~ s rest ( nurl_str_cat ( nurl_sym_get2 syms name `__closure_caps` ) `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ( bck_note_read w )
+        // Bound, not inline: a freshly allocated result handed straight
+        // to a call is not collected as an owned argument temp, and this
+        // runs once per captured handle per invocation.
+        : s seen ( bck_cap_via_of w )
+        ? == 0 ( nurl_str_len seen )
+        { = g_bck_cap_via ? == 0 ( nurl_str_len g_bck_cap_via )
+            ( nurl_str_cat3 w ` ` name )
+            ( nurl_str_cat3 g_bck_cap_via ` ` ( nurl_str_cat3 w ` ` name ) ) }
+        {}
+    }
+}
+
+// The dual: `name` is being (re)bound to something that is NOT a
+// capturing closure, so whatever it used to hold is no longer reachable
+// through it. Shadowing the entry with an empty one is what stops a
+// stale list from turning a correct later use into a false positive.
+// Guarded by the pre-filter, so an ordinary binding costs one word scan
+// and no allocation.
+@ bck_clear_cap_name i syms s name → v {
+    ? ! ( str_contains_word g_bck_cap_names name ) { ^ v } {}
+    ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) `` )
+}
+
+// Remember that `name` is a closure binding carrying captures, for the
+// pre-filter above. Idempotent — a rebound name is already present.
+@ bck_add_cap_name s name → v {
+    ? ( str_contains_word g_bck_cap_names name ) { ^ v } {}
+    = g_bck_cap_names ? == 0 ( nurl_str_len g_bck_cap_names )
+    ( nurl_str_cat name `` )
+    ( nurl_str_cat3 g_bck_cap_names ` ` name )
 }
 
 // Append one statement record, then clear the read accumulator so the
@@ -14365,10 +14769,20 @@
         : s cause ( nurl_sym_get g_bck ( nurl_str_cat3 `mc_` name ml ) )
         : s by ? == 0 ( nurl_str_len cause ) ( nurl_str_cat `` `` )
         ( nurl_str_cat3 ` by ` cause `` )
+        // Name the closure when the handle is reachable here only through
+        // one: the line this error points at spells the invocation, not
+        // the binding, and the reader would otherwise hunt for a name that
+        // is not on it. "holds", not "captured": with a closure captured by
+        // a closure the named one holds the handle without having written
+        // its name.
+        : s via0 ( bck_cap_via_of name )
+        : s via ? == 0 ( nurl_str_len via0 ) ( nurl_str_cat `` `` )
+        ( nurl_str_cat3 ` The closure '` via0
+        ( nurl_str_cat3 `' still holds '` name `', so invoking it reads the freed buffer.` ) )
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
         ( nurl_str_cat4 `use of moved value '` name
         `' — a heap handle has exactly one owner, and this one was consumed at line ` ( nurl_str_cat3 ml
-        ( nurl_str_cat by `. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.` ) `` ) ) )
+        ( nurl_str_cat by ( nurl_str_cat `. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.` via ) ) `` ) ) )
     }
 }
 
@@ -14764,6 +15178,12 @@
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `p` ix ) params )
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `f` ix )
     ( nurl_sym_get g_bck `file` ) )
+    // Park the closure-attribution list with the rows. It is a global
+    // that the next function clears, and a parked walk runs after the
+    // whole module — without this the "which closure holds it" clause
+    // was present only for a function that was NOT deferred, i.e. almost
+    // never, since any generic call (`vec_get [i]`) defers the caller.
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `c` ix ) g_bck_cap_via )
     ( nurl_sym_def g_deferred_bck `n` ( nurl_str_int + n 1 ) )
 }
 
@@ -14780,6 +15200,7 @@
         ( nurl_sym_set g_bck `file` ( nurl_sym_get g_deferred_bck ( nurl_str_cat `f` ix ) ) )
         ( nurl_sym_set g_bck `stmts` ( nurl_sym_get g_deferred_bck ( nurl_str_cat `s` ix ) ) )
         ( nurl_sym_set g_bck `reads` `` )
+        = g_bck_cap_via ( nurl_sym_get g_deferred_bck ( nurl_str_cat `c` ix ) )
         ( bck_analyze ( nurl_sym_get g_deferred_bck ( nurl_str_cat `p` ix ) ) )
         = i + i 1
     }
@@ -15304,6 +15725,7 @@
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         ( nurl_sym_def syms `__last_value_borrow__` `` )
         ( nurl_sym_def syms `__last_closure_env__` `` )
+        ( nurl_sym_def syms `__last_closure_caps__` `` )
         ( nurl_sym_def syms `__last_slice_owned__` `` )
         ( nurl_sym_def syms `__last_phi_idents__` `` )
         ( nurl_sym_def syms `__last_phi_cause__` `` )
@@ -15367,6 +15789,16 @@
         // closure's env? Captured now, registered for the function-exit
         // free after the binding is recorded below.
         : s rhs_closure_env ( nurl_sym_get syms `__last_closure_env__` )
+        // Borrow checker: a closure binding holds the handles its
+        // body captured, so a later read or invocation of THIS name
+        // reads them too (bck_note_closure_caps). Gated on the RHS
+        // being a capturing closure, like the flags above, so a
+        // plain binding never inherits a sibling literal's list.
+        : s rhs_closure_caps ( nurl_sym_get syms `__last_closure_caps__` )
+        ? & != 0 ( nurl_str_len rhs_closure_env ) != 0 ( nurl_str_len rhs_closure_caps )
+        { ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) rhs_closure_caps )
+            ( bck_add_cap_name name ) }
+        { ( bck_clear_cap_name syms name ) }
         // Borrow provenance: did the RHS produce a borrow (a value aliasing
         // something the caller still owns)? If so, an auto-Drop binding here
         // must NOT register its drop — the owner reclaims it.
@@ -15570,6 +16002,7 @@
                 ( nurl_sym_def syms `__last_expr_refdepth__` `` )
                 ( nurl_sym_def syms `__last_value_borrow__` `` )
                 ( nurl_sym_def syms `__last_closure_env__` `` )
+                ( nurl_sym_def syms `__last_closure_caps__` `` )
                 ( nurl_sym_def syms `__last_slice_owned__` `` )
                 ( nurl_sym_def syms `__last_phi_idents__` `` )
                 ( nurl_sym_def syms `__last_phi_cause__` `` )
@@ -15616,6 +16049,16 @@
                 ? & != 0 ( nurl_str_len rhs_closure_env ) != 0 ( nurl_str_len g_last_closure_nonsend )
                 { ( nurl_sym_def syms ( nurl_str_cat name `__closure_nonsend` ) g_last_closure_nonsend ) }
                 {}
+                // Borrow checker: a closure binding holds the handles its
+                // body captured, so a later read or invocation of THIS name
+                // reads them too (bck_note_closure_caps). Gated on the RHS
+                // being a capturing closure, like the flags above, so a
+                // plain binding never inherits a sibling literal's list.
+                : s rhs_closure_caps ( nurl_sym_get syms `__last_closure_caps__` )
+                ? & != 0 ( nurl_str_len rhs_closure_env ) != 0 ( nurl_str_len rhs_closure_caps )
+                { ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) rhs_closure_caps )
+                    ( bck_add_cap_name name ) }
+                { ( bck_clear_cap_name syms name ) }
                 // Same carry for the shared-mutation flag (§6.5): a closure
                 // that mutates an Arc's contents is only a bug once it is
                 // detached onto a thread, and that is known at thread_spawn.
@@ -15850,8 +16293,21 @@
         ( nurl_sym_def syms `__last_phi_idents__` `` )
         ( nurl_sym_def syms `__last_phi_cause__` `` )
         ( nurl_sym_def syms `__last_phi_definite__` `` )
+        ( nurl_sym_def syms `__last_closure_env__` `` )
+        ( nurl_sym_def syms `__last_closure_caps__` `` )
         : ~ s val ( gen_operand lex syms cg )
         : s __asn_rt ( nurl_get_last_type )
+        // Borrow checker: `= f \ … { … v … }` rebinds `f` to a closure
+        // holding `v`, exactly as the `:` form does — without this the
+        // whole use-after-free family came back by spelling the binding
+        // with `=`. A non-closure RHS clears the list (the resets above),
+        // so a rebound `f` never keeps a stale capture set.
+        : s __asn_caps ( nurl_sym_get syms `__last_closure_caps__` )
+        ? & != 0 ( nurl_str_len ( nurl_sym_get syms `__last_closure_env__` ) )
+        != 0 ( nurl_str_len __asn_caps )
+        { ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) __asn_caps )
+            ( bck_add_cap_name name ) }
+        { ( bck_clear_cap_name syms name ) }
         // A fresh owned slice reaching the RHS through a `?` / `??` (whose
         // first token isn't `[`) still frees the old buffer below.
         : b rhs_slice_owned != 0 ( nurl_sym_len syms `__last_slice_owned__` )
@@ -19933,12 +20389,40 @@
     // the closure may outlive the call and carry the captured reference.
     // Mark each captured name value-read in the enclosing scope.
     : ~ s __cap_scan ( nurl_str_cat captured_vars `` )
+    // The heap handles this closure will hold, published below as
+    // `__last_closure_caps__` so the binding site can record them
+    // (bck_note_closure_caps). Built here because this is the one place
+    // that still sees the ENCLOSING scope's types — inside the body a
+    // capture is a fresh local of the closure's own frame.
+    : ~ s __cap_heap ( nurl_str_cat `` `` )
     ~ != 0 ( nurl_str_len __cap_scan ) {
         : s __cap_w ( str_first_word __cap_scan )
         ( bck_mark_param_valueread syms __cap_w )
         // A tracked closure captured into THIS closure escapes — the new
         // closure (and wherever it goes) owns the captured env now.
         ( mem_own_closure_remove syms __cap_w )
+        ? != g_borrowck 0 {
+            // Capturing a handle READS it, right here: `( vec_free v )`
+            // followed by a closure that captures `v` is a use-after-move
+            // even if the closure is never called, and this is the record
+            // that reports it.
+            : s __cap_ll ( nurl_llty ( nurl_sym_get syms __cap_w ) )
+            ? ( bck_is_heap_lty __cap_ll )
+            { ( bck_note_read __cap_w )
+                = __cap_heap ? == 0 ( nurl_str_len __cap_heap )
+                ( nurl_str_cat __cap_w `` )
+                ( nurl_str_cat3 __cap_heap ` ` __cap_w ) }
+            {}
+            // A captured CLOSURE reaches everything IT captured, so the
+            // handles travel one level out. The inner list is already
+            // expanded, so this stays a single hop at every depth.
+            : s __cap_in ( nurl_sym_get2 syms __cap_w `__closure_caps` )
+            ? != 0 ( nurl_str_len __cap_in )
+            { = __cap_heap ? == 0 ( nurl_str_len __cap_heap )
+                ( nurl_str_cat __cap_in `` )
+                ( nurl_str_cat3 __cap_heap ` ` __cap_in ) }
+            {}
+        } {}
         = __cap_scan ( str_skip_word __cap_scan )
     }
 
@@ -20236,6 +20720,10 @@
     = g_lock_depth 0
     : s __cl_consumed_saved ( nurl_str_cat g_closure_consumed `` )
     = g_closure_consumed ``
+    // bck_fn_begin below clears the capture-binding pre-filter; the
+    // enclosing function's list must survive the body.
+    : s __cl_capnames_saved ( nurl_str_cat g_bck_cap_names `` )
+    : s __cl_capvia_saved ( nurl_str_cat g_bck_cap_via `` )
     // A closure body is emitted as its OWN function, so it needs its own
     // deferred arm-drop list: the enclosing function's epilogue cannot
     // free slots that live in a different frame. Saving and clearing the
@@ -20327,6 +20815,8 @@
         ( nurl_sym_set g_bck `deferred` __cl_bck_deferred )
     } {}
     = g_bck_depth __cl_bck_depth
+    = g_bck_cap_names __cl_capnames_saved
+    = g_bck_cap_via __cl_capvia_saved
     = g_bck_closure_depth - g_bck_closure_depth 1
     = g_fn_arc_mut_witness __cl_arcmut_saved
     = g_fn_mutates_witness __cl_mut_saved
@@ -20512,6 +21002,12 @@
     ? > captured_count 0
     { ( nurl_sym_def syms `__last_closure_env__` env_ptr ) }
     { ( nurl_sym_def syms `__last_closure_env__` `` ) }
+
+    // Borrow checker: the heap handles this closure now holds. Always
+    // published — including empty — so a consuming `:` never reads a
+    // sibling closure's list (the same discipline
+    // `__last_closure_param_idents__` follows).
+    ( nurl_sym_def syms `__last_closure_caps__` __cap_heap )
 
     result2
 }
@@ -25943,81 +26439,94 @@
     // lo and hi are two functions rather than one returning a pair
     // because a NURL function returns one value, and a pointer out-param
     // would put the sum in memory — the one place a carry chain must not
-    // go. Both are alwaysinline over identical operands, so GVN CSEs the
-    // shared i128 computation and the pair costs one instruction. That
-    // CSE is why callers must load limbs into bindings FIRST and chain
-    // over those: called on `. p k` operands straight out of memory, the
-    // two halves reload through a possibly-aliasing pointer, GVN cannot
-    // merge them, and the chain collapses back to the tree.
+    // go. Each pair is two thin wrappers over ONE i128-returning core
+    // (`nurl_mac_w` / `nurl_addc_w` / `nurl_subb_w`): the wide expression
+    // must live behind its own call boundary, not be duplicated into the
+    // two wrappers, because the -O2 pipeline runs a function-level
+    // InstCombine BEFORE the inliner — a self-contained `_lo` body is
+    // `trunc` of a single-use i128 chain, which that pass narrows to
+    // 64-bit mul/add inside the definition, and the inliner then pastes
+    // a 64-bit lo next to a 128-bit hi that no later pass can merge
+    // (measured: 1.8× duplicated adds, +50% instructions on the p256
+    // CIOS kernel). A core whose RETURN TYPE is i128 has nothing to
+    // narrow; the inlined copies are identical wide chains, EarlyCSE
+    // merges them, and the shared add gets both a `trunc` and a `lshr`
+    // use — multi-use, so it stays wide and legalises to the one
+    // mul/add/adc chain both halves ride. That CSE is why callers must
+    // load limbs into bindings FIRST and chain over those: called on
+    // `. p k` operands straight out of memory, the two halves reload
+    // through a possibly-aliasing pointer, the inlined chains differ,
+    // and the pair collapses back to two.
     //
     // carry_in / borrow_in must be 0 or 1 (always a previous `_hi`).
     // i128 is target-independent IR, like umulhi: backends without wide
     // arithmetic legalise it (wasm32 → compiler-rt's __multi3, which
     // the bundled zig links by default).
+    ( emit `define linkonce_odr i128 @nurl_addc_w(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %aw.a = zext i64 %a to i128` )
+    ( emit `  %aw.b = zext i64 %b to i128` )
+    ( emit `  %aw.c = zext i64 %c to i128` )
+    ( emit `  %aw.s = add i128 %aw.a, %aw.b` )
+    ( emit `  %aw.t = add i128 %aw.s, %aw.c` )
+    ( emit `  ret i128 %aw.t` )
+    ( emit `}` )
     ( emit `define linkonce_odr i64 @nurl_addc_lo(i64 %a, i64 %b, i64 %c) alwaysinline {` )
     ( emit `entry:` )
-    ( emit `  %ac.a = zext i64 %a to i128` )
-    ( emit `  %ac.b = zext i64 %b to i128` )
-    ( emit `  %ac.c = zext i64 %c to i128` )
-    ( emit `  %ac.s = add i128 %ac.a, %ac.b` )
-    ( emit `  %ac.t = add i128 %ac.s, %ac.c` )
+    ( emit `  %ac.t = call i128 @nurl_addc_w(i64 %a, i64 %b, i64 %c)` )
     ( emit `  %ac.r = trunc i128 %ac.t to i64` )
     ( emit `  ret i64 %ac.r` )
     ( emit `}` )
     ( emit `define linkonce_odr i64 @nurl_addc_hi(i64 %a, i64 %b, i64 %c) alwaysinline {` )
     ( emit `entry:` )
-    ( emit `  %ah.a = zext i64 %a to i128` )
-    ( emit `  %ah.b = zext i64 %b to i128` )
-    ( emit `  %ah.c = zext i64 %c to i128` )
-    ( emit `  %ah.s = add i128 %ah.a, %ah.b` )
-    ( emit `  %ah.t = add i128 %ah.s, %ah.c` )
+    ( emit `  %ah.t = call i128 @nurl_addc_w(i64 %a, i64 %b, i64 %c)` )
     ( emit `  %ah.h = lshr i128 %ah.t, 64` )
     ( emit `  %ah.r = trunc i128 %ah.h to i64` )
     ( emit `  ret i64 %ah.r` )
     ( emit `}` )
+    ( emit `define linkonce_odr i128 @nurl_subb_w(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %sw.a = zext i64 %a to i128` )
+    ( emit `  %sw.b = zext i64 %b to i128` )
+    ( emit `  %sw.c = zext i64 %c to i128` )
+    ( emit `  %sw.d = sub i128 %sw.a, %sw.b` )
+    ( emit `  %sw.e = sub i128 %sw.d, %sw.c` )
+    ( emit `  ret i128 %sw.e` )
+    ( emit `}` )
     ( emit `define linkonce_odr i64 @nurl_subb_lo(i64 %a, i64 %b, i64 %c) alwaysinline {` )
     ( emit `entry:` )
-    ( emit `  %sc.a = zext i64 %a to i128` )
-    ( emit `  %sc.b = zext i64 %b to i128` )
-    ( emit `  %sc.c = zext i64 %c to i128` )
-    ( emit `  %sc.d = sub i128 %sc.a, %sc.b` )
-    ( emit `  %sc.e = sub i128 %sc.d, %sc.c` )
+    ( emit `  %sc.e = call i128 @nurl_subb_w(i64 %a, i64 %b, i64 %c)` )
     ( emit `  %sc.r = trunc i128 %sc.e to i64` )
     ( emit `  ret i64 %sc.r` )
     ( emit `}` )
     ( emit `define linkonce_odr i64 @nurl_subb_hi(i64 %a, i64 %b, i64 %c) alwaysinline {` )
     ( emit `entry:` )
-    ( emit `  %sh.a = zext i64 %a to i128` )
-    ( emit `  %sh.b = zext i64 %b to i128` )
-    ( emit `  %sh.c = zext i64 %c to i128` )
-    ( emit `  %sh.d = sub i128 %sh.a, %sh.b` )
-    ( emit `  %sh.e = sub i128 %sh.d, %sh.c` )
+    ( emit `  %sh.e = call i128 @nurl_subb_w(i64 %a, i64 %b, i64 %c)` )
     ( emit `  %sh.h = lshr i128 %sh.e, 64` )
     ( emit `  %sh.t = trunc i128 %sh.h to i64` )
     ( emit `  %sh.r = and i64 %sh.t, 1` )
     ( emit `  ret i64 %sh.r` )
     ( emit `}` )
+    ( emit `define linkonce_odr i128 @nurl_mac_w(i64 %a, i64 %b, i64 %c, i64 %d) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %mw.a = zext i64 %a to i128` )
+    ( emit `  %mw.b = zext i64 %b to i128` )
+    ( emit `  %mw.c = zext i64 %c to i128` )
+    ( emit `  %mw.d = zext i64 %d to i128` )
+    ( emit `  %mw.p = mul i128 %mw.a, %mw.b` )
+    ( emit `  %mw.s = add i128 %mw.p, %mw.c` )
+    ( emit `  %mw.t = add i128 %mw.s, %mw.d` )
+    ( emit `  ret i128 %mw.t` )
+    ( emit `}` )
     ( emit `define linkonce_odr i64 @nurl_mac_lo(i64 %a, i64 %b, i64 %c, i64 %d) alwaysinline {` )
     ( emit `entry:` )
-    ( emit `  %ml.a = zext i64 %a to i128` )
-    ( emit `  %ml.b = zext i64 %b to i128` )
-    ( emit `  %ml.c = zext i64 %c to i128` )
-    ( emit `  %ml.d = zext i64 %d to i128` )
-    ( emit `  %ml.p = mul i128 %ml.a, %ml.b` )
-    ( emit `  %ml.s = add i128 %ml.p, %ml.c` )
-    ( emit `  %ml.t = add i128 %ml.s, %ml.d` )
+    ( emit `  %ml.t = call i128 @nurl_mac_w(i64 %a, i64 %b, i64 %c, i64 %d)` )
     ( emit `  %ml.r = trunc i128 %ml.t to i64` )
     ( emit `  ret i64 %ml.r` )
     ( emit `}` )
     ( emit `define linkonce_odr i64 @nurl_mac_hi(i64 %a, i64 %b, i64 %c, i64 %d) alwaysinline {` )
     ( emit `entry:` )
-    ( emit `  %mv.a = zext i64 %a to i128` )
-    ( emit `  %mv.b = zext i64 %b to i128` )
-    ( emit `  %mv.c = zext i64 %c to i128` )
-    ( emit `  %mv.d = zext i64 %d to i128` )
-    ( emit `  %mv.p = mul i128 %mv.a, %mv.b` )
-    ( emit `  %mv.s = add i128 %mv.p, %mv.c` )
-    ( emit `  %mv.t = add i128 %mv.s, %mv.d` )
+    ( emit `  %mv.t = call i128 @nurl_mac_w(i64 %a, i64 %b, i64 %c, i64 %d)` )
     ( emit `  %mv.h = lshr i128 %mv.t, 64` )
     ( emit `  %mv.r = trunc i128 %mv.h to i64` )
     ( emit `  ret i64 %mv.r` )
@@ -27111,12 +27620,25 @@
                         // `inout`/`sink` marker prefixes a param and is
                         // not one itself.
                         : ~ i __mpct 0
+                        : ~ s __mptys ``
                         ~ & != ( nurl_lex_type lex ) TT_ARROW
                         != ( nurl_lex_type lex ) TT_EOF
-                        { ? & ( is_ident_tok ( nurl_lex_type lex ) )
+                        { : ~ b __mpio F
+                            ? & ( is_ident_tok ( nurl_lex_type lex ) )
                             | ( seq ( nurl_lex_val lex ) `inout` ) ( seq ( nurl_lex_val lex ) `sink` )
-                            { ( nurl_lex_advance lex ) } {}
+                            { ? ( seq ( nurl_lex_val lex ) `inout` ) { = __mpio T } {}
+                                ( nurl_lex_advance lex ) } {}
                             : s __mpt ( parse_type lex )
+                            // Keep the parsed parameter type: the dispatch
+                            // site checks the assembled argstr against this
+                            // roster, the way the direct-call battery checks
+                            // each argument against __ptypes_src. An `inout`
+                            // parameter is passed by ADDRESS, so its roster
+                            // entry is the pointer spelling.
+                            : ~ s __mpll ( nurl_llty __mpt )
+                            ? __mpio { = __mpll ( nurl_str_cat __mpll `*` ) } {}
+                            = __mptys ? == 0 ( nurl_str_len __mptys )
+                            ( nurl_str_cat __mpll `` ) ( nurl_str_cat3 __mptys `;` __mpll )
                             ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
                             = __mpct + __mpct 1
                         }
@@ -27127,6 +27649,7 @@
                             ( __coherence_register lex mname impl_llvm impl_nurl tname )
                             ( nurl_sym_def g_impl_ret_syms key ret_ty )
                             ( nurl_sym_def g_impl_ret_syms ( nurl_str_cat key `__arity` ) ( nurl_str_int __mpct ) )
+                            ( nurl_sym_def g_impl_ret_syms ( nurl_str_cat key `__ptypes` ) __mptys )
                             ( nurl_sym_def g_impl_name_syms key impl_mangle )
                             // Mark the bare method name as impl-backed so
                             // gen_call's unknown-callee check lets it

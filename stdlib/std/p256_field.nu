@@ -196,15 +196,6 @@ $ `stdlib/core/vec.nu`
     // Every accumulate step is ONE primitive pair: `t[j] + a[j]·bi + carry`
     // is exactly `nurl_mac`, whose `_lo` is the new limb and whose `_hi` is
     // the outgoing carry. Both halves come out of one i128 expression, so
-    // the backend emits `mulx` for the product and threads the carry in the
-    // flag register — an `adc` chain. The previous shape spelled the same
-    // arithmetic as a `*` / `nurl_umulhi` pair plus two hand-written wrap
-    // tests (`? < s lo 1 0`), which reads the flags a plain `mul` would
-    // clobber and so forced the multiply, the compare, the `setb` and the
-    // add to serialise through the ALU, four instructions deep, per limb.
-    // Every accumulate step is ONE primitive pair: `t[j] + a[j]·bi + carry`
-    // is exactly `nurl_mac`, whose `_lo` is the new limb and whose `_hi` is
-    // the outgoing carry. Both halves come out of one i128 expression, so
     // the backend emits a single widening multiply for the product and
     // threads the carry in the flag register as an `adc` chain. The
     // previous shape spelled the same arithmetic as a `*` / `nurl_umulhi`

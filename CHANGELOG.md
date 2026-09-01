@@ -10,6 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The wide-arithmetic primitive pairs (`nurl_mac_lo/_hi`,
+  `nurl_addc_lo/_hi`, `nurl_subb_lo/_hi`) now share one i128-returning
+  core each, closing the ~1.5× codegen constant on every 4×64
+  carry-chain kernel.** The pairs were designed so the two inlined
+  copies CSE into one i128 chain, but -O2 runs a function-level
+  InstCombine *before* the inliner: a self-contained `_lo` body is a
+  single-use `trunc` of the wide chain, which that pass narrows to
+  64-bit mul/add inside the definition — so the inliner pasted a 64-bit
+  lo next to a 128-bit hi that no later pass could merge, and every
+  limb step paid its adds twice. Each pair is now two thin wrappers
+  over a core whose *return type* is i128 (`nurl_mac_w` /
+  `nurl_addc_w` / `nurl_subb_w`) — nothing to narrow pre-inline, and
+  the post-inline copies are identical wide chains EarlyCSE folds into
+  the textbook mul/add/adc schedule. `_p256_mul_d` drops from 388
+  instructions to 255 (the equivalent `__int128` C CIOS under clang
+  -O2: 238; movs 153 → 96, setb 12 → 5). Measured single-core
+  (ns/op before → after): P-256 ECDH keygen 55.6k → 41.9k (−25%),
+  ECDSA P-256 sign 90.2k → 67.1k (−26%), P-256 verify 396k → 278k
+  (−30%), P-384 verify 1.61M → 1.32M (−18%); X25519 and the AEADs are
+  unchanged (their fields don't ride the mac pairs). TLS handshakes
+  +3–4% end to end (loopback, client sharing the cores). No language
+  or stdlib surface change; emitted-IR change, bootstrap refreshed.
+
 - **The TLS handshake's crypto dropped a set of costs that bought
   nothing — public-exponent inversions no longer pretend to be secret,
   squarings no longer run as general multiplies, and per-call table
