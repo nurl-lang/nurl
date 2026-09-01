@@ -2,86 +2,86 @@
 
 Open-loop, coordinated-omission corrected (`oha -q --latency-correction`). Server pinned to cores `0-5`, generator to `6-11`. Both peers serve byte-identical bodies. MODE=**full**.
 
-- Host: `Linux 7.0.0-30-generic` — Intel(R) Core(TM) i7-5930K CPU @ 3.50GHz (6 cores pinned to the server, 6 to the generator)
-- NURL: `v0.57.0-23-g259400a3-dirty`  ·  oha: `oha 1.8.0`
+- Host: `Linux 7.0.0-30-generic` — Intel(R) Core(TM) i7-5930K CPU @ 3.50GHz
+- NURL: `v0.58.0-1-gbbaa3646-dirty`  ·  oha: `oha 1.8.0`
 - Sustainable capacity = highest offered rate with achieved ≥ 97% of target and p99 ≤ 50 ms.
 
 ### Body 1k — sustainable capacity & tail under load
 
 | Server | Sustainable req/s | 50% p50/p99/p99.9 (ms) | 80% p50/p99/p99.9 | 95% p50/p99/p99.9 |
 |---|--:|--:|--:|--:|
-| NURL | 168 000 | 0.779/8.465/21.310 | 1.020/45.488/79.241 | 1.424/92.601/110.330 |
-| RUST | 168 000 | 0.887/8.868/47.005 | 1.110/55.377/95.853 | 1.261/80.584/105.362 |
+| NURL | 192 000 | 0.811/8.261/28.709 | 1.114/64.142/96.992 | 1.881/111.539/133.070 |
+| RUST | 192 000 | 0.957/20.050/46.970 | 1.130/87.576/119.026 | 2.042/136.371/149.653 |
 
 ### Body 16k — sustainable capacity & tail under load
 
 | Server | Sustainable req/s | 50% p50/p99/p99.9 (ms) | 80% p50/p99/p99.9 | 95% p50/p99/p99.9 |
 |---|--:|--:|--:|--:|
-| NURL | 100 000 | 0.694/3.014/10.663 | 0.989/25.509/48.551 | 1.959/49.966/64.952 |
-| RUST | 120 000 | 0.863/16.767/48.082 | 1.152/22.403/47.157 | 1.807/114.979/124.604 |
+| NURL | 124 000 | 0.746/9.059/42.540 | 1.062/19.916/50.366 | 2.089/107.729/126.069 |
+| RUST | 116 000 | 0.907/15.767/53.909 | 1.094/23.761/52.437 | 1.509/104.022/130.995 |
 
 ### Body 1m — sustainable capacity & tail under load
 
 | Server | Sustainable req/s | 50% p50/p99/p99.9 (ms) | 80% p50/p99/p99.9 | 95% p50/p99/p99.9 |
 |---|--:|--:|--:|--:|
-| NURL | 1 500 | 1.701/4.690/7.474 | 1.816/5.157/13.467 | 1.912/5.088/11.476 |
-| RUST | 3 250 | 1.331/2.763/4.839 | 1.237/2.465/7.040 | 1.004/6.050/23.682 |
+| NURL | 2 250 | 1.463/3.978/5.716 | 1.705/3.742/5.456 | 1.760/3.934/12.590 |
+| RUST | 3 000 | 1.335/2.688/3.605 | 1.381/2.559/5.383 | 1.245/2.408/7.406 |
 
 ### Body 1k — CPU seconds per request (server-side)
 
 | Server | req served | CPU s (utime+stime) | µs / request |
 |---|--:|--:|--:|
-| NURL | 2351360 | 59.18 | 25.17 |
-| RUST | 2351340 | 63.16 | 26.86 |
+| NURL | 2687340 | 65.59 | 24.41 |
+| RUST | 2687340 | 66.26 | 24.66 |
 
 ### Body 16k — CPU seconds per request (server-side)
 
 | Server | req served | CPU s (utime+stime) | µs / request |
 |---|--:|--:|--:|
-| NURL | 1399640 | 57.41 | 41.02 |
-| RUST | 1679540 | 60.26 | 35.88 |
+| NURL | 1735600 | 61.25 | 35.29 |
+| RUST | 1623520 | 60.29 | 37.14 |
 
 ### Body 1m — CPU seconds per request (server-side)
 
 | Server | req served | CPU s (utime+stime) | µs / request |
 |---|--:|--:|--:|
-| NURL | 21000 | 27.80 | 1323.81 |
-| RUST | 45480 | 36.99 | 813.32 |
+| NURL | 31480 | 35.79 | 1136.91 |
+| RUST | 41980 | 38.67 | 921.15 |
 
 ### Body 1k — connection churn (no keep-alive, fresh conn/request)
 
 | Server | req/s (churn) | p50/p99/p99.9 (ms) | ok |
 |---|--:|--:|--:|
-| NURL | 42 732 | 2.249/4.929/7.203 | 1.0000 |
-| RUST | 45 791 | 2.136/3.882/6.142 | 1.0000 |
+| NURL | 44 387 | 2.194/4.005/6.449 | 1.0000 |
+| RUST | 46 620 | 2.104/3.743/5.851 | 1.0000 |
 
 ### Body 16k — connection churn (no keep-alive, fresh conn/request)
 
 | Server | req/s (churn) | p50/p99/p99.9 (ms) | ok |
 |---|--:|--:|--:|
-| NURL | 41 026 | 2.354/4.876/7.467 | 1.0000 |
-| RUST | 44 070 | 2.226/3.992/6.506 | 1.0000 |
+| NURL | 42 384 | 2.307/4.089/6.448 | 1.0000 |
+| RUST | 44 846 | 2.192/3.836/6.032 | 1.0000 |
 
 ### Body 1m — connection churn (no keep-alive, fresh conn/request)
 
 | Server | req/s (churn) | p50/p99/p99.9 (ms) | ok |
 |---|--:|--:|--:|
-| NURL | 1 505 | 59.794/169.878/214.200 | 1.0000 |
-| RUST | 2 617 | 37.225/64.576/87.937 | 1.0000 |
+| NURL | 1 924 | 49.930/96.557/127.046 | 1.0000 |
+| RUST | 2 749 | 35.820/53.817/71.250 | 1.0000 |
 
 ### Slowloris — 200 trickle clients held open, fast-client latency meanwhile (16k)
 
 | Server | fast-client req/s | p50/p99 (ms) | survived |
 |---|--:|--:|:--:|
-| NURL | 118 279 | 0.139/0.591 | yes |
-| RUST | 141 595 | 0.118/0.432 | yes |
+| NURL | 125 020 | 0.134/0.503 | yes |
+| RUST | 145 582 | 0.116/0.415 | yes |
 
 ### Keep-alive scale — 2000 concurrent keep-alive connections (1k body)
 
 | Server | conns | req/s | p50/p99/p99.9 (ms) | ok |
 |---|--:|--:|--:|--:|
-| NURL | 2000 | 171 994 | 11.026/21.803/31.676 | 1.0000 |
-| RUST | 2000 | 170 705 | 11.263/21.900/32.763 | 1.0000 |
+| NURL | 2000 | 178 421 | 10.819/19.454/26.152 | 1.0000 |
+| RUST | 2000 | 174 374 | 11.190/20.651/29.592 | 1.0000 |
 
 ### TLS 1.3 session resumption — does a reconnect skip the full handshake?
 
@@ -94,13 +94,13 @@ Open-loop, coordinated-omission corrected (`oha -q --latency-correction`). Serve
 
 | Server | req/s | p50/p99/p99.9 (ms) | ok | errors |
 |---|--:|--:|--:|--:|
-| NURL | 79 999 | 0.985/1011.032/2031.960 | 1.0000 | 7 (RSS 3096→26712 KiB) |
-| RUST | 95 999 | 1.183/657.577/1478.105 | 1.0000 | 3 (RSS 4500→9656 KiB) |
+| NURL | 99 199 | 1.066/729.250/1514.766 | 1.0000 | 4 (RSS 3108→11672 KiB) |
+| RUST | 92 799 | 1.083/501.461/1392.449 | 1.0000 | 8 (RSS 4572→9448 KiB) |
 
 ---
 
 ### Reading these numbers
 
-- **1 KB capacity is generator-bound, not a server ceiling.** When both servers report the *same* sustainable rate for 1 KB, that is `oha` on `6-11` hitting its own generation limit, not the servers saturating — the honest 1 KB conclusion is "both faster than this host can drive," i.e. a tie at the floor of the generator's ceiling.
-- **The gap grows with body size** (1 KB → 16 KB → 1 MB), which is the signature of a per-byte data-path cost, not a fixed per-request one. The CPU-per-request rows at 1 MB show it directly (NURL 1324 µs/req vs Rust 813 µs/req).
-- **The soak tail is largely environmental.** A 600 s run on a shared workstation is exposed to system scheduling the 20 s load-level runs are not, and coordinated-omission correction back-charges every hiccup — which is why *both* servers show an inflated soak p99 (NURL 1011 ms, Rust 658 ms). Compare the two servers to each other, and read the **RSS delta** as the server-specific signal: NURL grows more (24 MB vs 5 MB) but bounded — per-connection wire-buffer high-water, freed at connection close.
+- **1 KB capacity is generator-bound, not a server ceiling.** When both servers report the *same* sustainable rate for 1 KB, that is `oha` on 6-11 hitting its own generation limit, not the servers saturating — the honest 1 KB conclusion is "both faster than this host can drive," i.e. a tie at the floor of the generator's ceiling.
+- **Read the body-size axis as the data path.** A difference that grows from 1 KB to 16 KB to 1 MB is a per-byte cost, not a per-request one; the CPU-per-request rows make it visible directly. The first such cost found by this harness — the response body being copied into the connection's wire buffer before the write — was removed (head and body now leave in one `sendmsg`); what remains at 1 MB is the inbound copy `response_set_body_bytes` makes of the handler's buffer, which hyper's `Bytes::clone` does not pay.
+- **The soak tail is largely environmental.** A 600 s run on a shared workstation is exposed to system scheduling the 20 s load-level runs are not, and coordinated-omission correction back-charges every hiccup — which is why *both* servers show a inflated soak p99. Compare the two servers to each other, and read the **RSS delta** as the server-specific signal (bounded per-connection buffer high-water, freed at connection close).
