@@ -6,7 +6,7 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.58.0] — 2026-09-01
 
 ### Changed
 
@@ -112,55 +112,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measured concurrency; TLS c=200 req/s +7.5%, p99 5.21 → 3.12 ms,
   p99.9 9.09 → 5.37 ms. Non-Linux keeps the poll(2) reactor; it gains
   the batched global take unchanged.
-
-### Fixed
-
-- **ECDSA verification truncates a too-long digest instead of reducing it
-  as a full-width integer.** FIPS 186-5 §6.4.1 defines z as the LEFTMOST
-  qlen bits of the digest; the old BigInt path computed
-  `z = int(hash) mod n` over the whole digest, a different value whenever
-  the digest is longer than the curve — so every P-256 + SHA-384
-  signature the rest of the world accepts was rejected here (and an
-  off-standard value would have been accepted in its place). Found while
-  rebuilding the verify path below; pinned against OpenSSL across both
-  curves and five digest widths (SHA-1/256/384 × P-256/P-384) in
-  `compiler/tests/ecdsa_verify_matrix.nu`.
-
-- **`stdlib/ext/json.nu` passes the full JSONTestSuite — 283/283 must-accept /
-  must-reject verdicts correct.** Six `n_` documents parsed clean before, from
-  two roots:
-
-  * **The surrogate-pair lookahead consumed as it peeked.** After `\uD800`,
-    a `\` was swallowed before knowing whether `u` followed — so in
-    `["\uD800\"]` the escape lost its backslash, the stray quote closed the
-    string, and a document whose string never terminates parsed successfully.
-    And when `\u` did follow with malformed hex (`\u`, `\u1`, `\u1x`,
-    `\uDd"`), a code path its own comment called "best-effort recovery"
-    dropped the error a plain `\uZZZZ` raises. The lookahead is now pure —
-    `\u` is consumed only after both bytes matched, and once consumed the
-    four digits must be hex, the rule every other escape lives by. A
-    complete-but-unpaired surrogate stays accepted as U+FFFD (RFC 8259
-    leaves it undefined), and a value that breaks a pair re-enters the
-    pairing loop, so `\uD800` followed by a real pair still decodes the
-    real code point.
-
-  * **`json_parse` takes `s`, so the document ended at the first NUL** —
-    `123\0` truncated to `123` and parsed clean. The parser was already
-    length-based internally; only the entry ran `strlen`. New entries carry
-    the length end to end: `json_parse_n src len` (the root entry — an
-    embedded NUL is an ordinary rejected byte) and `json_parse_bytes buf`
-    for `( Vec u )` payloads (network buffers, `read_file_bytes` results).
-    `json_parse` is now a documented C-string wrapper over `json_parse_n`.
-
-  `tools/json_conformance.sh` runs the full suite against the byte-exact
-  harness (clones JSONTestSuite shallow when absent); the six regressions
-  plus the pairing/NUL semantics are pinned by
-  `compiler/tests/json_surrogate_lookahead.nu`. Parse throughput is
-  unchanged (measured A/B on `bench/json_parse`), and the parser fuzzer's
-  3000-iteration ASan+UBSan pass stays clean.
-
-
-### Changed
 
 - **ECDSA verification left the BigInt field: P-256 verify is 93× faster
   (37 ms → 0.4 ms), P-384 50× (85 ms → 1.7 ms).** Verification is the
@@ -295,6 +246,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `compress_rawdeflate` test freed the whole `!ZInflate CompressErr`
   RESULT value on its failure arms — heap corruption armed in dead
   code, four sites.
+
+### Fixed
+
+- **ECDSA verification truncates a too-long digest instead of reducing it
+  as a full-width integer.** FIPS 186-5 §6.4.1 defines z as the LEFTMOST
+  qlen bits of the digest; the old BigInt path computed
+  `z = int(hash) mod n` over the whole digest, a different value whenever
+  the digest is longer than the curve — so every P-256 + SHA-384
+  signature the rest of the world accepts was rejected here (and an
+  off-standard value would have been accepted in its place). Found while
+  rebuilding the verify path below; pinned against OpenSSL across both
+  curves and five digest widths (SHA-1/256/384 × P-256/P-384) in
+  `compiler/tests/ecdsa_verify_matrix.nu`.
+
+- **`stdlib/ext/json.nu` passes the full JSONTestSuite — 283/283 must-accept /
+  must-reject verdicts correct.** Six `n_` documents parsed clean before, from
+  two roots:
+
+  * **The surrogate-pair lookahead consumed as it peeked.** After `\uD800`,
+    a `\` was swallowed before knowing whether `u` followed — so in
+    `["\uD800\"]` the escape lost its backslash, the stray quote closed the
+    string, and a document whose string never terminates parsed successfully.
+    And when `\u` did follow with malformed hex (`\u`, `\u1`, `\u1x`,
+    `\uDd"`), a code path its own comment called "best-effort recovery"
+    dropped the error a plain `\uZZZZ` raises. The lookahead is now pure —
+    `\u` is consumed only after both bytes matched, and once consumed the
+    four digits must be hex, the rule every other escape lives by. A
+    complete-but-unpaired surrogate stays accepted as U+FFFD (RFC 8259
+    leaves it undefined), and a value that breaks a pair re-enters the
+    pairing loop, so `\uD800` followed by a real pair still decodes the
+    real code point.
+
+  * **`json_parse` takes `s`, so the document ended at the first NUL** —
+    `123\0` truncated to `123` and parsed clean. The parser was already
+    length-based internally; only the entry ran `strlen`. New entries carry
+    the length end to end: `json_parse_n src len` (the root entry — an
+    embedded NUL is an ordinary rejected byte) and `json_parse_bytes buf`
+    for `( Vec u )` payloads (network buffers, `read_file_bytes` results).
+    `json_parse` is now a documented C-string wrapper over `json_parse_n`.
+
+  `tools/json_conformance.sh` runs the full suite against the byte-exact
+  harness (clones JSONTestSuite shallow when absent); the six regressions
+  plus the pairing/NUL semantics are pinned by
+  `compiler/tests/json_surrogate_lookahead.nu`. Parse throughput is
+  unchanged (measured A/B on `bench/json_parse`), and the parser fuzzer's
+  3000-iteration ASan+UBSan pass stays clean.
+
+- **`nurlpkg install swarm-mcp` had been broken since v0.55.0, and eight
+  packages resolved a different dependency from the registry than this
+  tree builds against.** Two v0.55.0 compiler changes reached the
+  published swarm-mcp 0.28.1 tarball and neither had been republished
+  past: #1032 made a closure body that falls off its end drop what it
+  bound, so the package's hand-written free of a map key became the
+  second free (`'ks' is auto-dropped at the end of its scope`), and
+  #1025 closed the print family under one rule, after which
+  `nurl_print_int` no longer ends the line — this package *generates*
+  the NURL kernels it compiles to wasm and they print their result with
+  it, so a toolchain that still compiled 0.28.1 produced unparsable
+  output rather than a refused build. A wrong answer, not a failure. The
+  fixes were already in the tree; only the release was missing.
+  swarm-mcp 0.28.2 is published, its minimum toolchain moves v0.10.12 →
+  v0.55.0, and `tests/shuffle_smoke.sh` passes 5/5 against a real GPU
+  including the 1000-key multi-chunk merge.
+
+  The same sweep pinned every `[dependencies]` requirement across
+  `packages/` to the **major** (`^0`, `^1`). Caret locks the *minor* on
+  0.x, so `gpukit ^0.6` resolved to a 0.6 series while the monorepo
+  builds against 0.7.1 — the same commit building differently from the
+  registry than it does here. That was real in eight packages: grad,
+  tensor, onnx, yoloe, nurllama, mlp, lingbot-map, map-anything (and
+  mlp's `grad ^0.8` against a tree at 0.10). The trade is deliberate and
+  worth saying out loud: `^0` also accepts a 0.x minor that breaks, and
+  when a package really breaks compatibility the answer is to take the
+  major to 1.0, not to narrow the pin again. All 19 packages are
+  republished, and `onnx 0.8.1` installed from the registry now resolves
+  `gpukit 0.7.1`.
+
+  A follow-up caught what the sweep's own scan could not: three packages
+  print their version through a literal that carries the package name
+  next to it (`( nurl_print `lingbot-map 0.9.4\n` )`), which a search for
+  a bare version number never matches — `tools/check_package_version_strings.sh`
+  did. lingbot-map 0.9.6, map-anything 0.4.4 and nurllama 0.17.4 carry
+  the correction, byte-identical to the versions they replace apart from
+  that literal.
 
 ## [0.57.0] — 2026-08-30
 
@@ -17056,7 +17091,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.57.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.58.0...HEAD
+[0.58.0]: https://github.com/nurl-lang/nurl/compare/v0.57.0...v0.58.0
 [0.57.0]: https://github.com/nurl-lang/nurl/compare/v0.56.0...v0.57.0
 [0.56.0]: https://github.com/nurl-lang/nurl/compare/v0.55.0...v0.56.0
 [0.55.0]: https://github.com/nurl-lang/nurl/compare/v0.54.0...v0.55.0

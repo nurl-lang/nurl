@@ -21,8 +21,8 @@ on `$PATH`).
 
 ```toml
 [dependencies]
-onnx  = { path = "../onnx", version = "^0.4.2" }   # monorepo path + registry version
-chart = "^0.1.1"                                     # registry-only, shorthand
+onnx  = { path = "../onnx", version = "^0" }   # monorepo path + registry version
+chart = "^0"                                  # registry-only, shorthand
 ```
 
 `path` drives local/monorepo builds (resolved by symlink; `nurlpkg install`
@@ -59,15 +59,23 @@ segment — the everyday choice:
 | `^0.2.3` | `>=0.2.3 <0.3.0` | `0.2.x >= 0.2.3`, not `0.3.0` |
 | `^0.0.3` | `>=0.0.3 <0.0.4` | only `0.0.3` |
 
-For a `0.x` package caret locks the **minor** (`^0.2.3` won't jump to `0.3.0`),
-so every `0.x` package here pins deps with `^` and bumps its **minor** on a
-breaking change, **patch** on a fix.
+For a `0.x` package caret locks the **minor** (`^0.2.3` won't jump to
+`0.3.0`), and every `0.x` package here bumps its **minor** on a breaking
+change, **patch** on a fix.
 
 **`~` (tilde)** allows patch-level moves only: `~1.2.3` ⇒ `>=1.2.3 <1.3.0`,
 `~1.2` ⇒ `>=1.2.0 <1.3.0`, `~1` ⇒ `>=1.0.0 <2.0.0`.
 
-**Convention:** depend with `^<version>` (newest compatible); a bare `1.2.3`
-pins exactly — use it only when you must. The engine is
+**Convention (since 0.58.0):** depend on the **major** — `^0`, `^1` —
+not on a full version. `^0.6` locks the minor, so a package requiring
+`gpukit ^0.6` resolved a 0.6 series from the registry while the monorepo
+built it against 0.7.1: the same commit, built two different ways
+depending on where its dependency came from. Every `[dependencies]`
+requirement under `packages/` now names the major only. The trade is
+deliberate and worth saying out loud — `^0` also accepts a `0.x` minor
+that breaks, and when a package really breaks compatibility the answer
+is to take its major to 1.0, not to narrow the pin again. A bare
+`1.2.3` pins exactly; use it only when you must. The engine is
 `stdlib/ext/semver.nu`.
 
 ## `nq/` — a jq-lite JSON query tool (installable program)
@@ -106,7 +114,7 @@ md2html -f README.md --full      # complete styled page
 
 # …or depend on the renderer library:
 #   [dependencies]
-#   md2html = "^0.1"
+#   md2html = "^0"
 #   $ `deps/md2html/src/markdown.nu`
 #   : String html ( md_to_html ( string_data src ) )
 ```
@@ -132,7 +140,7 @@ chart line -f temps.txt --height 12                      # line plot from a file
 
 # …or depend on the renderer library:
 #   [dependencies]
-#   chart = "^0.1"
+#   chart = "^0"
 #   $ `deps/chart/src/chart.nu`
 #   : String spark ( chart_sparkline values )
 ```
@@ -160,7 +168,7 @@ lsmdb compact                        # merge tables, reclaim space
 
 # …or depend on the store itself:
 #   [dependencies]
-#   lsmdb = "^0.1"
+#   lsmdb = "^0"
 #   $ `deps/lsmdb/src/lsmdb.nu`
 #   : !*Lsm String db ( lsm_open `/var/db/things` )
 ```

@@ -475,6 +475,32 @@ not into a field, a binding, an assignment, or a return value; the
 explicit cast `# *T expr` converts intentionally, and `# *T 0` is the
 null pointer.
 
+Those classes are the *named* ones, not the boundary's definition. Since
+0.58.0 every value boundary — return, and every argument path — ends
+with a **total-agreement backstop**: after the sanctioned coercions
+above (integer and float widths, the enum wrap, the FFI NULL/handle
+`inttoptr` bridge), the value's lowered LLVM type must **equal** the
+declared one, pointer-beside-pointer excepted, since opaque pointers
+are one LLVM type. A pair that matches no branch is a diagnostic, not a
+hole. This matters because the bad instruction *assembles*:
+`ret { i1, i64 } %o` out of an `i64` function, or
+`call i64 @f({ i1, i64 } %v)` against `declare i64 @f(i64)`, are both
+accepted by clang — a call carries its own signature — and the callee
+reads whichever bytes the ABI left in the register. Garbage, not a
+crash. The backstop covers the aggregate-shaped types the pairwise
+list never named (option, result, slice and closure values beside
+scalars, pointers and named structs), a `void` expression used as an
+argument, and an FFI pointer passed where an integer parameter is
+declared (a silent `ptrtoint` of the string's *address*; write `# i x`
+to mean it, while `( free 0 )` and handle-to-pointer stay legal). It
+runs on **every** call path, not only direct calls to non-generic
+functions: generic instantiations, trait-method dispatch, closure and
+fn-pointer invocations, and `%Trait` dynamic dispatch each check their
+assembled arguments against the callee's declared roster. A closure
+returned where its own *result* type is declared is the `^ f( r )`
+C-style-call typo, and the diagnostic names the parenthesised prefix
+form to write instead.
+
 A **condition** (`?` / `~`) must be `b` or an integer (tested non-zero).
 A float, pointer/string, enum, or aggregate condition is rejected with
 the comparison to write instead — none of them has a truth value.

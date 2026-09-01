@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-30 · Current release: **0.57.0** · Language: **Grammar
+_Last reviewed: 2026-09-01 · Current release: **0.58.0** · Language: **Grammar
 v2.7** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -87,7 +87,17 @@ What is solid today:
   it is spelled, and `% NotSend` / `% Send` mark the cases a structural
   derivation cannot see either way. It is a sound lint, not a proof:
   [`docs/MEMORY.md`](docs/MEMORY.md) §6.5 states what it does and does
-  not guarantee.
+  not guarantee. Since 0.58.0 the Linux I/O path has no reactor thread:
+  an **idle worker becomes the poller** and blocks in `epoll_wait`
+  itself, so a ready fiber resumes on that worker with no queue hop, no
+  cross-thread wake and no migration (the Go netpoller / tokio driver
+  shape). Sockets register once per fd lifetime, edge-triggered, and
+  readiness that arrives while the fiber computes is banked so the next
+  wait skips the park entirely. The surplus a saturated poller cannot
+  keep spills into a **fair global FIFO** taken in batches, which is
+  what keeps the tail flat under load; non-Linux POSIX keeps the
+  portable `poll(2)` reactor. The contract — a wait may only follow an
+  `EAGAIN` — is in [`docs/ASYNC.md`](docs/ASYNC.md).
 - **Standard library.** A broad pure-NURL stdlib (see the inventory below)
   spanning collections, hashing, serialization, a full HTTP/1.1+2 + WebSocket
   stack, database clients, distributed systems (p2p overlay, CRDTs), MCP, and the Anthropic Claude API.
@@ -135,7 +145,14 @@ A high-level map of what exists. Dates and per-feature detail are in
   conversions. Sized integer/float types with **signedness carried in the
   type representation itself** (`u`/`u16`/`u32`/`u64` distinct from the
   signed types end to end — no flag side-channels); explicit `#` casts with
-  correct `sext`/`zext`/`trunc`/`fpext`/`fptrunc`.
+  correct `sext`/`zext`/`trunc`/`fpext`/`fptrunc`. Since 0.58.0 every value
+  boundary — return and every argument path, including generic
+  instantiations, trait-method dispatch, closure/fn-pointer invocation
+  and `%Trait` dynamic dispatch — ends in a **total-agreement
+  backstop**: after the sanctioned coercions the value's lowered type
+  must equal the declared one, so a pair nobody enumerated is a
+  diagnostic rather than a `call` clang assembles and the callee reads
+  as garbage ([`docs/spec.md` §4.1](docs/spec.md)).
 - Generics: monomorphised generic structs and functions (signedness-aware
   monomorphs, including behind `*`/`?` prefixes), generic nesting
   (`Channel[A]`, `Vec[Thread]`), and generics over `?T` / `!T E`.
@@ -227,8 +244,9 @@ platform-specific shims.
   HTTP/2 CONTINUATION-flood + stream-accounting, and clean cross-thread
   listener shutdown) with regression tests, and its serve path is
   peer-benchmarked against Rust hyper and Node
-  ([`bench/HTTP_RESULTS.md`](bench/HTTP_RESULTS.md): ahead of hyper at
-  low concurrency, an HTTP request served in 2 syscalls).
+  ([`bench/HTTP_RESULTS.md`](bench/HTTP_RESULTS.md): since 0.58.0 ahead
+  of hyper on req/s, p50, p95 *and* p99 at every measured concurrency,
+  an HTTP request served in 2 syscalls).
 - **ext/data services** — `sqlite` (production-hardened), `mqtt` 5.0 client,
   `smtp` (mail submission). Postgres and Redis clients live in the registry
   packages `psql` and `redis` (pure NURL — no libpq, no hiredis).
