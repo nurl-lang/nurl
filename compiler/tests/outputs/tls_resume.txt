@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+first_resumed=F
+first_echo=T
+session_exported=T
+second_resumed=T
+second_echo=T
+second_exports_new_ticket=T
+bad_ticket_resumed=F
+bad_ticket_echo=T
+server_saw_1_resumed=T
+server_saw_2_resumed=T
+server_saw_3_resumed=T
+server_echoed_3=T
