@@ -1,6 +1,6 @@
 # NURL post-quantum crypto peer-comparison
 
-Generated `2026-09-01T06:04:08Z` by `bench/run_pq.sh`. **Do not edit by hand** — the next run overwrites it.
+Generated `2026-09-01T08:40:53Z` by `bench/run_pq.sh`. **Do not edit by hand** — the next run overwrites it.
 
 Single-core µs/op for the three NIST post-quantum standards — ML-KEM (FIPS 203, the KEM in the X25519MLKEM768 hybrid TLS group), ML-DSA (FIPS 204, certificate signatures) and SLH-DSA (FIPS 205, the hash-based fallback) — plus the SHAKE128 bulk throughput they are all built from. NURL is the pure-NURL stdlib (`std/mlkem`, `std/mldsa`, `std/slhdsa`); Rust is the pure-Rust RustCrypto crates. Both sides are portable safe-language implementations with no hand-written assembly, measured by the same harness discipline (iteration-calibrated timed loops, per-op OS randomness, hedged signing, medians of 3 runs). The ratios compare those two implementations, not the two languages — "Where the ratios come from" below says what they do and do not show.
 
@@ -10,11 +10,11 @@ Single-core µs/op for the three NIST post-quantum standards — ML-KEM (FIPS 20
 |---|---|
 | Host | `GitHub Actions ubuntu-latest runner` |
 | Kernel | `Linux 6.17.0-1022-azure x86_64` |
-| CPU | AMD EPYC 7763 64-Core Processor (4 logical cores) |
-| Memory | 16373448 KiB |
-| Commit | `9f38b68c42f487345ef0d6847c9c60e2f42a75b5` |
-| CI run | https://github.com/nurl-lang/nurl/actions/runs/33475955362 |
-| NURL | `v0.57.0-12-g9f38b68c` |
+| CPU | AMD EPYC 9V74 80-Core Processor (4 logical cores) |
+| Memory | 16373452 KiB |
+| Commit | `8f152ab387c490af7a940fad74212638ceb1a61d` |
+| CI run | https://github.com/nurl-lang/nurl/actions/runs/33488203126 |
+| NURL | `v0.57.0-15-g8f152ab3` |
 | Rust | rustc 1.98.0 (88d9e12ae 2026-08-18) |
 
 | Implementation | Source |
@@ -28,52 +28,52 @@ Every scheme below spends most of its cycles in Keccak; this is the one-shot abs
 
 | | NURL | Rust |
 |---|---:|---:|
-| SHAKE128 absorb 8 MB | 362 MB/s | **405 MB/s** |
+| SHAKE128 absorb 8 MB | 328 MB/s | **368 MB/s** |
 
 ## ML-KEM (FIPS 203)
 
 | Operation | NURL µs/op | Rust µs/op | Rust / NURL |
 |---|---:|---:|---:|
-| ML-KEM-512 keygen | **17.7** | 26.8 | 1.51× |
-| ML-KEM-512 encaps | **18.4** | 24.2 | 1.32× |
-| ML-KEM-512 decaps | **22.7** | 30.6 | 1.34× |
-| ML-KEM-768 keygen | **28.0** | 46.2 | 1.65× |
-| ML-KEM-768 encaps | **27.4** | 41.6 | 1.52× |
-| ML-KEM-768 decaps | **33.4** | 51.0 | 1.53× |
-| ML-KEM-1024 keygen | **39.7** | 72.8 | 1.83× |
-| ML-KEM-1024 encaps | **36.7** | 63.6 | 1.73× |
-| ML-KEM-1024 decaps | **44.1** | 75.1 | 1.70× |
+| ML-KEM-512 keygen | **19.5** | 29.5 | 1.51× |
+| ML-KEM-512 encaps | **19.3** | 25.6 | 1.32× |
+| ML-KEM-512 decaps | **23.3** | 32.3 | 1.38× |
+| ML-KEM-768 keygen | **30.9** | 50.7 | 1.64× |
+| ML-KEM-768 encaps | **29.0** | 44.5 | 1.54× |
+| ML-KEM-768 decaps | **34.1** | 54.3 | 1.59× |
+| ML-KEM-1024 keygen | **43.9** | 80.1 | 1.83× |
+| ML-KEM-1024 encaps | **39.2** | 68.4 | 1.75× |
+| ML-KEM-1024 decaps | **45.8** | 80.9 | 1.77× |
 
 ## ML-DSA (FIPS 204)
 
 | Operation | NURL µs/op | Rust µs/op | Rust / NURL |
 |---|---:|---:|---:|
-| ML-DSA-44 keygen | **43.4** | 162 | 3.74× |
-| ML-DSA-44 sign | **139** | 401 | 2.89× |
-| ML-DSA-44 verify | **47.5** | 50.8 | 1.07× |
-| ML-DSA-65 keygen | **98.9** | 259 | 2.62× |
-| ML-DSA-65 sign | **237** | 624 | 2.64× |
-| ML-DSA-65 verify | 75.0 | **69.3** | 0.92× |
-| ML-DSA-87 keygen | **110** | 404 | 3.66× |
-| ML-DSA-87 sign | **272** | 716 | 2.63× |
-| ML-DSA-87 verify | 113 | **97.2** | 0.86× |
+| ML-DSA-44 keygen | **44.0** | 181 | 4.11× |
+| ML-DSA-44 sign | **139** | 456 | 3.28× |
+| ML-DSA-44 verify | **47.1** | 55.2 | 1.17× |
+| ML-DSA-65 keygen | **103** | 287 | 2.80× |
+| ML-DSA-65 sign | **221** | 662 | 3.00× |
+| ML-DSA-65 verify | **74.4** | 75.0 | 1.01× |
+| ML-DSA-87 keygen | **112** | 443 | 3.96× |
+| ML-DSA-87 sign | **255** | 800 | 3.14× |
+| ML-DSA-87 verify | 111 | **106** | 0.95× |
 
 ## SLH-DSA (FIPS 205)
 
 | Operation | NURL µs/op | Rust µs/op | Rust / NURL |
 |---|---:|---:|---:|
-| SLH-DSA-SHAKE-128s keygen | **40 231** | 244 584 | 6.08× |
-| SLH-DSA-SHAKE-128s sign | **304 753** | 1 868 828 | 6.13× |
-| SLH-DSA-SHAKE-128s verify | **524** | 1 821 | 3.47× |
-| SLH-DSA-SHAKE-128f keygen | **641** | 3 849 | 6.01× |
-| SLH-DSA-SHAKE-128f sign | **18 063** | 89 559 | 4.96× |
-| SLH-DSA-SHAKE-128f verify | **1 473** | 5 248 | 3.56× |
-| SLH-DSA-SHAKE-192f keygen | **921** | 5 683 | 6.17× |
-| SLH-DSA-SHAKE-192f sign | **28 498** | 144 706 | 5.08× |
-| SLH-DSA-SHAKE-192f verify | **2 157** | 7 714 | 3.58× |
-| SLH-DSA-SHAKE-256f keygen | **2 447** | 14 842 | 6.07× |
-| SLH-DSA-SHAKE-256f sign | **53 267** | 296 217 | 5.56× |
-| SLH-DSA-SHAKE-256f verify | **2 189** | 8 020 | 3.66× |
+| SLH-DSA-SHAKE-128s keygen | **46 638** | 275 100 | 5.90× |
+| SLH-DSA-SHAKE-128s sign | **383 695** | 2 072 398 | 5.40× |
+| SLH-DSA-SHAKE-128s verify | **591** | 1 994 | 3.37× |
+| SLH-DSA-SHAKE-128f keygen | **724** | 4 243 | 5.86× |
+| SLH-DSA-SHAKE-128f sign | **20 170** | 99 521 | 4.93× |
+| SLH-DSA-SHAKE-128f verify | **1 811** | 6 105 | 3.37× |
+| SLH-DSA-SHAKE-192f keygen | **1 048** | 6 320 | 6.03× |
+| SLH-DSA-SHAKE-192f sign | **31 526** | 161 935 | 5.14× |
+| SLH-DSA-SHAKE-192f verify | **2 369** | 8 726 | 3.68× |
+| SLH-DSA-SHAKE-256f keygen | **2 716** | 16 588 | 6.11× |
+| SLH-DSA-SHAKE-256f sign | **60 340** | 331 920 | 5.50× |
+| SLH-DSA-SHAKE-256f verify | **2 479** | 8 865 | 3.58× |
 
 (Best per row in **bold**. `Rust / NURL` > 1 means NURL is faster. `n/a` = toolchain absent or the harness failed.)
 
@@ -81,9 +81,9 @@ Every scheme below spends most of its cycles in Keccak; this is the one-shot abs
 
 This table compares two implementations, not two languages. Before quoting a ratio, know what it is made of:
 
-- **Start from the control row.** Single-lane SHAKE128 is the closest thing here to a pure language-and-compiler comparison: the same scalar Keccak permutation, the same workload, no API or vectorisation asymmetry on either side. In this run the two columns are within 11% of each other. Ratios far above that elsewhere are implementation differences, not language ones — compare the ML-DSA verify rows (0.86–1.07× in this run), the least asymmetric scheme-level operations.
-- **SLH-DSA (3.5–6.2×): batched Keccak vs scalar Keccak.** SLH-DSA's cost is thousands of short, independent hash chains. NURL batches them four Keccak lanes at a time (`std/hash_sha3x4`: `simd`-prefixed NURL source the compiler vectorises to AVX2 behind a runtime CPU check); RustCrypto `slh-dsa` hashes one lane at a time. No assembly on either side, but these rows compare a batched implementation against a scalar one. A Rust port of the same four-lane strategy (e.g. via `std::simd`) should close most of this gap; no such crate path existed at measurement time.
-- **ML-KEM and ML-DSA (0.9–3.7×): a tuned implementation against young crates.** Both columns spend most of these cycles in the same scalar Keccak the control row measures directly, so the gaps live in what surrounds it — sampling, NTT, serialisation, memory traffic. The RustCrypto lattice crates are pre-1.0 and have not had a dedicated performance pass; the NURL stdlib has been profiled and tuned across several releases. These rows have not been root-caused one by one: read them as optimised-vs-not-yet-optimised implementations, with the language contribution bounded by the control row above.
+- **Start from the control row.** Single-lane SHAKE128 is the closest thing here to a pure language-and-compiler comparison: the same scalar Keccak permutation, the same workload, no API or vectorisation asymmetry on either side. In this run the two columns are within 11% of each other. Ratios far above that elsewhere are implementation differences, not language ones — compare the ML-DSA verify rows (0.95–1.17× in this run), the least asymmetric scheme-level operations.
+- **SLH-DSA (3.4–6.1×): batched Keccak vs scalar Keccak.** SLH-DSA's cost is thousands of short, independent hash chains. NURL batches them four Keccak lanes at a time (`std/hash_sha3x4`: `simd`-prefixed NURL source the compiler vectorises to AVX2 behind a runtime CPU check); RustCrypto `slh-dsa` hashes one lane at a time. No assembly on either side, but these rows compare a batched implementation against a scalar one. A Rust port of the same four-lane strategy (e.g. via `std::simd`) should close most of this gap; no such crate path existed at measurement time.
+- **ML-KEM and ML-DSA (1.0–4.1×): a tuned implementation against young crates.** Both columns spend most of these cycles in the same scalar Keccak the control row measures directly, so the gaps live in what surrounds it — sampling, NTT, serialisation, memory traffic. The RustCrypto lattice crates are pre-1.0 and have not had a dedicated performance pass; the NURL stdlib has been profiled and tuned across several releases. These rows have not been root-caused one by one: read them as optimised-vs-not-yet-optimised implementations, with the language contribution bounded by the control row above.
 - **Neither column is the fastest known.** The scheme authors' AVX2 assembly implementations beat both columns on the lattice schemes; see the header of `bench/pq.nu` for that comparison.
 
 ## Notes
