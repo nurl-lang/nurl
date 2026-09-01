@@ -370,18 +370,52 @@ $ `stdlib/core/vec.nu`
 }
 
 // io ← io^(p-2) = io^-1  (Fermat inversion, 254 squarings).
+// io ← io^(2^n) — n back-to-back squarings.
+@ _sqn25519 ( Vec i ) io i n → v {
+    : ~ i k 0
+    ~ < k n { ( _S io io ) = k + k 1 }
+}
+
 @ _inv25519 ( Vec i ) io → v {
-    : ( Vec i ) inp ( _gf_copy io )
-    : ( Vec i ) c ( _gf_copy io )
-    : ~ i a 253
-    ~ >= a 0 {
-        ( _S c c )
-        ? & != a 2 != a 4 { ( _M c c inp ) } {}
-        = a - a 1
-    }
-    ( _gf_into io c )
-    ( vec_free [i] inp )
-    ( vec_free [i] c )
+    // io ← io^(p−2), p = 2^255−19 — Fermat, via the standard ref10
+    // addition chain: 254 squarings + 11 multiplies. The old
+    // tweetnacl-style ladder multiplied on every exponent bit — 254 S
+    // + 252 M for the same PUBLIC exponent, so 241 of those multiplies
+    // bought nothing: the schedule depends only on the constant p−2,
+    // and the data path stays branch-free either way. Verified against
+    // the RFC 7748 vectors and the x25519/TLS corpus tests.
+    : ( Vec i ) z ( _gf_copy io )
+    : ( Vec i ) z2 ( _gf_zero )
+    : ( Vec i ) z9 ( _gf_zero )
+    : ( Vec i ) z11 ( _gf_zero )
+    : ( Vec i ) z5 ( _gf_zero )
+    : ( Vec i ) z10 ( _gf_zero )
+    : ( Vec i ) z50 ( _gf_zero )
+    : ( Vec i ) t ( _gf_zero )
+    ( _S z2 z )  // z^2
+    ( _S z9 z2 ) ( _S z9 z9 ) ( _M z9 z9 z )  // z^9
+    ( _M z11 z9 z2 )  // z^11
+    ( _S z5 z11 ) ( _M z5 z5 z9 )  // z^(2^5−1)
+    ( _gf_into z10 z5 ) ( _sqn25519 z10 5 )
+    ( _M z10 z10 z5 )  // z^(2^10−1)
+    ( _gf_into t z10 ) ( _sqn25519 t 10 )
+    ( _M t t z10 )  // z^(2^20−1)
+    ( _gf_into z50 t ) ( _sqn25519 z50 20 )
+    ( _M z50 z50 t )  // z^(2^40−1)
+    ( _sqn25519 z50 10 )
+    ( _M z50 z50 z10 )  // z^(2^50−1)
+    ( _gf_into t z50 ) ( _sqn25519 t 50 )
+    ( _M t t z50 )  // z^(2^100−1)
+    ( _gf_into z10 t ) ( _sqn25519 z10 100 )
+    ( _M z10 z10 t )  // z^(2^200−1)
+    ( _sqn25519 z10 50 )
+    ( _M z10 z10 z50 )  // z^(2^250−1)
+    ( _sqn25519 z10 5 )
+    ( _M z10 z10 z11 )  // z^(2^255−21)
+    ( _gf_into io z10 )
+    ( vec_free [i] z ) ( vec_free [i] z2 ) ( vec_free [i] z9 )
+    ( vec_free [i] z11 ) ( vec_free [i] z5 ) ( vec_free [i] z10 )
+    ( vec_free [i] z50 ) ( vec_free [i] t )
 }
 
 // ── the ladder ────────────────────────────────────────────────────
@@ -576,52 +610,167 @@ $ `stdlib/core/vec.nu`
     ^ v
 }
 
-// p ← p + q, extended twisted-Edwards (a = −1). p may equal q (doubling):
-// every operand is read into the scratch before any of p's coords is set.
-@ __xe_add XEScr sc XEP p XEP q ( Vec i ) d2 → v {
+// ── niels-form comb table + dedicated double/madd (keygen fast path) ──
+//
+// The comb used to run a generic 9-_M complete addition twice per
+// iteration — once as a doubling, once to add a table entry whose Z is
+// 1 by construction. The dedicated shapes below are the ref10/EFD ones:
+// an extended-coordinate doubling (dbl-2008-hwcd, a = −1) at 4M+4S and
+// a mixed addition against a precomputed NIELS entry (y+x, y−x, 2d·t)
+// at 7M. The niels table (16 entries × 15 limbs) is derived ONCE per
+// process from the baked affine table and cached in a global — the old
+// path re-materialised the 320-limb table on every keygen. Benign init
+// race: two first callers may both build; one pointer wins, the losing
+// ~2 KB copy leaks once (same discipline as the P-256 comb tables).
+: ~ i g_xe_ntbl 0
+
+@ __xe_ntbl_build → v {
+    : ( Vec i ) src ( __xe_comb_table )
+    : ( Vec i ) d2 ( __xe_d2 )
+    : ( Vec i ) ntbl ( vec_with_cap [i] 240 )
+    : b _l ( vec_set_len [i] ntbl 240 )
+    : *i np ( vec_data [i] ntbl )
+    : ( Vec i ) x ( _gf_zero )
+    : ( Vec i ) y ( _gf_zero )
+    : ( Vec i ) t ( _gf_zero )
+    : ( Vec i ) yp ( _gf_zero )
+    : ( Vec i ) ym ( _gf_zero )
+    : ( Vec i ) t2d ( _gf_zero )
+    : *i sp ( vec_data [i] src )
+    : *i xp ( vec_data [i] x )
+    : *i yq ( vec_data [i] y )
+    : *i tp ( vec_data [i] t )
+    : *i ypp ( vec_data [i] yp )
+    : *i ymp ( vec_data [i] ym )
+    : *i tdp ( vec_data [i] t2d )
+    : ~ i e 0
+    ~ < e 16 {
+        : i base * e 20
+        : ~ i j 0
+        ~ < j 5 {
+            = . xp j . sp + base j
+            = . yq j . sp + + base 5 j
+            = . tp j . sp + + base 15 j
+            = j + j 1
+        }
+        ( _A yp y x )
+        ( _Z ym y x )
+        ( _M t2d t d2 )
+        : i nb * e 15
+        = j 0
+        ~ < j 5 {
+            = . np + nb j . ypp j
+            = . np + + nb 5 j . ymp j
+            = . np + + nb 10 j . tdp j
+            = j + j 1
+        }
+        = e + e 1
+    }
+    = g_xe_ntbl # i . ntbl ctl
+    ( vec_free [i] src ) ( vec_free [i] d2 )
+    ( vec_free [i] x ) ( vec_free [i] y ) ( vec_free [i] t )
+    ( vec_free [i] yp ) ( vec_free [i] ym ) ( vec_free [i] t2d )
+}
+
+@ __xe_ntbl → ( Vec i ) {
+    ? == g_xe_ntbl 0 { ( __xe_ntbl_build ) } {}
+    ^ @ ( Vec i ) { # s g_xe_ntbl }
+}
+
+// Constant-time read of niels entry `digit` (0..15): all 16 entries
+// scanned, merged under a match mask — 15 limbs each, not the 20 of the
+// extended form (Z = 1 is implicit in the niels shape).
+@ __xe_ntbl_get ( Vec i ) tbl i digit ( Vec i ) yp ( Vec i ) ym ( Vec i ) t2d → v {
+    : *i tb ( vec_data [i] tbl )
+    : *i pp ( vec_data [i] yp )
+    : *i mp ( vec_data [i] ym )
+    : *i dp ( vec_data [i] t2d )
+    : ~ i k 0
+    ~ < k 5 { = . pp k 0 = . mp k 0 = . dp k 0 = k + k 1 }
+    : ~ i e 0
+    ~ < e 16 {
+        : u64 z ^^ # u64 e # u64 digit
+        : i mask - 0 # i >> - z 1 63
+        : i base * e 15
+        : ~ i j 0
+        ~ < j 5 {
+            = . pp j | . pp j & mask . tb + base j
+            = . mp j | . mp j & mask . tb + + base 5 j
+            = . dp j | . dp j & mask . tb + + base 10 j
+            = j + j 1
+        }
+        = e + e 1
+    }
+}
+
+// One carry sweep: limbs (≤ ~2^54) back under 52 bits, top wraps ×19.
+// _Z's SUBTRAHEND must stay below the 2p limb constants (~2^52), so a
+// value built by _A needs this before it may be subtracted; minuends
+// and _M/_S operands tolerate the lazy 2^54 bound as-is.
+@ _gf_carry ( Vec i ) v → v {
+    : *i q ( vec_data [i] v )
+    : ~ i k 0
+    : ~ i c 0
+    ~ < k 4 {
+        = . q k + . q k c
+        = c >> . q k 51
+        = . q k & . q k 2251799813685247
+        = k + k 1
+    }
+    = . q 4 + . q 4 c
+    = c >> . q 4 51
+    = . q 4 & . q 4 2251799813685247
+    = . q 0 + . q 0 * 19 c
+}
+
+// p ← 2·p, extended coordinates (EFD dbl-2008-hwcd, a = −1): 4M + 4S.
+// Scratch registers: a,b,c,e,f,g,h (tt holds the zero for the negation).
+// The −(A+B) negative is taken as (2p − A) + (2p − B): both steps
+// subtract a REDUCED value, which is _Z's contract; C = 2Z² gets one
+// carry sweep before it appears as a subtrahend in F = G − C.
+@ __xe_dbl XEScr sc XEP p → v {
+    ( _S . sc a . p x )  // A = X²
+    ( _S . sc b . p y )  // B = Y²
+    ( _S . sc c . p z )
+    ( _A . sc c . sc c . sc c )
+    ( _gf_carry . sc c )  // C = 2Z², reduced
+    ( _A . sc e . p x . p y )
+    ( _S . sc e . sc e )
+    ( _Z . sc e . sc e . sc a )
+    ( _Z . sc e . sc e . sc b )  // E = (X+Y)² − A − B
+    ( _Z . sc g . sc b . sc a )  // G = B − A   (D = −A folded in)
+    ( _Z . sc f . sc g . sc c )  // F = G − C
+    ( _gf_zero_into . sc tt )
+    ( _Z . sc h . sc tt . sc a )
+    ( _Z . sc h . sc h . sc b )  // H = −(A + B)
+    ( _M . p x . sc e . sc f )
+    ( _M . p y . sc g . sc h )
+    ( _M . p t . sc e . sc h )
+    ( _M . p z . sc f . sc g )
+}
+
+// p ← p + niels(yp, ym, t2d): the ref10 ge_madd shape, 7M, Z2 = 1.
+@ __xe_madd XEScr sc XEP p ( Vec i ) yp ( Vec i ) ym ( Vec i ) t2d → v {
     ( _Z . sc a . p y . p x )
-    ( _Z . sc tt . q y . q x )
-    ( _M . sc a . sc a . sc tt )
-    ( _A . sc b . p x . p y )
-    ( _A . sc tt . q x . q y )
-    ( _M . sc b . sc b . sc tt )
-    ( _M . sc c . p t . q t )
-    ( _M . sc c . sc c d2 )
-    ( _M . sc d . p z . q z )
-    ( _A . sc d . sc d . sc d )
+    ( _M . sc a . sc a ym )  // A = (Y1−X1)·(y2−x2)
+    ( _A . sc b . p y . p x )
+    ( _M . sc b . sc b yp )  // B = (Y1+X1)·(y2+x2)
+    ( _M . sc c . p t t2d )  // C = T1·2d·t2
+    ( _A . sc d . p z . p z )  // D = 2Z1
     ( _Z . sc e . sc b . sc a )
     ( _Z . sc f . sc d . sc c )
     ( _A . sc g . sc d . sc c )
     ( _A . sc h . sc b . sc a )
     ( _M . p x . sc e . sc f )
-    ( _M . p y . sc h . sc g )
+    ( _M . p y . sc g . sc h )
     ( _M . p z . sc g . sc f )
     ( _M . p t . sc e . sc h )
 }
 
-// Constant-time read of entry `digit` (0..15) into dst from the flat baked
-// table (stride 20): all 16 entries scanned, merged under a match mask.
-@ __xe_tbl_get ( Vec i ) tbl i digit XEP dst → v {
-    : *i tb ( vec_data [i] tbl )
-    : *i dx ( vec_data [i] . dst x ) : *i dy ( vec_data [i] . dst y )
-    : *i dz ( vec_data [i] . dst z ) : *i dt ( vec_data [i] . dst t )
-    : ~ i k 0
-    ~ < k 5 { = . dx k 0 = . dy k 0 = . dz k 0 = . dt k 0 = k + k 1 }
-    : ~ i e 0
-    ~ < e 16 {
-        : u64 z ^^ # u64 e # u64 digit
-        : i mask - 0 # i >> - z 1 63
-        : i base * e 20
-        : ~ i j 0
-        ~ < j 5 {
-            = . dx j | . dx j & mask . tb + base j
-            = . dy j | . dy j & mask . tb + + base 5 j
-            = . dz j | . dz j & mask . tb + + base 10 j
-            = . dt j | . dt j & mask . tb + + base 15 j
-            = j + j 1
-        }
-        = e + e 1
-    }
+// Zero a gf in place.
+@ _gf_zero_into ( Vec i ) v → v {
+    : *i q ( vec_data [i] v )
+    = . q 0 0 = . q 1 0 = . q 2 0 = . q 3 0 = . q 4 0
 }
 
 // scalar·B via the comb → 32-byte little-endian Montgomery u (the X25519
@@ -634,15 +783,16 @@ $ `stdlib/core/vec.nu`
     ( _bset sc 0 & ( _x_bget scalar 0 ) 248 )
 
     : XEScr scr ( __xe_scr )
-    : ( Vec i ) d2 ( __xe_d2 )
-    : ( Vec i ) tbl ( __xe_comb_table )
+    : ( Vec i ) tbl ( __xe_ntbl )
     : XEP acc ( __xe_pt )
     : *i ay ( vec_data [i] . acc y ) : *i az ( vec_data [i] . acc z )
     = . ay 0 1 = . az 0 1
-    : XEP selp ( __xe_pt )
+    : ( Vec i ) syp ( _gf_zero )
+    : ( Vec i ) sym ( _gf_zero )
+    : ( Vec i ) std ( _gf_zero )
     : ~ i i 63
     ~ >= i 0 {
-        ( __xe_add scr acc acc d2 )
+        ( __xe_dbl scr acc )
         : ~ i idx 0
         : ~ i j 0
         ~ < j 4 {
@@ -651,8 +801,8 @@ $ `stdlib/core/vec.nu`
             = idx | idx << bit j
             = j + j 1
         }
-        ( __xe_tbl_get tbl idx selp )
-        ( __xe_add scr acc selp d2 )
+        ( __xe_ntbl_get tbl idx syp sym std )
+        ( __xe_madd scr acc syp sym std )
         = i - i 1
     }
 
@@ -665,8 +815,10 @@ $ `stdlib/core/vec.nu`
     ( _M uf num den )
     : ( Vec u ) out ( _pack25519 uf )
 
-    ( __xe_scr_free scr ) ( vec_free [i] d2 ) ( vec_free [i] tbl )
-    ( __xe_pt_free acc ) ( __xe_pt_free selp )
+    // tbl is the shared process-global niels table — never freed here.
+    ( __xe_scr_free scr )
+    ( __xe_pt_free acc )
+    ( vec_free [i] syp ) ( vec_free [i] sym ) ( vec_free [i] std )
     ( vec_free [u] sc ) ( vec_free [i] num ) ( vec_free [i] den ) ( vec_free [i] uf )
     ^ out
 }

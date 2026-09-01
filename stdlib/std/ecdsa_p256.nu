@@ -265,7 +265,7 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     // all-zero identity output, as before).
     : ( Vec i ) zinv ( _mag4 )
     ( _p256_inv_d scr zinv . acc z )
-    ( _p256_mul_d scr . acc z zinv zinv )
+    ( _p256_sqr_d scr . acc z zinv )
     ( _p256_mul_d scr . acc x . acc x . acc z )
     ( _p256_mul_d scr . acc z . acc z zinv )
     ( _p256_mul_d scr . acc y . acc y . acc z )
