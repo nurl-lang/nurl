@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`stdlib/ext/json.nu` passes the full JSONTestSuite — 283/283 must-accept /
+  must-reject verdicts correct.** Six `n_` documents parsed clean before, from
+  two roots:
+
+  * **The surrogate-pair lookahead consumed as it peeked.** After `\uD800`,
+    a `\` was swallowed before knowing whether `u` followed — so in
+    `["\uD800\"]` the escape lost its backslash, the stray quote closed the
+    string, and a document whose string never terminates parsed successfully.
+    And when `\u` did follow with malformed hex (`\u`, `\u1`, `\u1x`,
+    `\uDd"`), a code path its own comment called "best-effort recovery"
+    dropped the error a plain `\uZZZZ` raises. The lookahead is now pure —
+    `\u` is consumed only after both bytes matched, and once consumed the
+    four digits must be hex, the rule every other escape lives by. A
+    complete-but-unpaired surrogate stays accepted as U+FFFD (RFC 8259
+    leaves it undefined), and a value that breaks a pair re-enters the
+    pairing loop, so `\uD800` followed by a real pair still decodes the
+    real code point.
+
+  * **`json_parse` takes `s`, so the document ended at the first NUL** —
+    `123\0` truncated to `123` and parsed clean. The parser was already
+    length-based internally; only the entry ran `strlen`. New entries carry
+    the length end to end: `json_parse_n src len` (the root entry — an
+    embedded NUL is an ordinary rejected byte) and `json_parse_bytes buf`
+    for `( Vec u )` payloads (network buffers, `read_file_bytes` results).
+    `json_parse` is now a documented C-string wrapper over `json_parse_n`.
+
+  `tools/json_conformance.sh` runs the full suite against the byte-exact
+  harness (clones JSONTestSuite shallow when absent); the six regressions
+  plus the pairing/NUL semantics are pinned by
+  `compiler/tests/json_surrogate_lookahead.nu`. Parse throughput is
+  unchanged (measured A/B on `bench/json_parse`), and the parser fuzzer's
+  3000-iteration ASan+UBSan pass stays clean.
+
+
 ### Changed
 
 - **The Linux I/O reactor became a netpoller — and the HTTP facade now
