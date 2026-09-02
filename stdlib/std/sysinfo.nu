@@ -24,6 +24,8 @@ $ `stdlib/core/string.nu`
 
 & `c` @ nurl_cpu_count → i
 
+& `c` @ nurl_available_parallelism → i
+
 : i SYS_SYSNAME 0
 : i SYS_NODENAME 1
 : i SYS_RELEASE 2
@@ -52,4 +54,14 @@ $ `stdlib/core/string.nu`
 @ sys_cpu_count → i {
     : i n ( nurl_cpu_count )
     ^ ? < n 1 1 n
+}
+
+// How many threads THIS PROCESS can run at once: the affinity mask
+// (taskset / cpuset) capped by a container's cgroup CPU quota — what
+// the fiber scheduler sizes its worker pool by when NURL_WORKERS is
+// unset, and what Rust's available_parallelism() reports. sys_cpu_count
+// is the machine's hardware count regardless of such limits.
+@ sys_available_parallelism → i {
+    : i n ( nurl_available_parallelism )
+    ^ ? > n 0 n 1
 }

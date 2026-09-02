@@ -4377,6 +4377,83 @@ void nurl_fiber_join(long long fiber) {
 
 /* ── Worker loop ─────────────────────────────────────────────────── */
 
+#if defined(__linux__)
+#include <sched.h>   /* sched_getaffinity, CPU_COUNT (under _GNU_SOURCE) */
+/* ceil(quota / period) from a cgroup cpu limit, or 0 when unlimited or
+ * unreadable. v2: one file "cpu.max" = "<quota|max> <period>"; v1: two
+ * files cpu.cfs_quota_us (-1 = none) and cpu.cfs_period_us. */
+static long long nurl__cgroup_cpu_limit(void) {
+    char buf[64];
+    FILE *f = fopen("/sys/fs/cgroup/cpu.max", "r");
+    if (f) {
+        long long quota = 0, period = 0;
+        int ok = fscanf(f, "%lld %lld", &quota, &period) == 2;
+        fclose(f);
+        if (ok && quota > 0 && period > 0) return (quota + period - 1) / period;
+        /* "max <period>" fails the %lld on "max": unlimited */
+        return 0;
+    }
+    f = fopen("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", "r");
+    if (!f) f = fopen("/sys/fs/cgroup/cpu,cpuacct/cpu.cfs_quota_us", "r");
+    if (f) {
+        long long quota = -1, period = 0;
+        if (!fgets(buf, sizeof buf, f)) buf[0] = 0;
+        fclose(f);
+        quota = atoll(buf);
+        if (quota <= 0) return 0;
+        FILE *p = fopen("/sys/fs/cgroup/cpu/cpu.cfs_period_us", "r");
+        if (!p) p = fopen("/sys/fs/cgroup/cpu,cpuacct/cpu.cfs_period_us", "r");
+        if (!p) return 0;
+        if (!fgets(buf, sizeof buf, p)) buf[0] = 0;
+        fclose(p);
+        period = atoll(buf);
+        if (period <= 0) return 0;
+        return (quota + period - 1) / period;
+    }
+    return 0;
+}
+#endif
+
+/* HOSTED ONLY (this file is the half a freestanding target does not
+ * have; the unikernel's cooperative runtime never sizes a pool).
+ * How many threads can run at once FOR THIS PROCESS — the number the
+ * fiber scheduler sizes its worker pool by. Not the machine's CPU count:
+ * a process pinned with taskset/cpuset to 6 of 12 hardware threads, or
+ * capped by a container's cgroup CPU quota, gets exactly that many
+ * runnable threads, and every worker beyond it is a thread the kernel
+ * has to time-slice against a sibling. Measured on the reference host
+ * (12 hardware threads, server pinned to cores 0-5): the online count
+ * gave 12 workers on 6 cores — 0.75 context switches and 0.2 CPU
+ * migrations PER REQUEST at 20 connections, 124k req/s at p50 0.135 ms;
+ * six workers gave 153k at p50 0.115 ms with 50x fewer migrations. This
+ * is what Rust's std::thread::available_parallelism() returns, and thus
+ * what the tokio peer sizes itself by. Falls back to nurl_cpu_count. */
+long long nurl_available_parallelism(void) {
+    long long n = nurl_cpu_count();
+#if defined(__linux__)
+    {
+        cpu_set_t set;
+        CPU_ZERO(&set);
+        if (sched_getaffinity(0, sizeof set, &set) == 0) {
+            long long c = (long long)CPU_COUNT(&set);
+            if (c > 0 && c < n) n = c;
+        }
+        long long q = nurl__cgroup_cpu_limit();
+        if (q > 0 && q < n) n = q;
+    }
+#elif defined(_WIN32)
+    {
+        DWORD_PTR pmask = 0, smask = 0;
+        if (GetProcessAffinityMask(GetCurrentProcess(), &pmask, &smask) && pmask) {
+            long long c = 0;
+            while (pmask) { c += (long long)(pmask & 1); pmask >>= 1; }
+            if (c > 0 && c < n) n = c;
+        }
+    }
+#endif
+    return n > 0 ? n : 1;
+}
+
 /* xorshift32 — branch-free victim picker. */
 static unsigned nurl__rng_next(unsigned *st) {
     unsigned x = *st;
@@ -4541,7 +4618,11 @@ void nurl_runtime_init(long long worker_count) {
         const char *env = getenv("NURL_WORKERS");
         if (env && *env) wc = (int)nurl__parse_ul(env, NULL);
         if (wc <= 0) {
-            long n = sysconf(_SC_NPROCESSORS_ONLN);
+            /* One worker per thread this PROCESS may run — the affinity
+             * mask and the cgroup quota, not the machine's CPU count
+             * (see nurl_available_parallelism in runtime_core.c for the
+             * measurement that made the difference visible). */
+            long long n = nurl_available_parallelism();
             wc = (n > 0) ? (int)n : 2;
         }
     }
