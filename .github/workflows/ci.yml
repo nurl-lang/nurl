@@ -317,7 +317,7 @@ jobs:
           mkdir -p "$HOME/.local/bin" && tar -xzf /tmp/h2spec.tgz -C "$HOME/.local/bin" h2spec
           "$HOME/.local/bin/h2spec" --version
 
-      - name: HTTP/2 conformance gate (h2spec: TLS+ALPN, h2c, shared plaintext port)
+      - name: "HTTP/2 conformance gate (h2spec: TLS+ALPN, h2c, shared plaintext port)"
         # h2spec 146/146 (+147/147 strict) against the HttpApp TLS listener
         # and the HTTP/2-only example; 145/146 on the plaintext port shared
         # with HTTP/1.1, where the one pinned failure (§3.5/2, invalid
