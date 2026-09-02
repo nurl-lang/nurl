@@ -31,6 +31,7 @@ $ `stdlib/std/ecdsa_p256.nu`
 $ `stdlib/std/chacha20poly1305.nu`
 $ `stdlib/std/aes_gcm.nu`
 $ `stdlib/std/mlkem.nu`
+$ `stdlib/std/time.nu`
 $ `stdlib/std/tls_verify.nu`
 
 & `libc` @ nurl_tcp_connect s host i port → i
@@ -142,6 +143,16 @@ $ `stdlib/std/async_ffi.nu`
     i kx_group  // negotiated group: 4588 X25519MLKEM768, 29 x25519,
     // 23 secp256r1, 0 before the handshake reaches it
     ( Vec u ) alpn_sel  // ALPN protocol the server selected (empty if none)
+    // ── session resumption (RFC 8446 §4.6.1 / §4.2.11) ──
+    i resumed  // 1 when this connection came up from a PSK ticket
+    ( Vec u ) res_master  // resumption_master_secret, set when the handshake
+    // completes; the PSK of every ticket on this connection derives from it
+    ( Vec u ) res_early  // client scratch: early_secret(PSK) while offering
+    ( Vec u ) tk_ticket  // newest ticket (to offer next time / being offered)
+    ( Vec u ) tk_psk  // its PSK
+    i tk_age_add  // its ticket_age_add
+    i tk_lifetime  // its ticket_lifetime, seconds
+    i tk_received_ms  // wall clock (ms) when it arrived
 }
 
 // ── small helpers ─────────────────────────────────────────────────
@@ -152,6 +163,18 @@ $ `stdlib/std/async_ffi.nu`
 @ _tls_u16 ( Vec u ) v i n → v {
     ( vec_push [u] v # u & >> n 8 255 )
     ( vec_push [u] v # u & n 255 )
+}
+
+@ _tls_u32 ( Vec u ) v i n → v {
+    ( vec_push [u] v # u & >> n 24 255 )
+    ( vec_push [u] v # u & >> n 16 255 )
+    ( vec_push [u] v # u & >> n 8 255 )
+    ( vec_push [u] v # u & n 255 )
+}
+
+@ _tls_u64 ( Vec u ) v i n → v {
+    ( _tls_u32 v & >> n 32 4294967295 )
+    ( _tls_u32 v & n 4294967295 )
 }
 
 @ _u24 ( Vec u ) v i n → v {
@@ -382,6 +405,19 @@ $ `stdlib/std/async_ffi.nu`
 @ __send_encrypted * TlsConn c i content_type ( Vec u ) content → !v TlsErr {
     : ( Vec u ) inner ( vec_with_cap [u] + ( vec_len [u] content ) 1 )
     ( _tls_cat inner content )
+    ^ ( __send_inner_encrypted c content_type inner )
+}
+
+// Same record, plaintext = bytes [lo, hi) of `head`‖`body`, assembled
+// straight from the two buffers (tls_write2's per-record step).
+@ __send_encrypted_pair * TlsConn c i content_type ( Vec u ) head ( Vec u ) body i lo i hi → !v TlsErr {
+    : ( Vec u ) inner ( _tls_pair_slice head body lo hi )
+    ^ ( __send_inner_encrypted c content_type inner )
+}
+
+// Seal `inner` (plaintext WITHOUT the type byte yet; consumed here) as
+// one TLS 1.3 record under the client write keys and send it.
+@ __send_inner_encrypted * TlsConn c i content_type ( Vec u ) inner → !v TlsErr {
     ( vec_push [u] inner # u content_type )
     : i total + ( vec_len [u] inner ) 16
     : ( Vec u ) aad ( vec_with_cap [u] 5 )
@@ -485,7 +521,7 @@ $ `stdlib/std/async_ffi.nu`
 }
 
 // ── ClientHello ───────────────────────────────────────────────────
-@ __build_client_hello s host ( Vec u ) pubkey ( Vec u ) p256pub ( Vec u ) pqpub ( Vec u ) random ( Vec u ) sessid s alpn → ( Vec u ) {
+@ __build_client_hello s host ( Vec u ) pubkey ( Vec u ) p256pub ( Vec u ) pqpub ( Vec u ) random ( Vec u ) sessid s alpn ( Vec u ) psk_id i obf_age → ( Vec u ) {
     : ( Vec u ) body ( vec_new [u] )
     ( _tls_u16 body 771 )  // legacy_version 0x0303
     ( _tls_cat body random )  // 32-byte random
@@ -638,6 +674,34 @@ $ `stdlib/std/async_ffi.nu`
         ( vec_free [u] alp )
     } {}
 
+    // ── resumption offer (RFC 8446 §4.2.9 + §4.2.11) ──
+    // psk_key_exchange_modes: psk_dhe_ke only — a resumed handshake still
+    // runs a fresh (EC)DHE, so a ticket that leaks later never decrypts a
+    // recording of this connection. pre_shared_key MUST be the last
+    // extension: its binder is an HMAC over the ClientHello up to (not
+    // including) the binders list, so everything else has to be in place
+    // first. The binder bytes here are a placeholder the caller overwrites
+    // once it has hashed the truncated hello (see _psk_binder_over).
+    ? > ( vec_len [u] psk_id ) 0 {
+        : ( Vec u ) modes ( vec_new [u] )
+        ( vec_push [u] modes # u 1 )  // list length
+        ( vec_push [u] modes # u 1 )  // psk_dhe_ke
+        ( _tls_u16 ext 45 )
+        ( _blk16 ext modes )
+        ( vec_free [u] modes )
+        : ( Vec u ) psk ( vec_new [u] )
+        ( _tls_u16 psk + ( vec_len [u] psk_id ) 6 )  // identities: u16 len + id + u32 age
+        ( _blk16 psk psk_id )
+        ( _tls_u32 psk obf_age )
+        ( _tls_u16 psk 33 )  // binders: u8 len + 32 bytes
+        ( vec_push [u] psk # u 32 )
+        : ~ i bk 0
+        ~ < bk 32 { ( vec_push [u] psk # u 0 ) = bk + bk 1 }
+        ( _tls_u16 ext 41 )
+        ( _blk16 ext psk )
+        ( vec_free [u] psk )
+    } {}
+
     ( _blk16 body ext )
     ( vec_free [u] ext )
 
@@ -738,6 +802,174 @@ $ `stdlib/std/async_ffi.nu`
     }
 }
 
+// ── PSK key schedule pieces (shared by client and server) ─────────
+
+// early_secret for a PSK: HKDF-Extract(salt = "", IKM = PSK).
+@ _psk_early ( Vec u ) psk → ( Vec u ) {
+    : ( Vec u ) empty ( vec_new [u] )
+    : ( Vec u ) early ( hkdf_extract empty psk )
+    ( vec_free [u] empty )
+    ^ early
+}
+
+// The binder for a pre_shared_key offer (RFC 8446 §4.2.11.2): the
+// Finished-style MAC under early_secret → "res binder" → "finished", over
+// the transcript hash of the ClientHello TRUNCATED to `trunc_len` bytes —
+// everything before the binders list. With the extension last that is
+// `len - 35` (u16 binders length + u8 binder length + 32 bytes).
+@ _psk_binder_over ( Vec u ) early ( Vec u ) ch i trunc_len → ( Vec u ) {
+    : ( Vec u ) empty ( vec_new [u] )
+    : ( Vec u ) ehash ( sha256_pure empty )
+    : ( Vec u ) bkey ( derive_secret early `res binder` ehash )
+    : ( Vec u ) fkey ( hkdf_expand_label bkey `finished` empty 32 )
+    : ( Vec u ) trunc ( bytes_slice ch 0 trunc_len )
+    : ( Vec u ) th ( sha256_pure trunc )
+    : ( Vec u ) mac ( hmac_sha256_pure fkey th )
+    ( vec_free [u] empty ) ( vec_free [u] ehash ) ( vec_free [u] bkey )
+    ( vec_free [u] fkey ) ( vec_free [u] trunc ) ( vec_free [u] th )
+    ^ mac
+}
+
+// Constant-time compare of two 32-byte values (binders, Finished MACs).
+@ _ct_eq32 ( Vec u ) a i aoff ( Vec u ) b → b {
+    ? | < ( vec_len [u] a ) + aoff 32 < ( vec_len [u] b ) 32 { ^ F } {}
+    : ~ i diff 0
+    : ~ i k 0
+    ~ < k 32 { = diff | diff ^^ ( _t_bget a + aoff k ) ( _t_bget b k ) = k + k 1 }
+    ^ == diff 0
+}
+
+// Overwrite the last 32 bytes of `ch` (the binder placeholder) with `b`.
+@ __ch_patch_binder ( Vec u ) ch ( Vec u ) b → v {
+    : i off - ( vec_len [u] ch ) 32
+    : *u d ( vec_data [u] ch )
+    : ~ i k 0
+    ~ < k 32 { = . d + off k # u ( _t_bget b k ) = k + k 1 }
+}
+
+// ── session state (client) ────────────────────────────────────────
+
+// Opaque resumption state for a later connection: what the newest
+// NewSessionTicket said plus the PSK derived from it. Empty when no
+// ticket has arrived — the server sends it right after the handshake,
+// inside the application-data stream, so it lands during the first
+// tls_read. Hand the bytes to tls_connect_resume / tls_attach_resume;
+// they are secret (they hold the PSK) and single-purpose.
+@ tls_session_export * TlsConn c → ( Vec u ) {
+    : ( Vec u ) out ( vec_new [u] )
+    ? == ( vec_len [u] . c tk_ticket ) 0 { ^ out } {}
+    ( vec_push [u] out # u 1 )  // format version
+    ( _tls_u32 out . c tk_age_add )
+    ( _tls_u32 out . c tk_lifetime )
+    ( _tls_u64 out . c tk_received_ms )
+    ( _blk16 out . c tk_psk )
+    ( _blk16 out . c tk_ticket )
+    ^ out
+}
+
+// T when the handshake used a ticket (no certificate was sent; the PSK
+// authenticates the server as the one that issued it).
+@ tls_is_resumed * TlsConn c → b {
+    ^ == . c resumed 1
+}
+
+// Load an exported session onto a fresh conn as the offer for its
+// handshake. F (and nothing loaded) for an empty, malformed or expired
+// blob — the caller then simply does a full handshake.
+@ __sess_load * TlsConn c ( Vec u ) sess → b {
+    : i n ( vec_len [u] sess )
+    ? | < n 21 != ( _t_bget sess 0 ) 1 { ^ F } {}
+    : i age_add ( _rdint sess 1 4 )
+    : i lifetime ( _rdint sess 5 4 )
+    : i received ( _rdint sess 9 8 )
+    : i plen ( _rdint sess 17 2 )
+    : i tp + 19 plen
+    ? > + tp 2 n { ^ F } {}
+    : i tlen ( _rdint sess tp 2 )
+    ? | == tlen 0 != + + tp 2 tlen n { ^ F } {}
+    // RFC 8446 §4.6.1: a ticket is usable for ticket_lifetime seconds
+    // (never more than 7 days); past that the server will decline it, so
+    // do not offer it.
+    : i age_ms - ( now_ms ) received
+    ? | < age_ms 0 > age_ms * lifetime 1000 { ^ F } {}
+    ( vec_free [u] . c tk_psk ) ( vec_free [u] . c tk_ticket )
+    = . c tk_psk ( bytes_slice sess 19 tp )
+    = . c tk_ticket ( bytes_slice sess + tp 2 n )
+    = . c tk_age_add age_add
+    = . c tk_lifetime lifetime
+    = . c tk_received_ms received
+    ^ T
+}
+
+// Post-handshake messages that arrive inside the application-data
+// stream. NewSessionTicket (4) is kept — its PSK is derived from this
+// connection's resumption_master_secret — so tls_session_export can hand
+// it on; KeyUpdate (24) and anything else are ignored, as before.
+@ __client_post_hs * TlsConn c ( Vec u ) inner → v {
+    ( _tls_cat . c hsbuf inner )
+    : ~ b more T
+    ~ more {
+        = more F
+        : i have ( vec_len [u] . c hsbuf )
+        ? >= have 4 {
+            : i mlen ( _rdint . c hsbuf 1 3 )
+            ? >= have + 4 mlen {
+                : ( Vec u ) msg ( bytes_slice . c hsbuf 0 + 4 mlen )
+                : ( Vec u ) rest ( bytes_slice . c hsbuf + 4 mlen have )
+                ( vec_free [u] . c hsbuf )
+                = . c hsbuf rest
+                ? == ( _t_bget msg 0 ) 4 { ( __client_take_ticket c msg ) } {}
+                ( vec_free [u] msg )
+                = more T
+            } {}
+        } {}
+    }
+}
+
+// NewSessionTicket body: u32 lifetime, u32 age_add, nonce<u8>, ticket<u16>,
+// extensions<u16>. PSK = HKDF-Expand-Label(res_master, "resumption", nonce, 32).
+@ __client_take_ticket * TlsConn c ( Vec u ) msg → v {
+    ? == ( vec_len [u] . c res_master ) 0 { ^ } {}
+    : i n ( vec_len [u] msg )
+    ? < n 17 { ^ } {}
+    : i lifetime ( _rdint msg 4 4 )
+    : i age_add ( _rdint msg 8 4 )
+    : i nlen ( _t_bget msg 12 )
+    : i tp + 13 nlen
+    ? > + tp 2 n { ^ } {}
+    : i tlen ( _rdint msg tp 2 )
+    ? | == tlen 0 > + + tp 2 tlen n { ^ } {}
+    : ( Vec u ) nonce ( bytes_slice msg 13 tp )
+    : ( Vec u ) psk ( hkdf_expand_label . c res_master `resumption` nonce 32 )
+    ( vec_free [u] nonce )
+    ( vec_free [u] . c tk_ticket ) ( vec_free [u] . c tk_psk )
+    = . c tk_ticket ( bytes_slice msg + tp 2 + + tp 2 tlen )
+    = . c tk_psk psk
+    = . c tk_age_add age_add
+    = . c tk_lifetime lifetime
+    = . c tk_received_ms ( now_ms )
+}
+
+// Does a ServerHello carry pre_shared_key (41) — i.e. did the server take
+// our ticket? Layout after the 4-byte header: ver(2) random(32) sid<u8>
+// cipher(2) compression(1) extensions<u16>.
+@ __sh_has_psk ( Vec u ) msg → b {
+    : ~ i p 38
+    : i sidlen ( _t_bget msg p )
+    = p + + p 1 sidlen
+    = p + p 3
+    : i extlen ( _rdint msg p 2 )
+    = p + p 2
+    : i extend + p extlen
+    ~ < + p 4 + extend 1 {
+        : i etype ( _rdint msg p 2 )
+        : i elen ( _rdint msg + p 2 2 )
+        ? == etype 41 { ^ T } {}
+        = p + + p 4 elen
+    }
+    ^ F
+}
+
 // HMAC-based Finished verify_data over a traffic secret + transcript hash.
 @ _finished_mac ( Vec u ) secret ( Vec u ) thash → ( Vec u ) {
     : ( Vec u ) emptyc ( vec_new [u] )
@@ -801,7 +1033,7 @@ $ `stdlib/std/async_ffi.nu`
 // Core client handshake. `alpn` is a single ALPN protocol to offer (e.g.
 // "h2"); empty means no ALPN extension is sent. The negotiated protocol
 // (from the server's EncryptedExtensions) is stored in `c.alpn_sel`.
-@ __tls_handshake i raw s server_name s alpn → !*TlsConn TlsErr {
+@ __tls_handshake i raw s server_name s alpn ( Vec u ) sess → !*TlsConn TlsErr {
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 { ^ @ !*TlsConn TlsErr { F # TlsErr TlsConnect } } {}
     // Read timeout so an unresponsive/dead peer fails the handshake
@@ -834,6 +1066,30 @@ $ `stdlib/std/async_ffi.nu`
     = . c kx_mlkem ( vec_new [u] )
     = . c kx_group 0
     = . c alpn_sel ( vec_new [u] )
+    = . c resumed 0
+    = . c res_master ( vec_new [u] )
+    = . c res_early ( vec_new [u] )
+    = . c tk_ticket ( vec_new [u] )
+    = . c tk_psk ( vec_new [u] )
+    = . c tk_age_add 0
+    = . c tk_lifetime 0
+    = . c tk_received_ms 0
+
+    // ── resumption offer ──
+    // A usable exported session becomes the pre_shared_key offer; the
+    // server may still decline it (rotated ticket key, expired, or no
+    // resumption at all), in which case the handshake below is simply
+    // the full one — nothing here is trusted until the ServerHello says
+    // the ticket was taken.
+    : ~ i offer 0
+    : ~ i obf_age 0
+    ? ( __sess_load c sess ) {
+        = offer 1
+        ( vec_free [u] . c res_early )
+        = . c res_early ( _psk_early . c tk_psk )
+        : i age - ( now_ms ) . c tk_received_ms
+        = obf_age & + age . c tk_age_add 4294967295
+    } {}
 
     // ── key share ──
     : ( Vec u ) priv ( _rand_bytes 32 )
@@ -857,9 +1113,16 @@ $ `stdlib/std/async_ffi.nu`
     : ~ ( Vec u ) tr ( vec_new [u] )
 
     // ── ClientHello ──
-    : ( Vec u ) ch ( __build_client_hello server_name cpub p256pub pqpub random sessid alpn )
+    : ( Vec u ) noid ( vec_new [u] )
+    : ( Vec u ) ch ( __build_client_hello server_name cpub p256pub pqpub random sessid alpn ? == offer 1 . c tk_ticket noid obf_age )
+    ( vec_free [u] noid )
     ( vec_free [u] pqpub )
     ( vec_free [u] p256pub )
+    ? == offer 1 {
+        : ( Vec u ) binder ( _psk_binder_over . c res_early ch - ( vec_len [u] ch ) 35 )
+        ( __ch_patch_binder ch binder )
+        ( vec_free [u] binder )
+    } {}
     ( _tls_cat tr ch )
     : !v TlsErr sw ( _send_plain c 22 ch )
     ?? sw { T _ → {} F e → { ^ ( __fail c priv cpub random sessid ch tr e ) } }
@@ -907,7 +1170,12 @@ $ `stdlib/std/async_ffi.nu`
     ~ < zk 32 { ( vec_push [u] z32 # u 0 ) = zk + zk 1 }
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) ehash ( sha256_pure empty )
-    : ( Vec u ) early ( hkdf_extract empty z32 )
+    // The server took our ticket iff its ServerHello carries
+    // pre_shared_key; then the early secret is the PSK's and no
+    // Certificate / CertificateVerify will follow — the PSK is the proof
+    // of identity (only the issuer of the ticket knows it).
+    ? & == offer 1 ( __sh_has_psk sh ) { = . c resumed 1 } {}
+    : ( Vec u ) early ? == . c resumed 1 ( bytes_slice . c res_early 0 32 ) ( hkdf_extract empty z32 )
     : ( Vec u ) derived1 ( derive_secret early `derived` ehash )
     : ( Vec u ) hs_secret ( hkdf_extract derived1 ecdhe )
 
@@ -998,6 +1266,15 @@ $ `stdlib/std/async_ffi.nu`
     ( _set_keys c 1 c_ap )
     = . c established 1
 
+    // resumption_master_secret: transcript through our own Finished.
+    // Every NewSessionTicket the server sends from here on derives its
+    // PSK from this (see __client_take_ticket).
+    ( _tls_cat tr finmsg )
+    : ( Vec u ) th_cf ( sha256_pure tr )
+    ( vec_free [u] . c res_master )
+    = . c res_master ( derive_secret master `res master` th_cf )
+    ( vec_free [u] th_cf )
+
     // free handshake secrets / scratch
     ( vec_free [u] priv ) ( vec_free [u] cpub ) ( vec_free [u] random ) ( vec_free [u] sessid )
     ( vec_free [u] ch ) ( vec_free [u] tr ) ( vec_free [u] sh ) ( vec_free [u] spub )
@@ -1012,14 +1289,47 @@ $ `stdlib/std/async_ffi.nu`
 // Upgrade an already-connected fd to TLS (no ALPN). Insecure: does not
 // verify the certificate (see tls_attach_verify).
 @ tls_attach i raw s server_name → !*TlsConn TlsErr {
-    ^ ( __tls_handshake raw server_name `` )
+    : ( Vec u ) nosess ( vec_new [u] )
+    : !*TlsConn TlsErr r ( __tls_handshake raw server_name `` nosess )
+    ( vec_free [u] nosess )
+    ^ r
 }
 
 // Like tls_attach but offers a single ALPN protocol (e.g. "h2"). After a
 // successful handshake the negotiated protocol is readable via
 // tls_alpn_selected (empty if the server declined ALPN). Insecure variant.
 @ tls_attach_alpn i raw s server_name s alpn → !*TlsConn TlsErr {
-    ^ ( __tls_handshake raw server_name alpn )
+    : ( Vec u ) nosess ( vec_new [u] )
+    : !*TlsConn TlsErr r ( __tls_handshake raw server_name alpn nosess )
+    ( vec_free [u] nosess )
+    ^ r
+}
+
+// tls_attach with a resumption offer: `sess` is what tls_session_export
+// returned from an earlier connection to the same server. If the server
+// takes it the handshake is the abbreviated PSK one (no certificate, one
+// round trip, no signature to verify) and tls_is_resumed answers T;
+// otherwise this is exactly tls_attach. Insecure variant — see
+// tls_connect_resume for the verifying one.
+@ tls_attach_resume i raw s server_name ( Vec u ) sess → !*TlsConn TlsErr {
+    ^ ( __tls_handshake raw server_name `` sess )
+}
+
+// Unverified connect with a resumption offer (the tls_connect_insecure
+// of resumption — pinned / self-signed / test servers).
+@ tls_connect_insecure_resume s host i port s server_name ( Vec u ) sess → !*TlsConn TlsErr {
+    : i raw ( nurl_tcp_connect host port )
+    ^ ( tls_attach_resume raw server_name sess )
+}
+
+// Verifying connect with a resumption offer. A resumed connection is
+// authenticated by the PSK (the ticket's issuer is the server verified
+// when the session was made); a declined offer falls back to the full
+// handshake and the usual chain / hostname verification.
+@ tls_connect_resume s host i port s server_name ( Vec u ) sess → !*TlsConn TlsErr {
+    : i raw ( nurl_tcp_connect host port )
+    : !*TlsConn TlsErr r ( tls_attach_resume raw server_name sess )
+    ^ ( __verify_conn r server_name )
 }
 
 // The ALPN protocol the server selected, as an owned String ("" if none).
@@ -1100,7 +1410,10 @@ $ `stdlib/std/async_ffi.nu`
     ?? r {
         F e → { ^ @ !*TlsConn TlsErr { F e } }
         T c → {
-            : i rc ? == . c version 12 ( __verify12 c server_name ) ( tls_cert_verify . c cert_msg . c cv_scheme . c cv_sig . c th_cert server_name )
+            // A resumed connection carries no certificate: the PSK it was
+            // established from authenticates the server as the issuer of
+            // the ticket, which was verified when that session was made.
+            : i rc ? == . c resumed 1 0 ? == . c version 12 ( __verify12 c server_name ) ( tls_cert_verify . c cert_msg . c cv_scheme . c cv_sig . c th_cert server_name )
             ? == rc 0 {
                 ^ @ !*TlsConn TlsErr { T c }
             } {
@@ -1164,6 +1477,56 @@ $ `stdlib/std/async_ffi.nu`
     ^ @ !v TlsErr { T 0 }
 }
 
+// Bytes [lo, hi) of the logical concatenation `head`‖`body`, as a fresh
+// Vec — the record cutter behind tls_write2 / tls_server_write2. One
+// memcpy per source touched; a range inside a single source is one.
+// One spare byte of capacity: the sealers push the inner content-type
+// byte onto this same Vec, and that must not be a reallocation.
+@ _tls_pair_slice ( Vec u ) head ( Vec u ) body i lo i hi → ( Vec u ) {
+    : i hn ( vec_len [u] head )
+    : i bn ( vec_len [u] body )
+    : ~ i a lo
+    : ~ i z hi
+    ? < a 0 { = a 0 } {}
+    ? > z + hn bn { = z + hn bn } {}
+    ? < z a { = z a } {}
+    : ( Vec u ) out ( vec_with_cap [u] + 1 - z a )
+    ? < a hn {
+        : i h_hi ? < z hn z hn
+        : *u hp ( vec_data [u] head )
+        ( bytes_extend_raw out # s + # i hp a - h_hi a )
+    } {}
+    ? > z hn {
+        : i b_lo ? > a hn - a hn 0
+        : *u bp ( vec_data [u] body )
+        ( bytes_extend_raw out # s + # i bp b_lo - - z hn b_lo )
+    } {}
+    ^ out
+}
+
+// Two-buffer variant of tls_write (client side of tcp_write_all2):
+// records are cut from `head`‖`body` without joining the two first.
+// TLS 1.3 assembles each record's plaintext straight from the pair;
+// TLS 1.2 hands the AEAD a plaintext Vec, so it cuts one per record
+// (the same one bytes_slice cut before).
+@ tls_write2 * TlsConn c ( Vec u ) head ( Vec u ) body → !v TlsErr {
+    : i n + ( vec_len [u] head ) ( vec_len [u] body )
+    : ~ i off 0
+    ~ < off n {
+        : ~ i hi + off 16384
+        ? > hi n { = hi n } {}
+        : ~ ! v TlsErr w @ !v TlsErr { T 0 }
+        ? == . c version 12 {
+            : ( Vec u ) part ( _tls_pair_slice head body off hi )
+            = w ( __send_record_12 c 23 part )
+            ( vec_free [u] part )
+        } { = w ( __send_encrypted_pair c 23 head body off hi ) }
+        ?? w { T _ → {} F e → { ^ @ !v TlsErr { F e } } }
+        = off hi
+    }
+    ^ @ !v TlsErr { T 0 }
+}
+
 // Read up to `max` decrypted application bytes. Returns [] on clean EOF
 // (close_notify). Post-handshake messages (tickets, key updates) are
 // consumed transparently.
@@ -1206,7 +1569,8 @@ $ `stdlib/std/async_ffi.nu`
                                     ( _tls_cat . c appbuf inner )
                                 } {
                                     ? == ct 21 { = . c closed 1 } {}
-                                    // ct == 22 → post-handshake (ticket/key update): ignore
+                                    // post-handshake: keep a NewSessionTicket, ignore the rest
+                                    ? == ct 22 { ( __client_post_hs c inner ) } {}
                                 }
                                 ( vec_free [u] inner )
                             }
@@ -1254,6 +1618,10 @@ $ `stdlib/std/async_ffi.nu`
     ( vec_free [u] . c kx_p256 )
     ( vec_free [u] . c kx_mlkem )
     ( vec_free [u] . c alpn_sel )
+    ( vec_free [u] . c res_master )
+    ( vec_free [u] . c res_early )
+    ( vec_free [u] . c tk_ticket )
+    ( vec_free [u] . c tk_psk )
     ( nurl_free # s c )
 }
 

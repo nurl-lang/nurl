@@ -11,6 +11,7 @@
 //   ( tcp_accept          TcpListener l )                   → ! TcpConn NetErr
 //   ( tcp_read_chunk      TcpConn c i max )                 → ! ( Vec u ) NetErr
 //   ( tcp_write_all       TcpConn c ( Vec u ) bytes )       → ! v NetErr
+//   ( tcp_write_all2      TcpConn c ( Vec u ) head ( Vec u ) body ) → ! v NetErr
 //   ( tcp_write_str       TcpConn c s text )                → ! v NetErr
 //   ( tcp_close_listener  TcpListener l )                   → v
 //   ( tcp_close_conn      TcpConn c )                       → v
@@ -297,6 +298,10 @@ $ `stdlib/std/pkey.nu`
         ( nurl_tcp_close raw ) ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
         ^ @ !TcpListener NetErr { F ( _net_err_of ek ) }
     } {}
+    // The session-ticket key is drawn here, while the process is still
+    // single-threaded, so every worker that later accepts on this
+    // listener seals and opens tickets under the same key.
+    ( __tls_ticket_key_ensure )
     // Copy cert list / key material into raw heap buffers, then drop the Vecs.
     : i certp ( __net_dup cert )
     : i certlen ( vec_len [u] cert )
@@ -345,6 +350,16 @@ $ `stdlib/std/pkey.nu`
     : i tp ( __conn_tlsptr c )
     ? == tp 0 { ^ 0 } {}
     ^ ( tls_group # *TlsConn tp )
+}
+
+// T when this TLS connection was established from a session ticket
+// (RFC 8446 §4.6.1) rather than a full handshake — on the server, one
+// of its own tickets; on a client, the exported session it offered.
+// F for plaintext connections.
+@ tcp_tls_resumed TcpConn c → b {
+    : i tp ( __conn_tlsptr c )
+    ? == tp 0 { ^ F } {}
+    ^ ( tls_is_resumed # *TlsConn tp )
 }
 
 // T when this connection's key exchange has a post-quantum component,
@@ -700,6 +715,15 @@ $ `stdlib/std/pkey.nu`
     ?? r { T _ → ^ @ !v NetErr { T 0 } F _ → ^ @ !v NetErr { F # NetErr NetWrite } }
 }
 
+// Two-buffer TLS write: the record layer seals `head`‖`body` into
+// records straight from the two buffers (see tls_server_write2), so the
+// plaintext is never joined into one buffer first.
+@ __tls_write_net2 TcpConn c ( Vec u ) head ( Vec u ) body → !v NetErr {
+    : *TlsConn tc # *TlsConn ( __conn_tlsptr c )
+    : !v TlsErr r ? == . c kind 2 ( tls_server_write2 tc head body ) ( tls_write2 tc head body )
+    ?? r { T _ → ^ @ !v NetErr { T 0 } F _ → ^ @ !v NetErr { F # NetErr NetWrite } }
+}
+
 // with a clean peer shutdown. Caller frees the Vec on the Ok path.
 @ tcp_read_chunk TcpConn c i max → !( Vec u ) NetErr {
     ? != ( __conn_tlsptr c ) 0 { ^ ( __tls_read_net c max ) } {}
@@ -796,35 +820,45 @@ $ `stdlib/std/pkey.nu`
 
 // ── Writing ────────────────────────────────────────────────────────
 
-@ tcp_write_all TcpConn c ( Vec u ) bytes → !v NetErr {
-    ? != ( __conn_tlsptr c ) 0 { ^ ( __tls_write_net c bytes ) } {}
-    // Context-aware dispatch — see tcp_accept's note.
-    : i fcur ( nurl_fiber_current )
-    ? != fcur 0 { ^ ( tcp_write_all_async c bytes ) } {}
-    : s rp . c raw
-    : i raw # i rp
-    : i total ( vec_len [u] bytes )
+// Two-segment send: `b1[0..n1)` then `b2[0..n2)` through ONE
+// sendmsg(2)/WSASend, returning the count written across both (short
+// counts allowed; -1 = nothing written, err_kind set). With one segment
+// empty it is exactly nurl_tcp_write. Declared here rather than in the
+// compiler preamble, like the other stdlib-only runtime entry points.
+& `c` @ nurl_tcp_write2 i conn s b1 i n1 s b2 i n2 → i
+
+// The one blocking send loop behind tcp_write_all, tcp_write_str and
+// tcp_write_all2: writes the logical concatenation `p1[0..n1)‖p2[0..n2)`
+// to the raw handle, re-pointing the pair at the unsent remainder after
+// every short count. A single buffer is the pair with `n2 == 0`.
+//
+// write(2) on a blocking socket is NOT all-or-nothing: it returns as soon
+// as it has copied SOME bytes into the send buffer, and with SO_SNDTIMEO
+// set (tcp_set_timeout) it returns a short count when the timer fires with
+// the peer's window full. Writing once and reporting success left the rest
+// of the buffer unsent, and — because the frame header had already
+// announced the full length — DESYNCED the stream: the peer's next
+// read_exact spliced the tail of one frame onto the head of the next and
+// handed up a frame of the right length with the wrong bytes. Loopback
+// hides it (the receiver drains as fast as the sender fills, so one write
+// takes everything); a real network path with an autotuned 64 KiB initial
+// send buffer does not, past a few hundred KiB. Loop until it is all gone,
+// exactly as the async twin below does.
+@ __tcp_write_pair_sync i raw s p1 i n1 s p2 i n2 → !v NetErr {
+    : i total + n1 n2
     ? <= total 0 { ^ @ !v NetErr { T 0 } } {}
-    : *u p ( vec_data [u] bytes )
-    : s pbuf # s p
-    // write(2) on a blocking socket is NOT all-or-nothing: it returns as soon
-    // as it has copied SOME bytes into the send buffer, and with SO_SNDTIMEO
-    // set (tcp_set_timeout) it returns a short count when the timer fires with
-    // the peer's window full. Writing once and reporting success left the rest
-    // of the buffer unsent, and — because the frame header had already
-    // announced the full length — DESYNCED the stream: the peer's next
-    // read_exact spliced the tail of one frame onto the head of the next and
-    // handed up a frame of the right length with the wrong bytes. Loopback
-    // hides it (the receiver drains as fast as the sender fills, so one write
-    // takes everything); a real network path with an autotuned 64 KiB initial
-    // send buffer does not, past a few hundred KiB. Loop until it is all gone,
-    // exactly as tcp_write_all_async already does.
     : ~ i sent 0
     : ~ i idle 0
     ~ < sent total {
-        : i remaining - total sent
-        : s slice # s + # i pbuf sent
-        : i wn ( nurl_tcp_write raw slice remaining )
+        : ~ s a p1
+        : ~ i an - n1 sent
+        : ~ i bn n2
+        ? < sent n1 { = a # s + # i p1 sent } {
+            = a # s + # i p2 - sent n1
+            = an - total sent
+            = bn 0
+        }
+        : i wn ( nurl_tcp_write2 raw a an p2 bn )
         ? > wn 0 { = sent + sent wn = idle 0 } {
             : i ek ( nurl_tcp_err_kind raw )
             // ek 7 is EAGAIN / SO_SNDTIMEO. The peer is still connected and
@@ -840,6 +874,37 @@ $ `stdlib/std/pkey.nu`
     ^ @ !v NetErr { T 0 }
 }
 
+@ tcp_write_all TcpConn c ( Vec u ) bytes → !v NetErr {
+    ? != ( __conn_tlsptr c ) 0 { ^ ( __tls_write_net c bytes ) } {}
+    // Context-aware dispatch — see tcp_accept's note.
+    : i fcur ( nurl_fiber_current )
+    ? != fcur 0 { ^ ( tcp_write_all_async c bytes ) } {}
+    : s rp . c raw
+    : i raw # i rp
+    : *u p ( vec_data [u] bytes )
+    ^ ( __tcp_write_pair_sync raw # s p ( vec_len [u] bytes ) # s 0 0 )
+}
+
+// Write `head` then `body` as ONE logical message. On the plaintext
+// path both segments leave in a single sendmsg(2), so a caller that
+// keeps a message head and its payload in separate buffers (the HTTP
+// server: serialised head in the connection's wire buffer, body still
+// in the response) pays neither the concat copy nor a second syscall.
+// On TLS the record layer seals the pair straight from the two buffers.
+// Both inputs are BORROWED, as for tcp_write_all.
+@ tcp_write_all2 TcpConn c ( Vec u ) head ( Vec u ) body → !v NetErr {
+    ? != ( __conn_tlsptr c ) 0 { ^ ( __tls_write_net2 c head body ) } {}
+    : s rp . c raw
+    : i raw # i rp
+    : *u hp ( vec_data [u] head )
+    : i hn ( vec_len [u] head )
+    : *u bp ( vec_data [u] body )
+    : i bn ( vec_len [u] body )
+    : i fcur ( nurl_fiber_current )
+    ? != fcur 0 { ^ ( __tcp_write_pair_async raw # s hp hn # s bp bn ) } {}
+    ^ ( __tcp_write_pair_sync raw # s hp hn # s bp bn )
+}
+
 // Convenience: write a NUL-terminated `s` (the typical HTTP header /
 // status-line case). The bytes [0..len) are sent — the trailing NUL is
 // NOT transmitted.
@@ -852,27 +917,11 @@ $ `stdlib/std/pkey.nu`
     } {}
     : s rp . c raw
     : i raw # i rp
-    : i total ( nurl_str_len text )
-    ? <= total 0 { ^ @ !v NetErr { T 0 } } {}
-    // Same short-write rule as tcp_write_all — see the note there. Status
-    // lines and headers are small enough that one write almost always takes
-    // them, which is exactly why a partial one here would be a rare,
-    // load-dependent corruption rather than an outright failure.
-    : ~ i sent 0
-    : ~ i idle 0
-    ~ < sent total {
-        : i remaining - total sent
-        : s slice # s + # i text sent
-        : i wn ( nurl_tcp_write raw slice remaining )
-        ? > wn 0 { = sent + sent wn = idle 0 } {
-            : i ek ( nurl_tcp_err_kind raw )
-            ? | == ek 7 == wn 0 {
-                = idle + idle 1
-                ? > idle 2400 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
-            } { ^ @ !v NetErr { F ( _net_err_of ek ) } }
-        }
-    }
-    ^ @ !v NetErr { T 0 }
+    // Same short-write rule as tcp_write_all — see __tcp_write_pair_sync.
+    // Status lines and headers are small enough that one write almost
+    // always takes them, which is exactly why a partial one here would be
+    // a rare, load-dependent corruption rather than an outright failure.
+    ^ ( __tcp_write_pair_sync raw text ( nurl_str_len text ) # s 0 0 )
 }
 
 // ── Phase 6 — fiber-aware async TCP wrappers ───────────────────────
@@ -1036,12 +1085,18 @@ $ `stdlib/std/async_ffi.nu`
 @ tcp_write_all_async TcpConn c ( Vec u ) bytes → !v NetErr {
     : s rp . c raw
     : i raw # i rp
+    : *u p ( vec_data [u] bytes )
+    ^ ( __tcp_write_pair_async raw # s p ( vec_len [u] bytes ) # s 0 0 )
+}
+
+// The non-blocking twin of __tcp_write_pair_sync: same pair-of-segments
+// contract, parking the fiber on the reactor instead of blocking in the
+// kernel when the socket would block.
+@ __tcp_write_pair_async i raw s p1 i n1 s p2 i n2 → !v NetErr {
     ( nurl_tcp_set_nonblock raw 1 )
     : i fd ( nurl_tcp_get_fd raw )
-    : i total ( vec_len [u] bytes )
+    : i total + n1 n2
     ? <= total 0 { ^ @ !v NetErr { T 0 } } {}
-    : *u p ( vec_data [u] bytes )
-    : s pbuf # s p
     : ~ i sent 0
     // Once ANY byte of this buffer is on the wire, giving up is not an
     // option the caller can recover from. Callers frame their writes
@@ -1060,9 +1115,15 @@ $ `stdlib/std/async_ffi.nu`
     // is the only correct way out of a partial frame.
     : ~ i idle 0
     ~ < sent total {
-        : i remaining - total sent
-        : s slice # s + # i pbuf sent
-        : i n ( nurl_tcp_write raw slice remaining )
+        : ~ s a p1
+        : ~ i an - n1 sent
+        : ~ i bn n2
+        ? < sent n1 { = a # s + # i p1 sent } {
+            = a # s + # i p2 - sent n1
+            = an - total sent
+            = bn 0
+        }
+        : i n ( nurl_tcp_write2 raw a an p2 bn )
         ? > n 0 {
             = sent + sent n
             = idle 0

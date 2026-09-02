@@ -12,6 +12,8 @@
 //   ( response_add_header  HttpResponse r s name s value ) → v
 //   ( response_set_body_str   HttpResponse r s text )      → v
 //   ( response_set_body_bytes HttpResponse r ( Vec u ) )   → v
+//   ( response_set_body_borrowed HttpResponse r *u p i n )  → v   no copy; p outlives the write
+//   ( response_set_body_borrowed_bytes HttpResponse r ( Vec u ) ) → v   no copy; Vec outlives the write
 //   ( response_set_body_json  HttpResponse r Json j )      → v
 //
 //   ( response_text     i status s text )          → HttpResponse
@@ -148,6 +150,34 @@ $ `stdlib/ext/json.nu`
     ( vec_extend [u] . r body bytes )
 }
 
+// Make `p[0..n)` the body WITHOUT copying it: the body becomes a
+// borrowed view (`vec_borrow_raw`) of the caller's buffer, the server
+// writes it in place, and `http_response_free` releases only the view,
+// never `p`. This is the large-body fast path — a precomputed asset, a
+// cache entry, an mmap — where the copy `response_set_body_bytes` makes
+// was the whole per-byte cost of the response.
+//
+// Contract (the borrow checker cannot see through a raw pointer, so it
+// is yours): `p` stays alive and unchanged until the response has been
+// written — in a handler that means a buffer that outlives the request,
+// such as one owned by the app for its whole run. Anything that later
+// appends to the body (a compressing middleware, say) detaches the view
+// into an owned copy first; nothing ever frees `p` through the response.
+@ response_set_body_borrowed HttpResponse r * u p i n → v {
+    // In place, through the body's control block — `r` is a by-value
+    // struct here, so a fresh handle assigned to `. r body` would reach
+    // only this copy (the sanitizer run caught exactly that: the caller
+    // kept a freed handle).
+    ( vec_borrow_into [u] . r body p n )
+}
+
+// Same, borrowing the live range of an existing `( Vec u )`. The caller
+// keeps `bytes` alive and does not mutate or free it until the response
+// has been written.
+@ response_set_body_borrowed_bytes HttpResponse r ( Vec u ) bytes → v {
+    ( response_set_body_borrowed r ( vec_data [u] bytes ) ( vec_len [u] bytes ) )
+}
+
 // JSON convenience: serialises `j`, copies into the body, and sets
 // `Content-Type: application/json; charset=utf-8` IF no Content-Type
 // header has been pinned yet (case-insensitive scan). Caller still
@@ -246,6 +276,23 @@ $ `stdlib/ext/json.nu`
 // Caller clears the buffer between responses; this only appends.
 @ response_serialize_to HttpResponse r ( Vec u ) out → v {
     ( vec_reserve [u] out + 64 ( vec_len [u] . r body ) )
+    ( response_serialize_head_to r out )
+    // memcpy fast path — generic `vec_extend [u]` does a per-element
+    // copy that's the dominant cost for large response bodies
+    // (e.g. 330 KB base64 wasm payload). Replaced 2026-05-27 after
+    // profiling nurlapi /build_wasm showed ~2.5 s of the 3 s total
+    // wall-time was spent in this single byte-by-byte loop.
+    ( bytes_extend_bytes out . r body )
+}
+
+// Serialise only the HEAD — status line, headers, the blank line —
+// appending into `out`. The body stays where it is: the server writes
+// head and body as two segments of one message (`tcp_write_all2`, a
+// single sendmsg), which removes what used to be a full copy of every
+// response body into the wire buffer. Content-Length still describes
+// `r.body`, so the head is only valid paired with that body.
+@ response_serialize_head_to HttpResponse r ( Vec u ) out → v {
+    ( vec_reserve [u] out 256 )
 
     // ── Status line: "HTTP/1.1 <code> <reason>\r\n" ──
     ( bytes_extend_str out `HTTP/1.1 ` )
@@ -276,14 +323,8 @@ $ `stdlib/ext/json.nu`
         ( bytes_extend_str out `\r\n` )
     } {}
 
-    // ── Blank line + body ──
+    // ── Blank line ──
     ( bytes_extend_str out `\r\n` )
-    // memcpy fast path — generic `vec_extend [u]` does a per-element
-    // copy that's the dominant cost for large response bodies
-    // (e.g. 330 KB base64 wasm payload). Replaced 2026-05-27 after
-    // profiling nurlapi /build_wasm showed ~2.5 s of the 3 s total
-    // wall-time was spent in this single byte-by-byte loop.
-    ( bytes_extend_bytes out . r body )
 }
 
 // Case-insensitive header presence check. Direct *Header iteration —

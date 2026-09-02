@@ -6,6 +6,77 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **TLS 1.3 session resumption (RFC 8446 §4.6.1 / §4.2.11).** The pure
+  server issues a `NewSessionTicket` after every handshake — stateless:
+  the ticket is the PSK sealed under a process-wide key drawn at listener
+  setup, so any worker takes it back without a session table — and
+  accepts a returning `pre_shared_key` offer (binder verified over the
+  truncated ClientHello, `psk_dhe_ke` only, no early data) with the
+  abbreviated handshake: no Certificate, no CertificateVerify, no
+  signature. The client keeps the ticket when it arrives in the
+  application stream (`tls_read`), derives its PSK from the connection's
+  `resumption_master_secret`, and offers it on the next connection:
+  `tls_session_export c` → `tls_connect_resume` / `tls_attach_resume`
+  (`tls_connect_insecure_resume` for the unverified variant);
+  `tls_is_resumed` / `tcp_tls_resumed` say which handshake happened. A
+  declined or expired ticket falls back to the full handshake. Not yet:
+  ticket-key rotation on a timer (the key lives for the process; a
+  restart invalidates outstanding tickets, which is a full handshake,
+  not a failure). Test: `compiler/tests/tls_resume.nu`.
+
+- **Borrowed Vec views and a zero-copy HTTP response body.**
+  `vec_borrow_raw [A] p n` makes a `Vec` handle over the caller's
+  buffer: reads see it in place, the first growth detaches into an owned
+  copy (copy-on-write), and `vec_free` releases only the handle
+  (`cap == -1` marks a view; grow / set_len / shrink_to_fit / free /
+  free_with honour it); `vec_borrow_into [A] v p n` re-points an existing
+  handle — the form a struct field needs, since struct values travel by
+  copy and only the shared control block reaches the caller.
+  `response_set_body_borrowed r p n` and
+  `response_set_body_borrowed_bytes r v` put a precomputed buffer on a
+  response without copying it — the remaining full copy of every large
+  response body after the wire-buffer copy was removed. The contract is
+  the caller's: the buffer outlives the write. Test:
+  `compiler/tests/vec_borrowed.nu`.
+
+### Changed
+
+- **The HTTP server no longer copies the response body into the
+  connection's wire buffer.** `__write_response` serialises only the
+  head (status line, headers, blank line) into `wire` and writes head
+  and body as two segments of one message with the new
+  `tcp_write_all2` — a single `sendmsg(2)` with a two-entry iovec
+  (`nurl_tcp_write2` in the runtime; `WSASend` on Windows), so small
+  responses keep their one-syscall cost. That concat was the second
+  full copy of every response body (the first is
+  `response_set_body_*`); the open-loop torture harness
+  (`bench/http_torture`) had put it at roughly half of the 1 MB
+  per-request CPU gap to hyper. On TLS the record layer now cuts
+  records straight from the head/body pair (`tls_server_write2`,
+  `tls_write2`) with the same record boundaries as before.
+  `response_serialize_to` / `response_serialize` are unchanged for
+  other callers (proxy, WebSocket handshake); the new
+  `response_serialize_head_to` is the head-only half.
+- `tcp_write_all`, `tcp_write_str` and `tcp_write_all_async` now share
+  one send loop each (blocking / fiber) with `tcp_write_all2` instead
+  of three hand-copied ones; the short-count / EAGAIN / SO_SNDTIMEO
+  rules are unchanged and live in one place in the runtime too
+  (`nurl__tcp_short_send`).
+
+### Fixed
+
+- **Single-worker fiber scheduler crashed the first time a fiber landed
+  on the global run queue.** `nurl__rq_take_global_batch` takes
+  `len / worker_count + 1` fibers; with one worker that is `len + 1`,
+  the walk stepped past the last fiber and dereferenced NULL. Every
+  `NURL_WORKERS=1` run — and every one-CPU container using the per-core
+  default — hit it under the first real load. The share is now capped
+  at the queue length.
+
 ## [0.58.0] — 2026-09-01
 
 ### Changed

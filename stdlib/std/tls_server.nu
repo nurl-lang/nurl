@@ -50,6 +50,155 @@ $ `stdlib/std/aes_gcm.nu`
 
 & `c` @ nurl_rand_fill *u buf i n → i
 
+// ── session tickets (RFC 8446 §4.6.1) ───────────────────────────────
+//
+// Tickets are STATELESS: the ticket a client gets back is its PSK
+// (plus issue time and lifetime) sealed under one process-wide key, so
+// any worker thread can take it back later without a shared session
+// table, and nothing accumulates per connection. The key is drawn from
+// the CSPRNG once per process (at TLS-listener setup, or on first use)
+// and lives as long as the process; a restart simply invalidates
+// outstanding tickets, which clients handle by doing a full handshake.
+// Only psk_dhe_ke is offered or accepted, and there is no early data:
+// a resumed connection still runs a fresh (EC)DHE, so a ticket that
+// leaks later never decrypts a recording, and RFC 8446 §8's replay
+// concern (0-RTT) does not arise — which is what makes a stateless,
+// re-offerable ticket safe to issue.
+: ~ i g_tls_ticket_key 0
+
+@ __tls_ticket_key_ensure → v {
+    ? != g_tls_ticket_key 0 { ^ } {}
+    : s k ( nurl_alloc 32 )
+    : i r ( nurl_rand_fill # *u k 32 )
+    ? == r 0 { ( nurl_panic `tls server: CSPRNG (nurl_rand_fill) failed` ) } {}
+    = g_tls_ticket_key # i k
+}
+
+// ticket = nonce(12) ‖ AEAD(key, nonce, "", psk(32) ‖ issued_ms(8) ‖ lifetime_s(4))
+@ __tls_ticket_seal ( Vec u ) psk i lifetime → ( Vec u ) {
+    ( __tls_ticket_key_ensure )
+    : ( Vec u ) key ( vec_borrow_raw [u] # *u g_tls_ticket_key 32 )
+    : ( Vec u ) nonce ( __srv_rand 12 )
+    : ( Vec u ) aad ( vec_new [u] )
+    : ( Vec u ) plain ( vec_with_cap [u] 44 )
+    ( _tls_cat plain psk )
+    ( _tls_u64 plain ( now_ms ) )
+    ( _tls_u32 plain lifetime )
+    : ( Vec u ) sealed ( aead_encrypt key nonce aad plain )
+    : ( Vec u ) out ( vec_with_cap [u] + 12 ( vec_len [u] sealed ) )
+    ( _tls_cat out nonce )
+    ( _tls_cat out sealed )
+    ( vec_free [u] key ) ( vec_free [u] nonce ) ( vec_free [u] aad )
+    ( vec_free [u] plain ) ( vec_free [u] sealed )
+    ^ out
+}
+
+// The PSK inside a ticket we issued — or an empty Vec when the ticket is
+// not ours, was altered, or has outlived its lifetime.
+@ __tls_ticket_open ( Vec u ) ticket → ( Vec u ) {
+    : i n ( vec_len [u] ticket )
+    ? | == g_tls_ticket_key 0 != n 72 { ^ ( vec_new [u] ) } {}
+    : ( Vec u ) key ( vec_borrow_raw [u] # *u g_tls_ticket_key 32 )
+    : ( Vec u ) nonce ( bytes_slice ticket 0 12 )
+    : ( Vec u ) ct ( bytes_slice ticket 12 n )
+    : ( Vec u ) aad ( vec_new [u] )
+    : ?( Vec u ) r ( aead_decrypt key nonce aad ct )
+    ( vec_free [u] key ) ( vec_free [u] nonce ) ( vec_free [u] ct ) ( vec_free [u] aad )
+    ?? r {
+        F _ → ^ ( vec_new [u] )
+        T plain → {
+            : i issued ( _rdint plain 32 8 )
+            : i life ( _rdint plain 40 4 )
+            : i age - ( now_ms ) issued
+            : ( Vec u ) psk ? & & == ( vec_len [u] plain ) 44 >= age 0 <= age * life 1000 ( bytes_slice plain 0 32 ) ( vec_new [u] )
+            ( vec_free [u] plain )
+            ^ psk
+        }
+    }
+}
+
+// Issue one NewSessionTicket right after the handshake, under the
+// application keys. PSK = HKDF-Expand-Label(resumption_master_secret,
+// "resumption", nonce, 32) with nonce 0x0000 — one ticket per connection.
+@ __srv_issue_ticket * TlsConn c → v {
+    : i lifetime 7200
+    : ( Vec u ) nonce ( vec_with_cap [u] 2 )
+    ( vec_push [u] nonce # u 0 )
+    ( vec_push [u] nonce # u 0 )
+    : ( Vec u ) psk ( hkdf_expand_label . c res_master `resumption` nonce 32 )
+    : ( Vec u ) ticket ( __tls_ticket_seal psk lifetime )
+    : ( Vec u ) age_add ( __srv_rand 4 )
+    : ( Vec u ) body ( vec_new [u] )
+    ( _tls_u32 body lifetime )
+    ( _tls_cat body age_add )
+    ( vec_push [u] body # u 2 )
+    ( _tls_cat body nonce )
+    ( _blk16 body ticket )
+    ( _tls_u16 body 0 )
+    : ( Vec u ) msg ( __srv_hs_wrap 4 body )
+    : !v TlsErr _w ( __srv_send_enc c 22 msg )
+    ( vec_free [u] nonce ) ( vec_free [u] psk ) ( vec_free [u] ticket )
+    ( vec_free [u] age_add ) ( vec_free [u] body ) ( vec_free [u] msg )
+}
+
+// The resumption offer in a ClientHello, if it is one we can honour: a
+// ticket of ours, offered with psk_dhe_ke, whose binder verifies over the
+// hello truncated before the binders list (RFC 8446 §4.2.11.2). Appends
+// the PSK to `out` and returns the selected identity index, or -1 (and
+// leaves `out` empty) — the caller then runs the full handshake.
+@ __srv_psk_offer ( Vec u ) ch i es i ee ( Vec u ) out → i {
+    : i modes ( __srv_find_ext ch es ee 45 )
+    ? < modes 0 { ^ -1 } {}
+    : i mlen ( _t_bget ch modes )
+    : ~ b dhe F
+    : ~ i mk 0
+    ~ < mk mlen {
+        ? == ( _t_bget ch + + modes 1 mk ) 1 { = dhe T } {}
+        = mk + mk 1
+    }
+    ? ! dhe { ^ -1 } {}
+    : i pe ( __srv_find_ext ch es ee 41 )
+    ? < pe 0 { ^ -1 } {}
+    : i idlen ( _rdint ch pe 2 )
+    : i ids + pe 2
+    : i idend + ids idlen
+    ? > + idend 2 ee { ^ -1 } {}
+    : i blen ( _rdint ch idend 2 )
+    : i bstart + idend 2
+    // pre_shared_key must be the last extension: the binder covers
+    // everything up to its binders list, so nothing may follow.
+    ? != + bstart blen ee { ^ -1 } {}
+    : ~ i p ids
+    : ~ i bp bstart
+    : ~ i idx 0
+    : ~ i sel -1
+    ~ & == sel -1 < + p 6 + idend 1 {
+        : i tl ( _rdint ch p 2 )
+        : i tstart + p 2
+        : i tend + tstart tl
+        ? | > + tend 4 idend >= bp + bstart blen { = p idend } {
+            : i bl ( _t_bget ch bp )
+            : ( Vec u ) ticket ( bytes_slice ch tstart tend )
+            : ( Vec u ) psk ( __tls_ticket_open ticket )
+            ( vec_free [u] ticket )
+            ? & == ( vec_len [u] psk ) 32 == bl 32 {
+                : ( Vec u ) early ( _psk_early psk )
+                : ( Vec u ) want ( _psk_binder_over early ch idend )
+                ? ( _ct_eq32 ch + bp 1 want ) {
+                    = sel idx
+                    ( _tls_cat out psk )
+                } {}
+                ( vec_free [u] early ) ( vec_free [u] want )
+            } {}
+            ( vec_free [u] psk )
+            = p + tend 4
+            = bp + + bp 1 bl
+            = idx + idx 1
+        }
+    }
+    ^ sel
+}
+
 // ── server-direction record I/O ─────────────────────────────────────
 
 // Encrypt one record under the SERVER write keys (s_key/s_iv/s_seq) and
@@ -60,6 +209,21 @@ $ `stdlib/std/aes_gcm.nu`
 @ __srv_enc_rec_to * TlsConn c ( Vec u ) out i content_type ( Vec u ) content → v {
     : ( Vec u ) inner ( vec_with_cap [u] + ( vec_len [u] content ) 1 )
     ( _tls_cat inner content )
+    ( __srv_seal_inner_to c out content_type inner )
+}
+
+// Same record, plaintext taken as bytes [lo, hi) of `head`‖`body` — the
+// inner plaintext is assembled straight from the two buffers (one copy,
+// exactly what the single-buffer path pays), so tls_server_write2 does
+// not cut an intermediate slice per record.
+@ __srv_enc_rec_pair_to * TlsConn c ( Vec u ) out i content_type ( Vec u ) head ( Vec u ) body i lo i hi → v {
+    : ( Vec u ) inner ( _tls_pair_slice head body lo hi )
+    ( __srv_seal_inner_to c out content_type inner )
+}
+
+// Seal `inner` (plaintext WITHOUT the type byte yet; consumed here) as
+// one TLS 1.3 record under the server write keys, appended to `out`.
+@ __srv_seal_inner_to * TlsConn c ( Vec u ) out i content_type ( Vec u ) inner → v {
     ( vec_push [u] inner # u content_type )
     : i total + ( vec_len [u] inner ) 16
     : ( Vec u ) aad ( vec_with_cap [u] 5 )
@@ -346,6 +510,14 @@ $ `stdlib/std/aes_gcm.nu`
     = . c kx_mlkem ( vec_new [u] )
     = . c kx_group 0
     = . c alpn_sel ( vec_new [u] )
+    = . c resumed 0
+    = . c res_master ( vec_new [u] )
+    = . c res_early ( vec_new [u] )
+    = . c tk_ticket ( vec_new [u] )
+    = . c tk_psk ( vec_new [u] )
+    = . c tk_age_add 0
+    = . c tk_lifetime 0
+    = . c tk_received_ms 0
 
     // Incremental transcript hash: absorb each handshake message as it
     // is appended and SNAPSHOT the digest at the checkpoints, instead of
@@ -446,6 +618,15 @@ $ `stdlib/std/aes_gcm.nu`
         ^ ( __srv_fail raw )
     } {}
 
+    // ── resumption offer? ──
+    // A ticket of ours with a good binder makes this the abbreviated
+    // handshake: early secret from the PSK, ServerHello says which
+    // identity, no Certificate / CertificateVerify. The (EC)DHE above
+    // still happens (psk_dhe_ke), so the keys are fresh either way.
+    : ( Vec u ) psk ( vec_new [u] )
+    : i psk_sel ( __srv_psk_offer ch es ee psk )
+    ? >= psk_sel 0 { = . c resumed 1 } {}
+
     // ── server ephemeral + shared secret ──
     //
     // For X25519MLKEM768 the server is the *encapsulating* side: the
@@ -491,6 +672,7 @@ $ `stdlib/std/aes_gcm.nu`
     // low-order client key_share before it can seed the key schedule.
     ? ( _all_zero ecdhe ) {
         ( __srv_cleanup_accept ch crand cpub eph spub ecdhe ( vec_new [u] ) ( vec_new [u] ) )
+        ( vec_free [u] psk )
         ( __trh_abort trh )
         ( nurl_free # s c ) ^ ( __srv_fail raw )
     } {}
@@ -505,7 +687,7 @@ $ `stdlib/std/aes_gcm.nu`
     // the handshake ends in TlsHandshake.
     : ( Vec u ) flight ( vec_with_cap [u] 2048 )
     : ( Vec u ) srand ( __srv_rand 32 )
-    : ( Vec u ) sh ( __srv_build_sh srand ch sidlen suite grp spub )
+    : ( Vec u ) sh ( __srv_build_sh srand ch sidlen suite grp spub psk_sel )
     ( sha256_update trh sh )
     ( __srv_plain_rec_to flight 22 sh )
 
@@ -519,7 +701,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) z32 ( __srv_zeros 32 )
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) ehash ( sha256_pure empty )
-    : ( Vec u ) early ( hkdf_extract empty z32 )
+    : ( Vec u ) early ? == . c resumed 1 ( _psk_early psk ) ( hkdf_extract empty z32 )
     : ( Vec u ) derived1 ( derive_secret early `derived` ehash )
     : ( Vec u ) hs_secret ( hkdf_extract derived1 ecdhe )
     : ( Vec u ) th_sh ( sha256_snapshot trh )
@@ -539,29 +721,34 @@ $ `stdlib/std/aes_gcm.nu`
     ( __srv_enc_rec_to c flight 22 ee )
     ( vec_free [u] eebody )
 
-    // ── Certificate ──
-    // cert_chain is the certificate_list body: one or more CertificateEntry
-    // structs (each [u24 cert_len][DER][u16 ext_len]) already concatenated
-    // by the caller via tls_cert_entry — leaf first, then intermediates.
-    : ( Vec u ) certbody ( vec_new [u] )
-    ( vec_push [u] certbody # u 0 )  // certificate_request_context = empty
-    ( _u24 certbody ( vec_len [u] cert_chain ) )  // certificate_list length
-    ( _tls_cat certbody cert_chain )
-    : ( Vec u ) certmsg ( __srv_hs_wrap 11 certbody )
-    ( sha256_update trh certmsg )
-    ( __srv_enc_rec_to c flight 22 certmsg )
-    ( vec_free [u] certbody )
+    // ── Certificate + CertificateVerify (full handshake only) ──
+    // A resumed handshake carries neither: the PSK is the proof of
+    // identity (RFC 8446 §4.4.2 — no Certificate when a PSK is in use).
+    ? == . c resumed 0 {
+        // cert_chain is the certificate_list body: one or more CertificateEntry
+        // structs (each [u24 cert_len][DER][u16 ext_len]) already concatenated
+        // by the caller via tls_cert_entry — leaf first, then intermediates.
+        : ( Vec u ) certbody ( vec_new [u] )
+        ( vec_push [u] certbody # u 0 )  // certificate_request_context = empty
+        ( _u24 certbody ( vec_len [u] cert_chain ) )  // certificate_list length
+        ( _tls_cat certbody cert_chain )
+        : ( Vec u ) certmsg ( __srv_hs_wrap 11 certbody )
+        ( sha256_update trh certmsg )
+        ( __srv_enc_rec_to c flight 22 certmsg )
+        ( vec_free [u] certbody )
+        ( vec_free [u] certmsg )
 
-    // ── CertificateVerify ──
-    : ( Vec u ) th_cert ( sha256_snapshot trh )
-    : ( Vec u ) cvc ( __srv_cv_content th_cert )
-    : ( Vec u ) cvdig ( sha256_pure cvc )
-    : ( Vec u ) cvbody ( __srv_cv_body keytype ec_priv rsa_n rsa_e rsa_d cvdig cvc ml_level )
-    : ( Vec u ) cvmsg ( __srv_hs_wrap 15 cvbody )
-    ( sha256_update trh cvmsg )
-    ( __srv_enc_rec_to c flight 22 cvmsg )
-    ( vec_free [u] th_cert ) ( vec_free [u] cvc ) ( vec_free [u] cvdig )
-    ( vec_free [u] cvbody )
+        // ── CertificateVerify ──
+        : ( Vec u ) th_cert ( sha256_snapshot trh )
+        : ( Vec u ) cvc ( __srv_cv_content th_cert )
+        : ( Vec u ) cvdig ( sha256_pure cvc )
+        : ( Vec u ) cvbody ( __srv_cv_body keytype ec_priv rsa_n rsa_e rsa_d cvdig cvc ml_level )
+        : ( Vec u ) cvmsg ( __srv_hs_wrap 15 cvbody )
+        ( sha256_update trh cvmsg )
+        ( __srv_enc_rec_to c flight 22 cvmsg )
+        ( vec_free [u] th_cert ) ( vec_free [u] cvc ) ( vec_free [u] cvdig )
+        ( vec_free [u] cvbody ) ( vec_free [u] cvmsg )
+    } {}
 
     // ── server Finished ──
     : ( Vec u ) th_cv ( sha256_snapshot trh )
@@ -577,7 +764,7 @@ $ `stdlib/std/aes_gcm.nu`
     ( vec_free [u] sfin )
 
     // ── application keys (transcript through server Finished) ──
-    : ( Vec u ) th_sf ( sha256_final trh )
+    : ( Vec u ) th_sf ( sha256_snapshot trh )
     : ( Vec u ) c_ap ( derive_secret master `c ap traffic` th_sf )
     : ( Vec u ) s_ap ( derive_secret master `s ap traffic` th_sf )
 
@@ -588,21 +775,31 @@ $ `stdlib/std/aes_gcm.nu`
     ?? cfr {
         T cf → {
             ? & == ( _t_bget cf 0 ) 20 ( _cmp_finished cf cexp ) { = finok 1 } {}
+            // The transcript through the client's Finished is what the
+            // resumption secret is derived from.
+            ( sha256_update trh cf )
             ( vec_free [u] cf )
         }
         F _ → {}
     }
     ( vec_free [u] cexp )
+    : ( Vec u ) th_cf ( sha256_final trh )
+    ( vec_free [u] . c res_master )
+    = . c res_master ( derive_secret master `res master` th_cf )
+    ( vec_free [u] th_cf )
 
     // switch to application keys
     ( _set_keys c 0 s_ap )
     ( _set_keys c 1 c_ap )
     = . c established 1
 
+    // A ticket for next time, first thing under the application keys.
+    ? == finok 1 { ( __srv_issue_ticket c ) } {}
+
     // free scratch / handshake secrets
     ( vec_free [u] ch ) ( vec_free [u] crand ) ( vec_free [u] cpub ) ( vec_free [u] eph )
     ( vec_free [u] spub ) ( vec_free [u] ecdhe ) ( vec_free [u] srand ) ( vec_free [u] sh )
-    ( vec_free [u] ee ) ( vec_free [u] certmsg ) ( vec_free [u] cvmsg ) ( vec_free [u] sfmsg )
+    ( vec_free [u] ee ) ( vec_free [u] sfmsg ) ( vec_free [u] psk )
     ( vec_free [u] z32 ) ( vec_free [u] empty ) ( vec_free [u] ehash )
     ( vec_free [u] early ) ( vec_free [u] derived1 ) ( vec_free [u] hs_secret ) ( vec_free [u] th_sh )
     ( vec_free [u] c_hs ) ( vec_free [u] s_hs ) ( vec_free [u] derived2 ) ( vec_free [u] master )
@@ -687,7 +884,7 @@ $ `stdlib/std/aes_gcm.nu`
 }
 
 // Build the ServerHello handshake message.
-@ __srv_build_sh ( Vec u ) srand ( Vec u ) ch i sidlen i suite i grp ( Vec u ) spub → ( Vec u ) {
+@ __srv_build_sh ( Vec u ) srand ( Vec u ) ch i sidlen i suite i grp ( Vec u ) spub i psk_sel → ( Vec u ) {
     : ( Vec u ) body ( vec_new [u] )
     ( _tls_u16 body 771 )  // legacy_version 0x0303
     ( _tls_cat body srand )  // 32-byte random
@@ -706,6 +903,12 @@ $ `stdlib/std/aes_gcm.nu`
     ( _tls_u16 ext grp )
     ( _tls_u16 ext ( vec_len [u] spub ) )
     ( _tls_cat ext spub )
+    // pre_shared_key (0x0029): the identity we took, when resuming.
+    ? >= psk_sel 0 {
+        ( _tls_u16 ext 41 )
+        ( _tls_u16 ext 2 )
+        ( _tls_u16 ext psk_sel )
+    } {}
     ( _blk16 body ext )
     ( vec_free [u] ext )
     : ( Vec u ) hs ( __srv_hs_wrap 2 body )
@@ -730,6 +933,27 @@ $ `stdlib/std/aes_gcm.nu`
         : !v TlsErr w ( __srv_send_enc c 23 part )
         ( vec_free [u] part )
         ?? w { T _ → {} F e → { ^ @ !v TlsErr { F e } } }
+        = off hi
+    }
+    ^ @ !v TlsErr { T 0 }
+}
+
+// Two-buffer variant for net.nu's tcp_write_all2: records are cut from
+// the logical concatenation `head`‖`body` (see _tls_pair_slice), so the
+// HTTP server's response head and body are never joined into one
+// plaintext buffer first. Record boundaries are identical to
+// tls_server_write over the joined bytes — same wire, one copy less.
+@ tls_server_write2 * TlsConn c ( Vec u ) head ( Vec u ) body → !v TlsErr {
+    : i n + ( vec_len [u] head ) ( vec_len [u] body )
+    : ~ i off 0
+    ~ < off n {
+        : ~ i hi + off 16384
+        ? > hi n { = hi n } {}
+        : ( Vec u ) rec ( vec_new [u] )
+        ( __srv_enc_rec_pair_to c rec 23 head body off hi )
+        : b w ( _tls_sock_write . c fd rec )
+        ( vec_free [u] rec )
+        ? w {} { ^ @ !v TlsErr { F # TlsErr TlsWrite } }
         = off hi
     }
     ^ @ !v TlsErr { T 0 }

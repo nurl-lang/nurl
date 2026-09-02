@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+── big head ──
+HTTP/1.1 200 OK\r\n
+Content-Type: application/octet-stream\r\n
+Content-Length: 3145728\r\n
+\r\n
+head_plus_body_equals_serialize=T
+write=OK
+── empty head ──
+HTTP/1.1 204 No Content\r\n
+Content-Length: 0\r\n
+\r\n
+head_plus_body_equals_serialize=T
+write=OK
+client_saw=3145858 f6ed35dbf2e0240c
