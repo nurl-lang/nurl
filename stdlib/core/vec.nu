@@ -31,6 +31,22 @@
 // API:
 //   ( vec_new [A] )                → ( Vec A )   empty, no alloc
 //   ( vec_with_cap [A] n )         → ( Vec A )   preallocated
+//   ( vec_borrow_raw [A] p n )     → ( Vec A )   BORROWED view of p[0..n):
+//                                                reads see the caller's
+//                                                buffer, the first growth
+//                                                detaches into an owned
+//                                                copy (copy-on-write), and
+//                                                vec_free releases only the
+//                                                handle — never p. Caller
+//                                                keeps p alive and stable
+//                                                for as long as the view
+//                                                is read. Element writes
+//                                                (vec_set/swap/…) before a
+//                                                detach go THROUGH to p.
+//   ( vec_borrow_into [A] v p n )  → v          re-point an EXISTING handle
+//                                                (e.g. a struct field) at
+//                                                p[0..n) as a view, freeing
+//                                                what it owned
 //   ( vec_zeroed [A] n )           → ( Vec A )   n zero-filled elements,
 //                                                len == n, one calloc
 //   ( vec_len [A] v )              → i          current length
@@ -120,10 +136,32 @@
     ^ ( nurl_peek ctl 2 )
 }
 
+// A borrowed view (vec_borrow_raw) keeps cap == -1: the buffer is not
+// ours to grow, shrink or free. Every path that would touch the
+// allocation checks this first; readers never need to.
+@ __vec_is_borrowed s ctl → b {
+    ^ < ( __vec_cap_raw ctl ) 0
+}
+
 // Grow the underlying buffer so that cap >= need. Uses nurl_realloc;
 // safe to call when the current data pointer is null (cap == 0).
 @ __vec_grow [A] s ctl i need → v {
     : i cap ( __vec_cap_raw ctl )
+    ? < cap 0 {
+        // Borrowed view: the first growth DETACHES — copy the live
+        // elements into a fresh owned buffer and leave the source
+        // untouched. From here on this is an ordinary owned Vec.
+        : i len ( __vec_len_raw ctl )
+        : ~ i new_cap 4
+        ~ < new_cap need { = new_cap * new_cap 2 }
+        ~ < new_cap len { = new_cap * new_cap 2 }
+        : s fresh ( nurl_alloc * Z A new_cap )
+        : i copy_bytes * Z A len
+        ? > copy_bytes 0 { ( nurl_memcpy fresh ( __vec_data_raw ctl ) copy_bytes ) } {}
+        ( nurl_poke ctl 0 # i fresh )
+        ( nurl_poke ctl 2 new_cap )
+        ^
+    } {}
     ? < cap need {
         : ~ i new_cap ? == cap 0 4 cap
         ~ < new_cap need { = new_cap * new_cap 2 }
@@ -175,6 +213,61 @@
     ^ @ ( Vec A ) { ctl }
 }
 
+// A BORROWED view of `p[0..n)`: a Vec handle whose data pointer is the
+// caller's buffer. Reads (`vec_len`, `vec_data`, `vec_get`, iteration,
+// `bytes_extend_bytes`, the socket writers …) work unchanged and see the
+// caller's bytes with no copy. The first operation that needs capacity
+// (`vec_push`, `vec_extend`, `vec_reserve`, …) detaches: it copies the
+// live elements into a fresh owned buffer and the handle becomes an
+// ordinary owned Vec (copy-on-write). `vec_free` on an undetached view
+// releases only the 24-byte handle, never `p`.
+//
+// The contract is the caller's: `p` must stay alive and unchanged for as
+// long as the view is read — the borrow checker cannot see through a
+// raw pointer. Element writes made through the view before it detaches
+// (`vec_set`, `vec_swap`, `vec_reverse`, raw `vec_data` stores) land in
+// `p`, exactly like two handles on one buffer do today.
+//
+// Why: the HTTP server's large-body path. A handler serving a
+// precomputed buffer (a static asset, an mmap, a cache entry) used to
+// pay a full copy of it into the response (`response_set_body_bytes`);
+// hyper's `Bytes::clone` is a refcount bump. With a view the response
+// body is the caller's buffer and the write path reads it in place.
+// `n <= 0` (or a null `p`) is an ordinary empty owned Vec.
+@ vec_borrow_raw [A] * A p i n → ( Vec A ) {
+    : s ctl ( nurl_zalloc 24 )
+    ( __vec_point_at ctl # i p n )
+    ^ @ ( Vec A ) { ctl }
+}
+
+// Re-point an EXISTING handle at `p[0..n)` as a borrowed view, releasing
+// whatever buffer it owned. This is how a Vec that lives in a struct
+// field becomes a view: struct values travel by copy, so assigning a
+// fresh handle into `. r body` inside a helper would change only the
+// helper's copy and leave the caller holding a freed one — the control
+// block is the shared thing, so it is the control block that changes.
+@ vec_borrow_into [A] ( Vec A ) v * A p i n → v {
+    : s ctl . v ctl
+    : s data ( __vec_data_raw ctl )
+    : i ctl_end + # i ctl 24
+    ? & ! ( __vec_is_borrowed ctl ) & != 0 # i data != # i data ctl_end { ( nurl_free data ) } {}
+    ( __vec_point_at ctl # i p n )
+}
+
+// Write a borrowed view into a control block; an empty or null range is
+// the empty owned state (data 0, len 0, cap 0).
+@ __vec_point_at s ctl i p i n → v {
+    ? & > n 0 != 0 p {
+        ( nurl_poke ctl 0 p )
+        ( nurl_poke ctl 1 n )
+        ( nurl_poke ctl 2 -1 )
+    } {
+        ( nurl_poke ctl 0 0 )
+        ( nurl_poke ctl 1 0 )
+        ( nurl_poke ctl 2 0 )
+    }
+}
+
 // `n` zero-filled elements in ONE allocation, with `len` already at n —
 // the calloc-shaped sibling of `vec_with_cap`. Reaching the same state
 // by pushing a zero n times costs n bounds checks, n length stores and
@@ -201,8 +294,12 @@
     ^ ( __vec_len_raw . v ctl )
 }
 
+// For a borrowed view the capacity is its length: nothing beyond the
+// live elements may be written without detaching.
 @ vec_cap [A] ( Vec A ) v → i {
-    ^ ( __vec_cap_raw . v ctl )
+    : s ctl . v ctl
+    ? ( __vec_is_borrowed ctl ) { ^ ( __vec_len_raw ctl ) } {}
+    ^ ( __vec_cap_raw ctl )
 }
 
 @ vec_is_empty [A] ( Vec A ) v → b {
@@ -312,7 +409,8 @@
 @ vec_set_len [A] ( Vec A ) v i n → b {
     ? < n 0 { ^ F } {}
     : s ctl . v ctl
-    : i cap ( __vec_cap_raw ctl )
+    // A borrowed view can only shrink: its writable extent is its length.
+    : i cap ? ( __vec_is_borrowed ctl ) ( __vec_len_raw ctl ) ( __vec_cap_raw ctl )
     ? > n cap { ^ F } {}
     ( nurl_poke ctl 1 n )
     ^ T
@@ -406,6 +504,8 @@
 // (cap → 0, data → null). Otherwise the buffer is realloc'd down to len.
 @ vec_shrink_to_fit [A] ( Vec A ) v → v {
     : s ctl . v ctl
+    // Not our buffer to resize or free.
+    ? ( __vec_is_borrowed ctl ) { ^ } {}
     : i len ( __vec_len_raw ctl )
     : i cap ( __vec_cap_raw ctl )
     ? == len 0 {
@@ -486,12 +586,14 @@
 @ vec_free [A] ( Vec A ) v → v {
     : s ctl . v ctl
     : s data ( __vec_data_raw ctl )
+    // A borrowed view (vec_borrow_raw) never owned its buffer: release
+    // the handle only.
     // `string_from_bytes_packed` (core/string.nu) lays the data
     // buffer immediately after the 24-byte ctl in a single alloc.
     // Detect that case (data == ctl + 24) and skip the separate
     // buffer-free — both regions live in the one block freed below.
     : i ctl_end + # i ctl 24
-    ? & != 0 # i data != # i data ctl_end { ( nurl_free data ) } {}
+    ? & ! ( __vec_is_borrowed ctl ) & != 0 # i data != # i data ctl_end { ( nurl_free data ) } {}
     ( nurl_free ctl )
 }
 
@@ -505,6 +607,9 @@
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     : s data ( __vec_data_raw ctl )
+    // A borrowed view owns neither the elements nor the buffer: no
+    // drops, handle only.
+    ? ( __vec_is_borrowed ctl ) { ( nurl_free ctl ) ^ } {}
     ? != 0 # i data {
         : *A buf # *A data
         : ~ i i 0

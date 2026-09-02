@@ -46,9 +46,9 @@ OHA="${OHA:-$HOME/.cargo/bin/oha}"; [ -x "$OHA" ] || OHA="$(command -v oha || tr
 PY="$HT/lib.py"
 
 if [ "$MODE" = full ]; then
-  RAMP_SEC=5; MEAS_SEC=20; SOAK_SEC=600; CONNS=400
+  RAMP_SEC=5; MEAS_SEC=20; SOAK_SEC=600; CONNS=400; SETTLE_SEC="${SETTLE_SEC:-120}"
 else
-  RAMP_SEC=3; MEAS_SEC=6;  SOAK_SEC=20;  CONNS=200
+  RAMP_SEC=3; MEAS_SEC=6;  SOAK_SEC=20;  CONNS=200; SETTLE_SEC="${SETTLE_SEC:-5}"
 fi
 
 NB="$SCRATCH/nurl_torture.bin"
@@ -340,6 +340,16 @@ declare -A CAP_STORE
 
 main() {
   build
+  # Let the box settle before the first cell. The build just above is an
+  # all-core LTO compile plus a cargo build, and whatever ran before this
+  # script (a test suite, a sanitizer run) may have left the CPU hot: two
+  # full runs on the reference host had their FIRST cell — NURL, 1 KB —
+  # collapse to ~40 % of its clean capacity with the tail in the seconds,
+  # while the same binary sustained the clean rate minutes later and the
+  # peer, measured next, was unaffected. A cool-down costs two minutes;
+  # a biased first cell costs the run.
+  say "[settle] ${SETTLE_SEC}s idle before the first measurement"
+  sleep "$SETTLE_SEC"
   local host kern cpu
   host="$(uname -sr)"; cpu="$(LC_ALL=C lscpu | awk -F: '/Model name/{gsub(/^ +/,"",$2);print $2;exit}')"
   add "# HTTP torture — NURL vs Rust (hyper/rustls)"

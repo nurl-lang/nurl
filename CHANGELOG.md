@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Borrowed Vec views and a zero-copy HTTP response body.**
+  `vec_borrow_raw [A] p n` makes a `Vec` handle over the caller's
+  buffer: reads see it in place, the first growth detaches into an owned
+  copy (copy-on-write), and `vec_free` releases only the handle
+  (`cap == -1` marks a view; grow / set_len / shrink_to_fit / free /
+  free_with honour it); `vec_borrow_into [A] v p n` re-points an existing
+  handle — the form a struct field needs, since struct values travel by
+  copy and only the shared control block reaches the caller.
+  `response_set_body_borrowed r p n` and
+  `response_set_body_borrowed_bytes r v` put a precomputed buffer on a
+  response without copying it — the remaining full copy of every large
+  response body after the wire-buffer copy was removed. The contract is
+  the caller's: the buffer outlives the write. Test:
+  `compiler/tests/vec_borrowed.nu`.
+
 ### Changed
 
 - **The HTTP server no longer copies the response body into the
