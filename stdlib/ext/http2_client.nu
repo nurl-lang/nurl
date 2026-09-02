@@ -188,7 +188,9 @@ $ `stdlib/ext/http2_hpack.nu`
 @ __h2c_set_conn_window H2Client c i v → v { ( nurl_poke . c st 1 v ) }
 
 // Underlying socket fd, for readiness polling (nurl_reactor_wait_*).
-@ __h2c_fd H2Client c → i { ^ ( nurl_tcp_get_fd # i . . c tcp raw ) }
+// Through tcp_conn_fd: a TLS conn's handle lives in its TlsConn and its
+// `raw` is 0 — polling that probed the wrong (null or foreign) socket.
+@ __h2c_fd H2Client c → i { ^ ( nurl_tcp_get_fd ( tcp_conn_fd . c tcp ) ) }
 
 // Non-blocking readiness probe: a 0 ms timeout makes the reactor wait
 // a pure poll. (Runtime builtin, also used by std/net.nu's async path.)

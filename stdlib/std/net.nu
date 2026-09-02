@@ -594,6 +594,16 @@ $ `stdlib/std/pkey.nu`
     ^ # i . c raw
 }
 
+// The runtime socket handle behind ANY TcpConn — plaintext, pure-TLS
+// client or server, STARTTLS-upgraded — for readiness polling with
+// nurl_reactor_wait_read / nurl_tcp_get_fd. A TLS conn keeps its handle
+// inside the TlsConn and has raw = 0; reading `. c raw` directly, as the
+// HTTP/2 client did, polls handle 0 — which on the hosted runtime is a
+// null handle (never readable, so the probe merely fell through to the
+// blocking read) and on the pure in-process stack is somebody else's
+// socket, reported readable while the caller's own had nothing.
+@ tcp_conn_fd TcpConn c → i { ^ ( __conn_fd c ) }
+
 // Run the server-side pure-TLS handshake over a freshly accepted raw
 // conn handle, using the listener's parked cert/key material. Consumes
 // `craw` (the *TlsConn owns the socket on success; closed on failure).

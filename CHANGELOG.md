@@ -104,6 +104,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stay legal) and names the usual cause — a positional literal written
   against an older field order. Found when `H2Connection` grew fields and
   a test's hand-built literal kept the old layout.
+- **HTTP/2 client over TLS polled the wrong socket for readiness.** Its
+  drain loop asked `nurl_reactor_wait_read` about `. tcp raw`, which is 0
+  for a pure-TLS connection (the handle lives in the TlsConn). On the
+  hosted runtime that null handle was simply never readable and the
+  client fell through to its blocking read; on the pure in-process socket
+  stack (the nolibc corpus, the unikernel) handle 0 is another socket,
+  reported readable, and the client then read its own empty socket and
+  failed. New `tcp_conn_fd` returns the handle behind any TcpConn.
 - **HTTP/2 leaked one HttpResponse per request.** `__h2_dispatch` built a
   fresh 500 fallback response for every stream and, when the handler's
   response replaced it, never freed it. The fallback now lives on the
