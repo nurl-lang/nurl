@@ -1076,12 +1076,45 @@ long long nurl_tcp_accept(long long listener) {
     if (l->nonblock) {
         /* Fiber/reactor accept path: ONE non-blocking accept; the caller
          * (tcp_accept_async) parks on the reactor for EAGAIN. Must not
-         * enter the blocking poll loop below. */
+         * enter the blocking poll loop below.
+         *
+         * The connection comes back NON-BLOCKING here, and the handle's
+         * memo says so: every consumer of a reactor-accepted connection
+         * is an async wrapper (tcp_read_chunk_async, tcp_write_all_async,
+         * the TLS record layer on a fiber) that asks for O_NONBLOCK before
+         * its first read or write anyway, and with the memo already set
+         * that ask is free. Accepting blocking and flipping later cost
+         * three fcntl(2) per connection — the F_GETFL of the normalise
+         * block below plus the GET+SET of the first async wrapper — a
+         * third of everything the server asked the kernel for under
+         * connection churn (strace -c: 6007 fcntl / 2000 connections).
+         * accept4 with SOCK_NONBLOCK folds it into the accept itself;
+         * where accept4 does not exist (macOS) the flag is set once,
+         * still ahead of the memo. */
+#  if defined(SOCK_NONBLOCK) && defined(SOCK_CLOEXEC)
+        fd = accept4(l->fd, (struct sockaddr*)&peer, &peerlen,
+                     SOCK_NONBLOCK | SOCK_CLOEXEC);
+#  else
         fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
+        if (fd != NURL_INVALID_SOCK) {
+            int fl = fcntl(fd, F_GETFL, 0);
+            if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+        }
+#  endif
         if (fd == NURL_INVALID_SOCK) {
             c->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_ACCEPT);
             return (long long)(uintptr_t)c;
         }
+        c->fd       = fd;
+        c->err_kind = NURL_NET_ERR_OK;
+        c->peer     = nurl__net_format_peer(&peer);
+        {
+            int one = 1;
+            setsockopt(c->fd, IPPROTO_TCP, TCP_NODELAY,
+                       (const char*)&one, (socklen_t)sizeof(one));
+        }
+        c->nonblock = 1;
+        return (long long)(uintptr_t)c;
     } else
     /* Blocking accept (single-threaded + server_run_pool). If this listener
      * has no wakeup pipe (pipe() failed at listen) the loop's poll is

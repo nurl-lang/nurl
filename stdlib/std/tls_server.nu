@@ -53,31 +53,69 @@ $ `stdlib/std/aes_gcm.nu`
 // ── session tickets (RFC 8446 §4.6.1) ───────────────────────────────
 //
 // Tickets are STATELESS: the ticket a client gets back is its PSK
-// (plus issue time and lifetime) sealed under one process-wide key, so
+// (plus issue time and lifetime) sealed under a process-wide key, so
 // any worker thread can take it back later without a shared session
-// table, and nothing accumulates per connection. The key is drawn from
-// the CSPRNG once per process (at TLS-listener setup, or on first use)
-// and lives as long as the process; a restart simply invalidates
-// outstanding tickets, which clients handle by doing a full handshake.
-// Only psk_dhe_ke is offered or accepted, and there is no early data:
-// a resumed connection still runs a fresh (EC)DHE, so a ticket that
-// leaks later never decrypts a recording, and RFC 8446 §8's replay
-// concern (0-RTT) does not arise — which is what makes a stateless,
-// re-offerable ticket safe to issue.
-: ~ i g_tls_ticket_key 0
+// table, and nothing accumulates per connection. Only psk_dhe_ke is
+// offered or accepted, and there is no early data: a resumed connection
+// still runs a fresh (EC)DHE, so a ticket that leaks later never
+// decrypts a recording, and RFC 8446 §8's replay concern (0-RTT) does
+// not arise — which is what makes a stateless, re-offerable ticket safe
+// to issue.
+//
+// KEY ROTATION without shared mutable state. rustls' Ticketer rotates
+// its key on a timer and keeps the previous one for a grace window,
+// which needs a swap every worker sees and a retirement every worker
+// has stopped using. Here the sealing key is a pure function of time:
+// a 32-byte MASTER is drawn once per process (at TLS-listener setup,
+// while single-threaded, or on first use through a compare-and-swap so
+// concurrent first users agree), and the key for EPOCH e is
+// HKDF-Expand-Label(master, "ticket key", e, 32), e = floor(now / 6 h).
+// Every worker derives the same key for the same epoch with nothing to
+// publish or free; a ticket records its epoch, and one from the previous
+// epoch still opens (ticket lifetime 2 h < epoch 6 h), so rotation never
+// cuts a live ticket short. A process restart draws a new master and
+// invalidates outstanding tickets — a full handshake, not a failure.
+: ~ i g_tls_ticket_master 0
 
-@ __tls_ticket_key_ensure → v {
-    ? != g_tls_ticket_key 0 { ^ } {}
+// Runtime publish-once slots (stdlib/runtime_core.c nurl_once_slot):
+// the first non-zero value published into a slot wins; every caller
+// gets the winner back. Slot ids in use across the stdlib:
+//   1  TLS server ticket master (this module)
+//   2  HTTP client session cache (ext/http_pure.nu)
+& `c` @ nurl_once_slot i id i candidate → i
+
+@ _tls_ticket_key_ensure → v {
+    ? != g_tls_ticket_master 0 { ^ } {}
     : s k ( nurl_alloc 32 )
     : i r ( nurl_rand_fill # *u k 32 )
     ? == r 0 { ( nurl_panic `tls server: CSPRNG (nurl_rand_fill) failed` ) } {}
-    = g_tls_ticket_key # i k
+    // Publish unless someone else already did; the loser drops its draw
+    // and adopts the winner's. The plain global is a cache of the slot:
+    // every thread that fills it writes the same value.
+    : i won ( nurl_once_slot 1 # i k )
+    ? != won # i k { ( nurl_free k ) } {}
+    = g_tls_ticket_master won
 }
 
-// ticket = nonce(12) ‖ AEAD(key, nonce, "", psk(32) ‖ issued_ms(8) ‖ lifetime_s(4))
+// The sealing key for one 6-hour epoch (see above).
+@ __tls_ticket_key_for i epoch → ( Vec u ) {
+    ( _tls_ticket_key_ensure )
+    : ( Vec u ) master ( vec_borrow_raw [u] # *u g_tls_ticket_master 32 )
+    : ( Vec u ) ctx ( vec_with_cap [u] 4 )
+    ( _tls_u32 ctx epoch )
+    : ( Vec u ) key ( hkdf_expand_label master `ticket key` ctx 32 )
+    ( vec_free [u] master ) ( vec_free [u] ctx )
+    ^ key
+}
+
+@ __tls_ticket_epoch_now → i {
+    ^ / ( now_ms ) 21600000
+}
+
+// ticket = epoch(4) ‖ nonce(12) ‖ AEAD(key_epoch, nonce, "", psk(32) ‖ issued_ms(8) ‖ lifetime_s(4))
 @ __tls_ticket_seal ( Vec u ) psk i lifetime → ( Vec u ) {
-    ( __tls_ticket_key_ensure )
-    : ( Vec u ) key ( vec_borrow_raw [u] # *u g_tls_ticket_key 32 )
+    : i epoch ( __tls_ticket_epoch_now )
+    : ( Vec u ) key ( __tls_ticket_key_for epoch )
     : ( Vec u ) nonce ( __srv_rand 12 )
     : ( Vec u ) aad ( vec_new [u] )
     : ( Vec u ) plain ( vec_with_cap [u] 44 )
@@ -85,7 +123,8 @@ $ `stdlib/std/aes_gcm.nu`
     ( _tls_u64 plain ( now_ms ) )
     ( _tls_u32 plain lifetime )
     : ( Vec u ) sealed ( aead_encrypt key nonce aad plain )
-    : ( Vec u ) out ( vec_with_cap [u] + 12 ( vec_len [u] sealed ) )
+    : ( Vec u ) out ( vec_with_cap [u] + 16 ( vec_len [u] sealed ) )
+    ( _tls_u32 out epoch )
     ( _tls_cat out nonce )
     ( _tls_cat out sealed )
     ( vec_free [u] key ) ( vec_free [u] nonce ) ( vec_free [u] aad )
@@ -94,13 +133,17 @@ $ `stdlib/std/aes_gcm.nu`
 }
 
 // The PSK inside a ticket we issued — or an empty Vec when the ticket is
-// not ours, was altered, or has outlived its lifetime.
+// not ours, was altered, is from an epoch we no longer honour, or has
+// outlived its lifetime.
 @ __tls_ticket_open ( Vec u ) ticket → ( Vec u ) {
     : i n ( vec_len [u] ticket )
-    ? | == g_tls_ticket_key 0 != n 72 { ^ ( vec_new [u] ) } {}
-    : ( Vec u ) key ( vec_borrow_raw [u] # *u g_tls_ticket_key 32 )
-    : ( Vec u ) nonce ( bytes_slice ticket 0 12 )
-    : ( Vec u ) ct ( bytes_slice ticket 12 n )
+    ? | == g_tls_ticket_master 0 != n 76 { ^ ( vec_new [u] ) } {}
+    : i epoch ( _rdint ticket 0 4 )
+    : i cur ( __tls_ticket_epoch_now )
+    ? & != epoch cur != epoch - cur 1 { ^ ( vec_new [u] ) } {}
+    : ( Vec u ) key ( __tls_ticket_key_for epoch )
+    : ( Vec u ) nonce ( bytes_slice ticket 4 16 )
+    : ( Vec u ) ct ( bytes_slice ticket 16 n )
     : ( Vec u ) aad ( vec_new [u] )
     : ?( Vec u ) r ( aead_decrypt key nonce aad ct )
     ( vec_free [u] key ) ( vec_free [u] nonce ) ( vec_free [u] ct ) ( vec_free [u] aad )

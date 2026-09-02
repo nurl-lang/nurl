@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+get_1=T
+get_2=T
+get_3_other_port=T
+server_saw_1_full=T
+server_saw_2_resumed=T
+server_saw_3_full=T

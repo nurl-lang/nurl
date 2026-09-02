@@ -7101,11 +7101,20 @@
 // the pointee width (cast at the call site, e.g. `# i32`).
 
 // Strip the trailing '*' from a pointer LLVM type ("i32*" → "i32").
+// Always a fresh string, handed back from ONE return path as a binding:
+// that is the shape the owned-return summary recognises (see
+// __ptr_entry_find's note). The earlier form returned `pt` itself on the
+// no-star path and a slice on the other, from two `^` inside the arms —
+// the summary read neither as owned, so no caller ever freed the slice:
+// 4 bytes per volatile_load / volatile_store, seen by LSan while
+// compiling the unikernel demos. Two `^ ( nurl_str_slice … )` in the
+// arms still leak (a minimal repro is in the follow-up notes); the
+// binding form does not.
 @ __ptr_pointee s pt → s {
     : i n ( nurl_str_len pt )
-    ? & > n 0 == ( nurl_str_get pt - n 1 ) 42
-    { ^ ( nurl_str_slice pt 0 - n 1 ) }
-    { ^ pt }
+    : i keep ? & > n 0 == ( nurl_str_get pt - n 1 ) 42 - n 1 n
+    : s out ( nurl_str_slice pt 0 keep )
+    ^ out
 }
 
 @ __is_ptr_ty s pt → b {
