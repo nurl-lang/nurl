@@ -56,7 +56,7 @@ numbers are.
 # smoke (short, ~a few minutes; validates the pipeline)
 bench/http_torture/run_torture.sh
 
-# the real run (~35–45 min incl. the 10-min soak)
+# the real run (~80 min: a 120 s settle after the build, then every cell incl. two 10-min soaks)
 MODE=full bench/http_torture/run_torture.sh
 
 # a subset
