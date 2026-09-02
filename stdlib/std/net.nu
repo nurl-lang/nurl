@@ -298,6 +298,10 @@ $ `stdlib/std/pkey.nu`
         ( nurl_tcp_close raw ) ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
         ^ @ !TcpListener NetErr { F ( _net_err_of ek ) }
     } {}
+    // The session-ticket key is drawn here, while the process is still
+    // single-threaded, so every worker that later accepts on this
+    // listener seals and opens tickets under the same key.
+    ( __tls_ticket_key_ensure )
     // Copy cert list / key material into raw heap buffers, then drop the Vecs.
     : i certp ( __net_dup cert )
     : i certlen ( vec_len [u] cert )
@@ -346,6 +350,16 @@ $ `stdlib/std/pkey.nu`
     : i tp ( __conn_tlsptr c )
     ? == tp 0 { ^ 0 } {}
     ^ ( tls_group # *TlsConn tp )
+}
+
+// T when this TLS connection was established from a session ticket
+// (RFC 8446 §4.6.1) rather than a full handshake — on the server, one
+// of its own tickets; on a client, the exported session it offered.
+// F for plaintext connections.
+@ tcp_tls_resumed TcpConn c → b {
+    : i tp ( __conn_tlsptr c )
+    ? == tp 0 { ^ F } {}
+    ^ ( tls_is_resumed # *TlsConn tp )
 }
 
 // T when this connection's key exchange has a post-quantum component,
