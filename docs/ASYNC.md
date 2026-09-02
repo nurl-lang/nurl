@@ -132,7 +132,11 @@ handshake fails is now one failed connection; a plain-TCP probe against
 a TLS port used to take the whole accept loop down with it.
 
 `packages/http` exposes this as **`http_app_async n`** — fiber per
-connection, `n` worker pthreads, `0` meaning one per core.
+connection, `n` worker pthreads, `0` meaning one per CPU the *process*
+may run on — the affinity mask (`taskset`, cpusets) capped by the
+container's cgroup CPU quota (`sys_available_parallelism`), not the
+machine's CPU count; a pool larger than that only time-slices against
+itself.
 
 ## 4. Semantics worth knowing
 

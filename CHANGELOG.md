@@ -36,6 +36,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The fiber scheduler sized its default worker pool by the machine's
+  online CPU count, not by what the process may run on.** A server
+  pinned with `taskset` to 6 of 12 hardware threads got 12 workers on 6
+  cores; measured at 20 connections that was 0.75 context switches and
+  0.2 CPU migrations per request (124k req/s, p50 0.135 ms) against
+  153k at p50 0.115 ms with six workers. The default (`NURL_WORKERS`
+  unset or 0, `http_app_async a 0`) now comes from
+  `nurl_available_parallelism()`: the affinity mask (`sched_getaffinity`
+  / `GetProcessAffinityMask`) capped by the cgroup v1/v2 CPU quota —
+  what Rust's `available_parallelism()` returns and what the tokio peer
+  sizes itself by. `sys_available_parallelism` exposes it;
+  `sys_cpu_count` still reports the hardware count.
 - The reactor accept path took three `fcntl(2)` per connection (the
   normalise-to-blocking check, then the first async wrapper's GET+SET to
   flip it back) — a third of everything the async server asked the
