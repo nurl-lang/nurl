@@ -66,6 +66,7 @@ $ `stdlib/ext/http2_hpack.nu`
     H2ConnPreface
     H2ConnReadIo
     H2ConnReadShort
+    H2ConnReadTimeout  // idle: the socket's receive deadline fired
     H2ConnWriteIo
     H2ConnProtocol  // peer violated framing / state rules
     H2ConnCompression  // HPACK decode failed
@@ -83,6 +84,7 @@ $ `stdlib/ext/http2_hpack.nu`
         H2ConnPreface → `H2ConnPreface`
         H2ConnReadIo → `H2ConnReadIo`
         H2ConnReadShort → `H2ConnReadShort`
+        H2ConnReadTimeout → `H2ConnReadTimeout`
         H2ConnWriteIo → `H2ConnWriteIo`
         H2ConnProtocol → `H2ConnProtocol`
         H2ConnCompression → `H2ConnCompression`
@@ -101,6 +103,7 @@ $ `stdlib/ext/http2_hpack.nu`
         H2FrameBadPreface → { ^ # H2ConnErr H2ConnPreface }
         H2FrameReadIo → { ^ # H2ConnErr H2ConnReadIo }
         H2FrameReadShort → { ^ # H2ConnErr H2ConnReadShort }
+        H2FrameReadTimeout → { ^ # H2ConnErr H2ConnReadTimeout }
         H2FrameWriteIo → { ^ # H2ConnErr H2ConnWriteIo }
         H2FrameOversized → { ^ # H2ConnErr H2ConnFrameSize }
         H2FrameBadStreamId → { ^ # H2ConnErr H2ConnProtocol }
@@ -207,6 +210,9 @@ $ `stdlib/ext/http2_hpack.nu`
     i peer_max_header_list_size
     HpackDynTable enc_dyn  // tracks PEER's decoder table (we encode against this)
     HpackDynTable dec_dyn  // OUR decoder; tracks what peer-encoded indices mean
+    i enc_size_update  // Dynamic Table Size Update to emit at the start of the
+    // next header block we send (RFC 7541 §4.2 / §6.3), -1 = none. Set when
+    // the peer lowers SETTINGS_HEADER_TABLE_SIZE below our encoder's table.
     ( Vec H2Stream ) streams
     i conn_send_window  // connection-level flow control (send side)
     i conn_recv_window  // (recv side)
@@ -215,6 +221,16 @@ $ `stdlib/ext/http2_hpack.nu`
     i partial_headers_stream  // stream id currently mid HEADERS+CONTINUATION
     // sequence, 0 if none. Per §6.10 no other
     // frames may interleave.
+    ( Vec u ) rx  // OWNED receive buffer: bytes read off `tcp` and not yet
+    // consumed as frames (h2_read_frame_buf). Seeded with whatever the
+    // HTTP/1.1 keep-alive loop had read before it recognised the preface.
+    i body_max  // per-request body cap (bytes) — the HttpServer's limit, or
+    // h2_default_max_body_bytes for a bare http2_serve
+    HttpResponse panic_resp  // OWNED 500 fallback for a handler that panics,
+    // built once per connection (as the HTTP/1.1 keep-alive loop does) and
+    // rebuilt only after a panic consumed it. __h2_dispatch used to build a
+    // fresh one per request and drop it unfreed when the handler's response
+    // replaced it — one HttpResponse leaked per HTTP/2 request.
 }
 
 @ h2_conn_free H2Connection c → v {
@@ -222,6 +238,8 @@ $ `stdlib/ext/http2_hpack.nu`
     ( hpack_dyn_free . c dec_dyn )
     ( vec_free_with [H2Stream] . c streams
     \ H2Stream s → v { ( __h2_stream_free s ) } )
+    ( vec_free [u] . c rx )
+    ( http_response_free . c panic_resp )
 }
 
 // ── Initial handshake ─────────────────────────────────────────────────
@@ -239,10 +257,22 @@ $ `stdlib/ext/http2_hpack.nu`
 //     PROTOCOL_ERROR)
 
 @ h2_conn_new TcpConn tcp → !H2Connection H2ConnErr {
-    : !v H2FrameErr pr ( h2_read_preface tcp )
+    ^ ( h2_conn_new_buffered tcp ( vec_with_cap [u] 16384 ) ( h2_default_max_body_bytes ) )
+}
+
+// h2_conn_new over a connection whose first bytes have already been read:
+// `carry` (OWNED from here on — freed on every path) holds them, starting
+// with the 24-byte preface, and becomes the connection's receive buffer.
+// This is how the HTTP/1.1 keep-alive loop hands a prior-knowledge
+// (RFC 9113 §3.4) connection over without losing the SETTINGS frame that
+// typically rides in the same TCP segment as the preface. `body_max` caps
+// each request body (the HttpServer's HttpLimits value).
+@ h2_conn_new_buffered TcpConn tcp ( Vec u ) carry i body_max → !H2Connection H2ConnErr {
+    : !v H2FrameErr pr ( h2_read_preface_buf tcp carry )
     ?? pr {
         T _ → {}
         F e → {
+            ( vec_free [u] carry )
             // §3.4 — only a structurally-invalid preface (BadPreface)
             // is signalled with a GOAWAY; a read error (peer never
             // sent the preface, timed out, or closed the socket
@@ -277,7 +307,10 @@ $ `stdlib/ext/http2_hpack.nu`
     ( vec_free [H2Setting] initial_settings )
     ?? sr {
         T _ → {}
-        F e → { ^ @ !H2Connection H2ConnErr { F ( __h2_frame_err_to_conn e ) } }
+        F e → {
+            ( vec_free [u] carry )
+            ^ @ !H2Connection H2ConnErr { F ( __h2_frame_err_to_conn e ) }
+        }
     }
     : H2Connection c @ H2Connection {
         tcp
@@ -287,12 +320,16 @@ $ `stdlib/ext/http2_hpack.nu`
         4096 1 0 65535 16384 0
         ( hpack_dyn_new 4096 )
         ( hpack_dyn_new 4096 )
+        -1
         ( vec_new [H2Stream] )
         ( h2_default_initial_window_size )
         ( h2_default_initial_window_size )
         0
         F
         0
+        carry
+        body_max
+        ( response_text 500 `internal server error\n` )
     }
     ^ @ !H2Connection H2ConnErr { T c }
 }
@@ -406,7 +443,19 @@ $ `stdlib/ext/http2_hpack.nu`
         : i v3 & # i . p + k 5 255
         : i value + + + << v0 24 << v1 16 << v2 8 v3
         ?? id {
-            1 → { = . cur peer_header_table_size value }
+            1 → {
+                = . cur peer_header_table_size value
+                // Our encoder's mirror of the peer's decoding table may
+                // not exceed what the peer allows: shrink it and announce
+                // the new size at the start of the next header block
+                // (RFC 7541 §4.2). A larger allowance is not taken up —
+                // an encoder may use less than the peer offers.
+                : HpackDynTable ed . cur enc_dyn
+                ? < value . ed max_size {
+                    = . cur enc_dyn ( hpack_dyn_set_max ed value )
+                    = . cur enc_size_update value
+                } {}
+            }
             2 → {
                 // ENABLE_PUSH may only be 0 or 1 (§6.5.2).
                 ? > value 1 {
@@ -478,7 +527,7 @@ $ `stdlib/ext/http2_hpack.nu`
 // exhaustion DoS. 10 MiB matches the HTTP/1.1 server's body_default_max so
 // both protocols enforce the same request-body ceiling. A stream that
 // exceeds it is reset with ENHANCE_YOUR_CALM; the connection survives.
-@ __h2_max_body_bytes → i { ^ 10485760 }
+@ h2_default_max_body_bytes → i { ^ 10485760 }
 
 @ __h2_headers_priority_dep H2Frame f → i {
     ? == 0 & . f flags ( h2_flag_priority ) { ^ -1 } {}
@@ -849,21 +898,63 @@ $ `stdlib/ext/http2_hpack.nu`
         }
         = k + k 1
     }
-    : ( Vec u ) hdr_block ( hpack_encode_headers all )
+    : HpackEncoded enc ( hpack_encode_headers_dyn all . cur enc_dyn . cur enc_size_update )
+    = . cur enc_dyn . enc dyn
+    = . cur enc_size_update -1
+    : ( Vec u ) hdr_block . enc block
     ( vec_free_with [Header] all \ Header hh → v { ( header_free hh ) } )
 
     : i body_len ( vec_len [u] . r body )
-    : i flags1 ( h2_flag_end_headers )
-    : i flags + flags1 ? == body_len 0 ( h2_flag_end_stream ) 0
-    : H2Frame hf @ H2Frame {
-        ( h2_type_headers ) flags sid hdr_block
-    }
-    : !v H2FrameErr wr ( h2_write_frame . cur tcp hf
-    . cur peer_max_frame_size )
-    ( h2_frame_free hf )
-    ?? wr {
-        T _ → {}
-        F e → { ^ @ !H2Connection H2ConnErr { F ( __h2_frame_err_to_conn e ) } }
+    : i hdr_len ( vec_len [u] hdr_block )
+    ? > hdr_len . cur peer_max_frame_size {
+        ( vec_free [u] hdr_block )
+        ^ @ !H2Connection H2ConnErr { F H2ConnFrameSize }
+    } {}
+    : i hw_cap ? > . cur peer_max_frame_size 16384
+    16384 . cur peer_max_frame_size
+    // HEADERS — and, when the whole body fits one DATA frame within the
+    // stream and connection send windows, that DATA frame too — leave as
+    // ONE write: both frame headers from `wire`, the body straight from the
+    // response (tcp_write_all2: one sendmsg on plaintext, one sealed pair
+    // on TLS). No body copy, no second syscall — the same shape the
+    // HTTP/1.1 path took in #1050/#1051.
+    : ( Vec u ) wire ( vec_with_cap [u] + hdr_len 18 )
+    : i hflags + ( h2_flag_end_headers ) ? == body_len 0 ( h2_flag_end_stream ) 0
+    ( h2_push_frame_header wire hdr_len ( h2_type_headers ) hflags sid )
+    ( vec_extend [u] wire hdr_block )
+    ( vec_free [u] hdr_block )
+    : ~ b emitted_end_stream == body_len 0
+    : ~ i pos 0
+    : i sidx0 ( __h2_find_stream_index cur sid )
+    : ~ i first_window 0
+    ? >= sidx0 0 {
+        : H2Stream cs0 ( __h2_get_stream cur sidx0 )
+        : i sw0 . cs0 send_window
+        : i cw0 . cur conn_send_window
+        = first_window ? > sw0 cw0 cw0 sw0
+    } {}
+    : b coalesce & & > body_len 0 <= body_len hw_cap <= body_len first_window
+    ? coalesce {
+        ( h2_push_frame_header wire body_len ( h2_type_data ) ( h2_flag_end_stream ) sid )
+        : !v NetErr w2 ( tcp_write_all2 . cur tcp wire . r body )
+        ( vec_free [u] wire )
+        ?? w2 {
+            T _ → {}
+            F _ → { ^ @ !H2Connection H2ConnErr { F H2ConnWriteIo } }
+        }
+        = pos body_len
+        = . cur conn_send_window - . cur conn_send_window body_len
+        : H2Stream cs1 ( __h2_get_stream cur sidx0 )
+        = . cs1 send_window - . cs1 send_window body_len
+        ( __h2_set_stream cur sidx0 cs1 )
+        = emitted_end_stream T
+    } {
+        : !v NetErr w1 ( tcp_write_all . cur tcp wire )
+        ( vec_free [u] wire )
+        ?? w1 {
+            T _ → {}
+            F _ → { ^ @ !H2Connection H2ConnErr { F H2ConnWriteIo } }
+        }
     }
 
     // Emit body in DATA frames bounded by min(peer max_frame_size, 16K)
@@ -875,11 +966,7 @@ $ `stdlib/ext/http2_hpack.nu`
     // the peer is doing something we can't service mid-write; bail
     // and let the main loop handle subsequent frames after the empty
     // DATA(END_STREAM) tear-down below.
-    : ~ b emitted_end_stream == body_len 0
-    ? > body_len 0 {
-        : i hw_cap ? > . cur peer_max_frame_size 16384
-        16384 . cur peer_max_frame_size
-        : ~ i pos 0
+    ? & > body_len 0 ! emitted_end_stream {
         : ~ b bail F
         ~ & ! bail < pos body_len {
             : i sidx ( __h2_find_stream_index cur sid )
@@ -891,7 +978,7 @@ $ `stdlib/ext/http2_hpack.nu`
                 : i cw . cur conn_send_window
                 : i window ? > sw cw cw sw
                 ? <= window 0 {
-                    : !H2Frame H2FrameErr fr ( h2_read_frame . cur tcp
+                    : !H2Frame H2FrameErr fr ( h2_read_frame_buf . cur tcp . cur rx
                     . cur our_max_frame_size )
                     ?? fr {
                         T frame → {
@@ -967,24 +1054,20 @@ $ `stdlib/ext/http2_hpack.nu`
                     : i remaining - body_len pos
                     : ~ i chunk ? > remaining hw_cap hw_cap remaining
                     ? > chunk window { = chunk window } {}
-                    : ( Vec u ) part ( vec_with_cap [u] chunk )
-                    : *u bp ( vec_data [u] . r body )
-                    : ~ i j 0
-                    ~ < j chunk {
-                        ( vec_push [u] part # u . bp + pos j )
-                        = j + j 1
-                    }
                     : b is_last >= + pos chunk body_len
                     : i df_flags ? is_last ( h2_flag_end_stream ) 0
-                    : H2Frame df @ H2Frame {
-                        ( h2_type_data ) df_flags sid part
-                    }
-                    : !v H2FrameErr wd ( h2_write_frame . cur tcp df
-                    . cur peer_max_frame_size )
-                    ( h2_frame_free df )
+                    // Frame header + a BORROWED view of the body slice, one
+                    // write — the body is never copied per chunk.
+                    : ( Vec u ) fh ( vec_with_cap [u] 9 )
+                    ( h2_push_frame_header fh chunk ( h2_type_data ) df_flags sid )
+                    : *u bp ( vec_data [u] . r body )
+                    : ( Vec u ) view ( vec_borrow_raw [u] # *u + # i bp pos chunk )
+                    : !v NetErr wd ( tcp_write_all2 . cur tcp fh view )
+                    ( vec_free [u] view )
+                    ( vec_free [u] fh )
                     ?? wd {
                         T _ → {}
-                        F e → { ^ @ !H2Connection H2ConnErr { F ( __h2_frame_err_to_conn e ) } }
+                        F _ → { ^ @ !H2Connection H2ConnErr { F H2ConnWriteIo } }
                     }
                     = pos + pos chunk
                     = . cur conn_send_window - . cur conn_send_window chunk
@@ -1043,7 +1126,7 @@ $ `stdlib/ext/http2_hpack.nu`
     : ~ b ok T
     : ~ H2ConnErr err H2ConnOther
     ~ & ! done ok {
-        : !H2Frame H2FrameErr fr ( h2_read_frame . cur tcp
+        : !H2Frame H2FrameErr fr ( h2_read_frame_buf . cur tcp . cur rx
         . cur our_max_frame_size )
         ?? fr {
             T frame → {
@@ -1475,10 +1558,10 @@ $ `stdlib/ext/http2_hpack.nu`
                                         // Absolute body cap — backstop against
                                         // unbounded cumulative buffering across
                                         // many WINDOW_UPDATE-replenished frames
-                                        // (see __h2_max_body_bytes). Reset just
+                                        // (see h2_default_max_body_bytes). Reset just
                                         // this stream with ENHANCE_YOUR_CALM and
                                         // keep the connection alive.
-                                        ? > ( vec_len [u] . s body ) ( __h2_max_body_bytes ) {
+                                        ? > ( vec_len [u] . s body ) . cur body_max {
                                             : !v H2FrameErr rbc
                                             ( h2_send_rst_stream . cur tcp sid
                                             ( h2_err_enhance_your_calm ) )
@@ -1589,6 +1672,19 @@ $ `stdlib/ext/http2_hpack.nu`
                 : H2ConnErr ce ( __h2_frame_err_to_conn e )
                 ?? ce {
                     H2ConnReadShort → { = done T }  // peer closed cleanly
+                    H2ConnReadTimeout → {
+                        // The connection's idle deadline (tcp_set_timeout)
+                        // fired on a quiet peer: graceful shutdown, not an
+                        // error — GOAWAY(NO_ERROR) naming the last stream we
+                        // processed (§6.8), then the caller closes.
+                        ? ! . cur goaway_sent {
+                            : !v H2FrameErr ga ( h2_send_goaway . cur tcp
+                            . cur last_peer_stream_id ( h2_err_no_error ) `` )
+                            ?? ga { T _ → {} F _ → {} }
+                            = . cur goaway_sent T
+                        } {}
+                        = done T
+                    }
                     _ → { = err ce = ok F }
                 }
             }
@@ -1640,7 +1736,13 @@ $ `stdlib/ext/http2_hpack.nu`
     // worker thread). Mirrors the HTTP/1.1 path: on panic the default 500
     // flows back to the client over this stream and the message is logged.
     : ( @ HttpResponse HttpRequest ) f handler
-    : ~ HttpResponse resp ( response_text 500 `internal server error\n` )
+    // `resp` starts as the connection's pre-built 500 and is replaced by
+    // the handler's response on the normal path. Replacement is detected
+    // by comparing body-Vec DATA pointers, exactly as the HTTP/1.1 loop
+    // does: a closure captures the struct binding by reference, so
+    // `= resp` inside `recover` reaches this scope, and two live responses
+    // never share a body buffer.
+    : ~ HttpResponse resp . cur panic_resp
     : !v PanicInfo pr ( recover \ → v { = resp ( f req ) } )
     ?? pr {
         T _ → {}
@@ -1650,8 +1752,13 @@ $ `stdlib/ext/http2_hpack.nu`
         }
     }
     ( request_free req )
+    : HttpResponse fallback . cur panic_resp
+    : b replaced != # i ( vec_data [u] . resp body ) # i ( vec_data [u] . fallback body )
     : !H2Connection H2ConnErr wr ( __h2_send_response cur sid resp )
     ( http_response_free resp )
+    // A panic consumed the connection's fallback (resp WAS panic_resp and
+    // is freed above) — rebuild it for the next panic. Cold path.
+    ? replaced {} { = . cur panic_resp ( response_text 500 `internal server error\n` ) }
     ?? wr {
         T newc → {
             = cur newc

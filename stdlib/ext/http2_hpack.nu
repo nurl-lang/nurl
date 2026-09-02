@@ -646,6 +646,108 @@ $ `stdlib/ext/http2_frame.nu`
     ^ out
 }
 
+// ── Encoder with indexing (RFC 7541 §6.1 / §6.2.1 / §6.3) ────────────
+//
+// Encodes against `dyn`, the encoder's mirror of the PEER's decoding
+// table: both ends apply the same insertions in the same order (§2.3.2),
+// so an index we emit means the same field on the other side. Per field:
+//   * exact (name, value) match, static or dynamic → Indexed (§6.1):
+//     one byte for the static table, one or two for the dynamic one;
+//   * otherwise → Literal with Incremental Indexing (§6.2.1): the name as
+//     an index when a table has it, else as a literal string; the value
+//     as a literal string; and the pair is inserted into `dyn`, so the
+//     next response's identical header costs one byte;
+//   * a field too large to ever fit the table → Literal without Indexing
+//     (§6.2.2) and no insertion (inserting would only empty the table).
+// `size_update` >= 0 emits a Dynamic Table Size Update (§6.3) first —
+// mandatory at the start of the first block after the peer lowered
+// SETTINGS_HEADER_TABLE_SIZE. Names go out lowercased (RFC 9113 §8.2.1);
+// strings are literal, not Huffman-coded.
+
+: HpackEncoded {
+    ( Vec u ) block
+    HpackDynTable dyn  // the table after this block's insertions
+}
+
+// Combined HPACK index of an exact (name, value) match — static table
+// first (1..61), then dynamic (62..) — or 0.
+@ __hpack_find_exact HpackDynTable dyn s name s value → i {
+    : ~ i k 1
+    ~ <= k ( hpack_static_table_size ) {
+        ? & != 0 ( nurl_str_eq ( hpack_static_name k ) name )
+        != 0 ( nurl_str_eq ( hpack_static_value k ) value ) { ^ k } {}
+        = k + k 1
+    }
+    : i n ( vec_len [Header] . dyn entries )
+    : *Header ep ( vec_data [Header] . dyn entries )
+    = k 0
+    ~ < k n {
+        : Header h . ep k
+        ? & != 0 ( nurl_str_eq ( string_data . h name ) name )
+        != 0 ( nurl_str_eq ( string_data . h value ) value ) { ^ + ( hpack_static_table_size ) + k 1 } {}
+        = k + k 1
+    }
+    ^ 0
+}
+
+// Combined HPACK index of the first entry with this name, or 0.
+@ __hpack_find_name HpackDynTable dyn s name → i {
+    : ~ i k 1
+    ~ <= k ( hpack_static_table_size ) {
+        ? != 0 ( nurl_str_eq ( hpack_static_name k ) name ) { ^ k } {}
+        = k + k 1
+    }
+    : i n ( vec_len [Header] . dyn entries )
+    : *Header ep ( vec_data [Header] . dyn entries )
+    = k 0
+    ~ < k n {
+        : Header h . ep k
+        ? != 0 ( nurl_str_eq ( string_data . h name ) name ) { ^ + ( hpack_static_table_size ) + k 1 } {}
+        = k + k 1
+    }
+    ^ 0
+}
+
+@ hpack_encode_headers_dyn ( Vec Header ) headers HpackDynTable dyn i size_update → HpackEncoded {
+    : i n ( vec_len [Header] headers )
+    : ( Vec u ) out ( vec_with_cap [u] * + n 1 16 )
+    : ~ HpackDynTable cur dyn
+    ? >= size_update 0 { ( hpack_encode_int out 5 32 size_update ) } {}
+    : *Header hp ( vec_data [Header] headers )
+    : ~ i k 0
+    ~ < k n {
+        : Header h . hp k
+        : s lc_name ( __hpack_lower_name_dup ( string_data . h name ) )
+        : s value ( string_data . h value )
+        : i exact ( __hpack_find_exact cur lc_name value )
+        ? > exact 0 {
+            ( hpack_encode_int out 7 128 exact )
+        } {
+            : i nidx ( __hpack_find_name cur lc_name )
+            : i esz + + ( nurl_str_len lc_name ) ( nurl_str_len value ) 32
+            ? <= esz . cur max_size {
+                // Literal with Incremental Indexing (0x40, 6-bit prefix).
+                ? > nidx 0 { ( hpack_encode_int out 6 64 nidx ) } {
+                    ( vec_push [u] out # u 64 )
+                    ( hpack_encode_string out lc_name )
+                }
+                ( hpack_encode_string out value )
+                = cur ( hpack_dyn_insert cur lc_name value )
+            } {
+                // Literal without Indexing (0x00, 4-bit prefix).
+                ? > nidx 0 { ( hpack_encode_int out 4 0 nidx ) } {
+                    ( vec_push [u] out # u 0 )
+                    ( hpack_encode_string out lc_name )
+                }
+                ( hpack_encode_string out value )
+            }
+        }
+        ( nurl_free lc_name )
+        = k + k 1
+    }
+    ^ @ HpackEncoded { out cur }
+}
+
 // ── Huffman decoder (RFC 7541 Appendix B) ────────────────────────────
 //
 // Brute-force per-symbol match. For each input position scan known

@@ -9,9 +9,9 @@ for async I/O — the `epoll` netpoller on Linux, the portable `poll(2)`
 reactor elsewhere (see [`ASYNC.md`](ASYNC.md)).
 
 - **TCP server** — `tcp_listen` / `tcp_listen_tls` + `tcp_accept`, with a full
-  HTTP/1.1 server stack on top (`stdlib/ext/http_*` — routing, static files,
-  middleware, multipart, WebSockets, TLS with SNI + ALPN + mTLS + live cert
-  reload; see [HTTPS / TLS](#https--tls) below).
+  HTTP server stack on top (`stdlib/ext/http_*` — HTTP/1.1 **and HTTP/2 on
+  every listener**, routing, static files, middleware, multipart, WebSockets,
+  TLS with ALPN; see [HTTPS / TLS](#https--tls) and [HTTP/2](#http2) below).
 - **TCP client** — `tcp_connect` (plain) / `tcp_connect_tls` (TLS client
   handshake with SNI; the `verify` flag turns on peer-certificate chain +
   host-name verification against the system trust store — the primitive
@@ -94,7 +94,7 @@ server stack picks it up transparently — swap `tcp_listen` for
 | **TLS client-side** — `tcp_connect_tls host port server_name verify` | Client handshake with SNI; `verify` enables peer-certificate chain + host-name verification against the system trust store — or against `$SSL_CERT_FILE` when that is set, which **replaces** the system bundle (OpenSSL semantics) and fails closed if unreadable, so a private CA or a self-signed lab server no longer means editing `/etc/ssl` or giving up on verification. The primitive behind the MQTT client and any outbound TLS. |
 | TLS 1.2 minimum | TLS 1.0 / 1.1 / SSL 3.0 disabled in the SSL_CTX. |
 | **SNI** (RFC 6066 §3) — `tcp_tls_add_sni listener hostname cert key` | Multi-tenant HTTPS — per-hostname cert/key pairs on one listener; handshake-time selection; no-match falls through to the default cert. |
-| **ALPN** (RFC 7301) — `tcp_listen_tls_with_alpn`; `tcp_alpn_protocol conn` | Required by HTTP/2-over-TLS (RFC 9113 §3.3). |
+| **ALPN** (RFC 7301) — `tcp_listen_tls_with_alpn host port backlog cert key "h2 http/1.1"`; `tcp_alpn_protocol conn` | Server-side selection in the pure TLS 1.3 server: the first protocol in the listener's order that the client also offered, announced in EncryptedExtensions; a client offering ALPN with nothing in common is refused with a fatal `no_application_protocol` alert; no ALPN from the client negotiates nothing (`""`). Required by HTTP/2-over-TLS (RFC 9113 §3.3). |
 | **Mutual TLS (mTLS)** — `tcp_tls_require_client_cert listener ca_bundle strict?`; `tcp_peer_cert_subject conn` | Strict (handshake fails without a cert) and opportunistic modes. |
 | **Live cert reload** — `tcp_tls_reload listener hostname cert key` | Hot-swaps the SSL_CTX under a per-listener mutex; in-flight reads/writes on the old ctx survive until close. Standard Let's Encrypt-rotation use case. |
 
@@ -114,3 +114,49 @@ A program that never calls `tcp_connect_tls` / `tcp_listen_tls` (a
 pure-NURL-TLS client, or plain TCP) links `libc` only. The
 [`psql`](../packages/psql) package builds on the pure-NURL TLS client to
 reach PostgreSQL securely with no libpq and no OpenSSL.
+
+## HTTP/2
+
+Every HTTP server listener — `server_run`, `server_run_pool`,
+`server_run_async`, and so the `packages/http` HttpApp facade
+(`http_app_listen` / `http_app_listen_tls`) — serves **HTTP/2 (RFC 9113 +
+HPACK, RFC 7541) alongside HTTP/1.1**, with the same
+`( @ HttpResponse HttpRequest )` handler, the same routes and middleware,
+the same DoS gate, idle timeout and body limit. Nothing in application
+code chooses a protocol; the connection does:
+
+| How a client reaches HTTP/2 | What decides | Where |
+|---|---|---|
+| TLS, ALPN `h2` (RFC 9113 §3.3) | `http_app_listen_tls` advertises `h2 http/1.1`; per connection `tcp_alpn_is conn "h2"` routes to the HTTP/2 state machine before a byte is parsed | browsers, `curl --http2`, `oha --http2` over https |
+| Cleartext, prior knowledge (§3.4) | the keep-alive loop recognises the 24-byte `PRI * HTTP/2.0` preface in the first bytes and hands the connection — bytes and all — to `h2_conn_new_buffered`; anything else is HTTP/1.1 | `curl --http2-prior-knowledge`, `h2load`, `oha --http2` over http |
+| `Upgrade: h2c` | not implemented — deprecated by RFC 9113 | — |
+
+On a cleartext port shared with HTTP/1.1 a first line that is neither the
+preface nor HTTP gets HTTP/1.1's `400 Bad Request`; h2spec's §3.5/2
+("invalid connection preface") expects a GOAWAY there and is the one case
+the shared-port run fails, by design. Over ALPN-`h2` the connection is
+HTTP/2 from its first byte and the GOAWAY is sent.
+
+The implementation is pure NURL: `stdlib/ext/http2_frame.nu` (framing,
+buffered reads), `http2_hpack.nu` (static + dynamic table, Huffman),
+`http2_conn.nu` (connection + stream state machine, flow control, request
+assembly, response emission), `http2_client.nu` (multiplexed client:
+`h2_client_connect_tls` / `h2_client_connect_h2c`, `h2_client_submit`).
+`http2_serve` (`stdlib/ext/http2_server.nu`) drives one HTTP/2 connection
+for a program with its own accept loop (`examples/h2c_server.nu`).
+
+Conformance is a CI gate, not a claim: `tools/h2spec_gate.sh` runs h2spec
+2.6.0 against the HttpApp TLS listener and the HTTP/2-only example
+(146/146, strict 147/147) and the shared plaintext port (145/146 with
+§3.5/2 pinned by name), then confirms the negotiated protocol with curl.
+`compiler/tests/http2_in_http_server.nu` proves the same with the in-repo
+client. Performance is measured separately in
+[`bench/HTTP2_RESULTS.md`](../bench/HTTP2_RESULTS.md) (`bench/run_http2.sh`),
+next to the HTTP/1.1 report.
+
+Limits: the handler runs synchronously inside the connection's frame loop,
+one stream at a time — a slow handler delays the other streams on that
+connection (each connection is its own fiber, so other connections are
+unaffected). Server push is disabled (`SETTINGS_ENABLE_PUSH = 0`); the
+streaming / WebSocket upgrade hooks are HTTP/1.1-only. An idle HTTP/2
+connection whose deadline fires is closed with GOAWAY(NO_ERROR).

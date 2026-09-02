@@ -120,6 +120,7 @@ nurl_top10_arena.csv
 # same crate versions on a fresh checkout.
 bench/_build/
 bench/rust_http_server/target/
+bench/rust_http2_server/target/
 bench/rust_pq/target/
 
 # Development notes & helpers

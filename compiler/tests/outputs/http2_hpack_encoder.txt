@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+block1_len=46
+block1_status_is_0x88=T
+dyn_entries_after_block1=3
+block2_hex=88 c0 bf be
+block1_roundtrip=T
+block2_roundtrip=T
+zero_table_opens_with_size_update=T
+zero_table_entries=0
+zero_table_roundtrip=T
+decoder_table_after_zero_update=0

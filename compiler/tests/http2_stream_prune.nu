@@ -37,12 +37,16 @@ $ `stdlib/ext/http2_conn.nu`
         4096 1 0 65535 16384 0
         ( hpack_dyn_new 4096 )
         ( hpack_dyn_new 4096 )
+        -1
         ( vec_new [H2Stream] )
         ( h2_default_initial_window_size )
         ( h2_default_initial_window_size )
         0
         F
         0
+        ( vec_new [u] )
+        ( h2_default_max_body_bytes )
+        ( response_text 500 `internal server error\n` )
     }
 }
 

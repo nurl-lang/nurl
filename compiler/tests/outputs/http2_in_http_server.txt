@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+tls_alpn_h2=200 GET /alpn
+h2c_prior_knowledge=200 GET /prior
+http11_same_port=HTTP/1.1 200 OK
+garbage_first_line=HTTP/1.1 400 Bad Request

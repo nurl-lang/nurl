@@ -329,7 +329,12 @@ $ `stdlib/ext/http_static.nu`
 // Same, over TLS. `cert`/`key` are PEM paths (EC or RSA leaf; a fullchain
 // PEM is accepted for `cert`).
 @ http_app_listen_tls * HttpApp a s host i port s cert s key → i {
-    : !TcpListener NetErr lr ( tcp_listen_tls host port cert key )
+    // Advertise HTTP/2 and HTTP/1.1 over ALPN (RFC 7301), h2 preferred:
+    // an HTTP/2-capable client (browsers, curl, oha) gets HTTP/2, anything
+    // else HTTP/1.1, over the same listener and the same routes. The
+    // server itself tells the protocols apart by the connection preface,
+    // so this is the only HTTP/2-specific line in the facade.
+    : !TcpListener NetErr lr ( tcp_listen_tls_with_alpn host port 128 cert key `h2 http/1.1` )
     ?? lr {
         T listener → { ^ ( __httpapp_serve a listener `https` host port ) }
         F e → {

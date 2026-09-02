@@ -233,7 +233,9 @@ platform-specific shims.
   auth, JWT bearer-auth with HS256/EdDSA/**ES256**, cookies, forms, multipart, router, middleware, access log + Prometheus
   metrics, DoS caps, graceful shutdown, per-request timeouts, panic recovery),
   HTTP client (with cookie jar), **Post-Quantum TLS 1.3** (client & server: `X25519MLKEM768` hybrid & pure ML-KEM key exchange, ML-DSA certificate support, SNI + ALPN + mTLS + live cert reload), **HTTP/2**
-  (RFC 9113 + HPACK, **server and client**), **WebSocket** (RFC 6455, **server
+  (RFC 9113 + HPACK, **server and client** — served by every HttpServer /
+  HttpApp listener, ALPN `h2` over TLS and prior knowledge on cleartext,
+  h2spec-gated in CI), **WebSocket** (RFC 6455, **server
   and client**, with **permessage-deflate** compression — RFC 7692),
   reverse proxy with binary-safe streaming. Since 0.46.0 the serve path's
   scaling mode is **fiber-per-connection** (`http_app_async n`): TLS record

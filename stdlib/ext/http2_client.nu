@@ -115,6 +115,7 @@ $ `stdlib/ext/http2_hpack.nu`
         H2FrameBadPreface → { ^ # H2ClientErr H2CProtocol }
         H2FrameReadIo → { ^ # H2ClientErr H2CReadIo }
         H2FrameReadShort → { ^ # H2ClientErr H2CReadIo }
+        H2FrameReadTimeout → { ^ # H2ClientErr H2CReadIo }
         H2FrameWriteIo → { ^ # H2ClientErr H2CWriteIo }
         H2FrameOversized → { ^ # H2ClientErr H2CFrameSize }
         H2FrameBadStreamId → { ^ # H2ClientErr H2CProtocol }
