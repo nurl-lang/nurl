@@ -3442,6 +3442,31 @@ long long nurl_atomic_i64_dec_fetch(void *p) {
 #endif
 }
 
+/* Publish-once slots for stdlib singletons (a TLS ticket master, a
+ * session cache): the first caller to publish a non-zero value into
+ * slot `id` wins and every caller gets the winner's value back, so a
+ * lazily created singleton needs no lock to bootstrap — build a
+ * candidate, publish, and if the returned value is not yours, free
+ * yours and use the winner's. NURL cannot take the address of one of
+ * its globals for a compare-and-swap, which is why the slots live here.
+ * SEQ_CST CAS; `id` is a small stable constant chosen by the module
+ * (see stdlib/std/tls_server.nu for the registry of ids in use). */
+#define NURL_ONCE_SLOTS 64
+static long long nurl__once_slots[NURL_ONCE_SLOTS];
+long long nurl_once_slot(long long id, long long candidate) {
+    if (id < 0 || id >= NURL_ONCE_SLOTS) return 0;
+    long long *p = &nurl__once_slots[id];
+    long long expect = 0;
+#ifdef _WIN32
+    long long prev = (long long)InterlockedCompareExchange64((volatile LONG64*)p, candidate, 0);
+    return prev == 0 ? candidate : prev;
+#else
+    if (__atomic_compare_exchange_n(p, &expect, candidate, 0,
+                                    __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) return candidate;
+    return expect;   /* the value already published */
+#endif
+}
+
 long long nurl_atomic_i64_load(void *p) {
     if (!p) return 0;
 #ifdef _WIN32

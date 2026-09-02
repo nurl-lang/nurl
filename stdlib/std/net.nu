@@ -184,10 +184,13 @@ $ `stdlib/std/pkey.nu`
 }
 
 // Build a fresh Vec view over a raw (ptr, len) cert/key blob.
+// A borrowed view of a listener-owned buffer (certificate chain, key):
+// the listener keeps these for its whole life, and the handshake only
+// reads them, so there is nothing to copy — this used to memcpy the chain
+// and the key on EVERY accept. `vec_free` on the view releases the handle
+// only (core/vec.nu, vec_borrow_raw).
 @ __net_vecview i ptr i len → ( Vec u ) {
-    : ( Vec u ) v ( vec_new [u] )
-    ? > len 0 { ( bytes_extend_raw v # s ptr len ) } {}
-    ^ v
+    ^ ( vec_borrow_raw [u] # *u ptr len )
 }
 
 // Convenience: same as tcp_listen_with_backlog with backlog = 128.
@@ -301,7 +304,7 @@ $ `stdlib/std/pkey.nu`
     // The session-ticket key is drawn here, while the process is still
     // single-threaded, so every worker that later accepts on this
     // listener seals and opens tickets under the same key.
-    ( __tls_ticket_key_ensure )
+    ( _tls_ticket_key_ensure )
     // Copy cert list / key material into raw heap buffers, then drop the Vecs.
     : i certp ( __net_dup cert )
     : i certlen ( vec_len [u] cert )

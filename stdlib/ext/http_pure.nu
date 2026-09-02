@@ -28,6 +28,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/tls.nu`
 $ `stdlib/std/url.nu`
+$ `stdlib/std/thread.nu`
 
 // nurl_tcp_connect/read/write/close are compiler builtins (declared by
 // nurlc); tls_* come from tls.nu; the rest (malloc/strdup/nurl_*) are
@@ -40,6 +41,108 @@ $ `stdlib/std/url.nu`
     i is_tls
     i fd
     * TlsConn tc
+    String skey  // "host:port" — the session-cache key for this transport
+}
+
+// ── TLS session cache ───────────────────────────────────────────────
+//
+// A process-wide, per-host store of the resumption state a server hands
+// out (tls_session_export), so that the next https request to the same
+// host:port offers the ticket and gets the abbreviated handshake — no
+// certificate, no signature — without the caller doing anything. The
+// ticket arrives with the first response bytes; the export happens when
+// the transport closes; the offer happens at the next open. An expired
+// or declined entry costs nothing: the handshake falls back to the full
+// one, and the fresh ticket from that connection replaces the entry.
+//
+// Bounded (HP_SESS_MAX entries, oldest evicted) and never shared across
+// hosts. Guarded by a mutex — clients run from several threads and
+// fibers — and created on first use through the runtime's publish-once
+// slot (nurl_once_slot, id 2), so concurrent first users agree on one
+// cache without a lock to bootstrap.
+: HpSess {
+    String key
+    ( Vec u ) blob
+}
+
+: HpSessCache {
+    Mutex mu
+    ( Vec HpSess ) items
+}
+
+: ~ i g_hp_sess 0
+
+& `c` @ nurl_once_slot i id i candidate → i
+
+@ __hp_sess_cache → *HpSessCache {
+    ? != g_hp_sess 0 { ^ # *HpSessCache g_hp_sess } {}
+    : *HpSessCache c # *HpSessCache ( nurl_alloc Z HpSessCache )
+    = . c mu ( mutex_new )
+    = . c items ( vec_new [HpSess] )
+    : i won ( nurl_once_slot 2 # i c )
+    ? != won # i c {
+        ( mutex_free . c mu )
+        ( vec_free [HpSess] . c items )
+        ( nurl_free # s c )
+    } {}
+    = g_hp_sess won
+    ^ # *HpSessCache won
+}
+
+@ __hp_sess_key s host i port → String {
+    : String k ( string_from host )
+    ( string_push_str k `:` )
+    ( string_push_int k port )
+    ^ k
+}
+
+// A copy of the stored session for `key`, or an empty Vec.
+@ __hp_sess_get String key → ( Vec u ) {
+    : *HpSessCache c ( __hp_sess_cache )
+    : ( Vec u ) out ( vec_new [u] )
+    ( mutex_lock . c mu )
+    : i n ( vec_len [HpSess] . c items )
+    : *HpSess d ( vec_data [HpSess] . c items )
+    : ~ i k 0
+    ~ < k n {
+        : HpSess e . d k
+        ? ( string_eq . e key key ) {
+            ( bytes_extend_bytes out . e blob )
+            = k n
+        } { = k + k 1 }
+    }
+    ( mutex_unlock . c mu )
+    ^ out
+}
+
+// Store (or replace) the session for `key`. Both arguments are BORROWED.
+@ __hp_sess_put String key ( Vec u ) blob → v {
+    : *HpSessCache c ( __hp_sess_cache )
+    : ( Vec u ) copy ( vec_with_cap [u] ( vec_len [u] blob ) )
+    ( bytes_extend_bytes copy blob )
+    ( mutex_lock . c mu )
+    : i n ( vec_len [HpSess] . c items )
+    : *HpSess d ( vec_data [HpSess] . c items )
+    : ~ i k 0
+    : ~ b found F
+    ~ & ! found < k n {
+        : HpSess e . d k
+        ? ( string_eq . e key key ) {
+            ( vec_free [u] . e blob )
+            = . d k @ HpSess { . e key copy }
+            = found T
+        } { = k + k 1 }
+    }
+    ? found {} {
+        ? >= n 64 {
+            ?? ( vec_remove [HpSess] . c items 0 ) {
+                T old → { ( string_free . old key ) ( vec_free [u] . old blob ) }
+                F _ → {}
+            }
+        } {}
+        ( vec_push [HpSess] . c items @ HpSess { ( string_clone key ) copy } )
+    }
+    ( mutex_unlock . c mu )
 }
 
 // Map a TlsErr onto a NURL_HTTP_ERR_* code.
@@ -57,18 +160,23 @@ $ `stdlib/std/url.nu`
 // Open a transport to host:port. is_https selects the TLS stack; verify
 // chooses verify-full vs the insecure (no cert check) escape hatch.
 @ hp_conn_open i is_https s host i port s sni i verify → !HttpConn i {
+    : String skey ( __hp_sess_key host port )
     ? != is_https 0 {
+        // Offer the cached session, if any: an empty blob is exactly
+        // the full handshake, a declined one falls back to it.
+        : ( Vec u ) sess ( __hp_sess_get skey )
         : !*TlsConn TlsErr r ? != verify 0
-        ( tls_connect host port sni )
-        ( tls_connect_insecure host port sni )
+        ( tls_connect_resume host port sni sess )
+        ( tls_connect_insecure_resume host port sni sess )
+        ( vec_free [u] sess )
         ?? r {
-            F e → ^ @ !HttpConn i { F ( __hp_tls_err # i e ) }
-            T tc → ^ @ !HttpConn i { T @ HttpConn { 1 0 tc } }
+            F e → { ( string_free skey ) ^ @ !HttpConn i { F ( __hp_tls_err # i e ) } }
+            T tc → ^ @ !HttpConn i { T @ HttpConn { 1 0 tc skey } }
         }
     } {}
     : i fd ( nurl_tcp_connect host port )
-    ? <= fd 0 { ^ @ !HttpConn i { F 1 } } {}
-    ^ @ !HttpConn i { T @ HttpConn { 0 fd # *TlsConn 0 } }
+    ? <= fd 0 { ( string_free skey ) ^ @ !HttpConn i { F 1 } } {}
+    ^ @ !HttpConn i { T @ HttpConn { 0 fd # *TlsConn 0 skey } }
 }
 
 // Write all of `data` to the transport. Returns 0 on success, else a
@@ -120,10 +228,17 @@ $ `stdlib/std/url.nu`
 
 @ hp_conn_close HttpConn c → v {
     ? != . c is_tls 0 {
-        ? != # i . c tc 0 { ( tls_close . c tc ) } {}
+        ? != # i . c tc 0 {
+            // Keep the ticket this connection received for the next one.
+            : ( Vec u ) blob ( tls_session_export . c tc )
+            ? > ( vec_len [u] blob ) 0 { ( __hp_sess_put . c skey blob ) } {}
+            ( vec_free [u] blob )
+            ( tls_close . c tc )
+        } {}
     } {
         ? > . c fd 0 { ( nurl_tcp_close . c fd ) } {}
     }
+    ( string_free . c skey )
 }
 
 // ── Streaming response state ─────────────────────────────────────────
@@ -513,7 +628,7 @@ i follow i maxredir i verify s ua → *HttpStreamState {
         : ?Url maybe ( url_parse ( string_data cur_url ) )
         ?? maybe {
             F _ → {
-                : *HttpStreamState st ( __hp_state_new @ HttpConn { 0 0 # *TlsConn 0 } )
+                : *HttpStreamState st ( __hp_state_new @ HttpConn { 0 0 # *TlsConn 0 ( string_new ) } )
                 = . st err_kind 5
                 = . st finished 1
                 = result_p # i st
@@ -526,7 +641,7 @@ i follow i maxredir i verify s ua → *HttpStreamState {
                 : !HttpConn i co ( hp_conn_open is_https ( string_data . u host ) port ( string_data . u host ) verify )
                 ?? co {
                     F e → {
-                        : *HttpStreamState st ( __hp_state_new @ HttpConn { 0 0 # *TlsConn 0 } )
+                        : *HttpStreamState st ( __hp_state_new @ HttpConn { 0 0 # *TlsConn 0 ( string_new ) } )
                         = . st err_kind e
                         = . st finished 1
                         = result_p # i st

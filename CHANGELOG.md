@@ -10,6 +10,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The HTTP client resumes TLS sessions on its own.** `ext/http_pure.nu`
+  keeps the ticket a server sends in a process-wide per-host cache when
+  the transport closes and offers it on the next `https` request to the
+  same `host:port` — the abbreviated handshake, no certificate, no
+  signature, with nothing in the calling code. Bounded (64 hosts),
+  mutex-guarded, never shared across hosts; a declined or expired entry
+  is a full handshake. Test: `compiler/tests/http_client_resume.nu`
+  (the server asserts `tcp_tls_resumed`).
+- **TLS ticket-key rotation as a pure function of time.** The server's
+  sealing key is `HKDF-Expand-Label(master, "ticket key", epoch)` with a
+  6-hour epoch; a ticket records its epoch and the previous one still
+  opens (ticket lifetime 2 h). Every worker derives the same key with
+  nothing to swap or retire. The 32-byte master is drawn once, at
+  listener setup or on first use through the new runtime primitive
+  `nurl_once_slot(id, candidate)` — publish-once compare-and-swap slots
+  for stdlib singletons, since NURL cannot take a global's address.
+- **`http-torture.yml`** — a manual GitHub Action that runs the
+  open-loop torture harness on `ubuntu-latest` and commits
+  `bench/http_torture/TORTURE_RESULTS.md` back to `main`, the same
+  contract as `http-bench.yml` / `pq-bench.yml`. The harness now derives
+  its core split from `nproc`, prints `BENCH_HOST_LABEL` /
+  `BENCH_RUN_URL` and the commit in the report header, and takes
+  `SOAK_SEC` from the environment.
+
+### Fixed
+
+- The TLS accept path copied the certificate chain and private key on
+  every handshake (`__net_vecview`); they are borrowed views now.
+- `volatile_load` / `volatile_store` leaked 4 bytes per use in the
+  compiler: `__ptr_pointee` returned its argument on the no-star path,
+  so the result was never owned by the caller and the slice made on the
+  other path was never freed.
+
 - **TLS 1.3 session resumption (RFC 8446 §4.6.1 / §4.2.11).** The pure
   server issues a `NewSessionTicket` after every handshake — stateless:
   the ticket is the PSK sealed under a process-wide key drawn at listener

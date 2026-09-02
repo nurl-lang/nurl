@@ -39,16 +39,29 @@ mkdir -p "$SCRATCH"
 MODE="${MODE:-smoke}"                       # smoke | full
 SIZES="${SIZES:-1k 16k 1m}"                 # which bodies
 DIMS="${DIMS:-capacity loadlevels cpu churn slowloris keepalive tls_resume soak}"
-SRV_CORES="${SRV_CORES:-0-5}"
-GEN_CORES="${GEN_CORES:-6-11}"
 KNEE_MS="${KNEE_MS:-50}"                     # p99 SLO defining "sustainable"
 OHA="${OHA:-$HOME/.cargo/bin/oha}"; [ -x "$OHA" ] || OHA="$(command -v oha || true)"
 PY="$HT/lib.py"
 
+# Core split: the servers get the lower half of the online CPUs, the load
+# generator the upper half, so the two never share a core. The defaults
+# are derived from `nproc` (a 12-thread workstation gives 0-5 / 6-11, a
+# 4-vCPU CI runner 0-1 / 2-3); SRV_CORES / GEN_CORES override both.
+NCPU="$(nproc 2>/dev/null || echo 2)"; [ "$NCPU" -ge 2 ] || NCPU=2
+HALF=$(( NCPU / 2 ))
+SRV_CORES="${SRV_CORES:-0-$(( HALF - 1 ))}"
+GEN_CORES="${GEN_CORES:-$HALF-$(( NCPU - 1 ))}"
+
+# Where the numbers came from, for the report header. run_http.sh reads
+# the same two variables; the CI workflow sets them to the runner label
+# and the run URL, a workstation run leaves them empty and gets uname.
+HOST_LABEL="${BENCH_HOST_LABEL:-}"
+RUN_URL="${BENCH_RUN_URL:-}"
+
 if [ "$MODE" = full ]; then
-  RAMP_SEC=5; MEAS_SEC=20; SOAK_SEC=600; CONNS=400; SETTLE_SEC="${SETTLE_SEC:-120}"
+  RAMP_SEC=5; MEAS_SEC=20; SOAK_SEC="${SOAK_SEC:-600}"; CONNS=400; SETTLE_SEC="${SETTLE_SEC:-120}"
 else
-  RAMP_SEC=3; MEAS_SEC=6;  SOAK_SEC=20;  CONNS=200; SETTLE_SEC="${SETTLE_SEC:-5}"
+  RAMP_SEC=3; MEAS_SEC=6;  SOAK_SEC="${SOAK_SEC:-20}";  CONNS=200; SETTLE_SEC="${SETTLE_SEC:-5}"
 fi
 
 NB="$SCRATCH/nurl_torture.bin"
@@ -356,8 +369,9 @@ main() {
   add ""
   add "Open-loop, coordinated-omission corrected (\`oha -q --latency-correction\`). Server pinned to cores \`$SRV_CORES\`, generator to \`$GEN_CORES\`. Both peers serve byte-identical bodies. MODE=**$MODE**."
   add ""
-  add "- Host: \`$host\` — $cpu"
-  add "- NURL: \`$("$ROOT/build/nurlc" --version 2>/dev/null || echo n/a)\`  ·  oha: \`$($OHA --version 2>&1 | head -1)\`"
+  if [ -n "$HOST_LABEL" ]; then add "- Host: **$HOST_LABEL** — \`$host\` — $cpu ($NCPU CPUs)"; else add "- Host: \`$host\` — $cpu ($NCPU CPUs)"; fi
+  add "- NURL: \`$("$ROOT/build/nurlc" --version 2>/dev/null || echo n/a)\`  ·  oha: \`$($OHA --version 2>&1 | head -1)\`  ·  commit \`$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo n/a)\`"
+  [ -n "$RUN_URL" ] && add "- Run: $RUN_URL"
   add "- Sustainable capacity = highest offered rate with achieved ≥ 97% of target and p99 ≤ ${KNEE_MS} ms."
   add ""
   case " $DIMS " in *" capacity "*|*" loadlevels "*) for s in $SIZES; do dim_capacity_and_load "$s"; done;; esac
