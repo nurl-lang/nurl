@@ -18379,10 +18379,30 @@
                     : b __slip & > ( int_width fty ) 0
                     | | ( is_ptr_ty __sldft )
                     == ( nurl_str_get __sldft 0 ) 42 ( seq __sldft `s` )
+                    // (f) a named STRUCT value (`%Vec__u8`, `%String`, a user
+                    // struct — by value, no trailing star) into a SCALAR
+                    // field (int of any width, float, bool). The reverse of
+                    // (c): the insertvalue's value operand is an aggregate
+                    // where the slot is `i64`/`double`/`i1` — invalid IR that
+                    // only clang used to reject. The usual way in is a
+                    // positional literal written against an OLDER layout of
+                    // the struct (a field was added in the middle, every
+                    // later value shifted one slot). Enum values are excluded
+                    // — they lower to i64 tags and store into an int field
+                    // legally.
+                    : ~ b __slag F
+                    ? & ( __is_named_agg fty )
+                    | | > ( int_width __sldft ) 0 ( seq __sldft `i1` )
+                    | ( seq __sldft `double` ) ( seq __sldft `float` )
+                    { : s __slvn ( nurl_str_slice fty 1 - ( nurl_str_len fty ) 1 )
+                        ? == 0 ( nurl_sym_len2 syms __slvn `__variants` ) { = __slag T } {} }
+                    {}
                     : s __slcure ? __slip
                     `' — NURL has no implicit integer-to-pointer conversion; give the field a pointer-typed value, or cast an address intentionally with '# T expr' (the null pointer is '# T 0' for a pointer type T)`
+                    ? __slag
+                    `' — a struct value cannot be stored in a scalar field, and nothing converts it. If this literal is positional, check that its values line up with the struct's CURRENT field order — a field added in the middle shifts every later value one slot.`
                     `' — NURL has no implicit conversions; give the field a value of its declared type, or convert explicitly with '# T expr'`
-                    ? | | | | != __slvf __sldf ( __arg_named_struct_mismatch fty __sldft ) __slint_ps __slps __slip
+                    ? | | | | | != __slvf __sldf ( __arg_named_struct_mismatch fty __sldft ) __slint_ps __slps __slip __slag
                     { ( die lex ( nurl_str_cat3
                         ( nurl_str_cat4 `field ` ( nurl_str_int idx ) ` of struct literal '` cur_sname )
                         ( nurl_str_cat4 `' expects type '` __sldft `' but the value has type '` fty )
