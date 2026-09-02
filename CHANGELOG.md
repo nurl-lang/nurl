@@ -10,6 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **TLS 1.3 session resumption (RFC 8446 §4.6.1 / §4.2.11).** The pure
+  server issues a `NewSessionTicket` after every handshake — stateless:
+  the ticket is the PSK sealed under a process-wide key drawn at listener
+  setup, so any worker takes it back without a session table — and
+  accepts a returning `pre_shared_key` offer (binder verified over the
+  truncated ClientHello, `psk_dhe_ke` only, no early data) with the
+  abbreviated handshake: no Certificate, no CertificateVerify, no
+  signature. The client keeps the ticket when it arrives in the
+  application stream (`tls_read`), derives its PSK from the connection's
+  `resumption_master_secret`, and offers it on the next connection:
+  `tls_session_export c` → `tls_connect_resume` / `tls_attach_resume`
+  (`tls_connect_insecure_resume` for the unverified variant);
+  `tls_is_resumed` / `tcp_tls_resumed` say which handshake happened. A
+  declined or expired ticket falls back to the full handshake. Not yet:
+  ticket-key rotation on a timer (the key lives for the process; a
+  restart invalidates outstanding tickets, which is a full handshake,
+  not a failure). Test: `compiler/tests/tls_resume.nu`.
+
 - **Borrowed Vec views and a zero-copy HTTP response body.**
   `vec_borrow_raw [A] p n` makes a `Vec` handle over the caller's
   buffer: reads see it in place, the first growth detaches into an owned
