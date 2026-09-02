@@ -7,10 +7,12 @@
 //   GET /16k  → exactly  16384 bytes
 //   GET /1m   → exactly 1048576 bytes
 //
-// Each sized body is built ONCE at startup and copied into the response
-// per request — the same shape the Rust peer uses (a precomputed Bytes
-// cloned per response), so the measurement compares the servers, not two
-// body-construction strategies.
+// Each sized body is built ONCE at startup and the response BORROWS it
+// per request (`response_set_body_borrowed_bytes` — no copy) — the same
+// shape the Rust peer uses (a precomputed Bytes cloned per response, a
+// refcount bump), so the measurement compares the servers, not two
+// body-construction strategies. The bodies are main's locals and outlive
+// every request, which is exactly the borrowed-body contract.
 //
 // Args mirror bench/http_server.nu:
 //   (no args)                     → plaintext on 127.0.0.1:18080
@@ -36,7 +38,7 @@ $ `packages/http/src/http.nu`
 @ __sized i status ( Vec u ) body → HttpResponse {
     : HttpResponse r ( response_new status )
     ( response_set_header r `Content-Type` `application/octet-stream` )
-    ( response_set_body_bytes r body )
+    ( response_set_body_borrowed_bytes r body )
     ^ r
 }
 
