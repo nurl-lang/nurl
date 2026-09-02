@@ -36,6 +36,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Compiler: a function whose every `^` sits inside a `?` arm was never
+  marked as returning an owned string, so its callers leaked the
+  result.** The return site recorded the function-level ownership flags
+  (`__fn_ret_str_owned__`, the mixed poison, `__fn_ret_owned__`,
+  `__fn_ret_borrow__`) with a scope-local define; a `?` arm is a scope
+  of its own, so the flag died with the arm and only a tail `^` ever
+  reached the function's summary. The flags are written where they live
+  now (`nurl_sym_set_deep`), and the mixed poison is pre-declared at
+  function scope so a borrow-returning arm still vetoes the marker.
+  This is the shape behind the `volatile_load` leak fixed by hand in
+  #1054; `compiler/tests/owned_return_in_arms.nu` pins it under LSan.
+  Making the poison persist exposed a second gap: `^ r` where `r` was
+  bound from a forward (or recursive) call carries its ownership in the
+  run-time guard slot, so the return site could prove nothing and the
+  function lost its marker — `__thr_check`'s recursion leaked three
+  empty strings per self-compile. The return site now keeps the promise
+  the way the tail already did: a null slot (callee proved nothing)
+  copies, otherwise the buffer is handed on and the slot's drop skipped,
+  so every path returns something the caller may free. The bootstrap
+  snapshot is refreshed (the new compiler frees more of its own strings).
 - **The fiber scheduler sized its default worker pool by the machine's
   online CPU count, not by what the process may run on.** A server
   pinned with `taskset` to 6 of 12 hardware threads got 12 workers on 6

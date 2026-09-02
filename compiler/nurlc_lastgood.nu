@@ -3374,8 +3374,45 @@
         ret_arg_alias
         rid_ptr
         ``
+        // `^ r` where `r` was bound from a FORWARD call: its ownership is
+        // decided at run time by the guard slot (mem_emit_fwd_own_guard),
+        // so the static roster does not list `r` and this return could
+        // prove nothing. Left like that, the site sets the mixed poison
+        // and the whole function loses its owned marker — every caller
+        // then leaks the fresh value the callee did return (the shape of
+        // __thr_check's recursion: three empty strings per self-compile).
+        // Keep the promise instead: a null slot means the callee proved
+        // nothing, so COPY; otherwise hand the buffer on and skip the
+        // slot's drop. Either way this path returns a buffer the caller
+        // may free, and the marker can say so.
+        : s gslot ( nurl_sym_get2 syms ret_ident `__guardslot` )
+        ? & & & ( seq ( nurl_llty lt ) `i8*` ) == 0 ( nurl_str_len skip_str_ptr )
+        ret_arg_alias != 0 ( nurl_str_len gslot )
+        { : s gv ( nurl_cg_reg cg )
+            : s gc ( nurl_cg_reg cg )
+            : s gd ( nurl_cg_reg cg )
+            : s gj ( nurl_cg_reg cg )
+            : s lcopy ( nurl_cg_lbl cg `gret_copy` )
+            : s lkeep ( nurl_cg_lbl cg `gret_keep` )
+            : s ljoin ( nurl_cg_lbl cg `gret_join` )
+            ( nurl_print `  ` ) ( nurl_print gv ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print gslot ) ( nurl_print `\n` )
+            ( nurl_print `  ` ) ( nurl_print gc ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print gv ) ( nurl_print `, null\n` )
+            ( nurl_print `  br i1 ` ) ( nurl_print gc )
+            ( nurl_print `, label %` ) ( nurl_print lcopy )
+            ( nurl_print `, label %` ) ( nurl_print lkeep ) ( nurl_print `\n` )
+            ( emit ( nurl_str_cat lcopy `:` ) )
+            ( nurl_print `  ` ) ( nurl_print gd ) ( nurl_print ` = call i8* @nurl_strdup(i8* ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
+            ( nurl_print `  br label %` ) ( nurl_print ljoin ) ( nurl_print `\n` )
+            ( emit ( nurl_str_cat lkeep `:` ) )
+            ( nurl_print `  br label %` ) ( nurl_print ljoin ) ( nurl_print `\n` )
+            ( emit ( nurl_str_cat ljoin `:` ) )
+            ( nurl_print `  ` ) ( nurl_print gj ) ( nurl_print ` = phi i8* [ ` ) ( nurl_print gd ) ( nurl_print `, %` ) ( nurl_print lcopy )
+            ( nurl_print ` ], [ ` ) ( nurl_print val ) ( nurl_print `, %` ) ( nurl_print lkeep ) ( nurl_print ` ]\n` )
+            = val gj
+            = skip_str_ptr gslot
+        } {}
         ? != 0 ( nurl_str_len skip_str_ptr )
-        { ( nurl_sym_def syms `__fn_ret_str_owned__` `1` ) }
+        { ( nurl_sym_set_deep syms `__fn_ret_str_owned__` `1` ) }
         {}
         // `^ ( f … )` returning a fresh owned string: the value never
         // lived in a local (nothing to skip), but the OWNERSHIP must
@@ -3385,7 +3422,7 @@
         // (re)set by the outermost call's emit site just above.
         ? & & | ret_is_direct_call ret_is_det_join ( seq ( nurl_llty lt ) `i8*` )
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
-        { ( nurl_sym_def syms `__fn_ret_str_owned__` `1` ) }
+        { ( nurl_sym_set_deep syms `__fn_ret_str_owned__` `1` ) }
         {}
         // THIS site returns an i8* it cannot prove fresh (a parameter, a
         // literal, a borrow-returning call).
@@ -3406,7 +3443,7 @@
         == 0 ( nurl_str_len skip_str_ptr )
         ! & | ret_is_direct_call ret_is_det_join
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
-        { ( nurl_sym_def syms `__fn_ret_str_mixed__` `1` ) }
+        { ( nurl_sym_set_deep syms `__fn_ret_str_mixed__` `1` ) }
         {}
         = skip_user_ptr ? & ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) rid_ptr )
         ret_arg_alias
@@ -3425,13 +3462,13 @@
     { = skip_struct_ptr ( mem_ret_struct_transfer syms lt xfer_ident ) }
     {}
     ? != 0 ( nurl_str_len skip )
-    { ( nurl_sym_def syms `__fn_ret_owned__` `1` ) }
+    { ( nurl_sym_set_deep syms `__fn_ret_owned__` `1` ) }
     {}
     // Borrow provenance: if the returned value is a borrow (derived from a
     // parameter), this function returns a borrow — callers must NOT
     // auto-drop a `:`-binding off it.
     ? != 0 ( nurl_sym_len syms `__last_value_borrow__` )
-    { ( nurl_sym_def syms `__fn_ret_borrow__` `1` ) }
+    { ( nurl_sym_set_deep syms `__fn_ret_borrow__` `1` ) }
     {}
     // Publish this return site's ownership proof for callers that cannot
     // resolve the static marker (see @__nurl_ret_owned). The proof is the
@@ -7101,11 +7138,20 @@
 // the pointee width (cast at the call site, e.g. `# i32`).
 
 // Strip the trailing '*' from a pointer LLVM type ("i32*" → "i32").
+// Always a fresh string, handed back from ONE return path as a binding:
+// that is the shape the owned-return summary recognises (see
+// __ptr_entry_find's note). The earlier form returned `pt` itself on the
+// no-star path and a slice on the other, from two `^` inside the arms —
+// the summary read neither as owned, so no caller ever freed the slice:
+// 4 bytes per volatile_load / volatile_store, seen by LSan while
+// compiling the unikernel demos. Two `^ ( nurl_str_slice … )` in the
+// arms still leak (a minimal repro is in the follow-up notes); the
+// binding form does not.
 @ __ptr_pointee s pt → s {
     : i n ( nurl_str_len pt )
-    ? & > n 0 == ( nurl_str_get pt - n 1 ) 42
-    { ^ ( nurl_str_slice pt 0 - n 1 ) }
-    { ^ pt }
+    : i keep ? & > n 0 == ( nurl_str_get pt - n 1 ) 42 - n 1 n
+    : s out ( nurl_str_slice pt 0 keep )
+    ^ out
 }
 
 @ __is_ptr_ty s pt → b {
@@ -23187,6 +23233,7 @@
         ( nurl_sym_def syms `__owned_struct_fields__` `` )
         ( nurl_sym_def syms `__user_drops__` `` )
         ( nurl_sym_def syms `__fn_ret_str_owned__` `` )
+        ( nurl_sym_def syms `__fn_ret_str_mixed__` `` )
         ( nurl_sym_def syms `__fn_ret_struct_owned__` `` )
     }
     {}
@@ -23393,7 +23440,7 @@
     // gen_ret. (gen_ret also sets the flag, so this only ADDS the
     // implicit case; idempotent for explicit returns.)
     ? != 0 ( nurl_sym_len syms `__last_value_borrow__` )
-    { ( nurl_sym_def syms `__fn_ret_borrow__` `1` ) }
+    { ( nurl_sym_set_deep syms `__fn_ret_borrow__` `1` ) }
     {}
     // Auto-sink inference (critic v0.9.0 §2): merge any inferred sinks
     // into g_fn_sink[fname], deduping against the explicit `sink`
@@ -23534,7 +23581,7 @@
         rid_ptr
         ``
         ? != 0 ( nurl_str_len skip_str_ptr )
-        { ( nurl_sym_def syms `__fn_ret_str_owned__` `1` ) }
+        { ( nurl_sym_set_deep syms `__fn_ret_str_owned__` `1` ) }
         {}
         // Fall-off tail that is a direct owning call (`@ f → s { ( g ) }`)
         // proves ownership like gen_ret's explicit-call path; any other
@@ -23551,8 +23598,8 @@
         // and the other half of what makes ownership a signature property.
         ? & __has_fall == 0 ( nurl_str_len skip_str_ptr )
         { ? ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
-            { ( nurl_sym_def syms `__fn_ret_str_owned__` `1` ) }
-            { ( nurl_sym_def syms `__fn_ret_str_mixed__` `1` ) }
+            { ( nurl_sym_set_deep syms `__fn_ret_str_owned__` `1` ) }
+            { ( nurl_sym_set_deep syms `__fn_ret_str_mixed__` `1` ) }
         }
         {}
         // A void fall-off returns nothing — no binding can escape
@@ -23577,7 +23624,7 @@
     { = skip_struct_ptr ( mem_ret_struct_transfer syms ret_ty ret_ident ) }
     {}
     ? != 0 ( nurl_str_len skip )
-    { ( nurl_sym_def syms `__fn_ret_owned__` `1` ) }
+    { ( nurl_sym_set_deep syms `__fn_ret_owned__` `1` ) }
     {}
     ? ( seq ret_ty `void` )
     { ? == g_did_ret 0
