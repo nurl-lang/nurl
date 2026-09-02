@@ -36,9 +36,12 @@ numbers are.
 
 ## Fairness
 
-- Both servers are pinned to the **same** cores (`SRV_CORES`, default `0-5`);
-  the load generator to disjoint cores (`GEN_CORES`, default `6-11`), so the
-  generator never steals the server's CPU and vice versa.
+- Both servers are pinned to the **same** cores (`SRV_CORES`); the load
+  generator to disjoint cores (`GEN_CORES`), so the generator never steals
+  the server's CPU and vice versa. The defaults split the online CPUs in
+  half (`0-5` / `6-11` on a 12-thread host, `0-1` / `2-3` on a 4-vCPU
+  runner); the NURL server sizes its worker pool by that affinity mask,
+  exactly as tokio does.
 - Both peers serve **byte-identical bodies** (`/` = 14 B, `/1k`, `/16k`,
   `/1m`), each built once at startup and handed to a response per request.
   The NURL peer is the `packages/http` HttpApp facade in `http_app_async`
@@ -70,3 +73,15 @@ The report is written to `TORTURE_RESULTS.md`; the scratch directory
 `server.nu` is the NURL peer; `rust/` the hyper peer; `slowloris.py` and
 `tls_resume.py` are the two probes bash can't express; `lib.py` extracts
 the oha JSON fields.
+
+## Whose numbers are in `TORTURE_RESULTS.md`
+
+The committed table is whatever the **`http-torture` GitHub Action** last
+wrote: a full run on an `ubuntu-latest` runner (4 vCPUs — servers on
+cores 0-1, the generator on 2-3), committed to `main` the same way
+`bench/HTTP_RESULTS.md` and `bench/PQ_RESULTS.md` are. Its header names
+the host and links the run. Absolute numbers there are a fraction of a
+workstation's; read the two servers against each other on the same
+cores. Workstation runs (12 threads, servers on 0-5 / generator on 6-11)
+are posted in the pull requests that changed the numbers (#1053, #1054,
+#1055), not committed. When citing a cell, say which host produced it.

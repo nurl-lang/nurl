@@ -184,6 +184,22 @@ $ `stdlib/std/aes_gcm.nu`
     ( vec_free [u] age_add ) ( vec_free [u] body ) ( vec_free [u] msg )
 }
 
+// Did the ClientHello carry psk_key_exchange_modes with psk_dhe_ke? A
+// server MUST NOT send a NewSessionTicket to a client that did not
+// (RFC 8446 §4.2.9) — the client is saying it cannot resume, and a
+// strict one may treat an unsolicited ticket as an error.
+@ __srv_client_can_resume ( Vec u ) ch i es i ee → b {
+    : i modes ( __srv_find_ext ch es ee 45 )
+    ? < modes 0 { ^ F } {}
+    : i mlen ( _t_bget ch modes )
+    : ~ i mk 0
+    ~ < mk mlen {
+        ? == ( _t_bget ch + + modes 1 mk ) 1 { ^ T } {}
+        = mk + mk 1
+    }
+    ^ F
+}
+
 // The resumption offer in a ClientHello, if it is one we can honour: a
 // ticket of ours, offered with psk_dhe_ke, whose binder verifies over the
 // hello truncated before the binders list (RFC 8446 §4.2.11.2). Appends
@@ -669,6 +685,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) psk ( vec_new [u] )
     : i psk_sel ( __srv_psk_offer ch es ee psk )
     ? >= psk_sel 0 { = . c resumed 1 } {}
+    : b can_resume ( __srv_client_can_resume ch es ee )
 
     // ── server ephemeral + shared secret ──
     //
@@ -836,8 +853,9 @@ $ `stdlib/std/aes_gcm.nu`
     ( _set_keys c 1 c_ap )
     = . c established 1
 
-    // A ticket for next time, first thing under the application keys.
-    ? == finok 1 { ( __srv_issue_ticket c ) } {}
+    // A ticket for next time, first thing under the application keys —
+    // only for a client that said it can resume (§4.2.9).
+    ? & == finok 1 can_resume { ( __srv_issue_ticket c ) } {}
 
     // free scratch / handshake secrets
     ( vec_free [u] ch ) ( vec_free [u] crand ) ( vec_free [u] cpub ) ( vec_free [u] eph )
