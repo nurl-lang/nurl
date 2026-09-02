@@ -1361,6 +1361,21 @@ $ `stdlib/std/async_ffi.nu`
     ^ == . c kx_group 4588
 }
 
+// True iff the negotiated ALPN protocol is exactly `proto` — the
+// allocation-free form of tls_alpn_selected for the per-connection
+// dispatch question ("is this h2?").
+@ tls_alpn_is * TlsConn c s proto → b {
+    : i n ( vec_len [u] . c alpn_sel )
+    ? != n ( nurl_str_len proto ) { ^ F } {}
+    : *u p ( vec_data [u] . c alpn_sel )
+    : ~ i k 0
+    ~ < k n {
+        ? != # i . p k ( nurl_str_get proto k ) { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
 @ tls_alpn_selected * TlsConn c → String {
     : String s ( string_new )
     : i n ( vec_len [u] . c alpn_sel )

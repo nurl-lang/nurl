@@ -1,0 +1,19 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+client_h2=[h2] echo=T
+client_http11=[http/1.1] echo=T
+client_mismatch=NetTlsHandshake
+client_none=[] echo=T
+openssl_client=[h2] echo=T
+openssl_mismatch=alert_120
+noalpn_listener_client_h2=[] echo=T
+server_1=[h2]
+server_2=[http/1.1]
+server_3=handshake_failed
+server_4=[]
+server_5=[h2]
+server_6=handshake_failed
+server_b1=[]
+server_echoed_5=T
