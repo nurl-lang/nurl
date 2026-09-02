@@ -4,7 +4,7 @@
 // that the single-buffer `response_serialize` + `tcp_write_all` did.
 //
 // Round-trip over a real loopback socket, blocking (off-fiber) path:
-//   1. Listen on 127.0.0.1:18766.
+//   1. Listen on 127.0.0.1:18767.
 //   2. Spawn a python3 client that connects, SLEEPS before reading (so
 //      the 3 MB body fills the socket buffer and the send loop has to
 //      continue from short counts, across the head/body boundary), then
@@ -27,7 +27,7 @@ $ `stdlib/ext/http_response.nu`
 
 @ python_client_src → s {
     ^ `import socket,sys,time,hashlib
-s = socket.create_connection(('127.0.0.1', 18766), timeout=10.0)
+s = socket.create_connection(('127.0.0.1', 18767), timeout=10.0)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16384)
 time.sleep(0.4)
 h = hashlib.sha256()
@@ -113,7 +113,7 @@ sys.stdout.write('%d %s' % (n, h.hexdigest()[:16]))
 }
 
 @ main → i {
-    : !TcpListener NetErr lr ( tcp_listen_with_backlog `127.0.0.1` 18766 4 )
+    : !TcpListener NetErr lr ( tcp_listen_with_backlog `127.0.0.1` 18767 4 )
     ?? lr {
         T listener → {
             : s pyclient ( python_client_src )
