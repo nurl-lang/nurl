@@ -246,6 +246,23 @@ $ `stdlib/ext/json.nu`
 // Caller clears the buffer between responses; this only appends.
 @ response_serialize_to HttpResponse r ( Vec u ) out → v {
     ( vec_reserve [u] out + 64 ( vec_len [u] . r body ) )
+    ( response_serialize_head_to r out )
+    // memcpy fast path — generic `vec_extend [u]` does a per-element
+    // copy that's the dominant cost for large response bodies
+    // (e.g. 330 KB base64 wasm payload). Replaced 2026-05-27 after
+    // profiling nurlapi /build_wasm showed ~2.5 s of the 3 s total
+    // wall-time was spent in this single byte-by-byte loop.
+    ( bytes_extend_bytes out . r body )
+}
+
+// Serialise only the HEAD — status line, headers, the blank line —
+// appending into `out`. The body stays where it is: the server writes
+// head and body as two segments of one message (`tcp_write_all2`, a
+// single sendmsg), which removes what used to be a full copy of every
+// response body into the wire buffer. Content-Length still describes
+// `r.body`, so the head is only valid paired with that body.
+@ response_serialize_head_to HttpResponse r ( Vec u ) out → v {
+    ( vec_reserve [u] out 256 )
 
     // ── Status line: "HTTP/1.1 <code> <reason>\r\n" ──
     ( bytes_extend_str out `HTTP/1.1 ` )
@@ -276,14 +293,8 @@ $ `stdlib/ext/json.nu`
         ( bytes_extend_str out `\r\n` )
     } {}
 
-    // ── Blank line + body ──
+    // ── Blank line ──
     ( bytes_extend_str out `\r\n` )
-    // memcpy fast path — generic `vec_extend [u]` does a per-element
-    // copy that's the dominant cost for large response bodies
-    // (e.g. 330 KB base64 wasm payload). Replaced 2026-05-27 after
-    // profiling nurlapi /build_wasm showed ~2.5 s of the 3 s total
-    // wall-time was spent in this single byte-by-byte loop.
-    ( bytes_extend_bytes out . r body )
 }
 
 // Case-insensitive header presence check. Direct *Header iteration —

@@ -382,6 +382,19 @@ $ `stdlib/std/async_ffi.nu`
 @ __send_encrypted * TlsConn c i content_type ( Vec u ) content → !v TlsErr {
     : ( Vec u ) inner ( vec_with_cap [u] + ( vec_len [u] content ) 1 )
     ( _tls_cat inner content )
+    ^ ( __send_inner_encrypted c content_type inner )
+}
+
+// Same record, plaintext = bytes [lo, hi) of `head`‖`body`, assembled
+// straight from the two buffers (tls_write2's per-record step).
+@ __send_encrypted_pair * TlsConn c i content_type ( Vec u ) head ( Vec u ) body i lo i hi → !v TlsErr {
+    : ( Vec u ) inner ( _tls_pair_slice head body lo hi )
+    ^ ( __send_inner_encrypted c content_type inner )
+}
+
+// Seal `inner` (plaintext WITHOUT the type byte yet; consumed here) as
+// one TLS 1.3 record under the client write keys and send it.
+@ __send_inner_encrypted * TlsConn c i content_type ( Vec u ) inner → !v TlsErr {
     ( vec_push [u] inner # u content_type )
     : i total + ( vec_len [u] inner ) 16
     : ( Vec u ) aad ( vec_with_cap [u] 5 )
@@ -1158,6 +1171,56 @@ $ `stdlib/std/async_ffi.nu`
         : ~ ! v TlsErr w @ !v TlsErr { T 0 }
         ? == . c version 12 { = w ( __send_record_12 c 23 part ) } { = w ( __send_encrypted c 23 part ) }
         ( vec_free [u] part )
+        ?? w { T _ → {} F e → { ^ @ !v TlsErr { F e } } }
+        = off hi
+    }
+    ^ @ !v TlsErr { T 0 }
+}
+
+// Bytes [lo, hi) of the logical concatenation `head`‖`body`, as a fresh
+// Vec — the record cutter behind tls_write2 / tls_server_write2. One
+// memcpy per source touched; a range inside a single source is one.
+// One spare byte of capacity: the sealers push the inner content-type
+// byte onto this same Vec, and that must not be a reallocation.
+@ _tls_pair_slice ( Vec u ) head ( Vec u ) body i lo i hi → ( Vec u ) {
+    : i hn ( vec_len [u] head )
+    : i bn ( vec_len [u] body )
+    : ~ i a lo
+    : ~ i z hi
+    ? < a 0 { = a 0 } {}
+    ? > z + hn bn { = z + hn bn } {}
+    ? < z a { = z a } {}
+    : ( Vec u ) out ( vec_with_cap [u] + 1 - z a )
+    ? < a hn {
+        : i h_hi ? < z hn z hn
+        : *u hp ( vec_data [u] head )
+        ( bytes_extend_raw out # s + # i hp a - h_hi a )
+    } {}
+    ? > z hn {
+        : i b_lo ? > a hn - a hn 0
+        : *u bp ( vec_data [u] body )
+        ( bytes_extend_raw out # s + # i bp b_lo - - z hn b_lo )
+    } {}
+    ^ out
+}
+
+// Two-buffer variant of tls_write (client side of tcp_write_all2):
+// records are cut from `head`‖`body` without joining the two first.
+// TLS 1.3 assembles each record's plaintext straight from the pair;
+// TLS 1.2 hands the AEAD a plaintext Vec, so it cuts one per record
+// (the same one bytes_slice cut before).
+@ tls_write2 * TlsConn c ( Vec u ) head ( Vec u ) body → !v TlsErr {
+    : i n + ( vec_len [u] head ) ( vec_len [u] body )
+    : ~ i off 0
+    ~ < off n {
+        : ~ i hi + off 16384
+        ? > hi n { = hi n } {}
+        : ~ ! v TlsErr w @ !v TlsErr { T 0 }
+        ? == . c version 12 {
+            : ( Vec u ) part ( _tls_pair_slice head body off hi )
+            = w ( __send_record_12 c 23 part )
+            ( vec_free [u] part )
+        } { = w ( __send_encrypted_pair c 23 head body off hi ) }
         ?? w { T _ → {} F e → { ^ @ !v TlsErr { F e } } }
         = off hi
     }

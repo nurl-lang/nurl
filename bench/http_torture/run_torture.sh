@@ -362,7 +362,7 @@ main() {
   add "### Reading these numbers"
   add ""
   add "- **1 KB capacity is generator-bound, not a server ceiling.** When both servers report the *same* sustainable rate for 1 KB, that is \`oha\` on ${GEN_CORES} hitting its own generation limit, not the servers saturating — the honest 1 KB conclusion is \"both faster than this host can drive,\" i.e. a tie at the floor of the generator's ceiling."
-  add "- **The gap grows with body size** (1 KB → 16 KB → 1 MB), which is the signature of a per-byte data-path cost, not a fixed per-request one. The CPU-per-request rows at 1 MB show it directly."
+  add "- **Read the body-size axis as the data path.** A difference that grows from 1 KB to 16 KB to 1 MB is a per-byte cost, not a per-request one; the CPU-per-request rows make it visible directly. The first such cost found by this harness — the response body being copied into the connection's wire buffer before the write — was removed (head and body now leave in one \`sendmsg\`); what remains at 1 MB is the inbound copy \`response_set_body_bytes\` makes of the handler's buffer, which hyper's \`Bytes::clone\` does not pay."
   add "- **The soak tail is largely environmental.** A 600 s run on a shared workstation is exposed to system scheduling the 20 s load-level runs are not, and coordinated-omission correction back-charges every hiccup — which is why *both* servers show a inflated soak p99. Compare the two servers to each other, and read the **RSS delta** as the server-specific signal (bounded per-connection buffer high-water, freed at connection close)."
   printf '%s' "$report" > "$HT/TORTURE_RESULTS.md"
   say ""; say "report -> $HT/TORTURE_RESULTS.md   (scratch: $SCRATCH)"

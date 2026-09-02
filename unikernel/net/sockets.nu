@@ -827,6 +827,18 @@ $ `stdlib/net/dnsclient.nu`
     ^ rc
 }
 
+// Two-segment write (std/net.nu's `tcp_write_all2` → head + body in one
+// call). The sans-IO stack has no scatter/gather send, so it is two
+// writes under nurl_tcp_write2's contract: the count spans both
+// segments, head first, and a short head is a short total.
+@ nurl_tcp_write2 i conn s b1 i n1 s b2 i n2 → i {
+    ? <= n1 0 { ^ ( nurl_tcp_write conn b2 n2 ) } {}
+    : i w1 ( nurl_tcp_write conn b1 n1 )
+    ? | < w1 n1 <= n2 0 { ^ w1 } {}
+    : i w2 ( nurl_tcp_write conn b2 n2 )
+    ^ ? < w2 0 w1 + w1 w2
+}
+
 @ nurl_reactor_wait_read i fd i timeout_ms → i { ^ ( __wait fd 0 timeout_ms ) }
 
 @ nurl_reactor_wait_write i fd i timeout_ms → i { ^ ( __wait fd 1 timeout_ms ) }

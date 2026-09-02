@@ -60,6 +60,21 @@ $ `stdlib/std/aes_gcm.nu`
 @ __srv_enc_rec_to * TlsConn c ( Vec u ) out i content_type ( Vec u ) content → v {
     : ( Vec u ) inner ( vec_with_cap [u] + ( vec_len [u] content ) 1 )
     ( _tls_cat inner content )
+    ( __srv_seal_inner_to c out content_type inner )
+}
+
+// Same record, plaintext taken as bytes [lo, hi) of `head`‖`body` — the
+// inner plaintext is assembled straight from the two buffers (one copy,
+// exactly what the single-buffer path pays), so tls_server_write2 does
+// not cut an intermediate slice per record.
+@ __srv_enc_rec_pair_to * TlsConn c ( Vec u ) out i content_type ( Vec u ) head ( Vec u ) body i lo i hi → v {
+    : ( Vec u ) inner ( _tls_pair_slice head body lo hi )
+    ( __srv_seal_inner_to c out content_type inner )
+}
+
+// Seal `inner` (plaintext WITHOUT the type byte yet; consumed here) as
+// one TLS 1.3 record under the server write keys, appended to `out`.
+@ __srv_seal_inner_to * TlsConn c ( Vec u ) out i content_type ( Vec u ) inner → v {
     ( vec_push [u] inner # u content_type )
     : i total + ( vec_len [u] inner ) 16
     : ( Vec u ) aad ( vec_with_cap [u] 5 )
@@ -730,6 +745,27 @@ $ `stdlib/std/aes_gcm.nu`
         : !v TlsErr w ( __srv_send_enc c 23 part )
         ( vec_free [u] part )
         ?? w { T _ → {} F e → { ^ @ !v TlsErr { F e } } }
+        = off hi
+    }
+    ^ @ !v TlsErr { T 0 }
+}
+
+// Two-buffer variant for net.nu's tcp_write_all2: records are cut from
+// the logical concatenation `head`‖`body` (see _tls_pair_slice), so the
+// HTTP server's response head and body are never joined into one
+// plaintext buffer first. Record boundaries are identical to
+// tls_server_write over the joined bytes — same wire, one copy less.
+@ tls_server_write2 * TlsConn c ( Vec u ) head ( Vec u ) body → !v TlsErr {
+    : i n + ( vec_len [u] head ) ( vec_len [u] body )
+    : ~ i off 0
+    ~ < off n {
+        : ~ i hi + off 16384
+        ? > hi n { = hi n } {}
+        : ( Vec u ) rec ( vec_new [u] )
+        ( __srv_enc_rec_pair_to c rec 23 head body off hi )
+        : b w ( _tls_sock_write . c fd rec )
+        ( vec_free [u] rec )
+        ? w {} { ^ @ !v TlsErr { F # TlsErr TlsWrite } }
         = off hi
     }
     ^ @ !v TlsErr { T 0 }
