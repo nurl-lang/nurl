@@ -105,7 +105,10 @@ $ `stdlib/std/pkey.nu`
 // value struct returned with owned-Vec fields is auto-dropped at the
 // constructing function's exit (a borrowck escape gap), which would free
 // the buffers out from under the listener.
-: TcpListener { s raw i is_tls i keytype i certp i certlen i kp1 i kl1 i kp2 i kl2 i kp3 i kl3 }
+: TcpListener { s raw i is_tls i keytype i certp i certlen i kp1 i kl1 i kp2 i kl2 i kp3 i kl3 i alpnp i alpnlen }
+// alpnp/alpnlen: the TLS listener's ALPN preference list in wire form
+// ([len:1][name] entries, server order — see tls_alpn_pack), 0/0 when the
+// listener does not negotiate ALPN.
 // kind: 0 = plaintext (raw is the runtime socket handle), 1 = pure TLS
 // client, 2 = pure TLS server. For kinds 1/2 `tlsh` is the *TlsConn (as
 // i64) and reads/writes dispatch to the pure stack.
@@ -170,7 +173,7 @@ $ `stdlib/std/pkey.nu`
         ^ @ !TcpListener NetErr { F ( _net_err_of ek ) }
     } {}
     : s rp # s raw
-    : TcpListener l @ TcpListener { rp 0 0 0 0 0 0 0 0 0 0 }
+    : TcpListener l @ TcpListener { rp 0 0 0 0 0 0 0 0 0 0 0 0 }
     ^ @ !TcpListener NetErr { T l }
 }
 
@@ -204,11 +207,10 @@ $ `stdlib/std/pkey.nu`
 // the returned TcpConn is polymorphic — `tcp_read_chunk` /
 // `tcp_write_all` dispatch via libssl underneath, so HttpServer
 // (and any other code that consumed TcpConn) gets HTTPS without
-// changes. Cert and key are loaded once at listener creation; v1
-// has no SNI, no ALPN, no client-cert-auth, no live cert reload.
-//
-// Build-time dependency: openssl detected via pkg-config in build.sh.
-// When absent, every call here returns NetTlsCtxInit unconditionally.
+// changes. Cert and key are loaded once at listener creation. ALPN is
+// negotiated when the listener was made with tcp_listen_tls_with_alpn;
+// SNI cert selection, client-cert auth and live cert reload are not
+// implemented in the pure stack.
 // Load the leaf-cert DER + EC P-256 private scalar from PEM files for a
 // pure-TLS listener. The cert PEM's first block is taken as the leaf.
 // Frame every `-----BEGIN CERTIFICATE-----` block in `pem` as a TLS 1.3
@@ -285,6 +287,14 @@ $ `stdlib/std/pkey.nu`
 }
 
 @ tcp_listen_tls_with_backlog s host i port i backlog s cert_path s key_path → !TcpListener NetErr {
+    ^ ( __tcp_listen_tls_impl host port backlog cert_path key_path `` )
+}
+
+// Shared body of the TLS listener constructors. `alpn_protocols` is a
+// space-separated server preference list ("h2 http/1.1") or "" for no
+// ALPN; it is packed to wire form once here and parked on the listener
+// like the cert and key.
+@ __tcp_listen_tls_impl s host i port i backlog s cert_path s key_path s alpn_protocols → !TcpListener NetErr {
     : ( Vec u ) cert ( vec_new [u] )
     : ( Vec u ) k1 ( vec_new [u] )
     : ( Vec u ) k2 ( vec_new [u] )
@@ -315,29 +325,48 @@ $ `stdlib/std/pkey.nu`
     : i kp3 ( __net_dup k3 )
     : i kl3 ( vec_len [u] k3 )
     ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
+    : ( Vec u ) alpn ( tls_alpn_pack alpn_protocols )
+    : i alpnp ( __net_dup alpn )
+    : i alpnlen ( vec_len [u] alpn )
+    ( vec_free [u] alpn )
     : s rp # s raw
-    ^ @ !TcpListener NetErr { T @ TcpListener { rp 1 keytype certp certlen kp1 kl1 kp2 kl2 kp3 kl3 } }
+    ^ @ !TcpListener NetErr { T @ TcpListener { rp 1 keytype certp certlen kp1 kl1 kp2 kl2 kp3 kl3 alpnp alpnlen } }
 }
 
 @ tcp_listen_tls s host i port s cert_path s key_path → !TcpListener NetErr {
     ^ ( tcp_listen_tls_with_backlog host port 128 cert_path key_path )
 }
 
-// TLS listener with ALPN. The pure handshake does not yet advertise ALPN,
-// so the protocol list is accepted for source compatibility but ignored
-// (clients negotiate nothing → fall back to HTTP/1.1). ALPN is a planned
-// addition to the pure stack.
+// TLS listener with ALPN (RFC 7301). `alpn_protocols` is a space-separated
+// preference list, most-preferred first — "h2 http/1.1" is what an
+// HTTP/2-capable HTTPS server advertises. Per accepted connection the
+// handshake picks the first protocol in THIS order that the client also
+// offered and announces it in EncryptedExtensions; read it back with
+// tcp_alpn_protocol. A client that offers ALPN with nothing in common is
+// refused with a fatal no_application_protocol alert (§3.2); a client
+// that sends no ALPN negotiates nothing and gets "" — the caller decides
+// what that means (HTTP servers treat it as HTTP/1.1).
 @ tcp_listen_tls_with_alpn s host i port i backlog s cert_path s key_path s alpn_protocols → !TcpListener NetErr {
-    ^ ( tcp_listen_tls_with_backlog host port backlog cert_path key_path )
+    ^ ( __tcp_listen_tls_impl host port backlog cert_path key_path alpn_protocols )
 }
 
-// Read the negotiated ALPN protocol off a TLS conn (client kind 1 or a
-// STARTTLS upgrade). Returns "" for plaintext conns or when no ALPN was
-// negotiated. Server-side ALPN is not parsed yet.
+// Read the negotiated ALPN protocol off a TLS conn — a client conn (kind
+// 1), a STARTTLS upgrade, or a conn accepted by a tcp_listen_tls_with_alpn
+// listener (kind 2). Returns "" for plaintext conns or when no ALPN was
+// negotiated.
 @ tcp_alpn_protocol TcpConn c → String {
     : i tp ( __conn_tlsptr c )
     ? == tp 0 { ^ ( string_new ) } {}
     ^ ( tls_alpn_selected # *TlsConn tp )
+}
+
+// True iff this conn negotiated exactly `proto` over ALPN. F for a
+// plaintext conn or when nothing was negotiated. No allocation — this is
+// the per-connection protocol dispatch in the HTTP server.
+@ tcp_alpn_is TcpConn c s proto → b {
+    : i tp ( __conn_tlsptr c )
+    ? == tp 0 { ^ F } {}
+    ^ ( tls_alpn_is # *TlsConn tp proto )
 }
 
 // The key-exchange group this connection negotiated, as its IANA
@@ -461,6 +490,7 @@ $ `stdlib/std/pkey.nu`
         ? != . l kp1 0 { ( nurl_free # s . l kp1 ) } {}
         ? != . l kp2 0 { ( nurl_free # s . l kp2 ) } {}
         ? != . l kp3 0 { ( nurl_free # s . l kp3 ) } {}
+        ? != . l alpnp 0 { ( nurl_free # s . l alpnp ) } {}
     } {}
 }
 
@@ -564,22 +594,34 @@ $ `stdlib/std/pkey.nu`
     ^ # i . c raw
 }
 
+// The runtime socket handle behind ANY TcpConn — plaintext, pure-TLS
+// client or server, STARTTLS-upgraded — for readiness polling with
+// nurl_reactor_wait_read / nurl_tcp_get_fd. A TLS conn keeps its handle
+// inside the TlsConn and has raw = 0; reading `. c raw` directly, as the
+// HTTP/2 client did, polls handle 0 — which on the hosted runtime is a
+// null handle (never readable, so the probe merely fell through to the
+// blocking read) and on the pure in-process stack is somebody else's
+// socket, reported readable while the caller's own had nothing.
+@ tcp_conn_fd TcpConn c → i { ^ ( __conn_fd c ) }
+
 // Run the server-side pure-TLS handshake over a freshly accepted raw
 // conn handle, using the listener's parked cert/key material. Consumes
 // `craw` (the *TlsConn owns the socket on success; closed on failure).
 @ __tls_accept_handshake TcpListener l i craw → !TcpConn NetErr {
     : ( Vec u ) cert ( __net_vecview . l certp . l certlen )
     : ( Vec u ) k1 ( __net_vecview . l kp1 . l kl1 )
+    : ( Vec u ) alpn ( __net_vecview . l alpnp . l alpnlen )
     // keytype 1 = RSA (k1 = n, k2 = d, k3 = e); else EC P-256 (k1 = scalar).
     : !*TlsConn TlsErr r ? == . l keytype 1
     { : ( Vec u ) k2 ( __net_vecview . l kp2 . l kl2 )
         : ( Vec u ) k3 ( __net_vecview . l kp3 . l kl3 )
-        : !*TlsConn TlsErr rr ( tls_accept_rsa craw cert k1 k3 k2 )
+        : !*TlsConn TlsErr rr ( tls_accept_rsa_alpn craw cert k1 k3 k2 alpn )
         ( vec_free [u] k2 ) ( vec_free [u] k3 )
         rr }
-    ( tls_accept craw cert k1 )
+    ( tls_accept_alpn craw cert k1 alpn )
     ( vec_free [u] cert )
     ( vec_free [u] k1 )
+    ( vec_free [u] alpn )
     ?? r {
         F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
         T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 2 # i tc } }

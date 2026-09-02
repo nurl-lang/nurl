@@ -40,8 +40,8 @@ Construction & serving:
 | Call | Effect |
 | --- | --- |
 | `( http_app_new )` → `*HttpApp` | create an app (free with `http_app_free`) |
-| `( http_app_listen a host port )` → `i` | bind + serve until closed (SIGINT/SIGTERM/error) |
-| `( http_app_listen_tls a host port cert key )` → `i` | same, over TLS (PEM paths; EC or RSA leaf) |
+| `( http_app_listen a host port )` → `i` | bind + serve until closed (SIGINT/SIGTERM/error); HTTP/1.1 and HTTP/2 (prior knowledge) on the same port |
+| `( http_app_listen_tls a host port cert key )` → `i` | same, over TLS (PEM paths; EC or RSA leaf); ALPN `h2 http/1.1`, so HTTP/2-capable clients get HTTP/2 |
 
 Routing (handlers are `( @ HttpResponse HttpRequest Params )`):
 

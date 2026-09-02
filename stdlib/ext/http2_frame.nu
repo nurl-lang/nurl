@@ -125,6 +125,7 @@ $ `stdlib/std/net.nu`
     H2FrameBadPreface  // connection preface didn't match
     H2FrameReadIo  // socket read failed
     H2FrameReadShort  // peer closed mid-frame
+    H2FrameReadTimeout  // the socket's receive deadline fired (idle connection)
     H2FrameWriteIo  // socket write failed
     H2FrameOversized  // length > MAX_FRAME_SIZE
     H2FrameBadStreamId  // reserved bit set or zero where positive required
@@ -137,6 +138,7 @@ $ `stdlib/std/net.nu`
         H2FrameBadPreface → `H2FrameBadPreface`
         H2FrameReadIo → `H2FrameReadIo`
         H2FrameReadShort → `H2FrameReadShort`
+        H2FrameReadTimeout → `H2FrameReadTimeout`
         H2FrameWriteIo → `H2FrameWriteIo`
         H2FrameOversized → `H2FrameOversized`
         H2FrameBadStreamId → `H2FrameBadStreamId`
@@ -153,24 +155,27 @@ $ `stdlib/std/net.nu`
 // payload length (`max_frame_size`) prevents an accidental oversend.
 // Stream ID is masked to 31 bits — caller-supplied negative or
 // over-2^31 values silently clip rather than emit garbage R bit.
+// Append one 9-byte frame header (RFC 9113 §4.1): 24-bit big-endian
+// length, type, flags, 31-bit big-endian stream id with the reserved bit
+// clear. The one place the header layout is spelled out —
+// h2_serialize_frame and the server's coalesced HEADERS+DATA write both
+// go through it.
+@ h2_push_frame_header ( Vec u ) out i length i ftype i flags i stream_id → v {
+    ( vec_push [u] out # u & 255 >> length 16 )
+    ( vec_push [u] out # u & 255 >> length 8 )
+    ( vec_push [u] out # u & 255 length )
+    ( vec_push [u] out # u & 255 ftype )
+    ( vec_push [u] out # u & 255 flags )
+    ( bytes_push_u32_be out # u32 & 2147483647 stream_id )
+}
+
 @ h2_serialize_frame H2Frame f i max_frame_size → !( Vec u ) H2FrameErr {
     : i n ( vec_len [u] . f payload )
     ? > n max_frame_size {
         ^ @ !( Vec u ) H2FrameErr { F H2FrameOversized }
     } {}
     : ( Vec u ) out ( vec_with_cap [u] + 9 n )
-    // Length: 24-bit big-endian
-    ( vec_push [u] out # u & 255 >> n 16 )
-    ( vec_push [u] out # u & 255 >> n 8 )
-    ( vec_push [u] out # u & 255 n )
-    // Type: 8-bit
-    ( vec_push [u] out # u & 255 . f frame_type )
-    // Flags: 8-bit
-    ( vec_push [u] out # u & 255 . f flags )
-    // R + Stream ID: 31-bit big-endian (R bit always 0 on send).
-    : i sid & 2147483647 . f stream_id
-    ( bytes_push_u32_be out # u32 sid )
-    // Payload
+    ( h2_push_frame_header out n . f frame_type . f flags . f stream_id )
     ? > n 0 { ( vec_extend [u] out . f payload ) } {}
     ^ @ !( Vec u ) H2FrameErr { T out }
 }
@@ -338,6 +343,105 @@ $ `stdlib/std/net.nu`
         }
         F e → { ^ @ !H2Frame H2FrameErr { F e } }
     }
+}
+
+// ── Buffered reads ────────────────────────────────────────────────────
+//
+// `rx` is a connection-level receive buffer owned by the caller (the
+// server's H2Connection). Bytes land in it with tcp_read_into — one
+// recv(2) straight into spare capacity, up to 16 KB at a time — so a
+// frame that arrived together with its predecessors costs no syscall at
+// all, where h2_read_frame above pays a 9-byte header read plus a payload
+// read for every frame. It is also what lets the HTTP/1.1 keep-alive
+// loop hand a connection over to HTTP/2 (RFC 9113 §3.4 prior knowledge)
+// after it has already read the first bytes: the preface and whatever
+// followed it are simply the initial contents of `rx`.
+
+// Top `rx` up to at least `n` bytes. ReadShort = the peer closed first,
+// ReadTimeout = the socket's receive deadline fired with the buffer still
+// short (an idle connection), ReadIo = anything else.
+@ __h2_rx_ensure TcpConn conn ( Vec u ) rx i n → !v H2FrameErr {
+    ~ < ( vec_len [u] rx ) n {
+        : !i NetErr r ( tcp_read_into conn rx 16384 )
+        ?? r {
+            T got → {
+                ? <= got 0 { ^ @ !v H2FrameErr { F H2FrameReadIo } } {}
+            }
+            F e → {
+                : s nm ( net_err_name e )
+                ? != 0 ( nurl_str_eq nm `NetClosed` ) {
+                    ^ @ !v H2FrameErr { F H2FrameReadShort }
+                } {}
+                ? != 0 ( nurl_str_eq nm `NetTimeout` ) {
+                    ^ @ !v H2FrameErr { F H2FrameReadTimeout }
+                } {}
+                ^ @ !v H2FrameErr { F H2FrameReadIo }
+            }
+        }
+    }
+    ^ @ !v H2FrameErr { T 0 }
+}
+
+// Drop the first `n` bytes of rx (the tail moves down in place).
+@ __h2_rx_consume ( Vec u ) rx i n → v {
+    : i total ( vec_len [u] rx )
+    ? >= n total { ( vec_clear [u] rx ) } {
+        : i remaining - total n
+        : *u p ( vec_data [u] rx )
+        ( nurl_memmove # s p # s # *u + # i p n remaining )
+        ( vec_set_len [u] rx remaining )
+    }
+}
+
+// Validate and consume the 24-byte client connection preface at the
+// front of rx (RFC 9113 §3.4), reading more if it is not all there yet.
+@ h2_read_preface_buf TcpConn conn ( Vec u ) rx → !v H2FrameErr {
+    : !v H2FrameErr er ( __h2_rx_ensure conn rx ( h2_conn_preface_len ) )
+    ?? er { T _ → {} F e → { ^ @ !v H2FrameErr { F e } } }
+    : *u p ( vec_data [u] rx )
+    : s want ( h2_conn_preface )
+    : ~ b ok T
+    : ~ i k 0
+    ~ & ok < k ( h2_conn_preface_len ) {
+        ? != # i . p k ( nurl_str_get want k ) { = ok F } {}
+        = k + k 1
+    }
+    ? ok {} { ^ @ !v H2FrameErr { F H2FrameBadPreface } }
+    ( __h2_rx_consume rx ( h2_conn_preface_len ) )
+    ^ @ !v H2FrameErr { T 0 }
+}
+
+// Read one frame through rx. Same contract as h2_read_frame: the payload
+// is a fresh owned Vec, padding not yet stripped.
+@ h2_read_frame_buf TcpConn conn ( Vec u ) rx i max_frame_size → !H2Frame H2FrameErr {
+    : !v H2FrameErr hr ( __h2_rx_ensure conn rx 9 )
+    ?? hr { T _ → {} F e → { ^ @ !H2Frame H2FrameErr { F e } } }
+    : *u p ( vec_data [u] rx )
+    : i l0 # i . p 0
+    : i l1 # i . p 1
+    : i l2 # i . p 2
+    : i length + + << l0 16 << l1 8 l2
+    : i ftype # i . p 3
+    : i fflags # i . p 4
+    : i s0 # i . p 5
+    : i s1 # i . p 6
+    : i s2 # i . p 7
+    : i s3 # i . p 8
+    : i stream_id + + + << & s0 127 24 << s1 16 << s2 8 s3
+    ? > length max_frame_size {
+        ^ @ !H2Frame H2FrameErr { F H2FrameOversized }
+    } {}
+    : !v H2FrameErr pr ( __h2_rx_ensure conn rx + 9 length )
+    ?? pr { T _ → {} F e → { ^ @ !H2Frame H2FrameErr { F e } } }
+    : ( Vec u ) payload ( vec_with_cap [u] ? > length 0 length 1 )
+    ? > length 0 {
+        // Re-read the data pointer: the top-up above may have reallocated.
+        : *u q ( vec_data [u] rx )
+        ( nurl_memcpy ( vec_data [u] payload ) # *u + # i q 9 length )
+        ( vec_set_len [u] payload length )
+    } {}
+    ( __h2_rx_consume rx + 9 length )
+    ^ @ !H2Frame H2FrameErr { T @ H2Frame { ftype fflags stream_id payload } }
 }
 
 // Write a frame. Borrows the payload; caller still owns it.

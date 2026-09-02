@@ -1,4 +1,4 @@
-// stdlib/ext/http_server.nu — HTTP/1.1 server with keep-alive.
+// stdlib/ext/http_server.nu — HTTP/1.1 (keep-alive) + HTTP/2 server.
 //
 // Layering:
 //
@@ -14,8 +14,17 @@
 //                   ▼
 //      tcp_accept → _serve_keepalive_loop → close
 //                       │
-//                       ▼   loops while connection alive
+//                       ├─ ALPN "h2", or the HTTP/2 connection preface in
+//                       │  the first bytes → __serve_h2 (http2_conn.nu:
+//                       │  frames, streams, flow control; same handler)
+//                       │
+//                       ▼   otherwise HTTP/1.1, loops while connection alive
 //      _read_request_head → handler → __write_response
+//
+// One handler, two protocols: HTTP/2 arrives either negotiated over TLS
+// (RFC 9113 §3.3, tcp_listen_tls_with_alpn) or by prior knowledge on any
+// listener (§3.4). Everything below the dispatch — DoS gate, idle timeout,
+// body limits, server_stop — is shared.
 //
 // API (this revision):
 //
@@ -101,6 +110,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
+$ `stdlib/ext/http2_conn.nu`
 
 // ── HttpServer struct + lifecycle ─────────────────────────────────────
 //
@@ -761,6 +771,40 @@ $ `stdlib/ext/http_response.nu`
     // visible to the next _read_request_head call without re-reading
     // from the socket.
     : ( Vec u ) carry ( vec_with_cap [u] 4096 )
+    // HTTP/2 over TLS (RFC 9113 §3.3): when ALPN settled on "h2" the
+    // connection IS HTTP/2 from its first byte — no sniffing, and an
+    // invalid preface is a PROTOCOL_ERROR the h2 layer answers with
+    // GOAWAY, not an HTTP/1.1 400.
+    ? ( tcp_alpn_is conn `h2` ) {
+        ( __serve_h2 s conn carry )
+        ^ v
+    } {}
+    // HTTP/2 prior knowledge (RFC 9113 §3.4) on every other connection —
+    // a plaintext listener, or a TLS client that negotiated no ALPN. A
+    // client that already knows the server speaks HTTP/2 opens with the
+    // 24-byte preface `PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n`. Recognise it
+    // from the first bytes and hand the connection, carry and all, to the
+    // HTTP/2 connection machinery; anything else is HTTP/1.1 and continues
+    // below with the same bytes still in carry. The sniff costs the HTTP/1
+    // path nothing extra: the first recv happens here instead of in
+    // _read_request_head, and the comparison stops at the first
+    // non-matching byte (a GET differs at byte 0, a POST at byte 1). On a
+    // shared port garbage that is neither is an HTTP/1.1 request with a
+    // bad request line and gets the 400 HTTP/1.1 gives it — a dual-
+    // protocol port cannot answer it with an HTTP/2 GOAWAY, so h2spec's
+    // §3.5/2 ("invalid connection preface") is only meaningful against an
+    // ALPN-h2 or h2-only (http2_serve) endpoint.
+    : i h2 ( __sniff_h2_preface conn carry )
+    ? == h2 1 {
+        ( __serve_h2 s conn carry )
+        ^ v
+    } {}
+    ? < h2 0 {
+        // Peer went away before sending a full first line — the same
+        // silent close the HTTP/1.1 path gives an idle connection.
+        ( vec_free [u] carry )
+        ^ v
+    } {}
     // Connection-level response wire buffer, cleared and refilled by
     // __write_response per response — one allocation per CONNECTION
     // instead of one per response.
@@ -905,6 +949,58 @@ $ `stdlib/ext/http_response.nu`
     ( http_response_free panic_resp )
     ( vec_free [u] wire )
     ( vec_free [u] carry )
+}
+
+// Decide whether the bytes at the start of a fresh connection are the
+// HTTP/2 connection preface. Reads into `carry` until the answer is
+// known: 1 = the full 24-byte preface is in carry, 0 = the first bytes
+// are not the preface (carry keeps them for the HTTP/1.1 parser),
+// -1 = the peer closed or the read failed before either was certain.
+@ __sniff_h2_preface TcpConn conn ( Vec u ) carry → i {
+    : s want ( h2_conn_preface )
+    : i plen ( h2_conn_preface_len )
+    : ~ i verdict -2
+    ~ == verdict -2 {
+        : i have ( vec_len [u] carry )
+        : i lim ? < have plen have plen
+        : *u p ( vec_data [u] carry )
+        : ~ b same T
+        : ~ i k 0
+        ~ & same < k lim {
+            ? != # i . p k ( nurl_str_get want k ) { = same F } {}
+            = k + k 1
+        }
+        ? ! same { = verdict 0 } {
+            ? >= have plen { = verdict 1 } {
+                : !i NetErr r ( tcp_read_into conn carry 4096 )
+                ?? r {
+                    T got → { ? <= got 0 { = verdict -1 } {} }
+                    F _ → { = verdict -1 }
+                }
+            }
+        }
+    }
+    ^ verdict
+}
+
+// Serve an HTTP/2 connection whose preface (and possibly more) is already
+// in `carry`. Takes ownership of carry. The handler contract is the one
+// HTTP/1.1 uses — `( @ HttpResponse HttpRequest )` — so routes,
+// middleware and the DoS gate around this call see no difference; the
+// request-body cap comes from the same HttpLimits. A protocol error has
+// already been answered with GOAWAY inside h2_conn_serve; there is
+// nothing further to write, the caller closes the socket.
+@ __serve_h2 HttpServer s TcpConn conn ( Vec u ) carry → v {
+    : HttpLimits lim . s limits
+    : !H2Connection H2ConnErr cr ( h2_conn_new_buffered conn carry . lim body_default_max )
+    ?? cr {
+        T h2c → {
+            : !v H2ConnErr sr ( h2_conn_serve h2c . s handler )
+            ?? sr { T _ → {} F _ → {} }
+            ( h2_conn_free h2c )
+        }
+        F _ → {}
+    }
 }
 
 // ── server_run ───────────────────────────────────────────────────────

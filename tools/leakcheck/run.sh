@@ -3,8 +3,9 @@
 #  tools/leakcheck/run.sh — HTTP server per-request leak gate
 #
 #  Builds http_server_leakcheck.nu with ASan+LSan (NURL_SAN=1),
-#  serves N requests (hit + 404 + header probe), shuts down via
-#  SIGINT, and FAILS if LeakSanitizer reports anything at all.
+#  serves N requests (hit + 404 + header probe) over HTTP/1.1 and over
+#  HTTP/2 (prior knowledge on the same port), shuts down via SIGINT,
+#  and FAILS if LeakSanitizer reports anything at all.
 #
 #  Locks the per-request leak class fixed 2026-06-10:
 #    * None-placeholder allocations (`@ ?T { F ( string_new ) }`)
@@ -36,6 +37,16 @@ for _ in $(seq 1 20); do
 done
 curl -s "http://127.0.0.1:$PORT/nosuch" -o /dev/null
 
+# HTTP/2 over the same port (prior knowledge, RFC 9113 §3.4): 20 one-
+# request connections, then one connection carrying 10 requests on
+# successive streams, then a 404 — the h2 request/response path must be
+# as leak-free per request and per connection as the HTTP/1.1 one.
+for _ in $(seq 1 20); do
+    curl -s --http2-prior-knowledge -H "X-Probe: x" "http://127.0.0.1:$PORT/" -o /dev/null
+done
+curl -s --http2-prior-knowledge $(for _ in $(seq 1 10); do printf ' -o /dev/null http://127.0.0.1:%s/' "$PORT"; done)
+curl -s --http2-prior-knowledge "http://127.0.0.1:$PORT/nosuch" -o /dev/null
+
 kill -INT "$SRV"
 # Nudge the accept loops so the workers observe the shutdown flag.
 for _ in 1 2 3 4; do curl -s -m 1 "http://127.0.0.1:$PORT/" -o /dev/null 2>/dev/null || true; done
@@ -55,4 +66,4 @@ if [ -s "$LOG" ]; then
     cat "$LOG" >&2
     exit 1
 fi
-echo "leakcheck PASS — zero leaks across 21 requests"
+echo "leakcheck PASS — zero leaks across 21 HTTP/1.1 + 31 HTTP/2 requests"

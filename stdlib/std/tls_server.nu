@@ -24,6 +24,10 @@
 //   ( tls_accept     i raw ( Vec u ) cert_chain ( Vec u ) priv )
 //   ( tls_accept_rsa i raw ( Vec u ) cert_chain ( Vec u ) n ( Vec u ) e ( Vec u ) d )
 //                                              → !*TlsConn TlsErr
+//   ( tls_accept_alpn / tls_accept_rsa_alpn / tls_accept_mldsa_alpn … ( Vec u ) alpn_prefs )
+//       the same, with a server ALPN preference list (RFC 7301) in wire
+//       form — `tls_alpn_pack "h2 http/1.1"`; the pick lands in
+//       tls_alpn_selected, no common protocol is a fatal alert
 //       raw        = an accepted libc socket fd (from nurl_tcp_accept)
 //       cert_chain = the certificate_list: tls_cert_entry blobs
 //                    concatenated, leaf first (a single leaf is fine)
@@ -538,9 +542,88 @@ $ `stdlib/std/aes_gcm.nu`
 
 // ── accept ──────────────────────────────────────────────────────────
 
-@ __srv_fail i raw → !*TlsConn TlsErr {
-    ( nurl_tcp_close raw )
+// Abandon a handshake whose TlsConn is already allocated: close the
+// socket and release EVERY field the connection owns. The early exits
+// used to `nurl_free` the struct alone, leaking its buffers (the 16 KB
+// rxbuf, the hsbuf slice, twelve empty Vec handles) on every rejected
+// ClientHello — a client that keeps sending unacceptable hellos was a
+// slow heap leak. tls_close with established = 0 sends no alert and does
+// exactly this teardown.
+@ __srv_abort * TlsConn c → !*TlsConn TlsErr {
+    ( tls_close c )
     ^ @ !*TlsConn TlsErr { F # TlsErr TlsHandshake }
+}
+
+// Fail the handshake with a fatal alert. Only valid BEFORE the
+// ServerHello has gone out — the alert is a plaintext record, which is
+// what a peer expects at that stage (RFC 8446 §6: alerts share the
+// record protection of the current epoch, and before the ServerHello
+// there is none). Used for no_application_protocol (120, RFC 7301 §3.2).
+@ __srv_abort_alert * TlsConn c i desc → !*TlsConn TlsErr {
+    : ( Vec u ) body ( vec_with_cap [u] 2 )
+    ( vec_push [u] body # u 2 )  // AlertLevel fatal
+    ( vec_push [u] body # u desc )
+    : ( Vec u ) rec ( vec_with_cap [u] 7 )
+    ( __srv_plain_rec_to rec 21 body )
+    : b _w ( _tls_sock_write . c fd rec )
+    ( vec_free [u] rec )
+    ( vec_free [u] body )
+    ^ ( __srv_abort c )
+}
+
+// ALPN (RFC 7301). `prefs` is the server's protocol list in wire form —
+// a sequence of [len:1][name] entries, most-preferred first — and the
+// ClientHello's application_layer_protocol_negotiation body is
+// [list_len:2] followed by the same kind of entries. Returns a copy of
+// the first SERVER preference the client also offered (§3.2: the server
+// picks, in its own order), or an empty Vec when the client sent no ALPN
+// extension, sent an empty/garbled one, or offered nothing we serve.
+// Whether the empty result is "no ALPN" or "no overlap" is the caller's
+// question — it has the extension's presence from __srv_find_ext.
+@ __srv_select_alpn ( Vec u ) ch i es i ee ( Vec u ) prefs → ( Vec u ) {
+    : ( Vec u ) sel ( vec_new [u] )
+    : i np ( vec_len [u] prefs )
+    ? == np 0 { ^ sel } {}
+    : i ao ( __srv_find_ext ch es ee 16 )
+    ? < ao 0 { ^ sel } {}
+    : i al ( _rdint ch - ao 2 2 )  // extension_data length
+    : i aend + ao al
+    ? | > aend ee < al 2 { ^ sel } {}
+    : i ll ( _rdint ch ao 2 )  // ProtocolNameList length
+    : i lend + + ao 2 ll
+    ? > lend aend { ^ sel } {}
+    : ~ i pp 0
+    : ~ b found F
+    ~ & ! found < pp np {
+        : i pl ( _t_bget prefs pp )
+        : i pstart + pp 1
+        ? | == pl 0 > + pstart pl np { = pp np } {
+            // Walk the client's list looking for this exact name.
+            : ~ i cp + ao 2
+            ~ & ! found < cp lend {
+                : i cl ( _t_bget ch cp )
+                : i cstart + cp 1
+                ? | == cl 0 > + cstart cl lend { = cp lend } {
+                    ? == cl pl {
+                        : ~ i k 0
+                        : ~ b same T
+                        ~ & same < k pl {
+                            ? != ( _t_bget prefs + pstart k ) ( _t_bget ch + cstart k ) { = same F } {}
+                            = k + k 1
+                        }
+                        ? same {
+                            = found T
+                            = k 0
+                            ~ < k pl { ( vec_push [u] sel # u ( _t_bget prefs + pstart k ) ) = k + k 1 }
+                        } {}
+                    } {}
+                    = cp + cstart cl
+                }
+            }
+            = pp + pstart pl
+        }
+    }
+    ^ sel
 }
 
 // Core server handshake. `keytype` selects the CertificateVerify signature
@@ -549,7 +632,7 @@ $ `stdlib/std/aes_gcm.nu`
 // arguments are ignored. `cert_chain` is the pre-framed certificate_list
 // body — a concatenation of `tls_cert_entry` blobs (leaf first, then any
 // intermediates).
-@ __tls_accept_impl i raw ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level → !*TlsConn TlsErr {
+@ __tls_accept_impl i raw ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level ( Vec u ) alpn_prefs → !*TlsConn TlsErr {
     ? <= raw 0 { ^ @ !*TlsConn TlsErr { F # TlsErr TlsConnect } } {}
     : *TlsConn c ( nurl_alloc Z TlsConn )
     = . c fd raw
@@ -589,8 +672,8 @@ $ `stdlib/std/aes_gcm.nu`
     : !( Vec u ) TlsErr chr ( __srv_next_hs c )
     : ( Vec u ) ch ?? chr { T m → m F _ → ( vec_new [u] ) }
     ? | == ( vec_len [u] ch ) 0 != ( _t_bget ch 0 ) 1 {
-        ( vec_free [u] ch ) ( __trh_abort trh ) ( nurl_free # s c )
-        ^ ( __srv_fail raw )
+        ( vec_free [u] ch ) ( __trh_abort trh )
+        ^ ( __srv_abort c )
     } {}
     ( sha256_update trh ch )
 
@@ -634,8 +717,8 @@ $ `stdlib/std/aes_gcm.nu`
     // key_share (0x0033): pick x25519 (0x001d) if offered, else secp256r1.
     : i ks ( __srv_find_ext ch es ee 51 )
     ? < ks 0 {
-        ( vec_free [u] ch ) ( vec_free [u] crand ) ( __trh_abort trh ) ( nurl_free # s c )
-        ^ ( __srv_fail raw )
+        ( vec_free [u] ch ) ( vec_free [u] crand ) ( __trh_abort trh )
+        ^ ( __srv_abort c )
     } {}
     : i kslen ( _rdint ch ks 2 )  // client_shares length (first 2 bytes of ext body)
     : ~ i kp + ks 2
@@ -673,9 +756,25 @@ $ `stdlib/std/aes_gcm.nu`
     } {}
     = kp ksend
     ? == grp 0 {
-        ( vec_free [u] ch ) ( vec_free [u] crand ) ( vec_free [u] cpub ) ( __trh_abort trh ) ( nurl_free # s c )
-        ^ ( __srv_fail raw )
+        ( vec_free [u] ch ) ( vec_free [u] crand ) ( vec_free [u] cpub ) ( __trh_abort trh )
+        ^ ( __srv_abort c )
     } {}
+
+    // ── ALPN (RFC 7301) ──
+    // Decided here, before anything is sent: a client that offered ALPN
+    // but nothing we serve gets a fatal no_application_protocol alert
+    // (§3.2) instead of a connection it will then misuse. A client that
+    // sent no ALPN, or a listener with no preference list, negotiates
+    // nothing and the EncryptedExtensions below stay empty.
+    : ( Vec u ) alpn_sel ( __srv_select_alpn ch es ee alpn_prefs )
+    ? & & > ( vec_len [u] alpn_prefs ) 0 >= ( __srv_find_ext ch es ee 16 ) 0
+    == ( vec_len [u] alpn_sel ) 0 {
+        ( vec_free [u] alpn_sel )
+        ( vec_free [u] ch ) ( vec_free [u] crand ) ( vec_free [u] cpub ) ( __trh_abort trh )
+        ^ ( __srv_abort_alert c 120 )
+    } {}
+    ( vec_free [u] . c alpn_sel )
+    = . c alpn_sel alpn_sel
 
     // ── resumption offer? ──
     // A ticket of ours with a good binder makes this the abbreviated
@@ -734,7 +833,7 @@ $ `stdlib/std/aes_gcm.nu`
         ( __srv_cleanup_accept ch crand cpub eph spub ecdhe ( vec_new [u] ) ( vec_new [u] ) )
         ( vec_free [u] psk )
         ( __trh_abort trh )
-        ( nurl_free # s c ) ^ ( __srv_fail raw )
+        ^ ( __srv_abort c )
     } {}
 
     // ── ServerHello ──
@@ -773,9 +872,25 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) derived2 ( derive_secret hs_secret `derived` ehash )
     : ( Vec u ) master ( hkdf_extract derived2 z32 )
 
-    // ── EncryptedExtensions (empty) ──
+    // ── EncryptedExtensions ──
+    // Empty unless ALPN was negotiated; then exactly one extension,
+    // application_layer_protocol_negotiation (0x0010) carrying a
+    // one-entry ProtocolNameList with the selected name (RFC 7301 §3.1;
+    // RFC 8446 §4.3.1 puts it here, not in the ServerHello).
     : ( Vec u ) eebody ( vec_new [u] )
-    ( _tls_u16 eebody 0 )
+    : i asl ( vec_len [u] . c alpn_sel )
+    ? > asl 0 {
+        : ( Vec u ) alp ( vec_with_cap [u] + asl 3 )
+        ( _tls_u16 alp + asl 1 )  // ProtocolNameList length
+        ( vec_push [u] alp # u asl )  // protocol name length
+        ( _tls_cat alp . c alpn_sel )
+        : ( Vec u ) exts ( vec_with_cap [u] + asl 7 )
+        ( _tls_u16 exts 16 )
+        ( _blk16 exts alp )
+        ( _blk16 eebody exts )  // extensions length + extensions
+        ( vec_free [u] alp )
+        ( vec_free [u] exts )
+    } { ( _tls_u16 eebody 0 ) }
     : ( Vec u ) ee ( __srv_hs_wrap 8 eebody )
     ( sha256_update trh ee )
     ( __srv_enc_rec_to c flight 22 ee )
@@ -875,12 +990,46 @@ $ `stdlib/std/aes_gcm.nu`
 // a tls_cert_entry-framed certificate_list (leaf first, then any
 // intermediates). The original single-cert entry point.
 @ tls_accept i raw ( Vec u ) cert_chain ( Vec u ) priv → !*TlsConn TlsErr {
+    : ( Vec u ) noalpn ( vec_new [u] )
+    : !*TlsConn TlsErr r ( tls_accept_alpn raw cert_chain priv noalpn )
+    ( vec_free [u] noalpn )
+    ^ r
+}
+
+// tls_accept with an ALPN preference list (RFC 7301): `alpn_prefs` is
+// the server's protocols in wire form — [len:1][name] entries, most-
+// preferred first (`tls_alpn_pack` builds one from "h2 http/1.1"). The
+// negotiated protocol is read back with tls_alpn_selected; a client that
+// offers ALPN with no protocol in common is refused with a fatal
+// no_application_protocol alert. An empty list means "no ALPN".
+@ tls_accept_alpn i raw ( Vec u ) cert_chain ( Vec u ) priv ( Vec u ) alpn_prefs → !*TlsConn TlsErr {
     : ( Vec u ) en ( vec_new [u] )
     : ( Vec u ) ee ( vec_new [u] )
     : ( Vec u ) ed ( vec_new [u] )
-    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 0 priv en ee ed 0 )
+    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 0 priv en ee ed 0 alpn_prefs )
     ( vec_free [u] en ) ( vec_free [u] ee ) ( vec_free [u] ed )
     ^ r
+}
+
+// Pack a space-separated protocol list ("h2 http/1.1") into ALPN wire
+// form: [len:1][name] per entry, in the given order. Names longer than
+// 255 bytes cannot be encoded and are dropped; empty tokens are skipped.
+@ tls_alpn_pack s list → ( Vec u ) {
+    : ( Vec u ) out ( vec_new [u] )
+    : i n ( nurl_str_len list )
+    : ~ i p 0
+    ~ < p n {
+        ~ & < p n == ( nurl_str_get list p ) 32 { = p + p 1 }
+        : i start p
+        ~ & < p n != ( nurl_str_get list p ) 32 { = p + p 1 }
+        : i tl - p start
+        ? & > tl 0 <= tl 255 {
+            ( vec_push [u] out # u tl )
+            : ~ i k start
+            ~ < k p { ( vec_push [u] out # u ( nurl_str_get list k ) ) = k + k 1 }
+        } {}
+    }
+    ^ out
 }
 
 // Accept a TLS 1.3 connection with an RSA leaf certificate, signing the
@@ -889,8 +1038,16 @@ $ `stdlib/std/aes_gcm.nu`
 // std/pkey.nu `rsa_priv_from_pem` → RsaPriv). `cert_chain` is a
 // tls_cert_entry-framed certificate_list.
 @ tls_accept_rsa i raw ( Vec u ) cert_chain ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d → !*TlsConn TlsErr {
+    : ( Vec u ) noalpn ( vec_new [u] )
+    : !*TlsConn TlsErr r ( tls_accept_rsa_alpn raw cert_chain rsa_n rsa_e rsa_d noalpn )
+    ( vec_free [u] noalpn )
+    ^ r
+}
+
+// tls_accept_rsa with an ALPN preference list — see tls_accept_alpn.
+@ tls_accept_rsa_alpn i raw ( Vec u ) cert_chain ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d ( Vec u ) alpn_prefs → !*TlsConn TlsErr {
     : ( Vec u ) ee ( vec_new [u] )
-    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 1 ee rsa_n rsa_e rsa_d 0 )
+    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 1 ee rsa_n rsa_e rsa_d 0 alpn_prefs )
     ( vec_free [u] ee )
     ^ r
 }
@@ -907,10 +1064,18 @@ $ `stdlib/std/aes_gcm.nu`
 // ML-DSA certificates yet, so the chain has to be private or
 // self-signed — `x509_selfsigned_mldsa` in std/x509_gen.nu makes one.
 @ tls_accept_mldsa i raw ( Vec u ) cert_chain i level ( Vec u ) sk → !*TlsConn TlsErr {
+    : ( Vec u ) noalpn ( vec_new [u] )
+    : !*TlsConn TlsErr r ( tls_accept_mldsa_alpn raw cert_chain level sk noalpn )
+    ( vec_free [u] noalpn )
+    ^ r
+}
+
+// tls_accept_mldsa with an ALPN preference list — see tls_accept_alpn.
+@ tls_accept_mldsa_alpn i raw ( Vec u ) cert_chain i level ( Vec u ) sk ( Vec u ) alpn_prefs → !*TlsConn TlsErr {
     : ( Vec u ) en ( vec_new [u] )
     : ( Vec u ) ee ( vec_new [u] )
     : ( Vec u ) ed ( vec_new [u] )
-    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 2 sk en ee ed level )
+    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 2 sk en ee ed level alpn_prefs )
     ( vec_free [u] en ) ( vec_free [u] ee ) ( vec_free [u] ed )
     ^ r
 }

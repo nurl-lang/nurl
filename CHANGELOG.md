@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The pure TLS 1.3 server now negotiates ALPN (RFC 7301).**
+  `tcp_listen_tls_with_alpn` accepted its protocol list and ignored it:
+  `std/tls_server.nu` never parsed the ClientHello's
+  `application_layer_protocol_negotiation` extension and always sent an
+  empty EncryptedExtensions, so every HTTP/2-capable client (curl, oha,
+  browsers) silently fell back to HTTP/1.1 and `tcp_alpn_protocol` on an
+  accepted connection was always `""`. The server now picks the first
+  protocol in ITS list that the client offered (§3.2 — server
+  preference), announces it in EncryptedExtensions, and refuses a client
+  whose list has nothing in common with a fatal `no_application_protocol`
+  alert (120) before the ServerHello. Listener made with plain
+  `tcp_listen_tls` still negotiates nothing. New `tls_accept_alpn` /
+  `tls_accept_rsa_alpn` / `tls_accept_mldsa_alpn` + `tls_alpn_pack` for
+  callers of the raw handshake. Locked by `compiler/tests/tls_alpn_server.nu`
+  (NURL client both ways, OpenSSL client offering `["http/1.1","h2"]`
+  gets `h2`, OpenSSL client offering `spdy/3` sees alert 120).
+
 - **TLS 1.3 resumption did not interoperate with rustls.** RFC 8446
   §4.2.9 forbids a server from sending a `NewSessionTicket` to a client
   that did not send `psk_key_exchange_modes`; the NURL client sent that
@@ -20,6 +37,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in every ClientHello, and the NURL server issues a ticket only to a
   client that sent it. Verified in all four directions (NURL/openssl
   client × NURL/rustls/openssl server).
+
+### Added
+
+- **HTTP/2 is part of the HTTP server.** Every accept path of
+  `stdlib/ext/http_server.nu` — `server_run`, `server_run_pool`,
+  `server_run_async`, and so the `packages/http` HttpApp facade — now
+  serves HTTP/2 alongside HTTP/1.1 on the same listener, under the same
+  DoS gate, idle timeout, body limit and handler contract. Two ways in:
+  a TLS client that negotiated `h2` over ALPN (`http_app_listen_tls`
+  advertises `h2 http/1.1`; `tcp_alpn_is` decides per connection without
+  allocating), and RFC 9113 §3.4 prior knowledge on any connection — the
+  keep-alive loop recognises the 24-byte `PRI * HTTP/2.0` preface in the
+  first bytes and hands the connection, bytes and all, to the HTTP/2 state
+  machine (`h2_conn_new_buffered`). `curl --http2`, `curl
+  --http2-prior-knowledge`, browsers and `oha --http2` get HTTP/2 from an
+  unchanged `HttpApp`; h2spec 2.6.0 passes 146/146 (147/147 strict) against
+  the HttpApp TLS listener and against `examples/h2c_server.nu`; on a
+  shared plaintext port h2spec's §3.5/2 ("invalid connection preface")
+  gets HTTP/1.1's 400 instead of a GOAWAY, by design — see the comment in
+  `_serve_keepalive_loop`.
+  - HTTP/2 frames are read through a connection-level receive buffer
+    (`h2_read_frame_buf`): one `recv` per burst instead of a 9-byte header
+    read plus a payload read per frame.
+  - **Response headers are HPACK-indexed** (`hpack_encode_headers_dyn`):
+    static-table indices, a dynamic table mirroring the peer's, the
+    mandatory size update when the peer shrinks `SETTINGS_HEADER_TABLE_SIZE`;
+    a repeated response's header block goes from 46 bytes to 4. The old
+    encoder emitted every field as an unindexed literal.
+  - **HEADERS and DATA leave in one write** when the body fits the first
+    frame (`tcp_write_all2`: frame headers + the response body, no copy, one
+    `sendmsg`); larger bodies go out as frame header + borrowed body slice
+    per chunk instead of a byte-by-byte copy. Measured on the bench
+    server (ABAB, 5 s cells): +24 % req/s at 1 connection x 1 stream,
+    +35 % at 10 x 10, +57 % at 1 x 100, p99 roughly halved; HTTP/1.1
+    unchanged.
+  - An idle HTTP/2 connection whose receive deadline fires now ends with
+    GOAWAY(NO_ERROR) and a close (`H2ConnReadTimeout`), not an error.
+  - `server_run_h2_capable` / `server_run_once_h2_capable` (a second,
+    blocking accept loop with none of the server's safeguards, never
+    called) are gone; `http2_serve` stays for programs with their own
+    accept loop.
+  - `tools/leakcheck/run.sh` now drives HTTP/2 requests through the same
+    server and demands zero leaks from them too.
+  - **HTTP/2 benchmark alongside the HTTP/1.1 one**: `bench/run_http2.sh`
+    → `bench/HTTP2_RESULTS.md` (h2c and h2-over-TLS, C connections x P
+    streams cells, NURL vs hyper `http2` vs `node:http2`, plus NURL
+    HTTP/2-vs-HTTP/1.1 on the same listener), with its own manual workflow
+    `http2-bench.yml`. `bench/run_http.sh`, `HTTP_RESULTS.md` and the
+    torture harness are untouched.
+  - **HTTP/2 conformance is a CI gate**: `tools/h2spec_gate.sh` runs
+    h2spec 2.6.0 (pinned, checksum-verified) against the HttpApp TLS
+    listener, the HTTP/2-only example and the shared plaintext port, plus
+    curl protocol checks, and fails on any deviation from the expected
+    totals. `compiler/tests/http2_in_http_server.nu` proves the same with
+    the in-repo HTTP/2 client and no external tools.
+
+### Fixed
+
+- **Compiler: a struct value in a scalar field of a struct literal is now
+  a diagnosed error.** `@ S { ( vec_new [u] ) 1 }` against `: S { i a
+  ( Vec u ) b }` used to pass the front end and fail in LLVM with
+  `insertvalue operand and field disagree in type` and a `.ll` line
+  number. `gen_agg_lit`'s field battery gains the case (a named struct by
+  value into an int/float/bool slot; enum values, which lower to tags,
+  stay legal) and names the usual cause — a positional literal written
+  against an older field order. Found when `H2Connection` grew fields and
+  a test's hand-built literal kept the old layout.
+- **HTTP/2 client over TLS polled the wrong socket for readiness.** Its
+  drain loop asked `nurl_reactor_wait_read` about `. tcp raw`, which is 0
+  for a pure-TLS connection (the handle lives in the TlsConn). On the
+  hosted runtime that null handle was simply never readable and the
+  client fell through to its blocking read; on the pure in-process socket
+  stack (the nolibc corpus, the unikernel) handle 0 is another socket,
+  reported readable, and the client then read its own empty socket and
+  failed. New `tcp_conn_fd` returns the handle behind any TcpConn.
+- **HTTP/2 leaked one HttpResponse per request.** `__h2_dispatch` built a
+  fresh 500 fallback response for every stream and, when the handler's
+  response replaced it, never freed it. The fallback now lives on the
+  connection (built once, rebuilt only after a panic consumed it), as the
+  HTTP/1.1 keep-alive loop has done since 2026-06-10. Found by the extended
+  leak gate — the HTTP/2 tests had never run under LeakSanitizer.
 
 ### Added
 
