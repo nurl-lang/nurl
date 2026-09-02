@@ -36,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The reactor accept path took three `fcntl(2)` per connection (the
+  normalise-to-blocking check, then the first async wrapper's GET+SET to
+  flip it back) — a third of everything the async server asked the
+  kernel for under connection churn. It accepts with
+  `accept4(SOCK_NONBLOCK | SOCK_CLOEXEC)` now and records the state in
+  the handle's memo, so the wrappers' request is free: 8.5 → 5.5
+  syscalls per connection (hyper: 12.7). Where `accept4` does not exist
+  the flag is set once, still ahead of the memo.
 - The TLS accept path copied the certificate chain and private key on
   every handshake (`__net_vecview`); they are borrowed views now.
 - `volatile_load` / `volatile_store` leaked 4 bytes per use in the
