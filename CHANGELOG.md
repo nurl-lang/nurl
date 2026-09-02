@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **TLS 1.3 resumption did not interoperate with rustls.** RFC 8446
+  §4.2.9 forbids a server from sending a `NewSessionTicket` to a client
+  that did not send `psk_key_exchange_modes`; the NURL client sent that
+  extension only when it was already offering a ticket, so rustls — which
+  obeys the rule — never issued one and a NURL client never resumed
+  against a Rust server (openssl and the NURL server were lenient, which
+  hid it). The client now sends `psk_key_exchange_modes` (`psk_dhe_ke`)
+  in every ClientHello, and the NURL server issues a ticket only to a
+  client that sent it. Verified in all four directions (NURL/openssl
+  client × NURL/rustls/openssl server).
+
 ### Added
 
 - **The HTTP client resumes TLS sessions on its own.** `ext/http_pure.nu`

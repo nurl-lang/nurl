@@ -674,21 +674,27 @@ $ `stdlib/std/async_ffi.nu`
         ( vec_free [u] alp )
     } {}
 
-    // ── resumption offer (RFC 8446 §4.2.9 + §4.2.11) ──
-    // psk_key_exchange_modes: psk_dhe_ke only — a resumed handshake still
-    // runs a fresh (EC)DHE, so a ticket that leaks later never decrypts a
-    // recording of this connection. pre_shared_key MUST be the last
-    // extension: its binder is an HMAC over the ClientHello up to (not
-    // including) the binders list, so everything else has to be in place
-    // first. The binder bytes here are a placeholder the caller overwrites
-    // once it has hashed the truncated hello (see _psk_binder_over).
+    // ── resumption (RFC 8446 §4.2.9 + §4.2.11) ──
+    // psk_key_exchange_modes goes in EVERY hello, offer or not: it is
+    // how a client says it can resume, and §4.2.9 forbids a server from
+    // sending a NewSessionTicket to a client that did not send it —
+    // rustls obeys, so without this the client never received a ticket
+    // from the Rust peer (openssl and our own server were lenient, which
+    // hid it). psk_dhe_ke only — a resumed handshake still runs a fresh
+    // (EC)DHE, so a ticket that leaks later never decrypts a recording of
+    // this connection.
+    : ( Vec u ) modes ( vec_new [u] )
+    ( vec_push [u] modes # u 1 )  // list length
+    ( vec_push [u] modes # u 1 )  // psk_dhe_ke
+    ( _tls_u16 ext 45 )
+    ( _blk16 ext modes )
+    ( vec_free [u] modes )
+    // pre_shared_key MUST be the last extension: its binder is an HMAC
+    // over the ClientHello up to (not including) the binders list, so
+    // everything else has to be in place first. The binder bytes here
+    // are a placeholder the caller overwrites once it has hashed the
+    // truncated hello (see _psk_binder_over).
     ? > ( vec_len [u] psk_id ) 0 {
-        : ( Vec u ) modes ( vec_new [u] )
-        ( vec_push [u] modes # u 1 )  // list length
-        ( vec_push [u] modes # u 1 )  // psk_dhe_ke
-        ( _tls_u16 ext 45 )
-        ( _blk16 ext modes )
-        ( vec_free [u] modes )
         : ( Vec u ) psk ( vec_new [u] )
         ( _tls_u16 psk + ( vec_len [u] psk_id ) 6 )  // identities: u16 len + id + u32 age
         ( _blk16 psk psk_id )
