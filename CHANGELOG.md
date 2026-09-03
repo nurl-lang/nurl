@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The TLS 1.3 client handshake is a message-level machine, `CliHs`
+  (`std/tls.nu`)** — the split the server got in `SrvHs` for HTTP/3:
+  whole handshake messages go in (`_cli_hs_server_hello`,
+  `_cli_hs_message`), the ClientHello and client Finished come out
+  (`out_ch`, `out_fin`), the traffic secrets are read straight off the
+  machine, and a driver may add a ClientHello extension and require one
+  back in EncryptedExtensions (`_cli_hs_set_ext` — how QUIC will carry
+  `quic_transport_parameters`). `__tls_handshake` is now the record
+  layer around it: same bytes on the wire (h2spec 146/146, every tls_*
+  and http2 test unchanged, `packages/http-client` 14/14, example.org
+  over HTTP/2 + X25519MLKEM768), with the transcript hashed
+  incrementally and snapshotted at the checkpoints instead of
+  re-hashed from scratch five times. Handshake failures the client
+  detects are now said with the matching alert (illegal_parameter,
+  decrypt_error, missing_extension, …) before the close, not only
+  no_application_protocol; a server flight carrying a hello, ticket,
+  EndOfEarlyData or KeyUpdate before the Finished is refused as
+  unexpected_message. The TLS 1.2 fallback is unchanged (hands over
+  after the ServerHello, verified against `openssl s_server -tls1_2`).
+
 ### Added
 
 - **`packages/http-client` — the unified HTTP *client* facade, the

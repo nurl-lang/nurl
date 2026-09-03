@@ -202,7 +202,9 @@ The whole stack is pure NURL. `std/quic_packet.nu` (packet protection,
 header protection, Initial secrets, Retry tag — byte-exact against RFC 9001
 Appendix A), `std/quic_frame.nu`, `std/quic_tp.nu` (transport parameters),
 `std/quic_tls.nu` (RFC 9001 §4: the TLS 1.3 handshake fed from CRYPTO
-frames — the same message-level machine `std/tls_server.nu` uses for TCP),
+frames — the same message-level machine `std/tls_server.nu` uses for TCP;
+the client side has its twin, `CliHs` in `std/tls.nu`, which the TCP
+record layer drives today and a QUIC client role can drive the same way),
 `std/quic_recovery.nu` (RFC 9002: RTT, loss detection, PTO, NewReno),
 `std/quic_conn.nu` (the connection: every frame, stream states, both
 flow-control levels, connection IDs, key update, close/drain, idle,

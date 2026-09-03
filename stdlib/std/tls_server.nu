@@ -1391,12 +1391,6 @@ $ `stdlib/std/aes_gcm.nu`
     ^ ( __tls_accept_impl raw cert_chain keytype ec_priv rsa_n rsa_e rsa_d 0 pq_chain pq_level pq_sk alpn_prefs )
 }
 
-// Discard a live transcript hasher (error paths).
-@ __trh_abort * Sha256 h → v {
-    : ( Vec u ) d ( sha256_final h )
-    ( vec_free [u] d )
-}
-
 @ __srv_rand i n → ( Vec u ) {
     : ( Vec u ) v ( vec_with_cap [u] ? > n 0 n 1 )
     : ~ i k 0
