@@ -781,6 +781,73 @@ b read_only b destructive b idempotent b open_world
     ^ result
 }
 
+// prompts/list carries `arguments` as an ARRAY of
+// `{name, description, required}` (MCP spec §prompts), not as a JSON
+// Schema — the one place in the protocol where an argument list is not
+// a schema. A prompt registered with a `mcp_schema_obj` (the natural
+// thing to reach for, and what every caller did) therefore advertised
+// a shape no client can read.
+//
+// Both spellings are accepted: an array passes through, and a schema
+// object is converted, since a schema holds exactly the three fields
+// the array wants. Returns a fresh Json the caller owns.
+@ __mcp_prompt_args_array Json declared → Json {
+    ? ( json_is_arr declared ) { ^ ( json_clone declared ) } {}
+    : Json out ( json_arr_new )
+    ? ! ( json_is_obj declared ) { ^ out } {}
+    ?? ( json_obj_get declared `properties` ) {
+        T props → {
+            : ( Vec String ) keys ( json_obj_keys props )
+            : i n ( vec_len [String] keys )
+            : ~ i k 0
+            ~ < k n {
+                ?? ( vec_get [String] keys k ) {
+                    T key → {
+                        : s ks ( string_data key )
+                        : Json e ( json_obj_new )
+                        ( json_obj_set e `name` ( json_str_lit ks ) )
+                        ?? ( json_obj_get props ks ) {
+                            T pv → {
+                                ?? ( json_obj_get pv `description` ) {
+                                    T d → { ( json_obj_set e `description` ( json_clone d ) ) }
+                                    F _ → {}
+                                }
+                            }
+                            F _ → {}
+                        }
+                        ( json_obj_set e `required`
+                        ( json_bool ( __mcp_schema_requires declared ks ) ) )
+                        ( json_arr_push out e )
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
+        }
+        F _ → {}
+    }
+    ^ out
+}
+
+@ __mcp_schema_requires Json schema s name → b {
+    ?? ( json_obj_get schema `required` ) {
+        T req → {
+            : i n ( json_arr_len req )
+            : ~ i k 0
+            ~ < k n {
+                ?? ( json_arr_get req k ) {
+                    T v → { ? != 0 ( nurl_str_eq ( json_as_str v ) name ) { ^ T } {} }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+        }
+        F _ → {}
+    }
+    ^ F
+}
+
 // prompts/list: build the array of {name, description, arguments}.
 @ __mcp_dispatch_prompts_list McpServer r → Json {
     : Json arr ( json_arr_new )
@@ -792,7 +859,7 @@ b read_only b destructive b idempotent b open_world
         : Json e ( json_obj_new )
         ( json_obj_set e `name` ( json_str_lit ( string_data . p name ) ) )
         ( json_obj_set e `description` ( json_str_lit ( string_data . p description ) ) )
-        ( json_obj_set e `arguments` ( json_clone . p arguments_schema ) )
+        ( json_obj_set e `arguments` ( __mcp_prompt_args_array . p arguments_schema ) )
         ( json_arr_push arr e )
         = k + k 1
     }
@@ -1099,6 +1166,16 @@ b read_only b destructive b idempotent b open_world
     // which is the honest answer: the capability was never declared.
     ? & ( mcp_tasks_is_method method ) ( mcp_server_has_task_store r ) {
         ^ ( __mcp_dispatch_tasks r req method )
+    } {}
+    // Any `notifications/*` is ACCEPTED. The lifecycle ones —
+    // `notifications/initialized` above all, which every client sends
+    // straight after initialize — are not optional, and the spec says
+    // a receiver must ignore a notification it does not recognise
+    // rather than answer it. Treating them as unknown methods produced
+    // a "notification failed: unknown method" log line per session for
+    // a client doing exactly what it must.
+    ? != 0 ( nurl_str_starts method `notifications/` ) {
+        ^ @ !Json McpRpcErr { T ( json_obj_new ) }
     } {}
     : String m ( string_from `unknown method: ` )
     ( string_push_str m method )

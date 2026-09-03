@@ -34,6 +34,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   see the late arrival. Both now abort at the `add`, naming the
   registration. `compiler/tests/mcp_server_guards.nu`.
 
+- **`ext/mcp_server.nu`: `notifications/*` are accepted, not
+  method-not-found** — `notifications/initialized` is the notification
+  every client sends immediately after initialize, and the dispatcher
+  treated it as an unknown method, logging `notification failed` once
+  per session for a client doing exactly what the lifecycle requires.
+  The spec says a receiver ignores a notification it does not
+  recognise; all `notifications/*` now dispatch to an empty result,
+  which the envelope layer drops (no `id`, no response).
+
+- **`ext/mcp_server.nu`: `prompts/list` advertises the spec's argument
+  ARRAY** — it emitted whatever was registered as the prompt's
+  arguments, and every caller registers a JSON Schema, so the field
+  went out as a schema object where the spec has an array of
+  `{name, description, required}` — a shape no client can read. A
+  registered schema is now converted (it holds exactly those three
+  facts); an array passes through untouched. Found by writing the
+  wire-contract test.
+
 - **A parameter now shadows a same-named top-level function** — the
   parameter's type went into the inner scope, but the function's call
   metadata (declared parameter roster, FFI roster, arity) lived under
@@ -99,6 +117,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `→ !T E`, `→ ?T`), where the write reaches the caller through the
   return value, nor where the store is already a hard error for want of
   storage. `compiler/tests/should_warn_byval_param_field_store.nu`.
+
+- **`compiler/tests/mcp_server_contract.nu`: the MCP wire, frozen** —
+  the other MCP tests assert that a field holds the value they expect;
+  this one prints the exact bytes of every response the server can
+  produce and its golden freezes them. A refactor that renames a key,
+  reorders an object, drops `resultType`, changes a cache TTL or moves
+  an error code fails in CI rather than in someone's client. It pins
+  the handshake and `server/discover`, the version gate's -32022 with
+  `data.supported`, `_meta` serverInfo present on a modern request and
+  absent on a legacy one, tools/list with annotations and built
+  schemas, tools/call including a PANICKING handler (which must become
+  one error envelope, not a dead process), prompts, resources,
+  completion, every error code the dispatcher emits, and a
+  notification producing no response at all.
 
 - **`ext/mcp_server.nu` grows the four things the hand-rolled servers
   had and it did not** — which is a large part of why they were

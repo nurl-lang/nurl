@@ -1,0 +1,58 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+=== handshake ===
+initialize (legacy)
+  {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{},"prompts":{},"resources":{},"completions":{}},"serverInfo":{"name":"contract","version":"1.0.0"},"instructions":"Echo first; it is the cheap one.","resultType":"complete"}}
+server/discover
+  {"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","supportedVersions":["2026-07-28","2025-11-25","2025-06-18","2025-03-26","2024-11-05"],"capabilities":{"tools":{},"prompts":{},"resources":{},"completions":{}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"contract","version":"1.0.0"}},"instructions":"Echo first; it is the cheap one.","ttlMs":3600000,"cacheScope":"public"}}
+initialize (modern _meta)
+  {"jsonrpc":"2.0","id":3,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{},"prompts":{},"resources":{},"completions":{}},"serverInfo":{"name":"contract","version":"1.0.0"},"instructions":"Echo first; it is the cheap one.","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"contract","version":"1.0.0"}},"resultType":"complete"}}
+unsupported version
+  {"jsonrpc":"2.0","id":4,"error":{"code":-32022,"message":"Unsupported protocol version","data":{"supported":["2026-07-28","2025-11-25","2025-06-18","2025-03-26","2024-11-05"],"requested":"1999-01-01"}}}
+ping
+  {"jsonrpc":"2.0","id":5,"result":{"resultType":"complete"}}
+=== tools ===
+tools/list
+  {"jsonrpc":"2.0","id":6,"result":{"tools":[{"name":"echo","description":"Echo the supplied text back.","inputSchema":{"type":"object","properties":{"text":{"type":"string","description":"Text to echo"}},"required":["text"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"boom","description":"Panics on purpose.","inputSchema":{"type":"object","properties":{}}}],"ttlMs":60000,"cacheScope":"private","resultType":"complete"}}
+tools/call echo
+  {"jsonrpc":"2.0","id":7,"result":{"content":[{"type":"text","text":"hello"}],"isError":false,"resultType":"complete"}}
+tools/call echo (missing arg)
+  {"jsonrpc":"2.0","id":8,"result":{"content":[{"type":"text","text":"missing required argument: text"}],"isError":true,"resultType":"complete"}}
+tools/call unknown
+  {"jsonrpc":"2.0","id":9,"result":{"content":[{"type":"text","text":"unknown tool: nope"}],"isError":true,"resultType":"complete"}}
+tools/call panicking handler
+  [mcp] tool handler panicked: handler exploded
+{"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"tool handler panicked"}],"isError":true,"resultType":"complete"}}
+tools/call no name
+  {"jsonrpc":"2.0","id":11,"result":{"content":[{"type":"text","text":"missing tool name"}],"isError":true,"resultType":"complete"}}
+=== prompts ===
+prompts/list
+  {"jsonrpc":"2.0","id":12,"result":{"prompts":[{"name":"greet","description":"A friendly greeting.","arguments":[{"name":"name","description":"Who to greet","required":true},{"name":"formal","description":"Use a formal register","required":false}]}],"ttlMs":60000,"cacheScope":"private","resultType":"complete"}}
+prompts/get
+  {"jsonrpc":"2.0","id":13,"result":{"messages":[{"role":"user","content":{"type":"text","text":"Hello from NURL."}}],"resultType":"complete"}}
+prompts/get no name
+  {"jsonrpc":"2.0","id":14,"error":{"code":-32602,"message":"prompts/get requires a \"name\" parameter"}}
+prompts/get unknown
+  {"jsonrpc":"2.0","id":15,"error":{"code":-32602,"message":"unknown prompt: absent"}}
+=== resources ===
+resources/list
+  {"jsonrpc":"2.0","id":16,"result":{"resources":[{"uri":"mcp://hello","name":"hello","mimeType":"text/plain","description":"A greeting."}],"ttlMs":60000,"cacheScope":"private","resultType":"complete"}}
+resources/read
+  {"jsonrpc":"2.0","id":17,"result":{"contents":[{"text":"hello from a resource","uri":"mcp://hello","mimeType":"text/plain"}],"ttlMs":5000,"cacheScope":"private","resultType":"complete"}}
+resources/read no uri
+  {"jsonrpc":"2.0","id":18,"error":{"code":-32602,"message":"resources/read requires a \"uri\" parameter"}}
+resources/read unknown
+  {"jsonrpc":"2.0","id":19,"error":{"code":-32002,"message":"unknown resource: mcp://absent"}}
+=== completion ===
+completion/complete
+  {"jsonrpc":"2.0","id":20,"result":{"completion":{"values":["src/","stdlib/"],"total":2,"hasMore":false},"resultType":"complete"}}
+=== errors and notifications ===
+unknown method
+  {"jsonrpc":"2.0","id":21,"error":{"code":-32601,"message":"unknown method: nope/nope"}}
+notification
+  <no response — notification>
+notification of an unknown method
+  [mcp] notification failed: unknown method: nope/nope
+<no response — notification>
