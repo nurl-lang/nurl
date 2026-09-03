@@ -525,7 +525,7 @@ $ `stdlib/std/async_ffi.nu`
     : ( Vec u ) body ( vec_new [u] )
     ( _tls_u16 body 771 )  // legacy_version 0x0303
     ( _tls_cat body random )  // 32-byte random
-    ( vec_push [u] body # u 32 )  // session id length
+    ( vec_push [u] body # u ( vec_len [u] sessid ) )  // legacy_session_id (empty for QUIC)
     ( _tls_cat body sessid )
     // cipher_suites: TLS_CHACHA20_POLY1305_SHA256 (0x1303) +
     // TLS_AES_128_GCM_SHA256 (0x1301) — both use the SHA-256 key
@@ -1097,6 +1097,8 @@ $ `stdlib/std/async_ffi.nu`
 //                                                    a usable one becomes the pre_shared_key offer
 //   ( _cli_hs_set_ext h ext_out want )    → v        append `ext_out` (wire-framed extension(s)) to the
 //                                                    ClientHello; require EE extension `want` (0 = none)
+//   ( _cli_hs_set_compat h on )           → v        0 = no middlebox compatibility: an empty
+//                                                    legacy_session_id (QUIC, RFC 9001 §8.4); default 1
 //   ( _cli_hs_start h )                   → v        key shares + ClientHello into `out_ch`
 //   ( _cli_hs_server_hello h sh )         → i        0 ok · alert description otherwise. With TLS 1.2
 //                                                    chosen `version` is 12, nothing is derived, `sh`
@@ -1125,6 +1127,8 @@ $ `stdlib/std/async_ffi.nu`
     i ext_want  // EncryptedExtensions extension type required (0 = none)
     ( Vec u ) ext_in  // its body once seen
     i ext_in_present
+    i compat  // 1: TLS-over-TCP middlebox compatibility (a 32-byte legacy_session_id, RFC 8446 D.4);
+    // 0: QUIC, where the session id MUST be empty (RFC 9001 §8.4)
     i state
     i err  // failure kind: 1 TlsHandshake 2 TlsProtocol 3 TlsBadCipher 4 TlsHRR
     * Sha256 trh  // incremental transcript hash (0 once finished)
@@ -1169,6 +1173,7 @@ $ `stdlib/std/async_ffi.nu`
     = . h ext_want 0
     = . h ext_in ( vec_new [u] )
     = . h ext_in_present 0
+    = . h compat 1
     = . h state 0
     = . h err 0
     // Incremental transcript hash, snapshotted at the checkpoints —
@@ -1224,9 +1229,11 @@ $ `stdlib/std/async_ffi.nu`
     = . h ext_want want
 }
 
+@ _cli_hs_set_compat * CliHs h i on → v { = . h compat on }
+
 @ _cli_hs_free * CliHs h → v {
     ? == # i h 0 { ^ } {}
-    ? != # i . h trh 0 { ( __trh_abort . h trh ) } {}
+    ? != # i . h trh 0 { ( _trh_abort . h trh ) } {}
     ( vec_free [u] . h sni )
     ( vec_free [u] . h alpn )
     ( vec_free [u] . h ext_out )
@@ -1257,7 +1264,7 @@ $ `stdlib/std/async_ffi.nu`
 }
 
 // Discard a live transcript hasher (error paths).
-@ __trh_abort * Sha256 h → v {
+@ _trh_abort * Sha256 h → v {
     : ( Vec u ) d ( sha256_final h )
     ( vec_free [u] d )
 }
@@ -1325,7 +1332,7 @@ $ `stdlib/std/async_ffi.nu`
     ( vec_free [u] . h random )
     = . h random ( _rand_bytes 32 )
     ( vec_free [u] . h sessid )
-    = . h sessid ( _rand_bytes 32 )
+    = . h sessid ( _rand_bytes ? != . h compat 0 32 0 )
     : ~ i obf_age 0
     ? == . h offer 1 {
         : i age - ( now_ms ) . h tk_received_ms

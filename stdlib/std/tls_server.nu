@@ -749,7 +749,7 @@ $ `stdlib/std/aes_gcm.nu`
 
 @ _srv_hs_free * SrvHs h → v {
     ? == # i h 0 { ^ } {}
-    ? != # i . h trh 0 { ( __trh_abort . h trh ) } {}
+    ? != # i . h trh 0 { ( _trh_abort . h trh ) } {}
     ( vec_free [u] . h cert_chain )
     ( vec_free [u] . h ec_priv )
     ( vec_free [u] . h rsa_n )

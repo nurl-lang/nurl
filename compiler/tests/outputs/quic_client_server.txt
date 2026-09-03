@@ -1,0 +1,19 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+connect=OK
+alpn=echo
+client_pq=T
+stream_open=OK
+stream_send=OK
+echo=hello over quic
+echo_fin=T
+confirmed=T
+close=OK
+verify_selfsigned=REFUSED 298
+verify_stream=NONE
+server_alpn=echo
+server_pq=T
+server_echoed=T
+server_saw_close=T

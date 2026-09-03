@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **QUIC client role** — `std/quic_conn.nu` now plays either side
+  (`quic_conn_new_client`, `quic_conn_open_bidi`, `quic_conn_is_pq`,
+  `quic_conn_confirmed`, `quic_conn_new_token`, the peer's close code
+  and reason), `std/quic_tls.nu` gains the CRYPTO-frame driver of the
+  client TLS machine (`QuicTlsCli` over `CliHs`, with certificate
+  verification through `std/tls_verify.nu`), and `std/quic_client.nu`
+  is the socket + loop around one client connection
+  (`quic_client_connect` / `_step` / `_wait_readable` / `_close`). The
+  client honours Retry (integrity tag checked, new DCID and Initial
+  keys, the token in every Initial, the ClientHello sent again with the
+  packet number continuing), Version Negotiation (ignored when it lists
+  v1 or arrives after any processed packet, otherwise the attempt ends),
+  NEW_TOKEN, HANDSHAKE_DONE (confirmation, Handshake keys dropped),
+  pads every datagram that carries an Initial to 1200 bytes and drops
+  Initial keys on its first Handshake packet; it sends an empty
+  legacy_session_id (RFC 9001 §8.4 — Google's and Cloudflare's servers
+  refuse the TCP-style 32-byte one with `UNEXPECTED_COMPATIBILITY_MODE`).
+  `compiler/tests/quic_client_server.nu` is the first QUIC handshake in
+  the repo that completes with NURL on both ends — X25519MLKEM768
+  asserted on both, a bidirectional stream echoed with FIN, a clean
+  close seen by the server, and the self-signed server refused with
+  `CRYPTO_ERROR(bad_certificate)` when verification is on;
+  `quic_client_retry.nu` pins the Retry / VN behaviour sans-IO. Against
+  cloudflare-quic.com, www.google.com, quic.nginx.org and
+  www.facebook.com (verification on, system roots) the client completes
+  the handshake with a post-quantum key exchange and sees HANDSHAKE_DONE.
+
 ### Changed
 
 - **The TLS 1.3 client handshake is a message-level machine, `CliHs`

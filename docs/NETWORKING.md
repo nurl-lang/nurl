@@ -204,12 +204,16 @@ Appendix A), `std/quic_frame.nu`, `std/quic_tp.nu` (transport parameters),
 `std/quic_tls.nu` (RFC 9001 §4: the TLS 1.3 handshake fed from CRYPTO
 frames — the same message-level machine `std/tls_server.nu` uses for TCP;
 the client side has its twin, `CliHs` in `std/tls.nu`, which the TCP
-record layer drives today and a QUIC client role can drive the same way),
+record layer and `QuicTlsCli` in the same file both drive),
 `std/quic_recovery.nu` (RFC 9002: RTT, loss detection, PTO, NewReno),
 `std/quic_conn.nu` (the connection: every frame, stream states, both
 flow-control levels, connection IDs, key update, close/drain, idle,
 anti-amplification), `std/quic_server.nu` (UDP listener, connection table,
-Version Negotiation); `ext/http3_qpack.nu` (RFC 9204, static table +
+Version Negotiation); the same connection in its client role
+(`quic_conn_new_client`, `quic_conn_open_bidi` — Retry, Version
+Negotiation, NEW_TOKEN and HANDSHAKE_DONE handled, certificate verified
+through `std/tls_verify.nu`) with `std/quic_client.nu` as its socket and
+loop (`quic_client_connect` / `_wait_readable` / `_close`); `ext/http3_qpack.nu` (RFC 9204, static table +
 literals — this endpoint advertises a zero-size dynamic table),
 `ext/http3_frame.nu`, `ext/http3_conn.nu` (control / QPACK streams,
 request streams → `HttpRequest`), `ext/http3_server.nu`. A program that
