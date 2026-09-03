@@ -189,8 +189,9 @@ $ `stdlib/std/async_ffi.nu`
 // Park the current fiber until `fd` is readable OR `timeout_ms`
 // milliseconds elapse. timeout_ms < 0 means infinite. Returns 1 if
 // the fd became ready, 0 on timeout, -1 if not on a fiber. The
-// underlying reactor uses `poll(2)`; on WASI / Windows this is a
-// no-op returning -1.
+// underlying reactor is epoll on Linux and `poll(2)` on the other
+// POSIX targets; any fd works (TCP, UDP, pipes); on WASI / Windows
+// this is a no-op returning -1.
 @ wait_readable i fd i timeout_ms → i {
     ^ ( nurl_reactor_wait_read fd timeout_ms )
 }

@@ -8,6 +8,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **HTTP/3 (RFC 9114) over a pure-NURL QUIC (RFC 9000/9001/9002) — on
+  every TLS listener.** `http_app_listen_tls` now also binds its host:port
+  over UDP and serves HTTP/3 there through the same routes and handler,
+  on a QUIC loop of its own thread; HTTP/1.1 and HTTP/2 responses from
+  that listener carry `Alt-Svc: h3=":port"; ma=86400` so clients move
+  over. `http_app_set_http3 a 0` keeps a listener TCP-only; a UDP bind or
+  credential failure logs "HTTP/3 off" and the TCP side keeps serving.
+  New modules: `std/quic_rxbuf.nu`, `std/quic_recovery.nu` (RTT, ACK
+  ranges, loss detection, PTO, NewReno), `std/quic_conn.nu` (the
+  connection: packet protection per space, key update, every RFC 9000
+  frame with the §12.4 allow list, stream states, both flow-control
+  levels, connection IDs, close/drain, idle, anti-amplification),
+  `std/quic_server.nu` (UDP listener, connection table, Version
+  Negotiation), `ext/http3_qpack.nu` (RFC 9204: static table, field
+  sections, encoder/decoder streams), `ext/http3_frame.nu`,
+  `ext/http3_conn.nu` (control/QPACK streams, request streams →
+  `HttpRequest`, every §4/§6/§7 refusal), `ext/http3_server.nu`, and
+  `examples/h3_server.nu`. Conformance is a gate, not a claim:
+  `tools/h3spec_gate.sh` runs h3spec 0.1.13 (34 QUIC-transport + 15
+  HTTP/3 + QPACK error cases) against the HttpApp listener — **49/49** —
+  and checks Alt-Svc on the TCP side; it runs in CI with a pinned,
+  checksummed h3spec. Performance is measured beside the HTTP/1.1 and
+  HTTP/2 reports, which are untouched: `bench/run_http3.sh` →
+  `bench/HTTP3_RESULTS.md` (NURL vs Rust quinn+h3, plus the same
+  listener's HTTP/2 through the same generator, plus connection-setup
+  rates), driven by `h2load --h3` from an nghttp2 image built with ngtcp2
+  and nghttp3 — `.github/workflows/http3-bench.yml` builds it and
+  refreshes the report on demand. Out of scope (stated in the code):
+  0-RTT, Retry tokens, preferred_address, stateless reset emission, ECN,
+  path migration, server push, extended CONNECT.
+
+- **The TLS 1.3 server handshake is a message-level machine.**
+  `std/tls_server.nu` now holds the handshake as `SrvHs`
+  (`_srv_hs_new`, `_srv_hs_client_hello`, `_srv_hs_client_finished`,
+  `_srv_hs_free`): ClientHello in, ServerHello and the
+  EncryptedExtensions‖Certificate‖CertificateVerify‖Finished flight out,
+  client Finished in, NewSessionTicket out, traffic secrets exposed per
+  step, refusals returned as TLS alert descriptions. The TCP path
+  (`tls_accept*`) is a record wrapper around it and puts byte-identical
+  flights on the wire; QUIC (RFC 9001 §4) drives the same machine from
+  CRYPTO frames through `std/quic_tls.nu`, which reassembles per
+  encryption level, refuses what QUIC forbids (KeyUpdate, EndOfEarlyData,
+  a ClientHello without `quic_transport_parameters`, no ALPN) with the
+  matching CRYPTO_ERROR code, and carries the transport-parameters
+  extension both ways. `compiler/tests/quic_tls_server.nu` drives it with
+  the RFC 9001 Appendix A.2 ClientHello delivered out of order.
+
+- **QUIC v1 codecs (RFC 9000 / 9001), pure NURL.** `std/quic_varint.nu`
+  (variable-length integers, packet-number encode/decode),
+  `std/quic_packet.nu` (Initial secrets, per-level keys with the
+  `quic key` / `quic iv` / `quic hp` / `quic ku` labels, AES-128-GCM and
+  ChaCha20-Poly1305 packet protection, header protection, long and short
+  header parse/build, Retry integrity tag, Version Negotiation),
+  `std/quic_frame.nu` (every RFC 9000 §19 frame, the §12.4 per-packet-type
+  allow list) and `std/quic_tp.nu` (transport parameters with the §7.4 /
+  §18.2 checks a server owes a client). Byte-exact against RFC 9001
+  Appendix A in `compiler/tests/quic_packet_vectors.nu`; frame and
+  parameter codecs plus a 20 000-input structural fuzz in
+  `quic_frame_codec.nu`, `quic_tp_codec.nu`, `quic_frame_fuzz.nu`. The
+  transport that uses them is the next step; nothing is wired into the
+  HTTP stack yet.
+
+- **AES-GCM per-key context.** `aes_gcm_key_new` / `aes_gcm_seal` /
+  `aes_gcm_open` / `aes_block_encrypt` / `aes_gcm_key_free` in
+  `std/aes_gcm.nu`: the key expansion, bitsliced round keys and GHASH
+  subkey are computed once per key instead of on every call, and a raw
+  single-block encrypt is available (QUIC header protection is AES-ECB
+  of a 16-byte sample). The one-shot `aes128_gcm_*` / `aes256_gcm_*`
+  API is unchanged and now built on the context; the first CTR batch
+  also carries J0 with three real counters instead of two idle slots.
+
+- **Address-carrying UDP for a datagram-per-packet transport.**
+  `std/udp.nu` gains `udp_recv_into` / `udp_recv_into_deadline`
+  (receive into a caller-owned buffer, peer reported as a 24-byte
+  address; the deadline form is "datagram or timer" in one reactor park
+  inside a fiber and a scoped `SO_RCVTIMEO` on a thread),
+  `udp_send_addr` (send to such an address, no resolver),
+  `udp_addr_resolve` / `udp_addr_format` / `udp_addr_family` /
+  `udp_addr_port` / `udp_addr_eq`, and `udp_setsockopt_int` with the
+  socket-option names `posix_const` now answers (`SOL_SOCKET`,
+  `SO_REUSEPORT`, `IPPROTO_UDP`, `UDP_SEGMENT`, `UDP_GRO`, `IP_TOS`,
+  `IPV6_TCLASS`, `IP_PKTINFO`, …). The existing `udp_recv_from` /
+  `udp_send_to` paid a heap Vec + `getnameinfo` string per received
+  datagram and a `getaddrinfo` per sent one — fine for STUN and gossip,
+  impossible for QUIC. The address encoding is NURL's own (family, port,
+  16 address bytes, scope), normalised so an IPv4 peer of a dual-stack
+  socket is family 4 rather than `::ffff:…`, and the hosted runtime, the
+  wasm host bridge and the in-process unikernel stack all produce it.
+  `monotonic_ns` is now answered by the runtime (`nurl_monotonic_ns`)
+  instead of a heap `timespec` per read. Locked by
+  `compiler/tests/async_udp.nu` (the first golden for the fiber-parking
+  UDP paths, which had none) and a new section of `udp_basic.nu`; both
+  pass under the nolibc corpus too.
+
 ### Fixed
 
 - **The pure TLS 1.3 server now negotiates ALPN (RFC 7301).**

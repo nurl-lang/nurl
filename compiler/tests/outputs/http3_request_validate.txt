@@ -1,0 +1,24 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+ok_get: PASS
+ok_host_instead_of_authority: PASS
+ok_connect: PASS
+ok_te_trailers: PASS
+missing_method: PASS
+missing_scheme: PASS
+missing_path: PASS
+missing_authority_and_host: PASS
+duplicate_pseudo: PASS
+pseudo_after_regular: PASS
+unknown_pseudo: PASS
+status_in_request: PASS
+uppercase_name: PASS
+connection_header: PASS
+transfer_encoding: PASS
+te_gzip: PASS
+empty_path: PASS
+connect_with_path: PASS
+connect_without_authority: PASS
+http3_request_validate: all PASS

@@ -727,6 +727,188 @@ long long nurl_rand_fill(unsigned char *buf, long long n) {
 #define NURL_TCP_KIND_LISTENER  0
 #define NURL_TCP_KIND_CONN      1
 
+/* ── NurlUdpAddr text codec (pure C, every target) ──────────────────
+ *
+ * The 24-byte NurlUdpAddr encoding is documented at §18b-ii below. The
+ * two text helpers live outside the socket guards because the wasm
+ * host bridge (which only speaks "ip:port" strings) and the native
+ * path both need them, and neither libc's inet_ntop nor getnameinfo is
+ * available on every target this file builds for. IPv6 text follows
+ * RFC 5952 (lower-case hex, longest zero run compressed, v4-mapped
+ * printed as ::ffff:a.b.c.d). */
+
+#define NURL_UDP_ADDR_LEN 24
+
+static int nurl__udpaddr_hex(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* "a.b.c.d" → 4 bytes. Returns chars consumed, 0 on failure. */
+static int nurl__udpaddr_parse_v4(const char *s, unsigned char *out) {
+    int i = 0, part = 0;
+    for (part = 0; part < 4; part++) {
+        int v = 0, digits = 0;
+        while (s[i] >= '0' && s[i] <= '9') {
+            v = v * 10 + (s[i] - '0');
+            if (v > 255) return 0;
+            i++; digits++;
+        }
+        if (!digits) return 0;
+        out[part] = (unsigned char)v;
+        if (part < 3) {
+            if (s[i] != '.') return 0;
+            i++;
+        }
+    }
+    return i;
+}
+
+/* IPv6 text (with :: compression and an optional trailing embedded
+ * IPv4) → 16 bytes. `end` is the terminator ('\0' or ']'). Returns 1
+ * on success. */
+static int nurl__udpaddr_parse_v6(const char *s, const char *end, unsigned char *out) {
+    unsigned short groups[8];
+    int n = 0, gap = -1;
+    const char *p = s;
+    memset(out, 0, 16);
+    if (p[0] == ':' ) {
+        if (p[1] != ':') return 0;
+        gap = 0; p += 2;
+    }
+    while (p < end) {
+        if (n >= 8) return 0;
+        /* Embedded IPv4 tail: "…:a.b.c.d" */
+        const char *q = p;
+        int dots = 0;
+        while (q < end && ((*q >= '0' && *q <= '9') || *q == '.')) { if (*q == '.') dots++; q++; }
+        if (dots == 3 && q == end) {
+            unsigned char v4[4];
+            if (n > 6 || nurl__udpaddr_parse_v4(p, v4) == 0) return 0;
+            groups[n++] = (unsigned short)((v4[0] << 8) | v4[1]);
+            groups[n++] = (unsigned short)((v4[2] << 8) | v4[3]);
+            p = end;
+            break;
+        }
+        int v = 0, digits = 0;
+        while (p < end && nurl__udpaddr_hex(*p) >= 0) {
+            v = (v << 4) | nurl__udpaddr_hex(*p);
+            if (++digits > 4) return 0;
+            p++;
+        }
+        if (!digits) return 0;
+        groups[n++] = (unsigned short)v;
+        if (p == end) break;
+        if (*p != ':') return 0;
+        p++;
+        if (p < end && *p == ':') {
+            if (gap >= 0) return 0;
+            gap = n; p++;
+            if (p == end) break;
+        } else if (p == end) {
+            return 0;
+        }
+    }
+    if (gap < 0 && n != 8) return 0;
+    if (gap >= 0 && n >= 8) return 0;
+    int i, shift = (gap >= 0) ? 8 - n : 0;
+    for (i = 0; i < n; i++) {
+        int idx = (gap >= 0 && i >= gap) ? i + shift : i;
+        out[2 * idx]     = (unsigned char)(groups[i] >> 8);
+        out[2 * idx + 1] = (unsigned char)(groups[i] & 0xff);
+    }
+    return 1;
+}
+
+/* "ip:port" / "[ip]:port" / "ip" (port 0) → NurlUdpAddr. 0 ok, -1 bad. */
+static int nurl__udpaddr_parse(const char *text, unsigned char *a) {
+    memset(a, 0, NURL_UDP_ADDR_LEN);
+    if (!text || !*text) return -1;
+    const char *ip_start; const char *ip_end; const char *port_s = NULL;
+    if (text[0] == '[') {
+        ip_start = text + 1;
+        ip_end = strchr(ip_start, ']');
+        if (!ip_end) return -1;
+        if (ip_end[1] == ':') port_s = ip_end + 2;
+        else if (ip_end[1] != 0) return -1;
+    } else {
+        const char *first = strchr(text, ':');
+        const char *last  = strrchr(text, ':');
+        ip_start = text;
+        if (first && first == last) { ip_end = first; port_s = first + 1; }
+        else { ip_end = text + strlen(text); }   /* bare IPv6 or bare IPv4 */
+    }
+    unsigned port = 0;
+    if (port_s) {
+        if (!*port_s) return -1;
+        for (const char *p = port_s; *p; p++) {
+            if (*p < '0' || *p > '9') return -1;
+            port = port * 10 + (unsigned)(*p - '0');
+            if (port > 65535) return -1;
+        }
+    }
+    a[2] = (unsigned char)(port >> 8);
+    a[3] = (unsigned char)(port & 0xff);
+    if (memchr(ip_start, ':', (size_t)(ip_end - ip_start))) {
+        unsigned char v6[16];
+        if (!nurl__udpaddr_parse_v6(ip_start, ip_end, v6)) return -1;
+        static const unsigned char v4mapped[12] = {0,0,0,0,0,0,0,0,0,0,0xff,0xff};
+        if (memcmp(v6, v4mapped, 12) == 0) { a[0] = 4; memcpy(a + 4, v6 + 12, 4); }
+        else { a[0] = 6; memcpy(a + 4, v6, 16); }
+        return 0;
+    }
+    unsigned char v4[4];
+    int used = nurl__udpaddr_parse_v4(ip_start, v4);
+    if (used == 0 || ip_start + used != ip_end) return -1;
+    a[0] = 4; memcpy(a + 4, v4, 4);
+    return 0;
+}
+
+/* NurlUdpAddr → "ip:port" / "[ip]:port" into `out` (cap ≥ 64). Empty
+ * string for an empty address. */
+static void nurl__udpaddr_format(const unsigned char *a, char *out, size_t cap) {
+    if (cap == 0) return;
+    out[0] = 0;
+    if (!a || (a[0] != 4 && a[0] != 6)) return;
+    unsigned port = ((unsigned)a[2] << 8) | (unsigned)a[3];
+    if (a[0] == 4) {
+        snprintf(out, cap, "%u.%u.%u.%u:%u", a[4], a[5], a[6], a[7], port);
+        return;
+    }
+    char ip[48]; size_t n = 0;
+    static const unsigned char v4mapped[12] = {0,0,0,0,0,0,0,0,0,0,0xff,0xff};
+    if (memcmp(a + 4, v4mapped, 12) == 0) {
+        snprintf(ip, sizeof(ip), "::ffff:%u.%u.%u.%u", a[16], a[17], a[18], a[19]);
+    } else {
+        unsigned short g[8]; int i;
+        for (i = 0; i < 8; i++) g[i] = (unsigned short)((a[4 + 2*i] << 8) | a[5 + 2*i]);
+        /* longest run of zero groups (length ≥ 2) gets the "::" */
+        int best = -1, bestlen = 0, cur = -1, curlen = 0;
+        for (i = 0; i < 8; i++) {
+            if (g[i] == 0) { if (cur < 0) { cur = i; curlen = 0; } curlen++;
+                             if (curlen > bestlen) { best = cur; bestlen = curlen; } }
+            else cur = -1;
+        }
+        if (bestlen < 2) best = -1;
+        for (i = 0; i < 8; ) {
+            if (i == best) {
+                /* "::" stands for the run; the group before it already
+                 * skipped its trailing ':' and the group after adds none. */
+                ip[n++] = ':'; ip[n++] = ':';
+                i += bestlen;
+                continue;
+            }
+            n += (size_t)snprintf(ip + n, sizeof(ip) - n, "%x", g[i]);
+            if (i < 7 && i + 1 != best) ip[n++] = ':';
+            i++;
+        }
+        ip[n] = 0;
+    }
+    snprintf(out, cap, "[%s]:%u", ip, port);
+}
+
 #if !defined(__wasi__)
 #  ifdef _WIN32
 #    ifndef __MINGW32__          /* MSVC-only; see the bcrypt pragma above */
@@ -2601,6 +2783,263 @@ char *nurl_dns_resolve_port(const char *host, long long port) {
     return buf ? buf : strdup("");
 }
 
+/* ── §18b-ii  Address-carrying UDP: recv_into / send_addr ──────────
+ *
+ * The §18b entry points above were shaped for request/response tools
+ * (STUN, SWIM, DNS): one heap buffer + one "ip:port" string per
+ * datagram in, one getaddrinfo per datagram out. A datagram-per-packet
+ * transport (QUIC) cannot afford any of those three per packet, so
+ * this half adds the same operations without them:
+ *
+ *   nurl_udp_recv_into   — recvfrom into the CALLER's buffer, peer
+ *                          address written as a 24-byte NurlUdpAddr
+ *                          (no malloc, no getnameinfo, h->peer untouched)
+ *   nurl_udp_send_addr   — sendto a NurlUdpAddr (no getaddrinfo)
+ *   nurl_udp_addr_resolve — host:port → NurlUdpAddr, once per peer
+ *   nurl_udp_addr_format  — NurlUdpAddr → heap "ip:port", for logs
+ *   nurl_udp_setsockopt_int — the integer setsockopt the reuseport /
+ *                          GSO / ECN work needs; level+opt come from
+ *                          posix_const so no Linux numbers are baked in
+ *
+ * NurlUdpAddr is NURL's own encoding, not the kernel's sockaddr: the
+ * same 24 bytes mean the same thing on Linux, BSD, Windows, the wasm
+ * host bridge and the in-process unikernel stack, so NURL code can
+ * compare, hash and store peers as plain bytes.
+ *
+ *   [0]      family: 4 or 6 (0 = empty)
+ *   [1]      reserved, 0
+ *   [2..4)   port, big-endian
+ *   [4..20)  address: IPv4 in [4..8) (rest 0), IPv6 all 16
+ *   [20..24) IPv6 scope id, big-endian (0 for IPv4)
+ *
+ * An IPv4-mapped IPv6 source (::ffff:a.b.c.d — what a dual-stack
+ * socket reports for an IPv4 peer) is normalised to family 4 on the
+ * way in and mapped back on the way out when the socket is AF_INET6,
+ * so the address a program sees never depends on which socket family
+ * happened to receive it. */
+
+
+static int nurl__udp_addr_from_sa(const struct sockaddr *sa, socklen_t len,
+                                  unsigned char *out) {
+    memset(out, 0, NURL_UDP_ADDR_LEN);
+    if (!sa) return -1;
+    if (sa->sa_family == AF_INET && len >= (socklen_t)sizeof(struct sockaddr_in)) {
+        const struct sockaddr_in *in4 = (const struct sockaddr_in*)sa;
+        out[0] = 4;
+        out[2] = (unsigned char)(ntohs(in4->sin_port) >> 8);
+        out[3] = (unsigned char)(ntohs(in4->sin_port) & 0xff);
+        memcpy(out + 4, &in4->sin_addr, 4);
+        return 0;
+    }
+    if (sa->sa_family == AF_INET6 && len >= (socklen_t)sizeof(struct sockaddr_in6)) {
+        const struct sockaddr_in6 *in6 = (const struct sockaddr_in6*)sa;
+        const unsigned char *b = (const unsigned char*)&in6->sin6_addr;
+        unsigned port = ntohs(in6->sin6_port);
+        out[2] = (unsigned char)(port >> 8);
+        out[3] = (unsigned char)(port & 0xff);
+        static const unsigned char v4mapped[12] =
+            {0,0,0,0,0,0,0,0,0,0,0xff,0xff};
+        if (memcmp(b, v4mapped, 12) == 0) {
+            out[0] = 4;
+            memcpy(out + 4, b + 12, 4);
+            return 0;
+        }
+        out[0] = 6;
+        memcpy(out + 4, b, 16);
+        unsigned long sc = (unsigned long)in6->sin6_scope_id;
+        out[20] = (unsigned char)(sc >> 24);
+        out[21] = (unsigned char)(sc >> 16);
+        out[22] = (unsigned char)(sc >> 8);
+        out[23] = (unsigned char)(sc);
+        return 0;
+    }
+    return -1;
+}
+
+/* Build the sockaddr a socket of family `sock_family` can send to.
+ * Returns the sockaddr length, 0 if the address is empty/unknown or an
+ * IPv6 address is handed to an IPv4-only socket. */
+static socklen_t nurl__udp_addr_to_sa(const unsigned char *a, int sock_family,
+                                      struct sockaddr_storage *ss) {
+    memset(ss, 0, sizeof(*ss));
+    unsigned port = ((unsigned)a[2] << 8) | (unsigned)a[3];
+    if (a[0] == 4) {
+        if (sock_family == AF_INET6) {
+            struct sockaddr_in6 *in6 = (struct sockaddr_in6*)ss;
+            in6->sin6_family = AF_INET6;
+            in6->sin6_port   = htons((unsigned short)port);
+            unsigned char *b = (unsigned char*)&in6->sin6_addr;
+            b[10] = 0xff; b[11] = 0xff;
+            memcpy(b + 12, a + 4, 4);
+            return (socklen_t)sizeof(struct sockaddr_in6);
+        }
+        struct sockaddr_in *in4 = (struct sockaddr_in*)ss;
+        in4->sin_family = AF_INET;
+        in4->sin_port   = htons((unsigned short)port);
+        memcpy(&in4->sin_addr, a + 4, 4);
+        return (socklen_t)sizeof(struct sockaddr_in);
+    }
+    if (a[0] == 6) {
+        if (sock_family == AF_INET) return 0;
+        struct sockaddr_in6 *in6 = (struct sockaddr_in6*)ss;
+        in6->sin6_family = AF_INET6;
+        in6->sin6_port   = htons((unsigned short)port);
+        memcpy(&in6->sin6_addr, a + 4, 16);
+        in6->sin6_scope_id = ((unsigned long)a[20] << 24) | ((unsigned long)a[21] << 16)
+                           | ((unsigned long)a[22] << 8)  |  (unsigned long)a[23];
+        return (socklen_t)sizeof(struct sockaddr_in6);
+    }
+    return 0;
+}
+
+long long nurl_udp_recv_into(long long handle, char *buf, long long cap,
+                             char *addr_out) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (h->fd == NURL_INVALID_SOCK) {
+        h->err_kind = NURL_NET_ERR_CLOSED;
+        return -1;
+    }
+    if (cap <= 0 || !buf) {
+        h->err_kind = NURL_NET_ERR_READ;
+        return -1;
+    }
+    struct sockaddr_storage src;
+    memset(&src, 0, sizeof(src));
+#ifdef _WIN32
+    int srclen = (int)sizeof(src);
+    int rd = recvfrom(h->fd, buf, (int)cap, 0,
+                      (struct sockaddr*)&src, &srclen);
+#else
+    socklen_t srclen = (socklen_t)sizeof(src);
+    ssize_t rd;
+    do {
+        rd = recvfrom(h->fd, buf, (size_t)cap, 0,
+                      (struct sockaddr*)&src, &srclen);
+    } while (rd < 0 && errno == EINTR);
+#endif
+    if (rd < 0) {
+#ifdef _WIN32
+        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_READ);
+#else
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_READ);
+#endif
+        return -1;
+    }
+    if (addr_out) {
+        nurl__udp_addr_from_sa((struct sockaddr*)&src, (socklen_t)srclen,
+                               (unsigned char*)addr_out);
+    }
+    h->err_kind = NURL_NET_ERR_OK;
+    return (long long)rd;
+}
+
+long long nurl_udp_send_addr(long long handle, const char *buf, long long n,
+                             const char *addr) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (h->fd == NURL_INVALID_SOCK) {
+        h->err_kind = NURL_NET_ERR_CLOSED;
+        return -1;
+    }
+    if (n < 0 || (n > 0 && !buf) || !addr) {
+        h->err_kind = NURL_NET_ERR_WRITE;
+        return -1;
+    }
+    struct sockaddr_storage dst;
+    socklen_t dlen = nurl__udp_addr_to_sa((const unsigned char*)addr,
+                                          h->family, &dst);
+    if (dlen == 0) {
+        h->err_kind = NURL_NET_ERR_WRITE;
+        return -1;
+    }
+#ifdef _WIN32
+    int sent = sendto(h->fd, buf, (int)n, 0, (struct sockaddr*)&dst, (int)dlen);
+#else
+    ssize_t sent;
+    do {
+        sent = sendto(h->fd, buf, (size_t)n,
+#  ifdef MSG_NOSIGNAL
+                      MSG_NOSIGNAL,
+#  else
+                      0,
+#  endif
+                      (struct sockaddr*)&dst, dlen);
+    } while (sent < 0 && errno == EINTR);
+#endif
+    if (sent < 0) {
+#ifdef _WIN32
+        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_WRITE);
+#else
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_WRITE);
+#endif
+        return -1;
+    }
+    h->err_kind = NURL_NET_ERR_OK;
+    return (long long)sent;
+}
+
+/* host:port → NurlUdpAddr. Numeric literals never touch a resolver;
+ * names do (one getaddrinfo per call — the point is to call this once
+ * per peer, not per packet). 0 on success, -1 otherwise. */
+long long nurl_udp_addr_resolve(const char *host, long long port, char *addr_out) {
+    if (!addr_out) return -1;
+    memset(addr_out, 0, NURL_UDP_ADDR_LEN);
+    if (!host || !*host || port < 0 || port > 65535) return -1;
+#ifdef _WIN32
+    if (!nurl__net_wsa_init()) return -1;
+#endif
+    char portstr[16];
+    snprintf(portstr, sizeof(portstr), "%ld", (long)port);
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_DGRAM;
+    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) return -1;
+    int rc = nurl__udp_addr_from_sa(res->ai_addr, (socklen_t)res->ai_addrlen,
+                                    (unsigned char*)addr_out);
+    freeaddrinfo(res);
+    return rc;
+}
+
+/* NurlUdpAddr → heap "ip:port" / "[ip]:port" (caller nurl_frees). Pure
+ * text codec, no resolver. Empty string for an empty address. */
+char *nurl_udp_addr_format(const char *addr) {
+    char out[80];
+    nurl__udpaddr_format((const unsigned char*)addr, out, sizeof(out));
+    return strdup(out);
+}
+
+/* setsockopt with an int value. `level` / `opt` are whatever
+ * posix_const answered for SOL_SOCKET / IPPROTO_* / SO_* / IP_* /
+ * UDP_* — a -1 from posix_const (option unknown on this platform) is
+ * refused here rather than passed to the kernel as a real number. */
+long long nurl_udp_setsockopt_int(long long handle, long long level,
+                                  long long opt, long long val) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK) {
+        if (h) h->err_kind = NURL_NET_ERR_CLOSED;
+        return -1;
+    }
+    if (level < 0 || opt < 0) {
+        h->err_kind = NURL_NET_ERR_OTHER;
+        return -1;
+    }
+    int v = (int)val;
+    int rc = setsockopt(h->fd, (int)level, (int)opt,
+                        (const char*)&v, (socklen_t)sizeof(v));
+    if (rc != 0) {
+#ifdef _WIN32
+        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_OTHER);
+#else
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_OTHER);
+#endif
+        return -1;
+    }
+    h->err_kind = NURL_NET_ERR_OK;
+    return 0;
+}
+
 char *nurl_dns_reverse(const char *ip) {
 #ifdef _WIN32
     if (!nurl__net_wsa_init()) return strdup("");
@@ -2819,6 +3258,66 @@ char *nurl_dns_resolve_port(const char *h, long long p) {
     long long n = nurl__ni_dns_resolve_port(h ? h : "", p, buf, (long long)sizeof(buf));
     return nurl__net_take(buf, n);
 }
+/* §18b-ii over the host bridge: the host only speaks "ip:port"
+ * strings, so the address-carrying calls are the string calls plus
+ * the NurlUdpAddr text codec. What they still save is the NURL-side
+ * allocation per datagram; the per-packet cost of the bridge itself
+ * is the host's. */
+long long nurl_udp_recv_into(long long h, char *buf, long long cap, char *addr_out) {
+    long long n = nurl__ni_udp_recv_from(h, buf, cap);
+    if (n >= 0 && addr_out) {
+        char peer[NURL_NET_ADDR_CAP];
+        long long pn = nurl__ni_udp_peer_addr(h, peer, (long long)sizeof(peer) - 1);
+        if (pn < 0) pn = 0;
+        peer[pn] = 0;
+        nurl__udpaddr_parse(peer, (unsigned char*)addr_out);
+    }
+    return n;
+}
+long long nurl_udp_send_addr(long long h, const char *b, long long n, const char *addr) {
+    const unsigned char *a = (const unsigned char*)addr;
+    if (!a || (a[0] != 4 && a[0] != 6)) return -1;
+    char host[64];
+    unsigned port = ((unsigned)a[2] << 8) | (unsigned)a[3];
+    if (a[0] == 4) snprintf(host, sizeof(host), "%u.%u.%u.%u", a[4], a[5], a[6], a[7]);
+    else {
+        char full[80];
+        nurl__udpaddr_format(a, full, sizeof(full));   /* "[ip]:port" */
+        char *rb = strchr(full, ']');
+        if (!rb) return -1;
+        *rb = 0;
+        snprintf(host, sizeof(host), "%s", full + 1);
+    }
+    return nurl__ni_udp_send_to(h, b, n, host, (long long)port);
+}
+long long nurl_udp_addr_resolve(const char *host, long long port, char *addr_out) {
+    if (!addr_out) return -1;
+    memset(addr_out, 0, NURL_UDP_ADDR_LEN);
+    if (!host || !*host || port < 0 || port > 65535) return -1;
+    unsigned char *a = (unsigned char*)addr_out;
+    if (nurl__udpaddr_parse(host, a) != 0) {
+        char buf[NURL_NET_DNS_CAP];
+        long long n = nurl__ni_dns_resolve(host, buf, (long long)sizeof(buf) - 1);
+        if (n <= 0) return -1;
+        buf[n] = 0;
+        char *comma = strchr(buf, ',');
+        if (comma) *comma = 0;
+        if (nurl__udpaddr_parse(buf, a) != 0) return -1;
+    }
+    a[2] = (unsigned char)(port >> 8);
+    a[3] = (unsigned char)(port & 0xff);
+    return 0;
+}
+char *nurl_udp_addr_format(const char *addr) {
+    char out[80];
+    nurl__udpaddr_format((const unsigned char*)addr, out, sizeof(out));
+    return strdup(out);
+}
+long long nurl_udp_setsockopt_int(long long h, long long level, long long opt, long long val) {
+    (void)h; (void)level; (void)opt; (void)val;
+    return -1;   /* the bridge exposes no setsockopt; say so */
+}
+
 char *nurl_dns_reverse(const char *ip) {
     char buf[NURL_NET_ADDR_CAP];
     long long n = nurl__ni_dns_reverse(ip ? ip : "", buf, (long long)sizeof(buf));
@@ -2905,6 +3404,23 @@ long long nurl_udp_set_multicast_loop(long long h, long long on)       { (void)h
 char *nurl_dns_resolve(const char *h)                  { (void)h; return strdup(""); }
 char *nurl_dns_resolve_port(const char *h, long long p){ (void)h; (void)p; return strdup(""); }
 char *nurl_dns_reverse(const char *ip)                 { (void)ip; return strdup(""); }
+long long nurl_udp_recv_into(long long h, char *b, long long cap, char *addr_out) {
+    (void)h; (void)b; (void)cap; (void)addr_out; return -1;
+}
+long long nurl_udp_send_addr(long long h, const char *b, long long n, const char *addr) {
+    (void)h; (void)b; (void)n; (void)addr; return -1;
+}
+long long nurl_udp_addr_resolve(const char *host, long long port, char *addr_out) {
+    (void)host; (void)port; if (addr_out) memset(addr_out, 0, NURL_UDP_ADDR_LEN); return -1;
+}
+char *nurl_udp_addr_format(const char *addr) {
+    char out[80];
+    nurl__udpaddr_format((const unsigned char*)addr, out, sizeof(out));
+    return strdup(out);
+}
+long long nurl_udp_setsockopt_int(long long h, long long level, long long opt, long long val) {
+    (void)h; (void)level; (void)opt; (void)val; return -1;
+}
 
 
 /* These two were missing from the original stub set, which is why they

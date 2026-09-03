@@ -74,6 +74,8 @@ $ `stdlib/std/async_ffi.nu`
 
 & `c` @ nanosleep *u req *u rem → i32
 
+& `c` @ nurl_monotonic_ns → i
+
 // Does this runtime multiplex EVERYTHING onto the calling thread? 1 on
 // the freestanding runtime, where "threads" are coroutines on one vCPU;
 // 0 wherever the operating system schedules for us. It is the only
@@ -100,14 +102,12 @@ $ `stdlib/std/async_ffi.nu`
     ^ secs
 }
 
+// CLOCK_MONOTONIC in nanoseconds. Answered by the runtime directly:
+// going through `clock_gettime` here would cost a 16-byte heap timespec
+// per read (NURL has no stack byte buffers), which a transport that
+// timestamps every packet cannot afford. 0 if the clock is missing.
 @ monotonic_ns → i {
-    : s ts ( nurl_zalloc 16 )
-    : i32 rc ( clock_gettime # i32 ( posix_const `CLOCK_MONOTONIC` ) # *u ts )
-    ? != rc 0 { ( nurl_free ts ) ^ 0 } {}
-    : i secs ( nurl_peek ts 0 )
-    : i nsec ( nurl_peek ts 1 )
-    ( nurl_free ts )
-    ^ + * secs 1000000000 nsec
+    ^ ( nurl_monotonic_ns )
 }
 
 // Blocking `nanosleep` loop — retries on EINTR with the remaining

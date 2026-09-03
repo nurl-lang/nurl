@@ -10,8 +10,9 @@ reactor elsewhere (see [`ASYNC.md`](ASYNC.md)).
 
 - **TCP server** — `tcp_listen` / `tcp_listen_tls` + `tcp_accept`, with a full
   HTTP server stack on top (`stdlib/ext/http_*` — HTTP/1.1 **and HTTP/2 on
-  every listener**, routing, static files, middleware, multipart, WebSockets,
-  TLS with ALPN; see [HTTPS / TLS](#https--tls) and [HTTP/2](#http2) below).
+  every listener, HTTP/3 beside every TLS listener**, routing, static files,
+  middleware, multipart, WebSockets, TLS with ALPN; see
+  [HTTPS / TLS](#https--tls), [HTTP/2](#http2) and [HTTP/3](#http3) below).
 - **TCP client** — `tcp_connect` (plain) / `tcp_connect_tls` (TLS client
   handshake with SNI; the `verify` flag turns on peer-certificate chain +
   host-name verification against the system trust store — the primitive
@@ -20,7 +21,16 @@ reactor elsewhere (see [`ASYNC.md`](ASYNC.md)).
   `udp_connect`, `udp_send_to` / `udp_recv_from`, connected-mode `udp_send` /
   `udp_recv`, broadcast and multicast (`udp_join_group` / `_leave_group` /
   `_set_multicast_ttl` / `_set_multicast_loop`). Sync + fiber-aware async on
-  every send/recv.
+  every send/recv. Address-carrying variants for a datagram-per-packet
+  transport: `udp_recv_into` / `udp_recv_into_deadline` receive into a
+  caller-owned buffer and report the peer as a 24-byte `udp_addr_*`
+  value (no allocation, no name lookup per datagram; the deadline form
+  parks with a timeout inside a fiber and applies `SO_RCVTIMEO` on a
+  thread), `udp_send_addr` sends to such an address, `udp_addr_resolve`
+  builds one from host:port once per peer, `udp_setsockopt_int` sets the
+  integer options `posix_const` names (`SO_REUSEPORT`, `UDP_SEGMENT`,
+  `IP_TOS`, …). The same encoding is produced by the in-process
+  unikernel stack, so peers compare as bytes on every runtime.
 - **DNS** (`stdlib/std/dns.nu`) — system-resolver wrappers over
   `getaddrinfo` / `getnameinfo`, no c-ares dep. `dns_resolve host → ! (Vec
   String) NetErr` lists A/AAAA literals in the kernel's preferred order;
@@ -160,3 +170,50 @@ connection (each connection is its own fiber, so other connections are
 unaffected). Server push is disabled (`SETTINGS_ENABLE_PUSH = 0`); the
 streaming / WebSocket upgrade hooks are HTTP/1.1-only. An idle HTTP/2
 connection whose deadline fires is closed with GOAWAY(NO_ERROR).
+
+## HTTP/3
+
+Every TLS listener made by `http_app_listen_tls` also serves **HTTP/3
+(RFC 9114) over QUIC (RFC 9000 / 9001 / 9002)**: the same host:port is
+bound over UDP, a QUIC loop runs on a thread of its own, and every request
+reaches the same router and handler as HTTP/1.1 and HTTP/2. The TCP side
+announces it — every HTTP/1.1 and HTTP/2 response from that listener
+carries `Alt-Svc: h3=":port"; ma=86400` (RFC 9114 §3.1.1) — so a browser
+or `curl --http3` moves over on its next request. `http_app_set_http3 a 0`
+keeps a listener TCP-only; if the UDP port cannot be bound (or the
+credentials cannot be loaded for QUIC) the listener logs `HTTP/3 off` and
+keeps serving over TCP.
+
+The whole stack is pure NURL. `std/quic_packet.nu` (packet protection,
+header protection, Initial secrets, Retry tag — byte-exact against RFC 9001
+Appendix A), `std/quic_frame.nu`, `std/quic_tp.nu` (transport parameters),
+`std/quic_tls.nu` (RFC 9001 §4: the TLS 1.3 handshake fed from CRYPTO
+frames — the same message-level machine `std/tls_server.nu` uses for TCP),
+`std/quic_recovery.nu` (RFC 9002: RTT, loss detection, PTO, NewReno),
+`std/quic_conn.nu` (the connection: every frame, stream states, both
+flow-control levels, connection IDs, key update, close/drain, idle,
+anti-amplification), `std/quic_server.nu` (UDP listener, connection table,
+Version Negotiation); `ext/http3_qpack.nu` (RFC 9204, static table +
+literals — this endpoint advertises a zero-size dynamic table),
+`ext/http3_frame.nu`, `ext/http3_conn.nu` (control / QPACK streams,
+request streams → `HttpRequest`), `ext/http3_server.nu`. A program that
+wants HTTP/3 alone calls `http3_server_new` directly (see
+`examples/h3_server.nu`).
+
+Conformance is a CI gate, not a claim: `tools/h3spec_gate.sh` runs h3spec
+0.1.13 — 34 QUIC-transport and 15 HTTP/3 + QPACK error cases — against
+the HttpApp TLS listener (**49/49**) and checks `Alt-Svc` on the TCP
+responses; locally it also drives one `curl --http3-only` request through
+the `ymuski/curl-http3` docker image. Performance is measured separately in
+[`bench/HTTP3_RESULTS.md`](../bench/HTTP3_RESULTS.md) (`bench/run_http3.sh`,
+`h2load --h3` from an nghttp2 image built with ngtcp2 + nghttp3), next to
+the HTTP/1.1 and HTTP/2 reports.
+
+Limits, stated rather than hidden: no 0-RTT, no Retry / address-validation
+tokens, no `preferred_address`, no stateless-reset emission, no ECN
+marking, no path migration beyond following a validated peer address, no
+server push, no extended CONNECT; 1-RTT packets that arrive before the
+client's Finished are dropped (the peer's PTO resends them); the handler
+runs synchronously inside the connection's loop, as it does for HTTP/2.
+The QUIC transport (`quic_conn_new_server`, `quic_conn_recv` /
+`quic_conn_send`, streams) is sans-IO and reusable without HTTP/3.

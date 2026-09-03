@@ -24,7 +24,9 @@
 // One handler, two protocols: HTTP/2 arrives either negotiated over TLS
 // (RFC 9113 §3.3, tcp_listen_tls_with_alpn) or by prior knowledge on any
 // listener (§3.4). Everything below the dispatch — DoS gate, idle timeout,
-// body limits, server_stop — is shared.
+// body limits, server_stop — is shared. HTTP/3 is the same handler on a
+// UDP socket beside a TLS listener (`ext/http3_server.nu`; the
+// `packages/http` facade wires it up and adds `Alt-Svc` here).
 //
 // API (this revision):
 //

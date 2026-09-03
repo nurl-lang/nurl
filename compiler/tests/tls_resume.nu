@@ -151,6 +151,10 @@ $ `stdlib/std/time.nu`
                     ( vec_free [u] sess )
 
                     ( thread_join t )
+                    // thread_spawn borrows the closure's heap env; the
+                    // thread has joined, so free it here (LSan gate).
+                    : *u server_env # *u server 1
+                    ( nurl_free # s server_env )
                     ( label `server_saw_1_resumed` ( yn == srv_resumed_1 0 ) )
                     ( label `server_saw_2_resumed` ( yn == srv_resumed_2 1 ) )
                     ( label `server_saw_3_resumed` ( yn == srv_resumed_3 0 ) )
