@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ext/mqtt.nu`: three writes that never left the method** — every
+  MqttClient method takes the client by value, so the stores into its
+  `i` fields landed in the method's own copy. Surfaced by the new
+  by-value-parameter warning; all three are protocol-visible:
+  * `__mqtt_next_pid` returned **1 forever**. Every QoS 1/2 PUBLISH,
+    SUBSCRIBE and UNSUBSCRIBE went on the wire carrying packet
+    identifier 1 — the one field MQTT 5 §2.2.1 requires to differ
+    between packets in flight.
+  * the keep-alive deadline never moved, in `mqtt_ping`,
+    `__mqtt_send_pingreq` and `mqtt_reconnect` alike. After it first
+    expired, **every** `mqtt_keepalive_tick` sent another PINGREQ: an
+    idle loop became a ping flood at loop speed.
+  * `mqtt_reconnect` closed the caller's socket, dialled a fresh one,
+    completed the CONNECT handshake over it and returned Ok — leaving
+    the caller holding the CLOSED conn. Every later publish wrote to it.
+
+  The two counters move into `ctl`, a two-slot `( Vec i )` whose
+  control block is shared across copies exactly as `rxbuf` and
+  `qos2_rx` always were, which is what MqttClient's 29-method API
+  always implied it was. `mqtt_reconnect` takes `inout MqttClient cl`,
+  because it replaces the TcpConn itself and TcpConn is a plain
+  three-scalar struct with no control block to share — call it as
+  `( mqtt_reconnect inout cl host port cfg )` over a `: ~` binding.
+  `compiler/tests/mqtt_client_state.nu`.
+
 ### Added
 
 - **nurlc warns when a field store to a by-value struct parameter is
