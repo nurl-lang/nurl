@@ -52,6 +52,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   facts); an array passes through untouched. Found by writing the
   wire-contract test.
 
+- **Four test ports were each claimed by two files** — the corpus runs
+  at `jobs=12`, and 18915 (`tls_resume` / `tls_cert_select`), 18942 and
+  18941 (`http2_in_http_server` / `http_response_binary` /
+  `http_binary_body`) and 18799 (`http_server_pool` /
+  `websocket_client`) were hardcoded in two tests apiece. Whichever
+  binds second loses, so the failure appears only in a full run and
+  vanishes when either test is run alone. Each second claimant moves to
+  a free port, with a line saying why the number must stay unique.
+
 - **A parameter now shadows a same-named top-level function** — the
   parameter's type went into the inner scope, but the function's call
   metadata (declared parameter roster, FFI roster, arity) lived under
