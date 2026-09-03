@@ -89,7 +89,9 @@ $ `stdlib/std/time.nu`
                             : !( Vec u ) TlsErr rr ( tls_read c 64 )
                             ?? rr {
                                 T echo → {
-                                    ( label `echo_ok` ? ( bytes_eq echo ( bytes_from_str `pq\n` ) ) `T` `F` )
+                                    : ( Vec u ) want ( bytes_from_str `pq\n` )
+                                    ( label `echo_ok` ? ( bytes_eq echo want ) `T` `F` )
+                                    ( vec_free [u] want )
                                     ( vec_free [u] echo )
                                 }
                                 F _ → { ( label `echo_ok` `READ-FAIL` ) }
@@ -99,6 +101,10 @@ $ `stdlib/std/time.nu`
                         F _e → { ( label `client_handshake` `FAIL` ) }
                     }
                     ( thread_join t )
+                    // thread_spawn borrows the closure's heap env; the
+                    // thread has joined, so free it here (LSan gate).
+                    : *u server_env # *u server 1
+                    ( nurl_free # s server_env )
                 }
                 F _ → { ( label `spawn` `FAIL` ) }
             }
