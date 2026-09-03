@@ -19,6 +19,10 @@
 // `requires: live`.
 // requires: live
 
+// Port 18973, and it must stay unique across the corpus: the tests
+// run in parallel, so two files naming one port is a bind race that
+// fails only in a full run and passes when either is run alone.
+
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
@@ -37,7 +41,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ run_binary_body_test → v {
-    : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18941 )
+    : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18973 )
     ?? lr {
         T listener → {
             : ( @ HttpResponse HttpRequest ) h \ HttpRequest req → HttpResponse { ^ ( echo_len_handler req ) }
@@ -51,7 +55,7 @@ $ `stdlib/core/vec.nu`
                 ( vec_push [u] body # u 0 )  // embedded NUL
                 ( vec_push [u] body # u 67 )  // 'C'
                 ( vec_push [u] body # u 68 )  // 'D'
-                : !Response HttpErr r ( http_post_bytes `http://127.0.0.1:18941/echo` body `application/octet-stream` )
+                : !Response HttpErr r ( http_post_bytes `http://127.0.0.1:18973/echo` body `application/octet-stream` )
                 ?? r {
                     T resp → {
                         = g_client_status ( http_status resp )

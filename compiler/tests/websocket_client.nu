@@ -12,6 +12,10 @@
 //   §D  ws_connect → send text → echo → send binary → echo → close.
 // requires: live
 
+// Port 18974, and it must stay unique across the corpus: the tests
+// run in parallel, so two files naming one port is a bind race that
+// fails only in a full run and passes when either is run alone.
+
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
@@ -187,7 +191,7 @@ $ `stdlib/ext/websocket.nu`
 
 @ run_live_test → i {
     : ~ i fails 0
-    : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18799 )
+    : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18974 )
     ?? lr {
         T listener → {
             : ( @ v ) server_fn \ → v {
@@ -204,7 +208,7 @@ $ `stdlib/ext/websocket.nu`
             : !Thread ThreadErr st ( thread_spawn server_fn )
             ( sleep_ms 100 )
 
-            : !WsClient WsErr cr ( ws_connect `ws://127.0.0.1:18799/ws` )
+            : !WsClient WsErr cr ( ws_connect `ws://127.0.0.1:18974/ws` )
             ?? cr {
                 T client → {
                     : TcpConn conn ( ws_client_conn client )
