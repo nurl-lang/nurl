@@ -3179,6 +3179,9 @@ int  poll(void *fds, unsigned long n, int timeout) {
 #  include <sys/socket.h>
 #  include <sys/un.h>
 #  include <netinet/in.h>
+#  ifdef __linux__
+#    include <netinet/udp.h>   /* UDP_SEGMENT / UDP_GRO for posix_const */
+#  endif
 #  include <fcntl.h>
 #  include <poll.h>
 #  include <sys/wait.h>
@@ -3348,6 +3351,57 @@ long long nurl_native_constant(const char *name) {
     /* termios actions for stdlib/std/term.nu (raw mode). */
     if (strcmp(name, "TCSANOW")     == 0) return TCSANOW;
     if (strcmp(name, "TCSAFLUSH")   == 0) return TCSAFLUSH;
+    /* Socket option levels / names for stdlib/std/udp.nu's
+     * udp_setsockopt_int (the reuseport / GSO / GRO / ECN knobs a
+     * datagram transport tunes). Numbers differ per platform (IP_TOS
+     * is 1 on Linux, 3 on BSD; UDP_SEGMENT exists only on Linux), so
+     * they are asked for by name; a name this platform lacks answers
+     * -1 and the runtime refuses to pass -1 to setsockopt. */
+    if (strcmp(name, "SOL_SOCKET")   == 0) return SOL_SOCKET;
+    if (strcmp(name, "SO_REUSEADDR") == 0) return SO_REUSEADDR;
+#  ifdef SO_REUSEPORT
+    if (strcmp(name, "SO_REUSEPORT") == 0) return SO_REUSEPORT;
+#  endif
+    if (strcmp(name, "SO_RCVBUF")    == 0) return SO_RCVBUF;
+    if (strcmp(name, "SO_SNDBUF")    == 0) return SO_SNDBUF;
+    if (strcmp(name, "SOCK_DGRAM")   == 0) return SOCK_DGRAM;
+    if (strcmp(name, "IPPROTO_IP")   == 0) return IPPROTO_IP;
+    if (strcmp(name, "IPPROTO_IPV6") == 0) return IPPROTO_IPV6;
+    if (strcmp(name, "IPPROTO_UDP")  == 0) return IPPROTO_UDP;
+    if (strcmp(name, "IP_TOS")       == 0) return IP_TOS;
+#  ifdef IPV6_TCLASS
+    if (strcmp(name, "IPV6_TCLASS")  == 0) return IPV6_TCLASS;
+#  endif
+#  ifdef IP_RECVTOS
+    if (strcmp(name, "IP_RECVTOS")   == 0) return IP_RECVTOS;
+#  endif
+#  ifdef IPV6_RECVTCLASS
+    if (strcmp(name, "IPV6_RECVTCLASS") == 0) return IPV6_RECVTCLASS;
+#  endif
+#  ifdef IP_PKTINFO
+    if (strcmp(name, "IP_PKTINFO")   == 0) return IP_PKTINFO;
+#  endif
+#  ifdef IPV6_RECVPKTINFO
+    if (strcmp(name, "IPV6_RECVPKTINFO") == 0) return IPV6_RECVPKTINFO;
+#  endif
+#  ifdef UDP_SEGMENT
+    if (strcmp(name, "UDP_SEGMENT")  == 0) return UDP_SEGMENT;
+#  endif
+#  ifdef UDP_GRO
+    if (strcmp(name, "UDP_GRO")      == 0) return UDP_GRO;
+#  endif
+#endif
+#if defined(_WIN32)
+    /* The Winsock spellings of the portable subset. */
+    if (strcmp(name, "SOL_SOCKET")   == 0) return SOL_SOCKET;
+    if (strcmp(name, "SO_REUSEADDR") == 0) return SO_REUSEADDR;
+    if (strcmp(name, "SO_RCVBUF")    == 0) return SO_RCVBUF;
+    if (strcmp(name, "SO_SNDBUF")    == 0) return SO_SNDBUF;
+    if (strcmp(name, "SOCK_DGRAM")   == 0) return SOCK_DGRAM;
+    if (strcmp(name, "IPPROTO_IP")   == 0) return IPPROTO_IP;
+    if (strcmp(name, "IPPROTO_IPV6") == 0) return IPPROTO_IPV6;
+    if (strcmp(name, "IPPROTO_UDP")  == 0) return IPPROTO_UDP;
+    if (strcmp(name, "IP_TOS")       == 0) return IP_TOS;
 #endif
     /* CLOCK_* values differ per platform (CLOCK_MONOTONIC is 6 on
      * macOS, 1 elsewhere); wasi-libc spells them as pointer macros. */
@@ -3385,6 +3439,19 @@ long long nurl_native_constant(const char *name) {
  * check rejected the narrow shape. */
 long long nurl_errno_get(void) { return errno; }
 void nurl_errno_set(long long e) { errno = (int)e; }
+
+/* CLOCK_MONOTONIC in nanoseconds, straight from the runtime: the
+ * `clock_gettime` FFI route in std/time.nu needs a 16-byte heap
+ * timespec per call (NURL has no stack byte buffers), which is a
+ * malloc+free per clock read — fine for a benchmark harness, not for a
+ * transport that timestamps every packet. 0 if the clock is missing.
+ * Every target this runtime builds for has clock_gettime: libc, the
+ * Win32 shim above, wasi-libc, and unikernel/nolibc. */
+long long nurl_monotonic_ns(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+}
 
 /* waitpid status decoders — the W* macros are preprocessor bit-twiddles
  * and macOS expands them against an int lvalue, so bind locally first. */

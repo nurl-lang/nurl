@@ -16,6 +16,10 @@
 //   7. Zero-length datagram round-trip.
 //   8. Setsockopt smoke: SO_BROADCAST + IP_MULTICAST_TTL.
 //   9. Wildcard dual-stack bind sanity check (port 0).
+//  10. Address-carrying round-trip: udp_addr_resolve → udp_send_addr →
+//      udp_recv_into (24-byte peer address, caller-owned buffer) →
+//      reply to that address → udp_recv_into_deadline, then the
+//      deadline firing on an idle socket.
 // requires: live
 
 $ `stdlib/std/udp.nu`
@@ -236,6 +240,91 @@ $ `stdlib/core/vec.nu`
             ( udp_close w )
         }
         F e → ( print_label_str `wildcard_bind` ( net_err_name e ) )
+    }
+
+    // ── 11. Address-carrying round-trip (sync path): resolve once,
+    //       send_addr, recv_into, reply to the reported address. ──
+    : !UdpSocket NetErr asr ( udp_bind `127.0.0.1` 0 )
+    ?? asr {
+        T aserver → {
+            : String aslocal ( udp_local_addr aserver )
+            : i asport ( port_of aslocal )
+            ( string_free aslocal )
+            : !UdpSocket NetErr acr ( udp_bind `127.0.0.1` 0 )
+            ?? acr {
+                T aclient → {
+                    : String aclocal ( udp_local_addr aclient )
+                    : i acport ( port_of aclocal )
+                    ( string_free aclocal )
+                    : !( Vec u ) NetErr ar ( udp_addr_resolve `127.0.0.1` asport )
+                    ?? ar {
+                        F e → ( print_label_str `addr_resolve` ( net_err_name e ) )
+                        T to → {
+                            ( print_label_int `addr_family` ( udp_addr_family to ) )
+                            ( print_label_bool `addr_port_match` == ( udp_addr_port to ) asport )
+                            : ( Vec u ) msg ( bytes_from_str `addr-ping` )
+                            : !i NetErr s ( udp_send_addr aclient msg to )
+                            ?? s {
+                                T n → ( print_label_int `addr_send_bytes` n )
+                                F e → ( print_label_str `addr_send` ( net_err_name e ) )
+                            }
+                            ( vec_free [u] msg )
+
+                            : ( Vec u ) buf ( vec_with_cap [u] 32 )
+                            : ( Vec u ) from ( udp_addr_new )
+                            : !i NetErr r ( udp_recv_into aserver buf from )
+                            ?? r {
+                                T n → {
+                                    : String got ( bytes_to_str buf )
+                                    ( print_label_str `addr_recv_payload` ( string_data got ) )
+                                    ( string_free got )
+                                    ( print_label_int `addr_recv_family` ( udp_addr_family from ) )
+                                    ( print_label_bool `addr_recv_port_match` == ( udp_addr_port from ) acport )
+                                    : String ftxt ( udp_addr_format from )
+                                    : String want ( string_from `127.0.0.1:` )
+                                    ( string_push_int want acport )
+                                    ( print_label_bool `addr_recv_format_match` ( string_eq ftxt want ) )
+                                    ( string_free want )
+                                    ( string_free ftxt )
+                                    // Reply straight to the reported address.
+                                    : ( Vec u ) reply ( bytes_from_str `addr-pong` )
+                                    : !i NetErr s2 ( udp_send_addr aserver reply from )
+                                    ?? s2 {
+                                        T n2 → ( print_label_int `addr_reply_bytes` n2 )
+                                        F e → ( print_label_str `addr_reply` ( net_err_name e ) )
+                                    }
+                                    ( vec_free [u] reply )
+                                    : !i NetErr r2 ( udp_recv_into_deadline aclient buf from 2000 )
+                                    ?? r2 {
+                                        T n2 → {
+                                            : String got2 ( bytes_to_str buf )
+                                            ( print_label_str `addr_client_recv` ( string_data got2 ) )
+                                            ( string_free got2 )
+                                            ( print_label_bool `addr_client_from_eq_to` ( udp_addr_eq from to ) )
+                                        }
+                                        F e → ( print_label_str `addr_client_recv` ( net_err_name e ) )
+                                    }
+                                    // Nothing more is coming: the deadline must fire.
+                                    : !i NetErr r3 ( udp_recv_into_deadline aclient buf from 30 )
+                                    ?? r3 {
+                                        T n3 → ( print_label_str `addr_client_deadline` `data` )
+                                        F e → ( print_label_str `addr_client_deadline` ( net_err_name e ) )
+                                    }
+                                }
+                                F e → ( print_label_str `addr_recv` ( net_err_name e ) )
+                            }
+                            ( vec_free [u] from )
+                            ( vec_free [u] buf )
+                            ( vec_free [u] to )
+                        }
+                    }
+                    ( udp_close aclient )
+                }
+                F e → ( print_label_str `addr_client_bind` ( net_err_name e ) )
+            }
+            ( udp_close aserver )
+        }
+        F e → ( print_label_str `addr_server_bind` ( net_err_name e ) )
     }
 
     ^ 0

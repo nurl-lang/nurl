@@ -1016,6 +1016,146 @@ $ `stdlib/net/dnsclient.nu`
 
 @ nurl_udp_recv_from i handle s buf i n → i { ^ ( __udp_recv handle buf n ) }
 
+// ── address-carrying UDP (§18b-ii) ───────────────────────────────
+//
+// The 24-byte NurlUdpAddr the hosted runtime documents in
+// runtime_ffi.c: [0] family · [2..4) port BE · [4..8) IPv4 octets.
+// This stack is IPv4-only, so family is always 4 on the way out and
+// anything but 4 is refused on the way in.
+
+@ __udp_addr_put s addr i ip i port → v {
+    ( nurl_memset addr 0 24 )
+    : *u ap # *u addr
+    = . ap 0 # u 4
+    = . ap 2 # u & >> port 8 255
+    = . ap 3 # u & port 255
+    = . ap 4 # u ( ipv4_octet ip 0 )
+    = . ap 5 # u ( ipv4_octet ip 1 )
+    = . ap 6 # u ( ipv4_octet ip 2 )
+    = . ap 7 # u ( ipv4_octet ip 3 )
+}
+
+@ __udp_addr_ip s addr → i {
+    // Raw byte reads: `nurl_str_get` is a C-string accessor that stops
+    // at the first NUL, and byte 1 of an address is always 0.
+    : *u ap # *u addr
+    ? != # i . ap 0 4 { ^ -1 } {}
+    ^ ( ipv4_make # i . ap 4 # i . ap 5 # i . ap 6 # i . ap 7 )
+}
+
+@ __udp_addr_port s addr → i {
+    : *u ap # *u addr
+    ^ | << # i . ap 2 8 # i . ap 3
+}
+
+@ nurl_udp_recv_into i handle s buf i cap s addr_out → i {
+    : i got ( __udp_recv handle buf cap )
+    ? < got 0 { ^ got } {}
+    ? != # i addr_out 0 {
+        : *SockTab st ( __tab )
+        ( __udp_addr_put addr_out ( sock_udp_last_ip st handle ) ( sock_udp_last_port st handle ) )
+    } {}
+    ^ got
+}
+
+@ nurl_udp_send_addr i handle s buf i n s addr → i {
+    : i ip ( __udp_addr_ip addr )
+    ? < ip 0 { ^ -1 } {}
+    ^ ( __udp_send ( __tab ) handle ip ( __udp_addr_port addr ) buf n )
+}
+
+@ nurl_udp_addr_resolve s host i port s addr_out → i {
+    ( nurl_memset addr_out 0 24 )
+    : i ip ( __resolve host )
+    ? < ip 0 { ^ -1 } {}
+    ? || < port 0 > port 65535 { ^ -1 } {}
+    ( __udp_addr_put addr_out ip port )
+    ^ 0
+}
+
+@ __udp_hex_push String out i v → v {
+    // Lower-case hex without leading zeros (RFC 5952 §4.1), "0" for 0.
+    ? == v 0 { ( string_push_str out `0` ) ^ } {}
+    : ~ i shift 12
+    : ~ b started F
+    ~ >= shift 0 {
+        : i nib & >> v shift 15
+        ? || started != nib 0 {
+            = started T
+            ( string_push_char out ? < nib 10 + 48 nib + 87 nib )
+        } {}
+        = shift - shift 4
+    }
+}
+
+// OWNED "ip:port" (IPv4) / "[ip]:port" (IPv6, RFC 5952 text); "" for an
+// empty address. Formatting is text, not transport: this stack cannot
+// SEND to an IPv6 address, but an address handed to it (built by hand,
+// or received on a hosted build and logged here) prints the same way
+// on every runtime.
+@ nurl_udp_addr_format s addr → s {
+    : *u ap # *u addr
+    : i fam # i . ap 0
+    : i port ( __udp_addr_port addr )
+    ? == fam 4 { ^ ( __addr_string ( __udp_addr_ip addr ) port ) } {}
+    ? != fam 6 {
+        : s e # s ( nurl_zalloc 1 )
+        ^ e
+    } {}
+    : String out ( string_from `[` )
+    // v4-mapped ::ffff:a.b.c.d keeps its dotted tail.
+    : ~ b mapped T
+    : ~ i k 0
+    ~ < k 10 { ? != # i . ap + 4 k 0 { = mapped F } {} = k + k 1 }
+    ? && mapped && == # i . ap 14 255 == # i . ap 15 255 {
+        ( string_push_str out `::ffff:` )
+        : String v4 ( ipv4_str ( ipv4_make # i . ap 16 # i . ap 17 # i . ap 18 # i . ap 19 ) )
+        ( string_push_str out ( string_data v4 ) )
+        ( string_free v4 )
+    } {
+        // Longest run (≥ 2) of zero groups becomes "::".
+        : ~ i best -1
+        : ~ i bestlen 0
+        : ~ i cur -1
+        : ~ i curlen 0
+        : ~ i g 0
+        ~ < g 8 {
+            : i v | << # i . ap + 4 * 2 g 8 # i . ap + 5 * 2 g
+            ? == v 0 {
+                ? < cur 0 { = cur g = curlen 0 } {}
+                = curlen + curlen 1
+                ? > curlen bestlen { = best cur = bestlen curlen } {}
+            } { = cur -1 }
+            = g + g 1
+        }
+        ? < bestlen 2 { = best -1 } {}
+        = g 0
+        ~ < g 8 {
+            ? == g best {
+                ( string_push_str out `::` )
+                = g + g bestlen
+            } {
+                : i v | << # i . ap + 4 * 2 g 8 # i . ap + 5 * 2 g
+                ( __udp_hex_push out v )
+                ? && < g 7 != + g 1 best { ( string_push_str out `:` ) } {}
+                = g + g 1
+            }
+        }
+    }
+    ( string_push_str out `]:` )
+    ( string_push_int out port )
+    : s a ( string_data out )
+    : i n ( nurl_str_len a )
+    : s p # s ( nurl_alloc + n 1 )
+    ( nurl_memcpy p a + n 1 )
+    ( string_free out )
+    ^ p
+}
+
+// No socket options exist on this stack; refusing is the honest answer
+// (the caller treats a failed reuseport/GSO opt-in as "not available").
+@ nurl_udp_setsockopt_int i handle i level i opt i val → i { ^ -1 }
+
 @ nurl_udp_recv i handle s buf i n → i { ^ ( __udp_recv handle buf n ) }
 
 // The address the last received datagram came from, cached per fd so

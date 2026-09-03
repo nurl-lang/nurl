@@ -26,6 +26,32 @@
 //   ( udp_set_multicast_loop UdpSocket s i on  )              → ! v NetErr
 //   ( udp_family           UdpSocket s )                      → i (AF_INET/AF_INET6)
 //
+// Address-carrying variants (no allocation, no resolver per datagram —
+// the shape a packet-per-datagram transport such as QUIC needs):
+//
+//   ( udp_addr_new                                    )       → ( Vec u )  24 zero bytes
+//   ( udp_addr_resolve     s host i port )                    → ! ( Vec u ) NetErr (once per peer)
+//   ( udp_addr_format      ( Vec u ) addr )                   → String (OWNED) "ip:port" / "[ip]:port"
+//   ( udp_addr_family      ( Vec u ) addr )                   → i  4 / 6 / 0
+//   ( udp_addr_port        ( Vec u ) addr )                   → i
+//   ( udp_addr_eq          ( Vec u ) a ( Vec u ) b )          → b
+//   ( udp_recv_into        UdpSocket s ( Vec u ) buf ( Vec u ) from )            → ! i NetErr
+//   ( udp_recv_into_deadline UdpSocket s ( Vec u ) buf ( Vec u ) from i ms )     → ! i NetErr (NetTimeout)
+//   ( udp_send_addr        UdpSocket s ( Vec u ) bytes ( Vec u ) to )             → ! i NetErr
+//   ( udp_setsockopt_int   UdpSocket s i level i opt i val )                     → ! v NetErr
+//
+//   `udp_recv_into` fills `buf` up to its CAPACITY (vec_with_cap sizes
+//   the receive; the datagram length becomes the Vec's len) and writes
+//   the sender into `from`, a 24-byte address from `udp_addr_new`.
+//   Both Vecs stay owned by the caller and are reused across calls.
+//
+//   Address encoding (NURL's own, identical on every target):
+//     [0] family 4/6 (0 = empty) · [1] 0 · [2..4) port BE ·
+//     [4..20) address (IPv4 in the first 4 bytes) · [20..24) IPv6 scope
+//   An IPv4 peer of a dual-stack socket is reported as family 4, never
+//   as ::ffff:a.b.c.d, so `udp_addr_eq` compares peers regardless of the
+//   socket that received them.
+//
 // Memory model:
 //
 //   * `UdpSocket` is a single-field opaque handle (`s raw`) wrapping a
@@ -60,6 +86,8 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/net.nu`
+$ `stdlib/std/bytes.nu`
+$ `stdlib/std/time.nu`
 $ `stdlib/std/async_ffi.nu`
 
 // ── Runtime FFI bridge (§18b) ──────────────────────────────────────
@@ -101,6 +129,16 @@ $ `stdlib/std/async_ffi.nu`
 & `c` @ nurl_udp_set_multicast_ttl i handle i ttl → i
 
 & `c` @ nurl_udp_set_multicast_loop i handle i on → i
+
+& `c` @ nurl_udp_recv_into i handle s buf i cap s addr_out → i
+
+& `c` @ nurl_udp_send_addr i handle s buf i n s addr → i
+
+& `c` @ nurl_udp_addr_resolve s host i port s addr_out → i
+
+& `c` @ nurl_udp_addr_format s addr → s
+
+& `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 
 // ── Public types ───────────────────────────────────────────────────
 
@@ -521,4 +559,167 @@ $ `stdlib/std/async_ffi.nu`
         }
     }
     ^ @ !i NetErr { F # NetErr NetOther }
+}
+
+// ── Address-carrying variants ─────────────────────────────────────
+//
+// The entry points above were shaped for request/response tools: one
+// fresh Vec + one peer String per received datagram, one name
+// resolution per sent one. A transport that handles a datagram per
+// packet (QUIC) cannot pay any of those per packet, so these variants
+// move the buffer and the address to the caller and keep both across
+// calls. They are fiber-aware like the rest of the file: inside a
+// fiber EAGAIN parks on the reactor (with a deadline, for the
+// `_deadline` form), outside one the socket blocks.
+
+// A fresh, empty 24-byte address.
+@ udp_addr_new → ( Vec u ) {
+    : ( Vec u ) a ( vec_with_cap [u] 24 )
+    : b _ok ( vec_resize_zeroed [u] a 24 )
+    ^ a
+}
+
+@ __udp_addr_ptr ( Vec u ) a → s {
+    // Callers hand in whatever they like; a short Vec is grown to the
+    // 24 bytes the runtime writes/reads so no call ever runs past it.
+    ? < ( vec_len [u] a ) 24 { : b _ok ( vec_resize_zeroed [u] a 24 ) } {}
+    : *u p ( vec_data [u] a )
+    ^ # s p
+}
+
+// host:port → address. A numeric literal never touches a resolver; a
+// name costs one lookup — call this once per peer, not per packet.
+@ udp_addr_resolve s host i port → !( Vec u ) NetErr {
+    : ( Vec u ) a ( udp_addr_new )
+    : i rc ( nurl_udp_addr_resolve host port ( __udp_addr_ptr a ) )
+    ? < rc 0 {
+        ( vec_free [u] a )
+        ^ @ !( Vec u ) NetErr { F # NetErr NetOther }
+    } {}
+    ^ @ !( Vec u ) NetErr { T a }
+}
+
+// OWNED "ip:port" (IPv4) / "[ip]:port" (IPv6); "" for an empty address.
+@ udp_addr_format ( Vec u ) a → String {
+    : s raw_s ( nurl_udp_addr_format ( __udp_addr_ptr a ) )
+    : String out ( string_from raw_s )
+    ( nurl_free raw_s )
+    ^ out
+}
+
+@ udp_addr_family ( Vec u ) a → i {
+    ? < ( vec_len [u] a ) 24 { ^ 0 } {}
+    ^ # i ?? ( vec_get [u] a 0 ) { T x → x F → 0 }
+}
+
+@ udp_addr_port ( Vec u ) a → i {
+    ? < ( vec_len [u] a ) 24 { ^ 0 } {}
+    : i hi # i ?? ( vec_get [u] a 2 ) { T x → x F → 0 }
+    : i lo # i ?? ( vec_get [u] a 3 ) { T x → x F → 0 }
+    ^ | << hi 8 lo
+}
+
+@ udp_addr_eq ( Vec u ) a ( Vec u ) b → b {
+    ^ ( bytes_eq a b )
+}
+
+@ __udp_recv_into_raw i raw ( Vec u ) buf ( Vec u ) from → i {
+    : i cap ( vec_cap [u] buf )
+    : *u p ( vec_data [u] buf )
+    : s pbuf # s p
+    : i n ( nurl_udp_recv_into raw pbuf cap ( __udp_addr_ptr from ) )
+    ? >= n 0 { : b _ok ( vec_set_len [u] buf n ) } {}
+    ^ n
+}
+
+// Receive one datagram into `buf` (its capacity is the maximum; its
+// length becomes the datagram size) and the sender into `from`.
+// `deadline_ms` < 0 waits forever; otherwise Err(NetTimeout) when
+// nothing arrived in time. Outside a fiber the deadline is applied as
+// the socket's receive timeout (SO_RCVTIMEO) for the duration of the
+// call, so the same contract holds on a plain OS thread.
+@ udp_recv_into_deadline UdpSocket sk ( Vec u ) buf ( Vec u ) from i deadline_ms → !i NetErr {
+    : s rp . sk raw
+    : i raw # i rp
+    ? <= ( vec_cap [u] buf ) 0 { ^ @ !i NetErr { F # NetErr NetRead } } {}
+    : i fcur ( nurl_fiber_current )
+    ? == fcur 0 {
+        ? >= deadline_ms 0 { ( nurl_udp_set_timeout raw ? == deadline_ms 0 1 deadline_ms ) } {}
+        : i n ( __udp_recv_into_raw raw buf from )
+        ? >= deadline_ms 0 { ( nurl_udp_set_timeout raw 0 ) } {}
+        ? < n 0 {
+            : i ek ( nurl_udp_err_kind raw )
+            ^ @ !i NetErr { F ( _net_err_of ek ) }
+        } {}
+        ^ @ !i NetErr { T n }
+    } {}
+    ( nurl_udp_set_nonblock raw 1 )
+    : i fd ( nurl_udp_get_fd raw )
+    : i t0 ( nurl_monotonic_ns )
+    ~ T {
+        : i n ( __udp_recv_into_raw raw buf from )
+        ? >= n 0 { ^ @ !i NetErr { T n } } {}
+        : i ek ( nurl_udp_err_kind raw )
+        ? != ek 7 { ^ @ !i NetErr { F ( _net_err_of ek ) } } {}
+        : ~ i wait deadline_ms
+        ? >= deadline_ms 0 {
+            : i spent / - ( nurl_monotonic_ns ) t0 1000000
+            = wait - deadline_ms spent
+            ? <= wait 0 { ^ @ !i NetErr { F # NetErr NetTimeout } } {}
+        } {}
+        : i rc ( nurl_reactor_wait_read fd wait )
+        ? == rc 0 { ^ @ !i NetErr { F # NetErr NetTimeout } } {}
+        ? < rc 0 { ^ @ !i NetErr { F # NetErr NetOther } } {}
+    }
+    ^ @ !i NetErr { F # NetErr NetOther }
+}
+
+@ udp_recv_into UdpSocket sk ( Vec u ) buf ( Vec u ) from → !i NetErr {
+    ^ ( udp_recv_into_deadline sk buf from - 0 1 )
+}
+
+// Send `bytes` to an address obtained from `udp_recv_into` or
+// `udp_addr_resolve`. No resolver involved.
+@ udp_send_addr UdpSocket sk ( Vec u ) bytes ( Vec u ) to → !i NetErr {
+    : s rp . sk raw
+    : i raw # i rp
+    : i n ( vec_len [u] bytes )
+    : *u p ( vec_data [u] bytes )
+    : s pbuf ? <= n 0 `` # s p
+    : s pa ( __udp_addr_ptr to )
+    : i fcur ( nurl_fiber_current )
+    ? == fcur 0 {
+        : i sent ( nurl_udp_send_addr raw pbuf n pa )
+        ? < sent 0 {
+            : i ek ( nurl_udp_err_kind raw )
+            ^ @ !i NetErr { F ( _net_err_of ek ) }
+        } {}
+        ^ @ !i NetErr { T sent }
+    } {}
+    ( nurl_udp_set_nonblock raw 1 )
+    : i fd ( nurl_udp_get_fd raw )
+    ~ T {
+        : i sent ( nurl_udp_send_addr raw pbuf n pa )
+        ? >= sent 0 { ^ @ !i NetErr { T sent } } {}
+        : i ek ( nurl_udp_err_kind raw )
+        ? != ek 7 { ^ @ !i NetErr { F ( _net_err_of ek ) } } {}
+        : i rc ( nurl_reactor_wait_write fd - 0 1 )
+        ? < rc 0 { ^ @ !i NetErr { F # NetErr NetTimeout } } {}
+    }
+    ^ @ !i NetErr { F # NetErr NetOther }
+}
+
+// setsockopt with an int value. `level` and `opt` come from
+// `posix_const` (SOL_SOCKET, SO_REUSEPORT, IPPROTO_UDP, UDP_SEGMENT,
+// IP_TOS, …); a name the platform lacks resolves to -1 and is refused
+// here rather than handed to the kernel as a number.
+@ udp_setsockopt_int UdpSocket sk i level i opt i val → !v NetErr {
+    : s rp . sk raw
+    : i raw # i rp
+    : i rc ( nurl_udp_setsockopt_int raw level opt val )
+    ? < rc 0 {
+        : i ek ( nurl_udp_err_kind raw )
+        ^ @ !v NetErr { F ( _net_err_of ek ) }
+    } {}
+    ^ @ !v NetErr { T }
 }
