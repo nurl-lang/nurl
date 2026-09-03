@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **nurlc warns when a field store to a by-value struct parameter is
+  lost** — `= . p field v` inside `@ f T p → R` compiles, runs, and
+  writes to the callee's own copy; the caller never sees it. Value
+  semantics are intentional (`compiler/tests/function_param_mut.nu`
+  pins them) but invisible, and the same struct propagates mutations
+  made *through* its handle-typed fields — `( vec_push . p items x )`
+  IS seen by the caller — so a scalar field sitting beside a Vec field
+  looks like it behaves the same way and does not. This is the
+  parameter-context sibling of the by-value *closure capture* warning
+  nurlc already emitted, and generalising it that one context over
+  found three live bugs in `ext/mqtt.nu` (below) on the first sweep.
+  Not raised for the modify-a-copy-and-return-it idiom (`@ f T x → T`,
+  `→ !T E`, `→ ?T`), where the write reaches the caller through the
+  return value, nor where the store is already a hard error for want of
+  storage. `compiler/tests/should_warn_byval_param_field_store.nu`.
+
 ### Changed
 
 - **`ext/mcp_registry.nu` is now `ext/mcp_server.nu`** — the module you
