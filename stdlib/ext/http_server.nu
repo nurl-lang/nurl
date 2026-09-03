@@ -407,6 +407,11 @@ $ `stdlib/ext/http2_conn.nu`
     ^ ok
 }
 
+// Upper bound on trailer lines after a chunked body's terminating chunk.
+// A peer that streams an endless trailer section (each line ≤ 8 KiB but
+// unbounded in count) otherwise holds the connection open indefinitely.
+@ __max_trailer_lines → i { ^ 64 }
+
 // Index of the next CRLF in `carry`, topping up from the socket until
 // found or `cap` bytes have accumulated. Returns the CR index, or -1 on
 // EOF / IO / cap exceeded (a chunk-size or trailer line longer than `cap`
@@ -455,13 +460,19 @@ $ `stdlib/ext/http2_conn.nu`
                     ? < n 0 { = ok F } {
                         ? == n 0 {
                             // Terminating chunk: consume trailer lines up to
-                            // the closing empty line.
+                            // the closing empty line. The trailer section is
+                            // bounded — an unbounded run of trailer lines is
+                            // a slowloris variant — at __max_trailer_lines.
                             : ~ b tdone F
+                            : ~ i tcount 0
                             ~ & ok ! tdone {
                                 : i tc ( __carry_find_crlf conn carry 8192 )
                                 ? < tc 0 { = ok F } {
                                     ( __vec_drop_front_u carry + tc 2 )
-                                    ? == tc 0 { = tdone T } {}
+                                    ? == tc 0 { = tdone T } {
+                                        = tcount + tcount 1
+                                        ? > tcount ( __max_trailer_lines ) { = ok F } {}
+                                    }
                                 }
                             }
                             = done T
@@ -470,12 +481,20 @@ $ `stdlib/ext/http2_conn.nu`
                                 // Need n bytes of data + the trailing CRLF.
                                 ? ( __carry_ensure conn carry + n 2 ) {
                                     : *u cd ( vec_data [u] carry )
-                                    : ~ i k 0
-                                    ~ < k n {
-                                        ( vec_push [u] . req body & 255 # i . cd k )
-                                        = k + k 1
+                                    // The two octets after the chunk data MUST
+                                    // be CRLF (RFC 9112 §7.1). Dropping them
+                                    // unverified let a peer smuggle bytes past
+                                    // a strict front-end (a framing desync).
+                                    ? | != & 255 # i . cd n 13 != & 255 # i . cd + n 1 10 {
+                                        = ok F
+                                    } {
+                                        : ~ i k 0
+                                        ~ < k n {
+                                            ( vec_push [u] . req body & 255 # i . cd k )
+                                            = k + k 1
+                                        }
+                                        ( __vec_drop_front_u carry + n 2 )
                                     }
-                                    ( __vec_drop_front_u carry + n 2 )
                                 } { = ok F }
                             }
                         }

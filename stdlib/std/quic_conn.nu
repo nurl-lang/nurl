@@ -1008,10 +1008,27 @@ $ `stdlib/std/quic_recovery.nu`
             ( bytes_extend_bytes . c peer_cids cid )
         } {}
         ( vec_free [u] cid )
-        // retire what the peer asks us to
+        // RFC 9000 §19.15 — Retire Prior To MUST NOT exceed the Sequence
+        // Number. Without this a single frame with rpt = seq = 2^60 drove
+        // the retire loop ~4.6e18 iterations (CPU hang + OOM building
+        // RETIRE_CONNECTION_ID frames). This bounds rpt to this frame's
+        // seq, and the loop below is bounded independently by the number
+        // of peer CIDs we actually hold.
+        ? > rpt seq { ( __qc_fail c 0 ( quic_err_frame_encoding ) ft ) ^ 1 } {}
+        // Retire the peer CIDs the request covers. We iterate the CIDs we
+        // TRACK (peer_cid_seqs), retiring those with a sequence below rpt
+        // and at or above the previous retire mark — never the raw integer
+        // range [old_rpt, rpt), so the work is bounded by how many CIDs the
+        // peer has actually issued us, not by the attacker-chosen rpt.
         ? > rpt . c peer_cid_retire_prior {
-            : ~ i r . c peer_cid_retire_prior
-            ~ < r rpt { ( quic_push_retire_connection_id . c ctl2 r ) = r + r 1 }
+            : ~ i rk 0
+            ~ < rk ( vec_len [i] . c peer_cid_seqs ) {
+                : i rseq ( __qc_ri . c peer_cid_seqs rk )
+                ? & >= rseq . c peer_cid_retire_prior < rseq rpt {
+                    ( quic_push_retire_connection_id . c ctl2 rseq )
+                } {}
+                = rk + rk 1
+            }
             = . c peer_cid_retire_prior rpt
         } {}
         : ~ i active 0
@@ -1198,14 +1215,17 @@ $ `stdlib/std/quic_recovery.nu`
         ^
     } {}
     = . c bytes_recv + . c bytes_recv ( vec_len [u] dgram )
-    // Before the address is validated only the original path counts.
-    ? & != . c validated 0 ! ( bytes_eq from . c peer ) {
-        // migration to a new address: follow it (no active migration
-        // is advertised, so a real client never does this; a NAT
-        // rebinding does)
-        ( vec_clear [u] . c peer )
-        ( bytes_extend_bytes . c peer from )
-    } {}
+    // Peer-address change (NAT rebinding, or an off-path spoof). We do
+    // NOT move the connection here: an attacker who has only seen the
+    // cleartext DCID could otherwise redirect it with one junk datagram.
+    // The move is committed AFTER the packet loop, and only if a packet
+    // from the new address actually authenticated — tracked by whether
+    // last_activity advances, which happens solely on a successful
+    // decrypt. A spoofed datagram never decrypts, so it never migrates
+    // the connection. (RFC 9000 §9 — a path must be validated by an
+    // authenticated packet before it is used.)
+    : b __addr_changed & != . c validated 0 ! ( bytes_eq from . c peer )
+    : i __la_before . c last_activity
     // first Initial: learn the peer's SCID
     ? == ( vec_len [u] . c dcid ) 0 {
         : *QuicHdr h ( quic_hdr_parse dgram 0 8 )
@@ -1222,6 +1242,13 @@ $ `stdlib/std/quic_recovery.nu`
     ~ & >= off 0 < off ( vec_len [u] dgram ) {
         = off ( __qc_recv_packet c dgram off )
     }
+    // Commit a peer-address migration only now, and only if a packet in
+    // this datagram authenticated (last_activity advanced). This ties the
+    // move to a decrypt success, defeating off-path address-spoofing.
+    ? & __addr_changed > . c last_activity __la_before {
+        ( vec_clear [u] . c peer )
+        ( bytes_extend_bytes . c peer from )
+    } {}
     ? == . c state 2 {
         // a packet arrived while closing: repeat the close, rate-limited
         = . c close_pkts_since + . c close_pkts_since 1

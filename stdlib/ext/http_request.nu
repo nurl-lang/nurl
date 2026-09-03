@@ -605,6 +605,79 @@ $ `stdlib/std/simd.nu`
     i status
 }
 
+// RFC 9110 §5.6.2 token char: the only bytes allowed in a field-name.
+// ALPHA / DIGIT / "!#$%&'*+-.^_`|~". Excludes SP, CTL, ':' and the
+// separators, so this one predicate rejects whitespace-before-colon
+// (`Host : x`), obs-fold continuation lines (they start with SP/HTAB),
+// control characters and non-ASCII bytes in a name — every field-name
+// smuggling vector at once.
+@ __http_is_tchar i b → b {
+    ? & >= b 48 <= b 57 { ^ T } {}  // 0-9
+    ? & >= b 65 <= b 90 { ^ T } {}  // A-Z
+    ? & >= b 97 <= b 122 { ^ T } {}  // a-z
+    ? | == b 33 | == b 35 | == b 36 | == b 37 | == b 38 | == b 39 == b 42 { ^ T } {}  // ! # $ % & ' *
+    ? | == b 43 | == b 45 | == b 46 | == b 94 | == b 95 | == b 96 | == b 124 == b 126 { ^ T } {}  // + - . ^ _ ` | ~
+    ^ F
+}
+
+// True iff every byte of [from..to) is a valid field-name token char.
+// A zero-length range (from >= to) is NOT a valid name — the caller
+// rejects empty names separately, but we return F here as a backstop.
+@ __http_name_is_token ( Vec u ) buf i from i to → b {
+    ? >= from to { ^ F } {}
+    : ~ i k from
+    : ~ b ok T
+    ~ & ok < k to {
+        ? ! ( __http_is_tchar ( _bbyte buf k ) ) { = ok F } {}
+        = k + k 1
+    }
+    ^ ok
+}
+
+// True iff [from..to) contains a byte forbidden in a field-value:
+// NUL (0), LF (10) or CR (13). RFC 9110 §5.5 — these would forge a
+// header split if the value were re-serialised over HTTP/1.1.
+@ __http_value_has_ctl ( Vec u ) buf i from i to → b {
+    : ~ i k from
+    : ~ b bad F
+    ~ & ! bad < k to {
+        : i b ( _bbyte buf k )
+        ? | == b 0 | == b 10 == b 13 { = bad T } {}
+        = k + k 1
+    }
+    ^ bad
+}
+
+// Headers that may appear at most once. A repeat is a request-smuggling
+// vector (a front-end and back-end can disagree on which copy is
+// authoritative), so a second occurrence is rejected outright.
+// True iff `s` is a non-empty run of ASCII digits (RFC 9112 §6.3 for
+// Content-Length: `1*DIGIT`, no sign, no whitespace).
+// Upper bound on trailer lines in a chunked body (the socket-path
+// decoder). Matches http_server.nu's __max_trailer_lines; an unbounded
+// trailer section is a slowloris variant.
+@ __max_trailer_lines_req → i { ^ 64 }
+
+@ __http_all_digits String s → b {
+    : i n ( string_len s )
+    ? == n 0 { ^ F } {}
+    : ~ i k 0
+    : ~ b ok T
+    ~ & ok < k n {
+        : i b ( string_get s k )
+        ? | < b 48 > b 57 { = ok F } {}
+        = k + k 1
+    }
+    ^ ok
+}
+
+@ __http_is_singleton_name String name → b {
+    ? != 0 ( __string_eq_ci name `host` ) { ^ T } {}
+    ? != 0 ( __string_eq_ci name `content-length` ) { ^ T } {}
+    ? != 0 ( __string_eq_ci name `transfer-encoding` ) { ^ T } {}
+    ^ F
+}
+
 @ __parse_headers ( Vec u ) buf i from i head_end i header_max → ParsedHeaders {
     : ( Vec Header ) hs ( vec_new [Header] )
     : ~ i pos from
@@ -616,44 +689,61 @@ $ `stdlib/std/simd.nu`
             ? < nl 0 { = status 0 = done T } {
                 : i name_end ( __bindex_byte buf pos nl 58 )
                 ? < name_end 0 { = status 0 = done T } {
-                    // Header name: bytes [pos..name_end). Must be non-empty.
-                    ? <= name_end pos { = status 0 = done T } {
+                    // Header name: bytes [pos..name_end). Must be a non-empty
+                    // token. `__http_name_is_token` rejects an empty name,
+                    // whitespace before the colon (RFC 9112 §5.1 MUST-400),
+                    // obs-fold continuation lines (they begin with SP/HTAB,
+                    // §5.2), and any control / non-ASCII byte in the name.
+                    ? ! ( __http_name_is_token buf pos name_end ) { = status 0 = done T } {
                         // OWS handling around value: skip leading ws after ':',
                         // trim trailing ws before CRLF.
                         : i v_start ( __skip_ows buf + name_end 1 nl )
                         : i v_end ( __trim_ows_end buf v_start nl )
-                        ? > ( vec_len [Header] hs ) header_max {
-                            = status 2 = done T
-                        } {
-                            : String name ( _bsubstr buf pos name_end )
-                            : String value ( _bsubstr buf v_start v_end )
-                            // Folding: if a prior header has the same case-insens
-                            // name, append ", " + value to its value field.
-                            // Direct *Header iteration — `vec_get` would copy
-                            // the Header VALUE, breaking the in-place
-                            // string_push_str on the existing entry. The
-                            // pointer view is required here, not a workaround.
-                            : ~ b folded F
-                            : i hcount ( vec_len [Header] hs )
-                            : *Header hdata ( vec_data [Header] hs )
-                            : ~ i fk 0
-                            ~ & ! folded < fk hcount {
-                                : Header h . hdata fk
-                                ? ( __string_eq_ci . h name ( string_data name ) ) {
-                                    ( string_push_str . h value `, ` )
-                                    ( string_push_str . h value ( string_data value ) )
-                                    = folded T
-                                } {}
-                                = fk + fk 1
-                            }
-                            ? folded {
-                                ( string_free name )
-                                ( string_free value )
+                        // §5.5 — a field-value carrying NUL/CR/LF is malformed
+                        // (a bare CR sits inside the value because __bindex_crlf
+                        // only splits on CRLF; reject it so it cannot be
+                        // forwarded as a split).
+                        ? ( __http_value_has_ctl buf v_start v_end ) { = status 0 = done T } {
+                            ? >= ( vec_len [Header] hs ) header_max {
+                                = status 2 = done T
                             } {
-                                : Header newh @ Header { name value }
-                                ( vec_push [Header] hs newh )
+                                : String name ( _bsubstr buf pos name_end )
+                                : String value ( _bsubstr buf v_start v_end )
+                                // Folding: if a prior header has the same case-insens
+                                // name, append ", " + value to its value field.
+                                // Direct *Header iteration — `vec_get` would copy
+                                // the Header VALUE, breaking the in-place
+                                // string_push_str on the existing entry. The
+                                // pointer view is required here, not a workaround.
+                                : ~ b folded F
+                                : i hcount ( vec_len [Header] hs )
+                                : *Header hdata ( vec_data [Header] hs )
+                                : ~ i fk 0
+                                ~ & ! folded < fk hcount {
+                                    : Header h . hdata fk
+                                    ? ( __string_eq_ci . h name ( string_data name ) ) {
+                                        ( string_push_str . h value `, ` )
+                                        ( string_push_str . h value ( string_data value ) )
+                                        = folded T
+                                    } {}
+                                    = fk + fk 1
+                                }
+                                ? folded {
+                                    // Host / Content-Length / Transfer-Encoding
+                                    // are singletons (RFC 9112 §5.3 / §6.3): a
+                                    // second occurrence is a smuggling vector,
+                                    // not a list to comma-combine. Reject rather
+                                    // than fold.
+                                    : b singleton ( __http_is_singleton_name name )
+                                    ( string_free name )
+                                    ( string_free value )
+                                    ? singleton { = status 0 = done T } {}
+                                } {
+                                    : Header newh @ Header { name value }
+                                    ( vec_push [Header] hs newh )
+                                }
+                                = pos + nl 2
                             }
-                            = pos + nl 2
                         }
                     }
                 }
@@ -731,6 +821,38 @@ $ `stdlib/std/simd.nu`
         ( __req_line_parts_free rl )
         ( headers_free . hr headers )
         ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
+    } {}
+
+    // RFC 9112 §6.3 — Content-Length is `1*DIGIT`. A sign (`+5` / `-5`),
+    // whitespace, or any non-digit makes a front-end and back-end disagree
+    // on the framing; reject at head parse so no body reader ever sees a
+    // signed/garbage length. (Value OWS is already trimmed by the parser.)
+    ? __has_cl {
+        : ?String __cl2 ( header_get . hr headers `Content-Length` )
+        : b __cl_ok ?? __cl2 {
+            T x → { : b v ( __http_all_digits x ) ( string_free x ) v }
+            F _ → F
+        }
+        ? ! __cl_ok {
+            ( __req_line_parts_free rl )
+            ( headers_free . hr headers )
+            ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
+        } {}
+    } {}
+
+    // RFC 9112 §3.2 — an HTTP/1.1 request MUST carry a Host header. A
+    // missing Host is a 400 (a proxy could otherwise route it by an
+    // absolute-form target the origin never saw). HTTP/1.0 has no such
+    // requirement. Duplicate Host is already rejected as a singleton in
+    // __parse_headers.
+    ? v11 {
+        : ?String __host ( header_get . hr headers `Host` )
+        : b __has_host ?? __host { T x → { ( string_free x ) T } F _ → F }
+        ? ! __has_host {
+            ( __req_line_parts_free rl )
+            ( headers_free . hr headers )
+            ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
+        } {}
     } {}
 
     : HttpRequest req @ HttpRequest {
@@ -876,13 +998,19 @@ $ `stdlib/std/simd.nu`
                             // terminator on the socket, desyncing a persistent
                             // connection (a request-smuggling vector).
                             : ~ b tdone F
+                            : ~ i tcount 0
                             ~ & == status 1 ! tdone {
                                 : !String HttpReqErr trailer ( __read_crlf_line conn 0 )
                                 ?? trailer {
                                     T t → {
                                         : i tl ( string_len t )
                                         ( string_free t )
-                                        ? == tl 0 { = tdone T } {}
+                                        ? == tl 0 { = tdone T } {
+                                            = tcount + tcount 1
+                                            ? > tcount ( __max_trailer_lines_req ) {
+                                                = status 0 = tdone T
+                                            } {}
+                                        }
                                     }
                                     F _ → { = status 0 = tdone T }
                                 }
@@ -897,10 +1025,19 @@ $ `stdlib/std/simd.nu`
                                     T chunk → {
                                         ( vec_extend [u] body chunk )
                                         ( vec_free [u] chunk )
-                                        // Trailing CRLF after the chunk data.
+                                        // The chunk data MUST be followed by
+                                        // exactly CRLF (RFC 9112 §7.1) — an
+                                        // empty line. __read_crlf_line reads
+                                        // up to the next CRLF, so a non-empty
+                                        // line here means junk was smuggled
+                                        // between the data and its CRLF.
                                         : !String HttpReqErr eolr ( __read_crlf_line conn 0 )
                                         ?? eolr {
-                                            T eol → ( string_free eol )
+                                            T eol → {
+                                                : i el ( string_len eol )
+                                                ( string_free eol )
+                                                ? != el 0 { = status 0 = done T } {}
+                                            }
                                             F _ → = status 0
                                         }
                                     }

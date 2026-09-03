@@ -76,6 +76,7 @@ $ `stdlib/ext/http2_hpack.nu`
     H2ConnRefusedStream  // exceeded MAX_CONCURRENT_STREAMS
     H2ConnInternal
     H2ConnGoaway  // peer initiated graceful shutdown
+    H2ConnEnhanceCalm  // peer flooded cheap frames / reset streams (DoS)
     H2ConnOther
 }
 
@@ -94,6 +95,7 @@ $ `stdlib/ext/http2_hpack.nu`
         H2ConnRefusedStream → `H2ConnRefusedStream`
         H2ConnInternal → `H2ConnInternal`
         H2ConnGoaway → `H2ConnGoaway`
+        H2ConnEnhanceCalm → `H2ConnEnhanceCalm`
         H2ConnOther → `H2ConnOther`
     }
 }
@@ -221,6 +223,19 @@ $ `stdlib/ext/http2_hpack.nu`
     i partial_headers_stream  // stream id currently mid HEADERS+CONTINUATION
     // sequence, 0 if none. Per §6.10 no other
     // frames may interleave.
+    // ── DoS flood budgets (RFC 9113 §10.5, the CVE-2023-44487 class) ──
+    // Cheap frames that make no request progress cannot be sent without
+    // limit: a peer that opens+resets streams (Rapid Reset), or floods
+    // PING / SETTINGS / PRIORITY / WINDOW_UPDATE / empty DATA, is doing
+    // work-per-frame on us for free. Each counter has an absolute per-
+    // connection ceiling; crossing it is a connection error answered
+    // with GOAWAY(ENHANCE_YOUR_CALM). `streams_opened` also bounds the
+    // total work a single connection can extract (there is no other
+    // per-connection request cap on the h2 path, unlike HTTP/1.1's
+    // max_keepalive_requests).
+    i streams_opened  // total peer-initiated streams admitted (monotonic)
+    i peer_resets  // RST_STREAM received + streams we auto-reset/refused
+    i idle_frames  // no-progress frames since the last real stream progress
     ( Vec u ) rx  // OWNED receive buffer: bytes read off `tcp` and not yet
     // consumed as frames (h2_read_frame_buf). Seeded with whatever the
     // HTTP/1.1 keep-alive loop had read before it recognised the preface.
@@ -327,6 +342,8 @@ $ `stdlib/ext/http2_hpack.nu`
         0
         F
         0
+        // streams_opened, peer_resets, idle_frames
+        0 0 0
         carry
         body_max
         ( response_text 500 `internal server error\n` )
@@ -471,16 +488,29 @@ $ `stdlib/ext/http2_hpack.nu`
                 : i old . cur peer_initial_window_size
                 : i delta - value old
                 = . cur peer_initial_window_size value
-                // Adjust all open streams' send_window by the delta.
+                // Adjust all open streams' send_window by the delta. If the
+                // change pushes any stream's window past 2^31-1 it is a
+                // FLOW_CONTROL_ERROR (RFC 9113 §6.9.2) — the value cap above
+                // alone does not prevent this, since an already-credited
+                // stream plus a positive delta can overflow.
                 : i ns ( vec_len [H2Stream] . cur streams )
                 : *H2Stream sp ( vec_data [H2Stream] . cur streams )
                 : ~ i j 0
-                ~ < j ns {
+                : ~ b iws_overflow F
+                ~ & ! iws_overflow < j ns {
                     : H2Stream s . sp j
-                    = . s send_window + . s send_window delta
-                    = . sp j s
-                    = j + j 1
+                    : i nsw + . s send_window delta
+                    ? > nsw ( h2_max_window_size ) {
+                        = iws_overflow T
+                    } {
+                        = . s send_window nsw
+                        = . sp j s
+                        = j + j 1
+                    }
                 }
+                ? iws_overflow {
+                    ^ @ !H2Connection H2ConnErr { F H2ConnFlowControl }
+                } {}
             }
             5 → {
                 // MAX_FRAME_SIZE must be 2^14..2^24-1 (§6.5.2).
@@ -528,6 +558,26 @@ $ `stdlib/ext/http2_hpack.nu`
 // both protocols enforce the same request-body ceiling. A stream that
 // exceeds it is reset with ENHANCE_YOUR_CALM; the connection survives.
 @ h2_default_max_body_bytes → i { ^ 10485760 }
+
+// ── Flood ceilings (RFC 9113 §10.5) ──────────────────────────────────
+// Total peer-initiated streams one connection may open. Browsers
+// multiplex heavily but reuse a handful of streams sequentially; 10 000
+// is far above any legitimate session yet bounds the total handler work
+// a Rapid-Reset (CVE-2023-44487) flood can extract before the connection
+// is torn down.
+@ __h2_max_streams_per_conn → i { ^ 10000 }
+// RST_STREAM frames received (plus streams we refuse/auto-reset) before
+// we treat the peer as launching a reset flood. Legitimate cancellation
+// is rare; a client that resets 1 000 streams on one connection is
+// abusive regardless of whether each was dispatched.
+@ __h2_max_resets → i { ^ 1000 }
+// No-progress frames (PING / SETTINGS / PRIORITY / WINDOW_UPDATE / empty
+// DATA / unknown / surplus CONTINUATION) tolerated between two moments of
+// real request progress. Reset to zero whenever a stream is opened or a
+// DATA frame carries payload, so ordinary keep-alive PINGs interleaved
+// with requests never accumulate. A pure control-frame flood has no such
+// progress and trips the ceiling.
+@ __h2_max_idle_frames → i { ^ 10000 }
 
 @ __h2_headers_priority_dep H2Frame f → i {
     ? == 0 & . f flags ( h2_flag_priority ) { ^ -1 } {}
@@ -651,6 +701,36 @@ $ `stdlib/ext/http2_hpack.nu`
     ^ T
 }
 
+// RFC 9113 §8.2.1 — a field NAME must be non-empty and must not contain
+// NUL, CR, LF or SP (uppercase is checked separately). Scans the full
+// String length so an embedded NUL cannot hide the tail from the check.
+@ __h2_name_malformed String nm → b {
+    : i n ( string_len nm )
+    ? == n 0 { ^ T } {}
+    : ~ i k 0
+    : ~ b bad F
+    ~ & ! bad < k n {
+        : i b ( string_get nm k )
+        ? | == b 0 | == b 10 | == b 13 == b 32 { = bad T } {}
+        = k + k 1
+    }
+    ^ bad
+}
+
+// §8.2.1 — a field VALUE must not contain NUL, CR or LF. These would
+// forge a header split if the request were forwarded over HTTP/1.1.
+@ __h2_value_malformed String vl → b {
+    : i n ( string_len vl )
+    : ~ i k 0
+    : ~ b bad F
+    ~ & ! bad < k n {
+        : i b ( string_get vl k )
+        ? | == b 0 | == b 10 == b 13 { = bad T } {}
+        = k + k 1
+    }
+    ^ bad
+}
+
 @ __h2_validate_request_headers H2Stream s → H2ConnErr {
     : ( Vec Header ) hdrs . s decoded_headers
     : i nh ( vec_len [Header] hdrs )
@@ -670,6 +750,12 @@ $ `stdlib/ext/http2_hpack.nu`
         : b is_pseudo ( __h2_is_pseudo nm )
         // §8.2.1 — names MUST be lowercase
         ? ( __h2_name_has_uppercase nm ) { = bad T } {}
+        // §8.2.1 — reject malformed names (empty, NUL/CR/LF/SP) and any
+        // value carrying NUL/CR/LF. A pseudo-header name begins with ':'
+        // which __h2_name_malformed tolerates (':' is not one of the
+        // forbidden bytes); only the injection bytes are rejected.
+        ? & ! bad ( __h2_name_malformed . h name ) { = bad T } {}
+        ? & ! bad ( __h2_value_malformed . h value ) { = bad T } {}
         ? & ! bad is_pseudo {
             // §8.3 — pseudo-headers MUST precede regular ones
             ? regular_seen { = bad T } {
@@ -966,6 +1052,8 @@ $ `stdlib/ext/http2_hpack.nu`
     // the peer is doing something we can't service mid-write; bail
     // and let the main loop handle subsequent frames after the empty
     // DATA(END_STREAM) tear-down below.
+    : ~ b pump_has_err F
+    : ~ H2ConnErr pump_err H2ConnOther
     ? & > body_len 0 ! emitted_end_stream {
         : ~ b bail F
         ~ & ! bail < pos body_len {
@@ -991,18 +1079,35 @@ $ `stdlib/ext/http2_hpack.nu`
                                 : i w2 & # i . wp 2 255
                                 : i w3 & # i . wp 3 255
                                 : i inc + + + << & w0 127 24 << w1 16 << w2 8 w3
-                                ? > inc 0 {
+                                // Same flow-control rules as the main loop:
+                                // a 0 increment is a PROTOCOL_ERROR and a
+                                // window past 2^31-1 is a FLOW_CONTROL_ERROR
+                                // (RFC 9113 §6.9.1). Without these the pump
+                                // let a peer drive both windows arbitrarily
+                                // high while a response was stalled.
+                                ? == inc 0 {
+                                    = pump_has_err T = pump_err H2ConnProtocol = bail T
+                                } {
                                     ? == fsid 0 {
-                                        = . cur conn_send_window
-                                        + . cur conn_send_window inc
+                                        : i nw + . cur conn_send_window inc
+                                        ? > nw ( h2_max_window_size ) {
+                                            = pump_has_err T = pump_err H2ConnFlowControl = bail T
+                                        } {
+                                            = . cur conn_send_window nw
+                                        }
                                     } {
                                         ? == fsid sid {
                                             : H2Stream usc ( __h2_get_stream cur sidx )
-                                            = . usc send_window + . usc send_window inc
-                                            ( __h2_set_stream cur sidx usc )
+                                            : i nsw + . usc send_window inc
+                                            ? > nsw ( h2_max_window_size ) {
+                                                = pump_has_err T = pump_err H2ConnFlowControl = bail T
+                                            } {
+                                                = . usc send_window nsw
+                                                ( __h2_set_stream cur sidx usc )
+                                            }
                                         } {}
                                     }
-                                } {}
+                                }
                             } {
                                 ? == ft 2 {
                                     // PRIORITY — accepted on closed/half-
@@ -1079,6 +1184,12 @@ $ `stdlib/ext/http2_hpack.nu`
             }
         }
     } {}
+    // A WINDOW_UPDATE seen by the pump that violated flow control is a
+    // connection error — tear the whole connection down (GOAWAY) rather
+    // than limp on with a corrupted window.
+    ? pump_has_err {
+        ^ @ !H2Connection H2ConnErr { F pump_err }
+    } {}
     // If we bailed before the body was fully delivered (peer hit us with
     // a non-WINDOW_UPDATE non-PRIORITY frame, or a read failed mid-write),
     // close the stream with an empty DATA(END_STREAM). §6.9.1 explicitly
@@ -1139,6 +1250,30 @@ $ `stdlib/ext/http2_hpack.nu`
                     ? | != ft ( h2_type_continuation )
                     != sid . cur partial_headers_stream
                     { = err H2ConnProtocol = ok F } {}
+                } {}
+
+                // ── Flood accounting (RFC 9113 §10.5) ──────────────────
+                // Classify the frame before dispatch: a HEADERS (new
+                // request or trailers) or a DATA frame carrying payload is
+                // real progress and clears the idle-frame run; every cheap
+                // control frame or empty DATA frame adds to it. RST_STREAM
+                // is counted separately (Rapid Reset). streams_opened is
+                // bumped where a new stream is admitted, below.
+                : i __plen ( vec_len [u] . frame payload )
+                ? | == ft ( h2_type_headers ) & == ft ( h2_type_data ) > __plen 0 {
+                    = . cur idle_frames 0
+                } {
+                    ? | == ft ( h2_type_ping ) | == ft ( h2_type_settings ) | == ft ( h2_type_priority ) | == ft ( h2_type_window_update ) | == ft ( h2_type_continuation ) & == ft ( h2_type_data ) == __plen 0 {
+                        = . cur idle_frames + . cur idle_frames 1
+                    } {
+                        ? > ft 9 { = . cur idle_frames + . cur idle_frames 1 } {}
+                    }
+                }
+                ? == ft ( h2_type_rst_stream ) {
+                    = . cur peer_resets + . cur peer_resets 1
+                } {}
+                ? & ok | > . cur idle_frames ( __h2_max_idle_frames ) > . cur peer_resets ( __h2_max_resets ) {
+                    = err H2ConnEnhanceCalm = ok F
                 } {}
 
                 ?? ft {
@@ -1378,6 +1513,14 @@ $ `stdlib/ext/http2_hpack.nu`
                                     ( h2_send_rst_stream . cur tcp sid
                                     ( h2_err_refused_stream ) )
                                     ?? rs { T _ → {} F _ → {} }
+                                    // A stream we refuse over the concurrency
+                                    // cap counts toward the reset budget: a
+                                    // peer that keeps offering streams past
+                                    // the cap is a flood, not a client.
+                                    = . cur peer_resets + . cur peer_resets 1
+                                    ? > . cur peer_resets ( __h2_max_resets ) {
+                                        = err H2ConnEnhanceCalm = ok F
+                                    } {}
                                 } {
                                     : H2Stream new_s ( __h2_stream_new sid
                                     . cur peer_initial_window_size
@@ -1404,6 +1547,13 @@ $ `stdlib/ext/http2_hpack.nu`
                                             }
                                             ( vec_push [H2Stream] . cur streams new_s )
                                             = . cur last_peer_stream_id sid
+                                            // Total streams this connection
+                                            // has opened, bounding the work a
+                                            // Rapid-Reset flood can extract.
+                                            = . cur streams_opened + . cur streams_opened 1
+                                            ? > . cur streams_opened ( __h2_max_streams_per_conn ) {
+                                                = err H2ConnEnhanceCalm = ok F
+                                            } {}
                                             // If complete, decode + dispatch
                                             // (skip if the cap guard tripped).
                                             ? & ok . new_s headers_complete {
@@ -1710,6 +1860,7 @@ $ `stdlib/ext/http2_hpack.nu`
         H2ConnFrameSize → ( h2_err_frame_size_error )
         H2ConnRefusedStream → ( h2_err_refused_stream )
         H2ConnInternal → ( h2_err_internal_error )
+        H2ConnEnhanceCalm → ( h2_err_enhance_your_calm )
         _ → ( h2_err_internal_error )
     }
 }
