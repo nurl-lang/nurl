@@ -29,8 +29,9 @@ renders its table from. The
 [`bench` workflow](.github/workflows/bench.yml) refreshes both weekly on a
 fixed CI runner. Numbers are machine-specific, so run the suite locally for
 figures you can trust. The HTTP-server peer benchmarks are separate:
-[`bench/HTTP_RESULTS.md`](bench/HTTP_RESULTS.md) (HTTP/1.1) and
-[`bench/HTTP2_RESULTS.md`](bench/HTTP2_RESULTS.md) (HTTP/2).
+[`bench/HTTP_RESULTS.md`](bench/HTTP_RESULTS.md) (HTTP/1.1),
+[`bench/HTTP2_RESULTS.md`](bench/HTTP2_RESULTS.md) (HTTP/2) and
+[`bench/HTTP3_RESULTS.md`](bench/HTTP3_RESULTS.md) (HTTP/3 over QUIC).
 
 ---
 
@@ -178,7 +179,7 @@ one:
 
 | Gate | Where | What it proves |
 |---|---|---|
-| Linux x86_64 | `ubuntu-latest` | Fixed point + full corpus, `examples/` frontend gate, `nurlfmt` canonical-format gate, and ~20 targeted gates (CRC-32, XXH64, Zstandard against the `zstd` CLI, DWARF, HTTP per-request leak, HTTP/2 conformance with h2spec, diagnostic coverage) |
+| Linux x86_64 | `ubuntu-latest` | Fixed point + full corpus, `examples/` frontend gate, `nurlfmt` canonical-format gate, and ~20 targeted gates (CRC-32, XXH64, Zstandard against the `zstd` CLI, DWARF, HTTP per-request leak, HTTP/2 conformance with h2spec, HTTP/3 + QUIC conformance with h3spec, diagnostic coverage) |
 | FreeBSD 14.2 | real VM | The same corpus on a second OS |
 | **Windows x86_64** | `windows-latest` | `build.bat` fixed point + the Windows golden corpus, then `nurl.bat` builds and runs a program with both the bundled zig and clang |
 | **macOS ARM64** | `macos-14` (Apple Silicon) | `./build.sh` stage1 ≡ stage2 fixed point + the full corpus against the **same goldens as Linux**, plus the `examples/` gate |
