@@ -3,11 +3,12 @@ LINK OK
 EXIT 0
 OUTPUT
 client_timeout_first=1
+resolve_failed=0
 resolve_family=4
 resolve_port_match=1
 resolve_format_match=1
 client_send_ping=4
-client_recv=pong
+client_recv_pong=1
 client_recv_from_server_port=1
 client_recv_from_family=4
 client_send_second=32
