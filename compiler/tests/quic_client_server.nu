@@ -101,6 +101,22 @@ $ `stdlib/ext/http3_server.nu`
                     ( sleep_ms 100 )
                     ( client_round )
                     ( client_round_verify )
+                    // The server's own drain timer (RFC 9000 §10.2, 3xPTO from
+                    // when it saw our CONNECTION_CLOSE) is what fires event 3 —
+                    // not anything the client can see. On a real OS thread
+                    // that has already happened by now; under a cooperative
+                    // scheduler (the "no libc" build's unikernel/net/sockets.nu)
+                    // the server only advances when this fiber yields, and
+                    // scheduling gaps look like loss to its RTT estimate, so
+                    // PTO can back off to several seconds. Give it up to 15s,
+                    // yielding in short slices (sleep_ms is what drives the
+                    // server coroutine forward there) — a no-op wait on a
+                    // thread where it is already done.
+                    : ~ i waited 0
+                    ~ & == g_server_gone 0 < waited 15000 {
+                        ( sleep_ms 100 )
+                        = waited + waited 100
+                    }
                     ( quic_server_stop srv )
                     ( thread_join t )
                     : *u server_env # *u server 1
