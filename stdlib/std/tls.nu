@@ -246,7 +246,7 @@ $ `stdlib/std/async_ffi.nu`
 // random, so the pair looks fine and the classical half is silently
 // worthless. Returning an empty vector here makes the caller's
 // `_all_zero` test fail closed.
-@ __hybrid_shared * TlsConn c ( Vec u ) priv ( Vec u ) spub → ( Vec u ) {
+@ __hybrid_shared ( Vec u ) dk ( Vec u ) priv ( Vec u ) spub → ( Vec u ) {
     : ( Vec u ) ct ( bytes_slice spub 0 1088 )
     : ( Vec u ) xpub ( bytes_slice spub 1088 1120 )
     : ( Vec u ) xs ( x25519 priv xpub )
@@ -254,7 +254,7 @@ $ `stdlib/std/async_ffi.nu`
         ( vec_free [u] xs ) ( vec_free [u] xpub ) ( vec_free [u] ct )
         ^ ( vec_new [u] )
     } {}
-    : ( Vec u ) out ( mlkem_decaps 768 . c kx_mlkem ct )
+    : ( Vec u ) out ( mlkem_decaps 768 dk ct )
     ( bytes_extend_bytes out xs )
     ( vec_free [u] xs )
     ( vec_free [u] xpub )
@@ -521,11 +521,11 @@ $ `stdlib/std/async_ffi.nu`
 }
 
 // ── ClientHello ───────────────────────────────────────────────────
-@ __build_client_hello s host ( Vec u ) pubkey ( Vec u ) p256pub ( Vec u ) pqpub ( Vec u ) random ( Vec u ) sessid s alpn ( Vec u ) psk_id i obf_age → ( Vec u ) {
+@ __build_client_hello ( Vec u ) host ( Vec u ) pubkey ( Vec u ) p256pub ( Vec u ) pqpub ( Vec u ) random ( Vec u ) sessid ( Vec u ) alp_list ( Vec u ) ext_extra ( Vec u ) psk_id i obf_age → ( Vec u ) {
     : ( Vec u ) body ( vec_new [u] )
     ( _tls_u16 body 771 )  // legacy_version 0x0303
     ( _tls_cat body random )  // 32-byte random
-    ( vec_push [u] body # u 32 )  // session id length
+    ( vec_push [u] body # u ( vec_len [u] sessid ) )  // legacy_session_id (empty for QUIC)
     ( _tls_cat body sessid )
     // cipher_suites: TLS_CHACHA20_POLY1305_SHA256 (0x1303) +
     // TLS_AES_128_GCM_SHA256 (0x1301) — both use the SHA-256 key
@@ -556,12 +556,12 @@ $ `stdlib/std/async_ffi.nu`
 
     // server_name (0x0000)
     : ( Vec u ) sni ( vec_new [u] )
-    : i hl ( nurl_str_len host )
+    : i hl ( vec_len [u] host )
     ( _tls_u16 sni + hl 3 )  // ServerNameList length
     ( vec_push [u] sni # u 0 )  // name_type host_name
     ( _tls_u16 sni hl )
     : ~ i k 0
-    ~ < k hl { ( vec_push [u] sni # u ( nurl_str_get host k ) ) = k + k 1 }
+    ~ < k hl { ( vec_push [u] sni # u ( _t_bget host k ) ) = k + k 1 }
     ( _tls_u16 ext 0 )
     ( _blk16 ext sni )
     ( vec_free [u] sni )
@@ -660,11 +660,11 @@ $ `stdlib/std/async_ffi.nu`
     ( vec_free [u] ks )
 
     // application_layer_protocol_negotiation (0x0010), RFC 7301: the
-    // protocols we speak, most preferred first ("h2 http/1.1" — the same
-    // space-separated form the server's listener takes). Only emitted
-    // when at least one protocol was requested; otherwise the extension
-    // is omitted and the connect behaves exactly as before.
-    : ( Vec u ) alp_list ( tls_alpn_pack alpn )
+    // protocols we speak, most preferred first — `alp_list` is the wire
+    // form tls_alpn_pack makes of "h2 http/1.1", the same list the
+    // server's listener takes. Only emitted when at least one protocol
+    // was requested; otherwise the extension is omitted and the connect
+    // behaves exactly as before.
     ? > ( vec_len [u] alp_list ) 0 {
         : ( Vec u ) alp ( vec_new [u] )
         ( _tls_u16 alp ( vec_len [u] alp_list ) )  // ProtocolNameList length
@@ -673,7 +673,6 @@ $ `stdlib/std/async_ffi.nu`
         ( _blk16 ext alp )
         ( vec_free [u] alp )
     } {}
-    ( vec_free [u] alp_list )
 
     // ── resumption (RFC 8446 §4.2.9 + §4.2.11) ──
     // psk_key_exchange_modes goes in EVERY hello, offer or not: it is
@@ -690,6 +689,9 @@ $ `stdlib/std/async_ffi.nu`
     ( _tls_u16 ext 45 )
     ( _blk16 ext modes )
     ( vec_free [u] modes )
+    // Whatever the driver asked for (QUIC: quic_transport_parameters),
+    // already wire-framed.
+    ( _tls_cat ext ext_extra )
     // pre_shared_key MUST be the last extension: its binder is an HMAC
     // over the ClientHello up to (not including) the binders list, so
     // everything else has to be in place first. The binder bytes here
@@ -880,34 +882,6 @@ $ `stdlib/std/async_ffi.nu`
     ^ == . c resumed 1
 }
 
-// Load an exported session onto a fresh conn as the offer for its
-// handshake. F (and nothing loaded) for an empty, malformed or expired
-// blob — the caller then simply does a full handshake.
-@ __sess_load * TlsConn c ( Vec u ) sess → b {
-    : i n ( vec_len [u] sess )
-    ? | < n 21 != ( _t_bget sess 0 ) 1 { ^ F } {}
-    : i age_add ( _rdint sess 1 4 )
-    : i lifetime ( _rdint sess 5 4 )
-    : i received ( _rdint sess 9 8 )
-    : i plen ( _rdint sess 17 2 )
-    : i tp + 19 plen
-    ? > + tp 2 n { ^ F } {}
-    : i tlen ( _rdint sess tp 2 )
-    ? | == tlen 0 != + + tp 2 tlen n { ^ F } {}
-    // RFC 8446 §4.6.1: a ticket is usable for ticket_lifetime seconds
-    // (never more than 7 days); past that the server will decline it, so
-    // do not offer it.
-    : i age_ms - ( now_ms ) received
-    ? | < age_ms 0 > age_ms * lifetime 1000 { ^ F } {}
-    ( vec_free [u] . c tk_psk ) ( vec_free [u] . c tk_ticket )
-    = . c tk_psk ( bytes_slice sess 19 tp )
-    = . c tk_ticket ( bytes_slice sess + tp 2 n )
-    = . c tk_age_add age_add
-    = . c tk_lifetime lifetime
-    = . c tk_received_ms received
-    ^ T
-}
-
 // Post-handshake messages that arrive inside the application-data
 // stream. NewSessionTicket (4) is kept — its PSK is derived from this
 // connection's resumption_master_secret — so tls_session_export can hand
@@ -1036,6 +1010,13 @@ $ `stdlib/std/async_ffi.nu`
 // space-separated offer `list`.
 @ _alpn_offered s list ( Vec u ) sel → b {
     : ( Vec u ) packed ( tls_alpn_pack list )
+    : b r ( _alpn_offered_packed packed sel )
+    ( vec_free [u] packed )
+    ^ r
+}
+
+// The same over an offer already in wire form.
+@ _alpn_offered_packed ( Vec u ) packed ( Vec u ) sel → b {
     : i n ( vec_len [u] packed )
     : i sl ( vec_len [u] sel )
     : ~ i p 0
@@ -1053,7 +1034,6 @@ $ `stdlib/std/async_ffi.nu`
         } {}
         = p + + p 1 tl
     }
-    ( vec_free [u] packed )
     ^ found
 }
 
@@ -1096,11 +1076,495 @@ $ `stdlib/std/async_ffi.nu`
     ^ out
 }
 
-// Core client handshake. `alpn` is the space-separated list of ALPN
-// protocols to offer, most preferred first (e.g. "h2 http/1.1"); empty
-// means no ALPN extension is sent. The negotiated protocol (from the
-// server's EncryptedExtensions, checked to be one we offered) is stored
-// in `c.alpn_sel`.
+// ── the client handshake machine ──────────────────────────────────
+//
+// `CliHs` is the TLS 1.3 client handshake with no socket in it — the
+// same split `std/tls_server.nu` gives the server in `SrvHs`: whole
+// handshake messages go in, the messages to send come out, and the
+// traffic secrets are read straight off the machine. Two drivers:
+//
+//   * `__tls_handshake` below (TCP): sends `out_ch` as a plaintext
+//     record, feeds the ServerHello and then the encrypted server
+//     flight message by message, installs the secrets as record keys,
+//     sends `out_fin` under the handshake keys.
+//   * `std/quic_tls.nu` (QUIC, RFC 9001, client role): CRYPTO frame
+//     bytes per encryption level, packet keys from the same secrets,
+//     the quic_transport_parameters extension carried through
+//     `ext_out` / `ext_want` / `ext_in`.
+//
+//   ( _cli_hs_new server_name alpn sess ) → *CliHs   `alpn` = "h2 http/1.1" (empty: no ALPN);
+//                                                    `sess` = a tls_session_export blob (empty: none) —
+//                                                    a usable one becomes the pre_shared_key offer
+//   ( _cli_hs_set_ext h ext_out want )    → v        append `ext_out` (wire-framed extension(s)) to the
+//                                                    ClientHello; require EE extension `want` (0 = none)
+//   ( _cli_hs_set_compat h on )           → v        0 = no middlebox compatibility: an empty
+//                                                    legacy_session_id (QUIC, RFC 9001 §8.4); default 1
+//   ( _cli_hs_start h )                   → v        key shares + ClientHello into `out_ch`
+//   ( _cli_hs_server_hello h sh )         → i        0 ok · alert description otherwise. With TLS 1.2
+//                                                    chosen `version` is 12, nothing is derived, `sh`
+//                                                    is kept, and the caller decides what to do
+//   ( _cli_hs_message h m )               → i        EncryptedExtensions / Certificate /
+//                                                    CertificateVerify / Finished; 0 ok · alert
+//                                                    description. After the Finished `state` is 3 and
+//                                                    out_fin, c_ap / s_ap, res_master are set
+//   ( _cli_hs_err h )                     → TlsErr   what a failure was, in the record layer's terms
+//   ( _cli_hs_free h )                    → v
+//
+// `state`: 0 new · 1 ClientHello built (awaiting ServerHello) · 2
+// handshake secrets derived (awaiting the server flight) · 3 done ·
+// 4 failed. Every `( Vec u )` field is owned by the machine until
+// `_cli_hs_free`; a caller that wants to keep one copies (or moves) it.
+//
+// The certificate is NOT verified here: `cert_msg`, `cv_scheme`,
+// `cv_sig` and `th_cert` are captured for `tls_cert_verify`, exactly as
+// the record layer has always done (`__verify_conn`). A resumed
+// handshake captures nothing — the PSK authenticates the server.
+
+: CliHs {
+    ( Vec u ) sni  // host bytes for server_name
+    ( Vec u ) alpn  // ALPN offer, wire form (tls_alpn_pack)
+    ( Vec u ) ext_out  // extra ClientHello extension(s), wire-framed
+    i ext_want  // EncryptedExtensions extension type required (0 = none)
+    ( Vec u ) ext_in  // its body once seen
+    i ext_in_present
+    i compat  // 1: TLS-over-TCP middlebox compatibility (a 32-byte legacy_session_id, RFC 8446 D.4);
+    // 0: QUIC, where the session id MUST be empty (RFC 9001 §8.4)
+    i state
+    i err  // failure kind: 1 TlsHandshake 2 TlsProtocol 3 TlsBadCipher 4 TlsHRR
+    * Sha256 trh  // incremental transcript hash (0 once finished)
+    i cipher  // 0 ChaCha20-Poly1305 · 1 AES-128-GCM
+    i version  // 13 / 12, known from the ServerHello on
+    i kx_group  // 4588 X25519MLKEM768 · 29 x25519 · 23 secp256r1
+    i resumed  // 1 when the server took the offered ticket
+    i offer  // 1 when a ticket was offered
+    ( Vec u ) x_priv  // X25519 ephemeral
+    ( Vec u ) x_pub
+    ( Vec u ) p256_priv  // P-256 ephemeral scalar
+    ( Vec u ) pq_dk  // ML-KEM-768 decapsulation key
+    ( Vec u ) random
+    ( Vec u ) sessid
+    ( Vec u ) tk_ticket  // the offered ticket and its PSK
+    ( Vec u ) tk_psk
+    i tk_age_add
+    i tk_lifetime
+    i tk_received_ms
+    ( Vec u ) res_early  // early_secret(PSK) while offering
+    ( Vec u ) alpn_sel  // what the server selected (checked against `alpn`)
+    ( Vec u ) c_hs
+    ( Vec u ) s_hs
+    ( Vec u ) master
+    ( Vec u ) c_ap
+    ( Vec u ) s_ap
+    ( Vec u ) res_master
+    ( Vec u ) cert_msg  // raw Certificate message, for the verifier
+    ( Vec u ) cv_sig  // CertificateVerify signature
+    ( Vec u ) th_cert  // transcript hash through Certificate
+    i cv_scheme  // CertificateVerify SignatureScheme
+    ( Vec u ) out_ch  // the ClientHello, to send in the clear
+    ( Vec u ) out_fin  // the client Finished, to send under c_hs
+    ( Vec u ) sh  // the ServerHello, kept only for a TLS 1.2 fallback
+}
+
+@ _cli_hs_new s server_name s alpn ( Vec u ) sess → *CliHs {
+    : *CliHs h # *CliHs ( nurl_alloc Z CliHs )
+    = . h sni ( bytes_from_str server_name )
+    = . h alpn ( tls_alpn_pack alpn )
+    = . h ext_out ( vec_new [u] )
+    = . h ext_want 0
+    = . h ext_in ( vec_new [u] )
+    = . h ext_in_present 0
+    = . h compat 1
+    = . h state 0
+    = . h err 0
+    // Incremental transcript hash, snapshotted at the checkpoints —
+    // the server's machine hashes the same way.
+    = . h trh ( sha256_init )
+    = . h cipher 0
+    = . h version 13
+    = . h kx_group 0
+    = . h resumed 0
+    = . h offer 0
+    = . h x_priv ( vec_new [u] )
+    = . h x_pub ( vec_new [u] )
+    = . h p256_priv ( vec_new [u] )
+    = . h pq_dk ( vec_new [u] )
+    = . h random ( vec_new [u] )
+    = . h sessid ( vec_new [u] )
+    = . h tk_ticket ( vec_new [u] )
+    = . h tk_psk ( vec_new [u] )
+    = . h tk_age_add 0
+    = . h tk_lifetime 0
+    = . h tk_received_ms 0
+    = . h res_early ( vec_new [u] )
+    = . h alpn_sel ( vec_new [u] )
+    = . h c_hs ( vec_new [u] )
+    = . h s_hs ( vec_new [u] )
+    = . h master ( vec_new [u] )
+    = . h c_ap ( vec_new [u] )
+    = . h s_ap ( vec_new [u] )
+    = . h res_master ( vec_new [u] )
+    = . h cert_msg ( vec_new [u] )
+    = . h cv_sig ( vec_new [u] )
+    = . h th_cert ( vec_new [u] )
+    = . h cv_scheme 0
+    = . h out_ch ( vec_new [u] )
+    = . h out_fin ( vec_new [u] )
+    = . h sh ( vec_new [u] )
+    // A usable exported session becomes the pre_shared_key offer; the
+    // server may still decline it (rotated ticket key, expired, or no
+    // resumption at all), in which case the handshake is simply the
+    // full one — nothing here is trusted until the ServerHello says
+    // the ticket was taken.
+    ? ( __cli_sess_load h sess ) {
+        = . h offer 1
+        ( vec_free [u] . h res_early )
+        = . h res_early ( _psk_early . h tk_psk )
+    } {}
+    ^ h
+}
+
+@ _cli_hs_set_ext * CliHs h ( Vec u ) ext_out i want → v {
+    ( vec_clear [u] . h ext_out )
+    ( bytes_extend_bytes . h ext_out ext_out )
+    = . h ext_want want
+}
+
+@ _cli_hs_set_compat * CliHs h i on → v { = . h compat on }
+
+@ _cli_hs_free * CliHs h → v {
+    ? == # i h 0 { ^ } {}
+    ? != # i . h trh 0 { ( _trh_abort . h trh ) } {}
+    ( vec_free [u] . h sni )
+    ( vec_free [u] . h alpn )
+    ( vec_free [u] . h ext_out )
+    ( vec_free [u] . h ext_in )
+    ( vec_free [u] . h x_priv )
+    ( vec_free [u] . h x_pub )
+    ( vec_free [u] . h p256_priv )
+    ( vec_free [u] . h pq_dk )
+    ( vec_free [u] . h random )
+    ( vec_free [u] . h sessid )
+    ( vec_free [u] . h tk_ticket )
+    ( vec_free [u] . h tk_psk )
+    ( vec_free [u] . h res_early )
+    ( vec_free [u] . h alpn_sel )
+    ( vec_free [u] . h c_hs )
+    ( vec_free [u] . h s_hs )
+    ( vec_free [u] . h master )
+    ( vec_free [u] . h c_ap )
+    ( vec_free [u] . h s_ap )
+    ( vec_free [u] . h res_master )
+    ( vec_free [u] . h cert_msg )
+    ( vec_free [u] . h cv_sig )
+    ( vec_free [u] . h th_cert )
+    ( vec_free [u] . h out_ch )
+    ( vec_free [u] . h out_fin )
+    ( vec_free [u] . h sh )
+    ( nurl_free # s h )
+}
+
+// Discard a live transcript hasher (error paths).
+@ _trh_abort * Sha256 h → v {
+    : ( Vec u ) d ( sha256_final h )
+    ( vec_free [u] d )
+}
+
+@ __cli_hs_fail * CliHs h i err i alert → i {
+    = . h state 4
+    = . h err err
+    ^ alert
+}
+
+@ _cli_hs_err * CliHs h → TlsErr {
+    ? == . h err 2 { ^ # TlsErr TlsProtocol } {}
+    ? == . h err 3 { ^ # TlsErr TlsBadCipher } {}
+    ? == . h err 4 { ^ # TlsErr TlsHRR } {}
+    ^ # TlsErr TlsHandshake
+}
+
+// Load an exported session onto the machine as the offer for its
+// handshake. F (and nothing loaded) for an empty, malformed or expired
+// blob — the caller then simply does a full handshake.
+@ __cli_sess_load * CliHs h ( Vec u ) sess → b {
+    : i n ( vec_len [u] sess )
+    ? | < n 21 != ( _t_bget sess 0 ) 1 { ^ F } {}
+    : i age_add ( _rdint sess 1 4 )
+    : i lifetime ( _rdint sess 5 4 )
+    : i received ( _rdint sess 9 8 )
+    : i plen ( _rdint sess 17 2 )
+    : i tp + 19 plen
+    ? > + tp 2 n { ^ F } {}
+    : i tlen ( _rdint sess tp 2 )
+    ? | == tlen 0 != + + tp 2 tlen n { ^ F } {}
+    // RFC 8446 §4.6.1: a ticket is usable for ticket_lifetime seconds
+    // (never more than 7 days); past that the server will decline it, so
+    // do not offer it.
+    : i age_ms - ( now_ms ) received
+    ? | < age_ms 0 > age_ms * lifetime 1000 { ^ F } {}
+    ( vec_free [u] . h tk_psk ) ( vec_free [u] . h tk_ticket )
+    = . h tk_psk ( bytes_slice sess 19 tp )
+    = . h tk_ticket ( bytes_slice sess + tp 2 n )
+    = . h tk_age_add age_add
+    = . h tk_lifetime lifetime
+    = . h tk_received_ms received
+    ^ T
+}
+
+// Fresh key shares for every group we offer and the ClientHello that
+// carries them, into `out_ch`.
+@ _cli_hs_start * CliHs h → v {
+    ? != . h state 0 { ^ } {}
+    ( vec_free [u] . h x_priv )
+    = . h x_priv ( _rand_bytes 32 )
+    ( vec_free [u] . h x_pub )
+    = . h x_pub ( x25519_base . h x_priv )
+    ( vec_free [u] . h p256_priv )
+    = . h p256_priv ( _rand_bytes 32 )
+    : ( Vec u ) p256pub ( p256_ecdh_keygen . h p256_priv )
+    // ML-KEM-768 for the hybrid group. The decapsulation key stays on
+    // the machine until the server's share arrives; the encapsulation
+    // key travels in the ClientHello.
+    : *MlkemKeys pqkeys ( mlkem_keygen 768 )
+    : ( Vec u ) pqpub ( bytes_slice ( mlkem_ek pqkeys ) 0 ( vec_len [u] ( mlkem_ek pqkeys ) ) )
+    ( vec_free [u] . h pq_dk )
+    = . h pq_dk ( bytes_slice ( mlkem_dk pqkeys ) 0 ( vec_len [u] ( mlkem_dk pqkeys ) ) )
+    ( mlkem_keys_free pqkeys )
+    ( vec_free [u] . h random )
+    = . h random ( _rand_bytes 32 )
+    ( vec_free [u] . h sessid )
+    = . h sessid ( _rand_bytes ? != . h compat 0 32 0 )
+    : ~ i obf_age 0
+    ? == . h offer 1 {
+        : i age - ( now_ms ) . h tk_received_ms
+        = obf_age & + age . h tk_age_add 4294967295
+    } {}
+    : ( Vec u ) noid ( vec_new [u] )
+    : ( Vec u ) ch ( __build_client_hello . h sni . h x_pub p256pub pqpub . h random . h sessid . h alpn . h ext_out ? == . h offer 1 . h tk_ticket noid obf_age )
+    ( vec_free [u] noid )
+    ( vec_free [u] pqpub )
+    ( vec_free [u] p256pub )
+    ? == . h offer 1 {
+        : ( Vec u ) binder ( _psk_binder_over . h res_early ch - ( vec_len [u] ch ) 35 )
+        ( __ch_patch_binder ch binder )
+        ( vec_free [u] binder )
+    } {}
+    ( sha256_update . h trh ch )
+    ( vec_free [u] . h out_ch )
+    = . h out_ch ch
+    = . h state 1
+}
+
+// The ServerHello: cipher and version, the server's key share, and the
+// whole handshake key schedule. On success `state` is 2 and c_hs / s_hs
+// are the handshake traffic secrets.
+@ _cli_hs_server_hello * CliHs h ( Vec u ) sh → i {
+    ? != . h state 1 { ^ ( __cli_hs_fail h 1 10 ) } {}
+    // handshake type 2, and at least the fixed part of the body
+    ? | < ( vec_len [u] sh ) 42 != ( _t_bget sh 0 ) 2 { ^ ( __cli_hs_fail h 1 50 ) } {}
+    : i suite ( __sh_suite sh )
+    = . h version ( __suite_version suite )
+    = . h cipher ( __suite_cipher suite )
+    ? == . h version 12 {
+        // TLS 1.2: none of the 1.3 schedule applies. The hello is kept
+        // for a caller that speaks 1.2 (the TCP record layer does);
+        // QUIC refuses it.
+        ( vec_free [u] . h sh )
+        = . h sh ( bytes_slice sh 0 ( vec_len [u] sh ) )
+        ^ 0
+    } {}
+    : ~ ( Vec u ) spub ( vec_new [u] )
+    : ~ i bad 0
+    : !( Vec u ) TlsErr spkr ( __parse_server_hello sh )
+    ?? spkr {
+        T k → { ( vec_free [u] spub ) = spub k }
+        F e → { = bad ?? e { TlsHRR → 4 TlsBadCipher → 3 _ → 1 } }
+    }
+    // A HelloRetryRequest is not taken up (every share is in the first
+    // hello, so a server has no reason to send one): handshake_failure.
+    // A suite or key_share we cannot use is illegal_parameter.
+    ? != bad 0 { ( vec_free [u] spub ) ^ ( __cli_hs_fail h bad ? == bad 4 40 47 ) } {}
+    ( sha256_update . h trh sh )
+
+    // The negotiated group is told by the server key-exchange length:
+    // X25519 is 32 bytes, an uncompressed secp256r1 point is 65, and
+    // the X25519MLKEM768 share is 1088 + 32 = 1120.
+    //
+    // For the hybrid group the shared secret handed to the key schedule
+    // is `ML-KEM shared secret ‖ X25519 shared secret` — 64 bytes,
+    // ML-KEM first, matching the order of the shares. Concatenation is
+    // what makes it a hybrid worth having: HKDF-Extract over the pair
+    // is at least as strong as either half, so the handshake survives
+    // ML-KEM being broken *and* survives X25519 being broken.
+    : i sl ( vec_len [u] spub )
+    ? & & != sl 1120 != sl 65 != sl 32 { ( vec_free [u] spub ) ^ ( __cli_hs_fail h 2 47 ) } {}
+    = . h kx_group ? == sl 1120 4588 ? == sl 65 23 29
+    : ( Vec u ) ecdhe ? == sl 1120
+    ( __hybrid_shared . h pq_dk . h x_priv spub )
+    ? == sl 65 ( p256_ecdh_shared . h p256_priv spub ) ( x25519 . h x_priv spub )
+    ( vec_free [u] spub )
+    // RFC 8446 §7.4.2 — abort if the ECDHE output is all-zero (peer sent
+    // a low-order / small-subgroup point forcing a known shared secret).
+    ? ( _all_zero ecdhe ) { ( vec_free [u] ecdhe ) ^ ( __cli_hs_fail h 2 47 ) } {}
+
+    : ( Vec u ) z32 ( vec_with_cap [u] 32 )
+    : ~ i zk 0
+    ~ < zk 32 { ( vec_push [u] z32 # u 0 ) = zk + zk 1 }
+    : ( Vec u ) empty ( vec_new [u] )
+    : ( Vec u ) ehash ( sha256_pure empty )
+    // The server took our ticket iff its ServerHello carries
+    // pre_shared_key; then the early secret is the PSK's and no
+    // Certificate / CertificateVerify will follow — the PSK is the proof
+    // of identity (only the issuer of the ticket knows it).
+    ? & == . h offer 1 ( __sh_has_psk sh ) { = . h resumed 1 } {}
+    : ( Vec u ) early ? == . h resumed 1 ( bytes_slice . h res_early 0 32 ) ( hkdf_extract empty z32 )
+    : ( Vec u ) derived1 ( derive_secret early `derived` ehash )
+    : ( Vec u ) hs_secret ( hkdf_extract derived1 ecdhe )
+    : ( Vec u ) th_sh ( sha256_snapshot . h trh )
+    ( vec_free [u] . h c_hs )
+    = . h c_hs ( derive_secret hs_secret `c hs traffic` th_sh )
+    ( vec_free [u] . h s_hs )
+    = . h s_hs ( derive_secret hs_secret `s hs traffic` th_sh )
+    : ( Vec u ) derived2 ( derive_secret hs_secret `derived` ehash )
+    ( vec_free [u] . h master )
+    = . h master ( hkdf_extract derived2 z32 )
+    ( vec_free [u] ecdhe ) ( vec_free [u] z32 ) ( vec_free [u] empty ) ( vec_free [u] ehash )
+    ( vec_free [u] early ) ( vec_free [u] derived1 ) ( vec_free [u] hs_secret )
+    ( vec_free [u] th_sh ) ( vec_free [u] derived2 )
+    = . h state 2
+    ^ 0
+}
+
+// Offset of the data of extension `want` within msg[es..ee), or -1.
+@ __cli_find_ext ( Vec u ) msg i es i ee i want → i {
+    : ~ i p es
+    : ~ i found -1
+    ~ & < + p 4 + ee 1 == found -1 {
+        : i et ( _rdint msg p 2 )
+        : i el ( _rdint msg + p 2 2 )
+        ? == et want { = found + p 4 } { = p + + p 4 el }
+    }
+    ^ found
+}
+
+// One message of the server's flight, under the handshake keys.
+@ _cli_hs_message * CliHs h ( Vec u ) m → i {
+    ? != . h state 2 { ^ ( __cli_hs_fail h 1 10 ) } {}
+    ? < ( vec_len [u] m ) 4 { ^ ( __cli_hs_fail h 1 50 ) } {}
+    : i t ( _t_bget m 0 )
+    // Nothing but the flight belongs here: a hello, EndOfEarlyData, a
+    // ticket or a KeyUpdate before the Finished is unexpected_message.
+    ? | | | | == t 1 == t 2 == t 4 == t 5 == t 24 { ^ ( __cli_hs_fail h 1 10 ) } {}
+
+    ? == t 20 {
+        // Finished: the MAC is over the transcript BEFORE this message.
+        : ( Vec u ) th_cv ( sha256_snapshot . h trh )
+        : ( Vec u ) expect ( _finished_mac . h s_hs th_cv )
+        : b okfin ( _cmp_finished m expect )
+        ( vec_free [u] th_cv )
+        ( vec_free [u] expect )
+        ? okfin {} { ^ ( __cli_hs_fail h 1 51 ) }
+        ( sha256_update . h trh m )
+        // application traffic secrets: transcript through the server
+        // Finished — also what our own Finished is computed over
+        : ( Vec u ) th_sf ( sha256_snapshot . h trh )
+        ( vec_free [u] . h c_ap )
+        = . h c_ap ( derive_secret . h master `c ap traffic` th_sf )
+        ( vec_free [u] . h s_ap )
+        = . h s_ap ( derive_secret . h master `s ap traffic` th_sf )
+        : ( Vec u ) cfin ( _finished_mac . h c_hs th_sf )
+        : ( Vec u ) finmsg ( vec_with_cap [u] 36 )
+        ( vec_push [u] finmsg # u 20 )
+        ( _u24 finmsg 32 )
+        ( _tls_cat finmsg cfin )
+        // resumption_master_secret: transcript through our own Finished.
+        // Every NewSessionTicket the server sends from here on derives
+        // its PSK from this (see __client_take_ticket).
+        ( sha256_update . h trh finmsg )
+        : ( Vec u ) th_cf ( sha256_final . h trh )
+        = . h trh # *Sha256 0
+        ( vec_free [u] . h res_master )
+        = . h res_master ( derive_secret . h master `res master` th_cf )
+        ( vec_free [u] . h out_fin )
+        = . h out_fin finmsg
+        ( vec_free [u] th_sf ) ( vec_free [u] cfin ) ( vec_free [u] th_cf )
+        = . h state 3
+        ^ 0
+    } {}
+
+    ? == t 8 {
+        // EncryptedExtensions — the negotiated ALPN. The server must
+        // pick from OUR list (RFC 7301 §3.2); anything else is a
+        // protocol violation answered with no_application_protocol.
+        : ( Vec u ) sel ( __ee_alpn m )
+        ? > ( vec_len [u] sel ) 0 {
+            ? ( _alpn_offered_packed . h alpn sel ) {
+                ( vec_free [u] . h alpn_sel )
+                = . h alpn_sel sel
+            } {
+                ( vec_free [u] sel )
+                ^ ( __cli_hs_fail h 1 120 )
+            }
+        } { ( vec_free [u] sel ) }
+        // The extension a driver requires (QUIC: transport parameters).
+        ? != . h ext_want 0 {
+            : i n ( vec_len [u] m )
+            : i extlen ( _rdint m 4 2 )
+            : i ee ? > + 6 extlen n n + 6 extlen
+            : i xo ( __cli_find_ext m 6 ee . h ext_want )
+            ? < xo 0 { ^ ( __cli_hs_fail h 1 109 ) } {}
+            : i xl ( _rdint m - xo 2 2 )
+            ? > + xo xl ee { ^ ( __cli_hs_fail h 1 50 ) } {}
+            = . h ext_in_present 1
+            ( vec_clear [u] . h ext_in )
+            : ( Vec u ) xb ( bytes_slice m xo + xo xl )
+            ( bytes_extend_bytes . h ext_in xb )
+            ( vec_free [u] xb )
+        } {}
+    } {}
+    ? == t 11 {
+        ( vec_free [u] . h cert_msg )
+        = . h cert_msg ( bytes_slice m 0 ( vec_len [u] m ) )
+    } {}
+    ? == t 15 {
+        // CertificateVerify: the transcript through Certificate (before
+        // this message), the scheme and the signature — for the verifier.
+        ? < ( vec_len [u] m ) 8 { ^ ( __cli_hs_fail h 1 50 ) } {}
+        ( vec_free [u] . h th_cert )
+        = . h th_cert ( sha256_snapshot . h trh )
+        = . h cv_scheme ( _rdint m 4 2 )
+        : i siglen ( _rdint m 6 2 )
+        ? > + 8 siglen ( vec_len [u] m ) { ^ ( __cli_hs_fail h 1 50 ) } {}
+        ( vec_free [u] . h cv_sig )
+        = . h cv_sig ( bytes_slice m 8 + 8 siglen )
+    } {}
+    ( sha256_update . h trh m )
+    ^ 0
+}
+
+// Send an alert record (RFC 8446 §6) the way the peer can read it right
+// now: under the current write keys once there are any, in the clear
+// before that. Best effort — the connection is being torn down.
+@ __cli_say_alert * TlsConn c i desc → v {
+    ? > ( vec_len [u] . c c_key ) 0 { ( __send_alert c desc ) ^ } {}
+    : ( Vec u ) alert ( vec_with_cap [u] 2 )
+    ( vec_push [u] alert # u 2 )
+    ( vec_push [u] alert # u desc )
+    : !v TlsErr _w ( _send_plain c 21 alert )
+    ( vec_free [u] alert )
+}
+
+@ __cli_abort * TlsConn c * CliHs hs TlsErr e → !*TlsConn TlsErr {
+    ( _cli_hs_free hs )
+    ( tls_close c )
+    ^ @ !*TlsConn TlsErr { F e }
+}
+
+// Core client handshake over a socket: the record layer around `CliHs`.
+// `alpn` is the space-separated list of ALPN protocols to offer, most
+// preferred first (e.g. "h2 http/1.1"); empty means no ALPN extension
+// is sent. The negotiated protocol (from the server's
+// EncryptedExtensions, checked to be one we offered) is stored in
+// `c.alpn_sel`.
 @ __tls_handshake i raw s server_name s alpn ( Vec u ) sess → !*TlsConn TlsErr {
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 { ^ @ !*TlsConn TlsErr { F # TlsErr TlsConnect } } {}
@@ -1143,223 +1607,110 @@ $ `stdlib/std/async_ffi.nu`
     = . c tk_lifetime 0
     = . c tk_received_ms 0
 
-    // ── resumption offer ──
-    // A usable exported session becomes the pre_shared_key offer; the
-    // server may still decline it (rotated ticket key, expired, or no
-    // resumption at all), in which case the handshake below is simply
-    // the full one — nothing here is trusted until the ServerHello says
-    // the ticket was taken.
-    : ~ i offer 0
-    : ~ i obf_age 0
-    ? ( __sess_load c sess ) {
-        = offer 1
-        ( vec_free [u] . c res_early )
-        = . c res_early ( _psk_early . c tk_psk )
-        : i age - ( now_ms ) . c tk_received_ms
-        = obf_age & + age . c tk_age_add 4294967295
-    } {}
-
-    // ── key share ──
-    : ( Vec u ) priv ( _rand_bytes 32 )
-    : ( Vec u ) cpub ( x25519_base priv )
-    : ( Vec u ) p256priv ( _rand_bytes 32 )
-    : ( Vec u ) p256pub ( p256_ecdh_keygen p256priv )
-    ( vec_free [u] . c kx_p256 )
-    = . c kx_p256 p256priv
-    // ML-KEM-768 for the hybrid group. The decapsulation key lives on the
-    // connection until the server's share arrives; the encapsulation key
-    // travels in the ClientHello.
-    : *MlkemKeys pqkeys ( mlkem_keygen 768 )
-    : ( Vec u ) pqpub ( bytes_slice ( mlkem_ek pqkeys ) 0 ( vec_len [u] ( mlkem_ek pqkeys ) ) )
-    ( vec_free [u] . c kx_mlkem )
-    = . c kx_mlkem ( bytes_slice ( mlkem_dk pqkeys ) 0 ( vec_len [u] ( mlkem_dk pqkeys ) ) )
-    ( mlkem_keys_free pqkeys )
-    : ( Vec u ) random ( _rand_bytes 32 )
-    : ( Vec u ) sessid ( _rand_bytes 32 )
-
-    // ── transcript ──
-    : ~ ( Vec u ) tr ( vec_new [u] )
-
     // ── ClientHello ──
-    : ( Vec u ) noid ( vec_new [u] )
-    : ( Vec u ) ch ( __build_client_hello server_name cpub p256pub pqpub random sessid alpn ? == offer 1 . c tk_ticket noid obf_age )
-    ( vec_free [u] noid )
-    ( vec_free [u] pqpub )
-    ( vec_free [u] p256pub )
-    ? == offer 1 {
-        : ( Vec u ) binder ( _psk_binder_over . c res_early ch - ( vec_len [u] ch ) 35 )
-        ( __ch_patch_binder ch binder )
-        ( vec_free [u] binder )
+    : *CliHs hs ( _cli_hs_new server_name alpn sess )
+    ( _cli_hs_start hs )
+    // The offered ticket stays on the connection: a resumed handshake
+    // brings no certificate and need not bring a new ticket, and
+    // tls_session_export still has to hand this one on.
+    ? == . hs offer 1 {
+        ( vec_free [u] . c tk_ticket ) ( vec_free [u] . c tk_psk )
+        = . c tk_ticket ( bytes_slice . hs tk_ticket 0 ( vec_len [u] . hs tk_ticket ) )
+        = . c tk_psk ( bytes_slice . hs tk_psk 0 ( vec_len [u] . hs tk_psk ) )
+        = . c tk_age_add . hs tk_age_add
+        = . c tk_lifetime . hs tk_lifetime
+        = . c tk_received_ms . hs tk_received_ms
     } {}
-    ( _tls_cat tr ch )
-    : !v TlsErr sw ( _send_plain c 22 ch )
-    ?? sw { T _ → {} F e → { ^ ( __fail c priv cpub random sessid ch tr e ) } }
+    : !v TlsErr sw ( _send_plain c 22 . hs out_ch )
+    ?? sw { T _ → {} F e → { ^ ( __cli_abort c hs e ) } }
 
     // ── ServerHello ──
     : !( Vec u ) TlsErr shr ( __next_hs c )
-    : ( Vec u ) sh ?? shr { T m → m F e → { ^ ( __fail c priv cpub random sessid ch tr e ) } }
-    ( _tls_cat tr sh )
-    : i suite ( __sh_suite sh )
-    = . c version ( __suite_version suite )
-    = . c cipher ( __suite_cipher suite )
+    : ( Vec u ) sh ?? shr { T m → m F e → { ^ ( __cli_abort c hs e ) } }
+    : i shrc ( _cli_hs_server_hello hs sh )
+    ? != shrc 0 {
+        ( vec_free [u] sh )
+        ( __cli_say_alert c shrc )
+        ^ ( __cli_abort c hs ( _cli_hs_err hs ) )
+    } {}
+    = . c version . hs version
+    = . c cipher . hs cipher
 
     // ── TLS 1.2 fallback ──
+    // The 1.2 path owns what it is handed, so it gets copies of the
+    // machine's ephemerals and the hellos, and the machine goes.
     ? == . c version 12 {
+        : ( Vec u ) priv ( bytes_slice . hs x_priv 0 ( vec_len [u] . hs x_priv ) )
+        : ( Vec u ) cpub ( bytes_slice . hs x_pub 0 ( vec_len [u] . hs x_pub ) )
+        : ( Vec u ) random ( bytes_slice . hs random 0 ( vec_len [u] . hs random ) )
+        : ( Vec u ) sessid ( bytes_slice . hs sessid 0 ( vec_len [u] . hs sessid ) )
+        : ( Vec u ) ch ( bytes_slice . hs out_ch 0 ( vec_len [u] . hs out_ch ) )
+        : ( Vec u ) tr ( bytes_slice . hs out_ch 0 ( vec_len [u] . hs out_ch ) )
+        ( _tls_cat tr sh )
+        ( vec_free [u] . c kx_p256 )
+        = . c kx_p256 ( bytes_slice . hs p256_priv 0 ( vec_len [u] . hs p256_priv ) )
+        ( _cli_hs_free hs )
         ^ ( __tls12_handshake c sh priv cpub random sessid ch tr )
     } {}
+    ( vec_free [u] sh )
+    = . c kx_group . hs kx_group
+    = . c resumed . hs resumed
 
-    : !( Vec u ) TlsErr spkr ( __parse_server_hello sh )
-    : ( Vec u ) spub ?? spkr { T k → k F e → { ( vec_free [u] sh ) ^ ( __fail c priv cpub random sessid ch tr e ) } }
-
-    // ── key schedule (handshake) ──
-    // Distinguish the negotiated group by the server key-exchange length:
-    // X25519 is 32 bytes, an uncompressed secp256r1 point is 65, and the
-    // X25519MLKEM768 share is 1088 + 32 = 1120.
-    //
-    // For the hybrid group the shared secret handed to the key schedule
-    // is `ML-KEM shared secret ‖ X25519 shared secret` — 64 bytes, ML-KEM
-    // first, matching the order of the shares. Concatenation is what
-    // makes it a hybrid worth having: HKDF-Extract over the pair is at
-    // least as strong as either half, so the handshake survives ML-KEM
-    // being broken *and* survives X25519 being broken.
-    = . c kx_group ? == ( vec_len [u] spub ) 1120 4588 ? == ( vec_len [u] spub ) 65 23 29
-    : ( Vec u ) ecdhe ? == ( vec_len [u] spub ) 1120
-    ( __hybrid_shared c priv spub )
-    ? == ( vec_len [u] spub ) 65 ( p256_ecdh_shared . c kx_p256 spub ) ( x25519 priv spub )
-    // H3: RFC 8446 §7.4.2 — abort if the ECDHE output is all-zero (peer sent a
-    // low-order / small-subgroup point forcing a known shared secret).
-    ? ( _all_zero ecdhe ) {
-        ( vec_free [u] sh ) ( vec_free [u] spub ) ( vec_free [u] ecdhe )
-        ^ ( __fail c priv cpub random sessid ch tr # TlsErr TlsProtocol )
-    } {}
-    : ( Vec u ) zeros ( _rand_bytes 0 )
-    : ( Vec u ) z32 ( vec_with_cap [u] 32 )
-    : ~ i zk 0
-    ~ < zk 32 { ( vec_push [u] z32 # u 0 ) = zk + zk 1 }
-    : ( Vec u ) empty ( vec_new [u] )
-    : ( Vec u ) ehash ( sha256_pure empty )
-    // The server took our ticket iff its ServerHello carries
-    // pre_shared_key; then the early secret is the PSK's and no
-    // Certificate / CertificateVerify will follow — the PSK is the proof
-    // of identity (only the issuer of the ticket knows it).
-    ? & == offer 1 ( __sh_has_psk sh ) { = . c resumed 1 } {}
-    : ( Vec u ) early ? == . c resumed 1 ( bytes_slice . c res_early 0 32 ) ( hkdf_extract empty z32 )
-    : ( Vec u ) derived1 ( derive_secret early `derived` ehash )
-    : ( Vec u ) hs_secret ( hkdf_extract derived1 ecdhe )
-
-    : ( Vec u ) th_sh ( sha256_pure tr )
-    : ( Vec u ) c_hs ( derive_secret hs_secret `c hs traffic` th_sh )
-    : ( Vec u ) s_hs ( derive_secret hs_secret `s hs traffic` th_sh )
-    ( _set_keys c 0 s_hs )
-    ( _set_keys c 1 c_hs )
+    // handshake keys: the client writes under c_hs, reads the server
+    // under s_hs
+    ( _set_keys c 0 . hs s_hs )
+    ( _set_keys c 1 . hs c_hs )
     = . c enc_read 1
 
-    : ( Vec u ) derived2 ( derive_secret hs_secret `derived` ehash )
-    : ( Vec u ) master ( hkdf_extract derived2 z32 )
-
     // ── server flight: EE, Certificate, CertVerify, Finished ──
-    : ~ i done 0
-    : ~ i flighterr 0
-    ~ & == done 0 == flighterr 0 {
+    : ~ i rc 0
+    ~ & == rc 0 != . hs state 3 {
         : !( Vec u ) TlsErr mr ( __next_hs c )
         ?? mr {
-            F _ → { = flighterr 1 }
+            F e → { ^ ( __cli_abort c hs e ) }
             T msg → {
-                : i t ( _t_bget msg 0 )
-                ? == t 20 {
-                    : ( Vec u ) th_cv ( sha256_pure tr )
-                    : ( Vec u ) expect ( _finished_mac s_hs th_cv )
-                    : b okfin ( _cmp_finished msg expect )
-                    ( vec_free [u] th_cv )
-                    ( vec_free [u] expect )
-                    ( _tls_cat tr msg )
-                    ? okfin {} { = flighterr 1 }
-                    = done 1
-                } {
-                    ? == t 11 {
-                        ( vec_free [u] . c cert_msg )
-                        = . c cert_msg ( bytes_slice msg 0 ( vec_len [u] msg ) )
-                    } {}
-                    ? == t 15 {
-                        // CertificateVerify: capture transcript-through-Certificate
-                        // (before appending this message) and the scheme + signature.
-                        : ( Vec u ) thc ( sha256_pure tr )
-                        ( vec_free [u] . c th_cert )
-                        = . c th_cert thc
-                        = . c cv_scheme ( _rdint msg 4 2 )
-                        : i siglen ( _rdint msg 6 2 )
-                        ( vec_free [u] . c cv_sig )
-                        = . c cv_sig ( bytes_slice msg 8 + 8 siglen )
-                    } {}
-                    ? == t 8 {
-                        // EncryptedExtensions — pick up the negotiated ALPN.
-                        // The server must pick from OUR list (RFC 7301
-                        // §3.2); anything else is a protocol violation
-                        // answered with no_application_protocol (120).
-                        : ( Vec u ) sel ( __ee_alpn msg )
-                        ? > ( vec_len [u] sel ) 0 {
-                            ? ( _alpn_offered alpn sel ) {
-                                ( vec_free [u] . c alpn_sel )
-                                = . c alpn_sel sel
-                            } {
-                                ( vec_free [u] sel )
-                                ( __send_alert c 120 )
-                                = flighterr 1
-                            }
-                        } { ( vec_free [u] sel ) }
-                    } {}
-                    ( _tls_cat tr msg )
-                }
+                = rc ( _cli_hs_message hs msg )
                 ( vec_free [u] msg )
             }
         }
     }
-    ? == flighterr 1 {
-        ^ ( __fail2 c priv cpub random sessid ch tr spub ecdhe z32 empty ehash early derived1 hs_secret th_sh c_hs s_hs derived2 master sh )
+    ? != rc 0 {
+        ( __cli_say_alert c rc )
+        ^ ( __cli_abort c hs ( _cli_hs_err hs ) )
     } {}
-
-    // ── application keys ──
-    : ( Vec u ) th_sf ( sha256_pure tr )
-    : ( Vec u ) c_ap ( derive_secret master `c ap traffic` th_sf )
-    : ( Vec u ) s_ap ( derive_secret master `s ap traffic` th_sf )
+    // what the verifier and the callers read off the connection
+    ( vec_free [u] . c cert_msg )
+    = . c cert_msg . hs cert_msg
+    = . hs cert_msg ( vec_new [u] )
+    ( vec_free [u] . c cv_sig )
+    = . c cv_sig . hs cv_sig
+    = . hs cv_sig ( vec_new [u] )
+    ( vec_free [u] . c th_cert )
+    = . c th_cert . hs th_cert
+    = . hs th_cert ( vec_new [u] )
+    = . c cv_scheme . hs cv_scheme
+    ( vec_free [u] . c alpn_sel )
+    = . c alpn_sel . hs alpn_sel
+    = . hs alpn_sel ( vec_new [u] )
 
     // ── client Finished (under handshake keys) ──
-    : ( Vec u ) cfin ( _finished_mac c_hs th_sf )
-    : ( Vec u ) finmsg ( vec_with_cap [u] 36 )
-    ( vec_push [u] finmsg # u 20 )
-    ( _u24 finmsg 32 )
-    ( _tls_cat finmsg cfin )
     // change_cipher_spec for middlebox compatibility
     : ( Vec u ) ccs ( vec_with_cap [u] 1 )
     ( vec_push [u] ccs # u 1 )
     : !v TlsErr cw ( _send_plain c 20 ccs )
     ?? cw { T _ → {} F _ → {} }
     ( vec_free [u] ccs )
-    : !v TlsErr fw ( __send_encrypted c 22 finmsg )
+    : !v TlsErr fw ( __send_encrypted c 22 . hs out_fin )
     ?? fw { T _ → {} F _ → {} }
 
     // switch to application traffic keys
-    ( _set_keys c 0 s_ap )
-    ( _set_keys c 1 c_ap )
+    ( _set_keys c 0 . hs s_ap )
+    ( _set_keys c 1 . hs c_ap )
     = . c established 1
-
-    // resumption_master_secret: transcript through our own Finished.
-    // Every NewSessionTicket the server sends from here on derives its
-    // PSK from this (see __client_take_ticket).
-    ( _tls_cat tr finmsg )
-    : ( Vec u ) th_cf ( sha256_pure tr )
     ( vec_free [u] . c res_master )
-    = . c res_master ( derive_secret master `res master` th_cf )
-    ( vec_free [u] th_cf )
-
-    // free handshake secrets / scratch
-    ( vec_free [u] priv ) ( vec_free [u] cpub ) ( vec_free [u] random ) ( vec_free [u] sessid )
-    ( vec_free [u] ch ) ( vec_free [u] tr ) ( vec_free [u] sh ) ( vec_free [u] spub )
-    ( vec_free [u] ecdhe ) ( vec_free [u] zeros ) ( vec_free [u] z32 ) ( vec_free [u] empty )
-    ( vec_free [u] ehash ) ( vec_free [u] early ) ( vec_free [u] derived1 ) ( vec_free [u] hs_secret )
-    ( vec_free [u] th_sh ) ( vec_free [u] c_hs ) ( vec_free [u] s_hs ) ( vec_free [u] derived2 )
-    ( vec_free [u] master ) ( vec_free [u] th_sf ) ( vec_free [u] c_ap ) ( vec_free [u] s_ap )
-    ( vec_free [u] cfin ) ( vec_free [u] finmsg )
+    = . c res_master . hs res_master
+    = . hs res_master ( vec_new [u] )
+    ( _cli_hs_free hs )
     ^ @ !*TlsConn TlsErr { T c }
 }
 
@@ -1558,16 +1909,6 @@ $ `stdlib/std/async_ffi.nu`
     ( vec_free [u] ch ) ( vec_free [u] tr )
     ( tls_close c )
     ^ @ !*TlsConn TlsErr { F e }
-}
-
-@ __fail2 * TlsConn c ( Vec u ) priv ( Vec u ) cpub ( Vec u ) random ( Vec u ) sessid ( Vec u ) ch ( Vec u ) tr ( Vec u ) spub ( Vec u ) ecdhe ( Vec u ) z32 ( Vec u ) empty ( Vec u ) ehash ( Vec u ) early ( Vec u ) derived1 ( Vec u ) hs_secret ( Vec u ) th_sh ( Vec u ) c_hs ( Vec u ) s_hs ( Vec u ) derived2 ( Vec u ) master ( Vec u ) sh → !*TlsConn TlsErr {
-    ( vec_free [u] priv ) ( vec_free [u] cpub ) ( vec_free [u] random ) ( vec_free [u] sessid )
-    ( vec_free [u] ch ) ( vec_free [u] tr ) ( vec_free [u] spub ) ( vec_free [u] ecdhe )
-    ( vec_free [u] z32 ) ( vec_free [u] empty ) ( vec_free [u] ehash ) ( vec_free [u] early )
-    ( vec_free [u] derived1 ) ( vec_free [u] hs_secret ) ( vec_free [u] th_sh ) ( vec_free [u] c_hs )
-    ( vec_free [u] s_hs ) ( vec_free [u] derived2 ) ( vec_free [u] master ) ( vec_free [u] sh )
-    ( tls_close c )
-    ^ @ !*TlsConn TlsErr { F # TlsErr TlsHandshake }
 }
 
 // ── application data ──────────────────────────────────────────────

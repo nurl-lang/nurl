@@ -130,8 +130,8 @@ $ `../../http/src/http.nu`
 
     : *HttpApp a ( http_app_new )
     ( http_app_quiet a )
-    // Keep the test hermetic: no UDP/QUIC twin, no Alt-Svc.
-    ( http_app_set_http3 a 0 )
+    // The TLS listener keeps its UDP/QUIC twin and its Alt-Svc: the
+    // client's HTTP/3 path is driven against it.
     ( routes a )
 
     : ~ i rc 0

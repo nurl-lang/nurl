@@ -22,9 +22,13 @@
 // Protocol selection is automatic and needs nothing configured: an
 // https origin is dialled with ALPN "h2 http/1.1", and whichever the
 // server picks is what the client speaks — HTTP/2 multiplexed over one
-// connection, or HTTP/1.1 with keep-alive. The negotiated protocol and
-// whether the key exchange was post-quantum are readable after each
-// request (`http_client_last_proto` / `http_client_last_pq`).
+// connection, or HTTP/1.1 with keep-alive. A server that advertises
+// HTTP/3 (`Alt-Svc: h3=":443"`) gets the next request over QUIC
+// (`ext/http3_client.nu`), and a QUIC attempt that fails falls back to
+// TCP for that origin (`http_client_set_h3`: 0 follow Alt-Svc — the
+// default, 1 try QUIC first, 2 never). The negotiated protocol (1, 2 or
+// 3) and whether the key exchange was post-quantum are readable after
+// each request (`http_client_last_proto` / `http_client_last_pq`).
 //
 // Memory model: `http_client_new` returns a heap `*HttpClient`; free it
 // with `http_client_free`, which closes every pooled connection. A
@@ -42,6 +46,7 @@ $ `stdlib/ext/http_pure.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http2_client.nu`
+$ `stdlib/ext/http3_client.nu`
 $ `stdlib/ext/cookies.nu`
 $ `stdlib/ext/compress.nu`
 
@@ -99,9 +104,11 @@ $ `stdlib/ext/compress.nu`
 // ── Pooled origin ─────────────────────────────────────────────────────
 //
 // One live connection per (scheme, host, port). `proto` records what the
-// origin negotiated: 0 nothing yet, 1 HTTP/1.1, 2 HTTP/2. For h2 the
-// pooled connection is the multiplexed H2Client; for h1 it is one idle
-// keep-alive HttpConn, present only while `has_h1` is 1.
+// origin negotiated: 0 nothing yet, 1 HTTP/1.1, 2 HTTP/2, 3 HTTP/3. For
+// h2 the pooled connection is the multiplexed H2Client; for h1 it is one
+// idle keep-alive HttpConn, present only while `has_h1` is 1; for h3 it
+// is the QUIC connection in H3Client, beside whatever TCP connection
+// the origin still holds.
 : HcOrigin {
     String key  // "scheme://host:port"
     String host
@@ -111,6 +118,11 @@ $ `stdlib/ext/compress.nu`
     i has_h2 H2Client h2
     i has_h1 HttpConn h1
     i pq  // 1 = the TLS key exchange for this origin was post-quantum
+    i has_h3 * H3Client h3
+    i alt_h3_port  // the port an Alt-Svc named for h3 (0 none seen)
+    i alt_h3_until  // ... valid until this wall-clock second
+    i h3_failed  // 1 = a QUIC attempt failed here; TCP from now on
+    i pq_tcp  // the TCP connection's post-quantum evidence, kept beside h3's
 }
 
 // ── Client ────────────────────────────────────────────────────────────
@@ -124,8 +136,9 @@ $ `stdlib/ext/compress.nu`
     i decompress  // request + decode gzip/deflate (1) or leave bodies raw (0)
     i body_max  // response body cap in bytes; 0 = unlimited
     String ua
+    i h3_mode  // 0 follow Alt-Svc (default) · 1 try QUIC first · 2 never
     // Evidence from the most recent request.
-    i last_proto  // 1 h1, 2 h2, 0 none yet
+    i last_proto  // 1 h1, 2 h2, 3 h3, 0 none yet
     i last_pq  // 1 = post-quantum key exchange
 }
 
@@ -140,6 +153,7 @@ $ `stdlib/ext/compress.nu`
     = . c decompress 1
     = . c body_max 0
     = . c ua ( string_from `nurl-http-client/0.1` )
+    = . c h3_mode 0
     = . c last_proto 0
     = . c last_pq 0
     ^ c
@@ -173,6 +187,11 @@ $ `stdlib/ext/compress.nu`
 }
 
 // The protocol / key-exchange facts of the most recent request.
+// HTTP/3: 0 (default) use QUIC once an origin's response has advertised
+// it with `Alt-Svc: h3=...`; 1 try QUIC first on every https origin
+// (falling back to TCP when the attempt fails); 2 never.
+@ http_client_set_h3 * HttpClient c i mode → v { = . c h3_mode mode }
+
 @ http_client_last_proto * HttpClient c → i { ^ . c last_proto }
 
 @ http_client_last_pq * HttpClient c → b { ^ != . c last_pq 0 }
@@ -224,6 +243,11 @@ $ `stdlib/ext/compress.nu`
     = . o has_h2 0
     = . o has_h1 0
     = . o pq 0
+    = . o has_h3 0
+    = . o alt_h3_port 0
+    = . o alt_h3_until 0
+    = . o h3_failed 0
+    = . o pq_tcp 0
     ( vec_push [i] . c origins # i o )
     ^ o
 }
@@ -238,7 +262,16 @@ $ `stdlib/ext/compress.nu`
         ( hp_conn_close . o h1 )
         = . o has_h1 0
     } {}
+    ( __hc_origin_drop_h3 o )
     = . o proto 0
+}
+
+@ __hc_origin_drop_h3 * HcOrigin o → v {
+    ? != . o has_h3 0 {
+        ( h3_client_close . o h3 )
+        ( h3_client_free . o h3 )
+        = . o has_h3 0
+    } {}
 }
 
 // ── Establishing a connection for an origin ───────────────────────────
@@ -257,7 +290,7 @@ $ `stdlib/ext/compress.nu`
         ?? tr {
             F e → { ^ ?? e { TlsBadCert → 3 TlsConnect → 1 _ → 3 } }
             T tc → {
-                = . o pq ? ( tls_is_post_quantum tc ) 1 0
+                = . o pq_tcp ? ( tls_is_post_quantum tc ) 1 0
                 : b is_h2 ( tls_alpn_is tc `h2` )
                 ? is_h2 {
                     : TcpConn conn ( tcp_conn_from_tls tc )
@@ -354,17 +387,136 @@ $ `stdlib/ext/compress.nu`
 // Returns the unified HttpResponse or an HttpClientErr. `user` headers
 // are BORROWED-consumed (freed here). `body` is BORROWED.
 @ __hc_do * HttpClient c * HcOrigin o s method s path ( Vec Header ) user ( Vec u ) body → !HttpResponse HttpClientErr {
+    // HTTP/3 first when the origin advertised it (or QUIC-first was asked
+    // for), unless a QUIC attempt already failed here.
+    ? & & != . o is_https 0 != . c h3_mode 2 == . o h3_failed 0 {
+        : b want | == . c h3_mode 1 & > . o alt_h3_port 0 > . o alt_h3_until ( now_seconds )
+        ? & want == . o has_h3 0 { ( __hc_h3_connect c o ) } {}
+        ? & want != . o has_h3 0 {
+            = . c last_proto 3
+            = . c last_pq . o pq
+            : ~ i h3e 0
+            ?? ( __hc_do_h3 c o method path user body ) {
+                T r → { ( __hc_free_headers user ) ^ @ !HttpResponse HttpClientErr { T r } }
+                F e → { = h3e e }
+            }
+            ? == h3e 4 { ( __hc_free_headers user ) ^ @ !HttpResponse HttpClientErr { F # HttpClientErr HcTooLarge } } {}
+            // the connection is gone, timed out, broke or refused the
+            // request: TCP for this origin from now on
+            ( __hc_origin_drop_h3 o )
+            = . o h3_failed 1
+        } {}
+    } {}
     : i ce ( __hc_ensure_conn c o )
     ? != ce 0 {
         ( __hc_free_headers user )
         ^ @ !HttpResponse HttpClientErr { F ( __hc_conn_err ce ) }
     } {}
     = . c last_proto . o proto
-    = . c last_pq . o pq
+    = . c last_pq . o pq_tcp
     ? == . o proto 2 {
         ^ ( __hc_do_h2 c o method path user body )
     } {}
     ^ ( __hc_do_h1 c o method path user body )
+}
+
+// ── HTTP/3 ────────────────────────────────────────────────────────────
+
+// Dial QUIC to the origin (on the Alt-Svc port when one was named). A
+// failed attempt marks the origin TCP-only.
+@ __hc_h3_connect * HttpClient c * HcOrigin o → v {
+    : i port ? > . o alt_h3_port 0 . o alt_h3_port . o port
+    : i tmo ? > . c timeout_ms 0 . c timeout_ms 10000
+    : *H3Client cl ( h3_client_connect ( string_data . o host ) port ( string_data . o host ) . c verify tmo )
+    ? == # i cl 0 { = . o h3_failed 1 ^ } {}
+    ? ! ( h3_client_connected cl ) { ( h3_client_free cl ) = . o h3_failed 1 ^ } {}
+    ? > . c body_max 0 { ( h3_client_set_body_max cl . c body_max ) } {}
+    = . o has_h3 1
+    = . o h3 cl
+    = . o pq ? ( h3_client_is_pq cl ) 1 0
+}
+
+// One request over the origin's QUIC connection. `user` is borrowed —
+// the caller still owns it, so a failure can retry over TCP with the
+// same list. The error is the H3ClientErr code (see ext/http3_client.nu).
+@ __hc_do_h3 * HttpClient c * HcOrigin o s method s path ( Vec Header ) user ( Vec u ) body → !HttpResponse i {
+    : ( Vec Header ) hs ( __hc_clone_headers user )
+    ? ! ( __hc_hlist_has hs `cookie` ) {
+        : String ck ( cookie_jar_header . c jar ( string_data . o host ) path T ( now_seconds ) )
+        ? > ( string_len ck ) 0 { ( vec_push [Header] hs ( header_new `cookie` ( string_data ck ) ) ) } {}
+        ( string_free ck )
+    } {}
+    ? & != . c decompress 0 ! ( __hc_hlist_has hs `accept-encoding` ) {
+        ( vec_push [Header] hs ( header_new `accept-encoding` `gzip, deflate` ) )
+    } {}
+    ? ! ( __hc_hlist_has hs `user-agent` ) {
+        ( vec_push [Header] hs ( header_new `user-agent` ( string_data . c ua ) ) )
+    } {}
+    : i tmo ? > . c timeout_ms 0 . c timeout_ms 60000
+    : !HttpResponse i rr ( h3_client_request . o h3 method `https` ( string_data . o host ) path hs body tmo )
+    ( __hc_free_headers hs )
+    ?? rr {
+        F e → { ^ @ !HttpResponse i { F e } }
+        T resp → {
+            : HttpResponse dec ( __hc_decode_response c resp )
+            ^ @ !HttpResponse i { T dec }
+        }
+    }
+}
+
+// `Alt-Svc` (RFC 7838): remember an h3 alternative on the same host —
+// `h3=":443"; ma=86400` — for the origin; `clear` forgets it. An
+// alternative on another host is not followed (its certificate would
+// have to be checked for THIS origin; the same host is the common case).
+@ __hc_capture_alt_svc * HttpClient c * HcOrigin o HttpResponse r → v {
+    : String v ( __hc_header_value . r headers `alt-svc` )
+    : s av ( string_data v )
+    : i n ( nurl_str_len av )
+    ? == n 0 { ( string_free v ) ^ } {}
+    ? ( _hc_eq_ci av `clear` ) { = . o alt_h3_port 0 ( string_free v ) ^ } {}
+    : ~ i p 0
+    : ~ i found_port 0
+    : ~ i ma 86400
+    : ~ i done 0
+    ~ & == done 0 < p n {
+        // one alternative: proto "=" quoted-authority *( ";" param )
+        ~ & < p n | == ( nurl_str_get av p ) 32 == ( nurl_str_get av p ) 44 { = p + p 1 }
+        : i ps p
+        ~ & < p n != ( nurl_str_get av p ) 61 { = p + p 1 }
+        : i pe p
+        ? >= p n { = done 1 } {
+            = p + p 1
+            : b is_h3 & == - pe ps 2 & == ( nurl_str_get av ps ) 104 == ( nurl_str_get av + ps 1 ) 51
+            // the authority, in quotes: [host]:port
+            : ~ i port 0
+            : ~ i same_host T
+            ? & < p n == ( nurl_str_get av p ) 34 {
+                = p + p 1
+                ? & < p n != ( nurl_str_get av p ) 58 { = same_host F } {}
+                ~ & < p n != ( nurl_str_get av p ) 58 { = p + p 1 }
+                ? < p n { = p + p 1 } {}
+                ~ & < p n & >= ( nurl_str_get av p ) 48 <= ( nurl_str_get av p ) 57 { = port + * port 10 - ( nurl_str_get av p ) 48 = p + p 1 }
+                ~ & < p n != ( nurl_str_get av p ) 34 { = p + p 1 }
+                ? < p n { = p + p 1 } {}
+            } {}
+            // parameters up to the next comma: ma=N is the one we read
+            : ~ i this_ma 86400
+            ~ & < p n != ( nurl_str_get av p ) 44 {
+                ? & == ( nurl_str_get av p ) 109 & < + p 2 n & == ( nurl_str_get av + p 1 ) 97 == ( nurl_str_get av + p 2 ) 61 {
+                    = p + p 3
+                    : ~ i mv 0
+                    ~ & < p n & >= ( nurl_str_get av p ) 48 <= ( nurl_str_get av p ) 57 { = mv + * mv 10 - ( nurl_str_get av p ) 48 = p + p 1 }
+                    = this_ma mv
+                } { = p + p 1 }
+            }
+            ? is_h3 { ? same_host { ? & > port 0 == found_port 0 { = found_port port = ma this_ma } {} } {} } {}
+        }
+    }
+    ? > found_port 0 {
+        = . o alt_h3_port found_port
+        = . o alt_h3_until + ( now_seconds ) ma
+    } {}
+    ( string_free v )
 }
 
 @ __hc_free_headers ( Vec Header ) user → v {
@@ -439,6 +591,9 @@ $ `stdlib/ext/compress.nu`
     } {}
     ? & != . c decompress 0 ! ( __hc_hlist_has hs `accept-encoding` ) {
         ( vec_push [Header] hs ( header_new `accept-encoding` `gzip, deflate` ) )
+    } {}
+    ? ! ( __hc_hlist_has hs `user-agent` ) {
+        ( vec_push [Header] hs ( header_new `user-agent` ( string_data . c ua ) ) )
     } {}
     : ( Vec u ) bcopy ( vec_new [u] )
     ( bytes_extend_bytes bcopy body )
@@ -628,6 +783,7 @@ $ `stdlib/ext/compress.nu`
                         }
                         T resp → {
                             ( __hc_capture_cookies c resp ( string_data . u host ) ( string_data tgt ) )
+                            ? != . o is_https 0 { ( __hc_capture_alt_svc c o resp ) } {}
                             : i sc . resp status
                             : String loc ( __hc_header_value . resp headers `location` )
                             : b redir & & != . c follow 0 ( __hc_is_redirect sc ) > ( string_len loc ) 0

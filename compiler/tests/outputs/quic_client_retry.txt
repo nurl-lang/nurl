@@ -1,0 +1,22 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+initial_datagrams=2
+initial_len=1200
+initial_type=Initial
+initial_dcid_len=8
+initial_token_len=0
+odcid_is_ours=T
+bad_tag_ignored=T
+retried_datagrams=2
+retried_len=1200
+retried_dcid_is_retry_scid=T
+retried_carries_token=T
+retried_pn=2
+retried_crypto_at_0=T
+second_retry_ignored=T
+state_after_late_vn=0
+vn_with_v1_state=0
+vn_without_v1_state=4
+vn_without_v1_sent_after=0

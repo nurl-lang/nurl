@@ -6,6 +6,7 @@
 // redirects, carries cookies and decodes gzip — none of it configured.
 //
 //   nurlpkg install http-client        # then:  fetch https://example.org/
+//                                      #        fetch --h3 https://cloudflare-quic.com/
 //   # or in a checkout:
 //   ./nurl.sh packages/http-client/examples/fetch.nu /tmp/fetch
 //   /tmp/fetch https://example.org/
@@ -14,6 +15,7 @@ $ `stdlib/std/args.nu`
 $ `../src/http_client.nu`
 
 @ proto_name i p → s {
+    ? == p 3 { ^ `HTTP/3` } {}
     ? == p 2 { ^ `HTTP/2` } {}
     ? == p 1 { ^ `HTTP/1.1` } {}
     ^ `none`
@@ -22,6 +24,7 @@ $ `../src/http_client.nu`
 @ main → i {
     : ArgParser ap ( args_new `fetch` `fetch a URL with the HttpClient facade` )
     ( args_flag ap `insecure` 107 `skip TLS verification` )
+    ( args_flag ap `h3` 51 `try HTTP/3 (QUIC) first instead of waiting for Alt-Svc` )
     ? ( args_parse_argv ap ) {} { ( args_free ap ) ^ 2 }
     : ( Vec String ) pos ( args_positionals ap )
     ? == ( vec_len [String] pos ) 0 {
@@ -33,6 +36,7 @@ $ `../src/http_client.nu`
 
     : *HttpClient c ( http_client_new )
     ? ( args_present ap `insecure` ) { ( http_client_set_verify c F ) } {}
+    ? ( args_present ap `h3` ) { ( http_client_set_h3 c 1 ) } {}
 
     : ~ i rc 0
     ?? ( http_client_get c ( string_data url ) ) {

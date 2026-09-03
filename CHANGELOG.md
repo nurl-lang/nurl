@@ -10,6 +10,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **HTTP/3 client, and `packages/http-client` speaks it** —
+  `ext/http3_client.nu` is the client half of RFC 9114 over the QUIC
+  client (`h3_client_connect` / `h3_client_request`: control and QPACK
+  streams, a request per bidirectional stream, 1xx skipped, trailers
+  accepted, GOAWAY and stream refusals reported by code). The facade
+  moves an origin onto QUIC once a response advertises
+  `Alt-Svc: h3=":port"` (parsed and cached per origin with its `ma`),
+  or straight away with `http_client_set_h3 c 1`; a QUIC attempt that
+  fails falls back to TCP for that origin, and `http_client_last_proto`
+  reports 3. `packages/http-client` 0.2.0; `examples/fetch.nu --h3`.
+  `fetch --h3 https://cloudflare-quic.com/`, google and quic.nginx.org
+  answer `HTTP/3 (post-quantum) — status 200`. The package suite grows
+  to 25 checks (Alt-Svc switch, QUIC-first, cookies / gzip / redirects /
+  POST over h3, fall-back when no UDP listener answers);
+  `compiler/tests/http3_client_server.nu` drives the client against
+  `ext/http3_server.nu` in-process.
+
+### Fixed
+
+- **QPACK name-reference encoding** (`ext/http3_qpack.nu`): a field
+  whose name is in the static table but whose value is not was encoded
+  with index `2 − k` instead of `−(k + 2)` (a prefix-arity slip), so
+  `:authority` went on the wire as `age`, `accept` as `:status`, and
+  the HTTP/3 server's `date` as `age`. The codec test's "name-only"
+  case was an exact hit and never exercised the path; it now round-trips
+  `:authority`, `:path`, `date` and `accept` with foreign values. Found
+  by the first HTTP/3 request between two NURL ends.
+
+- **QUIC client role** — `std/quic_conn.nu` now plays either side
+  (`quic_conn_new_client`, `quic_conn_open_bidi`, `quic_conn_is_pq`,
+  `quic_conn_confirmed`, `quic_conn_new_token`, the peer's close code
+  and reason), `std/quic_tls.nu` gains the CRYPTO-frame driver of the
+  client TLS machine (`QuicTlsCli` over `CliHs`, with certificate
+  verification through `std/tls_verify.nu`), and `std/quic_client.nu`
+  is the socket + loop around one client connection
+  (`quic_client_connect` / `_step` / `_wait_readable` / `_close`). The
+  client honours Retry (integrity tag checked, new DCID and Initial
+  keys, the token in every Initial, the ClientHello sent again with the
+  packet number continuing), Version Negotiation (ignored when it lists
+  v1 or arrives after any processed packet, otherwise the attempt ends),
+  NEW_TOKEN, HANDSHAKE_DONE (confirmation, Handshake keys dropped),
+  pads every datagram that carries an Initial to 1200 bytes and drops
+  Initial keys on its first Handshake packet; it sends an empty
+  legacy_session_id (RFC 9001 §8.4 — Google's and Cloudflare's servers
+  refuse the TCP-style 32-byte one with `UNEXPECTED_COMPATIBILITY_MODE`).
+  `compiler/tests/quic_client_server.nu` is the first QUIC handshake in
+  the repo that completes with NURL on both ends — X25519MLKEM768
+  asserted on both, a bidirectional stream echoed with FIN, a clean
+  close seen by the server, and the self-signed server refused with
+  `CRYPTO_ERROR(bad_certificate)` when verification is on;
+  `quic_client_retry.nu` pins the Retry / VN behaviour sans-IO. Against
+  cloudflare-quic.com, www.google.com, quic.nginx.org and
+  www.facebook.com (verification on, system roots) the client completes
+  the handshake with a post-quantum key exchange and sees HANDSHAKE_DONE.
+
+### Changed
+
+- **The TLS 1.3 client handshake is a message-level machine, `CliHs`
+  (`std/tls.nu`)** — the split the server got in `SrvHs` for HTTP/3:
+  whole handshake messages go in (`_cli_hs_server_hello`,
+  `_cli_hs_message`), the ClientHello and client Finished come out
+  (`out_ch`, `out_fin`), the traffic secrets are read straight off the
+  machine, and a driver may add a ClientHello extension and require one
+  back in EncryptedExtensions (`_cli_hs_set_ext` — how QUIC will carry
+  `quic_transport_parameters`). `__tls_handshake` is now the record
+  layer around it: same bytes on the wire (h2spec 146/146, every tls_*
+  and http2 test unchanged, `packages/http-client` 14/14, example.org
+  over HTTP/2 + X25519MLKEM768), with the transcript hashed
+  incrementally and snapshotted at the checkpoints instead of
+  re-hashed from scratch five times. Handshake failures the client
+  detects are now said with the matching alert (illegal_parameter,
+  decrypt_error, missing_extension, …) before the close, not only
+  no_application_protocol; a server flight carrying a hello, ticket,
+  EndOfEarlyData or KeyUpdate before the Finished is refused as
+  unexpected_message. The TLS 1.2 fallback is unchanged (hands over
+  after the ServerHello, verified against `openssl s_server -tls1_2`).
+
+### Added
+
 - **`packages/http-client` — the unified HTTP *client* facade, the
   mirror of `packages/http`.** One `HttpClient` fetches over whichever
   protocol the server offers — HTTP/2 or HTTP/1.1 chosen by ALPN — with

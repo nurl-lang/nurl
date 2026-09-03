@@ -749,7 +749,7 @@ $ `stdlib/std/aes_gcm.nu`
 
 @ _srv_hs_free * SrvHs h → v {
     ? == # i h 0 { ^ } {}
-    ? != # i . h trh 0 { ( __trh_abort . h trh ) } {}
+    ? != # i . h trh 0 { ( _trh_abort . h trh ) } {}
     ( vec_free [u] . h cert_chain )
     ( vec_free [u] . h ec_priv )
     ( vec_free [u] . h rsa_n )
@@ -1389,12 +1389,6 @@ $ `stdlib/std/aes_gcm.nu`
 // An empty `pq_chain` makes it tls_accept_alpn / tls_accept_rsa_alpn.
 @ tls_accept_dual_alpn i raw ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk ( Vec u ) alpn_prefs → !*TlsConn TlsErr {
     ^ ( __tls_accept_impl raw cert_chain keytype ec_priv rsa_n rsa_e rsa_d 0 pq_chain pq_level pq_sk alpn_prefs )
-}
-
-// Discard a live transcript hasher (error paths).
-@ __trh_abort * Sha256 h → v {
-    : ( Vec u ) d ( sha256_final h )
-    ( vec_free [u] d )
 }
 
 @ __srv_rand i n → ( Vec u ) {

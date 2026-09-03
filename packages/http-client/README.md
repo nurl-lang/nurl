@@ -36,8 +36,9 @@ $ `deps/http-client/src/http_client.nu`
 | Feature | How |
 | --- | --- |
 | **Automatic protocol** | an `https` origin is dialled with ALPN `h2 http/1.1`; whichever the server picks is what the client speaks — HTTP/2 multiplexed, or HTTP/1.1 with keep-alive. Plaintext `http` is HTTP/1.1. |
+| **HTTP/3** | a response carrying `Alt-Svc: h3=":443"` moves the origin's next request onto QUIC (`stdlib/ext/http3_client.nu`, pure NURL: Retry, Version Negotiation, NEW_TOKEN, HANDSHAKE_DONE all honoured); `http_client_set_h3 c 1` tries QUIC first without waiting for Alt-Svc, `2` never uses it. A QUIC attempt that fails (no UDP path, a middlebox, a server that stopped) falls back to TCP for that origin and stays there. |
 | **Post-quantum TLS** | the stdlib client offers X25519MLKEM768 first and verifies ML-DSA (44/65/87) certificate chains, so a post-quantum server is used as such automatically. `http_client_last_pq c` reports it. |
-| **Connection pooling** | one live connection per `(scheme, host, port)` — the h2 connection is multiplexed, the h1 connection is kept alive and reused. |
+| **Connection pooling** | one live connection per `(scheme, host, port)` — the h2 connection is multiplexed, the h1 connection is kept alive and reused, the h3 connection carries every request as its own QUIC stream. |
 | **TLS session resumption** | tickets are cached per host and offered on the next connection, so a repeat visit skips the certificate and the signature. |
 | **Redirects** | 3xx are followed (up to `max_redirects`); a 303, and a 301/302 on a POST, become a bodyless GET, exactly as browsers do. Relative `Location`s resolve per RFC 3986 §5.2. |
 | **Cookies** | a built-in RFC 6265 jar stores `Set-Cookie` and sends `Cookie` on matching requests. |
@@ -48,6 +49,7 @@ $ `deps/http-client/src/http_client.nu`
 ```nurl
 : *HttpClient c ( http_client_new )
 ( http_client_set_verify c F )          // pinned / self-signed / test servers
+( http_client_set_h3 c 1 )              // QUIC first (0: after Alt-Svc — default; 2: never)
 ( http_client_set_timeout c 5000 )      // per read/write deadline, ms (0 = none)
 ( http_client_set_max_redirects c 3 )
 ( http_client_set_decompress c F )       // leave bodies as the wire carried them
@@ -76,7 +78,7 @@ the `http` server package builds, with `http_client_status`,
 ## Evidence
 
 ```nurl
-( http_client_last_proto c )   // 1 HTTP/1.1, 2 HTTP/2, 0 none yet
+( http_client_last_proto c )   // 1 HTTP/1.1, 2 HTTP/2, 3 HTTP/3, 0 none yet
 ( http_client_last_pq c )      // T when the key exchange was post-quantum
 ```
 
@@ -99,9 +101,11 @@ is complete); when it lands, this facade gains it behind the same
 ## Tests
 
 `./tests/client_test.sh` builds a server on the `http` package and drives
-the facade against it over both plaintext and TLS: protocol selection,
-connection reuse, redirects and the redirect cap, cookies, gzip decoding,
-POST bodies, and post-quantum key exchange. Requires `openssl` (to mint a
+the facade against it over plaintext, TLS (HTTP/2 by ALPN) and QUIC
+(HTTP/3 after Alt-Svc, and QUIC-first): protocol selection, connection
+reuse, redirects and the redirect cap, cookies, gzip decoding, POST
+bodies, post-quantum key exchange, and the fall-back to TCP when no UDP
+listener answers. Requires `openssl` (to mint a
 test certificate) and `curl` (readiness probe).
 
 ## License

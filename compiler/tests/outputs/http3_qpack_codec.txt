@@ -33,6 +33,15 @@ rt_1n: PASS
 rt_1v: PASS
 rt_2n: PASS
 rt_2v: PASS
+nameref_authority_byte: PASS
+nm_count: PASS
+nm_0n: PASS
+nm_0v: PASS
+nm_1n: PASS
+nm_1v: PASS
+nm_2n: PASS
+nm_3n: PASS
+nm_3v: PASS
 invalid_static_index: PASS
 dynamic_indexed: PASS
 post_base_indexed: PASS
