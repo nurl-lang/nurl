@@ -58,6 +58,8 @@ $ `stdlib/ext/http3_server.nu`
     i max_keepalive  // per-conn request reuse cap; -1 → server default (0 = close after one)
     i req_timeout_ms  // per-request wall-clock budget; -1 → server default (0 = disabled)
     i http3  // 1 → a TLS listener also serves HTTP/3 on the same port over UDP (default)
+    String pq_cert  // optional second identity for TLS listeners: ML-DSA chain PEM ("" = none)
+    String pq_key  // ...and its PKCS#8 key PEM
 }
 
 // ── Construction / teardown ───────────────────────────────────────────
@@ -79,12 +81,16 @@ $ `stdlib/ext/http3_server.nu`
     = . a max_keepalive -1
     = . a req_timeout_ms -1
     = . a http3 1
+    = . a pq_cert ( string_new )
+    = . a pq_key ( string_new )
     ^ a
 }
 
 @ http_app_free * HttpApp a → v {
     ( router_free . a router )
     ( string_free . a webroot )
+    ( string_free . a pq_cert )
+    ( string_free . a pq_key )
     ( nurl_free a )
 }
 
@@ -100,6 +106,26 @@ $ `stdlib/ext/http3_server.nu`
 // HTTP/3 on TLS listeners: on by default. `http_app_set_http3 a 0` keeps
 // a TLS listener TCP-only (no UDP socket, no Alt-Svc).
 @ http_app_set_http3 * HttpApp a i on → v { = . a http3 on }
+
+// A second, post-quantum identity for `http_app_listen_tls`: an ML-DSA
+// (44 / 65 / 87) certificate chain and PKCS#8 key, served BESIDE the
+// classical pair the listen call takes. Which one a connection is shown
+// is decided per ClientHello from the client's signature_algorithms
+// (RFC 8446 §4.4.2.2): the ML-DSA leaf for every client that lists its
+// scheme, the classical leaf for the rest — so deploying a post-quantum
+// certificate never turns a client away. Applies to HTTP/1.1, HTTP/2 and
+// HTTP/3 alike (the QUIC handshake is the same TLS 1.3 code). Mint a
+// self-signed pair with `x509_selfsigned_mldsa` (std/x509_gen.nu) or the
+// pki-server package; no public CA issues ML-DSA certificates yet.
+//
+// To serve ONLY an ML-DSA certificate, hand it to `http_app_listen_tls`
+// directly — the key form is auto-detected.
+@ http_app_set_pq_cert * HttpApp a s cert s key → v {
+    ( string_free . a pq_cert )
+    = . a pq_cert ( string_from cert )
+    ( string_free . a pq_key )
+    = . a pq_key ( string_from key )
+}
 
 // Serve fiber-per-connection on the M:N async runtime (server_run_async):
 // every accepted connection gets its own fiber, and `n` worker pthreads
@@ -319,6 +345,16 @@ $ `stdlib/ext/http3_server.nu`
     : ~ ( @ HttpResponse HttpRequest ) altw base
     ? & & != . a http3 0 > ( nurl_str_len cert ) 0 != 0 ( nurl_str_eq scheme `https` ) {
         = h3_creds ( http3_creds_load cert key )
+        // The second identity, when configured: the TCP listener has
+        // already loaded the same files, so a failure here is a
+        // filesystem race, and it is reported the same way as the
+        // primary pair rather than served half-configured.
+        ? & != # i h3_creds 0 > ( string_len . a pq_cert ) 0 {
+            ? ( http3_creds_add_pq h3_creds ( string_data . a pq_cert ) ( string_data . a pq_key ) ) {} {
+                ( quic_creds_free h3_creds )
+                = h3_creds # *QuicCreds 0
+            }
+        } {}
         ? == # i h3_creds 0 { ( nurl_eprintln `http: HTTP/3 off — certificate or key could not be loaded for QUIC` ) } {
             ?? ( udp_bind host port ) {
                 F e → {
@@ -408,8 +444,9 @@ $ `stdlib/ext/http3_server.nu`
     }
 }
 
-// Same, over TLS. `cert`/`key` are PEM paths (EC or RSA leaf; a fullchain
-// PEM is accepted for `cert`).
+// Same, over TLS. `cert`/`key` are PEM paths (EC, RSA or ML-DSA leaf,
+// auto-detected; a fullchain PEM is accepted for `cert`). With
+// `http_app_set_pq_cert` an ML-DSA pair is served beside this one.
 @ http_app_listen_tls * HttpApp a s host i port s cert s key → i {
     // Advertise HTTP/2 and HTTP/1.1 over ALPN (RFC 7301), h2 preferred:
     // an HTTP/2-capable client (browsers, curl, oha) gets HTTP/2, anything
@@ -417,7 +454,9 @@ $ `stdlib/ext/http3_server.nu`
     // server itself tells the protocols apart by the connection preface.
     // HTTP/3 rides beside it: `__httpapp_serve` binds the same port over
     // UDP for QUIC and the TCP responses announce it with Alt-Svc.
-    : !TcpListener NetErr lr ( tcp_listen_tls_with_alpn host port 128 cert key `h2 http/1.1` )
+    : !TcpListener NetErr lr ? > ( string_len . a pq_cert ) 0
+    ( tcp_listen_tls_dual host port 128 cert key ( string_data . a pq_cert ) ( string_data . a pq_key ) `h2 http/1.1` )
+    ( tcp_listen_tls_with_alpn host port 128 cert key `h2 http/1.1` )
     ?? lr {
         T listener → { ^ ( __httpapp_serve a listener `https` host port cert key ) }
         F e → {

@@ -10,6 +10,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Certificate selection by the client's `signature_algorithms`
+  (RFC 8446 §4.4.2.2) — a post-quantum certificate beside a classical
+  one.** The pure-NURL TLS 1.3 server can now hold two identities: the
+  EC P-256 / RSA leaf it always had and an ML-DSA (FIPS 204) leaf, and
+  shows each ClientHello the one it can verify — the ML-DSA leaf to a
+  client listing `mldsaNN`, the classical leaf to everything else — so
+  deploying a post-quantum certificate never turns a client away. The
+  choice is made once, on the shared handshake state, so it covers TCP
+  TLS and the QUIC handshake (HTTP/3) alike. `tls_accept_dual_alpn`
+  (`std/tls_server.nu`); `tcp_listen_tls_dual host port backlog cert key
+  pq_cert pq_key alpn` (`std/net.nu`), which refuses a non-ML-DSA key in
+  the PQ slot with `NetTlsKeyLoad`; `quic_creds_set_pq` /
+  `http3_creds_add_pq` for QUIC; `tls_cv_scheme conn` /
+  `tcp_tls_sig_scheme conn` report the scheme a connection was signed
+  with, on both ends. `_load_tls_creds` auto-detects an ML-DSA PKCS#8
+  key (keytype 2), so `tcp_listen_tls` with an ML-DSA pair alone serves
+  it directly. Test: `tls_cert_select.nu` (offline selection against
+  the RFC 9001 A.2 ClientHello with and without `mldsa65`, level
+  mismatch, no second identity; end to end from PEM files).
+- **http 0.5.0:** `http_app_set_pq_cert a cert key` — the second
+  identity for `http_app_listen_tls`, applied to HTTP/1.1, HTTP/2 and
+  HTTP/3 on that listener; the README gains a Capabilities table
+  (protocols, key exchange, authentication, how each is chosen).
+
+### Fixed
+
+- **`ec_p256_priv_from_pem` / `rsa_priv_from_pem` accepted any PKCS#8
+  key.** Neither checked the AlgorithmIdentifier: an ML-DSA PKCS#8 key
+  was sliced into a 32-byte "P-256 scalar" and accepted, so the TLS
+  listener's key auto-detection could never reach the ML-DSA parser.
+  Both now require their own OID (id-ecPublicKey / rsaEncryption).
+
 - **HTTP/3 (RFC 9114) over a pure-NURL QUIC (RFC 9000/9001/9002) — on
   every TLS listener.** `http_app_listen_tls` now also binds its host:port
   over UDP and serves HTTP/3 there through the same routes and handler,

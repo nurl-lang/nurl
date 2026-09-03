@@ -33,6 +33,39 @@ $ `deps/http/src/http.nu`
 }
 ```
 
+## Capabilities
+
+One `http_app_listen_tls` call gives a server every protocol a client
+might ask for, chosen per connection by the client, with nothing to
+configure:
+
+| | What the client gets | How it is chosen |
+| --- | --- | --- |
+| **HTTP/1.1** | keep-alive, pipelining, chunked bodies, streaming responses | the default on both listeners |
+| **HTTP/2** (RFC 9113) | multiplexed streams, HPACK, flow control | ALPN `h2` on the TLS listener; the connection preface on the plaintext listener (prior knowledge) |
+| **HTTP/3** (RFC 9114) | QUIC (RFC 9000/9001/9002) over UDP on the same port, QPACK, 0-RTT-less 1-RTT handshake | `Alt-Svc: h3` on every TCP response; a client that already knows (curl `--http3`, a browser on its second visit) connects over UDP directly |
+| **Post-quantum key exchange** | X25519MLKEM768 (hybrid ML-KEM-768, RFC 9370 group 0x11ec) | the server's first preference on TCP and QUIC alike; a client without it (pre-2024 stacks) falls back to X25519 or P-256 |
+| **Post-quantum authentication** | an ML-DSA (FIPS 204) certificate, CertificateVerify signed with `mldsa44/65/87` | `http_app_set_pq_cert`: the ML-DSA leaf is shown to every client whose `signature_algorithms` lists its scheme (RFC 8446 §4.4.2.2), the classical leaf to the rest — so a post-quantum certificate never turns a client away |
+| **Classical authentication** | EC P-256 (`ecdsa_secp256r1_sha256`) or RSA (`rsa_pss_rsae_sha256`) leaf, full chain | the `cert` / `key` pair of `http_app_listen_tls`, key form auto-detected |
+| **Session resumption** | TLS 1.3 tickets, one shared ticket key per process | offered to every client that asks (`psk_key_exchange_modes`) |
+
+The whole stack — TCP/TLS 1.3, QUIC, HTTP/1.1, HTTP/2, HTTP/3, ML-KEM,
+ML-DSA, X.509 — is pure NURL over a libc socket: no OpenSSL, no nghttp2,
+no quiche. With both post-quantum pieces negotiated, no asymmetric
+operation in the handshake is one a quantum computer breaks: the traffic
+keys cannot be recovered from a recording, and the server cannot be
+impersonated. Public CAs do not issue ML-DSA certificates yet; mint a
+self-signed one with `x509_selfsigned_mldsa` (`std/x509_gen.nu`) or run
+the [pki-server](../pki-server) package as a private CA.
+
+```nurl
+( http_app_set_pq_cert a `certs/mldsa65.pem` `certs/mldsa65.key` )   // optional
+^ ( http_app_listen_tls a `0.0.0.0` 443 `certs/fullchain.pem` `certs/privkey.pem` )
+```
+
+`tcp_tls_sig_scheme conn` / `tcp_is_post_quantum conn` (`std/net.nu`)
+report what a given connection settled on.
+
 ## The App API
 
 Construction & serving:
@@ -41,8 +74,9 @@ Construction & serving:
 | --- | --- |
 | `( http_app_new )` → `*HttpApp` | create an app (free with `http_app_free`) |
 | `( http_app_listen a host port )` → `i` | bind + serve until closed (SIGINT/SIGTERM/error); HTTP/1.1 and HTTP/2 (prior knowledge) on the same port |
-| `( http_app_listen_tls a host port cert key )` → `i` | same, over TLS (PEM paths; EC or RSA leaf); ALPN `h2 http/1.1`, so HTTP/2-capable clients get HTTP/2; **HTTP/3 (QUIC) on the same port over UDP**, announced with `Alt-Svc` on the TCP responses |
+| `( http_app_listen_tls a host port cert key )` → `i` | same, over TLS (PEM paths; EC, RSA or ML-DSA leaf, auto-detected); ALPN `h2 http/1.1`, so HTTP/2-capable clients get HTTP/2; **HTTP/3 (QUIC) on the same port over UDP**, announced with `Alt-Svc` on the TCP responses |
 | `( http_app_set_http3 a 0 )` → `v` | keep a TLS listener TCP-only (no UDP socket, no Alt-Svc); default 1 |
+| `( http_app_set_pq_cert a cert key )` → `v` | a second, **post-quantum identity** (ML-DSA-44/65/87 chain + PKCS#8 key) served beside the classical pair; each client is shown the one its `signature_algorithms` can verify — see [Capabilities](#capabilities) |
 
 Routing (handlers are `( @ HttpResponse HttpRequest Params )`):
 

@@ -9,6 +9,7 @@
 //
 //   ( quic_tls_srv_new cert_chain keytype ec_priv rsa_n rsa_e rsa_d ml_level alpn_prefs tp )
 //                                         → *QuicTlsSrv   `tp` = encoded quic_transport_parameters body
+//   ( quic_tls_srv_set_pq s pq_chain pq_level pq_sk ) → v   optional ML-DSA identity beside the classical one
 //   ( quic_tls_srv_free s )               → v
 //   ( quic_tls_srv_crypto s level off data ) → i          0 ok, else a QUIC transport error code:
 //                                                          0x100+alert (CRYPTO_ERROR), 0x0a PROTOCOL_VIOLATION,
@@ -84,6 +85,13 @@ $ `stdlib/std/quic_rxbuf.nu`
     = . s out1 ( vec_new [u] )
     = . s out2 ( vec_new [u] )
     ^ s
+}
+
+// A second, ML-DSA identity for this handshake — chosen over the
+// classical one when the ClientHello's signature_algorithms lists its
+// scheme (`_srv_hs_set_pq` / `__srv_pick_cert` in std/tls_server.nu).
+@ quic_tls_srv_set_pq * QuicTlsSrv s ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk → v {
+    ( _srv_hs_set_pq . s hs pq_chain pq_level pq_sk )
 }
 
 @ quic_tls_srv_free * QuicTlsSrv s → v {
@@ -174,6 +182,9 @@ $ `stdlib/std/quic_rxbuf.nu`
 @ quic_tls_srv_alpn * QuicTlsSrv s → ( Vec u ) { ^ . . s hs alpn_sel }
 
 @ quic_tls_srv_cipher * QuicTlsSrv s → i { ^ ? == . . s hs cipher 1 1 2 }
+
+// The CertificateVerify scheme this handshake signs with (see tls_cv_scheme).
+@ quic_tls_srv_sig_scheme * QuicTlsSrv s → i { ^ ( _srv_hs_sig_scheme . s hs ) }
 
 @ quic_tls_srv_c_hs * QuicTlsSrv s → ( Vec u ) { ^ . . s hs c_hs }
 

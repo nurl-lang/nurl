@@ -96,6 +96,16 @@ $ `stdlib/std/subtle.nu`
     ^ + + 128 * * 32 . p sbits + . p k . p l * 416 . p k
 }
 
+// The parameter set a secret key of `n` bytes belongs to — the three
+// FIPS 204 sizes are distinct (2560 / 4032 / 4896), so a raw key names
+// its own level. 0 for any other length.
+@ mldsa_level_of_sk_len i n → i {
+    ? == n ( mldsa_sk_len 44 ) { ^ 44 } {}
+    ? == n ( mldsa_sk_len 65 ) { ^ 65 } {}
+    ? == n ( mldsa_sk_len 87 ) { ^ 87 } {}
+    ^ 0
+}
+
 @ mldsa_sig_len i level → i {
     : MldsaParams p ( __mldsa_params level )
     ^ + + . p lam * * 32 . p zbits . p l + . p omega . p k
