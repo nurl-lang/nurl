@@ -346,7 +346,8 @@ $ `stdlib/std/quic_varint.nu`
     ~ < k ( qpack_static_table_size ) {
         ? ( nurl_str_eq ( qpack_static_name k ) name ) {
             ? ( nurl_str_eq ( qpack_static_value k ) value ) { ^ k } {}
-            ? < best 0 { = best - 0 - k 2 } {}
+            // -(k+2), so that k = 0 (:authority) is told apart from "no hit"
+            ? < best 0 { = best - - 0 k 2 } {}
         } {}
         = k + k 1
     }

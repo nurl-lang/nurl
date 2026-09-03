@@ -10,6 +10,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **HTTP/3 client, and `packages/http-client` speaks it** —
+  `ext/http3_client.nu` is the client half of RFC 9114 over the QUIC
+  client (`h3_client_connect` / `h3_client_request`: control and QPACK
+  streams, a request per bidirectional stream, 1xx skipped, trailers
+  accepted, GOAWAY and stream refusals reported by code). The facade
+  moves an origin onto QUIC once a response advertises
+  `Alt-Svc: h3=":port"` (parsed and cached per origin with its `ma`),
+  or straight away with `http_client_set_h3 c 1`; a QUIC attempt that
+  fails falls back to TCP for that origin, and `http_client_last_proto`
+  reports 3. `packages/http-client` 0.2.0; `examples/fetch.nu --h3`.
+  `fetch --h3 https://cloudflare-quic.com/`, google and quic.nginx.org
+  answer `HTTP/3 (post-quantum) — status 200`. The package suite grows
+  to 25 checks (Alt-Svc switch, QUIC-first, cookies / gzip / redirects /
+  POST over h3, fall-back when no UDP listener answers);
+  `compiler/tests/http3_client_server.nu` drives the client against
+  `ext/http3_server.nu` in-process.
+
+### Fixed
+
+- **QPACK name-reference encoding** (`ext/http3_qpack.nu`): a field
+  whose name is in the static table but whose value is not was encoded
+  with index `2 − k` instead of `−(k + 2)` (a prefix-arity slip), so
+  `:authority` went on the wire as `age`, `accept` as `:status`, and
+  the HTTP/3 server's `date` as `age`. The codec test's "name-only"
+  case was an exact hit and never exercised the path; it now round-trips
+  `:authority`, `:path`, `date` and `accept` with foreign values. Found
+  by the first HTTP/3 request between two NURL ends.
+
 - **QUIC client role** — `std/quic_conn.nu` now plays either side
   (`quic_conn_new_client`, `quic_conn_open_bidi`, `quic_conn_is_pq`,
   `quic_conn_confirmed`, `quic_conn_new_token`, the peer's close code

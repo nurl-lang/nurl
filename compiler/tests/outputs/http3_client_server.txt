@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+connect=OK
+pq=T
+get_status=200
+get_content_type=text/plain
+get_served_by=nurl-h3
+get_body=hello over h3
+post_status=200
+post_echo=T
+missing_status=404
+alive_after_three=T
+server_requests=3
+server_accepted=1

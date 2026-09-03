@@ -213,7 +213,10 @@ Version Negotiation); the same connection in its client role
 (`quic_conn_new_client`, `quic_conn_open_bidi` — Retry, Version
 Negotiation, NEW_TOKEN and HANDSHAKE_DONE handled, certificate verified
 through `std/tls_verify.nu`) with `std/quic_client.nu` as its socket and
-loop (`quic_client_connect` / `_wait_readable` / `_close`); `ext/http3_qpack.nu` (RFC 9204, static table +
+loop (`quic_client_connect` / `_wait_readable` / `_close`) and
+`ext/http3_client.nu` on top — an HTTP/3 client (`h3_client_connect` /
+`h3_client_request`) that `packages/http-client` switches to when a
+response advertises `Alt-Svc: h3`; `ext/http3_qpack.nu` (RFC 9204, static table +
 literals — this endpoint advertises a zero-size dynamic table),
 `ext/http3_frame.nu`, `ext/http3_conn.nu` (control / QPACK streams,
 request streams → `HttpRequest`), `ext/http3_server.nu`. A program that

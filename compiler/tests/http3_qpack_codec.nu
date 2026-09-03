@@ -153,6 +153,36 @@ $ `stdlib/ext/http3_qpack.nu`
     }
     ( vec_free [u] enc )
 
+    // ── name-only static hits: the name is in the table, the value is
+    // not — `:authority` is index 0, which a "-(k+2)" encoding must keep
+    // apart from "no hit"; `date` (6) and `accept` (29) sit where an
+    // off-by-two lands on `age` and `:status` (this was a real bug: the
+    // HTTP/3 client's :authority reached the server as `age`) ──
+    : ( Vec Header ) nm ( vec_new [Header] )
+    ( vec_push [Header] nm ( header_new `:authority` `localhost` ) )
+    ( vec_push [Header] nm ( header_new `:path` `/x` ) )
+    ( vec_push [Header] nm ( header_new `date` `Tue, 01 Jan 2030 00:00:00 GMT` ) )
+    ( vec_push [Header] nm ( header_new `accept` `text/plain` ) )
+    : ( Vec u ) enc2 ( qpack_encode_section nm )
+    ( free_hs nm )
+    // 0x50 | index with a 4-bit prefix: :authority → 0x50, :path → 0x51
+    = fails + fails ( check_int `nameref_authority_byte` ( __qpk_bget_pub enc2 2 ) 80 )
+    ?? ( qpack_decode_section enc2 ) {
+        T hs → {
+            = fails + fails ( check_int `nm_count` ( vec_len [Header] hs ) 4 )
+            = fails + fails ( check_str `nm_0n` ( hdr_name hs 0 ) `:authority` )
+            = fails + fails ( check_str `nm_0v` ( hdr_value hs 0 ) `localhost` )
+            = fails + fails ( check_str `nm_1n` ( hdr_name hs 1 ) `:path` )
+            = fails + fails ( check_str `nm_1v` ( hdr_value hs 1 ) `/x` )
+            = fails + fails ( check_str `nm_2n` ( hdr_name hs 2 ) `date` )
+            = fails + fails ( check_str `nm_3n` ( hdr_name hs 3 ) `accept` )
+            = fails + fails ( check_str `nm_3v` ( hdr_value hs 3 ) `text/plain` )
+            ( free_hs hs )
+        }
+        F code → { = fails + fails ( check_int `nm_decode` code 0 ) }
+    }
+    ( vec_free [u] enc2 )
+
     // ── refusals (h3spec QPACK cases) ────────────────────────────
     = fails + fails ( expect_decode_err `invalid_static_index` `0000ff24` 512 )
     = fails + fails ( expect_decode_err `dynamic_indexed` `000080` 512 )
