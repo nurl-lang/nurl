@@ -112,19 +112,20 @@ any syscall — there is no sandbox (unlike the playground's container).
   transport), leaving only analysis/read tools — the mode to expose when you
   only want the agent to inspect, not execute.
 
-Tool availability is enforced twice: disabled tools are omitted from
-`tools/list` *and* refused (with an explanatory error) if called directly.
+A disabled tool is not registered at all: it is absent from `tools/list`, and a
+call to it gets "unknown tool". *Why* it is absent goes into the server's
+`instructions`, which a client reads during the handshake — so a model learns
+that this endpoint is read-only, or that `nurl_run` needs `--allow-run`, before
+it picks a tool rather than after a rejected call.
 
-`nurl_run` is **arbitrary code execution**: NURL programs link libc and can make
-any syscall — there is no sandbox (unlike the playground's container). Over
-stdio this is safe, because only the process that spawned the server can talk to
-it. A network transport (`--http`, with token auth and a `--read-only` mode that
-omits `run`) is intentionally **deferred to a later version**; this one is
-stdio-only by design.
+The bearer token is compared in constant time, so the comparison's duration
+cannot leak how many leading bytes matched.
 
 ## Status
 
-v0.4.1 — stdio + token-authenticated HTTP transport. Not yet bundled with the
-toolchain; install it explicitly. Possible follow-ups: serving the grammar /
-spec / examples once the installer ships them (a `nurl_doc` tool); a continuous
-SSE notification stream; per-session state.
+v0.13.0 — stdio + token-authenticated HTTP transport, both served through
+`stdlib/ext/mcp_server.nu`, so the dual-era handshake (`server/discover`, the
+protocol version gate, `_meta` serverInfo) and per-handler panic isolation come
+from one implementation shared with the rest of the tree. Not yet bundled with
+the toolchain; install it explicitly. Possible follow-ups: a continuous SSE
+notification stream; per-session state.
