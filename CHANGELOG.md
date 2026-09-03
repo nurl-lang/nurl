@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.59.0] — 2026-09-03
+
 ### Added
 
 - **Certificate selection by the client's `signature_algorithms`
@@ -33,6 +35,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identity for `http_app_listen_tls`, applied to HTTP/1.1, HTTP/2 and
   HTTP/3 on that listener; the README gains a Capabilities table
   (protocols, key exchange, authentication, how each is chosen).
+
+- **HTTP/2 is part of the HTTP server.** Every accept path of
+  `stdlib/ext/http_server.nu` — `server_run`, `server_run_pool`,
+  `server_run_async`, and so the `packages/http` HttpApp facade — now
+  serves HTTP/2 alongside HTTP/1.1 on the same listener, under the same
+  DoS gate, idle timeout, body limit and handler contract. Two ways in:
+  a TLS client that negotiated `h2` over ALPN (`http_app_listen_tls`
+  advertises `h2 http/1.1`; `tcp_alpn_is` decides per connection without
+  allocating), and RFC 9113 §3.4 prior knowledge on any connection — the
+  keep-alive loop recognises the 24-byte `PRI * HTTP/2.0` preface in the
+  first bytes and hands the connection, bytes and all, to the HTTP/2 state
+  machine (`h2_conn_new_buffered`). `curl --http2`, `curl
+  --http2-prior-knowledge`, browsers and `oha --http2` get HTTP/2 from an
+  unchanged `HttpApp`; h2spec 2.6.0 passes 146/146 (147/147 strict) against
+  the HttpApp TLS listener and against `examples/h2c_server.nu`; on a
+  shared plaintext port h2spec's §3.5/2 ("invalid connection preface")
+  gets HTTP/1.1's 400 instead of a GOAWAY, by design — see the comment in
+  `_serve_keepalive_loop`.
+  - HTTP/2 frames are read through a connection-level receive buffer
+    (`h2_read_frame_buf`): one `recv` per burst instead of a 9-byte header
+    read plus a payload read per frame.
+  - **Response headers are HPACK-indexed** (`hpack_encode_headers_dyn`):
+    static-table indices, a dynamic table mirroring the peer's, the
+    mandatory size update when the peer shrinks `SETTINGS_HEADER_TABLE_SIZE`;
+    a repeated response's header block goes from 46 bytes to 4. The old
+    encoder emitted every field as an unindexed literal.
+  - **HEADERS and DATA leave in one write** when the body fits the first
+    frame (`tcp_write_all2`: frame headers + the response body, no copy, one
+    `sendmsg`); larger bodies go out as frame header + borrowed body slice
+    per chunk instead of a byte-by-byte copy. Measured on the bench
+    server (ABAB, 5 s cells): +24 % req/s at 1 connection x 1 stream,
+    +35 % at 10 x 10, +57 % at 1 x 100, p99 roughly halved; HTTP/1.1
+    unchanged.
+  - An idle HTTP/2 connection whose receive deadline fires now ends with
+    GOAWAY(NO_ERROR) and a close (`H2ConnReadTimeout`), not an error.
+  - `server_run_h2_capable` / `server_run_once_h2_capable` (a second,
+    blocking accept loop with none of the server's safeguards, never
+    called) are gone; `http2_serve` stays for programs with their own
+    accept loop.
+  - `tools/leakcheck/run.sh` now drives HTTP/2 requests through the same
+    server and demands zero leaks from them too.
+  - **HTTP/2 benchmark alongside the HTTP/1.1 one**: `bench/run_http2.sh`
+    → `bench/HTTP2_RESULTS.md` (h2c and h2-over-TLS, C connections x P
+    streams cells, NURL vs hyper `http2` vs `node:http2`, plus NURL
+    HTTP/2-vs-HTTP/1.1 on the same listener), with its own manual workflow
+    `http2-bench.yml`. `bench/run_http.sh`, `HTTP_RESULTS.md` and the
+    torture harness are untouched.
+  - **HTTP/2 conformance is a CI gate**: `tools/h2spec_gate.sh` runs
+    h2spec 2.6.0 (pinned, checksum-verified) against the HttpApp TLS
+    listener, the HTTP/2-only example and the shared plaintext port, plus
+    curl protocol checks, and fails on any deviation from the expected
+    totals. `compiler/tests/http2_in_http_server.nu` proves the same with
+    the in-repo HTTP/2 client and no external tools.
+
+- **The HTTP client resumes TLS sessions on its own.** `ext/http_pure.nu`
+  keeps the ticket a server sends in a process-wide per-host cache when
+  the transport closes and offers it on the next `https` request to the
+  same `host:port` — the abbreviated handshake, no certificate, no
+  signature, with nothing in the calling code. Bounded (64 hosts),
+  mutex-guarded, never shared across hosts; a declined or expired entry
+  is a full handshake. Test: `compiler/tests/http_client_resume.nu`
+  (the server asserts `tcp_tls_resumed`).
+- **TLS ticket-key rotation as a pure function of time.** The server's
+  sealing key is `HKDF-Expand-Label(master, "ticket key", epoch)` with a
+  6-hour epoch; a ticket records its epoch and the previous one still
+  opens (ticket lifetime 2 h). Every worker derives the same key with
+  nothing to swap or retire. The 32-byte master is drawn once, at
+  listener setup or on first use through the new runtime primitive
+  `nurl_once_slot(id, candidate)` — publish-once compare-and-swap slots
+  for stdlib singletons, since NURL cannot take a global's address.
+- **`http-torture.yml`** — a manual GitHub Action that runs the
+  open-loop torture harness on `ubuntu-latest` and commits
+  `bench/http_torture/TORTURE_RESULTS.md` back to `main`, the same
+  contract as `http-bench.yml` / `pq-bench.yml`. The harness now derives
+  its core split from `nproc`, prints `BENCH_HOST_LABEL` /
+  `BENCH_RUN_URL` and the commit in the report header, and takes
+  `SOAK_SEC` from the environment.
+
+### Changed
+
+- **The HTTP server no longer copies the response body into the
+  connection's wire buffer.** `__write_response` serialises only the
+  head (status line, headers, blank line) into `wire` and writes head
+  and body as two segments of one message with the new
+  `tcp_write_all2` — a single `sendmsg(2)` with a two-entry iovec
+  (`nurl_tcp_write2` in the runtime; `WSASend` on Windows), so small
+  responses keep their one-syscall cost. That concat was the second
+  full copy of every response body (the first is
+  `response_set_body_*`); the open-loop torture harness
+  (`bench/http_torture`) had put it at roughly half of the 1 MB
+  per-request CPU gap to hyper. On TLS the record layer now cuts
+  records straight from the head/body pair (`tls_server_write2`,
+  `tls_write2`) with the same record boundaries as before.
+  `response_serialize_to` / `response_serialize` are unchanged for
+  other callers (proxy, WebSocket handshake); the new
+  `response_serialize_head_to` is the head-only half.
+- `tcp_write_all`, `tcp_write_str` and `tcp_write_all_async` now share
+  one send loop each (blocking / fiber) with `tcp_write_all2` instead
+  of three hand-copied ones; the short-count / EAGAIN / SO_SNDTIMEO
+  rules are unchanged and live in one place in the runtime too
+  (`nurl__tcp_short_send`).
 
 ### Fixed
 
@@ -136,8 +239,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   UDP paths, which had none) and a new section of `udp_basic.nu`; both
   pass under the nolibc corpus too.
 
-### Fixed
-
 - **The pure TLS 1.3 server now negotiates ALPN (RFC 7301).**
   `tcp_listen_tls_with_alpn` accepted its protocol list and ignored it:
   `std/tls_server.nu` never parsed the ClientHello's
@@ -166,63 +267,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client that sent it. Verified in all four directions (NURL/openssl
   client × NURL/rustls/openssl server).
 
-### Added
-
-- **HTTP/2 is part of the HTTP server.** Every accept path of
-  `stdlib/ext/http_server.nu` — `server_run`, `server_run_pool`,
-  `server_run_async`, and so the `packages/http` HttpApp facade — now
-  serves HTTP/2 alongside HTTP/1.1 on the same listener, under the same
-  DoS gate, idle timeout, body limit and handler contract. Two ways in:
-  a TLS client that negotiated `h2` over ALPN (`http_app_listen_tls`
-  advertises `h2 http/1.1`; `tcp_alpn_is` decides per connection without
-  allocating), and RFC 9113 §3.4 prior knowledge on any connection — the
-  keep-alive loop recognises the 24-byte `PRI * HTTP/2.0` preface in the
-  first bytes and hands the connection, bytes and all, to the HTTP/2 state
-  machine (`h2_conn_new_buffered`). `curl --http2`, `curl
-  --http2-prior-knowledge`, browsers and `oha --http2` get HTTP/2 from an
-  unchanged `HttpApp`; h2spec 2.6.0 passes 146/146 (147/147 strict) against
-  the HttpApp TLS listener and against `examples/h2c_server.nu`; on a
-  shared plaintext port h2spec's §3.5/2 ("invalid connection preface")
-  gets HTTP/1.1's 400 instead of a GOAWAY, by design — see the comment in
-  `_serve_keepalive_loop`.
-  - HTTP/2 frames are read through a connection-level receive buffer
-    (`h2_read_frame_buf`): one `recv` per burst instead of a 9-byte header
-    read plus a payload read per frame.
-  - **Response headers are HPACK-indexed** (`hpack_encode_headers_dyn`):
-    static-table indices, a dynamic table mirroring the peer's, the
-    mandatory size update when the peer shrinks `SETTINGS_HEADER_TABLE_SIZE`;
-    a repeated response's header block goes from 46 bytes to 4. The old
-    encoder emitted every field as an unindexed literal.
-  - **HEADERS and DATA leave in one write** when the body fits the first
-    frame (`tcp_write_all2`: frame headers + the response body, no copy, one
-    `sendmsg`); larger bodies go out as frame header + borrowed body slice
-    per chunk instead of a byte-by-byte copy. Measured on the bench
-    server (ABAB, 5 s cells): +24 % req/s at 1 connection x 1 stream,
-    +35 % at 10 x 10, +57 % at 1 x 100, p99 roughly halved; HTTP/1.1
-    unchanged.
-  - An idle HTTP/2 connection whose receive deadline fires now ends with
-    GOAWAY(NO_ERROR) and a close (`H2ConnReadTimeout`), not an error.
-  - `server_run_h2_capable` / `server_run_once_h2_capable` (a second,
-    blocking accept loop with none of the server's safeguards, never
-    called) are gone; `http2_serve` stays for programs with their own
-    accept loop.
-  - `tools/leakcheck/run.sh` now drives HTTP/2 requests through the same
-    server and demands zero leaks from them too.
-  - **HTTP/2 benchmark alongside the HTTP/1.1 one**: `bench/run_http2.sh`
-    → `bench/HTTP2_RESULTS.md` (h2c and h2-over-TLS, C connections x P
-    streams cells, NURL vs hyper `http2` vs `node:http2`, plus NURL
-    HTTP/2-vs-HTTP/1.1 on the same listener), with its own manual workflow
-    `http2-bench.yml`. `bench/run_http.sh`, `HTTP_RESULTS.md` and the
-    torture harness are untouched.
-  - **HTTP/2 conformance is a CI gate**: `tools/h2spec_gate.sh` runs
-    h2spec 2.6.0 (pinned, checksum-verified) against the HttpApp TLS
-    listener, the HTTP/2-only example and the shared plaintext port, plus
-    curl protocol checks, and fails on any deviation from the expected
-    totals. `compiler/tests/http2_in_http_server.nu` proves the same with
-    the in-repo HTTP/2 client and no external tools.
-
-### Fixed
-
 - **Compiler: a struct value in a scalar field of a struct literal is now
   a diagnosed error.** `@ S { ( vec_new [u] ) 1 }` against `: S { i a
   ( Vec u ) b }` used to pass the front end and fail in LLVM with
@@ -246,34 +290,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connection (built once, rebuilt only after a panic consumed it), as the
   HTTP/1.1 keep-alive loop has done since 2026-06-10. Found by the extended
   leak gate — the HTTP/2 tests had never run under LeakSanitizer.
-
-### Added
-
-- **The HTTP client resumes TLS sessions on its own.** `ext/http_pure.nu`
-  keeps the ticket a server sends in a process-wide per-host cache when
-  the transport closes and offers it on the next `https` request to the
-  same `host:port` — the abbreviated handshake, no certificate, no
-  signature, with nothing in the calling code. Bounded (64 hosts),
-  mutex-guarded, never shared across hosts; a declined or expired entry
-  is a full handshake. Test: `compiler/tests/http_client_resume.nu`
-  (the server asserts `tcp_tls_resumed`).
-- **TLS ticket-key rotation as a pure function of time.** The server's
-  sealing key is `HKDF-Expand-Label(master, "ticket key", epoch)` with a
-  6-hour epoch; a ticket records its epoch and the previous one still
-  opens (ticket lifetime 2 h). Every worker derives the same key with
-  nothing to swap or retire. The 32-byte master is drawn once, at
-  listener setup or on first use through the new runtime primitive
-  `nurl_once_slot(id, candidate)` — publish-once compare-and-swap slots
-  for stdlib singletons, since NURL cannot take a global's address.
-- **`http-torture.yml`** — a manual GitHub Action that runs the
-  open-loop torture harness on `ubuntu-latest` and commits
-  `bench/http_torture/TORTURE_RESULTS.md` back to `main`, the same
-  contract as `http-bench.yml` / `pq-bench.yml`. The harness now derives
-  its core split from `nproc`, prints `BENCH_HOST_LABEL` /
-  `BENCH_RUN_URL` and the commit in the report header, and takes
-  `SOAK_SEC` from the environment.
-
-### Fixed
 
 - **Compiler: a function whose every `^` sits inside a `?` arm was never
   marked as returning an owned string, so its callers leaked the
@@ -354,32 +370,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   response body after the wire-buffer copy was removed. The contract is
   the caller's: the buffer outlives the write. Test:
   `compiler/tests/vec_borrowed.nu`.
-
-### Changed
-
-- **The HTTP server no longer copies the response body into the
-  connection's wire buffer.** `__write_response` serialises only the
-  head (status line, headers, blank line) into `wire` and writes head
-  and body as two segments of one message with the new
-  `tcp_write_all2` — a single `sendmsg(2)` with a two-entry iovec
-  (`nurl_tcp_write2` in the runtime; `WSASend` on Windows), so small
-  responses keep their one-syscall cost. That concat was the second
-  full copy of every response body (the first is
-  `response_set_body_*`); the open-loop torture harness
-  (`bench/http_torture`) had put it at roughly half of the 1 MB
-  per-request CPU gap to hyper. On TLS the record layer now cuts
-  records straight from the head/body pair (`tls_server_write2`,
-  `tls_write2`) with the same record boundaries as before.
-  `response_serialize_to` / `response_serialize` are unchanged for
-  other callers (proxy, WebSocket handshake); the new
-  `response_serialize_head_to` is the head-only half.
-- `tcp_write_all`, `tcp_write_str` and `tcp_write_all_async` now share
-  one send loop each (blocking / fiber) with `tcp_write_all2` instead
-  of three hand-copied ones; the short-count / EAGAIN / SO_SNDTIMEO
-  rules are unchanged and live in one place in the runtime too
-  (`nurl__tcp_short_send`).
-
-### Fixed
 
 - **Single-worker fiber scheduler crashed the first time a fiber landed
   on the global run queue.** `nurl__rq_take_global_batch` takes
@@ -17474,7 +17464,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.58.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.59.0...HEAD
+[0.59.0]: https://github.com/nurl-lang/nurl/compare/v0.58.0...v0.59.0
 [0.58.0]: https://github.com/nurl-lang/nurl/compare/v0.57.0...v0.58.0
 [0.57.0]: https://github.com/nurl-lang/nurl/compare/v0.56.0...v0.57.0
 [0.56.0]: https://github.com/nurl-lang/nurl/compare/v0.55.0...v0.56.0
