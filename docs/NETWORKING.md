@@ -120,6 +120,20 @@ X25519 or NIST P-256, verifies the chain against the system trust store by
 default, and runs on a host with nothing installed. `tls_attach` upgrades
 an already-connected socket, which is what STARTTLS-style protocols need.
 
+**Post-quantum.** Key exchange prefers X25519MLKEM768 (hybrid ML-KEM-768)
+on both the client and the server, falling back to X25519 / P-256 for a
+peer without it; `tcp_is_post_quantum conn` says which. Authentication can
+be post-quantum too: the server accepts an ML-DSA (FIPS 204) leaf, either
+alone (`tcp_listen_tls` with an ML-DSA PKCS#8 key — the key form is
+auto-detected) or **beside** a classical leaf with `tcp_listen_tls_dual host
+port backlog cert key pq_cert pq_key alpn`, in which case every ClientHello
+is shown the leaf its `signature_algorithms` can verify (RFC 8446
+§4.4.2.2) — ML-DSA to the clients that list it, ECDSA / RSA to the rest.
+The selection is made on the handshake state the QUIC server shares, so
+HTTP/3 gets it as well. `tcp_tls_sig_scheme conn` reports the scheme a
+connection was signed with. The client offers `mldsa44/65/87` first and
+verifies ML-DSA chains (`std/tls_verify.nu`).
+
 A program that never calls `tcp_connect_tls` / `tcp_listen_tls` (a
 pure-NURL-TLS client, or plain TCP) links `libc` only. The
 [`psql`](../packages/psql) package builds on the pure-NURL TLS client to

@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+classical_ch_ecdsa   ok
+mldsa_ch_mldsa65     ok
+level_mismatch_ecdsa ok
+no_pq_configured     ok
+pq_key_must_be_mldsa ok
+dual_handshake       ok
+dual_scheme_mldsa65  ok
+dual_group_is_pq     ok
+dual_cv_verifies     ok
+mldsa_only_pem       ok
+server_saw_mldsa65   ok
+served_both          ok

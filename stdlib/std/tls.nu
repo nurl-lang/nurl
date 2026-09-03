@@ -1354,6 +1354,14 @@ $ `stdlib/std/async_ffi.nu`
     ^ . c kx_group
 }
 
+// The SignatureScheme of this connection's CertificateVerify: on a client,
+// what the server signed with; on a server, what it chose to sign with
+// (ecdsa_secp256r1_sha256 0x0403, rsa_pss_rsae_sha256 0x0804, mldsa44/65/87
+// 0x0904–0x0906). 0 on a resumed handshake, which carries no certificate.
+@ tls_cv_scheme * TlsConn c → i {
+    ^ . c cv_scheme
+}
+
 // T when the negotiated group carries a post-quantum component, so the
 // session's forward secrecy survives a future quantum adversary
 // recording it today.

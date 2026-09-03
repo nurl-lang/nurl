@@ -8,12 +8,14 @@
 // the client keys; tls.nu's client functions are hardwired the other way).
 //
 // Scope: TLS 1.3 only; an EC P-256 leaf (CertificateVerify signed with
-// ecdsa_secp256r1_sha256) OR an RSA leaf (rsa_pss_rsae_sha256); the
-// X25519MLKEM768, X25519 and secp256r1 groups; the AES-128-GCM /
-// ChaCha20-Poly1305 cipher suites — i.e. exactly what tls.nu's client
-// offers, so the two interoperate. A full certificate chain (leaf +
-// intermediates) is supported via the tls_cert_entry-framed cert_chain
-// argument.
+// ecdsa_secp256r1_sha256), an RSA leaf (rsa_pss_rsae_sha256) or an ML-DSA
+// leaf (mldsa44/65/87) — or a classical leaf AND an ML-DSA leaf together,
+// chosen per connection from the client's signature_algorithms
+// (`tls_accept_dual_alpn`, RFC 8446 §4.4.2.2); the X25519MLKEM768, X25519
+// and secp256r1 groups; the AES-128-GCM / ChaCha20-Poly1305 cipher
+// suites — i.e. exactly what tls.nu's client offers, so the two
+// interoperate. A full certificate chain (leaf + intermediates) is
+// supported via the tls_cert_entry-framed cert_chain argument.
 //
 // On X25519MLKEM768 the server is the *encapsulating* side: the client
 // sends an ML-KEM encapsulation key and gets back a ciphertext, not a
@@ -34,6 +36,11 @@
 //       priv       = 32-byte EC P-256 private scalar (see std/pkey.nu)
 //       n / d      = RSA modulus / private exponent, big-endian
 //                    (std/pkey.nu rsa_priv_from_pem → RsaPriv)
+//   ( tls_accept_mldsa i raw ( Vec u ) cert_chain i level ( Vec u ) sk )
+//       an ML-DSA leaf: level 44 / 65 / 87, sk = the FIPS 204 secret key
+//   ( tls_accept_dual_alpn i raw cert_chain keytype ec_priv n e d pq_chain pq_level pq_sk alpn_prefs )
+//       a classical leaf plus an ML-DSA leaf; the client's
+//       signature_algorithms picks which one it is shown
 //   ( tls_server_read  *TlsConn c i max )      → !( Vec u ) TlsErr
 //   ( tls_server_write *TlsConn c ( Vec u ) )  → !v TlsErr
 //   ( tls_close *TlsConn c )                   → v   (reused from tls.nu)
@@ -479,7 +486,7 @@ $ `stdlib/std/aes_gcm.nu`
     ? == keytype 2 {
         : ( Vec u ) ctx ( vec_new [u] )
         : ( Vec u ) sig ( mldsa_sign ml_level ec_priv cvc ctx )
-        : i scheme ? == ml_level 44 2308 ? == ml_level 65 2309 2310
+        : i scheme ( __srv_mldsa_scheme ml_level )
         ( _tls_u16 cvbody scheme )
         ( _tls_u16 cvbody ( vec_len [u] sig ) )
         ( _tls_cat cvbody sig )
@@ -670,6 +677,13 @@ $ `stdlib/std/aes_gcm.nu`
     ( Vec u ) out_sh
     ( Vec u ) out_hs
     ( Vec u ) out_ticket
+    // Optional second identity: an ML-DSA leaf chain + FIPS 204 secret
+    // key, selected per ClientHello by `__srv_pick_cert` when the
+    // client's signature_algorithms lists its scheme. Empty when the
+    // caller configured a single certificate.
+    ( Vec u ) pq_chain
+    ( Vec u ) pq_sk
+    i pq_level
 }
 
 @ _srv_hs_new ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level ( Vec u ) alpn_prefs → *SrvHs {
@@ -708,7 +722,23 @@ $ `stdlib/std/aes_gcm.nu`
     = . h out_sh ( vec_new [u] )
     = . h out_hs ( vec_new [u] )
     = . h out_ticket ( vec_new [u] )
+    = . h pq_chain ( vec_new [u] )
+    = . h pq_sk ( vec_new [u] )
+    = . h pq_level 0
     ^ h
+}
+
+// Give the handshake a second, post-quantum identity: `pq_chain` is a
+// tls_cert_entry-framed ML-DSA certificate_list and `pq_sk` the matching
+// FIPS 204 secret key at `pq_level` (44 / 65 / 87). Which of the two
+// identities a connection gets is decided per ClientHello — see
+// `__srv_pick_cert`. Copies, like the constructor.
+@ _srv_hs_set_pq * SrvHs h ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk → v {
+    ( vec_clear [u] . h pq_chain )
+    ( bytes_extend_bytes . h pq_chain pq_chain )
+    ( vec_clear [u] . h pq_sk )
+    ( bytes_extend_bytes . h pq_sk pq_sk )
+    = . h pq_level pq_level
 }
 
 @ _srv_hs_set_ext * SrvHs h i want ( Vec u ) ext_out → v {
@@ -739,6 +769,8 @@ $ `stdlib/std/aes_gcm.nu`
     ( vec_free [u] . h out_sh )
     ( vec_free [u] . h out_hs )
     ( vec_free [u] . h out_ticket )
+    ( vec_free [u] . h pq_chain )
+    ( vec_free [u] . h pq_sk )
     ( nurl_free # s h )
 }
 
@@ -746,6 +778,58 @@ $ `stdlib/std/aes_gcm.nu`
 @ __srv_hs_fail * SrvHs h i desc → i {
     = . h state 3
     ^ desc
+}
+
+// The TLS SignatureScheme for an ML-DSA parameter set
+// (draft-ietf-tls-mldsa): mldsa44 0x0904, mldsa65 0x0905, mldsa87 0x0906.
+@ __srv_mldsa_scheme i level → i {
+    ^ ? == level 44 2308 ? == level 65 2309 2310
+}
+
+// Certificate selection, RFC 8446 §4.4.2.2: a server with more than one
+// identity picks the one whose signature scheme the client listed in
+// signature_algorithms. Here that is a choice between the classical
+// leaf the handshake was constructed with and the ML-DSA leaf parked
+// by `_srv_hs_set_pq`; the ML-DSA leaf wins whenever the client says it
+// can verify it — a client that offers `mldsaNN` is asking for it, and
+// nothing classical is left in the handshake once it is chosen. A
+// client without the scheme (every stack older than 2025, and every
+// OpenSSL before 3.5) gets the classical leaf exactly as before, so
+// adding a post-quantum certificate never costs a connection.
+//
+// No `pq_chain` → nothing to choose. No signature_algorithms extension
+// at all is a client that must be refused later anyway (§4.2.3 makes
+// it mandatory for certificate authentication); it gets the classical
+// leaf and the failure it was heading for.
+// The scheme this handshake signs (or signed) its CertificateVerify with.
+@ _srv_hs_sig_scheme * SrvHs h → i {
+    ? == . h keytype 2 { ^ ( __srv_mldsa_scheme . h ml_level ) } {}
+    ^ ? == . h keytype 1 2052 1027
+}
+
+@ __srv_pick_cert * SrvHs h ( Vec u ) ch i es i ee → v {
+    ? == ( vec_len [u] . h pq_chain ) 0 { ^ } {}
+    : i want ( __srv_mldsa_scheme . h pq_level )
+    : i sa ( __srv_find_ext ch es ee 13 )
+    ? < sa 0 { ^ } {}
+    : i extlen ( _rdint ch - sa 2 2 )
+    ? | < extlen 2 > + sa extlen ee { ^ } {}
+    : i salen ( _rdint ch sa 2 )
+    : i saend + + sa 2 salen
+    ? > saend + sa extlen { ^ } {}
+    : ~ i p + sa 2
+    : ~ i hit 0
+    ~ & < + p 1 saend == hit 0 {
+        ? == ( _rdint ch p 2 ) want { = hit 1 } {}
+        = p + p 2
+    }
+    ? == hit 0 { ^ } {}
+    ( vec_free [u] . h cert_chain )
+    ( vec_free [u] . h ec_priv )
+    = . h cert_chain ( bytes_slice . h pq_chain 0 ( vec_len [u] . h pq_chain ) )
+    = . h ec_priv ( bytes_slice . h pq_sk 0 ( vec_len [u] . h pq_sk ) )
+    = . h keytype 2
+    = . h ml_level . h pq_level
 }
 
 @ _srv_hs_client_hello * SrvHs h ( Vec u ) ch → i {
@@ -791,6 +875,10 @@ $ `stdlib/std/aes_gcm.nu`
     : i es + p3 2
     : i ee + es extlen
     ? > ee ( vec_len [u] ch ) { ^ ( __srv_hs_fail h 50 ) } {}
+
+    // Which identity this connection gets (§4.4.2.2) — decided before
+    // anything below reads keytype / cert_chain.
+    ( __srv_pick_cert h ch es ee )
 
     // key_share (0x0033): pick x25519 (0x001d) if offered, else secp256r1.
     : i ks ( __srv_find_ext ch es ee 51 )
@@ -1106,7 +1194,7 @@ $ `stdlib/std/aes_gcm.nu`
     }
 }
 
-@ __tls_accept_impl i raw ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level ( Vec u ) alpn_prefs → !*TlsConn TlsErr {
+@ __tls_accept_impl i raw ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk ( Vec u ) alpn_prefs → !*TlsConn TlsErr {
     ? <= raw 0 { ^ @ !*TlsConn TlsErr { F # TlsErr TlsConnect } } {}
     : *TlsConn c ( nurl_alloc Z TlsConn )
     = . c fd raw
@@ -1136,6 +1224,7 @@ $ `stdlib/std/aes_gcm.nu`
     = . c tk_received_ms 0
 
     : *SrvHs hs ( _srv_hs_new cert_chain keytype ec_priv rsa_n rsa_e rsa_d ml_level alpn_prefs )
+    ? > ( vec_len [u] pq_chain ) 0 { ( _srv_hs_set_pq hs pq_chain pq_level pq_sk ) } {}
 
     // ── ClientHello ──
     : !( Vec u ) TlsErr chr ( __srv_next_hs c )
@@ -1152,6 +1241,7 @@ $ `stdlib/std/aes_gcm.nu`
     = . c cipher . hs cipher
     = . c kx_group . hs kx_group
     = . c resumed . hs resumed
+    = . c cv_scheme ? == . hs resumed 0 ( _srv_hs_sig_scheme hs ) 0
     ( vec_free [u] . c alpn_sel )
     = . c alpn_sel ( bytes_slice . hs alpn_sel 0 ( vec_len [u] . hs alpn_sel ) )
 
@@ -1229,7 +1319,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) en ( vec_new [u] )
     : ( Vec u ) ee ( vec_new [u] )
     : ( Vec u ) ed ( vec_new [u] )
-    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 0 priv en ee ed 0 alpn_prefs )
+    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 0 priv en ee ed 0 en 0 en alpn_prefs )
     ( vec_free [u] en ) ( vec_free [u] ee ) ( vec_free [u] ed )
     ^ r
 }
@@ -1270,7 +1360,7 @@ $ `stdlib/std/aes_gcm.nu`
 // tls_accept_rsa with an ALPN preference list — see tls_accept_alpn.
 @ tls_accept_rsa_alpn i raw ( Vec u ) cert_chain ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d ( Vec u ) alpn_prefs → !*TlsConn TlsErr {
     : ( Vec u ) ee ( vec_new [u] )
-    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 1 ee rsa_n rsa_e rsa_d 0 alpn_prefs )
+    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 1 ee rsa_n rsa_e rsa_d 0 ee 0 ee alpn_prefs )
     ( vec_free [u] ee )
     ^ r
 }
@@ -1298,9 +1388,25 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) en ( vec_new [u] )
     : ( Vec u ) ee ( vec_new [u] )
     : ( Vec u ) ed ( vec_new [u] )
-    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 2 sk en ee ed level alpn_prefs )
+    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 2 sk en ee ed level en 0 en alpn_prefs )
     ( vec_free [u] en ) ( vec_free [u] ee ) ( vec_free [u] ed )
     ^ r
+}
+
+// Accept with TWO identities and let the client's signature_algorithms
+// decide which one it sees (RFC 8446 §4.4.2.2): the classical leaf
+// (`keytype` 0 = EC P-256 with `ec_priv`; 1 = RSA with `rsa_n` / `rsa_e`
+// / `rsa_d`) for clients that cannot verify ML-DSA, the ML-DSA leaf
+// (`pq_chain`, `pq_level`, `pq_sk` — the tls_accept_mldsa inputs) for
+// every client that lists `mldsaNN`. This is how a server serves a
+// post-quantum certificate to browsers and curl builds that understand
+// it while the rest of the world keeps its ECDSA — the same operation
+// OpenSSL performs when a context holds one certificate per key type.
+// `tcp_listen_tls_dual` (std/net.nu) is the PEM-file front of this.
+//
+// An empty `pq_chain` makes it tls_accept_alpn / tls_accept_rsa_alpn.
+@ tls_accept_dual_alpn i raw ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk ( Vec u ) alpn_prefs → !*TlsConn TlsErr {
+    ^ ( __tls_accept_impl raw cert_chain keytype ec_priv rsa_n rsa_e rsa_d 0 pq_chain pq_level pq_sk alpn_prefs )
 }
 
 // Discard a live transcript hasher (error paths).

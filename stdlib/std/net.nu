@@ -100,12 +100,16 @@ $ `stdlib/std/pkey.nu`
 // CertificateEntry blobs, leaf first) + the leaf's private key, so each
 // accept can run the pure handshake (is_tls = 1). keytype selects the
 // key form: 0 = EC P-256 (kp1 = 32-byte scalar, kp2 unused), 1 = RSA
-// (kp1 = modulus n, kp2 = private exponent d), both big-endian. All are
-// held as raw malloc'd (ptr, len) pairs — NOT Vec fields — because a
-// value struct returned with owned-Vec fields is auto-dropped at the
-// constructing function's exit (a borrowck escape gap), which would free
-// the buffers out from under the listener.
-: TcpListener { s raw i is_tls i keytype i certp i certlen i kp1 i kl1 i kp2 i kl2 i kp3 i kl3 i alpnp i alpnlen }
+// (kp1 = modulus n, kp2 = private exponent d, kp3 = public exponent e),
+// 2 = ML-DSA (kp1 = the FIPS 204 secret key; its length names the
+// parameter set), all big-endian. pqcertp / pqkp are an OPTIONAL second
+// identity — an ML-DSA chain and key served beside the classical one to
+// clients that list its scheme (`tcp_listen_tls_dual`), 0/0 otherwise.
+// All are held as raw malloc'd (ptr, len) pairs — NOT Vec fields —
+// because a value struct returned with owned-Vec fields is auto-dropped
+// at the constructing function's exit (a borrowck escape gap), which
+// would free the buffers out from under the listener.
+: TcpListener { s raw i is_tls i keytype i certp i certlen i kp1 i kl1 i kp2 i kl2 i kp3 i kl3 i alpnp i alpnlen i pqcertp i pqcertlen i pqkp i pqkl }
 // alpnp/alpnlen: the TLS listener's ALPN preference list in wire form
 // ([len:1][name] entries, server order — see tls_alpn_pack), 0/0 when the
 // listener does not negotiate ALPN.
@@ -173,7 +177,7 @@ $ `stdlib/std/pkey.nu`
         ^ @ !TcpListener NetErr { F ( _net_err_of ek ) }
     } {}
     : s rp # s raw
-    : TcpListener l @ TcpListener { rp 0 0 0 0 0 0 0 0 0 0 0 0 }
+    : TcpListener l @ TcpListener { rp 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 }
     ^ @ !TcpListener NetErr { T l }
 }
 
@@ -255,9 +259,11 @@ $ `stdlib/std/pkey.nu`
 // Load cert chain + private key from PEM files into a TLS listener. Fills
 // `cert_out` with the framed certificate_list and `k1`/`k2` with the key
 // material; returns the keytype (0 = EC P-256 scalar in k1; 1 = RSA with
-// modulus in k1, private exponent in k2), or a NEGATIVE NetErr-style code
-// on failure (-10 cert, -11 key). The key form is auto-detected: EC and
-// RSA parsers each cleanly reject the other's encoding.
+// modulus in k1, private exponent in k2, public exponent in k3; 2 =
+// ML-DSA with the FIPS 204 secret key in k1), or a NEGATIVE NetErr-style
+// code on failure (-10 cert, -11 key). The key form is auto-detected:
+// the EC, RSA and ML-DSA PKCS#8 parsers each cleanly reject the others'
+// encodings.
 @ _load_tls_creds s cert_path s key_path ( Vec u ) cert_out ( Vec u ) k1 ( Vec u ) k2 ( Vec u ) k3 → i {
     : String certpem ?? ( read_file cert_path ) { T p → p F _ → ( string_new ) }
     : ( Vec u ) chain ( __net_cert_chain certpem )
@@ -280,21 +286,25 @@ $ `stdlib/std/pkey.nu`
             ( bytes_extend_bytes k3 . k e )  // public exponent — for sign-time blinding
             ( rsa_priv_free k ) 1
         }
-        F _ → -11
+        F _ → ?? ( mldsa_priv_from_pem ( string_data keypem ) ) {
+            T mk → { ( bytes_extend_bytes k1 . mk sk ) ( mldsa_priv_free mk ) 2 }
+            F _ → -11
+        }
     }
     ( string_free keypem )
     ^ kt
 }
 
 @ tcp_listen_tls_with_backlog s host i port i backlog s cert_path s key_path → !TcpListener NetErr {
-    ^ ( __tcp_listen_tls_impl host port backlog cert_path key_path `` )
+    ^ ( __tcp_listen_tls_impl host port backlog cert_path key_path `` `` `` )
 }
 
 // Shared body of the TLS listener constructors. `alpn_protocols` is a
 // space-separated server preference list ("h2 http/1.1") or "" for no
 // ALPN; it is packed to wire form once here and parked on the listener
-// like the cert and key.
-@ __tcp_listen_tls_impl s host i port i backlog s cert_path s key_path s alpn_protocols → !TcpListener NetErr {
+// like the cert and key. `pq_cert_path` / `pq_key_path` name an optional
+// ML-DSA chain + key to serve beside the classical pair ("" for none).
+@ __tcp_listen_tls_impl s host i port i backlog s cert_path s key_path s alpn_protocols s pq_cert_path s pq_key_path → !TcpListener NetErr {
     : ( Vec u ) cert ( vec_new [u] )
     : ( Vec u ) k1 ( vec_new [u] )
     : ( Vec u ) k2 ( vec_new [u] )
@@ -304,11 +314,33 @@ $ `stdlib/std/pkey.nu`
         ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
         ^ @ !TcpListener NetErr { F ( _net_err_of - 0 keytype ) }
     } {}
+    // The second identity: it has to BE an ML-DSA key — a classical key
+    // here would be a configuration mistake, and is refused as a key
+    // load error rather than silently served as a second ECDSA cert.
+    : ( Vec u ) pqcert ( vec_new [u] )
+    : ( Vec u ) pqk ( vec_new [u] )
+    ? > ( nurl_str_len pq_cert_path ) 0 {
+        : ( Vec u ) u2 ( vec_new [u] )
+        : ( Vec u ) u3 ( vec_new [u] )
+        : i pqt ( _load_tls_creds pq_cert_path pq_key_path pqcert pqk u2 u3 )
+        ( vec_free [u] u2 ) ( vec_free [u] u3 )
+        : i pqerr ? < pqt 0 - 0 pqt ? != pqt 2 11 0
+        ? != pqerr 0 {
+            ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
+            ( vec_free [u] pqcert ) ( vec_free [u] pqk )
+            ^ @ !TcpListener NetErr { F ( _net_err_of pqerr ) }
+        } {}
+    } {}
     : i raw ( nurl_tcp_listen host port backlog )
-    ? == raw 0 { ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 ) ^ @ !TcpListener NetErr { F # NetErr NetOther } } {}
+    ? == raw 0 {
+        ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
+        ( vec_free [u] pqcert ) ( vec_free [u] pqk )
+        ^ @ !TcpListener NetErr { F # NetErr NetOther }
+    } {}
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 {
         ( nurl_tcp_close raw ) ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
+        ( vec_free [u] pqcert ) ( vec_free [u] pqk )
         ^ @ !TcpListener NetErr { F ( _net_err_of ek ) }
     } {}
     // The session-ticket key is drawn here, while the process is still
@@ -329,8 +361,13 @@ $ `stdlib/std/pkey.nu`
     : i alpnp ( __net_dup alpn )
     : i alpnlen ( vec_len [u] alpn )
     ( vec_free [u] alpn )
+    : i pqcertp ( __net_dup pqcert )
+    : i pqcertlen ( vec_len [u] pqcert )
+    : i pqkp ( __net_dup pqk )
+    : i pqkl ( vec_len [u] pqk )
+    ( vec_free [u] pqcert ) ( vec_free [u] pqk )
     : s rp # s raw
-    ^ @ !TcpListener NetErr { T @ TcpListener { rp 1 keytype certp certlen kp1 kl1 kp2 kl2 kp3 kl3 alpnp alpnlen } }
+    ^ @ !TcpListener NetErr { T @ TcpListener { rp 1 keytype certp certlen kp1 kl1 kp2 kl2 kp3 kl3 alpnp alpnlen pqcertp pqcertlen pqkp pqkl } }
 }
 
 @ tcp_listen_tls s host i port s cert_path s key_path → !TcpListener NetErr {
@@ -347,7 +384,27 @@ $ `stdlib/std/pkey.nu`
 // that sends no ALPN negotiates nothing and gets "" — the caller decides
 // what that means (HTTP servers treat it as HTTP/1.1).
 @ tcp_listen_tls_with_alpn s host i port i backlog s cert_path s key_path s alpn_protocols → !TcpListener NetErr {
-    ^ ( __tcp_listen_tls_impl host port backlog cert_path key_path alpn_protocols )
+    ^ ( __tcp_listen_tls_impl host port backlog cert_path key_path alpn_protocols `` `` )
+}
+
+// A TLS listener with TWO identities: the classical `cert_path` /
+// `key_path` (EC P-256 or RSA) and a post-quantum `pq_cert_path` /
+// `pq_key_path` (an ML-DSA-44/65/87 leaf, PKCS#8 key). Each accepted
+// connection is shown the one its ClientHello can verify: the ML-DSA
+// leaf when the client's signature_algorithms lists its scheme
+// (RFC 8446 §4.4.2.2), the classical leaf otherwise — so a server can
+// deploy an ML-DSA certificate for the clients that understand it
+// without turning away a single client that does not. With the
+// X25519MLKEM768 group the handshake already prefers, such a
+// connection has no classical asymmetric operation left in it.
+// `tcp_is_post_quantum` reports the group; `tcp_tls_sig_scheme` the
+// scheme the server signed with.
+//
+// The PQ key file must hold an ML-DSA key — a classical key there is
+// refused with NetTlsKeyLoad, since serving it as a second ECDSA
+// identity would silently not be what was asked for.
+@ tcp_listen_tls_dual s host i port i backlog s cert_path s key_path s pq_cert_path s pq_key_path s alpn_protocols → !TcpListener NetErr {
+    ^ ( __tcp_listen_tls_impl host port backlog cert_path key_path alpn_protocols pq_cert_path pq_key_path )
 }
 
 // Read the negotiated ALPN protocol off a TLS conn — a client conn (kind
@@ -399,6 +456,17 @@ $ `stdlib/std/pkey.nu`
 // factoring later.
 @ tcp_is_post_quantum TcpConn c → b {
     ^ == ( tcp_tls_group c ) 4588
+}
+
+// The SignatureScheme the CertificateVerify of this TLS connection was
+// signed with — on an accepted connection, which of the listener's
+// identities this client was shown: ecdsa_secp256r1_sha256 0x0403 (1027),
+// rsa_pss_rsae_sha256 0x0804 (2052), mldsa44/65/87 0x0904–0x0906
+// (2308–2310). 0 for plaintext and for resumed handshakes (no certificate).
+@ tcp_tls_sig_scheme TcpConn c → i {
+    : i tp ( __conn_tlsptr c )
+    ? == tp 0 { ^ 0 } {}
+    ^ ( tls_cv_scheme # *TlsConn tp )
 }
 
 // Open a plain (unencrypted) TCP client connection. Returns a
@@ -491,6 +559,8 @@ $ `stdlib/std/pkey.nu`
         ? != . l kp2 0 { ( nurl_free # s . l kp2 ) } {}
         ? != . l kp3 0 { ( nurl_free # s . l kp3 ) } {}
         ? != . l alpnp 0 { ( nurl_free # s . l alpnp ) } {}
+        ? != . l pqcertp 0 { ( nurl_free # s . l pqcertp ) } {}
+        ? != . l pqkp 0 { ( nurl_free # s . l pqkp ) } {}
     } {}
 }
 
@@ -611,14 +681,23 @@ $ `stdlib/std/pkey.nu`
     : ( Vec u ) cert ( __net_vecview . l certp . l certlen )
     : ( Vec u ) k1 ( __net_vecview . l kp1 . l kl1 )
     : ( Vec u ) alpn ( __net_vecview . l alpnp . l alpnlen )
-    // keytype 1 = RSA (k1 = n, k2 = d, k3 = e); else EC P-256 (k1 = scalar).
-    : !*TlsConn TlsErr r ? == . l keytype 1
-    { : ( Vec u ) k2 ( __net_vecview . l kp2 . l kl2 )
-        : ( Vec u ) k3 ( __net_vecview . l kp3 . l kl3 )
-        : !*TlsConn TlsErr rr ( tls_accept_rsa_alpn craw cert k1 k3 k2 alpn )
-        ( vec_free [u] k2 ) ( vec_free [u] k3 )
-        rr }
-    ( tls_accept_alpn craw cert k1 alpn )
+    // keytype 0 = EC P-256 (k1 = scalar), 1 = RSA (k1 = n, k2 = d, k3 =
+    // e), 2 = ML-DSA (k1 = secret key). With a second identity parked
+    // on the listener the handshake chooses between the two per
+    // ClientHello (tls_accept_dual_alpn); without one the classical /
+    // ML-DSA single-identity entry points are the same code.
+    : ( Vec u ) k2 ( __net_vecview . l kp2 . l kl2 )
+    : ( Vec u ) k3 ( __net_vecview . l kp3 . l kl3 )
+    : ( Vec u ) pqc ( __net_vecview . l pqcertp . l pqcertlen )
+    : ( Vec u ) pqk ( __net_vecview . l pqkp . l pqkl )
+    : ( Vec u ) none ( vec_new [u] )
+    : !*TlsConn TlsErr r ? == . l keytype 2
+    ( tls_accept_mldsa_alpn craw cert ( mldsa_level_of_sk_len ( vec_len [u] k1 ) ) k1 alpn )
+    ( tls_accept_dual_alpn craw cert . l keytype ? == . l keytype 1 none k1 ? == . l keytype 1 k1 none k3 k2
+    pqc ( mldsa_level_of_sk_len ( vec_len [u] pqk ) ) pqk alpn )
+    ( vec_free [u] none )
+    ( vec_free [u] pqc ) ( vec_free [u] pqk )
+    ( vec_free [u] k2 ) ( vec_free [u] k3 )
     ( vec_free [u] cert )
     ( vec_free [u] k1 )
     ( vec_free [u] alpn )

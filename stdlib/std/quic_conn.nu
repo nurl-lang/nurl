@@ -63,7 +63,12 @@ $ `stdlib/std/quic_recovery.nu`
 
 @ quic_err_application → i { ^ 12 }
 
-// Server credentials, the same inputs `tls_accept*` takes.
+// Server credentials, the same inputs `tls_accept*` takes. keytype 0 =
+// EC P-256 (ec_priv = scalar), 1 = RSA, 2 = ML-DSA (ec_priv = the FIPS
+// 204 secret key, ml_level its parameter set). `pq_chain` / `pq_sk` /
+// `pq_level` are an optional SECOND identity — an ML-DSA leaf served
+// beside the classical one to clients whose signature_algorithms list
+// it (`quic_creds_set_pq`, the tls_accept_dual_alpn inputs).
 : QuicCreds {
     ( Vec u ) cert_chain
     i keytype
@@ -72,6 +77,9 @@ $ `stdlib/std/quic_recovery.nu`
     ( Vec u ) rsa_e
     ( Vec u ) rsa_d
     i ml_level
+    ( Vec u ) pq_chain
+    i pq_level
+    ( Vec u ) pq_sk
 }
 
 @ quic_creds_new ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level → *QuicCreds {
@@ -83,13 +91,26 @@ $ `stdlib/std/quic_recovery.nu`
     = . k rsa_e ( bytes_slice rsa_e 0 ( vec_len [u] rsa_e ) )
     = . k rsa_d ( bytes_slice rsa_d 0 ( vec_len [u] rsa_d ) )
     = . k ml_level ml_level
+    = . k pq_chain ( vec_new [u] )
+    = . k pq_level 0
+    = . k pq_sk ( vec_new [u] )
     ^ k
+}
+
+// Park an ML-DSA identity beside the classical one (copies).
+@ quic_creds_set_pq * QuicCreds k ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk → v {
+    ( vec_clear [u] . k pq_chain )
+    ( bytes_extend_bytes . k pq_chain pq_chain )
+    ( vec_clear [u] . k pq_sk )
+    ( bytes_extend_bytes . k pq_sk pq_sk )
+    = . k pq_level pq_level
 }
 
 @ quic_creds_free * QuicCreds k → v {
     ? == # i k 0 { ^ } {}
     ( vec_free [u] . k cert_chain ) ( vec_free [u] . k ec_priv )
     ( vec_free [u] . k rsa_n ) ( vec_free [u] . k rsa_e ) ( vec_free [u] . k rsa_d )
+    ( vec_free [u] . k pq_chain ) ( vec_free [u] . k pq_sk )
     ( nurl_free # s k )
 }
 
@@ -310,6 +331,7 @@ $ `stdlib/std/quic_recovery.nu`
     = . c local_tp mine
     : ( Vec u ) tpb ( quic_tp_encode mine T )
     = . c tls ( quic_tls_srv_new . creds cert_chain . creds keytype . creds ec_priv . creds rsa_n . creds rsa_e . creds rsa_d . creds ml_level alpn_prefs tpb )
+    ? > ( vec_len [u] . creds pq_chain ) 0 { ( quic_tls_srv_set_pq . c tls . creds pq_chain . creds pq_level . creds pq_sk ) } {}
     ( vec_free [u] tpb )
     = . c tls_state 0
     = . c k_rx0 ( quic_initial_keys odcid T )

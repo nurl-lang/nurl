@@ -66,7 +66,12 @@ $ `stdlib/std/ecdsa_p256.nu`
     } {}
     ? == . e1 tag 48 {
         // PKCS#8: e1 = AlgorithmIdentifier SEQUENCE, e2 = OCTET STRING that
-        // itself contains the SEC1 ECPrivateKey.
+        // itself contains the SEC1 ECPrivateKey. The algorithm has to BE
+        // id-ecPublicKey (1.2.840.10045.2.1): every PKCS#8 key shares
+        // this outer shape, and an ML-DSA key's inner OCTET STRING would
+        // otherwise be sliced into a 32-byte "scalar" and accepted.
+        : DerTlv aoid ( _der_child der e1 )
+        ? | == . aoid ok 0 ! ( _der_oid_is der aoid `2a8648ce3d0201` ) { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
         : DerTlv e2 ( _der_next der e1 )
         ? != . e2 tag 4 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
         : ( Vec u ) inner ( _der_content der e2 )
@@ -159,7 +164,11 @@ $ `stdlib/std/ecdsa_p256.nu`
             : DerTlv c0 ( _der_child der seq )  // version
             : DerTlv c1 ( _der_next der c0 )
             // PKCS#8: { version, AlgorithmIdentifier SEQUENCE, OCTET STRING }.
+            // The algorithm must be rsaEncryption (1.2.840.113549.1.1.1);
+            // the wrapper is shared by every key type (see the EC parser).
             ? & == . c1 ok 1 == . c1 tag 48 {
+                : DerTlv aoid ( _der_child der c1 )
+                ? | == . aoid ok 0 ! ( _der_oid_is der aoid `2a864886f70d010101` ) { ( vec_free [u] der ) ^ @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } } {}
                 : DerTlv c2 ( _der_next der c1 )  // privateKey OCTET STRING
                 ? | == . c2 ok 0 != . c2 tag 4 { ( vec_free [u] der ) ^ @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } } {}
                 : ( Vec u ) inner ( _der_content der c2 )
