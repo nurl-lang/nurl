@@ -327,6 +327,25 @@ jobs:
         # could not connect fails rather than passes.
         run: H2SPEC="$HOME/.local/bin/h2spec" ./tools/h2spec_gate.sh
 
+      - name: Install h3spec 0.1.13 (QUIC + HTTP/3 conformance suite)
+        # Pinned release binary (a static Haskell build), checksum-verified.
+        run: |
+          curl -sSL -o "$HOME/.local/bin/h3spec" \
+            https://github.com/kazu-yamamoto/h3spec/releases/download/v0.1.13/h3spec-linux-x86_64
+          echo "b5f8eddd968cb195d1e3e7698d33fa141d6b2ad56153089d89928ac0fdee28bf  $HOME/.local/bin/h3spec" | sha256sum -c -
+          chmod +x "$HOME/.local/bin/h3spec"
+          "$HOME/.local/bin/h3spec" -v
+
+      - name: "HTTP/3 conformance gate (h3spec: QUIC transport, HTTP/3, QPACK; Alt-Svc on the TCP side)"
+        # h3spec 49/49 (34 QUIC-transport + 15 HTTP/3/QPACK error cases)
+        # against the HttpApp TLS listener, which serves HTTP/3 on the same
+        # port over UDP; then curl --http2 / --http1.1 must carry
+        # alt-svc: h3=":port". Every check greps the positive totals line,
+        # so an h3spec that could not reach the server fails rather than
+        # passes. The docker curl-http3 end-to-end request is local-only
+        # (no HTTP/3 curl on the runner) and reports SKIP here.
+        run: H3SPEC="$HOME/.local/bin/h3spec" ./tools/h3spec_gate.sh
+
       - name: DWARF debug-info gate
         # The plain corpus never builds with --debug, so it can't catch a
         # broken !DI emission. This builds the --debug regression
