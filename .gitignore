@@ -144,3 +144,4 @@ stdlib/runtime.nvrtc
 # .forest blobs staged for the next `git add -A`, nor put them in a published
 # tarball.
 packages/*/anomaly_tv_test/
+bench/rust_http3_server/target/

@@ -1,0 +1,31 @@
+# bench/rust_http3_server/Cargo.toml — minimal Cargo manifest for the
+# quinn + h3 hello-world HTTP/3 server, the Rust peer of bench/run_http3.sh.
+# Its own crate, so the HTTP/1.1 and HTTP/2 peers (bench/rust_http_server,
+# bench/rust_http2_server) and their dependency trees stay exactly as their
+# benchmarks measure them.
+#
+# Build:
+#     cargo build --release --manifest-path bench/rust_http3_server/Cargo.toml
+#
+# The runner script bench/run_http3.sh does this automatically.
+
+[package]
+name = "http3_server"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+quinn = { version = "0.11.7", default-features = false, features = ["runtime-tokio", "rustls", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+bytes = "1"
+http = "1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
