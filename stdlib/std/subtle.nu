@@ -10,7 +10,7 @@
 // crypto/subtle, Rust's subtle crate).
 //
 // First extracted from the bearer-token timing fix in
-// stdlib/ext/mcp_registry.nu (PR #97), promoted here so every
+// stdlib/ext/mcp_server.nu (PR #97), promoted here so every
 // secret-compare site shares one audited implementation.
 //
 //   ( constant_time_eq s a s b )                   → b

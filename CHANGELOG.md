@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`ext/mcp_registry.nu` is now `ext/mcp_server.nu`** — the module you
+  reach for to *write* an MCP server was named after an implementation
+  detail, and "registry" is already the package registry in this repo,
+  so the name read as "a registry of MCP servers". Nobody found it: it
+  had both transports, dual-era dispatch, `recover` around every
+  handler and constant-time bearer auth, yet `packages/nurl-mcp`,
+  `packages/swarm-mcp` and `packages/mermaid-server` each hand-rolled
+  their own JSON-RPC dispatch instead, and the copies had already
+  drifted apart. Renamed with its API — `mcp_server_new / _add_tool /
+  _add_prompt / _add_resource / _add_completion / _dispatch / _envelope
+  / _free`, `mcp_server_serve_stdio`, `mcp_server_http_dispatch`,
+  `McpServer`, `McpServerErr`, `mcp_server_err_name` — so that a grep
+  for "mcp server" lands on it. The module header now carries the map
+  of the whole `mcp*.nu` family (which module is client, which is
+  server, which is transport) and a STABLE SURFACE section stating what
+  is public and what may move. Also fixed: the header pointed at
+  `ext/mcp_stdio_server.nu`, a file that has never existed, sending
+  anyone who followed it to `mcp_stdio.nu` — the stdio *client*.
+
 ### Added
 
 - **HTTP/3 client, and `packages/http-client` speaks it** —

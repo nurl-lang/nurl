@@ -1,21 +1,35 @@
-// stdlib/ext/mcp_registry.nu — MCP server framework.
+// stdlib/ext/mcp_server.nu — WRITE AN MCP SERVER IN NURL.
 //
-// High-level "register a tool/prompt/resource with a closure handler"
-// API for building MCP servers. Sits on top of stdlib/ext/mcp.nu (the
-// JSON-RPC envelope + result builders) and is consumed by
-// stdlib/ext/mcp_stdio_server.nu (stdio transport) and
-// stdlib/ext/mcp_http.nu (HTTP transport — wired via the
-// existing mcp_http_handler taking the registry's dispatch as the
-// routing core).
+// START HERE for anything server-side. Register tools/prompts/
+// resources with closure handlers, pick a transport, done — you never
+// touch JSON-RPC, the dual-era version gate, `server/discover`, or the
+// `_meta` decorations by hand. Hand-rolling those is how three servers
+// in this repo each grew their own subtly-different copy; this module
+// is the one copy.
 //
-// The Channel[A] generic-propagation compiler fix (2026-05-17)
-// unlocked closure-in-Vec storage, which is what makes a uniform
-// `mcp_registry_add_*` API possible — handlers are stored on the
-// registry struct as Vec[McpTool] / Vec[McpPrompt] / Vec[McpResource]
-// and dispatched by name lookup at request time.
+//   : McpServer srv ( mcp_server_new `my-server` `1.0.0` )
+//   ( mcp_server_add_tool srv `echo` `Echo the text back.` schema handler )
+//   ?? ( mcp_server_serve_stdio srv ) { T _ → {} F _ → {} }
+//
+// Working examples: examples/mcp_echo_server.nu (stdio),
+// examples/mcp_echo_server_http.nu (HTTP). Real servers built on it:
+// packages/nurl-mcp, packages/swarm-mcp, packages/mermaid-server.
+//
+// The MCP module family (all of `stdlib/ext/mcp*.nu`):
+//   mcp_server.nu   ← YOU ARE HERE — build a server (any transport)
+//   mcp.nu            JSON-RPC envelopes + result builders (the layer
+//                     under this one; use it directly only for shapes
+//                     this module does not model yet)
+//   mcp_http.nu       Streamable-HTTP transport (POST/GET-SSE/DELETE)
+//   mcp_session.nu    per-session state: SSE queues, subscriptions,
+//                     server→client RPC (sampling)
+//   mcp_tasks.nu      the io.modelcontextprotocol/tasks extension
+//   mcp_client.nu     CLIENT over HTTP     — consuming someone else's server
+//   mcp_stdio.nu      CLIENT over stdio    — spawns a server as a child
+//   mcp_search.nu     search/fetch tool helpers
 //
 // Spec coverage — DUAL-ERA per the 2026-07-28 versioning page: one
-// registry serves both modern (per-request `_meta`, `server/discover`)
+// server serves both modern (per-request `_meta`, `server/discover`)
 // and legacy (initialize handshake) clients on the same endpoint:
 //   * server/discover (2026-07-28 — servers MUST implement)
 //   * initialize / initialized (legacy handshake; echoes the client's
@@ -34,17 +48,31 @@
 // Out of scope here (transport-level; served by mcp_session/mcp_http):
 //   * resources/subscribe + notifications/resources/updated — session-
 //     scoped in mcp_http_handler_session over the mcp_session queue
-//     (the registry dispatch stays session-agnostic)
+//     (this dispatch stays session-agnostic)
 //   * sampling/createMessage (server→client reverse RPC — mcp_session)
 // Out of scope (client-side feature):
 //   * roots/list
 //
+// Every handler runs under `recover`: a panic inside one becomes a
+// tool/prompt/resource error envelope instead of killing the process.
+// That is the difference between this and a hand-rolled dispatch loop
+// over stdio, where one bad `json_as_str` takes the server down.
+//
+// ── STABLE SURFACE ───────────────────────────────────────────────────
+//
+// Public API = the `mcp_server_*` functions and the `McpServerErr`
+// enum, and nothing else. Everything `__`-prefixed is internal and
+// changes without notice; `McpServer` and its record types are
+// OPAQUE — read them through the accessors, never by field
+// (`. srv tools`), or a field reorder underneath breaks you silently.
+//
 // Memory model:
-//   McpRegistry OWNS its String + Json fields + the Vec containers.
-//   Handlers are borrowed closures — they MUST outlive the registry
-//   (or be plain `@` function references that have static lifetime).
-//   mcp_registry_dispatch returns an OWNED Json envelope; caller
-//   frees via json_free.
+//   McpServer OWNS its String + Json fields + the Vec containers.
+//   `mcp_server_add_*` CONSUMES the name / description / schema it is
+//   given and BORROWS the handler closure — the handler must outlive
+//   the server (a top-level `@` function reference always does).
+//   `mcp_server_dispatch` / `_envelope` return an OWNED Json; the
+//   caller frees it with json_free (the transports here already do).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -106,7 +134,7 @@ $ `stdlib/ext/http_response.nu`
 
 // ── Registry ──────────────────────────────────────────────────────────
 
-: McpRegistry {
+: McpServer {
     String server_name
     String server_version
     ( Vec McpTool ) tools
@@ -115,8 +143,8 @@ $ `stdlib/ext/http_response.nu`
     ( Vec McpCompletion ) completions
 }
 
-@ mcp_registry_new s name s version → McpRegistry {
-    ^ @ McpRegistry {
+@ mcp_server_new s name s version → McpServer {
+    ^ @ McpServer {
         ( string_from name )
         ( string_from version )
         ( vec_new [McpTool] )
@@ -126,7 +154,7 @@ $ `stdlib/ext/http_response.nu`
     }
 }
 
-@ mcp_registry_free McpRegistry r → v {
+@ mcp_server_free McpServer r → v {
     ( string_free . r server_name )
     ( string_free . r server_version )
     // Tools
@@ -180,7 +208,7 @@ $ `stdlib/ext/http_response.nu`
 }
 
 // CONSUMES `name`, `description`, `schema`. Handler is borrowed.
-@ mcp_registry_add_tool McpRegistry r s name s description Json schema ( @ Json Json ) handler → v {
+@ mcp_server_add_tool McpServer r s name s description Json schema ( @ Json Json ) handler → v {
     : McpTool t @ McpTool {
         ( string_from name )
         ( string_from description )
@@ -190,7 +218,7 @@ $ `stdlib/ext/http_response.nu`
     ( vec_push [McpTool] . r tools t )
 }
 
-@ mcp_registry_add_prompt McpRegistry r s name s description Json args_schema ( @ Json Json ) handler → v {
+@ mcp_server_add_prompt McpServer r s name s description Json args_schema ( @ Json Json ) handler → v {
     : McpPrompt p @ McpPrompt {
         ( string_from name )
         ( string_from description )
@@ -200,7 +228,7 @@ $ `stdlib/ext/http_response.nu`
     ( vec_push [McpPrompt] . r prompts p )
 }
 
-@ mcp_registry_add_resource McpRegistry r s uri s name s mime_type s description ( @ Json ) handler → v {
+@ mcp_server_add_resource McpServer r s uri s name s mime_type s description ( @ Json ) handler → v {
     : McpResource res @ McpResource {
         ( string_from uri )
         ( string_from name )
@@ -216,7 +244,7 @@ $ `stdlib/ext/http_response.nu`
 // completion is attached to. The handler receives the `argument`
 // object and returns a Json array of candidate string values.
 // CONSUMES `ref_type`, `ref_id`. Handler is borrowed.
-@ mcp_registry_add_completion McpRegistry r s ref_type s ref_id ( @ Json Json ) handler → v {
+@ mcp_server_add_completion McpServer r s ref_type s ref_id ( @ Json Json ) handler → v {
     : McpCompletion c @ McpCompletion {
         ( string_from ref_type )
         ( string_from ref_id )
@@ -227,7 +255,7 @@ $ `stdlib/ext/http_response.nu`
 
 // ── Lookup helpers ────────────────────────────────────────────────────
 
-@ __mcp_find_tool_index McpRegistry r s name → i {
+@ __mcp_find_tool_index McpServer r s name → i {
     : i n ( vec_len [McpTool] . r tools )
     : *McpTool tp ( vec_data [McpTool] . r tools )
     : ~ i k 0
@@ -240,7 +268,7 @@ $ `stdlib/ext/http_response.nu`
     ^ found
 }
 
-@ __mcp_find_prompt_index McpRegistry r s name → i {
+@ __mcp_find_prompt_index McpServer r s name → i {
     : i n ( vec_len [McpPrompt] . r prompts )
     : *McpPrompt pp ( vec_data [McpPrompt] . r prompts )
     : ~ i k 0
@@ -253,7 +281,7 @@ $ `stdlib/ext/http_response.nu`
     ^ found
 }
 
-@ __mcp_find_resource_index McpRegistry r s uri → i {
+@ __mcp_find_resource_index McpServer r s uri → i {
     : i n ( vec_len [McpResource] . r resources )
     : *McpResource rp ( vec_data [McpResource] . r resources )
     : ~ i k 0
@@ -266,7 +294,7 @@ $ `stdlib/ext/http_response.nu`
     ^ found
 }
 
-@ __mcp_find_completion_index McpRegistry r s ref_type s ref_id → i {
+@ __mcp_find_completion_index McpServer r s ref_type s ref_id → i {
     : i n ( vec_len [McpCompletion] . r completions )
     : *McpCompletion cp ( vec_data [McpCompletion] . r completions )
     : ~ i k 0
@@ -285,7 +313,7 @@ $ `stdlib/ext/http_response.nu`
 
 // Capability object: one entry per category that has any registered
 // entries. Empty object = "supported with no extra options".
-@ __mcp_registry_caps McpRegistry r → Json {
+@ __mcp_server_caps McpServer r → Json {
     : Json caps ( json_obj_new )
     ? > ( vec_len [McpTool] . r tools ) 0
     { ( json_obj_set caps `tools` ( json_obj_new ) ) } {}
@@ -303,12 +331,12 @@ $ `stdlib/ext/http_response.nu`
 // requested `protocolVersion` when we support it, else answer with
 // the newest handshake-era revision we do support (a legacy client
 // would disconnect on a non-handshake revision like 2026-07-28).
-@ __mcp_dispatch_initialize McpRegistry r ? Json params → Json {
+@ __mcp_dispatch_initialize McpServer r ? Json params → Json {
     : Json info ( json_obj_new )
     ( json_obj_set info `name` ( json_str_lit ( string_data . r server_name ) ) )
     ( json_obj_set info `version` ( json_str_lit ( string_data . r server_version ) ) )
 
-    : Json caps ( __mcp_registry_caps r )
+    : Json caps ( __mcp_server_caps r )
     : s ver ( mcp_initialize_version_for params )
     : Json out ( json_obj_new )
     ( json_obj_set out `protocolVersion` ( json_str_lit ver ) )
@@ -319,16 +347,16 @@ $ `stdlib/ext/http_response.nu`
 
 // server/discover (2026-07-28, MUST): supported versions + caps +
 // identity. The registry has no instructions channel yet — empty.
-@ __mcp_dispatch_discover McpRegistry r → Json {
+@ __mcp_dispatch_discover McpServer r → Json {
     ^ ( mcp_discover_result
     ( string_data . r server_name )
     ( string_data . r server_version )
-    ( __mcp_registry_caps r )
+    ( __mcp_server_caps r )
     `` )
 }
 
 // tools/list: build the array of {name, description, inputSchema}.
-@ __mcp_dispatch_tools_list McpRegistry r → Json {
+@ __mcp_dispatch_tools_list McpServer r → Json {
     : Json arr ( json_arr_new )
     : i n ( vec_len [McpTool] . r tools )
     : *McpTool tp ( vec_data [McpTool] . r tools )
@@ -354,7 +382,7 @@ $ `stdlib/ext/http_response.nu`
 // sub-object. Returns the handler's tool-result envelope verbatim.
 // Errors (unknown tool) returned as the spec-defined tool error
 // envelope ({content: [...], isError: true}).
-@ __mcp_dispatch_tools_call McpRegistry r ? Json params → Json {
+@ __mcp_dispatch_tools_call McpServer r ? Json params → Json {
     : ~ s tool_name ``
     : ~ Json args ( json_null )
     ?? params {
@@ -389,7 +417,7 @@ $ `stdlib/ext/http_response.nu`
     : McpTool t . tp idx
     : ( @ Json Json ) h . t handler
     // Run the user handler under `recover` so a panic inside it doesn't
-    // unwind the dispatch — which over stdio (mcp_serve_stdio has no outer
+    // unwind the dispatch — which over stdio (mcp_server_serve_stdio has no outer
     // recover) would kill the whole server process. The handler's result is
     // carried OUT of the recover closure through a shared-ctl Vec sink: a
     // closure captures locals by value, so a direct `= result ...` inside it
@@ -416,7 +444,7 @@ $ `stdlib/ext/http_response.nu`
 }
 
 // prompts/list: build the array of {name, description, arguments}.
-@ __mcp_dispatch_prompts_list McpRegistry r → Json {
+@ __mcp_dispatch_prompts_list McpServer r → Json {
     : Json arr ( json_arr_new )
     : i n ( vec_len [McpPrompt] . r prompts )
     : *McpPrompt pp ( vec_data [McpPrompt] . r prompts )
@@ -439,7 +467,7 @@ $ `stdlib/ext/http_response.nu`
 // prompts/get: invoke the prompt handler with `arguments`. Handler
 // returns the spec-shaped {description, messages} object (or just
 // messages; we wrap if missing).
-@ __mcp_dispatch_prompts_get McpRegistry r ? Json params → Json {
+@ __mcp_dispatch_prompts_get McpServer r ? Json params → Json {
     : ~ s pname ``
     : ~ Json args ( json_null )
     ?? params {
@@ -499,7 +527,7 @@ $ `stdlib/ext/http_response.nu`
 }
 
 // resources/list: build the array of resource descriptors.
-@ __mcp_dispatch_resources_list McpRegistry r → Json {
+@ __mcp_dispatch_resources_list McpServer r → Json {
     : Json arr ( json_arr_new )
     : i n ( vec_len [McpResource] . r resources )
     : *McpResource rp ( vec_data [McpResource] . r resources )
@@ -523,7 +551,7 @@ $ `stdlib/ext/http_response.nu`
 // resources/read: lookup by uri, invoke handler. Spec response shape
 // is {contents: [{uri, mimeType, text|blob}]}. Handler returns the
 // inner content object; we wrap it.
-@ __mcp_dispatch_resources_read McpRegistry r ? Json params → Json {
+@ __mcp_dispatch_resources_read McpServer r ? Json params → Json {
     : ~ s uri ``
     ?? params {
         T p → {
@@ -613,7 +641,7 @@ $ `stdlib/ext/http_response.nu`
 // with the request's `argument` object. Returns
 // {completion: {values, total, hasMore}}. An unknown ref yields an empty
 // completion list rather than an error (per spec: completion is a hint).
-@ __mcp_dispatch_completion McpRegistry r ? Json params → Json {
+@ __mcp_dispatch_completion McpServer r ? Json params → Json {
     : ~ s ref_type ``
     : ~ s ref_id ``
     : ~ Json arg ( json_null )
@@ -680,7 +708,7 @@ $ `stdlib/ext/http_response.nu`
 // Unknown methods OR dispatch failures: returns a Json object with a
 // `__error__` field — caller turns that into a JSON-RPC error response
 // (method not found / internal error).
-@ mcp_registry_dispatch McpRegistry r s method ? Json params → Json {
+@ mcp_server_dispatch McpServer r s method ? Json params → Json {
     ? != 0 ( nurl_str_eq method `server/discover` ) {
         ^ ( __mcp_dispatch_discover r )
     } {}
@@ -734,17 +762,17 @@ $ `stdlib/ext/http_response.nu`
 // JSON parse error) are silent — the spec says the host process
 // drives the lifecycle.
 
-: | McpServeErr {
-    McpServeReadIo
-    McpServeWriteIo
-    McpServeOther
+: | McpServerErr {
+    McpServerReadIo
+    McpServerWriteIo
+    McpServerOther
 }
 
-@ mcp_serve_err_name McpServeErr e → s {
+@ mcp_server_err_name McpServerErr e → s {
     ^ ?? e {
-        McpServeReadIo → `McpServeReadIo`
-        McpServeWriteIo → `McpServeWriteIo`
-        McpServeOther → `McpServeOther`
+        McpServerReadIo → `McpServerReadIo`
+        McpServerWriteIo → `McpServerWriteIo`
+        McpServerOther → `McpServerOther`
     }
 }
 
@@ -774,7 +802,7 @@ $ `stdlib/ext/http_response.nu`
 
 // Build the JSON-RPC response envelope for one dispatch result. Handles
 // both success ({result, id}) and the error sub-shape recognised by
-// `mcp_registry_dispatch` (a Json object with an `__error__` field).
+// `mcp_server_dispatch` (a Json object with an `__error__` field).
 // CONSUMES `result` + `id`.
 @ __mcp_envelope_response Json result Json id → Json {
     : ?Json errf ( json_obj_get result `__error__` )
@@ -792,16 +820,16 @@ $ `stdlib/ext/http_response.nu`
 // Single iteration of the stdio main loop. Returns T when EOF reached
 // (caller terminates the loop), F otherwise.
 //
-// Routes through `mcp_registry_envelope` so the stdio transport gets
+// Routes through `mcp_server_envelope` so the stdio transport gets
 // the same dual-era behavior as HTTP (version gate, `server/discover`,
 // modern `_meta` decorations). This also fixed a latent double-free:
 // the old inline path called `json_free resp` after `mcp_send_message`
 // — which already CONSUMES its message.
-@ __mcp_serve_stdio_once McpRegistry r → b {
+@ __mcp_server_serve_stdio_once McpServer r → b {
     : ?Json req ( mcp_read_request )
     ?? req {
         T jr → {
-            : ?Json resp_o ( mcp_registry_envelope r jr )
+            : ?Json resp_o ( mcp_server_envelope r jr )
             ?? resp_o {
                 T resp → { ( mcp_send_message resp ) }
                 // Notification — no response (per JSON-RPC 2.0 §4.1).
@@ -814,34 +842,34 @@ $ `stdlib/ext/http_response.nu`
     }
 }
 
-@ mcp_serve_stdio McpRegistry r → !v McpServeErr {
+@ mcp_server_serve_stdio McpServer r → !v McpServerErr {
     : ~ b done F
     ~ ! done {
-        = done ( __mcp_serve_stdio_once r )
+        = done ( __mcp_server_serve_stdio_once r )
     }
-    ^ @ !v McpServeErr { T 0 }
+    ^ @ !v McpServerErr { T 0 }
 }
 
 // ── HTTP transport adapter ───────────────────────────────────────────
 //
-// `mcp_registry_envelope` is the transport-agnostic dispatch entry
+// `mcp_server_envelope` is the transport-agnostic dispatch entry
 // point. Given a parsed JSON-RPC request Json, runs the registry
 // dispatch and produces either a response Json (Some) or None (the
 // request was a pure notification with no id).
 //
-// `mcp_http_dispatch_for_registry` wraps this for the existing
+// `mcp_server_http_dispatch` wraps this for the existing
 // `mcp_http_handler` (stdlib/ext/mcp_http.nu) which expects a
 // `( @ ? Json Json )` dispatch closure shape.
 //
 // Caller wires it together like:
-//   : McpRegistry r ( mcp_registry_new `my-server` `1.0.0` )
-//   ( mcp_registry_add_tool r `echo` `Echo back input` schema echo_handler )
-//   : ( @ ? Json Json ) disp ( mcp_http_dispatch_for_registry r )
+//   : McpServer r ( mcp_server_new `my-server` `1.0.0` )
+//   ( mcp_server_add_tool r `echo` `Echo back input` schema echo_handler )
+//   : ( @ ? Json Json ) disp ( mcp_server_http_dispatch r )
 //   : ( @ HttpResponse HttpRequest ) h ( mcp_http_handler disp )
 //   : HttpServer s ( server_new listener h )
 //   ( server_run s )
 
-@ mcp_registry_envelope McpRegistry r Json req → ?Json {
+@ mcp_server_envelope McpServer r Json req → ?Json {
     : String method ( __mcp_extract_method req )
     : b had_id ( __mcp_has_id req )
     : Json id ( __mcp_extract_id_or_null req )
@@ -866,7 +894,7 @@ $ `stdlib/ext/http_response.nu`
     } {}
 
     : ?Json mparams ( json_obj_get req `params` )
-    : Json result ( mcp_registry_dispatch r ( string_data method ) mparams )
+    : Json result ( mcp_server_dispatch r ( string_data method ) mparams )
     ( string_free method )
     // Modern-era servers SHOULD identify themselves in each result's
     // `_meta`. Skip error sub-shapes (they become JSON-RPC errors).
@@ -889,8 +917,8 @@ $ `stdlib/ext/http_response.nu`
     }
 }
 
-@ mcp_http_dispatch_for_registry McpRegistry r → ( @ ?Json Json ) {
-    ^ \ Json req → ?Json { ^ ( mcp_registry_envelope r req ) }
+@ mcp_server_http_dispatch McpServer r → ( @ ?Json Json ) {
+    ^ \ Json req → ?Json { ^ ( mcp_server_envelope r req ) }
 }
 
 // Bearer-auth middleware. Decorates an HTTP handler so requests

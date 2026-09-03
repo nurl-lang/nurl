@@ -18,7 +18,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/std/panic.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
-$ `stdlib/ext/mcp_registry.nu`
+$ `stdlib/ext/mcp_server.nu`
 $ `stdlib/ext/mcp_session.nu`
 
 @ echo_handler Json args → Json {
@@ -50,11 +50,11 @@ $ `stdlib/ext/mcp_session.nu`
     }
 }
 
-@ call_tool McpRegistry r s name → Json {
+@ call_tool McpServer r s name → Json {
     : Json p ( json_obj_new )
     ( json_obj_set p `name` ( json_str_lit name ) )
     ( json_obj_set p `arguments` ( json_obj_new ) )
-    : Json out ( mcp_registry_dispatch r `tools/call` @ ?Json { T p } )
+    : Json out ( mcp_server_dispatch r `tools/call` @ ?Json { T p } )
     ( json_free p )
     ^ out
 }
@@ -62,9 +62,9 @@ $ `stdlib/ext/mcp_session.nu`
 @ run → i {
     : ~ i fails 0
 
-    : McpRegistry r ( mcp_registry_new `t` `1.0` )
-    ( mcp_registry_add_tool r `echo` `ok` ( json_obj_new ) \ Json a → Json { ^ ( echo_handler a ) } )
-    ( mcp_registry_add_tool r `boom` `panics` ( json_obj_new ) \ Json a → Json { ^ ( boom_handler a ) } )
+    : McpServer r ( mcp_server_new `t` `1.0` )
+    ( mcp_server_add_tool r `echo` `ok` ( json_obj_new ) \ Json a → Json { ^ ( echo_handler a ) } )
+    ( mcp_server_add_tool r `boom` `panics` ( json_obj_new ) \ Json a → Json { ^ ( boom_handler a ) } )
 
     // 1a. Success path must return the real result.
     : Json r1 ( call_tool r `echo` )
@@ -84,7 +84,7 @@ $ `stdlib/ext/mcp_session.nu`
         F → { ( nurl_eprintln `FAIL: no isError field` ) = fails + fails 1 }
     }
     ( json_free r2 )
-    ( mcp_registry_free r )
+    ( mcp_server_free r )
 
     // 2. resolve_rpc rejects a non-pending (forged) id, settles a pending one.
     : McpSessionStore st ( mcp_session_store_new )
