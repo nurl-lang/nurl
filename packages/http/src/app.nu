@@ -37,6 +37,10 @@ $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_router.nu`
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/ext/http_static.nu`
+$ `stdlib/std/udp.nu`
+$ `stdlib/std/thread.nu`
+$ `stdlib/std/tls_server.nu`
+$ `stdlib/ext/http3_server.nu`
 
 : HttpApp {
     Router router
@@ -53,6 +57,7 @@ $ `stdlib/ext/http_static.nu`
     i head_max  // request head byte cap; -1 → stdlib default (8 KiB)
     i max_keepalive  // per-conn request reuse cap; -1 → server default (0 = close after one)
     i req_timeout_ms  // per-request wall-clock budget; -1 → server default (0 = disabled)
+    i http3  // 1 → a TLS listener also serves HTTP/3 on the same port over UDP (default)
 }
 
 // ── Construction / teardown ───────────────────────────────────────────
@@ -73,6 +78,7 @@ $ `stdlib/ext/http_static.nu`
     = . a head_max -1
     = . a max_keepalive -1
     = . a req_timeout_ms -1
+    = . a http3 1
     ^ a
 }
 
@@ -90,6 +96,10 @@ $ `stdlib/ext/http_static.nu`
 // prefer http_app_async for servers that must scale past a handful of
 // concurrent connections.
 @ http_app_workers * HttpApp a i n → v { = . a workers n }
+
+// HTTP/3 on TLS listeners: on by default. `http_app_set_http3 a 0` keeps
+// a TLS listener TCP-only (no UDP socket, no Alt-Svc).
+@ http_app_set_http3 * HttpApp a i on → v { = . a http3 on }
 
 // Serve fiber-per-connection on the M:N async runtime (server_run_async):
 // every accepted connection gets its own fiber, and `n` worker pthreads
@@ -257,9 +267,26 @@ $ `stdlib/ext/http_static.nu`
     ^ @ HttpLimits { hm ( http_req_header_max_count ) bm }
 }
 
+// Every HTTP/1.1 and HTTP/2 response from a listener that also speaks
+// HTTP/3 carries `Alt-Svc: h3=":port"; ma=86400` (RFC 7838 / RFC 9114
+// §3.1.1) so a client that started over TCP can move to QUIC.
+@ __httpapp_with_alt_svc i port ( @ HttpResponse HttpRequest ) inner → ( @ HttpResponse HttpRequest ) {
+    : String v ( string_from `h3=":` )
+    ( string_push_int v port )
+    ( string_push_str v `"; ma=86400` )
+    ^ \ HttpRequest req → HttpResponse {
+        : HttpResponse resp ( inner req )
+        ( response_set_header resp `Alt-Svc` ( string_data v ) )
+        ^ resp
+    }
+}
+
 // Drive a bound listener: shutdown signal + composed handler + keep-alive
 // loop (pool when workers>0). MOVES `listener`; stops the server on return.
-@ __httpapp_serve * HttpApp a TcpListener listener s scheme s host i port → i {
+// `cert` / `key` are the TLS listener's PEM paths ("" for plaintext): with
+// them, and `http3` on, the same host:port is bound over UDP and served as
+// HTTP/3 by the same handler on its own thread.
+@ __httpapp_serve * HttpApp a TcpListener listener s scheme s host i port s cert s key → i {
     ( signal_install_shutdown listener )
     // Each middleware layer is held in its own binding so every closure
     // env can be released after the server returns (closures have no
@@ -280,6 +307,51 @@ $ `stdlib/ext/http_static.nu`
         = base logw
         = has_log T
     } {}
+    // ── HTTP/3 beside a TLS listener ──
+    : ~ b h3_on F
+    : ~ * H3Server h3 # *H3Server 0
+    : ~ * QuicCreds h3_creds # *QuicCreds 0
+    : ~ * QuicTp h3_tp # *QuicTp 0
+    : ~ UdpSocket h3_sock @ UdpSocket { # s 0 }
+    : ~ ( @ v ) h3_thread_body \ → v {}
+    : ~ b h3_thread_ok F
+    : ~ Thread h3_thread @ Thread { # s 0 }
+    : ~ ( @ HttpResponse HttpRequest ) altw base
+    ? & & != . a http3 0 > ( nurl_str_len cert ) 0 != 0 ( nurl_str_eq scheme `https` ) {
+        = h3_creds ( http3_creds_load cert key )
+        ? == # i h3_creds 0 { ( nurl_eprintln `http: HTTP/3 off — certificate or key could not be loaded for QUIC` ) } {
+            ?? ( udp_bind host port ) {
+                F e → {
+                    ( nurl_eprint `http: HTTP/3 off — cannot bind UDP ` )
+                    ( nurl_eprint host ) ( nurl_eprint `:` )
+                    : String ps ( string_new )
+                    ( string_push_int ps port )
+                    ( nurl_eprint ( string_data ps ) ) ( nurl_eprint ` — ` )
+                    ( nurl_eprintln ( net_err_name e ) )
+                    ( string_free ps )
+                }
+                T us → {
+                    = h3_sock us
+                    = h3_tp ( http3_default_tp )
+                    = . h3_tp max_idle_timeout . a idle_ms
+                    : ( Vec u ) alpn ( tls_alpn_pack `h3` )
+                    : HttpLimits lim ( __httpapp_limits a )
+                    = h3 ( http3_server_new h3_sock h3_creds alpn h3_tp base . lim body_default_max )
+                    ( vec_free [u] alpn )
+                    : *H3Server h3p h3
+                    = h3_thread_body \ → v { ( http3_server_run h3p ) }
+                    ?? ( thread_spawn h3_thread_body ) {
+                        T t → { = h3_thread t = h3_thread_ok T = h3_on T }
+                        F _ → { ( nurl_eprintln `http: HTTP/3 off — could not start the QUIC thread` ) }
+                    }
+                    ? h3_on {
+                        = altw ( __httpapp_with_alt_svc port base )
+                        = base altw
+                    } {}
+                }
+            }
+        }
+    } {}
     : ~ i ka . a max_keepalive
     ? < ka 0 { = ka ( server_default_max_keepalive_requests ) } {}
     : ~ i rt . a req_timeout_ms
@@ -299,6 +371,16 @@ $ `stdlib/ext/http_static.nu`
         }
     }
     ( server_stop srv )
+    ? h3_on {
+        ( http3_server_stop h3 )
+        ? h3_thread_ok { : i _j ( thread_join h3_thread ) } {}
+        ( nurl_free # s # *u h3_thread_body 1 )
+        ( nurl_free # s # *u altw 1 )
+    } {}
+    ? != # i h3 0 { ( http3_server_free h3 ) } {}
+    ? != # i h3_tp 0 { ( quic_tp_free h3_tp ) } {}
+    ? != # i h3_creds 0 { ( quic_creds_free h3_creds ) } {}
+    ? != # i . h3_sock raw 0 { ( udp_close h3_sock ) } {}
     ? has_log { ( nurl_free # s # *u logw 1 ) } {}
     ? has_cors { ( nurl_free # s # *u corsw 1 ) } {}
     ( nurl_free # s # *u disp 1 )
@@ -310,7 +392,7 @@ $ `stdlib/ext/http_static.nu`
 @ http_app_listen * HttpApp a s host i port → i {
     : !TcpListener NetErr lr ( tcp_listen host port )
     ?? lr {
-        T listener → { ^ ( __httpapp_serve a listener `http` host port ) }
+        T listener → { ^ ( __httpapp_serve a listener `http` host port `` `` ) }
         F e → {
             ( nurl_eprint `http: cannot bind ` )
             ( nurl_eprint host )
@@ -332,11 +414,12 @@ $ `stdlib/ext/http_static.nu`
     // Advertise HTTP/2 and HTTP/1.1 over ALPN (RFC 7301), h2 preferred:
     // an HTTP/2-capable client (browsers, curl, oha) gets HTTP/2, anything
     // else HTTP/1.1, over the same listener and the same routes. The
-    // server itself tells the protocols apart by the connection preface,
-    // so this is the only HTTP/2-specific line in the facade.
+    // server itself tells the protocols apart by the connection preface.
+    // HTTP/3 rides beside it: `__httpapp_serve` binds the same port over
+    // UDP for QUIC and the TCP responses announce it with Alt-Svc.
     : !TcpListener NetErr lr ( tcp_listen_tls_with_alpn host port 128 cert key `h2 http/1.1` )
     ?? lr {
-        T listener → { ^ ( __httpapp_serve a listener `https` host port ) }
+        T listener → { ^ ( __httpapp_serve a listener `https` host port cert key ) }
         F e → {
             ( nurl_eprint `http: cannot bind TLS ` )
             ( nurl_eprint host )

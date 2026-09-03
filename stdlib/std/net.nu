@@ -258,7 +258,7 @@ $ `stdlib/std/pkey.nu`
 // modulus in k1, private exponent in k2), or a NEGATIVE NetErr-style code
 // on failure (-10 cert, -11 key). The key form is auto-detected: EC and
 // RSA parsers each cleanly reject the other's encoding.
-@ __load_tls_creds s cert_path s key_path ( Vec u ) cert_out ( Vec u ) k1 ( Vec u ) k2 ( Vec u ) k3 → i {
+@ _load_tls_creds s cert_path s key_path ( Vec u ) cert_out ( Vec u ) k1 ( Vec u ) k2 ( Vec u ) k3 → i {
     : String certpem ?? ( read_file cert_path ) { T p → p F _ → ( string_new ) }
     : ( Vec u ) chain ( __net_cert_chain certpem )
     ( string_free certpem )
@@ -299,7 +299,7 @@ $ `stdlib/std/pkey.nu`
     : ( Vec u ) k1 ( vec_new [u] )
     : ( Vec u ) k2 ( vec_new [u] )
     : ( Vec u ) k3 ( vec_new [u] )
-    : i keytype ( __load_tls_creds cert_path key_path cert k1 k2 k3 )
+    : i keytype ( _load_tls_creds cert_path key_path cert k1 k2 k3 )
     ? < keytype 0 {
         ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
         ^ @ !TcpListener NetErr { F ( _net_err_of - 0 keytype ) }
