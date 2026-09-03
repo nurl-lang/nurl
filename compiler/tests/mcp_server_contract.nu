@@ -35,7 +35,6 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/panic.nu`
-$ `stdlib/core/io.nu`
 
 // ── request builders ────────────────────────────────────────────────
 
@@ -86,19 +85,20 @@ $ `stdlib/core/io.nu`
 // the request.
 
 @ show McpServer srv s tag Json request → v {
+    // The tag goes out BEFORE the dispatch so that a server log line —
+    // a panicking handler, a notification that failed — lands on its
+    // own line above the response it belongs to rather than inside it.
+    // On POSIX that is what the record shows: the runner captures
+    // `> out 2>&1` and NURL drains stdout before any stderr write, so
+    // the merge is program order (compiler/tests/stdout_flush_order.nu
+    // pins that rule). run_tests.ps1 reads the two pipes separately and
+    // concatenates them, so on Windows every stderr line lands after
+    // every stdout line whatever the program does — which is why this
+    // test carries an outputs-windows/ golden holding the same lines in
+    // that order. Do not "fix" either golden into the other's shape.
     ( nurl_print tag )
     ( nurl_print `\n` )
-    // Some of these dispatches log to stderr (a panicking handler, a
-    // notification that failed) and the runner merges the two streams.
-    // Where the log line lands relative to this test's own output is
-    // otherwise a function of libc buffering policy rather than of the
-    // program — the golden matched on Linux and did not on Windows.
-    // Flushing on both sides of the dispatch makes the interleaving
-    // program order on every platform, and puts any log line on its own
-    // line above the response it belongs to.
-    ( flush )
     : ?Json reply ( mcp_server_envelope srv request )
-    ( eflush )
     ( nurl_print `  ` )
     ?? reply {
         T resp → {
@@ -110,7 +110,6 @@ $ `stdlib/core/io.nu`
         F _ → { ( nurl_print `<no response — notification>` ) }
     }
     ( nurl_print `\n` )
-    ( flush )
     ( json_free request )
 }
 

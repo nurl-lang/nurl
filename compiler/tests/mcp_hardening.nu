@@ -15,7 +15,6 @@
 // main returns the failure count (0 = pass).
 
 $ `stdlib/core/string.nu`
-$ `stdlib/core/io.nu`
 $ `stdlib/std/panic.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
@@ -85,20 +84,17 @@ $ `stdlib/ext/mcp_session.nu`
     }
 }
 
-// The panicking handler logs to stderr and the runner merges the two
-// streams, so where that line lands relative to this test's own output
-// was a function of libc buffering policy rather than of the program:
-// the same record needed a separate outputs-windows/ golden that
-// differed by one line's POSITION and nothing else. Flushing on both
-// sides of the dispatch makes the interleaving program order
-// everywhere, and the Windows override is gone.
+// The panicking handler logs to stderr, so this test's record contains
+// both streams and its outputs-windows/ golden holds the same lines in
+// a different order — run_tests.ps1 concatenates the two pipes instead
+// of merging them, so every stderr line lands last there. That is a
+// property of the harness, not a bug and not something a flush can
+// change; see compiler/tests/stdout_flush_order.nu.
 @ call_tool McpServer r s name → Json {
     : Json p ( json_obj_new )
     ( json_obj_set p `name` ( json_str_lit name ) )
     ( json_obj_set p `arguments` ( json_obj_new ) )
-    ( flush )
     : Json out ( dispatch_ok r `tools/call` @ ?Json { T p } )
-    ( eflush )
     ( json_free p )
     ^ out
 }
