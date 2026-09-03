@@ -35,6 +35,7 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/panic.nu`
+$ `stdlib/core/io.nu`
 
 // ── request builders ────────────────────────────────────────────────
 
@@ -86,8 +87,20 @@ $ `stdlib/std/panic.nu`
 
 @ show McpServer srv s tag Json request → v {
     ( nurl_print tag )
-    ( nurl_print `\n  ` )
-    ?? ( mcp_server_envelope srv request ) {
+    ( nurl_print `\n` )
+    // Some of these dispatches log to stderr (a panicking handler, a
+    // notification that failed) and the runner merges the two streams.
+    // Where the log line lands relative to this test's own output is
+    // otherwise a function of libc buffering policy rather than of the
+    // program — the golden matched on Linux and did not on Windows.
+    // Flushing on both sides of the dispatch makes the interleaving
+    // program order on every platform, and puts any log line on its own
+    // line above the response it belongs to.
+    ( flush )
+    : ?Json reply ( mcp_server_envelope srv request )
+    ( eflush )
+    ( nurl_print `  ` )
+    ?? reply {
         T resp → {
             : String out ( json_stringify resp )
             ( nurl_print ( string_data out ) )
@@ -97,6 +110,7 @@ $ `stdlib/std/panic.nu`
         F _ → { ( nurl_print `<no response — notification>` ) }
     }
     ( nurl_print `\n` )
+    ( flush )
     ( json_free request )
 }
 

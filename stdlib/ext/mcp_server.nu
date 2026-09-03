@@ -121,29 +121,14 @@ $ `stdlib/ext/mcp_http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 
-// ── Handler-bearing record types ──────────────────────────────────────
-
-// Tool: callable function exposed to the LLM. The handler receives the
-// `arguments` Json (whatever the LLM passes per the tool's
-// inputSchema) and returns a tool-result envelope, typically built
-// via mcp_tool_result_text / mcp_tool_result_error.
-: McpTool {
-    String name
-    String description
-    Json input_schema
-    ( @ Json Json ) handler
-    // Handler for tools registered with `_add_tool_ctx`; `has_ctx`
-    // picks which of the two runs. Two fields rather than one
-    // wider handler type because the plain `( @ Json Json )` shape is
-    // frozen API (STABLE SURFACE rule 3) and most tools want it.
-    ( @ Json Json McpCall ) ctx_handler
-    b has_ctx
-    // ToolAnnotations (spec 2025-03-26), or Json null when the tool
-    // was registered without them. An ABSENT destructiveHint defaults
-    // to TRUE in the spec, so an unannotated harmless tool is presented
-    // to the user as if it could destroy state.
-    Json annotations
-}
+// ── Types the handler records refer to ────────────────────────────────
+//
+// These come FIRST because `McpTool` holds a closure type that takes an
+// `McpCall` by value: a named type inside a function type must already
+// be defined when the struct that holds it is emitted, or LLVM makes it
+// an opaque forward reference and rejects the module. nurlc diagnoses
+// that at the declaration now; before it did, the failure was a link
+// error on macOS-arm64 and Windows while x86-64 Linux built clean.
 
 // A pre-dispatch hook for tasks/*, boxed so it can live in a Vec.
 : McpTaskHook {
@@ -267,6 +252,30 @@ $ `stdlib/ext/http_response.nu`
 @ mcp_rpc_err_free McpRpcErr e → v {
     ( string_free . e __message )
     ( json_free . e __data )
+}
+
+// ── Handler-bearing record types ──────────────────────────────────────
+
+// Tool: callable function exposed to the LLM. The handler receives the
+// `arguments` Json (whatever the LLM passes per the tool's
+// inputSchema) and returns a tool-result envelope, typically built
+// via mcp_tool_result_text / mcp_tool_result_error.
+: McpTool {
+    String name
+    String description
+    Json input_schema
+    ( @ Json Json ) handler
+    // Handler for tools registered with `_add_tool_ctx`; `has_ctx`
+    // picks which of the two runs. Two fields rather than one
+    // wider handler type because the plain `( @ Json Json )` shape is
+    // frozen API (STABLE SURFACE rule 3) and most tools want it.
+    ( @ Json Json McpCall ) ctx_handler
+    b has_ctx
+    // ToolAnnotations (spec 2025-03-26), or Json null when the tool
+    // was registered without them. An ABSENT destructiveHint defaults
+    // to TRUE in the spec, so an unannotated harmless tool is presented
+    // to the user as if it could destroy state.
+    Json annotations
 }
 
 // ── The server handle ─────────────────────────────────────────────────

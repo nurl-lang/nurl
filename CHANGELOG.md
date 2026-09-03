@@ -61,6 +61,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vanishes when either test is run alone. Each second claimant moves to
   a free port, with a line saying why the number must stay unique.
 
+- **A named type inside a closure type must be declared before the
+  struct that holds it** — nurlc emitted a forward reference, LLVM's
+  parser makes a forward-referenced named type opaque, and an opaque
+  struct is neither a valid function argument nor a valid return type.
+  The module was rejected at link time at a column offset into a
+  generated `= type` line with no NURL source location — and not
+  everywhere: clang 18 on x86-64 Linux assembled it while the
+  macOS-arm64 and Windows toolchains did not, so it passed locally and
+  failed on another platform. Now a compile error at the declaration,
+  naming the declaration to move. A forward reference as a plain FIELD
+  stays legal (LLVM resolves that one), as do generic instantiations,
+  which are emitted ahead of every user struct.
+  `compiler/tests/should_fail_fnty_forward_type.nu`.
+
 - **A parameter now shadows a same-named top-level function** — the
   parameter's type went into the inner scope, but the function's call
   metadata (declared parameter roster, FFI roster, arity) lived under

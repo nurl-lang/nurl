@@ -24228,6 +24228,51 @@
     { ( nurl_lex_advance lex ) }
 }
 
+// A named struct used inside a FUNCTION type — as an argument or as the
+// return — must already be DEFINED in the emitted IR, not merely
+// declared later in the file. LLVM's parser makes a forward-referenced
+// named type opaque, and an opaque struct is neither a valid function
+// argument nor a valid return type, so the module is rejected at link
+// time with a column offset into a generated type line and no NURL
+// source location at all:
+//
+//   %McpTool = type { …, { %Json (i8*, %Json, %McpCall)*, i8* }, … }
+//   error: invalid type for function argument
+//
+// clang 18 on x86-64 accepted it; the macOS-arm64 and Windows
+// toolchains did not. That is the worst shape a diagnostic can take —
+// a green local build and a cryptic failure on somebody else's
+// platform — so the declaration site rejects it here, on every
+// platform, and says which declaration to move.
+//
+// Only function types are affected: a forward-referenced struct as a
+// plain field is resolved by LLVM when the definition arrives. Generic
+// instantiations (`%Vec__i64`) are emitted ahead of every user struct,
+// so dunder names are skipped, as is the `%dyn.` fat pointer.
+@ __check_fnty_types_defined i lex i syms s flt → v {
+    ? < ( nurl_str_find flt `(i8*` ) 0 { ^ v } {}
+    : i n ( nurl_str_len flt )
+    : ~ i i 0
+    ~ < i n {
+        ? == ( nurl_str_get flt i ) 37
+        { : ~ i j + i 1
+            ~ & < j n ( __is_ident_char ( nurl_str_get flt j ) ) { = j + j 1 }
+            : s name ( nurl_str_slice flt + i 1 - j + i 1 )
+            ? & & != 0 ( nurl_str_len name ) ! ( __has_dunder name )
+            ! ( seq name `dyn` )
+            { : s sv ( nurl_sym_get syms name )
+                ? & & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
+                == 0 ( nurl_str_len ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat `ty##` name ) ) )
+                { ( die lex ( nurl_str_cat
+                    ( nurl_str_cat3 `type '` name `' is used inside a closure type here but is declared LATER in the program` )
+                    ( nurl_str_cat3 `. A named type inside a function type must already be defined when this one is emitted — LLVM treats a forward reference as an opaque struct, which is not a valid function argument or return type, and the module then fails to assemble with no source location (some toolchains accept it, so it can pass locally and fail on another platform). Move ': ` name `' above this declaration.` ) ) ) }
+                {} }
+            {}
+            = i j }
+        { = i + i 1 }
+    }
+}
+
 @ gen_struct_decl s sname i lex i syms → v {
     ( nurl_lex_advance lex )
     // Same flat-namespace guard as `@` functions (g_fn_pos_syms): a second
@@ -24266,6 +24311,7 @@
             ( nurl_str_cat sname `'` ) ) ) }
         {}
         ( check_type_known lex syms flt `a struct field type` __ft_line __ft_col )
+        ( __check_fnty_types_defined lex syms flt )
         ? ( is_ident_tok ( nurl_lex_type lex ) )
         { : s fname ( nurl_lex_val lex )
             ( nurl_lex_advance lex )
