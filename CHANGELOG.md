@@ -166,6 +166,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every MCP server in the tree is on `ext/mcp_server.nu`** —
+  `packages/nurl-mcp` 0.13.0, `packages/swarm-mcp` 0.29.0 and
+  `packages/mermaid-server` 0.2.0. Three hand-rolled JSON-RPC
+  dispatchers (866 lines) become registrations. They were one design
+  copied three times: nurl-mcp's and swarm-mcp's `handle_ping` and
+  `handle_tools_list` were byte-identical, and nurl-mcp's own comment
+  said its shape came from `examples/mcp_echo_server_http.nu`. Each copy
+  had drifted somewhere the others had not — mermaid-server implemented
+  neither `server/discover` (mandatory since 2026-07-28) nor the version
+  gate, nurl-mcp compared its bearer token with a byte-at-a-time
+  `nurl_str_eq` where the stdlib's is constant-time, swarm-mcp's
+  handshake version had frozen at 0.20.0, and none of the three isolated
+  a panicking tool handler, which over stdio is the whole server. All
+  fifteen swarm tools, eleven nurl-mcp tools and three mermaid tools now
+  carry annotations; every server has `instructions`; swarm-mcp's task
+  eligibility is expressed by which tools register with
+  `mcp_server_add_tool_ctx` rather than a name list kept in sync by
+  hand.
+
 - **`ext/mcp_registry.nu` is now `ext/mcp_server.nu`** — the module you
   reach for to *write* an MCP server was named after an implementation
   detail, and "registry" is already the package registry in this repo,
