@@ -100,6 +100,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   return value, nor where the store is already a hard error for want of
   storage. `compiler/tests/should_warn_byval_param_field_store.nu`.
 
+- **`ext/mcp_server.nu` grows the four things the hand-rolled servers
+  had and it did not** — which is a large part of why they were
+  hand-rolled. `mcp_server_add_tool_full` carries ToolAnnotations (an
+  ABSENT `destructiveHint` defaults to TRUE in the spec, so an
+  unannotated read-only tool is presented as if it could destroy
+  state); `mcp_server_set_instructions` fills the `instructions`
+  channel on `server/discover` and the handshake result;
+  `mcp_server_set_task_store` turns on tasks/get, tasks/update and
+  tasks/cancel and is what declares the extension — a server without a
+  store answers method-not-found, which is the honest answer — with a
+  pre-dispatch hook for a server whose task state is only current after
+  it polls something; and `mcp_server_add_tool_ctx` hands a handler an
+  `McpCall` beside its arguments, so it can see what the client
+  declared on THIS request without widening the frozen handler type.
+  `mcp_server_dispatch` accordingly takes the whole request.
+  `mcp_server_serve_http srv host port token` is the HTTP main() in one
+  line, bearer auth included.
+  `compiler/tests/mcp_server_capabilities.nu`.
+
+- **`mcp_schema_obj` / `_prop` / `_of1` / `_empty` in `ext/mcp.nu`** —
+  a tool's inputSchema ran seven lines of `json_obj_set` per property,
+  and every MCP server in the tree had grown its own private `prop`
+  helper doing exactly that.
+
+- **`examples/mcp_echo_server.nu` and `…_http.nu` are written on the
+  facade** — 209 and 199 lines of hand-rolled JSON-RPC become 75 and 69
+  of mostly comments, and the two differ only in their last call. This
+  matters more than it looks: the example is what gets copied, and
+  `packages/nurl-mcp`'s dispatch still carries a `// shape from
+  examples/mcp_echo_server_http.nu` comment. It was teaching the wrong
+  thing, including to servers that then drifted from it.
+
 ### Changed
 
 - **`ext/mcp_registry.nu` is now `ext/mcp_server.nu`** — the module you

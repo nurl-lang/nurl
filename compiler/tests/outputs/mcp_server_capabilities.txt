@@ -1,0 +1,26 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- schema builder ---
+tool0=read
+schema_type=object
+schema_has_props=T
+schema_has_required=T
+--- annotations ---
+read_only=T
+destructive=F
+plain_has_annotations=F
+--- instructions ---
+discover_instructions=Start with search; read is cheap, build is not.
+initialize_instructions=Start with search; read is cheap, build is not.
+--- per-call context ---
+no_tasks_declared=answered-inline
+tasks_declared=would-defer
+--- tasks: not declared without a store ---
+caps_has_extensions=F
+tasks_get_no_store=unknown method: tasks/get
+--- tasks: declared with a store ---
+caps_has_extensions=T
+hook ran
+tasks_get_unknown_code=-32602

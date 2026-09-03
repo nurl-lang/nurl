@@ -8,8 +8,13 @@
 // is the one copy.
 //
 //   : McpServer srv ( mcp_server_new `my-server` `1.0.0` )
-//   ( mcp_server_add_tool srv `echo` `Echo the text back.` schema handler )
+//   ( mcp_server_add_tool srv `echo` `Echo the text back.`
+//     ( mcp_schema_of1 `text` `string` `Text to echo` T )
+//     \ Json a → Json { ^ ( echo_tool a ) } )
 //   ?? ( mcp_server_serve_stdio srv ) { T _ → {} F _ → {} }
+//
+// …and `mcp_server_serve_http srv host port token` is the same
+// program over Streamable HTTP, bearer auth included.
 //
 // Working examples: examples/mcp_echo_server.nu (stdio),
 // examples/mcp_echo_server_http.nu (HTTP). Real servers built on it:
@@ -34,12 +39,15 @@
 //   * server/discover (2026-07-28 — servers MUST implement)
 //   * initialize / initialized (legacy handshake; echoes the client's
 //     requested revision when supported)
-//   * tools/list, tools/call
+//   * tools/list, tools/call            (with ToolAnnotations)
 //   * prompts/list, prompts/get
 //   * resources/list, resources/read   (list/read results carry the
 //     2026-07-28 CacheableResult fields ttlMs + cacheScope)
 //   * completion/complete (argument autocompletion for prompts/resources)
 //   * ping (legacy heartbeat — empty result)
+//   * tasks/get, tasks/update, tasks/cancel — only once a task store
+//     is attached with `mcp_server_set_task_store`, which is also what
+//     declares the extension in the server's capabilities
 // Requests declaring an unsupported `_meta` protocolVersion get the
 // spec-shaped UnsupportedProtocolVersionError (-32022); results for
 // modern requests carry `_meta` serverInfo. `resultType: "complete"`
@@ -81,7 +89,15 @@
 //      a struct precisely so that a new JSON-RPC failure is a new
 //      CODE, not a new variant.
 //   3. Handler types are FROZEN: `( @ Json Json )` for tools, prompts
-//      and completions, `( @ Json )` for resources.
+//      and completions, `( @ Json )` for resources. A tool that needs
+//      to know what the client declared on THIS request registers
+//      through `mcp_server_add_tool_ctx` and receives an McpCall
+//      beside its arguments; the plain form stays untouched. Anything
+//      a future revision puts on a request becomes an McpCall
+//      accessor, never a new handler parameter.
+//   4. `mcp_server_dispatch` takes the whole REQUEST for the same
+//      reason: per-request `_meta` is part of the protocol now, and a
+//      method-plus-params entry point would have had to grow.
 //
 // Memory model:
 //   McpServer OWNS its String + Json fields + the Vec containers.
@@ -100,6 +116,8 @@ $ `stdlib/std/panic.nu`
 $ `stdlib/std/subtle.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
+$ `stdlib/ext/mcp_tasks.nu`
+$ `stdlib/ext/mcp_http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 
@@ -114,6 +132,54 @@ $ `stdlib/ext/http_response.nu`
     String description
     Json input_schema
     ( @ Json Json ) handler
+    // Handler for tools registered with `_add_tool_ctx`; `has_ctx`
+    // picks which of the two runs. Two fields rather than one
+    // wider handler type because the plain `( @ Json Json )` shape is
+    // frozen API (STABLE SURFACE rule 3) and most tools want it.
+    ( @ Json Json McpCall ) ctx_handler
+    b has_ctx
+    // ToolAnnotations (spec 2025-03-26), or Json null when the tool
+    // was registered without them. An ABSENT destructiveHint defaults
+    // to TRUE in the spec, so an unannotated harmless tool is presented
+    // to the user as if it could destroy state.
+    Json annotations
+}
+
+// A pre-dispatch hook for tasks/*, boxed so it can live in a Vec.
+: McpTaskHook {
+    ( @ v ) f
+}
+
+// ── Per-call context ──────────────────────────────────────────────────
+//
+// What a tool handler can learn about the request it is answering,
+// beyond its own arguments. OPAQUE and BORROWED: the request Json
+// belongs to the transport and is freed after the reply goes out, so a
+// handler must not keep an McpCall past its own return.
+//
+// It exists so that the frozen `( @ Json Json )` handler type never has
+// to grow: anything a future revision puts on a request becomes an
+// accessor here, not a new parameter on every handler in every server.
+
+: McpCall {
+    Json __req
+}
+
+// The raw JSON-RPC request, for `_meta` fields with no accessor yet.
+@ mcp_call_request McpCall c → Json { ^ . c __req }
+
+// Did the client declare the io.modelcontextprotocol/tasks extension on
+// THIS request? A server that can answer a long call as a task checks
+// this before doing so — a client that did not declare tasks cannot
+// poll one, so handing it a task id would strand the work.
+@ mcp_call_wants_tasks McpCall c → b {
+    ^ ( mcp_request_declares_tasks . c __req )
+}
+
+// The protocol revision this request declared, or `` for a legacy-era
+// request that declared none.
+@ mcp_call_protocol_version McpCall c → s {
+    ^ ( mcp_request_protocol_version . c __req )
 }
 
 // Prompt: parameterised prompt template the client can retrieve. The
@@ -217,6 +283,23 @@ $ `stdlib/ext/http_response.nu`
     ( Vec McpResource ) __resources
     ( Vec McpCompletion ) __completions
     ( Vec i ) __ctl
+    // Server instructions (2026-07-28 `server/discover`, and the
+    // legacy handshake's `instructions`): how a model should approach
+    // this server, which tool to reach for first. Empty = omitted.
+    // A String, so `mcp_server_set_instructions` can rewrite it
+    // through the shared control block rather than replacing a field
+    // that a by-value copy would swallow.
+    String __instructions
+    // Zero or one task store. A ( Vec ) so that "no store" and "an
+    // empty store" stay distinguishable, and so that attaching one
+    // after construction is visible to every copy of the handle.
+    ( Vec McpTaskStore ) __tasks
+    // Called before any tasks/* method is dispatched — the hook a
+    // server needs when its task state is only current after it polls
+    // something (swarm-mcp advances its cluster here). Empty Vec = no
+    // hook. Wrapped in a struct because a closure is not spellable as
+    // a generic type argument.
+    ( Vec McpTaskHook ) __task_hook
 }
 
 : i MCP_CTL_SERVING 0
@@ -230,6 +313,9 @@ $ `stdlib/ext/http_response.nu`
         ( vec_new [McpResource] )
         ( vec_new [McpCompletion] )
         ( __mcp_ctl_new )
+        ( string_new )
+        ( vec_new [McpTaskStore] )
+        ( vec_new [McpTaskHook] )
     }
 }
 
@@ -272,6 +358,7 @@ $ `stdlib/ext/http_response.nu`
         ( string_free . t name )
         ( string_free . t description )
         ( json_free . t input_schema )
+        ( json_free . t annotations )
         = k + k 1
     }
     ( vec_free [McpTool] . r __tools )
@@ -312,6 +399,10 @@ $ `stdlib/ext/http_response.nu`
     }
     ( vec_free [McpCompletion] . r __completions )
     ( vec_free [i] . r __ctl )
+    ( string_free . r __instructions )
+    // The task store is borrowed — freed by whoever created it.
+    ( vec_free [McpTaskStore] . r __tasks )
+    ( vec_free [McpTaskHook] . r __task_hook )
 }
 
 // ── Registration guards ───────────────────────────────────────────────
@@ -355,8 +446,95 @@ $ `stdlib/ext/http_response.nu`
         ( string_from description )
         schema
         handler
+        \ Json a McpCall c → Json { ^ ( json_obj_new ) }
+        F
+        ( json_null )
     }
     ( vec_push [McpTool] . r __tools t )
+}
+
+// Same, plus ToolAnnotations — the trust hints a client uses to decide
+// what to auto-allow. A tool that skips them is presented as if it
+// could destroy state, because an ABSENT destructiveHint defaults to
+// TRUE in the spec, so prefer this form for anything read-only.
+// CONSUMES `name`, `description`, `schema`.
+@ mcp_server_add_tool_full McpServer r s name s description Json schema
+b read_only b destructive b idempotent b open_world ( @ Json Json ) handler → v {
+    ( __mcp_server_check_open r `tool` name ( __mcp_find_tool_index r name ) )
+    : Json ann ( json_obj_new )
+    ( json_obj_set ann `readOnlyHint` ( json_bool read_only ) )
+    ( json_obj_set ann `destructiveHint` ( json_bool destructive ) )
+    ( json_obj_set ann `idempotentHint` ( json_bool idempotent ) )
+    ( json_obj_set ann `openWorldHint` ( json_bool open_world ) )
+    : McpTool t @ McpTool {
+        ( string_from name )
+        ( string_from description )
+        schema
+        handler
+        \ Json a McpCall c → Json { ^ ( json_obj_new ) }
+        F
+        ann
+    }
+    ( vec_push [McpTool] . r __tools t )
+}
+
+// A tool whose handler also receives the per-call context — what the
+// client declared on THIS request. The reason it is a separate
+// registration rather than a wider handler type: `( @ Json Json )` is
+// frozen API, and most tools neither need the context nor should pay
+// for it. CONSUMES `name`, `description`, `schema`.
+@ mcp_server_add_tool_ctx McpServer r s name s description Json schema
+b read_only b destructive b idempotent b open_world
+( @ Json Json McpCall ) handler → v {
+    ( __mcp_server_check_open r `tool` name ( __mcp_find_tool_index r name ) )
+    : Json ann ( json_obj_new )
+    ( json_obj_set ann `readOnlyHint` ( json_bool read_only ) )
+    ( json_obj_set ann `destructiveHint` ( json_bool destructive ) )
+    ( json_obj_set ann `idempotentHint` ( json_bool idempotent ) )
+    ( json_obj_set ann `openWorldHint` ( json_bool open_world ) )
+    : McpTool t @ McpTool {
+        ( string_from name )
+        ( string_from description )
+        schema
+        \ Json a → Json { ^ ( json_obj_new ) }
+        handler
+        T
+        ann
+    }
+    ( vec_push [McpTool] . r __tools t )
+}
+
+// How a model should approach this server: which tool to reach for
+// first, what the cheap probe is, what the expensive one costs. Rides
+// `server/discover` and the legacy handshake result. Every server that
+// hand-rolled its dispatch wrote one of these; the facade had no
+// channel for it, which is one reason they kept hand-rolling.
+@ mcp_server_set_instructions McpServer r s text → v {
+    ( string_clear . r __instructions )
+    ( string_push_str . r __instructions text )
+}
+
+@ mcp_server_instructions McpServer r → s { ^ ( string_data . r __instructions ) }
+
+// Attach a task store, which is what turns tasks/get, tasks/update and
+// tasks/cancel on and declares the io.modelcontextprotocol/tasks
+// extension in the server's capabilities. Without one those methods
+// answer "method not found", which is correct: a server that cannot
+// hold a task must not claim it can.
+//
+// The store is BORROWED — it outlives the server or the server outlives
+// nothing. `hook` runs before each tasks/* dispatch, for a server whose
+// task state is only current after it polls something; pass
+// `\ → v {}` when there is nothing to do.
+@ mcp_server_set_task_store McpServer r McpTaskStore store ( @ v ) hook → v {
+    ( vec_clear [McpTaskStore] . r __tasks )
+    ( vec_push [McpTaskStore] . r __tasks store )
+    ( vec_clear [McpTaskHook] . r __task_hook )
+    ( vec_push [McpTaskHook] . r __task_hook @ McpTaskHook { hook } )
+}
+
+@ mcp_server_has_task_store McpServer r → b {
+    ^ > ( vec_len [McpTaskStore] . r __tasks ) 0
 }
 
 @ mcp_server_add_prompt McpServer r s name s description Json args_schema ( @ Json Json ) handler → v {
@@ -468,6 +646,9 @@ $ `stdlib/ext/http_response.nu`
     { ( json_obj_set caps `resources` ( json_obj_new ) ) } {}
     ? > ( vec_len [McpCompletion] . r __completions ) 0
     { ( json_obj_set caps `completions` ( json_obj_new ) ) } {}
+    // Only declare the tasks extension when a store is actually
+    // attached — a client that sees it declared will send tasks/get.
+    ? ( mcp_server_has_task_store r ) { ( mcp_caps_declare_tasks caps ) } {}
     ^ caps
 }
 
@@ -487,6 +668,10 @@ $ `stdlib/ext/http_response.nu`
     ( json_obj_set out `protocolVersion` ( json_str_lit ver ) )
     ( json_obj_set out `capabilities` caps )
     ( json_obj_set out `serverInfo` info )
+    ? > ( string_len . r __instructions ) 0 {
+        ( json_obj_set out `instructions`
+        ( json_str_lit ( string_data . r __instructions ) ) )
+    } {}
     ^ out
 }
 
@@ -497,7 +682,7 @@ $ `stdlib/ext/http_response.nu`
     ( string_data . r __name )
     ( string_data . r __version )
     ( __mcp_server_caps r )
-    `` )
+    ( string_data . r __instructions ) )
 }
 
 // tools/list: build the array of {name, description, inputSchema}.
@@ -512,6 +697,9 @@ $ `stdlib/ext/http_response.nu`
         ( json_obj_set e `name` ( json_str_lit ( string_data . t name ) ) )
         ( json_obj_set e `description` ( json_str_lit ( string_data . t description ) ) )
         ( json_obj_set e `inputSchema` ( json_clone . t input_schema ) )
+        ? ( json_is_obj . t annotations ) {
+            ( json_obj_set e `annotations` ( json_clone . t annotations ) )
+        } {}
         ( json_arr_push arr e )
         = k + k 1
     }
@@ -527,7 +715,7 @@ $ `stdlib/ext/http_response.nu`
 // sub-object. Returns the handler's tool-result envelope verbatim.
 // Errors (unknown tool) returned as the spec-defined tool error
 // envelope ({content: [...], isError: true}).
-@ __mcp_dispatch_tools_call McpServer r ? Json params → Json {
+@ __mcp_dispatch_tools_call McpServer r ? Json params McpCall call → Json {
     : ~ s tool_name ``
     : ~ Json args ( json_null )
     ?? params {
@@ -561,6 +749,8 @@ $ `stdlib/ext/http_response.nu`
     : *McpTool tp ( vec_data [McpTool] . r __tools )
     : McpTool t . tp idx
     : ( @ Json Json ) h . t handler
+    : ( @ Json Json McpCall ) hc . t ctx_handler
+    : b use_ctx . t has_ctx
     // Run the user handler under `recover` so a panic inside it doesn't
     // unwind the dispatch — which over stdio (mcp_server_serve_stdio has no outer
     // recover) would kill the whole server process. The handler's result is
@@ -570,7 +760,10 @@ $ `stdlib/ext/http_response.nu`
     // block in place and does. An empty sink after recover means the handler
     // panicked, so the stock tool-error envelope stands.
     : ( Vec Json ) sink ( vec_with_cap [Json] 1 )
-    : !v PanicInfo pr ( recover \ → v { ( vec_push [Json] sink ( h args ) ) } )
+    : !v PanicInfo pr ( recover \ → v {
+        ? use_ctx { ( vec_push [Json] sink ( hc args call ) ) }
+        { ( vec_push [Json] sink ( h args ) ) }
+    } )
     : ~ Json result ( mcp_tool_result_error `tool handler panicked` )
     ?? pr {
         T _ → {}
@@ -846,17 +1039,31 @@ $ `stdlib/ext/http_response.nu`
 
 // ── Dispatcher ────────────────────────────────────────────────────────
 //
-// Single entry point routing JSON-RPC method names to the per-method
-// handlers above. On success returns the raw `result` field's Json
-// (the caller wraps it in the JSON-RPC envelope with the request
-// `id`); on failure an McpRpcErr carrying the code the client should
-// actually see.
+// Single entry point, request in. On success it returns the raw
+// `result` field's Json (the caller wraps it in the JSON-RPC envelope
+// with the request `id`); on failure an McpRpcErr carrying the code the
+// client should actually see.
+//
+// It takes the whole REQUEST rather than a method name and params
+// because a per-request `_meta` is now part of the protocol — the
+// declared protocol version, the declared extensions — and a handler
+// that answers `tools/call` may need to know what the client declared.
+// Passing method+params would have meant either losing that or growing
+// a parameter later, and STABLE SURFACE rule 1 says a published
+// function never grows one.
 //
 // Marks the server as serving. From here on `mcp_server_add_*` is a
 // registration-time error rather than a tool no client will see — see
 // `__ctl`.
-@ mcp_server_dispatch McpServer r s method ? Json params → !Json McpRpcErr {
+@ mcp_server_dispatch McpServer r Json req → !Json McpRpcErr {
     ( vec_set [i] . r __ctl MCP_CTL_SERVING 1 )
+    : ~ s method ``
+    ?? ( json_obj_get req `method` ) {
+        T mv → { = method ( json_as_str mv ) }
+        F _ → {}
+    }
+    : ?Json params ( json_obj_get req `params` )
+    : McpCall call @ McpCall { req }
     ? != 0 ( nurl_str_eq method `server/discover` ) {
         ^ @ !Json McpRpcErr { T ( __mcp_dispatch_discover r ) }
     } {}
@@ -867,7 +1074,7 @@ $ `stdlib/ext/http_response.nu`
         ^ @ !Json McpRpcErr { T ( __mcp_dispatch_tools_list r ) }
     } {}
     ? != 0 ( nurl_str_eq method `tools/call` ) {
-        ^ @ !Json McpRpcErr { T ( __mcp_dispatch_tools_call r params ) }
+        ^ @ !Json McpRpcErr { T ( __mcp_dispatch_tools_call r params call ) }
     } {}
     ? != 0 ( nurl_str_eq method `prompts/list` ) {
         ^ @ !Json McpRpcErr { T ( __mcp_dispatch_prompts_list r ) }
@@ -887,11 +1094,72 @@ $ `stdlib/ext/http_response.nu`
     ? != 0 ( nurl_str_eq method `ping` ) {
         ^ @ !Json McpRpcErr { T ( json_obj_new ) }
     } {}
+    // tasks/get, tasks/update, tasks/cancel — only when a store is
+    // attached. Without one these fall through to method-not-found,
+    // which is the honest answer: the capability was never declared.
+    ? & ( mcp_tasks_is_method method ) ( mcp_server_has_task_store r ) {
+        ^ ( __mcp_dispatch_tasks r req method )
+    } {}
     : String m ( string_from `unknown method: ` )
     ( string_push_str m method )
     : McpRpcErr e ( mcp_rpc_err mcp_err_method_not_found ( string_data m ) )
     ( string_free m )
     ^ @ !Json McpRpcErr { F e }
+}
+
+// tasks/*: run the server's pre-dispatch hook (its task state may only
+// be current after it polls something), then hand the request to
+// ext/mcp_tasks.nu, which owns the capability gate and the taskId
+// lookup. That layer answers with a complete JSON-RPC ENVELOPE, so its
+// `result` is unwrapped here and its `error` becomes an McpRpcErr —
+// the envelope is built once, by the caller, for every method alike.
+@ __mcp_dispatch_tasks McpServer r Json req s method → !Json McpRpcErr {
+    : *McpTaskHook hp ( vec_data [McpTaskHook] . r __task_hook )
+    ? > ( vec_len [McpTaskHook] . r __task_hook ) 0 {
+        : McpTaskHook hk . hp 0
+        : ( @ v ) f . hk f
+        ( f )
+    } {}
+    : *McpTaskStore sp ( vec_data [McpTaskStore] . r __tasks )
+    : McpTaskStore store . sp 0
+    // mcp_tasks_dispatch wants the id to echo; it is re-wrapped by the
+    // envelope layer anyway, so a null placeholder is enough here.
+    ?? ( mcp_tasks_dispatch store req ( json_null ) method ) {
+        T env → {
+            ?? ( json_obj_get env `result` ) {
+                T res → {
+                    : Json out ( json_clone res )
+                    ( json_free env )
+                    ^ @ !Json McpRpcErr { T out }
+                }
+                F _ → {}
+            }
+            : ~ i code mcp_err_internal_error
+            : ~ s msg `tasks dispatch failed`
+            ?? ( json_obj_get env `error` ) {
+                T eo → {
+                    ?? ( json_obj_get eo `code` ) {
+                        T cv → { = code ( json_as_int cv ) }
+                        F _ → {}
+                    }
+                    ?? ( json_obj_get eo `message` ) {
+                        T mv → { = msg ( json_as_str mv ) }
+                        F _ → {}
+                    }
+                }
+                F _ → {}
+            }
+            : McpRpcErr e ( mcp_rpc_err code msg )
+            ( json_free env )
+            ^ @ !Json McpRpcErr { F e }
+        }
+        F _ → {}
+    }
+    : String m ( string_from `unhandled tasks method: ` )
+    ( string_push_str m method )
+    : McpRpcErr e2 ( mcp_rpc_err mcp_err_method_not_found ( string_data m ) )
+    ( string_free m )
+    ^ @ !Json McpRpcErr { F e2 }
 }
 
 // ── Stdio transport ──────────────────────────────────────────────────
@@ -923,14 +1191,6 @@ $ `stdlib/ext/http_response.nu`
         McpServerReadIo → `McpServerReadIo`
         McpServerWriteIo → `McpServerWriteIo`
         McpServerOther → `McpServerOther`
-    }
-}
-
-@ __mcp_extract_method Json req → String {
-    : ?Json m ( json_obj_get req `method` )
-    ?? m {
-        T jm → { ^ ( string_from ( json_as_str jm ) ) }
-        F _ → { ^ ( string_new ) }
     }
 }
 
@@ -1003,7 +1263,6 @@ $ `stdlib/ext/http_response.nu`
 //   ( server_run s )
 
 @ mcp_server_envelope McpServer r Json req → ?Json {
-    : String method ( __mcp_extract_method req )
     : b had_id ( __mcp_has_id req )
     : Json id ( __mcp_extract_id_or_null req )
 
@@ -1015,7 +1274,6 @@ $ `stdlib/ext/http_response.nu`
     : s req_ver ( mcp_request_protocol_version req )
     : b is_modern > ( nurl_str_len req_ver ) 0
     ? & is_modern ! ( mcp_version_supported req_ver ) {
-        ( string_free method )
         ? had_id {
             : Json resp ( mcp_unsupported_version_response id req_ver )
             ( json_free id )
@@ -1026,10 +1284,8 @@ $ `stdlib/ext/http_response.nu`
         }
     } {}
 
-    : ?Json mparams ( json_obj_get req `params` )
-    ?? ( mcp_server_dispatch r ( string_data method ) mparams ) {
+    ?? ( mcp_server_dispatch r req ) {
         T result → {
-            ( string_free method )
             // Modern-era servers SHOULD identify themselves in each
             // result's `_meta`.
             ? & is_modern ( json_is_obj result ) {
@@ -1048,7 +1304,6 @@ $ `stdlib/ext/http_response.nu`
             }
         }
         F e → {
-            ( string_free method )
             ? had_id {
                 : Json resp ( mcp_response_error id ( mcp_rpc_err_code e )
                 ( mcp_rpc_err_message e ) )
@@ -1071,13 +1326,43 @@ $ `stdlib/ext/http_response.nu`
     ^ \ Json req → ?Json { ^ ( mcp_server_envelope r req ) }
 }
 
+// Serve this server over Streamable HTTP on host:port and block. An
+// empty `token` serves unauthenticated; a non-empty one requires
+// `Authorization: Bearer <token>` on every request (constant-time
+// compare — see `mcp_server_with_bearer_auth`).
+//
+// This is the whole HTTP main() for a server that needs nothing
+// special. A server that does — its own routing, TLS, a listener it
+// runs on another thread — builds the same pieces itself from
+// `mcp_server_http_dispatch` and `mcp_http_handler`, which is what
+// this function does in five lines.
+@ mcp_server_serve_http McpServer r s host i port s token → !v NetErr {
+    : ( @ ?Json Json ) disp ( mcp_server_http_dispatch r )
+    : !TcpListener NetErr lr ( tcp_listen host port )
+    ?? lr {
+        T listener → {
+            : ( @ HttpResponse HttpRequest ) inner
+            ( mcp_http_handler \ Json rq → ?Json { ^ ( disp rq ) } )
+            : ( @ HttpResponse HttpRequest ) h ? > ( nurl_str_len token ) 0
+            ( mcp_server_with_bearer_auth
+            \ HttpRequest rq → HttpResponse { ^ ( inner rq ) } token )
+            \ HttpRequest rq → HttpResponse { ^ ( inner rq ) }
+            : HttpServer srv ( server_new listener h )
+            : !v NetErr rr ( server_run srv )
+            ( server_stop srv )
+            ^ rr
+        }
+        F e → { ^ @ !v NetErr { F e } }
+    }
+}
+
 // Bearer-auth middleware. Decorates an HTTP handler so requests
 // without a matching `Authorization: Bearer <token>` header get a
 // stock 401 Unauthorized + WWW-Authenticate challenge before the
 // inner handler runs. Token comparison is byte-exact (no constant-
 // time guard yet — for high-security deployments swap in a runtime
 // helper that calls `CRYPTO_memcmp`).
-@ mcp_http_with_bearer_auth ( @ HttpResponse HttpRequest ) inner s expected_token → ( @ HttpResponse HttpRequest ) {
+@ mcp_server_with_bearer_auth ( @ HttpResponse HttpRequest ) inner s expected_token → ( @ HttpResponse HttpRequest ) {
     ^ \ HttpRequest req → HttpResponse {
         : ~ b ok F
         : ?String auth ( header_get . req headers `Authorization` )

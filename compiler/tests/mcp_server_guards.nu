@@ -87,10 +87,13 @@ $ `stdlib/ext/mcp_server.nu`
     ( nurl_print_int ( mcp_server_tool_count srv ) ) ( nurl_print `\n` )
 
     ( nurl_print `--- registration after serving ---\n` )
-    ?? ( mcp_server_dispatch srv `ping` @ ?Json { F ( json_null ) } ) {
+    : Json ping_req ( json_obj_new )
+    ( json_obj_set ping_req `method` ( json_str_lit `ping` ) )
+    ?? ( mcp_server_dispatch srv ping_req ) {
         T res → { ( json_free res ) }
         F e → { ( mcp_rpc_err_free e ) }
     }
+    ( json_free ping_req )
     ( nurl_print `serving_after_dispatch=` )
     ( nurl_print ? ( mcp_server_is_serving srv ) `T` `F` ) ( nurl_print `\n` )
     ( expect_panic `late_tool` \ → v {

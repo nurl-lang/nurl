@@ -13,14 +13,32 @@ $ `stdlib/ext/mcp_server.nu`
 // The dispatcher returns `!Json McpRpcErr` — these tests drive it
 // directly, so unwrap the success side here and let a failure print
 // itself rather than vanishing into a golden that still looks right.
+// mcp_server_dispatch takes the whole JSON-RPC request; these tests
+// name a method and its params, so wrap them in one.
+@ req_of s method ? Json params → Json {
+    : Json req ( json_obj_new )
+    ( json_obj_set req `jsonrpc` ( json_str_lit `2.0` ) )
+    ( json_obj_set req `method` ( json_str_lit method ) )
+    ?? params {
+        T p → { ( json_obj_set req `params` ( json_clone p ) ) }
+        F _ → {}
+    }
+    ^ req
+}
+
 @ dispatch_ok McpServer r s method ? Json params → Json {
-    ?? ( mcp_server_dispatch r method params ) {
-        T res → { ^ res }
+    : Json req ( req_of method params )
+    ?? ( mcp_server_dispatch r req ) {
+        T res → {
+            ( json_free req )
+            ^ res
+        }
         F e → {
             ( nurl_print `UNEXPECTED RPC ERROR: ` )
             ( nurl_print ( mcp_rpc_err_message e ) )
             ( nurl_print `\n` )
             ( mcp_rpc_err_free e )
+            ( json_free req )
             ^ ( json_obj_new )
         }
     }
@@ -37,7 +55,8 @@ $ `stdlib/ext/mcp_server.nu`
 // Dispatch expecting FAILURE: prints the code and message under `tag`.
 // CONSUMES `params`.
 @ expect_err McpServer r s method Json params s tag → v {
-    ?? ( mcp_server_dispatch r method @ ?Json { T params } ) {
+    : Json req ( req_of method @ ?Json { T params } )
+    ?? ( mcp_server_dispatch r req ) {
         T res → {
             ( print_label tag `UNEXPECTED SUCCESS` )
             ( json_free res )
@@ -48,6 +67,7 @@ $ `stdlib/ext/mcp_server.nu`
             ( mcp_rpc_err_free e )
         }
     }
+    ( json_free req )
     ( json_free params )
 }
 
@@ -314,7 +334,8 @@ $ `stdlib/ext/mcp_server.nu`
 
     // ── unknown method ───────────────────────────────────────────────
     ( nurl_print `--- unknown method ---\n` )
-    ?? ( mcp_server_dispatch reg `nonexistent/method` @ ?Json { F ( json_null ) } ) {
+    : Json um_req ( req_of `nonexistent/method` @ ?Json { F ( json_null ) } )
+    ?? ( mcp_server_dispatch reg um_req ) {
         T res → {
             ( nurl_print `expected an RPC error\n` )
             ( json_free res )
@@ -325,6 +346,7 @@ $ `stdlib/ext/mcp_server.nu`
             ( mcp_rpc_err_free e )
         }
     }
+    ( json_free um_req )
 
     // ── failure codes are not all -32601 ─────────────────────────────
     //
