@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+noise_invariant_violations=0
+noise_parsed_some=T
+noise_rejected_some=T
+roundtrip_violations=0
+roundtrips=6000
+mutated_parsed_some=T
+mutated_rejected_some=T
+varint_violations=0

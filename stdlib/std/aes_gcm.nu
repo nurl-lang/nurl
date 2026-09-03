@@ -10,6 +10,17 @@
 //
 //   key = 16 or 32 bytes, nonce = 12 bytes.
 //
+// Per-key context — expand and bitslice the key ONCE, then seal/open any
+// number of messages under it (a QUIC connection protects a packet of
+// ~1200 bytes per call, where the per-call key setup the one-shot API
+// pays is a large fraction of the work; TLS records use it too):
+//
+//   ( aes_gcm_key_new key )                 → *AesGcmKey   (16 or 32 B key; 0 on a bad length)
+//   ( aes_gcm_seal   k nonce aad pt )       → ( Vec u )  ct||tag
+//   ( aes_gcm_open   k nonce aad ct_tag )   → ?( Vec u )
+//   ( aes_block_encrypt k block16 )         → ( Vec u )  one raw AES block (header protection)
+//   ( aes_gcm_key_free k )                  → v
+//
 // ── Why this file looks the way it does ───────────────────────────
 //
 // Constant time is not negotiable here: a table-driven AES indexes memory
@@ -712,32 +723,84 @@ $ `stdlib/std/bytes.nu`
     ( nurl_free ystate )
 }
 
+// ── Per-key context ──────────────────────────────────────────────
+// Everything that depends only on the key: the bitsliced round keys,
+// the round count, and the GHASH subkey H = E_K(0^128). Built once by
+// `aes_gcm_key_new`, reused by every seal/open/block call, released by
+// `aes_gcm_key_free`. The per-call scratch (counter blocks, keystream)
+// is still allocated per call — it is per message, not per key.
+: AesGcmKey {
+    s skey
+    i nr
+    s hsub
+}
+
+@ aes_gcm_key_new ( Vec u ) key → *AesGcmKey {
+    : i klen ( vec_len [u] key )
+    ? & != klen 16 != klen 32 { ^ # *AesGcmKey 0 } {}
+    : *AesGcmKey k # *AesGcmKey ( nurl_alloc Z AesGcmKey )
+    : i nr ( __aes_nr key )
+    : ( Vec u ) rk ( __aes_expand key )
+    = . k skey ( __skey_bitslice rk nr )
+    = . k nr nr
+    ( vec_free [u] rk )
+    // H = E_K(0): slot 0 of one four-block call on an all-zero input.
+    : s q ( nurl_zalloc 64 )
+    : *u zb # *u ( nurl_zalloc 64 )
+    : *u hb # *u ( nurl_zalloc 64 )
+    ( __aes_ct64_enc4 zb hb . k skey nr q )
+    : s h ( nurl_zalloc 16 )
+    : *u hp # *u h
+    : ~ i i 0
+    ~ < i 16 { = . hp i . hb i = i + i 1 }
+    = . k hsub h
+    ( nurl_free # s hb )
+    ( nurl_free # s zb )
+    ( nurl_free q )
+    ^ k
+}
+
+@ aes_gcm_key_free * AesGcmKey k → v {
+    ? == # i k 0 { ^ } {}
+    ( nurl_free . k skey )
+    ( nurl_free . k hsub )
+    ( nurl_free # s k )
+}
+
+// One raw AES block: the 16 bytes of `block` encrypted under the key.
+// QUIC header protection (RFC 9001 §5.4.3) is AES-ECB of the 16-byte
+// sample; the four-block core runs with slot 0 live and the rest zero.
+@ aes_block_encrypt * AesGcmKey k ( Vec u ) block → ( Vec u ) {
+    ? | == # i k 0 != ( vec_len [u] block ) 16 { ^ ( vec_new [u] ) } {}
+    : s q ( nurl_zalloc 64 )
+    : *u inb # *u ( nurl_zalloc 64 )
+    : *u outb # *u ( nurl_zalloc 64 )
+    : ~ i i 0
+    ~ < i 16 { = . inb i # u ( __aes_bget block i ) = i + i 1 }
+    ( __aes_ct64_enc4 inb outb . k skey . k nr q )
+    : ( Vec u ) out ( vec_with_cap [u] 16 )
+    = i 0
+    ~ < i 16 { ( vec_push [u] out . outb i ) = i + i 1 }
+    ( nurl_free # s outb )
+    ( nurl_free # s inb )
+    ( nurl_free q )
+    ^ out
+}
+
 // One CTR pass plus the tag. `input` is the data to transform (plaintext
 // when sealing, ciphertext when opening) and the returned Vec is the
 // other one; the tag over the CIPHERTEXT — `out` when sealing, `input`
 // when opening — is written to the 16 bytes at `tagp`.
 //
-// The round keys, the hash subkey and the scratch buffers are set up once
-// here and reused across every block of the record.
-@ __gcm_run ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad * u inp i n i sealing * u tagp → ( Vec u ) {
-    : i nr ( __aes_nr key )
-    : ( Vec u ) rk ( __aes_expand key )
-    : s skey ( __skey_bitslice rk nr )
-    ( vec_free [u] rk )
+// The first four-block call carries J0 = nonce ‖ 0x00000001 in slot 0
+// (its ciphertext masks the tag) and counters 2..4 in slots 1..3, so no
+// block of the core is wasted; every later call is four counters.
+@ __gcm_run * AesGcmKey k ( Vec u ) nonce ( Vec u ) aad * u inp i n i sealing * u tagp → ( Vec u ) {
+    : s skey . k skey
+    : i nr . k nr
     : s q ( nurl_zalloc 64 )
     : *u cb # *u ( nurl_zalloc 64 )
     : *u kb # *u ( nurl_zalloc 64 )
-
-    // One cipher call covers both fixed blocks: slot 0 is the all-zero
-    // block whose ciphertext is the hash subkey H, slot 1 is J0 =
-    // nonce ‖ 0x00000001, whose ciphertext masks the tag.
-    : ~ i ni 0
-    ~ < ni 12 { = . cb + 16 ni # u ( __aes_bget nonce ni ) = ni + ni 1 }
-    = . cb 31 # u 1
-    ( __aes_ct64_enc4 cb kb skey nr q )
-    : *u hj # *u ( nurl_zalloc 32 )
-    : ~ i hi 0
-    ~ < hi 32 { = . hj hi . kb hi = hi + hi 1 }
 
     // The counter blocks all carry the same nonce; only the last four
     // bytes change, so the nonce is written once and left alone.
@@ -748,16 +811,29 @@ $ `stdlib/std/bytes.nu`
         = bi + bi 1
     }
 
+    // Batch 1: counters 1 (= J0), 2, 3, 4.
+    ( __ctr_fill cb 1 )
+    ( __aes_ct64_enc4 cb kb skey nr q )
+    : *u ej0 # *u ( nurl_zalloc 16 )
+    : ~ i hi 0
+    ~ < hi 16 { = . ej0 hi . kb hi = hi + hi 1 }
+
     : ( Vec u ) out ( vec_with_cap [u] ? > n 0 n 1 )
     : b _ol ( vec_set_len [u] out n )
     : *u op ( vec_data [u] out )
-    : ~ i off 0
-    : ~ i ctr 2
+    : i lim0 ? < n 48 n 48
+    : ~ i j 0
+    ~ < j lim0 {
+        = . op j # u ^^ # i . inp j # i . kb + 16 j
+        = j + j 1
+    }
+    : ~ i off lim0
+    : ~ i ctr 5
     ~ < off n {
         ( __ctr_fill cb ctr )
         ( __aes_ct64_enc4 cb kb skey nr q )
         : i lim ? < - n off 64 - n off 64
-        : ~ i j 0
+        = j 0
         ~ < j lim {
             = . op + off j # u ^^ # i . inp + off j # i . kb j
             = j + j 1
@@ -767,42 +843,62 @@ $ `stdlib/std/bytes.nu`
     }
 
     : *u ctp ? == sealing 1 op inp
-    ( __gcm_tag_raw hj # *u + # i hj 16 ( vec_data [u] aad ) ( vec_len [u] aad ) ctp n tagp )
+    ( __gcm_tag_raw # *u . k hsub ej0 ( vec_data [u] aad ) ( vec_len [u] aad ) ctp n tagp )
 
-    ( nurl_free # s hj )
+    ( nurl_free # s ej0 )
     ( nurl_free # s kb )
     ( nurl_free # s cb )
     ( nurl_free q )
-    ( nurl_free skey )
     ^ out
 }
 
-// AES-GCM seal: ciphertext with the 16-byte tag appended.
-@ __gcm_seal ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) pt → ( Vec u ) {
+// AES-GCM seal under a prepared key: ciphertext with the 16-byte tag
+// appended. Nonce must be 12 bytes; the plaintext cap is GCM's
+// 2^39−256 bits = 2^36−32 bytes.
+@ aes_gcm_seal * AesGcmKey k ( Vec u ) nonce ( Vec u ) aad ( Vec u ) pt → ( Vec u ) {
+    ? | == # i k 0 != ( vec_len [u] nonce ) 12 { ^ ( vec_new [u] ) } {}
+    ? > ( vec_len [u] pt ) 68719476704 { ^ ( vec_new [u] ) } {}
     : i n ( vec_len [u] pt )
     : *u tagp # *u ( nurl_zalloc 16 )
-    : ( Vec u ) ct ( __gcm_run key nonce aad ( vec_data [u] pt ) n 1 tagp )
+    : ( Vec u ) ct ( __gcm_run k nonce aad ( vec_data [u] pt ) n 1 tagp )
     : ~ i ti 0
     ~ < ti 16 { ( vec_push [u] ct . tagp ti ) = ti + ti 1 }
     ( nurl_free # s tagp )
     ^ ct
 }
 
-// AES-GCM open: `ct_tag` is ciphertext followed by its 16-byte tag.
-// The tag is verified BEFORE the plaintext is handed back, and the
-// comparison is a constant-time OR-accumulate.
-@ __gcm_open ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct_tag → ?( Vec u ) {
+// AES-GCM open under a prepared key: `ct_tag` is ciphertext followed by
+// its 16-byte tag. The tag is verified BEFORE the plaintext is handed
+// back, and the comparison is a constant-time OR-accumulate.
+@ aes_gcm_open * AesGcmKey k ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct_tag → ?( Vec u ) {
+    ? | == # i k 0 != ( vec_len [u] nonce ) 12 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : i total ( vec_len [u] ct_tag )
+    ? < total 16 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : i ctlen - total 16
     : *u ctp ( vec_data [u] ct_tag )
     : *u tagp # *u ( nurl_zalloc 16 )
-    : ( Vec u ) pt ( __gcm_run key nonce aad ctp ctlen 0 tagp )
+    : ( Vec u ) pt ( __gcm_run k nonce aad ctp ctlen 0 tagp )
     : ~ i diff 0
-    : ~ i k 0
-    ~ < k 16 { = diff | diff ^^ # i . tagp k # i . ctp + ctlen k = k + k 1 }
+    : ~ i i 0
+    ~ < i 16 { = diff | diff ^^ # i . tagp i # i . ctp + ctlen i = i + i 1 }
     ( nurl_free # s tagp )
     ? != diff 0 { ( vec_free [u] pt ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     ^ @ ?( Vec u ) { T pt }
+}
+
+// One-shot seal/open: a context for this call only.
+@ __gcm_seal ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) pt → ( Vec u ) {
+    : *AesGcmKey k ( aes_gcm_key_new key )
+    : ( Vec u ) ct ( aes_gcm_seal k nonce aad pt )
+    ( aes_gcm_key_free k )
+    ^ ct
+}
+
+@ __gcm_open ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct_tag → ?( Vec u ) {
+    : *AesGcmKey k ( aes_gcm_key_new key )
+    : ?( Vec u ) r ( aes_gcm_open k nonce aad ct_tag )
+    ( aes_gcm_key_free k )
+    ^ r
 }
 
 // AES-128-GCM seal: returns ciphertext with the 16-byte tag appended.
