@@ -1,6 +1,6 @@
 [package]
 name = "mermaid-server"
-version = "0.1.1"
+version = "0.2.0"
 description = "Mermaid flowcharts to SVG, as a multi-threaded HTTP server that is also an MCP server — one process, one port, both protocols. Parses the graph/flowchart dialect (all thirteen node shapes, solid/dotted/thick links, arrow/circle/cross heads, bidirectional links, & node groups, both label spellings, <br/> line breaks), lays it out with a layered Sugiyama-style pass (back-edge-tolerant ranking, barycentre crossing reduction, neighbour-pulled placement) and renders SVG in pure NURL — no headless browser, no node_modules, no mermaid.js. Nothing about the look is compiled in: every colour, width, radius, font and gap comes from a TEMPLATE read from an external directory of TOML files at startup, resolved per request by name, with per-shape and per-line-style overrides and a raw-CSS escape hatch — so a new look is a new file, and the template source is a discriminated kind that a registry- or HTTP-backed loader can join. HTTP: GET/POST /render (image/svg+xml), POST /render.json (svg + size + warnings), GET /templates, and a self-contained live playground at /. MCP: mermaid_render, mermaid_templates and mermaid_validate over Streamable HTTP at /mcp, or over stdio with --stdio. Also a one-shot CLI: mermaid-server render diagram.mmd -o diagram.svg."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/nurl-lang/nurl/tree/main/packages/mermaid-server"

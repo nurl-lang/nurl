@@ -19,8 +19,6 @@ $ `stdlib/std/sysinfo.nu`
 $ `stdlib/ext/env.nu`
 $ `service.nu`
 
-: s MMD_VERSION `0.1.0`
-
 // ── Template directory resolution ────────────────────────────────────
 //
 // In order: `--templates`, `$MERMAID_TEMPLATES`, `./.templates`, and the
@@ -142,20 +140,17 @@ $ `service.nu`
 
 @ __mmdm_serve_stdio → i {
     ( mcp_log `mermaid-server MCP (stdio) ready` )
-    : ~ b going T
-    ~ going {
-        ?? ( mcp_read_request ) {
-            T req → {
-                ?? ( mmd_mcp_dispatch req ) {
-                    T reply → ( mcp_send_message reply )
-                    F placeholder → ( json_free placeholder )
-                }
-                ( json_free req )
-            }
-            F _ → = going F
+    : McpServer srv ( mmd_mcp_server )
+    : ~ i rc 0
+    ?? ( mcp_server_serve_stdio srv ) {
+        T _ → {}
+        F e → {
+            ( mcp_log ( mcp_server_err_name e ) )
+            = rc 1
         }
     }
-    ^ 0
+    ( mcp_server_free srv )
+    ^ rc
 }
 
 // ── One-shot rendering ───────────────────────────────────────────────

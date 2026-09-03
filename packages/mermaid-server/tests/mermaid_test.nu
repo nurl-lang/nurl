@@ -266,43 +266,93 @@ $ `src/service.nu`
     ^ ``
 }
 
+// Drive the MCP surface the way a client does: through the server, not
+// through a private tool table. The dispatcher, the envelope shapes and
+// the panic isolation are ext/mcp_server.nu's and are pinned by
+// compiler/tests/mcp_server_contract.nu; what belongs here is that THIS
+// server registers the right tools and that they answer.
+// One tools/call through the server, returning the tool result.
+@ __mmt_call McpServer srv s tool Json args → Json {
+    : Json req ( json_obj_new )
+    ( json_obj_set req `jsonrpc` ( json_str_lit `2.0` ) )
+    ( json_obj_set req `id` ( json_int 1 ) )
+    ( json_obj_set req `method` ( json_str_lit `tools/call` ) )
+    : Json params ( json_obj_new )
+    ( json_obj_set params `name` ( json_str_lit tool ) )
+    ( json_obj_set params `arguments` ( json_clone args ) )
+    ( json_obj_set req `params` params )
+    : ~ Json out ( json_obj_new )
+    ?? ( mcp_server_envelope srv req ) {
+        T env → {
+            ?? ( json_obj_get env `result` ) {
+                T res → { ( json_free out ) = out ( json_clone res ) }
+                F _ → {}
+            }
+            ( json_free env )
+        }
+        F _ → {}
+    }
+    ( json_free req )
+    ^ out
+}
+
 @ test_mcp → v {
     : MmdTemplatesRes tr ( mmd_templates_load MMD_TSRC_DIR `.templates` )
     ( mmd_state_init . tr set )
     ( string_free . tr message )
 
-    : ( Vec Json ) tools ( mmd_tools_list )
-    ( check == ( vec_len [Json] tools ) 3 `mcp: three tools are advertised` )
-    ( vec_free_with [Json] tools \ Json j → v { ( json_free j ) } )
+    : McpServer srv ( mmd_mcp_server )
+    ( check == ( mcp_server_tool_count srv ) 3 `mcp: three tools are advertised` )
+    ( check ( mcp_server_has_tool srv `mermaid_render` ) `mcp: mermaid_render is registered` )
+    ( check ( mcp_server_has_tool srv `mermaid_validate` ) `mcp: mermaid_validate is registered` )
+    ( check ( mcp_server_has_tool srv `mermaid_templates` ) `mcp: mermaid_templates is registered` )
 
     : Json args ( json_obj_new )
     ( json_obj_set args `source` ( json_str_lit `graph TD\n A --> B\n` ) )
-    : Json res ( mmd_dispatch_tool `mermaid_render` args )
+    : Json res ( __mmt_call srv `mermaid_render` args )
     ( check ! ( json_as_bool
     ?? ( json_obj_get res `isError` ) { T v → v F _ → ( json_bool F ) } )
     `mcp: mermaid_render succeeds` )
     ( check != 0 ( nurl_str_starts ( json_text_of res ) `<svg` ) `mcp: mermaid_render returns SVG` )
     ( json_free res )
 
-    : Json vres ( mmd_dispatch_tool `mermaid_validate` args )
+    : Json vres ( __mmt_call srv `mermaid_validate` args )
     ( check != 0 ( nurl_str_starts ( json_text_of vres ) `ok: 2 nodes` ) `mcp: mermaid_validate counts nodes` )
     ( json_free vres )
     ( json_free args )
 
     : Json empty ( json_obj_new )
-    : Json tres ( mmd_dispatch_tool `mermaid_templates` empty )
+    : Json tres ( __mmt_call srv `mermaid_templates` empty )
     : String tlist ( string_from ( json_text_of tres ) )
     ( check ( string_contains tlist `dark` ) `mcp: mermaid_templates lists them` )
     ( string_free tlist )
     ( json_free tres )
 
-    : Json ures ( mmd_dispatch_tool `no_such_tool` empty )
+    : Json ures ( __mmt_call srv `no_such_tool` empty )
     ( check ( json_as_bool
     ?? ( json_obj_get ures `isError` ) { T v → v F _ → ( json_bool F ) } )
     `mcp: an unknown tool is an error` )
     ( json_free ures )
     ( json_free empty )
 
+    // The hand-rolled dispatch this replaced implemented neither
+    // server/discover (mandatory since 2026-07-28) nor the version
+    // gate; a modern client's first request got -32601.
+    : Json dreq ( json_obj_new )
+    ( json_obj_set dreq `jsonrpc` ( json_str_lit `2.0` ) )
+    ( json_obj_set dreq `id` ( json_int 1 ) )
+    ( json_obj_set dreq `method` ( json_str_lit `server/discover` ) )
+    ?? ( mcp_server_envelope srv dreq ) {
+        T env → {
+            ( check ?? ( json_obj_get env `result` ) { T _ → T F _ → F }
+            `mcp: server/discover answers` )
+            ( json_free env )
+        }
+        F _ → { ( check F `mcp: server/discover answers` ) }
+    }
+    ( json_free dreq )
+
+    ( mcp_server_free srv )
     ( mmd_state_free )
 }
 
