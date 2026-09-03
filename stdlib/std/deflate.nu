@@ -199,6 +199,16 @@ $ `stdlib/std/bytes.nu`
     i bitcnt
     ( Vec u ) out
     i err
+    i max_out  // stop (err 6) once `out` grows past this; 0 = unlimited
+}
+
+// The decompression-bomb guard, checked after every emitted byte run:
+// 1 KB of DEFLATE can expand to ~1 MB, so a cap enforced only after the
+// fact is no cap at all — the memory is already gone.
+@ __infl_over_cap * InflState st → b {
+    ? <= . st max_out 0 { ^ F } {}
+    ? > ( vec_len [u] . st out ) . st max_out { = . st err 6 ^ T } {}
+    ^ F
 }
 
 : Huff {
@@ -322,6 +332,7 @@ $ `stdlib/std/bytes.nu`
 ( Vec i ) lenbase ( Vec i ) lenext ( Vec i ) distbase ( Vec i ) distext → v {
     : ~ b done F
     ~ & ! done == . st err 0 {
+        ? ( __infl_over_cap st ) { = done T } {}
         : i sym ( __infl_decode st lencode )
         ? < sym 0 { = . st err 2 } {
             ? == sym 256 { = done T } {
@@ -481,6 +492,7 @@ $ `stdlib/std/bytes.nu`
                                 = k + k 1
                             }
                             = . st pos + . st pos blen
+                            : b _cap ( __infl_over_cap st )
                         }
                     }
                 } {
@@ -504,6 +516,13 @@ $ `stdlib/std/bytes.nu`
 
 // Inflate a complete raw DEFLATE stream into bytes.
 @ inflate ( Vec u ) src → !( Vec u ) DeflateErr {
+    ^ ( inflate_max src 0 )
+}
+
+// inflate with an output cap: decoding stops with DeflateBadLength as
+// soon as the output would exceed `max_out` bytes (0 = unlimited) — the
+// guard against a decompression bomb, enforced while decoding, not after.
+@ inflate_max ( Vec u ) src i max_out → !( Vec u ) DeflateErr {
     : *InflState st ( nurl_alloc Z InflState )
     = . st data ( vec_data [u] src )
     = . st len ( vec_len [u] src )
@@ -512,6 +531,7 @@ $ `stdlib/std/bytes.nu`
     = . st bitcnt 0
     = . st out ( vec_new [u] )
     = . st err 0
+    = . st max_out max_out
 
     ( __inflate_run st 0 )
 
@@ -542,6 +562,7 @@ $ `stdlib/std/bytes.nu`
     = . st bitcnt 0
     = . st out history
     = . st err 0
+    = . st max_out ? > max_out 0 + oldlen max_out 0
 
     ( __inflate_run st 1 )
 
@@ -576,6 +597,7 @@ $ `stdlib/std/bytes.nu`
     ? == e 2 { ^ # DeflateErr DeflateBadCode } {}
     ? == e 4 { ^ # DeflateErr DeflateBadDist } {}
     ? == e 5 { ^ # DeflateErr DeflateTruncated } {}
+    ? == e 6 { ^ # DeflateErr DeflateBadLength } {}
     ^ # DeflateErr DeflateOther
 }
 

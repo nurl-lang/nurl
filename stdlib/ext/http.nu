@@ -104,7 +104,7 @@ $ `stdlib/ext/http_pure.nu`
 // Variants are prefixed (`Http*`) because NURL enum variants live in a
 // flat global namespace — `Other` and `NotFound` already belong to
 // IoErr, so reusing them here would collide at link time.
-: | HttpErr { HttpConnect HttpTimeout HttpTls HttpDns HttpInvalidUrl HttpOther }
+: | HttpErr { HttpConnect HttpTimeout HttpTls HttpDns HttpInvalidUrl HttpOther HttpTooLarge }
 
 : Header { String name String value }
 
@@ -202,6 +202,7 @@ $ `stdlib/ext/http_pure.nu`
         ? == ek 3 { ^ @ !Response HttpErr { F # HttpErr HttpTls } } {}
         ? == ek 4 { ^ @ !Response HttpErr { F # HttpErr HttpDns } } {}
         ? == ek 5 { ^ @ !Response HttpErr { F # HttpErr HttpInvalidUrl } } {}
+        ? == ek 7 { ^ @ !Response HttpErr { F # HttpErr HttpTooLarge } } {}
         ^ @ !Response HttpErr { F # HttpErr HttpOther }
     } {}
     : s rp # s raw
@@ -215,29 +216,30 @@ $ `stdlib/ext/http_pure.nu`
 }
 
 // Same as http_request but with explicit per-call timeouts in
-// milliseconds. The timeout arguments are accepted for source
-// compatibility but are not yet honoured by the pure transport (a future
-// step will wire socket-level deadlines in).
+// milliseconds. `timeout_ms` is the deadline for every socket read and
+// write of the exchange (a stalled server answers HttpTimeout, not a
+// hang); 0 = none. `connect_timeout_ms` is accepted for the day the TCP
+// dial itself gets a deadline — today the dial is the OS's (the TLS
+// handshake already has its own 20 s read deadline).
 //
 // Dispatch: the pure-NURL HTTP/1.1 client in stdlib/ext/http_pure.nu
 // (TLS via stdlib/std/tls.nu for https, raw TCP otherwise).
 @ http_request_to s method s url s body s headers_blob i timeout_ms i connect_timeout_ms
 → !Response HttpErr {
     // s-body path: recover length via strlen (text/JSON callers).
-    // (timeouts are not yet honoured by the pure transport.)
-    : i raw ( hp_perform url method # *u body ( nurl_str_len body ) headers_blob 1 -1 1 `nurl-http/0.1` )
+    : i raw ( hp_perform url method # *u body ( nurl_str_len body ) headers_blob 1 -1 1 `nurl-http/0.1` timeout_ms )
     ^ ( __http_dispatch raw )
 }
 
 // Full-control entry point: every transport knob comes from `opt`
 // (see HttpOptions). follow_redirects / max_redirects / verify_tls /
-// user_agent are honoured by the pure transport; the two timeouts are
-// not yet wired in.
+// user_agent / timeout_ms are honoured by the pure transport;
+// connect_timeout_ms is not yet (see http_request_to).
 @ http_request_with_opts s method s url s body s headers_blob HttpOptions opt
 → !Response HttpErr {
     : s ua_in . opt user_agent
     : s ua ? & != # i ua_in 0 != ( nurl_str_len ua_in ) 0 ua_in `nurl-http/0.1`
-    : i raw ( hp_perform url method # *u body ( nurl_str_len body ) headers_blob . opt follow_redirects . opt max_redirects . opt verify_tls ua )
+    : i raw ( hp_perform url method # *u body ( nurl_str_len body ) headers_blob . opt follow_redirects . opt max_redirects . opt verify_tls ua . opt timeout_ms )
     ^ ( __http_dispatch raw )
 }
 
@@ -328,7 +330,7 @@ $ `stdlib/ext/http_pure.nu`
 // embedded NUL bytes survive end to end.
 @ http_request_bytes_to s method s url ( Vec u ) body s headers_blob
 i timeout_ms i connect_timeout_ms → !Response HttpErr {
-    : i raw ( hp_perform url method ( vec_data [u] body ) ( vec_len [u] body ) headers_blob 1 -1 1 `nurl-http/0.1` )
+    : i raw ( hp_perform url method ( vec_data [u] body ) ( vec_len [u] body ) headers_blob 1 -1 1 `nurl-http/0.1` timeout_ms )
     ^ ( __http_dispatch raw )
 }
 
@@ -450,6 +452,7 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
         HttpDns → `HttpDns`
         HttpInvalidUrl → `HttpInvalidUrl`
         HttpOther → `HttpOther`
+        HttpTooLarge → `HttpTooLarge`
     }
 }
 
@@ -508,6 +511,7 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
         ? == ek 3 { ^ @ !HttpStream HttpErr { F # HttpErr HttpTls } } {}
         ? == ek 4 { ^ @ !HttpStream HttpErr { F # HttpErr HttpDns } } {}
         ? == ek 5 { ^ @ !HttpStream HttpErr { F # HttpErr HttpInvalidUrl } } {}
+        ? == ek 7 { ^ @ !HttpStream HttpErr { F # HttpErr HttpTooLarge } } {}
         ^ @ !HttpStream HttpErr { F # HttpErr HttpOther }
     } {}
     ^ @ !HttpStream HttpErr { T @ HttpStream { raw } }
@@ -516,7 +520,7 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
 @ http_stream_open_to s method s url s body s headers_blob
 i timeout_ms i connect_timeout_ms
 → !HttpStream HttpErr {
-    : *HttpStreamState st ( hp_stream_open method url # *u body ( nurl_str_len body ) headers_blob 1 -1 1 `nurl-http/0.1` )
+    : *HttpStreamState st ( hp_stream_open method url # *u body ( nurl_str_len body ) headers_blob 1 -1 1 `nurl-http/0.1` timeout_ms )
     ^ ( __http_stream_dispatch_open # i st )
 }
 
@@ -526,7 +530,7 @@ i timeout_ms i connect_timeout_ms
 @ http_stream_open_bytes_to s method s url ( Vec u ) body s headers_blob
 i timeout_ms i connect_timeout_ms
 → !HttpStream HttpErr {
-    : *HttpStreamState st ( hp_stream_open method url ( vec_data [u] body ) ( vec_len [u] body ) headers_blob 1 -1 1 `nurl-http/0.1` )
+    : *HttpStreamState st ( hp_stream_open method url ( vec_data [u] body ) ( vec_len [u] body ) headers_blob 1 -1 1 `nurl-http/0.1` timeout_ms )
     ^ ( __http_stream_dispatch_open # i st )
 }
 

@@ -498,11 +498,12 @@ $ `stdlib/std/pkey.nu`
     }
 }
 
-// As tcp_connect_tls, but offers a single ALPN protocol (e.g. "h2").
-// After connecting, the negotiated protocol is read with
-// tcp_alpn_protocol — empty if the server declined ALPN. With verify the
-// chain is validated AND the ALPN handshake runs; on TLS 1.2 servers the
-// pure stack does not parse ALPN, so callers requiring h2 should check.
+// As tcp_connect_tls, but offers ALPN protocols — one ("h2") or a
+// preference list ("h2 http/1.1", most preferred first, RFC 7301). After
+// connecting, the negotiated protocol is read with tcp_alpn_protocol —
+// empty if the server declined ALPN. With verify the chain is validated
+// AND the ALPN handshake runs; on TLS 1.2 servers the pure stack does
+// not parse ALPN, so callers requiring h2 should check.
 @ tcp_connect_tls_alpn s host i port s server_name i verify s alpn → !TcpConn NetErr {
     : i raw ( nurl_tcp_connect host port )
     ? <= raw 0 { ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake } } {}
@@ -511,6 +512,38 @@ $ `stdlib/std/pkey.nu`
         F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
         T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 1 # i tc } }
     }
+}
+
+// tcp_connect_tls_alpn with a resumption offer as well: `sess` is what
+// tcp_tls_session_export returned from an earlier connection to the same
+// server (empty = full handshake). ALPN, resumption and verification in
+// one call — what an HTTP client that pools connections needs, since the
+// one-knob variants each leave one of the three out.
+@ tcp_connect_tls_full s host i port s server_name i verify s alpn ( Vec u ) sess → !TcpConn NetErr {
+    : i raw ( nurl_tcp_connect host port )
+    ? <= raw 0 { ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake } } {}
+    : !*TlsConn TlsErr r ( tls_attach_full raw server_name alpn sess verify )
+    ?? r {
+        F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
+        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 1 # i tc } }
+    }
+}
+
+// Wrap a TLS connection the caller established itself (tls_attach_full /
+// tls_connect_full — say, to read the ALPN pick before deciding which
+// protocol stack to hand the socket to) as a client TcpConn (kind 1).
+// The TcpConn owns it from here: tcp_close_conn closes it.
+@ tcp_conn_from_tls * TlsConn tc → TcpConn {
+    ^ @ TcpConn { # s 0 1 # i tc }
+}
+
+// The resumption session of a TLS client conn (tls_session_export): offer
+// it to tcp_connect_tls_full on the next connection to the same server.
+// Empty for plaintext conns and when the server issued no ticket.
+@ tcp_tls_session_export TcpConn c → ( Vec u ) {
+    : i tp ( __conn_tlsptr c )
+    ? == tp 0 { ^ ( vec_new [u] ) } {}
+    ^ ( tls_session_export # *TlsConn tp )
 }
 
 // Register a per-hostname cert/key pair on a TLS listener for Server

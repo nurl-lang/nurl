@@ -221,6 +221,7 @@ $ `stdlib/ext/json.nu`
         HttpDns → @ ClaudeErr { ClaudeHttpDns }
         HttpInvalidUrl → @ ClaudeErr { ClaudeHttpInvalidUrl }
         HttpOther → @ ClaudeErr { ClaudeHttpOther }
+        HttpTooLarge → @ ClaudeErr { ClaudeHttpOther }
     }
 }
 

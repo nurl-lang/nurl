@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`packages/http-client` — the unified HTTP *client* facade, the
+  mirror of `packages/http`.** One `HttpClient` fetches over whichever
+  protocol the server offers — HTTP/2 or HTTP/1.1 chosen by ALPN — with
+  post-quantum TLS (X25519MLKEM768 + ML-DSA chains) used automatically,
+  per-origin connection pooling and TLS-session resumption, redirect
+  following (303 / POST→GET downgrade, RFC 3986 §5.2 relative
+  resolution), a wired-in RFC 6265 cookie jar, and transparent
+  gzip/deflate decoding with a decompression-bomb cap. `http_client_get`
+  / `_post` / `_request`, a unified `HttpResponse` + `HttpClientErr`, and
+  `http_client_last_proto` / `_last_pq` evidence. The stdlib gained the
+  primitives a package cannot: an ALPN **preference list** in the TLS
+  client (`tls_connect_full` / `tcp_connect_tls_full`, the negotiated
+  protocol validated to be one offered — RFC 7301 §3.2), and HTTP/1.1
+  keep-alive with honoured read/write deadlines, a body cap, interim-1xx
+  skipping, chunked-trailer consumption and `Connection`-aware pooling
+  in `http_pure.nu` (`hp_stream_open_on` / `hp_stream_release`).
+
+### Security
+
+- **A decompression-output cap in the DEFLATE path**, enforced *while*
+  decoding rather than after: `inflate_max`, `zlib_decompress_max` and
+  `gzip_decompress_max` stop with an error the moment the output would
+  pass the caller's byte limit — the guard an HTTP client needs before
+  it trusts a `Content-Encoding` body (1 KB of DEFLATE can expand to a
+  megabyte, so a cap checked only after the fact is no cap at all).
+
 ### Security
 
 - **HTTP stack hardened against the standard smuggling / flood / DoS

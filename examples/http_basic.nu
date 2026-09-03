@@ -42,6 +42,7 @@ $ `stdlib/ext/http.nu`
                 HttpDns → { ( nurl_print `Dns\n` ) }
                 HttpInvalidUrl → { ( nurl_print `InvalidUrl\n` ) }
                 HttpOther → { ( nurl_print `Other\n` ) }
+                HttpTooLarge → { ( nurl_print `TooLarge\n` ) }
             }
         }
     }
@@ -74,6 +75,7 @@ $ `stdlib/ext/http.nu`
                 HttpDns → { ( nurl_print `Dns\n` ) }
                 HttpInvalidUrl → { ( nurl_print `InvalidUrl\n` ) }
                 HttpOther → { ( nurl_print `Other\n` ) }
+                HttpTooLarge → { ( nurl_print `TooLarge\n` ) }
             }
         }
     }
