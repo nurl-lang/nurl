@@ -1,17 +1,17 @@
 {
   "schema": 1,
-  "generated_utc": "2026-09-02T19:14:05Z",
-  "commit": "a50e7ddc877bc1fa31d104a95f177b4158354823",
-  "run_url": "https://github.com/nurl-lang/nurl/actions/runs/33671634868",
+  "generated_utc": "2026-09-03T03:49:15Z",
+  "commit": "f62e5ab2463c15685e9e9a1499138d92d11a9a05",
+  "run_url": "https://github.com/nurl-lang/nurl/actions/runs/33712420729",
   "host": {
     "label": "GitHub Actions ubuntu-latest runner",
     "kernel": "Linux 6.17.0-1022-azure x86_64",
-    "cpu": "AMD EPYC 9V45 96-Core Processor",
+    "cpu": "AMD EPYC 7763 64-Core Processor",
     "cores": 4,
-    "mem_kb": 16373452
+    "mem_kb": 16373448
   },
   "toolchains": {
-    "nurl": "v0.58.0-16-ga50e7ddc",
+    "nurl": "v0.58.0-19-gf62e5ab2",
     "c": "Ubuntu clang version 18.1.3 (1ubuntu1)",
     "rust": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
     "node": "v22.23.2",
@@ -24,8 +24,8 @@
     "timeout_s": 300,
     "compile_reps": 3
   },
-  "floor_ms": { "nurl": 1.122, "c": 1.087, "rust": 1.276, "node": 15.597, "python": 11.116 },
-  "floor_compile_ms": { "nurl_frontend": 2.081, "nurl": 73.238, "nurl_warm": 43.112, "c": 61.479, "rust": 47.677 },
+  "floor_ms": { "nurl": 1.452, "c": 1.418, "rust": 1.631, "node": 22.521, "python": 16.783 },
+  "floor_compile_ms": { "nurl_frontend": 2.629, "nurl": 95.997, "nurl_warm": 57.170, "c": 75.232, "rust": 58.802 },
   "benchmarks": [
     {
       "name": "lcg",
@@ -33,9 +33,9 @@
       "measures": "Loop-carried mul/add/shift/xor dependency the unroller cannot compose",
       "checksum": "-7585129161289236796",
       "verified": true,
-      "run_ms": { "nurl": 28.872, "c": 27.813, "rust": 27.993, "node": 1057.235, "python": 2862.249 },
-      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 2 },
-      "compile_ms": { "nurl_frontend": 2.120, "nurl": 78.107, "nurl_warm": 43.036, "c": 63.816, "rust": 54.168 }
+      "run_ms": { "nurl": 38.958, "c": 39.023, "rust": 39.138, "node": 2047.608, "python": 5548.357 },
+      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 3, "python": 1 },
+      "compile_ms": { "nurl_frontend": 2.739, "nurl": 105.011, "nurl_warm": 56.285, "c": 85.460, "rust": 66.051 }
     },
     {
       "name": "packet_classifier",
@@ -43,9 +43,9 @@
       "measures": "A data-dependent 50/50 branch the predictor cannot learn",
       "checksum": "4205972061",
       "verified": true,
-      "run_ms": { "nurl": 40.070, "c": 39.935, "rust": 40.087, "node": 122.580, "python": 2507.961 },
-      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 3 },
-      "compile_ms": { "nurl_frontend": 2.234, "nurl": 80.846, "nurl_warm": 43.817, "c": 67.722, "rust": 53.670 }
+      "run_ms": { "nurl": 56.099, "c": 56.113, "rust": 56.361, "node": 160.092, "python": 4637.639 },
+      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 1 },
+      "compile_ms": { "nurl_frontend": 2.867, "nurl": 104.902, "nurl_warm": 56.366, "c": 86.737, "rust": 66.265 }
     },
     {
       "name": "ring_write",
@@ -53,9 +53,9 @@
       "measures": "Dependent store per iteration plus address computation",
       "checksum": "8299504528805184357",
       "verified": true,
-      "run_ms": { "nurl": 27.989, "c": 27.833, "rust": 28.747, "node": 46.242, "python": 3571.780 },
-      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 2 },
-      "compile_ms": { "nurl_frontend": 2.234, "nurl": 78.574, "nurl_warm": 42.205, "c": 68.065, "rust": 56.093 }
+      "run_ms": { "nurl": 42.096, "c": 42.097, "rust": 42.368, "node": 65.261, "python": 6834.273 },
+      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 1 },
+      "compile_ms": { "nurl_frontend": 2.955, "nurl": 107.137, "nurl_warm": 56.900, "c": 89.076, "rust": 69.349 }
     },
     {
       "name": "histogram_bins",
@@ -63,9 +63,9 @@
       "measures": "Read-modify-write at a data-dependent index",
       "checksum": "1215643728",
       "verified": true,
-      "run_ms": { "nurl": 27.946, "c": 27.811, "rust": 27.923, "node": 46.975, "python": 3257.164 },
-      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 2 },
-      "compile_ms": { "nurl_frontend": 2.339, "nurl": 85.576, "nurl_warm": 43.265, "c": 75.993, "rust": 59.633 }
+      "run_ms": { "nurl": 39.448, "c": 40.534, "rust": 39.619, "node": 64.039, "python": 6192.163 },
+      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 1 },
+      "compile_ms": { "nurl_frontend": 3.042, "nurl": 117.605, "nurl_warm": 57.710, "c": 105.281, "rust": 76.462 }
     },
     {
       "name": "prefix_scan",
@@ -73,9 +73,9 @@
       "measures": "Store-bound fill then a serial load/add dependency chain",
       "checksum": "492982549",
       "verified": true,
-      "run_ms": { "nurl": 15.333, "c": 15.353, "rust": 15.402, "node": 45.289, "python": 2465.615 },
-      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 3 },
-      "compile_ms": { "nurl_frontend": 2.377, "nurl": 81.884, "nurl_warm": 44.167, "c": 71.327, "rust": 55.262 }
+      "run_ms": { "nurl": 21.579, "c": 21.611, "rust": 21.718, "node": 64.503, "python": 4538.031 },
+      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 1 },
+      "compile_ms": { "nurl_frontend": 3.065, "nurl": 108.903, "nurl_warm": 57.075, "c": 93.662, "rust": 71.593 }
     },
     {
       "name": "binary_search",
@@ -83,9 +83,9 @@
       "measures": "Pointer-chasing: each load address depends on the last compare",
       "checksum": "805907445",
       "verified": true,
-      "run_ms": { "nurl": 14.522, "c": 14.614, "rust": 14.768, "node": 66.804, "python": 3685.702 },
-      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 2 },
-      "compile_ms": { "nurl_frontend": 2.377, "nurl": 77.615, "nurl_warm": 42.148, "c": 66.850, "rust": 60.963 }
+      "run_ms": { "nurl": 39.399, "c": 38.200, "rust": 36.878, "node": 105.011, "python": 6262.703 },
+      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 1 },
+      "compile_ms": { "nurl_frontend": 3.227, "nurl": 108.341, "nurl_warm": 57.429, "c": 89.691, "rust": 73.432 }
     },
     {
       "name": "sort_window",
@@ -93,9 +93,9 @@
       "measures": "Branchless compare/exchange mill over a 64-byte window (~50 cmovs/iter)",
       "checksum": "2815490238",
       "verified": true,
-      "run_ms": { "nurl": 19.450, "c": 19.871, "rust": 19.594, "node": 128.411, "python": 6035.931 },
+      "run_ms": { "nurl": 26.543, "c": 26.557, "rust": 26.757, "node": 196.269, "python": 11977.645 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 1 },
-      "compile_ms": { "nurl_frontend": 2.456, "nurl": 82.080, "nurl_warm": 43.426, "c": 73.096, "rust": 62.225 }
+      "compile_ms": { "nurl_frontend": 3.271, "nurl": 111.564, "nurl_warm": 57.915, "c": 99.836, "rust": 78.238 }
     },
     {
       "name": "bloom_filter",
@@ -103,9 +103,9 @@
       "measures": "Four unpredictable loads per query over a 2 KB working set",
       "checksum": "2351703",
       "verified": true,
-      "run_ms": { "nurl": 8.433, "c": 8.423, "rust": 8.605, "node": 1548.624, "python": 4151.317 },
-      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 1 },
-      "compile_ms": { "nurl_frontend": 2.577, "nurl": 80.910, "nurl_warm": 42.948, "c": 71.840, "rust": 58.050 }
+      "run_ms": { "nurl": 17.835, "c": 17.795, "rust": 18.266, "node": 2835.305, "python": 7543.734 },
+      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 2, "python": 1 },
+      "compile_ms": { "nurl_frontend": 3.516, "nurl": 112.383, "nurl_warm": 58.125, "c": 97.815, "rust": 74.237 }
     },
     {
       "name": "hash_join",
@@ -113,9 +113,9 @@
       "measures": "Cheap Bloom early-out plus a rare, branchy join path",
       "checksum": "6152419568754618368",
       "verified": true,
-      "run_ms": { "nurl": 15.278, "c": 16.085, "rust": 17.208, "node": 1862.778, "python": 4260.440 },
-      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 4, "python": 1 },
-      "compile_ms": { "nurl_frontend": 3.949, "nurl": 167.450, "nurl_warm": 44.710, "c": 135.312, "rust": 88.603 }
+      "run_ms": { "nurl": 26.756, "c": 27.945, "rust": 29.322, "node": 3527.936, "python": 8353.408 },
+      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 2, "python": 1 },
+      "compile_ms": { "nurl_frontend": 6.049, "nurl": 260.224, "nurl_warm": 61.071, "c": 214.242, "rust": 121.909 }
     },
     {
       "name": "sieve",
@@ -123,9 +123,9 @@
       "measures": "Irregular-stride byte writes, then one linear scan",
       "checksum": "664579",
       "verified": true,
-      "run_ms": { "nurl": 11.324, "c": 11.106, "rust": 11.244, "node": 41.211, "python": 1696.114 },
-      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 4 },
-      "compile_ms": { "nurl_frontend": 2.329, "nurl": 78.928, "nurl_warm": 42.579, "c": 71.798, "rust": 60.701 }
+      "run_ms": { "nurl": 18.013, "c": 17.618, "rust": 17.675, "node": 63.967, "python": 3290.135 },
+      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 2 },
+      "compile_ms": { "nurl_frontend": 3.084, "nurl": 106.946, "nurl_warm": 57.585, "c": 98.792, "rust": 79.843 }
     },
     {
       "name": "fib",
@@ -133,9 +133,9 @@
       "measures": "The call/return path: ~15M calls after LLVM turns one recursion into a loop",
       "checksum": "9227465",
       "verified": true,
-      "run_ms": { "nurl": 18.561, "c": 18.345, "rust": 18.613, "node": 73.025, "python": 693.189 },
+      "run_ms": { "nurl": 25.065, "c": 29.702, "rust": 25.184, "node": 130.126, "python": 1353.170 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 5 },
-      "compile_ms": { "nurl_frontend": 2.210, "nurl": 79.932, "nurl_warm": 42.185, "c": 66.773, "rust": 54.085 }
+      "compile_ms": { "nurl_frontend": 2.758, "nurl": 105.948, "nurl_warm": 57.058, "c": 85.548, "rust": 66.689 }
     },
     {
       "name": "collatz",
@@ -143,9 +143,9 @@
       "measures": "Control-flow-heavy inner loop with no array at all",
       "checksum": "350",
       "verified": true,
-      "run_ms": { "nurl": 9.265, "c": 8.909, "rust": 8.999, "node": 33.320, "python": 440.849 },
+      "run_ms": { "nurl": 12.225, "c": 12.187, "rust": 12.319, "node": 48.028, "python": 744.252 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 5 },
-      "compile_ms": { "nurl_frontend": 2.249, "nurl": 78.217, "nurl_warm": 42.330, "c": 67.476, "rust": 55.450 }
+      "compile_ms": { "nurl_frontend": 3.006, "nurl": 109.625, "nurl_warm": 57.949, "c": 88.008, "rust": 69.092 }
     },
     {
       "name": "matmul",
@@ -153,9 +153,9 @@
       "measures": "Triple-nested loop, flat indexing, column-strided reads",
       "checksum": "393199",
       "verified": true,
-      "run_ms": { "nurl": 20.167, "c": 19.740, "rust": 19.697, "node": 49.661, "python": 1640.412 },
-      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 5 },
-      "compile_ms": { "nurl_frontend": 2.458, "nurl": 80.381, "nurl_warm": 43.519, "c": 74.825, "rust": 72.608 }
+      "run_ms": { "nurl": 33.205, "c": 33.303, "rust": 33.581, "node": 75.580, "python": 3205.329 },
+      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 2 },
+      "compile_ms": { "nurl_frontend": 3.341, "nurl": 108.229, "nurl_warm": 58.119, "c": 103.588, "rust": 92.065 }
     },
     {
       "name": "json_parse",
@@ -163,9 +163,9 @@
       "measures": "Allocator pressure, string handling, recursive descent",
       "checksum": "20",
       "verified": true,
-      "run_ms": { "nurl": 4.841, "c": 4.920, "rust": 6.598, "node": 21.554, "python": 21.945 },
+      "run_ms": { "nurl": 8.953, "c": 8.485, "rust": 11.605, "node": 34.826, "python": 37.117 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 5 },
-      "compile_ms": { "nurl_frontend": 30.751, "nurl": 303.841, "nurl_warm": 71.995, "c": 105.789, "rust": 126.454 }
+      "compile_ms": { "nurl_frontend": 57.083, "nurl": 506.415, "nurl_warm": 112.653, "c": 156.029, "rust": 173.228 }
     },
     {
       "name": "nbody",
@@ -173,9 +173,9 @@
       "measures": "IEEE-754 doubles: sqrt and divide throughput, the FPU rather than the ALU",
       "checksum": "4595260366167553674",
       "verified": true,
-      "run_ms": { "nurl": 15.977, "c": 23.659, "rust": 15.664, "node": 55.093, "python": 1450.914 },
-      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 5 },
-      "compile_ms": { "nurl_frontend": 3.132, "nurl": 90.404, "nurl_warm": 43.184, "c": 85.696, "rust": 75.088 }
+      "run_ms": { "nurl": 25.101, "c": 39.741, "rust": 24.059, "node": 97.989, "python": 3068.443 },
+      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 2 },
+      "compile_ms": { "nurl_frontend": 4.725, "nurl": 128.941, "nurl_warm": 58.789, "c": 124.512, "rust": 99.490 }
     }
   ]
 }
