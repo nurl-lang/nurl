@@ -30,6 +30,7 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/mcp_http.nu`
+$ `stdlib/ext/mcp_server.nu`
 $ `stdlib/ext/mcp_tasks.nu`
 $ `stdlib/net/relay.nu`
 $ `stdlib/net/transport.nu`
@@ -3027,19 +3028,6 @@ $ `cudakernel.nu`
 // keeps an interactive submit feeling immediate without a busy loop.
 @ __mcp_task_poll → i { ^ 1000 }
 
-// Tools that register a swarm task and are therefore worth augmenting.
-// The rest either answer immediately (help, list, upload) or run their
-// whole loop inside the call (iterate, shuffle) with no pollable handle.
-@ __mcp_task_eligible s name → b {
-    ? != 0 ( nurl_str_eq name `compute_submit` ) { ^ T } {}
-    ? != 0 ( nurl_str_eq name `compute_submit_kernel` ) { ^ T } {}
-    ? != 0 ( nurl_str_eq name `compute_submit_cuda` ) { ^ T } {}
-    ? != 0 ( nurl_str_eq name `compute_sample_cuda` ) { ^ T } {}
-    ? != 0 ( nurl_str_eq name `compute_histogram_cuda` ) { ^ T } {}
-    ? != 0 ( nurl_str_eq name `compute_run_wasm` ) { ^ T } {}
-    ^ F
-}
-
 // Reflect the linked swarm task's state onto the MCP task. A finished
 // swarm task completes the MCP task with exactly the CallToolResult
 // compute_result would have returned, so a task-polling client and a
@@ -3103,86 +3091,48 @@ $ `cudakernel.nu`
 
 // ── tool descriptors ─────────────────────────────────────────────
 
-@ ms_prop Json props s name s ty s desc → v {
-    : Json p ( json_obj_new )
-    ( json_obj_set p `type` ( json_str_lit ty ) )
-    ( json_obj_set p `description` ( json_str_lit desc ) )
-    ( json_obj_set props name p )
-}
-
 @ ms_schema_submit → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( ms_prop props `expr` `string` `The kernel: an expression in x — operators + - * / %, comparisons, logical & |, ternary ?:, min/max/abs; int or float literals. E.g. "x*x", "x%2==0", "x>5 ? x : 0". Full grammar: swarm_help "expr".` )
-    ( ms_prop props `lo` `integer` `Range start (inclusive).` )
-    ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
-    ( ms_prop props `reduce` `string` `Fold: "sum" (default) · product · min · max · count (how many x make the kernel nonzero).` )
-    ( ms_prop props `dtype` `string` `"int" (default, i64; x is the index) or "float" (f64; x is the index as a double). E.g. {"expr":"1.0/(x*x)",…,"dtype":"float"} ≈ π²/6.` )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `expr` ) )
-    ( json_arr_push req ( json_str_lit `lo` ) )
-    ( json_arr_push req ( json_str_lit `hi` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `expr` `string` `The kernel: an expression in x — operators + - * / %, comparisons, logical & |, ternary ?:, min/max/abs; int or float literals. E.g. "x*x", "x%2==0", "x>5 ? x : 0". Full grammar: swarm_help "expr".` T )
+    ( mcp_schema_prop sc `lo` `integer` `Range start (inclusive).` T )
+    ( mcp_schema_prop sc `hi` `integer` `Range end (exclusive). Must be > lo.` T )
+    ( mcp_schema_prop sc `reduce` `string` `Fold: "sum" (default) · product · min · max · count (how many x make the kernel nonzero).` F )
+    ( mcp_schema_prop sc `dtype` `string` `"int" (default, i64; x is the index) or "float" (f64; x is the index as a double). E.g. {"expr":"1.0/(x*x)",…,"dtype":"float"} ≈ π²/6.` F )
+    ^ sc
 }
 
 @ ms_schema_result → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( ms_prop props `task_id` `integer` `The id returned by compute_submit.` )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `task_id` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `task_id` `integer` `The id returned by compute_submit.` T )
+    ^ sc
 }
 
 @ ms_schema_empty → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ^ sc
 }
 
 @ ms_schema_run_wasm → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( ms_prop props `wasm_base64` `string` `Base64 wasm32-wasi module (e.g. from nurl_build_wasm). Its main reads lo, hi from argv, folds your kernel over [lo, hi), and prints the partial as a decimal integer.` )
-    ( ms_prop props `lo` `integer` `Range start (inclusive).` )
-    ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
-    ( ms_prop props `reduce` `string` `Combine the per-worker partials: "sum" (default) · product · min · max · count. Must match what the module reduces with.` )
-    ( ms_prop props `dtype` `string` `"int" (default; prints a decimal-integer partial) or "float" (prints the f64 bit pattern, e.g. floatbits f64_to_bits; combined in f64).` )
-    ( ms_prop props `gpu` `boolean` `Route only to --gpu workers and run with GPU host imports live (cuda/nvrtc FFI in the module hits the real GPU). Default false. See swarm_help "gpu".` )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `wasm_base64` ) )
-    ( json_arr_push req ( json_str_lit `lo` ) )
-    ( json_arr_push req ( json_str_lit `hi` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `wasm_base64` `string` `Base64 wasm32-wasi module (e.g. from nurl_build_wasm). Its main reads lo, hi from argv, folds your kernel over [lo, hi), and prints the partial as a decimal integer.` T )
+    ( mcp_schema_prop sc `lo` `integer` `Range start (inclusive).` T )
+    ( mcp_schema_prop sc `hi` `integer` `Range end (exclusive). Must be > lo.` T )
+    ( mcp_schema_prop sc `reduce` `string` `Combine the per-worker partials: "sum" (default) · product · min · max · count. Must match what the module reduces with.` F )
+    ( mcp_schema_prop sc `dtype` `string` `"int" (default; prints a decimal-integer partial) or "float" (prints the f64 bit pattern, e.g. floatbits f64_to_bits; combined in f64).` F )
+    ( mcp_schema_prop sc `gpu` `boolean` `Route only to --gpu workers and run with GPU host imports live (cuda/nvrtc FFI in the module hits the real GPU). Default false. See swarm_help "gpu".` F )
+    ^ sc
 }
 
 @ ms_schema_submit_kernel → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( ms_prop props `source` `string` `NURL source with a per-element kernel @ kernel i x → i { … } (+ optional imports/helpers; no main — the server generates it and compiles to wasm). For dtype "float" use → f. E.g. @ is_prime i n → b { … }  @ kernel i x → i { ? ( is_prime x ) 1 0 } with reduce "sum" counts primes.` )
-    ( ms_prop props `lo` `integer` `Range start (inclusive).` )
-    ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
-    ( ms_prop props `reduce` `string` `Combine the per-worker partials: "sum" (default) · product · min · max · count.` )
-    ( ms_prop props `dtype` `string` `"int" (default; kernel returns i) or "float" (kernel returns f, folded in f64).` )
-    ( ms_prop props `gpu` `boolean` `Route only to --gpu workers, GPU host imports live (cuda/nvrtc FFI in your source hits the real GPU). Default false.` )
-    ( ms_prop props `kind` `string` `"element" (default; @ kernel i x → i/f per x) or "chunk" (@ kernel i lo i hi → i/f, called once per sub-range — the kernel owns the loop). Use "chunk" for per-invocation setup (GPU ctx + JIT).` )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `source` ) )
-    ( json_arr_push req ( json_str_lit `lo` ) )
-    ( json_arr_push req ( json_str_lit `hi` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `source` `string` `NURL source with a per-element kernel @ kernel i x → i { … } (+ optional imports/helpers; no main — the server generates it and compiles to wasm). For dtype "float" use → f. E.g. @ is_prime i n → b { … }  @ kernel i x → i { ? ( is_prime x ) 1 0 } with reduce "sum" counts primes.` T )
+    ( mcp_schema_prop sc `lo` `integer` `Range start (inclusive).` T )
+    ( mcp_schema_prop sc `hi` `integer` `Range end (exclusive). Must be > lo.` T )
+    ( mcp_schema_prop sc `reduce` `string` `Combine the per-worker partials: "sum" (default) · product · min · max · count.` F )
+    ( mcp_schema_prop sc `dtype` `string` `"int" (default; kernel returns i) or "float" (kernel returns f, folded in f64).` F )
+    ( mcp_schema_prop sc `gpu` `boolean` `Route only to --gpu workers, GPU host imports live (cuda/nvrtc FFI in your source hits the real GPU). Default false.` F )
+    ( mcp_schema_prop sc `kind` `string` `"element" (default; @ kernel i x → i/f per x) or "chunk" (@ kernel i lo i hi → i/f, called once per sub-range — the kernel owns the loop). Use "chunk" for per-invocation setup (GPU ctx + JIT).` F )
+    ^ sc
 }
 
 // The params property text is shared by all three CUDA tools.
@@ -3195,124 +3145,82 @@ $ `cudakernel.nu`
 }
 
 @ ms_schema_submit_cuda → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( ms_prop props `cuda` `string` `A CUDA-C __device__ double f(long long x) (with params: f(long long x, const double* p)). __device__ only — no __global__/host/#includes; NVRTC builtins (sin, exp, sqrt, fmin…) available; no backticks. E.g. "__device__ double f(long long x){ double t=(double)x*1e-9; return 4.0/(1.0+t*t); }". Full ABI: swarm_help "cuda".` )
-    ( ms_prop props `lo` `integer` `Range start (inclusive).` )
-    ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
-    ( ms_prop props `reduce` `string` `Fold f(x): "sum" (default) · product · min · max · count (how many f(x) != 0).` )
-    ( ms_prop props `dataset` `integer` ( __ms_dataset_desc ) )
-    ( ms_prop props `params` `array` ( __ms_params_desc ) )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `cuda` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `cuda` `string` `A CUDA-C __device__ double f(long long x) (with params: f(long long x, const double* p)). __device__ only — no __global__/host/#includes; NVRTC builtins (sin, exp, sqrt, fmin…) available; no backticks. E.g. "__device__ double f(long long x){ double t=(double)x*1e-9; return 4.0/(1.0+t*t); }". Full ABI: swarm_help "cuda".` T )
+    ( mcp_schema_prop sc `lo` `integer` `Range start (inclusive).` F )
+    ( mcp_schema_prop sc `hi` `integer` `Range end (exclusive). Must be > lo.` F )
+    ( mcp_schema_prop sc `reduce` `string` `Fold f(x): "sum" (default) · product · min · max · count (how many f(x) != 0).` F )
+    ( mcp_schema_prop sc `dataset` `integer` ( __ms_dataset_desc ) F )
+    ( mcp_schema_prop sc `params` `array` ( __ms_params_desc ) F )
+    ^ sc
 }
 
 @ ms_schema_shuffle → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( ms_prop props `map` `string` `CUDA-C __device__ long long key(long long x) and __device__ double value(long long x) — emit (key, value) per element (with a dataset both take double v = data[x]). E.g. "__device__ long long key(long long x){ return x%100; } __device__ double value(long long x){ return 1.0; }". Details: swarm_help "shuffle".` )
-    ( ms_prop props `reduce` `string` `Fold values that share a key: "sum" (default) · product · min · max · count (pairs per key).` )
-    ( ms_prop props `dataset` `integer` ( __ms_dataset_desc ) )
-    ( ms_prop props `lo` `integer` `Range start (inclusive); required without a dataset.` )
-    ( ms_prop props `hi` `integer` `Range end (exclusive); required without a dataset. hi - lo ≤ 134217728 (128 M).` )
-    ( ms_prop props `params` `array` ( __ms_params_desc ) )
-    ( ms_prop props `out_file` `string` `Optional absolute path ON THE MCP HOST: beyond 8192 groups the table is written there as raw little-endian (i64 key, f64 value) pairs and the result carries a summary (n_groups, saved_to). Required when there are more than 8192 groups.` )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `map` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `map` `string` `CUDA-C __device__ long long key(long long x) and __device__ double value(long long x) — emit (key, value) per element (with a dataset both take double v = data[x]). E.g. "__device__ long long key(long long x){ return x%100; } __device__ double value(long long x){ return 1.0; }". Details: swarm_help "shuffle".` T )
+    ( mcp_schema_prop sc `reduce` `string` `Fold values that share a key: "sum" (default) · product · min · max · count (pairs per key).` F )
+    ( mcp_schema_prop sc `dataset` `integer` ( __ms_dataset_desc ) F )
+    ( mcp_schema_prop sc `lo` `integer` `Range start (inclusive); required without a dataset.` F )
+    ( mcp_schema_prop sc `hi` `integer` `Range end (exclusive); required without a dataset. hi - lo ≤ 134217728 (128 M).` F )
+    ( mcp_schema_prop sc `params` `array` ( __ms_params_desc ) F )
+    ( mcp_schema_prop sc `out_file` `string` `Optional absolute path ON THE MCP HOST: beyond 8192 groups the table is written there as raw little-endian (i64 key, f64 value) pairs and the result carries a summary (n_groups, saved_to). Required when there are more than 8192 groups.` F )
+    ^ sc
 }
 
 @ ms_schema_iterate → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( ms_prop props `cuda` `string` `CUDA-C __device__ void grad(long long x, double* g, const double* p) that scatter-adds via swarm_g_add(g, j, val) (with a dataset: grad(long long x, double v, double* g, const double* p), v = data[x]); p[0..state_len) is the current state, p[state_len..) your "params". Full ABI + examples: swarm_help "iterate".` )
-    ( ms_prop props `state` `array` `Initial parameter vector (numbers), ≤ 4096. What the engine iterates and returns. Carry optimizer state (momentum/Adam moments) as extra components.` )
-    ( ms_prop props `rounds` `integer` `Max rounds (1..100000). The loop runs IN THE ENGINE — you get the converged parameters back from one call.` )
-    ( ms_prop props `lr` `number` `Default (SGD) mode: learning rate; each round state[j] -= lr*grad[j]/N. Required unless "update" is given (then ignored).` )
-    ( ms_prop props `update` `string` `Optional CUDA-C step rule for a general fixpoint (k-means, EM, power iteration, Adam): __device__ double update(long long j, const double* p) returns the new state[j], reading swarm_state(i)/swarm_acc(i)/swarm_N/swarm_param(i) (swarm_dim, swarm_adim for loops). With it the accumulator may be wider than the state (set "acc_dim"). Recipes: swarm_help "iterate".` )
-    ( ms_prop props `acc_dim` `integer` `Accumulator width (1..65536) when grad() scatters into more slots than the state length (k-means sum+count, EM stats, A·v). Defaults to the state length; needs "update" when different.` )
-    ( ms_prop props `params` `array` `Optional constant numbers (same every round): grad reads p[state_len..], update reads swarm_param(i).` )
-    ( ms_prop props `epsilon` `number` `Optional: stop early once the largest |state change| in a round is below this. Omit to run all "rounds".` )
-    ( ms_prop props `dataset` `integer` `Optional dataset id: grad maps over the data (v = data[x]); blocks cache after round one, so later rounds ship only the state.` )
-    ( ms_prop props `async` `boolean` `true → return immediately with a task_id and advance the loop through compute_iterate_status polls (bounded work per call — use for long trainings). Default false: the whole loop runs inside this call.` )
-    ( ms_prop props `lo` `integer` `Range start (inclusive); required without a dataset.` )
-    ( ms_prop props `hi` `integer` `Range end (exclusive); required without a dataset.` )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `cuda` ) )
-    ( json_arr_push req ( json_str_lit `state` ) )
-    ( json_arr_push req ( json_str_lit `rounds` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `cuda` `string` `CUDA-C __device__ void grad(long long x, double* g, const double* p) that scatter-adds via swarm_g_add(g, j, val) (with a dataset: grad(long long x, double v, double* g, const double* p), v = data[x]); p[0..state_len) is the current state, p[state_len..) your "params". Full ABI + examples: swarm_help "iterate".` T )
+    ( mcp_schema_prop sc `state` `array` `Initial parameter vector (numbers), ≤ 4096. What the engine iterates and returns. Carry optimizer state (momentum/Adam moments) as extra components.` T )
+    ( mcp_schema_prop sc `rounds` `integer` `Max rounds (1..100000). The loop runs IN THE ENGINE — you get the converged parameters back from one call.` T )
+    ( mcp_schema_prop sc `lr` `number` `Default (SGD) mode: learning rate; each round state[j] -= lr*grad[j]/N. Required unless "update" is given (then ignored).` F )
+    ( mcp_schema_prop sc `update` `string` `Optional CUDA-C step rule for a general fixpoint (k-means, EM, power iteration, Adam): __device__ double update(long long j, const double* p) returns the new state[j], reading swarm_state(i)/swarm_acc(i)/swarm_N/swarm_param(i) (swarm_dim, swarm_adim for loops). With it the accumulator may be wider than the state (set "acc_dim"). Recipes: swarm_help "iterate".` F )
+    ( mcp_schema_prop sc `acc_dim` `integer` `Accumulator width (1..65536) when grad() scatters into more slots than the state length (k-means sum+count, EM stats, A·v). Defaults to the state length; needs "update" when different.` F )
+    ( mcp_schema_prop sc `params` `array` `Optional constant numbers (same every round): grad reads p[state_len..], update reads swarm_param(i).` F )
+    ( mcp_schema_prop sc `epsilon` `number` `Optional: stop early once the largest |state change| in a round is below this. Omit to run all "rounds".` F )
+    ( mcp_schema_prop sc `dataset` `integer` `Optional dataset id: grad maps over the data (v = data[x]); blocks cache after round one, so later rounds ship only the state.` F )
+    ( mcp_schema_prop sc `async` `boolean` `true → return immediately with a task_id and advance the loop through compute_iterate_status polls (bounded work per call — use for long trainings). Default false: the whole loop runs inside this call.` F )
+    ( mcp_schema_prop sc `lo` `integer` `Range start (inclusive); required without a dataset.` F )
+    ( mcp_schema_prop sc `hi` `integer` `Range end (exclusive); required without a dataset.` F )
+    ^ sc
 }
 
 @ ms_schema_iterate_status → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( ms_prop props `task_id` `integer` `The id compute_iterate {"async":true} returned.` )
-    ( ms_prop props `budget_ms` `integer` `Max time this poll may spend advancing rounds (100..60000, default 8000). The run keeps its exact position between polls.` )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `task_id` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `task_id` `integer` `The id compute_iterate {"async":true} returned.` T )
+    ( mcp_schema_prop sc `budget_ms` `integer` `Max time this poll may spend advancing rounds (100..60000, default 8000). The run keeps its exact position between polls.` F )
+    ^ sc
 }
 
 @ ms_schema_sample_cuda → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( ms_prop props `cuda` `string` `CUDA-C __device__ double f(long long x) (with params/dataset: extra args) — same rules as compute_submit_cuda, but every value comes back instead of being reduced. ABI: swarm_help "cuda".` )
-    ( ms_prop props `lo` `integer` `Range start (inclusive).` )
-    ( ms_prop props `hi` `integer` `Range end (exclusive). hi - lo values returned; ≤ 1048576 (≤ 65536 without out_file).` )
-    ( ms_prop props `dataset` `integer` ( __ms_dataset_desc ) )
-    ( ms_prop props `params` `array` ( __ms_params_desc ) )
-    ( ms_prop props `out_file` `string` `Optional absolute path ON THE MCP HOST: values written there as raw LE f64s (count = hi - lo), the text result carrying only count + min/max/mean. Required beyond 65536 values.` )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `cuda` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `cuda` `string` `CUDA-C __device__ double f(long long x) (with params/dataset: extra args) — same rules as compute_submit_cuda, but every value comes back instead of being reduced. ABI: swarm_help "cuda".` T )
+    ( mcp_schema_prop sc `lo` `integer` `Range start (inclusive).` F )
+    ( mcp_schema_prop sc `hi` `integer` `Range end (exclusive). hi - lo values returned; ≤ 1048576 (≤ 65536 without out_file).` F )
+    ( mcp_schema_prop sc `dataset` `integer` ( __ms_dataset_desc ) F )
+    ( mcp_schema_prop sc `params` `array` ( __ms_params_desc ) F )
+    ( mcp_schema_prop sc `out_file` `string` `Optional absolute path ON THE MCP HOST: values written there as raw LE f64s (count = hi - lo), the text result carrying only count + min/max/mean. Required beyond 65536 values.` F )
+    ^ sc
 }
 
 @ ms_schema_hist_cuda → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( ms_prop props `cuda` `string` `CUDA-C __device__ long long bin(long long x) picks the bucket (out-of-range skipped); optional __device__ double val(long long x) is the weight (default 1.0 = counting). With params/dataset: extra args. ABI: swarm_help "cuda".` )
-    ( ms_prop props `lo` `integer` `Range start (inclusive).` )
-    ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
-    ( ms_prop props `bins` `integer` `Bucket count K (1..1048576; ≤ 65536 without out_file). The result is K sums.` )
-    ( ms_prop props `dataset` `integer` ( __ms_dataset_desc ) )
-    ( ms_prop props `params` `array` ( __ms_params_desc ) )
-    ( ms_prop props `out_file` `string` `Optional absolute path ON THE MCP HOST: bins written there as raw LE f64s, the text result carrying only count + min/max/mean. Required beyond 65536 bins.` )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `cuda` ) )
-    ( json_arr_push req ( json_str_lit `bins` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `cuda` `string` `CUDA-C __device__ long long bin(long long x) picks the bucket (out-of-range skipped); optional __device__ double val(long long x) is the weight (default 1.0 = counting). With params/dataset: extra args. ABI: swarm_help "cuda".` T )
+    ( mcp_schema_prop sc `lo` `integer` `Range start (inclusive).` F )
+    ( mcp_schema_prop sc `hi` `integer` `Range end (exclusive). Must be > lo.` F )
+    ( mcp_schema_prop sc `bins` `integer` `Bucket count K (1..1048576; ≤ 65536 without out_file). The result is K sums.` T )
+    ( mcp_schema_prop sc `dataset` `integer` ( __ms_dataset_desc ) F )
+    ( mcp_schema_prop sc `params` `array` ( __ms_params_desc ) F )
+    ( mcp_schema_prop sc `out_file` `string` `Optional absolute path ON THE MCP HOST: bins written there as raw LE f64s, the text result carrying only count + min/max/mean. Required beyond 65536 bins.` F )
+    ^ sc
 }
 
 @ ms_schema_upload_data → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( ms_prop props `data_base64` `string` `The dataset as base64 of raw LITTLE-ENDIAN values of the given "dtype", held in memory (≤ 256 MiB). Use this XOR "file".` )
-    ( ms_prop props `file` `string` `A path ON THE MCP HOST to read the dataset from (raw little-endian values of "dtype"), streamed from disk (≤ 64 GiB — preferred for large data). Use this XOR "data_base64".` )
-    ( ms_prop props `dtype` `string` `Storage element type: "f64" (default) · "f32" · "i32" · "i64". Data is stored in its native width (f32/i32 halve transfer + GPU memory) and each element is promoted to a double on the GPU, so your device function is always f(long long x, double v).` )
-    ( ms_prop props `name` `string` `Optional human-readable label shown by compute_list_data.` )
-    ( json_obj_set schema `properties` props )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `data_base64` `string` `The dataset as base64 of raw LITTLE-ENDIAN values of the given "dtype", held in memory (≤ 256 MiB). Use this XOR "file".` F )
+    ( mcp_schema_prop sc `file` `string` `A path ON THE MCP HOST to read the dataset from (raw little-endian values of "dtype"), streamed from disk (≤ 64 GiB — preferred for large data). Use this XOR "data_base64".` F )
+    ( mcp_schema_prop sc `dtype` `string` `Storage element type: "f64" (default) · "f32" · "i32" · "i64". Data is stored in its native width (f32/i32 halve transfer + GPU memory) and each element is promoted to a double on the GPU, so your device function is always f(long long x, double v).` F )
+    ( mcp_schema_prop sc `name` `string` `Optional human-readable label shown by compute_list_data.` F )
+    ^ sc
 }
 
 // ── swarm_help: on-demand, topic-queryable guidance ──────────────────
@@ -3379,229 +3287,167 @@ $ `cudakernel.nu`
 }
 
 @ ms_schema_help → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( ms_prop props `topic` `string` `One of: overview, workflow, expr, cuda, iterate, shuffle, datasets, gpu, limits, troubleshooting. Omit to get the topic index.` )
-    ( json_obj_set schema `properties` props )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `topic` `string` `One of: overview, workflow, expr, cuda, iterate, shuffle, datasets, gpu, limits, troubleshooting. Omit to get the topic index.` F )
+    ^ sc
 }
 
-@ build_tools_list → ( Vec Json ) {
-    : ( Vec Json ) tools ( vec_new [Json] )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `swarm_help`
-    `Guidance for using this server, one topic at a time — the tool schemas are kept short, so call this for depth: the CUDA-C ABI, the compute_iterate and compute_shuffle recipes, dataset caching, and the honest size/support limits. Pass a "topic" (overview, workflow, expr, cuda, iterate, shuffle, datasets, gpu, limits, troubleshooting) or omit it for the index. Start here if unsure how a tool works.`
-    ( ms_schema_help ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_submit`
-    `Distributed map-reduce over an integer/float EXPRESSION in x across [lo, hi): evaluate the kernel per x, fold with reduce (sum/product/min/max/count). Returns a task_id; poll compute_result. E.g. {"expr":"x*x","lo":1,"hi":1000000,"reduce":"sum"}. Grammar, dtype and examples: swarm_help "expr".`
-    ( ms_schema_submit ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_submit_kernel`
-    `Run an arbitrary NURL kernel for what the expression language can't express (loops, helpers). Give just the per-element kernel as NURL source (@ kernel i x → i { … }); the server wraps it, compiles to wasm, shards it, and folds kernel(x) over [lo, hi) with reduce. Compile errors are returned. Returns a task_id; poll compute_result. Already-compiled module: compute_run_wasm.`
-    ( ms_schema_submit_kernel ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_submit_cuda`
-    `Distributed GPU map-reduce — write only a CUDA-C __device__ double f(long long x); the server generates the whole GPU program and the --gpu workers run it, folding f(x) over [lo, hi) with reduce (a float). For heavy numeric ranges, millions to billions of x: integrals, Monte-Carlo sums, parameter scans. Needs a --gpu worker; returns a task_id, poll compute_result. CUDA ABI, params and datasets: swarm_help "cuda".`
-    ( ms_schema_submit_cuda ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_sample_cuda`
-    `Distributed GPU map that returns EVERY value in order — sample a curve, render a field, tabulate a function. CUDA-C f(x) over [lo, hi); results inline (JSON ≤ 1024, base64 ≤ 65536) or to out_file (≤ 1M); min/max/mean included. Needs a --gpu worker; returns a task_id, poll compute_result. ABI & params: swarm_help "cuda".`
-    ( ms_schema_sample_cuda ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_histogram_cuda`
-    `Distributed GPU binned aggregation in ONE pass: CUDA-C bin(x) picks one of K buckets, val(x) (default 1.0) is added — value distributions, densities, class counts, binned integrals. K bin sums come back (JSON ≤ 1024, base64 ≤ 65536, out_file beyond). Needs a --gpu worker; returns a task_id, poll compute_result. ABI & params: swarm_help "cuda".`
-    ( ms_schema_hist_cuda ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_iterate`
-    `Iterative solver with the loop IN THE ENGINE — one call returns the converged "state". Each round reduces a CUDA grad() into an accumulator, then applies a step rule. DEFAULT is gradient descent (give "lr", state[j] -= lr*grad[j]/N); for k-means, EM, power iteration, PageRank, momentum/Adam give an "update" device function (and "acc_dim" when the accumulator is wider than the state). Over a dataset the data caches after round one. Needs a --gpu worker. Recipes and the swarm_state/swarm_acc/swarm_N accessors: swarm_help "iterate".`
-    ( ms_schema_iterate ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_iterate_status`
-    `Advance and inspect an ASYNC iterate run. Start one with compute_iterate {"async":true, ...} (returns task_id immediately); each status call advances the loop by a bounded time slice ("budget_ms", default 8000, max 60000) and returns {status: running|done|error, state, rounds_run, rounds_total, last_max_delta, seeded_blocks}. Poll until "done" — a long training is never at the mercy of one HTTP call's timeout.`
-    ( ms_schema_iterate_status ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_shuffle`
-    `Group-by-key / reduce-by-key. A CUDA key(x)+value(x) map plus a reduce op; both the map AND the per-key reduce run distributed on the GPU (a combiner), and the coordinator merges compact per-chunk tables. Returns { "groups": {…}, "n_groups", "pairs_mapped" } (or {n_groups, saved_to} with out_file, required past 8192 groups). Word-count, keyed histograms, joins. hi - lo ≤ 128 M; distinct keys are per-chunk-bounded (~131072) so total cardinality scales with the worker count (hundreds of thousands to millions). Needs a --gpu worker. Details: swarm_help "shuffle".`
-    ( ms_schema_shuffle ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_upload_data`
-    `Upload a dataset the GPU tools map over: {"data_base64": raw little-endian} (in memory, ≤ 256 MiB) or {"file": path on the MCP host} (STREAMED from disk, ≤ 64 GiB). "dtype" is the element type — f64 (default), f32, i32, i64 (native width; f32/i32 halve memory), promoted to double on the GPU so your kernel is always f(long long x, double v). Returns {dataset_id, count, dtype, min, max, mean, file_backed}. Then pass "dataset":id to the CUDA tools. Data is cut into content-addressed 1 MiB blocks cached per worker, so it moves ONCE. Details: swarm_help "datasets".`
-    ( ms_schema_upload_data ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_list_data`
-    `List every uploaded dataset: id, name, element count.`
-    ( ms_schema_empty ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_run_wasm`
-    `Like compute_submit_kernel but you provide an already-compiled wasm32-wasi module (base64) instead of NURL source — e.g. one built with the nurl_build_wasm tool. The module's main reads lo and hi from argv, folds the kernel over [lo, hi), and prints the partial. Returns a task_id; poll compute_result.`
-    ( ms_schema_run_wasm ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `swarm_status`
-    `The cluster as the coordinator currently sees it: how many workers have joined, which of them are GPU-capable, how long since each was last heard from (they heartbeat every ~2 s; one silent past liveness_ttl_ms is evicted), plus task and dataset counts. Check this first when a submit says there are no workers, or when a task keeps retrying.`
-    ( ms_schema_empty ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_list`
-    `List every submitted task with its status (running|done), kernel, range, reduce op, and result if finished.`
-    ( ms_schema_empty ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_result`
-    `Get one task by task_id: its status and, once finished, the reduced result.`
-    ( ms_schema_result ) ) )
-    ^ tools
+// ── The server ───────────────────────────────────────────────────────
+//
+// One registration per tool. JSON-RPC framing, the dual-era version
+// gate, `server/discover`, `_meta` decorations, tasks/* routing and
+// per-handler panic isolation are `stdlib/ext/mcp_server.nu`'s. The
+// dispatch this replaces was a copy of nurl-mcp's — handle_ping and
+// handle_tools_list byte-identical — plus a tasks branch.
+//
+// Single source of truth for the server version: the handshake,
+// server/discover and the --version banner all read this. It had
+// drifted to a hand-written 0.20.0 once already.
+
+@ sm_version → s { ^ `0.29.0` }
+
+@ sm_instructions → s {
+    ^ `Distributed compute over a swarm cluster: submit expression / NURL / CUDA-C kernels over integer ranges or uploaded datasets, sample or histogram on GPU workers, and iterate (SGD or a custom update rule). Call swarm_help first — topic "start" for the workflow, "limits" for the envelope.`
 }
 
-@ dispatch_tool s name Json args → Json {
-    ? != ( nurl_str_eq name `swarm_help` ) 0 { ^ ( tool_help args ) } {}
-    ? != ( nurl_str_eq name `compute_submit` ) 0 { ^ ( tool_submit args ) } {}
-    ? != ( nurl_str_eq name `compute_submit_kernel` ) 0 { ^ ( tool_submit_kernel args ) } {}
-    ? != ( nurl_str_eq name `compute_submit_cuda` ) 0 { ^ ( tool_submit_cuda args ) } {}
-    ? != ( nurl_str_eq name `compute_iterate` ) 0 { ^ ( tool_iterate args ) } {}
-    ? != ( nurl_str_eq name `compute_iterate_status` ) 0 { ^ ( tool_iterate_status args ) } {}
-    ? != ( nurl_str_eq name `compute_shuffle` ) 0 { ^ ( tool_shuffle args ) } {}
-    ? != ( nurl_str_eq name `compute_sample_cuda` ) 0 { ^ ( tool_sample_cuda args ) } {}
-    ? != ( nurl_str_eq name `compute_histogram_cuda` ) 0 { ^ ( tool_hist_cuda args ) } {}
-    ? != ( nurl_str_eq name `compute_upload_data` ) 0 { ^ ( tool_upload_data args ) } {}
-    ? != ( nurl_str_eq name `compute_list_data` ) 0 { ^ ( tool_list_data args ) } {}
-    ? != ( nurl_str_eq name `compute_run_wasm` ) 0 { ^ ( tool_run_wasm args ) } {}
-    ? != ( nurl_str_eq name `swarm_status` ) 0 { ^ ( tool_status args ) } {}
-    ? != ( nurl_str_eq name `compute_list` ) 0 { ^ ( tool_list args ) } {}
-    ? != ( nurl_str_eq name `compute_result` ) 0 { ^ ( tool_result args ) } {}
-    ^ ( mcp_tool_result_error `unknown tool` )
+// ── Task augmentation ────────────────────────────────────────────────
+//
+// A tool that registers a swarm task can hand a task-declaring client a
+// pollable handle instead of a result. The decision stays the server's
+// and is expressed by WHICH tools register through
+// `mcp_server_add_tool_ctx`: those six, and no list to keep in sync.
+// A client that did not declare the extension gets exactly the old
+// behaviour, and so does a call that registered no swarm task (an
+// argument error, or an empty cluster).
+
+@ __ms_task_begin McpCall call → b {
+    ? ! ( mcp_call_wants_tasks call ) { ^ F } {}
+    : *McpState st # *McpState g_mcp
+    = . st last_task # s 0
+    ^ T
 }
 
-// ── JSON-RPC method handlers ─────────────────────────────────────
-
-// Single source of truth for the server version — the MCP handshake,
-// server/discover, and the --version banner all read this (the
-// handshake had drifted to a stale hand-written 0.20.0).
-@ sm_version → s { ^ `0.28.2` }
-
-@ handle_initialize Json id ? Json params → Json {
-    : Json result ( mcp_initialize_result `swarm-mcp` ( sm_version ) )
-    // Legacy handshake negotiation: echo the client's requested
-    // handshake-era revision when supported.
-    ( json_obj_set result `protocolVersion`
-    ( json_str_lit ( mcp_initialize_version_for params ) ) )
-    ^ ( mcp_response_result id result )
-}
-
-// server/discover — 2026-07-28 servers MUST implement this; also the
-// stdio/HTTP backward-compat probe a dual-era client tries first.
-@ handle_discover Json id → Json {
-    : Json caps ( json_obj_new )
-    ( json_obj_set caps `tools` ( json_obj_new ) )
-    // io.modelcontextprotocol/tasks: the compute_submit family answers a
-    // task-declaring client with a CreateTaskResult it polls via tasks/get.
-    ( mcp_caps_declare_tasks caps )
-    : Json result ( mcp_discover_result `swarm-mcp` ( sm_version )
-    caps
-    `Distributed compute over a swarm cluster: submit expression / NURL / CUDA-C kernels over integer ranges or uploaded datasets, sample or histogram on GPU workers, and iterate (SGD or a custom update rule). Call swarm_help first — topic "start" for the workflow, "limits" for the envelope.` )
-    ^ ( mcp_response_result id result )
-}
-
-// Decorate an outgoing response for a MODERN (per-request `_meta`)
-// request: 2026-07-28 servers SHOULD identify themselves in each
-// result's `_meta`. Legacy requests pass through untouched.
-@ finish_reply Json env b modern → ?Json {
-    ? modern {
-        : ?Json res ( json_obj_get env `result` )
-        ?? res {
-            T rv → { ( mcp_result_set_server_info rv `swarm-mcp` ( sm_version ) ) }
+@ __ms_task_finish b augment s name Json args Json result → Json {
+    ? augment {
+        ?? ( __mcp_task_augment name args ) {
+            T ctr → {
+                ( json_free result )
+                ^ ctr
+            }
             F _ → {}
         }
     } {}
-    ^ @ ?Json { T env }
+    ^ result
 }
 
-@ handle_ping Json id → Json {
-    : Json empty ( json_obj_new )
-    ^ ( mcp_response_result id empty )
-}
+// Annotation columns: read-only, destructive, idempotent, open-world.
+// Every compute tool reaches out to the cluster, so all are
+// open-world; none destroys state a caller can lose; the submits are
+// not idempotent (each one queues fresh work), the queries are.
 
-@ handle_tools_list Json id → Json {
-    : ( Vec Json ) tools ( build_tools_list )
-    : Json result ( mcp_tools_list_result tools )
-    ^ ( mcp_response_result id result )
-}
+@ ms_server → McpServer {
+    : McpServer srv ( mcp_server_new `swarm-mcp` ( sm_version ) )
+    ( mcp_server_set_instructions srv ( sm_instructions ) )
+    ( mcp_server_set_task_store srv ( mcp_task_store ) \ → v {
+        // A poll must answer from the cluster's current state, not the
+        // state at submit time.
+        ( mcp_pump 4 )
+        ( __mcp_tasks_sync_all )
+    } )
 
-// `want_task` is the per-request tasks capability the client declared.
-// It only ENABLES augmentation — the decision stays the server's, per
-// tool (__mcp_task_eligible) and per call (a tool that registered no
-// swarm task returns its result directly).
-@ handle_tools_call Json id Json params b want_task → Json {
-    : ?Json name_j ( json_obj_get params `name` )
-    ?? name_j {
-        T nv → {
-            : s name ( json_str_data nv )
-            : Json args ?? ( json_obj_get params `arguments` ) { T av → ( json_clone av ) F → ( json_obj_new ) }
-            : b augment & want_task ( __mcp_task_eligible name )
-            : *McpState st # *McpState g_mcp
-            ? augment { = . st last_task # s 0 } {}
-            : Json result ( dispatch_tool name args )
-            ? augment {
-                ?? ( __mcp_task_augment name args ) {
-                    T ctr → {
-                        ( json_free result )
-                        ( json_free args )
-                        ^ ( mcp_response_result id ctr )
-                    }
-                    F _ → {}
-                }
-            } {}
-            ( json_free args )
-            ^ ( mcp_response_result id result )
-        }
-        F → { ^ ( mcp_response_error id mcp_err_invalid_params `tools/call requires a "name"` ) }
-    }
-}
+    ( mcp_server_add_tool_full srv `swarm_help`
+    `Guidance for using this server, one topic at a time — the tool schemas are kept short, so call this for depth: the CUDA-C ABI, the compute_iterate and compute_shuffle recipes, dataset caching, and the honest size/support limits. Pass a "topic" (overview, workflow, expr, cuda, iterate, shuffle, datasets, gpu, limits, troubleshooting) or omit it for the index. Start here if unsure how a tool works.`
+    ( ms_schema_help ) T F T F
+    \ Json a → Json { ^ ( tool_help a ) } )
 
-@ handle_unknown Json id s method → Json {
-    : i mlen ( nurl_str_len method )
-    : String msg ( string_with_cap + 20 mlen )
-    ( string_push_str msg `unknown method: ` )
-    ( string_push_str msg method )
-    : Json err ( mcp_response_error id mcp_err_method_not_found ( string_data msg ) )
-    ( string_free msg )
-    ^ err
-}
+    ( mcp_server_add_tool_ctx srv `compute_submit`
+    `Distributed map-reduce over an integer/float EXPRESSION in x across [lo, hi): evaluate the kernel per x, fold with reduce (sum/product/min/max/count). Returns a task_id; poll compute_result. E.g. {"expr":"x*x","lo":1,"hi":1000000,"reduce":"sum"}. Grammar, dtype and examples: swarm_help "expr".`
+    ( ms_schema_submit ) F F F T
+    \ Json a McpCall c → Json {
+        : b aug ( __ms_task_begin c )
+        ^ ( __ms_task_finish aug `compute_submit` a ( tool_submit a ) )
+    } )
 
-@ dispatch Json req → ?Json {
-    : ?Json method_j ( json_obj_get req `method` )
-    ?? method_j {
-        T mv → {
-            : s method ( json_str_data mv )
-            : ?Json id_opt ( json_obj_get req `id` )
-            ?? id_opt {
-                T id → {
-                    // 2026-07-28 version gate: a request declaring an
-                    // unsupported `_meta` protocolVersion gets the
-                    // spec-shaped -32022 error; no declared version =
-                    // legacy request, served below.
-                    : s req_ver ( mcp_request_protocol_version req )
-                    : b modern > ( nurl_str_len req_ver ) 0
-                    ? & modern ! ( mcp_version_supported req_ver ) {
-                        ^ @ ?Json { T ( mcp_unsupported_version_response id req_ver ) }
-                    } {}
-                    ? != ( nurl_str_eq method `server/discover` ) 0 { ^ @ ?Json { T ( handle_discover id ) } } {}
-                    ? != ( nurl_str_eq method `initialize` ) 0 {
-                        : ?Json init_params ( json_obj_get req `params` )
-                        ^ ( finish_reply ( handle_initialize id init_params ) modern )
-                    } {}
-                    ? != ( nurl_str_eq method `ping` ) 0 { ^ ( finish_reply ( handle_ping id ) modern ) } {}
-                    ? != ( nurl_str_eq method `tools/list` ) 0 { ^ ( finish_reply ( handle_tools_list id ) modern ) } {}
-                    ? != ( nurl_str_eq method `tools/call` ) 0 {
-                        : Json params ?? ( json_obj_get req `params` ) { T pv → ( json_clone pv ) F → ( json_obj_new ) }
-                        : Json out ( handle_tools_call id params ( mcp_request_declares_tasks req ) )
-                        ( json_free params )
-                        ^ ( finish_reply out modern )
-                    } {}
-                    // tasks/get, tasks/update, tasks/cancel. Every live
-                    // task is advanced first so a poll answers from the
-                    // cluster's current state rather than the state at
-                    // submit time; the stdlib layer then applies the
-                    // capability gate and the taskId lookup.
-                    ? ( mcp_tasks_is_method method ) {
-                        ( mcp_pump 4 )
-                        ( __mcp_tasks_sync_all )
-                        ?? ( mcp_tasks_dispatch ( mcp_task_store ) req id method ) {
-                            T out → { ^ ( finish_reply out modern ) }
-                            F _ → {}
-                        }
-                    } {}
-                    ^ @ ?Json { T ( handle_unknown id method ) }
-                }
-                F → { ^ @ ?Json { F } }
-            }
-        }
-        F → { ^ @ ?Json { F } }
-    }
+    ( mcp_server_add_tool_ctx srv `compute_submit_kernel`
+    `Run an arbitrary NURL kernel for what the expression language can't express (loops, helpers). Give just the per-element kernel as NURL source (@ kernel i x → i { … }); the server wraps it, compiles to wasm, shards it, and folds kernel(x) over [lo, hi) with reduce. Compile errors are returned. Returns a task_id; poll compute_result. Already-compiled module: compute_run_wasm.`
+    ( ms_schema_submit_kernel ) F F F T
+    \ Json a McpCall c → Json {
+        : b aug ( __ms_task_begin c )
+        ^ ( __ms_task_finish aug `compute_submit_kernel` a ( tool_submit_kernel a ) )
+    } )
+
+    ( mcp_server_add_tool_ctx srv `compute_submit_cuda`
+    `Distributed GPU map-reduce — write only a CUDA-C __device__ double f(long long x); the server generates the whole GPU program and the --gpu workers run it, folding f(x) over [lo, hi) with reduce (a float). For heavy numeric ranges, millions to billions of x: integrals, Monte-Carlo sums, parameter scans. Needs a --gpu worker; returns a task_id, poll compute_result. CUDA ABI, params and datasets: swarm_help "cuda".`
+    ( ms_schema_submit_cuda ) F F F T
+    \ Json a McpCall c → Json {
+        : b aug ( __ms_task_begin c )
+        ^ ( __ms_task_finish aug `compute_submit_cuda` a ( tool_submit_cuda a ) )
+    } )
+
+    ( mcp_server_add_tool_ctx srv `compute_sample_cuda`
+    `Distributed GPU map that returns EVERY value in order — sample a curve, render a field, tabulate a function. CUDA-C f(x) over [lo, hi); results inline (JSON ≤ 1024, base64 ≤ 65536) or to out_file (≤ 1M); min/max/mean included. Needs a --gpu worker; returns a task_id, poll compute_result. ABI & params: swarm_help "cuda".`
+    ( ms_schema_sample_cuda ) F F F T
+    \ Json a McpCall c → Json {
+        : b aug ( __ms_task_begin c )
+        ^ ( __ms_task_finish aug `compute_sample_cuda` a ( tool_sample_cuda a ) )
+    } )
+
+    ( mcp_server_add_tool_ctx srv `compute_histogram_cuda`
+    `Distributed GPU binned aggregation in ONE pass: CUDA-C bin(x) picks one of K buckets, val(x) (default 1.0) is added — value distributions, densities, class counts, binned integrals. K bin sums come back (JSON ≤ 1024, base64 ≤ 65536, out_file beyond). Needs a --gpu worker; returns a task_id, poll compute_result. ABI & params: swarm_help "cuda".`
+    ( ms_schema_hist_cuda ) F F F T
+    \ Json a McpCall c → Json {
+        : b aug ( __ms_task_begin c )
+        ^ ( __ms_task_finish aug `compute_histogram_cuda` a ( tool_hist_cuda a ) )
+    } )
+
+    ( mcp_server_add_tool_full srv `compute_iterate`
+    `Iterative solver with the loop IN THE ENGINE — one call returns the converged "state". Each round reduces a CUDA grad() into an accumulator, then applies a step rule. DEFAULT is gradient descent (give "lr", state[j] -= lr*grad[j]/N); for k-means, EM, power iteration, PageRank, momentum/Adam give an "update" device function (and "acc_dim" when the accumulator is wider than the state). Over a dataset the data caches after round one. Needs a --gpu worker. Recipes and the swarm_state/swarm_acc/swarm_N accessors: swarm_help "iterate".`
+    ( ms_schema_iterate ) F F F T
+    \ Json a → Json { ^ ( tool_iterate a ) } )
+
+    ( mcp_server_add_tool_full srv `compute_iterate_status`
+    `Advance and inspect an ASYNC iterate run. Start one with compute_iterate {"async":true, ...} (returns task_id immediately); each status call advances the loop by a bounded time slice ("budget_ms", default 8000, max 60000) and returns {status: running|done|error, state, rounds_run, rounds_total, last_max_delta, seeded_blocks}. Poll until "done" — a long training is never at the mercy of one HTTP call's timeout.`
+    ( ms_schema_iterate_status ) F F F T
+    \ Json a → Json { ^ ( tool_iterate_status a ) } )
+
+    ( mcp_server_add_tool_full srv `compute_shuffle`
+    `Group-by-key / reduce-by-key. A CUDA key(x)+value(x) map plus a reduce op; both the map AND the per-key reduce run distributed on the GPU (a combiner), and the coordinator merges compact per-chunk tables. Returns { "groups": {…}, "n_groups", "pairs_mapped" } (or {n_groups, saved_to} with out_file, required past 8192 groups). Word-count, keyed histograms, joins. hi - lo ≤ 128 M; distinct keys are per-chunk-bounded (~131072) so total cardinality scales with the worker count (hundreds of thousands to millions). Needs a --gpu worker. Details: swarm_help "shuffle".`
+    ( ms_schema_shuffle ) F F F T
+    \ Json a → Json { ^ ( tool_shuffle a ) } )
+
+    ( mcp_server_add_tool_full srv `compute_upload_data`
+    `Upload a dataset the GPU tools map over: {"data_base64": raw little-endian} (in memory, ≤ 256 MiB) or {"file": path on the MCP host} (STREAMED from disk, ≤ 64 GiB). "dtype" is the element type — f64 (default), f32, i32, i64 (native width; f32/i32 halve memory), promoted to double on the GPU so your kernel is always f(long long x, double v). Returns {dataset_id, count, dtype, min, max, mean, file_backed}. Then pass "dataset":id to the CUDA tools. Data is cut into content-addressed 1 MiB blocks cached per worker, so it moves ONCE. Details: swarm_help "datasets".`
+    ( ms_schema_upload_data ) F F F T
+    \ Json a → Json { ^ ( tool_upload_data a ) } )
+
+    ( mcp_server_add_tool_full srv `compute_list_data`
+    `List every uploaded dataset: id, name, element count.`
+    ( ms_schema_empty ) T F T T
+    \ Json a → Json { ^ ( tool_list_data a ) } )
+
+    ( mcp_server_add_tool_ctx srv `compute_run_wasm`
+    `Like compute_submit_kernel but you provide an already-compiled wasm32-wasi module (base64) instead of NURL source — e.g. one built with the nurl_build_wasm tool. The module's main reads lo and hi from argv, folds the kernel over [lo, hi), and prints the partial. Returns a task_id; poll compute_result.`
+    ( ms_schema_run_wasm ) F F F T
+    \ Json a McpCall c → Json {
+        : b aug ( __ms_task_begin c )
+        ^ ( __ms_task_finish aug `compute_run_wasm` a ( tool_run_wasm a ) )
+    } )
+
+    ( mcp_server_add_tool_full srv `swarm_status`
+    `The cluster as the coordinator currently sees it: how many workers have joined, which of them are GPU-capable, how long since each was last heard from (they heartbeat every ~2 s; one silent past liveness_ttl_ms is evicted), plus task and dataset counts. Check this first when a submit says there are no workers, or when a task keeps retrying.`
+    ( ms_schema_empty ) T F T T
+    \ Json a → Json { ^ ( tool_status a ) } )
+
+    ( mcp_server_add_tool_full srv `compute_list`
+    `List every submitted task with its status (running|done), kernel, range, reduce op, and result if finished.`
+    ( ms_schema_empty ) T F T T
+    \ Json a → Json { ^ ( tool_list a ) } )
+
+    ( mcp_server_add_tool_full srv `compute_result`
+    `Get one task by task_id: its status and, once finished, the reduced result.`
+    ( ms_schema_result ) T F T T
+    \ Json a → Json { ^ ( tool_result a ) } )
+    ^ srv
 }
 
 // ── MCP role: the LLM control surface over HTTPS JSON-RPC ─────────
@@ -3692,7 +3538,11 @@ $ `cudakernel.nu`
             = g_mcp_token token
             // recover any datasets persisted by a previous run of this coordinator
             ( __ds_load_all )
-            : ( @ HttpResponse HttpRequest ) mcph ( mcp_http_handler \ Json req → ?Json { ^ ( dispatch req ) } )
+            // Built after g_mcp is set: the task store lives on the
+            // McpState, and mcp_server_set_task_store reads it.
+            : McpServer msrv ( ms_server )
+            : ( @ HttpResponse HttpRequest ) mcph
+            ( mcp_http_handler ( mcp_server_http_dispatch msrv ) )
             // Serve the MCP transport at /mcp (and bare / for convenience) and
             // answer 404 everywhere else. Serving the same body on every path
             // made a typo'd URL look like a working endpoint.

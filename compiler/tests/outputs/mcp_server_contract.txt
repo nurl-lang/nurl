@@ -48,6 +48,11 @@ resources/read unknown
 === completion ===
 completion/complete
   {"jsonrpc":"2.0","id":20,"result":{"completion":{"values":["src/","stdlib/"],"total":2,"hasMore":false},"resultType":"complete"}}
+=== tasks extension ===
+server/discover (tasks declared)
+  {"jsonrpc":"2.0","id":30,"result":{"resultType":"complete","supportedVersions":["2026-07-28","2025-11-25","2025-06-18","2025-03-26","2024-11-05"],"capabilities":{"extensions":{"io.modelcontextprotocol/tasks":{}}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"contract-tasks","version":"1.0.0"}},"ttlMs":3600000,"cacheScope":"public"}}
+tasks/get without the capability
+  {"jsonrpc":"2.0","id":31,"error":{"code":-32003,"message":"Missing required client capability","data":{"requiredCapabilities":{"extensions":{"io.modelcontextprotocol/tasks":{}}}}}}
 === errors and notifications ===
 unknown method
   {"jsonrpc":"2.0","id":21,"error":{"code":-32601,"message":"unknown method: nope/nope"}}

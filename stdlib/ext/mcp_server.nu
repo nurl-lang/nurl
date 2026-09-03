@@ -233,23 +233,41 @@ $ `stdlib/ext/http_response.nu`
 // `!Json McpRpcErr` has room for the code and cannot collide with
 // handler output, because the failure is not a Json object at all.
 //
-// OPAQUE: read it with `mcp_rpc_err_code` / `_message`, free it with
-// `mcp_rpc_err_free`. Owned `__message` — the envelope layer frees.
+// A JSON-RPC error object is {code, message, data}, and `data` is where
+// the protocol puts what the client is supposed to DO about the failure
+// — `supported` on an unsupported version, `requiredCapabilities` on a
+// missing extension. Carrying only code and message would drop exactly
+// the actionable half.
+//
+// OPAQUE: read it with `mcp_rpc_err_code` / `_message` / `_data`, free
+// it with `mcp_rpc_err_free`. Owns its message and its data.
 
 : McpRpcErr {
     i __code
     String __message
+    Json __data
 }
 
 @ mcp_rpc_err i code s message → McpRpcErr {
-    ^ @ McpRpcErr { code ( string_from message ) }
+    ^ @ McpRpcErr { code ( string_from message ) ( json_null ) }
+}
+
+// CONSUMES `data`.
+@ mcp_rpc_err_data i code s message Json data → McpRpcErr {
+    ^ @ McpRpcErr { code ( string_from message ) data }
 }
 
 @ mcp_rpc_err_code McpRpcErr e → i { ^ . e __code }
 
 @ mcp_rpc_err_message McpRpcErr e → s { ^ ( string_data . e __message ) }
 
-@ mcp_rpc_err_free McpRpcErr e → v { ( string_free . e __message ) }
+// Borrowed; `json_is_null` when the failure carries none.
+@ mcp_rpc_err_get_data McpRpcErr e → Json { ^ . e __data }
+
+@ mcp_rpc_err_free McpRpcErr e → v {
+    ( string_free . e __message )
+    ( json_free . e __data )
+}
 
 // ── The server handle ─────────────────────────────────────────────────
 //
@@ -1213,6 +1231,7 @@ b read_only b destructive b idempotent b open_world
             }
             : ~ i code mcp_err_internal_error
             : ~ s msg `tasks dispatch failed`
+            : ~ Json data ( json_null )
             ?? ( json_obj_get env `error` ) {
                 T eo → {
                     ?? ( json_obj_get eo `code` ) {
@@ -1223,10 +1242,18 @@ b read_only b destructive b idempotent b open_world
                         T mv → { = msg ( json_as_str mv ) }
                         F _ → {}
                     }
+                    // `data` carries what the client should DO about it —
+                    // `requiredCapabilities` on the missing-extension
+                    // gate. Dropping it leaves a correct code with no
+                    // way to act on it.
+                    ?? ( json_obj_get eo `data` ) {
+                        T dv → { ( json_free data ) = data ( json_clone dv ) }
+                        F _ → {}
+                    }
                 }
                 F _ → {}
             }
-            : McpRpcErr e ( mcp_rpc_err code msg )
+            : McpRpcErr e ( mcp_rpc_err_data code msg data )
             ( json_free env )
             ^ @ !Json McpRpcErr { F e }
         }
@@ -1382,8 +1409,16 @@ b read_only b destructive b idempotent b open_world
         }
         F e → {
             ? had_id {
-                : Json resp ( mcp_response_error id ( mcp_rpc_err_code e )
-                ( mcp_rpc_err_message e ) )
+                : ~ Json resp ( json_null )
+                ? ( json_is_null ( mcp_rpc_err_get_data e ) ) {
+                    ( json_free resp )
+                    = resp ( mcp_response_error id ( mcp_rpc_err_code e )
+                    ( mcp_rpc_err_message e ) )
+                } {
+                    ( json_free resp )
+                    = resp ( mcp_response_error_data id ( mcp_rpc_err_code e )
+                    ( mcp_rpc_err_message e ) ( json_clone ( mcp_rpc_err_get_data e ) ) )
+                }
                 ( mcp_rpc_err_free e )
                 ^ @ ?Json { T resp }
             } {

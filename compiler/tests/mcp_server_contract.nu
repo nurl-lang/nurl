@@ -30,6 +30,7 @@
 
 $ `stdlib/ext/mcp_server.nu`
 $ `stdlib/ext/mcp.nu`
+$ `stdlib/ext/mcp_tasks.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -228,6 +229,23 @@ $ `stdlib/std/panic.nu`
     ( json_obj_set cp `argument` arg )
     ( show srv `completion/complete`
     ( with_params ( req_id 20 `completion/complete` ) cp ) )
+
+    ( nurl_print `=== tasks extension ===\n` )
+    // A store makes tasks/* exist and declares the extension. The
+    // capability gate's -32003 must reach the client WITH its `data`:
+    // the code says what went wrong, `requiredCapabilities` says what
+    // to do about it, and an error carrier that models only code and
+    // message drops exactly the actionable half.
+    : McpServer tsrv ( mcp_server_new `contract-tasks` `1.0.0` )
+    : McpTaskStore store ( mcp_task_store_new )
+    ( mcp_server_set_task_store tsrv store \ → v {} )
+    ( show tsrv `server/discover (tasks declared)` ( req_id 30 `server/discover` ) )
+    : Json tp ( json_obj_new )
+    ( json_obj_set tp `taskId` ( json_str_lit `0123456789abcdef0123456789abcdef` ) )
+    ( show tsrv `tasks/get without the capability`
+    ( with_params ( req_id 31 `tasks/get` ) tp ) )
+    ( mcp_task_store_free store )
+    ( mcp_server_free tsrv )
 
     ( nurl_print `=== errors and notifications ===\n` )
     ( show srv `unknown method` ( req_id 21 `nope/nope` ) )
