@@ -21048,8 +21048,22 @@
     = g_dbg_current_subprogram saved_dbg_sp
     = g_dbg_current_loc saved_dbg_loc
 
-    // Return a function pointer constant
-    : ~ s fn_ptr_type ( nurl_str_cat `{ ` ( nurl_str_cat ret_type `(` ) )
+    // Return a function pointer constant.
+    //
+    // The space before `(` is not cosmetic. parse_type spells an
+    // ANNOTATED closure type `{ R (i8*, P…)*, i8* }`, and nurlc compares
+    // types as strings, so emitting `{ R(i8*, P…)*, i8* }` here made a
+    // closure literal a DIFFERENT type from the identical annotated one:
+    //
+    //   : ( @ i i ) h ? c ( wrap a ) \ i x → i { ^ + x 9 }
+    //   error: the '?' branches yield values of different types
+    //          ('{ i64 (i8*, i64)*, i8* }' vs '{ i64(i8*, i64)*, i8* }')
+    //
+    // — two spellings of one type, and an error message that shows them
+    // as different without showing why. `extract_fn_ptr_return_type`
+    // scans for exactly this space too, so it silently fell back on the
+    // unspaced form.
+    : ~ s fn_ptr_type ( nurl_str_cat `{ ` ( nurl_str_cat ret_type ` (` ) )
     = fn_ptr_type ( nurl_str_cat fn_ptr_type `i8*` )
     : ~ s types1 ( nurl_str_cat param_types `` )
     : ~ i j 0
@@ -23971,6 +23985,29 @@
         ( nurl_sym_def syms pname lt )
         // Mark parameter as immutable by design
         ( nurl_sym_def syms ( nurl_str_cat pname `__param` ) `1` )
+        // A parameter SHADOWS a same-named top-level function for the
+        // whole body. Its type went into the inner scope above, but the
+        // function's call metadata — the declared parameter roster, the
+        // FFI roster — lives under the same key in an OUTER scope, and
+        // `nurl_sym_get2` walks outward and finds it. gen_call then
+        // type-checked `( handler x )` against whatever `@ handler`
+        // happens to declare elsewhere in the program:
+        //
+        //   @ run ( @ i i ) handler i x → i { ^ ( handler x ) }
+        //   @ handler s tag → i { ^ 42 }
+        //   error: argument 1 to 'handler': value of type 'i64' passed
+        //          where parameter expects 'i8*'
+        //
+        // — a call that resolves to the parameter, rejected against a
+        // signature it has nothing to do with, and reported at the
+        // callee's line. Worse across files: a stdlib function taking a
+        // `dispatch` closure stopped compiling because the IMPORTING
+        // program happened to define `@ dispatch`. Blanking the rosters
+        // in the parameter's own scope is what shadowing means.
+        ( nurl_sym_def syms ( nurl_str_cat pname `__ptypes_src` ) `` )
+        ( nurl_sym_def syms ( nurl_str_cat pname `__ffi_params` ) `` )
+        ( nurl_sym_def syms ( nurl_str_cat pname `__arity` ) `` )
+        ( nurl_sym_def syms ( nurl_str_cat pname `__garity` ) `` )
         // Borrow-provenance origin: an auto-Drop enum parameter is a
         // BORROW (the caller owns it). Values derived from it (vec_get,
         // field access, returned through it) inherit `__borrow`, so a

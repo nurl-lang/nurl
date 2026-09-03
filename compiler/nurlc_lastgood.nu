@@ -123,6 +123,15 @@
 // the concrete type arguments.
 : ~ s g_diag_ctx ``
 
+// LLVM return type of the function whose body is currently being
+// generated. Diagnostics-only: gen_field_store consults it to tell the
+// lost-write footgun (`= . p f v` in a function that returns something
+// else) apart from the legitimate modify-a-copy-and-return-it idiom.
+// Saved and restored around each function body, so a nested closure
+// body inherits its enclosing function's — which is the conservative
+// direction: it only ever SUPPRESSES a warning, never invents one.
+: ~ s g_cur_ret_llty ``
+
 // die → __diag_abort: print-position variants share this exit/panic tail.
 @ __diag_abort → v {
     ? != g_diag_recover_active 0
@@ -16835,6 +16844,21 @@
     ^ cur_ptr
 }
 
+// Does this function's LLVM return type carry `sty` (a `%Name`)? Used
+// to spare the modify-a-copy-and-return-it idiom from the lost-write
+// warning: `@ f T x → T`, and likewise `→ !T E` / `→ ?T`, whose LLVM
+// aggregates embed `%T`. Matched on a name boundary so `%Http` does
+// not pass for `%HttpResponse`.
+@ __ret_carries_type s ret_llty s sty → b {
+    : i at ( nurl_str_find ret_llty sty )
+    ? < at 0 { ^ F } {}
+    : i end + at ( nurl_str_len sty )
+    ? >= end ( nurl_str_len ret_llty ) { ^ T } {}
+    : i c ( nurl_str_get ret_llty end )
+    // alnum or '_' means we matched a prefix of a longer type name
+    ^ ! | | | & >= c 48 <= c 57 & >= c 65 <= c 90 & >= c 97 <= c 122 == c 95
+}
+
 @ gen_field_store i lex i syms i cg → s {
     ( nurl_lex_advance lex )  // consume '.'
     // A second '.' means the object is itself a field path. When that path
@@ -16851,6 +16875,41 @@
     // only the RHS. Every branch below routes its RHS through that one
     // function, so the target binding has to travel on a side-channel.
     ( nurl_sym_def syms `__last_field_obj__` obj_name )
+    // Silent-snapshot footgun, PARAMETER edition. A struct parameter is
+    // passed by value: the callee gets its own copy, so `= . p field v`
+    // lands in that copy and the caller never sees the write. This is
+    // the same violation gen_assign already warns about one context
+    // over (a binding captured by value into a closure — the write is
+    // discarded when the closure returns), and it is equally invisible
+    // without a diagnostic: the store compiles, runs, and does nothing.
+    //
+    // It is easy to believe otherwise, because a struct whose fields
+    // are HANDLES (String, Vec, Json) does propagate mutations made
+    // THROUGH those handles — `( vec_push . p items x )` is seen by the
+    // caller, since the handle's control block is shared. A plain
+    // scalar field beside them is not, and nothing marked the
+    // difference. Non-fatal: reading the field back within the call is
+    // legitimate scratch use, and some callees deliberately mutate a
+    // local copy. `inout` (whose `__ptr` IS the caller's address) and
+    // pointer parameters write through and are not flagged.
+    ? != 0 ( nurl_str_len obj_name )
+    { : s __fs_oty ( nurl_sym_get syms obj_name )
+        : i __fs_olen ( nurl_str_len __fs_oty )
+        ? & & & & & & != 0 ( nurl_sym_len2 syms obj_name `__param` )
+        == 0 ( nurl_sym_len2 syms obj_name `__inout` )
+        // A param with no alloca behind it has nowhere to store at all;
+        // that store is a hard error further down and must not also
+        // collect a warning about where its value would have gone.
+        != 0 ( nurl_sym_len2 syms obj_name `__ptr` )
+        > __fs_olen 0
+        == ( nurl_str_get __fs_oty 0 ) 37
+        != ( nurl_str_get __fs_oty - __fs_olen 1 ) 42
+        ! ( __ret_carries_type g_cur_ret_llty __fs_oty )
+        { ( warn lex ( nurl_str_cat3
+            `assignment to a field of by-value parameter '` obj_name
+            ( nurl_str_cat3 `' is not visible to the caller — a struct parameter is passed by value, so the store lands in this function's own copy. Handle-typed fields are different: pushing into a ( Vec T ) field, or writing through a String / Json field, IS seen by the caller, because those share a control block — which is exactly why a scalar field beside them looks like it should be too. Declare the parameter 'inout ` obj_name `' if the caller should see the write, return the new value, or move the state into a handle-typed field.` ) ) ) }
+        {} }
+    {}
     : s pv ? nested ( gen_nested_lvalue_addr lex syms cg )
     ( gen_expr lex syms cg )  // pointer/aggregate value
     : s pt ( nurl_get_last_type )  // LLVM type, e.g. "%Node*", "i64*", "{ T*, i64 }", or "%Pair"
@@ -18379,10 +18438,30 @@
                     : b __slip & > ( int_width fty ) 0
                     | | ( is_ptr_ty __sldft )
                     == ( nurl_str_get __sldft 0 ) 42 ( seq __sldft `s` )
+                    // (f) a named STRUCT value (`%Vec__u8`, `%String`, a user
+                    // struct — by value, no trailing star) into a SCALAR
+                    // field (int of any width, float, bool). The reverse of
+                    // (c): the insertvalue's value operand is an aggregate
+                    // where the slot is `i64`/`double`/`i1` — invalid IR that
+                    // only clang used to reject. The usual way in is a
+                    // positional literal written against an OLDER layout of
+                    // the struct (a field was added in the middle, every
+                    // later value shifted one slot). Enum values are excluded
+                    // — they lower to i64 tags and store into an int field
+                    // legally.
+                    : ~ b __slag F
+                    ? & ( __is_named_agg fty )
+                    | | > ( int_width __sldft ) 0 ( seq __sldft `i1` )
+                    | ( seq __sldft `double` ) ( seq __sldft `float` )
+                    { : s __slvn ( nurl_str_slice fty 1 - ( nurl_str_len fty ) 1 )
+                        ? == 0 ( nurl_sym_len2 syms __slvn `__variants` ) { = __slag T } {} }
+                    {}
                     : s __slcure ? __slip
                     `' — NURL has no implicit integer-to-pointer conversion; give the field a pointer-typed value, or cast an address intentionally with '# T expr' (the null pointer is '# T 0' for a pointer type T)`
+                    ? __slag
+                    `' — a struct value cannot be stored in a scalar field, and nothing converts it. If this literal is positional, check that its values line up with the struct's CURRENT field order — a field added in the middle shifts every later value one slot.`
                     `' — NURL has no implicit conversions; give the field a value of its declared type, or convert explicitly with '# T expr'`
-                    ? | | | | != __slvf __sldf ( __arg_named_struct_mismatch fty __sldft ) __slint_ps __slps __slip
+                    ? | | | | | != __slvf __sldf ( __arg_named_struct_mismatch fty __sldft ) __slint_ps __slps __slip __slag
                     { ( die lex ( nurl_str_cat3
                         ( nurl_str_cat4 `field ` ( nurl_str_int idx ) ` of struct literal '` cur_sname )
                         ( nurl_str_cat4 `' expects type '` __sldft `' but the value has type '` fty )
@@ -20969,8 +21048,22 @@
     = g_dbg_current_subprogram saved_dbg_sp
     = g_dbg_current_loc saved_dbg_loc
 
-    // Return a function pointer constant
-    : ~ s fn_ptr_type ( nurl_str_cat `{ ` ( nurl_str_cat ret_type `(` ) )
+    // Return a function pointer constant.
+    //
+    // The space before `(` is not cosmetic. parse_type spells an
+    // ANNOTATED closure type `{ R (i8*, P…)*, i8* }`, and nurlc compares
+    // types as strings, so emitting `{ R(i8*, P…)*, i8* }` here made a
+    // closure literal a DIFFERENT type from the identical annotated one:
+    //
+    //   : ( @ i i ) h ? c ( wrap a ) \ i x → i { ^ + x 9 }
+    //   error: the '?' branches yield values of different types
+    //          ('{ i64 (i8*, i64)*, i8* }' vs '{ i64(i8*, i64)*, i8* }')
+    //
+    // — two spellings of one type, and an error message that shows them
+    // as different without showing why. `extract_fn_ptr_return_type`
+    // scans for exactly this space too, so it silently fell back on the
+    // unspaced form.
+    : ~ s fn_ptr_type ( nurl_str_cat `{ ` ( nurl_str_cat ret_type ` (` ) )
     = fn_ptr_type ( nurl_str_cat fn_ptr_type `i8*` )
     : ~ s types1 ( nurl_str_cat param_types `` )
     : ~ i j 0
@@ -23352,6 +23445,12 @@
     // a pointer base via `<obj>__ptr`). See `__alloca_struct_params`
     // for the predicate (multi-field named struct, not enum).
     ( __alloca_struct_params syms cg )
+    // Published for gen_field_store's by-value-parameter diagnostic: a
+    // store into a param whose type is part of what this function
+    // RETURNS is the legitimate modify-a-copy-and-return-it idiom
+    // (`@ f T x → T { = . x n 1  ^ x }`), not a lost write.
+    : s __saved_ret_llty g_cur_ret_llty
+    = g_cur_ret_llty ( nurl_llty ret_ty )
     : s fn_cleanup ( nurl_cg_lbl cg `fn_cleanup` )
     ( nurl_sym_def syms `__fn_cleanup__` fn_cleanup )
     ( nurl_sym_set g_fn_escapes `__defer_top_fn__` `` )
@@ -23733,6 +23832,7 @@
     = g_dbg_current_subprogram 0
     = g_dbg_current_file_id 0
     = g_dbg_current_loc 0
+    = g_cur_ret_llty __saved_ret_llty
     ( emit_str_globals base_str g_str_idx )
     ( emit_closure_globals )
     // Borrow checker: the function body is fully parsed —

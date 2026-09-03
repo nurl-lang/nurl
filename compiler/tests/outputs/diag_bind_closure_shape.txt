@@ -1,5 +1,5 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_bind_closure_shape.nu:7:31: error: value of type '{ i64(i8*, i64)*, i8* }' cannot initialise / assign a binding of type '{ i64 (i8*)*, i8* }' — NURL has no implicit conversions between differently-shaped aggregates; make the option/result/closure shapes match exactly, or destructure with '??' and bind the payload
+compiler/tests/diag_bind_closure_shape.nu:7:31: error: value of type '{ i64 (i8*, i64)*, i8* }' cannot initialise / assign a binding of type '{ i64 (i8*)*, i8* }' — NURL has no implicit conversions between differently-shaped aggregates; make the option/result/closure shapes match exactly, or destructure with '??' and bind the payload
 error: aborting due to 1 previous error
 note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

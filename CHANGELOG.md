@@ -34,6 +34,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   see the late arrival. Both now abort at the `add`, naming the
   registration. `compiler/tests/mcp_server_guards.nu`.
 
+- **A parameter now shadows a same-named top-level function** — the
+  parameter's type went into the inner scope, but the function's call
+  metadata (declared parameter roster, FFI roster, arity) lived under
+  the same key in an outer scope and the lookup walked out and found it.
+  A call that resolved to the parameter was then checked against a
+  signature it had nothing to do with, and reported at the callee's
+  line: `argument 1 to 'handler': value of type 'i64' passed where
+  parameter expects 'i8*'`. The cross-file form is the one that bites —
+  `ext/mcp_http.nu` stopped compiling because a program importing it
+  happened to declare `@ dispatch` with a different arity, a name in one
+  file breaking an unrelated function in another.
+  `compiler/tests/param_shadows_fn.nu`.
+
+- **One closure type, one spelling** — `parse_type` spelled an
+  annotated closure type `{ R (i8*, P…)*, i8* }` and the closure-literal
+  codegen spelled the identical type `{ R(i8*, P…)*, i8* }`. nurlc
+  compares types as strings, so a conditional whose arms were a
+  returned closure and a literal one was rejected with the two
+  spellings printed side by side and no hint that the only difference
+  was a space; `extract_fn_ptr_return_type`, which scans for that
+  space, silently missed the unspaced form too.
+  `compiler/tests/closure_type_spelling.nu`.
+
 - **`ext/mqtt.nu`: three writes that never left the method** — every
   MqttClient method takes the client by value, so the stores into its
   `i` fields landed in the method's own copy. Surfaced by the new
