@@ -1,0 +1,37 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+abs=https://x.example/y
+scheme_rel=https://other/p
+root_rel=https://a:8443/g?x=1
+path_rel=http://a/b/c/g
+dotdot=http://a/b/g
+dotdot2=http://a/g
+dotdot_over=http://a/g
+dot=http://a/b/c/g/
+query_only=http://a/b/c/d;p?y
+empty_path_base=http://a/g
+blob_has_ae=T
+blob_has_ae_second=T
+blob_has_ae_not_value=F
+blob_has_ae_prefix=F
+blob_has_empty=F
+interim_100=200 body=[ok] reusable=T
+interim_100_reuse=200 body=[ok] reusable=T
+head_clen=200 body=[] reusable=T
+no_content_204=204 body=[] reusable=T
+eof_body=200 body=[hello] reusable=F
+conn_close=200 body=[bye] reusable=F
+deadline=err=2 reusable=F
+truncated=err=6 reusable=F
+over_cap=err=7 reusable=F
+chunked=200 body=[abcde] reusable=T
+chunked_reuse=200 body=[ok] reusable=T
+http10=200 body=[ok] reusable=F
+http10_keepalive=200 body=[ok] reusable=T
+server_req1=200 req 1 /n1
+server_req2=200 req 2 /n2
+server_req3=200 req 3 /n3
+server_handled=3
+server_run_once_returns=1

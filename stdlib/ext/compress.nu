@@ -124,6 +124,14 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
 }
 
 @ zlib_decompress ( Vec u ) src → !( Vec u ) CompressErr {
+    ^ ( zlib_decompress_max src 0 )
+}
+
+// zlib_decompress with an output cap (0 = unlimited): the decoder stops
+// with CompressBufTooSmall the moment the output would pass `max_out` —
+// the decompression-bomb guard an HTTP client needs before it trusts a
+// Content-Encoding: deflate body.
+@ zlib_decompress_max ( Vec u ) src i max_out → !( Vec u ) CompressErr {
     : i n ( vec_len [u] src )
     ? <= n 0 {
         ^ @ !( Vec u ) CompressErr { T ( vec_new [u] ) }
@@ -133,11 +141,20 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
     : ( Vec u ) raw ( vec_new [u] )
     : *u sp ( vec_data [u] src )
     ( bytes_extend_raw raw # s + # i sp 2 - n 6 )
-    : !( Vec u ) DeflateErr r ( inflate raw )
+    : !( Vec u ) DeflateErr r ( inflate_max raw max_out )
     ( vec_free [u] raw )
     ?? r {
-        F e → ^ @ !( Vec u ) CompressErr { F ( __df_to_compress_err e ) }
+        F e → ^ @ !( Vec u ) CompressErr { F ( __df_to_compress_err_cap e ) }
         T out → ^ @ !( Vec u ) CompressErr { T out }
+    }
+}
+
+// __df_to_compress_err, with the cap (DeflateBadLength from inflate_max)
+// named for what it is.
+@ __df_to_compress_err_cap DeflateErr e → CompressErr {
+    ^ ?? e {
+        DeflateBadLength → # CompressErr CompressBufTooSmall
+        _ → ( __df_to_compress_err e )
     }
 }
 
@@ -172,6 +189,12 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
 }
 
 @ gzip_decompress ( Vec u ) src → !( Vec u ) CompressErr {
+    ^ ( gzip_decompress_max src 0 )
+}
+
+// gzip_decompress with an output cap (0 = unlimited) — see
+// zlib_decompress_max.
+@ gzip_decompress_max ( Vec u ) src i max_out → !( Vec u ) CompressErr {
     : i n ( vec_len [u] src )
     ? <= n 0 {
         ^ @ !( Vec u ) CompressErr { T ( vec_new [u] ) }
@@ -181,7 +204,7 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
     // Accept a zlib stream too (matches zlib's inflateInit2(15+32) auto-
     // detect): non-gzip-magic input is routed to zlib_decompress.
     ? | != # i . sp 0 31 != # i . sp 1 139 {
-        ^ ( zlib_decompress src )
+        ^ ( zlib_decompress_max src max_out )
     } {}
     ? < n 18 { ^ @ !( Vec u ) CompressErr { F CompressData } } {}
     : i flg # i . sp 3
@@ -201,10 +224,10 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
     ? >= p - n 8 { ^ @ !( Vec u ) CompressErr { F CompressData } } {}
     : ( Vec u ) raw ( vec_new [u] )
     ( bytes_extend_raw raw # s + # i sp p - - n 8 p )
-    : !( Vec u ) DeflateErr r ( inflate raw )
+    : !( Vec u ) DeflateErr r ( inflate_max raw max_out )
     ( vec_free [u] raw )
     ?? r {
-        F e → ^ @ !( Vec u ) CompressErr { F ( __df_to_compress_err e ) }
+        F e → ^ @ !( Vec u ) CompressErr { F ( __df_to_compress_err_cap e ) }
         T out → ^ @ !( Vec u ) CompressErr { T out }
     }
 }

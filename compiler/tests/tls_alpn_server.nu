@@ -10,13 +10,18 @@
 //   * negotiate nothing for a client that sends no ALPN extension, and
 //     still serve it;
 //   * pick by SERVER preference: a Python/OpenSSL client offering
-//     ["http/1.1", "h2"] in that order gets "h2" (RFC 7301 §3.2).
+//     ["http/1.1", "h2"] in that order gets "h2" (RFC 7301 §3.2) — and
+//     so does our own client offering the list "http/1.1 h2"; a list
+//     with one unknown and one known entry ("spdy/3 http/1.1") gets the
+//     known one instead of a mismatch alert.
 // A plain tcp_listen_tls listener (no ALPN list) must keep ignoring the
 // client's offer: the client sees "" and the connection works.
 //
 // Before 2026-09-02 the pure server never parsed the extension and sent
 // an empty EncryptedExtensions, so tcp_listen_tls_with_alpn silently
-// served HTTP/1.1 to every HTTP/2-capable client.
+// served HTTP/1.1 to every HTTP/2-capable client. Until 2026-09-03 the
+// pure CLIENT could offer only a single protocol, so an HTTP client had
+// to choose h2-or-nothing before it knew what the server spoke.
 //
 // Server on an OS thread (tcp_accept blocks), client on the main thread,
 // as tls_resume.nu does.
@@ -42,6 +47,8 @@ $ `stdlib/std/time.nu`
 : ~ i srv_proto_4 -9
 : ~ i srv_proto_5 -9
 : ~ i srv_proto_6 -9
+: ~ i srv_proto_7 -9
+: ~ i srv_proto_8 -9
 : ~ i srv_proto_b1 -9
 : ~ i srv_echoed 0
 
@@ -75,6 +82,8 @@ $ `stdlib/std/time.nu`
     ? == slot 5 { = srv_proto_5 code } {}
     ? == slot 6 { = srv_proto_6 code } {}
     ? == slot 7 { = srv_proto_b1 code } {}
+    ? == slot 8 { = srv_proto_7 code } {}
+    ? == slot 9 { = srv_proto_8 code } {}
 }
 
 // Accept one connection, echo one chunk, record the negotiated ALPN.
@@ -169,6 +178,8 @@ $ `stdlib/std/time.nu`
                         ( serve_one la 4 )
                         ( serve_one la 5 )
                         ( serve_one la 6 )
+                        ( serve_one la 8 )
+                        ( serve_one la 9 )
                         ( serve_one lb 7 )
                     }
                     : !Thread ThreadErr st ( thread_spawn server )
@@ -211,6 +222,10 @@ ss.close()" 2>&1` )
                                 T po → { ( nurl_print ( output_stdout po ) ) ( output_free po ) }
                                 F e → ( label `openssl_mismatch` ( process_err_name e ) )
                             }
+                            // 7. our client, list "http/1.1 h2": server preference → h2
+                            ( client_case `client_list_server_pref` 18931 `http/1.1 h2` )
+                            // 8. list with an unknown first entry: the known one wins
+                            ( client_case `client_list_partial` 18931 `spdy/3 http/1.1` )
                             // B. listener without an ALPN list ignores the offer
                             ( client_case `noalpn_listener_client_h2` 18932 `h2` )
 
@@ -225,8 +240,10 @@ ss.close()" 2>&1` )
                             ( label `server_4` ( proto_name srv_proto_4 ) )
                             ( label `server_5` ( proto_name srv_proto_5 ) )
                             ( label `server_6` ( proto_name srv_proto_6 ) )
+                            ( label `server_7` ( proto_name srv_proto_7 ) )
+                            ( label `server_8` ( proto_name srv_proto_8 ) )
                             ( label `server_b1` ( proto_name srv_proto_b1 ) )
-                            ( label `server_echoed_5` ( yn == srv_echoed 5 ) )
+                            ( label `server_echoed_7` ( yn == srv_echoed 7 ) )
                         }
                         F _ → { ( label `thread` `FAIL` ) }
                     }
@@ -240,7 +257,21 @@ ss.close()" 2>&1` )
     }
 }
 
+// The offer matcher itself: exact entries only, never a prefix or a
+// superstring of one.
+@ offered s list s sel → s {
+    : ( Vec u ) v ( bytes_from_str sel )
+    : b r ( _alpn_offered list v )
+    ( vec_free [u] v )
+    ^ ( yn r )
+}
+
 @ main → i {
+    ( label `offered_h2_in_list` ( offered `h2 http/1.1` `h2` ) )
+    ( label `offered_http11_in_list` ( offered `h2 http/1.1` `http/1.1` ) )
+    ( label `offered_prefix_rejected` ( offered `h2 http/1.1` `h` ) )
+    ( label `offered_superstring_rejected` ( offered `h2 http/1.1` `h2c` ) )
+    ( label `offered_empty_list` ( offered `` `h2` ) )
     ( run )
     ^ 0
 }

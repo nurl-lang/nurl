@@ -659,20 +659,21 @@ $ `stdlib/std/async_ffi.nu`
     ( vec_free [u] entry )
     ( vec_free [u] ks )
 
-    // application_layer_protocol_negotiation (0x0010), one protocol
-    // (RFC 7301). Only emitted when a protocol was requested (e.g. "h2");
-    // otherwise the ext is omitted and the connect behaves exactly as before.
-    : i al ( nurl_str_len alpn )
-    ? > al 0 {
+    // application_layer_protocol_negotiation (0x0010), RFC 7301: the
+    // protocols we speak, most preferred first ("h2 http/1.1" — the same
+    // space-separated form the server's listener takes). Only emitted
+    // when at least one protocol was requested; otherwise the extension
+    // is omitted and the connect behaves exactly as before.
+    : ( Vec u ) alp_list ( tls_alpn_pack alpn )
+    ? > ( vec_len [u] alp_list ) 0 {
         : ( Vec u ) alp ( vec_new [u] )
-        ( _tls_u16 alp + al 1 )  // ProtocolNameList length
-        ( vec_push [u] alp # u al )  // protocol name length
-        : ~ i ak 0
-        ~ < ak al { ( vec_push [u] alp # u ( nurl_str_get alpn ak ) ) = ak + ak 1 }
+        ( _tls_u16 alp ( vec_len [u] alp_list ) )  // ProtocolNameList length
+        ( _tls_cat alp alp_list )
         ( _tls_u16 ext 16 )
         ( _blk16 ext alp )
         ( vec_free [u] alp )
     } {}
+    ( vec_free [u] alp_list )
 
     // ── resumption (RFC 8446 §4.2.9 + §4.2.11) ──
     // psk_key_exchange_modes goes in EVERY hello, offer or not: it is
@@ -1008,6 +1009,65 @@ $ `stdlib/std/async_ffi.nu`
 // an empty Vec if the server sent no ALPN extension. Message layout:
 // [type:1][len:3][exts_len:2] then exts; ALPN ext (0x0010) data is
 // [list_len:2][name_len:1][name…].
+// Pack a space-separated protocol list ("h2 http/1.1") into ALPN wire
+// form: [len:1][name] per entry, in the given order — the ProtocolNameList
+// body of RFC 7301 §3.1, used by both the client's offer and the server's
+// listener preference. Names longer than 255 bytes cannot be encoded and
+// are dropped; empty tokens are skipped.
+@ tls_alpn_pack s list → ( Vec u ) {
+    : ( Vec u ) out ( vec_new [u] )
+    : i n ( nurl_str_len list )
+    : ~ i p 0
+    ~ < p n {
+        ~ & < p n == ( nurl_str_get list p ) 32 { = p + p 1 }
+        : i start p
+        ~ & < p n != ( nurl_str_get list p ) 32 { = p + p 1 }
+        : i tl - p start
+        ? & > tl 0 <= tl 255 {
+            ( vec_push [u] out # u tl )
+            : ~ i k start
+            ~ < k p { ( vec_push [u] out # u ( nurl_str_get list k ) ) = k + k 1 }
+        } {}
+    }
+    ^ out
+}
+
+// T iff `sel` (a bare protocol name) is one of the entries of the
+// space-separated offer `list`.
+@ _alpn_offered s list ( Vec u ) sel → b {
+    : ( Vec u ) packed ( tls_alpn_pack list )
+    : i n ( vec_len [u] packed )
+    : i sl ( vec_len [u] sel )
+    : ~ i p 0
+    : ~ b found F
+    ~ & ! found < p n {
+        : i tl ( _t_bget packed p )
+        ? == tl sl {
+            : ~ i k 0
+            : ~ b same T
+            ~ & same < k tl {
+                ? != ( _t_bget packed + + p 1 k ) ( _t_bget sel k ) { = same F } {}
+                = k + k 1
+            }
+            = found same
+        } {}
+        = p + + p 1 tl
+    }
+    ( vec_free [u] packed )
+    ^ found
+}
+
+// Send a fatal alert (RFC 8446 §6) under the current write keys — during
+// the server flight those are the handshake keys, so the peer can read
+// it. Best effort: the connection is being torn down either way.
+@ __send_alert * TlsConn c i desc → v {
+    : ( Vec u ) alert ( vec_with_cap [u] 2 )
+    ( vec_push [u] alert # u 2 )
+    ( vec_push [u] alert # u desc )
+    : !v TlsErr _w ( __send_encrypted c 21 alert )
+    ( vec_free [u] alert )
+}
+
 @ __ee_alpn ( Vec u ) msg → ( Vec u ) {
     : ( Vec u ) out ( vec_new [u] )
     : i n ( vec_len [u] msg )
@@ -1036,9 +1096,11 @@ $ `stdlib/std/async_ffi.nu`
     ^ out
 }
 
-// Core client handshake. `alpn` is a single ALPN protocol to offer (e.g.
-// "h2"); empty means no ALPN extension is sent. The negotiated protocol
-// (from the server's EncryptedExtensions) is stored in `c.alpn_sel`.
+// Core client handshake. `alpn` is the space-separated list of ALPN
+// protocols to offer, most preferred first (e.g. "h2 http/1.1"); empty
+// means no ALPN extension is sent. The negotiated protocol (from the
+// server's EncryptedExtensions, checked to be one we offered) is stored
+// in `c.alpn_sel`.
 @ __tls_handshake i raw s server_name s alpn ( Vec u ) sess → !*TlsConn TlsErr {
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 { ^ @ !*TlsConn TlsErr { F # TlsErr TlsConnect } } {}
@@ -1231,10 +1293,19 @@ $ `stdlib/std/async_ffi.nu`
                     } {}
                     ? == t 8 {
                         // EncryptedExtensions — pick up the negotiated ALPN.
+                        // The server must pick from OUR list (RFC 7301
+                        // §3.2); anything else is a protocol violation
+                        // answered with no_application_protocol (120).
                         : ( Vec u ) sel ( __ee_alpn msg )
                         ? > ( vec_len [u] sel ) 0 {
-                            ( vec_free [u] . c alpn_sel )
-                            = . c alpn_sel sel
+                            ? ( _alpn_offered alpn sel ) {
+                                ( vec_free [u] . c alpn_sel )
+                                = . c alpn_sel sel
+                            } {
+                                ( vec_free [u] sel )
+                                ( __send_alert c 120 )
+                                = flighterr 1
+                            }
                         } { ( vec_free [u] sel ) }
                     } {}
                     ( _tls_cat tr msg )
@@ -1301,9 +1372,10 @@ $ `stdlib/std/async_ffi.nu`
     ^ r
 }
 
-// Like tls_attach but offers a single ALPN protocol (e.g. "h2"). After a
-// successful handshake the negotiated protocol is readable via
-// tls_alpn_selected (empty if the server declined ALPN). Insecure variant.
+// Like tls_attach but offers ALPN protocols ("h2" or a preference list
+// "h2 http/1.1"). After a successful handshake the negotiated protocol is
+// readable via tls_alpn_selected (empty if the server declined ALPN).
+// Insecure variant.
 @ tls_attach_alpn i raw s server_name s alpn → !*TlsConn TlsErr {
     : ( Vec u ) nosess ( vec_new [u] )
     : !*TlsConn TlsErr r ( __tls_handshake raw server_name alpn nosess )
@@ -1430,6 +1502,24 @@ $ `stdlib/std/async_ffi.nu`
 @ tls_attach_alpn_verify i raw s server_name s alpn → !*TlsConn TlsErr {
     : !*TlsConn TlsErr r ( tls_attach_alpn raw server_name alpn )
     ^ ( __verify_conn r server_name )
+}
+
+// Every client knob in one call: upgrade an already-connected socket to
+// TLS offering the ALPN list `alpn` ("" = none) AND the resumption
+// session `sess` (empty = none), verifying the chain / hostname when
+// `verify` is non-zero. The one-knob variants above are this with a
+// blank somewhere; an HTTP client that wants to resume a session on the
+// same connection it negotiates HTTP/2 over needs all of them at once.
+@ tls_attach_full i raw s server_name s alpn ( Vec u ) sess i verify → !*TlsConn TlsErr {
+    : !*TlsConn TlsErr r ( __tls_handshake raw server_name alpn sess )
+    ? != verify 0 { ^ ( __verify_conn r server_name ) } {}
+    ^ r
+}
+
+// tls_attach_full over a fresh TCP connection to host:port.
+@ tls_connect_full s host i port s server_name s alpn ( Vec u ) sess i verify → !*TlsConn TlsErr {
+    : i raw ( nurl_tcp_connect host port )
+    ^ ( tls_attach_full raw server_name alpn sess verify )
 }
 
 // Shared post-handshake verification used by both tls_connect and

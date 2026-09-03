@@ -18,9 +18,21 @@
 //     feeds a stateful chunked-transfer decoder, so SSE / chunked bodies
 //     stream live rather than buffering to completion.
 //
+//   * Connection reuse: `hp_stream_open` (URL in, redirects followed) is
+//     the one-shot path and asks the server to close; `hp_stream_open_on`
+//     runs one exchange over a caller-owned HttpConn with keep-alive, and
+//     `hp_stream_release` hands the transport back when the response left
+//     it reusable (framed body fully read, no `Connection: close`, no
+//     stray bytes) — the pool an HTTP client builds on.
+//   * Timeouts: `hp_conn_set_timeout` puts a read/write deadline on the
+//     socket (SO_RCVTIMEO/SO_SNDTIMEO through nurl_tcp_set_timeout), and
+//     a deadline that fires surfaces as error 2 (timeout), distinct from
+//     a dead peer.
+//
 // Error codes are the NURL_HTTP_ERR_* integers from stdlib/runtime.c §14
-// (0 ok, 1 connect, 2 timeout, 3 tls, 4 dns, 5 invalid-url, 6 other), so
-// http.nu maps them straight onto HttpErr without translation.
+// (0 ok, 1 connect, 2 timeout, 3 tls, 4 dns, 5 invalid-url, 6 other,
+// 7 response body over the caller's cap), so http.nu maps them straight
+// onto HttpErr without translation.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -179,13 +191,46 @@ $ `stdlib/std/thread.nu`
     ^ @ !HttpConn i { T @ HttpConn { 0 fd # *TlsConn 0 skey } }
 }
 
+// Wrap a TLS connection the caller established itself (for instance
+// with an ALPN offer, see tls_attach_full) as an HttpConn. The session
+// ticket it receives is cached for host:port when the conn closes, like
+// the ones hp_conn_open opens.
+@ hp_conn_from_tls * TlsConn tc s host i port → HttpConn {
+    ^ @ HttpConn { 1 0 tc ( __hp_sess_key host port ) }
+}
+
+// The cached resumption session for host:port (empty when none): what a
+// caller dialing TLS itself offers, so its handshakes resume too.
+@ hp_session_lookup s host i port → ( Vec u ) {
+    : String key ( __hp_sess_key host port )
+    : ( Vec u ) sess ( __hp_sess_get key )
+    ( string_free key )
+    ^ sess
+}
+
+// Store a session exported from a connection the caller closed itself.
+@ hp_session_store s host i port ( Vec u ) blob → v {
+    ? == ( vec_len [u] blob ) 0 { ^ v } {}
+    : String key ( __hp_sess_key host port )
+    ( __hp_sess_put key blob )
+    ( string_free key )
+}
+
+// Read/write deadline in milliseconds for every socket operation on
+// this transport (0 = none). A deadline that fires reads back as error
+// 2 (timeout) from hp_conn_read_some / the stream state.
+@ hp_conn_set_timeout HttpConn c i ms → v {
+    : i fd ? != . c is_tls 0 . . c tc fd . c fd
+    ? > fd 0 { ( nurl_tcp_set_timeout fd ms ) } {}
+}
+
 // Write all of `data` to the transport. Returns 0 on success, else a
 // NURL_HTTP_ERR_* code.
 @ hp_conn_write HttpConn c ( Vec u ) data → i {
     ? != . c is_tls 0 {
         ?? ( tls_write . c tc data ) {
             T _ → ^ 0
-            F _ → ^ 6
+            F _ → ^ ? == ( nurl_tcp_err_kind . . c tc fd ) 7 2 6
         }
     } {}
     : i fd . c fd
@@ -194,7 +239,7 @@ $ `stdlib/std/thread.nu`
     : ~ i off 0
     ~ < off n {
         : i wn ( nurl_tcp_write fd # s + # i dp off - n off )
-        ? <= wn 0 { ^ 6 } {}
+        ? <= wn 0 { ^ ? == ( nurl_tcp_err_kind fd ) 7 2 6 } {}
         = off + off wn
     }
     ^ 0
@@ -204,10 +249,11 @@ $ `stdlib/std/thread.nu`
 //   1  → bytes were appended
 //   0  → clean end of stream (EOF)
 //  -1  → transport error
+//  -2  → the read deadline (hp_conn_set_timeout) fired
 @ hp_conn_read_some HttpConn c ( Vec u ) acc → i {
     ? != . c is_tls 0 {
         ?? ( tls_read . c tc 16384 ) {
-            F _ → ^ -1
+            F _ → ^ ? == ( nurl_tcp_err_kind . . c tc fd ) 7 -2 -1
             T chunk → {
                 : i got ( vec_len [u] chunk )
                 ? > got 0 { ( bytes_extend_bytes acc chunk ) } {}
@@ -219,7 +265,7 @@ $ `stdlib/std/thread.nu`
     : i fd . c fd
     : s scratch # s ( nurl_alloc 16384 )
     : i n ( nurl_tcp_read fd scratch 16384 )
-    ? < n 0 { ( nurl_free scratch ) ^ -1 } {}
+    ? < n 0 { ( nurl_free scratch ) ^ ? == ( nurl_tcp_err_kind fd ) 7 -2 -1 } {}
     ? == n 0 { ( nurl_free scratch ) ^ 0 } {}
     ( bytes_extend_raw acc scratch n )
     ( nurl_free scratch )
@@ -252,7 +298,7 @@ $ `stdlib/std/thread.nu`
     ( Vec String ) hvalues  // response header values (parallel to hnames)
     i headers_done
     i chunked  // 1 = Transfer-Encoding: chunked
-    i chunk_state  // 0 need-size, 1 in-body, 3 need-crlf, 2 done
+    i chunk_state  // 0 need-size, 1 in-body, 3 need-crlf, 4 trailers, 2 done
     i chunk_remaining
     i has_clen  // 1 = a Content-Length header was present
     i content_remaining  // bytes of body still expected (Content-Length)
@@ -260,6 +306,10 @@ $ `stdlib/std/thread.nu`
     i finished  // body fully decoded
     i status
     i err_kind
+    i conn_close  // 1 = the transport cannot carry another request (Connection: close, HTTP/1.0, read-to-EOF body)
+    i no_body  // 1 = this response has no body by definition (HEAD, 1xx, 204, 304)
+    i body_max  // decoded-body cap in bytes; 0 = unlimited; over → err 7
+    i body_total  // decoded body bytes handed out so far (against body_max)
 }
 
 // ── small byte / text helpers ───────────────────────────────────────
@@ -290,13 +340,42 @@ $ `stdlib/std/thread.nu`
 
 // ── request building ────────────────────────────────────────────────
 
+// T iff the caller's header blob already carries a `name:` line (case-
+// insensitive, at a line start) — then the default for that header is
+// the caller's business, not ours.
+@ _hp_blob_has s blob s lname → b {
+    ? | == # i blob 0 == ( nurl_str_len blob ) 0 { ^ F } {}
+    : String lb ( __hp_to_lower blob )
+    : s ld ( string_data lb )
+    : i ln ( nurl_str_len ld )
+    : i nl ( nurl_str_len lname )
+    : ~ i k 0
+    : ~ b hit F
+    ~ & ! hit <= + k nl ln {
+        ? | == k 0 == ( nurl_str_get ld - k 1 ) 10 {
+            : ~ i j 0
+            : ~ b same T
+            ~ & same < j nl {
+                ? != ( nurl_str_get ld + k j ) ( nurl_str_get lname j ) { = same F } {}
+                = j + j 1
+            }
+            ? & same < + k nl ln { = hit == ( nurl_str_get ld + k nl ) 58 } {}
+        } {}
+        = k + k 1
+    }
+    ( string_free lb )
+    ^ hit
+}
+
 // Build the raw request bytes for one request. body_ptr/body_len carry an
 // arbitrary (possibly binary) body; "" / 0 for none. headers_blob is the
 // caller's CRLF-delimited "Name: Value" lines (Content-Type, Authorization,
-// …) — Host / User-Agent / Connection / Content-Length / Accept-Encoding
-// are added here.
+// …) — Host / User-Agent / Content-Length are added here, Accept-Encoding
+// (identity: this layer decodes nothing) and Connection unless the blob
+// already carries them. `keepalive` 0 asks the server to close after this
+// response (the one-shot path); 1 leaves the HTTP/1.1 default, persistent.
 @ __hp_build_request s method s host i port i is_https s target
-* u body_ptr i body_len s headers_blob s ua → ( Vec u ) {
+* u body_ptr i body_len s headers_blob s ua i keepalive → ( Vec u ) {
     : ( Vec u ) req ( vec_new [u] )
     ( bytes_extend_str req method )
     ( bytes_extend_str req ` ` )
@@ -313,12 +392,20 @@ $ `stdlib/std/thread.nu`
     } {}
     ( bytes_extend_str req `\r\n` )
 
-    ( bytes_extend_str req `User-Agent: ` )
-    ( bytes_extend_str req ua )
-    ( bytes_extend_str req `\r\n` )
-    // We do not implement content decoding, so refuse compressed bodies.
-    ( bytes_extend_str req `Accept-Encoding: identity\r\n` )
-    ( bytes_extend_str req `Connection: close\r\n` )
+    // User-Agent: `ua` unless the caller's blob already names one.
+    ? & > ( nurl_str_len ua ) 0 ! ( _hp_blob_has headers_blob `user-agent` ) {
+        ( bytes_extend_str req `User-Agent: ` )
+        ( bytes_extend_str req ua )
+        ( bytes_extend_str req `\r\n` )
+    } {}
+    // This layer decodes nothing, so refuse compressed bodies unless the
+    // caller negotiates (and decodes) an encoding itself.
+    ? ( _hp_blob_has headers_blob `accept-encoding` ) {} {
+        ( bytes_extend_str req `Accept-Encoding: identity\r\n` )
+    }
+    ? & == keepalive 0 ! ( _hp_blob_has headers_blob `connection` ) {
+        ( bytes_extend_str req `Connection: close\r\n` )
+    } {}
 
     ? > body_len 0 {
         ( bytes_extend_str req `Content-Length: ` )
@@ -343,13 +430,13 @@ $ `stdlib/std/thread.nu`
 
 // ── header parsing ──────────────────────────────────────────────────
 
-// Find the end of the header block (index just past "\r\n\r\n") in raw,
-// or -1 if not present yet.
-@ __hp_find_header_end ( Vec u ) raw → i {
+// Find the end of the header block (index just past "\r\n\r\n") in raw
+// at/after `from`, or -1 if not present yet.
+@ __hp_find_header_end ( Vec u ) raw i from → i {
     : i n ( vec_len [u] raw )
-    ? < n 4 { ^ -1 } {}
+    ? < - n from 4 { ^ -1 } {}
     : *u d ( vec_data [u] raw )
-    : ~ i k 0
+    : ~ i k from
     ~ <= k - n 4 {
         ? & & == # i . d k 13 == # i . d + k 1 10
         & == # i . d + k 2 13 == # i . d + k 3 10 {
@@ -360,12 +447,19 @@ $ `stdlib/std/thread.nu`
     ^ -1
 }
 
-// Parse status line + headers from raw[0..hdr_end] into the state.
+// Parse status line + headers from raw[rawpos..hdr_end] into the state,
+// and settle the framing facts the body decoder and the connection pool
+// live by: HTTP/1.0 or `Connection: close` → the transport dies after
+// this response; HEAD / 1xx / 204 / 304 → no body follows (RFC 9112
+// §6.3); neither Content-Length nor chunked → body runs to EOF, so the
+// transport dies too.
 @ __hp_parse_headers * HttpStreamState st i hdr_end → v {
     : *u d ( vec_data [u] . st raw )
-    : String block ( string_from_bytes d hdr_end )
+    : i from . st rawpos
+    : String block ( string_from_bytes # *u + # i d from - hdr_end from )
     : ( Vec String ) lines ( string_split block `\r\n` )
     : i nl ( vec_len [String] lines )
+    : ~ b keep_alive_hdr F
 
     // Status line: "HTTP/1.1 200 OK".
     ? > nl 0 {
@@ -376,6 +470,7 @@ $ `stdlib/std/thread.nu`
             : s rest # s + # i sld + sp 1
             = . st status ( nurl_str_to_int rest )
         } {}
+        ? ( nurl_str_starts sld `HTTP/1.0` ) { = . st conn_close 1 } {}
     } {}
 
     : ~ i li 1
@@ -406,6 +501,12 @@ $ `stdlib/std/thread.nu`
                     = . st has_clen 1
                     = . st content_remaining ( nurl_str_to_int value )
                 } {}
+                ? ( nurl_str_eq lnm `connection` ) {
+                    : String lval ( __hp_to_lower value )
+                    ? >= ( nurl_str_find ( string_data lval ) `close` ) 0 { = . st conn_close 1 } {}
+                    ? >= ( nurl_str_find ( string_data lval ) `keep-alive` ) 0 { = keep_alive_hdr T } {}
+                    ( string_free lval )
+                } {}
                 ( string_free lname )
             } {}
         } {}
@@ -416,6 +517,28 @@ $ `stdlib/std/thread.nu`
     ( string_free block )
     = . st rawpos hdr_end
     = . st headers_done 1
+
+    // HTTP/1.0 with an explicit keep-alive stays open (we sent 1.1).
+    : i sc . st status
+    ? & == . st conn_close 1 keep_alive_hdr {
+        ? ( __hp_status_no_body sc ) { = . st conn_close 0 } { ? | != . st has_clen 0 != . st chunked 0 { = . st conn_close 0 } {} }
+    } {}
+    ? | != . st no_body 0 ( __hp_status_no_body sc ) {
+        = . st no_body 1
+        = . st finished 1
+    } {
+        ? & == . st chunked 0 == . st has_clen 0 {
+            = . st conn_close 1  // body is delimited by EOF
+        } {}
+        ? & != . st has_clen 0 <= . st content_remaining 0 { = . st finished 1 } {}
+    }
+}
+
+// Responses that carry no body whatever the headers say (RFC 9112 §6.3
+// rules 1-2): informational, 204 No Content, 304 Not Modified.
+@ __hp_status_no_body i sc → b {
+    ? & >= sc 100 < sc 200 { ^ T } {}
+    ^ | == sc 204 == sc 304
 }
 
 @ __hp_free_strings ( Vec String ) v → v {
@@ -469,6 +592,7 @@ $ `stdlib/std/thread.nu`
         : *u d ( vec_data [u] . st raw )
         ( bytes_extend_raw . st body # s + # i d . st rawpos take )
         = . st rawpos + . st rawpos take
+        = . st body_total + . st body_total take
         ? != . st has_clen 0 {
             = . st content_remaining - . st content_remaining take
             ? <= . st content_remaining 0 { = . st finished 1 } {}
@@ -489,7 +613,7 @@ $ `stdlib/std/thread.nu`
                     : i size ( __hp_parse_chunk_size st . st rawpos nl )
                     = . st rawpos + nl 2
                     ? == size 0 {
-                        = . st chunk_state 2
+                        = . st chunk_state 4
                     } {
                         = . st chunk_remaining size
                         = . st chunk_state 1
@@ -503,15 +627,30 @@ $ `stdlib/std/thread.nu`
                         : *u d ( vec_data [u] . st raw )
                         ( bytes_extend_raw . st body # s + # i d . st rawpos take )
                         = . st rawpos + . st rawpos take
+                        = . st body_total + . st body_total take
                         = . st chunk_remaining - . st chunk_remaining take
                         ? <= . st chunk_remaining 0 { = . st chunk_state 3 } {}
                     }
                 } {
-                    // state 3: consume the CRLF that terminates a chunk body.
-                    : i avail - n . st rawpos
-                    ? < avail 2 { = looping F } {
-                        = . st rawpos + . st rawpos 2
-                        = . st chunk_state 0
+                    ? == state 3 {
+                        // consume the CRLF that terminates a chunk body.
+                        : i avail - n . st rawpos
+                        ? < avail 2 { = looping F } {
+                            = . st rawpos + . st rawpos 2
+                            = . st chunk_state 0
+                        }
+                    } {
+                        // state 4: the trailer section after the last
+                        // chunk (RFC 9112 §7.1.2) — zero or more field
+                        // lines, then an empty line. Trailer fields are
+                        // consumed and dropped; the empty line ends the
+                        // message, and only then is the transport clean.
+                        : i nl ( __hp_find_crlf . st raw . st rawpos )
+                        ? < nl 0 { = looping F } {
+                            : b empty == nl . st rawpos
+                            = . st rawpos + nl 2
+                            ? empty { = . st chunk_state 2 } {}
+                        }
                     }
                 } } }
     }
@@ -549,47 +688,97 @@ $ `stdlib/std/thread.nu`
 
 // ── stream lifecycle ────────────────────────────────────────────────
 
-// Pump one socket read + decode pass. Sets finished/eof/err on the state.
+// Pump: decode what is already buffered; when that neither completes
+// the body nor yields new body bytes, do ONE socket read and decode
+// again. Sets finished/eof/err on the state. Decoding first matters on
+// a keep-alive connection: the body usually arrives with the headers,
+// and a read issued before decoding it would wait for bytes the server
+// — itself waiting for our next request — will never send.
 @ hp_stream_pump * HttpStreamState st → v {
     ? != . st finished 0 { ^ v } {}
     ? != . st err_kind 0 { = . st finished 1 ^ v } {}
+    : i had ( vec_len [u] . st body )
+    ( __hp_decode_available st )
+    ? & > . st body_max 0 > . st body_total . st body_max {
+        = . st err_kind 7
+        = . st finished 1
+        ^ v
+    } {}
+    ? | != . st finished 0 > ( vec_len [u] . st body ) had { ( __hp_compact st ) ^ v } {}
     : i r ( hp_conn_read_some . st conn . st raw )
     ? < r 0 {
-        = . st err_kind 6
+        = . st err_kind ? == r -2 2 6
         = . st finished 1
         ^ v
     } {}
     ? == r 0 {
         = . st eof 1
-        // Flush whatever remains, then we are done.
+        = . st conn_close 1
+        // Flush whatever remains, then we are done. A framed body cut
+        // short by EOF is an error, not a short body.
         ( __hp_decode_available st )
+        ? & != . st has_clen 0 > . st content_remaining 0 { = . st err_kind 6 } {}
+        ? & != . st chunked 0 != . st chunk_state 2 { = . st err_kind 6 } {}
         = . st finished 1
         ^ v
     } {}
     ( __hp_decode_available st )
+    ? & > . st body_max 0 > . st body_total . st body_max {
+        = . st err_kind 7
+        = . st finished 1
+        ^ v
+    } {}
     ( __hp_compact st )
 }
 
-// Drive reads until headers are parsed (or the transport dies). Returns
-// 0 on success, else a NURL_HTTP_ERR_* code.
+// Drive reads until the final response's headers are parsed (or the
+// transport dies). Interim 1xx responses (100 Continue, 103 Early Hints)
+// are consumed and skipped — RFC 9110 §15.2, a client must be able to
+// receive any number of them before the final response. Returns 0 on
+// success, else a NURL_HTTP_ERR_* code.
 @ __hp_read_headers * HttpStreamState st → i {
     : ~ b looping T
     ~ looping {
-        : i he ( __hp_find_header_end . st raw )
+        : i he ( __hp_find_header_end . st raw . st rawpos )
         ? >= he 0 {
             ( __hp_parse_headers st he )
-            = looping F
+            ? ( __hp_interim st ) {} { = looping F }
         } {
             : i r ( hp_conn_read_some . st conn . st raw )
-            ? < r 0 { ^ 6 } {}
+            ? < r 0 { ^ ? == r -2 2 6 } {}
             ? == r 0 {
                 // EOF before headers completed.
-                : i he2 ( __hp_find_header_end . st raw )
-                ? >= he2 0 { ( __hp_parse_headers st he2 ) = looping F } { ^ 6 }
+                : i he2 ( __hp_find_header_end . st raw . st rawpos )
+                ? >= he2 0 {
+                    ( __hp_parse_headers st he2 )
+                    ? ( __hp_interim st ) { ^ 6 } { = looping F }
+                } { ^ 6 }
             } {}
         }
     }
     ^ 0
+}
+
+// After parsing a header block: T when it was an interim 1xx (other than
+// 101 Switching Protocols, which ends HTTP/1.1 on the connection) — the
+// block is dropped and the state reset so the next one parses fresh.
+@ __hp_interim * HttpStreamState st → b {
+    : i sc . st status
+    ? | < sc 100 >= sc 200 { ^ F } {}
+    ? == sc 101 { ^ F } {}
+    ( __hp_free_strings . st hnames )
+    ( __hp_free_strings . st hvalues )
+    = . st hnames ( vec_new [String] )
+    = . st hvalues ( vec_new [String] )
+    = . st headers_done 0
+    = . st finished 0
+    = . st no_body 0
+    = . st conn_close 0
+    = . st chunked 0
+    = . st has_clen 0
+    = . st content_remaining 0
+    = . st status 0
+    ^ T
 }
 
 @ __hp_state_new HttpConn c → *HttpStreamState {
@@ -610,16 +799,82 @@ $ `stdlib/std/thread.nu`
     = . st finished 0
     = . st status 0
     = . st err_kind 0
+    = . st conn_close 0
+    = . st no_body 0
+    = . st body_max 0
+    = . st body_total 0
     ^ st
 }
 
+// Cap the decoded body; a response that grows past it ends with error 7
+// (the transport is then unusable — the rest of the body is unread).
+@ hp_stream_set_body_max * HttpStreamState st i max → v {
+    = . st body_max max
+}
+
+// One request/response exchange over a caller-owned transport, HTTP/1.1
+// keep-alive semantics (no `Connection: close` from us). No redirects:
+// a redirect is a complete response like any other, and the caller —
+// who owns the transport and the per-origin pool — decides where the
+// next request goes. `host`/`port`/`is_https` shape the Host header;
+// `target` is the request-target ("/path?query"). Headers are read
+// before this returns; the state is never null. Afterwards
+// hp_stream_release gives the transport back if it is still usable.
+@ hp_stream_open_on HttpConn conn s method s host i port i is_https s target
+* u body_ptr i body_len s headers_blob s ua → *HttpStreamState {
+    : *HttpStreamState st ( __hp_state_new conn )
+    ? ( nurl_str_eq method `HEAD` ) { = . st no_body 1 } {}
+    : ( Vec u ) req ( __hp_build_request method host port is_https target body_ptr body_len headers_blob ua 1 )
+    : i werr ( hp_conn_write conn req )
+    ( vec_free [u] req )
+    ? != werr 0 {
+        = . st err_kind werr
+        = . st finished 1
+        ^ st
+    } {}
+    : i herr ( __hp_read_headers st )
+    ? != herr 0 {
+        = . st err_kind herr
+        = . st finished 1
+    } {}
+    ^ st
+}
+
+// Detach the transport from a finished stream: Some(conn) when the
+// response left it reusable — body fully decoded, no error, no
+// `Connection: close`, no EOF-delimited body, and no stray bytes after
+// the body — else the transport is closed here. The state is freed
+// either way.
+@ hp_stream_release * HttpStreamState st → ?HttpConn {
+    : b clean & & == . st err_kind 0 != . st finished 0 == . st conn_close 0
+    : b drained == . st rawpos ( vec_len [u] . st raw )
+    ? & clean drained {
+        : HttpConn c . st conn
+        ( vec_free [u] . st raw )
+        ( vec_free [u] . st body )
+        ( __hp_free_strings . st hnames )
+        ( __hp_free_strings . st hvalues )
+        ( nurl_free # s st )
+        ^ @ ?HttpConn { T c }
+    } {}
+    ( hp_stream_close st )
+    ^ @ ?HttpConn { F # HttpConn 0 }
+}
+
 // Open a stream: parse the URL, connect, send the request, read headers,
-// following redirects up to `maxredir` when `follow` is set. Returns a
-// heap *HttpStreamState (never null); transport failures are recorded in
-// the state's err_kind with finished=1.
+// following redirects up to `maxredir` when `follow` is set. A 303, and a
+// 301/302 answering a POST, turn the next request into a body-less GET
+// (RFC 9110 §15.4.4 / §15.4.2-3 — what every browser does); 307/308
+// replay method and body. `timeout_ms` > 0 is the per-socket-operation
+// deadline (error 2 when it fires). Returns a heap *HttpStreamState
+// (never null); transport failures are recorded in the state's err_kind
+// with finished=1.
 @ hp_stream_open s method s url * u body_ptr i body_len s headers_blob
-i follow i maxredir i verify s ua → *HttpStreamState {
+i follow i maxredir i verify s ua i timeout_ms → *HttpStreamState {
     : ~ String cur_url ( string_from url )
+    : ~ String cur_method ( string_from method )
+    : ~ * u cur_body body_ptr
+    : ~ i cur_len body_len
     : ~ i redirects 0
     : ~ i result_p 0
     : ~ b looping T
@@ -648,8 +903,10 @@ i follow i maxredir i verify s ua → *HttpStreamState {
                         = looping F
                     }
                     T conn → {
+                        ? > timeout_ms 0 { ( hp_conn_set_timeout conn timeout_ms ) } {}
                         : *HttpStreamState st ( __hp_state_new conn )
-                        : ( Vec u ) req ( __hp_build_request method ( string_data . u host ) port is_https ( string_data tgt ) body_ptr body_len headers_blob ua )
+                        ? ( nurl_str_eq ( string_data cur_method ) `HEAD` ) { = . st no_body 1 } {}
+                        : ( Vec u ) req ( __hp_build_request ( string_data cur_method ) ( string_data . u host ) port is_https ( string_data tgt ) cur_body cur_len headers_blob ua 0 )
                         : i werr ( hp_conn_write conn req )
                         ( vec_free [u] req )
                         ? != werr 0 {
@@ -671,7 +928,7 @@ i follow i maxredir i verify s ua → *HttpStreamState {
                                 : b have_loc > ( string_len loc ) 0
                                 : b can_redir < redirects ? >= maxredir 0 maxredir 32
                                 ? & & is_redir have_loc can_redir {
-                                    : ?String nu ( __hp_resolve_redirect u ( string_data loc ) )
+                                    : ?String nu ( _hp_resolve_redirect u ( string_data loc ) )
                                     ?? nu {
                                         F _ → { = result_p # i st = looping F }
                                         T nus → {
@@ -679,6 +936,13 @@ i follow i maxredir i verify s ua → *HttpStreamState {
                                             ( string_free cur_url )
                                             = cur_url nus
                                             = redirects + redirects 1
+                                            : b to_get | == sc 303 & | == sc 301 == sc 302 != 0 ( nurl_str_eq ( string_data cur_method ) `POST` )
+                                            ? & to_get == 0 ( nurl_str_eq ( string_data cur_method ) `HEAD` ) {
+                                                ( string_free cur_method )
+                                                = cur_method ( string_from `GET` )
+                                                = cur_body # *u 0
+                                                = cur_len 0
+                                            } {}
                                         }
                                     }
                                 } {
@@ -696,6 +960,7 @@ i follow i maxredir i verify s ua → *HttpStreamState {
         }
     }
     ( string_free cur_url )
+    ( string_free cur_method )
     ^ # *HttpStreamState result_p
 }
 
@@ -723,29 +988,102 @@ i follow i maxredir i verify s ua → *HttpStreamState {
     ^ ( string_new )
 }
 
-// Resolve a (possibly relative) Location against the current URL.
-@ __hp_resolve_redirect Url base s loc → ?String {
+// Resolve a Location against the current URL — RFC 3986 §5.2 reference
+// resolution: absolute URLs as they are, "//host/x" takes the scheme,
+// "/x" the origin, and a relative path merges with the base path's
+// directory; "?q" keeps the base path; dot segments are removed; a
+// fragment never travels to the server.
+@ _hp_resolve_redirect Url base s loc → ?String {
     : i ll ( nurl_str_len loc )
     ? == ll 0 { ^ @ ?String { F # String 0 } } {}
     ? | ( nurl_str_starts loc `http://` ) ( nurl_str_starts loc `https://` ) {
-        ^ @ ?String { T ( string_from loc ) }
+        ^ @ ?String { T ( __hp_strip_fragment loc ) }
     } {}
     : String out ( string_new )
     ( string_push_str out ( string_data . base scheme ) )
-    ( string_push_str out `://` )
+    ( string_push_str out `:` )
+    ? ( nurl_str_starts loc `//` ) {
+        ( string_push_str out loc )
+        : String r ( __hp_strip_fragment ( string_data out ) )
+        ( string_free out )
+        ^ @ ?String { T r }
+    } {}
+    ( string_push_str out `//` )
     ( string_push_str out ( string_data . base host ) )
     : i port . base port
     ? >= port 0 {
         ( string_push_str out `:` )
         ( string_push_str out ( nurl_str_int port ) )
     } {}
-    ? == ( nurl_str_get loc 0 ) 47 {
-        ( string_push_str out loc )  // root-relative
+    : s bpath ( string_data . base path )
+    ? == ( nurl_str_get loc 0 ) 63 {
+        // "?query": the base path, new query.
+        ( string_push_str out ? > ( nurl_str_len bpath ) 0 bpath `/` )
+        ( string_push_str out loc )
     } {
-        ( string_push_str out `/` )
-        ( string_push_str out loc )  // best-effort relative
+        : String merged ( string_new )
+        ? == ( nurl_str_get loc 0 ) 47 {
+            ( string_push_str merged loc )
+        } {
+            // Directory of the base path (through its last "/"), then loc.
+            : i bl ( nurl_str_len bpath )
+            : ~ i cut - bl 1
+            ~ & >= cut 0 != ( nurl_str_get bpath cut ) 47 { = cut - cut 1 }
+            ? >= cut 0 { ( string_push_str merged ( nurl_str_slice bpath 0 + cut 1 ) ) } { ( string_push_str merged `/` ) }
+            ( string_push_str merged loc )
+        }
+        : String dotless ( __hp_remove_dot_segments ( string_data merged ) )
+        ( string_push_str out ( string_data dotless ) )
+        ( string_free dotless )
+        ( string_free merged )
     }
-    ^ @ ?String { T out }
+    : String r ( __hp_strip_fragment ( string_data out ) )
+    ( string_free out )
+    ^ @ ?String { T r }
+}
+
+@ __hp_strip_fragment s in → String {
+    : i h ( nurl_str_find in `#` )
+    ^ ? >= h 0 ( string_from ( nurl_str_slice in 0 h ) ) ( string_from in )
+}
+
+// RFC 3986 §5.2.4 on "path?query": "." and ".." segments are resolved in
+// the path part; the query rides along untouched.
+@ __hp_remove_dot_segments s in → String {
+    : i q ( nurl_str_find in `?` )
+    : i plen ? >= q 0 q ( nurl_str_len in )
+    : ( Vec String ) segs ( vec_new [String] )
+    : ~ i k 0
+    : ~ b trailing_slash F
+    ~ < k plen {
+        : ~ i e k
+        ~ & < e plen != ( nurl_str_get in e ) 47 { = e + e 1 }
+        : s seg ( nurl_str_slice in k - e k )
+        ? ( nurl_str_eq seg `..` ) {
+            : i n ( vec_len [String] segs )
+            ? > n 0 { ?? ( vec_pop [String] segs ) { T x → ( string_free x ) F _ → {} } } {}
+            = trailing_slash T
+        } {
+            ? ( nurl_str_eq seg `.` ) { = trailing_slash T } {
+                ? > - e k 0 { ( vec_push [String] segs ( string_from seg ) ) = trailing_slash F } { = trailing_slash T }
+            }
+        }
+        = k + e 1
+    }
+    : String out ( string_new )
+    : i n ( vec_len [String] segs )
+    ? == n 0 { ( string_push_str out `/` ) } {}
+    : ~ i i 0
+    ~ < i n {
+        ( string_push_str out `/` )
+        : String sg ( __hp_vec_string_at segs i )
+        ( string_push_str out ( string_data sg ) )
+        = i + i 1
+    }
+    ? & > n 0 | trailing_slash == ( nurl_str_get in - plen 1 ) 47 { ( string_push_str out `/` ) } {}
+    ? >= q 0 { ( string_push_str out ( nurl_str_slice in q - ( nurl_str_len in ) q ) ) } {}
+    ( __hp_free_strings segs )
+    ^ out
 }
 
 // Free everything the state owns.
@@ -765,12 +1103,12 @@ i follow i maxredir i verify s ua → *HttpStreamState {
 //   slot 0 status, 1 err_kind, 2 header_count, 3 headers*, 4 body*, 5 body_len.
 // Returns the i64 heap pointer (0 only on the response-struct alloc fail).
 @ hp_perform s url s method * u body_ptr i body_len s headers_blob
-i follow i maxredir i verify s ua → i {
+i follow i maxredir i verify s ua i timeout_ms → i {
     : i resp # i ( nurl_zalloc 48 )
     ? == resp 0 { ^ 0 } {}
     : *u rp # *u resp
 
-    : *HttpStreamState st ( hp_stream_open method url body_ptr body_len headers_blob follow maxredir verify ua )
+    : *HttpStreamState st ( hp_stream_open method url body_ptr body_len headers_blob follow maxredir verify ua timeout_ms )
 
     // Pump body to completion.
     ~ == . st finished 0 { ( hp_stream_pump st ) }
@@ -831,6 +1169,20 @@ i follow i maxredir i verify s ua → i {
 
 @ hp_stream_finished * HttpStreamState st → i {
     ^ . st finished
+}
+
+// 1 when the response declared (or framed) the transport as single-use.
+@ hp_stream_conn_close * HttpStreamState st → i {
+    ^ . st conn_close
+}
+
+// Take ownership of the fully-decoded body, leaving the stream with a
+// fresh empty one. For the buffered/facade path that assembles its own
+// response object after pumping to completion.
+@ hp_stream_body_take * HttpStreamState st → ( Vec u ) {
+    : ( Vec u ) out . st body
+    = . st body ( vec_new [u] )
+    ^ out
 }
 
 // Headers are parsed at open; this just reports the status (0 if the

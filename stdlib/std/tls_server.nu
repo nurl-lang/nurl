@@ -1324,26 +1324,8 @@ $ `stdlib/std/aes_gcm.nu`
     ^ r
 }
 
-// Pack a space-separated protocol list ("h2 http/1.1") into ALPN wire
-// form: [len:1][name] per entry, in the given order. Names longer than
-// 255 bytes cannot be encoded and are dropped; empty tokens are skipped.
-@ tls_alpn_pack s list → ( Vec u ) {
-    : ( Vec u ) out ( vec_new [u] )
-    : i n ( nurl_str_len list )
-    : ~ i p 0
-    ~ < p n {
-        ~ & < p n == ( nurl_str_get list p ) 32 { = p + p 1 }
-        : i start p
-        ~ & < p n != ( nurl_str_get list p ) 32 { = p + p 1 }
-        : i tl - p start
-        ? & > tl 0 <= tl 255 {
-            ( vec_push [u] out # u tl )
-            : ~ i k start
-            ~ < k p { ( vec_push [u] out # u ( nurl_str_get list k ) ) = k + k 1 }
-        } {}
-    }
-    ^ out
-}
+// `tls_alpn_pack` (the wire form of a "h2 http/1.1" list) lives in
+// tls.nu: the client offers with it, the listener prefers with it.
 
 // Accept a TLS 1.3 connection with an RSA leaf certificate, signing the
 // CertificateVerify with RSASSA-PSS (rsa_pss_rsae_sha256). `rsa_n` /

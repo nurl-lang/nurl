@@ -1,0 +1,7 @@
+[package]
+name = "http-client"
+version = "0.1.0"
+description = "The unified HTTP client interface for NURL — one dependency for anything that needs to FETCH over HTTP. A single importable facade over the stdlib client stack (pure-NURL TLS 1.3 with post-quantum key exchange and ML-DSA certificates, the HTTP/1.1 keep-alive client, the multiplexed HTTP/2 client, cookies, gzip/deflate): an `HttpClient` that speaks whichever protocol the server offers — HTTP/2 or HTTP/1.1 by ALPN — pools connections per origin, resumes TLS sessions, follows redirects, keeps a cookie jar and decodes compressed bodies, so `( http_client_new )` and `( http_client_get c url )` are a complete client."
+license = "MIT OR Apache-2.0"
+
+[dependencies]

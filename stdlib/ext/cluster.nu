@@ -121,6 +121,7 @@ $ `stdlib/ext/http_server.nu`
         HttpDns → @ ClusterErr { ClNet }
         HttpInvalidUrl → @ ClusterErr { ClNet }
         HttpOther → @ ClusterErr { ClNet }
+        HttpTooLarge → @ ClusterErr { ClNet }
     }
 }
 
