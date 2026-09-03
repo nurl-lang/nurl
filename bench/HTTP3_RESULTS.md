@@ -1,6 +1,6 @@
 # NURL HTTP/3-server peer-comparison
 
-Generated `2026-09-02T22:00:53Z` by `bench/run_http3.sh`. **Do not edit by hand** — the next run overwrites it.
+Generated `2026-09-03T09:53:18Z` by `bench/run_http3.sh`. **Do not edit by hand** — the next run overwrites it.
 
 The HTTP/3 companion of [`HTTP_RESULTS.md`](HTTP_RESULTS.md) (HTTP/1.1) and [`HTTP2_RESULTS.md`](HTTP2_RESULTS.md) (HTTP/2), which stay as they are. Each implementation terminates QUIC (RFC 9000/9001/9002) on a UDP socket, speaks HTTP/3 (RFC 9114 + QPACK, RFC 9204) and answers every request on every stream with the same 14-byte `Hello, World!\n` body (`text/plain`), over a self-signed EC (P-256) certificate the generator accepts without verification.
 
@@ -12,14 +12,15 @@ The NURL server is `bench/http_server.nu` **unchanged from the HTTP/1.1 and HTTP
 
 | Item | Value |
 |---|---|
-| Host | `Linux x86_64` |
-| Kernel | `Linux 7.0.0-30-generic x86_64` |
-| CPU | Intel(R) Core(TM) i7-5930K CPU @ 3.50GHz (12 logical cores) |
-| Memory | 32770944 KiB |
-| Commit | `86a973f55f385e3acdf57d273e2587972f9b6fc6` |
-| NURL | `v0.58.0-18-g86a973f5-dirty` |
-| Rust | rustc 1.97.1 (8bab26f4f 2026-07-14) |
-| Load generator | h2load nghttp2/1.71.0-DEV (docker nghttp2-h3) |
+| Host | `GitHub Actions ubuntu-latest runner` |
+| Kernel | `Linux 6.17.0-1022-azure x86_64` |
+| CPU | AMD EPYC 7763 64-Core Processor (4 logical cores) |
+| Memory | 16373452 KiB |
+| Commit | `cdd5b317376ef7fa7f153c44af8daa78577536c9` |
+| CI run | https://github.com/nurl-lang/nurl/actions/runs/33740577353 |
+| NURL | `v0.59.0-3-gcdd5b317` |
+| Rust | rustc 1.98.0 (88d9e12ae 2026-08-18) |
+| Load generator | h2load nghttp2/1.70.0 (docker nghttp2-h3) |
 
 | Setting | Value |
 |---|---|
@@ -32,14 +33,14 @@ The NURL server is `bench/http_server.nu` **unchanged from the HTTP/1.1 and HTTP
 
 |              | Server  | 1 x 1 | 1 x 10 | 1 x 100 | 10 x 1 | 10 x 10 | 50 x 1 | 50 x 10 |
 |--------------|---------|--------:|--------:|--------:|--------:|--------:|--------:|--------:|
-| **req/s**    | NURL    | **7 801** | **37 045** | **139 346** | **34 223** | **123 025** | **31 749** | **121 786** |
-|              | Rust    | 51 | 8 308 | 12 092 | 402 | 47 499 | 1 903 | 32 129 |
-| **p50 (ms)** | NURL    | **0.11** | **0.26** | 0.56‡ | **0.28** | 0.79 | **1.55** | **3.94** |
-|              | Rust    | 25.95 | 1.12 | **8.19** | 26.27 | **0.49** | 26.46 | 25.82 |
-| **p99 (ms)** | NURL    | **0.27** | **0.55** | 0.91‡ | **0.48** | **1.32** | **2.11** | **6.63** |
-|              | Rust    | 26.97 | 2.88 | **12.43** | 27.22 | 26.05 | 27.74 | 27.21 |
+| **req/s**    | NURL    | **10 223** | **65 648** | **167 693** | **36 044** | **137 410** | **35 170** | **139 478** |
+|              | Rust    | 52 | 20 157 | 48 742 | 400 | 37 527 | 1 920 | 25 834 |
+| **p50 (ms)** | NURL    | **0.09** | **0.14** | 0.45‡ | **0.25** | 0.70 | **1.40** | **3.53** |
+|              | Rust    | 26.39 | 0.44 | 1.41‡ | 26.19 | **0.52** | 26.24 | 26.02 |
+| **p99 (ms)** | NURL    | **0.12** | **0.18** | 0.73‡ | **0.47** | **1.36** | **1.64** | **6.46** |
+|              | Rust    | 26.73 | 1.24 | 3.02‡ | 27.12 | 26.20 | 27.27 | 27.35 |
 
-‡ closed-loop starved (NURL 1x100: ~80.8 in flight).
+‡ closed-loop starved (NURL 1x100: ~78.8 in flight; Rust 1x100: ~71.7 in flight).
 
 ## 2. NURL, same server and listener: HTTP/3 vs HTTP/2 (M = 1)
 
@@ -47,9 +48,9 @@ The same binary and the same host:port — QUIC over UDP for HTTP/3, TLS over TC
 
 | C | HTTP/3 req/s | HTTP/2 req/s | HTTP/3 / HTTP/2 | HTTP/3 p50 (ms) | HTTP/2 p50 (ms) |
 |--:|-----------:|-----------:|---------------:|----------------:|----------------:|
-| 1 | 7 801 | 20 455 | 0.38x | 0.11 | 0.04 |
-| 10 | 34 223 | 30 697 | 1.11x | 0.28 | 0.17 |
-| 50 | 31 749 | 33 790 | 0.94x | 1.55 | 0.72 |
+| 1 | 10 223 | 1 000 | 10.22x | 0.09 | 0.04 |
+| 10 | 36 044 | 10 000 | 3.60x | 0.25 | 0.21 |
+| 50 | 35 170 | 32 473 | 1.08x | 1.40 | 0.79 |
 
 ## 3. Connection setup rate
 
@@ -57,9 +58,9 @@ The same binary and the same host:port — QUIC over UDP for HTTP/3, TLS over TC
 
 | Server | Protocol | conn/s |
 |---|---|------:|
-| NURL | HTTP/3 (QUIC) | 855 |
-| NURL | HTTP/2 (TLS+TCP) | 910 |
-| Rust | HTTP/3 (QUIC) | 815 |
+| NURL | HTTP/3 (QUIC) | 1 089 |
+| NURL | HTTP/2 (TLS+TCP) | 935 |
+| Rust | HTTP/3 (QUIC) | 1 008 |
 
 (Best per column in **bold**; latency winners are chosen only among non-starved cells. ‡ = closed-loop starved. `n/a` = tool absent; `FAIL` = the server did not complete that cell.)
 
