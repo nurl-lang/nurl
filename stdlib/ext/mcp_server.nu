@@ -60,17 +60,37 @@
 //
 // ── STABLE SURFACE ───────────────────────────────────────────────────
 //
-// Public API = the `mcp_server_*` functions and the `McpServerErr`
-// enum, and nothing else. Everything `__`-prefixed is internal and
-// changes without notice; `McpServer` and its record types are
-// OPAQUE — read them through the accessors, never by field
-// (`. srv tools`), or a field reorder underneath breaks you silently.
+// Public API = the `mcp_server_*` / `mcp_rpc_err_*` functions and the
+// `McpServerErr` enum, and nothing else. Everything `__`-prefixed is
+// internal and changes without notice; `McpServer` and `McpRpcErr` are
+// OPAQUE — every field is `__`-prefixed so that reaching in
+// (`. srv __tools`) reads at the call site as the violation it is.
+// Use the accessors and a field reorder underneath cannot touch you.
+//
+// The compatibility rules this module holds itself to, so that work
+// underneath cannot break code above it:
+//
+//   1. No existing function ever gains a parameter. NURL has no
+//      default arguments, so a new parameter is a break at every call
+//      site. Extensions arrive as NEW functions beside the old ones,
+//      or as setters on the handle.
+//   2. `McpServerErr` is FROZEN at its three variants. `??` over an
+//      enum is exhaustive, so a fourth variant breaks every consumer's
+//      match. New failure detail arrives through
+//      `mcp_server_err_name`, not through new variants. `McpRpcErr` is
+//      a struct precisely so that a new JSON-RPC failure is a new
+//      CODE, not a new variant.
+//   3. Handler types are FROZEN: `( @ Json Json )` for tools, prompts
+//      and completions, `( @ Json )` for resources.
 //
 // Memory model:
 //   McpServer OWNS its String + Json fields + the Vec containers.
 //   `mcp_server_add_*` CONSUMES the name / description / schema it is
 //   given and BORROWS the handler closure — the handler must outlive
-//   the server (a top-level `@` function reference always does).
+//   the server. A bare function name is not a closure value in NURL, so
+//   a top-level handler is wrapped at the registration site:
+//   `\ Json a → Json { ^ ( my_tool a ) }`. That wrapper captures
+//   nothing and lives as long as the program.
 //   `mcp_server_dispatch` / `_envelope` return an OWNED Json; the
 //   caller frees it with json_free (the transports here already do).
 
@@ -132,16 +152,74 @@ $ `stdlib/ext/http_response.nu`
     ( @ Json Json ) handler
 }
 
-// ── Registry ──────────────────────────────────────────────────────────
+// ── Protocol-level failure ────────────────────────────────────────────
+//
+// A dispatch either produces a RESULT or fails at the JSON-RPC level,
+// and those are different things — so they travel in different places.
+// The earlier design signalled failure in-band, as a `__error__` key on
+// the result object, which had two problems. It shared a namespace with
+// whatever a handler returned (a resource handler emitting a field of
+// that name became a protocol error), and having no room for a code it
+// mapped every failure to -32601 "method not found" — so a `prompts/get`
+// missing its `name` told the client the method did not exist, and the
+// client dutifully stopped calling it.
+//
+// `!Json McpRpcErr` has room for the code and cannot collide with
+// handler output, because the failure is not a Json object at all.
+//
+// OPAQUE: read it with `mcp_rpc_err_code` / `_message`, free it with
+// `mcp_rpc_err_free`. Owned `__message` — the envelope layer frees.
+
+: McpRpcErr {
+    i __code
+    String __message
+}
+
+@ mcp_rpc_err i code s message → McpRpcErr {
+    ^ @ McpRpcErr { code ( string_from message ) }
+}
+
+@ mcp_rpc_err_code McpRpcErr e → i { ^ . e __code }
+
+@ mcp_rpc_err_message McpRpcErr e → s { ^ ( string_data . e __message ) }
+
+@ mcp_rpc_err_free McpRpcErr e → v { ( string_free . e __message ) }
+
+// ── The server handle ─────────────────────────────────────────────────
+//
+// OPAQUE. Every field is `__`-prefixed for one reason: so that a
+// consumer reaching in (`. srv __tools`) reads at the call site as the
+// contract violation it is. Read the handle through the accessors
+// below — `mcp_server_name`, `_version`, `_tool_count`, `_has_tool` —
+// and a field reorder or a new field underneath cannot touch you.
+//
+// `__ctl` is a one-slot ( Vec i ) holding the serving flag, and it is
+// a Vec rather than an `i` field for a reason worth stating: a struct
+// is passed BY VALUE in NURL, so `= . r __frozen 1` inside a method
+// writes to that method's own copy and no caller ever sees it. A Vec
+// shares its control block across copies — the same property that
+// makes `mcp_server_add_tool` work at all — so the flag set during a
+// dispatch is visible to a later `add`. (nurlc now warns on the scalar
+// form; this module is where that warning was first earned.)
+//
+// The flag flips on the first dispatch, and registration after that
+// point fails loudly at the `add` (see `__mcp_server_check_open`).
+// `tools/list` results carry `ttlMs: 60000`, so a client may legally
+// cache the tool list — a tool registered after the first request is
+// invisible to that client until its cache expires, and invisible to
+// the author entirely.
 
 : McpServer {
-    String server_name
-    String server_version
-    ( Vec McpTool ) tools
-    ( Vec McpPrompt ) prompts
-    ( Vec McpResource ) resources
-    ( Vec McpCompletion ) completions
+    String __name
+    String __version
+    ( Vec McpTool ) __tools
+    ( Vec McpPrompt ) __prompts
+    ( Vec McpResource ) __resources
+    ( Vec McpCompletion ) __completions
+    ( Vec i ) __ctl
 }
+
+: i MCP_CTL_SERVING 0
 
 @ mcp_server_new s name s version → McpServer {
     ^ @ McpServer {
@@ -151,15 +229,43 @@ $ `stdlib/ext/http_response.nu`
         ( vec_new [McpPrompt] )
         ( vec_new [McpResource] )
         ( vec_new [McpCompletion] )
+        ( __mcp_ctl_new )
     }
 }
 
+@ __mcp_ctl_new → ( Vec i ) {
+    : ( Vec i ) c ( vec_with_cap [i] 1 )
+    ( vec_push [i] c 0 )
+    ^ c
+}
+
+// ── Accessors (the supported way to read the handle) ──────────────────
+
+@ mcp_server_name McpServer r → s { ^ ( string_data . r __name ) }
+
+@ mcp_server_version McpServer r → s { ^ ( string_data . r __version ) }
+
+@ mcp_server_tool_count McpServer r → i { ^ ( vec_len [McpTool] . r __tools ) }
+
+@ mcp_server_prompt_count McpServer r → i { ^ ( vec_len [McpPrompt] . r __prompts ) }
+
+@ mcp_server_resource_count McpServer r → i { ^ ( vec_len [McpResource] . r __resources ) }
+
+@ mcp_server_has_tool McpServer r s name → b {
+    ^ >= ( __mcp_find_tool_index r name ) 0
+}
+
+// T once the server has served its first request — see `__ctl`.
+@ mcp_server_is_serving McpServer r → b {
+    ?? ( vec_get [i] . r __ctl MCP_CTL_SERVING ) { T v → { ^ != v 0 } F → { ^ F } }
+}
+
 @ mcp_server_free McpServer r → v {
-    ( string_free . r server_name )
-    ( string_free . r server_version )
+    ( string_free . r __name )
+    ( string_free . r __version )
     // Tools
-    : i tn ( vec_len [McpTool] . r tools )
-    : *McpTool tp ( vec_data [McpTool] . r tools )
+    : i tn ( vec_len [McpTool] . r __tools )
+    : *McpTool tp ( vec_data [McpTool] . r __tools )
     : ~ i k 0
     ~ < k tn {
         : McpTool t . tp k
@@ -168,10 +274,10 @@ $ `stdlib/ext/http_response.nu`
         ( json_free . t input_schema )
         = k + k 1
     }
-    ( vec_free [McpTool] . r tools )
+    ( vec_free [McpTool] . r __tools )
     // Prompts
-    : i pn ( vec_len [McpPrompt] . r prompts )
-    : *McpPrompt pp ( vec_data [McpPrompt] . r prompts )
+    : i pn ( vec_len [McpPrompt] . r __prompts )
+    : *McpPrompt pp ( vec_data [McpPrompt] . r __prompts )
     = k 0
     ~ < k pn {
         : McpPrompt p . pp k
@@ -180,10 +286,10 @@ $ `stdlib/ext/http_response.nu`
         ( json_free . p arguments_schema )
         = k + k 1
     }
-    ( vec_free [McpPrompt] . r prompts )
+    ( vec_free [McpPrompt] . r __prompts )
     // Resources
-    : i rn ( vec_len [McpResource] . r resources )
-    : *McpResource rp ( vec_data [McpResource] . r resources )
+    : i rn ( vec_len [McpResource] . r __resources )
+    : *McpResource rp ( vec_data [McpResource] . r __resources )
     = k 0
     ~ < k rn {
         : McpResource res . rp k
@@ -193,10 +299,10 @@ $ `stdlib/ext/http_response.nu`
         ( string_free . res description )
         = k + k 1
     }
-    ( vec_free [McpResource] . r resources )
+    ( vec_free [McpResource] . r __resources )
     // Completions
-    : i cn ( vec_len [McpCompletion] . r completions )
-    : *McpCompletion cp ( vec_data [McpCompletion] . r completions )
+    : i cn ( vec_len [McpCompletion] . r __completions )
+    : *McpCompletion cp ( vec_data [McpCompletion] . r __completions )
     = k 0
     ~ < k cn {
         : McpCompletion c . cp k
@@ -204,31 +310,68 @@ $ `stdlib/ext/http_response.nu`
         ( string_free . c ref_id )
         = k + k 1
     }
-    ( vec_free [McpCompletion] . r completions )
+    ( vec_free [McpCompletion] . r __completions )
+    ( vec_free [i] . r __ctl )
+}
+
+// ── Registration guards ───────────────────────────────────────────────
+//
+// A duplicate name or a late registration is a bug in the SERVER, not
+// in any request, so both are caught at startup and loudly. The
+// alternatives are worse than a panic: a duplicate silently shadows —
+// `tools/list` advertises two entries, `tools/call` only ever reaches
+// the first, and the tool that does nothing is the one the author just
+// wrote. A late registration can reallocate a Vec that a dispatch in
+// flight is holding a `vec_data` pointer into, which is a
+// use-after-free that shows up as corruption under load, far from its
+// cause.
+
+@ __mcp_server_reject s kind s name s why → v {
+    : String m ( string_from `mcp_server: cannot register ` )
+    ( string_push_str m kind )
+    ( string_push_str m ` "` )
+    ( string_push_str m name )
+    ( string_push_str m `" — ` )
+    ( string_push_str m why )
+    ( panic ( string_data m ) )
+}
+
+// Every `mcp_server_add_*` calls this first. `dup` is the index a
+// lookup returned, or -1 when the name is free.
+@ __mcp_server_check_open McpServer r s kind s name i dup → v {
+    ? ( mcp_server_is_serving r ) {
+        ( __mcp_server_reject kind name `the server is already serving requests` )
+    } {}
+    ? >= dup 0 {
+        ( __mcp_server_reject kind name `that name is already registered` )
+    } {}
 }
 
 // CONSUMES `name`, `description`, `schema`. Handler is borrowed.
 @ mcp_server_add_tool McpServer r s name s description Json schema ( @ Json Json ) handler → v {
+    ( __mcp_server_check_open r `tool` name ( __mcp_find_tool_index r name ) )
     : McpTool t @ McpTool {
         ( string_from name )
         ( string_from description )
         schema
         handler
     }
-    ( vec_push [McpTool] . r tools t )
+    ( vec_push [McpTool] . r __tools t )
 }
 
 @ mcp_server_add_prompt McpServer r s name s description Json args_schema ( @ Json Json ) handler → v {
+    ( __mcp_server_check_open r `prompt` name ( __mcp_find_prompt_index r name ) )
     : McpPrompt p @ McpPrompt {
         ( string_from name )
         ( string_from description )
         args_schema
         handler
     }
-    ( vec_push [McpPrompt] . r prompts p )
+    ( vec_push [McpPrompt] . r __prompts p )
 }
 
 @ mcp_server_add_resource McpServer r s uri s name s mime_type s description ( @ Json ) handler → v {
+    ( __mcp_server_check_open r `resource` uri ( __mcp_find_resource_index r uri ) )
     : McpResource res @ McpResource {
         ( string_from uri )
         ( string_from name )
@@ -236,7 +379,7 @@ $ `stdlib/ext/http_response.nu`
         ( string_from description )
         handler
     }
-    ( vec_push [McpResource] . r resources res )
+    ( vec_push [McpResource] . r __resources res )
 }
 
 // Register a completion provider. `ref_type` is `ref/prompt` or
@@ -245,19 +388,21 @@ $ `stdlib/ext/http_response.nu`
 // object and returns a Json array of candidate string values.
 // CONSUMES `ref_type`, `ref_id`. Handler is borrowed.
 @ mcp_server_add_completion McpServer r s ref_type s ref_id ( @ Json Json ) handler → v {
+    ( __mcp_server_check_open r `completion` ref_id
+    ( __mcp_find_completion_index r ref_type ref_id ) )
     : McpCompletion c @ McpCompletion {
         ( string_from ref_type )
         ( string_from ref_id )
         handler
     }
-    ( vec_push [McpCompletion] . r completions c )
+    ( vec_push [McpCompletion] . r __completions c )
 }
 
 // ── Lookup helpers ────────────────────────────────────────────────────
 
 @ __mcp_find_tool_index McpServer r s name → i {
-    : i n ( vec_len [McpTool] . r tools )
-    : *McpTool tp ( vec_data [McpTool] . r tools )
+    : i n ( vec_len [McpTool] . r __tools )
+    : *McpTool tp ( vec_data [McpTool] . r __tools )
     : ~ i k 0
     : ~ i found -1
     ~ & == found -1 < k n {
@@ -269,8 +414,8 @@ $ `stdlib/ext/http_response.nu`
 }
 
 @ __mcp_find_prompt_index McpServer r s name → i {
-    : i n ( vec_len [McpPrompt] . r prompts )
-    : *McpPrompt pp ( vec_data [McpPrompt] . r prompts )
+    : i n ( vec_len [McpPrompt] . r __prompts )
+    : *McpPrompt pp ( vec_data [McpPrompt] . r __prompts )
     : ~ i k 0
     : ~ i found -1
     ~ & == found -1 < k n {
@@ -282,8 +427,8 @@ $ `stdlib/ext/http_response.nu`
 }
 
 @ __mcp_find_resource_index McpServer r s uri → i {
-    : i n ( vec_len [McpResource] . r resources )
-    : *McpResource rp ( vec_data [McpResource] . r resources )
+    : i n ( vec_len [McpResource] . r __resources )
+    : *McpResource rp ( vec_data [McpResource] . r __resources )
     : ~ i k 0
     : ~ i found -1
     ~ & == found -1 < k n {
@@ -295,8 +440,8 @@ $ `stdlib/ext/http_response.nu`
 }
 
 @ __mcp_find_completion_index McpServer r s ref_type s ref_id → i {
-    : i n ( vec_len [McpCompletion] . r completions )
-    : *McpCompletion cp ( vec_data [McpCompletion] . r completions )
+    : i n ( vec_len [McpCompletion] . r __completions )
+    : *McpCompletion cp ( vec_data [McpCompletion] . r __completions )
     : ~ i k 0
     : ~ i found -1
     ~ & == found -1 < k n {
@@ -315,13 +460,13 @@ $ `stdlib/ext/http_response.nu`
 // entries. Empty object = "supported with no extra options".
 @ __mcp_server_caps McpServer r → Json {
     : Json caps ( json_obj_new )
-    ? > ( vec_len [McpTool] . r tools ) 0
+    ? > ( vec_len [McpTool] . r __tools ) 0
     { ( json_obj_set caps `tools` ( json_obj_new ) ) } {}
-    ? > ( vec_len [McpPrompt] . r prompts ) 0
+    ? > ( vec_len [McpPrompt] . r __prompts ) 0
     { ( json_obj_set caps `prompts` ( json_obj_new ) ) } {}
-    ? > ( vec_len [McpResource] . r resources ) 0
+    ? > ( vec_len [McpResource] . r __resources ) 0
     { ( json_obj_set caps `resources` ( json_obj_new ) ) } {}
-    ? > ( vec_len [McpCompletion] . r completions ) 0
+    ? > ( vec_len [McpCompletion] . r __completions ) 0
     { ( json_obj_set caps `completions` ( json_obj_new ) ) } {}
     ^ caps
 }
@@ -333,8 +478,8 @@ $ `stdlib/ext/http_response.nu`
 // would disconnect on a non-handshake revision like 2026-07-28).
 @ __mcp_dispatch_initialize McpServer r ? Json params → Json {
     : Json info ( json_obj_new )
-    ( json_obj_set info `name` ( json_str_lit ( string_data . r server_name ) ) )
-    ( json_obj_set info `version` ( json_str_lit ( string_data . r server_version ) ) )
+    ( json_obj_set info `name` ( json_str_lit ( string_data . r __name ) ) )
+    ( json_obj_set info `version` ( json_str_lit ( string_data . r __version ) ) )
 
     : Json caps ( __mcp_server_caps r )
     : s ver ( mcp_initialize_version_for params )
@@ -349,8 +494,8 @@ $ `stdlib/ext/http_response.nu`
 // identity. The registry has no instructions channel yet — empty.
 @ __mcp_dispatch_discover McpServer r → Json {
     ^ ( mcp_discover_result
-    ( string_data . r server_name )
-    ( string_data . r server_version )
+    ( string_data . r __name )
+    ( string_data . r __version )
     ( __mcp_server_caps r )
     `` )
 }
@@ -358,8 +503,8 @@ $ `stdlib/ext/http_response.nu`
 // tools/list: build the array of {name, description, inputSchema}.
 @ __mcp_dispatch_tools_list McpServer r → Json {
     : Json arr ( json_arr_new )
-    : i n ( vec_len [McpTool] . r tools )
-    : *McpTool tp ( vec_data [McpTool] . r tools )
+    : i n ( vec_len [McpTool] . r __tools )
+    : *McpTool tp ( vec_data [McpTool] . r __tools )
     : ~ i k 0
     ~ < k n {
         : McpTool t . tp k
@@ -413,7 +558,7 @@ $ `stdlib/ext/http_response.nu`
         ( string_free msg )
         ^ out
     } {}
-    : *McpTool tp ( vec_data [McpTool] . r tools )
+    : *McpTool tp ( vec_data [McpTool] . r __tools )
     : McpTool t . tp idx
     : ( @ Json Json ) h . t handler
     // Run the user handler under `recover` so a panic inside it doesn't
@@ -446,8 +591,8 @@ $ `stdlib/ext/http_response.nu`
 // prompts/list: build the array of {name, description, arguments}.
 @ __mcp_dispatch_prompts_list McpServer r → Json {
     : Json arr ( json_arr_new )
-    : i n ( vec_len [McpPrompt] . r prompts )
-    : *McpPrompt pp ( vec_data [McpPrompt] . r prompts )
+    : i n ( vec_len [McpPrompt] . r __prompts )
+    : *McpPrompt pp ( vec_data [McpPrompt] . r __prompts )
     : ~ i k 0
     ~ < k n {
         : McpPrompt p . pp k
@@ -467,7 +612,7 @@ $ `stdlib/ext/http_response.nu`
 // prompts/get: invoke the prompt handler with `arguments`. Handler
 // returns the spec-shaped {description, messages} object (or just
 // messages; we wrap if missing).
-@ __mcp_dispatch_prompts_get McpServer r ? Json params → Json {
+@ __mcp_dispatch_prompts_get McpServer r ? Json params → !Json McpRpcErr {
     : ~ s pname ``
     : ~ Json args ( json_null )
     ?? params {
@@ -487,29 +632,26 @@ $ `stdlib/ext/http_response.nu`
     }
     ? == 0 ( nurl_str_len pname ) {
         ( json_free args )
-        : Json e ( json_obj_new )
-        ( json_obj_set e `__error__` ( json_str_lit `missing prompt name` ) )
-        ^ e
+        ^ @ !Json McpRpcErr { F ( mcp_rpc_err mcp_err_invalid_params
+            `prompts/get requires a "name" parameter` ) }
     } {}
     : i idx ( __mcp_find_prompt_index r pname )
     ? < idx 0 {
         ( json_free args )
-        : Json e ( json_obj_new )
-        ( json_obj_set e `__error__` ( json_str_lit `unknown prompt` ) )
-        ^ e
+        : String m ( string_from `unknown prompt: ` )
+        ( string_push_str m pname )
+        : McpRpcErr e ( mcp_rpc_err mcp_err_invalid_params ( string_data m ) )
+        ( string_free m )
+        ^ @ !Json McpRpcErr { F e }
     } {}
-    : *McpPrompt pp ( vec_data [McpPrompt] . r prompts )
+    : *McpPrompt pp ( vec_data [McpPrompt] . r __prompts )
     : McpPrompt p . pp idx
     : ( @ Json Json ) h . p handler
     // Panic-guard via a shared-ctl Vec sink (see __mcp_dispatch_tools_call
-    // for why a direct closure assignment can't carry the value out). On
-    // panic the default `__error__` shape — which the envelope layer maps to
-    // a JSON-RPC error — stands.
+    // for why a direct closure assignment can't carry the value out). An
+    // empty sink after recover means the handler panicked → -32603.
     : ( Vec Json ) sink ( vec_with_cap [Json] 1 )
     : !v PanicInfo pr ( recover \ → v { ( vec_push [Json] sink ( h args ) ) } )
-    : Json perr ( json_obj_new )
-    ( json_obj_set perr `__error__` ( json_str_lit `prompt handler panicked` ) )
-    : ~ Json result perr
     ?? pr {
         T _ → {}
         F pi → {
@@ -517,20 +659,23 @@ $ `stdlib/ext/http_response.nu`
             ( panic_info_free pi )
         }
     }
-    ? > ( vec_len [Json] sink ) 0 {
-        : ?Json e0 ( vec_get [Json] sink 0 )
-        ?? e0 { T jv → { ( json_free result ) = result jv } F → {} }
-    } {}
-    ( vec_free [Json] sink )
     ( json_free args )
-    ^ result
+    ? <= ( vec_len [Json] sink ) 0 {
+        ( vec_free [Json] sink )
+        ^ @ !Json McpRpcErr { F ( mcp_rpc_err mcp_err_internal_error
+            `prompt handler panicked` ) }
+    } {}
+    : ?Json e0 ( vec_get [Json] sink 0 )
+    : Json result ?? e0 { T jv → jv F → ( json_obj_new ) }
+    ( vec_free [Json] sink )
+    ^ @ !Json McpRpcErr { T result }
 }
 
 // resources/list: build the array of resource descriptors.
 @ __mcp_dispatch_resources_list McpServer r → Json {
     : Json arr ( json_arr_new )
-    : i n ( vec_len [McpResource] . r resources )
-    : *McpResource rp ( vec_data [McpResource] . r resources )
+    : i n ( vec_len [McpResource] . r __resources )
+    : *McpResource rp ( vec_data [McpResource] . r __resources )
     : ~ i k 0
     ~ < k n {
         : McpResource res . rp k
@@ -551,7 +696,7 @@ $ `stdlib/ext/http_response.nu`
 // resources/read: lookup by uri, invoke handler. Spec response shape
 // is {contents: [{uri, mimeType, text|blob}]}. Handler returns the
 // inner content object; we wrap it.
-@ __mcp_dispatch_resources_read McpServer r ? Json params → Json {
+@ __mcp_dispatch_resources_read McpServer r ? Json params → !Json McpRpcErr {
     : ~ s uri ``
     ?? params {
         T p → {
@@ -564,23 +709,24 @@ $ `stdlib/ext/http_response.nu`
         F _ → {}
     }
     ? == 0 ( nurl_str_len uri ) {
-        : Json e ( json_obj_new )
-        ( json_obj_set e `__error__` ( json_str_lit `missing uri` ) )
-        ^ e
+        ^ @ !Json McpRpcErr { F ( mcp_rpc_err mcp_err_invalid_params
+            `resources/read requires a "uri" parameter` ) }
     } {}
     : i idx ( __mcp_find_resource_index r uri )
     ? < idx 0 {
-        : Json e ( json_obj_new )
-        ( json_obj_set e `__error__` ( json_str_lit `unknown resource` ) )
-        ^ e
+        : String m ( string_from `unknown resource: ` )
+        ( string_push_str m uri )
+        : McpRpcErr e ( mcp_rpc_err mcp_err_resource_not_found ( string_data m ) )
+        ( string_free m )
+        ^ @ !Json McpRpcErr { F e }
     } {}
-    : *McpResource rp ( vec_data [McpResource] . r resources )
+    : *McpResource rp ( vec_data [McpResource] . r __resources )
     : McpResource res . rp idx
     : ( @ Json ) h . res handler
     // Panic-guard via a shared-ctl Vec sink (see __mcp_dispatch_tools_call).
-    // An empty sink after recover means the handler panicked → return the
-    // bare `__error__` object; otherwise post-process the content and wrap
-    // it in the spec-shaped {contents:[...]} envelope.
+    // An empty sink after recover means the handler panicked → -32603;
+    // otherwise post-process the content and wrap it in the spec-shaped
+    // {contents:[...]} envelope.
     : ( Vec Json ) sink ( vec_with_cap [Json] 1 )
     : !v PanicInfo pr ( recover \ → v { ( vec_push [Json] sink ( h ) ) } )
     ?? pr {
@@ -592,9 +738,8 @@ $ `stdlib/ext/http_response.nu`
     }
     ? <= ( vec_len [Json] sink ) 0 {
         ( vec_free [Json] sink )
-        : Json rerr ( json_obj_new )
-        ( json_obj_set rerr `__error__` ( json_str_lit `resource handler panicked` ) )
-        ^ rerr
+        ^ @ !Json McpRpcErr { F ( mcp_rpc_err mcp_err_internal_error
+            `resource handler panicked` ) }
     } {}
     : ?Json c0 ( vec_get [Json] sink 0 )
     : Json content ?? c0 { T jv → jv F → ( json_null ) }
@@ -618,7 +763,7 @@ $ `stdlib/ext/http_response.nu`
     // resources/read is also a CacheableResult in 2026-07-28. Content
     // comes from a live handler — short TTL, private scope.
     ( mcp_result_set_cacheable out 5000 `private` )
-    ^ out
+    ^ @ !Json McpRpcErr { T out }
 }
 
 // Wrap a values array in the spec-shaped completion result. CONSUMES
@@ -671,7 +816,7 @@ $ `stdlib/ext/http_response.nu`
         ( json_free arg )
         ^ ( __mcp_completion_envelope ( json_arr_new ) )
     } {}
-    : *McpCompletion cp ( vec_data [McpCompletion] . r completions )
+    : *McpCompletion cp ( vec_data [McpCompletion] . r __completions )
     : McpCompletion c . cp idx
     : ( @ Json Json ) h . c handler
     // Panic-guard via a shared-ctl Vec sink (see __mcp_dispatch_tools_call).
@@ -702,46 +847,51 @@ $ `stdlib/ext/http_response.nu`
 // ── Dispatcher ────────────────────────────────────────────────────────
 //
 // Single entry point routing JSON-RPC method names to the per-method
-// handlers above. Returns the raw `result` field's Json (caller wraps
-// in the JSON-RPC envelope with the request `id`).
+// handlers above. On success returns the raw `result` field's Json
+// (the caller wraps it in the JSON-RPC envelope with the request
+// `id`); on failure an McpRpcErr carrying the code the client should
+// actually see.
 //
-// Unknown methods OR dispatch failures: returns a Json object with a
-// `__error__` field — caller turns that into a JSON-RPC error response
-// (method not found / internal error).
-@ mcp_server_dispatch McpServer r s method ? Json params → Json {
+// Marks the server as serving. From here on `mcp_server_add_*` is a
+// registration-time error rather than a tool no client will see — see
+// `__ctl`.
+@ mcp_server_dispatch McpServer r s method ? Json params → !Json McpRpcErr {
+    ( vec_set [i] . r __ctl MCP_CTL_SERVING 1 )
     ? != 0 ( nurl_str_eq method `server/discover` ) {
-        ^ ( __mcp_dispatch_discover r )
+        ^ @ !Json McpRpcErr { T ( __mcp_dispatch_discover r ) }
     } {}
     ? != 0 ( nurl_str_eq method `initialize` ) {
-        ^ ( __mcp_dispatch_initialize r params )
+        ^ @ !Json McpRpcErr { T ( __mcp_dispatch_initialize r params ) }
     } {}
     ? != 0 ( nurl_str_eq method `tools/list` ) {
-        ^ ( __mcp_dispatch_tools_list r )
+        ^ @ !Json McpRpcErr { T ( __mcp_dispatch_tools_list r ) }
     } {}
     ? != 0 ( nurl_str_eq method `tools/call` ) {
-        ^ ( __mcp_dispatch_tools_call r params )
+        ^ @ !Json McpRpcErr { T ( __mcp_dispatch_tools_call r params ) }
     } {}
     ? != 0 ( nurl_str_eq method `prompts/list` ) {
-        ^ ( __mcp_dispatch_prompts_list r )
+        ^ @ !Json McpRpcErr { T ( __mcp_dispatch_prompts_list r ) }
     } {}
     ? != 0 ( nurl_str_eq method `prompts/get` ) {
         ^ ( __mcp_dispatch_prompts_get r params )
     } {}
     ? != 0 ( nurl_str_eq method `resources/list` ) {
-        ^ ( __mcp_dispatch_resources_list r )
+        ^ @ !Json McpRpcErr { T ( __mcp_dispatch_resources_list r ) }
     } {}
     ? != 0 ( nurl_str_eq method `resources/read` ) {
         ^ ( __mcp_dispatch_resources_read r params )
     } {}
     ? != 0 ( nurl_str_eq method `completion/complete` ) {
-        ^ ( __mcp_dispatch_completion r params )
+        ^ @ !Json McpRpcErr { T ( __mcp_dispatch_completion r params ) }
     } {}
     ? != 0 ( nurl_str_eq method `ping` ) {
-        ^ ( json_obj_new )
+        ^ @ !Json McpRpcErr { T ( json_obj_new ) }
     } {}
-    : Json e ( json_obj_new )
-    ( json_obj_set e `__error__` ( json_str_lit `method not found` ) )
-    ^ e
+    : String m ( string_from `unknown method: ` )
+    ( string_push_str m method )
+    : McpRpcErr e ( mcp_rpc_err mcp_err_method_not_found ( string_data m ) )
+    ( string_free m )
+    ^ @ !Json McpRpcErr { F e }
 }
 
 // ── Stdio transport ──────────────────────────────────────────────────
@@ -797,23 +947,6 @@ $ `stdlib/ext/http_response.nu`
     ?? idf {
         T _ → { ^ T }
         F _ → { ^ F }
-    }
-}
-
-// Build the JSON-RPC response envelope for one dispatch result. Handles
-// both success ({result, id}) and the error sub-shape recognised by
-// `mcp_server_dispatch` (a Json object with an `__error__` field).
-// CONSUMES `result` + `id`.
-@ __mcp_envelope_response Json result Json id → Json {
-    : ?Json errf ( json_obj_get result `__error__` )
-    ?? errf {
-        T jerr → {
-            : s msg ( json_as_str jerr )
-            : Json resp ( mcp_response_error id -32601 msg )
-            ( json_free result )
-            ^ resp
-        }
-        F _ → { ^ ( mcp_response_result id result ) }
     }
 }
 
@@ -894,26 +1027,43 @@ $ `stdlib/ext/http_response.nu`
     } {}
 
     : ?Json mparams ( json_obj_get req `params` )
-    : Json result ( mcp_server_dispatch r ( string_data method ) mparams )
-    ( string_free method )
-    // Modern-era servers SHOULD identify themselves in each result's
-    // `_meta`. Skip error sub-shapes (they become JSON-RPC errors).
-    ? & is_modern ( json_is_obj result ) {
-        ? ( json_obj_has result `__error__` ) {} {
-            ( mcp_result_set_server_info result
-            ( string_data . r server_name )
-            ( string_data . r server_version ) )
+    ?? ( mcp_server_dispatch r ( string_data method ) mparams ) {
+        T result → {
+            ( string_free method )
+            // Modern-era servers SHOULD identify themselves in each
+            // result's `_meta`.
+            ? & is_modern ( json_is_obj result ) {
+                ( mcp_result_set_server_info result
+                ( string_data . r __name )
+                ( string_data . r __version ) )
+            } {}
+            ? had_id {
+                ^ @ ?Json { T ( mcp_response_result id result ) }
+            } {
+                // Notification — caller (mcp_http_handler) maps this
+                // to a 202 Accepted with no body.
+                ( json_free result )
+                ( json_free id )
+                ^ @ ?Json { F }
+            }
         }
-    } {}
-    ? had_id {
-        : Json resp ( __mcp_envelope_response result id )
-        ^ @ ?Json { T resp }
-    } {
-        // Notification — caller (mcp_http_handler) maps this to a
-        // 202 Accepted with no body.
-        ( json_free result )
-        ( json_free id )
-        ^ @ ?Json { F }
+        F e → {
+            ( string_free method )
+            ? had_id {
+                : Json resp ( mcp_response_error id ( mcp_rpc_err_code e )
+                ( mcp_rpc_err_message e ) )
+                ( mcp_rpc_err_free e )
+                ^ @ ?Json { T resp }
+            } {
+                // A notification cannot be answered, not even to say it
+                // failed (JSON-RPC 2.0 §4.1) — log and drop.
+                ( mcp_log ( nurl_str_cat `notification failed: `
+                ( mcp_rpc_err_message e ) ) )
+                ( mcp_rpc_err_free e )
+                ( json_free id )
+                ^ @ ?Json { F }
+            }
+        }
     }
 }
 

@@ -10,8 +10,45 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/mcp_server.nu`
 
+// The dispatcher returns `!Json McpRpcErr` — these tests drive it
+// directly, so unwrap the success side here and let a failure print
+// itself rather than vanishing into a golden that still looks right.
+@ dispatch_ok McpServer r s method ? Json params → Json {
+    ?? ( mcp_server_dispatch r method params ) {
+        T res → { ^ res }
+        F e → {
+            ( nurl_print `UNEXPECTED RPC ERROR: ` )
+            ( nurl_print ( mcp_rpc_err_message e ) )
+            ( nurl_print `\n` )
+            ( mcp_rpc_err_free e )
+            ^ ( json_obj_new )
+        }
+    }
+}
+
 @ print_label s tag s value → v {
     ( nurl_print tag ) ( nurl_print `=` ) ( nurl_print value ) ( nurl_print `\n` )
+}
+
+@ print_label_i s tag i value → v {
+    ( nurl_print tag ) ( nurl_print `=` ) ( nurl_print_int value ) ( nurl_print `\n` )
+}
+
+// Dispatch expecting FAILURE: prints the code and message under `tag`.
+// CONSUMES `params`.
+@ expect_err McpServer r s method Json params s tag → v {
+    ?? ( mcp_server_dispatch r method @ ?Json { T params } ) {
+        T res → {
+            ( print_label tag `UNEXPECTED SUCCESS` )
+            ( json_free res )
+        }
+        F e → {
+            ( print_label_i ( nurl_str_cat tag `_code` ) ( mcp_rpc_err_code e ) )
+            ( print_label ( nurl_str_cat tag `_msg` ) ( mcp_rpc_err_message e ) )
+            ( mcp_rpc_err_free e )
+        }
+    }
+    ( json_free params )
 }
 
 // Tool: echoes the `text` argument back wrapped in the standard
@@ -119,7 +156,7 @@ $ `stdlib/ext/mcp_server.nu`
 
     // ── initialize ───────────────────────────────────────────────────
     ( nurl_print `--- initialize ---\n` )
-    : Json init ( mcp_server_dispatch reg `initialize` @ ?Json { F ( json_null ) } )
+    : Json init ( dispatch_ok reg `initialize` @ ?Json { F ( json_null ) } )
     : ?Json proto ( json_obj_get init `protocolVersion` )
     ?? proto {
         T jp → ( print_label `protocolVersion` ( json_as_str jp ) )
@@ -137,7 +174,7 @@ $ `stdlib/ext/mcp_server.nu`
 
     // ── tools/list ───────────────────────────────────────────────────
     ( nurl_print `--- tools/list ---\n` )
-    : Json tl ( mcp_server_dispatch reg `tools/list` @ ?Json { F ( json_null ) } )
+    : Json tl ( dispatch_ok reg `tools/list` @ ?Json { F ( json_null ) } )
     : ?Json tools_arr ( json_obj_get tl `tools` )
     ?? tools_arr {
         T arr → ( print_label `tools_count` ( nurl_str_int ( json_arr_len arr ) ) )
@@ -152,7 +189,7 @@ $ `stdlib/ext/mcp_server.nu`
     : Json args ( json_obj_new )
     ( json_obj_set args `text` ( json_str_lit `hello world` ) )
     ( json_obj_set call_params `arguments` args )
-    : Json call_result ( mcp_server_dispatch reg `tools/call` @ ?Json { T call_params } )
+    : Json call_result ( dispatch_ok reg `tools/call` @ ?Json { T call_params } )
     : ?Json content ( json_obj_get call_result `content` )
     ?? content {
         T arr → {
@@ -177,7 +214,7 @@ $ `stdlib/ext/mcp_server.nu`
     ( json_obj_set add_args `a` ( json_int 17 ) )
     ( json_obj_set add_args `b` ( json_int 25 ) )
     ( json_obj_set add_params `arguments` add_args )
-    : Json add_result ( mcp_server_dispatch reg `tools/call` @ ?Json { T add_params } )
+    : Json add_result ( dispatch_ok reg `tools/call` @ ?Json { T add_params } )
     : ?Json content2 ( json_obj_get add_result `content` )
     ?? content2 {
         T arr → {
@@ -200,7 +237,7 @@ $ `stdlib/ext/mcp_server.nu`
     ( json_obj_set u_params `name` ( json_str_lit `nonexistent` ) )
     : Json u_args ( json_obj_new )
     ( json_obj_set u_params `arguments` u_args )
-    : Json u_result ( mcp_server_dispatch reg `tools/call` @ ?Json { T u_params } )
+    : Json u_result ( dispatch_ok reg `tools/call` @ ?Json { T u_params } )
     : ?Json is_err ( json_obj_get u_result `isError` )
     ?? is_err {
         T je → ( print_label `unknown_isError` ? ( json_as_bool je ) `T` `F` )
@@ -210,7 +247,7 @@ $ `stdlib/ext/mcp_server.nu`
 
     // ── prompts/list ─────────────────────────────────────────────────
     ( nurl_print `--- prompts/list ---\n` )
-    : Json pl ( mcp_server_dispatch reg `prompts/list` @ ?Json { F ( json_null ) } )
+    : Json pl ( dispatch_ok reg `prompts/list` @ ?Json { F ( json_null ) } )
     : ?Json pa ( json_obj_get pl `prompts` )
     ?? pa { T arr → ( print_label `prompts_count` ( nurl_str_int ( json_arr_len arr ) ) ) F _ → {} }
     ( json_free pl )
@@ -222,7 +259,7 @@ $ `stdlib/ext/mcp_server.nu`
     : Json gargs ( json_obj_new )
     ( json_obj_set gargs `name` ( json_str_lit `NURL` ) )
     ( json_obj_set gp `arguments` gargs )
-    : Json gr ( mcp_server_dispatch reg `prompts/get` @ ?Json { T gp } )
+    : Json gr ( dispatch_ok reg `prompts/get` @ ?Json { T gp } )
     : ?Json gm ( json_obj_get gr `messages` )
     ?? gm {
         T arr → {
@@ -247,7 +284,7 @@ $ `stdlib/ext/mcp_server.nu`
 
     // ── resources/list ───────────────────────────────────────────────
     ( nurl_print `--- resources/list ---\n` )
-    : Json rl ( mcp_server_dispatch reg `resources/list` @ ?Json { F ( json_null ) } )
+    : Json rl ( dispatch_ok reg `resources/list` @ ?Json { F ( json_null ) } )
     : ?Json ra ( json_obj_get rl `resources` )
     ?? ra { T arr → ( print_label `resources_count` ( nurl_str_int ( json_arr_len arr ) ) ) F _ → {} }
     ( json_free rl )
@@ -256,7 +293,7 @@ $ `stdlib/ext/mcp_server.nu`
     ( nurl_print `--- resources/read ---\n` )
     : Json rp ( json_obj_new )
     ( json_obj_set rp `uri` ( json_str_lit `mcp://hello` ) )
-    : Json rr ( mcp_server_dispatch reg `resources/read` @ ?Json { T rp } )
+    : Json rr ( dispatch_ok reg `resources/read` @ ?Json { T rp } )
     : ?Json carr ( json_obj_get rr `contents` )
     ?? carr {
         T arr → {
@@ -277,17 +314,37 @@ $ `stdlib/ext/mcp_server.nu`
 
     // ── unknown method ───────────────────────────────────────────────
     ( nurl_print `--- unknown method ---\n` )
-    : Json um ( mcp_server_dispatch reg `nonexistent/method` @ ?Json { F ( json_null ) } )
-    : ?Json ef ( json_obj_get um `__error__` )
-    ?? ef {
-        T jef → ( print_label `unknown_method_err` ( json_as_str jef ) )
-        F _ → ( nurl_print `expected error envelope\n` )
+    ?? ( mcp_server_dispatch reg `nonexistent/method` @ ?Json { F ( json_null ) } ) {
+        T res → {
+            ( nurl_print `expected an RPC error\n` )
+            ( json_free res )
+        }
+        F e → {
+            ( print_label `unknown_method_err` ( mcp_rpc_err_message e ) )
+            ( print_label_i `unknown_method_code` ( mcp_rpc_err_code e ) )
+            ( mcp_rpc_err_free e )
+        }
     }
-    ( json_free um )
+
+    // ── failure codes are not all -32601 ─────────────────────────────
+    //
+    // Before the Result split every dispatch failure went out as
+    // "method not found", so a client that got one for a malformed
+    // prompts/get concluded the method did not exist and stopped
+    // calling it. Each of these must carry its own code.
+    ( nurl_print `--- error codes ---\n` )
+    ( expect_err reg `prompts/get` ( json_obj_new ) `prompts_get_no_name` )
+    : Json unknown_prompt ( json_obj_new )
+    ( json_obj_set unknown_prompt `name` ( json_str_lit `nope` ) )
+    ( expect_err reg `prompts/get` unknown_prompt `prompts_get_unknown` )
+    ( expect_err reg `resources/read` ( json_obj_new ) `resources_read_no_uri` )
+    : Json unknown_res ( json_obj_new )
+    ( json_obj_set unknown_res `uri` ( json_str_lit `mcp://absent` ) )
+    ( expect_err reg `resources/read` unknown_res `resources_read_unknown` )
 
     // ── ping ─────────────────────────────────────────────────────────
     ( nurl_print `--- ping ---\n` )
-    : Json png ( mcp_server_dispatch reg `ping` @ ?Json { F ( json_null ) } )
+    : Json png ( dispatch_ok reg `ping` @ ?Json { F ( json_null ) } )
     ( print_label `ping_obj_kind` ? ( json_is_obj png ) `obj` `other` )
     ( json_free png )
 

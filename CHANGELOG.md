@@ -10,6 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ext/mcp_server.nu`: dispatch failures carry their own code** —
+  the dispatcher signalled failure in-band, as an `__error__` key on the
+  result object, which shared a namespace with whatever a handler
+  returned and had no room for a code, so the envelope layer mapped
+  *every* failure to -32601 "method not found". A `prompts/get` missing
+  its `name` told the client the method did not exist, and a client that
+  believes that stops calling it. `mcp_server_dispatch` now returns
+  `!Json McpRpcErr`: -32602 for a malformed `prompts/get` /
+  `resources/read`, -32602 for an unknown prompt, the spec's -32002
+  (new `mcp_err_resource_not_found`) for an unknown resource, -32603 for
+  a panicking handler, -32601 only for a method that really is not
+  there — and each message now names what was missing. A failed
+  *notification* is logged and dropped rather than answered (JSON-RPC
+  2.0 §4.1).
+
+- **`ext/mcp_server.nu`: duplicate and late registration fail loudly** —
+  registering two tools under one name silently shadowed: `tools/list`
+  advertised both, `tools/call` only ever reached the first, and the one
+  that did nothing was the one just written. Registering after the first
+  dispatch was worse than untidy — `tools/list` results carry
+  `ttlMs: 60000`, so a client may legitimately cache the list and never
+  see the late arrival. Both now abort at the `add`, naming the
+  registration. `compiler/tests/mcp_server_guards.nu`.
+
 - **`ext/mqtt.nu`: three writes that never left the method** — every
   MqttClient method takes the client by value, so the stores into its
   `i` fields landed in the method's own copy. Surfaced by the new

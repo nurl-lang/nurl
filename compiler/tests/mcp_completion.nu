@@ -11,6 +11,22 @@ $ `stdlib/core/string.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp_server.nu`
 
+// The dispatcher returns `!Json McpRpcErr` — these tests drive it
+// directly, so unwrap the success side here and let a failure print
+// itself rather than vanishing into a golden that still looks right.
+@ dispatch_ok McpServer r s method ? Json params → Json {
+    ?? ( mcp_server_dispatch r method params ) {
+        T res → { ^ res }
+        F e → {
+            ( nurl_print `UNEXPECTED RPC ERROR: ` )
+            ( nurl_print ( mcp_rpc_err_message e ) )
+            ( nurl_print `\n` )
+            ( mcp_rpc_err_free e )
+            ^ ( json_obj_new )
+        }
+    }
+}
+
 @ print_label s tag s value → v {
     ( nurl_print tag ) ( nurl_print `=` ) ( nurl_print value ) ( nurl_print `\n` )
 }
@@ -114,7 +130,7 @@ $ `stdlib/ext/mcp_server.nu`
 
     // ── initialize advertises the completions capability ───────────────
     ( nurl_print `--- initialize ---\n` )
-    : Json init ( mcp_server_dispatch reg `initialize` @ ?Json { F ( json_null ) } )
+    : Json init ( dispatch_ok reg `initialize` @ ?Json { F ( json_null ) } )
     : ?Json caps ( json_obj_get init `capabilities` )
     ?? caps {
         T cp → {
@@ -131,7 +147,7 @@ $ `stdlib/ext/mcp_server.nu`
     // ── completion/complete: prompt arg, prefix "r" → ruby, rust ───────
     ( nurl_print `--- completion prompt (prefix r) ---\n` )
     : Json p1 ( complete_params `ref/prompt` `greet` `language` `r` )
-    : Json r1 ( mcp_server_dispatch reg `completion/complete` @ ?Json { T p1 } )
+    : Json r1 ( dispatch_ok reg `completion/complete` @ ?Json { T p1 } )
     ( report_completion `prompt_r` r1 )
     ( json_free r1 )
     ( json_free p1 )
@@ -139,7 +155,7 @@ $ `stdlib/ext/mcp_server.nu`
     // ── completion/complete: prompt arg, empty prefix → all 4 ──────────
     ( nurl_print `--- completion prompt (empty prefix) ---\n` )
     : Json p2 ( complete_params `ref/prompt` `greet` `language` `` )
-    : Json r2 ( mcp_server_dispatch reg `completion/complete` @ ?Json { T p2 } )
+    : Json r2 ( dispatch_ok reg `completion/complete` @ ?Json { T p2 } )
     ( report_completion `prompt_all` r2 )
     ( json_free r2 )
     ( json_free p2 )
@@ -147,7 +163,7 @@ $ `stdlib/ext/mcp_server.nu`
     // ── completion/complete: resource ref ──────────────────────────────
     ( nurl_print `--- completion resource ---\n` )
     : Json p3 ( complete_params `ref/resource` `git://repo` `branch` `` )
-    : Json r3 ( mcp_server_dispatch reg `completion/complete` @ ?Json { T p3 } )
+    : Json r3 ( dispatch_ok reg `completion/complete` @ ?Json { T p3 } )
     ( report_completion `resource` r3 )
     ( json_free r3 )
     ( json_free p3 )
@@ -155,7 +171,7 @@ $ `stdlib/ext/mcp_server.nu`
     // ── completion/complete: unknown ref → empty list ──────────────────
     ( nurl_print `--- completion unknown ref ---\n` )
     : Json p4 ( complete_params `ref/prompt` `nonexistent` `x` `a` )
-    : Json r4 ( mcp_server_dispatch reg `completion/complete` @ ?Json { T p4 } )
+    : Json r4 ( dispatch_ok reg `completion/complete` @ ?Json { T p4 } )
     ( report_completion `unknown` r4 )
     ( json_free r4 )
     ( json_free p4 )

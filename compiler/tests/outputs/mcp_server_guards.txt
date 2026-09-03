@@ -1,0 +1,19 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- accessors ---
+name=guards
+version=1.0.0
+tools=1
+has_echo=T
+has_ghost=F
+serving=F
+--- duplicate names ---
+dup_tool=mcp_server: cannot register tool "echo" — that name is already registered
+dup_prompt=mcp_server: cannot register prompt "greet" — that name is already registered
+dup_resource=mcp_server: cannot register resource "mcp://a" — that name is already registered
+tools_after=2
+--- registration after serving ---
+serving_after_dispatch=T
+late_tool=mcp_server: cannot register tool "late" — the server is already serving requests

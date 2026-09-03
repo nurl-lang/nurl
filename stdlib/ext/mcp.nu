@@ -142,6 +142,13 @@ $ `stdlib/ext/json.nu`
 : i mcp_err_invalid_params -32602
 : i mcp_err_internal_error -32603
 
+// Resource lookup failure. Kept at the spec's -32002 rather than
+// folded into invalid-params: a client distinguishes "that URI is not
+// served here" (re-list and pick another) from "your request was
+// malformed" (do not retry as-is), and only a distinct code carries
+// that.
+: i mcp_err_resource_not_found -32002
+
 // MCP-reserved codes (2026-07-28 partitioned -32020..-32099 for the
 // spec; earlier drafts used -32001/-32003/-32004 — renumbered).
 : i mcp_err_header_mismatch -32020

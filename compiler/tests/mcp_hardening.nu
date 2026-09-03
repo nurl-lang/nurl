@@ -21,6 +21,22 @@ $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/mcp_server.nu`
 $ `stdlib/ext/mcp_session.nu`
 
+// The dispatcher returns `!Json McpRpcErr` — these tests drive it
+// directly, so unwrap the success side here and let a failure print
+// itself rather than vanishing into a golden that still looks right.
+@ dispatch_ok McpServer r s method ? Json params → Json {
+    ?? ( mcp_server_dispatch r method params ) {
+        T res → { ^ res }
+        F e → {
+            ( nurl_print `UNEXPECTED RPC ERROR: ` )
+            ( nurl_print ( mcp_rpc_err_message e ) )
+            ( nurl_print `\n` )
+            ( mcp_rpc_err_free e )
+            ^ ( json_obj_new )
+        }
+    }
+}
+
 @ echo_handler Json args → Json {
     ^ ( mcp_tool_result_text `HELLO_REAL` )
 }
@@ -54,7 +70,7 @@ $ `stdlib/ext/mcp_session.nu`
     : Json p ( json_obj_new )
     ( json_obj_set p `name` ( json_str_lit name ) )
     ( json_obj_set p `arguments` ( json_obj_new ) )
-    : Json out ( mcp_server_dispatch r `tools/call` @ ?Json { T p } )
+    : Json out ( dispatch_ok r `tools/call` @ ?Json { T p } )
     ( json_free p )
     ^ out
 }
