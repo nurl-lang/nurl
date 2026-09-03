@@ -1,0 +1,25 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+baseline_get=OK
+baseline_cl0=OK
+baseline_chunked=OK
+baseline_http10=OK
+host_space_before_colon=HttpReqMalformed
+te_space_before_colon=HttpReqMalformed
+te_tab_before_colon=HttpReqMalformed
+obs_fold=HttpReqMalformed
+ctrl_in_name=HttpReqMalformed
+nonascii_in_name=HttpReqMalformed
+bare_cr_in_value=HttpReqMalformed
+dup_host=HttpReqMalformed
+dup_content_length=HttpReqMalformed
+dup_transfer_encoding=HttpReqMalformed
+no_host_http11=HttpReqMalformed
+cl_plus_sign=HttpReqMalformed
+cl_negative=HttpReqMalformed
+cl_hex=HttpReqMalformed
+cl_trailing_junk=HttpReqMalformed
+cl_and_te=HttpReqMalformed
+header_count_over_limit=HttpReqTooLarge

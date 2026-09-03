@@ -552,8 +552,11 @@ $ `stdlib/ext/http3_qpack.nu`
         ^
     } {}
     ? == t ( h3_st_push ) { ( __h3_fail h ( h3_err_stream_creation ) ) ^ } {}
-    // unknown type: stop reading it (§6.2.3)
+    // unknown type: stop reading it (§6.2.3). Release whatever was
+    // buffered while its type was still unknown — from here on its bytes
+    // are drained and discarded, never accumulated.
     = . s kind ( h3_kind_ignored )
+    ( vec_clear [u] . s buf )
     ( quic_conn_stream_stop_sending . h qc . s id ( h3_err_stream_creation ) )
 }
 
@@ -581,7 +584,15 @@ $ `stdlib/ext/http3_qpack.nu`
     : ~ b more T
     ~ more {
         : ( Vec u ) d ( quic_conn_stream_recv qc id 65536 )
-        ? == ( vec_len [u] d ) 0 { = more F } { ( bytes_extend_bytes . s buf d ) }
+        ? == ( vec_len [u] d ) 0 { = more F } {
+            // An ignored unidirectional stream (unknown type, STOP_SENDING
+            // already sent) must not buffer: a peer that ignores our
+            // STOP_SENDING could otherwise grow . s buf without bound. Drain
+            // and discard its bytes instead of accumulating them.
+            ? == . s kind ( h3_kind_ignored ) {} {
+                ( bytes_extend_bytes . s buf d )
+            }
+        }
         ( vec_free [u] d )
     }
     : b fin ( quic_conn_stream_fin qc id )

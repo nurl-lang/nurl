@@ -65,6 +65,16 @@ $ `stdlib/ext/http2_frame.nu`
 // so a flood of tiny headers can't explode the Header vector either.
 @ hpack_max_decoded_bytes → i { ^ 2097152 }
 
+// Ceiling on any decoded HPACK integer (RFC 7541 §5.1). Every integer we
+// decode is a table index or a string length, both bounded far below this
+// by the 16 KiB frame / 4 KiB table limits. Capping the accumulator here
+// keeps `value` from ever wrapping a 64-bit signed int (the classic HPACK
+// integer overflow → negative length → wild-pointer read) — the guard is
+// applied to the running total, before the next continuation byte, so the
+// accumulator never grows past 2^31-1 regardless of how many 0xFF bytes a
+// peer sends.
+@ hpack_max_int → i { ^ 2147483647 }
+
 // ── Static table (RFC 7541 Appendix A) ───────────────────────────────
 
 @ hpack_static_table_size → i { ^ 61 }
@@ -320,18 +330,26 @@ $ `stdlib/ext/http2_frame.nu`
     : ~ i k + from 1
     : ~ b done F
     : ~ b ok T
+    : ~ b overflow F
     ~ & ok ! done {
         ? >= k n { = ok F = done T } {
             : i b # i . p k
             = value + value << & b 127 shift
             = shift + shift 7
-            ? > shift 63 { = ok F = done T } {}
-            ? == 0 & b 128 { = done T } {}
-            = k + k 1
+            // Bound the accumulator BEFORE consuming another byte: any
+            // value past 2^31-1 (or wrapped negative) is a malicious
+            // integer, not a real length/index. This must fire ahead of
+            // the shift>63 test so a value bomb that stays under 63 bits
+            // of shift is still rejected.
+            ? | < value 0 > value ( hpack_max_int ) { = ok F = done T = overflow T } {
+                ? > shift 63 { = ok F = done T = overflow T } {}
+                ? == 0 & b 128 { = done T } {}
+                = k + k 1
+            }
         }
     }
     ? ! ok {
-        ? > shift 63 {
+        ? overflow {
             ^ @ !HpackInt HpackErr { F HpackIntegerOverflow }
         } {}
         ^ @ !HpackInt HpackErr { F HpackTruncated }
@@ -363,6 +381,13 @@ $ `stdlib/ext/http2_frame.nu`
         F e → { ^ @ !HpackString HpackErr { F e } }
     }
     : i data_off + from len_consumed
+    // Defence in depth against an integer-decode that slipped a negative
+    // or absurd length through: a length < 0 or a data_off past the
+    // buffer would make the `n - data_off < length` test below pass on a
+    // wrapped comparison and later index the buffer at a wild offset.
+    ? | < length 0 > data_off n {
+        ^ @ !HpackString HpackErr { F HpackTruncated }
+    } {}
     ? < - n data_off length {
         ^ @ !HpackString HpackErr { F HpackTruncated }
     } {}

@@ -1030,9 +1030,22 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
     ( __kpke_encrypt prm ekpke m rprime ct2 )
 
     : b same ( constant_time_eq_vec ct ct2 )
-    // Select without branching: mask is 0xFF when the ciphertexts
-    // matched and 0x00 when they did not.
-    : i mask ? same 255 0
+    // Constant-time implicit rejection (FIPS 203 §7.3). The output is K'
+    // when the re-encryption matched and K̄ otherwise, chosen WITHOUT a
+    // data-dependent branch OR a data-dependent address.
+    //
+    // The mask is built arithmetically from `same`: `- same` is 0 when
+    // false and -1 (all ones) when true, so `mask` is 0x00…00 / 0xFF…FF
+    // with no `? … 255 0` ternary — that ternary lowered to a real
+    // `br i1`+phi (nurlc emits a CFG diamond for every `?`), which LLVM
+    // then rewrote at -O2 into a `cmov` selecting the SOURCE POINTER
+    // (`kp` vs `bp`), leaking the secret through the load address.
+    //
+    // The per-byte combine is the conditional-swap idiom
+    // `out = bp ^ (mask & (kp ^ bp))`: it reads BOTH operands every
+    // iteration and never selects a pointer, so the emitted code is a
+    // straight-line xor/and/xor over both buffers regardless of `same`.
+    : i mask - 0 # i same
     : ( Vec u ) out ( vec_with_cap [u] 32 )
     : b _l ( vec_set_len [u] out 32 )
     : *u op ( vec_data [u] out )
@@ -1040,7 +1053,9 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
     : *u bp ( vec_data [u] kbar )
     : ~ i i 0
     ~ < i 32 {
-        = . op i # u | & mask # i . kp i & ~ mask # i . bp i
+        : i kb # i . kp i
+        : i bb # i . bp i
+        = . op i # u ^^ bb & mask ^^ kb bb
         = i + i 1
     }
 

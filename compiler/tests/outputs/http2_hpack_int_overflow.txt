@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+  ok   int-bomb rejected: HpackIntegerOverflow
+  ok   block-bomb rejected: HpackIntegerOverflow
+hpack integer-overflow defended

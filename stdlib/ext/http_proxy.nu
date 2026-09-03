@@ -188,6 +188,22 @@ $ `stdlib/ext/http_server.nu`
 // Build a libcurl-style headers blob ("Name: Value\r\n…") from the
 // request's headers, applying the request-side filter rules described
 // in the module-header policy block. Caller frees the returned String.
+// True iff the NUL-terminated string `str` contains a CR or LF byte.
+// Used to refuse forwarding a header that would split the upstream
+// request. Scans to the terminating NUL (an embedded NUL already
+// truncates the value the runtime sees).
+@ __proxy_s_has_crlf s str → b {
+    : i n ( nurl_str_len str )
+    : ~ i k 0
+    : ~ b bad F
+    ~ & ! bad < k n {
+        : i b ( nurl_str_get str k )
+        ? | == b 13 == b 10 { = bad T } {}
+        = k + k 1
+    }
+    ^ bad
+}
+
 @ _build_request_headers_blob HttpRequest req ProxyOpts opts → String {
     : String blob ( string_new )
     : i n ( vec_len [Header] . req headers )
@@ -203,6 +219,12 @@ $ `stdlib/ext/http_server.nu`
             = drop T
         } {}
         ? != 0 ( nurl_str_eq nm_lc `content-length` ) { = drop T } {}
+        // Never forward a header whose name or value carries CR/LF: it
+        // would inject extra request lines into the upstream (header
+        // smuggling). The inbound parser already rejects these, but the
+        // proxy must not rely on its caller having done so.
+        ? & ! drop | ( __proxy_s_has_crlf ( string_data . h name ) )
+        ( __proxy_s_has_crlf ( string_data . h value ) ) { = drop T } {}
         ? ! drop {
             ( string_push_str blob ( string_data . h name ) )
             ( string_push_str blob `: ` )

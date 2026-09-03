@@ -44,6 +44,8 @@ $ `stdlib/ext/http2_conn.nu`
         0
         F
         0
+        // streams_opened, peer_resets, idle_frames (flood budgets)
+        0 0 0
         ( vec_new [u] )
         ( h2_default_max_body_bytes )
         ( response_text 500 `internal server error\n` )

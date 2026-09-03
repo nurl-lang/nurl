@@ -8,6 +8,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **HTTP stack hardened against the standard smuggling / flood / DoS
+  matrix — every fix at the stdlib root, so the `http` facade inherits
+  it.** The changes are in `stdlib/ext/http_request.nu`,
+  `http_server.nu`, `http_proxy.nu`, `http2_conn.nu`, `http2_hpack.nu`,
+  `http3_conn.nu`, `stdlib/std/quic_conn.nu` and `std/mlkem.nu`.
+
+  - **HPACK integer-overflow remote crash (HTTP/2).**
+    `hpack_decode_int` accumulated continuation bytes with only a
+    `shift > 63` guard, so `0xFF` + nine `0xFF` wrapped the value
+    negative; the negative length then reached the string decoder and
+    was dereferenced at a wild offset (SIGSEGV), reachable pre-auth from
+    an ~11-byte HEADERS payload. The accumulator is now capped at
+    `hpack_max_int` before each byte, and `hpack_decode_string` rejects a
+    negative / out-of-range length as a backstop. Regression:
+    `http2_hpack_int_overflow.nu`.
+  - **HTTP/2 flood budgets (RFC 9113 §10.5 — the CVE-2023-44487 Rapid
+    Reset class).** Three per-connection counters — total streams
+    opened, RST_STREAMs received, and no-progress control frames (PING /
+    SETTINGS / PRIORITY / WINDOW_UPDATE / empty DATA / surplus
+    CONTINUATION) — each have an absolute ceiling; crossing one is a
+    connection error answered with `GOAWAY(ENHANCE_YOUR_CALM)`. Rapid
+    Reset, PING/SETTINGS/PRIORITY floods and the zero-length-frame CPU
+    floods are all now bounded. Regression: `http2_flood_budget.nu`.
+  - **HTTP/2 flow-control overflow on the response path.** The
+    in-response WINDOW_UPDATE pump and the `SETTINGS_INITIAL_WINDOW_SIZE`
+    delta now reject a window past 2^31-1 (`FLOW_CONTROL_ERROR`) and a
+    zero increment (`PROTOCOL_ERROR`), matching the main loop.
+  - **HTTP/2 header injection.** Received request headers with a CR / LF
+    / NUL in a value, or an empty / malformed name, are now rejected
+    (RFC 9113 §8.2.1) so they cannot be forged into a split on an h2→h1
+    downgrade.
+  - **HTTP/1.1 request smuggling & header injection.** The header parser
+    now rejects whitespace before the colon (the TE.CL gadget), obs-fold
+    continuation lines, non-token / control / non-ASCII field names, and
+    CR/LF/NUL in values; duplicate `Host` / `Content-Length` /
+    `Transfer-Encoding` singletons and a `Content-Length` that is not
+    `1*DIGIT` (a sign or non-digit) are rejected; a missing `Host` on
+    HTTP/1.1 is a 400; the chunked decoders verify the CRLF after each
+    chunk's data and cap the trailer section; and the reverse proxy never
+    forwards a header whose name or value carries CR/LF. Regression:
+    `http_request_smuggling.nu`.
+  - **QUIC NEW_CONNECTION_ID retire loop (DoS).** A frame with
+    `retire_prior_to = sequence = 2^60` drove ~4.6e18 loop iterations
+    (CPU hang + OOM). `retire_prior_to > sequence` is now a
+    `FRAME_ENCODING_ERROR` (RFC 9000 §19.15) and the retire loop iterates
+    only the CIDs actually held.
+  - **QUIC off-path connection migration.** A peer-address change is now
+    committed only after a packet from the new address authenticates, so
+    an off-path attacker who has only seen the cleartext DCID can no
+    longer redirect a connection with one spoofed datagram (RFC 9000 §9).
+  - **HTTP/3 ignored-stream buffering.** An unknown unidirectional stream
+    (STOP_SENDING already sent) no longer accumulates its bytes, so a
+    peer ignoring STOP_SENDING cannot grow per-connection memory.
+  - **ML-KEM implicit-rejection constant-time selection (FIPS 203
+    §7.3).** The final `K' / K̄` choice used a `? same 255 0` ternary
+    that `-O2` rewrote into a `cmov` on the source pointer, leaking the
+    secret through the load address. It is now the address-oblivious
+    conditional-swap idiom `out = K̄ ^ (mask & (K' ^ K̄))` with an
+    arithmetic mask — the emitted `mlkem_decaps` carries zero `cmov`
+    instructions and reads both buffers unconditionally.
+
 ## [0.59.0] — 2026-09-03
 
 ### Added
