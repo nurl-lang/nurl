@@ -261,7 +261,15 @@ def t_session_echo(c: Client, sid: str) -> None:
 def t_ping(c: Client) -> None:
     print("\n[MCP] ping")
     _, _, env = c.rpc({"jsonrpc": "2.0", "id": 99, "method": "ping"})
-    assert_eq("ping result is {}", env.get("result"), {})
+    # An EMPTY result, but not a bare {}: every result has carried the
+    # 2026-07-28 `resultType` since the dual-era work, so `== {}` has
+    # been failing here ever since and nobody read the exit code.
+    assert_eq("ping result is empty", env.get("result", {}).get("content"), None)
+    assert_eq(
+        "ping result carries only resultType",
+        sorted(env.get("result", {}).keys()),
+        ["resultType"],
+    )
 
 
 def t_tools_list(c: Client) -> None:
@@ -703,17 +711,76 @@ def t_resources(c: Client) -> None:
     print("\n[MCP] resources/list + resources/read")
     _, _, env = c.rpc({"jsonrpc": "2.0", "id": 4, "method": "resources/list"})
     resources = env.get("result", {}).get("resources", [])
-    assert_eq("7 resources", len(resources), 7)
-    uris = {r.get("uri") for r in resources}
-    for u in (
+    # The exact set, not a count: the count said 7 from the day
+    # nurl://gotchas was dropped until this line was written, so this
+    # assertion failed on every run and nobody noticed — which is what
+    # happens to a harness whose red is normal.
+    expected = {
         "nurl://readme",
         "nurl://roadmap",
         "nurl://grammar",
         "nurl://stdlib",
         "nurl://examples",
         "nurl://tests",
-    ):
-        assert_true(f"resources has {u}", u in uris)
+    }
+    uris = {r.get("uri") for r in resources}
+    assert_eq("resources/list is exactly the declared set", sorted(uris), sorted(expected))
+
+    # Templates are a SEPARATE listing: a client that saw `nurl://stdlib/{path}`
+    # in resources/list would try to read the literal `{path}`.
+    _, _, env = c.rpc(
+        {"jsonrpc": "2.0", "id": 41, "method": "resources/templates/list"}
+    )
+    tpls = {t.get("uriTemplate") for t in env.get("result", {}).get("resourceTemplates", [])}
+    assert_eq(
+        "resources/templates/list is exactly the declared set",
+        sorted(tpls),
+        sorted({"nurl://stdlib/{path}", "nurl://example/{name}", "nurl://test/{name}"}),
+    )
+
+    # …and a templated read reaches the same file nurl_read_stdlib does.
+    _, _, env = c.rpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "resources/read",
+            "params": {"uri": "nurl://stdlib/core/string.nu"},
+        }
+    )
+    tc = env.get("result", {}).get("contents", [])
+    assert_true("templated read returns content", len(tc) > 0 and len(tc[0].get("text", "")) > 100)
+    assert_eq(
+        "templated read echoes the uri",
+        tc[0].get("uri") if tc else None,
+        "nurl://stdlib/core/string.nu",
+    )
+
+    # A traversal attempt is a not-found, not an empty success.
+    _, _, env = c.rpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 43,
+            "method": "resources/read",
+            "params": {"uri": "nurl://stdlib/../../etc/passwd"},
+        }
+    )
+    assert_eq(
+        "templated traversal is refused",
+        env.get("error", {}).get("code"),
+        -32002,
+    )
+
+    # An unknown resource is an error, never `{"contents": []}` — an empty
+    # success reads to a client as "it exists and is empty".
+    _, _, env = c.rpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 44,
+            "method": "resources/read",
+            "params": {"uri": "nurl://nope"},
+        }
+    )
+    assert_eq("unknown resource is -32002", env.get("error", {}).get("code"), -32002)
 
     _, _, env = c.rpc(
         {
