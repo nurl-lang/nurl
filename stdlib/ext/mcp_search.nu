@@ -1081,8 +1081,12 @@ $ `stdlib/ext/nurldoc.nu`
 // that named NO module are listed as not-searched-here so their
 // concepts don't silently vanish from the reply. Returns how many
 // modules a term named (0 ⇒ the caller falls through to the OR pass
-// as before).
-@ __ms_api_exact_modules s stdlib_dir ( Vec String ) terms String out → i {
+// as before), and pushes the number of terms that named NO module into
+// `miss_out` — the caller runs the OR pass for those rather than
+// leaving them unanswered. Listing a term as "not searched" is an
+// admission the reply is incomplete; filling the gap is better than
+// admitting it.
+@ __ms_api_exact_modules s stdlib_dir ( Vec String ) terms String out ( Vec i ) miss_out → i {
     : Json files ( json_arr_new )
     ( msearch_walk_nu_files files stdlib_dir `` )
     : i nf ( json_arr_len files )
@@ -1208,9 +1212,10 @@ $ `stdlib/ext/nurldoc.nu`
                 }
                 = mi + mi 1
             }
-            ( string_push_str out ` — these name no module, and this reply answered only the module-name terms. What they describe may well exist (likely inside the modules above); query each concept separately, e.g. query='string lowercase'.\n` )
+            ( string_push_str out ` — these name no module. The declarations matching them follow.\n` )
         } {}
     } {}
+    ( vec_push [i] miss_out ( vec_len [String] misses ) )
     ( vec_free_with [String] rels \ String r → v { ( string_free r ) } )
     ( vec_free_with [String] hits \ String h → v { ( string_free h ) } )
     ( vec_free_with [String] misses \ String m → v { ( string_free m ) } )
@@ -1311,7 +1316,21 @@ $ `stdlib/ext/nurldoc.nu`
         // A term that exactly NAMES a stdlib module wins before any
         // fuzzy widening: "csv json string" means ext/csv.nu's API
         // surface, not an OR-ranked declaration list.
-        : i nm_n ( __ms_api_exact_modules stdlib_dir terms hdr )
+        : ( Vec i ) miss_ctr ( vec_new [i] )
+        : i nm_n ( __ms_api_exact_modules stdlib_dir terms hdr miss_ctr )
+        : i nm_missed ?? ( vec_get [i] miss_ctr 0 ) { T v → v F _ → 0 }
+        ( vec_free [i] miss_ctr )
+        // A module-name hit that explains the WHOLE query is the answer.
+        // One that leaves terms over is half an answer: `hash map insert`
+        // named std/hash.nu (cryptographic hashing) and stopped, while
+        // std/hashmap.nu — the module the query is about — sat behind the
+        // OR pass that never ran. So when terms are left over, run it too
+        // and put both in the reply.
+        ? & > nm_n 0 > nm_missed 0 {
+            ( string_push_char hdr 10 )
+            : i or_extra ( __ms_api_or_widen stdlib_dir terms hdr )
+            ? == or_extra 0 {} {}
+        } {}
         ? == nm_n 0 {
             // Widen the OPERATOR next: the same terms ORed, whole-word,
             // ranked by coverage. A multi-term concept query ("string builder

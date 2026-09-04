@@ -60,6 +60,17 @@ $ `stdlib/ext/http3_server.nu`
     i http3  // 1 → a TLS listener also serves HTTP/3 on the same port over UDP (default)
     String pq_cert  // optional second identity for TLS listeners: ML-DSA chain PEM ("" = none)
     String pq_key  // ...and its PKCS#8 key PEM
+    // Zero or one user middleware: a function from the app's own
+    // dispatch to the handler actually served. A ( Vec ) so that "none"
+    // and "one" stay apart and so `http_app_use` reaches every copy of
+    // the handle (see McpMiddleware).
+    ( Vec HttpMiddleware ) mw
+}
+
+// A user middleware, boxed so it can live in a Vec — a closure is not
+// spellable as a generic type argument.
+: HttpMiddleware {
+    ( @ ( @ HttpResponse HttpRequest ) ( @ HttpResponse HttpRequest ) ) f
 }
 
 // ── Construction / teardown ───────────────────────────────────────────
@@ -67,6 +78,7 @@ $ `stdlib/ext/http3_server.nu`
 @ http_app_new → *HttpApp {
     : *HttpApp a # *HttpApp ( nurl_malloc Z HttpApp )
     = . a router ( router_new )
+    = . a mw ( vec_new [HttpMiddleware] )
     = . a idle_ms 5000
     = . a workers 0
     = . a use_async F
@@ -91,10 +103,48 @@ $ `stdlib/ext/http3_server.nu`
     ( string_free . a webroot )
     ( string_free . a pq_cert )
     ( string_free . a pq_key )
+    ( vec_free [HttpMiddleware] . a mw )
     ( nurl_free a )
 }
 
 // ── Configuration (each returns v; call before http_app_listen) ───────────
+
+// Wrap the app's whole dispatch — routing, static fallback and all — in
+// a handler of your own. The facade's built-in layers (CORS, the access
+// log, Alt-Svc) go OUTSIDE this one, so a request reaches:
+//
+//   [alt-svc] → [log] → [cors] → YOUR middleware → route / static
+//
+// The argument is the app's dispatch; return the handler to serve
+// instead, and call the argument wherever you want the app to run:
+//
+//   ( http_app_use a \ ( @ HttpResponse HttpRequest ) inner
+//     → ( @ HttpResponse HttpRequest ) {
+//       ^ \ HttpRequest req → HttpResponse {
+//           ? ( heavy req ) { ( sem_acquire gate ) } {}
+//           : HttpResponse r ( inner req )
+//           ? ( heavy req ) { ( sem_release gate ) } {}
+//           ^ r
+//       }
+//   } )
+//
+// This is the seam the facade was missing. Without it a server that
+// needs anything the built-in layers do not do — a concurrency gate in
+// front of an expensive route, a per-IP budget, an auth check — has to
+// abandon the facade and hand-wire router + server + shutdown itself,
+// which is the ~40 lines the facade exists to remove. nurlapi did
+// exactly that, for one semaphore.
+//
+// One middleware. A second call replaces the first: middleware chains
+// grow ordering questions faster than they earn them, and a chain is
+// already expressible by composing inside the one closure.
+//
+// The wrapper must outlive `http_app_listen` and is yours to free; the
+// handler it RETURNS is freed by the facade with its own layers.
+@ http_app_use * HttpApp a ( @ ( @ HttpResponse HttpRequest ) ( @ HttpResponse HttpRequest ) ) f → v {
+    ( vec_clear [HttpMiddleware] . a mw )
+    ( vec_push [HttpMiddleware] . a mw @ HttpMiddleware { f } )
+}
 
 // Serve on a worker pool of `n` threads (0 = single-threaded keep-alive).
 // Each worker is pinned to one connection for that connection's whole
@@ -319,6 +369,18 @@ $ `stdlib/ext/http3_server.nu`
     // drop-glue — envs are manual).
     : ( @ HttpResponse HttpRequest ) disp \ HttpRequest req → HttpResponse { ^ ( __httpapp_route_and_static a req ) }
     : ~ ( @ HttpResponse HttpRequest ) base disp
+    // User middleware sits innermost: CORS preflights and the access
+    // log see every request, including the ones a gate would hold.
+    : ~ ( @ HttpResponse HttpRequest ) userw disp
+    : ~ b has_user F
+    ? > ( vec_len [HttpMiddleware] . a mw ) 0 {
+        : *HttpMiddleware mp ( vec_data [HttpMiddleware] . a mw )
+        : HttpMiddleware m . mp 0
+        : ( @ ( @ HttpResponse HttpRequest ) ( @ HttpResponse HttpRequest ) ) f . m f
+        = userw ( f base )
+        = base userw
+        = has_user T
+    } {}
     : ~ ( @ HttpResponse HttpRequest ) corsw disp
     : ~ b has_cors F
     ? . a cors {
@@ -418,6 +480,9 @@ $ `stdlib/ext/http3_server.nu`
     ? != # i h3_creds 0 { ( quic_creds_free h3_creds ) } {}
     ? != # i . h3_sock raw 0 { ( udp_close h3_sock ) } {}
     ? has_log { ( nurl_free # s # *u logw 1 ) } {}
+    // The handler the user middleware RETURNED is the facade's to free —
+    // the wrapper itself belongs to whoever called http_app_use.
+    ? has_user { ( nurl_free # s # *u userw 1 ) } {}
     ? has_cors { ( nurl_free # s # *u corsw 1 ) } {}
     ( nurl_free # s # *u disp 1 )
     ^ rc

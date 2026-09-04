@@ -4671,11 +4671,40 @@
 // params = commas + 1 when any parameter text is present, 0 otherwise.
 // Returns the raw comma count and whether any parameter text was seen,
 // packed as: -1 malformed (no '('), else commas * 2 + (any ? 1 : 0).
+// Index of the parameter list's opening `(` in a closure / fn-ptr LLVM
+// type, or -1. Both helpers below used to take the FIRST `(` in the
+// string, which is right until the RETURN type is itself a function
+// type:
+//
+//   ( @ ( @ i i ) ( @ i i ) )   →   { {i64(i8*,i64)*,i8*} (i8*, …)*, i8* }
+//                                      ^ the first `(` is the RETURN's
+//
+// so a middleware-shaped type — takes a handler, returns a handler —
+// had its arity and parameter types read off its own return value, and
+// `( mw h )` was rejected as passing a closure where an `i` was
+// declared. The parameter list's paren is the first one at the OUTER
+// nesting level: inside the closure struct's `{ … }` for a closure
+// type, at top level for a bare fn-ptr.
+@ __fnty_param_paren s t → i {
+    : i n ( nurl_str_len t )
+    ? == n 0 { ^ -1 } {}
+    : i base ? == ( nurl_str_get t 0 ) 123 1 0
+    : ~ i depth 0
+    : ~ i p 0
+    ~ < p n {
+        : i c ( nurl_str_get t p )
+        ? & == c 40 == depth base { ^ p } {}
+        ? | == c 40 == c 123 { = depth + depth 1 }
+        { ? | == c 41 == c 125 { = depth - depth 1 } {} }
+        = p + p 1
+    }
+    ^ -1
+}
+
 @ __fnty_paren_commas s t → i {
     : i n ( nurl_str_len t )
-    : ~ i p 0
-    ~ & < p n != ( nurl_str_get t p ) 40 { = p + p 1 }
-    ? >= p n { ^ -1 } {}
+    : ~ i p ( __fnty_param_paren t )
+    ? < p 0 { ^ -1 } {}
     = p + p 1
     : ~ i depth 0
     : ~ i commas 0
@@ -4722,9 +4751,8 @@
 // no parameter list to read.
 @ __fnty_param_lltys s t b skip_first → s {
     : i n ( nurl_str_len t )
-    : ~ i p 0
-    ~ & < p n != ( nurl_str_get t p ) 40 { = p + p 1 }
-    ? >= p n { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ i p ( __fnty_param_paren t )
+    ? < p 0 { ^ ( nurl_str_cat `` `` ) } {}
     = p + p 1
     : ~ i depth 0
     : ~ i seg_start p

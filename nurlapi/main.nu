@@ -1,4 +1,4 @@
-$ `stdlib/ext/http_full.nu`
+$ `packages/http/src/http.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/process.nu`
@@ -12,6 +12,7 @@ $ `stdlib/std/random.nu`
 $ `stdlib/ext/regex.nu`
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/mcp_http.nu`
+$ `stdlib/ext/mcp_server.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/ext/nurldoc.nu`
 $ `stdlib/ext/mcp_search.nu`
@@ -4273,93 +4274,38 @@ s combined_stdout s combined_stderr → v {
 
 // ── Tool schemas — small helpers keep the descriptor table terse.
 
-@ __mcp_prop s ptype s desc → Json {
-    : Json p ( json_obj_new )
-    ( json_obj_set p `type` ( json_str_lit ptype ) )
-    ( json_obj_set p `description` ( json_str_lit desc ) )
-    ^ p
-}
-
-@ __mcp_prop_enum s ptype s desc ( Vec s ) enum_vals → Json {
-    : Json p ( json_obj_new )
-    ( json_obj_set p `type` ( json_str_lit ptype ) )
-    ( json_obj_set p `description` ( json_str_lit desc ) )
-    : Json e ( json_arr_new )
-    : i en ( vec_len [s] enum_vals )
-    : ~ i k 0
-    ~ < k en {
-        ?? ( vec_get [s] enum_vals k ) { T v → ( json_arr_push e ( json_str_lit v ) ) F _ → {} }
-        = k + k 1
-    }
-    ( json_obj_set p `enum` e )
-    ^ p
-}
-
 // Schema: { source: string (required), filename: string (optional) }
 @ __mcp_schema_source_filename → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( json_obj_set props `source`
-    ( __mcp_prop `string` `NURL source code (full file contents)` ) )
-    ( json_obj_set props `filename`
-    ( __mcp_prop `string` `Logical filename for diagnostics (default main.nu)` ) )
-    ( json_obj_set props `flags`
-    ( __mcp_prop `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --no-borrowck, --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` ) )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `source` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `source` `string` `NURL source code (full file contents)` T )
+    ( mcp_schema_prop sc `filename` `string` `Logical filename for diagnostics (default main.nu)` F )
+    ( mcp_schema_prop sc `flags` `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --no-borrowck, --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` F )
+    ^ sc
 }
 
 @ __mcp_schema_build_target → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( json_obj_set props `source`
-    ( __mcp_prop `string` `NURL source code (full file contents)` ) )
-    : ( Vec s ) targets ( vec_new [s] )
-    ( vec_push [s] targets `linux-x64-musl` )
-    ( vec_push [s] targets `linux-arm64-musl` )
-    ( vec_push [s] targets `linux-arm64-gnu` )
-    ( vec_push [s] targets `linux-riscv64-musl` )
-    ( vec_push [s] targets `macos-x64` )
-    ( vec_push [s] targets `macos-arm64` )
-    ( json_obj_set props `target`
-    ( __mcp_prop_enum `string` `Cross-compile target id` targets ) )
-    ( vec_free [s] targets )
-    ( json_obj_set props `filename`
-    ( __mcp_prop `string` `Logical filename for diagnostics (default main.nu)` ) )
-    ( json_obj_set props `flags`
-    ( __mcp_prop `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --no-borrowck, --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` ) )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `source` ) )
-    ( json_arr_push req ( json_str_lit `target` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `source` `string` `NURL source code (full file contents)` T )
+    : Json __target_vals ( json_arr_new )
+    ( json_arr_push __target_vals ( json_str_lit `linux-x64-musl` ) )
+    ( json_arr_push __target_vals ( json_str_lit `linux-arm64-musl` ) )
+    ( json_arr_push __target_vals ( json_str_lit `linux-arm64-gnu` ) )
+    ( json_arr_push __target_vals ( json_str_lit `linux-riscv64-musl` ) )
+    ( json_arr_push __target_vals ( json_str_lit `macos-x64` ) )
+    ( json_arr_push __target_vals ( json_str_lit `macos-arm64` ) )
+    ( mcp_schema_prop_enum sc `target` `string` `Cross-compile target id` __target_vals T )
+    ( mcp_schema_prop sc `filename` `string` `Logical filename for diagnostics (default main.nu)` F )
+    ( mcp_schema_prop sc `flags` `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --no-borrowck, --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` F )
+    ^ sc
 }
 
 @ __mcp_schema_name → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( json_obj_set props `name`
-    ( __mcp_prop `string` `Relative path under the catalogue root (e.g. core/string.nu)` ) )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `name` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `name` `string` `Relative path under the catalogue root (e.g. core/string.nu)` T )
+    ^ sc
 }
 
-@ __mcp_schema_empty → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    ( json_obj_set schema `properties` ( json_obj_new ) )
-    ^ schema
-}
+@ __mcp_schema_empty → Json { ^ ( mcp_schema_empty ) }
 
 // ── Tool result helpers ─────────────────────────────────────────────
 
@@ -4459,46 +4405,26 @@ s combined_stdout s combined_stderr → v {
 
 // The native build tool's schema, with the opt-in `run`.
 @ __mcp_schema_build_native → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( json_obj_set props `source`
-    ( __mcp_prop `string` `NURL source code (full file contents)` ) )
-    ( json_obj_set props `filename`
-    ( __mcp_prop `string` `Logical filename for diagnostics (default main.nu)` ) )
-    ( json_obj_set props `run`
-    ( __mcp_prop `boolean` `Also run the compiled binary and return exit code, stdout, stderr. Unsandboxed code execution — disabled unless the operator set NURL_ALLOW_RUN=1 (asking while off returns an error, not a silent build). nurl_build_unikernel is the sandboxed alternative.` ) )
-    ( json_obj_set props `flags`
-    ( __mcp_prop `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --no-borrowck, --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` ) )
-    ( json_obj_set schema `properties` props )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `source` `string` `NURL source code (full file contents)` F )
+    ( mcp_schema_prop sc `filename` `string` `Logical filename for diagnostics (default main.nu)` F )
+    ( mcp_schema_prop sc `run` `boolean` `Also run the compiled binary and return exit code, stdout, stderr. Unsandboxed code execution — disabled unless the operator set NURL_ALLOW_RUN=1 (asking while off returns an error, not a silent build). nurl_build_unikernel is the sandboxed alternative.` F )
+    ( mcp_schema_prop sc `flags` `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --no-borrowck, --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` F )
+    ^ sc
 }
 
 @ __mcp_schema_build_unikernel → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( json_obj_set props `source`
-    ( __mcp_prop `string` `NURL source code (full file contents)` ) )
-    ( json_obj_set props `filename`
-    ( __mcp_prop `string` `Logical filename for diagnostics (default main.nu)` ) )
-    ( json_obj_set props `args`
-    ( __mcp_prop `string` `The guest program's argv, passed on the kernel command line as args="…"` ) )
-    ( json_obj_set props `files`
-    ( __mcp_prop `object` `Optional read-only filesystem baked into the image: {"relative/path": "<base64>"} — no absolute paths, no ".." segments` ) )
-    ( json_obj_set props `boot`
-    ( __mcp_prop `boolean` `Boot the built image in the server (TCG, no network, ~20 s cap) and return the guest console. Default true — the boot log is the point of the tool.` ) )
-    : ( Vec s ) uarchs ( vec_new [s] )
-    ( vec_push [s] uarchs `x86_64` )
-    ( vec_push [s] uarchs `aarch64` )
-    ( json_obj_set props `arch`
-    ( __mcp_prop_enum `string` `Which machine: x86_64 (QEMU microvm / PVH) or aarch64 (QEMU virt). Default x86_64.` uarchs ) )
-    ( vec_free [s] uarchs )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `source` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `source` `string` `NURL source code (full file contents)` T )
+    ( mcp_schema_prop sc `filename` `string` `Logical filename for diagnostics (default main.nu)` F )
+    ( mcp_schema_prop sc `args` `string` `The guest program's argv, passed on the kernel command line as args="…"` F )
+    ( mcp_schema_prop sc `files` `object` `Optional read-only filesystem baked into the image: {"relative/path": "<base64>"} — no absolute paths, no ".." segments` F )
+    ( mcp_schema_prop sc `boot` `boolean` `Boot the built image in the server (TCG, no network, ~20 s cap) and return the guest console. Default true — the boot log is the point of the tool.` F )
+    : Json __arch_vals ( json_arr_new )
+    ( json_arr_push __arch_vals ( json_str_lit `x86_64` ) )
+    ( json_arr_push __arch_vals ( json_str_lit `aarch64` ) )
+    ( mcp_schema_prop_enum sc `arch` `string` `Which machine: x86_64 (QEMU microvm / PVH) or aarch64 (QEMU virt). Default x86_64.` __arch_vals F )
+    ^ sc
 }
 
 // The MCP twin of POST /build_unikernel. Boot defaults ON here — an
@@ -4919,17 +4845,11 @@ s combined_stdout s combined_stderr → v {
 }
 
 @ __mcp_schema_changelog → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( json_obj_set props `query`
-    ( __mcp_prop `string` `Space-separated search terms; an entry matches only if EVERY term occurs in it (case-insensitive substring). Omit together with 'release' to get the release index.` ) )
-    ( json_obj_set props `release`
-    ( __mcp_prop `string` `Restrict to one release, e.g. '0.9.6' or 'Unreleased' (substring match on the release heading).` ) )
-    ( json_obj_set props `limit`
-    ( __mcp_prop `integer` `Maximum entries to return (default 10, max 50). Output is also byte-capped at 32 KB.` ) )
-    ( json_obj_set schema `properties` props )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `query` `string` `Space-separated search terms; an entry matches only if EVERY term occurs in it (case-insensitive substring). Omit together with 'release' to get the release index.` F )
+    ( mcp_schema_prop sc `release` `string` `Restrict to one release, e.g. '0.9.6' or 'Unreleased' (substring match on the release heading).` F )
+    ( mcp_schema_prop sc `limit` `integer` `Maximum entries to return (default 10, max 50). Output is also byte-capped at 32 KB.` F )
+    ^ sc
 }
 
 // Boolean tool argument: JSON true/false → b; absent / other → default.
@@ -5131,37 +5051,22 @@ s combined_stdout s combined_stderr → v {
 }
 
 @ __mcp_schema_docs → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( json_obj_set props `name`
-    ( __mcp_prop `string` `Which document, e.g. 'MEMORY.md', 'dev/COMPILER_INTERNALS.md' ('docs/' prefix and '.md' optional, case-insensitive). Omit to list every document.` ) )
-    ( json_obj_set props `section`
-    ( __mcp_prop `string` `Return ONE section of 'name' — by number ('7.4'; '2' includes its 2.x subsections) or by heading words ('move checking'). The cheap way to answer a specific question; a miss replies with the outline.` ) )
-    ( json_obj_set props `outline`
-    ( __mcp_prop `boolean` `With 'name': return that document's heading map (section titles + byte sizes) instead of its text, so you can pick a 'section' without reading the document first.` ) )
-    ( json_obj_set props `query`
-    ( __mcp_prop `string` `Search every section of every document (whole-word, ranked, heading hits outrank body hits); returns the best few with their 'section=' keys. Use when you know the question but not the document. Ignored when 'name' is set.` ) )
-    ( json_obj_set props `offset`
-    ( __mcp_prop `integer` `Byte offset for paging (default 0; replies cap at 48 KB and print the next offset). Prefer 'section' or 'query'.` ) )
-    ( json_obj_set schema `properties` props )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `name` `string` `Which document, e.g. 'MEMORY.md', 'dev/COMPILER_INTERNALS.md' ('docs/' prefix and '.md' optional, case-insensitive). Omit to list every document.` F )
+    ( mcp_schema_prop sc `section` `string` `Return ONE section of 'name' — by number ('7.4'; '2' includes its 2.x subsections) or by heading words ('move checking'). The cheap way to answer a specific question; a miss replies with the outline.` F )
+    ( mcp_schema_prop sc `outline` `boolean` `With 'name': return that document's heading map (section titles + byte sizes) instead of its text, so you can pick a 'section' without reading the document first.` F )
+    ( mcp_schema_prop sc `query` `string` `Search every section of every document (whole-word, ranked, heading hits outrank body hits); returns the best few with their 'section=' keys. Use when you know the question but not the document. Ignored when 'name' is set.` F )
+    ( mcp_schema_prop sc `offset` `integer` `Byte offset for paging (default 0; replies cap at 48 KB and print the next offset). Prefer 'section' or 'query'.` F )
+    ^ sc
 }
 
 @ __mcp_schema_api → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( json_obj_set props `module`
-    ( __mcp_prop `string` `Render ONE installed-stdlib module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'.` ) )
-    ( json_obj_set props `package`
-    ( __mcp_prop `string` `A published registry package's API surface, rendered from its tarball — the step after a registry hit, since package symbol names are not otherwise searchable. E.g. 'nn'.` ) )
-    ( json_obj_set props `version`
-    ( __mcp_prop `string` `Optional package version (e.g. '0.1.1'); defaults to the latest. Only meaningful with 'package'.` ) )
-    ( json_obj_set props `query`
-    ( __mcp_prop `string` `Declaration search: space- or comma-separated terms, ALL must occur (case-insensitive) in signature + doc comment + module path. Keep one call to ONE concept (2–4 related terms, e.g. 'string lowercase'). Zero-hit fallbacks run in order: a term that exactly names a module ('csv', 'csv.nu', 'ext/csv.nu') returns that whole surface — never cut mid-module, and the reply ends by listing any term it did not search; then a whole-word OR ranked by coverage; then examples + registry. Ignored when 'module' or 'package' is set.` ) )
-    ( json_obj_set schema `properties` props )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `module` `string` `Render ONE installed-stdlib module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'.` F )
+    ( mcp_schema_prop sc `package` `string` `A published registry package's API surface, rendered from its tarball — the step after a registry hit, since package symbol names are not otherwise searchable. E.g. 'nn'.` F )
+    ( mcp_schema_prop sc `version` `string` `Optional package version (e.g. '0.1.1'); defaults to the latest. Only meaningful with 'package'.` F )
+    ( mcp_schema_prop sc `query` `string` `Declaration search: space- or comma-separated terms, ALL must occur (case-insensitive) in signature + doc comment + module path. Keep one call to ONE concept (2–4 related terms, e.g. 'string lowercase'). Zero-hit fallbacks run in order: a term that exactly names a module ('csv', 'csv.nu', 'ext/csv.nu') returns that whole surface — never cut mid-module, and the reply ends by listing any term it did not search; then a whole-word OR ranked by coverage; then examples + registry. Ignored when 'module' or 'package' is set.` F )
+    ^ sc
 }
 
 // ── nurl_grep — substring search across the corpora an agent has ──────
@@ -5200,375 +5105,137 @@ s combined_stdout s combined_stderr → v {
 }
 
 @ __mcp_schema_grep → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( json_obj_set props `pattern`
-    ( __mcp_prop `string` `Case-insensitive substring to find. Results are path:line: text.` ) )
-    ( json_obj_set props `where`
-    ( __mcp_prop `string` `Scope: 'stdlib', 'examples', 'tests', 'packages' (registry name+description search), or 'all' (default). Combine with commas, e.g. 'stdlib,examples'.` ) )
-    ( json_obj_set props `word`
-    ( __mcp_prop `boolean` `true = only word-boundary lines, in-word tail dropped (rarely needed — results already rank boundary-first). Local corpora only.` ) )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `pattern` ) )
-    ( json_obj_set schema `properties` props )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `pattern` `string` `Case-insensitive substring to find. Results are path:line: text.` T )
+    ( mcp_schema_prop sc `where` `string` `Scope: 'stdlib', 'examples', 'tests', 'packages' (registry name+description search), or 'all' (default). Combine with commas, e.g. 'stdlib,examples'.` F )
+    ( mcp_schema_prop sc `word` `boolean` `true = only word-boundary lines, in-word tail dropped (rarely needed — results already rank boundary-first). Local corpora only.` F )
+    ^ sc
 }
 
 // ── Tool dispatch by name ──────────────────────────────────────────
 
-@ __mcp_dispatch_tool s name Json args → Json {
-    // Build tools — five compilation targets.
-    ? != 0 ( nurl_str_eq name `nurl_build_native` ) {
-        ^ ( __mcp_tool_build_source_filename `/build` F args )
-    } {}
-    ? != 0 ( nurl_str_eq name `nurl_build_wasm` ) {
-        ^ ( __mcp_tool_build_source_filename `/build_wasm` T args )
-    } {}
-    ? != 0 ( nurl_str_eq name `nurl_build_windows` ) {
-        ^ ( __mcp_tool_build_source_filename `/build_windows` F args )
-    } {}
-    ? != 0 ( nurl_str_eq name `nurl_build_macos` ) {
-        ^ ( __mcp_tool_build_source_filename `/build_macos` F args )
-    } {}
-    ? != 0 ( nurl_str_eq name `nurl_build_target` ) {
-        ^ ( __mcp_tool_build_target_impl args )
-    } {}
-    ? != 0 ( nurl_str_eq name `nurl_build_unikernel` ) {
-        ^ ( __mcp_tool_build_unikernel_impl args )
-    } {}
+// ── Tool helpers the registrations share ─────────────────────────────
+//
+// `dir` / `path` arrive OWNED from a get_*_dir / get_*_path call, so
+// each helper frees what it was handed — the registration site is a
+// one-line closure with nowhere to put a free.
 
-    // Browse — three catalogues.
-    ? != 0 ( nurl_str_eq name `nurl_list_examples` ) {
-        : String dir ( get_examples_dir )
-        : Json result ( __mcp_list_files_result ( string_data dir ) )
-        ( string_free dir )
-        ^ result
-    } {}
-    ? != 0 ( nurl_str_eq name `nurl_list_stdlib` ) {
-        : String dir ( get_stdlib_dir )
-        : Json result ( __mcp_list_files_result ( string_data dir ) )
-        ( string_free dir )
-        ^ result
-    } {}
-    ? != 0 ( nurl_str_eq name `nurl_list_tests` ) {
-        : String dir ( get_tests_dir )
-        : Json result ( __mcp_list_files_result ( string_data dir ) )
-        ( string_free dir )
-        ^ result
-    } {}
-
-    // Read per-catalogue. Refuses `..` segments to stop directory
-    // traversal — same defensive shape h_static* uses.
-    ? != 0 ( nurl_str_eq name `nurl_read_example` ) {
-        : s rel ( __mcp_args_get `name` args `` )
-        ? | == ( nurl_str_len rel ) 0 ( _has_dotdot_segment rel ) {
-            ^ ( __mcp_result_error `bad or missing 'name'` )
-        } {}
-        : String dir ( get_examples_dir )
-        : String fp ( path_join ( string_data dir ) rel )
-        : Json result ( __mcp_read_file_result ( string_data fp ) )
-        ( string_free dir ) ( string_free fp )
-        ^ result
-    } {}
-    ? != 0 ( nurl_str_eq name `nurl_read_stdlib` ) {
-        : s rel ( __mcp_args_get `name` args `` )
-        ? | == ( nurl_str_len rel ) 0 ( _has_dotdot_segment rel ) {
-            ^ ( __mcp_result_error `bad or missing 'name'` )
-        } {}
-        : String dir ( get_stdlib_dir )
-        : String fp ( path_join ( string_data dir ) rel )
-        : Json result ( __mcp_read_file_result ( string_data fp ) )
-        ( string_free dir ) ( string_free fp )
-        ^ result
-    } {}
-    ? != 0 ( nurl_str_eq name `nurl_read_test` ) {
-        : s rel ( __mcp_args_get `name` args `` )
-        ? | == ( nurl_str_len rel ) 0 ( _has_dotdot_segment rel ) {
-            ^ ( __mcp_result_error `bad or missing 'name'` )
-        } {}
-        : String dir ( get_tests_dir )
-        : String fp ( path_join ( string_data dir ) rel )
-        : Json result ( __mcp_read_file_result ( string_data fp ) )
-        ( string_free dir ) ( string_free fp )
-        ^ result
-    } {}
-
-    // Single-file reads — 4 doc files.
-    ? != 0 ( nurl_str_eq name `nurl_read_grammar` ) {
-        : String fp ( get_grammar_path )
-        : Json result ( __mcp_read_file_result ( string_data fp ) )
-        ( string_free fp ) ^ result
-    } {}
-    ? != 0 ( nurl_str_eq name `nurl_read_readme` ) {
-        : String fp ( get_readme_path )
-        : Json result ( __mcp_read_file_result ( string_data fp ) )
-        ( string_free fp ) ^ result
-    } {}
-    ? != 0 ( nurl_str_eq name `nurl_read_roadmap` ) {
-        : String fp ( get_roadmap_path )
-        : Json result ( __mcp_read_file_result ( string_data fp ) )
-        ( string_free fp ) ^ result
-    } {}
-
-    ? != 0 ( nurl_str_eq name `nurl_docs` ) {
-        ^ ( __mcp_tool_docs args )
-    } {}
-
-    // Targeted changelog retrieval.
-    ? != 0 ( nurl_str_eq name `nurl_changelog` ) {
-        ^ ( __mcp_tool_changelog args )
-    } {}
-    // API surface / search.
-    ? != 0 ( nurl_str_eq name `nurl_api` ) {
-        ^ ( __mcp_tool_api args )
-    } {}
-    ? != 0 ( nurl_str_eq name `nurl_grep` ) {
-        ^ ( __mcp_tool_grep args )
-    } {}
-
-    ^ ( __mcp_result_error `unknown tool` )
+@ __mcp_list_dir_result String dir → Json {
+    : Json result ( __mcp_list_files_result ( string_data dir ) )
+    ( string_free dir )
+    ^ result
 }
 
-// ── tools/list response ─────────────────────────────────────────────
-
-// Read-only tool: browse/search/read — clients may auto-allow.
-@ __mcp_tool_ro s name s desc Json schema → Json {
-    ^ ( mcp_tool_annotate ( mcp_tool_descriptor name desc schema ) T F T F )
+@ __mcp_read_owned_path String fp → Json {
+    : Json result ( __mcp_read_file_result ( string_data fp ) )
+    ( string_free fp )
+    ^ result
 }
 
-// Build tool: produces artifacts server-side, destroys nothing.
-@ __mcp_tool_build s name s desc Json schema → Json {
-    ^ ( mcp_tool_annotate ( mcp_tool_descriptor name desc schema ) F F T F )
+// Read `args.name` under `dir`. Refuses `..` segments to stop
+// directory traversal — the same defensive shape h_static* uses.
+@ __mcp_read_under String dir Json args → Json {
+    : s rel ( __mcp_args_get `name` args `` )
+    ? | == ( nurl_str_len rel ) 0 ( _has_dotdot_segment rel ) {
+        ( string_free dir )
+        ^ ( __mcp_result_error `bad or missing 'name'` )
+    } {}
+    : String fp ( path_join ( string_data dir ) rel )
+    : Json result ( __mcp_read_file_result ( string_data fp ) )
+    ( string_free dir ) ( string_free fp )
+    ^ result
 }
 
-@ __mcp_build_tools_list → Json {
-    : Json arr ( json_arr_new )
+// ── Resources ────────────────────────────────────────────────────────
+//
+// The three catalogue LISTINGS are exact URIs; the three per-file
+// families are TEMPLATES. Both halves were advertised on /mcp-info
+// before this, but only the exact six were ever served: reading
+// `nurl://stdlib/core/string.nu` returned `{"contents":[]}` — an empty
+// success, which a client reads as "exists, and is empty". They are
+// registered as templates now, so `resources/templates/list` announces
+// them and a read reaches the same file the nurl_read_* tools do.
 
-    // Build tools.
-    ( json_arr_push arr ( __mcp_tool_build `nurl_build_native`
-    `Compile NURL source to an x86_64 Linux ELF. Returns status, compiler stderr, and download URLs for the binary + .ll. run=true also executes it and returns exit code + output (see the run parameter for when that is allowed).`
-    ( __mcp_schema_build_native ) ) )
-    ( json_arr_push arr ( __mcp_tool_build `nurl_build_wasm`
-    `Compile NURL source to a wasm32-wasi module. Returns status, compile logs, and download URLs for the .wasm + .ll (no inline base64). The module runs in-browser via a WASI shim or with any WASI runtime (nwasm, wasmtime).`
-    ( __mcp_schema_source_filename ) ) )
-    ( json_arr_push arr ( __mcp_tool_build `nurl_build_windows`
-    `Cross-compile NURL source to a Windows x86_64 .exe (mingw-w64; static libcurl + Schannel TLS). Returns status, stderr, and a download URL.`
-    ( __mcp_schema_source_filename ) ) )
-    ( json_arr_push arr ( __mcp_tool_build `nurl_build_macos`
-    `Cross-compile NURL source to an unsigned macOS x86_64 Mach-O (zig cc); clear the quarantine attribute before running.`
-    ( __mcp_schema_source_filename ) ) )
-    ( json_arr_push arr ( __mcp_tool_build `nurl_build_target`
-    `Cross-compile NURL source via zig cc; 'target' picks static musl ELFs (x86_64/arm64/riscv64 Linux), linux-arm64-gnu (glibc), or macos-x64/macos-arm64 Mach-O.`
-    ( __mcp_schema_build_target ) ) )
-    ( json_arr_push arr ( __mcp_tool_build `nurl_build_unikernel`
-    `Build NURL source into a bootable unikernel image (x86_64 PVH/microvm or aarch64 virt — no OS or libc: pure-NURL TCP/IP + TLS, no fork/exec). By default also boots it server-side (no network, ~20 s cap) and returns the guest console, an ELF download link, and ready-to-paste QEMU commands. The sandboxed way to run NURL here.`
-    ( __mcp_schema_build_unikernel ) ) )
-
-    // Browse.
-    ( json_arr_push arr ( __mcp_tool_ro `nurl_list_examples`
-    `List bundled NURL example programs. Returns a JSON array of {name, path, bytes} entries, sorted alphabetically.`
-    ( __mcp_schema_empty ) ) )
-    ( json_arr_push arr ( __mcp_tool_ro `nurl_list_stdlib`
-    `List bundled NURL stdlib modules. Returns a JSON array of {name, path, bytes} entries (recursive — core/, std/, ext/), sorted alphabetically.`
-    ( __mcp_schema_empty ) ) )
-    ( json_arr_push arr ( __mcp_tool_ro `nurl_list_tests`
-    `List bundled compiler tests. Returns a JSON array of {name, path, bytes} entries, sorted alphabetically.`
-    ( __mcp_schema_empty ) ) )
-
-    // Read per-catalogue.
-    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_example`
-    `Return the source of a bundled example. name is the relative path returned by nurl_list_examples.`
-    ( __mcp_schema_name ) ) )
-    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_stdlib`
-    `Return the source of a stdlib module. name is the relative path returned by nurl_list_stdlib (e.g. core/string.nu).`
-    ( __mcp_schema_name ) ) )
-    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_test`
-    `Return the source of a bundled compiler test. name is the relative path returned by nurl_list_tests.`
-    ( __mcp_schema_name ) ) )
-
-    // Read docs.
-    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_grammar`
-    `Return the current NURL grammar EBNF (spec/grammar.ebnf).`
-    ( __mcp_schema_empty ) ) )
-    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_readme`
-    `Return README.md verbatim — project overview, syntax cheat sheet, build instructions.`
-    ( __mcp_schema_empty ) ) )
-    ( json_arr_push arr ( __mcp_tool_ro `nurl_read_roadmap`
-    `Return ROADMAP.md verbatim — current development plan + ship log.`
-    ( __mcp_schema_empty ) ) )
-    ( json_arr_push arr ( __mcp_tool_ro `nurl_docs`
-    `Search and read the shipped docs/ prose — MEMORY.md (ownership: who frees what), CRYPTO.md, ASYNC.md, spec.md (the full language reference), and ten more: the behaviour questions no API surface answers. Read this before guessing at memory, crypto, or platform behaviour. No arguments lists the documents; query= finds the sections that answer a question; name= with section=/outline= reads pieces. Prefer query/section — whole documents run 40–60 KB.`
-    ( __mcp_schema_docs ) ) )
-
-    // Changelog.
-    ( json_arr_push arr ( __mcp_tool_ro `nurl_changelog`
-    `Find when/whether a feature, fix, or rename shipped — targeted retrieval from the 240+ KB CHANGELOG, never fetch it whole. No arguments returns the release index; query= and/or release= return the matching entries in full ('[release] — date › category' provenance, best matches first, the rest as one-line titles).`
-    ( __mcp_schema_changelog ) ) )
-
-    ( json_arr_push arr ( __mcp_tool_ro `nurl_api`
-    `A module's API surface (signatures + doc comments + full type definitions, no bodies), or a declaration search across the whole stdlib. Prefer this over nurl_read_stdlib — a surface is ~6× smaller than the source, one matching declaration ~0.3 KB. module='ext/csv.nu' or package='nn' renders one surface (C-runtime builtins are indexed as core/builtins.nu); query= searches declarations — one concept per call, 2–4 related terms. Every reply states what it searched and lists what it could not.`
-    ( __mcp_schema_api ) ) )
-
-    ( json_arr_push arr ( __mcp_tool_ro `nurl_grep`
-    `Case-insensitive substring search across stdlib, examples, and tests (path:line: text) plus the package registry (name + description) — "is there anything for X" over raw text. Word-boundary matches rank first; in-word hits follow in a labeled tail. Scope with where=.`
-    ( __mcp_schema_grep ) ) )
-
+@ __mcp_res_text s mime String body → Json {
     : Json out ( json_obj_new )
-    ( json_obj_set out `tools` arr )
+    ( json_obj_set out `mimeType` ( json_str_lit mime ) )
+    ( json_obj_set out `text` ( json_str_lit ( string_data body ) ) )
+    ( string_free body )
     ^ out
 }
 
-// ── Resources (nurl:// URIs mirroring the read-tools) ──────────────
-
-@ __mcp_resource_desc s uri s name s desc s mime → Json {
-    : Json o ( json_obj_new )
-    ( json_obj_set o `uri` ( json_str_lit uri ) )
-    ( json_obj_set o `name` ( json_str_lit name ) )
-    ( json_obj_set o `description` ( json_str_lit desc ) )
-    ( json_obj_set o `mimeType` ( json_str_lit mime ) )
-    ^ o
-}
-
-@ __mcp_build_resources_list → Json {
-    : Json arr ( json_arr_new )
-    ( json_arr_push arr ( __mcp_resource_desc `nurl://readme` `README` `Project overview + syntax cheat sheet.` `text/markdown` ) )
-    ( json_arr_push arr ( __mcp_resource_desc `nurl://roadmap` `ROADMAP` `Current development plan + ship log.` `text/markdown` ) )
-    ( json_arr_push arr ( __mcp_resource_desc `nurl://grammar` `Grammar` `Current NURL grammar (EBNF).` `text/plain` ) )
-    ( json_arr_push arr ( __mcp_resource_desc `nurl://stdlib` `Stdlib` `JSON listing of every stdlib module.` `application/json` ) )
-    ( json_arr_push arr ( __mcp_resource_desc `nurl://examples` `Examples` `JSON listing of every bundled example.` `application/json` ) )
-    ( json_arr_push arr ( __mcp_resource_desc `nurl://tests` `Tests` `JSON listing of every compiler test.` `application/json` ) )
-    : Json out ( json_obj_new )
-    ( json_obj_set out `resources` arr )
-    ^ out
-}
-
-@ __mcp_resource_text_node s uri s mime s text → Json {
-    : Json o ( json_obj_new )
-    ( json_obj_set o `uri` ( json_str_lit uri ) )
-    ( json_obj_set o `mimeType` ( json_str_lit mime ) )
-    ( json_obj_set o `text` ( json_str_lit text ) )
-    ^ o
-}
-
-@ __mcp_resource_read_for s uri → Json {
-    : Json arr ( json_arr_new )
-    ? != 0 ( nurl_str_eq uri `nurl://readme` ) {
-        : String fp ( get_readme_path )
-        : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-        ?? rd {
-            T body → {
-                : String s_body ( bytes_to_str body )
-                ( json_arr_push arr ( __mcp_resource_text_node uri `text/markdown` ( string_data s_body ) ) )
-                ( vec_free [u] body ) ( string_free s_body )
-            }
-            F _ → {}
+@ __mcp_res_file s mime String fp → Json {
+    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+    ( string_free fp )
+    ?? rd {
+        T body → {
+            : String s_body ( bytes_to_str body )
+            ( vec_free [u] body )
+            ^ ( __mcp_res_text mime s_body )
         }
-        ( string_free fp )
-    } {
-        ? != 0 ( nurl_str_eq uri `nurl://roadmap` ) {
-            : String fp ( get_roadmap_path )
-            : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-            ?? rd { T body → {
-                    : String s_body ( bytes_to_str body )
-                    ( json_arr_push arr ( __mcp_resource_text_node uri `text/markdown` ( string_data s_body ) ) )
-                    ( vec_free [u] body ) ( string_free s_body )
-                } F _ → {} }
-            ( string_free fp )
-        } {
-            ? != 0 ( nurl_str_eq uri `nurl://grammar` ) {
-                : String fp ( get_grammar_path )
-                : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-                ?? rd { T body → {
-                        : String s_body ( bytes_to_str body )
-                        ( json_arr_push arr ( __mcp_resource_text_node uri `text/plain` ( string_data s_body ) ) )
-                        ( vec_free [u] body ) ( string_free s_body )
-                    } F _ → {} }
-                ( string_free fp )
-            } {
-                ? != 0 ( nurl_str_eq uri `nurl://stdlib` ) {
-                    : String dir ( get_stdlib_dir )
-                    : Json listing ( json_arr_new )
-                    ( msearch_walk_nu_files listing ( string_data dir ) `` )
-                    : String body ( json_stringify listing )
-                    ( json_arr_push arr ( __mcp_resource_text_node uri `application/json` ( string_data body ) ) )
-                    ( json_free listing ) ( string_free body ) ( string_free dir )
-                } {
-                    ? != 0 ( nurl_str_eq uri `nurl://examples` ) {
-                        : String dir ( get_examples_dir )
-                        : Json listing ( json_arr_new )
-                        ( msearch_walk_nu_files listing ( string_data dir ) `` )
-                        : String body ( json_stringify listing )
-                        ( json_arr_push arr ( __mcp_resource_text_node uri `application/json` ( string_data body ) ) )
-                        ( json_free listing ) ( string_free body ) ( string_free dir )
-                    } {
-                        ? != 0 ( nurl_str_eq uri `nurl://tests` ) {
-                            : String dir ( get_tests_dir )
-                            : Json listing ( json_arr_new )
-                            ( msearch_walk_nu_files listing ( string_data dir ) `` )
-                            : String body ( json_stringify listing )
-                            ( json_arr_push arr ( __mcp_resource_text_node uri `application/json` ( string_data body ) ) )
-                            ( json_free listing ) ( string_free body ) ( string_free dir )
-                        } {} } } } } }
-    : Json out ( json_obj_new )
-    ( json_obj_set out `contents` arr )
-    ^ out
-}
-
-// ── Prompts ────────────────────────────────────────────────────────
-
-@ __mcp_build_prompts_list → Json {
-    : Json arr ( json_arr_new )
-    : Json p ( json_obj_new )
-    ( json_obj_set p `name` ( json_str_lit `nurl_coding_assistant` ) )
-    ( json_obj_set p `description` ( json_str_lit `Compact NURL grammar + canonical-example primer so small models ground themselves before writing or reviewing NURL code.` ) )
-    ( json_obj_set p `arguments` ( json_arr_new ) )
-    ( json_arr_push arr p )
-    : Json out ( json_obj_new )
-    ( json_obj_set out `prompts` arr )
-    ^ out
-}
-
-@ __mcp_prompts_get_for s name → Json {
-    ? != 0 ( nurl_str_eq name `nurl_coding_assistant` ) {
-        : Json content ( json_obj_new )
-        ( json_obj_set content `type` ( json_str_lit `text` ) )
-        ( json_obj_set content `text` ( json_str_lit `You are about to read or write NURL source. NURL uses prefix notation: every operator comes before its arguments and arity is fixed. Calls require parentheses: ( fn arg1 arg2 ). Single-letter type keywords (i u f b s v), no semicolons. Functions: @ name params → ret { body }. Bindings: : type name expr (immutable) or : ~ type name expr (mutable). Pattern match: ?? expr { Variant payload → body ... }. Read README first via the tools — every common pitfall has a documented compiler diagnostic. When writing code, ALWAYS check examples for the closest shape before guessing syntax.` ) )
-
-        : Json msg ( json_obj_new )
-        ( json_obj_set msg `role` ( json_str_lit `user` ) )
-        ( json_obj_set msg `content` content )
-
-        : Json msgs ( json_arr_new )
-        ( json_arr_push msgs msg )
-
-        : Json out ( json_obj_new )
-        ( json_obj_set out `description` ( json_str_lit `NURL coding primer` ) )
-        ( json_obj_set out `messages` msgs )
-        ^ out
-    } {}
-    // Unknown name — return an empty result (caller wraps in error envelope).
-    : Json out ( json_obj_new )
-    ( json_obj_set out `description` ( json_str_lit `unknown prompt` ) )
-    ( json_obj_set out `messages` ( json_arr_new ) )
-    ^ out
-}
-
-// ── Top-level dispatch ─────────────────────────────────────────────
-
-// Pull `id` Json off the request — JNull when absent (notification).
-@ __mcp_get_id Json req → Json {
-    : ?Json o ( json_obj_get req `id` )
-    ?? o {
-        T j → { ^ ( json_clone j ) }
         F _ → { ^ ( json_null ) }
     }
 }
 
-// NURL backtick strings cannot embed a literal backtick, so the
-// instructions blurb is assembled at runtime from segments interleaved
-// with explicit backtick bytes.
+// A catalogue listing, as the JSON array /stdlib and /tests serve.
+@ __mcp_res_listing String dir → Json {
+    : Json arr ( json_arr_new )
+    ( msearch_walk_nu_files arr ( string_data dir ) `` )
+    ( string_free dir )
+    : String body ( json_stringify arr )
+    ( json_free arr )
+    ^ ( __mcp_res_text `application/json` body )
+}
+
+// One file under `dir`, named by the template variable. A traversal
+// attempt or a missing file returns a non-object, which the facade
+// turns into -32002 rather than an empty success.
+@ __mcp_res_under String dir Json arg → Json {
+    : ~ s rel ``
+    ?? ( json_obj_get arg `variable` ) {
+        T v → { = rel ( json_as_str v ) }
+        F _ → {}
+    }
+    ? | == ( nurl_str_len rel ) 0 ( _has_dotdot_segment rel ) {
+        ( string_free dir )
+        ^ ( json_null )
+    } {}
+    : String fp ( path_join ( string_data dir ) rel )
+    ( string_free dir )
+    ^ ( __mcp_res_file `text/plain` fp )
+}
+
+@ __mcp_register_resources McpServer srv → v {
+    ( mcp_server_add_resource srv `nurl://readme` `README` `text/markdown`
+    `Project overview + syntax cheat sheet.`
+    \ → Json { ^ ( __mcp_res_file `text/markdown` ( get_readme_path ) ) } )
+    ( mcp_server_add_resource srv `nurl://roadmap` `ROADMAP` `text/markdown`
+    `Current development plan + ship log.`
+    \ → Json { ^ ( __mcp_res_file `text/markdown` ( get_roadmap_path ) ) } )
+    ( mcp_server_add_resource srv `nurl://grammar` `Grammar` `text/plain`
+    `Current NURL grammar (EBNF).`
+    \ → Json { ^ ( __mcp_res_file `text/plain` ( get_grammar_path ) ) } )
+    ( mcp_server_add_resource srv `nurl://stdlib` `Stdlib` `application/json`
+    `JSON listing of every stdlib module.`
+    \ → Json { ^ ( __mcp_res_listing ( get_stdlib_dir ) ) } )
+    ( mcp_server_add_resource srv `nurl://examples` `Examples` `application/json`
+    `JSON listing of every bundled example.`
+    \ → Json { ^ ( __mcp_res_listing ( get_examples_dir ) ) } )
+    ( mcp_server_add_resource srv `nurl://tests` `Tests` `application/json`
+    `JSON listing of every compiler test.`
+    \ → Json { ^ ( __mcp_res_listing ( get_tests_dir ) ) } )
+
+    ( mcp_server_add_resource_template srv `nurl://stdlib/{path}` `Stdlib module`
+    `text/plain` `One stdlib module by path, e.g. nurl://stdlib/core/string.nu`
+    \ Json a → Json { ^ ( __mcp_res_under ( get_stdlib_dir ) a ) } )
+    ( mcp_server_add_resource_template srv `nurl://example/{name}` `Example`
+    `text/plain` `One bundled example by name, e.g. nurl://example/hello.nu`
+    \ Json a → Json { ^ ( __mcp_res_under ( get_examples_dir ) a ) } )
+    ( mcp_server_add_resource_template srv `nurl://test/{name}` `Compiler test`
+    `text/plain` `One compiler test by name, e.g. nurl://test/closures.nu`
+    \ Json a → Json { ^ ( __mcp_res_under ( get_tests_dir ) a ) } )
+}
+
 @ __mcp_instructions_text → String {
     : String s ( string_with_cap 800 )
     : i bt 96
@@ -5602,233 +5269,146 @@ s combined_stdout s combined_stderr → v {
     ^ s
 }
 
-// Initialize result with tools + resources + prompts capabilities.
+// ── The server ───────────────────────────────────────────────────────
 //
-// Legacy-handshake negotiation via `mcp_initialize_version_for`: the
-// client's requested revision is echoed when supported (a FastMCP-era
-// client asking for `2025-03-26` — the old pinned value — still sees
-// exactly that), newer handshake clients get theirs, and the modern
-// handshake-less revision is never advertised here. Modern
-// (2026-07-28) clients skip initialize entirely — they carry
-// per-request `_meta` and probe `server/discover` (below). The
-// capability sub-fields advertise the FastMCP shape so clients that
-// key off `listChanged`/`subscribe` see the expected surface even
-// though we don't push change notifications today.
-@ __mcp_initialize ? Json params → Json {
-    : Json experimental_cap ( json_obj_new )
-    : Json tools_cap ( json_obj_new )
-    ( json_obj_set tools_cap `listChanged` ( json_bool F ) )
-    : Json resources_cap ( json_obj_new )
-    ( json_obj_set resources_cap `subscribe` ( json_bool F ) )
-    ( json_obj_set resources_cap `listChanged` ( json_bool F ) )
-    : Json prompts_cap ( json_obj_new )
-    ( json_obj_set prompts_cap `listChanged` ( json_bool F ) )
+// One registration per tool, resource, template and prompt. The
+// dispatcher, the dual-era handshake, `server/discover`, the version
+// gate, the `_meta` decorations, per-handler panic isolation and the
+// CacheableResult stamping are `stdlib/ext/mcp_server.nu`'s — this file
+// carried the fourth hand-written copy of all of it.
+//
+// Cache policy: this surface is public and fixed at build time, so an
+// hour and `public` are honest. The facade's default (60 s, private)
+// suits a server behind auth whose resources are live, and would cost
+// every client a re-listing a minute for a list that cannot change.
+//
+// Annotation columns: read-only, destructive, idempotent, open-world.
 
-    : Json caps ( json_obj_new )
-    ( json_obj_set caps `experimental` experimental_cap )
-    ( json_obj_set caps `prompts` prompts_cap )
-    ( json_obj_set caps `resources` resources_cap )
-    ( json_obj_set caps `tools` tools_cap )
-
-    : Json info ( json_obj_new )
-    : String name ( get_mcp_server_name )
-    : String version ( get_mcp_server_version )
-    ( json_obj_set info `name` ( json_str_lit ( string_data name ) ) )
-    ( json_obj_set info `version` ( json_str_lit ( string_data version ) ) )
-    ( string_free name ) ( string_free version )
-
-    : String instructions ( __mcp_instructions_text )
-
+@ __mcp_prompt_primer Json args → Json {
+    : Json content ( json_obj_new )
+    ( json_obj_set content `type` ( json_str_lit `text` ) )
+    ( json_obj_set content `text` ( json_str_lit `You are about to read or write NURL source. NURL uses prefix notation: every operator comes before its arguments and arity is fixed. Calls require parentheses: ( fn arg1 arg2 ). Single-letter type keywords (i u f b s v), no semicolons. Functions: @ name params → ret { body }. Bindings: : type name expr (immutable) or : ~ type name expr (mutable). Pattern match: ?? expr { Variant payload → body ... }. Read README first via the tools — every common pitfall has a documented compiler diagnostic. When writing code, ALWAYS check examples for the closest shape before guessing syntax.` ) )
+    : Json msg ( json_obj_new )
+    ( json_obj_set msg `role` ( json_str_lit `user` ) )
+    ( json_obj_set msg `content` content )
+    : Json msgs ( json_arr_new )
+    ( json_arr_push msgs msg )
     : Json out ( json_obj_new )
-    ( json_obj_set out `protocolVersion` ( json_str_lit ( mcp_initialize_version_for params ) ) )
-    ( json_obj_set out `capabilities` caps )
-    ( json_obj_set out `serverInfo` info )
-    ( json_obj_set out `instructions` ( json_str_lit ( string_data instructions ) ) )
-    ( string_free instructions )
+    ( json_obj_set out `description` ( json_str_lit `NURL coding primer` ) )
+    ( json_obj_set out `messages` msgs )
     ^ out
 }
 
-// server/discover (2026-07-28, MUST): supported revisions + caps +
-// identity + the same LLM-facing instructions the initialize result
-// carries. Static output — mcp_discover_result stamps a long public
-// cache hint, which shared intermediaries in front of the playground
-// may cache.
-@ __mcp_discover → Json {
-    : Json caps ( json_obj_new )
-    ( json_obj_set caps `tools` ( json_obj_new ) )
-    ( json_obj_set caps `resources` ( json_obj_new ) )
-    ( json_obj_set caps `prompts` ( json_obj_new ) )
-    : String name ( get_mcp_server_name )
-    : String version ( get_mcp_server_version )
-    : String instructions ( __mcp_instructions_text )
-    : Json out ( mcp_discover_result
-    ( string_data name ) ( string_data version )
-    caps
-    ( string_data instructions ) )
-    ( string_free name )
-    ( string_free version )
-    ( string_free instructions )
-    ^ out
+@ nurlapi_mcp_server → McpServer {
+    : String nm ( get_mcp_server_name )
+    : String ver ( get_mcp_server_version )
+    : McpServer srv ( mcp_server_new ( string_data nm ) ( string_data ver ) )
+    ( string_free nm ) ( string_free ver )
+    : String instr ( __mcp_instructions_text )
+    ( mcp_server_set_instructions srv ( string_data instr ) )
+    ( string_free instr )
+    ( mcp_server_set_cache_policy srv 3600000 3600000 `public` )
+
+    ( mcp_server_add_tool_full srv `nurl_build_native`
+    `Compile NURL source to an x86_64 Linux ELF. Returns status, compiler stderr, and download URLs for the binary + .ll. run=true also executes it and returns exit code + output (see the run parameter for when that is allowed).`
+    ( __mcp_schema_build_native ) F F T F
+    \ Json a → Json { ^ ( __mcp_tool_build_source_filename `/build` F a ) } )
+    ( mcp_server_add_tool_full srv `nurl_build_wasm`
+    `Compile NURL source to a wasm32-wasi module. Returns status, compile logs, and download URLs for the .wasm + .ll (no inline base64). The module runs in-browser via a WASI shim or with any WASI runtime (nwasm, wasmtime).`
+    ( __mcp_schema_source_filename ) F F T F
+    \ Json a → Json { ^ ( __mcp_tool_build_source_filename `/build_wasm` T a ) } )
+    ( mcp_server_add_tool_full srv `nurl_build_windows`
+    `Cross-compile NURL source to a Windows x86_64 .exe (mingw-w64; static libcurl + Schannel TLS). Returns status, stderr, and a download URL.`
+    ( __mcp_schema_source_filename ) F F T F
+    \ Json a → Json { ^ ( __mcp_tool_build_source_filename `/build_windows` F a ) } )
+    ( mcp_server_add_tool_full srv `nurl_build_macos`
+    `Cross-compile NURL source to an unsigned macOS x86_64 Mach-O (zig cc); clear the quarantine attribute before running.`
+    ( __mcp_schema_source_filename ) F F T F
+    \ Json a → Json { ^ ( __mcp_tool_build_source_filename `/build_macos` F a ) } )
+    ( mcp_server_add_tool_full srv `nurl_build_target`
+    `Cross-compile NURL source via zig cc; 'target' picks static musl ELFs (x86_64/arm64/riscv64 Linux), linux-arm64-gnu (glibc), or macos-x64/macos-arm64 Mach-O.`
+    ( __mcp_schema_build_target ) F F T F
+    \ Json a → Json { ^ ( __mcp_tool_build_target_impl a ) } )
+    ( mcp_server_add_tool_full srv `nurl_build_unikernel`
+    `Build NURL source into a bootable unikernel image (x86_64 PVH/microvm or aarch64 virt — no OS or libc: pure-NURL TCP/IP + TLS, no fork/exec). By default also boots it server-side (no network, ~20 s cap) and returns the guest console, an ELF download link, and ready-to-paste QEMU commands. The sandboxed way to run NURL here.`
+    ( __mcp_schema_build_unikernel ) F F T F
+    \ Json a → Json { ^ ( __mcp_tool_build_unikernel_impl a ) } )
+    ( mcp_server_add_tool_full srv `nurl_list_examples`
+    `List bundled NURL example programs. Returns a JSON array of {name, path, bytes} entries, sorted alphabetically.`
+    ( __mcp_schema_empty ) T F T F
+    \ Json a → Json { ^ ( __mcp_list_dir_result ( get_examples_dir ) ) } )
+    ( mcp_server_add_tool_full srv `nurl_list_stdlib`
+    `List bundled NURL stdlib modules. Returns a JSON array of {name, path, bytes} entries (recursive — core/, std/, ext/), sorted alphabetically.`
+    ( __mcp_schema_empty ) T F T F
+    \ Json a → Json { ^ ( __mcp_list_dir_result ( get_stdlib_dir ) ) } )
+    ( mcp_server_add_tool_full srv `nurl_list_tests`
+    `List bundled compiler tests. Returns a JSON array of {name, path, bytes} entries, sorted alphabetically.`
+    ( __mcp_schema_empty ) T F T F
+    \ Json a → Json { ^ ( __mcp_list_dir_result ( get_tests_dir ) ) } )
+    ( mcp_server_add_tool_full srv `nurl_read_example`
+    `Return the source of a bundled example. name is the relative path returned by nurl_list_examples.`
+    ( __mcp_schema_name ) T F T F
+    \ Json a → Json { ^ ( __mcp_read_under ( get_examples_dir ) a ) } )
+    ( mcp_server_add_tool_full srv `nurl_read_stdlib`
+    `Return the source of a stdlib module. name is the relative path returned by nurl_list_stdlib (e.g. core/string.nu).`
+    ( __mcp_schema_name ) T F T F
+    \ Json a → Json { ^ ( __mcp_read_under ( get_stdlib_dir ) a ) } )
+    ( mcp_server_add_tool_full srv `nurl_read_test`
+    `Return the source of a bundled compiler test. name is the relative path returned by nurl_list_tests.`
+    ( __mcp_schema_name ) T F T F
+    \ Json a → Json { ^ ( __mcp_read_under ( get_tests_dir ) a ) } )
+    ( mcp_server_add_tool_full srv `nurl_read_grammar`
+    `Return the current NURL grammar EBNF (spec/grammar.ebnf).`
+    ( __mcp_schema_empty ) T F T F
+    \ Json a → Json { ^ ( __mcp_read_owned_path ( get_grammar_path ) ) } )
+    ( mcp_server_add_tool_full srv `nurl_read_readme`
+    `Return README.md verbatim — project overview, syntax cheat sheet, build instructions.`
+    ( __mcp_schema_empty ) T F T F
+    \ Json a → Json { ^ ( __mcp_read_owned_path ( get_readme_path ) ) } )
+    ( mcp_server_add_tool_full srv `nurl_read_roadmap`
+    `Return ROADMAP.md verbatim — current development plan + ship log.`
+    ( __mcp_schema_empty ) T F T F
+    \ Json a → Json { ^ ( __mcp_read_owned_path ( get_roadmap_path ) ) } )
+    ( mcp_server_add_tool_full srv `nurl_docs`
+    `Search and read the shipped docs/ prose — MEMORY.md (ownership: who frees what), CRYPTO.md, ASYNC.md, spec.md (the full language reference), and ten more: the behaviour questions no API surface answers. Read this before guessing at memory, crypto, or platform behaviour. No arguments lists the documents; query= finds the sections that answer a question; name= with section=/outline= reads pieces. Prefer query/section — whole documents run 40–60 KB.`
+    ( __mcp_schema_docs ) T F T F
+    \ Json a → Json { ^ ( __mcp_tool_docs a ) } )
+    ( mcp_server_add_tool_full srv `nurl_changelog`
+    `Find when/whether a feature, fix, or rename shipped — targeted retrieval from the 240+ KB CHANGELOG, never fetch it whole. No arguments returns the release index; query= and/or release= return the matching entries in full ('[release] — date › category' provenance, best matches first, the rest as one-line titles).`
+    ( __mcp_schema_changelog ) T F T F
+    \ Json a → Json { ^ ( __mcp_tool_changelog a ) } )
+    ( mcp_server_add_tool_full srv `nurl_api`
+    `A module's API surface (signatures + doc comments + full type definitions, no bodies), or a declaration search across the whole stdlib. Prefer this over nurl_read_stdlib — a surface is ~6× smaller than the source, one matching declaration ~0.3 KB. module='ext/csv.nu' or package='nn' renders one surface (C-runtime builtins are indexed as core/builtins.nu); query= searches declarations — one concept per call, 2–4 related terms. Every reply states what it searched and lists what it could not.`
+    ( __mcp_schema_api ) T F T F
+    \ Json a → Json { ^ ( __mcp_tool_api a ) } )
+    ( mcp_server_add_tool_full srv `nurl_grep`
+    `Case-insensitive substring search across stdlib, examples, and tests (path:line: text) plus the package registry (name + description) — "is there anything for X" over raw text. Word-boundary matches rank first; in-word hits follow in a labeled tail. Scope with where=.`
+    ( __mcp_schema_grep ) T F T F
+    \ Json a → Json { ^ ( __mcp_tool_grep a ) } )
+
+    ( __mcp_register_resources srv )
+
+    ( mcp_server_add_prompt srv `nurl_coding_assistant`
+    `Compact NURL grammar + canonical-example primer so small models ground themselves before writing or reviewing NURL code.`
+    ( mcp_schema_empty )
+    \ Json a → Json { ^ ( __mcp_prompt_primer a ) } )
+    ^ srv
 }
 
-// Decorate an outgoing envelope for a MODERN (per-request `_meta`)
-// request: 2026-07-28 servers SHOULD identify themselves in each
-// result's `_meta`. No-op for error envelopes and legacy requests.
-@ __mcp_finish Json env b modern → ?Json {
-    ? modern {
-        : ?Json res ( json_obj_get env `result` )
-        ?? res {
-            T rv → {
-                : String n ( get_mcp_server_name )
-                : String v ( get_mcp_server_version )
-                ( mcp_result_set_server_info rv ( string_data n ) ( string_data v ) )
-                ( string_free n )
-                ( string_free v )
-            }
-            F _ → {}
-        }
-    } {}
-    ^ @ ?Json { T env }
-}
-
-// `dispatch` per mcp_http_handler contract: takes a single parsed
-// JSON-RPC request (borrowed), returns Some(reply) for a request or
-// None for a notification.
-@ mcp_dispatch Json req → ?Json {
-    : ?Json mo ( json_obj_get req `method` )
-    : s method ?? mo {
-        T j → ?? j { JStr s → ( string_data s ) _ → `` }
-        F _ → ``
-    }
-    : Json id ( __mcp_get_id req )
-    : ?Json id_opt ( json_obj_get req `id` )
-    : b is_notification ?? id_opt { T _ → F F _ → T }
-
-    // Notifications: never reply, regardless of method.
-    ? is_notification {
-        ( json_free id )
-        ^ @ ?Json { F }
-    } {}
-
-    // 2026-07-28 version gate: a request DECLARING an unsupported
-    // `_meta` protocolVersion gets the spec-shaped -32022 error (with
-    // data.supported); no declared version = legacy request.
-    : s req_ver ( mcp_request_protocol_version req )
-    : b modern > ( nurl_str_len req_ver ) 0
-    ? & modern ! ( mcp_version_supported req_ver ) {
-        : Json env ( mcp_unsupported_version_response id req_ver )
-        ( json_free id )
-        ^ @ ?Json { T env }
-    } {}
-
-    // Method routing.
-    ? != 0 ( nurl_str_eq method `server/discover` ) {
-        : Json env ( mcp_response_result id ( __mcp_discover ) )
-        ( json_free id )
-        ^ ( __mcp_finish env modern )
-    } {}
-    ? != 0 ( nurl_str_eq method `initialize` ) {
-        : Json result ( __mcp_initialize ( json_obj_get req `params` ) )
-        : Json env ( mcp_response_result id result )
-        ( json_free id )
-        ^ ( __mcp_finish env modern )
-    } {}
-    ? != 0 ( nurl_str_eq method `ping` ) {
-        : Json env ( mcp_response_result id ( json_obj_new ) )
-        ( json_free id )
-        ^ ( __mcp_finish env modern )
-    } {}
-    ? != 0 ( nurl_str_eq method `tools/list` ) {
-        // CacheableResult (2026-07-28): the playground's tool set is
-        // identical for every caller — public, cache for an hour.
-        : Json tl ( __mcp_build_tools_list )
-        ( mcp_result_set_cacheable tl 3600000 `public` )
-        : Json env ( mcp_response_result id tl )
-        ( json_free id )
-        ^ ( __mcp_finish env modern )
-    } {}
-    ? != 0 ( nurl_str_eq method `tools/call` ) {
-        : ?Json po ( json_obj_get req `params` )
-        ?? po {
-            T params → {
-                : s tname ( __mcp_args_get `name` params `` )
-                : ?Json ao ( json_obj_get params `arguments` )
-                : Json args ?? ao { T j → ( json_clone j ) F _ → ( json_obj_new ) }
-                : Json result ( __mcp_dispatch_tool tname args )
-                : Json env ( mcp_response_result id result )
-                ( json_free args ) ( json_free id )
-                ^ ( __mcp_finish env modern )
-            }
-            F _ → {
-                : Json env ( mcp_response_error id mcp_err_invalid_params `tools/call requires params` )
-                ( json_free id )
-                ^ @ ?Json { T env }
-            }
-        }
-    } {}
-    ? != 0 ( nurl_str_eq method `resources/list` ) {
-        : Json rl ( __mcp_build_resources_list )
-        ( mcp_result_set_cacheable rl 3600000 `public` )
-        : Json env ( mcp_response_result id rl )
-        ( json_free id )
-        ^ ( __mcp_finish env modern )
-    } {}
-    ? != 0 ( nurl_str_eq method `resources/read` ) {
-        : ?Json po ( json_obj_get req `params` )
-        ?? po {
-            T params → {
-                : s uri ( __mcp_args_get `uri` params `` )
-                : Json result ( __mcp_resource_read_for uri )
-                // Resource bodies (grammar, readme, …) are static per
-                // deployed toolchain version — public, 1 h.
-                ( mcp_result_set_cacheable result 3600000 `public` )
-                : Json env ( mcp_response_result id result )
-                ( json_free id )
-                ^ ( __mcp_finish env modern )
-            }
-            F _ → {
-                : Json env ( mcp_response_error id mcp_err_invalid_params `resources/read requires params.uri` )
-                ( json_free id )
-                ^ @ ?Json { T env }
-            }
-        }
-    } {}
-    ? != 0 ( nurl_str_eq method `prompts/list` ) {
-        : Json pl ( __mcp_build_prompts_list )
-        ( mcp_result_set_cacheable pl 3600000 `public` )
-        : Json env ( mcp_response_result id pl )
-        ( json_free id )
-        ^ ( __mcp_finish env modern )
-    } {}
-    ? != 0 ( nurl_str_eq method `prompts/get` ) {
-        : ?Json po ( json_obj_get req `params` )
-        ?? po {
-            T params → {
-                : s pname ( __mcp_args_get `name` params `` )
-                : Json env ( mcp_response_result id ( __mcp_prompts_get_for pname ) )
-                ( json_free id )
-                ^ ( __mcp_finish env modern )
-            }
-            F _ → {
-                : Json env ( mcp_response_error id mcp_err_invalid_params `prompts/get requires params.name` )
-                ( json_free id )
-                ^ @ ?Json { T env }
-            }
-        }
-    } {}
-
-    // Unknown method.
-    : Json env ( mcp_response_error id mcp_err_method_not_found `method not found` )
-    ( json_free id )
-    ^ @ ?Json { T env }
-}
-
-// ── /mcp handler with session generation on first request ──────────
+// ── /mcp handler ─────────────────────────────────────────────────────
 //
-// Wraps `mcp_http_handler mcp_dispatch` with a layer that sets
-// `Mcp-Session-Id: <random>` on the response whenever the client
-// didn't send one. The base handler echoes back any sid the client
-// did send — together that gives us:
+// The server is built once, in `main`, and the /mcp routes close over
+// the handler: every McpServer field is a shared handle, so the
+// captured copy IS the server. Building it per request would
+// re-register nineteen tools on every call — and would abort on the
+// second one, since the facade refuses a duplicate registration. The
+// old code did rebuild its dispatch closures per request, and had to
+// free three closure envs by hand at the end of every /mcp call to
+// stop them leaking.
+//
+// `mcp_http_with_session` sets `Mcp-Session-Id: <random>` on the
+// response whenever the client didn't send one. The base handler echoes
+// back any sid the client did send — together that gives us:
 //
 //   - first request (no sid) → server picks one, returns it
 //   - subsequent requests (with sid) → echoed verbatim
@@ -5853,27 +5433,6 @@ s combined_stdout s combined_stderr → v {
     }
 }
 
-// Router-compatible (HttpRequest, Params) entry point.
-@ h_mcp HttpRequest req Params params → HttpResponse {
-    ( nurl_print `[srv] ` )
-    ( nurl_print ( string_data . req method ) )
-    ( nurl_print ` /mcp\n` )
-    : ( @ ?Json Json ) disp \ Json r → ?Json { ^ ( mcp_dispatch r ) }
-    : ( @ HttpResponse HttpRequest ) base ( mcp_http_handler disp )
-    : ( @ HttpResponse HttpRequest ) wrapped ( mcp_http_with_session base )
-    : HttpResponse out ( wrapped req )
-    // These three closures are built per request and die here. A closure
-    // is a by-value { fn_ptr, env_ptr } pair whose env is a heap
-    // allocation with no auto-drop — release the envs explicitly
-    // (std/panic.nu recover's convention; nurl_free is NULL-safe for the
-    // capture-less `disp`). Without this every /mcp request leaked the
-    // two capturing envs.
-    ( nurl_free # s # *u wrapped 1 )
-    ( nurl_free # s # *u base 1 )
-    ( nurl_free # s # *u disp 1 )
-    ^ out
-}
-
 // ── Compile-concurrency gate ──────────────────────────────────────────
 //
 // The worker pool (server_run_pool, NURL_WORKERS=16) lets up to 16
@@ -5889,6 +5448,34 @@ s combined_stdout s combined_stderr → v {
     : i n ?? ( int_parse ( string_data s ) ) { T v → v F _ → 4 }
     ( string_free s )
     ^ ? > n 0 n 1
+}
+
+// The gate lives behind a module global, the way the rate limiter and the
+// voice relay do, rather than as a `main` local: the middleware closure
+// escapes `main`'s frame, and a closure that escapes may not carry a
+// reference to a binding in the frame it escapes — the borrow checker
+// says so, correctly. One heap box, installed at boot.
+: SemBox { Semaphore s }
+
+: ~ i g_compile_gate 0
+
+@ gate_install i slots → v {
+    : *SemBox b # *SemBox ( nurl_alloc Z SemBox )
+    = . b s ( sem_new slots )
+    = g_compile_gate # i b
+}
+
+@ __gate → Semaphore {
+    : *SemBox b # *SemBox g_compile_gate
+    ^ . b s
+}
+
+@ gate_free → v {
+    ? == g_compile_gate 0 { ^ v } {}
+    : *SemBox b # *SemBox g_compile_gate
+    ( sem_free . b s )
+    ( nurl_free # *u b )
+    = g_compile_gate 0
 }
 
 // A request that triggers a compile: POST /build* (native/wasm/win/mac/
@@ -5911,7 +5498,43 @@ s combined_stdout s combined_stderr → v {
 // release, leaking a permit and eventually deadlocking the gate). Kept a
 // top-level fn — not a closure body — so the inner `recover` closure is
 // not nested inside another closure.
-@ __gated_handle Router r Semaphore gate HttpRequest req → HttpResponse {
+// The access log, then the gate — one function rather than two nested
+// closures. `with_access_log` would do the first half, but wrapping it
+// around a closure built here means returning a closure that captures a
+// closure built in the same frame, which the escape analysis refuses;
+// and the composition is three lines to write out.
+//
+// The format is this file's own and the deployment reads it:
+// `[req] POST /mcp → 200 906B 12ms`, one line per request with the size
+// and the duration. The facade's `http_app_logging` prints two lines and
+// neither number. Logging OUTSIDE the gate is deliberate — the duration
+// then includes the wait for a compile permit, which is the figure that
+// says whether the gate is the bottleneck.
+@ __gated_logged ( @ HttpResponse HttpRequest ) inner HttpRequest req → HttpResponse {
+    : i t0 ( monotonic_ns )
+    : HttpResponse resp ( __gated_handle inner req )
+    : i dt_ms / - ( monotonic_ns ) t0 1000000
+    ( nurl_eprint `[req] ` )
+    ( nurl_eprint ( string_data . req method ) )
+    ( nurl_eprint ` ` )
+    ( nurl_eprint ( string_data . req path ) )
+    // Each nurl_str_int allocates and auto-drop only tracks what it saw
+    // bound (spec §8.1) — inline, these three leak once per request in a
+    // process expected to run for months.
+    : s st ( nurl_str_int . resp status )
+    : s sb ( nurl_str_int ( vec_len [u] . resp body ) )
+    : s sd ( nurl_str_int dt_ms )
+    ( nurl_eprint ` → ` )
+    ( nurl_eprint st )
+    ( nurl_eprint ` ` )
+    ( nurl_eprint sb )
+    ( nurl_eprint `B ` )
+    ( nurl_eprint sd )
+    ( nurl_eprint `ms\n` )
+    ^ resp
+}
+
+@ __gated_handle ( @ HttpResponse HttpRequest ) inner HttpRequest req → HttpResponse {
     ? ( __is_compile_route req ) {
         // M11 hardening, before a compile permit is spent: explicit body
         // cap (source / wasm IR), per-IP rate limit, output-dir GC.
@@ -5934,13 +5557,19 @@ s combined_stdout s combined_stderr → v {
             ^ r429
         } {}
         ( sweep_output_dir )
+        : Semaphore gate ( __gate )
         ( sem_acquire gate )
+        // The recover is not about turning a panic into a 500 — the
+        // stdlib server already guarantees that. It is about the
+        // `sem_release` below: without it a panicking compile keeps its
+        // permit, and four of those wedge the gate for good.
+        //
         // `placeholder` is returned only on panic; on success the closure
         // overwrote `resp`, so free the placeholder there (it leaked one
         // response per compile request before).
         : HttpResponse placeholder ( response_text 500 `internal error: handler panicked\n` )
         : ~ HttpResponse resp placeholder
-        : !v PanicInfo pr ( recover \ → v { = resp ( router_handle r req ) } )
+        : !v PanicInfo pr ( recover \ → v { = resp ( inner req ) } )
         ( sem_release gate )
         ?? pr {
             T _ → { ( http_response_free placeholder ) }
@@ -5948,7 +5577,7 @@ s combined_stdout s combined_stderr → v {
         }
         ^ resp
     } {
-        ^ ( router_handle r req )
+        ^ ( inner req )
     }
 }
 
@@ -5972,10 +5601,9 @@ s combined_stdout s combined_stderr → v {
     ( string_free wr )
 
     : i port ( get_port )
-    : !TcpListener NetErr lr ( tcp_listen `0.0.0.0` port )
-    ?? lr {
-        T listener → {
-            : Router r ( router_new )
+    : Router r ( router_new )
+    ? T {
+        ? T {
             ( router_post r `/build` \ HttpRequest req Params params → HttpResponse { ^ ( h_build req params ) } )
             ( router_post r `/build_wasm` \ HttpRequest req Params params → HttpResponse { ^ ( h_build_wasm req params ) } )
             ( router_post r `/build_windows` \ HttpRequest req Params params → HttpResponse { ^ ( h_build_windows req params ) } )
@@ -6024,8 +5652,19 @@ s combined_stdout s combined_stderr → v {
             ( router_get r `/stdlib/*path` \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_file req params ) } )
             ( router_get r `/tests/*path` \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_file req params ) } )
             ( router_get r `/mcp-info` \ HttpRequest req Params params → HttpResponse { ^ ( h_mcp_info req params ) } )
-            ( router_post r `/mcp` \ HttpRequest req Params params → HttpResponse { ^ ( h_mcp req params ) } )
-            ( router_get r `/mcp` \ HttpRequest req Params params → HttpResponse { ^ ( h_mcp req params ) } )
+            // Built once here: see mcp_http_with_session above.
+            : McpServer msrv ( nurlapi_mcp_server )
+            : ( @ HttpResponse HttpRequest ) mcpbase
+            ( mcp_http_handler ( mcp_server_http_dispatch msrv ) )
+            : ( @ HttpResponse HttpRequest ) mcph ( mcp_http_with_session mcpbase )
+            : ( @ HttpResponse HttpRequest ) mcplog \ HttpRequest req → HttpResponse {
+                ( nurl_print `[srv] ` )
+                ( nurl_print ( string_data . req method ) )
+                ( nurl_print ` /mcp\n` )
+                ^ ( mcph req )
+            }
+            ( router_post r `/mcp` \ HttpRequest req Params params → HttpResponse { ^ ( mcplog req ) } )
+            ( router_get r `/mcp` \ HttpRequest req Params params → HttpResponse { ^ ( mcplog req ) } )
             ( router_get r `/.well-known/oauth-protected-resource` \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_protected_resource req params ) } )
             ( router_get r `/.well-known/oauth-protected-resource/mcp` \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_protected_resource req params ) } )
             ( router_get r `/.well-known/oauth-authorization-server` \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_auth_server req params ) } )
@@ -6035,7 +5674,7 @@ s combined_stdout s combined_stderr → v {
             ( router_post r `/token` \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_token req params ) } )
             ( router_get r `/openapi.json` \ HttpRequest req Params params → HttpResponse { ^ ( h_openapi_json req params ) } )
             ( router_get r `/docs` \ HttpRequest req Params params → HttpResponse { ^ ( h_docs_html req params ) } )
-            ( router_any r `DELETE` `/mcp` \ HttpRequest req Params params → HttpResponse { ^ ( h_mcp req params ) } )
+            ( router_any r `DELETE` `/mcp` \ HttpRequest req Params params → HttpResponse { ^ ( mcplog req ) } )
             ( router_get r `/favicon.ico` \ HttpRequest req Params params → HttpResponse { ^ ( h_favicon req params ) } )
             ( router_get r `/favicon.svg` \ HttpRequest req Params params → HttpResponse { ^ ( h_favicon req params ) } )
             ( router_get r `/static/*path` \ HttpRequest req Params params → HttpResponse { ^ ( h_static_prefixed req params ) } )
@@ -6045,15 +5684,32 @@ s combined_stdout s combined_stderr → v {
             // Compile-concurrency gate: bound how many `clang` compiles run
             // at once so a wide worker pool can't OOM the container.
             : i compile_slots ( get_compile_slots )
-            : Semaphore compile_gate ( sem_new compile_slots )
-            : ( @ HttpResponse HttpRequest ) base \ HttpRequest req → HttpResponse { ^ ( __gated_handle r compile_gate req ) }
-            : ( @ HttpResponse HttpRequest ) logged ( with_access_log base )
-            ( signal_install_shutdown listener )
+            ( gate_install compile_slots )
 
             // Worker count is overridable so we can A/B test threading vs sequential.
             : String wkstr ( env_var_or `NURL_WORKERS` `16` )
             : i workers ?? ( int_parse ( string_data wkstr ) ) { T n → n F _ → 16 }
             ( string_free wkstr )
+
+            // The whole serve path is `packages/http`: bind, adopt the
+            // router, install the shutdown signal, run the keep-alive
+            // worker pool, stop cleanly. What used to be forty lines of
+            // that glue here is now five configuration calls — and the
+            // one thing the facade cannot know about, the compile gate,
+            // goes in through `http_app_use`.
+            //
+            : *HttpApp app ( http_app_new )
+            ( http_app_use_router app r )
+            ( http_app_workers app workers )
+            ( http_app_idle_ms app 5000 )
+            ( http_app_quiet app )
+            : ( @ ( @ HttpResponse HttpRequest ) ( @ HttpResponse HttpRequest ) ) mw
+            \ ( @ HttpResponse HttpRequest ) inner → ( @ HttpResponse HttpRequest ) {
+                ^ \ HttpRequest rq → HttpResponse {
+                    ^ ( __gated_logged inner rq )
+                }
+            }
+            ( http_app_use app mw )
 
             ( nurl_print `[boot] registered routes: ` ) ( nurl_print ( nurl_str_int ( router_count r ) ) ) ( nurl_print `\n` )
             ( nurl_print `NURL API listening on http://0.0.0.0:` )
@@ -6063,18 +5719,21 @@ s combined_stdout s combined_stderr → v {
             ( nurl_print `, compile_slots=` )
             ( nurl_print ( nurl_str_int compile_slots ) )
             ( nurl_print `, idle=5000ms)\n` )
-            : HttpServer srv ( server_new_with_timeout listener logged 5000 )
             ( rl_install )  // per-IP build rate limiter (M11)
             ( ppt_install )  // /pptws/<channel> WebSocket voice relay (upgrade hook)
-            : !v NetErr rr ( server_run_pool srv workers )
-            ( signal_clear_shutdown ) ( server_stop srv ) ( sem_free compile_gate ) ( router_free r )
-            // The handler chain (`logged` wraps `base`) is dead once the
-            // worker pool has returned — release the closure envs so a
-            // clean shutdown reports zero leaks under LeakSanitizer.
-            ( nurl_free # s # *u logged 1 )
-            ( nurl_free # s # *u base 1 )
-            ?? rr { T _ → { ^ 0 } F e → { ( nurl_eprint `[srv] runtime error: ` ) ( nurl_eprint ( net_err_name e ) ) ( nurl_eprint `\n` ) ^ 1 } }
+            : i rc ( http_app_listen app `0.0.0.0` port )
+            ( gate_free )
+            ( nurl_free # s # *u mw 1 )
+            ( nurl_free # s # *u mcplog 1 )
+            ( nurl_free # s # *u mcph 1 )
+            ( nurl_free # s # *u mcpbase 1 )
+            ( mcp_server_free msrv )
+            // http_app_free frees the router it adopted.
+            ( http_app_free app )
+            ^ rc
         }
-        F e → { ( nurl_eprint `[boot] could not bind 0.0.0.0:8000: ` ) ( nurl_eprint ( net_err_name e ) ) ( nurl_eprint `\n` ) ^ 1 }
+        {}
     }
+    {}
+    ^ 1
 }

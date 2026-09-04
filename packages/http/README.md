@@ -85,10 +85,35 @@ Routing (handlers are `( @ HttpResponse HttpRequest Params )`):
 | `( http_app_get a pattern h )` | also `http_app_post` / `put` / `patch` / `delete` |
 | `( http_app_route a method pattern h )` | any method |
 | `( http_app_use_router a router )` | adopt a pre-built `Router` (keeps it socket-testable) |
+| `( http_app_use a middleware )` | wrap the app's whole dispatch in a handler of your own — see below |
 | `( http_app_router a )` → `Router` | the embedded router |
 
 Patterns use the stdlib router: `:name` captures a segment (read with
 `params_get`), `*rest` is a tail wildcard.
+
+### Middleware
+
+`http_app_use` takes a function from the app's dispatch to the handler
+actually served, and is the seam for anything the built-in layers do not
+do — a concurrency gate in front of an expensive route, a per-IP budget,
+an auth check:
+
+```nurl
+( http_app_use a \ ( @ HttpResponse HttpRequest ) inner → ( @ HttpResponse HttpRequest ) {
+    ^ \ HttpRequest req → HttpResponse {
+        ? ( is_heavy req ) { ( sem_acquire gate ) } {}
+        : HttpResponse r ( inner req )
+        ? ( is_heavy req ) { ( sem_release gate ) } {}
+        ^ r
+    }
+} )
+```
+
+A request reaches `[alt-svc] → [log] → [cors] → your middleware → route /
+static`, so CORS preflights and the access log still see the requests a
+gate holds. One middleware per app — a second call replaces the first;
+a chain composes inside the one closure. The wrapper and the handler it
+returns must outlive `http_app_listen`.
 
 Configuration (call before serving):
 

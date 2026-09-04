@@ -141,6 +141,22 @@ $ `stdlib/std/panic.nu`
     ^ out
 }
 
+// A templated resource: everything under `nurl://doc/`. The handler
+// gets the URI it was asked for and the part that filled `{name}`.
+@ r_doc Json arg → Json {
+    : ~ s var ``
+    ?? ( json_obj_get arg `variable` ) {
+        T v → { = var ( json_as_str v ) }
+        F _ → {}
+    }
+    // A name this template does not serve is a NOT FOUND, said by
+    // returning a non-object — not an empty success.
+    ? == 0 ( nurl_str_eq var `intro` ) { ^ ( json_null ) } {}
+    : Json out ( json_obj_new )
+    ( json_obj_set out `text` ( json_str_lit `the intro document` ) )
+    ^ out
+}
+
 @ r_hello → Json {
     : Json out ( json_obj_new )
     ( json_obj_set out `text` ( json_str_lit `hello from a resource` ) )
@@ -172,6 +188,9 @@ $ `stdlib/std/panic.nu`
     greet_args \ Json a → Json { ^ ( p_greet a ) } )
     ( mcp_server_add_resource srv `mcp://hello` `hello` `text/plain`
     `A greeting.` \ → Json { ^ ( r_hello ) } )
+    ( mcp_server_add_resource_template srv `nurl://doc/{name}` `doc`
+    `text/markdown` `One document by name.`
+    \ Json a → Json { ^ ( r_doc a ) } )
     ( mcp_server_add_completion srv `ref/prompt` `greet`
     \ Json a → Json { ^ ( c_paths a ) } )
     ^ srv
@@ -229,6 +248,33 @@ $ `stdlib/std/panic.nu`
     ( json_obj_set rp2 `uri` ( json_str_lit `mcp://absent` ) )
     ( show srv `resources/read unknown`
     ( with_params ( req_id 19 `resources/read` ) rp2 ) )
+
+    ( nurl_print `=== resource templates ===\n` )
+    // A template must NOT appear in resources/list (a client would try
+    // to read the literal `{name}`); resources/templates/list is where
+    // it is discoverable, and without that method a templated URI is
+    // unreachable through the protocol however well it is served.
+    ( show srv `resources/templates/list` ( req_id 22 `resources/templates/list` ) )
+    : Json tr ( json_obj_new )
+    ( json_obj_set tr `uri` ( json_str_lit `nurl://doc/intro` ) )
+    ( show srv `resources/read via template`
+    ( with_params ( req_id 23 `resources/read` ) tr ) )
+    : Json tr2 ( json_obj_new )
+    ( json_obj_set tr2 `uri` ( json_str_lit `nurl://doc/absent` ) )
+    ( show srv `resources/read template miss`
+    ( with_params ( req_id 24 `resources/read` ) tr2 ) )
+
+    ( nurl_print `=== cache policy ===\n` )
+    // The defaults suit a server behind auth whose resources are live.
+    // A public server with a build-time-fixed surface says so, and a
+    // 60-second private TTL would cost every client a re-listing a
+    // minute for a list that cannot change.
+    : McpServer psrv ( mcp_server_new `public` `1.0.0` )
+    ( mcp_server_set_cache_policy psrv 3600000 3600000 `public` )
+    ( mcp_server_add_tool psrv `noop` `Does nothing.` ( mcp_schema_empty )
+    \ Json a → Json { ^ ( mcp_tool_result_text `ok` ) } )
+    ( show psrv `tools/list (public, 1 h)` ( req_id 25 `tools/list` ) )
+    ( mcp_server_free psrv )
 
     ( nurl_print `=== completion ===\n` )
     : Json ref ( json_obj_new )

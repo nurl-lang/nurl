@@ -8,6 +8,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`nurlapi` is on both facades** — the playground/API's MCP surface
+  moves to `ext/mcp_server.nu` and its serving path to `packages/http`.
+  760 lines of `nurlapi/main.nu` become 419: the fourth hand-written
+  copy of the JSON-RPC protocol (a nineteen-arm dispatch chain, the
+  handshake, `server/discover`, the version gate, the `_meta`
+  decorations, a private schema-property helper) and the forty lines of
+  bind / router / shutdown / worker-pool glue that `packages/http`
+  exists to remove. The one thing that kept it hand-wired — a semaphore
+  bounding concurrent `clang` invocations so a wide worker pool cannot
+  OOM the container — now goes in through `http_app_use`.
+
+  Two bugs fixed in what that server tells the world about itself.
+  `/mcp-info` advertises `nurl://stdlib/{path}`,
+  `nurl://example/{name}` and `nurl://test/{name}`; the read path
+  compared the URI against six exact strings and nothing else, so a
+  templated read returned `{"contents":[]}` — an empty success, which a
+  client reads as "exists, and is empty" — and
+  `resources/templates/list`, the method a client would discover them
+  through, was not implemented at all. And every result was cached 60
+  seconds privately, on a public server whose surface is fixed at build
+  time; it is an hour and `public` now.
+
+  Verified in the container: `nurlapi/e2e_test.sh`, 237/237, including
+  the native / wasm / windows / macos / cross-target / unikernel builds
+  and the aarch64 boot, plus the WebSocket upgrade and every HTML,
+  JSON and raw-file endpoint by hand.
+
+- **`packages/http` 0.6.0: `http_app_use`** — the facade had a fixed
+  middleware chain (CORS, access log, Alt-Svc) and no seam for one of
+  your own, so a server needing anything else — a concurrency gate in
+  front of an expensive route, a per-IP budget, an auth check — had to
+  abandon the facade and hand-wire router + server + shutdown itself,
+  which is the ~40 lines the facade exists to remove. `nurlapi` did
+  exactly that, for one semaphore. `http_app_use` takes a function from
+  the app's dispatch to the handler served; the built-in layers stay
+  outside it, so preflights and the access log still see the requests a
+  gate holds.
+
+- **nurlc: a closure type whose RETURN is a closure** — the middleware
+  shape. Both helpers that read a function type's parameter list took
+  the FIRST `(` in the LLVM string, which is the parameter list's until
+  the return type is itself a function type and brings its own. So a
+  `( @ ( @ i i ) ( @ i i ) )` had its arity and its parameter types read
+  off its own return value, and calling it was rejected as passing a
+  closure where an `i` was declared — a correct program, refused with a
+  message describing a type nobody wrote.
+  `compiler/tests/closure_type_nested.nu`.
+
+- **`ext/mcp_server.nu`: resource templates** —
+  `mcp_server_add_resource_template srv \`nurl://stdlib/{path}\` …`
+  registers a FAMILY of resources and answers the spec's
+  `resources/templates/list`, which the module did not implement at
+  all. A template is deliberately absent from `resources/list` (a client
+  would try to read the literal `{path}`), so without that method a
+  templated URI is unreachable through the protocol however well it is
+  served — which is exactly the state `nurlapi` was in. `resources/read`
+  falls through to the longest matching template, hands the handler the
+  URI and the part that filled the variable, and a handler that does not
+  serve that particular one returns a non-object, which becomes -32002
+  rather than an empty success.
+
+- **`ext/mcp_server.nu`: `mcp_server_set_cache_policy`** — the
+  CacheableResult TTLs and scope were hardcoded at 60 s / 5 s /
+  `private`. Those suit a server that may sit behind auth and whose
+  resources are live; they are wrong for the other common shape, a
+  public server whose tool surface is fixed at build time, where a
+  60-second private TTL costs every client a re-listing a minute for a
+  list that cannot change. `nurlapi` sets an hour, public.
+
 ### Fixed
 
 - **`ext/mcp_server.nu`: dispatch failures carry their own code** —

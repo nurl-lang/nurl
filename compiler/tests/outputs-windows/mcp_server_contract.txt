@@ -44,6 +44,16 @@ resources/read no uri
   {"jsonrpc":"2.0","id":18,"error":{"code":-32602,"message":"resources/read requires a \"uri\" parameter"}}
 resources/read unknown
   {"jsonrpc":"2.0","id":19,"error":{"code":-32002,"message":"unknown resource: mcp://absent"}}
+=== resource templates ===
+resources/templates/list
+  {"jsonrpc":"2.0","id":22,"result":{"resourceTemplates":[{"uriTemplate":"nurl://doc/{name}","name":"doc","mimeType":"text/markdown","description":"One document by name."}],"ttlMs":60000,"cacheScope":"private","resultType":"complete"}}
+resources/read via template
+  {"jsonrpc":"2.0","id":23,"result":{"contents":[{"text":"the intro document","uri":"nurl://doc/intro","mimeType":"text/markdown"}],"ttlMs":5000,"cacheScope":"private","resultType":"complete"}}
+resources/read template miss
+  {"jsonrpc":"2.0","id":24,"error":{"code":-32002,"message":"unknown resource: nurl://doc/absent"}}
+=== cache policy ===
+tools/list (public, 1 h)
+  {"jsonrpc":"2.0","id":25,"result":{"tools":[{"name":"noop","description":"Does nothing.","inputSchema":{"type":"object","properties":{}}}],"ttlMs":3600000,"cacheScope":"public","resultType":"complete"}}
 === completion ===
 completion/complete
   {"jsonrpc":"2.0","id":20,"result":{"completion":{"values":["src/","stdlib/"],"total":2,"hasMore":false},"resultType":"complete"}}
