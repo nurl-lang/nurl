@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+=== self echo ===
+pid_present=1
+r1=<alpha>
+r2=<beta>
+r3=<gamma>
+r4=eof
+child_exit=0
+missing_err=ProcessNotFound
+timeout=ok
+kill_nonzero=1

@@ -5,6 +5,13 @@
 // Deterministic on POSIX hosts: relies on `cat` (echo back stdin) and a
 // known-missing command for the error path. Stdin is closed before the
 // reader loop so `cat` exits cleanly with status 0.
+//
+// It runs on Windows too — the runner's PATH carries Git-for-Windows'
+// `cat`, and the corpus proves it by producing this exact golden there.
+// Should that ever stop being true the failure is a loud diff, not a
+// silent gap: the Win32 duplex backend is covered independently by
+// process_spawn_self.nu, whose child is the test binary itself and
+// needs no platform tools at all.
 
 $ `stdlib/std/process.nu`
 $ `stdlib/core/string.nu`

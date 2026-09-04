@@ -463,8 +463,9 @@ void nurl_proc_free(long long h) {
  *
  * NurlProcChild is laid out as 16 × i64 slots so the pure-NURL POSIX
  * backend (stdlib/std/process.nu) can index fields via nurl_peek/poke.
- * Win32 keeps HANDLE-typed fields at slot 6+ because NURL never reads
- * those slots directly (Win32 spawn isn't ported yet). */
+ * Win32 keeps HANDLE-typed fields at slot 6+, and its own state past
+ * slot 15, because NURL never reads those slots directly: on Windows
+ * every proc_* call dispatches into the C entry points below. */
 typedef struct NurlProcChild {
     long long  err_kind;       /* slot 0  */
     long long  last_io_err;    /* slot 1  — errno snapshot */
@@ -478,8 +479,8 @@ typedef struct NurlProcChild {
     long long  fd_out;         /* slot 8  — child→parent stdout */
 #elif defined(_WIN32) && !defined(__wasi__)
     HANDLE     h_proc;         /* slot 6+ (Win32 layout — NURL never reads) */
-    HANDLE     h_in;
-    HANDLE     h_out;
+    HANDLE     h_in;           /* parent→child stdin (anonymous pipe) */
+    HANDLE     h_out;          /* child→parent stdout (overlapped pipe) */
 #endif
     /* Read-overflow: bytes past the first '\n' become the next line's head. */
     long long  scratch;        /* slot 9  — char* widened */
@@ -490,6 +491,15 @@ typedef struct NurlProcChild {
     long long  line_len;       /* slot 13 */
     long long  line_cap;       /* slot 14 */
     long long  _reserved;      /* slot 15 — round to 128 bytes */
+#if defined(_WIN32) && !defined(__wasi__)
+    /* Win32-only tail. It sits PAST slot 15 on purpose: the 16-slot
+     * prefix above is the contract with the pure-NURL POSIX backend,
+     * and nothing here is ever read from NURL. */
+    HANDLE     h_ev;           /* manual-reset event for `ov` */
+    OVERLAPPED ov;             /* the stdout read in flight, if any */
+    long long  read_pending;   /* 1 while `ov` owns `rdbuf` */
+    char       rdbuf[4096];    /* target of that read */
+#endif
 } NurlProcChild;
 
 #if !defined(_WIN32) && !defined(__wasi__)
@@ -507,22 +517,443 @@ long long nurl_proc_spawn_wait(long long h) { (void)h; return -1; }
 long long nurl_proc_spawn_kill(long long h, long long sig) { (void)h; (void)sig; return -1; }
 
 #elif defined(_WIN32) && !defined(__wasi__)
-/* Win32 spawn stubs — returns ProcessOther until ported. */
+/* ── Win32 duplex spawn backend ──────────────────────────────────
+ *
+ * The POSIX half of this API lives in pure NURL (fork + execvp +
+ * poll(2) on a non-blocking stdout fd). Windows has neither fork nor
+ * poll, and — the part that decides the design — an ANONYMOUS pipe
+ * cannot be read with a timeout at all: ReadFile on one blocks until
+ * bytes arrive, and anonymous pipes reject FILE_FLAG_OVERLAPPED. That
+ * is why `proc_read_line`'s timeout contract cannot be met by the
+ * reader-thread shape §16's `nurl_proc_run` uses: a thread that is
+ * parked in ReadFile still has to be joined before its buffer can die.
+ *
+ * So the child's stdout is a NAMED pipe with a unique name, opened
+ * overlapped on the parent side and inherited synchronously on the
+ * child side — the standard "async anonymous pipe" construction. One
+ * read is kept IN FLIGHT across calls: `read_line` issues it, waits on
+ * the OVERLAPPED event for `timeout_ms`, and on WAIT_TIMEOUT returns
+ * empty-handed while LEAVING the read pending. The next call waits on
+ * the same read, so a timeout can never lose bytes and nothing is ever
+ * cancelled on the hot path.
+ *
+ * stdin is a plain anonymous pipe (writes are always blocking), and
+ * stderr is inherited from the parent, exactly like the POSIX backend
+ * which leaves fd 2 alone.
+ *
+ * `proc_read_chunk` stays POSIX-only (it returns ProcessOther here, as
+ * documented in stdlib/std/process.nu): it would need a new FFI entry
+ * point, and every Windows caller — `nurl upgrade`, the MCP stdio
+ * client — is line-oriented.
+ */
+
+/* Unique-per-call pipe name. The counter is only a tiebreaker within
+ * one process; FILE_FLAG_FIRST_PIPE_INSTANCE is what actually makes a
+ * collision impossible (a second creator of the same name fails with
+ * ERROR_ACCESS_DENIED instead of silently joining the pipe). */
+static volatile LONG nurl__proc_pipe_seq = 0;
+
+static int nurl__proc_overlapped_pipe(HANDLE *rd_out, HANDLE *wr_out) {
+    for (int attempt = 0; attempt < 64; attempt++) {
+        char name[96];
+        LONG seq = InterlockedIncrement(&nurl__proc_pipe_seq);
+        snprintf(name, sizeof(name), "\\\\.\\pipe\\nurl-proc-%lu-%lu-%lu",
+                (unsigned long)GetCurrentProcessId(),
+                (unsigned long)seq,
+                (unsigned long)GetTickCount());
+        /* Server (parent) end: read-only, overlapped, NOT inheritable. */
+        HANDLE rd = CreateNamedPipeA(
+            name,
+            PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED |
+                FILE_FLAG_FIRST_PIPE_INSTANCE,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            1, 4096, 4096, 0, NULL);
+        if (rd == INVALID_HANDLE_VALUE) {
+            if (GetLastError() == ERROR_ACCESS_DENIED) continue;  /* name taken */
+            return 0;
+        }
+        /* Client (child) end: write-only, synchronous, inheritable.
+         * Opening it is what connects the pipe — with the client
+         * already waiting there is nothing for ConnectNamedPipe to do. */
+        SECURITY_ATTRIBUTES sa;
+        sa.nLength              = sizeof(sa);
+        sa.lpSecurityDescriptor = NULL;
+        sa.bInheritHandle       = TRUE;
+        HANDLE wr = CreateFileA(name, GENERIC_WRITE, 0, &sa,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (wr == INVALID_HANDLE_VALUE) { CloseHandle(rd); return 0; }
+        *rd_out = rd;
+        *wr_out = wr;
+        return 1;
+    }
+    return 0;
+}
+
+/* scratch / line buffers — the C twins of __pc_scratch_reserve,
+ * __pc_line_reserve and __pc_drain_line in stdlib/std/process.nu. The
+ * slots are typed `long long` so the POSIX side can nurl_poke them;
+ * here they are just widened `char *`. */
+static int nurl__pc_scratch_reserve(NurlProcChild *c, long long want) {
+    if (c->scratch_cap >= want) return 1;
+    long long newcap = c->scratch_cap > 0 ? c->scratch_cap : 1024;
+    while (newcap < want) newcap *= 2;
+    char *p = (char*)realloc((void*)(uintptr_t)c->scratch, (size_t)newcap);
+    if (!p) return 0;
+    c->scratch     = (long long)(uintptr_t)p;
+    c->scratch_cap = newcap;
+    return 1;
+}
+
+static int nurl__pc_line_reserve(NurlProcChild *c, long long want) {
+    if (c->line_cap >= want + 1) return 1;
+    long long newcap = c->line_cap > 0 ? c->line_cap : 256;
+    while (newcap < want + 1) newcap *= 2;
+    char *p = (char*)realloc((void*)(uintptr_t)c->line_buf, (size_t)newcap);
+    if (!p) return 0;
+    c->line_buf = (long long)(uintptr_t)p;
+    c->line_cap = newcap;
+    return 1;
+}
+
+/* Move the first '\n'-terminated line out of scratch and into line_buf.
+ * The '\n' is consumed but not copied; a '\r' before it is stripped too,
+ * so a child that writes CRLF (every Windows console program does) does
+ * not hand the caller a stray carriage return. */
+static int nurl__pc_drain_line(NurlProcChild *c) {
+    char *sp = (char*)(uintptr_t)c->scratch;
+    if (!sp) return 0;
+    for (long long i = 0; i < c->scratch_len; i++) {
+        if (sp[i] != '\n') continue;
+        long long take = i;
+        if (take > 0 && sp[take - 1] == '\r') take--;
+        if (!nurl__pc_line_reserve(c, take)) return 0;
+        char *lp = (char*)(uintptr_t)c->line_buf;
+        if (take > 0) memcpy(lp, sp, (size_t)take);
+        lp[take] = 0;
+        c->line_len = take;
+        long long rem = c->scratch_len - (i + 1);
+        if (rem > 0) memmove(sp, sp + i + 1, (size_t)rem);  /* overlaps */
+        c->scratch_len = rem;
+        return 1;
+    }
+    return 0;
+}
+
+/* EOF with no trailing '\n': the tail still counts as a line. */
+static int nurl__pc_flush_tail(NurlProcChild *c) {
+    if (c->scratch_len <= 0) return 0;
+    if (!nurl__pc_line_reserve(c, c->scratch_len)) return 0;
+    char *lp = (char*)(uintptr_t)c->line_buf;
+    char *sp = (char*)(uintptr_t)c->scratch;
+    long long take = c->scratch_len;
+    if (take > 0 && sp[take - 1] == '\r') take--;
+    memcpy(lp, sp, (size_t)take);
+    lp[take] = 0;
+    c->line_len    = take;
+    c->scratch_len = 0;
+    return 1;
+}
+
+static void nurl__pc_out_eof(NurlProcChild *c) {
+    if (c->h_out) { CloseHandle(c->h_out); c->h_out = NULL; }
+    c->eof = 1;
+}
+
 long long nurl_proc_spawn(const char *cmd, const char *argv_buf, long long argc) {
-    (void)cmd; (void)argv_buf; (void)argc;
     NurlProcChild *c = (NurlProcChild*)calloc(1, sizeof(NurlProcChild));
     if (!c) return 0;
-    c->err_kind = NURL_PROC_ERR_OTHER;
     c->exit_code = -1;
+    if (!cmd || !*cmd) {
+        c->err_kind = NURL_PROC_ERR_NOTFOUND;
+        return (long long)(uintptr_t)c;
+    }
+    if (argc < 0) argc = 0;
+    const char *const *argv_user = (const char *const *)argv_buf;
+
+    NurlProcBuf cmdline = {0};
+    int build_ok = nurl__proc_quote_arg(cmd, &cmdline);
+    for (long long i = 0; i < argc && build_ok; i++) {
+        if (!nurl__proc_buf_append(&cmdline, " ", 1)) { build_ok = 0; break; }
+        build_ok = nurl__proc_quote_arg(argv_user ? argv_user[i] : "", &cmdline);
+    }
+    if (!build_ok || !cmdline.data) {
+        free(cmdline.data);
+        c->err_kind = NURL_PROC_ERR_OTHER;
+        return (long long)(uintptr_t)c;
+    }
+
+    SECURITY_ATTRIBUTES sa = {0};
+    sa.nLength        = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE in_r = NULL, in_w = NULL, out_r = NULL, out_w = NULL;
+    if (!CreatePipe(&in_r, &in_w, &sa, 0)) {
+        free(cmdline.data);
+        c->err_kind    = NURL_PROC_ERR_IO;
+        c->last_io_err = (long long)GetLastError();
+        return (long long)(uintptr_t)c;
+    }
+    SetHandleInformation(in_w, HANDLE_FLAG_INHERIT, 0);
+    if (!nurl__proc_overlapped_pipe(&out_r, &out_w)) {
+        DWORD le = GetLastError();
+        CloseHandle(in_r); CloseHandle(in_w);
+        free(cmdline.data);
+        c->err_kind    = NURL_PROC_ERR_IO;
+        c->last_io_err = (long long)le;
+        return (long long)(uintptr_t)c;
+    }
+
+    /* The timeout machinery: one manual-reset event, reused by every
+     * read on this child. Allocated BEFORE CreateProcess so a failure
+     * here does not leave an orphan running. */
+    HANDLE ev = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if (!ev) {
+        DWORD le = GetLastError();
+        CloseHandle(in_r); CloseHandle(in_w);
+        CloseHandle(out_r); CloseHandle(out_w);
+        free(cmdline.data);
+        c->err_kind    = NURL_PROC_ERR_IO;
+        c->last_io_err = (long long)le;
+        return (long long)(uintptr_t)c;
+    }
+
+    /* stderr: hand the child an inheritable duplicate of ours, so its
+     * diagnostics reach the terminal (the POSIX backend inherits fd 2
+     * unchanged). A session with no stderr at all — a GUI subsystem
+     * parent — falls back to NUL, because STARTF_USESTDHANDLES with a
+     * NULL hStdError gives the child no stderr rather than the
+     * parent's. */
+    HANDLE err_dup = NULL;
+    HANDLE err_own = GetStdHandle(STD_ERROR_HANDLE);
+    if (err_own && err_own != INVALID_HANDLE_VALUE) {
+        if (!DuplicateHandle(GetCurrentProcess(), err_own,
+                             GetCurrentProcess(), &err_dup,
+                             0, TRUE, DUPLICATE_SAME_ACCESS)) {
+            err_dup = NULL;
+        }
+    }
+    if (!err_dup) {
+        err_dup = CreateFileA("NUL", GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (err_dup == INVALID_HANDLE_VALUE) err_dup = NULL;
+    }
+
+    STARTUPINFOA si = {0};
+    si.cb         = sizeof(si);
+    si.dwFlags    = STARTF_USESTDHANDLES;
+    si.hStdInput  = in_r;
+    si.hStdOutput = out_w;
+    si.hStdError  = err_dup;
+    PROCESS_INFORMATION pi = {0};
+    BOOL ok = CreateProcessA(NULL, cmdline.data,
+                             NULL, NULL, TRUE, 0,
+                             NULL, NULL, &si, &pi);
+    DWORD spawn_err = ok ? 0 : GetLastError();
+    free(cmdline.data);
+    /* The child owns its ends now; the parent must drop them or the
+     * pipes never report EOF. */
+    CloseHandle(in_r);
+    CloseHandle(out_w);
+    if (err_dup) CloseHandle(err_dup);
+
+    if (!ok) {
+        CloseHandle(in_w);
+        CloseHandle(out_r);
+        CloseHandle(ev);
+        c->last_io_err = (long long)spawn_err;
+        c->err_kind = (spawn_err == ERROR_FILE_NOT_FOUND ||
+                       spawn_err == ERROR_PATH_NOT_FOUND)
+                    ? NURL_PROC_ERR_NOTFOUND
+                    : NURL_PROC_ERR_EXEC_FAILED;
+        return (long long)(uintptr_t)c;
+    }
+    CloseHandle(pi.hThread);
+
+    c->h_proc    = pi.hProcess;
+    c->h_in      = in_w;
+    c->h_out     = out_r;
+    c->h_ev      = ev;
+    c->pid_or_0  = (long long)pi.dwProcessId;
     return (long long)(uintptr_t)c;
 }
+
 long long nurl_proc_spawn_write(long long h, const char *buf, long long n) {
-    (void)h; (void)buf; (void)n; return -1;
+    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
+    if (!c) return -1;
+    if (!c->h_in) return 0;          /* stdin already closed — as POSIX */
+    if (n <= 0 || !buf) return 0;
+    long long total = 0;
+    while (total < n) {
+        DWORD wrote = 0;
+        if (!WriteFile(c->h_in, buf + total, (DWORD)(n - total), &wrote, NULL)) {
+            c->last_io_err = (long long)GetLastError();
+            return -1;
+        }
+        if (wrote == 0) break;
+        total += (long long)wrote;
+    }
+    return total;
 }
-void nurl_proc_spawn_close_stdin(long long h) { (void)h; }
-const char* nurl_proc_spawn_read_line(long long h, long long t) { (void)h; (void)t; return ""; }
-long long nurl_proc_spawn_wait(long long h) { (void)h; return -1; }
-long long nurl_proc_spawn_kill(long long h, long long sig) { (void)h; (void)sig; return -1; }
+
+void nurl_proc_spawn_close_stdin(long long h) {
+    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
+    if (!c || !c->h_in) return;
+    CloseHandle(c->h_in);
+    c->h_in = NULL;
+}
+
+const char* nurl_proc_spawn_read_line(long long h, long long timeout_ms) {
+    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
+    if (!c) return "";
+
+    /* Reset the previous line first: the caller distinguishes "no line"
+     * from "a line" by read_line_len, not by the pointer. */
+    c->line_len = 0;
+    if (c->line_buf) ((char*)(uintptr_t)c->line_buf)[0] = 0;
+
+    if (nurl__pc_drain_line(c)) return (const char*)(uintptr_t)c->line_buf;
+    if (!c->h_out) { c->eof = 1; return ""; }
+
+    for (;;) {
+        DWORD nread   = 0;
+        int   hit_eof = 0;
+
+        if (!c->read_pending) {
+            memset(&c->ov, 0, sizeof(c->ov));
+            c->ov.hEvent = c->h_ev;
+            ResetEvent(c->h_ev);
+            if (ReadFile(c->h_out, c->rdbuf, (DWORD)sizeof(c->rdbuf),
+                         &nread, &c->ov)) {
+                /* Completed inline — nread is already set. */
+            } else {
+                DWORD le = GetLastError();
+                if (le == ERROR_IO_PENDING) {
+                    c->read_pending = 1;
+                } else if (le == ERROR_BROKEN_PIPE || le == ERROR_HANDLE_EOF) {
+                    hit_eof = 1;
+                } else {
+                    c->err_kind    = NURL_PROC_ERR_IO;
+                    c->last_io_err = (long long)le;
+                    return "";
+                }
+            }
+        }
+
+        if (!hit_eof && c->read_pending) {
+            DWORD w = WaitForSingleObject(
+                c->h_ev, timeout_ms > 0 ? (DWORD)timeout_ms : INFINITE);
+            if (w == WAIT_TIMEOUT) return "";   /* read stays in flight */
+            if (w != WAIT_OBJECT_0) {
+                c->err_kind    = NURL_PROC_ERR_IO;
+                c->last_io_err = (long long)GetLastError();
+                return "";
+            }
+            if (GetOverlappedResult(c->h_out, &c->ov, &nread, FALSE)) {
+                c->read_pending = 0;
+            } else {
+                DWORD le = GetLastError();
+                c->read_pending = 0;
+                if (le == ERROR_BROKEN_PIPE || le == ERROR_HANDLE_EOF ||
+                    le == ERROR_OPERATION_ABORTED) {
+                    hit_eof = 1;
+                } else {
+                    c->err_kind    = NURL_PROC_ERR_IO;
+                    c->last_io_err = (long long)le;
+                    return "";
+                }
+            }
+        }
+
+        if (!hit_eof) {
+            if (nread == 0) {
+                hit_eof = 1;               /* pipe closed, as read()==0 */
+            } else {
+                if (!nurl__pc_scratch_reserve(c, c->scratch_len + (long long)nread)) {
+                    c->err_kind = NURL_PROC_ERR_OTHER;
+                    return "";
+                }
+                memcpy((char*)(uintptr_t)c->scratch + c->scratch_len,
+                       c->rdbuf, (size_t)nread);
+                c->scratch_len += (long long)nread;
+                if (nurl__pc_drain_line(c))
+                    return (const char*)(uintptr_t)c->line_buf;
+            }
+        }
+
+        if (hit_eof) {
+            nurl__pc_out_eof(c);
+            if (nurl__pc_drain_line(c) || nurl__pc_flush_tail(c))
+                return (const char*)(uintptr_t)c->line_buf;
+            return "";
+        }
+        /* No '\n' yet — issue the next read. */
+    }
+}
+
+long long nurl_proc_spawn_wait(long long h) {
+    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
+    if (!c) return -1;
+    if (c->waited) return c->exit_code;
+    if (!c->h_proc) return -1;
+    if (WaitForSingleObject(c->h_proc, INFINITE) != WAIT_OBJECT_0) {
+        c->last_io_err = (long long)GetLastError();
+        return -1;
+    }
+    DWORD ec = 0;
+    if (!GetExitCodeProcess(c->h_proc, &ec)) {
+        c->last_io_err = (long long)GetLastError();
+        return -1;
+    }
+    c->exit_code = (long long)ec;
+    c->waited    = 1;
+    return c->exit_code;
+}
+
+/* Windows has no signals. TerminateProcess is the only lever, and the
+ * observable half of `kill` is the status a later `proc_wait` reports —
+ * so the child is terminated with the code POSIX would report for that
+ * signal (128 + sig), which keeps `proc_kill p 15` → `proc_wait` = 143
+ * true on both platforms. */
+long long nurl_proc_spawn_kill(long long h, long long sig) {
+    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
+    if (!c || !c->h_proc) return -1;
+    UINT code = (UINT)(128 + (sig > 0 ? sig : 15));
+    if (TerminateProcess(c->h_proc, code)) return 0;
+    DWORD le = GetLastError();
+    /* Already gone: POSIX kill would say ESRCH, but the child having
+     * exited on its own is not a failure of the call for any caller
+     * that then waits. */
+    if (WaitForSingleObject(c->h_proc, 0) == WAIT_OBJECT_0) return 0;
+    c->last_io_err = (long long)le;
+    return -1;
+}
+
+/* Close pipes, settle any in-flight read, and reap — the Win32 twin of
+ * __proc_free_posix's close/SIGTERM/500ms/SIGKILL sequence. Order
+ * matters: stdin first (that alone ends a well-behaved filter), then
+ * the grace window, then the kill. Only once the child is dead is the
+ * pending overlapped read guaranteed to complete, and it MUST complete
+ * before `rdbuf` — which lives inside this struct — is freed. */
+static void nurl__proc_child_shutdown(NurlProcChild *c) {
+    if (c->h_in) { CloseHandle(c->h_in); c->h_in = NULL; }
+    if (c->h_proc && !c->waited) {
+        if (WaitForSingleObject(c->h_proc, 500) != WAIT_OBJECT_0) {
+            TerminateProcess(c->h_proc, 1);
+            WaitForSingleObject(c->h_proc, 2000);
+        }
+        c->waited = 1;
+    }
+    if (c->read_pending && c->h_out) {
+        DWORD n = 0;
+        CancelIo(c->h_out);
+        GetOverlappedResult(c->h_out, &c->ov, &n, TRUE);
+        c->read_pending = 0;
+    }
+    if (c->h_out)  { CloseHandle(c->h_out);  c->h_out  = NULL; }
+    if (c->h_ev)   { CloseHandle(c->h_ev);   c->h_ev   = NULL; }
+    if (c->h_proc) { CloseHandle(c->h_proc); c->h_proc = NULL; }
+}
 
 #else  /* WASI */
 long long nurl_proc_spawn(const char *cmd, const char *argv_buf, long long argc) {
@@ -571,9 +1002,7 @@ void nurl_proc_spawn_free(long long h) {
     NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
     if (!c) return;
 #if defined(_WIN32) && !defined(__wasi__)
-    if (c->h_in)   CloseHandle(c->h_in);
-    if (c->h_out)  CloseHandle(c->h_out);
-    if (c->h_proc) CloseHandle(c->h_proc);
+    nurl__proc_child_shutdown(c);
     free((void*)(uintptr_t)c->scratch);
     free((void*)(uintptr_t)c->line_buf);
 #endif
