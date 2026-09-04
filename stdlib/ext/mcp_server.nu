@@ -41,8 +41,9 @@
 //     requested revision when supported)
 //   * tools/list, tools/call            (with ToolAnnotations)
 //   * prompts/list, prompts/get
-//   * resources/list, resources/read   (list/read results carry the
-//     2026-07-28 CacheableResult fields ttlMs + cacheScope)
+//   * resources/list, resources/read, resources/templates/list
+//     (list/read results carry the 2026-07-28 CacheableResult fields
+//     ttlMs + cacheScope, per `mcp_server_set_cache_policy`)
 //   * completion/complete (argument autocompletion for prompts/resources)
 //   * ping (legacy heartbeat — empty result)
 //   * tasks/get, tasks/update, tasks/cancel — only once a task store
@@ -190,6 +191,32 @@ $ `stdlib/ext/http_response.nu`
     ( @ Json ) handler
 }
 
+// Resource TEMPLATE (spec §resources, `resources/templates/list`): a
+// family of resources addressed by a URI template rather than one
+// fixed URI — `nurl://stdlib/{path}`. The handler receives the part of
+// the requested URI that filled the variable, so a template registered
+// as `nurl://stdlib/{path}` and read as `nurl://stdlib/ext/csv.nu`
+// hands the handler `ext/csv.nu`.
+//
+// Only a single trailing `{var}` is supported, which is the shape every
+// template in this tree uses and the only one that can be matched by a
+// prefix compare. A template whose variable is not final is rejected at
+// registration rather than silently never matching.
+//
+// A template is not a resource: `resources/list` must NOT contain it
+// (a client would try to read the literal `{path}`), and a client that
+// only reads `resources/list` cannot discover it. That is what
+// `resources/templates/list` is for, and a server that serves templated
+// URIs without answering it is advertising nothing a client can find.
+: McpResourceTemplate {
+    String uri_template
+    String prefix
+    String name
+    String mime_type
+    String description
+    ( @ Json Json ) handler
+}
+
 // Completion provider (spec §6.7, completion/complete). Bound to a
 // single reference — a prompt (`ref/prompt` + name) or a resource
 // template (`ref/resource` + uri). The handler receives the request's
@@ -308,8 +335,13 @@ $ `stdlib/ext/http_response.nu`
     ( Vec McpTool ) __tools
     ( Vec McpPrompt ) __prompts
     ( Vec McpResource ) __resources
+    ( Vec McpResourceTemplate ) __templates
     ( Vec McpCompletion ) __completions
     ( Vec i ) __ctl
+    // The `cacheScope` a CacheableResult carries. A String rather than
+    // a scalar for the same reason `__ctl` is a Vec: a struct is passed
+    // by value, so only a shared handle lets a setter reach every copy.
+    String __cache_scope
     // Server instructions (2026-07-28 `server/discover`, and the
     // legacy handshake's `instructions`): how a model should approach
     // this server, which tool to reach for first. Empty = omitted.
@@ -330,6 +362,9 @@ $ `stdlib/ext/http_response.nu`
 }
 
 : i MCP_CTL_SERVING 0
+// Slots 1..3 hold the CacheableResult TTLs, in ms. Defaults below.
+: i MCP_CTL_TTL_LIST 1
+: i MCP_CTL_TTL_READ 2
 
 @ mcp_server_new s name s version → McpServer {
     ^ @ McpServer {
@@ -338,8 +373,10 @@ $ `stdlib/ext/http_response.nu`
         ( vec_new [McpTool] )
         ( vec_new [McpPrompt] )
         ( vec_new [McpResource] )
+        ( vec_new [McpResourceTemplate] )
         ( vec_new [McpCompletion] )
         ( __mcp_ctl_new )
+        ( string_from `private` )
         ( string_new )
         ( vec_new [McpTaskStore] )
         ( vec_new [McpTaskHook] )
@@ -347,8 +384,13 @@ $ `stdlib/ext/http_response.nu`
 }
 
 @ __mcp_ctl_new → ( Vec i ) {
-    : ( Vec i ) c ( vec_with_cap [i] 1 )
+    : ( Vec i ) c ( vec_with_cap [i] 3 )
     ( vec_push [i] c 0 )
+    // Defaults: a registry fixed after startup but possibly behind
+    // auth — a modest TTL, private. A server whose surface is public
+    // and static says so with `mcp_server_set_cache_policy`.
+    ( vec_push [i] c 60000 )
+    ( vec_push [i] c 5000 )
     ^ c
 }
 
@@ -366,6 +408,41 @@ $ `stdlib/ext/http_response.nu`
 
 @ mcp_server_has_tool McpServer r s name → b {
     ^ >= ( __mcp_find_tool_index r name ) 0
+}
+
+// How long a client may cache this server's LISTINGS (tools/list,
+// prompts/list, resources/list) and its resource READS, and whether a
+// shared cache may hold them (`public`) or only the requesting client
+// (`private`). CacheableResult, 2026-07-28.
+//
+// The defaults — 60 s / 5 s, private — suit a server that may sit
+// behind auth and whose resources are live. They are wrong for the
+// other common shape: a public server whose tool surface is fixed at
+// build time, where an hour and `public` are honest and a 60-second
+// private TTL costs every client a re-listing per minute for a list
+// that cannot change.
+//
+// A TTL of 0 leaves that result uncached.
+@ mcp_server_set_cache_policy McpServer r i list_ttl_ms i read_ttl_ms s scope → v {
+    ( vec_set [i] . r __ctl MCP_CTL_TTL_LIST list_ttl_ms )
+    ( vec_set [i] . r __ctl MCP_CTL_TTL_READ read_ttl_ms )
+    ( string_clear . r __cache_scope )
+    ( string_push_str . r __cache_scope scope )
+}
+
+@ __mcp_ctl McpServer r i slot → i {
+    ?? ( vec_get [i] . r __ctl slot ) { T v → { ^ v } F → { ^ 0 } }
+}
+
+// Stamp a listing result with the server's cache policy.
+@ __mcp_mark_list McpServer r Json out → v {
+    : i ttl ( __mcp_ctl r MCP_CTL_TTL_LIST )
+    ? > ttl 0 { ( mcp_result_set_cacheable out ttl ( string_data . r __cache_scope ) ) } {}
+}
+
+@ __mcp_mark_read McpServer r Json out → v {
+    : i ttl ( __mcp_ctl r MCP_CTL_TTL_READ )
+    ? > ttl 0 { ( mcp_result_set_cacheable out ttl ( string_data . r __cache_scope ) ) } {}
 }
 
 // T once the server has served its first request — see `__ctl`.
@@ -414,6 +491,20 @@ $ `stdlib/ext/http_response.nu`
         = k + k 1
     }
     ( vec_free [McpResource] . r __resources )
+    // Templates
+    : i wn ( vec_len [McpResourceTemplate] . r __templates )
+    : *McpResourceTemplate wp ( vec_data [McpResourceTemplate] . r __templates )
+    = k 0
+    ~ < k wn {
+        : McpResourceTemplate t . wp k
+        ( string_free . t uri_template )
+        ( string_free . t prefix )
+        ( string_free . t name )
+        ( string_free . t mime_type )
+        ( string_free . t description )
+        = k + k 1
+    }
+    ( vec_free [McpResourceTemplate] . r __templates )
     // Completions
     : i cn ( vec_len [McpCompletion] . r __completions )
     : *McpCompletion cp ( vec_data [McpCompletion] . r __completions )
@@ -427,6 +518,7 @@ $ `stdlib/ext/http_response.nu`
     ( vec_free [McpCompletion] . r __completions )
     ( vec_free [i] . r __ctl )
     ( string_free . r __instructions )
+    ( string_free . r __cache_scope )
     // The task store is borrowed — freed by whoever created it.
     ( vec_free [McpTaskStore] . r __tasks )
     ( vec_free [McpTaskHook] . r __task_hook )
@@ -587,6 +679,30 @@ b read_only b destructive b idempotent b open_world
     ( vec_push [McpResource] . r __resources res )
 }
 
+// Register a resource TEMPLATE. `uri_template` must end in a single
+// `{var}` — the part of a requested URI that follows the literal
+// prefix is handed to the handler as the request's `uri` plus a
+// `variable` field holding it. CONSUMES the four strings.
+@ mcp_server_add_resource_template McpServer r s uri_template s name s mime_type s description ( @ Json Json ) handler → v {
+    ( __mcp_server_check_open r `resource template` uri_template
+    ( __mcp_find_template_index r uri_template ) )
+    : i n ( nurl_str_len uri_template )
+    : i open ( nurl_str_find uri_template `{` )
+    ? | < open 0 != ( nurl_str_get uri_template - n 1 ) 125 {
+        ( __mcp_server_reject `resource template` uri_template
+        `a URI template must end in a single '{var}' — only a trailing variable can be matched by prefix, and a template that never matches is worse than none` )
+    } {}
+    : McpResourceTemplate t @ McpResourceTemplate {
+        ( string_from uri_template )
+        ( string_from ( nurl_str_slice uri_template 0 open ) )
+        ( string_from name )
+        ( string_from mime_type )
+        ( string_from description )
+        handler
+    }
+    ( vec_push [McpResourceTemplate] . r __templates t )
+}
+
 // Register a completion provider. `ref_type` is `ref/prompt` or
 // `ref/resource`; `ref_id` is the prompt name or resource URI the
 // completion is attached to. The handler receives the `argument`
@@ -644,6 +760,42 @@ b read_only b destructive b idempotent b open_world
     ^ found
 }
 
+@ __mcp_find_template_index McpServer r s uri_template → i {
+    : i n ( vec_len [McpResourceTemplate] . r __templates )
+    : *McpResourceTemplate tp ( vec_data [McpResourceTemplate] . r __templates )
+    : ~ i k 0
+    : ~ i found -1
+    ~ & == found -1 < k n {
+        : McpResourceTemplate t . tp k
+        ? != 0 ( nurl_str_eq ( string_data . t uri_template ) uri_template ) { = found k } {}
+        = k + k 1
+    }
+    ^ found
+}
+
+// The template whose literal prefix `uri` starts with, or -1. Longest
+// prefix wins, so `nurl://stdlib/{path}` beats a hypothetical
+// `nurl://{rest}` for a stdlib URI rather than whichever registered
+// first.
+@ __mcp_match_template McpServer r s uri → i {
+    : i n ( vec_len [McpResourceTemplate] . r __templates )
+    : *McpResourceTemplate tp ( vec_data [McpResourceTemplate] . r __templates )
+    : ~ i k 0
+    : ~ i best -1
+    : ~ i best_len -1
+    ~ < k n {
+        : McpResourceTemplate t . tp k
+        : s pre ( string_data . t prefix )
+        : i plen ( nurl_str_len pre )
+        ? & != 0 ( nurl_str_starts uri pre ) > plen best_len {
+            = best k
+            = best_len plen
+        } {}
+        = k + k 1
+    }
+    ^ best
+}
+
 @ __mcp_find_completion_index McpServer r s ref_type s ref_id → i {
     : i n ( vec_len [McpCompletion] . r __completions )
     : *McpCompletion cp ( vec_data [McpCompletion] . r __completions )
@@ -669,7 +821,8 @@ b read_only b destructive b idempotent b open_world
     { ( json_obj_set caps `tools` ( json_obj_new ) ) } {}
     ? > ( vec_len [McpPrompt] . r __prompts ) 0
     { ( json_obj_set caps `prompts` ( json_obj_new ) ) } {}
-    ? > ( vec_len [McpResource] . r __resources ) 0
+    ? | > ( vec_len [McpResource] . r __resources ) 0
+    > ( vec_len [McpResourceTemplate] . r __templates ) 0
     { ( json_obj_set caps `resources` ( json_obj_new ) ) } {}
     ? > ( vec_len [McpCompletion] . r __completions ) 0
     { ( json_obj_set caps `completions` ( json_obj_new ) ) } {}
@@ -732,9 +885,7 @@ b read_only b destructive b idempotent b open_world
     }
     : Json out ( json_obj_new )
     ( json_obj_set out `tools` arr )
-    // CacheableResult (2026-07-28): the registry is fixed after
-    // startup but may sit behind auth — modest TTL, private scope.
-    ( mcp_result_set_cacheable out 60000 `private` )
+    ( __mcp_mark_list r out )
     ^ out
 }
 
@@ -892,7 +1043,7 @@ b read_only b destructive b idempotent b open_world
     }
     : Json out ( json_obj_new )
     ( json_obj_set out `prompts` arr )
-    ( mcp_result_set_cacheable out 60000 `private` )
+    ( __mcp_mark_list r out )
     ^ out
 }
 
@@ -976,8 +1127,96 @@ b read_only b destructive b idempotent b open_world
     }
     : Json out ( json_obj_new )
     ( json_obj_set out `resources` arr )
-    ( mcp_result_set_cacheable out 60000 `private` )
+    ( __mcp_mark_list r out )
     ^ out
+}
+
+// resources/templates/list: the templated families, kept out of
+// `resources/list` because a client would try to read the literal
+// `{path}`. Without this method a templated URI is unreachable through
+// the protocol however well it is served.
+@ __mcp_dispatch_templates_list McpServer r → Json {
+    : Json arr ( json_arr_new )
+    : i n ( vec_len [McpResourceTemplate] . r __templates )
+    : *McpResourceTemplate tp ( vec_data [McpResourceTemplate] . r __templates )
+    : ~ i k 0
+    ~ < k n {
+        : McpResourceTemplate t . tp k
+        : Json e ( json_obj_new )
+        ( json_obj_set e `uriTemplate` ( json_str_lit ( string_data . t uri_template ) ) )
+        ( json_obj_set e `name` ( json_str_lit ( string_data . t name ) ) )
+        ( json_obj_set e `mimeType` ( json_str_lit ( string_data . t mime_type ) ) )
+        ( json_obj_set e `description` ( json_str_lit ( string_data . t description ) ) )
+        ( json_arr_push arr e )
+        = k + k 1
+    }
+    : Json out ( json_obj_new )
+    ( json_obj_set out `resourceTemplates` arr )
+    ( __mcp_mark_list r out )
+    ^ out
+}
+
+// Read through a template. The handler gets `{uri, variable}` — the
+// URI as asked for, and the part that filled the trailing `{var}` —
+// and returns the same inner content object an exact resource's
+// handler does. Panic-guarded like every other handler.
+@ __mcp_read_template McpServer r i idx s uri → !Json McpRpcErr {
+    : *McpResourceTemplate tp ( vec_data [McpResourceTemplate] . r __templates )
+    : McpResourceTemplate t . tp idx
+    : ( @ Json Json ) h . t handler
+    : i plen ( nurl_str_len ( string_data . t prefix ) )
+    : Json arg ( json_obj_new )
+    ( json_obj_set arg `uri` ( json_str_lit uri ) )
+    ( json_obj_set arg `variable`
+    ( json_str_lit ( nurl_str_slice uri plen - ( nurl_str_len uri ) plen ) ) )
+    : ( Vec Json ) sink ( vec_with_cap [Json] 1 )
+    : !v PanicInfo pr ( recover \ → v { ( vec_push [Json] sink ( h arg ) ) } )
+    ?? pr {
+        T _ → {}
+        F pi → {
+            ( mcp_log ( nurl_str_cat `resource template handler panicked: `
+            ( string_data . pi msg ) ) )
+            ( panic_info_free pi )
+        }
+    }
+    ( json_free arg )
+    ? <= ( vec_len [Json] sink ) 0 {
+        ( vec_free [Json] sink )
+        ^ @ !Json McpRpcErr { F ( mcp_rpc_err mcp_err_internal_error
+            `resource template handler panicked` ) }
+    } {}
+    : ?Json c0 ( vec_get [Json] sink 0 )
+    : Json content ?? c0 { T jv → jv F → ( json_null ) }
+    ( vec_free [Json] sink )
+    // A handler that cannot serve this particular URI says so by
+    // returning a null / non-object, which is a not-found rather than
+    // an empty success — the shape nurlapi shipped, where a templated
+    // read answered `{"contents":[]}` and looked like it had worked.
+    ? ! ( json_is_obj content ) {
+        ( json_free content )
+        : String m ( string_from `unknown resource: ` )
+        ( string_push_str m uri )
+        : McpRpcErr e ( mcp_rpc_err mcp_err_resource_not_found ( string_data m ) )
+        ( string_free m )
+        ^ @ !Json McpRpcErr { F e }
+    } {}
+    ?? ( json_obj_get content `uri` ) {
+        T _ → {}
+        F _ → { ( json_obj_set content `uri` ( json_str_lit uri ) ) }
+    }
+    ?? ( json_obj_get content `mimeType` ) {
+        T _ → {}
+        F _ → {
+            ( json_obj_set content `mimeType`
+            ( json_str_lit ( string_data . t mime_type ) ) )
+        }
+    }
+    : Json arr ( json_arr_new )
+    ( json_arr_push arr content )
+    : Json out ( json_obj_new )
+    ( json_obj_set out `contents` arr )
+    ( __mcp_mark_read r out )
+    ^ @ !Json McpRpcErr { T out }
 }
 
 // resources/read: lookup by uri, invoke handler. Spec response shape
@@ -1001,6 +1240,9 @@ b read_only b destructive b idempotent b open_world
     } {}
     : i idx ( __mcp_find_resource_index r uri )
     ? < idx 0 {
+        // No exact resource — try the templates before giving up.
+        : i tidx ( __mcp_match_template r uri )
+        ? >= tidx 0 { ^ ( __mcp_read_template r tidx uri ) } {}
         : String m ( string_from `unknown resource: ` )
         ( string_push_str m uri )
         : McpRpcErr e ( mcp_rpc_err mcp_err_resource_not_found ( string_data m ) )
@@ -1047,9 +1289,8 @@ b read_only b destructive b idempotent b open_world
     ( json_arr_push arr content )
     : Json out ( json_obj_new )
     ( json_obj_set out `contents` arr )
-    // resources/read is also a CacheableResult in 2026-07-28. Content
-    // comes from a live handler — short TTL, private scope.
-    ( mcp_result_set_cacheable out 5000 `private` )
+    // resources/read is also a CacheableResult in 2026-07-28.
+    ( __mcp_mark_read r out )
     ^ @ !Json McpRpcErr { T out }
 }
 
@@ -1175,6 +1416,9 @@ b read_only b destructive b idempotent b open_world
     } {}
     ? != 0 ( nurl_str_eq method `prompts/get` ) {
         ^ ( __mcp_dispatch_prompts_get r params )
+    } {}
+    ? != 0 ( nurl_str_eq method `resources/templates/list` ) {
+        ^ @ !Json McpRpcErr { T ( __mcp_dispatch_templates_list r ) }
     } {}
     ? != 0 ( nurl_str_eq method `resources/list` ) {
         ^ @ !Json McpRpcErr { T ( __mcp_dispatch_resources_list r ) }

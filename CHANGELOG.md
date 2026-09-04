@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ext/mcp_server.nu`: resource templates** —
+  `mcp_server_add_resource_template srv \`nurl://stdlib/{path}\` …`
+  registers a FAMILY of resources and answers the spec's
+  `resources/templates/list`, which the module did not implement at
+  all. A template is deliberately absent from `resources/list` (a client
+  would try to read the literal `{path}`), so without that method a
+  templated URI is unreachable through the protocol however well it is
+  served — which is exactly the state `nurlapi` was in. `resources/read`
+  falls through to the longest matching template, hands the handler the
+  URI and the part that filled the variable, and a handler that does not
+  serve that particular one returns a non-object, which becomes -32002
+  rather than an empty success.
+
+- **`ext/mcp_server.nu`: `mcp_server_set_cache_policy`** — the
+  CacheableResult TTLs and scope were hardcoded at 60 s / 5 s /
+  `private`. Those suit a server that may sit behind auth and whose
+  resources are live; they are wrong for the other common shape, a
+  public server whose tool surface is fixed at build time, where a
+  60-second private TTL costs every client a re-listing a minute for a
+  list that cannot change. `nurlapi` sets an hour, public.
+
 ### Fixed
 
 - **`ext/mcp_server.nu`: dispatch failures carry their own code** —
