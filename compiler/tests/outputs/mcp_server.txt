@@ -23,6 +23,16 @@ resources_count=1
 resource_uri=mcp://hello
 resource_text=hello from MCP resource
 --- unknown method ---
-unknown_method_err=method not found
+unknown_method_err=unknown method: nonexistent/method
+unknown_method_code=-32601
+--- error codes ---
+prompts_get_no_name_code=-32602
+prompts_get_no_name_msg=prompts/get requires a "name" parameter
+prompts_get_unknown_code=-32602
+prompts_get_unknown_msg=unknown prompt: nope
+resources_read_no_uri_code=-32602
+resources_read_no_uri_msg=resources/read requires a "uri" parameter
+resources_read_unknown_code=-32002
+resources_read_unknown_msg=unknown resource: mcp://absent
 --- ping ---
 ping_obj_kind=obj

@@ -8,6 +8,10 @@
 // Opens a loopback socket, hence `requires: live`.
 // requires: live
 
+// Port 18972, and it must stay unique across the corpus: the tests
+// run in parallel, so two files naming one port is a bind race that
+// fails only in a full run and passes when either is run alone.
+
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
@@ -35,7 +39,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ run_test → v {
-    : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18942 )
+    : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18972 )
     ?? lr {
         T listener → {
             : ( @ HttpResponse HttpRequest ) h \ HttpRequest req → HttpResponse { ^ ( bin_handler req ) }
@@ -43,7 +47,7 @@ $ `stdlib/core/vec.nu`
 
             : ( @ v ) client \ → v {
                 ( sleep_ms 250 )
-                : !Response HttpErr rr ( http_get `http://127.0.0.1:18942/blob` )
+                : !Response HttpErr rr ( http_get `http://127.0.0.1:18972/blob` )
                 ?? rr {
                     T resp → {
                         = g_status ( http_status resp )

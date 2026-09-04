@@ -123,6 +123,15 @@
 // the concrete type arguments.
 : ~ s g_diag_ctx ``
 
+// LLVM return type of the function whose body is currently being
+// generated. Diagnostics-only: gen_field_store consults it to tell the
+// lost-write footgun (`= . p f v` in a function that returns something
+// else) apart from the legitimate modify-a-copy-and-return-it idiom.
+// Saved and restored around each function body, so a nested closure
+// body inherits its enclosing function's — which is the conservative
+// direction: it only ever SUPPRESSES a warning, never invents one.
+: ~ s g_cur_ret_llty ``
+
 // die → __diag_abort: print-position variants share this exit/panic tail.
 @ __diag_abort → v {
     ? != g_diag_recover_active 0
@@ -16835,6 +16844,21 @@
     ^ cur_ptr
 }
 
+// Does this function's LLVM return type carry `sty` (a `%Name`)? Used
+// to spare the modify-a-copy-and-return-it idiom from the lost-write
+// warning: `@ f T x → T`, and likewise `→ !T E` / `→ ?T`, whose LLVM
+// aggregates embed `%T`. Matched on a name boundary so `%Http` does
+// not pass for `%HttpResponse`.
+@ __ret_carries_type s ret_llty s sty → b {
+    : i at ( nurl_str_find ret_llty sty )
+    ? < at 0 { ^ F } {}
+    : i end + at ( nurl_str_len sty )
+    ? >= end ( nurl_str_len ret_llty ) { ^ T } {}
+    : i c ( nurl_str_get ret_llty end )
+    // alnum or '_' means we matched a prefix of a longer type name
+    ^ ! | | | & >= c 48 <= c 57 & >= c 65 <= c 90 & >= c 97 <= c 122 == c 95
+}
+
 @ gen_field_store i lex i syms i cg → s {
     ( nurl_lex_advance lex )  // consume '.'
     // A second '.' means the object is itself a field path. When that path
@@ -16851,6 +16875,41 @@
     // only the RHS. Every branch below routes its RHS through that one
     // function, so the target binding has to travel on a side-channel.
     ( nurl_sym_def syms `__last_field_obj__` obj_name )
+    // Silent-snapshot footgun, PARAMETER edition. A struct parameter is
+    // passed by value: the callee gets its own copy, so `= . p field v`
+    // lands in that copy and the caller never sees the write. This is
+    // the same violation gen_assign already warns about one context
+    // over (a binding captured by value into a closure — the write is
+    // discarded when the closure returns), and it is equally invisible
+    // without a diagnostic: the store compiles, runs, and does nothing.
+    //
+    // It is easy to believe otherwise, because a struct whose fields
+    // are HANDLES (String, Vec, Json) does propagate mutations made
+    // THROUGH those handles — `( vec_push . p items x )` is seen by the
+    // caller, since the handle's control block is shared. A plain
+    // scalar field beside them is not, and nothing marked the
+    // difference. Non-fatal: reading the field back within the call is
+    // legitimate scratch use, and some callees deliberately mutate a
+    // local copy. `inout` (whose `__ptr` IS the caller's address) and
+    // pointer parameters write through and are not flagged.
+    ? != 0 ( nurl_str_len obj_name )
+    { : s __fs_oty ( nurl_sym_get syms obj_name )
+        : i __fs_olen ( nurl_str_len __fs_oty )
+        ? & & & & & & != 0 ( nurl_sym_len2 syms obj_name `__param` )
+        == 0 ( nurl_sym_len2 syms obj_name `__inout` )
+        // A param with no alloca behind it has nowhere to store at all;
+        // that store is a hard error further down and must not also
+        // collect a warning about where its value would have gone.
+        != 0 ( nurl_sym_len2 syms obj_name `__ptr` )
+        > __fs_olen 0
+        == ( nurl_str_get __fs_oty 0 ) 37
+        != ( nurl_str_get __fs_oty - __fs_olen 1 ) 42
+        ! ( __ret_carries_type g_cur_ret_llty __fs_oty )
+        { ( warn lex ( nurl_str_cat3
+            `assignment to a field of by-value parameter '` obj_name
+            ( nurl_str_cat3 `' is not visible to the caller — a struct parameter is passed by value, so the store lands in this function's own copy. Handle-typed fields are different: pushing into a ( Vec T ) field, or writing through a String / Json field, IS seen by the caller, because those share a control block — which is exactly why a scalar field beside them looks like it should be too. Declare the parameter 'inout ` obj_name `' if the caller should see the write, return the new value, or move the state into a handle-typed field.` ) ) ) }
+        {} }
+    {}
     : s pv ? nested ( gen_nested_lvalue_addr lex syms cg )
     ( gen_expr lex syms cg )  // pointer/aggregate value
     : s pt ( nurl_get_last_type )  // LLVM type, e.g. "%Node*", "i64*", "{ T*, i64 }", or "%Pair"
@@ -20989,8 +21048,22 @@
     = g_dbg_current_subprogram saved_dbg_sp
     = g_dbg_current_loc saved_dbg_loc
 
-    // Return a function pointer constant
-    : ~ s fn_ptr_type ( nurl_str_cat `{ ` ( nurl_str_cat ret_type `(` ) )
+    // Return a function pointer constant.
+    //
+    // The space before `(` is not cosmetic. parse_type spells an
+    // ANNOTATED closure type `{ R (i8*, P…)*, i8* }`, and nurlc compares
+    // types as strings, so emitting `{ R(i8*, P…)*, i8* }` here made a
+    // closure literal a DIFFERENT type from the identical annotated one:
+    //
+    //   : ( @ i i ) h ? c ( wrap a ) \ i x → i { ^ + x 9 }
+    //   error: the '?' branches yield values of different types
+    //          ('{ i64 (i8*, i64)*, i8* }' vs '{ i64(i8*, i64)*, i8* }')
+    //
+    // — two spellings of one type, and an error message that shows them
+    // as different without showing why. `extract_fn_ptr_return_type`
+    // scans for exactly this space too, so it silently fell back on the
+    // unspaced form.
+    : ~ s fn_ptr_type ( nurl_str_cat `{ ` ( nurl_str_cat ret_type ` (` ) )
     = fn_ptr_type ( nurl_str_cat fn_ptr_type `i8*` )
     : ~ s types1 ( nurl_str_cat param_types `` )
     : ~ i j 0
@@ -23372,6 +23445,12 @@
     // a pointer base via `<obj>__ptr`). See `__alloca_struct_params`
     // for the predicate (multi-field named struct, not enum).
     ( __alloca_struct_params syms cg )
+    // Published for gen_field_store's by-value-parameter diagnostic: a
+    // store into a param whose type is part of what this function
+    // RETURNS is the legitimate modify-a-copy-and-return-it idiom
+    // (`@ f T x → T { = . x n 1  ^ x }`), not a lost write.
+    : s __saved_ret_llty g_cur_ret_llty
+    = g_cur_ret_llty ( nurl_llty ret_ty )
     : s fn_cleanup ( nurl_cg_lbl cg `fn_cleanup` )
     ( nurl_sym_def syms `__fn_cleanup__` fn_cleanup )
     ( nurl_sym_set g_fn_escapes `__defer_top_fn__` `` )
@@ -23753,6 +23832,7 @@
     = g_dbg_current_subprogram 0
     = g_dbg_current_file_id 0
     = g_dbg_current_loc 0
+    = g_cur_ret_llty __saved_ret_llty
     ( emit_str_globals base_str g_str_idx )
     ( emit_closure_globals )
     // Borrow checker: the function body is fully parsed —
@@ -23905,6 +23985,29 @@
         ( nurl_sym_def syms pname lt )
         // Mark parameter as immutable by design
         ( nurl_sym_def syms ( nurl_str_cat pname `__param` ) `1` )
+        // A parameter SHADOWS a same-named top-level function for the
+        // whole body. Its type went into the inner scope above, but the
+        // function's call metadata — the declared parameter roster, the
+        // FFI roster — lives under the same key in an OUTER scope, and
+        // `nurl_sym_get2` walks outward and finds it. gen_call then
+        // type-checked `( handler x )` against whatever `@ handler`
+        // happens to declare elsewhere in the program:
+        //
+        //   @ run ( @ i i ) handler i x → i { ^ ( handler x ) }
+        //   @ handler s tag → i { ^ 42 }
+        //   error: argument 1 to 'handler': value of type 'i64' passed
+        //          where parameter expects 'i8*'
+        //
+        // — a call that resolves to the parameter, rejected against a
+        // signature it has nothing to do with, and reported at the
+        // callee's line. Worse across files: a stdlib function taking a
+        // `dispatch` closure stopped compiling because the IMPORTING
+        // program happened to define `@ dispatch`. Blanking the rosters
+        // in the parameter's own scope is what shadowing means.
+        ( nurl_sym_def syms ( nurl_str_cat pname `__ptypes_src` ) `` )
+        ( nurl_sym_def syms ( nurl_str_cat pname `__ffi_params` ) `` )
+        ( nurl_sym_def syms ( nurl_str_cat pname `__arity` ) `` )
+        ( nurl_sym_def syms ( nurl_str_cat pname `__garity` ) `` )
         // Borrow-provenance origin: an auto-Drop enum parameter is a
         // BORROW (the caller owns it). Values derived from it (vec_get,
         // field access, returned through it) inherit `__borrow`, so a
@@ -24125,6 +24228,51 @@
     { ( nurl_lex_advance lex ) }
 }
 
+// A named struct used inside a FUNCTION type — as an argument or as the
+// return — must already be DEFINED in the emitted IR, not merely
+// declared later in the file. LLVM's parser makes a forward-referenced
+// named type opaque, and an opaque struct is neither a valid function
+// argument nor a valid return type, so the module is rejected at link
+// time with a column offset into a generated type line and no NURL
+// source location at all:
+//
+//   %McpTool = type { …, { %Json (i8*, %Json, %McpCall)*, i8* }, … }
+//   error: invalid type for function argument
+//
+// clang 18 on x86-64 accepted it; the macOS-arm64 and Windows
+// toolchains did not. That is the worst shape a diagnostic can take —
+// a green local build and a cryptic failure on somebody else's
+// platform — so the declaration site rejects it here, on every
+// platform, and says which declaration to move.
+//
+// Only function types are affected: a forward-referenced struct as a
+// plain field is resolved by LLVM when the definition arrives. Generic
+// instantiations (`%Vec__i64`) are emitted ahead of every user struct,
+// so dunder names are skipped, as is the `%dyn.` fat pointer.
+@ __check_fnty_types_defined i lex i syms s flt → v {
+    ? < ( nurl_str_find flt `(i8*` ) 0 { ^ v } {}
+    : i n ( nurl_str_len flt )
+    : ~ i i 0
+    ~ < i n {
+        ? == ( nurl_str_get flt i ) 37
+        { : ~ i j + i 1
+            ~ & < j n ( __is_ident_char ( nurl_str_get flt j ) ) { = j + j 1 }
+            : s name ( nurl_str_slice flt + i 1 - j + i 1 )
+            ? & & != 0 ( nurl_str_len name ) ! ( __has_dunder name )
+            ! ( seq name `dyn` )
+            { : s sv ( nurl_sym_get syms name )
+                ? & & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
+                == 0 ( nurl_str_len ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat `ty##` name ) ) )
+                { ( die lex ( nurl_str_cat
+                    ( nurl_str_cat3 `type '` name `' is used inside a closure type here but is declared LATER in the program` )
+                    ( nurl_str_cat3 `. A named type inside a function type must already be defined when this one is emitted — LLVM treats a forward reference as an opaque struct, which is not a valid function argument or return type, and the module then fails to assemble with no source location (some toolchains accept it, so it can pass locally and fail on another platform). Move ': ` name `' above this declaration.` ) ) ) }
+                {} }
+            {}
+            = i j }
+        { = i + i 1 }
+    }
+}
+
 @ gen_struct_decl s sname i lex i syms → v {
     ( nurl_lex_advance lex )
     // Same flat-namespace guard as `@` functions (g_fn_pos_syms): a second
@@ -24163,6 +24311,7 @@
             ( nurl_str_cat sname `'` ) ) ) }
         {}
         ( check_type_known lex syms flt `a struct field type` __ft_line __ft_col )
+        ( __check_fnty_types_defined lex syms flt )
         ? ( is_ident_tok ( nurl_lex_type lex ) )
         { : s fname ( nurl_lex_val lex )
             ( nurl_lex_advance lex )

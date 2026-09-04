@@ -1,6 +1,6 @@
 [package]
 name = "nurl-mcp"
-version = "0.12.2"
+version = "0.13.0"
 description = "Local MCP server for the NURL toolchain — dual-era MCP (the 2026-07-28 stateless revision with server/discover and per-request _meta, plus the legacy initialize handshake for older clients) — exposes the installed compiler over Model Context Protocol so an LLM agent on the host can build, run, type-check, format, and compile NURL to wasm32-wasi (fully local wasm builds via the wasmbuilder package), read the installed stdlib, browse its API surface — the stdlib's or a published registry package's (nurl_api, package=) — without function bodies, search stdlib + the package registry (by name, description, or exported symbol) with ranked word boundaries (nurl_grep), and compile a program that USES a registry package end to end, resolving its dependencies (nurl_build_project). Stdio by default; an optional token-authenticated HTTP transport (--http) gates code execution behind --allow-run. The editor-facing counterpart of nurl-lsp, for LLMs."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/nurl-lang/nurl/tree/main/packages/nurl-mcp"

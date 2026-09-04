@@ -18,6 +18,7 @@
 $ `deps/http/src/http.nu`
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/mcp_http.nu`
+$ `stdlib/ext/mcp_server.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -26,6 +27,14 @@ $ `parse.nu`
 $ `theme.nu`
 $ `layout.nu`
 $ `render.nu`
+
+// The one version string. It was two: main.nu carried MMD_VERSION for
+// the CLI banner while the MCP handshake had its own literal, and by
+// the time anyone looked the package was 0.1.1, the banner said 0.1.0
+// and the handshake said 0.1.0 as well — three numbers, one of them
+// right. A hand-written second copy of a version is a copy that goes
+// stale; swarm-mcp's had frozen five releases back.
+: s MMD_VERSION `0.2.0`
 
 : ~ i g_mmd_ts 0
 
@@ -331,59 +340,17 @@ $ `render.nu`
 
 // ── MCP ──────────────────────────────────────────────────────────────
 
-@ __mmds_tool_schema_render → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    : Json p_src ( json_obj_new )
-    ( json_obj_set p_src `type` ( json_str_lit `string` ) )
-    ( json_obj_set p_src `description` ( json_str_lit `Mermaid flowchart source, starting with 'graph <dir>' or 'flowchart <dir>'.` ) )
-    ( json_obj_set props `source` p_src )
-    : Json p_tpl ( json_obj_new )
-    ( json_obj_set p_tpl `type` ( json_str_lit `string` ) )
-    ( json_obj_set p_tpl `description` ( json_str_lit `Template name; omit for the server default. mermaid_templates lists them.` ) )
-    ( json_obj_set props `template` p_tpl )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `source` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+@ __mmds_schema_render → Json {
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `source` `string`
+    `Mermaid flowchart source, starting with 'graph <dir>' or 'flowchart <dir>'.` T )
+    ( mcp_schema_prop sc `template` `string`
+    `Template name; omit for the server default. mermaid_templates lists them.` F )
+    ^ sc
 }
 
-@ __mmds_tool_schema_source_only → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    : Json p_src ( json_obj_new )
-    ( json_obj_set p_src `type` ( json_str_lit `string` ) )
-    ( json_obj_set p_src `description` ( json_str_lit `Mermaid flowchart source.` ) )
-    ( json_obj_set props `source` p_src )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `source` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
-}
-
-@ __mmds_tool_schema_empty → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    ( json_obj_set schema `properties` ( json_obj_new ) )
-    ^ schema
-}
-
-@ mmd_tools_list → ( Vec Json ) {
-    : ( Vec Json ) tools ( vec_new [Json] )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `mermaid_render`
-    `Render a mermaid flowchart to an SVG image and return the SVG markup. The look comes from a named template; omit 'template' for the server default.`
-    ( __mmds_tool_schema_render ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `mermaid_templates`
-    `List the templates this server has loaded — the names accepted by mermaid_render's 'template' argument — with their descriptions.`
-    ( __mmds_tool_schema_empty ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `mermaid_validate`
-    `Parse a mermaid flowchart WITHOUT rendering it: reports node and edge counts, or the line and column of the first syntax error, plus any statements that were ignored.`
-    ( __mmds_tool_schema_source_only ) ) )
-    ^ tools
+@ __mmds_schema_source_only → Json {
+    ^ ( mcp_schema_of1 `source` `string` `Mermaid flowchart source.` T )
 }
 
 @ __mmds_arg_str Json args s key → String {
@@ -525,72 +492,36 @@ $ `render.nu`
     ^ out
 }
 
-@ mmd_dispatch_tool s name Json args → Json {
-    ? != 0 ( nurl_str_eq name `mermaid_render` ) { ^ ( __mmds_tool_render args ) } {}
-    ? != 0 ( nurl_str_eq name `mermaid_templates` ) { ^ ( __mmds_tool_templates ) } {}
-    ? != 0 ( nurl_str_eq name `mermaid_validate` ) { ^ ( __mmds_tool_validate args ) } {}
-    : String m ( string_with_cap 64 )
-    ( string_push_str m `unknown tool: ` )
-    ( string_push_str m name )
-    : Json out ( mcp_tool_result_error ( string_data m ) )
-    ( string_free m )
-    ^ out
-}
+// ── MCP server ───────────────────────────────────────────────────────
+//
+// Built once, served over both transports. Everything between a
+// request arriving and a handler running — JSON-RPC framing, the
+// dual-era version gate, `server/discover`, `_meta` decorations,
+// per-handler panic isolation — is ext/mcp_server.nu's, and this file
+// no longer has an opinion about any of it. The hand-rolled dispatch
+// it replaces implemented neither `server/discover` (which the
+// 2026-07-28 spec makes mandatory) nor the version gate, and answered
+// -32601 to a modern client's first request.
 
-@ __mmds_mcp_call Json id Json params → Json {
-    ?? ( json_obj_get params `name` ) {
-        T nv → {
-            : s name ( json_str_data nv )
-            : Json args ?? ( json_obj_get params `arguments` ) {
-                T av → ( json_clone av )
-                F → ( json_obj_new )
-            }
-            : Json result ( mmd_dispatch_tool name args )
-            ( json_free args )
-            ^ ( mcp_response_result id result )
-        }
-        F → ^ ( mcp_response_error id mcp_err_invalid_params `tools/call requires a "name" parameter` )
-    }
-}
-
-// One JSON-RPC request in, the reply (or None for a notification) out. The
-// same function backs both the HTTP transport and `--stdio`.
-@ mmd_mcp_dispatch Json req → ?Json {
-    ?? ( json_obj_get req `method` ) {
-        T mv → {
-            : s method ( json_str_data mv )
-            ?? ( json_obj_get req `id` ) {
-                T id → {
-                    ? != 0 ( nurl_str_eq method `initialize` ) {
-                        ^ @ ?Json { T ( mcp_response_result id ( mcp_initialize_result `mermaid-server` `0.1.0` ) ) }
-                    } {}
-                    ? != 0 ( nurl_str_eq method `ping` ) {
-                        ^ @ ?Json { T ( mcp_response_result id ( json_obj_new ) ) }
-                    } {}
-                    ? != 0 ( nurl_str_eq method `tools/list` ) {
-                        ^ @ ?Json { T ( mcp_response_result id ( mcp_tools_list_result ( mmd_tools_list ) ) ) }
-                    } {}
-                    ? != 0 ( nurl_str_eq method `tools/call` ) {
-                        : Json params ?? ( json_obj_get req `params` ) {
-                            T pv → ( json_clone pv )
-                            F → ( json_obj_new )
-                        }
-                        : Json out ( __mmds_mcp_call id params )
-                        ( json_free params )
-                        ^ @ ?Json { T out }
-                    } {}
-                    : String m ( string_with_cap 48 )
-                    ( string_push_str m `unknown method: ` )
-                    ( string_push_str m method )
-                    : Json err ( mcp_response_error id mcp_err_method_not_found ( string_data m ) )
-                    ( string_free m )
-                    ^ @ ?Json { T err }
-                }
-                F → ^ @ ?Json { F @ Json { JNull } }
-            }
-        }
-        F → ^ @ ?Json { F @ Json { JNull } }
-    }
+@ mmd_mcp_server → McpServer {
+    : McpServer srv ( mcp_server_new `mermaid-server` MMD_VERSION )
+    ( mcp_server_set_instructions srv
+    `Render mermaid flowcharts to SVG. mermaid_validate parses without
+rendering and is the cheap way to check a diagram; mermaid_templates
+lists the looks mermaid_render can apply.` )
+    ( mcp_server_add_tool_full srv `mermaid_render`
+    `Render a mermaid flowchart to an SVG image and return the SVG markup. The look comes from a named template; omit 'template' for the server default.`
+    ( __mmds_schema_render ) T F T F
+    \ Json a → Json { ^ ( __mmds_tool_render a ) } )
+    ( mcp_server_add_tool_full srv `mermaid_templates`
+    `List the templates this server has loaded — the names accepted by mermaid_render's 'template' argument — with their descriptions.`
+    ( mcp_schema_empty ) T F T F
+    \ Json a → Json { ^ ( __mmds_tool_templates ) } )
+    ( mcp_server_add_tool_full srv `mermaid_validate`
+    `Parse a mermaid flowchart WITHOUT rendering it: reports node and edge counts, or the line and column of the first syntax error, plus any statements that were ignored.`
+    ( __mmds_schema_source_only ) T F T F
+    \ Json a → Json { ^ ( __mmds_tool_validate a ) } )
+    ^ srv
 }
 
 // ── The playground ───────────────────────────────────────────────────
@@ -699,8 +630,13 @@ tpl.addEventListener("change", render);
     ( http_app_post a `/render` \ HttpRequest req Params p → HttpResponse { ^ ( __mmds_h_render_post req p ) } )
     ( http_app_post a `/render.json` \ HttpRequest req Params p → HttpResponse { ^ ( __mmds_h_render_json req p ) } )
 
-    // MCP shares the process, the port and the template set.
-    : ( @ HttpResponse HttpRequest ) mcph ( mcp_http_handler \ Json rq → ?Json { ^ ( mmd_mcp_dispatch rq ) } )
+    // MCP shares the process, the port and the template set. The
+    // server is built here and captured by the routes below: its
+    // fields are all shared handles, so the captured copy IS the
+    // server, and it lives as long as the app does.
+    : McpServer srv ( mmd_mcp_server )
+    : ( @ HttpResponse HttpRequest ) mcph
+    ( mcp_http_handler ( mcp_server_http_dispatch srv ) )
     ( http_app_route a `POST` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( mcph req ) } )
     ( http_app_route a `GET` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( mcph req ) } )
     ( http_app_route a `DELETE` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( mcph req ) } )

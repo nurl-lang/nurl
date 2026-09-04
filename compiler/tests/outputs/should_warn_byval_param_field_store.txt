@@ -1,0 +1,10 @@
+COMPILE OK
+WARNINGS
+compiler/tests/should_warn_byval_param_field_store.nu:30:9: warning: assignment to a field of by-value parameter 'c' is not visible to the caller — a struct parameter is passed by value, so the store lands in this function's own copy. Handle-typed fields are different: pushing into a ( Vec T ) field, or writing through a String / Json field, IS seen by the caller, because those share a control block — which is exactly why a scalar field beside them looks like it should be too. Declare the parameter 'inout c' if the caller should see the write, return the new value, or move the state into a handle-typed field.
+    = . c seq + . c seq 1
+        ^
+LINK OK
+EXIT 0
+OUTPUT
+seq=1
+log=1

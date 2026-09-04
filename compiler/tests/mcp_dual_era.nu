@@ -1,5 +1,5 @@
 // mcp_dual_era.nu — offline regression for the 2026-07-28 dual-era
-// registry behavior on top of mcp_registry_envelope:
+// registry behavior on top of mcp_server_envelope:
 //   * server/discover returns supportedVersions + caps + _meta
 //     serverInfo + the CacheableResult fields
 //   * a modern request (per-request `_meta` protocolVersion) gets
@@ -16,7 +16,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
-$ `stdlib/ext/mcp_registry.nu`
+$ `stdlib/ext/mcp_server.nu`
 
 @ echo_tool Json args → Json {
     : ?Json t ( json_obj_get args `text` )
@@ -28,11 +28,11 @@ $ `stdlib/ext/mcp_registry.nu`
     ^ ( mcp_tool_result_text text )
 }
 
-@ roundtrip McpRegistry r s tag s reqs → v {
+@ roundtrip McpServer r s tag s reqs → v {
     : !Json JsonError pj ( json_parse reqs )
     ?? pj {
         T req → {
-            : ?Json resp_o ( mcp_registry_envelope r req )
+            : ?Json resp_o ( mcp_server_envelope r req )
             ?? resp_o {
                 T resp → {
                     : String out ( json_stringify resp )
@@ -56,10 +56,10 @@ $ `stdlib/ext/mcp_registry.nu`
 }
 
 @ main → i {
-    : McpRegistry r ( mcp_registry_new `dual-test` `1.2.3` )
+    : McpServer r ( mcp_server_new `dual-test` `1.2.3` )
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    ( mcp_registry_add_tool r `echo` `Echo back the input.` schema \ Json a → Json { ^ ( echo_tool a ) } )
+    ( mcp_server_add_tool r `echo` `Echo back the input.` schema \ Json a → Json { ^ ( echo_tool a ) } )
 
     // Modern: server/discover.
     ( roundtrip r `discover` `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"t","version":"0"}}}}` )
@@ -87,6 +87,6 @@ $ `stdlib/ext/mcp_registry.nu`
     // Legacy ping still answered.
     ( roundtrip r `ping` `{"jsonrpc":"2.0","id":8,"method":"ping"}` )
 
-    ( mcp_registry_free r )
+    ( mcp_server_free r )
     ^ 0
 }

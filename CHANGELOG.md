@@ -8,6 +8,225 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ext/mcp_server.nu`: dispatch failures carry their own code** —
+  the dispatcher signalled failure in-band, as an `__error__` key on the
+  result object, which shared a namespace with whatever a handler
+  returned and had no room for a code, so the envelope layer mapped
+  *every* failure to -32601 "method not found". A `prompts/get` missing
+  its `name` told the client the method did not exist, and a client that
+  believes that stops calling it. `mcp_server_dispatch` now returns
+  `!Json McpRpcErr`: -32602 for a malformed `prompts/get` /
+  `resources/read`, -32602 for an unknown prompt, the spec's -32002
+  (new `mcp_err_resource_not_found`) for an unknown resource, -32603 for
+  a panicking handler, -32601 only for a method that really is not
+  there — and each message now names what was missing. A failed
+  *notification* is logged and dropped rather than answered (JSON-RPC
+  2.0 §4.1).
+
+- **`ext/mcp_server.nu`: duplicate and late registration fail loudly** —
+  registering two tools under one name silently shadowed: `tools/list`
+  advertised both, `tools/call` only ever reached the first, and the one
+  that did nothing was the one just written. Registering after the first
+  dispatch was worse than untidy — `tools/list` results carry
+  `ttlMs: 60000`, so a client may legitimately cache the list and never
+  see the late arrival. Both now abort at the `add`, naming the
+  registration. `compiler/tests/mcp_server_guards.nu`.
+
+- **`ext/mcp_server.nu`: `notifications/*` are accepted, not
+  method-not-found** — `notifications/initialized` is the notification
+  every client sends immediately after initialize, and the dispatcher
+  treated it as an unknown method, logging `notification failed` once
+  per session for a client doing exactly what the lifecycle requires.
+  The spec says a receiver ignores a notification it does not
+  recognise; all `notifications/*` now dispatch to an empty result,
+  which the envelope layer drops (no `id`, no response).
+
+- **`ext/mcp_server.nu`: `prompts/list` advertises the spec's argument
+  ARRAY** — it emitted whatever was registered as the prompt's
+  arguments, and every caller registers a JSON Schema, so the field
+  went out as a schema object where the spec has an array of
+  `{name, description, required}` — a shape no client can read. A
+  registered schema is now converted (it holds exactly those three
+  facts); an array passes through untouched. Found by writing the
+  wire-contract test.
+
+- **Four test ports were each claimed by two files** — the corpus runs
+  at `jobs=12`, and 18915 (`tls_resume` / `tls_cert_select`), 18942 and
+  18941 (`http2_in_http_server` / `http_response_binary` /
+  `http_binary_body`) and 18799 (`http_server_pool` /
+  `websocket_client`) were hardcoded in two tests apiece. Whichever
+  binds second loses, so the failure appears only in a full run and
+  vanishes when either test is run alone. Each second claimant moves to
+  a free port, with a line saying why the number must stay unique.
+
+- **A named type inside a closure type must be declared before the
+  struct that holds it** — nurlc emitted a forward reference, LLVM's
+  parser makes a forward-referenced named type opaque, and an opaque
+  struct is neither a valid function argument nor a valid return type.
+  The module was rejected at link time at a column offset into a
+  generated `= type` line with no NURL source location — and not
+  everywhere: clang 18 on x86-64 Linux assembled it while the
+  macOS-arm64 and Windows toolchains did not, so it passed locally and
+  failed on another platform. Now a compile error at the declaration,
+  naming the declaration to move. A forward reference as a plain FIELD
+  stays legal (LLVM resolves that one), as do generic instantiations,
+  which are emitted ahead of every user struct.
+  `compiler/tests/should_fail_fnty_forward_type.nu`.
+
+- **A parameter now shadows a same-named top-level function** — the
+  parameter's type went into the inner scope, but the function's call
+  metadata (declared parameter roster, FFI roster, arity) lived under
+  the same key in an outer scope and the lookup walked out and found it.
+  A call that resolved to the parameter was then checked against a
+  signature it had nothing to do with, and reported at the callee's
+  line: `argument 1 to 'handler': value of type 'i64' passed where
+  parameter expects 'i8*'`. The cross-file form is the one that bites —
+  `ext/mcp_http.nu` stopped compiling because a program importing it
+  happened to declare `@ dispatch` with a different arity, a name in one
+  file breaking an unrelated function in another.
+  `compiler/tests/param_shadows_fn.nu`.
+
+- **One closure type, one spelling** — `parse_type` spelled an
+  annotated closure type `{ R (i8*, P…)*, i8* }` and the closure-literal
+  codegen spelled the identical type `{ R(i8*, P…)*, i8* }`. nurlc
+  compares types as strings, so a conditional whose arms were a
+  returned closure and a literal one was rejected with the two
+  spellings printed side by side and no hint that the only difference
+  was a space; `extract_fn_ptr_return_type`, which scans for that
+  space, silently missed the unspaced form too.
+  `compiler/tests/closure_type_spelling.nu`.
+
+- **`ext/mqtt.nu`: three writes that never left the method** — every
+  MqttClient method takes the client by value, so the stores into its
+  `i` fields landed in the method's own copy. Surfaced by the new
+  by-value-parameter warning; all three are protocol-visible:
+  * `__mqtt_next_pid` returned **1 forever**. Every QoS 1/2 PUBLISH,
+    SUBSCRIBE and UNSUBSCRIBE went on the wire carrying packet
+    identifier 1 — the one field MQTT 5 §2.2.1 requires to differ
+    between packets in flight.
+  * the keep-alive deadline never moved, in `mqtt_ping`,
+    `__mqtt_send_pingreq` and `mqtt_reconnect` alike. After it first
+    expired, **every** `mqtt_keepalive_tick` sent another PINGREQ: an
+    idle loop became a ping flood at loop speed.
+  * `mqtt_reconnect` closed the caller's socket, dialled a fresh one,
+    completed the CONNECT handshake over it and returned Ok — leaving
+    the caller holding the CLOSED conn. Every later publish wrote to it.
+
+  The two counters move into `ctl`, a two-slot `( Vec i )` whose
+  control block is shared across copies exactly as `rxbuf` and
+  `qos2_rx` always were, which is what MqttClient's 29-method API
+  always implied it was. `mqtt_reconnect` takes `inout MqttClient cl`,
+  because it replaces the TcpConn itself and TcpConn is a plain
+  three-scalar struct with no control block to share — call it as
+  `( mqtt_reconnect inout cl host port cfg )` over a `: ~` binding.
+  `compiler/tests/mqtt_client_state.nu`.
+
+### Added
+
+- **nurlc warns when a field store to a by-value struct parameter is
+  lost** — `= . p field v` inside `@ f T p → R` compiles, runs, and
+  writes to the callee's own copy; the caller never sees it. Value
+  semantics are intentional (`compiler/tests/function_param_mut.nu`
+  pins them) but invisible, and the same struct propagates mutations
+  made *through* its handle-typed fields — `( vec_push . p items x )`
+  IS seen by the caller — so a scalar field sitting beside a Vec field
+  looks like it behaves the same way and does not. This is the
+  parameter-context sibling of the by-value *closure capture* warning
+  nurlc already emitted, and generalising it that one context over
+  found three live bugs in `ext/mqtt.nu` (below) on the first sweep.
+  Not raised for the modify-a-copy-and-return-it idiom (`@ f T x → T`,
+  `→ !T E`, `→ ?T`), where the write reaches the caller through the
+  return value, nor where the store is already a hard error for want of
+  storage. `compiler/tests/should_warn_byval_param_field_store.nu`.
+
+- **`compiler/tests/mcp_server_contract.nu`: the MCP wire, frozen** —
+  the other MCP tests assert that a field holds the value they expect;
+  this one prints the exact bytes of every response the server can
+  produce and its golden freezes them. A refactor that renames a key,
+  reorders an object, drops `resultType`, changes a cache TTL or moves
+  an error code fails in CI rather than in someone's client. It pins
+  the handshake and `server/discover`, the version gate's -32022 with
+  `data.supported`, `_meta` serverInfo present on a modern request and
+  absent on a legacy one, tools/list with annotations and built
+  schemas, tools/call including a PANICKING handler (which must become
+  one error envelope, not a dead process), prompts, resources,
+  completion, every error code the dispatcher emits, and a
+  notification producing no response at all.
+
+- **`ext/mcp_server.nu` grows the four things the hand-rolled servers
+  had and it did not** — which is a large part of why they were
+  hand-rolled. `mcp_server_add_tool_full` carries ToolAnnotations (an
+  ABSENT `destructiveHint` defaults to TRUE in the spec, so an
+  unannotated read-only tool is presented as if it could destroy
+  state); `mcp_server_set_instructions` fills the `instructions`
+  channel on `server/discover` and the handshake result;
+  `mcp_server_set_task_store` turns on tasks/get, tasks/update and
+  tasks/cancel and is what declares the extension — a server without a
+  store answers method-not-found, which is the honest answer — with a
+  pre-dispatch hook for a server whose task state is only current after
+  it polls something; and `mcp_server_add_tool_ctx` hands a handler an
+  `McpCall` beside its arguments, so it can see what the client
+  declared on THIS request without widening the frozen handler type.
+  `mcp_server_dispatch` accordingly takes the whole request.
+  `mcp_server_serve_http srv host port token` is the HTTP main() in one
+  line, bearer auth included.
+  `compiler/tests/mcp_server_capabilities.nu`.
+
+- **`mcp_schema_obj` / `_prop` / `_of1` / `_empty` in `ext/mcp.nu`** —
+  a tool's inputSchema ran seven lines of `json_obj_set` per property,
+  and every MCP server in the tree had grown its own private `prop`
+  helper doing exactly that.
+
+- **`examples/mcp_echo_server.nu` and `…_http.nu` are written on the
+  facade** — 209 and 199 lines of hand-rolled JSON-RPC become 75 and 69
+  of mostly comments, and the two differ only in their last call. This
+  matters more than it looks: the example is what gets copied, and
+  `packages/nurl-mcp`'s dispatch still carries a `// shape from
+  examples/mcp_echo_server_http.nu` comment. It was teaching the wrong
+  thing, including to servers that then drifted from it.
+
+### Changed
+
+- **Every MCP server in the tree is on `ext/mcp_server.nu`** —
+  `packages/nurl-mcp` 0.13.0, `packages/swarm-mcp` 0.29.0 and
+  `packages/mermaid-server` 0.2.0. Three hand-rolled JSON-RPC
+  dispatchers (866 lines) become registrations. They were one design
+  copied three times: nurl-mcp's and swarm-mcp's `handle_ping` and
+  `handle_tools_list` were byte-identical, and nurl-mcp's own comment
+  said its shape came from `examples/mcp_echo_server_http.nu`. Each copy
+  had drifted somewhere the others had not — mermaid-server implemented
+  neither `server/discover` (mandatory since 2026-07-28) nor the version
+  gate, nurl-mcp compared its bearer token with a byte-at-a-time
+  `nurl_str_eq` where the stdlib's is constant-time, swarm-mcp's
+  handshake version had frozen at 0.20.0, and none of the three isolated
+  a panicking tool handler, which over stdio is the whole server. All
+  fifteen swarm tools, eleven nurl-mcp tools and three mermaid tools now
+  carry annotations; every server has `instructions`; swarm-mcp's task
+  eligibility is expressed by which tools register with
+  `mcp_server_add_tool_ctx` rather than a name list kept in sync by
+  hand.
+
+- **`ext/mcp_registry.nu` is now `ext/mcp_server.nu`** — the module you
+  reach for to *write* an MCP server was named after an implementation
+  detail, and "registry" is already the package registry in this repo,
+  so the name read as "a registry of MCP servers". Nobody found it: it
+  had both transports, dual-era dispatch, `recover` around every
+  handler and constant-time bearer auth, yet `packages/nurl-mcp`,
+  `packages/swarm-mcp` and `packages/mermaid-server` each hand-rolled
+  their own JSON-RPC dispatch instead, and the copies had already
+  drifted apart. Renamed with its API — `mcp_server_new / _add_tool /
+  _add_prompt / _add_resource / _add_completion / _dispatch / _envelope
+  / _free`, `mcp_server_serve_stdio`, `mcp_server_http_dispatch`,
+  `McpServer`, `McpServerErr`, `mcp_server_err_name` — so that a grep
+  for "mcp server" lands on it. The module header now carries the map
+  of the whole `mcp*.nu` family (which module is client, which is
+  server, which is transport) and a STABLE SURFACE section stating what
+  is public and what may move. Also fixed: the header pointed at
+  `ext/mcp_stdio_server.nu`, a file that has never existed, sending
+  anyone who followed it to `mcp_stdio.nu` — the stdio *client*.
+
 ### Added
 
 - **HTTP/3 client, and `packages/http-client` speaks it** —

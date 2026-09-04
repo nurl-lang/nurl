@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.29.0
+
+The MCP protocol layer moves onto `stdlib/ext/mcp_server.nu`. 387 lines
+of `src/main.nu` become 237, and the deleted ones were all protocol:
+`build_tools_list`, `dispatch_tool`'s string-equality chain,
+`handle_initialize` / `_discover` / `_ping` / `_tools_list` /
+`_tools_call` / `_unknown`, `finish_reply`, `dispatch`, the private
+`ms_prop` schema helper, and `__mcp_task_eligible`.
+
+That `dispatch` was a copy of nurl-mcp's — `handle_ping` and
+`handle_tools_list` byte-identical, the rest differing only in line
+wrapping plus the tasks branch. It is one implementation now, shared
+with nurl-mcp, mermaid-server and the stdlib's own examples, and pinned
+by `compiler/tests/mcp_server_contract.nu`.
+
+- **Task eligibility is no longer a list to keep in sync.** The six
+  tools that can hand back a pollable task register through
+  `mcp_server_add_tool_ctx` and receive the per-call context; the other
+  nine register plainly. Adding a task-capable tool can no longer mean
+  remembering to add its name to `__mcp_task_eligible` as well.
+- **Tools carry annotations.** All fifteen are open-world (they reach
+  the cluster); the submits are non-idempotent, the queries read-only
+  and idempotent. Until now an absent `destructiveHint` presented every
+  one of them as if it could destroy state.
+- **`instructions`** now ride the legacy handshake result too, not only
+  `server/discover`.
+
+No change to the tools, their arguments, the tasks wire shapes or the
+cluster. `tests/tasks_smoke.sh` (14 checks over real HTTPS, including
+the capability gate and its `requiredCapabilities`) and
+`tests/general_smoke.sh` (k-means against a numpy Lloyd oracle) pass
+unchanged.
+
 ## 0.28.2
 
 **0.28.1 does not build on a current toolchain — this is that release

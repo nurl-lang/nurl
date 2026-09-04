@@ -18,8 +18,42 @@ $ `stdlib/core/string.nu`
 $ `stdlib/std/panic.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
-$ `stdlib/ext/mcp_registry.nu`
+$ `stdlib/ext/mcp_server.nu`
 $ `stdlib/ext/mcp_session.nu`
+
+// The dispatcher returns `!Json McpRpcErr` — these tests drive it
+// directly, so unwrap the success side here and let a failure print
+// itself rather than vanishing into a golden that still looks right.
+// mcp_server_dispatch takes the whole JSON-RPC request; these tests
+// name a method and its params, so wrap them in one.
+@ req_of s method ? Json params → Json {
+    : Json req ( json_obj_new )
+    ( json_obj_set req `jsonrpc` ( json_str_lit `2.0` ) )
+    ( json_obj_set req `method` ( json_str_lit method ) )
+    ?? params {
+        T p → { ( json_obj_set req `params` ( json_clone p ) ) }
+        F _ → {}
+    }
+    ^ req
+}
+
+@ dispatch_ok McpServer r s method ? Json params → Json {
+    : Json req ( req_of method params )
+    ?? ( mcp_server_dispatch r req ) {
+        T res → {
+            ( json_free req )
+            ^ res
+        }
+        F e → {
+            ( nurl_print `UNEXPECTED RPC ERROR: ` )
+            ( nurl_print ( mcp_rpc_err_message e ) )
+            ( nurl_print `\n` )
+            ( mcp_rpc_err_free e )
+            ( json_free req )
+            ^ ( json_obj_new )
+        }
+    }
+}
 
 @ echo_handler Json args → Json {
     ^ ( mcp_tool_result_text `HELLO_REAL` )
@@ -50,11 +84,17 @@ $ `stdlib/ext/mcp_session.nu`
     }
 }
 
-@ call_tool McpRegistry r s name → Json {
+// The panicking handler logs to stderr, so this test's record contains
+// both streams and its outputs-windows/ golden holds the same lines in
+// a different order — run_tests.ps1 concatenates the two pipes instead
+// of merging them, so every stderr line lands last there. That is a
+// property of the harness, not a bug and not something a flush can
+// change; see compiler/tests/stdout_flush_order.nu.
+@ call_tool McpServer r s name → Json {
     : Json p ( json_obj_new )
     ( json_obj_set p `name` ( json_str_lit name ) )
     ( json_obj_set p `arguments` ( json_obj_new ) )
-    : Json out ( mcp_registry_dispatch r `tools/call` @ ?Json { T p } )
+    : Json out ( dispatch_ok r `tools/call` @ ?Json { T p } )
     ( json_free p )
     ^ out
 }
@@ -62,9 +102,9 @@ $ `stdlib/ext/mcp_session.nu`
 @ run → i {
     : ~ i fails 0
 
-    : McpRegistry r ( mcp_registry_new `t` `1.0` )
-    ( mcp_registry_add_tool r `echo` `ok` ( json_obj_new ) \ Json a → Json { ^ ( echo_handler a ) } )
-    ( mcp_registry_add_tool r `boom` `panics` ( json_obj_new ) \ Json a → Json { ^ ( boom_handler a ) } )
+    : McpServer r ( mcp_server_new `t` `1.0` )
+    ( mcp_server_add_tool r `echo` `ok` ( json_obj_new ) \ Json a → Json { ^ ( echo_handler a ) } )
+    ( mcp_server_add_tool r `boom` `panics` ( json_obj_new ) \ Json a → Json { ^ ( boom_handler a ) } )
 
     // 1a. Success path must return the real result.
     : Json r1 ( call_tool r `echo` )
@@ -84,7 +124,7 @@ $ `stdlib/ext/mcp_session.nu`
         F → { ( nurl_eprintln `FAIL: no isError field` ) = fails + fails 1 }
     }
     ( json_free r2 )
-    ( mcp_registry_free r )
+    ( mcp_server_free r )
 
     // 2. resolve_rpc rejects a non-pending (forged) id, settles a pending one.
     : McpSessionStore st ( mcp_session_store_new )

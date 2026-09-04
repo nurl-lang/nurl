@@ -159,18 +159,59 @@ $ `stdlib/ext/websocket.nu`
 
 // `rxbuf` holds bytes already pulled off the socket but not yet
 // consumed — leftover past a packet boundary; the framed reader drains
-// from its front. `ping_deadline` is the now_ms timestamp by which the
-// next PINGREQ must go out to satisfy the broker's keep-alive;
-// `keepalive_ms` 0 disables keep-alive. `next_pid` is the rotating
-// 1..65535 packet-identifier allocator (0 is reserved by the spec).
+// from its front. `keepalive_ms` 0 disables keep-alive; it is fixed at
+// connect and never written again.
+//
+// The two pieces of state that DO change per operation — the
+// keep-alive deadline and the rotating packet-id counter — live in
+// `ctl`, a two-slot ( Vec i ), not in scalar fields. That is not
+// decoration. A struct is passed BY VALUE in NURL, so `= . cl
+// next_pid n` inside a method writes to that method's own copy and the
+// caller never sees it: the id never advanced past 1 and the
+// keep-alive deadline never moved, so every `mqtt_keepalive_tick`
+// after the first expiry sent another PINGREQ, forever. A ( Vec i )
+// shares its control block across copies exactly as `rxbuf` and
+// `qos2_rx` already do, which is what makes MqttClient behave like the
+// handle its 29-method API always claimed it was. Read and write the
+// two slots only through the accessors below.
+//
+//   ctl[MQTT_CTL_DEADLINE] — now_ms by which the next PINGREQ must go
+//                            out to satisfy the broker's keep-alive
+//   ctl[MQTT_CTL_NEXT_PID] — rotating 1..65535 packet-identifier
+//                            allocator (0 is reserved by the spec)
 : MqttClient {
     TcpConn conn
     ( Vec u ) rxbuf
-    i ping_deadline
+    ( Vec i ) ctl
     i keepalive_ms
-    i next_pid
     ( Vec i ) qos2_rx
     b ws  // T = MQTT-over-WebSocket: each control packet rides in a binary frame
+}
+
+: i MQTT_CTL_DEADLINE 0
+: i MQTT_CTL_NEXT_PID 1
+
+@ __mqtt_ctl_new i deadline → ( Vec i ) {
+    : ( Vec i ) c ( vec_with_cap [i] 2 )
+    ( vec_push [i] c deadline )
+    ( vec_push [i] c 1 )
+    ^ c
+}
+
+@ __mqtt_ctl_get MqttClient cl i slot → i {
+    ?? ( vec_get [i] . cl ctl slot ) { T v → { ^ v } F → { ^ 0 } }
+}
+
+@ __mqtt_ctl_set MqttClient cl i slot i v → v {
+    ( vec_set [i] . cl ctl slot v )
+}
+
+// The keep-alive deadline, pushed out every time a packet that
+// satisfies the broker goes on the wire.
+@ __mqtt_deadline MqttClient cl → i { ^ ( __mqtt_ctl_get cl MQTT_CTL_DEADLINE ) }
+
+@ __mqtt_deadline_bump MqttClient cl → v {
+    ( __mqtt_ctl_set cl MQTT_CTL_DEADLINE + ( now_ms ) . cl keepalive_ms )
 }
 
 // An inbound application message. `props` holds the MQTT 5 user
@@ -217,10 +258,10 @@ $ `stdlib/ext/websocket.nu`
 // at a time today (the calls are synchronous), but the wire carries a
 // fresh id per QoS 1/2 publish, SUBSCRIBE and UNSUBSCRIBE.
 @ __mqtt_next_pid MqttClient cl → i {
-    : i pid . cl next_pid
+    : i pid ( __mqtt_ctl_get cl MQTT_CTL_NEXT_PID )
     : ~ i nxt + pid 1
     ? > nxt 65535 { = nxt 1 } {}
-    = . cl next_pid nxt
+    ( __mqtt_ctl_set cl MQTT_CTL_NEXT_PID nxt )
     ^ pid
 }
 
@@ -537,6 +578,7 @@ $ `stdlib/ext/websocket.nu`
         F we → {
             ( vec_free [u] . cl rxbuf )
             ( vec_free [i] . cl qos2_rx )
+            ( vec_free [i] . cl ctl )
             ( tcp_close_conn . cl conn )
             ^ @ !MqttClient MqttErr { F ( __mqtt_of_net we ) }
         }
@@ -555,6 +597,7 @@ $ `stdlib/ext/websocket.nu`
                 ( nurl_eprint `\n` )
                 ( vec_free [u] . cl rxbuf )
                 ( vec_free [i] . cl qos2_rx )
+                ( vec_free [i] . cl ctl )
                 ( tcp_close_conn . cl conn )
                 ^ @ !MqttClient MqttErr { F ( __mqtt_connack_err reason ) }
             }
@@ -562,6 +605,7 @@ $ `stdlib/ext/websocket.nu`
         F re → {
             ( vec_free [u] . cl rxbuf )
             ( vec_free [i] . cl qos2_rx )
+            ( vec_free [i] . cl ctl )
             ( tcp_close_conn . cl conn )
             ^ @ !MqttClient MqttErr { F re }
         }
@@ -579,7 +623,7 @@ $ `stdlib/ext/websocket.nu`
         T conn → {
             ( tcp_set_timeout conn 15000 )
             : i kams * . cfg keepalive 1000
-            : MqttClient cl @ MqttClient { conn ( vec_new [u] ) + ( now_ms ) kams kams 1 ( vec_new [i] ) F }
+            : MqttClient cl @ MqttClient { conn ( vec_new [u] ) ( __mqtt_ctl_new + ( now_ms ) kams ) kams ( vec_new [i] ) F }
             ^ ( __mqtt_finish_connect cl cfg )
         }
         F e → { ^ @ !MqttClient MqttErr { F e } }
@@ -621,7 +665,7 @@ $ `stdlib/ext/websocket.nu`
             : TcpConn conn ( ws_client_conn wc )
             ( tcp_set_timeout conn 15000 )
             : i kams * . cfg keepalive 1000
-            : MqttClient cl @ MqttClient { conn ( vec_new [u] ) + ( now_ms ) kams kams 1 ( vec_new [i] ) T }
+            : MqttClient cl @ MqttClient { conn ( vec_new [u] ) ( __mqtt_ctl_new + ( now_ms ) kams ) kams ( vec_new [i] ) T }
             ^ ( __mqtt_finish_connect cl cfg )
         }
         F e → { ^ @ !MqttClient MqttErr { F ( __mqtt_ws_connect_err e ) } }
@@ -952,7 +996,7 @@ $ `stdlib/ext/websocket.nu`
                 : i pt & >> ( _mqtt_byte resp 0 ) 4 15
                 ( vec_free [u] resp )
                 ? == pt 13 {
-                    = . cl ping_deadline + ( now_ms ) . cl keepalive_ms
+                    ( __mqtt_deadline_bump cl )
                     ^ @ !v MqttErr { T 0 }
                 } {}
             }
@@ -972,7 +1016,7 @@ $ `stdlib/ext/websocket.nu`
     : !v NetErr w ( __mqtt_write_pkt cl pkt )
     ?? w { T → {} F _ → {} }
     ( vec_free [u] pkt )
-    = . cl ping_deadline + ( now_ms ) . cl keepalive_ms
+    ( __mqtt_deadline_bump cl )
 }
 
 // Send PINGREQ only if the keep-alive deadline has passed. Call this
@@ -981,7 +1025,7 @@ $ `stdlib/ext/websocket.nu`
 // reached.
 @ mqtt_keepalive_tick MqttClient cl → !v MqttErr {
     ? <= . cl keepalive_ms 0 { ^ @ !v MqttErr { T 0 } } {}
-    ? >= ( now_ms ) . cl ping_deadline {
+    ? >= ( now_ms ) ( __mqtt_deadline cl ) {
         ^ ( mqtt_ping cl )
     } {}
     ^ @ !v MqttErr { T 0 }
@@ -992,10 +1036,20 @@ $ `stdlib/ext/websocket.nu`
 // `cfg` again. On success the MqttClient is reusable; the caller must
 // re-issue any SUBSCRIBEs (the broker starts a fresh subscription set
 // unless the session was resumed via session-expiry + clean-start F).
+//
+// `inout` because this is the one operation that replaces the socket
+// itself, and TcpConn is a plain three-scalar struct with no shared
+// control block behind it — unlike `rxbuf`, `qos2_rx` and `ctl`, a new
+// conn stored into a by-value copy does not reach the caller. It did
+// not: reconnect closed the caller's socket, dialled a fresh one,
+// completed the handshake over it and returned Ok, leaving the caller
+// holding the CLOSED conn and every later publish writing to it. So
+// the caller must hold the client in a `: ~` binding and spell the
+// call `( mqtt_reconnect inout cl host port cfg )`.
 // Raw transports only — a WebSocket client carries no URL to redo the
 // upgrade, so it must be rebuilt with mqtt_connect_ws; calling this on
 // one yields MqttTransport rather than silently dialling plain MQTT.
-@ mqtt_reconnect MqttClient cl s host i port MqttConfig cfg → !v MqttErr {
+@ mqtt_reconnect inout MqttClient cl s host i port MqttConfig cfg → !v MqttErr {
     ? . cl ws { ^ @ !v MqttErr { F # MqttErr MqttTransport } } {}
     ( tcp_close_conn . cl conn )
     : !TcpConn MqttErr cr ( __mqtt_connect_tls host port . cfg tls_verify )
@@ -1019,7 +1073,7 @@ $ `stdlib/ext/websocket.nu`
                     : i reason ( mqtt_connack_reason resp )
                     ( vec_free [u] resp )
                     ? == reason 0 {
-                        = . cl ping_deadline + ( now_ms ) . cl keepalive_ms
+                        ( __mqtt_deadline_bump cl )
                         ^ @ !v MqttErr { T 0 }
                     } {
                         ^ @ !v MqttErr { F ( __mqtt_connack_err reason ) }
@@ -1477,7 +1531,7 @@ $ `stdlib/ext/websocket.nu`
                                 = running F
                             } {
                                 ? > . cl keepalive_ms 0 {
-                                    ? >= ( now_ms ) . cl ping_deadline {
+                                    ? >= ( now_ms ) ( __mqtt_deadline cl ) {
                                         ( __mqtt_send_pingreq cl )
                                     } {}
                                 } {}
@@ -1497,6 +1551,7 @@ $ `stdlib/ext/websocket.nu`
         ( chan_close [MqttMessage] inbox )
         ( vec_free [u] . cl rxbuf )
         ( vec_free [i] . cl qos2_rx )
+        ( vec_free [i] . cl ctl )
         ( tcp_close_conn . cl conn )
     }
 
@@ -1544,5 +1599,6 @@ $ `stdlib/ext/websocket.nu`
     } {}
     ( vec_free [u] . cl rxbuf )
     ( vec_free [i] . cl qos2_rx )
+    ( vec_free [i] . cl ctl )
     ( tcp_close_conn . cl conn )
 }

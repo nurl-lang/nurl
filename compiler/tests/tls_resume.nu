@@ -15,6 +15,10 @@
 // thread, as tls_pq_hybrid.nu does.
 // requires: live fibers
 
+// Port 18971, and it must stay unique across the corpus: the tests
+// run in parallel, so two files naming one port is a bind race that
+// fails only in a full run and passes when either is run alone.
+
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
@@ -92,7 +96,7 @@ $ `stdlib/std/time.nu`
     ?? ( write_file kp ( string_data . cert key_pem ) ) { T _ → {} F _ → { ( label `key_write` `FAIL` ) } }
     ( x509_selfsigned_free cert )
 
-    : !TcpListener NetErr lr ( tcp_listen_tls `127.0.0.1` 18915 cp kp )
+    : !TcpListener NetErr lr ( tcp_listen_tls `127.0.0.1` 18971 cp kp )
     ?? lr {
         T listener → {
             : ( @ v ) server \ → v {
@@ -107,7 +111,7 @@ $ `stdlib/std/time.nu`
 
                     // 1. full handshake; the ticket arrives with the echo
                     : ~ ( Vec u ) sess ( vec_new [u] )
-                    : !*TlsConn TlsErr r1 ( tls_connect_insecure `127.0.0.1` 18915 `localhost` )
+                    : !*TlsConn TlsErr r1 ( tls_connect_insecure `127.0.0.1` 18971 `localhost` )
                     ?? r1 {
                         T c → {
                             ( label `first_resumed` ( yn ( tls_is_resumed c ) ) )
@@ -121,7 +125,7 @@ $ `stdlib/std/time.nu`
                     }
 
                     // 2. offer the session: abbreviated handshake, data still flows
-                    : !*TlsConn TlsErr r2 ( tls_connect_resume `127.0.0.1` 18915 `localhost` sess )
+                    : !*TlsConn TlsErr r2 ( tls_connect_resume `127.0.0.1` 18971 `localhost` sess )
                     ?? r2 {
                         T c → {
                             ( label `second_resumed` ( yn ( tls_is_resumed c ) ) )
@@ -139,7 +143,7 @@ $ `stdlib/std/time.nu`
                     : i last - ( vec_len [u] sess ) 1
                     : i lb ?? ( vec_get [u] sess last ) { T x → # i x F → 0 }
                     : b _s ( vec_set [u] sess last # u ^^ lb 255 )
-                    : !*TlsConn TlsErr r3 ( tls_connect_insecure_resume `127.0.0.1` 18915 `localhost` sess )
+                    : !*TlsConn TlsErr r3 ( tls_connect_insecure_resume `127.0.0.1` 18971 `localhost` sess )
                     ?? r3 {
                         T c → {
                             ( label `bad_ticket_resumed` ( yn ( tls_is_resumed c ) ) )

@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- packet ids advance ---
+1 2 3 4 5 
+6 7 8 
+--- id wraps at 65535, never to 0 ---
+65534 65535 1 2 
+--- keep-alive deadline moves ---
+bumped=T
+nonzero=T

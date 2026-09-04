@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.2.0
+
+The MCP surface moves onto `stdlib/ext/mcp_server.nu`, the stdlib's
+server framework, and deletes the hand-rolled JSON-RPC dispatch this
+package had grown from an old copy of `examples/mcp_echo_server_http.nu`.
+That copy had drifted, and what it was missing was not cosmetic:
+
+- **`server/discover` now answers.** The 2026-07-28 revision makes it
+  mandatory, and it is the first thing a dual-era client sends; this
+  server replied "method not found" and the client had to fall back.
+- **The protocol version gate is enforced.** A request declaring a
+  revision the server does not support now gets the spec-shaped -32022
+  with `data.supported`, so a client can retry on a mutual revision,
+  instead of being served as if it had declared nothing.
+- **Results carry `_meta` serverInfo** for modern requests.
+- **Tools carry annotations.** All three are read-only, and an ABSENT
+  `destructiveHint` defaults to TRUE in the spec — so until now every
+  tool here was presented to users as if it could destroy state, and
+  clients that auto-allow read-only tools would not.
+- **`instructions`** tell a model which tool is the cheap one.
+- **A panicking tool handler becomes one error envelope** rather than
+  ending the process — which, under `--stdio`, is the whole server.
+
+Also: the version string existed twice, and by 0.1.1 neither copy was
+right — the package said 0.1.1, the CLI banner said 0.1.0, and the MCP
+handshake had its own literal 0.1.0. There is now one constant.
+
+No change to the HTTP API, the renderer, the parser or the templates.
+
 ## 0.1.1
 
 `nurlpkg install mermaid-server` installed a binary that could not start:

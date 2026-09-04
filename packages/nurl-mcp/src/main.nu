@@ -34,6 +34,7 @@ $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/ext/mcp_http.nu`
+$ `stdlib/ext/mcp_server.nu`
 $ `deps/wasmbuilder/src/build.nu`
 
 // ── Policy (set once in main, read by the dispatcher) ───────────────
@@ -58,7 +59,7 @@ $ `deps/wasmbuilder/src/build.nu`
 // to bump (previously the banners drifted to a stale 0.2.0 while the
 // handshake reported 0.4.0).
 
-@ nm_version → s { ^ `0.12.2` }
+@ nm_version → s { ^ `0.13.0` }
 
 // Log a startup banner "nurl-mcp <version> <suffix>" through mcp_log,
 // building the line from the single-source version so the banners can
@@ -1034,371 +1035,168 @@ version = "0.0.0"
     ^ r
 }
 
+// ── Tool input schemas ───────────────────────────────────────────────
+//
+// `mcp_schema_prop` (ext/mcp.nu) replaces the private nm_prop/_int/_bool
+// helpers this file had grown — the same three lines of json_obj_set
+// per property that swarm-mcp and mermaid-server had each grown too.
+
 @ nm_schema_api → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( nm_prop props `module` `Render ONE installed-stdlib module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'.` )
-    ( nm_prop props `package` `A published registry package's API surface, rendered from its tarball — the step after a registry hit, since package symbol names are not otherwise searchable. E.g. 'nn'.` )
-    ( nm_prop props `version` `Optional package version (e.g. '0.1.1'); defaults to the latest. Only meaningful with 'package'.` )
-    ( nm_prop props `query` `Declaration search: space- or comma-separated terms, ALL must occur (case-insensitive) in signature + doc comment + module path. Keep one call to ONE concept (2–4 related terms, e.g. 'string lowercase'). Zero-hit fallbacks run in order: a term that exactly names a module ('csv', 'csv.nu', 'ext/csv.nu') returns that whole surface — never cut mid-module, and the reply ends by listing any term it did not search; then a whole-word OR ranked by coverage; then the package registry. Ignored when 'module' or 'package' is set.` )
-    ( json_obj_set schema `properties` props )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `module` `string` `Render ONE installed-stdlib module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'.` F )
+    ( mcp_schema_prop sc `package` `string` `A published registry package's API surface, rendered from its tarball — the step after a registry hit, since package symbol names are not otherwise searchable. E.g. 'nn'.` F )
+    ( mcp_schema_prop sc `version` `string` `Optional package version (e.g. '0.1.1'); defaults to the latest. Only meaningful with 'package'.` F )
+    ( mcp_schema_prop sc `query` `string` `Declaration search: space- or comma-separated terms, ALL must occur (case-insensitive) in signature + doc comment + module path. Keep one call to ONE concept (2–4 related terms, e.g. 'string lowercase'). Zero-hit fallbacks run in order: a term that exactly names a module ('csv', 'csv.nu', 'ext/csv.nu') returns that whole surface — never cut mid-module, and the reply ends by listing any term it did not search; then a whole-word OR ranked by coverage; then the package registry. Ignored when 'module' or 'package' is set.` F )
+    ^ sc
 }
 
 @ nm_schema_grep → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( nm_prop props `pattern` `Case-insensitive substring to find; results are path:line: text, boundary-clean matches ranked first. For short acronyms (under ~5 chars) pass word=true.` )
-    ( nm_prop props `where` `Scope: 'stdlib' (installed), 'packages' (registry name+description), or 'all' (default).` )
-    ( nm_prop props `word` `true = only word-boundary lines (adjacent byte not a letter; underscore and digits count as boundaries).` )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `pattern` ) )
-    ( json_obj_set schema `properties` props )
-    ( json_obj_set schema `required` req )
-    ^ schema
-}
-
-@ nm_prop Json props s name s desc → v {
-    : Json p ( json_obj_new )
-    ( json_obj_set p `type` ( json_str_lit `string` ) )
-    ( json_obj_set p `description` ( json_str_lit desc ) )
-    ( json_obj_set props name p )
-}
-
-@ nm_prop_int Json props s name s desc → v {
-    : Json p ( json_obj_new )
-    ( json_obj_set p `type` ( json_str_lit `integer` ) )
-    ( json_obj_set p `description` ( json_str_lit desc ) )
-    ( json_obj_set props name p )
-}
-
-@ nm_prop_bool Json props s name s desc → v {
-    : Json p ( json_obj_new )
-    ( json_obj_set p `type` ( json_str_lit `boolean` ) )
-    ( json_obj_set p `description` ( json_str_lit desc ) )
-    ( json_obj_set props name p )
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `pattern` `string` `Case-insensitive substring to find; results are path:line: text, boundary-clean matches ranked first. For short acronyms (under ~5 chars) pass word=true.` T )
+    ( mcp_schema_prop sc `where` `string` `Scope: 'stdlib' (installed), 'packages' (registry name+description), or 'all' (default).` F )
+    ( mcp_schema_prop sc `word` `boolean` `true = only word-boundary lines (adjacent byte not a letter; underscore and digits count as boundaries).` F )
+    ^ sc
 }
 
 @ nm_schema_docs → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( nm_prop props `name` `Which document, e.g. 'MEMORY.md', 'dev/COMPILER_INTERNALS.md' ('docs/' prefix and '.md' optional, case-insensitive). Omit to list every document.` )
-    ( nm_prop props `section` `Return ONE section of 'name' — by number ('7.4'; '2' includes its 2.x subsections) or by heading words ('move checking'). The cheap way to answer a specific question; a miss replies with the outline.` )
-    ( nm_prop_bool props `outline` `With 'name': return that document's heading map (section titles + byte sizes) instead of its text, so you can pick a 'section' without reading the document first.` )
-    ( nm_prop props `query` `Search every section of every document (whole-word, ranked, heading hits outrank body hits); returns the best few with their 'section=' keys. Use when you know the question but not the document. Ignored when 'name' is set.` )
-    ( nm_prop_int props `offset` `Byte offset for paging (default 0; replies cap at 48 KB and print the next offset). Prefer 'section' or 'query'.` )
-    ( json_obj_set schema `properties` props )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `name` `string` `Which document, e.g. 'MEMORY.md', 'dev/COMPILER_INTERNALS.md' ('docs/' prefix and '.md' optional, case-insensitive). Omit to list every document.` F )
+    ( mcp_schema_prop sc `section` `string` `Return ONE section of 'name' — by number ('7.4'; '2' includes its 2.x subsections) or by heading words ('move checking'). The cheap way to answer a specific question; a miss replies with the outline.` F )
+    ( mcp_schema_prop sc `outline` `boolean` `With 'name': return that document's heading map (section titles + byte sizes) instead of its text, so you can pick a 'section' without reading the document first.` F )
+    ( mcp_schema_prop sc `query` `string` `Search every section of every document (whole-word, ranked, heading hits outrank body hits); returns the best few with their 'section=' keys. Use when you know the question but not the document. Ignored when 'name' is set.` F )
+    ( mcp_schema_prop sc `offset` `integer` `Byte offset for paging (default 0; replies cap at 48 KB and print the next offset). Prefer 'section' or 'query'.` F )
+    ^ sc
 }
 
 @ nm_schema_src_path → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( nm_prop props `source` `Inline NURL source. Provide this OR "path".` )
-    ( nm_prop props `path` `Path to a .nu file on the host. Provide this OR "source".` )
-    ( json_obj_set schema `properties` props )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `source` `string` `Inline NURL source. Provide this OR "path".` F )
+    ( mcp_schema_prop sc `path` `string` `Path to a .nu file on the host. Provide this OR "source".` F )
+    ^ sc
 }
 
 @ nm_schema_project → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( nm_prop props `source` `Inline NURL source for a single-file program (written as main.nu). Provide this OR "files".` )
-    ( nm_prop props `files` `A {relative-path: content} object for a multi-file project, e.g. {"main.nu": "...", "src/util.nu": "..."}. Paths must stay inside the workspace.` )
-    ( nm_prop props `deps` `{name: version-requirement} registry deps, e.g. {"nn": "^0.1.1"}. A program imports one as $ 'deps/<name>/src/<module>.nu' (nurl_api package=<name> shows module paths).` )
-    ( nm_prop props `entry` `The .nu file to compile (default main.nu).` )
-    ( json_obj_set schema `properties` props )
-    ^ schema
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `source` `string` `Inline NURL source for a single-file program (written as main.nu). Provide this OR "files".` F )
+    ( mcp_schema_prop sc `files` `object` `A {relative-path: content} object for a multi-file project, e.g. {"main.nu": "...", "src/util.nu": "..."}. Paths must stay inside the workspace.` F )
+    ( mcp_schema_prop sc `deps` `object` `{name: version-requirement} registry deps, e.g. {"nn": "^0.1.1"}. A program imports one as $ 'deps/<name>/src/<module>.nu' (nurl_api package=<name> shows module paths).` F )
+    ( mcp_schema_prop sc `entry` `string` `The .nu file to compile (default main.nu).` F )
+    ^ sc
 }
 
 @ nm_schema_name → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    : Json props ( json_obj_new )
-    ( nm_prop props `name` `Path under the stdlib root, e.g. "core/string.nu".` )
-    ( json_obj_set schema `properties` props )
-    : Json req ( json_arr_new )
-    ( json_arr_push req ( json_str_lit `name` ) )
-    ( json_obj_set schema `required` req )
-    ^ schema
+    ^ ( mcp_schema_of1 `name` `string` `Path under the stdlib root, e.g. "core/string.nu".` T )
 }
 
-@ nm_schema_empty → Json {
-    : Json schema ( json_obj_new )
-    ( json_obj_set schema `type` ( json_str_lit `object` ) )
-    ^ schema
-}
+@ nm_schema_empty → Json { ^ ( mcp_schema_empty ) }
 
 // Policy predicates (read the globals set in main).
 @ nm_build_ok → b { ^ ? == g_read_only 0 T F }
 
 @ nm_run_ok → b { ^ ? & == g_read_only 0 != g_run_allowed 0 T F }
 
-@ build_tools_list → ( Vec Json ) {
-    : ( Vec Json ) tools ( vec_new [Json] )
+// ── The server ───────────────────────────────────────────────────────
+//
+// One registration per tool, and nothing else. JSON-RPC framing, the
+// dual-era version gate, `server/discover`, `_meta` decorations,
+// per-handler panic isolation and both transports are
+// `stdlib/ext/mcp_server.nu`'s — this file used to carry its own copy
+// of all of it, byte-identical in places to swarm-mcp's, and drifting
+// elsewhere.
+//
+// Tools the current policy disables are NOT registered. That is the
+// honest shape: a disabled tool is not a tool that fails, it is a tool
+// this endpoint does not have, and a model should learn that from
+// `tools/list` rather than from a rejected call. Why it is missing goes
+// into the instructions, which every client reads before choosing.
+//
+// Annotation columns below: read-only, destructive, idempotent,
+// open-world.
+
+@ nm_instructions → String {
+    : String m ( string_with_cap 1024 )
+    ( string_push_str m `Local NURL toolchain: build/run/check/format NURL code, compile to wasm32-wasi, read the installed stdlib, browse API surfaces (nurl_api), search stdlib + the package registry (nurl_grep), read the shipped documentation (nurl_docs), and build registry-dependent projects (nurl_build_project). Start with nurl_api or nurl_grep to discover symbols, nurl_docs for how the language behaves (ownership, crypto, async, platforms), then nurl_check to validate code cheaply before nurl_build.` )
+    // Say what is missing and why, rather than letting a model discover
+    // it by calling a tool that is not there.
+    ? ! ( nm_build_ok ) {
+        ( string_push_str m ` This endpoint is READ-ONLY: nurl_build, nurl_build_project, nurl_build_wasm and nurl_run are not exposed. nurl_check still type- and borrow-checks code.` )
+    } {
+        ? ! ( nm_run_ok ) {
+            ( string_push_str m ` nurl_run is not exposed here — running code is unsandboxed execution, and over HTTP it is off unless the server was started with --allow-run. nurl_build still compiles.` )
+        } {}
+    }
+    ^ m
+}
+
+@ nm_server → McpServer {
+    : McpServer srv ( mcp_server_new `nurl-mcp` ( nm_version ) )
+    : String instr ( nm_instructions )
+    ( mcp_server_set_instructions srv ( string_data instr ) )
+    ( string_free instr )
+
     ? ( nm_build_ok ) {
-        ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_build`
+        ( mcp_server_add_tool_full srv `nurl_build`
         `Compile NURL (inline "source" or a "path") with the local toolchain; reports success or compiler diagnostics. Does not run the program.`
-        ( nm_schema_src_path ) ) F F T F ) )
-        ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_build_project`
+        ( nm_schema_src_path ) F F T F
+        \ Json a → Json { ^ ( nm_tool_build a ) } )
+        ( mcp_server_add_tool_full srv `nurl_build_project`
         `Compile a program that uses registry packages: "source" (or "files") plus "deps" ({name: req}); deps are resolved with nurlpkg (transitive, checksum + signature verified). Returns binary_path and ll_path. Does not run the program.`
-        ( nm_schema_project ) ) F F T F ) )
-    } {}
-    ? ( nm_build_ok ) {
-        ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_build_wasm`
+        ( nm_schema_project ) F F T F
+        \ Json a → Json { ^ ( nm_tool_build_project a ) } )
+        ( mcp_server_add_tool_full srv `nurl_build_wasm`
         `Compile NURL (inline "source" or a "path") to a wasm32-wasi module, fully locally. Writes the .wasm + .ll next to "path" (or to "out", or a temp path for inline source) and returns wasm_path and ll_path.`
-        ( nm_schema_src_path ) ) F F T F ) )
+        ( nm_schema_src_path ) F F T F
+        \ Json a → Json { ^ ( nm_tool_build_wasm a ) } )
     } {}
     ? ( nm_run_ok ) {
-        ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_run`
+        ( mcp_server_add_tool_full srv `nurl_run`
         `Compile AND run NURL with the local toolchain; returns the program's exit code, stdout, and stderr.`
-        ( nm_schema_src_path ) ) F T F T ) )
+        ( nm_schema_src_path ) F T F T
+        \ Json a → Json { ^ ( nm_tool_run a ) } )
     } {}
-    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_check`
+    ( mcp_server_add_tool_full srv `nurl_check`
     `Front-end only: type-check and borrow-check NURL without producing a binary. Fast. Reports diagnostics.`
-    ( nm_schema_src_path ) ) T F T F ) )
-    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_fmt`
+    ( nm_schema_src_path ) T F T F
+    \ Json a → Json { ^ ( nm_tool_check a ) } )
+    ( mcp_server_add_tool_full srv `nurl_fmt`
     `Format NURL to canonical form with nurlfmt; returns the formatted source.`
-    ( nm_schema_src_path ) ) F F T F ) )
-    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_list_stdlib`
+    ( nm_schema_src_path ) F F T F
+    \ Json a → Json { ^ ( nm_tool_fmt a ) } )
+    ( mcp_server_add_tool_full srv `nurl_list_stdlib`
     `List the .nu modules in the installed standard library (under $NURL_STDLIB).`
-    ( nm_schema_empty ) ) T F T F ) )
-    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_read_stdlib`
+    ( nm_schema_empty ) T F T F
+    \ Json a → Json { ^ ( nm_tool_list_stdlib a ) } )
+    ( mcp_server_add_tool_full srv `nurl_read_stdlib`
     `Read one module from the installed standard library by relative path.`
-    ( nm_schema_name ) ) T F T F ) )
-    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_docs`
+    ( nm_schema_name ) T F T F
+    \ Json a → Json { ^ ( nm_tool_read_stdlib a ) } )
+    ( mcp_server_add_tool_full srv `nurl_docs`
     `Search and read the shipped docs/ prose — MEMORY.md (ownership: who frees what), CRYPTO.md, ASYNC.md, spec.md (the full language reference), and ten more: the behaviour questions no API surface answers. Read this before guessing at memory, crypto, or platform behaviour. No arguments lists the documents; query= finds the sections that answer a question; name= with section=/outline= reads pieces. Prefer query/section — whole documents run 40–60 KB.`
-    ( nm_schema_docs ) ) T F T F ) )
-    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_api`
+    ( nm_schema_docs ) T F T F
+    \ Json a → Json { ^ ( nm_tool_docs a ) } )
+    ( mcp_server_add_tool_full srv `nurl_api`
     `A module's API surface (signatures + doc comments + full type definitions, no bodies), or a declaration search across the whole stdlib. Prefer this over nurl_read_stdlib — a surface is ~6× smaller than the source, one matching declaration ~0.3 KB. module='ext/csv.nu' or package='nn' renders one surface (C-runtime builtins are indexed as core/builtins.nu); query= searches declarations — one concept per call, 2–4 related terms. Every reply states what it searched and lists what it could not.`
-    ( nm_schema_api ) ) T F T F ) )
-    ( vec_push [Json] tools ( mcp_tool_annotate ( mcp_tool_descriptor `nurl_grep`
+    ( nm_schema_api ) T F T F
+    \ Json a → Json { ^ ( nm_tool_api a ) } )
+    ( mcp_server_add_tool_full srv `nurl_grep`
     `Case-insensitive search across the installed stdlib (path:line: text; word-boundary matches ranked first, in-word substring hits in a labeled tail) and the package registry (name + description) — "is there a package for X" works from any MCP-only editor. word=true for short acronyms.`
-    ( nm_schema_grep ) ) T F T F ) )
-    ^ tools
-}
-
-@ dispatch_tool s name Json args → Json {
-    ? != ( nurl_str_eq name `nurl_build` ) 0 {
-        ? ( nm_build_ok ) { ^ ( nm_tool_build args ) }
-        { ^ ( mcp_tool_result_error `nurl_build is disabled (--read-only)` ) }
-    } {}
-    ? != ( nurl_str_eq name `nurl_build_project` ) 0 {
-        ? ( nm_build_ok ) { ^ ( nm_tool_build_project args ) }
-        ^ ( mcp_tool_result_error `the local toolchain (nurl/nurlpkg) is not on PATH` )
-    } {}
-    ? != ( nurl_str_eq name `nurl_build_wasm` ) 0 {
-        ? ( nm_build_ok ) { ^ ( nm_tool_build_wasm args ) }
-        { ^ ( mcp_tool_result_error `nurl_build_wasm is disabled (--read-only)` ) }
-    } {}
-    ? != ( nurl_str_eq name `nurl_run` ) 0 {
-        ? ( nm_run_ok ) { ^ ( nm_tool_run args ) }
-        { ^ ( mcp_tool_result_error `nurl_run is disabled — it is unsandboxed code execution; over HTTP pass --allow-run to enable it (and it is off entirely under --read-only)` ) }
-    } {}
-    ? != ( nurl_str_eq name `nurl_check` ) 0 { ^ ( nm_tool_check args ) } {}
-    ? != ( nurl_str_eq name `nurl_fmt` ) 0 { ^ ( nm_tool_fmt args ) } {}
-    ? != ( nurl_str_eq name `nurl_list_stdlib` ) 0 { ^ ( nm_tool_list_stdlib args ) } {}
-    ? != ( nurl_str_eq name `nurl_read_stdlib` ) 0 { ^ ( nm_tool_read_stdlib args ) } {}
-    ? != ( nurl_str_eq name `nurl_docs` ) 0 { ^ ( nm_tool_docs args ) } {}
-    ? != ( nurl_str_eq name `nurl_api` ) 0 { ^ ( nm_tool_api args ) } {}
-    ? != ( nurl_str_eq name `nurl_grep` ) 0 { ^ ( nm_tool_grep args ) } {}
-    ^ ( mcp_tool_result_error `unknown tool` )
-}
-
-// ── JSON-RPC method handlers (return-style: shape from
-// examples/mcp_echo_server_http.nu, used by both transports) ─────────
-
-@ handle_initialize Json id ? Json params → Json {
-    : Json result ( mcp_initialize_result `nurl-mcp` ( nm_version ) )
-    // Legacy handshake negotiation: echo the client's requested
-    // handshake-era revision when supported (mcp_initialize_result
-    // pins the newest one).
-    ( json_obj_set result `protocolVersion`
-    ( json_str_lit ( mcp_initialize_version_for params ) ) )
-    ^ ( mcp_response_result id result )
-}
-
-// server/discover — 2026-07-28 servers MUST implement this; it is
-// also the stdio backward-compat probe a dual-era client sends first.
-@ handle_discover Json id → Json {
-    : Json caps ( json_obj_new )
-    ( json_obj_set caps `tools` ( json_obj_new ) )
-    : Json result ( mcp_discover_result `nurl-mcp` ( nm_version )
-    caps
-    `Local NURL toolchain: build/run/check/format NURL code, compile to wasm32-wasi, read the installed stdlib, browse API surfaces (nurl_api), search stdlib + the package registry (nurl_grep), read the shipped documentation (nurl_docs), and build registry-dependent projects (nurl_build_project). Start with nurl_api or nurl_grep to discover symbols, nurl_docs for how the language behaves (ownership, crypto, async, platforms), then nurl_check to validate code cheaply before nurl_build.` )
-    ^ ( mcp_response_result id result )
-}
-
-// Decorate an outgoing response for a MODERN (per-request `_meta`)
-// request: 2026-07-28 servers SHOULD identify themselves in each
-// result's `_meta`. Legacy requests pass through untouched.
-@ finish_reply Json env b modern → ?Json {
-    ? modern {
-        : ?Json res ( json_obj_get env `result` )
-        ?? res {
-            T rv → { ( mcp_result_set_server_info rv `nurl-mcp` ( nm_version ) ) }
-            F _ → {}
-        }
-    } {}
-    ^ @ ?Json { T env }
-}
-
-@ handle_ping Json id → Json {
-    : Json empty ( json_obj_new )
-    ^ ( mcp_response_result id empty )
-}
-
-@ handle_tools_list Json id → Json {
-    : ( Vec Json ) tools ( build_tools_list )
-    : Json result ( mcp_tools_list_result tools )
-    ^ ( mcp_response_result id result )
-}
-
-@ handle_tools_call Json id Json params → Json {
-    : ?Json name_j ( json_obj_get params `name` )
-    ?? name_j {
-        T nv → {
-            : s name ( json_str_data nv )
-            : ?Json args_j ( json_obj_get params `arguments` )
-            : Json args ?? args_j {
-                T av → ( json_clone av )
-                F → ( json_obj_new )
-            }
-            : Json result ( dispatch_tool name args )
-            ( json_free args )
-            ^ ( mcp_response_result id result )
-        }
-        F → {
-            ^ ( mcp_response_error id mcp_err_invalid_params
-            `tools/call requires a "name" parameter` )
-        }
-    }
-}
-
-@ handle_unknown_method Json id s method → Json {
-    : i mlen ( nurl_str_len method )
-    : String msg ( string_with_cap + 32 mlen )
-    ( string_push_str msg `unknown method: ` )
-    ( string_push_str msg method )
-    : Json err ( mcp_response_error id mcp_err_method_not_found ( string_data msg ) )
-    ( string_free msg )
-    ^ err
-}
-
-// Transport-agnostic dispatcher: request Json → Some(response) for a
-// request, or None for a notification (the caller drops it / replies 202).
-@ dispatch Json req → ?Json {
-    : ?Json method_j ( json_obj_get req `method` )
-    ?? method_j {
-        T mv → {
-            : s method ( json_str_data mv )
-            : ?Json id_opt ( json_obj_get req `id` )
-            ?? id_opt {
-                T id → {
-                    // 2026-07-28 version gate: a request DECLARING an
-                    // unsupported `_meta` protocolVersion gets the
-                    // spec-shaped -32022 error (with data.supported so
-                    // the client can retry on a mutual revision). No
-                    // declared version = legacy request, served below.
-                    : s req_ver ( mcp_request_protocol_version req )
-                    : b modern > ( nurl_str_len req_ver ) 0
-                    ? & modern ! ( mcp_version_supported req_ver ) {
-                        ^ @ ?Json { T ( mcp_unsupported_version_response id req_ver ) }
-                    } {}
-                    ? != ( nurl_str_eq method `server/discover` ) 0 {
-                        ^ @ ?Json { T ( handle_discover id ) }
-                    } {}
-                    ? != ( nurl_str_eq method `initialize` ) 0 {
-                        : ?Json init_params ( json_obj_get req `params` )
-                        ^ ( finish_reply ( handle_initialize id init_params ) modern )
-                    } {}
-                    ? != ( nurl_str_eq method `ping` ) 0 {
-                        ^ ( finish_reply ( handle_ping id ) modern )
-                    } {}
-                    ? != ( nurl_str_eq method `tools/list` ) 0 {
-                        ^ ( finish_reply ( handle_tools_list id ) modern )
-                    } {}
-                    ? != ( nurl_str_eq method `tools/call` ) 0 {
-                        : ?Json params_j ( json_obj_get req `params` )
-                        : Json params ?? params_j {
-                            T pv → ( json_clone pv )
-                            F → ( json_obj_new )
-                        }
-                        : Json out ( handle_tools_call id params )
-                        ( json_free params )
-                        ^ ( finish_reply out modern )
-                    } {}
-                    ^ @ ?Json { T ( handle_unknown_method id method ) }
-                }
-                F → {
-                    ? != ( nurl_str_eq method `notifications/initialized` ) 0 {
-                        ( mcp_log `client initialized` )
-                    } {}
-                    ^ @ ?Json { F }
-                }
-            }
-        }
-        F → {
-            ( mcp_log `request without method, ignoring` )
-            ^ @ ?Json { F }
-        }
-    }
-}
-
-// ── stdio transport ─────────────────────────────────────────────────
-
-@ stdio_loop → v {
-    : ~ b running T
-    ~ running {
-        : ?Json msg ( mcp_read_request )
-        ?? msg {
-            T req → {
-                : ?Json reply ( dispatch req )
-                ( json_free req )
-                ?? reply {
-                    T resp → ( mcp_send_message resp )
-                    F empty → ( json_free empty )
-                }
-            }
-            F → { = running F }
-        }
-    }
+    ( nm_schema_grep ) T F T F
+    \ Json a → Json { ^ ( nm_tool_grep a ) } )
+    ^ srv
 }
 
 // ── HTTP transport ───────────────────────────────────────────────────
 //
-// The wire protocol (POST single/batch, GET SSE probe, DELETE,
-// Mcp-Session-Id echo, CORS + preflight) comes from the stdlib's
-// Streamable-HTTP facade (`ext/mcp_http.nu` — the same plumbing
-// swarm-mcp serves through); this file only layers bearer-token auth
-// around it. CORS headers for the auth reject, matching the facade's.
+// The wire protocol comes from the stdlib; this file layers bearer-token
+// auth around it and refuses to bind a non-loopback address without one.
+// The auth compare itself is `mcp_server_with_bearer_auth`, which is
+// constant-time — the hand-rolled check here was a plain string
+// compare that returns on the first differing byte.
 
 @ nm_cors HttpResponse r → v {
     ( response_set_header r `Access-Control-Allow-Origin` `*` )
     ( response_set_header r `Access-Control-Allow-Headers` `Content-Type, Authorization, Mcp-Session-Id` )
     ( response_set_header r `Access-Control-Allow-Methods` `POST, GET, DELETE, OPTIONS` )
-}
-
-@ nm_authed HttpRequest req → b {
-    ? == ( nurl_str_len g_token ) 0 { ^ T } {}
-    : ?String av ( header_get . req headers `Authorization` )
-    ?? av {
-        T s → {
-            : String expect ( string_from `Bearer ` )
-            ( string_push_str expect g_token )
-            : b ok ? != ( nurl_str_eq ( string_data s ) ( string_data expect ) ) 0 T F
-            ( string_free expect )
-            ( string_free s )
-            ^ ok
-        }
-        F → { ^ F }
-    }
-    ^ F
 }
 
 @ nm_is_loopback s host → b {
@@ -1408,26 +1206,30 @@ version = "0.0.0"
     ^ F
 }
 
-@ run_http s host i port → i {
+@ run_http McpServer srv s host i port → i {
     : !TcpListener NetErr lr ( tcp_listen host port )
     ?? lr {
         T listener → {
-            // The facade handles the whole MCP wire protocol; auth wraps it.
-            // OPTIONS bypasses auth (browser preflights carry no headers).
-            : ( @ HttpResponse HttpRequest ) inner ( mcp_http_handler \ Json rq → ?Json { ^ ( dispatch rq ) } )
+            : ( @ HttpResponse HttpRequest ) inner
+            ( mcp_http_handler ( mcp_server_http_dispatch srv ) )
+            : ( @ HttpResponse HttpRequest ) authed
+            ( mcp_server_with_bearer_auth
+            \ HttpRequest req → HttpResponse { ^ ( inner req ) } g_token )
+            // OPTIONS bypasses auth: a browser preflight carries no
+            // Authorization header, so requiring one 401s the preflight
+            // and the real request is never sent.
             : ( @ HttpResponse HttpRequest ) h \ HttpRequest req → HttpResponse {
-                ? != ( nurl_str_eq ( string_data . req method ) `OPTIONS` ) 0 { ^ ( inner req ) } {}
-                ? ! ( nm_authed req ) {
-                    : HttpResponse r ( response_text 401 `Unauthorized\n` )
-                    ( response_set_header r `WWW-Authenticate` `Bearer` )
-                    ( nm_cors r )
-                    ^ r
+                ? != ( nurl_str_eq ( string_data . req method ) `OPTIONS` ) 0 {
+                    ^ ( inner req )
                 } {}
-                ^ ( inner req )
+                ? == ( nurl_str_len g_token ) 0 { ^ ( inner req ) } {}
+                : HttpResponse r ( authed req )
+                ? == . r status 401 { ( nm_cors r ) } {}
+                ^ r
             }
-            : HttpServer srv ( server_new listener h )
-            : !v NetErr rr ( server_run srv )
-            ( server_stop srv )
+            : HttpServer hs ( server_new listener h )
+            : !v NetErr rr ( server_run hs )
+            ( server_stop hs )
             ?? rr {
                 T → { ^ 0 }
                 F e → {
@@ -1483,6 +1285,11 @@ version = "0.0.0"
     }
     = g_token ( string_data token )
 
+    // Built after the policy globals are set: which tools exist is a
+    // function of --read-only / --allow-run, and the server is
+    // registration-frozen once it starts answering.
+    : McpServer srv ( nm_server )
+
     : ~ i rc 0
     ? want_http {
         ? & ! ( nm_is_loopback ( string_data host ) ) == ( string_len token ) 0 {
@@ -1497,15 +1304,21 @@ version = "0.0.0"
             } {
                 ( nm_log_banner `ready (http) — nurl_run disabled (pass --allow-run to enable)` )
             }
-            = rc ( run_http ( string_data host ) port )
+            = rc ( run_http srv ( string_data host ) port )
         }
     } {
         ( nm_log_banner `ready (stdio)` )
-        ( stdio_loop )
+        ?? ( mcp_server_serve_stdio srv ) {
+            T _ → {}
+            F e → {
+                ( mcp_log ( mcp_server_err_name e ) )
+                = rc 1
+            }
+        }
         ( mcp_log `bye` )
-        = rc 0
     }
 
+    ( mcp_server_free srv )
     ( args_free p )
     ( string_free host )
     ( string_free ports )

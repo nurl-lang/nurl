@@ -142,6 +142,13 @@ $ `stdlib/ext/json.nu`
 : i mcp_err_invalid_params -32602
 : i mcp_err_internal_error -32603
 
+// Resource lookup failure. Kept at the spec's -32002 rather than
+// folded into invalid-params: a client distinguishes "that URI is not
+// served here" (re-list and pick another) from "your request was
+// malformed" (do not retry as-is), and only a distinct code carries
+// that.
+: i mcp_err_resource_not_found -32002
+
 // MCP-reserved codes (2026-07-28 partitioned -32020..-32099 for the
 // spec; earlier drafts used -32001/-32003/-32004 — renumbered).
 : i mcp_err_header_mismatch -32020
@@ -420,6 +427,73 @@ $ `stdlib/ext/json.nu`
 
 @ mcp_tool_result_error s message → Json {
     ^ ( __mcp_tool_result_envelope message T )
+}
+
+// ── Input schemas ─────────────────────────────────────────────────────
+//
+// A tool's `inputSchema` is a JSON Schema object, and hand-building one
+// out of json_obj_new / json_obj_set runs seven lines per property.
+// Every MCP server in this tree had grown its own private `prop`
+// helper doing exactly this, three times over, so it lives here.
+//
+//   : Json sc ( mcp_schema_obj )
+//   ( mcp_schema_prop sc `path` `string` `File to read.` T )
+//   ( mcp_schema_prop sc `limit` `integer` `Max lines.` F )
+//
+// `ty` is a JSON Schema type name — `string`, `integer`, `number`,
+// `boolean`, `array`, `object`. Anything richer (enums, nested
+// objects, per-item types) is built as Json directly and dropped in
+// with `json_obj_set`; these helpers cover the shape that is 90 % of
+// every tool and do not try to be a schema DSL.
+
+@ mcp_schema_obj → Json {
+    : Json sc ( json_obj_new )
+    ( json_obj_set sc `type` ( json_str_lit `object` ) )
+    ( json_obj_set sc `properties` ( json_obj_new ) )
+    ^ sc
+}
+
+// A tool that takes no arguments still needs a schema: an object with
+// no properties. Omitting `properties` entirely makes some clients
+// treat the tool as un-callable.
+@ mcp_schema_empty → Json { ^ ( mcp_schema_obj ) }
+
+// Add one property to a schema built by `mcp_schema_obj`. `required`
+// appends the name to the schema's `required` array, creating it on
+// first use — a schema with an empty `required` array is not the same
+// as one without the key, and some clients read the difference.
+@ mcp_schema_prop Json schema s name s ty s desc b required → v {
+    : Json p ( json_obj_new )
+    ( json_obj_set p `type` ( json_str_lit ty ) )
+    ( json_obj_set p `description` ( json_str_lit desc ) )
+    ?? ( json_obj_get schema `properties` ) {
+        T props → { ( json_obj_set props name p ) }
+        F _ → {
+            // Called on something `mcp_schema_obj` did not build; keep
+            // the property rather than leaking it.
+            : Json props ( json_obj_new )
+            ( json_obj_set props name p )
+            ( json_obj_set schema `properties` props )
+        }
+    }
+    ? required {
+        ?? ( json_obj_get schema `required` ) {
+            T req → { ( json_arr_push req ( json_str_lit name ) ) }
+            F _ → {
+                : Json req ( json_arr_new )
+                ( json_arr_push req ( json_str_lit name ) )
+                ( json_obj_set schema `required` req )
+            }
+        }
+    } {}
+}
+
+// The one-property case, which is most tools: `mcp_schema_of1 \`text\`
+// \`string\` \`Text to echo\` T`.
+@ mcp_schema_of1 s name s ty s desc b required → Json {
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc name ty desc required )
+    ^ sc
 }
 
 @ mcp_tool_descriptor s name s desc Json schema → Json {

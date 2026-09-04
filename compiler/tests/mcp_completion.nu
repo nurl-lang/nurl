@@ -2,14 +2,48 @@
 // (spec §6.7) on the server registry.
 //
 // Registers a prompt-argument completer and a resource completer, then
-// drives completion/complete through mcp_registry_dispatch and prints the
+// drives completion/complete through mcp_server_dispatch and prints the
 // spec-shaped {completion: {values, total, hasMore}} envelope. Also
 // checks that `initialize` now advertises the `completions` capability.
-// No sockets — pure dispatcher exercise (mirrors mcp_registry.nu).
+// No sockets — pure dispatcher exercise (mirrors mcp_server.nu).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/ext/json.nu`
-$ `stdlib/ext/mcp_registry.nu`
+$ `stdlib/ext/mcp_server.nu`
+
+// The dispatcher returns `!Json McpRpcErr` — these tests drive it
+// directly, so unwrap the success side here and let a failure print
+// itself rather than vanishing into a golden that still looks right.
+// mcp_server_dispatch takes the whole JSON-RPC request; these tests
+// name a method and its params, so wrap them in one.
+@ req_of s method ? Json params → Json {
+    : Json req ( json_obj_new )
+    ( json_obj_set req `jsonrpc` ( json_str_lit `2.0` ) )
+    ( json_obj_set req `method` ( json_str_lit method ) )
+    ?? params {
+        T p → { ( json_obj_set req `params` ( json_clone p ) ) }
+        F _ → {}
+    }
+    ^ req
+}
+
+@ dispatch_ok McpServer r s method ? Json params → Json {
+    : Json req ( req_of method params )
+    ?? ( mcp_server_dispatch r req ) {
+        T res → {
+            ( json_free req )
+            ^ res
+        }
+        F e → {
+            ( nurl_print `UNEXPECTED RPC ERROR: ` )
+            ( nurl_print ( mcp_rpc_err_message e ) )
+            ( nurl_print `\n` )
+            ( mcp_rpc_err_free e )
+            ( json_free req )
+            ^ ( json_obj_new )
+        }
+    }
+}
 
 @ print_label s tag s value → v {
     ( nurl_print tag ) ( nurl_print `=` ) ( nurl_print value ) ( nurl_print `\n` )
@@ -49,20 +83,20 @@ $ `stdlib/ext/mcp_registry.nu`
     ^ out
 }
 
-@ build_registry → McpRegistry {
-    : McpRegistry r ( mcp_registry_new `nurl-completion-test` `1.0.0` )
+@ build_registry → McpServer {
+    : McpServer r ( mcp_server_new `nurl-completion-test` `1.0.0` )
 
     // A prompt the completion is attached to.
     : Json greet_args ( json_arr_new )
-    ( mcp_registry_add_prompt r `greet` `Greeting` greet_args
+    ( mcp_server_add_prompt r `greet` `Greeting` greet_args
     \ Json a → Json { ^ ( json_obj_new ) } )
 
     // completion for the prompt's `language` argument.
-    ( mcp_registry_add_completion r `ref/prompt` `greet`
+    ( mcp_server_add_completion r `ref/prompt` `greet`
     \ Json a → Json { ^ ( lang_completion a ) } )
 
     // completion for a resource template argument.
-    ( mcp_registry_add_completion r `ref/resource` `git://repo`
+    ( mcp_server_add_completion r `ref/resource` `git://repo`
     \ Json a → Json { ^ ( branch_completion a ) } )
 
     ^ r
@@ -110,11 +144,11 @@ $ `stdlib/ext/mcp_registry.nu`
 }
 
 @ main → i {
-    : McpRegistry reg ( build_registry )
+    : McpServer reg ( build_registry )
 
     // ── initialize advertises the completions capability ───────────────
     ( nurl_print `--- initialize ---\n` )
-    : Json init ( mcp_registry_dispatch reg `initialize` @ ?Json { F ( json_null ) } )
+    : Json init ( dispatch_ok reg `initialize` @ ?Json { F ( json_null ) } )
     : ?Json caps ( json_obj_get init `capabilities` )
     ?? caps {
         T cp → {
@@ -131,7 +165,7 @@ $ `stdlib/ext/mcp_registry.nu`
     // ── completion/complete: prompt arg, prefix "r" → ruby, rust ───────
     ( nurl_print `--- completion prompt (prefix r) ---\n` )
     : Json p1 ( complete_params `ref/prompt` `greet` `language` `r` )
-    : Json r1 ( mcp_registry_dispatch reg `completion/complete` @ ?Json { T p1 } )
+    : Json r1 ( dispatch_ok reg `completion/complete` @ ?Json { T p1 } )
     ( report_completion `prompt_r` r1 )
     ( json_free r1 )
     ( json_free p1 )
@@ -139,7 +173,7 @@ $ `stdlib/ext/mcp_registry.nu`
     // ── completion/complete: prompt arg, empty prefix → all 4 ──────────
     ( nurl_print `--- completion prompt (empty prefix) ---\n` )
     : Json p2 ( complete_params `ref/prompt` `greet` `language` `` )
-    : Json r2 ( mcp_registry_dispatch reg `completion/complete` @ ?Json { T p2 } )
+    : Json r2 ( dispatch_ok reg `completion/complete` @ ?Json { T p2 } )
     ( report_completion `prompt_all` r2 )
     ( json_free r2 )
     ( json_free p2 )
@@ -147,7 +181,7 @@ $ `stdlib/ext/mcp_registry.nu`
     // ── completion/complete: resource ref ──────────────────────────────
     ( nurl_print `--- completion resource ---\n` )
     : Json p3 ( complete_params `ref/resource` `git://repo` `branch` `` )
-    : Json r3 ( mcp_registry_dispatch reg `completion/complete` @ ?Json { T p3 } )
+    : Json r3 ( dispatch_ok reg `completion/complete` @ ?Json { T p3 } )
     ( report_completion `resource` r3 )
     ( json_free r3 )
     ( json_free p3 )
@@ -155,11 +189,11 @@ $ `stdlib/ext/mcp_registry.nu`
     // ── completion/complete: unknown ref → empty list ──────────────────
     ( nurl_print `--- completion unknown ref ---\n` )
     : Json p4 ( complete_params `ref/prompt` `nonexistent` `x` `a` )
-    : Json r4 ( mcp_registry_dispatch reg `completion/complete` @ ?Json { T p4 } )
+    : Json r4 ( dispatch_ok reg `completion/complete` @ ?Json { T p4 } )
     ( report_completion `unknown` r4 )
     ( json_free r4 )
     ( json_free p4 )
 
-    ( mcp_registry_free reg )
+    ( mcp_server_free reg )
     ^ 0
 }
