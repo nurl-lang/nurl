@@ -1,0 +1,9 @@
+[package]
+name = "oauth"
+version = "0.1.0"
+description = "OAuth 2.0 and OpenID Connect for NURL — identify the user and read the claims, with no C anywhere in the chain. The client half runs the authorization-code flow with PKCE (S256 only), OIDC discovery over RFC 8414 metadata with the issuer cross-checked, the token endpoint (authorization_code, refresh_token, client_credentials; client_secret_post or client_secret_basic), and UserInfo. The verifying half is the part that decides who someone is: it fetches the provider's JWKS, picks the key the token's kid/alg names, re-fetches on an unseen kid so a key rotation needs no restart (rate-limited, so a flood of forged kids cannot be aimed at the provider), and checks the signature in pure NURL — RS256/RS384/RS512, PS256, ES256/ES384, EdDSA, and HS256 only for a deliberately configured shared secret. Then the claims: iss, aud with azp, exp/nbf/iat with leeway, nonce, sub and max_age, each named when it fails. `alg: none` and an unrecognised `crit` are refused, not ignored. The result is an OidcIdentity — subject, issuer, email, name, picture and the full claim set — and, on the server side, with_oidc_bearer / with_oidc_scope wrap an HttpApp route so a handler only ever runs for a caller it can name, with 401 challenges and 403 insufficient_scope written per RFC 6750."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nurl-lang/nurl-lang/tree/main/packages/oauth"
+
+[dependencies]
+http-client = { path = "../http-client", version = "^0" }
