@@ -10,6 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`nurlapi` is on both facades** — the playground/API's MCP surface
+  moves to `ext/mcp_server.nu` and its serving path to `packages/http`.
+  760 lines of `nurlapi/main.nu` become 419: the fourth hand-written
+  copy of the JSON-RPC protocol (a nineteen-arm dispatch chain, the
+  handshake, `server/discover`, the version gate, the `_meta`
+  decorations, a private schema-property helper) and the forty lines of
+  bind / router / shutdown / worker-pool glue that `packages/http`
+  exists to remove. The one thing that kept it hand-wired — a semaphore
+  bounding concurrent `clang` invocations so a wide worker pool cannot
+  OOM the container — now goes in through `http_app_use`.
+
+  Two bugs fixed in what that server tells the world about itself.
+  `/mcp-info` advertises `nurl://stdlib/{path}`,
+  `nurl://example/{name}` and `nurl://test/{name}`; the read path
+  compared the URI against six exact strings and nothing else, so a
+  templated read returned `{"contents":[]}` — an empty success, which a
+  client reads as "exists, and is empty" — and
+  `resources/templates/list`, the method a client would discover them
+  through, was not implemented at all. And every result was cached 60
+  seconds privately, on a public server whose surface is fixed at build
+  time; it is an hour and `public` now.
+
+  Verified in the container: `nurlapi/e2e_test.sh`, 237/237, including
+  the native / wasm / windows / macos / cross-target / unikernel builds
+  and the aarch64 boot, plus the WebSocket upgrade and every HTML,
+  JSON and raw-file endpoint by hand.
+
 - **`packages/http` 0.6.0: `http_app_use`** — the facade had a fixed
   middleware chain (CORS, access log, Alt-Svc) and no seam for one of
   your own, so a server needing anything else — a concurrency gate in
