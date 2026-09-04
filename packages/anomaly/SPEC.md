@@ -187,6 +187,12 @@ encodings aligned across retrains.
                            # model's score_epoch (§5.6) — pure derived
                            # state: deleting it costs a rescan, never a
                            # wrong answer
+
+<root>/orgs/<org>.db       # one SQLite database per organisation (§5.7):
+                           # users + roles, model ownership, API keys.
+                           # The org is IMPLICIT in the filename, so no
+                           # query carries an org column and none can
+                           # forget one.
 ```
 
 The forest blob is a straight serialisation of the `iforest` node arena (§the
@@ -326,6 +332,79 @@ point as though it sat at its own ring position, so a timevector window is
 built from the points *before* it. A scan therefore reproduces
 `detect_only` exactly.
 
+### 5.7 Identity, organisations and ownership (`src/authz.nu`)
+
+The service was single-user by construction: every route reached every model
+in one flat store. Three concepts turn that into a shared service without
+moving a stored model.
+
+**Off by default.** With `ANOMALY_AUTH` unset, `authz_principal` returns an
+authenticated admin of the reserved `local` organisation and every gate opens.
+An upgraded binary must not start refusing the requests its predecessor
+served. `ANOMALY_AUTH=1` without both an issuer and a client id also stays
+off: half-configured, verification would refuse everything rather than protect
+anything.
+
+| Concept | Definition |
+| --- | --- |
+| identity | an OIDC bearer token, verified by `packages/oauth` against the provider's JWKS |
+| organisation | the `tid` claim, or the issuer when a provider publishes none → `<store>/orgs/<org>.db` |
+| owner | a row in that database binding a model name to a subject |
+
+```
+Principal { authed, via_key, org, sub, email, pname, role, key_id }
+```
+
+An org id becomes a filename, so it is not taken on trust: a plain GUID
+passes through lowercased, anything else is replaced by a 32-character digest
+of itself. No input can produce a separator, a `..` or an empty name.
+
+**Roles.** `admin` sees and manages the organisation's models, users and keys;
+`viewer` sees only what it owns. The first subject to authenticate from an
+organisation becomes its admin — nobody else could have granted it — and
+`az_user_set_role` refuses to demote the last one, because an organisation
+with no admin can never appoint another.
+
+**Ownership.** A model with no row is *unowned*: what everything created
+before this section existed looks like, and what a model ingested through the
+open window (below) looks like. Unowned models are visible to admins so
+somebody can claim them, rather than being absorbed by whoever signed in
+first. Deleting a model forgets its row, or the next model to reuse the name
+would inherit an owner nobody chose.
+
+**API keys** (`anok_<16 hex id>_<64 hex secret>`) carry the identity and role
+of the user who created them, so "you see only your own models" holds for a
+machine exactly as it holds for that user's browser. Only a SHA-256 of the
+secret is stored. A presented key names no organisation, so it is tried
+against each database in `<store>/orgs`; with one database per tenant and a
+key arriving a few times a minute, the scan is cheaper than a second index
+that could disagree with the first.
+
+**The migration window.** `ANOMALY_OPEN_INGEST` (default on) keeps `/detect`
+and `/detect_only` reachable without credentials while already-deployed
+producers are moved onto keys, so enabling authentication drops no data. It is
+a window, not a design: with it open, anyone who can reach the port can write
+points.
+
+**The gate.** Every handler starts with one, so no handler assembles a policy
+decision out of parts and a route added later cannot forget half of one.
+
+```
+__an_gate_auth   (req, need_admin)          -> Gate   // is there a caller
+__an_gate_model  (req, name, allow_create)  -> Gate   // may it touch this model
+__an_gate_ingest (req, name)                -> Gate   // the window above
+```
+
+`allow_create` marks the routes that bring a model into existence: a model
+with no stored directory has no owner yet, and refusing there would mean only
+administrators could ever create one.
+
+`oauth`'s `with_oidc_bearer` returns a one-argument handler that the router
+used here does not accept, and every route needs its own ownership decision
+anyway, so the gate calls `oidc_request_identity` directly. Two audiences are
+tried — the configured API audience, then the client id — because a dashboard
+that sends either token from the same sign-in is a dashboard that works.
+
 ## 6. HTTP/JSON service surface (`src/service.nu`, optional milestone)
 
 The routes mirror §3 (ported column). Request/response shapes match the Python
@@ -347,7 +426,7 @@ service so existing dashboards and the `modelmanager` UI keep working:
   keys the PUT below accepts, published so a client never has to keep its
   own copy of the list. It is service-shaped and deliberately absent from
   the stored `metadata.json`.
-- `PUT /models/dynamic/<model>/metadata` body = `{ schedule?,
+- `PUT /models/dynamic/<model>/metadata` body = `{ alias?, schedule?,
   max_data_points?, versions?, replace_versions? }`, every field within
   optional (an omitted field keeps its value; an unknown version name adds
   a version; `replace_versions` deletes the versions the object omits).
@@ -371,6 +450,17 @@ service so existing dashboards and the `modelmanager` UI keep working:
   `{ index, timestamp, score, anomaly, versions[], values?, contributions? }`.
   `considered` and `anomalies` describe the whole window, so a filtered
   response still says how much it filtered.
+- `GET /api/auth/config` — public, because the page that has not signed in is
+  the one asking: `enabled`, `issuer`, `client_id`, `audience`, `scope`,
+  `redirect_path`, `open_ingest`. Everything in it is in the redirect the
+  browser makes anyway; publishing it is what stops the dashboard carrying a
+  second, drifting copy of the deployment's identity configuration.
+- `GET /api/me` — the caller's identity, organisation and role.
+- `GET /api/org/users`, `PUT /api/org/users/<sub>/role` — the roster (admin).
+- `GET|POST /api/org/keys`, `DELETE /api/org/keys/<id>` — API keys. The POST
+  response carries the only copy of the secret there will ever be.
+- `POST /models/dynamic/<model>/claim` `{ owner? }` — set a model's owner
+  (admin); defaults to the caller.
 - `POST /train/autoencoder/<model>` optional body = `{ hidden?: [int],
   contamination?: float }` → `training_data_points`, `filtered_anomalies`,
   `reconstruction_threshold`.

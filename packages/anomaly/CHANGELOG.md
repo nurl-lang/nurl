@@ -1,5 +1,301 @@
 # Changelog
 
+## 0.9.0
+
+- **A model can have a nickname.** `alias` is ordinary editable metadata:
+  `PUT /models/dynamic/<m>/metadata {"alias": "boiler room"}`, or the field
+  beside the model's name in the dashboard drawer. The pickers lead with it
+  and sort by it, keeping the real name beside it — a model's own name is
+  whatever created it, which here is a 32-character hash, and every route and
+  every log stays keyed on that. The alias never reaches a file path or the
+  feature order, so unlike the name it is free to be edited, hold spaces, and
+  be cleared back to empty.
+
+- **Sign-in, organizations, roles, ownership and API keys** (`src/authz.nu`).
+  The service was single-user by construction: every route reached every model
+  in one flat store. It now has an identity, a tenant and an owner — without
+  moving a single stored model.
+
+  **Off by default.** With `ANOMALY_AUTH` unset the resolver hands every
+  request an authenticated admin and the service behaves exactly as it did
+  before this file existed. A deployment upgrades the binary first and turns
+  authentication on when its identity provider is configured, not at the same
+  instant. `ANOMALY_AUTH=1` without both an issuer and a client id stays off
+  and says so: half-configured, it would refuse every request rather than
+  protect anything.
+
+  - **An organization is an OIDC tenant** — the `tid` claim, or the issuer for
+    a provider that publishes none. One SQLite database per organization at
+    `<store>/orgs/<org>.db`, so the org is *implicit in the file*: no query in
+    `authz.nu` carries an org column and none can forget one. An org id
+    becomes a filename, so anything that is not a plain GUID is replaced by a
+    digest of itself — no input can produce a separator, a `..`, or an empty
+    name.
+  - **Two roles.** `admin` manages the organization's models, users and keys;
+    `viewer` sees only what it owns. The first subject to authenticate from an
+    organization becomes its admin — nobody else could have granted it — and
+    the last admin cannot be demoted, because an organization with no admin
+    can never appoint one.
+  - **A model has an owner:** whoever created it. A model with no row is
+    *unowned* — what everything predating this release looks like — and stays
+    visible to admins so somebody can claim it (`POST
+    /models/dynamic/<m>/claim`) rather than being absorbed by whoever signed
+    in first. A model created through the open ingest window stays unowned,
+    because nobody was there to own it.
+  - **API keys** for producers that cannot do an interactive sign-in. A key
+    carries the identity and role of its creator, so "you see only your own
+    models" holds for a key exactly as it holds for that user's browser.
+    Stored as a SHA-256 of the secret: the plaintext exists once, in the
+    response that creates it.
+  - **A migration window.** `ANOMALY_OPEN_INGEST` (on by default) keeps
+    `/detect` and `/detect_only` reachable without credentials while deployed
+    producers are moved onto keys, so turning authentication on does not drop
+    a single data point. It is a window, not a design.
+
+  Verification is `packages/oauth`: its own JWKS fetch, signature and claim
+  checks. `guard.nu`'s `with_oidc_bearer` returns a handler shape the router
+  here does not take, and every route needs its own ownership decision anyway,
+  so the routes use `oidc_request_identity` behind one `Gate` — the gate
+  answers *may this request proceed*, so no handler assembles a policy
+  decision out of parts and a route added later cannot forget half of one.
+
+  Two audiences are tried: the configured API audience and then the client id.
+  A dashboard that sends either token from the same sign-in is a dashboard
+  that works; the alternative is a 401 whose only clue is which of two GUIDs
+  the token happened to name.
+
+- **`/admin.html` and browser sign-in.** `static/auth.js` runs the
+  authorization-code flow with PKCE in the browser and wraps `fetch` once, so
+  every existing page calls the API exactly as before — a page's only new
+  obligation is `await Auth.ready()` before its first request. The new page
+  manages users and their roles, API keys, and model ownership.
+
+- **Azure AD (Entra ID) app registration**, created with `az` for this
+  deployment. Reproducing it elsewhere:
+
+  ```
+  az ad app create --display-name anomaly --sign-in-audience AzureADMyOrg
+  # then PATCH the pieces `az ad app create` has no flags for:
+  #   spa.redirectUris        <origin>/oauth/callback   (SPA + PKCE, no secret)
+  #   identifierUris          api://<appId>
+  #   api.oauth2PermissionScopes  access_as_user
+  #   api.preAuthorizedApplications  the app itself, so its own scope needs
+  #                                  no consent prompt
+  #   api.requestedAccessTokenVersion 2
+  az ad sp create --id <appId>
+  ```
+
+  `requestedAccessTokenVersion: 2` is the one that bites: a v1 access token is
+  signed by `sts.windows.net`, not by the issuer OIDC discovery advertises, so
+  it fails the issuer check for no visible reason.
+
+  README's *Signing in* section carries the whole sequence, with the values
+  a deployment fills in for itself.
+
+- **An admin of one organization could see every organization's models.**
+  A tenancy bug with the tenancy layer working correctly: a second tenant
+  signing in got its own database with nothing in it, exactly as designed —
+  and then the listing showed it the whole store anyway.
+
+  The model store is one FLAT directory shared by every organization; only
+  the per-organization claim tables say who a model belongs to. The listing
+  and `az_may_see` treated `admin` as "no filter", which in a single-tenant
+  deployment is the same thing and in a multi-tenant one is every other
+  tenant's data. An admin's world is now the set its organization has
+  CLAIMED, never the directory listing.
+
+  A model no organization has claimed is now visible to nobody through the
+  ordinary path, and adopting one is reserved to the **home organization** —
+  the first this store ever created, recorded in `<store>/orgs/.home`.
+  Nothing in an unowned model says whose it is, so any admin being able to
+  adopt one would let a stranger who signed in from their own tenant, and so
+  became an admin of it, take the operator's data.
+
+  `test_cross_org` is the test that would have caught it: one organization's
+  admin against another's models, including a name it could guess.
+
+- **Multi-tenant sign-in** (`auth.multi_tenant`, `auth.allowed_tenants`).
+  A single-tenant application has one issuer and a token either carries it or
+  is refused. A multi-tenant one does not: every organization signs with its
+  own, and the provider's discovery document publishes a *template* —
+  Entra's multi-tenant authority literally returns
+  `"issuer": "https://login.microsoftonline.com/{tenantid}/v2.0"`.
+
+  So there is nothing to pin, and `oidc_discover` refuses it: it cross-checks
+  the document's issuer against the one asked for, correctly, and a template
+  never matches. The multi-tenant path therefore reads the discovery document
+  itself and takes two fields from it — the issuer template and the JWKS URI
+  — so nothing about any particular provider is hardcoded. Each token is then
+  verified against that template with its own `tid` substituted, which is what
+  the provider documents. Both claims sit inside the same signature, so a
+  token cannot be moved between tenants.
+
+  The trade is that anyone with a work account anywhere can sign in and have
+  an organization created for them. `allowed_tenants` restricts it; empty
+  admits any, which is what multi-tenant asks for and is checked twice — once
+  to choose which issuer to demand, and again on the verified `tid`, because
+  only the second reading has a signature behind it.
+
+- **Two gate mistakes the new tests caught.** The read/write split was applied
+  to the route handlers by a positional pass over the file, and the order was
+  not the one assumed: `force_train` was classified as a READ — a retrain
+  within a viewer's reach — and `anomalies` as a WRITE, closing the one page a
+  viewer most needs. The classification is now keyed on the handler's NAME,
+  which is a mistake a name-keyed table cannot make.
+
+  And `allow_create` short-circuited the role check: a missing model returned
+  "allowed" before any role was consulted, so an ingest key could invent
+  models. The flag says a missing model may be brought into being *here*, not
+  that anyone may bring it.
+
+- **Import a file of history** (`src/importer.nu`, `POST
+  /models/dynamic/<m>/import`, and a file picker on the Trainer page). CSV
+  with a guessed delimiter and quoted cells, a JSON array or one wrapped
+  under `data`/`points`/`rows`, or JSONL — which is what this service's own
+  `/data` route emits, so a model can be moved by exporting and importing it.
+  `format=auto` sniffs.
+
+  It is a separate path from ingest rather than a loop over it, and each
+  difference is the reason it exists. **Points keep the timestamp the file
+  gives them**, because history that all lands at "now" is not history: every
+  time window would see one instant and `seasonal` would be as blind as
+  `short_term`. Keeping those timestamps means the batch cannot simply be
+  appended — the ring is read as a time sequence by every window filter — so
+  the two sorted sides are merged, and a file of last year's data lands
+  before this morning's points. **The log is written once and the model
+  trains once**, at the end; replaying ten thousand points through the
+  streaming path would retrain two hundred times.
+
+  A row that cannot be read is counted and named by line rather than failing
+  the file, and a file bigger than the ring is a file whose tail the model
+  keeps. Importing creates a model, which is a structural act, so it is an
+  admin's — and what it creates belongs to the organization exactly like one
+  grown from a stream. There is no third kind of model.
+
+  `tests/import_test.nu` (49 checks) covers the parsers and the ordering;
+  the auth-flow suite drives a CSV and a JSONL file over a socket and checks
+  that an ingest key can import one and still cannot retrain or delete it.
+
+- **A model belongs to the organization, not to a person.** A colleague
+  leaving must not take a production model with them, so everyone in an
+  organization sees the same models and the *role* decides what may be done to
+  one. `models` has no owner column any more — only the database it sits in —
+  and `owner_sub` survives as an audit trail of who first sent a point, blanked
+  when they leave. Membership is row EXISTENCE, not a non-empty creator: the
+  two are different questions, and conflating them meant forgetting a person
+  also forgot which organization their models belonged to.
+
+- **A viewer views.** Reading the organization's models, their collected data
+  and the charts is what the role is for; creating a model, training,
+  finetuning, resetting, deleting and editing metadata are an admin's.
+
+- **Sending points is the organization's act, not a person's.** It is done by
+  the organization's key, so it is not on the role axis at all: keys carry an
+  `ingest` capability of their own. An ingest key can feed the models its
+  organization already has and can do nothing else — not retrain them, not
+  delete what it feeds, not create a new model, not even learn that another
+  key exists. A producer credential that could delete a production model is a
+  hazard, and one that has to be an admin to send a number is a blunt
+  instrument. Keys issued before the distinction existed are migrated to
+  `ingest`: every one of them was made to feed a model.
+
+- **Keys belong to the organization, and only its admins see them.** There is
+  no per-person view of a key because there is no per-person ownership: the
+  listing, creation and revocation routes are admin-only, `az_keys_json` has
+  no owner filter, and revoking takes no owner check — whoever pressed the
+  button that made a key has no more claim on it than any other admin. The controls
+  are not disabled in the dashboard, they are absent, with one line saying why.
+
+- **Nothing is created or collected without a credential.** `POST /detect`
+  from an unauthenticated caller is now refused: without a credential naming
+  an organization there is nothing a point could belong to, and a model made
+  from one would be owned by nobody — exactly the shape the ownership rules
+  refuse. `auth.open_ingest` stays as the migration window, defaulting to
+  **off**, and even open it routes those points into the `public`
+  organization rather than conjuring an ownerless model.
+
+- **`auth.mode`: `simple` or `oidc`.** Simple mode is the service as it was
+  before sign-in existed — anyone who opens the page sees every model — kept
+  as a mode rather than as a fallback, so a deployment that wants it says so.
+  What it collects lands in one `public` organization, a real organization
+  with a real database, so the two modes share one shape and turning sign-in
+  on later does not have to move anything. (`auth.enabled` is still read.)
+
+- **A tenant registry, and an owner tenant.** An organization that signs in
+  and has not been approved is recorded as **pending** and refused;
+  provisioning one for whoever knocks is how a multi-tenant service fills a
+  disk with strangers. Approving, blocking and un-approving happen in the
+  dashboard, because the answer changes at runtime and a config key cannot be
+  edited by the person doing the approving — `allowed_tenants` in the config
+  only ever ADDS, so a decision made in the dashboard survives a restart.
+
+  `auth.owner_tenant` names the organization whose admins administer the
+  service itself: the registry, and any organization's members. It is set in
+  the configuration file and nowhere else — a tenant that could grant itself
+  that from the dashboard would not be an anchor — and it is always allowed to
+  sign in, because one that could be locked out would leave nobody able to
+  unlock anything. It exists for the repair an organization cannot do for
+  itself: when its last admin has left, promoting somebody is an admin's act
+  and there is no admin left.
+
+- **The right to be forgotten.** `DELETE /api/me`. The person's row goes and
+  with it the personal identifier on anything they made; the organization
+  keeps what is the organization's — its models, and the keys that feed them,
+  which is why a key now records the role it was issued with rather than
+  reading it from a creator who may no longer exist. If they were the last
+  member, the organization goes too: its models are deleted from the store,
+  then its database. In that order — a crash between the two leaves models
+  nobody claims, which an admin can adopt, while the reverse leaves a database
+  pointing at models that are gone.
+
+- **Two things that made a working sign-in look like a broken one**, found
+  by minting a real token and following it:
+
+  The multi-tenant issuer was derived and then not used. `__az_token_principal`
+  still measured every token against the *configured* value, which for a
+  multi-tenant deployment is an authority (`.../organizations/v2.0`) that no
+  token ever carries — so every token was refused. The derivation existed and
+  its helpers were tested; the wiring between them was not, and
+  `test_tenancy_wiring` is now the test that would have caught it.
+
+  And `auth.js` booted on the callback page. That page has no token yet —
+  that is the entire reason it exists — so `boot()` raised the sign-in card
+  over an exchange already in flight, and clicking it started a second
+  sign-in that raced the first. The symptom is a sign-in screen that keeps
+  coming back while the sign-in itself succeeds every time. The page now sets
+  `__AUTH_CALLBACK__` before loading auth.js, and auth.js leaves it alone.
+
+  Both were invisible because a refused token produced a bare 401. It now
+  carries the reason, in the body and in an RFC 6750 `WWW-Authenticate`
+  challenge (sanitized — part of it is copied from a token, and a CR LF in
+  there is response splitting, not a diagnostic), and the sign-in card shows
+  it instead of reappearing with nothing to say. The tenant allowlist is
+  also checked before the provider is contacted: whether a tenant is admitted
+  needs no network round trip.
+
+- **A configuration file.** Everything the service can be told now layers
+  `flag > environment > file > default`. The file is TOML (the project's own
+  format), found at `--config FILE` / `$ANOMALY_CONFIG`, else
+  `<store>/anomaly.toml`, else `/etc/anomaly/anomaly.toml`; the environment
+  overlays only where a variable is actually set, so an unset one lets the
+  file show through rather than blanking it. `anomaly.toml.example` ships
+  beside the README.
+
+  The store directory is deliberately not settable in the file: the file is
+  looked for inside the store, so a `store` key would be a file relocating the
+  directory it was just found in. A file that does not exist is fine — most
+  deployments have none — but one that exists and does not parse stops the
+  service with exit 2, because coming up unconfigured because a config file
+  was quietly ignored is the failure nobody can see.
+
+- **`tests/authflow_test.sh`** drives the whole path over a socket against
+  `packages/oauth`'s signing test provider: no credentials, a real ES256
+  token, first-user-becomes-admin, ownership following its creator, keys
+  issued/used/revoked, and every deliberately broken token the provider can
+  mint — expired, tampered, wrong audience, unpublished kid, `alg: none`,
+  HS256 signed with the public key, a CRLF kid — refused. 28 assertions;
+  `tests/authz_test.nu` covers the tenancy rules with 69 more.
+
 ## 0.8.0
 
 - **The autoencoder's decision margin is relative to its own threshold.**

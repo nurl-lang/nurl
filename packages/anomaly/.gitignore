@@ -13,6 +13,10 @@
 /tests/timevector_test
 /tests/autoencoder_test
 /tests/metaedit_test
+/tests/scan_test
+/tests/authz_test
+/tests/config_test
+/tests/import_test
 /tests/service_test
 /tests/gpu_test
 /tests/aegpu_parity_test

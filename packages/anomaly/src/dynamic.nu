@@ -30,6 +30,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/time.nu`
+$ `stdlib/std/sort.nu`
 $ `stdlib/ext/json.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
@@ -774,6 +775,208 @@ $ `src/store.nu`
         }
         F e → { ^ @ !Verdict String { F e } }
     }
+}
+
+// ── Importing a file of history ───────────────────────────────────────
+//
+// The ingest path is built for one point at a time: append, persist, and
+// retrain whenever the schedule says so. Replaying ten thousand stored
+// points through it would retrain two hundred times and rewrite the log
+// once per point, which is not slow by accident — it is the streaming
+// design being asked to do a bulk job.
+//
+// So importing has its own path. It differs in exactly three ways, and
+// each is the reason it exists:
+//
+//   * the log is written ONCE at the end, not once per point;
+//   * a point keeps the timestamp the FILE gave it, because history that
+//     all lands at "now" is not history — every time window would see one
+//     instant, and `seasonal` would be as blind as `short_term`;
+//   * training happens once, after everything has landed.
+//
+// Ordering is the price of keeping those timestamps. The ring is assumed
+// ingest-ordered — the window filters and the timevector windows all read
+// it as a time sequence — so imported points cannot simply be appended.
+// Both sides are sorted, so they are merged.
+
+: ImpRow {
+    i ir_ts
+    String ir_line
+}
+
+@ __an_imp_cmp ImpRow a ImpRow b → i {
+    ? < . a ir_ts . b ir_ts { ^ -1 } {}
+    ? > . a ir_ts . b ir_ts { ^ 1 } {}
+    ^ 0
+}
+
+: ImportReport {
+    i accepted
+    i rejected
+    i stored  // points in the ring afterwards
+    b trained
+    String err  // non-empty ⇒ nothing was imported
+    ( Vec String ) notes
+}
+
+@ import_report_free ImportReport r → v {
+    ( string_free . r err )
+    ( vec_free_with [String] . r notes \ String s → v { ( string_free s ) } )
+}
+
+// The timestamp a record carries, or 0 when it names none. A number is
+// unix seconds; a string is left to the preprocessing layer, which knows
+// ISO-8601 — but a point still needs a position in the ring, so a record
+// timestamped only by a string is placed by the fallback.
+@ __an_imp_ts Json rec → i {
+    ?? ( json_obj_get rec `timestamp` ) {
+        T v → {
+            ? ( json_is_num v ) { ^ ( json_as_int v ) } {}
+        }
+        F _ → {}
+    }
+    ^ 0
+}
+
+// Import `recs` into the model. Records keep their own `timestamp` when
+// they carry one; the rest are placed at `now`. Returns what happened.
+@ model_import_at * Model mo ( Vec Json ) recs i now → ImportReport {
+    : *Meta mm . mo meta
+    : i nrec ( vec_len [Json] recs )
+    ? > nrec 0 {} {
+        ^ @ ImportReport { 0 0 ( vec_len [String] . mo lines ) F
+            ( string_from `nothing to import` ) ( vec_new [String] ) }
+    }
+
+    : ( Vec ImpRow ) fresh ( vec_new [ImpRow] )
+    : ( Vec String ) notes ( vec_new [String] )
+    : ~ i rejected 0
+    : ~ i k 0
+    ~ < k nrec {
+        ?? ( vec_get [Json] recs k ) {
+            T rec → {
+                // Preprocessing is what LEARNS: columns, categories and
+                // their order all come from the records as they arrive, so
+                // an import teaches the model its shape exactly as a stream
+                // would.
+                : !EncPoint String er ( anomaly_preprocess mm rec )
+                ?? er {
+                    T p → {
+                        ( enc_free p )
+                        : i given ( __an_imp_ts rec )
+                        : i ts ? > given 0 given now
+                        : Json out ( json_clone rec )
+                        ( json_obj_set out `timestamp` ( json_int ts ) )
+                        : String line ( json_stringify out )
+                        ( json_free out )
+                        ( vec_push [ImpRow] fresh @ ImpRow { ts line } )
+                    }
+                    F e → {
+                        = rejected + rejected 1
+                        ? < ( vec_len [String] notes ) 5 {
+                            : String m ( string_from `row ` )
+                            ( string_push_int m + k 1 )
+                            ( string_push_str m `: ` )
+                            ( string_push_str m ( string_data e ) )
+                            ( vec_push [String] notes m )
+                        } {}
+                        ( string_free e )
+                    }
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+
+    : i accepted ( vec_len [ImpRow] fresh )
+    ? > accepted 0 {} {
+        ( vec_free [ImpRow] fresh )
+        ^ @ ImportReport { 0 rejected ( vec_len [String] . mo lines ) F
+            ( string_from `no row could be read as a data point` ) notes }
+    }
+    ( sort_by [ImpRow] fresh \ ImpRow a ImpRow b → i { ^ ( __an_imp_cmp a b ) } )
+
+    // Merge with the ring. Both sides are ordered, so this is one pass —
+    // and it is a merge rather than an append because an import of last
+    // year's history must land before this morning's points, not after
+    // them.
+    : i have ( vec_len [String] . mo lines )
+    : ~ ( Vec String ) mlines ( vec_with_cap [String] + have accepted )
+    : ~ ( Vec i ) mtimes ( vec_with_cap [i] + have accepted )
+    : ~ i a 0
+    : ~ i b 0
+    ~ | < a have < b accepted {
+        : ~ i ta 9223372036854775807
+        : ~ i tb 9223372036854775807
+        ? < a have { ?? ( vec_get [i] . mo times a ) { T x → { = ta x } F _ → {} } } {}
+        ? < b accepted { ?? ( vec_get [ImpRow] fresh b ) { T r → { = tb . r ir_ts } F _ → {} } } {}
+        ? <= ta tb {
+            ?? ( vec_get [String] . mo lines a ) {
+                T l → { ( vec_push [String] mlines ( string_from ( string_data l ) ) ) }
+                F _ → {}
+            }
+            ( vec_push [i] mtimes ta )
+            = a + a 1
+        } {
+            ?? ( vec_get [ImpRow] fresh b ) {
+                T r → {
+                    ( vec_push [String] mlines ( string_from ( string_data . r ir_line ) ) )
+                    ( vec_push [i] mtimes . r ir_ts )
+                }
+                F _ → {}
+            }
+            = b + b 1
+        }
+    }
+    ( vec_free_with [ImpRow] fresh \ ImpRow r → v { ( string_free . r ir_line ) } )
+
+    // Ring eviction: the OLDEST go, which after a merge may well be
+    // imported ones. A file bigger than the ring is a file whose tail is
+    // what the model keeps.
+    : ~ i drop - ( vec_len [String] mlines ) . mo max_points
+    ? > drop 0 {
+        : ( Vec String ) kl ( vec_new [String] )
+        : ( Vec i ) kt ( vec_new [i] )
+        : i tot ( vec_len [String] mlines )
+        : ~ i j drop
+        ~ < j tot {
+            ?? ( vec_get [String] mlines j ) {
+                T l → { ( vec_push [String] kl ( string_from ( string_data l ) ) ) }
+                F _ → {}
+            }
+            ?? ( vec_get [i] mtimes j ) { T x → { ( vec_push [i] kt x ) } F _ → {} }
+            = j + j 1
+        }
+        ( __an_free_lines mlines )
+        ( vec_free [i] mtimes )
+        = mlines kl
+        = mtimes kt
+    } {}
+
+    ( __an_free_lines . mo lines )
+    ( vec_free [i] . mo times )
+    = . mo lines mlines
+    = . mo times mtimes
+    = . mm n_seen + . mm n_seen accepted
+
+    // One write for the whole file, not one per point.
+    ( store_write_points . mo store ( string_data . mo mname ) . mo lines )
+    ( store_save_meta . mo store ( string_data . mo mname ) mm )
+
+    // And one train, if there is now enough to train on. An import that
+    // doubles a model's history should not leave it scoring against the
+    // forests it had before.
+    : ~ b trained F
+    ? >= ( vec_len [String] . mo lines ) . mo min_points {
+        ? > ( model_force_train_at mo now ) 0 { = trained T } {}
+    } {}
+    ^ @ ImportReport { accepted rejected ( vec_len [String] . mo lines ) trained
+        ( string_new ) notes }
+}
+
+@ model_import * Model mo ( Vec Json ) recs → ImportReport {
+    ^ ( model_import_at mo recs ( now_seconds ) )
 }
 
 // ── Fine-tuning ───────────────────────────────────────────────────────
@@ -1547,7 +1750,8 @@ $ `src/store.nu`
 
 // Apply an editable-metadata patch:
 //
-//   { "schedule": { "below_max": N, "at_max": N },
+//   { "alias": "boiler room",
+//     "schedule": { "below_max": N, "at_max": N },
 //     "max_data_points": N,
 //     "versions": { "<name>": { <any VerCfg field> }, ... },
 //     "replace_versions": bool }
@@ -1573,6 +1777,7 @@ $ `src/store.nu`
 // writer, and a service-shaped descriptor has no business in the stored file.
 @ meta_editable_fields → Json {
     : Json a ( json_arr_new )
+    ( json_arr_push a ( json_str_lit `alias` ) )
     ( json_arr_push a ( json_str_lit `schedule` ) )
     ( json_arr_push a ( json_str_lit `max_data_points` ) )
     ( json_arr_push a ( json_str_lit `versions` ) )
@@ -1583,6 +1788,23 @@ $ `src/store.nu`
     ? ( json_is_obj patch ) {} { ^ ( string_from `metadata must be a JSON object` ) }
     : *Meta mm . mo meta
     : ~ b touched F
+
+    // The alias is a display name, nothing more: it never reaches the
+    // store, the feature order or a file path, so unlike `name` it is free
+    // to be edited, contain spaces, or be cleared back to empty.
+    ?? ( json_obj_get patch `alias` ) {
+        T aj → {
+            ? ( json_is_str aj ) {} { ^ ( string_from `alias must be a string` ) }
+            : s araw ( json_str_data aj )
+            ? > ( nurl_str_len araw ) ANOM_ALIAS_MAX {
+                ^ ( string_from `alias is too long (max 120 characters)` )
+            } {}
+            ( string_free . mm alias )
+            = . mm alias ( string_from araw )
+            = touched T
+        }
+        F _ → {}
+    }
 
     ?? ( json_obj_get patch `schedule` ) {
         T sj → {
@@ -1643,7 +1865,7 @@ $ `src/store.nu`
     }
 
     ? touched {} {
-        ^ ( string_from `nothing to update: expected schedule, max_data_points and/or versions` )
+        ^ ( string_from `nothing to update: expected alias, schedule, max_data_points and/or versions` )
     }
 
     ( __an_prune_disabled mo )

@@ -7,9 +7,14 @@
 #                      dynamic (M4), versions (M5), scan (the cached ring
 #                      scan + the relative autoencoder margin), metaedit,
 #                      service (M6),
+#                      authz (organisations, roles, ownership, keys),
+#                      config (the file, and what layers over it),
+#                      import (CSV/JSON/JSONL history → a model),
 #                      dashboard (the generated metadata editor; needs node)
 #    2. CLI          : detect/score/train/ls/info/batch/reset/rm
 #    3. live HTTP    : `anomaly serve` + curl against the routes
+#    4. auth         : tests/authflow_test.sh — the OIDC gate over a socket
+#                      against packages/oauth's signing test provider
 #
 #  Run from the package dir:  ./tests/anomaly_test.sh
 #  Env: NURL (build driver; defaults to ../../nurl.sh in a checkout)
@@ -32,7 +37,7 @@ ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 
 echo "[1/3] unit suites"
-for t in prep model store dynamic versions timevector autoencoder scan metaedit service gpu; do
+for t in prep model store dynamic versions timevector autoencoder scan authz config import metaedit service gpu; do
     if ! $NURL "tests/${t}_test.nu" "$WORK/${t}_test" >/dev/null 2>"$WORK/build.err"; then
         echo "FAIL: could not build ${t}_test:"; tail -5 "$WORK/build.err"; exit 1
     fi
@@ -195,6 +200,15 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/nope.html"
 [ "$CODE" = "404" ] && ok "HTTP dashboard 404 for unknown page" || bad "HTTP dashboard 404 ($CODE)"
 
 kill "$SERVE_PID" 2>/dev/null; wait "$SERVE_PID" 2>/dev/null; SERVE_PID=""
+
+# Authentication runs over a real socket against a real signing provider,
+# so it lives in its own script; fold its result into this one's.
+echo "[4/4] authentication end to end"
+if ./tests/authflow_test.sh > "$WORK/authflow.out" 2>&1; then
+    ok "authflow_test.sh ($(tail -1 "$WORK/authflow.out"))"
+else
+    bad "authflow_test.sh"; tail -20 "$WORK/authflow.out"
+fi
 
 echo "== anomaly tests: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" = 0 ]

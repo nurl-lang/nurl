@@ -98,6 +98,7 @@
 </main>
 <div id="tip"></div>
 
+<script src="/auth.js"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -282,7 +283,7 @@ window.addEventListener("resize", draw);
 async function refresh() { await onModel(); }
 
 const qp = new URLSearchParams(location.search);
-loadModels(qp.get("model")).catch(e => $("count").textContent = e.message);
+Auth.ready().then(() => loadModels(qp.get("model"))).catch(e => $("count").textContent = e.message);
 </script>
 </body>
 </html>

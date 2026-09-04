@@ -315,6 +315,81 @@ $ `src/dynamic.nu`
 
 // ── Scenario 5: max_data_points is metadata, not a constant ───────────
 
+// ── Scenario: the alias ───────────────────────────────────────────────
+//
+// A display name, and nothing structural: it never reaches the store, a
+// file path or the feature order, which is why — unlike `name` — it may be
+// edited freely, hold spaces, and be cleared back to empty.
+
+@ test_alias Store st → v {
+    = g_lcg 31
+    : *Model mo ( model_open_at st `aliased` T0 )
+    ( seed mo )
+    : *Meta mm ( model_metadata mo )
+    ( check == ( string_len . mm alias ) 0 `alias: a fresh model has none` )
+
+    : String e1 ( patch_text mo `{"alias":"Pannuhuone"}` )
+    ( check == ( string_len e1 ) 0 `alias: a patch setting it is accepted` )
+    ( string_free e1 )
+    ( check == ( nurl_str_eq ( string_data . mm alias ) `Pannuhuone` ) 1 `alias: it took the value` )
+
+    // It survives a round trip through the stored metadata, which is the
+    // whole point of putting it there rather than in a side table.
+    : *Model mo2 ( model_open_at st `aliased` T0 )
+    : *Meta mm2 ( model_metadata mo2 )
+    ( check == ( nurl_str_eq ( string_data . mm2 alias ) `Pannuhuone` ) 1 `alias: it persists across a reopen` )
+    ( model_free mo2 )
+
+    // Editing and clearing both work; empty means "go by the name".
+    : String e2 ( patch_text mo `{"alias":"Boiler room"}` )
+    ( check == ( string_len e2 ) 0 `alias: it can be edited` )
+    ( string_free e2 )
+    ( check == ( nurl_str_eq ( string_data . mm alias ) `Boiler room` ) 1 `alias: the edit took` )
+    : String e3 ( patch_text mo `{"alias":""}` )
+    ( check == ( string_len e3 ) 0 `alias: it can be cleared` )
+    ( string_free e3 )
+    ( check == ( string_len . mm alias ) 0 `alias: cleared back to empty` )
+
+    // A patch that names only the alias is a complete patch — the "at least
+    // one key" rule has to count it, or the field is unreachable alone.
+    : String e4 ( patch_text mo `{"alias":"Solo"}` )
+    ( check == ( string_len e4 ) 0 `alias: alone it is still a valid patch` )
+    ( string_free e4 )
+
+    // Refusals leave it alone.
+    : String e5 ( patch_text mo `{"alias":42}` )
+    ( check > ( string_len e5 ) 0 `alias: a non-string is refused` )
+    ( string_free e5 )
+    ( check == ( nurl_str_eq ( string_data . mm alias ) `Solo` ) 1 `alias: a refused patch keeps the old value` )
+    : String long ( string_from `{"alias":"` )
+    : ~ i k 0
+    ~ < k 200 { ( string_push_char long 120 ) = k + k 1 }
+    ( string_push_str long `"}` )
+    : String e6 ( patch_text mo ( string_data long ) )
+    ( check > ( string_len e6 ) 0 `alias: an over-long alias is refused` )
+    ( string_free e6 )
+    ( string_free long )
+    ( check == ( nurl_str_eq ( string_data . mm alias ) `Solo` ) 1 `alias: still the old value` )
+
+    // It is published as an editable field, which is what puts it in the
+    // dashboard's generated editor.
+    : Json ef ( meta_editable_fields )
+    : ~ b has_alias F
+    : i n ( json_arr_len ef )
+    = k 0
+    ~ < k n {
+        ?? ( json_arr_get ef k ) {
+            T e → { ? == ( nurl_str_eq ( json_str_data e ) `alias` ) 1 { = has_alias T } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( json_free ef )
+    ( check has_alias `alias: it is published in editable_fields` )
+
+    ( model_free mo )
+}
+
 @ test_maxpoints Store st → v {
     = g_lcg 11
     : *Model mo ( model_open_at st `maxpts` T0 )
@@ -370,6 +445,7 @@ $ `src/dynamic.nu`
     ( test_patch st )
     ( test_clamp st )
     ( test_toggle st )
+    ( test_alias st )
     ( test_maxpoints st )
     ( test_errors st )
 

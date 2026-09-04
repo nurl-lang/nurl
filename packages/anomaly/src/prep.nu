@@ -69,6 +69,7 @@ $ `stdlib/ext/json.nu`
 : Meta {
     String name
     String created
+    String alias  // human-readable nickname; empty = go by `name`
     ( Vec String ) cols
     ( Vec i ) kinds
     ( Vec ( Vec String ) ) cats
@@ -130,12 +131,18 @@ $ `stdlib/ext/json.nu`
     ( string_free . vc vname )
 }
 
+// An alias is a label, so it is bounded by what a human will read rather
+// than by anything structural. Long enough for a sentence, short enough that
+// it cannot be used to bloat every metadata response.
+: i ANOM_ALIAS_MAX 120
+
 // ── Meta lifecycle ────────────────────────────────────────────────────
 
 @ meta_new s name s created → *Meta {
     : *Meta m # *Meta ( nurl_malloc Z Meta )
     = . m name ( string_from name )
     = . m created ( string_from created )
+    = . m alias ( string_new )
     = . m cols ( vec_new [String] )
     = . m kinds ( vec_new [i] )
     = . m cats ( vec_new [( Vec String )] )
@@ -155,6 +162,7 @@ $ `stdlib/ext/json.nu`
 @ meta_free * Meta m → v {
     ( string_free . m name )
     ( string_free . m created )
+    ( string_free . m alias )
     ( vec_free_with [String] . m cols \ String x → v { ( string_free x ) } )
     ( vec_free [i] . m kinds )
     ( vec_free_with [( Vec String )] . m cats \ ( Vec String ) cv → v {
@@ -719,6 +727,7 @@ $ `stdlib/ext/json.nu`
     : Json o ( json_obj_new )
     ( json_obj_set o `name` ( json_str_lit ( string_data . m name ) ) )
     ( json_obj_set o `created` ( json_str_lit ( string_data . m created ) ) )
+    ( json_obj_set o `alias` ( json_str_lit ( string_data . m alias ) ) )
 
     : Json types ( json_obj_new )
     : Json cats ( json_obj_new )
@@ -1014,6 +1023,15 @@ $ `stdlib/ext/json.nu`
     = . m last_trained ( _an_jint j `last_trained_at` 0 )
     = . m max_points ( _an_jint j `max_data_points` ANOM_MAX_POINTS )
     = . m score_epoch ( _an_jint j `score_epoch` 1 )
+    ?? ( json_obj_get j `alias` ) {
+        T av → {
+            ? ( json_is_str av ) {
+                ( string_free . m alias )
+                = . m alias ( string_from ( json_str_data av ) )
+            } {}
+        }
+        F _ → {}
+    }
 
     ? ok {} {
         ( meta_free m )

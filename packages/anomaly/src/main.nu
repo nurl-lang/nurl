@@ -36,6 +36,7 @@ $ `src/score.nu`
 $ `src/store.nu`
 $ `src/dynamic.nu`
 $ `src/csvdata.nu`
+$ `src/config.nu`
 $ `src/service.nu`
 
 @ pline s x → v {
@@ -55,6 +56,10 @@ $ `src/service.nu`
     ( string_free home )
     ^ r
 }
+
+// The bind address a bare `anomaly serve` uses. Named so the flag's
+// default and the "was --addr actually given" test cannot drift apart.
+: s ANOM_DEFAULT_ADDR `127.0.0.1:8811`
 
 // Dashboard web root for `serve`. --webroot / $ANOMALY_WEBROOT (via the
 // flag) first, then <exe-dir>/static, <exe-dir>/../share/anomaly/static,
@@ -295,7 +300,61 @@ $ `src/service.nu`
 }
 
 @ __an_cmd_serve CliCtx x → i {
-    : String addr ( ctx_str x `addr` )
+    : String root ( __an_store_root x )
+    ( anomaly_service_set_root ( string_data root ) )
+    // The organisation databases live beside the models, in the same store.
+    ( anomaly_authz_set_root ( string_data root ) )
+
+    // Settings layer: flag > environment > file > default. The file is
+    // found relative to the store, so it cannot itself move the store.
+    : String cfg_flag ( ctx_str x `config` )
+    : String cfg_path ( config_find ( string_data cfg_flag ) ( string_data root ) )
+    : AnomalyConfig cfg ( config_load ( string_data cfg_path ) )
+    ? > ( nurl_str_len ( config_error cfg ) ) 0 {
+        // A file that exists and does not parse is an error, not something
+        // to shrug at: coming up unconfigured because a config file was
+        // quietly ignored is the failure nobody can see.
+        ( nurl_eprint `anomaly: cannot read the config file: ` )
+        ( nurl_eprintln ( config_error cfg ) )
+        ( config_free cfg )
+        ( string_free cfg_path )
+        ( string_free cfg_flag )
+        ( string_free root )
+        ^ 2
+    } {}
+    ? ( config_loaded cfg ) {
+        ( nurl_eprint `anomaly: config file: ` )
+        ( nurl_eprintln ( config_path cfg ) )
+    } {}
+
+    // Authentication is off unless an issuer and a client id are both
+    // present: an upgraded binary must not start refusing the requests its
+    // predecessor served, and a half-configured one would refuse every
+    // request rather than protect anything.
+    ? ( anomaly_authz_apply cfg ) {
+        ( nurl_eprint `anomaly: authentication ON, issuer ` )
+        ( nurl_eprintln ( anomaly_authz_issuer ) )
+        ? ( anomaly_authz_open_ingest ) {
+            ( nurl_eprintln `anomaly: /detect and /detect_only still accept unauthenticated points (auth.open_ingest = false to close them)` )
+        } {}
+    } {
+        ? ( anomaly_authz_requested cfg ) {
+            ( nurl_eprintln `anomaly: authentication was requested but stays OFF — auth.issuer and auth.client_id are both required` )
+        } {
+            ( nurl_eprintln `anomaly: authentication OFF (see [auth] in the config file, or ANOMALY_AUTH=1 with ANOMALY_OIDC_ISSUER and ANOMALY_OIDC_CLIENT_ID)` )
+        }
+    }
+
+    // The address: --addr wins, then $ANOMALY_ADDR (via the flag's env
+    // binding), then the file, then the built-in default.
+    : ~ String addr ( ctx_str x `addr` )
+    ? == ( nurl_str_eq ( string_data addr ) ANOM_DEFAULT_ADDR ) 1 {
+        : String from_file ( config_str cfg `service.addr` `` )
+        ? > ( string_len from_file ) 0 {
+            ( string_free addr )
+            = addr from_file
+        } { ( string_free from_file ) }
+    } {}
     : ~ String host ( string_new )
     : ~ i port 8811
     : ?i colon ( string_index_of addr `:` )
@@ -321,9 +380,14 @@ $ `src/service.nu`
             = host ( string_from ( string_data addr ) )
         }
     }
-    : String root ( __an_store_root x )
-    ( anomaly_service_set_root ( string_data root ) )
-    : String webroot ( __an_webroot x )
+
+    : ~ String webroot ( __an_webroot x )
+    // The config file supplies a web root only when nothing more specific
+    // did — __an_webroot has already consulted --webroot and $ANOMALY_WEBROOT.
+    ? == ( string_len webroot ) 0 {
+        ( string_free webroot )
+        = webroot ( config_str cfg `service.webroot` `` )
+    } {}
     ( anomaly_service_set_webroot ( string_data webroot ) )
     ? > ( string_len webroot ) 0 {
         ( nurl_eprint `anomaly: dashboard web root: ` )
@@ -332,6 +396,9 @@ $ `src/service.nu`
         ( nurl_eprintln `anomaly: no dashboard web root found (API-only)` )
     }
     : i rc ( anomaly_serve ( string_data host ) port )
+    ( config_free cfg )
+    ( string_free cfg_path )
+    ( string_free cfg_flag )
     ( string_free webroot )
     ( string_free root )
     ( string_free host )
@@ -495,11 +562,12 @@ $ `src/service.nu`
 }
 
 @ main → i {
-    : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` `0.8.0` )
+    : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` `0.9.0` )
     ( cli_flag_str c `store` 115 `DIR` `model store (default: $ANOMALY_HOME, else ~/.anomaly)` `` `ANOMALY_HOME` )
     ( cli_flag_str c `file` 102 `FILE` `for batch: read CSV from FILE instead of stdin` `` `` )
     ( cli_flag_str c `margin` 109 `M` `for batch: decision margin (default 0 = predict==-1)` `0` `` )
-    ( cli_flag_str c `addr` 97 `HOST:PORT` `for serve: bind address` `127.0.0.1:8811` `` )
+    ( cli_flag_str c `addr` 97 `HOST:PORT` `for serve: bind address` ANOM_DEFAULT_ADDR `ANOMALY_ADDR` )
+    ( cli_flag_str c `config` 99 `FILE` `config file (default: <store>/anomaly.toml, then /etc/anomaly/anomaly.toml)` `` `ANOMALY_CONFIG` )
     ( cli_flag_str c `webroot` 119 `DIR` `for serve: dashboard HTML dir (default: <exe>/static, $ANOMALY_WEBROOT)` `` `ANOMALY_WEBROOT` )
     ( cli_flag_bool c `header` 72 `for batch: skip the first CSV line (header)` )
 

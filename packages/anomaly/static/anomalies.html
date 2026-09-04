@@ -158,6 +158,7 @@
 </main>
 <div id="tip"></div>
 
+<script src="/auth.js"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -196,12 +197,21 @@ function verColor(v) { return v === AE ? getVar("--joint") : getVar("--danger");
 
 // ── model + feature pickers ───────────────────────────────────────────
 
+// A model's own name is whatever created it — often an opaque hash — so the
+// picker shows the alias when one is set and sorts by what is displayed.
+// The value stays the real name: that is what every route is keyed on.
+function modelLabel(name) {
+  const a = (MODELS[name] || {}).alias;
+  return a && a.length ? a : name;
+}
+
 async function loadModels(preselect) {
   const r = await api("GET", "/models/dynamic");
   MODELS = (r.data && r.data.models) || {};
-  const names = Object.keys(MODELS).sort();
+  const names = Object.keys(MODELS)
+    .sort((a, b) => modelLabel(a).localeCompare(modelLabel(b)));
   $("model").innerHTML = names.length
-    ? names.map(n => '<option value="' + esc(n) + '">' + esc(n) + "</option>").join("")
+    ? names.map(n => '<option value="' + esc(n) + '">' + esc(modelLabel(n)) + "</option>").join("")
     : '<option value="">(no models)</option>';
   if (preselect && names.includes(preselect)) $("model").value = preselect;
   $("model").onchange = () => { SCAN = null; loadFeatures(); resetView(); };
@@ -539,7 +549,7 @@ $("range").onchange = () => {
 $("feature").onchange = () => { if (SCAN) scan(false); };
 
 const qp = new URLSearchParams(location.search);
-loadModels(qp.get("model")).then(() => {
+Auth.ready().then(() => loadModels(qp.get("model"))).then(() => {
   if (qp.get("model") && $("model").value) scan(false);
 }).catch(e => { $("prog").textContent = e.message; $("prog").className = "err"; });
 </script>

@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Organization · anomaly</title>
+<style>
+  :root {
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c2230; --border:#2a3242;
+    --fg:#e6edf3; --muted:#8b98a9; --accent:#4c9aff; --accent2:#6ee7b7;
+    --danger:#ff6b6b; --warn:#f6c344; --ok:#56d364; --radius:10px;
+    --mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:var(--sans); font-size:14px; }
+  a { color:var(--accent); text-decoration:none; }
+  header { display:flex; align-items:center; gap:20px; padding:14px 24px; background:var(--panel);
+           border-bottom:1px solid var(--border); position:sticky; top:0; z-index:10; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header .brand { color:var(--accent2); font-family:var(--mono); }
+  nav { display:flex; gap:4px; margin-left:auto; }
+  nav a { padding:6px 12px; border-radius:8px; color:var(--muted); font-weight:500; }
+  nav a:hover { background:var(--panel2); color:var(--fg); }
+  nav a.active { background:var(--accent); color:#06122b; }
+  main { max-width:1100px; margin:0 auto; padding:24px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:var(--radius);
+          padding:18px; margin-bottom:20px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted);
+             margin:0 0 4px; font-weight:600; }
+  .card p.hint { margin:0 0 14px; color:var(--muted); font-size:12px; line-height:1.55; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  thead th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.5px;
+             color:var(--muted); padding:8px 10px; border-bottom:1px solid var(--border); }
+  tbody td { padding:8px 10px; border-bottom:1px solid var(--border); font-family:var(--mono);
+             font-variant-numeric:tabular-nums; vertical-align:middle; }
+  tbody tr:hover { background:var(--panel2); }
+  button, select, input { font-family:var(--sans); font-size:13px; border:1px solid var(--border);
+    background:var(--panel2); color:var(--fg); padding:6px 11px; border-radius:8px; cursor:pointer; }
+  input { font-family:var(--mono); cursor:text; background:var(--bg); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#06122b; font-weight:600; }
+  button.danger { color:var(--danger); border-color:rgba(255,107,107,.4); }
+  button:disabled { opacity:.45; cursor:default; }
+  .pill { font-size:10px; font-family:var(--mono); padding:1px 7px; border-radius:999px;
+          border:1px solid var(--border); color:var(--muted); }
+  .pill.admin { border-color:var(--accent2); color:var(--accent2); }
+  .pill.revoked { border-color:rgba(255,107,107,.4); color:var(--danger); }
+  .pill.unowned { border-color:var(--warn); color:var(--warn); }
+  .muted { color:var(--muted); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .empty { text-align:center; padding:28px; color:var(--muted); }
+  .secret { background:rgba(110,231,183,.08); border:1px solid rgba(110,231,183,.35);
+            border-radius:8px; padding:14px; margin-top:14px; }
+  .secret code { display:block; font-family:var(--mono); font-size:12px; word-break:break-all;
+                 color:var(--accent2); margin:8px 0; user-select:all; }
+  .secret .warn { color:var(--warn); font-size:12px; }
+  .err { color:var(--danger); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="brand">anomaly</span> · Organization</h1>
+  <nav>
+    <a href="/modelmanager.html">Models</a>
+    <a href="/modeltrainer.html">Trainer</a>
+    <a href="/visualize.html">Visualize</a>
+    <a href="/anomalies.html">Anomalies</a>
+    <a href="/admin.html" class="active">Organization</a>
+  </nav>
+</header>
+
+<main>
+  <div class="card">
+    <h2>You</h2>
+    <div id="me" class="muted">loading…</div>
+  </div>
+
+  <div class="card" id="keysCard" style="display:none">
+    <h2>API keys</h2>
+    <p class="hint">A key authenticates a machine — a Node-RED flow, a script — as the
+      <strong>organization</strong>. An <em>ingest</em> key can send points to models this organization
+      already has and cannot change or delete them; an <em>admin</em> key can do everything an
+      administrator can. The secret is stored hashed, so it is shown once, here, and never again.</p>
+    <div class="row">
+      <input id="keyLabel" placeholder="what will use this key" style="min-width:240px">
+      <select id="keyRole">
+        <option value="ingest">ingest — send points only</option>
+        <option value="admin">admin — full access</option>
+      </select>
+      <button class="primary" onclick="createKey()">Create key</button>
+    </div>
+    <div id="newKey"></div>
+    <div id="keys" style="margin-top:16px"></div>
+  </div>
+
+  <div class="card" id="usersCard" style="display:none">
+    <h2>Users</h2>
+    <p class="hint">Everyone who has signed in to this organization. An <strong>admin</strong> sees and
+      manages every model in the organization; a <strong>viewer</strong> sees only their own. The first
+      person to sign in became the admin — there was nobody else who could have appointed one — and the
+      last admin cannot be demoted.</p>
+    <div id="users"></div>
+  </div>
+
+  <div class="card" id="ownerCard" style="display:none">
+    <h2>Models</h2>
+    <p class="hint">A model belongs to the <strong>organization</strong>, not to a person: everyone here sees
+      the same models, and a colleague leaving does not take one with them. Only admins can change them.</p>
+    <div id="owners"></div>
+  </div>
+
+  <div class="card" id="tenantCard" style="display:none">
+    <h2>Organizations waiting for a decision</h2>
+    <p class="hint">This service is the <strong>owner tenant</strong>. An organization that signs in is
+      recorded here and refused until somebody approves it — provisioning one for whoever knocks is how a
+      multi-tenant service fills a disk with strangers.</p>
+    <div id="tenants"></div>
+  </div>
+
+  <div class="card" id="orgsCard" style="display:none">
+    <h2>All organizations</h2>
+    <p class="hint">Every organization with a database. An organization that has lost its last admin cannot
+      appoint one — promoting somebody is an admin's act — so that repair happens from here.</p>
+    <div id="orgs"></div>
+  </div>
+
+  <div class="card" id="meCard" style="display:none">
+    <h2>Your account</h2>
+    <p class="hint" id="forgetHint"></p>
+    <button class="danger" onclick="forgetMe()">Delete my account</button>
+  </div>
+
+  <div class="empty" id="offNotice" style="display:none">
+    Authentication is disabled on this server, so there is no organization to manage.<br>
+    <span class="muted">Set <code>ANOMALY_AUTH=1</code> with <code>ANOMALY_OIDC_ISSUER</code> and
+    <code>ANOMALY_OIDC_CLIENT_ID</code> to turn it on.</span>
+  </div>
+</main>
+
+<script src="/auth.js"></script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const enc = encodeURIComponent;
+let ME = null, USERS = [];
+
+async function api(method, url, body) {
+  const opt = { method, headers: {} };
+  if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const r = await fetch(url, opt);
+  let d = null; try { d = await r.json(); } catch (e) {}
+  return { ok: r.ok, status: r.status, data: d };
+}
+function fmtTime(t) {
+  if (!t) return "–";
+  return new Date(t * 1000).toLocaleString(undefined,
+    { year:"2-digit", month:"short", day:"2-digit", hour:"2-digit", minute:"2-digit" });
+}
+
+async function loadMe() {
+  const r = await api("GET", "/api/me");
+  if (!r.ok) return;
+  ME = r.data;
+  $("me").innerHTML =
+    '<div class="row"><strong>' + esc(ME.name || ME.email || ME.subject) + "</strong>" +
+    '<span class="pill ' + (ME.is_admin ? "admin" : "") + '">' + esc(ME.role) + "</span></div>" +
+    '<div class="muted" style="margin-top:6px;font-family:var(--mono);font-size:12px">' +
+    "organization " + esc(ME.organization) + " · subject " + esc(ME.subject) + "</div>";
+  if (ME.is_admin) {
+    $("usersCard").style.display = "block";
+    $("ownerCard").style.display = "block";
+    // A key reaches the whole organization. A viewer reads what the models
+    // collected and decided, and is not shown that one exists.
+    $("keysCard").style.display = "block";
+  }
+  if (ME.owner_admin) { $("tenantCard").style.display = "block"; $("orgsCard").style.display = "block"; }
+  // A key is the organization's credential, not a person, so it cannot ask
+  // for that person to be forgotten.
+  if (!ME.via_api_key) {
+    $("meCard").style.display = "block";
+    $("forgetHint").innerHTML = "You can remove yourself from this organization at any time. " +
+      "Your models and API keys stay — they belong to the organization. " +
+      "<strong>If you are its last member, the organization goes too</strong>, with its models and its keys.";
+  }
+
+}
+
+// ── keys ──────────────────────────────────────────────────────────────
+
+async function loadKeys() {
+  if (!ME || !ME.is_admin) return;
+  const r = await api("GET", "/api/org/keys");
+  if (!r.ok) { $("keys").innerHTML = '<div class="err">could not load keys</div>'; return; }
+  const ks = r.data.keys || [];
+  if (!ks.length) { $("keys").innerHTML = '<div class="empty">No keys yet.</div>'; return; }
+  $("keys").innerHTML = "<table><thead><tr><th>label</th><th>id</th><th>capability</th>" +
+    "<th>created</th><th>last used</th><th></th></tr></thead><tbody>" +
+    ks.map(k =>
+      "<tr><td>" + esc(k.label || "—") + "</td><td>" + esc(k.id) + "</td>" +
+      '<td><span class="pill ' + (k.role === "admin" ? "admin" : "") + '">' + esc(k.role) + "</span></td>" +
+      "<td>" + fmtTime(k.created_at) + "</td><td>" + fmtTime(k.last_used_at) + "</td>" +
+      "<td>" + (k.revoked
+        ? '<span class="pill revoked">revoked</span>'
+        : '<button class="danger" onclick="revokeKey(\'' + esc(k.id) + '\')">Revoke</button>') +
+      "</td></tr>").join("") + "</tbody></table>";
+}
+
+async function createKey() {
+  const label = $("keyLabel").value.trim();
+  const r = await api("POST", "/api/org/keys", { label, role: $("keyRole").value });
+  if (!r.ok) { $("newKey").innerHTML = '<div class="err">' + esc((r.data && r.data.message) || "failed") + "</div>"; return; }
+  $("keyLabel").value = "";
+  $("newKey").innerHTML = '<div class="secret"><div><strong>New ' + esc(r.data.role) + ' key</strong></div>' +
+    "<code>" + esc(r.data.key) + "</code>" +
+    '<div class="warn">Copy it now — it is stored hashed and cannot be shown again.</div>' +
+    '<div class="muted" style="margin-top:10px;font-size:12px">Send it as ' +
+    "<code>Authorization: Bearer &lt;key&gt;</code> or <code>X-API-Key: &lt;key&gt;</code>.</div></div>";
+  loadKeys();
+}
+
+async function revokeKey(id) {
+  if (!confirm("Revoke key " + id + "? Anything using it stops working immediately.")) return;
+  await api("DELETE", "/api/org/keys/" + enc(id));
+  loadKeys();
+}
+
+// ── users ─────────────────────────────────────────────────────────────
+
+async function loadUsers() {
+  if (!ME || !ME.is_admin) return;
+  const r = await api("GET", "/api/org/users");
+  if (!r.ok) return;
+  USERS = r.data.users || [];
+  const admins = USERS.filter(u => u.role === "admin").length;
+  $("users").innerHTML = "<table><thead><tr><th>name</th><th>email</th><th>subject</th>" +
+    "<th>first seen</th><th>last seen</th><th>role</th></tr></thead><tbody>" +
+    USERS.map(u => {
+      // The last admin has no toggle at all: the server refuses it, and an
+      // enabled control that always fails is worse than none.
+      const locked = u.role === "admin" && admins <= 1;
+      return "<tr><td>" + esc(u.name || "—") + "</td><td>" + esc(u.email || "—") + "</td>" +
+        '<td class="muted">' + esc(u.subject) + "</td>" +
+        "<td>" + fmtTime(u.created_at) + "</td><td>" + fmtTime(u.last_seen_at) + "</td><td>" +
+        (locked
+          ? '<span class="pill admin">admin</span> <span class="muted" style="font-size:11px">last admin</span>'
+          : '<select onchange="setRole(\'' + esc(u.subject) + '\', this.value)">' +
+            '<option value="viewer"' + (u.role === "viewer" ? " selected" : "") + ">viewer</option>" +
+            '<option value="admin"' + (u.role === "admin" ? " selected" : "") + ">admin</option></select>") +
+        "</td></tr>";
+    }).join("") + "</tbody></table>";
+}
+
+async function setRole(sub, role) {
+  const r = await api("PUT", "/api/org/users/" + enc(sub) + "/role", { role });
+  if (!r.ok) alert((r.data && r.data.message) || "could not change the role");
+  await loadUsers();
+  if (sub === ME.subject) { await loadMe(); location.reload(); }
+}
+
+// ── model ownership ───────────────────────────────────────────────────
+
+async function loadOwners() {
+  if (!ME || !ME.is_admin) return;
+  const r = await api("GET", "/models/dynamic");
+  if (!r.ok) return;
+  const models = r.data.models || {};
+  const names = Object.keys(models).sort();
+  if (!names.length) { $("owners").innerHTML = '<div class="empty">No models.</div>'; return; }
+  const opts = USERS.map(u =>
+    '<option value="' + esc(u.subject) + '">' + esc(u.name || u.email || u.subject) + "</option>").join("");
+  $("owners").innerHTML = "<table><thead><tr><th>model</th><th>alias</th><th>owner</th><th></th></tr></thead><tbody>" +
+    names.map(n => {
+      const m = models[n];
+      return "<tr><td>" + esc(n) + "</td><td>" + esc(m.alias || "—") + "</td>" +
+        '<td id="own-' + esc(n) + '" class="muted">…</td>' +
+        '<td><select id="sel-' + esc(n) + '">' + opts + "</select> " +
+        '<button onclick="claim(\'' + esc(n) + '\')">Assign</button></td></tr>';
+    }).join("") + "</tbody></table>";
+  // The listing carries no owner column, so ask per model. Admin-only page,
+  // a handful of models: cheap enough to keep the API surface smaller.
+  for (const n of names) {
+    const md = await api("GET", "/models/dynamic/" + enc(n) + "/metadata");
+    const cell = $("own-" + n);
+    if (!cell) continue;
+    const owner = (md.data && md.data.owner) || "";
+    const u = USERS.find(x => x.subject === owner);
+    cell.innerHTML = owner
+      ? esc(u ? (u.name || u.email || owner) : owner)
+      : '<span class="pill unowned">unowned</span>';
+  }
+}
+
+// ── owner tenant: which organizations may use this at all ─────────────
+
+async function loadTenants() {
+  if (!ME || !ME.owner_admin) return;
+  const r = await api("GET", "/api/tenants");
+  if (!r.ok) return;
+  const ts = r.data.tenants || [];
+  if (!ts.length) { $("tenants").innerHTML = '<div class="empty">Nobody has knocked yet.</div>'; return; }
+  $("tenants").innerHTML = "<table><thead><tr><th>tenant</th><th>state</th><th>first seen</th>" +
+    "<th>decided</th><th></th></tr></thead><tbody>" +
+    ts.map(t => {
+      const isOwner = t.tenant === r.data.owner_tenant;
+      return "<tr><td>" + esc(t.tenant) + (isOwner ? ' <span class="pill admin">owner</span>' : "") +
+        '</td><td><span class="pill ' + (t.state === "allowed" ? "admin" : t.state === "blocked" ? "revoked" : "unowned") +
+        '">' + esc(t.state) + "</span></td><td>" + fmtTime(t.first_seen) + "</td><td>" +
+        (t.decided_at ? fmtTime(t.decided_at) : "—") + "</td><td>" +
+        (isOwner ? '<span class="muted" style="font-size:11px">always allowed</span>'
+                 : '<select onchange="setTenant(\'' + esc(t.tenant) + '\', this.value)">' +
+                   ["pending", "allowed", "blocked"].map(v =>
+                     '<option value="' + v + '"' + (t.state === v ? " selected" : "") + ">" + v + "</option>").join("") +
+                   "</select>") +
+        "</td></tr>";
+    }).join("") + "</tbody></table>";
+}
+
+async function setTenant(tid, state) {
+  const r = await api("PUT", "/api/tenants/" + enc(tid), { state });
+  if (!r.ok) alert((r.data && r.data.message) || "could not change it");
+  loadTenants();
+}
+
+async function loadOrgs() {
+  if (!ME || !ME.owner_admin) return;
+  const r = await api("GET", "/api/orgs");
+  if (!r.ok) return;
+  const os = r.data.organizations || [];
+  if (!os.length) { $("orgs").innerHTML = '<div class="empty">No organizations yet.</div>'; return; }
+  $("orgs").innerHTML = "<table><thead><tr><th>organization</th><th>members</th><th>admins</th>" +
+    "<th>models</th><th></th></tr></thead><tbody>" +
+    os.map(o =>
+      "<tr><td>" + esc(o.organization) + (o.is_home ? ' <span class="pill admin">home</span>' : "") +
+      "</td><td>" + o.users + "</td><td>" +
+      (o.admins ? o.admins : '<span class="pill revoked">none</span>') + "</td><td>" + o.models +
+      '</td><td><button onclick="openOrg(\'' + esc(o.organization) + '\')">Members</button></td></tr>').join("") +
+    '</tbody></table><div id="orgUsers" style="margin-top:14px"></div>';
+}
+
+async function openOrg(org) {
+  const r = await api("GET", "/api/orgs/" + enc(org) + "/users");
+  if (!r.ok) return;
+  const us = r.data.users || [];
+  $("orgUsers").innerHTML = "<h2 style='font-size:11px;margin:0 0 8px'>" + esc(org) + "</h2>" +
+    (us.length
+      ? "<table><thead><tr><th>name</th><th>email</th><th>role</th><th></th></tr></thead><tbody>" +
+        us.map(u =>
+          "<tr><td>" + esc(u.name || "—") + "</td><td>" + esc(u.email || "—") + "</td><td>" +
+          '<select onchange="setOrgRole(\'' + esc(org) + '\', \'' + esc(u.subject) + '\', this.value)">' +
+          ["viewer", "admin"].map(v =>
+            '<option value="' + v + '"' + (u.role === v ? " selected" : "") + ">" + v + "</option>").join("") +
+          '</select></td><td><button class="danger" onclick="forgetUser(\'' + esc(org) + '\', \'' +
+          esc(u.subject) + '\')">Delete</button></td></tr>').join("") + "</tbody></table>"
+      : '<div class="empty">No members — this organization is empty.</div>');
+}
+
+async function setOrgRole(org, sub, role) {
+  const r = await api("PUT", "/api/orgs/" + enc(org) + "/users/" + enc(sub) + "/role", { role });
+  if (!r.ok) alert((r.data && r.data.message) || "could not change the role");
+  await loadOrgs(); await openOrg(org);
+}
+
+async function forgetUser(org, sub) {
+  if (!confirm("Delete this account from " + org + "?\n\n" +
+               "If they are the last member, the organization goes too — with its models and its keys.")) return;
+  const r = await api("DELETE", "/api/orgs/" + enc(org) + "/users/" + enc(sub));
+  if (!r.ok) { alert((r.data && r.data.message) || "could not delete"); return; }
+  if (r.data.organization_deleted)
+    alert("That was the last member. " + org + " is gone, along with " + r.data.models_deleted + " model(s).");
+  $("orgUsers").innerHTML = "";
+  await loadOrgs();
+}
+
+// ── the right to be forgotten ─────────────────────────────────────────
+
+async function forgetMe() {
+  if (!confirm("Delete your account?\n\n" +
+               "Your organization's models and API keys stay — they belong to the organization.\n" +
+               "But if you are its LAST member, the organization is deleted with its models and keys.\n\n" +
+               "This cannot be undone.")) return;
+  const r = await api("DELETE", "/api/me");
+  if (!r.ok) { alert((r.data && r.data.message) || "could not delete the account"); return; }
+  alert(r.data.organization_deleted
+    ? "Account deleted. You were the last member, so the organization and " +
+      r.data.models_deleted + " model(s) went with it."
+    : "Account deleted.");
+  Auth.logout();
+  location.replace("/");
+}
+
+async function claim(name) {
+  const owner = $("sel-" + name).value;
+  const r = await api("POST", "/models/dynamic/" + enc(name) + "/claim", { owner });
+  if (!r.ok) alert((r.data && r.data.message) || "could not set the owner");
+  loadOwners();
+}
+
+// ── boot ──────────────────────────────────────────────────────────────
+
+Auth.ready().then(async () => {
+  if (!Auth.cfg || !Auth.cfg.enabled) {
+    $("offNotice").style.display = "block";
+    document.querySelectorAll(".card").forEach(c => c.style.display = "none");
+    return;
+  }
+  await loadMe();
+  await loadKeys();
+  await loadUsers();
+  await loadOwners();
+  await loadTenants();
+  await loadOrgs();
+});
+</script>
+</body>
+</html>

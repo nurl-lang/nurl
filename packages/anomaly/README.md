@@ -84,6 +84,10 @@ HTTP routes and response shapes, so existing dashboards keep working.
   the magnitude of the worst score observed over the ring — the most
   anomalous point seen so far lands just inside the anomaly band. The
   autoencoder is included, in its own relative units.
+- **A nickname.** `alias` is a display name the dashboard shows in place of
+  the model's own name, which is often whatever created it. It is ordinary
+  editable metadata (`{"alias": "boiler room"}`), never reaches a file path or
+  the feature order, and may be cleared back to empty.
 - **Persistence.** `metadata.json` (types, categories, feature order,
   scaler, schedule, version configs) + one validated binary forest blob per
   version, written atomically. Corrupt or truncated files load as errors,
@@ -136,6 +140,42 @@ reports `cache: { hits, misses, epoch }` so the dashboard can show which it
 got. `?refresh=1` recomputes anyway — the escape hatch for verifying the cache,
 never needed for correctness.
 
+## Importing a file of history
+
+A model does not have to be grown from a stream. `POST
+/models/dynamic/<m>/import` — or the file picker on `/modeltrainer.html` —
+takes a file that already holds the history and turns it into the same
+records the ingest path takes.
+
+| format | shape |
+| --- | --- |
+| `csv` | a header row naming the columns, one row per point. Delimiter guessed from `,` `;` tab; quoted cells honoured. Cells that parse as numbers become numbers, everything else stays text |
+| `json` | an array of objects, or an object with the array under `data`, `points` or `rows` |
+| `jsonl` | one object per line — what this service's own `/data` route emits, so a model can be moved by exporting and importing it |
+
+`?format=auto` (the default) sniffs: a body starting with `[` is a JSON
+array, one starting with `{` is JSONL if later lines also start objects,
+anything else is CSV.
+
+Two things it does that a replay through `/detect` would not:
+
+- **Points keep the `timestamp` the file gives them.** History that all
+  lands at "now" is not history — every time window would see one instant,
+  and `seasonal` would be as blind as `short_term`. Imported points are
+  merged into the ring in time order, so a file of last year's data lands
+  *before* this morning's points rather than after them.
+- **The log is written once and the model trains once**, at the end. Replaying
+  ten thousand points through the streaming path would retrain two hundred
+  times and rewrite the log ten thousand times.
+
+A row that cannot be read does not fail the file: it is counted, and the
+first few are named by line. A file bigger than the ring is a file whose
+*tail* the model keeps.
+
+Creating a model is a structural act, so importing is an admin's — and the
+model it creates belongs to the **organization**, exactly like one grown from
+a stream. There is no third kind of model.
+
 ## GPU acceleration
 
 Bulk scoring (batch CSVs, the contamination percentile at training time,
@@ -173,6 +213,317 @@ the pure `mlp` path — the same result at CPU pace.
 `tests/aegpu_parity_test.nu` asserts the bit-identity: weights, biases,
 the full Adam state, epoch count and losses.
 
+## Configuration
+
+Everything the service can be told layers in one fixed order:
+
+```
+command-line flag  >  environment variable  >  config file  >  built-in default
+```
+
+The file is the persistent baseline a deployment writes once; the environment
+is what a container or a unit file overrides for one run; a flag is what a
+person types to override both.
+
+The file is TOML, looked for in this order — `--config FILE` or
+`$ANOMALY_CONFIG`, then `<store>/anomaly.toml`, then
+`/etc/anomaly/anomaly.toml`. An `anomaly.toml.example` ships beside this
+README.
+
+```toml
+[auth]
+enabled     = true
+issuer      = "https://login.example.com/<tenant>/v2.0"
+client_id   = "<application (client) id>"
+audience    = "api://<application (client) id>"   # optional; this is the default
+open_ingest = true
+
+[service]
+addr    = "0.0.0.0:8811"
+webroot = "/usr/share/anomaly/static"
+```
+
+| Key | Environment | Flag |
+| --- | --- | --- |
+| `auth.mode` | `ANOMALY_MODE` | — |
+| `auth.owner_tenant` | `ANOMALY_OIDC_OWNER_TENANT` | — |
+| `auth.issuer` | `ANOMALY_OIDC_ISSUER` | — |
+| `auth.client_id` | `ANOMALY_OIDC_CLIENT_ID` | — |
+| `auth.audience` | `ANOMALY_OIDC_AUDIENCE` | — |
+| `auth.multi_tenant` | `ANOMALY_OIDC_MULTI_TENANT` | — |
+| `auth.allowed_tenants` | `ANOMALY_OIDC_ALLOWED_TENANTS` | — |
+| `auth.open_ingest` | `ANOMALY_OPEN_INGEST` | — |
+| `service.addr` | `ANOMALY_ADDR` | `--addr` |
+| `service.webroot` | `ANOMALY_WEBROOT` | `--webroot` |
+| — | `ANOMALY_HOME` | `--store` |
+| — | `ANOMALY_CONFIG` | `--config` |
+
+The store directory is deliberately **not** settable in the file: the file is
+looked for inside the store, so a `store` key would be a file relocating the
+directory it was just found in.
+
+A file that does not exist is fine — most deployments have none. A file that
+exists and does not parse **stops the service** with exit 2, because coming up
+unconfigured because a config file was quietly ignored is the failure nobody
+can see.
+
+## Two modes
+
+```toml
+[auth]
+mode = "simple"   # or "oidc"
+```
+
+**simple** — no sign-in at all. Anyone who opens the page sees every model,
+and what the API collects lands in one `public` organization. This is what the
+service was before sign-in existed, kept as a mode rather than as a fallback
+so a deployment that wants it says so. It is the default.
+
+**oidc** — signed in and multi-tenant. A model belongs to an **organization**,
+and nothing is created or collected without a credential naming one.
+
+## Signing in, organizations, and who owns what
+
+In `oidc` mode the service verifies OIDC bearer tokens with the
+[`oauth`](../oauth) package (its own JWKS fetch, its own signature and claim
+checks — nothing in that chain is C). Four things follow.
+
+**An organization is an OIDC tenant.** The `tid` claim (or, for a provider
+publishing none, the issuer) selects one SQLite database under
+`<store>/orgs/<org>.db`. The org is *implicit in the file*, so no query in
+`authz.nu` carries an org column and none can forget one. An org id that is
+not a plain GUID is replaced by a digest of itself before it becomes a
+filename.
+
+**A model belongs to the organization, never to a person.** Everyone in it
+sees the same models — a colleague leaving must not take a production model
+with them — and the *role* decides what may be done to one. The model store is
+a single flat directory shared by every organization, so membership is the
+whole scope: a model your organization has not claimed is invisible to you,
+admin or not.
+
+**Two roles.**
+
+| | viewer | admin |
+| --- | --- | --- |
+| the organization's models, their data, the charts | ✓ | ✓ |
+| train, finetune, reset, delete, edit metadata | | ✓ |
+| API keys, users and roles | | ✓ |
+
+Sending data is a third thing, and it is not on this axis at all: it is done
+by the organization's **key**, not by a person. See *API keys* below.
+
+The first subject to authenticate from an organization becomes its admin —
+there is nobody else who could have granted it — and the last admin cannot be
+demoted.
+
+**Nothing is collected without a credential.** `POST /detect` from an
+unauthenticated caller is refused and creates nothing: without a credential
+naming an organization there is nothing a point could belong to, and a model
+made from one would be owned by nobody. `auth.open_ingest` is the migration
+window for producers not yet carrying a key — and even then those points land
+in the `public` organization rather than conjuring an ownerless model.
+
+### The owner tenant
+
+```toml
+owner_tenant = "<tenant-id>"
+```
+
+One organization administers the *service*, from `/admin.html`:
+
+- **Which organizations may use it.** An organization that signs in and has
+  not been approved is recorded as **pending** and refused. Approving,
+  blocking and un-approving are done from the dashboard; `allowed_tenants` in
+  the config only ever *adds*, so a decision made in the dashboard is never
+  undone by a restart.
+- **Any organization's members.** Including the repair an organization cannot
+  do for itself: when its last admin has left, promoting somebody is an
+  admin's act and there is no admin left. From here, that account can be
+  deleted and another promoted.
+
+It is set in the configuration file and nowhere else, and it is always allowed
+to sign in. A tenant that could grant itself this from the dashboard would not
+be an anchor, and one that could be locked out would leave nobody able to
+unlock anything.
+
+### The right to be forgotten
+
+`DELETE /api/me`, or the button on `/admin.html`.
+
+The person's row goes, and with it the personal identifier attached to
+anything they made. What stays is what belongs to the **organization**: its
+models, and the API keys that feed them — a colleague leaving must not stop
+the data arriving, so a key records the role it was issued with rather than
+reading it from a creator who may no longer exist.
+
+Unless they were the last member. An organization with nobody in it has nobody
+it could belong to, so it goes: its models are deleted from the store, then its
+database. In that order — a crash between the two leaves models nobody claims,
+which an admin can adopt, while the reverse leaves a database pointing at
+models that are gone.
+
+### Setting up the identity provider
+
+Any OIDC provider that publishes discovery and a JWKS will do. The dashboard
+is a **public client** doing authorization-code with PKCE, so there is no
+secret to store anywhere. Register:
+
+| | |
+| --- | --- |
+| application type | SPA / public client, PKCE, **no** client secret |
+| redirect URIs | `https://<your-host>/oauth/callback` and `http://localhost:8811/oauth/callback` |
+| scopes | `openid profile email`, plus one scope for this API |
+| claims | `email` and `preferred_username` in the ID and access tokens |
+
+#### One organization, or any
+
+A **single-tenant** application has one issuer, and a token either carries it
+or is refused.
+
+A **multi-tenant** one has no single issuer: every organization signs its
+users' tokens with its own, and the provider says so — Entra's discovery
+document at the multi-tenant authority publishes the literal string
+
+```
+"issuer": "https://login.microsoftonline.com/{tenantid}/v2.0"
+```
+
+which is a template, not a URL. There is nothing to pin. Set
+`auth.multi_tenant = true` and the service checks what the provider documents
+instead: a token's `iss` must be that template with the token's own `tid`
+substituted. Both claims sit inside the same signature, so a token cannot be
+moved between tenants.
+
+For Entra, `auth.issuer` must then be
+`https://login.microsoftonline.com/organizations/v2.0` and the registration's
+sign-in audience must be `AzureADMultipleOrgs`. Register single-tenant and sign
+in with an outside account and you get
+
+```
+AADSTS50020: User account '…' from identity provider '…' does not exist in
+tenant '…' and cannot access the application '…' in that tenant.
+```
+
+which names the mismatch exactly.
+
+#### Azure AD (Entra ID), with `az`
+
+`az ad app create` has no flags for SPA redirect URIs, for exposing an API, or
+for the token version, so those three are a Graph PATCH:
+
+```bash
+APPID=$(az ad app create --display-name anomaly \
+          --sign-in-audience AzureADMultipleOrgs --query appId -o tsv)
+          # ...or AzureADMyOrg for a single-organization deployment
+OID=$(az ad app show --id "$APPID" --query id -o tsv)
+SCOPEID=$(python3 -c 'import uuid;print(uuid.uuid4())')
+
+# 1. SPA redirect URIs, the API this app exposes, and v2 access tokens.
+az rest --method PATCH \
+  --uri "https://graph.microsoft.com/v1.0/applications/$OID" \
+  --headers "Content-Type=application/json" --body "$(cat <<JSON
+{
+  "spa": { "redirectUris": [
+      "https://<your-host>/oauth/callback",
+      "http://localhost:8811/oauth/callback" ] },
+  "identifierUris": [ "api://$APPID" ],
+  "api": {
+    "requestedAccessTokenVersion": 2,
+    "oauth2PermissionScopes": [ {
+      "id": "$SCOPEID", "value": "access_as_user", "type": "User",
+      "isEnabled": true,
+      "adminConsentDisplayName": "Access anomaly as the signed-in user",
+      "adminConsentDescription": "Call the anomaly API as the signed-in user.",
+      "userConsentDisplayName": "Access anomaly on your behalf",
+      "userConsentDescription": "Call the anomaly API as you." } ] },
+  "optionalClaims": {
+    "idToken":     [ {"name": "email"}, {"name": "preferred_username"} ],
+    "accessToken": [ {"name": "email"}, {"name": "preferred_username"} ],
+    "saml2Token":  [] }
+}
+JSON
+)"
+
+# 2. Pre-authorize the app against its own scope — the scope has to exist
+#    first, which is why this is a second call. Without it the first sign-in
+#    stops at a consent prompt for a permission the app grants itself.
+az rest --method PATCH \
+  --uri "https://graph.microsoft.com/v1.0/applications/$OID" \
+  --headers "Content-Type=application/json" \
+  --body "{\"api\": {\"requestedAccessTokenVersion\": 2,
+    \"oauth2PermissionScopes\": [{\"id\": \"$SCOPEID\", \"value\": \"access_as_user\",
+      \"type\": \"User\", \"isEnabled\": true,
+      \"adminConsentDisplayName\": \"Access anomaly as the signed-in user\",
+      \"adminConsentDescription\": \"Call the anomaly API as the signed-in user.\",
+      \"userConsentDisplayName\": \"Access anomaly on your behalf\",
+      \"userConsentDescription\": \"Call the anomaly API as you.\"}],
+    \"preAuthorizedApplications\": [{\"appId\": \"$APPID\",
+      \"delegatedPermissionIds\": [\"$SCOPEID\"]}]}}"
+
+# 3. A service principal is what makes the app signable-into in this tenant.
+az ad sp create --id "$APPID"
+```
+
+Two steps there bite:
+
+- **`requestedAccessTokenVersion: 2`.** A v1 access token is signed by
+  `sts.windows.net`, not by the issuer discovery advertises, so it fails the
+  issuer check for no visible reason.
+- **`preAuthorizedApplications` needs the scope to already exist**, hence two
+  PATCHes. A single one fails with *"has a Permission Id that cannot be found
+  in the AppPermissions sets"*.
+
+Sanity-check the registration without a browser by building the authorize URL
+the dashboard would and fetching it: a real sign-in page means the client id,
+redirect URI, scope and PKCE all check out; an `AADSTS…` code in the body names
+what does not.
+
+### Rolling it out without losing data
+
+1. **Deploy in `simple` mode.** Nothing changes.
+2. **Switch to `oidc`** with the issuer, client id and owner tenant. Sign in —
+   you are the first subject, so you are your organization's admin. Models
+   that predate this are unclaimed; adopt them from `/admin.html`.
+3. **Issue an API key** for each producer that cannot sign in, and switch them
+   over. `auth.open_ingest = true` keeps them writing in the meantime, into the
+   `public` organization.
+4. **Close the window.** `open_ingest = false` once every producer carries a
+   key.
+
+### API keys
+
+For machines that cannot do an interactive sign-in. A key authenticates as the
+**organization** and carries a capability of its own, so it keeps working when
+the person who issued it is forgotten.
+
+An **ingest** key — the default, and what a producer wants — may put data in:
+send points, import a file, and bring a model into being by doing either. The
+first point for a new sensor defines a new model, and requiring an
+administrator's credential to report a reading would be the opposite of least
+privilege. It may do nothing else: not retrain, not reset, not delete what it
+feeds, not edit metadata, not learn that another key exists.
+
+An **admin** key can do everything an administrator can. Only issue one when
+something genuinely has to manage the organization unattended.
+
+```
+$ curl -H 'Authorization: Bearer anok_<id>_<secret>' https://…/models/dynamic
+$ curl -H 'X-API-Key: anok_<id>_<secret>'            https://…/detect/boiler -d '{…}'
+```
+
+Keys are stored as a SHA-256 of the secret: the plaintext exists once, in the
+response that creates it. An admin can revoke anyone's; a viewer only their
+own. Revocation takes effect on the next request.
+
+### The dashboard
+
+`static/auth.js` does the authorization-code flow with PKCE in the browser and
+wraps `fetch` once, so each page calls the API exactly as it did before
+authentication existed — what a page must do is `await Auth.ready()` before its
+first request. `/admin.html` is where an organization's keys, users and models
+are managed, and where the owner tenant approves organizations.
+
 ## CLI
 
 ```
@@ -205,6 +556,15 @@ command with `--store DIR`.
 | `PUT /models/dynamic/<m>/metadata` | edit the schedule and the per-version configs (see below) |
 | `GET /models/dynamic/<m>/data?limit=N\|all` | recent raw points |
 | `GET /models/dynamic/<m>/anomalies` | re-score the stored ring, cached (see below) |
+| `POST /models/dynamic/<m>/claim` | adopt an unclaimed model into your organization |
+| `POST /models/dynamic/<m>/import?format=` | import a CSV/JSON/JSONL file of history |
+| `DELETE /api/me` | delete your account (right to be forgotten) |
+| `GET\|PUT /api/tenants[/<tid>]` | approve organizations (owner tenant) |
+| `GET /api/orgs`, `GET\|PUT\|DELETE /api/orgs/<org>/users[/<sub>[/role]]` | administer any organization (owner tenant) |
+| `GET /api/auth/config` | what a browser needs to start a sign-in (public) |
+| `GET /api/me` | the caller's identity, organization and role |
+| `GET\|PUT /api/org/users[/<sub>/role]` | the organization's roster (admin) |
+| `GET\|POST /api/org/keys`, `DELETE /api/org/keys/<id>` | API keys |
 | `POST /models/dynamic/<m>/reset` | drop data + forests, keep the name |
 | `DELETE\|GET /delete_model/<m>` | delete entirely |
 | `PUT /api/dynamic/<m>/schedule` | `{"below_max_retrain_frequency": .., "at_max_retrain_frequency": ..}` |
@@ -275,8 +635,9 @@ build step — plain HTML/CSS/JS that talks to the routes above):
 | Page | What it does |
 | --- | --- |
 | `/` · `/modelmanager.html` | list models, train / finetune / reset / delete, toggle versions and retune their margins, train the autoencoder, edit the retrain schedule — or, under *Advanced*, the whole editable metadata, as a generated field form or as raw JSON |
-| `/modeltrainer.html` | feed points (`/detect`) one at a time or in bulk (paste JSON lines / generate synthetic), force-train |
+| `/modeltrainer.html` | import a CSV/JSON/JSONL file of history; feed points (`/detect`) one at a time or in bulk; force-train |
 | `/visualize.html` | plot any numeric feature of a model's stored points over time |
+| `/admin.html` | the organization: users and their roles, API keys, model ownership |
 | `/anomalies.html` | scan stored history over a time range: score timeline, a per-version ribbon showing *what* flagged *when*, any feature's own trace for context, and a table naming the features whose relationship broke. Filter chips isolate the joint (autoencoder) anomalies from the per-feature (forest) ones |
 
 The HTML lives in `static/` next to the package. `serve` locates it via, in
@@ -347,9 +708,15 @@ Deliberate, all documented in the code:
 
 ## Tests
 
-`./tests/anomaly_test.sh` builds and runs the unit suites (280+ checks:
+`./tests/anomaly_test.sh` builds and runs the unit suites (430+ checks:
 preprocessing golden vectors, sklearn-parity decision maths, bit-exact
 blob round-trips, corrupt-file rejection, streaming mechanics, window
-routing, fine-tune, all HTTP routes, GPU/CPU-backend bit-parity), a CLI
-end-to-end pass, and a live served-over-curl smoke test. The whole suite is AddressSanitizer /
+routing, fine-tune, all HTTP routes, organizations, roles, model ownership and API keys,
+configuration layering (flag over environment over file),
+CSV/JSON/JSONL import and its timestamp ordering,
+GPU/CPU-backend bit-parity), a CLI
+end-to-end pass, a live served-over-curl smoke test, and
+`tests/authflow_test.sh` — the whole authentication path over a socket
+against `oauth`'s own signing test provider, including every deliberately
+broken token it can mint being refused. The whole suite is AddressSanitizer /
 LeakSanitizer-clean (`NURL_SAN=1 ./tests/anomaly_test.sh`).
