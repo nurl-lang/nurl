@@ -6,16 +6,15 @@
 // known-missing command for the error path. Stdin is closed before the
 // reader loop so `cat` exits cleanly with status 0.
 //
-// `cat` is also why this one stops at the platform line: whether it
-// resolves on a Windows runner is a property of that runner's PATH, not
-// of the spawn backend, so the test says so and stops rather than
-// golden-ing someone's Git-for-Windows install. The Win32 duplex
-// backend is covered by process_spawn_self.nu, whose child is the test
-// binary itself.
+// It runs on Windows too — the runner's PATH carries Git-for-Windows'
+// `cat`, and the corpus proves it by producing this exact golden there.
+// Should that ever stop being true the failure is a loud diff, not a
+// silent gap: the Win32 duplex backend is covered independently by
+// process_spawn_self.nu, whose child is the test binary itself and
+// needs no platform tools at all.
 
 $ `stdlib/std/process.nu`
 $ `stdlib/core/string.nu`
-$ `stdlib/ext/env.nu`
 
 @ println s line → v {
     ( nurl_print line )
@@ -46,19 +45,7 @@ $ `stdlib/ext/env.nu`
     }
 }
 
-// Windows always exports OS=Windows_NT; nothing else does.
-@ is_windows → b {
-    : ~ b w F
-    ?? ( env_get `OS` ) {
-        T e → { = w ( nurl_str_eq ( string_data e ) `Windows_NT` ) ( string_free e ) }
-        F → {}
-    }
-    ^ w
-}
-
 @ main → i {
-    ? ( is_windows ) { ( println `skip=needs-posix-tools` ) ^ 0 } {}
-
     // ── 1. Spawn `cat`, round-trip 3 lines through the duplex pipes. ──
     : !ProcChild ProcessErr r1 ( process_spawn0 `cat` )
     ?? r1 {

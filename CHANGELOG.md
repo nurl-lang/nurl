@@ -35,13 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — the Win32 twin of the POSIX close/SIGTERM/SIGKILL sequence.
   `proc_read_chunk` stays POSIX-only, as documented.
 
-  The stub had a green test corpus: `process_spawn_basic` and
-  `process_pipes` drive `cat` and `sort`, and their Windows goldens
-  RECORDED the stub — `cat-spawn-failed=ProcessOther` was the expected
-  output. Both now say on Windows why they stop there, and the new
+  The stub had a green test corpus. `process_spawn_basic`,
+  `process_pipes` and `mcp_stdio_basic` drive `cat`, `sort` and `false`,
+  and their Windows goldens RECORDED the stub —
+  `cat-spawn-failed=ProcessOther` and `cat_spawn_err=McpStdioOther` were
+  the EXPECTED outputs. Three permanently green tests for a backend that
+  did not exist. Two of them now produce their POSIX golden on Windows
+  unchanged, MCP JSON-RPC round-trip included; `process_pipes` says why
+  it stops (`proc_read_chunk` is POSIX-only). And the new
   `process_spawn_self` covers the duplex API on every platform with a
-  child that needs no platform tools: the test binary re-executed with a
-  marker argument. One golden, all hosts, no `cat`.
+  child that needs no platform tools at all: the test binary re-executed
+  with a marker argument. One golden, all hosts, no `cat`.
 
 - **Windows `setenv` now writes the process environment block too**
   (`SetEnvironmentVariableA` alongside `_putenv_s`). `CreateProcess`

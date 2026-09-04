@@ -1,7 +1,0 @@
-COMPILE OK
-LINK OK
-EXIT 0
-OUTPUT
-cat_spawn_err=McpStdioOther
-missing=McpStdioOther
-false_spawn=McpStdioOther
