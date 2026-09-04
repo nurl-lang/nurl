@@ -57,9 +57,13 @@
 //
 //   * POSIX backend uses fork + execvp + poll(2) to multiplex
 //     stdout/stderr drain — no deadlock on long output streams.
-//   * Win32 backend uses CreateProcess + reader threads. `cmd` is
-//     looked up via the standard PATH search; pass an absolute path
-//     when in doubt.
+//   * Win32 `process_run` uses CreateProcess + reader threads; the
+//     duplex `process_spawn` family uses CreateProcess with an
+//     OVERLAPPED named pipe for the child's stdout, which is what
+//     makes `proc_read_line`'s timeout honourable there (an anonymous
+//     pipe cannot be read with one). Both live in stdlib/runtime.c
+//     §16/§16b. `cmd` is looked up via the standard PATH search; pass
+//     an absolute path when in doubt.
 //   * wasm32-wasi: every call returns ProcessOther.
 //
 // MVP scope — explicitly left for a follow-up:

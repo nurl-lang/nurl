@@ -8,6 +8,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`nurl upgrade` on Windows** — it could never have worked. The
+  upgrade spawns the installer bundled at `<prefix>\libexec\get-nurl.ps1`
+  and streams its output, and the duplex-stdio spawn backend it uses
+  (`process_spawn` / `proc_read_line` / `proc_wait`) was a Win32 stub
+  that set `err_kind = ProcessOther` before it tried anything. Every
+  Windows user got the same three lines — `resolving the latest
+  release…`, `upgrading v0.5x.0 → v0.60.0`, `could not run the
+  installer: ProcessOther` — with the toolchain untouched. So Windows
+  had a `nurl upgrade` command that only ever printed how far it got.
+
+  The backend is now real: `CreateProcess`, an anonymous pipe for the
+  child's stdin, and — the part that decides the design — an OVERLAPPED
+  NAMED pipe for the child's stdout. An anonymous pipe cannot be read
+  with a timeout on Windows at all (`ReadFile` blocks; anonymous pipes
+  reject `FILE_FLAG_OVERLAPPED`), and `proc_read_line timeout_ms` is a
+  contract this API has to keep, so one read is kept in flight across
+  calls: a timeout leaves it pending instead of cancelling it, and the
+  next call waits on the same read. Bytes cannot be lost by a timeout,
+  and nothing is cancelled on the hot path. CRLF is stripped alongside
+  LF, `proc_kill p sig` terminates with the status POSIX would report
+  for that signal (`128 + sig`), so `proc_wait` agrees across platforms,
+  and `proc_free` closes stdin, gives the child 500 ms, then terminates
+  — the Win32 twin of the POSIX close/SIGTERM/SIGKILL sequence.
+  `proc_read_chunk` stays POSIX-only, as documented.
+
+  The stub had a green test corpus: `process_spawn_basic` and
+  `process_pipes` drive `cat` and `sort`, and their Windows goldens
+  RECORDED the stub — `cat-spawn-failed=ProcessOther` was the expected
+  output. Both now say on Windows why they stop there, and the new
+  `process_spawn_self` covers the duplex API on every platform with a
+  child that needs no platform tools: the test binary re-executed with a
+  marker argument. One golden, all hosts, no `cat`.
+
+- **Windows `setenv` now writes the process environment block too**
+  (`SetEnvironmentVariableA` alongside `_putenv_s`). `CreateProcess`
+  hands a child the process block, not the CRT's copy of it, and
+  `nurl upgrade` exports `NURL_NO_MODIFY_PATH=1` precisely so the
+  installer it spawns does not stop to ask about PATH.
+
 ## [0.60.0] — 2026-09-04
 
 ### Added

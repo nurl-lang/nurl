@@ -18,6 +18,7 @@
 $ `stdlib/std/process.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/ext/env.nu`
 
 @ str_to_vec s in → ( Vec u ) {
     : i n ( nurl_str_len in )
@@ -70,7 +71,21 @@ $ `stdlib/core/vec.nu`
     ^ got
 }
 
+// Windows always exports OS=Windows_NT; nothing else does.
+@ is_windows → b {
+    : ~ b w F
+    ?? ( env_get `OS` ) {
+        T e → { = w ( nurl_str_eq ( string_data e ) `Windows_NT` ) ( string_free e ) }
+        F → {}
+    }
+    ^ w
+}
+
 @ main → i {
+    // proc_read_chunk is the POSIX-only half of the duplex API (Win32
+    // returns ProcessOther), and both children here are POSIX tools.
+    ? ( is_windows ) { ( println `skip=posix-only-read-chunk` ) ^ 0 } {}
+
     // ── 1. cat: two round-trips on a LIVE child (proves streaming). ──
     : !ProcChild ProcessErr r1 ( process_spawn0 `cat` )
     ?? r1 {

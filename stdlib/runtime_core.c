@@ -236,21 +236,34 @@ int madvise(void *addr, size_t length, int advice) {
     return 0;
 }
 
-/* setenv / unsetenv via Win32 _putenv_s. */
+/* setenv / unsetenv via Win32 _putenv_s.
+ *
+ * _putenv_s updates the CRT's copy of the environment, which is what
+ * getenv reads back. SetEnvironmentVariableA updates the PROCESS
+ * environment block, which is what CreateProcess hands to a child when
+ * lpEnvironment is NULL — and that is the half `nurl upgrade` depends
+ * on (it exports NURL_NO_MODIFY_PATH so the bundled installer never
+ * stops to ask about PATH). Every CRT in use here keeps the two in
+ * sync on its own, but the sync is an implementation detail of the CRT
+ * and the child's behaviour is not: write both, explicitly. */
 int setenv(const char *name, const char *value, int overwrite) {
     (void)overwrite;
     if (!name || !*name || strchr(name, '=')) {
         errno = EINVAL;
         return -1;
     }
-    return _putenv_s(name, value ? value : "") == 0 ? 0 : -1;
+    if (_putenv_s(name, value ? value : "") != 0) return -1;
+    SetEnvironmentVariableA(name, value ? value : "");
+    return 0;
 }
 int unsetenv(const char *name) {
     if (!name || !*name || strchr(name, '=')) {
         errno = EINVAL;
         return -1;
     }
-    return _putenv_s(name, "") == 0 ? 0 : -1;
+    if (_putenv_s(name, "") != 0) return -1;
+    SetEnvironmentVariableA(name, NULL);
+    return 0;
 }
 
 /* nurl_dirent_name — Windows dir-list uses `FindFirstFileA` /

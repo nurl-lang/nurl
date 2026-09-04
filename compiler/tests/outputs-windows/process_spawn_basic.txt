@@ -2,6 +2,4 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-cat-spawn-failed=ProcessOther
-missing_err=ProcessOther
-timeout-spawn-failed
+skip=needs-posix-tools
