@@ -139,7 +139,8 @@ $ `stdlib/ext/http3_server.nu`
 // grow ordering questions faster than they earn them, and a chain is
 // already expressible by composing inside the one closure.
 //
-// The wrapper and the closure it returns must outlive `http_app_listen`.
+// The wrapper must outlive `http_app_listen` and is yours to free; the
+// handler it RETURNS is freed by the facade with its own layers.
 @ http_app_use * HttpApp a ( @ ( @ HttpResponse HttpRequest ) ( @ HttpResponse HttpRequest ) ) f → v {
     ( vec_clear [HttpMiddleware] . a mw )
     ( vec_push [HttpMiddleware] . a mw @ HttpMiddleware { f } )
@@ -479,6 +480,9 @@ $ `stdlib/ext/http3_server.nu`
     ? != # i h3_creds 0 { ( quic_creds_free h3_creds ) } {}
     ? != # i . h3_sock raw 0 { ( udp_close h3_sock ) } {}
     ? has_log { ( nurl_free # s # *u logw 1 ) } {}
+    // The handler the user middleware RETURNED is the facade's to free —
+    // the wrapper itself belongs to whoever called http_app_use.
+    ? has_user { ( nurl_free # s # *u userw 1 ) } {}
     ? has_cors { ( nurl_free # s # *u corsw 1 ) } {}
     ( nurl_free # s # *u disp 1 )
     ^ rc

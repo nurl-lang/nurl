@@ -488,6 +488,24 @@ $ `stdlib/ext/json.nu`
     } {}
 }
 
+// A property whose value must be one of a fixed set. `values` is
+// CONSUMED — a Json array of strings, e.g. built with json_arr_push.
+// A closed set belongs in the schema rather than in prose: a client
+// that reads it can offer the choices, and one that does not at least
+// fails the call instead of the build.
+@ mcp_schema_prop_enum Json schema s name s ty s desc Json values b required → v {
+    ( mcp_schema_prop schema name ty desc required )
+    ?? ( json_obj_get schema `properties` ) {
+        T props → {
+            ?? ( json_obj_get props name ) {
+                T p → { ( json_obj_set p `enum` values ) }
+                F _ → { ( json_free values ) }
+            }
+        }
+        F _ → { ( json_free values ) }
+    }
+}
+
 // The one-property case, which is most tools: `mcp_schema_of1 \`text\`
 // \`string\` \`Text to echo\` T`.
 @ mcp_schema_of1 s name s ty s desc b required → Json {
