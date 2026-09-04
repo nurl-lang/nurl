@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-09-03 · Current release: **0.59.0** · Language: **Grammar
+_Last reviewed: 2026-09-04 · Current release: **0.60.0** · Language: **Grammar
 v2.7** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -254,8 +254,10 @@ platform-specific shims.
 - **ext/data services** — `sqlite` (production-hardened), `mqtt` 5.0 client,
   `smtp` (mail submission). Postgres and Redis clients live in the registry
   packages `psql` and `redis` (pure NURL — no libpq, no hiredis).
-- **ext/AI & agents** — `mcp` (+ `client`, `http`, `session`, `stdio`,
-  `registry`, and since 0.40.0 `tasks` — the
+- **ext/AI & agents** — `mcp` (+ `server` — the one server framework, on
+  which every MCP server in the tree is built since 0.60.0, with its wire
+  frozen by `compiler/tests/mcp_server_contract.nu`; `client`, `http`,
+  `session`, `stdio`, `search`, and since 0.40.0 `tasks` — the
   `io.modelcontextprotocol/tasks` extension, so a long-running
   `tools/call` returns a pollable task handle instead of holding a
   JSON-RPC response open) and `anthropic` (Claude Messages API incl.

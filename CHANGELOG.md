@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.60.0] — 2026-09-04
+
 ### Added
 
 - **`nurlapi` is on both facades** — the playground/API's MCP surface
@@ -48,16 +50,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outside it, so preflights and the access log still see the requests a
   gate holds.
 
-- **nurlc: a closure type whose RETURN is a closure** — the middleware
-  shape. Both helpers that read a function type's parameter list took
-  the FIRST `(` in the LLVM string, which is the parameter list's until
-  the return type is itself a function type and brings its own. So a
-  `( @ ( @ i i ) ( @ i i ) )` had its arity and its parameter types read
-  off its own return value, and calling it was rejected as passing a
-  closure where an `i` was declared — a correct program, refused with a
-  message describing a type nobody wrote.
-  `compiler/tests/closure_type_nested.nu`.
-
 - **`ext/mcp_server.nu`: resource templates** —
   `mcp_server_add_resource_template srv \`nurl://stdlib/{path}\` …`
   registers a FAMILY of resources and answers the spec's
@@ -78,6 +70,162 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public server whose tool surface is fixed at build time, where a
   60-second private TTL costs every client a re-listing a minute for a
   list that cannot change. `nurlapi` sets an hour, public.
+
+- **nurlc warns when a field store to a by-value struct parameter is
+  lost** — `= . p field v` inside `@ f T p → R` compiles, runs, and
+  writes to the callee's own copy; the caller never sees it. Value
+  semantics are intentional (`compiler/tests/function_param_mut.nu`
+  pins them) but invisible, and the same struct propagates mutations
+  made *through* its handle-typed fields — `( vec_push . p items x )`
+  IS seen by the caller — so a scalar field sitting beside a Vec field
+  looks like it behaves the same way and does not. This is the
+  parameter-context sibling of the by-value *closure capture* warning
+  nurlc already emitted, and generalising it that one context over
+  found three live bugs in `ext/mqtt.nu` (below) on the first sweep.
+  Not raised for the modify-a-copy-and-return-it idiom (`@ f T x → T`,
+  `→ !T E`, `→ ?T`), where the write reaches the caller through the
+  return value, nor where the store is already a hard error for want of
+  storage. `compiler/tests/should_warn_byval_param_field_store.nu`.
+
+- **`compiler/tests/mcp_server_contract.nu`: the MCP wire, frozen** —
+  the other MCP tests assert that a field holds the value they expect;
+  this one prints the exact bytes of every response the server can
+  produce and its golden freezes them. A refactor that renames a key,
+  reorders an object, drops `resultType`, changes a cache TTL or moves
+  an error code fails in CI rather than in someone's client. It pins
+  the handshake and `server/discover`, the version gate's -32022 with
+  `data.supported`, `_meta` serverInfo present on a modern request and
+  absent on a legacy one, tools/list with annotations and built
+  schemas, tools/call including a PANICKING handler (which must become
+  one error envelope, not a dead process), prompts, resources,
+  completion, every error code the dispatcher emits, and a
+  notification producing no response at all.
+
+- **`ext/mcp_server.nu` grows the four things the hand-rolled servers
+  had and it did not** — which is a large part of why they were
+  hand-rolled. `mcp_server_add_tool_full` carries ToolAnnotations (an
+  ABSENT `destructiveHint` defaults to TRUE in the spec, so an
+  unannotated read-only tool is presented as if it could destroy
+  state); `mcp_server_set_instructions` fills the `instructions`
+  channel on `server/discover` and the handshake result;
+  `mcp_server_set_task_store` turns on tasks/get, tasks/update and
+  tasks/cancel and is what declares the extension — a server without a
+  store answers method-not-found, which is the honest answer — with a
+  pre-dispatch hook for a server whose task state is only current after
+  it polls something; and `mcp_server_add_tool_ctx` hands a handler an
+  `McpCall` beside its arguments, so it can see what the client
+  declared on THIS request without widening the frozen handler type.
+  `mcp_server_dispatch` accordingly takes the whole request.
+  `mcp_server_serve_http srv host port token` is the HTTP main() in one
+  line, bearer auth included.
+  `compiler/tests/mcp_server_capabilities.nu`.
+
+- **`mcp_schema_obj` / `_prop` / `_of1` / `_empty` in `ext/mcp.nu`** —
+  a tool's inputSchema ran seven lines of `json_obj_set` per property,
+  and every MCP server in the tree had grown its own private `prop`
+  helper doing exactly that.
+
+- **`examples/mcp_echo_server.nu` and `…_http.nu` are written on the
+  facade** — 209 and 199 lines of hand-rolled JSON-RPC become 75 and 69
+  of mostly comments, and the two differ only in their last call. This
+  matters more than it looks: the example is what gets copied, and
+  `packages/nurl-mcp`'s dispatch still carries a `// shape from
+  examples/mcp_echo_server_http.nu` comment. It was teaching the wrong
+  thing, including to servers that then drifted from it.
+
+- **HTTP/3 client, and `packages/http-client` speaks it** —
+  `ext/http3_client.nu` is the client half of RFC 9114 over the QUIC
+  client (`h3_client_connect` / `h3_client_request`: control and QPACK
+  streams, a request per bidirectional stream, 1xx skipped, trailers
+  accepted, GOAWAY and stream refusals reported by code). The facade
+  moves an origin onto QUIC once a response advertises
+  `Alt-Svc: h3=":port"` (parsed and cached per origin with its `ma`),
+  or straight away with `http_client_set_h3 c 1`; a QUIC attempt that
+  fails falls back to TCP for that origin, and `http_client_last_proto`
+  reports 3. `packages/http-client` 0.2.0; `examples/fetch.nu --h3`.
+  `fetch --h3 https://cloudflare-quic.com/`, google and quic.nginx.org
+  answer `HTTP/3 (post-quantum) — status 200`. The package suite grows
+  to 25 checks (Alt-Svc switch, QUIC-first, cookies / gzip / redirects /
+  POST over h3, fall-back when no UDP listener answers);
+  `compiler/tests/http3_client_server.nu` drives the client against
+  `ext/http3_server.nu` in-process.
+
+- **`packages/http-client` — the unified HTTP *client* facade, the
+  mirror of `packages/http`.** One `HttpClient` fetches over whichever
+  protocol the server offers — HTTP/2 or HTTP/1.1 chosen by ALPN — with
+  post-quantum TLS (X25519MLKEM768 + ML-DSA chains) used automatically,
+  per-origin connection pooling and TLS-session resumption, redirect
+  following (303 / POST→GET downgrade, RFC 3986 §5.2 relative
+  resolution), a wired-in RFC 6265 cookie jar, and transparent
+  gzip/deflate decoding with a decompression-bomb cap. `http_client_get`
+  / `_post` / `_request`, a unified `HttpResponse` + `HttpClientErr`, and
+  `http_client_last_proto` / `_last_pq` evidence. The stdlib gained the
+  primitives a package cannot: an ALPN **preference list** in the TLS
+  client (`tls_connect_full` / `tcp_connect_tls_full`, the negotiated
+  protocol validated to be one offered — RFC 7301 §3.2), and HTTP/1.1
+  keep-alive with honoured read/write deadlines, a body cap, interim-1xx
+  skipping, chunked-trailer consumption and `Connection`-aware pooling
+  in `http_pure.nu` (`hp_stream_open_on` / `hp_stream_release`).
+
+### Changed
+
+- **Every MCP server in the tree is on `ext/mcp_server.nu`** —
+  `packages/nurl-mcp` 0.13.0, `packages/swarm-mcp` 0.29.0 and
+  `packages/mermaid-server` 0.2.0. Three hand-rolled JSON-RPC
+  dispatchers (866 lines) become registrations. They were one design
+  copied three times: nurl-mcp's and swarm-mcp's `handle_ping` and
+  `handle_tools_list` were byte-identical, and nurl-mcp's own comment
+  said its shape came from `examples/mcp_echo_server_http.nu`. Each copy
+  had drifted somewhere the others had not — mermaid-server implemented
+  neither `server/discover` (mandatory since 2026-07-28) nor the version
+  gate, nurl-mcp compared its bearer token with a byte-at-a-time
+  `nurl_str_eq` where the stdlib's is constant-time, swarm-mcp's
+  handshake version had frozen at 0.20.0, and none of the three isolated
+  a panicking tool handler, which over stdio is the whole server. All
+  fifteen swarm tools, eleven nurl-mcp tools and three mermaid tools now
+  carry annotations; every server has `instructions`; swarm-mcp's task
+  eligibility is expressed by which tools register with
+  `mcp_server_add_tool_ctx` rather than a name list kept in sync by
+  hand.
+
+- **`ext/mcp_registry.nu` is now `ext/mcp_server.nu`** — the module you
+  reach for to *write* an MCP server was named after an implementation
+  detail, and "registry" is already the package registry in this repo,
+  so the name read as "a registry of MCP servers". Nobody found it: it
+  had both transports, dual-era dispatch, `recover` around every
+  handler and constant-time bearer auth, yet `packages/nurl-mcp`,
+  `packages/swarm-mcp` and `packages/mermaid-server` each hand-rolled
+  their own JSON-RPC dispatch instead, and the copies had already
+  drifted apart. Renamed with its API — `mcp_server_new / _add_tool /
+  _add_prompt / _add_resource / _add_completion / _dispatch / _envelope
+  / _free`, `mcp_server_serve_stdio`, `mcp_server_http_dispatch`,
+  `McpServer`, `McpServerErr`, `mcp_server_err_name` — so that a grep
+  for "mcp server" lands on it. The module header now carries the map
+  of the whole `mcp*.nu` family (which module is client, which is
+  server, which is transport) and a STABLE SURFACE section stating what
+  is public and what may move. Also fixed: the header pointed at
+  `ext/mcp_stdio_server.nu`, a file that has never existed, sending
+  anyone who followed it to `mcp_stdio.nu` — the stdio *client*.
+
+- **The TLS 1.3 client handshake is a message-level machine, `CliHs`
+  (`std/tls.nu`)** — the split the server got in `SrvHs` for HTTP/3:
+  whole handshake messages go in (`_cli_hs_server_hello`,
+  `_cli_hs_message`), the ClientHello and client Finished come out
+  (`out_ch`, `out_fin`), the traffic secrets are read straight off the
+  machine, and a driver may add a ClientHello extension and require one
+  back in EncryptedExtensions (`_cli_hs_set_ext` — how QUIC will carry
+  `quic_transport_parameters`). `__tls_handshake` is now the record
+  layer around it: same bytes on the wire (h2spec 146/146, every tls_*
+  and http2 test unchanged, `packages/http-client` 14/14, example.org
+  over HTTP/2 + X25519MLKEM768), with the transcript hashed
+  incrementally and snapshotted at the checkpoints instead of
+  re-hashed from scratch five times. Handshake failures the client
+  detects are now said with the matching alert (illegal_parameter,
+  decrypt_error, missing_extension, …) before the close, not only
+  no_application_protocol; a server flight carrying a hello, ticket,
+  EndOfEarlyData or KeyUpdate before the Finished is refused as
+  unexpected_message. The TLS 1.2 fallback is unchanged (hands over
+  after the ServerHello, verified against `openssl s_server -tls1_2`).
 
 ### Fixed
 
@@ -159,6 +307,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file breaking an unrelated function in another.
   `compiler/tests/param_shadows_fn.nu`.
 
+- **nurlc: a closure type whose RETURN is a closure** — the middleware
+  shape. Both helpers that read a function type's parameter list took
+  the FIRST `(` in the LLVM string, which is the parameter list's until
+  the return type is itself a function type and brings its own. So a
+  `( @ ( @ i i ) ( @ i i ) )` had its arity and its parameter types read
+  off its own return value, and calling it was rejected as passing a
+  closure where an `i` was declared — a correct program, refused with a
+  message describing a type nobody wrote.
+  `compiler/tests/closure_type_nested.nu`.
+
 - **One closure type, one spelling** — `parse_type` spelled an
   annotated closure type `{ R (i8*, P…)*, i8* }` and the closure-literal
   codegen spelled the identical type `{ R(i8*, P…)*, i8* }`. nurlc
@@ -193,131 +351,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   three-scalar struct with no control block to share — call it as
   `( mqtt_reconnect inout cl host port cfg )` over a `: ~` binding.
   `compiler/tests/mqtt_client_state.nu`.
-
-### Added
-
-- **nurlc warns when a field store to a by-value struct parameter is
-  lost** — `= . p field v` inside `@ f T p → R` compiles, runs, and
-  writes to the callee's own copy; the caller never sees it. Value
-  semantics are intentional (`compiler/tests/function_param_mut.nu`
-  pins them) but invisible, and the same struct propagates mutations
-  made *through* its handle-typed fields — `( vec_push . p items x )`
-  IS seen by the caller — so a scalar field sitting beside a Vec field
-  looks like it behaves the same way and does not. This is the
-  parameter-context sibling of the by-value *closure capture* warning
-  nurlc already emitted, and generalising it that one context over
-  found three live bugs in `ext/mqtt.nu` (below) on the first sweep.
-  Not raised for the modify-a-copy-and-return-it idiom (`@ f T x → T`,
-  `→ !T E`, `→ ?T`), where the write reaches the caller through the
-  return value, nor where the store is already a hard error for want of
-  storage. `compiler/tests/should_warn_byval_param_field_store.nu`.
-
-- **`compiler/tests/mcp_server_contract.nu`: the MCP wire, frozen** —
-  the other MCP tests assert that a field holds the value they expect;
-  this one prints the exact bytes of every response the server can
-  produce and its golden freezes them. A refactor that renames a key,
-  reorders an object, drops `resultType`, changes a cache TTL or moves
-  an error code fails in CI rather than in someone's client. It pins
-  the handshake and `server/discover`, the version gate's -32022 with
-  `data.supported`, `_meta` serverInfo present on a modern request and
-  absent on a legacy one, tools/list with annotations and built
-  schemas, tools/call including a PANICKING handler (which must become
-  one error envelope, not a dead process), prompts, resources,
-  completion, every error code the dispatcher emits, and a
-  notification producing no response at all.
-
-- **`ext/mcp_server.nu` grows the four things the hand-rolled servers
-  had and it did not** — which is a large part of why they were
-  hand-rolled. `mcp_server_add_tool_full` carries ToolAnnotations (an
-  ABSENT `destructiveHint` defaults to TRUE in the spec, so an
-  unannotated read-only tool is presented as if it could destroy
-  state); `mcp_server_set_instructions` fills the `instructions`
-  channel on `server/discover` and the handshake result;
-  `mcp_server_set_task_store` turns on tasks/get, tasks/update and
-  tasks/cancel and is what declares the extension — a server without a
-  store answers method-not-found, which is the honest answer — with a
-  pre-dispatch hook for a server whose task state is only current after
-  it polls something; and `mcp_server_add_tool_ctx` hands a handler an
-  `McpCall` beside its arguments, so it can see what the client
-  declared on THIS request without widening the frozen handler type.
-  `mcp_server_dispatch` accordingly takes the whole request.
-  `mcp_server_serve_http srv host port token` is the HTTP main() in one
-  line, bearer auth included.
-  `compiler/tests/mcp_server_capabilities.nu`.
-
-- **`mcp_schema_obj` / `_prop` / `_of1` / `_empty` in `ext/mcp.nu`** —
-  a tool's inputSchema ran seven lines of `json_obj_set` per property,
-  and every MCP server in the tree had grown its own private `prop`
-  helper doing exactly that.
-
-- **`examples/mcp_echo_server.nu` and `…_http.nu` are written on the
-  facade** — 209 and 199 lines of hand-rolled JSON-RPC become 75 and 69
-  of mostly comments, and the two differ only in their last call. This
-  matters more than it looks: the example is what gets copied, and
-  `packages/nurl-mcp`'s dispatch still carries a `// shape from
-  examples/mcp_echo_server_http.nu` comment. It was teaching the wrong
-  thing, including to servers that then drifted from it.
-
-### Changed
-
-- **Every MCP server in the tree is on `ext/mcp_server.nu`** —
-  `packages/nurl-mcp` 0.13.0, `packages/swarm-mcp` 0.29.0 and
-  `packages/mermaid-server` 0.2.0. Three hand-rolled JSON-RPC
-  dispatchers (866 lines) become registrations. They were one design
-  copied three times: nurl-mcp's and swarm-mcp's `handle_ping` and
-  `handle_tools_list` were byte-identical, and nurl-mcp's own comment
-  said its shape came from `examples/mcp_echo_server_http.nu`. Each copy
-  had drifted somewhere the others had not — mermaid-server implemented
-  neither `server/discover` (mandatory since 2026-07-28) nor the version
-  gate, nurl-mcp compared its bearer token with a byte-at-a-time
-  `nurl_str_eq` where the stdlib's is constant-time, swarm-mcp's
-  handshake version had frozen at 0.20.0, and none of the three isolated
-  a panicking tool handler, which over stdio is the whole server. All
-  fifteen swarm tools, eleven nurl-mcp tools and three mermaid tools now
-  carry annotations; every server has `instructions`; swarm-mcp's task
-  eligibility is expressed by which tools register with
-  `mcp_server_add_tool_ctx` rather than a name list kept in sync by
-  hand.
-
-- **`ext/mcp_registry.nu` is now `ext/mcp_server.nu`** — the module you
-  reach for to *write* an MCP server was named after an implementation
-  detail, and "registry" is already the package registry in this repo,
-  so the name read as "a registry of MCP servers". Nobody found it: it
-  had both transports, dual-era dispatch, `recover` around every
-  handler and constant-time bearer auth, yet `packages/nurl-mcp`,
-  `packages/swarm-mcp` and `packages/mermaid-server` each hand-rolled
-  their own JSON-RPC dispatch instead, and the copies had already
-  drifted apart. Renamed with its API — `mcp_server_new / _add_tool /
-  _add_prompt / _add_resource / _add_completion / _dispatch / _envelope
-  / _free`, `mcp_server_serve_stdio`, `mcp_server_http_dispatch`,
-  `McpServer`, `McpServerErr`, `mcp_server_err_name` — so that a grep
-  for "mcp server" lands on it. The module header now carries the map
-  of the whole `mcp*.nu` family (which module is client, which is
-  server, which is transport) and a STABLE SURFACE section stating what
-  is public and what may move. Also fixed: the header pointed at
-  `ext/mcp_stdio_server.nu`, a file that has never existed, sending
-  anyone who followed it to `mcp_stdio.nu` — the stdio *client*.
-
-### Added
-
-- **HTTP/3 client, and `packages/http-client` speaks it** —
-  `ext/http3_client.nu` is the client half of RFC 9114 over the QUIC
-  client (`h3_client_connect` / `h3_client_request`: control and QPACK
-  streams, a request per bidirectional stream, 1xx skipped, trailers
-  accepted, GOAWAY and stream refusals reported by code). The facade
-  moves an origin onto QUIC once a response advertises
-  `Alt-Svc: h3=":port"` (parsed and cached per origin with its `ma`),
-  or straight away with `http_client_set_h3 c 1`; a QUIC attempt that
-  fails falls back to TCP for that origin, and `http_client_last_proto`
-  reports 3. `packages/http-client` 0.2.0; `examples/fetch.nu --h3`.
-  `fetch --h3 https://cloudflare-quic.com/`, google and quic.nginx.org
-  answer `HTTP/3 (post-quantum) — status 200`. The package suite grows
-  to 25 checks (Alt-Svc switch, QUIC-first, cookies / gzip / redirects /
-  POST over h3, fall-back when no UDP listener answers);
-  `compiler/tests/http3_client_server.nu` drives the client against
-  `ext/http3_server.nu` in-process.
-
-### Fixed
 
 - **QPACK name-reference encoding** (`ext/http3_qpack.nu`): a field
   whose name is in the static table but whose value is not was encoded
@@ -355,47 +388,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   www.facebook.com (verification on, system roots) the client completes
   the handshake with a post-quantum key exchange and sees HANDSHAKE_DONE.
 
-### Changed
-
-- **The TLS 1.3 client handshake is a message-level machine, `CliHs`
-  (`std/tls.nu`)** — the split the server got in `SrvHs` for HTTP/3:
-  whole handshake messages go in (`_cli_hs_server_hello`,
-  `_cli_hs_message`), the ClientHello and client Finished come out
-  (`out_ch`, `out_fin`), the traffic secrets are read straight off the
-  machine, and a driver may add a ClientHello extension and require one
-  back in EncryptedExtensions (`_cli_hs_set_ext` — how QUIC will carry
-  `quic_transport_parameters`). `__tls_handshake` is now the record
-  layer around it: same bytes on the wire (h2spec 146/146, every tls_*
-  and http2 test unchanged, `packages/http-client` 14/14, example.org
-  over HTTP/2 + X25519MLKEM768), with the transcript hashed
-  incrementally and snapshotted at the checkpoints instead of
-  re-hashed from scratch five times. Handshake failures the client
-  detects are now said with the matching alert (illegal_parameter,
-  decrypt_error, missing_extension, …) before the close, not only
-  no_application_protocol; a server flight carrying a hello, ticket,
-  EndOfEarlyData or KeyUpdate before the Finished is refused as
-  unexpected_message. The TLS 1.2 fallback is unchanged (hands over
-  after the ServerHello, verified against `openssl s_server -tls1_2`).
-
-### Added
-
-- **`packages/http-client` — the unified HTTP *client* facade, the
-  mirror of `packages/http`.** One `HttpClient` fetches over whichever
-  protocol the server offers — HTTP/2 or HTTP/1.1 chosen by ALPN — with
-  post-quantum TLS (X25519MLKEM768 + ML-DSA chains) used automatically,
-  per-origin connection pooling and TLS-session resumption, redirect
-  following (303 / POST→GET downgrade, RFC 3986 §5.2 relative
-  resolution), a wired-in RFC 6265 cookie jar, and transparent
-  gzip/deflate decoding with a decompression-bomb cap. `http_client_get`
-  / `_post` / `_request`, a unified `HttpResponse` + `HttpClientErr`, and
-  `http_client_last_proto` / `_last_pq` evidence. The stdlib gained the
-  primitives a package cannot: an ALPN **preference list** in the TLS
-  client (`tls_connect_full` / `tcp_connect_tls_full`, the negotiated
-  protocol validated to be one offered — RFC 7301 §3.2), and HTTP/1.1
-  keep-alive with honoured read/write deadlines, a body cap, interim-1xx
-  skipping, chunked-trailer consumption and `Connection`-aware pooling
-  in `http_pure.nu` (`hp_stream_open_on` / `hp_stream_release`).
-
 ### Security
 
 - **A decompression-output cap in the DEFLATE path**, enforced *while*
@@ -404,8 +396,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pass the caller's byte limit — the guard an HTTP client needs before
   it trusts a `Content-Encoding` body (1 KB of DEFLATE can expand to a
   megabyte, so a cap checked only after the fact is no cap at all).
-
-### Security
 
 - **HTTP stack hardened against the standard smuggling / flood / DoS
   matrix — every fix at the stdlib root, so the `http` facade inherits
