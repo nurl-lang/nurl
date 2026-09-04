@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`packages/http` 0.6.0: `http_app_use`** — the facade had a fixed
+  middleware chain (CORS, access log, Alt-Svc) and no seam for one of
+  your own, so a server needing anything else — a concurrency gate in
+  front of an expensive route, a per-IP budget, an auth check — had to
+  abandon the facade and hand-wire router + server + shutdown itself,
+  which is the ~40 lines the facade exists to remove. `nurlapi` did
+  exactly that, for one semaphore. `http_app_use` takes a function from
+  the app's dispatch to the handler served; the built-in layers stay
+  outside it, so preflights and the access log still see the requests a
+  gate holds.
+
+- **nurlc: a closure type whose RETURN is a closure** — the middleware
+  shape. Both helpers that read a function type's parameter list took
+  the FIRST `(` in the LLVM string, which is the parameter list's until
+  the return type is itself a function type and brings its own. So a
+  `( @ ( @ i i ) ( @ i i ) )` had its arity and its parameter types read
+  off its own return value, and calling it was rejected as passing a
+  closure where an `i` was declared — a correct program, refused with a
+  message describing a type nobody wrote.
+  `compiler/tests/closure_type_nested.nu`.
+
 - **`ext/mcp_server.nu`: resource templates** —
   `mcp_server_add_resource_template srv \`nurl://stdlib/{path}\` …`
   registers a FAMILY of resources and answers the spec's
