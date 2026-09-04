@@ -11,6 +11,7 @@
     --danger: #ff6b6b; --warn: #f6c344; --ok: #56d364; --radius: 10px; --grid: #212836;
     --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --joint: #c792ea;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 14px; }
@@ -23,11 +24,12 @@
   nav a { padding: 6px 12px; border-radius: 8px; color: var(--muted); font-weight: 500; }
   nav a:hover { background: var(--panel2); color: var(--fg); }
   nav a.active { background: var(--accent); color: #06122b; }
-  main { max-width: 1200px; margin: 0 auto; padding: 24px; }
-  .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 18px; }
-  select, input[type=number] { font-family: var(--mono); font-size: 13px; background: var(--bg); color: var(--fg);
+  main { max-width: 1280px; margin: 0 auto; padding: 24px; }
+  .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  select, input[type=number], input[type=datetime-local] {
+    font-family: var(--mono); font-size: 13px; background: var(--bg); color: var(--fg);
     border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; }
-  select:focus { outline: none; border-color: var(--accent); }
+  select:focus, input:focus { outline: none; border-color: var(--accent); }
   button { font-family: var(--sans); font-size: 13px; border: 1px solid var(--border); background: var(--panel2);
            color: var(--fg); padding: 7px 12px; border-radius: 8px; cursor: pointer; font-weight: 500; }
   button:hover { border-color: var(--accent); }
@@ -35,30 +37,49 @@
   button:disabled { opacity: .5; cursor: default; }
   label.lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin-right: 4px; }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; margin-bottom: 20px; }
-  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 14px; font-weight: 600; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+             margin: 0 0 4px; font-weight: 600; }
+  .card p.hint { margin: 0 0 14px; color: var(--muted); font-size: 12px; }
   canvas { width: 100%; display: block; }
-  .stat-row { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 18px; }
-  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; min-width: 120px; }
-  .stat .n { font-size: 22px; font-weight: 700; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .stat-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; min-width: 116px; }
+  .stat .n { font-size: 21px; font-weight: 700; font-family: var(--mono); font-variant-numeric: tabular-nums; }
   .stat .n.danger { color: var(--danger); } .stat .n.ok { color: var(--ok); }
+  .stat .n.joint { color: var(--joint); } .stat .n.small { font-size: 15px; }
   .stat .l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
   .muted { color: var(--muted); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .chip { font-size: 12px; font-family: var(--mono); padding: 4px 10px; border-radius: 999px; cursor: pointer;
+          border: 1px solid var(--border); background: var(--panel2); color: var(--muted); user-select: none; }
+  .chip.on { border-color: var(--danger); color: var(--danger); background: rgba(255,107,107,.10); }
+  .chip.on.ae { border-color: var(--joint); color: var(--joint); background: rgba(199,146,234,.12); }
+  .chip .c { opacity: .65; margin-left: 5px; }
   .bar { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; flex: 1; min-width: 120px; }
   .bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .15s; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   thead th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted);
-             padding: 8px 12px; border-bottom: 1px solid var(--border); }
-  tbody td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-family: var(--mono);
-             font-variant-numeric: tabular-nums; }
+             padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  tbody td { padding: 8px 10px; border-bottom: 1px solid var(--border); font-family: var(--mono);
+             font-variant-numeric: tabular-nums; vertical-align: top; }
   tbody tr:hover { background: var(--panel2); }
   .score { color: var(--danger); font-weight: 600; }
   .vtags { display: flex; gap: 4px; flex-wrap: wrap; }
   .vtag { font-size: 10px; padding: 1px 6px; border-radius: 999px; border: 1px solid rgba(255,107,107,.4);
-          color: var(--danger); background: rgba(255,107,107,.08); }
+          color: var(--danger); background: rgba(255,107,107,.08); white-space: nowrap; }
+  .vtag.ae { border-color: rgba(199,146,234,.5); color: var(--joint); background: rgba(199,146,234,.10); }
+  .contrib { display: flex; flex-direction: column; gap: 3px; min-width: 210px; }
+  .contrib .row { display: grid; grid-template-columns: 1fr 40px; gap: 6px; align-items: center; font-size: 11px; }
+  .contrib .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .contrib .track { grid-column: 1 / -1; height: 3px; background: var(--panel2); border-radius: 2px; }
+  .contrib .track > i { display: block; height: 100%; background: var(--joint); border-radius: 2px; }
   .empty { text-align: center; padding: 40px; color: var(--muted); }
+  .err { color: var(--danger); }
   #tip { position: fixed; pointer-events: none; background: var(--panel2); border: 1px solid var(--border);
          border-radius: 6px; padding: 6px 9px; font-family: var(--mono); font-size: 12px; display: none;
-         box-shadow: 0 6px 18px rgba(0,0,0,.5); z-index: 50; white-space: nowrap; }
+         box-shadow: 0 6px 18px rgba(0,0,0,.5); z-index: 50; white-space: pre; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-top: 8px; }
+  .legend span { display: flex; align-items: center; gap: 5px; }
+  .legend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 </style>
 </head>
 <body>
@@ -75,28 +96,65 @@
 <main>
   <div class="controls">
     <span><label class="lbl">Model</label><select id="model"></select></span>
-    <span><label class="lbl">Feature</label><select id="feature"></select></span>
+    <span><label class="lbl">Range</label><select id="range">
+      <option value="3600">last hour</option>
+      <option value="21600">last 6 hours</option>
+      <option value="86400" selected>last 24 hours</option>
+      <option value="604800">last 7 days</option>
+      <option value="2592000">last 30 days</option>
+      <option value="0">everything stored</option>
+      <option value="custom">custom…</option>
+    </select></span>
+    <span id="customRange" style="display:none">
+      <label class="lbl">From</label><input type="datetime-local" id="from">
+      <label class="lbl" style="margin-left:6px">To</label><input type="datetime-local" id="to">
+    </span>
     <span><label class="lbl">Max points</label>
-      <input type="number" id="cap" value="500" min="10" max="5000" style="width:90px"></span>
-    <button class="primary" id="run" onclick="run()">Scan for anomalies</button>
-    <div class="bar" id="barWrap" style="display:none"><i id="bar"></i></div>
+      <input type="number" id="cap" value="5000" min="10" max="200000" step="500" style="width:100px"></span>
+    <button class="primary" id="run" onclick="scan(false)">Scan</button>
+    <button id="rerun" onclick="scan(true)" title="Ignore the cached verdicts and re-score every point">Rescore</button>
     <span class="muted" id="prog"></span>
   </div>
 
   <div class="stat-row" id="stats" style="display:none"></div>
 
-  <div class="card" id="chartCard" style="display:none">
-    <h2 id="chartTitle">Series with anomalies</h2>
-    <canvas id="chart" height="360"></canvas>
+  <div class="card" id="filterCard" style="display:none">
+    <h2>Filter by what flagged the point</h2>
+    <p class="hint" id="filterHint"></p>
+    <div class="chips" id="verChips"></div>
+  </div>
+
+  <div class="card" id="scoreCard" style="display:none">
+    <h2>Anomaly score over time</h2>
+    <p class="hint">The most severe version's <code>decision_function</code>. Lower is worse; each version has its
+      own margin, so the flag — not the height — is the verdict.</p>
+    <canvas id="scoreChart" height="230"></canvas>
+  </div>
+
+  <div class="card" id="ribbonCard" style="display:none">
+    <h2>Which version flagged what</h2>
+    <p class="hint">One row per version, a mark wherever it flagged. The forests react to a single feature
+      being extreme; the autoencoder reacts to the features disagreeing with each other.</p>
+    <canvas id="ribbon" height="150"></canvas>
+    <div class="legend" id="ribbonLegend"></div>
+  </div>
+
+  <div class="card" id="featCard" style="display:none">
+    <h2 style="display:flex;align-items:center;gap:10px">Feature over time
+      <select id="feature" style="text-transform:none"></select></h2>
+    <p class="hint">One feature's own trace, for context. A point can be flagged while this line looks
+      perfectly ordinary — that is the whole point of a joint model.</p>
+    <canvas id="featChart" height="230"></canvas>
   </div>
 
   <div class="card" id="listCard" style="display:none">
     <h2>Flagged points</h2>
+    <p class="hint" id="listHint"></p>
     <div id="list"></div>
   </div>
 
-  <div class="empty" id="hint">Pick a model and scan. Each stored point is re-scored via
-    <code>/detect_only</code> and anomalies are highlighted.</div>
+  <div class="empty" id="hint">Pick a model and scan. Every stored point is scored against
+    <em>all</em> of the model's features at once; verdicts are cached until the model changes.</div>
 </main>
 <div id="tip"></div>
 
@@ -104,7 +162,16 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const enc = encodeURIComponent;
-let DATA = [], NUMKEYS = [], RESULTS = [];
+
+// The autoencoder is the only version that models the features JOINTLY, so
+// it gets its own colour everywhere: "flagged by autoencoder" is the answer
+// to "which points are anomalous because of how the features relate".
+const AE = "autoencoder";
+
+let MODELS = {};       // name -> metadata (column_types, autoencoder, …)
+let SCAN = null;       // last /anomalies response
+let OFF = new Set();   // version names the user has switched off
+let CHART = {};        // canvas -> hit-testing state
 
 async function api(method, url, body) {
   const opt = { method, headers: {} };
@@ -119,167 +186,362 @@ function fmtNum(x) {
   if (!isFinite(x)) return "–";
   return Math.abs(x) < 1e-4 && x !== 0 ? x.toExponential(2) : +x.toFixed(5) + "";
 }
+function fmtTime(t) {
+  if (!t) return "–";
+  const d = new Date(t * 1000);
+  return d.toLocaleString(undefined, { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
 function getVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+function verColor(v) { return v === AE ? getVar("--joint") : getVar("--danger"); }
+
+// ── model + feature pickers ───────────────────────────────────────────
 
 async function loadModels(preselect) {
   const r = await api("GET", "/models/dynamic");
-  const names = Object.keys((r.data && r.data.models) || {}).sort();
+  MODELS = (r.data && r.data.models) || {};
+  const names = Object.keys(MODELS).sort();
   $("model").innerHTML = names.length
     ? names.map(n => '<option value="' + esc(n) + '">' + esc(n) + "</option>").join("")
-    : '<option>(no models)</option>';
+    : '<option value="">(no models)</option>';
   if (preselect && names.includes(preselect)) $("model").value = preselect;
-  $("model").onchange = loadFeatures;
-  await loadFeatures();
+  $("model").onchange = () => { SCAN = null; loadFeatures(); resetView(); };
+  loadFeatures();
 }
 
-async function loadFeatures() {
-  const name = $("model").value;
-  if (!name || name === "(no models)") { DATA = []; NUMKEYS = []; $("feature").innerHTML = ""; return; }
-  const r = await api("GET", "/models/dynamic/" + enc(name) + "/data?limit=all");
-  DATA = (r.data && r.data.data) || [];
-  const keys = {};
-  for (const rec of DATA) if (rec && typeof rec === "object")
-    for (const k of Object.keys(rec)) if (typeof rec[k] === "number") keys[k] = true;
-  NUMKEYS = Object.keys(keys);
-  $("feature").innerHTML = NUMKEYS.length
-    ? NUMKEYS.map(k => '<option value="' + esc(k) + '">' + esc(k) + "</option>").join("")
-    : '<option>(none)</option>';
-  $("prog").textContent = DATA.length + " stored points";
+function numericFeatures(name) {
+  const m = MODELS[name] || {};
+  const t = m.column_types || {};
+  return Object.keys(t).filter(k => t[k] === "numeric").sort();
 }
 
-async function run() {
+function loadFeatures() {
   const name = $("model").value;
-  if (!name || name === "(no models)") return;
-  if (!DATA.length) { $("prog").textContent = "no stored data for this model"; return; }
-  const cap = Math.max(10, Math.min(5000, parseInt($("cap").value, 10) || 500));
-  const pts = DATA.slice(Math.max(0, DATA.length - cap));   // most recent `cap`
-  const baseIdx = DATA.length - pts.length;
+  const keys = numericFeatures(name);
+  const prev = $("feature").value;
+  $("feature").innerHTML = keys.length
+    ? keys.map(k => '<option value="' + esc(k) + '">' + esc(k) + "</option>").join("")
+    : '<option value="">(no numeric features)</option>';
+  if (prev && keys.includes(prev)) $("feature").value = prev;
+  const m = MODELS[name] || {};
+  const ae = m.autoencoder;
+  $("prog").textContent = ae && ae.trained
+    ? "autoencoder trained on " + ae.training_data_points + " points"
+    : "no autoencoder trained — only per-feature anomalies will be found";
+  $("prog").className = ae && ae.trained ? "muted" : "err";
+}
 
-  $("run").disabled = true;
-  $("barWrap").style.display = "block";
-  RESULTS = [];
-  let warming = false;
-  for (let i = 0; i < pts.length; i++) {
-    const r = await api("POST", "/detect_only/" + enc(name), pts[i]);
-    if (r.status === 202) { warming = true; break; }
-    if (r.ok && r.data && r.data.status === "success") {
-      const flagged = [];
-      const vs = r.data.versions || {};
-      for (const vn of Object.keys(vs)) if (vs[vn].anomaly) flagged.push(vn);
-      RESULTS.push({ idx: baseIdx + i, rec: pts[i], score: r.data.score,
-                     anomaly: !!r.data.anomaly, versions: flagged });
-    }
-    $("bar").style.width = Math.round((i+1)/pts.length*100) + "%";
-    $("prog").textContent = (i+1) + "/" + pts.length + " scored";
+function resetView() {
+  for (const id of ["stats", "filterCard", "scoreCard", "ribbonCard", "featCard", "listCard"])
+    $(id).style.display = "none";
+  $("hint").style.display = "block";
+}
+
+// ── scanning ──────────────────────────────────────────────────────────
+
+function rangeParams() {
+  const sel = $("range").value;
+  if (sel === "custom") {
+    const p = [];
+    const f = $("from").value, t = $("to").value;
+    if (f) p.push("from=" + Math.floor(new Date(f).getTime() / 1000));
+    if (t) p.push("to=" + Math.floor(new Date(t).getTime() / 1000));
+    return p.join("&");
   }
-  $("run").disabled = false;
-  $("barWrap").style.display = "none";
+  const secs = parseInt(sel, 10);
+  return secs > 0 ? "last=" + secs : "";
+}
 
-  if (warming) {
-    $("prog").textContent = "model is still warming up — not enough data to score";
-    $("hint").style.display = "block"; $("hint").textContent = "Model warming up: feed more data or force-train it first.";
-    $("stats").style.display = $("chartCard").style.display = $("listCard").style.display = "none";
+async function scan(force) {
+  const name = $("model").value;
+  if (!name) return;
+  const cap = Math.max(10, Math.min(200000, parseInt($("cap").value, 10) || 5000));
+  const feat = $("feature").value;
+  const q = ["limit=" + cap, rangeParams(), feat ? "fields=" + enc(feat) : "", force ? "refresh=1" : ""]
+    .filter(Boolean).join("&");
+
+  $("run").disabled = $("rerun").disabled = true;
+  $("prog").textContent = force ? "re-scoring…" : "scoring…";
+  $("prog").className = "muted";
+  const t0 = performance.now();
+  const r = await api("GET", "/models/dynamic/" + enc(name) + "/anomalies?" + q);
+  const ms = Math.round(performance.now() - t0);
+  $("run").disabled = $("rerun").disabled = false;
+
+  if (!r.ok || !r.data || r.data.status !== "success") {
+    resetView();
+    $("hint").innerHTML = '<span class="err">' + esc((r.data && r.data.message) || "scan failed") + "</span>";
+    $("prog").textContent = "";
     return;
   }
-  renderAll();
+  SCAN = r.data; SCAN.ms = ms;
+  OFF = new Set();
+  render();
+  const c = SCAN.cache || {};
+  $("prog").textContent = SCAN.considered + " of " + SCAN.data_points_count + " stored points in range · " +
+    (c.misses ? c.misses + " scored, " + c.hits + " cached" : "all " + c.hits + " from cache") +
+    " · " + ms + " ms";
+  $("prog").className = "muted";
 }
 
-function renderAll() {
+// ── rendering ─────────────────────────────────────────────────────────
+
+function activeVersions() { return (SCAN.model_versions || []).filter(v => !OFF.has(v)); }
+
+// A point counts as flagged only through versions the user has left on, so
+// switching every forest off answers "show me ONLY the joint anomalies".
+function visiblePoints() {
+  const on = new Set(activeVersions());
+  return (SCAN.points || []).map(p => {
+    const hit = (p.versions || []).filter(v => on.has(v));
+    return { ...p, hit, flagged: hit.length > 0 };
+  });
+}
+
+function render() {
   $("hint").style.display = "none";
-  const total = RESULTS.length;
-  const anoms = RESULTS.filter(r => r.anomaly);
-  const pct = total ? (anoms.length/total*100) : 0;
+  const pts = visiblePoints();
+  const flagged = pts.filter(p => p.flagged);
+  const aeOnly = pts.filter(p => (p.versions || []).includes(AE) &&
+                                 (p.versions || []).every(v => v === AE));
+  const c = SCAN.cache || {};
+
   $("stats").style.display = "flex";
   $("stats").innerHTML = [
-    ['<span class="n">' + total + "</span>", "scored"],
-    ['<span class="n ' + (anoms.length?"danger":"ok") + '">' + anoms.length + "</span>", "anomalies"],
-    ['<span class="n">' + pct.toFixed(1) + "%</span>", "rate"],
-  ].map(([n,l]) => '<div class="stat">' + n + '<div class="l">' + l + "</div></div>").join("");
-  drawChart();
-  renderList(anoms);
+    ['<span class="n">' + pts.length + "</span>", "scored"],
+    ['<span class="n ' + (flagged.length ? "danger" : "ok") + '">' + flagged.length + "</span>", "anomalies"],
+    ['<span class="n">' + (pts.length ? (flagged.length / pts.length * 100).toFixed(1) : "0.0") + "%</span>", "rate"],
+    ['<span class="n joint">' + aeOnly.length + "</span>", "joint only"],
+    ['<span class="n small">' + c.hits + " / " + (c.hits + c.misses) + "</span>", "from cache"],
+    ['<span class="n small">' + SCAN.ms + " ms</span>", "epoch " + c.epoch],
+  ].map(([n, l]) => '<div class="stat">' + n + '<div class="l">' + l + "</div></div>").join("");
+
+  renderChips();
+  drawScore(pts);
+  drawRibbon(pts);
+  drawFeature(pts);
+  renderList(flagged);
 }
 
-function drawChart() {
-  $("chartCard").style.display = "block";
-  const feat = $("feature").value;
-  const cv = $("chart");
-  const pts = RESULTS.map(r => ({ idx: r.idx, x: (r.rec && typeof r.rec[feat]==="number") ? r.rec[feat] : null,
-                                  score: r.score, anomaly: r.anomaly }));
-  const valid = pts.filter(p => p.x !== null);
-  $("chartTitle").textContent = feat + " — anomalies in red";
-  if (!valid.length) { cv.style.display = "none"; return; }
-  cv.style.display = "block";
+function renderChips() {
+  $("filterCard").style.display = "block";
+  const counts = {};
+  for (const p of SCAN.points || []) for (const v of p.versions || []) counts[v] = (counts[v] || 0) + 1;
+  const vs = SCAN.model_versions || [];
+  $("filterHint").innerHTML = vs.includes(AE)
+    ? "Switch the forests off to isolate the points that are anomalous only because of how the features " +
+      "<em>relate</em> to each other — that is what <span style='color:var(--joint)'>autoencoder</span> means here."
+    : "<span class='err'>This model has no trained autoencoder</span>, so nothing here is judging the features " +
+      "jointly. Train one from the Models page to find relational anomalies.";
+  $("verChips").innerHTML = vs.map(v =>
+    '<span class="chip ' + (OFF.has(v) ? "" : "on ") + (v === AE ? "ae" : "") + '" data-v="' + esc(v) + '">' +
+    esc(v) + '<span class="c">' + (counts[v] || 0) + "</span></span>").join("") +
+    '<span style="margin-left:8px"><button onclick="onlyJoint()">only joint</button> ' +
+    '<button onclick="allOn()">all</button></span>';
+  for (const el of $("verChips").querySelectorAll(".chip"))
+    el.onclick = () => { const v = el.dataset.v; OFF.has(v) ? OFF.delete(v) : OFF.add(v); render(); };
+}
+function onlyJoint() { OFF = new Set((SCAN.model_versions || []).filter(v => v !== AE)); render(); }
+function allOn() { OFF = new Set(); render(); }
 
-  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = 360;
-  cv.width = W*dpr; cv.height = H*dpr;
-  const g = cv.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0,0,W,H);
-  const pad = { l: 54, r: 14, t: 14, b: 26 }, iw = W-pad.l-pad.r, ih = H-pad.t-pad.b;
-  const xs = valid.map(p=>p.x);
-  let mn = Math.min(...xs), mx = Math.max(...xs); if (mn===mx){mn-=1;mx+=1;}
-  const py=(mx-mn)*0.08; mn-=py; mx+=py;
+// Shared plumbing: axes, x mapping, hover state.
+function plotFrame(cv, h, pts, padL) {
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = h;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
+  const pad = { l: padL || 60, r: 14, t: 12, b: 24 }, iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
   const N = pts.length;
-  const X = (i)=> pad.l + (N<=1?iw/2:(i/(N-1))*iw);
-  const Y = (v)=> pad.t + ih - ((v-mn)/(mx-mn))*ih;
-
+  const X = (i) => pad.l + (N <= 1 ? iw / 2 : (i / (N - 1)) * iw);
   g.strokeStyle = getVar("--grid"); g.fillStyle = getVar("--muted");
   g.font = "11px " + getVar("--mono"); g.lineWidth = 1;
-  for (let t=0;t<=4;t++){ const yv=mn+(mx-mn)*t/4, y=Y(yv);
-    g.beginPath(); g.moveTo(pad.l,y); g.lineTo(W-pad.r,y); g.stroke(); g.fillText(fmtNum(yv),6,y+3); }
-  for (let t=0;t<=4;t++){ const i=Math.round((N-1)*t/4);
-    g.fillText(String(pts[i] ? pts[i].idx : ""), X(i)-8, H-8); }
+  for (let t = 0; t <= 4; t++) {
+    const i = Math.round((N - 1) * t / 4);
+    const x = X(i), lbl = pts[i] ? fmtTime(pts[i].timestamp) : "";
+    g.fillText(lbl, Math.min(W - 78, Math.max(2, x - 34)), H - 7);
+  }
+  return { g, W, H, pad, iw, ih, X, N };
+}
 
-  // line through valid points
-  g.beginPath(); let started=false;
-  pts.forEach((p,i)=>{ if(p.x===null) return; const x=X(i),y=Y(p.x);
-    if(!started){g.moveTo(x,y);started=true;} else g.lineTo(x,y); });
-  g.strokeStyle = getVar("--accent"); g.lineWidth = 1.6; g.stroke();
-
-  // markers
-  pts.forEach((p,i)=>{ if(p.x===null) return; const x=X(i), y=Y(p.x);
-    g.beginPath(); g.arc(x,y, p.anomaly?4:2, 0, 7);
-    g.fillStyle = p.anomaly ? getVar("--danger") : getVar("--accent"); g.fill();
-    if (p.anomaly){ g.beginPath(); g.arc(x,y,7,0,7); g.strokeStyle="rgba(255,107,107,.5)"; g.lineWidth=1.5; g.stroke(); }
+function drawScore(pts) {
+  $("scoreCard").style.display = "block";
+  const cv = $("scoreChart");
+  if (!pts.length) { cv.style.display = "none"; return; }
+  cv.style.display = "block";
+  const F = plotFrame(cv, 230, pts);
+  const { g, W, pad, ih } = F;
+  const ys = pts.map(p => p.score);
+  let mn = Math.min(...ys), mx = Math.max(...ys);
+  if (mn === mx) { mn -= 0.05; mx += 0.05; }
+  const padY = (mx - mn) * 0.10; mn -= padY; mx += padY;
+  const Y = (v) => pad.t + ih - ((v - mn) / (mx - mn)) * ih;
+  for (let t = 0; t <= 4; t++) {
+    const yv = mn + (mx - mn) * t / 4, y = Y(yv);
+    g.beginPath(); g.moveTo(pad.l, y); g.lineTo(W - pad.r, y); g.stroke();
+    g.fillText(fmtNum(yv), 6, y + 3);
+  }
+  g.beginPath();
+  pts.forEach((p, i) => { const x = F.X(i), y = Y(p.score); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+  g.strokeStyle = getVar("--accent"); g.lineWidth = 1.3; g.stroke();
+  pts.forEach((p, i) => {
+    if (!p.flagged) return;
+    const x = F.X(i), y = Y(p.score);
+    const joint = p.hit.length === 1 && p.hit[0] === AE;
+    g.beginPath(); g.arc(x, y, 3, 0, 7);
+    g.fillStyle = joint ? getVar("--joint") : getVar("--danger"); g.fill();
   });
-
-  cv._pts = pts; cv._X = X; cv._Y = Y; cv._N = N; cv._pad = pad; cv._feat = feat;
+  CHART[cv.id] = { pts, X: F.X, N: F.N, pad: F.pad, Y, kind: "score" };
 }
 
-$("chart").addEventListener("mousemove", (e) => {
-  const cv = $("chart"); if (!cv._pts) return;
-  const rect = cv.getBoundingClientRect(), mx = e.clientX-rect.left;
-  const N=cv._N, pad=cv._pad, iw=cv.clientWidth-pad.l-pad.r;
-  let i = Math.round(((mx-pad.l)/iw)*(N-1)); i=Math.max(0,Math.min(N-1,i));
-  const p = cv._pts[i]; if(!p) return;
-  const tip=$("tip"); tip.style.display="block";
-  tip.style.left=(e.clientX+12)+"px"; tip.style.top=(e.clientY+12)+"px";
-  tip.innerHTML = "#" + p.idx + " · " + cv._feat + "=" + fmtNum(p.x) + " · score=" + fmtNum(p.score) +
-    (p.anomaly ? ' · <span style="color:var(--danger)">ANOMALY</span>' : "");
-});
-$("chart").addEventListener("mouseleave", ()=> $("tip").style.display="none");
-window.addEventListener("resize", ()=> { if (RESULTS.length) drawChart(); });
+function drawRibbon(pts) {
+  const vs = SCAN.model_versions || [];
+  $("ribbonCard").style.display = vs.length ? "block" : "none";
+  if (!vs.length) return;
+  const cv = $("ribbon");
+  const rowH = 22, H = vs.length * rowH + 30;
+  const F = plotFrame(cv, H, pts, 96);
+  const { g, W, pad } = F;
+  vs.forEach((v, r) => {
+    const y = pad.t + r * rowH + rowH / 2;
+    g.strokeStyle = getVar("--grid"); g.beginPath();
+    g.moveTo(pad.l, y); g.lineTo(W - pad.r, y); g.stroke();
+    g.fillStyle = OFF.has(v) ? getVar("--border") : getVar("--muted");
+    g.font = "11px " + getVar("--mono");
+    g.fillText(v, 4, y + 4);
+    if (OFF.has(v)) return;
+    g.fillStyle = verColor(v);
+    pts.forEach((p, i) => {
+      if (!(p.versions || []).includes(v)) return;
+      g.fillRect(F.X(i) - 0.75, y - 6, 1.5, 12);
+    });
+  });
+  const forests = vs.filter(v => v !== AE);
+  $("ribbonLegend").innerHTML =
+    (forests.length ? '<span><i style="background:' + getVar("--danger") + '"></i>' +
+      esc(forests.join(", ")) + " — isolation forests: some feature is extreme on its own</span>" : "") +
+    (vs.includes(AE) ? '<span><i style="background:' + getVar("--joint") + '"></i>' +
+      "autoencoder — the features contradict each other</span>" : "");
+  CHART[cv.id] = { pts, X: F.X, N: F.N, pad: F.pad, kind: "ribbon" };
+}
 
-function renderList(anoms) {
-  $("listCard").style.display = "block";
-  if (!anoms.length) { $("list").innerHTML = '<div class="empty">No anomalies found 🎉</div>'; return; }
+function drawFeature(pts) {
   const feat = $("feature").value;
-  const keys = NUMKEYS.slice(0, 4);
-  let head = "<tr><th>#</th><th>score</th><th>versions</th>" +
-    keys.map(k=>"<th>"+esc(k)+"</th>").join("") + "</tr>";
-  let rows = anoms.slice(0, 200).map(a =>
-    "<tr><td>" + a.idx + '</td><td class="score">' + fmtNum(a.score) + "</td>" +
-    '<td><div class="vtags">' + a.versions.map(v=>'<span class="vtag">'+esc(v)+"</span>").join("") + "</div></td>" +
-    keys.map(k => "<td>" + (a.rec && typeof a.rec[k]==="number" ? fmtNum(a.rec[k]) : "–") + "</td>").join("") +
-    "</tr>").join("");
-  $("list").innerHTML = "<table><thead>" + head + "</thead><tbody>" + rows + "</tbody></table>" +
-    (anoms.length > 200 ? '<div class="muted" style="padding:8px 12px">…' + (anoms.length-200) + " more</div>" : "");
+  $("featCard").style.display = feat ? "block" : "none";
+  if (!feat) return;
+  const cv = $("featChart");
+  const have = pts.filter(p => p.values && typeof p.values[feat] === "number");
+  if (!have.length) {
+    cv.style.display = "none";
+    CHART[cv.id] = null;
+    return;
+  }
+  cv.style.display = "block";
+  const F = plotFrame(cv, 230, pts);
+  const { g, W, pad, ih } = F;
+  const ys = have.map(p => p.values[feat]);
+  let mn = Math.min(...ys), mx = Math.max(...ys);
+  if (mn === mx) { mn -= 1; mx += 1; }
+  const padY = (mx - mn) * 0.10; mn -= padY; mx += padY;
+  const Y = (v) => pad.t + ih - ((v - mn) / (mx - mn)) * ih;
+  for (let t = 0; t <= 4; t++) {
+    const yv = mn + (mx - mn) * t / 4, y = Y(yv);
+    g.beginPath(); g.moveTo(pad.l, y); g.lineTo(W - pad.r, y); g.stroke();
+    g.fillText(fmtNum(yv), 6, y + 3);
+  }
+  g.beginPath(); let started = false;
+  pts.forEach((p, i) => {
+    const v = p.values && p.values[feat];
+    if (typeof v !== "number") return;
+    const x = F.X(i), y = Y(v);
+    started ? g.lineTo(x, y) : (g.moveTo(x, y), started = true);
+  });
+  g.strokeStyle = getVar("--accent"); g.lineWidth = 1.3; g.stroke();
+  pts.forEach((p, i) => {
+    const v = p.values && p.values[feat];
+    if (typeof v !== "number" || !p.flagged) return;
+    const joint = p.hit.length === 1 && p.hit[0] === AE;
+    g.beginPath(); g.arc(F.X(i), Y(v), 3.2, 0, 7);
+    g.fillStyle = joint ? getVar("--joint") : getVar("--danger"); g.fill();
+  });
+  CHART[cv.id] = { pts, X: F.X, N: F.N, pad: F.pad, Y, kind: "feature", feat };
 }
+
+// ── hover ─────────────────────────────────────────────────────────────
+
+function hoverAt(cv, e) {
+  const st = CHART[cv.id];
+  if (!st || !st.pts.length) return null;
+  const rect = cv.getBoundingClientRect();
+  const iw = cv.clientWidth - st.pad.l - st.pad.r;
+  let i = Math.round(((e.clientX - rect.left - st.pad.l) / iw) * (st.N - 1));
+  i = Math.max(0, Math.min(st.N - 1, i));
+  return st.pts[i];
+}
+for (const id of ["scoreChart", "ribbon", "featChart"]) {
+  const cv = $(id);
+  cv.addEventListener("mousemove", (e) => {
+    const p = hoverAt(cv, e);
+    const tip = $("tip");
+    if (!p) { tip.style.display = "none"; return; }
+    const lines = [fmtTime(p.timestamp) + "  #" + p.index, "score " + fmtNum(p.score)];
+    const st = CHART[cv.id];
+    if (st.feat && p.values && typeof p.values[st.feat] === "number")
+      lines.push(st.feat + " = " + fmtNum(p.values[st.feat]));
+    if (p.versions && p.versions.length) lines.push("flagged: " + p.versions.join(", "));
+    else lines.push("normal");
+    if (p.contributions && p.contributions.length)
+      lines.push("top error: " + p.contributions.map(c => c.feature + " " + Math.round(c.share * 100) + "%").join(", "));
+    tip.textContent = lines.join("\n");
+    tip.style.display = "block";
+    tip.style.left = Math.min(window.innerWidth - 320, e.clientX + 12) + "px";
+    tip.style.top = (e.clientY + 12) + "px";
+  });
+  cv.addEventListener("mouseleave", () => $("tip").style.display = "none");
+}
+window.addEventListener("resize", () => { if (SCAN) render(); });
+
+// ── the table ─────────────────────────────────────────────────────────
+
+function renderList(flagged) {
+  $("listCard").style.display = "block";
+  const feat = $("feature").value;
+  const withAe = flagged.filter(p => p.hit.includes(AE)).length;
+  $("listHint").innerHTML = flagged.length
+    ? withAe + " of " + flagged.length + " were flagged by the autoencoder; for those, " +
+      "<em>top error</em> names the features that failed hardest to be predictable from the rest."
+    : "";
+  if (!flagged.length) { $("list").innerHTML = '<div class="empty">No anomalies in this window 🎉</div>'; return; }
+  const rows = flagged.slice(-300).reverse().map(p => {
+    const tags = p.hit.map(v =>
+      '<span class="vtag ' + (v === AE ? "ae" : "") + '">' + esc(v) + "</span>").join("");
+    const contrib = (p.contributions || []).length
+      ? '<div class="contrib">' + p.contributions.map(c =>
+          '<div class="row"><span class="nm" title="' + esc(c.feature) + '">' + esc(c.feature) + "</span>" +
+          "<span>" + Math.round(c.share * 100) + '%</span>' +
+          '<span class="track"><i style="width:' + Math.round(c.share * 100) + '%"></i></span></div>').join("") +
+        "</div>"
+      : '<span class="muted">–</span>';
+    const fv = feat && p.values && typeof p.values[feat] === "number" ? fmtNum(p.values[feat]) : "–";
+    return "<tr><td>" + fmtTime(p.timestamp) + "</td><td>" + p.index + '</td><td class="score">' +
+      fmtNum(p.score) + '</td><td><div class="vtags">' + tags + "</div></td><td>" + contrib +
+      "</td><td>" + fv + "</td></tr>";
+  }).join("");
+  $("list").innerHTML = "<table><thead><tr><th>when</th><th>#</th><th>score</th><th>flagged by</th>" +
+    "<th>top error (autoencoder)</th><th>" + esc(feat || "—") + "</th></tr></thead><tbody>" + rows +
+    "</tbody></table>" +
+    (flagged.length > 300 ? '<div class="muted" style="padding:8px 10px">showing the 300 most recent of ' +
+      flagged.length + "</div>" : "");
+}
+
+// ── boot ──────────────────────────────────────────────────────────────
+
+$("range").onchange = () => {
+  $("customRange").style.display = $("range").value === "custom" ? "inline" : "none";
+};
+$("feature").onchange = () => { if (SCAN) scan(false); };
 
 const qp = new URLSearchParams(location.search);
 loadModels(qp.get("model")).then(() => {
-  // Arriving with ?model= (e.g. the "Anomalies →" deep link) means intent
-  // to scan — kick it off automatically.
-  if (qp.get("model") && DATA.length) run();
-}).catch(e => $("prog").textContent = e.message);
+  if (qp.get("model") && $("model").value) scan(false);
+}).catch(e => { $("prog").textContent = e.message; $("prog").className = "err"; });
 </script>
 </body>
 </html>

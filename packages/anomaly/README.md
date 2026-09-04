@@ -41,6 +41,14 @@ HTTP routes and response shapes, so existing dashboards keep working.
   impossible. Reported as the `autoencoder` version with the standard
   decision_function orientation (`threshold − mse`; negative ⇒ anomaly).
 
+  **This is the only version that judges the features jointly.** An
+  isolation forest splits one axis at a time over a tree capped at
+  ~log2(max_samples) levels, so what it scores is how extreme a point is on
+  some *single* feature; adding `hour_sin`/`hour_cos` to the input does not
+  teach it "no motion at 03:00 is normal, no motion at 15:00 is not". The
+  autoencoder does exactly that, and its per-feature reconstruction error
+  says *which* relationship broke — see **Why a point is an anomaly** below.
+
 ## What a model does
 
 - **Heterogeneous features, encoded automatically.** Numbers pass through;
@@ -74,7 +82,8 @@ HTTP routes and response shapes, so existing dashboards keep working.
   tuning applies without a retrain.
 - **Fine-tuning.** `model_finetune` sets each version's margin to 95 % of
   the magnitude of the worst score observed over the ring — the most
-  anomalous point seen so far lands just inside the anomaly band.
+  anomalous point seen so far lands just inside the anomaly band. The
+  autoencoder is included, in its own relative units.
 - **Persistence.** `metadata.json` (types, categories, feature order,
   scaler, schedule, version configs) + one validated binary forest blob per
   version, written atomically. Corrupt or truncated files load as errors,
@@ -85,6 +94,47 @@ deterministic data: `decision_function` values match within ~0.01 across
 normal and outlier points. A fixed seed (42, the reference's
 `random_state`) makes forests — and therefore scores — byte-identical
 across platforms and runs.
+
+## Why a point is an anomaly
+
+A verdict says *that* a point is anomalous and which versions agreed. For the
+autoencoder it can also say **why**: its reconstruction error is per-feature,
+and a feature's share of the total is the amount by which that feature failed
+to be predictable from all the others. So the top contributors name the
+*relationship* that broke, not merely the largest number in the record.
+
+```
+$ curl 'localhost:8811/models/dynamic/boiler/anomalies?last=86400&only=anomalies'
+{"points":[{"index":6771,"timestamp":1788496324,"score":-0.121,"anomaly":true,
+  "versions":["weekly","autoencoder"],
+  "contributions":[{"feature":"flow","share":0.41},
+                   {"feature":"pressure","share":0.19},
+                   {"feature":"hour_sin","share":0.14}]}], ...}
+```
+
+Contrast that with the reference's `feature_importance`, which is a per-feature
+z-score from the column mean: it can only ever point at the value that was
+extreme, which is the question the forests were already answering.
+
+## Scanning stored history
+
+`GET /models/dynamic/<m>/anomalies` re-scores the stored ring in one request —
+one model load for the whole window instead of one per point — and caches the
+verdicts on disk (`scores.bin`).
+
+The cache is stamped with the model's **scoring epoch**, a counter bumped by
+anything that can change a verdict: a retrain, a new autoencoder, a margin
+edit, a version toggled on or off, a metadata patch, a reset. An entry with an
+older epoch is stale by construction, so there is no per-entry invalidation
+rule to get wrong. Cache rows are keyed on the lifetime point counter rather
+than the ring index, so ring eviction shifts nothing.
+
+On a 7 271-point model with five forests and an autoencoder: 329 s of
+`/detect_only` round trips before (45 ms each, which is why the dashboard used
+to cap the scan at 500 points), **14 s cold, 0.1 s warm** after. The response
+reports `cache: { hits, misses, epoch }` so the dashboard can show which it
+got. `?refresh=1` recomputes anyway — the escape hatch for verifying the cache,
+never needed for correctness.
 
 ## GPU acceleration
 
@@ -154,6 +204,7 @@ command with `--store DIR`.
 | `GET /models/dynamic/<m>/metadata` | model metadata, plus the autoencoder's own state |
 | `PUT /models/dynamic/<m>/metadata` | edit the schedule and the per-version configs (see below) |
 | `GET /models/dynamic/<m>/data?limit=N\|all` | recent raw points |
+| `GET /models/dynamic/<m>/anomalies` | re-score the stored ring, cached (see below) |
 | `POST /models/dynamic/<m>/reset` | drop data + forests, keep the name |
 | `DELETE\|GET /delete_model/<m>` | delete entirely |
 | `PUT /api/dynamic/<m>/schedule` | `{"below_max_retrain_frequency": .., "at_max_retrain_frequency": ..}` |
@@ -226,7 +277,7 @@ build step — plain HTML/CSS/JS that talks to the routes above):
 | `/` · `/modelmanager.html` | list models, train / finetune / reset / delete, toggle versions and retune their margins, train the autoencoder, edit the retrain schedule — or, under *Advanced*, the whole editable metadata, as a generated field form or as raw JSON |
 | `/modeltrainer.html` | feed points (`/detect`) one at a time or in bulk (paste JSON lines / generate synthetic), force-train |
 | `/visualize.html` | plot any numeric feature of a model's stored points over time |
-| `/anomalies.html` | re-score stored points via `/detect_only` and highlight the anomalies (chart + table with the flagging versions) |
+| `/anomalies.html` | scan stored history over a time range: score timeline, a per-version ribbon showing *what* flagged *when*, any feature's own trace for context, and a table naming the features whose relationship broke. Filter chips isolate the joint (autoencoder) anomalies from the per-feature (forest) ones |
 
 The HTML lives in `static/` next to the package. `serve` locates it via, in
 order: `--webroot DIR`, `$ANOMALY_WEBROOT`, `<exe-dir>/static`,
@@ -244,8 +295,9 @@ $ `deps/anomaly/src/dynamic.nu`
 : !Verdict String vr ( model_ingest mo point_json )   // or model_detect_only
 ```
 
-`model_open / model_ingest / model_detect_only / model_force_train /
-model_reset / model_delete / model_finetune / model_train_autoencoder /
+`model_open / model_ingest / model_detect_only / model_scan /
+model_ae_contrib / model_point_json / model_force_train / model_reset /
+model_delete / model_finetune / model_train_autoencoder /
 model_set_schedule / model_set_margin / model_set_version_enabled /
 model_set_version_window / model_apply_meta_patch / model_metadata /
 model_free`, plus the layers beneath:
@@ -279,10 +331,23 @@ Deliberate, all documented in the code:
    is a 400 rather than silently using a different model family.
 6. **Points store raw JSON lines** (`data.jsonl`), not a pickled array —
    raw records are what let retrains learn new categories.
+7. **The autoencoder's margin is relative, not absolute.** The reference
+   sets `is_anomaly = mse > reconstruction_threshold` in the autoencoder
+   branch and then, at the same indentation as the branch, unconditionally
+   overwrites it with `is_anomaly = bool(score <= -decision_margin)` using
+   the autoencoder default `0.05`. On a threshold of ~5e-4 that requires a
+   reconstruction error ~100x the p95 of the training errors — the joint
+   detector is effectively off, which its `"enabled": False` default hid.
+   Here `decision_margin` is a fraction of the model's own threshold, so
+   the stored `0.05` means "5 % above p95" and needs no migration.
+8. **Anomaly attribution is the autoencoder's per-feature error**, not a
+   per-feature z-score from the mean. A z-score can only name the extreme
+   value; the reconstruction error names the feature that stopped agreeing
+   with the rest — the actual reason a joint model objected.
 
 ## Tests
 
-`./tests/anomaly_test.sh` builds and runs the seven unit suites (165+ checks:
+`./tests/anomaly_test.sh` builds and runs the unit suites (280+ checks:
 preprocessing golden vectors, sklearn-parity decision maths, bit-exact
 blob round-trips, corrupt-file rejection, streaming mechanics, window
 routing, fine-tune, all HTTP routes, GPU/CPU-backend bit-parity), a CLI

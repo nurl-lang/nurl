@@ -12,6 +12,7 @@
 //   GET    /models/dynamic/<model>/metadata   metadata (+ autoencoder state)
 //   PUT    /models/dynamic/<model>/metadata   edit schedule / version configs
 //   GET    /models/dynamic/<model>/data       recent points (?limit=N|all)
+//   GET    /models/dynamic/<model>/anomalies  scored ring (cached, filtered)
 //   POST   /models/dynamic/<model>/reset      drop data+forests, keep name
 //   DELETE|GET /delete_model/<model>          delete entirely
 //   PUT    /api/dynamic/<model>/schedule      retraining schedule
@@ -556,6 +557,263 @@ $ `src/csvdata.nu`
     ^ r
 }
 
+// String query parameter (?key=value). Empty String when missing. Values
+// are taken verbatim up to the next '&' — no percent-decoding, because
+// every parameter this route accepts is a name from our own metadata.
+@ __an_query_str String q s key → String {
+    : String needle ( string_from key )
+    ( string_push_char needle 61 )
+    : ?i at0 ( string_index_of q ( string_data needle ) )
+    : i klen ( string_len needle )
+    ( string_free needle )
+    ?? at0 {
+        T at → {
+            : String val ( string_new )
+            : i n ( string_len q )
+            : ~ i k + at klen
+            : ~ b going T
+            ~ & going < k n {
+                : i c ( string_get q k )
+                ? == c 38 { = going F } {
+                    ( string_push_char val c )
+                    = k + k 1
+                }
+            }
+            ^ val
+        }
+        F _ → { ^ ( string_new ) }
+    }
+}
+
+// Is `name` listed in a comma-separated filter? An empty filter matches
+// everything, which is what makes "no filter" and "all filters" the same
+// request.
+@ __an_csv_has String csv s name → b {
+    ? == ( string_len csv ) 0 { ^ T } {}
+    : ( Vec String ) parts ( string_split csv `,` )
+    : i n ( vec_len [String] parts )
+    : ~ b found F
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] parts k ) {
+            T x → { ? == ( nurl_str_eq ( string_data x ) name ) 1 { = found T } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] parts \ String x → v { ( string_free x ) } )
+    ^ found
+}
+
+// GET /models/dynamic/<m>/anomalies
+//
+// The dashboard's scan, server-side. One model load, one pass over the
+// requested slice of the ring, verdicts served from the epoch-stamped
+// cache when the model has not changed since they were computed.
+//
+//   ?from=<unix>&to=<unix>     time window (either bound may be omitted)
+//   &last=<seconds>            shorthand: the last N seconds up to `to`/now
+//   &limit=N                   newest N rows of the window (default 2000)
+//   &only=anomalies            omit the rows nothing flagged
+//   &versions=a,b              keep only rows flagged by one of these
+//   &fields=x,y                include these numeric fields per row
+//   &contrib=N                 top-N autoencoder contributors per flagged row
+//   &refresh=1                 recompute even when the cache is warm
+//
+// `total`/`considered`/`anomalies` describe the whole window; `points` is
+// what survived `limit`, `only` and `versions`, so a filtered response
+// still says how much it filtered.
+@ __an_h_anomalies HttpRequest req Params p → HttpResponse {
+    : String mname ( __an_param_model p )
+    ? ( __an_name_ok ( string_data mname ) ) {} {
+        ( string_free mname )
+        ^ ( __an_bad_name )
+    }
+    : Store st ( store_open g_an_root )
+    ? ( store_exists st ( string_data mname ) ) {} {
+        : HttpResponse r404 ( __an_404_model ( string_data mname ) )
+        ( store_free st )
+        ( string_free mname )
+        ^ r404
+    }
+
+    : i limit ( __an_query_int . req query `limit` 2000 )
+    : i q_from ( __an_query_int . req query `from` 0 )
+    : i q_to ( __an_query_int . req query `to` 0 )
+    : i q_last ( __an_query_int . req query `last` 0 )
+    // Read via the string form: __an_query_int treats a non-positive value
+    // as "absent", and `contrib=0` (chart-only fetches that want no
+    // attribution) has to be distinguishable from not asking at all.
+    : String ctopk ( __an_query_str . req query `contrib` )
+    : ~ i topk 3
+    ? > ( string_len ctopk ) 0 {
+        ?? ( string_to_int ctopk ) { T x → { = topk x } F _ → {} }
+    } {}
+    ( string_free ctopk )
+    : i refresh ( __an_query_int . req query `refresh` 0 )
+    : String only ( __an_query_str . req query `only` )
+    : String vfilter ( __an_query_str . req query `versions` )
+    : String ffilter ( __an_query_str . req query `fields` )
+    : b only_anom == ( nurl_str_eq ( string_data only ) `anomalies` ) 1
+
+    : *Model mo ( model_open st ( string_data mname ) )
+
+    // `last` is relative to the window's upper bound, or to the newest
+    // stored point when there is none — never to the server's clock, so a
+    // model that stopped receiving data still answers "the last 24 h of it".
+    : ~ i from_ts q_from
+    : ~ i to_ts q_to
+    ? > q_last 0 {
+        : ~ i anchor to_ts
+        ? > anchor 0 {} {
+            : i np ( model_n_points mo )
+            ? > np 0 {
+                ?? ( vec_get [i] . mo times - np 1 ) { T x → { = anchor x } F _ → {} }
+            } {}
+        }
+        ? > anchor 0 { = from_ts - anchor q_last } {}
+    } {}
+
+    : ScanOut so ( model_scan_at mo from_ts to_ts limit > refresh 0 )
+
+    : Json vers ( json_arr_new )
+    : i nvn ( vec_len [String] . so vnames )
+    : ~ i k 0
+    ~ < k nvn {
+        ?? ( vec_get [String] . so vnames k ) {
+            T nm → { ( json_arr_push vers ( json_str_lit ( string_data nm ) ) ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+
+    : ( Vec String ) fields ( string_split ffilter `,` )
+    : b want_fields > ( string_len ffilter ) 0
+
+    : Json arr ( json_arr_new )
+    : i np ( vec_len [ScoredPt] . so pts )
+    : ~ i shown 0
+    = k 0
+    ~ < k np {
+        ?? ( vec_get [ScoredPt] . so pts k ) {
+            T r → {
+                // Version names this row's bitmasks decode to.
+                : Json flagged ( json_arr_new )
+                : ~ b keep T
+                : ~ b matched F
+                : ~ i b 0
+                ~ < b nvn {
+                    ? != & >> . r sp_flagged b 1 0 {
+                        ?? ( vec_get [String] . so vnames b ) {
+                            T nm → {
+                                ( json_arr_push flagged ( json_str_lit ( string_data nm ) ) )
+                                ? ( __an_csv_has vfilter ( string_data nm ) ) { = matched T } {}
+                            }
+                            F _ → {}
+                        }
+                    } {}
+                    = b + b 1
+                }
+                ? only_anom { ? . r sp_anomaly {} { = keep F } } {}
+                ? > ( string_len vfilter ) 0 { ? matched {} { = keep F } } {}
+
+                ? keep {
+                    : Json o ( json_obj_new )
+                    ( json_obj_set o `index` ( json_int . r sp_idx ) )
+                    ( json_obj_set o `timestamp` ( json_int . r sp_ts ) )
+                    ( json_obj_set o `score` ( json_float . r sp_score ) )
+                    ( json_obj_set o `anomaly` ( json_bool . r sp_anomaly ) )
+                    ( json_obj_set o `versions` flagged )
+                    ? || want_fields . r sp_anomaly {
+                        ?? ( model_point_json mo . r sp_idx ) {
+                            T rec → {
+                                ? want_fields {
+                                    : Json vals ( json_obj_new )
+                                    : i nf ( vec_len [String] fields )
+                                    : ~ i fi 0
+                                    ~ < fi nf {
+                                        ?? ( vec_get [String] fields fi ) {
+                                            T fname → {
+                                                ?? ( json_obj_get rec ( string_data fname ) ) {
+                                                    T fv → { ( json_obj_set vals ( string_data fname ) ( json_clone fv ) ) }
+                                                    F _ → {}
+                                                }
+                                            }
+                                            F _ → {}
+                                        }
+                                        = fi + fi 1
+                                    }
+                                    ( json_obj_set o `values` vals )
+                                } {}
+                                // Attribution costs one autoencoder forward
+                                // pass, so it is computed only for the rows
+                                // actually being returned as anomalies.
+                                ? & . r sp_anomaly > topk 0 {
+                                    : ( Vec AeContrib ) cs ( model_ae_contrib mo rec topk )
+                                    : i nc ( vec_len [AeContrib] cs )
+                                    ? > nc 0 {
+                                        : Json ca ( json_arr_new )
+                                        : ~ i ci 0
+                                        ~ < ci nc {
+                                            ?? ( vec_get [AeContrib] cs ci ) {
+                                                T c → {
+                                                    : Json co ( json_obj_new )
+                                                    ( json_obj_set co `feature` ( json_str_lit ( string_data . c ac_name ) ) )
+                                                    ( json_obj_set co `error` ( json_float . c ac_err ) )
+                                                    ( json_obj_set co `share` ( json_float . c ac_share ) )
+                                                    ( json_arr_push ca co )
+                                                }
+                                                F _ → {}
+                                            }
+                                            = ci + ci 1
+                                        }
+                                        ( json_obj_set o `contributions` ca )
+                                    } {}
+                                    ( ae_contrib_free cs )
+                                } {}
+                                ( json_free rec )
+                            }
+                            F → {}
+                        }
+                    } {}
+                    ( json_arr_push arr o )
+                    = shown + shown 1
+                } { ( json_free flagged ) }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
+
+    : Json cache ( json_obj_new )
+    ( json_obj_set cache `hits` ( json_int . so hits ) )
+    ( json_obj_set cache `misses` ( json_int . so misses ) )
+    ( json_obj_set cache `epoch` ( json_int . so epoch ) )
+
+    : Json o ( json_obj_new )
+    ( json_obj_set o `status` ( json_str_lit `success` ) )
+    ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
+    ( json_obj_set o `data_points_count` ( json_int . so total ) )
+    ( json_obj_set o `considered` ( json_int . so considered ) )
+    ( json_obj_set o `anomalies` ( json_int . so anomalies ) )
+    ( json_obj_set o `returned` ( json_int shown ) )
+    ( json_obj_set o `model_versions` vers )
+    ( json_obj_set o `cache` cache )
+    ( json_obj_set o `points` arr )
+
+    : HttpResponse r ( response_json 200 o )
+    ( json_free o )
+    ( scan_free so )
+    ( model_free mo )
+    ( store_free st )
+    ( string_free only )
+    ( string_free vfilter )
+    ( string_free ffilter )
+    ( string_free mname )
+    ^ r
+}
+
 @ __an_h_reset HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -987,6 +1245,7 @@ $ `src/csvdata.nu`
     ( router_get r `/models/dynamic/:model/metadata` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_metadata req p ) } )
     ( router_put r `/models/dynamic/:model/metadata` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_meta_update req p ) } )
     ( router_get r `/models/dynamic/:model/data` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_data req p ) } )
+    ( router_get r `/models/dynamic/:model/anomalies` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_anomalies req p ) } )
     ( router_post r `/models/dynamic/:model/reset` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_reset req p ) } )
     ( router_delete r `/delete_model/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_delete req p ) } )
     ( router_get r `/delete_model/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_delete req p ) } )

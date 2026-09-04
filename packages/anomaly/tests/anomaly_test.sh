@@ -4,7 +4,9 @@
 # ============================================================
 #  tests/anomaly_test.sh — the package's full test suite:
 #    1. unit suites  : prep (M1), model (M2), store (M3),
-#                      dynamic (M4), versions (M5), metaedit, service (M6),
+#                      dynamic (M4), versions (M5), scan (the cached ring
+#                      scan + the relative autoencoder margin), metaedit,
+#                      service (M6),
 #                      dashboard (the generated metadata editor; needs node)
 #    2. CLI          : detect/score/train/ls/info/batch/reset/rm
 #    3. live HTTP    : `anomaly serve` + curl against the routes
@@ -30,7 +32,7 @@ ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 
 echo "[1/3] unit suites"
-for t in prep model store dynamic versions timevector autoencoder metaedit service gpu; do
+for t in prep model store dynamic versions timevector autoencoder scan metaedit service gpu; do
     if ! $NURL "tests/${t}_test.nu" "$WORK/${t}_test" >/dev/null 2>"$WORK/build.err"; then
         echo "FAIL: could not build ${t}_test:"; tail -5 "$WORK/build.err"; exit 1
     fi
@@ -145,6 +147,36 @@ CODE=$(curl -s -o "$WORK/rput2" -w '%{http_code}' -X PUT \
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -X PUT \
     "http://127.0.0.1:$PORT/models/dynamic/nosuch/metadata" -d '{"schedule":{"below_max":5,"at_max":5}}')
 [ "$CODE" = "404" ] && ok "HTTP metadata PUT 404s an unknown model" || bad "HTTP metadata PUT 404 ($CODE)"
+
+# The scan route the Anomalies dashboard runs on: one request for the whole
+# ring, and a second one that recomputes nothing.
+curl -s -o "$WORK/scan1" "http://127.0.0.1:$PORT/models/dynamic/live/anomalies?limit=all"
+python3 - "$WORK/scan1" <<'PYEOF' && ok "HTTP anomalies scan" || bad "HTTP anomalies scan"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["status"] == "success", d
+assert d["returned"] == d["data_points_count"] > 0, d
+assert d["cache"]["misses"] == d["returned"] and d["cache"]["hits"] == 0, d["cache"]
+assert d["model_versions"], d
+p = d["points"][0]
+for k in ("index", "timestamp", "score", "anomaly"):
+    assert k in p, p
+PYEOF
+curl -s -o "$WORK/scan2" "http://127.0.0.1:$PORT/models/dynamic/live/anomalies?limit=all"
+python3 - "$WORK/scan2" <<'PYEOF' && ok "HTTP anomalies scan is cached" || bad "HTTP anomalies cache"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["cache"]["misses"] == 0 and d["cache"]["hits"] == d["returned"], d["cache"]
+PYEOF
+# Retraining must invalidate it: the same points can score differently.
+curl -s -o /dev/null "http://127.0.0.1:$PORT/force_train/live"
+curl -s -o "$WORK/scan3" "http://127.0.0.1:$PORT/models/dynamic/live/anomalies?limit=all"
+python3 - "$WORK/scan2" "$WORK/scan3" <<'PYEOF' && ok "HTTP retrain invalidates the scan cache" || bad "HTTP retrain invalidation"
+import json, sys
+a, b = (json.load(open(p)) for p in sys.argv[1:3])
+assert b["cache"]["epoch"] > a["cache"]["epoch"], (a["cache"], b["cache"])
+assert b["cache"]["misses"] == b["returned"], b["cache"]
+PYEOF
 
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "http://127.0.0.1:$PORT/delete_model/live")
 [ "$CODE" = "200" ] && ok "HTTP delete" || bad "HTTP delete ($CODE)"

@@ -80,6 +80,7 @@ $ `stdlib/ext/json.nu`
     i n_seen
     i last_trained
     i max_points
+    i score_epoch
     ( Vec VerCfg ) versions
 }
 
@@ -146,6 +147,7 @@ $ `stdlib/ext/json.nu`
     = . m n_seen 0
     = . m last_trained 0
     = . m max_points ANOM_MAX_POINTS
+    = . m score_epoch 1
     = . m versions ( meta_default_versions )
     ^ m
 }
@@ -783,6 +785,7 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set o `n_points_seen` ( json_int . m n_seen ) )
     ( json_obj_set o `last_trained_at` ( json_int . m last_trained ) )
     ( json_obj_set o `max_data_points` ( json_int . m max_points ) )
+    ( json_obj_set o `score_epoch` ( json_int . m score_epoch ) )
     ^ o
 }
 
@@ -1010,6 +1013,7 @@ $ `stdlib/ext/json.nu`
     = . m n_seen ( _an_jint j `n_points_seen` 0 )
     = . m last_trained ( _an_jint j `last_trained_at` 0 )
     = . m max_points ( _an_jint j `max_data_points` ANOM_MAX_POINTS )
+    = . m score_epoch ( _an_jint j `score_epoch` 1 )
 
     ? ok {} {
         ( meta_free m )
@@ -1078,6 +1082,16 @@ $ `stdlib/ext/json.nu`
     : i at ( meta_find_version m vname )
     ? < at 0 { ^ dflt } {}
     ?? ( vec_get [VerCfg] . m versions at ) { T vc → { ^ . vc decision_margin } F _ → { ^ dflt } }
+}
+
+// Bump the scoring epoch: the token every cached verdict is stamped with.
+// Anything that can change what a stored point scores — a retrain, a new
+// autoencoder, a margin edit, a version toggled on or off, a reset — bumps
+// it, and every cache entry carrying an older epoch is stale by
+// construction. One counter beats trying to reason about which caches a
+// given edit could have invalidated.
+@ meta_bump_epoch * Meta m → v {
+    = . m score_epoch + . m score_epoch 1
 }
 
 // Clamp a config into the range the trainer can actually honour, so a

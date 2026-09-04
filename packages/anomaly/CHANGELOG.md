@@ -1,5 +1,101 @@
 # Changelog
 
+## 0.8.0
+
+- **The autoencoder's decision margin is relative to its own threshold.**
+  This is a correctness fix, and it is the reason a trained autoencoder
+  looked like it was doing nothing.
+
+  Every forest version's `decision_margin` is an absolute offset on a
+  `decision_function` whose scale sklearn fixes: normal near 0, anomalies
+  below, so `0.06` travels between models. The autoencoder's score is
+  `reconstruction_threshold − mse`, and MSE has no fixed scale — it is the
+  mean squared error of MinMax-scaled features and lands wherever the data
+  puts it (~1e-3 on one model here, ~2e-4 on another).
+
+  The Python reference applies its absolute rule to the autoencoder anyway.
+  `model_training.py` sets `is_anomaly = mse > reconstruction_threshold`
+  inside the autoencoder branch, then — thirty lines later, at the same
+  indentation as the branch itself, so unconditionally — overwrites it with
+  `is_anomaly = bool(score <= -decision_margin)` using the autoencoder
+  default `0.05`. Against a threshold of ~5e-4 that demands a
+  reconstruction error a *hundred times* the p95 of the training errors.
+  The one version that models the joint distribution was, in practice,
+  off. The reference ships it `"enabled": False`, which is why nobody hit
+  it. We had ported the arithmetic faithfully, bug included.
+
+  `decision_margin` for the `autoencoder` version is now a **fraction** of
+  that model's reconstruction threshold:
+  `anomaly ⇔ mse >= threshold · (1 + decision_margin)`. The stored default
+  `0.05` reads "5 % above the p95 training error" — the documented intent —
+  and needs no migration: the value that was mute becomes the value that
+  works. Measured on a 32-feature home-sensor model, on points whose every
+  reading is real but whose clock was rotated 12 h so only the *relations*
+  are wrong: the autoencoder went from 1/150 to 150/150. The forests, which
+  cannot see relations at all, stayed at 15/150 either way.
+
+  `VerVerdict` now carries both `margin` (the effective band, so
+  `score <= -margin ⇒ anomaly` holds for every version without exception)
+  and `cfg_margin` (the stored number).
+
+- **`model_finetune` reaches the autoencoder.** It iterated `mo.forests`,
+  so the one version whose margin is hardest to guess by hand — because
+  the error scale is data-dependent — was the one version it skipped. It
+  now calibrates the autoencoder on the same rule as the forests
+  (`0.95 · |worst score over the ring|`), expressed in relative units.
+
+- **Anomaly attribution: which relationship broke.** `ae_feature_errors`
+  exposes the per-feature squared reconstruction error that `ae_mse`
+  already computed and threw away, and `model_ae_contrib` ranks it. A
+  feature's share is the amount by which it failed to be predictable from
+  all the others, so the top entries name the *relationship* that broke
+  rather than the largest number in the record. (The reference's
+  `feature_importance` is a z-score from the column mean, which can only
+  ever point at the value that was already extreme.)
+
+- **`GET /models/dynamic/<model>/anomalies`: scan the stored ring, cached.**
+  The dashboard used to re-score stored history one `POST /detect_only` at
+  a time, and every one of those loads the whole model — metadata, ring and
+  all five forest blobs — to score a single point. On a 7 271-point model
+  that is 45 ms each, 329 s for the ring, which is why the page capped
+  itself at 500 points.
+
+  The new route does one model load and one pass, filtered by `from`/`to`/
+  `last`, `limit`, `only=anomalies`, `versions=`, with `fields=` attaching
+  feature values and `contrib=N` the attribution above. Verdicts are cached
+  on disk in `scores.bin`. **14 s cold, 0.1 s warm** for the same ring.
+
+  Invalidation is by epoch, not by rule: `Meta.score_epoch` is bumped by
+  anything that can change a verdict — retrain, new autoencoder, margin
+  edit, version toggle, metadata patch, reset — and an entry stamped with
+  an older epoch is stale by construction. Cache rows are keyed on the
+  lifetime point counter rather than the ring index, so ring eviction
+  shifts nothing; the suite asserts that a point keeps its verdict across
+  an eviction.
+
+  A replayed verdict must not see the future, so `__an_score_enc_upto`
+  scores a stored point as though it sat at its own ring position: a
+  timevector window is built from the points *before* it. A scan therefore
+  reproduces `detect_only` exactly, which the suite checks point by point.
+
+- **The Anomalies dashboard is about the joint verdict now.** The old page
+  had one feature picker, which was only ever the chart's y-axis but read
+  as "interpret this one feature" — a fair reading, since with the
+  autoencoder muted the forests really were the whole verdict, and forests
+  really are per-feature detectors.
+
+  It now opens on a time range (last hour … everything stored, or a custom
+  window), and shows: the score timeline; a **version ribbon** — one row
+  per version, a mark wherever it flagged — which makes "the forests
+  flagged these spikes, the autoencoder flagged this whole regime" a
+  glance rather than a spreadsheet; any feature's own trace for context;
+  and a table naming the features whose relationship broke, with bars.
+  Filter chips toggle versions, and **only joint** switches every forest
+  off to leave exactly the points that are anomalous because of how the
+  features relate. A model with no trained autoencoder now says so in
+  place, instead of quietly showing only per-feature anomalies. The status
+  line reports how much of the scan came from cache.
+
 ## 0.7.0
 
 - **The ring size is metadata, not a constant.** `max_data_points` — how
