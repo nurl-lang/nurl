@@ -96,15 +96,7 @@
 <main>
   <div class="controls">
     <span><label class="lbl">Model</label><select id="model"></select></span>
-    <span><label class="lbl">Range</label><select id="range">
-      <option value="3600">last hour</option>
-      <option value="21600">last 6 hours</option>
-      <option value="86400" selected>last 24 hours</option>
-      <option value="604800">last 7 days</option>
-      <option value="2592000">last 30 days</option>
-      <option value="0">everything stored</option>
-      <option value="custom">custom…</option>
-    </select></span>
+    <span><label class="lbl">Range</label><select id="range" title="How far back from the newest stored point to scan. A model without timestamps counts points instead of hours."></select></span>
     <span id="customRange" style="display:none">
       <label class="lbl">From</label><input type="datetime-local" id="from">
       <label class="lbl" style="margin-left:6px">To</label><input type="datetime-local" id="to">
@@ -187,8 +179,23 @@ function fmtNum(x) {
   if (!isFinite(x)) return "–";
   return Math.abs(x) < 1e-4 && x !== 0 ? x.toExponential(2) : +x.toFixed(5) + "";
 }
+// COUNT: the selected model has no timestamps (`clock: "count"`); its
+// "times" are point ordinals and its ranges are point counts.
+let COUNT = false;
+const RANGES_TIME = [["3600", "last hour"], ["21600", "last 6 hours"], ["86400", "last 24 hours"],
+  ["604800", "last 7 days"], ["2592000", "last 30 days"], ["0", "everything stored"], ["custom", "custom…"]];
+const RANGES_COUNT = [["60", "last 60 points"], ["360", "last 360 points"], ["1440", "last 1,440 points"],
+  ["10080", "last 10,080 points"], ["43200", "last 43,200 points"], ["0", "everything stored"]];
+function renderRange() {
+  const prev = $("range").value;
+  const opts = COUNT ? RANGES_COUNT : RANGES_TIME;
+  $("range").innerHTML = opts.map(([v, l]) => '<option value="' + v + '">' + l + "</option>").join("");
+  $("range").value = opts.some(([v]) => v === prev) ? prev : (COUNT ? "1440" : "86400");
+  $("customRange").style.display = $("range").value === "custom" ? "inline" : "none";
+}
 function fmtTime(t) {
   if (!t) return "–";
+  if (COUNT) return "#" + Math.round(t / 60).toLocaleString();
   const d = new Date(t * 1000);
   return d.toLocaleString(undefined, { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
@@ -233,6 +240,8 @@ function loadFeatures() {
     : '<option value="">(no numeric features)</option>';
   if (prev && keys.includes(prev)) $("feature").value = prev;
   const m = MODELS[name] || {};
+  COUNT = m.clock === "count";
+  renderRange();
   const ae = m.autoencoder;
   $("prog").textContent = ae && ae.trained
     ? "autoencoder trained on " + ae.training_data_points + " points"
@@ -257,8 +266,10 @@ function rangeParams() {
     if (t) p.push("to=" + Math.floor(new Date(t).getTime() / 1000));
     return p.join("&");
   }
-  const secs = parseInt(sel, 10);
-  return secs > 0 ? "last=" + secs : "";
+  // seconds on a time clock, points on a count clock — the service reads
+  // `last=` in the model's own unit
+  const n = parseInt(sel, 10);
+  return n > 0 ? "last=" + n : "";
 }
 
 async function scan(force) {
@@ -547,6 +558,7 @@ $("range").onchange = () => {
   $("customRange").style.display = $("range").value === "custom" ? "inline" : "none";
 };
 $("feature").onchange = () => { if (SCAN) scan(false); };
+renderRange();
 
 const qp = new URLSearchParams(location.search);
 Auth.ready().then(() => loadModels(qp.get("model"))).then(() => {

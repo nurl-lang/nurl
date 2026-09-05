@@ -248,6 +248,28 @@ $ `src/store.nu`
     ^ F
 }
 
+// ── Which clock ───────────────────────────────────────────────────────
+
+// The newest stored stamp, or 0 on an empty ring.
+@ model_last_ts * Model mo → i {
+    : i np ( vec_len [i] . mo times )
+    ? > np 0 { ?? ( vec_get [i] . mo times - np 1 ) { T x → { ^ x } F _ → {} } } {}
+    ^ 0
+}
+
+// The tick the NEXT point gets on the count clock: one past the newest.
+@ model_next_tick * Model mo → i {
+    ^ + ( model_last_ts mo ) ANOM_TICK
+}
+
+// "Now" for this model: the wall clock, or on the count clock the newest
+// tick — the moment the last point arrived is the only present it has.
+@ model_now * Model mo → i {
+    : *Meta mm . mo meta
+    ? . mm count_clock { ^ ( model_last_ts mo ) } {}
+    ^ ( now_seconds )
+}
+
 @ model_free * Model mo → v {
     ( __an_free_forests mo )
     ( vec_free [VerModel] . mo forests )
@@ -645,7 +667,7 @@ $ `src/store.nu`
 }
 
 @ model_force_train * Model mo → i {
-    ^ ( model_force_train_at mo ( now_seconds ) )
+    ^ ( model_force_train_at mo ( model_now mo ) )
 }
 
 // ── The autoencoder version ───────────────────────────────────────────
@@ -677,7 +699,7 @@ $ `src/store.nu`
 // retrain repeats it with the same layout and pre-filter (see
 // __an_retrain_ae). Returns the error text ("" = success).
 @ model_train_autoencoder * Model mo ( Vec i ) hidden f contamination → String {
-    ^ ( model_train_autoencoder_at mo hidden contamination ( now_seconds ) )
+    ^ ( model_train_autoencoder_at mo hidden contamination ( model_now mo ) )
 }
 
 @ model_train_autoencoder_at * Model mo ( Vec i ) hidden f contamination i now → String {
@@ -799,6 +821,8 @@ $ `src/store.nu`
 }
 
 @ model_ingest * Model mo Json raw → !Verdict String {
+    : *Meta mm . mo meta
+    ? . mm count_clock { ^ ( model_ingest_at mo raw ( model_next_tick mo ) ) } {}
     ^ ( model_ingest_at mo raw ( now_seconds ) )
 }
 
@@ -878,9 +902,13 @@ $ `src/store.nu`
 }
 
 // Import `recs` into the model. Records keep their own `timestamp` when
-// they carry one; the rest are placed at `now`. Returns what happened.
+// they carry one; the rest are placed at `now`. On the count clock a
+// record's own stamp is ignored: the file's order is its time, and the
+// rows take the ticks after the newest stored point, one each. Returns
+// what happened.
 @ model_import_at * Model mo ( Vec Json ) recs i now → ImportReport {
     : *Meta mm . mo meta
+    : ~ i tick ( model_next_tick mo )
     : i nrec ( vec_len [Json] recs )
     ? > nrec 0 {} {
         ^ @ ImportReport { 0 0 ( vec_len [String] . mo lines ) F
@@ -903,7 +931,8 @@ $ `src/store.nu`
                     T p → {
                         ( enc_free p )
                         : i given ( __an_imp_ts rec )
-                        : i ts ? > given 0 given now
+                        : ~ i ts ? > given 0 given now
+                        ? . mm count_clock { = ts tick = tick + tick ANOM_TICK } {}
                         : Json out ( json_clone rec )
                         ( json_obj_set out `timestamp` ( json_int ts ) )
                         : String line ( json_stringify out )
@@ -1008,14 +1037,16 @@ $ `src/store.nu`
     // forests it had before.
     : ~ b trained F
     ? >= ( vec_len [String] . mo lines ) . mo min_points {
-        ? > ( model_force_train_at mo now ) 0 { = trained T } {}
+        // On the count clock the present moved with the import.
+        : i tnow ? . mm count_clock ( model_now mo ) now
+        ? > ( model_force_train_at mo tnow ) 0 { = trained T } {}
     } {}
     ^ @ ImportReport { accepted rejected ( vec_len [String] . mo lines ) trained
         ( string_new ) notes }
 }
 
 @ model_import * Model mo ( Vec Json ) recs → ImportReport {
-    ^ ( model_import_at mo recs ( now_seconds ) )
+    ^ ( model_import_at mo recs ( model_now mo ) )
 }
 
 // ── Calibration and fine-tuning ───────────────────────────────────────
@@ -1284,7 +1315,8 @@ $ `src/store.nu`
             ?? ( vec_get [i] . mo times - np 1 ) { T x → { = anchor x } F _ → {} }
         } {}
     }
-    ? > anchor 0 { ^ - anchor last } { ^ 0 }
+    // A window reaching past the beginning of time is the whole ring (0).
+    ? > anchor 0 { : i f - anchor last ^ ? > f 0 f 0 } { ^ 0 }
 }
 
 // One version's fine-tune outcome.
@@ -1297,6 +1329,8 @@ $ `src/store.nu`
     i after  // flagged at new_margin
     f worst
     b applied  // F on a dry run, or when the version was filtered out
+    i ft_from  // the window's lower bound this version was tuned over
+    i ft_n_rows  // ring rows inside that window
 }
 
 : FineTuneReport {
@@ -1353,6 +1387,8 @@ $ `src/store.nu`
                     ( cal_flagged_at cv nm_new )
                     . cv worst
                     did
+                    from_ts
+                    . cal n_rows
                 } )
             }
             F _ → {}
@@ -1364,11 +1400,121 @@ $ `src/store.nu`
     ^ @ FineTuneReport { items rate from_ts to_ts nr apply }
 }
 
+// The lower bound of a version's OWN window, anchored on the newest stored
+// point: window_min minutes back for a forest version, window_size points
+// back for timevector, and the whole ring (0) for the autoencoder, whose
+// training set is the whole ring too.
+@ model_version_from * Model mo s vname → i {
+    : *Meta mm . mo meta
+    : i nv ( vec_len [VerCfg] . mm versions )
+    : ~ i k 0
+    ~ < k nv {
+        ?? ( vec_get [VerCfg] . mm versions k ) {
+            T vc → {
+                ? == ( nurl_str_eq ( string_data . vc vname ) vname ) 1 {
+                    ? > . vc window_min 0 {
+                        // On a count clock the window is exactly window_min
+                        // points; the lower bound is inclusive, so the span
+                        // is one tick short (as `last=N` is in the service).
+                        : ~ i span * . vc window_min 60
+                        ? . mm count_clock { = span - span ANOM_TICK } {}
+                        ^ ( model_window_from_last mo 0 span )
+                    } {}
+                    ? > . vc window_size 0 {
+                        : i np ( model_n_points mo )
+                        : i at - np . vc window_size
+                        ? > at 0 { ?? ( vec_get [i] . mo times at ) { T x → { ^ x } F _ → {} } } {}
+                    } {}
+                    ^ 0
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ 0
+}
+
+// Fine-tune every version over ITS OWN window — the one it trains on —
+// so short_term's margin answers for the last three hours and seasonal's
+// for the last ninety days, each at the same rate. One calibration per
+// version; the report's window is the widest of them.
+@ model_finetune_own * Model mo f rate b apply ( Vec String ) only → FineTuneReport {
+    : ( Vec FtVer ) items ( vec_new [FtVer] )
+    : ( Vec String ) names ( model_scan_versions mo )
+    : i nn ( vec_len [String] names )
+    : ~ i lo 0
+    : ~ b first T
+    : ~ i rows 0
+    : ~ i k 0
+    ~ < k nn {
+        ?? ( vec_get [String] names k ) {
+            T nm → {
+                : i from_ts ( model_version_from mo ( string_data nm ) )
+                : ( Vec String ) one ( vec_new [String] )
+                ( vec_push [String] one ( string_from ( string_data nm ) ) )
+                : ~ b wanted T
+                : i nonly ( vec_len [String] only )
+                ? > nonly 0 {
+                    = wanted F
+                    : ~ i q 0
+                    ~ < q nonly {
+                        ?? ( vec_get [String] only q ) {
+                            T o → { ? == ( nurl_str_eq ( string_data o ) ( string_data nm ) ) 1 { = wanted T } {} }
+                            F _ → {}
+                        }
+                        = q + q 1
+                    }
+                } {}
+                : FineTuneReport part ( model_finetune_at mo rate from_ts 0 & apply wanted one )
+                : i np ( vec_len [FtVer] . part items )
+                : ~ i j 0
+                ~ < j np {
+                    ?? ( vec_get [FtVer] . part items j ) {
+                        T ft → {
+                            ? == ( nurl_str_eq ( string_data . ft ftname ) ( string_data nm ) ) 1 {
+                                : ~ FtVer c ft
+                                = . c ftname ( string_from ( string_data . ft ftname ) )
+                                ( vec_push [FtVer] items c )
+                                ? | first < from_ts lo { = lo from_ts = first F } {}
+                                ? > . part n_rows rows { = rows . part n_rows } {}
+                            } {}
+                        }
+                        F _ → {}
+                    }
+                    = j + j 1
+                }
+                ( finetune_free part )
+                ( vec_free_with [String] one \ String x → v { ( string_free x ) } )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
+    ^ @ FineTuneReport { items rate lo 0 rows apply }
+}
+
 // The one-call form: 1 % of the last 24 hours, applied to every version.
 : f ANOM_FT_RATE 0.01
 
+// A `last` as a caller says it — seconds on a time clock, points on a count
+// clock — as the span model_window_from_last takes. N points back from the
+// newest is N ticks INCLUDING it, so the span is one short of N whole ticks.
+@ model_last_span * Model mo i last → i {
+    : *Meta mm . mo meta
+    ? & . mm count_clock > last 0 { ^ - * last ANOM_TICK 1 } {}
+    ^ last
+}
+
+// The default window: a day, or its worth of points (1440) on a count clock.
+@ model_default_last * Model mo → i {
+    : *Meta mm . mo meta
+    ^ ? . mm count_clock / ANOM_CAL_WINDOW ANOM_TICK ANOM_CAL_WINDOW
+}
+
 @ model_finetune * Model mo → FineTuneReport {
-    : i from_ts ( model_window_from_last mo 0 ANOM_CAL_WINDOW )
+    : i from_ts ( model_window_from_last mo 0 ( model_last_span mo ( model_default_last mo ) ) )
     : ( Vec String ) none ( vec_new [String] )
     : FineTuneReport rep ( model_finetune_at mo ANOM_FT_RATE from_ts 0 T none )
     ( vec_free [String] none )
@@ -1792,6 +1938,7 @@ $ `src/store.nu`
     = . fresh sched_below . old sched_below
     = . fresh sched_at_max . old sched_at_max
     = . fresh sched_ae . old sched_ae
+    = . fresh count_clock . old count_clock
     // Carry the scoring epoch across the reset, bumped: cached verdicts for
     // the discarded points must never be mistaken for verdicts of the new
     // ones that will reuse their ring positions.
@@ -1985,6 +2132,7 @@ $ `src/store.nu`
 @ meta_editable_fields → Json {
     : Json a ( json_arr_new )
     ( json_arr_push a ( json_str_lit `alias` ) )
+    ( json_arr_push a ( json_str_lit `clock` ) )
     ( json_arr_push a ( json_str_lit `schedule` ) )
     ( json_arr_push a ( json_str_lit `max_data_points` ) )
     ( json_arr_push a ( json_str_lit `versions` ) )
@@ -2025,6 +2173,26 @@ $ `src/store.nu`
             = . mm sched_at_max atmax
             ?? ( json_obj_get sj `autoencoder` ) { T aj → { = . mm sched_ae ( json_as_bool aj ) } F _ → {} }
             = touched T
+        }
+        F _ → {}
+    }
+
+    ?? ( json_obj_get patch `clock` ) {
+        T cj → {
+            ? ( json_is_str cj ) {} { ^ ( string_from `clock must be "time" or "count"` ) }
+            : s cs ( json_str_data cj )
+            : ~ b want F
+            ? == ( nurl_str_eq cs `count` ) 1 { = want T } {
+                ? == ( nurl_str_eq cs `time` ) 1 {} { ^ ( string_from `clock must be "time" or "count"` ) }
+            }
+            ? == want . mm count_clock {} {
+                // Ticks and wall-clock stamps must never share a ring.
+                ? == ( vec_len [String] . mo lines ) 0 {} {
+                    ^ ( string_from `clock can only change on a model with no stored points (reset it first)` )
+                }
+                = . mm count_clock want
+                = touched T
+            }
         }
         F _ → {}
     }

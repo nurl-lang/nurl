@@ -154,8 +154,17 @@ $ curl -X POST localhost:8811/api/dynamic/boiler/finetune \
 
 The window is counted back from the newest stored point, not the clock, so
 a feed that stopped still calibrates on its last day; `last: "all"` is the
-whole ring. Ties in the data can make the count land above the target — the
-report says what it actually flagged, before and after.
+whole ring. `last: "own"` (`--last own`) gives every version its own
+window — the period it trains on: `short_term` tunes on the last 3 h,
+`daily` on 24 h, `weekly` on 7 d, `seasonal` on 90 d, `timevector` on its
+window of points — so each margin answers for the horizon its forest looks
+at. The dashboard's window picker offers exactly these periods. Ties in the
+data can make the count land above the target — the report says what it
+actually flagged, before and after.
+
+On a model without timestamps (a *count clock*, see below) every window is a
+number of points: `last: 1440` is the newest 1,440 points, `--last 100` the
+newest hundred.
 
 The table above is also the drift detector: an autoencoder trained once on
 a week in June and never again will, by September, flag most of every day
@@ -233,7 +242,46 @@ Two things it does that a replay through `/detect` would not:
 
 A row that cannot be read does not fail the file: it is counted, and the
 first few are named by line. A file bigger than the ring is a file whose
-*tail* the model keeps.
+*tail* the model keeps. `-`, `--`, `NA`, `N/A`, `NaN`, `null` and `None`
+are missing values, not text.
+
+### Finding the time in a file
+
+A file rarely calls its clock `timestamp`. The importer reads the columns
+before a row lands and proposes where the time is:
+
+- a **column** whose values parse as a stamp under any name (`ajanhetki`,
+  `ts`, `created`…): ISO 8601 / RFC 3339, the Postgres and MySQL
+  `TIMESTAMP` / `TIMESTAMPTZ` forms (`2026-08-29 00:10:00+03`), compact
+  `20260829T001000`, Unix seconds / milliseconds / microseconds /
+  nanoseconds, or a bare date;
+- **parts** — year / month / day plus a clock or hour / minute / second,
+  under English or Finnish names (`Vuosi`, `Kuukausi`, `Päivä`, `Aika`,
+  `tunti`, `min`…), the way an FMI weather export is laid out;
+- **none** — nothing in the file reads as a time.
+
+`POST /models/dynamic/<m>/import?inspect=1` returns that proposal with its
+confidence and a sample of the first row read (`2026-08-29T00:00:00+03:00`)
+and creates nothing; the trainer page shows it and lets you confirm, pick
+another column or set of parts, choose the zone naive stamps are read in
+(`tz=local|utc|+03:00`), or import with no time at all. The import call
+takes the plan back (`time=<json>`, `{"mode":"auto"}` is the proposal) and
+drops the columns it consumed, so a year never becomes a feature.
+`calendar=1` keeps an ISO `time` column so hour / weekday / month become
+features of the model.
+
+### Data without timestamps: the count clock
+
+Points that carry no time are not given one. A model born from unstamped
+rows runs on a **count clock** (`"clock": "count"` in its metadata): the
+n-th point is simply #n, every window in the package is a number of points
+— a `window_minutes: 1440` forest is the last 1,440 points, `last=100` the
+newest hundred — and the dashboards label points by their ordinal instead
+of a date. Nothing time-of-day shaped is derived. The clock is settled by
+the first points and can only change while the model is empty
+(`{"clock": "time"}` through the metadata, or `?clock=` on the first
+import); rows arriving later conform to it, and the import says so in
+`notes` when it had to ignore stamps or invent them.
 
 Creating a model is a structural act, so importing is an admin's — and the
 model it creates belongs to the **organization**, exactly like one grown from
@@ -597,7 +645,8 @@ anomaly train  <model>                 # force a retrain now
 anomaly train-ae <model>               # train the autoencoder version
 anomaly calibrate <model> [--last S]   # alert rates vs margins over a window
 anomaly finetune <model> [--rate R]    # set every margin from a target rate
-               [--last S|all] [-n]     #   (-n / --dry-run previews)
+               [--last S|all|own] [-n] #   (own: each version its own period;
+                                       #    -n / --dry-run previews)
 anomaly reset  <model>                 # drop data+forests, keep the name
 anomaly rm     <model>                 # delete the model entirely
 anomaly ls / info <model>              # list models / dump metadata
@@ -624,7 +673,7 @@ command with `--store DIR`.
 | `GET /models/dynamic/<m>/data?limit=N\|all` | recent raw points |
 | `GET /models/dynamic/<m>/anomalies` | re-score the stored ring, cached (see below) |
 | `POST /models/dynamic/<m>/claim` | adopt an unclaimed model into your organization |
-| `POST /models/dynamic/<m>/import?format=` | import a CSV/JSON/JSONL file of history |
+| `POST /models/dynamic/<m>/import?format=&inspect=&time=&tz=&calendar=&clock=` | import a CSV/JSON/JSONL file of history; `inspect=1` proposes where its time is |
 | `DELETE /api/me` | delete your account (right to be forgotten) |
 | `GET\|PUT /api/tenants[/<tid>]` | approve organizations (owner tenant) |
 | `GET /api/orgs`, `GET\|PUT\|DELETE /api/orgs/<org>/users[/<sub>[/role]]` | administer any organization (owner tenant) |
@@ -636,7 +685,7 @@ command with `--store DIR`.
 | `DELETE\|GET /delete_model/<m>` | delete entirely |
 | `PUT /api/dynamic/<m>/schedule` | `{"below_max_retrain_frequency": .., "at_max_retrain_frequency": ..}` |
 | `GET /models/dynamic/<m>/calibration?last=&from=&to=&curve=` | alert rates vs margins over a window of the ring (read-only) |
-| `POST /api/dynamic/<m>/finetune` | set margins from a target alert rate — `{"rate": 0.01, "last": 86400, "dry_run": false, "versions": [..]}` |
+| `POST /api/dynamic/<m>/finetune` | set margins from a target alert rate — `{"rate": 0.01, "last": 86400 \| "all" \| "own", "dry_run": false, "versions": [..]}` |
 | `POST /train/autoencoder/<m>` | train the autoencoder version — optional `{"hidden": [..], "contamination": x}` |
 
 Model names must match `^[a-zA-Z0-9_]+$`. The router is a plain function
@@ -704,7 +753,7 @@ build step — plain HTML/CSS/JS that talks to the routes above):
 | Page | What it does |
 | --- | --- |
 | `/` · `/modelmanager.html` | list models, train / finetune / reset / delete; per model: toggle versions, edit margins and contamination with a live *flags in window* column from the calibration report, preview and apply a fine-tune for a target alert rate, train the autoencoder, edit the retrain schedule — or, under *Advanced*, the whole editable metadata, as a generated field form or as raw JSON. Every alert-affecting control carries a `?` that says what it means and which way to move it |
-| `/modeltrainer.html` | import a CSV/JSON/JSONL file of history; feed points (`/detect`) one at a time or in bulk; force-train |
+| `/modeltrainer.html` | import a CSV/JSON/JSONL file of history — inspect first: the page shows where it found the time (a column, year/month/day parts, or none) and lets you confirm or change it; feed points (`/detect`) one at a time or in bulk; force-train |
 | `/visualize.html` | plot any numeric feature of a model's stored points over time |
 | `/admin.html` | the organization: users and their roles, API keys, model ownership |
 | `/anomalies.html` | scan stored history over a time range: score timeline, a per-version ribbon showing *what* flagged *when*, any feature's own trace for context, and a table naming the features whose relationship broke. Filter chips isolate the joint (autoencoder) anomalies from the per-feature (forest) ones |

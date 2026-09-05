@@ -153,7 +153,8 @@ Persisted as JSON (`std/ext/json`). Fields:
   "versions":        { version_name: <version config>, ... },
   "n_points_seen":   int,
   "last_trained_at": int,  // point count at last train
-  "max_data_points": int   // ring capacity, editable (§6)
+  "max_data_points": int,  // ring capacity, editable (§6)
+  "clock":           "time" | "count"   // §5.8; editable only while empty
 }
 ```
 
@@ -356,6 +357,36 @@ point as though it sat at its own ring position, so a timevector window is
 built from the points *before* it. A scan therefore reproduces
 `detect_only` exactly.
 
+### 5.8 The clock of a model
+
+Every stored point carries an `i` timestamp, and every window in this
+package — the four forest versions' `window_minutes`, calibration's and
+fine-tune's `last`, the scan's `from`/`to` — is a span of those stamps. A
+model has one of two clocks (`Meta.count_clock`, JSON `clock`):
+
+- **`time`** — the stamps are Unix seconds: the point's own `timestamp`, or
+  the wall clock when it arrives without one. Windows are durations.
+- **`count`** — the data has no timestamps and the model refuses to invent
+  any. The n-th stored point is stamped `n × ANOM_TICK` (60), whatever the
+  wall clock says, so every duration in the package is a *number of
+  points*: a version's `window_minutes` is a point count, `last=N` is the
+  newest N points (span `N × 60 − 1`, the lower bound being inclusive), and
+  a dashboard shows the stamp as the ordinal `#n`. Nothing time-of-day
+  shaped is ever derived — no calendar features, no "last 24 h" in the
+  wall-clock sense.
+
+The clock is chosen when the first points land — an import of unstamped
+rows makes a count-clock model, of stamped rows a time-clock one, and
+`?clock=` overrides — and is editable through the metadata only while the
+model holds no points, because a stored ring on the wrong clock would put
+every window in the wrong unit. On a settled clock later rows conform:
+stamps landing on a count clock become ticks, unstamped rows on a time
+clock take the clock time, and the import reports both in `notes`.
+
+The 60-second tick is not a claim about the data's cadence. It only makes
+minute-denominated windows and point counts the same number, so a
+`window_minutes: 180` forest is the last 180 points on either clock.
+
 ### 5.7 Identity, organisations and ownership (`src/authz.nu`)
 
 The service was single-user by construction: every route reached every model
@@ -490,9 +521,28 @@ service so existing dashboards and the `modelmanager` UI keep working:
   contamination?: float }` → `training_data_points`, `filtered_anomalies`,
   `reconstruction_threshold`. Both are stored with the net and reused when
   `schedule.autoencoder` retrains it with the forests.
+- `POST /models/dynamic/<model>/import?format=csv|json|jsonl|auto` — the
+  body is the file. The rows' time is read before any lands:
+  `?inspect=1` returns the columns (`name`, `kind`, `filled`, `sample`)
+  and a proposal `time { mode: column|parts|none, column | parts { year,
+  month, day, clock | hour, minute, second }, confidence, reason, sample,
+  sample_unix }` without creating the model (`model { exists, data_points,
+  clock }`). The import then takes the plan back as `?time=<json>`
+  (`{"mode":"auto"}` = the proposal), the zone naive stamps are read in as
+  `?tz=local|utc|±HH:MM`, `?calendar=1` to keep an ISO `time` column for
+  calendar features, and `?clock=time|count` for a new model (§5.8).
+  Recognised as a stamp under any column name: ISO 8601 / RFC 3339, the
+  Postgres and MySQL `TIMESTAMP` / `TIMESTAMPTZ` forms, `YYYYMMDDTHHMMSS`,
+  Unix seconds / milliseconds / microseconds / nanoseconds, a bare date;
+  as parts, year/month/day/hour/minute/second columns under English or
+  Finnish names (`Vuosi`, `Kuukausi`, `Päivä`, `Aika`, …). The consumed
+  columns are dropped so a year never becomes a feature; `-`, `NA`, `null`
+  and their kin are missing values. Response adds `clock` and `time {
+  …plan, stamped, failed, first_failure? }`.
 - `GET /models/dynamic/<model>/calibration` — §5.2 `model_calibrate` over
   the same window query as the scan (`from` / `to` / `last`, default the
-  last 24 h of stored data, `last=all` the whole ring), read-only. Response:
+  last 24 h of stored data, `last=all` the whole ring; on a count clock
+  `last` is a number of points, default 1440), read-only. Response:
   `window { from, to, rows, total }`, `aggregate { flagged, rate }` and per
   enabled, trained version `{ margin, n, flagged, rate, worst, median,
   margin_for_rate: { "0.1%": { margin, flagged }, "0.5%", "1%", "2%", "5%",
@@ -501,9 +551,16 @@ service so existing dashboards and the `modelmanager` UI keep working:
   estimated alert rate without a round trip. `curve=0` omits it. 400 on an
   untrained model.
 - `POST /api/dynamic/<model>/finetune` body (all optional) = `{ rate: 0.01,
-  last: 86400 | "all", from, to, dry_run: false, versions: [names] }` →
-  `rate`, `dry_run`, `window`, per version `{ old_margin, new_margin, n,
-  flagged_before, flagged_after, rate_before, rate_after, worst, applied }`,
+  last: 86400 | "all" | "own", from, to, dry_run: false, versions: [names] }` →
+  `rate`, `dry_run`, `window { from, to, rows, own }`, per version `{
+  old_margin, new_margin, n, rows, from, flagged_before, flagged_after,
+  rate_before, rate_after, worst, applied }`. `last: "own"` tunes every
+  version over its own period — the window it trains on (`window_minutes`
+  back for a forest, `window_size` points for timevector, the ring for the
+  autoencoder) — so the short-term margin answers for the last three hours
+  and the seasonal one for the last ninety days; the report's `window` is
+  then the widest of them. On a count clock `last` is a number of points.
+  The response also carries
   plus the legacy `adjusted_margins` and `max_anomaly_scores` maps. 400 on
   a rate outside `[0, 1]`.
 - model-name validation: `^[a-zA-Z0-9_]+$` (reject otherwise, mirrors reference).

@@ -8,7 +8,8 @@
 //   anomaly calibrate <model> [--last S]   alert rate at the current margins,
 //                                          margin for each standard rate
 //   anomaly finetune <model> [--rate R]    set margins so R of the window is
-//                  [--last S] [--dry-run]  flagged (default 1 % of 24 h)
+//                  [--last S|all|own] [-n]  flagged (default 1 % of 24 h;
+//                                          own = each version its period)
 //   anomaly reset  <model>                 drop data+forests, keep the name
 //   anomaly rm     <model>                 delete the model entirely
 //   anomaly ls                             list models in the store
@@ -504,14 +505,15 @@ $ `src/service.nu`
     : i from0 ( ctx_int x `from` )
     : i to0 ( ctx_int x `to` )
     : String lasts ( ctx_str x `last` )
-    : ~ i last ANOM_CAL_WINDOW
+    : ~ i last ( model_default_last mo )
     : s lraw ( string_data lasts )
     ? || == ( nurl_str_eq lraw `all` ) 1 == ( nurl_str_eq lraw `*` ) 1 { = last 0 } {
         ?? ( string_to_int lasts ) { T v → { ? > v 0 { = last v } {} } F _ → {} }
     }
     ( string_free lasts )
     : ~ i from_ts from0
-    ? & > last 0 <= from0 0 { = from_ts ( model_window_from_last mo to0 last ) } {}
+    // seconds on a time clock, points on a count clock
+    ? & > last 0 <= from0 0 { = from_ts ( model_window_from_last mo to0 ( model_last_span mo last ) ) } {}
     : ( Vec i ) w ( vec_new [i] )
     ( vec_push [i] w from_ts )
     ( vec_push [i] w to0 )
@@ -600,9 +602,10 @@ $ `src/service.nu`
     ^ rc
 }
 
-// anomaly finetune <model> [--rate R] [--last S|all] [--dry-run]
+// anomaly finetune <model> [--rate R] [--last S|all|own] [--dry-run]
 //
-// Set every version's margin so that R of the window is flagged.
+// Set every version's margin so that R of the window is flagged. `--last
+// own` gives every version its own window — the period it trains on.
 @ __an_cmd_finetune CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
@@ -622,7 +625,11 @@ $ `src/service.nu`
             : ( Vec i ) w ( __an_cli_window mo x )
             : b dry ( ctx_bool x `dry-run` )
             : ( Vec String ) none ( vec_new [String] )
-            : FineTuneReport rep ( model_finetune_at mo rate ( _mlp_iget w 0 ) ( _mlp_iget w 1 ) ! dry none )
+            : String lasts ( ctx_str x `last` )
+            : b own == ( nurl_str_eq ( string_data lasts ) `own` ) 1
+            ( string_free lasts )
+            : FineTuneReport rep ? own ( model_finetune_own mo rate ! dry none )
+            ( model_finetune_at mo rate ( _mlp_iget w 0 ) ( _mlp_iget w 1 ) ! dry none )
             ( vec_free [String] none )
             ( vec_free [i] w )
             ( pline ? dry `dry run — nothing written` `margins updated` )
@@ -745,7 +752,7 @@ $ `src/service.nu`
 }
 
 @ main → i {
-    : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` `0.10.0` )
+    : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` `0.11.0` )
     ( cli_flag_str c `store` 115 `DIR` `model store (default: $ANOMALY_HOME, else ~/.anomaly)` `` `ANOMALY_HOME` )
     ( cli_flag_str c `file` 102 `FILE` `for batch: read CSV from FILE instead of stdin` `` `` )
     ( cli_flag_str c `margin` 109 `M` `for batch: decision margin (default 0 = predict==-1)` `0` `` )
@@ -754,7 +761,7 @@ $ `src/service.nu`
     ( cli_flag_str c `webroot` 119 `DIR` `for serve: dashboard HTML dir (default: <exe>/static, $ANOMALY_WEBROOT)` `` `ANOMALY_WEBROOT` )
     ( cli_flag_bool c `header` 72 `for batch: skip the first CSV line (header)` )
     ( cli_flag_float c `rate` 114 `R` `for finetune: fraction of the window to flag (default 0.01)` 0.01 `` )
-    ( cli_flag_str c `last` 108 `SECONDS` `for calibrate/finetune: window back from the newest point (default 86400; all = whole ring)` `` `` )
+    ( cli_flag_str c `last` 108 `SECONDS` `for calibrate/finetune: window back from the newest point (default 86400; all = whole ring; finetune: own = each version its own period). Points, not seconds, on a count-clock model` `` `` )
     ( cli_flag_int c `from` 0 `UNIX` `for calibrate/finetune: window start (unix seconds)` 0 `` )
     ( cli_flag_int c `to` 0 `UNIX` `for calibrate/finetune: window end (unix seconds)` 0 `` )
     ( cli_flag_bool c `dry-run` 110 `for finetune: report the margins without writing them` )

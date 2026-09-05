@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.11.0
+
+- **The importer finds the time.** `POST /models/dynamic/<m>/import` reads
+  the columns before a row lands: a column whose values parse as a stamp
+  under any name (ISO 8601 / RFC 3339, Postgres and MySQL `TIMESTAMP` and
+  `TIMESTAMPTZ`, compact `YYYYMMDDTHHMMSS`, Unix s/ms/µs/ns, a bare date),
+  or year / month / day plus clock / hour / minute / second parts under
+  English or Finnish names — an FMI export (`Vuosi, Kuukausi, Päivä, Aika`)
+  imports as is. `?inspect=1` returns the proposal with a confidence and a
+  sample, without creating the model; `?time=<plan>` confirms or overrides
+  it, `?tz=` says which zone naive stamps are in, `?calendar=1` keeps an
+  ISO `time` column for calendar features. Consumed columns are dropped so
+  a year never becomes a feature; `-`, `NA`, `null` and their kin are
+  missing values. The trainer page inspects on file pick and shows the
+  guess to confirm, change, or import without a time.
+
+- **A model without timestamps counts points.** Unstamped rows make a
+  count-clock model (`"clock": "count"`): the n-th point is #n, every
+  window is a number of points (`window_minutes: 1440` = the last 1,440
+  points, `last=100` = the newest hundred, also on the CLI), and the
+  dashboards label points by ordinal. No time is ever invented. The clock
+  can change only while the model is empty; later rows conform to it and
+  the import notes when it ignored or supplied stamps.
+
+- **Fine-tune on each version's own period.** `last: "own"` (`--last own`)
+  tunes every version over the window it trains on — 3 h for `short_term`,
+  90 d for `seasonal`, its point window for `timevector` — and the report
+  says per version how many rows it saw. The dashboard's window picker is
+  now the versions' periods (`3 h · short_term`, `24 h · daily`, …, `own`).
+
+- **The model panel is a panel.** The per-model drawer opens as a centred
+  1,100-px view instead of a side sheet; it shows the model's clock, and
+  the fine-tune table has a per-version window column.
+
 ## 0.10.0
 
 - **Margins you can read.** `GET /models/dynamic/<m>/calibration` (and

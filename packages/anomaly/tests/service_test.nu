@@ -569,6 +569,132 @@ $ `src/service.nu`
     ( check > an5_epoch an1_epoch `svc: the epoch advanced` )
     ( json_free . an5 body )
 
+    // Import with a clock to find. An FMI-shaped file: the time is spread
+    // over year/month/day/clock columns under Finnish names, and `-` is a
+    // missing value. inspect=1 describes the file and proposes the parts
+    // without creating the model; the import then stamps every row from
+    // that proposal and drops the consumed columns.
+    : s FMI `Havaintoasema,Vuosi,Kuukausi,Päivä,Aika [Paikallinen aika],Ilman lämpötila [°C],Suhteellinen kosteus [%]
+Kouvola Anjala,2026,8,29,00:00,12.1,88
+Kouvola Anjala,2026,8,29,00:10,12.0,89
+Kouvola Anjala,2026,8,29,00:20,11.8,-
+Kouvola Anjala,2026,8,29,00:30,11.7,90
+Kouvola Anjala,2026,8,29,00:40,11.5,91
+Kouvola Anjala,2026,8,29,00:50,11.4,92
+`
+    : SvcOut insp ( fire r `POST` `/models/dynamic/svc_imp/import` `inspect=1&format=csv&tz=utc` FMI )
+    ( check == . insp status 200 `svc: import inspect -> 200` )
+    : ~ b insp_parts F
+    : ~ i insp_unix 0
+    ?? ( json_obj_get . insp body `time` ) {
+        T tj → {
+            = insp_parts ( jstr_eq tj `mode` `parts` )
+            = insp_unix ( jint_of tj `sample_unix` )
+        }
+        F _ → {}
+    }
+    ( check insp_parts `svc: inspect proposes the year/month/day/clock parts` )
+    ( check == insp_unix 1787961600 `svc: inspect reads the first row as 2026-08-29T00:00:00Z` )
+    : ~ b insp_exists T
+    ?? ( json_obj_get . insp body `model` ) { T mj → { = insp_exists ( jbool_of mj `exists` ) } F _ → {} }
+    ( check ! insp_exists `svc: inspect does not bring the model into being` )
+    ( json_free . insp body )
+    : SvcOut md_none ( fire r `GET` `/models/dynamic/svc_imp/metadata` `` `` )
+    ( check == . md_none status 404 `svc: inspected model still 404` )
+    ( json_free . md_none body )
+
+    : SvcOut imp ( fire r `POST` `/models/dynamic/svc_imp/import` `format=csv&tz=utc` FMI )
+    ( check == . imp status 200 `svc: import with the proposed clock -> 200` )
+    ( check ( jstr_eq . imp body `clock` `time` ) `svc: stamped rows run on the time clock` )
+    : ~ i imp_stamped 0
+    ?? ( json_obj_get . imp body `time` ) { T tj → { = imp_stamped ( jint_of tj `stamped` ) } F _ → {} }
+    ( check == imp_stamped 6 `svc: every row was stamped` )
+    ( json_free . imp body )
+    : SvcOut md_imp ( fire r `GET` `/models/dynamic/svc_imp/metadata` `` `` )
+    ( check ( jstr_eq . md_imp body `clock` `time` ) `svc: metadata clock is time` )
+    : ~ b has_year F
+    : ~ b has_temp F
+    ?? ( json_obj_get . md_imp body `column_types` ) {
+        T ct → {
+            ?? ( json_obj_get ct `Vuosi` ) { T _ → { = has_year T } F _ → {} }
+            ?? ( json_obj_get ct `Ilman lämpötila [°C]` ) { T _ → { = has_temp T } F _ → {} }
+        }
+        F _ → {}
+    }
+    ( check ! has_year `svc: the consumed year column is not a feature` )
+    ( check has_temp `svc: the measurement columns are features` )
+    ( json_free . md_imp body )
+    : SvcOut dat ( fire r `GET` `/models/dynamic/svc_imp/data` `limit=all` `` )
+    : ~ i first_ts 0
+    ?? ( json_obj_get . dat body `data` ) {
+        T a → { ?? ( json_arr_get a 0 ) { T row → { = first_ts ( jint_of row `timestamp` ) } F _ → {} } }
+        F _ → {}
+    }
+    ( check == first_ts 1787961600 `svc: the stored point carries the parsed stamp` )
+    ( json_free . dat body )
+    ( check == . ( fire r `DELETE` `/delete_model/svc_imp` `` `` ) status 200 `svc: delete imported model` )
+
+    // The same rows without any time column: the model is born on the
+    // count clock. Points are ticks of 60 apart, `last=N` is N points, and
+    // the clock cannot be changed once points are stored.
+    : s NOTIME `a,b
+12.1,88
+12.0,89
+11.8,90
+11.7,90
+11.5,91
+`
+    : SvcOut impc ( fire r `POST` `/models/dynamic/svc_cnt/import` `format=csv` NOTIME )
+    ( check == . impc status 200 `svc: import without a clock -> 200` )
+    ( check ( jstr_eq . impc body `clock` `count` ) `svc: unstamped rows run on the count clock` )
+    ( json_free . impc body )
+    : SvcOut datc ( fire r `GET` `/models/dynamic/svc_cnt/data` `limit=all` `` )
+    : ~ i tick0 0
+    : ~ i tick4 0
+    ?? ( json_obj_get . datc body `data` ) {
+        T a → {
+            ?? ( json_arr_get a 0 ) { T row → { = tick0 ( jint_of row `timestamp` ) } F _ → {} }
+            ?? ( json_arr_get a 4 ) { T row → { = tick4 ( jint_of row `timestamp` ) } F _ → {} }
+        }
+        F _ → {}
+    }
+    ( check == tick0 60 `svc: count clock starts at tick 60` )
+    ( check == tick4 300 `svc: ticks are 60 apart` )
+    ( json_free . datc body )
+    : SvcOut detc ( fire r `POST` `/detect/svc_cnt` `` `{"a": 11.3, "b": 92}` )
+    ( check | == . detc status 200 == . detc status 202 `svc: detect on a count-clock model is accepted` )
+    ( json_free . detc body )
+    : SvcOut calc ( fire r `GET` `/models/dynamic/svc_cnt/calibration` `last=2` `` )
+    : ~ i cal_rows -1
+    ?? ( json_obj_get . calc body `window` ) { T w → { = cal_rows ( jint_of w `rows` ) } F _ → {} }
+    // 400 (not trained) is fine too: what matters is that last= counts points.
+    ? == . calc status 200 { ( check == cal_rows 2 `svc: last=2 on a count clock is 2 points` ) } {}
+    ( json_free . calc body )
+    : SvcOut clk ( fire r `PUT` `/models/dynamic/svc_cnt/metadata` `` `{"clock": "time"}` )
+    ( check == . clk status 400 `svc: the clock cannot change once points are stored` )
+    ( json_free . clk body )
+    // Stamped rows into a count-clock model are taken as ticks — the clock
+    // is settled — and the response says so.
+    : SvcOut mismatch ( fire r `POST` `/models/dynamic/svc_cnt/import` `format=csv&tz=utc` FMI )
+    ( check == . mismatch status 200 `svc: stamped rows into a count-clock model -> 200` )
+    ( check ( jstr_eq . mismatch body `clock` `count` ) `svc: the count clock is kept` )
+    : ~ b noted F
+    ?? ( json_obj_get . mismatch body `notes` ) {
+        T a → { ? > ( json_arr_len a ) 0 { = noted T } {} }
+        F _ → {}
+    }
+    ( check noted `svc: ignored stamps are noted` )
+    ( json_free . mismatch body )
+    : SvcOut datc2 ( fire r `GET` `/models/dynamic/svc_cnt/data` `limit=all` `` )
+    : ~ i tick11 0
+    ?? ( json_obj_get . datc2 body `data` ) {
+        T a → { ?? ( json_arr_get a 11 ) { T row → { = tick11 ( jint_of row `timestamp` ) } F _ → {} } }
+        F _ → {}
+    }
+    ( check == tick11 720 `svc: the stamped rows took ticks, not their stamps` )
+    ( json_free . datc2 body )
+    ( check == . ( fire r `DELETE` `/delete_model/svc_cnt` `` `` ) status 200 `svc: delete count model` )
+
     // Reset → not trained → detect_only 400.
     : SvcOut rs ( fire r `POST` `/models/dynamic/svc/reset` `` `{}` )
     ( check == . rs status 200 `svc: reset -> 200` )

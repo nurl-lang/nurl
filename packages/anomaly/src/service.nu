@@ -994,7 +994,8 @@ $ `src/authz.nu`
     // model that stopped receiving data still answers "the last 24 h of it".
     : ~ i from_ts q_from
     : ~ i to_ts q_to
-    ? > q_last 0 {
+    : i q_span ( __an_last_span mo q_last )
+    ? > q_span 0 {
         : ~ i anchor to_ts
         ? > anchor 0 {} {
             : i np ( model_n_points mo )
@@ -1002,7 +1003,7 @@ $ `src/authz.nu`
                 ?? ( vec_get [i] . mo times - np 1 ) { T x → { = anchor x } F _ → {} }
             } {}
         }
-        ? > anchor 0 { = from_ts - anchor q_last } {}
+        ? > anchor 0 { = from_ts - anchor q_span } {}
     } {}
 
     : ScanOut so ( model_scan_at mo from_ts to_ts limit > refresh 0 )
@@ -1515,14 +1516,20 @@ $ `src/authz.nu`
     ^ o
 }
 
+// `last` as a span of stamps: seconds on the wall clock; on the count
+// clock the caller counts POINTS, and a point is one tick.
+@ __an_last_span * Model mo i q_last → i {
+    ^ ( model_last_span mo q_last )
+}
+
 // The window shared by calibration and fine-tune: ?from / ?to / ?last
 // (query) or the same keys in a JSON body; `last` defaults to 24 h when
 // nothing bounds the window.
 @ __an_cal_window * Model mo i q_from i q_to i q_last → ( Vec i ) {
     : ~ i from_ts q_from
     : ~ i to_ts q_to
-    : ~ i last q_last
-    ? & & <= from_ts 0 <= to_ts 0 == last 0 { = last ANOM_CAL_WINDOW } {}
+    : ~ i last ( __an_last_span mo q_last )
+    ? & & <= from_ts 0 <= to_ts 0 == last 0 { = last ( model_last_span mo ( model_default_last mo ) ) } {}
     ? > last 0 {
         : i f2 ( model_window_from_last mo to_ts last )
         ? > f2 0 { = from_ts f2 } {}
@@ -1662,8 +1669,12 @@ $ `src/authz.nu`
     : ~ i q_to ( __an_query_int . req query `to` 0 )
     : ~ i q_last ( __an_query_int . req query `last` 0 )
     : ~ b dry F
+    : ~ b own F
     : ( Vec String ) only ( vec_new [String] )
     : ~ b bad_rate F
+    : String qlast ( __an_query_str . req query `last` )
+    ? == ( nurl_str_eq ( string_data qlast ) `own` ) 1 { = own T } {}
+    ( string_free qlast )
     ?? ( __an_body_json req ) {
         T body → {
             ? ( json_is_obj body ) {
@@ -1683,9 +1694,15 @@ $ `src/authz.nu`
                 = q_from ( _an_jint body `from` q_from )
                 = q_to ( _an_jint body `to` q_to )
                 = q_last ( _an_jint body `last` q_last )
-                // "last": "all" (or -1) means the whole ring, as in the query.
+                // "last": "all" (or -1) means the whole ring, as in the query;
+                // "own" tunes each version over the window it trains on.
                 ?? ( json_obj_get body `last` ) {
-                    T lj → { ? ( json_is_str lj ) { ? == ( nurl_str_eq ( json_str_data lj ) `all` ) 1 { = q_last -1 } {} } {} }
+                    T lj → {
+                        ? ( json_is_str lj ) {
+                            ? == ( nurl_str_eq ( json_str_data lj ) `all` ) 1 { = q_last -1 } {}
+                            ? == ( nurl_str_eq ( json_str_data lj ) `own` ) 1 { = own T } {}
+                        } {}
+                    }
                     F _ → {}
                 }
                 ?? ( json_obj_get body `dry_run` ) { T dj → { = dry ( json_as_bool dj ) } F _ → {} }
@@ -1731,11 +1748,16 @@ $ `src/authz.nu`
         ( string_free mname )
         ^ rr
     }
-    : ( Vec i ) win ( __an_cal_window mo q_from q_to q_last )
-    : i from_ts ( _mlp_iget win 0 )
-    : i to_ts ( _mlp_iget win 1 )
-    ( vec_free [i] win )
-    : FineTuneReport rep ( model_finetune_at mo rate from_ts to_ts ! dry only )
+    : ~ i from_ts 0
+    : ~ i to_ts 0
+    ? own {} {
+        : ( Vec i ) win ( __an_cal_window mo q_from q_to q_last )
+        = from_ts ( _mlp_iget win 0 )
+        = to_ts ( _mlp_iget win 1 )
+        ( vec_free [i] win )
+    }
+    : FineTuneReport rep ? own ( model_finetune_own mo rate ! dry only ) ( model_finetune_at mo rate from_ts to_ts ! dry only )
+    ? own { = from_ts . rep from_ts } {}
     ( vec_free_with [String] only \ String x → v { ( string_free x ) } )
 
     : Json margins ( json_obj_new )
@@ -1764,6 +1786,8 @@ $ `src/authz.nu`
                 ( json_obj_set v `rate_after` ( json_float ra ) )
                 ( json_obj_set v `worst` ( json_float . ft worst ) )
                 ( json_obj_set v `applied` ( json_bool . ft applied ) )
+                ( json_obj_set v `from` ( json_int . ft ft_from ) )
+                ( json_obj_set v `rows` ( json_int . ft ft_n_rows ) )
                 ( json_obj_set vers ( string_data . ft ftname ) v )
             }
             F _ → {}
@@ -1786,6 +1810,7 @@ $ `src/authz.nu`
     ( json_obj_set wj `from` ( json_int from_ts ) )
     ( json_obj_set wj `to` ( json_int to_ts ) )
     ( json_obj_set wj `rows` ( json_int . rep n_rows ) )
+    ( json_obj_set wj `own` ( json_bool own ) )
     ( json_obj_set o `window` wj )
     ( json_obj_set o `versions` vers )
     ( json_obj_set o `adjusted_margins` margins )
@@ -2297,10 +2322,30 @@ $ `src/authz.nu`
 }
 
 // POST /models/dynamic/<m>/import?format=csv|json|jsonl|auto
+//     &inspect=1            describe the file and propose its clock; import nothing
+//     &time=<json>          the time plan (percent-encoded JSON):
+//                             {"mode":"auto"}                       — the proposal (default)
+//                             {"mode":"column","column":"ts"}       — one column
+//                             {"mode":"parts","parts":{"year":..,"month":..,"day":..,
+//                                "clock":.. | "hour":..,"minute":..,"second":..}}
+//                             {"mode":"none"}                       — read no time
+//     &tz=local|utc|+03:00  the zone naive stamps are read in (default local)
+//     &calendar=1           keep an ISO `time` column for calendar features
+//     &clock=time|count     the clock a NEW model runs on; without it, a
+//                           model born from stamped rows runs on time, one
+//                           born from unstamped rows on its point count
 //
 // The body is the file, verbatim — no multipart, no base64. A file is
 // bytes and this is the shortest path from a browser's FileReader to the
 // ring; wrapping it in a form encoding would only mean decoding it again.
+//
+// The clock of a file is read before a row lands: `inspect=1` returns the
+// columns, what their values look like, and a proposal — the column, or
+// the year/month/day/clock parts, the time is in — with a confidence, so
+// the dashboard can show the guess and let the person confirm or change
+// it. The import call then takes the same plan back, stamps every row
+// from it, and drops the columns it consumed so a year never becomes a
+// feature.
 //
 // This is the same act as sending points, done in one call instead of ten
 // thousand, so it is gated the same way: an `ingest` credential may do it,
@@ -2335,8 +2380,117 @@ $ `src/authz.nu`
         ^ rr
     } {}
 
+    // The time spec: `time=` JSON, with `tz=` layered over it.
+    : ~ Json spec ( json_obj_new )
+    : String tq ( __an_query_str . req query `time` )
+    ? > ( string_len tq ) 0 {
+        : String tdec ( percent_decode ( string_data tq ) )
+        : !Json JsonError tj ( json_parse ( string_data tdec ) )
+        ( string_free tdec )
+        ?? tj {
+            T j → { ? ( json_is_obj j ) { ( json_free spec ) = spec j } { ( json_free j ) } }
+            F _ → {}
+        }
+    } {}
+    ( string_free tq )
+    : String tzq ( __an_query_str . req query `tz` )
+    ? > ( string_len tzq ) 0 { ( json_obj_set spec `tz` ( json_str_lit ( string_data tzq ) ) ) } {}
+    ( string_free tzq )
+    : i tz ( imp_tz_of spec )
+    : b calendar > ( __an_query_int . req query `calendar` 0 ) 0
+    : String clockq ( __an_query_str . req query `clock` )
+
     : Store st ( store_open g_an_root )
+    : b existed ( store_exists st ( string_data mname ) )
+    : Json insp ( import_inspect . ip rows spec tz )
+    ( json_free spec )
+
+    // inspect=1: the description, and where the model stands, nothing
+    // more — a model that does not exist is not brought into being by a
+    // look at a file.
+    ? > ( __an_query_int . req query `inspect` 0 ) 0 {
+        ( json_obj_set insp `format` ( json_str_lit ( string_data . ip format ) ) )
+        ( json_obj_set insp `rows` ( json_int ( vec_len [Json] . ip rows ) ) )
+        ( json_obj_set insp `skipped` ( json_int . ip skipped ) )
+        : Json mj ( json_obj_new )
+        ( json_obj_set mj `exists` ( json_bool existed ) )
+        : ~ i npts 0
+        : ~ b count F
+        ? existed {
+            : *Model mo0 ( model_open st ( string_data mname ) )
+            : *Meta mm0 . mo0 meta
+            = npts ( model_n_points mo0 )
+            = count . mm0 count_clock
+            ( model_free mo0 )
+        } {}
+        ( json_obj_set mj `data_points` ( json_int npts ) )
+        ( json_obj_set mj `clock` ( json_str_lit ? count `count` `time` ) )
+        ( json_obj_set insp `model` mj )
+        : HttpResponse ri ( response_json 200 insp )
+        ( json_free insp )
+        ( string_free clockq )
+        ( import_parse_free ip )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ ri
+    } {}
     : *Model mo ( model_open st ( string_data mname ) )
+    : *Meta mm . mo meta
+
+    // The plan, applied: every row stamped from it, or a 400 naming what
+    // the plan asked for and the file does not have.
+    : Json plan ?? ( json_obj_get insp `time` ) { T tp → ( json_clone tp ) F _ → ( json_obj_new ) }
+    ( json_free insp )
+    ? ( json_obj_has plan `error` ) {
+        : s perr ?? ( json_obj_get plan `error` ) { T e → ( json_str_data e ) F _ → `bad time plan` }
+        : HttpResponse rp ( __an_json_err 400 perr )
+        ( json_free plan )
+        ( string_free clockq )
+        ( import_parse_free ip )
+        ( model_free mo )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rp
+    } {}
+    : ImpTimeResult tr ( import_time_apply . ip rows plan calendar tz )
+
+    // Which clock. A model that already holds points keeps its clock; a
+    // fresh one takes `clock=`, or the one its first rows imply.
+    : ~ String cerr ( string_new )
+    ? == ( model_n_points mo ) 0 {
+        : ~ b want . mm count_clock
+        ? > ( string_len clockq ) 0 {
+            ? == ( nurl_str_eq ( string_data clockq ) `count` ) 1 { = want T } {
+                ? == ( nurl_str_eq ( string_data clockq ) `time` ) 1 { = want F } {
+                    ( string_free cerr )
+                    = cerr ( string_from `clock must be "time" or "count"` )
+                }
+            }
+        } { = want == . tr stamped 0 }
+        = . mm count_clock want
+    } {
+        ? & > ( string_len clockq ) 0 != == ( nurl_str_eq ( string_data clockq ) `count` ) 1 . mm count_clock {
+            ( string_free cerr )
+            = cerr ( string_from `clock can only change on a model with no stored points (reset it first)` )
+        } {}
+    }
+    ( string_free clockq )
+    ? > ( string_len cerr ) 0 {
+        : HttpResponse rc ( __an_json_err 400 ( string_data cerr ) )
+        ( string_free cerr )
+        ( imp_time_result_free tr )
+        ( json_free plan )
+        ( import_parse_free ip )
+        ( model_free mo )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rc
+    } {}
+    ( string_free cerr )
+
     : ImportReport rep ( model_import mo . ip rows )
 
     : ~ HttpResponse r ( response_status_only 500 )
@@ -2358,6 +2512,12 @@ $ `src/authz.nu`
         ( json_obj_set o `skipped` ( json_int + . ip skipped . rep rejected ) )
         ( json_obj_set o `data_points` ( json_int . rep stored ) )
         ( json_obj_set o `trained` ( json_bool . rep trained ) )
+        ( json_obj_set o `clock` ( json_str_lit ? . mm count_clock `count` `time` ) )
+        : Json tj ( json_clone plan )
+        ( json_obj_set tj `stamped` ( json_int . tr stamped ) )
+        ( json_obj_set tj `failed` ( json_int . tr failed ) )
+        ? > ( string_len . tr first_fail ) 0 { ( json_obj_set tj `first_failure` ( json_str_lit ( string_data . tr first_fail ) ) ) } {}
+        ( json_obj_set o `time` tj )
         : Json notes ( json_arr_new )
         : i pn ( vec_len [String] . ip notes )
         : ~ i k 0
@@ -2368,6 +2528,15 @@ $ `src/authz.nu`
             }
             = k + k 1
         }
+        // The clock of a model with points is settled: stamps landing on
+        // a count clock become ticks, unstamped rows on a time clock take
+        // the clock time. Neither is an error, but both are worth a note.
+        ? & . mm count_clock > . tr stamped 0 {
+            ( json_arr_push notes ( json_str_lit `the model counts points: the rows' timestamps were read but not kept; every row took the next tick` ) )
+        } {}
+        ? & ! . mm count_clock & == . tr stamped 0 > . rep accepted 0 {
+            ( json_arr_push notes ( json_str_lit `the model runs on time and the rows carry no timestamp: they were stamped with the current time` ) )
+        } {}
         : i rn ( vec_len [String] . rep notes )
         = k 0
         ~ < k rn {
@@ -2383,6 +2552,8 @@ $ `src/authz.nu`
         ( json_free o )
     }
     ( import_report_free rep )
+    ( imp_time_result_free tr )
+    ( json_free plan )
     ( import_parse_free ip )
     ( model_free mo )
     ( store_free st )
