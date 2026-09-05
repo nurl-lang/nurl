@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.9.1
+
+- **The public organization could take the home marker, and then nobody
+  could adopt anything.** A fix for a trap on the exact deployment path the
+  README recommends.
+
+  `public` is the organization that credential-less points land in while
+  `auth.open_ingest` is open — the migration window. On a fresh deployment
+  that window is open *before anybody has signed in*, so the first producer
+  to send a point created `orgs/public.db`, and the home marker — "the first
+  organization this store ever created" — was written to `public`.
+
+  The marker is written once and never revised. So the operator who signed
+  in afterwards was not the home organization, and adoption is reserved to
+  the home organization: they could never claim a single model that predated
+  them. One anonymous point, and the store was unadministrable.
+
+  `public` is now never home. It is not an operator; it is the bucket
+  ownerless data waits in, and the first *real* organization takes the
+  marker however many points arrived first.
+
+- **The home organization can adopt a model held by `public`.** Adoption
+  used to require a model no organization had claimed at all, which left
+  everything the open window collected stranded: `public` held it, and
+  `public` is not an organization anyone can sign in to. A model gets there
+  because a point arrived without a credential naming an owner — the same
+  condition adoption exists for — so it is released from `public` and taken
+  into the adopting organization.
+
+- Simple mode still records no ownership, and that is deliberate rather than
+  an oversight. Claiming into `public` there would strand the models on the
+  simple → oidc transition: `public` would hold them, the operator's
+  organization would not, and only the home organization can adopt. Leaving
+  them unclaimed is what lets the first organization to sign in become home
+  and take them.
+
 ## 0.9.0
 
 - **A model can have a nickname.** `alias` is ordinary editable metadata:

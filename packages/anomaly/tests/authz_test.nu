@@ -388,7 +388,48 @@ $ `src/authz.nu`
     ( check > ( string_len home ) 0 `home: a marker was written` )
     ( check ( az_is_home_org ( string_data home ) ) `home: it identifies itself` )
     ( check ! ( az_is_home_org `orgY` ) `home: a later organisation is not home` )
+    // `public` must never hold the marker. It is the bucket ownerless data
+    // lands in, and it is created by the first credential-less point — on a
+    // fresh deployment, before anybody has signed in. If it took the marker
+    // the operator could adopt nothing, ever, because the marker is written
+    // once.
+    ( check ! ( az_is_home_org AZ_PUBLIC_ORG ) `home: public is not home` )
+    ( check ! ( streq home AZ_PUBLIC_ORG ) `home: and never became it` )
     ( string_free home )
+}
+
+// The public organisation: where a point that named no owner waits.
+@ test_public_org → v {
+    // Creating it must not claim the home marker, whatever the order.
+    : String marker ( __az_home_marker )
+    : !v IoErr rm ( file_delete ( string_data marker ) )
+    ?? rm { T _ → {} F _ → {} }
+    ( string_free marker )
+    ?? ( az_db_open AZ_PUBLIC_ORG ) {
+        F _ → { ( check F `public: its database opens` ) }
+        T db → {
+            ( check T `public: its database opens` )
+            : b _c ( az_model_claim db `orphan` `` T0 F )
+        }
+    }
+    : String h ( az_home_org )
+    ( check == ( string_len h ) 0 `public: creating it wrote no home marker` )
+    ( string_free h )
+
+    // A real organisation created afterwards IS home — the operator who
+    // signs in after the producers started must still be able to adopt.
+    ?? ( az_db_open `orgReal` ) {
+        F _ → { ( check F `public: a real org opens` ) }
+        T db2 → { : String r ( az_user_touch db2 `op` `o@o` `Op` T0 ) ( string_free r ) }
+    }
+    ( check ( az_is_home_org `orgReal` ) `public: the first REAL organisation is home` )
+
+    // And what waited in public can be released into it. Ownerless data is
+    // not the public organisation's property.
+    ( check ( az_model_in_public `orphan` ) `public: it holds the orphaned model` )
+    ( check ( az_model_release_public `orphan` ) `public: which can be released` )
+    ( check ! ( az_model_in_public `orphan` ) `public: and is no longer held` )
+    ( check ! ( az_model_release_public `orphan` ) `public: releasing twice is a no-op` )
 }
 
 // The tenant registry: who may use this service at all.
@@ -668,6 +709,7 @@ $ `src/authz.nu`
     ( test_registry )
     ( test_leaving )
     ( test_ingest_capability )
+    ( test_public_org )
     ( test_keys )
     ( test_off )
 
