@@ -1941,17 +1941,25 @@ $ `src/authz.nu`
     ?? ( az_db_open ( string_data . me org ) ) {
         F _ → {}
         T db → {
-            : String cur ( az_model_owner db ( string_data mname ) )
-            : b claimed > ( string_len cur ) 0
-            ( string_free cur )
+            : b claimed ( az_model_in_org db ( string_data mname ) )
             // Reassigning WITHIN an organisation is ordinary administration.
-            // Adopting a model no organisation has claimed is not: nothing
-            // in an unowned model says whose it is, so letting any admin
-            // take one would let a stranger who signed in from their own
-            // tenant adopt the operator's data. Only the home organisation
-            // — the first this store ever created, which is the one that
-            // set the service up — may do that.
-            ? | claimed ( az_is_home_org ( string_data . me org ) ) {
+            // Adopting one no organisation has claimed is not: nothing in an
+            // unowned model says whose it is, so letting any admin take one
+            // would let a stranger who signed in from their own tenant adopt
+            // the operator's data. Only the home organisation — the first
+            // this store created, which is the one that set the service up —
+            // may do that.
+            //
+            // A model held by `public` counts as unowned for this purpose.
+            // It got there because a point arrived without a credential
+            // naming an owner, which is the same condition adoption exists
+            // for; `public` is where such data waits, not an organisation
+            // with a claim on it.
+            : b home ( az_is_home_org ( string_data . me org ) )
+            ? | claimed home {
+                ? & home ! claimed {
+                    : b _rel ( az_model_release_public ( string_data mname ) )
+                } {}
                 = ok ( az_model_claim db ( string_data mname ) ( string_data owner ) ( now_seconds ) T )
             } { = refused_home T }
         }

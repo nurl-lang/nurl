@@ -607,12 +607,48 @@ $ `deps/oauth/src/oauth.nu`
 }
 
 @ __az_claim_home_if_unset s org → v {
+    // `public` is never home. It is not an operator — it is the bucket
+    // ownerless data lands in, and it comes into existence the moment a
+    // producer sends a point during the open-ingest window, which on a
+    // fresh deployment is BEFORE anybody has signed in. Letting it take the
+    // marker would hand the service to the one organisation that has no
+    // members, permanently: the marker is written once, and the operator
+    // who signs in afterwards could then adopt nothing, ever.
+    ? == ( nurl_str_eq org AZ_PUBLIC_ORG ) 1 { ^ } {}
     : String p ( __az_home_marker )
     ? ( file_exists ( string_data p ) ) {} {
         : !v IoErr w ( write_file ( string_data p ) org )
         ?? w { T _ → {} F _ → {} }
     }
     ( string_free p )
+}
+
+// Is `name` held by the public organisation — the bucket for points that
+// arrived without a credential naming an owner?
+@ az_model_in_public s name → b {
+    : ~ b there F
+    ?? ( az_db_open AZ_PUBLIC_ORG ) {
+        F _ → {}
+        T db → { = there ( az_model_in_org db name ) }
+    }
+    ^ there
+}
+
+// Release a model from the public organisation, so it can be adopted into
+// a real one. Ownerless data is not the public organisation's property; it
+// is data nobody has claimed yet, and `public` is where it waits.
+@ az_model_release_public s name → b {
+    : ~ b ok F
+    ?? ( az_db_open AZ_PUBLIC_ORG ) {
+        F _ → {}
+        T db → {
+            ? ( az_model_in_org db name ) {
+                ( az_model_forget db name )
+                = ok T
+            } {}
+        }
+    }
+    ^ ok
 }
 
 // Open (creating if absent) the organisation's database with its schema

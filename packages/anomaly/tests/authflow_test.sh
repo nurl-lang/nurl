@@ -169,6 +169,32 @@ PYX
 [ "$(code -H "$AH" "$B/models/dynamic/legacy/metadata")" = 403 ] \
     && ok "another organization still cannot read it" || bad "public org model leaked"
 
+# The public organization must NOT have taken the home marker. It is created
+# by the first credential-less point, which on a fresh deployment happens
+# before anybody signs in — and the marker is written once, so if it took it
+# the operator could adopt nothing, ever.
+python3 - "$WORK/store" <<'PYX' && ok "the public organization did not become home" || bad "public took the home marker"
+import os, sys
+m = os.path.join(sys.argv[1], "orgs", ".home")
+assert os.path.exists(m), "a home marker should exist by now"
+who = open(m).read().strip()
+assert who != "public", "public must never be the home organization"
+PYX
+# And what waited in public can be adopted by the home organization: it got
+# there because nobody named an owner, which is what adoption is for.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$AH" -H 'Content-Type: application/json' \
+     -d '{}' "$B/models/dynamic/legacy/claim")" = 200 ] \
+    && ok "the home organization can adopt from public" || bad "could not adopt from public"
+[ "$(code -H "$AH" "$B/models/dynamic/legacy/metadata")" = 200 ] \
+    && ok "and it becomes readable once adopted" || bad "adopted model still unreadable"
+python3 - "$WORK/store" <<'PYX' && ok "and public no longer holds it" || bad "public still holds an adopted model"
+import sqlite3, sys, os
+db = os.path.join(sys.argv[1], "orgs", "public.db")
+c = sqlite3.connect("file:" + db + "?mode=ro", uri=True)
+names = [r[0] for r in c.execute("SELECT name FROM models")]
+assert "legacy" not in names, f"public should have released it, still has {names}"
+PYX
+
 # API keys.
 curl -s -m 10 -X POST -H "$AH" -H 'Content-Type: application/json' \
      -d '{"label":"node-red"}' "$B/api/org/keys" -o "$WORK/key.json"
