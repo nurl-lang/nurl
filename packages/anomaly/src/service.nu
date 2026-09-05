@@ -59,12 +59,16 @@ $ `src/dynamic.nu`
 $ `src/csvdata.nu`
 $ `src/importer.nu`
 $ `src/authz.nu`
+$ `src/orgfiles.nu`
+$ `src/analyze.nu`
+$ `stdlib/std/thread.nu`
 
 // Store root used by every handler; set once before serving.
 : ~ s g_an_root `.`
 
 @ anomaly_service_set_root s root → v {
     = g_an_root root
+    ( orgfiles_set_root root )
 }
 
 // Directory holding the dashboard HTML (modelmanager.html, etc). Empty =
@@ -2581,6 +2585,500 @@ $ `src/authz.nu`
     ^ r
 }
 
+// ── The organisation's folder, and file analysis ──────────────────────
+//
+// Every organisation has a folder (src/orgfiles.nu) its members list
+// and read; administrators delete. A file can be handed out as a link
+// that carries its own permission, for results too large to return in
+// a response. `POST /api/analyze` fills the folder: a file in, its
+// anomalies out (src/analyze.nu), inline when they are few, as a link
+// when they are not.
+
+// The service lock. The server runs a small worker pool so that a handler
+// which WAITS — analyze, for its job — can let go of the service while it
+// does; every other handler holds the lock for its whole run, so the store,
+// the GPU singleton and the authorization layer see one request at a
+// time, exactly as under the single-threaded server. 0 = no pool (tests
+// drive the router directly), and the release/acquire pair is a no-op.
+: ~ i g_an_lock 0
+
+@ __an_lock → Mutex { ^ @ Mutex { @ Cell { # s g_an_lock 0 } } }
+
+@ __an_lock_acquire → v { ? != g_an_lock 0 { ( mutex_lock ( __an_lock ) ) } {} }
+
+@ __an_lock_release → v { ? != g_an_lock 0 { ( mutex_unlock ( __an_lock ) ) } {} }
+
+// A path capture (owned; empty String = missing).
+@ __an_param_str Params p s key → String {
+    ?? ( params_get p key ) {
+        T v → { ^ v }
+        F junk → { ^ junk }
+    }
+}
+
+// A member of an organisation: anyone signed in with a role that is not
+// a data producer's. An ingest key reports readings; it has no business
+// in the folder.
+@ __an_gate_member HttpRequest req → Gate {
+    : Gate g ( __an_gate_auth req F )
+    ? . g allowed {} { ^ g }
+    : Principal me . g who
+    ? == ( nurl_str_eq ( string_data . me role ) AZ_ROLE_INGEST ) 1 {
+        ^ @ Gate { F AZ_GATE_FORBID . g who F }
+    } {}
+    ^ g
+}
+
+@ __an_file_json s org OrgFile f → Json {
+    : Json o ( json_obj_new )
+    ( json_obj_set o `name` ( json_str_lit ( string_data . f name ) ) )
+    ( json_obj_set o `size` ( json_int . f size ) )
+    ( json_obj_set o `modified` ( json_int . f mtime ) )
+    : String u ( string_from `/api/org/files/` )
+    ( string_push_str u ( string_data . f name ) )
+    ( json_obj_set o `url` ( json_str_lit ( string_data u ) ) )
+    ( string_free u )
+    ^ o
+}
+
+@ __an_h_org_files HttpRequest req Params p → HttpResponse {
+    : Gate gate ( __an_gate_member req )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ^ rd
+    }
+    : Principal me . gate who
+    : ( Vec OrgFile ) fs ( orgfiles_list ( string_data . me org ) )
+    : Json arr ( json_arr_new )
+    : i n ( vec_len [OrgFile] fs )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [OrgFile] fs k ) {
+            T f → { ( json_arr_push arr ( __an_file_json ( string_data . me org ) f ) ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( orgfiles_free fs )
+    : Json o ( json_obj_new )
+    ( json_obj_set o `status` ( json_str_lit `success` ) )
+    ( json_obj_set o `organization` ( json_str_lit ( string_data . me org ) ) )
+    ( json_obj_set o `files` arr )
+    : HttpResponse r ( response_json 200 o )
+    ( json_free o )
+    ( __an_gate_free gate )
+    ^ r
+}
+
+@ __an_bad_file_name → HttpResponse {
+    ^ ( __an_json_err 400 `Invalid file name. Use only letters, numbers, dots, underscores and dashes.` )
+}
+
+@ __an_404_file s name → HttpResponse {
+    : String msg ( string_from `File ` )
+    ( string_push_str msg name )
+    ( string_push_str msg ` not found` )
+    : HttpResponse r ( __an_json_err 404 ( string_data msg ) )
+    ( string_free msg )
+    ^ r
+}
+
+// The file itself, as a download.
+@ __an_serve_org_file s org s name → HttpResponse {
+    : String path ( orgfiles_path org name )
+    : ~ HttpResponse r ( __an_404_file name )
+    ?? ( read_file_bytes ( string_data path ) ) {
+        T data → {
+            ( http_response_free r )
+            = r ( response_new 200 )
+            ( response_set_header r `Content-Type` ( orgfiles_content_type name ) )
+            : String cd ( string_from `attachment; filename="` )
+            ( string_push_str cd name )
+            ( string_push_char cd 34 )
+            ( response_set_header r `Content-Disposition` ( string_data cd ) )
+            ( string_free cd )
+            ( response_set_header r `Cache-Control` `private, no-store` )
+            ( response_set_body_bytes r data )
+            ( vec_free [u] data )
+        }
+        F _ → {}
+    }
+    ( string_free path )
+    ^ r
+}
+
+// GET /api/org/files/:name — a member's download, or a link's: with
+// `org`, `exp` and `sig` in the query the link is its own credential and
+// the sign-in is not consulted at all.
+@ __an_h_org_file_get HttpRequest req Params p → HttpResponse {
+    : String name ( __an_param_str p `name` )
+    ? ( orgfiles_name_ok ( string_data name ) ) {} {
+        ( string_free name )
+        ^ ( __an_bad_file_name )
+    }
+    : String sig ( __an_query_str . req query `sig` )
+    ? > ( string_len sig ) 0 {
+        : String lorg ( __an_query_str . req query `org` )
+        : i exp ( __an_query_int . req query `exp` 0 )
+        : b ok ( orgfiles_verify ( string_data lorg ) ( string_data name ) exp ( string_data sig ) ( now_seconds ) )
+        : HttpResponse rl ? ok ( __an_serve_org_file ( string_data lorg ) ( string_data name ) )
+        ( __an_json_err 403 `This link is not valid, or has expired.` )
+        ( string_free lorg )
+        ( string_free sig )
+        ( string_free name )
+        ^ rl
+    } {}
+    ( string_free sig )
+    : Gate gate ( __an_gate_member req )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free name )
+        ^ rd
+    }
+    : Principal me . gate who
+    : HttpResponse r ( __an_serve_org_file ( string_data . me org ) ( string_data name ) )
+    ( __an_gate_free gate )
+    ( string_free name )
+    ^ r
+}
+
+// POST /api/org/files/:name/link?ttl=SECONDS — a pre-authenticated
+// download link for one file. Whoever holds it can fetch that file until
+// it expires (a week by default, 30 days at most).
+@ __an_h_org_file_link HttpRequest req Params p → HttpResponse {
+    : String name ( __an_param_str p `name` )
+    ? ( orgfiles_name_ok ( string_data name ) ) {} {
+        ( string_free name )
+        ^ ( __an_bad_file_name )
+    }
+    : Gate gate ( __an_gate_member req )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free name )
+        ^ rd
+    }
+    : Principal me . gate who
+    : OrgFile f ( orgfiles_stat ( string_data . me org ) ( string_data name ) )
+    : ~ HttpResponse r ( __an_404_file ( string_data name ) )
+    ? >= . f size 0 {
+        : ~ i ttl ( __an_query_int . req query `ttl` OF_LINK_TTL_DEFAULT )
+        ? | <= ttl 0 > ttl OF_LINK_TTL_MAX { = ttl OF_LINK_TTL_MAX } {}
+        : i exp + ( now_seconds ) ttl
+        : String u ( orgfiles_link ( string_data . me org ) ( string_data name ) exp )
+        : Json o ( __an_file_json ( string_data . me org ) f )
+        ( json_obj_set o `status` ( json_str_lit `success` ) )
+        ( json_obj_set o `download_url` ( json_str_lit ( string_data u ) ) )
+        ( json_obj_set o `expires` ( json_int exp ) )
+        ( http_response_free r )
+        = r ( response_json 200 o )
+        ( json_free o )
+        ( string_free u )
+    } {}
+    ( string_free . f name )
+    ( __an_gate_free gate )
+    ( string_free name )
+    ^ r
+}
+
+@ __an_h_org_file_delete HttpRequest req Params p → HttpResponse {
+    : String name ( __an_param_str p `name` )
+    ? ( orgfiles_name_ok ( string_data name ) ) {} {
+        ( string_free name )
+        ^ ( __an_bad_file_name )
+    }
+    : Gate gate ( __an_gate_auth req T )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free name )
+        ^ rd
+    }
+    : Principal me . gate who
+    : ~ HttpResponse r ( __an_404_file ( string_data name ) )
+    ? ( orgfiles_delete ( string_data . me org ) ( string_data name ) ) {
+        ( http_response_free r )
+        : Json o ( __an_ok_msg `deleted` )
+        ( json_obj_set o `name` ( json_str_lit ( string_data name ) ) )
+        = r ( response_json 200 o )
+        ( json_free o )
+    } {}
+    ( __an_gate_free gate )
+    ( string_free name )
+    ^ r
+}
+
+// The answer for a task in whatever state it is in. Done: the numbers,
+// the result file with a pre-authenticated link, and the anomalies
+// themselves when there are at most ANA_INLINE_MAX of them. Failed: the
+// error. Otherwise: pending, with where to ask again. `fail_status` is
+// the HTTP status a failed task answers with — an analyze call that
+// watched its own file fail is a 400, a later look at the task a 200.
+@ __an_task_response s org s id i fail_status → HttpResponse {
+    : String dir ( analyze_task_dir org id )
+    : ?Json stm ( analyze_status_read ( string_data dir ) )
+    ( string_free dir )
+    ?? stm {
+        F _ → {
+            : String msg ( string_from `Task ` )
+            ( string_push_str msg id )
+            ( string_push_str msg ` not found` )
+            : HttpResponse r404 ( __an_json_err 404 ( string_data msg ) )
+            ( string_free msg )
+            ^ r404
+        }
+        T st → {
+            : String state ( _ana_jstr st `state` )
+            : String turl ( string_from `/api/org/tasks/` )
+            ( string_push_str turl id )
+            : Json o ( json_obj_new )
+            ( json_obj_set o `task_id` ( json_str_lit id ) )
+            ( json_obj_set o `state` ( json_str_lit ( string_data state ) ) )
+            ( json_obj_set o `task_url` ( json_str_lit ( string_data turl ) ) )
+            ( json_obj_set o `name` ( json_str_lit ( json_as_str ?? ( json_obj_get st `name` ) { T v → v F _ → @ Json { JNull } } ) ) )
+            ( json_obj_set o `created` ( json_int ( _ana_jint st `created` 0 ) ) )
+            : ~ i code 202
+            ? == ( nurl_str_eq ( string_data state ) `failed` ) 1 {
+                = code fail_status
+                ( json_obj_set o `status` ( json_str_lit `error` ) )
+                ( json_obj_set o `message` ( json_str_lit ( json_as_str ?? ( json_obj_get st `error` ) { T v → v F _ → @ Json { JNull } } ) ) )
+                ( json_obj_set o `finished` ( json_int ( _ana_jint st `finished` 0 ) ) )
+            } {
+                ? == ( nurl_str_eq ( string_data state ) `done` ) 1 {
+                    = code 200
+                    ( json_obj_set o `status` ( json_str_lit `success` ) )
+                    ( json_obj_set o `finished` ( json_int ( _ana_jint st `finished` 0 ) ) )
+                    ( json_obj_set o `rows` ( json_int ( _ana_jint st `rows` 0 ) ) )
+                    ( json_obj_set o `imported` ( json_int ( _ana_jint st `imported` 0 ) ) )
+                    ( json_obj_set o `skipped` ( json_int ( _ana_jint st `skipped` 0 ) ) )
+                    ( json_obj_set o `considered` ( json_int ( _ana_jint st `considered` 0 ) ) )
+                    : i nanom ( _ana_jint st `anomalies` 0 )
+                    ( json_obj_set o `anomalies` ( json_int nanom ) )
+                    ( json_obj_set o `target_rate` ( json_float ANA_TARGET_RATE ) )
+                    ( json_obj_set o `votes` ( json_int ( _ana_jint st `votes` 1 ) ) )
+                    ?? ( json_obj_get st `model_versions` ) { T v → { ( json_obj_set o `model_versions` ( json_clone v ) ) } F _ → {} }
+                    ?? ( json_obj_get st `margins` ) { T v → { ( json_obj_set o `margins` ( json_clone v ) ) } F _ → {} }
+                    ?? ( json_obj_get st `notes` ) { T v → { ( json_obj_set o `notes` ( json_clone v ) ) } F _ → {} }
+                    // The result file, and the link to it.
+                    : String fname ( _ana_jstr st `file` )
+                    : OrgFile f ( orgfiles_stat org ( string_data fname ) )
+                    : Json fj ( __an_file_json org f )
+                    : i exp + ( now_seconds ) OF_LINK_TTL_DEFAULT
+                    : String u ( orgfiles_link org ( string_data fname ) exp )
+                    ( json_obj_set fj `download_url` ( json_str_lit ( string_data u ) ) )
+                    ( json_obj_set fj `expires` ( json_int exp ) )
+                    ( string_free u )
+                    ( json_obj_set o `file` fj )
+                    ( json_obj_set o `inline` ( json_bool <= nanom ANA_INLINE_MAX ) )
+                    ? <= nanom ANA_INLINE_MAX {
+                        : String path ( orgfiles_path org ( string_data fname ) )
+                        ?? ( read_file ( string_data path ) ) {
+                            T txt → {
+                                ?? ( json_parse ( string_data txt ) ) {
+                                    T res → {
+                                        ?? ( json_obj_get res `points` ) { T pts → { ( json_obj_set o `points` ( json_clone pts ) ) } F _ → {} }
+                                        ?? ( json_obj_get res `time` ) { T tj → { ( json_obj_set o `time` ( json_clone tj ) ) } F _ → {} }
+                                        ( json_free res )
+                                    }
+                                    F _ → {}
+                                }
+                                ( string_free txt )
+                            }
+                            F _ → {}
+                        }
+                        ( string_free path )
+                    } {}
+                    ( string_free . f name )
+                    ( string_free fname )
+                } {
+                    ( json_obj_set o `status` ( json_str_lit `pending` ) )
+                }
+            }
+            : HttpResponse r ( response_json code o )
+            ( json_free o )
+            ( string_free turl )
+            ( string_free state )
+            ( json_free st )
+            ^ r
+        }
+    }
+}
+
+// POST /api/analyze — the body is the file. Query: `format` (csv, json,
+// jsonl, fmi; empty = detect), `time`, `tz`, `calendar`, `clock` as for an
+// import, `name` to label the result, and `wait` — how many seconds to
+// hold the call for the result (10 by default, 60 at most, 0 = return
+// the task at once). A result that is not ready in time answers 202 with
+// the task to ask again for.
+: i AN_ANALYZE_WAIT_DEFAULT 10
+: i AN_ANALYZE_WAIT_MAX 60
+
+@ __an_h_analyze HttpRequest req Params p → HttpResponse {
+    : Gate gate ( __an_gate_member req )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ^ rd
+    }
+    : Principal me . gate who
+    ? > ( vec_len [u] . req body ) 0 {} {
+        ( __an_gate_free gate )
+        ^ ( __an_json_err 400 `The request body is empty: send the file to analyse as the body.` )
+    }
+
+    : Json params ( json_obj_new )
+    : String fmt ( __an_query_str . req query `format` )
+    ( json_obj_set params `format` ( json_str_lit ( string_data fmt ) ) )
+    ( string_free fmt )
+    : ~ Json spec ( json_obj_new )
+    : String tq ( __an_query_str . req query `time` )
+    ? > ( string_len tq ) 0 {
+        ?? ( json_parse ( string_data tq ) ) {
+            T j → { ? ( json_is_obj j ) { ( json_free spec ) = spec j } { ( json_free j ) } }
+            F _ → {}
+        }
+    } {}
+    ( string_free tq )
+    : String tzq ( __an_query_str . req query `tz` )
+    ? > ( string_len tzq ) 0 { ( json_obj_set spec `tz` ( json_str_lit ( string_data tzq ) ) ) } {}
+    ( string_free tzq )
+    ( json_obj_set params `time` spec )
+    ( json_obj_set params `calendar` ( json_bool > ( __an_query_int . req query `calendar` 0 ) 0 ) )
+    : String clockq ( __an_query_str . req query `clock` )
+    ( json_obj_set params `clock` ( json_str_lit ( string_data clockq ) ) )
+    ( string_free clockq )
+    : String label ( __an_query_str . req query `name` )
+    ( json_obj_set params `name` ( json_str_lit ? > ( string_len label ) 0 ( string_data label ) `analysis` ) )
+    ( string_free label )
+    ( json_obj_set params `votes` ( json_int ( __an_query_int . req query `votes` 1 ) ) )
+    ( json_obj_set params `created` ( json_int ( now_seconds ) ) )
+    ( json_obj_set params `by` ( json_str_lit ( string_data . me sub ) ) )
+    // The job is another process: it learns where the store is from here.
+    ( json_obj_set params `root` ( json_str_lit g_an_root ) )
+    : String wq ( __an_query_str . req query `wait` )
+    : ~ i wait AN_ANALYZE_WAIT_DEFAULT
+    ? > ( string_len wq ) 0 { ?? ( string_to_int wq ) { T x → { = wait x } F _ → {} } } {}
+    ( string_free wq )
+    ? < wait 0 { = wait 0 } {}
+    ? > wait AN_ANALYZE_WAIT_MAX { = wait AN_ANALYZE_WAIT_MAX } {}
+
+    : String id ( analyze_task_create ( string_data . me org ) params . req body )
+    ( json_free params )
+    ? > ( string_len id ) 0 {} {
+        ( string_free id )
+        ( __an_gate_free gate )
+        ^ ( __an_json_err 500 `The task could not be created in the organisation's folder.` )
+    }
+    ? ( analyze_spawn ( string_data . me org ) ( string_data id ) ) {} {
+        : String dir ( analyze_task_dir ( string_data . me org ) ( string_data id ) )
+        ( _ana_mark_crashed ( string_data dir ) -1 `no thread could be started for the job` )
+        ( string_free dir )
+    }
+
+    // Wait for the job, with the service released: the live detectors keep
+    // answering while this call sleeps.
+    : String dir ( analyze_task_dir ( string_data . me org ) ( string_data id ) )
+    : i deadline + ( now_ms ) * wait 1000
+    : ~ b waiting > wait 0
+    ~ waiting {
+        : String state ( analyze_state ( string_data dir ) )
+        ? ( analyze_state_final ( string_data state ) ) { = waiting F } {}
+        ( string_free state )
+        ? & waiting >= ( now_ms ) deadline { = waiting F } {}
+        ? waiting {
+            ( __an_lock_release )
+            ( sleep_ms 100 )
+            ( __an_lock_acquire )
+        } {}
+    }
+    ( string_free dir )
+    : HttpResponse r ( __an_task_response ( string_data . me org ) ( string_data id ) 400 )
+    ( string_free id )
+    ( __an_gate_free gate )
+    ^ r
+}
+
+@ __an_task_id_ok s id → b {
+    : i n ( nurl_str_len id )
+    ? != n 24 { ^ F } {}
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_at id n k )
+        ? | & >= c 48 <= c 57 & >= c 97 <= c 102 {} { ^ F }
+        = k + k 1
+    }
+    ^ T
+}
+
+@ __an_h_tasks HttpRequest req Params p → HttpResponse {
+    : Gate gate ( __an_gate_member req )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ^ rd
+    }
+    : Principal me . gate who
+    : Json o ( json_obj_new )
+    ( json_obj_set o `status` ( json_str_lit `success` ) )
+    ( json_obj_set o `organization` ( json_str_lit ( string_data . me org ) ) )
+    ( json_obj_set o `tasks` ( analyze_task_list ( string_data . me org ) ) )
+    : HttpResponse r ( response_json 200 o )
+    ( json_free o )
+    ( __an_gate_free gate )
+    ^ r
+}
+
+@ __an_h_task HttpRequest req Params p → HttpResponse {
+    : String id ( __an_param_str p `id` )
+    ? ( __an_task_id_ok ( string_data id ) ) {} {
+        ( string_free id )
+        ^ ( __an_json_err 400 `Invalid task id.` )
+    }
+    : Gate gate ( __an_gate_member req )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free id )
+        ^ rd
+    }
+    : Principal me . gate who
+    : HttpResponse r ( __an_task_response ( string_data . me org ) ( string_data id ) 200 )
+    ( __an_gate_free gate )
+    ( string_free id )
+    ^ r
+}
+
+// DELETE /api/org/tasks/:id — the task record; the result file in the
+// folder stays until deleted on its own.
+@ __an_h_task_delete HttpRequest req Params p → HttpResponse {
+    : String id ( __an_param_str p `id` )
+    ? ( __an_task_id_ok ( string_data id ) ) {} {
+        ( string_free id )
+        ^ ( __an_json_err 400 `Invalid task id.` )
+    }
+    : Gate gate ( __an_gate_auth req T )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free id )
+        ^ rd
+    }
+    : Principal me . gate who
+    : ~ HttpResponse r ( __an_json_err 404 `Task not found` )
+    ? ( analyze_task_delete ( string_data . me org ) ( string_data id ) ) {
+        ( http_response_free r )
+        : Json o ( __an_ok_msg `deleted` )
+        ( json_obj_set o `task_id` ( json_str_lit ( string_data id ) ) )
+        = r ( response_json 200 o )
+        ( json_free o )
+    } {}
+    ( __an_gate_free gate )
+    ( string_free id )
+    ^ r
+}
+
 // ── The owner tenant's console ────────────────────────────────────────
 //
 // One organisation administers the service itself: which other
@@ -2994,6 +3492,15 @@ $ `src/authz.nu`
     ( router_get r `/api/orgs/:org/users` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_org_roster req p ) } )
     ( router_put r `/api/orgs/:org/users/:sub/role` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_org_promote req p ) } )
     ( router_delete r `/api/orgs/:org/users/:sub` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_org_forget req p ) } )
+    // The organisation's folder, and analyses.
+    ( router_get r `/api/org/files` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_org_files req p ) } )
+    ( router_get r `/api/org/files/:name` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_org_file_get req p ) } )
+    ( router_post r `/api/org/files/:name/link` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_org_file_link req p ) } )
+    ( router_delete r `/api/org/files/:name` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_org_file_delete req p ) } )
+    ( router_post r `/api/analyze` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_analyze req p ) } )
+    ( router_get r `/api/org/tasks` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_tasks req p ) } )
+    ( router_get r `/api/org/tasks/:id` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_task req p ) } )
+    ( router_delete r `/api/org/tasks/:id` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_task_delete req p ) } )
     ^ r
 }
 
@@ -3016,7 +3523,28 @@ $ `src/authz.nu`
     // dashboard whose parallel requests are served in the order they
     // arrive.
     ( http_app_max_keepalive app 0 )
+    // A file to analyse is bigger than a point.
+    ( http_app_body_max app 67108864 )
+    // A small pool of workers behind one lock (see g_an_lock): handlers
+    // still run one at a time, but a handler that waits on a job can step
+    // aside while it does, and the others are served meanwhile.
+    : Mutex lock ( mutex_new )
+    : Cell lcell . lock c
+    = g_an_lock # i . lcell ptr
+    ( http_app_workers app 4 )
+    : ( @ ( @ HttpResponse HttpRequest ) ( @ HttpResponse HttpRequest ) ) serial
+    \ ( @ HttpResponse HttpRequest ) inner → ( @ HttpResponse HttpRequest ) {
+        ^ \ HttpRequest req → HttpResponse {
+            ( __an_lock_acquire )
+            : HttpResponse r ( inner req )
+            ( __an_lock_release )
+            ^ r
+        }
+    }
+    ( http_app_use app serial )
     : i rc ( http_app_listen app host port )
     ( http_app_free app )
+    = g_an_lock 0
+    ( mutex_free lock )
     ^ rc
 }

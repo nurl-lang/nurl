@@ -67,6 +67,21 @@ $ `src/service.nu`
 // default and the "was --addr actually given" test cannot drift apart.
 : s ANOM_DEFAULT_ADDR `127.0.0.1:8811`
 
+// `anomaly analyze-job <dir>`: the child the service runs for
+// POST /api/analyze (src/analyze.nu). Everything it needs is in the task
+// directory; it reports through status.json and its exit code.
+@ __an_cmd_analyze_job CliCtx x → i {
+    : String dir ( ctx_arg x 0 )
+    ? > ( string_len dir ) 0 {} {
+        ( nurl_eprintln `anomaly: analyze-job needs the task directory` )
+        ( string_free dir )
+        ^ 2
+    }
+    : i rc ( analyze_run ( string_data dir ) )
+    ( string_free dir )
+    ^ rc
+}
+
 // Dashboard web root for `serve`. --webroot / $ANOMALY_WEBROOT (via the
 // flag) first, then <exe-dir>/static, <exe-dir>/../share/anomaly/static,
 // then ./static. Empty String disables the dashboard (API-only).
@@ -752,7 +767,7 @@ $ `src/service.nu`
 }
 
 @ main → i {
-    : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` `0.11.1` )
+    : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` `0.12.0` )
     ( cli_flag_str c `store` 115 `DIR` `model store (default: $ANOMALY_HOME, else ~/.anomaly)` `` `ANOMALY_HOME` )
     ( cli_flag_str c `file` 102 `FILE` `for batch: read CSV from FILE instead of stdin` `` `` )
     ( cli_flag_str c `margin` 109 `M` `for batch: decision margin (default 0 = predict==-1)` `0` `` )
@@ -778,6 +793,7 @@ $ `src/service.nu`
     ( cli_cmd c `ls` `list models` \ CliCtx x → i { ^ ( __an_cmd_ls x ) } )
     ( cli_cmd c `info` `print model metadata` \ CliCtx x → i { ^ ( __an_cmd_info x ) } )
     ( cli_cmd c `serve` `run the HTTP/JSON service + web dashboard` \ CliCtx x → i { ^ ( __an_cmd_serve x ) } )
+    ( cli_cmd c `analyze-job` `run one analysis task (the service starts these; TASK_DIR)` \ CliCtx x → i { ^ ( __an_cmd_analyze_job x ) } )
 
     : i rc ( cli_run c )
     ( cli_free c )

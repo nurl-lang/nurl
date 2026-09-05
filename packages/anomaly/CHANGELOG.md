@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.12.0
+
+- **Analyse a file in one call.** `POST /api/analyze` takes a CSV / JSON /
+  JSONL file as the body (the import route's `format=`, `time=`, `tz=`,
+  `calendar=`, `clock=` apply), trains a throwaway model on it — every
+  forest version over the whole file, the autoencoder as 64-16-64, every
+  margin fine-tuned to a 1 % alert rate — and answers with the anomalies:
+  each point's index, stamp, score, the versions that flagged it (and how
+  many, `votes`), its top contributors with value and expectation, and the
+  full record. Up to 10 000 points come inline; the result file always
+  lands in the organisation's folder, and the answer carries a signed
+  `download_url` anyone holding it can fetch, for seven days. `?votes=N`
+  keeps only the points at least N versions agreed on — each version is
+  calibrated to 1 % on its own, so their union runs above it.
+- **Long analyses become tasks.** The call waits `wait=` seconds (default
+  10, at most 60); when the job has not finished by then it answers 202
+  with a `task_id` and `task_url`, and `GET /api/org/tasks[/<id>]` lets
+  the organisation's members list their tasks and read the result — the
+  same answer the call would have given — whenever it is done. Admins
+  `DELETE` a task. A failed job (unreadable file, too few rows) says why,
+  as a 400 when the call was still waiting and as the task's `message`
+  later. `wait=0` returns at once.
+- **An organisation folder.** `GET /api/org/files` lists it, `GET
+  /api/org/files/<name>` downloads a file (members: viewer or admin), `POST
+  /api/org/files/<name>/link?ttl=` mints a pre-authenticated link (default
+  seven days, at most thirty), `DELETE` removes a file (admin). Links are
+  HMAC-signed with a per-store secret and bound to the organisation, the
+  file and the expiry; a tampered or expired one is a 403.
+- **Walk the points from the popup.** The point popup on the anomalies page
+  has `<<  <  >  >>` — ten back, previous, next, ten forward — and the
+  arrow keys do the same (Shift for ten).
+- The service now runs four worker threads behind one service lock, so a
+  waiting analysis no longer holds up live `/detect` traffic; every other
+  route still runs one at a time, as before. The request body cap is
+  64 MiB. Analyses run in a child process (`anomaly analyze-job <dir>`,
+  not for hand use) so a crash in one cannot take the service down, and the
+  service's GPU and models stay untouched.
+
 ## 0.11.1
 
 - **Contributors say what the value was.** An autoencoder contribution in

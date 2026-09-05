@@ -656,6 +656,7 @@ anomaly rm     <model>                 # delete the model entirely
 anomaly ls / info <model>              # list models / dump metadata
 anomaly serve  [--addr HOST:PORT]      # run the HTTP/JSON service + dashboard
                [--webroot DIR]
+anomaly analyze-job <task-dir>         # (internal) run one /api/analyze task
 ```
 
 The store defaults to `$ANOMALY_HOME`, else `~/.anomaly`; override per
@@ -678,6 +679,9 @@ command with `--store DIR`.
 | `GET /models/dynamic/<m>/anomalies` | re-score the stored ring, cached (see below) |
 | `POST /models/dynamic/<m>/claim` | adopt an unclaimed model into your organization |
 | `POST /models/dynamic/<m>/import?format=&inspect=&time=&tz=&calendar=&clock=` | import a CSV/JSON/JSONL file of history; `inspect=1` proposes where its time is |
+| `POST /api/analyze?wait=&votes=&name=&format=&time=&tz=&calendar=&clock=` | analyse a file sent as the body: train, fine-tune to 1 %, return the anomalies (see below) |
+| `GET /api/org/tasks[/<id>]`, `DELETE /api/org/tasks/<id>` | the organization's analyses and their results |
+| `GET /api/org/files[/<name>]`, `POST /api/org/files/<name>/link?ttl=`, `DELETE /api/org/files/<name>` | the organization's folder: list, download, pre-authenticated link, delete |
 | `DELETE /api/me` | delete your account (right to be forgotten) |
 | `GET\|PUT /api/tenants[/<tid>]` | approve organizations (owner tenant) |
 | `GET /api/orgs`, `GET\|PUT\|DELETE /api/orgs/<org>/users[/<sub>[/role]]` | administer any organization (owner tenant) |
@@ -694,6 +698,62 @@ command with `--store DIR`.
 
 Model names must match `^[a-zA-Z0-9_]+$`. The router is a plain function
 over `HttpRequest` — the test suite drives every route without a socket.
+
+### Analysing a file
+
+`POST /api/analyze` is the import route without the model: send a CSV,
+JSON or JSONL file as the body (`format=`, `time=`, `tz=`, `calendar=` and
+`clock=` mean what they mean for an import; `name=` labels the result) and
+the service trains a throwaway model on it — every forest version over the
+whole file, the autoencoder as 64-16-64, every margin fine-tuned to a 1 %
+alert rate — scans it and answers with the anomalies:
+
+```
+curl --data-binary @week.csv "https://host/api/analyze?name=week%2036&wait=30"
+{ "status": "success", "state": "done", "task_id": "…", "task_url": "/api/org/tasks/…",
+  "rows": 10080, "anomalies": 143, "target_rate": 0.01, "votes": 1,
+  "model_versions": ["short_term", …, "autoencoder"], "margins": { … },
+  "file": { "name": "week_36-….json", "size": 61022, "url": "/api/org/files/…",
+            "download_url": "/api/org/files/…?org=…&exp=…&sig=…", "expires": … },
+  "inline": true,
+  "points": [ { "index": 411, "timestamp": …, "score": -0.113, "votes": 4,
+                "versions": ["short_term", "daily", "weekly", "seasonal"],
+                "contributions": [ { "feature": "rh", "share": 0.6, "value": 47.9, "expected": 48.4 }, … ],
+                "values": { …the whole record… } }, … ] }
+```
+
+Up to 10 000 points come inline (`inline: true`); the full result — the
+same object, points included — is always written to the organization's
+folder, and `download_url` is a pre-authenticated link to it: anyone
+holding it can fetch the file until `expires` (seven days), no sign-in.
+Each version is calibrated to 1 % on its own and a point is an anomaly
+when any of them says so, so the union runs above 1 %; `votes=2` keeps
+only the points two or more versions agreed on, which lands near it.
+
+The call waits `wait=` seconds for the job (default 10, at most 60). A
+job still running after that answers **202** with `state: "queued"` or `"running"`, and
+`GET /api/org/tasks/<task_id>` (the `task_url`) gives the very same answer
+once it is done — poll it, or come back later: `GET /api/org/tasks` lists
+the organization's analyses, newest first, with their state. A job that
+fails (nothing parses, fewer than ten rows) answers 400 with the reason
+while the call waits, and `state: "failed"` with a `message` from the task
+route afterwards. Members (viewer or admin) see their organization's
+tasks; admins delete them. Analyses run as a child process
+(`anomaly analyze-job`), so the live models, the GPU and the service
+itself are never in the job's hands.
+
+### The organization's folder
+
+Every organization has a folder in the store (`orgs/<org>/files`).
+`GET /api/org/files` lists it (`name`, `size`, `modified`, `url`), `GET
+/api/org/files/<name>` downloads a file — both for members, viewer or
+admin. `POST /api/org/files/<name>/link?ttl=<seconds>` mints a
+pre-authenticated link (default seven days, at most thirty): the file's
+URL with `org`, `exp` and an HMAC signature over the three, keyed by a
+secret the store generates once (`orgs/link.secret`). A link opens exactly
+that file of that organization until it expires; a tampered or expired one
+is a 403. Admins `DELETE` files. Names are `[A-Za-z0-9._-]`, no leading
+dot, at most 128 characters.
 
 ### Editing the metadata
 

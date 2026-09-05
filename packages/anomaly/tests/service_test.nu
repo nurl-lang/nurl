@@ -757,6 +757,165 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     ( check == . md5 status 404 `svc: deleted model metadata -> 404` )
     ( json_free . md5 body )
 
+    // ── Organisation folder, signed links ─────────────────────────────
+    ( check ( orgfiles_name_ok `report-2026.05.json` ) `orgfiles: plain name ok` )
+    ( check ! ( orgfiles_name_ok `.hidden` ) `orgfiles: leading dot rejected` )
+    ( check ! ( orgfiles_name_ok `../etc/passwd` ) `orgfiles: path escape rejected` )
+    ( check ! ( orgfiles_name_ok `a b` ) `orgfiles: space rejected` )
+    : String safe ( orgfiles_safe_name `demo run/x` )
+    ( check == ( nurl_str_eq ( string_data safe ) `demo_run_x` ) 1 `orgfiles: safe_name maps the rest to _` )
+    ( string_free safe )
+    : ( Vec u ) payload ( bytes_from_str `{"hello": 1}` )
+    ( check ( orgfiles_write `public` `hello.json` payload ) `orgfiles: write` )
+    ( vec_free [u] payload )
+    : SvcOut fl ( fire r `GET` `/api/org/files` `` `` )
+    ( check == . fl status 200 `org files: list -> 200` )
+    : ~ i nfiles 0
+    ?? ( json_obj_get . fl body `files` ) { T a → { = nfiles ( json_arr_len a ) } F _ → {} }
+    ( check == nfiles 1 `org files: one file listed` )
+    ( json_free . fl body )
+    : SvcOut fg ( fire r `GET` `/api/org/files/hello.json` `` `` )
+    ( check == . fg status 200 `org files: member get -> 200` )
+    ( check == ( jint_of . fg body `hello` ) 1 `org files: get returns the content` )
+    ( json_free . fg body )
+    ( check == . ( fire r `GET` `/api/org/files/nope.json` `` `` ) status 404 `org files: missing -> 404` )
+    ( check == . ( fire r `GET` `/api/org/files/.env` `` `` ) status 400 `org files: bad name -> 400` )
+    : SvcOut lk ( fire r `POST` `/api/org/files/hello.json/link` `ttl=60` `` )
+    ( check == . lk status 200 `org files: link -> 200` )
+    : ~ String durl ( string_new )
+    ?? ( json_obj_get . lk body `download_url` ) { T u → { ( string_push_str durl ( json_str_data u ) ) } F _ → {} }
+    ( check > ( string_len durl ) 0 `org files: link carries download_url` )
+    ( json_free . lk body )
+    // The link is path?query: split it and fire the query as an
+    // anonymous request — the signature alone must open the file.
+    : ~ i qat -1
+    ?? ( string_index_of durl `?` ) { T q → { = qat q } F _ → {} }
+    ( check > qat 0 `org files: link has a query` )
+    : String lpath ( string_substr durl 0 qat )
+    : String lquery ( string_substr durl + qat 1 - ( string_len durl ) + qat 1 )
+    : SvcOut sg ( fire r `GET` ( string_data lpath ) ( string_data lquery ) `` )
+    ( check == . sg status 200 `org files: signed link -> 200` )
+    ( json_free . sg body )
+    : ~ String bad ( string_from ( string_data lquery ) )
+    ( string_push_str bad `0` )
+    : SvcOut sb ( fire r `GET` ( string_data lpath ) ( string_data bad ) `` )
+    ( check == . sb status 403 `org files: tampered signature -> 403` )
+    ( json_free . sb body )
+    ( string_free bad )
+    : i tnow ( now_seconds )
+    : String sig ( orgfiles_sign `public` `hello.json` + tnow 60 )
+    ( check ( orgfiles_verify `public` `hello.json` + tnow 60 ( string_data sig ) tnow ) `orgfiles: verify own signature` )
+    ( check ! ( orgfiles_verify `public` `hello.json` + tnow 60 ( string_data sig ) + tnow 61 ) `orgfiles: expired link fails` )
+    ( check ! ( orgfiles_verify `other` `hello.json` + tnow 60 ( string_data sig ) tnow ) `orgfiles: signature is bound to the org` )
+    ( string_free sig )
+    ( string_free lpath )
+    ( string_free lquery )
+    ( string_free durl )
+    ( check == . ( fire r `DELETE` `/api/org/files/hello.json` `` `` ) status 200 `org files: delete -> 200` )
+    ( check == . ( fire r `GET` `/api/org/files/hello.json` `` `` ) status 404 `org files: deleted -> 404` )
+
+    // ── Analyze: tasks, the job, the response ─────────────────────────
+    ( check == . ( fire r `GET` `/api/org/tasks/not-a-task-id` `` `` ) status 400 `tasks: bad id -> 400` )
+    ( check == . ( fire r `GET` `/api/org/tasks/000000000000000000000000` `` `` ) status 404 `tasks: unknown -> 404` )
+    ( check == . ( fire r `POST` `/api/analyze` `` `` ) status 400 `analyze: empty body -> 400` )
+    // The test binary must not re-spawn itself as the job: the job runs
+    // in this process instead, after the request has queued it.
+    ( analyze_set_exe `/bin/true` )
+    : ~ String csv ( string_from `timestamp,a,b` )
+    : ~ i ri 0
+    ~ < ri 400 {
+        ( string_push_char csv 10 )
+        ( string_push_int csv + 1780000000 * ri 60 )
+        ( string_push_str csv `,` )
+        ( string_push_int csv + 10 % ri 7 )
+        ( string_push_str csv `,` )
+        ( string_push_int csv ? == ri 200 900 + 20 % ri 5 )
+        = ri + ri 1
+    }
+    : SvcOut aq ( fire r `POST` `/api/analyze` `wait=0&name=unit%20run` ( string_data csv ) )
+    ( check == . aq status 202 `analyze: wait=0 -> 202 pending` )
+    ( check ( jstr_eq . aq body `state` `queued` ) `analyze: state queued` )
+    : ~ String tid ( string_new )
+    ?? ( json_obj_get . aq body `task_id` ) { T t → { ( string_push_str tid ( json_str_data t ) ) } F _ → {} }
+    ( check == ( string_len tid ) 24 `analyze: task_id is 24 hex chars` )
+    ( json_free . aq body )
+    : String tdir ( analyze_task_dir `public` ( string_data tid ) )
+    ( check == ( analyze_run ( string_data tdir ) ) 0 `analyze: the job runs to completion` )
+    : ~ String turl ( string_from `/api/org/tasks/` )
+    ( string_push_str turl ( string_data tid ) )
+    : SvcOut tr ( fire r `GET` ( string_data turl ) `` `` )
+    ( check == . tr status 200 `tasks: finished task -> 200` )
+    ( check ( jstr_eq . tr body `state` `done` ) `tasks: state done` )
+    ( check == ( jint_of . tr body `rows` ) 400 `tasks: every row counted` )
+    ( check ( jbool_of . tr body `inline` ) `tasks: small result is inline` )
+    : ~ i npts -1
+    : ~ b spike F
+    ?? ( json_obj_get . tr body `points` ) {
+        T a → {
+            = npts ( json_arr_len a )
+            : ~ i pk 0
+            ~ < pk npts {
+                ?? ( json_arr_get a pk ) {
+                    T pt → { ? == ( jint_of pt `index` ) 200 { = spike T } {} }
+                    F _ → {}
+                }
+                = pk + pk 1
+            }
+        }
+        F _ → {}
+    }
+    ( check > npts 0 `tasks: anomalies returned` )
+    ( check < npts 40 `tasks: the union stays near the target (< 10% of 400)` )
+    ( check spike `tasks: the injected spike is among the anomalies` )
+    ( check ( jarr_has . tr body `model_versions` `autoencoder` ) `tasks: the autoencoder was trained` )
+    : ~ String rfile ( string_new )
+    ?? ( json_obj_get . tr body `file` ) {
+        T fo → {
+            ?? ( json_obj_get fo `name` ) { T n → { ( string_push_str rfile ( json_str_data n ) ) } F _ → {} }
+            ( check > ( jint_of fo `size` ) 0 `tasks: result file has a size` )
+        }
+        F _ → {}
+    }
+    ( json_free . tr body )
+    : ~ String rurl ( string_from `/api/org/files/` )
+    ( string_push_str rurl ( string_data rfile ) )
+    : SvcOut rf ( fire r `GET` ( string_data rurl ) `` `` )
+    ( check == . rf status 200 `tasks: result file is in the org folder` )
+    ( check == ( jint_of . rf body `rows` ) 400 `tasks: result file carries the report` )
+    ( json_free . rf body )
+    ( string_free rurl )
+    ( string_free rfile )
+    : SvcOut tl ( fire r `GET` `/api/org/tasks` `` `` )
+    ( check == . tl status 200 `tasks: list -> 200` )
+    : ~ i ntasks 0
+    ?? ( json_obj_get . tl body `tasks` ) { T a → { = ntasks ( json_arr_len a ) } F _ → {} }
+    ( check == ntasks 1 `tasks: one task listed` )
+    ( json_free . tl body )
+    // A garbage file fails with a message, in the task and in the answer.
+    : SvcOut ag ( fire r `POST` `/api/analyze` `wait=0` `this is not data` )
+    ( check == . ag status 202 `analyze: garbage queues too` )
+    : ~ String gid ( string_new )
+    ?? ( json_obj_get . ag body `task_id` ) { T t → { ( string_push_str gid ( json_str_data t ) ) } F _ → {} }
+    ( json_free . ag body )
+    : String gdir ( analyze_task_dir `public` ( string_data gid ) )
+    ( check != ( analyze_run ( string_data gdir ) ) 0 `analyze: garbage job fails` )
+    : ~ String gurl ( string_from `/api/org/tasks/` )
+    ( string_push_str gurl ( string_data gid ) )
+    : SvcOut gr ( fire r `GET` ( string_data gurl ) `` `` )
+    ( check == . gr status 200 `tasks: failed task is readable` )
+    ( check ( jstr_eq . gr body `state` `failed` ) `tasks: state failed` )
+    ( check ( jstr_eq . gr body `status` `error` ) `tasks: failed task says error` )
+    ( json_free . gr body )
+    ( check == . ( fire r `DELETE` ( string_data gurl ) `` `` ) status 200 `tasks: delete -> 200` )
+    ( check == . ( fire r `GET` ( string_data gurl ) `` `` ) status 404 `tasks: deleted -> 404` )
+    ( string_free gurl )
+    ( string_free gdir )
+    ( string_free gid )
+    ( string_free turl )
+    ( string_free tdir )
+    ( string_free tid )
+    ( string_free csv )
+
     ( router_free r )
     : !v IoErr fin ( dir_remove_all ( string_data root ) )
     ?? fin { T _ → {} F _ → {} }

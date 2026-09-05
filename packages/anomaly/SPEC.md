@@ -567,6 +567,58 @@ service so existing dashboards and the `modelmanager` UI keep working:
   The response also carries
   plus the legacy `adjusted_margins` and `max_anomaly_scores` maps. 400 on
   a rate outside `[0, 1]`.
+- `POST /api/analyze` (members) — the body is a file (the import route's
+  `format`, `time`, `tz`, `calendar`, `clock` apply; `name` labels the
+  result, default `analysis`). A task directory (`orgs/<org>/tasks/<id>`,
+  id = 24 hex chars) receives the input and `params.json`; a child process
+  (`anomaly analyze-job <dir>`) opens a store under it, imports the rows
+  with the warm-up shrunk to the file, opens every version's window to
+  the whole file (`window_minutes`/`window_points` → 0, the file has no
+  present), trains at the newest stamp, trains the autoencoder 64-16-64
+  with a 1 % pre-filter, fine-tunes every margin to `ANA_TARGET_RATE`
+  (1 %) over the file, scans, and writes the result — `task_id`, `name`,
+  `format`, `rows`, `imported`, `skipped`, `clock`, `target_rate`, `votes`,
+  `anomalies`, `considered`, `model_versions`, `margins`, `time`, `notes`,
+  `points[] { index, timestamp, score, votes, versions[], contributions[]
+  { feature, share, value, expected }, values }` — as
+  `<safe name>-<id>.json` into the organisation's folder, then
+  `status.json` (`state: queued → running → done | failed`, with the
+  numbers above, `file`, `size`, or `message`). `?votes=N` (default 1)
+  keeps a point only when N or more versions flagged it. The handler
+  waits `?wait=` seconds (default 10, max 60, polling every 100 ms with
+  the service lock released) and answers as `GET /api/org/tasks/<id>`
+  would: 200 `status: success` with the numbers, `file { name, size,
+  modified, url, download_url, expires }`, `inline` and — when
+  `anomalies ≤ ANA_INLINE_MAX` (10 000) — `points` and `time` read from
+  the result file; 202 `status: pending` while queued or running; a
+  failed task is 400 from the analyze call and 200 `status: error,
+  message` from the task route. A child that dies without a final status
+  is marked `failed` with its exit code and stderr tail. Fewer than ten
+  parsed rows is a failure. The request body cap is 64 MiB.
+- `GET /api/org/tasks` (members) — the organisation's tasks, newest first,
+  each the status record plus `task_id`; `DELETE /api/org/tasks/<id>`
+  (admin). A malformed id is 400, an unknown one 404.
+- `GET /api/org/files` (members) — the organisation's folder,
+  `orgs/<org>/files`: `files[] { name, size, modified, url }`, sorted by
+  name. `GET /api/org/files/<name>` — the file, `Content-Disposition:
+  attachment`, `Cache-Control: private, no-store`, content type by
+  extension (`.json`, `.csv`, `.txt`, else octet-stream). With `?org=&exp=&sig=`
+  the request is anonymous and the signature decides: `sig` =
+  hex HMAC-SHA256(secret, `org\nname\nexp`), the secret being 32 random
+  bytes the store writes once to `orgs/link.secret`; compared in constant
+  time; 403 "This link is not valid, or has expired." on any mismatch or
+  `exp < now`. `POST /api/org/files/<name>/link?ttl=` (members) mints such
+  a link (`download_url`, `expires`; ttl default 604 800 s, max
+  2 592 000 s). `DELETE /api/org/files/<name>` (admin). Names match
+  `[A-Za-z0-9._-]{1,128}` without a leading dot (400 otherwise); the
+  result file's stem is the task's name with every other character mapped
+  to `_`.
+- concurrency: `anomaly serve` runs four worker threads behind one service
+  mutex taken in an `http_app_use` middleware — handlers still run one at
+  a time (the GPU singleton, the RNG and the authz tables are global), but
+  the analyze handler releases the lock while it sleeps between polls, so
+  a waiting analysis never delays live traffic. The mutex is released on a
+  handler panic too (the recover sits inside the middleware).
 - model-name validation: `^[a-zA-Z0-9_]+$` (reject otherwise, mirrors reference).
 
 The service is thin: parse JSON → call the library → serialise. It is
@@ -588,6 +640,7 @@ anomaly rm      <model> [--store DIR]
 anomaly ls      [--store DIR]                          # list models
 anomaly info    <model> [--store DIR]                  # dump metadata
 anomaly serve   [--addr HOST:PORT] [--store DIR]       # run the HTTP service (M5)
+anomaly analyze-job <task-dir>                         # internal: one /api/analyze task, spawned by serve
 ```
 
 `--store DIR` defaults to `$ANOMALY_HOME` or `~/.anomaly`. Verdicts print as

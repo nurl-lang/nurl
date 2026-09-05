@@ -96,7 +96,10 @@
   .modal .mhead { display: flex; align-items: baseline; gap: 14px; padding: 16px 20px 10px; position: sticky; top: 0;
                   background: var(--panel); border-bottom: 1px solid var(--border); }
   .modal .mhead h3 { margin: 0; font-size: 15px; font-family: var(--mono); }
-  .modal .mhead .x { margin-left: auto; font-size: 18px; line-height: 1; padding: 2px 8px; }
+  .modal .mhead .x { font-size: 18px; line-height: 1; padding: 2px 8px; }
+  .modal .mhead .nav { margin-left: auto; display: flex; gap: 4px; }
+  .modal .mhead .nav button { font-family: var(--mono); padding: 2px 8px; min-width: 32px; }
+  .modal .mhead .nav button:disabled { opacity: .35; cursor: default; }
   .modal .mbody { padding: 12px 20px 18px; }
   .modal h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
   .modal table { font-size: 12px; }
@@ -154,7 +157,7 @@
     <h2>Anomaly score over time</h2>
     <p class="hint">The most severe version's <code>decision_function</code>. Lower is worse; each version has its
       own margin, so the flag — not the height — is the verdict. Drag across any chart to zoom into a stretch
-      of points; double-click, or the button, shows the whole range again. Click a point for every value it carries.</p>
+      of points; double-click, or the button, shows the whole range again. Click a point for every value it carries; the arrows in the popup walk the stored points.</p>
     <div class="zoombar" id="zoomBar"></div>
     <div class="cwrap"><canvas id="scoreChart" height="230"></canvas><div class="sel"></div></div>
   </div>
@@ -188,6 +191,12 @@
 <div class="scrim" id="scrim" onclick="closePoint()"></div>
 <div class="modal" id="modal" role="dialog" aria-modal="true">
   <div class="mhead"><h3 id="mtitle"></h3><span id="mtags" class="vtags"></span>
+    <span class="nav">
+      <button id="nav0" onclick="stepPoint(-10)" title="10 points earlier (Shift+←)">&lt;&lt;</button>
+      <button id="nav1" onclick="stepPoint(-1)" title="previous point (←)">&lt;</button>
+      <button id="nav2" onclick="stepPoint(1)" title="next point (→)">&gt;</button>
+      <button id="nav3" onclick="stepPoint(10)" title="10 points later (Shift+→)">&gt;&gt;</button>
+    </span>
     <button class="x" onclick="closePoint()" title="close (Esc)">×</button></div>
   <div class="mbody" id="mbody"></div>
 </div>
@@ -723,22 +732,57 @@ function renderList(flagged) {
 // An autoencoder verdict brings the reconstruction of every feature and
 // its share of the error, not just the top three of the table.
 
-async function openPoint(p) {
-  if (!p) return;
+// The popup walks the model's stored points by index, so it can step
+// outside the scanned window: a point the scan did not return is fetched
+// on its own (the record first, its verdict by the record's timestamp).
+let MODAL = null;      // { index, seq } while the popup is open
+
+function openPoint(p) { if (p) openPointAt(p.index); }
+
+function stepPoint(d) {
+  if (!MODAL || !SCAN) return;
+  const last = Math.max(0, (SCAN.data_points_count || 1) - 1);
+  openPointAt(Math.min(last, Math.max(0, MODAL.index + d)));
+}
+
+function navState() {
+  const last = SCAN ? Math.max(0, (SCAN.data_points_count || 1) - 1) : 0;
+  const i = MODAL ? MODAL.index : 0;
+  $("nav0").disabled = $("nav1").disabled = i <= 0;
+  $("nav2").disabled = $("nav3").disabled = i >= last;
+}
+
+async function openPointAt(index) {
   const name = $("model").value;
-  $("mtitle").textContent = fmtTime(p.timestamp) + "  #" + p.index + "  score " + fmtNum(p.score);
-  $("mtags").innerHTML = (p.hit || []).map(v =>
-    '<span class="vtag ' + (v === AE ? "ae" : "") + '">' + esc(v) + "</span>").join("") ||
-    '<span class="muted">not flagged</span>';
+  const seq = (MODAL && MODAL.seq || 0) + 1;
+  MODAL = { index, seq };
+  const known = (SCAN && SCAN.points || []).find(x => x.index === index) || null;
+  const on = new Set(activeVersions());
+  const hitOf = (pt) => (pt && pt.versions || []).filter(v => on.has(v));
+  const head = (pt) => {
+    $("mtitle").textContent = (pt ? fmtTime(pt.timestamp) : "…") + "  #" + index + (pt ? "  score " + fmtNum(pt.score) : "");
+    $("mtags").innerHTML = hitOf(pt).map(v =>
+      '<span class="vtag ' + (v === AE ? "ae" : "") + '">' + esc(v) + "</span>").join("") ||
+      '<span class="muted">' + (pt ? "not flagged" : "") + "</span>";
+  };
+  head(known);
+  navState();
   $("mbody").innerHTML = '<div class="muted">loading…</div>';
   $("scrim").classList.add("open"); $("modal").classList.add("open");
-  const [rec, det] = await Promise.all([
-    api("GET", "/models/dynamic/" + enc(name) + "/data?at=" + p.index),
-    api("GET", "/models/dynamic/" + enc(name) + "/anomalies?from=" + p.timestamp + "&to=" + p.timestamp +
-      "&contrib=999" + (numericFeatures(name).length ? "&fields=" + enc(numericFeatures(name).join(",")) : "")),
-  ]);
+
+  const rec = await api("GET", "/models/dynamic/" + enc(name) + "/data?at=" + index);
+  if (!MODAL || MODAL.seq !== seq) return;
   const row = rec.ok && rec.data && rec.data.data && rec.data.data[0] || null;
-  const pt = det.ok && det.data && det.data.points && det.data.points.find(x => x.index === p.index) || det.data && det.data.points && det.data.points[0] || null;
+  const ts = known ? known.timestamp : row && (row.timestamp ?? row.time);
+  let pt = null;
+  if (ts !== undefined && ts !== null) {
+    const det = await api("GET", "/models/dynamic/" + enc(name) + "/anomalies?from=" + ts + "&to=" + ts +
+      "&contrib=999" + (numericFeatures(name).length ? "&fields=" + enc(numericFeatures(name).join(",")) : ""));
+    if (!MODAL || MODAL.seq !== seq) return;
+    const pts = det.ok && det.data && det.data.points || [];
+    pt = pts.find(x => x.index === index) || pts[0] || null;
+  }
+  head(pt || known);
   let h = "";
 
   // The record, as stored.
@@ -756,7 +800,7 @@ async function openPoint(p) {
 
   // The features, as the model saw them.
   const contribs = pt && pt.contributions && pt.contributions.length ? pt.contributions : null;
-  const vals = (pt && pt.values) || p.values || {};
+  const vals = (pt && pt.values) || (known && known.values) || {};
   if (contribs) {
     h += "<h4>every feature, as the autoencoder saw it</h4>" +
       '<p class="hint" style="margin:0 0 8px">Value carried, value the net expected from the other features, and each feature\'s share of the reconstruction error. Largest share first.</p>' +
@@ -781,8 +825,13 @@ async function openPoint(p) {
   }
   $("mbody").innerHTML = h;
 }
-function closePoint() { $("scrim").classList.remove("open"); $("modal").classList.remove("open"); }
-window.addEventListener("keydown", (e) => { if (e.key === "Escape") closePoint(); });
+function closePoint() { MODAL = null; $("scrim").classList.remove("open"); $("modal").classList.remove("open"); }
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closePoint();
+  if (!MODAL) return;
+  if (e.key === "ArrowLeft") { e.preventDefault(); stepPoint(e.shiftKey ? -10 : -1); }
+  if (e.key === "ArrowRight") { e.preventDefault(); stepPoint(e.shiftKey ? 10 : 1); }
+});
 
 // ── boot ──────────────────────────────────────────────────────────────
 
