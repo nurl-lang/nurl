@@ -4,6 +4,12 @@
 //   anomaly score  <model> key=val ...     score only (no state change)
 //   anomaly batch  [-f FILE] [-H]          score a CSV (index<TAB>score)
 //   anomaly train  <model>                 force a retrain now
+//   anomaly train-ae <model>               train the autoencoder version
+//   anomaly calibrate <model> [--last S]   alert rate at the current margins,
+//                                          margin for each standard rate
+//   anomaly finetune <model> [--rate R]    set margins so R of the window is
+//                  [--last S|all|own] [-n]  flagged (default 1 % of 24 h;
+//                                          own = each version its period)
 //   anomaly reset  <model>                 drop data+forests, keep the name
 //   anomaly rm     <model>                 delete the model entirely
 //   anomaly ls                             list models in the store
@@ -60,6 +66,21 @@ $ `src/service.nu`
 // The bind address a bare `anomaly serve` uses. Named so the flag's
 // default and the "was --addr actually given" test cannot drift apart.
 : s ANOM_DEFAULT_ADDR `127.0.0.1:8811`
+
+// `anomaly analyze-job <dir>`: the child the service runs for
+// POST /api/analyze (src/analyze.nu). Everything it needs is in the task
+// directory; it reports through status.json and its exit code.
+@ __an_cmd_analyze_job CliCtx x → i {
+    : String dir ( ctx_arg x 0 )
+    ? > ( string_len dir ) 0 {} {
+        ( nurl_eprintln `anomaly: analyze-job needs the task directory` )
+        ( string_free dir )
+        ^ 2
+    }
+    : i rc ( analyze_run ( string_data dir ) )
+    ( string_free dir )
+    ^ rc
+}
 
 // Dashboard web root for `serve`. --webroot / $ANOMALY_WEBROOT (via the
 // flag) first, then <exe-dir>/static, <exe-dir>/../share/anomaly/static,
@@ -389,6 +410,10 @@ $ `src/service.nu`
         = webroot ( config_str cfg `service.webroot` `` )
     } {}
     ( anomaly_service_set_webroot ( string_data webroot ) )
+    // Say where the models live: a mistyped --store or $ANOMALY_HOME
+    // otherwise serves (and writes) the default store without a word.
+    ( nurl_eprint `anomaly: model store: ` )
+    ( nurl_eprintln ( string_data root ) )
     ? > ( string_len webroot ) 0 {
         ( nurl_eprint `anomaly: dashboard web root: ` )
         ( nurl_eprintln ( string_data webroot ) )
@@ -488,6 +513,186 @@ $ `src/service.nu`
     ^ rc
 }
 
+// Resolve --last / --from / --to into the calibration window (see
+// model_window_from_last): --last counts back from the newest stored
+// point, `--last all` means the whole ring.
+@ __an_cli_window * Model mo CliCtx x → ( Vec i ) {
+    : i from0 ( ctx_int x `from` )
+    : i to0 ( ctx_int x `to` )
+    : String lasts ( ctx_str x `last` )
+    : ~ i last ( model_default_last mo )
+    : s lraw ( string_data lasts )
+    ? || == ( nurl_str_eq lraw `all` ) 1 == ( nurl_str_eq lraw `*` ) 1 { = last 0 } {
+        ?? ( string_to_int lasts ) { T v → { ? > v 0 { = last v } {} } F _ → {} }
+    }
+    ( string_free lasts )
+    : ~ i from_ts from0
+    // seconds on a time clock, points on a count clock
+    ? & > last 0 <= from0 0 { = from_ts ( model_window_from_last mo to0 ( model_last_span mo last ) ) } {}
+    : ( Vec i ) w ( vec_new [i] )
+    ( vec_push [i] w from_ts )
+    ( vec_push [i] w to0 )
+    ^ w
+}
+
+@ __an_push_pct String out i num i den → v {
+    : ~ f pct 0.0
+    ? > den 0 { = pct / * 100.0 # f num # f den } {}
+    ( string_push_str out ( float_to_string ( round_sig pct 3 ) ) )
+    ( string_push_char out 37 )
+}
+
+// anomaly calibrate <model> [--last S|all] [--from T] [--to T]
+//
+// Per version: the current margin, what it flags in the window, and the
+// margin for each standard alert rate — the numbers a person needs before
+// editing a margin by hand.
+@ __an_cmd_calibrate CliCtx x → i {
+    : String mname ( ctx_arg x 0 )
+    : String root ( __an_store_root x )
+    : Store st ( store_open ( string_data root ) )
+    ( string_free root )
+    : ~ i rc 0
+    ? ( store_exists st ( string_data mname ) ) {
+        : *Model mo ( model_open st ( string_data mname ) )
+        ? ( model_is_trained mo ) {
+            : ( Vec i ) w ( __an_cli_window mo x )
+            : CalReport cal ( model_calibrate mo ( _mlp_iget w 0 ) ( _mlp_iget w 1 ) )
+            ( vec_free [i] w )
+            : String hdr ( string_from `window: ` )
+            ( string_push_int hdr . cal n_rows )
+            ( string_push_str hdr ` of ` )
+            ( string_push_int hdr ( model_n_points mo ) )
+            ( string_push_str hdr ` stored points; any version flags ` )
+            ( string_push_int hdr . cal agg_flagged )
+            ( string_push_str hdr ` (` )
+            ( __an_push_pct hdr . cal agg_flagged . cal n_rows )
+            ( string_push_str hdr `)` )
+            ( pline ( string_data hdr ) )
+            ( string_free hdr )
+            ( pline `version       margin    flagged        worst     margin for 0.1% / 1% / 5% / 10%` )
+            : i ni ( vec_len [CalVer] . cal items )
+            : ~ i k 0
+            ~ < k ni {
+                ?? ( vec_get [CalVer] . cal items k ) {
+                    T cv → {
+                        : String ln ( string_from ( string_data . cv cvname ) )
+                        ~ < ( string_len ln ) 13 { ( string_push_char ln 32 ) }
+                        ( string_push_char ln 32 )
+                        ( string_push_str ln ( float_to_string ( round_sig . cv cur_margin 4 ) ) )
+                        ( string_push_str ln `  ` )
+                        ( string_push_int ln . cv flagged )
+                        ( string_push_str ln ` (` )
+                        ( __an_push_pct ln . cv flagged . cv n )
+                        ( string_push_str ln `)  ` )
+                        ( string_push_str ln ( float_to_string ( round_sig . cv worst 4 ) ) )
+                        ( string_push_str ln `  ` )
+                        ( string_push_str ln ( float_to_string ( cal_margin_for_rate cv 0.001 ) ) )
+                        ( string_push_str ln ` / ` )
+                        ( string_push_str ln ( float_to_string ( cal_margin_for_rate cv 0.01 ) ) )
+                        ( string_push_str ln ` / ` )
+                        ( string_push_str ln ( float_to_string ( cal_margin_for_rate cv 0.05 ) ) )
+                        ( string_push_str ln ` / ` )
+                        ( string_push_str ln ( float_to_string ( cal_margin_for_rate cv 0.1 ) ) )
+                        ( pline ( string_data ln ) )
+                        ( string_free ln )
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( cal_free cal )
+        } {
+            ( nurl_eprintln `anomaly: model is not trained yet` )
+            = rc 1
+        }
+        ( model_free mo )
+    } {
+        ( nurl_eprint `anomaly: model not found: ` )
+        ( nurl_eprintln ( string_data mname ) )
+        = rc 1
+    }
+    ( store_free st )
+    ( string_free mname )
+    ^ rc
+}
+
+// anomaly finetune <model> [--rate R] [--last S|all|own] [--dry-run]
+//
+// Set every version's margin so that R of the window is flagged. `--last
+// own` gives every version its own window — the period it trains on.
+@ __an_cmd_finetune CliCtx x → i {
+    : String mname ( ctx_arg x 0 )
+    : String root ( __an_store_root x )
+    : Store st ( store_open ( string_data root ) )
+    ( string_free root )
+    : ~ i rc 0
+    : f rate ( ctx_float x `rate` )
+    ? & >= rate 0.0 <= rate 1.0 {} {
+        ( nurl_eprintln `anomaly: --rate must be between 0 and 1 (the fraction of the window to flag)` )
+        ( store_free st )
+        ( string_free mname )
+        ^ 2
+    }
+    ? ( store_exists st ( string_data mname ) ) {
+        : *Model mo ( model_open st ( string_data mname ) )
+        ? ( model_is_trained mo ) {
+            : ( Vec i ) w ( __an_cli_window mo x )
+            : b dry ( ctx_bool x `dry-run` )
+            : ( Vec String ) none ( vec_new [String] )
+            : String lasts ( ctx_str x `last` )
+            : b own == ( nurl_str_eq ( string_data lasts ) `own` ) 1
+            ( string_free lasts )
+            : FineTuneReport rep ? own ( model_finetune_own mo rate ! dry none )
+            ( model_finetune_at mo rate ( _mlp_iget w 0 ) ( _mlp_iget w 1 ) ! dry none )
+            ( vec_free [String] none )
+            ( vec_free [i] w )
+            ( pline ? dry `dry run — nothing written` `margins updated` )
+            ( pline `version       old margin -> new margin   flagged before -> after (window)` )
+            : i ni ( vec_len [FtVer] . rep items )
+            : ~ i k 0
+            ~ < k ni {
+                ?? ( vec_get [FtVer] . rep items k ) {
+                    T ft → {
+                        : String ln ( string_from ( string_data . ft ftname ) )
+                        ~ < ( string_len ln ) 13 { ( string_push_char ln 32 ) }
+                        ( string_push_char ln 32 )
+                        ( string_push_str ln ( float_to_string ( round_sig . ft old_margin 4 ) ) )
+                        ( string_push_str ln ` -> ` )
+                        ( string_push_str ln ( float_to_string . ft new_margin ) )
+                        ( string_push_str ln `   ` )
+                        ( string_push_int ln . ft before )
+                        ( string_push_str ln ` (` )
+                        ( __an_push_pct ln . ft before . ft n )
+                        ( string_push_str ln `) -> ` )
+                        ( string_push_int ln . ft after )
+                        ( string_push_str ln ` (` )
+                        ( __an_push_pct ln . ft after . ft n )
+                        ( string_push_str ln `) of ` )
+                        ( string_push_int ln . ft n )
+                        ( pline ( string_data ln ) )
+                        ( string_free ln )
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( finetune_free rep )
+        } {
+            ( nurl_eprintln `anomaly: model is not trained yet` )
+            = rc 1
+        }
+        ( model_free mo )
+    } {
+        ( nurl_eprint `anomaly: model not found: ` )
+        ( nurl_eprintln ( string_data mname ) )
+        = rc 1
+    }
+    ( store_free st )
+    ( string_free mname )
+    ^ rc
+}
+
 @ __an_cmd_train CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
@@ -562,7 +767,7 @@ $ `src/service.nu`
 }
 
 @ main → i {
-    : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` `0.9.1` )
+    : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` `0.12.0` )
     ( cli_flag_str c `store` 115 `DIR` `model store (default: $ANOMALY_HOME, else ~/.anomaly)` `` `ANOMALY_HOME` )
     ( cli_flag_str c `file` 102 `FILE` `for batch: read CSV from FILE instead of stdin` `` `` )
     ( cli_flag_str c `margin` 109 `M` `for batch: decision margin (default 0 = predict==-1)` `0` `` )
@@ -570,17 +775,25 @@ $ `src/service.nu`
     ( cli_flag_str c `config` 99 `FILE` `config file (default: <store>/anomaly.toml, then /etc/anomaly/anomaly.toml)` `` `ANOMALY_CONFIG` )
     ( cli_flag_str c `webroot` 119 `DIR` `for serve: dashboard HTML dir (default: <exe>/static, $ANOMALY_WEBROOT)` `` `ANOMALY_WEBROOT` )
     ( cli_flag_bool c `header` 72 `for batch: skip the first CSV line (header)` )
+    ( cli_flag_float c `rate` 114 `R` `for finetune: fraction of the window to flag (default 0.01)` 0.01 `` )
+    ( cli_flag_str c `last` 108 `SECONDS` `for calibrate/finetune: window back from the newest point (default 86400; all = whole ring; finetune: own = each version its own period). Points, not seconds, on a count-clock model` `` `` )
+    ( cli_flag_int c `from` 0 `UNIX` `for calibrate/finetune: window start (unix seconds)` 0 `` )
+    ( cli_flag_int c `to` 0 `UNIX` `for calibrate/finetune: window end (unix seconds)` 0 `` )
+    ( cli_flag_bool c `dry-run` 110 `for finetune: report the margins without writing them` )
 
     ( cli_cmd c `detect` `ingest one point, print the verdict` \ CliCtx x → i { ^ ( __an_cmd_detect x T ) } )
     ( cli_cmd c `score` `score only (never ingests or retrains)` \ CliCtx x → i { ^ ( __an_cmd_detect x F ) } )
     ( cli_cmd c `batch` `score a CSV, one index<TAB>score per row` \ CliCtx x → i { ^ ( __an_cmd_batch x ) } )
     ( cli_cmd c `train` `force a retrain now` \ CliCtx x → i { ^ ( __an_cmd_train x ) } )
     ( cli_cmd c `train-ae` `train the autoencoder version (iforest-filtered)` \ CliCtx x → i { ^ ( __an_cmd_train_ae x ) } )
+    ( cli_cmd c `calibrate` `alert rates vs margins over a recent window` \ CliCtx x → i { ^ ( __an_cmd_calibrate x ) } )
+    ( cli_cmd c `finetune` `set every margin from a target alert rate` \ CliCtx x → i { ^ ( __an_cmd_finetune x ) } )
     ( cli_cmd c `reset` `drop data + forests, keep the name` \ CliCtx x → i { ^ ( __an_cmd_reset x ) } )
     ( cli_cmd c `rm` `delete the model entirely` \ CliCtx x → i { ^ ( __an_cmd_rm x ) } )
     ( cli_cmd c `ls` `list models` \ CliCtx x → i { ^ ( __an_cmd_ls x ) } )
     ( cli_cmd c `info` `print model metadata` \ CliCtx x → i { ^ ( __an_cmd_info x ) } )
     ( cli_cmd c `serve` `run the HTTP/JSON service + web dashboard` \ CliCtx x → i { ^ ( __an_cmd_serve x ) } )
+    ( cli_cmd c `analyze-job` `run one analysis task (the service starts these; TASK_DIR)` \ CliCtx x → i { ^ ( __an_cmd_analyze_job x ) } )
 
     : i rc ( cli_run c )
     ( cli_free c )

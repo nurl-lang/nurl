@@ -6,6 +6,9 @@
 //   sniff   — a body that does not say what it is.
 //   ingest  — timestamps from the FILE, merged into the ring in order,
 //             evicted from the oldest end, trained once at the end.
+//   stamps  — one cell of text in every clock format the importer reads.
+//   time    — a weather-service export with the date spread over four
+//             columns: inspected, proposed, applied; missing markers.
 // Store root: $ANOMALY_TEST_DIR (default ./anomaly_import_test).
 
 $ `stdlib/core/io.nu`
@@ -289,6 +292,197 @@ oops
     ( model_free mo )
 }
 
+// A stamp read from text, or -1 when the text is not one.
+@ stamp_secs s t → i {
+    : ImpStamp st ( imp_stamp_of_text t )
+    ? == . st kind STAMP_NONE { ^ -1 } {}
+    ^ . st secs  // naive stamps read as UTC here; zoned ones already are
+}
+
+@ stamp_kind s t → i { ^ . ( imp_stamp_of_text t ) kind }
+
+// 2026-08-29T00:10:00Z, read in UTC (tz 0).
+: i T_FMI 1787962200
+
+@ test_stamps → v {
+    ( check == ( stamp_secs `2026-08-29T00:10:00Z` ) T_FMI `stamps: RFC 3339 Z` )
+    ( check == ( stamp_secs `2026-08-29T03:10:00+03:00` ) T_FMI `stamps: RFC 3339 +03:00` )
+    ( check == ( stamp_secs `2026-08-29 03:10:00+0300` ) T_FMI `stamps: SQL TIMESTAMPTZ +0300` )
+    ( check == ( stamp_secs `2026-08-29 00:10:00` ) T_FMI `stamps: SQL TIMESTAMP naive` )
+    ( check == ( stamp_secs `2026-08-29 00:10:00.123456` ) T_FMI `stamps: fractional seconds` )
+    ( check == ( stamp_secs `2026-08-29 00:10` ) T_FMI `stamps: minutes only` )
+    ( check == ( stamp_secs `2026-08-29T00:10:00 UTC` ) T_FMI `stamps: UTC suffix` )
+    ( check == ( stamp_secs `2026-08-29` ) - T_FMI 600 `stamps: date alone` )
+    ( check == ( stamp_kind `2026-08-29` ) STAMP_DATE `stamps: date alone is DATE` )
+    ( check == ( stamp_secs `2026/08/29 00:10` ) T_FMI `stamps: slashed ISO` )
+    ( check == ( stamp_secs `29.8.2026 00:10` ) T_FMI `stamps: Finnish D.M.YYYY` )
+    ( check == ( stamp_secs `29.08.2026` ) - T_FMI 600 `stamps: D.M.YYYY date` )
+    ( check == ( stamp_secs `29/08/2026 00:10` ) T_FMI `stamps: D/M/YYYY` )
+    ( check == ( stamp_secs `08/29/2026 00:10` ) T_FMI `stamps: M/D/YYYY when day > 12` )
+    ( check == ( stamp_secs `20260829T001000` ) T_FMI `stamps: compact` )
+    ( check == ( stamp_secs `20260829` ) - T_FMI 600 `stamps: compact date` )
+    ( check == ( stamp_secs `1787962200` ) T_FMI `stamps: Unix seconds` )
+    ( check == ( stamp_secs `1787962200000` ) T_FMI `stamps: Unix milliseconds` )
+    ( check == ( stamp_secs `1787962200000000` ) T_FMI `stamps: Unix microseconds` )
+    ( check == ( stamp_secs `1787962200.5` ) T_FMI `stamps: Unix float` )
+    ( check == ( stamp_secs `Sat, 29 Aug 2026 00:10:00 GMT` ) T_FMI `stamps: RFC 2822 / HTTP date` )
+    ( check == ( stamp_kind `00:10` ) STAMP_CLOCK `stamps: a clock alone` )
+    ( check == ( stamp_secs `00:10` ) 600 `stamps: clock seconds after midnight` )
+    ( check == ( stamp_kind `14.3` ) STAMP_NONE `stamps: 14.3 is a number` )
+    ( check == ( stamp_kind `29.8` ) STAMP_NONE `stamps: 29.8 is not a date` )
+    ( check == ( stamp_kind `2026` ) STAMP_NONE `stamps: a bare year is a number` )
+    ( check == ( stamp_kind `Kouvola Anjala` ) STAMP_NONE `stamps: text` )
+    ( check == ( stamp_kind `2026-13-01` ) STAMP_NONE `stamps: month 13 rejected` )
+    ( check == ( stamp_kind `2026-08-29 25:00` ) STAMP_NONE `stamps: hour 25 rejected` )
+}
+
+// The header and four rows of an FMI (Finnish weather service) export.
+: s FMI_CSV `"Havaintoasema","Vuosi","Kuukausi","Päivä","Aika [Paikallinen aika]","Ilman lämpötila [°C]","Kastepistelämpötila [°C]","Pilvisyys [1/8]","Sademäärä [mm]"
+"Kouvola Anjala","2026","8","29","00:00","14.3","14.1","-","0"
+"Kouvola Anjala","2026","8","29","00:10","14.2","14","-","0"
+"Kouvola Anjala","2026","8","29","00:20","14.1","13.8","7","0"
+"Kouvola Anjala","2026","8","29","00:30","14","13.7","-","0"
+`
+
+@ jparse s txt → Json {
+    : !Json JsonError jr ( json_parse txt )
+    ?? jr { T j → { ^ j } F _ → { ^ ( json_obj_new ) } }
+}
+
+@ jstr Json o s key → s {
+    ?? ( json_obj_get o key ) { T v → { ? ( json_is_str v ) { ^ ( json_str_data v ) } { ^ `` } } F _ → { ^ `` } }
+}
+
+@ jpart Json plan s role → s {
+    ?? ( json_obj_get plan `parts` ) { T p → { ^ ( jstr p role ) } F _ → { ^ `` } }
+}
+
+@ row_int ( Vec Json ) rows i idx s key → i {
+    ?? ( vec_get [Json] rows idx ) {
+        T row → { ?? ( json_obj_get row key ) { T v → { ^ ( json_as_int v ) } F _ → { ^ -1 } } }
+        F _ → { ^ -1 }
+    }
+}
+
+@ row_has ( Vec Json ) rows i idx s key → b {
+    ?? ( vec_get [Json] rows idx ) { T row → { ^ ( json_obj_has row key ) } F _ → { ^ F } }
+}
+
+@ test_time → v {
+    : ImportParse ip ( import_parse FMI_CSV `csv` )
+    ( check == ( vec_len [Json] . ip rows ) 4 `time: four rows parsed` )
+    ( check ! ( row_has . ip rows 0 `Pilvisyys [1/8]` ) `time: "-" is a missing value` )
+    ( check == ( row_int . ip rows 2 `Pilvisyys [1/8]` ) 7 `time: a filled cell stays` )
+
+    // Inspect: the proposal is the four part columns, read in UTC here so
+    // the expected numbers do not depend on the machine's zone.
+    : Json auto ( json_obj_new )
+    : Json insp ( import_inspect . ip rows auto 0 )
+    ?? ( json_obj_get insp `time` ) {
+        T plan → {
+            ( check ( streq ( string_from ( jstr plan `mode` ) ) `parts` ) `time: proposal is parts` )
+            ( check ( streq ( string_from ( jpart plan `year` ) ) `Vuosi` ) `time: year ← Vuosi` )
+            ( check ( streq ( string_from ( jpart plan `month` ) ) `Kuukausi` ) `time: month ← Kuukausi` )
+            ( check ( streq ( string_from ( jpart plan `day` ) ) `Päivä` ) `time: day ← Päivä` )
+            ( check ( streq ( string_from ( jpart plan `clock` ) ) `Aika [Paikallinen aika]` ) `time: clock ← Aika` )
+            ( check ( streq ( string_from ( jstr plan `confidence` ) ) `high` ) `time: named parts are a confident guess` )
+            ?? ( json_obj_get plan `sample_unix` ) {
+                T su → { ( check == ( json_as_int su ) - T_FMI 600 `time: sample row stamps to 2026-08-29 00:00Z` ) }
+                F _ → { ( check F `time: sample_unix present` ) }
+            }
+        }
+        F _ → { ( check F `time: inspect has a time plan` ) }
+    }
+    ?? ( json_obj_get insp `columns` ) {
+        T cols → { ( check == ( json_arr_len cols ) 9 `time: nine columns described` ) }
+        F _ → { ( check F `time: columns described` ) }
+    }
+
+    // Apply the proposal: every row gets `timestamp`, the parts go away,
+    // the station name (text) stays for the preprocessing layer to judge.
+    : Json plan ?? ( json_obj_get insp `time` ) { T p → ( json_clone p ) F _ → ( json_obj_new ) }
+    : ImpTimeResult r ( import_time_apply . ip rows plan T 0 )
+    ( check == . r stamped 4 `time: four rows stamped` )
+    ( check == . r failed 0 `time: none failed` )
+    ( check == ( row_int . ip rows 1 `timestamp` ) T_FMI `time: row 1 is 00:10Z` )
+    ( check == ( row_int . ip rows 3 `timestamp` ) + T_FMI 1200 `time: row 3 is 00:30Z` )
+    ( check ! ( row_has . ip rows 0 `Vuosi` ) `time: Vuosi consumed` )
+    ( check ! ( row_has . ip rows 0 `Aika [Paikallinen aika]` ) `time: Aika consumed` )
+    ( check ( row_has . ip rows 0 `Havaintoasema` ) `time: the station column stays` )
+    ( check ( row_has . ip rows 0 `time` ) `time: calendar=T leaves an ISO time column` )
+    ( imp_time_result_free r )
+    ( json_free plan )
+    ( json_free insp )
+    ( import_parse_free ip )
+
+    // An explicit plan naming a column that is not there is an error, not a
+    // silent nothing.
+    : ImportParse ip2 ( import_parse FMI_CSV `csv` )
+    : Json bad ( jparse `{"mode":"column","column":"Aikaleima"}` )
+    : Json insp2 ( import_inspect . ip2 rows bad 0 )
+    ?? ( json_obj_get insp2 `time` ) {
+        T plan → { ( check ( json_obj_has plan `error` ) `time: a missing column is reported` ) }
+        F _ → { ( check F `time: inspect reports` ) }
+    }
+    ( json_free insp2 )
+    ( json_free bad )
+
+    // "none": nothing is read; no row gets a timestamp.
+    : Json none ( jparse `{"mode":"none"}` )
+    : Json insp3 ( import_inspect . ip2 rows none 0 )
+    ?? ( json_obj_get insp3 `time` ) {
+        T plan → {
+            : ImpTimeResult r3 ( import_time_apply . ip2 rows plan F 0 )
+            ( check == . r3 stamped 0 `time: mode none stamps nothing` )
+            ( check ! ( row_has . ip2 rows 0 `timestamp` ) `time: and rows stay unstamped` )
+            ( check ( row_has . ip2 rows 0 `Vuosi` ) `time: and columns stay` )
+            ( imp_time_result_free r3 )
+        }
+        F _ → { ( check F `time: none plan` ) }
+    }
+    ( json_free insp3 )
+    ( json_free none )
+    ( import_parse_free ip2 )
+
+    // A single datetime column under an unrelated name is found by its
+    // values; a naive stamp is read in the zone given (+03:00 here).
+    : ImportParse ip4 ( import_parse `ajanhetki,x
+2026-08-29 03:10:00,1
+2026-08-29 03:20:00,2
+` `csv` )
+    : Json spec4 ( jparse `{"tz":"+03:00"}` )
+    : Json insp4 ( import_inspect . ip4 rows spec4 ( imp_tz_of spec4 ) )
+    ?? ( json_obj_get insp4 `time` ) {
+        T plan → {
+            ( check ( streq ( string_from ( jstr plan `mode` ) ) `column` ) `time: one datetime column → column mode` )
+            ( check ( streq ( string_from ( jstr plan `column` ) ) `ajanhetki` ) `time: found by its values` )
+            : ImpTimeResult r4 ( import_time_apply . ip4 rows plan F ( imp_tz_of spec4 ) )
+            ( check == ( row_int . ip4 rows 0 `timestamp` ) T_FMI `time: naive stamp read in +03:00` )
+            ( imp_time_result_free r4 )
+        }
+        F _ → { ( check F `time: column plan` ) }
+    }
+    ( json_free insp4 )
+    ( json_free spec4 )
+    ( import_parse_free ip4 )
+
+    // Nothing time-like at all: the proposal is none, with no confidence.
+    : ImportParse ip5 ( import_parse `a,b,min
+1,2,3
+4,5,6
+` `csv` )
+    : Json insp5 ( import_inspect . ip5 rows auto 0 )
+    ?? ( json_obj_get insp5 `time` ) {
+        T plan → {
+            ( check ( streq ( string_from ( jstr plan `mode` ) ) `none` ) `time: numbers alone → none` )
+        }
+        F _ → { ( check F `time: none proposal` ) }
+    }
+    ( json_free insp5 )
+    ( json_free auto )
+    ( import_parse_free ip5 )
+}
+
 @ main → i {
     : String root ( env_var_or `ANOMALY_TEST_DIR` `./anomaly_import_test` )
     : !v IoErr junk ( dir_remove_all ( string_data root ) )
@@ -299,6 +493,8 @@ oops
     ( test_json )
     ( test_jsonl )
     ( test_sniff )
+    ( test_stamps )
+    ( test_time )
     ( test_ingest st )
     ( test_evict st )
     ( test_reject st )

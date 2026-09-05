@@ -1,5 +1,160 @@
 # Changelog
 
+## 0.12.0
+
+- **Analyse a file in one call.** `POST /api/analyze` takes a CSV / JSON /
+  JSONL file as the body (the import route's `format=`, `time=`, `tz=`,
+  `calendar=`, `clock=` apply), trains a throwaway model on it — every
+  forest version over the whole file, the autoencoder as 64-16-64, every
+  margin fine-tuned to a 1 % alert rate — and answers with the anomalies:
+  each point's index, stamp, score, the versions that flagged it (and how
+  many, `votes`), its top contributors with value and expectation, and the
+  full record. Up to 10 000 points come inline; the result file always
+  lands in the organisation's folder, and the answer carries a signed
+  `download_url` anyone holding it can fetch, for seven days. `?votes=N`
+  keeps only the points at least N versions agreed on — each version is
+  calibrated to 1 % on its own, so their union runs above it.
+- **Long analyses become tasks.** The call waits `wait=` seconds (default
+  10, at most 60); when the job has not finished by then it answers 202
+  with a `task_id` and `task_url`, and `GET /api/org/tasks[/<id>]` lets
+  the organisation's members list their tasks and read the result — the
+  same answer the call would have given — whenever it is done. Admins
+  `DELETE` a task. A failed job (unreadable file, too few rows) says why,
+  as a 400 when the call was still waiting and as the task's `message`
+  later. `wait=0` returns at once.
+- **An organisation folder.** `GET /api/org/files` lists it, `GET
+  /api/org/files/<name>` downloads a file (members: viewer or admin), `POST
+  /api/org/files/<name>/link?ttl=` mints a pre-authenticated link (default
+  seven days, at most thirty), `DELETE` removes a file (admin). Links are
+  HMAC-signed with a per-store secret and bound to the organisation, the
+  file and the expiry; a tampered or expired one is a 403.
+- **Walk the points from the popup.** The point popup on the anomalies page
+  has `<<  <  >  >>` — ten back, previous, next, ten forward — and the
+  arrow keys do the same (Shift for ten).
+- The service now runs four worker threads behind one service lock, so a
+  waiting analysis no longer holds up live `/detect` traffic; every other
+  route still runs one at a time, as before. The request body cap is
+  64 MiB. Analyses run in a child process (`anomaly analyze-job <dir>`,
+  not for hand use) so a crash in one cannot take the service down, and the
+  service's GPU and models stay untouched.
+
+## 0.11.1
+
+- **Contributors say what the value was.** An autoencoder contribution in
+  the anomalies route carries `value` and `expected` — the value the point
+  had and the one the net reconstructed from the other features. The
+  anomalies page shows them next to the share (`12.6 ≈ 13.20 · 60%`); for a
+  point only the forests flagged, which have no attribution of their own,
+  it lists the point's most extreme values in standard deviations over the
+  scan.
+- **Zoom by dragging.** Drag across any chart on the anomalies page to zoom
+  into that stretch of points — the counters and the flagged list follow;
+  double-click or *reset zoom* shows the whole range again.
+- **Click a point for all of it.** A click on a chart point or a row of the
+  flagged table opens a popup with the stored record (every column, strings
+  and stamp included) and every feature as the model saw it — one-hot and
+  time features among them — with, for an autoencoder verdict, the
+  reconstruction and error share of each. `GET …/data?at=<index>` fetches
+  one stored row by the index a scan point carries.
+- Fixed: the service served one connection at a time *and* kept it alive,
+  so a browser's second parallel request waited the whole 5 s idle
+  timeout — every page load and every pair of fetches stalled. The service
+  now closes after each response; parallel requests are served in arrival
+  order.
+- Fixed: string query parameters (`fields=`, `versions=`, `only=` …) were
+  taken verbatim, so a feature name with a space or a non-ASCII character
+  — every FMI column — could not be asked for from a browser, and the
+  feature trace on the anomalies page stayed empty for such models.
+
+## 0.11.0
+
+- **The importer finds the time.** `POST /models/dynamic/<m>/import` reads
+  the columns before a row lands: a column whose values parse as a stamp
+  under any name (ISO 8601 / RFC 3339, Postgres and MySQL `TIMESTAMP` and
+  `TIMESTAMPTZ`, compact `YYYYMMDDTHHMMSS`, Unix s/ms/µs/ns, a bare date),
+  or year / month / day plus clock / hour / minute / second parts under
+  English or Finnish names — an FMI export (`Vuosi, Kuukausi, Päivä, Aika`)
+  imports as is. `?inspect=1` returns the proposal with a confidence and a
+  sample, without creating the model; `?time=<plan>` confirms or overrides
+  it, `?tz=` says which zone naive stamps are in, `?calendar=1` keeps an
+  ISO `time` column for calendar features. Consumed columns are dropped so
+  a year never becomes a feature; `-`, `NA`, `null` and their kin are
+  missing values. The trainer page inspects on file pick and shows the
+  guess to confirm, change, or import without a time.
+
+- **A model without timestamps counts points.** Unstamped rows make a
+  count-clock model (`"clock": "count"`): the n-th point is #n, every
+  window is a number of points (`window_minutes: 1440` = the last 1,440
+  points, `last=100` = the newest hundred, also on the CLI), and the
+  dashboards label points by ordinal. No time is ever invented. The clock
+  can change only while the model is empty; later rows conform to it and
+  the import notes when it ignored or supplied stamps.
+
+- **Fine-tune on each version's own period.** `last: "own"` (`--last own`)
+  tunes every version over the window it trains on — 3 h for `short_term`,
+  90 d for `seasonal`, its point window for `timevector` — and the report
+  says per version how many rows it saw. The dashboard's window picker is
+  now the versions' periods (`3 h · short_term`, `24 h · daily`, …, `own`).
+
+- **The model panel is a panel.** The per-model drawer opens as a centred
+  1,100-px view instead of a side sheet; it shows the model's clock, and
+  the fine-tune table has a per-version window column.
+
+## 0.10.0
+
+- **Margins you can read.** `GET /models/dynamic/<m>/calibration` (and
+  `anomaly calibrate`) says, per version, what the current margin flags over
+  a window of stored data (default the last 24 h, `last=all` the ring) and
+  which margin would flag 0.1 / 0.5 / 1 / 2 / 5 / 10 % — plus a 110-point
+  rate→margin curve so a dashboard can estimate the alert rate of a typed
+  margin without a round trip. Read-only; about a millisecond per row.
+
+- **Fine-tune sets a rate, not 95 % of the worst score.** The old rule
+  followed one outlier: whatever the ring's most anomalous point was, the
+  margin moved so it was just inside the band, and it wrote eight-decimal
+  values with no more meaning than the first two digits. `model_finetune`
+  now picks, per version, the margin that flags 1 % of the last 24 h
+  (anchored on the newest stored point), rounded to the fewest significant
+  digits that keep the count within a tenth of the target. `POST
+  /api/dynamic/<m>/finetune` takes `rate`, the window (`last: 86400 |
+  "all"`, `from`, `to`), `dry_run` and a `versions` filter, and reports the
+  flagged count and rate before and after for every version. The CLI grew
+  `finetune [--rate R] [--last S|all] [--dry-run]`.
+
+- **A ghost `autoencoder` forest.** The retrain loop treated the
+  `autoencoder` version config as a forest: it trained and stored a
+  zero-tree `version_autoencoder.forest`, and the loader scored it as a
+  second "autoencoder" verdict that read the AE's *relative* margin as an
+  absolute one. The loop skips it, deletes the stale blob, and the loader
+  ignores one.
+
+- **The autoencoder can retrain with the forests.** `schedule.autoencoder:
+  true` (dashboard checkbox, `PUT /api/dynamic/<m>/schedule`) retrains the
+  net on every forest retrain with the hidden layers and pre-filter
+  contamination it was first trained with — both are now persisted
+  (`prefilter_contamination`, `trained_at`, `retrain_with_forests` in the
+  AE JSON) instead of being lost after the first training call. Off by
+  default: a drifting AE at margin 0 is the one detector that tells you the
+  feed moved, and retraining it silently would hide that.
+
+- **`severity` in every verdict.** `−score / margin`, per version and as
+  the maximum in the aggregate: 1.0 is the alert line, 2.0 twice as far
+  past it, negative comfortably normal. The one unit-free number an
+  operator — or an agent — can compare across versions and models.
+
+- **Dashboard.** Every setting has a tooltip that says what it means, which
+  way to move it for fewer or more alerts, and when it takes effect. The
+  drawer shows the calibration of the chosen window (1 h … all) next to
+  each margin, estimates the alert rate live as you type one, and has a
+  fine-tune section with a target rate, a preview table and an apply
+  button. Contamination is editable (`auto` or a share), margins accept any
+  precision, and the AE row spells out its rule (`flags error ≥ thr ×
+  (1 + m)`). The trainer shows severity.
+
+- `anomaly serve` prints the model store it opened: a mistyped `--store`
+  or `$ANOMALY_HOME` otherwise served (and wrote) the default store without
+  a word. Note the variable is `ANOMALY_HOME`; `ANOMALY_STORE` is nothing.
+
 ## 0.9.1
 
 - **The public organization could take the home marker, and then nobody

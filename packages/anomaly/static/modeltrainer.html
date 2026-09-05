@@ -55,7 +55,7 @@
   .verdict.warm { border-color: var(--warn); background: rgba(246,195,68,.06); }
   .verdict .big { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
   .verdict .score { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-  .vgrid { display: grid; grid-template-columns: 1fr auto auto; gap: 3px 14px; margin-top: 10px;
+  .vgrid { display: grid; grid-template-columns: 1fr auto auto auto; gap: 3px 14px; margin-top: 10px;
            font-family: var(--mono); font-size: 12px; }
   .vgrid .h { color: var(--muted); font-size: 10px; text-transform: uppercase; }
   .flag { color: var(--danger); font-weight: 700; }
@@ -74,6 +74,23 @@
           border-top-color: var(--accent); border-radius: 50%; animation: rot .7s linear infinite; vertical-align: -2px; }
   @keyframes rot { to { transform: rotate(360deg); } }
   .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .tpanel { margin-top: 14px; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;
+            background: var(--panel2); font-size: 13px; }
+  .tpanel.guess { border-color: var(--warn); }
+  .tpanel .th { font-weight: 600; margin-bottom: 6px; }
+  .tpanel .reason { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+  .tgrid { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; margin-top: 8px; }
+  .tgrid label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .parts { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; margin-top: 8px; }
+  .parts label { display: block; font-size: 10px; color: var(--muted); text-transform: uppercase; margin-bottom: 2px; }
+  .cols { font-family: var(--mono); font-size: 11px; margin-top: 10px; max-height: 150px; overflow: auto;
+          border: 1px solid var(--border); border-radius: 6px; }
+  .cols div { display: grid; grid-template-columns: 1fr 70px 1fr; gap: 8px; padding: 2px 8px; border-bottom: 1px solid var(--border); }
+  .cols div:last-child { border-bottom: 0; }
+  .cols .k { color: var(--accent2); }
+  .cols .s { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chk { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 8px; }
+  .chk input { width: auto; }
 </style>
 </head>
 <body>
@@ -111,23 +128,26 @@
   <!-- Import a file of history -->
   <div class="card">
     <h2>Import a file <span class="sub">CSV, JSON or JSONL → one model</span></h2>
-    <p class="hint">A file that already holds the history. Points keep the <code>timestamp</code> the file
-      gives them and are merged into the model in time order — history that all landed at "now" would make
-      every time window see one instant. The model belongs to your organization, exactly like one grown
-      from a stream.</p>
+    <p class="hint">A file that already holds the history. The file's own clock is read first — a
+      <code>timestamp</code> column, an ISO or SQL datetime under any name, a Unix number, or a date spread
+      over year / month / day / time columns — and shown below for you to confirm before a row lands. Rows
+      are merged into the model in time order. A file with no clock makes a model that counts points
+      instead of minutes. The model belongs to your organization, exactly like one grown from a stream.</p>
     <label class="fl">Target model</label>
     <input type="text" id="impModel" list="models" placeholder="model name (created if new)" autocomplete="off">
     <div class="btns" style="margin-top:10px">
       <input type="file" id="impFile" accept=".csv,.json,.jsonl,.ndjson,.txt,text/csv,application/json">
-      <select id="impFormat">
+      <select id="impFormat" title="How to read the file. Detect looks at the first bytes: a { or [ is JSON, one object per line is JSONL, anything else is CSV (comma, semicolon or tab).">
         <option value="auto">detect the format</option>
         <option value="csv">CSV</option>
         <option value="json">JSON</option>
         <option value="jsonl">JSONL</option>
       </select>
-      <button class="primary" id="btnImport" onclick="doImport()">Import</button>
+      <button id="btnInspect" onclick="inspectFile()" title="Read the file without importing it: which columns it has, what their values look like, and where its clock is.">Inspect</button>
+      <button class="primary" id="btnImport" onclick="doImport()" disabled title="Import with the time plan shown below.">Import</button>
       <span class="muted" id="impInfo" style="align-self:center"></span>
     </div>
+    <div id="tpanel" class="tpanel" style="display:none"></div>
     <pre class="log" id="impLog" style="display:none"></pre>
   </div>
 
@@ -181,21 +201,177 @@ async function api(method, url, body) {
 // The body is the file verbatim: a file is bytes, and this is the shortest
 // path from a FileReader to the ring. Wrapping it in a form encoding would
 // only mean decoding it again on the other side.
+//
+// Two calls. `inspect=1` reads the file and answers with its columns and a
+// proposal for where its clock is; the panel shows that proposal and lets
+// the person confirm or change it. The import then carries the plan back
+// as `time=`, so what was shown is exactly what is read.
+const IMP = { text: null, insp: null };
+
+const ROLES = ["year", "month", "day", "clock", "hour", "minute", "second"];
+const ROLE_HELP = {
+  year: "four-digit year, or two-digit (1970–2069)", month: "1–12", day: "1–31",
+  clock: "a time of day as text, HH:MM or HH:MM:SS — instead of hour/minute/second",
+  hour: "0–23", minute: "0–59", second: "0–60",
+};
+
+async function inspectFile() {
+  const file = $("impFile").files[0];
+  const name = $("impModel").value.trim();
+  if (!file) { toast("Choose a file", "err"); return; }
+  $("btnInspect").disabled = true; $("btnImport").disabled = true;
+  $("impInfo").textContent = "reading " + file.name + "…";
+  $("impLog").style.display = "none";
+  try {
+    IMP.text = await file.text();
+    $("impInfo").textContent = "inspecting " + fmtBytes(IMP.text.length) + "…";
+    const q = "?inspect=1&format=" + encodeURIComponent($("impFormat").value) + tzParam();
+    const r = await fetch("/models/dynamic/" + encodeURIComponent(name || "_inspect") + "/import" + q,
+                          { method: "POST", headers: { "Content-Type": "text/plain" }, body: IMP.text });
+    let d = null; try { d = await r.json(); } catch (e) {}
+    if (!r.ok) {
+      $("impLog").style.display = "block";
+      $("impLog").textContent = (d && d.message) || ("inspect failed (HTTP " + r.status + ")");
+      $("impInfo").textContent = "";
+      IMP.insp = null;
+    } else {
+      IMP.insp = d;
+      renderTimePanel(d);
+      $("tpanel").style.display = "";
+      $("impInfo").textContent = d.rows + " row(s), " + (d.columns || []).length + " column(s), read as " + d.format;
+      $("btnImport").disabled = false;
+    }
+  } catch (e) {
+    $("impLog").style.display = "block"; $("impLog").textContent = String(e && e.message || e);
+    $("impInfo").textContent = "";
+  }
+  $("btnInspect").disabled = false;
+}
+
+function tzParam() {
+  const t = $("tmTz"); if (!t) return "";
+  const v = t.value === "other" ? ($("tmTzOther").value.trim() || "local") : t.value;
+  return "&tz=" + encodeURIComponent(v);
+}
+
+function colOptions(cols, chosen, kinds) {
+  const opts = ['<option value="">—</option>'];
+  for (const c of cols) {
+    if (kinds && kinds.length && kinds.indexOf(c.kind) < 0) continue;
+    opts.push('<option value="' + esc(c.name) + '"' + (c.name === chosen ? " selected" : "") + ">" +
+              esc(c.name) + " · " + esc(c.kind) + "</option>");
+  }
+  return opts.join("");
+}
+
+function renderTimePanel(d) {
+  const t = d.time || { mode: "none", confidence: "none" };
+  const cols = d.columns || [];
+  const hints = d.hints || {};
+  const parts = t.parts || {};
+  const model = d.model || {};
+  const held = model.exists && model.data_points > 0;
+  const el = $("tpanel");
+  el.className = "tpanel" + (t.confidence === "guess" ? " guess" : "");
+
+  // The headline: what was found, and how sure the service is.
+  let head;
+  const hasParts = Object.keys(hints).some(k => k !== "stamp" && (hints[k] || []).length);
+  if (t.mode === "column") head = "Timestamp found: column " + t.column;
+  else if (t.mode === "parts" && t.confidence === "high") head = "Timestamp built from columns: " + Object.values(parts).join(", ");
+  else if (t.mode === "parts") head = "No timestamp column — parse the time from these columns?";
+  else if (hasParts) head = "No timestamp column — build one from parts, or number the points";
+  else head = "No timestamp found — points will be numbered";
+  const tzKeep = $("tmTz") ? $("tmTz").value : "local";
+  const tzOther = $("tmTzOther") ? $("tmTzOther").value : "";
+
+  const modeOpts = [
+    ["column", "one column holds the timestamp"],
+    ["parts", "build it from year / month / day (+ time) columns"],
+    ["none", "no time — number the points (count clock)"],
+  ].map(([v, l]) => '<option value="' + v + '"' + (v === t.mode ? " selected" : "") + ">" + esc(l) + "</option>").join("");
+
+  const partSel = ROLES.map(r => {
+    const chosen = parts[r] || "";
+    return '<div title="' + esc(ROLE_HELP[r]) + '"><label>' + r + '</label><select id="tmPart_' + r + '">' +
+           colOptions(cols, chosen, r === "clock" ? ["clock", "text", "mixed"] : ["number", "text", "mixed"]) + "</select></div>";
+  }).join("");
+
+  const colTable = cols.map(c =>
+    '<div><span class="k">' + esc(c.name) + '</span><span>' + esc(c.kind) + '</span><span class="s">' + esc(c.sample) + "</span></div>").join("");
+
+  el.innerHTML =
+    '<div class="th">' + esc(head) + "</div>" +
+    (t.reason ? '<div class="reason">' + esc(t.reason) + (t.sample ? " · first row → <code>" + esc(t.sample) + "</code>" : "") + "</div>" : "") +
+    (held ? '<div class="reason">The model already holds ' + model.data_points + " point(s) on the <b>" +
+            esc(model.clock) + "</b> clock; " + (model.clock === "count"
+              ? "rows are numbered after them and any time in the file is ignored."
+              : "rows are merged into it by time.") + "</div>" : "") +
+    '<div class="tgrid">' +
+      '<label title="Where the time of each row comes from.">time</label><select id="tmMode" onchange="tmModeChanged()">' + modeOpts + "</select>" +
+      '<label title="Naive stamps — a clock with no offset, as a database TIMESTAMP, a spreadsheet or a weather export writes them — are read in this zone. ISO stamps with Z or +hh:mm and Unix numbers are unaffected.">timezone</label>' +
+      '<div style="display:flex;gap:6px"><select id="tmTz" onchange="tmTzChanged()">' +
+        '<option value="local">server local</option><option value="utc">UTC</option><option value="other">other offset…</option>' +
+      '</select><input type="text" id="tmTzOther" placeholder="+03:00" style="display:none;width:110px"></div>' +
+    "</div>" +
+    '<div id="tmColRow" class="tgrid" style="display:none"><label>column</label><select id="tmCol">' +
+      colOptions(cols, t.column || (hints.stamp || [])[0] || "", null) + "</select></div>" +
+    '<div id="tmPartsRow" class="parts" style="display:none">' + partSel + "</div>" +
+    '<div id="tmNoneRow" class="reason" style="display:none;margin-top:8px">Points are numbered 1, 2, 3… and every window is a number of points: ' +
+      "short_term is the last 180 points, daily the last 1440. Nothing in this model will ever read the wall clock.</div>" +
+    '<div class="chk"><input type="checkbox" id="tmCal" checked title="Leave a `time` column with the ISO stamp so the model gets hour, day, month and weekday as features. Untick for data whose anomalies have nothing to do with the calendar."><label for="tmCal">calendar features (hour, day, month, weekday) from the timestamp</label></div>' +
+    '<details style="margin-top:8px"><summary class="muted" style="cursor:pointer;font-size:12px">columns (' + cols.length + ")</summary>" +
+      '<div class="cols">' + colTable + "</div></details>";
+  $("tmTz").value = tzKeep; $("tmTzOther").value = tzOther;
+  tmTzChanged();
+  tmModeChanged();
+}
+
+function tmModeChanged() {
+  const m = $("tmMode").value;
+  $("tmColRow").style.display = m === "column" ? "" : "none";
+  $("tmPartsRow").style.display = m === "parts" ? "" : "none";
+  $("tmNoneRow").style.display = m === "none" ? "" : "none";
+  $("tmCal").parentNode.style.display = m === "none" ? "none" : "";
+}
+function tmTzChanged() { $("tmTzOther").style.display = $("tmTz").value === "other" ? "" : "none"; }
+
+// The plan as the panel shows it, in the shape the service takes back.
+function timePlan() {
+  const m = $("tmMode") ? $("tmMode").value : "auto";
+  if (m === "column") return { mode: "column", column: $("tmCol").value };
+  if (m === "parts") {
+    const parts = {};
+    for (const r of ROLES) { const v = $("tmPart_" + r).value; if (v) parts[r] = v; }
+    return { mode: "parts", parts };
+  }
+  if (m === "none") return { mode: "none" };
+  return { mode: "auto" };
+}
+
 async function doImport() {
   const name = $("impModel").value.trim();
   const file = $("impFile").files[0];
   const log = $("impLog");
   if (!name) { toast("Name the model first", "err"); return; }
   if (!file) { toast("Choose a file", "err"); return; }
+  if (!IMP.insp) { await inspectFile(); if (!IMP.insp) return; }
 
   const btn = $("btnImport");
   btn.disabled = true;
-  $("impInfo").textContent = "reading " + file.name + "…";
   try {
-    const text = await file.text();
+    const text = IMP.text;
+    const plan = timePlan();
+    if (plan.mode === "column" && !plan.column) { toast("Pick the timestamp column", "err"); btn.disabled = false; return; }
+    if (plan.mode === "parts" && !(plan.parts.year && plan.parts.month && plan.parts.day)) {
+      toast("Year, month and day are needed to build a date", "err"); btn.disabled = false; return;
+    }
     $("impInfo").textContent = "importing " + fmtBytes(text.length) + "…";
-    const r = await fetch("/models/dynamic/" + encodeURIComponent(name) +
-                          "/import?format=" + encodeURIComponent($("impFormat").value),
+    const q = "?format=" + encodeURIComponent($("impFormat").value) +
+              "&time=" + encodeURIComponent(JSON.stringify(plan)) + tzParam() +
+              "&calendar=" + ($("tmCal") && $("tmCal").checked && plan.mode !== "none" ? "1" : "0") +
+              (plan.mode === "none" ? "&clock=count" : "");
+    const r = await fetch("/models/dynamic/" + encodeURIComponent(name) + "/import" + q,
                           { method: "POST", headers: { "Content-Type": "text/plain" }, body: text });
     let d = null; try { d = await r.json(); } catch (e) {}
     log.style.display = "block";
@@ -204,13 +380,20 @@ async function doImport() {
       toast("Import failed", "err");
       $("impInfo").textContent = "";
     } else {
+      const tm = d.time || {};
+      const tdesc = tm.mode === "column" ? "column " + tm.column
+        : tm.mode === "parts" ? "built from " + Object.values(tm.parts || {}).join(", ")
+        : "none — points are numbered";
       const lines = [
         "read as   : " + d.format,
+        "time      : " + tdesc + (tm.stamped ? " (" + tm.stamped + " stamped" + (tm.failed ? ", " + tm.failed + " unreadable" : "") + ")" : ""),
+        "clock     : " + (d.clock === "count" ? "count — windows are point counts" : "time"),
         "imported  : " + d.imported + " point(s)",
         "skipped   : " + d.skipped,
         "stored    : " + d.data_points + " point(s) in the ring",
         "trained   : " + (d.trained ? "yes" : "not yet — needs more history"),
       ];
+      if (tm.first_failure) lines.push("first unreadable time: " + tm.first_failure);
       // The rows the file could not give up, and the rows the model could
       // not take. A caller fixing a file wants to see which line.
       if (d.notes && d.notes.length) lines.push("", "skipped rows:", ...d.notes.map(n => "  " + n));
@@ -271,12 +454,16 @@ function renderVerdict(el, d, status) {
     const v = versions[vn];
     const th = v.threshold_info || {};
     vrows += "<div>" + esc(vn) + '</div><div class="flag ' + (v.anomaly ? "" : "n") + '">' +
-      (v.anomaly ? "ANOM" : "ok") + "</div><div>" + fmtNum(v.score) + "</div>";
+      (v.anomaly ? "ANOM" : "ok") + "</div><div>" + fmtNum(v.score) + "</div><div>" +
+      (typeof v.severity === "number" ? v.severity.toFixed(2) : "–") + "</div>";
   }
   el.innerHTML = '<div class="verdict ' + (anom ? "anom" : "ok") + '">' +
     '<div class="big">' + (anom ? "🚨 Anomaly" : "✓ Normal") + "</div>" +
-    '<div class="score">score = ' + fmtNum(d.score) + " · " + (d.data_points ?? "?") + " pts</div>" +
-    (vrows ? '<div class="vgrid"><div class="h">version</div><div class="h">flag</div><div class="h">score</div>' + vrows + "</div>" : "") +
+    '<div class="score">score = ' + fmtNum(d.score) +
+      (typeof d.severity === "number" ? " · severity " + d.severity.toFixed(2) : "") +
+      " · " + (d.data_points ?? "?") + " pts</div>" +
+    (vrows ? '<div class="vgrid" title="severity = −score / margin: 1.0 is exactly the alert line, 2.0 twice as far past it, below 0 comfortably normal">' +
+      '<div class="h">version</div><div class="h">flag</div><div class="h">score</div><div class="h">severity</div>' + vrows + "</div>" : "") +
     "</div>";
 }
 function fmtNum(x) {
@@ -295,7 +482,12 @@ async function send(ingest) {
     const url = (ingest ? "/detect/" : "/detect_only/") + enc(name);
     const { ok, status, data } = await api("POST", url, rec);
     renderVerdict($("verdict"), data, status);
-    if (ok || status === 202) document.addEventListener("DOMContentLoaded", () => {
+    if (ok || status === 202) refreshModels();
+  } catch (e) { toast(e.message, "err"); }
+  finally { btn.disabled = false; btn.textContent = orig; }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
   const f = document.getElementById("impFile");
   if (f) f.addEventListener("change", () => {
     const m = document.getElementById("impModel");
@@ -303,6 +495,10 @@ async function send(ingest) {
       // A sensible default, sanitized to what a model name may hold.
       m.value = f.files[0].name.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_]/g, "_");
     }
+    // A new file is a new clock to find: inspect it at once.
+    IMP.insp = null; IMP.text = null;
+    $("tpanel").style.display = "none"; $("btnImport").disabled = true;
+    if (f.files[0]) inspectFile().then(() => { if (IMP.insp) $("tpanel").style.display = ""; });
   });
 });
 
@@ -317,9 +513,6 @@ Auth.ready().then(() => {
   }
   return refreshModels();
 });
-  } catch (e) { toast(e.message, "err"); }
-  finally { btn.disabled = false; btn.textContent = orig; }
-}
 
 async function forceTrain() {
   const name = $("model").value.trim();

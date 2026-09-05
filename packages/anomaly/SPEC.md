@@ -86,7 +86,7 @@ For traceability, this is the surface `anomaly` is modelled on. Endpoints marked
 | `POST /detect_anomalies` | batch-score every row of a CSV file with a model | † |
 | `GET  /models/dynamic` | list dynamic models | † |
 | `GET  /models/dynamic/<model>/metadata` | model metadata | † |
-| `GET  /models/dynamic/<model>/data` | recent data points | † |
+| `GET  /models/dynamic/<model>/data` | recent data points (`limit=N`, `all`; `at=<index>` one stored row) | † |
 | `POST /models/dynamic/<model>/reset` | drop data + models, keep name | † |
 | `DELETE /delete_model/<model>` | delete a model entirely | † |
 | `PUT  /api/dynamic/<model>/schedule` | change retraining schedule | † |
@@ -148,11 +148,13 @@ Persisted as JSON (`std/ext/json`). Fields:
   "categories":      { col: [sorted strings] },
   "feature_names":   [ordered feature names],   // authoritative feature order
   "scaler":          { "mean": [...], "std": [...] },
-  "schedule":        { "below_max": 50, "at_max": 1000 },
+  "schedule":        { "below_max": 50, "at_max": 1000,
+                       "autoencoder": false },  // true ⇒ the AE retrains with the forests
   "versions":        { version_name: <version config>, ... },
   "n_points_seen":   int,
   "last_trained_at": int,  // point count at last train
-  "max_data_points": int   // ring capacity, editable (§6)
+  "max_data_points": int,  // ring capacity, editable (§6)
+  "clock":           "time" | "count"   // §5.8; editable only while empty
 }
 ```
 
@@ -224,7 +226,9 @@ caller-owned handles, `( Vec f )` row-major matrices).
 | `( model_force_train model )` | `i` — retrain now, return points used |
 | `( model_reset model )` | `v` — drop data + forests, keep name/schedule |
 | `( model_delete store name )` | `v` — remove everything |
-| `( model_finetune model )` | `FineTuneReport` — recalibrate margins |
+| `( model_calibrate model from to )` | `CalReport` — per version, the sorted decision values of the ring rows in `[from, to]` (0 = unbounded), what the current margin flags, and `cal_margin_for_rate` to read the margin for any alert rate off them |
+| `( model_finetune model )` | `FineTuneReport` — set every enabled version's margin to the one that flags `ANOM_FT_RATE` (1 %) of the last `ANOM_CAL_WINDOW` (24 h, anchored on the newest stored point) |
+| `( model_finetune_at model rate from to apply only )` | the same with the rate, the window, a dry run (`apply = F`) and a version filter (`only`, empty = all) |
 | `( model_set_schedule model below_max at_max )` | `v` |
 | `( model_metadata model )` | `Meta` |
 | `( model_free model )` | `v` |
@@ -246,6 +250,12 @@ Verdict {
                                    //               margin, cfg_margin }
 }
 ```
+
+The service adds `severity = −score / margin` to every version verdict and,
+as the maximum over versions, to the aggregate (`margin = 0` gives 1.0 when
+flagged, 0.0 otherwise). 1.0 is exactly the alert line, 2.0 twice as far
+past it, negative comfortably normal — the one unit-free number an operator
+or an agent can compare across versions and models.
 
 Aggregation: a point is anomalous if **any** enabled version flags it; the
 reported `score` is the most-severe version's score. (The reference checks all
@@ -293,10 +303,25 @@ training error" — the documented intent — instead of "flag at p95 + 0.05",
 and the same number means the same thing on every model. Existing metadata
 needs no migration: the value that was mute becomes the value that works.
 
-`model_finetune` (§5.2) covers the autoencoder on the same rule as the
-forests, in these relative units: `decision_margin` becomes
-`0.95 · |worst decision_function over the ring| / reconstruction_threshold`,
-so the ring's most anomalous point lands just inside the band.
+`model_calibrate` and `model_finetune` (§5.2) cover the autoencoder on the
+same rule as the forests, in these relative units: its decision values are
+expressed as `decision_function / reconstruction_threshold`, so the margin
+that flags 1 % of the window is read off the same sorted list as a forest's.
+
+**Fine-tune is a rate, rounded to be readable.** For a version with `n`
+window rows sorted ascending (`dfs`) and a target rate `r`, `k = round(r·n)`
+and the raw margin is `−dfs[k−1]` (`k = 0`: just above the worst row). The
+written value is that margin rounded to the fewest significant digits — 2 to
+5, nearest first, then away from the target side — whose flagged count stays
+within `k/10` of `k`, falling back to 6 digits rounded toward the target
+side. So `0.12994712` becomes `0.13` when the data allow it, and never
+`0.1299471200000001`. Ties in the data can put the actual count above `k`;
+the report says what was flagged before and after.
+
+**The `autoencoder` version config is never a forest.** The retrain loop
+skips it and deletes a stale `version_autoencoder.forest`, and the loader
+ignores one: a zero-tree forest scored under that name would be a second
+"autoencoder" verdict reading the relative margin as an absolute one.
 
 ### 5.6 Scanning the stored ring
 
@@ -331,6 +356,36 @@ A replayed verdict must not see the future: `__an_score_enc_upto` scores a
 point as though it sat at its own ring position, so a timevector window is
 built from the points *before* it. A scan therefore reproduces
 `detect_only` exactly.
+
+### 5.8 The clock of a model
+
+Every stored point carries an `i` timestamp, and every window in this
+package — the four forest versions' `window_minutes`, calibration's and
+fine-tune's `last`, the scan's `from`/`to` — is a span of those stamps. A
+model has one of two clocks (`Meta.count_clock`, JSON `clock`):
+
+- **`time`** — the stamps are Unix seconds: the point's own `timestamp`, or
+  the wall clock when it arrives without one. Windows are durations.
+- **`count`** — the data has no timestamps and the model refuses to invent
+  any. The n-th stored point is stamped `n × ANOM_TICK` (60), whatever the
+  wall clock says, so every duration in the package is a *number of
+  points*: a version's `window_minutes` is a point count, `last=N` is the
+  newest N points (span `N × 60 − 1`, the lower bound being inclusive), and
+  a dashboard shows the stamp as the ordinal `#n`. Nothing time-of-day
+  shaped is ever derived — no calendar features, no "last 24 h" in the
+  wall-clock sense.
+
+The clock is chosen when the first points land — an import of unstamped
+rows makes a count-clock model, of stamped rows a time-clock one, and
+`?clock=` overrides — and is editable through the metadata only while the
+model holds no points, because a stored ring on the wrong clock would put
+every window in the wrong unit. On a settled clock later rows conform:
+stamps landing on a count clock become ticks, unstamped rows on a time
+clock take the clock time, and the import reports both in `notes`.
+
+The 60-second tick is not a claim about the data's cadence. It only makes
+minute-denominated windows and point counts the same number, so a
+`window_minutes: 180` forest is the last 180 points on either clock.
 
 ### 5.7 Identity, organisations and ownership (`src/authz.nu`)
 
@@ -421,7 +476,8 @@ service so existing dashboards and the `modelmanager` UI keep working:
   `autoencoder` block (its own state lives in `autoencoder.json`, not the
   metadata): `trained`, `enabled`, `reconstruction_threshold`,
   `training_data_points`, `filtered_anomalies`, `decision_margin`,
-  `feature_names`, `layer_sizes`. Every metadata response (this one, the
+  `feature_names`, `layer_sizes`, `prefilter_contamination`, `trained_at`,
+  `retrain_with_forests`. Every metadata response (this one, the
   listing, and the PUT echo) also carries `editable_fields`: the top-level
   keys the PUT below accepts, published so a client never has to keep its
   own copy of the list. It is service-shaped and deliberately absent from
@@ -447,9 +503,13 @@ service so existing dashboards and the `modelmanager` UI keep working:
   `0` to omit), `refresh=1` (ignore the cache). Response:
   `data_points_count`, `considered`, `anomalies`, `returned`,
   `model_versions`, `cache: { hits, misses, epoch }` and `points`, each
-  `{ index, timestamp, score, anomaly, versions[], values?, contributions? }`.
-  `considered` and `anomalies` describe the whole window, so a filtered
-  response still says how much it filtered.
+  `{ index, timestamp, score, anomaly, versions[], values?, contributions? }`,
+  a contribution being `{ feature, error, share, value, expected }` — the
+  value the point carried and the autoencoder's reconstruction of it.
+  String parameters are percent-decoded, so a feature named
+  `Ilman lämpötila [°C]` can be asked for. `considered` and `anomalies`
+  describe the whole window, so a filtered response still says how much it
+  filtered.
 - `GET /api/auth/config` — public, because the page that has not signed in is
   the one asking: `enabled`, `issuer`, `client_id`, `audience`, `scope`,
   `redirect_path`, `open_ingest`. Everything in it is in the redirect the
@@ -463,7 +523,102 @@ service so existing dashboards and the `modelmanager` UI keep working:
   (admin); defaults to the caller.
 - `POST /train/autoencoder/<model>` optional body = `{ hidden?: [int],
   contamination?: float }` → `training_data_points`, `filtered_anomalies`,
-  `reconstruction_threshold`.
+  `reconstruction_threshold`. Both are stored with the net and reused when
+  `schedule.autoencoder` retrains it with the forests.
+- `POST /models/dynamic/<model>/import?format=csv|json|jsonl|auto` — the
+  body is the file. The rows' time is read before any lands:
+  `?inspect=1` returns the columns (`name`, `kind`, `filled`, `sample`)
+  and a proposal `time { mode: column|parts|none, column | parts { year,
+  month, day, clock | hour, minute, second }, confidence, reason, sample,
+  sample_unix }` without creating the model (`model { exists, data_points,
+  clock }`). The import then takes the plan back as `?time=<json>`
+  (`{"mode":"auto"}` = the proposal), the zone naive stamps are read in as
+  `?tz=local|utc|±HH:MM`, `?calendar=1` to keep an ISO `time` column for
+  calendar features, and `?clock=time|count` for a new model (§5.8).
+  Recognised as a stamp under any column name: ISO 8601 / RFC 3339, the
+  Postgres and MySQL `TIMESTAMP` / `TIMESTAMPTZ` forms, `YYYYMMDDTHHMMSS`,
+  Unix seconds / milliseconds / microseconds / nanoseconds, a bare date;
+  as parts, year/month/day/hour/minute/second columns under English or
+  Finnish names (`Vuosi`, `Kuukausi`, `Päivä`, `Aika`, …). The consumed
+  columns are dropped so a year never becomes a feature; `-`, `NA`, `null`
+  and their kin are missing values. Response adds `clock` and `time {
+  …plan, stamped, failed, first_failure? }`.
+- `GET /models/dynamic/<model>/calibration` — §5.2 `model_calibrate` over
+  the same window query as the scan (`from` / `to` / `last`, default the
+  last 24 h of stored data, `last=all` the whole ring; on a count clock
+  `last` is a number of points, default 1440), read-only. Response:
+  `window { from, to, rows, total }`, `aggregate { flagged, rate }` and per
+  enabled, trained version `{ margin, n, flagged, rate, worst, median,
+  margin_for_rate: { "0.1%": { margin, flagged }, "0.5%", "1%", "2%", "5%",
+  "10%" }, curve: [[rate, margin], …] }` — 110 points, 0.1 % steps to 1 %
+  then 1 % steps to 100 %, so a dashboard can turn a typed margin into an
+  estimated alert rate without a round trip. `curve=0` omits it. 400 on an
+  untrained model.
+- `POST /api/dynamic/<model>/finetune` body (all optional) = `{ rate: 0.01,
+  last: 86400 | "all" | "own", from, to, dry_run: false, versions: [names] }` →
+  `rate`, `dry_run`, `window { from, to, rows, own }`, per version `{
+  old_margin, new_margin, n, rows, from, flagged_before, flagged_after,
+  rate_before, rate_after, worst, applied }`. `last: "own"` tunes every
+  version over its own period — the window it trains on (`window_minutes`
+  back for a forest, `window_size` points for timevector, the ring for the
+  autoencoder) — so the short-term margin answers for the last three hours
+  and the seasonal one for the last ninety days; the report's `window` is
+  then the widest of them. On a count clock `last` is a number of points.
+  The response also carries
+  plus the legacy `adjusted_margins` and `max_anomaly_scores` maps. 400 on
+  a rate outside `[0, 1]`.
+- `POST /api/analyze` (members) — the body is a file (the import route's
+  `format`, `time`, `tz`, `calendar`, `clock` apply; `name` labels the
+  result, default `analysis`). A task directory (`orgs/<org>/tasks/<id>`,
+  id = 24 hex chars) receives the input and `params.json`; a child process
+  (`anomaly analyze-job <dir>`) opens a store under it, imports the rows
+  with the warm-up shrunk to the file, opens every version's window to
+  the whole file (`window_minutes`/`window_points` → 0, the file has no
+  present), trains at the newest stamp, trains the autoencoder 64-16-64
+  with a 1 % pre-filter, fine-tunes every margin to `ANA_TARGET_RATE`
+  (1 %) over the file, scans, and writes the result — `task_id`, `name`,
+  `format`, `rows`, `imported`, `skipped`, `clock`, `target_rate`, `votes`,
+  `anomalies`, `considered`, `model_versions`, `margins`, `time`, `notes`,
+  `points[] { index, timestamp, score, votes, versions[], contributions[]
+  { feature, share, value, expected }, values }` — as
+  `<safe name>-<id>.json` into the organisation's folder, then
+  `status.json` (`state: queued → running → done | failed`, with the
+  numbers above, `file`, `size`, or `message`). `?votes=N` (default 1)
+  keeps a point only when N or more versions flagged it. The handler
+  waits `?wait=` seconds (default 10, max 60, polling every 100 ms with
+  the service lock released) and answers as `GET /api/org/tasks/<id>`
+  would: 200 `status: success` with the numbers, `file { name, size,
+  modified, url, download_url, expires }`, `inline` and — when
+  `anomalies ≤ ANA_INLINE_MAX` (10 000) — `points` and `time` read from
+  the result file; 202 `status: pending` while queued or running; a
+  failed task is 400 from the analyze call and 200 `status: error,
+  message` from the task route. A child that dies without a final status
+  is marked `failed` with its exit code and stderr tail. Fewer than ten
+  parsed rows is a failure. The request body cap is 64 MiB.
+- `GET /api/org/tasks` (members) — the organisation's tasks, newest first,
+  each the status record plus `task_id`; `DELETE /api/org/tasks/<id>`
+  (admin). A malformed id is 400, an unknown one 404.
+- `GET /api/org/files` (members) — the organisation's folder,
+  `orgs/<org>/files`: `files[] { name, size, modified, url }`, sorted by
+  name. `GET /api/org/files/<name>` — the file, `Content-Disposition:
+  attachment`, `Cache-Control: private, no-store`, content type by
+  extension (`.json`, `.csv`, `.txt`, else octet-stream). With `?org=&exp=&sig=`
+  the request is anonymous and the signature decides: `sig` =
+  hex HMAC-SHA256(secret, `org\nname\nexp`), the secret being 32 random
+  bytes the store writes once to `orgs/link.secret`; compared in constant
+  time; 403 "This link is not valid, or has expired." on any mismatch or
+  `exp < now`. `POST /api/org/files/<name>/link?ttl=` (members) mints such
+  a link (`download_url`, `expires`; ttl default 604 800 s, max
+  2 592 000 s). `DELETE /api/org/files/<name>` (admin). Names match
+  `[A-Za-z0-9._-]{1,128}` without a leading dot (400 otherwise); the
+  result file's stem is the task's name with every other character mapped
+  to `_`.
+- concurrency: `anomaly serve` runs four worker threads behind one service
+  mutex taken in an `http_app_use` middleware — handlers still run one at
+  a time (the GPU singleton, the RNG and the authz tables are global), but
+  the analyze handler releases the lock while it sleeps between polls, so
+  a waiting analysis never delays live traffic. The mutex is released on a
+  handler panic too (the recover sits inside the middleware).
 - model-name validation: `^[a-zA-Z0-9_]+$` (reject otherwise, mirrors reference).
 
 The service is thin: parse JSON → call the library → serialise. It is
@@ -477,11 +632,15 @@ anomaly detect  <model> [--store DIR] key=val ...      # ingest + verdict
 anomaly score   <model> [--store DIR] key=val ...      # detect-only
 anomaly batch   [-f FILE] [-H] [--model M]             # score a CSV, like iforest but with a saved model
 anomaly train   <model> [--store DIR]                  # force retrain
+anomaly train-ae <model> [--hidden 64,32,64] [--contamination C]
+anomaly calibrate <model> [--last S|all] [--from T] [--to T]   # alert rates vs margins
+anomaly finetune  <model> [--rate R] [--last S|all] [--dry-run]  # write margins for a rate
 anomaly reset   <model> [--store DIR]
 anomaly rm      <model> [--store DIR]
 anomaly ls      [--store DIR]                          # list models
 anomaly info    <model> [--store DIR]                  # dump metadata
 anomaly serve   [--addr HOST:PORT] [--store DIR]       # run the HTTP service (M5)
+anomaly analyze-job <task-dir>                         # internal: one /api/analyze task, spawned by serve
 ```
 
 `--store DIR` defaults to `$ANOMALY_HOME` or `~/.anomaly`. Verdicts print as
@@ -542,8 +701,9 @@ usable state. Later milestones depend only on earlier ones.
 - Several enabled versions per model (`short_term` … `timevector`), each a
   window-filtered Isolation Forest with its own config.
 - Verdict aggregation (§5.4) and the per-version breakdown.
-- `model_finetune`: for each version, find the max observed score and lower the
-  margin so that point is (just) anomalous, +5 % buffer — matching the reference.
+- `model_finetune`: for each version, the margin that flags a target share of
+  a recent window (§5.5) — the reference's "worst point just inside the band,
+  +5 % buffer" was replaced once a real feed showed it tracks one outlier.
 - **Tests:** aggregation truth table (any-version-anomalous); per-window data
   routing; fine-tune moves the margin monotonically and makes the previously
   max-scoring point cross the threshold.

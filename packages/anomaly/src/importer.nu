@@ -28,6 +28,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/json.nu`
+$ `src/imptime.nu`
 
 // A file bigger than this is refused before it is parsed. Generous enough
 // for years of minute-resolution history, small enough that a mistaken
@@ -176,6 +177,24 @@ $ `stdlib/ext/json.nu`
 // One cell as JSON. A number stays a number; everything else stays text,
 // because the preprocessing layer is where a string becomes a category or
 // an ISO-8601 stamp becomes calendar features — not here.
+// The markers exporters write for "no value": a dash (the weather
+// service), R's NA, a spreadsheet's #N/A, JSON's null, Python's None, a
+// NaN. Each is the same as a blank cell — no field.
+@ __imp_is_missing s t → b {
+    ? == ( nurl_str_eq t `-` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq t `--` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq t `NA` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq t `N/A` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq t `n/a` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq t `#N/A` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq t `NaN` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq t `nan` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq t `null` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq t `NULL` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq t `None` ) 1 { ^ T } {}
+    ^ F
+}
+
 @ __imp_cell s raw → ?Json {
     : String t ( __imp_trimmed raw )
     ? > ( string_len t ) 0 {} {
@@ -185,6 +204,10 @@ $ `stdlib/ext/json.nu`
         ( string_free t )
         ^ @ ?Json { F }
     }
+    ? ( __imp_is_missing ( string_data t ) ) {
+        ( string_free t )
+        ^ @ ?Json { F }
+    } {}
     ?? ( string_to_int t ) {
         T n → {
             ( string_free t )

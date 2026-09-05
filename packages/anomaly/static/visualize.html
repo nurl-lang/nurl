@@ -166,8 +166,10 @@ async function loadMeta(name) {
     $("meta").innerHTML = '<dl class="kv">' +
       "<dt>Created</dt><dd>" + esc(m.created || "–") + "</dd>" +
       "<dt>Points seen</dt><dd>" + (m.n_points_seen ?? 0).toLocaleString() + "</dd>" +
+      "<dt>Clock</dt><dd>" + (m.clock === "count" ? "count — no timestamps, points are numbered" : "time") + "</dd>" +
       "<dt>Last trained</dt><dd>" + (m.last_trained_at > 0 ? "@ " + m.last_trained_at.toLocaleString() + " pts" : "never") + "</dd>" +
-      "<dt>Schedule</dt><dd>below " + (sched.below_max||0) + " · at " + (sched.at_max||0) + "</dd>" +
+      "<dt>Schedule</dt><dd>below " + (sched.below_max||0) + " · at " + (sched.at_max||0) +
+        (sched.autoencoder ? " · autoencoder too" : "") + "</dd>" +
       "<dt>Versions</dt><dd>" + (onv.length ? esc(onv.join(", ")) : "–") + "</dd>" +
       "<dt>Features</dt><dd>" + (m.feature_names||[]).map(esc).join(", ") + "</dd>" +
       "</dl>";

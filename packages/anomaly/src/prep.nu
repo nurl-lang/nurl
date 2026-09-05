@@ -78,6 +78,8 @@ $ `stdlib/ext/json.nu`
     ( Vec f ) sc_std
     i sched_below
     i sched_at_max
+    b sched_ae  // retrain the autoencoder whenever the forests retrain
+    b count_clock  // points are numbered, not timed: see ANOM_TICK
     i n_seen
     i last_trained
     i max_points
@@ -136,6 +138,19 @@ $ `stdlib/ext/json.nu`
 // it cannot be used to bloat every metadata response.
 : i ANOM_ALIAS_MAX 120
 
+// ── The count clock ───────────────────────────────────────────────────
+//
+// Data without a clock — a file of readings nobody dated, a sequence of
+// measurements where only the order matters — is a model whose time is
+// its point count. Such a model runs on the COUNT clock: every point is
+// stamped one tick after the previous one, ticks are ANOM_TICK seconds
+// apart, and nothing in it ever reads the wall clock. One tick is one
+// minute on purpose: every version window is written in minutes, so on
+// the count clock "180 minutes" reads as "the last 180 points", and every
+// window, scan and calibration falls out of the same code unchanged.
+// The number a point shows is its ordinal, timestamp ÷ ANOM_TICK.
+: i ANOM_TICK 60
+
 // ── Meta lifecycle ────────────────────────────────────────────────────
 
 @ meta_new s name s created → *Meta {
@@ -151,6 +166,8 @@ $ `stdlib/ext/json.nu`
     = . m sc_std ( vec_new [f] )
     = . m sched_below ANOM_SCHED_BELOW
     = . m sched_at_max ANOM_SCHED_AT_MAX
+    = . m sched_ae F
+    = . m count_clock F
     = . m n_seen 0
     = . m last_trained 0
     = . m max_points ANOM_MAX_POINTS
@@ -728,6 +745,7 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set o `name` ( json_str_lit ( string_data . m name ) ) )
     ( json_obj_set o `created` ( json_str_lit ( string_data . m created ) ) )
     ( json_obj_set o `alias` ( json_str_lit ( string_data . m alias ) ) )
+    ( json_obj_set o `clock` ( json_str_lit ? . m count_clock `count` `time` ) )
 
     : Json types ( json_obj_new )
     : Json cats ( json_obj_new )
@@ -761,6 +779,7 @@ $ `stdlib/ext/json.nu`
     : Json sched ( json_obj_new )
     ( json_obj_set sched `below_max` ( json_int . m sched_below ) )
     ( json_obj_set sched `at_max` ( json_int . m sched_at_max ) )
+    ( json_obj_set sched `autoencoder` ( json_bool . m sched_ae ) )
     ( json_obj_set o `schedule` sched )
 
     : Json vers ( json_obj_new )
@@ -984,6 +1003,7 @@ $ `stdlib/ext/json.nu`
         T sched → {
             = . m sched_below ( _an_jint sched `below_max` ANOM_SCHED_BELOW )
             = . m sched_at_max ( _an_jint sched `at_max` ANOM_SCHED_AT_MAX )
+            ?? ( json_obj_get sched `autoencoder` ) { T aj → { = . m sched_ae ( json_as_bool aj ) } F _ → {} }
         }
         F _ → {}
     }
@@ -1023,6 +1043,10 @@ $ `stdlib/ext/json.nu`
     = . m last_trained ( _an_jint j `last_trained_at` 0 )
     = . m max_points ( _an_jint j `max_data_points` ANOM_MAX_POINTS )
     = . m score_epoch ( _an_jint j `score_epoch` 1 )
+    ?? ( json_obj_get j `clock` ) {
+        T cv → { ? ( json_is_str cv ) { = . m count_clock == ( nurl_str_eq ( json_str_data cv ) `count` ) 1 } {} }
+        F _ → {}
+    }
     ?? ( json_obj_get j `alias` ) {
         T av → {
             ? ( json_is_str av ) {

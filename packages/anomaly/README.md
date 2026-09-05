@@ -33,7 +33,7 @@ HTTP routes and response shapes, so existing dashboards keep working.
 - **autoencoder — the correlation detector** (trained on demand:
   `anomaly train-ae <model>` / `POST /train/autoencoder/<model>`). A
   temporary Isolation Forest first drops the ring's anomalies
-  (contamination 10 %), then an MLP autoencoder
+  (pre-filter contamination 10 % unless given), then an MLP autoencoder
   ([`mlp`](../mlp) package: Adam, early stopping, deterministic restarts)
   learns to reconstruct the normal rows; the detection threshold is the
   95th percentile of the training reconstruction errors. It catches what
@@ -69,7 +69,10 @@ HTTP routes and response shapes, so existing dashboards keep working.
 - **Schedule-driven self-training.** Warm-up until 50 points (verdicts say
   `collecting`), then a full retrain every 50 points — every 1000 once the
   ring is full. `PUT /api/dynamic/<m>/schedule` / `model_set_schedule`
-  change the cadence.
+  change the cadence. Retraining keeps the margins. The autoencoder is
+  left alone unless `schedule.autoencoder` is true, in which case it is
+  retrained with the forests, with the layer sizes and pre-filter of its
+  last manual training.
 - **Multiple time-window versions.** Each model trains one forest per
   enabled version — `short_term` (180 min), `daily` (24 h), `weekly`,
   `seasonal` (90 d) and `timevector` (last 100 points) — so the same stream
@@ -79,11 +82,15 @@ HTTP routes and response shapes, so existing dashboards keep working.
   `-iforest_score − offset`, `offset = −0.5` for `contamination = "auto"`
   (else the 100·c percentile of training scores). A version flags a point
   when `score ≤ −decision_margin`; margins are read from live metadata, so
-  tuning applies without a retrain.
-- **Fine-tuning.** `model_finetune` sets each version's margin to 95 % of
-  the magnitude of the worst score observed over the ring — the most
-  anomalous point seen so far lands just inside the anomaly band. The
-  autoencoder is included, in its own relative units.
+  tuning applies without a retrain. Every verdict also carries
+  `severity = −score / margin` — 1.0 is exactly the alert line, 2.0 twice
+  as far past it, negative is comfortably normal — the one number that
+  means the same thing in every version.
+- **Calibration and fine-tuning.** `model_calibrate` scores a window of the
+  stored ring (the last 24 h by default) through the live verdict path and
+  reports, per version, what the current margin flags and which margin
+  would flag any given share. `model_finetune` writes the margin for one
+  target alert rate (1 % by default). See **How many alerts** below.
 - **A nickname.** `alias` is a display name the dashboard shows in place of
   the model's own name, which is often whatever created it. It is ordinary
   editable metadata (`{"alias": "boiler room"}`), never reaches a file path or
@@ -99,6 +106,71 @@ normal and outlier points. A fixed seed (42, the reference's
 `random_state`) makes forests — and therefore scores — byte-identical
 across platforms and runs.
 
+## How many alerts: margins, calibration, fine-tune
+
+The decision rule is one line: a version flags a point when
+`score ≤ −decision_margin`, and the model reports an anomaly when **any**
+enabled version flags. So the margin is the alert line, and there is
+exactly one direction to move it:
+
+| you want | move |
+| --- | --- |
+| fewer alerts, only the extreme points | **raise** the margin |
+| more alerts | **lower** it (0 flags anything the model finds even slightly unusual) |
+
+`contamination` moves the forest's zero line instead (raise → more alerts)
+but only at the next retrain, so day-to-day tuning is the margin. The
+autoencoder's margin is relative to its learned threshold — flag when
+`error ≥ threshold × (1 + margin)` — but reads the same way: raise for fewer.
+
+What a margin *means* in alerts per day is a property of the data, not of
+the number, so the service answers that question directly:
+
+```
+$ anomaly calibrate boiler                      # last 24 h; --last 604800, --last all
+window: 1 441 of 15 500 stored points; any version flags 883 (61.3%)
+version       margin    flagged        worst     margin for 0.1% / 1% / 5% / 10%
+short_term    0.06  0 (0%)  -0.05485  0.0548514 / 0.0548514 / 0.0536471 / 0.0536471
+daily         0.06  0 (0%)  -0.03866  0.0386 / 0.0382 / 0.0375 / 0.037
+autoencoder   0  883 (61.3%)  -6.242  6.24 / 6.06 / 5.76 / 5.64
+```
+
+`GET /models/dynamic/<m>/calibration?last=86400` is the same report as JSON:
+per version the current margin, how many of the window it flags, the margin
+for each standard rate (`margin_for_rate`), and a (rate, margin) `curve` a
+dashboard can read a live estimate off. Read-only; ~1 ms per stored row.
+
+Fine-tune is calibration plus a write: pick the share of the window you are
+willing to alert on and every enabled version gets the margin that flags
+exactly that share — rounded to the fewest significant digits that keep the
+count, so a margin reads `0.13`, not `0.12994712`:
+
+```
+$ anomaly finetune boiler --rate 0.01 --dry-run        # preview, nothing written
+$ anomaly finetune boiler --rate 0.01                  # write
+$ curl -X POST localhost:8811/api/dynamic/boiler/finetune \
+       -d '{"rate": 0.01, "last": 86400, "dry_run": true, "versions": ["daily"]}'
+```
+
+The window is counted back from the newest stored point, not the clock, so
+a feed that stopped still calibrates on its last day; `last: "all"` is the
+whole ring. `last: "own"` (`--last own`) gives every version its own
+window — the period it trains on: `short_term` tunes on the last 3 h,
+`daily` on 24 h, `weekly` on 7 d, `seasonal` on 90 d, `timevector` on its
+window of points — so each margin answers for the horizon its forest looks
+at. The dashboard's window picker offers exactly these periods. Ties in the
+data can make the count land above the target — the report says what it
+actually flagged, before and after.
+
+On a model without timestamps (a *count clock*, see below) every window is a
+number of points: `last: 1440` is the newest 1,440 points, `--last 100` the
+newest hundred.
+
+The table above is also the drift detector: an autoencoder trained once on
+a week in June and never again will, by September, flag most of every day
+(`883 (61.3%)` at margin 0 is exactly that). The cure is a retrain, not a
+margin — tick `schedule.autoencoder` or train it again by hand.
+
 ## Why a point is an anomaly
 
 A verdict says *that* a point is anomalous and which versions agreed. For the
@@ -111,10 +183,14 @@ to be predictable from all the others. So the top contributors name the
 $ curl 'localhost:8811/models/dynamic/boiler/anomalies?last=86400&only=anomalies'
 {"points":[{"index":6771,"timestamp":1788496324,"score":-0.121,"anomaly":true,
   "versions":["weekly","autoencoder"],
-  "contributions":[{"feature":"flow","share":0.41},
-                   {"feature":"pressure","share":0.19},
-                   {"feature":"hour_sin","share":0.14}]}], ...}
+  "contributions":[{"feature":"flow","share":0.41,"value":5.0,"expected":3.02},
+                   {"feature":"pressure","share":0.19,"value":2.1,"expected":2.31},
+                   {"feature":"hour_sin","share":0.14,"value":0.5,"expected":0.44}]}], ...}
 ```
+
+Each contributor carries the value the point had and the one the autoencoder
+reconstructed for it from the other features — the sentence "flow was 5.0
+where 3.0 was expected" is in the response, not left for the reader to infer.
 
 Contrast that with the reference's `feature_importance`, which is a per-feature
 z-score from the column mean: it can only ever point at the value that was
@@ -170,7 +246,46 @@ Two things it does that a replay through `/detect` would not:
 
 A row that cannot be read does not fail the file: it is counted, and the
 first few are named by line. A file bigger than the ring is a file whose
-*tail* the model keeps.
+*tail* the model keeps. `-`, `--`, `NA`, `N/A`, `NaN`, `null` and `None`
+are missing values, not text.
+
+### Finding the time in a file
+
+A file rarely calls its clock `timestamp`. The importer reads the columns
+before a row lands and proposes where the time is:
+
+- a **column** whose values parse as a stamp under any name (`ajanhetki`,
+  `ts`, `created`…): ISO 8601 / RFC 3339, the Postgres and MySQL
+  `TIMESTAMP` / `TIMESTAMPTZ` forms (`2026-08-29 00:10:00+03`), compact
+  `20260829T001000`, Unix seconds / milliseconds / microseconds /
+  nanoseconds, or a bare date;
+- **parts** — year / month / day plus a clock or hour / minute / second,
+  under English or Finnish names (`Vuosi`, `Kuukausi`, `Päivä`, `Aika`,
+  `tunti`, `min`…), the way an FMI weather export is laid out;
+- **none** — nothing in the file reads as a time.
+
+`POST /models/dynamic/<m>/import?inspect=1` returns that proposal with its
+confidence and a sample of the first row read (`2026-08-29T00:00:00+03:00`)
+and creates nothing; the trainer page shows it and lets you confirm, pick
+another column or set of parts, choose the zone naive stamps are read in
+(`tz=local|utc|+03:00`), or import with no time at all. The import call
+takes the plan back (`time=<json>`, `{"mode":"auto"}` is the proposal) and
+drops the columns it consumed, so a year never becomes a feature.
+`calendar=1` keeps an ISO `time` column so hour / weekday / month become
+features of the model.
+
+### Data without timestamps: the count clock
+
+Points that carry no time are not given one. A model born from unstamped
+rows runs on a **count clock** (`"clock": "count"` in its metadata): the
+n-th point is simply #n, every window in the package is a number of points
+— a `window_minutes: 1440` forest is the last 1,440 points, `last=100` the
+newest hundred — and the dashboards label points by their ordinal instead
+of a date. Nothing time-of-day shaped is derived. The clock is settled by
+the first points and can only change while the model is empty
+(`{"clock": "time"}` through the metadata, or `?clock=` on the first
+import); rows arriving later conform to it, and the import says so in
+`notes` when it had to ignore stamps or invent them.
 
 Creating a model is a structural act, so importing is an admin's — and the
 model it creates belongs to the **organization**, exactly like one grown from
@@ -531,11 +646,17 @@ anomaly detect <model> key=val ...     # ingest one point → verdict JSON
 anomaly score  <model> key=val ...     # score only (never ingests/retrains)
 anomaly batch  [-f FILE] [-H] [-m M]   # stateless CSV scoring (index⇥score)
 anomaly train  <model>                 # force a retrain now
+anomaly train-ae <model>               # train the autoencoder version
+anomaly calibrate <model> [--last S]   # alert rates vs margins over a window
+anomaly finetune <model> [--rate R]    # set every margin from a target rate
+               [--last S|all|own] [-n] #   (own: each version its own period;
+                                       #    -n / --dry-run previews)
 anomaly reset  <model>                 # drop data+forests, keep the name
 anomaly rm     <model>                 # delete the model entirely
 anomaly ls / info <model>              # list models / dump metadata
 anomaly serve  [--addr HOST:PORT]      # run the HTTP/JSON service + dashboard
                [--webroot DIR]
+anomaly analyze-job <task-dir>         # (internal) run one /api/analyze task
 ```
 
 The store defaults to `$ANOMALY_HOME`, else `~/.anomaly`; override per
@@ -557,7 +678,10 @@ command with `--store DIR`.
 | `GET /models/dynamic/<m>/data?limit=N\|all` | recent raw points |
 | `GET /models/dynamic/<m>/anomalies` | re-score the stored ring, cached (see below) |
 | `POST /models/dynamic/<m>/claim` | adopt an unclaimed model into your organization |
-| `POST /models/dynamic/<m>/import?format=` | import a CSV/JSON/JSONL file of history |
+| `POST /models/dynamic/<m>/import?format=&inspect=&time=&tz=&calendar=&clock=` | import a CSV/JSON/JSONL file of history; `inspect=1` proposes where its time is |
+| `POST /api/analyze?wait=&votes=&name=&format=&time=&tz=&calendar=&clock=` | analyse a file sent as the body: train, fine-tune to 1 %, return the anomalies (see below) |
+| `GET /api/org/tasks[/<id>]`, `DELETE /api/org/tasks/<id>` | the organization's analyses and their results |
+| `GET /api/org/files[/<name>]`, `POST /api/org/files/<name>/link?ttl=`, `DELETE /api/org/files/<name>` | the organization's folder: list, download, pre-authenticated link, delete |
 | `DELETE /api/me` | delete your account (right to be forgotten) |
 | `GET\|PUT /api/tenants[/<tid>]` | approve organizations (owner tenant) |
 | `GET /api/orgs`, `GET\|PUT\|DELETE /api/orgs/<org>/users[/<sub>[/role]]` | administer any organization (owner tenant) |
@@ -568,11 +692,68 @@ command with `--store DIR`.
 | `POST /models/dynamic/<m>/reset` | drop data + forests, keep the name |
 | `DELETE\|GET /delete_model/<m>` | delete entirely |
 | `PUT /api/dynamic/<m>/schedule` | `{"below_max_retrain_frequency": .., "at_max_retrain_frequency": ..}` |
-| `POST /api/dynamic/<m>/finetune` | recalibrate decision margins |
+| `GET /models/dynamic/<m>/calibration?last=&from=&to=&curve=` | alert rates vs margins over a window of the ring (read-only) |
+| `POST /api/dynamic/<m>/finetune` | set margins from a target alert rate — `{"rate": 0.01, "last": 86400 \| "all" \| "own", "dry_run": false, "versions": [..]}` |
 | `POST /train/autoencoder/<m>` | train the autoencoder version — optional `{"hidden": [..], "contamination": x}` |
 
 Model names must match `^[a-zA-Z0-9_]+$`. The router is a plain function
 over `HttpRequest` — the test suite drives every route without a socket.
+
+### Analysing a file
+
+`POST /api/analyze` is the import route without the model: send a CSV,
+JSON or JSONL file as the body (`format=`, `time=`, `tz=`, `calendar=` and
+`clock=` mean what they mean for an import; `name=` labels the result) and
+the service trains a throwaway model on it — every forest version over the
+whole file, the autoencoder as 64-16-64, every margin fine-tuned to a 1 %
+alert rate — scans it and answers with the anomalies:
+
+```
+curl --data-binary @week.csv "https://host/api/analyze?name=week%2036&wait=30"
+{ "status": "success", "state": "done", "task_id": "…", "task_url": "/api/org/tasks/…",
+  "rows": 10080, "anomalies": 143, "target_rate": 0.01, "votes": 1,
+  "model_versions": ["short_term", …, "autoencoder"], "margins": { … },
+  "file": { "name": "week_36-….json", "size": 61022, "url": "/api/org/files/…",
+            "download_url": "/api/org/files/…?org=…&exp=…&sig=…", "expires": … },
+  "inline": true,
+  "points": [ { "index": 411, "timestamp": …, "score": -0.113, "votes": 4,
+                "versions": ["short_term", "daily", "weekly", "seasonal"],
+                "contributions": [ { "feature": "rh", "share": 0.6, "value": 47.9, "expected": 48.4 }, … ],
+                "values": { …the whole record… } }, … ] }
+```
+
+Up to 10 000 points come inline (`inline: true`); the full result — the
+same object, points included — is always written to the organization's
+folder, and `download_url` is a pre-authenticated link to it: anyone
+holding it can fetch the file until `expires` (seven days), no sign-in.
+Each version is calibrated to 1 % on its own and a point is an anomaly
+when any of them says so, so the union runs above 1 %; `votes=2` keeps
+only the points two or more versions agreed on, which lands near it.
+
+The call waits `wait=` seconds for the job (default 10, at most 60). A
+job still running after that answers **202** with `state: "queued"` or `"running"`, and
+`GET /api/org/tasks/<task_id>` (the `task_url`) gives the very same answer
+once it is done — poll it, or come back later: `GET /api/org/tasks` lists
+the organization's analyses, newest first, with their state. A job that
+fails (nothing parses, fewer than ten rows) answers 400 with the reason
+while the call waits, and `state: "failed"` with a `message` from the task
+route afterwards. Members (viewer or admin) see their organization's
+tasks; admins delete them. Analyses run as a child process
+(`anomaly analyze-job`), so the live models, the GPU and the service
+itself are never in the job's hands.
+
+### The organization's folder
+
+Every organization has a folder in the store (`orgs/<org>/files`).
+`GET /api/org/files` lists it (`name`, `size`, `modified`, `url`), `GET
+/api/org/files/<name>` downloads a file — both for members, viewer or
+admin. `POST /api/org/files/<name>/link?ttl=<seconds>` mints a
+pre-authenticated link (default seven days, at most thirty): the file's
+URL with `org`, `exp` and an HMAC signature over the three, keyed by a
+secret the store generates once (`orgs/link.secret`). A link opens exactly
+that file of that organization until it expires; a tampered or expired one
+is a 403. Admins `DELETE` files. Names are `[A-Za-z0-9._-]`, no leading
+dot, at most 128 characters.
 
 ### Editing the metadata
 
@@ -583,7 +764,8 @@ so a checkbox can send one field:
 
 ```jsonc
 {
-  "schedule": { "below_max": 50, "at_max": 1000 },
+  "schedule": { "below_max": 50, "at_max": 1000,
+                "autoencoder": false },            // true ⇒ the AE retrains with the forests
   "max_data_points": 50000,                        // ring size; see below
   "versions": {
     "weekly":      { "enabled": false },          // stop scoring, drop the forest
@@ -634,11 +816,11 @@ build step — plain HTML/CSS/JS that talks to the routes above):
 
 | Page | What it does |
 | --- | --- |
-| `/` · `/modelmanager.html` | list models, train / finetune / reset / delete, toggle versions and retune their margins, train the autoencoder, edit the retrain schedule — or, under *Advanced*, the whole editable metadata, as a generated field form or as raw JSON |
-| `/modeltrainer.html` | import a CSV/JSON/JSONL file of history; feed points (`/detect`) one at a time or in bulk; force-train |
+| `/` · `/modelmanager.html` | list models, train / finetune / reset / delete; per model: toggle versions, edit margins and contamination with a live *flags in window* column from the calibration report, preview and apply a fine-tune for a target alert rate, train the autoencoder, edit the retrain schedule — or, under *Advanced*, the whole editable metadata, as a generated field form or as raw JSON. Every alert-affecting control carries a `?` that says what it means and which way to move it |
+| `/modeltrainer.html` | import a CSV/JSON/JSONL file of history — inspect first: the page shows where it found the time (a column, year/month/day parts, or none) and lets you confirm or change it; feed points (`/detect`) one at a time or in bulk; force-train |
 | `/visualize.html` | plot any numeric feature of a model's stored points over time |
 | `/admin.html` | the organization: users and their roles, API keys, model ownership |
-| `/anomalies.html` | scan stored history over a time range: score timeline, a per-version ribbon showing *what* flagged *when*, any feature's own trace for context, and a table naming the features whose relationship broke. Filter chips isolate the joint (autoencoder) anomalies from the per-feature (forest) ones |
+| `/anomalies.html` | scan stored history over a time range: score timeline, a per-version ribbon showing *what* flagged *when*, any feature's own trace for context, and a table naming the features whose relationship broke — with the value each had and the one the autoencoder expected; forest-only flags list the point's most extreme values in σ. Drag across a chart to zoom into a stretch of points, double-click or *reset zoom* to see the whole range; click a point for its stored record and every feature as the model saw it. Filter chips isolate the joint (autoencoder) anomalies from the per-feature (forest) ones |
 
 The HTML lives in `static/` next to the package. `serve` locates it via, in
 order: `--webroot DIR`, `$ANOMALY_WEBROOT`, `<exe-dir>/static`,
@@ -658,7 +840,8 @@ $ `deps/anomaly/src/dynamic.nu`
 
 `model_open / model_ingest / model_detect_only / model_scan /
 model_ae_contrib / model_point_json / model_force_train / model_reset /
-model_delete / model_finetune / model_train_autoencoder /
+model_delete / model_calibrate / model_finetune / model_finetune_at /
+model_train_autoencoder /
 model_set_schedule / model_set_margin / model_set_version_enabled /
 model_set_version_window / model_apply_meta_patch / model_metadata /
 model_free`, plus the layers beneath:
@@ -673,11 +856,13 @@ makes window filtering reproducible in tests.
 
 Deliberate, all documented in the code:
 
-1. **Fine-tune implements the intent, not the bug.** The reference
+1. **Fine-tune sets a rate, not 95 % of the worst score.** The reference
    initialises its accumulator to `-inf` and only updates on `score <
    -inf`, so it never adjusts anything (and its "+5 % buffer" comment
-   belies a `* 0.95`). We track the true minimum and apply `0.95·|min|`,
-   in place (no `tune_<name>` clone).
+   belies a `* 0.95`). Its intent — the worst point seen lands just inside
+   the band — makes every margin a function of one outlier. Here fine-tune
+   is calibration plus a write: the margin that flags a chosen share of a
+   recent window, in place (no `tune_<name>` clone).
 2. **One scaler per model**, fit over the full ring — the reference fits
    one per version and silently keeps whichever trained last.
 3. **Retraining is keyed on the lifetime point counter**, so it keeps
@@ -700,7 +885,12 @@ Deliberate, all documented in the code:
    reconstruction error ~100x the p95 of the training errors — the joint
    detector is effectively off, which its `"enabled": False` default hid.
    Here `decision_margin` is a fraction of the model's own threshold, so
-   the stored `0.05` means "5 % above p95" and needs no migration.
+   the stored `0.05` means "5 % above p95" and needs no migration. The
+   reference's retrain loop also trained a zero-tree forest for the
+   `autoencoder` version config and scored it as a second "autoencoder"
+   verdict with the relative margin read as an absolute one; that forest is
+   never trained here, and a stale `version_autoencoder.forest` is ignored
+   on load and deleted at the next retrain.
 8. **Anomaly attribution is the autoencoder's per-feature error**, not a
    per-feature z-score from the mean. A z-score can only name the extreme
    value; the reconstruction error names the feature that stopped agreeing
@@ -711,7 +901,7 @@ Deliberate, all documented in the code:
 `./tests/anomaly_test.sh` builds and runs the unit suites (430+ checks:
 preprocessing golden vectors, sklearn-parity decision maths, bit-exact
 blob round-trips, corrupt-file rejection, streaming mechanics, window
-routing, fine-tune, all HTTP routes, organizations, roles, model ownership and API keys,
+routing, calibration and fine-tune, all HTTP routes, organizations, roles, model ownership and API keys,
 configuration layering (flag over environment over file),
 CSV/JSON/JSONL import and its timestamp ordering,
 GPU/CPU-backend bit-parity), a CLI

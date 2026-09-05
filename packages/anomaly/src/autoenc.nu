@@ -45,6 +45,8 @@ $ `deps/mlp/src/mlp.nu`
     f threshold  // p95 of the training reconstruction errors
     i trained_on  // normal rows the net was fitted on
     i filtered  // rows the pre-filter dropped as anomalous
+    f prefilter  // the pre-filter's contamination rate actually used
+    i trained_at  // unix seconds (0 = unknown, pre-0.10 file)
     b trained
 }
 
@@ -57,7 +59,7 @@ $ `deps/mlp/src/mlp.nu`
     : ( Vec f ) e ( vec_new [f] )
     : MinMax mm ( minmax_fit e 0 0 )
     ( vec_free [f] e )
-    ^ @ AeModel { net mm ( vec_new [String] ) 0.0 0 0 F }
+    ^ @ AeModel { net mm ( vec_new [String] ) 0.0 0 0 0.0 0 F }
 }
 
 @ ae_free AeModel ae → v {
@@ -184,9 +186,23 @@ $ `deps/mlp/src/mlp.nu`
         = k + k 1
     }
     ^ @ AeTrainOut {
-        @ AeModel { . fit model mm fcopy thr nk - n nk T }
+        @ AeModel { . fit model mm fcopy thr nk - n nk cont 0 T }
         ( string_new )
     }
+}
+
+// The hidden layer widths the net was built with (sizes minus the input
+// and output layers) — what a retrain needs to rebuild the same shape.
+@ ae_hidden AeModel ae → ( Vec i ) {
+    : Mlp anet . ae net
+    : ( Vec i ) out ( vec_new [i] )
+    : i nl ( vec_len [i] . anet sizes )
+    : ~ i k 1
+    ~ < k - nl 1 {
+        ( vec_push [i] out ( _mlp_iget . anet sizes k ) )
+        = k + k 1
+    }
+    ^ out
 }
 
 // ── Scoring ───────────────────────────────────────────────────────────
@@ -283,6 +299,30 @@ $ `deps/mlp/src/mlp.nu`
     ^ out
 }
 
+// The autoencoder's reconstruction of one RAW projected point, back in
+// raw units (the MinMax undone), in the AE's feature order. For a flagged
+// point this is what each feature "should" have been given the others —
+// the value the broken relationship expected. A feature whose training
+// range was a single value reconstructs to that value.
+@ ae_reconstruct AeModel ae ( Vec f ) raw_point → ( Vec f ) {
+    : MinMax amm . ae mm
+    : i d . amm n_cols
+    : ( Vec f ) x ( vec_clone [f] raw_point )
+    ( minmax_apply amm x 1 )
+    : Mlp anet . ae net
+    : ( Vec f ) y ( mlp_predict anet x )
+    : ( Vec f ) out ( vec_with_cap [f] d )
+    : ~ i k 0
+    ~ < k d {
+        : f lo ( _mlp_fget . amm lo k )
+        : f hi ( _mlp_fget . amm hi k )
+        ( vec_push [f] out + lo * ( _mlp_fget y k ) - hi lo )
+        = k + k 1
+    }
+    ( vec_free [f] x ) ( vec_free [f] y )
+    ^ out
+}
+
 // decision_function orientation: threshold − mse (negative ⇒ anomaly).
 @ ae_decision AeModel ae ( Vec f ) raw_point → f {
     ^ - . ae threshold ( ae_mse ae raw_point )
@@ -300,6 +340,8 @@ $ `deps/mlp/src/mlp.nu`
     ( json_obj_set o `threshold_bits` ( json_int ( f64_to_bits . ae threshold ) ) )
     ( json_obj_set o `trained_on` ( json_int . ae trained_on ) )
     ( json_obj_set o `filtered` ( json_int . ae filtered ) )
+    ( json_obj_set o `prefilter` ( json_float . ae prefilter ) )
+    ( json_obj_set o `trained_at` ( json_int . ae trained_at ) )
     : Json fa ( json_arr_new )
     : i nf ( vec_len [String] . ae feats )
     : ~ i k 0
@@ -344,6 +386,8 @@ $ `deps/mlp/src/mlp.nu`
             : f thr ( bits_to_f64 ?? ( json_obj_get j `threshold_bits` ) { T e → ?? ( json_num_as_i e ) { T x → x F → 0 } F _ → 0 } )
             : i ton ?? ( json_obj_get j `trained_on` ) { T e → ( json_as_int e ) F _ → 0 }
             : i fil ?? ( json_obj_get j `filtered` ) { T e → ( json_as_int e ) F _ → 0 }
+            : f pre ?? ( json_obj_get j `prefilter` ) { T e → ?? ( json_num_as_f e ) { T x → x F → 0.1 } F _ → 0.1 }
+            : i tat ?? ( json_obj_get j `trained_at` ) { T e → ( json_as_int e ) F _ → 0 }
             : ( Vec String ) feats ( vec_new [String] )
             ?? ( json_obj_get j `features` ) {
                 T fa → {
@@ -360,7 +404,7 @@ $ `deps/mlp/src/mlp.nu`
                 F _ → {}
             }
             ( json_free j )
-            ^ @ ?AeModel { T @ AeModel { net mm feats thr ton fil T } }
+            ^ @ ?AeModel { T @ AeModel { net mm feats thr ton fil pre tat T } }
         }
     }
 }

@@ -208,6 +208,8 @@ $ `src/dynamic.nu`
     ( check == ( vec_len [AeContrib] cs ) 3 `contributions come back top-3` )
     : ~ f share_flow -1.0
     : ~ f share_temp -1.0
+    : ~ f flow_value 0.0
+    : ~ f flow_expected 0.0
     : ~ b sorted T
     : ~ f prev 1000000.0
     = k 0
@@ -216,7 +218,11 @@ $ `src/dynamic.nu`
             T c → {
                 ? > . c ac_err prev { = sorted F } {}
                 = prev . c ac_err
-                ? == ( nurl_str_eq ( string_data . c ac_name ) `flow` ) 1 { = share_flow . c ac_share } {}
+                ? == ( nurl_str_eq ( string_data . c ac_name ) `flow` ) 1 {
+                    = share_flow . c ac_share
+                    = flow_value . c ac_value
+                    = flow_expected . c ac_expected
+                } {}
                 ? == ( nurl_str_eq ( string_data . c ac_name ) `temp` ) 1 { = share_temp . c ac_share } {}
             }
             F _ → {}
@@ -225,6 +231,10 @@ $ `src/dynamic.nu`
     }
     ( check sorted `contributions are ordered worst-first` )
     ( check > share_flow share_temp `the feature that broke the relation carries more error` )
+    // The contribution says what the point carried and what the manifold
+    // expected: flow was 5.0 where flow ≈ 2·pres says 3.0.
+    ( check < ( float_abs - flow_value 5.0 ) 0.001 `the contribution carries the feature's raw value` )
+    ( check < ( float_abs - flow_expected 3.0 ) ( float_abs - flow_expected 5.0 ) `the expected value sits nearer the manifold than the point` )
     ( ae_contrib_free cs )
     : ( Vec AeContrib ) cs2 ( model_ae_contrib mo good 3 )
     ( check == ( vec_len [AeContrib] cs2 ) 3 `a clean point still reports shares` )
@@ -356,9 +366,12 @@ $ `src/dynamic.nu`
     : b _m6 ( model_set_margin mo `autoencoder` 0.0 )
     : i ae_before ( ae_flag_count mo )
     ( check > ae_before 1 `at margin 0 the ring flags several points` )
+    // The default fine-tune: 1 % of the window (400 points, all inside
+    // the 24 h default) → four flagged, in the AE's own relative units.
     : FineTuneReport rep ( model_finetune mo )
     : ~ b saw_ae F
     : ~ f ae_new -1.0
+    : ~ i ae_rep_after -1
     = k 0
     ~ < k ( vec_len [FtVer] . rep items ) {
         ?? ( vec_get [FtVer] . rep items k ) {
@@ -366,6 +379,7 @@ $ `src/dynamic.nu`
                 ? == ( nurl_str_eq ( string_data . ft ftname ) `autoencoder` ) 1 {
                     = saw_ae T
                     = ae_new . ft new_margin
+                    = ae_rep_after . ft after
                 } {}
             }
             F _ → {}
@@ -377,14 +391,41 @@ $ `src/dynamic.nu`
     ( check > ae_new 0.0 `the autoencoder gets a positive relative margin` )
     : f stored ( meta_version_margin ( model_metadata mo ) `autoencoder` -1.0 )
     ( check < ( float_abs - stored ae_new ) 0.000000001 `the new margin is persisted` )
-    // The calibrated margin is 95% of the worst error seen, so the ring's
-    // most anomalous point lands JUST INSIDE the band — still flagged, with
-    // everything milder now below it. Same rule, same outcome, as the
-    // forests: fine-tune narrows the alarm to the observed extreme, it does
-    // not silence it.
+    ( check == ae_rep_after 4 `1 % of 400 points: the report says four flagged` )
+    // The scan, which applies the relative margin through the live verdict
+    // path, agrees with the report — that is what makes the margin a
+    // setting with a visible effect.
     : i ae_after ( ae_flag_count mo )
-    ( check > ae_after 0 `the worst point stays just inside the band` )
+    ( check == ae_after 4 `the scan flags exactly those four` )
     ( check < ae_after ae_before `fine-tune narrows the autoencoder's alarm` )
+
+    // Calibration reads the same numbers back without writing anything.
+    : CalReport cal ( model_calibrate mo 0 0 )
+    ( check == . cal n_rows 400 `calibrate: every ring row scored` )
+    : ~ b cal_ae F
+    = k 0
+    ~ < k ( vec_len [CalVer] . cal items ) {
+        ?? ( vec_get [CalVer] . cal items k ) {
+            T cv → {
+                ? == ( nurl_str_eq ( string_data . cv cvname ) `autoencoder` ) 1 {
+                    = cal_ae T
+                    ( check == . cv n 400 `calibrate: autoencoder saw every row` )
+                    ( check == . cv flagged 4 `calibrate: flagged at the stored margin = 4` )
+                    ( check < ( float_abs - . cv cur_margin ae_new ) 0.000000001 `calibrate: reports the stored margin` )
+                    // Rounding to few digits may trade a tenth of the
+                    // count for a readable margin: 20 ± 2.
+                    : i at5 ( cal_flagged_at cv ( cal_margin_for_rate cv 0.05 ) )
+                    ( check & >= at5 18 <= at5 22 `calibrate: margin for 5 % flags 20 (±2)` )
+                    ( check == ( cal_flagged_at cv ( cal_margin_for_rate cv 0.0 ) ) 0 `calibrate: margin for 0 % flags none` )
+                    ( check >= ( cal_margin_for_rate cv 0.05 ) 0.0 `calibrate: margins never go negative` )
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( check cal_ae `calibrate: the autoencoder is in the report` )
+    ( cal_free cal )
 
     ( model_free mo )
     ( store_free st )

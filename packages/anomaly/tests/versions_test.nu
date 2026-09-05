@@ -199,37 +199,85 @@ $ `src/dynamic.nu`
     ( check == . all5 hits 5 `agg: all tight margins -> 5 versions flag` )
     ( check <= . all5 score . all5 df_short `agg: aggregate score is the most severe` )
 
-    // Fine-tune from loose margins: the worst observed point must cross.
+    // Fine-tune from loose margins: a 5 % target on a 20-point ring is
+    // one point per version — the worst one, sitting exactly on the line.
     : b r1 ( model_set_margin mo `short_term` 0.5 )
     : b r2 ( model_set_margin mo `daily` 0.5 )
     : b r3 ( model_set_margin mo `weekly` 0.5 )
     : b r4 ( model_set_margin mo `seasonal` 0.5 )
     : b r5 ( model_set_margin mo `timevector` 0.5 )
+    : ( Vec String ) none ( vec_new [String] )
 
-    : FineTuneReport rep ( model_finetune mo )
-    ( check == ( vec_len [FtVer] . rep items ) 5 `finetune: 5 versions tuned` )
-    : ~ b margins_tightened T
-    : ~ b formula_holds T
-    : i ni ( vec_len [FtVer] . rep items )
+    // Dry run first: the report is complete, nothing is written.
+    : FineTuneReport dry ( model_finetune_at mo 0.05 0 0 F none )
+    ( check == ( vec_len [FtVer] . dry items ) 5 `finetune dry: 5 versions reported` )
+    ( check == . dry applied F `finetune dry: report says not applied` )
+    : ~ b dry_untouched T
     : ~ i q 0
+    ~ < q ( vec_len [FtVer] . dry items ) {
+        ?? ( vec_get [FtVer] . dry items q ) {
+            T ft → {
+                ? . ft applied { = dry_untouched F } {}
+                ? == ( meta_version_margin ( model_metadata mo ) ( string_data . ft ftname ) -1.0 ) 0.5 {} { = dry_untouched F }
+            }
+            F _ → {}
+        }
+        = q + q 1
+    }
+    ( check dry_untouched `finetune dry: margins still 0.5` )
+    ( finetune_free dry )
+
+    : FineTuneReport rep ( model_finetune_at mo 0.05 0 0 T none )
+    ( vec_free [String] none )
+    ( check == ( vec_len [FtVer] . rep items ) 5 `finetune: 5 versions tuned` )
+    ( check == . rep n_rows 20 `finetune: whole ring in the window` )
+    : ~ b margins_tightened T
+    : ~ b one_each T
+    : ~ b short_numbers T
+    : ~ b all_applied T
+    : i ni ( vec_len [FtVer] . rep items )
+    = q 0
     ~ < q ni {
         ?? ( vec_get [FtVer] . rep items q ) {
             T ft → {
                 ? < . ft new_margin . ft old_margin {} { = margins_tightened F }
-                ? < ( float_abs - . ft new_margin * ( float_abs . ft min_score ) 0.95 ) 0.0000001 {} { = formula_holds F }
+                ? == . ft after 1 {} { = one_each F }
+                ? == ( round_sig . ft new_margin 6 ) . ft new_margin {} { = short_numbers F }
+                ? . ft applied {} { = all_applied F }
+                ? == ( meta_version_margin ( model_metadata mo ) ( string_data . ft ftname ) -1.0 ) . ft new_margin {} { = all_applied F }
             }
             F _ → {}
         }
         = q + q 1
     }
     ( check margins_tightened `finetune: margins move toward the data` )
-    ( check formula_holds `finetune: margin = 0.95 * |worst score|` )
+    ( check one_each `finetune: 5 % of 20 points = exactly one flagged per version` )
+    ( check short_numbers `finetune: margins carry at most 6 significant digits` )
+    ( check all_applied `finetune: every margin written to the metadata` )
 
     // The worst ring point (the 23.0 outlier) now crosses; normals don't.
     : ProbeOut post ( probe_temp mo 23.0 )
     ( check . post anomaly `finetune: worst observed point crosses the margin` )
     : ProbeOut norm ( probe_temp mo 20.0 )
     ( check == . norm anomaly F `finetune: normal point still normal` )
+
+    // Rate 0: the margin sits just above the worst point, nothing flags.
+    : ( Vec String ) none2 ( vec_new [String] )
+    : FineTuneReport zero ( model_finetune_at mo 0.0 0 0 T none2 )
+    ( vec_free [String] none2 )
+    : ~ b none_flag T
+    = q 0
+    ~ < q ( vec_len [FtVer] . zero items ) {
+        ?? ( vec_get [FtVer] . zero items q ) {
+            T ft → { ? == . ft after 0 {} { = none_flag F } }
+            F _ → {}
+        }
+        = q + q 1
+    }
+    ( check none_flag `finetune: rate 0 flags nothing` )
+    : ProbeOut post0 ( probe_temp mo 23.0 )
+    ( check == . post0 anomaly F `finetune: rate 0 clears the worst point` )
+    ( finetune_free zero )
 
     ( finetune_free rep )
     ( model_free mo )

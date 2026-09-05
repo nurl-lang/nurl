@@ -13,11 +13,12 @@
 //   PUT    /models/dynamic/<model>/metadata   edit schedule / version configs
 //   GET    /models/dynamic/<model>/data       recent points (?limit=N|all)
 //   GET    /models/dynamic/<model>/anomalies  scored ring (cached, filtered)
+//   GET    /models/dynamic/<model>/calibration  alert rates vs margins
 //   POST   /models/dynamic/<model>/import     a CSV/JSON/JSONL file of history
 //   POST   /models/dynamic/<model>/reset      drop data+forests, keep name
 //   DELETE|GET /delete_model/<model>          delete entirely
 //   PUT    /api/dynamic/<model>/schedule      retraining schedule
-//   POST   /api/dynamic/<model>/finetune      recalibrate margins
+//   POST   /api/dynamic/<model>/finetune      set margins from a target alert rate
 //   POST   /train/autoencoder/<model>         train the autoencoder version
 //
 // Model names must match ^[a-zA-Z0-9_]+$ (400 otherwise, same message as
@@ -58,12 +59,16 @@ $ `src/dynamic.nu`
 $ `src/csvdata.nu`
 $ `src/importer.nu`
 $ `src/authz.nu`
+$ `src/orgfiles.nu`
+$ `src/analyze.nu`
+$ `stdlib/std/thread.nu`
 
 // Store root used by every handler; set once before serving.
 : ~ s g_an_root `.`
 
 @ anomaly_service_set_root s root → v {
     = g_an_root root
+    ( orgfiles_set_root root )
 }
 
 // Directory holding the dashboard HTML (modelmanager.html, etc). Empty =
@@ -453,8 +458,14 @@ $ `src/authz.nu`
     ( json_obj_set o `score` ( json_float . vd score ) )
     ( json_obj_set o `data_points` ( json_int ( model_n_points mo ) ) )
 
+    // `severity` is the one number that means the same thing in every
+    // version: -score / margin, so 1.0 is exactly the alert line, 2.0 is
+    // twice as far past it, and a negative value is a comfortably normal
+    // point. `score` and `margin` stay in each version's own units.
     : Json vers ( json_obj_new )
     : i nv ( vec_len [VerVerdict] . vd versions )
+    : ~ f top_sev 0.0
+    : ~ b first T
     : ~ i k 0
     ~ < k nv {
         ?? ( vec_get [VerVerdict] . vd versions k ) {
@@ -462,6 +473,13 @@ $ `src/authz.nu`
                 : Json vo ( json_obj_new )
                 ( json_obj_set vo `anomaly` ( json_bool . vv anomaly ) )
                 ( json_obj_set vo `score` ( json_float . vv score ) )
+                : ~ f sev 0.0
+                ? > . vv margin 0.0 { = sev / - 0.0 . vv score . vv margin } {
+                    = sev ? <= . vv score 0.0 1.0 0.0
+                }
+                ( json_obj_set vo `severity` ( json_float sev ) )
+                ? || first > sev top_sev { = top_sev sev } {}
+                = first F
                 : Json ti ( json_obj_new )
                 ( json_obj_set ti `margin` ( json_float . vv margin ) )
                 ( json_obj_set vo `threshold_info` ti )
@@ -471,6 +489,7 @@ $ `src/authz.nu`
         }
         = k + k 1
     }
+    ( json_obj_set o `severity` ( json_float top_sev ) )
     ( json_obj_set o `versions` vers )
     ( json_obj_set o `data_point` ( json_clone body ) )
 
@@ -719,6 +738,9 @@ $ `src/authz.nu`
             ( json_obj_set o `reconstruction_threshold` ( json_float . ae threshold ) )
             ( json_obj_set o `training_data_points` ( json_int . ae trained_on ) )
             ( json_obj_set o `filtered_anomalies` ( json_int . ae filtered ) )
+            ( json_obj_set o `prefilter_contamination` ( json_float . ae prefilter ) )
+            ( json_obj_set o `trained_at` ( json_int . ae trained_at ) )
+            ( json_obj_set o `retrain_with_forests` ( json_bool . mm sched_ae ) )
             ( json_obj_set o `decision_margin` ( json_float ( meta_version_margin mm `autoencoder` 0.05 ) ) )
             ( json_obj_set o `feature_names` ( _an_jarr_of_strs . ae feats ) )
             : Json layers ( json_arr_new )
@@ -825,15 +847,31 @@ $ `src/authz.nu`
         ^ r404
     }
     : i limit ( __an_query_int . req query `limit` 100 )
+    // ?at=<index>: one stored row by its ring index (the `index` a scan
+    // point carries), for the dashboard's point popup. Read as a string
+    // because index 0 is a real answer.
+    : String atq ( __an_query_str . req query `at` )
+    : ~ i at -1
+    ? > ( string_len atq ) 0 {
+        ?? ( string_to_int atq ) { T x → { = at x } F _ → {} }
+    } {}
+    ( string_free atq )
     : ( Vec String ) pts ( store_load_points st ( string_data mname ) )
     : i total ( vec_len [String] pts )
     : ~ i from 0
-    ? > limit 0 {
-        ? > total limit { = from - total limit } {}
-    } {}
+    : ~ i upto total
+    ? >= at 0 {
+        = from at
+        = upto + at 1
+        ? > upto total { = upto total } {}
+    } {
+        ? > limit 0 {
+            ? > total limit { = from - total limit } {}
+        } {}
+    }
     : Json arr ( json_arr_new )
     : ~ i k from
-    ~ < k total {
+    ~ < k upto {
         ?? ( vec_get [String] pts k ) {
             T l → {
                 : !Json JsonError jr ( json_parse ( string_data l ) )
@@ -859,9 +897,10 @@ $ `src/authz.nu`
     ^ r
 }
 
-// String query parameter (?key=value). Empty String when missing. Values
-// are taken verbatim up to the next '&' — no percent-decoding, because
-// every parameter this route accepts is a name from our own metadata.
+// String query parameter (?key=value), percent-decoded. Empty String
+// when missing. The names this route takes are our own metadata's, but
+// those come from the user's files — an FMI column is "Ilman lämpötila
+// [°C]", and a browser sends that escaped.
 @ __an_query_str String q s key → String {
     : String needle ( string_from key )
     ( string_push_char needle 61 )
@@ -881,7 +920,9 @@ $ `src/authz.nu`
                     = k + k 1
                 }
             }
-            ^ val
+            : String dec ( percent_decode ( string_data val ) )
+            ( string_free val )
+            ^ dec
         }
         F _ → { ^ ( string_new ) }
     }
@@ -976,7 +1017,8 @@ $ `src/authz.nu`
     // model that stopped receiving data still answers "the last 24 h of it".
     : ~ i from_ts q_from
     : ~ i to_ts q_to
-    ? > q_last 0 {
+    : i q_span ( __an_last_span mo q_last )
+    ? > q_span 0 {
         : ~ i anchor to_ts
         ? > anchor 0 {} {
             : i np ( model_n_points mo )
@@ -984,7 +1026,7 @@ $ `src/authz.nu`
                 ?? ( vec_get [i] . mo times - np 1 ) { T x → { = anchor x } F _ → {} }
             } {}
         }
-        ? > anchor 0 { = from_ts - anchor q_last } {}
+        ? > anchor 0 { = from_ts - anchor q_span } {}
     } {}
 
     : ScanOut so ( model_scan_at mo from_ts to_ts limit > refresh 0 )
@@ -1074,6 +1116,8 @@ $ `src/authz.nu`
                                                     ( json_obj_set co `feature` ( json_str_lit ( string_data . c ac_name ) ) )
                                                     ( json_obj_set co `error` ( json_float . c ac_err ) )
                                                     ( json_obj_set co `share` ( json_float . c ac_share ) )
+                                                    ( json_obj_set co `value` ( json_float . c ac_value ) )
+                                                    ( json_obj_set co `expected` ( json_float . c ac_expected ) )
                                                     ( json_arr_push ca co )
                                                 }
                                                 F _ → {}
@@ -1249,6 +1293,7 @@ $ `src/authz.nu`
             : Json sched ( json_obj_new )
             ( json_obj_set sched `below_max` ( json_int . mm sched_below ) )
             ( json_obj_set sched `at_max` ( json_int . mm sched_at_max ) )
+            ( json_obj_set sched `autoencoder` ( json_bool . mm sched_ae ) )
             ( json_obj_set o `training_schedule` sched )
             : HttpResponse r ( response_json 200 o )
             ( json_free o )
@@ -1421,6 +1466,204 @@ $ `src/authz.nu`
     }
 }
 
+// The rate ladder a calibration answers "margin for" without being asked:
+// what a person can type in one breath.
+@ __an_cal_rates → ( Vec f ) {
+    : ( Vec f ) r ( vec_new [f] )
+    ( vec_push [f] r 0.001 ) ( vec_push [f] r 0.005 ) ( vec_push [f] r 0.01 )
+    ( vec_push [f] r 0.02 ) ( vec_push [f] r 0.05 ) ( vec_push [f] r 0.1 )
+    ^ r
+}
+
+// The (rate, margin) curve the dashboard interpolates for "how many
+// would THIS margin flag": every 0.1 % up to 1 %, then every 1 % — the
+// resolution a slider needs where the decision values are dense.
+@ __an_cal_curve CalVer cv → Json {
+    : Json a ( json_arr_new )
+    : ~ i k 0
+    ~ <= k 109 {
+        : ~ f rate 0.0
+        ? < k 10 { = rate * # f k 0.001 } { = rate * # f - k 9 0.01 }
+        : f m ( cal_margin_for_rate cv rate )
+        : Json pt ( json_arr_new )
+        ( json_arr_push pt ( json_float rate ) )
+        ( json_arr_push pt ( json_float m ) )
+        ( json_arr_push a pt )
+        = k + k 1
+    }
+    ^ a
+}
+
+@ __an_rate_key f rate → String {
+    // "0.01" → key "1%", "0.001" → "0.1%", "0.1" → "10%"
+    : f pct * rate 100.0
+    : String key ( string_new )
+    : f r3 ( round_sig pct 3 )
+    ? == r3 ( float_floor r3 ) {
+        ( string_push_int key # i r3 )
+    } {
+        : s t ( float_to_string r3 )
+        ( string_push_str key t )
+    }
+    ( string_push_char key 37 )
+    ^ key
+}
+
+// One version's calibration block.
+@ __an_cal_ver_json CalVer cv b with_curve → Json {
+    : Json o ( json_obj_new )
+    ( json_obj_set o `margin` ( json_float . cv cur_margin ) )
+    ( json_obj_set o `n` ( json_int . cv n ) )
+    ( json_obj_set o `flagged` ( json_int . cv flagged ) )
+    : ~ f rate 0.0
+    ? > . cv n 0 { = rate / # f . cv flagged # f . cv n } {}
+    ( json_obj_set o `rate` ( json_float rate ) )
+    ( json_obj_set o `worst` ( json_float . cv worst ) )
+    ( json_obj_set o `median` ( json_float . cv median ) )
+    : Json mfr ( json_obj_new )
+    : ( Vec f ) rates ( __an_cal_rates )
+    : i nr ( vec_len [f] rates )
+    : ~ i k 0
+    ~ < k nr {
+        : f r ( _mlp_fget rates k )
+        : f m ( cal_margin_for_rate cv r )
+        : Json e ( json_obj_new )
+        ( json_obj_set e `margin` ( json_float m ) )
+        ( json_obj_set e `flagged` ( json_int ( cal_flagged_at cv m ) ) )
+        : String key ( __an_rate_key r )
+        ( json_obj_set mfr ( string_data key ) e )
+        ( string_free key )
+        = k + k 1
+    }
+    ( vec_free [f] rates )
+    ( json_obj_set o `margin_for_rate` mfr )
+    ? with_curve { ( json_obj_set o `curve` ( __an_cal_curve cv ) ) } {}
+    ^ o
+}
+
+// `last` as a span of stamps: seconds on the wall clock; on the count
+// clock the caller counts POINTS, and a point is one tick.
+@ __an_last_span * Model mo i q_last → i {
+    ^ ( model_last_span mo q_last )
+}
+
+// The window shared by calibration and fine-tune: ?from / ?to / ?last
+// (query) or the same keys in a JSON body; `last` defaults to 24 h when
+// nothing bounds the window.
+@ __an_cal_window * Model mo i q_from i q_to i q_last → ( Vec i ) {
+    : ~ i from_ts q_from
+    : ~ i to_ts q_to
+    : ~ i last ( __an_last_span mo q_last )
+    ? & & <= from_ts 0 <= to_ts 0 == last 0 { = last ( model_last_span mo ( model_default_last mo ) ) } {}
+    ? > last 0 {
+        : i f2 ( model_window_from_last mo to_ts last )
+        ? > f2 0 { = from_ts f2 } {}
+    } {}
+    : ( Vec i ) w ( vec_new [i] )
+    ( vec_push [i] w from_ts )
+    ( vec_push [i] w to_ts )
+    ^ w
+}
+
+// GET /models/dynamic/<m>/calibration
+//
+//   ?from=<unix>&to=<unix>&last=<seconds>   window (default: last 24 h;
+//                                           last=all for the whole ring)
+//   &curve=0                                omit the (rate, margin) curves
+//
+// Per enabled, trained version: the current margin and what it flags in
+// the window, the margin for each standard alert rate, and the curve.
+// Read-only — nothing is written.
+@ __an_h_calibration HttpRequest req Params p → HttpResponse {
+    : String mname ( __an_param_model p )
+    ? ( __an_name_ok ( string_data mname ) ) {} {
+        ( string_free mname )
+        ^ ( __an_bad_name )
+    }
+    : Gate gate ( __an_gate_model req ( string_data mname ) F F )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rd
+    }
+    ( __an_gate_free gate )
+    : Store st ( store_open g_an_root )
+    ? ( store_exists st ( string_data mname ) ) {} {
+        : HttpResponse r404 ( __an_404_model ( string_data mname ) )
+        ( store_free st )
+        ( string_free mname )
+        ^ r404
+    }
+    : i q_from ( __an_query_int . req query `from` 0 )
+    : i q_to ( __an_query_int . req query `to` 0 )
+    : i q_last ( __an_query_int . req query `last` 0 )
+    : String qcurve ( __an_query_str . req query `curve` )
+    : b with_curve ! == ( nurl_str_eq ( string_data qcurve ) `0` ) 1
+    ( string_free qcurve )
+
+    : *Model mo ( model_open st ( string_data mname ) )
+    ? ( model_is_trained mo ) {} {
+        : String msg ( string_from `Model ` )
+        ( string_push_str msg ( string_data mname ) )
+        ( string_push_str msg ` exists but is not trained yet.` )
+        : HttpResponse rr ( __an_json_err 400 ( string_data msg ) )
+        ( string_free msg )
+        ( model_free mo )
+        ( store_free st )
+        ( string_free mname )
+        ^ rr
+    }
+    : ( Vec i ) win ( __an_cal_window mo q_from q_to q_last )
+    : i from_ts ( _mlp_iget win 0 )
+    : i to_ts ( _mlp_iget win 1 )
+    ( vec_free [i] win )
+    : CalReport cal ( model_calibrate mo from_ts to_ts )
+
+    : Json o ( json_obj_new )
+    ( json_obj_set o `status` ( json_str_lit `success` ) )
+    ( json_obj_set o `model` ( json_str_lit ( string_data mname ) ) )
+    : Json wj ( json_obj_new )
+    ( json_obj_set wj `from` ( json_int from_ts ) )
+    ( json_obj_set wj `to` ( json_int to_ts ) )
+    ( json_obj_set wj `rows` ( json_int . cal n_rows ) )
+    ( json_obj_set wj `total` ( json_int ( model_n_points mo ) ) )
+    ( json_obj_set o `window` wj )
+    : Json agg ( json_obj_new )
+    ( json_obj_set agg `flagged` ( json_int . cal agg_flagged ) )
+    : ~ f arate 0.0
+    ? > . cal n_rows 0 { = arate / # f . cal agg_flagged # f . cal n_rows } {}
+    ( json_obj_set agg `rate` ( json_float arate ) )
+    ( json_obj_set o `aggregate` agg )
+    : Json vers ( json_obj_new )
+    : i ni ( vec_len [CalVer] . cal items )
+    : ~ i k 0
+    ~ < k ni {
+        ?? ( vec_get [CalVer] . cal items k ) {
+            T cv → { ( json_obj_set vers ( string_data . cv cvname ) ( __an_cal_ver_json cv with_curve ) ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( json_obj_set o `versions` vers )
+    ( cal_free cal )
+    : HttpResponse r ( response_json 200 o )
+    ( json_free o )
+    ( model_free mo )
+    ( store_free st )
+    ( string_free mname )
+    ^ r
+}
+
+// POST /models/dynamic/<m>/finetune
+//
+// Body (all optional): {"rate": 0.01, "last": 86400 | "all", "from": N, "to": N,
+// "dry_run": false, "versions": ["short_term", ...]}. Sets every enabled,
+// trained version's margin so that `rate` of the window is flagged
+// (rounded to the fewest significant digits that keep the count);
+// `dry_run` reports without writing.
+// The response keeps the legacy `adjusted_margins` map (the new margins,
+// whether or not they were applied) beside the per-version detail.
 @ __an_h_finetune HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -1445,8 +1688,81 @@ $ `src/authz.nu`
         ( string_free mname )
         ^ r404
     }
+
+    : ~ f rate ANOM_FT_RATE
+    : ~ i q_from ( __an_query_int . req query `from` 0 )
+    : ~ i q_to ( __an_query_int . req query `to` 0 )
+    : ~ i q_last ( __an_query_int . req query `last` 0 )
+    : ~ b dry F
+    : ~ b own F
+    : ( Vec String ) only ( vec_new [String] )
+    : ~ b bad_rate F
+    : String qlast ( __an_query_str . req query `last` )
+    ? == ( nurl_str_eq ( string_data qlast ) `own` ) 1 { = own T } {}
+    ( string_free qlast )
+    ?? ( __an_body_json req ) {
+        T body → {
+            ? ( json_is_obj body ) {
+                ?? ( json_obj_get body `rate` ) {
+                    T rj → {
+                        : ~ b okr F
+                        ? ( json_is_num rj ) {
+                            ?? ( json_num_as_f rj ) {
+                                T x → { ? & >= x 0.0 <= x 1.0 { = rate x = okr T } {} }
+                                F _ → {}
+                            }
+                        } {}
+                        ? okr {} { = bad_rate T }
+                    }
+                    F _ → {}
+                }
+                = q_from ( _an_jint body `from` q_from )
+                = q_to ( _an_jint body `to` q_to )
+                = q_last ( _an_jint body `last` q_last )
+                // "last": "all" (or -1) means the whole ring, as in the query;
+                // "own" tunes each version over the window it trains on.
+                ?? ( json_obj_get body `last` ) {
+                    T lj → {
+                        ? ( json_is_str lj ) {
+                            ? == ( nurl_str_eq ( json_str_data lj ) `all` ) 1 { = q_last -1 } {}
+                            ? == ( nurl_str_eq ( json_str_data lj ) `own` ) 1 { = own T } {}
+                        } {}
+                    }
+                    F _ → {}
+                }
+                ?? ( json_obj_get body `dry_run` ) { T dj → { = dry ( json_as_bool dj ) } F _ → {} }
+                ?? ( json_obj_get body `versions` ) {
+                    T va → {
+                        ? ( json_is_arr va ) {
+                            : i nv ( json_arr_len va )
+                            : ~ i k 0
+                            ~ < k nv {
+                                ?? ( json_arr_get va k ) {
+                                    T e → { ? ( json_is_str e ) { ( vec_push [String] only ( string_from ( json_str_data e ) ) ) } {} }
+                                    F _ → {}
+                                }
+                                = k + k 1
+                            }
+                        } {}
+                    }
+                    F _ → {}
+                }
+            } {}
+            ( json_free body )
+        }
+        F _ → {}
+    }
+    ? bad_rate {
+        ( vec_free_with [String] only \ String x → v { ( string_free x ) } )
+        : HttpResponse rb ( __an_json_err 400 `rate must be a number between 0 and 1 (the fraction of the window to flag)` )
+        ( store_free st )
+        ( string_free mname )
+        ^ rb
+    } {}
+
     : *Model mo ( model_open st ( string_data mname ) )
     ? ( model_is_trained mo ) {} {
+        ( vec_free_with [String] only \ String x → v { ( string_free x ) } )
         : String msg ( string_from `Model ` )
         ( string_push_str msg ( string_data mname ) )
         ( string_push_str msg ` exists but is not trained yet.` )
@@ -1457,27 +1773,74 @@ $ `src/authz.nu`
         ( string_free mname )
         ^ rr
     }
-    : FineTuneReport rep ( model_finetune mo )
+    : ~ i from_ts 0
+    : ~ i to_ts 0
+    ? own {} {
+        : ( Vec i ) win ( __an_cal_window mo q_from q_to q_last )
+        = from_ts ( _mlp_iget win 0 )
+        = to_ts ( _mlp_iget win 1 )
+        ( vec_free [i] win )
+    }
+    : FineTuneReport rep ? own ( model_finetune_own mo rate ! dry only ) ( model_finetune_at mo rate from_ts to_ts ! dry only )
+    ? own { = from_ts . rep from_ts } {}
+    ( vec_free_with [String] only \ String x → v { ( string_free x ) } )
+
     : Json margins ( json_obj_new )
     : Json scores ( json_obj_new )
+    : Json vers ( json_obj_new )
     : i ni ( vec_len [FtVer] . rep items )
     : ~ i k 0
     ~ < k ni {
         ?? ( vec_get [FtVer] . rep items k ) {
             T ft → {
                 ( json_obj_set margins ( string_data . ft ftname ) ( json_float . ft new_margin ) )
-                ( json_obj_set scores ( string_data . ft ftname ) ( json_float . ft min_score ) )
+                ( json_obj_set scores ( string_data . ft ftname ) ( json_float . ft worst ) )
+                : Json v ( json_obj_new )
+                ( json_obj_set v `old_margin` ( json_float . ft old_margin ) )
+                ( json_obj_set v `new_margin` ( json_float . ft new_margin ) )
+                ( json_obj_set v `n` ( json_int . ft n ) )
+                ( json_obj_set v `flagged_before` ( json_int . ft before ) )
+                ( json_obj_set v `flagged_after` ( json_int . ft after ) )
+                : ~ f rb 0.0
+                : ~ f ra 0.0
+                ? > . ft n 0 {
+                    = rb / # f . ft before # f . ft n
+                    = ra / # f . ft after # f . ft n
+                } {}
+                ( json_obj_set v `rate_before` ( json_float rb ) )
+                ( json_obj_set v `rate_after` ( json_float ra ) )
+                ( json_obj_set v `worst` ( json_float . ft worst ) )
+                ( json_obj_set v `applied` ( json_bool . ft applied ) )
+                ( json_obj_set v `from` ( json_int . ft ft_from ) )
+                ( json_obj_set v `rows` ( json_int . ft ft_n_rows ) )
+                ( json_obj_set vers ( string_data . ft ftname ) v )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( finetune_free rep )
-    : String msg ( string_from `Successfully fine-tuned model ` )
-    ( string_push_str msg ( string_data mname ) )
+    : String msg ( string_new )
+    ? dry {
+        ( string_push_str msg `Dry run: margins for model ` )
+        ( string_push_str msg ( string_data mname ) )
+        ( string_push_str msg ` were not changed` )
+    } {
+        ( string_push_str msg `Successfully fine-tuned model ` )
+        ( string_push_str msg ( string_data mname ) )
+    }
     : Json o ( __an_ok_msg ( string_data msg ) )
+    ( json_obj_set o `rate` ( json_float rate ) )
+    ( json_obj_set o `dry_run` ( json_bool dry ) )
+    : Json wj ( json_obj_new )
+    ( json_obj_set wj `from` ( json_int from_ts ) )
+    ( json_obj_set wj `to` ( json_int to_ts ) )
+    ( json_obj_set wj `rows` ( json_int . rep n_rows ) )
+    ( json_obj_set wj `own` ( json_bool own ) )
+    ( json_obj_set o `window` wj )
+    ( json_obj_set o `versions` vers )
     ( json_obj_set o `adjusted_margins` margins )
     ( json_obj_set o `max_anomaly_scores` scores )
+    ( finetune_free rep )
     : HttpResponse r ( response_json 200 o )
     ( json_free o )
     ( string_free msg )
@@ -1984,10 +2347,30 @@ $ `src/authz.nu`
 }
 
 // POST /models/dynamic/<m>/import?format=csv|json|jsonl|auto
+//     &inspect=1            describe the file and propose its clock; import nothing
+//     &time=<json>          the time plan (percent-encoded JSON):
+//                             {"mode":"auto"}                       — the proposal (default)
+//                             {"mode":"column","column":"ts"}       — one column
+//                             {"mode":"parts","parts":{"year":..,"month":..,"day":..,
+//                                "clock":.. | "hour":..,"minute":..,"second":..}}
+//                             {"mode":"none"}                       — read no time
+//     &tz=local|utc|+03:00  the zone naive stamps are read in (default local)
+//     &calendar=1           keep an ISO `time` column for calendar features
+//     &clock=time|count     the clock a NEW model runs on; without it, a
+//                           model born from stamped rows runs on time, one
+//                           born from unstamped rows on its point count
 //
 // The body is the file, verbatim — no multipart, no base64. A file is
 // bytes and this is the shortest path from a browser's FileReader to the
 // ring; wrapping it in a form encoding would only mean decoding it again.
+//
+// The clock of a file is read before a row lands: `inspect=1` returns the
+// columns, what their values look like, and a proposal — the column, or
+// the year/month/day/clock parts, the time is in — with a confidence, so
+// the dashboard can show the guess and let the person confirm or change
+// it. The import call then takes the same plan back, stamps every row
+// from it, and drops the columns it consumed so a year never becomes a
+// feature.
 //
 // This is the same act as sending points, done in one call instead of ten
 // thousand, so it is gated the same way: an `ingest` credential may do it,
@@ -2022,8 +2405,115 @@ $ `src/authz.nu`
         ^ rr
     } {}
 
+    // The time spec: `time=` JSON, with `tz=` layered over it.
+    : ~ Json spec ( json_obj_new )
+    : String tq ( __an_query_str . req query `time` )
+    ? > ( string_len tq ) 0 {
+        : !Json JsonError tj ( json_parse ( string_data tq ) )
+        ?? tj {
+            T j → { ? ( json_is_obj j ) { ( json_free spec ) = spec j } { ( json_free j ) } }
+            F _ → {}
+        }
+    } {}
+    ( string_free tq )
+    : String tzq ( __an_query_str . req query `tz` )
+    ? > ( string_len tzq ) 0 { ( json_obj_set spec `tz` ( json_str_lit ( string_data tzq ) ) ) } {}
+    ( string_free tzq )
+    : i tz ( imp_tz_of spec )
+    : b calendar > ( __an_query_int . req query `calendar` 0 ) 0
+    : String clockq ( __an_query_str . req query `clock` )
+
     : Store st ( store_open g_an_root )
+    : b existed ( store_exists st ( string_data mname ) )
+    : Json insp ( import_inspect . ip rows spec tz )
+    ( json_free spec )
+
+    // inspect=1: the description, and where the model stands, nothing
+    // more — a model that does not exist is not brought into being by a
+    // look at a file.
+    ? > ( __an_query_int . req query `inspect` 0 ) 0 {
+        ( json_obj_set insp `format` ( json_str_lit ( string_data . ip format ) ) )
+        ( json_obj_set insp `rows` ( json_int ( vec_len [Json] . ip rows ) ) )
+        ( json_obj_set insp `skipped` ( json_int . ip skipped ) )
+        : Json mj ( json_obj_new )
+        ( json_obj_set mj `exists` ( json_bool existed ) )
+        : ~ i npts 0
+        : ~ b count F
+        ? existed {
+            : *Model mo0 ( model_open st ( string_data mname ) )
+            : *Meta mm0 . mo0 meta
+            = npts ( model_n_points mo0 )
+            = count . mm0 count_clock
+            ( model_free mo0 )
+        } {}
+        ( json_obj_set mj `data_points` ( json_int npts ) )
+        ( json_obj_set mj `clock` ( json_str_lit ? count `count` `time` ) )
+        ( json_obj_set insp `model` mj )
+        : HttpResponse ri ( response_json 200 insp )
+        ( json_free insp )
+        ( string_free clockq )
+        ( import_parse_free ip )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ ri
+    } {}
     : *Model mo ( model_open st ( string_data mname ) )
+    : *Meta mm . mo meta
+
+    // The plan, applied: every row stamped from it, or a 400 naming what
+    // the plan asked for and the file does not have.
+    : Json plan ?? ( json_obj_get insp `time` ) { T tp → ( json_clone tp ) F _ → ( json_obj_new ) }
+    ( json_free insp )
+    ? ( json_obj_has plan `error` ) {
+        : s perr ?? ( json_obj_get plan `error` ) { T e → ( json_str_data e ) F _ → `bad time plan` }
+        : HttpResponse rp ( __an_json_err 400 perr )
+        ( json_free plan )
+        ( string_free clockq )
+        ( import_parse_free ip )
+        ( model_free mo )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rp
+    } {}
+    : ImpTimeResult tr ( import_time_apply . ip rows plan calendar tz )
+
+    // Which clock. A model that already holds points keeps its clock; a
+    // fresh one takes `clock=`, or the one its first rows imply.
+    : ~ String cerr ( string_new )
+    ? == ( model_n_points mo ) 0 {
+        : ~ b want . mm count_clock
+        ? > ( string_len clockq ) 0 {
+            ? == ( nurl_str_eq ( string_data clockq ) `count` ) 1 { = want T } {
+                ? == ( nurl_str_eq ( string_data clockq ) `time` ) 1 { = want F } {
+                    ( string_free cerr )
+                    = cerr ( string_from `clock must be "time" or "count"` )
+                }
+            }
+        } { = want == . tr stamped 0 }
+        = . mm count_clock want
+    } {
+        ? & > ( string_len clockq ) 0 != == ( nurl_str_eq ( string_data clockq ) `count` ) 1 . mm count_clock {
+            ( string_free cerr )
+            = cerr ( string_from `clock can only change on a model with no stored points (reset it first)` )
+        } {}
+    }
+    ( string_free clockq )
+    ? > ( string_len cerr ) 0 {
+        : HttpResponse rc ( __an_json_err 400 ( string_data cerr ) )
+        ( string_free cerr )
+        ( imp_time_result_free tr )
+        ( json_free plan )
+        ( import_parse_free ip )
+        ( model_free mo )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rc
+    } {}
+    ( string_free cerr )
+
     : ImportReport rep ( model_import mo . ip rows )
 
     : ~ HttpResponse r ( response_status_only 500 )
@@ -2045,6 +2535,12 @@ $ `src/authz.nu`
         ( json_obj_set o `skipped` ( json_int + . ip skipped . rep rejected ) )
         ( json_obj_set o `data_points` ( json_int . rep stored ) )
         ( json_obj_set o `trained` ( json_bool . rep trained ) )
+        ( json_obj_set o `clock` ( json_str_lit ? . mm count_clock `count` `time` ) )
+        : Json tj ( json_clone plan )
+        ( json_obj_set tj `stamped` ( json_int . tr stamped ) )
+        ( json_obj_set tj `failed` ( json_int . tr failed ) )
+        ? > ( string_len . tr first_fail ) 0 { ( json_obj_set tj `first_failure` ( json_str_lit ( string_data . tr first_fail ) ) ) } {}
+        ( json_obj_set o `time` tj )
         : Json notes ( json_arr_new )
         : i pn ( vec_len [String] . ip notes )
         : ~ i k 0
@@ -2055,6 +2551,15 @@ $ `src/authz.nu`
             }
             = k + k 1
         }
+        // The clock of a model with points is settled: stamps landing on
+        // a count clock become ticks, unstamped rows on a time clock take
+        // the clock time. Neither is an error, but both are worth a note.
+        ? & . mm count_clock > . tr stamped 0 {
+            ( json_arr_push notes ( json_str_lit `the model counts points: the rows' timestamps were read but not kept; every row took the next tick` ) )
+        } {}
+        ? & ! . mm count_clock & == . tr stamped 0 > . rep accepted 0 {
+            ( json_arr_push notes ( json_str_lit `the model runs on time and the rows carry no timestamp: they were stamped with the current time` ) )
+        } {}
         : i rn ( vec_len [String] . rep notes )
         = k 0
         ~ < k rn {
@@ -2070,11 +2575,507 @@ $ `src/authz.nu`
         ( json_free o )
     }
     ( import_report_free rep )
+    ( imp_time_result_free tr )
+    ( json_free plan )
     ( import_parse_free ip )
     ( model_free mo )
     ( store_free st )
     ( __an_gate_free gate )
     ( string_free mname )
+    ^ r
+}
+
+// ── The organisation's folder, and file analysis ──────────────────────
+//
+// Every organisation has a folder (src/orgfiles.nu) its members list
+// and read; administrators delete. A file can be handed out as a link
+// that carries its own permission, for results too large to return in
+// a response. `POST /api/analyze` fills the folder: a file in, its
+// anomalies out (src/analyze.nu), inline when they are few, as a link
+// when they are not.
+
+// The service lock. The server runs a small worker pool so that a handler
+// which WAITS — analyze, for its job — can let go of the service while it
+// does; every other handler holds the lock for its whole run, so the store,
+// the GPU singleton and the authorization layer see one request at a
+// time, exactly as under the single-threaded server. 0 = no pool (tests
+// drive the router directly), and the release/acquire pair is a no-op.
+: ~ i g_an_lock 0
+
+@ __an_lock → Mutex { ^ @ Mutex { @ Cell { # s g_an_lock 0 } } }
+
+@ __an_lock_acquire → v { ? != g_an_lock 0 { ( mutex_lock ( __an_lock ) ) } {} }
+
+@ __an_lock_release → v { ? != g_an_lock 0 { ( mutex_unlock ( __an_lock ) ) } {} }
+
+// A path capture (owned; empty String = missing).
+@ __an_param_str Params p s key → String {
+    ?? ( params_get p key ) {
+        T v → { ^ v }
+        F junk → { ^ junk }
+    }
+}
+
+// A member of an organisation: anyone signed in with a role that is not
+// a data producer's. An ingest key reports readings; it has no business
+// in the folder.
+@ __an_gate_member HttpRequest req → Gate {
+    : Gate g ( __an_gate_auth req F )
+    ? . g allowed {} { ^ g }
+    : Principal me . g who
+    ? == ( nurl_str_eq ( string_data . me role ) AZ_ROLE_INGEST ) 1 {
+        ^ @ Gate { F AZ_GATE_FORBID . g who F }
+    } {}
+    ^ g
+}
+
+@ __an_file_json s org OrgFile f → Json {
+    : Json o ( json_obj_new )
+    ( json_obj_set o `name` ( json_str_lit ( string_data . f name ) ) )
+    ( json_obj_set o `size` ( json_int . f size ) )
+    ( json_obj_set o `modified` ( json_int . f mtime ) )
+    : String u ( string_from `/api/org/files/` )
+    ( string_push_str u ( string_data . f name ) )
+    ( json_obj_set o `url` ( json_str_lit ( string_data u ) ) )
+    ( string_free u )
+    ^ o
+}
+
+@ __an_h_org_files HttpRequest req Params p → HttpResponse {
+    : Gate gate ( __an_gate_member req )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ^ rd
+    }
+    : Principal me . gate who
+    : ( Vec OrgFile ) fs ( orgfiles_list ( string_data . me org ) )
+    : Json arr ( json_arr_new )
+    : i n ( vec_len [OrgFile] fs )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [OrgFile] fs k ) {
+            T f → { ( json_arr_push arr ( __an_file_json ( string_data . me org ) f ) ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( orgfiles_free fs )
+    : Json o ( json_obj_new )
+    ( json_obj_set o `status` ( json_str_lit `success` ) )
+    ( json_obj_set o `organization` ( json_str_lit ( string_data . me org ) ) )
+    ( json_obj_set o `files` arr )
+    : HttpResponse r ( response_json 200 o )
+    ( json_free o )
+    ( __an_gate_free gate )
+    ^ r
+}
+
+@ __an_bad_file_name → HttpResponse {
+    ^ ( __an_json_err 400 `Invalid file name. Use only letters, numbers, dots, underscores and dashes.` )
+}
+
+@ __an_404_file s name → HttpResponse {
+    : String msg ( string_from `File ` )
+    ( string_push_str msg name )
+    ( string_push_str msg ` not found` )
+    : HttpResponse r ( __an_json_err 404 ( string_data msg ) )
+    ( string_free msg )
+    ^ r
+}
+
+// The file itself, as a download.
+@ __an_serve_org_file s org s name → HttpResponse {
+    : String path ( orgfiles_path org name )
+    : ~ HttpResponse r ( __an_404_file name )
+    ?? ( read_file_bytes ( string_data path ) ) {
+        T data → {
+            ( http_response_free r )
+            = r ( response_new 200 )
+            ( response_set_header r `Content-Type` ( orgfiles_content_type name ) )
+            : String cd ( string_from `attachment; filename="` )
+            ( string_push_str cd name )
+            ( string_push_char cd 34 )
+            ( response_set_header r `Content-Disposition` ( string_data cd ) )
+            ( string_free cd )
+            ( response_set_header r `Cache-Control` `private, no-store` )
+            ( response_set_body_bytes r data )
+            ( vec_free [u] data )
+        }
+        F _ → {}
+    }
+    ( string_free path )
+    ^ r
+}
+
+// GET /api/org/files/:name — a member's download, or a link's: with
+// `org`, `exp` and `sig` in the query the link is its own credential and
+// the sign-in is not consulted at all.
+@ __an_h_org_file_get HttpRequest req Params p → HttpResponse {
+    : String name ( __an_param_str p `name` )
+    ? ( orgfiles_name_ok ( string_data name ) ) {} {
+        ( string_free name )
+        ^ ( __an_bad_file_name )
+    }
+    : String sig ( __an_query_str . req query `sig` )
+    ? > ( string_len sig ) 0 {
+        : String lorg ( __an_query_str . req query `org` )
+        : i exp ( __an_query_int . req query `exp` 0 )
+        : b ok ( orgfiles_verify ( string_data lorg ) ( string_data name ) exp ( string_data sig ) ( now_seconds ) )
+        : HttpResponse rl ? ok ( __an_serve_org_file ( string_data lorg ) ( string_data name ) )
+        ( __an_json_err 403 `This link is not valid, or has expired.` )
+        ( string_free lorg )
+        ( string_free sig )
+        ( string_free name )
+        ^ rl
+    } {}
+    ( string_free sig )
+    : Gate gate ( __an_gate_member req )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free name )
+        ^ rd
+    }
+    : Principal me . gate who
+    : HttpResponse r ( __an_serve_org_file ( string_data . me org ) ( string_data name ) )
+    ( __an_gate_free gate )
+    ( string_free name )
+    ^ r
+}
+
+// POST /api/org/files/:name/link?ttl=SECONDS — a pre-authenticated
+// download link for one file. Whoever holds it can fetch that file until
+// it expires (a week by default, 30 days at most).
+@ __an_h_org_file_link HttpRequest req Params p → HttpResponse {
+    : String name ( __an_param_str p `name` )
+    ? ( orgfiles_name_ok ( string_data name ) ) {} {
+        ( string_free name )
+        ^ ( __an_bad_file_name )
+    }
+    : Gate gate ( __an_gate_member req )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free name )
+        ^ rd
+    }
+    : Principal me . gate who
+    : OrgFile f ( orgfiles_stat ( string_data . me org ) ( string_data name ) )
+    : ~ HttpResponse r ( __an_404_file ( string_data name ) )
+    ? >= . f size 0 {
+        : ~ i ttl ( __an_query_int . req query `ttl` OF_LINK_TTL_DEFAULT )
+        ? | <= ttl 0 > ttl OF_LINK_TTL_MAX { = ttl OF_LINK_TTL_MAX } {}
+        : i exp + ( now_seconds ) ttl
+        : String u ( orgfiles_link ( string_data . me org ) ( string_data name ) exp )
+        : Json o ( __an_file_json ( string_data . me org ) f )
+        ( json_obj_set o `status` ( json_str_lit `success` ) )
+        ( json_obj_set o `download_url` ( json_str_lit ( string_data u ) ) )
+        ( json_obj_set o `expires` ( json_int exp ) )
+        ( http_response_free r )
+        = r ( response_json 200 o )
+        ( json_free o )
+        ( string_free u )
+    } {}
+    ( string_free . f name )
+    ( __an_gate_free gate )
+    ( string_free name )
+    ^ r
+}
+
+@ __an_h_org_file_delete HttpRequest req Params p → HttpResponse {
+    : String name ( __an_param_str p `name` )
+    ? ( orgfiles_name_ok ( string_data name ) ) {} {
+        ( string_free name )
+        ^ ( __an_bad_file_name )
+    }
+    : Gate gate ( __an_gate_auth req T )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free name )
+        ^ rd
+    }
+    : Principal me . gate who
+    : ~ HttpResponse r ( __an_404_file ( string_data name ) )
+    ? ( orgfiles_delete ( string_data . me org ) ( string_data name ) ) {
+        ( http_response_free r )
+        : Json o ( __an_ok_msg `deleted` )
+        ( json_obj_set o `name` ( json_str_lit ( string_data name ) ) )
+        = r ( response_json 200 o )
+        ( json_free o )
+    } {}
+    ( __an_gate_free gate )
+    ( string_free name )
+    ^ r
+}
+
+// The answer for a task in whatever state it is in. Done: the numbers,
+// the result file with a pre-authenticated link, and the anomalies
+// themselves when there are at most ANA_INLINE_MAX of them. Failed: the
+// error. Otherwise: pending, with where to ask again. `fail_status` is
+// the HTTP status a failed task answers with — an analyze call that
+// watched its own file fail is a 400, a later look at the task a 200.
+@ __an_task_response s org s id i fail_status → HttpResponse {
+    : String dir ( analyze_task_dir org id )
+    : ?Json stm ( analyze_status_read ( string_data dir ) )
+    ( string_free dir )
+    ?? stm {
+        F _ → {
+            : String msg ( string_from `Task ` )
+            ( string_push_str msg id )
+            ( string_push_str msg ` not found` )
+            : HttpResponse r404 ( __an_json_err 404 ( string_data msg ) )
+            ( string_free msg )
+            ^ r404
+        }
+        T st → {
+            : String state ( _ana_jstr st `state` )
+            : String turl ( string_from `/api/org/tasks/` )
+            ( string_push_str turl id )
+            : Json o ( json_obj_new )
+            ( json_obj_set o `task_id` ( json_str_lit id ) )
+            ( json_obj_set o `state` ( json_str_lit ( string_data state ) ) )
+            ( json_obj_set o `task_url` ( json_str_lit ( string_data turl ) ) )
+            ( json_obj_set o `name` ( json_str_lit ( json_as_str ?? ( json_obj_get st `name` ) { T v → v F _ → @ Json { JNull } } ) ) )
+            ( json_obj_set o `created` ( json_int ( _ana_jint st `created` 0 ) ) )
+            : ~ i code 202
+            ? == ( nurl_str_eq ( string_data state ) `failed` ) 1 {
+                = code fail_status
+                ( json_obj_set o `status` ( json_str_lit `error` ) )
+                ( json_obj_set o `message` ( json_str_lit ( json_as_str ?? ( json_obj_get st `error` ) { T v → v F _ → @ Json { JNull } } ) ) )
+                ( json_obj_set o `finished` ( json_int ( _ana_jint st `finished` 0 ) ) )
+            } {
+                ? == ( nurl_str_eq ( string_data state ) `done` ) 1 {
+                    = code 200
+                    ( json_obj_set o `status` ( json_str_lit `success` ) )
+                    ( json_obj_set o `finished` ( json_int ( _ana_jint st `finished` 0 ) ) )
+                    ( json_obj_set o `rows` ( json_int ( _ana_jint st `rows` 0 ) ) )
+                    ( json_obj_set o `imported` ( json_int ( _ana_jint st `imported` 0 ) ) )
+                    ( json_obj_set o `skipped` ( json_int ( _ana_jint st `skipped` 0 ) ) )
+                    ( json_obj_set o `considered` ( json_int ( _ana_jint st `considered` 0 ) ) )
+                    : i nanom ( _ana_jint st `anomalies` 0 )
+                    ( json_obj_set o `anomalies` ( json_int nanom ) )
+                    ( json_obj_set o `target_rate` ( json_float ANA_TARGET_RATE ) )
+                    ( json_obj_set o `votes` ( json_int ( _ana_jint st `votes` 1 ) ) )
+                    ?? ( json_obj_get st `model_versions` ) { T v → { ( json_obj_set o `model_versions` ( json_clone v ) ) } F _ → {} }
+                    ?? ( json_obj_get st `margins` ) { T v → { ( json_obj_set o `margins` ( json_clone v ) ) } F _ → {} }
+                    ?? ( json_obj_get st `notes` ) { T v → { ( json_obj_set o `notes` ( json_clone v ) ) } F _ → {} }
+                    // The result file, and the link to it.
+                    : String fname ( _ana_jstr st `file` )
+                    : OrgFile f ( orgfiles_stat org ( string_data fname ) )
+                    : Json fj ( __an_file_json org f )
+                    : i exp + ( now_seconds ) OF_LINK_TTL_DEFAULT
+                    : String u ( orgfiles_link org ( string_data fname ) exp )
+                    ( json_obj_set fj `download_url` ( json_str_lit ( string_data u ) ) )
+                    ( json_obj_set fj `expires` ( json_int exp ) )
+                    ( string_free u )
+                    ( json_obj_set o `file` fj )
+                    ( json_obj_set o `inline` ( json_bool <= nanom ANA_INLINE_MAX ) )
+                    ? <= nanom ANA_INLINE_MAX {
+                        : String path ( orgfiles_path org ( string_data fname ) )
+                        ?? ( read_file ( string_data path ) ) {
+                            T txt → {
+                                ?? ( json_parse ( string_data txt ) ) {
+                                    T res → {
+                                        ?? ( json_obj_get res `points` ) { T pts → { ( json_obj_set o `points` ( json_clone pts ) ) } F _ → {} }
+                                        ?? ( json_obj_get res `time` ) { T tj → { ( json_obj_set o `time` ( json_clone tj ) ) } F _ → {} }
+                                        ( json_free res )
+                                    }
+                                    F _ → {}
+                                }
+                                ( string_free txt )
+                            }
+                            F _ → {}
+                        }
+                        ( string_free path )
+                    } {}
+                    ( string_free . f name )
+                    ( string_free fname )
+                } {
+                    ( json_obj_set o `status` ( json_str_lit `pending` ) )
+                }
+            }
+            : HttpResponse r ( response_json code o )
+            ( json_free o )
+            ( string_free turl )
+            ( string_free state )
+            ( json_free st )
+            ^ r
+        }
+    }
+}
+
+// POST /api/analyze — the body is the file. Query: `format` (csv, json,
+// jsonl, fmi; empty = detect), `time`, `tz`, `calendar`, `clock` as for an
+// import, `name` to label the result, and `wait` — how many seconds to
+// hold the call for the result (10 by default, 60 at most, 0 = return
+// the task at once). A result that is not ready in time answers 202 with
+// the task to ask again for.
+: i AN_ANALYZE_WAIT_DEFAULT 10
+: i AN_ANALYZE_WAIT_MAX 60
+
+@ __an_h_analyze HttpRequest req Params p → HttpResponse {
+    : Gate gate ( __an_gate_member req )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ^ rd
+    }
+    : Principal me . gate who
+    ? > ( vec_len [u] . req body ) 0 {} {
+        ( __an_gate_free gate )
+        ^ ( __an_json_err 400 `The request body is empty: send the file to analyse as the body.` )
+    }
+
+    : Json params ( json_obj_new )
+    : String fmt ( __an_query_str . req query `format` )
+    ( json_obj_set params `format` ( json_str_lit ( string_data fmt ) ) )
+    ( string_free fmt )
+    : ~ Json spec ( json_obj_new )
+    : String tq ( __an_query_str . req query `time` )
+    ? > ( string_len tq ) 0 {
+        ?? ( json_parse ( string_data tq ) ) {
+            T j → { ? ( json_is_obj j ) { ( json_free spec ) = spec j } { ( json_free j ) } }
+            F _ → {}
+        }
+    } {}
+    ( string_free tq )
+    : String tzq ( __an_query_str . req query `tz` )
+    ? > ( string_len tzq ) 0 { ( json_obj_set spec `tz` ( json_str_lit ( string_data tzq ) ) ) } {}
+    ( string_free tzq )
+    ( json_obj_set params `time` spec )
+    ( json_obj_set params `calendar` ( json_bool > ( __an_query_int . req query `calendar` 0 ) 0 ) )
+    : String clockq ( __an_query_str . req query `clock` )
+    ( json_obj_set params `clock` ( json_str_lit ( string_data clockq ) ) )
+    ( string_free clockq )
+    : String label ( __an_query_str . req query `name` )
+    ( json_obj_set params `name` ( json_str_lit ? > ( string_len label ) 0 ( string_data label ) `analysis` ) )
+    ( string_free label )
+    ( json_obj_set params `votes` ( json_int ( __an_query_int . req query `votes` 1 ) ) )
+    ( json_obj_set params `created` ( json_int ( now_seconds ) ) )
+    ( json_obj_set params `by` ( json_str_lit ( string_data . me sub ) ) )
+    // The job is another process: it learns where the store is from here.
+    ( json_obj_set params `root` ( json_str_lit g_an_root ) )
+    : String wq ( __an_query_str . req query `wait` )
+    : ~ i wait AN_ANALYZE_WAIT_DEFAULT
+    ? > ( string_len wq ) 0 { ?? ( string_to_int wq ) { T x → { = wait x } F _ → {} } } {}
+    ( string_free wq )
+    ? < wait 0 { = wait 0 } {}
+    ? > wait AN_ANALYZE_WAIT_MAX { = wait AN_ANALYZE_WAIT_MAX } {}
+
+    : String id ( analyze_task_create ( string_data . me org ) params . req body )
+    ( json_free params )
+    ? > ( string_len id ) 0 {} {
+        ( string_free id )
+        ( __an_gate_free gate )
+        ^ ( __an_json_err 500 `The task could not be created in the organisation's folder.` )
+    }
+    ? ( analyze_spawn ( string_data . me org ) ( string_data id ) ) {} {
+        : String dir ( analyze_task_dir ( string_data . me org ) ( string_data id ) )
+        ( _ana_mark_crashed ( string_data dir ) -1 `no thread could be started for the job` )
+        ( string_free dir )
+    }
+
+    // Wait for the job, with the service released: the live detectors keep
+    // answering while this call sleeps.
+    : String dir ( analyze_task_dir ( string_data . me org ) ( string_data id ) )
+    : i deadline + ( now_ms ) * wait 1000
+    : ~ b waiting > wait 0
+    ~ waiting {
+        : String state ( analyze_state ( string_data dir ) )
+        ? ( analyze_state_final ( string_data state ) ) { = waiting F } {}
+        ( string_free state )
+        ? & waiting >= ( now_ms ) deadline { = waiting F } {}
+        ? waiting {
+            ( __an_lock_release )
+            ( sleep_ms 100 )
+            ( __an_lock_acquire )
+        } {}
+    }
+    ( string_free dir )
+    : HttpResponse r ( __an_task_response ( string_data . me org ) ( string_data id ) 400 )
+    ( string_free id )
+    ( __an_gate_free gate )
+    ^ r
+}
+
+@ __an_task_id_ok s id → b {
+    : i n ( nurl_str_len id )
+    ? != n 24 { ^ F } {}
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_at id n k )
+        ? | & >= c 48 <= c 57 & >= c 97 <= c 102 {} { ^ F }
+        = k + k 1
+    }
+    ^ T
+}
+
+@ __an_h_tasks HttpRequest req Params p → HttpResponse {
+    : Gate gate ( __an_gate_member req )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ^ rd
+    }
+    : Principal me . gate who
+    : Json o ( json_obj_new )
+    ( json_obj_set o `status` ( json_str_lit `success` ) )
+    ( json_obj_set o `organization` ( json_str_lit ( string_data . me org ) ) )
+    ( json_obj_set o `tasks` ( analyze_task_list ( string_data . me org ) ) )
+    : HttpResponse r ( response_json 200 o )
+    ( json_free o )
+    ( __an_gate_free gate )
+    ^ r
+}
+
+@ __an_h_task HttpRequest req Params p → HttpResponse {
+    : String id ( __an_param_str p `id` )
+    ? ( __an_task_id_ok ( string_data id ) ) {} {
+        ( string_free id )
+        ^ ( __an_json_err 400 `Invalid task id.` )
+    }
+    : Gate gate ( __an_gate_member req )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free id )
+        ^ rd
+    }
+    : Principal me . gate who
+    : HttpResponse r ( __an_task_response ( string_data . me org ) ( string_data id ) 200 )
+    ( __an_gate_free gate )
+    ( string_free id )
+    ^ r
+}
+
+// DELETE /api/org/tasks/:id — the task record; the result file in the
+// folder stays until deleted on its own.
+@ __an_h_task_delete HttpRequest req Params p → HttpResponse {
+    : String id ( __an_param_str p `id` )
+    ? ( __an_task_id_ok ( string_data id ) ) {} {
+        ( string_free id )
+        ^ ( __an_json_err 400 `Invalid task id.` )
+    }
+    : Gate gate ( __an_gate_auth req T )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free id )
+        ^ rd
+    }
+    : Principal me . gate who
+    : ~ HttpResponse r ( __an_json_err 404 `Task not found` )
+    ? ( analyze_task_delete ( string_data . me org ) ( string_data id ) ) {
+        ( http_response_free r )
+        : Json o ( __an_ok_msg `deleted` )
+        ( json_obj_set o `task_id` ( json_str_lit ( string_data id ) ) )
+        = r ( response_json 200 o )
+        ( json_free o )
+    } {}
+    ( __an_gate_free gate )
+    ( string_free id )
     ^ r
 }
 
@@ -2473,6 +3474,7 @@ $ `src/authz.nu`
     ( router_get r `/delete_model/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_delete req p ) } )
     ( router_put r `/api/dynamic/:model/schedule` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_schedule req p ) } )
     ( router_post r `/api/dynamic/:model/finetune` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_finetune req p ) } )
+    ( router_get r `/models/dynamic/:model/calibration` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_calibration req p ) } )
     ( router_post r `/train/autoencoder/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_train_ae req p ) } )
     ( router_post r `/models/dynamic/:model/claim` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_claim req p ) } )
     ( router_post r `/models/dynamic/:model/import` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_import req p ) } )
@@ -2490,6 +3492,15 @@ $ `src/authz.nu`
     ( router_get r `/api/orgs/:org/users` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_org_roster req p ) } )
     ( router_put r `/api/orgs/:org/users/:sub/role` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_org_promote req p ) } )
     ( router_delete r `/api/orgs/:org/users/:sub` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_org_forget req p ) } )
+    // The organisation's folder, and analyses.
+    ( router_get r `/api/org/files` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_org_files req p ) } )
+    ( router_get r `/api/org/files/:name` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_org_file_get req p ) } )
+    ( router_post r `/api/org/files/:name/link` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_org_file_link req p ) } )
+    ( router_delete r `/api/org/files/:name` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_org_file_delete req p ) } )
+    ( router_post r `/api/analyze` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_analyze req p ) } )
+    ( router_get r `/api/org/tasks` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_tasks req p ) } )
+    ( router_get r `/api/org/tasks/:id` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_task req p ) } )
+    ( router_delete r `/api/org/tasks/:id` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_task_delete req p ) } )
     ^ r
 }
 
@@ -2502,7 +3513,38 @@ $ `src/authz.nu`
 @ anomaly_serve s host i port → i {
     : *HttpApp app ( http_app_new )
     ( http_app_use_router app ( anomaly_service_router ) )
+    // One request per connection. The handlers share the store through
+    // the file system with no lock between them, so the server stays
+    // single-threaded — and a single thread that also honours keep-alive
+    // is held by whichever connection it served last, for as long as
+    // that one idles: a browser that opens a second connection for a
+    // parallel fetch waited the whole idle timeout (5 s) for it. Closing
+    // after each response costs a TCP handshake per request and buys a
+    // dashboard whose parallel requests are served in the order they
+    // arrive.
+    ( http_app_max_keepalive app 0 )
+    // A file to analyse is bigger than a point.
+    ( http_app_body_max app 67108864 )
+    // A small pool of workers behind one lock (see g_an_lock): handlers
+    // still run one at a time, but a handler that waits on a job can step
+    // aside while it does, and the others are served meanwhile.
+    : Mutex lock ( mutex_new )
+    : Cell lcell . lock c
+    = g_an_lock # i . lcell ptr
+    ( http_app_workers app 4 )
+    : ( @ ( @ HttpResponse HttpRequest ) ( @ HttpResponse HttpRequest ) ) serial
+    \ ( @ HttpResponse HttpRequest ) inner → ( @ HttpResponse HttpRequest ) {
+        ^ \ HttpRequest req → HttpResponse {
+            ( __an_lock_acquire )
+            : HttpResponse r ( inner req )
+            ( __an_lock_release )
+            ^ r
+        }
+    }
+    ( http_app_use app serial )
     : i rc ( http_app_listen app host port )
     ( http_app_free app )
+    = g_an_lock 0
+    ( mutex_free lock )
     ^ rc
 }
