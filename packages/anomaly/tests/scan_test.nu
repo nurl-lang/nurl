@@ -208,6 +208,8 @@ $ `src/dynamic.nu`
     ( check == ( vec_len [AeContrib] cs ) 3 `contributions come back top-3` )
     : ~ f share_flow -1.0
     : ~ f share_temp -1.0
+    : ~ f flow_value 0.0
+    : ~ f flow_expected 0.0
     : ~ b sorted T
     : ~ f prev 1000000.0
     = k 0
@@ -216,7 +218,11 @@ $ `src/dynamic.nu`
             T c → {
                 ? > . c ac_err prev { = sorted F } {}
                 = prev . c ac_err
-                ? == ( nurl_str_eq ( string_data . c ac_name ) `flow` ) 1 { = share_flow . c ac_share } {}
+                ? == ( nurl_str_eq ( string_data . c ac_name ) `flow` ) 1 {
+                    = share_flow . c ac_share
+                    = flow_value . c ac_value
+                    = flow_expected . c ac_expected
+                } {}
                 ? == ( nurl_str_eq ( string_data . c ac_name ) `temp` ) 1 { = share_temp . c ac_share } {}
             }
             F _ → {}
@@ -225,6 +231,10 @@ $ `src/dynamic.nu`
     }
     ( check sorted `contributions are ordered worst-first` )
     ( check > share_flow share_temp `the feature that broke the relation carries more error` )
+    // The contribution says what the point carried and what the manifold
+    // expected: flow was 5.0 where flow ≈ 2·pres says 3.0.
+    ( check < ( float_abs - flow_value 5.0 ) 0.001 `the contribution carries the feature's raw value` )
+    ( check < ( float_abs - flow_expected 3.0 ) ( float_abs - flow_expected 5.0 ) `the expected value sits nearer the manifold than the point` )
     ( ae_contrib_free cs )
     : ( Vec AeContrib ) cs2 ( model_ae_contrib mo good 3 )
     ( check == ( vec_len [AeContrib] cs2 ) 3 `a clean point still reports shares` )

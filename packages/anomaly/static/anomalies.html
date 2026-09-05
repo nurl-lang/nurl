@@ -40,7 +40,15 @@
   .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
              margin: 0 0 4px; font-weight: 600; }
   .card p.hint { margin: 0 0 14px; color: var(--muted); font-size: 12px; }
-  canvas { width: 100%; display: block; }
+  canvas { width: 100%; display: block; cursor: crosshair; }
+  .cwrap { position: relative; }
+  .cwrap .sel { position: absolute; top: 0; bottom: 0; background: rgba(93,169,255,.16);
+                border-left: 1px solid var(--accent); border-right: 1px solid var(--accent);
+                pointer-events: none; display: none; }
+  .zoombar { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted);
+             margin: 0 0 10px; min-height: 22px; }
+  .zoombar b { color: var(--fg); font-family: var(--mono); font-weight: 600; }
+  .zoombar button { padding: 2px 10px; font-size: 12px; }
   .stat-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
   .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; min-width: 116px; }
   .stat .n { font-size: 21px; font-weight: 700; font-family: var(--mono); font-variant-numeric: tabular-nums; }
@@ -68,10 +76,14 @@
           color: var(--danger); background: rgba(255,107,107,.08); white-space: nowrap; }
   .vtag.ae { border-color: rgba(199,146,234,.5); color: var(--joint); background: rgba(199,146,234,.10); }
   .contrib { display: flex; flex-direction: column; gap: 3px; min-width: 210px; }
-  .contrib .row { display: grid; grid-template-columns: 1fr 40px; gap: 6px; align-items: center; font-size: 11px; }
+  .contrib .row { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; font-size: 11px; }
+  .contrib .val { white-space: nowrap; }
+  .contrib .val .exp { color: var(--muted); }
+  .contrib .z { color: var(--danger); }
   .contrib .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .contrib .track { grid-column: 1 / -1; height: 3px; background: var(--panel2); border-radius: 2px; }
   .contrib .track > i { display: block; height: 100%; background: var(--joint); border-radius: 2px; }
+  .contrib.ext .track > i { background: var(--danger); }
   .empty { text-align: center; padding: 40px; color: var(--muted); }
   .err { color: var(--danger); }
   #tip { position: fixed; pointer-events: none; background: var(--panel2); border: 1px solid var(--border);
@@ -119,15 +131,17 @@
   <div class="card" id="scoreCard" style="display:none">
     <h2>Anomaly score over time</h2>
     <p class="hint">The most severe version's <code>decision_function</code>. Lower is worse; each version has its
-      own margin, so the flag — not the height — is the verdict.</p>
-    <canvas id="scoreChart" height="230"></canvas>
+      own margin, so the flag — not the height — is the verdict. Drag across any chart to zoom into a stretch
+      of points; double-click, or the button, shows the whole range again.</p>
+    <div class="zoombar" id="zoomBar"></div>
+    <div class="cwrap"><canvas id="scoreChart" height="230"></canvas><div class="sel"></div></div>
   </div>
 
   <div class="card" id="ribbonCard" style="display:none">
     <h2>Which version flagged what</h2>
     <p class="hint">One row per version, a mark wherever it flagged. The forests react to a single feature
       being extreme; the autoencoder reacts to the features disagreeing with each other.</p>
-    <canvas id="ribbon" height="150"></canvas>
+    <div class="cwrap"><canvas id="ribbon" height="150"></canvas><div class="sel"></div></div>
     <div class="legend" id="ribbonLegend"></div>
   </div>
 
@@ -136,7 +150,7 @@
       <select id="feature" style="text-transform:none"></select></h2>
     <p class="hint">One feature's own trace, for context. A point can be flagged while this line looks
       perfectly ordinary — that is the whole point of a joint model.</p>
-    <canvas id="featChart" height="230"></canvas>
+    <div class="cwrap"><canvas id="featChart" height="230"></canvas><div class="sel"></div></div>
   </div>
 
   <div class="card" id="listCard" style="display:none">
@@ -165,6 +179,8 @@ let MODELS = {};       // name -> metadata (column_types, autoencoder, …)
 let SCAN = null;       // last /anomalies response
 let OFF = new Set();   // version names the user has switched off
 let CHART = {};        // canvas -> hit-testing state
+let ZOOM = null;       // [first, last] index into the visible points, or null = all
+let FSTATS = {};       // feature -> {mean, std} over the scanned points (for "extreme")
 
 async function api(method, url, body) {
   const opt = { method, headers: {} };
@@ -277,7 +293,10 @@ async function scan(force) {
   if (!name) return;
   const cap = Math.max(10, Math.min(200000, parseInt($("cap").value, 10) || 5000));
   const feat = $("feature").value;
-  const q = ["limit=" + cap, rangeParams(), feat ? "fields=" + enc(feat) : "", force ? "refresh=1" : ""]
+  // Every numeric feature comes back with each point: the feature chart
+  // needs one, the "why" column of a forest-flagged point needs them all.
+  const fields = numericFeatures(name);
+  const q = ["limit=" + cap, rangeParams(), fields.length ? "fields=" + enc(fields.join(",")) : "", force ? "refresh=1" : ""]
     .filter(Boolean).join("&");
 
   $("run").disabled = $("rerun").disabled = true;
@@ -296,6 +315,8 @@ async function scan(force) {
   }
   SCAN = r.data; SCAN.ms = ms;
   OFF = new Set();
+  ZOOM = null;
+  fitStats();
   render();
   const c = SCAN.cache || {};
   $("prog").textContent = SCAN.considered + " of " + SCAN.data_points_count + " stored points in range · " +
@@ -318,9 +339,62 @@ function visiblePoints() {
   });
 }
 
+// Mean and standard deviation of every numeric feature over the scanned
+// points, so a forest-flagged point can say which of its values was the
+// extreme one — the forests give no attribution of their own.
+function fitStats() {
+  FSTATS = {};
+  const acc = {};
+  for (const p of SCAN.points || []) {
+    if (!p.values) continue;
+    for (const k of Object.keys(p.values)) {
+      const v = p.values[k];
+      if (typeof v !== "number" || !isFinite(v)) continue;
+      const a = acc[k] || (acc[k] = { n: 0, s: 0, s2: 0 });
+      a.n++; a.s += v; a.s2 += v * v;
+    }
+  }
+  for (const k of Object.keys(acc)) {
+    const a = acc[k], mean = a.s / a.n, varc = Math.max(0, a.s2 / a.n - mean * mean);
+    FSTATS[k] = { mean, std: Math.sqrt(varc) };
+  }
+}
+
+// Why a point was flagged, as a short list. An autoencoder verdict carries
+// its own attribution — the features that failed to be predictable from
+// the rest, with the value the point had and the one the net expected. A
+// forest verdict has none, so the point's most extreme values (in
+// standard deviations over this scan) stand in.
+function explain(p) {
+  if (p.contributions && p.contributions.length)
+    return { kind: "ae", items: p.contributions.map(c => ({ feature: c.feature, share: c.share, value: c.value, expected: c.expected })) };
+  if (!p.values) return { kind: "none", items: [] };
+  const items = Object.keys(p.values).map(k => {
+    const st = FSTATS[k], v = p.values[k];
+    if (!st || typeof v !== "number") return null;
+    return { feature: k, value: v, z: st.std > 0 ? (v - st.mean) / st.std : 0 };
+  }).filter(Boolean).sort((a, b) => Math.abs(b.z) - Math.abs(a.z)).slice(0, 3);
+  return { kind: "extreme", items };
+}
+function fmtZ(z) { return (z >= 0 ? "+" : "−") + Math.abs(z).toFixed(1) + "σ"; }
+// An expected value printed to the precision of the value it is compared
+// with (one decimal more, at least two): 12.6 ≈ 13.20, not ≈ 13.203627.
+function fmtExp(exp, value) {
+  const vs = fmtNum(value), dot = vs.indexOf(".");
+  const dec = Math.min(4, Math.max(2, (dot < 0 ? 0 : vs.length - dot - 1) + 1));
+  return exp.toFixed(dec);
+}
+
 function render() {
   $("hint").style.display = "none";
-  const pts = visiblePoints();
+  const all = visiblePoints();
+  if (ZOOM && (ZOOM[1] >= all.length || ZOOM[1] - ZOOM[0] < 1)) ZOOM = null;
+  const pts = ZOOM ? all.slice(ZOOM[0], ZOOM[1] + 1) : all;
+  $("zoomBar").innerHTML = ZOOM
+    ? "zoomed to <b>" + pts.length.toLocaleString() + "</b> of " + all.length.toLocaleString() + " points (" +
+      esc(fmtTime(pts[0].timestamp)) + " → " + esc(fmtTime(pts[pts.length - 1].timestamp)) + ") " +
+      '<button onclick="resetZoom()" title="Show every scanned point again (also: double-click a chart)">reset zoom</button>'
+    : '<span class="muted">' + all.length.toLocaleString() + " points · drag across a chart to zoom</span>";
   const flagged = pts.filter(p => p.flagged);
   const aeOnly = pts.filter(p => (p.versions || []).includes(AE) &&
                                  (p.versions || []).every(v => v === AE));
@@ -508,15 +582,54 @@ for (const id of ["scoreChart", "ribbon", "featChart"]) {
       lines.push(st.feat + " = " + fmtNum(p.values[st.feat]));
     if (p.versions && p.versions.length) lines.push("flagged: " + p.versions.join(", "));
     else lines.push("normal");
-    if (p.contributions && p.contributions.length)
-      lines.push("top error: " + p.contributions.map(c => c.feature + " " + Math.round(c.share * 100) + "%").join(", "));
+    const ex = p.flagged ? explain(p) : { kind: "none", items: [] };
+    if (ex.kind === "ae")
+      lines.push("top error: " + ex.items.map(c => c.feature + " " + Math.round(c.share * 100) + "% · " +
+        fmtNum(c.value) + " (expected ≈ " + fmtExp(c.expected, c.value) + ")").join("\n           "));
+    else if (ex.kind === "extreme")
+      lines.push("extreme: " + ex.items.map(c => c.feature + " = " + fmtNum(c.value) + " (" + fmtZ(c.z) + ")").join("\n         "));
     tip.textContent = lines.join("\n");
     tip.style.display = "block";
     tip.style.left = Math.min(window.innerWidth - 320, e.clientX + 12) + "px";
     tip.style.top = (e.clientY + 12) + "px";
   });
   cv.addEventListener("mouseleave", () => $("tip").style.display = "none");
+  cv.addEventListener("dblclick", () => resetZoom());
+  cv.addEventListener("mousedown", (e) => { if (e.button === 0 && CHART[cv.id]) { DRAG = { cv, x0: e.clientX, x1: e.clientX }; e.preventDefault(); } });
 }
+
+// Drag across a chart to zoom: the selection is a translucent band over
+// the canvas, and on release the visible points narrow to the dragged
+// index range (nested zooms compose). A click without a drag is nothing.
+let DRAG = null;
+function indexAtX(cv, clientX) {
+  const st = CHART[cv.id];
+  const rect = cv.getBoundingClientRect();
+  const iw = cv.clientWidth - st.pad.l - st.pad.r;
+  let i = Math.round(((clientX - rect.left - st.pad.l) / iw) * (st.N - 1));
+  return Math.max(0, Math.min(st.N - 1, i));
+}
+window.addEventListener("mousemove", (e) => {
+  if (!DRAG) return;
+  DRAG.x1 = e.clientX;
+  const rect = DRAG.cv.getBoundingClientRect();
+  const sel = DRAG.cv.parentElement.querySelector(".sel");
+  const a = Math.max(0, Math.min(DRAG.x0, DRAG.x1) - rect.left), b = Math.min(rect.width, Math.max(DRAG.x0, DRAG.x1) - rect.left);
+  sel.style.left = a + "px"; sel.style.width = Math.max(0, b - a) + "px"; sel.style.display = "block";
+  $("tip").style.display = "none";
+});
+window.addEventListener("mouseup", () => {
+  if (!DRAG) return;
+  const d = DRAG; DRAG = null;
+  d.cv.parentElement.querySelector(".sel").style.display = "none";
+  if (Math.abs(d.x1 - d.x0) < 4) return;
+  const i0 = indexAtX(d.cv, Math.min(d.x0, d.x1)), i1 = indexAtX(d.cv, Math.max(d.x0, d.x1));
+  if (i1 - i0 < 1) return;
+  const base = ZOOM ? ZOOM[0] : 0;
+  ZOOM = [base + i0, base + i1];
+  render();
+});
+function resetZoom() { if (ZOOM) { ZOOM = null; render(); } }
 window.addEventListener("resize", () => { if (SCAN) render(); });
 
 // ── the table ─────────────────────────────────────────────────────────
@@ -525,19 +638,32 @@ function renderList(flagged) {
   $("listCard").style.display = "block";
   const feat = $("feature").value;
   const withAe = flagged.filter(p => p.hit.includes(AE)).length;
-  $("listHint").innerHTML = flagged.length
-    ? withAe + " of " + flagged.length + " were flagged by the autoencoder; for those, " +
-      "<em>top error</em> names the features that failed hardest to be predictable from the rest."
-    : "";
+  $("listHint").innerHTML = !flagged.length ? ""
+    : withAe
+    ? withAe + " of " + flagged.length + " were flagged by the autoencoder; for those, <em>why</em> " +
+      "names the features that failed hardest to be predictable from the rest, with the value the point " +
+      "carried and the one the net expected. For forest-only flags it lists the point's most extreme values."
+    : "All " + flagged.length + " were flagged by isolation forests, which react to a single feature being " +
+      "extreme on its own; <em>why</em> lists each point's most extreme values, in standard deviations over this scan.";
   if (!flagged.length) { $("list").innerHTML = '<div class="empty">No anomalies in this window 🎉</div>'; return; }
   const rows = flagged.slice(-300).reverse().map(p => {
     const tags = p.hit.map(v =>
       '<span class="vtag ' + (v === AE ? "ae" : "") + '">' + esc(v) + "</span>").join("");
-    const contrib = (p.contributions || []).length
-      ? '<div class="contrib">' + p.contributions.map(c =>
+    const ex = explain(p);
+    const contrib = ex.kind === "ae"
+      ? '<div class="contrib">' + ex.items.map(c =>
           '<div class="row"><span class="nm" title="' + esc(c.feature) + '">' + esc(c.feature) + "</span>" +
+          '<span class="val" title="the value the point carried, and the one the autoencoder expected of it given the other features">' +
+            fmtNum(c.value) + ' <span class="exp">≈ ' + fmtExp(c.expected, c.value) + "</span></span>" +
           "<span>" + Math.round(c.share * 100) + '%</span>' +
           '<span class="track"><i style="width:' + Math.round(c.share * 100) + '%"></i></span></div>').join("") +
+        "</div>"
+      : ex.kind === "extreme"
+      ? '<div class="contrib ext">' + ex.items.map(c =>
+          '<div class="row"><span class="nm" title="' + esc(c.feature) + '">' + esc(c.feature) + "</span>" +
+          '<span class="val">' + fmtNum(c.value) + "</span>" +
+          '<span class="z" title="standard deviations from this scan\'s mean">' + fmtZ(c.z) + "</span>" +
+          '<span class="track"><i style="width:' + Math.min(100, Math.round(Math.abs(c.z) / 4 * 100)) + '%"></i></span></div>').join("") +
         "</div>"
       : '<span class="muted">–</span>';
     const fv = feat && p.values && typeof p.values[feat] === "number" ? fmtNum(p.values[feat]) : "–";
@@ -546,7 +672,7 @@ function renderList(flagged) {
       "</td><td>" + fv + "</td></tr>";
   }).join("");
   $("list").innerHTML = "<table><thead><tr><th>when</th><th>#</th><th>score</th><th>flagged by</th>" +
-    "<th>top error (autoencoder)</th><th>" + esc(feat || "—") + "</th></tr></thead><tbody>" + rows +
+    '<th title="Autoencoder: the features that failed hardest to be predictable from the rest — value carried ≈ value expected — and their share of the error. Forests only: the point\'s most extreme values, in standard deviations over this scan.">why</th><th>' + esc(feat || "—") + "</th></tr></thead><tbody>" + rows +
     "</tbody></table>" +
     (flagged.length > 300 ? '<div class="muted" style="padding:8px 10px">showing the 300 most recent of ' +
       flagged.length + "</div>" : "");

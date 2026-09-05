@@ -877,9 +877,10 @@ $ `src/authz.nu`
     ^ r
 }
 
-// String query parameter (?key=value). Empty String when missing. Values
-// are taken verbatim up to the next '&' — no percent-decoding, because
-// every parameter this route accepts is a name from our own metadata.
+// String query parameter (?key=value), percent-decoded. Empty String
+// when missing. The names this route takes are our own metadata's, but
+// those come from the user's files — an FMI column is "Ilman lämpötila
+// [°C]", and a browser sends that escaped.
 @ __an_query_str String q s key → String {
     : String needle ( string_from key )
     ( string_push_char needle 61 )
@@ -899,7 +900,9 @@ $ `src/authz.nu`
                     = k + k 1
                 }
             }
-            ^ val
+            : String dec ( percent_decode ( string_data val ) )
+            ( string_free val )
+            ^ dec
         }
         F _ → { ^ ( string_new ) }
     }
@@ -1093,6 +1096,8 @@ $ `src/authz.nu`
                                                     ( json_obj_set co `feature` ( json_str_lit ( string_data . c ac_name ) ) )
                                                     ( json_obj_set co `error` ( json_float . c ac_err ) )
                                                     ( json_obj_set co `share` ( json_float . c ac_share ) )
+                                                    ( json_obj_set co `value` ( json_float . c ac_value ) )
+                                                    ( json_obj_set co `expected` ( json_float . c ac_expected ) )
                                                     ( json_arr_push ca co )
                                                 }
                                                 F _ → {}
@@ -2384,9 +2389,7 @@ $ `src/authz.nu`
     : ~ Json spec ( json_obj_new )
     : String tq ( __an_query_str . req query `time` )
     ? > ( string_len tq ) 0 {
-        : String tdec ( percent_decode ( string_data tq ) )
-        : !Json JsonError tj ( json_parse ( string_data tdec ) )
-        ( string_free tdec )
+        : !Json JsonError tj ( json_parse ( string_data tq ) )
         ?? tj {
             T j → { ? ( json_is_obj j ) { ( json_free spec ) = spec j } { ( json_free j ) } }
             F _ → {}

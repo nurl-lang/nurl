@@ -503,9 +503,13 @@ service so existing dashboards and the `modelmanager` UI keep working:
   `0` to omit), `refresh=1` (ignore the cache). Response:
   `data_points_count`, `considered`, `anomalies`, `returned`,
   `model_versions`, `cache: { hits, misses, epoch }` and `points`, each
-  `{ index, timestamp, score, anomaly, versions[], values?, contributions? }`.
-  `considered` and `anomalies` describe the whole window, so a filtered
-  response still says how much it filtered.
+  `{ index, timestamp, score, anomaly, versions[], values?, contributions? }`,
+  a contribution being `{ feature, error, share, value, expected }` — the
+  value the point carried and the autoencoder's reconstruction of it.
+  String parameters are percent-decoded, so a feature named
+  `Ilman lämpötila [°C]` can be asked for. `considered` and `anomalies`
+  describe the whole window, so a filtered response still says how much it
+  filtered.
 - `GET /api/auth/config` — public, because the page that has not signed in is
   the one asking: `enabled`, `issuer`, `client_id`, `audience`, `scope`,
   `redirect_path`, `open_ingest`. Everything in it is in the redirect the

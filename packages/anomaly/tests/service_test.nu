@@ -632,6 +632,33 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     }
     ( check == first_ts 1787961600 `svc: the stored point carries the parsed stamp` )
     ( json_free . dat body )
+    // A feature named with spaces and a degree sign arrives percent-encoded
+    // from a browser; fields= must still find it.
+    : SvcOut anf ( fire r `GET` `/models/dynamic/svc_imp/anomalies`
+    `limit=all&fields=Ilman%20l%C3%A4mp%C3%B6tila%20%5B%C2%B0C%5D,Suhteellinen%20kosteus%20%5B%25%5D` `` )
+    ( check == . anf status 200 `svc: anomalies with encoded fields -> 200` )
+    : ~ b anf_temp F
+    : ~ b anf_rh F
+    ?? ( json_obj_get . anf body `points` ) {
+        T ps → {
+            ?? ( json_arr_get ps 0 ) {
+                T p0 → {
+                    ?? ( json_obj_get p0 `values` ) {
+                        T vv → {
+                            = anf_temp ( json_obj_has vv `Ilman lämpötila [°C]` )
+                            = anf_rh ( json_obj_has vv `Suhteellinen kosteus [%]` )
+                        }
+                        F _ → {}
+                    }
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check anf_temp `svc: fields= is percent-decoded (space, UTF-8)` )
+    ( check anf_rh `svc: fields= is percent-decoded (%25)` )
+    ( json_free . anf body )
     ( check == . ( fire r `DELETE` `/delete_model/svc_imp` `` `` ) status 200 `svc: delete imported model` )
 
     // The same rows without any time column: the model is born on the

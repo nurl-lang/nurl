@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.1
+
+- **Contributors say what the value was.** An autoencoder contribution in
+  the anomalies route carries `value` and `expected` — the value the point
+  had and the one the net reconstructed from the other features. The
+  anomalies page shows them next to the share (`12.6 ≈ 13.20 · 60%`); for a
+  point only the forests flagged, which have no attribution of their own,
+  it lists the point's most extreme values in standard deviations over the
+  scan.
+- **Zoom by dragging.** Drag across any chart on the anomalies page to zoom
+  into that stretch of points — the counters and the flagged list follow;
+  double-click or *reset zoom* shows the whole range again.
+- Fixed: string query parameters (`fields=`, `versions=`, `only=` …) were
+  taken verbatim, so a feature name with a space or a non-ASCII character
+  — every FMI column — could not be asked for from a browser, and the
+  feature trace on the anomalies page stayed empty for such models.
+
 ## 0.11.0
 
 - **The importer finds the time.** `POST /models/dynamic/<m>/import` reads

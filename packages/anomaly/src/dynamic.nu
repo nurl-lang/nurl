@@ -1847,11 +1847,15 @@ $ `src/store.nu`
 
 // ── Why a point is a relational anomaly ───────────────────────────────
 
-// One feature's share of an autoencoder reconstruction error.
+// One feature's share of an autoencoder reconstruction error, with the
+// value the point carried and the one the autoencoder expected of it
+// given the other features (raw units — the MinMax undone).
 : AeContrib {
     String ac_name
     f ac_err
     f ac_share
+    f ac_value
+    f ac_expected
 }
 
 @ ae_contrib_free ( Vec AeContrib ) xs → v {
@@ -1873,7 +1877,7 @@ $ `src/store.nu`
         T p → {
             : ( Vec f ) araw ( anomaly_project p . cae feats )
             : ( Vec f ) errs ( ae_feature_errors cae araw )
-            ( vec_free [f] araw )
+            : ( Vec f ) recon ( ae_reconstruct cae araw )
             ( enc_free p )
             : i d ( vec_len [f] errs )
             : ~ f tot 0.0
@@ -1914,12 +1918,16 @@ $ `src/store.nu`
                         T x → { ( string_free nm ) = nm ( string_from ( string_data x ) ) }
                         F _ → {}
                     }
-                    ( vec_push [AeContrib] out @ AeContrib { nm bestv share } )
+                    : f val ( _mlp_fget araw best )
+                    : f exp ( _mlp_fget recon best )
+                    ( vec_push [AeContrib] out @ AeContrib { nm bestv share val exp } )
                     = picked + picked 1
                 }
             }
             ( vec_free [b] taken )
             ( vec_free [f] errs )
+            ( vec_free [f] recon )
+            ( vec_free [f] araw )
         }
         F e → { ( string_free e ) }
     }

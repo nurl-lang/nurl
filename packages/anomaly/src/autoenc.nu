@@ -299,6 +299,30 @@ $ `deps/mlp/src/mlp.nu`
     ^ out
 }
 
+// The autoencoder's reconstruction of one RAW projected point, back in
+// raw units (the MinMax undone), in the AE's feature order. For a flagged
+// point this is what each feature "should" have been given the others —
+// the value the broken relationship expected. A feature whose training
+// range was a single value reconstructs to that value.
+@ ae_reconstruct AeModel ae ( Vec f ) raw_point → ( Vec f ) {
+    : MinMax amm . ae mm
+    : i d . amm n_cols
+    : ( Vec f ) x ( vec_clone [f] raw_point )
+    ( minmax_apply amm x 1 )
+    : Mlp anet . ae net
+    : ( Vec f ) y ( mlp_predict anet x )
+    : ( Vec f ) out ( vec_with_cap [f] d )
+    : ~ i k 0
+    ~ < k d {
+        : f lo ( _mlp_fget . amm lo k )
+        : f hi ( _mlp_fget . amm hi k )
+        ( vec_push [f] out + lo * ( _mlp_fget y k ) - hi lo )
+        = k + k 1
+    }
+    ( vec_free [f] x ) ( vec_free [f] y )
+    ^ out
+}
+
 // decision_function orientation: threshold − mse (negative ⇒ anomaly).
 @ ae_decision AeModel ae ( Vec f ) raw_point → f {
     ^ - . ae threshold ( ae_mse ae raw_point )

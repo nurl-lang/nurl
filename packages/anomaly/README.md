@@ -183,10 +183,14 @@ to be predictable from all the others. So the top contributors name the
 $ curl 'localhost:8811/models/dynamic/boiler/anomalies?last=86400&only=anomalies'
 {"points":[{"index":6771,"timestamp":1788496324,"score":-0.121,"anomaly":true,
   "versions":["weekly","autoencoder"],
-  "contributions":[{"feature":"flow","share":0.41},
-                   {"feature":"pressure","share":0.19},
-                   {"feature":"hour_sin","share":0.14}]}], ...}
+  "contributions":[{"feature":"flow","share":0.41,"value":5.0,"expected":3.02},
+                   {"feature":"pressure","share":0.19,"value":2.1,"expected":2.31},
+                   {"feature":"hour_sin","share":0.14,"value":0.5,"expected":0.44}]}], ...}
 ```
+
+Each contributor carries the value the point had and the one the autoencoder
+reconstructed for it from the other features — the sentence "flow was 5.0
+where 3.0 was expected" is in the response, not left for the reader to infer.
 
 Contrast that with the reference's `feature_importance`, which is a per-feature
 z-score from the column mean: it can only ever point at the value that was
@@ -756,7 +760,7 @@ build step — plain HTML/CSS/JS that talks to the routes above):
 | `/modeltrainer.html` | import a CSV/JSON/JSONL file of history — inspect first: the page shows where it found the time (a column, year/month/day parts, or none) and lets you confirm or change it; feed points (`/detect`) one at a time or in bulk; force-train |
 | `/visualize.html` | plot any numeric feature of a model's stored points over time |
 | `/admin.html` | the organization: users and their roles, API keys, model ownership |
-| `/anomalies.html` | scan stored history over a time range: score timeline, a per-version ribbon showing *what* flagged *when*, any feature's own trace for context, and a table naming the features whose relationship broke. Filter chips isolate the joint (autoencoder) anomalies from the per-feature (forest) ones |
+| `/anomalies.html` | scan stored history over a time range: score timeline, a per-version ribbon showing *what* flagged *when*, any feature's own trace for context, and a table naming the features whose relationship broke — with the value each had and the one the autoencoder expected; forest-only flags list the point's most extreme values in σ. Drag across a chart to zoom into a stretch of points, double-click or *reset zoom* to see the whole range. Filter chips isolate the joint (autoencoder) anomalies from the per-feature (forest) ones |
 
 The HTML lives in `static/` next to the package. `serve` locates it via, in
 order: `--webroot DIR`, `$ANOMALY_WEBROOT`, `<exe-dir>/static`,
