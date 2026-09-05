@@ -108,6 +108,29 @@
     <div id="verdict"></div>
   </div>
 
+  <!-- Import a file of history -->
+  <div class="card">
+    <h2>Import a file <span class="sub">CSV, JSON or JSONL → one model</span></h2>
+    <p class="hint">A file that already holds the history. Points keep the <code>timestamp</code> the file
+      gives them and are merged into the model in time order — history that all landed at "now" would make
+      every time window see one instant. The model belongs to your organization, exactly like one grown
+      from a stream.</p>
+    <label class="fl">Target model</label>
+    <input type="text" id="impModel" list="models" placeholder="model name (created if new)" autocomplete="off">
+    <div class="btns" style="margin-top:10px">
+      <input type="file" id="impFile" accept=".csv,.json,.jsonl,.ndjson,.txt,text/csv,application/json">
+      <select id="impFormat">
+        <option value="auto">detect the format</option>
+        <option value="csv">CSV</option>
+        <option value="json">JSON</option>
+        <option value="jsonl">JSONL</option>
+      </select>
+      <button class="primary" id="btnImport" onclick="doImport()">Import</button>
+      <span class="muted" id="impInfo" style="align-self:center"></span>
+    </div>
+    <pre class="log" id="impLog" style="display:none"></pre>
+  </div>
+
   <!-- Bulk feed -->
   <div class="card">
     <h2>Bulk feed <span class="sub">one JSON object per line → POST /detect</span></h2>
@@ -129,6 +152,7 @@
 
 <div id="toasts"></div>
 
+<script src="/auth.js"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -150,6 +174,64 @@ async function api(method, url, body) {
   const r = await fetch(url, opt);
   let data = null; try { data = await r.json(); } catch (e) {}
   return { ok: r.ok, status: r.status, data };
+}
+
+// ── Importing a file ──────────────────────────────────────────────────
+//
+// The body is the file verbatim: a file is bytes, and this is the shortest
+// path from a FileReader to the ring. Wrapping it in a form encoding would
+// only mean decoding it again on the other side.
+async function doImport() {
+  const name = $("impModel").value.trim();
+  const file = $("impFile").files[0];
+  const log = $("impLog");
+  if (!name) { toast("Name the model first", "err"); return; }
+  if (!file) { toast("Choose a file", "err"); return; }
+
+  const btn = $("btnImport");
+  btn.disabled = true;
+  $("impInfo").textContent = "reading " + file.name + "…";
+  try {
+    const text = await file.text();
+    $("impInfo").textContent = "importing " + fmtBytes(text.length) + "…";
+    const r = await fetch("/models/dynamic/" + encodeURIComponent(name) +
+                          "/import?format=" + encodeURIComponent($("impFormat").value),
+                          { method: "POST", headers: { "Content-Type": "text/plain" }, body: text });
+    let d = null; try { d = await r.json(); } catch (e) {}
+    log.style.display = "block";
+    if (!r.ok) {
+      log.textContent = (d && d.message) || ("import failed (HTTP " + r.status + ")");
+      toast("Import failed", "err");
+      $("impInfo").textContent = "";
+    } else {
+      const lines = [
+        "read as   : " + d.format,
+        "imported  : " + d.imported + " point(s)",
+        "skipped   : " + d.skipped,
+        "stored    : " + d.data_points + " point(s) in the ring",
+        "trained   : " + (d.trained ? "yes" : "not yet — needs more history"),
+      ];
+      // The rows the file could not give up, and the rows the model could
+      // not take. A caller fixing a file wants to see which line.
+      if (d.notes && d.notes.length) lines.push("", "skipped rows:", ...d.notes.map(n => "  " + n));
+      log.textContent = lines.join("\n");
+      toast("Imported " + d.imported + " point(s)", "ok");
+      $("impInfo").textContent = "";
+      refreshModels();
+    }
+  } catch (e) {
+    log.style.display = "block";
+    log.textContent = String(e && e.message || e);
+    toast("Import failed", "err");
+    $("impInfo").textContent = "";
+  }
+  btn.disabled = false;
+}
+
+function fmtBytes(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " kB";
+  return (n / 1048576).toFixed(1) + " MB";
 }
 
 function addField(k, v) {
@@ -213,7 +295,28 @@ async function send(ingest) {
     const url = (ingest ? "/detect/" : "/detect_only/") + enc(name);
     const { ok, status, data } = await api("POST", url, rec);
     renderVerdict($("verdict"), data, status);
-    if (ok || status === 202) refreshModels();
+    if (ok || status === 202) document.addEventListener("DOMContentLoaded", () => {
+  const f = document.getElementById("impFile");
+  if (f) f.addEventListener("change", () => {
+    const m = document.getElementById("impModel");
+    if (m && !m.value.trim() && f.files[0]) {
+      // A sensible default, sanitized to what a model name may hold.
+      m.value = f.files[0].name.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_]/g, "_");
+    }
+  });
+});
+
+Auth.ready().then(() => {
+  // Feeding points creates and changes models, so this whole page is an
+  // administrator's.
+  Auth.viewerNotice("Feeding points is for administrators.");
+  if (!Auth.canWrite()) {
+    document.querySelectorAll("main button, main input, main textarea, main select")
+      .forEach(el => { el.disabled = true; });
+    return;
+  }
+  return refreshModels();
+});
   } catch (e) { toast(e.message, "err"); }
   finally { btn.disabled = false; btn.textContent = orig; }
 }

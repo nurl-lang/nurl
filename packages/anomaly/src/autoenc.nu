@@ -212,6 +212,77 @@ $ `deps/mlp/src/mlp.nu`
     ^ / se # f d
 }
 
+// ── The decision margin, and why it is RELATIVE ───────────────────────
+//
+// Every forest version's `decision_margin` is an absolute offset on a
+// decision_function whose scale is fixed by construction: sklearn's
+// convention puts normal points near 0 and anomalies below it, so 0.06
+// means the same thing for every model. The autoencoder's score is
+// `threshold − mse`, and MSE has no such fixed scale — it is the mean
+// squared error of MinMax-scaled features, which lands wherever the data
+// puts it (1e-3 for one model, 2e-4 for another).
+//
+// The Python reference (model_training.py) nevertheless applies its shared
+// absolute-margin rule to the autoencoder too: the branch computes
+// `is_anomaly = mse > reconstruction_threshold`, and thirty lines later,
+// at the same indentation as the branch itself, `is_anomaly = bool(score
+// <= -decision_margin)` overwrites it unconditionally — with the
+// autoencoder default margin of 0.05. Against a threshold of ~5e-4 that
+// demands a reconstruction error a HUNDRED times the p95 of the training
+// errors, which mutes the one version that models the joint distribution.
+// The reference ships that version disabled by default, so the muting was
+// never noticed.
+//
+// We keep the tunable knob and put it on the only scale that travels:
+// `decision_margin` for the autoencoder is a FRACTION of the model's own
+// reconstruction threshold. The stored default 0.05 now reads "flag at 5 %
+// above the p95 training error" — the documented intent — instead of
+// "flag at p95 + 0.05", and the same number means the same thing on every
+// model. See SPEC §5.5.
+: f ANOM_AE_MARGIN 0.05
+
+// The effective ABSOLUTE margin for `rel`, so the verdict rule stays the
+// one every version shares: `decision_function <= -margin ⇒ anomaly`.
+// Substituting `ae_decision` gives `mse >= threshold * (1 + rel)`.
+@ anom_ae_margin AeModel ae f rel → f {
+    : ~ f r rel
+    ? < r 0.0 { = r 0.0 } {}
+    ^ * . ae threshold r
+}
+
+// Turn an effective absolute margin back into the relative one stored in
+// the metadata (the inverse of anom_ae_margin; 0 when untrained).
+@ anom_ae_rel_margin AeModel ae f abs_margin → f {
+    ? > . ae threshold 0.0 {} { ^ 0.0 }
+    ^ / abs_margin . ae threshold
+}
+
+// Per-feature squared reconstruction error of one RAW projected point, in
+// the AE's own feature order (length = ae.mm.n_cols). This is the
+// attribution the forests cannot give: the autoencoder's error is the
+// amount by which each feature failed to be predictable from the others,
+// so the largest entries name the RELATIONSHIP that broke, not merely the
+// value that was extreme. `ae_mse` is the mean of this vector; it keeps
+// its own loop because it is on the per-point scoring path and this one
+// allocates.
+@ ae_feature_errors AeModel ae ( Vec f ) raw_point → ( Vec f ) {
+    : MinMax amm . ae mm
+    : i d . amm n_cols
+    : ( Vec f ) x ( vec_clone [f] raw_point )
+    ( minmax_apply amm x 1 )
+    : Mlp anet . ae net
+    : ( Vec f ) y ( mlp_predict anet x )
+    : ( Vec f ) out ( vec_with_cap [f] d )
+    : ~ i k 0
+    ~ < k d {
+        : f e - ( _mlp_fget y k ) ( _mlp_fget x k )
+        ( vec_push [f] out * e e )
+        = k + k 1
+    }
+    ( vec_free [f] x ) ( vec_free [f] y )
+    ^ out
+}
+
 // decision_function orientation: threshold − mse (negative ⇒ anomaly).
 @ ae_decision AeModel ae ( Vec f ) raw_point → f {
     ^ - . ae threshold ( ae_mse ae raw_point )

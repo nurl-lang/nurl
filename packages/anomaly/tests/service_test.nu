@@ -368,6 +368,117 @@ $ `src/service.nu`
     ( json_free . batm body )
     ( string_free csvpath )
 
+    // ── GET /models/dynamic/<m>/anomalies ─────────────────────────────
+    //
+    // The scan route: one model load for the whole ring, epoch-stamped
+    // cache underneath, and the filters the dashboard drives.
+    : SvcOut an404 ( fire r `GET` `/models/dynamic/nosuch/anomalies` `` `` )
+    ( check == . an404 status 404 `svc: anomalies missing model -> 404` )
+    ( json_free . an404 body )
+    : SvcOut anbad ( fire r `GET` `/models/dynamic/bad-name/anomalies` `` `` )
+    ( check == . anbad status 400 `svc: anomalies bad name -> 400` )
+    ( json_free . anbad body )
+
+    : SvcOut an1 ( fire r `GET` `/models/dynamic/svc/anomalies` `limit=all` `` )
+    ( check == . an1 status 200 `svc: anomalies -> 200` )
+    : i an1_total ( jint_of . an1 body `data_points_count` )
+    : i an1_ret ( jint_of . an1 body `returned` )
+    ( check == an1_ret an1_total `svc: anomalies returns every stored point` )
+    : ~ i an1_hits -1
+    : ~ i an1_miss -1
+    : ~ i an1_epoch -1
+    ?? ( json_obj_get . an1 body `cache` ) {
+        T c → {
+            = an1_hits ( jint_of c `hits` )
+            = an1_miss ( jint_of c `misses` )
+            = an1_epoch ( jint_of c `epoch` )
+        }
+        F _ → {}
+    }
+    ( check == an1_hits 0 `svc: the first scan is a cold one` )
+    ( check == an1_miss an1_total `svc: the cold scan computes every verdict` )
+    ( check > an1_epoch 0 `svc: the scan reports its epoch` )
+    // model_versions drives the dashboard's filter chips, so it must be
+    // there even before anything has been flagged.
+    : ~ b an1_vers F
+    ?? ( json_obj_get . an1 body `model_versions` ) {
+        T vs → { = an1_vers > ( json_arr_len vs ) 0 }
+        F _ → {}
+    }
+    ( check an1_vers `svc: anomalies lists the scoring versions` )
+    // Every returned point carries the fields the charts read.
+    : ~ b an1_shape F
+    ?? ( json_obj_get . an1 body `points` ) {
+        T ps → {
+            ?? ( json_arr_get ps 0 ) {
+                T p0 → {
+                    = an1_shape & & ( json_obj_has p0 `index` ) ( json_obj_has p0 `timestamp` )
+                    & ( json_obj_has p0 `score` ) ( json_obj_has p0 `anomaly` )
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check an1_shape `svc: a scanned point carries index/timestamp/score/anomaly` )
+    ( json_free . an1 body )
+
+    // Second call: same answer, nothing recomputed.
+    : SvcOut an2 ( fire r `GET` `/models/dynamic/svc/anomalies` `limit=all` `` )
+    : ~ i an2_hits -1
+    : ~ i an2_miss -1
+    ?? ( json_obj_get . an2 body `cache` ) {
+        T c → { = an2_hits ( jint_of c `hits` ) = an2_miss ( jint_of c `misses` ) }
+        F _ → {}
+    }
+    ( check == an2_hits an1_total `svc: the second scan is served from cache` )
+    ( check == an2_miss 0 `svc: the cached scan recomputes nothing` )
+    ( json_free . an2 body )
+
+    // limit takes the newest rows; fields adds the values the chart needs.
+    : SvcOut an3 ( fire r `GET` `/models/dynamic/svc/anomalies` `limit=3&fields=temp` `` )
+    ( check == ( jint_of . an3 body `returned` ) 3 `svc: anomalies honours limit` )
+    ( check == ( jint_of . an3 body `considered` ) an1_total `svc: considered spans the window` )
+    : ~ b an3_vals F
+    ?? ( json_obj_get . an3 body `points` ) {
+        T ps → {
+            ?? ( json_arr_get ps 0 ) {
+                T p0 → {
+                    ?? ( json_obj_get p0 `values` ) {
+                        T vv → { = an3_vals ( json_obj_has vv `temp` ) }
+                        F _ → {}
+                    }
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check an3_vals `svc: fields= attaches the requested feature values` )
+    ( json_free . an3 body )
+
+    // A time window nothing falls into is empty, not an error.
+    : SvcOut an4 ( fire r `GET` `/models/dynamic/svc/anomalies` `from=4000000000` `` )
+    ( check == . an4 status 200 `svc: an empty time window -> 200` )
+    ( check == ( jint_of . an4 body `returned` ) 0 `svc: an empty time window returns nothing` )
+    ( json_free . an4 body )
+
+    // A margin edit changes verdicts, so it must invalidate the cache.
+    : SvcOut anpatch ( fire r `PUT` `/models/dynamic/svc/metadata` ``
+    `{"versions": {"weekly": {"decision_margin": 0.011}}}` )
+    ( check == . anpatch status 200 `svc: margin patch -> 200` )
+    ( json_free . anpatch body )
+    : SvcOut an5 ( fire r `GET` `/models/dynamic/svc/anomalies` `limit=all` `` )
+    : ~ i an5_miss -1
+    : ~ i an5_epoch -1
+    ?? ( json_obj_get . an5 body `cache` ) {
+        T c → { = an5_miss ( jint_of c `misses` ) = an5_epoch ( jint_of c `epoch` ) }
+        F _ → {}
+    }
+    ( check == an5_miss an1_total `svc: a margin edit invalidates every cached verdict` )
+    ( check > an5_epoch an1_epoch `svc: the epoch advanced` )
+    ( json_free . an5 body )
+
     // Reset → not trained → detect_only 400.
     : SvcOut rs ( fire r `POST` `/models/dynamic/svc/reset` `` `{}` )
     ( check == . rs status 200 `svc: reset -> 200` )

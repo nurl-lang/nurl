@@ -8,6 +8,8 @@
 //                              (raw records — not projected vectors — so a
 //                              retrain can pick up new categories/columns)
 //     version_<v>.forest       one binary forest blob per trained version
+//     autoencoder.json         the trained autoencoder, if any
+//     scores.bin               cached per-point verdicts (epoch-stamped)
 //
 // The forest blob ("ANOMFOR1") is a little-endian dump of the iforest node
 // arena plus the version's decision offset/margin. Loading re-validates
@@ -450,6 +452,232 @@ $ `deps/iforest/src/iforest.nu`
     ?? r { T _ → {} F _ → { = ok F } }
     ( string_free d )
     ^ ok
+}
+
+// ── Scored-verdict cache (scores.bin) ─────────────────────────────────
+//
+// Re-scoring a stored ring is pure recomputation: the same point against
+// the same forests yields the same verdict every time. The dashboard's
+// anomaly scan used to pay for that recomputation on every visit, one HTTP
+// round trip AND one full model load per point, which is what made a
+// 5000-point scan a minutes-long progress bar.
+//
+// The cache is a ring-aligned array of verdicts stamped with the model's
+// `score_epoch` (prep.nu). Anything that can change a verdict — a retrain,
+// a new autoencoder, a margin edit, a version toggled, a reset — bumps the
+// epoch, and the whole cache is stale by construction; there is no
+// per-entry invalidation rule to get wrong.
+//
+// Alignment survives ring eviction because rows are keyed on the LIFETIME
+// point counter, not the ring index: `base_seen` is the lifetime index of
+// row 0, so a ring row `j` of a ring of length L at counter S sits at cache
+// index `S - L + j - base_seen`. Rows outside [0, nrows) are simply misses.
+//
+//   "ANOMSCR1" | u64 epoch | u64 base_seen
+//              | u64 nver  | nver × (u64 len, bytes)
+//              | u64 nrows | nrows × (f64 score, u64 state, u64 present, u64 flagged)
+//
+// `state` is 0 for a row never scored under this epoch, 1 for a scored
+// verdict and 2 for "the model was not ready for this point". `present` and
+// `flagged` are bitmasks over `vnames`, so a version that produced no
+// verdict (a timevector window longer than the ring prefix) stays
+// distinguishable from one that produced a clean verdict.
+: i ANOM_SC_UNSCORED 0
+: i ANOM_SC_SCORED 1
+: i ANOM_SC_NOT_READY 2
+
+// Refuse a cache claiming more rows/versions than a model could hold.
+: i ANOM_SC_MAX_ROWS 100000000
+: i ANOM_SC_MAX_VERS 64
+
+: ScoreCache {
+    i epoch
+    i base_seen
+    ( Vec String ) vnames
+    ( Vec i ) state
+    ( Vec f ) score
+    ( Vec i ) present
+    ( Vec i ) flagged
+}
+
+@ scorecache_new i epoch i base_seen → ScoreCache {
+    ^ @ ScoreCache {
+        epoch base_seen ( vec_new [String] )
+        ( vec_new [i] ) ( vec_new [f] ) ( vec_new [i] ) ( vec_new [i] )
+    }
+}
+
+@ scorecache_free ScoreCache c → v {
+    ( vec_free_with [String] . c vnames \ String x → v { ( string_free x ) } )
+    ( vec_free [i] . c state )
+    ( vec_free [f] . c score )
+    ( vec_free [i] . c present )
+    ( vec_free [i] . c flagged )
+}
+
+@ scorecache_rows ScoreCache c → i {
+    ^ ( vec_len [i] . c state )
+}
+
+// Grow to `n` rows, every new row unscored.
+@ scorecache_resize ScoreCache c i n → v {
+    ~ < ( vec_len [i] . c state ) n {
+        ( vec_push [i] . c state ANOM_SC_UNSCORED )
+        ( vec_push [f] . c score 0.0 )
+        ( vec_push [i] . c present 0 )
+        ( vec_push [i] . c flagged 0 )
+    }
+}
+
+@ scorecache_set ScoreCache c i at i state f score i present i flagged → v {
+    : b _a ( vec_set [i] . c state at state )
+    : b _b ( vec_set [f] . c score at score )
+    : b _c ( vec_set [i] . c present at present )
+    : b _d ( vec_set [i] . c flagged at flagged )
+}
+
+// Do the cached version names still match the live ones, in order?
+@ scorecache_vnames_match ScoreCache c ( Vec String ) live → b {
+    : i n ( vec_len [String] live )
+    ? == n ( vec_len [String] . c vnames ) {} { ^ F }
+    : ~ i k 0
+    ~ < k n {
+        : ~ b same F
+        ?? ( vec_get [String] live k ) {
+            T a → {
+                ?? ( vec_get [String] . c vnames k ) {
+                    T b2 → { = same == ( nurl_str_eq ( string_data a ) ( string_data b2 ) ) 1 }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+        ? same {} { ^ F }
+        = k + k 1
+    }
+    ^ T
+}
+
+@ __an_sc_file Store st s name → String {
+    ^ ( __an_model_file st name `scores.bin` )
+}
+
+@ store_save_scores Store st s name ScoreCache c → b {
+    : String d ( __an_model_dir st name )
+    : !v IoErr mk ( dir_create_all ( string_data d ) )
+    ( string_free d )
+    : ~ b ok T
+    ?? mk { T _ → {} F _ → { = ok F } }
+    ? ok {} { ^ F }
+
+    : ( Vec u ) out ( vec_new [u] )
+    ( bytes_extend_str out `ANOMSCR1` )
+    ( bytes_push_u64_le out # u64 . c epoch )
+    ( bytes_push_u64_le out # u64 . c base_seen )
+    : i nv ( vec_len [String] . c vnames )
+    ( bytes_push_u64_le out # u64 nv )
+    : ~ i k 0
+    ~ < k nv {
+        ?? ( vec_get [String] . c vnames k ) {
+            T nm → {
+                ( bytes_push_u64_le out # u64 ( string_len nm ) )
+                ( bytes_extend_str out ( string_data nm ) )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    : i nr ( vec_len [i] . c state )
+    ( bytes_push_u64_le out # u64 nr )
+    : *i stp ( vec_data [i] . c state )
+    : *f scp ( vec_data [f] . c score )
+    : *i prp ( vec_data [i] . c present )
+    : *i flp ( vec_data [i] . c flagged )
+    = k 0
+    ~ < k nr {
+        ( bytes_push_f64_le out . scp k )
+        ( bytes_push_u64_le out # u64 . stp k )
+        ( bytes_push_u64_le out # u64 . prp k )
+        ( bytes_push_u64_le out # u64 . flp k )
+        = k + k 1
+    }
+    : String p ( __an_sc_file st name )
+    = ok ( __an_write_atomic ( string_data p ) out )
+    ( string_free p )
+    ( vec_free [u] out )
+    ^ ok
+}
+
+// Load the cache; None when absent, truncated or structurally impossible.
+// A rejected cache costs a rescan, never a wrong verdict.
+@ store_load_scores Store st s name → ?ScoreCache {
+    : String p ( __an_sc_file st name )
+    : !( Vec u ) IoErr r ( read_file_bytes ( string_data p ) )
+    ( string_free p )
+    ?? r {
+        T buf → {
+            : ( Vec u ) magic ( bytes_from_str `ANOMSCR1` )
+            : b magic_ok ( bytes_starts_with buf magic )
+            ( vec_free [u] magic )
+            ? magic_ok {} {
+                ( vec_free [u] buf )
+                ^ @ ?ScoreCache { F }
+            }
+            : *BlobRd rd ( __an_rd_new buf )
+            = . rd pos 8
+            : i epoch ( __an_rd_u64 rd )
+            : i base ( __an_rd_u64 rd )
+            : i nv ( __an_rd_u64 rd )
+            ? || < nv 0 > nv ANOM_SC_MAX_VERS { = . rd ok F } {}
+            : ScoreCache c ( scorecache_new epoch base )
+            : ~ i k 0
+            ~ & . rd ok < k nv {
+                : i nlen ( __an_rd_u64 rd )
+                ? || < nlen 0 > nlen ANOM_BLOB_MAX_NAME { = . rd ok F } {
+                    : i n ( vec_len [u] buf )
+                    ? > + . rd pos nlen n { = . rd ok F } {
+                        : *u bp ( vec_data [u] buf )
+                        : i base2 + # i bp . rd pos
+                        ( vec_push [String] . c vnames ( string_from_bytes # *u base2 nlen ) )
+                        = . rd pos + . rd pos nlen
+                    }
+                }
+                = k + k 1
+            }
+            : i nr ( __an_rd_u64 rd )
+            ? || < nr 0 > nr ANOM_SC_MAX_ROWS { = . rd ok F } {}
+            : ~ i safe nr
+            ? . rd ok {} { = safe 0 }
+            ( vec_reserve [i] . c state safe )
+            ( vec_reserve [f] . c score safe )
+            ( vec_reserve [i] . c present safe )
+            ( vec_reserve [i] . c flagged safe )
+            = k 0
+            ~ & . rd ok < k safe {
+                ( vec_push [f] . c score ( __an_rd_f64 rd ) )
+                ( vec_push [i] . c state ( __an_rd_u64 rd ) )
+                ( vec_push [i] . c present ( __an_rd_u64 rd ) )
+                ( vec_push [i] . c flagged ( __an_rd_u64 rd ) )
+                = k + k 1
+            }
+            // Trailing garbage after a well-formed body is corruption too.
+            ? == . rd pos ( vec_len [u] buf ) {} { = . rd ok F }
+            : b good . rd ok
+            ( nurl_free rd )
+            ( vec_free [u] buf )
+            ? good { ^ @ ?ScoreCache { T c } } {}
+            ( scorecache_free c )
+            ^ @ ?ScoreCache { F }
+        }
+        F _ → { ^ @ ?ScoreCache { F } }
+    }
+}
+
+@ store_delete_scores Store st s name → v {
+    : String p ( __an_sc_file st name )
+    : !v IoErr r ( file_delete ( string_data p ) )
+    ?? r { T _ → {} F _ → {} }
+    ( string_free p )
 }
 
 // ── Raw point log (data.jsonl) ────────────────────────────────────────

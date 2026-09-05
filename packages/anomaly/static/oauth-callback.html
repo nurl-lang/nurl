@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signing in · anomaly</title>
+<style>
+  :root { --bg:#0e1116; --panel:#161b22; --border:#2a3242; --fg:#e6edf3; --muted:#8b98a9;
+          --accent:#4c9aff; --accent2:#6ee7b7; --danger:#ff6b6b;
+          --mono: ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+          --sans: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--fg); font-family:var(--sans);
+         display:flex; align-items:center; justify-content:center; }
+  .box { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+         padding:32px 36px; max-width:460px; text-align:center; }
+  h1 { font-size:16px; margin:0 0 10px; }
+  .brand { color:var(--accent2); font-family:var(--mono); }
+  p { color:var(--muted); font-size:13px; line-height:1.55; margin:0; }
+  .err { color:var(--danger); font-family:var(--mono); font-size:12px; margin-top:14px;
+         word-break:break-word; }
+  a { color:var(--accent); }
+  .spin { width:18px; height:18px; margin:0 auto 16px; border-radius:50%;
+          border:2px solid var(--border); border-top-color:var(--accent);
+          animation:sp .8s linear infinite; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="spin" id="spin"></div>
+  <h1><span class="brand">anomaly</span> · signing you in</h1>
+  <p id="msg">Exchanging the authorization code…</p>
+  <div class="err" id="err"></div>
+</div>
+<script>
+// Loaded before auth.js: this page is the redirect target, so it must not
+// run the ordinary boot — see the note beside the flag in auth.js.
+window.__AUTH_CALLBACK__ = true;
+</script>
+<script src="/auth.js"></script>
+<script>
+"use strict";
+// The redirect lands here. Everything this page does is finish the code
+// exchange and send the browser back where it came from; it is deliberately
+// the only page that touches the token endpoint.
+(async () => {
+  try {
+    const back = await Auth.completeLogin();
+    location.replace(back && back.startsWith("/") ? back : "/");
+  } catch (e) {
+    document.getElementById("spin").style.display = "none";
+    document.getElementById("msg").textContent = "Sign-in did not complete.";
+    document.getElementById("err").textContent = e.message || String(e);
+    const p = document.createElement("p");
+    p.style.marginTop = "14px";
+    p.innerHTML = '<a href="/">Back to the dashboard</a>';
+    document.querySelector(".box").appendChild(p);
+  }
+})();
+</script>
+</body>
+</html>

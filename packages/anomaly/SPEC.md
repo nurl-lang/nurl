@@ -182,6 +182,17 @@ encodings aligned across retrains.
                            # (raw — not projected vectors — so a retrain can
                            # pick up new categories/columns)
   version_<v>.forest       # one compact forest blob per enabled version
+  autoencoder.json         # the trained autoencoder, if one exists
+  scores.bin               # cached per-point verdicts, stamped with the
+                           # model's score_epoch (§5.6) — pure derived
+                           # state: deleting it costs a rescan, never a
+                           # wrong answer
+
+<root>/orgs/<org>.db       # one SQLite database per organisation (§5.7):
+                           # users + roles, model ownership, API keys.
+                           # The org is IMPLICIT in the filename, so no
+                           # query carries an org column and none can
+                           # forget one.
 ```
 
 The forest blob is a straight serialisation of the `iforest` node arena (§the
@@ -231,13 +242,168 @@ Verdict {
   ready:      i1      // false while warming up (< MIN_DATA_POINTS)
   anomaly:    i1      // aggregate decision across enabled versions
   score:      f       // aggregate (max-severity) score
-  versions:   Vec VersionVerdict   // per-version { name, anomaly, score, margin }
+  versions:   Vec VersionVerdict   // per-version { name, anomaly, score,
+                                   //               margin, cfg_margin }
 }
 ```
 
 Aggregation: a point is anomalous if **any** enabled version flags it; the
 reported `score` is the most-severe version's score. (The reference checks all
 versions and surfaces each; §6 preserves that in the JSON.)
+
+`margin` is the *effective* band the score was compared against, so the rule
+`score <= -margin ⇒ anomaly` holds for every version without exception;
+`cfg_margin` is the number stored in the metadata. They differ only for the
+autoencoder — see §5.5.
+
+### 5.5 The autoencoder's decision margin is relative
+
+Every forest version's `decision_margin` is an absolute offset on a
+`decision_function` whose scale is fixed by sklearn's convention: normal points
+sit near 0, anomalies below it, so `0.06` means the same thing for every model.
+
+The autoencoder's score is `reconstruction_threshold − mse`, and MSE has no
+such fixed scale: it is the mean squared error of MinMax-scaled features and
+lands wherever the data puts it — ~1e-3 for one model, ~2e-4 for another.
+
+The Python reference applies its shared absolute-margin rule to the
+autoencoder anyway. `model_training.py` computes `is_anomaly = mse >
+reconstruction_threshold` inside the autoencoder branch, and thirty lines
+later — at the same indentation as the branch itself, so unconditionally —
+overwrites it with `is_anomaly = bool(score <= -decision_margin)`, using the
+autoencoder's default margin of `0.05`. Against a threshold of ~5e-4 that
+demands a reconstruction error a *hundred times* the p95 of the training
+errors, which mutes the only version that models the joint distribution. The
+reference ships that version `"enabled": False`, so the muting was never
+noticed. (This is a second bug of the same family as the fine-tune one in
+§5.2: code whose stated intent the surrounding lines quietly undo.)
+
+We keep the knob and put it on the only scale that travels between models:
+for the `autoencoder` version, `decision_margin` is a **fraction of the
+model's own reconstruction threshold**.
+
+```
+effective_margin = reconstruction_threshold * decision_margin
+anomaly          ⇔ decision_function <= -effective_margin
+                 ⇔ mse >= reconstruction_threshold * (1 + decision_margin)
+```
+
+The stored default `0.05` therefore now reads "flag at 5 % above the p95
+training error" — the documented intent — instead of "flag at p95 + 0.05",
+and the same number means the same thing on every model. Existing metadata
+needs no migration: the value that was mute becomes the value that works.
+
+`model_finetune` (§5.2) covers the autoencoder on the same rule as the
+forests, in these relative units: `decision_margin` becomes
+`0.95 · |worst decision_function over the ring| / reconstruction_threshold`,
+so the ring's most anomalous point lands just inside the band.
+
+### 5.6 Scanning the stored ring
+
+Re-scoring stored history is pure recomputation — the same point against the
+same forests yields the same verdict every time — so it is cached.
+
+```
+model_scan_at(mo, from_ts, to_ts, limit, force) -> ScanOut {
+  pts:        Vec ScoredPt { idx, ts, score, anomaly, present, flagged }
+  vnames:     Vec String        // the bitmask order for present/flagged
+  epoch, total, considered, hits, misses, anomalies
+}
+```
+
+`present` and `flagged` are bitmasks over `vnames`, so "this version had no
+verdict" (a timevector window longer than the ring prefix) stays
+distinguishable from "this version was clean".
+
+**Invalidation is by epoch, not by rule.** `Meta.score_epoch` is bumped by
+anything that can change a verdict — a retrain, a new autoencoder, a margin
+edit, a version toggled on or off, a metadata patch, a reset — and a cache
+entry stamped with an older epoch is stale by construction. There is no
+per-entry invalidation logic to get wrong.
+
+**Alignment survives ring eviction** because cache rows are keyed on the
+lifetime point counter, not the ring index: `base_seen` is the lifetime index
+of row 0, so ring row `j` of a ring of length `L` at counter `S` lives at
+cache index `S − L + j − base_seen`. Rows outside the stored span are misses,
+never mismatches.
+
+A replayed verdict must not see the future: `__an_score_enc_upto` scores a
+point as though it sat at its own ring position, so a timevector window is
+built from the points *before* it. A scan therefore reproduces
+`detect_only` exactly.
+
+### 5.7 Identity, organisations and ownership (`src/authz.nu`)
+
+The service was single-user by construction: every route reached every model
+in one flat store. Three concepts turn that into a shared service without
+moving a stored model.
+
+**Off by default.** With `ANOMALY_AUTH` unset, `authz_principal` returns an
+authenticated admin of the reserved `local` organisation and every gate opens.
+An upgraded binary must not start refusing the requests its predecessor
+served. `ANOMALY_AUTH=1` without both an issuer and a client id also stays
+off: half-configured, verification would refuse everything rather than protect
+anything.
+
+| Concept | Definition |
+| --- | --- |
+| identity | an OIDC bearer token, verified by `packages/oauth` against the provider's JWKS |
+| organisation | the `tid` claim, or the issuer when a provider publishes none → `<store>/orgs/<org>.db` |
+| owner | a row in that database binding a model name to a subject |
+
+```
+Principal { authed, via_key, org, sub, email, pname, role, key_id }
+```
+
+An org id becomes a filename, so it is not taken on trust: a plain GUID
+passes through lowercased, anything else is replaced by a 32-character digest
+of itself. No input can produce a separator, a `..` or an empty name.
+
+**Roles.** `admin` sees and manages the organisation's models, users and keys;
+`viewer` sees only what it owns. The first subject to authenticate from an
+organisation becomes its admin — nobody else could have granted it — and
+`az_user_set_role` refuses to demote the last one, because an organisation
+with no admin can never appoint another.
+
+**Ownership.** A model with no row is *unowned*: what everything created
+before this section existed looks like, and what a model ingested through the
+open window (below) looks like. Unowned models are visible to admins so
+somebody can claim them, rather than being absorbed by whoever signed in
+first. Deleting a model forgets its row, or the next model to reuse the name
+would inherit an owner nobody chose.
+
+**API keys** (`anok_<16 hex id>_<64 hex secret>`) carry the identity and role
+of the user who created them, so "you see only your own models" holds for a
+machine exactly as it holds for that user's browser. Only a SHA-256 of the
+secret is stored. A presented key names no organisation, so it is tried
+against each database in `<store>/orgs`; with one database per tenant and a
+key arriving a few times a minute, the scan is cheaper than a second index
+that could disagree with the first.
+
+**The migration window.** `ANOMALY_OPEN_INGEST` (default on) keeps `/detect`
+and `/detect_only` reachable without credentials while already-deployed
+producers are moved onto keys, so enabling authentication drops no data. It is
+a window, not a design: with it open, anyone who can reach the port can write
+points.
+
+**The gate.** Every handler starts with one, so no handler assembles a policy
+decision out of parts and a route added later cannot forget half of one.
+
+```
+__an_gate_auth   (req, need_admin)          -> Gate   // is there a caller
+__an_gate_model  (req, name, allow_create)  -> Gate   // may it touch this model
+__an_gate_ingest (req, name)                -> Gate   // the window above
+```
+
+`allow_create` marks the routes that bring a model into existence: a model
+with no stored directory has no owner yet, and refusing there would mean only
+administrators could ever create one.
+
+`oauth`'s `with_oidc_bearer` returns a one-argument handler that the router
+used here does not accept, and every route needs its own ownership decision
+anyway, so the gate calls `oidc_request_identity` directly. Two audiences are
+tried — the configured API audience, then the client id — because a dashboard
+that sends either token from the same sign-in is a dashboard that works.
 
 ## 6. HTTP/JSON service surface (`src/service.nu`, optional milestone)
 
@@ -260,7 +426,7 @@ service so existing dashboards and the `modelmanager` UI keep working:
   keys the PUT below accepts, published so a client never has to keep its
   own copy of the list. It is service-shaped and deliberately absent from
   the stored `metadata.json`.
-- `PUT /models/dynamic/<model>/metadata` body = `{ schedule?,
+- `PUT /models/dynamic/<model>/metadata` body = `{ alias?, schedule?,
   max_data_points?, versions?, replace_versions? }`, every field within
   optional (an omitted field keeps its value; an unknown version name adds
   a version; `replace_versions` deletes the versions the object omits).
@@ -271,6 +437,30 @@ service so existing dashboards and the `modelmanager` UI keep working:
   shape that is not a JSON object of objects, on a rejected
   `max_data_points`, or on an empty patch. Response echoes the full
   metadata.
+- `GET /models/dynamic/<model>/anomalies` — the scan of §5.6, served from
+  one model load. Query: `from` / `to` (unix seconds), `last=<seconds>`
+  (relative to `to`, else to the newest stored point — never to the server
+  clock, so a model that stopped receiving data still answers "the last
+  24 h *of it*"), `limit` (newest N of the window; `all` for no cap),
+  `only=anomalies`, `versions=a,b`, `fields=x,y` (attach these feature
+  values), `contrib=N` (top-N autoencoder contributors per flagged point,
+  `0` to omit), `refresh=1` (ignore the cache). Response:
+  `data_points_count`, `considered`, `anomalies`, `returned`,
+  `model_versions`, `cache: { hits, misses, epoch }` and `points`, each
+  `{ index, timestamp, score, anomaly, versions[], values?, contributions? }`.
+  `considered` and `anomalies` describe the whole window, so a filtered
+  response still says how much it filtered.
+- `GET /api/auth/config` — public, because the page that has not signed in is
+  the one asking: `enabled`, `issuer`, `client_id`, `audience`, `scope`,
+  `redirect_path`, `open_ingest`. Everything in it is in the redirect the
+  browser makes anyway; publishing it is what stops the dashboard carrying a
+  second, drifting copy of the deployment's identity configuration.
+- `GET /api/me` — the caller's identity, organisation and role.
+- `GET /api/org/users`, `PUT /api/org/users/<sub>/role` — the roster (admin).
+- `GET|POST /api/org/keys`, `DELETE /api/org/keys/<id>` — API keys. The POST
+  response carries the only copy of the secret there will ever be.
+- `POST /models/dynamic/<model>/claim` `{ owner? }` — set a model's owner
+  (admin); defaults to the caller.
 - `POST /train/autoencoder/<model>` optional body = `{ hidden?: [int],
   contamination?: float }` → `training_data_points`, `filtered_anomalies`,
   `reconstruction_threshold`.

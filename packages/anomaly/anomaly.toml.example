@@ -1,0 +1,86 @@
+# anomaly.toml — service configuration.
+#
+# Looked for at, in order:  --config FILE  ·  $ANOMALY_CONFIG
+#                           <store>/anomaly.toml
+#                           /etc/anomaly/anomaly.toml
+#
+# Every setting here can also come from the environment or a flag, and they
+# layer in one order:
+#
+#     command-line flag  >  environment variable  >  this file  >  default
+#
+# A missing file is fine; a file that does not parse stops the service, rather
+# than letting it come up unconfigured for a reason nobody can see.
+
+[auth]
+# "simple" or "oidc".
+#
+#   simple  No sign-in at all. Anyone who opens the page sees every model,
+#           and what the API collects lands in one `public` organization.
+#           This is what the service was before sign-in existed.
+#   oidc    Signed in, multi-tenant. A model belongs to an ORGANIZATION, and
+#           nothing is created or collected without a credential naming one.
+mode = "simple"
+
+# ── the rest applies to mode = "oidc" ────────────────────────────────────
+
+# The provider's issuer URL — exactly what its
+# /.well-known/openid-configuration reports as "issuer".
+#   Entra, one organization:   https://login.microsoftonline.com/<tenant-id>/v2.0
+#   Entra, many:               https://login.microsoftonline.com/organizations/v2.0
+#   Keycloak:                  https://<host>/realms/<realm>
+# issuer = "https://login.example.com/<tenant>/v2.0"
+
+# The client id of the app registration the dashboard signs in with. A public
+# client doing authorization-code with PKCE — there is no secret to put here.
+# client_id = "<application (client) id>"
+
+# What the access token's `aud` must be. Defaults to api://<client_id>. Both
+# that and the bare client id are accepted, because which one a token carries
+# is the provider's choice, not yours.
+# audience = "api://<application (client) id>"
+
+# Accept users from ANY organization the provider will sign for.
+#
+# A multi-tenant application has no single issuer: every organization signs
+# with its own, and the provider's discovery document publishes a template
+# ("https://login.microsoftonline.com/{tenantid}/v2.0"). With this on, a
+# token's `iss` is checked against that template with the token's own `tid`
+# substituted, which is what the provider documents.
+#
+# For Entra the app registration's signInAudience must be AzureADMultipleOrgs
+# to match, or sign-in fails with AADSTS50020.
+# multi_tenant = false
+
+# THE OWNER TENANT: the organization whose admins administer the service
+# itself — approving other organizations, and repairing one that has lost its
+# last admin. Set here and nowhere else: a tenant that could grant itself this
+# from the dashboard would not be an anchor. It is always allowed to sign in.
+# owner_tenant = "<tenant-id>"
+
+# Organizations admitted without anyone approving them in the dashboard. This
+# only ever ADDS: an approval or a block made in the dashboard is never undone
+# by a restart. An organization that is neither listed here nor approved is
+# recorded as *pending* and refused — provisioning one for whoever knocks is
+# how a multi-tenant service fills a disk with strangers.
+# allowed_tenants = ["<tenant-id>", "<another-tenant-id>"]
+
+# Accept points on /detect and /detect_only WITHOUT a credential.
+#
+# Off by default: without a credential naming an organization there is nothing
+# a point could belong to. With it on, such points land in the `public`
+# organization — they never conjure a model nobody owns. This is the migration
+# window for producers not yet carrying an API key; close it once they do.
+open_ingest = false
+
+[service]
+# Bind address. --addr overrides this.
+# addr = "0.0.0.0:8811"
+
+# Directory holding the dashboard HTML. --webroot and $ANOMALY_WEBROOT
+# override this; without any of them the binary looks beside itself.
+# webroot = "/usr/share/anomaly/static"
+
+# NOTE: the store directory is deliberately NOT settable here. This file is
+# looked for inside the store, so a `store` key would be a file relocating the
+# directory it was just found in. Use --store or $ANOMALY_HOME.

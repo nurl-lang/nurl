@@ -73,6 +73,10 @@
                  border-bottom: 1px solid var(--border); position: sticky; top: 0;
                  background: var(--panel); }
   .drawer-head h2 { margin: 0; font-size: 15px; font-family: var(--mono); }
+  .alias-in { flex: 1; min-width: 120px; font-family: var(--sans); font-size: 13px;
+    background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 5px 9px; }
+  .alias-in:focus { outline: none; border-color: var(--accent); }
   .drawer-body { padding: 20px; }
   .drawer-close { margin-left: auto; }
   .section { margin-bottom: 22px; }
@@ -205,6 +209,8 @@
 <div class="drawer" id="drawer">
   <div class="drawer-head">
     <h2 id="dTitle">model</h2>
+    <input id="dAlias" class="alias-in" placeholder="add a nickname" title="A display name for this model. The model's real name never changes.">
+    <button class="small" id="dAliasSave" onclick="saveAlias()">Save</button>
     <button class="small drawer-close" onclick="closeDrawer()">✕ Close</button>
   </div>
   <div class="drawer-body" id="dBody"></div>
@@ -212,6 +218,7 @@
 
 <div id="toasts"></div>
 
+<script src="/auth.js"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -269,8 +276,18 @@ async function load() {
   }
 }
 
+// A model's own name is often whatever created it — a hash, here. The
+// listing leads with the nickname when there is one and keeps the real
+// name beside it, because that is what every route and every log is
+// keyed on.
+function modelLabel(name) {
+  const a = (MODELS[name] || {}).alias;
+  return a && a.length ? a : name;
+}
+
 function render() {
-  const names = Object.keys(MODELS).sort();
+  const names = Object.keys(MODELS)
+    .sort((a, b) => modelLabel(a).localeCompare(modelLabel(b)));
   $("statCount").textContent = names.length;
   const rows = $("rows");
   rows.innerHTML = "";
@@ -282,7 +299,9 @@ function render() {
     if (name === SELECTED) tr.className = "selected";
     const trained = isTrained(m);
     tr.innerHTML =
-      '<td><span class="name" data-m="' + esc(name) + '">' + esc(name) + "</span></td>" +
+      '<td><span class="name" data-m="' + esc(name) + '">' + esc(modelLabel(name)) + "</span>" +
+        (m.alias ? '<div class="muted" style="font-family:var(--mono);font-size:11px">' +
+                   esc(name) + "</div>" : "") + "</td>" +
       '<td><span class="pill ' + (trained ? "trained" : "warming") + '">' +
         (trained ? "trained" : "warming") + "</span></td>" +
       '<td style="text-align:right">' + (m.n_points_seen ?? 0).toLocaleString() + "</td>" +
@@ -326,6 +345,25 @@ async function doAction(act, name, btn) {
 const enc = encodeURIComponent;
 
 // ── Detail drawer ──────────────────────────────────────────────
+// The alias is a label the dashboard shows in place of the model's own
+// name, which is often whatever created it — a hash, usually. The name
+// itself is what every route is keyed on and never changes.
+async function saveAlias() {
+  if (!SELECTED) return;
+  const btn = $("dAliasSave");
+  btn.disabled = true;
+  try {
+    const r = await api("PUT", "/models/dynamic/" + enc(SELECTED) + "/metadata",
+                        { alias: $("dAlias").value.trim() });
+    MODELS[SELECTED] = r;
+    toast("Nickname saved");
+    render();
+  } catch (e) {
+    toast(e.message, true);
+  }
+  btn.disabled = false;
+}
+
 async function openDrawer(name) {
   SELECTED = name;
   $("drawer").classList.add("open");
@@ -351,6 +389,7 @@ function closeDrawer() {
 function renderDrawer(name) {
   const m = MODELS[name];
   $("dTitle").textContent = name;
+  $("dAlias").value = m.alias || "";
   const cols = m.column_types || {};
   const feats = m.feature_names || [];
   const sched = m.schedule || { below_max: 0, at_max: 0 };
@@ -689,7 +728,18 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(
 
 // deep link ?model=NAME opens the drawer
 const qp = new URLSearchParams(location.search);
-load().then(() => { const m = qp.get("model"); if (m && MODELS[m]) openDrawer(m); });
+Auth.ready().then(() => {
+  // A viewer sees what the organization has, and reads it. The controls
+  // that would change a model are not disabled — they are not there.
+  Auth.viewerNotice("Changing models, training and deleting are for administrators.");
+  if (!Auth.canWrite()) {
+    const st = document.createElement("style");
+    st.textContent = ".actions{display:none!important}#dAlias,#dAliasSave{display:none!important}" +
+      ".drawer-body button:not(.drawer-close){display:none!important}" +
+      ".drawer-body input,.drawer-body select,.drawer-body textarea{pointer-events:none;opacity:.55}";
+    document.head.appendChild(st);
+  }
+}).then(load).then(() => { const m = qp.get("model"); if (m && MODELS[m]) openDrawer(m); });
 </script>
 </body>
 </html>

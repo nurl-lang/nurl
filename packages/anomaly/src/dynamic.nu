@@ -30,6 +30,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/time.nu`
+$ `stdlib/std/sort.nu`
 $ `stdlib/ext/json.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
@@ -39,12 +40,17 @@ $ `src/store.nu`
 
 // ── Types ─────────────────────────────────────────────────────────────
 
-// One version's slice of a verdict.
+// One version's slice of a verdict. `margin` is the EFFECTIVE absolute
+// band the score was compared against (the invariant `score <= -margin ⇒
+// anomaly` holds for every version); `cfg_margin` is the number stored in
+// the metadata. They differ only for the autoencoder, whose configured
+// margin is relative to its reconstruction threshold — see ANOM_AE_MARGIN.
 : VerVerdict {
     String vvname
     b anomaly
     f score
     f margin
+    f cfg_margin
 }
 
 // The aggregate verdict for one point (SPEC §5.4).
@@ -272,14 +278,17 @@ $ `src/store.nu`
 
 // Score an encoded point against every trained version. `ready` is false
 // until the model has trained at least once AND the ring holds min_points.
-// The last window_size−1 ring points before the current one, projected and
-// standardised, concatenated in time order — the sliding window's tail.
-// `skip_last` skips the ring's newest entry (at ingest the current point is
-// already IN the ring; at detect_only it is not). None when the ring is too
-// short or a stored line no longer parses.
-@ __an_window_tail * Model mo i need i skip_last → ?( Vec f ) {
+// The `need` ring points ending just before ring position `end`, projected
+// and standardised, concatenated in time order — the sliding window's tail.
+// `end` is where the point being scored sits: the ring length at
+// detect_only (the point is not in the ring), one less at ingest (it
+// already is), and the row index when re-scoring stored history, so a
+// timevector window is always the points BEFORE the one under judgement and
+// never leaks the future into a replayed verdict. None when the ring is too
+// short there, or a stored line no longer parses.
+@ __an_window_tail * Model mo i need i end → ?( Vec f ) {
     : *Meta mm . mo meta
-    : i n - ( vec_len [String] . mo lines ) skip_last
+    : i n end
     ? < n need { ^ @ ?( Vec f ) { F } } {}
     : ( Vec f ) out ( vec_new [f] )
     : ~ b ok T
@@ -315,7 +324,10 @@ $ `src/store.nu`
     ^ @ ?( Vec f ) { F }
 }
 
-@ __an_score_enc * Model mo EncPoint p i ring_has_current → Verdict {
+// Score `p` as though it sat at ring position `end` — the point's own slot,
+// exclusive: rows [0, end) are its past and everything from `end` on is
+// future the verdict must not see.
+@ __an_score_enc_upto * Model mo EncPoint p i end → Verdict {
     : ( Vec VerVerdict ) vvs ( vec_new [VerVerdict] )
     : b warm >= ( vec_len [String] . mo lines ) . mo min_points
     ? & ( model_is_trained mo ) warm {} {
@@ -341,7 +353,7 @@ $ `src/store.nu`
                 // a config change cannot desync until the next retrain).
                 ? & > nfeat 0 != . vm n_cols nfeat {
                     : i W / . vm n_cols nfeat
-                    ?? ( __an_window_tail mo - W 1 ring_has_current ) {
+                    ?? ( __an_window_tail mo - W 1 end ) {
                         T tail → {
                             ( vec_extend [f] tail x )
                             ? == ( vec_len [f] tail ) . vm n_cols {
@@ -355,6 +367,7 @@ $ `src/store.nu`
                                     ( string_from ( string_data . vm vname ) )
                                     hitw
                                     dfw
+                                    marginw
                                     marginw
                                 } )
                             } {}
@@ -376,6 +389,7 @@ $ `src/store.nu`
                         hit
                         df
                         margin
+                        margin
                     } )
                 }
             }
@@ -392,7 +406,8 @@ $ `src/store.nu`
     ? & . cae trained ( meta_version_enabled mm `autoencoder` T ) {
         : ( Vec f ) araw ( anomaly_project p . cae feats )
         : f adf ( ae_decision cae araw )
-        : f amargin ( meta_version_margin mm `autoencoder` 0.05 )
+        : f arel ( meta_version_margin mm `autoencoder` ANOM_AE_MARGIN )
+        : f amargin ( anom_ae_margin cae arel )
         : b ahit <= adf - 0.0 amargin
         ? ahit { = any T } {}
         ? || first < adf worst { = worst adf } {}
@@ -402,11 +417,19 @@ $ `src/store.nu`
             ahit
             adf
             amargin
+            arel
         } )
         ( vec_free [f] araw )
     } {}
     ( vec_free [f] x )
     ^ @ Verdict { T any worst vvs }
+}
+
+// The live-point entry: `ring_has_current` is 1 when the point being scored
+// has already been appended to the ring (ingest) and 0 when it has not
+// (detect_only).
+@ __an_score_enc * Model mo EncPoint p i ring_has_current → Verdict {
+    ^ ( __an_score_enc_upto mo p - ( vec_len [String] . mo lines ) ring_has_current )
 }
 
 // ── Training ──────────────────────────────────────────────────────────
@@ -582,6 +605,7 @@ $ `src/store.nu`
     ( vec_free [i] ets )
 
     = . mm last_trained . mm n_seen
+    ( meta_bump_epoch mm )
     ( store_save_meta . mo store ( string_data . mo mname ) mm )
     = . mo next_train_at + . mm n_seen ( __an_sched_step mo )
     ^ ne
@@ -679,6 +703,7 @@ $ `src/store.nu`
         ( ae_free . mo ae )
         = . mo ae nae
         ( __an_ensure_ae_cfg mo )
+        ( meta_bump_epoch mm )
         ( store_save_ae . mo store ( string_data . mo mname ) . mo ae )
         ( store_save_meta . mo store ( string_data . mo mname ) mm )
         ( string_free . out err )
@@ -752,6 +777,208 @@ $ `src/store.nu`
     }
 }
 
+// ── Importing a file of history ───────────────────────────────────────
+//
+// The ingest path is built for one point at a time: append, persist, and
+// retrain whenever the schedule says so. Replaying ten thousand stored
+// points through it would retrain two hundred times and rewrite the log
+// once per point, which is not slow by accident — it is the streaming
+// design being asked to do a bulk job.
+//
+// So importing has its own path. It differs in exactly three ways, and
+// each is the reason it exists:
+//
+//   * the log is written ONCE at the end, not once per point;
+//   * a point keeps the timestamp the FILE gave it, because history that
+//     all lands at "now" is not history — every time window would see one
+//     instant, and `seasonal` would be as blind as `short_term`;
+//   * training happens once, after everything has landed.
+//
+// Ordering is the price of keeping those timestamps. The ring is assumed
+// ingest-ordered — the window filters and the timevector windows all read
+// it as a time sequence — so imported points cannot simply be appended.
+// Both sides are sorted, so they are merged.
+
+: ImpRow {
+    i ir_ts
+    String ir_line
+}
+
+@ __an_imp_cmp ImpRow a ImpRow b → i {
+    ? < . a ir_ts . b ir_ts { ^ -1 } {}
+    ? > . a ir_ts . b ir_ts { ^ 1 } {}
+    ^ 0
+}
+
+: ImportReport {
+    i accepted
+    i rejected
+    i stored  // points in the ring afterwards
+    b trained
+    String err  // non-empty ⇒ nothing was imported
+    ( Vec String ) notes
+}
+
+@ import_report_free ImportReport r → v {
+    ( string_free . r err )
+    ( vec_free_with [String] . r notes \ String s → v { ( string_free s ) } )
+}
+
+// The timestamp a record carries, or 0 when it names none. A number is
+// unix seconds; a string is left to the preprocessing layer, which knows
+// ISO-8601 — but a point still needs a position in the ring, so a record
+// timestamped only by a string is placed by the fallback.
+@ __an_imp_ts Json rec → i {
+    ?? ( json_obj_get rec `timestamp` ) {
+        T v → {
+            ? ( json_is_num v ) { ^ ( json_as_int v ) } {}
+        }
+        F _ → {}
+    }
+    ^ 0
+}
+
+// Import `recs` into the model. Records keep their own `timestamp` when
+// they carry one; the rest are placed at `now`. Returns what happened.
+@ model_import_at * Model mo ( Vec Json ) recs i now → ImportReport {
+    : *Meta mm . mo meta
+    : i nrec ( vec_len [Json] recs )
+    ? > nrec 0 {} {
+        ^ @ ImportReport { 0 0 ( vec_len [String] . mo lines ) F
+            ( string_from `nothing to import` ) ( vec_new [String] ) }
+    }
+
+    : ( Vec ImpRow ) fresh ( vec_new [ImpRow] )
+    : ( Vec String ) notes ( vec_new [String] )
+    : ~ i rejected 0
+    : ~ i k 0
+    ~ < k nrec {
+        ?? ( vec_get [Json] recs k ) {
+            T rec → {
+                // Preprocessing is what LEARNS: columns, categories and
+                // their order all come from the records as they arrive, so
+                // an import teaches the model its shape exactly as a stream
+                // would.
+                : !EncPoint String er ( anomaly_preprocess mm rec )
+                ?? er {
+                    T p → {
+                        ( enc_free p )
+                        : i given ( __an_imp_ts rec )
+                        : i ts ? > given 0 given now
+                        : Json out ( json_clone rec )
+                        ( json_obj_set out `timestamp` ( json_int ts ) )
+                        : String line ( json_stringify out )
+                        ( json_free out )
+                        ( vec_push [ImpRow] fresh @ ImpRow { ts line } )
+                    }
+                    F e → {
+                        = rejected + rejected 1
+                        ? < ( vec_len [String] notes ) 5 {
+                            : String m ( string_from `row ` )
+                            ( string_push_int m + k 1 )
+                            ( string_push_str m `: ` )
+                            ( string_push_str m ( string_data e ) )
+                            ( vec_push [String] notes m )
+                        } {}
+                        ( string_free e )
+                    }
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+
+    : i accepted ( vec_len [ImpRow] fresh )
+    ? > accepted 0 {} {
+        ( vec_free [ImpRow] fresh )
+        ^ @ ImportReport { 0 rejected ( vec_len [String] . mo lines ) F
+            ( string_from `no row could be read as a data point` ) notes }
+    }
+    ( sort_by [ImpRow] fresh \ ImpRow a ImpRow b → i { ^ ( __an_imp_cmp a b ) } )
+
+    // Merge with the ring. Both sides are ordered, so this is one pass —
+    // and it is a merge rather than an append because an import of last
+    // year's history must land before this morning's points, not after
+    // them.
+    : i have ( vec_len [String] . mo lines )
+    : ~ ( Vec String ) mlines ( vec_with_cap [String] + have accepted )
+    : ~ ( Vec i ) mtimes ( vec_with_cap [i] + have accepted )
+    : ~ i a 0
+    : ~ i b 0
+    ~ | < a have < b accepted {
+        : ~ i ta 9223372036854775807
+        : ~ i tb 9223372036854775807
+        ? < a have { ?? ( vec_get [i] . mo times a ) { T x → { = ta x } F _ → {} } } {}
+        ? < b accepted { ?? ( vec_get [ImpRow] fresh b ) { T r → { = tb . r ir_ts } F _ → {} } } {}
+        ? <= ta tb {
+            ?? ( vec_get [String] . mo lines a ) {
+                T l → { ( vec_push [String] mlines ( string_from ( string_data l ) ) ) }
+                F _ → {}
+            }
+            ( vec_push [i] mtimes ta )
+            = a + a 1
+        } {
+            ?? ( vec_get [ImpRow] fresh b ) {
+                T r → {
+                    ( vec_push [String] mlines ( string_from ( string_data . r ir_line ) ) )
+                    ( vec_push [i] mtimes . r ir_ts )
+                }
+                F _ → {}
+            }
+            = b + b 1
+        }
+    }
+    ( vec_free_with [ImpRow] fresh \ ImpRow r → v { ( string_free . r ir_line ) } )
+
+    // Ring eviction: the OLDEST go, which after a merge may well be
+    // imported ones. A file bigger than the ring is a file whose tail is
+    // what the model keeps.
+    : ~ i drop - ( vec_len [String] mlines ) . mo max_points
+    ? > drop 0 {
+        : ( Vec String ) kl ( vec_new [String] )
+        : ( Vec i ) kt ( vec_new [i] )
+        : i tot ( vec_len [String] mlines )
+        : ~ i j drop
+        ~ < j tot {
+            ?? ( vec_get [String] mlines j ) {
+                T l → { ( vec_push [String] kl ( string_from ( string_data l ) ) ) }
+                F _ → {}
+            }
+            ?? ( vec_get [i] mtimes j ) { T x → { ( vec_push [i] kt x ) } F _ → {} }
+            = j + j 1
+        }
+        ( __an_free_lines mlines )
+        ( vec_free [i] mtimes )
+        = mlines kl
+        = mtimes kt
+    } {}
+
+    ( __an_free_lines . mo lines )
+    ( vec_free [i] . mo times )
+    = . mo lines mlines
+    = . mo times mtimes
+    = . mm n_seen + . mm n_seen accepted
+
+    // One write for the whole file, not one per point.
+    ( store_write_points . mo store ( string_data . mo mname ) . mo lines )
+    ( store_save_meta . mo store ( string_data . mo mname ) mm )
+
+    // And one train, if there is now enough to train on. An import that
+    // doubles a model's history should not leave it scoring against the
+    // forests it had before.
+    : ~ b trained F
+    ? >= ( vec_len [String] . mo lines ) . mo min_points {
+        ? > ( model_force_train_at mo now ) 0 { = trained T } {}
+    } {}
+    ^ @ ImportReport { accepted rejected ( vec_len [String] . mo lines ) trained
+        ( string_new ) notes }
+}
+
+@ model_import * Model mo ( Vec Json ) recs → ImportReport {
+    ^ ( model_import_at mo recs ( now_seconds ) )
+}
+
 // ── Fine-tuning ───────────────────────────────────────────────────────
 
 // One version's fine-tune outcome.
@@ -791,6 +1018,46 @@ $ `src/store.nu`
                             T p → {
                                 : ( Vec f ) row ( anomaly_project p . mm feats )
                                 ( scaler_apply . mo sc row )
+                                ( vec_extend [f] big row )
+                                ( vec_free [f] row )
+                                ( enc_free p )
+                            }
+                            F e → { ( string_free e ) }
+                        }
+                        ( json_free j )
+                    }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ big
+}
+
+// The ring projected onto the AUTOENCODER's own frozen feature order, raw
+// (the AE MinMax-scales internally, so no standardising scaler here) — the
+// exact view ae_decision sees. Row width is ae.feats; empty when untrained.
+@ __an_ring_ae_raw * Model mo → ( Vec f ) {
+    : *Meta mm . mo meta
+    : AeModel cae . mo ae
+    : ( Vec f ) big ( vec_new [f] )
+    ? . cae trained {} { ^ big }
+    : i nfeat ( vec_len [String] . cae feats )
+    ? <= nfeat 0 { ^ big } {}
+    : i n ( vec_len [String] . mo lines )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] . mo lines k ) {
+            T l → {
+                : !Json JsonError jr ( json_parse ( string_data l ) )
+                ?? jr {
+                    T j → {
+                        : !EncPoint String er ( anomaly_preprocess_ro mm j )
+                        ?? er {
+                            T p → {
+                                : ( Vec f ) row ( anomaly_project p . cae feats )
                                 ( vec_extend [f] big row )
                                 ( vec_free [f] row )
                                 ( enc_free p )
@@ -862,7 +1129,449 @@ $ `src/store.nu`
         = k + k 1
     }
     ( vec_free [f] big )
+
+    // The autoencoder has no forest, so the loop above cannot see it — and
+    // it is the version whose margin is hardest to guess by hand, because
+    // the reconstruction-error scale is data-dependent. Calibrate it on the
+    // same rule, in its own relative units.
+    : AeModel fae . mo ae
+    ? & . fae trained > . fae threshold 0.0 {
+        : ( Vec f ) araw ( __an_ring_ae_raw mo )
+        : i awidth ( vec_len [String] . fae feats )
+        : ~ i arows 0
+        ? > awidth 0 { = arows / ( vec_len [f] araw ) awidth } {}
+        ? > arows 0 {
+            : ~ f alow 0.0
+            : ~ b afirst T
+            : ( Vec f ) arow ( vec_with_cap [f] awidth )
+            : ~ i ar 0
+            ~ < ar arows {
+                ( vec_clear [f] arow )
+                ( vec_extend_range [f] arow araw * ar awidth awidth )
+                : f adf ( ae_decision fae arow )
+                ? || afirst < adf alow { = alow adf } {}
+                = afirst F
+                = ar + ar 1
+            }
+            ( vec_free [f] arow )
+            : f aold ( meta_version_margin mm `autoencoder` ANOM_AE_MARGIN )
+            : f anew ( anom_ae_rel_margin fae * ( float_abs alow ) 0.95 )
+            : b _a ( model_set_margin mo `autoencoder` anew )
+            ( vec_push [FtVer] items @ FtVer {
+                ( string_from `autoencoder` )
+                alow
+                aold
+                anew
+            } )
+        } {}
+        ( vec_free [f] araw )
+    } {}
     ^ @ FineTuneReport { items }
+}
+
+// ── Scanning the stored ring ──────────────────────────────────────────
+//
+// The dashboard's job is "show me which of my stored points are
+// anomalies", and the honest way to answer it is to score every stored
+// point. Doing that one /detect_only at a time costs a full model load
+// (metadata + ring + every forest blob) per point, which is why the naive
+// loop is quadratic in the ring. model_scan_at loads the model once and
+// scores in one pass, with the epoch-stamped cache underneath: on a second
+// visit nothing is recomputed at all unless the model actually changed.
+
+// One scored ring point.
+: ScoredPt {
+    i sp_idx  // ring index
+    i sp_ts  // ingest timestamp (unix seconds)
+    f sp_score  // aggregate decision_function (the most severe version)
+    b sp_anomaly
+    i sp_present  // bitmask over ScanOut.vnames: versions that had a verdict
+    i sp_flagged  // bitmask over ScanOut.vnames: versions that flagged it
+}
+
+: ScanOut {
+    ( Vec ScoredPt ) pts
+    ( Vec String ) vnames
+    i epoch
+    i total  // ring size
+    i considered  // rows inside the requested time window
+    i hits  // verdicts answered from the cache
+    i misses  // verdicts computed this call
+    i anomalies  // anomalous rows among `considered`
+}
+
+@ scan_free ScanOut so → v {
+    ( vec_free [ScoredPt] . so pts )
+    ( vec_free_with [String] . so vnames \ String x → v { ( string_free x ) } )
+}
+
+// The canonical version order a scan's bitmasks are indexed by: every
+// enabled version that could produce a verdict, in metadata order. It is
+// stable within an epoch by construction — anything that adds, removes or
+// toggles a version bumps the epoch — and it is written into the cache so a
+// mismatch is caught rather than silently misread as different versions.
+@ model_scan_versions * Model mo → ( Vec String ) {
+    : *Meta mm . mo meta
+    : AeModel cae . mo ae
+    : ( Vec String ) out ( vec_new [String] )
+    : i nv ( vec_len [VerCfg] . mm versions )
+    : ~ i k 0
+    ~ < k nv {
+        ?? ( vec_get [VerCfg] . mm versions k ) {
+            T vc → {
+                ? . vc enabled {
+                    : s nm ( string_data . vc vname )
+                    ? == ( nurl_str_eq nm `autoencoder` ) 1 {
+                        ? . cae trained { ( vec_push [String] out ( string_from nm ) ) } {}
+                    } {
+                        : ~ b has F
+                        : i nf ( vec_len [VerModel] . mo forests )
+                        : ~ i j 0
+                        ~ < j nf {
+                            ?? ( vec_get [VerModel] . mo forests j ) {
+                                T vm → {
+                                    ? == ( nurl_str_eq ( string_data . vm vname ) nm ) 1 { = has T } {}
+                                }
+                                F _ → {}
+                            }
+                            = j + j 1
+                        }
+                        ? has { ( vec_push [String] out ( string_from nm ) ) } {}
+                    }
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ out
+}
+
+@ __an_vname_bit ( Vec String ) vnames s nm → i {
+    : i n ( vec_len [String] vnames )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] vnames k ) {
+            T a → { ? == ( nurl_str_eq ( string_data a ) nm ) 1 { ^ k } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ -1
+}
+
+// Score ring row `at`, returning the verdict folded into cache words.
+@ __an_scan_row * Model mo ( Vec String ) vnames i at → ScoredPt {
+    : ~ i st ANOM_SC_NOT_READY
+    : ~ f sc 0.0
+    : ~ b anom F
+    : ~ i pres 0
+    : ~ i flag 0
+    ?? ( vec_get [String] . mo lines at ) {
+        T l → {
+            : !Json JsonError jr ( json_parse ( string_data l ) )
+            ?? jr {
+                T j → {
+                    : !EncPoint String er ( anomaly_preprocess_ro . mo meta j )
+                    ?? er {
+                        T p → {
+                            // `at` is the row being scored, so the ring
+                            // entries AFTER it are the future: a timevector
+                            // window must end at `at`, not at the ring tip.
+                            : Verdict vd ( __an_score_enc_upto mo p at )
+                            ? . vd ready {
+                                = st ANOM_SC_SCORED
+                                = sc . vd score
+                                = anom . vd anomaly
+                                : i nvv ( vec_len [VerVerdict] . vd versions )
+                                : ~ i q 0
+                                ~ < q nvv {
+                                    ?? ( vec_get [VerVerdict] . vd versions q ) {
+                                        T vv → {
+                                            : i bit ( __an_vname_bit vnames ( string_data . vv vvname ) )
+                                            ? >= bit 0 {
+                                                = pres | pres << 1 bit
+                                                ? . vv anomaly { = flag | flag << 1 bit } {}
+                                            } {}
+                                        }
+                                        F _ → {}
+                                    }
+                                    = q + q 1
+                                }
+                            } {}
+                            ( verdict_free vd )
+                            ( enc_free p )
+                        }
+                        F e → { ( string_free e ) }
+                    }
+                    ( json_free j )
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    : ~ i ts 0
+    ?? ( vec_get [i] . mo times at ) { T t → { = ts t } F _ → {} }
+    ^ @ ScoredPt { at ts sc anom pres flag }
+}
+
+// Score every ring point whose timestamp falls in [from_ts, to_ts]
+// (0 = unbounded on either side), newest-last, capped at `limit` rows
+// (<= 0 = no cap) taken from the END of the window. `force` recomputes
+// even when the cache is warm — the escape hatch for verifying the cache
+// itself, never needed for correctness.
+@ model_scan_at * Model mo i from_ts i to_ts i limit b force → ScanOut {
+    : *Meta mm . mo meta
+    : ( Vec String ) vnames ( model_scan_versions mo )
+    : i total ( vec_len [String] . mo lines )
+    : i epoch . mm score_epoch
+    : i base - . mm n_seen total
+
+    // Load the cache, keeping it only if it is stamped with this epoch and
+    // the same version order. Anything else starts empty.
+    : ~ ScoreCache cache ( scorecache_new epoch base )
+    : ~ i cbase base
+    ?? ( store_load_scores . mo store ( string_data . mo mname ) ) {
+        T got → {
+            : b same_epoch == . got epoch epoch
+            : b same_vers ( scorecache_vnames_match got vnames )
+            ? & & same_epoch same_vers == force F {
+                ( scorecache_free cache )
+                = cache got
+                = cbase . got base_seen
+            } { ( scorecache_free got ) }
+        }
+        F → {}
+    }
+
+    // Rows in the requested time window. The ring is ingest-ordered, so
+    // both bounds are a prefix scan: skip while below `from_ts`, advance
+    // while at or below `to_ts`. An unparsable line stamps timestamp 0 and
+    // therefore falls outside any bounded window, which is the safe side.
+    : ~ i lo 0
+    : ~ i hi total
+    ? > from_ts 0 {
+        : ~ i k 0
+        : ~ b run T
+        ~ & run < k total {
+            : ~ i t 0
+            ?? ( vec_get [i] . mo times k ) { T x → { = t x } F _ → {} }
+            ? < t from_ts { = k + k 1 } { = run F }
+        }
+        = lo k
+    } {}
+    ? > to_ts 0 {
+        : ~ i k lo
+        : ~ b run T
+        ~ & run < k total {
+            : ~ i t 0
+            ?? ( vec_get [i] . mo times k ) { T x → { = t x } F _ → {} }
+            ? <= t to_ts { = k + k 1 } { = run F }
+        }
+        = hi k
+    } {}
+    ? < hi lo { = hi lo } {}
+    : i considered - hi lo
+    ? > limit 0 {
+        ? > considered limit { = lo - hi limit } {}
+    } {}
+
+    : ( Vec ScoredPt ) pts ( vec_new [ScoredPt] )
+    : ~ i hits 0
+    : ~ i misses 0
+    : ~ i anoms 0
+    : ~ b dirty F
+    : ~ i j lo
+    ~ < j hi {
+        // Cache index of ring row j: lifetime index minus the cache's base.
+        : i ci - + base j cbase
+        : ~ b hit F
+        : ~ i st ANOM_SC_UNSCORED
+        : ~ f sc 0.0
+        : ~ i pres 0
+        : ~ i flag 0
+        ? & >= ci 0 < ci ( scorecache_rows cache ) {
+            ?? ( vec_get [i] . cache state ci ) {
+                T stv → {
+                    ? != stv ANOM_SC_UNSCORED {
+                        = hit T
+                        = st stv
+                        ?? ( vec_get [f] . cache score ci ) { T x → { = sc x } F _ → {} }
+                        ?? ( vec_get [i] . cache present ci ) { T x → { = pres x } F _ → {} }
+                        ?? ( vec_get [i] . cache flagged ci ) { T x → { = flag x } F _ → {} }
+                    } {}
+                }
+                F _ → {}
+            }
+        } {}
+        : ~ i ts 0
+        ?? ( vec_get [i] . mo times j ) { T x → { = ts x } F _ → {} }
+        ? hit {
+            = hits + hits 1
+            : b scored == st ANOM_SC_SCORED
+            : b anom & scored != flag 0
+            ? anom { = anoms + anoms 1 } {}
+            ( vec_push [ScoredPt] pts @ ScoredPt { j ts sc anom pres flag } )
+        } {
+            = misses + misses 1
+            : ScoredPt row ( __an_scan_row mo vnames j )
+            ? . row sp_anomaly { = anoms + anoms 1 } {}
+            ( vec_push [ScoredPt] pts row )
+            = dirty T
+        }
+        = j + j 1
+    }
+
+    // Fold what we computed back into a full ring-length cache and persist
+    // it, so the next scan of ANY window benefits from this one.
+    ? dirty {
+        : ScoreCache nc ( scorecache_new epoch base )
+        ( scorecache_resize nc total )
+        : ~ i k 0
+        ~ < k total {
+            : i ci - + base k cbase
+            ? & >= ci 0 < ci ( scorecache_rows cache ) {
+                : ~ i st ANOM_SC_UNSCORED
+                : ~ f sc 0.0
+                : ~ i pres 0
+                : ~ i flag 0
+                ?? ( vec_get [i] . cache state ci ) { T x → { = st x } F _ → {} }
+                ?? ( vec_get [f] . cache score ci ) { T x → { = sc x } F _ → {} }
+                ?? ( vec_get [i] . cache present ci ) { T x → { = pres x } F _ → {} }
+                ?? ( vec_get [i] . cache flagged ci ) { T x → { = flag x } F _ → {} }
+                ( scorecache_set nc k st sc pres flag )
+            } {}
+            = k + k 1
+        }
+        : i np ( vec_len [ScoredPt] pts )
+        = k 0
+        ~ < k np {
+            ?? ( vec_get [ScoredPt] pts k ) {
+                T r → {
+                    : ~ i st ANOM_SC_NOT_READY
+                    ? != . r sp_present 0 { = st ANOM_SC_SCORED } {}
+                    ( scorecache_set nc . r sp_idx st . r sp_score . r sp_present . r sp_flagged )
+                }
+                F _ → {}
+            }
+            = k + k 1
+        }
+        : i nvn ( vec_len [String] vnames )
+        = k 0
+        ~ < k nvn {
+            ?? ( vec_get [String] vnames k ) {
+                T nm → { ( vec_push [String] . nc vnames ( string_from ( string_data nm ) ) ) }
+                F _ → {}
+            }
+            = k + k 1
+        }
+        : b _w ( store_save_scores . mo store ( string_data . mo mname ) nc )
+        ( scorecache_free nc )
+    } {}
+    ( scorecache_free cache )
+
+    ^ @ ScanOut { pts vnames epoch total considered hits misses anoms }
+}
+
+@ model_scan * Model mo i from_ts i to_ts i limit b force → ScanOut {
+    ^ ( model_scan_at mo from_ts to_ts limit force )
+}
+
+// The raw stored record at a ring index, parsed (None when out of range or
+// no longer parsable).
+@ model_point_json * Model mo i at → ?Json {
+    ?? ( vec_get [String] . mo lines at ) {
+        T l → {
+            : !Json JsonError jr ( json_parse ( string_data l ) )
+            ?? jr {
+                T j → { ^ @ ?Json { T j } }
+                F _ → { ^ @ ?Json { F } }
+            }
+        }
+        F _ → { ^ @ ?Json { F } }
+    }
+}
+
+// ── Why a point is a relational anomaly ───────────────────────────────
+
+// One feature's share of an autoencoder reconstruction error.
+: AeContrib {
+    String ac_name
+    f ac_err
+    f ac_share
+}
+
+@ ae_contrib_free ( Vec AeContrib ) xs → v {
+    ( vec_free_with [AeContrib] xs \ AeContrib c → v { ( string_free . c ac_name ) } )
+}
+
+// The `topk` features carrying the most of a point's reconstruction error,
+// largest first, with each one's share of the total. This is the answer
+// the forests structurally cannot give: the autoencoder's per-feature error
+// is how badly that feature failed to be predictable FROM THE OTHERS, so
+// the top entries name the broken relationship rather than the extreme
+// value. Empty when the model has no trained autoencoder.
+@ model_ae_contrib * Model mo Json raw i topk → ( Vec AeContrib ) {
+    : ( Vec AeContrib ) out ( vec_new [AeContrib] )
+    : AeModel cae . mo ae
+    ? . cae trained {} { ^ out }
+    : !EncPoint String er ( anomaly_preprocess_ro . mo meta raw )
+    ?? er {
+        T p → {
+            : ( Vec f ) araw ( anomaly_project p . cae feats )
+            : ( Vec f ) errs ( ae_feature_errors cae araw )
+            ( vec_free [f] araw )
+            ( enc_free p )
+            : i d ( vec_len [f] errs )
+            : ~ f tot 0.0
+            : ~ i k 0
+            ~ < k d {
+                ?? ( vec_get [f] errs k ) { T e → { = tot + tot e } F _ → {} }
+                = k + k 1
+            }
+            : ~ i want topk
+            ? < want 1 { = want 1 } {}
+            ? > want d { = want d } {}
+            // Selection sort over `want` picks: d is the feature count, and
+            // want is 3-5, so this beats sorting the whole vector.
+            : ( Vec b ) taken ( vec_new [b] )
+            = k 0
+            ~ < k d { ( vec_push [b] taken F ) = k + k 1 }
+            : ~ i picked 0
+            ~ < picked want {
+                : ~ i best -1
+                : ~ f bestv -1.0
+                = k 0
+                ~ < k d {
+                    : ~ b used T
+                    ?? ( vec_get [b] taken k ) { T x → { = used x } F _ → {} }
+                    ? used {} {
+                        : ~ f e 0.0
+                        ?? ( vec_get [f] errs k ) { T x → { = e x } F _ → {} }
+                        ? > e bestv { = bestv e = best k } {}
+                    }
+                    = k + k 1
+                }
+                ? < best 0 { = picked want } {
+                    : b _t ( vec_set [b] taken best T )
+                    : ~ f share 0.0
+                    ? > tot 0.0 { = share / bestv tot } {}
+                    : ~ String nm ( string_new )
+                    ?? ( vec_get [String] . cae feats best ) {
+                        T x → { ( string_free nm ) = nm ( string_from ( string_data x ) ) }
+                        F _ → {}
+                    }
+                    ( vec_push [AeContrib] out @ AeContrib { nm bestv share } )
+                    = picked + picked 1
+                }
+            }
+            ( vec_free [b] taken )
+            ( vec_free [f] errs )
+        }
+        F e → { ( string_free e ) }
+    }
+    ^ out
 }
 
 // ── Management ────────────────────────────────────────────────────────
@@ -876,6 +1585,10 @@ $ `src/store.nu`
     : *Meta fresh ( meta_new ( string_data . old name ) ( string_data . old created ) )
     = . fresh sched_below . old sched_below
     = . fresh sched_at_max . old sched_at_max
+    // Carry the scoring epoch across the reset, bumped: cached verdicts for
+    // the discarded points must never be mistaken for verdicts of the new
+    // ones that will reuse their ring positions.
+    = . fresh score_epoch + . old score_epoch 1
     ( vec_free_with [VerCfg] . fresh versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
     = . fresh versions ( vec_new [VerCfg] )
     : i nv ( vec_len [VerCfg] . old versions )
@@ -929,6 +1642,7 @@ $ `src/store.nu`
                     : ~ VerCfg upd vc
                     = . upd decision_margin margin
                     ( vec_set [VerCfg] . mm versions k upd )
+                    ( meta_bump_epoch mm )
                     ( store_save_meta . mo store ( string_data . mo mname ) mm )
                     ^ T
                 } {}
@@ -1029,13 +1743,15 @@ $ `src/store.nu`
     ? on {} {
         ? == ( nurl_str_eq vname `autoencoder` ) 1 {} { ( __an_drop_forest mo vname ) }
     }
+    ( meta_bump_epoch mm )
     ( store_save_meta . mo store ( string_data . mo mname ) mm )
     ^ T
 }
 
 // Apply an editable-metadata patch:
 //
-//   { "schedule": { "below_max": N, "at_max": N },
+//   { "alias": "boiler room",
+//     "schedule": { "below_max": N, "at_max": N },
 //     "max_data_points": N,
 //     "versions": { "<name>": { <any VerCfg field> }, ... },
 //     "replace_versions": bool }
@@ -1061,6 +1777,7 @@ $ `src/store.nu`
 // writer, and a service-shaped descriptor has no business in the stored file.
 @ meta_editable_fields → Json {
     : Json a ( json_arr_new )
+    ( json_arr_push a ( json_str_lit `alias` ) )
     ( json_arr_push a ( json_str_lit `schedule` ) )
     ( json_arr_push a ( json_str_lit `max_data_points` ) )
     ( json_arr_push a ( json_str_lit `versions` ) )
@@ -1071,6 +1788,23 @@ $ `src/store.nu`
     ? ( json_is_obj patch ) {} { ^ ( string_from `metadata must be a JSON object` ) }
     : *Meta mm . mo meta
     : ~ b touched F
+
+    // The alias is a display name, nothing more: it never reaches the
+    // store, the feature order or a file path, so unlike `name` it is free
+    // to be edited, contain spaces, or be cleared back to empty.
+    ?? ( json_obj_get patch `alias` ) {
+        T aj → {
+            ? ( json_is_str aj ) {} { ^ ( string_from `alias must be a string` ) }
+            : s araw ( json_str_data aj )
+            ? > ( nurl_str_len araw ) ANOM_ALIAS_MAX {
+                ^ ( string_from `alias is too long (max 120 characters)` )
+            } {}
+            ( string_free . mm alias )
+            = . mm alias ( string_from araw )
+            = touched T
+        }
+        F _ → {}
+    }
 
     ?? ( json_obj_get patch `schedule` ) {
         T sj → {
@@ -1131,13 +1865,14 @@ $ `src/store.nu`
     }
 
     ? touched {} {
-        ^ ( string_from `nothing to update: expected schedule, max_data_points and/or versions` )
+        ^ ( string_from `nothing to update: expected alias, schedule, max_data_points and/or versions` )
     }
 
     ( __an_prune_disabled mo )
     ? ( model_is_trained mo ) {
         = . mo next_train_at + . mm last_trained ( __an_sched_step mo )
     } {}
+    ( meta_bump_epoch mm )
     ( store_save_meta . mo store ( string_data . mo mname ) mm )
     ^ ( string_new )
 }
