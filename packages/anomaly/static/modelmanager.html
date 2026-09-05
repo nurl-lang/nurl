@@ -64,7 +64,7 @@
   .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
   .empty svg { opacity: .3; }
   /* detail drawer */
-  .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(560px, 92vw);
+  .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(680px, 94vw);
             background: var(--panel); border-left: 1px solid var(--border); z-index: 40;
             transform: translateX(100%); transition: transform .22s ease; overflow-y: auto;
             box-shadow: -20px 0 40px rgba(0,0,0,.4); }
@@ -89,10 +89,11 @@
   .chip { font-family: var(--mono); font-size: 12px; background: var(--panel2);
           border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; }
   .chip .t { color: var(--accent2); }
+  .vwrap { overflow-x: auto; }
   .vtable { width: 100%; font-size: 12px; }
-  .vtable th, .vtable td { padding: 5px 8px; text-align: right; }
+  .vtable th, .vtable td { padding: 5px 6px; text-align: right; white-space: nowrap; }
   .vtable th:first-child, .vtable td:first-child { text-align: left; font-family: var(--mono); }
-  .vtable input[type=number] { width: 84px; padding: 3px 6px; font-size: 12px; text-align: right; }
+  .vtable input[type=number] { width: 78px; padding: 3px 6px; font-size: 12px; text-align: right; }
   .vtable input[type=checkbox] { accent-color: var(--accent); cursor: pointer; }
   .vtable tr.off td:first-child { color: var(--muted); }
   .vtable td.dim { color: var(--muted); }
@@ -141,6 +142,27 @@
   .field { display: flex; flex-direction: column; gap: 4px; }
   .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
   .field input { width: 110px; }
+  /* Help glyphs and the collapsible explainer: every alert-affecting
+     control says which way to move it. */
+  .q { display: inline-block; width: 14px; height: 14px; line-height: 14px; text-align: center;
+       border-radius: 50%; border: 1px solid var(--border); color: var(--muted); font-size: 10px;
+       font-weight: 700; cursor: help; vertical-align: 1px; font-family: var(--sans);
+       text-transform: none; letter-spacing: 0; }
+  .q:hover { border-color: var(--accent); color: var(--accent); }
+  details.help { margin-top: 8px; font-size: 12px; color: var(--muted); }
+  details.help > summary { cursor: pointer; color: var(--accent); font-weight: 500; }
+  details.help p { margin: 6px 0 0; line-height: 1.5; }
+  .small-lbl { font-size: 11.5px; }
+  .section-head select { padding: 3px 8px; font-size: 12px; }
+  .cal-note { font-size: 12px; color: var(--muted); margin: 0 0 8px; min-height: 18px; }
+  .cal-note b { color: var(--fg); }
+  .vtable input[type=text] { width: 68px; padding: 3px 6px; font-size: 12px; text-align: right; }
+  .ft-table { margin-top: 10px; }
+  .field .unit { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .field .unit input { width: 80px; }
+  label.chk { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted);
+              padding-bottom: 7px; cursor: pointer; }
+  label.chk input { accent-color: var(--accent); }
   .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 30;
               opacity: 0; pointer-events: none; transition: opacity .2s; }
   .backdrop.open { opacity: 1; pointer-events: auto; }
@@ -309,8 +331,8 @@ function render() {
       "<td>" + fmtTrained(m.last_trained_at) + "</td>" +
       "<td>" + versionSummary(m) + "</td>" +
       '<td><div class="actions">' +
-        '<button class="small" data-act="train" data-m="' + esc(name) + '">Train</button>' +
-        '<button class="small" data-act="finetune" data-m="' + esc(name) + '">Finetune</button>' +
+        '<button class="small" data-act="train" data-m="' + esc(name) + '" title="Retrain the forests on the stored points now; margins are kept">Train</button>' +
+        '<button class="small" data-act="finetune" data-m="' + esc(name) + '" title="Set every margin so 1 % of the last 24 h would be flagged">Finetune</button>' +
         '<button class="small" data-act="reset" data-m="' + esc(name) + '">Reset</button>' +
         '<button class="small danger" data-act="delete" data-m="' + esc(name) + '">Delete</button>' +
       "</div></td>";
@@ -325,6 +347,7 @@ function render() {
 async function doAction(act, name, btn) {
   if (act === "delete" && !confirm('Delete model "' + name + '"? This removes all data and forests.')) return;
   if (act === "reset" && !confirm('Reset model "' + name + '"? Drops data and forests, keeps the name.')) return;
+  if (act === "finetune" && !confirm('Fine-tune "' + name + '"? Sets every enabled version\'s margin so that 1 % of the last 24 h of stored points would be flagged. Open the model to preview or pick another rate.')) return;
   const orig = btn ? btn.textContent : "";
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span>'; }
   try {
@@ -332,7 +355,7 @@ async function doAction(act, name, btn) {
     if (act === "train")        d = await api("POST", "/force_train/" + enc(name));
     else if (act === "reset")   d = await api("POST", "/models/dynamic/" + enc(name) + "/reset");
     else if (act === "delete")  d = await api("DELETE", "/delete_model/" + enc(name));
-    else if (act === "finetune")d = await api("POST", "/api/dynamic/" + enc(name) + "/finetune");
+    else if (act === "finetune")d = await api("POST", "/api/dynamic/" + enc(name) + "/finetune", { rate: 0.01 });
     toast((d && d.message) || "OK", "ok", act);
     if (act === "delete" && SELECTED === name) closeDrawer();
     await load();
@@ -383,18 +406,152 @@ function closeDrawer() {
   $("backdrop").classList.remove("open");
   render();
 }
-// Only these two version fields are editable inline: they bite at the very
-// next detect. Geometry and forest size live in the advanced JSON editor
-// because they only take effect at the next retrain.
+// ── Detail drawer: the model's settings, explained ────────────────
+//
+// Every control that changes what gets flagged carries a `?` with the same
+// three things: what the number means, which way to move it for fewer or
+// more alerts, and when it takes effect. The texts are the contract the
+// API documents, in plain words; keep them in step with README "Conventions".
+const HELP = {
+  rule: "Every enabled version scores each point; the score goes negative as the " +
+    "point gets more unusual. A version flags the point when score ≤ −margin, and " +
+    "the model reports an anomaly when ANY enabled version flags it. " +
+    "severity = −score / margin, so 1.0 is exactly the alert line and 2.0 is twice " +
+    "as far past it. Fewer alerts: raise the margin (or fine-tune to a lower rate). " +
+    "More alerts: lower it.",
+  margin: "Alert line of this version. A point is flagged when its score ≤ −margin.\n" +
+    "• Raise the margin → fewer alerts (only the most extreme points).\n" +
+    "• Lower it → more alerts; 0 flags anything the forest finds even slightly unusual.\n" +
+    "Takes effect at the next point. The flags column shows what the value you type " +
+    "would have flagged in the calibration window; Fine-tune sets it from a target rate.",
+  margin_ae: "Alert line of the autoencoder, relative to its reconstruction threshold: " +
+    "a point is flagged when its reconstruction error ≥ threshold × (1 + margin).\n" +
+    "• 0 flags at the threshold itself; 0.5 only points that reconstruct 50 % worse than it.\n" +
+    "• Raise → fewer alerts. Lower → more alerts. Takes effect at the next point.",
+  contamination: "How large a share of its own training data the forest should treat " +
+    "as outliers when it sets its zero line. \"auto\" is the isolation-forest default; " +
+    "a number such as 0.01 (= 1 %) moves the zero line so that about 1 % of the " +
+    "training points score below it.\n" +
+    "• Raise → more alerts. Lower → fewer alerts.\n" +
+    "Takes effect at the next retrain. The margin is applied on top and works at once — " +
+    "prefer the margin for day-to-day tuning.",
+  flags: "How many stored points in the calibration window this version flags at the " +
+    "margin shown — its past alert rate. Type a new margin and this updates to what " +
+    "that margin would have flagged. Ties in the data can make the count jump.",
+  window: "The data the forest is trained on: minutes / points back for a time window, " +
+    "or size × step for the shape (timevector) version. Changes at the next retrain; " +
+    "edit them in Advanced.",
+  trees: "Isolation-forest size: trees × samples per tree. More trees make the score " +
+    "steadier, not stricter. Changes at the next retrain; edit in Advanced.",
+  rate: "The share of stored points you are willing to alert on. 1 % of a feed at one " +
+    "point per minute is about 14 alerts a day; 0.1 % about one or two. Fine-tune picks, " +
+    "per version, the margin that flags this share of the window, and rounds it to " +
+    "the fewest digits that keep the count (ties can make it a little more or less).",
+  calwin: "The stored points that calibration and fine-tune look at, counted back from " +
+    "the newest stored point (not the clock, so a stopped feed still calibrates on its " +
+    "last day). Pick a window that looks like the future you want to alert on — a " +
+    "day for a feed with a daily rhythm, a week if weekends differ.",
+  threshold: "Reconstruction error at which the autoencoder starts calling a point " +
+    "unusual, set at training from the error distribution of the training data. " +
+    "The margin is relative to this.",
+  prefilter: "Before the autoencoder trains, an isolation-forest pre-filter drops this " +
+    "share of the ring as outliers so the net learns normal behaviour only. \"auto\" " +
+    "is the forest default. Kept for automatic retrains.",
+  sched_ae: "Also retrain the autoencoder whenever the forests retrain, with the layer " +
+    "sizes and pre-filter of its last manual training. Off by default. Turn it on for " +
+    "a feed whose normal drifts — an autoencoder trained once on a summer week calls " +
+    "every autumn point unusual.",
+  sched: "The forests retrain automatically every N stored points: one cadence while " +
+    "the ring is still filling, another once it holds max points. Retraining keeps " +
+    "the margins.",
+  hidden: "Layer sizes of the autoencoder between input and output, e.g. 64,32,64. " +
+    "Smaller middle layers force a stronger summary of what is normal.",
+};
+function q(key) { return '<span class="q" title="' + esc(HELP[key]) + '">?</span>'; }
+function th(label, key) { return "<th" + (key ? ' title="' + esc(HELP[key]) + '"' : "") + ">" + label + (key ? " " + q(key) : "") + "</th>"; }
+
+// Numbers on screen: four significant digits, no trailing zeros. The
+// stored value is what the input carries; this is only how it reads.
+function fmtNum(x) {
+  if (x === null || x === undefined) return "–";
+  if (typeof x !== "number") return esc(x);
+  if (x === 0) return "0";
+  return String(Number(x.toPrecision(4)));
+}
+function fmtPct(num, den) {
+  if (!den) return "–";
+  const p = 100 * num / den;
+  return (p >= 10 ? p.toFixed(0) : p >= 1 ? p.toFixed(1) : p.toFixed(2)) + " %";
+}
+function fmtWhen(ts) {
+  if (!ts || ts <= 0) return '<span class="muted">–</span>';
+  return esc(new Date(ts * 1000).toLocaleString());
+}
+
+// The calibration window. `CAL` holds the last report for the open model;
+// the flags column and the fine-tune preview both read from it.
+let CAL_LAST = "86400";
+let CAL = null;
+const CAL_WINDOWS = [["3600", "1 h"], ["21600", "6 h"], ["86400", "24 h"], ["604800", "7 d"], ["all", "all"]];
+
+// How many of the window a margin would flag, read off the calibration
+// curve (rate → margin, margins fall as the rate rises). Approximate to the
+// curve's 0.1 % / 1 % steps; the exact count needs the service.
+function rateForMargin(cv, m) {
+  if (!cv || !Array.isArray(cv.curve) || !cv.curve.length) return null;
+  let best = 0;
+  for (const [rate, margin] of cv.curve) { if (margin >= m) best = rate; else break; }
+  return best;
+}
+
+function calCell(vn, m) {
+  const cv = CAL && CAL.versions && CAL.versions[vn];
+  if (!cv) return '<span class="muted">–</span>';
+  const same = Math.abs(m - cv.margin) < 1e-12;
+  if (same) return cv.flagged + " / " + cv.n + ' <span class="muted">(' + fmtPct(cv.flagged, cv.n) + ")</span>";
+  const r = rateForMargin(cv, m);
+  if (r === null) return '<span class="muted">–</span>';
+  return '≈ ' + Math.round(r * cv.n) + " / " + cv.n + ' <span class="muted">(' + fmtPct(r * cv.n, cv.n) + ")</span>";
+}
+
+async function loadCal(name) {
+  CAL = null;
+  const box = $("calNote");
+  if (!MODELS[name] || !isTrained(MODELS[name])) { if (box) box.textContent = ""; return; }
+  if (box) box.innerHTML = '<span class="spin"></span> calibrating…';
+  try {
+    const d = await api("GET", "/models/dynamic/" + enc(name) + "/calibration?last=" + CAL_LAST);
+    if (SELECTED !== name) return;
+    CAL = d;
+    if (box) box.innerHTML = "window: <b>" + (d.window.rows || 0).toLocaleString() + "</b> of " +
+      (d.window.total || 0).toLocaleString() + " stored points · flagged by any version: <b>" +
+      (d.aggregate.flagged || 0) + "</b> (" + fmtPct(d.aggregate.flagged || 0, d.window.rows || 0) + ")";
+    refreshCalCells();
+  } catch (e) {
+    if (box) box.innerHTML = '<span class="muted">' + esc(e.message) + "</span>";
+  }
+}
+function refreshCalCells() {
+  const t = $("vTbl");
+  if (!t) return;
+  t.querySelectorAll("td[data-cal]").forEach(td => {
+    const vn = td.dataset.cal;
+    const inp = t.querySelector('input[data-v="' + CSS.escape(vn) + '"][data-f="margin"]');
+    const m = inp ? parseFloat(inp.value) : NaN;
+    td.innerHTML = isFinite(m) ? calCell(vn, m) : '<span class="muted">–</span>';
+  });
+}
+
 function renderDrawer(name) {
   const m = MODELS[name];
   $("dTitle").textContent = name;
   $("dAlias").value = m.alias || "";
   const cols = m.column_types || {};
   const feats = m.feature_names || [];
-  const sched = m.schedule || { below_max: 0, at_max: 0 };
+  const sched = m.schedule || { below_max: 0, at_max: 0, autoencoder: false };
   const vers = m.versions || {};
   const ae = m.autoencoder || { trained: false, enabled: false };
+  const trained = isTrained(m);
 
   let colChips = Object.keys(cols).map(c =>
     '<span class="chip">' + esc(c) + ' <span class="t">' + esc(cols[c]) + "</span></span>").join("");
@@ -407,31 +564,46 @@ function renderDrawer(name) {
       : (v.window_size > 0 ? v.window_size + "×" + (v.step_size || 1) + " pts"
                            : (v.window_minutes || 0) + "m/" + (v.window_points || 0) + "p");
     const trees = isAe ? "–" : (v.n_estimators || 0) + "×" + (v.max_samples || 0);
+    const cont = isAe ? '<span class="muted">–</span>'
+      : '<input type="text" data-v="' + esc(vn) + '" data-f="contamination" placeholder="auto" value="' +
+        (typeof v.contamination === "number" ? v.contamination : "") + '" title="' + esc(HELP.contamination) + '">';
+    const margin = Number(v.decision_margin) || 0;
     return '<tr' + (v.enabled ? "" : ' class="off"') + '><td>' + esc(vn) + "</td>" +
       '<td><input type="checkbox" data-v="' + esc(vn) + '" data-f="enabled"' +
-        (v.enabled ? " checked" : "") + "></td>" +
+        (v.enabled ? " checked" : "") + ' title="Score points with this version. Off: a forest version drops its forest (re-enabling costs a retrain); the autoencoder is only muted."></td>' +
       '<td class="dim">' + esc(win) + "</td>" +
       '<td class="dim">' + esc(trees) + "</td>" +
-      '<td><input type="number" step="0.001" min="0" data-v="' + esc(vn) + '" data-f="margin" value="' +
-        (Number(v.decision_margin) || 0) + '"></td></tr>';
+      "<td>" + cont + "</td>" +
+      '<td><input type="number" step="any" min="0" data-v="' + esc(vn) + '" data-f="margin" value="' +
+        margin + '" title="' + esc(isAe ? HELP.margin_ae : HELP.margin) + '"></td>' +
+      '<td class="dim" data-cal="' + esc(vn) + '">–</td></tr>';
   }).join("");
-  if (!vrows) vrows = '<tr><td colspan="5" class="muted">no versions</td></tr>';
+  if (!vrows) vrows = '<tr><td colspan="7" class="muted">no versions</td></tr>';
+
+  const winSel = '<select id="calWin" title="' + esc(HELP.calwin) + '">' +
+    CAL_WINDOWS.map(([v, l]) => '<option value="' + v + '"' + (v === CAL_LAST ? " selected" : "") + ">" + l + "</option>").join("") +
+    "</select>";
 
   const aeState = ae.trained
     ? (ae.enabled ? '<span class="dot on"></span>trained &amp; scoring'
                   : '<span class="dot off"></span>trained, muted (version disabled)')
     : '<span class="dot"></span>not trained';
   const aeRows = ae.trained
-    ? "<dt>Threshold</dt><dd>" + fmtNum(ae.reconstruction_threshold) + "</dd>" +
+    ? "<dt>Threshold " + q("threshold") + "</dt><dd>" + fmtNum(ae.reconstruction_threshold) + "</dd>" +
+      "<dt>Margin " + q("margin_ae") + "</dt><dd>" + fmtNum(ae.decision_margin) +
+        ' <span class="muted">→ flags error ≥ ' + fmtNum((ae.reconstruction_threshold || 0) * (1 + (ae.decision_margin || 0))) + "</span></dd>" +
       "<dt>Trained on</dt><dd>" + (ae.training_data_points ?? 0).toLocaleString() +
         " pts <span class=\"muted\">(" + (ae.filtered_anomalies ?? 0) + " filtered)</span></dd>" +
-      "<dt>Layers</dt><dd>" + esc((ae.layer_sizes || []).join(" → ") || "–") + "</dd>" +
-      "<dt>Margin</dt><dd>" + fmtNum(ae.decision_margin) + "</dd>"
+      "<dt>Trained at</dt><dd>" + fmtWhen(ae.trained_at) + "</dd>" +
+      "<dt>Layers " + q("hidden") + "</dt><dd>" + esc((ae.layer_sizes || []).join(" → ") || "–") + "</dd>" +
+      "<dt>Pre-filter " + q("prefilter") + "</dt><dd>" + fmtNum(ae.prefilter_contamination) + "</dd>" +
+      "<dt>Retrains</dt><dd>" + (ae.retrain_with_forests ? "with the forests" : "manually only") +
+        ' <span class="muted">(schedule below)</span></dd>'
     : "";
 
   $("dBody").innerHTML =
     '<div class="section"><h3>Overview</h3><dl class="kv">' +
-      "<dt>Status</dt><dd>" + (isTrained(m) ? "trained" : "warming up") + "</dd>" +
+      "<dt>Status</dt><dd>" + (trained ? "trained" : "warming up") + "</dd>" +
       "<dt>Points seen</dt><dd>" + (m.n_points_seen ?? 0).toLocaleString() + "</dd>" +
       "<dt>Ring</dt><dd>" + (m.max_data_points ?? "–").toLocaleString?.() +
         ' <span class="muted">points kept</span></dd>' +
@@ -443,38 +615,60 @@ function renderDrawer(name) {
     '<div class="section"><h3>Columns</h3><div class="chips">' + colChips + "</div></div>" +
 
     '<div class="section">' +
-      '<div class="section-head"><h3>Versions</h3><div class="spacer"></div>' +
+      '<div class="section-head"><h3>Versions</h3>' +
+        '<span class="muted small-lbl">calibrate on the last</span>' + winSel +
+        '<div class="spacer"></div>' +
         '<button class="small primary" id="vSave">Save versions</button></div>' +
-      '<table class="vtable" id="vTbl">' +
-      "<thead><tr><th>name</th><th>on</th><th>window</th><th>trees</th><th>margin</th></tr></thead>" +
-      "<tbody>" + vrows + "</tbody></table>" +
-      '<p class="hint">A point is anomalous if <b>any</b> enabled version flags it ' +
-        "(score ≤ −margin). On/off and margin take effect at the next detect; " +
-        "disabling a forest version discards its forest, so re-enabling costs a retrain. " +
-        "The autoencoder is only muted — its net is kept.</p>" +
+      '<div class="cal-note" id="calNote"></div>' +
+      '<div class="vwrap"><table class="vtable" id="vTbl">' +
+      "<thead><tr>" + th("name") + th("on") + th("window", "window") + th("trees", "trees") +
+        th("contamination", "contamination") + th("margin", "margin") + th("flags", "flags") +
+      "</tr></thead>" +
+      "<tbody>" + vrows + "</tbody></table></div>" +
+      '<details class="help"><summary>How alerts work</summary><p>' + esc(HELP.rule) +
+        "</p><p>On/off and margin take effect at the next point. Contamination, window and " +
+        "trees at the next retrain. Disabling a forest version discards its forest, so " +
+        "re-enabling costs a retrain; the autoencoder is only muted — its net is kept.</p></details>" +
+    "</div>" +
+
+    '<div class="section"><h3>Fine-tune margins</h3>' +
+      '<div class="sched-form">' +
+        '<div class="field"><label>target alert rate ' + q("rate") + "</label>" +
+          '<span class="unit"><input type="number" id="ftRate" min="0" max="100" step="any" value="1" title="' + esc(HELP.rate) + '"> % of the window</span></div>' +
+        '<button id="ftPreview" title="Compute the margins and show what they would flag. Writes nothing.">Preview</button>' +
+        '<button class="primary" id="ftApply" title="Write the previewed margins into the model. They apply at the next point.">Apply</button>' +
+      "</div>" +
+      '<div id="ftOut"></div>' +
+      '<p class="hint">Sets every enabled version’s margin so that the chosen share of the ' +
+        "calibration window above would have been flagged. Preview first: the table shows the old " +
+        "and new margin and how many points each flags. Apply writes them; Force train does " +
+        "not change them.</p>" +
     "</div>" +
 
     '<div class="section"><h3>Autoencoder</h3>' +
       '<div style="margin-bottom:10px">' + aeState + "</div>" +
       (aeRows ? '<dl class="ae-grid">' + aeRows + "</dl>" : "") +
       '<div class="ae-form">' +
-        '<div class="field"><label>hidden layers</label>' +
-          '<input type="text" id="aeHidden" placeholder="64,32,64"></div>' +
-        '<div class="field"><label>contamination</label>' +
-          '<input type="text" id="aeCont" placeholder="auto"></div>' +
+        '<div class="field"><label>hidden layers ' + q("hidden") + "</label>" +
+          '<input type="text" id="aeHidden" placeholder="64,32,64" title="' + esc(HELP.hidden) + '"></div>' +
+        '<div class="field"><label>pre-filter ' + q("prefilter") + "</label>" +
+          '<input type="text" id="aeCont" placeholder="auto" title="' + esc(HELP.prefilter) + '"></div>' +
         '<button id="aeTrain">' + (ae.trained ? "Retrain" : "Train") + " autoencoder</button>" +
       "</div>" +
       '<p class="hint">Trains a reconstruction model on the ring after an isolation-forest ' +
-        "pre-filter drops the obvious outliers. Explicit only — never part of the retrain " +
-        "schedule. Leave the fields empty for 64-32-64 and automatic contamination.</p>" +
+        "pre-filter drops the obvious outliers. Leave the fields empty for 64-32-64 and an " +
+        "automatic pre-filter. Its alert line is the <b>autoencoder</b> row above; its threshold " +
+        "is learned, so retrain it when the feed’s normal has moved (or tick the schedule box).</p>" +
     "</div>" +
 
-    '<div class="section"><h3>Retrain schedule</h3>' +
+    '<div class="section"><h3>Retrain schedule ' + q("sched") + "</h3>" +
       '<div class="sched-form">' +
         '<div class="field"><label>below max (every N pts)</label>' +
-          '<input type="number" id="schedBelow" min="1" value="' + (sched.below_max || 0) + '"></div>' +
+          '<input type="number" id="schedBelow" min="1" value="' + (sched.below_max || 0) + '" title="While the ring is still filling, retrain the forests every N stored points."></div>' +
         '<div class="field"><label>at max (every N pts)</label>' +
-          '<input type="number" id="schedAt" min="1" value="' + (sched.at_max || 0) + '"></div>' +
+          '<input type="number" id="schedAt" min="1" value="' + (sched.at_max || 0) + '" title="Once the ring holds max points, retrain the forests every N stored points."></div>' +
+        '<label class="chk" title="' + esc(HELP.sched_ae) + '"><input type="checkbox" id="schedAe"' +
+          (sched.autoencoder ? " checked" : "") + "> autoencoder too " + q("sched_ae") + "</label>" +
         '<button class="primary" id="schedSave">Save</button>' +
       "</div></div>" +
 
@@ -504,8 +698,7 @@ function renderDrawer(name) {
       "</div></details></div>" +
 
     '<div class="section"><h3>Actions</h3><div class="actions" style="justify-content:flex-start">' +
-      '<button onclick="doAction(\'train\',\'' + esc(name) + '\',this)">Force train</button>' +
-      '<button onclick="doAction(\'finetune\',\'' + esc(name) + '\',this)">Finetune margins</button>' +
+      '<button onclick="doAction(\'train\',\'' + esc(name) + '\',this)" title="Retrain every enabled forest on the ring now. Margins are kept.">Force train</button>' +
       '<a class="btn" href="/visualize.html?model=' + enc(name) + '">Visualize →</a>' +
       '<a class="btn" href="/anomalies.html?model=' + enc(name) + '">Anomalies →</a>' +
     "</div></div>";
@@ -513,15 +706,21 @@ function renderDrawer(name) {
   $("vSave").onclick    = (e) => saveVersions(name, e.currentTarget);
   $("schedSave").onclick= (e) => saveSchedule(name, e.currentTarget);
   $("aeTrain").onclick  = (e) => trainAE(name, e.currentTarget);
+  $("ftPreview").onclick= (e) => runFinetune(name, false, e.currentTarget);
+  $("ftApply").onclick  = (e) => runFinetune(name, true, e.currentTarget);
+  $("calWin").onchange  = (e) => { CAL_LAST = e.target.value; loadCal(name); };
   $("advApply").onclick = (e) => applyAdvanced(name, e.currentTarget);
   $("advRevert").onclick= () => { advShow(m, ADV_TAB); };
   $("advTabF").onclick  = () => advSwitch(m, "fields");
   $("advTabJ").onclick  = () => advSwitch(m, "json");
   $("advText").value = advSource(m);
   advSwitch(m, ADV_TAB, true);
-  $("vTbl").querySelectorAll("input").forEach(el =>
+  $("vTbl").querySelectorAll("input").forEach(el => {
     el.onchange = () => { const tr = el.closest("tr");
-                          if (el.dataset.f === "enabled") tr.classList.toggle("off", !el.checked); });
+                          if (el.dataset.f === "enabled") tr.classList.toggle("off", !el.checked); };
+    if (el.dataset.f === "margin") el.oninput = refreshCalCells;
+  });
+  if (CAL && CAL.model === name) refreshCalCells(); else loadCal(name);
 }
 
 // ── Advanced metadata editor ───────────────────────────────────
@@ -654,19 +853,6 @@ async function putMeta(name, patch, btn, what) {
   }
 }
 
-function saveVersions(name, btn) {
-  const versions = {};
-  $("vTbl").querySelectorAll("input[data-v]").forEach(el => {
-    const v = versions[el.dataset.v] || (versions[el.dataset.v] = {});
-    if (el.dataset.f === "enabled") v.enabled = el.checked;
-    else {
-      const x = parseFloat(el.value);
-      if (isFinite(x)) v.decision_margin = x;
-    }
-  });
-  return putMeta(name, { versions }, btn, "versions");
-}
-
 // Apply whichever view is showing — they produce the same patch shape.
 function applyAdvanced(name, btn) {
   let patch;
@@ -688,6 +874,80 @@ function applyAdvanced(name, btn) {
   return putMeta(name, patch, btn, "metadata");
 }
 
+function saveVersions(name, btn) {
+  const versions = {};
+  let bad = null;
+  $("vTbl").querySelectorAll("input[data-v]").forEach(el => {
+    const v = versions[el.dataset.v] || (versions[el.dataset.v] = {});
+    if (el.dataset.f === "enabled") v.enabled = el.checked;
+    else if (el.dataset.f === "contamination") {
+      const raw = el.value.trim().toLowerCase();
+      if (raw === "" || raw === "auto") v.contamination = "auto";
+      else {
+        const x = parseFloat(raw);
+        if (isFinite(x) && x > 0 && x <= 0.5) v.contamination = x;
+        else bad = el.dataset.v + ": contamination must be auto or a number in (0, 0.5]";
+      }
+    } else {
+      const x = parseFloat(el.value);
+      if (isFinite(x) && x >= 0) v.decision_margin = x;
+      else bad = el.dataset.v + ": margin must be a number ≥ 0";
+    }
+  });
+  if (bad) { toast(bad, "err", "Not saved"); return; }
+  return putMeta(name, { versions }, btn, "versions").then(ok => { if (ok) loadCal(name); });
+}
+
+// Fine-tune: one POST for preview (dry_run) and apply. The response is the
+// same shape either way, so the table is rendered by one function.
+async function runFinetune(name, apply, btn) {
+  const pct = parseFloat($("ftRate").value);
+  if (!isFinite(pct) || pct < 0 || pct > 100) { toast("rate must be 0–100 %", "err", "Fine-tune"); return; }
+  const orig = btn.textContent;
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try {
+    const d = await api("POST", "/api/dynamic/" + enc(name) + "/finetune",
+                        { rate: pct / 100, last: CAL_LAST === "all" ? "all" : parseInt(CAL_LAST, 10), dry_run: !apply });
+    renderFinetune(d);
+    if (apply) {
+      toast(d.message || "margins written", "ok", "Fine-tune");
+      const meta = await api("GET", "/models/dynamic/" + enc(name) + "/metadata");
+      MODELS[name] = meta;
+      CAL = null;
+      renderDrawer(name);
+      $("ftRate").value = pct;
+      renderFinetune(d);
+      render();
+    }
+  } catch (e) {
+    toast(e.message, "err", "Fine-tune failed");
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+function renderFinetune(d) {
+  const out = $("ftOut");
+  if (!out) return;
+  const vs = d.versions || {};
+  const names = Object.keys(vs);
+  if (!names.length) { out.innerHTML = '<p class="muted">no enabled, trained version to tune</p>'; return; }
+  const rows = names.map(vn => {
+    const v = vs[vn];
+    const up = v.new_margin > v.old_margin;
+    return "<tr><td>" + esc(vn) + "</td>" +
+      '<td class="dim">' + fmtNum(v.old_margin) + "</td>" +
+      "<td>" + (up ? "↑ " : v.new_margin < v.old_margin ? "↓ " : "= ") + fmtNum(v.new_margin) + "</td>" +
+      '<td class="dim">' + v.flagged_before + " <span class=\"muted\">(" + fmtPct(v.flagged_before, v.n) + ")</span></td>" +
+      "<td>" + v.flagged_after + " <span class=\"muted\">(" + fmtPct(v.flagged_after, v.n) + ")</span></td>" +
+      "<td>" + (v.applied ? '<span class="pill trained">written</span>' : '<span class="pill">preview</span>') + "</td></tr>";
+  }).join("");
+  out.innerHTML = '<table class="vtable ft-table"><thead><tr><th>version</th><th>margin now</th>' +
+    "<th>new margin</th><th>flags now</th><th>flags after</th><th></th></tr></thead><tbody>" + rows +
+    "</tbody></table>" + '<div class="cal-note">' + (d.dry_run ? "Preview — nothing written. " : "") +
+    "Window: " + (d.window && d.window.rows || 0).toLocaleString() + " points, target " +
+    fmtPct(d.rate || 0, 1) + ".</div>";
+}
+
 async function trainAE(name, btn) {
   const body = {};
   const hs = ($("aeHidden").value || "").split(",").map(x => parseInt(x, 10)).filter(x => x > 0);
@@ -700,6 +960,7 @@ async function trainAE(name, btn) {
     const d = await api("POST", "/train/autoencoder/" + enc(name), body);
     toast("trained on " + (d.training_data_points ?? "?") + " pts, " +
           (d.filtered_anomalies ?? 0) + " filtered", "ok", "autoencoder");
+    CAL = null;
     await openDrawer(name);
   } catch (e) {
     toast(e.message, "err", "Autoencoder failed");
@@ -708,16 +969,11 @@ async function trainAE(name, btn) {
   }
 }
 
-function fmtNum(x) {
-  if (x === null || x === undefined) return "–";
-  if (typeof x !== "number") return esc(x);
-  return Math.abs(x) < 1e-4 && x !== 0 ? x.toExponential(2) : x.toFixed(4).replace(/\.?0+$/, "");
-}
-
 function saveSchedule(name, btn) {
   const below = parseInt($("schedBelow").value, 10) || 0;
   const at = parseInt($("schedAt").value, 10) || 0;
-  return putMeta(name, { schedule: { below_max: below, at_max: at } }, btn, "schedule");
+  const aeToo = !!$("schedAe").checked;
+  return putMeta(name, { schedule: { below_max: below, at_max: at, autoencoder: aeToo } }, btn, "schedule");
 }
 
 $("auto").onchange = (e) => {

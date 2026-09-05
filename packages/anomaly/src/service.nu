@@ -13,11 +13,12 @@
 //   PUT    /models/dynamic/<model>/metadata   edit schedule / version configs
 //   GET    /models/dynamic/<model>/data       recent points (?limit=N|all)
 //   GET    /models/dynamic/<model>/anomalies  scored ring (cached, filtered)
+//   GET    /models/dynamic/<model>/calibration  alert rates vs margins
 //   POST   /models/dynamic/<model>/import     a CSV/JSON/JSONL file of history
 //   POST   /models/dynamic/<model>/reset      drop data+forests, keep name
 //   DELETE|GET /delete_model/<model>          delete entirely
 //   PUT    /api/dynamic/<model>/schedule      retraining schedule
-//   POST   /api/dynamic/<model>/finetune      recalibrate margins
+//   POST   /api/dynamic/<model>/finetune      set margins from a target alert rate
 //   POST   /train/autoencoder/<model>         train the autoencoder version
 //
 // Model names must match ^[a-zA-Z0-9_]+$ (400 otherwise, same message as
@@ -453,8 +454,14 @@ $ `src/authz.nu`
     ( json_obj_set o `score` ( json_float . vd score ) )
     ( json_obj_set o `data_points` ( json_int ( model_n_points mo ) ) )
 
+    // `severity` is the one number that means the same thing in every
+    // version: -score / margin, so 1.0 is exactly the alert line, 2.0 is
+    // twice as far past it, and a negative value is a comfortably normal
+    // point. `score` and `margin` stay in each version's own units.
     : Json vers ( json_obj_new )
     : i nv ( vec_len [VerVerdict] . vd versions )
+    : ~ f top_sev 0.0
+    : ~ b first T
     : ~ i k 0
     ~ < k nv {
         ?? ( vec_get [VerVerdict] . vd versions k ) {
@@ -462,6 +469,13 @@ $ `src/authz.nu`
                 : Json vo ( json_obj_new )
                 ( json_obj_set vo `anomaly` ( json_bool . vv anomaly ) )
                 ( json_obj_set vo `score` ( json_float . vv score ) )
+                : ~ f sev 0.0
+                ? > . vv margin 0.0 { = sev / - 0.0 . vv score . vv margin } {
+                    = sev ? <= . vv score 0.0 1.0 0.0
+                }
+                ( json_obj_set vo `severity` ( json_float sev ) )
+                ? || first > sev top_sev { = top_sev sev } {}
+                = first F
                 : Json ti ( json_obj_new )
                 ( json_obj_set ti `margin` ( json_float . vv margin ) )
                 ( json_obj_set vo `threshold_info` ti )
@@ -471,6 +485,7 @@ $ `src/authz.nu`
         }
         = k + k 1
     }
+    ( json_obj_set o `severity` ( json_float top_sev ) )
     ( json_obj_set o `versions` vers )
     ( json_obj_set o `data_point` ( json_clone body ) )
 
@@ -719,6 +734,9 @@ $ `src/authz.nu`
             ( json_obj_set o `reconstruction_threshold` ( json_float . ae threshold ) )
             ( json_obj_set o `training_data_points` ( json_int . ae trained_on ) )
             ( json_obj_set o `filtered_anomalies` ( json_int . ae filtered ) )
+            ( json_obj_set o `prefilter_contamination` ( json_float . ae prefilter ) )
+            ( json_obj_set o `trained_at` ( json_int . ae trained_at ) )
+            ( json_obj_set o `retrain_with_forests` ( json_bool . mm sched_ae ) )
             ( json_obj_set o `decision_margin` ( json_float ( meta_version_margin mm `autoencoder` 0.05 ) ) )
             ( json_obj_set o `feature_names` ( _an_jarr_of_strs . ae feats ) )
             : Json layers ( json_arr_new )
@@ -1249,6 +1267,7 @@ $ `src/authz.nu`
             : Json sched ( json_obj_new )
             ( json_obj_set sched `below_max` ( json_int . mm sched_below ) )
             ( json_obj_set sched `at_max` ( json_int . mm sched_at_max ) )
+            ( json_obj_set sched `autoencoder` ( json_bool . mm sched_ae ) )
             ( json_obj_set o `training_schedule` sched )
             : HttpResponse r ( response_json 200 o )
             ( json_free o )
@@ -1421,6 +1440,198 @@ $ `src/authz.nu`
     }
 }
 
+// The rate ladder a calibration answers "margin for" without being asked:
+// what a person can type in one breath.
+@ __an_cal_rates → ( Vec f ) {
+    : ( Vec f ) r ( vec_new [f] )
+    ( vec_push [f] r 0.001 ) ( vec_push [f] r 0.005 ) ( vec_push [f] r 0.01 )
+    ( vec_push [f] r 0.02 ) ( vec_push [f] r 0.05 ) ( vec_push [f] r 0.1 )
+    ^ r
+}
+
+// The (rate, margin) curve the dashboard interpolates for "how many
+// would THIS margin flag": every 0.1 % up to 1 %, then every 1 % — the
+// resolution a slider needs where the decision values are dense.
+@ __an_cal_curve CalVer cv → Json {
+    : Json a ( json_arr_new )
+    : ~ i k 0
+    ~ <= k 109 {
+        : ~ f rate 0.0
+        ? < k 10 { = rate * # f k 0.001 } { = rate * # f - k 9 0.01 }
+        : f m ( cal_margin_for_rate cv rate )
+        : Json pt ( json_arr_new )
+        ( json_arr_push pt ( json_float rate ) )
+        ( json_arr_push pt ( json_float m ) )
+        ( json_arr_push a pt )
+        = k + k 1
+    }
+    ^ a
+}
+
+@ __an_rate_key f rate → String {
+    // "0.01" → key "1%", "0.001" → "0.1%", "0.1" → "10%"
+    : f pct * rate 100.0
+    : String key ( string_new )
+    : f r3 ( round_sig pct 3 )
+    ? == r3 ( float_floor r3 ) {
+        ( string_push_int key # i r3 )
+    } {
+        : s t ( float_to_string r3 )
+        ( string_push_str key t )
+    }
+    ( string_push_char key 37 )
+    ^ key
+}
+
+// One version's calibration block.
+@ __an_cal_ver_json CalVer cv b with_curve → Json {
+    : Json o ( json_obj_new )
+    ( json_obj_set o `margin` ( json_float . cv cur_margin ) )
+    ( json_obj_set o `n` ( json_int . cv n ) )
+    ( json_obj_set o `flagged` ( json_int . cv flagged ) )
+    : ~ f rate 0.0
+    ? > . cv n 0 { = rate / # f . cv flagged # f . cv n } {}
+    ( json_obj_set o `rate` ( json_float rate ) )
+    ( json_obj_set o `worst` ( json_float . cv worst ) )
+    ( json_obj_set o `median` ( json_float . cv median ) )
+    : Json mfr ( json_obj_new )
+    : ( Vec f ) rates ( __an_cal_rates )
+    : i nr ( vec_len [f] rates )
+    : ~ i k 0
+    ~ < k nr {
+        : f r ( _mlp_fget rates k )
+        : f m ( cal_margin_for_rate cv r )
+        : Json e ( json_obj_new )
+        ( json_obj_set e `margin` ( json_float m ) )
+        ( json_obj_set e `flagged` ( json_int ( cal_flagged_at cv m ) ) )
+        : String key ( __an_rate_key r )
+        ( json_obj_set mfr ( string_data key ) e )
+        ( string_free key )
+        = k + k 1
+    }
+    ( vec_free [f] rates )
+    ( json_obj_set o `margin_for_rate` mfr )
+    ? with_curve { ( json_obj_set o `curve` ( __an_cal_curve cv ) ) } {}
+    ^ o
+}
+
+// The window shared by calibration and fine-tune: ?from / ?to / ?last
+// (query) or the same keys in a JSON body; `last` defaults to 24 h when
+// nothing bounds the window.
+@ __an_cal_window * Model mo i q_from i q_to i q_last → ( Vec i ) {
+    : ~ i from_ts q_from
+    : ~ i to_ts q_to
+    : ~ i last q_last
+    ? & & <= from_ts 0 <= to_ts 0 == last 0 { = last ANOM_CAL_WINDOW } {}
+    ? > last 0 {
+        : i f2 ( model_window_from_last mo to_ts last )
+        ? > f2 0 { = from_ts f2 } {}
+    } {}
+    : ( Vec i ) w ( vec_new [i] )
+    ( vec_push [i] w from_ts )
+    ( vec_push [i] w to_ts )
+    ^ w
+}
+
+// GET /models/dynamic/<m>/calibration
+//
+//   ?from=<unix>&to=<unix>&last=<seconds>   window (default: last 24 h;
+//                                           last=all for the whole ring)
+//   &curve=0                                omit the (rate, margin) curves
+//
+// Per enabled, trained version: the current margin and what it flags in
+// the window, the margin for each standard alert rate, and the curve.
+// Read-only — nothing is written.
+@ __an_h_calibration HttpRequest req Params p → HttpResponse {
+    : String mname ( __an_param_model p )
+    ? ( __an_name_ok ( string_data mname ) ) {} {
+        ( string_free mname )
+        ^ ( __an_bad_name )
+    }
+    : Gate gate ( __an_gate_model req ( string_data mname ) F F )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rd
+    }
+    ( __an_gate_free gate )
+    : Store st ( store_open g_an_root )
+    ? ( store_exists st ( string_data mname ) ) {} {
+        : HttpResponse r404 ( __an_404_model ( string_data mname ) )
+        ( store_free st )
+        ( string_free mname )
+        ^ r404
+    }
+    : i q_from ( __an_query_int . req query `from` 0 )
+    : i q_to ( __an_query_int . req query `to` 0 )
+    : i q_last ( __an_query_int . req query `last` 0 )
+    : String qcurve ( __an_query_str . req query `curve` )
+    : b with_curve ! == ( nurl_str_eq ( string_data qcurve ) `0` ) 1
+    ( string_free qcurve )
+
+    : *Model mo ( model_open st ( string_data mname ) )
+    ? ( model_is_trained mo ) {} {
+        : String msg ( string_from `Model ` )
+        ( string_push_str msg ( string_data mname ) )
+        ( string_push_str msg ` exists but is not trained yet.` )
+        : HttpResponse rr ( __an_json_err 400 ( string_data msg ) )
+        ( string_free msg )
+        ( model_free mo )
+        ( store_free st )
+        ( string_free mname )
+        ^ rr
+    }
+    : ( Vec i ) win ( __an_cal_window mo q_from q_to q_last )
+    : i from_ts ( _mlp_iget win 0 )
+    : i to_ts ( _mlp_iget win 1 )
+    ( vec_free [i] win )
+    : CalReport cal ( model_calibrate mo from_ts to_ts )
+
+    : Json o ( json_obj_new )
+    ( json_obj_set o `status` ( json_str_lit `success` ) )
+    ( json_obj_set o `model` ( json_str_lit ( string_data mname ) ) )
+    : Json wj ( json_obj_new )
+    ( json_obj_set wj `from` ( json_int from_ts ) )
+    ( json_obj_set wj `to` ( json_int to_ts ) )
+    ( json_obj_set wj `rows` ( json_int . cal n_rows ) )
+    ( json_obj_set wj `total` ( json_int ( model_n_points mo ) ) )
+    ( json_obj_set o `window` wj )
+    : Json agg ( json_obj_new )
+    ( json_obj_set agg `flagged` ( json_int . cal agg_flagged ) )
+    : ~ f arate 0.0
+    ? > . cal n_rows 0 { = arate / # f . cal agg_flagged # f . cal n_rows } {}
+    ( json_obj_set agg `rate` ( json_float arate ) )
+    ( json_obj_set o `aggregate` agg )
+    : Json vers ( json_obj_new )
+    : i ni ( vec_len [CalVer] . cal items )
+    : ~ i k 0
+    ~ < k ni {
+        ?? ( vec_get [CalVer] . cal items k ) {
+            T cv → { ( json_obj_set vers ( string_data . cv cvname ) ( __an_cal_ver_json cv with_curve ) ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( json_obj_set o `versions` vers )
+    ( cal_free cal )
+    : HttpResponse r ( response_json 200 o )
+    ( json_free o )
+    ( model_free mo )
+    ( store_free st )
+    ( string_free mname )
+    ^ r
+}
+
+// POST /models/dynamic/<m>/finetune
+//
+// Body (all optional): {"rate": 0.01, "last": 86400 | "all", "from": N, "to": N,
+// "dry_run": false, "versions": ["short_term", ...]}. Sets every enabled,
+// trained version's margin so that `rate` of the window is flagged
+// (rounded to the fewest significant digits that keep the count);
+// `dry_run` reports without writing.
+// The response keeps the legacy `adjusted_margins` map (the new margins,
+// whether or not they were applied) beside the per-version detail.
 @ __an_h_finetune HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -1445,8 +1656,71 @@ $ `src/authz.nu`
         ( string_free mname )
         ^ r404
     }
+
+    : ~ f rate ANOM_FT_RATE
+    : ~ i q_from ( __an_query_int . req query `from` 0 )
+    : ~ i q_to ( __an_query_int . req query `to` 0 )
+    : ~ i q_last ( __an_query_int . req query `last` 0 )
+    : ~ b dry F
+    : ( Vec String ) only ( vec_new [String] )
+    : ~ b bad_rate F
+    ?? ( __an_body_json req ) {
+        T body → {
+            ? ( json_is_obj body ) {
+                ?? ( json_obj_get body `rate` ) {
+                    T rj → {
+                        : ~ b okr F
+                        ? ( json_is_num rj ) {
+                            ?? ( json_num_as_f rj ) {
+                                T x → { ? & >= x 0.0 <= x 1.0 { = rate x = okr T } {} }
+                                F _ → {}
+                            }
+                        } {}
+                        ? okr {} { = bad_rate T }
+                    }
+                    F _ → {}
+                }
+                = q_from ( _an_jint body `from` q_from )
+                = q_to ( _an_jint body `to` q_to )
+                = q_last ( _an_jint body `last` q_last )
+                // "last": "all" (or -1) means the whole ring, as in the query.
+                ?? ( json_obj_get body `last` ) {
+                    T lj → { ? ( json_is_str lj ) { ? == ( nurl_str_eq ( json_str_data lj ) `all` ) 1 { = q_last -1 } {} } {} }
+                    F _ → {}
+                }
+                ?? ( json_obj_get body `dry_run` ) { T dj → { = dry ( json_as_bool dj ) } F _ → {} }
+                ?? ( json_obj_get body `versions` ) {
+                    T va → {
+                        ? ( json_is_arr va ) {
+                            : i nv ( json_arr_len va )
+                            : ~ i k 0
+                            ~ < k nv {
+                                ?? ( json_arr_get va k ) {
+                                    T e → { ? ( json_is_str e ) { ( vec_push [String] only ( string_from ( json_str_data e ) ) ) } {} }
+                                    F _ → {}
+                                }
+                                = k + k 1
+                            }
+                        } {}
+                    }
+                    F _ → {}
+                }
+            } {}
+            ( json_free body )
+        }
+        F _ → {}
+    }
+    ? bad_rate {
+        ( vec_free_with [String] only \ String x → v { ( string_free x ) } )
+        : HttpResponse rb ( __an_json_err 400 `rate must be a number between 0 and 1 (the fraction of the window to flag)` )
+        ( store_free st )
+        ( string_free mname )
+        ^ rb
+    } {}
+
     : *Model mo ( model_open st ( string_data mname ) )
     ? ( model_is_trained mo ) {} {
+        ( vec_free_with [String] only \ String x → v { ( string_free x ) } )
         : String msg ( string_from `Model ` )
         ( string_push_str msg ( string_data mname ) )
         ( string_push_str msg ` exists but is not trained yet.` )
@@ -1457,27 +1731,66 @@ $ `src/authz.nu`
         ( string_free mname )
         ^ rr
     }
-    : FineTuneReport rep ( model_finetune mo )
+    : ( Vec i ) win ( __an_cal_window mo q_from q_to q_last )
+    : i from_ts ( _mlp_iget win 0 )
+    : i to_ts ( _mlp_iget win 1 )
+    ( vec_free [i] win )
+    : FineTuneReport rep ( model_finetune_at mo rate from_ts to_ts ! dry only )
+    ( vec_free_with [String] only \ String x → v { ( string_free x ) } )
+
     : Json margins ( json_obj_new )
     : Json scores ( json_obj_new )
+    : Json vers ( json_obj_new )
     : i ni ( vec_len [FtVer] . rep items )
     : ~ i k 0
     ~ < k ni {
         ?? ( vec_get [FtVer] . rep items k ) {
             T ft → {
                 ( json_obj_set margins ( string_data . ft ftname ) ( json_float . ft new_margin ) )
-                ( json_obj_set scores ( string_data . ft ftname ) ( json_float . ft min_score ) )
+                ( json_obj_set scores ( string_data . ft ftname ) ( json_float . ft worst ) )
+                : Json v ( json_obj_new )
+                ( json_obj_set v `old_margin` ( json_float . ft old_margin ) )
+                ( json_obj_set v `new_margin` ( json_float . ft new_margin ) )
+                ( json_obj_set v `n` ( json_int . ft n ) )
+                ( json_obj_set v `flagged_before` ( json_int . ft before ) )
+                ( json_obj_set v `flagged_after` ( json_int . ft after ) )
+                : ~ f rb 0.0
+                : ~ f ra 0.0
+                ? > . ft n 0 {
+                    = rb / # f . ft before # f . ft n
+                    = ra / # f . ft after # f . ft n
+                } {}
+                ( json_obj_set v `rate_before` ( json_float rb ) )
+                ( json_obj_set v `rate_after` ( json_float ra ) )
+                ( json_obj_set v `worst` ( json_float . ft worst ) )
+                ( json_obj_set v `applied` ( json_bool . ft applied ) )
+                ( json_obj_set vers ( string_data . ft ftname ) v )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( finetune_free rep )
-    : String msg ( string_from `Successfully fine-tuned model ` )
-    ( string_push_str msg ( string_data mname ) )
+    : String msg ( string_new )
+    ? dry {
+        ( string_push_str msg `Dry run: margins for model ` )
+        ( string_push_str msg ( string_data mname ) )
+        ( string_push_str msg ` were not changed` )
+    } {
+        ( string_push_str msg `Successfully fine-tuned model ` )
+        ( string_push_str msg ( string_data mname ) )
+    }
     : Json o ( __an_ok_msg ( string_data msg ) )
+    ( json_obj_set o `rate` ( json_float rate ) )
+    ( json_obj_set o `dry_run` ( json_bool dry ) )
+    : Json wj ( json_obj_new )
+    ( json_obj_set wj `from` ( json_int from_ts ) )
+    ( json_obj_set wj `to` ( json_int to_ts ) )
+    ( json_obj_set wj `rows` ( json_int . rep n_rows ) )
+    ( json_obj_set o `window` wj )
+    ( json_obj_set o `versions` vers )
     ( json_obj_set o `adjusted_margins` margins )
     ( json_obj_set o `max_anomaly_scores` scores )
+    ( finetune_free rep )
     : HttpResponse r ( response_json 200 o )
     ( json_free o )
     ( string_free msg )
@@ -2473,6 +2786,7 @@ $ `src/authz.nu`
     ( router_get r `/delete_model/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_delete req p ) } )
     ( router_put r `/api/dynamic/:model/schedule` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_schedule req p ) } )
     ( router_post r `/api/dynamic/:model/finetune` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_finetune req p ) } )
+    ( router_get r `/models/dynamic/:model/calibration` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_calibration req p ) } )
     ( router_post r `/train/autoencoder/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_train_ae req p ) } )
     ( router_post r `/models/dynamic/:model/claim` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_claim req p ) } )
     ( router_post r `/models/dynamic/:model/import` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_import req p ) } )

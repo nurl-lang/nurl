@@ -148,7 +148,8 @@ Persisted as JSON (`std/ext/json`). Fields:
   "categories":      { col: [sorted strings] },
   "feature_names":   [ordered feature names],   // authoritative feature order
   "scaler":          { "mean": [...], "std": [...] },
-  "schedule":        { "below_max": 50, "at_max": 1000 },
+  "schedule":        { "below_max": 50, "at_max": 1000,
+                       "autoencoder": false },  // true ⇒ the AE retrains with the forests
   "versions":        { version_name: <version config>, ... },
   "n_points_seen":   int,
   "last_trained_at": int,  // point count at last train
@@ -224,7 +225,9 @@ caller-owned handles, `( Vec f )` row-major matrices).
 | `( model_force_train model )` | `i` — retrain now, return points used |
 | `( model_reset model )` | `v` — drop data + forests, keep name/schedule |
 | `( model_delete store name )` | `v` — remove everything |
-| `( model_finetune model )` | `FineTuneReport` — recalibrate margins |
+| `( model_calibrate model from to )` | `CalReport` — per version, the sorted decision values of the ring rows in `[from, to]` (0 = unbounded), what the current margin flags, and `cal_margin_for_rate` to read the margin for any alert rate off them |
+| `( model_finetune model )` | `FineTuneReport` — set every enabled version's margin to the one that flags `ANOM_FT_RATE` (1 %) of the last `ANOM_CAL_WINDOW` (24 h, anchored on the newest stored point) |
+| `( model_finetune_at model rate from to apply only )` | the same with the rate, the window, a dry run (`apply = F`) and a version filter (`only`, empty = all) |
 | `( model_set_schedule model below_max at_max )` | `v` |
 | `( model_metadata model )` | `Meta` |
 | `( model_free model )` | `v` |
@@ -246,6 +249,12 @@ Verdict {
                                    //               margin, cfg_margin }
 }
 ```
+
+The service adds `severity = −score / margin` to every version verdict and,
+as the maximum over versions, to the aggregate (`margin = 0` gives 1.0 when
+flagged, 0.0 otherwise). 1.0 is exactly the alert line, 2.0 twice as far
+past it, negative comfortably normal — the one unit-free number an operator
+or an agent can compare across versions and models.
 
 Aggregation: a point is anomalous if **any** enabled version flags it; the
 reported `score` is the most-severe version's score. (The reference checks all
@@ -293,10 +302,25 @@ training error" — the documented intent — instead of "flag at p95 + 0.05",
 and the same number means the same thing on every model. Existing metadata
 needs no migration: the value that was mute becomes the value that works.
 
-`model_finetune` (§5.2) covers the autoencoder on the same rule as the
-forests, in these relative units: `decision_margin` becomes
-`0.95 · |worst decision_function over the ring| / reconstruction_threshold`,
-so the ring's most anomalous point lands just inside the band.
+`model_calibrate` and `model_finetune` (§5.2) cover the autoencoder on the
+same rule as the forests, in these relative units: its decision values are
+expressed as `decision_function / reconstruction_threshold`, so the margin
+that flags 1 % of the window is read off the same sorted list as a forest's.
+
+**Fine-tune is a rate, rounded to be readable.** For a version with `n`
+window rows sorted ascending (`dfs`) and a target rate `r`, `k = round(r·n)`
+and the raw margin is `−dfs[k−1]` (`k = 0`: just above the worst row). The
+written value is that margin rounded to the fewest significant digits — 2 to
+5, nearest first, then away from the target side — whose flagged count stays
+within `k/10` of `k`, falling back to 6 digits rounded toward the target
+side. So `0.12994712` becomes `0.13` when the data allow it, and never
+`0.1299471200000001`. Ties in the data can put the actual count above `k`;
+the report says what was flagged before and after.
+
+**The `autoencoder` version config is never a forest.** The retrain loop
+skips it and deletes a stale `version_autoencoder.forest`, and the loader
+ignores one: a zero-tree forest scored under that name would be a second
+"autoencoder" verdict reading the relative margin as an absolute one.
 
 ### 5.6 Scanning the stored ring
 
@@ -421,7 +445,8 @@ service so existing dashboards and the `modelmanager` UI keep working:
   `autoencoder` block (its own state lives in `autoencoder.json`, not the
   metadata): `trained`, `enabled`, `reconstruction_threshold`,
   `training_data_points`, `filtered_anomalies`, `decision_margin`,
-  `feature_names`, `layer_sizes`. Every metadata response (this one, the
+  `feature_names`, `layer_sizes`, `prefilter_contamination`, `trained_at`,
+  `retrain_with_forests`. Every metadata response (this one, the
   listing, and the PUT echo) also carries `editable_fields`: the top-level
   keys the PUT below accepts, published so a client never has to keep its
   own copy of the list. It is service-shaped and deliberately absent from
@@ -463,7 +488,24 @@ service so existing dashboards and the `modelmanager` UI keep working:
   (admin); defaults to the caller.
 - `POST /train/autoencoder/<model>` optional body = `{ hidden?: [int],
   contamination?: float }` → `training_data_points`, `filtered_anomalies`,
-  `reconstruction_threshold`.
+  `reconstruction_threshold`. Both are stored with the net and reused when
+  `schedule.autoencoder` retrains it with the forests.
+- `GET /models/dynamic/<model>/calibration` — §5.2 `model_calibrate` over
+  the same window query as the scan (`from` / `to` / `last`, default the
+  last 24 h of stored data, `last=all` the whole ring), read-only. Response:
+  `window { from, to, rows, total }`, `aggregate { flagged, rate }` and per
+  enabled, trained version `{ margin, n, flagged, rate, worst, median,
+  margin_for_rate: { "0.1%": { margin, flagged }, "0.5%", "1%", "2%", "5%",
+  "10%" }, curve: [[rate, margin], …] }` — 110 points, 0.1 % steps to 1 %
+  then 1 % steps to 100 %, so a dashboard can turn a typed margin into an
+  estimated alert rate without a round trip. `curve=0` omits it. 400 on an
+  untrained model.
+- `POST /api/dynamic/<model>/finetune` body (all optional) = `{ rate: 0.01,
+  last: 86400 | "all", from, to, dry_run: false, versions: [names] }` →
+  `rate`, `dry_run`, `window`, per version `{ old_margin, new_margin, n,
+  flagged_before, flagged_after, rate_before, rate_after, worst, applied }`,
+  plus the legacy `adjusted_margins` and `max_anomaly_scores` maps. 400 on
+  a rate outside `[0, 1]`.
 - model-name validation: `^[a-zA-Z0-9_]+$` (reject otherwise, mirrors reference).
 
 The service is thin: parse JSON → call the library → serialise. It is
@@ -477,6 +519,9 @@ anomaly detect  <model> [--store DIR] key=val ...      # ingest + verdict
 anomaly score   <model> [--store DIR] key=val ...      # detect-only
 anomaly batch   [-f FILE] [-H] [--model M]             # score a CSV, like iforest but with a saved model
 anomaly train   <model> [--store DIR]                  # force retrain
+anomaly train-ae <model> [--hidden 64,32,64] [--contamination C]
+anomaly calibrate <model> [--last S|all] [--from T] [--to T]   # alert rates vs margins
+anomaly finetune  <model> [--rate R] [--last S|all] [--dry-run]  # write margins for a rate
 anomaly reset   <model> [--store DIR]
 anomaly rm      <model> [--store DIR]
 anomaly ls      [--store DIR]                          # list models
@@ -542,8 +587,9 @@ usable state. Later milestones depend only on earlier ones.
 - Several enabled versions per model (`short_term` … `timevector`), each a
   window-filtered Isolation Forest with its own config.
 - Verdict aggregation (§5.4) and the per-version breakdown.
-- `model_finetune`: for each version, find the max observed score and lower the
-  margin so that point is (just) anomalous, +5 % buffer — matching the reference.
+- `model_finetune`: for each version, the margin that flags a target share of
+  a recent window (§5.5) — the reference's "worst point just inside the band,
+  +5 % buffer" was replaced once a real feed showed it tracks one outlier.
 - **Tests:** aggregation truth table (any-version-anomalous); per-window data
   routing; fine-tune moves the margin monotonically and makes the previously
   max-scoring point cross the threshold.

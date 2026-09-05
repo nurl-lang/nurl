@@ -78,6 +78,7 @@ $ `stdlib/ext/json.nu`
     ( Vec f ) sc_std
     i sched_below
     i sched_at_max
+    b sched_ae  // retrain the autoencoder whenever the forests retrain
     i n_seen
     i last_trained
     i max_points
@@ -151,6 +152,7 @@ $ `stdlib/ext/json.nu`
     = . m sc_std ( vec_new [f] )
     = . m sched_below ANOM_SCHED_BELOW
     = . m sched_at_max ANOM_SCHED_AT_MAX
+    = . m sched_ae F
     = . m n_seen 0
     = . m last_trained 0
     = . m max_points ANOM_MAX_POINTS
@@ -761,6 +763,7 @@ $ `stdlib/ext/json.nu`
     : Json sched ( json_obj_new )
     ( json_obj_set sched `below_max` ( json_int . m sched_below ) )
     ( json_obj_set sched `at_max` ( json_int . m sched_at_max ) )
+    ( json_obj_set sched `autoencoder` ( json_bool . m sched_ae ) )
     ( json_obj_set o `schedule` sched )
 
     : Json vers ( json_obj_new )
@@ -984,6 +987,7 @@ $ `stdlib/ext/json.nu`
         T sched → {
             = . m sched_below ( _an_jint sched `below_max` ANOM_SCHED_BELOW )
             = . m sched_at_max ( _an_jint sched `at_max` ANOM_SCHED_AT_MAX )
+            ?? ( json_obj_get sched `autoencoder` ) { T aj → { = . m sched_ae ( json_as_bool aj ) } F _ → {} }
         }
         F _ → {}
     }

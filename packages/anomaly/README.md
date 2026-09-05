@@ -33,7 +33,7 @@ HTTP routes and response shapes, so existing dashboards keep working.
 - **autoencoder — the correlation detector** (trained on demand:
   `anomaly train-ae <model>` / `POST /train/autoencoder/<model>`). A
   temporary Isolation Forest first drops the ring's anomalies
-  (contamination 10 %), then an MLP autoencoder
+  (pre-filter contamination 10 % unless given), then an MLP autoencoder
   ([`mlp`](../mlp) package: Adam, early stopping, deterministic restarts)
   learns to reconstruct the normal rows; the detection threshold is the
   95th percentile of the training reconstruction errors. It catches what
@@ -69,7 +69,10 @@ HTTP routes and response shapes, so existing dashboards keep working.
 - **Schedule-driven self-training.** Warm-up until 50 points (verdicts say
   `collecting`), then a full retrain every 50 points — every 1000 once the
   ring is full. `PUT /api/dynamic/<m>/schedule` / `model_set_schedule`
-  change the cadence.
+  change the cadence. Retraining keeps the margins. The autoencoder is
+  left alone unless `schedule.autoencoder` is true, in which case it is
+  retrained with the forests, with the layer sizes and pre-filter of its
+  last manual training.
 - **Multiple time-window versions.** Each model trains one forest per
   enabled version — `short_term` (180 min), `daily` (24 h), `weekly`,
   `seasonal` (90 d) and `timevector` (last 100 points) — so the same stream
@@ -79,11 +82,15 @@ HTTP routes and response shapes, so existing dashboards keep working.
   `-iforest_score − offset`, `offset = −0.5` for `contamination = "auto"`
   (else the 100·c percentile of training scores). A version flags a point
   when `score ≤ −decision_margin`; margins are read from live metadata, so
-  tuning applies without a retrain.
-- **Fine-tuning.** `model_finetune` sets each version's margin to 95 % of
-  the magnitude of the worst score observed over the ring — the most
-  anomalous point seen so far lands just inside the anomaly band. The
-  autoencoder is included, in its own relative units.
+  tuning applies without a retrain. Every verdict also carries
+  `severity = −score / margin` — 1.0 is exactly the alert line, 2.0 twice
+  as far past it, negative is comfortably normal — the one number that
+  means the same thing in every version.
+- **Calibration and fine-tuning.** `model_calibrate` scores a window of the
+  stored ring (the last 24 h by default) through the live verdict path and
+  reports, per version, what the current margin flags and which margin
+  would flag any given share. `model_finetune` writes the margin for one
+  target alert rate (1 % by default). See **How many alerts** below.
 - **A nickname.** `alias` is a display name the dashboard shows in place of
   the model's own name, which is often whatever created it. It is ordinary
   editable metadata (`{"alias": "boiler room"}`), never reaches a file path or
@@ -98,6 +105,62 @@ deterministic data: `decision_function` values match within ~0.01 across
 normal and outlier points. A fixed seed (42, the reference's
 `random_state`) makes forests — and therefore scores — byte-identical
 across platforms and runs.
+
+## How many alerts: margins, calibration, fine-tune
+
+The decision rule is one line: a version flags a point when
+`score ≤ −decision_margin`, and the model reports an anomaly when **any**
+enabled version flags. So the margin is the alert line, and there is
+exactly one direction to move it:
+
+| you want | move |
+| --- | --- |
+| fewer alerts, only the extreme points | **raise** the margin |
+| more alerts | **lower** it (0 flags anything the model finds even slightly unusual) |
+
+`contamination` moves the forest's zero line instead (raise → more alerts)
+but only at the next retrain, so day-to-day tuning is the margin. The
+autoencoder's margin is relative to its learned threshold — flag when
+`error ≥ threshold × (1 + margin)` — but reads the same way: raise for fewer.
+
+What a margin *means* in alerts per day is a property of the data, not of
+the number, so the service answers that question directly:
+
+```
+$ anomaly calibrate boiler                      # last 24 h; --last 604800, --last all
+window: 1 441 of 15 500 stored points; any version flags 883 (61.3%)
+version       margin    flagged        worst     margin for 0.1% / 1% / 5% / 10%
+short_term    0.06  0 (0%)  -0.05485  0.0548514 / 0.0548514 / 0.0536471 / 0.0536471
+daily         0.06  0 (0%)  -0.03866  0.0386 / 0.0382 / 0.0375 / 0.037
+autoencoder   0  883 (61.3%)  -6.242  6.24 / 6.06 / 5.76 / 5.64
+```
+
+`GET /models/dynamic/<m>/calibration?last=86400` is the same report as JSON:
+per version the current margin, how many of the window it flags, the margin
+for each standard rate (`margin_for_rate`), and a (rate, margin) `curve` a
+dashboard can read a live estimate off. Read-only; ~1 ms per stored row.
+
+Fine-tune is calibration plus a write: pick the share of the window you are
+willing to alert on and every enabled version gets the margin that flags
+exactly that share — rounded to the fewest significant digits that keep the
+count, so a margin reads `0.13`, not `0.12994712`:
+
+```
+$ anomaly finetune boiler --rate 0.01 --dry-run        # preview, nothing written
+$ anomaly finetune boiler --rate 0.01                  # write
+$ curl -X POST localhost:8811/api/dynamic/boiler/finetune \
+       -d '{"rate": 0.01, "last": 86400, "dry_run": true, "versions": ["daily"]}'
+```
+
+The window is counted back from the newest stored point, not the clock, so
+a feed that stopped still calibrates on its last day; `last: "all"` is the
+whole ring. Ties in the data can make the count land above the target — the
+report says what it actually flagged, before and after.
+
+The table above is also the drift detector: an autoencoder trained once on
+a week in June and never again will, by September, flag most of every day
+(`883 (61.3%)` at margin 0 is exactly that). The cure is a retrain, not a
+margin — tick `schedule.autoencoder` or train it again by hand.
 
 ## Why a point is an anomaly
 
@@ -531,6 +594,10 @@ anomaly detect <model> key=val ...     # ingest one point → verdict JSON
 anomaly score  <model> key=val ...     # score only (never ingests/retrains)
 anomaly batch  [-f FILE] [-H] [-m M]   # stateless CSV scoring (index⇥score)
 anomaly train  <model>                 # force a retrain now
+anomaly train-ae <model>               # train the autoencoder version
+anomaly calibrate <model> [--last S]   # alert rates vs margins over a window
+anomaly finetune <model> [--rate R]    # set every margin from a target rate
+               [--last S|all] [-n]     #   (-n / --dry-run previews)
 anomaly reset  <model>                 # drop data+forests, keep the name
 anomaly rm     <model>                 # delete the model entirely
 anomaly ls / info <model>              # list models / dump metadata
@@ -568,7 +635,8 @@ command with `--store DIR`.
 | `POST /models/dynamic/<m>/reset` | drop data + forests, keep the name |
 | `DELETE\|GET /delete_model/<m>` | delete entirely |
 | `PUT /api/dynamic/<m>/schedule` | `{"below_max_retrain_frequency": .., "at_max_retrain_frequency": ..}` |
-| `POST /api/dynamic/<m>/finetune` | recalibrate decision margins |
+| `GET /models/dynamic/<m>/calibration?last=&from=&to=&curve=` | alert rates vs margins over a window of the ring (read-only) |
+| `POST /api/dynamic/<m>/finetune` | set margins from a target alert rate — `{"rate": 0.01, "last": 86400, "dry_run": false, "versions": [..]}` |
 | `POST /train/autoencoder/<m>` | train the autoencoder version — optional `{"hidden": [..], "contamination": x}` |
 
 Model names must match `^[a-zA-Z0-9_]+$`. The router is a plain function
@@ -583,7 +651,8 @@ so a checkbox can send one field:
 
 ```jsonc
 {
-  "schedule": { "below_max": 50, "at_max": 1000 },
+  "schedule": { "below_max": 50, "at_max": 1000,
+                "autoencoder": false },            // true ⇒ the AE retrains with the forests
   "max_data_points": 50000,                        // ring size; see below
   "versions": {
     "weekly":      { "enabled": false },          // stop scoring, drop the forest
@@ -634,7 +703,7 @@ build step — plain HTML/CSS/JS that talks to the routes above):
 
 | Page | What it does |
 | --- | --- |
-| `/` · `/modelmanager.html` | list models, train / finetune / reset / delete, toggle versions and retune their margins, train the autoencoder, edit the retrain schedule — or, under *Advanced*, the whole editable metadata, as a generated field form or as raw JSON |
+| `/` · `/modelmanager.html` | list models, train / finetune / reset / delete; per model: toggle versions, edit margins and contamination with a live *flags in window* column from the calibration report, preview and apply a fine-tune for a target alert rate, train the autoencoder, edit the retrain schedule — or, under *Advanced*, the whole editable metadata, as a generated field form or as raw JSON. Every alert-affecting control carries a `?` that says what it means and which way to move it |
 | `/modeltrainer.html` | import a CSV/JSON/JSONL file of history; feed points (`/detect`) one at a time or in bulk; force-train |
 | `/visualize.html` | plot any numeric feature of a model's stored points over time |
 | `/admin.html` | the organization: users and their roles, API keys, model ownership |
@@ -658,7 +727,8 @@ $ `deps/anomaly/src/dynamic.nu`
 
 `model_open / model_ingest / model_detect_only / model_scan /
 model_ae_contrib / model_point_json / model_force_train / model_reset /
-model_delete / model_finetune / model_train_autoencoder /
+model_delete / model_calibrate / model_finetune / model_finetune_at /
+model_train_autoencoder /
 model_set_schedule / model_set_margin / model_set_version_enabled /
 model_set_version_window / model_apply_meta_patch / model_metadata /
 model_free`, plus the layers beneath:
@@ -673,11 +743,13 @@ makes window filtering reproducible in tests.
 
 Deliberate, all documented in the code:
 
-1. **Fine-tune implements the intent, not the bug.** The reference
+1. **Fine-tune sets a rate, not 95 % of the worst score.** The reference
    initialises its accumulator to `-inf` and only updates on `score <
    -inf`, so it never adjusts anything (and its "+5 % buffer" comment
-   belies a `* 0.95`). We track the true minimum and apply `0.95·|min|`,
-   in place (no `tune_<name>` clone).
+   belies a `* 0.95`). Its intent — the worst point seen lands just inside
+   the band — makes every margin a function of one outlier. Here fine-tune
+   is calibration plus a write: the margin that flags a chosen share of a
+   recent window, in place (no `tune_<name>` clone).
 2. **One scaler per model**, fit over the full ring — the reference fits
    one per version and silently keeps whichever trained last.
 3. **Retraining is keyed on the lifetime point counter**, so it keeps
@@ -700,7 +772,12 @@ Deliberate, all documented in the code:
    reconstruction error ~100x the p95 of the training errors — the joint
    detector is effectively off, which its `"enabled": False` default hid.
    Here `decision_margin` is a fraction of the model's own threshold, so
-   the stored `0.05` means "5 % above p95" and needs no migration.
+   the stored `0.05` means "5 % above p95" and needs no migration. The
+   reference's retrain loop also trained a zero-tree forest for the
+   `autoencoder` version config and scored it as a second "autoencoder"
+   verdict with the relative margin read as an absolute one; that forest is
+   never trained here, and a stale `version_autoencoder.forest` is ignored
+   on load and deleted at the next retrain.
 8. **Anomaly attribution is the autoencoder's per-feature error**, not a
    per-feature z-score from the mean. A z-score can only name the extreme
    value; the reconstruction error names the feature that stopped agreeing
@@ -711,7 +788,7 @@ Deliberate, all documented in the code:
 `./tests/anomaly_test.sh` builds and runs the unit suites (430+ checks:
 preprocessing golden vectors, sklearn-parity decision maths, bit-exact
 blob round-trips, corrupt-file rejection, streaming mechanics, window
-routing, fine-tune, all HTTP routes, organizations, roles, model ownership and API keys,
+routing, calibration and fine-tune, all HTTP routes, organizations, roles, model ownership and API keys,
 configuration layering (flag over environment over file),
 CSV/JSON/JSONL import and its timestamp ordering,
 GPU/CPU-backend bit-parity), a CLI

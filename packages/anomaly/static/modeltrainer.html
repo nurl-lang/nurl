@@ -55,7 +55,7 @@
   .verdict.warm { border-color: var(--warn); background: rgba(246,195,68,.06); }
   .verdict .big { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
   .verdict .score { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-  .vgrid { display: grid; grid-template-columns: 1fr auto auto; gap: 3px 14px; margin-top: 10px;
+  .vgrid { display: grid; grid-template-columns: 1fr auto auto auto; gap: 3px 14px; margin-top: 10px;
            font-family: var(--mono); font-size: 12px; }
   .vgrid .h { color: var(--muted); font-size: 10px; text-transform: uppercase; }
   .flag { color: var(--danger); font-weight: 700; }
@@ -271,12 +271,16 @@ function renderVerdict(el, d, status) {
     const v = versions[vn];
     const th = v.threshold_info || {};
     vrows += "<div>" + esc(vn) + '</div><div class="flag ' + (v.anomaly ? "" : "n") + '">' +
-      (v.anomaly ? "ANOM" : "ok") + "</div><div>" + fmtNum(v.score) + "</div>";
+      (v.anomaly ? "ANOM" : "ok") + "</div><div>" + fmtNum(v.score) + "</div><div>" +
+      (typeof v.severity === "number" ? v.severity.toFixed(2) : "–") + "</div>";
   }
   el.innerHTML = '<div class="verdict ' + (anom ? "anom" : "ok") + '">' +
     '<div class="big">' + (anom ? "🚨 Anomaly" : "✓ Normal") + "</div>" +
-    '<div class="score">score = ' + fmtNum(d.score) + " · " + (d.data_points ?? "?") + " pts</div>" +
-    (vrows ? '<div class="vgrid"><div class="h">version</div><div class="h">flag</div><div class="h">score</div>' + vrows + "</div>" : "") +
+    '<div class="score">score = ' + fmtNum(d.score) +
+      (typeof d.severity === "number" ? " · severity " + d.severity.toFixed(2) : "") +
+      " · " + (d.data_points ?? "?") + " pts</div>" +
+    (vrows ? '<div class="vgrid" title="severity = −score / margin: 1.0 is exactly the alert line, 2.0 twice as far past it, below 0 comfortably normal">' +
+      '<div class="h">version</div><div class="h">flag</div><div class="h">score</div><div class="h">severity</div>' + vrows + "</div>" : "") +
     "</div>";
 }
 function fmtNum(x) {

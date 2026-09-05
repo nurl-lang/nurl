@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.10.0
+
+- **Margins you can read.** `GET /models/dynamic/<m>/calibration` (and
+  `anomaly calibrate`) says, per version, what the current margin flags over
+  a window of stored data (default the last 24 h, `last=all` the ring) and
+  which margin would flag 0.1 / 0.5 / 1 / 2 / 5 / 10 % — plus a 110-point
+  rate→margin curve so a dashboard can estimate the alert rate of a typed
+  margin without a round trip. Read-only; about a millisecond per row.
+
+- **Fine-tune sets a rate, not 95 % of the worst score.** The old rule
+  followed one outlier: whatever the ring's most anomalous point was, the
+  margin moved so it was just inside the band, and it wrote eight-decimal
+  values with no more meaning than the first two digits. `model_finetune`
+  now picks, per version, the margin that flags 1 % of the last 24 h
+  (anchored on the newest stored point), rounded to the fewest significant
+  digits that keep the count within a tenth of the target. `POST
+  /api/dynamic/<m>/finetune` takes `rate`, the window (`last: 86400 |
+  "all"`, `from`, `to`), `dry_run` and a `versions` filter, and reports the
+  flagged count and rate before and after for every version. The CLI grew
+  `finetune [--rate R] [--last S|all] [--dry-run]`.
+
+- **A ghost `autoencoder` forest.** The retrain loop treated the
+  `autoencoder` version config as a forest: it trained and stored a
+  zero-tree `version_autoencoder.forest`, and the loader scored it as a
+  second "autoencoder" verdict that read the AE's *relative* margin as an
+  absolute one. The loop skips it, deletes the stale blob, and the loader
+  ignores one.
+
+- **The autoencoder can retrain with the forests.** `schedule.autoencoder:
+  true` (dashboard checkbox, `PUT /api/dynamic/<m>/schedule`) retrains the
+  net on every forest retrain with the hidden layers and pre-filter
+  contamination it was first trained with — both are now persisted
+  (`prefilter_contamination`, `trained_at`, `retrain_with_forests` in the
+  AE JSON) instead of being lost after the first training call. Off by
+  default: a drifting AE at margin 0 is the one detector that tells you the
+  feed moved, and retraining it silently would hide that.
+
+- **`severity` in every verdict.** `−score / margin`, per version and as
+  the maximum in the aggregate: 1.0 is the alert line, 2.0 twice as far
+  past it, negative comfortably normal. The one unit-free number an
+  operator — or an agent — can compare across versions and models.
+
+- **Dashboard.** Every setting has a tooltip that says what it means, which
+  way to move it for fewer or more alerts, and when it takes effect. The
+  drawer shows the calibration of the chosen window (1 h … all) next to
+  each margin, estimates the alert rate live as you type one, and has a
+  fine-tune section with a target rate, a preview table and an apply
+  button. Contamination is editable (`auto` or a share), margins accept any
+  precision, and the AE row spells out its rule (`flags error ≥ thr ×
+  (1 + m)`). The trainer shows severity.
+
+- `anomaly serve` prints the model store it opened: a mistyped `--store`
+  or `$ANOMALY_HOME` otherwise served (and wrote) the default store without
+  a word. Note the variable is `ANOMALY_HOME`; `ANOMALY_STORE` is nothing.
+
 ## 0.9.1
 
 - **The public organization could take the home marker, and then nobody

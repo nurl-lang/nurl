@@ -185,6 +185,21 @@ $ `src/service.nu`
     : SvcOut outl ( fire r `POST` `/detect_only/svc` `` `{"temp": 99}` )
     ( check == . outl status 200 `svc: detect_only -> 200` )
     ( check ( jbool_of . outl body `anomaly` ) `svc: outlier flagged` )
+    // severity = -score / margin: unit-free, > 1 exactly when flagged.
+    : ~ f sev 0.0
+    ?? ( json_obj_get . outl body `severity` ) { T e → { ?? ( json_num_as_f e ) { T x → { = sev x } F _ → {} } } F _ → {} }
+    ( check > sev 1.0 `svc: aggregate severity above 1 for a flagged point` )
+    : ~ f sev_st 0.0
+    ?? ( json_obj_get . outl body `versions` ) {
+        T vers → {
+            ?? ( json_obj_get vers `short_term` ) {
+                T v → { ?? ( json_obj_get v `severity` ) { T e → { ?? ( json_num_as_f e ) { T x → { = sev_st x } F _ → {} } } F _ → {} } }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check > sev_st 0.0 `svc: per-version severity present` )
     ( json_free . outl body )
     : SvcOut garb ( fire r `POST` `/detect_only/svc` `` `not json` )
     ( check == . garb status 400 `svc: garbage body -> 400` )
@@ -311,18 +326,93 @@ $ `src/service.nu`
     ( check == . mu5 status 200 `svc: metadata PUT restores the defaults` )
     ( json_free . mu5 body )
 
-    // Fine-tune.
-    : SvcOut ft ( fire r `POST` `/api/dynamic/svc/finetune` `` `{}` )
+    // Calibration: read-only, per version, with the rate ladder.
+    : SvcOut cal ( fire r `GET` `/models/dynamic/svc/calibration` `last=all&curve=0` `` )
+    ( check == . cal status 200 `svc: calibration -> 200` )
+    : ~ i cal_rows -1
+    ?? ( json_obj_get . cal body `window` ) { T w → { = cal_rows ( jint_of w `rows` ) } F _ → {} }
+    ( check == cal_rows 50 `svc: calibration scored the whole ring` )
+    : ~ b cal_st F
+    : ~ b cal_ladder F
+    ?? ( json_obj_get . cal body `versions` ) {
+        T vers → {
+            ?? ( json_obj_get vers `short_term` ) {
+                T v → {
+                    = cal_st == ( jint_of v `n` ) 50
+                    ?? ( json_obj_get v `margin_for_rate` ) {
+                        T mfr → { ?? ( json_obj_get mfr `1%` ) { T _ → { = cal_ladder T } F _ → {} } }
+                        F _ → {}
+                    }
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check cal_st `svc: calibration reports short_term over 50 rows` )
+    ( check cal_ladder `svc: calibration carries margin_for_rate` )
+    ( json_free . cal body )
+    : SvcOut cal4 ( fire r `GET` `/models/dynamic/nosuch/calibration` `` `` )
+    ( check == . cal4 status 404 `svc: calibration missing -> 404` )
+    ( json_free . cal4 body )
+
+    // Fine-tune: a dry run changes nothing, a real one writes 10 % of 50
+    // = 5 flagged per version (the feed cycles ten values, so the five
+    // copies of the worst one tie), and a bad rate is a 400.
+    : SvcOut ftd ( fire r `POST` `/api/dynamic/svc/finetune` `` `{"rate":0.1,"last":"all","dry_run":true}` )
+    ( check == . ftd status 200 `svc: finetune dry run -> 200` )
+    ( check ( jbool_of . ftd body `dry_run` ) `svc: dry run echoed` )
+    : ~ b dry_applied T
+    : ~ i dry_after -1
+    ?? ( json_obj_get . ftd body `versions` ) {
+        T vers → {
+            ?? ( json_obj_get vers `short_term` ) {
+                T v → { = dry_applied ( jbool_of v `applied` ) = dry_after ( jint_of v `flagged_after` ) }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check == dry_applied F `svc: dry run applies nothing` )
+    ( check == dry_after 5 `svc: dry run predicts 5 flagged of 50` )
+    ( json_free . ftd body )
+
+    : SvcOut ft ( fire r `POST` `/api/dynamic/svc/finetune` `` `{"rate":0.1,"last":"all"}` )
     ( check == . ft status 200 `svc: finetune -> 200` )
     : ~ b has_margin F
+    : ~ f ft_margin -1.0
     ?? ( json_obj_get . ft body `adjusted_margins` ) {
         T ms → {
-            ?? ( json_obj_get ms `short_term` ) { T _ → { = has_margin T } F _ → {} }
+            ?? ( json_obj_get ms `short_term` ) { T e → { = has_margin T ?? ( json_num_as_f e ) { T x → { = ft_margin x } F _ → {} } } F _ → {} }
         }
         F _ → {}
     }
     ( check has_margin `svc: finetune returns adjusted margins` )
+    : ~ b ft_applied F
+    ?? ( json_obj_get . ft body `versions` ) {
+        T vers → {
+            ?? ( json_obj_get vers `short_term` ) { T v → { = ft_applied ( jbool_of v `applied` ) } F _ → {} }
+        }
+        F _ → {}
+    }
+    ( check ft_applied `svc: finetune applied the margin` )
     ( json_free . ft body )
+    : SvcOut md6 ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
+    : ~ f stored_m -2.0
+    ?? ( json_obj_get . md6 body `versions` ) {
+        T vers → {
+            ?? ( json_obj_get vers `short_term` ) {
+                T v → { ?? ( json_obj_get v `decision_margin` ) { T e → { ?? ( json_num_as_f e ) { T x → { = stored_m x } F _ → {} } } F _ → {} } }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check < ( float_abs - stored_m ft_margin ) 0.000000001 `svc: the fine-tuned margin is in the metadata` )
+    ( json_free . md6 body )
+    : SvcOut ftb ( fire r `POST` `/api/dynamic/svc/finetune` `` `{"rate":7}` )
+    ( check == . ftb status 400 `svc: finetune with rate > 1 -> 400` )
+    ( json_free . ftb body )
 
     // Force train.
     : SvcOut tr ( fire r `POST` `/force_train/svc` `` `` )

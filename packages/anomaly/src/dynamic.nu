@@ -129,6 +129,10 @@ $ `src/store.nu`
 // Open (or create) the named model in the store: load metadata, the point
 // ring, and every trained version's forest. Create-on-first-use: a missing
 // model is initialised with fresh metadata and persisted immediately.
+@ __an_is_ae_name s vname → b {
+    ^ == ( nurl_str_eq vname `autoencoder` ) 1
+}
+
 @ model_open_at Store st s name i now → *Model {
     : *Model mo # *Model ( nurl_malloc Z Model )
     = . mo store ( store_open ( string_data . st root ) )
@@ -173,12 +177,17 @@ $ `src/store.nu`
     }
 
     // Trained versions: one forest blob per enabled version, if present.
+    // The `autoencoder` version is not a forest: its VerCfg only carries
+    // the margin and the enabled flag, and a forest blob under that name
+    // is the leftover of a release that trained one anyway (an empty
+    // forest whose verdict shadowed the real autoencoder's) — ignored here
+    // and deleted by the next retrain.
     : i nv ( vec_len [VerCfg] . mm versions )
     : ~ i vi 0
     ~ < vi nv {
         ?? ( vec_get [VerCfg] . mm versions vi ) {
             T vc → {
-                ? . vc enabled {
+                ? & . vc enabled ! ( __an_is_ae_name ( string_data . vc vname ) ) {
                     : ?VerModel got ( store_load_forest . mo store name ( string_data . vc vname ) )
                     ?? got {
                         T vm → { ( vec_push [VerModel] . mo forests vm ) }
@@ -510,8 +519,12 @@ $ `src/store.nu`
     = . mo sc snew
     ( scaler_apply_matrix snew big ne nfeat )
 
-    // Per enabled version: pick window rows, train, persist.
+    // Per enabled forest version: pick window rows, train, persist. The
+    // `autoencoder` VerCfg is skipped — it has no forest (see
+    // model_train_autoencoder), and training one under its name put a
+    // second, empty "autoencoder" verdict beside the real one.
     ( __an_free_forests mo )
+    ( store_delete_forest . mo store ( string_data . mo mname ) `autoencoder` )
     : *f bigp ( vec_data [f] big )
     : *i etsp ( vec_data [i] ets )
     : i nv ( vec_len [VerCfg] . mm versions )
@@ -519,7 +532,7 @@ $ `src/store.nu`
     ~ < vi nv {
         ?? ( vec_get [VerCfg] . mm versions vi ) {
             T vc → {
-                ? . vc enabled {
+                ? & . vc enabled ! ( __an_is_ae_name ( string_data . vc vname ) ) {
                     // Window: time filter first, then point cap, then the
                     // most-recent-min_points fallback.
                     : ~ i from 0
@@ -608,7 +621,27 @@ $ `src/store.nu`
     ( meta_bump_epoch mm )
     ( store_save_meta . mo store ( string_data . mo mname ) mm )
     = . mo next_train_at + . mm n_seen ( __an_sched_step mo )
+    ( __an_retrain_ae mo now )
     ^ ne
+}
+
+// The autoencoder's place in the retrain schedule. Its threshold is the
+// p95 reconstruction error of the data it was trained on, and sensor data
+// drifts: a net trained on one week's weather reconstructs the next week's
+// worse across the board, so a never-retrained autoencoder ends up
+// flagging everything, whatever the margin. Opting in (schedule.autoencoder)
+// retrains it with the same hidden layout and pre-filter rate every time
+// the forests retrain. Margins are never touched. Requires an existing
+// trained net: the first training stays an explicit choice, because it
+// fixes the layout.
+@ __an_retrain_ae * Model mo i now → v {
+    : *Meta mm . mo meta
+    : AeModel cae . mo ae
+    ? & . mm sched_ae . cae trained {} { ^ }
+    : ( Vec i ) hidden ( ae_hidden cae )
+    : String err ( model_train_autoencoder_at mo hidden . cae prefilter now )
+    ( vec_free [i] hidden )
+    ( string_free err )
 }
 
 @ model_force_train * Model mo → i {
@@ -640,9 +673,14 @@ $ `src/store.nu`
 // (the same pass model_force_train_at runs, minus the standardising
 // scaler — the AE recipe MinMax-scales after anomaly filtering), then
 // hand the matrix to ae_train_matrix. `hidden` empty → 64-32-64.
-// Explicit-only: never part of the retrain schedule. Returns the error
-// text ("" = success).
+// Explicit by default; with `schedule.autoencoder` on, every forest
+// retrain repeats it with the same layout and pre-filter (see
+// __an_retrain_ae). Returns the error text ("" = success).
 @ model_train_autoencoder * Model mo ( Vec i ) hidden f contamination → String {
+    ^ ( model_train_autoencoder_at mo hidden contamination ( now_seconds ) )
+}
+
+@ model_train_autoencoder_at * Model mo ( Vec i ) hidden f contamination i now → String {
     : *Meta mm . mo meta
     : i n ( vec_len [String] . mo lines )
     ? < n . mo min_points { ^ ( string_from `not enough data points` ) } {}
@@ -698,8 +736,9 @@ $ `src/store.nu`
 
     : AeTrainOut out ( ae_train_matrix raw ne nfeat . mm feats hidden contamination . mo min_points )
     ( vec_free [f] raw )
-    : AeModel nae . out ae
+    : ~ AeModel nae . out ae
     ? . nae trained {
+        = . nae trained_at now
         ( ae_free . mo ae )
         = . mo ae nae
         ( __an_ensure_ae_cfg mo )
@@ -979,194 +1018,361 @@ $ `src/store.nu`
     ^ ( model_import_at mo recs ( now_seconds ) )
 }
 
-// ── Fine-tuning ───────────────────────────────────────────────────────
+// ── Calibration and fine-tuning ───────────────────────────────────────
+//
+// Every version answers "anomaly?" with the same rule, `decision_function
+// <= -margin`, but nobody can tell from the number 0.16 how many alerts it
+// buys: the decision scale is data-dependent for a forest (and with
+// contamination "auto" the zero line is too), and the autoencoder's margin
+// is a fraction of a threshold nobody remembers. What a person can reason
+// about is a RATE — "one point in a hundred" — so calibration turns the
+// decision values of a recent window into that currency: for each version
+// it sorts the values and reads off (a) how many the current margin flags
+// and (b) the margin that would flag any requested fraction. Fine-tuning is
+// then nothing more than calibrating and writing the margin for one target
+// rate back, rounded to three significant digits, because a margin that
+// separates two neighbouring points to 17 digits is not a setting, it is a
+// fingerprint of one particular ring.
+//
+// Units are each version's OWN margin units (a forest's absolute decision
+// value; the autoencoder's `(threshold − mse) / threshold`, so its
+// relative margin drops straight in), which is what makes the numbers here
+// directly editable in the metadata.
+
+// One version's decision values over the calibration window.
+: CalVer {
+    String cvname
+    f cur_margin  // the configured margin (own units)
+    i n  // rows this version had a verdict for
+    i flagged  // rows the current margin flags
+    f worst  // the most negative decision value
+    f median
+    ( Vec f ) dfs  // ascending
+}
+
+: CalReport {
+    ( Vec CalVer ) items
+    i from_ts  // resolved window (0 = unbounded)
+    i to_ts
+    i n_rows  // rows scored
+    i agg_flagged  // rows some enabled version flagged at the current margins
+}
+
+@ cal_free CalReport rep → v {
+    ( vec_free_with [CalVer] . rep items \ CalVer x → v {
+        ( string_free . x cvname )
+        ( vec_free [f] . x dfs )
+    } )
+}
+
+// Round to `digits` significant decimal digits, through an exact integer
+// mantissa and a power of ten so the result is the double nearest to the
+// short decimal (the same double the literal "0.106" parses to — division
+// by an exactly representable power of ten is correctly rounded), and
+// therefore prints as that short decimal.
+@ round_sig f x i digits → f {
+    ^ ( round_sig_dir x digits 0 )
+}
+
+// `dir` picks the rounding: 0 nearest, -1 toward zero, +1 away from zero
+// (on the magnitude; the sign is restored afterwards).
+@ round_sig_dir f x i digits i dir → f {
+    ? == x 0.0 { ^ 0.0 } {}
+    : f ax ( float_abs x )
+    : i e # i ( float_floor ( float_log10 ax ) )
+    : i p - - digits 1 e
+    : ~ f m 0.0
+    ? >= p 0 {
+        : f scale ( float_pow 10.0 # f p )
+        : f scaled * ax scale
+        : f q ? < dir 0 ( float_floor scaled ) ? > dir 0 ( float_ceil scaled ) ( float_round scaled )
+        = m / q scale
+    } {
+        : f scale ( float_pow 10.0 # f - 0 p )
+        : f scaled / ax scale
+        : f q ? < dir 0 ( float_floor scaled ) ? > dir 0 ( float_ceil scaled ) ( float_round scaled )
+        = m * q scale
+    }
+    ^ ? < x 0.0 - 0.0 m m
+}
+
+// Rows the version would flag at `margin`: count of dfs <= -margin.
+@ cal_flagged_at CalVer cv f margin → i {
+    : i n ( vec_len [f] . cv dfs )
+    : *f dp ( vec_data [f] . cv dfs )
+    : f line - 0.0 margin
+    : ~ i c 0
+    ~ & < c n <= . dp c line { = c + c 1 }
+    ^ c
+}
+
+// The margin at which a fraction `rate` of the window is flagged: the
+// k-th most negative value, k = round(rate·n), sits exactly on the line
+// (so it is flagged, and the (k+1)-th is not); rate 0 asks for a margin
+// just above the worst point. The exact value is then rounded to the
+// FEWEST significant digits (2 to 6) that still flag the same count, give
+// or take a tenth of it — a margin is a setting a person reads and
+// retypes, and "0.13" is one where the data allows it, "0.1284" where the
+// decision values are packed too densely for fewer digits. Never
+// negative: a negative margin would flag points the forest itself calls
+// normal, and a rate the data cannot supply is answered by the honest
+// post-rounding count, not by a margin below zero.
+@ cal_margin_for_rate CalVer cv f rate → f {
+    : i n ( vec_len [f] . cv dfs )
+    ? <= n 0 { ^ . cv cur_margin } {}
+    : *f dp ( vec_data [f] . cv dfs )
+    : ~ f r rate
+    ? < r 0.0 { = r 0.0 } {}
+    ? > r 1.0 { = r 1.0 } {}
+    : ~ i k # i ( float_round * r # f n )
+    ? > k n { = k n } {}
+    : ~ f exact 0.0
+    ? <= k 0 {
+        // Just above the worst point, by a hair that survives rounding.
+        : f w - 0.0 . dp 0
+        = exact + w + * ( float_abs w ) 0.000000001 0.000000000001
+    } {
+        = exact - 0.0 . dp - k 1
+    }
+    ? < exact 0.0 { ^ 0.0 } {}
+    : i tol / k 10
+    // Nearest first at each precision, then the rounding that errs on the
+    // side of the request (down = flags at least k; up, for rate 0, flags
+    // none).
+    : i lean ? <= k 0 1 -1
+    : ~ i digits 2
+    ~ < digits 6 {
+        : f m ( round_sig exact digits )
+        : i off - ( cal_flagged_at cv m ) k
+        ? & >= off - 0 tol <= off tol { ^ m } {}
+        : f m2 ( round_sig_dir exact digits lean )
+        : i off2 - ( cal_flagged_at cv m2 ) k
+        ? & >= off2 - 0 tol <= off2 tol { ^ m2 } {}
+        = digits + digits 1
+    }
+    // Values packed tighter than five digits resolve (a constant feed
+    // scores as near-ties): six digits, and the reported count says how
+    // far off that lands.
+    ^ ( round_sig_dir exact 6 lean )
+}
+
+@ __an_cal_find ( Vec CalVer ) items s name → i {
+    : i n ( vec_len [CalVer] items )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [CalVer] items k ) {
+            T cv → { ? == ( nurl_str_eq ( string_data . cv cvname ) name ) 1 { ^ k } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ -1
+}
+
+// Score every ring row in [from_ts, to_ts] (0 = unbounded) through the
+// live verdict path and collect each version's decision values. Rows are
+// scored as of their own ring position, exactly as the scan does, so a
+// timevector window never sees the future.
+@ model_calibrate * Model mo i from_ts i to_ts → CalReport {
+    : ( Vec CalVer ) items ( vec_new [CalVer] )
+    : ~ i n_rows 0
+    : ~ i agg 0
+    ? ( model_is_trained mo ) {} { ^ @ CalReport { items from_ts to_ts 0 0 } }
+
+    : *Meta mm . mo meta
+    : AeModel cae . mo ae
+    : f athr . cae threshold
+    : i n ( vec_len [String] . mo lines )
+    : ~ i k 0
+    ~ < k n {
+        : ~ i ts 0
+        ?? ( vec_get [i] . mo times k ) { T t → { = ts t } F _ → {} }
+        : b inside & || <= from_ts 0 >= ts from_ts || <= to_ts 0 <= ts to_ts
+        ? inside {
+            ?? ( vec_get [String] . mo lines k ) {
+                T l → {
+                    : !Json JsonError jr ( json_parse ( string_data l ) )
+                    ?? jr {
+                        T j → {
+                            : !EncPoint String er ( anomaly_preprocess_ro mm j )
+                            ?? er {
+                                T p → {
+                                    : Verdict vd ( __an_score_enc_upto mo p k )
+                                    ? . vd ready {
+                                        = n_rows + n_rows 1
+                                        ? . vd anomaly { = agg + agg 1 } {}
+                                        : i nvv ( vec_len [VerVerdict] . vd versions )
+                                        : ~ i q 0
+                                        ~ < q nvv {
+                                            ?? ( vec_get [VerVerdict] . vd versions q ) {
+                                                T vv → {
+                                                    : s nm ( string_data . vv vvname )
+                                                    : b is_ae == ( nurl_str_eq nm `autoencoder` ) 1
+                                                    : ~ f own . vv score
+                                                    ? & is_ae > athr 0.0 { = own / own athr } {}
+                                                    : ~ i at ( __an_cal_find items nm )
+                                                    ? < at 0 {
+                                                        = at ( vec_len [CalVer] items )
+                                                        ( vec_push [CalVer] items @ CalVer {
+                                                            ( string_from nm ) . vv cfg_margin 0 0 0.0 0.0 ( vec_new [f] )
+                                                        } )
+                                                    } {}
+                                                    ?? ( vec_get [CalVer] items at ) {
+                                                        T cv → { ( vec_push [f] . cv dfs own ) }
+                                                        F _ → {}
+                                                    }
+                                                }
+                                                F _ → {}
+                                            }
+                                            = q + q 1
+                                        }
+                                    } {}
+                                    ( verdict_free vd )
+                                    ( enc_free p )
+                                }
+                                F e → { ( string_free e ) }
+                            }
+                            ( json_free j )
+                        }
+                        F _ → {}
+                    }
+                }
+                F _ → {}
+            }
+        } {}
+        = k + k 1
+    }
+
+    // Sort, then read the summary numbers off the sorted values.
+    : i ni ( vec_len [CalVer] items )
+    = k 0
+    ~ < k ni {
+        ?? ( vec_get [CalVer] items k ) {
+            T cv → {
+                : ~ CalVer u cv
+                ( sort_by [f] . u dfs \ f a f b → i { ^ ? < a b -1 ? > a b 1 0 } )
+                : i nd ( vec_len [f] . u dfs )
+                = . u n nd
+                ? > nd 0 {
+                    : *f dp ( vec_data [f] . u dfs )
+                    = . u worst . dp 0
+                    = . u median . dp / nd 2
+                } {}
+                = . u flagged ( cal_flagged_at u . u cur_margin )
+                ( vec_set [CalVer] items k u )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ @ CalReport { items from_ts to_ts n_rows agg }
+}
+
+// The window fine-tune and calibration default to: the newest 24 hours of
+// stored data, anchored on the newest stored point rather than the clock,
+// so a model whose feed stopped still calibrates on its last day.
+: i ANOM_CAL_WINDOW 86400
+
+// Resolve (from, to, last) the way the HTTP layer spells it: `last` seconds
+// back from `to`, or from the newest stored point when `to` is unbounded.
+@ model_window_from_last * Model mo i to_ts i last → i {
+    ? <= last 0 { ^ 0 } {}
+    : ~ i anchor to_ts
+    ? > anchor 0 {} {
+        : i np ( model_n_points mo )
+        ? > np 0 {
+            ?? ( vec_get [i] . mo times - np 1 ) { T x → { = anchor x } F _ → {} }
+        } {}
+    }
+    ? > anchor 0 { ^ - anchor last } { ^ 0 }
+}
 
 // One version's fine-tune outcome.
 : FtVer {
     String ftname
-    f min_score
     f old_margin
     f new_margin
+    i n  // rows in the window with a verdict
+    i before  // flagged at old_margin
+    i after  // flagged at new_margin
+    f worst
+    b applied  // F on a dry run, or when the version was filtered out
 }
 
 : FineTuneReport {
     ( Vec FtVer ) items
+    f rate
+    i from_ts
+    i to_ts
+    i n_rows
+    b applied
 }
 
 @ finetune_free FineTuneReport rep → v {
     ( vec_free_with [FtVer] . rep items \ FtVer x → v { ( string_free . x ftname ) } )
 }
 
-// The ring, read-only encoded, projected onto the current feature order and
-// standardised with the current scaler — the exact view scoring uses.
-// Returns a row-major matrix of (result length / nfeat) rows.
-@ __an_ring_scaled * Model mo → ( Vec f ) {
-    : *Meta mm . mo meta
-    : i nfeat ( vec_len [String] . mm feats )
-    : ( Vec f ) big ( vec_new [f] )
-    ? <= nfeat 0 { ^ big } {}
-    : i n ( vec_len [String] . mo lines )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [String] . mo lines k ) {
-            T l → {
-                : !Json JsonError jr ( json_parse ( string_data l ) )
-                ?? jr {
-                    T j → {
-                        : !EncPoint String er ( anomaly_preprocess_ro mm j )
-                        ?? er {
-                            T p → {
-                                : ( Vec f ) row ( anomaly_project p . mm feats )
-                                ( scaler_apply . mo sc row )
-                                ( vec_extend [f] big row )
-                                ( vec_free [f] row )
-                                ( enc_free p )
-                            }
-                            F e → { ( string_free e ) }
-                        }
-                        ( json_free j )
-                    }
-                    F _ → {}
-                }
-            }
-            F _ → {}
-        }
-        = k + k 1
-    }
-    ^ big
-}
-
-// The ring projected onto the AUTOENCODER's own frozen feature order, raw
-// (the AE MinMax-scales internally, so no standardising scaler here) — the
-// exact view ae_decision sees. Row width is ae.feats; empty when untrained.
-@ __an_ring_ae_raw * Model mo → ( Vec f ) {
-    : *Meta mm . mo meta
-    : AeModel cae . mo ae
-    : ( Vec f ) big ( vec_new [f] )
-    ? . cae trained {} { ^ big }
-    : i nfeat ( vec_len [String] . cae feats )
-    ? <= nfeat 0 { ^ big } {}
-    : i n ( vec_len [String] . mo lines )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [String] . mo lines k ) {
-            T l → {
-                : !Json JsonError jr ( json_parse ( string_data l ) )
-                ?? jr {
-                    T j → {
-                        : !EncPoint String er ( anomaly_preprocess_ro mm j )
-                        ?? er {
-                            T p → {
-                                : ( Vec f ) row ( anomaly_project p . cae feats )
-                                ( vec_extend [f] big row )
-                                ( vec_free [f] row )
-                                ( enc_free p )
-                            }
-                            F e → { ( string_free e ) }
-                        }
-                        ( json_free j )
-                    }
-                    F _ → {}
-                }
-            }
-            F _ → {}
-        }
-        = k + k 1
-    }
-    ^ big
-}
-
-// Recalibrate every trained version's decision margin against the observed
-// ring: margin becomes 95% of the magnitude of the most-negative
-// decision_function over the ring, so the most anomalous point seen so far
-// lands just inside the anomaly band. (This is the documented INTENT of the
-// reference's finetune — its own accumulator never updates due to an
-// inverted comparison against -inf, so it never adjusts anything; we
-// implement what the code meant, in place, per SPEC §5.2.) Margins are
-// persisted and take effect immediately. Returns per-version details.
-@ model_finetune * Model mo → FineTuneReport {
+// Set every enabled, trained version's margin so that a fraction `rate` of
+// the window [from_ts, to_ts] is flagged, or only report what would change
+// when `apply` is F. `only` (empty = all) restricts which versions are
+// written; the rest are still reported, unapplied, so a dry run and a
+// partial apply show the same picture. Margins are written in the
+// version's own units, rounded to three significant digits, and take
+// effect at the next detect.
+@ model_finetune_at * Model mo f rate i from_ts i to_ts b apply ( Vec String ) only → FineTuneReport {
     : ( Vec FtVer ) items ( vec_new [FtVer] )
-    : *Meta mm . mo meta
-    ? ( model_is_trained mo ) {} { ^ @ FineTuneReport { items } }
-
-    : i nfeat ( vec_len [String] . mm feats )
-    : ( Vec f ) big ( __an_ring_scaled mo )
-    : ~ i rows 0
-    ? > nfeat 0 { = rows / ( vec_len [f] big ) nfeat } {}
-    ? <= rows 0 {
-        ( vec_free [f] big )
-        ^ @ FineTuneReport { items }
-    } {}
-
-    : i nf ( vec_len [VerModel] . mo forests )
+    : CalReport cal ( model_calibrate mo from_ts to_ts )
+    : i ni ( vec_len [CalVer] . cal items )
     : ~ i k 0
-    ~ < k nf {
-        ?? ( vec_get [VerModel] . mo forests k ) {
-            T vm → {
-                : ( Vec f ) dfs ( anom_decisions vm big rows nfeat )
-                : *f dfp ( vec_data [f] dfs )
-                : ~ f lowest 0.0
-                : ~ b first T
-                : ~ i r 0
-                ~ < r rows {
-                    ? || first < . dfp r lowest { = lowest . dfp r } {}
-                    = first F
-                    = r + r 1
-                }
-                ( vec_free [f] dfs )
-                : f old ( meta_version_margin mm ( string_data . vm vname ) . vm margin )
-                : f adjusted * ( float_abs lowest ) 0.95
-                : b applied ( model_set_margin mo ( string_data . vm vname ) adjusted )
+    ~ < k ni {
+        ?? ( vec_get [CalVer] . cal items k ) {
+            T cv → {
+                : s nm ( string_data . cv cvname )
+                : f nm_new ( cal_margin_for_rate cv rate )
+                : ~ b wanted T
+                : i nonly ( vec_len [String] only )
+                ? > nonly 0 {
+                    = wanted F
+                    : ~ i q 0
+                    ~ < q nonly {
+                        ?? ( vec_get [String] only q ) {
+                            T o → { ? == ( nurl_str_eq ( string_data o ) nm ) 1 { = wanted T } {} }
+                            F _ → {}
+                        }
+                        = q + q 1
+                    }
+                } {}
+                : ~ b did F
+                ? & apply wanted { = did ( model_set_margin mo nm nm_new ) } {}
                 ( vec_push [FtVer] items @ FtVer {
-                    ( string_from ( string_data . vm vname ) )
-                    lowest
-                    old
-                    adjusted
+                    ( string_from nm )
+                    . cv cur_margin
+                    nm_new
+                    . cv n
+                    . cv flagged
+                    ( cal_flagged_at cv nm_new )
+                    . cv worst
+                    did
                 } )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free [f] big )
+    : i nr . cal n_rows
+    ( cal_free cal )
+    ^ @ FineTuneReport { items rate from_ts to_ts nr apply }
+}
 
-    // The autoencoder has no forest, so the loop above cannot see it — and
-    // it is the version whose margin is hardest to guess by hand, because
-    // the reconstruction-error scale is data-dependent. Calibrate it on the
-    // same rule, in its own relative units.
-    : AeModel fae . mo ae
-    ? & . fae trained > . fae threshold 0.0 {
-        : ( Vec f ) araw ( __an_ring_ae_raw mo )
-        : i awidth ( vec_len [String] . fae feats )
-        : ~ i arows 0
-        ? > awidth 0 { = arows / ( vec_len [f] araw ) awidth } {}
-        ? > arows 0 {
-            : ~ f alow 0.0
-            : ~ b afirst T
-            : ( Vec f ) arow ( vec_with_cap [f] awidth )
-            : ~ i ar 0
-            ~ < ar arows {
-                ( vec_clear [f] arow )
-                ( vec_extend_range [f] arow araw * ar awidth awidth )
-                : f adf ( ae_decision fae arow )
-                ? || afirst < adf alow { = alow adf } {}
-                = afirst F
-                = ar + ar 1
-            }
-            ( vec_free [f] arow )
-            : f aold ( meta_version_margin mm `autoencoder` ANOM_AE_MARGIN )
-            : f anew ( anom_ae_rel_margin fae * ( float_abs alow ) 0.95 )
-            : b _a ( model_set_margin mo `autoencoder` anew )
-            ( vec_push [FtVer] items @ FtVer {
-                ( string_from `autoencoder` )
-                alow
-                aold
-                anew
-            } )
-        } {}
-        ( vec_free [f] araw )
-    } {}
-    ^ @ FineTuneReport { items }
+// The one-call form: 1 % of the last 24 hours, applied to every version.
+: f ANOM_FT_RATE 0.01
+
+@ model_finetune * Model mo → FineTuneReport {
+    : i from_ts ( model_window_from_last mo 0 ANOM_CAL_WINDOW )
+    : ( Vec String ) none ( vec_new [String] )
+    : FineTuneReport rep ( model_finetune_at mo ANOM_FT_RATE from_ts 0 T none )
+    ( vec_free [String] none )
+    ^ rep
 }
 
 // ── Scanning the stored ring ──────────────────────────────────────────
@@ -1585,6 +1791,7 @@ $ `src/store.nu`
     : *Meta fresh ( meta_new ( string_data . old name ) ( string_data . old created ) )
     = . fresh sched_below . old sched_below
     = . fresh sched_at_max . old sched_at_max
+    = . fresh sched_ae . old sched_ae
     // Carry the scoring epoch across the reset, bumped: cached verdicts for
     // the discarded points must never be mistaken for verdicts of the new
     // ones that will reuse their ring positions.
@@ -1751,7 +1958,7 @@ $ `src/store.nu`
 // Apply an editable-metadata patch:
 //
 //   { "alias": "boiler room",
-//     "schedule": { "below_max": N, "at_max": N },
+//     "schedule": { "below_max": N, "at_max": N, "autoencoder": bool },
 //     "max_data_points": N,
 //     "versions": { "<name>": { <any VerCfg field> }, ... },
 //     "replace_versions": bool }
@@ -1816,6 +2023,7 @@ $ `src/store.nu`
             }
             = . mm sched_below below
             = . mm sched_at_max atmax
+            ?? ( json_obj_get sj `autoencoder` ) { T aj → { = . mm sched_ae ( json_as_bool aj ) } F _ → {} }
             = touched T
         }
         F _ → {}
