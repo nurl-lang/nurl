@@ -86,7 +86,7 @@ For traceability, this is the surface `anomaly` is modelled on. Endpoints marked
 | `POST /detect_anomalies` | batch-score every row of a CSV file with a model | † |
 | `GET  /models/dynamic` | list dynamic models | † |
 | `GET  /models/dynamic/<model>/metadata` | model metadata | † |
-| `GET  /models/dynamic/<model>/data` | recent data points | † |
+| `GET  /models/dynamic/<model>/data` | recent data points (`limit=N`, `all`; `at=<index>` one stored row) | † |
 | `POST /models/dynamic/<model>/reset` | drop data + models, keep name | † |
 | `DELETE /delete_model/<model>` | delete a model entirely | † |
 | `PUT  /api/dynamic/<model>/schedule` | change retraining schedule | † |

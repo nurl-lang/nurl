@@ -12,6 +12,17 @@
 - **Zoom by dragging.** Drag across any chart on the anomalies page to zoom
   into that stretch of points — the counters and the flagged list follow;
   double-click or *reset zoom* shows the whole range again.
+- **Click a point for all of it.** A click on a chart point or a row of the
+  flagged table opens a popup with the stored record (every column, strings
+  and stamp included) and every feature as the model saw it — one-hot and
+  time features among them — with, for an autoencoder verdict, the
+  reconstruction and error share of each. `GET …/data?at=<index>` fetches
+  one stored row by the index a scan point carries.
+- Fixed: the service served one connection at a time *and* kept it alive,
+  so a browser's second parallel request waited the whole 5 s idle
+  timeout — every page load and every pair of fetches stalled. The service
+  now closes after each response; parallel requests are served in arrival
+  order.
 - Fixed: string query parameters (`fields=`, `versions=`, `only=` …) were
   taken verbatim, so a feature name with a space or a non-ASCII character
   — every FMI column — could not be asked for from a browser, and the

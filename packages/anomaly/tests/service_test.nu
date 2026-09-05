@@ -632,6 +632,25 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     }
     ( check == first_ts 1787961600 `svc: the stored point carries the parsed stamp` )
     ( json_free . dat body )
+    // ?at=<index>: exactly that row; past the end, none.
+    : SvcOut at1 ( fire r `GET` `/models/dynamic/svc_imp/data` `at=1` `` )
+    : ~ i at1_n 0
+    : ~ i at1_ts 0
+    ?? ( json_obj_get . at1 body `data` ) {
+        T a → {
+            = at1_n ( json_arr_len a )
+            ?? ( json_arr_get a 0 ) { T row → { = at1_ts ( jint_of row `timestamp` ) } F _ → {} }
+        }
+        F _ → {}
+    }
+    ( check == at1_n 1 `svc: data?at= returns one row` )
+    ( check == at1_ts + 1787961600 600 `svc: data?at=1 is the second stored row` )
+    ( json_free . at1 body )
+    : SvcOut at9 ( fire r `GET` `/models/dynamic/svc_imp/data` `at=99` `` )
+    : ~ i at9_n -1
+    ?? ( json_obj_get . at9 body `data` ) { T a → { = at9_n ( json_arr_len a ) } F _ → {} }
+    ( check == at9_n 0 `svc: data?at= past the end is empty` )
+    ( json_free . at9 body )
     // A feature named with spaces and a degree sign arrives percent-encoded
     // from a browser; fields= must still find it.
     : SvcOut anf ( fire r `GET` `/models/dynamic/svc_imp/anomalies`

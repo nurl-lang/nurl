@@ -85,6 +85,28 @@
   .contrib .track > i { display: block; height: 100%; background: var(--joint); border-radius: 2px; }
   .contrib.ext .track > i { background: var(--danger); }
   .empty { text-align: center; padding: 40px; color: var(--muted); }
+  tbody tr.pt { cursor: pointer; }
+  /* the point popup */
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 40; display: none; }
+  .scrim.open { display: block; }
+  .modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); width: min(820px, 94vw);
+           max-height: 90vh; overflow: auto; background: var(--panel); border: 1px solid var(--border);
+           border-radius: var(--radius); box-shadow: 0 20px 60px rgba(0,0,0,.6); z-index: 41; display: none; }
+  .modal.open { display: block; }
+  .modal .mhead { display: flex; align-items: baseline; gap: 14px; padding: 16px 20px 10px; position: sticky; top: 0;
+                  background: var(--panel); border-bottom: 1px solid var(--border); }
+  .modal .mhead h3 { margin: 0; font-size: 15px; font-family: var(--mono); }
+  .modal .mhead .x { margin-left: auto; font-size: 18px; line-height: 1; padding: 2px 8px; }
+  .modal .mbody { padding: 12px 20px 18px; }
+  .modal h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+  .modal table { font-size: 12px; }
+  .modal tbody td { padding: 5px 10px; }
+  .modal td.num, .modal td.str, .modal td:last-child { text-align: right; }
+  .modal thead th:not(:first-child) { text-align: right; }
+  .modal .track { display: inline-block; width: 90px; height: 4px; background: var(--panel2); border-radius: 2px; vertical-align: middle; }
+  .modal .track > i { display: block; height: 100%; background: var(--joint); border-radius: 2px; }
+  .modal .flag { color: var(--danger); }
+  .modal .str { color: var(--accent2); }
   .err { color: var(--danger); }
   #tip { position: fixed; pointer-events: none; background: var(--panel2); border: 1px solid var(--border);
          border-radius: 6px; padding: 6px 9px; font-family: var(--mono); font-size: 12px; display: none;
@@ -132,7 +154,7 @@
     <h2>Anomaly score over time</h2>
     <p class="hint">The most severe version's <code>decision_function</code>. Lower is worse; each version has its
       own margin, so the flag — not the height — is the verdict. Drag across any chart to zoom into a stretch
-      of points; double-click, or the button, shows the whole range again.</p>
+      of points; double-click, or the button, shows the whole range again. Click a point for every value it carries.</p>
     <div class="zoombar" id="zoomBar"></div>
     <div class="cwrap"><canvas id="scoreChart" height="230"></canvas><div class="sel"></div></div>
   </div>
@@ -163,6 +185,12 @@
     <em>all</em> of the model's features at once; verdicts are cached until the model changes.</div>
 </main>
 <div id="tip"></div>
+<div class="scrim" id="scrim" onclick="closePoint()"></div>
+<div class="modal" id="modal" role="dialog" aria-modal="true">
+  <div class="mhead"><h3 id="mtitle"></h3><span id="mtags" class="vtags"></span>
+    <button class="x" onclick="closePoint()" title="close (Esc)">×</button></div>
+  <div class="mbody" id="mbody"></div>
+</div>
 
 <script src="/auth.js"></script>
 <script>
@@ -594,7 +622,7 @@ for (const id of ["scoreChart", "ribbon", "featChart"]) {
     tip.style.top = (e.clientY + 12) + "px";
   });
   cv.addEventListener("mouseleave", () => $("tip").style.display = "none");
-  cv.addEventListener("dblclick", () => resetZoom());
+  cv.addEventListener("dblclick", () => { closePoint(); resetZoom(); });
   cv.addEventListener("mousedown", (e) => { if (e.button === 0 && CHART[cv.id]) { DRAG = { cv, x0: e.clientX, x1: e.clientX }; e.preventDefault(); } });
 }
 
@@ -622,7 +650,12 @@ window.addEventListener("mouseup", () => {
   if (!DRAG) return;
   const d = DRAG; DRAG = null;
   d.cv.parentElement.querySelector(".sel").style.display = "none";
-  if (Math.abs(d.x1 - d.x0) < 4) return;
+  if (Math.abs(d.x1 - d.x0) < 4) {
+    // a click, not a drag: the point under the cursor
+    const st = CHART[d.cv.id];
+    if (st && st.pts) openPoint(st.pts[indexAtX(d.cv, d.x0)]);
+    return;
+  }
   const i0 = indexAtX(d.cv, Math.min(d.x0, d.x1)), i1 = indexAtX(d.cv, Math.max(d.x0, d.x1));
   if (i1 - i0 < 1) return;
   const base = ZOOM ? ZOOM[0] : 0;
@@ -667,7 +700,7 @@ function renderList(flagged) {
         "</div>"
       : '<span class="muted">–</span>';
     const fv = feat && p.values && typeof p.values[feat] === "number" ? fmtNum(p.values[feat]) : "–";
-    return "<tr><td>" + fmtTime(p.timestamp) + "</td><td>" + p.index + '</td><td class="score">' +
+    return '<tr class="pt" data-i="' + p.index + '" title="click for every value of this point"><td>' + fmtTime(p.timestamp) + "</td><td>" + p.index + '</td><td class="score">' +
       fmtNum(p.score) + '</td><td><div class="vtags">' + tags + "</div></td><td>" + contrib +
       "</td><td>" + fv + "</td></tr>";
   }).join("");
@@ -676,7 +709,80 @@ function renderList(flagged) {
     "</tbody></table>" +
     (flagged.length > 300 ? '<div class="muted" style="padding:8px 10px">showing the 300 most recent of ' +
       flagged.length + "</div>" : "");
+  const byIndex = new Map(flagged.map(p => [p.index, p]));
+  for (const tr of $("list").querySelectorAll("tr.pt"))
+    tr.onclick = () => openPoint(byIndex.get(+tr.dataset.i));
 }
+
+// ── the point popup ───────────────────────────────────────────────────
+//
+// Click a point — on a chart, or a row of the flagged table — and it
+// opens with everything known about that one row: the stored record as
+// it arrived (every column, strings and stamp included) and the features
+// as the model saw them, one-hot columns and time features among them.
+// An autoencoder verdict brings the reconstruction of every feature and
+// its share of the error, not just the top three of the table.
+
+async function openPoint(p) {
+  if (!p) return;
+  const name = $("model").value;
+  $("mtitle").textContent = fmtTime(p.timestamp) + "  #" + p.index + "  score " + fmtNum(p.score);
+  $("mtags").innerHTML = (p.hit || []).map(v =>
+    '<span class="vtag ' + (v === AE ? "ae" : "") + '">' + esc(v) + "</span>").join("") ||
+    '<span class="muted">not flagged</span>';
+  $("mbody").innerHTML = '<div class="muted">loading…</div>';
+  $("scrim").classList.add("open"); $("modal").classList.add("open");
+  const [rec, det] = await Promise.all([
+    api("GET", "/models/dynamic/" + enc(name) + "/data?at=" + p.index),
+    api("GET", "/models/dynamic/" + enc(name) + "/anomalies?from=" + p.timestamp + "&to=" + p.timestamp +
+      "&contrib=999" + (numericFeatures(name).length ? "&fields=" + enc(numericFeatures(name).join(",")) : "")),
+  ]);
+  const row = rec.ok && rec.data && rec.data.data && rec.data.data[0] || null;
+  const pt = det.ok && det.data && det.data.points && det.data.points.find(x => x.index === p.index) || det.data && det.data.points && det.data.points[0] || null;
+  let h = "";
+
+  // The record, as stored.
+  h += "<h4>the stored record</h4>";
+  if (row) {
+    const keys = Object.keys(row).sort((a, b) => (a === "timestamp" || a === "time") - (b === "timestamp" || b === "time") || a.localeCompare(b));
+    h += "<table><tbody>" + keys.map(k => {
+      const v = row[k];
+      const cell = typeof v === "number" ? '<td class="num">' + fmtNum(v) + "</td>"
+        : v === null ? '<td class="muted">null</td>'
+        : '<td class="str">' + esc(String(v)) + "</td>";
+      return "<tr><td>" + esc(k) + "</td>" + cell + "</tr>";
+    }).join("") + "</tbody></table>";
+  } else h += '<div class="muted">the row could not be read (' + esc((rec.data && rec.data.message) || "no data") + ")</div>";
+
+  // The features, as the model saw them.
+  const contribs = pt && pt.contributions && pt.contributions.length ? pt.contributions : null;
+  const vals = (pt && pt.values) || p.values || {};
+  if (contribs) {
+    h += "<h4>every feature, as the autoencoder saw it</h4>" +
+      '<p class="hint" style="margin:0 0 8px">Value carried, value the net expected from the other features, and each feature\'s share of the reconstruction error. Largest share first.</p>' +
+      "<table><thead><tr><th>feature</th><th>value</th><th>expected</th><th>share</th><th></th></tr></thead><tbody>" +
+      contribs.map(c => "<tr><td>" + esc(c.feature) + '</td><td class="num">' + fmtNum(c.value) +
+        '</td><td class="num muted">' + fmtExp(c.expected, c.value) + '</td><td class="num">' + Math.round(c.share * 100) +
+        '%</td><td><span class="track"><i style="width:' + Math.round(c.share * 100) + '%"></i></span></td></tr>').join("") +
+      "</tbody></table>";
+  } else {
+    const keys = Object.keys(vals).sort();
+    if (keys.length) {
+      h += "<h4>every feature</h4>" +
+        '<p class="hint" style="margin:0 0 8px">No autoencoder verdict for this point, so no reconstruction to compare with; σ is the distance from the mean of this scan.</p>' +
+        "<table><thead><tr><th>feature</th><th>value</th><th>σ</th></tr></thead><tbody>" +
+        keys.map(k => {
+          const v = vals[k], st = FSTATS[k];
+          const z = st && st.std > 0 && typeof v === "number" ? (v - st.mean) / st.std : null;
+          return "<tr><td>" + esc(k) + '</td><td class="num">' + (typeof v === "number" ? fmtNum(v) : esc(String(v))) +
+            '</td><td class="num' + (z !== null && Math.abs(z) >= 3 ? " flag" : " muted") + '">' + (z === null ? "–" : fmtZ(z)) + "</td></tr>";
+        }).join("") + "</tbody></table>";
+    }
+  }
+  $("mbody").innerHTML = h;
+}
+function closePoint() { $("scrim").classList.remove("open"); $("modal").classList.remove("open"); }
+window.addEventListener("keydown", (e) => { if (e.key === "Escape") closePoint(); });
 
 // ── boot ──────────────────────────────────────────────────────────────
 

@@ -843,15 +843,31 @@ $ `src/authz.nu`
         ^ r404
     }
     : i limit ( __an_query_int . req query `limit` 100 )
+    // ?at=<index>: one stored row by its ring index (the `index` a scan
+    // point carries), for the dashboard's point popup. Read as a string
+    // because index 0 is a real answer.
+    : String atq ( __an_query_str . req query `at` )
+    : ~ i at -1
+    ? > ( string_len atq ) 0 {
+        ?? ( string_to_int atq ) { T x → { = at x } F _ → {} }
+    } {}
+    ( string_free atq )
     : ( Vec String ) pts ( store_load_points st ( string_data mname ) )
     : i total ( vec_len [String] pts )
     : ~ i from 0
-    ? > limit 0 {
-        ? > total limit { = from - total limit } {}
-    } {}
+    : ~ i upto total
+    ? >= at 0 {
+        = from at
+        = upto + at 1
+        ? > upto total { = upto total } {}
+    } {
+        ? > limit 0 {
+            ? > total limit { = from - total limit } {}
+        } {}
+    }
     : Json arr ( json_arr_new )
     : ~ i k from
-    ~ < k total {
+    ~ < k upto {
         ?? ( vec_get [String] pts k ) {
             T l → {
                 : !Json JsonError jr ( json_parse ( string_data l ) )
@@ -2990,6 +3006,16 @@ $ `src/authz.nu`
 @ anomaly_serve s host i port → i {
     : *HttpApp app ( http_app_new )
     ( http_app_use_router app ( anomaly_service_router ) )
+    // One request per connection. The handlers share the store through
+    // the file system with no lock between them, so the server stays
+    // single-threaded — and a single thread that also honours keep-alive
+    // is held by whichever connection it served last, for as long as
+    // that one idles: a browser that opens a second connection for a
+    // parallel fetch waited the whole idle timeout (5 s) for it. Closing
+    // after each response costs a TCP handshake per request and buys a
+    // dashboard whose parallel requests are served in the order they
+    // arrive.
+    ( http_app_max_keepalive app 0 )
     : i rc ( http_app_listen app host port )
     ( http_app_free app )
     ^ rc
