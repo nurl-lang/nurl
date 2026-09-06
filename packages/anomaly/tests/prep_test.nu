@@ -58,13 +58,18 @@ $ `src/prep.nu`
             : !EncPoint String er ( anomaly_preprocess m j )
             ?? er {
                 T p → {
-                    ( check == ( vec_len [f] . p vals ) 6 `golden: 6 features (timestamp key skipped)` )
+                    ( check == ( vec_len [f] . p vals ) 8 `golden: 8 features (timestamp key skipped)` )
                     ( check ( feq ( enc_val p `temp` ) 21.5 ) `golden: numeric passthrough` )
                     ( check ( feq ( enc_val p `status_ok` ) 1.0 ) `golden: one-hot fires` )
-                    ( check ( feq ( enc_val p `when_hour` ) 12.0 ) `golden: hour` )
-                    ( check ( feq ( enc_val p `when_day` ) 3.0 ) `golden: day` )
-                    ( check ( feq ( enc_val p `when_month` ) 7.0 ) `golden: month` )
-                    ( check ( feq ( enc_val p `when_weekday` ) 4.0 ) `golden: weekday (Fri=4, Python convention)` )
+                    // 12:34 → hour 12 of 24: sin(π) ≈ 0, cos(π) = -1.
+                    ( check ( feq ( enc_val p `when_hour_sin` ) 0.0 ) `golden: hour sin` )
+                    ( check ( feq ( enc_val p `when_hour_cos` ) -1.0 ) `golden: hour cos` )
+                    // Friday = 4 of 7 (Monday = 0, Python convention).
+                    ( check ( feq ( enc_val p `when_weekday_sin` ) ( float_sin / * 8.0 PI 7.0 ) ) `golden: weekday sin (Fri=4)` )
+                    ( check ( feq ( enc_val p `when_weekday_cos` ) ( float_cos / * 8.0 PI 7.0 ) ) `golden: weekday cos` )
+                    // July = position 6 of 12: sin(π) ≈ 0, cos(π) = -1.
+                    ( check ( feq ( enc_val p `when_month_sin` ) 0.0 ) `golden: month sin` )
+                    ( check ( feq ( enc_val p `when_month_cos` ) -1.0 ) `golden: month cos` )
                     ( enc_free p )
                 }
                 F e → {
@@ -76,15 +81,83 @@ $ `src/prep.nu`
             }
             // Derived feature order: cols first-seen, canonical expansion.
             : ( Vec String ) fs ( meta_derived_feats m )
-            ( check == ( vec_len [String] fs ) 6 `golden: derived feature count` )
+            ( check == ( vec_len [String] fs ) 8 `golden: derived feature count` )
             ( check ( feat_eq fs 0 `temp` ) `golden: feat[0] temp` )
             ( check ( feat_eq fs 1 `status_ok` ) `golden: feat[1] status_ok` )
-            ( check ( feat_eq fs 2 `when_hour` ) `golden: feat[2] when_hour` )
+            ( check ( feat_eq fs 2 `when_hour_sin` ) `golden: feat[2] when_hour_sin` )
             ( vec_free_with [String] fs \ String x → v { ( string_free x ) } )
             ( json_free j )
         }
         F _ → { ( check F `golden: test json parses` ) }
     }
+    ( meta_free m )
+}
+
+// ── 1b. Calendar features read the clock the stamp was written in ─────
+
+// The hour_sin/hour_cos pair of `stamp`'s encoding, as (sin, cos) of the
+// hour it names; -999999 when the stamp is rejected.
+@ hour_of * Meta m s stamp → f {
+    : String src ( string_from `{"when": "` )
+    ( string_push_str src stamp )
+    ( string_push_str src `"}` )
+    : ~ f got -999999.0
+    ?? ( json_parse ( string_data src ) ) {
+        T j → {
+            ?? ( anomaly_preprocess m j ) {
+                T p → {
+                    // atan2 of the pair gives the angle back; 24·angle/2π is the hour.
+                    : f ang ( float_atan2 ( enc_val p `when_hour_sin` ) ( enc_val p `when_hour_cos` ) )
+                    : ~ f h / * 24.0 ang * 2.0 PI
+                    ? < h -0.5 { = h + h 24.0 } {}
+                    = got h
+                    ( enc_free p )
+                }
+                F e → { ( string_free e ) }
+            }
+            ( json_free j )
+        }
+        F _ → {}
+    }
+    ( string_free src )
+    ^ got
+}
+
+@ test_calendar_clock → v {
+    : *Meta m ( meta_new `t1b` `2026-07-03T00:00:00Z` )
+    // Midnight in +03:00 is midnight to the sender, not 21:00 UTC.
+    ( check ( feq ( hour_of m `2026-08-01T00:00:00+03:00` ) 0.0 ) `calendar: +03:00 midnight is hour 0` )
+    ( check ( feq ( hour_of m `2026-08-01T00:00:00-05:30` ) 0.0 ) `calendar: -05:30 midnight is hour 0` )
+    ( check ( feq ( hour_of m `2026-08-01T23:00:00Z` ) 23.0 ) `calendar: Z is UTC` )
+    ( check ( feq ( hour_of m `2026-08-01T07:15:00` ) 7.0 ) `calendar: no designator = as written` )
+    ( check ( feq ( hour_of m `2026-08-01T07:15:00.250+02:00` ) 7.0 ) `calendar: fraction before the offset` )
+    ( check == ( __an_iso_offset `2026-08-01T00:00:00+0300` ) 10800 `calendar: offset without colon` )
+    ( check == ( __an_iso_offset `2026-08-01T00:00:00-05:30` ) -19800 `calendar: negative offset` )
+    ( check == ( __an_iso_offset `2026-08-01T00:00:00Z` ) 0 `calendar: Z offset 0` )
+    ( check ! ( meta_retrain_required m ) `calendar: a current model needs no retrain` )
+
+    // A model stored under encoding 1 still encodes its points the old
+    // way (its frozen feature order names them) and says so.
+    = . m feat_enc 1
+    ( meta_refresh_feats m )
+    ( check ( meta_retrain_required m ) `calendar: encoding-1 model needs a retrain` )
+    ?? ( json_parse `{"when": "2026-08-01T00:00:00+03:00"}` ) {
+        T j → {
+            ?? ( anomaly_preprocess m j ) {
+                T p → {
+                    ( check ( feq ( enc_val p `when_hour` ) 21.0 ) `calendar: encoding 1 keeps its UTC hour` )
+                    ( check ( feq ( enc_val p `when_day` ) 31.0 ) `calendar: encoding 1 keeps day-of-month` )
+                    ( enc_free p )
+                }
+                F e → { ( string_free e ) }
+            }
+            ( json_free j )
+        }
+        F _ → {}
+    }
+    : ( Vec String ) fs ( meta_derived_feats m )
+    ( check ( feat_eq fs 0 `when_hour` ) `calendar: encoding 1 keeps its feature names` )
+    ( vec_free_with [String] fs \ String x → v { ( string_free x ) } )
     ( meta_free m )
 }
 
@@ -294,7 +367,8 @@ $ `src/prep.nu`
             ( check == . m2 n_seen 123 `meta: n_points_seen survives` )
             ( check == . m2 sched_below 50 `meta: schedule default survives` )
             ( check == ( vec_len [VerCfg] . m2 versions ) 5 `meta: 5 default versions survive` )
-            ( check == ( vec_len [String] . m2 feats ) 6 `meta: feature order survives` )
+            ( check == ( vec_len [String] . m2 feats ) 8 `meta: feature order survives` )
+            ( check == . m2 feat_enc ANOM_FEAT_ENC `meta: feature encoding survives` )
             ( string_free s2 )
             ( meta_free m2 )
         }
@@ -312,6 +386,7 @@ $ `src/prep.nu`
 
 @ main → i {
     ( test_golden )
+    ( test_calendar_clock )
     ( test_categories )
     ( test_projection )
     ( test_numeric_error )

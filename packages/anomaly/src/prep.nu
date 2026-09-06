@@ -81,11 +81,36 @@ $ `stdlib/ext/json.nu`
     b sched_ae  // retrain the autoencoder whenever the forests retrain
     b count_clock  // points are numbered, not timed: see ANOM_TICK
     i n_seen
-    i last_trained
+    i last_trained  // n_seen at the last train (a point count, not a time)
+    i trained_time  // wall clock of the last train, unix seconds; 0 = never
     i max_points
     i score_epoch
+    i feat_enc  // the calendar-feature encoding the stored feature order uses
     ( Vec VerCfg ) versions
 }
+
+// ── Calendar features ─────────────────────────────────────────────────
+//
+// A timestamp column becomes calendar features so the forests can learn
+// that 03:00 on a Sunday is not 15:00 on a Tuesday. Two things matter:
+//
+//   1. The clock is the one the stamp was WRITTEN in. "2026-08-01T00:00:00
+//      +03:00" is midnight to whoever sent it; folding the offset away and
+//      reading the UTC fields would call it 21:00 the day before, and a
+//      model fed local-offset stamps would learn a day shifted by the
+//      offset — with a step every DST change. A stamp without an offset
+//      is taken as written.
+//   2. Cyclic quantities are encoded as (sin, cos) pairs, so 23:00 sits
+//      next to 00:00 and Sunday next to Monday. A linear hour lets a
+//      forest cut the day at midnight, where nothing changes.
+//
+// ANOM_FEAT_ENC numbers this scheme. A model trained under an older one
+// keeps encoding its points the old way (its frozen feature order names
+// the old features) until its next retrain, which re-encodes the ring
+// under the current scheme; metadata reports `retrain_required` until
+// then. Encoding 1 is the original: UTC fields, linear hour / day-of-month
+// / month / weekday.
+: i ANOM_FEAT_ENC 2
 
 // One preprocessed record: parallel (feature name, value) pairs in
 // encounter order. Project onto a feature order with anomaly_project.
@@ -170,8 +195,10 @@ $ `stdlib/ext/json.nu`
     = . m count_clock F
     = . m n_seen 0
     = . m last_trained 0
+    = . m trained_time 0
     = . m max_points ANOM_MAX_POINTS
     = . m score_epoch 1
+    = . m feat_enc ANOM_FEAT_ENC
     = . m versions ( meta_default_versions )
     ^ m
 }
@@ -215,6 +242,27 @@ $ `stdlib/ext/json.nu`
 // first train). Before that, feature order is derived from the metadata.
 @ meta_is_frozen * Meta m → b {
     ^ > ( vec_len [String] . m feats ) 0
+}
+
+// Whether any column is a timestamp — the only kind whose encoding has
+// changed between ANOM_FEAT_ENC schemes.
+@ meta_has_timestamp * Meta m → b {
+    : i n ( vec_len [i] . m kinds )
+    : ~ i k 0
+    ~ < k n {
+        ? == ( __an_kind_at m k ) COL_TIMESTAMP { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
+// A trained model whose frozen feature order was built under an older
+// calendar encoding: it still scores, the old way, but its next retrain
+// changes what it learns.
+@ meta_retrain_required * Meta m → b {
+    ? >= . m feat_enc ANOM_FEAT_ENC { ^ F } {}
+    ? ! ( meta_is_frozen m ) { ^ F } {}
+    ^ ( meta_has_timestamp m )
 }
 
 // ── Value coercion ────────────────────────────────────────────────────
@@ -316,10 +364,19 @@ $ `stdlib/ext/json.nu`
                 }
             } {}
             ? == kind COL_TIMESTAMP {
-                ( vec_push [String] out ( __an_feat_name cn `hour` ) )
-                ( vec_push [String] out ( __an_feat_name cn `day` ) )
-                ( vec_push [String] out ( __an_feat_name cn `month` ) )
-                ( vec_push [String] out ( __an_feat_name cn `weekday` ) )
+                ? < . m feat_enc 2 {
+                    ( vec_push [String] out ( __an_feat_name cn `hour` ) )
+                    ( vec_push [String] out ( __an_feat_name cn `day` ) )
+                    ( vec_push [String] out ( __an_feat_name cn `month` ) )
+                    ( vec_push [String] out ( __an_feat_name cn `weekday` ) )
+                } {
+                    ( vec_push [String] out ( __an_feat_name cn `hour_sin` ) )
+                    ( vec_push [String] out ( __an_feat_name cn `hour_cos` ) )
+                    ( vec_push [String] out ( __an_feat_name cn `weekday_sin` ) )
+                    ( vec_push [String] out ( __an_feat_name cn `weekday_cos` ) )
+                    ( vec_push [String] out ( __an_feat_name cn `month_sin` ) )
+                    ( vec_push [String] out ( __an_feat_name cn `month_cos` ) )
+                }
             } {}
         }
         F _ → {}
@@ -378,6 +435,50 @@ $ `stdlib/ext/json.nu`
     ^ msg
 }
 
+// The zone offset an ISO-8601 stamp ends in, in seconds: "+03:00" → 10800,
+// "-05:30" → -19800, "Z" or no designator → 0. The stamp has already
+// passed time_parse_iso, so the tail is well-formed.
+@ __an_iso_offset s stamp → i {
+    : i n ( nurl_str_len stamp )
+    : ~ i k 19
+    // Skip fractional seconds.
+    ? & < k n == ( nurl_str_at stamp n k ) 46 {
+        = k + k 1
+        ~ & < k n & >= ( nurl_str_at stamp n k ) 48 <= ( nurl_str_at stamp n k ) 57 { = k + k 1 }
+    } {}
+    ? >= k n { ^ 0 } {}
+    : i sc ( nurl_str_at stamp n k )
+    ? & != sc 43 != sc 45 { ^ 0 } {}
+    : ~ i hh 0
+    : ~ i mm 0
+    : ~ i seen 0
+    = k + k 1
+    ~ < k n {
+        : i c ( nurl_str_at stamp n k )
+        ? & >= c 48 <= c 57 {
+            ? < seen 2 { = hh + * hh 10 - c 48 } { = mm + * mm 10 - c 48 }
+            = seen + seen 1
+        } {}
+        = k + k 1
+    }
+    : i off + * hh 3600 * mm 60
+    ^ ? == sc 45 - 0 off off
+}
+
+// "<col>_<what>_sin" / "<col>_<what>_cos" for position `pos` of a cycle
+// of `period` steps: the pair puts the last step next to the first.
+@ __an_push_cyclic s cn s what i pos i period ( Vec String ) names ( Vec f ) vals → v {
+    : f ang / * 2.0 * PI # f pos # f period
+    : String sn ( __an_feat_name cn what )
+    ( string_push_str sn `_sin` )
+    ( vec_push [String] names sn )
+    ( vec_push [f] vals ( float_sin ang ) )
+    : String cs ( __an_feat_name cn what )
+    ( string_push_str cs `_cos` )
+    ( vec_push [String] names cs )
+    ( vec_push [f] vals ( float_cos ang ) )
+}
+
 // Encode one column's value into (names, vals). When `learn` is set, new
 // categories are recorded in the metadata; otherwise an unseen category
 // just yields an all-zero one-hot. Returns an error message, or an empty
@@ -420,19 +521,30 @@ $ `stdlib/ext/json.nu`
     } {}
     ? == kind COL_TIMESTAMP {
         ? ( json_is_str jv ) {
-            : !i ParseErr r ( time_parse_iso ( json_str_data jv ) )
+            : s stamp ( json_str_data jv )
+            : !i ParseErr r ( time_parse_iso stamp )
             ?? r {
                 T secs → {
-                    : Time t ( time_from_unix secs )
-                    ( vec_push [String] names ( __an_feat_name cn `hour` ) )
-                    ( vec_push [f] vals # f . t hour )
-                    ( vec_push [String] names ( __an_feat_name cn `day` ) )
-                    ( vec_push [f] vals # f . t day )
-                    ( vec_push [String] names ( __an_feat_name cn `month` ) )
-                    ( vec_push [f] vals # f . t month )
-                    // Monday = 0 … Sunday = 6, like Python's weekday().
-                    ( vec_push [String] names ( __an_feat_name cn `weekday` ) )
-                    ( vec_push [f] vals # f % + . t wday 6 7 )
+                    ? < . m feat_enc 2 {
+                        // Encoding 1: the UTC fields, linear.
+                        : Time t ( time_from_unix secs )
+                        ( vec_push [String] names ( __an_feat_name cn `hour` ) )
+                        ( vec_push [f] vals # f . t hour )
+                        ( vec_push [String] names ( __an_feat_name cn `day` ) )
+                        ( vec_push [f] vals # f . t day )
+                        ( vec_push [String] names ( __an_feat_name cn `month` ) )
+                        ( vec_push [f] vals # f . t month )
+                        // Monday = 0 … Sunday = 6, like Python's weekday().
+                        ( vec_push [String] names ( __an_feat_name cn `weekday` ) )
+                        ( vec_push [f] vals # f % + . t wday 6 7 )
+                    } {
+                        // The clock the stamp was written in: UTC plus
+                        // the offset it carries.
+                        : Time t ( time_from_unix + secs ( __an_iso_offset stamp ) )
+                        ( __an_push_cyclic cn `hour` . t hour 24 names vals )
+                        ( __an_push_cyclic cn `weekday` % + . t wday 6 7 7 names vals )
+                        ( __an_push_cyclic cn `month` - . t month 1 12 names vals )
+                    }
                 }
                 F _ → { ^ ( __an_err_param cn `a valid ISO timestamp` ) }
             }
@@ -812,8 +924,11 @@ $ `stdlib/ext/json.nu`
 
     ( json_obj_set o `n_points_seen` ( json_int . m n_seen ) )
     ( json_obj_set o `last_trained_at` ( json_int . m last_trained ) )
+    ( json_obj_set o `last_trained_time` ( json_int . m trained_time ) )
     ( json_obj_set o `max_data_points` ( json_int . m max_points ) )
     ( json_obj_set o `score_epoch` ( json_int . m score_epoch ) )
+    ( json_obj_set o `feature_encoding` ( json_int . m feat_enc ) )
+    ( json_obj_set o `retrain_required` ( json_bool ( meta_retrain_required m ) ) )
     ^ o
 }
 
@@ -1041,8 +1156,11 @@ $ `stdlib/ext/json.nu`
 
     = . m n_seen ( _an_jint j `n_points_seen` 0 )
     = . m last_trained ( _an_jint j `last_trained_at` 0 )
+    = . m trained_time ( _an_jint j `last_trained_time` 0 )
     = . m max_points ( _an_jint j `max_data_points` ANOM_MAX_POINTS )
     = . m score_epoch ( _an_jint j `score_epoch` 1 )
+    // Metadata written before the key existed was trained under encoding 1.
+    = . m feat_enc ( _an_jint j `feature_encoding` 1 )
     ?? ( json_obj_get j `clock` ) {
         T cv → { ? ( json_is_str cv ) { = . m count_clock == ( nurl_str_eq ( json_str_data cv ) `count` ) 1 } {} }
         F _ → {}

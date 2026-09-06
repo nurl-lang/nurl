@@ -475,6 +475,10 @@ $ `src/store.nu`
     : i n ( vec_len [String] . mo lines )
     ? < n . mo min_points { ^ 0 } {}
 
+    // A retrain re-encodes the whole ring, so it is where a model built
+    // under an older calendar encoding moves to the current one.
+    = . mm feat_enc ANOM_FEAT_ENC
+
     // Pass 1: re-encode every raw point (learning), tracking timestamps.
     : ( Vec EncPoint ) encs ( vec_new [EncPoint] )
     : ( Vec i ) ets ( vec_new [i] )
@@ -640,6 +644,7 @@ $ `src/store.nu`
     ( vec_free [i] ets )
 
     = . mm last_trained . mm n_seen
+    = . mm trained_time ( now_seconds )
     ( meta_bump_epoch mm )
     ( store_save_meta . mo store ( string_data . mo mname ) mm )
     = . mo next_train_at + . mm n_seen ( __an_sched_step mo )
