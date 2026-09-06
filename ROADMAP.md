@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-09-04 · Current release: **0.60.0** · Language: **Grammar
+_Last reviewed: 2026-09-06 · Current release: **0.61.0** · Language: **Grammar
 v2.7** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -257,10 +257,13 @@ platform-specific shims.
 - **ext/AI & agents** — `mcp` (+ `server` — the one server framework, on
   which every MCP server in the tree is built since 0.60.0, with its wire
   frozen by `compiler/tests/mcp_server_contract.nu`; `client`, `http`,
-  `session`, `stdio`, `search`, and since 0.40.0 `tasks` — the
+  `session`, `stdio`, `search`, since 0.40.0 `tasks` — the
   `io.modelcontextprotocol/tasks` extension, so a long-running
   `tools/call` returns a pollable task handle instead of holding a
-  JSON-RPC response open) and `anthropic` (Claude Messages API incl.
+  JSON-RPC response open — and since 0.61.0 `auth`, the OAuth
+  resource-server half of the MCP Authorization spec: RFC 9728 protected
+  resource metadata and the 401 challenge that points at it) and
+  `anthropic` (Claude Messages API incl.
   streaming SSE + tool-use deltas).
 - **ext/packaging** — `semver`, `manifest`, `lockfile`, `resolver`,
   `registry_index`, `pkg_fetch`, `pkg_publish` (the `nurlpkg` backend).
@@ -381,7 +384,9 @@ platform-specific shims.
   first *trainable* package, a deterministic sklearn-faithful MLP regressor),
   local LLMs (`nurllama`, `gguf`, `tokenizer`, `safetensor`), speech (`whisper`,
   `audio`), distributed compute (`swarm`, `swarm-mcp`), web
-  (`template` HTML templating, `http`), PKI (`pki-server` — a private CA
+  (`template` HTML templating, `http`, `http-client` — one client facade
+  over HTTP/1.1, HTTP/2 and HTTP/3 — and `oauth`, an OpenID Connect
+  relying party and resource-server guard in pure NURL), PKI (`pki-server` — a private CA
   with a classical *or* post-quantum signing key), database clients
   (`psql`, `redis`
   — pure NURL), and application scaffolding (`cli`, `cas`, `wasmbuilder`,

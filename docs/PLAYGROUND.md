@@ -117,8 +117,9 @@ The playground container also exposes the toolchain as a **public,
 unauthenticated [Model Context Protocol](https://modelcontextprotocol.io/)**
 endpoint, mounted at `/mcp` over Streamable HTTP. The JSON-RPC handler,
 framing and tool/resource catalog are pure NURL
-([`nurlapi/main.nu`](../nurlapi/main.nu) backed by `stdlib/ext/mcp.nu` +
-`stdlib/ext/mcp_http.nu`).
+([`nurlapi/main.nu`](../nurlapi/main.nu) backed by
+`stdlib/ext/mcp_server.nu` — the one server framework every MCP server in
+the tree is built on — over `packages/http`).
 
 **Add to Claude Code / Claude Desktop:**
 ```bash

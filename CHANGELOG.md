@@ -6,15 +6,220 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.61.0] — 2026-09-06
 
 ### Added
+
+- **`packages/oauth` 0.1.0 — identify the user, read the claims.** An
+  OpenID Connect relying party and a resource-server guard, with no C
+  anywhere in the chain: the TLS is `std/tls.nu`, the JSON is
+  `ext/json.nu`, and the RSA, ECDSA, Ed25519 and SHA-2 that decide
+  whether a token is real are `std/rsa.nu`, `std/ecdsa_p256.nu`,
+  `std/ed25519.nu` and `std/hash_sha*.nu`.
+
+  The client half runs the authorization-code flow with PKCE (S256
+  only), OIDC discovery over RFC 8414 metadata with the document's
+  issuer cross-checked against the one that was asked for, the token
+  endpoint (`authorization_code`, `refresh_token`, `client_credentials`;
+  `client_secret_post` or `client_secret_basic`) and UserInfo.
+
+  The verifying half is the part that decides who someone is. It fetches
+  the provider's JWKS, picks the key the token's `kid`/`alg` names, and
+  re-fetches on an unseen `kid` so a key rotation needs no restart —
+  rate-limited, so a flood of forged `kid`s cannot be aimed at the
+  provider through us. The signature is checked in pure NURL:
+  RS256/RS384/RS512, PS256, ES256/ES384, EdDSA, and HS256 only for a
+  deliberately configured shared secret. Then the claims — `iss`, `aud`
+  with `azp`, `exp`/`nbf`/`iat` with leeway, `nonce`, `sub` and
+  `max_age` — each named when it fails. `alg: none` and an unrecognised
+  `crit` are refused, not ignored.
+
+  The result is an `OidcIdentity`: subject, issuer, email, name, picture
+  and the full claim set. On the server side `with_oidc_bearer` /
+  `with_oidc_scope` wrap an `HttpApp` route, so a handler is entered
+  only for a caller the package could name. Everything else — no token,
+  an expired one, one from another issuer, one minted for another
+  audience, one signed with a key the provider never published, one that
+  says `alg: none` — is a 401 with an RFC 6750 challenge naming which of
+  those it was, while a caller who is who they say but lacks the scope
+  gets 403 `insufficient_scope`, because that is a different answer. What the challenge quotes back is sanitized first:
+  part of that text is copied from the token, and a `kid` carrying a
+  CR LF is response splitting, not a diagnostic.
+
+  `tests/provider.nu` is a signing test provider — it mints a real ES256
+  token and every deliberately broken one, and its authorization code
+  carries an optional subject (`c.<challenge>.<nonce>[.<sub>]`) so a
+  relying party with roles can exercise its second role and not only its
+  first. `packages/anomaly`'s sign-in is built on this package, and its
+  `authflow_test.sh` drives the whole path over a socket against that
+  provider.
+
+- **`packages/anomaly` 0.8.0 → 0.13.0 — the detector grew an identity, a
+  tenant, and an API for agents.** Six releases; the package's own
+  [`CHANGELOG.md`](packages/anomaly/CHANGELOG.md) has the full text.
+
+  **0.8.0 — the joint detector stops being muted.** Every forest
+  version's `decision_margin` is an absolute offset on a
+  `decision_function` whose scale sklearn fixes, so `0.06` travels
+  between models. The autoencoder's score is
+  `reconstruction_threshold − mse`, and MSE has no fixed scale — it is
+  the mean squared error of MinMax-scaled features and lands wherever the
+  data puts it (~1e-3 on one model here, ~2e-4 on another). The Python
+  reference applies its absolute rule to the autoencoder anyway:
+  `model_training.py` sets `is_anomaly = mse > reconstruction_threshold`
+  inside the autoencoder branch and then, thirty lines later at the same
+  indentation as the branch itself and so unconditionally, overwrites it
+  with the margin rule. Against a threshold of ~5e-4 that demands a
+  reconstruction error a *hundred times* the p95 of the training errors.
+  The one version that models the joint distribution was, in practice,
+  off — and the reference ships it `"enabled": False`, which is why
+  nobody hit it. We had ported the arithmetic faithfully, bug included.
+  The margin is now a **fraction** of that model's reconstruction
+  threshold (`mse >= threshold · (1 + margin)`), so the stored default
+  `0.05` reads "5 % above the p95 training error" — the documented
+  intent — and no migration is needed: the value that was mute becomes
+  the value that works. Measured on a 32-feature home-sensor model, on
+  points whose every reading is real but whose clock was rotated 12 h so
+  that only the *relations* are wrong, the autoencoder went from 1/150
+  to 150/150; the forests, which cannot see relations at all, stayed at
+  15/150 either way.
+
+  **0.9.0/0.9.1 — sign-in, organizations, roles, ownership and API
+  keys** (`src/authz.nu`). The service was single-user by construction:
+  every route reached every model in one flat store. It now has an
+  identity, a tenant and an owner, without moving a single stored model
+  — and it is **off by default**, so a deployment upgrades the binary
+  first and turns authentication on when its provider is configured, not
+  at the same instant. An organization is an OIDC tenant with one SQLite
+  database of its own (`<store>/orgs/<org>.db`), so the org is implicit
+  in the file and no query can forget an org column. Two roles: an
+  `admin` manages the organization's models, users and keys, a `viewer`
+  reads. The first subject to authenticate from an organization becomes
+  its admin — nobody else could have granted it — and the last admin
+  cannot be demoted. A model belongs to the organization rather than to
+  a person, so a colleague leaving does not take a production model with
+  them. API keys carry an `ingest` capability of their own, off the role
+  axis entirely: a producer credential can feed the models its
+  organization already has and can do nothing else, because one that
+  could delete a production model is a hazard and one that has to be an
+  admin to send a number is a blunt instrument. `DELETE /api/me` is the
+  right to be forgotten, and it deletes an organization's models before
+  its database — a crash between the two leaves models nobody claims,
+  which an admin can adopt, while the reverse leaves a database pointing
+  at models that are gone. Multi-tenant sign-in reads the issuer
+  *template* a multi-tenant authority publishes
+  (`https://login.microsoftonline.com/{tenantid}/v2.0` — there is
+  nothing to pin, and `oidc_discover` correctly refuses it) and verifies
+  each token against that template with its own `tid` substituted; both
+  claims sit inside the same signature, so a token cannot be moved
+  between tenants. Verification throughout is `packages/oauth`.
+
+  Three bugs the new tests found. **An admin of one organization could
+  see every organization's models** — the tenancy layer worked, and then
+  the listing treated `admin` as "no filter", which in a single-tenant
+  deployment is the same thing and in a multi-tenant one is every other
+  tenant's data. An admin's world is now the set its organization has
+  claimed, never the store's directory listing. **The read/write split
+  was applied by a positional pass over the file** and the order was not
+  the one assumed, so `force_train` was a READ and `anomalies` a WRITE —
+  it is keyed on the handler's name now, which is a mistake a name-keyed
+  table cannot make. And **`allow_create` short-circuited the role
+  check**, so an ingest key could invent models; the flag says a missing
+  model may be brought into being *here*, not that anyone may bring it.
+
+  0.9.1 then closed a trap on the exact deployment path the README
+  recommends. `public` is the organization that credential-less points
+  land in while the migration window is open, and on a fresh deployment
+  that window is open *before anybody has signed in* — so the first
+  producer to send a point created `orgs/public.db` and the home marker,
+  "the first organization this store ever created", was written to
+  `public`. The marker is written once and never revised, adoption is
+  reserved to the home organization, and `public` is not an organization
+  anyone can sign in to: one anonymous point, and the store was
+  unadministrable. `public` is now never home, and the home organization
+  can adopt a model `public` holds.
+
+  **0.10.0 — margins you can read.** `GET
+  /models/dynamic/<m>/calibration` says, per version, what the current
+  margin flags over a window of stored data and which margin would flag
+  0.1 / 0.5 / 1 / 2 / 5 / 10 %, plus a 110-point rate→margin curve so a
+  dashboard can estimate the alert rate of a typed margin without a
+  round trip. Fine-tuning now sets a **rate** instead of following one
+  outlier: the old rule moved the margin until the ring's most anomalous
+  point was just inside the band and wrote eight-decimal values with no
+  more meaning than their first two digits. `severity` (`−score /
+  margin`, per version and as the aggregate maximum) is the one
+  unit-free number an operator — or an agent — can compare across
+  versions and models. Fixed: the retrain loop treated the `autoencoder`
+  version config as a forest and stored a zero-tree
+  `version_autoencoder.forest`, which the loader then scored as a second
+  "autoencoder" verdict reading the AE's *relative* margin as an
+  absolute one.
+
+  **0.11.0/0.11.1 — the importer finds the time.** It reads the columns
+  before a row lands: a column whose values parse as a stamp under any
+  name (ISO 8601 / RFC 3339, Postgres and MySQL `TIMESTAMP` and
+  `TIMESTAMPTZ`, compact `YYYYMMDDTHHMMSS`, Unix s/ms/µs/ns, a bare
+  date), or year / month / day plus clock parts under English or Finnish
+  names — an FMI export (`Vuosi, Kuukausi, Päivä, Aika`) imports as is.
+  `?inspect=1` returns the proposal with a confidence and a sample
+  without creating anything. Unstamped rows make a **count-clock** model:
+  the n-th point is #n and every window is a number of points. No time is
+  ever invented. On the dashboard a contribution now carries the value
+  the point had and the one the net reconstructed from the other
+  features, charts zoom by dragging, and a click on a point or a row
+  opens the stored record in full. Fixed: the service served one
+  connection at a time *and* kept it alive, so a browser's second
+  parallel request waited out the whole 5 s idle timeout — every page
+  load stalled — and string query parameters were taken verbatim, so a
+  feature name with a space or a non-ASCII character (every FMI column)
+  could not be asked for from a browser at all.
+
+  **0.12.0 — analyse a file in one call.** `POST /api/analyze` takes a
+  CSV / JSON / JSONL body, trains a throwaway model on it — every forest
+  version over the whole file, the autoencoder as 64-16-64, every margin
+  fine-tuned to a 1 % alert rate — and answers with the anomalies: index,
+  stamp, score, which versions flagged it, its top contributors with
+  value and expectation, and the full record. A call that has not
+  finished within `wait=` seconds becomes a **task**
+  (`GET /api/org/tasks[/<id>]`) rather than holding the response open,
+  and the result file lands in the organization's folder with a signed
+  `download_url` — HMAC'd against a per-store secret and bound to the
+  organization, the file and the expiry — that anyone holding it can
+  fetch. Analyses run in a child process, so a crash in one cannot take
+  the service down and the service's GPU and models stay untouched, and
+  the service now runs four worker threads behind one service lock so a
+  waiting analysis no longer holds up live `/detect` traffic.
+
+  **0.13.0 — an MCP endpoint for agents.** `POST /mcp` (Streamable HTTP,
+  JSON-RPC) is the whole API for a language model, authenticated exactly
+  like the REST routes and acting with that user's rights: a viewer's
+  client sees the read tools, an administrator's the whole surface, and
+  a tool the caller may not use is not listed and is "unknown" when
+  called — an agent is never shown a door it cannot open. A client with
+  no token gets the RFC 9728 challenge and
+  `GET /.well-known/oauth-protected-resource[/mcp]` names the
+  authorization server, so Claude Code, the MCP inspector and any
+  spec-following agent discover the login on their own. Twenty-six
+  tools, described for an agent and sized for a context window; times
+  are ISO-8601 UTC, numbers are rounded to what a reader can use, and
+  every error says what to do instead. Resetting and deleting a model
+  take `confirm: true`, and there is no tool that creates or revokes an
+  API key: a secret must not land in a model's context. **Scratch
+  models** (`llm_…`) let every member — a viewer too — create, train,
+  tune and delete a model of their own, so an agent can test a
+  hypothesis on a slice of history without touching a production model
+  or needing an administrator; the rule lives in the authorization gate,
+  so the REST routes and the MCP tools agree by construction. Fixed: a
+  viewer's model listing was empty, because it filtered by ownership
+  while `az_may_see` grants every member of the organization read access
+  to its models.
 
 - **An MCP server that knows who is calling** — `ext/mcp_server.nu`
   gains a caller context. `mcp_server_dispatch_as r req ctx` and
   `mcp_server_envelope_as` are the plain dispatch/envelope with one more
   argument: a Json the HOST built from what it authenticated (principal,
-  role, organisation — whatever its tools need) and the client never
+  role, organization — whatever its tools need) and the client never
   gets to assert. Every handler reads it through `mcp_call_context c`
   (borrowed; JSON null under the plain dispatch), so a tool learns the
   authenticated principal the way it learns its arguments — through the
@@ -53,12 +258,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trampoline in runtime_ffi.c). What the body captured is still the
   body's to free; only the env block changes hands. The thread twin of
   `spawn_owned` for fibers.
-
-- **`packages/oauth` test provider signs in more than one user** — the
-  authorization code carries an optional subject
-  (`c.<challenge>.<nonce>[.<sub>]`) and the ID/access tokens are minted
-  for it; a relying party with roles needs a second user to test the
-  second role.
 
 ### Fixed
 
