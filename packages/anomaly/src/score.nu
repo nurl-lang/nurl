@@ -91,8 +91,18 @@ $ `deps/gpukit/src/gpukit.nu`
 // Probe once: open a GpuKit (CUDA, else the gpu package's CPU backend) and
 // warm the kernel cache with `anomaly_paths`. Any failure parks the
 // accelerator for the process.
+//
+// Every accelerated path enters through here, and the caller may be on
+// any thread — `anomaly serve` scores and trains from a worker pool — so
+// a live kit is bound to the calling thread before it is used: a CUDA
+// context is current only on the thread that opened it, and a launch from
+// another thread fails without one. gk_bind_thread is idempotent and
+// costs a cuCtxSetCurrent.
 @ __ag_ensure → b {
-    ? != g_ag_state 0 { ^ == g_ag_state 1 } {}
+    ? != g_ag_state 0 {
+        ? == g_ag_state 1 { ^ ( gk_bind_thread ( __ag_kit ) ) } {}
+        ^ F
+    } {}
     ? ( __ag_env_off ) {
         = g_ag_state -1
         ^ F
