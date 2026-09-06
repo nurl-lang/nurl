@@ -75,6 +75,43 @@ $ `src/service.nu`
     ^ @ SvcOut { status parsed }
 }
 
+// A response as text: status, the body verbatim and one header's value
+// (empty when absent) — for the routes that answer with a file.
+: TextOut {
+    i status
+    String text
+    String header
+}
+
+@ fire_text Router r s method s path s query s want_header → TextOut {
+    : HttpRequest req ( mk_req method path query `` )
+    : HttpResponse resp ( router_handle r req )
+    : i status . resp status
+    : String txt ( bytes_to_str . resp body )
+    : String hv ( string_new )
+    : i nh ( vec_len [Header] . resp headers )
+    : ~ i k 0
+    ~ < k nh {
+        ?? ( vec_get [Header] . resp headers k ) {
+            T h → {
+                ? == ( nurl_str_eq ( string_data . h name ) want_header ) 1 {
+                    ( string_push_str hv ( string_data . h value ) )
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( http_response_free resp )
+    ( request_free req )
+    ^ @ TextOut { status txt hv }
+}
+
+@ text_out_free TextOut t → v {
+    ( string_free . t text )
+    ( string_free . t header )
+}
+
 // Fire one request for its status alone; the body is parsed and dropped.
 @ status_of Router r s method s path → i {
     : SvcOut o ( fire r method path `` `` )
@@ -283,6 +320,50 @@ $ `src/service.nu`
     }
     ( check == arr_len 5 `svc: data respects limit` )
     ( json_free . data body )
+
+    // The ring's fill is published beside the lifetime count.
+    : SvcOut mds ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
+    ( check == ( jint_of . mds body `n_points_stored` ) 50 `svc: metadata publishes n_points_stored` )
+    ( check == ( jint_of . mds body `n_points_seen` ) 50 `svc: n_points_seen beside it` )
+    ( json_free . mds body )
+
+    // Export: the stored points as a file.
+    : TextOut xc ( fire_text r `GET` `/models/dynamic/svc/export` `format=csv` `Content-Type` )
+    ( check == . xc status 200 `svc: export csv -> 200` )
+    ( check ( string_starts_with . xc header `text/csv` ) `svc: export csv content type` )
+    ( check ( string_starts_with . xc text `timestamp,temp\n` ) `svc: csv header is timestamp first, then the fields` )
+    ( check == ( string_count . xc text `\n` ) 51 `svc: csv has a header line and every stored row` )
+    ( text_out_free xc )
+    : TextOut xd ( fire_text r `GET` `/models/dynamic/svc/export` `format=csv` `Content-Disposition` )
+    ( check ( string_starts_with . xd header `attachment; filename="svc.csv"` ) `svc: export csv is a download named after the model` )
+    ( text_out_free xd )
+    : TextOut xj ( fire_text r `GET` `/models/dynamic/svc/export` `format=jsonl&limit=5` `Content-Type` )
+    ( check == . xj status 200 `svc: export jsonl -> 200` )
+    ( check ( string_starts_with . xj header `application/x-ndjson` ) `svc: export jsonl content type` )
+    ( check == ( string_count . xj text `\n` ) 5 `svc: export jsonl respects limit` )
+    : ( Vec String ) jl ( string_split . xj text `\n` )
+    : ~ b jl_ok F
+    ?? ( vec_get [String] jl 0 ) {
+        T l0 → {
+            : !Json JsonError pj ( json_parse ( string_data l0 ) )
+            ?? pj {
+                T j → { = jl_ok & ( json_obj_has j `timestamp` ) ( json_obj_has j `temp` ) ( json_free j ) }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check jl_ok `svc: each jsonl line is the stored record` )
+    ( vec_free_with [String] jl \ String x → v { ( string_free x ) } )
+    ( text_out_free xj )
+    : TextOut xf ( fire_text r `GET` `/models/dynamic/svc/export` `format=csv&fields=nosuch&limit=2` `X-Rows` )
+    ( check ( string_starts_with . xf text `timestamp,nosuch\n` ) `svc: csv fields= sets the columns` )
+    ( check == ( nurl_str_eq ( string_data . xf header ) `2` ) 1 `svc: X-Rows counts the exported rows` )
+    ( text_out_free xf )
+    : TextOut xb ( fire_text r `GET` `/models/dynamic/svc/export` `format=xml` `Content-Type` )
+    ( check == . xb status 400 `svc: export with an unknown format -> 400` )
+    ( text_out_free xb )
+    ( check == ( status_of r `GET` `/models/dynamic/nosuch/export` ) 404 `svc: export of a missing model -> 404` )
 
     // Schedule.
     : SvcOut sch ( fire r `PUT` `/api/dynamic/svc/schedule` `` `{"below_max_retrain_frequency": 25}` )

@@ -912,6 +912,7 @@ command with `--store DIR`.
 | `GET /models/dynamic/<m>/metadata` | model metadata, plus the autoencoder's own state |
 | `PUT /models/dynamic/<m>/metadata` | edit the schedule and the per-version configs (see below) |
 | `GET /models/dynamic/<m>/data?limit=N\|all` | recent raw points |
+| `GET /models/dynamic/<m>/export?format=csv\|jsonl` | the stored points as a download — the whole ring, or the `from`/`to`/`last` window and `fields` projection `/data` takes; CSV has one column per field any row carries, `timestamp` first; JSONL is the records line for line, which `/import?format=jsonl` takes back |
 | `GET /models/dynamic/<m>/anomalies` | re-score the stored ring, cached (see below) |
 | `POST /models/dynamic/<m>/claim` | adopt an unclaimed model into your organization |
 | `POST /models/dynamic/<m>/import?format=&inspect=&time=&tz=&calendar=&clock=` | import a CSV/JSON/JSONL file of history; `inspect=1` proposes where its time is |
@@ -1055,11 +1056,11 @@ build step — plain HTML/CSS/JS that talks to the routes above):
 
 | Page | What it does |
 | --- | --- |
-| `/` · `/modelmanager.html` | list models, train / finetune / reset / delete; per model: toggle versions, edit margins and contamination with a live *flags in window* column from the calibration report, preview and apply a fine-tune for a target alert rate, train the autoencoder, edit the retrain schedule — or, under *Advanced*, the whole editable metadata, as a generated field form or as raw JSON. Every alert-affecting control carries a `?` that says what it means and which way to move it |
+| `/` · `/modelmanager.html` | list models — stored points beside the lifetime count, feature count, a button straight to the model's anomalies — train / finetune / reset / delete, export the stored points as CSV or JSONL; per model: toggle versions, edit margins and contamination with a live *flags in window* column from the calibration report, preview and apply a fine-tune for a target alert rate, train the autoencoder, edit the retrain schedule — or, under *Advanced*, the whole editable metadata, as a generated field form or as raw JSON. Every alert-affecting control carries a `?` that says what it means and which way to move it |
 | `/modeltrainer.html` | import a CSV/JSON/JSONL file of history — inspect first: the page shows where it found the time (a column, year/month/day parts, or none) and lets you confirm or change it; feed points (`/detect`) one at a time or in bulk; force-train |
 | `/visualize.html` | plot any numeric feature of a model's stored points over time |
 | `/admin.html` | the organization: users and their roles, API keys, model ownership |
-| `/anomalies.html` | scan stored history over a time range: score timeline, a per-version ribbon showing *what* flagged *when*, any feature's own trace for context, and a table naming the features whose relationship broke — with the value each had and the one the autoencoder expected; forest-only flags list the point's most extreme values in σ. Drag across a chart to zoom into a stretch of points, double-click or *reset zoom* to see the whole range; click a point for its stored record and every feature as the model saw it. Filter chips isolate the joint (autoencoder) anomalies from the per-feature (forest) ones |
+| `/anomalies.html` | scan stored history over a time range: score timeline, a per-version ribbon showing *what* flagged *when*, any feature's own trace for context, and a table naming the features whose relationship broke — with the value each had and the one the autoencoder expected; forest-only flags list the point's most extreme values in σ. Drag across a chart to zoom into a stretch of points, double-click or *reset zoom* to see the whole range; click a point for its stored record and every feature as the model saw it. Filter chips isolate the joint (autoencoder) anomalies from the per-feature (forest) ones. *Max points* (50 000) bites only when the range holds more; *Export* downloads the range's stored points as CSV or JSONL |
 
 The HTML lives in `static/` next to the package. `serve` locates it via, in
 order: `--webroot DIR`, `$ANOMALY_WEBROOT`, `<exe-dir>/static`,

@@ -87,6 +87,7 @@ For traceability, this is the surface `anomaly` is modelled on. Endpoints marked
 | `GET  /models/dynamic` | list dynamic models | † |
 | `GET  /models/dynamic/<model>/metadata` | model metadata | † |
 | `GET  /models/dynamic/<model>/data` | recent data points (`limit=N`, `all`; `at=<index>` one stored row) | † |
+| `GET  /models/dynamic/<model>/export` | the stored points as a file: `format=csv\|jsonl`, the same `from`/`to`/`last`/`fields`/`limit` as `/data`, whole ring by default; `Content-Disposition: attachment`, `X-Rows` | † |
 | `POST /models/dynamic/<model>/reset` | drop data + models, keep name | † |
 | `DELETE /delete_model/<model>` | delete a model entirely | † |
 | `PUT  /api/dynamic/<model>/schedule` | change retraining schedule | † |
@@ -158,7 +159,8 @@ Persisted as JSON (`std/ext/json`). Fields:
   "schedule":        { "below_max": 50, "at_max": 1000,
                        "autoencoder": false },  // true ⇒ the AE retrains with the forests
   "versions":        { version_name: <version config>, ... },
-  "n_points_seen":   int,
+  "n_points_seen":   int,  // lifetime; keeps climbing past the cap
+  "n_points_stored": int,  // rows in the ring now (≤ max_data_points)
   "last_trained_at": int,  // point count at last train
   "max_data_points": int,  // ring capacity, editable (§6)
   "clock":           "time" | "count"   // §5.8; editable only while empty
@@ -636,8 +638,10 @@ service so existing dashboards and the `modelmanager` UI keep working:
   (admin); defaults to the caller.
 - `POST /train/autoencoder/<model>` optional body = `{ hidden?: [int],
   contamination?: float }` → `training_data_points`, `filtered_anomalies`,
-  `reconstruction_threshold`. Both are stored with the net and reused when
-  `schedule.autoencoder` retrains it with the forests.
+  `reconstruction_threshold`, `layer_sizes`. `hidden` absent or empty keeps
+  the layout a trained net already has (a first train uses 64-32-64). Both
+  are stored with the net and reused when `schedule.autoencoder` retrains
+  it with the forests.
 - `POST /models/dynamic/<model>/import?format=csv|json|jsonl|fmi|auto` —
   the body is the file (`fmi`, the name the weather service's export comes
   under, is the CSV reader; an unknown format is 400 naming the four). The rows' time is read before any lands:

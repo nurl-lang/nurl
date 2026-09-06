@@ -81,6 +81,7 @@ $ `stdlib/ext/json.nu`
     b sched_ae  // retrain the autoencoder whenever the forests retrain
     b count_clock  // points are numbered, not timed: see ANOM_TICK
     i n_seen
+    i n_stored  // rows in the ring right now (≤ max_points); n_seen minus the evicted
     i last_trained  // n_seen at the last train (a point count, not a time)
     i trained_time  // wall clock of the last train, unix seconds; 0 = never
     i max_points
@@ -276,6 +277,7 @@ $ `stdlib/ext/json.nu`
     = . m sched_ae F
     = . m count_clock F
     = . m n_seen 0
+    = . m n_stored 0
     = . m last_trained 0
     = . m trained_time 0
     = . m max_points ANOM_MAX_POINTS
@@ -1095,6 +1097,7 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set o `versions` vers )
 
     ( json_obj_set o `n_points_seen` ( json_int . m n_seen ) )
+    ( json_obj_set o `n_points_stored` ( json_int . m n_stored ) )
     ( json_obj_set o `last_trained_at` ( json_int . m last_trained ) )
     ( json_obj_set o `last_trained_time` ( json_int . m trained_time ) )
     ( json_obj_set o `max_data_points` ( json_int . m max_points ) )
@@ -1358,6 +1361,13 @@ $ `stdlib/ext/json.nu`
     = . m last_trained ( _an_jint j `last_trained_at` 0 )
     = . m trained_time ( _an_jint j `last_trained_time` 0 )
     = . m max_points ( _an_jint j `max_data_points` ANOM_MAX_POINTS )
+    // Metadata from before the key existed: the ring holds every point
+    // seen until it is full, then exactly `max_points` — the only ways a
+    // ring shrinks (a reset, a lowered cap) rewrite the metadata too.
+    = . m n_stored ( _an_jint j `n_points_stored` -1 )
+    ? < . m n_stored 0 {
+        = . m n_stored ? < . m n_seen . m max_points . m n_seen . m max_points
+    } {}
     = . m score_epoch ( _an_jint j `score_epoch` 1 )
     // Metadata written before the key existed was trained under encoding 1.
     = . m feat_enc ( _an_jint j `feature_encoding` 1 )

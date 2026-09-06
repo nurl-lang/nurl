@@ -39,7 +39,7 @@ $ `src/authz.nu`
 $ `src/imptime.nu`
 
 // One version for the CLI banner and the MCP handshake.
-: s ANOMALY_VERSION `0.15.0`
+: s ANOMALY_VERSION `0.16.0`
 
 // ── Wiring ───────────────────────────────────────────────────────────
 
@@ -687,6 +687,7 @@ $ `src/imptime.nu`
         F _ → {}
     }
     ( __mcp_copy mj `n_points_seen` m )
+    ( __mcp_copy mj `n_points_stored` m )
     ( __mcp_copy mj `max_data_points` m )
     ( __mcp_training_of mj m )
     ?? ( json_obj_get mj `versions` ) {
@@ -843,6 +844,7 @@ $ `src/imptime.nu`
     ?? ( json_obj_get b `categories` ) { T c → { ( json_obj_set out `categories` ( __mcp_cats_brief c ) ) } F _ → {} }
     ?? ( json_obj_get b `feature_names` ) { T f → { ( json_obj_set out `features` ( __mcp_feats_brief f ) ) } F _ → {} }
     ( __mcp_copy b `n_points_seen` out )
+    ( __mcp_copy b `n_points_stored` out )
     ( __mcp_copy b `max_data_points` out )
     ( __mcp_training_of b out )
     ( __mcp_copy b `schedule` out )

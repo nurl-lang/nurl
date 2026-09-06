@@ -203,6 +203,7 @@ $ `src/store.nu`
         }
         = k + k 1
     }
+    ( __an_note_stored mo )
 
     // Trained versions: one forest blob per enabled version, if present.
     // The `autoencoder` version is not a forest: its VerCfg only carries
@@ -328,6 +329,14 @@ $ `src/store.nu`
 
 @ model_n_points * Model mo → i {
     ^ ( vec_len [String] . mo lines )
+}
+
+// The metadata's copy of the ring's fill, refreshed wherever the ring
+// changes and before the metadata is written: the listing reads the
+// metadata alone, and "points seen" is a lifetime count that keeps
+// climbing past the cap.
+@ __an_note_stored * Model mo → v {
+    = . ( model_metadata mo ) n_stored ( vec_len [String] . mo lines )
 }
 
 @ model_is_trained * Model mo → b {
@@ -1341,9 +1350,11 @@ $ `src/store.nu`
 // Train the autoencoder from the ring: encode + project the raw points
 // (the same pass model_force_train_at runs, minus the standardising
 // scaler — the AE recipe MinMax-scales after anomaly filtering), then
-// hand the matrix to ae_train_matrix. `hidden` empty → 64-32-64.
-// Explicit by default; with `schedule.autoencoder` on, every forest
-// retrain repeats it with the same layout and pre-filter (see
+// hand the matrix to ae_train_matrix. `hidden` empty → the layout the
+// trained net already has, so a retrain with no layout given is a
+// retrain and not a silent return to the default; with no net yet,
+// 64-32-64. Explicit by default; with `schedule.autoencoder` on, every
+// forest retrain repeats it with the same layout and pre-filter (see
 // __an_retrain_ae). Returns the error text ("" = success).
 @ model_train_autoencoder * Model mo ( Vec i ) hidden f contamination → String {
     ^ ( model_train_autoencoder_at mo hidden contamination ( model_now mo ) )
@@ -1353,6 +1364,16 @@ $ `src/store.nu`
     : *Meta mm . mo meta
     : i n ( vec_len [String] . mo lines )
     ? < n . mo min_points { ^ ( string_from `not enough data points` ) } {}
+    : AeModel cur_ae . mo ae
+    ? & == ( vec_len [i] hidden ) 0 . cur_ae trained {
+        : ( Vec i ) prev ( ae_hidden cur_ae )
+        ? > ( vec_len [i] prev ) 0 {
+            : String r ( model_train_autoencoder_at mo prev contamination now )
+            ( vec_free [i] prev )
+            ^ r
+        } {}
+        ( vec_free [i] prev )
+    } {}
 
     : ( Vec EncPoint ) encs ( vec_new [EncPoint] )
     : ~ i k 0
@@ -1459,6 +1480,7 @@ $ `src/store.nu`
                 ?? ( vec_remove [i] . mo times 0 ) { T _ → {} F _ → {} }
                 ( store_write_points . mo store ( string_data . mo mname ) . mo lines )
             } {}
+            ( __an_note_stored mo )
             ( store_save_meta . mo store ( string_data . mo mname ) mm )
 
             // Schedule: lifetime counter reaching the mark retrains all.
@@ -1696,6 +1718,7 @@ $ `src/store.nu`
     = . mo lines mlines
     = . mo times mtimes
     = . mm n_seen + . mm n_seen accepted
+    ( __an_note_stored mo )
 
     // One write for the whole file, not one per point.
     ( store_write_points . mo store ( string_data . mo mname ) . mo lines )
@@ -3230,6 +3253,7 @@ $ `src/store.nu`
         = . mo next_train_at + . mm last_trained ( __an_sched_step mo )
     } {}
     ( meta_bump_epoch mm )
+    ( __an_note_stored mo )
     ( store_save_meta . mo store ( string_data . mo mname ) mm )
     ^ ( string_new )
 }

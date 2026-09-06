@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Trainer · anomaly</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
   :root {
     --bg: #0e1116; --panel: #161b22; --panel2: #1c2230; --border: #2a3242;
@@ -18,6 +19,7 @@
   header { display: flex; align-items: center; gap: 20px; padding: 14px 24px; background: var(--panel);
            border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header h1 .logo { width: 22px; height: 22px; vertical-align: -5px; margin-right: 8px; }
   header .brand { color: var(--accent2); font-family: var(--mono); }
   nav { display: flex; gap: 4px; margin-left: auto; }
   nav a { padding: 6px 12px; border-radius: 8px; color: var(--muted); font-weight: 500; }
@@ -95,7 +97,7 @@
 </head>
 <body>
 <header>
-  <h1><span class="brand">anomaly</span> · Trainer</h1>
+  <h1><img class="logo" src="/favicon.svg" alt=""><span class="brand">anomaly</span> · Trainer</h1>
   <nav>
     <a href="/modelmanager.html">Models</a>
     <a href="/modeltrainer.html" class="active">Trainer</a>

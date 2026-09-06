@@ -35,7 +35,7 @@
 //
 //   GET /  |  /modelmanager.html  |  /modeltrainer.html
 //       |  /visualize.html        |  /anomalies.html
-//       |  /admin.html            |  /oauth/callback  |  /auth.js
+//       |  /admin.html            |  /oauth/callback  |  /auth.js  |  /favicon.svg
 //
 // With no web root these routes 404 and the service is API-only.
 //
@@ -766,6 +766,23 @@ $ `stdlib/std/thread.nu`
     ^ r
 }
 
+// Every layer width of a trained net, input and output included — the
+// `hidden` a retrain takes is this list minus its two ends.
+@ __an_ae_layers AeModel ae → Json {
+    : Json layers ( json_arr_new )
+    : Mlp net . ae net
+    : i nl ( vec_len [i] . net sizes )
+    : ~ i k 0
+    ~ < k nl {
+        ?? ( vec_get [i] . net sizes k ) {
+            T sz → { ( json_arr_push layers ( json_int sz ) ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ layers
+}
+
 // The autoencoder version's own state, which lives outside the metadata
 // (autoencoder.json, not meta.json) and so has no place in meta_to_json.
 // `enabled` is read back from the metadata: disabling the version mutes
@@ -792,18 +809,7 @@ $ `stdlib/std/thread.nu`
             // decision_margin (SPEC §5.5), in the score's own units.
             ( json_obj_set o `effective_margin` ( json_float ( anom_ae_margin ae arel ) ) )
             ( json_obj_set o `feature_names` ( _an_jarr_of_strs . ae feats ) )
-            : Json layers ( json_arr_new )
-            : Mlp net . ae net
-            : i nl ( vec_len [i] . net sizes )
-            : ~ i k 0
-            ~ < k nl {
-                ?? ( vec_get [i] . net sizes k ) {
-                    T sz → { ( json_arr_push layers ( json_int sz ) ) }
-                    F _ → {}
-                }
-                = k + k 1
-            }
-            ( json_obj_set o `layer_sizes` layers )
+            ( json_obj_set o `layer_sizes` ( __an_ae_layers ae ) )
             ( ae_free ae )
         }
         F → {
@@ -897,63 +903,15 @@ $ `stdlib/std/thread.nu`
         ^ r404
     }
     : i limit ( __an_query_int . req query `limit` 100 )
-    // ?at=<index>: one stored row by its ring index (the `index` a scan
-    // point carries), for the dashboard's point popup. Read as a string
-    // because index 0 is a real answer.
-    : String atq ( __an_query_str . req query `at` )
-    : ~ i at -1
-    ? > ( string_len atq ) 0 {
-        ?? ( string_to_int atq ) { T x → { = at x } F _ → {} }
-    } {}
-    ( string_free atq )
-    // ?from=<unix>&to=<unix>&last=<seconds>: a window over the stored
-    // timestamps, `last` anchored to the newest stored point (or `to`),
-    // never to the server's clock. ?fields=a,b projects each row to those
-    // fields plus its timestamp (`*` = every field).
-    : i q_from ( __an_query_int . req query `from` 0 )
-    : i q_to ( __an_query_int . req query `to` 0 )
-    : i q_last ( __an_query_int . req query `last` 0 )
+    // ?fields=a,b projects each row to those fields plus its timestamp
+    // (`*` = every field, which is what no projection returns).
     : String ffilter ( __an_query_str . req query `fields` )
-    // `fields=*` is every field, which is what no projection returns.
     : b want_fields & > ( string_len ffilter ) 0 == ( nurl_str_eq ( string_data ffilter ) `*` ) 0
     : ( Vec String ) fields ( string_split ffilter `,` )
     ( string_free ffilter )
     : ( Vec String ) pts ( store_load_points st ( string_data mname ) )
     : i total ( vec_len [String] pts )
-    : ~ i from_ts q_from
-    : i to_ts q_to
-    ? > q_last 0 {
-        : ~ i anchor to_ts
-        ? > anchor 0 {} {
-            ? > total 0 {
-                ?? ( vec_get [String] pts - total 1 ) { T l → { = anchor ( _an_line_ts ( string_data l ) ) } F _ → {} }
-            } {}
-        }
-        ? > anchor 0 { = from_ts - anchor q_last } {}
-    } {}
-    : b windowed | > from_ts 0 > to_ts 0
-    // Which rows: one by index, or the window's, newest `limit` of them.
-    : ( Vec i ) kept ( vec_new [i] )
-    ? >= at 0 {
-        ? < at total { ( vec_push [i] kept at ) } {}
-    } {
-        : ~ i k 0
-        ~ < k total {
-            : ~ b keep T
-            ? windowed {
-                ?? ( vec_get [String] pts k ) {
-                    T l → {
-                        : i ts ( _an_line_ts ( string_data l ) )
-                        ? & > from_ts 0 < ts from_ts { = keep F } {}
-                        ? & > to_ts 0 > ts to_ts { = keep F } {}
-                    }
-                    F _ → {}
-                }
-            } {}
-            ? keep { ( vec_push [i] kept k ) } {}
-            = k + k 1
-        }
-    }
+    : ( Vec i ) kept ( __an_data_select . req query pts )
     : i in_window ( vec_len [i] kept )
     : ~ i kstart 0
     ? & > limit 0 > in_window limit { = kstart - in_window limit } {}
@@ -973,27 +931,8 @@ $ `stdlib/std/thread.nu`
                     T j → {
                         ( json_arr_push idxs ( json_int k ) )
                         ? want_fields {
-                            : Json row ( json_obj_new )
-                            ?? ( json_obj_get j `timestamp` ) {
-                                T tv → { ( json_obj_set row `timestamp` ( json_clone tv ) ) }
-                                F _ → {}
-                            }
-                            : i nf ( vec_len [String] fields )
-                            : ~ i fi 0
-                            ~ < fi nf {
-                                ?? ( vec_get [String] fields fi ) {
-                                    T fname → {
-                                        ?? ( json_obj_get j ( string_data fname ) ) {
-                                            T fv → { ( json_obj_set row ( string_data fname ) ( json_clone fv ) ) }
-                                            F _ → {}
-                                        }
-                                    }
-                                    F _ → {}
-                                }
-                                = fi + fi 1
-                            }
+                            ( json_arr_push arr ( __an_project_row j fields ) )
                             ( json_free j )
-                            ( json_arr_push arr row )
                         } { ( json_arr_push arr j ) }
                     }
                     F _ → {}
@@ -1022,6 +961,326 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `indices` idxs )
     : HttpResponse r ( response_json 200 o )
     ( json_free o )
+    ( store_free st )
+    ( string_free mname )
+    ^ r
+}
+
+// Which stored rows a query names, as ring indices in ring order.
+// ?at=<index> is one row by its ring index (the `index` a scan point
+// carries), for the dashboard's point popup — read as a string because
+// index 0 is a real answer. Otherwise ?from=<unix>&to=<unix>&last=<seconds>
+// is a window over the stored timestamps, `last` anchored to the newest
+// stored point (or `to`), never to the server's clock; no window is
+// every row. Shared by /data and /export, so the two cannot disagree
+// about what a window holds.
+@ __an_data_select String q ( Vec String ) pts → ( Vec i ) {
+    : i total ( vec_len [String] pts )
+    : String atq ( __an_query_str q `at` )
+    : ~ i at -1
+    ? > ( string_len atq ) 0 {
+        ?? ( string_to_int atq ) { T x → { = at x } F _ → {} }
+    } {}
+    ( string_free atq )
+    : i q_from ( __an_query_int q `from` 0 )
+    : i q_to ( __an_query_int q `to` 0 )
+    : i q_last ( __an_query_int q `last` 0 )
+    : ~ i from_ts q_from
+    : i to_ts q_to
+    ? > q_last 0 {
+        : ~ i anchor to_ts
+        ? > anchor 0 {} {
+            ? > total 0 {
+                ?? ( vec_get [String] pts - total 1 ) { T l → { = anchor ( _an_line_ts ( string_data l ) ) } F _ → {} }
+            } {}
+        }
+        ? > anchor 0 { = from_ts - anchor q_last } {}
+    } {}
+    : b windowed | > from_ts 0 > to_ts 0
+    : ( Vec i ) kept ( vec_new [i] )
+    ? >= at 0 {
+        ? < at total { ( vec_push [i] kept at ) } {}
+    } {
+        : ~ i k 0
+        ~ < k total {
+            : ~ b keep T
+            ? windowed {
+                ?? ( vec_get [String] pts k ) {
+                    T l → {
+                        : i ts ( _an_line_ts ( string_data l ) )
+                        ? & > from_ts 0 < ts from_ts { = keep F } {}
+                        ? & > to_ts 0 > ts to_ts { = keep F } {}
+                    }
+                    F _ → {}
+                }
+            } {}
+            ? keep { ( vec_push [i] kept k ) } {}
+            = k + k 1
+        }
+    }
+    ^ kept
+}
+
+// One field of a row, projected: the `fields` the caller asked for plus
+// the timestamp, absent fields left out (a sensor that skipped a tick).
+@ __an_project_row Json j ( Vec String ) fields → Json {
+    : Json row ( json_obj_new )
+    ?? ( json_obj_get j `timestamp` ) {
+        T tv → { ( json_obj_set row `timestamp` ( json_clone tv ) ) }
+        F _ → {}
+    }
+    : i nf ( vec_len [String] fields )
+    : ~ i fi 0
+    ~ < fi nf {
+        ?? ( vec_get [String] fields fi ) {
+            T fname → {
+                ?? ( json_obj_get j ( string_data fname ) ) {
+                    T fv → { ( json_obj_set row ( string_data fname ) ( json_clone fv ) ) }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+        = fi + fi 1
+    }
+    ^ row
+}
+
+// One CSV cell, RFC 4180: text is quoted when it holds a comma, a quote,
+// a line break or an edge space, with quotes doubled; a number or a bool
+// is written as JSON writes it; null is empty; an object or an array is
+// its JSON text, quoted. An absent field is the caller's empty cell.
+@ __an_csv_quote String out s t → v {
+    : i n ( nurl_str_len t )
+    : ~ b need F
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_get t k )
+        ? | | | == c 44 == c 34 == c 10 == c 13 { = need T } {}
+        = k + k 1
+    }
+    ? > n 0 { ? | == ( nurl_str_get t 0 ) 32 == ( nurl_str_get t - n 1 ) 32 { = need T } {} } {}
+    ? need {
+        ( string_push_char out 34 )
+        = k 0
+        ~ < k n {
+            : i c ( nurl_str_get t k )
+            ? == c 34 { ( string_push_char out 34 ) } {}
+            ( string_push_char out c )
+            = k + k 1
+        }
+        ( string_push_char out 34 )
+    } { ( string_push_str out t ) }
+}
+
+@ __an_csv_cell String out Json v → v {
+    ? ( json_is_null v ) {} {
+        ? ( json_is_str v ) { ( __an_csv_quote out ( json_str_data v ) ) } {
+            : String txt ( json_stringify v )
+            ? | ( json_is_obj v ) ( json_is_arr v ) {
+                ( __an_csv_quote out ( string_data txt ) )
+            } { ( string_push_str out ( string_data txt ) ) }
+            ( string_free txt )
+        }
+    }
+}
+
+// GET /models/dynamic/<model>/export?format=csv|jsonl — the stored points
+// as a file: the same rows /data serves (the whole ring by default;
+// `from`/`to`/`last` pick a window, `fields` a projection, `limit` the
+// newest N), in a form a spreadsheet or the importer reads. `jsonl` is the
+// stored records line for line, which POST /import?format=jsonl takes
+// back unchanged; `csv` has one column per field any exported row carries,
+// `timestamp` first, so a field a sensor sent only sometimes is a column
+// with gaps and not a ragged file. The timestamp is what the record
+// holds: unix seconds, or the tick of a count-clock model.
+@ __an_h_export HttpRequest req Params p → HttpResponse {
+    : String mname ( __an_param_model p )
+    ? ( __an_name_ok ( string_data mname ) ) {} {
+        ( string_free mname )
+        ^ ( __an_bad_name )
+    }
+    : Gate gate ( __an_gate_model req ( string_data mname ) F F )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rd
+    }
+    ( __an_gate_free gate )
+    : String fmtq ( __an_query_str . req query `format` )
+    : b jsonl == ( nurl_str_eq ( string_data fmtq ) `jsonl` ) 1
+    : b csv | == ( string_len fmtq ) 0 == ( nurl_str_eq ( string_data fmtq ) `csv` ) 1
+    ( string_free fmtq )
+    ? | jsonl csv {} {
+        ( string_free mname )
+        ^ ( __an_json_err 400 `format must be csv or jsonl` )
+    }
+    : Store st ( store_open g_an_root )
+    ? ( store_exists st ( string_data mname ) ) {} {
+        : HttpResponse r404 ( __an_404_model ( string_data mname ) )
+        ( store_free st )
+        ( string_free mname )
+        ^ r404
+    }
+    : i limit ( __an_query_int . req query `limit` 0 )
+    : String ffilter ( __an_query_str . req query `fields` )
+    : b want_fields & > ( string_len ffilter ) 0 == ( nurl_str_eq ( string_data ffilter ) `*` ) 0
+    : ( Vec String ) fields ( string_split ffilter `,` )
+    ( string_free ffilter )
+    : ( Vec String ) pts ( store_load_points st ( string_data mname ) )
+    : ( Vec i ) kept ( __an_data_select . req query pts )
+    : i in_window ( vec_len [i] kept )
+    : ~ i kstart 0
+    ? & > limit 0 > in_window limit { = kstart - in_window limit } {}
+
+    : String out ( string_new )
+    : ~ i rows 0
+    ? jsonl {
+        : ~ i ki kstart
+        ~ < ki in_window {
+            : i k ( _mlp_iget kept ki )
+            = ki + ki 1
+            ?? ( vec_get [String] pts k ) {
+                T l → {
+                    ? want_fields {
+                        : !Json JsonError jr ( json_parse ( string_data l ) )
+                        ?? jr {
+                            T j → {
+                                : Json row ( __an_project_row j fields )
+                                : String txt ( json_stringify row )
+                                ( string_push_str out ( string_data txt ) )
+                                ( string_push_char out 10 )
+                                = rows + rows 1
+                                ( string_free txt )
+                                ( json_free row )
+                                ( json_free j )
+                            }
+                            F _ → {}
+                        }
+                    } {
+                        ( string_push_str out ( string_data l ) )
+                        ( string_push_char out 10 )
+                        = rows + rows 1
+                    }
+                }
+                F _ → {}
+            }
+        }
+    } {
+        // Columns: `timestamp`, then the requested fields in their order,
+        // or every key any exported row carries, in first-seen order.
+        : ( Vec String ) cols ( vec_new [String] )
+        ( vec_push [String] cols ( string_from `timestamp` ) )
+        ? want_fields {
+            : i nf ( vec_len [String] fields )
+            : ~ i fi 0
+            ~ < fi nf {
+                ?? ( vec_get [String] fields fi ) {
+                    T fname → {
+                        ? | == ( string_len fname ) 0 ( __an_str_in cols ( string_data fname ) ) {} {
+                            ( vec_push [String] cols ( string_from ( string_data fname ) ) )
+                        }
+                    }
+                    F _ → {}
+                }
+                = fi + fi 1
+            }
+        } {
+            : ~ i ki kstart
+            ~ < ki in_window {
+                : i k ( _mlp_iget kept ki )
+                = ki + ki 1
+                ?? ( vec_get [String] pts k ) {
+                    T l → {
+                        : !Json JsonError jr ( json_parse ( string_data l ) )
+                        ?? jr {
+                            T j → {
+                                : ( Vec String ) keys ( json_obj_keys j )
+                                : i nk ( vec_len [String] keys )
+                                : ~ i kk 0
+                                ~ < kk nk {
+                                    ?? ( vec_get [String] keys kk ) {
+                                        T key → {
+                                            ? ( __an_str_in cols ( string_data key ) ) {} {
+                                                ( vec_push [String] cols ( string_from ( string_data key ) ) )
+                                            }
+                                        }
+                                        F _ → {}
+                                    }
+                                    = kk + kk 1
+                                }
+                                ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
+                                ( json_free j )
+                            }
+                            F _ → {}
+                        }
+                    }
+                    F _ → {}
+                }
+            }
+        }
+        : i nc ( vec_len [String] cols )
+        : ~ i ci 0
+        ~ < ci nc {
+            ? > ci 0 { ( string_push_char out 44 ) } {}
+            ?? ( vec_get [String] cols ci ) { T c → { ( __an_csv_quote out ( string_data c ) ) } F _ → {} }
+            = ci + ci 1
+        }
+        ( string_push_char out 10 )
+        : ~ i ki kstart
+        ~ < ki in_window {
+            : i k ( _mlp_iget kept ki )
+            = ki + ki 1
+            ?? ( vec_get [String] pts k ) {
+                T l → {
+                    : !Json JsonError jr ( json_parse ( string_data l ) )
+                    ?? jr {
+                        T j → {
+                            = ci 0
+                            ~ < ci nc {
+                                ? > ci 0 { ( string_push_char out 44 ) } {}
+                                ?? ( vec_get [String] cols ci ) {
+                                    T c → {
+                                        ?? ( json_obj_get j ( string_data c ) ) {
+                                            T v → { ( __an_csv_cell out v ) }
+                                            F _ → {}
+                                        }
+                                    }
+                                    F _ → {}
+                                }
+                                = ci + ci 1
+                            }
+                            ( string_push_char out 10 )
+                            = rows + rows 1
+                            ( json_free j )
+                        }
+                        F _ → {}
+                    }
+                }
+                F _ → {}
+            }
+        }
+        ( vec_free_with [String] cols \ String x → v { ( string_free x ) } )
+    }
+    ( vec_free [i] kept )
+    ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
+    ( vec_free_with [String] pts \ String x → v { ( string_free x ) } )
+
+    : HttpResponse r ( response_new 200 )
+    ( response_set_header r `Content-Type` ? jsonl `application/x-ndjson` `text/csv; charset=utf-8` )
+    : String cd ( string_from `attachment; filename="` )
+    ( string_push_str cd ( string_data mname ) )
+    ( string_push_str cd ? jsonl `.jsonl"` `.csv"` )
+    ( response_set_header r `Content-Disposition` ( string_data cd ) )
+    ( string_free cd )
+    ( response_set_header r `Cache-Control` `private, no-store` )
+    : String xr ( string_new )
+    ( string_push_int xr rows )
+    ( response_set_header r `X-Rows` ( string_data xr ) )
+    ( string_free xr )
+    ( response_set_body_str r ( string_data out ) )
+    ( string_free out )
     ( store_free st )
     ( string_free mname )
     ^ r
@@ -2231,6 +2490,7 @@ $ `stdlib/std/thread.nu`
         ( json_obj_set o `training_data_points` ( json_int . tae trained_on ) )
         ( json_obj_set o `filtered_anomalies` ( json_int . tae filtered ) )
         ( json_obj_set o `reconstruction_threshold` ( json_float . tae threshold ) )
+        ( json_obj_set o `layer_sizes` ( __an_ae_layers tae ) )
         : HttpResponse rr ( response_json 200 o )
         ( json_free o )
         ( string_free err )
@@ -4294,6 +4554,10 @@ $ `stdlib/std/thread.nu`
     ( router_get r `/admin.html` \ HttpRequest req Params p → HttpResponse { ^ ( __an_serve_file `admin.html` ) } )
     ( router_get r `/modeltrainer.html` \ HttpRequest req Params p → HttpResponse { ^ ( __an_serve_file `modeltrainer.html` ) } )
     ( router_get r `/visualize.html` \ HttpRequest req Params p → HttpResponse { ^ ( __an_serve_file `visualize.html` ) } )
+    // The logo: the tab icon of every page, and what a browser asks for
+    // unprompted at /favicon.ico (an SVG under that name is accepted).
+    ( router_get r `/favicon.svg` \ HttpRequest req Params p → HttpResponse { ^ ( __an_serve_file `favicon.svg` ) } )
+    ( router_get r `/favicon.ico` \ HttpRequest req Params p → HttpResponse { ^ ( __an_serve_file `favicon.svg` ) } )
     ( router_post r `/detect/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_detect req p T ) } )
     ( router_post r `/detect_only/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_detect req p F ) } )
     ( router_post r `/force_train/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_force_train req p ) } )
@@ -4303,6 +4567,7 @@ $ `stdlib/std/thread.nu`
     ( router_get r `/models/dynamic/:model/metadata` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_metadata req p ) } )
     ( router_put r `/models/dynamic/:model/metadata` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_meta_update req p ) } )
     ( router_get r `/models/dynamic/:model/data` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_data req p ) } )
+    ( router_get r `/models/dynamic/:model/export` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_export req p ) } )
     ( router_post r `/models/dynamic/:model/fork` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_fork req p ) } )
     ( router_get r `/models/dynamic/:model/anomalies` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_anomalies req p ) } )
     ( router_post r `/models/dynamic/:model/reset` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_reset req p ) } )

@@ -195,6 +195,26 @@ $ `src/dynamic.nu`
     ( check ! . mo2 ae_stale `the retrain replaced the stale net` )
     : AeProbe fresh ( probe2 mo2 1.2 3.8 )
     ( check & . fresh has_ae . fresh ae_hit `the fresh net scores, and still flags the off-manifold point` )
+
+    // ── an empty layout is the trained one, not the default ──
+    // The dashboard's Retrain button sends no layout unless the box is
+    // filled in; a net trained 8-4-8 must come back 8-4-8, not 64-32-64.
+    : ( Vec i ) h848 ( vec_new [i] )
+    ( vec_push [i] h848 8 ) ( vec_push [i] h848 4 ) ( vec_push [i] h848 8 )
+    : String err848 ( model_train_autoencoder_at mo2 h848 -1.0 + T0 * 302 60 )
+    ( check == ( string_len err848 ) 0 `AE retrains with an 8-4-8 layout` )
+    ( string_free err848 )
+    : ( Vec i ) hnone ( vec_new [i] )
+    : String errk ( model_train_autoencoder_at mo2 hnone -1.0 + T0 * 303 60 )
+    ( check == ( string_len errk ) 0 `AE retrains with no layout given` )
+    ( string_free errk )
+    : AeModel kae . mo2 ae
+    : ( Vec i ) kept ( ae_hidden kae )
+    ( check & == ( vec_len [i] kept ) 3 & == ( _mlp_iget kept 0 ) 8 == ( _mlp_iget kept 1 ) 4
+    `an empty layout keeps the trained 8-4-8, not the 64-32-64 default` )
+    ( vec_free [i] kept )
+    ( vec_free [i] hnone )
+    ( vec_free [i] h848 )
     ( model_free mo2 )
 
     // ── errors ──

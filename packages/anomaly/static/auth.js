@@ -146,11 +146,16 @@
     save(localStorage, LS_KEY, Auth.tokens);
   }
 
-  Auth.logout = function () {
+  // Forget the session. `reload` (the Sign out button) then reloads the
+  // page, so what it had fetched for the signed-in person leaves the
+  // screen with them and the sign-in card is all that is left; the
+  // internal callers (an expired token) keep the page and put up the card.
+  Auth.logout = function (reload) {
     Auth.tokens = null;
     Auth.me = null;
     save(localStorage, LS_KEY, null);
     save(sessionStorage, SS_FLOW, null);
+    if (reload) { location.reload(); return; }
     render();
   };
 
@@ -261,13 +266,16 @@
     const label = Auth.me.name || Auth.me.email || Auth.me.subject;
     chip.innerHTML = '<span class="who"></span>' +
       '<span class="role ' + (Auth.me.is_admin ? "admin" : "") + '"></span>' +
-      '<button onclick="Auth.logout()">Sign out</button>';
+      '<button onclick="Auth.logout(true)">Sign out</button>';
     chip.querySelector(".who").textContent = label;
     chip.querySelector(".role").textContent = Auth.me.role;
   }
 
   function requireSignIn(message) {
     injectCss();
+    // Nothing of the page behind the card: what a page shows is the
+    // organization's, and the card is not a curtain in front of it.
+    document.querySelectorAll("main").forEach(m => { m.hidden = true; });
     if (document.getElementById("auth-card")) return;
     const d = document.createElement("div");
     d.id = "auth-card";
