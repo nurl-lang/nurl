@@ -58,6 +58,11 @@ The forest is fully deterministic: a fixed `--seed` produces a
 byte-identical forest, and hence identical scores, on every platform and
 build.
 
+A node splits only on a column that varies over its subsample. A constant
+column (a stuck sensor, a one-hot category nobody sent) is redrawn rather
+than ending the subtree in one big leaf, so carrying such columns costs
+nothing; only rows that agree on every column stop a subtree early.
+
 ## Using the trainer as a library
 
 The library depends only on the standard library (`vec`, `float`, `rng`) —
