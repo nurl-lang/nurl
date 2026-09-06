@@ -350,7 +350,7 @@ README.
 enabled     = true
 issuer      = "https://login.example.com/<tenant>/v2.0"
 client_id   = "<application (client) id>"
-audience    = "api://<application (client) id>"   # optional; this is the default
+audience    = "https://<your-host>/mcp"   # optional; default api://<client id>. See "An agent's client" below
 open_ingest = true
 
 [service]
@@ -500,6 +500,7 @@ secret to store anywhere. Register:
 | redirect URIs | `https://<your-host>/oauth/callback` and `http://localhost:8811/oauth/callback` |
 | scopes | `openid profile email`, plus one scope for this API |
 | claims | `email` and `preferred_username` in the ID and access tokens |
+| for agents on `/mcp` | the MCP client's redirect URI as a **public client**, and `https://<your-host>/mcp` as an identifier of this API — see [An agent's client](#an-agents-client) |
 
 #### One organization, or any
 
@@ -532,6 +533,44 @@ tenant '…' and cannot access the application '…' in that tenant.
 
 which names the mismatch exactly.
 
+#### An agent's client
+
+An MCP client that signs the person in — Claude, or any client that follows
+the MCP authorization spec — is an OAuth client of its own, and it differs
+from the dashboard in two ways the registration has to allow for.
+
+**Its redirect URI is not on your host.** The client names its own callback
+(Claude's is `https://claude.ai/api/mcp/auth_callback`, and
+`https://claude.com/api/mcp/auth_callback` alongside it), and it exchanges
+the code from its own servers, without a secret: authorization-code with
+PKCE. Register that URI as a **public client** — in Entra, the *Mobile and
+desktop applications* platform. The other two platforms refuse exactly this
+exchange: *Web* demands a client secret, and *Single-page application*
+demands a browser's `Origin` header on the token request.
+
+**It names the resource it wants a token for.** The client reads the
+`resource` this service publishes at `/.well-known/oauth-protected-resource/mcp`
+— `https://<your-host>/mcp` — and sends it with every authorization request
+([RFC 8707](https://www.rfc-editor.org/rfc/rfc8707)). Entra checks that the
+scope requested belongs to that resource, and `api://<client id>` is a
+different resource, so the sign-in ends in
+
+```
+AADSTS9010010: The resource parameter provided in the request doesn't match
+with the requested scopes.
+```
+
+The fix is one name for one thing: add `https://<your-host>/mcp` as a second
+*Application ID URI* of the registration (Entra accepts an `https://` URI
+only on a domain verified in your tenant) and set `auth.audience` to it. The
+service then advertises `https://<your-host>/mcp/access_as_user` as the
+scope, resource and scope agree, and the dashboard keeps working — it
+requests the same permission under the new name, and the access token's
+`aud` is the client id either way, which is the second spelling the service
+accepts.
+
+Give the MCP client the same `client_id` as the dashboard and no secret.
+
 #### Azure AD (Entra ID), with `az`
 
 `az ad app create` has no flags for SPA redirect URIs, for exposing an API, or
@@ -552,7 +591,10 @@ az rest --method PATCH \
   "spa": { "redirectUris": [
       "https://<your-host>/oauth/callback",
       "http://localhost:8811/oauth/callback" ] },
-  "identifierUris": [ "api://$APPID" ],
+  "publicClient": { "redirectUris": [
+      "https://claude.ai/api/mcp/auth_callback",
+      "https://claude.com/api/mcp/auth_callback" ] },
+  "identifierUris": [ "api://$APPID", "https://<your-host>/mcp" ],
   "api": {
     "requestedAccessTokenVersion": 2,
     "oauth2PermissionScopes": [ {
@@ -598,6 +640,10 @@ Two steps there bite:
 - **`preAuthorizedApplications` needs the scope to already exist**, hence two
   PATCHes. A single one fails with *"has a Permission Id that cannot be found
   in the AppPermissions sets"*.
+- **`https://<your-host>/mcp` must be on a domain your tenant has verified**,
+  or the PATCH is refused. Without it an MCP client cannot sign in at all
+  (`AADSTS9010010`, above); the dashboard does not need it. Set
+  `auth.audience = "https://<your-host>/mcp"` to match.
 
 Sanity-check the registration without a browser by building the authorize URL
 the dashboard would and fetching it: a real sign-in page means the client id,
@@ -669,8 +715,10 @@ In `oidc` mode the endpoint answers an unauthenticated call with the standard
 challenge — `401`, `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/mcp"` —
 and that document names the issuer and the scope, so an MCP client that
 speaks OAuth signs the person in by itself against the same identity provider
-the dashboard uses (the same `client_id`; the client's loopback redirect must
-be registered on the app). A machine agent uses an API key instead:
+the dashboard uses — the same `client_id`, with the client's own redirect
+URI and this service's `/mcp` URL registered on the app as
+[An agent's client](#an-agents-client) describes. A machine agent uses an
+API key instead:
 `--header "X-API-Key: anok_…"`. In `simple` mode there is no sign-in and
 every call is an administrator's, as everywhere else.
 

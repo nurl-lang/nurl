@@ -38,7 +38,14 @@ mode = "simple"
 # What the access token's `aud` must be. Defaults to api://<client_id>. Both
 # that and the bare client id are accepted, because which one a token carries
 # is the provider's choice, not yours.
-# audience = "api://<application (client) id>"
+#
+# For agents on /mcp set this to the MCP resource itself, registered as a
+# second Application ID URI of the same app. An MCP client sends
+# resource=https://<your-host>/mcp with the scope (RFC 8707), and Entra
+# refuses the pair unless the scope belongs to that resource
+# (AADSTS9010010) -- api://<client id> is a different resource. The
+# dashboard works with either. README: "An agent's client".
+# audience = "https://<your-host>/mcp"
 
 # Accept users from ANY organization the provider will sign for.
 #
