@@ -86,6 +86,9 @@ $ `stdlib/ext/json.nu`
     i max_points
     i score_epoch
     i feat_enc  // the calendar-feature encoding the stored feature order uses
+    i train_span  // seconds the last train's rows covered; 0 = unknown, every cycle kept
+    ( Vec f ) flat_run  // flatline reference per feature: longest identical run in training (-1 = not watched)
+    ( Vec f ) flat_sd  // flatline reference per feature: the quiet-window std of training (see ANOM_FLAT_QUANTILE)
     ( Vec VerCfg ) versions
 }
 
@@ -162,6 +165,45 @@ $ `stdlib/ext/json.nu`
     ^ @ VerCfg { ( string_from ANOM_GUARD_NAME ) 0 0 0 0 0 0 -1.0 ANOM_GUARD_SIGMA T }
 }
 
+// The flatline guard (SPEC §5.4): the stuck sensor is the commonest single
+// fault in a sensor stream and structurally invisible to a point scorer —
+// every row of a flat stretch is, on its own, an ordinary reading; the
+// signal is that nothing moves. This version looks at the last
+// `window_size` rows of each numeric column and measures two things
+// against what a retrain learned from the ring: how long the run of
+// identical values ending at this row is, relative to twice the longest
+// run the training rows held (or the window, whichever is longer), and
+// how far the window's standard deviation has collapsed below the
+// stream's own quiet windows (the ANOM_FLAT_QUANTILE-th quantile of the
+// training window stds). Both are fractions; the decision value is minus
+// the larger, over the columns, so the margin reads as a fraction: 0.9
+// flags a column when 90 % of the reference run is identical, or the
+// window is ten times flatter than the stream's quietest periods. A
+// column that already sat flat in training — a rain gauge, a status
+// flag — sets its own reference and is not flagged for doing it again.
+// It names the column, like the range guard.
+: s ANOM_FLAT_NAME `flatline`
+: i ANOM_FLAT_WINDOW 60
+: f ANOM_FLAT_MARGIN 0.9
+: f ANOM_FLAT_QUANTILE 0.05
+
+@ _an_is_flat_name s vname → b {
+    ^ == ( nurl_str_eq vname ANOM_FLAT_NAME ) 1
+}
+
+@ _an_vc_flat → VerCfg {
+    ^ @ VerCfg { ( string_from ANOM_FLAT_NAME ) 0 0 ANOM_FLAT_WINDOW 1 0 0 -1.0 ANOM_FLAT_MARGIN T }
+}
+
+// The versions that are not forests: the autoencoder and the two guards
+// have a VerCfg (margin, enabled) but no forest blob to load, train or
+// drop.
+@ _an_forestless_name s vname → b {
+    ? == ( nurl_str_eq vname `autoencoder` ) 1 { ^ T } {}
+    ? ( _an_is_guard_name vname ) { ^ T } {}
+    ^ ( _an_is_flat_name vname )
+}
+
 @ meta_default_versions → ( Vec VerCfg ) {
     : ( Vec VerCfg ) vs ( vec_new [VerCfg] )
     ( vec_push [VerCfg] vs ( __an_vc `short_term` 180 0 200 256 0.16 ) )
@@ -170,6 +212,7 @@ $ `stdlib/ext/json.nu`
     ( vec_push [VerCfg] vs ( __an_vc `seasonal` 129600 0 400 256 0.08 ) )
     ( vec_push [VerCfg] vs ( __an_vc_tv `timevector` 100 1 200 256 0.10 ) )
     ( vec_push [VerCfg] vs ( _an_vc_guard ) )
+    ( vec_push [VerCfg] vs ( _an_vc_flat ) )
     ^ vs
 }
 
@@ -238,6 +281,9 @@ $ `stdlib/ext/json.nu`
     = . m max_points ANOM_MAX_POINTS
     = . m score_epoch 1
     = . m feat_enc ANOM_FEAT_ENC
+    = . m train_span 0
+    = . m flat_run ( vec_new [f] )
+    = . m flat_sd ( vec_new [f] )
     = . m versions ( meta_default_versions )
     ^ m
 }
@@ -254,6 +300,8 @@ $ `stdlib/ext/json.nu`
     ( vec_free_with [String] . m feats \ String x → v { ( string_free x ) } )
     ( vec_free [f] . m sc_mean )
     ( vec_free [f] . m sc_std )
+    ( vec_free [f] . m flat_run )
+    ( vec_free [f] . m flat_sd )
     ( vec_free_with [VerCfg] . m versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
     ( nurl_free m )
 }
@@ -377,6 +425,21 @@ $ `stdlib/ext/json.nu`
     ^ fname
 }
 
+// Whether the rows the model last trained on covered a calendar cycle of
+// `period` seconds at least twice. A cycle the data has not been round
+// twice is not a cycle the forests can learn, it is a date: eight days of
+// readings that straddle a month boundary would carry a month feature
+// that splits them into "before" and "after", and every point on the
+// rare side of the split scores as unusual for the day it was taken. So
+// the feature order keeps only the cycles the training span has seen —
+// hour needs two days, weekday two weeks, month two years — and a later
+// retrain over a longer span brings the rest in. An unknown span (0: a
+// count clock, or a model from before the field) keeps every cycle.
+@ __an_cycle_seen * Meta m i period → b {
+    ? <= . m train_span 0 { ^ T } {}
+    ^ >= . m train_span * 2 period
+}
+
 // Append column `ci`'s feature names (in canonical order) to `out`.
 @ __an_push_col_feats * Meta m i ci ( Vec String ) out → v {
     ?? ( vec_get [String] . m cols ci ) {
@@ -409,12 +472,18 @@ $ `stdlib/ext/json.nu`
                     ( vec_push [String] out ( __an_feat_name cn `month` ) )
                     ( vec_push [String] out ( __an_feat_name cn `weekday` ) )
                 } {
-                    ( vec_push [String] out ( __an_feat_name cn `hour_sin` ) )
-                    ( vec_push [String] out ( __an_feat_name cn `hour_cos` ) )
-                    ( vec_push [String] out ( __an_feat_name cn `weekday_sin` ) )
-                    ( vec_push [String] out ( __an_feat_name cn `weekday_cos` ) )
-                    ( vec_push [String] out ( __an_feat_name cn `month_sin` ) )
-                    ( vec_push [String] out ( __an_feat_name cn `month_cos` ) )
+                    ? ( __an_cycle_seen m 86400 ) {
+                        ( vec_push [String] out ( __an_feat_name cn `hour_sin` ) )
+                        ( vec_push [String] out ( __an_feat_name cn `hour_cos` ) )
+                    } {}
+                    ? ( __an_cycle_seen m 604800 ) {
+                        ( vec_push [String] out ( __an_feat_name cn `weekday_sin` ) )
+                        ( vec_push [String] out ( __an_feat_name cn `weekday_cos` ) )
+                    } {}
+                    ? ( __an_cycle_seen m 31557600 ) {
+                        ( vec_push [String] out ( __an_feat_name cn `month_sin` ) )
+                        ( vec_push [String] out ( __an_feat_name cn `month_cos` ) )
+                    } {}
                 }
             } {}
         }
@@ -431,6 +500,38 @@ $ `stdlib/ext/json.nu`
     : ~ i k 0
     ~ < k n {
         ( __an_push_col_feats m k out )
+        = k + k 1
+    }
+    ^ out
+}
+
+// Which features are a numeric column as it came in — 1 per feature, 0
+// for a one-hot level or a calendar feature. The flatline guard watches
+// only these: a category that does not change and a month that does not
+// change are not sensors.
+@ meta_numeric_feat_mask * Meta m → ( Vec i ) {
+    : i nf ( vec_len [String] . m feats )
+    : ( Vec i ) out ( vec_with_cap [i] nf )
+    : i nc ( vec_len [String] . m cols )
+    : ~ i k 0
+    ~ < k nf {
+        : ~ i hit 0
+        ?? ( vec_get [String] . m feats k ) {
+            T fname → {
+                : ~ i c 0
+                ~ & == hit 0 < c nc {
+                    ? == ( __an_kind_at m c ) COL_NUMERIC {
+                        ?? ( vec_get [String] . m cols c ) {
+                            T cn → { ? ( string_eq cn fname ) { = hit 1 } {} }
+                            F _ → {}
+                        }
+                    } {}
+                    = c + c 1
+                }
+            }
+            F _ → {}
+        }
+        ( vec_push [i] out hit )
         = k + k 1
     }
     ^ out
@@ -477,7 +578,7 @@ $ `stdlib/ext/json.nu`
 // The zone offset an ISO-8601 stamp ends in, in seconds: "+03:00" → 10800,
 // "-05:30" → -19800, "Z" or no designator → 0. The stamp has already
 // passed time_parse_iso, so the tail is well-formed.
-@ __an_iso_offset s stamp → i {
+@ _an_iso_offset s stamp → i {
     : i n ( nurl_str_len stamp )
     : ~ i k 19
     // Skip fractional seconds.
@@ -579,7 +680,7 @@ $ `stdlib/ext/json.nu`
                     } {
                         // The clock the stamp was written in: UTC plus
                         // the offset it carries.
-                        : Time t ( time_from_unix + secs ( __an_iso_offset stamp ) )
+                        : Time t ( time_from_unix + secs ( _an_iso_offset stamp ) )
                         ( __an_push_cyclic cn `hour` . t hour 24 names vals )
                         ( __an_push_cyclic cn `weekday` % + . t wday 6 7 7 names vals )
                         ( __an_push_cyclic cn `month` - . t month 1 12 names vals )
@@ -651,6 +752,33 @@ $ `stdlib/ext/json.nu`
 // parse failure and bad timestamps are hard errors (owned message).
 @ anomaly_preprocess * Meta m Json raw → !EncPoint String {
     ^ ( __an_preprocess m raw T )
+}
+
+// The model's columns a point does not carry — absent, or carried as
+// null. A trained model expects every column it learned: a numeric one
+// the point leaves out would otherwise encode as 0, which after
+// standardisation is however many standard deviations 0 is from the
+// column's mean, and the range guard would then blame a value nobody
+// sent. Owned; empty when the point is complete.
+@ anomaly_missing_cols * Meta m Json raw → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : i n ( vec_len [String] . m cols )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] . m cols k ) {
+            T c → {
+                : ~ b have F
+                ?? ( json_obj_get raw ( string_data c ) ) {
+                    T jv → { = have ! ( json_is_null jv ) }
+                    F _ → {}
+                }
+                ? have {} { ( vec_push [String] out ( string_clone c ) ) }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ out
 }
 
 // Read-only encode: never touches the metadata. Unknown columns are
@@ -927,6 +1055,11 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set sc `std` ( __an_jarr_of_floats . m sc_std ) )
     ( json_obj_set o `scaler` sc )
 
+    : Json fl ( json_obj_new )
+    ( json_obj_set fl `ref_run` ( __an_jarr_of_floats . m flat_run ) )
+    ( json_obj_set fl `ref_sd` ( __an_jarr_of_floats . m flat_sd ) )
+    ( json_obj_set o `flatline` fl )
+
     : Json sched ( json_obj_new )
     ( json_obj_set sched `below_max` ( json_int . m sched_below ) )
     ( json_obj_set sched `at_max` ( json_int . m sched_at_max ) )
@@ -967,6 +1100,7 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set o `max_data_points` ( json_int . m max_points ) )
     ( json_obj_set o `score_epoch` ( json_int . m score_epoch ) )
     ( json_obj_set o `feature_encoding` ( json_int . m feat_enc ) )
+    ( json_obj_set o `train_span` ( json_int . m train_span ) )
     ( json_obj_set o `retrain_required` ( json_bool ( meta_retrain_required m ) ) )
     ^ o
 }
@@ -1152,6 +1286,33 @@ $ `stdlib/ext/json.nu`
         F _ → {}
     }
 
+    // Flatline references (a model from before the version has none;
+    // its next retrain fits them).
+    ?? ( json_obj_get j `flatline` ) {
+        T fl → {
+            ?? ( json_obj_get fl `ref_run` ) {
+                T ra → {
+                    ?? ( __an_floats_of_jarr ra ) {
+                        T got → { ( vec_free [f] . m flat_run ) = . m flat_run got }
+                        F junk → { ( vec_free [f] junk ) = ok F }
+                    }
+                }
+                F _ → {}
+            }
+            ?? ( json_obj_get fl `ref_sd` ) {
+                T sa → {
+                    ?? ( __an_floats_of_jarr sa ) {
+                        T got → { ( vec_free [f] . m flat_sd ) = . m flat_sd got }
+                        F junk → { ( vec_free [f] junk ) = ok F }
+                    }
+                }
+                F _ → {}
+            }
+            ? == ( vec_len [f] . m flat_run ) ( vec_len [f] . m flat_sd ) {} { = ok F }
+        }
+        F _ → {}
+    }
+
     // Schedule.
     ?? ( json_obj_get j `schedule` ) {
         T sched → {
@@ -1200,6 +1361,7 @@ $ `stdlib/ext/json.nu`
     = . m score_epoch ( _an_jint j `score_epoch` 1 )
     // Metadata written before the key existed was trained under encoding 1.
     = . m feat_enc ( _an_jint j `feature_encoding` 1 )
+    = . m train_span ( _an_jint j `train_span` 0 )
     ?? ( json_obj_get j `clock` ) {
         T cv → { ? ( json_is_str cv ) { = . m count_clock == ( nurl_str_eq ( json_str_data cv ) `count` ) 1 } {} }
         F _ → {}
@@ -1304,12 +1466,14 @@ $ `stdlib/ext/json.nu`
     ? > . o window_size 0 {
         ? < . o step_size 1 { = . o step_size 1 } {}
     } { = . o step_size 0 }
-    // The autoencoder and the range guard have no forest: their tree
-    // counts stay 0 so the config round-trips unchanged. Every other
-    // version must be trainable.
-    ? | == ( nurl_str_eq ( string_data . o vname ) `autoencoder` ) 1 ( _an_is_guard_name ( string_data . o vname ) ) {
+    // The autoencoder and the guards have no forest: their tree counts
+    // stay 0 so the config round-trips unchanged. Every other version
+    // must be trainable. The flatline guard's window is a run of rows and
+    // needs at least two of them.
+    ? ( _an_forestless_name ( string_data . o vname ) ) {
         ? < . o n_estimators 0 { = . o n_estimators 0 } {}
         ? < . o max_samples 0 { = . o max_samples 0 } {}
+        ? & ( _an_is_flat_name ( string_data . o vname ) ) < . o window_size 2 { = . o window_size ANOM_FLAT_WINDOW = . o step_size 1 } {}
     } {
         ? < . o n_estimators 1 { = . o n_estimators 1 } {}
         ? > . o n_estimators 5000 { = . o n_estimators 5000 } {}

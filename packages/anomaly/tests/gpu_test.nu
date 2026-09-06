@@ -14,6 +14,7 @@ $ `stdlib/std/float.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
 $ `src/score.nu`
+$ `stdlib/std/thread.nu`
 
 : ~ i g_pass 0
 : ~ i g_fail 0
@@ -141,9 +142,49 @@ $ `src/score.nu`
     : f want_off ( _an_percentile ss 0.05 )
     ( check == . vm_a offset want_off `gpu: contamination offset bit-identical` )
     ( vec_free [f] ss )
-    ( vec_free [f] ref2 )
     ( anom_vermodel_free vm_a )
     ( _an_vercfg_free cfg2 )
+
+    // 4. Another thread — `anomaly serve` scores and trains from a worker
+    //    pool, and a CUDA context is current only on the thread that opened
+    //    it. The accelerated path must bind the calling thread itself and
+    //    give the pure loop's numbers from a thread the device was not
+    //    opened on. tflag: 1 same, 2 differs, -1 accelerator refused,
+    //    -2 no thread.
+    : *u tflag ( nurl_alloc 8 )
+    ( nurl_poke tflag 0 0 )
+    : ( @ v ) body \ → v {
+        : ?( Vec f ) got ( anom_scores_gpu vm data ROWS COLS )
+        ?? got {
+            T g → {
+                : ( Vec f ) pure ( anom_scores_cpu vm data ROWS COLS )
+                : ~ i st 1
+                : *f gp ( vec_data [f] g )
+                : *f pp ( vec_data [f] pure )
+                : ~ i k 0
+                ~ < k ROWS {
+                    ? == . gp k . pp k {} { = st 2 }
+                    = k + k 1
+                }
+                ( nurl_poke tflag 0 st )
+                ( vec_free [f] pure )
+                ( vec_free [f] g )
+            }
+            F _ → { ( nurl_poke tflag 0 -1 ) }
+        }
+    }
+    ?? ( thread_spawn body ) {
+        T th → { ( thread_join th ) }
+        F _ → { ( nurl_poke tflag 0 -2 ) }
+    }
+    // thread_spawn borrows the closure's env; joined, it is ours to free.
+    ( nurl_free # s # *u body 1 )
+    ( check == ( nurl_peek tflag 0 ) 1 `gpu: accelerated scoring runs, bit-identical, from a thread the device was not opened on` )
+    ? == ( nurl_peek tflag 0 ) 1 {} {
+        ( nurl_print `gpu: thread status ` ) ( nurl_print_int ( nurl_peek tflag 0 ) ) ( pline `` )
+    }
+    ( nurl_free tflag )
+    ( vec_free [f] ref2 )
 
     ( anom_vermodel_free vm )
     ( _an_vercfg_free cfg )

@@ -364,6 +364,9 @@ $ `src/service.nu`
     ( check . dm ok `mcp: describe_model answers` )
     ( check ( jstr_eq . dm data `model_name` `pub` ) `mcp: describe_model names the model` )
     ( check > ( jarr_len . dm data `editable_fields` ) 0 `mcp: describe_model says what edit_model may change` )
+    : ~ i nfeat 0
+    ?? ( json_obj_get . dm data `features` ) { T fo → { = nfeat ( jint_of fo `count` ) ( check == ( jarr_len fo `names` ) nfeat `mcp: a short feature order is listed whole` ) } F _ → {} }
+    ( check >= nfeat 2 `mcp: describe_model counts the features` )
     ( call_free dm )
 
     : Call miss ( call r `describe_model` `{}` `` )
@@ -371,6 +374,14 @@ $ `src/service.nu`
     ( check ( string_contains . miss text `list_models` ) `mcp: that points at list_models` )
     ( call_free miss )
 
+    // An alias names the model too: the tool resolves it to the real name.
+    : Call al ( call r `edit_model` `{"model":"pub","patch":{"alias":"Pump House"}}` `` )
+    ( check . al ok `mcp: the model gets an alias` )
+    ( call_free al )
+    : Call byal ( call r `describe_model` `{"model":"pump house"}` `` )
+    ( check . byal ok `mcp: the alias resolves` )
+    ( check ( jstr_eq . byal data `model_name` `pub` ) `mcp: to the model's real name` )
+    ( call_free byal )
     : Call gone ( call r `describe_model` `{"model":"nosuch"}` `` )
     ( check ! . gone ok `mcp: an unknown model is an error` )
     ( check ( string_contains . gone text `404` ) `mcp: carrying the API's status` )
@@ -520,7 +531,35 @@ $ `src/service.nu`
     ( check . ca ok `mcp: calibration answers` )
     ( check ( jobj_at . ca data `versions` ) `mcp: calibration has the versions` )
     ( check ( jobj_at . ca data `aggregate` ) `mcp: calibration has the aggregate` )
+    // Every version gets a one-word reading and the model a verdict; a
+    // window of 61 rows is too small to read a 1 % rate from.
+    : ~ b rd F
+    ?? ( json_obj_get . ca data `versions` ) {
+        T vs → {
+            ?? ( json_obj_get vs `weekly` ) {
+                T w → { ?? ( json_obj_get w `reading` ) { T x → { = rd ( json_is_str x ) } F _ → {} } }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check rd `mcp: calibration reads each version` )
+    ( check ( string_contains . ca text `too few rows` ) `mcp: a window under 100 rows is called too small to read` )
     ( call_free ca )
+
+    // A version with no margin flags everything past its raw threshold;
+    // list_models says so before anyone trusts its verdicts.
+    : Call m0 ( call r `edit_model` `{"model":"pub","patch":{"versions":{"short_term":{"decision_margin":0}}}}` `` )
+    ( check . m0 ok `mcp: the margin is zeroed` )
+    ( call_free m0 )
+    : Call lmw ( call r `list_models` `{}` `` )
+    ( check ( string_contains . lmw text `short_term: margin 0` ) `mcp: list_models warns about a margin of 0` )
+    ( call_free lmw )
+    : Call m1 ( call r `edit_model` `{"model":"pub","patch":{"versions":{"short_term":{"decision_margin":0.05}}}}` `` )
+    ( call_free m1 )
+    : Call lmq ( call r `list_models` `{}` `` )
+    ( check ! ( string_contains . lmq text `margin 0 ` ) `mcp: the warning goes with the margin` )
+    ( call_free lmq )
 
     // Labels: the flagged row called a false positive carries the label
     // in anomalies, is counted in the summary, and leaves calibration.

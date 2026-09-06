@@ -465,6 +465,21 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `anomaly` ( json_bool . vd anomaly ) )
     ( json_obj_set o `score` ( json_float . vd score ) )
     ( json_obj_set o `data_points` ( json_int ( model_n_points mo ) ) )
+    // A stored point may leave columns out — a sensor that skipped a tick
+    // is still a point in the stream — but the verdict says so, because
+    // those columns were scored as 0.
+    : ( Vec String ) miss ( anomaly_missing_cols vmm body )
+    ? > ( vec_len [String] miss ) 0 {
+        : Json ma ( json_arr_new )
+        : i nmiss ( vec_len [String] miss )
+        : ~ i mi 0
+        ~ < mi nmiss {
+            ?? ( vec_get [String] miss mi ) { T c → { ( json_arr_push ma ( json_str_lit ( string_data c ) ) ) } F _ → {} }
+            = mi + mi 1
+        }
+        ( json_obj_set o `missing` ma )
+    } {}
+    ( vec_free_with [String] miss \ String x → v { ( string_free x ) } )
 
     // `severity` is the one number that means the same thing in every
     // version: -score / margin, so 1.0 is exactly the alert line, 2.0 is
@@ -713,6 +728,19 @@ $ `stdlib/std/thread.nu`
                         T mm → {
                             : Json mj ( meta_to_json mm )
                             ( json_obj_set mj `editable_fields` ( meta_editable_fields ) )
+                            // The one autoencoder fact a listing needs:
+                            // whether the net has gone silent because
+                            // the feature order moved past it. Only an
+                            // enabled version can be missed.
+                            ? ( meta_version_enabled mm `autoencoder` F ) {
+                                ?? ( store_load_ae st ( string_data nm ) ) {
+                                    T ae → {
+                                        ( json_obj_set mj `retrain_required` ( json_bool ( an_ae_stale mm ae ) ) )
+                                        ( ae_free ae )
+                                    }
+                                    F _ → {}
+                                }
+                            } {}
                             ( json_obj_set models ( string_data nm ) mj )
                             ( meta_free mm )
                         }
@@ -748,6 +776,10 @@ $ `stdlib/std/thread.nu`
         T ae → {
             ( json_obj_set o `trained` ( json_bool . ae trained ) )
             ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm `autoencoder` F ) ) )
+            // A net whose feature order names features the model no
+            // longer encodes does not score; the next forest retrain
+            // replaces it, or train_autoencoder does now.
+            ( json_obj_set o `retrain_required` ( json_bool ( an_ae_stale mm ae ) ) )
             ( json_obj_set o `reconstruction_threshold` ( json_float . ae threshold ) )
             ( json_obj_set o `training_data_points` ( json_int . ae trained_on ) )
             ( json_obj_set o `filtered_anomalies` ( json_int . ae filtered ) )
@@ -777,6 +809,7 @@ $ `stdlib/std/thread.nu`
         F → {
             ( json_obj_set o `trained` ( json_bool F ) )
             ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm `autoencoder` F ) ) )
+            ( json_obj_set o `retrain_required` ( json_bool F ) )
         }
     }
     ^ o
@@ -1174,15 +1207,27 @@ $ `stdlib/std/thread.nu`
     : i np ( vec_len [ScoredPt] . so pts )
     : ( Vec i ) kept ( vec_new [i] )
     : ~ i n_agreed 0
+    // Per version, how many rows of the window it flagged, and the
+    // window's own span — a reader judging the model's health needs the
+    // whole window's numbers, not the flagged rows' alone.
+    : ( Vec i ) vflagged ( vec_new [i] )
+    = k 0
+    ~ < k nvn { ( vec_push [i] vflagged 0 ) = k + k 1 }
+    : ~ i w_from 0
+    : ~ i w_to 0
+    : ~ b w_one_time T
     = k 0
     ~ < k np {
         ?? ( vec_get [ScoredPt] . so pts k ) {
             T r → {
+                ? == k 0 { = w_from . r sp_ts } { ? != . r sp_ts w_from { = w_one_time F } {} }
+                = w_to . r sp_ts
                 : ~ b keep T
                 : ~ b matched F
                 : ~ i b 0
                 ~ < b nvn {
                     ? != & >> . r sp_flagged b 1 0 {
+                        : b _s ( vec_set [i] vflagged b + ( _mlp_iget vflagged b ) 1 )
                         ?? ( vec_get [String] . so vnames b ) {
                             T nm → { ? ( __an_csv_has vfilter ( string_data nm ) ) { = matched T } {} }
                             F _ → {}
@@ -1381,6 +1426,24 @@ $ `stdlib/std/thread.nu`
     ( labels_free labels )
     ( json_obj_set o `returned` ( json_int shown ) )
     ( json_obj_set o `model_versions` vers )
+    : Json byv ( json_obj_new )
+    = k 0
+    ~ < k nvn {
+        ?? ( vec_get [String] . so vnames k ) {
+            T nm → { ( json_obj_set byv ( string_data nm ) ( json_int ( _mlp_iget vflagged k ) ) ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free [i] vflagged )
+    ( json_obj_set o `flagged_by_version` byv )
+    ? > np 0 {
+        : Json wj ( json_obj_new )
+        ( json_obj_set wj `from` ( json_int w_from ) )
+        ( json_obj_set wj `to` ( json_int w_to ) )
+        ( json_obj_set wj `one_time` ( json_bool w_one_time ) )
+        ( json_obj_set o `window` wj )
+    } {}
     ( json_obj_set o `cache` cache )
     ( json_obj_set o `points` arr )
 
@@ -2234,6 +2297,7 @@ $ `stdlib/std/thread.nu`
 // reports carry every number of a version in these units.
 @ __an_margin_units s vname → s {
     ? ( _an_is_guard_name vname ) { ^ `standard_deviations` } {}
+    ? ( _an_is_flat_name vname ) { ^ `fraction` } {}
     ^ ? == ( nurl_str_eq vname `autoencoder` ) 1 `relative_to_threshold` `absolute`
 }
 
@@ -3626,6 +3690,9 @@ $ `stdlib/std/thread.nu`
                     ( json_obj_set o `anomalies` ( json_int nanom ) )
                     ( json_obj_set o `target_rate` ( json_float ANA_TARGET_RATE ) )
                     ( json_obj_set o `votes` ( json_int ( _ana_jint st `votes` 1 ) ) )
+                    ?? ( json_obj_get st `worst_severity` ) { T v → { ( json_obj_set o `worst_severity` ( json_clone v ) ) } F _ → {} }
+                    ?? ( json_obj_get st `separation` ) { T v → { ( json_obj_set o `separation` ( json_clone v ) ) } F _ → {} }
+                    ?? ( json_obj_get st `reading` ) { T v → { ( json_obj_set o `reading` ( json_clone v ) ) } F _ → {} }
                     ?? ( json_obj_get st `model_versions` ) { T v → { ( json_obj_set o `model_versions` ( json_clone v ) ) } F _ → {} }
                     ?? ( json_obj_get st `margins` ) { T v → { ( json_obj_set o `margins` ( json_clone v ) ) } F _ → {} }
                     ?? ( json_obj_get st `notes` ) { T v → { ( json_obj_set o `notes` ( json_clone v ) ) } F _ → {} }

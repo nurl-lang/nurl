@@ -176,6 +176,25 @@ $ `src/dynamic.nu`
         = k + k 1
     }
     ( check have_cfg `metadata carries the autoencoder version config` )
+
+    // ── a stale net ──
+    // A net whose frozen feature order names a feature the model no
+    // longer encodes (the calendar features changed shape once; a cycle
+    // the span has not seen twice is left out) would reconstruct 0 where
+    // it learned a value and flag every point by thousands of margins.
+    // It must fall silent instead, and the next forest retrain replaces
+    // it even with the schedule's autoencoder switch off.
+    ( check ! . mo2 ae_stale `a net over the model's own features is not stale` )
+    ( vec_push [String] . . mo2 ae feats ( string_from `when_month_sin` ) )
+    ( check ( an_ae_stale mm2 . mo2 ae ) `a net naming a feature the model does not encode is stale` )
+    = . mo2 ae_stale T
+    : AeProbe stp ( probe2 mo2 1.2 3.8 )
+    ( check ! . stp has_ae `a stale net gives no verdict` )
+    ( check ! . mm2 sched_ae `(the schedule does not retrain the net on its own)` )
+    ( check > ( model_force_train_at mo2 + T0 * 301 60 ) 0 `forests retrain` )
+    ( check ! . mo2 ae_stale `the retrain replaced the stale net` )
+    : AeProbe fresh ( probe2 mo2 1.2 3.8 )
+    ( check & . fresh has_ae . fresh ae_hit `the fresh net scores, and still flags the off-manifold point` )
     ( model_free mo2 )
 
     // ── errors ──

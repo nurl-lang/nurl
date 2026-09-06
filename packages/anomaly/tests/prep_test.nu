@@ -86,6 +86,20 @@ $ `src/prep.nu`
             ( check ( feat_eq fs 1 `status_ok` ) `golden: feat[1] status_ok` )
             ( check ( feat_eq fs 2 `when_hour_sin` ) `golden: feat[2] when_hour_sin` )
             ( vec_free_with [String] fs \ String x → v { ( string_free x ) } )
+            // A calendar cycle the training span has not been round twice
+            // is a date, not a cycle: eight days keep the hour pair only,
+            // three weeks add the weekday pair, an unknown span keeps all.
+            = . m train_span * 8 86400
+            : ( Vec String ) f8 ( meta_derived_feats m )
+            ( check == ( vec_len [String] f8 ) 4 `cycles: eight days keep only the hour pair` )
+            ( check ( feat_eq f8 3 `when_hour_cos` ) `cycles: the pair is hour sin/cos` )
+            ( vec_free_with [String] f8 \ String x → v { ( string_free x ) } )
+            = . m train_span * 21 86400
+            : ( Vec String ) f21 ( meta_derived_feats m )
+            ( check == ( vec_len [String] f21 ) 6 `cycles: three weeks add the weekday pair` )
+            ( check ( feat_eq f21 5 `when_weekday_cos` ) `cycles: weekday follows hour` )
+            ( vec_free_with [String] f21 \ String x → v { ( string_free x ) } )
+            = . m train_span 0
             ( json_free j )
         }
         F _ → { ( check F `golden: test json parses` ) }
@@ -131,9 +145,9 @@ $ `src/prep.nu`
     ( check ( feq ( hour_of m `2026-08-01T23:00:00Z` ) 23.0 ) `calendar: Z is UTC` )
     ( check ( feq ( hour_of m `2026-08-01T07:15:00` ) 7.0 ) `calendar: no designator = as written` )
     ( check ( feq ( hour_of m `2026-08-01T07:15:00.250+02:00` ) 7.0 ) `calendar: fraction before the offset` )
-    ( check == ( __an_iso_offset `2026-08-01T00:00:00+0300` ) 10800 `calendar: offset without colon` )
-    ( check == ( __an_iso_offset `2026-08-01T00:00:00-05:30` ) -19800 `calendar: negative offset` )
-    ( check == ( __an_iso_offset `2026-08-01T00:00:00Z` ) 0 `calendar: Z offset 0` )
+    ( check == ( _an_iso_offset `2026-08-01T00:00:00+0300` ) 10800 `calendar: offset without colon` )
+    ( check == ( _an_iso_offset `2026-08-01T00:00:00-05:30` ) -19800 `calendar: negative offset` )
+    ( check == ( _an_iso_offset `2026-08-01T00:00:00Z` ) 0 `calendar: Z offset 0` )
     ( check ! ( meta_retrain_required m ) `calendar: a current model needs no retrain` )
 
     // A model stored under encoding 1 still encodes its points the old
@@ -366,7 +380,7 @@ $ `src/prep.nu`
             ( check ( string_eq s1 s2 ) `meta: JSON round-trip byte-stable` )
             ( check == . m2 n_seen 123 `meta: n_points_seen survives` )
             ( check == . m2 sched_below 50 `meta: schedule default survives` )
-            ( check == ( vec_len [VerCfg] . m2 versions ) 6 `meta: 6 default versions survive` )
+            ( check == ( vec_len [VerCfg] . m2 versions ) 7 `meta: 7 default versions survive` )
             ( check == ( vec_len [String] . m2 feats ) 8 `meta: feature order survives` )
             ( check == . m2 feat_enc ANOM_FEAT_ENC `meta: feature encoding survives` )
             ( string_free s2 )

@@ -22,7 +22,7 @@ language model working on the same data — an [MCP endpoint](#mcp-the-service-f
 at `/mcp` that exposes the whole API as tools, under the signed-in user's own
 rights.
 
-## Three versions beyond the plain forests
+## Four versions beyond the plain forests
 
 - **range_guard — the univariate check.** A forest scores a point as a
   whole: an air temperature of 95 °C among eleven normal readings is one
@@ -34,6 +34,20 @@ rights.
   window: the scaler every retrain refits is all it needs, so it costs
   nothing to keep and nothing to re-enable. A model from before it existed
   gains it at its next retrain.
+- **flatline — the stuck sensor.** The opposite failure hides from every
+  per-point check: a gauge that froze at a perfectly ordinary reading sits
+  inside its training range for as long as it likes. This guard watches
+  each numeric column's recent run — how long it has repeated the same
+  value, or, when it dithers in its last digit instead, how far its spread
+  over the window has collapsed against what the training data showed at
+  its quietest — and flags when the run fills the window (`window_size`
+  points, 60 by default) or twice the longest run seen in training,
+  whichever is longer, so a rain gauge that reads zero for hours has to be
+  quieter than it ever was before it counts. Its margin is a fraction of
+  the window (0.9 by default) and the verdict names the column.
+  Fine-tune leaves it alone — a rate target would only ever loosen it, a
+  healthy training set holds almost no stuck columns — and `edit_model`
+  sets it.
 - **timevector — the sliding window.** `window_size` consecutive points
   flatten to one window vector; the forest trains on window vectors and
   detection scores the window ending at the incoming point. This is the
@@ -64,13 +78,29 @@ rights.
 
 - **Heterogeneous features, encoded automatically.** Numbers pass through;
   strings become deterministic one-hot categoricals (categories kept
-  sorted); ISO-8601 strings expand to `hour/day/month/weekday` calendar
-  features (Monday = 0 … Sunday = 6). Column types are detected on
+  sorted); ISO-8601 strings expand to calendar features in the model's
+  time zone — hour, weekday and month as `(sin, cos)` pairs, so 23:00 sits
+  next to 00:00 and Sunday next to Monday. Column types are detected on
   first sight and frozen in metadata.
+- **Only the cycles the training data has been round.** A calendar cycle
+  the rows have not covered twice is not a cycle the forests can learn, it
+  is a date: eight days straddling a month boundary would carry a month
+  feature that splits them into "before" and "after", and every point on
+  the rare side scores as unusual for the day it was taken. So a retrain
+  keeps the hour features once the rows span two days, weekday once they
+  span two weeks, month once they span two years; the span is reported
+  as `train_span` and a later, longer retrain brings the rest in.
 - **Feature-order stability.** `feature_names` is snapshotted at each
-  train; scoring projects every point onto exactly that vector (missing
-  features → 0, unknown extras dropped), so one-hot columns never scramble
-  between retrains.
+  train; scoring projects every point onto exactly that vector (unknown
+  extras dropped), so one-hot columns never scramble between retrains. A
+  column the model knows and a point leaves out is stored as absent and
+  scored as 0, and the verdict lists it under `missing`; a bare
+  `/detect_only` question about such a point is refused with the column
+  named, since a question about a point must carry the whole point. An
+  autoencoder whose input names features the current encoding no longer
+  makes (a shorter span dropped a cycle, or the encoding changed) is
+  stale: it does not score, `retrain_required` says so, and the next
+  forest retrain replaces it whether the schedule says so or not.
 - **Standardisation.** A persisted StandardScaler analogue (zero-mean /
   unit-variance, zero-variance features pass through) is refit over the
   full ring at each train and applied before the forest.
@@ -87,8 +117,8 @@ rights.
 - **Multiple time-window versions.** Each model trains one forest per
   enabled version — `short_term` (180 min), `daily` (24 h), `weekly`,
   `seasonal` (90 d) and `timevector` (last 100 points) — and the forestless
-  `range_guard` beside them, so the same stream is judged against several
-  horizons at once. A point is anomalous if
+  `range_guard` and `flatline` beside them, so the same stream is judged
+  against several horizons at once. A point is anomalous if
   **any** version flags it; the reported `score` and `severity` are those
   of the most severe version (by severity, the unit-free measure below —
   not by raw score, which is on a different scale per version).
@@ -164,8 +194,8 @@ number, so they survive ring eviction and never land on a row that took a
 shifted slot; they change no verdict, so nothing is rescored.
 
 Fine-tune is calibration plus a write: pick the share of the window you are
-willing to alert on and every enabled version gets the margin that flags
-that share — rounded to the fewest significant digits that keep the count,
+willing to alert on and every enabled version but `flatline` gets the
+margin that flags that share — rounded to the fewest significant digits that keep the count,
 so a margin reads `0.13`, not `0.12994712`. When the scores tie at the cut
 (a stuck sensor scores whole days identically) no margin flags exactly that
 share; the nearer edge of the run is taken and the response says so
@@ -256,6 +286,7 @@ records the ingest path takes.
 | `csv` | a header row naming the columns, one row per point. Delimiter guessed from `,` `;` tab; quoted cells honoured. Cells that parse as numbers become numbers, everything else stays text |
 | `json` | an array of objects, or an object with the array under `data`, `points` or `rows` |
 | `jsonl` | one object per line — what this service's own `/data` route emits, so a model can be moved by exporting and importing it |
+| `fmi` | the weather service's CSV export (`Vuosi`, `Kuukausi`, `Päivä`, `Aika`, `-` for a missing reading) — the same reader as `csv`, accepted under the name the file came with |
 
 `?format=auto` (the default) sniffs: a body starting with `[` is a JSON
 array, one starting with `{` is JSONL if later lines also start objects,
@@ -275,7 +306,10 @@ Two things it does that a replay through `/detect` would not:
 A row that cannot be read does not fail the file: it is counted, and the
 first few are named by line. A file bigger than the ring is a file whose
 *tail* the model keeps. `-`, `--`, `NA`, `N/A`, `NaN`, `null` and `None`
-are missing values, not text.
+are missing values, not text — in a JSON row as much as in a CSV cell, and
+a JSON `null` or a number quoted as a string (`"21.5"`) is read the way the
+CSV reader would read it, so a file exported by another tool does not turn
+a numeric column into text.
 
 ### Finding the time in a file
 
@@ -340,7 +374,17 @@ either way — so which engine ran can never change a verdict, and the test
 suite asserts element-for-element `==` across engines. Measured on 200 000
 rows × 300 trees: pure NURL 9.6 s, host C++ backend 1.1 s (~9×), RTX 4090
 213 ms (~45×). `ANOMALY_GPU=0` disables the accelerator; `NURL_GPU=cpu`
-forces the CPU backend on a CUDA machine.
+forces the CPU backend on a CUDA machine. A CUDA context is current only
+on the thread that opened it, so every accelerated path binds the calling
+thread first — `anomaly serve` scores and trains from a worker pool, and
+which thread a request lands on must not decide which engine runs.
+
+A scan, calibration or fine-tune over stored rows (the anomalies route,
+`model_scan_at`, `model_calibrate`) encodes the rows once — each ring row
+in range parsed, projected and scaled a single time — and takes every
+forest's decisions from the bulk scorer over the whole range, so the
+per-row verdict only reads: 10 000 rows calibrate in 0.7 s accelerated,
+2.6 s on the CPU.
 
 **Autoencoder training** (`/train/autoencoder/<model>`) also runs on the
 GPU by default when a CUDA device is present — and training is where the
@@ -797,6 +841,27 @@ rows read as the three bursts they were. The REST route calls them runs
 with `label_anomaly {model, index, label: "false_positive"}`: it shows on the
 row in `anomalies`, the summary counts it under `labelled`, and `calibration`
 and `finetune` report it under `window.excluded`.
+
+A model may be named by its `alias` as readily as by its name: a tool given
+a name the organisation has no model under looks it up as an alias among
+the models the caller may see and, on one match, proceeds under the model's
+real name (`describe_model` and `list_models` carry both). `describe_model`
+is written for a context window: a categorical column with more than
+twelve levels is given as its count, a sample and a note (a time-of-day or
+an id read as text is one feature per value, better dropped or encoded as a
+number), a long feature order as its count and first forty names, and the
+model's warnings — most of the ring evicted, an autoencoder that is stale
+(`retrain_required`) — sit at the top. `anomaly_summary` judges the
+window as well as the stream: `warnings` say when no row of the window is
+flagged (margins may be loose for this data), when a version flags a tenth
+or more of it (a margin too tight, or a version trained on data unlike
+this window — `flagged_by_version` shows which), and when every row of the
+window carries the same timestamp (a file imported without its time column
+named, so the time windows all see one instant); `calibration` gives every
+version a one-word `reading` — quiet, loud, or on target — and the model a
+`verdict`, and `analyze_data` says up front whether its flagged rows stand
+apart from the file (`separation`, `reading`) or are merely its least
+typical 1 %.
 
 The server's `instructions` tell the agent the things it most often gets
 wrong: that `last: "24h"` counts back from the model's newest point, not from

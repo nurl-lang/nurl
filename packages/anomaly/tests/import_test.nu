@@ -110,6 +110,20 @@ $ `src/dynamic.nu`
     ( check > ( vec_len [String] . ragged notes ) 0 `csv: and described` )
     ( import_parse_free ragged )
 
+    // The weather service's export is a CSV; naming it is allowed.
+    : ImportParse fmi ( import_parse `Vuosi,Kuukausi,Päivä,Aika,Lämpötila
+2024,1,1,00:00,-3.2
+2024,1,1,00:10,-
+` `fmi` )
+    ( check == ( string_len . fmi err ) 0 `fmi: accepted as a format name` )
+    ( check == ( vec_len [Json] . fmi rows ) 2 `fmi: read as csv` )
+    ( check ! ( has_key fmi 1 `Lämpötila` ) `fmi: a dash is a missing cell` )
+    ( import_parse_free fmi )
+    : ImportParse unk ( import_parse `a,b
+1,2` `xml` )
+    ( check > ( string_len . unk err ) 0 `format: an unknown name is an error` )
+    ( import_parse_free unk )
+
     : ImportParse nohdr ( import_parse `` `csv` )
     ( check > ( string_len . nohdr err ) 0 `csv: an empty file is an error` )
     ( import_parse_free nohdr )
@@ -139,6 +153,24 @@ $ `src/dynamic.nu`
     : ImportParse noarr ( import_parse `{"a":1}` `json` )
     ( check > ( string_len . noarr err ) 0 `json: an object with no array is an error` )
     ( import_parse_free noarr )
+
+    // The cell rule holds for JSON too: a dash or an N/A is no field, a
+    // null is no field, a number written as text is a number.
+    : ImportParse gaps ( import_parse `[{"t":"-","w":"N/A","p":null,"h":"21.5","n":"7","k":"ok","x":3}]` `json` )
+    ( check ! ( has_key gaps 0 `t` ) `json: a dash is a missing cell` )
+    ( check ! ( has_key gaps 0 `w` ) `json: so is N/A` )
+    ( check ! ( has_key gaps 0 `p` ) `json: and null` )
+    : String h ( cell gaps 0 `h` )
+    ( check ( streq h `21` ) `json: "21.5" is a number` )
+    ( string_free h )
+    : String n ( cell gaps 0 `n` )
+    ( check ( streq n `7` ) `json: "7" is an integer` )
+    ( string_free n )
+    : String kk ( cell gaps 0 `k` )
+    ( check ( streq kk `ok` ) `json: a word stays text` )
+    ( string_free kk )
+    ( check ( has_key gaps 0 `x` ) `json: a number is kept` )
+    ( import_parse_free gaps )
 }
 
 @ test_jsonl → v {
@@ -158,6 +190,16 @@ oops
     ( check == ( vec_len [Json] . bad rows ) 2 `jsonl: a bad line does not stop the file` )
     ( check == . bad skipped 1 `jsonl: it is counted` )
     ( import_parse_free bad )
+
+    : ImportParse gaps ( import_parse `{"a":"-","b":"1"}
+{"a":"NaN","b":"2"}
+` `jsonl` )
+    ( check ! ( has_key gaps 0 `a` ) `jsonl: a dash is a missing cell` )
+    ( check ! ( has_key gaps 1 `a` ) `jsonl: so is NaN` )
+    : String b1 ( cell gaps 1 `b` )
+    ( check ( streq b1 `2` ) `jsonl: "2" is a number` )
+    ( string_free b1 )
+    ( import_parse_free gaps )
 }
 
 @ test_sniff → v {
@@ -467,6 +509,26 @@ oops
     ( json_free insp4 )
     ( json_free spec4 )
     ( import_parse_free ip4 )
+
+    // The same export handed over as JSON rows, numbers already numbers,
+    // the way an assistant sends `rows`: the parts are found the same.
+    : ImportParse ipj ( import_parse `[{"Havaintoasema":"Vaasa","Vuosi":2026,"Kuukausi":8,"Päivä":29,"Aika [UTC]":"00:00","Pilvisyys [1/8]":"-","Lämpötila":12.5},
+{"Havaintoasema":"Vaasa","Vuosi":2026,"Kuukausi":8,"Päivä":29,"Aika [UTC]":"00:10","Pilvisyys [1/8]":7,"Lämpötila":12.4}]` `json` )
+    : Json inspj ( import_inspect . ipj rows auto 0 )
+    ?? ( json_obj_get inspj `time` ) {
+        T plan → {
+            ( check ( seq ( jstr plan `mode` ) `parts` ) `time: json rows → parts` )
+            ( check ( seq ( jpart plan `clock` ) `Aika [UTC]` ) `time: json rows clock ← Aika` )
+            : ImpTimeResult rj ( import_time_apply . ipj rows plan F 0 )
+            ( check == . rj stamped 2 `time: json rows stamped` )
+            ( check ! ( row_has . ipj rows 0 `Aika [UTC]` ) `time: json rows: the clock part is consumed` )
+            ( check ! ( row_has . ipj rows 0 `Pilvisyys [1/8]` ) `time: json rows: "-" is a missing value` )
+            ( imp_time_result_free rj )
+        }
+        F _ → { ( check F `time: json rows inspect has a time plan` ) }
+    }
+    ( json_free inspj )
+    ( import_parse_free ipj )
 
     // Nothing time-like at all: the proposal is none, with no confidence.
     : ImportParse ip5 ( import_parse `a,b,min

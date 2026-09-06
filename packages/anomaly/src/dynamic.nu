@@ -54,6 +54,13 @@ $ `src/store.nu`
     i vv_feat  // the feature this verdict is about (range_guard); -1 = none
 }
 
+// What the flatline guard saw (see __an_flat_judge).
+: FlatOut {
+    b ready  // F when the ring is shorter than the window or nothing is fitted
+    f worst  // the largest fraction over the watched features
+    i feat  // the feature that gave it; -1 when none is watched
+}
+
 // The aggregate verdict for one point (SPEC §5.4).
 : Verdict {
     b ready
@@ -85,6 +92,7 @@ $ `src/store.nu`
     ( Vec VerModel ) forests
     Scaler sc
     AeModel ae
+    b ae_stale  // the net names features the current encoding no longer makes
     i next_train_at
     i min_points
     i max_points
@@ -147,10 +155,10 @@ $ `src/store.nu`
     ^ == ( nurl_str_eq vname `autoencoder` ) 1
 }
 
-// The versions that are not forests: the autoencoder and the range guard
-// have a VerCfg (margin, enabled) but no forest blob to load, train or drop.
+// The versions that are not forests: the autoencoder and the guards have
+// a VerCfg (margin, enabled) but no forest blob to load, train or drop.
 @ __an_forestless s vname → b {
-    ^ | ( __an_is_ae_name vname ) ( _an_is_guard_name vname )
+    ^ ( _an_forestless_name vname )
 }
 
 @ model_open_at Store st s name i now → *Model {
@@ -228,6 +236,7 @@ $ `src/store.nu`
         T ae → { = . mo ae ae }
         F → { = . mo ae ( ae_empty ) }
     }
+    = . mo ae_stale ( an_ae_stale mm . mo ae )
 
     // Next scheduled training mark, from the lifetime counter.
     ? == ( vec_len [VerModel] . mo forests ) 0 {
@@ -375,20 +384,300 @@ $ `src/store.nu`
     ^ @ ?( Vec f ) { F }
 }
 
+// ── Encoded history ───────────────────────────────────────────────────
+// A scan, a calibration and a fine-tune judge every stored row, and each
+// row's verdict needs the row itself, the W−1 rows before it (the
+// timevector window) and every forest's decision for it. Encoding a stored
+// line costs a JSON parse and a name lookup per feature, so ring rows
+// [base, base+n) are encoded ONCE here, and each forest scores the whole
+// matrix in one call — the accelerated path — instead of a row at a time.
+// The numbers are the per-row path's exactly (anom_decisions is
+// bit-identical to anom_decision, and the window is the same projection
+// of the same rows); only the work is shared.
+: Hist {
+    i base
+    i n
+    i nfeat
+    ( Vec f ) x  // n × nfeat, standardised; a row that failed to parse is zeros
+    ( Vec i ) ok  // 1 when the row parsed and encoded
+    i ae_nfeat
+    ( Vec f ) ae_x  // n × ae_nfeat, raw projection onto the autoencoder's own feature order
+    ( Vec ( Vec f ) ) dfs  // per forest index: its decision for every row
+    ( Vec ( Vec i ) ) dfs_ok  // per forest index: 1 where that decision stands (a timevector forest has none for a row whose window is not all here)
+}
+
+@ __an_hist_free * Hist h → v {
+    ? == # i h 0 { ^ } {}
+    ( vec_free [f] . h x )
+    ( vec_free [i] . h ok )
+    ( vec_free [f] . h ae_x )
+    ( vec_free_with [( Vec f )] . h dfs \ ( Vec f ) d → v { ( vec_free [f] d ) } )
+    ( vec_free_with [( Vec i )] . h dfs_ok \ ( Vec i ) d → v { ( vec_free [i] d ) } )
+    ( nurl_free # *u h )
+}
+
+// Widest timevector window over the trained forests (1 when there is none):
+// the rows a scan of [lo, hi) needs encoded start at lo − width + 1.
+@ __an_hist_width * Model mo → i {
+    : i nfeat ( vec_len [String] . . mo meta feats )
+    : ~ i w 1
+    : i nf ( vec_len [VerModel] . mo forests )
+    : ~ i k 0
+    ~ < k nf {
+        ?? ( vec_get [VerModel] . mo forests k ) {
+            T vm → {
+                ? & > nfeat 0 != . vm n_cols nfeat {
+                    : i wk / . vm n_cols nfeat
+                    ? > wk w { = w wk } {}
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ w
+}
+
+// Encode ring rows [from, to) and score them through every forest.
+@ __an_hist_build * Model mo i from i to → *Hist {
+    : *Meta mm . mo meta
+    : i nfeat ( vec_len [String] . mm feats )
+    : AeModel cae . mo ae
+    : ~ i ae_nfeat 0
+    ? & . cae trained ! . mo ae_stale { = ae_nfeat ( vec_len [String] . cae feats ) } {}
+    : ~ i lo from
+    ? < lo 0 { = lo 0 } {}
+    : ~ i hi to
+    : i total ( vec_len [String] . mo lines )
+    ? > hi total { = hi total } {}
+    ? < hi lo { = hi lo } {}
+    : i n - hi lo
+    : ( Vec f ) x ( vec_with_cap [f] * n nfeat )
+    : ( Vec i ) ok ( vec_with_cap [i] n )
+    : ( Vec f ) ae_x ( vec_with_cap [f] * n ae_nfeat )
+    : ~ i k lo
+    ~ < k hi {
+        : ~ b got F
+        ?? ( vec_get [String] . mo lines k ) {
+            T l → {
+                : !Json JsonError jr ( json_parse ( string_data l ) )
+                ?? jr {
+                    T j → {
+                        : !EncPoint String er ( anomaly_preprocess_ro mm j )
+                        ?? er {
+                            T p → {
+                                : ( Vec f ) row ( anomaly_project p . mm feats )
+                                ( scaler_apply . mo sc row )
+                                ( vec_extend [f] x row )
+                                ( vec_free [f] row )
+                                ? > ae_nfeat 0 {
+                                    : ( Vec f ) araw ( anomaly_project p . cae feats )
+                                    ( vec_extend [f] ae_x araw )
+                                    ( vec_free [f] araw )
+                                } {}
+                                ( enc_free p )
+                                = got T
+                            }
+                            F e → { ( string_free e ) }
+                        }
+                        ( json_free j )
+                    }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+        ? got { ( vec_push [i] ok 1 ) } {
+            ( vec_push [i] ok 0 )
+            : ~ i z 0
+            ~ < z nfeat { ( vec_push [f] x 0.0 ) = z + z 1 }
+            = z 0
+            ~ < z ae_nfeat { ( vec_push [f] ae_x 0.0 ) = z + z 1 }
+        }
+        = k + k 1
+    }
+    // Every forest over the whole matrix at once. A point-wide forest takes
+    // the matrix as it is; a timevector forest takes each row's window —
+    // the W−1 rows before it and itself, all encoded here — laid out in
+    // batches sized to a few megabytes, so the accelerated path scores
+    // them too and nothing is walked a row at a time.
+    : ( Vec ( Vec f ) ) dfs ( vec_new [( Vec f )] )
+    : ( Vec ( Vec i ) ) dfs_ok ( vec_new [( Vec i )] )
+    : i nf ( vec_len [VerModel] . mo forests )
+    = k 0
+    ~ < k nf {
+        : ~ ( Vec f ) d ( vec_new [f] )
+        : ( Vec i ) dok ( vec_new [i] )
+        ?? ( vec_get [VerModel] . mo forests k ) {
+            T vm → {
+                ? & > n 0 > nfeat 0 {
+                    ? == . vm n_cols nfeat {
+                        ( vec_free [f] d )
+                        = d ( anom_decisions vm x n nfeat )
+                        : ~ i r 0
+                        ~ < r n { ( vec_push [i] dok ( _mlp_iget ok r ) ) = r + r 1 }
+                    } {
+                        : i W / . vm n_cols nfeat
+                        : i need - W 1
+                        : i wcols . vm n_cols
+                        : ~ i r 0
+                        ~ < r n { ( vec_push [f] d 0.0 ) ( vec_push [i] dok 0 ) = r + r 1 }
+                        : ~ i per / 4194304 wcols
+                        ? < per 1 { = per 1 } {}
+                        : ( Vec f ) batch ( vec_with_cap [f] * per wcols )
+                        : ( Vec i ) rows ( vec_with_cap [i] per )
+                        : *f xp ( vec_data [f] x )
+                        : *i okp ( vec_data [i] ok )
+                        = r 0
+                        ~ <= r n {
+                            // Row r belongs to the batch when its whole
+                            // window is encoded; a full batch, or the end,
+                            // is scored and scattered back.
+                            : ~ b take F
+                            ? < r n {
+                                ? >= r need {
+                                    = take T
+                                    : ~ i q - r need
+                                    ~ & take <= q r {
+                                        ? == . okp q 1 {} { = take F }
+                                        = q + q 1
+                                    }
+                                } {}
+                            } {}
+                            ? take {
+                                : i w0 * - r need nfeat
+                                : ~ i c 0
+                                ~ < c wcols { ( vec_push [f] batch . xp + w0 c ) = c + c 1 }
+                                ( vec_push [i] rows r )
+                            } {}
+                            : i nb ( vec_len [i] rows )
+                            ? & > nb 0 | >= nb per == r n {
+                                : ( Vec f ) got ( anom_decisions vm batch nb wcols )
+                                : ~ i q 0
+                                ~ < q nb {
+                                    : i at ( _mlp_iget rows q )
+                                    ( vec_set [f] d at ( _mlp_fget got q ) )
+                                    ( vec_set [i] dok at 1 )
+                                    = q + q 1
+                                }
+                                ( vec_free [f] got )
+                                ( vec_set_len [f] batch 0 )
+                                ( vec_set_len [i] rows 0 )
+                            } {}
+                            = r + r 1
+                        }
+                        ( vec_free [f] batch )
+                        ( vec_free [i] rows )
+                    }
+                } {}
+            }
+            F _ → {}
+        }
+        ( vec_push [( Vec f )] dfs d )
+        ( vec_push [( Vec i )] dfs_ok dok )
+        = k + k 1
+    }
+    : *Hist h # *Hist ( nurl_malloc Z Hist )
+    = . h base lo
+    = . h n n
+    = . h nfeat nfeat
+    = . h x x
+    = . h ok ok
+    = . h ae_nfeat ae_nfeat
+    = . h ae_x ae_x
+    = . h dfs dfs
+    = . h dfs_ok dfs_ok
+    ^ h
+}
+
+// Row `at` of the ring as a standardised point, copied out of the history.
+@ __an_hist_row * Hist h i at → ( Vec f ) {
+    : i r - at . h base
+    : ( Vec f ) out ( vec_with_cap [f] . h nfeat )
+    : *f xp ( vec_data [f] . h x )
+    : ~ i c 0
+    ~ < c . h nfeat { ( vec_push [f] out . xp + * r . h nfeat c ) = c + c 1 }
+    ^ out
+}
+
+// The `need` rows ending just before `end`, from the history — None when
+// any of them lies outside it or failed to encode (the caller then reads
+// the ring, exactly as without a history).
+@ __an_hist_tail * Hist h i need i end → ?( Vec f ) {
+    : i first - end need
+    ? | < first . h base > end + . h base . h n { ^ @ ?( Vec f ) { F } } {}
+    : *i okp ( vec_data [i] . h ok )
+    : ~ i k first
+    ~ < k end {
+        ? == . okp - k . h base 1 {} { ^ @ ?( Vec f ) { F } }
+        = k + k 1
+    }
+    : ( Vec f ) out ( vec_with_cap [f] * need . h nfeat )
+    : *f xp ( vec_data [f] . h x )
+    : i from * - first . h base . h nfeat
+    : i cnt * need . h nfeat
+    = k 0
+    ~ < k cnt { ( vec_push [f] out . xp + from k ) = k + k 1 }
+    ^ @ ?( Vec f ) { T out }
+}
+
+// The timevector tail: out of the history when one covers it, else read
+// from the ring.
+@ __an_tail_for * Model mo * Hist h i need i end → ?( Vec f ) {
+    ? != # i h 0 {
+        ?? ( __an_hist_tail h need end ) {
+            T t → { ^ @ ?( Vec f ) { T t } }
+            F → {}
+        }
+    } {}
+    ^ ( __an_window_tail mo need end )
+}
+
 // Score `p` as though it sat at ring position `end` — the point's own slot,
 // exclusive: rows [0, end) are its past and everything from `end` on is
 // future the verdict must not see.
 @ __an_score_enc_upto * Model mo EncPoint p i end → Verdict {
+    : *Meta mm . mo meta
+    : ( Vec f ) x ( anomaly_project p . mm feats )
+    ( scaler_apply . mo sc x )
+    : AeModel cae . mo ae
+    : ~ ( Vec f ) araw ( vec_new [f] )
+    ? & . cae trained ! . mo ae_stale {
+        ( vec_free [f] araw )
+        = araw ( anomaly_project p . cae feats )
+    } {}
+    ^ ( __an_score_core mo x araw end # *Hist 0 )
+}
+
+// Score ring row `at` out of an encoded history that covers it.
+@ __an_score_hist * Model mo * Hist h i at → Verdict {
+    : i r - at . h base
+    : ( Vec f ) x ( __an_hist_row h at )
+    : ( Vec f ) araw ( vec_with_cap [f] . h ae_nfeat )
+    : *f ap ( vec_data [f] . h ae_x )
+    : ~ i c 0
+    ~ < c . h ae_nfeat { ( vec_push [f] araw . ap + * r . h ae_nfeat c ) = c + c 1 }
+    ^ ( __an_score_core mo x araw at h )
+}
+
+// The verdict of a standardised point `x` (owned, freed here) sitting at
+// ring position `end`, with `araw` its raw projection onto the
+// autoencoder's feature order (owned; empty when the AE is untrained).
+// `h` is an encoded history covering the rows involved, or null: with one,
+// a forest's decision and the timevector window come out of it; without,
+// they are computed here and read from the ring.
+@ __an_score_core * Model mo ( Vec f ) x ( Vec f ) araw i end * Hist h → Verdict {
     : ( Vec VerVerdict ) vvs ( vec_new [VerVerdict] )
     : b warm >= ( vec_len [String] . mo lines ) . mo min_points
     ? & ( model_is_trained mo ) warm {} {
+        ( vec_free [f] x )
+        ( vec_free [f] araw )
         ^ @ Verdict { F F 0.0 0.0 vvs }
     }
 
     : *Meta mm . mo meta
     : i nfeat ( vec_len [String] . mm feats )
-    : ( Vec f ) x ( anomaly_project p . mm feats )
-    ( scaler_apply . mo sc x )
+    : b hist != # i h 0
 
     : ~ b any F
     // `worst` is the aggregate score: the decision value of the version
@@ -405,13 +694,38 @@ $ `src/store.nu`
                 // its input is the WINDOW ending at the current point
                 // (W·nfeat features, W derived from the trained forest so
                 // a config change cannot desync until the next retrain).
+                : ~ f hdf 0.0
+                : ~ b have F
+                ? hist {
+                    : i r - end . h base
+                    ?? ( vec_get [( Vec i )] . h dfs_ok k ) {
+                        T okv → {
+                            ? & >= r 0 < r ( vec_len [i] okv ) {
+                                ? == ( _mlp_iget okv r ) 1 {
+                                    ?? ( vec_get [( Vec f )] . h dfs k ) {
+                                        T dv → { = hdf ( _mlp_fget dv r ) = have T }
+                                        F _ → {}
+                                    }
+                                } {}
+                            } {}
+                        }
+                        F _ → {}
+                    }
+                } {}
                 ? & > nfeat 0 != . vm n_cols nfeat {
                     : i W / . vm n_cols nfeat
-                    ?? ( __an_window_tail mo - W 1 end ) {
+                    : ~ ? ( Vec f ) tailo @ ?( Vec f ) { F }
+                    ? have {
+                        // The history scored this window already; an
+                        // empty tail stands for it and is not walked.
+                        = tailo @ ?( Vec f ) { T ( vec_new [f] ) }
+                    } { = tailo ( __an_tail_for mo h - W 1 end ) }
+                    ?? tailo {
                         T tail → {
-                            ( vec_extend [f] tail x )
-                            ? == ( vec_len [f] tail ) . vm n_cols {
-                                : f dfw ( anom_decision vm tail )
+                            ? have {} { ( vec_extend [f] tail x ) }
+                            ? | have == ( vec_len [f] tail ) . vm n_cols {
+                                : ~ f dfw hdf
+                                ? have {} { = dfw ( anom_decision vm tail ) }
                                 : f marginw ( meta_version_margin mm ( string_data . vm vname ) . vm margin )
                                 : b hitw <= dfw - 0.0 marginw
                                 ? hitw { = any T } {}
@@ -434,7 +748,8 @@ $ `src/store.nu`
                         // no verdict this time (absent, never wrong)
                     }
                 } {
-                    : f df ( anom_decision vm x )
+                    : ~ f df hdf
+                    ? have {} { = df ( anom_decision vm x ) }
                     : f margin ( meta_version_margin mm ( string_data . vm vname ) . vm margin )
                     : b hit <= df - 0.0 margin
                     ? hit { = any T } {}
@@ -488,14 +803,35 @@ $ `src/store.nu`
         } )
     } {}
 
+    // The flatline guard: the column that has stopped moving, if one has.
+    ? ( meta_version_enabled mm ANOM_FLAT_NAME F ) {
+        : FlatOut fo ( __an_flat_judge mo x end h )
+        ? . fo ready {
+            : f fdf - 0.0 . fo worst
+            : f fmargin ( meta_version_margin mm ANOM_FLAT_NAME ANOM_FLAT_MARGIN )
+            : b fhit <= fdf - 0.0 fmargin
+            ? fhit { = any T } {}
+            : f fsev ( anom_severity fdf fmargin )
+            ? || first > fsev top_sev { = worst fdf = top_sev fsev } {}
+            = first F
+            ( vec_push [VerVerdict] vvs @ VerVerdict {
+                ( string_from ANOM_FLAT_NAME )
+                fhit
+                fdf
+                fmargin
+                fmargin
+                . fo feat
+            } )
+        } {}
+    } {}
+
     // The autoencoder verdict: reconstruction error against the trained
     // threshold, on the point projected onto the AE's OWN frozen feature
     // order (independent of the forests' scaler and current feats). Muted
     // while its VerCfg is disabled — the net is kept, only the verdict
     // goes away, because re-training it is not a checkbox-priced action.
     : AeModel cae . mo ae
-    ? & . cae trained ( meta_version_enabled mm `autoencoder` T ) {
-        : ( Vec f ) araw ( anomaly_project p . cae feats )
+    ? & & . cae trained ! . mo ae_stale ( meta_version_enabled mm `autoencoder` T ) {
         : f adf ( ae_decision cae araw )
         : f arel ( meta_version_margin mm `autoencoder` ANOM_AE_MARGIN )
         : f amargin ( anom_ae_margin cae arel )
@@ -512,8 +848,8 @@ $ `src/store.nu`
             arel
             -1
         } )
-        ( vec_free [f] araw )
     } {}
+    ( vec_free [f] araw )
     ( vec_free [f] x )
     ^ @ Verdict { T any worst top_sev vvs }
 }
@@ -577,6 +913,22 @@ $ `src/store.nu`
         ^ 0
     } {}
 
+    // The span these rows cover decides which calendar cycles the
+    // feature order keeps (__an_cycle_seen); a count clock has no span.
+    = . mm train_span 0
+    ? . mm count_clock {} {
+        : *i sp ( vec_data [i] ets )
+        : ~ i tmin . sp 0
+        : ~ i tmax . sp 0
+        = k 1
+        ~ < k ne {
+            ? < . sp k tmin { = tmin . sp k } {}
+            ? > . sp k tmax { = tmax . sp k } {}
+            = k + k 1
+        }
+        = . mm train_span - tmax tmin
+    }
+
     // Freeze the (possibly grown) feature order, project the full matrix.
     ( meta_refresh_feats mm )
     : i nfeat ( vec_len [String] . mm feats )
@@ -617,6 +969,8 @@ $ `src/store.nu`
     // from before it existed gains the version here, at its next retrain,
     // where the epoch bump and the metadata save happen anyway.
     ( __an_ensure_guard_cfg mo )
+    ( __an_ensure_flat_cfg mo )
+    ( __an_flat_fit mo big ne nfeat )
     : *f bigp ( vec_data [f] big )
     : *i etsp ( vec_data [i] ets )
     : i nv ( vec_len [VerCfg] . mm versions )
@@ -714,6 +1068,7 @@ $ `src/store.nu`
     ( meta_bump_epoch mm )
     ( store_save_meta . mo store ( string_data . mo mname ) mm )
     = . mo next_train_at + . mm n_seen ( __an_sched_step mo )
+    = . mo ae_stale ( an_ae_stale mm . mo ae )
     ( __an_retrain_ae mo now )
     ^ ne
 }
@@ -727,10 +1082,48 @@ $ `src/store.nu`
 // the forests retrain. Margins are never touched. Requires an existing
 // trained net: the first training stays an explicit choice, because it
 // fixes the layout.
+// A trained autoencoder is stale when its frozen feature order names a
+// feature the model's current encoding no longer produces — the calendar
+// features changed shape in 0.14.0, and a cycle the training span has
+// not seen twice is left out (see __an_cycle_seen). Projecting a point
+// onto such an order fills the lost features with 0, which for a value
+// that was never 0 in training is a reconstruction error thousands of
+// times the threshold, on every point. A stale net does not score; the
+// next forest retrain replaces it whether or not the schedule says so.
+@ an_ae_stale * Meta mm AeModel ae → b {
+    ? . ae trained {} { ^ F }
+    : ( Vec String ) now ( meta_derived_feats mm )
+    : i n ( vec_len [String] . ae feats )
+    : ~ b stale F
+    : ~ i k 0
+    ~ & ! stale < k n {
+        ?? ( vec_get [String] . ae feats k ) {
+            T f → { ? < ( __an_find_str now ( string_data f ) ) 0 { = stale T } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] now \ String x → v { ( string_free x ) } )
+    ^ stale
+}
+
+@ __an_find_str ( Vec String ) v s name → i {
+    : i n ( vec_len [String] v )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] v k ) {
+            T c → { ? == ( nurl_str_eq ( string_data c ) name ) 1 { ^ k } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ -1
+}
+
 @ __an_retrain_ae * Model mo i now → v {
     : *Meta mm . mo meta
     : AeModel cae . mo ae
-    ? & . mm sched_ae . cae trained {} { ^ }
+    ? & . cae trained | . mm sched_ae . mo ae_stale {} { ^ }
     : ( Vec i ) hidden ( ae_hidden cae )
     : String err ( model_train_autoencoder_at mo hidden . cae prefilter now )
     ( vec_free [i] hidden )
@@ -771,6 +1164,178 @@ $ `src/store.nu`
     : *Meta mm . mo meta
     ? < ( meta_find_version mm ANOM_GUARD_NAME ) 0 {} { ^ }
     ( vec_push [VerCfg] . mm versions ( _an_vc_guard ) )
+}
+
+// ── The flatline guard version ────────────────────────────────────────
+
+// Ensure a `flatline` VerCfg exists (SPEC §5.4) — a model from before the
+// version gains it at its next retrain, where the references are fitted.
+@ __an_ensure_flat_cfg * Model mo → v {
+    : *Meta mm . mo meta
+    ? < ( meta_find_version mm ANOM_FLAT_NAME ) 0 {} { ^ }
+    ( vec_push [VerCfg] . mm versions ( _an_vc_flat ) )
+}
+
+// The configured window, in rows.
+@ __an_flat_window * Meta mm → i {
+    : i at ( meta_find_version mm ANOM_FLAT_NAME )
+    ? >= at 0 {
+        ?? ( vec_get [VerCfg] . mm versions at ) {
+            T vc → { ? >= . vc window_size 2 { ^ . vc window_size } {} }
+            F _ → {}
+        }
+    } {}
+    ^ ANOM_FLAT_WINDOW
+}
+
+// The references are fitted when there is one per feature of the frozen
+// order (the retrain refits them; an edit that changes the features
+// bumps the epoch and retrains).
+@ __an_flat_fitted * Model mo → b {
+    : *Meta mm . mo meta
+    : i nf ( vec_len [String] . mm feats )
+    ^ & > nf 0 == ( vec_len [f] . mm flat_sd ) nf
+}
+
+// Fit the references from the standardised training matrix: per watched
+// feature, the longest run of identical values, and the
+// ANOM_FLAT_QUANTILE-th quantile of the window standard deviations (the
+// stream's own quiet periods). A feature that is not a numeric column, or
+// a ring shorter than the window, gets -1: not watched.
+@ __an_flat_fit * Model mo ( Vec f ) big i n i nfeat → v {
+    : *Meta mm . mo meta
+    : i W ( __an_flat_window mm )
+    : ( Vec i ) mask ( meta_numeric_feat_mask mm )
+    : ( Vec f ) runs ( vec_with_cap [f] nfeat )
+    : ( Vec f ) sds ( vec_with_cap [f] nfeat )
+    : *f bp ( vec_data [f] big )
+    : *i mp ( vec_data [i] mask )
+    : ~ i j 0
+    ~ < j nfeat {
+        ? | == . mp j 0 < n W {
+            ( vec_push [f] runs -1.0 )
+            ( vec_push [f] sds -1.0 )
+        } {
+            : ~ i best 1
+            : ~ i run 1
+            : ~ i r 1
+            ~ < r n {
+                ? == . bp + * r nfeat j . bp + * - r 1 nfeat j { = run + run 1 } { = run 1 }
+                ? > run best { = best run } {}
+                = r + r 1
+            }
+            ( vec_push [f] runs # f best )
+            // Window stds by a sliding sum; the values are standardised,
+            // so the sums do not cancel badly.
+            : ( Vec f ) wsd ( vec_with_cap [f] + - n W 1 )
+            : ~ f sum 0.0
+            : ~ f sq 0.0
+            = r 0
+            ~ < r n {
+                : f v . bp + * r nfeat j
+                = sum + sum v
+                = sq + sq * v v
+                ? >= r W {
+                    : f o . bp + * - r W nfeat j
+                    = sum - sum o
+                    = sq - sq * o o
+                } {}
+                ? >= r - W 1 {
+                    : f mean / sum # f W
+                    : ~ f var - / sq # f W * mean mean
+                    ? < var 0.0 { = var 0.0 } {}
+                    ( vec_push [f] wsd ( sqrt var ) )
+                } {}
+                = r + r 1
+            }
+            ( sort_by [f] wsd \ f a f b → i {
+                ? < a b { ^ -1 } {}
+                ? > a b { ^ 1 } {}
+                ^ 0
+            } )
+            ( vec_push [f] sds ( _an_percentile wsd ANOM_FLAT_QUANTILE ) )
+            ( vec_free [f] wsd )
+        }
+        = j + j 1
+    }
+    ( vec_free [i] mask )
+    ( vec_free [f] . mm flat_run )
+    ( vec_free [f] . mm flat_sd )
+    = . mm flat_run runs
+    = . mm flat_sd sds
+}
+
+// Judge the standardised point `x` at ring position `end` (exclusive) —
+// the window is the W−1 rows before it plus the point itself. Per watched
+// feature: the run of values identical to this one, as a fraction of
+// max(W, 2·reference run), and — when the window is not one value
+// throughout — its std collapse below the reference, 1 − sd/ref (0 when
+// the reference is 0: a column that never moved in training is not
+// expected to). The larger of the two, over the features, is the
+// verdict's fraction.
+@ __an_flat_judge * Model mo ( Vec f ) x i end * Hist h → FlatOut {
+    : *Meta mm . mo meta
+    ? ( __an_flat_fitted mo ) {} { ^ @ FlatOut { F 0.0 -1 } }
+    : i nfeat ( vec_len [String] . mm feats )
+    : i W ( __an_flat_window mm )
+    ?? ( __an_tail_for mo h - W 1 end ) {
+        T tail → {
+            ? == ( vec_len [f] tail ) * - W 1 nfeat {} {
+                ( vec_free [f] tail )
+                ^ @ FlatOut { F 0.0 -1 }
+            }
+            : *f tp ( vec_data [f] tail )
+            : *f xp ( vec_data [f] x )
+            : *f rrp ( vec_data [f] . mm flat_run )
+            : *f rsp ( vec_data [f] . mm flat_sd )
+            : ~ f worst 0.0
+            : ~ i wf -1
+            : ~ i j 0
+            ~ < j nfeat {
+                ? < . rrp j 0.0 {} {
+                    : f cur . xp j
+                    : ~ i run 1
+                    : ~ b same T
+                    : ~ i r - W 2
+                    ~ & same >= r 0 {
+                        ? == . tp + * r nfeat j cur { = run + run 1 } { = same F }
+                        = r - r 1
+                    }
+                    : ~ f ref_run * 2.0 . rrp j
+                    ? < ref_run # f W { = ref_run # f W } {}
+                    : ~ f frac / # f run ref_run
+                    // The collapse rule is for the sensor that hangs
+                    // with dither; a window that is one value throughout
+                    // is the run rule's case alone, so a column that sat
+                    // flat in training (a rain gauge) answers to its own
+                    // reference run and not to a spread of zero.
+                    : f ref_sd . rsp j
+                    ? & > ref_sd 0.0 < run W {
+                        : ~ f sum cur
+                        : ~ f sq * cur cur
+                        = r 0
+                        ~ < r - W 1 {
+                            : f v . tp + * r nfeat j
+                            = sum + sum v
+                            = sq + sq * v v
+                            = r + r 1
+                        }
+                        : f mean / sum # f W
+                        : ~ f var - / sq # f W * mean mean
+                        ? < var 0.0 { = var 0.0 } {}
+                        : f collapse - 1.0 / ( sqrt var ) ref_sd
+                        ? > collapse frac { = frac collapse } {}
+                    } {}
+                    ? | < wf 0 > frac worst { = worst frac = wf j } {}
+                }
+                = j + j 1
+            }
+            ( vec_free [f] tail )
+            ? < wf 0 { ^ @ FlatOut { F 0.0 -1 } } {}
+            ^ @ FlatOut { T worst wf }
+        }
+        F → { ^ @ FlatOut { F 0.0 -1 } }
+    }
 }
 
 // Train the autoencoder from the ring: encode + project the raw points
@@ -817,10 +1382,15 @@ $ `src/store.nu`
         ^ ( string_from `not enough decodable data points` )
     } {}
 
-    ( meta_refresh_feats mm )
-    : i nfeat ( vec_len [String] . mm feats )
+    // The net freezes its own feature order: what the metadata encodes
+    // today, which may have grown past the forests' frozen order since
+    // their last train. That order is theirs — refreshing it here would
+    // shift the columns their scaler and trees were fitted to.
+    : ( Vec String ) afeats ( meta_derived_feats mm )
+    : i nfeat ( vec_len [String] afeats )
     ? <= nfeat 0 {
         ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
+        ( vec_free_with [String] afeats \ String x → v { ( string_free x ) } )
         ^ ( string_from `no numeric features` )
     } {}
     : ( Vec f ) raw ( vec_with_cap [f] * ne nfeat )
@@ -828,7 +1398,7 @@ $ `src/store.nu`
     ~ < k ne {
         ?? ( vec_get [EncPoint] encs k ) {
             T p → {
-                : ( Vec f ) row ( anomaly_project p . mm feats )
+                : ( Vec f ) row ( anomaly_project p afeats )
                 ( vec_extend [f] raw row )
                 ( vec_free [f] row )
             }
@@ -838,13 +1408,15 @@ $ `src/store.nu`
     }
     ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
 
-    : AeTrainOut out ( ae_train_matrix raw ne nfeat . mm feats hidden contamination . mo min_points )
+    : AeTrainOut out ( ae_train_matrix raw ne nfeat afeats hidden contamination . mo min_points )
+    ( vec_free_with [String] afeats \ String x → v { ( string_free x ) } )
     ( vec_free [f] raw )
     : ~ AeModel nae . out ae
     ? . nae trained {
         = . nae trained_at now
         ( ae_free . mo ae )
         = . mo ae nae
+        = . mo ae_stale F
         ( __an_ensure_ae_cfg mo )
         ( meta_bump_epoch mm )
         ( store_save_ae . mo store ( string_data . mo mname ) . mo ae )
@@ -909,8 +1481,23 @@ $ `src/store.nu`
 }
 
 // Score without ingesting: no metadata learning, no ring append, no
-// retrain, no disk writes. Unknown columns/categories project to zeros.
+// retrain, no disk writes. Unknown columns/categories project to zeros;
+// a column the trained model knows and the point leaves out is an
+// error, named — a question about a point must carry the whole point.
 @ model_detect_only * Model mo Json raw → !Verdict String {
+    ? ( meta_is_frozen . mo meta ) {
+        : ( Vec String ) miss ( anomaly_missing_cols . mo meta raw )
+        ? > ( vec_len [String] miss ) 0 {
+            : String names ( string_join miss `, ` )
+            : String e ( string_from `Missing columns: ` )
+            ( string_push_str e ( string_data names ) )
+            ( string_push_str e `. A point to score carries every column the model knows; columns it does not know are ignored.` )
+            ( string_free names )
+            ( vec_free_with [String] miss \ String x → v { ( string_free x ) } )
+            ^ @ !Verdict String { F e }
+        } {}
+        ( vec_free_with [String] miss \ String x → v { ( string_free x ) } )
+    } {}
     : !EncPoint String er ( anomaly_preprocess_ro . mo meta raw )
     ?? er {
         T p → {
@@ -1324,66 +1911,73 @@ $ `src/store.nu`
     : AeModel cae . mo ae
     : f athr . cae threshold
     : i n ( vec_len [String] . mo lines )
-    : ~ i k 0
-    ~ < k n {
+    // The window's rows, encoded once and scored by every forest at once;
+    // the ring is ingest-ordered, so the window is one contiguous span.
+    : ~ i lo 0
+    : ~ i hi n
+    ? > from_ts 0 {
+        : ~ i q 0
+        : ~ b run T
+        ~ & run < q n {
+            : ~ i t 0
+            ?? ( vec_get [i] . mo times q ) { T x → { = t x } F _ → {} }
+            ? < t from_ts { = q + q 1 } { = run F }
+        }
+        = lo q
+    } {}
+    ? > to_ts 0 {
+        : ~ i q lo
+        : ~ b run T
+        ~ & run < q n {
+            : ~ i t 0
+            ?? ( vec_get [i] . mo times q ) { T x → { = t x } F _ → {} }
+            ? <= t to_ts { = q + q 1 } { = run F }
+        }
+        = hi q
+    } {}
+    : *Hist h ( __an_hist_build mo + - lo ( __an_hist_width mo ) 1 hi )
+    : ~ i k lo
+    ~ < k hi {
         : ~ i ts 0
         ?? ( vec_get [i] . mo times k ) { T t → { = ts t } F _ → {} }
         : ~ b inside & || <= from_ts 0 >= ts from_ts || <= to_ts 0 <= ts to_ts
         ? & inside ( _an_label_is labels ( _mlp_iget label_of k ) ANOM_LABEL_FP ) { = inside F = excluded + excluded 1 } {}
-        ? inside {
-            ?? ( vec_get [String] . mo lines k ) {
-                T l → {
-                    : !Json JsonError jr ( json_parse ( string_data l ) )
-                    ?? jr {
-                        T j → {
-                            : !EncPoint String er ( anomaly_preprocess_ro mm j )
-                            ?? er {
-                                T p → {
-                                    : Verdict vd ( __an_score_enc_upto mo p k )
-                                    ? . vd ready {
-                                        = n_rows + n_rows 1
-                                        ? . vd anomaly { = agg + agg 1 } {}
-                                        : i nvv ( vec_len [VerVerdict] . vd versions )
-                                        : ~ i q 0
-                                        ~ < q nvv {
-                                            ?? ( vec_get [VerVerdict] . vd versions q ) {
-                                                T vv → {
-                                                    : s nm ( string_data . vv vvname )
-                                                    : b is_ae == ( nurl_str_eq nm `autoencoder` ) 1
-                                                    : ~ f own . vv score
-                                                    ? & is_ae > athr 0.0 { = own / own athr } {}
-                                                    : ~ i at ( __an_cal_find items nm )
-                                                    ? < at 0 {
-                                                        = at ( vec_len [CalVer] items )
-                                                        ( vec_push [CalVer] items @ CalVer {
-                                                            ( string_from nm ) . vv cfg_margin 0 0 0.0 0.0 ( vec_new [f] )
-                                                        } )
-                                                    } {}
-                                                    ?? ( vec_get [CalVer] items at ) {
-                                                        T cv → { ( vec_push [f] . cv dfs own ) }
-                                                        F _ → {}
-                                                    }
-                                                }
-                                                F _ → {}
-                                            }
-                                            = q + q 1
-                                        }
-                                    } {}
-                                    ( verdict_free vd )
-                                    ( enc_free p )
-                                }
-                                F e → { ( string_free e ) }
+        ? & inside == ( _mlp_iget . h ok - k . h base ) 1 {
+            : Verdict vd ( __an_score_hist mo h k )
+            ? . vd ready {
+                = n_rows + n_rows 1
+                ? . vd anomaly { = agg + agg 1 } {}
+                : i nvv ( vec_len [VerVerdict] . vd versions )
+                : ~ i q 0
+                ~ < q nvv {
+                    ?? ( vec_get [VerVerdict] . vd versions q ) {
+                        T vv → {
+                            : s nm ( string_data . vv vvname )
+                            : b is_ae == ( nurl_str_eq nm `autoencoder` ) 1
+                            : ~ f own . vv score
+                            ? & is_ae > athr 0.0 { = own / own athr } {}
+                            : ~ i at ( __an_cal_find items nm )
+                            ? < at 0 {
+                                = at ( vec_len [CalVer] items )
+                                ( vec_push [CalVer] items @ CalVer {
+                                    ( string_from nm ) . vv cfg_margin 0 0 0.0 0.0 ( vec_new [f] )
+                                } )
+                            } {}
+                            ?? ( vec_get [CalVer] items at ) {
+                                T cv → { ( vec_push [f] . cv dfs own ) }
+                                F _ → {}
                             }
-                            ( json_free j )
                         }
                         F _ → {}
                     }
+                    = q + q 1
                 }
-                F _ → {}
-            }
+            } {}
+            ( verdict_free vd )
         } {}
         = k + k 1
     }
+    ( __an_hist_free h )
 
     // Sort, then read the summary numbers off the sorted values.
     : i ni ( vec_len [CalVer] items )
@@ -1466,7 +2060,9 @@ $ `src/store.nu`
 // written; the rest are still reported, unapplied, so a dry run and a
 // partial apply show the same picture. Margins are written in the
 // version's own units, rounded to three significant digits, and take
-// effect at the next detect.
+// effect at the next detect. The flatline guard is left out: its margin
+// is a fraction with a fixed meaning (SPEC §5.4), and a stuck sensor is
+// not a 1 % property of a window — set it with the version editor.
 @ model_finetune_at * Model mo f rate i from_ts i to_ts b apply ( Vec String ) only → FineTuneReport {
     : ( Vec FtVer ) items ( vec_new [FtVer] )
     : CalReport cal ( model_calibrate mo from_ts to_ts )
@@ -1476,34 +2072,36 @@ $ `src/store.nu`
         ?? ( vec_get [CalVer] . cal items k ) {
             T cv → {
                 : s nm ( string_data . cv cvname )
-                : f nm_new ( cal_margin_for_rate cv rate )
-                : ~ b wanted T
-                : i nonly ( vec_len [String] only )
-                ? > nonly 0 {
-                    = wanted F
-                    : ~ i q 0
-                    ~ < q nonly {
-                        ?? ( vec_get [String] only q ) {
-                            T o → { ? == ( nurl_str_eq ( string_data o ) nm ) 1 { = wanted T } {} }
-                            F _ → {}
+                ? ( _an_is_flat_name nm ) {} {
+                    : f nm_new ( cal_margin_for_rate cv rate )
+                    : ~ b wanted T
+                    : i nonly ( vec_len [String] only )
+                    ? > nonly 0 {
+                        = wanted F
+                        : ~ i q 0
+                        ~ < q nonly {
+                            ?? ( vec_get [String] only q ) {
+                                T o → { ? == ( nurl_str_eq ( string_data o ) nm ) 1 { = wanted T } {} }
+                                F _ → {}
+                            }
+                            = q + q 1
                         }
-                        = q + q 1
-                    }
-                } {}
-                : ~ b did F
-                ? & apply wanted { = did ( model_set_margin mo nm nm_new ) } {}
-                ( vec_push [FtVer] items @ FtVer {
-                    ( string_from nm )
-                    . cv cur_margin
-                    nm_new
-                    . cv n
-                    . cv flagged
-                    ( cal_flagged_at cv nm_new )
-                    . cv worst
-                    did
-                    from_ts
-                    . cal n_rows
-                } )
+                    } {}
+                    : ~ b did F
+                    ? & apply wanted { = did ( model_set_margin mo nm nm_new ) } {}
+                    ( vec_push [FtVer] items @ FtVer {
+                        ( string_from nm )
+                        . cv cur_margin
+                        nm_new
+                        . cv n
+                        . cv flagged
+                        ( cal_flagged_at cv nm_new )
+                        . cv worst
+                        did
+                        from_ts
+                        . cal n_rows
+                    } )
+                }
             }
             F _ → {}
         }
@@ -1798,6 +2396,11 @@ $ `src/store.nu`
         = k + k 1
     }
     ( finetune_free ft )
+    // The flatline guard keeps its configured margin (finetune leaves it
+    // alone); it is reported so the list is every version that judged.
+    ? & ( meta_version_enabled . mo meta ANOM_FLAT_NAME F ) ( __an_flat_fitted mo ) {
+        ( json_obj_set margins ANOM_FLAT_NAME ( json_float ( meta_version_margin . mo meta ANOM_FLAT_NAME ANOM_FLAT_MARGIN ) ) )
+    } {}
     ^ @ WholeTrain { margins notes }
 }
 
@@ -1939,24 +2542,26 @@ $ `src/store.nu`
                 ? . vc enabled {
                     : s nm ( string_data . vc vname )
                     ? == ( nurl_str_eq nm `autoencoder` ) 1 {
-                        ? . cae trained { ( vec_push [String] out ( string_from nm ) ) } {}
+                        ? & . cae trained ! . mo ae_stale { ( vec_push [String] out ( string_from nm ) ) } {}
                     } { ? ( _an_is_guard_name nm ) {
                             ? > ( vec_len [f] . . mo sc mean ) 0 { ( vec_push [String] out ( string_from nm ) ) } {}
-                        } {
-                            : ~ b has F
-                            : i nf ( vec_len [VerModel] . mo forests )
-                            : ~ i j 0
-                            ~ < j nf {
-                                ?? ( vec_get [VerModel] . mo forests j ) {
-                                    T vm → {
-                                        ? == ( nurl_str_eq ( string_data . vm vname ) nm ) 1 { = has T } {}
+                        } { ? ( _an_is_flat_name nm ) {
+                                ? ( __an_flat_fitted mo ) { ( vec_push [String] out ( string_from nm ) ) } {}
+                            } {
+                                : ~ b has F
+                                : i nf ( vec_len [VerModel] . mo forests )
+                                : ~ i j 0
+                                ~ < j nf {
+                                    ?? ( vec_get [VerModel] . mo forests j ) {
+                                        T vm → {
+                                            ? == ( nurl_str_eq ( string_data . vm vname ) nm ) 1 { = has T } {}
+                                        }
+                                        F _ → {}
                                     }
-                                    F _ → {}
+                                    = j + j 1
                                 }
-                                = j + j 1
-                            }
-                            ? has { ( vec_push [String] out ( string_from nm ) ) } {}
-                        } }
+                                ? has { ( vec_push [String] out ( string_from nm ) ) } {}
+                            } } }
                 } {}
             }
             F _ → {}
@@ -1979,59 +2584,45 @@ $ `src/store.nu`
     ^ -1
 }
 
-// Score ring row `at`, returning the verdict folded into cache words.
-@ __an_scan_row * Model mo ( Vec String ) vnames i at → ScoredPt {
+// Score ring row `at` out of the encoded history `h`, returning the
+// verdict folded into cache words. `at` is the row being scored, so the
+// ring entries AFTER it are the future: a timevector window ends at `at`,
+// not at the ring tip.
+@ __an_scan_row * Model mo * Hist h ( Vec String ) vnames i at → ScoredPt {
     : ~ i st ANOM_SC_NOT_READY
     : ~ f sc 0.0
     : ~ f sv 0.0
     : ~ b anom F
     : ~ i pres 0
     : ~ i flag 0
-    ?? ( vec_get [String] . mo lines at ) {
-        T l → {
-            : !Json JsonError jr ( json_parse ( string_data l ) )
-            ?? jr {
-                T j → {
-                    : !EncPoint String er ( anomaly_preprocess_ro . mo meta j )
-                    ?? er {
-                        T p → {
-                            // `at` is the row being scored, so the ring
-                            // entries AFTER it are the future: a timevector
-                            // window must end at `at`, not at the ring tip.
-                            : Verdict vd ( __an_score_enc_upto mo p at )
-                            ? . vd ready {
-                                = st ANOM_SC_SCORED
-                                = sc . vd score
-                                = sv . vd severity
-                                = anom . vd anomaly
-                                : i nvv ( vec_len [VerVerdict] . vd versions )
-                                : ~ i q 0
-                                ~ < q nvv {
-                                    ?? ( vec_get [VerVerdict] . vd versions q ) {
-                                        T vv → {
-                                            : i bit ( __an_vname_bit vnames ( string_data . vv vvname ) )
-                                            ? >= bit 0 {
-                                                = pres | pres << 1 bit
-                                                ? . vv anomaly { = flag | flag << 1 bit } {}
-                                            } {}
-                                        }
-                                        F _ → {}
-                                    }
-                                    = q + q 1
-                                }
+    : i r - at . h base
+    ? & >= r 0 < r . h n {
+        ? == ( _mlp_iget . h ok r ) 1 {
+            : Verdict vd ( __an_score_hist mo h at )
+            ? . vd ready {
+                = st ANOM_SC_SCORED
+                = sc . vd score
+                = sv . vd severity
+                = anom . vd anomaly
+                : i nvv ( vec_len [VerVerdict] . vd versions )
+                : ~ i q 0
+                ~ < q nvv {
+                    ?? ( vec_get [VerVerdict] . vd versions q ) {
+                        T vv → {
+                            : i bit ( __an_vname_bit vnames ( string_data . vv vvname ) )
+                            ? >= bit 0 {
+                                = pres | pres << 1 bit
+                                ? . vv anomaly { = flag | flag << 1 bit } {}
                             } {}
-                            ( verdict_free vd )
-                            ( enc_free p )
                         }
-                        F e → { ( string_free e ) }
+                        F _ → {}
                     }
-                    ( json_free j )
+                    = q + q 1
                 }
-                F _ → {}
-            }
-        }
-        F _ → {}
-    }
+            } {}
+            ( verdict_free vd )
+        } {}
+    } {}
     : ~ i ts 0
     ?? ( vec_get [i] . mo times at ) { T t → { = ts t } F _ → {} }
     ^ @ ScoredPt { at ts sc sv anom pres flag }
@@ -2103,6 +2694,10 @@ $ `src/store.nu`
     : ~ i misses 0
     : ~ i anoms 0
     : ~ b dirty F
+    // The rows the misses need, encoded once — on the first miss, so a scan
+    // the cache answers in full parses nothing. A timevector window reaches
+    // back width−1 rows before the first row in the window.
+    : ~ * Hist h # *Hist 0
     : ~ i j lo
     ~ < j hi {
         // Cache index of ring row j: lifetime index minus the cache's base.
@@ -2138,7 +2733,8 @@ $ `src/store.nu`
             ( vec_push [ScoredPt] pts @ ScoredPt { j ts sc sv anom pres flag } )
         } {
             = misses + misses 1
-            : ScoredPt row ( __an_scan_row mo vnames j )
+            ? == # i h 0 { = h ( __an_hist_build mo + - lo ( __an_hist_width mo ) 1 hi ) } {}
+            : ScoredPt row ( __an_scan_row mo h vnames j )
             ? . row sp_anomaly { = anoms + anoms 1 } {}
             ( vec_push [ScoredPt] pts row )
             = dirty T
@@ -2195,6 +2791,7 @@ $ `src/store.nu`
         ( scorecache_free nc )
     } {}
     ( scorecache_free cache )
+    ( __an_hist_free h )
 
     ^ @ ScanOut { pts vnames epoch total considered hits misses anoms }
 }
@@ -2244,7 +2841,7 @@ $ `src/store.nu`
 @ model_ae_contrib * Model mo Json raw i topk → ( Vec AeContrib ) {
     : ( Vec AeContrib ) out ( vec_new [AeContrib] )
     : AeModel cae . mo ae
-    ? . cae trained {} { ^ out }
+    ? & . cae trained ! . mo ae_stale {} { ^ out }
     : !EncPoint String er ( anomaly_preprocess_ro . mo meta raw )
     ?? er {
         T p → {
