@@ -42,6 +42,58 @@ $ `src/orgfiles.nu`
 : f ANA_TARGET_RATE 0.01
 : i ANA_MIN_ROWS 10
 : i ANA_INLINE_MAX 10000  // anomalies returned in the response body; beyond it, a link
+: f ANA_STANDOUT 3.0  // separation from which the flagged rows stand apart from the file
+
+// Whether the flagged rows stand apart from the file or are merely its
+// tail. The margins are the file's own 1 % quantile, so about 1 % of ANY
+// file is flagged and severity says ~1 for all of them — a lone spike
+// sets the very margin it is measured against. What tells a spike from
+// a tail is the gap below the cut: the worst row against the row at
+// twice the rate (the 2k-th worst). A file's tail thins gradually and
+// the ratio stays near 1 — the worst of 1500 Gaussian draws is ~3.3 σ,
+// the 30th ~2.3 σ; a real outlier sits several times above the rows
+// just under the cut. Read on range_guard alone, whose score is a
+// linear magnitude (−max |z|, in standard deviations). A forest's
+// decision function saturates, and the autoencoder's reconstruction
+// error is heavy-tailed even on Gaussian data (the net fits the bulk),
+// so their ratios say nothing about the file. −1 when range_guard gave
+// no verdict (disabled, or too few rows).
+@ _ana_separation * Model mo f rate → f {
+    : CalReport cr ( model_calibrate mo 0 0 )
+    : ~ f sep -1.0
+    : i ni ( vec_len [CalVer] . cr items )
+    : ~ i k 0
+    ~ < k ni {
+        ?? ( vec_get [CalVer] . cr items k ) {
+            T cv → {
+                : i n ( vec_len [f] . cv dfs )
+                ? & == ( nurl_str_eq ( string_data . cv cvname ) `range_guard` ) 1 > n 1 {
+                    : *f dp ( vec_data [f] . cv dfs )
+                    : ~ i cut # i ( float_round * rate # f n )
+                    ? < cut 1 { = cut 1 } {}
+                    : ~ i j - * 2 cut 1
+                    ? >= j n { = j - n 1 } {}
+                    : f w - 0.0 . dp 0
+                    : f ref - 0.0 . dp j
+                    ? > w 0.0 { = sep ? > ref 0.0 / w ref 1000000.0 } { = sep 1.0 }
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( cal_free cr )
+    ^ sep
+}
+
+// One sentence on what the flagged rows are worth: the margins are set
+// from the file itself, so the count alone says nothing.
+@ _ana_reading i nanom f sep → s {
+    ? == nanom 0 { ^ `nothing flagged: no row falls past the margins the file's own scores set` } {}
+    ? < sep 0.0 { ^ `the margins are set from the file itself, so its least typical 1 % is flagged whatever it holds; range_guard gave no verdict, so whether any row stands apart from that tail is not read` } {}
+    ? < sep ANA_STANDOUT { ^ `nothing stands out: the margins are set from the file itself, so its least typical 1 % is flagged whatever it holds — and the worst row is under three times as far out, in standard deviations, as the rows just below the cut (separation < 3): the tail of the file rather than a fault` } {}
+    ^ `the flagged rows stand apart from the file: the worst row is separation times as many standard deviations out as the rows just below the 1 % cut — a fault or a real event, not the tail`
+}
 
 // ── The task directory ────────────────────────────────────────────────
 
@@ -498,6 +550,7 @@ $ `src/orgfiles.nu`
     ? < minvotes 1 { = minvotes 1 } {}
     : Json pts ( json_arr_new )
     : ~ i nanom 0
+    : ~ f worst 0.0
     : i np ( vec_len [ScoredPt] . so pts )
     = k 0
     ~ < k np {
@@ -520,6 +573,7 @@ $ `src/orgfiles.nu`
                 }
                 ? & . r sp_anomaly >= votes minvotes {
                     = nanom + nanom 1
+                    ? > . r sp_severity worst { = worst . r sp_severity } {}
                     : Json o ( json_obj_new )
                     ( json_obj_set o `index` ( json_int . r sp_idx ) )
                     ( json_obj_set o `timestamp` ( json_int . r sp_ts ) )
@@ -563,6 +617,9 @@ $ `src/orgfiles.nu`
         = k + k 1
     }
 
+    : ~ f sep ( _ana_separation mo ANA_TARGET_RATE )
+    ? > sep 0.0 { = sep / ( float_round * sep 100.0 ) 100.0 } {}
+
     // The result file, into the organisation's folder.
     : String label ( _ana_jstr params `name` )
     : ~ String base ( orgfiles_safe_name ( string_data label ) )
@@ -586,6 +643,9 @@ $ `src/orgfiles.nu`
     ( json_obj_set res `votes` ( json_int minvotes ) )
     ( json_obj_set res `anomalies` ( json_int nanom ) )
     ( json_obj_set res `considered` ( json_int . so considered ) )
+    ( json_obj_set res `worst_severity` ( json_float worst ) )
+    ( json_obj_set res `separation` ( json_float sep ) )
+    ( json_obj_set res `reading` ( json_str_lit ( _ana_reading nanom sep ) ) )
     ( json_obj_set res `model_versions` ( json_clone vers ) )
     ( json_obj_set res `margins` ( json_clone margins ) )
     : Json tj ( json_clone plan )
@@ -612,6 +672,9 @@ $ `src/orgfiles.nu`
         ( json_obj_set st `votes` ( json_int minvotes ) )
         ( json_obj_set st `anomalies` ( json_int nanom ) )
         ( json_obj_set st `considered` ( json_int . so considered ) )
+        ( json_obj_set st `worst_severity` ( json_float worst ) )
+        ( json_obj_set st `separation` ( json_float sep ) )
+        ( json_obj_set st `reading` ( json_str_lit ( _ana_reading nanom sep ) ) )
         ( json_obj_set st `model_versions` vers )
         ( json_obj_set st `margins` margins )
         ( json_obj_set st `notes` notes )

@@ -128,7 +128,7 @@ $ `src/dynamic.nu`
     : IngestOut o101 ( ingest_pt mo 26.0 8.0 101 )
     ( check . o101 anomaly `stream: step change flagged` )
     ( check <= . o101 score -0.17 `stream: step change crosses the margin` )
-    ( check == . o101 n_versions 6 `stream: verdict carries all 6 versions` )
+    ( check == . o101 n_versions 7 `stream: verdict carries all 7 versions` )
 
     // detect_only sees the same outlier without touching anything.
     : Json probe ( json_obj_new )
@@ -184,6 +184,7 @@ $ `src/dynamic.nu`
     : i pts_before ( model_n_points mo )
     : Json probe ( json_obj_new )
     ( json_obj_set probe `temp` ( json_float 1000.0 ) )
+    ( json_obj_set probe `load` ( json_float 5.0 ) )
     ( json_obj_set probe `newcol` ( json_float 5.0 ) )
     ( json_obj_set probe `status` ( json_str_lit `newcat` ) )
     : !Verdict String dr ( model_detect_only mo probe )
@@ -191,6 +192,19 @@ $ `src/dynamic.nu`
     ?? dr {
         T vd → { ( verdict_free vd ) ( check T `mech: detect_only succeeds` ) }
         F e → { ( string_free e ) ( check F `mech: detect_only succeeds` ) }
+    }
+    // A point without a column the model knows is refused, by name: scored
+    // as 0 it would be a value nobody sent.
+    : Json half ( json_obj_new )
+    ( json_obj_set half `temp` ( json_float 20.0 ) )
+    : !Verdict String hr ( model_detect_only mo half )
+    ( json_free half )
+    ?? hr {
+        T vd → { ( verdict_free vd ) ( check F `mech: detect_only refuses a point without a known column` ) }
+        F e → {
+            ( check >= ( nurl_str_find ( string_data e ) `Missing columns: load` ) 0 `mech: detect_only refuses a point without a known column` )
+            ( string_free e )
+        }
     }
     : String meta_after ( meta_to_json_str mm )
     ( check ( string_eq meta_before meta_after ) `mech: detect_only leaves metadata untouched` )

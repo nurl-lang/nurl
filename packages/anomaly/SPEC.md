@@ -123,9 +123,16 @@ or categories appear.
 - **categorical** — value stringified; the column's category list is kept
   **sorted** so ordering is deterministic; emitted as one-hot features named
   `col_<category>`. New categories extend the vector (see §4.3 stability rule).
-- **timestamp** — ISO-8601 parsed via `std/time`; expands to
-  `col_hour`, `col_day`, `col_month`, `col_weekday` (float). (Cyclical
-  sin/cos encoding is a candidate refinement, tracked as an open question.)
+- **timestamp** — ISO-8601 parsed via `std/time`, read in the model's
+  time zone; expands to `col_hour_sin/cos`, `col_weekday_sin/cos`,
+  `col_month_sin/cos` (encoding 2, `ANOM_FEAT_ENC`; encoding 1 was the
+  linear UTC `hour/day/month/weekday`, and a model trained under it keeps
+  it until its next retrain, reporting `retrain_required`). A cycle is
+  emitted only when the rows of the last train covered it twice
+  (`__an_cycle_seen` over `Meta.train_span`: hour needs two days, weekday
+  two weeks, month two years; an unknown span keeps every cycle) — a cycle
+  the data has not been round twice is a date, and a month feature over
+  eight days splits them into before and after.
 - Column type may be pinned in metadata (`numeric` / `categorical` /
   `timestamp`) or `auto`-detected on first sight and then frozen.
 
@@ -291,6 +298,38 @@ at its next retrain (`__an_ensure_guard_cfg`), where the epoch bumps and
 the metadata is saved anyway, so the score cache's version bitmask never
 shifts under a live cache. Disabling it mutes it, like the autoencoder:
 there is no forest to drop and nothing to retrain on re-enable.
+
+`missing` (service verdicts) lists the columns the model knows and the
+point left out: they are scored as 0 after standardisation — the training
+mean — so a point is never refused for a gap in the stream, but the reader
+is told. `model_detect_only` is the exception: a bare question about a
+point carries the whole point, so it fails with the columns named.
+
+The **flatline guard** (`flatline`) is the second forestless version and
+the other check the forests cannot make: a sensor that has stopped moving
+sits inside its training range, so every per-point score stays quiet.
+Each retrain fits two references per numeric feature from the
+standardised training matrix (`__an_flat_fit`; `flat_run`, `flat_sd` in
+`Meta`, serialised under `flatline`): the longest run of identical values
+and the `ANOM_FLAT_QUANTILE` (0.05) quantile of the standard deviation over
+sliding windows of `window_size` points (`ANOM_FLAT_WINDOW`, 60, the
+VerCfg's `window_size`). At scoring, the tail of the ring ending at the
+point gives each feature a run fraction `run / max(W, 2·ref_run)` — a
+feature that legitimately sits still for `ref_run` points in training
+needs twice that before it counts — and, while the run is still shorter
+than `W` and the reference is positive, a collapse `1 − sd_window /
+ref_sd`, which catches the gauge that dithers in its last digit rather than
+repeating a value. The decision value is `−max` over the numeric features
+and `feat` names the one, so `score <= −margin` with the default
+`ANOM_FLAT_MARGIN` 0.9 reads "a column has been flat for 90 % of its
+window" (`units` is `fraction`). Features without a reference (a ring
+shorter than `W` at retrain, a non-numeric column) are not watched, so
+`model_scan_versions` lists the version only once it has been fitted.
+Fine-tune leaves its margin alone — a rate target would only ever loosen
+it, since a stuck column is rare in a healthy training set — while
+calibration still reports it; `edit_model` sets it. A column missing for a
+stretch reads as flat (its standardised value repeats), which is what a
+person would call it too.
 
 `severity = −score / margin` (`anom_severity`; `margin = 0` gives 1.0 when
 flagged, 0.0 otherwise) is computed for every version verdict; the
@@ -517,8 +556,9 @@ service so existing dashboards and the `modelmanager` UI keep working:
   units }`: `margin` is the absolute band the score was compared to,
   `decision_margin` the stored setting, and `units` says whether that
   setting is `absolute` on the decision function, `standard_deviations`
-  for the range guard, or, for the autoencoder, `relative_to_threshold`;
-  the range guard's entry also carries `feature`, the one it judged by),
+  for the range guard, `fraction` for the flatline guard, or, for the
+  autoencoder, `relative_to_threshold`; the two guards' entries also
+  carry `feature`, the one they judged by),
   `status`, `model`, echoed `data_point`.
 - `POST /detect_only/<model>` — same body, `Verdict`, no state change.
 - `POST /detect_anomalies` body = `{ file_path, model_name? }` → batch report:
@@ -557,7 +597,11 @@ service so existing dashboards and the `modelmanager` UI keep working:
   flagged point, `0` to omit), `group=runs` (list the events, below),
   `refresh=1` (ignore the cache). Response:
   `data_points_count`, `considered`, `anomalies`, `votes`, `runs`, `returned`,
-  `model_versions`, `cache: { hits, misses, epoch }` and `points`, each
+  `model_versions`, `flagged_by_version { name: rows }` (over the whole
+  window, before any filter), `window { from, to, one_time }` (`one_time`:
+  every row of the window carries one stamp — a file imported without its
+  time column named — so the time-window versions all see one instant),
+  `cache: { hits, misses, epoch }` and `points`, each
   `{ index, timestamp, score, severity, anomaly, votes, run?, versions[], values?, contributions? }`,
   a contribution being `{ feature, error, share, value, expected }` — the
   value the point carried and the autoencoder's reconstruction of it.
@@ -594,8 +638,9 @@ service so existing dashboards and the `modelmanager` UI keep working:
   contamination?: float }` → `training_data_points`, `filtered_anomalies`,
   `reconstruction_threshold`. Both are stored with the net and reused when
   `schedule.autoencoder` retrains it with the forests.
-- `POST /models/dynamic/<model>/import?format=csv|json|jsonl|auto` — the
-  body is the file. The rows' time is read before any lands:
+- `POST /models/dynamic/<model>/import?format=csv|json|jsonl|fmi|auto` —
+  the body is the file (`fmi`, the name the weather service's export comes
+  under, is the CSV reader; an unknown format is 400 naming the four). The rows' time is read before any lands:
   `?inspect=1` returns the columns (`name`, `kind`, `filled`, `sample`)
   and a proposal `time { mode: column|parts|none, column | parts { year,
   month, day, clock | hour, minute, second }, confidence, reason, sample,
@@ -610,7 +655,10 @@ service so existing dashboards and the `modelmanager` UI keep working:
   as parts, year/month/day/hour/minute/second columns under English or
   Finnish names (`Vuosi`, `Kuukausi`, `Päivä`, `Aika`, …). The consumed
   columns are dropped so a year never becomes a feature; `-`, `NA`, `null`
-  and their kin are missing values. Response adds `clock` and `time {
+  and their kin are missing values in a JSON row as in a CSV cell
+  (`__imp_norm_row`: JSON `null` and the markers are dropped, a number
+  quoted as a string is a number), so the three readers hand the model
+  the same record. Response adds `clock` and `time {
   …plan, stamped, failed, first_failure? }`.
 - `POST /models/dynamic/<model>/labels` — body `{ index, label, note? }`,
   `label` one of `false_positive`, `confirmed`, `none` (withdraw). Records
@@ -638,8 +686,9 @@ service so existing dashboards and the `modelmanager` UI keep working:
   without a round trip. `curve=0` omits it. 400 on an untrained model.
   `margin` is the stored value verbatim, and every number of a version is
   in its `units`: `absolute` decision values for a forest,
-  `relative_to_threshold` for the autoencoder (its scores divided by the
-  reconstruction threshold, §5.5). A sorted list of decision values
+  `standard_deviations` for the range guard, `fraction` for the flatline
+  guard, `relative_to_threshold` for the autoencoder (its scores divided
+  by the reconstruction threshold, §5.5). A sorted list of decision values
   can only supply margins at its gaps: when the requested count falls in
   a run of tied values (a stuck sensor, whole days of identical points)
   `cal_margin_for_rate` answers with the nearer edge of the run — the
@@ -673,6 +722,14 @@ service so existing dashboards and the `modelmanager` UI keep working:
   (1 %) over the file, scans, and writes the result — `task_id`, `name`,
   `format`, `rows`, `imported`, `skipped`, `clock`, `target_rate`, `votes`,
   `anomalies`, `considered`, `model_versions`, `margins`, `time`, `notes`,
+  `worst_severity`, `separation`, `reading` — the margins are fitted to
+  the file, so `anomalies` is ~1 % of it whatever it holds; `separation`
+  is the range guard's `|z|` of the worst row over that of the row at
+  twice the cut (a linear magnitude — a forest's decision function
+  saturates and the autoencoder's error is heavy-tailed, so their ratios
+  say nothing; −1 when the guard gave no verdict) and `reading` says in
+  one sentence whether the flagged rows stand apart from the file
+  (`separation ≥ ANA_STANDOUT`, 3) or are its tail —
   `points[] { index, timestamp, score, severity, votes, versions[], contributions[]
   { feature, share, value, expected }, values }` — as
   `<safe name>-<id>.json` into the organisation's folder, then

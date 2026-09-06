@@ -2,7 +2,7 @@
 //
 // A language model talks to the same service the dashboard does, with the
 // same credential, and gets exactly what that credential may do: the tool
-// list is computed per caller (a viewer never sees `delete_model`), and
+// list is computed per caller (a viewer never sees `ingest_point`), and
 // every tool runs as an in-process HTTP request through the service's own
 // router, so the API's authorisation gates are the only gates — there is
 // no second rule book to drift.
@@ -39,7 +39,7 @@ $ `src/authz.nu`
 $ `src/imptime.nu`
 
 // One version for the CLI banner and the MCP handshake.
-: s ANOMALY_VERSION `0.14.1`
+: s ANOMALY_VERSION `0.15.0`
 
 // ── Wiring ───────────────────────────────────────────────────────────
 
@@ -573,9 +573,58 @@ $ `src/imptime.nu`
     ^ p
 }
 
-// A tool that needs a model name; `` when the argument is missing.
-@ __mcp_need_model Json a → String {
-    ^ ( __mcp_arg_str a `model` )
+// A tool that needs a model name; `` when the argument is missing. A
+// person calls a model by its alias as readily as by its name, and an
+// agent repeats what it was told — so a name that is no stored model is
+// looked up as an alias among the models the caller may see (the
+// listing is the organisation's own, so nothing outside it resolves)
+// and the model's real name is used. The lookup costs a listing and
+// only runs when the name as given is not a model (404, or 400 when
+// it is not even a valid name).
+@ __mcp_need_model Json a Json ctx → String {
+    : String given ( __mcp_arg_str a `model` )
+    ? > ( string_len given ) 0 {} { ^ given }
+    : String q ( string_new )
+    : String mp ( __mcp_model_path `/models/dynamic/` given `/metadata` )
+    : ApiOut probe ( __mcp_api ctx `GET` ( string_data mp ) q @ ?Json { F @ Json { JNull } } )
+    ( string_free mp )
+    // 404: no such model; 400: not even a model name (an alias may carry
+    // spaces and accents, a name may not).
+    : b missing | == . probe status 404 == . probe status 400
+    ( __mcp_api_out_free probe )
+    ? missing {} { ( string_free q ) ^ given }
+    : ApiOut o ( __mcp_api ctx `GET` `/models/dynamic` q @ ?Json { F @ Json { JNull } } )
+    ( string_free q )
+    : ~ String real ( string_new )
+    ? ( __mcp_api_ok o ) {
+        : String want ( string_to_lower given )
+        ?? ( json_obj_get . o body `models` ) {
+            T ms → {
+                ( json_obj_each ms \ s name Json mj → v {
+                    ? > ( string_len real ) 0 {} {
+                        ?? ( json_obj_get mj `alias` ) {
+                            T av → {
+                                ? ( json_is_str av ) {
+                                    : String al ( string_from ( json_str_data av ) )
+                                    : String all ( string_to_lower al )
+                                    ? & > ( string_len all ) 0 ( string_eq all want ) { ( string_push_str real name ) } {}
+                                    ( string_free all )
+                                    ( string_free al )
+                                } {}
+                            }
+                            F _ → {}
+                        }
+                    }
+                } )
+            }
+            F _ → {}
+        }
+        ( string_free want )
+    } {}
+    ( __mcp_api_out_free o )
+    ? > ( string_len real ) 0 { ( string_free given ) ^ real } {}
+    ( string_free real )
+    ^ given
 }
 
 @ __mcp_no_model → Json {
@@ -653,7 +702,48 @@ $ `src/imptime.nu`
         }
         F _ → {}
     }
+    : Json w ( __mcp_health_meta mj )
+    ? > ( json_arr_len w ) 0 { ( json_obj_set m `warnings` w ) } { ( json_free w ) }
     ^ m
+}
+
+// What a reader should know about a model before trusting its verdicts,
+// from its metadata alone: a version with no band, a ring that has
+// evicted history, a feature order the encoding has moved past. Empty
+// when nothing stands out; a summary adds what only a scan can see.
+@ __mcp_health_meta Json mj → Json {
+    : Json w ( json_arr_new )
+    : i seen ( __mcp_int_of mj `n_points_seen` )
+    : i mx ( __mcp_int_of mj `max_data_points` )
+    ? & > mx 0 > seen mx {
+        : String s ( string_from `ring full: the newest ` )
+        ( string_push_int s mx )
+        ( string_push_str s ` of ` )
+        ( string_push_int s seen )
+        ( string_push_str s ` points are stored; the rest were evicted, and every window and retrain sees only what is stored` )
+        ( json_arr_push w ( json_str_lit ( string_data s ) ) )
+        ( string_free s )
+    } {}
+    ?? ( json_obj_get mj `retrain_required` ) {
+        T v → { ? ( json_as_bool v ) { ( json_arr_push w ( json_str_lit `retrain required: the feature order predates the current calendar encoding; retrain re-encodes the ring` ) ) } {} }
+        F _ → {}
+    }
+    ?? ( json_obj_get mj `versions` ) {
+        T vs → {
+            ( json_obj_each vs \ s vn Json vo → v {
+                : ~ b on T
+                ?? ( json_obj_get vo `enabled` ) { T e → { = on ( json_as_bool e ) } F _ → {} }
+                ? & on == ( __mcp_f_of vo `decision_margin` ) 0.0 {
+                    : String s ( string_from vn )
+                    ( string_push_str s `: margin 0 — no band above its raw threshold, so it flags every row it scores past that line; calibration shows what a margin would flag, finetune sets one` )
+                    ( json_arr_push w ( json_str_lit ( string_data s ) ) )
+                    ( string_free s )
+                } {}
+            } )
+        }
+        F _ → {}
+    }
+    ^ w
 }
 
 @ __mcp_t_list_models Json a Json ctx → Json {
@@ -683,8 +773,56 @@ $ `src/imptime.nu`
     ^ ( __mcp_result_json out )
 }
 
+// A categorical column's levels, fit for a context window: a short list
+// whole, a long one (a time-of-day text, an id) as its count and a
+// sample — 144 dummies listed twice tell a reader nothing the count
+// does not.
+: i MCP_CATS_WHOLE 12
+: i MCP_CATS_SAMPLE 6
+: i MCP_FEATS_WHOLE 40
+
+@ __mcp_cats_brief Json cats → Json {
+    : Json out ( json_obj_new )
+    ( json_obj_each cats \ s col Json lv → v {
+        : i n ( json_arr_len lv )
+        ? <= n MCP_CATS_WHOLE { ( json_obj_set out col ( json_clone lv ) ) } {
+            : Json o ( json_obj_new )
+            ( json_obj_set o `levels` ( json_int n ) )
+            : Json smp ( json_arr_new )
+            : ~ i k 0
+            ~ < k MCP_CATS_SAMPLE {
+                ?? ( json_arr_get lv k ) { T x → { ( json_arr_push smp ( json_clone x ) ) } F _ → {} }
+                = k + k 1
+            }
+            ( json_obj_set o `sample` smp )
+            ( json_obj_set o `note` ( json_str_lit `a level this many-valued is one feature per value; a time or an id read as text is better dropped from the model (fork_model with fields) or encoded as a number` ) )
+            ( json_obj_set out col o )
+        }
+    } )
+    ^ out
+}
+
+// The feature order, whole when short; otherwise its count, the first
+// names and how many were left out.
+@ __mcp_feats_brief Json feats → Json {
+    : Json out ( json_obj_new )
+    : i n ( json_arr_len feats )
+    ( json_obj_set out `count` ( json_int n ) )
+    ? <= n MCP_FEATS_WHOLE { ( json_obj_set out `names` ( json_clone feats ) ) } {
+        : Json names ( json_arr_new )
+        : ~ i k 0
+        ~ < k MCP_FEATS_WHOLE {
+            ?? ( json_arr_get feats k ) { T x → { ( json_arr_push names ( json_clone x ) ) } F _ → {} }
+            = k + k 1
+        }
+        ( json_obj_set out `names` names )
+        ( json_obj_set out `omitted` ( json_int - n MCP_FEATS_WHOLE ) )
+    }
+    ^ out
+}
+
 @ __mcp_t_describe_model Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : String path ( __mcp_model_path `/models/dynamic/` model `/metadata` )
     : String q ( string_new )
@@ -702,8 +840,8 @@ $ `src/imptime.nu`
     ( __mcp_copy b `clock` out )
     ( __mcp_copy b `created` out )
     ( __mcp_copy b `column_types` out )
-    ( __mcp_copy b `categories` out )
-    ( __mcp_copy b `feature_names` out )
+    ?? ( json_obj_get b `categories` ) { T c → { ( json_obj_set out `categories` ( __mcp_cats_brief c ) ) } F _ → {} }
+    ?? ( json_obj_get b `feature_names` ) { T f → { ( json_obj_set out `features` ( __mcp_feats_brief f ) ) } F _ → {} }
     ( __mcp_copy b `n_points_seen` out )
     ( __mcp_copy b `max_data_points` out )
     ( __mcp_training_of b out )
@@ -720,6 +858,13 @@ $ `src/imptime.nu`
             ( __mcp_copy ae `training_data_points` ao )
             ( __mcp_copy ae `layer_sizes` ao )
             ( __mcp_when_of ae `trained_at` ao `trained` F )
+            ?? ( json_obj_get ae `retrain_required` ) {
+                T v → { ? ( json_as_bool v ) {
+                        ( json_obj_set ao `retrain_required` ( json_bool T ) )
+                        ( json_obj_set ao `note` ( json_str_lit `The net was trained on a feature order the model no longer encodes; it gives no verdict until train_autoencoder or the next retrain replaces it.` ) )
+                    } {} }
+                F _ → {}
+            }
             ( json_obj_set out `autoencoder` ao )
         }
         F _ → {}
@@ -819,7 +964,7 @@ $ `src/imptime.nu`
 }
 
 @ __mcp_t_anomalies Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : ~ i count ( __mcp_arg_int a `count` 20 )
     ? <= count 0 { = count 20 } {}
@@ -877,7 +1022,7 @@ $ `src/imptime.nu`
 }
 
 @ __mcp_t_anomaly_summary Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : ~ i buckets ( __mcp_arg_int a `buckets` 12 )
     ? <= buckets 0 { = buckets 12 } {}
@@ -1103,6 +1248,56 @@ $ `src/imptime.nu`
         ( json_obj_set out `top_features` top )
     } {}
     ( vec_free_with [FeatShare] feats \ FeatShare x → v { ( string_free . x name ) } )
+
+    // Health: what the window says about the model itself. A rate of
+    // nothing or of everything is a margin problem or a stale version,
+    // not a fact about the stream; a window of rows all stamped the same
+    // second was imported without its time.
+    : Json warn ( json_arr_new )
+    ? > considered 0 {
+        ? == nanom 0 {
+            ( json_arr_push warn ( json_str_lit `no row in the window is flagged: margins may be loose for this data — calibration shows the rate each margin would give, finetune {rate: 0.01} sets them` ) )
+        } {}
+        ? >= rate 0.5 {
+            : String s ( string_from `the model flags ` )
+            ( string_push_int s # i ( float_round * rate 100.0 ) )
+            ( string_push_str s ` % of the window: a margin this tight, or a version trained on data unlike this window, says nothing about the stream — see which version below, then finetune {rate: 0.01} or retrain` )
+            ( json_arr_push warn ( json_str_lit ( string_data s ) ) )
+            ( string_free s )
+        } {}
+        ?? ( json_obj_get b `flagged_by_version` ) {
+            T fbv → {
+                ( json_obj_each fbv \ s vn Json cnt → v {
+                    : i c ( json_as_int cnt )
+                    ? >= * c 2 considered {
+                        ? >= rate 0.5 {} {
+                            : String s ( string_from vn )
+                            ( string_push_str s ` flags ` )
+                            ( string_push_int s c )
+                            ( string_push_str s ` of ` )
+                            ( string_push_int s considered )
+                            ( string_push_str s ` rows in the window` )
+                            ? ( _an_is_flat_name vn ) { ( string_push_str s `: a column stood still for that long — a sensor to check, not a margin to move` ) } {}
+                            ( json_arr_push warn ( json_str_lit ( string_data s ) ) )
+                            ( string_free s )
+                        }
+                    } {}
+                } )
+            }
+            F _ → {}
+        }
+        ?? ( json_obj_get b `window` ) {
+            T wj → {
+                : ~ b one F
+                ?? ( json_obj_get wj `one_time` ) { T v → { = one ( json_as_bool v ) } F _ → {} }
+                ? & one > considered 1 {
+                    ( json_arr_push warn ( json_str_lit `every row in the window carries the same timestamp — a file imported without its time column named does this — so the time windows (short_term, daily, weekly, seasonal) all see one instant; re-import with the time column named, or fork with a count clock` ) )
+                } {}
+            }
+            F _ → {}
+        }
+    } {}
+    ? > ( json_arr_len warn ) 0 { ( json_obj_set out `warnings` warn ) } { ( json_free warn ) }
     ( json_obj_set out `next` ( json_str_lit `anomalies {model, count, from/to/last} lists the rows; point {model, index} shows one in full; calibration shows how the margins sit.` ) )
     ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
@@ -1191,7 +1386,7 @@ $ `src/imptime.nu`
 }
 
 @ __mcp_t_points Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : ~ i count ( __mcp_arg_int a `count` 20 )
     ? <= count 0 { = count 20 } {}
@@ -1234,7 +1429,7 @@ $ `src/imptime.nu`
 }
 
 @ __mcp_t_point Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     ? ( __mcp_arg_has a `index` ) {} { ( string_free model ) ^ ( mcp_tool_result_error `index: required — the ring index an anomalies row carries` ) }
     : i idx ( __mcp_arg_int a `index` -1 )
@@ -1274,8 +1469,32 @@ $ `src/imptime.nu`
 
 // ── Tools: calibration and scoring ───────────────────────────────────
 
+// Too quiet, too loud, or about right: the one-word reading of a flag
+// rate over a window. A window too small to show 1 % says nothing. The
+// alert rate a margin aims for is ANOM_FT_RATE (1 %); a version flagging
+// nothing has no evidence it would flag anything, one flagging a tenth
+// of the window is describing the window, not its anomalies.
+// The flatline guard's margin has a fixed meaning (the fraction of the
+// window a column has been stuck for), not a rate to aim at: a window
+// where it flags nothing is a window where no column stuck, and a
+// window where it flags a tenth is a column that was stuck a tenth of
+// the time — neither says anything about the margin.
+@ __mcp_flat_reading i n f rate → s {
+    ? < n 100 { ^ `too few rows to read (under 100)` } {}
+    ? == rate 0.0 { ^ `no column stuck in this window` } {}
+    ^ `a column was stuck for this share of the window — see anomalies for which; the margin is a fraction with a fixed meaning, not a rate to tune`
+}
+
+@ __mcp_cal_reading i n f rate → s {
+    ? < n 100 { ^ `too few rows to read (under 100)` } {}
+    ? == rate 0.0 { ^ `quiet: flags nothing here — the margin may be loose; margin_for_rate shows the one for 1 %` } {}
+    ? >= rate 0.1 { ^ `loud: flags a tenth or more of the window — the margin is too tight, or the version was trained on data unlike this; finetune {rate: 0.01} sets a margin from this window` } {}
+    ? > rate 0.03 { ^ `louder than the 1 % a margin aims for` } {}
+    ^ `on target: near the 1 % a margin aims for`
+}
+
 @ __mcp_t_calibration Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : String q ( string_new )
     : Json werr ( __mcp_q_window a q )
@@ -1324,6 +1543,11 @@ $ `src/imptime.nu`
                 ( __mcp_copy_rounded v `rate` one 4 )
                 ( __mcp_copy_rounded v `worst` one 4 )
                 ( __mcp_copy_rounded v `median` one 4 )
+                ? ( _an_is_flat_name vn ) {
+                    ( json_obj_set one `reading` ( json_str_lit ( __mcp_flat_reading ( __mcp_int_of v `n` ) ( __mcp_f_of v `rate` ) ) ) )
+                } {
+                    ( json_obj_set one `reading` ( json_str_lit ( __mcp_cal_reading ( __mcp_int_of v `n` ) ( __mcp_f_of v `rate` ) ) ) )
+                }
                 ?? ( json_obj_get v `margin_for_rate` ) {
                     T mfr → {
                         : Json mo ( json_obj_new )
@@ -1346,7 +1570,15 @@ $ `src/imptime.nu`
         }
         F _ → {}
     }
-    ( json_obj_set out `reading` ( json_str_lit `A version flags a row when its score is at or below -margin (score = decision function; the more negative, the more anomalous); rate = flagged / n over this window. margin_for_rate gives, per requested rate, the nearest margin the window's scores can supply: when scores tie at the cut the achieved rate differs from the requested one (exact = false) — a run of identical scores is taken or left whole. Margins are shown exactly as stored, in each version's own units (units: a forest's margin is absolute on its decision function; the autoencoder's is a fraction of its reconstruction threshold, and its scores here are scaled the same way; range_guard's is a count of standard deviations — its score is -max|z| over the features, and it names the feature). finetune {model, rate} sets them.` ) )
+    ?? ( json_obj_get b `aggregate` ) {
+        T ag → {
+            : ~ i n 0
+            ?? ( json_obj_get b `window` ) { T w → { = n ( __mcp_int_of w `rows` ) } F _ → {} }
+            ( json_obj_set out `verdict` ( json_str_lit ( __mcp_cal_reading n ( __mcp_f_of ag `rate` ) ) ) )
+        }
+        F _ → {}
+    }
+    ( json_obj_set out `reading` ( json_str_lit `A version flags a row when its score is at or below -margin (score = decision function; the more negative, the more anomalous); rate = flagged / n over this window. margin_for_rate gives, per requested rate, the nearest margin the window's scores can supply: when scores tie at the cut the achieved rate differs from the requested one (exact = false) — a run of identical scores is taken or left whole. Margins are shown exactly as stored, in each version's own units (units: a forest's margin is absolute on its decision function; the autoencoder's is a fraction of its reconstruction threshold, and its scores here are scaled the same way; range_guard's is a count of standard deviations — its score is -max|z| over the features, and it names the feature; flatline's is a fraction — its score is minus the largest stuck fraction over the numeric columns, and it names the column). finetune {model, rate} sets them, the flatline excepted: its margin has a fixed meaning and is set with edit_model.` ) )
     ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
@@ -1380,6 +1612,7 @@ $ `src/imptime.nu`
         ( __mcp_copy b `anomaly` out )
         ( __mcp_copy_rounded b `score` out 4 )
         ( __mcp_copy_rounded b `severity` out 3 )
+        ( __mcp_copy b `missing` out )
         ?? ( json_obj_get b `versions` ) {
             T vers → {
                 : Json vo ( json_obj_new )
@@ -1415,7 +1648,7 @@ $ `src/imptime.nu`
 }
 
 @ __mcp_t_score_point Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : ?Json vals ( __mcp_values_arg a )
     ?? vals {
@@ -1433,7 +1666,7 @@ $ `src/imptime.nu`
 }
 
 @ __mcp_t_ingest_point Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : ?Json vals ( __mcp_values_arg a )
     ?? vals {
@@ -1561,7 +1794,7 @@ $ `src/imptime.nu`
 }
 
 @ __mcp_t_import_data Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : String text ( string_new )
     : s ct ( __mcp_file_arg a text )
@@ -1656,7 +1889,7 @@ $ `src/imptime.nu`
 }
 
 @ __mcp_t_retrain Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : String q ( string_new )
     : String path ( __mcp_model_path `/force_train/` model `` )
@@ -1675,7 +1908,7 @@ $ `src/imptime.nu`
 }
 
 @ __mcp_t_train_autoencoder Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : Json body ( json_obj_new )
     ?? ( __mcp_arg a `hidden` ) {
@@ -1706,7 +1939,7 @@ $ `src/imptime.nu`
 }
 
 @ __mcp_t_finetune Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : Json body ( json_obj_new )
     ? ( __mcp_arg_has a `rate` ) { ( json_obj_set body `rate` ( json_float ( __mcp_arg_f a `rate` 0.01 ) ) ) } {}
@@ -1808,7 +2041,7 @@ $ `src/imptime.nu`
 }
 
 @ __mcp_t_edit_model Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     ?? ( __mcp_arg a `patch` ) {
         T pv → {
@@ -1836,7 +2069,7 @@ $ `src/imptime.nu`
 }
 
 @ __mcp_t_reset_model Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     ? ( __mcp_arg_bool a `confirm` F ) {} {
         ( string_free model )
@@ -1851,7 +2084,7 @@ $ `src/imptime.nu`
 // withdraw. Rides on the row through anomalies; a false positive is
 // left out of calibration and fine-tune.
 @ __mcp_t_label_anomaly Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : i index ( __mcp_arg_int a `index` -1 )
     ? >= index 0 {} {
@@ -1895,7 +2128,7 @@ $ `src/imptime.nu`
 }
 
 @ __mcp_t_labels Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : String q ( string_new )
     : String path ( __mcp_model_path `/models/dynamic/` model `/labels` )
@@ -1935,7 +2168,7 @@ $ `src/imptime.nu`
 }
 
 @ __mcp_t_delete_model Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     ? ( __mcp_arg_bool a `confirm` F ) {} {
         ( string_free model )
@@ -1949,7 +2182,7 @@ $ `src/imptime.nu`
 // ── Tools: the organisation ──────────────────────────────────────────
 
 @ __mcp_t_claim_model Json a Json ctx → Json {
-    : String model ( __mcp_need_model a )
+    : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : String owner ( __mcp_arg_str a `owner` )
     : Json body ( json_obj_new )
@@ -2031,9 +2264,12 @@ $ `src/imptime.nu`
     ^ sc
 }
 
-@ __mcp_sc_values → Json {
+@ __mcp_sc_values s missing → Json {
     : Json sc ( __mcp_sc_model )
-    ( mcp_schema_prop sc `values` `object` `One point: the model's columns and their values, e.g. {"temperature": 21.5, "state": "on"}. Columns the model does not know are ignored; missing ones are an error.` T )
+    : String d ( string_from `One point: the model's columns and their values, e.g. {"temperature": 21.5, "state": "on"}. Columns the model does not know are ignored; ` )
+    ( string_push_str d missing )
+    ( mcp_schema_prop sc `values` `object` ( string_data d ) T )
+    ( string_free d )
     ^ sc
 }
 
@@ -2140,9 +2376,9 @@ $ `src/imptime.nu`
 // ── The server ───────────────────────────────────────────────────────
 
 @ __mcp_instructions → s {
-    ^ `Anomaly detection over an organisation's sensor and event streams: every model watches one stream, stores its recent points in a ring, and flags points its versions (isolation forests over different windows, an autoencoder that sees the relations between fields, and a range_guard that flags a single field far outside its usual range and names it) score as unusual. You act with the signed-in user's permissions, inside their organisation.
+    ^ `Anomaly detection over an organisation's sensor and event streams: every model watches one stream, stores its recent points in a ring, and flags points its versions (isolation forests over different windows, an autoencoder that sees the relations between fields, a range_guard that flags a single field far outside its usual range and names it, and a flatline guard that flags a numeric column that has stopped moving — a run of identical readings, or a spread collapsed far below the stream's own quiet periods — and names it) score as unusual. You act with the signed-in user's permissions, inside their organisation.
 
-Start with list_models. Then anomalies {model, last: "24h"} for the newest flagged rows with the features that caused them, anomaly_summary for counts, events, timeline and the features blamed most, point for one row in full, describe_model for how a model is built, calibration for how its margins sit against the recent data. Times are ISO-8601 UTC; a model on a count clock numbers its rows instead. "last" counts back from the model's newest point, not from now. Scores run downward into anomaly: a point is flagged when its score is at or below minus the version's margin. A forest's decision_margin is that margin as is; the autoencoder's decision_margin is a fraction of its reconstruction threshold (margin = threshold × decision_margin), so its scores are ~1e-4 where a forest's are ~1e-1; range_guard's decision_margin is a count of standard deviations. Rank points and versions by severity (−score / margin: 1.0 is exactly on the alert line, 2.0 twice as far past it), never by raw score; a row's score and severity are those of its most severe version. Consecutive anomalous rows are one event: anomalies gives each row its event number, anomaly_summary lists the events — count events, not rows, when saying how often something went wrong. When the person says a flagged row was nothing, label_anomaly {model, index, label: "false_positive"} — from then on calibration and finetune leave it out, so the margins stop paying for known noise.
+Start with list_models. Then anomalies {model, last: "24h"} for the newest flagged rows with the features that caused them, anomaly_summary for counts, events, timeline and the features blamed most, point for one row in full, describe_model for how a model is built, calibration for how its margins sit against the recent data. Times are ISO-8601 UTC; a model on a count clock numbers its rows instead. "last" counts back from the model's newest point, not from now. Scores run downward into anomaly: a point is flagged when its score is at or below minus the version's margin. A forest's decision_margin is that margin as is; the autoencoder's decision_margin is a fraction of its reconstruction threshold (margin = threshold × decision_margin), so its scores are ~1e-4 where a forest's are ~1e-1; range_guard's decision_margin is a count of standard deviations; flatline's is a fraction (0.9 = nine tenths of the reference run identical, or the window ten times flatter than the stream's quiet periods), and point shows which column it named. Rank points and versions by severity (−score / margin: 1.0 is exactly on the alert line, 2.0 twice as far past it), never by raw score; a row's score and severity are those of its most severe version. Consecutive anomalous rows are one event: anomalies gives each row its event number, anomaly_summary lists the events — count events, not rows, when saying how often something went wrong. When the person says a flagged row was nothing, label_anomaly {model, index, label: "false_positive"} — from then on calibration and finetune leave it out, so the margins stop paying for known noise.
 
 Every member may build scratch models named llm_… (fork_model: a slice of an existing model's history, optionally fewer columns), tune them (finetune, train_autoencoder, retrain), edit and delete them — use them to test a hypothesis without touching production models. Changing or deleting any other model needs the administrator role; the reply says so when it does. Sending new points (ingest_point, import_data) needs the ingest capability. analyze_data scores a file you provide without creating a model.`
 }
@@ -2188,15 +2424,15 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     ( __mcp_sc_point ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_point a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `calibration`
-    `How each version's margin sits against a window: how much it flags now, the worst and median scores, and the margin that would flag 0.1%, 1%, 5% … — the numbers to read before finetune. Says whether a model is too quiet or too loud.`
+    `How each version's margin sits against a window (default: the last 24 h before the newest point; last: "all" for the whole ring): how much it flags now, the worst and median scores, and the margin that would flag 0.1%, 1%, 5% … — the numbers to read before finetune. Each version gets a reading — quiet, loud or on target — and the model a verdict.`
     ( __mcp_sc_model_window ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_calibration a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `score_point`
     `Score one hypothetical point against a model WITHOUT storing it: the verdict of every version and the scores. For "would the model flag this".`
-    ( __mcp_sc_values ) T F T F member
+    ( __mcp_sc_values `a column the model knows and the point leaves out is an error that names it.` ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_score_point a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `analyze_data`
-    `Score a file you provide (csv text or rows) on its own, with no model kept: a self-trained model finds the time column, learns the file, and reports its anomalies, margins and notes. For a one-off "what is odd in this data". Big files return a task to poll with task.`
+    `Score a file you provide (csv text or rows) on its own, with no model kept: a self-trained model finds the time column, learns the file, and reports its anomalies, margins and notes. The margins are set from the file itself, so about 1 % of any file is flagged — read "reading" and "separation" first: they say whether the flagged rows stand apart from the file or are merely its least typical tail. For a one-off "what is odd in this data". Big files return a task to poll with task.`
     ( __mcp_sc_analyze ) F F F F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_analyze_data a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `list_tasks`
@@ -2226,7 +2462,7 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     ( __mcp_sc_train_ae ) F F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_train_autoencoder a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `finetune`
-    `Set every version's margin so that a chosen share of a window is flagged (rate 0.01 = 1%). dry_run=true shows the margins without applying them; calibration shows the same numbers for several rates at once. Members: llm_… models only; administrators: any.`
+    `Set every version's margin so that a chosen share of a window is flagged (rate 0.01 = 1%). dry_run=true shows the margins without applying them; calibration shows the same numbers for several rates at once. The flatline guard is left alone (its margin is a fraction with a fixed meaning; edit_model sets it). Members: llm_… models only; administrators: any.`
     ( __mcp_sc_finetune ) F F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_finetune a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `label_anomaly`
@@ -2253,7 +2489,7 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     // ── Feeding models (the ingest capability: administrators and ingest keys) ──
     ( __mcp_add srv `ingest_point`
     `Send one point to a model: it is stored, scored, and answered with the verdict. A new name creates a model, which warms up (HTTP 202) until it has 50 points. This changes what the model learns — use score_point to ask without teaching.`
-    ( __mcp_sc_values ) F F F F ingest
+    ( __mcp_sc_values `a column the model knows and the point leaves out is stored as absent, scored as 0, and listed under "missing" in the verdict.` ) F F F F ingest
     \ Json a McpCall c → Json { ^ ( __mcp_t_ingest_point a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `import_data`
     `Load a file of history (csv text or rows) into a model — a new one or an existing one. The time column is detected (or named with time); rows are stamped, stored and the model trained. Returns counts of imported / skipped rows and the scan.`

@@ -1,5 +1,90 @@
 # Changelog
 
+## 0.15.0
+
+- **A flatline guard.** A sensor that has stopped moving hides from every
+  per-point check: a gauge frozen at an ordinary reading sits inside its
+  training range for as long as it likes, and the forests, the range
+  guard and the autoencoder all stay quiet. The new forestless `flatline`
+  version watches each numeric column's recent run — how long it has
+  repeated one value, or, when it dithers in its last digit instead, how
+  far its spread over the window has collapsed against the stream's own
+  quietest windows in training — and flags when the run fills the window
+  (`window_size`, 60 rows) or twice the longest run training held,
+  whichever is longer, so a rain gauge that reads zero for hours has to be
+  quieter than it ever was before it counts. The references are fitted at
+  every retrain and stored under `flatline` in the metadata; the decision
+  value is minus the largest stuck fraction over the columns, the margin
+  is that fraction (0.9 by default, `units: fraction`), and the verdict
+  names the column, as the range guard does. Fine-tune leaves its margin
+  alone — a rate target would only ever loosen it — and calibration
+  reports it; `edit_model` sets it. A model from before it gains it at its
+  next retrain. `meta_default_versions` now has seven entries.
+
+- **Only the calendar cycles the training data has been round.** A cycle
+  the rows have not covered twice is not a cycle the forests can learn,
+  it is a date: eight days straddling a month boundary carried a month
+  feature that split them into "before" and "after", and every point on
+  the rare side scored as unusual for the day it was taken. A retrain
+  keeps the hour features once the training rows span two days, weekday
+  once they span two weeks, month once they span two years (`train_span`
+  in the metadata; an unknown span keeps every cycle), and a later,
+  longer retrain brings the rest in.
+
+- **A stale autoencoder does not score.** A net whose input names
+  features the current encoding no longer makes — a cycle dropped by the
+  rule above, or the encoding bump of 0.14.0 — projected them as 0, a
+  reconstruction error thousands of times the threshold on every point,
+  so the model flagged everything. Such a net is now stale: it gives no
+  verdict, the model reports `retrain_required`, and the next forest
+  retrain replaces it whether the schedule says so or not.
+
+- **Missing columns are said, and a bare question refuses them.** A stored
+  point that leaves out columns the model knows — a sensor that skipped a
+  tick — is still a point in the stream, scored with those columns at 0
+  (the training mean); the verdict now lists them under `missing`.
+  `/detect_only` and `score_point`, a question about a hypothetical
+  point, refuse with the columns named: a question about a point carries
+  the whole point.
+
+- **The scan judges the window, not only its flagged rows.** `anomalies`
+  answers with `flagged_by_version` (each version's count over the whole
+  window) and `window { from, to, one_time }`; `anomaly_summary` over MCP
+  turns them into `warnings` — no row flagged (margins may be loose for
+  this data), a version flagging a tenth or more (a margin too tight, or a
+  version trained on data unlike this window), every row on one stamp (a
+  file imported without its time column named, so the time windows all
+  see one instant) — and `calibration` gives each version a `reading`
+  (quiet, loud, on target) and the model a `verdict`.
+
+- **An analysis says whether its anomalies mean anything.** The margins of
+  `POST /api/analyze` are fitted to the file, so ~1 % of any file is
+  flagged whatever it holds. The result now carries `worst_severity`,
+  `separation` — the range guard's `|z|` of the worst row over the row at
+  twice the cut, a linear magnitude where a forest's decision function
+  saturates and the autoencoder's error is heavy-tailed — and a
+  one-sentence `reading`: the flagged rows stand apart from the file, or
+  they are its tail.
+
+- **MCP: a model by its alias, a description that fits a context window.**
+  A tool given a name the organisation has no model under looks it up as
+  an alias among the models the caller may see and proceeds under the
+  real name. `describe_model` gives a categorical column with more than
+  twelve levels as its count, a sample and a note (a time-of-day or an id
+  read as text is one feature per value — better dropped or encoded as a
+  number), a long feature order as its count and first forty names, and
+  the model's warnings — most of the ring evicted, a stale autoencoder —
+  at the top. The calibration reading and the server instructions explain
+  the flatline guard's units beside the others.
+
+- **The importer takes `format: "fmi"` and cleans JSON rows.** The weather
+  service's export is a CSV under its own name; `fmi` is accepted as one
+  (an unknown format is 400 naming the four). A JSON or JSONL row is
+  normalised the way a CSV row is: `null` and the missing markers (`-`,
+  `NA`, `N/A`, …) are dropped rather than stored as text, and a number
+  quoted as a string is a number, so a file exported by another tool no
+  longer turns a numeric column into a categorical one.
+
 ## 0.14.1
 
 - **The accelerator binds the calling thread.** A CUDA context is current

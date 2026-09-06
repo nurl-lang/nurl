@@ -339,6 +339,161 @@ $ `src/dynamic.nu`
     ( model_free mo )
 }
 
+// ── Scenario 3: the flatline guard ────────────────────────────────────
+//
+// 300 minutes of a temperature at 0.1 ° resolution riding a slow wave,
+// a pressure with fine noise, and a rain gauge that reads 0.0 nine
+// minutes in ten. Then the temperature sticks for 70 minutes: the run of
+// identical readings passes nine tenths of the reference (the window, 60,
+// as the training runs were short) and the flatline guard names `temp`.
+// Later the pressure sensor hangs with a hair of dither: no two readings
+// identical, but the window's spread collapses below a tenth of the
+// stream's quietest windows, and the guard names `press`. The rain gauge
+// sat flat through training and is never blamed for it.
+
+: FlatProbe {
+    b seen  // the flatline gave a verdict
+    b anomaly
+    f score
+    String feat
+}
+
+@ flat_ingest * Model mo f temp f press f rain i at → FlatProbe {
+    : Json j ( json_obj_new )
+    ( json_obj_set j `temp` ( json_float temp ) )
+    ( json_obj_set j `press` ( json_float press ) )
+    ( json_obj_set j `rain` ( json_float rain ) )
+    : !Verdict String r ( model_ingest_at mo j at )
+    ( json_free j )
+    : ~ FlatProbe out @ FlatProbe { F F 0.0 ( string_new ) }
+    ?? r {
+        T vd → {
+            : *Meta mm ( model_metadata mo )
+            : i nv ( vec_len [VerVerdict] . vd versions )
+            : ~ i k 0
+            ~ < k nv {
+                ?? ( vec_get [VerVerdict] . vd versions k ) {
+                    T vv → {
+                        ? ( _an_is_flat_name ( string_data . vv vvname ) ) {
+                            = . out seen T
+                            = . out anomaly . vv anomaly
+                            = . out score . vv score
+                            ? >= . vv vv_feat 0 {
+                                ?? ( vec_get [String] . mm feats . vv vv_feat ) {
+                                    T fn → { ( string_push_str . out feat ( string_data fn ) ) }
+                                    F _ → {}
+                                }
+                            } {}
+                        } {}
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( verdict_free vd )
+        }
+        F e → { ( string_free e ) }
+    }
+    ^ out
+}
+
+@ tenths f x → f { ^ / ( float_round * x 10.0 ) 10.0 }
+
+// The gauge's habit: dry nine minutes in ten.
+@ rain_now → f { ^ ? < ( lcg_u01 ) 0.9 0.0 ( tenths * 3.0 ( lcg_u01 ) ) }
+
+@ test_flatline Store st → v {
+    = g_lcg 11
+    : *Model mo ( model_open_at st `flat` T0 )
+    ( model_set_limits mo 10 150000 )
+    ( model_set_schedule mo 100000 100000 )
+    : ~ i k 0
+    : ~ f last_temp 0.0
+    ~ < k 300 {
+        : f wave * 5.0 ( sin / # f k 20.0 )
+        = last_temp ( tenths + + 20.0 wave * 0.3 ( gauss3 ) )
+        : FlatProbe fp ( flat_ingest mo last_temp + 1000.0 ( gauss3 ) ( rain_now ) + T0 * k 60 )
+        ( string_free . fp feat )
+        = k + k 1
+    }
+    : i tr ( model_force_train_at mo + T0 * 300 60 )
+    ( check > tr 0 `flatline: trained` )
+    : *Meta mm ( model_metadata mo )
+    ( check == ( vec_len [f] . mm flat_sd ) ( vec_len [String] . mm feats ) `flatline: one reference per feature` )
+    ( check ( meta_version_enabled mm ANOM_FLAT_NAME F ) `flatline: the version exists and is on` )
+    ( check == ( meta_version_margin mm ANOM_FLAT_NAME 0.0 ) ANOM_FLAT_MARGIN `flatline: default margin` )
+
+    // The references round-trip through the metadata JSON.
+    : String js ( meta_to_json_str mm )
+    ?? ( meta_from_json_str ( string_data js ) ) {
+        T m2 → {
+            ( check == ( vec_len [f] . m2 flat_run ) ( vec_len [f] . mm flat_run ) `flatline: references survive the JSON round trip` )
+            ( meta_free m2 )
+        }
+        F _ → { ( check F `flatline: metadata parses back` ) }
+    }
+    ( string_free js )
+
+    // A normal minute: the guard judges and stays quiet.
+    : FlatProbe p0 ( flat_ingest mo ( tenths + 20.0 * 0.3 ( gauss3 ) ) + 1000.0 ( gauss3 ) ( rain_now ) + T0 * 300 60 )
+    ( check . p0 seen `flatline: a verdict on a normal minute` )
+    ( check ! . p0 anomaly `flatline: quiet on a normal minute` )
+    ( string_free . p0 feat )
+
+    // The temperature sticks.
+    : ~ FlatProbe pa @ FlatProbe { F F 0.0 ( string_new ) }
+    = k 0
+    ~ < k 70 {
+        ( string_free . pa feat )
+        = pa ( flat_ingest mo 20.0 + 1000.0 ( gauss3 ) ( rain_now ) + T0 * + 301 k 60 )
+        = k + k 1
+    }
+    ( check . pa anomaly `flatline: 70 identical readings are flagged` )
+    ( check == ( nurl_str_eq ( string_data . pa feat ) `temp` ) 1 `flatline: and the guard names temp` )
+    ( check <= . pa score -0.9 `flatline: the fraction is past the line` )
+    ( string_free . pa feat )
+
+    // Back to life for a window's worth, then the pressure hangs with dither.
+    = k 0
+    ~ < k 70 {
+        : f wave * 5.0 ( sin / # f k 20.0 )
+        : FlatProbe fp ( flat_ingest mo ( tenths + + 20.0 wave * 0.3 ( gauss3 ) ) + 1000.0 ( gauss3 ) ( rain_now ) + T0 * + 371 k 60 )
+        ? == k 69 { ( check ! . fp anomaly `flatline: quiet again once the window has moved` ) } {}
+        ( string_free . fp feat )
+        = k + k 1
+    }
+    : ~ FlatProbe pb @ FlatProbe { F F 0.0 ( string_new ) }
+    = k 0
+    ~ < k 70 {
+        ( string_free . pb feat )
+        : f wave * 5.0 ( sin / # f + 70 k 20.0 )
+        = pb ( flat_ingest mo ( tenths + + 20.0 wave * 0.3 ( gauss3 ) ) + 1000.0 * 0.001 ( gauss3 ) ( rain_now ) + T0 * + 441 k 60 )
+        = k + k 1
+    }
+    ( check . pb anomaly `flatline: a dithering stuck sensor is flagged` )
+    ( check == ( nurl_str_eq ( string_data . pb feat ) `press` ) 1 `flatline: and the guard names press` )
+    ( string_free . pb feat )
+
+    // Fine-tune leaves the flatline's margin alone.
+    : ( Vec String ) none ( vec_new [String] )
+    : FineTuneReport ft ( model_finetune_at mo 0.05 0 0 T none )
+    ( vec_free [String] none )
+    : ~ b listed F
+    = k 0
+    ~ < k ( vec_len [FtVer] . ft items ) {
+        ?? ( vec_get [FtVer] . ft items k ) {
+            T it → { ? ( _an_is_flat_name ( string_data . it ftname ) ) { = listed T } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( finetune_free ft )
+    ( check ! listed `flatline: finetune does not list it` )
+    ( check == ( meta_version_margin mm ANOM_FLAT_NAME 0.0 ) ANOM_FLAT_MARGIN `flatline: and its margin stands` )
+
+    ( model_free mo )
+}
+
 @ main → i {
     : ~ String root ( string_from `./anomaly_ver_test` )
     ?? ( env_get `ANOMALY_TEST_DIR` ) {
@@ -351,6 +506,7 @@ $ `src/dynamic.nu`
 
     ( test_routing st )
     ( test_aggregate_finetune st )
+    ( test_flatline st )
 
     ( store_free st )
     : !v IoErr fin ( dir_remove_all ( string_data root ) )

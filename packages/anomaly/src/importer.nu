@@ -227,6 +227,45 @@ $ `src/imptime.nu`
     ^ @ ?Json { T j }
 }
 
+// A JSON row goes through the same cell rule as a CSV row: a string that
+// is a missing marker or blank is no field, a string that reads as a
+// number is a number, a JSON null is no field. An exporter that writes
+// its gaps as "-" in JSON deserves the same reading as one that writes
+// them in CSV — otherwise the dash becomes a category and the column a
+// text feature. Returns a fresh object; the given one is freed.
+@ __imp_norm_row Json row → Json {
+    : Json out ( json_obj_new )
+    : ( Vec String ) keys ( json_obj_keys row )
+    : i n ( vec_len [String] keys )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] keys k ) {
+            T key → {
+                ?? ( json_obj_get row ( string_data key ) ) {
+                    T v → {
+                        ? ( json_is_str v ) {
+                            ?? ( __imp_cell ( json_str_data v ) ) {
+                                T c → { ( json_obj_set out ( string_data key ) c ) }
+                                F _ → {}
+                            }
+                        } {
+                            ? ( json_is_null v ) {} {
+                                ( json_obj_set out ( string_data key ) ( json_clone v ) )
+                            }
+                        }
+                    }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
+    ( json_free row )
+    ^ out
+}
+
 @ __imp_parse_csv s text → ImportParse {
     : String whole ( string_from text )
     : ( Vec String ) lines ( string_split whole `\n` )
@@ -387,7 +426,7 @@ $ `src/imptime.nu`
                             ?? ( json_arr_get arr k ) {
                                 T e → {
                                     ? ( json_is_obj e ) {
-                                        ( vec_push [Json] rows ( json_clone e ) )
+                                        ( vec_push [Json] rows ( __imp_norm_row ( json_clone e ) ) )
                                     } {
                                         = skipped + skipped 1
                                         ( __imp_note notes + k 1 `not an object` )
@@ -426,7 +465,7 @@ $ `src/imptime.nu`
                         : !Json JsonError r ( json_parse ( string_data t ) )
                         ?? r {
                             T j → {
-                                ? ( json_is_obj j ) { ( vec_push [Json] rows j ) } {
+                                ? ( json_is_obj j ) { ( vec_push [Json] rows ( __imp_norm_row j ) ) } {
                                     ( json_free j )
                                     = skipped + skipped 1
                                     ( __imp_note notes + k 1 `not an object` )
@@ -463,7 +502,11 @@ $ `src/imptime.nu`
     } {}
     : s f ( string_data fmt )
     : ~ ImportParse out ( __imp_fail `` )
-    ? == ( nurl_str_eq f `csv` ) 1 {
+    // An FMI weather export is a CSV whose time sits in Vuosi/Kuukausi/
+    // Päivä/Aika columns; the preprocessing layer reads those on its own,
+    // so the name is only a courtesy for the person who knows what they
+    // are holding.
+    ? | == ( nurl_str_eq f `csv` ) 1 == ( nurl_str_eq f `fmi` ) 1 {
         ( import_parse_free out )
         = out ( __imp_parse_csv text )
     } {
@@ -476,7 +519,7 @@ $ `src/imptime.nu`
                 = out ( __imp_parse_json text )
             } {
                 ( import_parse_free out )
-                = out ( __imp_fail `format must be "csv", "json", "jsonl" or "auto"` )
+                = out ( __imp_fail `format must be "csv", "json", "jsonl", "fmi" (a CSV from the weather service) or "auto"` )
             }
         }
     }

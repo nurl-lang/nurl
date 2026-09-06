@@ -125,6 +125,13 @@ $ `src/service.nu`
     }
 }
 
+@ jf_of Json o s key → f {
+    ?? ( json_obj_get o key ) {
+        T e → { ?? ( json_num_as_f e ) { T x → { ^ x } F _ → { ^ -1.0 } } }
+        F _ → { ^ -1.0 }
+    }
+}
+
 @ main → i {
     : ~ String root ( string_from `./anomaly_svc_test` )
     ?? ( env_get `ANOMALY_TEST_DIR` ) {
@@ -228,6 +235,17 @@ $ `src/service.nu`
     : SvcOut garb ( fire r `POST` `/detect_only/svc` `` `not json` )
     ( check == . garb status 400 `svc: garbage body -> 400` )
     ( json_free . garb body )
+    // A column the model knows and the point leaves out is an error that
+    // names it — scored as 0 it would be a value nobody sent, blamed.
+    : SvcOut lack ( fire r `POST` `/detect_only/svc` `` `{"other": 1}` )
+    ( check == . lack status 400 `svc: detect_only without a known column -> 400` )
+    : ~ b names_it F
+    ?? ( json_obj_get . lack body `message` ) {
+        T e → { = names_it >= ( nurl_str_find ( json_str_data e ) `Missing columns: temp` ) 0 }
+        F _ → {}
+    }
+    ( check names_it `svc: the error names the missing column` )
+    ( json_free . lack body )
 
     // Listing + metadata + data.
     : SvcOut lst ( fire r `GET` `/models/dynamic` `` `` )
@@ -338,10 +356,10 @@ $ `src/service.nu`
     : SvcOut aem ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
     : ~ b ae_block F
     ?? ( json_obj_get . aem body `autoencoder` ) {
-        T ab → { = ae_block == ( jbool_of ab `trained` ) F }
+        T ab → { = ae_block & == ( jbool_of ab `trained` ) F & ( json_obj_has ab `retrain_required` ) ! ( jbool_of ab `retrain_required` ) }
         F _ → {}
     }
-    ( check ae_block `svc: metadata carries an autoencoder block` )
+    ( check ae_block `svc: metadata carries an autoencoder block, not stale` )
     ( json_free . aem body )
 
     // Put weekly back so the routes below see the default version set.
@@ -552,6 +570,24 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check an1_shape `svc: a scanned point carries index/timestamp/score/anomaly` )
+    // The per-version tally and the window's shape are what a summary
+    // reads its health warnings from.
+    : ~ i an1_fbv -1
+    ?? ( json_obj_get . an1 body `flagged_by_version` ) {
+        T fbv → {
+            : ( Vec String ) ks ( json_obj_keys fbv )
+            = an1_fbv ( vec_len [String] ks )
+            ( vec_free_with [String] ks \ String x → v { ( string_free x ) } )
+        }
+        F _ → {}
+    }
+    ( check > an1_fbv 0 `svc: anomalies tallies the flags per version` )
+    : ~ b an1_win F
+    ?? ( json_obj_get . an1 body `window` ) {
+        T w → { = an1_win & & ( json_obj_has w `from` ) ( json_obj_has w `to` ) ( json_obj_has w `one_time` ) }
+        F _ → {}
+    }
+    ( check an1_win `svc: anomalies describes the window it scanned` )
     ( json_free . an1 body )
 
     // Second call: same answer, nothing recomputed.
@@ -931,6 +967,12 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     ( json_free . datc2 body )
     ( check == ( status_of r `DELETE` `/delete_model/svc_cnt` ) 200 `svc: delete count model` )
 
+    // A stored point may leave a column out, and the verdict says which.
+    : SvcOut part ( fire r `POST` `/detect/svc` `` `{"other": 1}` )
+    ( check == . part status 200 `svc: a stored point may leave a column out` )
+    ( check ( jarr_has . part body `missing` `temp` ) `svc: the verdict lists the column it scored as 0` )
+    ( json_free . part body )
+
     // Reset → not trained → detect_only 400.
     : SvcOut rs ( fire r `POST` `/models/dynamic/svc/reset` `` `{}` )
     ( check == . rs status 200 `svc: reset -> 200` )
@@ -1057,6 +1099,14 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     ( check > npts 0 `tasks: anomalies returned` )
     ( check < npts 40 `tasks: the union stays near the target (< 10% of 400)` )
     ( check spike `tasks: the injected spike is among the anomalies` )
+    // The spike sits far above the rows just under the 1 % cut: the
+    // reading says the flagged rows stand apart, not that they are the
+    // file's tail.
+    ( check >= ( jf_of . tr body `separation` ) 2.0 `tasks: the spike is separated from the file` )
+    ( check ( json_obj_has . tr body `worst_severity` ) `tasks: the worst severity is reported` )
+    : ~ b reading F
+    ?? ( json_obj_get . tr body `reading` ) { T rd → { = reading >= ( nurl_str_find ( json_str_data rd ) `stand apart` ) 0 } F _ → {} }
+    ( check reading `tasks: the reading says the flagged rows stand apart` )
     ( check ( jarr_has . tr body `model_versions` `autoencoder` ) `tasks: the autoencoder was trained` )
     : ~ String rfile ( string_new )
     ?? ( json_obj_get . tr body `file` ) {
