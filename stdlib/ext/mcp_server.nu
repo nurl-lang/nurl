@@ -95,7 +95,12 @@
 //      through `mcp_server_add_tool_ctx` and receives an McpCall
 //      beside its arguments; the plain form stays untouched. Anything
 //      a future revision puts on a request becomes an McpCall
-//      accessor, never a new handler parameter.
+//      accessor, never a new handler parameter. The same accessor
+//      carries what the HOST knows about the caller
+//      (`mcp_call_context`, attached by `mcp_server_dispatch_as`) —
+//      which is also what `mcp_server_add_tool_gated` filters the
+//      tool list on, so an authorisation-aware server is one server,
+//      not one per role.
 //   4. `mcp_server_dispatch` takes the whole REQUEST for the same
 //      reason: per-request `_meta` is part of the protocol now, and a
 //      method-plus-params entry point would have had to grow.
@@ -146,13 +151,29 @@ $ `stdlib/ext/http_response.nu`
 // It exists so that the frozen `( @ Json Json )` handler type never has
 // to grow: anything a future revision puts on a request becomes an
 // accessor here, not a new parameter on every handler in every server.
+//
+// Two things ride here, from two different parties:
+//   __req  — what the CLIENT sent (the JSON-RPC request, `_meta` etc.)
+//   __ctx  — what the HOST knows about the caller and the client never
+//            gets to assert: who they are, what they may do. Set by
+//            `mcp_server_dispatch_as` / `_envelope_as`; JSON null when
+//            the server was entered through the plain dispatch.
 
 : McpCall {
     Json __req
+    Json __ctx
 }
 
 // The raw JSON-RPC request, for `_meta` fields with no accessor yet.
 @ mcp_call_request McpCall c → Json { ^ . c __req }
+
+// The caller context the HOST attached to this dispatch (see
+// `mcp_server_dispatch_as`), or JSON null. BORROWED — do not free, do
+// not keep past the handler's return. This is where a tool learns the
+// authenticated principal behind the request: the transport resolved
+// the credential, the server threaded it through, and no client
+// argument can forge it.
+@ mcp_call_context McpCall c → Json { ^ . c __ctx }
 
 // Did the client declare the io.modelcontextprotocol/tasks extension on
 // THIS request? A server that can answer a long call as a task checks
@@ -303,6 +324,12 @@ $ `stdlib/ext/http_response.nu`
     // to TRUE in the spec, so an unannotated harmless tool is presented
     // to the user as if it could destroy state.
     Json annotations
+    // Per-caller visibility (`mcp_server_add_tool_gated`): the tool is
+    // listed and callable only when `visible` says so for the caller
+    // context of the dispatch. `gated` F = always visible, and the
+    // predicate is a placeholder that is never consulted.
+    ( @ b Json ) visible
+    b gated
 }
 
 // ── The server handle ─────────────────────────────────────────────────
@@ -568,6 +595,8 @@ $ `stdlib/ext/http_response.nu`
         \ Json a McpCall c → Json { ^ ( json_obj_new ) }
         F
         ( json_null )
+        \ Json c → b { ^ T }
+        F
     }
     ( vec_push [McpTool] . r __tools t )
 }
@@ -593,6 +622,8 @@ b read_only b destructive b idempotent b open_world ( @ Json Json ) handler → 
         \ Json a McpCall c → Json { ^ ( json_obj_new ) }
         F
         ann
+        \ Json c → b { ^ T }
+        F
     }
     ( vec_push [McpTool] . r __tools t )
 }
@@ -619,8 +650,56 @@ b read_only b destructive b idempotent b open_world
         handler
         T
         ann
+        \ Json c → b { ^ T }
+        F
     }
     ( vec_push [McpTool] . r __tools t )
+}
+
+// A tool whose EXISTENCE depends on who is asking. `visible` is
+// evaluated against the caller context of each dispatch (see
+// `mcp_server_dispatch_as`): when it says F the tool is left out of
+// `tools/list` and a `tools/call` naming it gets the same "unknown
+// tool" envelope an unregistered name gets — a caller who may not use
+// a tool is not told it exists. With the plain dispatch (context = JSON
+// null) the predicate sees null and decides for that case too.
+//
+// This is how one server serves an admin the full surface and a viewer
+// the read-only half without two servers, and without every handler
+// re-checking a role its caller could never have reached it with. The
+// handler receives the McpCall so it can read the same context
+// (`mcp_call_context`) — the identity that made it visible is the
+// identity it acts as. BORROWS `visible` and `handler`; CONSUMES
+// `name`, `description`, `schema`.
+@ mcp_server_add_tool_gated McpServer r s name s description Json schema
+b read_only b destructive b idempotent b open_world
+( @ b Json ) visible ( @ Json Json McpCall ) handler → v {
+    ( __mcp_server_check_open r `tool` name ( __mcp_find_tool_index r name ) )
+    : Json ann ( json_obj_new )
+    ( json_obj_set ann `readOnlyHint` ( json_bool read_only ) )
+    ( json_obj_set ann `destructiveHint` ( json_bool destructive ) )
+    ( json_obj_set ann `idempotentHint` ( json_bool idempotent ) )
+    ( json_obj_set ann `openWorldHint` ( json_bool open_world ) )
+    : McpTool t @ McpTool {
+        ( string_from name )
+        ( string_from description )
+        schema
+        \ Json a → Json { ^ ( json_obj_new ) }
+        handler
+        T
+        ann
+        visible
+        T
+    }
+    ( vec_push [McpTool] . r __tools t )
+}
+
+// Is tool `t` visible to the caller context `ctx`? Ungated tools always
+// are; a gated one asks its predicate.
+@ __mcp_tool_visible McpTool t Json ctx → b {
+    ? ! . t gated { ^ T } {}
+    : ( @ b Json ) vis . t visible
+    ^ ( vis ctx )
 }
 
 // How a model should approach this server: which tool to reach for
@@ -865,14 +944,19 @@ b read_only b destructive b idempotent b open_world
     ( string_data . r __instructions ) )
 }
 
-// tools/list: build the array of {name, description, inputSchema}.
-@ __mcp_dispatch_tools_list McpServer r → Json {
+// tools/list: build the array of {name, description, inputSchema} —
+// only the tools visible to this dispatch's caller context.
+@ __mcp_dispatch_tools_list McpServer r Json ctx → Json {
     : Json arr ( json_arr_new )
     : i n ( vec_len [McpTool] . r __tools )
     : *McpTool tp ( vec_data [McpTool] . r __tools )
     : ~ i k 0
     ~ < k n {
         : McpTool t . tp k
+        ? ! ( __mcp_tool_visible t ctx ) {
+            = k + k 1
+            continue
+        } {}
         : Json e ( json_obj_new )
         ( json_obj_set e `name` ( json_str_lit ( string_data . t name ) ) )
         ( json_obj_set e `description` ( json_str_lit ( string_data . t description ) ) )
@@ -915,7 +999,13 @@ b read_only b destructive b idempotent b open_world
         ( json_free args )
         ^ ( mcp_tool_result_error `missing tool name` )
     } {}
-    : i idx ( __mcp_find_tool_index r tool_name )
+    : ~ i idx ( __mcp_find_tool_index r tool_name )
+    // A gated tool the caller may not see is, to that caller, not
+    // registered — same envelope, no hint that the name exists.
+    ? >= idx 0 {
+        : *McpTool tp0 ( vec_data [McpTool] . r __tools )
+        ? ! ( __mcp_tool_visible . tp0 idx . call __ctx ) { = idx -1 } {}
+    } {}
     ? < idx 0 {
         ( json_free args )
         : String msg ( string_from `unknown tool: ` )
@@ -1391,6 +1481,21 @@ b read_only b destructive b idempotent b open_world
 // registration-time error rather than a tool no client will see — see
 // `__ctl`.
 @ mcp_server_dispatch McpServer r Json req → !Json McpRpcErr {
+    ^ ( mcp_server_dispatch_as r req ( json_null ) )
+}
+
+// The same dispatch with a CALLER CONTEXT attached: a Json the HOST
+// built from what it authenticated (principal, role, organisation —
+// whatever its tools need), never from anything the client sent. It
+// reaches every tool through `mcp_call_context`, and it is what the
+// `visible` predicate of a gated tool (`mcp_server_add_tool_gated`)
+// decides on, so `tools/list` and `tools/call` agree per caller. The
+// context is BORROWED for the duration of the call: the host frees it
+// after the reply, and nothing in the result refers to it.
+//
+// One server, built once, serves every caller: the per-request work is
+// authenticating and building `ctx`, not registering tools.
+@ mcp_server_dispatch_as McpServer r Json req Json ctx → !Json McpRpcErr {
     ( vec_set [i] . r __ctl MCP_CTL_SERVING 1 )
     : ~ s method ``
     ?? ( json_obj_get req `method` ) {
@@ -1398,7 +1503,7 @@ b read_only b destructive b idempotent b open_world
         F _ → {}
     }
     : ?Json params ( json_obj_get req `params` )
-    : McpCall call @ McpCall { req }
+    : McpCall call @ McpCall { req ctx }
     ? != 0 ( nurl_str_eq method `server/discover` ) {
         ^ @ !Json McpRpcErr { T ( __mcp_dispatch_discover r ) }
     } {}
@@ -1406,7 +1511,7 @@ b read_only b destructive b idempotent b open_world
         ^ @ !Json McpRpcErr { T ( __mcp_dispatch_initialize r params ) }
     } {}
     ? != 0 ( nurl_str_eq method `tools/list` ) {
-        ^ @ !Json McpRpcErr { T ( __mcp_dispatch_tools_list r ) }
+        ^ @ !Json McpRpcErr { T ( __mcp_dispatch_tools_list r ctx ) }
     } {}
     ? != 0 ( nurl_str_eq method `tools/call` ) {
         ^ @ !Json McpRpcErr { T ( __mcp_dispatch_tools_call r params call ) }
@@ -1620,6 +1725,20 @@ b read_only b destructive b idempotent b open_world
 //   ( server_run s )
 
 @ mcp_server_envelope McpServer r Json req → ?Json {
+    ^ ( mcp_server_envelope_as r req ( json_null ) )
+}
+
+// `mcp_server_envelope` with a caller context — see
+// `mcp_server_dispatch_as` for what the context is and who owns it.
+// An HTTP host that authenticates per request builds the dispatch
+// closure per request around this:
+//
+//   : Json ctx ( my_principal_json req )        // from the credential
+//   : ( @ ?Json Json ) d \ Json rq → ?Json { ^ ( mcp_server_envelope_as srv rq ctx ) }
+//   : HttpResponse out ( ( mcp_http_handler d ) req )
+//   ( nurl_free # s # *u d 1 )                  // the closure's env
+//   ( json_free ctx )
+@ mcp_server_envelope_as McpServer r Json req Json ctx → ?Json {
     : b had_id ( __mcp_has_id req )
     : Json id ( __mcp_extract_id_or_null req )
 
@@ -1641,7 +1760,7 @@ b read_only b destructive b idempotent b open_world
         }
     } {}
 
-    ?? ( mcp_server_dispatch r req ) {
+    ?? ( mcp_server_dispatch_as r req ctx ) {
         T result → {
             // Modern-era servers SHOULD identify themselves in each
             // result's `_meta`.
@@ -1651,7 +1770,11 @@ b read_only b destructive b idempotent b open_world
                 ( string_data . r __version ) )
             } {}
             ? had_id {
-                ^ @ ?Json { T ( mcp_response_result id result ) }
+                // The envelope clones the id into the response; this copy
+                // was for the error paths and has done its work.
+                : Json resp ( mcp_response_result id result )
+                ( json_free id )
+                ^ @ ?Json { T resp }
             } {
                 // Notification — caller (mcp_http_handler) maps this
                 // to a 202 Accepted with no body.
@@ -1673,6 +1796,7 @@ b read_only b destructive b idempotent b open_world
                     ( mcp_rpc_err_message e ) ( json_clone ( mcp_rpc_err_get_data e ) ) )
                 }
                 ( mcp_rpc_err_free e )
+                ( json_free id )
                 ^ @ ?Json { T resp }
             } {
                 // A notification cannot be answered, not even to say it

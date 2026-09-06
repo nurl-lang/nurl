@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+list.admin=whoami,delete_everything,my_models
+list.viewer=whoami,my_models
+list.null=whoami
+call.admin.delete=deleting as admin
+call.viewer.delete=ERR:unknown tool: delete_everything
+call.viewer.unknown=ERR:unknown tool: no_such_tool
+call.viewer.models=models of viewer
+call.null.models=ERR:unknown tool: my_models
+call.null.plain=plain tool
+plain.count=1

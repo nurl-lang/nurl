@@ -6,12 +6,15 @@
 // It is stateless by design: the authorization code carries what a real
 // provider would have stored server-side —
 //
-//     code = "c." <code_challenge> "." <nonce>
+//     code = "c." <code_challenge> "." <nonce> [ "." <sub> ]
 //
 // — so /token can verify that S256(code_verifier) is the challenge the
 // authorization request committed to, and can put the right nonce in the
-// ID token, without a session store. Everything on the wire is the
-// standard shape; only the code's INTERNAL format is a shortcut.
+// ID token, without a session store. The optional fourth field is WHO
+// signed in (default user-42), which is the other thing a provider would
+// have kept in the session: a relying party with roles needs a second
+// user to test the second role. Everything on the wire is the standard
+// shape; only the code's INTERNAL format is a shortcut.
 //
 // /mint/<kind> hands out deliberately broken tokens for the negative
 // tests: expired, badsig, none (alg: none), unknownkid, wrongaud, hs256.
@@ -150,18 +153,40 @@ $ `stdlib/ext/http_response.nu`
 
 // An ID token: the standard claim set plus the profile.
 @ prov_id_claims s aud s nonce i exp_delta → String {
+    ^ ( prov_id_claims_for ( prov_subject ) aud nonce exp_delta )
+}
+
+// The profile of a subject. user-42 is the test user with a name; any
+// other subject a code names gets a profile derived from it.
+@ prov_email_of s sub → String {
+    ? == 1 ( nurl_str_eq sub ( prov_subject ) ) { ^ ( string_from `user42@example.com` ) } {}
+    : String e ( string_from sub )
+    ( string_push_str e `@example.com` )
+    ^ e
+}
+
+@ prov_name_of s sub → String {
+    ? == 1 ( nurl_str_eq sub ( prov_subject ) ) { ^ ( string_from `Test User` ) } {}
+    ^ ( string_from sub )
+}
+
+@ prov_id_claims_for s sub s aud s nonce i exp_delta → String {
     : i now ( now_seconds )
     : String base ( prov_base )
+    : String email ( prov_email_of sub )
+    : String name ( prov_name_of sub )
     : String out ( string_with_cap 512 )
     ( string_push_char out 123 )
     ( prov_kv out `iss` ( string_data base ) T )
-    ( prov_kv out `sub` ( prov_subject ) F )
+    ( prov_kv out `sub` sub F )
     ( prov_kv out `aud` aud F )
     ( string_free base )
     ? > ( nurl_str_len nonce ) 0 { ( prov_kv out `nonce` nonce F ) } {}
-    ( prov_kv out `email` `user42@example.com` F )
-    ( prov_kv out `name` `Test User` F )
-    ( prov_kv out `preferred_username` `tuser` F )
+    ( prov_kv out `email` ( string_data email ) F )
+    ( prov_kv out `name` ( string_data name ) F )
+    ( prov_kv out `preferred_username` ? == 1 ( nurl_str_eq sub ( prov_subject ) ) `tuser` sub F )
+    ( string_free email )
+    ( string_free name )
     ( string_push_str out `,"email_verified":true` )
     ( string_push_str out `,"iat":` )
     ( string_push_int out now )
@@ -179,12 +204,16 @@ $ `stdlib/ext/http_response.nu`
 }
 
 @ prov_access_claims_scope s scope → String {
+    ^ ( prov_access_claims_for ( prov_subject ) scope )
+}
+
+@ prov_access_claims_for s sub s scope → String {
     : i now ( now_seconds )
     : String base ( prov_base )
     : String out ( string_with_cap 384 )
     ( string_push_char out 123 )
     ( prov_kv out `iss` ( string_data base ) T )
-    ( prov_kv out `sub` ( prov_subject ) F )
+    ( prov_kv out `sub` sub F )
     ( prov_kv out `aud` ( prov_api_audience ) F )
     ( prov_kv out `scope` scope F )
     ( string_free base )
@@ -319,16 +348,18 @@ $ `stdlib/ext/http_response.nu`
         ? == 1 ( nurl_str_eq ( string_data grant ) `authorization_code` ) {
             : String want ( prov_code_field code 1 )
             : String nonce ( prov_code_field code 2 )
+            : ~ String who ( prov_code_field code 3 )
+            ? > ( string_len who ) 0 {} { ( string_free who ) = who ( string_from ( prov_subject ) ) }
             : ( Vec u ) msg ( bytes_from_str ( string_data verifier ) )
             : ( Vec u ) h ( sha256_pure msg )
             ( vec_free [u] msg )
             : String got ( b64_url_encode_vec h )
             ( vec_free [u] h )
             ? & > ( string_len want ) 0 ( string_eq got want ) {
-                : String idc ( prov_id_claims ( prov_client_id ) ( string_data nonce ) 300 )
+                : String idc ( prov_id_claims_for ( string_data who ) ( prov_client_id ) ( string_data nonce ) 300 )
                 : String hdr ( prov_header `ES256` ( prov_kid ) )
                 : String idt ( prov_sign ( string_data hdr ) ( string_data idc ) F )
-                : String ac ( prov_access_claims )
+                : String ac ( prov_access_claims_for ( string_data who ) `openid profile read:things` )
                 : String at ( prov_sign ( string_data hdr ) ( string_data ac ) F )
                 : String out ( string_with_cap 2048 )
                 ( string_push_char out 123 )
@@ -346,7 +377,7 @@ $ `stdlib/ext/http_response.nu`
                 ( http_response_free resp )
                 = resp ( prov_error 400 `invalid_grant` `PKCE verification failed` )
             }
-            ( string_free want ) ( string_free nonce ) ( string_free got )
+            ( string_free want ) ( string_free nonce ) ( string_free who ) ( string_free got )
             = done T
         } {}
     }

@@ -21,8 +21,9 @@
 //     open_ingest = true
 //
 //     [service]
-//     addr    = "0.0.0.0:8811"
-//     webroot = "/usr/share/anomaly/static"
+//     addr       = "0.0.0.0:8811"
+//     webroot    = "/usr/share/anomaly/static"
+//     public_url = "https://anomaly.example.com"   # behind a proxy
 //
 // Deliberately NOT settable here: the store directory. The file is looked
 // for inside the store, so a `store` key would be a file relocating the

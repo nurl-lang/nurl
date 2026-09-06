@@ -30,14 +30,37 @@ $ `stdlib/ext/json.nu`
 : i OF_LINK_TTL_DEFAULT 604800  // a week
 : i OF_LINK_TTL_MAX 2592000  // 30 days
 
-// The store root (the models' directory). The organisation folders live
-// under <root>/orgs, beside the organisation databases.
-: ~ s g_of_root `.`
+// What the module keeps for the life of the process: the store root (the
+// models' directory — the organisation folders live under <root>/orgs,
+// beside the organisation databases) and the link-signing secret. Both
+// are OWNED copies in one heap block a global points at, so a caller may
+// free the root it passed, and the block stays reachable — a global that
+// held only a data pointer would leave the String header unreachable,
+// which is a leak in every accounting.
+: OfState {
+    String root
+    String secret
+}
 
-@ orgfiles_set_root s root → v { = g_of_root root }
+: ~ i g_of_state 0
+
+@ __of_state → *OfState {
+    ? != g_of_state 0 { ^ # *OfState g_of_state } {}
+    : *OfState st # *OfState ( nurl_malloc Z OfState )
+    = . st root ( string_from `.` )
+    = . st secret ( string_new )
+    = g_of_state # i st
+    ^ st
+}
+
+@ orgfiles_set_root s root → v {
+    : *OfState st ( __of_state )
+    ( string_clear . st root )
+    ( string_push_str . st root root )
+}
 
 @ __of_orgs_dir → String {
-    : String p ( string_from g_of_root )
+    : String p ( string_from ( string_data . ( __of_state ) root ) )
     ( string_push_str p `/orgs` )
     ^ p
 }
@@ -222,10 +245,9 @@ $ `stdlib/ext/json.nu`
 // random bytes, generated on first use and kept at <root>/orgs/link.secret;
 // deleting the file revokes every link at once.
 
-: ~ s g_of_secret ``
-
 @ __of_secret → s {
-    ? > ( nurl_str_len g_of_secret ) 0 { ^ g_of_secret } {}
+    : *OfState st ( __of_state )
+    ? > ( string_len . st secret ) 0 { ^ ( string_data . st secret ) } {}
     : String p ( __of_orgs_dir )
     : !v IoErr mk ( dir_create_all ( string_data p ) )
     ?? mk { T _ → {} F _ → {} }
@@ -242,9 +264,10 @@ $ `stdlib/ext/json.nu`
         ?? wr { T _ → {} F _ → {} }
     } {}
     ( string_free p )
-    // Kept for the life of the process: the global owns the buffer.
-    = g_of_secret ( string_data sec )
-    ^ g_of_secret
+    // Kept for the life of the process, in the module's own block.
+    ( string_free . st secret )
+    = . st secret sec
+    ^ ( string_data . st secret )
 }
 
 @ orgfiles_sign s org s name i exp → String {

@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.13.0
+
+- **An MCP endpoint for agents.** `POST /mcp` (Streamable HTTP, JSON-RPC)
+  is the whole API for a language model, authenticated exactly like the
+  REST routes — a bearer token from the organisation's OIDC provider or
+  an API key — and acting with that user's rights: a viewer's client
+  sees the read tools, an administrator's the whole surface, and a tool
+  the caller may not use is not listed and is "unknown" when called, so
+  an agent is never shown a door it cannot open. A client with no token
+  gets the RFC 9728 challenge (`WWW-Authenticate: Bearer
+  resource_metadata=…`) and `GET /.well-known/oauth-protected-resource[/mcp]`
+  names the authorization server, so Claude Code, the MCP inspector and
+  any spec-following agent discover the login on their own.
+
+  Twenty-six tools, described for an agent, sized for a context window:
+  `whoami`, `list_models`, `describe_model`, `anomalies` (the newest
+  flagged rows of a model over `last`/`from`/`to`, each with the
+  features that caused it), `anomaly_summary` (counts, an hourly or
+  daily timeline, the features blamed most, the worst point),
+  `points`/`point` (rows in full, `fields` to project), `calibration`,
+  `score_point`, `analyze_data` (a file scored without creating a
+  model), `list_tasks`/`task`, `list_files`; `fork_model`, `retrain`,
+  `train_autoencoder`, `finetune`, `edit_model`, `reset_model`,
+  `delete_model`; `ingest_point`, `import_data`; `claim_model`,
+  `org_users`, `set_role`, `org_keys`. Times are ISO-8601 UTC, numbers
+  are rounded to what a reader can use, and every error says what to do
+  instead. Resetting and deleting a model take `confirm: true`. There is no
+  tool that creates or revokes an API key: a secret must not land in a
+  model's context.
+
+- **Scratch models: `llm_…`.** Every member — a viewer too — may create,
+  train, tune, edit and delete a model whose name starts with `llm_`, so
+  an agent can test a hypothesis on a slice of history without touching
+  a production model or needing an administrator. `POST
+  /models/dynamic/<model>/fork` builds one from another model's stored
+  points (`from`/`to`/`last`, `fields` for fewer columns) and trains
+  every version over the whole slice at once. The rule lives in the
+  authorization gate (`az_is_scratch_model`, `az_may_write`), so the
+  REST routes and the MCP tools agree by construction.
+
+- **Windows and projections on the data routes.** `GET
+  /models/dynamic/<model>/data` takes `from`, `to`, `last` (anchored to
+  the newest stored point, never to the server's clock) and `fields`
+  (`*` = every field); `/anomalies` takes `rows=N` and `fields` to carry
+  the rows that survive its filters. `POST /api/analyze` is what the
+  `analyze_data` tool calls.
+
+- **`service.public_url`** — the origin agents reach the service at, for
+  a deployment behind a reverse proxy that rewrites `Host`; the 401
+  challenge and the protected-resource document name it. Unset, the
+  origin is derived per request from `Host` and
+  `X-Forwarded-Proto/Host`.
+
+- **Fixed: a viewer's model listing was empty.** The listing filtered by
+  ownership while `az_may_see` grants every member of the organisation
+  read access to its models, so a viewer was told "no models" about
+  models it could read by name. The listing is now the organisation's
+  set for every role.
+
+- **Fixed: leaks.** Every request handler that opened the organisation
+  database through a `?? ( sqlite_open … )` arm leaked the connection
+  (a compiler bug — a `% Drop` value in an arm whose tail assigns was
+  never dropped; fixed in the compiler, see the root CHANGELOG), the
+  task runner leaked one thread closure per analysis
+  (`thread_spawn_owned`), the organisation-files module held its root
+  and signing secret in a way LeakSanitizer could not see, the MCP
+  summary rounded through a temporary Json it never freed, and the
+  autoencoder training route never freed its response object.
+  `NURL_SAN=1 ./tests/anomaly_test.sh` is clean end to end.
+
+- **Tests.** `tests/mcp_test.nu` drives every tool through the server
+  as a viewer, an administrator and an ingest key — the visible set per
+  role, the scratch namespace, the challenge and the metadata document
+  — and `tests/authflow_test.sh` has a viewer and an administrator
+  driving `/mcp` with real tokens from `oauth`'s signing test provider,
+  which can now sign in a second user for the second role.
+
 ## 0.12.0
 
 - **Analyse a file in one call.** `POST /api/analyze` takes a CSV / JSON /

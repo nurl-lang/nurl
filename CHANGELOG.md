@@ -8,7 +8,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An MCP server that knows who is calling** — `ext/mcp_server.nu`
+  gains a caller context. `mcp_server_dispatch_as r req ctx` and
+  `mcp_server_envelope_as` are the plain dispatch/envelope with one more
+  argument: a Json the HOST built from what it authenticated (principal,
+  role, organisation — whatever its tools need) and the client never
+  gets to assert. Every handler reads it through `mcp_call_context c`
+  (borrowed; JSON null under the plain dispatch), so a tool learns the
+  authenticated principal the way it learns its arguments — through the
+  `McpCall` accessor, never a new parameter. `mcp_server_add_tool_gated`
+  registers a tool whose EXISTENCE depends on that context: a `visible`
+  predicate evaluated per dispatch decides whether the tool appears in
+  `tools/list`, and a `tools/call` naming an invisible tool gets the same
+  "unknown tool" envelope an unregistered name gets — a caller who may
+  not use a tool is not told it exists. One server, built once, serves
+  an admin the full surface and a viewer the read-only half; the
+  per-request work is authenticating and building `ctx`, not
+  registering tools. Tests: `mcp_server_gated`.
+
+- **`ext/mcp_auth.nu` — OAuth resource-server plumbing for an HTTP MCP
+  server.** The MCP Authorization spec makes such a server an OAuth 2.1
+  resource server: it verifies tokens and tells a client that has none
+  where to get one. The two protocol-shaped halves of that live here —
+  RFC 9728 Protected Resource Metadata (`mcp_auth_metadata_path`,
+  `mcp_auth_metadata_url`, `mcp_auth_resource_metadata`,
+  `mcp_auth_metadata_response`) and the 401 challenge that points at it
+  (`mcp_auth_challenge` → `WWW-Authenticate: Bearer
+  resource_metadata="…"`), plus `mcp_auth_base_url` (the public origin,
+  honouring `X-Forwarded-Proto/Host` behind a proxy) and
+  `mcp_auth_bearer_token`. Token VERIFICATION stays the server's own
+  business (packages/oauth for JWTs, an API-key table, a shared secret)
+  — which one it is decides what "authenticated" means for its tools.
+  Tests: `mcp_auth`.
+
+- **`thread_spawn_owned`** (`std/thread.nu`) — the fire-and-forget
+  thread. `thread_spawn` BORROWS its closure env, and for an inline
+  closure that is spawned, detached and never referred to again the
+  spawner has no correct moment to free it: the body is still running
+  and nothing says when it stops. So every such spawn leaked one env.
+  `thread_spawn_owned` hands the env to the thread and the runtime
+  frees it right after the body returns (`nurl_pthread_create_owned`, a
+  trampoline in runtime_ffi.c). What the body captured is still the
+  body's to free; only the env block changes hands. The thread twin of
+  `spawn_owned` for fibers.
+
+- **`packages/oauth` test provider signs in more than one user** — the
+  authorization code carries an optional subject
+  (`c.<challenge>.<nonce>[.<sub>]`) and the ID/access tokens are minted
+  for it; a relying party with roles needs a second user to test the
+  second role.
+
 ### Fixed
+
+- **A `% Drop` value in a match or cond arm whose value the join throws
+  away was never dropped.** `?? x { T db → { = out ( label db ) } … }` —
+  the arm's tail is an assignment, so the arm carries a `%String` type
+  (assignment publishes its LHS type), `mem_arm_drop_safe` refused to
+  drop inside a non-scalar-typed arm (the value might BE the thing being
+  dropped), and every arm-local `% Drop` value and owned struct field
+  leaked — even though the match was a statement and nobody read the
+  value. The same shape in `?`. Ownership was correct; the compiler just
+  could not tell, at the arm's closing brace, whether the join would
+  keep the value, so it played safe and leaked.
+
+  The arm no longer has to know. When an unsafe arm has drops pending,
+  the compiler parks them in an EXIT BLOCK (`arm_exit_N`) the arm
+  branches to instead of the join; the block is emitted at the join,
+  once the verdict is in — typed and used as an expression → the exit
+  block is a bare `br` to the join; a statement match, or an untyped one
+  → the drops go in it. A `?`/`??` that is the LAST statement of its
+  block cannot judge alone — its value is the block's value — so it
+  hands the exit records up and the construct that knows the answer
+  emits them: an enclosing arm folds them into its own join (the
+  anomaly service's `? see_all {} { ?? ( db_open … ) { T db → { = owner
+  … } } }` shape), a loop or bare block body drops them, a function or
+  closure body drops them iff it returns nothing, a block in expression
+  position keeps the value alive. The phi predecessor is redirected to
+  the exit block (the arm dominates it, so every value is still in
+  scope), no IR is buffered or rewritten, and the drop lands exactly
+  where a scalar arm would have put it. A `?? … { T db → { : *u q . db
+  buf = . db buf q q } … }` whose arm value IS derived from the
+  droppable still keeps it alive, as before. `arm_join_verdict_drop`
+  pins all of it, in the CI leak gate. On the way, the compiler stopped
+  leaking its own loop-snapshot lookups on every `break`/`continue` it
+  compiled.
+
+- **`mcp_server_envelope_as` / `mcp_server_envelope` leaked the request
+  id** — the envelope extracted the id once for the error paths and the
+  success path cloned it again into the response, freeing neither. One
+  Json per request.
 
 - **`nurl upgrade` on Windows** — it could never have worked. The
   upgrade spawns the installer bundled at `<prefix>\libexec\get-nurl.ps1`

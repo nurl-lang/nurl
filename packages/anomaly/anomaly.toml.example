@@ -81,6 +81,12 @@ open_ingest = false
 # override this; without any of them the binary looks beside itself.
 # webroot = "/usr/share/anomaly/static"
 
+# The origin agents reach the service at, when a reverse proxy rewrites Host.
+# The MCP endpoint's 401 challenge and /.well-known/oauth-protected-resource
+# name this origin; unset, it is derived per request from Host and
+# X-Forwarded-Proto / X-Forwarded-Host.
+# public_url = "https://anomaly.example.com"
+
 # NOTE: the store directory is deliberately NOT settable here. This file is
 # looked for inside the store, so a `store` key would be a file relocating the
 # directory it was just found in. Use --store or $ANOMALY_HOME.

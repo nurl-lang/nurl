@@ -75,6 +75,13 @@ $ `src/service.nu`
     ^ @ SvcOut { status parsed }
 }
 
+// Fire one request for its status alone; the body is parsed and dropped.
+@ status_of Router r s method s path → i {
+    : SvcOut o ( fire r method path `` `` )
+    ( json_free . o body )
+    ^ . o status
+}
+
 // String field of a JSON object equals `want`.
 @ jstr_eq Json o s key s want → b {
     ?? ( json_obj_get o key ) {
@@ -678,7 +685,7 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     ( check anf_temp `svc: fields= is percent-decoded (space, UTF-8)` )
     ( check anf_rh `svc: fields= is percent-decoded (%25)` )
     ( json_free . anf body )
-    ( check == . ( fire r `DELETE` `/delete_model/svc_imp` `` `` ) status 200 `svc: delete imported model` )
+    ( check == ( status_of r `DELETE` `/delete_model/svc_imp` ) 200 `svc: delete imported model` )
 
     // The same rows without any time column: the model is born on the
     // count clock. Points are ticks of 60 apart, `last=N` is N points, and
@@ -739,7 +746,7 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     }
     ( check == tick11 720 `svc: the stamped rows took ticks, not their stamps` )
     ( json_free . datc2 body )
-    ( check == . ( fire r `DELETE` `/delete_model/svc_cnt` `` `` ) status 200 `svc: delete count model` )
+    ( check == ( status_of r `DELETE` `/delete_model/svc_cnt` ) 200 `svc: delete count model` )
 
     // Reset → not trained → detect_only 400.
     : SvcOut rs ( fire r `POST` `/models/dynamic/svc/reset` `` `{}` )
@@ -778,8 +785,8 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     ( check == . fg status 200 `org files: member get -> 200` )
     ( check == ( jint_of . fg body `hello` ) 1 `org files: get returns the content` )
     ( json_free . fg body )
-    ( check == . ( fire r `GET` `/api/org/files/nope.json` `` `` ) status 404 `org files: missing -> 404` )
-    ( check == . ( fire r `GET` `/api/org/files/.env` `` `` ) status 400 `org files: bad name -> 400` )
+    ( check == ( status_of r `GET` `/api/org/files/nope.json` ) 404 `org files: missing -> 404` )
+    ( check == ( status_of r `GET` `/api/org/files/.env` ) 400 `org files: bad name -> 400` )
     : SvcOut lk ( fire r `POST` `/api/org/files/hello.json/link` `ttl=60` `` )
     ( check == . lk status 200 `org files: link -> 200` )
     : ~ String durl ( string_new )
@@ -811,13 +818,13 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     ( string_free lpath )
     ( string_free lquery )
     ( string_free durl )
-    ( check == . ( fire r `DELETE` `/api/org/files/hello.json` `` `` ) status 200 `org files: delete -> 200` )
-    ( check == . ( fire r `GET` `/api/org/files/hello.json` `` `` ) status 404 `org files: deleted -> 404` )
+    ( check == ( status_of r `DELETE` `/api/org/files/hello.json` ) 200 `org files: delete -> 200` )
+    ( check == ( status_of r `GET` `/api/org/files/hello.json` ) 404 `org files: deleted -> 404` )
 
     // ── Analyze: tasks, the job, the response ─────────────────────────
-    ( check == . ( fire r `GET` `/api/org/tasks/not-a-task-id` `` `` ) status 400 `tasks: bad id -> 400` )
-    ( check == . ( fire r `GET` `/api/org/tasks/000000000000000000000000` `` `` ) status 404 `tasks: unknown -> 404` )
-    ( check == . ( fire r `POST` `/api/analyze` `` `` ) status 400 `analyze: empty body -> 400` )
+    ( check == ( status_of r `GET` `/api/org/tasks/not-a-task-id` ) 400 `tasks: bad id -> 400` )
+    ( check == ( status_of r `GET` `/api/org/tasks/000000000000000000000000` ) 404 `tasks: unknown -> 404` )
+    ( check == ( status_of r `POST` `/api/analyze` ) 400 `analyze: empty body -> 400` )
     // The test binary must not re-spawn itself as the job: the job runs
     // in this process instead, after the request has queued it.
     ( analyze_set_exe `/bin/true` )
@@ -906,8 +913,8 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     ( check ( jstr_eq . gr body `state` `failed` ) `tasks: state failed` )
     ( check ( jstr_eq . gr body `status` `error` ) `tasks: failed task says error` )
     ( json_free . gr body )
-    ( check == . ( fire r `DELETE` ( string_data gurl ) `` `` ) status 200 `tasks: delete -> 200` )
-    ( check == . ( fire r `GET` ( string_data gurl ) `` `` ) status 404 `tasks: deleted -> 404` )
+    ( check == ( status_of r `DELETE` ( string_data gurl ) ) 200 `tasks: delete -> 200` )
+    ( check == ( status_of r `GET` ( string_data gurl ) ) 404 `tasks: deleted -> 404` )
     ( string_free gurl )
     ( string_free gdir )
     ( string_free gid )

@@ -44,6 +44,7 @@ $ `src/dynamic.nu`
 $ `src/csvdata.nu`
 $ `src/config.nu`
 $ `src/service.nu`
+$ `src/mcp.nu`
 
 @ pline s x → v {
     ( nurl_print x )
@@ -410,6 +411,12 @@ $ `src/service.nu`
         = webroot ( config_str cfg `service.webroot` `` )
     } {}
     ( anomaly_service_set_webroot ( string_data webroot ) )
+    // Behind a proxy that rewrites Host, the /mcp challenge and the
+    // protected-resource document must still name the origin agents
+    // reach; the config file is the only place that origin is known.
+    : String origin ( config_str cfg `service.public_url` `` )
+    ( an_mcp_set_public_url ( string_data origin ) )
+    ( string_free origin )
     // Say where the models live: a mistyped --store or $ANOMALY_HOME
     // otherwise serves (and writes) the default store without a word.
     ( nurl_eprint `anomaly: model store: ` )
@@ -767,7 +774,7 @@ $ `src/service.nu`
 }
 
 @ main → i {
-    : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` `0.12.0` )
+    : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` ANOMALY_VERSION )
     ( cli_flag_str c `store` 115 `DIR` `model store (default: $ANOMALY_HOME, else ~/.anomaly)` `` `ANOMALY_HOME` )
     ( cli_flag_str c `file` 102 `FILE` `for batch: read CSV from FILE instead of stdin` `` `` )
     ( cli_flag_str c `margin` 109 `M` `for batch: decision margin (default 0 = predict==-1)` `0` `` )

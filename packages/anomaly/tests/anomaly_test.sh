@@ -10,11 +10,13 @@
 #                      authz (organisations, roles, ownership, keys),
 #                      config (the file, and what layers over it),
 #                      import (CSV/JSON/JSONL history → a model),
+#                      mcp (the agent endpoint: tools, roles, challenge),
 #                      dashboard (the generated metadata editor; needs node)
 #    2. CLI          : detect/score/train/ls/info/batch/reset/rm
 #    3. live HTTP    : `anomaly serve` + curl against the routes
 #    4. auth         : tests/authflow_test.sh — the OIDC gate over a socket
-#                      against packages/oauth's signing test provider
+#                      against packages/oauth's signing test provider,
+#                      and the MCP endpoint behind it
 #
 #  Run from the package dir:  ./tests/anomaly_test.sh
 #  Env: NURL (build driver; defaults to ../../nurl.sh in a checkout)
@@ -36,8 +38,8 @@ PASS=0; FAIL=0
 ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 
-echo "[1/3] unit suites"
-for t in prep model store dynamic versions timevector autoencoder scan authz config import metaedit service gpu; do
+echo "[1/4] unit suites"
+for t in prep model store dynamic versions timevector autoencoder scan authz config import metaedit service mcp gpu; do
     if ! $NURL "tests/${t}_test.nu" "$WORK/${t}_test" >/dev/null 2>"$WORK/build.err"; then
         echo "FAIL: could not build ${t}_test:"; tail -5 "$WORK/build.err"; exit 1
     fi
@@ -69,7 +71,7 @@ else
     echo "  SKIP dashboard_test (node not installed)"
 fi
 
-echo "[2/3] CLI"
+echo "[2/4] CLI"
 if ! $NURL src/main.nu "$WORK/anomaly" >/dev/null 2>"$WORK/build.err"; then
     echo "FAIL: could not build the anomaly CLI:"; tail -5 "$WORK/build.err"; exit 1
 fi
@@ -96,7 +98,7 @@ WORST=$(echo "$B" | LC_ALL=C sort -k2 -g | head -1 | cut -f1)
 [ "$WORST" = "3" ] && ok "CLI batch ranks the outlier row worst" || bad "CLI batch outlier row ($WORST)"
 "$A" reset s1 >/dev/null && "$A" rm s1 >/dev/null && [ -z "$("$A" ls)" ] && ok "CLI reset + rm" || bad "CLI reset/rm"
 
-echo "[3/3] live HTTP service"
+echo "[3/4] live HTTP service"
 PORT=$((20000 + RANDOM % 20000))
 "$A" serve --addr "127.0.0.1:$PORT" --store "$WORK/svcmodels" --webroot static 2>"$WORK/serve.err" &
 SERVE_PID=$!

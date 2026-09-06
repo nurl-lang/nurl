@@ -309,10 +309,13 @@ $ `src/orgfiles.nu`
         ( string_free dir )
         ( string_free exe )
     }
-    ?? ( thread_spawn body ) {
+    // Detached and forgotten: the thread frees the closure's env when the
+    // body returns, and the body frees what it captured.
+    ?? ( thread_spawn_owned body ) {
         T t → { ( thread_detach t ) ^ T }
         F _ → {}
     }
+    ( nurl_free # s # *u body 1 )
     ( string_free dir )
     ( string_free exe )
     ^ F
@@ -356,9 +359,8 @@ $ `src/orgfiles.nu`
     // The store root the service named: the result goes into the
     // organisation's folder beside it.
     : String root ( _ana_jstr params `root` )
-    // `root` is never freed: the folder module borrows it for the life of
-    // the process, which is this one job.
     ? > ( string_len root ) 0 { ( orgfiles_set_root ( string_data root ) ) } {}
+    ( string_free root )
     : Json st ?? ( analyze_status_read dir ) { T j → j F _ → ( json_obj_new ) }
     ( json_obj_set st `state` ( json_str_lit `running` ) )
     ( json_obj_set st `started` ( json_int ( now_seconds ) ) )
@@ -465,62 +467,18 @@ $ `src/orgfiles.nu`
     } {}
 
     // Train: every forest over the whole file, the autoencoder over the
-    // forest-filtered points, every margin at the target rate. The stock
-    // versions window their training set back from "now" (three hours,
-    // a day, a week, ninety days) — right for a live stream, wrong for a
-    // file whose stamps may be months old: every window would miss the
-    // data and fall back to the last fifty rows, a forest that saturates
-    // on everything else. A batch analysis has no present; the file is
-    // the whole world, so every window opens to it.
-    : i nv ( vec_len [VerCfg] . mm versions )
-    : ~ i vi 0
-    ~ < vi nv {
-        ?? ( vec_get [VerCfg] . mm versions vi ) {
-            T vc → {
-                : ~ VerCfg o vc
-                = . o window_min 0
-                = . o window_pts 0
-                : b _o ( vec_set [VerCfg] . mm versions vi o )
-            }
-            F _ → {}
-        }
-        = vi + vi 1
-    }
-    ( model_force_train_at mo ( model_last_ts mo ) )
-    : Json notes ( json_arr_new )
-    : ( Vec i ) hidden ( vec_new [i] )
-    ( vec_push [i] hidden 64 )
-    ( vec_push [i] hidden 16 )
-    ( vec_push [i] hidden 64 )
-    : String aerr ( model_train_autoencoder mo hidden ANA_TARGET_RATE )
-    ( vec_free [i] hidden )
-    ? > ( string_len aerr ) 0 {
-        : String m ( string_from `autoencoder not trained: ` )
-        ( string_push_str m ( string_data aerr ) )
-        ( json_arr_push notes ( json_str_lit ( string_data m ) ) )
-        ( string_free m )
-    } {}
-    ( string_free aerr )
-    : ( Vec String ) none ( vec_new [String] )
-    : FineTuneReport ft ( model_finetune_at mo ANA_TARGET_RATE 0 0 T none )
-    ( vec_free [String] none )
-    : Json margins ( json_obj_new )
-    : i nft ( vec_len [FtVer] . ft items )
-    : ~ i k 0
-    ~ < k nft {
-        ?? ( vec_get [FtVer] . ft items k ) {
-            T fv → { ( json_obj_set margins ( string_data . fv ftname ) ( json_float . fv new_margin ) ) }
-            F _ → {}
-        }
-        = k + k 1
-    }
-    ( finetune_free ft )
+    // forest-filtered points, every margin at the target rate — the batch
+    // recipe (model_train_whole), shared with a model forked from another
+    // model's history.
+    : WholeTrain wt ( model_train_whole mo ANA_TARGET_RATE )
+    : Json notes . wt notes
+    : Json margins . wt margins
 
     // Scan everything, keep the anomalies.
     : ScanOut so ( model_scan mo 0 0 0 F )
     : Json vers ( json_arr_new )
     : i nvn ( vec_len [String] . so vnames )
-    = k 0
+    : ~ i k 0
     ~ < k nvn {
         ?? ( vec_get [String] . so vnames k ) {
             T nm → { ( json_arr_push vers ( json_str_lit ( string_data nm ) ) ) }

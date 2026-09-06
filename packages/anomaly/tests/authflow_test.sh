@@ -12,8 +12,10 @@
 #
 #  Covered: the gate with no credentials; a real token signed by a real
 #  key; first-user-becomes-admin; the ingest migration window; API keys
-#  issued, used and revoked; model ownership following its creator; and
-#  every broken token the provider can mint being refused.
+#  issued, used and revoked; model ownership following its creator; every
+#  broken token the provider can mint being refused; and the MCP endpoint
+#  — the 401 challenge that leads a client to the issuer, a viewer's tool
+#  list and its scratch namespace, an admin's organisation tools.
 #
 #  Run from the package dir:  ./tests/authflow_test.sh
 # ============================================================
@@ -42,7 +44,7 @@ PPORT=$((21000 + RANDOM % 2000))
 APORT=$((23000 + RANDOM % 2000))
 ISS="http://127.0.0.1:$PPORT"
 
-echo "[1/4] build"
+echo "[1/5] build"
 if ! $NURL ../oauth/tests/provider.nu "$WORK/provider" >/dev/null 2>"$WORK/b1.err"; then
     echo "SKIP: cannot build the oauth test provider"; tail -3 "$WORK/b1.err"; exit 0
 fi
@@ -51,7 +53,7 @@ if ! $NURL src/main.nu "$WORK/anomaly" >/dev/null 2>"$WORK/b2.err"; then
 fi
 ok "provider and service built"
 
-echo "[2/4] start"
+echo "[2/5] start"
 "$WORK/provider" --port "$PPORT" >"$WORK/prov.log" 2>&1 &
 PROV_PID=$!
 for _ in $(seq 1 60); do curl -s -m 1 -o /dev/null "$ISS/.well-known/openid-configuration" && break; sleep 0.2; done
@@ -69,7 +71,7 @@ grep -q "authentication ON" "$WORK/srv.log" && ok "service started with authenti
 
 code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 
-echo "[3/4] the gate"
+echo "[3/5] the gate"
 [ "$(code "$B/api/me")" = 401 ]           && ok "no credentials -> 401" || bad "no credentials"
 [ "$(code "$B/models/dynamic")" = 401 ]   && ok "the listing is closed" || bad "listing not closed"
 [ "$(code "$B/api/org/users")" = 401 ]    && ok "org routes are closed" || bad "org routes"
@@ -86,7 +88,7 @@ curl -s -D- -o /dev/null "$B/api/me" | grep -qi '^WWW-Authenticate: Bearer' \
 [ ! -d "$WORK/store/nobody" ] \
     && ok "and no model was created for it" || bad "anonymous ingest created a model"
 
-echo "[4/4] a real token"
+echo "[4/5] a real token"
 # A real sign-in: PKCE verifier -> challenge -> code -> token exchange.
 VERIFIER="verifier-$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 CHALLENGE=$(python3 -c "
@@ -338,6 +340,169 @@ PYX
 curl -s -m 10 -H "$AH" "$B/api/org/keys" -o "$WORK/kls.json"
 grep -q "$KEY" "$WORK/kls.json" && bad "the key listing leaks the secret" \
     || ok "the key listing never carries a secret"
+
+echo "[5/5] MCP"
+# An agent with no credential is told where to sign in: the 401 names the
+# protected-resource document, and that document names the issuer.
+curl -s -m 10 -D "$WORK/mcp401.h" -o "$WORK/mcp401.json" -H 'Content-Type: application/json' \
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' "$B/mcp"
+grep -q '^HTTP/1.1 401' "$WORK/mcp401.h" && ok "MCP without a credential -> 401" || bad "MCP anonymous ($(head -1 "$WORK/mcp401.h"))"
+PRM=$(grep -i '^WWW-Authenticate:' "$WORK/mcp401.h" | sed -n 's/.*resource_metadata="\([^"]*\)".*/\1/p')
+[ "$PRM" = "$B/.well-known/oauth-protected-resource/mcp" ] \
+    && ok "the challenge names the resource metadata document" || bad "challenge URL: $PRM"
+curl -s -m 10 "$PRM" -o "$WORK/prm.json"
+python3 - "$WORK/prm.json" "$ISS" "$B/mcp" <<'PYX' && ok "the document names the issuer, the resource and the scope" || bad "resource metadata"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["authorization_servers"] == [sys.argv[2]], d
+assert d["resource"] == sys.argv[3], d
+assert d["scopes_supported"] == ["test-api/access_as_user"], d
+assert "header" in d["bearer_methods_supported"], d
+PYX
+[ "$(code -X OPTIONS "$B/mcp")" = 204 ] && ok "MCP preflight is open" || bad "MCP preflight"
+
+# A second person signs in: the second subject an organisation sees is a
+# viewer. The code names who (the provider's session, in a stateless test).
+curl -s -m 5 -X POST "$ISS/token" \
+     -d "grant_type=authorization_code&client_id=test-client&code=c.$CHALLENGE.n2.user-77&code_verifier=$VERIFIER" \
+     -o "$WORK/tok2.json"
+VACCESS=$(python3 -c "import json;print(json.load(open('$WORK/tok2.json')).get('access_token',''))")
+[ -n "$VACCESS" ] && ok "a second user signed in" || { bad "no second token"; cat "$WORK/tok2.json"; }
+VH="Authorization: Bearer $VACCESS"
+curl -s -m 10 -H "$VH" "$B/api/me" -o "$WORK/me77.json"
+python3 - "$WORK/me77.json" <<'PYX' && ok "and is a viewer of the same organisation" || bad "second user role"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d.get("subject") == "user-77" and d.get("role") == "viewer", d
+PYX
+
+mcp() { curl -s -m 60 -H "$1" -H 'Content-Type: application/json' -d "$2" "$B/mcp"; }
+mcp "$VH" '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' > "$WORK/vtools.json"
+python3 - "$WORK/vtools.json" <<'PYX' && ok "a viewer is shown the member tools and none of the organisation's" || bad "viewer tool list"
+import json, sys
+names = {t["name"] for t in json.load(open(sys.argv[1]))["result"]["tools"]}
+for t in ("whoami", "list_models", "anomalies", "anomaly_summary", "points", "calibration",
+          "fork_model", "finetune", "delete_model", "analyze_data"):
+    assert t in names, f"viewer should see {t}"
+for t in ("ingest_point", "import_data", "set_role", "org_users", "org_keys", "claim_model"):
+    assert t not in names, f"viewer must not see {t}"
+assert len(names) == 20, sorted(names)
+PYX
+call() { mcp "$1" "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"$2\",\"arguments\":$3}}"; }
+call "$VH" whoami '{}' > "$WORK/vwho.json"
+python3 - "$WORK/vwho.json" <<'PYX' && ok "whoami tells the viewer what it may do" || bad "viewer whoami"
+import json, sys
+r = json.load(open(sys.argv[1]))["result"]
+assert r["isError"] is False, r
+d = json.loads(r["content"][0]["text"])
+assert d["role"] == "viewer" and d["scratch_prefix"] == "llm_", d
+assert any("NOT change or delete" in m for m in d["may"]), d["may"]
+PYX
+call "$VH" list_models '{}' > "$WORK/vlist.json"
+python3 - "$WORK/vlist.json" <<'PYX' && ok "the viewer lists the organisation's models" || bad "viewer list_models"
+import json, sys
+d = json.loads(json.load(open(sys.argv[1]))["result"]["content"][0]["text"])
+assert {m["name"] for m in d["models"]} >= {"mine", "history", "brandnew"}, d
+PYX
+call "$VH" anomaly_summary '{"model":"history"}' > "$WORK/vsum.json"
+python3 - "$WORK/vsum.json" <<'PYX' && ok "the viewer reads a summary" || bad "viewer anomaly_summary"
+import json, sys
+r = json.load(open(sys.argv[1]))["result"]
+assert r["isError"] is False, r
+d = json.loads(r["content"][0]["text"])
+assert d["points_in_window"] == 82 and "anomaly_rate" in d and "timeline" in d, d
+PYX
+call "$VH" retrain '{"model":"history"}' > "$WORK/vrt.json"
+python3 - "$WORK/vrt.json" <<'PYX' && ok "the viewer may not retrain a production model, and is told why" || bad "viewer retrain"
+import json, sys
+r = json.load(open(sys.argv[1]))["result"]
+assert r["isError"] is True, r
+t = r["content"][0]["text"]
+assert "403" in t and "llm_" in t, t
+PYX
+call "$VH" set_role '{"subject":"user-42","role":"viewer"}' > "$WORK/vsr.json"
+python3 - "$WORK/vsr.json" <<'PYX' && ok "an organisation tool is unknown to a viewer" || bad "viewer set_role"
+import json, sys
+r = json.load(open(sys.argv[1]))["result"]
+assert r["isError"] is True and "unknown tool" in r["content"][0]["text"], r
+PYX
+call "$VH" fork_model '{"source":"history","name":"llm_view","fields":["temp"]}' > "$WORK/vfk.json"
+python3 - "$WORK/vfk.json" <<'PYX' && ok "the viewer forks a scratch model of its own" || bad "viewer fork_model"
+import json, sys
+r = json.load(open(sys.argv[1]))["result"]
+assert r["isError"] is False, r
+d = json.loads(r["content"][0]["text"])
+assert d["model_name"] == "llm_view" and d["source"] == "history" and d["fields"] == ["temp"], d
+PYX
+call "$VH" finetune '{"model":"llm_view","rate":0.02}' > "$WORK/vft.json"
+python3 - "$WORK/vft.json" <<'PYX' && ok "and tunes it" || bad "viewer finetune"
+import json, sys
+assert json.load(open(sys.argv[1]))["result"]["isError"] is False
+PYX
+curl -s -m 10 -H "$AH" "$B/models/dynamic/llm_view/metadata" -o "$WORK/vmd.json"
+python3 - "$WORK/vmd.json" <<'PYX' && ok "the scratch model belongs to the organisation" || bad "scratch model ownership"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d.get("owner") == "user-77", d
+PYX
+call "$VH" delete_model '{"model":"llm_view"}' > "$WORK/vdl0.json"
+python3 - "$WORK/vdl0.json" <<'PYX' && ok "delete_model insists on confirm" || bad "delete without confirm"
+import json, sys
+r = json.load(open(sys.argv[1]))["result"]
+assert r["isError"] is True and "confirm" in r["content"][0]["text"], r
+PYX
+call "$VH" delete_model '{"model":"llm_view","confirm":true}' > "$WORK/vdl.json"
+python3 - "$WORK/vdl.json" <<'PYX' && ok "the viewer deletes its scratch model" || bad "viewer delete_model"
+import json, sys
+assert json.load(open(sys.argv[1]))["result"]["isError"] is False
+PYX
+[ "$(code -H "$AH" "$B/models/dynamic/llm_view/metadata")" = 404 ] \
+    && ok "and it is gone" || bad "scratch model survived delete"
+
+# The administrator's view.
+mcp "$AH" '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' > "$WORK/atools.json"
+python3 - "$WORK/atools.json" <<'PYX' && ok "an admin is shown every tool" || bad "admin tool list"
+import json, sys
+names = {t["name"] for t in json.load(open(sys.argv[1]))["result"]["tools"]}
+assert {"set_role", "org_users", "org_keys", "claim_model", "ingest_point", "import_data"} <= names, sorted(names)
+assert len(names) == 26, len(names)
+PYX
+call "$AH" org_users '{}' > "$WORK/ausers.json"
+python3 - "$WORK/ausers.json" <<'PYX' && ok "org_users lists both members" || bad "admin org_users"
+import json, sys
+r = json.load(open(sys.argv[1]))["result"]
+assert r["isError"] is False, r
+t = r["content"][0]["text"]
+assert "user-42" in t and "user-77" in t, t
+PYX
+call "$AH" org_keys '{}' > "$WORK/akeys.json"
+python3 - "$WORK/akeys.json" "$IKEY" <<'PYX' && ok "org_keys lists keys without their secrets" || bad "admin org_keys"
+import json, sys
+r = json.load(open(sys.argv[1]))["result"]
+assert r["isError"] is False, r
+t = r["content"][0]["text"]
+assert "producer" in t and sys.argv[2] not in t, t
+PYX
+call "$AH" set_role '{"subject":"user-77","role":"admin"}' > "$WORK/asr.json"
+python3 - "$WORK/asr.json" <<'PYX' && ok "set_role promotes the viewer" || bad "admin set_role"
+import json, sys
+assert json.load(open(sys.argv[1]))["result"]["isError"] is False
+PYX
+mcp "$VH" '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' > "$WORK/vtools2.json"
+python3 - "$WORK/vtools2.json" <<'PYX' && ok "and the promoted user's next tool list has grown" || bad "promoted tool list"
+import json, sys
+names = {t["name"] for t in json.load(open(sys.argv[1]))["result"]["tools"]}
+assert "set_role" in names and len(names) == 26, sorted(names)
+PYX
+call "$AH" set_role '{"subject":"user-77","role":"viewer"}' > /dev/null
+call "$AH" ingest_point '{"model":"mine","values":{"t":3}}' > "$WORK/aip.json"
+python3 - "$WORK/aip.json" <<'PYX' && ok "an admin sends a point through MCP" || bad "admin ingest_point"
+import json, sys
+r = json.load(open(sys.argv[1]))["result"]
+assert r["isError"] is False, r
+d = json.loads(r["content"][0]["text"])
+assert d["model_name"] == "mine" and d["data_points"] == 3, d
+PYX
 
 echo "== anomaly auth flow: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" = 0 ]

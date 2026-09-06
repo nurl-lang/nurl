@@ -9915,6 +9915,206 @@
     ( nurl_sym_def g_ptrtab `__ptr_dead__` out )
 }
 
+// ── Phase 2D: the join decides an unsafe arm's drops ──────────────
+// (Defined above gen_cond/gen_match on purpose: a string-returning
+// helper below its caller has no ownership summary yet, and the
+// caller would keep — leak — every list it returns.)
+// mem_arm_drop_safe judges an arm by its VALUE type: a pointer or
+// aggregate value may be backed by an arm-local owned object, so such
+// an arm cannot free its `% Drop` values and owned struct fields at
+// the fall-through — and they leaked, whether or not anything consumed
+// the value. Most such arms are statements whose tail is an assignment
+// (`T db → { ( string_free out ) = out ( names db ) }`): the arm's type
+// is the assigned type, the value flows nowhere, and `db` still had to
+// be closed by hand (a `?? ( sqlite_open … )` arm in every anomaly
+// handler leaked its connection this way).
+//
+// So the arm branches to a private exit block instead of the join
+// label, and its arm-local delta is parked under that label (labels
+// are unique per function). Once every arm is parsed, the construct
+// knows whether its value is consumed at all — no phi is emitted, or
+// the `?`/`??` heads a statement that is not its block's tail — and
+// emits the exit blocks: with the parked drops when nothing consumes
+// the value, a bare `br` otherwise (the value may alias an arm-local;
+// the leak stays the conservative direction). The phi reads the arm's
+// value through the exit block, which the arm dominates. Strings are
+// not parked here — mem_defer_new_strings already frees them in the
+// epilogue.
+
+// Park the arm-local user-drop / struct-field delta (entries not in the
+// parent's snapshot, not defer-snapshotted, with a destructor to run).
+// Returns the exit label, or `` when the arm has nothing to drop — then
+// the caller keeps branching straight to the join.
+@ mem_arm_exit_open i syms i cg s old_user s old_structs → s {
+    : s usnap ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
+    : ~ s udelta ``
+    : ~ s urest ( nurl_sym_get syms `__user_drops__` )
+    ~ != 0 ( nurl_str_len urest ) {
+        : s ptr ( str_first_word urest ) = urest ( str_skip_word urest )
+        : s vt ( str_first_word urest ) = urest ( str_skip_word urest )
+        ? | | ( str_contains_word old_user ptr ) ( str_contains_word usnap ptr )
+        == 0 ( nurl_sym_len2 g_impl_name_syms `drop##` vt )
+        {}
+        { : s rec ( nurl_str_cat3 ptr ` ` vt )
+            = udelta ? == 0 ( nurl_str_len udelta ) ( nurl_str_cat rec `` ) ( nurl_str_cat3 udelta ` ` rec ) }
+    }
+    : s ssnap ( nurl_sym_get g_fn_escapes `__dsnap_sfield__` )
+    : ~ s sdelta ``
+    : ~ s srest ( nurl_sym_get syms `__owned_struct_fields__` )
+    ~ != 0 ( nurl_str_len srest ) {
+        : s ptr ( str_first_word srest ) = srest ( str_skip_word srest )
+        : ~ s rec ( nurl_str_cat ptr `` )
+        : ~ i k 1
+        ~ < k 6 {
+            = rec ( nurl_str_cat3 rec ` ` ( str_first_word srest ) )
+            = srest ( str_skip_word srest )
+            = k + k 1
+        }
+        ? | ( str_contains_word old_structs ptr ) ( str_contains_word ssnap ptr )
+        {}
+        { = sdelta ? == 0 ( nurl_str_len sdelta ) ( nurl_str_cat rec `` ) ( nurl_str_cat3 sdelta ` ` rec ) }
+    }
+    ? & == 0 ( nurl_str_len udelta ) == 0 ( nurl_str_len sdelta )
+    { ^ ( nurl_str_cat `` `` ) } {}
+    : s lbl ( nurl_cg_lbl cg `arm_exit` )
+    : s ukey ( nurl_str_cat lbl `__x_udrops` )
+    : s skey ( nurl_str_cat lbl `__x_sfields` )
+    ( nurl_sym_set g_fn_escapes ukey udelta )
+    ( nurl_sym_set g_fn_escapes skey sdelta )
+    ^ lbl
+}
+
+// Emit parked exit blocks: each runs its drops when `drop` (the value
+// they guard is consumed by nothing) and branches to its join. A record
+// is `<exit label>><join label>` — an exit inherited from a nested
+// `?`/`??` (see the hand-up below) joins ITS construct, not the one
+// that emits it; the block may be emitted anywhere in the function,
+// since the arm dominates it and the join's phi already names it.
+// Journal entries are forgotten with the drop, as at any other scope
+// exit. The parked lists are cleared: the label counter is per
+// function, so the key would otherwise meet a namesake later.
+@ mem_arm_exits_emit i syms i cg s records b drop → v {
+    : ~ s rest ( nurl_str_cat records `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s rec ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i gt ( nurl_str_find rec `>` )
+        : s lbl ( nurl_str_slice rec 0 gt )
+        : s end_label ( nurl_str_slice rec + gt 1 - ( nurl_str_len rec ) + gt 1 )
+        : s ukey ( nurl_str_cat lbl `__x_udrops` )
+        : s skey ( nurl_str_cat lbl `__x_sfields` )
+        ( nurl_print lbl ) ( nurl_print `:\n` )
+        ? drop
+        { : ~ s urest ( nurl_sym_get g_fn_escapes ukey )
+            ~ != 0 ( nurl_str_len urest ) {
+                : s ptr ( str_first_word urest ) = urest ( str_skip_word urest )
+                : s vt ( str_first_word urest ) = urest ( str_skip_word urest )
+                : s mangled ( nurl_sym_get2 g_impl_name_syms `drop##` vt )
+                : s impl_name ( nurl_str_cat `drop__` mangled )
+                : s v ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print v )
+                ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) )
+                ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+                ( nurl_print `  call void @` ) ( nurl_print impl_name )
+                ( nurl_print `(` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
+                ( mem_journal_forget_userdrop cg ptr vt )
+            }
+            : ~ s srest ( nurl_sym_get g_fn_escapes skey )
+            ~ != 0 ( nurl_str_len srest ) {
+                : s ptr ( str_first_word srest ) = srest ( str_skip_word srest )
+                : s sname ( str_first_word srest ) = srest ( str_skip_word srest )
+                : s path ( str_first_word srest ) = srest ( str_skip_word srest )
+                : s kind ( str_first_word srest ) = srest ( str_skip_word srest )
+                : s leaf_sname ( str_first_word srest ) = srest ( str_skip_word srest )
+                : s leaf_idx ( str_first_word srest ) = srest ( str_skip_word srest )
+                ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx )
+            } }
+        {}
+        ( nurl_print `  br label %` ) ( nurl_print end_label ) ( emit_dbg_eol )
+        ( nurl_sym_set g_fn_escapes ukey `` )
+        ( nurl_sym_set g_fn_escapes skey `` )
+    }
+}
+
+// ── The hand-up: a tail `?`/`??` lets its consumer decide ─────────
+// A `?`/`??` that is the LAST statement of a block does not know at its
+// own join whether its value is used: the block's value goes to whoever
+// opened the block — a `?`/`??` arm (whose own verdict is still
+// pending), a loop or void body (discarded), a function body (the
+// fall-off return, used iff the function returns a value), a closure
+// body (likewise), a block expression (used). So instead of guessing it
+// parks its exit records on `__pend_exits__` (function lifetime, like
+// the defer chain) and the consumer either takes them into its own list
+// (an arm — and decides for both at its join, or hands up again), or
+// drains them where it knows the answer.
+@ mem_exits_pend_add s records → v {
+    ? == 0 ( nurl_str_len records ) {} {
+        : s cur ( nurl_sym_get g_fn_escapes `__pend_exits__` )
+        ? == 0 ( nurl_str_len cur )
+        { ( nurl_sym_set g_fn_escapes `__pend_exits__` records ) }
+        { : s joined ( nurl_str_cat3 cur ` ` records )
+            ( nurl_sym_set g_fn_escapes `__pend_exits__` joined ) }
+    }
+}
+
+// What an arm body handed up while it was generated: the records added
+// since `before` (the list is append-only inside an arm). Restores the
+// list to `before` — the caller now owns the delta.
+@ mem_exits_inherit s before → s {
+    // Every path allocates (a literal-initialised `delta` would make the
+    // return "maybe borrowed" and the callers keep it — see __subst_word).
+    : ~ s delta ( nurl_str_cat `` `` )
+    : ~ s rest ( nurl_sym_get g_fn_escapes `__pend_exits__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( str_contains_word before w ) {}
+        { = delta ? == 0 ( nurl_str_len delta ) ( nurl_str_cat w `` ) ( nurl_str_cat3 delta ` ` w ) }
+    }
+    ( nurl_sym_set g_fn_escapes `__pend_exits__` before )
+    ^ delta
+}
+
+// Append `more` to an exits list.
+@ mem_exits_join s list s more → s {
+    ? == 0 ( nurl_str_len more ) { ^ ( nurl_str_cat list `` ) } {}
+    ? == 0 ( nurl_str_len list ) { ^ ( nurl_str_cat more `` ) } {}
+    ^ ( nurl_str_cat3 list ` ` more )
+}
+
+// A consumer that knows the verdict emits what is pending. Exit blocks
+// start with a label, so the live block is closed first with a `br` to
+// a resume label the code continues under (LLVM folds the hop); after
+// a terminator (g_did_ret) they are simply appended.
+@ mem_exits_drain i syms i cg b drop → v {
+    : s pend ( nurl_sym_get g_fn_escapes `__pend_exits__` )
+    ? == 0 ( nurl_str_len pend ) {} {
+        ( nurl_sym_set g_fn_escapes `__pend_exits__` `` )
+        ? == 0 g_did_ret
+        { : s lres ( nurl_cg_lbl cg `exits_resume` )
+            ( nurl_print `  br label %` ) ( nurl_print lres ) ( emit_dbg_eol )
+            ( mem_arm_exits_emit syms cg pend drop )
+            ( emit ( nurl_str_cat lres `:` ) )
+            ( nurl_sym_def syms `__cur_lbl__` lres ) }
+        { ( mem_arm_exits_emit syms cg pend drop ) }
+    }
+}
+
+// Mark the block about to be generated as a `?`/`??` arm body, so
+// gen_block_expr leaves its pending exits to the construct instead of
+// draining them as a block expression would. Only a `{` is marked — a
+// bare-expression arm has no tail statement to hand anything up.
+@ mem_arm_body_mark i lex → v {
+    ? == ( nurl_lex_type lex ) TT_LBRACE
+    { ( nurl_sym_set g_fn_escapes `__arm_body__` `1` ) }
+    { ( nurl_sym_set g_fn_escapes `__arm_body__` `` ) }
+}
+
+// Does the `?`/`??` whose head token is at (line, col) head the
+// statement gen_stmt is generating? Then its value is consumed only if
+// it is also its block's tail — the caller checks the token after it.
+@ mem_join_heads_stmt i lex → b {
+    & == ( nurl_lex_line lex ) g_stmt_line == ( nurl_lex_col lex ) g_stmt_col
+}
+
 @ gen_cond i lex i syms i cg → s {
     // Borrow checker (Phase 0d): source line of the `?`, for the
     // `cond`/`endcond` structural markers bracketing this conditional.
@@ -9923,6 +10123,9 @@
     // function can point at the `?` rather than at the `{` that
     // finally revealed the mistake.
     : i bck_ccol ( nurl_lex_col lex )
+    // Does this `?` head a statement? Decided before the arms move the
+    // statement anchor; the parked-drop verdict at the join reads it.
+    : b c_is_stmt ( mem_join_heads_stmt lex )
     ( nurl_lex_advance lex )
     // The condition is a value operand — a `^` here is a cascade.
     // Parsing a CONDITION: a `{` after a ternary in here opens this
@@ -10017,7 +10220,13 @@
     // spelling the variant blessing below may trust.
     : i t_tt0 ( nurl_lex_type lex )
     : s t_v0 ( nurl_str_cat ( nurl_lex_val lex ) `` )
+    // Exits a tail `?`/`??` inside this arm hands up are this arm's to
+    // carry to the join (mem_exits_inherit, after the body).
+    : s t_pend0 ( nurl_sym_get g_fn_escapes `__pend_exits__` )
+    ( mem_arm_body_mark lex )
     : ~ s tv ( gen_expr lex syms cg )
+    ( nurl_sym_set g_fn_escapes `__arm_body__` `` )
+    : s t_inherited ( mem_exits_inherit t_pend0 )
     : s tt2 ( nurl_get_last_type )
     : s t_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
     : s t_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
@@ -10078,7 +10287,11 @@
     ? & ( is_ident_tok t_tt0 ) & ( seq t_v0 t_retid ) != 0 ( nurl_str_len t_retid )
     { = t_ven ( nurl_str_cat ( nurl_sym_get2 syms t_retid `__enum_of` ) `` ) }
     { = t_ven ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` ) }
-    : s tlbl ( nurl_sym_get syms `__cur_lbl__` )
+    // The phi's predecessor for this arm: its last block, or the private
+    // exit block a parked-drop arm leaves through (mem_arm_exit_open).
+    : ~ s tlbl ( nurl_sym_get syms `__cur_lbl__` )
+    : ~ b t_via_exit F
+    : ~ s c_exits ( nurl_str_cat t_inherited `` )
     : i tdr g_did_ret
     // Lossless 64-bit shadow of an integer branch value, emitted while
     // instructions still land in this branch's block. If the two branches
@@ -10111,9 +10324,18 @@
             ( mem_drop_new_user_drops syms cg old_user_t )
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_t ) } {} }
         { ? != 0 g_auto_drop_strings
-            { ( mem_defer_new_strings syms old_strs_t ) } {} }
+            { ( mem_defer_new_strings syms old_strs_t )
+                : s __tx ( mem_arm_exit_open syms cg old_user_t old_structs_t )
+                ? != 0 ( nurl_str_len __tx )
+                { = tlbl ( nurl_str_cat __tx `` )
+                    = t_via_exit T
+                    : s __txr ( nurl_str_cat3 __tx `>` lend )
+                    = c_exits ( mem_exits_join c_exits __txr ) }
+                {} } {} }
         ( mem_drop_new_closure_envs syms cg old_closure_t )
-        ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
+        ( nurl_print `  br label %` )
+        ? t_via_exit { ( nurl_print tlbl ) } { ( nurl_print lend ) }
+        ( emit_dbg_eol )
     } {}
     ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
     ( emit ( nurl_str_cat le `:` ) )
@@ -10149,7 +10371,12 @@
     ( nurl_sym_def syms `__last_phi_idents__` `` )
     : i e_tt0 ( nurl_lex_type lex )
     : s e_v0 ( nurl_str_cat ( nurl_lex_val lex ) `` )
+    : s e_pend0 ( nurl_sym_get g_fn_escapes `__pend_exits__` )
+    ( mem_arm_body_mark lex )
     : ~ s ev ( gen_expr lex syms cg )
+    ( nurl_sym_set g_fn_escapes `__arm_body__` `` )
+    : s e_inherited ( mem_exits_inherit e_pend0 )
+    = c_exits ( mem_exits_join c_exits e_inherited )
     : s et2 ( nurl_get_last_type )
     : s e_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
     : s e_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
@@ -10187,7 +10414,8 @@
     ? & ( is_ident_tok e_tt0 ) & ( seq e_v0 e_retid ) != 0 ( nurl_str_len e_retid )
     { = e_ven ( nurl_str_cat ( nurl_sym_get2 syms e_retid `__enum_of` ) `` ) }
     { = e_ven ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` ) }
-    : s elbl ( nurl_sym_get syms `__cur_lbl__` )
+    : ~ s elbl ( nurl_sym_get syms `__cur_lbl__` )
+    : ~ b e_via_exit F
     : i edr g_did_ret
     : ~ s ev64 ( nurl_str_cat ev `` )
     ? == edr 0
@@ -10208,9 +10436,18 @@
             ( mem_drop_new_user_drops syms cg old_user_e )
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_e ) } {} }
         { ? != 0 g_auto_drop_strings
-            { ( mem_defer_new_strings syms old_strs_e ) } {} }
+            { ( mem_defer_new_strings syms old_strs_e )
+                : s __ex ( mem_arm_exit_open syms cg old_user_e old_structs_e )
+                ? != 0 ( nurl_str_len __ex )
+                { = elbl ( nurl_str_cat __ex `` )
+                    = e_via_exit T
+                    : s __exr ( nurl_str_cat3 __ex `>` lend )
+                    = c_exits ( mem_exits_join c_exits __exr ) }
+                {} } {} }
         ( mem_drop_new_closure_envs syms cg old_closure_e )
-        ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
+        ( nurl_print `  br label %` )
+        ? e_via_exit { ( nurl_print elbl ) } { ( nurl_print lend ) }
+        ( emit_dbg_eol )
     } {}
     ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
     // Borrow checker: disarm — a block-less else-arm would otherwise
@@ -10226,6 +10463,28 @@
         ? == edr 0 { ( __ptr_dead_union __ptr_dead_then ( __ptr_dead_snapshot ) ) }
         { ( __ptr_dead_restore __ptr_dead_then ) }
     } {}
+    // The parked-drop arms' exit blocks (mem_arm_exit_open). Their drops
+    // run when nothing consumes this conditional's value: the join below
+    // emits no phi — the same verdict as its `phi_ty`/`types_ok`, taken
+    // here because the blocks must precede the join label; the integer
+    // rescue cannot apply, a parked arm's type is never an integer — or
+    // the `?` heads a statement that is not its block's tail (the token
+    // after the else arm is not a `}`).
+    // The verdict on the parked exits (mem_arm_exit_open). A value-less
+    // `?` — void, or arms of different types with no phi — drops; one
+    // in expression position is consumed, so its exits are bare
+    // branches; a statement that is not its block's tail drops; the
+    // block's TAIL hands its exits to whoever consumes the block.
+    ? != 0 ( nurl_str_len c_exits )
+    { : s c_phi_ty ? != 0 tdr et2 tt2
+        : b c_val & ! ( seq c_phi_ty `void` )
+        | | != 0 tdr != 0 edr ( seq ( nurl_llty tt2 ) ( nurl_llty et2 ) )
+        : b c_tail & c_is_stmt == ( nurl_lex_type lex ) TT_RBRACE
+        ? & c_val c_tail
+        { ( mem_exits_pend_add c_exits ) }
+        { : b c_used & c_val ! c_is_stmt
+            ( mem_arm_exits_emit syms cg c_exits ! c_used ) } }
+    {}
     ( emit ( nurl_str_cat lend `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lend )
     // The whole conditional only "did_ret" if BOTH branches did. If either
@@ -10717,6 +10976,9 @@
     // Borrow checker (Phase 0d): source line of the `??`, for the
     // `match`/`endmatch` structural markers bracketing this match.
     : i bck_mline ( nurl_lex_line lex )
+    // Does this `??` head a statement? Decided before the arms move the
+    // statement anchor; the parked-drop verdict at the join reads it.
+    : b m_is_stmt ( mem_join_heads_stmt lex )
     ( nurl_lex_advance lex )  // consume '??'
 
     // `?? {` (no scrutinee) is a Go-style channel select, not a match.
@@ -10838,6 +11100,9 @@
     // `??` may hand to whoever receives its value, and whether every
     // live arm hands the same one.
     : ~ s m_phi_ids ``
+    // Exit labels of the arms whose drops wait for the join's verdict
+    // (mem_arm_exit_open).
+    : ~ s m_exits ``
     // …plus the candidates a live arm INHERITED from a join of its own.
     // gen_cond has carried these up since #899 (`? c ? c a ( make ) …`);
     // the `??` twin did not, so `?? c { 1 → ? d a a  _ → ( make ) }`
@@ -11820,7 +12085,14 @@
             ( nurl_sym_def syms `__last_phi_idents__` `` )
             : i arm_tt0 ( nurl_lex_type lex )
             : s arm_v0 ( nurl_lex_val lex )
+            // Exits a tail `?`/`??` inside this arm hands up are this arm's
+            // to carry to the join (mem_exits_inherit, after the body).
+            : s arm_pend0 ( nurl_sym_get g_fn_escapes `__pend_exits__` )
+            ( mem_arm_body_mark lex )
             : ~ s arm_result ( gen_stmt lex syms cg )
+            ( nurl_sym_set g_fn_escapes `__arm_body__` `` )
+            : s arm_inherited ( mem_exits_inherit arm_pend0 )
+            = m_exits ( mem_exits_join m_exits arm_inherited )
             = g_in_match_arm __saved_in_arm
             : s arm_type ( nurl_get_last_type )
             // Fresh-owned-slice provenance of THIS arm's value (see gen_cond):
@@ -11855,7 +12127,10 @@
                 = arm_result __ad
                 = arm_dup T
             } {}
-            : s arm_lbl ( nurl_sym_get syms `__cur_lbl__` )
+            // The phi's predecessor for this arm: its last block, or the
+            // private exit block a parked-drop arm leaves through.
+            : ~ s arm_lbl ( nurl_sym_get syms `__cur_lbl__` )
+            : ~ b arm_via_exit F
             : i arm_did_ret g_did_ret
             // Lossless 64-bit shadow of an integer arm value (see gen_cond's
             // twin): if the arms turn out to carry different integer widths,
@@ -11905,7 +12180,16 @@
                 ( mem_drop_new_user_drops syms cg old_user_m )
                 ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_m ) } {} }
             { ? & != 0 g_auto_drop_strings == arm_did_ret 0
-                { ( mem_defer_new_strings syms old_strs_m ) } {} }
+                { ( mem_defer_new_strings syms old_strs_m )
+                    // Drop values and owned struct fields wait in a private
+                    // exit block for the join's verdict (mem_arm_exit_open).
+                    : s __ax ( mem_arm_exit_open syms cg old_user_m old_structs_m )
+                    ? != 0 ( nurl_str_len __ax )
+                    { = arm_lbl ( nurl_str_cat __ax `` )
+                        = arm_via_exit T
+                        : s __axr ( nurl_str_cat3 __ax `>` end_label )
+                        = m_exits ( mem_exits_join m_exits __axr ) }
+                    {} } {} }
             ? == arm_did_ret 0
             { ( mem_drop_new_closure_envs syms cg old_closure_m ) } {}
             ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
@@ -11995,7 +12279,9 @@
                     ( nurl_str_cat entry `` )
                     ( nurl_str_cat phi_entries ( nurl_str_cat `, ` entry ) )
                 }
-                ( nurl_print `  br label %` ) ( nurl_print end_label ) ( emit_dbg_eol )
+                ( nurl_print `  br label %` )
+                ? arm_via_exit { ( nurl_print arm_lbl ) } { ( nurl_print end_label ) }
+                ( emit_dbg_eol )
             } {}
 
             // Continue to next arm (skipped for wildcard arms)
@@ -12041,6 +12327,22 @@
     // unreachable-block removal pass.
     ? != 0 ( nurl_str_len fallback_pred )
     { ( nurl_print `  br label %` ) ( nurl_print end_label ) ( emit_dbg_eol ) }
+    {}
+
+    // The parked-drop arms' exit blocks. Their drops run when nothing
+    // consumes this match's value: no phi is emitted below (the same
+    // verdict, computed here because the blocks must precede the join
+    // label), or the match heads a statement that is not its block's
+    // tail — the token after the closing `}` is not another `}`.
+    ? != 0 ( nurl_str_len m_exits )
+    { : b m_typed & & != 0 phi_count phi_ok ! ( seq phi_type `void` )
+        : b m_int64 & & != 0 phi_count ! phi_ok all_int64
+        : b m_val | m_typed m_int64
+        : b m_tail & m_is_stmt == ( nurl_lex_type lex ) TT_RBRACE
+        ? & m_val m_tail
+        { ( mem_exits_pend_add m_exits ) }
+        { : b m_used & m_val ! m_is_stmt
+            ( mem_arm_exits_emit syms cg m_exits ! m_used ) } }
     {}
 
     // End label
@@ -12458,14 +12760,21 @@
     : s save_user ( nurl_sym_get syms `__user_drops__` )
     : s save_slices ( nurl_sym_get syms `__slice_decls__` )
     : s save_cenv ( nurl_sym_get syms `__owned_closure_envs__` )
+    // Snapshots bound before use: an owned string inline in an argument
+    // list is never collected (one leak per break/continue otherwise).
+    : s snap_strs ( nurl_sym_get syms `__loop_snap_strs__` )
+    : s snap_structs ( nurl_sym_get syms `__loop_snap_structs__` )
+    : s snap_user ( nurl_sym_get syms `__loop_snap_user__` )
+    : s snap_slices ( nurl_sym_get syms `__loop_snap_slices__` )
+    : s snap_cenv ( nurl_sym_get syms `__loop_snap_cenv__` )
     ? != 0 g_auto_drop_strings
-    { ( mem_drop_new_strings syms cg ( nurl_sym_get syms `__loop_snap_strs__` ) )
-        ( mem_drop_new_struct_fields syms cg ( nurl_sym_get syms `__loop_snap_structs__` ) )
-        ( mem_drop_new_user_drops syms cg ( nurl_sym_get syms `__loop_snap_user__` ) )
+    { ( mem_drop_new_strings syms cg snap_strs )
+        ( mem_drop_new_struct_fields syms cg snap_structs )
+        ( mem_drop_new_user_drops syms cg snap_user )
         ? != 0 g_fn_slice_decls
-        { ( mem_drop_new_slices syms cg ( nurl_sym_get syms `__loop_snap_slices__` ) ) } {} }
+        { ( mem_drop_new_slices syms cg snap_slices ) } {} }
     {}
-    ( mem_drop_new_closure_envs syms cg ( nurl_sym_get syms `__loop_snap_cenv__` ) )
+    ( mem_drop_new_closure_envs syms cg snap_cenv )
     ( nurl_sym_set_deep syms `__owned_strings__` save_strs )
     ( nurl_sym_set_deep syms `__owned_struct_fields__` save_structs )
     ( nurl_sym_set_deep syms `__user_drops__` save_user )
@@ -12752,6 +13061,12 @@
 
 @ gen_block_expr i lex i syms i cg → s {
     : i bck_line ( nurl_lex_line lex )
+    // A `?`/`??` arm body (mem_arm_body_mark) leaves the exits its tail
+    // handed up to the construct; any other block decides below.
+    : s __blk_mark ( nurl_sym_get g_fn_escapes `__arm_body__` )
+    : b blk_is_arm ( seq __blk_mark `1` )
+    ( nurl_sym_set g_fn_escapes `__arm_body__` `` )
+    : b blk_is_stmt ( mem_join_heads_stmt lex )
     ( nurl_lex_advance lex )
     ( bck_block_enter bck_line )
     : ~ s last ( nurl_str_cat `undef` `` )
@@ -12782,6 +13097,14 @@
     }
     ( nurl_lex_advance lex )
     ( bck_block_exit )
+    // Exits the tail statement handed up. An arm body leaves them to its
+    // `?`/`??`; a bare block that is itself a block's tail hands them on;
+    // a bare block statement discards its value, so they drop; a block
+    // in expression position is consumed, so they are bare branches.
+    ? blk_is_arm {} {
+        : b blk_tail & blk_is_stmt == ( nurl_lex_type lex ) TT_RBRACE
+        ? blk_tail {} { ( mem_exits_drain syms cg blk_is_stmt ) }
+    }
     ? any
     { ( nurl_sym_def syms `__tail_first_tt__` ( nurl_str_int __tail_tt ) )
         ( nurl_sym_def syms `__tail_first_val__` __tail_tv )
@@ -12857,6 +13180,9 @@
         // iteration's and scope exit frees the last.
         : s __gs_val ( gen_stmt lex syms cg )
         ? != 0 ( nurl_str_len __gs_val ) {} {}
+        // A tail `?`/`??` handed its exits up: this block discards every
+        // value, so they drop (mem_exits_drain).
+        ( mem_exits_drain syms cg T )
         ? & & != 0 g_blk_tail_lit_line
         | == __bs_tt TT_QUEST == __bs_tt TT_QUESTQUEST
         ( seq ( nurl_get_last_type ) `void` )
@@ -20899,6 +21225,8 @@
     : s __cl_snapce_saved ( nurl_sym_get g_fn_escapes `__dsnap_cenv__` )
     : s __cl_snapsl_saved ( nurl_sym_get g_fn_escapes `__dsnap_slice__` )
     : s __cl_rskips_saved ( nurl_sym_get g_fn_escapes `__dret_skips__` )
+    : s __cl_pend_saved ( nurl_sym_get g_fn_escapes `__pend_exits__` )
+    ( nurl_sym_set g_fn_escapes `__pend_exits__` `` )
     ( nurl_sym_set g_fn_escapes `__defer_top_fn__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_str__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_sfield__` `` )
@@ -20948,8 +21276,15 @@
     : i __cl_bck_depth g_bck_depth
     ( bck_fn_begin )
     ? != g_borrowck 0 { ( nurl_sym_set g_bck `deferred` `` ) } {}
+    // The closure body is not an arm, whatever it sits inside.
+    ( nurl_sym_set g_fn_escapes `__arm_body__` `` )
     : ~ s body_val ( gen_stmt lex body_syms cg )
     : s __cl_tail_lt ( nurl_get_last_type )
+    // Exits the body's tail `?`/`??` handed up: its value is the
+    // closure's result, used iff the closure returns one. Emitted into
+    // THIS body — the labels are its own.
+    : b __cl_fall_used & == 0 g_did_ret ! ( seq ret_type `void` )
+    ( mem_exits_drain body_syms cg ! __cl_fall_used )
     ? != g_borrowck 0 {
         // Same rule borrowck_fn_end follows: a body whose verdict depends on
         // a summary that does not exist yet is parked and walked after the
@@ -21038,6 +21373,7 @@
     ( nurl_sym_set g_fn_escapes `__dsnap_cenv__` __cl_snapce_saved )
     ( nurl_sym_set g_fn_escapes `__dsnap_slice__` __cl_snapsl_saved )
     ( nurl_sym_set g_fn_escapes `__dret_skips__` __cl_rskips_saved )
+    ( nurl_sym_set g_fn_escapes `__pend_exits__` __cl_pend_saved )
 
     // The closure tail is a return value like any other: run the shared
     // agreement battery (ret_ty_agree) before emitting the `ret`. Same
@@ -23538,6 +23874,10 @@
     // NO fall-off value — its type is void — and must not be judged by
     // the fall-off ownership rule below.
     : s __fall_ty ( nurl_get_last_type )
+    // Exits a tail `?`/`??` handed up to the body: its value is the
+    // fall-off return, used iff the function returns one.
+    : b __fall_used & == 0 g_did_ret ! ( seq ret_ty `void` )
+    ( mem_exits_drain syms cg ! __fall_used )
     : b __has_fall & == 0 g_did_ret ( seq ( nurl_llty __fall_ty ) `i8*` )
     // Noreturn inference: the body contains no `^` at all, yet it
     // terminated (g_did_ret) — every path through it diverges (a

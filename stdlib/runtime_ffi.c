@@ -4259,6 +4259,43 @@ int pthread_cond_destroy(void *c)          { (void)c; return 0; }
 
 #endif
 
+/*
+ * thread_spawn_owned (stdlib/std/thread.nu): the thread frees the
+ * closure's environment once the body returns. `thread_spawn` BORROWS
+ * the env, and a fire-and-forget spawner — one that detaches and moves
+ * on — has no correct place to free it: too early and the running body
+ * reads freed captures, and there is no "later" it will be told about.
+ * The fiber runtime's spawn_owned answers the same question for fibers.
+ *
+ * The boot block is libc-malloc'd and freed here, before the body runs,
+ * so a body that never returns leaks nothing but itself. The env came
+ * from nurl_alloc and goes back through nurl_free — libc's free would
+ * hand a size-class block to the wrong allocator (see nurl__wf_body).
+ *
+ * The trampoline has the shape a NURL closure has, `void (*)(void *)`,
+ * because that is the only shape every pthread_create here is prepared
+ * to call: wasm type-checks call_indirect exactly, and the SysV targets
+ * discard the return through a throwaway slot on join.
+ */
+typedef struct { void (*fn)(void *); void *env; } NurlThrOwned;
+
+static void nurl__thr_owned_tramp(void *p) {
+    NurlThrOwned b = *(NurlThrOwned *)p;
+    free(p);
+    b.fn(b.env);
+    if (b.env) nurl_free((char *)b.env);
+}
+
+int nurl_pthread_create_owned(void *t, void *fn, void *env) {
+    NurlThrOwned *b = (NurlThrOwned *)malloc(sizeof *b);
+    if (!b) return 11;  /* EAGAIN */
+    b->fn  = (void (*)(void *))fn;
+    b->env = env;
+    int rc = pthread_create(t, NULL, (void *(*)(void *))nurl__thr_owned_tramp, b);
+    if (rc != 0) free(b);
+    return rc;
+}
+
 /* ── §21  Signal handling — generic + legacy shutdown bridge ──── */
 /*
  * Two layers in one place:

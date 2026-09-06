@@ -36,6 +36,8 @@ $ `src/dynamic.nu`
 
 @ streq String a s b → b { ^ == ( nurl_str_eq ( string_data a ) b ) 1 }
 
+@ seq s a s b → b { ^ == ( nurl_str_eq a b ) 1 }
+
 // The value of `key` in row `idx`, as text ("" when absent).
 @ cell ImportParse ip i idx s key → String {
     ?? ( vec_get [Json] . ip rows idx ) {
@@ -380,12 +382,12 @@ oops
     : Json insp ( import_inspect . ip rows auto 0 )
     ?? ( json_obj_get insp `time` ) {
         T plan → {
-            ( check ( streq ( string_from ( jstr plan `mode` ) ) `parts` ) `time: proposal is parts` )
-            ( check ( streq ( string_from ( jpart plan `year` ) ) `Vuosi` ) `time: year ← Vuosi` )
-            ( check ( streq ( string_from ( jpart plan `month` ) ) `Kuukausi` ) `time: month ← Kuukausi` )
-            ( check ( streq ( string_from ( jpart plan `day` ) ) `Päivä` ) `time: day ← Päivä` )
-            ( check ( streq ( string_from ( jpart plan `clock` ) ) `Aika [Paikallinen aika]` ) `time: clock ← Aika` )
-            ( check ( streq ( string_from ( jstr plan `confidence` ) ) `high` ) `time: named parts are a confident guess` )
+            ( check ( seq ( jstr plan `mode` ) `parts` ) `time: proposal is parts` )
+            ( check ( seq ( jpart plan `year` ) `Vuosi` ) `time: year ← Vuosi` )
+            ( check ( seq ( jpart plan `month` ) `Kuukausi` ) `time: month ← Kuukausi` )
+            ( check ( seq ( jpart plan `day` ) `Päivä` ) `time: day ← Päivä` )
+            ( check ( seq ( jpart plan `clock` ) `Aika [Paikallinen aika]` ) `time: clock ← Aika` )
+            ( check ( seq ( jstr plan `confidence` ) `high` ) `time: named parts are a confident guess` )
             ?? ( json_obj_get plan `sample_unix` ) {
                 T su → { ( check == ( json_as_int su ) - T_FMI 600 `time: sample row stamps to 2026-08-29 00:00Z` ) }
                 F _ → { ( check F `time: sample_unix present` ) }
@@ -454,8 +456,8 @@ oops
     : Json insp4 ( import_inspect . ip4 rows spec4 ( imp_tz_of spec4 ) )
     ?? ( json_obj_get insp4 `time` ) {
         T plan → {
-            ( check ( streq ( string_from ( jstr plan `mode` ) ) `column` ) `time: one datetime column → column mode` )
-            ( check ( streq ( string_from ( jstr plan `column` ) ) `ajanhetki` ) `time: found by its values` )
+            ( check ( seq ( jstr plan `mode` ) `column` ) `time: one datetime column → column mode` )
+            ( check ( seq ( jstr plan `column` ) `ajanhetki` ) `time: found by its values` )
             : ImpTimeResult r4 ( import_time_apply . ip4 rows plan F ( imp_tz_of spec4 ) )
             ( check == ( row_int . ip4 rows 0 `timestamp` ) T_FMI `time: naive stamp read in +03:00` )
             ( imp_time_result_free r4 )
@@ -474,7 +476,7 @@ oops
     : Json insp5 ( import_inspect . ip5 rows auto 0 )
     ?? ( json_obj_get insp5 `time` ) {
         T plan → {
-            ( check ( streq ( string_from ( jstr plan `mode` ) ) `none` ) `time: numbers alone → none` )
+            ( check ( seq ( jstr plan `mode` ) `none` ) `time: numbers alone → none` )
         }
         F _ → { ( check F `time: none proposal` ) }
     }

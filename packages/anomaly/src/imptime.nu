@@ -326,6 +326,47 @@ $ `stdlib/std/time.nu`
     ^ - naive tz
 }
 
+// One instant from one piece of text, as a Unix second: an ISO 8601 date
+// or date-time (a bare one is read in `tz`, ANOM_TZ_LOCAL for the
+// server's zone), a Unix number in seconds, milliseconds, microseconds
+// or nanoseconds (told apart by magnitude), or a compact 20260901[120000].
+// 0 when the text is not a moment — a time of day alone is not one.
+@ imp_instant_of_text s raw i tz → i {
+    : ImpStamp st ( imp_stamp_of_text raw )
+    ? | == . st kind STAMP_NONE == . st kind STAMP_CLOCK { ^ 0 } {}
+    ^ ( __it_finish . st secs . st zoned tz )
+}
+
+// A span from text: "90s", "15m", "24h", "7d", "2w", or a bare number of
+// seconds. 0 when unreadable or not positive.
+@ imp_span_of_text s raw → i {
+    : String t0 ( string_from raw )
+    : String t ( string_trim t0 )
+    ( string_free t0 )
+    : s p ( string_data t )
+    : i n ( nurl_str_len p )
+    : ~ i nd 0
+    ~ & < nd n ( __it_is_digit p n nd ) { = nd + nd 1 }
+    ? == nd 0 { ( string_free t ) ^ 0 } {}
+    : __ItNum num ( __it_digits p n 0 nd )
+    : ~ i unit 1
+    ? == nd n {} {
+        ? == + nd 1 n {} { ( string_free t ) ^ 0 }
+        : i c ( nurl_str_at p n nd )
+        ? == c 115 { = unit 1 } {
+            ? == c 109 { = unit 60 } {
+                ? == c 104 { = unit 3600 } {
+                    ? == c 100 { = unit 86400 } {
+                        ? == c 119 { = unit 604800 } { ( string_free t ) ^ 0 }
+                    }
+                }
+            }
+        }
+    }
+    ( string_free t )
+    ^ * . num val unit
+}
+
 // The offset that applies to a Unix instant under `tz`.
 @ __it_off_at i utc i tz → i {
     ? == tz ANOM_TZ_LOCAL { ^ ( tz_offset utc ) } {}

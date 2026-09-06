@@ -17,16 +17,20 @@
 //              authentication, visible to admins so somebody can claim it,
 //              never silently absorbed into whoever logged in first.
 //
-// Two roles: `admin` sees and manages the whole organisation's models and
-// its users and keys; `viewer` sees only the models it owns. The first
-// subject to authenticate from an organisation becomes its admin — there
-// is nobody else who could have granted it, and an org whose only user is
-// a viewer would be permanently unadministrable.
+// Three roles. `admin` manages the whole organisation's models and its
+// users and keys; `viewer` reads every one of its models and may change
+// none of them — except the scratch models named llm_…, which every
+// member may build and destroy (`az_is_scratch_model`); `ingest` is for
+// machines that send points (keys only, never a person). A model belongs
+// to the organisation, so every member SEES the same set; the roles differ
+// in what they may DO. The first subject to authenticate from an
+// organisation becomes its admin — there is nobody else who could have
+// granted it, and an org whose only user is a viewer would be permanently
+// unadministrable.
 //
 // API keys are for machines that cannot do an interactive login (the
-// Node-RED flows feeding these models). A key carries the identity and
-// role of the user who created it, so "you see only your own models" holds
-// for a key exactly as it holds for that user's browser. Keys are stored
+// Node-RED flows feeding these models). A key carries the identity of the
+// user who created it and a role of its own, admin or ingest. Keys are stored
 // as a SHA-256 of the secret; the plaintext exists once, in the response
 // that creates it.
 //
@@ -1131,28 +1135,6 @@ $ `deps/oauth/src/oauth.nu`
     }
 }
 
-// The model names `sub` owns. The listing route needs the whole set at
-// once: asking per model would reopen the database once per row.
-@ az_owned_names Database db s sub → ( Vec String ) {
-    : ( Vec String ) out ( vec_new [String] )
-    ?? ( sqlite_prepare db `SELECT name FROM models WHERE owner_sub = ?1` ) {
-        F _ → {}
-        T q → {
-            ( __az_bind_str q 1 ( string_from sub ) )
-            : ~ b done F
-            ~ ! done {
-                ?? ( sqlite_step q ) {
-                    F _ → { = done T }
-                    T has → {
-                        ? has { ( vec_push [String] out ( sqlite_column_text q 0 ) ) } { = done T }
-                    }
-                }
-            }
-        }
-    }
-    ^ out
-}
-
 // Every model name this organisation claims, owned by anyone in it. This is
 // the admin's whole world: the store is flat and global, so "every model" is
 // every model of every ORGANISATION, and an admin of one tenant must never
@@ -1202,9 +1184,8 @@ $ `deps/oauth/src/oauth.nu`
     ^ o
 }
 
-// May this principal see the model at all? Admins see the whole
-// organisation, including the unowned models nobody has claimed yet;
-// a viewer sees exactly what it owns.
+// May this principal see the model at all?
+//
 // A model belongs to an ORGANISATION, not to a person. Everyone in the
 // organisation sees the same models; what differs is what they may do to
 // them. That is the shape a shared service actually has — a colleague
@@ -1243,9 +1224,25 @@ $ `deps/oauth/src/oauth.nu`
 // organisation's models and the data they have collected — that is what a
 // viewer is for — but retraining rewrites forests, a margin edit changes
 // every verdict, and a reset destroys history. None of that is viewing.
+//
+// The one exception is the organisation's SCRATCH namespace: a model named
+// `llm_…` is an experiment, and an agent — or the viewer driving it — may
+// build, tune and discard its own experiments without an administrator's
+// signature. Production models keep the full rule. This is the law both
+// the HTTP API and the MCP surface enforce, so the two never disagree.
 @ az_may_write Database db Principal p s name → b {
-    ? ( principal_is_admin p ) {} { ^ F }
+    ? | ( principal_is_admin p ) ( az_is_scratch_model name ) {} { ^ F }
     ^ ( az_may_see db p name )
+}
+
+// Models whose name starts with this prefix are scratch models: every
+// member of the organisation may create, retrain, tune and delete them.
+: s AZ_LLM_PREFIX `llm_`
+
+// Is this a scratch model by name? The bare prefix is not a name.
+@ az_is_scratch_model s name → b {
+    ? <= ( nurl_str_len name ) ( nurl_str_len AZ_LLM_PREFIX ) { ^ F } {}
+    ^ != 0 ( nurl_str_starts name AZ_LLM_PREFIX )
 }
 
 // ── Leaving ───────────────────────────────────────────────────────────
@@ -1536,7 +1533,7 @@ $ `deps/oauth/src/oauth.nu`
 // without a second index — so a presented key is tried against each. There
 // is one database per tenant and a key arrives a few times a minute, so
 // the scan is cheaper than a second source of truth that could disagree.
-@ __az_org_ids → ( Vec String ) {
+@ _az_org_ids → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
     : String dir ( __az_orgs_dir )
     : !( Vec String ) IoErr r ( dir_list ( string_data dir ) )
@@ -1870,7 +1867,7 @@ $ `deps/oauth/src/oauth.nu`
 
 // An API key names no organisation, so every organisation is asked.
 @ __az_key_principal_any KeyParts kp i now → Principal {
-    : ( Vec String ) orgs ( __az_org_ids )
+    : ( Vec String ) orgs ( _az_org_ids )
     : ~ Principal out ( principal_anon )
     : i n ( vec_len [String] orgs )
     : ~ i k 0
@@ -1917,6 +1914,9 @@ $ `deps/oauth/src/oauth.nu`
         }
     }
     ? > ( string_len tok ) 0 {} {
+        // Nothing presented, so nothing was refused: a reason left over
+        // from an earlier request must not be reported for this one.
+        ( __az_set_last_err `` )
         ( string_free tok )
         ^ ( principal_anon )
     }
@@ -1925,6 +1925,9 @@ $ `deps/oauth/src/oauth.nu`
     ? . kp ok {
         ( principal_free out )
         = out ( __az_key_principal_any kp now )
+        // A key is refused for one reason only; the token path records
+        // its own, and this one is as entitled to be told as those are.
+        ( __az_set_last_err ? . out authed `` `the API key is not recognised, or has been revoked` )
     } {
         ( principal_free out )
         = out ( __az_token_principal ( string_data tok ) now )

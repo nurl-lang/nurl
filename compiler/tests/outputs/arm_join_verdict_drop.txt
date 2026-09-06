@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+dh-1 drops=1
+dh-2! drops=2
+negative! drops=2
+dh-30 drops=3
+consumed arm dropped 0 (must be 0)
+dh-5 drops=4
+dh-6 drops=5
+dh-3 drops=8
+fn tail drops=9
+closure saw dh-9 drops=10
