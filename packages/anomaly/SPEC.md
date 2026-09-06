@@ -549,23 +549,32 @@ service so existing dashboards and the `modelmanager` UI keep working:
   `last` is a number of points, default 1440), read-only. Response:
   `window { from, to, rows, total }`, `aggregate { flagged, rate }` and per
   enabled, trained version `{ margin, n, flagged, rate, worst, median,
-  margin_for_rate: { "0.1%": { margin, flagged }, "0.5%", "1%", "2%", "5%",
-  "10%" }, curve: [[rate, margin], …] }` — 110 points, 0.1 % steps to 1 %
-  then 1 % steps to 100 %, so a dashboard can turn a typed margin into an
-  estimated alert rate without a round trip. `curve=0` omits it. 400 on an
-  untrained model.
+  margin_for_rate: { "0.1%": { margin, flagged, requested_rate,
+  achieved_rate, exact }, "0.5%", "1%", "2%", "5%", "10%" }, curve: [[rate,
+  margin], …] }` — 110 points, 0.1 % steps to 1 % then 1 % steps to 100 %,
+  so a dashboard can turn a typed margin into an estimated alert rate
+  without a round trip. `curve=0` omits it. 400 on an untrained model.
+  `margin` is the stored value verbatim. A sorted list of decision values
+  can only supply margins at its gaps: when the requested count falls in
+  a run of tied values (a stuck sensor, whole days of identical points)
+  `cal_margin_for_rate` answers with the nearer edge of the run — the
+  rows before it, or the run whole (on a tie between the edges, whole) —
+  and `achieved_rate` / `exact` say what that came to.
 - `POST /api/dynamic/<model>/finetune` body (all optional) = `{ rate: 0.01,
   last: 86400 | "all" | "own", from, to, dry_run: false, versions: [names] }` →
   `rate`, `dry_run`, `window { from, to, rows, own }`, per version `{
   old_margin, new_margin, n, rows, from, flagged_before, flagged_after,
-  rate_before, rate_after, worst, applied }`. `last: "own"` tunes every
+  rate_before, rate_after, exact, worst, applied }` and, when some
+  version's scores tie at the cut so that `rate_after` is not the
+  requested rate, a `note` naming those versions with the rate each
+  reached. `last: "own"` tunes every
   version over its own period — the window it trains on (`window_minutes`
   back for a forest, `window_size` points for timevector, the ring for the
   autoencoder) — so the short-term margin answers for the last three hours
   and the seasonal one for the last ninety days; the report's `window` is
   then the widest of them. On a count clock `last` is a number of points.
-  The response also carries
-  plus the legacy `adjusted_margins` and `max_anomaly_scores` maps. 400 on
+  The response also carries the legacy `adjusted_margins` and
+  `max_anomaly_scores` maps. 400 on
   a rate outside `[0, 1]`.
 - `POST /api/analyze` (members) — the body is a file (the import route's
   `format`, `time`, `tz`, `calendar`, `clock` apply; `name` labels the

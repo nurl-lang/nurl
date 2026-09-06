@@ -586,7 +586,7 @@ $ `src/mcp.nu`
                         : String ln ( string_from ( string_data . cv cvname ) )
                         ~ < ( string_len ln ) 13 { ( string_push_char ln 32 ) }
                         ( string_push_char ln 32 )
-                        ( string_push_str ln ( float_to_string ( round_sig . cv cur_margin 4 ) ) )
+                        ( string_push_str ln ( float_to_string . cv cur_margin ) )
                         ( string_push_str ln `  ` )
                         ( string_push_int ln . cv flagged )
                         ( string_push_str ln ` (` )

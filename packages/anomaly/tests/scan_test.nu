@@ -14,6 +14,8 @@
 //   evict    — cached verdicts stay aligned to their points across ring
 //              eviction, because rows are keyed on the lifetime counter.
 //   ft       — model_finetune now reaches the autoencoder as well.
+//   ties     — cal_margin_for_rate lands on the nearer edge of a run of
+//              tied decision values instead of swallowing the run.
 // Store root: $ANOMALY_TEST_DIR (default ./anomaly_scan_test).
 
 $ `stdlib/core/io.nu`
@@ -138,7 +140,50 @@ $ `src/dynamic.nu`
     ^ n
 }
 
+// A calibration entry over hand-picked decision values: `head` distinct
+// values below `tie`, then `run` copies of `tie`, then `tail` distinct
+// values above it (ascending, as the report keeps them), a thousandth
+// apart; `tie` sits low enough that the whole list stays negative.
+@ cal_of_run i head f tie i run i tail → CalVer {
+    : ( Vec f ) dfs ( vec_new [f] )
+    : ~ i k 0
+    ~ < k head { ( vec_push [f] dfs - tie * # f - head k 0.001 ) = k + k 1 }
+    = k 0
+    ~ < k run { ( vec_push [f] dfs tie ) = k + k 1 }
+    = k 0
+    ~ < k tail { ( vec_push [f] dfs + tie * # f + k 1 0.001 ) = k + k 1 }
+    : String nm ( string_from `forest` )
+    ^ @ CalVer { nm 0.1 ( vec_len [f] dfs ) 0 ( _mlp_fget dfs 0 ) tie dfs }
+}
+
+@ test_ties → v {
+    // 9 rows before a run of 221 equal values, 770 after: 1000 rows. A
+    // request for 1 % (10 rows) cuts inside the run; the honest answer
+    // is the 9 rows before it, not the 230 the run would bring.
+    : CalVer cv ( cal_of_run 9 -5.0 221 770 )
+    : f m1 ( cal_margin_for_rate cv 0.01 )
+    ( check == ( cal_flagged_at cv m1 ) 9 `ties: 1 % over a 221-run lands on the 9 rows before it` )
+    // 20 % (200 rows) is nearer the run's far edge (230) than its near
+    // one (9): the run is taken whole.
+    : f m20 ( cal_margin_for_rate cv 0.2 )
+    ( check == ( cal_flagged_at cv m20 ) 230 `ties: 20 % takes the run whole` )
+    // 50 % falls in the distinct tail: exact.
+    : f m50 ( cal_margin_for_rate cv 0.5 )
+    : i at50 ( cal_flagged_at cv m50 )
+    ( check & >= at50 450 <= at50 550 `ties: 50 % in distinct values is met (±10 %)` )
+    // A run at the very worst end: 1 % of 1000 = 10 inside a run of 50
+    // starting at row 0 — the near edge is "none", the far edge 50;
+    // 10 is nearer none.
+    : CalVer cw ( cal_of_run 0 -2.0 50 950 )
+    ( check == ( cal_flagged_at cw ( cal_margin_for_rate cw 0.01 ) ) 0 `ties: a run at the worst end is left out when the request is nearer none` )
+    ( check == ( cal_flagged_at cw ( cal_margin_for_rate cw 0.04 ) ) 50 `ties: … and taken when the request is nearer its far edge` )
+    ( check >= ( cal_margin_for_rate cw 0.04 ) 0.0 `ties: margins stay non-negative` )
+    ( string_free . cv cvname ) ( vec_free [f] . cv dfs )
+    ( string_free . cw cvname ) ( vec_free [f] . cw dfs )
+}
+
 @ main → i {
+    ( test_ties )
     : String root ( env_var_or `ANOMALY_TEST_DIR` `./anomaly_scan_test` )
     : Store st ( store_open ( string_data root ) )
 

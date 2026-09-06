@@ -1963,9 +1963,17 @@ $ `stdlib/std/thread.nu`
     ~ < k nr {
         : f r ( _mlp_fget rates k )
         : f m ( cal_margin_for_rate cv r )
+        : i fl ( cal_flagged_at cv m )
         : Json e ( json_obj_new )
         ( json_obj_set e `margin` ( json_float m ) )
-        ( json_obj_set e `flagged` ( json_int ( cal_flagged_at cv m ) ) )
+        ( json_obj_set e `flagged` ( json_int fl ) )
+        // The rate asked for and the one the data could supply: they
+        // part where the decision values tie (see cal_margin_for_rate).
+        ( json_obj_set e `requested_rate` ( json_float r ) )
+        : ~ f ach 0.0
+        ? > . cv n 0 { = ach / # f fl # f . cv n } {}
+        ( json_obj_set e `achieved_rate` ( json_float ach ) )
+        ( json_obj_set e `exact` ( json_bool == fl # i ( float_round * r # f . cv n ) ) )
         : String key ( __an_rate_key r )
         ( json_obj_set mfr ( string_data key ) e )
         ( string_free key )
@@ -2226,6 +2234,10 @@ $ `stdlib/std/thread.nu`
     : Json margins ( json_obj_new )
     : Json scores ( json_obj_new )
     : Json vers ( json_obj_new )
+    // Versions whose data could not supply the requested rate exactly
+    // (their decision values tie at the cut) are named in a note, with
+    // the rate they reach, so the caller does not read `rate` as a fact.
+    : String note ( string_new )
     : i ni ( vec_len [FtVer] . rep items )
     : ~ i k 0
     ~ < k ni {
@@ -2247,6 +2259,24 @@ $ `stdlib/std/thread.nu`
                 } {}
                 ( json_obj_set v `rate_before` ( json_float rb ) )
                 ( json_obj_set v `rate_after` ( json_float ra ) )
+                : b exact == . ft after # i ( float_round * rate # f . ft n )
+                ( json_obj_set v `exact` ( json_bool exact ) )
+                ? | exact <= . ft n 0 {} {
+                    ? == ( string_len note ) 0 {
+                        ( string_push_str note `Requested rate ` )
+                        ( string_push_str note ( float_to_string rate ) )
+                        ( string_push_str note ` is not a rate the window's scores can supply exactly (they tie at the cut); nearest achievable:` )
+                    } { ( string_push_char note 44 ) }
+                    ( string_push_char note 32 )
+                    ( string_push_str note ( string_data . ft ftname ) )
+                    ( string_push_str note ` ` )
+                    ( string_push_str note ( float_to_string ( round_sig ra 3 ) ) )
+                    ( string_push_str note ` (` )
+                    ( string_push_int note . ft after )
+                    ( string_push_str note ` of ` )
+                    ( string_push_int note . ft n )
+                    ( string_push_str note `)` )
+                }
                 ( json_obj_set v `worst` ( json_float . ft worst ) )
                 ( json_obj_set v `applied` ( json_bool . ft applied ) )
                 ( json_obj_set v `from` ( json_int . ft ft_from ) )
@@ -2269,6 +2299,8 @@ $ `stdlib/std/thread.nu`
     : Json o ( __an_ok_msg ( string_data msg ) )
     ( json_obj_set o `rate` ( json_float rate ) )
     ( json_obj_set o `dry_run` ( json_bool dry ) )
+    ? > ( string_len note ) 0 { ( json_obj_set o `note` ( json_str_lit ( string_data note ) ) ) } {}
+    ( string_free note )
     : Json wj ( json_obj_new )
     ( json_obj_set wj `from` ( json_int from_ts ) )
     ( json_obj_set wj `to` ( json_int to_ts ) )

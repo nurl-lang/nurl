@@ -1142,17 +1142,24 @@ $ `src/store.nu`
     ^ c
 }
 
-// The margin at which a fraction `rate` of the window is flagged: the
-// k-th most negative value, k = round(rate·n), sits exactly on the line
-// (so it is flagged, and the (k+1)-th is not); rate 0 asks for a margin
-// just above the worst point. The exact value is then rounded to the
-// FEWEST significant digits (2 to 6) that still flag the same count, give
-// or take a tenth of it — a margin is a setting a person reads and
-// retypes, and "0.13" is one where the data allows it, "0.1284" where the
-// decision values are packed too densely for fewer digits. Never
-// negative: a negative margin would flag points the forest itself calls
-// normal, and a rate the data cannot supply is answered by the honest
-// post-rounding count, not by a margin below zero.
+// The margin at which a fraction `rate` of the window is flagged. The
+// request is k = round(rate·n) rows; the margins a sorted list of decision
+// values can supply are its gaps, so when the k-th most negative value is
+// one of a run of TIES (a stuck sensor, a categorical feed, a forest that
+// gives one path length to whole days of identical points) the request
+// falls inside the run and only its two edges are achievable: everything
+// before the run, or the run entire. The closer edge to k wins — a run of
+// 221 equal values at k = 10 is answered with the 9 rows before it, not
+// with 231 — and on a tie between the edges the run is flagged, so the
+// request is at least met. rate 0 asks for a margin just above the worst
+// point. The chosen margin is then rounded to the FEWEST significant
+// digits (2 to 6) that still flag the chosen count, give or take a tenth
+// of it — a margin is a setting a person reads and retypes, and "0.13" is
+// one where the data allows it, "0.1284" where the decision values are
+// packed too densely for fewer digits. Never negative: a negative margin
+// would flag points the forest itself calls normal, and a rate the data
+// cannot supply is answered by the honest count next to the margin, not
+// by a margin below zero.
 @ cal_margin_for_rate CalVer cv f rate → f {
     : i n ( vec_len [f] . cv dfs )
     ? <= n 0 { ^ . cv cur_margin } {}
@@ -1162,33 +1169,47 @@ $ `src/store.nu`
     ? > r 1.0 { = r 1.0 } {}
     : ~ i k # i ( float_round * r # f n )
     ? > k n { = k n } {}
+    // The run of ties the k-th value sits in: [lo, hi] inclusive.
+    : ~ i kt k
+    : ~ b incl T
+    ? > k 0 {
+        : f tv . dp - k 1
+        : ~ i lo - k 1
+        ~ & > lo 0 == . dp - lo 1 tv { = lo - lo 1 }
+        : ~ i hi - k 1
+        ~ & < + hi 1 n == . dp + hi 1 tv { = hi + hi 1 }
+        : i whole + hi 1
+        = incl <= - whole k - k lo
+        = kt ? incl whole lo
+    } {}
     : ~ f exact 0.0
-    ? <= k 0 {
+    ? <= kt 0 {
         // Just above the worst point, by a hair that survives rounding.
         : f w - 0.0 . dp 0
         = exact + w + * ( float_abs w ) 0.000000001 0.000000000001
     } {
-        = exact - 0.0 . dp - k 1
+        = exact - 0.0 . dp - kt 1
     }
     ? < exact 0.0 { ^ 0.0 } {}
-    : i tol / k 10
-    // Nearest first at each precision, then the rounding that errs on the
-    // side of the request (down = flags at least k; up, for rate 0, flags
-    // none).
-    : i lean ? <= k 0 1 -1
+    : i tol / kt 10
+    // Nearest first at each precision, then the rounding that stays on
+    // the chosen side of the run: a smaller margin flags more, so it is
+    // the one to try when the run was taken (the other way would drop it
+    // whole); a larger one when it was left out (and for rate 0, which
+    // flags none).
+    : i lean ? & incl > kt 0 -1 1
     : ~ i digits 2
     ~ < digits 6 {
         : f m ( round_sig exact digits )
-        : i off - ( cal_flagged_at cv m ) k
+        : i off - ( cal_flagged_at cv m ) kt
         ? & >= off - 0 tol <= off tol { ^ m } {}
         : f m2 ( round_sig_dir exact digits lean )
-        : i off2 - ( cal_flagged_at cv m2 ) k
+        : i off2 - ( cal_flagged_at cv m2 ) kt
         ? & >= off2 - 0 tol <= off2 tol { ^ m2 } {}
         = digits + digits 1
     }
-    // Values packed tighter than five digits resolve (a constant feed
-    // scores as near-ties): six digits, and the reported count says how
-    // far off that lands.
+    // Values packed tighter than five digits resolve: six digits, and the
+    // reported count says how far off that lands.
     ^ ( round_sig_dir exact 6 lean )
 }
 

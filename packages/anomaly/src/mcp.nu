@@ -500,8 +500,20 @@ $ `src/imptime.nu`
 }
 
 // A number rounded to `digits` decimals, so a score reads as 0.6132 and
-// not as seventeen digits of it.
+// not as seventeen digits of it — but never to fewer than `digits`
+// SIGNIFICANT digits: an autoencoder scores in the 1e-4 range, and four
+// decimals would turn every one of its values into 0.0001 or 0.0. Below
+// one in magnitude the rounding is therefore by significant digits,
+// through an exact integer mantissa and a power of ten so the result is
+// the double the short decimal parses to.
 @ __mcp_round_f f x i digits → Json {
+    : f ax ( float_abs x )
+    ? & > ax 0.0 < ax 1.0 {
+        : i e # i ( float_floor ( float_log10 ax ) )
+        : f scale ( float_pow 10.0 # f - - digits 1 e )
+        : f m / ( float_round * ax scale ) scale
+        ^ ( json_float ? < x 0.0 - 0.0 m m )
+    } {}
     : ~ f scale 1.0
     : ~ i k 0
     ~ < k digits { = scale * scale 10.0 = k + k 1 }
@@ -621,7 +633,7 @@ $ `src/imptime.nu`
             : Json out ( json_obj_new )
             ( json_obj_each vs \ s vn Json vo → v {
                 : Json v ( json_obj_new )
-                ( __mcp_copy_rounded vo `decision_margin` v 4 )
+                ( __mcp_copy vo `decision_margin` v )
                 ( __mcp_copy vo `enabled` v )
                 ( json_obj_set out vn v )
             } )
@@ -691,7 +703,7 @@ $ `src/imptime.nu`
             ( __mcp_copy ae `trained` ao )
             ( __mcp_copy ae `enabled` ao )
             ( __mcp_copy_rounded ae `reconstruction_threshold` ao 5 )
-            ( __mcp_copy_rounded ae `decision_margin` ao 4 )
+            ( __mcp_copy ae `decision_margin` ao )
             ( __mcp_copy ae `training_data_points` ao )
             ( __mcp_copy ae `layer_sizes` ao )
             ( __mcp_when_of ae `trained_at` ao `trained` F )
@@ -1188,7 +1200,7 @@ $ `src/imptime.nu`
             : Json vo ( json_obj_new )
             ( json_obj_each vs \ s vn Json v → v {
                 : Json one ( json_obj_new )
-                ( __mcp_copy_rounded v `margin` one 4 )
+                ( __mcp_copy v `margin` one )
                 ( __mcp_copy v `n` one )
                 ( __mcp_copy v `flagged` one )
                 ( __mcp_copy_rounded v `rate` one 4 )
@@ -1199,8 +1211,11 @@ $ `src/imptime.nu`
                         : Json mo ( json_obj_new )
                         ( json_obj_each mfr \ s rk Json rv → v {
                             : Json ro ( json_obj_new )
-                            ( __mcp_copy_rounded rv `margin` ro 4 )
+                            ( __mcp_copy rv `margin` ro )
                             ( __mcp_copy rv `flagged` ro )
+                            ( __mcp_copy rv `requested_rate` ro )
+                            ( __mcp_copy_rounded rv `achieved_rate` ro 4 )
+                            ( __mcp_copy rv `exact` ro )
                             ( json_obj_set mo rk ro )
                         } )
                         ( json_obj_set one `margin_for_rate` mo )
@@ -1213,7 +1228,7 @@ $ `src/imptime.nu`
         }
         F _ → {}
     }
-    ( json_obj_set out `reading` ( json_str_lit `A version flags a row when its score exceeds margin; rate = flagged / n. margin_for_rate says which margin would flag 0.1% / 1% / 5% … of this window — finetune {model, rate} sets them.` ) )
+    ( json_obj_set out `reading` ( json_str_lit `A version flags a row when its score is at or below -margin (score = decision function; the more negative, the more anomalous); rate = flagged / n over this window. margin_for_rate gives, per requested rate, the nearest margin the window's scores can supply: when scores tie at the cut the achieved rate differs from the requested one (exact = false) — a run of identical scores is taken or left whole. Margins are shown exactly as stored. finetune {model, rate} sets them.` ) )
     ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }

@@ -142,8 +142,13 @@ dashboard can read a live estimate off. Read-only; ~1 ms per stored row.
 
 Fine-tune is calibration plus a write: pick the share of the window you are
 willing to alert on and every enabled version gets the margin that flags
-exactly that share — rounded to the fewest significant digits that keep the
-count, so a margin reads `0.13`, not `0.12994712`:
+that share — rounded to the fewest significant digits that keep the count,
+so a margin reads `0.13`, not `0.12994712`. When the scores tie at the cut
+(a stuck sensor scores whole days identically) no margin flags exactly that
+share; the nearer edge of the run is taken and the response says so
+(`exact: false`, a `note` with the rate reached), the same way the
+calibration's `margin_for_rate` reports `requested_rate` next to
+`achieved_rate`:
 
 ```
 $ anomaly finetune boiler --rate 0.01 --dry-run        # preview, nothing written
