@@ -470,7 +470,9 @@ $ `src/orgfiles.nu`
     // forest-filtered points, every margin at the target rate — the batch
     // recipe (model_train_whole), shared with a model forked from another
     // model's history.
-    : WholeTrain wt ( model_train_whole mo ANA_TARGET_RATE )
+    : ( Vec i ) dflt_layout ( vec_new [i] )
+    : WholeTrain wt ( model_train_whole mo ANA_TARGET_RATE dflt_layout )
+    ( vec_free [i] dflt_layout )
     : Json notes . wt notes
     : Json margins . wt margins
 

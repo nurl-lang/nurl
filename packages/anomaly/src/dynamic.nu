@@ -1549,13 +1549,24 @@ $ `src/store.nu`
     ( json_free . w notes )
 }
 
-@ model_train_whole * Model mo f rate → WholeTrain {
+//
+// The windows are opened for this one training only: the version
+// configuration the model keeps is the one it was given (its own, or the
+// source's when it is a fork), so a fork that goes on receiving points
+// retrains its short_term over three hours like its source, not over
+// everything it has ever seen. The autoencoder takes `hidden` as its
+// layout (empty = the 64-16-64 default) and `rate` as its pre-filter.
+@ model_train_whole * Model mo f rate ( Vec i ) hidden → WholeTrain {
     : *Meta mm . mo meta
     : i nv ( vec_len [VerCfg] . mm versions )
+    : ( Vec i ) wmins ( vec_with_cap [i] nv )
+    : ( Vec i ) wptss ( vec_with_cap [i] nv )
     : ~ i vi 0
     ~ < vi nv {
         ?? ( vec_get [VerCfg] . mm versions vi ) {
             T vc → {
+                ( vec_push [i] wmins . vc window_min )
+                ( vec_push [i] wptss . vc window_pts )
                 : ~ VerCfg o vc
                 = . o window_min 0
                 = . o window_pts 0
@@ -1566,13 +1577,31 @@ $ `src/store.nu`
         = vi + vi 1
     }
     ( model_force_train_at mo ( model_last_ts mo ) )
+    = vi 0
+    ~ < vi nv {
+        ?? ( vec_get [VerCfg] . mm versions vi ) {
+            T vc → {
+                : ~ VerCfg o vc
+                = . o window_min ( _mlp_iget wmins vi )
+                = . o window_pts ( _mlp_iget wptss vi )
+                : b _o ( vec_set [VerCfg] . mm versions vi o )
+            }
+            F _ → {}
+        }
+        = vi + vi 1
+    }
+    ( vec_free [i] wmins )
+    ( vec_free [i] wptss )
+    ( store_save_meta . mo store ( string_data . mo mname ) mm )
     : Json notes ( json_arr_new )
-    : ( Vec i ) hidden ( vec_new [i] )
-    ( vec_push [i] hidden 64 )
-    ( vec_push [i] hidden 16 )
-    ( vec_push [i] hidden 64 )
-    : String aerr ( model_train_autoencoder mo hidden rate )
-    ( vec_free [i] hidden )
+    : ( Vec i ) layout ( vec_new [i] )
+    ? > ( vec_len [i] hidden ) 0 { ( vec_extend [i] layout hidden ) } {
+        ( vec_push [i] layout 64 )
+        ( vec_push [i] layout 16 )
+        ( vec_push [i] layout 64 )
+    }
+    : String aerr ( model_train_autoencoder mo layout rate )
+    ( vec_free [i] layout )
     ? > ( string_len aerr ) 0 {
         : String m ( string_from `autoencoder not trained: ` )
         ( string_push_str m ( string_data aerr ) )

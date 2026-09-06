@@ -158,6 +158,26 @@ $ `stdlib/ext/json.nu`
     ( string_free . vc vname )
 }
 
+// An owned copy of a model's version configuration — what a fork takes
+// from its source.
+@ meta_clone_versions * Meta m → ( Vec VerCfg ) {
+    : i nv ( vec_len [VerCfg] . m versions )
+    : ( Vec VerCfg ) out ( vec_with_cap [VerCfg] nv )
+    : ~ i k 0
+    ~ < k nv {
+        ?? ( vec_get [VerCfg] . m versions k ) {
+            T vc → {
+                : ~ VerCfg c vc
+                = . c vname ( string_from ( string_data . vc vname ) )
+                ( vec_push [VerCfg] out c )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ out
+}
+
 // An alias is a label, so it is bounded by what a human will read rather
 // than by anything structural. Long enough for a sentence, short enough that
 // it cannot be used to bloat every metadata response.

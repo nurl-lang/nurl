@@ -471,11 +471,50 @@ $ `src/service.nu`
     ( call_free sc )
 }
 
+// The `weekly` version of `model` as describe_model shows it: its
+// window_minutes, n_estimators and enabled flag (−1 / F when absent).
+: Weekly {
+    i wmin
+    i est
+    b en
+}
+
+@ weekly_of Router r s model → Weekly {
+    : String args ( string_from `{"model":"` )
+    ( string_push_str args model )
+    ( string_push_str args `"}` )
+    : Call dm ( call r `describe_model` ( string_data args ) `` )
+    ( string_free args )
+    : ~ i wmin -1
+    : ~ i est -1
+    : ~ b en F
+    ?? ( json_obj_get . dm data `versions` ) {
+        T vs → {
+            ?? ( json_obj_get vs `weekly` ) {
+                T w → {
+                    = wmin ( jint_of w `window_minutes` )
+                    = est ( jint_of w `n_estimators` )
+                    ?? ( json_obj_get w `enabled` ) { T e → { = en ( json_as_bool e ) } F _ → {} }
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( call_free dm )
+    ^ @ Weekly { wmin est en }
+}
+
 @ test_scratch Router r → v {
     : Call noname ( call r `fork_model` `{"source":"pub"}` `` )
     ( check ! . noname ok `mcp: fork_model needs a name` )
     ( check ( string_contains . noname text `llm_` ) `mcp: and suggests the scratch prefix` )
     ( call_free noname )
+
+    // Give the source a configuration of its own: the fork must carry it.
+    : Call cfg ( call r `edit_model` `{"model":"pub","patch":{"versions":{"weekly":{"n_estimators":123,"enabled":false}}}}` `` )
+    ( check . cfg ok `mcp: the source's weekly version is edited` )
+    ( call_free cfg )
 
     : Call fk ( call r `fork_model` `{"source":"pub","name":"llm_fork","fields":["temp"]}` `` )
     ( check . fk ok `mcp: fork_model builds a scratch model` )
@@ -485,6 +524,11 @@ $ `src/service.nu`
     ( check > ( jint_of . fk data `points` ) 50 `mcp: fork trained on the slice` )
     ( check ( string_contains . fk text `delete_model when done` ) `mcp: fork tells what comes next` )
     ( call_free fk )
+
+    : Weekly fw ( weekly_of r `llm_fork` )
+    ( check == . fw est 123 `mcp: the fork inherits the source's version configuration` )
+    ( check ! . fw en `mcp: a version disabled on the source is disabled on the fork` )
+    ( check == . fw wmin 10080 `mcp: whole-slice training leaves the version's window as configured` )
 
     : Call lm ( call r `list_models` `{}` `` )
     ( check == ( jint_of . lm data `count` ) 2 `mcp: list_models now counts two` )

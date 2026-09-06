@@ -1559,8 +1559,18 @@ $ `stdlib/std/thread.nu`
         } {}
         = k + k 1
     }
+    // What the fork inherits besides the points: the clock, the version
+    // configuration (which versions, their windows and forests) and the
+    // retrain schedule, so it behaves like its source once it is fed; and
+    // the autoencoder's layout, so its own is trained the same shape.
     : *Meta sm . smo meta
     : b count_clock . sm count_clock
+    : ( Vec VerCfg ) src_versions ( meta_clone_versions sm )
+    : i src_sched_below . sm sched_below
+    : i src_sched_at_max . sm sched_at_max
+    : b src_sched_ae . sm sched_ae
+    : AeModel sae . smo ae
+    : ( Vec i ) ae_layout ? . sae trained ( ae_hidden sae ) ( vec_new [i] )
     ( model_free smo )
     : i nrec ( vec_len [Json] recs )
     ? < nrec ANOM_MIN_POINTS {
@@ -1574,6 +1584,8 @@ $ `stdlib/std/thread.nu`
         : HttpResponse rr ( __an_json_err 400 ( string_data m ) )
         ( string_free m )
         ( vec_free_with [Json] recs \ Json j → v { ( json_free j ) } )
+        ( vec_free_with [VerCfg] src_versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
+        ( vec_free [i] ae_layout )
         ( store_free st )
         ( __an_gate_free gate )
         ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
@@ -1586,6 +1598,11 @@ $ `stdlib/std/thread.nu`
     : *Model mo ( model_open st ( string_data name ) )
     : *Meta mm . mo meta
     = . mm count_clock count_clock
+    ( vec_free_with [VerCfg] . mm versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
+    = . mm versions src_versions
+    = . mm sched_below src_sched_below
+    = . mm sched_at_max src_sched_at_max
+    = . mm sched_ae src_sched_ae
     : i maxp ? > nrec ANOM_MAX_POINTS nrec ANOM_MAX_POINTS
     ( model_set_limits mo ANOM_MIN_POINTS maxp )
     : ImportReport rep ( model_import mo recs )
@@ -1602,6 +1619,7 @@ $ `stdlib/std/thread.nu`
         ( string_free m )
         ( import_report_free rep )
         ( model_free mo )
+        ( vec_free [i] ae_layout )
         : b _d ( store_delete st ( string_data name ) )
         ( store_free st )
         ( __an_gate_free gate )
@@ -1612,7 +1630,8 @@ $ `stdlib/std/thread.nu`
     } {}
     ( __an_gate_claim gate ( string_data name ) )
     ( __an_gate_free gate )
-    : WholeTrain wt ( model_train_whole mo rate )
+    : WholeTrain wt ( model_train_whole mo rate ae_layout )
+    ( vec_free [i] ae_layout )
     : ScanOut so ( model_scan mo 0 0 0 F )
 
     : Json o ( json_obj_new )

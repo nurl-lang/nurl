@@ -471,6 +471,34 @@ $ `src/imptime.nu`
     }
 }
 
+// When a model was last trained, as the wall-clock time the metadata
+// records (`last_trained_time`; a model trained before it was recorded
+// has none), and how many points it has taken since — `last_trained_at`
+// is that point count, not a time, whatever the clock. A model whose
+// feature order predates the current calendar encoding says so.
+@ __mcp_training_of Json src Json dst → v {
+    ?? ( json_obj_get src `last_trained_time` ) {
+        T v → {
+            : i t ( json_as_int v )
+            ? > t 0 { ( json_obj_set dst `last_trained` ( __mcp_when t F ) ) } {}
+        }
+        F _ → {}
+    }
+    ?? ( json_obj_get src `last_trained_at` ) {
+        T v → {
+            : i at ( json_as_int v )
+            : ~ i seen 0
+            ?? ( json_obj_get src `n_points_seen` ) { T sv → { = seen ( json_as_int sv ) } F _ → {} }
+            ? > at 0 { ( json_obj_set dst `points_since_training` ( json_int - seen at ) ) } {}
+        }
+        F _ → {}
+    }
+    ?? ( json_obj_get src `retrain_required` ) {
+        T v → { ? ( json_as_bool v ) { ( json_obj_set dst `retrain_required` ( json_bool T ) ) } {} }
+        F _ → {}
+    }
+}
+
 // A number rounded to `digits` decimals, so a score reads as 0.6132 and
 // not as seventeen digits of it.
 @ __mcp_round_f f x i digits → Json {
@@ -587,7 +615,7 @@ $ `src/imptime.nu`
     }
     ( __mcp_copy mj `n_points_seen` m )
     ( __mcp_copy mj `max_data_points` m )
-    ( __mcp_when_of mj `last_trained_at` m `last_trained` F )
+    ( __mcp_training_of mj m )
     ?? ( json_obj_get mj `versions` ) {
         T vs → {
             : Json out ( json_obj_new )
@@ -654,7 +682,7 @@ $ `src/imptime.nu`
     ( __mcp_copy b `feature_names` out )
     ( __mcp_copy b `n_points_seen` out )
     ( __mcp_copy b `max_data_points` out )
-    ( __mcp_when_of b `last_trained_at` out `last_trained` F )
+    ( __mcp_training_of b out )
     ( __mcp_copy b `schedule` out )
     ( __mcp_copy b `versions` out )
     ?? ( json_obj_get b `autoencoder` ) {
