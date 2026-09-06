@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.14.1
+
+- **The accelerator binds the calling thread.** A CUDA context is current
+  only on the thread that opened it, and since 0.12.0 `anomaly serve`
+  scores and trains from a worker pool: the first accelerated call from a
+  worker failed, the process logged "gpu scoring failed, falling back to
+  the pure path" and "autoencoder GPU setup failed, training on the CPU"
+  once, and every scan and autoencoder fit after that ran on the CPU —
+  35 s per fit against 1.7 s on the device. The one gate every
+  accelerated path goes through now binds the calling thread to the live
+  device before use; gpu_test checks the accelerated scores from a thread
+  the device was not opened on, bit for bit.
+
+- **A scan encodes its rows once and the forests score them in bulk.**
+  Scoring one stored row parsed and encoded its whole timevector window
+  again — 99 JSON lines per row — so a scan or calibration over 10 000
+  rows took 23 s with or without the device. A scan now builds an encoded
+  history once (each ring row in range parsed, projected and scaled a
+  single time, the autoencoder projection kept alongside) and each
+  forest's decisions come from the bulk scorer over the whole range —
+  point-wide forests in one call, timevector forests in window batches —
+  so the per-row verdict only reads. Output is byte-identical to 0.14.0;
+  the same 10 000-row calibration takes 0.7 s accelerated and 2.6 s on
+  the CPU.
+
 ## 0.14.0
 
 - **Labels: a reader's word on a stored point.** `POST

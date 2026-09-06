@@ -340,7 +340,17 @@ either way — so which engine ran can never change a verdict, and the test
 suite asserts element-for-element `==` across engines. Measured on 200 000
 rows × 300 trees: pure NURL 9.6 s, host C++ backend 1.1 s (~9×), RTX 4090
 213 ms (~45×). `ANOMALY_GPU=0` disables the accelerator; `NURL_GPU=cpu`
-forces the CPU backend on a CUDA machine.
+forces the CPU backend on a CUDA machine. A CUDA context is current only
+on the thread that opened it, so every accelerated path binds the calling
+thread first — `anomaly serve` scores and trains from a worker pool, and
+which thread a request lands on must not decide which engine runs.
+
+A scan, calibration or fine-tune over stored rows (the anomalies route,
+`model_scan_at`, `model_calibrate`) encodes the rows once — each ring row
+in range parsed, projected and scaled a single time — and takes every
+forest's decisions from the bulk scorer over the whole range, so the
+per-row verdict only reads: 10 000 rows calibrate in 0.7 s accelerated,
+2.6 s on the CPU.
 
 **Autoencoder training** (`/train/autoencoder/<model>`) also runs on the
 GPU by default when a CUDA device is present — and training is where the
