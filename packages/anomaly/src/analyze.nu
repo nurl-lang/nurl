@@ -524,6 +524,7 @@ $ `src/orgfiles.nu`
                     ( json_obj_set o `index` ( json_int . r sp_idx ) )
                     ( json_obj_set o `timestamp` ( json_int . r sp_ts ) )
                     ( json_obj_set o `score` ( json_float . r sp_score ) )
+                    ( json_obj_set o `severity` ( json_float . r sp_severity ) )
                     ( json_obj_set o `votes` ( json_int votes ) )
                     ( json_obj_set o `versions` flagged )
                     ?? ( model_point_json mo . r sp_idx ) {

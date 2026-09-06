@@ -704,6 +704,7 @@ $ `src/imptime.nu`
             ( __mcp_copy ae `enabled` ao )
             ( __mcp_copy_rounded ae `reconstruction_threshold` ao 5 )
             ( __mcp_copy ae `decision_margin` ao )
+            ( __mcp_copy_rounded ae `effective_margin` ao 5 )
             ( __mcp_copy ae `training_data_points` ao )
             ( __mcp_copy ae `layer_sizes` ao )
             ( __mcp_when_of ae `trained_at` ao `trained` F )
@@ -750,6 +751,7 @@ $ `src/imptime.nu`
     ( __mcp_copy r `index` o )
     ( __mcp_when_of r `timestamp` o `time` count_clock )
     ( __mcp_copy_rounded r `score` o 4 )
+    ( __mcp_copy_rounded r `severity` o 3 )
     ( __mcp_copy r `anomaly` o )
     ( __mcp_copy r `versions` o )
     ?? ( json_obj_get r `values` ) {
@@ -864,9 +866,12 @@ $ `src/imptime.nu`
     : ( Vec FeatShare ) feats ( vec_new [FeatShare] )
     : ~ i first_ts 0
     : ~ i last_ts 0
-    // Scores run DOWNWARD into anomaly: a point is flagged when its score
-    // falls below minus the margin, so the worst row is the lowest score.
+    // The worst row is the one farthest past its alert line: highest
+    // severity (−score / margin), which is comparable across versions
+    // where a raw score is not (a forest's ~1e-1 next to the
+    // autoencoder's ~1e-4).
     : ~ f worst 0.0
+    : ~ f worst_sev 0.0
     : ~ i worst_idx -1
     : ~ i worst_ts 0
     : ( Vec i ) stamps ( vec_new [i] )
@@ -882,7 +887,8 @@ $ `src/imptime.nu`
                         ? | == first_ts 0 < ts first_ts { = first_ts ts } {}
                         ? > ts last_ts { = last_ts ts } {}
                         : f sc ( __mcp_f_of r `score` )
-                        ? | < worst_idx 0 < sc worst { = worst sc = worst_idx ( __mcp_int_of r `index` ) = worst_ts ts } {}
+                        : f sv ( __mcp_f_of r `severity` )
+                        ? | < worst_idx 0 > sv worst_sev { = worst sc = worst_sev sv = worst_idx ( __mcp_int_of r `index` ) = worst_ts ts } {}
                         ?? ( json_obj_get r `versions` ) {
                             T vs → {
                                 ( json_arr_each vs \ Json vn → v {
@@ -919,6 +925,7 @@ $ `src/imptime.nu`
         ( json_obj_set w `index` ( json_int worst_idx ) )
         ( json_obj_set w `time` ( __mcp_when worst_ts cc ) )
         ( json_obj_set w `score` ( __mcp_round_f worst 4 ) )
+        ( json_obj_set w `severity` ( __mcp_round_f worst_sev 3 ) )
         ( json_obj_set out `worst` w )
     } {}
 
@@ -1200,6 +1207,7 @@ $ `src/imptime.nu`
             : Json vo ( json_obj_new )
             ( json_obj_each vs \ s vn Json v → v {
                 : Json one ( json_obj_new )
+                ( __mcp_copy v `units` one )
                 ( __mcp_copy v `margin` one )
                 ( __mcp_copy v `n` one )
                 ( __mcp_copy v `flagged` one )
@@ -1228,7 +1236,7 @@ $ `src/imptime.nu`
         }
         F _ → {}
     }
-    ( json_obj_set out `reading` ( json_str_lit `A version flags a row when its score is at or below -margin (score = decision function; the more negative, the more anomalous); rate = flagged / n over this window. margin_for_rate gives, per requested rate, the nearest margin the window's scores can supply: when scores tie at the cut the achieved rate differs from the requested one (exact = false) — a run of identical scores is taken or left whole. Margins are shown exactly as stored. finetune {model, rate} sets them.` ) )
+    ( json_obj_set out `reading` ( json_str_lit `A version flags a row when its score is at or below -margin (score = decision function; the more negative, the more anomalous); rate = flagged / n over this window. margin_for_rate gives, per requested rate, the nearest margin the window's scores can supply: when scores tie at the cut the achieved rate differs from the requested one (exact = false) — a run of identical scores is taken or left whole. Margins are shown exactly as stored, in each version's own units (units: a forest's margin is absolute on its decision function; the autoencoder's is a fraction of its reconstruction threshold, and its scores here are scaled the same way). finetune {model, rate} sets them.` ) )
     ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
@@ -1782,7 +1790,7 @@ $ `src/imptime.nu`
 @ __mcp_instructions → s {
     ^ `Anomaly detection over an organisation's sensor and event streams: every model watches one stream, stores its recent points in a ring, and flags points its versions (isolation forests over different windows, and an autoencoder that sees the relations between fields) score as unusual. You act with the signed-in user's permissions, inside their organisation.
 
-Start with list_models. Then anomalies {model, last: "24h"} for the newest flagged rows with the features that caused them, anomaly_summary for counts, timeline and the features blamed most, point for one row in full, describe_model for how a model is built, calibration for how its margins sit against the recent data. Times are ISO-8601 UTC; a model on a count clock numbers its rows instead. "last" counts back from the model's newest point, not from now. Scores run downward into anomaly: a point is flagged when its score falls below minus the version's decision_margin, so the lowest score is the worst point.
+Start with list_models. Then anomalies {model, last: "24h"} for the newest flagged rows with the features that caused them, anomaly_summary for counts, timeline and the features blamed most, point for one row in full, describe_model for how a model is built, calibration for how its margins sit against the recent data. Times are ISO-8601 UTC; a model on a count clock numbers its rows instead. "last" counts back from the model's newest point, not from now. Scores run downward into anomaly: a point is flagged when its score is at or below minus the version's margin. A forest's decision_margin is that margin as is; the autoencoder's decision_margin is a fraction of its reconstruction threshold (margin = threshold × decision_margin), so its scores are ~1e-4 where a forest's are ~1e-1. Rank points and versions by severity (−score / margin: 1.0 is exactly on the alert line, 2.0 twice as far past it), never by raw score; a row's score and severity are those of its most severe version.
 
 Every member may build scratch models named llm_… (fork_model: a slice of an existing model's history, optionally fewer columns), tune them (finetune, train_autoencoder, retrain), edit and delete them — use them to test a hypothesis without touching production models. Changing or deleting any other model needs the administrator role; the reply says so when it does. Sending new points (ingest_point, import_data) needs the ingest capability. analyze_data scores a file you provide without creating a model.`
 }

@@ -470,8 +470,6 @@ $ `stdlib/std/thread.nu`
     // point. `score` and `margin` stay in each version's own units.
     : Json vers ( json_obj_new )
     : i nv ( vec_len [VerVerdict] . vd versions )
-    : ~ f top_sev 0.0
-    : ~ b first T
     : ~ i k 0
     ~ < k nv {
         ?? ( vec_get [VerVerdict] . vd versions k ) {
@@ -479,15 +477,15 @@ $ `stdlib/std/thread.nu`
                 : Json vo ( json_obj_new )
                 ( json_obj_set vo `anomaly` ( json_bool . vv anomaly ) )
                 ( json_obj_set vo `score` ( json_float . vv score ) )
-                : ~ f sev 0.0
-                ? > . vv margin 0.0 { = sev / - 0.0 . vv score . vv margin } {
-                    = sev ? <= . vv score 0.0 1.0 0.0
-                }
-                ( json_obj_set vo `severity` ( json_float sev ) )
-                ? || first > sev top_sev { = top_sev sev } {}
-                = first F
+                ( json_obj_set vo `severity` ( json_float ( anom_severity . vv score . vv margin ) ) )
+                // `margin` is the absolute band the score was compared
+                // to; `decision_margin` the stored setting, which for the
+                // autoencoder is a fraction of its reconstruction
+                // threshold (SPEC §5.5) — `units` says which.
                 : Json ti ( json_obj_new )
                 ( json_obj_set ti `margin` ( json_float . vv margin ) )
+                ( json_obj_set ti `decision_margin` ( json_float . vv cfg_margin ) )
+                ( json_obj_set ti `units` ( json_str_lit ( __an_margin_units ( string_data . vv vvname ) ) ) )
                 ( json_obj_set vo `threshold_info` ti )
                 ( json_obj_set vers ( string_data . vv vvname ) vo )
             }
@@ -495,7 +493,7 @@ $ `stdlib/std/thread.nu`
         }
         = k + k 1
     }
-    ( json_obj_set o `severity` ( json_float top_sev ) )
+    ( json_obj_set o `severity` ( json_float . vd severity ) )
     ( json_obj_set o `versions` vers )
     ( json_obj_set o `data_point` ( json_clone body ) )
 
@@ -747,7 +745,11 @@ $ `stdlib/std/thread.nu`
             ( json_obj_set o `prefilter_contamination` ( json_float . ae prefilter ) )
             ( json_obj_set o `trained_at` ( json_int . ae trained_at ) )
             ( json_obj_set o `retrain_with_forests` ( json_bool . mm sched_ae ) )
-            ( json_obj_set o `decision_margin` ( json_float ( meta_version_margin mm `autoencoder` 0.05 ) ) )
+            : f arel ( meta_version_margin mm `autoencoder` 0.05 )
+            ( json_obj_set o `decision_margin` ( json_float arel ) )
+            // The band the score is actually compared to: threshold ×
+            // decision_margin (SPEC §5.5), in the score's own units.
+            ( json_obj_set o `effective_margin` ( json_float ( anom_ae_margin ae arel ) ) )
             ( json_obj_set o `feature_names` ( _an_jarr_of_strs . ae feats ) )
             : Json layers ( json_arr_new )
             : Mlp net . ae net
@@ -1200,6 +1202,7 @@ $ `stdlib/std/thread.nu`
                 ( json_obj_set o `index` ( json_int . r sp_idx ) )
                 ( json_obj_set o `timestamp` ( json_int . r sp_ts ) )
                 ( json_obj_set o `score` ( json_float . r sp_score ) )
+                ( json_obj_set o `severity` ( json_float . r sp_severity ) )
                 ( json_obj_set o `anomaly` ( json_bool . r sp_anomaly ) )
                 ( json_obj_set o `versions` flagged )
                 ? || want_fields . r sp_anomaly {
@@ -1945,9 +1948,18 @@ $ `stdlib/std/thread.nu`
     ^ key
 }
 
+// What a version's margin is measured in: a forest's is an absolute
+// offset on its decision function, the autoencoder's a fraction of its
+// reconstruction threshold (SPEC §5.5). The calibration and fine-tune
+// reports carry every number of a version in these units.
+@ __an_margin_units s vname → s {
+    ^ ? == ( nurl_str_eq vname `autoencoder` ) 1 `relative_to_threshold` `absolute`
+}
+
 // One version's calibration block.
 @ __an_cal_ver_json CalVer cv b with_curve → Json {
     : Json o ( json_obj_new )
+    ( json_obj_set o `units` ( json_str_lit ( __an_margin_units ( string_data . cv cvname ) ) ) )
     ( json_obj_set o `margin` ( json_float . cv cur_margin ) )
     ( json_obj_set o `n` ( json_int . cv n ) )
     ( json_obj_set o `flagged` ( json_int . cv flagged ) )
@@ -2246,6 +2258,7 @@ $ `stdlib/std/thread.nu`
                 ( json_obj_set margins ( string_data . ft ftname ) ( json_float . ft new_margin ) )
                 ( json_obj_set scores ( string_data . ft ftname ) ( json_float . ft worst ) )
                 : Json v ( json_obj_new )
+                ( json_obj_set v `units` ( json_str_lit ( __an_margin_units ( string_data . ft ftname ) ) ) )
                 ( json_obj_set v `old_margin` ( json_float . ft old_margin ) )
                 ( json_obj_set v `new_margin` ( json_float . ft new_margin ) )
                 ( json_obj_set v `n` ( json_int . ft n ) )

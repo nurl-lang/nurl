@@ -96,6 +96,40 @@ $ `src/dynamic.nu`
     }
 }
 
+// Does the aggregate follow the most SEVERE version — the one farthest
+// past its own alert line in its own margins — rather than the lowest
+// raw decision value? The two differ whenever the autoencoder (scores
+// ~1e-4) is the alarmed one and a forest (~1e-1) is merely normal.
+@ agg_follows_severity * Model mo Json j b must_differ → b {
+    : !Verdict String r ( model_detect_only mo j )
+    ?? r {
+        T vd → {
+            : ~ f top -1000000.0
+            : ~ f top_score 0.0
+            : ~ f low 1000000.0
+            : i nv ( vec_len [VerVerdict] . vd versions )
+            : ~ i k 0
+            ~ < k nv {
+                ?? ( vec_get [VerVerdict] . vd versions k ) {
+                    T vv → {
+                        : f sev ( anom_severity . vv score . vv margin )
+                        ? > sev top { = top sev = top_score . vv score } {}
+                        ? < . vv score low { = low . vv score } {}
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            : b ok & < ( float_abs - . vd severity top ) 0.000000001 < ( float_abs - . vd score top_score ) 0.000000001
+            // `must_differ`: the caller arranged the two rules to disagree.
+            : b differs > ( float_abs - top_score low ) 0.000000001
+            ( verdict_free vd )
+            ^ & ok | differs ! must_differ
+        }
+        F e → { ( string_free e ) ^ F }
+    }
+}
+
 // The aggregate verdict of one stored ring row, the slow way.
 @ detect_row * Model mo i at → b {
     : ~ b anom F
@@ -443,6 +477,21 @@ $ `src/dynamic.nu`
     : i ae_after ( ae_flag_count mo )
     ( check == ae_after 4 `the scan flags exactly those four` )
     ( check < ae_after ae_before `fine-tune narrows the autoencoder's alarm` )
+
+    // The aggregate follows the most SEVERE version. On the off-manifold
+    // point the autoencoder has both the lowest raw score and the highest
+    // severity, so the two rules agree; a hair-thin margin on short_term
+    // makes that forest the most severe while its raw score stays well
+    // above the autoencoder's — now only the severity rule picks it.
+    : Json off ( mkpoint 1.5 5.0 20.5 )
+    : AeSlice offs ( ae_probe mo off )
+    ( check . offs hit `off-manifold: the autoencoder flags it` )
+    ( check ( agg_follows_severity mo off F ) `aggregate score and severity are the most severe version's` )
+    : f st_margin ( meta_version_margin ( model_metadata mo ) `short_term` -1.0 )
+    : b _ms ( model_set_margin mo `short_term` 0.0001 )
+    ( check ( agg_follows_severity mo off T ) `a forest of higher severity but higher raw score is the aggregate` )
+    : b _mr ( model_set_margin mo `short_term` st_margin )
+    ( json_free off )
 
     // Calibration reads the same numbers back without writing anything.
     : CalReport cal ( model_calibrate mo 0 0 )

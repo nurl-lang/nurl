@@ -197,16 +197,33 @@ $ `src/service.nu`
     ?? ( json_obj_get . outl body `severity` ) { T e → { ?? ( json_num_as_f e ) { T x → { = sev x } F _ → {} } } F _ → {} }
     ( check > sev 1.0 `svc: aggregate severity above 1 for a flagged point` )
     : ~ f sev_st 0.0
+    : ~ b ti_ok F
     ?? ( json_obj_get . outl body `versions` ) {
         T vers → {
             ?? ( json_obj_get vers `short_term` ) {
-                T v → { ?? ( json_obj_get v `severity` ) { T e → { ?? ( json_num_as_f e ) { T x → { = sev_st x } F _ → {} } } F _ → {} } }
+                T v → {
+                    ?? ( json_obj_get v `severity` ) { T e → { ?? ( json_num_as_f e ) { T x → { = sev_st x } F _ → {} } } F _ → {} }
+                    // threshold_info names the band and its units: a
+                    // forest's margin is absolute, so it equals the
+                    // stored decision_margin.
+                    ?? ( json_obj_get v `threshold_info` ) {
+                        T ti → {
+                            : ~ f m 0.0
+                            : ~ f dm -1.0
+                            ?? ( json_obj_get ti `margin` ) { T e → { ?? ( json_num_as_f e ) { T x → { = m x } F _ → {} } } F _ → {} }
+                            ?? ( json_obj_get ti `decision_margin` ) { T e → { ?? ( json_num_as_f e ) { T x → { = dm x } F _ → {} } } F _ → {} }
+                            = ti_ok & == m dm ( jstr_eq ti `units` `absolute` )
+                        }
+                        F _ → {}
+                    }
+                }
                 F _ → {}
             }
         }
         F _ → {}
     }
     ( check > sev_st 0.0 `svc: per-version severity present` )
+    ( check ti_ok `svc: threshold_info carries decision_margin and units` )
     ( json_free . outl body )
     : SvcOut garb ( fire r `POST` `/detect_only/svc` `` `not json` )
     ( check == . garb status 400 `svc: garbage body -> 400` )
@@ -341,13 +358,29 @@ $ `src/service.nu`
     ( check == cal_rows 50 `svc: calibration scored the whole ring` )
     : ~ b cal_st F
     : ~ b cal_ladder F
+    : ~ b cal_units F
     ?? ( json_obj_get . cal body `versions` ) {
         T vers → {
             ?? ( json_obj_get vers `short_term` ) {
                 T v → {
                     = cal_st == ( jint_of v `n` ) 50
+                    = cal_units ( jstr_eq v `units` `absolute` )
                     ?? ( json_obj_get v `margin_for_rate` ) {
-                        T mfr → { ?? ( json_obj_get mfr `1%` ) { T _ → { = cal_ladder T } F _ → {} } }
+                        T mfr → {
+                            ?? ( json_obj_get mfr `1%` ) {
+                                T e → {
+                                    // requested_rate is the ladder step;
+                                    // achieved_rate = flagged / n.
+                                    : ~ f req 0.0
+                                    : ~ f ach -1.0
+                                    ?? ( json_obj_get e `requested_rate` ) { T x → { ?? ( json_num_as_f x ) { T y → { = req y } F _ → {} } } F _ → {} }
+                                    ?? ( json_obj_get e `achieved_rate` ) { T x → { ?? ( json_num_as_f x ) { T y → { = ach y } F _ → {} } } F _ → {} }
+                                    : f want / # f ( jint_of e `flagged` ) 50.0
+                                    = cal_ladder & == req 0.01 < ( float_abs - ach want ) 0.000000001
+                                }
+                                F _ → {}
+                            }
+                        }
                         F _ → {}
                     }
                 }
@@ -357,7 +390,8 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check cal_st `svc: calibration reports short_term over 50 rows` )
-    ( check cal_ladder `svc: calibration carries margin_for_rate` )
+    ( check cal_units `svc: calibration names the margin's units` )
+    ( check cal_ladder `svc: margin_for_rate carries requested and achieved rates` )
     ( json_free . cal body )
     : SvcOut cal4 ( fire r `GET` `/models/dynamic/nosuch/calibration` `` `` )
     ( check == . cal4 status 404 `svc: calibration missing -> 404` )

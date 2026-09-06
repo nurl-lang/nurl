@@ -57,8 +57,21 @@ $ `src/store.nu`
 : Verdict {
     b ready
     b anomaly
-    f score
+    f score  // the most severe version's decision value (own units)
+    f severity  // that version's severity: the aggregate, unit-free
     ( Vec VerVerdict ) versions
+}
+
+// The one unit-free number every version shares (SPEC §5.4): how far past
+// its own alert line a decision value sits, in margins — 1.0 exactly on
+// the line, 2.0 twice as far, negative comfortably normal. A margin of 0
+// gives 1.0 when flagged and 0.0 otherwise. The aggregate score is the
+// score of the version that is most severe by this measure; a plain
+// minimum over decision values would let a forest's ~1e-1 always outrank
+// an autoencoder's ~1e-4 and hide the joint model's alarm.
+@ anom_severity f df f margin → f {
+    ? > margin 0.0 { ^ / - 0.0 df margin } {}
+    ^ ? <= df 0.0 1.0 0.0
 }
 
 // A live dynamic model. Obtain with model_open, release with model_free.
@@ -362,7 +375,7 @@ $ `src/store.nu`
     : ( Vec VerVerdict ) vvs ( vec_new [VerVerdict] )
     : b warm >= ( vec_len [String] . mo lines ) . mo min_points
     ? & ( model_is_trained mo ) warm {} {
-        ^ @ Verdict { F F 0.0 vvs }
+        ^ @ Verdict { F F 0.0 0.0 vvs }
     }
 
     : *Meta mm . mo meta
@@ -371,7 +384,10 @@ $ `src/store.nu`
     ( scaler_apply . mo sc x )
 
     : ~ b any F
+    // `worst` is the aggregate score: the decision value of the version
+    // that is most severe in its own margins (anom_severity).
     : ~ f worst 0.0
+    : ~ f top_sev 0.0
     : ~ b first T
     : i nf ( vec_len [VerModel] . mo forests )
     : ~ i k 0
@@ -392,7 +408,8 @@ $ `src/store.nu`
                                 : f marginw ( meta_version_margin mm ( string_data . vm vname ) . vm margin )
                                 : b hitw <= dfw - 0.0 marginw
                                 ? hitw { = any T } {}
-                                ? || first < dfw worst { = worst dfw } {}
+                                : f sevw ( anom_severity dfw marginw )
+                                ? || first > sevw top_sev { = worst dfw = top_sev sevw } {}
                                 = first F
                                 ( vec_push [VerVerdict] vvs @ VerVerdict {
                                     ( string_from ( string_data . vm vname ) )
@@ -413,7 +430,8 @@ $ `src/store.nu`
                     : f margin ( meta_version_margin mm ( string_data . vm vname ) . vm margin )
                     : b hit <= df - 0.0 margin
                     ? hit { = any T } {}
-                    ? || first < df worst { = worst df } {}
+                    : f sev ( anom_severity df margin )
+                    ? || first > sev top_sev { = worst df = top_sev sev } {}
                     = first F
                     ( vec_push [VerVerdict] vvs @ VerVerdict {
                         ( string_from ( string_data . vm vname ) )
@@ -441,7 +459,8 @@ $ `src/store.nu`
         : f amargin ( anom_ae_margin cae arel )
         : b ahit <= adf - 0.0 amargin
         ? ahit { = any T } {}
-        ? || first < adf worst { = worst adf } {}
+        : f asev ( anom_severity adf amargin )
+        ? || first > asev top_sev { = worst adf = top_sev asev } {}
         = first F
         ( vec_push [VerVerdict] vvs @ VerVerdict {
             ( string_from `autoencoder` )
@@ -453,7 +472,7 @@ $ `src/store.nu`
         ( vec_free [f] araw )
     } {}
     ( vec_free [f] x )
-    ^ @ Verdict { T any worst vvs }
+    ^ @ Verdict { T any worst top_sev vvs }
 }
 
 // The live-point entry: `ring_has_current` is 1 when the point being scored
@@ -1662,6 +1681,7 @@ $ `src/store.nu`
     i sp_idx  // ring index
     i sp_ts  // ingest timestamp (unix seconds)
     f sp_score  // aggregate decision_function (the most severe version)
+    f sp_severity  // that version's severity — comparable across rows
     b sp_anomaly
     i sp_present  // bitmask over ScanOut.vnames: versions that had a verdict
     i sp_flagged  // bitmask over ScanOut.vnames: versions that flagged it
@@ -1742,6 +1762,7 @@ $ `src/store.nu`
 @ __an_scan_row * Model mo ( Vec String ) vnames i at → ScoredPt {
     : ~ i st ANOM_SC_NOT_READY
     : ~ f sc 0.0
+    : ~ f sv 0.0
     : ~ b anom F
     : ~ i pres 0
     : ~ i flag 0
@@ -1760,6 +1781,7 @@ $ `src/store.nu`
                             ? . vd ready {
                                 = st ANOM_SC_SCORED
                                 = sc . vd score
+                                = sv . vd severity
                                 = anom . vd anomaly
                                 : i nvv ( vec_len [VerVerdict] . vd versions )
                                 : ~ i q 0
@@ -1791,7 +1813,7 @@ $ `src/store.nu`
     }
     : ~ i ts 0
     ?? ( vec_get [i] . mo times at ) { T t → { = ts t } F _ → {} }
-    ^ @ ScoredPt { at ts sc anom pres flag }
+    ^ @ ScoredPt { at ts sc sv anom pres flag }
 }
 
 // Score every ring point whose timestamp falls in [from_ts, to_ts]
@@ -1867,6 +1889,7 @@ $ `src/store.nu`
         : ~ b hit F
         : ~ i st ANOM_SC_UNSCORED
         : ~ f sc 0.0
+        : ~ f sv 0.0
         : ~ i pres 0
         : ~ i flag 0
         ? & >= ci 0 < ci ( scorecache_rows cache ) {
@@ -1876,6 +1899,7 @@ $ `src/store.nu`
                         = hit T
                         = st stv
                         ?? ( vec_get [f] . cache score ci ) { T x → { = sc x } F _ → {} }
+                        ?? ( vec_get [f] . cache severity ci ) { T x → { = sv x } F _ → {} }
                         ?? ( vec_get [i] . cache present ci ) { T x → { = pres x } F _ → {} }
                         ?? ( vec_get [i] . cache flagged ci ) { T x → { = flag x } F _ → {} }
                     } {}
@@ -1890,7 +1914,7 @@ $ `src/store.nu`
             : b scored == st ANOM_SC_SCORED
             : b anom & scored != flag 0
             ? anom { = anoms + anoms 1 } {}
-            ( vec_push [ScoredPt] pts @ ScoredPt { j ts sc anom pres flag } )
+            ( vec_push [ScoredPt] pts @ ScoredPt { j ts sc sv anom pres flag } )
         } {
             = misses + misses 1
             : ScoredPt row ( __an_scan_row mo vnames j )
@@ -1912,13 +1936,15 @@ $ `src/store.nu`
             ? & >= ci 0 < ci ( scorecache_rows cache ) {
                 : ~ i st ANOM_SC_UNSCORED
                 : ~ f sc 0.0
+                : ~ f sv 0.0
                 : ~ i pres 0
                 : ~ i flag 0
                 ?? ( vec_get [i] . cache state ci ) { T x → { = st x } F _ → {} }
                 ?? ( vec_get [f] . cache score ci ) { T x → { = sc x } F _ → {} }
+                ?? ( vec_get [f] . cache severity ci ) { T x → { = sv x } F _ → {} }
                 ?? ( vec_get [i] . cache present ci ) { T x → { = pres x } F _ → {} }
                 ?? ( vec_get [i] . cache flagged ci ) { T x → { = flag x } F _ → {} }
-                ( scorecache_set nc k st sc pres flag )
+                ( scorecache_set nc k st sc sv pres flag )
             } {}
             = k + k 1
         }
@@ -1929,7 +1955,7 @@ $ `src/store.nu`
                 T r → {
                     : ~ i st ANOM_SC_NOT_READY
                     ? != . r sp_present 0 { = st ANOM_SC_SCORED } {}
-                    ( scorecache_set nc . r sp_idx st . r sp_score . r sp_present . r sp_flagged )
+                    ( scorecache_set nc . r sp_idx st . r sp_score . r sp_severity . r sp_present . r sp_flagged )
                 }
                 F _ → {}
             }

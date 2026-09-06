@@ -78,7 +78,9 @@ rights.
   enabled version — `short_term` (180 min), `daily` (24 h), `weekly`,
   `seasonal` (90 d) and `timevector` (last 100 points) — so the same stream
   is judged against several horizons at once. A point is anomalous if
-  **any** version flags it; the reported score is the most severe.
+  **any** version flags it; the reported `score` and `severity` are those
+  of the most severe version (by severity, the unit-free measure below —
+  not by raw score, which is on a different scale per version).
 - **Isolation-forest decision conventions.** `score` is `decision_function`:
   `-iforest_score − offset`, `offset = −0.5` for `contamination = "auto"`
   (else the 100·c percentile of training scores). A version flags a point

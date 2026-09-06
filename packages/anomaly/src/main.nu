@@ -170,6 +170,7 @@ $ `src/mcp.nu`
         ( json_obj_set o `status` ( json_str_lit `success` ) )
         ( json_obj_set o `anomaly` ( json_bool . vd anomaly ) )
         ( json_obj_set o `score` ( json_float . vd score ) )
+        ( json_obj_set o `severity` ( json_float . vd severity ) )
         : Json vers ( json_obj_new )
         : i nv ( vec_len [VerVerdict] . vd versions )
         : ~ i k 0
@@ -179,6 +180,7 @@ $ `src/mcp.nu`
                     : Json vo ( json_obj_new )
                     ( json_obj_set vo `anomaly` ( json_bool . vv anomaly ) )
                     ( json_obj_set vo `score` ( json_float . vv score ) )
+                    ( json_obj_set vo `severity` ( json_float ( anom_severity . vv score . vv margin ) ) )
                     ( json_obj_set vo `margin` ( json_float . vv margin ) )
                     ( json_obj_set vers ( string_data . vv vvname ) vo )
                 }

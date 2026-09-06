@@ -473,9 +473,9 @@ $ `deps/iforest/src/iforest.nu`
 // row 0, so a ring row `j` of a ring of length L at counter S sits at cache
 // index `S - L + j - base_seen`. Rows outside [0, nrows) are simply misses.
 //
-//   "ANOMSCR1" | u64 epoch | u64 base_seen
+//   "ANOMSCR2" | u64 epoch | u64 base_seen
 //              | u64 nver  | nver × (u64 len, bytes)
-//              | u64 nrows | nrows × (f64 score, u64 state, u64 present, u64 flagged)
+//              | u64 nrows | nrows × (f64 score, f64 severity, u64 state, u64 present, u64 flagged)
 //
 // `state` is 0 for a row never scored under this epoch, 1 for a scored
 // verdict and 2 for "the model was not ready for this point". `present` and
@@ -496,6 +496,7 @@ $ `deps/iforest/src/iforest.nu`
     ( Vec String ) vnames
     ( Vec i ) state
     ( Vec f ) score
+    ( Vec f ) severity
     ( Vec i ) present
     ( Vec i ) flagged
 }
@@ -503,7 +504,7 @@ $ `deps/iforest/src/iforest.nu`
 @ scorecache_new i epoch i base_seen → ScoreCache {
     ^ @ ScoreCache {
         epoch base_seen ( vec_new [String] )
-        ( vec_new [i] ) ( vec_new [f] ) ( vec_new [i] ) ( vec_new [i] )
+        ( vec_new [i] ) ( vec_new [f] ) ( vec_new [f] ) ( vec_new [i] ) ( vec_new [i] )
     }
 }
 
@@ -511,6 +512,7 @@ $ `deps/iforest/src/iforest.nu`
     ( vec_free_with [String] . c vnames \ String x → v { ( string_free x ) } )
     ( vec_free [i] . c state )
     ( vec_free [f] . c score )
+    ( vec_free [f] . c severity )
     ( vec_free [i] . c present )
     ( vec_free [i] . c flagged )
 }
@@ -524,14 +526,16 @@ $ `deps/iforest/src/iforest.nu`
     ~ < ( vec_len [i] . c state ) n {
         ( vec_push [i] . c state ANOM_SC_UNSCORED )
         ( vec_push [f] . c score 0.0 )
+        ( vec_push [f] . c severity 0.0 )
         ( vec_push [i] . c present 0 )
         ( vec_push [i] . c flagged 0 )
     }
 }
 
-@ scorecache_set ScoreCache c i at i state f score i present i flagged → v {
+@ scorecache_set ScoreCache c i at i state f score f severity i present i flagged → v {
     : b _a ( vec_set [i] . c state at state )
     : b _b ( vec_set [f] . c score at score )
+    : b _s ( vec_set [f] . c severity at severity )
     : b _c ( vec_set [i] . c present at present )
     : b _d ( vec_set [i] . c flagged at flagged )
 }
@@ -571,7 +575,7 @@ $ `deps/iforest/src/iforest.nu`
     ? ok {} { ^ F }
 
     : ( Vec u ) out ( vec_new [u] )
-    ( bytes_extend_str out `ANOMSCR1` )
+    ( bytes_extend_str out `ANOMSCR2` )
     ( bytes_push_u64_le out # u64 . c epoch )
     ( bytes_push_u64_le out # u64 . c base_seen )
     : i nv ( vec_len [String] . c vnames )
@@ -591,11 +595,13 @@ $ `deps/iforest/src/iforest.nu`
     ( bytes_push_u64_le out # u64 nr )
     : *i stp ( vec_data [i] . c state )
     : *f scp ( vec_data [f] . c score )
+    : *f svp ( vec_data [f] . c severity )
     : *i prp ( vec_data [i] . c present )
     : *i flp ( vec_data [i] . c flagged )
     = k 0
     ~ < k nr {
         ( bytes_push_f64_le out . scp k )
+        ( bytes_push_f64_le out . svp k )
         ( bytes_push_u64_le out # u64 . stp k )
         ( bytes_push_u64_le out # u64 . prp k )
         ( bytes_push_u64_le out # u64 . flp k )
@@ -616,7 +622,10 @@ $ `deps/iforest/src/iforest.nu`
     ( string_free p )
     ?? r {
         T buf → {
-            : ( Vec u ) magic ( bytes_from_str `ANOMSCR1` )
+            // ANOMSCR1 aggregated by minimum decision value; 2 by the
+            // most severe version. An old cache is a miss, never a
+            // wrong number.
+            : ( Vec u ) magic ( bytes_from_str `ANOMSCR2` )
             : b magic_ok ( bytes_starts_with buf magic )
             ( vec_free [u] magic )
             ? magic_ok {} {
@@ -650,11 +659,13 @@ $ `deps/iforest/src/iforest.nu`
             ? . rd ok {} { = safe 0 }
             ( vec_reserve [i] . c state safe )
             ( vec_reserve [f] . c score safe )
+            ( vec_reserve [f] . c severity safe )
             ( vec_reserve [i] . c present safe )
             ( vec_reserve [i] . c flagged safe )
             = k 0
             ~ & . rd ok < k safe {
                 ( vec_push [f] . c score ( __an_rd_f64 rd ) )
+                ( vec_push [f] . c severity ( __an_rd_f64 rd ) )
                 ( vec_push [i] . c state ( __an_rd_u64 rd ) )
                 ( vec_push [i] . c present ( __an_rd_u64 rd ) )
                 ( vec_push [i] . c flagged ( __an_rd_u64 rd ) )

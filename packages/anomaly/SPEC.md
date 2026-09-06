@@ -245,15 +245,20 @@ caller-owned handles, `( Vec f )` row-major matrices).
 Verdict {
   ready:      i1      // false while warming up (< MIN_DATA_POINTS)
   anomaly:    i1      // aggregate decision across enabled versions
-  score:      f       // aggregate (max-severity) score
+  score:      f       // the most severe version's score (its own units)
+  severity:   f       // that version's severity — the aggregate
   versions:   Vec VersionVerdict   // per-version { name, anomaly, score,
                                    //               margin, cfg_margin }
 }
 ```
 
-The service adds `severity = −score / margin` to every version verdict and,
-as the maximum over versions, to the aggregate (`margin = 0` gives 1.0 when
-flagged, 0.0 otherwise). 1.0 is exactly the alert line, 2.0 twice as far
+`severity = −score / margin` (`anom_severity`; `margin = 0` gives 1.0 when
+flagged, 0.0 otherwise) is computed for every version verdict; the
+aggregate is the maximum over versions and `score` is that version's
+decision value — never a plain minimum over versions, which would let a
+forest's ~1e-1 always outrank the autoencoder's ~1e-4 and hide the joint
+model's alarm. The scan rows carry the same pair, and the score cache
+(`ANOMSCR2`) stores both. 1.0 is exactly the alert line, 2.0 twice as far
 past it, negative comfortably normal — the one unit-free number an operator
 or an agent can compare across versions and models.
 
@@ -466,8 +471,13 @@ The routes mirror §3 (ported column). Request/response shapes match the Python
 service so existing dashboards and the `modelmanager` UI keep working:
 
 - `POST /detect/<model>` body = `{ col: value, ... }` (numeric/categorical/
-  timestamp), optional `timestamp`. Response = `Verdict` as JSON with the
-  `versions` map, `status`, `model`, echoed `data_point`.
+  timestamp), optional `timestamp`. Response = `Verdict` as JSON — `anomaly`,
+  `score`, `severity`, `data_points` — with the `versions` map (per version
+  `anomaly`, `score`, `severity`, `threshold_info { margin, decision_margin,
+  units }`: `margin` is the absolute band the score was compared to,
+  `decision_margin` the stored setting, and `units` says whether that
+  setting is `absolute` on the decision function or, for the autoencoder,
+  `relative_to_threshold`), `status`, `model`, echoed `data_point`.
 - `POST /detect_only/<model>` — same body, `Verdict`, no state change.
 - `POST /detect_anomalies` body = `{ file_path, model_name? }` → batch report:
   `anomaly_count`, `anomaly_percentage`, `anomaly_indices`, `has_anomalies`,
@@ -475,8 +485,9 @@ service so existing dashboards and the `modelmanager` UI keep working:
 - `GET /models/dynamic/<model>/metadata` — §4.3 metadata plus an
   `autoencoder` block (its own state lives in `autoencoder.json`, not the
   metadata): `trained`, `enabled`, `reconstruction_threshold`,
-  `training_data_points`, `filtered_anomalies`, `decision_margin`,
-  `feature_names`, `layer_sizes`, `prefilter_contamination`, `trained_at`,
+  `training_data_points`, `filtered_anomalies`, `decision_margin` (a
+  fraction of the threshold, §5.5), `effective_margin` (threshold ×
+  decision_margin — the band in the score's own units), `feature_names`, `layer_sizes`, `prefilter_contamination`, `trained_at`,
   `retrain_with_forests`. Every metadata response (this one, the
   listing, and the PUT echo) also carries `editable_fields`: the top-level
   keys the PUT below accepts, published so a client never has to keep its
@@ -503,7 +514,7 @@ service so existing dashboards and the `modelmanager` UI keep working:
   `0` to omit), `refresh=1` (ignore the cache). Response:
   `data_points_count`, `considered`, `anomalies`, `returned`,
   `model_versions`, `cache: { hits, misses, epoch }` and `points`, each
-  `{ index, timestamp, score, anomaly, versions[], values?, contributions? }`,
+  `{ index, timestamp, score, severity, anomaly, versions[], values?, contributions? }`,
   a contribution being `{ feature, error, share, value, expected }` — the
   value the point carried and the autoencoder's reconstruction of it.
   String parameters are percent-decoded, so a feature named
@@ -548,13 +559,16 @@ service so existing dashboards and the `modelmanager` UI keep working:
   last 24 h of stored data, `last=all` the whole ring; on a count clock
   `last` is a number of points, default 1440), read-only. Response:
   `window { from, to, rows, total }`, `aggregate { flagged, rate }` and per
-  enabled, trained version `{ margin, n, flagged, rate, worst, median,
+  enabled, trained version `{ units, margin, n, flagged, rate, worst, median,
   margin_for_rate: { "0.1%": { margin, flagged, requested_rate,
   achieved_rate, exact }, "0.5%", "1%", "2%", "5%", "10%" }, curve: [[rate,
   margin], …] }` — 110 points, 0.1 % steps to 1 % then 1 % steps to 100 %,
   so a dashboard can turn a typed margin into an estimated alert rate
   without a round trip. `curve=0` omits it. 400 on an untrained model.
-  `margin` is the stored value verbatim. A sorted list of decision values
+  `margin` is the stored value verbatim, and every number of a version is
+  in its `units`: `absolute` decision values for a forest,
+  `relative_to_threshold` for the autoencoder (its scores divided by the
+  reconstruction threshold, §5.5). A sorted list of decision values
   can only supply margins at its gaps: when the requested count falls in
   a run of tied values (a stuck sensor, whole days of identical points)
   `cal_margin_for_rate` answers with the nearer edge of the run — the
@@ -563,7 +577,7 @@ service so existing dashboards and the `modelmanager` UI keep working:
 - `POST /api/dynamic/<model>/finetune` body (all optional) = `{ rate: 0.01,
   last: 86400 | "all" | "own", from, to, dry_run: false, versions: [names] }` →
   `rate`, `dry_run`, `window { from, to, rows, own }`, per version `{
-  old_margin, new_margin, n, rows, from, flagged_before, flagged_after,
+  units, old_margin, new_margin, n, rows, from, flagged_before, flagged_after,
   rate_before, rate_after, exact, worst, applied }` and, when some
   version's scores tie at the cut so that `rate_after` is not the
   requested rate, a `note` naming those versions with the rate each
@@ -588,7 +602,7 @@ service so existing dashboards and the `modelmanager` UI keep working:
   (1 %) over the file, scans, and writes the result — `task_id`, `name`,
   `format`, `rows`, `imported`, `skipped`, `clock`, `target_rate`, `votes`,
   `anomalies`, `considered`, `model_versions`, `margins`, `time`, `notes`,
-  `points[] { index, timestamp, score, votes, versions[], contributions[]
+  `points[] { index, timestamp, score, severity, votes, versions[], contributions[]
   { feature, share, value, expected }, values }` — as
   `<safe name>-<id>.json` into the organisation's folder, then
   `status.json` (`state: queued → running → done | failed`, with the
