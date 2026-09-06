@@ -671,7 +671,93 @@ $ `src/service.nu`
     ( check == an6_rows_in_runs an6_event_rows `svc: the rows in runs add up to the events' rows` )
     ( check an6_run_ids `svc: a row's run is a listed one, and the row is an anomaly` )
     ( check == an6_rows_in_runs ( jint_of . an6 body `anomalies` ) `svc: every anomalous row is in a run` )
+    // The first anomalous row, to label.
+    : ~ i lidx -1
+    ?? ( json_obj_get . an6 body `points` ) {
+        T pts → {
+            : i npt ( json_arr_len pts )
+            : ~ i pk 0
+            ~ & < pk npt < lidx 0 {
+                ?? ( json_arr_get pts pk ) {
+                    T pt → { ? ( jbool_of pt `anomaly` ) { = lidx ( jint_of pt `index` ) } {} }
+                    F _ → {}
+                }
+                = pk + pk 1
+            }
+        }
+        F _ → {}
+    }
     ( json_free . an6 body )
+
+    // ── labels ────────────────────────────────────────────────────────
+    ( check >= lidx 0 `svc: an anomalous row to label` )
+    : SvcOut lb1 ( fire r `POST` `/models/dynamic/svc/labels` `` `{"index": 0, "label": "meh"}` )
+    ( check == . lb1 status 400 `svc: an unknown label -> 400` )
+    ( json_free . lb1 body )
+    : SvcOut lb2 ( fire r `POST` `/models/dynamic/svc/labels` `` `{"index": 100000, "label": "confirmed"}` )
+    ( check == . lb2 status 400 `svc: an index past the ring -> 400` )
+    ( json_free . lb2 body )
+    : SvcOut lb3 ( fire r `POST` `/models/dynamic/nosuch/labels` `` `{"index": 0, "label": "confirmed"}` )
+    ( check == . lb3 status 404 `svc: labels on a missing model -> 404` )
+    ( json_free . lb3 body )
+    : String lbody ( string_from `{"index": ` )
+    ( string_push_int lbody lidx )
+    ( string_push_str lbody `, "label": "false_positive", "note": "cleaning"}` )
+    : SvcOut lb4 ( fire r `POST` `/models/dynamic/svc/labels` `` ( string_data lbody ) )
+    ( string_free lbody )
+    ( check == . lb4 status 200 `svc: label -> 200` )
+    ( check == ( jint_of . lb4 body `index` ) lidx `svc: the label names the row` )
+    ( check ( jstr_eq . lb4 body `label` `false_positive` ) `svc: and the label` )
+    ( check ( jstr_eq . lb4 body `note` `cleaning` ) `svc: and the note` )
+    ( check >= ( jint_of . lb4 body `seq` ) lidx `svc: keyed by lifetime sequence` )
+    ( json_free . lb4 body )
+    : SvcOut lb5 ( fire r `GET` `/models/dynamic/svc/labels` `` `` )
+    ( check == . lb5 status 200 `svc: labels list -> 200` )
+    ( check == ( jint_of . lb5 body `count` ) 1 `svc: one label in force` )
+    ( check == ( jint_of . lb5 body `false_positives` ) 1 `svc: counted as a false positive` )
+    : ~ b lb5_row F
+    ?? ( json_obj_get . lb5 body `labels` ) {
+        T ls → { ?? ( json_arr_get ls 0 ) { T l0 → { = lb5_row & == ( jint_of l0 `index` ) lidx ( jstr_eq l0 `label` `false_positive` ) } F _ → {} } }
+        F _ → {}
+    }
+    ( check lb5_row `svc: the listed label carries the row's current index` )
+    ( json_free . lb5 body )
+    : SvcOut lb6 ( fire r `GET` `/models/dynamic/svc/anomalies` `limit=all` `` )
+    : ~ b lb6_row F
+    : ~ i lb6_epoch -1
+    ?? ( json_obj_get . lb6 body `cache` ) { T c → { = lb6_epoch ( jint_of c `epoch` ) } F _ → {} }
+    ?? ( json_obj_get . lb6 body `points` ) {
+        T pts → {
+            : i npt ( json_arr_len pts )
+            : ~ i pk 0
+            ~ < pk npt {
+                ?? ( json_arr_get pts pk ) {
+                    T pt → { ? == ( jint_of pt `index` ) lidx { = lb6_row ( jstr_eq pt `label` `false_positive` ) } {} }
+                    F _ → {}
+                }
+                = pk + pk 1
+            }
+        }
+        F _ → {}
+    }
+    ( check lb6_row `svc: the scan row carries its label` )
+    ( check == lb6_epoch an5_epoch `svc: a label does not move the scoring epoch` )
+    ( json_free . lb6 body )
+    : SvcOut lb7 ( fire r `GET` `/models/dynamic/svc/calibration` `` `` )
+    : ~ i lb7_ex -1
+    ?? ( json_obj_get . lb7 body `window` ) { T w → { = lb7_ex ( jint_of w `excluded` ) } F _ → {} }
+    ( check == lb7_ex 1 `svc: calibration leaves the false positive out` )
+    ( json_free . lb7 body )
+    : String lnone ( string_from `{"index": ` )
+    ( string_push_int lnone lidx )
+    ( string_push_str lnone `, "label": "none"}` )
+    : SvcOut lb8 ( fire r `POST` `/models/dynamic/svc/labels` `` ( string_data lnone ) )
+    ( string_free lnone )
+    ( check == . lb8 status 200 `svc: none -> 200` )
+    ( json_free . lb8 body )
+    : SvcOut lb9 ( fire r `GET` `/models/dynamic/svc/labels` `` `` )
+    ( check == ( jint_of . lb9 body `count` ) 0 `svc: none withdraws the label` )
+    ( json_free . lb9 body )
 
     // Import with a clock to find. An FMI-shaped file: the time is spread
     // over year/month/day/clock columns under Finnish names, and `-` is a

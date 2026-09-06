@@ -14,6 +14,7 @@
 //   GET    /models/dynamic/<model>/data       recent points (?limit=N&from=&to=&last=&fields=)
 //   GET    /models/dynamic/<model>/anomalies  scored ring (cached, filtered)
 //   GET    /models/dynamic/<model>/calibration  alert rates vs margins
+//   POST|GET /models/dynamic/<model>/labels   a reader's word on a stored point
 //   POST   /models/dynamic/<model>/import     a CSV/JSON/JSONL file of history
 //   POST   /models/dynamic/<model>/fork       a new model trained on a slice of this one's history
 //   POST   /models/dynamic/<model>/reset      drop data+forests, keep name
@@ -1071,7 +1072,8 @@ $ `stdlib/std/thread.nu`
 //
 // `total`/`considered`/`anomalies` describe the whole window; `points` is
 // what survived `limit`, `only` and `versions`, so a filtered response
-// still says how much it filtered.
+// still says how much it filtered. A row a reader has labelled carries
+// its `label` (POST …/labels).
 @ __an_h_anomalies HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -1202,6 +1204,8 @@ $ `stdlib/std/thread.nu`
     : ~ i kstart 0
     ? & > rows 0 > nkept rows { = kstart - nkept rows } {}
     : ScanRuns sr ( scan_runs so minvotes )
+    : ( Vec Label ) labels ( model_labels mo )
+    : ( Vec i ) label_of ( model_label_map mo labels )
 
     : Json arr ( json_arr_new )
     : ~ i shown 0
@@ -1232,6 +1236,13 @@ $ `stdlib/std/thread.nu`
                 ( json_obj_set o `votes` ( json_int ( json_arr_len flagged ) ) )
                 : i run_id ( _mlp_iget . sr run_of k )
                 ? > run_id 0 { ( json_obj_set o `run` ( json_int run_id ) ) } {}
+                : i li ( _mlp_iget label_of . r sp_idx )
+                ? >= li 0 {
+                    ?? ( vec_get [Label] labels li ) {
+                        T lb → { ( json_obj_set o `label` ( json_str_lit ( string_data . lb label ) ) ) }
+                        F _ → {}
+                    }
+                } {}
                 ( json_obj_set o `versions` flagged )
                 ? || want_fields . r sp_anomaly {
                     ?? ( model_point_json mo . r sp_idx ) {
@@ -1366,6 +1377,8 @@ $ `stdlib/std/thread.nu`
         ( json_obj_set o `events` evs )
     } {}
     ( scan_runs_free sr )
+    ( vec_free [i] label_of )
+    ( labels_free labels )
     ( json_obj_set o `returned` ( json_int shown ) )
     ( json_obj_set o `model_versions` vers )
     ( json_obj_set o `cache` cache )
@@ -1417,6 +1430,188 @@ $ `stdlib/std/thread.nu`
     : HttpResponse r ( response_json 200 o )
     ( json_free o )
     ( string_free msg )
+    ( store_free st )
+    ( string_free mname )
+    ^ r
+}
+
+// A principal as a label's `by`: the person's name, else their email,
+// else the key that spoke, else the subject.
+@ __an_principal_handle Principal who → String {
+    ? > ( string_len . who pname ) 0 { ^ ( string_from ( string_data . who pname ) ) } {}
+    ? > ( string_len . who email ) 0 { ^ ( string_from ( string_data . who email ) ) } {}
+    ? & . who via_key > ( string_len . who key_id ) 0 {
+        : String k ( string_from `key:` )
+        ( string_push_str k ( string_data . who key_id ) )
+        ^ k
+    } {}
+    ^ ( string_from ( string_data . who sub ) )
+}
+
+@ __an_label_json Label lb i index → Json {
+    : Json o ( label_to_json lb )
+    ? >= index 0 { ( json_obj_set o `index` ( json_int index ) ) } { ( json_obj_set o `evicted` ( json_bool T ) ) }
+    ^ o
+}
+
+// POST /models/dynamic/<m>/labels
+//
+// Body: {"index": N, "label": "false_positive" | "confirmed" | "none",
+// "note": "…"}. What a reader says about the stored row at `index`:
+// the label rides on the row through the scan and a false positive is
+// left out of calibration and fine-tune. `none` withdraws an earlier
+// label. Recorded with who said it and when; verdicts are untouched.
+@ __an_h_label HttpRequest req Params p → HttpResponse {
+    : String mname ( __an_param_model p )
+    ? ( __an_name_ok ( string_data mname ) ) {} {
+        ( string_free mname )
+        ^ ( __an_bad_name )
+    }
+    : Gate gate ( __an_gate_model req ( string_data mname ) F T )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rd
+    }
+    : Store st ( store_open g_an_root )
+    ? ( store_exists st ( string_data mname ) ) {} {
+        : HttpResponse r404 ( __an_404_model ( string_data mname ) )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ r404
+    }
+    : ~ i index -1
+    : ~ String label ( string_new )
+    : ~ String note ( string_new )
+    ?? ( __an_body_json req ) {
+        T body → {
+            ? ( json_is_obj body ) {
+                = index ( _an_jint body `index` -1 )
+                ?? ( json_obj_get body `label` ) {
+                    T lj → { ? ( json_is_str lj ) { ( string_push_str label ( json_str_data lj ) ) } {} }
+                    F _ → {}
+                }
+                ?? ( json_obj_get body `note` ) {
+                    T nj → { ? ( json_is_str nj ) { ( string_push_str note ( json_str_data nj ) ) } {} }
+                    F _ → {}
+                }
+            } {}
+            ( json_free body )
+        }
+        F _ → {}
+    }
+    ? ( label_known ( string_data label ) ) {} {
+        ( string_free label )
+        ( string_free note )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ ( __an_json_err 400 `label must be "false_positive", "confirmed" or "none"` )
+    }
+    : *Model mo ( model_open st ( string_data mname ) )
+    : Principal who . gate who
+    : String by ( __an_principal_handle who )
+    : i at ( now_seconds )
+    : i seq ( model_label_point mo index ( string_data label ) ( string_data by ) ( string_data note ) at )
+    ? >= seq 0 {} {
+        ( model_free mo )
+        ( string_free by )
+        ( string_free label )
+        ( string_free note )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ ( __an_json_err 400 `index must name a stored point` )
+    }
+    : ~ i ts 0
+    ?? ( vec_get [i] . mo times index ) { T t → { = ts t } F _ → {} }
+    : String msg ( string_from `Point ` )
+    ( string_push_int msg index )
+    ( string_push_str msg ` of ` )
+    ( string_push_str msg ( string_data mname ) )
+    ( string_push_str msg ` labelled ` )
+    ( string_push_str msg ( string_data label ) )
+    : Json o ( __an_ok_msg ( string_data msg ) )
+    ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
+    ( json_obj_set o `index` ( json_int index ) )
+    ( json_obj_set o `seq` ( json_int seq ) )
+    ( json_obj_set o `timestamp` ( json_int ts ) )
+    ( json_obj_set o `label` ( json_str_lit ( string_data label ) ) )
+    ( json_obj_set o `by` ( json_str_lit ( string_data by ) ) )
+    ( json_obj_set o `at` ( json_int at ) )
+    ( json_obj_set o `note` ( json_str_lit ( string_data note ) ) )
+    : HttpResponse r ( response_json 200 o )
+    ( json_free o )
+    ( string_free msg )
+    ( model_free mo )
+    ( string_free by )
+    ( string_free label )
+    ( string_free note )
+    ( store_free st )
+    ( __an_gate_free gate )
+    ( string_free mname )
+    ^ r
+}
+
+// GET /models/dynamic/<m>/labels — the labels in force, each with the
+// row's current `index` or `evicted` when the ring has let the row go.
+@ __an_h_labels HttpRequest req Params p → HttpResponse {
+    : String mname ( __an_param_model p )
+    ? ( __an_name_ok ( string_data mname ) ) {} {
+        ( string_free mname )
+        ^ ( __an_bad_name )
+    }
+    : Gate gate ( __an_gate_model req ( string_data mname ) F F )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rd
+    }
+    ( __an_gate_free gate )
+    : Store st ( store_open g_an_root )
+    ? ( store_exists st ( string_data mname ) ) {} {
+        : HttpResponse r404 ( __an_404_model ( string_data mname ) )
+        ( store_free st )
+        ( string_free mname )
+        ^ r404
+    }
+    : *Model mo ( model_open st ( string_data mname ) )
+    : ( Vec Label ) labels ( model_labels mo )
+    : i base ( model_seq_base mo )
+    : i n ( model_n_points mo )
+    : Json arr ( json_arr_new )
+    : ~ i fps 0
+    : ~ i oks 0
+    : i nl ( vec_len [Label] labels )
+    : ~ i k 0
+    ~ < k nl {
+        ?? ( vec_get [Label] labels k ) {
+            T lb → {
+                : ~ i idx - . lb seq base
+                ? | < idx 0 >= idx n { = idx -1 } {}
+                ( json_arr_push arr ( __an_label_json lb idx ) )
+                ? == ( nurl_str_eq ( string_data . lb label ) ANOM_LABEL_FP ) 1 { = fps + fps 1 } { = oks + oks 1 }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    : Json o ( json_obj_new )
+    ( json_obj_set o `status` ( json_str_lit `success` ) )
+    ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
+    : *Meta lmm . mo meta
+    ( json_obj_set o `clock` ( json_str_lit ? . lmm count_clock `count` `time` ) )
+    ( json_obj_set o `count` ( json_int nl ) )
+    ( json_obj_set o `false_positives` ( json_int fps ) )
+    ( json_obj_set o `confirmed` ( json_int oks ) )
+    ( json_obj_set o `labels` arr )
+    : HttpResponse r ( response_json 200 o )
+    ( json_free o )
+    ( labels_free labels )
+    ( model_free mo )
     ( store_free st )
     ( string_free mname )
     ^ r
@@ -2171,6 +2366,7 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set wj `from` ( json_int from_ts ) )
     ( json_obj_set wj `to` ( json_int to_ts ) )
     ( json_obj_set wj `rows` ( json_int . cal n_rows ) )
+    ( json_obj_set wj `excluded` ( json_int . cal excluded ) )
     ( json_obj_set wj `total` ( json_int ( model_n_points mo ) ) )
     ( json_obj_set o `window` wj )
     : Json agg ( json_obj_new )
@@ -2406,6 +2602,7 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set wj `from` ( json_int from_ts ) )
     ( json_obj_set wj `to` ( json_int to_ts ) )
     ( json_obj_set wj `rows` ( json_int . rep n_rows ) )
+    ( json_obj_set wj `excluded` ( json_int . rep excluded ) )
     ( json_obj_set wj `own` ( json_bool own ) )
     ( json_obj_set o `window` wj )
     ( json_obj_set o `versions` vers )
@@ -4042,6 +4239,8 @@ $ `stdlib/std/thread.nu`
     ( router_post r `/models/dynamic/:model/fork` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_fork req p ) } )
     ( router_get r `/models/dynamic/:model/anomalies` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_anomalies req p ) } )
     ( router_post r `/models/dynamic/:model/reset` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_reset req p ) } )
+    ( router_post r `/models/dynamic/:model/labels` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_label req p ) } )
+    ( router_get r `/models/dynamic/:model/labels` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_labels req p ) } )
     ( router_delete r `/delete_model/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_delete req p ) } )
     ( router_get r `/delete_model/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_delete req p ) } )
     ( router_put r `/api/dynamic/:model/schedule` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_schedule req p ) } )

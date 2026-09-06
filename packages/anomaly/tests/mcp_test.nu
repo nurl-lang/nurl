@@ -322,7 +322,7 @@ $ `src/service.nu`
     ( check ( tools_has . ls body `ingest_point` ) `mcp: sign-in off = admin: ingest_point listed` )
     ( check ( tools_has . ls body `set_role` ) `mcp: sign-in off = admin: set_role listed` )
     ( check ( tools_has . ls body `org_keys` ) `mcp: sign-in off = admin: org_keys listed` )
-    ( check == ( tools_count . ls body ) 26 `mcp: every one of the 26 tools is listed` )
+    ( check == ( tools_count . ls body ) 28 `mcp: every one of the 28 tools is listed` )
     ( out_free ls )
 
     // A tool that does not exist is refused in the tool-result envelope.
@@ -521,6 +521,54 @@ $ `src/service.nu`
     ( check ( jobj_at . ca data `versions` ) `mcp: calibration has the versions` )
     ( check ( jobj_at . ca data `aggregate` ) `mcp: calibration has the aggregate` )
     ( call_free ca )
+
+    // Labels: the flagged row called a false positive carries the label
+    // in anomalies, is counted in the summary, and leaves calibration.
+    : Call an2 ( call r `anomalies` `{"model":"pub","count":1}` `` )
+    : ~ i aidx -1
+    ?? ( json_obj_get . an2 data `rows` ) {
+        T rows → { ?? ( json_arr_get rows 0 ) { T r0 → { = aidx ( jint_of r0 `index` ) } F _ → {} } }
+        F _ → {}
+    }
+    ( call_free an2 )
+    ( check >= aidx 0 `mcp: an anomaly to label` )
+    : Call lbad ( call r `label_anomaly` `{"model":"pub","index":0,"label":"meh"}` `` )
+    ( check ! . lbad ok `mcp: an unknown label is refused` )
+    ( call_free lbad )
+    : String largs ( string_from `{"model":"pub","index":` )
+    ( string_push_int largs aidx )
+    ( string_push_str largs `,"label":"false_positive","note":"window open"}` )
+    : Call lab ( call r `label_anomaly` ( string_data largs ) `` )
+    ( string_free largs )
+    ( check . lab ok `mcp: label_anomaly answers` )
+    ( check ( jstr_eq . lab data `label` `false_positive` ) `mcp: and echoes the label` )
+    ( check ( jstr_eq . lab data `note` `window open` ) `mcp: with the note` )
+    ( check == ( jint_of . lab data `index` ) aidx `mcp: on the row asked` )
+    ( check ( json_obj_has . lab data `at` ) `mcp: stamped` )
+    ( call_free lab )
+    : Call ll ( call r `labels` `{"model":"pub"}` `` )
+    ( check . ll ok `mcp: labels answers` )
+    ( check == ( jint_of . ll data `count` ) 1 `mcp: one label` )
+    ( check == ( jint_of . ll data `false_positives` ) 1 `mcp: counted as a false positive` )
+    ( call_free ll )
+    : Call an3 ( call r `anomalies` `{"model":"pub","count":1}` `` )
+    : ~ b lrow F
+    ?? ( json_obj_get . an3 data `rows` ) {
+        T rows → { ?? ( json_arr_get rows 0 ) { T r0 → { = lrow ( jstr_eq r0 `label` `false_positive` ) } F _ → {} } }
+        F _ → {}
+    }
+    ( check lrow `mcp: the row carries its label` )
+    ( call_free an3 )
+    : Call su2 ( call r `anomaly_summary` `{"model":"pub"}` `` )
+    : ~ i sfp 0
+    ?? ( json_obj_get . su2 data `labelled` ) { T lj → { = sfp ( jint_of lj `false_positive` ) } F _ → {} }
+    ( check == sfp 1 `mcp: the summary counts the labelled rows` )
+    ( call_free su2 )
+    : Call ca2 ( call r `calibration` `{"model":"pub"}` `` )
+    : ~ i cex 0
+    ?? ( json_obj_get . ca2 data `window` ) { T w → { = cex ( jint_of w `excluded` ) } F _ → {} }
+    ( check == cex 1 `mcp: calibration says it left the false positive out` )
+    ( call_free ca2 )
 
     : Call sc ( call r `score_point` `{"model":"pub","values":{"temp":99,"load":44}}` `` )
     ( check . sc ok `mcp: score_point answers` )
@@ -751,11 +799,11 @@ $ `src/service.nu`
     ( check ! ( tools_has . gl body `org_keys` ) `mcp: ingest does not see org_keys` )
     ( check ! ( tools_has . gl body `org_users` ) `mcp: ingest does not see org_users` )
     ( check ! ( tools_has . gl body `claim_model` ) `mcp: ingest does not see claim_model` )
-    ( check == ( tools_count . gl body ) 22 `mcp: 22 tools for an ingest key` )
+    ( check == ( tools_count . gl body ) 24 `mcp: 24 tools for an ingest key` )
     ( out_free gl )
 
     : Out al ( rpc r `tools/list` `{}` AK )
-    ( check == ( tools_count . al body ) 26 `mcp: an admin key sees every tool` )
+    ( check == ( tools_count . al body ) 28 `mcp: an admin key sees every tool` )
     ( out_free al )
 
     // An invisible tool called by name is unknown to that caller.

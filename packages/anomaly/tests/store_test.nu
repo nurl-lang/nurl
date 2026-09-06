@@ -226,6 +226,48 @@ $ `src/store.nu`
     : ?VerModel nov ( store_load_forest st `sensor_a` `daily` )
     ?? nov { T bad → { ( anom_vermodel_free bad ) ( check F `store: missing version None` ) } F _ → { ( check T `store: missing version None` ) } }
 
+    // Labels: append, replay with last write winning, withdraw, delete.
+    : Label l1 @ Label { 7 100 ( string_from ANOM_LABEL_FP ) ( string_from `a` ) 1 ( string_from `n1` ) }
+    : Label l2 @ Label { 9 102 ( string_from ANOM_LABEL_OK ) ( string_from `b` ) 2 ( string_new ) }
+    : Label l3 @ Label { 7 100 ( string_from ANOM_LABEL_OK ) ( string_from `c` ) 3 ( string_from `n3` ) }
+    ( check ( store_append_label st `sensor_a` l1 ) `labels: append` )
+    ( check ( store_append_label st `sensor_a` l2 ) `labels: append another` )
+    ( check ( store_append_label st `sensor_a` l3 ) `labels: rewrite the first` )
+    ( label_free l1 )
+    ( label_free l2 )
+    ( label_free l3 )
+    : ( Vec Label ) lls ( store_load_labels st `sensor_a` )
+    ( check == ( vec_len [Label] lls ) 2 `labels: one entry per sequence` )
+    : ~ b lw F
+    : ~ i q 0
+    ~ < q ( vec_len [Label] lls ) {
+        ?? ( vec_get [Label] lls q ) {
+            T l → {
+                ? == . l seq 7 {
+                    = lw & == ( nurl_str_eq ( string_data . l label ) ANOM_LABEL_OK ) 1
+                    & == ( nurl_str_eq ( string_data . l by ) `c` ) 1
+                    & == . l at 3 == ( nurl_str_eq ( string_data . l note ) `n3` ) 1
+                } {}
+            }
+            F _ → {}
+        }
+        = q + q 1
+    }
+    ( check lw `labels: the last write wins, whole record` )
+    ( labels_free lls )
+    : Label l4 @ Label { 9 102 ( string_from ANOM_LABEL_NONE ) ( string_from `b` ) 4 ( string_new ) }
+    ( check ( store_append_label st `sensor_a` l4 ) `labels: withdraw` )
+    ( label_free l4 )
+    : ( Vec Label ) lls2 ( store_load_labels st `sensor_a` )
+    ( check == ( vec_len [Label] lls2 ) 1 `labels: none removes the entry` )
+    ( labels_free lls2 )
+    ( store_delete_labels st `sensor_a` )
+    : ( Vec Label ) lls3 ( store_load_labels st `sensor_a` )
+    ( check == ( vec_len [Label] lls3 ) 0 `labels: deleted file loads empty` )
+    ( labels_free lls3 )
+    ( check ( label_known ANOM_LABEL_FP ) `labels: false_positive is known` )
+    ( check ! ( label_known `maybe` ) `labels: maybe is not` )
+
     // Point log: append, load, rewrite.
     ( store_append_point st `sensor_a` `{"temp":1,"timestamp":100}` )
     ( store_append_point st `sensor_a` `{"temp":2,"timestamp":101}` )

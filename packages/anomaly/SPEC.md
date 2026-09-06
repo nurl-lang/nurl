@@ -189,6 +189,10 @@ encodings aligned across retrains.
                            # model's score_epoch (§5.6) — pure derived
                            # state: deleting it costs a rescan, never a
                            # wrong answer
+  labels.jsonl             # what readers said about points (§4.5): one
+                           # record per line, appended, keyed by the
+                           # point's LIFETIME sequence number, last
+                           # write wins; `none` withdraws
 
 <root>/orgs/<org>.db       # one SQLite database per organisation (§5.7):
                            # users + roles, model ownership, API keys.
@@ -201,6 +205,24 @@ The forest blob is a straight serialisation of the `iforest` node arena (§the
 arena is already flat, so this is a length-prefixed dump of the SoA arrays plus
 the per-tree root indices). The storage API is an interface (`store_*` fns) so a
 non-file backend can be dropped in without touching callers.
+
+### 4.5 Labels
+
+A reader's word on a stored point: `false_positive` (it was flagged and
+nothing was wrong), `confirmed` (it was the real thing), `none` (withdraw).
+`Label { seq, ts, label, by, at, note }` is appended to `labels.jsonl` as one
+JSON record per line; `store_load_labels` replays the file and keeps the last
+record per `seq`, dropping a `none`. The key is the point's LIFETIME
+sequence number (`Meta.n_seen` space, the same the score cache aligns on),
+not its ring index: eviction shifts every index and a label on an index would
+migrate to whichever row took the slot. `model_seq_base` (n_seen minus the
+rows held) turns one into the other; `model_label_map` joins the labels in
+force onto the ring, a row past the ring being simply unlabelled. Labels
+change no verdict, so they never bump the score epoch. Their reader is
+`model_calibrate`, which leaves labelled false positives out of the rows a
+margin is fitted on and reports them as `excluded` (fine-tune inherits it)
+— a margin should not be paid for by rows already known to be noise. A
+reset drops the file with the ring, since the sequence numbers start over.
 
 ## 5. Library API surface (`src/anomaly.nu`)
 
@@ -229,6 +251,8 @@ caller-owned handles, `( Vec f )` row-major matrices).
 | `( model_calibrate model from to )` | `CalReport` — per version, the sorted decision values of the ring rows in `[from, to]` (0 = unbounded), what the current margin flags, and `cal_margin_for_rate` to read the margin for any alert rate off them |
 | `( model_finetune model )` | `FineTuneReport` — set every enabled version's margin to the one that flags `ANOM_FT_RATE` (1 %) of the last `ANOM_CAL_WINDOW` (24 h, anchored on the newest stored point) |
 | `( model_finetune_at model rate from to apply only )` | the same with the rate, the window, a dry run (`apply = F`) and a version filter (`only`, empty = all) |
+| `( model_label_point model index label by note at )` | the row's sequence number after recording a label (§4.5); −1 for an index outside the ring, −2 for an unknown label |
+| `( model_labels model )` / `( model_label_map model labels )` | the labels in force; per ring row the index of its label, −1 for none |
 | `( model_set_schedule model below_max at_max )` | `v` |
 | `( model_metadata model )` | `Meta` |
 | `( model_free model )` | `v` |
@@ -588,11 +612,24 @@ service so existing dashboards and the `modelmanager` UI keep working:
   columns are dropped so a year never becomes a feature; `-`, `NA`, `null`
   and their kin are missing values. Response adds `clock` and `time {
   …plan, stamped, failed, first_failure? }`.
+- `POST /models/dynamic/<model>/labels` — body `{ index, label, note? }`,
+  `label` one of `false_positive`, `confirmed`, `none` (withdraw). Records
+  what a reader said about the stored row at `index` (§4.5): the row's
+  lifetime sequence number, its timestamp, the label, who (the principal's
+  name, else email, else `key:<id>`, else subject), when, the note. 400
+  for an unknown label or an index outside the ring; write access to the
+  model, as fine-tune. Verdicts do not change, so the epoch does not move.
+  Response echoes the record with `index` and `seq`.
+- `GET /models/dynamic/<model>/labels` — the labels in force: `count`,
+  `false_positives`, `confirmed`, `labels[] { seq, timestamp, label, by,
+  at, note, index | evicted }` — `index` the row's current ring index,
+  `evicted: true` when the ring has let the row go.
 - `GET /models/dynamic/<model>/calibration` — §5.2 `model_calibrate` over
   the same window query as the scan (`from` / `to` / `last`, default the
   last 24 h of stored data, `last=all` the whole ring; on a count clock
   `last` is a number of points, default 1440), read-only. Response:
-  `window { from, to, rows, total }`, `aggregate { flagged, rate }` and per
+  `window { from, to, rows, excluded, total }` (`excluded`: rows in the
+  window labelled false positives, left out of every number below), `aggregate { flagged, rate }` and per
   enabled, trained version `{ units, margin, n, flagged, rate, worst, median,
   margin_for_rate: { "0.1%": { margin, flagged, requested_rate,
   achieved_rate, exact }, "0.5%", "1%", "2%", "5%", "10%" }, curve: [[rate,

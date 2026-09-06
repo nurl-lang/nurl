@@ -153,6 +153,16 @@ per version the current margin, how many of the window it flags, the margin
 for each standard rate (`margin_for_rate`), and a (rate, margin) `curve` a
 dashboard can read a live estimate off. Read-only; ~1 ms per stored row.
 
+A flagged row that was nothing — the sensor was being cleaned — can be
+told so: `POST /models/dynamic/<m>/labels {"index": 411, "label":
+"false_positive", "note": "cleaning"}` (`confirmed` for the real thing,
+`none` to withdraw). The label rides on the row through the scan, and
+calibration and fine-tune leave labelled false positives out of the rows a
+margin is fitted on (`window.excluded` says how many), so the margin stops
+paying for known noise. Labels are keyed by the point's lifetime sequence
+number, so they survive ring eviction and never land on a row that took a
+shifted slot; they change no verdict, so nothing is rescored.
+
 Fine-tune is calibration plus a write: pick the share of the window you are
 willing to alert on and every enabled version gets the margin that flags
 that share — rounded to the fewest significant digits that keep the count,
@@ -758,6 +768,8 @@ says why and what would be allowed instead.
 | `analyze_data` | every member | a one-off analysis of a file (CSV text or rows), no model kept; large files become a task |
 | `list_tasks`, `task`, `list_files` | every member | the organization's background jobs and its folder |
 | `fork_model` | every member | a new model trained on a slice of another's history — a window, some columns; `llm_…` is scratch |
+| `labels` | every member | what readers have said about a model's rows |
+| `label_anomaly` | member on `llm_…`, admin on any | say a flagged row was a `false_positive` (calibration and `finetune` leave it out from then on), `confirmed`, or `none` to withdraw |
 | `retrain`, `train_autoencoder`, `finetune`, `edit_model`, `reset_model`, `delete_model` | member on `llm_…`, admin on any | the model's lifecycle; destructive ones need `confirm: true` |
 | `ingest_point`, `import_data` | ingest key, admin | send a point / load a file of history — this teaches the model |
 | `claim_model`, `org_users`, `set_role`, `org_keys` | admin | ownership, the roster, roles, the key listing |
@@ -781,7 +793,10 @@ carries its `event` number, both tools count `events_in_window`, and
 `anomaly_summary` lists the newest ten events with their span, worst row and
 versions, and counts event starts per timeline bucket — so a hundred flagged
 rows read as the three bursts they were. The REST route calls them runs
-(`runs`, `run`, `group=runs`).
+(`runs`, `run`, `group=runs`). A row the person calls nothing is labelled
+with `label_anomaly {model, index, label: "false_positive"}`: it shows on the
+row in `anomalies`, the summary counts it under `labelled`, and `calibration`
+and `finetune` report it under `window.excluded`.
 
 The server's `instructions` tell the agent the things it most often gets
 wrong: that `last: "24h"` counts back from the model's newest point, not from
@@ -851,6 +866,7 @@ command with `--store DIR`.
 | `DELETE\|GET /delete_model/<m>` | delete entirely |
 | `PUT /api/dynamic/<m>/schedule` | `{"below_max_retrain_frequency": .., "at_max_retrain_frequency": ..}` |
 | `GET /models/dynamic/<m>/calibration?last=&from=&to=&curve=` | alert rates vs margins over a window of the ring (read-only) |
+| `POST\|GET /models/dynamic/<m>/labels` | `{"index": N, "label": "false_positive" \| "confirmed" \| "none", "note": ".."}` — a reader's word on a stored row; the list in force |
 | `POST /api/dynamic/<m>/finetune` | set margins from a target alert rate — `{"rate": 0.01, "last": 86400 \| "all" \| "own", "dry_run": false, "versions": [..]}` |
 | `POST /train/autoencoder/<m>` | train the autoencoder version — optional `{"hidden": [..], "contamination": x}` |
 

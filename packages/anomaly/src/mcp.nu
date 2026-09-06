@@ -773,6 +773,7 @@ $ `src/imptime.nu`
         T ru → { ( json_obj_set o `event` ( json_int ( json_as_int ru ) ) ) }
         F _ → {}
     }
+    ( __mcp_copy r `label` o )
     ( __mcp_copy r `versions` o )
     ?? ( json_obj_get r `values` ) {
         T vals → { ( json_obj_set o `values` ( __mcp_round_obj vals 4 ) ) }
@@ -909,6 +910,8 @@ $ `src/imptime.nu`
     : ~ f worst_sev 0.0
     : ~ i worst_idx -1
     : ~ i worst_ts 0
+    : ~ i n_fp 0
+    : ~ i n_ok 0
     : ( Vec i ) stamps ( vec_new [i] )
     ?? ( json_obj_get b `points` ) {
         T pts → {
@@ -919,6 +922,9 @@ $ `src/imptime.nu`
                     T r → {
                         : i ts ( __mcp_int_of r `timestamp` )
                         ( vec_push [i] stamps ts )
+                        : s lab ( __mcp_ctx_str r `label` )
+                        ? == ( nurl_str_eq lab ANOM_LABEL_FP ) 1 { = n_fp + n_fp 1 } {}
+                        ? == ( nurl_str_eq lab ANOM_LABEL_OK ) 1 { = n_ok + n_ok 1 } {}
                         ? | == first_ts 0 < ts first_ts { = first_ts ts } {}
                         ? > ts last_ts { = last_ts ts } {}
                         : f sc ( __mcp_f_of r `score` )
@@ -953,6 +959,12 @@ $ `src/imptime.nu`
         F _ → {}
     }
     ( json_obj_set out `by_version` per_version )
+    ? > + n_fp n_ok 0 {
+        : Json lj ( json_obj_new )
+        ( json_obj_set lj `false_positive` ( json_int n_fp ) )
+        ( json_obj_set lj `confirmed` ( json_int n_ok ) )
+        ( json_obj_set out `labelled` lj )
+    } {}
     ? > nanom 0 {
         ( json_obj_set out `first_anomaly` ( __mcp_when first_ts cc ) )
         ( json_obj_set out `latest_anomaly` ( __mcp_when last_ts cc ) )
@@ -1285,6 +1297,7 @@ $ `src/imptime.nu`
             ( __mcp_when_of w `from` wo `from` cc )
             ( __mcp_when_of w `to` wo `to` cc )
             ( __mcp_copy w `rows` wo )
+            ( __mcp_copy w `excluded` wo )
             ( __mcp_copy w `total` wo )
             ( json_obj_set out `window` wo )
         }
@@ -1761,6 +1774,7 @@ $ `src/imptime.nu`
             ( __mcp_when_of w `from` wo `from` cc )
             ( __mcp_when_of w `to` wo `to` cc )
             ( __mcp_copy w `rows` wo )
+            ( __mcp_copy w `excluded` wo )
             ( __mcp_copy w `own` wo )
             ( json_obj_set out `window` wo )
         }
@@ -1831,6 +1845,93 @@ $ `src/imptime.nu`
     : Json out ( __mcp_model_post ctx `/models/dynamic/` model `/reset` `POST` @ ?Json { F @ Json { JNull } } )
     ( string_free model )
     ^ out
+}
+
+// A reader's word on a row: false_positive, confirmed, or none to
+// withdraw. Rides on the row through anomalies; a false positive is
+// left out of calibration and fine-tune.
+@ __mcp_t_label_anomaly Json a Json ctx → Json {
+    : String model ( __mcp_need_model a )
+    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    : i index ( __mcp_arg_int a `index` -1 )
+    ? >= index 0 {} {
+        ( string_free model )
+        ^ ( mcp_tool_result_error `index: the row's index, as anomalies and points list it` )
+    }
+    : String label ( __mcp_arg_str a `label` )
+    ? ( label_known ( string_data label ) ) {} {
+        ( string_free label )
+        ( string_free model )
+        ^ ( mcp_tool_result_error `label: "false_positive", "confirmed", or "none" to withdraw an earlier label` )
+    }
+    : Json body ( json_obj_new )
+    ( json_obj_set body `index` ( json_int index ) )
+    ( json_obj_set body `label` ( json_str_lit ( string_data label ) ) )
+    ( string_free label )
+    : String note ( __mcp_arg_str a `note` )
+    ? > ( string_len note ) 0 { ( json_obj_set body `note` ( json_str_lit ( string_data note ) ) ) } {}
+    ( string_free note )
+    : String q ( string_new )
+    : String path ( __mcp_model_path `/models/dynamic/` model `/labels` )
+    : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { T body } )
+    ( string_free path )
+    ( string_free q )
+    ( json_free body )
+    ( string_free model )
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    : Json b . o body
+    : Json out ( json_obj_new )
+    ( __mcp_copy b `status` out )
+    ( __mcp_copy b `message` out )
+    ( __mcp_copy b `model_name` out )
+    ( __mcp_copy b `index` out )
+    ( __mcp_when_of b `timestamp` out `time` F )
+    ( __mcp_copy b `label` out )
+    ( __mcp_copy b `by` out )
+    ( __mcp_when_of b `at` out `at` F )
+    ( __mcp_copy b `note` out )
+    ( __mcp_api_out_free o )
+    ^ ( __mcp_result_json out )
+}
+
+@ __mcp_t_labels Json a Json ctx → Json {
+    : String model ( __mcp_need_model a )
+    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    : String q ( string_new )
+    : String path ( __mcp_model_path `/models/dynamic/` model `/labels` )
+    : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
+    ( string_free path )
+    ( string_free q )
+    ( string_free model )
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    : Json b . o body
+    : b cc ( __mcp_count_clock b )
+    : Json out ( json_obj_new )
+    ( __mcp_copy b `model_name` out )
+    ( __mcp_copy b `clock` out )
+    ( __mcp_copy b `count` out )
+    ( __mcp_copy b `false_positives` out )
+    ( __mcp_copy b `confirmed` out )
+    : Json rows ( json_arr_new )
+    ?? ( json_obj_get b `labels` ) {
+        T ls → {
+            ( json_arr_each ls \ Json l → v {
+                : Json lo ( json_obj_new )
+                ( __mcp_copy l `index` lo )
+                ( __mcp_copy l `evicted` lo )
+                ( __mcp_when_of l `timestamp` lo `time` cc )
+                ( __mcp_copy l `label` lo )
+                ( __mcp_copy l `by` lo )
+                ( __mcp_when_of l `at` lo `at` F )
+                ( __mcp_copy l `note` lo )
+                ( json_arr_push rows lo )
+            } )
+        }
+        F _ → {}
+    }
+    ( json_obj_set out `labels` rows )
+    ( __mcp_api_out_free o )
+    ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_delete_model Json a Json ctx → Json {
@@ -1996,6 +2097,18 @@ $ `src/imptime.nu`
     ^ sc
 }
 
+@ __mcp_sc_label → Json {
+    : Json sc ( __mcp_sc_model )
+    ( mcp_schema_prop sc `index` `integer` `The row's index, as anomalies and points list it.` T )
+    : Json labels ( json_arr_new )
+    ( json_arr_push labels ( json_str_lit ANOM_LABEL_FP ) )
+    ( json_arr_push labels ( json_str_lit ANOM_LABEL_OK ) )
+    ( json_arr_push labels ( json_str_lit ANOM_LABEL_NONE ) )
+    ( mcp_schema_prop_enum sc `label` `string` `"false_positive": the row was flagged but nothing was wrong — left out of calibration and finetune from now on. "confirmed": the row was the real thing. "none": withdraw an earlier label.` labels T )
+    ( mcp_schema_prop sc `note` `string` `Why, in a sentence.` F )
+    ^ sc
+}
+
 @ __mcp_sc_patch → Json {
     : Json sc ( __mcp_sc_model )
     ( mcp_schema_prop sc `patch` `object` `The fields to change: alias, clock ("time" | "count"), schedule {below_max, at_max, autoencoder}, max_data_points, versions {name: {enabled, decision_margin, window_minutes, window_points, window_size, step_size, n_estimators, max_samples, contamination}}. Anything else is rejected with the reason.` T )
@@ -2029,7 +2142,7 @@ $ `src/imptime.nu`
 @ __mcp_instructions → s {
     ^ `Anomaly detection over an organisation's sensor and event streams: every model watches one stream, stores its recent points in a ring, and flags points its versions (isolation forests over different windows, an autoencoder that sees the relations between fields, and a range_guard that flags a single field far outside its usual range and names it) score as unusual. You act with the signed-in user's permissions, inside their organisation.
 
-Start with list_models. Then anomalies {model, last: "24h"} for the newest flagged rows with the features that caused them, anomaly_summary for counts, events, timeline and the features blamed most, point for one row in full, describe_model for how a model is built, calibration for how its margins sit against the recent data. Times are ISO-8601 UTC; a model on a count clock numbers its rows instead. "last" counts back from the model's newest point, not from now. Scores run downward into anomaly: a point is flagged when its score is at or below minus the version's margin. A forest's decision_margin is that margin as is; the autoencoder's decision_margin is a fraction of its reconstruction threshold (margin = threshold × decision_margin), so its scores are ~1e-4 where a forest's are ~1e-1; range_guard's decision_margin is a count of standard deviations. Rank points and versions by severity (−score / margin: 1.0 is exactly on the alert line, 2.0 twice as far past it), never by raw score; a row's score and severity are those of its most severe version. Consecutive anomalous rows are one event: anomalies gives each row its event number, anomaly_summary lists the events — count events, not rows, when saying how often something went wrong.
+Start with list_models. Then anomalies {model, last: "24h"} for the newest flagged rows with the features that caused them, anomaly_summary for counts, events, timeline and the features blamed most, point for one row in full, describe_model for how a model is built, calibration for how its margins sit against the recent data. Times are ISO-8601 UTC; a model on a count clock numbers its rows instead. "last" counts back from the model's newest point, not from now. Scores run downward into anomaly: a point is flagged when its score is at or below minus the version's margin. A forest's decision_margin is that margin as is; the autoencoder's decision_margin is a fraction of its reconstruction threshold (margin = threshold × decision_margin), so its scores are ~1e-4 where a forest's are ~1e-1; range_guard's decision_margin is a count of standard deviations. Rank points and versions by severity (−score / margin: 1.0 is exactly on the alert line, 2.0 twice as far past it), never by raw score; a row's score and severity are those of its most severe version. Consecutive anomalous rows are one event: anomalies gives each row its event number, anomaly_summary lists the events — count events, not rows, when saying how often something went wrong. When the person says a flagged row was nothing, label_anomaly {model, index, label: "false_positive"} — from then on calibration and finetune leave it out, so the margins stop paying for known noise.
 
 Every member may build scratch models named llm_… (fork_model: a slice of an existing model's history, optionally fewer columns), tune them (finetune, train_autoencoder, retrain), edit and delete them — use them to test a hypothesis without touching production models. Changing or deleting any other model needs the administrator role; the reply says so when it does. Sending new points (ingest_point, import_data) needs the ingest capability. analyze_data scores a file you provide without creating a model.`
 }
@@ -2116,6 +2229,14 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     `Set every version's margin so that a chosen share of a window is flagged (rate 0.01 = 1%). dry_run=true shows the margins without applying them; calibration shows the same numbers for several rates at once. Members: llm_… models only; administrators: any.`
     ( __mcp_sc_finetune ) F F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_finetune a ( mcp_call_context c ) ) } )
+    ( __mcp_add srv `label_anomaly`
+    `Say what a flagged row was: false_positive (nothing was wrong — calibration and finetune leave it out from then on), confirmed, or none to withdraw. The label shows on the row in anomalies; labels lists them. Members: llm_… models only; administrators: any.`
+    ( __mcp_sc_label ) F F T F member
+    \ Json a McpCall c → Json { ^ ( __mcp_t_label_anomaly a ( mcp_call_context c ) ) } )
+    ( __mcp_add srv `labels`
+    `The labels readers have put on a model's rows, with the row's index (or evicted when the ring has let it go), who said it and when.`
+    ( __mcp_sc_model ) T F T F member
+    \ Json a McpCall c → Json { ^ ( __mcp_t_labels a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `edit_model`
     `Change a model's settings: alias, clock, retraining schedule, ring size, and per-version enabled / decision_margin / geometry. Rejected fields come back with the reason. Members: llm_… models only; administrators: any.`
     ( __mcp_sc_patch ) F F T F member

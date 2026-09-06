@@ -763,3 +763,159 @@ $ `deps/iforest/src/iforest.nu`
     }
     ^ out
 }
+
+// ── Labels (labels.jsonl) ─────────────────────────────────────────────
+//
+// What a reader said about a stored point: that a flagged row was a
+// false positive, or that it was the real thing. Keyed by the point's
+// LIFETIME sequence number (Meta.n_seen space, see the score cache
+// above), not its ring index, so a label survives eviction and never
+// lands on the row that took a shifted slot. One JSON record per line,
+// appended, last write wins on replay — the label `none` withdraws an
+// earlier one. Labels change no verdict, so they never bump the epoch;
+// their first reader is calibration, which leaves the false positives
+// out of the set a margin is fitted on.
+
+: s ANOM_LABEL_FP `false_positive`
+: s ANOM_LABEL_OK `confirmed`
+: s ANOM_LABEL_NONE `none`
+
+: Label {
+    i seq  // lifetime sequence number of the point
+    i ts  // the point's own timestamp
+    String label  // ANOM_LABEL_*
+    String by  // who said so (a principal's name, an API key's id, or empty)
+    i at  // when (unix seconds)
+    String note
+}
+
+@ label_free Label l → v {
+    ( string_free . l label )
+    ( string_free . l by )
+    ( string_free . l note )
+}
+
+@ labels_free ( Vec Label ) ls → v {
+    ( vec_free_with [Label] ls \ Label l → v { ( label_free l ) } )
+}
+
+// Is `s` a label a reader may give?
+@ label_known s name → b {
+    ? == ( nurl_str_eq name ANOM_LABEL_FP ) 1 { ^ T } {}
+    ? == ( nurl_str_eq name ANOM_LABEL_OK ) 1 { ^ T } {}
+    ? == ( nurl_str_eq name ANOM_LABEL_NONE ) 1 { ^ T } {}
+    ^ F
+}
+
+@ label_to_json Label l → Json {
+    : Json o ( json_obj_new )
+    ( json_obj_set o `seq` ( json_int . l seq ) )
+    ( json_obj_set o `timestamp` ( json_int . l ts ) )
+    ( json_obj_set o `label` ( json_str_lit ( string_data . l label ) ) )
+    ( json_obj_set o `by` ( json_str_lit ( string_data . l by ) ) )
+    ( json_obj_set o `at` ( json_int . l at ) )
+    ( json_obj_set o `note` ( json_str_lit ( string_data . l note ) ) )
+    ^ o
+}
+
+@ __an_label_str Json o s key → String {
+    ?? ( json_obj_get o key ) {
+        T v → { ? ( json_is_str v ) { ^ ( string_from ( json_str_data v ) ) } { ^ ( string_new ) } }
+        F _ → { ^ ( string_new ) }
+    }
+}
+
+@ __an_label_int Json o s key → i {
+    ?? ( json_obj_get o key ) {
+        T v → { ? ( json_is_num v ) { ^ ( json_as_int v ) } { ^ -1 } }
+        F _ → { ^ -1 }
+    }
+}
+
+// Append one label. Returns F when the record could not be written.
+@ store_append_label Store st s name Label l → b {
+    : Json o ( label_to_json l )
+    : String txt ( json_stringify o )
+    ( json_free o )
+    ( string_push_char txt 10 )
+    : String p ( __an_model_file st name `labels.jsonl` )
+    : !v IoErr r ( append_file ( string_data p ) ( string_data txt ) )
+    : ~ b ok T
+    ?? r { T _ → {} F _ → { = ok F } }
+    ( string_free p )
+    ( string_free txt )
+    ^ ok
+}
+
+// The labels in force: one per sequence number, the last written; a
+// `none` removes the entry. Ascending by seq is not promised — a reader
+// wanting the ring order joins on seq (model_label_map). Empty when the
+// file does not exist; a line that does not parse is skipped.
+@ store_load_labels Store st s name → ( Vec Label ) {
+    : ( Vec Label ) out ( vec_new [Label] )
+    : String p ( __an_model_file st name `labels.jsonl` )
+    : !String IoErr r ( read_file ( string_data p ) )
+    ( string_free p )
+    ?? r {
+        T txt → {
+            : ( Vec String ) lines ( string_split txt `\n` )
+            : i n ( vec_len [String] lines )
+            : ~ i k 0
+            ~ < k n {
+                ?? ( vec_get [String] lines k ) {
+                    T l → {
+                        ? > ( string_len l ) 0 {
+                            : !Json JsonError jr ( json_parse ( string_data l ) )
+                            ?? jr {
+                                T j → {
+                                    ? ( json_is_obj j ) {
+                                        : i seq ( __an_label_int j `seq` )
+                                        : String lab ( __an_label_str j `label` )
+                                        ? & >= seq 0 ( label_known ( string_data lab ) ) {
+                                            // Drop what an earlier line said about this seq.
+                                            : ~ i q 0
+                                            ~ < q ( vec_len [Label] out ) {
+                                                : ~ b same F
+                                                ?? ( vec_get [Label] out q ) { T e → { = same == . e seq seq } F _ → {} }
+                                                ? same {
+                                                    ?? ( vec_remove [Label] out q ) { T e → { ( label_free e ) } F _ → {} }
+                                                } { = q + q 1 }
+                                            }
+                                            ? == ( nurl_str_eq ( string_data lab ) ANOM_LABEL_NONE ) 1 {
+                                                ( string_free lab )
+                                            } {
+                                                ( vec_push [Label] out @ Label {
+                                                    seq
+                                                    ( __an_label_int j `timestamp` )
+                                                    lab
+                                                    ( __an_label_str j `by` )
+                                                    ( __an_label_int j `at` )
+                                                    ( __an_label_str j `note` )
+                                                } )
+                                            }
+                                        } { ( string_free lab ) }
+                                    } {}
+                                    ( json_free j )
+                                }
+                                F _ → {}
+                            }
+                        } {}
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( vec_free_with [String] lines \ String x → v { ( string_free x ) } )
+            ( string_free txt )
+        }
+        F _ → {}
+    }
+    ^ out
+}
+
+@ store_delete_labels Store st s name → v {
+    : String p ( __an_model_file st name `labels.jsonl` )
+    : !v IoErr r ( file_delete ( string_data p ) )
+    ?? r { T _ → {} F _ → {} }
+    ( string_free p )
+}

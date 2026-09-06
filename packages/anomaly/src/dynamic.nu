@@ -1169,6 +1169,7 @@ $ `src/store.nu`
     i to_ts
     i n_rows  // rows scored
     i agg_flagged  // rows some enabled version flagged at the current margins
+    i excluded  // rows in the window left out: labelled false positives
 }
 
 @ cal_free CalReport rep → v {
@@ -1311,7 +1312,13 @@ $ `src/store.nu`
     : ( Vec CalVer ) items ( vec_new [CalVer] )
     : ~ i n_rows 0
     : ~ i agg 0
-    ? ( model_is_trained mo ) {} { ^ @ CalReport { items from_ts to_ts 0 0 } }
+    ? ( model_is_trained mo ) {} { ^ @ CalReport { items from_ts to_ts 0 0 0 } }
+
+    // A row a reader has called a false positive is left out: a margin
+    // fitted over it would be paid for by known noise.
+    : ( Vec Label ) labels ( model_labels mo )
+    : ( Vec i ) label_of ( model_label_map mo labels )
+    : ~ i excluded 0
 
     : *Meta mm . mo meta
     : AeModel cae . mo ae
@@ -1321,7 +1328,8 @@ $ `src/store.nu`
     ~ < k n {
         : ~ i ts 0
         ?? ( vec_get [i] . mo times k ) { T t → { = ts t } F _ → {} }
-        : b inside & || <= from_ts 0 >= ts from_ts || <= to_ts 0 <= ts to_ts
+        : ~ b inside & || <= from_ts 0 >= ts from_ts || <= to_ts 0 <= ts to_ts
+        ? & inside ( _an_label_is labels ( _mlp_iget label_of k ) ANOM_LABEL_FP ) { = inside F = excluded + excluded 1 } {}
         ? inside {
             ?? ( vec_get [String] . mo lines k ) {
                 T l → {
@@ -1399,7 +1407,9 @@ $ `src/store.nu`
         }
         = k + k 1
     }
-    ^ @ CalReport { items from_ts to_ts n_rows agg }
+    ( vec_free [i] label_of )
+    ( labels_free labels )
+    ^ @ CalReport { items from_ts to_ts n_rows agg excluded }
 }
 
 // The window fine-tune and calibration default to: the newest 24 hours of
@@ -1443,6 +1453,7 @@ $ `src/store.nu`
     i to_ts
     i n_rows
     b applied
+    i excluded  // labelled false positives left out of the window
 }
 
 @ finetune_free FineTuneReport rep → v {
@@ -1499,8 +1510,9 @@ $ `src/store.nu`
         = k + k 1
     }
     : i nr . cal n_rows
+    : i nex . cal excluded
     ( cal_free cal )
-    ^ @ FineTuneReport { items rate from_ts to_ts nr apply }
+    ^ @ FineTuneReport { items rate from_ts to_ts nr apply nex }
 }
 
 // The lower bound of a version's OWN window, anchored on the newest stored
@@ -1549,6 +1561,7 @@ $ `src/store.nu`
     : ~ i lo 0
     : ~ b first T
     : ~ i rows 0
+    : ~ i excluded 0
     : ~ i k 0
     ~ < k nn {
         ?? ( vec_get [String] names k ) {
@@ -1580,7 +1593,7 @@ $ `src/store.nu`
                                 = . c ftname ( string_from ( string_data . ft ftname ) )
                                 ( vec_push [FtVer] items c )
                                 ? | first < from_ts lo { = lo from_ts = first F } {}
-                                ? > . part n_rows rows { = rows . part n_rows } {}
+                                ? > . part n_rows rows { = rows . part n_rows = excluded . part excluded } {}
                             } {}
                         }
                         F _ → {}
@@ -1595,7 +1608,71 @@ $ `src/store.nu`
         = k + k 1
     }
     ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
-    ^ @ FineTuneReport { items rate lo 0 rows apply }
+    ^ @ FineTuneReport { items rate lo 0 rows apply excluded }
+}
+
+// ── Labels ────────────────────────────────────────────────────────────
+//
+// A reader's word on a stored point (store.nu: Label). Points are
+// addressed by ring index at the API and by lifetime sequence number on
+// disk; the base of the ring is n_seen minus the rows it holds.
+
+@ model_seq_base * Model mo → i {
+    : *Meta mm . mo meta
+    ^ - . mm n_seen ( vec_len [String] . mo lines )
+}
+
+// Record what a reader said about the row at `index`. Returns the row's
+// sequence number, -1 for an index outside the ring, -2 for a label
+// that is not one of ANOM_LABEL_*. Verdicts do not change, so the epoch
+// does not move.
+@ model_label_point * Model mo i index s label s by s note i at → i {
+    ? ( label_known label ) {} { ^ -2 }
+    : i n ( vec_len [String] . mo lines )
+    ? | < index 0 >= index n { ^ -1 } {}
+    : i seq + ( model_seq_base mo ) index
+    : ~ i ts 0
+    ?? ( vec_get [i] . mo times index ) { T t → { = ts t } F _ → {} }
+    : Label l @ Label { seq ts ( string_from label ) ( string_from by ) at ( string_from note ) }
+    : b ok ( store_append_label . mo store ( string_data . mo mname ) l )
+    ( label_free l )
+    ^ ? ok seq -1
+}
+
+// The labels in force (store_load_labels), evicted rows included.
+@ model_labels * Model mo → ( Vec Label ) {
+    ^ ( store_load_labels . mo store ( string_data . mo mname ) )
+}
+
+// Per ring position, the index into `labels` of its label, -1 for none.
+@ model_label_map * Model mo ( Vec Label ) labels → ( Vec i ) {
+    : i n ( vec_len [String] . mo lines )
+    : i base ( model_seq_base mo )
+    : ( Vec i ) out ( vec_with_cap [i] n )
+    : ~ i k 0
+    ~ < k n { ( vec_push [i] out -1 ) = k + k 1 }
+    : i nl ( vec_len [Label] labels )
+    = k 0
+    ~ < k nl {
+        ?? ( vec_get [Label] labels k ) {
+            T l → {
+                : i idx - . l seq base
+                ? & >= idx 0 < idx n { : b _s ( vec_set [i] out idx k ) } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ out
+}
+
+// Does label `li` of `labels` (as model_label_map hands it out) say `what`?
+@ _an_label_is ( Vec Label ) labels i li s what → b {
+    ? < li 0 { ^ F } {}
+    ?? ( vec_get [Label] labels li ) {
+        T l → { ^ == ( nurl_str_eq ( string_data . l label ) what ) 1 }
+        F _ → { ^ F }
+    }
 }
 
 // The one-call form: 1 % of the last 24 hours, applied to every version.
@@ -2277,6 +2354,9 @@ $ `src/store.nu`
     : ( Vec String ) none ( vec_new [String] )
     ( store_write_points . mo store ( string_data . mo mname ) none )
     ( vec_free [String] none )
+    // Sequence numbers start over with the ring, so labels keyed on the
+    // old ones would name rows that never were.
+    ( store_delete_labels . mo store ( string_data . mo mname ) )
     ( store_save_meta . mo store ( string_data . mo mname ) fresh )
 }
 
