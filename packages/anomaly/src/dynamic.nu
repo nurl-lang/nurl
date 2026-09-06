@@ -1756,6 +1756,90 @@ $ `src/store.nu`
     i anomalies  // anomalous rows among `considered`
 }
 
+// ── Runs ──────────────────────────────────────────────────────────────
+//
+// Calibration is a marginal quantile: 1 % of rows flagged says nothing
+// about whether they are 1 % of the rows scattered singly or one burst
+// of consecutive rows — and a burst is one event to whoever reads the
+// list. A run is a maximal sequence of consecutive stored rows every one
+// of which counts as an anomaly (with `minvotes` versions agreeing, see
+// scan_agreed); the scan reports each row's run and the runs
+// themselves, so a hundred flagged rows can read as three events.
+
+// Does a scored row count as an anomaly when `minvotes` versions have
+// to agree? The bit count of the flagged mask is the vote.
+@ scan_agreed ScoredPt r i minvotes → b {
+    ? . r sp_anomaly {} { ^ F }
+    : ~ i votes 0
+    : ~ i m . r sp_flagged
+    ~ != m 0 {
+        ? != & m 1 0 { = votes + votes 1 } {}
+        = m >> m 1
+    }
+    ^ >= votes minvotes
+}
+
+: ScanRun {
+    i run  // 1-based, in ring order
+    i first_k  // positions in ScanOut.pts
+    i last_k
+    i rows
+    i worst_k  // the row with the highest severity
+    f worst_sev
+    i flagged  // union of the rows' flagged masks
+}
+
+: ScanRuns {
+    ( Vec ScanRun ) runs
+    ( Vec i ) run_of  // per position in ScanOut.pts: its run, 0 = none
+}
+
+@ scan_runs ScanOut so i minvotes → ScanRuns {
+    : i np ( vec_len [ScoredPt] . so pts )
+    : ( Vec ScanRun ) runs ( vec_new [ScanRun] )
+    : ( Vec i ) run_of ( vec_with_cap [i] np )
+    : ~ b in_run F
+    : ~ i k 0
+    ~ < k np {
+        : ~ i id 0
+        ?? ( vec_get [ScoredPt] . so pts k ) {
+            T r → {
+                ? ( scan_agreed r minvotes ) {
+                    ? in_run {
+                        : i last - ( vec_len [ScanRun] runs ) 1
+                        ?? ( vec_get [ScanRun] runs last ) {
+                            T cur → {
+                                : ~ ScanRun u cur
+                                = . u last_k k
+                                = . u rows + . u rows 1
+                                = . u flagged | . u flagged . r sp_flagged
+                                ? > . r sp_severity . u worst_sev { = . u worst_k k = . u worst_sev . r sp_severity } {}
+                                : b _s ( vec_set [ScanRun] runs last u )
+                            }
+                            F _ → {}
+                        }
+                    } {
+                        ( vec_push [ScanRun] runs @ ScanRun {
+                            + ( vec_len [ScanRun] runs ) 1 k k 1 k . r sp_severity . r sp_flagged
+                        } )
+                    }
+                    = in_run T
+                    = id ( vec_len [ScanRun] runs )
+                } { = in_run F }
+            }
+            F _ → { = in_run F }
+        }
+        ( vec_push [i] run_of id )
+        = k + k 1
+    }
+    ^ @ ScanRuns { runs run_of }
+}
+
+@ scan_runs_free ScanRuns sr → v {
+    ( vec_free [ScanRun] . sr runs )
+    ( vec_free [i] . sr run_of )
+}
+
 @ scan_free ScanOut so → v {
     ( vec_free [ScoredPt] . so pts )
     ( vec_free_with [String] . so vnames \ String x → v { ( string_free x ) } )

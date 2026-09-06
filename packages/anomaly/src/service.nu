@@ -1056,7 +1056,12 @@ $ `stdlib/std/thread.nu`
 //   &only=anomalies            omit the rows nothing flagged
 //   &votes=N                   a row is an anomaly only when N or more
 //                              versions flagged it (default 1); shapes
-//                              `only=anomalies` and the `anomalies` count
+//                              `only=anomalies`, the `anomalies` count
+//                              and the runs
+//   &group=runs                add `events`: every run of consecutive
+//                              anomalous rows in the window, as one
+//                              entry each (the `runs` count and each
+//                              row's `run` are always there)
 //   &versions=a,b              keep only rows flagged by one of these
 //   &rows=N                    of the rows that survive the filters above,
 //                              return only the newest N (default: all)
@@ -1113,6 +1118,9 @@ $ `stdlib/std/thread.nu`
     : b only_anom == ( nurl_str_eq ( string_data only ) `anomalies` ) 1
     : ~ i minvotes ( __an_query_int . req query `votes` 1 )
     ? < minvotes 1 { = minvotes 1 } {}
+    : String group ( __an_query_str . req query `group` )
+    : b want_events == ( nurl_str_eq ( string_data group ) `runs` ) 1
+    ( string_free group )
 
     : *Model mo ( model_open st ( string_data mname ) )
 
@@ -1170,11 +1178,9 @@ $ `stdlib/std/thread.nu`
             T r → {
                 : ~ b keep T
                 : ~ b matched F
-                : ~ i nv_flag 0
                 : ~ i b 0
                 ~ < b nvn {
                     ? != & >> . r sp_flagged b 1 0 {
-                        = nv_flag + nv_flag 1
                         ?? ( vec_get [String] . so vnames b ) {
                             T nm → { ? ( __an_csv_has vfilter ( string_data nm ) ) { = matched T } {} }
                             F _ → {}
@@ -1182,7 +1188,7 @@ $ `stdlib/std/thread.nu`
                     } {}
                     = b + b 1
                 }
-                : b agreed & . r sp_anomaly >= nv_flag minvotes
+                : b agreed ( scan_agreed r minvotes )
                 ? agreed { = n_agreed + n_agreed 1 } {}
                 ? only_anom { ? agreed {} { = keep F } } {}
                 ? > ( string_len vfilter ) 0 { ? matched {} { = keep F } } {}
@@ -1195,6 +1201,7 @@ $ `stdlib/std/thread.nu`
     : i nkept ( vec_len [i] kept )
     : ~ i kstart 0
     ? & > rows 0 > nkept rows { = kstart - nkept rows } {}
+    : ScanRuns sr ( scan_runs so minvotes )
 
     : Json arr ( json_arr_new )
     : ~ i shown 0
@@ -1223,6 +1230,8 @@ $ `stdlib/std/thread.nu`
                 ( json_obj_set o `severity` ( json_float . r sp_severity ) )
                 ( json_obj_set o `anomaly` ( json_bool . r sp_anomaly ) )
                 ( json_obj_set o `votes` ( json_int ( json_arr_len flagged ) ) )
+                : i run_id ( _mlp_iget . sr run_of k )
+                ? > run_id 0 { ( json_obj_set o `run` ( json_int run_id ) ) } {}
                 ( json_obj_set o `versions` flagged )
                 ? || want_fields . r sp_anomaly {
                     ?? ( model_point_json mo . r sp_idx ) {
@@ -1303,6 +1312,60 @@ $ `stdlib/std/thread.nu`
     // default of one that is every flagged row.
     ( json_obj_set o `anomalies` ( json_int n_agreed ) )
     ( json_obj_set o `votes` ( json_int minvotes ) )
+    : i nruns ( vec_len [ScanRun] . sr runs )
+    ( json_obj_set o `runs` ( json_int nruns ) )
+    ? want_events {
+        : Json evs ( json_arr_new )
+        : ~ i ri 0
+        ~ < ri nruns {
+            ?? ( vec_get [ScanRun] . sr runs ri ) {
+                T ru → {
+                    : Json eo ( json_obj_new )
+                    ( json_obj_set eo `run` ( json_int . ru run ) )
+                    ( json_obj_set eo `rows` ( json_int . ru rows ) )
+                    ?? ( vec_get [ScoredPt] . so pts . ru first_k ) {
+                        T fr → {
+                            ( json_obj_set eo `from_index` ( json_int . fr sp_idx ) )
+                            ( json_obj_set eo `from` ( json_int . fr sp_ts ) )
+                        }
+                        F _ → {}
+                    }
+                    ?? ( vec_get [ScoredPt] . so pts . ru last_k ) {
+                        T lr → {
+                            ( json_obj_set eo `to_index` ( json_int . lr sp_idx ) )
+                            ( json_obj_set eo `to` ( json_int . lr sp_ts ) )
+                        }
+                        F _ → {}
+                    }
+                    ?? ( vec_get [ScoredPt] . so pts . ru worst_k ) {
+                        T wr → {
+                            ( json_obj_set eo `worst_index` ( json_int . wr sp_idx ) )
+                            ( json_obj_set eo `worst_score` ( json_float . wr sp_score ) )
+                            ( json_obj_set eo `worst_severity` ( json_float . wr sp_severity ) )
+                        }
+                        F _ → {}
+                    }
+                    : Json rv ( json_arr_new )
+                    : ~ i b 0
+                    ~ < b nvn {
+                        ? != & >> . ru flagged b 1 0 {
+                            ?? ( vec_get [String] . so vnames b ) {
+                                T nm → { ( json_arr_push rv ( json_str_lit ( string_data nm ) ) ) }
+                                F _ → {}
+                            }
+                        } {}
+                        = b + b 1
+                    }
+                    ( json_obj_set eo `versions` rv )
+                    ( json_arr_push evs eo )
+                }
+                F _ → {}
+            }
+            = ri + ri 1
+        }
+        ( json_obj_set o `events` evs )
+    } {}
+    ( scan_runs_free sr )
     ( json_obj_set o `returned` ( json_int shown ) )
     ( json_obj_set o `model_versions` vers )
     ( json_obj_set o `cache` cache )

@@ -401,6 +401,24 @@ $ `src/service.nu`
         F _ → { ( check F `mcp: anomalies has rows` ) }
     }
     ( check row_ok `mcp: a row carries its index and every value` )
+    ( check >= ( jint_of . an data `events_in_window` ) 1 `mcp: anomalies counts the events` )
+    ( check <= ( jint_of . an data `events_in_window` ) ( jint_of . an data `anomalies_in_window` ) `mcp: no more events than anomalies` )
+    : ~ b row_event T
+    ?? ( json_obj_get . an data `rows` ) {
+        T rows → {
+            : i nr ( json_arr_len rows )
+            : ~ i rk 0
+            ~ < rk nr {
+                ?? ( json_arr_get rows rk ) {
+                    T r → { ? >= ( jint_of r `event` ) 1 {} { = row_event F } }
+                    F _ → {}
+                }
+                = rk + rk 1
+            }
+        }
+        F _ → {}
+    }
+    ( check row_event `mcp: every anomalous row names its event` )
     ( call_free an )
 
     : Call all ( call r `anomalies` `{"model":"pub","all_points":true,"count":200}` `` )
@@ -417,6 +435,38 @@ $ `src/service.nu`
     ( check == ( jint_of . su data `points_in_window` ) 61 `mcp: summary counts the points` )
     ( check >= ( jint_of . su data `anomalies_in_window` ) 1 `mcp: summary counts the anomalies` )
     ( check <= ( jarr_len . su data `timeline` ) 4 `mcp: the timeline has at most the buckets asked` )
+    ( check == ( jarr_len . su data `events` ) ( jint_of . su data `events_in_window` ) `mcp: the summary lists every event when there are few` )
+    : ~ b ev_ok F
+    ?? ( json_obj_get . su data `events` ) {
+        T evs → {
+            ?? ( json_arr_get evs 0 ) {
+                T e0 → {
+                    : ~ b has_from F
+                    ?? ( json_obj_get e0 `from` ) { T _f → { = has_from T } F _ → {} }
+                    = ev_ok & >= ( jint_of e0 `rows` ) 1 & has_from > ( jarr_len e0 `versions` ) 0
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check ev_ok `mcp: an event has its rows, its start and its versions` )
+    : ~ i tl_events 0
+    ?? ( json_obj_get . su data `timeline` ) {
+        T tl → {
+            : i ntl ( json_arr_len tl )
+            : ~ i tk 0
+            ~ < tk ntl {
+                ?? ( json_arr_get tl tk ) {
+                    T bo → { = tl_events + tl_events ( jint_of bo `events` ) }
+                    F _ → {}
+                }
+                = tk + tk 1
+            }
+        }
+        F _ → {}
+    }
+    ( check | < ( jarr_len . su data `timeline` ) 1 == tl_events ( jint_of . su data `events_in_window` ) `mcp: the timeline's events add up` )
     ( check > ( jf_of . su data `anomaly_rate` ) 0.0 `mcp: summary has an anomaly rate` )
     : ~ b worst_ok F
     ?? ( json_obj_get . su data `worst` ) {

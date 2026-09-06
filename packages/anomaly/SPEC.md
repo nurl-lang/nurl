@@ -530,10 +530,11 @@ service so existing dashboards and the `modelmanager` UI keep working:
   `only=anomalies`, `votes=N` (a row is an anomaly only when N or more
   versions flagged it; default 1), `versions=a,b`, `fields=x,y` (attach
   these feature values), `contrib=N` (top-N autoencoder contributors per
-  flagged point, `0` to omit), `refresh=1` (ignore the cache). Response:
-  `data_points_count`, `considered`, `anomalies`, `votes`, `returned`,
+  flagged point, `0` to omit), `group=runs` (list the events, below),
+  `refresh=1` (ignore the cache). Response:
+  `data_points_count`, `considered`, `anomalies`, `votes`, `runs`, `returned`,
   `model_versions`, `cache: { hits, misses, epoch }` and `points`, each
-  `{ index, timestamp, score, severity, anomaly, votes, versions[], values?, contributions? }`,
+  `{ index, timestamp, score, severity, anomaly, votes, run?, versions[], values?, contributions? }`,
   a contribution being `{ feature, error, share, value, expected }` — the
   value the point carried and the autoencoder's reconstruction of it.
   String parameters are percent-decoded, so a feature named
@@ -542,6 +543,18 @@ service so existing dashboards and the `modelmanager` UI keep working:
   filtered; `anomalies` counts the rows that reached `votes`, so with
   `votes=2` on a three-version model it is the count the versions agree
   on, and a row's own `votes` is how many flagged it.
+
+  A **run** is a maximal sequence of consecutive stored rows every one of
+  which is an anomaly under `votes`: a burst is one event to whoever reads
+  the list, and a marginal 1 % says nothing about whether it is a hundred
+  single rows or three bursts. `runs` counts them over the window, an
+  anomalous row's `run` is its number (1-based in ring order; the count and
+  the numbers are computed over the whole window, before `limit` and
+  `versions` narrow the rows), and `group=runs` adds `events`, one per run:
+  `{ run, rows, from_index, from, to_index, to, worst_index, worst_score,
+  worst_severity, versions[] }` — `worst` being the row of highest severity,
+  `versions` the union of the rows' flagging versions. The dynamic layer
+  computes them with `scan_runs` over a `ScanOut` (§5.6).
 - `GET /api/auth/config` — public, because the page that has not signed in is
   the one asking: `enabled`, `issuer`, `client_id`, `audience`, `scope`,
   `redirect_path`, `open_ingest`. Everything in it is in the redirect the

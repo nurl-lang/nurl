@@ -743,6 +743,7 @@ $ `src/imptime.nu`
     ? only_anomalies { ( __mcp_q_add q `only` `anomalies` ) } {}
     : i votes ( __mcp_arg_int a `min_votes` 1 )
     ? > votes 1 { ( __mcp_q_add_int q `votes` votes ) } {}
+    ( __mcp_q_add q `group` `runs` )
     ( __mcp_q_add q `limit` `all` )
     ? > rows 0 { ( __mcp_q_add_int q `rows` rows ) } {}
     : String vers ( __mcp_arg_csv a `versions` )
@@ -768,6 +769,10 @@ $ `src/imptime.nu`
     ( __mcp_copy_rounded r `severity` o 3 )
     ( __mcp_copy r `anomaly` o )
     ( __mcp_copy r `votes` o )
+    ?? ( json_obj_get r `run` ) {
+        T ru → { ( json_obj_set o `event` ( json_int ( json_as_int ru ) ) ) }
+        F _ → {}
+    }
     ( __mcp_copy r `versions` o )
     ?? ( json_obj_get r `values` ) {
         T vals → { ( json_obj_set o `values` ( __mcp_round_obj vals 4 ) ) }
@@ -798,6 +803,7 @@ $ `src/imptime.nu`
     ( __mcp_copy b `clock` out )
     ( json_obj_set out `points_in_window` ( json_int ( __mcp_int_of b `considered` ) ) )
     ( json_obj_set out `anomalies_in_window` ( json_int ( __mcp_int_of b `anomalies` ) ) )
+    ( json_obj_set out `events_in_window` ( json_int ( __mcp_int_of b `runs` ) ) )
     ( json_obj_set out `points_stored` ( json_int ( __mcp_int_of b `data_points_count` ) ) )
     : i votes ( __mcp_int_of b `votes` )
     ? > votes 1 { ( json_obj_set out `min_votes` ( json_int votes ) ) } {}
@@ -848,6 +854,18 @@ $ `src/imptime.nu`
     ( json_obj_set out `rows` rows )
     ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
+}
+
+// Events shown in an anomaly_summary; the count is always there.
+: i MCP_EVENTS_SHOWN 10
+
+// Which of `buckets` equal slices of [first, first + span] a stamp
+// falls in; the last slice takes its own end.
+@ __mcp_bucket_of i ts i first i span i buckets → i {
+    : ~ i bi / * - ts first buckets span
+    ? >= bi buckets { = bi - buckets 1 } {}
+    ? < bi 0 { = bi 0 } {}
+    ^ bi
 }
 
 // Per-feature attribution totals across the flagged rows.
@@ -946,22 +964,74 @@ $ `src/imptime.nu`
         ( json_obj_set out `worst` w )
     } {}
 
-    // Timeline: the flagged rows counted into `buckets` equal slices
-    // between the first and the latest of them.
+    // Events: the runs of consecutive anomalous rows, newest first —
+    // a hundred flagged rows may be three of these. The run starts are
+    // kept for the timeline.
+    : ( Vec i ) starts ( vec_new [i] )
+    ?? ( json_obj_get b `events` ) {
+        T evs → {
+            : i ne ( json_arr_len evs )
+            : Json list ( json_arr_new )
+            : ~ i ei - ne 1
+            ~ >= ei 0 {
+                ?? ( json_arr_get evs ei ) {
+                    T ev → {
+                        ( vec_push [i] starts ( __mcp_int_of ev `from` ) )
+                        ? < ( json_arr_len list ) MCP_EVENTS_SHOWN {
+                            : Json eo ( json_obj_new )
+                            ( json_obj_set eo `event` ( json_int ( __mcp_int_of ev `run` ) ) )
+                            ( __mcp_copy ev `rows` eo )
+                            ( __mcp_when_of ev `from` eo `from` cc )
+                            ( __mcp_when_of ev `to` eo `to` cc )
+                            ( __mcp_copy ev `from_index` eo )
+                            ( __mcp_copy ev `to_index` eo )
+                            ( __mcp_copy ev `worst_index` eo )
+                            ( __mcp_copy_rounded ev `worst_score` eo 4 )
+                            ( __mcp_copy_rounded ev `worst_severity` eo 3 )
+                            ( __mcp_copy ev `versions` eo )
+                            ( json_arr_push list eo )
+                        } {}
+                    }
+                    F _ → {}
+                }
+                = ei - ei 1
+            }
+            ( json_obj_set out `events` list )
+            ? > ne MCP_EVENTS_SHOWN {
+                : String note ( string_from `the newest ` )
+                ( string_push_int note MCP_EVENTS_SHOWN )
+                ( string_push_str note ` events of ` )
+                ( string_push_int note ne )
+                ( string_push_str note ` in the window — anomalies lists every row with its event; narrow from/to/last for the rest` )
+                ( json_obj_set out `events_note` ( json_str_lit ( string_data note ) ) )
+                ( string_free note )
+            } {}
+        }
+        F _ → {}
+    }
+
+    // Timeline: the flagged rows and the event starts counted into
+    // `buckets` equal slices between the first and the latest flagged
+    // row.
     : i nst ( vec_len [i] stamps )
     ? & > nst 1 > last_ts first_ts {
         : Json tl ( json_arr_new )
         : i span - last_ts first_ts
         : ( Vec i ) counts ( vec_new [i] )
+        : ( Vec i ) ecounts ( vec_new [i] )
         : ~ i k 0
-        ~ < k buckets { ( vec_push [i] counts 0 ) = k + k 1 }
+        ~ < k buckets { ( vec_push [i] counts 0 ) ( vec_push [i] ecounts 0 ) = k + k 1 }
         = k 0
         ~ < k nst {
-            : i ts ( __mcp_iget stamps k )
-            : ~ i bi / * - ts first_ts buckets span
-            ? >= bi buckets { = bi - buckets 1 } {}
-            ? < bi 0 { = bi 0 } {}
+            : i bi ( __mcp_bucket_of ( __mcp_iget stamps k ) first_ts span buckets )
             : b _s ( vec_set [i] counts bi + ( __mcp_iget counts bi ) 1 )
+            = k + k 1
+        }
+        = k 0
+        : i nstarts ( vec_len [i] starts )
+        ~ < k nstarts {
+            : i bi ( __mcp_bucket_of ( __mcp_iget starts k ) first_ts span buckets )
+            : b _s ( vec_set [i] ecounts bi + ( __mcp_iget ecounts bi ) 1 )
             = k + k 1
         }
         = k 0
@@ -970,13 +1040,16 @@ $ `src/imptime.nu`
             : Json bo ( json_obj_new )
             ( json_obj_set bo `from` ( __mcp_when bstart cc ) )
             ( json_obj_set bo `anomalies` ( json_int ( __mcp_iget counts k ) ) )
+            ( json_obj_set bo `events` ( json_int ( __mcp_iget ecounts k ) ) )
             ( json_arr_push tl bo )
             = k + k 1
         }
         ( vec_free [i] counts )
+        ( vec_free [i] ecounts )
         ( json_obj_set out `timeline` tl )
     } {}
     ( vec_free [i] stamps )
+    ( vec_free [i] starts )
 
     // The features the autoencoder blamed most, by mean share.
     : i nf ( vec_len [FeatShare] feats )
@@ -1956,7 +2029,7 @@ $ `src/imptime.nu`
 @ __mcp_instructions → s {
     ^ `Anomaly detection over an organisation's sensor and event streams: every model watches one stream, stores its recent points in a ring, and flags points its versions (isolation forests over different windows, an autoencoder that sees the relations between fields, and a range_guard that flags a single field far outside its usual range and names it) score as unusual. You act with the signed-in user's permissions, inside their organisation.
 
-Start with list_models. Then anomalies {model, last: "24h"} for the newest flagged rows with the features that caused them, anomaly_summary for counts, timeline and the features blamed most, point for one row in full, describe_model for how a model is built, calibration for how its margins sit against the recent data. Times are ISO-8601 UTC; a model on a count clock numbers its rows instead. "last" counts back from the model's newest point, not from now. Scores run downward into anomaly: a point is flagged when its score is at or below minus the version's margin. A forest's decision_margin is that margin as is; the autoencoder's decision_margin is a fraction of its reconstruction threshold (margin = threshold × decision_margin), so its scores are ~1e-4 where a forest's are ~1e-1; range_guard's decision_margin is a count of standard deviations. Rank points and versions by severity (−score / margin: 1.0 is exactly on the alert line, 2.0 twice as far past it), never by raw score; a row's score and severity are those of its most severe version.
+Start with list_models. Then anomalies {model, last: "24h"} for the newest flagged rows with the features that caused them, anomaly_summary for counts, events, timeline and the features blamed most, point for one row in full, describe_model for how a model is built, calibration for how its margins sit against the recent data. Times are ISO-8601 UTC; a model on a count clock numbers its rows instead. "last" counts back from the model's newest point, not from now. Scores run downward into anomaly: a point is flagged when its score is at or below minus the version's margin. A forest's decision_margin is that margin as is; the autoencoder's decision_margin is a fraction of its reconstruction threshold (margin = threshold × decision_margin), so its scores are ~1e-4 where a forest's are ~1e-1; range_guard's decision_margin is a count of standard deviations. Rank points and versions by severity (−score / margin: 1.0 is exactly on the alert line, 2.0 twice as far past it), never by raw score; a row's score and severity are those of its most severe version. Consecutive anomalous rows are one event: anomalies gives each row its event number, anomaly_summary lists the events — count events, not rows, when saying how often something went wrong.
 
 Every member may build scratch models named llm_… (fork_model: a slice of an existing model's history, optionally fewer columns), tune them (finetune, train_autoencoder, retrain), edit and delete them — use them to test a hypothesis without touching production models. Changing or deleting any other model needs the administrator role; the reply says so when it does. Sending new points (ingest_point, import_data) needs the ingest capability. analyze_data scores a file you provide without creating a model.`
 }
@@ -1990,7 +2063,7 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     ( __mcp_sc_anomalies ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_anomalies a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `anomaly_summary`
-    `A window in one screen: points and anomalies counted, the rate, counts per version, first/latest/worst anomaly, a timeline of anomaly counts, and the features blamed most often. Cheap enough to call before anomalies; call it for "how has <model> been doing".`
+    `A window in one screen: points and anomalies counted, the rate, counts per version, first/latest/worst anomaly, the events (runs of consecutive anomalous rows — a hundred flagged rows may be three events), a timeline of anomaly and event counts, and the features blamed most often. Cheap enough to call before anomalies; call it for "how has <model> been doing".`
     ( __mcp_sc_summary ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_anomaly_summary a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `points`

@@ -469,6 +469,66 @@ $ `src/dynamic.nu`
 
     : ScanOut sc9 ( model_scan_at mo 0 0 0 F )
     ( scan_free sc9 )
+
+    // ── runs ──────────────────────────────────────────────────────────
+    // A run is a maximal sequence of consecutive agreed rows: every
+    // position in a run is agreed and points back at it, every agreed
+    // position is in a run, and no two runs touch.
+    : ScanOut scr ( model_scan_at mo 0 0 0 F )
+    : i nscr ( vec_len [ScoredPt] . scr pts )
+    : ScanRuns sr ( scan_runs scr 1 )
+    ( check == ( vec_len [i] . sr run_of ) nscr `runs: one run number per position` )
+    : ~ i agreed 0
+    : ~ i in_runs 0
+    : ~ b back_ok T
+    = k 0
+    ~ < k nscr {
+        : i rid ( _mlp_iget . sr run_of k )
+        : ~ b ag F
+        ?? ( vec_get [ScoredPt] . scr pts k ) { T r → { = ag ( scan_agreed r 1 ) } F _ → {} }
+        ? ag { = agreed + agreed 1 } {}
+        ? > rid 0 {
+            = in_runs + in_runs 1
+            ? ag {} { = back_ok F }
+            ?? ( vec_get [ScanRun] . sr runs - rid 1 ) {
+                T ru → { ? & <= . ru first_k k >= . ru last_k k {} { = back_ok F } }
+                F _ → { = back_ok F }
+            }
+        } { ? ag { = back_ok F } {} }
+        = k + k 1
+    }
+    ( check > agreed 0 `runs: the stream has anomalies to group` )
+    ( check == in_runs agreed `runs: every agreed row is in a run, and nothing else is` )
+    ( check back_ok `runs: a row's run spans it` )
+    : i nruns ( vec_len [ScanRun] . sr runs )
+    ( check > nruns 0 `runs: at least one run` )
+    ( check <= nruns agreed `runs: no more runs than rows` )
+    : ~ b contiguous T
+    : ~ i prev_last -2
+    : ~ i rows_sum 0
+    = k 0
+    ~ < k nruns {
+        ?? ( vec_get [ScanRun] . sr runs k ) {
+            T ru → {
+                ? != . ru run + k 1 { = contiguous F } {}
+                ? != . ru rows + - . ru last_k . ru first_k 1 { = contiguous F } {}
+                ? <= . ru first_k + prev_last 1 { = contiguous F } {}
+                ? | < . ru worst_k . ru first_k > . ru worst_k . ru last_k { = contiguous F } {}
+                ? == . ru flagged 0 { = contiguous F } {}
+                = prev_last . ru last_k
+                = rows_sum + rows_sum . ru rows
+            }
+            F _ → { = contiguous F }
+        }
+        = k + k 1
+    }
+    ( check contiguous `runs: numbered in order, maximal, never touching, worst inside` )
+    ( check == rows_sum agreed `runs: the rows add up` )
+    ( scan_runs_free sr )
+    : ScanRuns sr99 ( scan_runs scr 99 )
+    ( check == ( vec_len [ScanRun] . sr99 runs ) 0 `runs: 99 votes agree nowhere` )
+    ( scan_runs_free sr99 )
+    ( scan_free scr )
     : i _u2 ( model_force_train_at mo + T0 * 400 60 )
     : ScanOut sc10 ( model_scan_at mo 0 0 0 F )
     ( check == . sc10 misses 400 `a retrain invalidates the cache` )

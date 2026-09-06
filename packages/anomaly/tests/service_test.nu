@@ -610,6 +610,69 @@ $ `src/service.nu`
     ( check > an5_epoch an1_epoch `svc: the epoch advanced` )
     ( json_free . an5 body )
 
+    // Runs: consecutive anomalous rows are one event. Every row in a run
+    // names it, the count is always there, and group=runs lists them.
+    : SvcOut an6 ( fire r `GET` `/models/dynamic/svc/anomalies` `limit=all&group=runs` `` )
+    ( check == . an6 status 200 `svc: anomalies group=runs -> 200` )
+    : i an6_runs ( jint_of . an6 body `runs` )
+    : ~ i an6_events -1
+    : ~ i an6_event_rows 0
+    : ~ b an6_shape T
+    ?? ( json_obj_get . an6 body `events` ) {
+        T evs → {
+            = an6_events ( json_arr_len evs )
+            : ~ i ek 0
+            ~ < ek an6_events {
+                ?? ( json_arr_get evs ek ) {
+                    T ev → {
+                        = an6_event_rows + an6_event_rows ( jint_of ev `rows` )
+                        ? != ( jint_of ev `run` ) + ek 1 { = an6_shape F } {}
+                        ? < ( jint_of ev `rows` ) 1 { = an6_shape F } {}
+                        ? > ( jint_of ev `from_index` ) ( jint_of ev `to_index` ) { = an6_shape F } {}
+                        ?? ( json_obj_get ev `versions` ) {
+                            T vs → { ? > ( json_arr_len vs ) 0 {} { = an6_shape F } }
+                            F _ → { = an6_shape F }
+                        }
+                    }
+                    F _ → {}
+                }
+                = ek + ek 1
+            }
+        }
+        F _ → {}
+    }
+    ( check == an6_events an6_runs `svc: group=runs lists one event per run` )
+    ( check an6_shape `svc: an event is numbered in order, spans rows and names its versions` )
+    : ~ i an6_rows_in_runs 0
+    : ~ b an6_run_ids T
+    ?? ( json_obj_get . an6 body `points` ) {
+        T pts → {
+            : i npt ( json_arr_len pts )
+            : ~ i pk 0
+            ~ < pk npt {
+                ?? ( json_arr_get pts pk ) {
+                    T pt → {
+                        ?? ( json_obj_get pt `run` ) {
+                            T ru → {
+                                = an6_rows_in_runs + an6_rows_in_runs 1
+                                ? | < ( json_as_int ru ) 1 > ( json_as_int ru ) an6_runs { = an6_run_ids F } {}
+                                ? ( jbool_of pt `anomaly` ) {} { = an6_run_ids F }
+                            }
+                            F _ → {}
+                        }
+                    }
+                    F _ → {}
+                }
+                = pk + pk 1
+            }
+        }
+        F _ → {}
+    }
+    ( check == an6_rows_in_runs an6_event_rows `svc: the rows in runs add up to the events' rows` )
+    ( check an6_run_ids `svc: a row's run is a listed one, and the row is an anomaly` )
+    ( check == an6_rows_in_runs ( jint_of . an6 body `anomalies` ) `svc: every anomalous row is in a run` )
+    ( json_free . an6 body )
+
     // Import with a clock to find. An FMI-shaped file: the time is spread
     // over year/month/day/clock columns under Finnish names, and `-` is a
     // missing value. inspect=1 describes the file and proposes the parts

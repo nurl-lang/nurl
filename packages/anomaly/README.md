@@ -751,7 +751,7 @@ says why and what would be allowed instead.
 | `list_models` | every member | every model: columns, points seen, last training, each version's margin |
 | `describe_model` | every member | how a model is built, and which fields `edit_model` may change |
 | `anomalies` | every member | the newest flagged points of a window with the features blamed; says how many the window held |
-| `anomaly_summary` | every member | a window in one screen: counts, rate, per-version counts, worst point, timeline, most-blamed features |
+| `anomaly_summary` | every member | a window in one screen: counts, rate, per-version counts, worst point, events, timeline, most-blamed features |
 | `points`, `point` | every member | the raw stored rows of a window; one row in full by ring index |
 | `calibration` | every member | how each margin sits against a window — the numbers to read before `finetune` |
 | `score_point` | every member | the verdict for a hypothetical point, without storing it |
@@ -776,6 +776,12 @@ named `time` cannot shadow the stamp. A window is `from` / `to` and a span
 stored point; `finetune` also takes `"own"` for each version's own training
 period. `anomalies` and `anomaly_summary` take `min_votes`: with `2` on a
 three-version model, a row one version alone flagged is not counted.
+Consecutive anomalous rows are one **event**: every row in `anomalies`
+carries its `event` number, both tools count `events_in_window`, and
+`anomaly_summary` lists the newest ten events with their span, worst row and
+versions, and counts event starts per timeline bucket — so a hundred flagged
+rows read as the three bursts they were. The REST route calls them runs
+(`runs`, `run`, `group=runs`).
 
 The server's `instructions` tell the agent the things it most often gets
 wrong: that `last: "24h"` counts back from the model's newest point, not from
