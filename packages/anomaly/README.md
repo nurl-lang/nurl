@@ -756,10 +756,21 @@ MCP: a new key's secret exists once, in the response that creates it, and a
 conversation with a language model is not where it should land. Use the
 dashboard.
 
-The server's `instructions` tell the agent the two things it most often gets
+Every tool answers in a reader's shape rather than the route's: stamps are
+ISO-8601 (or the point's ordinal on a count clock), readings are rounded to
+four significant digits, margins are never rounded (a rounded margin is a
+different threshold), and a row is `{ index, time, values: {…} }` so a column
+named `time` cannot shadow the stamp. A window is `from` / `to` and a span
+`last` — seconds or `90s` / `15m` / `24h` / `7d` / `2w`, and `"all"` for every
+stored point; `finetune` also takes `"own"` for each version's own training
+period. `anomalies` and `anomaly_summary` take `min_votes`: with `2` on a
+three-version model, a row one version alone flagged is not counted.
+
+The server's `instructions` tell the agent the things it most often gets
 wrong: that `last: "24h"` counts back from the model's newest point, not from
-the clock, and that scores run downward — the lowest score is the worst
-point. A typical session is `list_models` → `anomaly_summary {model,
+the clock, and that scores run downward and are ranked by `severity`
+(−score / margin, 1.0 being the alert line) — the lowest score of one
+version is not comparable with another's. A typical session is `list_models` → `anomaly_summary {model,
 last:"7d"}` → `anomalies {model, last:"24h"}` → `point {model, index}`;
 a hypothesis is tested with `fork_model {source, name:"llm_…", fields:[…]}`
 → `calibration` → `finetune` → `delete_model {confirm:true}`.

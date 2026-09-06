@@ -1046,6 +1046,9 @@ $ `stdlib/std/thread.nu`
 //   &last=<seconds>            shorthand: the last N seconds up to `to`/now
 //   &limit=N                   newest N rows of the window (default 2000)
 //   &only=anomalies            omit the rows nothing flagged
+//   &votes=N                   a row is an anomaly only when N or more
+//                              versions flagged it (default 1); shapes
+//                              `only=anomalies` and the `anomalies` count
 //   &versions=a,b              keep only rows flagged by one of these
 //   &rows=N                    of the rows that survive the filters above,
 //                              return only the newest N (default: all)
@@ -1100,6 +1103,8 @@ $ `stdlib/std/thread.nu`
     : String vfilter ( __an_query_str . req query `versions` )
     : String ffilter ( __an_query_str . req query `fields` )
     : b only_anom == ( nurl_str_eq ( string_data only ) `anomalies` ) 1
+    : ~ i minvotes ( __an_query_int . req query `votes` 1 )
+    ? < minvotes 1 { = minvotes 1 } {}
 
     : *Model mo ( model_open st ( string_data mname ) )
 
@@ -1150,15 +1155,18 @@ $ `stdlib/std/thread.nu`
     // pass per row) run only for rows that are actually returned.
     : i np ( vec_len [ScoredPt] . so pts )
     : ( Vec i ) kept ( vec_new [i] )
+    : ~ i n_agreed 0
     = k 0
     ~ < k np {
         ?? ( vec_get [ScoredPt] . so pts k ) {
             T r → {
                 : ~ b keep T
                 : ~ b matched F
+                : ~ i nv_flag 0
                 : ~ i b 0
                 ~ < b nvn {
                     ? != & >> . r sp_flagged b 1 0 {
+                        = nv_flag + nv_flag 1
                         ?? ( vec_get [String] . so vnames b ) {
                             T nm → { ? ( __an_csv_has vfilter ( string_data nm ) ) { = matched T } {} }
                             F _ → {}
@@ -1166,7 +1174,9 @@ $ `stdlib/std/thread.nu`
                     } {}
                     = b + b 1
                 }
-                ? only_anom { ? . r sp_anomaly {} { = keep F } } {}
+                : b agreed & . r sp_anomaly >= nv_flag minvotes
+                ? agreed { = n_agreed + n_agreed 1 } {}
+                ? only_anom { ? agreed {} { = keep F } } {}
                 ? > ( string_len vfilter ) 0 { ? matched {} { = keep F } } {}
                 ? keep { ( vec_push [i] kept k ) } {}
             }
@@ -1204,6 +1214,7 @@ $ `stdlib/std/thread.nu`
                 ( json_obj_set o `score` ( json_float . r sp_score ) )
                 ( json_obj_set o `severity` ( json_float . r sp_severity ) )
                 ( json_obj_set o `anomaly` ( json_bool . r sp_anomaly ) )
+                ( json_obj_set o `votes` ( json_int ( json_arr_len flagged ) ) )
                 ( json_obj_set o `versions` flagged )
                 ? || want_fields . r sp_anomaly {
                     ?? ( model_point_json mo . r sp_idx ) {
@@ -1280,7 +1291,10 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `clock` ( json_str_lit ? . amm count_clock `count` `time` ) )
     ( json_obj_set o `data_points_count` ( json_int . so total ) )
     ( json_obj_set o `considered` ( json_int . so considered ) )
-    ( json_obj_set o `anomalies` ( json_int . so anomalies ) )
+    // `anomalies` counts the rows `votes` versions or more flagged; at the
+    // default of one that is every flagged row.
+    ( json_obj_set o `anomalies` ( json_int n_agreed ) )
+    ( json_obj_set o `votes` ( json_int minvotes ) )
     ( json_obj_set o `returned` ( json_int shown ) )
     ( json_obj_set o `model_versions` vers )
     ( json_obj_set o `cache` cache )
@@ -2310,6 +2324,8 @@ $ `stdlib/std/thread.nu`
         ( string_push_str msg ( string_data mname ) )
     }
     : Json o ( __an_ok_msg ( string_data msg ) )
+    : *Meta fmm . mo meta
+    ( json_obj_set o `clock` ( json_str_lit ? . fmm count_clock `count` `time` ) )
     ( json_obj_set o `rate` ( json_float rate ) )
     ( json_obj_set o `dry_run` ( json_bool dry ) )
     ? > ( string_len note ) 0 { ( json_obj_set o `note` ( json_str_lit ( string_data note ) ) ) } {}

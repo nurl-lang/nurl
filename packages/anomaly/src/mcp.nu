@@ -383,8 +383,16 @@ $ `src/imptime.nu`
     }
 }
 
-// A span: seconds as a number, or "90s" / "15m" / "24h" / "7d" / "2w".
-// 0 when absent, -1 when unreadable.
+// A span: seconds as a number, or "90s" / "15m" / "24h" / "7d" / "2w";
+// "all" (also "max", "*") is the whole ring, the word the REST routes
+// know — one window vocabulary for every tool. 0 when absent,
+// MCP_SPAN_ALL for the whole ring, -1 when unreadable.
+: i MCP_SPAN_ALL -2
+
+@ __mcp_span_is_all s raw → b {
+    ^ || == ( nurl_str_eq raw `all` ) 1 || == ( nurl_str_eq raw `max` ) 1 == ( nurl_str_eq raw `*` ) 1
+}
+
 @ __mcp_arg_span Json a s key → i {
     ?? ( __mcp_arg a key ) {
         T v → {
@@ -393,6 +401,7 @@ $ `src/imptime.nu`
             ? ( json_is_str v ) {
                 : s raw ( json_str_data v )
                 ? == ( nurl_str_len raw ) 0 { ^ 0 } {}
+                ? ( __mcp_span_is_all raw ) { ^ MCP_SPAN_ALL } {}
                 : i t ( imp_span_of_text raw )
                 ^ ? > t 0 t -1
             } {}
@@ -433,10 +442,13 @@ $ `src/imptime.nu`
     : i to ( __mcp_arg_instant a `to` )
     ? < to 0 { ^ ( mcp_tool_result_error `to: not a moment — use ISO-8601 (2026-09-01 or 2026-09-01T06:00:00Z) or Unix seconds` ) } {}
     : i last ( __mcp_arg_span a `last` )
-    ? < last 0 { ^ ( mcp_tool_result_error `last: not a span — use seconds or 90s / 15m / 24h / 7d / 2w` ) } {}
+    ? | > last 0 == last MCP_SPAN_ALL {} {
+        ? < last 0 { ^ ( mcp_tool_result_error `last: not a span — use seconds, 90s / 15m / 24h / 7d / 2w, or "all" for every stored point` ) } {}
+    }
     ? > from 0 { ( __mcp_q_add_int q `from` from ) } {}
     ? > to 0 { ( __mcp_q_add_int q `to` to ) } {}
     ? > last 0 { ( __mcp_q_add_int q `last` last ) } {}
+    ? == last MCP_SPAN_ALL { ( __mcp_q_add q `last` `all` ) } {}
     ^ ( json_null )
 }
 
@@ -729,6 +741,8 @@ $ `src/imptime.nu`
         ^ @ ApiOut { 0 werr }
     }
     ? only_anomalies { ( __mcp_q_add q `only` `anomalies` ) } {}
+    : i votes ( __mcp_arg_int a `min_votes` 1 )
+    ? > votes 1 { ( __mcp_q_add_int q `votes` votes ) } {}
     ( __mcp_q_add q `limit` `all` )
     ? > rows 0 { ( __mcp_q_add_int q `rows` rows ) } {}
     : String vers ( __mcp_arg_csv a `versions` )
@@ -753,6 +767,7 @@ $ `src/imptime.nu`
     ( __mcp_copy_rounded r `score` o 4 )
     ( __mcp_copy_rounded r `severity` o 3 )
     ( __mcp_copy r `anomaly` o )
+    ( __mcp_copy r `votes` o )
     ( __mcp_copy r `versions` o )
     ?? ( json_obj_get r `values` ) {
         T vals → { ( json_obj_set o `values` ( __mcp_round_obj vals 4 ) ) }
@@ -784,6 +799,8 @@ $ `src/imptime.nu`
     ( json_obj_set out `points_in_window` ( json_int ( __mcp_int_of b `considered` ) ) )
     ( json_obj_set out `anomalies_in_window` ( json_int ( __mcp_int_of b `anomalies` ) ) )
     ( json_obj_set out `points_stored` ( json_int ( __mcp_int_of b `data_points_count` ) ) )
+    : i votes ( __mcp_int_of b `votes` )
+    ? > votes 1 { ( json_obj_set out `min_votes` ( json_int votes ) ) } {}
     ( __mcp_copy b `model_versions` out )
 }
 
@@ -1040,6 +1057,11 @@ $ `src/imptime.nu`
 // ── Tools: points ────────────────────────────────────────────────────
 
 // Rows of the ring: `{index, time, <fields…>}` per row, newest last.
+// A stored row for a reader: `index` and `time` are the row's place in
+// the ring and its stamp, and the columns live under `values` — so a
+// column called "time" or "index" (a Finnish "Aika" imported as time, a
+// counter named index) can never overwrite the row's own coordinates. The
+// same shape the anomalies rows use.
 @ __mcp_data_rows Json b → Json {
     : b cc ( __mcp_count_clock b )
     : Json rows ( json_arr_new )
@@ -1057,12 +1079,14 @@ $ `src/imptime.nu`
                             F _ → {}
                         }
                         ( __mcp_when_of rec `timestamp` row `time` cc )
+                        : Json vals ( json_obj_new )
                         ( json_obj_each rec \ s key Json v → v {
                             ? == ( nurl_str_eq key `timestamp` ) 1 {} {
-                                ? ( json_is_num v ) { ( json_obj_set row key ( __mcp_round v 4 ) ) }
-                                { ( json_obj_set row key ( json_clone v ) ) }
+                                ? ( json_is_num v ) { ( json_obj_set vals key ( __mcp_round v 4 ) ) }
+                                { ( json_obj_set vals key ( json_clone v ) ) }
                             }
                         } )
+                        ( json_obj_set row `values` vals )
                         ( json_arr_push rows row )
                     }
                     F _ → {}
@@ -1253,6 +1277,56 @@ $ `src/imptime.nu`
     ^ ( mcp_tool_result_error `values: required — an object of the model's columns, e.g. {"temperature": 21.5, "humidity": 40}` )
 }
 
+// A verdict for a reader: the aggregate, then each version with its
+// score, severity and the margin it was held to — margins verbatim,
+// since a rounded margin is a different threshold. The API's echo of
+// the submitted values is dropped; the caller sent them. A model still
+// collecting its first points says so instead of scoring.
+@ __mcp_verdict_out ApiOut o b ingested → Json {
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    : Json b . o body
+    : Json out ( json_obj_new )
+    ( __mcp_copy b `status` out )
+    ( __mcp_copy b `model` out )
+    ( __mcp_copy b `model_name` out )
+    ( __mcp_copy b `message` out )
+    ? ( json_obj_has b `anomaly` ) {
+        ( __mcp_copy b `anomaly` out )
+        ( __mcp_copy_rounded b `score` out 4 )
+        ( __mcp_copy_rounded b `severity` out 3 )
+        ?? ( json_obj_get b `versions` ) {
+            T vers → {
+                : Json vo ( json_obj_new )
+                ( json_obj_each vers \ s name Json vv → v {
+                    : Json e ( json_obj_new )
+                    ( __mcp_copy vv `anomaly` e )
+                    ( __mcp_copy_rounded vv `score` e 4 )
+                    ( __mcp_copy_rounded vv `severity` e 3 )
+                    ?? ( json_obj_get vv `threshold_info` ) {
+                        T ti → {
+                            : Json t ( json_obj_new )
+                            ( __mcp_copy ti `margin` t )
+                            ( __mcp_copy ti `decision_margin` t )
+                            ( __mcp_copy ti `units` t )
+                            ( json_obj_set e `threshold_info` t )
+                        }
+                        F _ → {}
+                    }
+                    ( json_obj_set vo name e )
+                } )
+                ( json_obj_set out `versions` vo )
+            }
+            F _ → {}
+        }
+    } {
+        ( __mcp_copy b `min_data_points` out )
+    }
+    ( json_obj_set out `points_stored` ( json_int ( __mcp_int_of b `data_points` ) ) )
+    ( json_obj_set out `stored` ( json_bool ingested ) )
+    ( __mcp_api_out_free o )
+    ^ ( __mcp_result_json out )
+}
+
 @ __mcp_t_score_point Json a Json ctx → Json {
     : String model ( __mcp_need_model a )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
@@ -1265,7 +1339,7 @@ $ `src/imptime.nu`
             ( string_free path )
             ( string_free q )
             ( string_free model )
-            ^ ( __mcp_pass o )
+            ^ ( __mcp_verdict_out o F )
         }
         F _ → { ( string_free model ) ^ ( __mcp_no_values ) }
     }
@@ -1283,7 +1357,7 @@ $ `src/imptime.nu`
             ( string_free path )
             ( string_free q )
             ( string_free model )
-            ^ ( __mcp_pass o )
+            ^ ( __mcp_verdict_out o T )
         }
         F _ → { ( string_free model ) ^ ( __mcp_no_values ) }
     }
@@ -1497,9 +1571,20 @@ $ `src/imptime.nu`
 @ __mcp_t_retrain Json a Json ctx → Json {
     : String model ( __mcp_need_model a )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
-    : Json out ( __mcp_model_post ctx `/force_train/` model `` `POST` @ ?Json { F @ Json { JNull } } )
+    : String q ( string_new )
+    : String path ( __mcp_model_path `/force_train/` model `` )
+    : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
+    ( string_free path )
+    ( string_free q )
     ( string_free model )
-    ^ out
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    : Json out ( json_obj_new )
+    ( __mcp_copy . o body `status` out )
+    ( __mcp_copy . o body `message` out )
+    ( __mcp_copy . o body `points_used` out )
+    ( json_obj_set out `next` ( json_str_lit `calibration to see the margins the retrained versions now hold; anomalies to see what they flag.` ) )
+    ( __mcp_api_out_free o )
+    ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_train_autoencoder Json a Json ctx → Json {
@@ -1511,10 +1596,26 @@ $ `src/imptime.nu`
         F _ → {}
     }
     ? ( __mcp_arg_has a `contamination` ) { ( json_obj_set body `contamination` ( json_float ( __mcp_arg_f a `contamination` 0.0 ) ) ) } {}
-    : Json out ( __mcp_model_post ctx `/train/autoencoder/` model `` `POST` @ ?Json { T body } )
+    : String q ( string_new )
+    : String path ( __mcp_model_path `/train/autoencoder/` model `` )
+    : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { T body } )
+    ( string_free path )
+    ( string_free q )
     ( json_free body )
     ( string_free model )
-    ^ out
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    : Json out ( json_obj_new )
+    ( __mcp_copy . o body `status` out )
+    ( __mcp_copy . o body `message` out )
+    ( __mcp_copy . o body `training_data_points` out )
+    ( __mcp_copy . o body `filtered_anomalies` out )
+    // The threshold is a reconstruction error in the model's own scale
+    // (often 1e-4); significant digits keep it readable, and it is
+    // informational — the margin the verdict uses is relative to it.
+    ( __mcp_copy_rounded . o body `reconstruction_threshold` out 4 )
+    ( json_obj_set out `next` ( json_str_lit `describe_model shows the autoencoder's effective margin; anomalies {versions: ["autoencoder"]} what it flags on its own.` ) )
+    ( __mcp_api_out_free o )
+    ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_finetune Json a Json ctx → Json {
@@ -1522,19 +1623,22 @@ $ `src/imptime.nu`
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : Json body ( json_obj_new )
     ? ( __mcp_arg_has a `rate` ) { ( json_obj_set body `rate` ( json_float ( __mcp_arg_f a `rate` 0.01 ) ) ) } {}
-    // `last`: a span, or the words the API knows ("all", "own").
+    // `last`: the shared span vocabulary, plus "own" — each version's
+    // own training period — which only fine-tune knows.
+    : ~ b own F
     ?? ( __mcp_arg a `last` ) {
-        T lv → {
-            ? ( json_is_str lv ) {
-                : s raw ( json_str_data lv )
-                : i span ( imp_span_of_text raw )
-                ? > span 0 { ( json_obj_set body `last` ( json_int span ) ) }
-                { ( json_obj_set body `last` ( json_str_lit raw ) ) }
-            } {
-                ? ( json_is_num lv ) { ( json_obj_set body `last` ( json_int ( json_as_int lv ) ) ) } {}
-            }
-        }
+        T lv → { ? ( json_is_str lv ) { = own == ( nurl_str_eq ( json_str_data lv ) `own` ) 1 } {} }
         F _ → {}
+    }
+    ? own { ( json_obj_set body `last` ( json_str_lit `own` ) ) } {
+        : i last ( __mcp_arg_span a `last` )
+        ? == last -1 {
+            ( json_free body )
+            ( string_free model )
+            ^ ( mcp_tool_result_error `last: not a span — use seconds, 90s / 15m / 24h / 7d / 2w, "all" for every stored point, or "own" for each version's own training period` )
+        } {}
+        ? > last 0 { ( json_obj_set body `last` ( json_int last ) ) } {}
+        ? == last MCP_SPAN_ALL { ( json_obj_set body `last` ( json_str_lit `all` ) ) } {}
     }
     : i from ( __mcp_arg_instant a `from` )
     : i to ( __mcp_arg_instant a `to` )
@@ -1550,10 +1654,69 @@ $ `src/imptime.nu`
         F _ → {}
     }
     ? ( __mcp_arg_bool a `dry_run` F ) { ( json_obj_set body `dry_run` ( json_bool T ) ) } {}
-    : Json out ( __mcp_model_post ctx `/api/dynamic/` model `/finetune` `POST` @ ?Json { T body } )
+    : String q ( string_new )
+    : String path ( __mcp_model_path `/api/dynamic/` model `/finetune` )
+    : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { T body } )
+    ( string_free path )
+    ( string_free q )
     ( json_free body )
     ( string_free model )
-    ^ out
+    ^ ( __mcp_finetune_out o )
+}
+
+// A fine-tune report for a reader: the window as stamps, then each
+// version's margin before and after (verbatim — a margin is a
+// threshold, not a reading), how many rows it flagged either side and
+// the rate that makes, whether the requested rate was reachable exactly
+// and whether the change was applied. The API's legacy
+// `adjusted_margins` / `max_anomaly_scores` maps repeat the per-version
+// numbers and are not carried.
+@ __mcp_finetune_out ApiOut o → Json {
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    : Json b . o body
+    : b cc ( __mcp_count_clock b )
+    : Json out ( json_obj_new )
+    ( __mcp_copy b `status` out )
+    ( __mcp_copy b `message` out )
+    ( __mcp_copy b `rate` out )
+    ( __mcp_copy b `dry_run` out )
+    ( __mcp_copy b `note` out )
+    ?? ( json_obj_get b `window` ) {
+        T w → {
+            : Json wo ( json_obj_new )
+            ( __mcp_when_of w `from` wo `from` cc )
+            ( __mcp_when_of w `to` wo `to` cc )
+            ( __mcp_copy w `rows` wo )
+            ( __mcp_copy w `own` wo )
+            ( json_obj_set out `window` wo )
+        }
+        F _ → {}
+    }
+    ?? ( json_obj_get b `versions` ) {
+        T vers → {
+            : Json vo ( json_obj_new )
+            ( json_obj_each vers \ s name Json vv → v {
+                : Json e ( json_obj_new )
+                ( __mcp_copy vv `units` e )
+                ( __mcp_copy vv `old_margin` e )
+                ( __mcp_copy vv `new_margin` e )
+                ( __mcp_copy vv `n` e )
+                ( __mcp_copy vv `flagged_before` e )
+                ( __mcp_copy vv `flagged_after` e )
+                ( __mcp_copy_rounded vv `rate_before` e 4 )
+                ( __mcp_copy_rounded vv `rate_after` e 4 )
+                ( __mcp_copy vv `exact` e )
+                ( __mcp_copy vv `applied` e )
+                ( __mcp_when_of vv `from` e `from` cc )
+                ( __mcp_copy vv `rows` e )
+                ( json_obj_set vo name e )
+            } )
+            ( json_obj_set out `versions` vo )
+        }
+        F _ → {}
+    }
+    ( __mcp_api_out_free o )
+    ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_edit_model Json a Json ctx → Json {
@@ -1651,7 +1814,7 @@ $ `src/imptime.nu`
 
 // from / to / last on a schema — the window vocabulary every reader shares.
 @ __mcp_sc_window Json sc → v {
-    ( mcp_schema_prop sc `last` `string` `A span back from the newest stored point (not from now): "24h", "7d", "2w", "90m", or seconds. A model that stopped receiving data still answers about its last day.` F )
+    ( mcp_schema_prop sc `last` `string` `A span back from the newest stored point (not from now): "24h", "7d", "2w", "90m", or seconds; "all" for every stored point. A model that stopped receiving data still answers about its last day.` F )
     ( mcp_schema_prop sc `from` `string` `Window start: ISO-8601 ("2026-09-01" or "2026-09-01T06:00:00Z"; a bare stamp is read in the server's zone) or Unix seconds.` F )
     ( mcp_schema_prop sc `to` `string` `Window end, same forms as from. With last, the span ends here.` F )
 }
@@ -1667,6 +1830,7 @@ $ `src/imptime.nu`
     ( mcp_schema_prop sc `count` `integer` `How many of the newest matching rows to return (default 20, max 200). The reply says how many the window had.` F )
     ( mcp_schema_prop sc `all_points` `boolean` `true: every scored row, flagged or not (default false: only anomalies).` F )
     ( mcp_schema_prop sc `versions` `array` `Keep only rows flagged by one of these model versions (names from list_models), e.g. ["autoencoder"].` F )
+    ( mcp_schema_prop sc `min_votes` `integer` `Count a row as an anomaly only when this many versions flagged it (default 1). 2 on a three-version model drops the rows one version alone disputes.` F )
     ( mcp_schema_prop sc `fields` `array` `Which of the row's columns to include as values (default: all of them).` F )
     ( mcp_schema_prop sc `contributions` `integer` `Per flagged row, the N features the autoencoder blames most, with the value it saw and the value it expected (default 3, 0 = none). Needs a trained autoencoder.` F )
     ^ sc
@@ -1675,6 +1839,7 @@ $ `src/imptime.nu`
 @ __mcp_sc_summary → Json {
     : Json sc ( __mcp_sc_model_window )
     ( mcp_schema_prop sc `buckets` `integer` `Timeline slices between the first and the latest anomaly (default 12, max 48).` F )
+    ( mcp_schema_prop sc `min_votes` `integer` `Count a row as an anomaly only when this many versions flagged it (default 1).` F )
     ^ sc
 }
 
@@ -1749,7 +1914,7 @@ $ `src/imptime.nu`
 @ __mcp_sc_finetune → Json {
     : Json sc ( __mcp_sc_model )
     ( mcp_schema_prop sc `rate` `number` `Target alert rate: the share of the window each version should flag, e.g. 0.01 for 1% (default 0.01).` F )
-    ( mcp_schema_prop sc `last` `string` `Window: a span ("7d", "24h", seconds), "all" for the whole ring, or "own" for each version's own training period (the default).` F )
+    ( mcp_schema_prop sc `last` `string` `Window: a span back from the newest stored point ("7d", "24h", seconds), "all" for every stored point, or "own" for each version's own training period. Default: the last 24h.` F )
     ( mcp_schema_prop sc `from` `string` `Window start, ISO-8601 or Unix seconds.` F )
     ( mcp_schema_prop sc `to` `string` `Window end.` F )
     ( mcp_schema_prop sc `versions` `array` `Only these versions (default: every enabled, trained one).` F )

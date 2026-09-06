@@ -452,6 +452,13 @@ $ `src/service.nu`
     ( check . one ok `mcp: point answers for that index` )
     ( check ( jstr_eq . one data `model_name` `pub` ) `mcp: point names the model` )
     ( check ( jobj_at . one data `point` ) `mcp: point carries the row` )
+    ?? ( json_obj_get . one data `point` ) {
+        T prow → {
+            ( check ( jobj_at prow `values` ) `mcp: the row keeps its columns under values` )
+            ( check ! ( jobj_at prow `temp` ) `mcp: and not beside index and time` )
+        }
+        F _ → {}
+    }
     ( call_free one )
 
     : Call far ( call r `point` `{"model":"pub","index":100000}` `` )
@@ -468,6 +475,21 @@ $ `src/service.nu`
     : Call sc ( call r `score_point` `{"model":"pub","values":{"temp":99,"load":44}}` `` )
     ( check . sc ok `mcp: score_point answers` )
     ( check ( string_contains . sc text `anomaly` ) `mcp: score_point carries a verdict` )
+    ( check ( jobj_at . sc data `versions` ) `mcp: score_point lists the versions` )
+    ( check ( json_obj_has . sc data `severity` ) `mcp: score_point carries the severity` )
+    ( check ! ( json_obj_has . sc data `data_point` ) `mcp: score_point does not echo the values` )
+    ?? ( json_obj_get . sc data `versions` ) {
+        T svs → {
+            ?? ( json_obj_get svs `short_term` ) {
+                T svv → { ( check ( jobj_at svv `threshold_info` ) `mcp: score_point versions carry threshold_info` ) }
+                F _ → { ( check F `mcp: score_point has short_term` ) }
+            }
+        }
+        F _ → {}
+    }
+    : Call va ( call r `anomalies` `{"model":"pub","min_votes":2,"all_points":true}` `` )
+    ( check . va ok `mcp: anomalies takes min_votes` )
+    ( call_free va )
     ( call_free sc )
 }
 
@@ -545,7 +567,13 @@ $ `src/service.nu`
 
     : Call ft ( call r `finetune` `{"model":"llm_fork","rate":0.05,"dry_run":true}` `` )
     ( check . ft ok `mcp: finetune dry_run answers` )
+    ( check ( jobj_at . ft data `versions` ) `mcp: finetune reports the versions` )
+    ( check ( jobj_at . ft data `window` ) `mcp: finetune reports the window` )
+    ( check ! ( json_obj_has . ft data `adjusted_margins` ) `mcp: finetune drops the legacy margin map` )
     ( call_free ft )
+    : Call fta ( call r `finetune` `{"model":"llm_fork","rate":0.05,"dry_run":true,"last":"all"}` `` )
+    ( check . fta ok `mcp: finetune takes last=all` )
+    ( call_free fta )
 
     : Call ed ( call r `edit_model` `{"model":"llm_fork","patch":{"alias":"forked"}}` `` )
     ( check . ed ok `mcp: edit_model applies a patch` )

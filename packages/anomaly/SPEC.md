@@ -509,18 +509,21 @@ service so existing dashboards and the `modelmanager` UI keep working:
   (relative to `to`, else to the newest stored point — never to the server
   clock, so a model that stopped receiving data still answers "the last
   24 h *of it*"), `limit` (newest N of the window; `all` for no cap),
-  `only=anomalies`, `versions=a,b`, `fields=x,y` (attach these feature
-  values), `contrib=N` (top-N autoencoder contributors per flagged point,
-  `0` to omit), `refresh=1` (ignore the cache). Response:
-  `data_points_count`, `considered`, `anomalies`, `returned`,
+  `only=anomalies`, `votes=N` (a row is an anomaly only when N or more
+  versions flagged it; default 1), `versions=a,b`, `fields=x,y` (attach
+  these feature values), `contrib=N` (top-N autoencoder contributors per
+  flagged point, `0` to omit), `refresh=1` (ignore the cache). Response:
+  `data_points_count`, `considered`, `anomalies`, `votes`, `returned`,
   `model_versions`, `cache: { hits, misses, epoch }` and `points`, each
-  `{ index, timestamp, score, severity, anomaly, versions[], values?, contributions? }`,
+  `{ index, timestamp, score, severity, anomaly, votes, versions[], values?, contributions? }`,
   a contribution being `{ feature, error, share, value, expected }` — the
   value the point carried and the autoencoder's reconstruction of it.
   String parameters are percent-decoded, so a feature named
   `Ilman lämpötila [°C]` can be asked for. `considered` and `anomalies`
   describe the whole window, so a filtered response still says how much it
-  filtered.
+  filtered; `anomalies` counts the rows that reached `votes`, so with
+  `votes=2` on a three-version model it is the count the versions agree
+  on, and a row's own `votes` is how many flagged it.
 - `GET /api/auth/config` — public, because the page that has not signed in is
   the one asking: `enabled`, `issuer`, `client_id`, `audience`, `scope`,
   `redirect_path`, `open_ingest`. Everything in it is in the redirect the
