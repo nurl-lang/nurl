@@ -22,8 +22,18 @@ language model working on the same data — an [MCP endpoint](#mcp-the-service-f
 at `/mcp` that exposes the whole API as tools, under the signed-in user's own
 rights.
 
-## Two versions beyond the forests
+## Three versions beyond the plain forests
 
+- **range_guard — the univariate check.** A forest scores a point as a
+  whole: an air temperature of 95 °C among eleven normal readings is one
+  coordinate in a twelve-dimensional space, and the forests may not blink.
+  The guard looks at each feature alone — its decision value is
+  `−max|z|` over the standardised features, so its margin *is* the sigma
+  count of the alert line (4 by default, tunable and calibratable like any
+  other), and the verdict names the feature that tripped it. No forest, no
+  window: the scaler every retrain refits is all it needs, so it costs
+  nothing to keep and nothing to re-enable. A model from before it existed
+  gains it at its next retrain.
 - **timevector — the sliding window.** `window_size` consecutive points
   flatten to one window vector; the forest trains on window vectors and
   detection scores the window ending at the incoming point. This is the
@@ -76,9 +86,12 @@ rights.
   last manual training.
 - **Multiple time-window versions.** Each model trains one forest per
   enabled version — `short_term` (180 min), `daily` (24 h), `weekly`,
-  `seasonal` (90 d) and `timevector` (last 100 points) — so the same stream
-  is judged against several horizons at once. A point is anomalous if
-  **any** version flags it; the reported score is the most severe.
+  `seasonal` (90 d) and `timevector` (last 100 points) — and the forestless
+  `range_guard` beside them, so the same stream is judged against several
+  horizons at once. A point is anomalous if
+  **any** version flags it; the reported `score` and `severity` are those
+  of the most severe version (by severity, the unit-free measure below —
+  not by raw score, which is on a different scale per version).
 - **Isolation-forest decision conventions.** `score` is `decision_function`:
   `-iforest_score − offset`, `offset = −0.5` for `contamination = "auto"`
   (else the 100·c percentile of training scores). A version flags a point
@@ -140,10 +153,25 @@ per version the current margin, how many of the window it flags, the margin
 for each standard rate (`margin_for_rate`), and a (rate, margin) `curve` a
 dashboard can read a live estimate off. Read-only; ~1 ms per stored row.
 
+A flagged row that was nothing — the sensor was being cleaned — can be
+told so: `POST /models/dynamic/<m>/labels {"index": 411, "label":
+"false_positive", "note": "cleaning"}` (`confirmed` for the real thing,
+`none` to withdraw). The label rides on the row through the scan, and
+calibration and fine-tune leave labelled false positives out of the rows a
+margin is fitted on (`window.excluded` says how many), so the margin stops
+paying for known noise. Labels are keyed by the point's lifetime sequence
+number, so they survive ring eviction and never land on a row that took a
+shifted slot; they change no verdict, so nothing is rescored.
+
 Fine-tune is calibration plus a write: pick the share of the window you are
 willing to alert on and every enabled version gets the margin that flags
-exactly that share — rounded to the fewest significant digits that keep the
-count, so a margin reads `0.13`, not `0.12994712`:
+that share — rounded to the fewest significant digits that keep the count,
+so a margin reads `0.13`, not `0.12994712`. When the scores tie at the cut
+(a stuck sensor scores whole days identically) no margin flags exactly that
+share; the nearer edge of the run is taken and the response says so
+(`exact: false`, a `note` with the rate reached), the same way the
+calibration's `margin_for_rate` reports `requested_rate` next to
+`achieved_rate`:
 
 ```
 $ anomaly finetune boiler --rate 0.01 --dry-run        # preview, nothing written
@@ -733,13 +761,15 @@ says why and what would be allowed instead.
 | `list_models` | every member | every model: columns, points seen, last training, each version's margin |
 | `describe_model` | every member | how a model is built, and which fields `edit_model` may change |
 | `anomalies` | every member | the newest flagged points of a window with the features blamed; says how many the window held |
-| `anomaly_summary` | every member | a window in one screen: counts, rate, per-version counts, worst point, timeline, most-blamed features |
+| `anomaly_summary` | every member | a window in one screen: counts, rate, per-version counts, worst point, events, timeline, most-blamed features |
 | `points`, `point` | every member | the raw stored rows of a window; one row in full by ring index |
 | `calibration` | every member | how each margin sits against a window — the numbers to read before `finetune` |
 | `score_point` | every member | the verdict for a hypothetical point, without storing it |
 | `analyze_data` | every member | a one-off analysis of a file (CSV text or rows), no model kept; large files become a task |
 | `list_tasks`, `task`, `list_files` | every member | the organization's background jobs and its folder |
 | `fork_model` | every member | a new model trained on a slice of another's history — a window, some columns; `llm_…` is scratch |
+| `labels` | every member | what readers have said about a model's rows |
+| `label_anomaly` | member on `llm_…`, admin on any | say a flagged row was a `false_positive` (calibration and `finetune` leave it out from then on), `confirmed`, or `none` to withdraw |
 | `retrain`, `train_autoencoder`, `finetune`, `edit_model`, `reset_model`, `delete_model` | member on `llm_…`, admin on any | the model's lifecycle; destructive ones need `confirm: true` |
 | `ingest_point`, `import_data` | ingest key, admin | send a point / load a file of history — this teaches the model |
 | `claim_model`, `org_users`, `set_role`, `org_keys` | admin | ownership, the roster, roles, the key listing |
@@ -749,10 +779,30 @@ MCP: a new key's secret exists once, in the response that creates it, and a
 conversation with a language model is not where it should land. Use the
 dashboard.
 
-The server's `instructions` tell the agent the two things it most often gets
+Every tool answers in a reader's shape rather than the route's: stamps are
+ISO-8601 (or the point's ordinal on a count clock), readings are rounded to
+four significant digits, margins are never rounded (a rounded margin is a
+different threshold), and a row is `{ index, time, values: {…} }` so a column
+named `time` cannot shadow the stamp. A window is `from` / `to` and a span
+`last` — seconds or `90s` / `15m` / `24h` / `7d` / `2w`, and `"all"` for every
+stored point; `finetune` also takes `"own"` for each version's own training
+period. `anomalies` and `anomaly_summary` take `min_votes`: with `2` on a
+three-version model, a row one version alone flagged is not counted.
+Consecutive anomalous rows are one **event**: every row in `anomalies`
+carries its `event` number, both tools count `events_in_window`, and
+`anomaly_summary` lists the newest ten events with their span, worst row and
+versions, and counts event starts per timeline bucket — so a hundred flagged
+rows read as the three bursts they were. The REST route calls them runs
+(`runs`, `run`, `group=runs`). A row the person calls nothing is labelled
+with `label_anomaly {model, index, label: "false_positive"}`: it shows on the
+row in `anomalies`, the summary counts it under `labelled`, and `calibration`
+and `finetune` report it under `window.excluded`.
+
+The server's `instructions` tell the agent the things it most often gets
 wrong: that `last: "24h"` counts back from the model's newest point, not from
-the clock, and that scores run downward — the lowest score is the worst
-point. A typical session is `list_models` → `anomaly_summary {model,
+the clock, and that scores run downward and are ranked by `severity`
+(−score / margin, 1.0 being the alert line) — the lowest score of one
+version is not comparable with another's. A typical session is `list_models` → `anomaly_summary {model,
 last:"7d"}` → `anomalies {model, last:"24h"}` → `point {model, index}`;
 a hypothesis is tested with `fork_model {source, name:"llm_…", fields:[…]}`
 → `calibration` → `finetune` → `delete_model {confirm:true}`.
@@ -816,6 +866,7 @@ command with `--store DIR`.
 | `DELETE\|GET /delete_model/<m>` | delete entirely |
 | `PUT /api/dynamic/<m>/schedule` | `{"below_max_retrain_frequency": .., "at_max_retrain_frequency": ..}` |
 | `GET /models/dynamic/<m>/calibration?last=&from=&to=&curve=` | alert rates vs margins over a window of the ring (read-only) |
+| `POST\|GET /models/dynamic/<m>/labels` | `{"index": N, "label": "false_positive" \| "confirmed" \| "none", "note": ".."}` — a reader's word on a stored row; the list in force |
 | `POST /api/dynamic/<m>/finetune` | set margins from a target alert rate — `{"rate": 0.01, "last": 86400 \| "all" \| "own", "dry_run": false, "versions": [..]}` |
 | `POST /train/autoencoder/<m>` | train the autoencoder version — optional `{"hidden": [..], "contamination": x}` |
 

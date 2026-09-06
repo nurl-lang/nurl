@@ -170,6 +170,9 @@ $ `src/dynamic.nu`
     : b m3 ( model_set_margin mo `weekly` 0.5 )
     : b m4 ( model_set_margin mo `seasonal` 0.5 )
     : b m5 ( model_set_margin mo `timevector` 0.5 )
+    // The range guard counts in sigmas, and 23.0 on a ±0.5 stream is six
+    // of them: "loose" for it is a hundred.
+    : b m6 ( model_set_margin mo ANOM_GUARD_NAME 100.0 )
 
     // 19 normal points (temp ≈ 20 ± .5) and one mild outlier (23.0).
     : ~ i k 1
@@ -195,8 +198,9 @@ $ `src/dynamic.nu`
     : b t3 ( model_set_margin mo `weekly` 0.01 )
     : b t4 ( model_set_margin mo `seasonal` 0.01 )
     : b t5 ( model_set_margin mo `timevector` 0.01 )
+    : b t6 ( model_set_margin mo ANOM_GUARD_NAME 0.01 )
     : ProbeOut all5 ( probe_temp mo 23.0 )
-    ( check == . all5 hits 5 `agg: all tight margins -> 5 versions flag` )
+    ( check == . all5 hits 6 `agg: all tight margins -> 6 versions flag` )
     ( check <= . all5 score . all5 df_short `agg: aggregate score is the most severe` )
 
     // Fine-tune from loose margins: a 5 % target on a 20-point ring is
@@ -206,11 +210,12 @@ $ `src/dynamic.nu`
     : b r3 ( model_set_margin mo `weekly` 0.5 )
     : b r4 ( model_set_margin mo `seasonal` 0.5 )
     : b r5 ( model_set_margin mo `timevector` 0.5 )
+    : b r6 ( model_set_margin mo ANOM_GUARD_NAME 100.0 )
     : ( Vec String ) none ( vec_new [String] )
 
     // Dry run first: the report is complete, nothing is written.
     : FineTuneReport dry ( model_finetune_at mo 0.05 0 0 F none )
-    ( check == ( vec_len [FtVer] . dry items ) 5 `finetune dry: 5 versions reported` )
+    ( check == ( vec_len [FtVer] . dry items ) 6 `finetune dry: 6 versions reported` )
     ( check == . dry applied F `finetune dry: report says not applied` )
     : ~ b dry_untouched T
     : ~ i q 0
@@ -218,18 +223,19 @@ $ `src/dynamic.nu`
         ?? ( vec_get [FtVer] . dry items q ) {
             T ft → {
                 ? . ft applied { = dry_untouched F } {}
-                ? == ( meta_version_margin ( model_metadata mo ) ( string_data . ft ftname ) -1.0 ) 0.5 {} { = dry_untouched F }
+                ? == ( meta_version_margin ( model_metadata mo ) ( string_data . ft ftname ) -1.0 ) . ft old_margin {} { = dry_untouched F }
+                ? | == . ft old_margin 0.5 == . ft old_margin 100.0 {} { = dry_untouched F }
             }
             F _ → {}
         }
         = q + q 1
     }
-    ( check dry_untouched `finetune dry: margins still 0.5` )
+    ( check dry_untouched `finetune dry: margins untouched` )
     ( finetune_free dry )
 
     : FineTuneReport rep ( model_finetune_at mo 0.05 0 0 T none )
     ( vec_free [String] none )
-    ( check == ( vec_len [FtVer] . rep items ) 5 `finetune: 5 versions tuned` )
+    ( check == ( vec_len [FtVer] . rep items ) 6 `finetune: 6 versions tuned` )
     ( check == . rep n_rows 20 `finetune: whole ring in the window` )
     : ~ b margins_tightened T
     : ~ b one_each T
@@ -278,6 +284,56 @@ $ `src/dynamic.nu`
     : ProbeOut post0 ( probe_temp mo 23.0 )
     ( check == . post0 anomaly F `finetune: rate 0 clears the worst point` )
     ( finetune_free zero )
+
+    // Labels: the worst stored row called a false positive drops out of
+    // calibration, so rate 0 — "flag nothing you have seen" — no longer
+    // makes room for it: the margin lands on the worst of the rest and
+    // 23.0 crosses again.
+    : ScanOut lsc ( model_scan_at mo 0 0 0 F )
+    : ~ i worst_idx -1
+    : ~ f worst_sev -1.0
+    : ~ i lk 0
+    ~ < lk ( vec_len [ScoredPt] . lsc pts ) {
+        ?? ( vec_get [ScoredPt] . lsc pts lk ) {
+            T r → { ? > . r sp_severity worst_sev { = worst_sev . r sp_severity = worst_idx . r sp_idx } {} }
+            F _ → {}
+        }
+        = lk + lk 1
+    }
+    ( scan_free lsc )
+    ( check >= worst_idx 0 `labels: the scan names a worst row` )
+    ( check == ( model_label_point mo worst_idx `nonsense` `t` `` 1 ) -2 `labels: an unknown label is refused` )
+    ( check == ( model_label_point mo 999 ANOM_LABEL_FP `t` `` 1 ) -1 `labels: an index outside the ring is refused` )
+    : i lseq ( model_label_point mo worst_idx ANOM_LABEL_FP `tester` `sensor was being cleaned` 1700000000 )
+    ( check == lseq + ( model_seq_base mo ) worst_idx `labels: the label is keyed by lifetime sequence` )
+    : ( Vec Label ) ls ( model_labels mo )
+    ( check == ( vec_len [Label] ls ) 1 `labels: one label in force` )
+    : ( Vec i ) lmap ( model_label_map mo ls )
+    ( check == ( _mlp_iget lmap worst_idx ) 0 `labels: the map points the row at its label` )
+    ( check ( _an_label_is ls ( _mlp_iget lmap worst_idx ) ANOM_LABEL_FP ) `labels: and it reads false_positive` )
+    ( vec_free [i] lmap )
+    ( labels_free ls )
+    : CalReport lcal ( model_calibrate mo 0 0 )
+    ( check == . lcal excluded 1 `labels: calibration leaves the false positive out` )
+    ( check == . lcal n_rows 19 `labels: and scores the other nineteen` )
+    ( cal_free lcal )
+    : ( Vec String ) none3 ( vec_new [String] )
+    : FineTuneReport zero2 ( model_finetune_at mo 0.0 0 0 T none3 )
+    ( check == . zero2 excluded 1 `labels: the fine-tune report counts the exclusion` )
+    ( finetune_free zero2 )
+    ( vec_free [String] none3 )
+    : ProbeOut post1 ( probe_temp mo 23.0 )
+    ( check . post1 anomaly `labels: a false positive no longer pays for the margin` )
+    : i lseq2 ( model_label_point mo worst_idx ANOM_LABEL_NONE `tester` `` 1700000001 )
+    ( check == lseq2 lseq `labels: none is written under the same sequence` )
+    : ( Vec Label ) ls2 ( model_labels mo )
+    ( check == ( vec_len [Label] ls2 ) 0 `labels: none withdraws the label` )
+    ( labels_free ls2 )
+    : i lseq3 ( model_label_point mo worst_idx ANOM_LABEL_OK `tester` `` 1700000002 )
+    ( model_reset mo )
+    : ( Vec Label ) ls3 ( model_labels mo )
+    ( check == ( vec_len [Label] ls3 ) 0 `labels: a reset drops the labels with the ring` )
+    ( labels_free ls3 )
 
     ( finetune_free rep )
     ( model_free mo )

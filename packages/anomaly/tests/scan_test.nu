@@ -14,6 +14,8 @@
 //   evict    — cached verdicts stay aligned to their points across ring
 //              eviction, because rows are keyed on the lifetime counter.
 //   ft       — model_finetune now reaches the autoencoder as well.
+//   ties     — cal_margin_for_rate lands on the nearer edge of a run of
+//              tied decision values instead of swallowing the run.
 // Store root: $ANOMALY_TEST_DIR (default ./anomaly_scan_test).
 
 $ `stdlib/core/io.nu`
@@ -94,6 +96,75 @@ $ `src/dynamic.nu`
     }
 }
 
+// The range guard's slice of a verdict: present, hit, score (-max|z|),
+// and the feature it judged by.
+: GuardSlice {
+    b present
+    b hit
+    f score
+    f margin
+    i feat
+}
+
+@ guard_probe * Model mo Json j → GuardSlice {
+    : !Verdict String r ( model_detect_only mo j )
+    ?? r {
+        T vd → {
+            : ~ GuardSlice out @ GuardSlice { F F 0.0 0.0 -1 }
+            : i nv ( vec_len [VerVerdict] . vd versions )
+            : ~ i k 0
+            ~ < k nv {
+                ?? ( vec_get [VerVerdict] . vd versions k ) {
+                    T vv → {
+                        ? ( _an_is_guard_name ( string_data . vv vvname ) ) {
+                            = out @ GuardSlice { T . vv anomaly . vv score . vv margin . vv vv_feat }
+                        } {}
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( verdict_free vd )
+            ^ out
+        }
+        F e → { ( string_free e ) ^ @ GuardSlice { F F 0.0 0.0 -1 } }
+    }
+}
+
+// Does the aggregate follow the most SEVERE version — the one farthest
+// past its own alert line in its own margins — rather than the lowest
+// raw decision value? The two differ whenever the autoencoder (scores
+// ~1e-4) is the alarmed one and a forest (~1e-1) is merely normal.
+@ agg_follows_severity * Model mo Json j b must_differ → b {
+    : !Verdict String r ( model_detect_only mo j )
+    ?? r {
+        T vd → {
+            : ~ f top -1000000.0
+            : ~ f top_score 0.0
+            : ~ f low 1000000.0
+            : i nv ( vec_len [VerVerdict] . vd versions )
+            : ~ i k 0
+            ~ < k nv {
+                ?? ( vec_get [VerVerdict] . vd versions k ) {
+                    T vv → {
+                        : f sev ( anom_severity . vv score . vv margin )
+                        ? > sev top { = top sev = top_score . vv score } {}
+                        ? < . vv score low { = low . vv score } {}
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            : b ok & < ( float_abs - . vd severity top ) 0.000000001 < ( float_abs - . vd score top_score ) 0.000000001
+            // `must_differ`: the caller arranged the two rules to disagree.
+            : b differs > ( float_abs - top_score low ) 0.000000001
+            ( verdict_free vd )
+            ^ & ok | differs ! must_differ
+        }
+        F e → { ( string_free e ) ^ F }
+    }
+}
+
 // The aggregate verdict of one stored ring row, the slow way.
 @ detect_row * Model mo i at → b {
     : ~ b anom F
@@ -138,7 +209,50 @@ $ `src/dynamic.nu`
     ^ n
 }
 
+// A calibration entry over hand-picked decision values: `head` distinct
+// values below `tie`, then `run` copies of `tie`, then `tail` distinct
+// values above it (ascending, as the report keeps them), a thousandth
+// apart; `tie` sits low enough that the whole list stays negative.
+@ cal_of_run i head f tie i run i tail → CalVer {
+    : ( Vec f ) dfs ( vec_new [f] )
+    : ~ i k 0
+    ~ < k head { ( vec_push [f] dfs - tie * # f - head k 0.001 ) = k + k 1 }
+    = k 0
+    ~ < k run { ( vec_push [f] dfs tie ) = k + k 1 }
+    = k 0
+    ~ < k tail { ( vec_push [f] dfs + tie * # f + k 1 0.001 ) = k + k 1 }
+    : String nm ( string_from `forest` )
+    ^ @ CalVer { nm 0.1 ( vec_len [f] dfs ) 0 ( _mlp_fget dfs 0 ) tie dfs }
+}
+
+@ test_ties → v {
+    // 9 rows before a run of 221 equal values, 770 after: 1000 rows. A
+    // request for 1 % (10 rows) cuts inside the run; the honest answer
+    // is the 9 rows before it, not the 230 the run would bring.
+    : CalVer cv ( cal_of_run 9 -5.0 221 770 )
+    : f m1 ( cal_margin_for_rate cv 0.01 )
+    ( check == ( cal_flagged_at cv m1 ) 9 `ties: 1 % over a 221-run lands on the 9 rows before it` )
+    // 20 % (200 rows) is nearer the run's far edge (230) than its near
+    // one (9): the run is taken whole.
+    : f m20 ( cal_margin_for_rate cv 0.2 )
+    ( check == ( cal_flagged_at cv m20 ) 230 `ties: 20 % takes the run whole` )
+    // 50 % falls in the distinct tail: exact.
+    : f m50 ( cal_margin_for_rate cv 0.5 )
+    : i at50 ( cal_flagged_at cv m50 )
+    ( check & >= at50 450 <= at50 550 `ties: 50 % in distinct values is met (±10 %)` )
+    // A run at the very worst end: 1 % of 1000 = 10 inside a run of 50
+    // starting at row 0 — the near edge is "none", the far edge 50;
+    // 10 is nearer none.
+    : CalVer cw ( cal_of_run 0 -2.0 50 950 )
+    ( check == ( cal_flagged_at cw ( cal_margin_for_rate cw 0.01 ) ) 0 `ties: a run at the worst end is left out when the request is nearer none` )
+    ( check == ( cal_flagged_at cw ( cal_margin_for_rate cw 0.04 ) ) 50 `ties: … and taken when the request is nearer its far edge` )
+    ( check >= ( cal_margin_for_rate cw 0.04 ) 0.0 `ties: margins stay non-negative` )
+    ( string_free . cv cvname ) ( vec_free [f] . cv dfs )
+    ( string_free . cw cvname ) ( vec_free [f] . cw dfs )
+}
+
 @ main → i {
+    ( test_ties )
     : String root ( env_var_or `ANOMALY_TEST_DIR` `./anomaly_scan_test` )
     : Store st ( store_open ( string_data root ) )
 
@@ -199,6 +313,43 @@ $ `src/dynamic.nu`
     : Json good ( mkpoint 1.5 3.0 20.5 )
     : AeSlice s3 ( ae_probe mo good )
     ( check ! . s3 hit `an on-manifold point is not an anomaly` )
+
+    // ── the range guard ───────────────────────────────────────────────
+    //
+    // temp trains on 20..21 (std ~0.29); 30 is thirty sigma out on that
+    // one column while pres and flow sit on the manifold. A forest may or
+    // may not notice; the guard must, and it must say which feature.
+    : Json spike ( mkpoint 1.5 3.0 30.0 )
+    : GuardSlice g0 ( guard_probe mo spike )
+    ( check . g0 present `the range guard has a verdict` )
+    ( check . g0 hit `a single feature thirty sigma out trips the guard` )
+    ( check == . g0 margin ANOM_GUARD_SIGMA `the guard's default margin is the sigma count` )
+    ( check < . g0 score - 0.0 20.0 `its score is -max|z|` )
+    : *Meta gmm ( model_metadata mo )
+    : ~ b named_temp F
+    ? >= . g0 feat 0 {
+        ?? ( vec_get [String] . gmm feats . g0 feat ) {
+            T fname → { = named_temp == ( nurl_str_eq ( string_data fname ) `temp` ) 1 }
+            F _ → {}
+        }
+    } {}
+    ( check named_temp `and it names temp` )
+    : GuardSlice g1 ( guard_probe mo good )
+    ( check . g1 present `the guard judges the on-manifold point too` )
+    ( check ! . g1 hit `and does not trip on it` )
+    ( check > . g1 score - 0.0 ANOM_GUARD_SIGMA `its z stays under the line` )
+    // The margin is a sigma count and tunes like any other.
+    : b _g2 ( model_set_margin mo ANOM_GUARD_NAME 1.0 )
+    : GuardSlice g2 ( guard_probe mo good )
+    ( check == . g2 margin 1.0 `the guard's margin is the metadata's` )
+    : b _g3 ( model_set_margin mo ANOM_GUARD_NAME ANOM_GUARD_SIGMA )
+    : b _g4 ( model_set_version_enabled mo ANOM_GUARD_NAME F )
+    : GuardSlice g4 ( guard_probe mo spike )
+    ( check ! . g4 present `a disabled guard has no verdict` )
+    : b _g5 ( model_set_version_enabled mo ANOM_GUARD_NAME T )
+    : GuardSlice g5 ( guard_probe mo spike )
+    ( check . g5 hit `re-enabling it costs nothing: no forest to retrain` )
+    ( json_free spike )
 
     // ── per-feature attribution ───────────────────────────────────────
     //
@@ -318,6 +469,66 @@ $ `src/dynamic.nu`
 
     : ScanOut sc9 ( model_scan_at mo 0 0 0 F )
     ( scan_free sc9 )
+
+    // ── runs ──────────────────────────────────────────────────────────
+    // A run is a maximal sequence of consecutive agreed rows: every
+    // position in a run is agreed and points back at it, every agreed
+    // position is in a run, and no two runs touch.
+    : ScanOut scr ( model_scan_at mo 0 0 0 F )
+    : i nscr ( vec_len [ScoredPt] . scr pts )
+    : ScanRuns sr ( scan_runs scr 1 )
+    ( check == ( vec_len [i] . sr run_of ) nscr `runs: one run number per position` )
+    : ~ i agreed 0
+    : ~ i in_runs 0
+    : ~ b back_ok T
+    = k 0
+    ~ < k nscr {
+        : i rid ( _mlp_iget . sr run_of k )
+        : ~ b ag F
+        ?? ( vec_get [ScoredPt] . scr pts k ) { T r → { = ag ( scan_agreed r 1 ) } F _ → {} }
+        ? ag { = agreed + agreed 1 } {}
+        ? > rid 0 {
+            = in_runs + in_runs 1
+            ? ag {} { = back_ok F }
+            ?? ( vec_get [ScanRun] . sr runs - rid 1 ) {
+                T ru → { ? & <= . ru first_k k >= . ru last_k k {} { = back_ok F } }
+                F _ → { = back_ok F }
+            }
+        } { ? ag { = back_ok F } {} }
+        = k + k 1
+    }
+    ( check > agreed 0 `runs: the stream has anomalies to group` )
+    ( check == in_runs agreed `runs: every agreed row is in a run, and nothing else is` )
+    ( check back_ok `runs: a row's run spans it` )
+    : i nruns ( vec_len [ScanRun] . sr runs )
+    ( check > nruns 0 `runs: at least one run` )
+    ( check <= nruns agreed `runs: no more runs than rows` )
+    : ~ b contiguous T
+    : ~ i prev_last -2
+    : ~ i rows_sum 0
+    = k 0
+    ~ < k nruns {
+        ?? ( vec_get [ScanRun] . sr runs k ) {
+            T ru → {
+                ? != . ru run + k 1 { = contiguous F } {}
+                ? != . ru rows + - . ru last_k . ru first_k 1 { = contiguous F } {}
+                ? <= . ru first_k + prev_last 1 { = contiguous F } {}
+                ? | < . ru worst_k . ru first_k > . ru worst_k . ru last_k { = contiguous F } {}
+                ? == . ru flagged 0 { = contiguous F } {}
+                = prev_last . ru last_k
+                = rows_sum + rows_sum . ru rows
+            }
+            F _ → { = contiguous F }
+        }
+        = k + k 1
+    }
+    ( check contiguous `runs: numbered in order, maximal, never touching, worst inside` )
+    ( check == rows_sum agreed `runs: the rows add up` )
+    ( scan_runs_free sr )
+    : ScanRuns sr99 ( scan_runs scr 99 )
+    ( check == ( vec_len [ScanRun] . sr99 runs ) 0 `runs: 99 votes agree nowhere` )
+    ( scan_runs_free sr99 )
+    ( scan_free scr )
     : i _u2 ( model_force_train_at mo + T0 * 400 60 )
     : ScanOut sc10 ( model_scan_at mo 0 0 0 F )
     ( check == . sc10 misses 400 `a retrain invalidates the cache` )
@@ -398,6 +609,21 @@ $ `src/dynamic.nu`
     : i ae_after ( ae_flag_count mo )
     ( check == ae_after 4 `the scan flags exactly those four` )
     ( check < ae_after ae_before `fine-tune narrows the autoencoder's alarm` )
+
+    // The aggregate follows the most SEVERE version. On the off-manifold
+    // point the autoencoder has both the lowest raw score and the highest
+    // severity, so the two rules agree; a hair-thin margin on short_term
+    // makes that forest the most severe while its raw score stays well
+    // above the autoencoder's — now only the severity rule picks it.
+    : Json off ( mkpoint 1.5 5.0 20.5 )
+    : AeSlice offs ( ae_probe mo off )
+    ( check . offs hit `off-manifold: the autoencoder flags it` )
+    ( check ( agg_follows_severity mo off F ) `aggregate score and severity are the most severe version's` )
+    : f st_margin ( meta_version_margin ( model_metadata mo ) `short_term` -1.0 )
+    : b _ms ( model_set_margin mo `short_term` 0.0001 )
+    ( check ( agg_follows_severity mo off T ) `a forest of higher severity but higher raw score is the aggregate` )
+    : b _mr ( model_set_margin mo `short_term` st_margin )
+    ( json_free off )
 
     // Calibration reads the same numbers back without writing anything.
     : CalReport cal ( model_calibrate mo 0 0 )

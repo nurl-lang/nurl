@@ -473,9 +473,9 @@ $ `deps/iforest/src/iforest.nu`
 // row 0, so a ring row `j` of a ring of length L at counter S sits at cache
 // index `S - L + j - base_seen`. Rows outside [0, nrows) are simply misses.
 //
-//   "ANOMSCR1" | u64 epoch | u64 base_seen
+//   "ANOMSCR2" | u64 epoch | u64 base_seen
 //              | u64 nver  | nver × (u64 len, bytes)
-//              | u64 nrows | nrows × (f64 score, u64 state, u64 present, u64 flagged)
+//              | u64 nrows | nrows × (f64 score, f64 severity, u64 state, u64 present, u64 flagged)
 //
 // `state` is 0 for a row never scored under this epoch, 1 for a scored
 // verdict and 2 for "the model was not ready for this point". `present` and
@@ -496,6 +496,7 @@ $ `deps/iforest/src/iforest.nu`
     ( Vec String ) vnames
     ( Vec i ) state
     ( Vec f ) score
+    ( Vec f ) severity
     ( Vec i ) present
     ( Vec i ) flagged
 }
@@ -503,7 +504,7 @@ $ `deps/iforest/src/iforest.nu`
 @ scorecache_new i epoch i base_seen → ScoreCache {
     ^ @ ScoreCache {
         epoch base_seen ( vec_new [String] )
-        ( vec_new [i] ) ( vec_new [f] ) ( vec_new [i] ) ( vec_new [i] )
+        ( vec_new [i] ) ( vec_new [f] ) ( vec_new [f] ) ( vec_new [i] ) ( vec_new [i] )
     }
 }
 
@@ -511,6 +512,7 @@ $ `deps/iforest/src/iforest.nu`
     ( vec_free_with [String] . c vnames \ String x → v { ( string_free x ) } )
     ( vec_free [i] . c state )
     ( vec_free [f] . c score )
+    ( vec_free [f] . c severity )
     ( vec_free [i] . c present )
     ( vec_free [i] . c flagged )
 }
@@ -524,14 +526,16 @@ $ `deps/iforest/src/iforest.nu`
     ~ < ( vec_len [i] . c state ) n {
         ( vec_push [i] . c state ANOM_SC_UNSCORED )
         ( vec_push [f] . c score 0.0 )
+        ( vec_push [f] . c severity 0.0 )
         ( vec_push [i] . c present 0 )
         ( vec_push [i] . c flagged 0 )
     }
 }
 
-@ scorecache_set ScoreCache c i at i state f score i present i flagged → v {
+@ scorecache_set ScoreCache c i at i state f score f severity i present i flagged → v {
     : b _a ( vec_set [i] . c state at state )
     : b _b ( vec_set [f] . c score at score )
+    : b _s ( vec_set [f] . c severity at severity )
     : b _c ( vec_set [i] . c present at present )
     : b _d ( vec_set [i] . c flagged at flagged )
 }
@@ -571,7 +575,7 @@ $ `deps/iforest/src/iforest.nu`
     ? ok {} { ^ F }
 
     : ( Vec u ) out ( vec_new [u] )
-    ( bytes_extend_str out `ANOMSCR1` )
+    ( bytes_extend_str out `ANOMSCR2` )
     ( bytes_push_u64_le out # u64 . c epoch )
     ( bytes_push_u64_le out # u64 . c base_seen )
     : i nv ( vec_len [String] . c vnames )
@@ -591,11 +595,13 @@ $ `deps/iforest/src/iforest.nu`
     ( bytes_push_u64_le out # u64 nr )
     : *i stp ( vec_data [i] . c state )
     : *f scp ( vec_data [f] . c score )
+    : *f svp ( vec_data [f] . c severity )
     : *i prp ( vec_data [i] . c present )
     : *i flp ( vec_data [i] . c flagged )
     = k 0
     ~ < k nr {
         ( bytes_push_f64_le out . scp k )
+        ( bytes_push_f64_le out . svp k )
         ( bytes_push_u64_le out # u64 . stp k )
         ( bytes_push_u64_le out # u64 . prp k )
         ( bytes_push_u64_le out # u64 . flp k )
@@ -616,7 +622,10 @@ $ `deps/iforest/src/iforest.nu`
     ( string_free p )
     ?? r {
         T buf → {
-            : ( Vec u ) magic ( bytes_from_str `ANOMSCR1` )
+            // ANOMSCR1 aggregated by minimum decision value; 2 by the
+            // most severe version. An old cache is a miss, never a
+            // wrong number.
+            : ( Vec u ) magic ( bytes_from_str `ANOMSCR2` )
             : b magic_ok ( bytes_starts_with buf magic )
             ( vec_free [u] magic )
             ? magic_ok {} {
@@ -650,11 +659,13 @@ $ `deps/iforest/src/iforest.nu`
             ? . rd ok {} { = safe 0 }
             ( vec_reserve [i] . c state safe )
             ( vec_reserve [f] . c score safe )
+            ( vec_reserve [f] . c severity safe )
             ( vec_reserve [i] . c present safe )
             ( vec_reserve [i] . c flagged safe )
             = k 0
             ~ & . rd ok < k safe {
                 ( vec_push [f] . c score ( __an_rd_f64 rd ) )
+                ( vec_push [f] . c severity ( __an_rd_f64 rd ) )
                 ( vec_push [i] . c state ( __an_rd_u64 rd ) )
                 ( vec_push [i] . c present ( __an_rd_u64 rd ) )
                 ( vec_push [i] . c flagged ( __an_rd_u64 rd ) )
@@ -751,4 +762,160 @@ $ `deps/iforest/src/iforest.nu`
         F _ → {}
     }
     ^ out
+}
+
+// ── Labels (labels.jsonl) ─────────────────────────────────────────────
+//
+// What a reader said about a stored point: that a flagged row was a
+// false positive, or that it was the real thing. Keyed by the point's
+// LIFETIME sequence number (Meta.n_seen space, see the score cache
+// above), not its ring index, so a label survives eviction and never
+// lands on the row that took a shifted slot. One JSON record per line,
+// appended, last write wins on replay — the label `none` withdraws an
+// earlier one. Labels change no verdict, so they never bump the epoch;
+// their first reader is calibration, which leaves the false positives
+// out of the set a margin is fitted on.
+
+: s ANOM_LABEL_FP `false_positive`
+: s ANOM_LABEL_OK `confirmed`
+: s ANOM_LABEL_NONE `none`
+
+: Label {
+    i seq  // lifetime sequence number of the point
+    i ts  // the point's own timestamp
+    String label  // ANOM_LABEL_*
+    String by  // who said so (a principal's name, an API key's id, or empty)
+    i at  // when (unix seconds)
+    String note
+}
+
+@ label_free Label l → v {
+    ( string_free . l label )
+    ( string_free . l by )
+    ( string_free . l note )
+}
+
+@ labels_free ( Vec Label ) ls → v {
+    ( vec_free_with [Label] ls \ Label l → v { ( label_free l ) } )
+}
+
+// Is `s` a label a reader may give?
+@ label_known s name → b {
+    ? == ( nurl_str_eq name ANOM_LABEL_FP ) 1 { ^ T } {}
+    ? == ( nurl_str_eq name ANOM_LABEL_OK ) 1 { ^ T } {}
+    ? == ( nurl_str_eq name ANOM_LABEL_NONE ) 1 { ^ T } {}
+    ^ F
+}
+
+@ label_to_json Label l → Json {
+    : Json o ( json_obj_new )
+    ( json_obj_set o `seq` ( json_int . l seq ) )
+    ( json_obj_set o `timestamp` ( json_int . l ts ) )
+    ( json_obj_set o `label` ( json_str_lit ( string_data . l label ) ) )
+    ( json_obj_set o `by` ( json_str_lit ( string_data . l by ) ) )
+    ( json_obj_set o `at` ( json_int . l at ) )
+    ( json_obj_set o `note` ( json_str_lit ( string_data . l note ) ) )
+    ^ o
+}
+
+@ __an_label_str Json o s key → String {
+    ?? ( json_obj_get o key ) {
+        T v → { ? ( json_is_str v ) { ^ ( string_from ( json_str_data v ) ) } { ^ ( string_new ) } }
+        F _ → { ^ ( string_new ) }
+    }
+}
+
+@ __an_label_int Json o s key → i {
+    ?? ( json_obj_get o key ) {
+        T v → { ? ( json_is_num v ) { ^ ( json_as_int v ) } { ^ -1 } }
+        F _ → { ^ -1 }
+    }
+}
+
+// Append one label. Returns F when the record could not be written.
+@ store_append_label Store st s name Label l → b {
+    : Json o ( label_to_json l )
+    : String txt ( json_stringify o )
+    ( json_free o )
+    ( string_push_char txt 10 )
+    : String p ( __an_model_file st name `labels.jsonl` )
+    : !v IoErr r ( append_file ( string_data p ) ( string_data txt ) )
+    : ~ b ok T
+    ?? r { T _ → {} F _ → { = ok F } }
+    ( string_free p )
+    ( string_free txt )
+    ^ ok
+}
+
+// The labels in force: one per sequence number, the last written; a
+// `none` removes the entry. Ascending by seq is not promised — a reader
+// wanting the ring order joins on seq (model_label_map). Empty when the
+// file does not exist; a line that does not parse is skipped.
+@ store_load_labels Store st s name → ( Vec Label ) {
+    : ( Vec Label ) out ( vec_new [Label] )
+    : String p ( __an_model_file st name `labels.jsonl` )
+    : !String IoErr r ( read_file ( string_data p ) )
+    ( string_free p )
+    ?? r {
+        T txt → {
+            : ( Vec String ) lines ( string_split txt `\n` )
+            : i n ( vec_len [String] lines )
+            : ~ i k 0
+            ~ < k n {
+                ?? ( vec_get [String] lines k ) {
+                    T l → {
+                        ? > ( string_len l ) 0 {
+                            : !Json JsonError jr ( json_parse ( string_data l ) )
+                            ?? jr {
+                                T j → {
+                                    ? ( json_is_obj j ) {
+                                        : i seq ( __an_label_int j `seq` )
+                                        : String lab ( __an_label_str j `label` )
+                                        ? & >= seq 0 ( label_known ( string_data lab ) ) {
+                                            // Drop what an earlier line said about this seq.
+                                            : ~ i q 0
+                                            ~ < q ( vec_len [Label] out ) {
+                                                : ~ b same F
+                                                ?? ( vec_get [Label] out q ) { T e → { = same == . e seq seq } F _ → {} }
+                                                ? same {
+                                                    ?? ( vec_remove [Label] out q ) { T e → { ( label_free e ) } F _ → {} }
+                                                } { = q + q 1 }
+                                            }
+                                            ? == ( nurl_str_eq ( string_data lab ) ANOM_LABEL_NONE ) 1 {
+                                                ( string_free lab )
+                                            } {
+                                                ( vec_push [Label] out @ Label {
+                                                    seq
+                                                    ( __an_label_int j `timestamp` )
+                                                    lab
+                                                    ( __an_label_str j `by` )
+                                                    ( __an_label_int j `at` )
+                                                    ( __an_label_str j `note` )
+                                                } )
+                                            }
+                                        } { ( string_free lab ) }
+                                    } {}
+                                    ( json_free j )
+                                }
+                                F _ → {}
+                            }
+                        } {}
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( vec_free_with [String] lines \ String x → v { ( string_free x ) } )
+            ( string_free txt )
+        }
+        F _ → {}
+    }
+    ^ out
+}
+
+@ store_delete_labels Store st s name → v {
+    : String p ( __an_model_file st name `labels.jsonl` )
+    : !v IoErr r ( file_delete ( string_data p ) )
+    ?? r { T _ → {} F _ → {} }
+    ( string_free p )
 }

@@ -170,6 +170,7 @@ $ `src/mcp.nu`
         ( json_obj_set o `status` ( json_str_lit `success` ) )
         ( json_obj_set o `anomaly` ( json_bool . vd anomaly ) )
         ( json_obj_set o `score` ( json_float . vd score ) )
+        ( json_obj_set o `severity` ( json_float . vd severity ) )
         : Json vers ( json_obj_new )
         : i nv ( vec_len [VerVerdict] . vd versions )
         : ~ i k 0
@@ -179,7 +180,15 @@ $ `src/mcp.nu`
                     : Json vo ( json_obj_new )
                     ( json_obj_set vo `anomaly` ( json_bool . vv anomaly ) )
                     ( json_obj_set vo `score` ( json_float . vv score ) )
+                    ( json_obj_set vo `severity` ( json_float ( anom_severity . vv score . vv margin ) ) )
                     ( json_obj_set vo `margin` ( json_float . vv margin ) )
+                    ? >= . vv vv_feat 0 {
+                        : *Meta pmm ( model_metadata mo )
+                        ?? ( vec_get [String] . pmm feats . vv vv_feat ) {
+                            T fname → { ( json_obj_set vo `feature` ( json_str_lit ( string_data fname ) ) ) }
+                            F _ → {}
+                        }
+                    } {}
                     ( json_obj_set vers ( string_data . vv vvname ) vo )
                 }
                 F _ → {}
@@ -586,7 +595,7 @@ $ `src/mcp.nu`
                         : String ln ( string_from ( string_data . cv cvname ) )
                         ~ < ( string_len ln ) 13 { ( string_push_char ln 32 ) }
                         ( string_push_char ln 32 )
-                        ( string_push_str ln ( float_to_string ( round_sig . cv cur_margin 4 ) ) )
+                        ( string_push_str ln ( float_to_string . cv cur_margin ) )
                         ( string_push_str ln `  ` )
                         ( string_push_int ln . cv flagged )
                         ( string_push_str ln ` (` )

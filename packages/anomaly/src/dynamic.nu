@@ -51,14 +51,28 @@ $ `src/store.nu`
     f score
     f margin
     f cfg_margin
+    i vv_feat  // the feature this verdict is about (range_guard); -1 = none
 }
 
 // The aggregate verdict for one point (SPEC §5.4).
 : Verdict {
     b ready
     b anomaly
-    f score
+    f score  // the most severe version's decision value (own units)
+    f severity  // that version's severity: the aggregate, unit-free
     ( Vec VerVerdict ) versions
+}
+
+// The one unit-free number every version shares (SPEC §5.4): how far past
+// its own alert line a decision value sits, in margins — 1.0 exactly on
+// the line, 2.0 twice as far, negative comfortably normal. A margin of 0
+// gives 1.0 when flagged and 0.0 otherwise. The aggregate score is the
+// score of the version that is most severe by this measure; a plain
+// minimum over decision values would let a forest's ~1e-1 always outrank
+// an autoencoder's ~1e-4 and hide the joint model's alarm.
+@ anom_severity f df f margin → f {
+    ? > margin 0.0 { ^ / - 0.0 df margin } {}
+    ^ ? <= df 0.0 1.0 0.0
 }
 
 // A live dynamic model. Obtain with model_open, release with model_free.
@@ -133,6 +147,12 @@ $ `src/store.nu`
     ^ == ( nurl_str_eq vname `autoencoder` ) 1
 }
 
+// The versions that are not forests: the autoencoder and the range guard
+// have a VerCfg (margin, enabled) but no forest blob to load, train or drop.
+@ __an_forestless s vname → b {
+    ^ | ( __an_is_ae_name vname ) ( _an_is_guard_name vname )
+}
+
 @ model_open_at Store st s name i now → *Model {
     : *Model mo # *Model ( nurl_malloc Z Model )
     = . mo store ( store_open ( string_data . st root ) )
@@ -187,7 +207,7 @@ $ `src/store.nu`
     ~ < vi nv {
         ?? ( vec_get [VerCfg] . mm versions vi ) {
             T vc → {
-                ? & . vc enabled ! ( __an_is_ae_name ( string_data . vc vname ) ) {
+                ? & . vc enabled ! ( __an_forestless ( string_data . vc vname ) ) {
                     : ?VerModel got ( store_load_forest . mo store name ( string_data . vc vname ) )
                     ?? got {
                         T vm → { ( vec_push [VerModel] . mo forests vm ) }
@@ -362,7 +382,7 @@ $ `src/store.nu`
     : ( Vec VerVerdict ) vvs ( vec_new [VerVerdict] )
     : b warm >= ( vec_len [String] . mo lines ) . mo min_points
     ? & ( model_is_trained mo ) warm {} {
-        ^ @ Verdict { F F 0.0 vvs }
+        ^ @ Verdict { F F 0.0 0.0 vvs }
     }
 
     : *Meta mm . mo meta
@@ -371,7 +391,10 @@ $ `src/store.nu`
     ( scaler_apply . mo sc x )
 
     : ~ b any F
+    // `worst` is the aggregate score: the decision value of the version
+    // that is most severe in its own margins (anom_severity).
     : ~ f worst 0.0
+    : ~ f top_sev 0.0
     : ~ b first T
     : i nf ( vec_len [VerModel] . mo forests )
     : ~ i k 0
@@ -392,7 +415,8 @@ $ `src/store.nu`
                                 : f marginw ( meta_version_margin mm ( string_data . vm vname ) . vm margin )
                                 : b hitw <= dfw - 0.0 marginw
                                 ? hitw { = any T } {}
-                                ? || first < dfw worst { = worst dfw } {}
+                                : f sevw ( anom_severity dfw marginw )
+                                ? || first > sevw top_sev { = worst dfw = top_sev sevw } {}
                                 = first F
                                 ( vec_push [VerVerdict] vvs @ VerVerdict {
                                     ( string_from ( string_data . vm vname ) )
@@ -400,6 +424,7 @@ $ `src/store.nu`
                                     dfw
                                     marginw
                                     marginw
+                                    -1
                                 } )
                             } {}
                             ( vec_free [f] tail )
@@ -413,7 +438,8 @@ $ `src/store.nu`
                     : f margin ( meta_version_margin mm ( string_data . vm vname ) . vm margin )
                     : b hit <= df - 0.0 margin
                     ? hit { = any T } {}
-                    ? || first < df worst { = worst df } {}
+                    : f sev ( anom_severity df margin )
+                    ? || first > sev top_sev { = worst df = top_sev sev } {}
                     = first F
                     ( vec_push [VerVerdict] vvs @ VerVerdict {
                         ( string_from ( string_data . vm vname ) )
@@ -421,6 +447,7 @@ $ `src/store.nu`
                         df
                         margin
                         margin
+                        -1
                     } )
                 }
             }
@@ -428,6 +455,39 @@ $ `src/store.nu`
         }
         = k + k 1
     }
+    // The range guard: the feature furthest from its training mean, in
+    // standard deviations (`x` is already standardised). A forest sees a
+    // point as a whole and a single reading at ten sigma is one coordinate
+    // among many to it; this version is the univariate check the forests
+    // structurally cannot make, and it names the feature. Its decision
+    // value is -max|z|, so the margin IS the sigma count of the line.
+    ? & ( meta_version_enabled mm ANOM_GUARD_NAME F ) > ( vec_len [f] . . mo sc mean ) 0 {
+        : ~ f gz 0.0
+        : ~ i gi -1
+        : *f xp ( vec_data [f] x )
+        : ~ i j 0
+        ~ < j nfeat {
+            : f az ( float_abs . xp j )
+            ? | < gi 0 > az gz { = gz az = gi j } {}
+            = j + j 1
+        }
+        : f gdf - 0.0 gz
+        : f gmargin ( meta_version_margin mm ANOM_GUARD_NAME ANOM_GUARD_SIGMA )
+        : b ghit <= gdf - 0.0 gmargin
+        ? ghit { = any T } {}
+        : f gsev ( anom_severity gdf gmargin )
+        ? || first > gsev top_sev { = worst gdf = top_sev gsev } {}
+        = first F
+        ( vec_push [VerVerdict] vvs @ VerVerdict {
+            ( string_from ANOM_GUARD_NAME )
+            ghit
+            gdf
+            gmargin
+            gmargin
+            gi
+        } )
+    } {}
+
     // The autoencoder verdict: reconstruction error against the trained
     // threshold, on the point projected onto the AE's OWN frozen feature
     // order (independent of the forests' scaler and current feats). Muted
@@ -441,7 +501,8 @@ $ `src/store.nu`
         : f amargin ( anom_ae_margin cae arel )
         : b ahit <= adf - 0.0 amargin
         ? ahit { = any T } {}
-        ? || first < adf worst { = worst adf } {}
+        : f asev ( anom_severity adf amargin )
+        ? || first > asev top_sev { = worst adf = top_sev asev } {}
         = first F
         ( vec_push [VerVerdict] vvs @ VerVerdict {
             ( string_from `autoencoder` )
@@ -449,11 +510,12 @@ $ `src/store.nu`
             adf
             amargin
             arel
+            -1
         } )
         ( vec_free [f] araw )
     } {}
     ( vec_free [f] x )
-    ^ @ Verdict { T any worst vvs }
+    ^ @ Verdict { T any worst top_sev vvs }
 }
 
 // The live-point entry: `ring_has_current` is 1 when the point being scored
@@ -474,6 +536,10 @@ $ `src/store.nu`
     : *Meta mm . mo meta
     : i n ( vec_len [String] . mo lines )
     ? < n . mo min_points { ^ 0 } {}
+
+    // A retrain re-encodes the whole ring, so it is where a model built
+    // under an older calendar encoding moves to the current one.
+    = . mm feat_enc ANOM_FEAT_ENC
 
     // Pass 1: re-encode every raw point (learning), tracking timestamps.
     : ( Vec EncPoint ) encs ( vec_new [EncPoint] )
@@ -547,6 +613,10 @@ $ `src/store.nu`
     // second, empty "autoencoder" verdict beside the real one.
     ( __an_free_forests mo )
     ( store_delete_forest . mo store ( string_data . mo mname ) `autoencoder` )
+    // The range guard needs nothing but the scaler just fitted; a model
+    // from before it existed gains the version here, at its next retrain,
+    // where the epoch bump and the metadata save happen anyway.
+    ( __an_ensure_guard_cfg mo )
     : *f bigp ( vec_data [f] big )
     : *i etsp ( vec_data [i] ets )
     : i nv ( vec_len [VerCfg] . mm versions )
@@ -554,7 +624,7 @@ $ `src/store.nu`
     ~ < vi nv {
         ?? ( vec_get [VerCfg] . mm versions vi ) {
             T vc → {
-                ? & . vc enabled ! ( __an_is_ae_name ( string_data . vc vname ) ) {
+                ? & . vc enabled ! ( __an_forestless ( string_data . vc vname ) ) {
                     // Window: time filter first, then point cap, then the
                     // most-recent-min_points fallback.
                     : ~ i from 0
@@ -640,6 +710,7 @@ $ `src/store.nu`
     ( vec_free [i] ets )
 
     = . mm last_trained . mm n_seen
+    = . mm trained_time ( now_seconds )
     ( meta_bump_epoch mm )
     ( store_save_meta . mo store ( string_data . mo mname ) mm )
     = . mo next_train_at + . mm n_seen ( __an_sched_step mo )
@@ -689,6 +760,17 @@ $ `src/store.nu`
     }
     ( vec_push [VerCfg] . mm versions
     @ VerCfg { ( string_from `autoencoder` ) 0 0 0 0 0 0 -1.0 0.05 T } )
+}
+
+// ── The range guard version ───────────────────────────────────────────
+
+// Ensure a `range_guard` VerCfg exists (SPEC §5.4): margin in standard
+// deviations, tunable like any other, window fields 0 — it has no
+// training of its own beyond the shared scaler.
+@ __an_ensure_guard_cfg * Model mo → v {
+    : *Meta mm . mo meta
+    ? < ( meta_find_version mm ANOM_GUARD_NAME ) 0 {} { ^ }
+    ( vec_push [VerCfg] . mm versions ( _an_vc_guard ) )
 }
 
 // Train the autoencoder from the ring: encode + project the raw points
@@ -1087,6 +1169,7 @@ $ `src/store.nu`
     i to_ts
     i n_rows  // rows scored
     i agg_flagged  // rows some enabled version flagged at the current margins
+    i excluded  // rows in the window left out: labelled false positives
 }
 
 @ cal_free CalReport rep → v {
@@ -1137,17 +1220,24 @@ $ `src/store.nu`
     ^ c
 }
 
-// The margin at which a fraction `rate` of the window is flagged: the
-// k-th most negative value, k = round(rate·n), sits exactly on the line
-// (so it is flagged, and the (k+1)-th is not); rate 0 asks for a margin
-// just above the worst point. The exact value is then rounded to the
-// FEWEST significant digits (2 to 6) that still flag the same count, give
-// or take a tenth of it — a margin is a setting a person reads and
-// retypes, and "0.13" is one where the data allows it, "0.1284" where the
-// decision values are packed too densely for fewer digits. Never
-// negative: a negative margin would flag points the forest itself calls
-// normal, and a rate the data cannot supply is answered by the honest
-// post-rounding count, not by a margin below zero.
+// The margin at which a fraction `rate` of the window is flagged. The
+// request is k = round(rate·n) rows; the margins a sorted list of decision
+// values can supply are its gaps, so when the k-th most negative value is
+// one of a run of TIES (a stuck sensor, a categorical feed, a forest that
+// gives one path length to whole days of identical points) the request
+// falls inside the run and only its two edges are achievable: everything
+// before the run, or the run entire. The closer edge to k wins — a run of
+// 221 equal values at k = 10 is answered with the 9 rows before it, not
+// with 231 — and on a tie between the edges the run is flagged, so the
+// request is at least met. rate 0 asks for a margin just above the worst
+// point. The chosen margin is then rounded to the FEWEST significant
+// digits (2 to 6) that still flag the chosen count, give or take a tenth
+// of it — a margin is a setting a person reads and retypes, and "0.13" is
+// one where the data allows it, "0.1284" where the decision values are
+// packed too densely for fewer digits. Never negative: a negative margin
+// would flag points the forest itself calls normal, and a rate the data
+// cannot supply is answered by the honest count next to the margin, not
+// by a margin below zero.
 @ cal_margin_for_rate CalVer cv f rate → f {
     : i n ( vec_len [f] . cv dfs )
     ? <= n 0 { ^ . cv cur_margin } {}
@@ -1157,33 +1247,47 @@ $ `src/store.nu`
     ? > r 1.0 { = r 1.0 } {}
     : ~ i k # i ( float_round * r # f n )
     ? > k n { = k n } {}
+    // The run of ties the k-th value sits in: [lo, hi] inclusive.
+    : ~ i kt k
+    : ~ b incl T
+    ? > k 0 {
+        : f tv . dp - k 1
+        : ~ i lo - k 1
+        ~ & > lo 0 == . dp - lo 1 tv { = lo - lo 1 }
+        : ~ i hi - k 1
+        ~ & < + hi 1 n == . dp + hi 1 tv { = hi + hi 1 }
+        : i whole + hi 1
+        = incl <= - whole k - k lo
+        = kt ? incl whole lo
+    } {}
     : ~ f exact 0.0
-    ? <= k 0 {
+    ? <= kt 0 {
         // Just above the worst point, by a hair that survives rounding.
         : f w - 0.0 . dp 0
         = exact + w + * ( float_abs w ) 0.000000001 0.000000000001
     } {
-        = exact - 0.0 . dp - k 1
+        = exact - 0.0 . dp - kt 1
     }
     ? < exact 0.0 { ^ 0.0 } {}
-    : i tol / k 10
-    // Nearest first at each precision, then the rounding that errs on the
-    // side of the request (down = flags at least k; up, for rate 0, flags
-    // none).
-    : i lean ? <= k 0 1 -1
+    : i tol / kt 10
+    // Nearest first at each precision, then the rounding that stays on
+    // the chosen side of the run: a smaller margin flags more, so it is
+    // the one to try when the run was taken (the other way would drop it
+    // whole); a larger one when it was left out (and for rate 0, which
+    // flags none).
+    : i lean ? & incl > kt 0 -1 1
     : ~ i digits 2
     ~ < digits 6 {
         : f m ( round_sig exact digits )
-        : i off - ( cal_flagged_at cv m ) k
+        : i off - ( cal_flagged_at cv m ) kt
         ? & >= off - 0 tol <= off tol { ^ m } {}
         : f m2 ( round_sig_dir exact digits lean )
-        : i off2 - ( cal_flagged_at cv m2 ) k
+        : i off2 - ( cal_flagged_at cv m2 ) kt
         ? & >= off2 - 0 tol <= off2 tol { ^ m2 } {}
         = digits + digits 1
     }
-    // Values packed tighter than five digits resolve (a constant feed
-    // scores as near-ties): six digits, and the reported count says how
-    // far off that lands.
+    // Values packed tighter than five digits resolve: six digits, and the
+    // reported count says how far off that lands.
     ^ ( round_sig_dir exact 6 lean )
 }
 
@@ -1208,7 +1312,13 @@ $ `src/store.nu`
     : ( Vec CalVer ) items ( vec_new [CalVer] )
     : ~ i n_rows 0
     : ~ i agg 0
-    ? ( model_is_trained mo ) {} { ^ @ CalReport { items from_ts to_ts 0 0 } }
+    ? ( model_is_trained mo ) {} { ^ @ CalReport { items from_ts to_ts 0 0 0 } }
+
+    // A row a reader has called a false positive is left out: a margin
+    // fitted over it would be paid for by known noise.
+    : ( Vec Label ) labels ( model_labels mo )
+    : ( Vec i ) label_of ( model_label_map mo labels )
+    : ~ i excluded 0
 
     : *Meta mm . mo meta
     : AeModel cae . mo ae
@@ -1218,7 +1328,8 @@ $ `src/store.nu`
     ~ < k n {
         : ~ i ts 0
         ?? ( vec_get [i] . mo times k ) { T t → { = ts t } F _ → {} }
-        : b inside & || <= from_ts 0 >= ts from_ts || <= to_ts 0 <= ts to_ts
+        : ~ b inside & || <= from_ts 0 >= ts from_ts || <= to_ts 0 <= ts to_ts
+        ? & inside ( _an_label_is labels ( _mlp_iget label_of k ) ANOM_LABEL_FP ) { = inside F = excluded + excluded 1 } {}
         ? inside {
             ?? ( vec_get [String] . mo lines k ) {
                 T l → {
@@ -1296,7 +1407,9 @@ $ `src/store.nu`
         }
         = k + k 1
     }
-    ^ @ CalReport { items from_ts to_ts n_rows agg }
+    ( vec_free [i] label_of )
+    ( labels_free labels )
+    ^ @ CalReport { items from_ts to_ts n_rows agg excluded }
 }
 
 // The window fine-tune and calibration default to: the newest 24 hours of
@@ -1340,6 +1453,7 @@ $ `src/store.nu`
     i to_ts
     i n_rows
     b applied
+    i excluded  // labelled false positives left out of the window
 }
 
 @ finetune_free FineTuneReport rep → v {
@@ -1396,8 +1510,9 @@ $ `src/store.nu`
         = k + k 1
     }
     : i nr . cal n_rows
+    : i nex . cal excluded
     ( cal_free cal )
-    ^ @ FineTuneReport { items rate from_ts to_ts nr apply }
+    ^ @ FineTuneReport { items rate from_ts to_ts nr apply nex }
 }
 
 // The lower bound of a version's OWN window, anchored on the newest stored
@@ -1446,6 +1561,7 @@ $ `src/store.nu`
     : ~ i lo 0
     : ~ b first T
     : ~ i rows 0
+    : ~ i excluded 0
     : ~ i k 0
     ~ < k nn {
         ?? ( vec_get [String] names k ) {
@@ -1477,7 +1593,7 @@ $ `src/store.nu`
                                 = . c ftname ( string_from ( string_data . ft ftname ) )
                                 ( vec_push [FtVer] items c )
                                 ? | first < from_ts lo { = lo from_ts = first F } {}
-                                ? > . part n_rows rows { = rows . part n_rows } {}
+                                ? > . part n_rows rows { = rows . part n_rows = excluded . part excluded } {}
                             } {}
                         }
                         F _ → {}
@@ -1492,7 +1608,71 @@ $ `src/store.nu`
         = k + k 1
     }
     ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
-    ^ @ FineTuneReport { items rate lo 0 rows apply }
+    ^ @ FineTuneReport { items rate lo 0 rows apply excluded }
+}
+
+// ── Labels ────────────────────────────────────────────────────────────
+//
+// A reader's word on a stored point (store.nu: Label). Points are
+// addressed by ring index at the API and by lifetime sequence number on
+// disk; the base of the ring is n_seen minus the rows it holds.
+
+@ model_seq_base * Model mo → i {
+    : *Meta mm . mo meta
+    ^ - . mm n_seen ( vec_len [String] . mo lines )
+}
+
+// Record what a reader said about the row at `index`. Returns the row's
+// sequence number, -1 for an index outside the ring, -2 for a label
+// that is not one of ANOM_LABEL_*. Verdicts do not change, so the epoch
+// does not move.
+@ model_label_point * Model mo i index s label s by s note i at → i {
+    ? ( label_known label ) {} { ^ -2 }
+    : i n ( vec_len [String] . mo lines )
+    ? | < index 0 >= index n { ^ -1 } {}
+    : i seq + ( model_seq_base mo ) index
+    : ~ i ts 0
+    ?? ( vec_get [i] . mo times index ) { T t → { = ts t } F _ → {} }
+    : Label l @ Label { seq ts ( string_from label ) ( string_from by ) at ( string_from note ) }
+    : b ok ( store_append_label . mo store ( string_data . mo mname ) l )
+    ( label_free l )
+    ^ ? ok seq -1
+}
+
+// The labels in force (store_load_labels), evicted rows included.
+@ model_labels * Model mo → ( Vec Label ) {
+    ^ ( store_load_labels . mo store ( string_data . mo mname ) )
+}
+
+// Per ring position, the index into `labels` of its label, -1 for none.
+@ model_label_map * Model mo ( Vec Label ) labels → ( Vec i ) {
+    : i n ( vec_len [String] . mo lines )
+    : i base ( model_seq_base mo )
+    : ( Vec i ) out ( vec_with_cap [i] n )
+    : ~ i k 0
+    ~ < k n { ( vec_push [i] out -1 ) = k + k 1 }
+    : i nl ( vec_len [Label] labels )
+    = k 0
+    ~ < k nl {
+        ?? ( vec_get [Label] labels k ) {
+            T l → {
+                : i idx - . l seq base
+                ? & >= idx 0 < idx n { : b _s ( vec_set [i] out idx k ) } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ out
+}
+
+// Does label `li` of `labels` (as model_label_map hands it out) say `what`?
+@ _an_label_is ( Vec Label ) labels i li s what → b {
+    ? < li 0 { ^ F } {}
+    ?? ( vec_get [Label] labels li ) {
+        T l → { ^ == ( nurl_str_eq ( string_data . l label ) what ) 1 }
+        F _ → { ^ F }
+    }
 }
 
 // The one-call form: 1 % of the last 24 hours, applied to every version.
@@ -1544,13 +1724,24 @@ $ `src/store.nu`
     ( json_free . w notes )
 }
 
-@ model_train_whole * Model mo f rate → WholeTrain {
+//
+// The windows are opened for this one training only: the version
+// configuration the model keeps is the one it was given (its own, or the
+// source's when it is a fork), so a fork that goes on receiving points
+// retrains its short_term over three hours like its source, not over
+// everything it has ever seen. The autoencoder takes `hidden` as its
+// layout (empty = the 64-16-64 default) and `rate` as its pre-filter.
+@ model_train_whole * Model mo f rate ( Vec i ) hidden → WholeTrain {
     : *Meta mm . mo meta
     : i nv ( vec_len [VerCfg] . mm versions )
+    : ( Vec i ) wmins ( vec_with_cap [i] nv )
+    : ( Vec i ) wptss ( vec_with_cap [i] nv )
     : ~ i vi 0
     ~ < vi nv {
         ?? ( vec_get [VerCfg] . mm versions vi ) {
             T vc → {
+                ( vec_push [i] wmins . vc window_min )
+                ( vec_push [i] wptss . vc window_pts )
                 : ~ VerCfg o vc
                 = . o window_min 0
                 = . o window_pts 0
@@ -1561,13 +1752,31 @@ $ `src/store.nu`
         = vi + vi 1
     }
     ( model_force_train_at mo ( model_last_ts mo ) )
+    = vi 0
+    ~ < vi nv {
+        ?? ( vec_get [VerCfg] . mm versions vi ) {
+            T vc → {
+                : ~ VerCfg o vc
+                = . o window_min ( _mlp_iget wmins vi )
+                = . o window_pts ( _mlp_iget wptss vi )
+                : b _o ( vec_set [VerCfg] . mm versions vi o )
+            }
+            F _ → {}
+        }
+        = vi + vi 1
+    }
+    ( vec_free [i] wmins )
+    ( vec_free [i] wptss )
+    ( store_save_meta . mo store ( string_data . mo mname ) mm )
     : Json notes ( json_arr_new )
-    : ( Vec i ) hidden ( vec_new [i] )
-    ( vec_push [i] hidden 64 )
-    ( vec_push [i] hidden 16 )
-    ( vec_push [i] hidden 64 )
-    : String aerr ( model_train_autoencoder mo hidden rate )
-    ( vec_free [i] hidden )
+    : ( Vec i ) layout ( vec_new [i] )
+    ? > ( vec_len [i] hidden ) 0 { ( vec_extend [i] layout hidden ) } {
+        ( vec_push [i] layout 64 )
+        ( vec_push [i] layout 16 )
+        ( vec_push [i] layout 64 )
+    }
+    : String aerr ( model_train_autoencoder mo layout rate )
+    ( vec_free [i] layout )
     ? > ( string_len aerr ) 0 {
         : String m ( string_from `autoencoder not trained: ` )
         ( string_push_str m ( string_data aerr ) )
@@ -1607,6 +1816,7 @@ $ `src/store.nu`
     i sp_idx  // ring index
     i sp_ts  // ingest timestamp (unix seconds)
     f sp_score  // aggregate decision_function (the most severe version)
+    f sp_severity  // that version's severity — comparable across rows
     b sp_anomaly
     i sp_present  // bitmask over ScanOut.vnames: versions that had a verdict
     i sp_flagged  // bitmask over ScanOut.vnames: versions that flagged it
@@ -1621,6 +1831,90 @@ $ `src/store.nu`
     i hits  // verdicts answered from the cache
     i misses  // verdicts computed this call
     i anomalies  // anomalous rows among `considered`
+}
+
+// ── Runs ──────────────────────────────────────────────────────────────
+//
+// Calibration is a marginal quantile: 1 % of rows flagged says nothing
+// about whether they are 1 % of the rows scattered singly or one burst
+// of consecutive rows — and a burst is one event to whoever reads the
+// list. A run is a maximal sequence of consecutive stored rows every one
+// of which counts as an anomaly (with `minvotes` versions agreeing, see
+// scan_agreed); the scan reports each row's run and the runs
+// themselves, so a hundred flagged rows can read as three events.
+
+// Does a scored row count as an anomaly when `minvotes` versions have
+// to agree? The bit count of the flagged mask is the vote.
+@ scan_agreed ScoredPt r i minvotes → b {
+    ? . r sp_anomaly {} { ^ F }
+    : ~ i votes 0
+    : ~ i m . r sp_flagged
+    ~ != m 0 {
+        ? != & m 1 0 { = votes + votes 1 } {}
+        = m >> m 1
+    }
+    ^ >= votes minvotes
+}
+
+: ScanRun {
+    i run  // 1-based, in ring order
+    i first_k  // positions in ScanOut.pts
+    i last_k
+    i rows
+    i worst_k  // the row with the highest severity
+    f worst_sev
+    i flagged  // union of the rows' flagged masks
+}
+
+: ScanRuns {
+    ( Vec ScanRun ) runs
+    ( Vec i ) run_of  // per position in ScanOut.pts: its run, 0 = none
+}
+
+@ scan_runs ScanOut so i minvotes → ScanRuns {
+    : i np ( vec_len [ScoredPt] . so pts )
+    : ( Vec ScanRun ) runs ( vec_new [ScanRun] )
+    : ( Vec i ) run_of ( vec_with_cap [i] np )
+    : ~ b in_run F
+    : ~ i k 0
+    ~ < k np {
+        : ~ i id 0
+        ?? ( vec_get [ScoredPt] . so pts k ) {
+            T r → {
+                ? ( scan_agreed r minvotes ) {
+                    ? in_run {
+                        : i last - ( vec_len [ScanRun] runs ) 1
+                        ?? ( vec_get [ScanRun] runs last ) {
+                            T cur → {
+                                : ~ ScanRun u cur
+                                = . u last_k k
+                                = . u rows + . u rows 1
+                                = . u flagged | . u flagged . r sp_flagged
+                                ? > . r sp_severity . u worst_sev { = . u worst_k k = . u worst_sev . r sp_severity } {}
+                                : b _s ( vec_set [ScanRun] runs last u )
+                            }
+                            F _ → {}
+                        }
+                    } {
+                        ( vec_push [ScanRun] runs @ ScanRun {
+                            + ( vec_len [ScanRun] runs ) 1 k k 1 k . r sp_severity . r sp_flagged
+                        } )
+                    }
+                    = in_run T
+                    = id ( vec_len [ScanRun] runs )
+                } { = in_run F }
+            }
+            F _ → { = in_run F }
+        }
+        ( vec_push [i] run_of id )
+        = k + k 1
+    }
+    ^ @ ScanRuns { runs run_of }
+}
+
+@ scan_runs_free ScanRuns sr → v {
+    ( vec_free [ScanRun] . sr runs )
+    ( vec_free [i] . sr run_of )
 }
 
 @ scan_free ScanOut so → v {
@@ -1646,21 +1940,23 @@ $ `src/store.nu`
                     : s nm ( string_data . vc vname )
                     ? == ( nurl_str_eq nm `autoencoder` ) 1 {
                         ? . cae trained { ( vec_push [String] out ( string_from nm ) ) } {}
-                    } {
-                        : ~ b has F
-                        : i nf ( vec_len [VerModel] . mo forests )
-                        : ~ i j 0
-                        ~ < j nf {
-                            ?? ( vec_get [VerModel] . mo forests j ) {
-                                T vm → {
-                                    ? == ( nurl_str_eq ( string_data . vm vname ) nm ) 1 { = has T } {}
+                    } { ? ( _an_is_guard_name nm ) {
+                            ? > ( vec_len [f] . . mo sc mean ) 0 { ( vec_push [String] out ( string_from nm ) ) } {}
+                        } {
+                            : ~ b has F
+                            : i nf ( vec_len [VerModel] . mo forests )
+                            : ~ i j 0
+                            ~ < j nf {
+                                ?? ( vec_get [VerModel] . mo forests j ) {
+                                    T vm → {
+                                        ? == ( nurl_str_eq ( string_data . vm vname ) nm ) 1 { = has T } {}
+                                    }
+                                    F _ → {}
                                 }
-                                F _ → {}
+                                = j + j 1
                             }
-                            = j + j 1
-                        }
-                        ? has { ( vec_push [String] out ( string_from nm ) ) } {}
-                    }
+                            ? has { ( vec_push [String] out ( string_from nm ) ) } {}
+                        } }
                 } {}
             }
             F _ → {}
@@ -1687,6 +1983,7 @@ $ `src/store.nu`
 @ __an_scan_row * Model mo ( Vec String ) vnames i at → ScoredPt {
     : ~ i st ANOM_SC_NOT_READY
     : ~ f sc 0.0
+    : ~ f sv 0.0
     : ~ b anom F
     : ~ i pres 0
     : ~ i flag 0
@@ -1705,6 +2002,7 @@ $ `src/store.nu`
                             ? . vd ready {
                                 = st ANOM_SC_SCORED
                                 = sc . vd score
+                                = sv . vd severity
                                 = anom . vd anomaly
                                 : i nvv ( vec_len [VerVerdict] . vd versions )
                                 : ~ i q 0
@@ -1736,7 +2034,7 @@ $ `src/store.nu`
     }
     : ~ i ts 0
     ?? ( vec_get [i] . mo times at ) { T t → { = ts t } F _ → {} }
-    ^ @ ScoredPt { at ts sc anom pres flag }
+    ^ @ ScoredPt { at ts sc sv anom pres flag }
 }
 
 // Score every ring point whose timestamp falls in [from_ts, to_ts]
@@ -1812,6 +2110,7 @@ $ `src/store.nu`
         : ~ b hit F
         : ~ i st ANOM_SC_UNSCORED
         : ~ f sc 0.0
+        : ~ f sv 0.0
         : ~ i pres 0
         : ~ i flag 0
         ? & >= ci 0 < ci ( scorecache_rows cache ) {
@@ -1821,6 +2120,7 @@ $ `src/store.nu`
                         = hit T
                         = st stv
                         ?? ( vec_get [f] . cache score ci ) { T x → { = sc x } F _ → {} }
+                        ?? ( vec_get [f] . cache severity ci ) { T x → { = sv x } F _ → {} }
                         ?? ( vec_get [i] . cache present ci ) { T x → { = pres x } F _ → {} }
                         ?? ( vec_get [i] . cache flagged ci ) { T x → { = flag x } F _ → {} }
                     } {}
@@ -1835,7 +2135,7 @@ $ `src/store.nu`
             : b scored == st ANOM_SC_SCORED
             : b anom & scored != flag 0
             ? anom { = anoms + anoms 1 } {}
-            ( vec_push [ScoredPt] pts @ ScoredPt { j ts sc anom pres flag } )
+            ( vec_push [ScoredPt] pts @ ScoredPt { j ts sc sv anom pres flag } )
         } {
             = misses + misses 1
             : ScoredPt row ( __an_scan_row mo vnames j )
@@ -1857,13 +2157,15 @@ $ `src/store.nu`
             ? & >= ci 0 < ci ( scorecache_rows cache ) {
                 : ~ i st ANOM_SC_UNSCORED
                 : ~ f sc 0.0
+                : ~ f sv 0.0
                 : ~ i pres 0
                 : ~ i flag 0
                 ?? ( vec_get [i] . cache state ci ) { T x → { = st x } F _ → {} }
                 ?? ( vec_get [f] . cache score ci ) { T x → { = sc x } F _ → {} }
+                ?? ( vec_get [f] . cache severity ci ) { T x → { = sv x } F _ → {} }
                 ?? ( vec_get [i] . cache present ci ) { T x → { = pres x } F _ → {} }
                 ?? ( vec_get [i] . cache flagged ci ) { T x → { = flag x } F _ → {} }
-                ( scorecache_set nc k st sc pres flag )
+                ( scorecache_set nc k st sc sv pres flag )
             } {}
             = k + k 1
         }
@@ -1874,7 +2176,7 @@ $ `src/store.nu`
                 T r → {
                     : ~ i st ANOM_SC_NOT_READY
                     ? != . r sp_present 0 { = st ANOM_SC_SCORED } {}
-                    ( scorecache_set nc . r sp_idx st . r sp_score . r sp_present . r sp_flagged )
+                    ( scorecache_set nc . r sp_idx st . r sp_score . r sp_severity . r sp_present . r sp_flagged )
                 }
                 F _ → {}
             }
@@ -2052,6 +2354,9 @@ $ `src/store.nu`
     : ( Vec String ) none ( vec_new [String] )
     ( store_write_points . mo store ( string_data . mo mname ) none )
     ( vec_free [String] none )
+    // Sequence numbers start over with the ring, so labels keyed on the
+    // old ones would name rows that never were.
+    ( store_delete_labels . mo store ( string_data . mo mname ) )
     ( store_save_meta . mo store ( string_data . mo mname ) fresh )
 }
 
@@ -2174,7 +2479,7 @@ $ `src/store.nu`
         F _ → {}
     }
     ? on {} {
-        ? == ( nurl_str_eq vname `autoencoder` ) 1 {} { ( __an_drop_forest mo vname ) }
+        ? ( __an_forestless vname ) {} { ( __an_drop_forest mo vname ) }
     }
     ( meta_bump_epoch mm )
     ( store_save_meta . mo store ( string_data . mo mname ) mm )

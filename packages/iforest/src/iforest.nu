@@ -54,15 +54,15 @@ $ `stdlib/std/rng.nu`
 
 : IForest {
     i n_trees
-    i sample_size       // psi — points subsampled per tree (clamped to n_rows)
-    f c_psi             // c(psi): path-length normaliser, precomputed
-    i n_cols            // dimensionality of a point
-    ( Vec i ) roots     // roots[t] = node index of tree t's root
-    ( Vec i ) feature   // split feature, or -1 at a leaf
-    ( Vec f ) split     // split threshold (internal nodes only)
-    ( Vec i ) left      // left child index, or -1
-    ( Vec i ) right     // right child index, or -1
-    ( Vec i ) size      // subsample size that reached this node
+    i sample_size  // psi — points subsampled per tree (clamped to n_rows)
+    f c_psi  // c(psi): path-length normaliser, precomputed
+    i n_cols  // dimensionality of a point
+    ( Vec i ) roots  // roots[t] = node index of tree t's root
+    ( Vec i ) feature  // split feature, or -1 at a leaf
+    ( Vec f ) split  // split threshold (internal nodes only)
+    ( Vec i ) left  // left child index, or -1
+    ( Vec i ) right  // right child index, or -1
+    ( Vec i ) size  // subsample size that reached this node
 }
 
 // ── Path-length normaliser c(n) ───────────────────────────────────────
@@ -113,7 +113,7 @@ $ `stdlib/std/rng.nu`
     ? > m n { = m n } {}
     : ~ i k 0
     ~ < k m {
-        : i j + k ( rng_below g - n k )   // pick from [k, n)
+        : i j + k ( rng_below g - n k )  // pick from [k, n)
         ( vec_swap [i] all k j )
         = k + k 1
     }
@@ -126,7 +126,7 @@ $ `stdlib/std/rng.nu`
 // Build one subtree from the row indices `idx` (which this call OWNS and
 // frees) and return its node index. `dp` is the raw row-major data buffer;
 // reading feature q of row r is dp[r*n_cols + q].
-@ __build_node IForest fo *f dp i n_cols ( Vec i ) idx i depth i height_limit Rng g → i {
+@ __build_node IForest fo * f dp i n_cols ( Vec i ) idx i depth i height_limit Rng g → i {
     : i m ( vec_len [i] idx )
 
     // Isolated (≤1 point) or hit the depth cap → leaf.
@@ -137,25 +137,41 @@ $ `stdlib/std/rng.nu`
     } {}
 
     : *i idxp ( vec_data [i] idx )
-    : i q ( rng_below g n_cols )
 
-    // Range of feature q over this subsample.
-    : i r0 . idxp 0
-    : i o0 + * r0 n_cols q
-    : ~ f mn . dp o0
-    : ~ f mx mn
-    : ~ i a 1
-    ~ < a m {
-        : i row . idxp a
-        : i off + * row n_cols q
-        : f v . dp off
-        ? < v mn { = mn v } {}
-        ? > v mx { = mx v } {}
-        = a + a 1
+    // Pick a feature that actually varies over this subsample. A column
+    // every row agrees on (a one-hot category nobody sent, a sensor stuck
+    // at one value, a rare category absent from this subsample) cannot be
+    // split; ending the subtree there would leave m points in one leaf
+    // with a short path — every point below looks isolated, and the
+    // forest's discrimination drops with each constant column it carries.
+    // So a degenerate draw is redrawn, uniformly among all columns, up to
+    // 2·n_cols times: only when nothing varies (identical rows) is the
+    // node a leaf.
+    : ~ i q -1
+    : ~ f mn 0.0
+    : ~ f mx 0.0
+    : ~ i tries 0
+    : i max_tries * 2 n_cols
+    ~ & < q 0 < tries max_tries {
+        : i cand ( rng_below g n_cols )
+        : i r0 . idxp 0
+        : ~ f lo . dp + * r0 n_cols cand
+        : ~ f hi lo
+        : ~ i a 1
+        ~ < a m {
+            : f v . dp + * . idxp a n_cols cand
+            ? < v lo { = lo v } {}
+            ? > v hi { = hi v } {}
+            = a + a 1
+        }
+        ? < lo hi {
+            = q cand
+            = mn lo
+            = mx hi
+        } {}
+        = tries + tries 1
     }
-
-    // Degenerate column (every value equal): nothing to split on → leaf.
-    ? == mn mx {
+    ? < q 0 {
         : i leaf ( __push_leaf fo m )
         ( vec_free [i] idx )
         ^ leaf
@@ -227,7 +243,7 @@ $ `stdlib/std/rng.nu`
 // Path length of `point` (raw *f, length n_cols) down one tree: walk from
 // `root` comparing the node's feature to its threshold, then add c(leaf
 // size) for the unbuilt subtree below where we stopped.
-@ __path_len IForest fo i root *f point → f {
+@ __path_len IForest fo i root * f point → f {
     : *i feat ( vec_data [i] . fo feature )
     : *f spl ( vec_data [f] . fo split )
     : *i lf ( vec_data [i] . fo left )
@@ -266,7 +282,7 @@ $ `stdlib/std/rng.nu`
 }
 
 // Mean path length over the forest → score. `point` is a raw *f of n_cols.
-@ __score_ptr IForest fo *f point → f {
+@ __score_ptr IForest fo * f point → f {
     : i nt ( vec_len [i] . fo roots )
     ? <= nt 0 { ^ 0.0 } {}
     : f cpsi . fo c_psi

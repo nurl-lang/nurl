@@ -1,5 +1,122 @@
 # Changelog
 
+## 0.14.0
+
+- **Labels: a reader's word on a stored point.** `POST
+  /models/dynamic/<model>/labels` with `{index, label, note}` marks a
+  point `false_positive` or `confirmed` (`none` withdraws the label);
+  `GET` lists them. Labels live in `labels.jsonl` beside the model and
+  are keyed by the point's lifetime sequence, so a ring eviction never
+  moves a label onto another row — an evicted label lists as such.
+  Calibration and fine-tune skip rows labelled `false_positive` and
+  report how many they left out (`window.excluded`), so a reader's
+  correction loosens the margin instead of paying for it forever. Labels
+  never bump the score epoch: the scan cache stays valid. Scan rows
+  carry `label`. MCP: `label_anomaly` (member, a write) and `labels`
+  (member, read-only); `anomaly_summary` counts `labelled` points.
+  Twenty-eight tools now.
+
+- **Consecutive anomalous rows are one event.** A calibrated 1 % is a
+  marginal rate; it does not say whether the rows came singly or as
+  three bursts, and a burst is one event to whoever reads the list. The
+  scan groups consecutive agreed rows into runs (`scan_runs`, honouring
+  the votes rule): the anomalies route always reports `runs` and each
+  row's `run`, and `group=runs` lists them as `events` with their span,
+  worst row and the union of their versions. The MCP tools speak of
+  events — rows carry `event`, both scan tools count
+  `events_in_window`, `anomaly_summary` lists the newest ten (with a
+  note when there are more) and counts event starts per timeline
+  bucket — and the server instructions tell the agent to count events,
+  not rows, when saying how often something went wrong.
+
+- **A range guard version.** The forests and the autoencoder judge a
+  point against the shape of the training data; a single feature ten
+  standard deviations out can still land in a populated region of the
+  tree space and pass. `range_guard` is a forestless sixth version: its
+  score is minus the largest |z| over the scaled features, its margin is
+  a sigma count (default 4.0, units `standard_deviations`), and the
+  verdict names the feature that tripped it. It is ensured at every
+  retrain, can be muted and re-margined like any version, and
+  calibration and fine-tune see it through the same verdict as the
+  others.
+
+- **`votes=N`.** The scan route flags a row only when at least N enabled
+  versions flagged it, reported per row and in the anomalies count; the
+  MCP `anomalies` and `anomaly_summary` tools expose it as `min_votes`.
+
+- **The aggregate score is the most severe version's.** Aggregation took
+  the minimum decision value over versions, but the versions do not share
+  a scale — a forest scores around 1e-1, the autoencoder around 1e-4 — so
+  the forest's number always won and the joint model's alarm never reached
+  the aggregate. Severity (−score / margin, 1.0 exactly on the alert line)
+  is now computed once in the scorer; the aggregate carries the most
+  severe version's score and that severity, the scan rows carry both, and
+  the score cache stores both (magic `ANOMSCR2`, so a cache written under
+  the old rule is a miss rather than a wrong number). The MCP summary's
+  worst row is the highest severity; the instructions say to rank by
+  severity, never by raw score.
+
+- **Every margin says its units.** The same number was called "margin"
+  in three meanings. `threshold_info` now carries the absolute band the
+  score was compared to (`margin`), the stored setting
+  (`decision_margin`) and `units` — `absolute` for a forest,
+  `relative_to_threshold` for the autoencoder, whose setting is a
+  fraction of its reconstruction threshold, `standard_deviations` for
+  the range guard. Calibration and fine-tune tag each version with
+  `units`; the metadata's autoencoder block adds `effective_margin`.
+
+- **Calibration answers a tied cut with the nearer edge, and says which
+  rate it reached.** When the k-th decision value is one of a run of
+  ties — a stuck sensor, a forest giving one path length to whole days
+  of identical points — the old cut flagged the whole run: 1 % over 1000
+  rows answered with 230. Now the run's two edges are the achievable
+  counts, the nearer to k wins (on a tie the run is taken, so the request
+  is at least met), and the readable-digits rounding leans to the chosen
+  side. Every `margin_for_rate` entry carries `requested_rate`,
+  `achieved_rate` and `exact`; fine-tune marks each version `exact` or
+  not and adds a `note` naming the versions whose scores tied at the cut.
+
+- **MCP verdicts, training and fine-tune are readers' reports.**
+  `score_point`, `ingest_point`, `retrain`, `train_autoencoder` and
+  `finetune` no longer pass the route's body through: a verdict is the
+  aggregate and each version's score, severity and `threshold_info`
+  (margins verbatim), without the echo of the submitted values; a
+  fine-tune report is the window as stamps and each version's old/new
+  margin, flagged counts and rates. A `points`/`point` row is `{index,
+  time, values: {…}}`, so a column called `time` or `index` can no
+  longer overwrite the stamp. The span vocabulary gains `all` (every
+  stored point, `last=all` on the API) on every windowed tool; `finetune`
+  keeps `own` beside it. The `calibration` tool shows margins verbatim
+  and states the verdict rule correctly (flagged when score ≤ −margin).
+
+- **Calendar features read the clock the stamp was written in, as
+  sin/cos pairs.** Hour, weekday and month were taken from the UTC
+  fields after the offset was folded away, so a model fed local-offset
+  stamps learned a day shifted by the offset with a step at every DST
+  change. The encoder now reads the stamp's own offset, and the features
+  are (sin, cos) pairs so 23:00 sits next to 00:00 and Sunday next to
+  Monday; day-of-month is gone. Metadata carries `feature_encoding`: a
+  model stored under encoding 1 keeps encoding its points the old way
+  until its next retrain and reports `retrain_required` until then.
+  Metadata also records `last_trained_time`, the wall clock of the last
+  train — `last_trained_at` was always a point count.
+
+- **A fork inherits its source's configuration.** `fork_model` copied
+  the source's points and clock and nothing else. It now takes the
+  source's version configuration, retrain schedule and autoencoder
+  layout; the whole-slice training that follows opens the windows for
+  that one training only, so a fork that goes on receiving points
+  retrains like its source. `describe_model` shows `last_trained`,
+  `points_since_training` and `retrain_required`.
+
+- **iforest 0.1.2.** A node that drew a feature every row of its
+  subsample agrees on used to become a leaf holding all rows, so with a
+  few constant columns (one-hot categories nobody sends, a sensor stuck
+  at one value) the forest could no longer tell an outlier from the
+  crowd. The node now redraws among all columns until one varies; only
+  identical rows end a subtree. Existing forests keep their blobs; the
+  next retrain uses the new rule.
+
 ## 0.13.0
 
 - **An MCP endpoint for agents.** `POST /mcp` (Streamable HTTP, JSON-RPC)

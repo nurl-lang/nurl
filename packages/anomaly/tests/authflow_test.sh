@@ -386,7 +386,7 @@ for t in ("whoami", "list_models", "anomalies", "anomaly_summary", "points", "ca
     assert t in names, f"viewer should see {t}"
 for t in ("ingest_point", "import_data", "set_role", "org_users", "org_keys", "claim_model"):
     assert t not in names, f"viewer must not see {t}"
-assert len(names) == 20, sorted(names)
+assert len(names) == 22, sorted(names)
 PYX
 call() { mcp "$1" "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"$2\",\"arguments\":$3}}"; }
 call "$VH" whoami '{}' > "$WORK/vwho.json"
@@ -419,6 +419,21 @@ r = json.load(open(sys.argv[1]))["result"]
 assert r["isError"] is True, r
 t = r["content"][0]["text"]
 assert "403" in t and "llm_" in t, t
+PYX
+call "$VH" label_anomaly '{"model":"history","index":3,"label":"false_positive"}' > "$WORK/vlab.json"
+python3 - "$WORK/vlab.json" <<'PYX' && ok "the viewer may not label a production model's rows" || bad "viewer label_anomaly"
+import json, sys
+r = json.load(open(sys.argv[1]))["result"]
+assert r["isError"] is True, r
+assert "403" in r["content"][0]["text"], r
+PYX
+call "$VH" labels '{"model":"history"}' > "$WORK/vlabs.json"
+python3 - "$WORK/vlabs.json" <<'PYX' && ok "but reads the labels" || bad "viewer labels"
+import json, sys
+r = json.load(open(sys.argv[1]))["result"]
+assert r["isError"] is False, r
+d = json.loads(r["content"][0]["text"])
+assert d["count"] == 0 and d["labels"] == [], d
 PYX
 call "$VH" set_role '{"subject":"user-42","role":"viewer"}' > "$WORK/vsr.json"
 python3 - "$WORK/vsr.json" <<'PYX' && ok "an organisation tool is unknown to a viewer" || bad "viewer set_role"
@@ -465,7 +480,7 @@ python3 - "$WORK/atools.json" <<'PYX' && ok "an admin is shown every tool" || ba
 import json, sys
 names = {t["name"] for t in json.load(open(sys.argv[1]))["result"]["tools"]}
 assert {"set_role", "org_users", "org_keys", "claim_model", "ingest_point", "import_data"} <= names, sorted(names)
-assert len(names) == 26, len(names)
+assert len(names) == 28, len(names)
 PYX
 call "$AH" org_users '{}' > "$WORK/ausers.json"
 python3 - "$WORK/ausers.json" <<'PYX' && ok "org_users lists both members" || bad "admin org_users"
@@ -492,7 +507,7 @@ mcp "$VH" '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' > "$WORK/
 python3 - "$WORK/vtools2.json" <<'PYX' && ok "and the promoted user's next tool list has grown" || bad "promoted tool list"
 import json, sys
 names = {t["name"] for t in json.load(open(sys.argv[1]))["result"]["tools"]}
-assert "set_role" in names and len(names) == 26, sorted(names)
+assert "set_role" in names and len(names) == 28, sorted(names)
 PYX
 call "$AH" set_role '{"subject":"user-77","role":"viewer"}' > /dev/null
 call "$AH" ingest_point '{"model":"mine","values":{"t":3}}' > "$WORK/aip.json"
@@ -501,7 +516,23 @@ import json, sys
 r = json.load(open(sys.argv[1]))["result"]
 assert r["isError"] is False, r
 d = json.loads(r["content"][0]["text"])
-assert d["model_name"] == "mine" and d["data_points"] == 3, d
+assert d["model_name"] == "mine" and d["points_stored"] == 3 and d["stored"] is True, d
+PYX
+call "$AH" label_anomaly '{"model":"history","index":3,"label":"false_positive","note":"maintenance"}' > "$WORK/alab.json"
+python3 - "$WORK/alab.json" <<'PYX' && ok "an admin labels a row, and the label names the admin" || bad "admin label_anomaly"
+import json, sys
+r = json.load(open(sys.argv[1]))["result"]
+assert r["isError"] is False, r
+d = json.loads(r["content"][0]["text"])
+assert d["index"] == 3 and d["label"] == "false_positive" and d["note"] == "maintenance", d
+assert d["by"] and "at" in d and "time" in d, d
+PYX
+call "$AH" labels '{"model":"history"}' > "$WORK/alabs.json"
+python3 - "$WORK/alabs.json" <<'PYX' && ok "and the label is listed" || bad "admin labels"
+import json, sys
+r = json.load(open(sys.argv[1]))["result"]
+d = json.loads(r["content"][0]["text"])
+assert d["count"] == 1 and d["false_positives"] == 1 and d["labels"][0]["index"] == 3, d
 PYX
 
 echo "== anomaly auth flow: PASS=$PASS FAIL=$FAIL"

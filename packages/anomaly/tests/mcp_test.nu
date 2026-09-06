@@ -322,7 +322,7 @@ $ `src/service.nu`
     ( check ( tools_has . ls body `ingest_point` ) `mcp: sign-in off = admin: ingest_point listed` )
     ( check ( tools_has . ls body `set_role` ) `mcp: sign-in off = admin: set_role listed` )
     ( check ( tools_has . ls body `org_keys` ) `mcp: sign-in off = admin: org_keys listed` )
-    ( check == ( tools_count . ls body ) 26 `mcp: every one of the 26 tools is listed` )
+    ( check == ( tools_count . ls body ) 28 `mcp: every one of the 28 tools is listed` )
     ( out_free ls )
 
     // A tool that does not exist is refused in the tool-result envelope.
@@ -401,6 +401,24 @@ $ `src/service.nu`
         F _ → { ( check F `mcp: anomalies has rows` ) }
     }
     ( check row_ok `mcp: a row carries its index and every value` )
+    ( check >= ( jint_of . an data `events_in_window` ) 1 `mcp: anomalies counts the events` )
+    ( check <= ( jint_of . an data `events_in_window` ) ( jint_of . an data `anomalies_in_window` ) `mcp: no more events than anomalies` )
+    : ~ b row_event T
+    ?? ( json_obj_get . an data `rows` ) {
+        T rows → {
+            : i nr ( json_arr_len rows )
+            : ~ i rk 0
+            ~ < rk nr {
+                ?? ( json_arr_get rows rk ) {
+                    T r → { ? >= ( jint_of r `event` ) 1 {} { = row_event F } }
+                    F _ → {}
+                }
+                = rk + rk 1
+            }
+        }
+        F _ → {}
+    }
+    ( check row_event `mcp: every anomalous row names its event` )
     ( call_free an )
 
     : Call all ( call r `anomalies` `{"model":"pub","all_points":true,"count":200}` `` )
@@ -417,6 +435,38 @@ $ `src/service.nu`
     ( check == ( jint_of . su data `points_in_window` ) 61 `mcp: summary counts the points` )
     ( check >= ( jint_of . su data `anomalies_in_window` ) 1 `mcp: summary counts the anomalies` )
     ( check <= ( jarr_len . su data `timeline` ) 4 `mcp: the timeline has at most the buckets asked` )
+    ( check == ( jarr_len . su data `events` ) ( jint_of . su data `events_in_window` ) `mcp: the summary lists every event when there are few` )
+    : ~ b ev_ok F
+    ?? ( json_obj_get . su data `events` ) {
+        T evs → {
+            ?? ( json_arr_get evs 0 ) {
+                T e0 → {
+                    : ~ b has_from F
+                    ?? ( json_obj_get e0 `from` ) { T _f → { = has_from T } F _ → {} }
+                    = ev_ok & >= ( jint_of e0 `rows` ) 1 & has_from > ( jarr_len e0 `versions` ) 0
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check ev_ok `mcp: an event has its rows, its start and its versions` )
+    : ~ i tl_events 0
+    ?? ( json_obj_get . su data `timeline` ) {
+        T tl → {
+            : i ntl ( json_arr_len tl )
+            : ~ i tk 0
+            ~ < tk ntl {
+                ?? ( json_arr_get tl tk ) {
+                    T bo → { = tl_events + tl_events ( jint_of bo `events` ) }
+                    F _ → {}
+                }
+                = tk + tk 1
+            }
+        }
+        F _ → {}
+    }
+    ( check | < ( jarr_len . su data `timeline` ) 1 == tl_events ( jint_of . su data `events_in_window` ) `mcp: the timeline's events add up` )
     ( check > ( jf_of . su data `anomaly_rate` ) 0.0 `mcp: summary has an anomaly rate` )
     : ~ b worst_ok F
     ?? ( json_obj_get . su data `worst` ) {
@@ -452,6 +502,13 @@ $ `src/service.nu`
     ( check . one ok `mcp: point answers for that index` )
     ( check ( jstr_eq . one data `model_name` `pub` ) `mcp: point names the model` )
     ( check ( jobj_at . one data `point` ) `mcp: point carries the row` )
+    ?? ( json_obj_get . one data `point` ) {
+        T prow → {
+            ( check ( jobj_at prow `values` ) `mcp: the row keeps its columns under values` )
+            ( check ! ( jobj_at prow `temp` ) `mcp: and not beside index and time` )
+        }
+        F _ → {}
+    }
     ( call_free one )
 
     : Call far ( call r `point` `{"model":"pub","index":100000}` `` )
@@ -465,10 +522,107 @@ $ `src/service.nu`
     ( check ( jobj_at . ca data `aggregate` ) `mcp: calibration has the aggregate` )
     ( call_free ca )
 
+    // Labels: the flagged row called a false positive carries the label
+    // in anomalies, is counted in the summary, and leaves calibration.
+    : Call an2 ( call r `anomalies` `{"model":"pub","count":1}` `` )
+    : ~ i aidx -1
+    ?? ( json_obj_get . an2 data `rows` ) {
+        T rows → { ?? ( json_arr_get rows 0 ) { T r0 → { = aidx ( jint_of r0 `index` ) } F _ → {} } }
+        F _ → {}
+    }
+    ( call_free an2 )
+    ( check >= aidx 0 `mcp: an anomaly to label` )
+    : Call lbad ( call r `label_anomaly` `{"model":"pub","index":0,"label":"meh"}` `` )
+    ( check ! . lbad ok `mcp: an unknown label is refused` )
+    ( call_free lbad )
+    : String largs ( string_from `{"model":"pub","index":` )
+    ( string_push_int largs aidx )
+    ( string_push_str largs `,"label":"false_positive","note":"window open"}` )
+    : Call lab ( call r `label_anomaly` ( string_data largs ) `` )
+    ( string_free largs )
+    ( check . lab ok `mcp: label_anomaly answers` )
+    ( check ( jstr_eq . lab data `label` `false_positive` ) `mcp: and echoes the label` )
+    ( check ( jstr_eq . lab data `note` `window open` ) `mcp: with the note` )
+    ( check == ( jint_of . lab data `index` ) aidx `mcp: on the row asked` )
+    ( check ( json_obj_has . lab data `at` ) `mcp: stamped` )
+    ( call_free lab )
+    : Call ll ( call r `labels` `{"model":"pub"}` `` )
+    ( check . ll ok `mcp: labels answers` )
+    ( check == ( jint_of . ll data `count` ) 1 `mcp: one label` )
+    ( check == ( jint_of . ll data `false_positives` ) 1 `mcp: counted as a false positive` )
+    ( call_free ll )
+    : Call an3 ( call r `anomalies` `{"model":"pub","count":1}` `` )
+    : ~ b lrow F
+    ?? ( json_obj_get . an3 data `rows` ) {
+        T rows → { ?? ( json_arr_get rows 0 ) { T r0 → { = lrow ( jstr_eq r0 `label` `false_positive` ) } F _ → {} } }
+        F _ → {}
+    }
+    ( check lrow `mcp: the row carries its label` )
+    ( call_free an3 )
+    : Call su2 ( call r `anomaly_summary` `{"model":"pub"}` `` )
+    : ~ i sfp 0
+    ?? ( json_obj_get . su2 data `labelled` ) { T lj → { = sfp ( jint_of lj `false_positive` ) } F _ → {} }
+    ( check == sfp 1 `mcp: the summary counts the labelled rows` )
+    ( call_free su2 )
+    : Call ca2 ( call r `calibration` `{"model":"pub"}` `` )
+    : ~ i cex 0
+    ?? ( json_obj_get . ca2 data `window` ) { T w → { = cex ( jint_of w `excluded` ) } F _ → {} }
+    ( check == cex 1 `mcp: calibration says it left the false positive out` )
+    ( call_free ca2 )
+
     : Call sc ( call r `score_point` `{"model":"pub","values":{"temp":99,"load":44}}` `` )
     ( check . sc ok `mcp: score_point answers` )
     ( check ( string_contains . sc text `anomaly` ) `mcp: score_point carries a verdict` )
+    ( check ( jobj_at . sc data `versions` ) `mcp: score_point lists the versions` )
+    ( check ( json_obj_has . sc data `severity` ) `mcp: score_point carries the severity` )
+    ( check ! ( json_obj_has . sc data `data_point` ) `mcp: score_point does not echo the values` )
+    ?? ( json_obj_get . sc data `versions` ) {
+        T svs → {
+            ?? ( json_obj_get svs `short_term` ) {
+                T svv → { ( check ( jobj_at svv `threshold_info` ) `mcp: score_point versions carry threshold_info` ) }
+                F _ → { ( check F `mcp: score_point has short_term` ) }
+            }
+        }
+        F _ → {}
+    }
+    : Call va ( call r `anomalies` `{"model":"pub","min_votes":2,"all_points":true}` `` )
+    ( check . va ok `mcp: anomalies takes min_votes` )
+    ( call_free va )
     ( call_free sc )
+}
+
+// The `weekly` version of `model` as describe_model shows it: its
+// window_minutes, n_estimators and enabled flag (−1 / F when absent).
+: Weekly {
+    i wmin
+    i est
+    b en
+}
+
+@ weekly_of Router r s model → Weekly {
+    : String args ( string_from `{"model":"` )
+    ( string_push_str args model )
+    ( string_push_str args `"}` )
+    : Call dm ( call r `describe_model` ( string_data args ) `` )
+    ( string_free args )
+    : ~ i wmin -1
+    : ~ i est -1
+    : ~ b en F
+    ?? ( json_obj_get . dm data `versions` ) {
+        T vs → {
+            ?? ( json_obj_get vs `weekly` ) {
+                T w → {
+                    = wmin ( jint_of w `window_minutes` )
+                    = est ( jint_of w `n_estimators` )
+                    ?? ( json_obj_get w `enabled` ) { T e → { = en ( json_as_bool e ) } F _ → {} }
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( call_free dm )
+    ^ @ Weekly { wmin est en }
 }
 
 @ test_scratch Router r → v {
@@ -476,6 +630,11 @@ $ `src/service.nu`
     ( check ! . noname ok `mcp: fork_model needs a name` )
     ( check ( string_contains . noname text `llm_` ) `mcp: and suggests the scratch prefix` )
     ( call_free noname )
+
+    // Give the source a configuration of its own: the fork must carry it.
+    : Call cfg ( call r `edit_model` `{"model":"pub","patch":{"versions":{"weekly":{"n_estimators":123,"enabled":false}}}}` `` )
+    ( check . cfg ok `mcp: the source's weekly version is edited` )
+    ( call_free cfg )
 
     : Call fk ( call r `fork_model` `{"source":"pub","name":"llm_fork","fields":["temp"]}` `` )
     ( check . fk ok `mcp: fork_model builds a scratch model` )
@@ -485,6 +644,11 @@ $ `src/service.nu`
     ( check > ( jint_of . fk data `points` ) 50 `mcp: fork trained on the slice` )
     ( check ( string_contains . fk text `delete_model when done` ) `mcp: fork tells what comes next` )
     ( call_free fk )
+
+    : Weekly fw ( weekly_of r `llm_fork` )
+    ( check == . fw est 123 `mcp: the fork inherits the source's version configuration` )
+    ( check ! . fw en `mcp: a version disabled on the source is disabled on the fork` )
+    ( check == . fw wmin 10080 `mcp: whole-slice training leaves the version's window as configured` )
 
     : Call lm ( call r `list_models` `{}` `` )
     ( check == ( jint_of . lm data `count` ) 2 `mcp: list_models now counts two` )
@@ -501,7 +665,13 @@ $ `src/service.nu`
 
     : Call ft ( call r `finetune` `{"model":"llm_fork","rate":0.05,"dry_run":true}` `` )
     ( check . ft ok `mcp: finetune dry_run answers` )
+    ( check ( jobj_at . ft data `versions` ) `mcp: finetune reports the versions` )
+    ( check ( jobj_at . ft data `window` ) `mcp: finetune reports the window` )
+    ( check ! ( json_obj_has . ft data `adjusted_margins` ) `mcp: finetune drops the legacy margin map` )
     ( call_free ft )
+    : Call fta ( call r `finetune` `{"model":"llm_fork","rate":0.05,"dry_run":true,"last":"all"}` `` )
+    ( check . fta ok `mcp: finetune takes last=all` )
+    ( call_free fta )
 
     : Call ed ( call r `edit_model` `{"model":"llm_fork","patch":{"alias":"forked"}}` `` )
     ( check . ed ok `mcp: edit_model applies a patch` )
@@ -629,11 +799,11 @@ $ `src/service.nu`
     ( check ! ( tools_has . gl body `org_keys` ) `mcp: ingest does not see org_keys` )
     ( check ! ( tools_has . gl body `org_users` ) `mcp: ingest does not see org_users` )
     ( check ! ( tools_has . gl body `claim_model` ) `mcp: ingest does not see claim_model` )
-    ( check == ( tools_count . gl body ) 22 `mcp: 22 tools for an ingest key` )
+    ( check == ( tools_count . gl body ) 24 `mcp: 24 tools for an ingest key` )
     ( out_free gl )
 
     : Out al ( rpc r `tools/list` `{}` AK )
-    ( check == ( tools_count . al body ) 26 `mcp: an admin key sees every tool` )
+    ( check == ( tools_count . al body ) 28 `mcp: an admin key sees every tool` )
     ( out_free al )
 
     // An invisible tool called by name is unknown to that caller.

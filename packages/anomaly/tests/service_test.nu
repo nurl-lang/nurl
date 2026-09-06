@@ -197,16 +197,33 @@ $ `src/service.nu`
     ?? ( json_obj_get . outl body `severity` ) { T e → { ?? ( json_num_as_f e ) { T x → { = sev x } F _ → {} } } F _ → {} }
     ( check > sev 1.0 `svc: aggregate severity above 1 for a flagged point` )
     : ~ f sev_st 0.0
+    : ~ b ti_ok F
     ?? ( json_obj_get . outl body `versions` ) {
         T vers → {
             ?? ( json_obj_get vers `short_term` ) {
-                T v → { ?? ( json_obj_get v `severity` ) { T e → { ?? ( json_num_as_f e ) { T x → { = sev_st x } F _ → {} } } F _ → {} } }
+                T v → {
+                    ?? ( json_obj_get v `severity` ) { T e → { ?? ( json_num_as_f e ) { T x → { = sev_st x } F _ → {} } } F _ → {} }
+                    // threshold_info names the band and its units: a
+                    // forest's margin is absolute, so it equals the
+                    // stored decision_margin.
+                    ?? ( json_obj_get v `threshold_info` ) {
+                        T ti → {
+                            : ~ f m 0.0
+                            : ~ f dm -1.0
+                            ?? ( json_obj_get ti `margin` ) { T e → { ?? ( json_num_as_f e ) { T x → { = m x } F _ → {} } } F _ → {} }
+                            ?? ( json_obj_get ti `decision_margin` ) { T e → { ?? ( json_num_as_f e ) { T x → { = dm x } F _ → {} } } F _ → {} }
+                            = ti_ok & == m dm ( jstr_eq ti `units` `absolute` )
+                        }
+                        F _ → {}
+                    }
+                }
                 F _ → {}
             }
         }
         F _ → {}
     }
     ( check > sev_st 0.0 `svc: per-version severity present` )
+    ( check ti_ok `svc: threshold_info carries decision_margin and units` )
     ( json_free . outl body )
     : SvcOut garb ( fire r `POST` `/detect_only/svc` `` `not json` )
     ( check == . garb status 400 `svc: garbage body -> 400` )
@@ -341,13 +358,29 @@ $ `src/service.nu`
     ( check == cal_rows 50 `svc: calibration scored the whole ring` )
     : ~ b cal_st F
     : ~ b cal_ladder F
+    : ~ b cal_units F
     ?? ( json_obj_get . cal body `versions` ) {
         T vers → {
             ?? ( json_obj_get vers `short_term` ) {
                 T v → {
                     = cal_st == ( jint_of v `n` ) 50
+                    = cal_units ( jstr_eq v `units` `absolute` )
                     ?? ( json_obj_get v `margin_for_rate` ) {
-                        T mfr → { ?? ( json_obj_get mfr `1%` ) { T _ → { = cal_ladder T } F _ → {} } }
+                        T mfr → {
+                            ?? ( json_obj_get mfr `1%` ) {
+                                T e → {
+                                    // requested_rate is the ladder step;
+                                    // achieved_rate = flagged / n.
+                                    : ~ f req 0.0
+                                    : ~ f ach -1.0
+                                    ?? ( json_obj_get e `requested_rate` ) { T x → { ?? ( json_num_as_f x ) { T y → { = req y } F _ → {} } } F _ → {} }
+                                    ?? ( json_obj_get e `achieved_rate` ) { T x → { ?? ( json_num_as_f x ) { T y → { = ach y } F _ → {} } } F _ → {} }
+                                    : f want / # f ( jint_of e `flagged` ) 50.0
+                                    = cal_ladder & == req 0.01 < ( float_abs - ach want ) 0.000000001
+                                }
+                                F _ → {}
+                            }
+                        }
                         F _ → {}
                     }
                 }
@@ -357,7 +390,8 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check cal_st `svc: calibration reports short_term over 50 rows` )
-    ( check cal_ladder `svc: calibration carries margin_for_rate` )
+    ( check cal_units `svc: calibration names the margin's units` )
+    ( check cal_ladder `svc: margin_for_rate carries requested and achieved rates` )
     ( json_free . cal body )
     : SvcOut cal4 ( fire r `GET` `/models/dynamic/nosuch/calibration` `` `` )
     ( check == . cal4 status 404 `svc: calibration missing -> 404` )
@@ -575,6 +609,155 @@ $ `src/service.nu`
     ( check == an5_miss an1_total `svc: a margin edit invalidates every cached verdict` )
     ( check > an5_epoch an1_epoch `svc: the epoch advanced` )
     ( json_free . an5 body )
+
+    // Runs: consecutive anomalous rows are one event. Every row in a run
+    // names it, the count is always there, and group=runs lists them.
+    : SvcOut an6 ( fire r `GET` `/models/dynamic/svc/anomalies` `limit=all&group=runs` `` )
+    ( check == . an6 status 200 `svc: anomalies group=runs -> 200` )
+    : i an6_runs ( jint_of . an6 body `runs` )
+    : ~ i an6_events -1
+    : ~ i an6_event_rows 0
+    : ~ b an6_shape T
+    ?? ( json_obj_get . an6 body `events` ) {
+        T evs → {
+            = an6_events ( json_arr_len evs )
+            : ~ i ek 0
+            ~ < ek an6_events {
+                ?? ( json_arr_get evs ek ) {
+                    T ev → {
+                        = an6_event_rows + an6_event_rows ( jint_of ev `rows` )
+                        ? != ( jint_of ev `run` ) + ek 1 { = an6_shape F } {}
+                        ? < ( jint_of ev `rows` ) 1 { = an6_shape F } {}
+                        ? > ( jint_of ev `from_index` ) ( jint_of ev `to_index` ) { = an6_shape F } {}
+                        ?? ( json_obj_get ev `versions` ) {
+                            T vs → { ? > ( json_arr_len vs ) 0 {} { = an6_shape F } }
+                            F _ → { = an6_shape F }
+                        }
+                    }
+                    F _ → {}
+                }
+                = ek + ek 1
+            }
+        }
+        F _ → {}
+    }
+    ( check == an6_events an6_runs `svc: group=runs lists one event per run` )
+    ( check an6_shape `svc: an event is numbered in order, spans rows and names its versions` )
+    : ~ i an6_rows_in_runs 0
+    : ~ b an6_run_ids T
+    ?? ( json_obj_get . an6 body `points` ) {
+        T pts → {
+            : i npt ( json_arr_len pts )
+            : ~ i pk 0
+            ~ < pk npt {
+                ?? ( json_arr_get pts pk ) {
+                    T pt → {
+                        ?? ( json_obj_get pt `run` ) {
+                            T ru → {
+                                = an6_rows_in_runs + an6_rows_in_runs 1
+                                ? | < ( json_as_int ru ) 1 > ( json_as_int ru ) an6_runs { = an6_run_ids F } {}
+                                ? ( jbool_of pt `anomaly` ) {} { = an6_run_ids F }
+                            }
+                            F _ → {}
+                        }
+                    }
+                    F _ → {}
+                }
+                = pk + pk 1
+            }
+        }
+        F _ → {}
+    }
+    ( check == an6_rows_in_runs an6_event_rows `svc: the rows in runs add up to the events' rows` )
+    ( check an6_run_ids `svc: a row's run is a listed one, and the row is an anomaly` )
+    ( check == an6_rows_in_runs ( jint_of . an6 body `anomalies` ) `svc: every anomalous row is in a run` )
+    // The first anomalous row, to label.
+    : ~ i lidx -1
+    ?? ( json_obj_get . an6 body `points` ) {
+        T pts → {
+            : i npt ( json_arr_len pts )
+            : ~ i pk 0
+            ~ & < pk npt < lidx 0 {
+                ?? ( json_arr_get pts pk ) {
+                    T pt → { ? ( jbool_of pt `anomaly` ) { = lidx ( jint_of pt `index` ) } {} }
+                    F _ → {}
+                }
+                = pk + pk 1
+            }
+        }
+        F _ → {}
+    }
+    ( json_free . an6 body )
+
+    // ── labels ────────────────────────────────────────────────────────
+    ( check >= lidx 0 `svc: an anomalous row to label` )
+    : SvcOut lb1 ( fire r `POST` `/models/dynamic/svc/labels` `` `{"index": 0, "label": "meh"}` )
+    ( check == . lb1 status 400 `svc: an unknown label -> 400` )
+    ( json_free . lb1 body )
+    : SvcOut lb2 ( fire r `POST` `/models/dynamic/svc/labels` `` `{"index": 100000, "label": "confirmed"}` )
+    ( check == . lb2 status 400 `svc: an index past the ring -> 400` )
+    ( json_free . lb2 body )
+    : SvcOut lb3 ( fire r `POST` `/models/dynamic/nosuch/labels` `` `{"index": 0, "label": "confirmed"}` )
+    ( check == . lb3 status 404 `svc: labels on a missing model -> 404` )
+    ( json_free . lb3 body )
+    : String lbody ( string_from `{"index": ` )
+    ( string_push_int lbody lidx )
+    ( string_push_str lbody `, "label": "false_positive", "note": "cleaning"}` )
+    : SvcOut lb4 ( fire r `POST` `/models/dynamic/svc/labels` `` ( string_data lbody ) )
+    ( string_free lbody )
+    ( check == . lb4 status 200 `svc: label -> 200` )
+    ( check == ( jint_of . lb4 body `index` ) lidx `svc: the label names the row` )
+    ( check ( jstr_eq . lb4 body `label` `false_positive` ) `svc: and the label` )
+    ( check ( jstr_eq . lb4 body `note` `cleaning` ) `svc: and the note` )
+    ( check >= ( jint_of . lb4 body `seq` ) lidx `svc: keyed by lifetime sequence` )
+    ( json_free . lb4 body )
+    : SvcOut lb5 ( fire r `GET` `/models/dynamic/svc/labels` `` `` )
+    ( check == . lb5 status 200 `svc: labels list -> 200` )
+    ( check == ( jint_of . lb5 body `count` ) 1 `svc: one label in force` )
+    ( check == ( jint_of . lb5 body `false_positives` ) 1 `svc: counted as a false positive` )
+    : ~ b lb5_row F
+    ?? ( json_obj_get . lb5 body `labels` ) {
+        T ls → { ?? ( json_arr_get ls 0 ) { T l0 → { = lb5_row & == ( jint_of l0 `index` ) lidx ( jstr_eq l0 `label` `false_positive` ) } F _ → {} } }
+        F _ → {}
+    }
+    ( check lb5_row `svc: the listed label carries the row's current index` )
+    ( json_free . lb5 body )
+    : SvcOut lb6 ( fire r `GET` `/models/dynamic/svc/anomalies` `limit=all` `` )
+    : ~ b lb6_row F
+    : ~ i lb6_epoch -1
+    ?? ( json_obj_get . lb6 body `cache` ) { T c → { = lb6_epoch ( jint_of c `epoch` ) } F _ → {} }
+    ?? ( json_obj_get . lb6 body `points` ) {
+        T pts → {
+            : i npt ( json_arr_len pts )
+            : ~ i pk 0
+            ~ < pk npt {
+                ?? ( json_arr_get pts pk ) {
+                    T pt → { ? == ( jint_of pt `index` ) lidx { = lb6_row ( jstr_eq pt `label` `false_positive` ) } {} }
+                    F _ → {}
+                }
+                = pk + pk 1
+            }
+        }
+        F _ → {}
+    }
+    ( check lb6_row `svc: the scan row carries its label` )
+    ( check == lb6_epoch an5_epoch `svc: a label does not move the scoring epoch` )
+    ( json_free . lb6 body )
+    : SvcOut lb7 ( fire r `GET` `/models/dynamic/svc/calibration` `` `` )
+    : ~ i lb7_ex -1
+    ?? ( json_obj_get . lb7 body `window` ) { T w → { = lb7_ex ( jint_of w `excluded` ) } F _ → {} }
+    ( check == lb7_ex 1 `svc: calibration leaves the false positive out` )
+    ( json_free . lb7 body )
+    : String lnone ( string_from `{"index": ` )
+    ( string_push_int lnone lidx )
+    ( string_push_str lnone `, "label": "none"}` )
+    : SvcOut lb8 ( fire r `POST` `/models/dynamic/svc/labels` `` ( string_data lnone ) )
+    ( string_free lnone )
+    ( check == . lb8 status 200 `svc: none -> 200` )
+    ( json_free . lb8 body )
+    : SvcOut lb9 ( fire r `GET` `/models/dynamic/svc/labels` `` `` )
+    ( check == ( jint_of . lb9 body `count` ) 0 `svc: none withdraws the label` )
+    ( json_free . lb9 body )
 
     // Import with a clock to find. An FMI-shaped file: the time is spread
     // over year/month/day/clock columns under Finnish names, and `-` is a

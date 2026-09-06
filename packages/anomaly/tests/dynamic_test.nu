@@ -128,7 +128,7 @@ $ `src/dynamic.nu`
     : IngestOut o101 ( ingest_pt mo 26.0 8.0 101 )
     ( check . o101 anomaly `stream: step change flagged` )
     ( check <= . o101 score -0.17 `stream: step change crosses the margin` )
-    ( check == . o101 n_versions 5 `stream: verdict carries all 5 versions` )
+    ( check == . o101 n_versions 6 `stream: verdict carries all 6 versions` )
 
     // detect_only sees the same outlier without touching anything.
     : Json probe ( json_obj_new )

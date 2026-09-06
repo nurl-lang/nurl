@@ -14,6 +14,7 @@
 //   GET    /models/dynamic/<model>/data       recent points (?limit=N&from=&to=&last=&fields=)
 //   GET    /models/dynamic/<model>/anomalies  scored ring (cached, filtered)
 //   GET    /models/dynamic/<model>/calibration  alert rates vs margins
+//   POST|GET /models/dynamic/<model>/labels   a reader's word on a stored point
 //   POST   /models/dynamic/<model>/import     a CSV/JSON/JSONL file of history
 //   POST   /models/dynamic/<model>/fork       a new model trained on a slice of this one's history
 //   POST   /models/dynamic/<model>/reset      drop data+forests, keep name
@@ -457,6 +458,7 @@ $ `stdlib/std/thread.nu`
         ^ r
     }
 
+    : *Meta vmm ( model_metadata mo )
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `model` ( json_str_lit mname ) )
@@ -470,8 +472,6 @@ $ `stdlib/std/thread.nu`
     // point. `score` and `margin` stay in each version's own units.
     : Json vers ( json_obj_new )
     : i nv ( vec_len [VerVerdict] . vd versions )
-    : ~ f top_sev 0.0
-    : ~ b first T
     : ~ i k 0
     ~ < k nv {
         ?? ( vec_get [VerVerdict] . vd versions k ) {
@@ -479,15 +479,22 @@ $ `stdlib/std/thread.nu`
                 : Json vo ( json_obj_new )
                 ( json_obj_set vo `anomaly` ( json_bool . vv anomaly ) )
                 ( json_obj_set vo `score` ( json_float . vv score ) )
-                : ~ f sev 0.0
-                ? > . vv margin 0.0 { = sev / - 0.0 . vv score . vv margin } {
-                    = sev ? <= . vv score 0.0 1.0 0.0
-                }
-                ( json_obj_set vo `severity` ( json_float sev ) )
-                ? || first > sev top_sev { = top_sev sev } {}
-                = first F
+                ( json_obj_set vo `severity` ( json_float ( anom_severity . vv score . vv margin ) ) )
+                // The range guard names the feature it judged by.
+                ? >= . vv vv_feat 0 {
+                    ?? ( vec_get [String] . vmm feats . vv vv_feat ) {
+                        T fname → { ( json_obj_set vo `feature` ( json_str_lit ( string_data fname ) ) ) }
+                        F _ → {}
+                    }
+                } {}
+                // `margin` is the absolute band the score was compared
+                // to; `decision_margin` the stored setting, which for the
+                // autoencoder is a fraction of its reconstruction
+                // threshold (SPEC §5.5) — `units` says which.
                 : Json ti ( json_obj_new )
                 ( json_obj_set ti `margin` ( json_float . vv margin ) )
+                ( json_obj_set ti `decision_margin` ( json_float . vv cfg_margin ) )
+                ( json_obj_set ti `units` ( json_str_lit ( __an_margin_units ( string_data . vv vvname ) ) ) )
                 ( json_obj_set vo `threshold_info` ti )
                 ( json_obj_set vers ( string_data . vv vvname ) vo )
             }
@@ -495,7 +502,7 @@ $ `stdlib/std/thread.nu`
         }
         = k + k 1
     }
-    ( json_obj_set o `severity` ( json_float top_sev ) )
+    ( json_obj_set o `severity` ( json_float . vd severity ) )
     ( json_obj_set o `versions` vers )
     ( json_obj_set o `data_point` ( json_clone body ) )
 
@@ -747,7 +754,11 @@ $ `stdlib/std/thread.nu`
             ( json_obj_set o `prefilter_contamination` ( json_float . ae prefilter ) )
             ( json_obj_set o `trained_at` ( json_int . ae trained_at ) )
             ( json_obj_set o `retrain_with_forests` ( json_bool . mm sched_ae ) )
-            ( json_obj_set o `decision_margin` ( json_float ( meta_version_margin mm `autoencoder` 0.05 ) ) )
+            : f arel ( meta_version_margin mm `autoencoder` 0.05 )
+            ( json_obj_set o `decision_margin` ( json_float arel ) )
+            // The band the score is actually compared to: threshold ×
+            // decision_margin (SPEC §5.5), in the score's own units.
+            ( json_obj_set o `effective_margin` ( json_float ( anom_ae_margin ae arel ) ) )
             ( json_obj_set o `feature_names` ( _an_jarr_of_strs . ae feats ) )
             : Json layers ( json_arr_new )
             : Mlp net . ae net
@@ -1044,6 +1055,14 @@ $ `stdlib/std/thread.nu`
 //   &last=<seconds>            shorthand: the last N seconds up to `to`/now
 //   &limit=N                   newest N rows of the window (default 2000)
 //   &only=anomalies            omit the rows nothing flagged
+//   &votes=N                   a row is an anomaly only when N or more
+//                              versions flagged it (default 1); shapes
+//                              `only=anomalies`, the `anomalies` count
+//                              and the runs
+//   &group=runs                add `events`: every run of consecutive
+//                              anomalous rows in the window, as one
+//                              entry each (the `runs` count and each
+//                              row's `run` are always there)
 //   &versions=a,b              keep only rows flagged by one of these
 //   &rows=N                    of the rows that survive the filters above,
 //                              return only the newest N (default: all)
@@ -1053,7 +1072,8 @@ $ `stdlib/std/thread.nu`
 //
 // `total`/`considered`/`anomalies` describe the whole window; `points` is
 // what survived `limit`, `only` and `versions`, so a filtered response
-// still says how much it filtered.
+// still says how much it filtered. A row a reader has labelled carries
+// its `label` (POST …/labels).
 @ __an_h_anomalies HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -1098,6 +1118,11 @@ $ `stdlib/std/thread.nu`
     : String vfilter ( __an_query_str . req query `versions` )
     : String ffilter ( __an_query_str . req query `fields` )
     : b only_anom == ( nurl_str_eq ( string_data only ) `anomalies` ) 1
+    : ~ i minvotes ( __an_query_int . req query `votes` 1 )
+    ? < minvotes 1 { = minvotes 1 } {}
+    : String group ( __an_query_str . req query `group` )
+    : b want_events == ( nurl_str_eq ( string_data group ) `runs` ) 1
+    ( string_free group )
 
     : *Model mo ( model_open st ( string_data mname ) )
 
@@ -1148,6 +1173,7 @@ $ `stdlib/std/thread.nu`
     // pass per row) run only for rows that are actually returned.
     : i np ( vec_len [ScoredPt] . so pts )
     : ( Vec i ) kept ( vec_new [i] )
+    : ~ i n_agreed 0
     = k 0
     ~ < k np {
         ?? ( vec_get [ScoredPt] . so pts k ) {
@@ -1164,7 +1190,9 @@ $ `stdlib/std/thread.nu`
                     } {}
                     = b + b 1
                 }
-                ? only_anom { ? . r sp_anomaly {} { = keep F } } {}
+                : b agreed ( scan_agreed r minvotes )
+                ? agreed { = n_agreed + n_agreed 1 } {}
+                ? only_anom { ? agreed {} { = keep F } } {}
                 ? > ( string_len vfilter ) 0 { ? matched {} { = keep F } } {}
                 ? keep { ( vec_push [i] kept k ) } {}
             }
@@ -1175,6 +1203,9 @@ $ `stdlib/std/thread.nu`
     : i nkept ( vec_len [i] kept )
     : ~ i kstart 0
     ? & > rows 0 > nkept rows { = kstart - nkept rows } {}
+    : ScanRuns sr ( scan_runs so minvotes )
+    : ( Vec Label ) labels ( model_labels mo )
+    : ( Vec i ) label_of ( model_label_map mo labels )
 
     : Json arr ( json_arr_new )
     : ~ i shown 0
@@ -1200,7 +1231,18 @@ $ `stdlib/std/thread.nu`
                 ( json_obj_set o `index` ( json_int . r sp_idx ) )
                 ( json_obj_set o `timestamp` ( json_int . r sp_ts ) )
                 ( json_obj_set o `score` ( json_float . r sp_score ) )
+                ( json_obj_set o `severity` ( json_float . r sp_severity ) )
                 ( json_obj_set o `anomaly` ( json_bool . r sp_anomaly ) )
+                ( json_obj_set o `votes` ( json_int ( json_arr_len flagged ) ) )
+                : i run_id ( _mlp_iget . sr run_of k )
+                ? > run_id 0 { ( json_obj_set o `run` ( json_int run_id ) ) } {}
+                : i li ( _mlp_iget label_of . r sp_idx )
+                ? >= li 0 {
+                    ?? ( vec_get [Label] labels li ) {
+                        T lb → { ( json_obj_set o `label` ( json_str_lit ( string_data . lb label ) ) ) }
+                        F _ → {}
+                    }
+                } {}
                 ( json_obj_set o `versions` flagged )
                 ? || want_fields . r sp_anomaly {
                     ?? ( model_point_json mo . r sp_idx ) {
@@ -1277,7 +1319,66 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `clock` ( json_str_lit ? . amm count_clock `count` `time` ) )
     ( json_obj_set o `data_points_count` ( json_int . so total ) )
     ( json_obj_set o `considered` ( json_int . so considered ) )
-    ( json_obj_set o `anomalies` ( json_int . so anomalies ) )
+    // `anomalies` counts the rows `votes` versions or more flagged; at the
+    // default of one that is every flagged row.
+    ( json_obj_set o `anomalies` ( json_int n_agreed ) )
+    ( json_obj_set o `votes` ( json_int minvotes ) )
+    : i nruns ( vec_len [ScanRun] . sr runs )
+    ( json_obj_set o `runs` ( json_int nruns ) )
+    ? want_events {
+        : Json evs ( json_arr_new )
+        : ~ i ri 0
+        ~ < ri nruns {
+            ?? ( vec_get [ScanRun] . sr runs ri ) {
+                T ru → {
+                    : Json eo ( json_obj_new )
+                    ( json_obj_set eo `run` ( json_int . ru run ) )
+                    ( json_obj_set eo `rows` ( json_int . ru rows ) )
+                    ?? ( vec_get [ScoredPt] . so pts . ru first_k ) {
+                        T fr → {
+                            ( json_obj_set eo `from_index` ( json_int . fr sp_idx ) )
+                            ( json_obj_set eo `from` ( json_int . fr sp_ts ) )
+                        }
+                        F _ → {}
+                    }
+                    ?? ( vec_get [ScoredPt] . so pts . ru last_k ) {
+                        T lr → {
+                            ( json_obj_set eo `to_index` ( json_int . lr sp_idx ) )
+                            ( json_obj_set eo `to` ( json_int . lr sp_ts ) )
+                        }
+                        F _ → {}
+                    }
+                    ?? ( vec_get [ScoredPt] . so pts . ru worst_k ) {
+                        T wr → {
+                            ( json_obj_set eo `worst_index` ( json_int . wr sp_idx ) )
+                            ( json_obj_set eo `worst_score` ( json_float . wr sp_score ) )
+                            ( json_obj_set eo `worst_severity` ( json_float . wr sp_severity ) )
+                        }
+                        F _ → {}
+                    }
+                    : Json rv ( json_arr_new )
+                    : ~ i b 0
+                    ~ < b nvn {
+                        ? != & >> . ru flagged b 1 0 {
+                            ?? ( vec_get [String] . so vnames b ) {
+                                T nm → { ( json_arr_push rv ( json_str_lit ( string_data nm ) ) ) }
+                                F _ → {}
+                            }
+                        } {}
+                        = b + b 1
+                    }
+                    ( json_obj_set eo `versions` rv )
+                    ( json_arr_push evs eo )
+                }
+                F _ → {}
+            }
+            = ri + ri 1
+        }
+        ( json_obj_set o `events` evs )
+    } {}
+    ( scan_runs_free sr )
+    ( vec_free [i] label_of )
+    ( labels_free labels )
     ( json_obj_set o `returned` ( json_int shown ) )
     ( json_obj_set o `model_versions` vers )
     ( json_obj_set o `cache` cache )
@@ -1329,6 +1430,188 @@ $ `stdlib/std/thread.nu`
     : HttpResponse r ( response_json 200 o )
     ( json_free o )
     ( string_free msg )
+    ( store_free st )
+    ( string_free mname )
+    ^ r
+}
+
+// A principal as a label's `by`: the person's name, else their email,
+// else the key that spoke, else the subject.
+@ __an_principal_handle Principal who → String {
+    ? > ( string_len . who pname ) 0 { ^ ( string_from ( string_data . who pname ) ) } {}
+    ? > ( string_len . who email ) 0 { ^ ( string_from ( string_data . who email ) ) } {}
+    ? & . who via_key > ( string_len . who key_id ) 0 {
+        : String k ( string_from `key:` )
+        ( string_push_str k ( string_data . who key_id ) )
+        ^ k
+    } {}
+    ^ ( string_from ( string_data . who sub ) )
+}
+
+@ __an_label_json Label lb i index → Json {
+    : Json o ( label_to_json lb )
+    ? >= index 0 { ( json_obj_set o `index` ( json_int index ) ) } { ( json_obj_set o `evicted` ( json_bool T ) ) }
+    ^ o
+}
+
+// POST /models/dynamic/<m>/labels
+//
+// Body: {"index": N, "label": "false_positive" | "confirmed" | "none",
+// "note": "…"}. What a reader says about the stored row at `index`:
+// the label rides on the row through the scan and a false positive is
+// left out of calibration and fine-tune. `none` withdraws an earlier
+// label. Recorded with who said it and when; verdicts are untouched.
+@ __an_h_label HttpRequest req Params p → HttpResponse {
+    : String mname ( __an_param_model p )
+    ? ( __an_name_ok ( string_data mname ) ) {} {
+        ( string_free mname )
+        ^ ( __an_bad_name )
+    }
+    : Gate gate ( __an_gate_model req ( string_data mname ) F T )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rd
+    }
+    : Store st ( store_open g_an_root )
+    ? ( store_exists st ( string_data mname ) ) {} {
+        : HttpResponse r404 ( __an_404_model ( string_data mname ) )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ r404
+    }
+    : ~ i index -1
+    : ~ String label ( string_new )
+    : ~ String note ( string_new )
+    ?? ( __an_body_json req ) {
+        T body → {
+            ? ( json_is_obj body ) {
+                = index ( _an_jint body `index` -1 )
+                ?? ( json_obj_get body `label` ) {
+                    T lj → { ? ( json_is_str lj ) { ( string_push_str label ( json_str_data lj ) ) } {} }
+                    F _ → {}
+                }
+                ?? ( json_obj_get body `note` ) {
+                    T nj → { ? ( json_is_str nj ) { ( string_push_str note ( json_str_data nj ) ) } {} }
+                    F _ → {}
+                }
+            } {}
+            ( json_free body )
+        }
+        F _ → {}
+    }
+    ? ( label_known ( string_data label ) ) {} {
+        ( string_free label )
+        ( string_free note )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ ( __an_json_err 400 `label must be "false_positive", "confirmed" or "none"` )
+    }
+    : *Model mo ( model_open st ( string_data mname ) )
+    : Principal who . gate who
+    : String by ( __an_principal_handle who )
+    : i at ( now_seconds )
+    : i seq ( model_label_point mo index ( string_data label ) ( string_data by ) ( string_data note ) at )
+    ? >= seq 0 {} {
+        ( model_free mo )
+        ( string_free by )
+        ( string_free label )
+        ( string_free note )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ ( __an_json_err 400 `index must name a stored point` )
+    }
+    : ~ i ts 0
+    ?? ( vec_get [i] . mo times index ) { T t → { = ts t } F _ → {} }
+    : String msg ( string_from `Point ` )
+    ( string_push_int msg index )
+    ( string_push_str msg ` of ` )
+    ( string_push_str msg ( string_data mname ) )
+    ( string_push_str msg ` labelled ` )
+    ( string_push_str msg ( string_data label ) )
+    : Json o ( __an_ok_msg ( string_data msg ) )
+    ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
+    ( json_obj_set o `index` ( json_int index ) )
+    ( json_obj_set o `seq` ( json_int seq ) )
+    ( json_obj_set o `timestamp` ( json_int ts ) )
+    ( json_obj_set o `label` ( json_str_lit ( string_data label ) ) )
+    ( json_obj_set o `by` ( json_str_lit ( string_data by ) ) )
+    ( json_obj_set o `at` ( json_int at ) )
+    ( json_obj_set o `note` ( json_str_lit ( string_data note ) ) )
+    : HttpResponse r ( response_json 200 o )
+    ( json_free o )
+    ( string_free msg )
+    ( model_free mo )
+    ( string_free by )
+    ( string_free label )
+    ( string_free note )
+    ( store_free st )
+    ( __an_gate_free gate )
+    ( string_free mname )
+    ^ r
+}
+
+// GET /models/dynamic/<m>/labels — the labels in force, each with the
+// row's current `index` or `evicted` when the ring has let the row go.
+@ __an_h_labels HttpRequest req Params p → HttpResponse {
+    : String mname ( __an_param_model p )
+    ? ( __an_name_ok ( string_data mname ) ) {} {
+        ( string_free mname )
+        ^ ( __an_bad_name )
+    }
+    : Gate gate ( __an_gate_model req ( string_data mname ) F F )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rd
+    }
+    ( __an_gate_free gate )
+    : Store st ( store_open g_an_root )
+    ? ( store_exists st ( string_data mname ) ) {} {
+        : HttpResponse r404 ( __an_404_model ( string_data mname ) )
+        ( store_free st )
+        ( string_free mname )
+        ^ r404
+    }
+    : *Model mo ( model_open st ( string_data mname ) )
+    : ( Vec Label ) labels ( model_labels mo )
+    : i base ( model_seq_base mo )
+    : i n ( model_n_points mo )
+    : Json arr ( json_arr_new )
+    : ~ i fps 0
+    : ~ i oks 0
+    : i nl ( vec_len [Label] labels )
+    : ~ i k 0
+    ~ < k nl {
+        ?? ( vec_get [Label] labels k ) {
+            T lb → {
+                : ~ i idx - . lb seq base
+                ? | < idx 0 >= idx n { = idx -1 } {}
+                ( json_arr_push arr ( __an_label_json lb idx ) )
+                ? == ( nurl_str_eq ( string_data . lb label ) ANOM_LABEL_FP ) 1 { = fps + fps 1 } { = oks + oks 1 }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    : Json o ( json_obj_new )
+    ( json_obj_set o `status` ( json_str_lit `success` ) )
+    ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
+    : *Meta lmm . mo meta
+    ( json_obj_set o `clock` ( json_str_lit ? . lmm count_clock `count` `time` ) )
+    ( json_obj_set o `count` ( json_int nl ) )
+    ( json_obj_set o `false_positives` ( json_int fps ) )
+    ( json_obj_set o `confirmed` ( json_int oks ) )
+    ( json_obj_set o `labels` arr )
+    : HttpResponse r ( response_json 200 o )
+    ( json_free o )
+    ( labels_free labels )
+    ( model_free mo )
     ( store_free st )
     ( string_free mname )
     ^ r
@@ -1559,8 +1842,18 @@ $ `stdlib/std/thread.nu`
         } {}
         = k + k 1
     }
+    // What the fork inherits besides the points: the clock, the version
+    // configuration (which versions, their windows and forests) and the
+    // retrain schedule, so it behaves like its source once it is fed; and
+    // the autoencoder's layout, so its own is trained the same shape.
     : *Meta sm . smo meta
     : b count_clock . sm count_clock
+    : ( Vec VerCfg ) src_versions ( meta_clone_versions sm )
+    : i src_sched_below . sm sched_below
+    : i src_sched_at_max . sm sched_at_max
+    : b src_sched_ae . sm sched_ae
+    : AeModel sae . smo ae
+    : ( Vec i ) ae_layout ? . sae trained ( ae_hidden sae ) ( vec_new [i] )
     ( model_free smo )
     : i nrec ( vec_len [Json] recs )
     ? < nrec ANOM_MIN_POINTS {
@@ -1574,6 +1867,8 @@ $ `stdlib/std/thread.nu`
         : HttpResponse rr ( __an_json_err 400 ( string_data m ) )
         ( string_free m )
         ( vec_free_with [Json] recs \ Json j → v { ( json_free j ) } )
+        ( vec_free_with [VerCfg] src_versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
+        ( vec_free [i] ae_layout )
         ( store_free st )
         ( __an_gate_free gate )
         ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
@@ -1586,6 +1881,11 @@ $ `stdlib/std/thread.nu`
     : *Model mo ( model_open st ( string_data name ) )
     : *Meta mm . mo meta
     = . mm count_clock count_clock
+    ( vec_free_with [VerCfg] . mm versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
+    = . mm versions src_versions
+    = . mm sched_below src_sched_below
+    = . mm sched_at_max src_sched_at_max
+    = . mm sched_ae src_sched_ae
     : i maxp ? > nrec ANOM_MAX_POINTS nrec ANOM_MAX_POINTS
     ( model_set_limits mo ANOM_MIN_POINTS maxp )
     : ImportReport rep ( model_import mo recs )
@@ -1602,6 +1902,7 @@ $ `stdlib/std/thread.nu`
         ( string_free m )
         ( import_report_free rep )
         ( model_free mo )
+        ( vec_free [i] ae_layout )
         : b _d ( store_delete st ( string_data name ) )
         ( store_free st )
         ( __an_gate_free gate )
@@ -1612,7 +1913,8 @@ $ `stdlib/std/thread.nu`
     } {}
     ( __an_gate_claim gate ( string_data name ) )
     ( __an_gate_free gate )
-    : WholeTrain wt ( model_train_whole mo rate )
+    : WholeTrain wt ( model_train_whole mo rate ae_layout )
+    ( vec_free [i] ae_layout )
     : ScanOut so ( model_scan mo 0 0 0 F )
 
     : Json o ( json_obj_new )
@@ -1926,9 +2228,19 @@ $ `stdlib/std/thread.nu`
     ^ key
 }
 
+// What a version's margin is measured in: a forest's is an absolute
+// offset on its decision function, the autoencoder's a fraction of its
+// reconstruction threshold (SPEC §5.5). The calibration and fine-tune
+// reports carry every number of a version in these units.
+@ __an_margin_units s vname → s {
+    ? ( _an_is_guard_name vname ) { ^ `standard_deviations` } {}
+    ^ ? == ( nurl_str_eq vname `autoencoder` ) 1 `relative_to_threshold` `absolute`
+}
+
 // One version's calibration block.
 @ __an_cal_ver_json CalVer cv b with_curve → Json {
     : Json o ( json_obj_new )
+    ( json_obj_set o `units` ( json_str_lit ( __an_margin_units ( string_data . cv cvname ) ) ) )
     ( json_obj_set o `margin` ( json_float . cv cur_margin ) )
     ( json_obj_set o `n` ( json_int . cv n ) )
     ( json_obj_set o `flagged` ( json_int . cv flagged ) )
@@ -1944,9 +2256,17 @@ $ `stdlib/std/thread.nu`
     ~ < k nr {
         : f r ( _mlp_fget rates k )
         : f m ( cal_margin_for_rate cv r )
+        : i fl ( cal_flagged_at cv m )
         : Json e ( json_obj_new )
         ( json_obj_set e `margin` ( json_float m ) )
-        ( json_obj_set e `flagged` ( json_int ( cal_flagged_at cv m ) ) )
+        ( json_obj_set e `flagged` ( json_int fl ) )
+        // The rate asked for and the one the data could supply: they
+        // part where the decision values tie (see cal_margin_for_rate).
+        ( json_obj_set e `requested_rate` ( json_float r ) )
+        : ~ f ach 0.0
+        ? > . cv n 0 { = ach / # f fl # f . cv n } {}
+        ( json_obj_set e `achieved_rate` ( json_float ach ) )
+        ( json_obj_set e `exact` ( json_bool == fl # i ( float_round * r # f . cv n ) ) )
         : String key ( __an_rate_key r )
         ( json_obj_set mfr ( string_data key ) e )
         ( string_free key )
@@ -2046,6 +2366,7 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set wj `from` ( json_int from_ts ) )
     ( json_obj_set wj `to` ( json_int to_ts ) )
     ( json_obj_set wj `rows` ( json_int . cal n_rows ) )
+    ( json_obj_set wj `excluded` ( json_int . cal excluded ) )
     ( json_obj_set wj `total` ( json_int ( model_n_points mo ) ) )
     ( json_obj_set o `window` wj )
     : Json agg ( json_obj_new )
@@ -2207,6 +2528,10 @@ $ `stdlib/std/thread.nu`
     : Json margins ( json_obj_new )
     : Json scores ( json_obj_new )
     : Json vers ( json_obj_new )
+    // Versions whose data could not supply the requested rate exactly
+    // (their decision values tie at the cut) are named in a note, with
+    // the rate they reach, so the caller does not read `rate` as a fact.
+    : String note ( string_new )
     : i ni ( vec_len [FtVer] . rep items )
     : ~ i k 0
     ~ < k ni {
@@ -2215,6 +2540,7 @@ $ `stdlib/std/thread.nu`
                 ( json_obj_set margins ( string_data . ft ftname ) ( json_float . ft new_margin ) )
                 ( json_obj_set scores ( string_data . ft ftname ) ( json_float . ft worst ) )
                 : Json v ( json_obj_new )
+                ( json_obj_set v `units` ( json_str_lit ( __an_margin_units ( string_data . ft ftname ) ) ) )
                 ( json_obj_set v `old_margin` ( json_float . ft old_margin ) )
                 ( json_obj_set v `new_margin` ( json_float . ft new_margin ) )
                 ( json_obj_set v `n` ( json_int . ft n ) )
@@ -2228,6 +2554,24 @@ $ `stdlib/std/thread.nu`
                 } {}
                 ( json_obj_set v `rate_before` ( json_float rb ) )
                 ( json_obj_set v `rate_after` ( json_float ra ) )
+                : b exact == . ft after # i ( float_round * rate # f . ft n )
+                ( json_obj_set v `exact` ( json_bool exact ) )
+                ? | exact <= . ft n 0 {} {
+                    ? == ( string_len note ) 0 {
+                        ( string_push_str note `Requested rate ` )
+                        ( string_push_str note ( float_to_string rate ) )
+                        ( string_push_str note ` is not a rate the window's scores can supply exactly (they tie at the cut); nearest achievable:` )
+                    } { ( string_push_char note 44 ) }
+                    ( string_push_char note 32 )
+                    ( string_push_str note ( string_data . ft ftname ) )
+                    ( string_push_str note ` ` )
+                    ( string_push_str note ( float_to_string ( round_sig ra 3 ) ) )
+                    ( string_push_str note ` (` )
+                    ( string_push_int note . ft after )
+                    ( string_push_str note ` of ` )
+                    ( string_push_int note . ft n )
+                    ( string_push_str note `)` )
+                }
                 ( json_obj_set v `worst` ( json_float . ft worst ) )
                 ( json_obj_set v `applied` ( json_bool . ft applied ) )
                 ( json_obj_set v `from` ( json_int . ft ft_from ) )
@@ -2248,12 +2592,17 @@ $ `stdlib/std/thread.nu`
         ( string_push_str msg ( string_data mname ) )
     }
     : Json o ( __an_ok_msg ( string_data msg ) )
+    : *Meta fmm . mo meta
+    ( json_obj_set o `clock` ( json_str_lit ? . fmm count_clock `count` `time` ) )
     ( json_obj_set o `rate` ( json_float rate ) )
     ( json_obj_set o `dry_run` ( json_bool dry ) )
+    ? > ( string_len note ) 0 { ( json_obj_set o `note` ( json_str_lit ( string_data note ) ) ) } {}
+    ( string_free note )
     : Json wj ( json_obj_new )
     ( json_obj_set wj `from` ( json_int from_ts ) )
     ( json_obj_set wj `to` ( json_int to_ts ) )
     ( json_obj_set wj `rows` ( json_int . rep n_rows ) )
+    ( json_obj_set wj `excluded` ( json_int . rep excluded ) )
     ( json_obj_set wj `own` ( json_bool own ) )
     ( json_obj_set o `window` wj )
     ( json_obj_set o `versions` vers )
@@ -3890,6 +4239,8 @@ $ `stdlib/std/thread.nu`
     ( router_post r `/models/dynamic/:model/fork` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_fork req p ) } )
     ( router_get r `/models/dynamic/:model/anomalies` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_anomalies req p ) } )
     ( router_post r `/models/dynamic/:model/reset` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_reset req p ) } )
+    ( router_post r `/models/dynamic/:model/labels` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_label req p ) } )
+    ( router_get r `/models/dynamic/:model/labels` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_labels req p ) } )
     ( router_delete r `/delete_model/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_delete req p ) } )
     ( router_get r `/delete_model/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_delete req p ) } )
     ( router_put r `/api/dynamic/:model/schedule` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_schedule req p ) } )
