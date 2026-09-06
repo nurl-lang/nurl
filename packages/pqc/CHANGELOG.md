@@ -5,6 +5,15 @@ All notable changes to `pqc` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-09-06
+
+### Fixed
+
+- `probe HOST:PORT` ends the port on its own line again. The toolchain's
+  print family settled on one rule (`print` = no newline, `println` =
+  newline) and `nurl_print_int` stopped adding one; 0.2.1 built with a
+  current toolchain ran the port into the next line.
+
 ## [0.2.1] — 2026-08-19
 
 ### Fixed
