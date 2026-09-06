@@ -11,15 +11,18 @@
 //   GET    /models/dynamic                    list models + metadata
 //   GET    /models/dynamic/<model>/metadata   metadata (+ autoencoder state)
 //   PUT    /models/dynamic/<model>/metadata   edit schedule / version configs
-//   GET    /models/dynamic/<model>/data       recent points (?limit=N|all)
+//   GET    /models/dynamic/<model>/data       recent points (?limit=N&from=&to=&last=&fields=)
 //   GET    /models/dynamic/<model>/anomalies  scored ring (cached, filtered)
 //   GET    /models/dynamic/<model>/calibration  alert rates vs margins
 //   POST   /models/dynamic/<model>/import     a CSV/JSON/JSONL file of history
+//   POST   /models/dynamic/<model>/fork       a new model trained on a slice of this one's history
 //   POST   /models/dynamic/<model>/reset      drop data+forests, keep name
 //   DELETE|GET /delete_model/<model>          delete entirely
 //   PUT    /api/dynamic/<model>/schedule      retraining schedule
 //   POST   /api/dynamic/<model>/finetune      set margins from a target alert rate
 //   POST   /train/autoencoder/<model>         train the autoencoder version
+//   POST   /mcp                               the same API for a language model (src/mcp.nu)
+//   GET    /.well-known/oauth-protected-resource[/mcp]  where /mcp callers get a token
 //
 // Model names must match ^[a-zA-Z0-9_]+$ (400 otherwise, same message as
 // the reference). Divergence from the reference: /detect_anomalies scores
@@ -61,6 +64,7 @@ $ `src/importer.nu`
 $ `src/authz.nu`
 $ `src/orgfiles.nu`
 $ `src/analyze.nu`
+$ `src/mcp.nu`
 $ `stdlib/std/thread.nu`
 
 // Store root used by every handler; set once before serving.
@@ -294,7 +298,7 @@ $ `stdlib/std/thread.nu`
 
 @ __an_gate_deny Gate g → HttpResponse {
     ? == . g status AZ_GATE_FORBID {
-        ^ ( __an_json_err 403 `Forbidden: this model belongs to another user.` )
+        ^ ( __an_json_err 403 `Forbidden: your role may not do this. Administrators may change any of the organisation's models and manage its members; every member may create, tune and delete scratch models named llm_… .` )
     } {}
     // A credential was presented and refused: say why. A bare 401 turns a
     // one-line configuration mistake into a sign-in screen that reappears
@@ -349,8 +353,10 @@ $ `stdlib/std/thread.nu`
         // that governs sending points at all: requiring an admin here would
         // mean handing a data producer an administrator's credential to
         // report a reading, which is the opposite of least privilege.
+        // A scratch model (`llm_…`) is any member's to bring into being:
+        // that is what the namespace is for (az_may_write).
         ? allow_create {
-            ? ( principal_may_ingest p ) { ^ @ Gate { T AZ_GATE_OK p T } } {}
+            ? | ( principal_may_ingest p ) ( az_is_scratch_model name ) { ^ @ Gate { T AZ_GATE_OK p T } } {}
             ^ @ Gate { F AZ_GATE_FORBID p F }
         } {}
         // Not a permission problem — the handler's own 404 is the honest
@@ -401,7 +407,7 @@ $ `stdlib/std/thread.nu`
     : Gate g ( __an_gate_model req name T F )
     ? . g allowed {} { ^ g }
     : Principal ip . g who
-    ? ( principal_may_ingest ip ) {} { ^ @ Gate { F AZ_GATE_FORBID . g who F } }
+    ? | ( principal_may_ingest ip ) ( az_is_scratch_model name ) {} { ^ @ Gate { F AZ_GATE_FORBID . g who F } }
     ^ g
 }
 
@@ -651,9 +657,9 @@ $ `stdlib/std/thread.nu`
     ^ resp
 }
 
-// The listing is where "you see only your own models" is actually visible,
-// so it filters rather than 403s: a viewer's listing simply does not
-// mention what belongs to someone else.
+// The listing is where "you see only your organisation's models" is
+// actually visible, so it filters rather than 403s: a member's listing
+// simply does not mention what belongs to another organisation.
 @ __an_h_models HttpRequest req Params p → HttpResponse {
     : Gate gate ( __an_gate_auth req F )
     ? . gate allowed {} {
@@ -664,9 +670,13 @@ $ `stdlib/std/thread.nu`
     : Principal lp . gate who
     // With authentication off there is one implicit organisation and the
     // whole store is it. With it on, the store is FLAT — one directory of
-    // models shared by every organisation — so an admin's world is the set
+    // models shared by every organisation — so a member's world is the set
     // its organisation has CLAIMED, never the directory listing. Showing
     // the latter would show one tenant another tenant's models.
+    //
+    // Every member sees the same set, whatever their role: the listing
+    // must agree with az_may_see, or a viewer is told "no models" about a
+    // model it can read by name.
     : b see_all ! ( anomaly_authz_enabled )
     // One database open for the whole listing: asking per model would
     // reopen it once per row.
@@ -676,11 +686,7 @@ $ `stdlib/std/thread.nu`
             F _ → {}
             T db → {
                 ( vec_free [String] owned )
-                ? ( principal_is_admin lp ) {
-                    = owned ( az_org_model_names db )
-                } {
-                    = owned ( az_owned_names db ( string_data . lp sub ) )
-                }
+                = owned ( az_org_model_names db )
             }
         }
     }
@@ -856,40 +862,120 @@ $ `stdlib/std/thread.nu`
         ?? ( string_to_int atq ) { T x → { = at x } F _ → {} }
     } {}
     ( string_free atq )
+    // ?from=<unix>&to=<unix>&last=<seconds>: a window over the stored
+    // timestamps, `last` anchored to the newest stored point (or `to`),
+    // never to the server's clock. ?fields=a,b projects each row to those
+    // fields plus its timestamp (`*` = every field).
+    : i q_from ( __an_query_int . req query `from` 0 )
+    : i q_to ( __an_query_int . req query `to` 0 )
+    : i q_last ( __an_query_int . req query `last` 0 )
+    : String ffilter ( __an_query_str . req query `fields` )
+    // `fields=*` is every field, which is what no projection returns.
+    : b want_fields & > ( string_len ffilter ) 0 == ( nurl_str_eq ( string_data ffilter ) `*` ) 0
+    : ( Vec String ) fields ( string_split ffilter `,` )
+    ( string_free ffilter )
     : ( Vec String ) pts ( store_load_points st ( string_data mname ) )
     : i total ( vec_len [String] pts )
-    : ~ i from 0
-    : ~ i upto total
+    : ~ i from_ts q_from
+    : i to_ts q_to
+    ? > q_last 0 {
+        : ~ i anchor to_ts
+        ? > anchor 0 {} {
+            ? > total 0 {
+                ?? ( vec_get [String] pts - total 1 ) { T l → { = anchor ( _an_line_ts ( string_data l ) ) } F _ → {} }
+            } {}
+        }
+        ? > anchor 0 { = from_ts - anchor q_last } {}
+    } {}
+    : b windowed | > from_ts 0 > to_ts 0
+    // Which rows: one by index, or the window's, newest `limit` of them.
+    : ( Vec i ) kept ( vec_new [i] )
     ? >= at 0 {
-        = from at
-        = upto + at 1
-        ? > upto total { = upto total } {}
+        ? < at total { ( vec_push [i] kept at ) } {}
     } {
-        ? > limit 0 {
-            ? > total limit { = from - total limit } {}
-        } {}
+        : ~ i k 0
+        ~ < k total {
+            : ~ b keep T
+            ? windowed {
+                ?? ( vec_get [String] pts k ) {
+                    T l → {
+                        : i ts ( _an_line_ts ( string_data l ) )
+                        ? & > from_ts 0 < ts from_ts { = keep F } {}
+                        ? & > to_ts 0 > ts to_ts { = keep F } {}
+                    }
+                    F _ → {}
+                }
+            } {}
+            ? keep { ( vec_push [i] kept k ) } {}
+            = k + k 1
+        }
     }
+    : i in_window ( vec_len [i] kept )
+    : ~ i kstart 0
+    ? & > limit 0 > in_window limit { = kstart - in_window limit } {}
     : Json arr ( json_arr_new )
-    : ~ i k from
-    ~ < k upto {
+    // The ring index of each returned row, beside the rows rather than
+    // inside them: a record may have a field called `index`, and the scan
+    // points (`/anomalies`) name rows by this index.
+    : Json idxs ( json_arr_new )
+    : ~ i ki kstart
+    ~ < ki in_window {
+        : i k ( _mlp_iget kept ki )
+        = ki + ki 1
         ?? ( vec_get [String] pts k ) {
             T l → {
                 : !Json JsonError jr ( json_parse ( string_data l ) )
                 ?? jr {
-                    T j → { ( json_arr_push arr j ) }
+                    T j → {
+                        ( json_arr_push idxs ( json_int k ) )
+                        ? want_fields {
+                            : Json row ( json_obj_new )
+                            ?? ( json_obj_get j `timestamp` ) {
+                                T tv → { ( json_obj_set row `timestamp` ( json_clone tv ) ) }
+                                F _ → {}
+                            }
+                            : i nf ( vec_len [String] fields )
+                            : ~ i fi 0
+                            ~ < fi nf {
+                                ?? ( vec_get [String] fields fi ) {
+                                    T fname → {
+                                        ?? ( json_obj_get j ( string_data fname ) ) {
+                                            T fv → { ( json_obj_set row ( string_data fname ) ( json_clone fv ) ) }
+                                            F _ → {}
+                                        }
+                                    }
+                                    F _ → {}
+                                }
+                                = fi + fi 1
+                            }
+                            ( json_free j )
+                            ( json_arr_push arr row )
+                        } { ( json_arr_push arr j ) }
+                    }
                     F _ → {}
                 }
             }
             F _ → {}
         }
-        = k + k 1
     }
+    ( vec_free [i] kept )
+    ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
     ( vec_free_with [String] pts \ String x → v { ( string_free x ) } )
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
+    // Which clock the timestamps are on: seconds, or ticks of a count.
+    ?? ( store_load_meta st ( string_data mname ) ) {
+        T dmm → {
+            ( json_obj_set o `clock` ( json_str_lit ? . dmm count_clock `count` `time` ) )
+            ( meta_free dmm )
+        }
+        F _ → {}
+    }
     ( json_obj_set o `data_points_count` ( json_int total ) )
+    ( json_obj_set o `in_window` ( json_int in_window ) )
     ( json_obj_set o `data` arr )
+    ( json_obj_set o `indices` idxs )
     : HttpResponse r ( response_json 200 o )
     ( json_free o )
     ( store_free st )
@@ -959,7 +1045,9 @@ $ `stdlib/std/thread.nu`
 //   &limit=N                   newest N rows of the window (default 2000)
 //   &only=anomalies            omit the rows nothing flagged
 //   &versions=a,b              keep only rows flagged by one of these
-//   &fields=x,y                include these numeric fields per row
+//   &rows=N                    of the rows that survive the filters above,
+//                              return only the newest N (default: all)
+//   &fields=x,y                include these fields per row (`*` = every column)
 //   &contrib=N                 top-N autoencoder contributors per flagged row
 //   &refresh=1                 recompute even when the cache is warm
 //
@@ -992,6 +1080,7 @@ $ `stdlib/std/thread.nu`
     }
 
     : i limit ( __an_query_int . req query `limit` 2000 )
+    : i rows ( __an_query_int . req query `rows` 0 )
     : i q_from ( __an_query_int . req query `from` 0 )
     : i q_to ( __an_query_int . req query `to` 0 )
     : i q_last ( __an_query_int . req query `last` 0 )
@@ -1042,28 +1131,34 @@ $ `stdlib/std/thread.nu`
         = k + k 1
     }
 
-    : ( Vec String ) fields ( string_split ffilter `,` )
+    // `fields=*` is every input column the model was created with — the
+    // whole record of each row, without the caller first having to ask
+    // the metadata what the columns are.
+    : b all_fields == ( nurl_str_eq ( string_data ffilter ) `*` ) 1
+    : *Meta fmm . mo meta
+    : ( Vec String ) fields ? all_fields
+    ( vec_clone_with [String] . fmm cols \ String x → String { ^ ( string_from ( string_data x ) ) } )
+    ( string_split ffilter `,` )
     : b want_fields > ( string_len ffilter ) 0
 
-    : Json arr ( json_arr_new )
+    // Pass one: which rows survive `only` and `versions`. Deciding first and
+    // building afterwards is what lets `rows` keep the NEWEST N survivors —
+    // "the last five anomalies" is a question about the flagged rows, not
+    // about the last five points — and lets attribution (an autoencoder
+    // pass per row) run only for rows that are actually returned.
     : i np ( vec_len [ScoredPt] . so pts )
-    : ~ i shown 0
+    : ( Vec i ) kept ( vec_new [i] )
     = k 0
     ~ < k np {
         ?? ( vec_get [ScoredPt] . so pts k ) {
             T r → {
-                // Version names this row's bitmasks decode to.
-                : Json flagged ( json_arr_new )
                 : ~ b keep T
                 : ~ b matched F
                 : ~ i b 0
                 ~ < b nvn {
                     ? != & >> . r sp_flagged b 1 0 {
                         ?? ( vec_get [String] . so vnames b ) {
-                            T nm → {
-                                ( json_arr_push flagged ( json_str_lit ( string_data nm ) ) )
-                                ? ( __an_csv_has vfilter ( string_data nm ) ) { = matched T } {}
-                            }
+                            T nm → { ? ( __an_csv_has vfilter ( string_data nm ) ) { = matched T } {} }
                             F _ → {}
                         }
                     } {}
@@ -1071,76 +1166,103 @@ $ `stdlib/std/thread.nu`
                 }
                 ? only_anom { ? . r sp_anomaly {} { = keep F } } {}
                 ? > ( string_len vfilter ) 0 { ? matched {} { = keep F } } {}
-
-                ? keep {
-                    : Json o ( json_obj_new )
-                    ( json_obj_set o `index` ( json_int . r sp_idx ) )
-                    ( json_obj_set o `timestamp` ( json_int . r sp_ts ) )
-                    ( json_obj_set o `score` ( json_float . r sp_score ) )
-                    ( json_obj_set o `anomaly` ( json_bool . r sp_anomaly ) )
-                    ( json_obj_set o `versions` flagged )
-                    ? || want_fields . r sp_anomaly {
-                        ?? ( model_point_json mo . r sp_idx ) {
-                            T rec → {
-                                ? want_fields {
-                                    : Json vals ( json_obj_new )
-                                    : i nf ( vec_len [String] fields )
-                                    : ~ i fi 0
-                                    ~ < fi nf {
-                                        ?? ( vec_get [String] fields fi ) {
-                                            T fname → {
-                                                ?? ( json_obj_get rec ( string_data fname ) ) {
-                                                    T fv → { ( json_obj_set vals ( string_data fname ) ( json_clone fv ) ) }
-                                                    F _ → {}
-                                                }
-                                            }
-                                            F _ → {}
-                                        }
-                                        = fi + fi 1
-                                    }
-                                    ( json_obj_set o `values` vals )
-                                } {}
-                                // Attribution costs one autoencoder forward
-                                // pass, so it is computed only for the rows
-                                // actually being returned as anomalies.
-                                ? & . r sp_anomaly > topk 0 {
-                                    : ( Vec AeContrib ) cs ( model_ae_contrib mo rec topk )
-                                    : i nc ( vec_len [AeContrib] cs )
-                                    ? > nc 0 {
-                                        : Json ca ( json_arr_new )
-                                        : ~ i ci 0
-                                        ~ < ci nc {
-                                            ?? ( vec_get [AeContrib] cs ci ) {
-                                                T c → {
-                                                    : Json co ( json_obj_new )
-                                                    ( json_obj_set co `feature` ( json_str_lit ( string_data . c ac_name ) ) )
-                                                    ( json_obj_set co `error` ( json_float . c ac_err ) )
-                                                    ( json_obj_set co `share` ( json_float . c ac_share ) )
-                                                    ( json_obj_set co `value` ( json_float . c ac_value ) )
-                                                    ( json_obj_set co `expected` ( json_float . c ac_expected ) )
-                                                    ( json_arr_push ca co )
-                                                }
-                                                F _ → {}
-                                            }
-                                            = ci + ci 1
-                                        }
-                                        ( json_obj_set o `contributions` ca )
-                                    } {}
-                                    ( ae_contrib_free cs )
-                                } {}
-                                ( json_free rec )
-                            }
-                            F → {}
-                        }
-                    } {}
-                    ( json_arr_push arr o )
-                    = shown + shown 1
-                } { ( json_free flagged ) }
+                ? keep { ( vec_push [i] kept k ) } {}
             }
             F _ → {}
         }
         = k + k 1
     }
+    : i nkept ( vec_len [i] kept )
+    : ~ i kstart 0
+    ? & > rows 0 > nkept rows { = kstart - nkept rows } {}
+
+    : Json arr ( json_arr_new )
+    : ~ i shown 0
+    : ~ i ki kstart
+    ~ < ki nkept {
+        = k ( _mlp_iget kept ki )
+        = ki + ki 1
+        ?? ( vec_get [ScoredPt] . so pts k ) {
+            T r → {
+                // Version names this row's bitmasks decode to.
+                : Json flagged ( json_arr_new )
+                : ~ i b 0
+                ~ < b nvn {
+                    ? != & >> . r sp_flagged b 1 0 {
+                        ?? ( vec_get [String] . so vnames b ) {
+                            T nm → { ( json_arr_push flagged ( json_str_lit ( string_data nm ) ) ) }
+                            F _ → {}
+                        }
+                    } {}
+                    = b + b 1
+                }
+                : Json o ( json_obj_new )
+                ( json_obj_set o `index` ( json_int . r sp_idx ) )
+                ( json_obj_set o `timestamp` ( json_int . r sp_ts ) )
+                ( json_obj_set o `score` ( json_float . r sp_score ) )
+                ( json_obj_set o `anomaly` ( json_bool . r sp_anomaly ) )
+                ( json_obj_set o `versions` flagged )
+                ? || want_fields . r sp_anomaly {
+                    ?? ( model_point_json mo . r sp_idx ) {
+                        T rec → {
+                            ? want_fields {
+                                : Json vals ( json_obj_new )
+                                : i nf ( vec_len [String] fields )
+                                : ~ i fi 0
+                                ~ < fi nf {
+                                    ?? ( vec_get [String] fields fi ) {
+                                        T fname → {
+                                            ?? ( json_obj_get rec ( string_data fname ) ) {
+                                                T fv → { ( json_obj_set vals ( string_data fname ) ( json_clone fv ) ) }
+                                                F _ → {}
+                                            }
+                                        }
+                                        F _ → {}
+                                    }
+                                    = fi + fi 1
+                                }
+                                ( json_obj_set o `values` vals )
+                            } {}
+                            // Attribution costs one autoencoder forward
+                            // pass, so it is computed only for the rows
+                            // actually being returned as anomalies.
+                            ? & . r sp_anomaly > topk 0 {
+                                : ( Vec AeContrib ) cs ( model_ae_contrib mo rec topk )
+                                : i nc ( vec_len [AeContrib] cs )
+                                ? > nc 0 {
+                                    : Json ca ( json_arr_new )
+                                    : ~ i ci 0
+                                    ~ < ci nc {
+                                        ?? ( vec_get [AeContrib] cs ci ) {
+                                            T c → {
+                                                : Json co ( json_obj_new )
+                                                ( json_obj_set co `feature` ( json_str_lit ( string_data . c ac_name ) ) )
+                                                ( json_obj_set co `error` ( json_float . c ac_err ) )
+                                                ( json_obj_set co `share` ( json_float . c ac_share ) )
+                                                ( json_obj_set co `value` ( json_float . c ac_value ) )
+                                                ( json_obj_set co `expected` ( json_float . c ac_expected ) )
+                                                ( json_arr_push ca co )
+                                            }
+                                            F _ → {}
+                                        }
+                                        = ci + ci 1
+                                    }
+                                    ( json_obj_set o `contributions` ca )
+                                } {}
+                                ( ae_contrib_free cs )
+                            } {}
+                            ( json_free rec )
+                        }
+                        F → {}
+                    }
+                } {}
+                ( json_arr_push arr o )
+                = shown + shown 1
+            }
+            F _ → {}
+        }
+    }
+    ( vec_free [i] kept )
     ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
 
     : Json cache ( json_obj_new )
@@ -1151,6 +1273,8 @@ $ `stdlib/std/thread.nu`
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
+    : *Meta amm . mo meta
+    ( json_obj_set o `clock` ( json_str_lit ? . amm count_clock `count` `time` ) )
     ( json_obj_set o `data_points_count` ( json_int . so total ) )
     ( json_obj_set o `considered` ( json_int . so considered ) )
     ( json_obj_set o `anomalies` ( json_int . so anomalies ) )
@@ -1246,6 +1370,298 @@ $ `stdlib/std/thread.nu`
     ( string_free msg )
     ( store_free st )
     ( string_free mname )
+    ^ r
+}
+
+// POST /models/dynamic/<source>/fork
+//
+// Body: {"name": "llm_x", "from": N, "to": N, "last": N, "fields": ["a","b"],
+// "rate": 0.01}. A NEW model built from a slice of an existing model's
+// history — a window of its points (`last` anchored to its newest point,
+// as everywhere), optionally projected to a subset of its fields — and
+// trained on that data as one batch (model_train_whole): every version's
+// window opened to the whole slice, the autoencoder over the filtered
+// points, every margin set so `rate` of the slice is flagged.
+//
+// This is how an agent, or anyone, gets a model of their own to
+// experiment on without touching the production model: the source is only
+// read, and the target is any name the caller may create — for a member
+// that is the `llm_…` scratch namespace, for an administrator any name.
+// The target must not exist yet; forking over a model would be a reset in
+// disguise, and reset has its own route.
+@ __an_h_fork HttpRequest req Params p → HttpResponse {
+    : String src ( __an_param_model p )
+    ? ( __an_name_ok ( string_data src ) ) {} {
+        ( string_free src )
+        ^ ( __an_bad_name )
+    }
+    : Gate sgate ( __an_gate_model req ( string_data src ) F F )
+    ? . sgate allowed {} {
+        : HttpResponse rd ( __an_gate_deny sgate )
+        ( __an_gate_free sgate )
+        ( string_free src )
+        ^ rd
+    }
+    ( __an_gate_free sgate )
+
+    : ~ String name ( string_new )
+    : ~ i q_from 0
+    : ~ i q_to 0
+    : ~ i q_last 0
+    : ~ f rate ANOM_FT_RATE
+    : ~ b bad_rate F
+    : ( Vec String ) fields ( vec_new [String] )
+    ?? ( __an_body_json req ) {
+        T body → {
+            ? ( json_is_obj body ) {
+                ?? ( json_obj_get body `name` ) {
+                    T nj → { ? ( json_is_str nj ) { ( string_push_str name ( json_str_data nj ) ) } {} }
+                    F _ → {}
+                }
+                = q_from ( _an_jint body `from` 0 )
+                = q_to ( _an_jint body `to` 0 )
+                = q_last ( _an_jint body `last` 0 )
+                ?? ( json_obj_get body `rate` ) {
+                    T rj → {
+                        : ~ b okr F
+                        ? ( json_is_num rj ) {
+                            ?? ( json_num_as_f rj ) {
+                                T x → { ? & > x 0.0 <= x 1.0 { = rate x = okr T } {} }
+                                F _ → {}
+                            }
+                        } {}
+                        ? okr {} { = bad_rate T }
+                    }
+                    F _ → {}
+                }
+                ?? ( json_obj_get body `fields` ) {
+                    T fa → {
+                        ? ( json_is_arr fa ) {
+                            : i nf ( json_arr_len fa )
+                            : ~ i k 0
+                            ~ < k nf {
+                                ?? ( json_arr_get fa k ) {
+                                    T e → { ? ( json_is_str e ) { ( vec_push [String] fields ( string_from ( json_str_data e ) ) ) } {} }
+                                    F _ → {}
+                                }
+                                = k + k 1
+                            }
+                        } {}
+                    }
+                    F _ → {}
+                }
+            } {}
+            ( json_free body )
+        }
+        F _ → {}
+    }
+    ? bad_rate {
+        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
+        ( string_free name )
+        ( string_free src )
+        ^ ( __an_json_err 400 `rate must be a number in (0, 1].` )
+    } {}
+    ? ( __an_name_ok ( string_data name ) ) {} {
+        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
+        ( string_free name )
+        ( string_free src )
+        ^ ( __an_json_err 400 `Body needs "name": the new model's name (letters, numbers and underscores).` )
+    }
+    ? == ( nurl_str_eq ( string_data name ) ( string_data src ) ) 1 {
+        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
+        ( string_free name )
+        ( string_free src )
+        ^ ( __an_json_err 400 `A model cannot be forked onto itself.` )
+    } {}
+    // May the caller bring the target into being? The gate's create branch
+    // is the one rule (an ingest credential, or the scratch namespace).
+    : Gate gate ( __an_gate_model req ( string_data name ) T T )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
+        ( string_free name )
+        ( string_free src )
+        ^ rd
+    }
+    : Store st ( store_open g_an_root )
+    ? ( store_exists st ( string_data src ) ) {} {
+        : HttpResponse r404 ( __an_404_model ( string_data src ) )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
+        ( string_free name )
+        ( string_free src )
+        ^ r404
+    }
+    ? ( store_exists st ( string_data name ) ) {
+        : String msg ( string_from `Model ` )
+        ( string_push_str msg ( string_data name ) )
+        ( string_push_str msg ` already exists; delete it first or choose another name.` )
+        : HttpResponse r409 ( __an_json_err 409 ( string_data msg ) )
+        ( string_free msg )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
+        ( string_free name )
+        ( string_free src )
+        ^ r409
+    } {}
+
+    // The slice of the source.
+    : *Model smo ( model_open st ( string_data src ) )
+    : ~ i from_ts q_from
+    : i to_ts q_to
+    : i q_span ( __an_last_span smo q_last )
+    ? > q_span 0 {
+        : ~ i anchor to_ts
+        ? > anchor 0 {} { = anchor ( model_last_ts smo ) }
+        ? > anchor 0 { = from_ts - anchor q_span } {}
+    } {}
+    : b project > ( vec_len [String] fields ) 0
+    : ( Vec Json ) recs ( vec_new [Json] )
+    : i np ( model_n_points smo )
+    : ~ i k 0
+    ~ < k np {
+        : i ts ( _mlp_iget . smo times k )
+        : ~ b keep T
+        ? & > from_ts 0 < ts from_ts { = keep F } {}
+        ? & > to_ts 0 > ts to_ts { = keep F } {}
+        ? keep {
+            ?? ( model_point_json smo k ) {
+                T rec → {
+                    ? project {
+                        : Json row ( json_obj_new )
+                        ?? ( json_obj_get rec `timestamp` ) {
+                            T tv → { ( json_obj_set row `timestamp` ( json_clone tv ) ) }
+                            F _ → {}
+                        }
+                        : i nf ( vec_len [String] fields )
+                        : ~ i fi 0
+                        ~ < fi nf {
+                            ?? ( vec_get [String] fields fi ) {
+                                T fname → {
+                                    ?? ( json_obj_get rec ( string_data fname ) ) {
+                                        T fv → { ( json_obj_set row ( string_data fname ) ( json_clone fv ) ) }
+                                        F _ → {}
+                                    }
+                                }
+                                F _ → {}
+                            }
+                            = fi + fi 1
+                        }
+                        ( json_free rec )
+                        ( vec_push [Json] recs row )
+                    } { ( vec_push [Json] recs rec ) }
+                }
+                F _ → {}
+            }
+        } {}
+        = k + k 1
+    }
+    : *Meta sm . smo meta
+    : b count_clock . sm count_clock
+    ( model_free smo )
+    : i nrec ( vec_len [Json] recs )
+    ? < nrec ANOM_MIN_POINTS {
+        : String m ( string_from `The window holds ` )
+        ( string_push_int m nrec )
+        ( string_push_str m ` points of ` )
+        ( string_push_int m np )
+        ( string_push_str m `; at least ` )
+        ( string_push_int m ANOM_MIN_POINTS )
+        ( string_push_str m ` are needed to train a model. Widen the window.` )
+        : HttpResponse rr ( __an_json_err 400 ( string_data m ) )
+        ( string_free m )
+        ( vec_free_with [Json] recs \ Json j → v { ( json_free j ) } )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
+        ( string_free name )
+        ( string_free src )
+        ^ rr
+    } {}
+
+    // The new model: the slice is its whole world.
+    : *Model mo ( model_open st ( string_data name ) )
+    : *Meta mm . mo meta
+    = . mm count_clock count_clock
+    : i maxp ? > nrec ANOM_MAX_POINTS nrec ANOM_MAX_POINTS
+    ( model_set_limits mo ANOM_MIN_POINTS maxp )
+    : ImportReport rep ( model_import mo recs )
+    ( vec_free_with [Json] recs \ Json j → v { ( json_free j ) } )
+    ? | > ( string_len . rep err ) 0 < . rep accepted ANOM_MIN_POINTS {
+        : String m ( string_from `Nothing to train on: ` )
+        ? > ( string_len . rep err ) 0 { ( string_push_str m ( string_data . rep err ) ) } {
+            ( string_push_int m . rep accepted )
+            ( string_push_str m ` of ` )
+            ( string_push_int m nrec )
+            ( string_push_str m ` points carried a numeric value in the requested fields.` )
+        }
+        : HttpResponse rr ( __an_json_err 400 ( string_data m ) )
+        ( string_free m )
+        ( import_report_free rep )
+        ( model_free mo )
+        : b _d ( store_delete st ( string_data name ) )
+        ( store_free st )
+        ( __an_gate_free gate )
+        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
+        ( string_free name )
+        ( string_free src )
+        ^ rr
+    } {}
+    ( __an_gate_claim gate ( string_data name ) )
+    ( __an_gate_free gate )
+    : WholeTrain wt ( model_train_whole mo rate )
+    : ScanOut so ( model_scan mo 0 0 0 F )
+
+    : Json o ( json_obj_new )
+    ( json_obj_set o `status` ( json_str_lit `success` ) )
+    ( json_obj_set o `model_name` ( json_str_lit ( string_data name ) ) )
+    ( json_obj_set o `source` ( json_str_lit ( string_data src ) ) )
+    : Json wj ( json_obj_new )
+    ( json_obj_set wj `from` ( json_int from_ts ) )
+    ( json_obj_set wj `to` ( json_int to_ts ) )
+    ( json_obj_set wj `source_points` ( json_int np ) )
+    ( json_obj_set o `window` wj )
+    ( json_obj_set o `points` ( json_int . rep accepted ) )
+    ( json_obj_set o `rejected` ( json_int . rep rejected ) )
+    : Json fj ( json_arr_new )
+    : i nf ( vec_len [String] fields )
+    = k 0
+    ~ < k nf {
+        ?? ( vec_get [String] fields k ) {
+            T x → { ( json_arr_push fj ( json_str_lit ( string_data x ) ) ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( json_obj_set o `fields` fj )
+    ( json_obj_set o `target_rate` ( json_float rate ) )
+    ( json_obj_set o `margins` . wt margins )
+    ( json_obj_set o `notes` . wt notes )
+    ( json_obj_set o `anomalies` ( json_int . so anomalies ) )
+    ( json_obj_set o `considered` ( json_int . so considered ) )
+    : Json vers ( json_arr_new )
+    : i nvn ( vec_len [String] . so vnames )
+    = k 0
+    ~ < k nvn {
+        ?? ( vec_get [String] . so vnames k ) {
+            T nm → { ( json_arr_push vers ( json_str_lit ( string_data nm ) ) ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( json_obj_set o `model_versions` vers )
+    : HttpResponse r ( response_json 200 o )
+    ( json_free o )
+    ( scan_free so )
+    ( import_report_free rep )
+    ( model_free mo )
+    ( store_free st )
+    ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
+    ( string_free name )
+    ( string_free src )
     ^ r
 }
 
@@ -1451,6 +1867,7 @@ $ `stdlib/std/thread.nu`
         ( json_obj_set o `filtered_anomalies` ( json_int . tae filtered ) )
         ( json_obj_set o `reconstruction_threshold` ( json_float . tae threshold ) )
         : HttpResponse rr ( response_json 200 o )
+        ( json_free o )
         ( string_free err )
         ( model_free mo )
         ( store_free st )
@@ -1623,6 +2040,8 @@ $ `stdlib/std/thread.nu`
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `model` ( json_str_lit ( string_data mname ) ) )
+    : *Meta cmm . mo meta
+    ( json_obj_set o `clock` ( json_str_lit ? . cmm count_clock `count` `time` ) )
     : Json wj ( json_obj_new )
     ( json_obj_set wj `from` ( json_int from_ts ) )
     ( json_obj_set wj `to` ( json_int to_ts ) )
@@ -3185,7 +3604,7 @@ $ `stdlib/std/thread.nu`
         ^ rd
     }
     : Json arr ( json_arr_new )
-    : ( Vec String ) orgs ( __az_org_ids )
+    : ( Vec String ) orgs ( _az_org_ids )
     : i n ( vec_len [String] orgs )
     : ~ i k 0
     ~ < k n {
@@ -3468,6 +3887,7 @@ $ `stdlib/std/thread.nu`
     ( router_get r `/models/dynamic/:model/metadata` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_metadata req p ) } )
     ( router_put r `/models/dynamic/:model/metadata` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_meta_update req p ) } )
     ( router_get r `/models/dynamic/:model/data` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_data req p ) } )
+    ( router_post r `/models/dynamic/:model/fork` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_fork req p ) } )
     ( router_get r `/models/dynamic/:model/anomalies` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_anomalies req p ) } )
     ( router_post r `/models/dynamic/:model/reset` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_reset req p ) } )
     ( router_delete r `/delete_model/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_delete req p ) } )
@@ -3501,6 +3921,13 @@ $ `stdlib/std/thread.nu`
     ( router_get r `/api/org/tasks` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_tasks req p ) } )
     ( router_get r `/api/org/tasks/:id` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_task req p ) } )
     ( router_delete r `/api/org/tasks/:id` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_task_delete req p ) } )
+    // The MCP endpoint (src/mcp.nu): the same API for a language model,
+    // with the caller's own permissions. The tools call back into this
+    // router, which is complete here — attach it last.
+    ( router_any r `*` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( an_mcp_handle req ) } )
+    ( router_get r `/.well-known/oauth-protected-resource` \ HttpRequest req Params p → HttpResponse { ^ ( an_mcp_metadata_response req ) } )
+    ( router_get r `/.well-known/oauth-protected-resource/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( an_mcp_metadata_response req ) } )
+    ( an_mcp_attach_router r )
     ^ r
 }
 

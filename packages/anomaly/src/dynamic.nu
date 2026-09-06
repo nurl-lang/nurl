@@ -96,7 +96,7 @@ $ `src/store.nu`
 }
 
 // Ingest timestamp of a stored data.jsonl line (0 if unparsable).
-@ __an_line_ts s line → i {
+@ _an_line_ts s line → i {
     : !Json JsonError r ( json_parse line )
     ?? r {
         T j → {
@@ -170,7 +170,7 @@ $ `src/store.nu`
     : ~ i k 0
     ~ < k np {
         ?? ( vec_get [String] pts k ) {
-            T l → { ( vec_push [i] . mo times ( __an_line_ts ( string_data l ) ) ) }
+            T l → { ( vec_push [i] . mo times ( _an_line_ts ( string_data l ) ) ) }
             F _ → {}
         }
         = k + k 1
@@ -1519,6 +1519,77 @@ $ `src/store.nu`
     : FineTuneReport rep ( model_finetune_at mo ANOM_FT_RATE from_ts 0 T none )
     ( vec_free [String] none )
     ^ rep
+}
+
+// ── Training on everything at once ────────────────────────────────────
+//
+// A model fed by a stream trains itself as points arrive, each version
+// over its own window back from "now". A model built from a FILE — a
+// batch analysis, or a fork of another model's history — has no present:
+// the data is the whole world, and the stock windows (three hours, a
+// day, a week, ninety days back from the newest stamp) would each miss
+// most of it and fall back to the last fifty rows, a forest that
+// saturates on everything else. So every window opens to the whole ring,
+// every forest trains once, the autoencoder trains over the
+// forest-filtered points, and every margin is set so `rate` of the data
+// is flagged. The result is a model that describes the data it was given.
+
+: WholeTrain {
+    Json margins  // version name → decision margin, as fine-tune set it
+    Json notes  // strings: what could not be done, and why
+}
+
+@ whole_train_free WholeTrain w → v {
+    ( json_free . w margins )
+    ( json_free . w notes )
+}
+
+@ model_train_whole * Model mo f rate → WholeTrain {
+    : *Meta mm . mo meta
+    : i nv ( vec_len [VerCfg] . mm versions )
+    : ~ i vi 0
+    ~ < vi nv {
+        ?? ( vec_get [VerCfg] . mm versions vi ) {
+            T vc → {
+                : ~ VerCfg o vc
+                = . o window_min 0
+                = . o window_pts 0
+                : b _o ( vec_set [VerCfg] . mm versions vi o )
+            }
+            F _ → {}
+        }
+        = vi + vi 1
+    }
+    ( model_force_train_at mo ( model_last_ts mo ) )
+    : Json notes ( json_arr_new )
+    : ( Vec i ) hidden ( vec_new [i] )
+    ( vec_push [i] hidden 64 )
+    ( vec_push [i] hidden 16 )
+    ( vec_push [i] hidden 64 )
+    : String aerr ( model_train_autoencoder mo hidden rate )
+    ( vec_free [i] hidden )
+    ? > ( string_len aerr ) 0 {
+        : String m ( string_from `autoencoder not trained: ` )
+        ( string_push_str m ( string_data aerr ) )
+        ( json_arr_push notes ( json_str_lit ( string_data m ) ) )
+        ( string_free m )
+    } {}
+    ( string_free aerr )
+    : ( Vec String ) none ( vec_new [String] )
+    : FineTuneReport ft ( model_finetune_at mo rate 0 0 T none )
+    ( vec_free [String] none )
+    : Json margins ( json_obj_new )
+    : i nft ( vec_len [FtVer] . ft items )
+    : ~ i k 0
+    ~ < k nft {
+        ?? ( vec_get [FtVer] . ft items k ) {
+            T fv → { ( json_obj_set margins ( string_data . fv ftname ) ( json_float . fv new_margin ) ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( finetune_free ft )
+    ^ @ WholeTrain { margins notes }
 }
 
 // ── Scanning the stored ring ──────────────────────────────────────────

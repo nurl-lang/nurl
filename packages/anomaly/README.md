@@ -5,7 +5,7 @@ Isolation Forests. Where the [`iforest`](../iforest) package is the kernel
 (numeric matrix in, scores out), `anomaly` is everything around it: named
 models that are **created on first use**, ingest one JSON point at a time,
 and **train themselves** once enough history has accumulated — no offline
-training step, no labels, no Python.
+training step, no labels.
 
 ```
 $ anomaly detect boiler temp=78.2 pressure=1.4 state=heating
@@ -17,9 +17,10 @@ $ anomaly detect boiler temp=712 pressure=9.9 state=fault
 {"status":"success","anomaly":true,"score":-0.31,"versions":{...},"data_points":74}
 ```
 
-It is a NURL re-implementation of the anomaly-detection interface of a
-Flask + scikit-learn reference service (`model_training.py`), with the same
-HTTP routes and response shapes, so existing dashboards keep working.
+It is a library, a CLI, an HTTP/JSON service with a dashboard, and — for a
+language model working on the same data — an [MCP endpoint](#mcp-the-service-for-an-agent)
+at `/mcp` that exposes the whole API as tools, under the signed-in user's own
+rights.
 
 ## Two versions beyond the forests
 
@@ -54,7 +55,7 @@ HTTP routes and response shapes, so existing dashboards keep working.
 - **Heterogeneous features, encoded automatically.** Numbers pass through;
   strings become deterministic one-hot categoricals (categories kept
   sorted); ISO-8601 strings expand to `hour/day/month/weekday` calendar
-  features (Python `weekday()` convention). Column types are detected on
+  features (Monday = 0 … Sunday = 6). Column types are detected on
   first sight and frozen in metadata.
 - **Feature-order stability.** `feature_names` is snapshotted at each
   train; scoring projects every point onto exactly that vector (missing
@@ -78,7 +79,7 @@ HTTP routes and response shapes, so existing dashboards keep working.
   `seasonal` (90 d) and `timevector` (last 100 points) — so the same stream
   is judged against several horizons at once. A point is anomalous if
   **any** version flags it; the reported score is the most severe.
-- **sklearn decision conventions.** `score` is `decision_function`:
+- **Isolation-forest decision conventions.** `score` is `decision_function`:
   `-iforest_score − offset`, `offset = −0.5` for `contamination = "auto"`
   (else the 100·c percentile of training scores). A version flags a point
   when `score ≤ −decision_margin`; margins are read from live metadata, so
@@ -102,9 +103,8 @@ HTTP routes and response shapes, so existing dashboards keep working.
 
 Scores were validated against scikit-learn's `IsolationForest` on identical
 deterministic data: `decision_function` values match within ~0.01 across
-normal and outlier points. A fixed seed (42, the reference's
-`random_state`) makes forests — and therefore scores — byte-identical
-across platforms and runs.
+normal and outlier points. A fixed seed (42) makes forests — and therefore
+scores — byte-identical across platforms and runs.
 
 ## How many alerts: margins, calibration, fine-tune
 
@@ -192,9 +192,9 @@ Each contributor carries the value the point had and the one the autoencoder
 reconstructed for it from the other features — the sentence "flow was 5.0
 where 3.0 was expected" is in the response, not left for the reader to infer.
 
-Contrast that with the reference's `feature_importance`, which is a per-feature
-z-score from the column mean: it can only ever point at the value that was
-extreme, which is the question the forests were already answering.
+A per-feature z-score from the column mean would not do: it can only ever
+point at the value that was extreme, which is the question the forests were
+already answering.
 
 ## Scanning stored history
 
@@ -354,8 +354,9 @@ audience    = "api://<application (client) id>"   # optional; this is the defaul
 open_ingest = true
 
 [service]
-addr    = "0.0.0.0:8811"
-webroot = "/usr/share/anomaly/static"
+addr       = "0.0.0.0:8811"
+webroot    = "/usr/share/anomaly/static"
+public_url = "https://anomaly.example.com"   # only behind a proxy that rewrites Host
 ```
 
 | Key | Environment | Flag |
@@ -370,6 +371,7 @@ webroot = "/usr/share/anomaly/static"
 | `auth.open_ingest` | `ANOMALY_OPEN_INGEST` | — |
 | `service.addr` | `ANOMALY_ADDR` | `--addr` |
 | `service.webroot` | `ANOMALY_WEBROOT` | `--webroot` |
+| `service.public_url` | — | — |
 | — | `ANOMALY_HOME` | `--store` |
 | — | `ANOMALY_CONFIG` | `--config` |
 
@@ -417,13 +419,21 @@ a single flat directory shared by every organization, so membership is the
 whole scope: a model your organization has not claimed is invisible to you,
 admin or not.
 
-**Two roles.**
+**Two roles for people.**
 
 | | viewer | admin |
 | --- | --- | --- |
 | the organization's models, their data, the charts | ✓ | ✓ |
-| train, finetune, reset, delete, edit metadata | | ✓ |
+| create, train, finetune, reset, delete, edit **scratch models** named `llm_…` | ✓ | ✓ |
+| train, finetune, reset, delete, edit any other model | | ✓ |
 | API keys, users and roles | | ✓ |
+
+The `llm_` namespace is the one place a viewer may write: a model named
+`llm_<anything>` is a scratch model, which every member — in the dashboard,
+over the API or through an agent on `/mcp` — may fork from a production
+model's history, tune, and delete, without ever being able to touch the
+production model itself. The rule lives in the authorization gate
+(`az_is_scratch_model`), so every surface agrees on it.
 
 Sending data is a third thing, and it is not on this axis at all: it is done
 by the organization's **key**, not by a person. See *API keys* below.
@@ -532,7 +542,7 @@ APPID=$(az ad app create --display-name anomaly \
           --sign-in-audience AzureADMultipleOrgs --query appId -o tsv)
           # ...or AzureADMyOrg for a single-organization deployment
 OID=$(az ad app show --id "$APPID" --query id -o tsv)
-SCOPEID=$(python3 -c 'import uuid;print(uuid.uuid4())')
+SCOPEID=$(uuidgen)
 
 # 1. SPA redirect URIs, the API this app exposes, and v2 access tokens.
 az rest --method PATCH \
@@ -622,6 +632,9 @@ feeds, not edit metadata, not learn that another key exists.
 An **admin** key can do everything an administrator can. Only issue one when
 something genuinely has to manage the organization unattended.
 
+There is no viewer key: a machine that only reads is pointless, and a person
+who reads signs in. A key that ever carried the role is read as ingest.
+
 ```
 $ curl -H 'Authorization: Bearer anok_<id>_<secret>' https://…/models/dynamic
 $ curl -H 'X-API-Key: anok_<id>_<secret>'            https://…/detect/boiler -d '{…}'
@@ -638,6 +651,66 @@ wraps `fetch` once, so each page calls the API exactly as it did before
 authentication existed — what a page must do is `await Auth.ready()` before its
 first request. `/admin.html` is where an organization's keys, users and models
 are managed, and where the owner tenant approves organizations.
+
+## MCP: the service for an agent
+
+`POST /mcp` is the same service for a language model — [Model Context
+Protocol](https://modelcontextprotocol.io) over Streamable HTTP, built on the
+stdlib's `mcp_server` / `mcp_http` / `mcp_auth`. Every tool is a thin, named
+view of an API route, and every call runs **as the signed-in user, inside
+their organization, with their role**: the agent can do exactly what the
+person driving it could do in the dashboard, and nothing more.
+
+```
+$ claude mcp add --transport http anomaly https://anomaly.example.com/mcp
+```
+
+In `oidc` mode the endpoint answers an unauthenticated call with the standard
+challenge — `401`, `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/mcp"` —
+and that document names the issuer and the scope, so an MCP client that
+speaks OAuth signs the person in by itself against the same identity provider
+the dashboard uses (the same `client_id`; the client's loopback redirect must
+be registered on the app). A machine agent uses an API key instead:
+`--header "X-API-Key: anok_…"`. In `simple` mode there is no sign-in and
+every call is an administrator's, as everywhere else.
+
+**What a role sees.** `tools/list` shows only the tools the caller may use; a
+tool the caller may not see is *unknown*, not *forbidden*. When a visible
+tool refuses something — a viewer retraining a production model — the reply
+says why and what would be allowed instead.
+
+| Tool | Who | What |
+| --- | --- | --- |
+| `whoami` | every member | organization, role, and what the role allows through these tools |
+| `list_models` | every member | every model: columns, points seen, last training, each version's margin |
+| `describe_model` | every member | how a model is built, and which fields `edit_model` may change |
+| `anomalies` | every member | the newest flagged points of a window with the features blamed; says how many the window held |
+| `anomaly_summary` | every member | a window in one screen: counts, rate, per-version counts, worst point, timeline, most-blamed features |
+| `points`, `point` | every member | the raw stored rows of a window; one row in full by ring index |
+| `calibration` | every member | how each margin sits against a window — the numbers to read before `finetune` |
+| `score_point` | every member | the verdict for a hypothetical point, without storing it |
+| `analyze_data` | every member | a one-off analysis of a file (CSV text or rows), no model kept; large files become a task |
+| `list_tasks`, `task`, `list_files` | every member | the organization's background jobs and its folder |
+| `fork_model` | every member | a new model trained on a slice of another's history — a window, some columns; `llm_…` is scratch |
+| `retrain`, `train_autoencoder`, `finetune`, `edit_model`, `reset_model`, `delete_model` | member on `llm_…`, admin on any | the model's lifecycle; destructive ones need `confirm: true` |
+| `ingest_point`, `import_data` | ingest key, admin | send a point / load a file of history — this teaches the model |
+| `claim_model`, `org_users`, `set_role`, `org_keys` | admin | ownership, the roster, roles, the key listing |
+
+API keys are deliberately **listed but never created or revoked** through
+MCP: a new key's secret exists once, in the response that creates it, and a
+conversation with a language model is not where it should land. Use the
+dashboard.
+
+The server's `instructions` tell the agent the two things it most often gets
+wrong: that `last: "24h"` counts back from the model's newest point, not from
+the clock, and that scores run downward — the lowest score is the worst
+point. A typical session is `list_models` → `anomaly_summary {model,
+last:"7d"}` → `anomalies {model, last:"24h"}` → `point {model, index}`;
+a hypothesis is tested with `fork_model {source, name:"llm_…", fields:[…]}`
+→ `calibration` → `finetune` → `delete_model {confirm:true}`.
+
+Behind a reverse proxy that rewrites `Host`, set `service.public_url` so the
+challenge and the metadata document name the origin agents actually reach.
 
 ## CLI
 
@@ -664,7 +737,7 @@ command with `--store DIR`.
 
 ## HTTP service
 
-`anomaly serve` exposes the reference routes:
+`anomaly serve` exposes these routes:
 
 | Route | Meaning |
 | --- | --- |
@@ -685,6 +758,8 @@ command with `--store DIR`.
 | `DELETE /api/me` | delete your account (right to be forgotten) |
 | `GET\|PUT /api/tenants[/<tid>]` | approve organizations (owner tenant) |
 | `GET /api/orgs`, `GET\|PUT\|DELETE /api/orgs/<org>/users[/<sub>[/role]]` | administer any organization (owner tenant) |
+| `POST /mcp` | the same API as MCP tools for a language model, under the caller's rights (see above) |
+| `GET /.well-known/oauth-protected-resource[/mcp]` | where `/mcp` callers get a token (RFC 9728) |
 | `GET /api/auth/config` | what a browser needs to start a sign-in (public) |
 | `GET /api/me` | the caller's identity, organization and role |
 | `GET\|PUT /api/org/users[/<sub>/role]` | the organization's roster (admin) |
@@ -852,61 +927,55 @@ HTTP surface (`service.nu`). Every mutating entry point has an
 `_at` variant taking `now` in unix seconds — the injectable clock that
 makes window filtering reproducible in tests.
 
-## Known divergences from the Python reference
+## Design decisions
 
-Deliberate, all documented in the code:
+Each of these is documented where it is implemented; the short form:
 
-1. **Fine-tune sets a rate, not 95 % of the worst score.** The reference
-   initialises its accumulator to `-inf` and only updates on `score <
-   -inf`, so it never adjusts anything (and its "+5 % buffer" comment
-   belies a `* 0.95`). Its intent — the worst point seen lands just inside
-   the band — makes every margin a function of one outlier. Here fine-tune
-   is calibration plus a write: the margin that flags a chosen share of a
+1. **Fine-tune sets a rate.** A margin that lands the worst point seen just
+   inside the band is a function of one outlier. Here fine-tune is
+   calibration plus a write: the margin that flags a chosen share of a
    recent window, in place (no `tune_<name>` clone).
-2. **One scaler per model**, fit over the full ring — the reference fits
-   one per version and silently keeps whichever trained last.
+2. **One scaler per model**, fit over the full ring, shared by every
+   version — so two versions' scores are on the same footing.
 3. **Retraining is keyed on the lifetime point counter**, so it keeps
-   working at ring capacity (the reference's count-based fallback arms a
-   threshold above the capped length; its per-version timers are what kept
-   it retraining).
-4. **`timevector` trains a forest on the last 100 points** rather than on
-   flattened 100-point sliding windows (which bypassed the scaler in the
-   reference).
-5. **`/detect_anomalies` self-trains on the file** — the reference's
-   separate "static model" family doesn't exist here; passing `model_name`
-   is a 400 rather than silently using a different model family.
-6. **Points store raw JSON lines** (`data.jsonl`), not a pickled array —
-   raw records are what let retrains learn new categories.
-7. **The autoencoder's margin is relative, not absolute.** The reference
-   sets `is_anomaly = mse > reconstruction_threshold` in the autoencoder
-   branch and then, at the same indentation as the branch, unconditionally
-   overwrites it with `is_anomaly = bool(score <= -decision_margin)` using
-   the autoencoder default `0.05`. On a threshold of ~5e-4 that requires a
-   reconstruction error ~100x the p95 of the training errors — the joint
-   detector is effectively off, which its `"enabled": False` default hid.
-   Here `decision_margin` is a fraction of the model's own threshold, so
-   the stored `0.05` means "5 % above p95" and needs no migration. The
-   reference's retrain loop also trained a zero-tree forest for the
-   `autoencoder` version config and scored it as a second "autoencoder"
-   verdict with the relative margin read as an absolute one; that forest is
-   never trained here, and a stale `version_autoencoder.forest` is ignored
-   on load and deleted at the next retrain.
+   working at ring capacity, where a count of stored points stops moving.
+4. **`timevector` trains a forest on the last 100 points** through the
+   same scaler as every other version.
+5. **`/detect_anomalies` self-trains on the file**; there is no separate
+   static-model family, and passing `model_name` is a 400 rather than a
+   silent switch to a different one.
+6. **Points store raw JSON lines** (`data.jsonl`) — raw records are what let
+   retrains learn new categories.
+7. **The autoencoder's margin is relative, not absolute.** Its threshold is
+   the p95 of the training reconstruction errors, often ~5e-4; an absolute
+   `decision_margin` of `0.05` against that would need an error ~100× the
+   threshold and switch the joint detector off in practice. Here
+   `decision_margin` is a fraction of the model's own threshold, so `0.05`
+   means "5 % above p95". No forest is trained for the autoencoder version;
+   a stale `version_autoencoder.forest` is ignored on load and deleted at
+   the next retrain.
 8. **Anomaly attribution is the autoencoder's per-feature error**, not a
-   per-feature z-score from the mean. A z-score can only name the extreme
-   value; the reconstruction error names the feature that stopped agreeing
-   with the rest — the actual reason a joint model objected.
+   per-feature z-score from the mean — the reconstruction error names the
+   feature that stopped agreeing with the rest, the actual reason a joint
+   model objected.
+9. **Scores run downward.** A point is flagged when its score falls below
+   `−decision_margin`; the lowest score is the worst point, and
+   `severity = −score / margin` says how far past the line it is.
 
 ## Tests
 
-`./tests/anomaly_test.sh` builds and runs the unit suites (430+ checks:
-preprocessing golden vectors, sklearn-parity decision maths, bit-exact
+`./tests/anomaly_test.sh` builds and runs the unit suites (890 checks:
+preprocessing golden vectors, decision maths checked against scikit-learn, bit-exact
 blob round-trips, corrupt-file rejection, streaming mechanics, window
 routing, calibration and fine-tune, all HTTP routes, organizations, roles, model ownership and API keys,
 configuration layering (flag over environment over file),
 CSV/JSON/JSONL import and its timestamp ordering,
+the MCP endpoint — every tool, what each role sees, the scratch namespace,
+the 401 challenge and the protected-resource document —
 GPU/CPU-backend bit-parity), a CLI
 end-to-end pass, a live served-over-curl smoke test, and
 `tests/authflow_test.sh` — the whole authentication path over a socket
 against `oauth`'s own signing test provider, including every deliberately
-broken token it can mint being refused. The whole suite is AddressSanitizer /
+broken token it can mint being refused, and a viewer and an administrator
+driving `/mcp` with real tokens. The whole suite is AddressSanitizer /
 LeakSanitizer-clean (`NURL_SAN=1 ./tests/anomaly_test.sh`).

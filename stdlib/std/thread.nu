@@ -22,6 +22,7 @@
 // API:
 //
 //   ( thread_spawn   ( @ v ) f )           → ! Thread ThreadErr
+//   ( thread_spawn_owned ( @ v ) f )       → ! Thread ThreadErr  (frees f's env after the body)
 //   ( thread_join    Thread t )            → i      (0 ok, -1 err)
 //   ( thread_detach  Thread t )            → v
 //   ( mutex_new )                          → Mutex
@@ -51,6 +52,9 @@
 //     points at. The closure (and its env heap allocation) MUST OUTLIVE
 //     the worker thread — typical pattern is to hold it in a local
 //     binding and `thread_join` before that binding goes out of scope.
+//     `thread_spawn_owned` is the fire-and-forget form: the env is freed
+//     by the thread when the body returns, so an inline closure can be
+//     spawned, detached and forgotten without leaking one env per spawn.
 //   * The mutex passed to `cond_wait` must already be held by the
 //     calling thread; the primitive atomically releases-and-reacquires
 //     it per POSIX semantics.
@@ -100,6 +104,10 @@ $ `stdlib/core/marker.nu`
 & `c` @ nurl_pthread_join_ptr *u t → i32
 
 & `c` @ nurl_pthread_detach_ptr *u t → v
+
+// pthread_create through a trampoline that frees the closure env once
+// the body returns (runtime_ffi.c §19). What thread_spawn_owned is made of.
+& `c` @ nurl_pthread_create_owned *u t *u start *u env → i32
 
 // ── ThreadErr ─────────────────────────────────────────────────────
 
@@ -187,6 +195,33 @@ $ `stdlib/core/marker.nu`
     } {}
     : *u tp # *u ptr
     : i rc ( pthread_create tp # *u 0 fnp env )
+    ? != rc 0 {
+        ( nurl_free ptr )
+        ^ @ !Thread ThreadErr { F # ThreadErr ThreadCreate }
+    } {}
+    ^ @ !Thread ThreadErr { T @ Thread { ptr } }
+}
+
+// Spawn a thread that OWNS its closure env: the runtime frees the env
+// right after the body returns. For the fire-and-forget shape — an
+// inline closure, spawned, detached, never referred to again — where
+// `thread_spawn` leaks one env per spawn because it BORROWS the env and
+// the spawner has no correct moment to free it (the body is still
+// running, and nothing tells the spawner when it stops). What the body
+// captured is still the body's to free before it returns; only the
+// env block itself changes hands. Do NOT use when the spawner keeps the
+// closure binding to free or reuse later. Mirrors `spawn_owned` for
+// fibers.
+@ thread_spawn_owned ( @ v ) f → !Thread ThreadErr {
+    : *u fnp # *u f 0
+    : *u env # *u f 1
+    : i sz ( nurl_native_sizeof `pthread_t` )
+    : s ptr ( nurl_alloc sz )
+    ? == 0 # i ptr {
+        ^ @ !Thread ThreadErr { F # ThreadErr ThreadCreate }
+    } {}
+    : *u tp # *u ptr
+    : i rc ( nurl_pthread_create_owned tp fnp env )
     ? != rc 0 {
         ( nurl_free ptr )
         ^ @ !Thread ThreadErr { F # ThreadErr ThreadCreate }

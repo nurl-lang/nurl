@@ -625,7 +625,7 @@ jobs:
           LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh \
             struct_nested_field_drop arm_local_drop arm_local_trailing_drop \
             recover_unwind loop_drop_reclaim closure_env_reclaim closure_env_binding \
-            ternary_slice_owned match_slice_owned arm_assign_tail_drop \
+            ternary_slice_owned match_slice_owned arm_assign_tail_drop arm_join_verdict_drop \
             defer_drop_reclaim defer_scoped defer_ret_transfer \
             net_inet net_frames net_dhcp net_stack net_tcp net_tcp_fuzz \
             net_frame_fuzz \
