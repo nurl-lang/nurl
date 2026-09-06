@@ -82,6 +82,36 @@ frame's — whose allocas do not exist in the lifted function. When the body
 falls off with a value and that value is a bare identifier, the binding's
 drop is skipped: its handle is the closure's result.
 
+### An arm drops what the join throws away
+
+A `?` / `??` arm is a scope too, and a value it owns is freed at its
+closing brace — but only the *join* knows whether that value survives as
+the construct's own value:
+
+```nurl
+?? ( db_open path ) { T db → { = out ( label db ) } F e → { } }
+```
+
+The arm's tail is an assignment, and an assignment publishes its LHS
+type, so the arm looks like it carries a `%String`. Until 0.61 the
+compiler refused to drop inside an arm whose type was not scalar — what
+is dropped might BE the value the join is about to take — so every
+arm-local `% Drop` value and owned struct field in that shape leaked,
+even when the match was a statement and nobody read its result.
+
+The arm no longer has to decide. Drops pending in an unsafe arm are
+parked in an exit block (`arm_exit_N`) the arm branches to instead of the
+join, and the block is emitted at the join once the verdict is in: the
+match used as an expression → a bare `br`; a statement match, or an
+untyped one → the drops go in it. A `?` / `??` that is the *last*
+statement of its block cannot judge alone, because its value is the
+block's value, so it hands the records up and the construct that knows
+the answer emits them — an enclosing arm folds them into its own join, a
+loop or bare block body drops them, a function or closure body drops them
+iff it returns nothing, a block in expression position keeps the value
+alive. An arm whose value IS derived from the droppable still keeps it
+alive, as before.
+
 ### A `:` binding, and only a `:` binding
 
 The word doing the work above is **binding**. An allocating call whose
