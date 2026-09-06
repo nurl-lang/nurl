@@ -457,6 +457,7 @@ $ `stdlib/std/thread.nu`
         ^ r
     }
 
+    : *Meta vmm ( model_metadata mo )
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `model` ( json_str_lit mname ) )
@@ -478,6 +479,13 @@ $ `stdlib/std/thread.nu`
                 ( json_obj_set vo `anomaly` ( json_bool . vv anomaly ) )
                 ( json_obj_set vo `score` ( json_float . vv score ) )
                 ( json_obj_set vo `severity` ( json_float ( anom_severity . vv score . vv margin ) ) )
+                // The range guard names the feature it judged by.
+                ? >= . vv vv_feat 0 {
+                    ?? ( vec_get [String] . vmm feats . vv vv_feat ) {
+                        T fname → { ( json_obj_set vo `feature` ( json_str_lit ( string_data fname ) ) ) }
+                        F _ → {}
+                    }
+                } {}
                 // `margin` is the absolute band the score was compared
                 // to; `decision_margin` the stored setting, which for the
                 // autoencoder is a fraction of its reconstruction
@@ -1967,6 +1975,7 @@ $ `stdlib/std/thread.nu`
 // reconstruction threshold (SPEC §5.5). The calibration and fine-tune
 // reports carry every number of a version in these units.
 @ __an_margin_units s vname → s {
+    ? ( _an_is_guard_name vname ) { ^ `standard_deviations` } {}
     ^ ? == ( nurl_str_eq vname `autoencoder` ) 1 `relative_to_threshold` `absolute`
 }
 

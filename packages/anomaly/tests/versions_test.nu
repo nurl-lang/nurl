@@ -170,6 +170,9 @@ $ `src/dynamic.nu`
     : b m3 ( model_set_margin mo `weekly` 0.5 )
     : b m4 ( model_set_margin mo `seasonal` 0.5 )
     : b m5 ( model_set_margin mo `timevector` 0.5 )
+    // The range guard counts in sigmas, and 23.0 on a ±0.5 stream is six
+    // of them: "loose" for it is a hundred.
+    : b m6 ( model_set_margin mo ANOM_GUARD_NAME 100.0 )
 
     // 19 normal points (temp ≈ 20 ± .5) and one mild outlier (23.0).
     : ~ i k 1
@@ -195,8 +198,9 @@ $ `src/dynamic.nu`
     : b t3 ( model_set_margin mo `weekly` 0.01 )
     : b t4 ( model_set_margin mo `seasonal` 0.01 )
     : b t5 ( model_set_margin mo `timevector` 0.01 )
+    : b t6 ( model_set_margin mo ANOM_GUARD_NAME 0.01 )
     : ProbeOut all5 ( probe_temp mo 23.0 )
-    ( check == . all5 hits 5 `agg: all tight margins -> 5 versions flag` )
+    ( check == . all5 hits 6 `agg: all tight margins -> 6 versions flag` )
     ( check <= . all5 score . all5 df_short `agg: aggregate score is the most severe` )
 
     // Fine-tune from loose margins: a 5 % target on a 20-point ring is
@@ -206,11 +210,12 @@ $ `src/dynamic.nu`
     : b r3 ( model_set_margin mo `weekly` 0.5 )
     : b r4 ( model_set_margin mo `seasonal` 0.5 )
     : b r5 ( model_set_margin mo `timevector` 0.5 )
+    : b r6 ( model_set_margin mo ANOM_GUARD_NAME 100.0 )
     : ( Vec String ) none ( vec_new [String] )
 
     // Dry run first: the report is complete, nothing is written.
     : FineTuneReport dry ( model_finetune_at mo 0.05 0 0 F none )
-    ( check == ( vec_len [FtVer] . dry items ) 5 `finetune dry: 5 versions reported` )
+    ( check == ( vec_len [FtVer] . dry items ) 6 `finetune dry: 6 versions reported` )
     ( check == . dry applied F `finetune dry: report says not applied` )
     : ~ b dry_untouched T
     : ~ i q 0
@@ -218,18 +223,19 @@ $ `src/dynamic.nu`
         ?? ( vec_get [FtVer] . dry items q ) {
             T ft → {
                 ? . ft applied { = dry_untouched F } {}
-                ? == ( meta_version_margin ( model_metadata mo ) ( string_data . ft ftname ) -1.0 ) 0.5 {} { = dry_untouched F }
+                ? == ( meta_version_margin ( model_metadata mo ) ( string_data . ft ftname ) -1.0 ) . ft old_margin {} { = dry_untouched F }
+                ? | == . ft old_margin 0.5 == . ft old_margin 100.0 {} { = dry_untouched F }
             }
             F _ → {}
         }
         = q + q 1
     }
-    ( check dry_untouched `finetune dry: margins still 0.5` )
+    ( check dry_untouched `finetune dry: margins untouched` )
     ( finetune_free dry )
 
     : FineTuneReport rep ( model_finetune_at mo 0.05 0 0 T none )
     ( vec_free [String] none )
-    ( check == ( vec_len [FtVer] . rep items ) 5 `finetune: 5 versions tuned` )
+    ( check == ( vec_len [FtVer] . rep items ) 6 `finetune: 6 versions tuned` )
     ( check == . rep n_rows 20 `finetune: whole ring in the window` )
     : ~ b margins_tightened T
     : ~ b one_each T

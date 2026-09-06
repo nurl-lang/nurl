@@ -501,7 +501,7 @@ import json, sys
 r = json.load(open(sys.argv[1]))["result"]
 assert r["isError"] is False, r
 d = json.loads(r["content"][0]["text"])
-assert d["model_name"] == "mine" and d["data_points"] == 3, d
+assert d["model_name"] == "mine" and d["points_stored"] == 3 and d["stored"] is True, d
 PYX
 
 echo "== anomaly auth flow: PASS=$PASS FAIL=$FAIL"

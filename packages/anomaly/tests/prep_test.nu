@@ -366,7 +366,7 @@ $ `src/prep.nu`
             ( check ( string_eq s1 s2 ) `meta: JSON round-trip byte-stable` )
             ( check == . m2 n_seen 123 `meta: n_points_seen survives` )
             ( check == . m2 sched_below 50 `meta: schedule default survives` )
-            ( check == ( vec_len [VerCfg] . m2 versions ) 5 `meta: 5 default versions survive` )
+            ( check == ( vec_len [VerCfg] . m2 versions ) 6 `meta: 6 default versions survive` )
             ( check == ( vec_len [String] . m2 feats ) 8 `meta: feature order survives` )
             ( check == . m2 feat_enc ANOM_FEAT_ENC `meta: feature encoding survives` )
             ( string_free s2 )

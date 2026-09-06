@@ -22,8 +22,18 @@ language model working on the same data — an [MCP endpoint](#mcp-the-service-f
 at `/mcp` that exposes the whole API as tools, under the signed-in user's own
 rights.
 
-## Two versions beyond the forests
+## Three versions beyond the plain forests
 
+- **range_guard — the univariate check.** A forest scores a point as a
+  whole: an air temperature of 95 °C among eleven normal readings is one
+  coordinate in a twelve-dimensional space, and the forests may not blink.
+  The guard looks at each feature alone — its decision value is
+  `−max|z|` over the standardised features, so its margin *is* the sigma
+  count of the alert line (4 by default, tunable and calibratable like any
+  other), and the verdict names the feature that tripped it. No forest, no
+  window: the scaler every retrain refits is all it needs, so it costs
+  nothing to keep and nothing to re-enable. A model from before it existed
+  gains it at its next retrain.
 - **timevector — the sliding window.** `window_size` consecutive points
   flatten to one window vector; the forest trains on window vectors and
   detection scores the window ending at the incoming point. This is the
@@ -76,8 +86,9 @@ rights.
   last manual training.
 - **Multiple time-window versions.** Each model trains one forest per
   enabled version — `short_term` (180 min), `daily` (24 h), `weekly`,
-  `seasonal` (90 d) and `timevector` (last 100 points) — so the same stream
-  is judged against several horizons at once. A point is anomalous if
+  `seasonal` (90 d) and `timevector` (last 100 points) — and the forestless
+  `range_guard` beside them, so the same stream is judged against several
+  horizons at once. A point is anomalous if
   **any** version flags it; the reported `score` and `severity` are those
   of the most severe version (by severity, the unit-free measure below —
   not by raw score, which is on a different scale per version).

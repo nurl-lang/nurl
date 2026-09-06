@@ -51,6 +51,7 @@ $ `src/store.nu`
     f score
     f margin
     f cfg_margin
+    i vv_feat  // the feature this verdict is about (range_guard); -1 = none
 }
 
 // The aggregate verdict for one point (SPEC §5.4).
@@ -146,6 +147,12 @@ $ `src/store.nu`
     ^ == ( nurl_str_eq vname `autoencoder` ) 1
 }
 
+// The versions that are not forests: the autoencoder and the range guard
+// have a VerCfg (margin, enabled) but no forest blob to load, train or drop.
+@ __an_forestless s vname → b {
+    ^ | ( __an_is_ae_name vname ) ( _an_is_guard_name vname )
+}
+
 @ model_open_at Store st s name i now → *Model {
     : *Model mo # *Model ( nurl_malloc Z Model )
     = . mo store ( store_open ( string_data . st root ) )
@@ -200,7 +207,7 @@ $ `src/store.nu`
     ~ < vi nv {
         ?? ( vec_get [VerCfg] . mm versions vi ) {
             T vc → {
-                ? & . vc enabled ! ( __an_is_ae_name ( string_data . vc vname ) ) {
+                ? & . vc enabled ! ( __an_forestless ( string_data . vc vname ) ) {
                     : ?VerModel got ( store_load_forest . mo store name ( string_data . vc vname ) )
                     ?? got {
                         T vm → { ( vec_push [VerModel] . mo forests vm ) }
@@ -417,6 +424,7 @@ $ `src/store.nu`
                                     dfw
                                     marginw
                                     marginw
+                                    -1
                                 } )
                             } {}
                             ( vec_free [f] tail )
@@ -439,6 +447,7 @@ $ `src/store.nu`
                         df
                         margin
                         margin
+                        -1
                     } )
                 }
             }
@@ -446,6 +455,39 @@ $ `src/store.nu`
         }
         = k + k 1
     }
+    // The range guard: the feature furthest from its training mean, in
+    // standard deviations (`x` is already standardised). A forest sees a
+    // point as a whole and a single reading at ten sigma is one coordinate
+    // among many to it; this version is the univariate check the forests
+    // structurally cannot make, and it names the feature. Its decision
+    // value is -max|z|, so the margin IS the sigma count of the line.
+    ? & ( meta_version_enabled mm ANOM_GUARD_NAME F ) > ( vec_len [f] . . mo sc mean ) 0 {
+        : ~ f gz 0.0
+        : ~ i gi -1
+        : *f xp ( vec_data [f] x )
+        : ~ i j 0
+        ~ < j nfeat {
+            : f az ( float_abs . xp j )
+            ? | < gi 0 > az gz { = gz az = gi j } {}
+            = j + j 1
+        }
+        : f gdf - 0.0 gz
+        : f gmargin ( meta_version_margin mm ANOM_GUARD_NAME ANOM_GUARD_SIGMA )
+        : b ghit <= gdf - 0.0 gmargin
+        ? ghit { = any T } {}
+        : f gsev ( anom_severity gdf gmargin )
+        ? || first > gsev top_sev { = worst gdf = top_sev gsev } {}
+        = first F
+        ( vec_push [VerVerdict] vvs @ VerVerdict {
+            ( string_from ANOM_GUARD_NAME )
+            ghit
+            gdf
+            gmargin
+            gmargin
+            gi
+        } )
+    } {}
+
     // The autoencoder verdict: reconstruction error against the trained
     // threshold, on the point projected onto the AE's OWN frozen feature
     // order (independent of the forests' scaler and current feats). Muted
@@ -468,6 +510,7 @@ $ `src/store.nu`
             adf
             amargin
             arel
+            -1
         } )
         ( vec_free [f] araw )
     } {}
@@ -570,6 +613,10 @@ $ `src/store.nu`
     // second, empty "autoencoder" verdict beside the real one.
     ( __an_free_forests mo )
     ( store_delete_forest . mo store ( string_data . mo mname ) `autoencoder` )
+    // The range guard needs nothing but the scaler just fitted; a model
+    // from before it existed gains the version here, at its next retrain,
+    // where the epoch bump and the metadata save happen anyway.
+    ( __an_ensure_guard_cfg mo )
     : *f bigp ( vec_data [f] big )
     : *i etsp ( vec_data [i] ets )
     : i nv ( vec_len [VerCfg] . mm versions )
@@ -577,7 +624,7 @@ $ `src/store.nu`
     ~ < vi nv {
         ?? ( vec_get [VerCfg] . mm versions vi ) {
             T vc → {
-                ? & . vc enabled ! ( __an_is_ae_name ( string_data . vc vname ) ) {
+                ? & . vc enabled ! ( __an_forestless ( string_data . vc vname ) ) {
                     // Window: time filter first, then point cap, then the
                     // most-recent-min_points fallback.
                     : ~ i from 0
@@ -713,6 +760,17 @@ $ `src/store.nu`
     }
     ( vec_push [VerCfg] . mm versions
     @ VerCfg { ( string_from `autoencoder` ) 0 0 0 0 0 0 -1.0 0.05 T } )
+}
+
+// ── The range guard version ───────────────────────────────────────────
+
+// Ensure a `range_guard` VerCfg exists (SPEC §5.4): margin in standard
+// deviations, tunable like any other, window fields 0 — it has no
+// training of its own beyond the shared scaler.
+@ __an_ensure_guard_cfg * Model mo → v {
+    : *Meta mm . mo meta
+    ? < ( meta_find_version mm ANOM_GUARD_NAME ) 0 {} { ^ }
+    ( vec_push [VerCfg] . mm versions ( _an_vc_guard ) )
 }
 
 // Train the autoencoder from the ring: encode + project the raw points
@@ -1721,21 +1779,23 @@ $ `src/store.nu`
                     : s nm ( string_data . vc vname )
                     ? == ( nurl_str_eq nm `autoencoder` ) 1 {
                         ? . cae trained { ( vec_push [String] out ( string_from nm ) ) } {}
-                    } {
-                        : ~ b has F
-                        : i nf ( vec_len [VerModel] . mo forests )
-                        : ~ i j 0
-                        ~ < j nf {
-                            ?? ( vec_get [VerModel] . mo forests j ) {
-                                T vm → {
-                                    ? == ( nurl_str_eq ( string_data . vm vname ) nm ) 1 { = has T } {}
+                    } { ? ( _an_is_guard_name nm ) {
+                            ? > ( vec_len [f] . . mo sc mean ) 0 { ( vec_push [String] out ( string_from nm ) ) } {}
+                        } {
+                            : ~ b has F
+                            : i nf ( vec_len [VerModel] . mo forests )
+                            : ~ i j 0
+                            ~ < j nf {
+                                ?? ( vec_get [VerModel] . mo forests j ) {
+                                    T vm → {
+                                        ? == ( nurl_str_eq ( string_data . vm vname ) nm ) 1 { = has T } {}
+                                    }
+                                    F _ → {}
                                 }
-                                F _ → {}
+                                = j + j 1
                             }
-                            = j + j 1
-                        }
-                        ? has { ( vec_push [String] out ( string_from nm ) ) } {}
-                    }
+                            ? has { ( vec_push [String] out ( string_from nm ) ) } {}
+                        } }
                 } {}
             }
             F _ → {}
@@ -2255,7 +2315,7 @@ $ `src/store.nu`
         F _ → {}
     }
     ? on {} {
-        ? == ( nurl_str_eq vname `autoencoder` ) 1 {} { ( __an_drop_forest mo vname ) }
+        ? ( __an_forestless vname ) {} { ( __an_drop_forest mo vname ) }
     }
     ( meta_bump_epoch mm )
     ( store_save_meta . mo store ( string_data . mo mname ) mm )

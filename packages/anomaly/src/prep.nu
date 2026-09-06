@@ -144,6 +144,24 @@ $ `stdlib/ext/json.nu`
     ^ @ VerCfg { ( string_from vname ) 0 0 wsize sstep est samp -1.0 margin T }
 }
 
+// The range guard (SPEC §5.4): not a forest but the univariate check the
+// forests cannot make — a point whose one feature sits further from its
+// training mean than `decision_margin` standard deviations is an anomaly
+// on that alone, whatever the joint picture. Its decision value is
+// -max|z| over the standardised features, so the margin reads as a sigma
+// count; ANOM_GUARD_SIGMA is the default line. It has no window or trees:
+// the shared scaler every retrain refits is all it needs.
+: s ANOM_GUARD_NAME `range_guard`
+: f ANOM_GUARD_SIGMA 4.0
+
+@ _an_is_guard_name s vname → b {
+    ^ == ( nurl_str_eq vname ANOM_GUARD_NAME ) 1
+}
+
+@ _an_vc_guard → VerCfg {
+    ^ @ VerCfg { ( string_from ANOM_GUARD_NAME ) 0 0 0 0 0 0 -1.0 ANOM_GUARD_SIGMA T }
+}
+
 @ meta_default_versions → ( Vec VerCfg ) {
     : ( Vec VerCfg ) vs ( vec_new [VerCfg] )
     ( vec_push [VerCfg] vs ( __an_vc `short_term` 180 0 200 256 0.16 ) )
@@ -151,6 +169,7 @@ $ `stdlib/ext/json.nu`
     ( vec_push [VerCfg] vs ( __an_vc `weekly` 10080 0 350 256 0.06 ) )
     ( vec_push [VerCfg] vs ( __an_vc `seasonal` 129600 0 400 256 0.08 ) )
     ( vec_push [VerCfg] vs ( __an_vc_tv `timevector` 100 1 200 256 0.10 ) )
+    ( vec_push [VerCfg] vs ( _an_vc_guard ) )
     ^ vs
 }
 
@@ -1285,9 +1304,10 @@ $ `stdlib/ext/json.nu`
     ? > . o window_size 0 {
         ? < . o step_size 1 { = . o step_size 1 } {}
     } { = . o step_size 0 }
-    // The autoencoder version has no forest: its tree counts stay 0 so the
-    // config round-trips unchanged. Every other version must be trainable.
-    ? == ( nurl_str_eq ( string_data . o vname ) `autoencoder` ) 1 {
+    // The autoencoder and the range guard have no forest: their tree
+    // counts stay 0 so the config round-trips unchanged. Every other
+    // version must be trainable.
+    ? | == ( nurl_str_eq ( string_data . o vname ) `autoencoder` ) 1 ( _an_is_guard_name ( string_data . o vname ) ) {
         ? < . o n_estimators 0 { = . o n_estimators 0 } {}
         ? < . o max_samples 0 { = . o max_samples 0 } {}
     } {

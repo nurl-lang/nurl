@@ -248,9 +248,25 @@ Verdict {
   score:      f       // the most severe version's score (its own units)
   severity:   f       // that version's severity — the aggregate
   versions:   Vec VersionVerdict   // per-version { name, anomaly, score,
-                                   //               margin, cfg_margin }
+                                   //               margin, cfg_margin,
+                                   //               feat }
 }
 ```
+
+`feat` is the feature index a verdict is about, −1 for every version but
+the **range guard**: `range_guard` is a forestless version whose decision
+value is `−max_j |z_j|` over the standardised features (the shared scaler
+the last retrain fitted), so `score <= −margin` reads "some feature is
+`margin` or more standard deviations from its training mean" and the
+margin is a sigma count (`ANOM_GUARD_SIGMA`, 4.0, by default; `units` in
+the service says `standard_deviations`). It is the univariate check the
+forests structurally cannot make — a single reading at ten sigma is one
+coordinate among many to a tree — and it names the feature. It is in
+`meta_default_versions`; a model from before it existed gains the VerCfg
+at its next retrain (`__an_ensure_guard_cfg`), where the epoch bumps and
+the metadata is saved anyway, so the score cache's version bitmask never
+shifts under a live cache. Disabling it mutes it, like the autoencoder:
+there is no forest to drop and nothing to retrain on re-enable.
 
 `severity = −score / margin` (`anom_severity`; `margin = 0` gives 1.0 when
 flagged, 0.0 otherwise) is computed for every version verdict; the
@@ -476,8 +492,10 @@ service so existing dashboards and the `modelmanager` UI keep working:
   `anomaly`, `score`, `severity`, `threshold_info { margin, decision_margin,
   units }`: `margin` is the absolute band the score was compared to,
   `decision_margin` the stored setting, and `units` says whether that
-  setting is `absolute` on the decision function or, for the autoencoder,
-  `relative_to_threshold`), `status`, `model`, echoed `data_point`.
+  setting is `absolute` on the decision function, `standard_deviations`
+  for the range guard, or, for the autoencoder, `relative_to_threshold`;
+  the range guard's entry also carries `feature`, the one it judged by),
+  `status`, `model`, echoed `data_point`.
 - `POST /detect_only/<model>` — same body, `Verdict`, no state change.
 - `POST /detect_anomalies` body = `{ file_path, model_name? }` → batch report:
   `anomaly_count`, `anomaly_percentage`, `anomaly_indices`, `has_anomalies`,

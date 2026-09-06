@@ -182,6 +182,13 @@ $ `src/mcp.nu`
                     ( json_obj_set vo `score` ( json_float . vv score ) )
                     ( json_obj_set vo `severity` ( json_float ( anom_severity . vv score . vv margin ) ) )
                     ( json_obj_set vo `margin` ( json_float . vv margin ) )
+                    ? >= . vv vv_feat 0 {
+                        : *Meta pmm ( model_metadata mo )
+                        ?? ( vec_get [String] . pmm feats . vv vv_feat ) {
+                            T fname → { ( json_obj_set vo `feature` ( json_str_lit ( string_data fname ) ) ) }
+                            F _ → {}
+                        }
+                    } {}
                     ( json_obj_set vers ( string_data . vv vvname ) vo )
                 }
                 F _ → {}

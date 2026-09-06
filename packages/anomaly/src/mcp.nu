@@ -1260,7 +1260,7 @@ $ `src/imptime.nu`
         }
         F _ → {}
     }
-    ( json_obj_set out `reading` ( json_str_lit `A version flags a row when its score is at or below -margin (score = decision function; the more negative, the more anomalous); rate = flagged / n over this window. margin_for_rate gives, per requested rate, the nearest margin the window's scores can supply: when scores tie at the cut the achieved rate differs from the requested one (exact = false) — a run of identical scores is taken or left whole. Margins are shown exactly as stored, in each version's own units (units: a forest's margin is absolute on its decision function; the autoencoder's is a fraction of its reconstruction threshold, and its scores here are scaled the same way). finetune {model, rate} sets them.` ) )
+    ( json_obj_set out `reading` ( json_str_lit `A version flags a row when its score is at or below -margin (score = decision function; the more negative, the more anomalous); rate = flagged / n over this window. margin_for_rate gives, per requested rate, the nearest margin the window's scores can supply: when scores tie at the cut the achieved rate differs from the requested one (exact = false) — a run of identical scores is taken or left whole. Margins are shown exactly as stored, in each version's own units (units: a forest's margin is absolute on its decision function; the autoencoder's is a fraction of its reconstruction threshold, and its scores here are scaled the same way; range_guard's is a count of standard deviations — its score is -max|z| over the features, and it names the feature). finetune {model, rate} sets them.` ) )
     ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
@@ -1302,6 +1302,7 @@ $ `src/imptime.nu`
                     ( __mcp_copy vv `anomaly` e )
                     ( __mcp_copy_rounded vv `score` e 4 )
                     ( __mcp_copy_rounded vv `severity` e 3 )
+                    ( __mcp_copy vv `feature` e )
                     ?? ( json_obj_get vv `threshold_info` ) {
                         T ti → {
                             : Json t ( json_obj_new )
@@ -1953,9 +1954,9 @@ $ `src/imptime.nu`
 // ── The server ───────────────────────────────────────────────────────
 
 @ __mcp_instructions → s {
-    ^ `Anomaly detection over an organisation's sensor and event streams: every model watches one stream, stores its recent points in a ring, and flags points its versions (isolation forests over different windows, and an autoencoder that sees the relations between fields) score as unusual. You act with the signed-in user's permissions, inside their organisation.
+    ^ `Anomaly detection over an organisation's sensor and event streams: every model watches one stream, stores its recent points in a ring, and flags points its versions (isolation forests over different windows, an autoencoder that sees the relations between fields, and a range_guard that flags a single field far outside its usual range and names it) score as unusual. You act with the signed-in user's permissions, inside their organisation.
 
-Start with list_models. Then anomalies {model, last: "24h"} for the newest flagged rows with the features that caused them, anomaly_summary for counts, timeline and the features blamed most, point for one row in full, describe_model for how a model is built, calibration for how its margins sit against the recent data. Times are ISO-8601 UTC; a model on a count clock numbers its rows instead. "last" counts back from the model's newest point, not from now. Scores run downward into anomaly: a point is flagged when its score is at or below minus the version's margin. A forest's decision_margin is that margin as is; the autoencoder's decision_margin is a fraction of its reconstruction threshold (margin = threshold × decision_margin), so its scores are ~1e-4 where a forest's are ~1e-1. Rank points and versions by severity (−score / margin: 1.0 is exactly on the alert line, 2.0 twice as far past it), never by raw score; a row's score and severity are those of its most severe version.
+Start with list_models. Then anomalies {model, last: "24h"} for the newest flagged rows with the features that caused them, anomaly_summary for counts, timeline and the features blamed most, point for one row in full, describe_model for how a model is built, calibration for how its margins sit against the recent data. Times are ISO-8601 UTC; a model on a count clock numbers its rows instead. "last" counts back from the model's newest point, not from now. Scores run downward into anomaly: a point is flagged when its score is at or below minus the version's margin. A forest's decision_margin is that margin as is; the autoencoder's decision_margin is a fraction of its reconstruction threshold (margin = threshold × decision_margin), so its scores are ~1e-4 where a forest's are ~1e-1; range_guard's decision_margin is a count of standard deviations. Rank points and versions by severity (−score / margin: 1.0 is exactly on the alert line, 2.0 twice as far past it), never by raw score; a row's score and severity are those of its most severe version.
 
 Every member may build scratch models named llm_… (fork_model: a slice of an existing model's history, optionally fewer columns), tune them (finetune, train_autoencoder, retrain), edit and delete them — use them to test a hypothesis without touching production models. Changing or deleting any other model needs the administrator role; the reply says so when it does. Sending new points (ingest_point, import_data) needs the ingest capability. analyze_data scores a file you provide without creating a model.`
 }

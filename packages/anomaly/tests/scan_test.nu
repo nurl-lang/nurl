@@ -96,6 +96,41 @@ $ `src/dynamic.nu`
     }
 }
 
+// The range guard's slice of a verdict: present, hit, score (-max|z|),
+// and the feature it judged by.
+: GuardSlice {
+    b present
+    b hit
+    f score
+    f margin
+    i feat
+}
+
+@ guard_probe * Model mo Json j → GuardSlice {
+    : !Verdict String r ( model_detect_only mo j )
+    ?? r {
+        T vd → {
+            : ~ GuardSlice out @ GuardSlice { F F 0.0 0.0 -1 }
+            : i nv ( vec_len [VerVerdict] . vd versions )
+            : ~ i k 0
+            ~ < k nv {
+                ?? ( vec_get [VerVerdict] . vd versions k ) {
+                    T vv → {
+                        ? ( _an_is_guard_name ( string_data . vv vvname ) ) {
+                            = out @ GuardSlice { T . vv anomaly . vv score . vv margin . vv vv_feat }
+                        } {}
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( verdict_free vd )
+            ^ out
+        }
+        F e → { ( string_free e ) ^ @ GuardSlice { F F 0.0 0.0 -1 } }
+    }
+}
+
 // Does the aggregate follow the most SEVERE version — the one farthest
 // past its own alert line in its own margins — rather than the lowest
 // raw decision value? The two differ whenever the autoencoder (scores
@@ -278,6 +313,43 @@ $ `src/dynamic.nu`
     : Json good ( mkpoint 1.5 3.0 20.5 )
     : AeSlice s3 ( ae_probe mo good )
     ( check ! . s3 hit `an on-manifold point is not an anomaly` )
+
+    // ── the range guard ───────────────────────────────────────────────
+    //
+    // temp trains on 20..21 (std ~0.29); 30 is thirty sigma out on that
+    // one column while pres and flow sit on the manifold. A forest may or
+    // may not notice; the guard must, and it must say which feature.
+    : Json spike ( mkpoint 1.5 3.0 30.0 )
+    : GuardSlice g0 ( guard_probe mo spike )
+    ( check . g0 present `the range guard has a verdict` )
+    ( check . g0 hit `a single feature thirty sigma out trips the guard` )
+    ( check == . g0 margin ANOM_GUARD_SIGMA `the guard's default margin is the sigma count` )
+    ( check < . g0 score - 0.0 20.0 `its score is -max|z|` )
+    : *Meta gmm ( model_metadata mo )
+    : ~ b named_temp F
+    ? >= . g0 feat 0 {
+        ?? ( vec_get [String] . gmm feats . g0 feat ) {
+            T fname → { = named_temp == ( nurl_str_eq ( string_data fname ) `temp` ) 1 }
+            F _ → {}
+        }
+    } {}
+    ( check named_temp `and it names temp` )
+    : GuardSlice g1 ( guard_probe mo good )
+    ( check . g1 present `the guard judges the on-manifold point too` )
+    ( check ! . g1 hit `and does not trip on it` )
+    ( check > . g1 score - 0.0 ANOM_GUARD_SIGMA `its z stays under the line` )
+    // The margin is a sigma count and tunes like any other.
+    : b _g2 ( model_set_margin mo ANOM_GUARD_NAME 1.0 )
+    : GuardSlice g2 ( guard_probe mo good )
+    ( check == . g2 margin 1.0 `the guard's margin is the metadata's` )
+    : b _g3 ( model_set_margin mo ANOM_GUARD_NAME ANOM_GUARD_SIGMA )
+    : b _g4 ( model_set_version_enabled mo ANOM_GUARD_NAME F )
+    : GuardSlice g4 ( guard_probe mo spike )
+    ( check ! . g4 present `a disabled guard has no verdict` )
+    : b _g5 ( model_set_version_enabled mo ANOM_GUARD_NAME T )
+    : GuardSlice g5 ( guard_probe mo spike )
+    ( check . g5 hit `re-enabling it costs nothing: no forest to retrain` )
+    ( json_free spike )
 
     // ── per-feature attribution ───────────────────────────────────────
     //
