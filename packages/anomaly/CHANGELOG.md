@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.19.0
+
+- **HTTP sources: a URL answering JSON, polled with headers.** Most of
+  what a service publishes is not a WFS but a URL that answers JSON — a
+  REST API behind a key, a device's status page. A source of `kind:
+  "http"` is the URL as given (query string and all), a `method` (GET,
+  POST or PUT), `headers` (an `Authorization`, a `Digitraffic-User`), a
+  `body` for POST, and a `path` to the records in the answer (dotted,
+  indexes allowed: `data.items`, `stations.0.values`; empty = the whole
+  answer). An array gives one record per element, an object one record;
+  nested objects are flattened (`current_temperature_2m`), numbers and
+  booleans are numbers, short strings are text, arrays and nulls are left
+  out; the clock is read as for a feature type (`time_field`, detected, or
+  `none` for a snapshot series). Header values are an administrator's
+  secrets: the API shows them masked (`••••••••`), and the mask sent back
+  on an edit keeps the stored value. The Sources page gained the kind
+  switch, a header editor and a body field. Verified against Open-Meteo
+  (no headers; the forecast time is the clock, so a second poll lands
+  nothing) and Digitraffic (the `Digitraffic-User` header the service
+  requires; 107 sensors of one station, their names categorical).
+
 ## 0.18.0
 
 - **Any WFS: feature types, not only stored queries.** A GeoServer or a

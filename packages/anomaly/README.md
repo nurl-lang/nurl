@@ -1043,6 +1043,20 @@ Two kinds of WFS answer, and the source's `mode` says which:
   that landed, so the same features never land twice and a reading
   published late is not skipped.
 
+A third kind is not a WFS at all: **`kind: "http"`**, a URL answering
+JSON. The record keeps the URL as given (query string and all), a
+`method` (GET, POST or PUT), `headers` (an `Authorization`, the
+`Digitraffic-User` a service requires), a `body` for POST, and a `path`
+to the records in the answer — dotted, indexes allowed (`data.items`,
+`stations.0.values`), empty for the whole answer. An array gives one
+record per element, an object one record; nested objects are flattened
+(`current_temperature_2m`), numbers and booleans are numbers, short
+strings are text, arrays and nulls are left out; the clock is read as for
+a feature type (`time_field`, detected, or `none` for a snapshot series),
+and the span moves with the records' clocks. Header values are secrets:
+`GET` shows them masked (`••••••••`), and the mask sent back in a `PUT`
+keeps the stored value.
+
 `POST /api/org/sources/catalog {"url": …}` fetches the service's
 `GetCapabilities` (every feature type, `kind: "type"`) and, where it
 offers them, `DescribeStoredQueries` (`kind: "stored"`, with parameters),

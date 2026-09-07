@@ -8,8 +8,9 @@
 //
 //   <root>/orgs/<org>/sources/<id>.json
 //
-//   { "id", "name", "kind": "wfs", "url", "query", "params": {…},
-//     "mode": "stored" | "type",           a stored query, or a feature type
+//   { "id", "name", "kind": "wfs" | "http", "url", "query", "params": {…},
+//     "mode": "stored" | "type",           WFS: a stored query, or a feature type
+//     "method", "headers": {…}, "body", "path",   HTTP: the request, and where the records are
 //     "features": ["t2m", "ws_10min"],     the columns kept (empty = all)
 //     "categorical": ["lat", "lon"],       columns stored as text → one-hot
 //     "time_field": "",                    a feature type's clock ("" = detect)
@@ -54,6 +55,7 @@ $ `src/store.nu`
 $ `src/dynamic.nu`
 $ `src/authz.nu`
 $ `src/wfs.nu`
+$ `src/httpsrc.nu`
 
 : i SRC_ID_LEN 12
 : i SRC_NAME_MAX 80
@@ -67,6 +69,13 @@ $ `src/wfs.nu`
 : i SRC_CHUNK_SECS 86400  // one request covers at most a day
 : i SRC_TICK_MS 15000  // the scheduler's wake-up
 : s SRC_KIND_WFS `wfs`
+: s SRC_KIND_HTTP `http`
+: i SRC_HEADERS_MAX 20
+: i SRC_BODY_MAX 65536
+// What the API shows in place of a header's value: a key is an admin's
+// secret, and the record is readable by every member. Sent back as a
+// value it means "keep what is stored".
+: s SRC_MASK `••••••••`
 : s SRC_MODE_STORED `stored`
 : s SRC_MODE_TYPE `type`
 // A feature type's forward window has no upper edge: a forecast's rows
@@ -275,22 +284,100 @@ $ `src/wfs.nu`
 
     ? ( json_obj_has body `kind` ) {
         : String kind ( __src_jstr body `kind` )
-        : b ok == ( nurl_str_eq ( string_data kind ) SRC_KIND_WFS ) 1
+        : b ok | == ( nurl_str_eq ( string_data kind ) SRC_KIND_WFS ) 1 == ( nurl_str_eq ( string_data kind ) SRC_KIND_HTTP ) 1
+        ? ok { ( __src_set_str src `kind` ( string_data kind ) ) } {}
         ( string_free kind )
-        ? ok {} { ^ ( string_from `kind must be "wfs"` ) }
+        ? ok {} { ^ ( string_from `kind must be "wfs" or "http"` ) }
     } {}
-    ( __src_set_str src `kind` SRC_KIND_WFS )
+    : b is_http ( source_is_http src )
 
     ? ( json_obj_has body `url` ) {
-        : String url ( __src_jstr body `url` )
+        : String url0 ( __src_jstr body `url` )
+        : String url ( string_trim url0 )
+        ( string_free url0 )
         : b ok & ( wfs_url_ok ( string_data url ) ) ( __src_text_ok ( string_data url ) 2048 )
         ? ok {
-            : String base ( wfs_base_url ( string_data url ) )
-            ( __src_set_str src `url` ( string_data base ) )
-            ( string_free base )
+            // A WFS is named by its endpoint, the requests built on it; an
+            // HTTP source is the URL exactly as given, query string and all.
+            ? is_http { ( __src_set_str src `url` ( string_data url ) ) } {
+                : String base ( wfs_base_url ( string_data url ) )
+                ( __src_set_str src `url` ( string_data base ) )
+                ( string_free base )
+            }
         } {}
         ( string_free url )
-        ? ok {} { ^ ( string_from `url must be an http(s) WFS endpoint` ) }
+        ? ok {} { ^ ( string_from ? is_http `url must be an http(s) URL` `url must be an http(s) WFS endpoint` ) }
+    } {}
+
+    ? ( json_obj_has body `method` ) {
+        : String m0 ( __src_jstr body `method` )
+        : String m ( string_to_upper m0 )
+        ( string_free m0 )
+        : b ok | | == ( nurl_str_eq ( string_data m ) `GET` ) 1 == ( nurl_str_eq ( string_data m ) `POST` ) 1 == ( nurl_str_eq ( string_data m ) `PUT` ) 1
+        ? ok { ( __src_set_str src `method` ( string_data m ) ) } {}
+        ( string_free m )
+        ? ok {} { ^ ( string_from `method must be GET, POST or PUT` ) }
+    } {}
+
+    ? ( json_obj_has body `headers` ) {
+        ?? ( json_obj_get body `headers` ) {
+            T hv → {
+                ? ( json_is_obj hv ) {} { ^ ( string_from `headers must be an object of header values` ) }
+                : ( Vec String ) keys ( json_obj_keys hv )
+                : i nk ( vec_len [String] keys )
+                : ~ String bad ( string_new )
+                : Json merged ( json_obj_new )
+                : ~ i k 0
+                ~ & < k nk == ( string_len bad ) 0 {
+                    ?? ( vec_get [String] keys k ) {
+                        T key → {
+                            ? ( __src_header_name_ok ( string_data key ) ) {} { ( string_free bad ) = bad ( string_from `a header name may hold letters, digits and dashes only` ) }
+                            ?? ( json_obj_get hv ( string_data key ) ) {
+                                T v → {
+                                    ? ( json_is_str v ) {
+                                        ? ( __src_text_ok ( json_str_data v ) 1024 ) {} { ( string_free bad ) = bad ( string_from `a header value is not printable text` ) }
+                                        // The mask sent back: keep the stored value.
+                                        ? == ( nurl_str_eq ( json_str_data v ) SRC_MASK ) 1 {
+                                            ?? ( json_obj_get src `headers` ) {
+                                                T oh → { ?? ( json_obj_get oh ( string_data key ) ) { T ov → { ( json_obj_set merged ( string_data key ) ( json_clone ov ) ) } F _ → {} } }
+                                                F _ → {}
+                                            }
+                                        } { ( json_obj_set merged ( string_data key ) ( json_clone v ) ) }
+                                    } { ( string_free bad ) = bad ( string_from `header values must be strings` ) }
+                                }
+                                F _ → {}
+                            }
+                        }
+                        F _ → {}
+                    }
+                    = k + k 1
+                }
+                ( vec_free_with [String] keys \ String s → v { ( string_free s ) } )
+                ? > nk SRC_HEADERS_MAX { ( string_free bad ) = bad ( string_from `too many headers` ) } {}
+                ? > ( string_len bad ) 0 { ( json_free merged ) ^ bad } {}
+                ( string_free bad )
+                ( json_obj_set src `headers` merged )
+            }
+            F _ → {}
+        }
+    } {}
+
+    ? ( json_obj_has body `body` ) {
+        : String b ( __src_jstr body `body` )
+        : b ok <= ( string_len b ) SRC_BODY_MAX
+        ? ok { ( __src_set_str src `body` ( string_data b ) ) } {}
+        ( string_free b )
+        ? ok {} { ^ ( string_from `body is too long` ) }
+    } {}
+
+    ? ( json_obj_has body `path` ) {
+        : String p0 ( __src_jstr body `path` )
+        : String p ( string_trim p0 )
+        ( string_free p0 )
+        : b ok ( __src_text_ok ( string_data p ) 200 )
+        ? ok { ( __src_set_str src `path` ( string_data p ) ) } {}
+        ( string_free p )
+        ? ok {} { ^ ( string_from `path must be a dotted path into the answer (data.items)` ) }
     } {}
 
     ? ( json_obj_has body `query` ) {
@@ -445,16 +532,39 @@ $ `src/wfs.nu`
     : String url ( __src_jstr src `url` )
     : String q ( __src_jstr src `query` )
     : String m ( __src_jstr src `model` )
-    : b have & & > ( string_len url ) 0 > ( string_len q ) 0 > ( string_len m ) 0
-    ( string_free url )
+    : b have & & > ( string_len url ) 0 | is_http > ( string_len q ) 0 > ( string_len m ) 0
     ( string_free m )
-    ? have {} { ( string_free q ) ^ ( string_from `a source needs url, query and model` ) }
-    // A nameless source is called after its query.
+    ? have {} { ( string_free url ) ( string_free q ) ^ ( string_from ? is_http `a source needs url and model` `a source needs url, query and model` ) }
+    // A nameless source is called after its query, or its URL.
     : String nm ( __src_jstr src `name` )
-    ? == ( string_len nm ) 0 { ( __src_set_str src `name` ( string_data q ) ) } {}
+    ? == ( string_len nm ) 0 { ( __src_set_str src `name` ? is_http ( string_data url ) ( string_data q ) ) } {}
     ( string_free nm )
+    ( string_free url )
     ( string_free q )
     ^ ( string_new )
+}
+
+// A header name: RFC 7230 tokens, in practice letters, digits and dashes.
+@ __src_header_name_ok s name → b {
+    : i n ( nurl_str_len name )
+    ? | == n 0 > n 64 { ^ F } {}
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_get name k )
+        : b digit & >= c 48 <= c 57
+        : b lower & >= c 97 <= c 122
+        : b upper & >= c 65 <= c 90
+        ? | | | digit lower upper | == c 45 == c 95 {} { ^ F }
+        = k + k 1
+    }
+    ^ T
+}
+
+@ source_is_http Json src → b {
+    : String kind ( __src_jstr src `kind` )
+    : b h == ( nurl_str_eq ( string_data kind ) SRC_KIND_HTTP ) 1
+    ( string_free kind )
+    ^ h
 }
 
 // A record with every field present, so a reader never has to default.
@@ -467,6 +577,10 @@ $ `src/wfs.nu`
     ( __src_set_str o `query` `` )
     ( json_obj_set o `params` ( json_obj_new ) )
     ( __src_set_str o `mode` SRC_MODE_STORED )
+    ( __src_set_str o `method` `GET` )
+    ( json_obj_set o `headers` ( json_obj_new ) )
+    ( __src_set_str o `body` `` )
+    ( __src_set_str o `path` `` )
     ( json_obj_set o `features` ( json_arr_new ) )
     ( json_obj_set o `categorical` ( json_arr_new ) )
     ( __src_set_str o `time_field` `` )
@@ -515,6 +629,10 @@ $ `src/wfs.nu`
             : String p0 ?? ( json_obj_get src `params` ) { T p → ( json_stringify p ) F _ → ( string_new ) }
             ( string_push_str p0 ( string_data ( __src_jstr src `mode` ) ) )
             ( string_push_str p0 ( string_data ( __src_jstr src `time_field` ) ) )
+            ( string_push_str p0 ( string_data ( __src_jstr src `method` ) ) )
+            ( string_push_str p0 ( string_data ( __src_jstr src `body` ) ) )
+            ( string_push_str p0 ( string_data ( __src_jstr src `path` ) ) )
+            ?? ( json_obj_get src `headers` ) { T h → { : String ht ( json_stringify h ) ( string_push_str p0 ( string_data ht ) ) ( string_free ht ) } F _ → {} }
             : String err ( source_apply src body )
             ? > ( string_len err ) 0 {
                 ( string_free u0 ) ( string_free q0 ) ( string_free p0 )
@@ -527,6 +645,10 @@ $ `src/wfs.nu`
             : String p1 ?? ( json_obj_get src `params` ) { T p → ( json_stringify p ) F _ → ( string_new ) }
             ( string_push_str p1 ( string_data ( __src_jstr src `mode` ) ) )
             ( string_push_str p1 ( string_data ( __src_jstr src `time_field` ) ) )
+            ( string_push_str p1 ( string_data ( __src_jstr src `method` ) ) )
+            ( string_push_str p1 ( string_data ( __src_jstr src `body` ) ) )
+            ( string_push_str p1 ( string_data ( __src_jstr src `path` ) ) )
+            ?? ( json_obj_get src `headers` ) { T h → { : String ht ( json_stringify h ) ( string_push_str p1 ( string_data ht ) ) ( string_free ht ) } F _ → {} }
             : b same & & ( string_eq u0 u1 ) ( string_eq q0 q1 ) ( string_eq p0 p1 )
             ( string_free u0 ) ( string_free q0 ) ( string_free p0 )
             ( string_free u1 ) ( string_free q1 ) ( string_free p1 )
@@ -553,7 +675,10 @@ $ `src/wfs.nu`
 // seen to now, or `history_hours` back on the first run. Backfill: from
 // `hours` back to just before the oldest observation seen — never over
 // ground already covered. An empty window has end < start.
+// Fetched whole on every run, its clock in the records: a feature type,
+// and an HTTP source alike.
 @ source_is_type Json src → b {
+    ? ( source_is_http src ) { ^ T } {}
     : String mode ( __src_jstr src `mode` )
     : b t == ( nurl_str_eq ( string_data mode ) SRC_MODE_TYPE ) 1
     ( string_free mode )
@@ -749,13 +874,27 @@ $ `src/wfs.nu`
     : Json params ?? ( json_obj_get src `params` ) { T p → ( json_clone p ) F _ → ( json_obj_new ) }
     : ( Vec Json ) rows ( vec_new [Json] )
     : ~ String err ( string_new )
-    // A feature type: one request, the whole type, no window.
+    // A feature type, or an HTTP endpoint: one request, the whole
+    // answer, no window.
     ? ( source_is_type src ) {
         : String tf ( __src_jstr src `time_field` )
-        : String u ( wfs_url_type ( string_data url ) ( string_data q ) params )
-        ?? ( wfs_fetch ( string_data u ) ) {
+        : b is_http ( source_is_http src )
+        : ~ String u ( string_new )
+        ? is_http { ( string_push_str u ( string_data url ) ) } {
+            ( string_free u )
+            = u ( wfs_url_type ( string_data url ) ( string_data q ) params )
+        }
+        : ~ String method ( __src_jstr src `method` )
+        // A record built for a preview may carry no method: GET it is.
+        ? == ( string_len method ) 0 { ( string_free method ) = method ( string_from `GET` ) } {}
+        : String hbody ( __src_jstr src `body` )
+        : String path ( __src_jstr src `path` )
+        : Json headers ?? ( json_obj_get src `headers` ) { T h → ( json_clone h ) F _ → ( json_obj_new ) }
+        : !String String fr ? is_http ( http_fetch ( string_data method ) ( string_data u ) headers ( string_data hbody ) ) ( wfs_fetch ( string_data u ) )
+        ( json_free headers )
+        ?? fr {
             T body → {
-                : WfsPivot pv ( wfs_pivot_wide ( string_data body ) ( string_data tf ) ( now_seconds ) )
+                : WfsPivot pv ? is_http ( http_pivot ( string_data body ) ( string_data path ) ( string_data tf ) ( now_seconds ) ) ( wfs_pivot_wide ( string_data body ) ( string_data tf ) ( now_seconds ) )
                 ? > ( string_len . pv err ) 0 {
                     ? & == . pv members 0 ( string_starts_with . pv err `the feature collection holds no` ) {} {
                         ( string_free err )
@@ -776,6 +915,9 @@ $ `src/wfs.nu`
             }
             F why → { ( string_free err ) = err why }
         }
+        ( string_free path )
+        ( string_free hbody )
+        ( string_free method )
         ( string_free u )
         ( string_free tf )
         ( json_free params )

@@ -107,6 +107,12 @@
           border:1px solid var(--border); color:var(--muted); background:var(--bg); user-select:none; }
   .chip.on { border-color:var(--accent2); color:var(--accent2); background:rgba(110,231,183,.08); }
   .chip:hover { border-color:var(--accent); }
+  .hdr { display:grid; grid-template-columns:minmax(120px,1fr) minmax(160px,2fr) auto; gap:6px; margin-bottom:6px; align-items:center; }
+  .hdr input { width:100%; }
+  textarea { font-family:var(--mono); font-size:12px; width:100%; min-height:70px; background:var(--bg); color:var(--fg);
+             border:1px solid var(--border); border-radius:8px; padding:8px; }
+  .kinds { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
+  .kinds button.on { background:var(--accent); border-color:var(--accent); color:#06122b; font-weight:600; }
   .sample { font-family:var(--mono); font-size:11px; color:var(--muted); white-space:pre; overflow-x:auto;
             background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:8px; margin-top:8px; }
 </style>
@@ -143,10 +149,37 @@
       types answer a feature per row with its properties, and each fetch is a snapshot unless a property is a date.</p>
 
     <h3><span class="step">1</span>Service</h3>
-    <div class="row">
+    <div class="kinds">
+      <button id="kindWfs" class="on" onclick="setKind('wfs')">WFS — stored queries and feature types</button>
+      <button id="kindHttp" onclick="setKind('http')">HTTP — a URL answering JSON (REST)</button>
+    </div>
+    <div class="row" id="wfsRow">
       <input id="url" class="wide" placeholder="https://opendata.fmi.fi/wfs" value="https://opendata.fmi.fi/wfs">
       <button onclick="loadCatalog()">Load catalogue</button>
       <span id="catStatus" class="muted" style="font-size:12px"></span>
+    </div>
+    <div id="httpBox" style="display:none">
+      <p class="hint">The URL is requested as given, query string and all, with the headers below — an API key, a token,
+        a <code>Digitraffic-User</code>. Header values are stored on the server and shown masked afterwards. The answer's
+        JSON is read at <em>path</em>: an array gives one record per element, an object one record; nested objects are
+        flattened (<code>current_temperature_2m</code>), arrays inside a record are left out.</p>
+      <div class="grid">
+        <label>URL <input id="httpUrl" placeholder="https://api.example.com/v1/readings?station=1"></label>
+        <label>method <select id="httpMethod" onchange="$('bodyBox').style.display = this.value === 'GET' ? 'none' : ''"><option>GET</option><option>POST</option><option>PUT</option></select></label>
+        <label>path to the records <input id="httpPath" placeholder="empty = the whole answer; data.items; stations.0.values"></label>
+      </div>
+      <div style="margin-top:10px">
+        <div class="muted" style="font-size:12px;margin-bottom:6px">Headers</div>
+        <div id="headers"></div>
+        <button class="small" onclick="addHeader('', '')">+ header</button>
+      </div>
+      <div id="bodyBox" style="display:none;margin-top:10px">
+        <div class="muted" style="font-size:12px;margin-bottom:6px">Request body (sent as JSON unless a Content-Type header says otherwise)</div>
+        <textarea id="httpBody" placeholder='{"query": "..."}'></textarea>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button onclick="httpReady()">Continue to the columns</button>
+      </div>
     </div>
     <div id="catBox" style="display:none">
       <div class="row">
@@ -207,6 +240,7 @@ let CATALOG = [], SELECTED = null, PREVIEW = null, EDITING = null, SOURCES = [];
 // The features chosen so far: what the preview's rows toggle, what the
 // chips of a saved source show, what save() sends.
 let FEATS = new Set();
+let KIND = "wfs";
 // Which of the chosen features are stored as text (a one-hot identity
 // rather than a number), and which column is a feature type's clock.
 let CATS = new Set();
@@ -263,7 +297,11 @@ async function loadSources() {
         '<button class="small" onclick="edit(\'' + esc(s.id) + '\')">Edit</button>' +
         '<button class="small danger" onclick="remove(\'' + esc(s.id) + '\')">Delete</button>' : "") + "</div>" +
       '<div class="facts">' +
-        '<span title="' + esc(s.url) + '"><code>' + esc(s.query) + "</code>" + (s.mode === "type" ? ' <span class="pill run">feature type</span>' : "") + "</span>" +
+        (s.kind === "http"
+          ? '<span title="' + esc(s.url) + '"><span class="pill run">' + esc(s.method || "GET") + " JSON</span> <code>" + esc(s.url.length > 70 ? s.url.slice(0, 70) + "…" : s.url) + "</code>" +
+            (s.path ? ' <span class="muted">at</span> <code>' + esc(s.path) + "</code>" : "") +
+            (Object.keys(s.headers || {}).length ? ' <span class="muted">headers: ' + esc(Object.keys(s.headers).join(", ")) + "</span>" : "") + "</span>"
+          : '<span title="' + esc(s.url) + '"><code>' + esc(s.query) + "</code>" + (s.mode === "type" ? ' <span class="pill run">feature type</span>' : "") + "</span>") +
         "<span>" + esc(paramsText(s.params)) + "</span>" +
         "<span>every " + every(s.interval_minutes) + "</span>" +
         "<span>last run " + fmtTime(s.last_run) + "</span>" +
@@ -318,6 +356,58 @@ async function remove(id) {
   if (!r.ok) alert((r.data && r.data.message) || "could not delete");
   if (EDITING === id) resetEditor();
   loadSources();
+}
+
+// ── the editor: which kind ────────────────────────────────────────────
+
+function setKind(k) {
+  KIND = k;
+  $("kindWfs").classList.toggle("on", k === "wfs");
+  $("kindHttp").classList.toggle("on", k === "http");
+  $("wfsRow").style.display = k === "wfs" ? "" : "none";
+  $("httpBox").style.display = k === "http" ? "" : "none";
+  $("catBox").style.display = "none";
+  $("paramsBox").style.display = "none";
+  $("previewBox").style.display = "none";
+  $("targetBox").style.display = "none";
+  SELECTED = null; PREVIEW = null;
+  if (k === "http" && !$("headers").children.length) addHeader("", "");
+}
+
+function addHeader(name, value) {
+  const row = document.createElement("div");
+  row.className = "hdr";
+  row.innerHTML = '<input class="hname" placeholder="Header-Name" value="' + esc(name) + '">' +
+    '<input class="hvalue" placeholder="value" value="' + esc(value) + '">' +
+    '<button class="small danger" onclick="this.parentNode.remove()">×</button>';
+  $("headers").appendChild(row);
+}
+
+function readHeaders() {
+  const out = {};
+  document.querySelectorAll("#headers .hdr").forEach(r => {
+    const n = r.querySelector(".hname").value.trim(), v = r.querySelector(".hvalue").value;
+    if (n) out[n] = v;
+  });
+  return out;
+}
+
+// The HTTP kind has no catalogue: the URL is the query. Go straight to
+// the preview and the model.
+function httpReady() {
+  const url = $("httpUrl").value.trim();
+  if (!/^https?:\/\//.test(url)) { alert("The URL must start with http:// or https://"); return; }
+  SELECTED = { id: url, kind: "http", title: url, parameters: [] };
+  PREVIEW = null;
+  if (!EDITING) { FEATS = new Set(); CATS = new Set(); TIME_FIELD = ""; }
+  $("hoursBox").style.display = "none";
+  $("previewBox").style.display = "block";
+  $("targetBox").style.display = "block";
+  $("columns").innerHTML = "";
+  $("sampleBox").innerHTML = "";
+  renderChips();
+  if (!$("name").value) $("name").value = url.replace(/^https?:\/\//, "").split("?")[0].slice(0, 60);
+  if (!$("model").value) $("model").value = url.replace(/^https?:\/\//, "").split(/[?#]/)[0].replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "http_source";
 }
 
 // ── the editor ────────────────────────────────────────────────────────
@@ -419,12 +509,17 @@ function readParams() {
 async function preview() {
   if (!SELECTED) return;
   $("prevStatus").textContent = "asking the service…";
-  const body = { url: $("url").value.trim(), query: SELECTED.id, params: readParams(), hours: parseInt($("hours").value, 10),
-                 mode: SELECTED.kind === "type" ? "type" : "stored", time_field: TIME_FIELD };
+  const body = KIND === "http"
+    ? { kind: "http", url: $("httpUrl").value.trim(), method: $("httpMethod").value, headers: readHeaders(),
+        body: $("httpBody").value, path: $("httpPath").value.trim(), time_field: TIME_FIELD, id: EDITING || undefined }
+    : { url: $("url").value.trim(), query: SELECTED.id, params: readParams(), hours: parseInt($("hours").value, 10),
+        mode: SELECTED.kind === "type" ? "type" : "stored", time_field: TIME_FIELD };
   const r = await api("POST", "/api/org/sources/preview", body);
   if (!r.ok) { $("prevStatus").innerHTML = '<span class="err">' + esc((r.data && r.data.message) || "failed") + "</span>"; return; }
   PREVIEW = r.data;
-  $("prevStatus").textContent = (SELECTED && SELECTED.kind === "type")
+  $("prevStatus").textContent = (SELECTED && SELECTED.kind === "http")
+    ? PREVIEW.rows + " record" + (PREVIEW.rows === 1 ? "" : "s") + " in the answer"
+    : (SELECTED && SELECTED.kind === "type")
     ? PREVIEW.rows + " features fetched (one record each)"
     : PREVIEW.rows + " rows (location × time) in the last " + PREVIEW.hours + " h";
   const cols = PREVIEW.columns || [];
@@ -437,7 +532,7 @@ async function preview() {
   // Text columns that are taken are categories unless said otherwise.
   cols.forEach(c => { if (FEATS.has(c.name) && c.kind === "text" && !CATS.has(c.name)) CATS.add(c.name); });
   const timeCols = cols.filter(c => c.kind === "time").map(c => c.name);
-  const isType = SELECTED && SELECTED.kind === "type";
+  const isType = SELECTED && (SELECTED.kind === "type" || SELECTED.kind === "http");
   $("columns").innerHTML = '<div class="tablewrap"><table><thead><tr><th><input type="checkbox" id="allCols" onchange="allCols(this.checked)"></th>' +
     "<th>column</th><th>as</th><th>rows</th><th>distinct</th><th>min</th><th>max</th><th>last</th></tr></thead><tbody>" +
     cols.map(c => {
@@ -480,7 +575,17 @@ async function preview() {
   $("sampleBox").innerHTML = sample.length ? '<div class="sample">' + esc(sample.map(r => JSON.stringify(r)).join("\n")) + "</div>" : "";
 }
 
-function setFeat(name, on) { if (on) FEATS.add(name); else FEATS.delete(name); renderChips(); }
+function setFeat(name, on) {
+  if (on) FEATS.add(name); else FEATS.delete(name);
+  // A text column taken is a category unless it was said otherwise.
+  const col = PREVIEW && (PREVIEW.columns || []).find(c => c.name === name);
+  if (on && col && col.kind === "text" && !CATS.has(name)) {
+    CATS.add(name);
+    const b = document.querySelector('#columns button[data-kind="' + CSS.escape(name) + '"]');
+    if (b) b.textContent = "category";
+  }
+  renderChips();
+}
 
 function allCols(on) {
   document.querySelectorAll("#columns tbody tr[data-col]").forEach(tr => {
@@ -517,7 +622,21 @@ async function save() {
   if (!SELECTED) { $("saveStatus").innerHTML = '<span class="err">pick a stored query first</span>'; return; }
   const feats = readFeatures();
   if (PREVIEW && !feats.length) { $("saveStatus").innerHTML = '<span class="err">take at least one column</span>'; return; }
-  const body = {
+  const body = KIND === "http" ? {
+    kind: "http",
+    name: $("name").value.trim(),
+    url: $("httpUrl").value.trim(),
+    method: $("httpMethod").value,
+    headers: readHeaders(),
+    body: $("httpBody").value,
+    path: $("httpPath").value.trim(),
+    model: $("model").value.trim(),
+    interval_minutes: parseInt($("interval").value, 10),
+    history_hours: parseInt($("history").value, 10),
+    calendar: $("calendar").value === "true",
+    enabled: $("enabled").value === "true",
+  } : {
+    kind: "wfs",
     name: $("name").value.trim(),
     url: $("url").value.trim(),
     query: SELECTED.id,
@@ -532,7 +651,7 @@ async function save() {
   // or the list as it was (an edit); the chips carry it either way.
   body.features = feats;
   body.categorical = [...CATS].filter(n => FEATS.has(n));
-  body.mode = SELECTED.kind === "type" ? "type" : "stored";
+  if (KIND !== "http") body.mode = SELECTED.kind === "type" ? "type" : "stored";
   body.time_field = TIME_FIELD;
   $("saveStatus").textContent = "saving…";
   const r = EDITING ? await api("PUT", "/api/org/sources/" + enc(EDITING), body)
@@ -550,6 +669,32 @@ async function edit(id) {
   resetEditor();
   EDITING = id;
   $("editorTitle").textContent = "Edit source · " + s.name;
+  if (s.kind === "http") {
+    setKind("http");
+    $("httpUrl").value = s.url;
+    $("httpMethod").value = s.method || "GET";
+    $("bodyBox").style.display = $("httpMethod").value === "GET" ? "none" : "";
+    $("httpBody").value = s.body || "";
+    $("httpPath").value = s.path || "";
+    $("headers").innerHTML = "";
+    Object.keys(s.headers || {}).forEach(k => addHeader(k, s.headers[k]));
+    if (!Object.keys(s.headers || {}).length) addHeader("", "");
+    FEATS = new Set(s.features || []);
+    CATS = new Set(s.categorical || []);
+    TIME_FIELD = s.time_field || "";
+    httpReady();
+    $("name").value = s.name;
+    $("model").value = s.model;
+    $("interval").value = s.interval_minutes;
+    $("history").value = s.history_hours;
+    $("calendar").value = s.calendar ? "true" : "false";
+    $("enabled").value = s.enabled ? "true" : "false";
+    $("saveBtn").textContent = "Save changes";
+    renderChips();
+    $("editor").scrollIntoView({ behavior: "smooth" });
+    return;
+  }
+  setKind("wfs");
   $("url").value = s.url;
   await loadCatalog();
   if (!CATALOG.find(q => q.id === s.query)) CATALOG.push({ id: s.query, title: "(not in the catalogue any more)", parameters: [], kind: s.mode === "type" ? "type" : "stored" });
@@ -571,6 +716,9 @@ async function edit(id) {
 
 function resetEditor() {
   EDITING = null; SELECTED = null; PREVIEW = null; FEATS = new Set(); CATS = new Set(); TIME_FIELD = "";
+  $("httpUrl").value = ""; $("httpPath").value = ""; $("httpBody").value = ""; $("httpMethod").value = "GET";
+  $("headers").innerHTML = ""; $("bodyBox").style.display = "none";
+  setKind(KIND);
   const chips = $("chips"); if (chips) chips.innerHTML = "";
   $("editorTitle").textContent = "Add a source";
   $("saveBtn").textContent = "Save source";

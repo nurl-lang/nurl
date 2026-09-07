@@ -421,11 +421,11 @@ $ `src/imptime.nu`
     ( string_free . p err )
 }
 
-@ __wfs_pivot_err s msg → WfsPivot {
+@ _wfs_pivot_err s msg → WfsPivot {
     ^ @ WfsPivot { ( vec_new [Json] ) ( vec_new [String] ) 0 0 ( string_from msg ) }
 }
 
-@ __wfs_col_add ( Vec String ) cols s name → v {
+@ _wfs_col_add ( Vec String ) cols s name → v {
     : i n ( vec_len [String] cols )
     : ~ i k 0
     ~ < k n {
@@ -530,8 +530,8 @@ $ `src/imptime.nu`
         ? . wp ok {
             ( json_obj_set row `lat` ( json_float . wp lat ) )
             ( json_obj_set row `lon` ( json_float . wp lon ) )
-            ( __wfs_col_add cols `lat` )
-            ( __wfs_col_add cols `lon` )
+            ( _wfs_col_add cols `lat` )
+            ( _wfs_col_add cols `lon` )
         } {}
         ( vec_push [Json] rows row )
         ( vec_push [String] keys key )
@@ -548,7 +548,7 @@ $ `src/imptime.nu`
                 ?? ( vec_get [Json] rows at ) {
                     T row → {
                         ( json_obj_set row ( string_data name ) ( json_float x ) )
-                        ( __wfs_col_add cols ( string_data name ) )
+                        ( _wfs_col_add cols ( string_data name ) )
                         = rc 1
                     }
                     F _ → {}
@@ -572,7 +572,7 @@ $ `src/imptime.nu`
                 : String tw ( string_trim why )
                 : String msg ( string_from `the service answered with an exception: ` )
                 ( string_push_str msg ( string_data tw ) )
-                : WfsPivot pe ( __wfs_pivot_err ( string_data msg ) )
+                : WfsPivot pe ( _wfs_pivot_err ( string_data msg ) )
                 ( string_free msg )
                 ( string_free tw )
                 ( string_free why )
@@ -623,7 +623,7 @@ $ `src/imptime.nu`
             : String msg ( string_from `the answer is not XML (` )
             ( string_push_str msg ( xml_err_name e ) )
             ( string_push_char msg 41 )
-            : WfsPivot pe ( __wfs_pivot_err ( string_data msg ) )
+            : WfsPivot pe ( _wfs_pivot_err ( string_data msg ) )
             ( string_free msg )
             ^ pe
         }
@@ -701,8 +701,8 @@ $ `src/imptime.nu`
                                 ? . wp ok {
                                     ( json_obj_set row `lat` ( json_float . wp lat ) )
                                     ( json_obj_set row `lon` ( json_float . wp lon ) )
-                                    ( __wfs_col_add cols `lat` )
-                                    ( __wfs_col_add cols `lon` )
+                                    ( _wfs_col_add cols `lat` )
+                                    ( _wfs_col_add cols `lon` )
                                 } {}
                                 ( string_free coord )
                             }
@@ -737,12 +737,12 @@ $ `src/imptime.nu`
                                             ?? ( string_to_float txt ) {
                                                 T x → {
                                                     ( json_obj_set row ( string_data key ) ( json_float x ) )
-                                                    ( __wfs_col_add cols ( string_data key ) )
+                                                    ( _wfs_col_add cols ( string_data key ) )
                                                 }
                                                 F _ → {
                                                     ? <= ( string_len txt ) WFS_TEXT_MAX {
                                                         ( json_obj_set row ( string_data key ) ( json_str_lit ( string_data txt ) ) )
-                                                        ( __wfs_col_add cols ( string_data key ) )
+                                                        ( _wfs_col_add cols ( string_data key ) )
                                                     } {}
                                                 }
                                             }
@@ -770,7 +770,7 @@ $ `src/imptime.nu`
 // text property that reads as a date or a date-time — unless the field
 // is WFS_CLOCK_NONE, then nothing is. Sets `timestamp` and an ISO `time`
 // (for the calendar features); T when found.
-@ __wfs_wide_clock Json row s time_field → b {
+@ _wfs_wide_clock Json row s time_field → b {
     ? == ( nurl_str_eq time_field WFS_CLOCK_NONE ) 1 { ^ F } {}
     : ~ String key ( string_new )
     ? > ( nurl_str_len time_field ) 0 {
@@ -836,7 +836,7 @@ $ `src/imptime.nu`
                 : String tw ( string_trim why )
                 : String msg ( string_from `the service answered with an exception: ` )
                 ( string_push_str msg ( string_data tw ) )
-                : WfsPivot pe ( __wfs_pivot_err ( string_data msg ) )
+                : WfsPivot pe ( _wfs_pivot_err ( string_data msg ) )
                 ( string_free msg )
                 ( string_free tw )
                 ( string_free why )
@@ -870,7 +870,7 @@ $ `src/imptime.nu`
                                     ?? ( __wfs_first_elem c ) {
                                         T feat → {
                                             ?? ( xml_attr feat `gml:id` ) {
-                                                T gid → { ( json_obj_set row `gml_id` ( json_str_lit ( string_data gid ) ) ) ( __wfs_col_add cols `gml_id` ) ( string_free gid ) }
+                                                T gid → { ( json_obj_set row `gml_id` ( json_str_lit ( string_data gid ) ) ) ( _wfs_col_add cols `gml_id` ) ( string_free gid ) }
                                                 F _ → {}
                                             }
                                             ( __wfs_wide_props row cols feat `` 0 )
@@ -880,7 +880,7 @@ $ `src/imptime.nu`
                                     }
                                 } {
                                     ?? ( xml_attr c `gml:id` ) {
-                                        T gid → { ( json_obj_set row `gml_id` ( json_str_lit ( string_data gid ) ) ) ( __wfs_col_add cols `gml_id` ) ( string_free gid ) }
+                                        T gid → { ( json_obj_set row `gml_id` ( json_str_lit ( string_data gid ) ) ) ( _wfs_col_add cols `gml_id` ) ( string_free gid ) }
                                         F _ → {}
                                     }
                                     ( __wfs_wide_props row cols c `` 0 )
@@ -891,7 +891,7 @@ $ `src/imptime.nu`
                                 ( vec_free_with [String] got \ String s → v { ( string_free s ) } )
                                 ? & ok > ngot 0 {
                                     = members + members 1
-                                    ? ( __wfs_wide_clock row time_field ) {} {
+                                    ? ( _wfs_wide_clock row time_field ) {} {
                                         ( json_obj_set row `timestamp` ( json_int now ) )
                                     }
                                     ( vec_push [Json] rows row )
@@ -922,7 +922,7 @@ $ `src/imptime.nu`
             : String msg ( string_from `the answer is not XML (` )
             ( string_push_str msg ( xml_err_name e ) )
             ( string_push_char msg 41 )
-            : WfsPivot pe ( __wfs_pivot_err ( string_data msg ) )
+            : WfsPivot pe ( _wfs_pivot_err ( string_data msg ) )
             ( string_free msg )
             ^ pe
         }
