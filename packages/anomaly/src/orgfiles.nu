@@ -81,6 +81,46 @@ $ `stdlib/ext/json.nu`
 
 @ orgfiles_tasks_dir s org → String { ^ ( __of_org_sub org `tasks` ) }
 
+// Where an organisation keeps its configured data sources (src/sources.nu).
+@ orgfiles_sources_dir s org → String { ^ ( __of_org_sub org `sources` ) }
+
+// The store root itself, for a module that needs the models beside the
+// organisation folders.
+@ orgfiles_root → s { ^ ( string_data . ( __of_state ) root ) }
+
+// Every organisation that has a folder under <root>/orgs — the names of
+// the directories there, whatever they hold.
+@ orgfiles_orgs → ( Vec String ) {
+    : String d ( __of_orgs_dir )
+    : ( Vec String ) out ( vec_new [String] )
+    ?? ( dir_list ( string_data d ) ) {
+        T names → {
+            : i n ( vec_len [String] names )
+            : ~ i k 0
+            ~ < k n {
+                ?? ( vec_get [String] names k ) {
+                    T nm → {
+                        : String p ( string_clone d )
+                        ( string_push_char p 47 )
+                        ( string_push_str p ( string_data nm ) )
+                        ?? ( fs_stat ( string_data p ) ) {
+                            T stt → { ? ( stat_is_dir stt ) { ( vec_push [String] out ( string_clone nm ) ) } {} }
+                            F _ → {}
+                        }
+                        ( string_free p )
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
+        }
+        F _ → {}
+    }
+    ( string_free d )
+    ^ out
+}
+
 // One safe alphabet for file names: [A-Za-z0-9._-], no leading dot, at
 // most OF_NAME_MAX bytes.
 @ orgfiles_name_ok s name → b {

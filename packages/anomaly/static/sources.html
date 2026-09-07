@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data sources · anomaly</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+  :root {
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c2230; --border:#2a3242;
+    --fg:#e6edf3; --muted:#8b98a9; --accent:#4c9aff; --accent2:#6ee7b7;
+    --danger:#ff6b6b; --warn:#f6c344; --ok:#56d364; --radius:10px;
+    --mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:var(--sans); font-size:14px; }
+  a { color:var(--accent); text-decoration:none; }
+  header { display:flex; align-items:center; gap:20px; padding:14px 24px; background:var(--panel);
+           border-bottom:1px solid var(--border); position:sticky; top:0; z-index:10; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header h1 .logo { width: 22px; height: 22px; vertical-align: -5px; margin-right: 8px; }
+  header .brand { color:var(--accent2); font-family:var(--mono); }
+  nav { display:flex; gap:4px; margin-left:auto; }
+  nav a { padding:6px 12px; border-radius:8px; color:var(--muted); font-weight:500; }
+  nav a:hover { background:var(--panel2); color:var(--fg); }
+  nav a.active { background:var(--accent); color:#06122b; }
+  main { max-width:1200px; margin:0 auto; padding:24px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:var(--radius);
+          padding:18px; margin-bottom:20px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted);
+             margin:0 0 4px; font-weight:600; }
+  .card h3 { font-size:13px; margin:18px 0 8px; font-weight:600; color:var(--fg); }
+  .card h3 .step { display:inline-block; width:20px; height:20px; border-radius:50%; background:var(--panel2);
+                   border:1px solid var(--border); color:var(--muted); font-size:11px; text-align:center;
+                   line-height:18px; margin-right:8px; font-family:var(--mono); }
+  .card p.hint { margin:0 0 14px; color:var(--muted); font-size:12px; line-height:1.55; }
+  .tablewrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  thead th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.5px;
+             color:var(--muted); padding:8px 10px; border-bottom:1px solid var(--border); white-space:nowrap; }
+  tbody td { padding:8px 10px; border-bottom:1px solid var(--border); font-family:var(--mono);
+             font-variant-numeric:tabular-nums; vertical-align:middle; font-size:12px; }
+  tbody tr:hover { background:var(--panel2); }
+  button, select, input { font-family:var(--sans); font-size:13px; border:1px solid var(--border);
+    background:var(--panel2); color:var(--fg); padding:6px 11px; border-radius:8px; cursor:pointer; }
+  input { font-family:var(--mono); cursor:text; background:var(--bg); }
+  input[type=checkbox] { width:15px; height:15px; padding:0; cursor:pointer; vertical-align:-2px; }
+  label { color:var(--muted); font-size:12px; }
+  label input, label select { margin-left:6px; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#06122b; font-weight:600; }
+  button.danger { color:var(--danger); border-color:rgba(255,107,107,.4); }
+  button.small { padding:3px 8px; font-size:12px; }
+  button:disabled { opacity:.45; cursor:default; }
+  .pill { font-size:10px; font-family:var(--mono); padding:1px 7px; border-radius:999px;
+          border:1px solid var(--border); color:var(--muted); white-space:nowrap; }
+  .pill.ok { border-color:var(--ok); color:var(--ok); }
+  .pill.err { border-color:rgba(255,107,107,.5); color:var(--danger); }
+  .pill.off { border-color:var(--warn); color:var(--warn); }
+  .pill.run { border-color:var(--accent); color:var(--accent); }
+  .muted { color:var(--muted); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+  .empty { text-align:center; padding:28px; color:var(--muted); }
+  .err { color:var(--danger); font-size:12px; }
+  .note { color:var(--accent2); font-size:12px; }
+  .actions { min-width:190px; }
+  td.clip { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .actions button { margin:0 4px 4px 0; }
+  .catalog { max-height:320px; overflow:auto; border:1px solid var(--border); border-radius:8px; background:var(--bg); }
+  .catalog .q { padding:7px 10px; border-bottom:1px solid var(--border); cursor:pointer; display:flex; gap:10px; align-items:baseline; }
+  .catalog .q:hover { background:var(--panel2); }
+  .catalog .q.sel { background:rgba(76,154,255,.15); }
+  .catalog .q .id { font-family:var(--mono); font-size:12px; color:var(--fg); }
+  .catalog .q .title { color:var(--muted); font-size:12px; }
+  .catalog .q .simple { margin-left:auto; }
+  .abstract { color:var(--muted); font-size:12px; line-height:1.5; margin:10px 0; white-space:pre-line; }
+  .params { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:8px 16px; }
+  .params .p { display:flex; flex-direction:column; gap:3px; }
+  .params .p span { font-size:11px; color:var(--muted); }
+  .params .p input { width:100%; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:10px 16px; }
+  .grid label { display:flex; flex-direction:column; gap:4px; }
+  .grid label input, .grid label select { margin:0; width:100%; }
+  code { font-family:var(--mono); font-size:12px; color:var(--accent2); }
+  .sample { font-family:var(--mono); font-size:11px; color:var(--muted); white-space:pre; overflow-x:auto;
+            background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:8px; margin-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><img class="logo" src="/favicon.svg" alt=""><span class="brand">anomaly</span> · Data sources</h1>
+  <nav>
+    <a href="/modelmanager.html">Models</a>
+    <a href="/modeltrainer.html">Trainer</a>
+    <a href="/visualize.html">Visualize</a>
+    <a href="/anomalies.html">Anomalies</a>
+    <a href="/sources.html" class="active">Sources</a>
+    <a href="/admin.html">Organization</a>
+  </nav>
+</header>
+
+<main>
+  <div class="card">
+    <h2>Sources</h2>
+    <p class="hint">A source is a public service the server fetches on a schedule and feeds into a model —
+      a weather office's WFS, for instance. Each run asks only for the observations it has not seen yet, so
+      nothing lands twice; <em>Backfill</em> reaches further into the past than the first run did.</p>
+    <div id="sources"></div>
+    <div id="runOut" class="muted" style="margin-top:10px;font-size:12px"></div>
+  </div>
+
+  <div class="card" id="editor">
+    <h2 id="editorTitle">Add a source</h2>
+    <p class="hint">Point it at a WFS 2.0 endpoint, pick a stored query, fill in where, preview what the last
+      hours would give, tick the columns that should be features, and say which model to feed and how often.
+      The <code>::simple</code> queries answer one value per row, which is what pivots into a data point.</p>
+
+    <h3><span class="step">1</span>Service</h3>
+    <div class="row">
+      <input id="url" placeholder="https://opendata.fmi.fi/wfs" value="https://opendata.fmi.fi/wfs" style="min-width:380px">
+      <button onclick="loadCatalog()">Load catalogue</button>
+      <span id="catStatus" class="muted" style="font-size:12px"></span>
+    </div>
+    <div id="catBox" style="display:none">
+      <div class="row">
+        <input id="catFilter" placeholder="filter — e.g. weather, mareograph, radiation" style="min-width:320px" oninput="renderCatalog()">
+        <label><input type="checkbox" id="catSimple" checked onchange="renderCatalog()"> only <code>::simple</code></label>
+      </div>
+      <div class="catalog" id="catalog"></div>
+      <div class="abstract" id="abstract"></div>
+    </div>
+
+    <div id="paramsBox" style="display:none">
+      <h3><span class="step">2</span>Parameters for <code id="qid"></code></h3>
+      <p class="hint">At least one location is usually required — <code>place</code>, <code>fmisid</code>,
+        <code>bbox</code> or the like. The time window is not a parameter here: every run sets it.</p>
+      <div class="params" id="params"></div>
+    </div>
+
+    <div id="previewBox" style="display:none">
+      <h3><span class="step">3</span>Columns</h3>
+      <div class="row">
+        <label>preview the last
+          <select id="hours"><option>1</option><option selected>3</option><option>6</option><option>24</option><option>72</option></select> h</label>
+        <button onclick="preview()">Preview</button>
+        <span id="prevStatus" class="muted" style="font-size:12px"></span>
+      </div>
+      <div id="columns"></div>
+      <div id="sampleBox"></div>
+    </div>
+
+    <div id="targetBox" style="display:none">
+      <h3><span class="step">4</span>Model and schedule</h3>
+      <div class="grid">
+        <label>name <input id="name" placeholder="Helsinki weather"></label>
+        <label>model <input id="model" list="models" placeholder="helsinki_weather"><datalist id="models"></datalist></label>
+        <label>fetch every (minutes) <input id="interval" type="number" min="1" max="10080" value="10"></label>
+        <label>first run reaches back (hours) <input id="history" type="number" min="1" max="8760" value="24"></label>
+        <label><span>calendar features from the observation time</span><select id="calendar"><option value="true">yes — hour, weekday, month</option><option value="false">no</option></select></label>
+        <label><span>enabled</span><select id="enabled"><option value="true">yes — fetched on schedule</option><option value="false">no — by hand only</option></select></label>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="primary" onclick="save()" id="saveBtn">Save source</button>
+        <button onclick="resetEditor()">Cancel</button>
+        <span id="saveStatus" class="muted" style="font-size:12px"></span>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="/auth.js"></script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const enc = encodeURIComponent;
+let CATALOG = [], SELECTED = null, PREVIEW = null, EDITING = null, SOURCES = [];
+
+async function api(method, url, body) {
+  const opt = { method, headers: {} };
+  if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const r = await fetch(url, opt);
+  let d = null; try { d = await r.json(); } catch (e) {}
+  return { ok: r.ok, status: r.status, data: d };
+}
+function fmtTime(t) {
+  if (!t) return "–";
+  return new Date(t * 1000).toLocaleString(undefined,
+    { year:"2-digit", month:"short", day:"2-digit", hour:"2-digit", minute:"2-digit" });
+}
+function fmtNum(x) {
+  if (x === undefined || x === null) return "–";
+  return Number.isInteger(x) ? String(x) : Number(x).toFixed(2);
+}
+function every(m) {
+  if (m % 1440 === 0) return (m / 1440) + " d";
+  if (m % 60 === 0) return (m / 60) + " h";
+  return m + " min";
+}
+function paramsText(p) {
+  return Object.keys(p || {}).map(k => k + "=" + p[k]).join(" ") || "—";
+}
+
+// ── the list ──────────────────────────────────────────────────────────
+
+async function loadSources() {
+  const r = await api("GET", "/api/org/sources");
+  if (!r.ok) { $("sources").innerHTML = '<div class="err">could not load the sources</div>'; return; }
+  SOURCES = r.data.sources || [];
+  if (!SOURCES.length) { $("sources").innerHTML = '<div class="empty">No sources yet.</div>'; return; }
+  const write = Auth.canWrite();
+  $("sources").innerHTML = '<div class="tablewrap"><table><thead><tr><th>name</th><th>query</th><th>where</th>' +
+    "<th>features</th><th>model</th><th>every</th><th>last run</th><th>status</th><th>rows</th><th></th></tr></thead><tbody>" +
+    SOURCES.map(s => {
+      const pill = s.running ? '<span class="pill run">fetching</span>'
+        : !s.enabled ? '<span class="pill off">off</span>'
+        : s.last_status === "ok" ? '<span class="pill ok">ok</span>'
+        : s.last_status === "error" ? '<span class="pill err" title="' + esc(s.last_error || "") + '">error</span>'
+        : '<span class="pill">not yet run</span>';
+      const feats = (s.features || []).length ? (s.features || []).join(", ") : "all";
+      return "<tr><td>" + esc(s.name) + "</td>" +
+        '<td class="clip" title="' + esc(s.url + " · " + s.query) + '">' + esc(s.query) + "</td>" +
+        '<td class="clip" title="' + esc(paramsText(s.params)) + '">' + esc(paramsText(s.params)) + "</td>" +
+        '<td class="clip" title="' + esc(feats) + '">' + esc(feats) + "</td>" +
+        '<td><a href="/modelmanager.html?model=' + enc(s.model) + '">' + esc(s.model) + "</a></td>" +
+        "<td>" + every(s.interval_minutes) + "</td>" +
+        "<td>" + fmtTime(s.last_run) + "</td>" +
+        "<td>" + pill + (s.last_status === "error" ? '<div class="err" style="max-width:260px;white-space:normal">' + esc(s.last_error || "") + "</div>" : "") + "</td>" +
+        '<td title="last run ' + (s.last_rows || 0) + '">' + (s.total_rows || 0) + "</td>" +
+        '<td class="actions">' + (write ?
+          '<button class="small" onclick="runNow(\'' + esc(s.id) + '\')"' + (s.running ? " disabled" : "") + ">Run now</button>" +
+          '<button class="small" onclick="backfill(\'' + esc(s.id) + '\')"' + (s.running ? " disabled" : "") + ">Backfill</button>" +
+          '<button class="small" onclick="toggle(\'' + esc(s.id) + '\', ' + (s.enabled ? "false" : "true") + ')">' + (s.enabled ? "Disable" : "Enable") + "</button>" +
+          '<button class="small" onclick="edit(\'' + esc(s.id) + '\')">Edit</button>' +
+          '<button class="small danger" onclick="remove(\'' + esc(s.id) + '\')">Delete</button>' : "") +
+        "</td></tr>";
+    }).join("") + "</tbody></table></div>";
+}
+
+function describeRun(r) {
+  const d = r.data || {};
+  if (!r.ok) return '<span class="err">' + esc(d.message || ("failed (" + r.status + ")")) + "</span>";
+  if (d.message && !d.fetched) return esc(d.message);
+  let t = "fetched " + (d.fetched || 0) + " rows, " + (d.ingested || 0) + " points into the model";
+  const skipped = (d.skipped_outside || 0) + (d.skipped_empty || 0) + (d.skipped_unstamped || 0);
+  if (skipped) t += " (" + skipped + " left out)";
+  if (d.window_start) t += " · window " + fmtTime(d.window_start) + " – " + fmtTime(d.window_end);
+  return esc(t);
+}
+
+async function runNow(id) {
+  $("runOut").innerHTML = "fetching…";
+  await loadSources();
+  const r = await api("POST", "/api/org/sources/" + enc(id) + "/run");
+  $("runOut").innerHTML = describeRun(r);
+  loadSources();
+}
+
+async function backfill(id) {
+  const h = prompt("Reach back how many hours before the oldest observation fetched so far?", "168");
+  if (!h) return;
+  const n = parseInt(h, 10);
+  if (!(n > 0)) return;
+  $("runOut").innerHTML = "backfilling…";
+  const r = await api("POST", "/api/org/sources/" + enc(id) + "/run?backfill_hours=" + n);
+  $("runOut").innerHTML = describeRun(r);
+  loadSources();
+}
+
+async function toggle(id, on) {
+  const r = await api("PUT", "/api/org/sources/" + enc(id), { enabled: on });
+  if (!r.ok) alert((r.data && r.data.message) || "could not change it");
+  loadSources();
+}
+
+async function remove(id) {
+  const s = SOURCES.find(x => x.id === id);
+  if (!confirm("Delete the source " + (s ? s.name : id) + "?\n\nThe model and its points stay; only the schedule goes.")) return;
+  const r = await api("DELETE", "/api/org/sources/" + enc(id));
+  if (!r.ok) alert((r.data && r.data.message) || "could not delete");
+  if (EDITING === id) resetEditor();
+  loadSources();
+}
+
+// ── the editor ────────────────────────────────────────────────────────
+
+async function loadCatalog() {
+  const url = $("url").value.trim();
+  $("catStatus").textContent = "loading the catalogue…";
+  const r = await api("POST", "/api/org/sources/catalog", { url });
+  if (!r.ok) { $("catStatus").innerHTML = '<span class="err">' + esc((r.data && r.data.message) || "failed") + "</span>"; return; }
+  CATALOG = r.data.queries || [];
+  $("url").value = r.data.base_url || url;
+  $("catStatus").textContent = CATALOG.length + " stored queries";
+  $("catBox").style.display = "block";
+  renderCatalog();
+}
+
+function renderCatalog() {
+  const f = $("catFilter").value.trim().toLowerCase();
+  const simpleOnly = $("catSimple").checked;
+  const rows = CATALOG.filter(q => {
+    if (simpleOnly && !/::simple$/.test(q.id)) return false;
+    return !f || (q.id + " " + q.title).toLowerCase().includes(f);
+  });
+  if (!rows.length) { $("catalog").innerHTML = '<div class="empty">Nothing matches.</div>'; return; }
+  $("catalog").innerHTML = rows.map(q =>
+    '<div class="q' + (SELECTED && SELECTED.id === q.id ? " sel" : "") + '" onclick="selectQuery(\'' + esc(q.id) + '\')">' +
+    '<span class="id">' + esc(q.id) + '</span><span class="title">' + esc(q.title) + "</span>" +
+    (/::simple$/.test(q.id) ? '<span class="pill ok simple">simple</span>' : "") + "</div>").join("");
+}
+
+function selectQuery(id) {
+  SELECTED = CATALOG.find(q => q.id === id) || null;
+  if (!SELECTED) return;
+  renderCatalog();
+  $("abstract").textContent = (SELECTED.abstract || "").trim();
+  $("qid").textContent = SELECTED.id;
+  renderParams({});
+  $("paramsBox").style.display = "block";
+  $("previewBox").style.display = "block";
+  $("targetBox").style.display = "block";
+  $("columns").innerHTML = "";
+  $("sampleBox").innerHTML = "";
+  PREVIEW = null;
+  if (!$("name").value) $("name").value = SELECTED.title || SELECTED.id;
+  if (!$("model").value) $("model").value = (SELECTED.id.replace(/::simple$/, "").split("::").slice(-2).join("_") || "source")
+    .replace(/[^A-Za-z0-9_]/g, "_");
+}
+
+// Parameters the run owns are not shown; the rest get an input each,
+// with the catalogue's title as the hint.
+function renderParams(values) {
+  const ps = (SELECTED.parameters || []).filter(p => p.name !== "starttime" && p.name !== "endtime");
+  const known = new Set(ps.map(p => p.name));
+  // A saved source may carry a parameter the catalogue no longer lists.
+  Object.keys(values).forEach(k => { if (!known.has(k)) ps.push({ name: k, type: "", title: "" }); });
+  if (!ps.length) { $("params").innerHTML = '<div class="muted">This query takes no parameters.</div>'; return; }
+  $("params").innerHTML = ps.map(p => {
+    const v = values[p.name] !== undefined ? values[p.name] : (p.name === "timestep" ? "60" : "");
+    return '<div class="p"><span>' + esc(p.name) + (p.type ? ' <span class="muted">(' + esc(p.type) + ")</span>" : "") +
+      (p.title ? " — " + esc(p.title) : "") + '</span><input data-param="' + esc(p.name) + '" value="' + esc(v) +
+      '" placeholder="' + esc(p.abstract ? p.abstract.trim().slice(0, 80) : "") + '"></div>';
+  }).join("");
+}
+
+function readParams() {
+  const out = {};
+  document.querySelectorAll("#params input[data-param]").forEach(i => {
+    const v = i.value.trim();
+    if (v !== "") out[i.dataset.param] = v;
+  });
+  return out;
+}
+
+async function preview() {
+  if (!SELECTED) return;
+  $("prevStatus").textContent = "asking the service…";
+  const body = { url: $("url").value.trim(), query: SELECTED.id, params: readParams(), hours: parseInt($("hours").value, 10) };
+  const r = await api("POST", "/api/org/sources/preview", body);
+  if (!r.ok) { $("prevStatus").innerHTML = '<span class="err">' + esc((r.data && r.data.message) || "failed") + "</span>"; return; }
+  PREVIEW = r.data;
+  const chosen = new Set(EDITING ? ((SOURCES.find(s => s.id === EDITING) || {}).features || []) : []);
+  $("prevStatus").textContent = PREVIEW.rows + " rows (location × time) in the last " + PREVIEW.hours + " h";
+  const cols = PREVIEW.columns || [];
+  if (!cols.length) { $("columns").innerHTML = '<div class="empty">No numeric columns came back — check the location parameters.</div>'; return; }
+  $("columns").innerHTML = '<div class="tablewrap"><table><thead><tr><th><input type="checkbox" id="allCols" onchange="allCols(this.checked)"></th>' +
+    "<th>column</th><th>rows</th><th>min</th><th>max</th><th>last</th></tr></thead><tbody>" +
+    cols.map(c => {
+      const on = chosen.size ? chosen.has(c.name) : (c.name !== "lat" && c.name !== "lon");
+      return "<tr><td><input type=\"checkbox\" data-col=\"" + esc(c.name) + '"' + (on ? " checked" : "") + "></td>" +
+        "<td>" + esc(c.name) + "</td><td>" + c.count + "</td><td>" + fmtNum(c.min) + "</td><td>" + fmtNum(c.max) + "</td><td>" + fmtNum(c.last) + "</td></tr>";
+    }).join("") + "</tbody></table></div>" +
+    '<div class="muted" style="font-size:12px;margin-top:6px">Ticked columns become the model\'s features. ' +
+    "<code>lat</code>/<code>lon</code> only matter when several stations answer.</div>";
+  const sample = PREVIEW.sample || [];
+  $("sampleBox").innerHTML = sample.length ? '<div class="sample">' + esc(sample.map(r => JSON.stringify(r)).join("\n")) + "</div>" : "";
+}
+
+function allCols(on) { document.querySelectorAll("#columns input[data-col]").forEach(i => i.checked = on); }
+
+function readFeatures() {
+  const out = [];
+  document.querySelectorAll("#columns input[data-col]").forEach(i => { if (i.checked) out.push(i.dataset.col); });
+  return out;
+}
+
+async function save() {
+  if (!SELECTED) { $("saveStatus").innerHTML = '<span class="err">pick a stored query first</span>'; return; }
+  const feats = readFeatures();
+  if (PREVIEW && !feats.length) { $("saveStatus").innerHTML = '<span class="err">tick at least one column</span>'; return; }
+  const body = {
+    name: $("name").value.trim(),
+    url: $("url").value.trim(),
+    query: SELECTED.id,
+    params: readParams(),
+    model: $("model").value.trim(),
+    interval_minutes: parseInt($("interval").value, 10),
+    history_hours: parseInt($("history").value, 10),
+    calendar: $("calendar").value === "true",
+    enabled: $("enabled").value === "true",
+  };
+  // Without a preview the saved feature list stays as it was (an edit)
+  // or empty (every column): the server accepts both.
+  if (PREVIEW) body.features = feats;
+  $("saveStatus").textContent = "saving…";
+  const r = EDITING ? await api("PUT", "/api/org/sources/" + enc(EDITING), body)
+                    : await api("POST", "/api/org/sources", body);
+  if (!r.ok) { $("saveStatus").innerHTML = '<span class="err">' + esc((r.data && r.data.message) || "failed") + "</span>"; return; }
+  $("saveStatus").innerHTML = '<span class="note">saved' + (EDITING ? "" : " — it runs within a minute, or press Run now") + "</span>";
+  const wasNew = !EDITING;
+  await loadSources();
+  if (wasNew) resetEditor();
+}
+
+async function edit(id) {
+  const s = SOURCES.find(x => x.id === id);
+  if (!s) return;
+  resetEditor();
+  EDITING = id;
+  $("editorTitle").textContent = "Edit source · " + s.name;
+  $("url").value = s.url;
+  await loadCatalog();
+  if (!CATALOG.find(q => q.id === s.query)) CATALOG.push({ id: s.query, title: "(not in the catalogue any more)", parameters: [] });
+  selectQuery(s.query);
+  renderParams(s.params || {});
+  $("name").value = s.name;
+  $("model").value = s.model;
+  $("interval").value = s.interval_minutes;
+  $("history").value = s.history_hours;
+  $("calendar").value = s.calendar ? "true" : "false";
+  $("enabled").value = s.enabled ? "true" : "false";
+  $("saveBtn").textContent = "Save changes";
+  const feats = s.features || [];
+  $("columns").innerHTML = feats.length
+    ? '<div class="muted" style="font-size:12px">Features: <code>' + esc(feats.join(", ")) + "</code> — preview to change them.</div>"
+    : '<div class="muted" style="font-size:12px">Every column is a feature — preview to choose.</div>';
+  $("editor").scrollIntoView({ behavior: "smooth" });
+}
+
+function resetEditor() {
+  EDITING = null; SELECTED = null; PREVIEW = null;
+  $("editorTitle").textContent = "Add a source";
+  $("saveBtn").textContent = "Save source";
+  $("catBox").style.display = "none";
+  $("paramsBox").style.display = "none";
+  $("previewBox").style.display = "none";
+  $("targetBox").style.display = "none";
+  $("abstract").textContent = "";
+  $("columns").innerHTML = "";
+  $("sampleBox").innerHTML = "";
+  $("saveStatus").textContent = "";
+  $("prevStatus").textContent = "";
+  $("catStatus").textContent = "";
+  $("name").value = ""; $("model").value = "";
+  $("interval").value = "10"; $("history").value = "24";
+  $("calendar").value = "true"; $("enabled").value = "true";
+}
+
+async function loadModels() {
+  const r = await api("GET", "/models/dynamic");
+  if (!r.ok) return;
+  const names = Object.keys(r.data.models || {}).sort();
+  $("models").innerHTML = names.map(n => '<option value="' + esc(n) + '">').join("");
+}
+
+// ── boot ──────────────────────────────────────────────────────────────
+
+Auth.ready().then(async () => {
+  Auth.viewerNotice("Adding, changing and running sources are for administrators.");
+  if (!Auth.canWrite()) $("editor").style.display = "none";
+  await loadSources();
+  loadModels();
+  // A run started by the scheduler shows up here without a reload.
+  setInterval(loadSources, 15000);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,783 @@
+// sources_test.nu — data sources: a WFS read, pivoted, configured,
+// scheduled and served.
+//
+//   wfs      — URLs (base, percent-encoding, the window's own times),
+//              the catalogue from DescribeStoredQueries, the pivot of a
+//              GetFeature answer (one row per location and time, NaN
+//              dropped, the clock read), and what an exception becomes.
+//   sources  — a record created with defaults, validated, listed,
+//              changed (a new query resets the fetched span), deleted.
+//   windows  — the first run, the next run, a backfill.
+//   run      — fixture rows through the run path: points in the model
+//              with their own timestamps, the span recorded, a second
+//              run over the same window taking nothing, a backfill
+//              taking only what lies before; an unreachable service
+//              leaves an error on the record.
+//   due      — what the scheduler would run and when.
+//   routes   — the HTTP surface through router_handle, no sockets.
+// Store root: $ANOMALY_TEST_DIR (default ./anomaly_sources_test).
+
+$ `stdlib/core/io.nu`
+$ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
+$ `stdlib/std/fs.nu`
+$ `stdlib/std/bytes.nu`
+$ `stdlib/ext/env.nu`
+$ `stdlib/ext/json.nu`
+$ `stdlib/ext/http_request.nu`
+$ `stdlib/ext/http_response.nu`
+$ `stdlib/ext/http_router.nu`
+$ `src/store.nu`
+$ `src/dynamic.nu`
+$ `src/wfs.nu`
+$ `src/sources.nu`
+$ `src/service.nu`
+
+: ~ i g_pass 0
+: ~ i g_fail 0
+: s ORG `public`
+: i T_0500 1788757200
+: i T_0600 1788760800
+
+@ check b cond s label → v {
+    ? cond {
+        ( nurl_print `ok ` ) ( nurl_print label ) ( nurl_print `\n` )
+        = g_pass + g_pass 1
+    } {
+        ( nurl_print `FAIL ` ) ( nurl_print label ) ( nurl_print `\n` )
+        = g_fail + g_fail 1
+    }
+}
+
+@ seq s a s b → b { ^ == ( nurl_str_eq a b ) 1 }
+
+@ jstr Json o s key → s {
+    ?? ( json_obj_get o key ) {
+        T v → { ? ( json_is_str v ) { ^ ( json_str_data v ) } {} }
+        F _ → {}
+    }
+    ^ ``
+}
+
+@ jint Json o s key → i {
+    ?? ( json_obj_get o key ) {
+        T v → { ? ( json_is_num v ) { ^ ( json_as_int v ) } {} }
+        F _ → {}
+    }
+    ^ -1
+}
+
+@ jhas Json o s key → b { ^ ( json_obj_has o key ) }
+
+@ has_col ( Vec String ) cols s name → b {
+    : i n ( vec_len [String] cols )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] cols k ) {
+            T c → { ? ( seq ( string_data c ) name ) { ^ T } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ F
+}
+
+// ── Fixtures ──────────────────────────────────────────────────────────
+
+: s CATALOG_XML `<?xml version="1.0" encoding="UTF-8"?>
+<DescribeStoredQueriesResponse xmlns="http://www.opengis.net/wfs/2.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <StoredQueryDescription id="fmi::observations::weather::simple">
+    <Title>Instantaneous Weather Observations</Title>
+    <Abstract>
+    Real time weather observations from weather stations.
+    </Abstract>
+    <Parameter name="starttime" type="dateTime">
+      <Title>Begin of the time interval</Title>
+    </Parameter>
+    <Parameter name="place" type="xsi:string">
+      <Title>The location for which to provide data</Title>
+      <Abstract>Region can be given after location name separated by comma.</Abstract>
+    </Parameter>
+    <Parameter name="timestep" type="int">
+      <Title>The time step of data in minutes</Title>
+    </Parameter>
+  </StoredQueryDescription>
+  <StoredQueryDescription id="fmi::observations::mareograph::simple">
+    <Title>Sea level observations</Title>
+    <Abstract>Sea level.</Abstract>
+  </StoredQueryDescription>
+</DescribeStoredQueriesResponse>`
+
+: s FEATURE_XML `<?xml version="1.0" encoding="UTF-8"?>
+<wfs:FeatureCollection timeStamp="2026-09-07T05:12:36Z" numberReturned="5" numberMatched="5"
+    xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2"
+    xmlns:BsWfs="http://xml.fmi.fi/schema/wfs/2.0">
+  <wfs:member>
+    <BsWfs:BsWfsElement gml:id="BsWfsElement.1.1.1">
+      <BsWfs:Location>
+        <gml:Point gml:id="P.1.1.1" srsDimension="2"><gml:pos>60.17523 24.94459 </gml:pos></gml:Point>
+      </BsWfs:Location>
+      <BsWfs:Time>2026-09-07T05:00:00Z</BsWfs:Time>
+      <BsWfs:ParameterName>t2m</BsWfs:ParameterName>
+      <BsWfs:ParameterValue>7.5</BsWfs:ParameterValue>
+    </BsWfs:BsWfsElement>
+  </wfs:member>
+  <wfs:member>
+    <BsWfs:BsWfsElement gml:id="BsWfsElement.1.1.2">
+      <BsWfs:Location>
+        <gml:Point gml:id="P.1.1.2" srsDimension="2"><gml:pos>60.17523 24.94459 </gml:pos></gml:Point>
+      </BsWfs:Location>
+      <BsWfs:Time>2026-09-07T05:00:00Z</BsWfs:Time>
+      <BsWfs:ParameterName>ws_10min</BsWfs:ParameterName>
+      <BsWfs:ParameterValue>1.6</BsWfs:ParameterValue>
+    </BsWfs:BsWfsElement>
+  </wfs:member>
+  <wfs:member>
+    <BsWfs:BsWfsElement gml:id="BsWfsElement.1.2.1">
+      <BsWfs:Location>
+        <gml:Point gml:id="P.1.2.1" srsDimension="2"><gml:pos>60.17523 24.94459 </gml:pos></gml:Point>
+      </BsWfs:Location>
+      <BsWfs:Time>2026-09-07T06:00:00Z</BsWfs:Time>
+      <BsWfs:ParameterName>t2m</BsWfs:ParameterName>
+      <BsWfs:ParameterValue>8.25</BsWfs:ParameterValue>
+    </BsWfs:BsWfsElement>
+  </wfs:member>
+  <wfs:member>
+    <BsWfs:BsWfsElement gml:id="BsWfsElement.1.2.2">
+      <BsWfs:Location>
+        <gml:Point gml:id="P.1.2.2" srsDimension="2"><gml:pos>60.17523 24.94459 </gml:pos></gml:Point>
+      </BsWfs:Location>
+      <BsWfs:Time>2026-09-07T06:00:00Z</BsWfs:Time>
+      <BsWfs:ParameterName>ws_10min</BsWfs:ParameterName>
+      <BsWfs:ParameterValue>NaN</BsWfs:ParameterValue>
+    </BsWfs:BsWfsElement>
+  </wfs:member>
+  <wfs:member>
+    <BsWfs:BsWfsElement gml:id="BsWfsElement.2.1.1">
+      <BsWfs:Location>
+        <gml:Point gml:id="P.2.1.1" srsDimension="2"><gml:pos>61.0 25.0</gml:pos></gml:Point>
+      </BsWfs:Location>
+      <BsWfs:Time>2026-09-07T05:00:00Z</BsWfs:Time>
+      <BsWfs:ParameterName>t2m</BsWfs:ParameterName>
+      <BsWfs:ParameterValue>-3</BsWfs:ParameterValue>
+    </BsWfs:BsWfsElement>
+  </wfs:member>
+</wfs:FeatureCollection>`
+
+: s EXCEPTION_XML `<?xml version="1.0" encoding="UTF-8"?>
+<ExceptionReport xmlns="http://www.opengis.net/ows/1.1" version="2.0.0">
+  <Exception exceptionCode="OperationParsingFailed">
+    <ExceptionText>No location parameter given</ExceptionText>
+  </Exception>
+</ExceptionReport>`
+
+: s EMPTY_FC_XML `<?xml version="1.0" encoding="UTF-8"?>
+<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" numberReturned="0" numberMatched="0">
+</wfs:FeatureCollection>`
+
+// ── wfs ───────────────────────────────────────────────────────────────
+
+@ test_wfs → v {
+    : String b1 ( wfs_base_url ` https://opendata.fmi.fi/wfs?request=GetCapabilities ` )
+    ( check ( seq ( string_data b1 ) `https://opendata.fmi.fi/wfs` ) `wfs: base url drops the query and the spaces` )
+    ( string_free b1 )
+    : String b2 ( wfs_base_url `http://example.org/wfs` )
+    ( check ( seq ( string_data b2 ) `http://example.org/wfs` ) `wfs: base url without a query stays` )
+    ( string_free b2 )
+    ( check ( wfs_url_ok `https://opendata.fmi.fi/wfs?request=GetCapabilities` ) `wfs: https url ok` )
+    ( check ! ( wfs_url_ok `ftp://opendata.fmi.fi/wfs` ) `wfs: ftp refused` )
+    ( check ! ( wfs_url_ok `` ) `wfs: empty refused` )
+
+    : String cu ( wfs_url_catalog `https://opendata.fmi.fi/wfs?x=1` )
+    ( check ( seq ( string_data cu ) `https://opendata.fmi.fi/wfs?service=WFS&version=2.0.0&request=DescribeStoredQueries` ) `wfs: catalogue url` )
+    ( string_free cu )
+
+    : Json params ( json_obj_new )
+    ( json_obj_set params `place` ( json_str_lit `Kumpula,Helsinki` ) )
+    ( json_obj_set params `timestep` ( json_int 60 ) )
+    ( json_obj_set params `starttime` ( json_str_lit `2001-01-01T00:00:00Z` ) )
+    ( json_obj_set params `crs` ( json_str_lit `` ) )
+    : String fu ( wfs_url_feature `https://opendata.fmi.fi/wfs` `fmi::observations::weather::simple` params T_0500 T_0600 )
+    ( check ( string_contains fu `request=GetFeature&storedquery_id=fmi%3A%3Aobservations%3A%3Aweather%3A%3Asimple` ) `wfs: feature url names the query, encoded` )
+    ( check ( string_contains fu `&place=Kumpula%2CHelsinki` ) `wfs: feature url encodes the comma` )
+    ( check ( string_contains fu `&timestep=60` ) `wfs: a numeric parameter prints as an integer` )
+    ( check ! ( string_contains fu `2001-01-01` ) `wfs: a saved starttime is not sent` )
+    ( check ! ( string_contains fu `crs=` ) `wfs: an empty parameter is not sent` )
+    ( check ( string_contains fu `&starttime=2026-09-07T05%3A00%3A00Z&endtime=2026-09-07T06%3A00%3A00Z` ) `wfs: the window's times end the url` )
+    ( string_free fu )
+    ( json_free params )
+
+    : Json cat ( wfs_catalog CATALOG_XML )
+    ( check ! ( jhas cat `error` ) `wfs: catalogue parses` )
+    ?? ( json_obj_get cat `queries` ) {
+        T qs → {
+            ( check == ( json_arr_len qs ) 2 `wfs: two stored queries` )
+            ?? ( json_arr_get qs 0 ) {
+                T q → {
+                    ( check ( seq ( jstr q `id` ) `fmi::observations::weather::simple` ) `wfs: query id` )
+                    ( check ( seq ( jstr q `title` ) `Instantaneous Weather Observations` ) `wfs: query title` )
+                    ( check ( string_starts_with ( string_from ( jstr q `abstract` ) ) `Real time` ) `wfs: abstract trimmed` )
+                    ?? ( json_obj_get q `parameters` ) {
+                        T ps → {
+                            ( check == ( json_arr_len ps ) 3 `wfs: three parameters` )
+                            ?? ( json_arr_get ps 1 ) {
+                                T pp → {
+                                    ( check ( seq ( jstr pp `name` ) `place` ) `wfs: parameter name` )
+                                    ( check ( seq ( jstr pp `type` ) `xsi:string` ) `wfs: parameter type` )
+                                    ( check ( seq ( jstr pp `title` ) `The location for which to provide data` ) `wfs: parameter title` )
+                                }
+                                F _ → { ( check F `wfs: parameter 1` ) }
+                            }
+                        }
+                        F _ → { ( check F `wfs: parameters` ) }
+                    }
+                }
+                F _ → { ( check F `wfs: query 0` ) }
+            }
+        }
+        F _ → { ( check F `wfs: queries` ) }
+    }
+    ( json_free cat )
+    : Json cat2 ( wfs_catalog EXCEPTION_XML )
+    ( check ( string_contains ( string_from ( jstr cat2 `error` ) ) `exception` ) `wfs: an exception report is an error` )
+    ( json_free cat2 )
+    : Json cat3 ( wfs_catalog `this is not xml` )
+    ( check ( jhas cat3 `error` ) `wfs: garbage is an error` )
+    ( json_free cat3 )
+
+    : WfsPivot pv ( wfs_pivot FEATURE_XML )
+    ( check == ( string_len . pv err ) 0 `pivot: no error` )
+    ( check == . pv members 5 `pivot: five members read` )
+    ( check == ( vec_len [Json] . pv rows ) 3 `pivot: three (location, time) rows` )
+    ( check == . pv missing 1 `pivot: one NaN left out` )
+    ( check ( has_col . pv columns `lat` ) `pivot: lat column` )
+    ( check ( has_col . pv columns `t2m` ) `pivot: t2m column` )
+    ( check ( has_col . pv columns `ws_10min` ) `pivot: ws_10min column` )
+    ( check == ( vec_len [String] . pv columns ) 4 `pivot: four columns` )
+    ?? ( vec_get [Json] . pv rows 0 ) {
+        T r0 → {
+            ( check == ( jint r0 `timestamp` ) T_0500 `pivot: row 0 clock read` )
+            ( check ( seq ( jstr r0 `time` ) `2026-09-07T05:00:00Z` ) `pivot: row 0 keeps the ISO time` )
+            ( check ( jhas r0 `ws_10min` ) `pivot: row 0 has wind` )
+        }
+        F _ → { ( check F `pivot: row 0` ) }
+    }
+    ?? ( vec_get [Json] . pv rows 1 ) {
+        T r1 → {
+            ( check == ( jint r1 `timestamp` ) T_0600 `pivot: row 1 is the next hour` )
+            ( check ! ( jhas r1 `ws_10min` ) `pivot: row 1 lacks the NaN wind` )
+            ( check ( jhas r1 `t2m` ) `pivot: row 1 has t2m` )
+        }
+        F _ → { ( check F `pivot: row 1` ) }
+    }
+    ?? ( vec_get [Json] . pv rows 2 ) {
+        T r2 → {
+            ( check == ( jint r2 `timestamp` ) T_0500 `pivot: row 2 is the other station at 05:00` )
+            ( check == ( jint r2 `t2m` ) -3 `pivot: row 2 negative value` )
+        }
+        F _ → { ( check F `pivot: row 2` ) }
+    }
+    ( wfs_pivot_free pv )
+    : WfsPivot pe ( wfs_pivot EXCEPTION_XML )
+    ( check ( string_contains . pe err `No location parameter given` ) `pivot: exception text surfaces` )
+    ( wfs_pivot_free pe )
+    : WfsPivot pf ( wfs_pivot EMPTY_FC_XML )
+    ( check ( string_starts_with . pf err `the feature collection holds no` ) `pivot: an empty collection says so` )
+    ( check == ( vec_len [Json] . pf rows ) 0 `pivot: an empty collection has no rows` )
+    ( wfs_pivot_free pf )
+    : WfsPivot pg ( wfs_pivot `<html>nope</html>` )
+    ( check ( seq ( string_data . pg err ) `not a WFS feature collection` ) `pivot: another document is refused` )
+    ( wfs_pivot_free pg )
+}
+
+// ── sources ───────────────────────────────────────────────────────────
+
+@ body_full → Json {
+    : Json b ( json_obj_new )
+    ( json_obj_set b `url` ( json_str_lit `https://opendata.fmi.fi/wfs?request=GetCapabilities` ) )
+    ( json_obj_set b `query` ( json_str_lit `fmi::observations::weather::simple` ) )
+    : Json p ( json_obj_new )
+    ( json_obj_set p `place` ( json_str_lit `Helsinki` ) )
+    ( json_obj_set p `timestep` ( json_int 60 ) )
+    ( json_obj_set b `params` p )
+    : Json f ( json_arr_new )
+    ( json_arr_push f ( json_str_lit `t2m` ) )
+    ( json_arr_push f ( json_str_lit `ws_10min` ) )
+    ( json_obj_set b `features` f )
+    ( json_obj_set b `model` ( json_str_lit `helsinki_weather` ) )
+    ^ b
+}
+
+// Create; returns the id (owned).
+@ make_source → String {
+    : Json b ( body_full )
+    : ~ String id ( string_new )
+    ?? ( source_create ORG b `tester` 1000 ) {
+        T src → { ( string_free id ) = id ( string_from ( jstr src `id` ) ) ( json_free src ) }
+        F e → { ( string_free e ) }
+    }
+    ( json_free b )
+    ^ id
+}
+
+@ test_sources → v {
+    : Json b ( body_full )
+    : ~ String id ( string_new )
+    ?? ( source_create ORG b `tester` 1000 ) {
+        T src → {
+            ( string_free id )
+            = id ( string_from ( jstr src `id` ) )
+            ( check ( source_id_ok ( string_data id ) ) `sources: id is twelve hex digits` )
+            ( check ( seq ( jstr src `url` ) `https://opendata.fmi.fi/wfs` ) `sources: url stored as its base` )
+            ( check ( seq ( jstr src `name` ) `fmi::observations::weather::simple` ) `sources: nameless → named after the query` )
+            ( check == ( jint src `interval_minutes` ) 10 `sources: default interval` )
+            ( check == ( jint src `history_hours` ) 24 `sources: default history` )
+            ( check == ( jint src `created_at` ) 1000 `sources: created_at` )
+            ( check ( seq ( jstr src `created_by` ) `tester` ) `sources: created_by` )
+            ( check ( seq ( jstr src `kind` ) `wfs` ) `sources: kind` )
+            ( check == ( jint src `last_time` ) 0 `sources: nothing fetched yet` )
+            ( json_free src )
+        }
+        F e → { ( nurl_print `  create said: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( check F `sources: create` ) ( string_free e ) }
+    }
+    ( json_free b )
+
+    // What is refused.
+    : Json bad1 ( body_full )
+    ( json_obj_set bad1 `url` ( json_str_lit `ftp://x/wfs` ) )
+    ?? ( source_create ORG bad1 `tester` 1000 ) {
+        T s1 → { ( check F `sources: ftp url refused` ) ( json_free s1 ) }
+        F e → { ( check ( string_contains e `url must be` ) `sources: ftp url refused` ) ( string_free e ) }
+    }
+    ( json_free bad1 )
+    : Json bad2 ( json_obj_new )
+    ( json_obj_set bad2 `url` ( json_str_lit `https://opendata.fmi.fi/wfs` ) )
+    ?? ( source_create ORG bad2 `tester` 1000 ) {
+        T s2 → { ( check F `sources: missing query and model refused` ) ( json_free s2 ) }
+        F e → { ( check ( string_contains e `needs url, query and model` ) `sources: missing query and model refused` ) ( string_free e ) }
+    }
+    ( json_free bad2 )
+    : Json bad3 ( body_full )
+    ( json_obj_set bad3 `interval_minutes` ( json_int 0 ) )
+    ?? ( source_create ORG bad3 `tester` 1000 ) {
+        T s3 → { ( check F `sources: interval 0 refused` ) ( json_free s3 ) }
+        F e → { ( check ( string_contains e `interval_minutes` ) `sources: interval 0 refused` ) ( string_free e ) }
+    }
+    ( json_free bad3 )
+    : Json bad4 ( body_full )
+    ( json_obj_set bad4 `model` ( json_str_lit `no spaces` ) )
+    ?? ( source_create ORG bad4 `tester` 1000 ) {
+        T s4 → { ( check F `sources: bad model name refused` ) ( json_free s4 ) }
+        F e → { ( check ( string_contains e `model must be` ) `sources: bad model name refused` ) ( string_free e ) }
+    }
+    ( json_free bad4 )
+    : Json bad5 ( body_full )
+    ( json_obj_set bad5 `features` ( json_str_lit `t2m` ) )
+    ?? ( source_create ORG bad5 `tester` 1000 ) {
+        T s5 → { ( check F `sources: features must be an array` ) ( json_free s5 ) }
+        F e → { ( check ( string_contains e `features must be` ) `sources: features must be an array` ) ( string_free e ) }
+    }
+    ( json_free bad5 )
+
+    : ( Vec Json ) all ( sources_list ORG )
+    ( check == ( vec_len [Json] all ) 1 `sources: one listed` )
+    ( sources_free all )
+
+    // Change the interval: the span stays. Change the query: it resets.
+    ?? ( source_load ORG ( string_data id ) ) {
+        T src → {
+            ( json_obj_set src `first_time` ( json_int 500 ) )
+            ( json_obj_set src `last_time` ( json_int 900 ) )
+            ( check ( source_save ORG src ) `sources: saved with a span` )
+            ( json_free src )
+        }
+        F _ → { ( check F `sources: load` ) }
+    }
+    : Json ch1 ( json_obj_new )
+    ( json_obj_set ch1 `interval_minutes` ( json_int 30 ) )
+    ( json_obj_set ch1 `name` ( json_str_lit `  Helsinki hourly  ` ) )
+    ?? ( source_update ORG ( string_data id ) ch1 2000 ) {
+        T src → {
+            ( check == ( jint src `interval_minutes` ) 30 `sources: interval changed` )
+            ( check ( seq ( jstr src `name` ) `Helsinki hourly` ) `sources: name trimmed` )
+            ( check == ( jint src `last_time` ) 900 `sources: the span survives an interval change` )
+            ( check == ( jint src `updated_at` ) 2000 `sources: updated_at` )
+            ( json_free src )
+        }
+        F e → { ( check F `sources: update interval` ) ( string_free e ) }
+    }
+    ( json_free ch1 )
+    : Json ch2 ( json_obj_new )
+    ( json_obj_set ch2 `query` ( json_str_lit `fmi::observations::weather::hourly::simple` ) )
+    ?? ( source_update ORG ( string_data id ) ch2 2100 ) {
+        T src → {
+            ( check == ( jint src `last_time` ) 0 `sources: a new query resets the span` )
+            ( check == ( jint src `first_time` ) 0 `sources: a new query resets first_time` )
+            ( json_free src )
+        }
+        F e → { ( check F `sources: update query` ) ( string_free e ) }
+    }
+    ( json_free ch2 )
+    : Json ch3 ( json_obj_new )
+    ( json_obj_set ch3 `history_hours` ( json_int 99999 ) )
+    ?? ( source_update ORG ( string_data id ) ch3 2200 ) {
+        T src → { ( check F `sources: absurd history refused` ) ( json_free src ) }
+        F e → { ( check ( string_contains e `history_hours` ) `sources: absurd history refused` ) ( string_free e ) }
+    }
+    ?? ( source_update ORG `000000000000` ch3 2200 ) {
+        T src → { ( check F `sources: unknown id` ) ( json_free src ) }
+        F e → { ( check ( seq ( string_data e ) `no such source` ) `sources: unknown id` ) ( string_free e ) }
+    }
+    ( json_free ch3 )
+
+    ( check ( source_delete ORG ( string_data id ) ) `sources: deleted` )
+    ( check ! ( source_delete ORG ( string_data id ) ) `sources: deleting twice is false` )
+    : ( Vec Json ) none ( sources_list ORG )
+    ( check == ( vec_len [Json] none ) 0 `sources: none listed after delete` )
+    ( sources_free none )
+    ( string_free id )
+}
+
+// ── windows ───────────────────────────────────────────────────────────
+
+@ test_windows → v {
+    : Json src ( json_obj_new )
+    ( json_obj_set src `history_hours` ( json_int 6 ) )
+    : i now 1000000
+    : SrcWindow w1 ( source_window src now F 0 )
+    ( check & == . w1 start - now 21600 == . w1 end now `window: first run reaches history_hours back` )
+    ( json_obj_set src `first_time` ( json_int - now 21600 ) )
+    ( json_obj_set src `last_time` ( json_int - now 600 ) )
+    : SrcWindow w2 ( source_window src now F 0 )
+    ( check & == . w2 start + - now 600 1 == . w2 end now `window: the next run starts after last_time` )
+    : SrcWindow w3 ( source_window src now T 48 )
+    ( check & == . w3 start - now 172800 == . w3 end - - now 21600 1 `window: a backfill ends before first_time` )
+    : SrcWindow w4 ( source_window src now T 1 )
+    ( check > . w4 start . w4 end `window: a backfill inside the span is empty` )
+    ( json_free src )
+}
+
+// ── run ───────────────────────────────────────────────────────────────
+
+@ fixture_rows → ( Vec Json ) {
+    : WfsPivot pv ( wfs_pivot FEATURE_XML )
+    : ( Vec Json ) rows ( vec_new [Json] )
+    : i n ( vec_len [Json] . pv rows )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [Json] . pv rows k ) {
+            T r → { ( vec_push [Json] rows ( json_clone r ) ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( wfs_pivot_free pv )
+    ^ rows
+}
+
+@ nop → v {}
+
+@ test_run Store st → v {
+    : String id ( make_source )
+    ( check > ( string_len id ) 0 `run: source made` )
+    : i now + T_0600 1800
+
+    // A forward window over the fixture: three rows, two features each
+    // except the one whose wind was NaN.
+    : SrcWindow w @ SrcWindow { - T_0500 3600 now }
+    : Json r1 ( source_run_rows ORG ( string_data id ) @ !( Vec Json ) String { T ( fixture_rows ) } w F now )
+    ( check ( seq ( jstr r1 `status` ) `success` ) `run: success` )
+    ( check == ( jint r1 `ingested` ) 3 `run: three points in` )
+    ( check == ( jint r1 `fetched` ) 3 `run: three rows fetched` )
+    ( check == ( jint r1 `newest` ) T_0600 `run: newest observation` )
+    ( check == ( jint r1 `oldest` ) T_0500 `run: oldest observation` )
+    ( json_free r1 )
+    ?? ( source_load ORG ( string_data id ) ) {
+        T src → {
+            ( check ( seq ( jstr src `last_status` ) `ok` ) `run: record says ok` )
+            ( check == ( jint src `last_time` ) now `run: last_time is the window's end` )
+            ( check == ( jint src `first_time` ) - T_0500 3600 `run: first_time is the window's start` )
+            ( check == ( jint src `last_rows` ) 3 `run: last_rows` )
+            ( check == ( jint src `total_rows` ) 3 `run: total_rows` )
+            ( check == ( jint src `runs` ) 1 `run: runs` )
+            ( check == ( jint src `last_run` ) now `run: last_run` )
+            ( json_free src )
+        }
+        F _ → { ( check F `run: reload` ) }
+    }
+    ( check ( store_exists st `helsinki_weather` ) `run: the model exists now` )
+    : *Model mo ( model_open st `helsinki_weather` )
+    ( check == ( model_n_points mo ) 3 `run: the model holds three points` )
+    ( check == ( model_last_ts mo ) T_0600 `run: the newest point carries the observation's clock` )
+    : *Meta mm . mo meta
+    ( check ! . mm count_clock `run: a time clock` )
+    ( model_free mo )
+
+    // The same rows again, in the window the next run would ask for:
+    // every row lies before it, so nothing lands twice.
+    : SrcWindow w2 @ SrcWindow { + now 1 + now 600 }
+    : Json r2 ( source_run_rows ORG ( string_data id ) @ !( Vec Json ) String { T ( fixture_rows ) } w2 F + now 600 )
+    ( check ( seq ( jstr r2 `status` ) `success` ) `run: second run succeeds` )
+    ( check == ( jint r2 `ingested` ) 0 `run: nothing ingested twice` )
+    ( check == ( jint r2 `skipped_outside` ) 3 `run: the rows were outside the window` )
+    ( json_free r2 )
+    : *Model mo2 ( model_open st `helsinki_weather` )
+    ( check == ( model_n_points mo2 ) 3 `run: still three points` )
+    ( model_free mo2 )
+
+    // A backfill window ending before first_time takes only what lies
+    // there: nothing from this fixture, and first_time moves back.
+    : SrcWindow w3 @ SrcWindow { - T_0500 7200 - - T_0500 3600 1 }
+    : Json r3 ( source_run_rows ORG ( string_data id ) @ !( Vec Json ) String { T ( fixture_rows ) } w3 T + now 700 )
+    ( check ( seq ( jstr r3 `status` ) `success` ) `run: backfill succeeds` )
+    ( check == ( jint r3 `ingested` ) 0 `run: backfill takes nothing from inside the span` )
+    ( json_free r3 )
+    ?? ( source_load ORG ( string_data id ) ) {
+        T src → {
+            ( check == ( jint src `first_time` ) - T_0500 7200 `run: backfill moved first_time back` )
+            ( check == ( jint src `last_time` ) + now 600 `run: last_time untouched by a backfill` )
+            ( json_free src )
+        }
+        F _ → { ( check F `run: reload after backfill` ) }
+    }
+
+    // Only the chosen features land: lat and lon were not chosen.
+    : *Model mo3 ( model_open st `helsinki_weather` )
+    ?? ( vec_get [String] . mo3 lines 0 ) {
+        T line → {
+            ( check ( string_contains line `"t2m"` ) `run: t2m stored` )
+            ( check ! ( string_contains line `"lat"` ) `run: lat not stored (not chosen)` )
+            ( check ( string_contains line `"time"` ) `run: the ISO time kept for calendar features` )
+        }
+        F _ → { ( check F `run: stored line` ) }
+    }
+    ( model_free mo3 )
+
+    // A fetch that fails leaves the error on the record and the model alone.
+    : Json e1 ( source_run_rows ORG ( string_data id ) @ !( Vec Json ) String { F ( string_from `HTTP 400 from the service: bad place` ) } w F + now 800 )
+    ( check ( seq ( jstr e1 `status` ) `error` ) `run: a failed fetch is an error` )
+    ( check ( string_contains ( string_from ( jstr e1 `message` ) ) `HTTP 400` ) `run: the reason is passed on` )
+    ( json_free e1 )
+    ?? ( source_load ORG ( string_data id ) ) {
+        T src → {
+            ( check ( seq ( jstr src `last_status` ) `error` ) `run: record says error` )
+            ( check ( string_contains ( string_from ( jstr src `last_error` ) ) `bad place` ) `run: last_error kept` )
+            ( check == ( jint src `runs` ) 4 `run: every attempt counts as a run` )
+            ( json_free src )
+        }
+        F _ → { ( check F `run: reload after error` ) }
+    }
+
+    // A source nobody can reach: the real path, with the lock closures,
+    // ends in an error on the record within the connect failure.
+    : Json ch ( json_obj_new )
+    ( json_obj_set ch `url` ( json_str_lit `http://127.0.0.1:9/wfs` ) )
+    ?? ( source_update ORG ( string_data id ) ch 3000 ) { T s → { ( json_free s ) } F e → { ( string_free e ) } }
+    ( json_free ch )
+    : Json e2 ( source_run ORG ( string_data id ) F 0 + now 900 \ → v { ( nop ) } \ → v { ( nop ) } )
+    ( check ( seq ( jstr e2 `status` ) `error` ) `run: an unreachable service is an error` )
+    ( check ( string_contains ( string_from ( jstr e2 `message` ) ) `could not fetch` ) `run: says it could not fetch` )
+    ( check ! ( source_is_running ORG ( string_data id ) ) `run: not marked running afterwards` )
+    ( json_free e2 )
+    : Json e3 ( source_run ORG `000000000000` F 0 now \ → v { ( nop ) } \ → v { ( nop ) } )
+    ( check ( seq ( jstr e3 `message` ) `no such source` ) `run: unknown source` )
+    ( json_free e3 )
+
+    : b _d ( source_delete ORG ( string_data id ) )
+    ( string_free id )
+}
+
+// ── due ───────────────────────────────────────────────────────────────
+
+@ test_due → v {
+    : String id ( make_source )
+    : ( Vec SrcRef ) d1 ( sources_due 5000 )
+    ( check == ( vec_len [SrcRef] d1 ) 1 `due: a fresh source is due` )
+    ?? ( vec_get [SrcRef] d1 0 ) {
+        T r → { ( check & ( seq ( string_data . r org ) ORG ) ( seq ( string_data . r id ) ( string_data id ) ) `due: names org and id` ) }
+        F _ → { ( check F `due: ref` ) }
+    }
+    ( vec_free_with [SrcRef] d1 \ SrcRef r → v { ( string_free . r org ) ( string_free . r id ) } )
+    ?? ( source_load ORG ( string_data id ) ) {
+        T src → {
+            ( json_obj_set src `last_run` ( json_int 5000 ) )
+            : b _s ( source_save ORG src )
+            ( json_free src )
+        }
+        F _ → {}
+    }
+    : ( Vec SrcRef ) d2 ( sources_due + 5000 599 )
+    ( check == ( vec_len [SrcRef] d2 ) 0 `due: not due before the interval passes` )
+    ( vec_free_with [SrcRef] d2 \ SrcRef r → v { ( string_free . r org ) ( string_free . r id ) } )
+    : ( Vec SrcRef ) d3 ( sources_due + 5000 600 )
+    ( check == ( vec_len [SrcRef] d3 ) 1 `due: due when it has` )
+    ( vec_free_with [SrcRef] d3 \ SrcRef r → v { ( string_free . r org ) ( string_free . r id ) } )
+    : Json off ( json_obj_new )
+    ( json_obj_set off `enabled` ( json_bool F ) )
+    ?? ( source_update ORG ( string_data id ) off 6000 ) { T s → { ( json_free s ) } F e → { ( string_free e ) } }
+    ( json_free off )
+    : ( Vec SrcRef ) d4 ( sources_due 99999 )
+    ( check == ( vec_len [SrcRef] d4 ) 0 `due: a disabled source never is` )
+    ( vec_free_with [SrcRef] d4 \ SrcRef r → v { ( string_free . r org ) ( string_free . r id ) } )
+    ( check == ( sources_tick 99999 \ → v { ( nop ) } \ → v { ( nop ) } ) 0 `due: a tick with nothing due runs nothing` )
+    : b _d ( source_delete ORG ( string_data id ) )
+    ( string_free id )
+}
+
+// ── routes ────────────────────────────────────────────────────────────
+
+@ mk_req s method s path s query s body → HttpRequest {
+    ^ @ HttpRequest {
+        ( string_from method )
+        ( string_from path )
+        ( string_from query )
+        ( string_from `HTTP/1.1` )
+        ( vec_new [Header] )
+        ( bytes_from_str body )
+    }
+}
+
+: SvcOut {
+    i status
+    Json body
+}
+
+@ fire Router r s method s path s query s body → SvcOut {
+    : HttpRequest req ( mk_req method path query body )
+    : HttpResponse resp ( router_handle r req )
+    : i status . resp status
+    : String txt ( bytes_to_str . resp body )
+    : ~ Json parsed ( json_null )
+    : !Json JsonError jr ( json_parse ( string_data txt ) )
+    ?? jr {
+        T j → { ( json_free parsed ) = parsed j }
+        F _ → {}
+    }
+    ( string_free txt )
+    ( http_response_free resp )
+    ( request_free req )
+    ^ @ SvcOut { status parsed }
+}
+
+@ test_routes → v {
+    : Router r ( anomaly_service_router )
+
+    : SvcOut l0 ( fire r `GET` `/api/org/sources` `` `` )
+    ( check == . l0 status 200 `routes: GET /api/org/sources 200` )
+    ?? ( json_obj_get . l0 body `sources` ) {
+        T arr → { ( check == ( json_arr_len arr ) 0 `routes: none yet` ) }
+        F _ → { ( check F `routes: sources array` ) }
+    }
+    ( json_free . l0 body )
+
+    : SvcOut c0 ( fire r `POST` `/api/org/sources` `` `{"url":"ftp://x"}` )
+    ( check == . c0 status 400 `routes: a bad body is 400` )
+    ( json_free . c0 body )
+    : SvcOut c1 ( fire r `POST` `/api/org/sources` `` `not json` )
+    ( check == . c1 status 400 `routes: not JSON is 400` )
+    ( json_free . c1 body )
+
+    : Json b ( body_full )
+    ( json_obj_set b `name` ( json_str_lit `Helsinki` ) )
+    : String bs ( json_stringify b )
+    ( json_free b )
+    : SvcOut c2 ( fire r `POST` `/api/org/sources` `` ( string_data bs ) )
+    ( string_free bs )
+    ( check == . c2 status 201 `routes: created 201` )
+    : String id ( string_from ( jstr . c2 body `id` ) )
+    ( check ( source_id_ok ( string_data id ) ) `routes: the answer carries the id` )
+    ( check ( seq ( jstr . c2 body `name` ) `Helsinki` ) `routes: and the record` )
+    ( check ( jhas . c2 body `running` ) `routes: and whether it runs` )
+    ( json_free . c2 body )
+
+    : String path ( string_from `/api/org/sources/` )
+    ( string_push_str path ( string_data id ) )
+    : SvcOut g1 ( fire r `GET` ( string_data path ) `` `` )
+    ( check == . g1 status 200 `routes: GET one 200` )
+    ( check ( seq ( jstr . g1 body `model` ) `helsinki_weather` ) `routes: GET one has the model` )
+    ( json_free . g1 body )
+    : SvcOut g2 ( fire r `GET` `/api/org/sources/000000000000` `` `` )
+    ( check == . g2 status 404 `routes: unknown id 404` )
+    ( json_free . g2 body )
+    : SvcOut g3 ( fire r `GET` `/api/org/sources/not-an-id` `` `` )
+    ( check == . g3 status 400 `routes: malformed id 400` )
+    ( json_free . g3 body )
+
+    : SvcOut u1 ( fire r `PUT` ( string_data path ) `` `{"interval_minutes": 5, "enabled": false}` )
+    ( check == . u1 status 200 `routes: PUT 200` )
+    ( check == ( jint . u1 body `interval_minutes` ) 5 `routes: PUT changed the interval` )
+    ( json_free . u1 body )
+    : SvcOut u2 ( fire r `PUT` ( string_data path ) `` `{"interval_minutes": 0}` )
+    ( check == . u2 status 400 `routes: PUT with a bad value 400` )
+    ( json_free . u2 body )
+
+    : SvcOut l1 ( fire r `GET` `/api/org/sources` `` `` )
+    ?? ( json_obj_get . l1 body `sources` ) {
+        T arr → { ( check == ( json_arr_len arr ) 1 `routes: one listed` ) }
+        F _ → { ( check F `routes: sources array` ) }
+    }
+    ( json_free . l1 body )
+
+    // Run: the URL is a real host nobody listens on, so the run fails
+    // fast and the failure is the answer.
+    : SvcOut u3 ( fire r `PUT` ( string_data path ) `` `{"url": "http://127.0.0.1:9/wfs"}` )
+    ( check == . u3 status 200 `routes: PUT url` )
+    ( json_free . u3 body )
+    : String rpath ( string_clone path )
+    ( string_push_str rpath `/run` )
+    : SvcOut r1 ( fire r `POST` ( string_data rpath ) `` `` )
+    ( check == . r1 status 400 `routes: a failed run is 400` )
+    ( check ( seq ( jstr . r1 body `status` ) `error` ) `routes: with status error` )
+    ( json_free . r1 body )
+    : SvcOut r2 ( fire r `POST` `/api/org/sources/000000000000/run` `` `` )
+    ( check == . r2 status 404 `routes: running an unknown source 404` )
+    ( json_free . r2 body )
+    ( string_free rpath )
+
+    : SvcOut k1 ( fire r `POST` `/api/org/sources/catalog` `` `{"url": "ftp://nope"}` )
+    ( check == . k1 status 400 `routes: catalogue needs an http(s) url` )
+    ( json_free . k1 body )
+    : SvcOut k2 ( fire r `POST` `/api/org/sources/catalog` `` `{"url": "http://127.0.0.1:9/wfs"}` )
+    ( check == . k2 status 502 `routes: an unreachable catalogue is 502` )
+    ( json_free . k2 body )
+    : SvcOut p1 ( fire r `POST` `/api/org/sources/preview` `` `{"url": "https://opendata.fmi.fi/wfs"}` )
+    ( check == . p1 status 400 `routes: preview needs a query` )
+    ( json_free . p1 body )
+    : SvcOut p2 ( fire r `POST` `/api/org/sources/preview` `` `{"url": "http://127.0.0.1:9/wfs", "query": "x::simple", "hours": 1}` )
+    ( check == . p2 status 502 `routes: an unreachable preview is 502` )
+    ( json_free . p2 body )
+
+    : SvcOut d1 ( fire r `DELETE` ( string_data path ) `` `` )
+    ( check == . d1 status 200 `routes: DELETE 200` )
+    ( json_free . d1 body )
+    : SvcOut d2 ( fire r `DELETE` ( string_data path ) `` `` )
+    ( check == . d2 status 404 `routes: DELETE twice 404` )
+    ( json_free . d2 body )
+    ( string_free path )
+    ( string_free id )
+    ( router_free r )
+}
+
+@ main → i {
+    : String root ( env_var_or `ANOMALY_TEST_DIR` `./anomaly_sources_test` )
+    : !v IoErr junk ( dir_remove_all ( string_data root ) )
+    ?? junk { T _ → {} F _ → {} }
+    ( anomaly_service_set_root ( string_data root ) )
+    ( anomaly_authz_set_root ( string_data root ) )
+    : Store st ( store_open ( string_data root ) )
+
+    ( test_wfs )
+    ( test_sources )
+    ( test_windows )
+    ( test_run st )
+    ( test_due )
+    ( test_routes )
+
+    ( store_free st )
+    : !v IoErr fin ( dir_remove_all ( string_data root ) )
+    ?? fin { T _ → {} F _ → {} }
+    ( string_free root )
+    ( nurl_print `sources_test: ` ) ( nurl_print_int g_pass )
+    ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )
+    ^ ? > g_fail 0 1 0
+}

@@ -11,6 +11,7 @@
 #                      config (the file, and what layers over it),
 #                      import (CSV/JSON/JSONL history → a model),
 #                      mcp (the agent endpoint: tools, roles, challenge),
+#                      sources (WFS data sources: pivot, records, runs, routes),
 #                      dashboard (the generated metadata editor; needs node)
 #    2. CLI          : detect/score/train/ls/info/batch/reset/rm
 #    3. live HTTP    : `anomaly serve` + curl against the routes
@@ -39,7 +40,7 @@ ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 
 echo "[1/4] unit suites"
-for t in prep model store dynamic versions timevector autoencoder scan authz config import metaedit service mcp gpu; do
+for t in prep model store dynamic versions timevector autoencoder scan authz config import metaedit service mcp sources gpu; do
     if ! $NURL "tests/${t}_test.nu" "$WORK/${t}_test" >/dev/null 2>"$WORK/build.err"; then
         echo "FAIL: could not build ${t}_test:"; tail -5 "$WORK/build.err"; exit 1
     fi
