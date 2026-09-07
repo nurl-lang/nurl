@@ -6,6 +6,25 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`stdlib/ext/xml.nu`: a comment before a closing tag ended the element
+  inside the comment.** The child loop checked for `</` before skipping
+  comments, and when the node parser skipped one and reported "no node"
+  the scan position was not advanced; the `>` then found was the
+  comment's own, so the element closed there and every later sibling was
+  handed to the parent's parent and lost. A MapServer `GetCapabilities`
+  (comments after empty `<ows:Voice/>` elements) parsed to a root with one
+  child. Regression in `compiler/tests/xml_basic.nu`.
+- **`stdlib/std/tls.nu`: the ALPN a TLS 1.2 ServerHello selects was never
+  read.** ALPN was taken only from EncryptedExtensions (TLS 1.3); on the
+  1.2 fallback `alpn_sel` stayed empty, so `packages/http-client` spoke
+  HTTP/1.1 to a load balancer that had chosen h2 (avoinapi.vaylapilvi.fi)
+  and every request to it failed. `__sh_alpn` reads extension 0x0010 from
+  the ServerHello; the selection must be one we offered, as in 1.3.
+
 ## [0.61.0] — 2026-09-06
 
 ### Added

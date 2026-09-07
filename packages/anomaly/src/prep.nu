@@ -354,6 +354,20 @@ $ `stdlib/ext/json.nu`
     ^ ( meta_has_timestamp m )
 }
 
+// Declare a column's kind before its first value is seen — the one way
+// to make a numeric-looking column categorical: a coordinate or a station
+// code that should be an identity, not a magnitude. A column the model
+// already knows keeps its kind (its encoding is settled); returns T only
+// when the declaration took.
+@ meta_declare_column * Meta m s name i kind → b {
+    ? >= ( __an_col_find m name ) 0 { ^ F } {}
+    ? | | == kind COL_NUMERIC == kind COL_CATEGORICAL == kind COL_TIMESTAMP {} { ^ F }
+    ( vec_push [String] . m cols ( string_from name ) )
+    ( vec_push [i] . m kinds kind )
+    ( vec_push [( Vec String )] . m cats ( vec_new [String] ) )
+    ^ T
+}
+
 // ── Value coercion ────────────────────────────────────────────────────
 
 // Kind of a column, judged from its first-seen value: number (or bool, or

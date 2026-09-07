@@ -13,6 +13,12 @@
 //              run over the same window taking nothing, a backfill
 //              taking only what lies before; an unreachable service
 //              leaves an error on the record.
+//   wide     — a GeoServer's capabilities as a catalogue of feature
+//              types, GetFeature by type name, the wide pivot (one record
+//              per feature, properties as numbers or text, the geometry's
+//              coordinate, the clock from a date property or the fetch
+//              time), and a feature-type source: its window, a categorical
+//              coordinate stored as text.
 //   due      — what the scheduler would run and when.
 //   routes   — the HTTP surface through router_handle, no sockets.
 // Store root: $ANOMALY_TEST_DIR (default ./anomaly_sources_test).
@@ -170,6 +176,67 @@ $ `src/service.nu`
     <ExceptionText>No location parameter given</ExceptionText>
   </Exception>
 </ExceptionReport>`
+
+: s CAPS_XML `<?xml version="1.0" encoding="UTF-8"?>
+<wfs:WFS_Capabilities xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:ows="http://www.opengis.net/ows/1.1" version="2.0.0">
+  <ows:OperationsMetadata><ows:Operation name="GetFeature"/><ows:Operation name="DescribeStoredQueries"/></ows:OperationsMetadata>
+  <FeatureTypeList>
+    <FeatureType xmlns:dwd="https://www.dwd.de">
+      <Name>dwd:RBSN_T2m</Name>
+      <Title>2m Temperatur an RBSN Stationen</Title>
+      <Abstract>Messwerte der 2m Temperatur.</Abstract>
+      <DefaultCRS>urn:ogc:def:crs:EPSG::4258</DefaultCRS>
+    </FeatureType>
+    <FeatureType>
+      <Name>ms:cities</Name>
+      <Title>World cities</Title>
+    </FeatureType>
+  </FeatureTypeList>
+</wfs:WFS_Capabilities>`
+
+: s WIDE_XML `<?xml version="1.0" encoding="UTF-8"?>
+<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:dwd="https://www.dwd.de" numberReturned="3">
+  <wfs:member>
+    <dwd:RBSN_T2m gml:id="RBSN_T2m.102">
+      <gml:boundedBy><gml:Envelope srsName="urn:ogc:def:crs:EPSG::4258"><gml:lowerCorner>1 1</gml:lowerCorner><gml:upperCorner>2 2</gml:upperCorner></gml:Envelope></gml:boundedBy>
+      <dwd:ID>102</dwd:ID>
+      <dwd:NAME>Leuchtturm Alte Weser</dwd:NAME>
+      <dwd:TEMPERATURE>17.5</dwd:TEMPERATURE>
+      <dwd:M_DATE>2026-09-07T05:00:00Z</dwd:M_DATE>
+      <dwd:THE_GEOM><gml:Point srsName="urn:ogc:def:crs:EPSG::4258"><gml:pos>53.8633 8.1275</gml:pos></gml:Point></dwd:THE_GEOM>
+    </dwd:RBSN_T2m>
+  </wfs:member>
+  <wfs:member>
+    <dwd:RBSN_T2m gml:id="RBSN_T2m.164">
+      <dwd:ID>164</dwd:ID>
+      <dwd:NAME>Angermünde</dwd:NAME>
+      <dwd:TEMPERATURE>NaN</dwd:TEMPERATURE>
+      <dwd:M_DATE>2026-09-07T06:00:00Z</dwd:M_DATE>
+      <dwd:THE_GEOM><gml:Point><gml:pos>53.0316 13.9908</gml:pos></gml:Point></dwd:THE_GEOM>
+    </dwd:RBSN_T2m>
+  </wfs:member>
+  <wfs:member>
+    <dwd:RBSN_T2m gml:id="RBSN_T2m.183">
+      <dwd:ID>183</dwd:ID>
+      <dwd:NAME>Arkona</dwd:NAME>
+      <dwd:TEMPERATURE>15.25</dwd:TEMPERATURE>
+      <dwd:M_DATE>2026-09-07T06:00:00Z</dwd:M_DATE>
+      <dwd:NOTE>some very long text</dwd:NOTE>
+      <dwd:THE_GEOM><gml:Point><gml:pos>54.6791 13.4343</gml:pos></gml:Point></dwd:THE_GEOM>
+    </dwd:RBSN_T2m>
+  </wfs:member>
+</wfs:FeatureCollection>`
+
+: s SNAPSHOT_XML `<?xml version="1.0" encoding="UTF-8"?>
+<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:ms="http://mapserver.gis.umn.edu/mapserver">
+  <wfs:member>
+    <ms:cities gml:id="cities.1">
+      <ms:geom><gml:Point><gml:pos>48.85 2.35</gml:pos></gml:Point></ms:geom>
+      <ms:NAME>Paris</ms:NAME>
+      <ms:POPULATION>2140526</ms:POPULATION>
+    </ms:cities>
+  </wfs:member>
+</wfs:FeatureCollection>`
 
 : s EMPTY_FC_XML `<?xml version="1.0" encoding="UTF-8"?>
 <wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" numberReturned="0" numberMatched="0">
@@ -587,6 +654,208 @@ $ `src/service.nu`
     ( string_free id )
 }
 
+// ── wide ──────────────────────────────────────────────────────────────
+
+@ test_wide Store st → v {
+    ( check ( wfs_caps_has_stored CAPS_XML ) `wide: capabilities mention stored queries` )
+    ( check ! ( wfs_caps_has_stored WIDE_XML ) `wide: a collection does not` )
+    : Json cat ( wfs_catalog CAPS_XML )
+    ( check ! ( jhas cat `error` ) `wide: capabilities parse as a catalogue` )
+    ?? ( json_obj_get cat `queries` ) {
+        T qs → {
+            ( check == ( json_arr_len qs ) 2 `wide: two feature types` )
+            ?? ( json_arr_get qs 0 ) {
+                T q → {
+                    ( check ( seq ( jstr q `id` ) `dwd:RBSN_T2m` ) `wide: type name is the id` )
+                    ( check ( seq ( jstr q `kind` ) `type` ) `wide: kind type` )
+                    ( check ( seq ( jstr q `title` ) `2m Temperatur an RBSN Stationen` ) `wide: type title` )
+                }
+                F _ → { ( check F `wide: type 0` ) }
+            }
+        }
+        F _ → { ( check F `wide: queries` ) }
+    }
+    ( json_free cat )
+    : Json scat ( wfs_catalog CATALOG_XML )
+    ?? ( json_obj_get scat `queries` ) {
+        T qs → { ?? ( json_arr_get qs 0 ) { T q → { ( check ( seq ( jstr q `kind` ) `stored` ) `wide: a stored query says so` ) } F _ → {} } }
+        F _ → {}
+    }
+    ( json_free scat )
+
+    : Json params ( json_obj_new )
+    ( json_obj_set params `count` ( json_str_lit `250` ) )
+    ( json_obj_set params `cql_filter` ( json_str_lit `TEMPERATURE > 10` ) )
+    ( json_obj_set params `bbox` ( json_str_lit `` ) )
+    : String tu ( wfs_url_type `https://maps.dwd.de/geoserver/dwd/ows?x=1` `dwd:RBSN_T2m` params )
+    ( check ( string_contains tu `request=GetFeature&typeNames=dwd%3ARBSN_T2m` ) `wide: url names the type` )
+    ( check ( string_contains tu `&cql_filter=TEMPERATURE%20%3E%2010` ) `wide: url passes a filter` )
+    ( check ( string_contains tu `&count=250` ) `wide: url takes the count` )
+    ( check ( string_contains tu `&srsName=urn%3Aogc%3Adef%3Acrs%3AEPSG%3A%3A4326` ) `wide: url asks for WGS 84, latitude first` )
+    ( check ! ( string_contains tu `bbox=` ) `wide: an empty parameter is not sent` )
+    ( string_free tu )
+    ( json_free params )
+    : Json none ( json_obj_new )
+    : String tu2 ( wfs_url_type `https://x/wfs` `a:b` none )
+    ( check ( string_contains tu2 `&count=1000&srsName=` ) `wide: default count` )
+    ( string_free tu2 )
+    ( json_free none )
+
+    : WfsPivot pv ( wfs_pivot_wide WIDE_XML `` 5000 )
+    ( check == ( string_len . pv err ) 0 `wide pivot: no error` )
+    ( check == . pv members 3 `wide pivot: three features` )
+    ( check == ( vec_len [Json] . pv rows ) 3 `wide pivot: three rows` )
+    ( check ( has_col . pv columns `TEMPERATURE` ) `wide pivot: number column` )
+    ( check ( has_col . pv columns `NAME` ) `wide pivot: text column` )
+    ( check ( has_col . pv columns `gml_id` ) `wide pivot: identity column` )
+    ( check ( has_col . pv columns `lat` ) `wide pivot: latitude from the geometry` )
+    ?? ( vec_get [Json] . pv rows 0 ) {
+        T r0 → {
+            ( check == ( jint r0 `timestamp` ) T_0500 `wide pivot: clock from M_DATE` )
+            ( check ( seq ( jstr r0 `time` ) `2026-09-07T05:00:00Z` ) `wide pivot: ISO time kept` )
+            ( check ( seq ( jstr r0 `NAME` ) `Leuchtturm Alte Weser` ) `wide pivot: text value` )
+            ( check ( seq ( jstr r0 `gml_id` ) `RBSN_T2m.102` ) `wide pivot: gml:id` )
+            ( check == ( jint r0 `ID` ) 102 `wide pivot: a numeric text is a number` )
+            ( check ! ( jhas r0 `lowerCorner` ) `wide pivot: boundedBy skipped` )
+            ?? ( json_obj_get r0 `lat` ) { T lv → { ?? ( json_num_as_f lv ) { T x → { ( check & > x 53.86 < x 53.87 `wide pivot: lat value` ) } F _ → { ( check F `wide pivot: lat` ) } } } F _ → { ( check F `wide pivot: lat` ) } }
+        }
+        F _ → { ( check F `wide pivot: row 0` ) }
+    }
+    ?? ( vec_get [Json] . pv rows 1 ) {
+        T r1 → {
+            ( check ! ( jhas r1 `TEMPERATURE` ) `wide pivot: NaN left out` )
+            ( check == ( jint r1 `timestamp` ) T_0600 `wide pivot: second clock` )
+        }
+        F _ → { ( check F `wide pivot: row 1` ) }
+    }
+    ( wfs_pivot_free pv )
+    : WfsPivot pz ( wfs_pivot_wide WIDE_XML `none` 5000 )
+    ?? ( vec_get [Json] . pz rows 0 ) {
+        T r0 → { ( check & == ( jint r0 `timestamp` ) 5000 ! ( jhas r0 `time` ) `wide pivot: "none" means no property is the clock` ) }
+        F _ → { ( check F `wide pivot: none clock` ) }
+    }
+    ( wfs_pivot_free pz )
+    : WfsPivot pn ( wfs_pivot_wide WIDE_XML `NAME` 5000 )
+    ?? ( vec_get [Json] . pn rows 0 ) {
+        T r0 → { ( check == ( jint r0 `timestamp` ) 5000 `wide pivot: a named clock that is no date falls back to now` ) }
+        F _ → { ( check F `wide pivot: named clock` ) }
+    }
+    ( wfs_pivot_free pn )
+    : WfsPivot ps ( wfs_pivot_wide SNAPSHOT_XML `` 7000 )
+    ( check == ( vec_len [Json] . ps rows ) 1 `wide pivot: snapshot row` )
+    ?? ( vec_get [Json] . ps rows 0 ) {
+        T r0 → {
+            ( check == ( jint r0 `timestamp` ) 7000 `wide pivot: no date → stamped now` )
+            ( check ! ( jhas r0 `time` ) `wide pivot: no ISO time for a snapshot` )
+            ( check == ( jint r0 `POPULATION` ) 2140526 `wide pivot: population` )
+        }
+        F _ → { ( check F `wide pivot: snapshot` ) }
+    }
+    ( wfs_pivot_free ps )
+    : WfsPivot pe ( wfs_pivot_wide EXCEPTION_XML `` 1 )
+    ( check ( string_contains . pe err `exception` ) `wide pivot: exception surfaces` )
+    ( wfs_pivot_free pe )
+
+    // A feature-type source: window, categorical coordinates, the span.
+    : Json b ( json_obj_new )
+    ( json_obj_set b `url` ( json_str_lit `https://maps.dwd.de/geoserver/dwd/ows` ) )
+    ( json_obj_set b `query` ( json_str_lit `dwd:RBSN_T2m` ) )
+    ( json_obj_set b `mode` ( json_str_lit `type` ) )
+    ( json_obj_set b `model` ( json_str_lit `dwd_t2m` ) )
+    : Json f ( json_arr_new )
+    ( json_arr_push f ( json_str_lit `TEMPERATURE` ) ) ( json_arr_push f ( json_str_lit `lat` ) ) ( json_arr_push f ( json_str_lit `lon` ) ) ( json_arr_push f ( json_str_lit `NAME` ) )
+    ( json_obj_set b `features` f )
+    : Json c ( json_arr_new )
+    ( json_arr_push c ( json_str_lit `lat` ) ) ( json_arr_push c ( json_str_lit `lon` ) )
+    ( json_obj_set b `categorical` c )
+    : ~ String id ( string_new )
+    ?? ( source_create ORG b `tester` 1000 ) {
+        T src → {
+            ( string_free id ) = id ( string_from ( jstr src `id` ) )
+            ( check ( seq ( jstr src `mode` ) `type` ) `type source: mode kept` )
+            ( check ( source_is_type src ) `type source: is a type` )
+            : SrcWindow w ( source_window src 9000 F 0 )
+            ( check & == . w start 0 > . w end + 9000 100000000 `type source: first window is everything, open-ended` )
+            : SrcWindow wb ( source_window src 9000 T 24 )
+            ( check > . wb start . wb end `type source: a backfill is empty` )
+            ( json_free src )
+        }
+        F e → { ( check F `type source: create` ) ( string_free e ) }
+    }
+    ( json_free b )
+    : Json bad ( json_obj_new )
+    ( json_obj_set bad `mode` ( json_str_lit `sideways` ) )
+    ?? ( source_update ORG ( string_data id ) bad 1100 ) {
+        T src → { ( check F `type source: bad mode refused` ) ( json_free src ) }
+        F e → { ( check ( string_contains e `mode must be` ) `type source: bad mode refused` ) ( string_free e ) }
+    }
+    ( json_free bad )
+
+    : i now + T_0600 600
+    : WfsPivot pw ( wfs_pivot_wide WIDE_XML `` now )
+    : ( Vec Json ) rows ( vec_new [Json] )
+    : i nr ( vec_len [Json] . pw rows )
+    : ~ i k 0
+    ~ < k nr { ?? ( vec_get [Json] . pw rows k ) { T r → { ( vec_push [Json] rows ( json_clone r ) ) } F _ → {} } = k + k 1 }
+    ( wfs_pivot_free pw )
+    : ~ Json cur ( json_null )
+    ?? ( source_load ORG ( string_data id ) ) { T sj → { ( json_free cur ) = cur sj } F _ → {} }
+    : SrcWindow w2 ( source_window cur now F 0 )
+    ( json_free cur )
+    : Json r1 ( source_run_rows ORG ( string_data id ) @ !( Vec Json ) String { T rows } w2 F now )
+    ( check ( seq ( jstr r1 `status` ) `success` ) `type run: success` )
+    ( check == ( jint r1 `ingested` ) 3 `type run: three features in` )
+    ( json_free r1 )
+    // The same features again: nothing new, and the span does not move.
+    : WfsPivot pw2 ( wfs_pivot_wide WIDE_XML `` + now 100 )
+    : ( Vec Json ) rows2 ( vec_new [Json] )
+    : i nr2 ( vec_len [Json] . pw2 rows )
+    = k 0
+    ~ < k nr2 { ?? ( vec_get [Json] . pw2 rows k ) { T r → { ( vec_push [Json] rows2 ( json_clone r ) ) } F _ → {} } = k + k 1 }
+    ( wfs_pivot_free pw2 )
+    : ~ Json cur2 ( json_null )
+    ?? ( source_load ORG ( string_data id ) ) { T sj → { ( json_free cur2 ) = cur2 sj } F _ → {} }
+    : SrcWindow w4 ( source_window cur2 + now 100 F 0 )
+    ( json_free cur2 )
+    : Json r2 ( source_run_rows ORG ( string_data id ) @ !( Vec Json ) String { T rows2 } w4 F + now 100 )
+    ( check == ( jint r2 `ingested` ) 0 `type run: the same features land once` )
+    ( json_free r2 )
+    ?? ( source_load ORG ( string_data id ) ) {
+        T src → {
+            ( check == ( jint src `last_time` ) T_0600 `type run: last_time is the newest feature's clock` )
+            ( check == ( jint src `first_time` ) T_0500 `type run: first_time is the oldest` )
+            : SrcWindow w3 ( source_window src + now 60 F 0 )
+            ( check == . w3 start + T_0600 1 `type run: the next window starts after the newest clock` )
+            ( json_free src )
+        }
+        F _ → { ( check F `type run: reload` ) }
+    }
+    : *Model mo ( model_open st `dwd_t2m` )
+    ( check == ( model_n_points mo ) 3 `type run: model holds three points` )
+    : Json mj ( meta_to_json . mo meta )
+    ?? ( json_obj_get mj `column_types` ) {
+        T ct → {
+            ( check ( seq ( jstr ct `lat` ) `categorical` ) `type run: a categorical coordinate is a categorical column` )
+            ( check ( seq ( jstr ct `TEMPERATURE` ) `numeric` ) `type run: the temperature stays numeric` )
+            ( check ( seq ( jstr ct `NAME` ) `categorical` ) `type run: text is categorical` )
+        }
+        F _ → { ( check F `type run: column_types` ) }
+    }
+    ( json_free mj )
+    ?? ( vec_get [String] . mo lines 0 ) {
+        T line → {
+            ( check ( string_contains line `"lat":"53.8633"` ) `type run: a categorical coordinate is stored as text` )
+            ( check ( string_contains line `"TEMPERATURE":17.5` ) `type run: a number stays a number` )
+            ( check ( string_contains line `"NAME":"Leuchtturm Alte Weser"` ) `type run: text feature kept` )
+            ( check ! ( string_contains line `gml_id` ) `type run: identity not taken unasked` )
+        }
+        F _ → { ( check F `type run: stored line` ) }
+    }
+    ( model_free mo )
+    : b _d ( source_delete ORG ( string_data id ) )
+    ( string_free id )
+}
+
 // ── due ───────────────────────────────────────────────────────────────
 
 @ test_due → v {
@@ -770,6 +1039,7 @@ $ `src/service.nu`
     ( test_sources )
     ( test_windows )
     ( test_run st )
+    ( test_wide st )
     ( test_due )
     ( test_routes )
 

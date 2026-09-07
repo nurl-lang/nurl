@@ -136,9 +136,11 @@
 
   <div class="card" id="editor">
     <h2 id="editorTitle">Add a source</h2>
-    <p class="hint">Point it at a WFS 2.0 endpoint, pick a stored query, fill in where, preview what the last
-      hours would give, tick the columns that should be features, and say which model to feed and how often.
-      The <code>::simple</code> queries answer one value per row, which is what pivots into a data point.</p>
+    <p class="hint">Point it at a WFS 2.0 endpoint, pick a stored query or a feature type, fill in where, preview
+      what it gives, tap the columns that should be features — as numbers, or as categories so a place or a
+      station is an identity the anomaly is judged against — and say which model to feed and how often.
+      A weather service's <code>::simple</code> stored queries answer a value per row; a GeoServer's feature
+      types answer a feature per row with its properties, and each fetch is a snapshot unless a property is a date.</p>
 
     <h3><span class="step">1</span>Service</h3>
     <div class="row">
@@ -149,7 +151,7 @@
     <div id="catBox" style="display:none">
       <div class="row">
         <input id="catFilter" class="wide" placeholder="filter — e.g. weather, mareograph, radiation" oninput="renderCatalog()">
-        <label><input type="checkbox" id="catSimple" checked onchange="renderCatalog()"> only <code>::simple</code></label>
+        <label id="catSimpleBox"><input type="checkbox" id="catSimple" checked onchange="renderCatalog()"> only <code>::simple</code></label>
       </div>
       <div class="catalog" id="catalog"></div>
       <div class="abstract" id="abstract"></div>
@@ -157,8 +159,7 @@
 
     <div id="paramsBox" style="display:none">
       <h3><span class="step">2</span>Parameters for <code id="qid"></code></h3>
-      <p class="hint">At least one location is usually required — <code>place</code>, <code>fmisid</code>,
-        <code>bbox</code> or the like. The time window is not a parameter here: every run sets it.</p>
+      <p class="hint" id="paramsHint"></p>
       <div class="params" id="params"></div>
     </div>
 
@@ -167,7 +168,7 @@
       <p class="hint">Preview fetches the last hours of the query and lists every column it gives. Nothing needs typing:
         tap a row to take it or leave it.</p>
       <div class="row">
-        <label>the last
+        <label id="hoursBox">the last
           <select id="hours"><option>1</option><option selected>3</option><option>6</option><option>24</option><option>72</option></select> h</label>
         <button class="primary" onclick="preview()">Preview and pick columns</button>
         <span id="prevStatus" class="muted" style="font-size:12px"></span>
@@ -206,6 +207,10 @@ let CATALOG = [], SELECTED = null, PREVIEW = null, EDITING = null, SOURCES = [];
 // The features chosen so far: what the preview's rows toggle, what the
 // chips of a saved source show, what save() sends.
 let FEATS = new Set();
+// Which of the chosen features are stored as text (a one-hot identity
+// rather than a number), and which column is a feature type's clock.
+let CATS = new Set();
+let TIME_FIELD = "";
 
 async function api(method, url, body) {
   const opt = { method, headers: {} };
@@ -246,7 +251,8 @@ async function loadSources() {
       : s.last_status === "ok" ? '<span class="pill ok">ok</span>'
       : s.last_status === "error" ? '<span class="pill err">error</span>'
       : '<span class="pill">not yet run</span>';
-    const feats = (s.features || []).length ? (s.features || []).join(", ") : "every column";
+    const cats = new Set(s.categorical || []);
+    const feats = (s.features || []).length ? (s.features || []).map(f => cats.has(f) ? f + " (cat)" : f).join(", ") : "every column";
     return '<div class="src">' +
       '<div class="head"><span class="name">' + esc(s.name) + "</span>" + pill +
         '<span class="model">→ <a href="/modelmanager.html?model=' + enc(s.model) + '">' + esc(s.model) + "</a></span></div>" +
@@ -257,7 +263,7 @@ async function loadSources() {
         '<button class="small" onclick="edit(\'' + esc(s.id) + '\')">Edit</button>' +
         '<button class="small danger" onclick="remove(\'' + esc(s.id) + '\')">Delete</button>' : "") + "</div>" +
       '<div class="facts">' +
-        '<span title="' + esc(s.url) + '"><code>' + esc(s.query) + "</code></span>" +
+        '<span title="' + esc(s.url) + '"><code>' + esc(s.query) + "</code>" + (s.mode === "type" ? ' <span class="pill run">feature type</span>' : "") + "</span>" +
         "<span>" + esc(paramsText(s.params)) + "</span>" +
         "<span>every " + every(s.interval_minutes) + "</span>" +
         "<span>last run " + fmtTime(s.last_run) + "</span>" +
@@ -330,16 +336,21 @@ async function loadCatalog() {
 
 function renderCatalog() {
   const f = $("catFilter").value.trim().toLowerCase();
-  const simpleOnly = $("catSimple").checked;
+  const hasStored = CATALOG.some(q => q.kind === "stored");
+  // The ::simple filter means something only where stored queries exist.
+  $("catSimpleBox").style.display = hasStored ? "" : "none";
+  const simpleOnly = hasStored && $("catSimple").checked;
   const rows = CATALOG.filter(q => {
-    if (simpleOnly && !/::simple$/.test(q.id)) return false;
-    return !f || (q.id + " " + q.title).toLowerCase().includes(f);
+    if (simpleOnly && q.kind === "stored" && !/::simple$/.test(q.id)) return false;
+    return !f || (q.id + " " + (q.title || "") + " " + (q.abstract || "")).toLowerCase().includes(f);
   });
   if (!rows.length) { $("catalog").innerHTML = '<div class="empty">Nothing matches.</div>'; return; }
   $("catalog").innerHTML = rows.map(q =>
     '<div class="q' + (SELECTED && SELECTED.id === q.id ? " sel" : "") + '" onclick="selectQuery(\'' + esc(q.id) + '\')">' +
-    '<span class="id">' + esc(q.id) + '</span><span class="title">' + esc(q.title) + "</span>" +
-    (/::simple$/.test(q.id) ? '<span class="pill ok simple">simple</span>' : "") + "</div>").join("");
+    '<span class="id">' + esc(q.id) + '</span><span class="title">' + esc(q.title || "") + "</span>" +
+    (q.kind === "stored"
+      ? (/::simple$/.test(q.id) ? '<span class="pill ok simple">simple</span>' : '<span class="pill simple">stored</span>')
+      : '<span class="pill run simple">feature type</span>') + "</div>").join("");
 }
 
 function selectQuery(id) {
@@ -355,7 +366,14 @@ function selectQuery(id) {
   $("columns").innerHTML = "";
   $("sampleBox").innerHTML = "";
   PREVIEW = null;
-  if (!EDITING) FEATS = new Set();
+  if (!EDITING) { FEATS = new Set(); CATS = new Set(); TIME_FIELD = ""; }
+  $("hoursBox").style.display = SELECTED.kind === "type" ? "none" : "";
+  $("paramsHint").innerHTML = SELECTED.kind === "type"
+    ? "A feature type is fetched whole on every run, at most <code>count</code> features. <code>bbox</code> " +
+      "(<code>minx,miny,maxx,maxy</code>) or a GeoServer <code>cql_filter</code> narrows it. Every property " +
+      "becomes a column; a property that is a date becomes the clock, otherwise each fetch is stamped with its own time."
+    : "At least one location is usually required — <code>place</code>, <code>fmisid</code>, <code>bbox</code> " +
+      "or the like. The time window is not a parameter here: every run sets it.";
   renderChips();
   if (!$("name").value) $("name").value = SELECTED.title || SELECTED.id;
   if (!$("model").value) $("model").value = (SELECTED.id.replace(/::simple$/, "").split("::").slice(-2).join("_") || "source")
@@ -365,13 +383,19 @@ function selectQuery(id) {
 // Parameters the run owns are not shown; the rest get an input each,
 // with the catalogue's title as the hint.
 function renderParams(values) {
-  const ps = (SELECTED.parameters || []).filter(p => p.name !== "starttime" && p.name !== "endtime");
+  let ps = (SELECTED.parameters || []).filter(p => p.name !== "starttime" && p.name !== "endtime");
+  if (SELECTED.kind === "type") ps = [
+    { name: "count", type: "int", title: "at most this many features per fetch" },
+    { name: "bbox", type: "string", title: "bounding box, minx,miny,maxx,maxy in the layer's CRS" },
+    { name: "cql_filter", type: "string", title: "a GeoServer CQL filter, e.g. TEMPERATURE IS NOT NULL" },
+    { name: "sortBy", type: "string", title: "property to sort by, e.g. M_DATE DESC" },
+  ];
   const known = new Set(ps.map(p => p.name));
   // A saved source may carry a parameter the catalogue no longer lists.
   Object.keys(values).forEach(k => { if (!known.has(k)) ps.push({ name: k, type: "", title: "" }); });
   if (!ps.length) { $("params").innerHTML = '<div class="muted">This query takes no parameters.</div>'; return; }
   $("params").innerHTML = ps.map(p => {
-    const v = values[p.name] !== undefined ? values[p.name] : (p.name === "timestep" ? "60" : "");
+    const v = values[p.name] !== undefined ? values[p.name] : (p.name === "timestep" ? "60" : p.name === "count" ? "500" : "");
     // A list of parameter names is the one field nobody should have to
     // type: left empty, the service answers with its default set, and the
     // columns are picked by tapping in step 3.
@@ -395,25 +419,53 @@ function readParams() {
 async function preview() {
   if (!SELECTED) return;
   $("prevStatus").textContent = "asking the service…";
-  const body = { url: $("url").value.trim(), query: SELECTED.id, params: readParams(), hours: parseInt($("hours").value, 10) };
+  const body = { url: $("url").value.trim(), query: SELECTED.id, params: readParams(), hours: parseInt($("hours").value, 10),
+                 mode: SELECTED.kind === "type" ? "type" : "stored", time_field: TIME_FIELD };
   const r = await api("POST", "/api/org/sources/preview", body);
   if (!r.ok) { $("prevStatus").innerHTML = '<span class="err">' + esc((r.data && r.data.message) || "failed") + "</span>"; return; }
   PREVIEW = r.data;
-  $("prevStatus").textContent = PREVIEW.rows + " rows (location × time) in the last " + PREVIEW.hours + " h";
+  $("prevStatus").textContent = (SELECTED && SELECTED.kind === "type")
+    ? PREVIEW.rows + " features fetched (one record each)"
+    : PREVIEW.rows + " rows (location × time) in the last " + PREVIEW.hours + " h";
   const cols = PREVIEW.columns || [];
   if (!cols.length) { $("columns").innerHTML = '<div class="empty">No numeric columns came back — check the location parameters.</div>'; return; }
-  // A fresh source starts with every column but the coordinates taken; a
-  // saved one keeps its choice.
-  if (!FEATS.size) cols.forEach(c => { if (c.name !== "lat" && c.name !== "lon") FEATS.add(c.name); });
+  // A fresh source starts with the number columns taken — not the
+  // coordinates, not an identity, not a date; a saved one keeps its choice.
+  if (!FEATS.size && !CATS.size) cols.forEach(c => {
+    if (c.kind === "number" && c.name !== "lat" && c.name !== "lon") FEATS.add(c.name);
+  });
+  // Text columns that are taken are categories unless said otherwise.
+  cols.forEach(c => { if (FEATS.has(c.name) && c.kind === "text" && !CATS.has(c.name)) CATS.add(c.name); });
+  const timeCols = cols.filter(c => c.kind === "time").map(c => c.name);
+  const isType = SELECTED && SELECTED.kind === "type";
   $("columns").innerHTML = '<div class="tablewrap"><table><thead><tr><th><input type="checkbox" id="allCols" onchange="allCols(this.checked)"></th>' +
-    "<th>column</th><th>rows</th><th>min</th><th>max</th><th>last</th></tr></thead><tbody>" +
+    "<th>column</th><th>as</th><th>rows</th><th>distinct</th><th>min</th><th>max</th><th>last</th></tr></thead><tbody>" +
     cols.map(c => {
       const on = FEATS.has(c.name);
+      const cat = CATS.has(c.name);
+      const asCell = c.kind === "time"
+        ? '<span class="pill">time</span>'
+        : '<button class="small" data-kind="' + esc(c.name) + '" title="tap to store this column as a number or as a category">' +
+          (cat ? "category" : "number") + "</button>";
+      const last = c.kind === "number" ? fmtNum(c.last) : String(c.last === undefined ? "–" : c.last).slice(0, 40);
       return '<tr data-col="' + esc(c.name) + '" class="' + (on ? "on" : "") + '"><td><input type="checkbox" data-col="' + esc(c.name) + '"' + (on ? " checked" : "") + "></td>" +
-        "<td>" + esc(c.name) + "</td><td>" + c.count + "</td><td>" + fmtNum(c.min) + "</td><td>" + fmtNum(c.max) + "</td><td>" + fmtNum(c.last) + "</td></tr>";
+        "<td>" + esc(c.name) + "</td><td>" + asCell + "</td><td>" + c.count + "</td><td>" + (c.distinct || "–") + "</td>" +
+        "<td>" + fmtNum(c.min) + "</td><td>" + fmtNum(c.max) + "</td><td>" + esc(last) + "</td></tr>";
     }).join("") + "</tbody></table></div>" +
-    '<div class="muted" style="font-size:12px;margin-top:6px">Tap a row to take the column or leave it. ' +
-    "<code>lat</code>/<code>lon</code> only matter when several stations answer.</div>";
+    '<div class="muted" style="font-size:12px;margin-top:6px">Tap a row to take the column or leave it; tap <em>number</em>/<em>category</em> to say how it is stored. ' +
+    "A category is an identity — a coordinate or a station stored as a category lets the model judge each place against itself.</div>" +
+    (isType ? '<div class="row" style="margin-top:8px"><label>the clock is <select id="timeField" onchange="TIME_FIELD=this.value">' +
+      '<option value="">' + (timeCols.length ? "detected: " + timeCols[0] : "none — each fetch is stamped with its own time") + "</option>" +
+      timeCols.map(n => '<option value="' + esc(n) + '"' + (TIME_FIELD === n ? " selected" : "") + ">" + esc(n) + "</option>").join("") +
+      '<option value="none"' + (TIME_FIELD === "none" ? " selected" : "") + ">no property — stamp each fetch with its own time (a snapshot series)</option>" +
+      "</select></label></div>" : "");
+  document.querySelectorAll("#columns button[data-kind]").forEach(b => b.addEventListener("click", ev => {
+    ev.stopPropagation();
+    const n = b.dataset.kind;
+    if (CATS.has(n)) CATS.delete(n); else CATS.add(n);
+    b.textContent = CATS.has(n) ? "category" : "number";
+    renderChips();
+  }));
   // The whole row is the control: a 15 px checkbox is no target on a phone.
   document.querySelectorAll("#columns tbody tr[data-col]").forEach(tr => {
     tr.addEventListener("click", ev => {
@@ -448,8 +500,9 @@ function renderChips() {
   const known = PREVIEW ? (PREVIEW.columns || []).map(c => c.name) : [];
   const names = [...new Set([...FEATS, ...known])];
   if (!names.length) { box.innerHTML = SELECTED ? '<span class="muted" style="font-size:12px">No columns chosen yet — every column the query gives becomes a feature.</span>' : ""; return; }
-  box.innerHTML = '<div class="muted" style="font-size:12px;margin-top:8px">Features (tap to toggle):</div><div class="chips">' +
-    names.map(n => '<span class="chip ' + (FEATS.has(n) ? "on" : "") + '" data-chip="' + esc(n) + '">' + esc(n) + "</span>").join("") + "</div>";
+  box.innerHTML = '<div class="muted" style="font-size:12px;margin-top:8px">Features (tap to toggle; <em>cat</em> = stored as a category):</div><div class="chips">' +
+    names.map(n => '<span class="chip ' + (FEATS.has(n) ? "on" : "") + '" data-chip="' + esc(n) + '">' + esc(n) +
+      (CATS.has(n) ? ' <span class="muted">cat</span>' : "") + "</span>").join("") + "</div>";
   box.querySelectorAll(".chip").forEach(ch => ch.addEventListener("click", () => {
     const n = ch.dataset.chip, on = !FEATS.has(n);
     setFeat(n, on);
@@ -478,6 +531,9 @@ async function save() {
   // No preview and nothing chosen means every column (a fresh source)
   // or the list as it was (an edit); the chips carry it either way.
   body.features = feats;
+  body.categorical = [...CATS].filter(n => FEATS.has(n));
+  body.mode = SELECTED.kind === "type" ? "type" : "stored";
+  body.time_field = TIME_FIELD;
   $("saveStatus").textContent = "saving…";
   const r = EDITING ? await api("PUT", "/api/org/sources/" + enc(EDITING), body)
                     : await api("POST", "/api/org/sources", body);
@@ -496,7 +552,10 @@ async function edit(id) {
   $("editorTitle").textContent = "Edit source · " + s.name;
   $("url").value = s.url;
   await loadCatalog();
-  if (!CATALOG.find(q => q.id === s.query)) CATALOG.push({ id: s.query, title: "(not in the catalogue any more)", parameters: [] });
+  if (!CATALOG.find(q => q.id === s.query)) CATALOG.push({ id: s.query, title: "(not in the catalogue any more)", parameters: [], kind: s.mode === "type" ? "type" : "stored" });
+  FEATS = new Set(s.features || []);
+  CATS = new Set(s.categorical || []);
+  TIME_FIELD = s.time_field || "";
   selectQuery(s.query);
   renderParams(s.params || {});
   $("name").value = s.name;
@@ -506,13 +565,12 @@ async function edit(id) {
   $("calendar").value = s.calendar ? "true" : "false";
   $("enabled").value = s.enabled ? "true" : "false";
   $("saveBtn").textContent = "Save changes";
-  FEATS = new Set(s.features || []);
   renderChips();
   $("editor").scrollIntoView({ behavior: "smooth" });
 }
 
 function resetEditor() {
-  EDITING = null; SELECTED = null; PREVIEW = null; FEATS = new Set();
+  EDITING = null; SELECTED = null; PREVIEW = null; FEATS = new Set(); CATS = new Set(); TIME_FIELD = "";
   const chips = $("chips"); if (chips) chips.innerHTML = "";
   $("editorTitle").textContent = "Add a source";
   $("saveBtn").textContent = "Save source";

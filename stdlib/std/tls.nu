@@ -761,6 +761,43 @@ $ `stdlib/std/async_ffi.nu`
     ^ @ !( Vec u ) TlsErr { T found }
 }
 
+// The ALPN protocol a TLS 1.2 ServerHello selects (the 1.3 ServerHello
+// carries none: there it travels in EncryptedExtensions, __ee_alpn), or
+// an empty Vec. Same walk as __parse_server_hello, stopping at extension
+// 0x0010; the data is [list_len:2][name_len:1][name…].
+@ __sh_alpn ( Vec u ) msg → ( Vec u ) {
+    : ( Vec u ) out ( vec_new [u] )
+    : i n ( vec_len [u] msg )
+    ? < n 42 { ^ out } {}
+    : ~ i p 38  // past type, len, version, random
+    : i sidlen ( _t_bget msg p )
+    = p + + p 1 sidlen
+    = p + p 3  // cipher, compression
+    ? > + p 2 n { ^ out } {}
+    : i extlen ( _rdint msg p 2 )
+    = p + p 2
+    : i extend ? > + p extlen n n + p extlen
+    ~ < p extend {
+        ? > + p 4 extend { ^ out } {}
+        : i etype ( _rdint msg p 2 )
+        : i elen ( _rdint msg + p 2 2 )
+        : i edata + p 4
+        ? == etype 16 {
+            ? & >= elen 3 <= + edata elen extend {
+                : i nl ( _t_bget msg + edata 2 )
+                : ~ i j 0
+                ~ & < j nl < + + edata 3 j extend {
+                    ( vec_push [u] out # u ( _t_bget msg + + edata 3 j ) )
+                    = j + j 1
+                }
+            } {}
+            ^ out
+        } {}
+        = p + + p 4 elen
+    }
+    ^ out
+}
+
 // The raw cipher suite the server selected (2-byte value).
 @ __sh_suite ( Vec u ) msg → i {
     : i sidlen ( _t_bget msg 38 )
@@ -1649,6 +1686,14 @@ $ `stdlib/std/async_ffi.nu`
         ( _tls_cat tr sh )
         ( vec_free [u] . c kx_p256 )
         = . c kx_p256 ( bytes_slice . hs p256_priv 0 ( vec_len [u] . hs p256_priv ) )
+        // ALPN under 1.2 is answered in the ServerHello itself. Without
+        // this a load balancer that picked h2 there was spoken to in
+        // HTTP/1.1 — and every request to it failed.
+        : ( Vec u ) sel12 ( __sh_alpn sh )
+        ? & > ( vec_len [u] sel12 ) 0 ( _alpn_offered_packed . hs alpn sel12 ) {
+            ( vec_free [u] . c alpn_sel )
+            = . c alpn_sel sel12
+        } { ( vec_free [u] sel12 ) }
         ( _cli_hs_free hs )
         ^ ( __tls12_handshake c sh priv cpub random sessid ch tr )
     } {}

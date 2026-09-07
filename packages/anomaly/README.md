@@ -1010,7 +1010,8 @@ from where, which columns, into which model and how often. That is a
   "url": "https://opendata.fmi.fi/wfs",
   "query": "fmi::observations::weather::simple",
   "params": { "place": "Helsinki", "timestep": "60" },
-  "features": ["t2m", "ws_10min", "rh", "p_sea"],
+  "mode": "stored", "features": ["t2m", "ws_10min", "rh", "p_sea"],
+  "categorical": [], "time_field": "",
   "model": "helsinki_weather", "interval_minutes": 10, "history_hours": 24,
   "calendar": true, "enabled": true,
   "first_time": 1788670800, "last_time": 1788757200,
@@ -1018,19 +1019,47 @@ from where, which columns, into which model and how often. That is a
   "last_rows": 1, "runs": 144, "total_rows": 168 }
 ```
 
-The service speaks WFS 2.0 *stored queries* — named, parameterised
-requests. `POST /api/org/sources/catalog {"url": …}` fetches the
-service's `DescribeStoredQueries` and returns every query with its title,
-abstract and parameters, so a person can pick one; the dashboard's
-*Sources* page lists them and filters to the `::simple` family, whose
-answers are one `(location, time, parameter, value)` per member — the
-shape that pivots into a data point. `POST /api/org/sources/preview
-{"url", "query", "params", "hours"}` fetches the last hours of that query
-and answers with the columns it would give (`name`, `count`, `min`,
-`max`, `last`) and a few sample rows; the columns ticked become the
-source's `features` (an empty list means every column). `lat` and `lon`
-are columns too, for the case where a bounding box makes several
-stations answer.
+Two kinds of WFS answer, and the source's `mode` says which:
+
+- **`stored`** — a *stored query*, a named parameterised request such as
+  a weather service publishes (`fmi::observations::weather::simple`). Its
+  `::simple` family answers one `(location, time, parameter, value)` per
+  member, which pivots into one record per location and time. A run asks
+  for a time window, a day per request.
+- **`type`** — a *feature type*, what a GeoServer or a MapServer
+  publishes (the City of Helsinki's open data, the Finnish Transport
+  Infrastructure Agency's, SYKE's hydrology, the German weather service's
+  `dwd:RBSN_T2m`). A GetFeature by type name answers in wide form: one
+  feature per member with a property per element and a geometry. A run
+  fetches the type whole — at most `params.count` features (default
+  1000), `bbox`, `cql_filter` and `sortBy` passed through, WGS 84
+  latitude-first asked for by URN — and pivots one record per feature:
+  every simple property a number or a text, nested ones flattened, `NaN`
+  dropped, `gml_id`, `lat`/`lon` from the geometry's first coordinate.
+  Its clock is `time_field`: a named date property, `""` to take the
+  first property that reads as a date, or `none` to stamp every feature
+  with the fetch time — a snapshot series, the model learning how the
+  snapshots drift. The span moves only with the clocks of the features
+  that landed, so the same features never land twice and a reading
+  published late is not skipped.
+
+`POST /api/org/sources/catalog {"url": …}` fetches the service's
+`GetCapabilities` (every feature type, `kind: "type"`) and, where it
+offers them, `DescribeStoredQueries` (`kind: "stored"`, with parameters),
+so a person can pick one; the dashboard's *Sources* page lists both and,
+where stored queries exist, filters to the `::simple` family.
+`POST /api/org/sources/preview {"url", "query", "mode", "params", "hours",
+"time_field"}` fetches the last hours of a stored query, or a feature
+type's features, and answers with the columns it would give — `name`,
+`kind` (`number`, `text`, `time`, `mixed`), `count`, `distinct` and a
+few `values`, `min`, `max`, `last` — and a few sample rows. The columns
+taken become the source's `features` (an empty list means every column
+but `gml_id`); those named in `categorical` are stored as text, so the
+preprocessing makes a one-hot identity of them whatever they were — a
+coordinate, a station code — and an anomaly is judged per place. A
+column declared categorical keeps that kind from the model's first point
+(`meta_declare_column`), where a numeric-looking string would otherwise
+have been judged a number.
 
 A run asks the service for the window the source has not seen yet —
 `(last_time, now]`, or `history_hours` back on the first run — one day

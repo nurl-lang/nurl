@@ -548,6 +548,14 @@ $ `stdlib/core/vec.nu`
                     = cdone T
                 } {
                     ? == . nd ok 0 {
+                        // No node, but the scan moved: a comment, a PI or
+                        // whitespace before the closing tag was skipped,
+                        // and the close must be looked for from where it
+                        // stopped — from the old position the '>' found
+                        // would be the comment's own, the element would
+                        // end inside itself, and every sibling after it
+                        // would be lost to the parent.
+                        = cp . nd endpos
                         = cdone T
                     } {
                         ( vec_push [Xml] children . nd node )

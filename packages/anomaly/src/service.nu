@@ -4813,8 +4813,9 @@ $ `stdlib/std/thread.nu`
     ^ ( string_new )
 }
 
-// POST /api/org/sources/catalog — {url} → the stored queries the service
-// offers, for a person to pick from.
+// POST /api/org/sources/catalog — {url} → what the service offers, for a
+// person to pick from: its feature types (GetCapabilities) and, when it
+// has any, its stored queries (DescribeStoredQueries), stored ones first.
 @ __an_h_source_catalog HttpRequest req Params p → HttpResponse {
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
@@ -4827,14 +4828,45 @@ $ `stdlib/std/thread.nu`
         T body → {
             : String base ( __an_src_body_url body )
             ? > ( string_len base ) 0 {
-                : String u ( wfs_url_catalog ( string_data base ) )
+                : String u ( wfs_url_capabilities ( string_data base ) )
                 ( __an_src_unlock )
                 : !String String fr ( wfs_fetch ( string_data u ) )
                 ( __an_src_lock )
                 ( string_free u )
                 ?? fr {
                     T xml → {
-                        : Json cat ( wfs_catalog ( string_data xml ) )
+                        : ~ Json cat ( wfs_catalog ( string_data xml ) )
+                        // Stored queries, when the service has them, go in
+                        // front: they are what a weather service means.
+                        ? ( wfs_caps_has_stored ( string_data xml ) ) {
+                            : String su ( wfs_url_catalog ( string_data base ) )
+                            ( __an_src_unlock )
+                            : !String String sr ( wfs_fetch ( string_data su ) )
+                            ( __an_src_lock )
+                            ( string_free su )
+                            ?? sr {
+                                T sxml → {
+                                    : Json scat ( wfs_catalog ( string_data sxml ) )
+                                    ( string_free sxml )
+                                    ? ( json_obj_has scat `queries` ) {
+                                        : Json merged ( json_arr_new )
+                                        ?? ( json_obj_get scat `queries` ) {
+                                            T sq → { ( json_arr_each sq \ Json q → v { ( json_arr_push merged ( json_clone q ) ) } ) }
+                                            F _ → {}
+                                        }
+                                        ?? ( json_obj_get cat `queries` ) {
+                                            T tq → { ( json_arr_each tq \ Json q → v { ( json_arr_push merged ( json_clone q ) ) } ) }
+                                            F _ → {}
+                                        }
+                                        ( json_free cat )
+                                        = cat ( json_obj_new )
+                                        ( json_obj_set cat `queries` merged )
+                                    } {}
+                                    ( json_free scat )
+                                }
+                                F swhy → { ( string_free swhy ) }
+                            }
+                        } {}
                         ( string_free xml )
                         ( http_response_free r )
                         ? ( json_obj_has cat `error` ) {
@@ -4863,9 +4895,38 @@ $ `stdlib/std/thread.nu`
     ^ r
 }
 
+// One text value into a column's tally: the distinct values it has shown
+// (a handful kept, the count of them bounded) — what tells a category
+// from an identity and a date from a name.
+@ __an_src_col_text Json c s txt → v {
+    ?? ( json_obj_get c `values` ) {
+        T vals → {
+            : ~ b seen F
+            : i nv ( json_arr_len vals )
+            : ~ i k 0
+            ~ & < k nv ! seen {
+                ?? ( json_arr_get vals k ) {
+                    T x → { ? == ( nurl_str_eq ( json_str_data x ) txt ) 1 { = seen T } {} }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            // Only a handful of values are kept, so past them a repeat of
+            // an unkept value counts as new: the tally is a lower bound.
+            ? seen {} {
+                : i nd ?? ( json_obj_get c `distinct` ) { T dv → ( json_as_int dv ) F _ → 0 }
+                ( json_obj_set c `distinct` ( json_int + nd 1 ) )
+                ? < nv 8 { ( json_arr_push vals ( json_str_lit txt ) ) } {}
+            }
+        }
+        F _ → {}
+    }
+}
+
 // Per-column statistics over pivoted rows: how many rows carry it, its
-// range, and the newest value — what a person needs to decide whether a
-// column is a feature.
+// kind (number, text, time, mixed), its range or its distinct values,
+// and the newest value — what a person needs to decide whether a column
+// is a feature, and whether as a number or a category.
 @ __an_src_columns ( Vec Json ) rows → Json {
     : Json cols ( json_obj_new )
     : i n ( vec_len [Json] rows )
@@ -4884,31 +4945,57 @@ $ `stdlib/std/thread.nu`
                             ? clock {} {
                                 ?? ( json_obj_get row ks ) {
                                     T v → {
-                                        ?? ( json_num_as_f v ) {
-                                            T x → {
-                                                ?? ( json_obj_get cols ks ) {
-                                                    T c → {
-                                                        : i cnt ?? ( json_obj_get c `count` ) { T cv → ( json_as_int cv ) F _ → 0 }
-                                                        : f lo ?? ( json_obj_get c `min` ) { T lv → ?? ( json_num_as_f lv ) { T q → q F _ → x } F _ → x }
-                                                        : f hi ?? ( json_obj_get c `max` ) { T hv → ?? ( json_num_as_f hv ) { T q → q F _ → x } F _ → x }
-                                                        ( json_obj_set c `count` ( json_int + cnt 1 ) )
-                                                        ? < x lo { ( json_obj_set c `min` ( json_float x ) ) } {}
-                                                        ? > x hi { ( json_obj_set c `max` ( json_float x ) ) } {}
-                                                        ( json_obj_set c `last` ( json_float x ) )
-                                                    }
-                                                    F _ → {
-                                                        : Json c ( json_obj_new )
-                                                        ( json_obj_set c `name` ( json_str_lit ks ) )
-                                                        ( json_obj_set c `count` ( json_int 1 ) )
-                                                        ( json_obj_set c `min` ( json_float x ) )
-                                                        ( json_obj_set c `max` ( json_float x ) )
-                                                        ( json_obj_set c `last` ( json_float x ) )
-                                                        ( json_obj_set cols ks c )
-                                                    }
+                                        : b isnum ( json_is_num v )
+                                        : b istxt ( json_is_str v )
+                                        ? | isnum istxt {
+                                            : Json c ?? ( json_obj_get cols ks ) {
+                                                T have → ( json_clone have )
+                                                F _ → {
+                                                    : Json fresh ( json_obj_new )
+                                                    ( json_obj_set fresh `name` ( json_str_lit ks ) )
+                                                    ( json_obj_set fresh `count` ( json_int 0 ) )
+                                                    ( json_obj_set fresh `numbers` ( json_int 0 ) )
+                                                    ( json_obj_set fresh `texts` ( json_int 0 ) )
+                                                    ( json_obj_set fresh `times` ( json_int 0 ) )
+                                                    ( json_obj_set fresh `distinct` ( json_int 0 ) )
+                                                    ( json_obj_set fresh `values` ( json_arr_new ) )
+                                                    fresh
                                                 }
                                             }
-                                            F _ → {}
-                                        }
+                                            : i cnt ?? ( json_obj_get c `count` ) { T cv → ( json_as_int cv ) F _ → 0 }
+                                            ( json_obj_set c `count` ( json_int + cnt 1 ) )
+                                            ? isnum {
+                                                ?? ( json_num_as_f v ) {
+                                                    T x → {
+                                                        : i nn ?? ( json_obj_get c `numbers` ) { T nv → ( json_as_int nv ) F _ → 0 }
+                                                        ( json_obj_set c `numbers` ( json_int + nn 1 ) )
+                                                        : f lo ?? ( json_obj_get c `min` ) { T lv → ?? ( json_num_as_f lv ) { T q → q F _ → x } F _ → x }
+                                                        : f hi ?? ( json_obj_get c `max` ) { T hv → ?? ( json_num_as_f hv ) { T q → q F _ → x } F _ → x }
+                                                        ? | ! ( json_obj_has c `min` ) < x lo { ( json_obj_set c `min` ( json_float x ) ) } {}
+                                                        ? | ! ( json_obj_has c `max` ) > x hi { ( json_obj_set c `max` ( json_float x ) ) } {}
+                                                        ( json_obj_set c `last` ( json_float x ) )
+                                                        // A handful of distinct numbers is a code, not a
+                                                        // measurement: tallied like text so the page can say so.
+                                                        : String xt ( json_stringify v )
+                                                        ( __an_src_col_text c ( string_data xt ) )
+                                                        ( string_free xt )
+                                                    }
+                                                    F _ → {}
+                                                }
+                                            } {
+                                                : s txt ( json_str_data v )
+                                                : i nt ?? ( json_obj_get c `texts` ) { T tv → ( json_as_int tv ) F _ → 0 }
+                                                ( json_obj_set c `texts` ( json_int + nt 1 ) )
+                                                : ImpStamp st ( imp_stamp_of_text txt )
+                                                ? | == . st kind STAMP_DATETIME == . st kind STAMP_DATE {
+                                                    : i ntm ?? ( json_obj_get c `times` ) { T mv → ( json_as_int mv ) F _ → 0 }
+                                                    ( json_obj_set c `times` ( json_int + ntm 1 ) )
+                                                } {}
+                                                ( json_obj_set c `last` ( json_str_lit txt ) )
+                                                ( __an_src_col_text c txt )
+                                            }
+                                            ( json_obj_set cols ks c )
+                                        } {}
                                     }
                                     F _ → {}
                                 }
@@ -4924,7 +5011,8 @@ $ `stdlib/std/thread.nu`
         }
         = r + r 1
     }
-    // An array, in the order the columns first appeared.
+    // An array, in the order the columns first appeared, each with its
+    // kind: what most of its values were.
     : Json arr ( json_arr_new )
     : ( Vec String ) names ( json_obj_keys cols )
     : i nn ( vec_len [String] names )
@@ -4933,7 +5021,19 @@ $ `stdlib/std/thread.nu`
         ?? ( vec_get [String] names q ) {
             T nm → {
                 ?? ( json_obj_get cols ( string_data nm ) ) {
-                    T c → { ( json_arr_push arr ( json_clone c ) ) }
+                    T c → {
+                        : Json o ( json_clone c )
+                        : i cnt ?? ( json_obj_get o `count` ) { T cv → ( json_as_int cv ) F _ → 0 }
+                        : i nnum ?? ( json_obj_get o `numbers` ) { T nv → ( json_as_int nv ) F _ → 0 }
+                        : i ntxt ?? ( json_obj_get o `texts` ) { T tv → ( json_as_int tv ) F _ → 0 }
+                        : i ntm ?? ( json_obj_get o `times` ) { T mv → ( json_as_int mv ) F _ → 0 }
+                        : ~ s kind `mixed`
+                        ? == nnum cnt { = kind `number` } {}
+                        ? & == ntxt cnt == ntm cnt { = kind `time` } {}
+                        ? & == ntxt cnt < ntm cnt { = kind `text` } {}
+                        ( json_obj_set o `kind` ( json_str_lit kind ) )
+                        ( json_arr_push arr o )
+                    }
                     F _ → {}
                 }
             }

@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.18.0
+
+- **Any WFS: feature types, not only stored queries.** A GeoServer or a
+  MapServer — the City of Helsinki's open data, the Finnish Transport
+  Infrastructure Agency's, SYKE's, the German weather service's two — has
+  no stored queries worth the name but publishes feature types, and a
+  GetFeature by type name answers in wide form: one feature per member, a
+  property per element, a geometry. The catalogue now reads
+  `GetCapabilities` (every feature type, `kind: "type"`) and, where the
+  service offers them, `DescribeStoredQueries` (`kind: "stored"`); a
+  feature-type source is fetched whole on every run (at most `count`
+  features, `bbox` / `cql_filter` / `sortBy` passed through, WGS 84
+  latitude-first asked for by URN), pivoted one record per feature — every
+  simple property a number or a text, nested ones flattened, `NaN` dropped,
+  `gml_id`, `lat`/`lon` from the geometry's first coordinate — and its clock
+  read from a chosen or detected date property (`time_field`; `none` stamps
+  each fetch with its own time, a snapshot series). Its span moves only
+  with the clocks of features that landed, so the same features never land
+  twice and a reading published late is not skipped.
+- **Categorical columns.** A source's `categorical` list names the chosen
+  columns to store as text — a coordinate, a station code — so the model's
+  one-hot encoding makes an identity of them and an anomaly is judged per
+  place. The preprocessing gained `meta_declare_column`: a column declared
+  categorical before its first value keeps that kind, where a
+  numeric-looking string would have been judged a number. The preview
+  reports each column's kind (number, text, time, mixed), its distinct
+  values, and the Sources page has a number/category toggle per column and
+  a clock selector.
+- **Fixed in the toolchain on the way.** `stdlib/ext/xml.nu` ended an
+  element inside a comment that stood right before its closing tag, losing
+  every later sibling (a MapServer `GetCapabilities` parsed to one child).
+  `stdlib/std/tls.nu` never read the ALPN a TLS 1.2 ServerHello selects,
+  so a load balancer that chose h2 there (avoinapi.vaylapilvi.fi) was
+  spoken to in HTTP/1.1 and every request to it failed.
+
 ## 0.17.1
 
 - **The Sources page lays out.** The list was a ten-column table: on a
