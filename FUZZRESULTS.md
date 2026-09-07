@@ -5,7 +5,7 @@
 > the same way `bench.yml` commits the benchmark numbers. Do not edit by hand;
 > curate the findings log in [`tools/fuzz/FINDINGS.json`](tools/fuzz/FINDINGS.json).
 
-_Last run: **2026-08-31** · toolchain `v0.57.0-1-g67091b9b` · commit `67091b9b`_
+_Last run: **2026-09-07** · toolchain `v0.61.0-9-g67dc0373` · commit `67dc0373`_
 
 **Latest run:** ✅ **clean** — no findings
 
