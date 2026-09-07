@@ -4590,6 +4590,27 @@ $ `stdlib/std/thread.nu`
     : String id ( __an_src_id src )
     ( json_obj_set o `running` ( json_bool ( source_is_running org ( string_data id ) ) ) )
     ( string_free id )
+    // Header values are an administrator's secrets (a key, a token); the
+    // record is every member's to read. The names are shown, the values
+    // masked — and the mask sent back on an edit keeps the stored value.
+    ?? ( json_obj_get src `headers` ) {
+        T h → {
+            : Json masked ( json_obj_new )
+            : ( Vec String ) keys ( json_obj_keys h )
+            : i n ( vec_len [String] keys )
+            : ~ i k 0
+            ~ < k n {
+                ?? ( vec_get [String] keys k ) {
+                    T key → { ( json_obj_set masked ( string_data key ) ( json_str_lit SRC_MASK ) ) }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( vec_free_with [String] keys \ String s → v { ( string_free s ) } )
+            ( json_obj_set o `headers` masked )
+        }
+        F _ → {}
+    }
     ^ o
 }
 
@@ -5065,9 +5086,28 @@ $ `stdlib/std/thread.nu`
             ( json_obj_set tmp `url` ( json_str_lit `` ) )
             ( json_obj_set tmp `query` ( json_str_lit `` ) )
             ( json_obj_set tmp `params` ( json_obj_new ) )
+            ( json_obj_set tmp `headers` ( json_obj_new ) )
+            ( json_obj_set tmp `method` ( json_str_lit `GET` ) )
             ( json_obj_set tmp `model` ( json_str_lit `preview` ) )
             ( json_obj_set tmp `name` ( json_str_lit `preview` ) )
             : Json spec ( json_clone body )
+            // A preview of a saved source sends the mask for its headers;
+            // the stored values stand in.
+            ?? ( json_obj_get body `id` ) {
+                T idv → {
+                    ? ( json_is_str idv ) {
+                        : Principal pme . gate who
+                        ?? ( source_load ( string_data . pme org ) ( json_str_data idv ) ) {
+                            T saved → {
+                                ?? ( json_obj_get saved `headers` ) { T sh → { ( json_obj_set tmp `headers` ( json_clone sh ) ) } F _ → {} }
+                                ( json_free saved )
+                            }
+                            F _ → {}
+                        }
+                    } {}
+                }
+                F _ → {}
+            }
             ( json_obj_set spec `model` ( json_str_lit `preview` ) )
             ( json_obj_set spec `name` ( json_str_lit `preview` ) )
             : String err ( source_apply tmp spec )

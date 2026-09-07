@@ -19,6 +19,10 @@
 //              coordinate, the clock from a date property or the fetch
 //              time), and a feature-type source: its window, a categorical
 //              coordinate stored as text.
+//   http     — a JSON answer as records: an array at a path, an object as
+//              a snapshot, nesting flattened, the clock detected; an HTTP
+//              source with headers, masked on the way out and kept when
+//              the mask comes back.
 //   due      — what the scheduler would run and when.
 //   routes   — the HTTP surface through router_handle, no sockets.
 // Store root: $ANOMALY_TEST_DIR (default ./anomaly_sources_test).
@@ -36,6 +40,7 @@ $ `stdlib/ext/http_router.nu`
 $ `src/store.nu`
 $ `src/dynamic.nu`
 $ `src/wfs.nu`
+$ `src/httpsrc.nu`
 $ `src/sources.nu`
 $ `src/service.nu`
 
@@ -237,6 +242,14 @@ $ `src/service.nu`
     </ms:cities>
   </wfs:member>
 </wfs:FeatureCollection>`
+
+: s JSON_ARRAY `{"status":"ok","data":{"items":[
+  {"id":"st-1","name":"Kumpula","measured":"2026-09-07T05:00:00Z","reading":{"temperature":7.5,"humidity":82},"ok":true,"tags":["a","b"],"note":null},
+  {"id":"st-2","name":"Kaisaniemi","measured":"2026-09-07T06:00:00Z","reading":{"temperature":8.25,"humidity":80},"ok":false},
+  {"id":"st-3","name":"Harmaja","measured":"2026-09-07T06:00:00Z","reading":{"temperature":"NaN","humidity":90}}
+]}}`
+
+: s JSON_OBJECT `{"latitude":60.17,"longitude":24.94,"current":{"time":"2026-09-07T13:15","temperature_2m":18.3,"wind_speed_10m":9.4},"units":{"temperature_2m":"°C"}}`
 
 : s EMPTY_FC_XML `<?xml version="1.0" encoding="UTF-8"?>
 <wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" numberReturned="0" numberMatched="0">
@@ -928,6 +941,129 @@ $ `src/service.nu`
     ^ @ SvcOut { status parsed }
 }
 
+// ── http ──────────────────────────────────────────────────────────────
+
+@ test_http Router r → v {
+    : WfsPivot pa ( http_pivot JSON_ARRAY `data.items` `` 5000 )
+    ( check == ( string_len . pa err ) 0 `http pivot: array parses` )
+    ( check == ( vec_len [Json] . pa rows ) 3 `http pivot: three records` )
+    ( check ( has_col . pa columns `reading_temperature` ) `http pivot: nested keys flattened` )
+    ( check ( has_col . pa columns `ok` ) `http pivot: booleans are columns` )
+    ( check ! ( has_col . pa columns `tags` ) `http pivot: arrays left out` )
+    ( check ! ( has_col . pa columns `note` ) `http pivot: nulls left out` )
+    ?? ( vec_get [Json] . pa rows 0 ) {
+        T r0 → {
+            ( check == ( jint r0 `timestamp` ) T_0500 `http pivot: clock detected from "measured"` )
+            ( check ( seq ( jstr r0 `name` ) `Kumpula` ) `http pivot: text kept` )
+            ( check == ( jint r0 `ok` ) 1 `http pivot: true is 1` )
+            ( check == ( jint r0 `reading_humidity` ) 82 `http pivot: nested number` )
+        }
+        F _ → { ( check F `http pivot: row 0` ) }
+    }
+    ?? ( vec_get [Json] . pa rows 2 ) {
+        T r2 → { ( check ( seq ( jstr r2 `reading_temperature` ) `NaN` ) `http pivot: a "NaN" string stays text (the column table will say mixed)` ) }
+        F _ → { ( check F `http pivot: row 2` ) }
+    }
+    ( wfs_pivot_free pa )
+    : WfsPivot po ( http_pivot JSON_OBJECT `current` `` 7000 )
+    ( check == ( vec_len [Json] . po rows ) 1 `http pivot: an object is one record` )
+    ?? ( vec_get [Json] . po rows 0 ) {
+        T r0 → {
+            ( check ( jhas r0 `timestamp` ) `http pivot: naive time read` )
+            ( check ( seq ( jstr r0 `time` ) `2026-09-07T13:15:00Z` ) `http pivot: naive time taken as UTC` )
+            ( check == ( jint r0 `wind_speed_10m` ) 9 `http pivot: value` )
+        }
+        F _ → { ( check F `http pivot: object row` ) }
+    }
+    ( wfs_pivot_free po )
+    : WfsPivot pw ( http_pivot JSON_OBJECT `` `none` 7000 )
+    ?? ( vec_get [Json] . pw rows 0 ) {
+        T r0 → { ( check & ( jhas r0 `current_temperature_2m` ) == ( jint r0 `timestamp` ) 7000 `http pivot: whole answer flattened, no clock → now` ) }
+        F _ → { ( check F `http pivot: whole` ) }
+    }
+    ( wfs_pivot_free pw )
+    : WfsPivot pm ( http_pivot JSON_OBJECT `nowhere.here` `` 1 )
+    ( check ( string_contains . pm err `nothing at the path` ) `http pivot: a missing path says so` )
+    ( wfs_pivot_free pm )
+    : WfsPivot pj ( http_pivot `<html>` `` `` 1 )
+    ( check ( string_contains . pj err `not JSON` ) `http pivot: HTML is not JSON` )
+    ( wfs_pivot_free pj )
+
+    // A source: created with headers, listed masked, edited with the mask.
+    : SvcOut c1 ( fire r `POST` `/api/org/sources` `` `{"kind":"http","url":"http://127.0.0.1:9/api/v1/readings?station=1","method":"GET","headers":{"Digitraffic-User":"anomaly-test","Authorization":"Bearer s3cret"},"path":"data.items","features":["reading_temperature","name"],"categorical":["name"],"model":"http_test"}` )
+    ( check == . c1 status 201 `http source: created` )
+    : String id ( string_from ( jstr . c1 body `id` ) )
+    ( check ( seq ( jstr . c1 body `kind` ) `http` ) `http source: kind kept` )
+    ( check ( seq ( jstr . c1 body `name` ) `http://127.0.0.1:9/api/v1/readings?station=1` ) `http source: named after the url` )
+    ?? ( json_obj_get . c1 body `headers` ) {
+        T h → { ( check ( seq ( jstr h `Authorization` ) `••••••••` ) `http source: header values masked in the answer` ) }
+        F _ → { ( check F `http source: headers` ) }
+    }
+    ( json_free . c1 body )
+    ?? ( source_load ORG ( string_data id ) ) {
+        T src → {
+            ?? ( json_obj_get src `headers` ) {
+                T h → { ( check ( seq ( jstr h `Authorization` ) `Bearer s3cret` ) `http source: the stored value is the real one` ) }
+                F _ → { ( check F `http source: stored headers` ) }
+            }
+            ( check ( source_is_type src ) `http source: fetched whole each run` )
+            ( json_free src )
+        }
+        F _ → { ( check F `http source: load` ) }
+    }
+    : String path ( string_from `/api/org/sources/` )
+    ( string_push_str path ( string_data id ) )
+    : SvcOut u1 ( fire r `PUT` ( string_data path ) `` `{"headers":{"Digitraffic-User":"renamed","Authorization":"••••••••"},"path":"data.items"}` )
+    ( check == . u1 status 200 `http source: edited` )
+    ( json_free . u1 body )
+    ?? ( source_load ORG ( string_data id ) ) {
+        T src → {
+            ?? ( json_obj_get src `headers` ) {
+                T h → {
+                    ( check ( seq ( jstr h `Authorization` ) `Bearer s3cret` ) `http source: the mask sent back keeps the stored value` )
+                    ( check ( seq ( jstr h `Digitraffic-User` ) `renamed` ) `http source: a new value replaces` )
+                }
+                F _ → { ( check F `http source: edited headers` ) }
+            }
+            ( json_free src )
+        }
+        F _ → { ( check F `http source: reload` ) }
+    }
+    : SvcOut u2 ( fire r `PUT` ( string_data path ) `` `{"headers":{"Bad Name":"x"}}` )
+    ( check == . u2 status 400 `http source: a header name with a space is refused` )
+    ( json_free . u2 body )
+    : SvcOut u3 ( fire r `PUT` ( string_data path ) `` `{"method":"DELETE"}` )
+    ( check == . u3 status 400 `http source: DELETE is not a poll` )
+    ( json_free . u3 body )
+    : SvcOut c2 ( fire r `POST` `/api/org/sources` `` `{"kind":"http","url":"https://example.org/x","model":"m"}` )
+    ( check == . c2 status 201 `http source: no query needed` )
+    : String id2 ( string_from ( jstr . c2 body `id` ) )
+    ( json_free . c2 body )
+    : b _d2 ( source_delete ORG ( string_data id2 ) )
+    ( string_free id2 )
+    : SvcOut c3 ( fire r `POST` `/api/org/sources` `` `{"kind":"ftp","url":"https://example.org/x","model":"m"}` )
+    ( check == . c3 status 400 `http source: an unknown kind is refused` )
+    ( json_free . c3 body )
+
+    // A run against a closed port: the failure on the record.
+    : String rpath ( string_clone path )
+    ( string_push_str rpath `/run` )
+    : SvcOut r1 ( fire r `POST` ( string_data rpath ) `` `` )
+    ( check == . r1 status 400 `http source: an unreachable url fails the run` )
+    ( check ( string_contains ( string_from ( jstr . r1 body `message` ) ) `could not fetch` ) `http source: and says why` )
+    ( json_free . r1 body )
+    ( string_free rpath )
+    : SvcOut p1 ( fire r `POST` `/api/org/sources/preview` `` `{"kind":"http","url":"http://127.0.0.1:9/x","path":"","headers":{"X-Key":"k"}}` )
+    ( check == . p1 status 502 `http source: an unreachable preview is 502` )
+    ( json_free . p1 body )
+
+    : SvcOut d1 ( fire r `DELETE` ( string_data path ) `` `` )
+    ( check == . d1 status 200 `http source: deleted` )
+    ( json_free . d1 body )
+    ( string_free path )
+    ( string_free id )
+}
+
 @ test_routes → v {
     : Router r ( anomaly_service_router )
 
@@ -1040,6 +1176,9 @@ $ `src/service.nu`
     ( test_windows )
     ( test_run st )
     ( test_wide st )
+    : Router rh ( anomaly_service_router )
+    ( test_http rh )
+    ( router_free rh )
     ( test_due )
     ( test_routes )
 
