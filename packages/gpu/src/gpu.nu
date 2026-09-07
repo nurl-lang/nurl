@@ -612,11 +612,15 @@ $ `cpu.nu`
     : ( @ v ) w1 \ → v { ( nurl_memcpy # *u + dst q # *u + src q q ) }
     : ( @ v ) w2 \ → v { ( nurl_memcpy # *u + dst o2 # *u + src o2 q ) }
     : ( @ v ) w3 \ → v { ( nurl_memcpy # *u + dst o3 # *u + src o3 - n o3 ) }
-    ?? ( thread_spawn w1 ) {
+    // Owned spawns: the runtime frees each closure's env when its body
+    // returns (a borrowing spawn left one env per stripe behind — three
+    // 16-byte blocks per large upload, found by LeakSanitizer). A spawn
+    // that fails runs the stripe here and frees the env by hand.
+    ?? ( thread_spawn_owned w1 ) {
         T t1 → {
-            ?? ( thread_spawn w2 ) {
+            ?? ( thread_spawn_owned w2 ) {
                 T t2 → {
-                    ?? ( thread_spawn w3 ) {
+                    ?? ( thread_spawn_owned w3 ) {
                         T t3 → {
                             ( nurl_memcpy # *u dst # *u src q )
                             : i _j3 ( thread_join t3 )
@@ -624,6 +628,7 @@ $ `cpu.nu`
                         F _ → {
                             ( nurl_memcpy # *u dst # *u src q )
                             ( w3 )
+                            ( nurl_free # s # *u w3 1 )
                         }
                     }
                     : i _j2 ( thread_join t2 )
@@ -632,6 +637,8 @@ $ `cpu.nu`
                     ( nurl_memcpy # *u dst # *u src q )
                     ( w2 )
                     ( w3 )
+                    ( nurl_free # s # *u w2 1 )
+                    ( nurl_free # s # *u w3 1 )
                 }
             }
             : i _j1 ( thread_join t1 )
@@ -641,6 +648,9 @@ $ `cpu.nu`
             ( w1 )
             ( w2 )
             ( w3 )
+            ( nurl_free # s # *u w1 1 )
+            ( nurl_free # s # *u w2 1 )
+            ( nurl_free # s # *u w3 1 )
         }
     }
 }

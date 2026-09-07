@@ -1,0 +1,9 @@
+[package]
+name = "arima"
+version = "0.1.0"
+description = "Seasonal ARIMA forecasting in pure NURL — exact, fast, streaming. SARIMA(p,d,q)(P,D,Q)_s with an optional mean, estimated the way R's arima() and statsmodels do: conditional sum of squares first, then exact Gaussian maximum likelihood by the Kalman filter over the state-space form with the model's own stationary covariance as the start (solved by doubling), σ² concentrated out, BFGS over Jones-transformed parameters so every polynomial stays stationary and invertible. Forecasts with standard errors come from the full state-space model — the ARMA state with the differencing folded in — filtered over the raw series with a diffuse start, so one new observation is one Kalman step: arima_update absorbs it, reports the innovation and its z-score, and the next forecast starts from there — the streaming shape a live detector needs, a model trained once, kept current point by point, refitted on a schedule. Stepwise order selection (KPSS differences, seasonal-lag autocorrelation, the Hyndman–Khandakar search by AICc), standard errors from the numerical Hessian, bit-exact JSON persistence with the state. Matches statsmodels' coefficients, log-likelihoods, forecasts and standard errors to 1e-5 on its fixtures and fits 10 000 points of ARMA(2,1) in 60 ms where statsmodels takes 460. A CLI (arima fit|auto|forecast) reads a column of numbers from a file."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+gpu = { path = "../gpu", version = "^0" }
+gpukit = { path = "../gpukit", version = "^0" }

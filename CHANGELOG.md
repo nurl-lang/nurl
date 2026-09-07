@@ -6,6 +6,34 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`packages/arima` 0.1.0 — seasonal ARIMA forecasting: exact, fast,
+  streaming.** SARIMA(p,d,q)(P,D,Q)_s estimated CSS-ML — exact Gaussian
+  maximum likelihood by the Kalman filter with the model's own stationary
+  covariance as the start, solved in closed form — matching statsmodels to
+  1e-5 on eight recorded fixtures and fitting 10 000 points of ARMA(2,1) in
+  16 ms where statsmodels takes 460. Forecasts and one-step updates run on
+  the full state-space model, so a live detector can keep a model current
+  point by point and judge each point by its innovation. The optimizer is a
+  request/absorb state machine, so K fits share one batch of likelihoods per
+  round — on the machine's threads, or on a CUDA device bit-identically.
+  Stepwise order selection, standard errors, bit-exact JSON persistence, a
+  CLI. [`packages/arima/README.md`](packages/arima/README.md).
+
+### Fixed
+
+- **`packages/gpu` 0.11.3: the striped upload copy leaked its closures.**
+  `__gpu_par_memcpy` spawned its stripe threads with the borrowing
+  `thread_spawn` and never freed the closures' environments — three blocks
+  per large upload, found by LeakSanitizer while sanitizing `arima`. The
+  stripes are `thread_spawn_owned` now, and a spawn that fails runs the
+  stripe inline and frees the env by hand. The rule, for the record: a
+  closure handed to `thread_spawn` is borrowed, and the spawner frees its
+  env after the join (`( nurl_free # s # *u f 1 )`) — or spawns it owned.
+
 ## [0.61.1] — 2026-09-07
 
 ### Added
