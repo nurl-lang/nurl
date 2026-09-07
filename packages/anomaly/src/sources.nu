@@ -9,15 +9,24 @@
 //   <root>/orgs/<org>/sources/<id>.json
 //
 //   { "id", "name", "kind": "wfs", "url", "query", "params": {…},
-//     "features": ["t2m", "ws_10min"], "model", "interval_minutes",
-//     "history_hours", "calendar", "enabled",
+//     "mode": "stored" | "type",           a stored query, or a feature type
+//     "features": ["t2m", "ws_10min"],     the columns kept (empty = all)
+//     "categorical": ["lat", "lon"],       columns stored as text → one-hot
+//     "time_field": "",                    a feature type's clock ("" = detect)
+//     "model", "interval_minutes", "history_hours", "calendar", "enabled",
 //     "created_by", "created_at", "updated_at",
 //     "first_time", "last_time",           the span of observation time fetched so far
 //     "last_run", "last_status", "last_error", "last_rows", "runs", "total_rows" }
 //
-// A run asks the service for the window the source has not seen yet —
-// (last_time, now] — pivots the answer into points (src/wfs.nu), keeps
-// the chosen columns, and imports them with their own timestamps
+// A stored query is asked for the window the source has not seen yet —
+// (last_time, now], a day per request. A feature type is fetched whole
+// each run (at most `count` features): its features carry their own
+// clock in a date property, or none — then every run stores a snapshot
+// stamped with the fetch time, and the model learns how the snapshots
+// drift. Either way the answer is pivoted into points (src/wfs.nu), the
+// chosen columns kept — a categorical one written as text, so a
+// coordinate or a station name becomes a one-hot identity and anomalies
+// are judged per place — and imported with their own timestamps
 // (model_import), so a run is the same act as importing a file of
 // history and the model learns from it the same way. The first run
 // reaches back `history_hours`; a backfill reaches further back, to
@@ -58,6 +67,11 @@ $ `src/wfs.nu`
 : i SRC_CHUNK_SECS 86400  // one request covers at most a day
 : i SRC_TICK_MS 15000  // the scheduler's wake-up
 : s SRC_KIND_WFS `wfs`
+: s SRC_MODE_STORED `stored`
+: s SRC_MODE_TYPE `type`
+// A feature type's forward window has no upper edge: a forecast's rows
+// lie in the future and still belong to this run.
+: i SRC_FAR_FUTURE 315360000
 
 // ── Small JSON readers (owned copies, defaults) ───────────────────────
 
@@ -330,6 +344,46 @@ $ `src/wfs.nu`
         }
     } {}
 
+    ? ( json_obj_has body `mode` ) {
+        : String mode ( __src_jstr body `mode` )
+        : b ok | == ( nurl_str_eq ( string_data mode ) SRC_MODE_STORED ) 1 == ( nurl_str_eq ( string_data mode ) SRC_MODE_TYPE ) 1
+        ? ok { ( __src_set_str src `mode` ( string_data mode ) ) } {}
+        ( string_free mode )
+        ? ok {} { ^ ( string_from `mode must be "stored" (a stored query) or "type" (a feature type)` ) }
+    } {}
+
+    ? ( json_obj_has body `time_field` ) {
+        : String tf ( __src_jstr body `time_field` )
+        : b ok ( __src_text_ok ( string_data tf ) 64 )
+        ? ok { ( __src_set_str src `time_field` ( string_data tf ) ) } {}
+        ( string_free tf )
+        ? ok {} { ^ ( string_from `time_field must be a column name` ) }
+    } {}
+
+    ? ( json_obj_has body `categorical` ) {
+        ?? ( json_obj_get body `categorical` ) {
+            T cv → {
+                ? ( json_is_arr cv ) {} { ^ ( string_from `categorical must be an array of column names` ) }
+                : i ncv ( json_arr_len cv )
+                ? > ncv SRC_FEATURES_MAX { ^ ( string_from `too many categorical columns` ) } {}
+                : ~ i k 0
+                ~ < k ncv {
+                    ?? ( json_arr_get cv k ) {
+                        T f → {
+                            ? & ( json_is_str f ) & > ( nurl_str_len ( json_str_data f ) ) 0 ( __src_text_ok ( json_str_data f ) 64 ) {} {
+                                ^ ( string_from `every categorical entry must be a column name` )
+                            }
+                        }
+                        F _ → {}
+                    }
+                    = k + k 1
+                }
+                ( json_obj_set src `categorical` ( json_clone cv ) )
+            }
+            F _ → {}
+        }
+    } {}
+
     ? ( json_obj_has body `features` ) {
         ?? ( json_obj_get body `features` ) {
             T fv → {
@@ -412,7 +466,10 @@ $ `src/wfs.nu`
     ( __src_set_str o `url` `` )
     ( __src_set_str o `query` `` )
     ( json_obj_set o `params` ( json_obj_new ) )
+    ( __src_set_str o `mode` SRC_MODE_STORED )
     ( json_obj_set o `features` ( json_arr_new ) )
+    ( json_obj_set o `categorical` ( json_arr_new ) )
+    ( __src_set_str o `time_field` `` )
     ( __src_set_str o `model` `` )
     ( __src_set_int o `interval_minutes` SRC_INTERVAL_DEFAULT )
     ( __src_set_int o `history_hours` SRC_HISTORY_DEFAULT )
@@ -456,6 +513,8 @@ $ `src/wfs.nu`
             : String u0 ( __src_jstr src `url` )
             : String q0 ( __src_jstr src `query` )
             : String p0 ?? ( json_obj_get src `params` ) { T p → ( json_stringify p ) F _ → ( string_new ) }
+            ( string_push_str p0 ( string_data ( __src_jstr src `mode` ) ) )
+            ( string_push_str p0 ( string_data ( __src_jstr src `time_field` ) ) )
             : String err ( source_apply src body )
             ? > ( string_len err ) 0 {
                 ( string_free u0 ) ( string_free q0 ) ( string_free p0 )
@@ -466,6 +525,8 @@ $ `src/wfs.nu`
             : String u1 ( __src_jstr src `url` )
             : String q1 ( __src_jstr src `query` )
             : String p1 ?? ( json_obj_get src `params` ) { T p → ( json_stringify p ) F _ → ( string_new ) }
+            ( string_push_str p1 ( string_data ( __src_jstr src `mode` ) ) )
+            ( string_push_str p1 ( string_data ( __src_jstr src `time_field` ) ) )
             : b same & & ( string_eq u0 u1 ) ( string_eq q0 q1 ) ( string_eq p0 p1 )
             ( string_free u0 ) ( string_free q0 ) ( string_free p0 )
             ( string_free u1 ) ( string_free q1 ) ( string_free p1 )
@@ -492,9 +553,23 @@ $ `src/wfs.nu`
 // seen to now, or `history_hours` back on the first run. Backfill: from
 // `hours` back to just before the oldest observation seen — never over
 // ground already covered. An empty window has end < start.
+@ source_is_type Json src → b {
+    : String mode ( __src_jstr src `mode` )
+    : b t == ( nurl_str_eq ( string_data mode ) SRC_MODE_TYPE ) 1
+    ( string_free mode )
+    ^ t
+}
+
 @ source_window Json src i now b backfill i hours → SrcWindow {
     : i first ( _src_jint src `first_time` 0 )
     : i last ( _src_jint src `last_time` 0 )
+    // A feature type: everything newer than what was seen, however far
+    // ahead it is dated; the first run takes all of it; nothing to reach
+    // back to, so a backfill is an empty window.
+    ? ( source_is_type src ) {
+        ? backfill { ^ @ SrcWindow { 1 0 } } {}
+        ^ @ SrcWindow { ? > last 0 + last 1 0 + now SRC_FAR_FUTURE }
+    } {}
     ? backfill {
         : i start - now * hours 3600
         : i end ? > first 0 - first 1 now
@@ -531,6 +606,22 @@ $ `src/wfs.nu`
     : ~ i oldest 0
     : ~ i newest 0
     : b calendar ( __src_jbool src `calendar` T )
+    : ( Vec String ) cats ?? ( json_obj_get src `categorical` ) {
+        T cv → {
+            : ( Vec String ) cs ( vec_new [String] )
+            : i ncs ( json_arr_len cv )
+            : ~ i k 0
+            ~ < k ncs {
+                ?? ( json_arr_get cv k ) {
+                    T f → { ? ( json_is_str f ) { ( vec_push [String] cs ( string_from ( json_str_data f ) ) ) } {} }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            cs
+        }
+        F _ → ( vec_new [String] )
+    }
     : ( Vec String ) feats ?? ( json_obj_get src `features` ) {
         T fv → {
             : ( Vec String ) fs ( vec_new [String] )
@@ -570,7 +661,7 @@ $ `src/wfs.nu`
                                 ?? ( vec_get [String] feats k ) {
                                     T f → {
                                         ?? ( json_obj_get row ( string_data f ) ) {
-                                            T v → { ( json_obj_set pt ( string_data f ) ( json_clone v ) ) = got + got 1 }
+                                            T v → { ( json_obj_set pt ( string_data f ) ( __src_as_feature v ( __src_str_in cats ( string_data f ) ) ) ) = got + got 1 }
                                             F _ → {}
                                         }
                                     }
@@ -586,10 +677,12 @@ $ `src/wfs.nu`
                                 ?? ( vec_get [String] keys k ) {
                                     T key → {
                                         : s ks ( string_data key )
-                                        : b clock | == ( nurl_str_eq ks `time` ) 1 == ( nurl_str_eq ks `timestamp` ) 1
+                                        // The clock is not a feature; nor, unasked, is a
+                                        // feature's identity — one-hot per feature is no model.
+                                        : b clock | | == ( nurl_str_eq ks `time` ) 1 == ( nurl_str_eq ks `timestamp` ) 1 == ( nurl_str_eq ks `gml_id` ) 1
                                         ? clock {} {
                                             ?? ( json_obj_get row ks ) {
-                                                T v → { ( json_obj_set pt ks ( json_clone v ) ) = got + got 1 }
+                                                T v → { ( json_obj_set pt ks ( __src_as_feature v ( __src_str_in cats ks ) ) ) = got + got 1 }
                                                 F _ → {}
                                             }
                                         }
@@ -616,7 +709,33 @@ $ `src/wfs.nu`
         = r + r 1
     }
     ( vec_free_with [String] feats \ String s → v { ( string_free s ) } )
+    ( vec_free_with [String] cats \ String s → v { ( string_free s ) } )
     ^ @ SrcProject { pts outside empty unstamped oldest newest }
+}
+
+@ __src_str_in ( Vec String ) xs s want → b {
+    : i n ( vec_len [String] xs )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] xs k ) {
+            T x → { ? == ( nurl_str_eq ( string_data x ) want ) 1 { ^ T } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ F
+}
+
+// A column value as the model should see it: as it came, or — for a
+// categorical column — as text, so the preprocessing makes a one-hot
+// identity of it whatever it was (a coordinate, a station code).
+@ __src_as_feature Json v b categorical → Json {
+    ? categorical {} { ^ ( json_clone v ) }
+    ? ( json_is_str v ) { ^ ( json_clone v ) } {}
+    : String txt ( json_stringify v )
+    : Json out ( json_str_lit ( string_data txt ) )
+    ( string_free txt )
+    ^ out
 }
 
 // ── Fetching ──────────────────────────────────────────────────────────
@@ -630,6 +749,44 @@ $ `src/wfs.nu`
     : Json params ?? ( json_obj_get src `params` ) { T p → ( json_clone p ) F _ → ( json_obj_new ) }
     : ( Vec Json ) rows ( vec_new [Json] )
     : ~ String err ( string_new )
+    // A feature type: one request, the whole type, no window.
+    ? ( source_is_type src ) {
+        : String tf ( __src_jstr src `time_field` )
+        : String u ( wfs_url_type ( string_data url ) ( string_data q ) params )
+        ?? ( wfs_fetch ( string_data u ) ) {
+            T body → {
+                : WfsPivot pv ( wfs_pivot_wide ( string_data body ) ( string_data tf ) ( now_seconds ) )
+                ? > ( string_len . pv err ) 0 {
+                    ? & == . pv members 0 ( string_starts_with . pv err `the feature collection holds no` ) {} {
+                        ( string_free err )
+                        = err ( string_clone . pv err )
+                    }
+                } {}
+                : i nr ( vec_len [Json] . pv rows )
+                : ~ i k 0
+                ~ < k nr {
+                    ?? ( vec_get [Json] . pv rows k ) {
+                        T r → { ( vec_push [Json] rows ( json_clone r ) ) }
+                        F _ → {}
+                    }
+                    = k + k 1
+                }
+                ( wfs_pivot_free pv )
+                ( string_free body )
+            }
+            F why → { ( string_free err ) = err why }
+        }
+        ( string_free u )
+        ( string_free tf )
+        ( json_free params )
+        ( string_free q )
+        ( string_free url )
+        ? > ( string_len err ) 0 {
+            ( vec_free_with [Json] rows \ Json j → v { ( json_free j ) } )
+            ^ @ !( Vec Json ) String { F err }
+        } {}
+        ^ @ !( Vec Json ) String { T rows }
+    } {}
     : ~ i a start
     ~ & <= a end == ( string_len err ) 0 {
         : ~ i b + a - SRC_CHUNK_SECS 1
@@ -766,6 +923,25 @@ $ `src/wfs.nu`
         ^ err
     } {}
     : *Model mo ( model_open st ( string_data model ) )
+    // A categorical column is declared before the first point arrives,
+    // or a coordinate would be judged a number by its first value. On a
+    // model that already knows the column the kind is settled and the
+    // declaration is a no-op.
+    ?? ( json_obj_get src `categorical` ) {
+        T cv → {
+            : *Meta mm . mo meta
+            : i ncv ( json_arr_len cv )
+            : ~ i k 0
+            ~ < k ncv {
+                ?? ( json_arr_get cv k ) {
+                    T f → { ? ( json_is_str f ) { : b _d ( meta_declare_column mm ( json_str_data f ) COL_CATEGORICAL ) } {} }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+        }
+        F _ → {}
+    }
     : ImportReport rep ( model_import_at mo . sp points now )
     ? > ( string_len . rep err ) 0 {
         ( string_free err )
@@ -835,15 +1011,24 @@ $ `src/wfs.nu`
                         ( __src_set_str cur `last_error` `` )
                         // The span grows over the window asked for, not
                         // only the points found: an empty day fetched is
-                        // a day fetched.
+                        // a day fetched. A feature type has no window of
+                        // its own: its span is the features' clocks, or
+                        // the fetch time of a snapshot.
                         : i first ( _src_jint cur `first_time` 0 )
                         : i last ( _src_jint cur `last_time` 0 )
+                        // A feature type's span moves only with the clocks
+                        // of the features that landed: a run that found
+                        // nothing new leaves it, so a reading published
+                        // late is not skipped as older than "now".
+                        : b typed ( source_is_type cur )
+                        : i lo ? typed ? > . sp oldest 0 . sp oldest first . w start
+                        : i hi ? typed ? > . sp newest 0 . sp newest last . w end
                         ? backfill {
-                            ? | == first 0 < . w start first { ( __src_set_int cur `first_time` . w start ) } {}
-                            ? == last 0 { ( __src_set_int cur `last_time` . w end ) } {}
+                            ? | == first 0 < lo first { ( __src_set_int cur `first_time` lo ) } {}
+                            ? == last 0 { ( __src_set_int cur `last_time` hi ) } {}
                         } {
-                            ? == first 0 { ( __src_set_int cur `first_time` . w start ) } {}
-                            ? > . w end last { ( __src_set_int cur `last_time` . w end ) } {}
+                            ? == first 0 { ( __src_set_int cur `first_time` lo ) } {}
+                            ? > hi last { ( __src_set_int cur `last_time` hi ) } {}
                         }
                         ? > . sp newest 0 { ( __src_set_int out `newest` . sp newest ) } {}
                         ? > . sp oldest 0 { ( __src_set_int out `oldest` . sp oldest ) } {}
@@ -897,7 +1082,7 @@ $ `src/wfs.nu`
                 : Json none ( json_obj_new )
                 ( __src_set_str none `id` id )
                 ( __src_set_str none `status` `success` )
-                ( __src_set_str none `message` `nothing to fetch: the window is already covered` )
+                ( __src_set_str none `message` ? ( source_is_type src ) `nothing to fetch: a feature type has no history to reach back to` `nothing to fetch: the window is already covered` )
                 ( __src_set_int none `window_start` . w start )
                 ( __src_set_int none `window_end` . w end )
                 ( __src_set_int none `fetched` 0 )

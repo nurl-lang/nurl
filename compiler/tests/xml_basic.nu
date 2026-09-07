@@ -95,6 +95,26 @@ $ `stdlib/core/string.nu`
     ( string_free bs )
     ( xml_free b )
 
+    // A comment (or PI, or whitespace) right before a closing tag: the
+    // element must still end at its own close, and every sibling after
+    // it must still belong to the parent. Used to end the element inside
+    // the comment and lose the rest of the document (a MapServer
+    // GetCapabilities parsed to one child).
+    : !Xml XmlErr cm ( xml_parse `<a><p><v/><!--w1--><f/><!--w2--></p><c/><!-- tail --><d/></a>` )
+    ?? cm {
+        T root → {
+            ? != ( xml_child_count root ) 3 {
+                ( nurl_print `  FAIL comment before close: root has ` ) ( nurl_print ( nurl_str_int ( xml_child_count root ) ) ) ( nurl_print ` children, want 3\n` ) = fails + fails 1
+            } {}
+            ?? ( xml_find root `p` ) {
+                T pe → { ? != ( xml_child_count pe ) 2 { ( nurl_print `  FAIL comment before close: p children\n` ) = fails + fails 1 } {} }
+                F → { ( nurl_print `  FAIL comment before close: no p\n` ) = fails + fails 1 }
+            }
+            ( xml_free root )
+        }
+        F e → { ( nurl_print `  FAIL comment before close: ` ) ( nurl_print ( xml_err_name e ) ) ( nurl_print `\n` ) = fails + fails 1 }
+    }
+
     // Malformed input rejected.
     : !Xml XmlErr bad ( xml_parse `not xml at all` )
     ?? bad { T x → { ( nurl_print `  FAIL accepted junk\n` ) ( xml_free x ) = fails + fails 1 } F → {} }
