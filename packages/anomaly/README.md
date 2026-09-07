@@ -444,6 +444,7 @@ public_url = "https://anomaly.example.com"   # only behind a proxy that rewrites
 | `service.addr` | `ANOMALY_ADDR` | `--addr` |
 | `service.webroot` | `ANOMALY_WEBROOT` | `--webroot` |
 | `service.public_url` | — | — |
+| `sources.enabled` | `ANOMALY_SOURCES` (`0` = off) | — |
 | — | `ANOMALY_HOME` | `--store` |
 | — | `ANOMALY_CONFIG` | `--config` |
 
@@ -919,6 +920,7 @@ command with `--store DIR`.
 | `POST /api/analyze?wait=&votes=&name=&format=&time=&tz=&calendar=&clock=` | analyse a file sent as the body: train, fine-tune to 1 %, return the anomalies (see below) |
 | `GET /api/org/tasks[/<id>]`, `DELETE /api/org/tasks/<id>` | the organization's analyses and their results |
 | `GET /api/org/files[/<name>]`, `POST /api/org/files/<name>/link?ttl=`, `DELETE /api/org/files/<name>` | the organization's folder: list, download, pre-authenticated link, delete |
+| `GET /api/org/sources[/<id>]`, `POST /api/org/sources`, `PUT` / `DELETE /api/org/sources/<id>`, `POST /api/org/sources/<id>/run[?backfill_hours=N]`, `POST /api/org/sources/catalog`, `POST /api/org/sources/preview` | data sources: a WFS the server fetches on a schedule into a model — list, create, change, delete, run now or backfill, browse a service's stored queries, preview what a query's last hours pivot into |
 | `DELETE /api/me` | delete your account (right to be forgotten) |
 | `GET\|PUT /api/tenants[/<tid>]` | approve organizations (owner tenant) |
 | `GET /api/orgs`, `GET\|PUT\|DELETE /api/orgs/<org>/users[/<sub>[/role]]` | administer any organization (owner tenant) |
@@ -995,6 +997,73 @@ that file of that organization until it expires; a tampered or expired one
 is a 403. Admins `DELETE` files. Names are `[A-Za-z0-9._-]`, no leading
 dot, at most 128 characters.
 
+### Data sources: a WFS fetched on a schedule
+
+A model fed by a producer gets its points pushed. A model fed from a
+public service has to go and get them — a weather office's WFS, a
+hydrology office's, a radiation network's — and an administrator says
+from where, which columns, into which model and how often. That is a
+*source*, kept at `orgs/<org>/sources/<id>.json`:
+
+```json
+{ "id": "3f9a1c0b7e2d", "name": "Helsinki weather", "kind": "wfs",
+  "url": "https://opendata.fmi.fi/wfs",
+  "query": "fmi::observations::weather::simple",
+  "params": { "place": "Helsinki", "timestep": "60" },
+  "features": ["t2m", "ws_10min", "rh", "p_sea"],
+  "model": "helsinki_weather", "interval_minutes": 10, "history_hours": 24,
+  "calendar": true, "enabled": true,
+  "first_time": 1788670800, "last_time": 1788757200,
+  "last_run": 1788757260, "last_status": "ok", "last_error": "",
+  "last_rows": 1, "runs": 144, "total_rows": 168 }
+```
+
+The service speaks WFS 2.0 *stored queries* — named, parameterised
+requests. `POST /api/org/sources/catalog {"url": …}` fetches the
+service's `DescribeStoredQueries` and returns every query with its title,
+abstract and parameters, so a person can pick one; the dashboard's
+*Sources* page lists them and filters to the `::simple` family, whose
+answers are one `(location, time, parameter, value)` per member — the
+shape that pivots into a data point. `POST /api/org/sources/preview
+{"url", "query", "params", "hours"}` fetches the last hours of that query
+and answers with the columns it would give (`name`, `count`, `min`,
+`max`, `last`) and a few sample rows; the columns ticked become the
+source's `features` (an empty list means every column). `lat` and `lon`
+are columns too, for the case where a bounding box makes several
+stations answer.
+
+A run asks the service for the window the source has not seen yet —
+`(last_time, now]`, or `history_hours` back on the first run — one day
+per request, pivots the answer (one record per location and time, `NaN`
+readings dropped, the observation's own `time` and `timestamp` on it),
+keeps the chosen features, and imports the records exactly as a file of
+history is imported: the model learns columns and categories from them,
+stores them with their own clock, merges them in time order, and trains
+when its schedule says so. Nothing lands twice because the window never
+overlaps what was fetched. `POST /api/org/sources/<id>/run` runs a source
+now; with `?backfill_hours=N` it reaches back N hours *before*
+`first_time` instead, so history can be added after the fact without
+touching the span already held. Editing a source's `url`, `query` or
+`params` resets the span: the next run starts over from `history_hours`
+back.
+
+The scheduler is one thread the server starts with `serve`. It wakes
+every 15 s, runs every enabled source whose `interval_minutes` have
+passed since `last_run`, and holds the service lock only while it touches
+the store — the network wait happens with the lock released, so a slow
+service never stalls a live detection. A failed fetch (the service down,
+a 400 for a mistyped place, an exception report) is written to the
+record as `last_status: "error"` with the reason in `last_error`, and
+retried at the next interval. `[sources] enabled = false` in the config
+file, or `ANOMALY_SOURCES=0`, leaves the scheduler off; sources then run
+only by hand.
+
+Members list and read sources; creating, changing, deleting and running
+them, and asking the catalogue and the preview, are an administrator's.
+With sign-in on, a model a run brings into being is claimed for the
+organization by the source's creator, and a source cannot feed a model
+that belongs to another organization.
+
 ### Editing the metadata
 
 `PUT /models/dynamic/<m>/metadata` takes the *editable half* of the
@@ -1060,6 +1129,7 @@ build step — plain HTML/CSS/JS that talks to the routes above):
 | `/modeltrainer.html` | import a CSV/JSON/JSONL file of history — inspect first: the page shows where it found the time (a column, year/month/day parts, or none) and lets you confirm or change it; feed points (`/detect`) one at a time or in bulk; force-train |
 | `/visualize.html` | plot any numeric feature of a model's stored points over time |
 | `/admin.html` | the organization: users and their roles, API keys, model ownership |
+| `/sources.html` | data sources: what is fetched from where into which model and how often, with each run's outcome; add one by loading a WFS service's catalogue, picking a stored query, filling in the location, previewing the last hours and ticking the columns to use as features |
 | `/anomalies.html` | scan stored history over a time range: score timeline, a per-version ribbon showing *what* flagged *when*, any feature's own trace for context, and a table naming the features whose relationship broke — with the value each had and the one the autoencoder expected; forest-only flags list the point's most extreme values in σ. Drag across a chart to zoom into a stretch of points, double-click or *reset zoom* to see the whole range; click a point for its stored record and every feature as the model saw it. Filter chips isolate the joint (autoencoder) anomalies from the per-feature (forest) ones. *Max points* (50 000) bites only when the range holds more; *Export* downloads the range's stored points as CSV or JSONL |
 
 The HTML lives in `static/` next to the package. `serve` locates it via, in

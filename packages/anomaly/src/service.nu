@@ -65,6 +65,7 @@ $ `src/importer.nu`
 $ `src/authz.nu`
 $ `src/orgfiles.nu`
 $ `src/analyze.nu`
+$ `src/sources.nu`
 $ `src/mcp.nu`
 $ `stdlib/std/thread.nu`
 
@@ -4543,6 +4544,484 @@ $ `stdlib/std/thread.nu`
 
 // ── Router assembly / server ──────────────────────────────────────────
 
+// ── Data sources: a WFS fetched on a schedule (src/sources.nu) ────────
+//
+//   GET    /api/org/sources             every source of the organisation
+//   POST   /api/org/sources             create one (admin)
+//   GET    /api/org/sources/:id         one source
+//   PUT    /api/org/sources/:id         change it (admin)
+//   DELETE /api/org/sources/:id         remove it (admin)
+//   POST   /api/org/sources/:id/run     fetch now; ?backfill_hours=N reaches
+//                                       back before what was fetched (admin)
+//   POST   /api/org/sources/catalog     {url} → the service's stored queries (admin)
+//   POST   /api/org/sources/preview     {url, query, params, hours} → the
+//                                       columns the last hours would give (admin)
+//
+// The catalogue and the preview fetch from the network on the caller's
+// behalf — a browser cannot ask a weather service directly — and do so
+// with the service lock released, like a run.
+
+// Whether the scheduler thread is started with the server.
+: ~ b g_an_sources_on T
+
+@ anomaly_service_set_sources b on → v { = g_an_sources_on on }
+
+@ __an_src_unlock → v { ( __an_lock_release ) }
+
+@ __an_src_lock → v { ( __an_lock_acquire ) }
+
+@ __an_bad_source_id → HttpResponse {
+    ^ ( __an_json_err 400 `Invalid source id.` )
+}
+
+@ __an_404_source s id → HttpResponse {
+    : String msg ( string_from `Source ` )
+    ( string_push_str msg id )
+    ( string_push_str msg ` not found` )
+    : HttpResponse r ( __an_json_err 404 ( string_data msg ) )
+    ( string_free msg )
+    ^ r
+}
+
+// A source as the API shows it: the record, plus whether a fetch is in
+// flight right now.
+@ __an_source_json s org Json src → Json {
+    : Json o ( json_clone src )
+    : String id ( __an_src_id src )
+    ( json_obj_set o `running` ( json_bool ( source_is_running org ( string_data id ) ) ) )
+    ( string_free id )
+    ^ o
+}
+
+@ __an_src_id Json src → String {
+    ?? ( json_obj_get src `id` ) {
+        T v → { ? ( json_is_str v ) { ^ ( string_from ( json_str_data v ) ) } {} }
+        F _ → {}
+    }
+    ^ ( string_new )
+}
+
+@ __an_h_sources HttpRequest req Params p → HttpResponse {
+    : Gate gate ( __an_gate_member req )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ^ rd
+    }
+    : Principal me . gate who
+    : ( Vec Json ) srcs ( sources_list ( string_data . me org ) )
+    : Json arr ( json_arr_new )
+    : i n ( vec_len [Json] srcs )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [Json] srcs k ) {
+            T sj → { ( json_arr_push arr ( __an_source_json ( string_data . me org ) sj ) ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( sources_free srcs )
+    : Json o ( json_obj_new )
+    ( json_obj_set o `status` ( json_str_lit `success` ) )
+    ( json_obj_set o `organization` ( json_str_lit ( string_data . me org ) ) )
+    ( json_obj_set o `sources` arr )
+    : HttpResponse r ( response_json 200 o )
+    ( json_free o )
+    ( __an_gate_free gate )
+    ^ r
+}
+
+@ __an_h_source_get HttpRequest req Params p → HttpResponse {
+    : String id ( __an_param_str p `id` )
+    ? ( source_id_ok ( string_data id ) ) {} { ( string_free id ) ^ ( __an_bad_source_id ) }
+    : Gate gate ( __an_gate_member req )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free id )
+        ^ rd
+    }
+    : Principal me . gate who
+    : ~ HttpResponse r ( __an_404_source ( string_data id ) )
+    ?? ( source_load ( string_data . me org ) ( string_data id ) ) {
+        T src → {
+            ( http_response_free r )
+            : Json o ( __an_source_json ( string_data . me org ) src )
+            ( json_obj_set o `status` ( json_str_lit `success` ) )
+            = r ( response_json 200 o )
+            ( json_free o )
+            ( json_free src )
+        }
+        F _ → {}
+    }
+    ( __an_gate_free gate )
+    ( string_free id )
+    ^ r
+}
+
+@ __an_h_source_create HttpRequest req Params p → HttpResponse {
+    : Gate gate ( __an_gate_auth req T )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ^ rd
+    }
+    : Principal me . gate who
+    : ~ HttpResponse r ( __an_json_err 400 `The body must be a JSON object describing the source.` )
+    ?? ( __an_body_json req ) {
+        T body → {
+            ?? ( source_create ( string_data . me org ) body ( string_data . me sub ) ( now_seconds ) ) {
+                T src → {
+                    ( http_response_free r )
+                    : Json o ( __an_source_json ( string_data . me org ) src )
+                    ( json_obj_set o `status` ( json_str_lit `success` ) )
+                    = r ( response_json 201 o )
+                    ( json_free o )
+                    ( json_free src )
+                }
+                F e → {
+                    ( http_response_free r )
+                    = r ( __an_json_err 400 ( string_data e ) )
+                    ( string_free e )
+                }
+            }
+            ( json_free body )
+        }
+        F _ → {}
+    }
+    ( __an_gate_free gate )
+    ^ r
+}
+
+@ __an_h_source_update HttpRequest req Params p → HttpResponse {
+    : String id ( __an_param_str p `id` )
+    ? ( source_id_ok ( string_data id ) ) {} { ( string_free id ) ^ ( __an_bad_source_id ) }
+    : Gate gate ( __an_gate_auth req T )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free id )
+        ^ rd
+    }
+    : Principal me . gate who
+    : ~ HttpResponse r ( __an_json_err 400 `The body must be a JSON object with the fields to change.` )
+    ?? ( __an_body_json req ) {
+        T body → {
+            ( http_response_free r )
+            ? ( source_is_running ( string_data . me org ) ( string_data id ) ) {
+                = r ( __an_json_err 409 `This source is being fetched right now; try again in a moment.` )
+            } {
+                ?? ( source_update ( string_data . me org ) ( string_data id ) body ( now_seconds ) ) {
+                    T src → {
+                        : Json o ( __an_source_json ( string_data . me org ) src )
+                        ( json_obj_set o `status` ( json_str_lit `success` ) )
+                        = r ( response_json 200 o )
+                        ( json_free o )
+                        ( json_free src )
+                    }
+                    F e → {
+                        ? == ( nurl_str_eq ( string_data e ) `no such source` ) 1 {
+                            = r ( __an_404_source ( string_data id ) )
+                        } {
+                            = r ( __an_json_err 400 ( string_data e ) )
+                        }
+                        ( string_free e )
+                    }
+                }
+            }
+            ( json_free body )
+        }
+        F _ → {}
+    }
+    ( __an_gate_free gate )
+    ( string_free id )
+    ^ r
+}
+
+@ __an_h_source_delete HttpRequest req Params p → HttpResponse {
+    : String id ( __an_param_str p `id` )
+    ? ( source_id_ok ( string_data id ) ) {} { ( string_free id ) ^ ( __an_bad_source_id ) }
+    : Gate gate ( __an_gate_auth req T )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free id )
+        ^ rd
+    }
+    : Principal me . gate who
+    : ~ HttpResponse r ( __an_404_source ( string_data id ) )
+    ? ( source_delete ( string_data . me org ) ( string_data id ) ) {
+        ( http_response_free r )
+        : Json o ( __an_ok_msg `deleted` )
+        ( json_obj_set o `id` ( json_str_lit ( string_data id ) ) )
+        = r ( response_json 200 o )
+        ( json_free o )
+    } {}
+    ( __an_gate_free gate )
+    ( string_free id )
+    ^ r
+}
+
+// POST /api/org/sources/:id/run — fetch now, and answer with what came of
+// it. The lock is let go while the service is asked.
+@ __an_h_source_run HttpRequest req Params p → HttpResponse {
+    : String id ( __an_param_str p `id` )
+    ? ( source_id_ok ( string_data id ) ) {} { ( string_free id ) ^ ( __an_bad_source_id ) }
+    : Gate gate ( __an_gate_auth req T )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free id )
+        ^ rd
+    }
+    : Principal me . gate who
+    : ~ i hours ( __an_query_int . req query `backfill_hours` 0 )
+    ? > hours SRC_HISTORY_MAX { = hours SRC_HISTORY_MAX } {}
+    : Json rep ( source_run ( string_data . me org ) ( string_data id ) > hours 0 hours ( now_seconds )
+    \ → v { ( __an_src_unlock ) } \ → v { ( __an_src_lock ) } )
+    : ~ i status 200
+    ?? ( json_obj_get rep `status` ) {
+        T sv → {
+            ? == ( nurl_str_eq ( json_str_data sv ) `busy` ) 1 { = status 409 } {}
+            ? == ( nurl_str_eq ( json_str_data sv ) `error` ) 1 {
+                = status 400
+                ?? ( json_obj_get rep `message` ) {
+                    T mv → { ? == ( nurl_str_eq ( json_str_data mv ) `no such source` ) 1 { = status 404 } {} }
+                    F _ → {}
+                }
+            } {}
+        }
+        F _ → {}
+    }
+    : HttpResponse r ( response_json status rep )
+    ( json_free rep )
+    ( __an_gate_free gate )
+    ( string_free id )
+    ^ r
+}
+
+// The `url` of a JSON body, checked; "" when there is none worth using.
+@ __an_src_body_url Json body → String {
+    ?? ( json_obj_get body `url` ) {
+        T v → {
+            ? ( json_is_str v ) {
+                ? ( wfs_url_ok ( json_str_data v ) ) { ^ ( wfs_base_url ( json_str_data v ) ) } {}
+            } {}
+        }
+        F _ → {}
+    }
+    ^ ( string_new )
+}
+
+// POST /api/org/sources/catalog — {url} → the stored queries the service
+// offers, for a person to pick from.
+@ __an_h_source_catalog HttpRequest req Params p → HttpResponse {
+    : Gate gate ( __an_gate_auth req T )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ^ rd
+    }
+    : ~ HttpResponse r ( __an_json_err 400 `The body must be {"url": "https://…/wfs"} — an http(s) WFS endpoint.` )
+    ?? ( __an_body_json req ) {
+        T body → {
+            : String base ( __an_src_body_url body )
+            ? > ( string_len base ) 0 {
+                : String u ( wfs_url_catalog ( string_data base ) )
+                ( __an_src_unlock )
+                : !String String fr ( wfs_fetch ( string_data u ) )
+                ( __an_src_lock )
+                ( string_free u )
+                ?? fr {
+                    T xml → {
+                        : Json cat ( wfs_catalog ( string_data xml ) )
+                        ( string_free xml )
+                        ( http_response_free r )
+                        ? ( json_obj_has cat `error` ) {
+                            : s why ?? ( json_obj_get cat `error` ) { T e → ( json_str_data e ) F _ → `` }
+                            = r ( __an_json_err 400 why )
+                        } {
+                            ( json_obj_set cat `status` ( json_str_lit `success` ) )
+                            ( json_obj_set cat `base_url` ( json_str_lit ( string_data base ) ) )
+                            = r ( response_json 200 cat )
+                        }
+                        ( json_free cat )
+                    }
+                    F why → {
+                        ( http_response_free r )
+                        = r ( __an_json_err 502 ( string_data why ) )
+                        ( string_free why )
+                    }
+                }
+            } {}
+            ( string_free base )
+            ( json_free body )
+        }
+        F _ → {}
+    }
+    ( __an_gate_free gate )
+    ^ r
+}
+
+// Per-column statistics over pivoted rows: how many rows carry it, its
+// range, and the newest value — what a person needs to decide whether a
+// column is a feature.
+@ __an_src_columns ( Vec Json ) rows → Json {
+    : Json cols ( json_obj_new )
+    : i n ( vec_len [Json] rows )
+    : ~ i r 0
+    ~ < r n {
+        ?? ( vec_get [Json] rows r ) {
+            T row → {
+                : ( Vec String ) keys ( json_obj_keys row )
+                : i nk ( vec_len [String] keys )
+                : ~ i k 0
+                ~ < k nk {
+                    ?? ( vec_get [String] keys k ) {
+                        T key → {
+                            : s ks ( string_data key )
+                            : b clock | == ( nurl_str_eq ks `time` ) 1 == ( nurl_str_eq ks `timestamp` ) 1
+                            ? clock {} {
+                                ?? ( json_obj_get row ks ) {
+                                    T v → {
+                                        ?? ( json_num_as_f v ) {
+                                            T x → {
+                                                ?? ( json_obj_get cols ks ) {
+                                                    T c → {
+                                                        : i cnt ?? ( json_obj_get c `count` ) { T cv → ( json_as_int cv ) F _ → 0 }
+                                                        : f lo ?? ( json_obj_get c `min` ) { T lv → ?? ( json_num_as_f lv ) { T q → q F _ → x } F _ → x }
+                                                        : f hi ?? ( json_obj_get c `max` ) { T hv → ?? ( json_num_as_f hv ) { T q → q F _ → x } F _ → x }
+                                                        ( json_obj_set c `count` ( json_int + cnt 1 ) )
+                                                        ? < x lo { ( json_obj_set c `min` ( json_float x ) ) } {}
+                                                        ? > x hi { ( json_obj_set c `max` ( json_float x ) ) } {}
+                                                        ( json_obj_set c `last` ( json_float x ) )
+                                                    }
+                                                    F _ → {
+                                                        : Json c ( json_obj_new )
+                                                        ( json_obj_set c `name` ( json_str_lit ks ) )
+                                                        ( json_obj_set c `count` ( json_int 1 ) )
+                                                        ( json_obj_set c `min` ( json_float x ) )
+                                                        ( json_obj_set c `max` ( json_float x ) )
+                                                        ( json_obj_set c `last` ( json_float x ) )
+                                                        ( json_obj_set cols ks c )
+                                                    }
+                                                }
+                                            }
+                                            F _ → {}
+                                        }
+                                    }
+                                    F _ → {}
+                                }
+                            }
+                        }
+                        F _ → {}
+                    }
+                    = k + k 1
+                }
+                ( vec_free_with [String] keys \ String s → v { ( string_free s ) } )
+            }
+            F _ → {}
+        }
+        = r + r 1
+    }
+    // An array, in the order the columns first appeared.
+    : Json arr ( json_arr_new )
+    : ( Vec String ) names ( json_obj_keys cols )
+    : i nn ( vec_len [String] names )
+    : ~ i q 0
+    ~ < q nn {
+        ?? ( vec_get [String] names q ) {
+            T nm → {
+                ?? ( json_obj_get cols ( string_data nm ) ) {
+                    T c → { ( json_arr_push arr ( json_clone c ) ) }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+        = q + q 1
+    }
+    ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
+    ( json_free cols )
+    ^ arr
+}
+
+// POST /api/org/sources/preview — {url, query, params, hours} → what the
+// last `hours` (default 3, at most a week) of that query pivot into: the
+// columns with their statistics, the row count, a few sample rows.
+@ __an_h_source_preview HttpRequest req Params p → HttpResponse {
+    : Gate gate ( __an_gate_auth req T )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ^ rd
+    }
+    : ~ HttpResponse r ( __an_json_err 400 `The body must carry url and query (and params, hours).` )
+    ?? ( __an_body_json req ) {
+        T body → {
+            // The same validation a saved source gets, on a record that is
+            // never saved: a model name is required there, so lend one.
+            : Json tmp ( json_obj_new )
+            ( json_obj_set tmp `url` ( json_str_lit `` ) )
+            ( json_obj_set tmp `query` ( json_str_lit `` ) )
+            ( json_obj_set tmp `params` ( json_obj_new ) )
+            ( json_obj_set tmp `model` ( json_str_lit `preview` ) )
+            ( json_obj_set tmp `name` ( json_str_lit `preview` ) )
+            : Json spec ( json_clone body )
+            ( json_obj_set spec `model` ( json_str_lit `preview` ) )
+            ( json_obj_set spec `name` ( json_str_lit `preview` ) )
+            : String err ( source_apply tmp spec )
+            ( json_free spec )
+            ? > ( string_len err ) 0 {
+                ( http_response_free r )
+                = r ( __an_json_err 400 ( string_data err ) )
+            } {
+                : ~ i hours ( _src_jint body `hours` 3 )
+                ? < hours 1 { = hours 1 } {}
+                ? > hours 168 { = hours 168 } {}
+                : i now ( now_seconds )
+                ( __an_src_unlock )
+                : !( Vec Json ) String fr ( source_fetch tmp - now * hours 3600 now )
+                ( __an_src_lock )
+                ( http_response_free r )
+                ?? fr {
+                    T rows → {
+                        : Json o ( json_obj_new )
+                        ( json_obj_set o `status` ( json_str_lit `success` ) )
+                        ( json_obj_set o `rows` ( json_int ( vec_len [Json] rows ) ) )
+                        ( json_obj_set o `hours` ( json_int hours ) )
+                        ( json_obj_set o `columns` ( __an_src_columns rows ) )
+                        : Json sample ( json_arr_new )
+                        : i ns ( vec_len [Json] rows )
+                        : ~ i k ? > ns 5 - ns 5 0
+                        ~ < k ns {
+                            ?? ( vec_get [Json] rows k ) {
+                                T row → { ( json_arr_push sample ( json_clone row ) ) }
+                                F _ → {}
+                            }
+                            = k + k 1
+                        }
+                        ( json_obj_set o `sample` sample )
+                        = r ( response_json 200 o )
+                        ( json_free o )
+                        ( vec_free_with [Json] rows \ Json j → v { ( json_free j ) } )
+                    }
+                    F why → {
+                        = r ( __an_json_err 502 ( string_data why ) )
+                        ( string_free why )
+                    }
+                }
+            }
+            ( string_free err )
+            ( json_free tmp )
+            ( json_free body )
+        }
+        F _ → {}
+    }
+    ( __an_gate_free gate )
+    ^ r
+}
+
 @ anomaly_service_router → Router {
     : Router r ( router_new )
     // Dashboard pages (served from g_an_webroot; 404 when unset).
@@ -4554,6 +5033,7 @@ $ `stdlib/std/thread.nu`
     ( router_get r `/admin.html` \ HttpRequest req Params p → HttpResponse { ^ ( __an_serve_file `admin.html` ) } )
     ( router_get r `/modeltrainer.html` \ HttpRequest req Params p → HttpResponse { ^ ( __an_serve_file `modeltrainer.html` ) } )
     ( router_get r `/visualize.html` \ HttpRequest req Params p → HttpResponse { ^ ( __an_serve_file `visualize.html` ) } )
+    ( router_get r `/sources.html` \ HttpRequest req Params p → HttpResponse { ^ ( __an_serve_file `sources.html` ) } )
     // The logo: the tab icon of every page, and what a browser asks for
     // unprompted at /favicon.ico (an SVG under that name is accepted).
     ( router_get r `/favicon.svg` \ HttpRequest req Params p → HttpResponse { ^ ( __an_serve_file `favicon.svg` ) } )
@@ -4604,6 +5084,14 @@ $ `stdlib/std/thread.nu`
     ( router_get r `/api/org/tasks` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_tasks req p ) } )
     ( router_get r `/api/org/tasks/:id` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_task req p ) } )
     ( router_delete r `/api/org/tasks/:id` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_task_delete req p ) } )
+    ( router_get r `/api/org/sources` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_sources req p ) } )
+    ( router_post r `/api/org/sources` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_source_create req p ) } )
+    ( router_post r `/api/org/sources/catalog` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_source_catalog req p ) } )
+    ( router_post r `/api/org/sources/preview` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_source_preview req p ) } )
+    ( router_get r `/api/org/sources/:id` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_source_get req p ) } )
+    ( router_put r `/api/org/sources/:id` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_source_update req p ) } )
+    ( router_delete r `/api/org/sources/:id` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_source_delete req p ) } )
+    ( router_post r `/api/org/sources/:id/run` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_source_run req p ) } )
     // The MCP endpoint (src/mcp.nu): the same API for a language model,
     // with the caller's own permissions. The tools call back into this
     // router, which is complete here — attach it last.
@@ -4652,6 +5140,17 @@ $ `stdlib/std/thread.nu`
         }
     }
     ( http_app_use app serial )
+    // The data-source scheduler: one thread that takes the same lock to
+    // touch the store and lets it go to wait on the network.
+    ? g_an_sources_on {
+        ? ( sources_start_scheduler \ → v { ( __an_src_unlock ) } \ → v { ( __an_src_lock ) } ) {
+            ( nurl_eprintln `anomaly: data sources are fetched on their schedules (checked every 15 s)` )
+        } {
+            ( nurl_eprintln `anomaly: no thread could be started for the data-source scheduler; sources run only by hand` )
+        }
+    } {
+        ( nurl_eprintln `anomaly: data-source scheduler OFF (sources run only by hand)` )
+    }
     : i rc ( http_app_listen app host port )
     ( http_app_free app )
     = g_an_lock 0

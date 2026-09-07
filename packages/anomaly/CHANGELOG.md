@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.17.0
+
+- **Data sources: a WFS fetched on a schedule.** An administrator can
+  point the service at an OGC WFS 2.0 endpoint — `https://opendata.fmi.fi/wfs`
+  is the one it was built against — browse its stored queries, pick one,
+  fill in where (`place`, `fmisid`, `bbox`…), preview what the last hours
+  pivot into and tick the columns that become features, then say which
+  model to feed and every how many minutes. The record lives at
+  `orgs/<org>/sources/<id>.json`; a scheduler thread runs every enabled
+  source when its interval has passed, asking only for the observations it
+  has not seen yet, so nothing lands twice, and reaching back before the
+  first fetch on request (`?backfill_hours=N`). The answer's long form —
+  one `(location, time, parameter, value)` per member — is pivoted into one
+  record per location and time with the observation's own clock, `NaN`
+  readings dropped, and imported the way a file of history is. The network
+  wait happens with the service lock released. New: `src/wfs.nu`,
+  `src/sources.nu`, the `/api/org/sources` routes (list, create, change,
+  delete, run, catalogue, preview), the *Sources* dashboard page,
+  `[sources] enabled` / `ANOMALY_SOURCES`, and a suite of 143 checks over
+  recorded answers — no network in the tests.
+
 ## 0.16.1
 
 - **The Models page centres on a wide screen.** `main` was a 1200 px box

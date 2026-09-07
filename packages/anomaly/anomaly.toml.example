@@ -97,3 +97,10 @@ open_ingest = false
 # NOTE: the store directory is deliberately NOT settable here. This file is
 # looked for inside the store, so a `store` key would be a file relocating the
 # directory it was just found in. Use --store or $ANOMALY_HOME.
+
+[sources]
+# Data sources (a WFS fetched on a schedule into a model) are run by a
+# scheduler thread the server starts. Set this to false — or ANOMALY_SOURCES=0
+# in the environment — to leave the scheduler off; sources then run only by
+# hand (POST /api/org/sources/<id>/run, or "Run now" on the Sources page).
+# enabled = true

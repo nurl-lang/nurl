@@ -436,6 +436,13 @@ $ `src/mcp.nu`
     } {
         ( nurl_eprintln `anomaly: no dashboard web root found (API-only)` )
     }
+    // Data sources are fetched on their schedules unless the file
+    // ([sources] enabled = false) or ANOMALY_SOURCES=0 says otherwise.
+    : ~ b srcs_on ( config_bool cfg `sources.enabled` T )
+    : String senv ( env_var_or `ANOMALY_SOURCES` `` )
+    ? > ( string_len senv ) 0 { = srcs_on != ( nurl_str_eq ( string_data senv ) `0` ) 1 } {}
+    ( string_free senv )
+    ( anomaly_service_set_sources srcs_on )
     : i rc ( anomaly_serve ( string_data host ) port )
     ( config_free cfg )
     ( string_free cfg_path )
