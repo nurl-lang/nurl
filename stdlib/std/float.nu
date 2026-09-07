@@ -28,6 +28,10 @@
 //   ( float_is_nan x )      → b      NaN ≠ itself by IEEE-754
 //   ( float_is_inf x )      → b      +∞ or −∞
 //
+// The two values no literal can spell:
+//   ( float_nan )           → f      a quiet NaN — "no value" in a stream of doubles
+//   ( float_inf )           → f      +∞ (negate for −∞)
+//
 // Strict parser:
 //   ( float_parse s )       → ! f ParseErr
 //     - empty string                → Empty
@@ -174,6 +178,19 @@ $ `stdlib/core/errors.nu`
 
 @ float_is_inf f x → b {
     ^ != 0 ( nurl_is_inf x )
+}
+
+// ── The unspellable values ─────────────────────────────────────────
+//
+// IEEE-754 gives 0/0 a quiet NaN and 1/0 +∞; the compiler does not
+// assume finite arithmetic, so these are what they say at run time and
+// when folded.
+@ float_nan → f {
+    ^ / 0.0 0.0
+}
+
+@ float_inf → f {
+    ^ / 1.0 0.0
 }
 
 // ── Strict parser ──────────────────────────────────────────────────

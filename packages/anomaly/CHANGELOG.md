@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.20.0
+
+- **The forecast version: a seasonal ARIMA per feature.** The forests see
+  a point as a whole and the guards one reading at a time; neither sees
+  order beyond the timevector's window, so a temperature that reads an
+  ordinary trough value at the top of its daily cycle passed every one of
+  them. The new `forecast` version (`src/forecast.nu`, on `packages/arima`)
+  fits one SARIMA per numeric feature at each retrain — `arima_auto`'s
+  stepwise order search, the season the version's `window_size` gives, the
+  features fitted on the machine's threads, gaps bridged for the fit —
+  keeps each model's Kalman state current point by point, and judges every
+  reading by how many standard errors of its own forecast it landed from
+  it: the decision value is `−max|z|`, the margin a sigma count (4 by
+  default), and the verdict names the feature. A reading a point leaves
+  out is a gap to the model, not a zero. The states are persisted with the
+  ring sequence number they stand at and caught up from the ring's stored
+  rows when a request opens the model, so a service restart loses nothing;
+  a scan replays a copy of the models from 500 rows before its window.
+  Off by default: `anomaly train-fc <model> [--season S]`,
+  `POST /train/forecast/<m>` (`{"season": S, "window_points": N}`), the
+  dashboard's Forecast section, or the MCP tool `train_forecast` fit it
+  and switch it on; `GET /models/dynamic/<m>/forecast?horizon=H`,
+  `anomaly forecast <model>` and the MCP tool `forecast` read the next H
+  values per feature with standard errors. The rights are the
+  autoencoder's: training is a write, reading is membership. The test
+  (`tests/forecast_test.nu`, 48 checks) feeds a 24-row rhythm and shows the
+  contextual point flagged and named by the forecast and passed by the
+  forests, the gap, detect_only leaving the states alone, the scan
+  agreeing with the stream, a reopen carrying on from the file, the mute.
+- `packages/arima` 0.2.0 underneath: the exact likelihood by the
+  Chandrasekhar recursions (a weekly-season fit 30× faster, the order
+  search 80×), a fair CSS screening, the streaming step O(r) once the
+  covariance has converged, `arima_restart`, `arima_clone`, gaps.
+
 ## 0.19.0
 
 - **HTTP sources: a URL answering JSON, polled with headers.** Most of

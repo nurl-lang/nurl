@@ -39,7 +39,7 @@ $ `src/authz.nu`
 $ `src/imptime.nu`
 
 // One version for the CLI banner and the MCP handshake.
-: s ANOMALY_VERSION `0.19.0`
+: s ANOMALY_VERSION `0.20.0`
 
 // ── Wiring ───────────────────────────────────────────────────────────
 
@@ -1940,6 +1940,45 @@ $ `src/imptime.nu`
     ^ ( __mcp_result_json out )
 }
 
+@ __mcp_t_train_forecast Json a Json ctx → Json {
+    : String model ( __mcp_need_model a ctx )
+    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    : Json body ( json_obj_new )
+    ? ( __mcp_arg_has a `season` ) { ( json_obj_set body `season` ( json_int ( __mcp_arg_int a `season` 0 ) ) ) } {}
+    ? ( __mcp_arg_has a `window_points` ) { ( json_obj_set body `window_points` ( json_int ( __mcp_arg_int a `window_points` 0 ) ) ) } {}
+    : String q ( string_new )
+    : String path ( __mcp_model_path `/train/forecast/` model `` )
+    : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { T body } )
+    ( string_free path )
+    ( string_free q )
+    ( json_free body )
+    ( string_free model )
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    : Json out ( json_obj_new )
+    ( __mcp_copy . o body `status` out )
+    ( __mcp_copy . o body `message` out )
+    ( __mcp_copy . o body `features` out )
+    ( __mcp_copy . o body `training_data_points` out )
+    ( __mcp_copy . o body `season` out )
+    ( json_obj_set out `next` ( json_str_lit `forecast {model, horizon} for what the models expect next; anomalies {versions: ["forecast"]} for the points that landed far from their forecast, each naming the feature.` ) )
+    ( __mcp_api_out_free o )
+    ^ ( __mcp_result_json out )
+}
+
+@ __mcp_t_forecast Json a Json ctx → Json {
+    : String model ( __mcp_need_model a ctx )
+    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    : String q ( string_from `horizon=` )
+    ( string_push_int q ( __mcp_arg_int a `horizon` 12 ) )
+    : String path ( __mcp_model_path `/models/dynamic/` model `/forecast` )
+    : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
+    ( string_free path )
+    ( string_free q )
+    ( string_free model )
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ^ ( __mcp_pass o )
+}
+
 @ __mcp_t_finetune Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
@@ -2324,6 +2363,19 @@ $ `src/imptime.nu`
     ^ sc
 }
 
+@ __mcp_sc_train_fc → Json {
+    : Json sc ( __mcp_sc_model )
+    ( mcp_schema_prop sc `season` `integer` `Seasonal period in rows — 24 for hourly data with a daily rhythm, 7 for daily data with a weekly one; 0 = none (default: the version's current setting).` F )
+    ( mcp_schema_prop sc `window_points` `integer` `Rows back from the newest the models are fitted on (default: the version's setting, 2000).` F )
+    ^ sc
+}
+
+@ __mcp_sc_forecast → Json {
+    : Json sc ( __mcp_sc_model )
+    ( mcp_schema_prop sc `horizon` `integer` `How many steps ahead (default 12, at most 1000).` F )
+    ^ sc
+}
+
 @ __mcp_sc_finetune → Json {
     : Json sc ( __mcp_sc_model )
     ( mcp_schema_prop sc `rate` `number` `Target alert rate: the share of the window each version should flag, e.g. 0.01 for 1% (default 0.01).` F )
@@ -2378,11 +2430,11 @@ $ `src/imptime.nu`
 // ── The server ───────────────────────────────────────────────────────
 
 @ __mcp_instructions → s {
-    ^ `Anomaly detection over an organisation's sensor and event streams: every model watches one stream, stores its recent points in a ring, and flags points its versions (isolation forests over different windows, an autoencoder that sees the relations between fields, a range_guard that flags a single field far outside its usual range and names it, and a flatline guard that flags a numeric column that has stopped moving — a run of identical readings, or a spread collapsed far below the stream's own quiet periods — and names it) score as unusual. You act with the signed-in user's permissions, inside their organisation.
+    ^ `Anomaly detection over an organisation's sensor and event streams: every model watches one stream, stores its recent points in a ring, and flags points its versions (isolation forests over different windows, an autoencoder that sees the relations between fields, a range_guard that flags a single field far outside its usual range and names it, a flatline guard that flags a numeric column that has stopped moving — a run of identical readings, or a spread collapsed far below the stream's own quiet periods — and names it, and an optional forecast version — a seasonal ARIMA per numeric feature — that flags a reading far from what the feature's own recent past forecast for that moment, ordinary value or not, and names it) score as unusual. You act with the signed-in user's permissions, inside their organisation.
 
-Start with list_models. Then anomalies {model, last: "24h"} for the newest flagged rows with the features that caused them, anomaly_summary for counts, events, timeline and the features blamed most, point for one row in full, describe_model for how a model is built, calibration for how its margins sit against the recent data. Times are ISO-8601 UTC; a model on a count clock numbers its rows instead. "last" counts back from the model's newest point, not from now. Scores run downward into anomaly: a point is flagged when its score is at or below minus the version's margin. A forest's decision_margin is that margin as is; the autoencoder's decision_margin is a fraction of its reconstruction threshold (margin = threshold × decision_margin), so its scores are ~1e-4 where a forest's are ~1e-1; range_guard's decision_margin is a count of standard deviations; flatline's is a fraction (0.9 = nine tenths of the reference run identical, or the window ten times flatter than the stream's quiet periods), and point shows which column it named. Rank points and versions by severity (−score / margin: 1.0 is exactly on the alert line, 2.0 twice as far past it), never by raw score; a row's score and severity are those of its most severe version. Consecutive anomalous rows are one event: anomalies gives each row its event number, anomaly_summary lists the events — count events, not rows, when saying how often something went wrong. When the person says a flagged row was nothing, label_anomaly {model, index, label: "false_positive"} — from then on calibration and finetune leave it out, so the margins stop paying for known noise.
+Start with list_models. Then anomalies {model, last: "24h"} for the newest flagged rows with the features that caused them, anomaly_summary for counts, events, timeline and the features blamed most, point for one row in full, describe_model for how a model is built, calibration for how its margins sit against the recent data. Times are ISO-8601 UTC; a model on a count clock numbers its rows instead. "last" counts back from the model's newest point, not from now. Scores run downward into anomaly: a point is flagged when its score is at or below minus the version's margin. A forest's decision_margin is that margin as is; the autoencoder's decision_margin is a fraction of its reconstruction threshold (margin = threshold × decision_margin), so its scores are ~1e-4 where a forest's are ~1e-1; range_guard's decision_margin is a count of standard deviations; flatline's is a fraction (0.9 = nine tenths of the reference run identical, or the window ten times flatter than the stream's quiet periods); forecast's is a count of the forecast's standard errors (4 = the reading sat four standard errors from what was forecast), and point shows which column each of them named. Rank points and versions by severity (−score / margin: 1.0 is exactly on the alert line, 2.0 twice as far past it), never by raw score; a row's score and severity are those of its most severe version. Consecutive anomalous rows are one event: anomalies gives each row its event number, anomaly_summary lists the events — count events, not rows, when saying how often something went wrong. When the person says a flagged row was nothing, label_anomaly {model, index, label: "false_positive"} — from then on calibration and finetune leave it out, so the margins stop paying for known noise.
 
-Every member may build scratch models named llm_… (fork_model: a slice of an existing model's history, optionally fewer columns), tune them (finetune, train_autoencoder, retrain), edit and delete them — use them to test a hypothesis without touching production models. Changing or deleting any other model needs the administrator role; the reply says so when it does. Sending new points (ingest_point, import_data) needs the ingest capability. analyze_data scores a file you provide without creating a model.`
+Every member may build scratch models named llm_… (fork_model: a slice of an existing model's history, optionally fewer columns), tune them (finetune, train_autoencoder, train_forecast, retrain), edit and delete them — use them to test a hypothesis without touching production models. Changing or deleting any other model needs the administrator role; the reply says so when it does. Sending new points (ingest_point, import_data) needs the ingest capability. analyze_data scores a file you provide without creating a model.`
 }
 
 @ __mcp_add McpServer srv s name s desc Json sc b ro b destr b idem b ow ( @ b Json ) vis ( @ Json Json McpCall ) h → v {
@@ -2429,6 +2481,10 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     `How each version's margin sits against a window (default: the last 24 h before the newest point; last: "all" for the whole ring): how much it flags now, the worst and median scores, and the margin that would flag 0.1%, 1%, 5% … — the numbers to read before finetune. Each version gets a reading — quiet, loud or on target — and the model a verdict.`
     ( __mcp_sc_model_window ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_calibration a ( mcp_call_context c ) ) } )
+    ( __mcp_add srv `forecast`
+    `What a model's forecast version expects next: for every feature it watches, the next horizon values with standard errors, and the fitted order. Needs a trained forecast version (train_forecast).`
+    ( __mcp_sc_forecast ) T F T F member
+    \ Json a McpCall c → Json { ^ ( __mcp_t_forecast a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `score_point`
     `Score one hypothetical point against a model WITHOUT storing it: the verdict of every version and the scores. For "would the model flag this".`
     ( __mcp_sc_values `a column the model knows and the point leaves out is an error that names it.` ) T F T F member
@@ -2463,6 +2519,10 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     `Train (or retrain) a model's autoencoder version — the one version that learns the relations between fields, and the source of per-feature blame in anomalies. Members: llm_… models only; administrators: any.`
     ( __mcp_sc_train_ae ) F F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_train_autoencoder a ( mcp_call_context c ) ) } )
+    ( __mcp_add srv `train_forecast`
+    `Train (or retrain) a model's forecast version — a seasonal ARIMA per numeric feature that judges every reading against what the feature's own recent past said it would be, and names the feature. Switches the version on. Members: llm_… models only; administrators: any.`
+    ( __mcp_sc_train_fc ) F F T F member
+    \ Json a McpCall c → Json { ^ ( __mcp_t_train_forecast a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `finetune`
     `Set every version's margin so that a chosen share of a window is flagged (rate 0.01 = 1%). dry_run=true shows the margins without applying them; calibration shows the same numbers for several rates at once. The flatline guard is left alone (its margin is a fraction with a fixed meaning; edit_model sets it). Members: llm_… models only; administrators: any.`
     ( __mcp_sc_finetune ) F F T F member

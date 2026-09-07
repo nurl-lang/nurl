@@ -386,7 +386,7 @@ for t in ("whoami", "list_models", "anomalies", "anomaly_summary", "points", "ca
     assert t in names, f"viewer should see {t}"
 for t in ("ingest_point", "import_data", "set_role", "org_users", "org_keys", "claim_model"):
     assert t not in names, f"viewer must not see {t}"
-assert len(names) == 22, sorted(names)
+assert len(names) == 24, sorted(names)
 PYX
 call() { mcp "$1" "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"$2\",\"arguments\":$3}}"; }
 call "$VH" whoami '{}' > "$WORK/vwho.json"
@@ -480,7 +480,7 @@ python3 - "$WORK/atools.json" <<'PYX' && ok "an admin is shown every tool" || ba
 import json, sys
 names = {t["name"] for t in json.load(open(sys.argv[1]))["result"]["tools"]}
 assert {"set_role", "org_users", "org_keys", "claim_model", "ingest_point", "import_data"} <= names, sorted(names)
-assert len(names) == 28, len(names)
+assert len(names) == 30, len(names)
 PYX
 call "$AH" org_users '{}' > "$WORK/ausers.json"
 python3 - "$WORK/ausers.json" <<'PYX' && ok "org_users lists both members" || bad "admin org_users"
@@ -507,7 +507,7 @@ mcp "$VH" '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' > "$WORK/
 python3 - "$WORK/vtools2.json" <<'PYX' && ok "and the promoted user's next tool list has grown" || bad "promoted tool list"
 import json, sys
 names = {t["name"] for t in json.load(open(sys.argv[1]))["result"]["tools"]}
-assert "set_role" in names and len(names) == 28, sorted(names)
+assert "set_role" in names and len(names) == 30, sorted(names)
 PYX
 call "$AH" set_role '{"subject":"user-77","role":"viewer"}' > /dev/null
 call "$AH" ingest_point '{"model":"mine","values":{"t":3}}' > "$WORK/aip.json"

@@ -558,6 +558,30 @@ $ `src/service.nu`
     : SvcOut tr ( fire r `POST` `/force_train/svc` `` `` )
     ( check == . tr status 200 `svc: force_train -> 200` )
     ( check == ( jint_of . tr body `points_used` ) 50 `svc: force_train points_used` )
+
+    // The forecast version: untrained until asked, then a forecast.
+    : SvcOut fq0 ( fire r `GET` `/models/dynamic/svc/forecast` `horizon=3` `` )
+    ( check == . fq0 status 400 `svc: forecast before training -> 400` )
+    ( json_free . fq0 body )
+    : SvcOut ftr ( fire r `POST` `/train/forecast/svc` `` `{"season":0}` )
+    ( check == . ftr status 200 `svc: train/forecast -> 200` )
+    ( check == ( jint_of . ftr body `training_data_points` ) 50 `svc: the forecast fitted the ring` )
+    ( json_free . ftr body )
+    : SvcOut fq1 ( fire r `GET` `/models/dynamic/svc/forecast` `horizon=3` `` )
+    ( check == . fq1 status 200 `svc: forecast -> 200` )
+    ( check == ( jint_of . fq1 body `horizon` ) 3 `svc: three steps ahead` )
+    : ~ i nfc 0
+    ?? ( json_obj_get . fq1 body `forecasts` ) { T fa → { = nfc ( json_arr_len fa ) } F _ → {} }
+    ( check > nfc 0 `svc: a forecast per watched feature` )
+    ( json_free . fq1 body )
+    : SvcOut md7 ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
+    : ~ b fc_on F
+    ?? ( json_obj_get . md7 body `forecast` ) {
+        T fo → { ?? ( json_obj_get fo `enabled` ) { T e → { = fc_on ( json_as_bool e ) } F _ → {} } }
+        F _ → {}
+    }
+    ( check fc_on `svc: the metadata's forecast block says trained and on` )
+    ( json_free . md7 body )
     ( json_free . tr body )
 
     // Batch CSV.

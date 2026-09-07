@@ -196,12 +196,34 @@ $ `stdlib/ext/json.nu`
     ^ @ VerCfg { ( string_from ANOM_FLAT_NAME ) 0 0 ANOM_FLAT_WINDOW 1 0 0 -1.0 ANOM_FLAT_MARGIN T }
 }
 
-// The versions that are not forests: the autoencoder and the two guards
-// have a VerCfg (margin, enabled) but no forest blob to load, train or
-// drop.
+// The forecast version (src/forecast.nu): a seasonal ARIMA per numeric
+// feature, judging each reading against the forecast its own past made.
+// Its decision value is −max|z| over the features — the reading's
+// distance from the forecast in the forecast's standard errors — so the
+// margin reads as a sigma count like the range guard's, and it names
+// the feature. `window_points` / `window_minutes` are its fit window,
+// `window_size` the seasonal period in rows (0 = none). Off until a
+// reader turns it on: a model per feature is a cost a stream should
+// choose.
+: s ANOM_FC_NAME `forecast`
+: f ANOM_FC_SIGMA 4.0
+: i ANOM_FC_WINDOW 2000
+
+@ _an_is_fc_name s vname → b {
+    ^ == ( nurl_str_eq vname ANOM_FC_NAME ) 1
+}
+
+@ _an_vc_fc → VerCfg {
+    ^ @ VerCfg { ( string_from ANOM_FC_NAME ) 0 ANOM_FC_WINDOW 0 0 0 0 -1.0 ANOM_FC_SIGMA F }
+}
+
+// The versions that are not forests: the autoencoder, the two guards
+// and the forecast have a VerCfg (margin, enabled) but no forest blob to
+// load, train or drop.
 @ _an_forestless_name s vname → b {
     ? == ( nurl_str_eq vname `autoencoder` ) 1 { ^ T } {}
     ? ( _an_is_guard_name vname ) { ^ T } {}
+    ? ( _an_is_fc_name vname ) { ^ T } {}
     ^ ( _an_is_flat_name vname )
 }
 
@@ -214,6 +236,7 @@ $ `stdlib/ext/json.nu`
     ( vec_push [VerCfg] vs ( __an_vc_tv `timevector` 100 1 200 256 0.10 ) )
     ( vec_push [VerCfg] vs ( _an_vc_guard ) )
     ( vec_push [VerCfg] vs ( _an_vc_flat ) )
+    ( vec_push [VerCfg] vs ( _an_vc_fc ) )
     ^ vs
 }
 
@@ -965,7 +988,7 @@ $ `stdlib/ext/json.nu`
 }
 
 // ( Vec f ) → JSON array of numbers.
-@ __an_jarr_of_floats ( Vec f ) xs → Json {
+@ _an_jarr_of_floats ( Vec f ) xs → Json {
     : Json a ( json_arr_new )
     : i n ( vec_len [f] xs )
     : ~ i k 0
@@ -1067,13 +1090,13 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set o `feature_names` ( _an_jarr_of_strs . m feats ) )
 
     : Json sc ( json_obj_new )
-    ( json_obj_set sc `mean` ( __an_jarr_of_floats . m sc_mean ) )
-    ( json_obj_set sc `std` ( __an_jarr_of_floats . m sc_std ) )
+    ( json_obj_set sc `mean` ( _an_jarr_of_floats . m sc_mean ) )
+    ( json_obj_set sc `std` ( _an_jarr_of_floats . m sc_std ) )
     ( json_obj_set o `scaler` sc )
 
     : Json fl ( json_obj_new )
-    ( json_obj_set fl `ref_run` ( __an_jarr_of_floats . m flat_run ) )
-    ( json_obj_set fl `ref_sd` ( __an_jarr_of_floats . m flat_sd ) )
+    ( json_obj_set fl `ref_run` ( _an_jarr_of_floats . m flat_run ) )
+    ( json_obj_set fl `ref_sd` ( _an_jarr_of_floats . m flat_sd ) )
     ( json_obj_set o `flatline` fl )
 
     : Json sched ( json_obj_new )
@@ -1490,6 +1513,8 @@ $ `stdlib/ext/json.nu`
     ? > . o window_size 0 {
         ? < . o step_size 1 { = . o step_size 1 } {}
     } { = . o step_size 0 }
+    // The forecast's window_size is a seasonal period: one row is no season.
+    ? & ( _an_is_fc_name ( string_data . o vname ) ) == . o window_size 1 { = . o window_size 0 = . o step_size 0 } {}
     // The autoencoder and the guards have no forest: their tree counts
     // stay 0 so the config round-trips unchanged. Every other version
     // must be trainable. The flatline guard's window is a run of rows and

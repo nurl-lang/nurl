@@ -505,6 +505,14 @@ const HELP = {
     "• Lower it → more alerts; 0 flags anything the forest finds even slightly unusual.\n" +
     "Takes effect at the next point. The flags column shows what the value you type " +
     "would have flagged in the calibration window; Fine-tune sets it from a target rate.",
+  margin_fc: "Alert line of the forecast version, in the forecast's standard errors: " +
+    "a point is flagged when some feature's reading sits at least this many standard errors " +
+    "from what its own model forecast for that moment.\n" +
+    "• 4 (the default) flags a reading four standard errors from its forecast; 3 flags more, 6 fewer.\n" +
+    "Takes effect at the next point. The verdict names the feature.",
+  season: "The seasonal period of the forecast models, in rows: 24 for hourly data with a " +
+    "daily rhythm, 7 for daily data with a weekly one, 0 for none. Rows, not time — the " +
+    "models see the stored points in order. Takes effect at the next forecast training.",
   margin_ae: "Alert line of the autoencoder, relative to its reconstruction threshold: " +
     "a point is flagged when its reconstruction error ≥ threshold × (1 + margin).\n" +
     "• 0 flags at the threshold itself; 0.5 only points that reconstruct 50 % worse than it.\n" +
@@ -675,6 +683,7 @@ function renderDrawer(name) {
   const sched = m.schedule || { below_max: 0, at_max: 0, autoencoder: false };
   const vers = m.versions || {};
   const ae = m.autoencoder || { trained: false, enabled: false };
+  const fc = m.forecast || { trained: false, enabled: false };
   const trained = isTrained(m);
   COUNT = m.clock === "count";
 
@@ -685,12 +694,15 @@ function renderDrawer(name) {
   let vrows = Object.keys(vers).map(vn => {
     const v = vers[vn];
     const isAe = vn === "autoencoder";
+    const isFc = vn === "forecast";
     const win = isAe ? "–"
+      : isFc ? ("last " + (v.window_points || 0).toLocaleString() + " pts" +
+                (v.window_size > 0 ? " · season " + v.window_size : " · no season"))
       : (v.window_size > 0 ? v.window_size + "×" + (v.step_size || 1) + " pts"
          : COUNT ? (v.window_minutes || 0).toLocaleString() + " pts"
                  : (v.window_minutes || 0) + "m/" + (v.window_points || 0) + "p");
-    const trees = isAe ? "–" : (v.n_estimators || 0) + "×" + (v.max_samples || 0);
-    const cont = isAe ? '<span class="muted">–</span>'
+    const trees = (isAe || isFc) ? "–" : (v.n_estimators || 0) + "×" + (v.max_samples || 0);
+    const cont = (isAe || isFc) ? '<span class="muted">–</span>'
       : '<input type="text" data-v="' + esc(vn) + '" data-f="contamination" placeholder="auto" value="' +
         (typeof v.contamination === "number" ? v.contamination : "") + '" title="' + esc(HELP.contamination) + '">';
     const margin = Number(v.decision_margin) || 0;
@@ -701,7 +713,7 @@ function renderDrawer(name) {
       '<td class="dim">' + esc(trees) + "</td>" +
       "<td>" + cont + "</td>" +
       '<td><input type="number" step="any" min="0" data-v="' + esc(vn) + '" data-f="margin" value="' +
-        margin + '" title="' + esc(isAe ? HELP.margin_ae : HELP.margin) + '"></td>' +
+        margin + '" title="' + esc(isAe ? HELP.margin_ae : isFc ? HELP.margin_fc : HELP.margin) + '"></td>' +
       '<td class="dim" data-cal="' + esc(vn) + '">–</td></tr>';
   }).join("");
   if (!vrows) vrows = '<tr><td colspan="7" class="muted">no versions</td></tr>';
@@ -710,6 +722,22 @@ function renderDrawer(name) {
     CAL_WINDOWS.map(([v, l, vn]) => '<option value="' + v + '"' + (v === CAL_LAST ? " selected" : "") + ">" + esc(calLabel(v, l, vn)) + "</option>").join("") +
     "</select>";
 
+  const fcState = fc.trained
+    ? (fc.enabled ? '<span class="dot on"></span>trained &amp; scoring'
+                  : '<span class="dot off"></span>trained, muted (version disabled)')
+    : '<span class="dot"></span>not trained';
+  const fcRows = fc.trained
+    ? "<dt>Features</dt><dd>" + esc((fc.features || []).join(", ") || "–") + "</dd>" +
+      "<dt>Season " + q("season") + "</dt><dd>" + (fc.season > 0 ? fc.season + " rows" : "none") + "</dd>" +
+      "<dt>Margin " + q("margin_fc") + "</dt><dd>" + fmtNum(fc.decision_margin) + " standard errors</dd>" +
+      "<dt>Trained on</dt><dd>" + (fc.training_data_points ?? 0).toLocaleString() + " pts</dd>" +
+      "<dt>Trained at</dt><dd>" + fmtWhen(fc.trained_at) + "</dd>" +
+      "<dt>Orders</dt><dd>" + esc((fc.models || []).map(o => {
+          const od = o.order || {};
+          return (o.feature || "?") + " (" + (od.p ?? 0) + "," + (od.d ?? 0) + "," + (od.q ?? 0) + ")" +
+            (od.s > 0 ? "(" + (od.P ?? 0) + "," + (od.D ?? 0) + "," + (od.Q ?? 0) + ")" + od.s : "");
+        }).join(" · ") || "–") + "</dd>"
+    : "";
   const aeState = ae.trained
     ? (ae.enabled ? '<span class="dot on"></span>trained &amp; scoring'
                   : '<span class="dot off"></span>trained, muted (version disabled)')
@@ -797,6 +825,24 @@ function renderDrawer(name) {
         "is learned, so retrain it when the feed’s normal has moved (or tick the schedule box).</p>" +
     "</div>" +
 
+    '<div class="section"><h3>Forecast</h3>' +
+      '<div style="margin-bottom:10px">' + fcState + "</div>" +
+      (fcRows ? '<dl class="ae-grid">' + fcRows + "</dl>" : "") +
+      '<div class="ae-form">' +
+        '<div class="field"><label>season (rows) ' + q("season") + "</label>" +
+          '<input type="text" id="fcSeason" placeholder="0" value="' + esc(String(fc.season ?? 0)) + '" title="' + esc(HELP.season) + '"></div>' +
+        '<div class="field"><label>fit window (pts)</label>' +
+          '<input type="text" id="fcWindow" placeholder="2000" value="' + esc(String(fc.window_points ?? 2000)) + '" title="How many of the newest stored points each feature\'s model is fitted on."></div>' +
+        '<button id="fcTrain">' + (fc.trained ? "Retrain" : "Train") + " forecast</button>" +
+      "</div>" +
+      '<p class="hint">Fits a seasonal ARIMA to every numeric feature and judges each new ' +
+        "reading by how far it lands from the feature’s own forecast, in the forecast’s standard " +
+        "errors — the version that catches an ordinary value at the wrong moment, and names the " +
+        "feature. Give the season in rows (24 for hourly data with a daily rhythm; 0 for none). " +
+        "Training switches the version on; it retrains with the forests while on. " +
+        "Its alert line is the <b>forecast</b> row above.</p>" +
+    "</div>" +
+
     '<div class="section"><h3>Retrain schedule ' + q("sched") + "</h3>" +
       '<div class="sched-form">' +
         '<div class="field"><label>below max (every N pts)</label>' +
@@ -847,6 +893,7 @@ function renderDrawer(name) {
   $("vSave").onclick    = (e) => saveVersions(name, e.currentTarget);
   $("schedSave").onclick= (e) => saveSchedule(name, e.currentTarget);
   $("aeTrain").onclick  = (e) => trainAE(name, e.currentTarget);
+  $("fcTrain").onclick  = (e) => trainFC(name, e.currentTarget);
   $("ftPreview").onclick= (e) => runFinetune(name, false, e.currentTarget);
   $("ftApply").onclick  = (e) => runFinetune(name, true, e.currentTarget);
   $("calWin").onchange  = (e) => { CAL_LAST = e.target.value; loadCal(name); };
@@ -1108,6 +1155,26 @@ async function trainAE(name, btn) {
     await openDrawer(name);
   } catch (e) {
     toast(e.message, "err", "Autoencoder failed");
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+
+async function trainFC(name, btn) {
+  const body = {};
+  const s = parseInt($("fcSeason").value, 10);
+  if (isFinite(s) && s >= 0) body.season = s;
+  const w = parseInt($("fcWindow").value, 10);
+  if (isFinite(w) && w > 0) body.window_points = w;
+  const orig = btn.textContent;
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try {
+    const d = await api("POST", "/train/forecast/" + enc(name), body);
+    toast("fitted " + ((d.features || []).length) + " features on " + (d.training_data_points ?? "?") + " pts", "ok", "forecast");
+    CAL = null;
+    await openDrawer(name);
+  } catch (e) {
+    toast(e.message, "err", "Forecast failed");
   } finally {
     btn.disabled = false; btn.textContent = orig;
   }

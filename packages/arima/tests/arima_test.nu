@@ -125,6 +125,41 @@ $ `src/arima.nu`
     : String ws ( fmt worst ) ( string_push_str wl ( string_data ws ) ) ( string_free ws ) ( string_push_str wl `)` )
     ( check < worst 0.000000001 ( string_data wl ) )
     ( string_free wl )
+    // the O(r²) first column equals the full covariance's
+    : ( Vec f ) col ( vec_zeroed [f] . s1 r )
+    ( check ( _ar_init_col . s1 r . s1 phi . s1 theta col ) `algebra: the first column solves` )
+    : ~ f cworst 0.0
+    = k 0
+    ~ < k . s1 r {
+        : f dd ( float_abs - ( _ar_at col k ) ( _ar_at . s1 pm * k . s1 rd ) )
+        ? > dd cworst { = cworst dd } {}
+        = k + k 1
+    }
+    ( check < cworst 0.000000001 `algebra: P e₀ from the column formula equals the covariance's first column` )
+    // and the Chandrasekhar likelihood equals the covariance filter's
+    : ( Vec f ) yy ( sim_ar1 300 0.5 7 )
+    : ( Vec f ) delta0 ( vec_new [f] )
+    : ArimaSS s3 ( _ar_ss_new ar2 ma2 delta0 )
+    : b _c3 ( _ar_init_cov s3 )
+    : ~ f ssq3 0.0
+    : ~ f sl3 0.0
+    : ~ i t 0
+    ~ < t 300 {
+        : ArimaStep st ( _ar_step s3 ( _ar_at yy t ) )
+        = ssq3 + ssq3 / * . st innovation . st innovation . st variance
+        = sl3 + sl3 ( float_log . st variance )
+        = t + t 1
+    }
+    : ArimaLik lk3 ( _ar_lik_ml_from ssq3 sl3 300 )
+    : ArimaLik lk4 ( _ar_filter_arma . s1 phi . s1 theta col yy 0.0 )
+    : String cl ( string_from `algebra: the Chandrasekhar likelihood equals the covariance filter's (` )
+    : String c1 ( fmt . lk3 loglik ) ( string_push_str cl ( string_data c1 ) ) ( string_free c1 )
+    ( string_push_str cl ` vs ` )
+    : String c2 ( fmt . lk4 loglik ) ( string_push_str cl ( string_data c2 ) ) ( string_free c2 )
+    ( string_push_str cl `)` )
+    ( check & . lk4 ok ( near . lk3 loglik . lk4 loglik * 0.000000001 ( float_abs . lk3 loglik ) ) ( string_data cl ) )
+    ( string_free cl )
+    ( _ar_ss_free s3 ) ( vec_free [f] delta0 ) ( vec_free [f] yy ) ( vec_free [f] col )
     ( _ar_ss_free s1 ) ( _ar_ss_free s2 )
     ( vec_free [f] ar2 ) ( vec_free [f] ma2 ) ( vec_free [f] nod )
 }
@@ -333,6 +368,30 @@ $ `src/arima.nu`
     }
     ( string_free j1 )
     ?? ( arima_from_json `{"format":"other"}` ) { T mx → { ( check F `stream: a foreign document is refused` ) ( arima_free mx ) } F _ → { ( check T `stream: a foreign document is refused` ) } }
+    // restart + replay: the state after the 400 points equals the streamed one
+    : *ArimaModel m5 ( arima_clone m )
+    ( arima_restart m5 )
+    ( check == ( arima_n m5 ) 0 `stream: a restarted model has absorbed nothing` )
+    ( check == ( arima_n m ) 400 `stream: cloning then restarting the clone leaves the original alone` )
+    = t 0
+    ~ < t 400 { : ArimaUpdate _u ( arima_update m5 ( _ar_at y t ) ) = t + t 1 }
+    : String j5 ( arima_to_json m5 )
+    : String j6 ( arima_to_json m )
+    ( check ( string_eq j5 j6 ) `stream: restart + replay reproduces the streamed state bit for bit` )
+    ( string_free j5 ) ( string_free j6 )
+    ( arima_free m5 )
+    // a missing observation: the clock ticks, the uncertainty grows, nothing is learned
+    : *ArimaModel m6 ( arima_clone m )
+    : ArimaForecast f2 ( arima_forecast m6 2 )
+    : ArimaUpdate um ( arima_update m6 ( float_nan ) )
+    ( check & ( float_is_nan . um innovation ) ( float_is_nan . um z ) `stream: a NaN observation answers with NaN innovation and z` )
+    ( check == ( f64_to_bits . um predicted ) ( f64_to_bits ( _ar_at . f2 mean 0 ) ) `stream: and with the forecast the model had made` )
+    : ArimaForecast f1 ( arima_forecast m6 1 )
+    ( check == ( f64_to_bits ( _ar_at . f1 mean 0 ) ) ( f64_to_bits ( _ar_at . f2 mean 1 ) ) `stream: after the gap the next forecast is the two-step forecast from before it` )
+    ( check == ( f64_to_bits ( _ar_at . f1 se 0 ) ) ( f64_to_bits ( _ar_at . f2 se 1 ) ) `stream: with the two-step forecast's standard error` )
+    ( check == ( arima_n m6 ) 401 `stream: the gap counts as a step` )
+    ( arima_forecast_free f1 ) ( arima_forecast_free f2 )
+    ( arima_free m6 )
     // CSS alone lands near ML
     : *ArimaModel mc ( arima_fit_method head ( arima_spec 1 0 1 ) ARIMA_CSS )
     ( check ( near ( _ar_at ( arima_phi mc ) 0 ) ( _ar_at ( arima_phi m ) 0 ) 0.1 ) `stream: CSS lands near ML` )
@@ -360,7 +419,14 @@ $ `src/arima.nu`
     : *ArimaModel truth ( arima_fit y ( arima_spec_with_mean ( arima_spec 1 0 0 ) T ) )
     : *ArimaModel best ( arima_auto y 0 )
     : ArimaSpec bs . best spec
-    ( check <= ( arima_aicc best ) + ( arima_aicc truth ) 0.01 `select: the search does at least as well as the true order` )
+    : String sl ( string_from `select: the search does at least as well as the true order (found ` )
+    : String s1 ( fmt ( arima_aicc best ) ) ( string_push_str sl ( string_data s1 ) ) ( string_free s1 )
+    ( string_push_str sl ` vs ` )
+    : String s2 ( fmt ( arima_aicc truth ) ) ( string_push_str sl ( string_data s2 ) ) ( string_free s2 )
+    ( string_push_str sl `; order ` ) ( string_push_int sl . bs p ) ( string_push_str sl `,` ) ( string_push_int sl . bs d ) ( string_push_str sl `,` ) ( string_push_int sl . bs q )
+    ( string_push_str sl ? . bs mean ` mean)` ` no mean)` )
+    ( check <= ( arima_aicc best ) + ( arima_aicc truth ) 0.01 ( string_data sl ) )
+    ( string_free sl )
     ( check | > . bs p 0 > . bs q 0 `select: and finds a dynamic model` )
     ( check == . bs d 0 `select: no difference for a stationary AR(1)` )
     ( arima_free best ) ( arima_free truth ) ( vec_free [f] y )

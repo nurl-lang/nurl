@@ -287,7 +287,16 @@ Verdict {
 ```
 
 `feat` is the feature index a verdict is about, −1 for every version but
-the **range guard**: `range_guard` is a forestless version whose decision
+the **range guard**, the **flatline guard** and the **forecast**
+(`forecast`, src/forecast.nu: a seasonal ARIMA per numeric feature from
+`packages/arima`; its decision value is `−max_j |z_j|` with `z_j` the
+reading's distance from the feature's one-step forecast in the
+forecast's standard errors, so the margin is a sigma count too —
+`ANOM_FC_SIGMA`, 4.0; `units` says `forecast_standard_errors` — and it
+flags the reading that is ordinary for the feature and wrong for the
+moment. Off by default; `POST /train/forecast/<m>` fits it and switches
+it on; its `window_size` is the seasonal period in rows). The range
+guard: `range_guard` is a forestless version whose decision
 value is `−max_j |z_j|` over the standardised features (the shared scaler
 the last retrain fitted), so `score <= −margin` reads "some feature is
 `margin` or more standard deviations from its training mean" and the
