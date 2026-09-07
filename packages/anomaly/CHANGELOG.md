@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.16.0
+
+- **The ring's fill, beside the lifetime count.** `n_points_seen` never
+  stops climbing — it is the retrain schedule's clock and counts every
+  point the model ever accepted — so once the ring was full the dashboard's
+  *Points seen* read far above `max_data_points` and looked like a cap
+  that did not bite. It did: the metadata now also carries
+  `n_points_stored`, the rows in the ring right now, kept in step at every
+  ingest, import, cap change and reset (and derived as
+  `min(n_points_seen, max_data_points)` for metadata written before it
+  existed, which is what the ring held by construction). The Models page
+  leads with it — *Stored 150,000 · seen 1,203,411* — and the drawer says
+  which count the schedule follows. The MCP model briefs carry it too.
+
+- **Export.** `GET /models/dynamic/<m>/export?format=csv|jsonl` is the
+  stored points as a download: the whole ring by default, or the same
+  `from`/`to`/`last` window, `fields` projection and `limit` that `/data`
+  takes — the two share one row selection now, so they cannot disagree
+  about a window. CSV has one column per field any exported row carries,
+  `timestamp` first, so a field a sensor sent only sometimes is a column
+  with gaps and not a ragged file; text is quoted per RFC 4180, null is
+  empty, a nested value is its JSON text. JSONL is the records line for
+  line, which `POST /import?format=jsonl` takes back unchanged. The
+  response is `Content-Disposition: attachment` with `X-Rows`. The Models
+  drawer exports a model, the Anomalies page the selected range; both go
+  through `fetch`, because with sign-in on a plain link would carry no
+  token. A viewer may export: it is reading.
+
+- **A retrain keeps the layout.** `POST /train/autoencoder/<m>` with no
+  `hidden` (and the CLI and library with an empty layout) now retrains a
+  trained net with the layers it has, and only a first train falls back to
+  64-32-64: the dashboard's *Retrain autoencoder* with the box left empty
+  used to quietly replace a 64-16-64 net with the default. The box is
+  prefilled with the trained layers, and the training response reports
+  `layer_sizes`.
+
+- **Models page.** Every row has *Anomalies* and *Visualize* buttons that
+  open that model, and a *Features* column (the frozen feature count, or
+  the columns seen before the first train).
+
+- **Anomalies page.** *Max points* defaults to 50 000 and is documented as
+  what it is: the newest N of the range, biting only when the range holds
+  more. Stepping through points with the arrows no longer tears the popup
+  down and rebuilds it — the last point's tables stay, dimmed and at
+  their height, until the next one's are ready, and the record and the
+  verdict are fetched in one round trip when the scan knows the time.
+
+- **Sign out signs out.** The button now reloads the page after
+  forgetting the session, so what the page had fetched for the signed-in
+  person leaves the screen with them; the sign-in card also hides the
+  page's `main` rather than covering it. The Organization page drops the
+  notice above its model list that said nothing the list did not.
+
+- **A logo.** `static/favicon.svg` — six petals and the one that is not,
+  with the arrow that leaves the cluster — is every page's tab icon and
+  header mark.
+
 ## 0.15.0
 
 - **A flatline guard.** A sensor that has stopped moving hides from every

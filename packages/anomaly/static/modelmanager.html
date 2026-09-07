@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Model Manager · anomaly</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
   :root {
     --bg: #0e1116; --panel: #161b22; --panel2: #1c2230; --border: #2a3242;
@@ -20,6 +21,7 @@
            background: var(--panel); border-bottom: 1px solid var(--border);
            position: sticky; top: 0; z-index: 10; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  header h1 .logo { width: 22px; height: 22px; vertical-align: -5px; margin-right: 8px; }
   header .brand { color: var(--accent2); font-family: var(--mono); }
   nav { display: flex; gap: 4px; margin-left: auto; }
   nav a { padding: 6px 12px; border-radius: 8px; color: var(--muted); font-weight: 500; }
@@ -38,7 +40,7 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: #06122b; }
   button.danger { color: var(--danger); }
   button.danger:hover { border-color: var(--danger); background: rgba(255,107,107,.1); }
-  button.small { padding: 3px 8px; font-size: 12px; }
+  button.small, .btn.small { padding: 3px 8px; font-size: 12px; }
   input[type=text], input[type=number], select {
     font-family: var(--mono); font-size: 13px; background: var(--bg); color: var(--fg);
     border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
@@ -105,7 +107,7 @@
   .vtable td.dim { color: var(--muted); }
   .section-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px; }
   .section-head h3 { margin: 0; }
-  .section-head .spacer { flex: 1; }
+  .section-head .spacer, .actions .spacer { flex: 1; }
   .hint { color: var(--muted); font-size: 11.5px; margin: 8px 0 0; line-height: 1.45; }
   textarea { width: 100%; min-height: 240px; font-family: var(--mono); font-size: 12px;
              background: var(--bg); color: var(--fg); border: 1px solid var(--border);
@@ -190,7 +192,7 @@
 </head>
 <body>
 <header>
-  <h1><span class="brand">anomaly</span> · Model Manager</h1>
+  <h1><img class="logo" src="/favicon.svg" alt=""><span class="brand">anomaly</span> · Model Manager</h1>
   <nav>
     <a href="/modelmanager.html" class="active">Models</a>
     <a href="/modeltrainer.html">Trainer</a>
@@ -218,7 +220,8 @@
       <tr>
         <th>Model</th>
         <th>Status</th>
-        <th style="text-align:right">Points seen</th>
+        <th style="text-align:right" title="Points in the ring now — the newest max_data_points are kept. The lifetime count follows when the oldest have been evicted.">Stored</th>
+        <th style="text-align:right" title="Features the model scores on (one-hot and calendar columns included), frozen at the last train; before that, the columns it has seen">Features</th>
         <th>Created</th>
         <th>Last trained</th>
         <th>Versions</th>
@@ -313,6 +316,50 @@ function modelLabel(name) {
   return a && a.length ? a : name;
 }
 
+// The ring's fill first — that is what the model trains and scans on —
+// and the lifetime count beside it once they differ, i.e. once the ring
+// has been full and the oldest points have left it.
+function storedCell(m) {
+  const seen = m.n_points_seen ?? 0, stored = m.n_points_stored ?? seen;
+  return stored.toLocaleString() + (seen > stored
+    ? ' <span class="muted" title="points ever seen by this model; the oldest ' + (seen - stored).toLocaleString() +
+      ' have been evicted from the ring">· seen ' + seen.toLocaleString() + "</span>" : "");
+}
+function featCell(m) {
+  const feats = m.feature_names || [], nc = Object.keys(m.column_types || {}).length;
+  if (feats.length) return '<span title="' + esc(feats.join(", ")) + '">' + feats.length + "</span>" +
+    (nc && nc !== feats.length ? ' <span class="muted">/ ' + nc + " col" + (nc === 1 ? "" : "s") + "</span>" : "");
+  return nc ? '<span class="muted" title="columns seen; the feature order is frozen at the first train">' + nc + " col" + (nc === 1 ? "" : "s") + "</span>"
+            : '<span class="muted">–</span>';
+}
+
+// A model's stored points as a file. Through fetch, not a link: with
+// sign-in on, the token travels only with a wrapped fetch.
+async function downloadFile(url, filename, btn) {
+  const orig = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span>'; }
+  try {
+    const r = await fetch(url);
+    if (!r.ok) {
+      let m = ""; try { m = (await r.json()).message || ""; } catch (e) {}
+      throw new Error(m || ("HTTP " + r.status));
+    }
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    toast((r.headers.get("X-Rows") || "?") + " rows → " + filename, "ok", "exported");
+  } catch (e) {
+    toast(e.message, "err", "export failed");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
+  }
+}
+function exportModel(name, fmt, btn) {
+  return downloadFile("/models/dynamic/" + enc(name) + "/export?format=" + fmt, name + "." + fmt, btn);
+}
+
 function render() {
   const names = Object.keys(MODELS)
     .sort((a, b) => modelLabel(a).localeCompare(modelLabel(b)));
@@ -332,11 +379,14 @@ function render() {
                    esc(name) + "</div>" : "") + "</td>" +
       '<td><span class="pill ' + (trained ? "trained" : "warming") + '">' +
         (trained ? "trained" : "warming") + "</span></td>" +
-      '<td style="text-align:right">' + (m.n_points_seen ?? 0).toLocaleString() + "</td>" +
+      '<td style="text-align:right;white-space:nowrap">' + storedCell(m) + "</td>" +
+      '<td style="text-align:right">' + featCell(m) + "</td>" +
       "<td>" + esc(m.created || "–") + "</td>" +
       "<td>" + fmtTrained(m.last_trained_at) + "</td>" +
       "<td>" + versionSummary(m) + "</td>" +
       '<td><div class="actions">' +
+        '<a class="btn small" href="/anomalies.html?model=' + enc(name) + '" title="Scan this model\'s stored points: what was flagged, when, and why">Anomalies</a>' +
+        '<a class="btn small" href="/visualize.html?model=' + enc(name) + '" title="Plot any numeric feature of this model over time">Visualize</a>' +
         '<button class="small" data-act="train" data-m="' + esc(name) + '" title="Retrain the forests on the stored points now; margins are kept">Train</button>' +
         '<button class="small" data-act="finetune" data-m="' + esc(name) + '" title="Set every margin so 1 % of the last 24 h would be flagged">Finetune</button>' +
         '<button class="small" data-act="reset" data-m="' + esc(name) + '">Reset</button>' +
@@ -477,7 +527,8 @@ const HELP = {
     "the ring is still filling, another once it holds max points. Retraining keeps " +
     "the margins.",
   hidden: "Layer sizes of the autoencoder between input and output, e.g. 64,32,64. " +
-    "Smaller middle layers force a stronger summary of what is normal.",
+    "Smaller middle layers force a stronger summary of what is normal. Empty keeps the " +
+    "trained layout; a first train uses 64,32,64.",
 };
 function q(key) { return '<span class="q" title="' + esc(HELP[key]) + '">?</span>'; }
 function th(label, key) { return "<th" + (key ? ' title="' + esc(HELP[key]) + '"' : "") + ">" + label + (key ? " " + q(key) : "") + "</th>"; }
@@ -582,6 +633,14 @@ function refreshCalCells() {
   });
 }
 
+// The hidden layers a trained net has: its layer list minus the input
+// and output ends — what the layout box shows, and what a retrain with
+// the box left empty keeps.
+function aeHiddenOf(ae) {
+  const ls = ae && ae.trained && Array.isArray(ae.layer_sizes) ? ae.layer_sizes : [];
+  return ls.length > 2 ? ls.slice(1, -1).join(",") : "";
+}
+
 function renderDrawer(name) {
   const m = MODELS[name];
   $("dTitle").textContent = name;
@@ -646,15 +705,17 @@ function renderDrawer(name) {
   $("dBody").innerHTML =
     '<div class="section"><h3>Overview</h3><dl class="kv">' +
       "<dt>Status</dt><dd>" + (trained ? "trained" : "warming up") + "</dd>" +
-      "<dt>Points seen</dt><dd>" + (m.n_points_seen ?? 0).toLocaleString() + "</dd>" +
+      "<dt>Stored</dt><dd>" + (m.n_points_stored ?? m.n_points_seen ?? 0).toLocaleString() +
+        ' <span class="muted">of the ' + (m.max_data_points ?? 0).toLocaleString() + " the ring keeps</span></dd>" +
+      "<dt>Points seen</dt><dd>" + (m.n_points_seen ?? 0).toLocaleString() +
+        ' <span class="muted">lifetime — the retrain schedule counts these</span></dd>' +
       "<dt>Clock " + q("clock") + "</dt><dd>" + (COUNT
         ? 'count <span class="muted">— no timestamps; windows are point counts</span>'
         : 'time <span class="muted">— point timestamps</span>') + "</dd>" +
-      "<dt>Ring</dt><dd>" + (m.max_data_points ?? "–").toLocaleString?.() +
-        ' <span class="muted">points kept</span></dd>' +
       "<dt>Created</dt><dd>" + esc(m.created || "–") + "</dd>" +
       "<dt>Last trained</dt><dd>" + fmtTrained(m.last_trained_at) + "</dd>" +
-      "<dt>Features</dt><dd>" + (feats.length ? esc(feats.join(", ")) : '<span class="muted">–</span>') + "</dd>" +
+      "<dt>Features</dt><dd>" + (feats.length ? "<b>" + feats.length + "</b> · " + esc(feats.join(", "))
+        : '<span class="muted">none yet — the order freezes at the first train</span>') + "</dd>" +
     "</dl></div>" +
 
     '<div class="section"><h3>Columns</h3><div class="chips">' + colChips + "</div></div>" +
@@ -699,14 +760,15 @@ function renderDrawer(name) {
       (aeRows ? '<dl class="ae-grid">' + aeRows + "</dl>" : "") +
       '<div class="ae-form">' +
         '<div class="field"><label>hidden layers ' + q("hidden") + "</label>" +
-          '<input type="text" id="aeHidden" placeholder="64,32,64" title="' + esc(HELP.hidden) + '"></div>' +
+          '<input type="text" id="aeHidden" placeholder="64,32,64" value="' + esc(aeHiddenOf(ae)) + '" title="' + esc(HELP.hidden) + '"></div>' +
         '<div class="field"><label>pre-filter ' + q("prefilter") + "</label>" +
           '<input type="text" id="aeCont" placeholder="auto" title="' + esc(HELP.prefilter) + '"></div>' +
         '<button id="aeTrain">' + (ae.trained ? "Retrain" : "Train") + " autoencoder</button>" +
       "</div>" +
       '<p class="hint">Trains a reconstruction model on the ring after an isolation-forest ' +
-        "pre-filter drops the obvious outliers. Leave the fields empty for 64-32-64 and an " +
-        "automatic pre-filter. Its alert line is the <b>autoencoder</b> row above; its threshold " +
+        "pre-filter drops the obvious outliers. The layout box shows the trained net’s layers; " +
+        "empty, a retrain keeps them (a first train uses 64-32-64) and the pre-filter is automatic. " +
+        "Its alert line is the <b>autoencoder</b> row above; its threshold " +
         "is learned, so retrain it when the feed’s normal has moved (or tick the schedule box).</p>" +
     "</div>" +
 
@@ -750,8 +812,13 @@ function renderDrawer(name) {
       '<button onclick="doAction(\'train\',\'' + esc(name) + '\',this)" title="Retrain every enabled forest on the ring now. Margins are kept.">Force train</button>' +
       '<a class="btn" href="/visualize.html?model=' + enc(name) + '">Visualize →</a>' +
       '<a class="btn" href="/anomalies.html?model=' + enc(name) + '">Anomalies →</a>' +
+      '<span class="spacer"></span>' +
+      '<button class="ro" id="expCsv" title="Download every stored point as CSV: one column per field, timestamp first">Export CSV</button>' +
+      '<button class="ro" id="expJsonl" title="Download every stored point as JSON Lines — the stored records as they are; the importer takes the file back">Export JSONL</button>' +
     "</div></div>";
 
+  $("expCsv").onclick   = (e) => exportModel(name, "csv", e.currentTarget);
+  $("expJsonl").onclick = (e) => exportModel(name, "jsonl", e.currentTarget);
   $("vSave").onclick    = (e) => saveVersions(name, e.currentTarget);
   $("schedSave").onclick= (e) => saveSchedule(name, e.currentTarget);
   $("aeTrain").onclick  = (e) => trainAE(name, e.currentTarget);
@@ -1042,8 +1109,8 @@ Auth.ready().then(() => {
   Auth.viewerNotice("Changing models, training and deleting are for administrators.");
   if (!Auth.canWrite()) {
     const st = document.createElement("style");
-    st.textContent = ".actions{display:none!important}#dAlias,#dAliasSave{display:none!important}" +
-      ".drawer-body button:not(.drawer-close){display:none!important}" +
+    st.textContent = ".actions button:not(.ro){display:none!important}#dAlias,#dAliasSave{display:none!important}" +
+      ".drawer-body button:not(.drawer-close):not(.ro){display:none!important}" +
       ".drawer-body input,.drawer-body select,.drawer-body textarea{pointer-events:none;opacity:.55}";
     document.head.appendChild(st);
   }

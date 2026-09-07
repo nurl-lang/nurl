@@ -223,6 +223,7 @@ $ `src/dynamic.nu`
     }
     ( check == ( model_n_points mo ) 30 `mech: ring capped at 30` )
     ( check == . mm n_seen 40 `mech: n_seen counts past the cap` )
+    ( check == . mm n_stored 30 `mech: n_stored is the ring's fill, not the lifetime count` )
     ?? ( vec_get [i] . mo times 0 ) {
         T t0 → { ( check > t0 T0 `mech: oldest point evicted` ) }
         F _ → {}
@@ -239,6 +240,7 @@ $ `src/dynamic.nu`
     ( check == ( model_n_points mo2 ) 30 `mech: reopened ring intact` )
     : *Meta mm2 ( model_metadata mo2 )
     ( check == . mm2 n_seen 40 `mech: reopened n_seen intact` )
+    ( check == . mm2 n_stored 30 `mech: reopened n_stored intact` )
     ( check == . mm2 sched_below 10 `mech: reopened schedule intact` )
 
     // Bad values are hard errors and leave no trace.
@@ -256,6 +258,7 @@ $ `src/dynamic.nu`
     // Reset: data and forests gone, identity/schedule kept.
     ( model_reset mo2 )
     ( check == ( model_n_points mo2 ) 0 `mech: reset drops the ring` )
+    ( check == . ( model_metadata mo2 ) n_stored 0 `mech: reset zeroes n_stored` )
     ( check == ( model_is_trained mo2 ) F `mech: reset drops the forests` )
     ( check == . ( model_metadata mo2 ) sched_below 10 `mech: reset keeps the schedule` )
     ( check ( store_exists st `mech` ) `mech: reset keeps the model` )

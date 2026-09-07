@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Anomalies · anomaly</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
   :root {
     --bg: #0e1116; --panel: #161b22; --panel2: #1c2230; --border: #2a3242;
@@ -19,6 +20,7 @@
   header { display: flex; align-items: center; gap: 20px; padding: 14px 24px; background: var(--panel);
            border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header h1 .logo { width: 22px; height: 22px; vertical-align: -5px; margin-right: 8px; }
   header .brand { color: var(--accent2); font-family: var(--mono); }
   nav { display: flex; gap: 4px; margin-left: auto; }
   nav a { padding: 6px 12px; border-radius: 8px; color: var(--muted); font-weight: 500; }
@@ -93,6 +95,7 @@
            max-height: 90vh; overflow: auto; background: var(--panel); border: 1px solid var(--border);
            border-radius: var(--radius); box-shadow: 0 20px 60px rgba(0,0,0,.6); z-index: 41; display: none; }
   .modal.open { display: block; }
+  .modal.busy .mbody { opacity: .45; transition: opacity .15s; }
   .modal .mhead { display: flex; align-items: baseline; gap: 14px; padding: 16px 20px 10px; position: sticky; top: 0;
                   background: var(--panel); border-bottom: 1px solid var(--border); }
   .modal .mhead h3 { margin: 0; font-size: 15px; font-family: var(--mono); }
@@ -121,7 +124,7 @@
 </head>
 <body>
 <header>
-  <h1><span class="brand">anomaly</span> · Anomalies</h1>
+  <h1><img class="logo" src="/favicon.svg" alt=""><span class="brand">anomaly</span> · Anomalies</h1>
   <nav>
     <a href="/modelmanager.html">Models</a>
     <a href="/modeltrainer.html">Trainer</a>
@@ -138,10 +141,13 @@
       <label class="lbl">From</label><input type="datetime-local" id="from">
       <label class="lbl" style="margin-left:6px">To</label><input type="datetime-local" id="to">
     </span>
-    <span><label class="lbl">Max points</label>
-      <input type="number" id="cap" value="5000" min="10" max="200000" step="500" style="width:100px"></span>
+    <span title="At most this many points are scored — the newest of the range. It only bites when the range holds more."><label class="lbl">Max points</label>
+      <input type="number" id="cap" value="50000" min="10" max="200000" step="5000" style="width:100px"></span>
     <button class="primary" id="run" onclick="scan(false)">Scan</button>
     <button id="rerun" onclick="scan(true)" title="Ignore the cached verdicts and re-score every point">Rescore</button>
+    <span><label class="lbl">Export</label>
+      <button onclick="exportRange('csv')" title="Download the stored points of this range as CSV (every point in the range, not just the scored ones)">CSV</button>
+      <button onclick="exportRange('jsonl')" title="Download the stored points of this range as JSON Lines">JSONL</button></span>
     <span class="muted" id="prog"></span>
   </div>
 
@@ -328,7 +334,7 @@ function rangeParams() {
 async function scan(force) {
   const name = $("model").value;
   if (!name) return;
-  const cap = Math.max(10, Math.min(200000, parseInt($("cap").value, 10) || 5000));
+  const cap = Math.max(10, Math.min(200000, parseInt($("cap").value, 10) || 50000));
   const feat = $("feature").value;
   // Every numeric feature comes back with each point: the feature chart
   // needs one, the "why" column of a forest-flagged point needs them all.
@@ -360,6 +366,30 @@ async function scan(force) {
     (c.misses ? c.misses + " scored, " + c.hits + " cached" : "all " + c.hits + " from cache") +
     " · " + ms + " ms";
   $("prog").className = "muted";
+}
+
+// The stored points of the chosen range as a file. Through fetch, not a
+// link: with sign-in on, the token travels only with a wrapped fetch.
+async function exportRange(fmt) {
+  const name = $("model").value;
+  if (!name) return;
+  const q = ["format=" + fmt, rangeParams()].filter(Boolean).join("&");
+  $("prog").textContent = "exporting…"; $("prog").className = "muted";
+  try {
+    const r = await fetch("/models/dynamic/" + enc(name) + "/export?" + q);
+    if (!r.ok) {
+      let m = ""; try { m = (await r.json()).message || ""; } catch (e) {}
+      throw new Error(m || ("HTTP " + r.status));
+    }
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = name + "." + fmt;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    $("prog").textContent = "exported " + (r.headers.get("X-Rows") || "?") + " points → " + name + "." + fmt;
+  } catch (e) {
+    $("prog").textContent = "export failed: " + e.message; $("prog").className = "err";
+  }
 }
 
 // ── rendering ─────────────────────────────────────────────────────────
@@ -737,6 +767,20 @@ function renderList(flagged) {
 // on its own (the record first, its verdict by the record's timestamp).
 let MODAL = null;      // { index, seq } while the popup is open
 
+// Stepping to the next point must not tear the popup down and rebuild
+// it: the last point's tables stay, dimmed and at their height, until
+// the new one's are ready, so the arrows walk a steady window.
+function modalBusy(on) {
+  const md = $("modal");
+  if (on) {
+    if (md.classList.contains("open")) md.style.minHeight = md.offsetHeight + "px";
+    md.classList.add("busy");
+  } else {
+    md.classList.remove("busy");
+    md.style.minHeight = "";
+  }
+}
+
 function openPoint(p) { if (p) openPointAt(p.index); }
 
 function stepPoint(d) {
@@ -767,17 +811,25 @@ async function openPointAt(index) {
   };
   head(known);
   navState();
-  $("mbody").innerHTML = '<div class="muted">loading…</div>';
+  const wasOpen = $("modal").classList.contains("open");
+  modalBusy(true);
+  if (!wasOpen) $("mbody").innerHTML = '<div class="muted">loading…</div>';
   $("scrim").classList.add("open"); $("modal").classList.add("open");
 
-  const rec = await api("GET", "/models/dynamic/" + enc(name) + "/data?at=" + index);
+  // The record, and — when the scan already knows the point's time — its
+  // verdict in the same round trip.
+  const verdictAt = (ts) => api("GET", "/models/dynamic/" + enc(name) + "/anomalies?from=" + ts + "&to=" + ts +
+    "&contrib=999" + (numericFeatures(name).length ? "&fields=" + enc(numericFeatures(name).join(",")) : ""));
+  const recP = api("GET", "/models/dynamic/" + enc(name) + "/data?at=" + index);
+  let detP = known ? verdictAt(known.timestamp) : null;
+  const rec = await recP;
   if (!MODAL || MODAL.seq !== seq) return;
   const row = rec.ok && rec.data && rec.data.data && rec.data.data[0] || null;
   const ts = known ? known.timestamp : row && (row.timestamp ?? row.time);
+  if (!detP && ts !== undefined && ts !== null) detP = verdictAt(ts);
   let pt = null;
-  if (ts !== undefined && ts !== null) {
-    const det = await api("GET", "/models/dynamic/" + enc(name) + "/anomalies?from=" + ts + "&to=" + ts +
-      "&contrib=999" + (numericFeatures(name).length ? "&fields=" + enc(numericFeatures(name).join(",")) : ""));
+  if (detP) {
+    const det = await detP;
     if (!MODAL || MODAL.seq !== seq) return;
     const pts = det.ok && det.data && det.data.points || [];
     pt = pts.find(x => x.index === index) || pts[0] || null;
@@ -824,8 +876,9 @@ async function openPointAt(index) {
     }
   }
   $("mbody").innerHTML = h;
+  modalBusy(false);
 }
-function closePoint() { MODAL = null; $("scrim").classList.remove("open"); $("modal").classList.remove("open"); }
+function closePoint() { MODAL = null; modalBusy(false); $("scrim").classList.remove("open"); $("modal").classList.remove("open"); }
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closePoint();
   if (!MODAL) return;
