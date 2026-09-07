@@ -27,7 +27,11 @@
   nav a { padding: 6px 12px; border-radius: 8px; color: var(--muted); font-weight: 500; }
   nav a:hover { background: var(--panel2); color: var(--fg); }
   nav a.active { background: var(--accent); color: #06122b; }
-  main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+  /* 1200px wide, centred — and when the table needs more (hash names,
+     aliases, the action buttons), the page widens with it up to the
+     viewport instead of letting the table run out of a fixed box to the
+     right, which read as "the margin does not centre". */
+  main { width: fit-content; min-width: min(1200px, 100%); max-width: 100%; margin: 0 auto; padding: 24px; }
   .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
   .toolbar .spacer { flex: 1; }
   .stat { display: flex; gap: 18px; color: var(--muted); font-size: 13px; }
@@ -61,7 +65,8 @@
           font-weight: 600; border: 1px solid var(--border); }
   .pill.trained { color: var(--ok); border-color: rgba(86,211,100,.4); background: rgba(86,211,100,.08); }
   .pill.warming { color: var(--warn); border-color: rgba(246,195,68,.4); background: rgba(246,195,68,.08); }
-  .actions { display: flex; gap: 6px; justify-content: flex-end; }
+  .actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+  .tblwrap { overflow-x: auto; }
   .muted { color: var(--muted); }
   .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
   .empty svg { opacity: .3; }
@@ -215,7 +220,7 @@
     </div>
   </div>
 
-  <table id="tbl">
+  <div class="tblwrap"><table id="tbl">
     <thead>
       <tr>
         <th>Model</th>
@@ -229,7 +234,7 @@
       </tr>
     </thead>
     <tbody id="rows"></tbody>
-  </table>
+  </table></div>
   <div id="empty" class="empty" style="display:none">
     <div style="font-size:15px;margin-bottom:6px">No models yet</div>
     <div>Feed data via the <a href="/modeltrainer.html">Trainer</a> or <code>POST /detect/&lt;model&gt;</code>.</div>
