@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.16.1
+
+- **The Models page centres on a wide screen.** `main` was a 1200 px box
+  with `margin: 0 auto`; when the model table needed more — hash names
+  with an alias under them, six action buttons — the table ran out of the
+  box to the right and the page read as off-centre. The page now widens
+  with its table up to the viewport (`width: fit-content`, at least 1200
+  px) and stays centred; below that the action buttons wrap and the table
+  scrolls inside its own wrapper instead of being cut off.
+
 ## 0.16.0
 
 - **The ring's fill, beside the lifetime count.** `n_points_seen` never
