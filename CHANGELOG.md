@@ -6,7 +6,25 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.61.1] — 2026-09-07
+
+### Added
+
+- **`packages/anomaly` 0.14.0 → 0.19.0 — data sources.** An administrator
+  points the service at something that publishes data and the server
+  fetches it on a schedule into a model: an OGC WFS 2.0 endpoint's stored
+  queries (the Finnish Meteorological Institute) or feature types (a
+  GeoServer's or MapServer's — Helsinki, Väylä, SYKE, DWD), or any URL
+  answering JSON, polled with the headers it needs. The service's
+  catalogue is browsed and picked in the dashboard, the answer previewed,
+  the columns tapped as features — as numbers, or as categories so a
+  place or a station is an identity the anomaly is judged against — and
+  each run asks only for what it has not seen. Before that, 0.14–0.16
+  brought a range guard, events, labels and votes, GPU scoring bound to
+  the calling thread, CSV/JSONL export and a dashboard polish;
+  [`packages/anomaly/CHANGELOG.md`](packages/anomaly/CHANGELOG.md) has the
+  full text. `pqc` 0.2.2 and `swarm` 0.2.1 were republished after the
+  print-family rule.
 
 ### Fixed
 
