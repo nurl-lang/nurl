@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.17.1
+
+- **The Sources page lays out.** The list was a ten-column table: on a
+  1200 px card the action buttons ran off the right edge and a long feature
+  list stacked the row twenty lines high. Each source is now a two-line
+  card — name, state and model on the first line, the query, parameters,
+  schedule, last run, row count and features on the second, the actions
+  beside them — and the actions drop under the name below 900 px. The
+  failure reason of the last run reads under the card.
+- **Features are chosen by tapping, not typing.** In the Sources editor a
+  preview row is the control — tap it to take the column or leave it — and
+  the chosen features show as chips under the table, each a tap to toggle;
+  a saved source opened for editing shows its chips straight away, so a
+  feature can be dropped without a preview. A stored query's `parameters`
+  list (a comma-separated list of names nobody knows by heart) is marked
+  optional: left empty, the service answers with its default set and the
+  columns are picked from the preview.
+- **The Models page at every width.** `main` was pinned to 1200 px, so a
+  narrower window cut the action buttons off the right edge; the created
+  date broke in the middle of its ISO string; the six buttons stacked one
+  per line. The page now takes the viewport up to 1500 px, a long name or
+  alias wraps in its own column, dates read `2026-09-07 08:34` and never
+  break, the buttons sit on one line from 1300 px and on two below it,
+  and under 1000 px the features, created and versions columns step aside
+  so the table fits. Checked at 1000, 1200, 1400 and 1920 px.
+- **The header wraps on a phone.** Six navigation links and the sign-in
+  chip made every page 650 px wide on a 412 px screen; the header and
+  its navigation now wrap, and the Sources page fits a phone with no
+  sideways scroll (the column table scrolls inside its own box).
+
 ## 0.17.0
 
 - **Data sources: a WFS fetched on a schedule.** An administrator can
