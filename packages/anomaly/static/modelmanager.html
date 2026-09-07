@@ -19,19 +19,21 @@
   a { color: var(--accent); text-decoration: none; }
   header { display: flex; align-items: center; gap: 20px; padding: 14px 24px;
            background: var(--panel); border-bottom: 1px solid var(--border);
-           position: sticky; top: 0; z-index: 10; }
+           position: sticky; top: 0; z-index: 10; flex-wrap: wrap; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .2px; }
   header h1 .logo { width: 22px; height: 22px; vertical-align: -5px; margin-right: 8px; }
   header .brand { color: var(--accent2); font-family: var(--mono); }
-  nav { display: flex; gap: 4px; margin-left: auto; }
+  nav { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
   nav a { padding: 6px 12px; border-radius: 8px; color: var(--muted); font-weight: 500; }
   nav a:hover { background: var(--panel2); color: var(--fg); }
   nav a.active { background: var(--accent); color: #06122b; }
-  /* 1200px wide, centred — and when the table needs more (hash names,
-     aliases, the action buttons), the page widens with it up to the
-     viewport instead of letting the table run out of a fixed box to the
-     right, which read as "the margin does not centre". */
-  main { width: fit-content; min-width: min(1200px, 100%); max-width: 100%; margin: 0 auto; padding: 24px; }
+  /* The page takes the viewport up to 1500px and stays centred. The
+     table sizes itself inside: a long name or alias wraps in its own
+     column, dates never break mid-token, the action buttons wrap into
+     two or three lines as the width shrinks, and below 1000px the
+     secondary columns go and the table scrolls in its wrapper rather
+     than running off the right edge. */
+  main { width: 100%; max-width: 1500px; margin: 0 auto; padding: 24px; }
   .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
   .toolbar .spacer { flex: 1; }
   .stat { display: flex; gap: 18px; color: var(--muted); font-size: 13px; }
@@ -65,8 +67,18 @@
           font-weight: 600; border: 1px solid var(--border); }
   .pill.trained { color: var(--ok); border-color: rgba(86,211,100,.4); background: rgba(86,211,100,.08); }
   .pill.warming { color: var(--warn); border-color: rgba(246,195,68,.4); background: rgba(246,195,68,.08); }
-  .actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+  .actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap;
+             min-width: 200px; max-width: 460px; margin-left: auto; }
   .tblwrap { overflow-x: auto; }
+  thead th { white-space: nowrap; }
+  td.model { max-width: 360px; overflow-wrap: anywhere; }
+  td.nowrap { white-space: nowrap; }
+  /* Room for all six buttons on one line once the viewport allows it. */
+  @media (min-width: 1300px) { .actions { min-width: 430px; } }
+  @media (max-width: 1000px) {
+    .opt { display: none; }
+    .actions { min-width: 150px; }
+  }
   .muted { color: var(--muted); }
   .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
   .empty svg { opacity: .3; }
@@ -227,10 +239,10 @@
         <th>Model</th>
         <th>Status</th>
         <th style="text-align:right" title="Points in the ring now — the newest max_data_points are kept. The lifetime count follows when the oldest have been evicted.">Stored</th>
-        <th style="text-align:right" title="Features the model scores on (one-hot and calendar columns included), frozen at the last train; before that, the columns it has seen">Features</th>
-        <th>Created</th>
+        <th class="opt" style="text-align:right" title="Features the model scores on (one-hot and calendar columns included), frozen at the last train; before that, the columns it has seen">Features</th>
+        <th class="opt">Created</th>
         <th>Last trained</th>
-        <th>Versions</th>
+        <th class="opt">Versions</th>
         <th style="text-align:right">Actions</th>
       </tr>
     </thead>
@@ -286,6 +298,13 @@ async function api(method, url, body) {
 
 // `last_trained_at` is a point counter (n_seen at the last retrain), not a
 // clock time — render it as a point mark.
+// "2026-09-07T08:34:40Z" → "2026-09-07 08:34" — the seconds and the zone
+// marker are noise in a listing, and the T split the date from the time
+// wherever the column was narrow.
+function fmtCreated(c) {
+  if (!c) return "–";
+  return String(c).replace("T", " ").replace(/(:\d\d)?(\.\d+)?Z?$/, "");
+}
 function fmtTrained(n) {
   if (!n || n <= 0) return '<span class="muted">never</span>';
   return '@ ' + Number(n).toLocaleString() + ' pts';
@@ -380,16 +399,16 @@ function render() {
     if (name === SELECTED) tr.className = "selected";
     const trained = isTrained(m);
     tr.innerHTML =
-      '<td><span class="name" data-m="' + esc(name) + '">' + esc(modelLabel(name)) + "</span>" +
+      '<td class="model"><span class="name" data-m="' + esc(name) + '">' + esc(modelLabel(name)) + "</span>" +
         (m.alias ? '<div class="muted" style="font-family:var(--mono);font-size:11px">' +
                    esc(name) + "</div>" : "") + "</td>" +
       '<td><span class="pill ' + (trained ? "trained" : "warming") + '">' +
         (trained ? "trained" : "warming") + "</span></td>" +
       '<td style="text-align:right;white-space:nowrap">' + storedCell(m) + "</td>" +
-      '<td style="text-align:right">' + featCell(m) + "</td>" +
-      "<td>" + esc(m.created || "–") + "</td>" +
-      "<td>" + fmtTrained(m.last_trained_at) + "</td>" +
-      "<td>" + versionSummary(m) + "</td>" +
+      '<td class="opt" style="text-align:right">' + featCell(m) + "</td>" +
+      '<td class="opt nowrap">' + esc(fmtCreated(m.created)) + "</td>" +
+      '<td class="nowrap">' + fmtTrained(m.last_trained_at) + "</td>" +
+      '<td class="opt nowrap">' + versionSummary(m) + "</td>" +
       '<td><div class="actions">' +
         '<a class="btn small" href="/anomalies.html?model=' + enc(name) + '" title="Scan this model\'s stored points: what was flagged, when, and why">Anomalies</a>' +
         '<a class="btn small" href="/visualize.html?model=' + enc(name) + '" title="Plot any numeric feature of this model over time">Visualize</a>' +

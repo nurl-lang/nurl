@@ -16,12 +16,12 @@
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font-family:var(--sans); font-size:14px; }
   a { color:var(--accent); text-decoration:none; }
-  header { display:flex; align-items:center; gap:20px; padding:14px 24px; background:var(--panel);
-           border-bottom:1px solid var(--border); position:sticky; top:0; z-index:10; }
+  header { display:flex; align-items:center; gap:12px 20px; padding:14px 24px; background:var(--panel);
+           border-bottom:1px solid var(--border); position:sticky; top:0; z-index:10; flex-wrap:wrap; }
   header h1 { font-size:16px; margin:0; font-weight:600; }
   header h1 .logo { width: 22px; height: 22px; vertical-align: -5px; margin-right: 8px; }
   header .brand { color:var(--accent2); font-family:var(--mono); }
-  nav { display:flex; gap:4px; margin-left:auto; }
+  nav { display:flex; gap:4px; margin-left:auto; flex-wrap:wrap; }
   nav a { padding:6px 12px; border-radius:8px; color:var(--muted); font-weight:500; }
   nav a:hover { background:var(--panel2); color:var(--fg); }
   nav a.active { background:var(--accent); color:#06122b; }
@@ -30,7 +30,7 @@
           padding:18px; margin-bottom:20px; }
   .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted);
              margin:0 0 4px; font-weight:600; }
-  .card h3 { font-size:13px; margin:18px 0 8px; font-weight:600; color:var(--fg); }
+  .card h3 { font-size:13px; margin:18px 0 8px; font-weight:600; color:var(--fg); overflow-wrap:anywhere; }
   .card h3 .step { display:inline-block; width:20px; height:20px; border-radius:50%; background:var(--panel2);
                    border:1px solid var(--border); color:var(--muted); font-size:11px; text-align:center;
                    line-height:18px; margin-right:8px; font-family:var(--mono); }
@@ -63,14 +63,30 @@
   .empty { text-align:center; padding:28px; color:var(--muted); }
   .err { color:var(--danger); font-size:12px; }
   .note { color:var(--accent2); font-size:12px; }
-  .actions { min-width:190px; }
-  td.clip { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .src { display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-rows:auto auto; gap:6px 16px;
+         padding:12px 4px; border-bottom:1px solid var(--border); align-items:start; }
+  .src:last-child { border-bottom:none; }
+  .src .head { display:flex; gap:10px; align-items:center; flex-wrap:wrap; min-width:0; }
+  .src .head .name { font-weight:600; font-size:14px; }
+  .src .head .model { font-family:var(--mono); font-size:12px; }
+  .src .facts { display:flex; gap:6px 18px; flex-wrap:wrap; font-size:12px; color:var(--muted); min-width:0; }
+  .src .facts span { overflow-wrap:anywhere; }
+  .src .facts code { color:var(--fg); font-size:12px; overflow-wrap:anywhere; }
+  .src .facts .feats { white-space:normal; overflow-wrap:anywhere; }
+  .src .why { color:var(--danger); font-size:12px; overflow-wrap:anywhere; grid-column:1 / -1; }
+  .src .actions { grid-column:2; grid-row:1 / span 2; align-self:center; display:flex; gap:4px;
+                  flex-wrap:wrap; justify-content:flex-end; max-width:350px; }
+  @media (max-width: 900px) {
+    .src { grid-template-columns:1fr; }
+    .src .actions { grid-column:1; grid-row:auto; justify-content:flex-start; max-width:none; }
+  }
   .actions button { margin:0 4px 4px 0; }
   .catalog { max-height:320px; overflow:auto; border:1px solid var(--border); border-radius:8px; background:var(--bg); }
-  .catalog .q { padding:7px 10px; border-bottom:1px solid var(--border); cursor:pointer; display:flex; gap:10px; align-items:baseline; }
+  .catalog .q { padding:7px 10px; border-bottom:1px solid var(--border); cursor:pointer; display:flex; gap:6px 10px;
+                align-items:baseline; flex-wrap:wrap; }
   .catalog .q:hover { background:var(--panel2); }
   .catalog .q.sel { background:rgba(76,154,255,.15); }
-  .catalog .q .id { font-family:var(--mono); font-size:12px; color:var(--fg); }
+  .catalog .q .id { font-family:var(--mono); font-size:12px; color:var(--fg); overflow-wrap:anywhere; }
   .catalog .q .title { color:var(--muted); font-size:12px; }
   .catalog .q .simple { margin-left:auto; }
   .abstract { color:var(--muted); font-size:12px; line-height:1.5; margin:10px 0; white-space:pre-line; }
@@ -82,6 +98,15 @@
   .grid label { display:flex; flex-direction:column; gap:4px; }
   .grid label input, .grid label select { margin:0; width:100%; }
   code { font-family:var(--mono); font-size:12px; color:var(--accent2); }
+  .wide { flex:1 1 260px; min-width:0; max-width:520px; }
+  #columns tbody tr { cursor:pointer; user-select:none; }
+  #columns tbody tr.on td { color:var(--fg); }
+  #columns tbody tr:not(.on) td { color:var(--muted); }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 2px; }
+  .chip { font-family:var(--mono); font-size:12px; padding:4px 10px; border-radius:999px; cursor:pointer;
+          border:1px solid var(--border); color:var(--muted); background:var(--bg); user-select:none; }
+  .chip.on { border-color:var(--accent2); color:var(--accent2); background:rgba(110,231,183,.08); }
+  .chip:hover { border-color:var(--accent); }
   .sample { font-family:var(--mono); font-size:11px; color:var(--muted); white-space:pre; overflow-x:auto;
             background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:8px; margin-top:8px; }
 </style>
@@ -117,13 +142,13 @@
 
     <h3><span class="step">1</span>Service</h3>
     <div class="row">
-      <input id="url" placeholder="https://opendata.fmi.fi/wfs" value="https://opendata.fmi.fi/wfs" style="min-width:380px">
+      <input id="url" class="wide" placeholder="https://opendata.fmi.fi/wfs" value="https://opendata.fmi.fi/wfs">
       <button onclick="loadCatalog()">Load catalogue</button>
       <span id="catStatus" class="muted" style="font-size:12px"></span>
     </div>
     <div id="catBox" style="display:none">
       <div class="row">
-        <input id="catFilter" placeholder="filter — e.g. weather, mareograph, radiation" style="min-width:320px" oninput="renderCatalog()">
+        <input id="catFilter" class="wide" placeholder="filter — e.g. weather, mareograph, radiation" oninput="renderCatalog()">
         <label><input type="checkbox" id="catSimple" checked onchange="renderCatalog()"> only <code>::simple</code></label>
       </div>
       <div class="catalog" id="catalog"></div>
@@ -138,14 +163,17 @@
     </div>
 
     <div id="previewBox" style="display:none">
-      <h3><span class="step">3</span>Columns</h3>
+      <h3><span class="step">3</span>Columns — tap the ones that become features</h3>
+      <p class="hint">Preview fetches the last hours of the query and lists every column it gives. Nothing needs typing:
+        tap a row to take it or leave it.</p>
       <div class="row">
-        <label>preview the last
+        <label>the last
           <select id="hours"><option>1</option><option selected>3</option><option>6</option><option>24</option><option>72</option></select> h</label>
-        <button onclick="preview()">Preview</button>
+        <button class="primary" onclick="preview()">Preview and pick columns</button>
         <span id="prevStatus" class="muted" style="font-size:12px"></span>
       </div>
       <div id="columns"></div>
+      <div id="chips"></div>
       <div id="sampleBox"></div>
     </div>
 
@@ -175,6 +203,9 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const enc = encodeURIComponent;
 let CATALOG = [], SELECTED = null, PREVIEW = null, EDITING = null, SOURCES = [];
+// The features chosen so far: what the preview's rows toggle, what the
+// chips of a saved source show, what save() sends.
+let FEATS = new Set();
 
 async function api(method, url, body) {
   const opt = { method, headers: {} };
@@ -209,32 +240,33 @@ async function loadSources() {
   SOURCES = r.data.sources || [];
   if (!SOURCES.length) { $("sources").innerHTML = '<div class="empty">No sources yet.</div>'; return; }
   const write = Auth.canWrite();
-  $("sources").innerHTML = '<div class="tablewrap"><table><thead><tr><th>name</th><th>query</th><th>where</th>' +
-    "<th>features</th><th>model</th><th>every</th><th>last run</th><th>status</th><th>rows</th><th></th></tr></thead><tbody>" +
-    SOURCES.map(s => {
-      const pill = s.running ? '<span class="pill run">fetching</span>'
-        : !s.enabled ? '<span class="pill off">off</span>'
-        : s.last_status === "ok" ? '<span class="pill ok">ok</span>'
-        : s.last_status === "error" ? '<span class="pill err" title="' + esc(s.last_error || "") + '">error</span>'
-        : '<span class="pill">not yet run</span>';
-      const feats = (s.features || []).length ? (s.features || []).join(", ") : "all";
-      return "<tr><td>" + esc(s.name) + "</td>" +
-        '<td class="clip" title="' + esc(s.url + " · " + s.query) + '">' + esc(s.query) + "</td>" +
-        '<td class="clip" title="' + esc(paramsText(s.params)) + '">' + esc(paramsText(s.params)) + "</td>" +
-        '<td class="clip" title="' + esc(feats) + '">' + esc(feats) + "</td>" +
-        '<td><a href="/modelmanager.html?model=' + enc(s.model) + '">' + esc(s.model) + "</a></td>" +
-        "<td>" + every(s.interval_minutes) + "</td>" +
-        "<td>" + fmtTime(s.last_run) + "</td>" +
-        "<td>" + pill + (s.last_status === "error" ? '<div class="err" style="max-width:260px;white-space:normal">' + esc(s.last_error || "") + "</div>" : "") + "</td>" +
-        '<td title="last run ' + (s.last_rows || 0) + '">' + (s.total_rows || 0) + "</td>" +
-        '<td class="actions">' + (write ?
-          '<button class="small" onclick="runNow(\'' + esc(s.id) + '\')"' + (s.running ? " disabled" : "") + ">Run now</button>" +
-          '<button class="small" onclick="backfill(\'' + esc(s.id) + '\')"' + (s.running ? " disabled" : "") + ">Backfill</button>" +
-          '<button class="small" onclick="toggle(\'' + esc(s.id) + '\', ' + (s.enabled ? "false" : "true") + ')">' + (s.enabled ? "Disable" : "Enable") + "</button>" +
-          '<button class="small" onclick="edit(\'' + esc(s.id) + '\')">Edit</button>' +
-          '<button class="small danger" onclick="remove(\'' + esc(s.id) + '\')">Delete</button>' : "") +
-        "</td></tr>";
-    }).join("") + "</tbody></table></div>";
+  $("sources").innerHTML = SOURCES.map(s => {
+    const pill = s.running ? '<span class="pill run">fetching</span>'
+      : !s.enabled ? '<span class="pill off">off</span>'
+      : s.last_status === "ok" ? '<span class="pill ok">ok</span>'
+      : s.last_status === "error" ? '<span class="pill err">error</span>'
+      : '<span class="pill">not yet run</span>';
+    const feats = (s.features || []).length ? (s.features || []).join(", ") : "every column";
+    return '<div class="src">' +
+      '<div class="head"><span class="name">' + esc(s.name) + "</span>" + pill +
+        '<span class="model">→ <a href="/modelmanager.html?model=' + enc(s.model) + '">' + esc(s.model) + "</a></span></div>" +
+      '<div class="actions">' + (write ?
+        '<button class="small" onclick="runNow(\'' + esc(s.id) + '\')"' + (s.running ? " disabled" : "") + ">Run now</button>" +
+        '<button class="small" onclick="backfill(\'' + esc(s.id) + '\')"' + (s.running ? " disabled" : "") + ">Backfill</button>" +
+        '<button class="small" onclick="toggle(\'' + esc(s.id) + '\', ' + (s.enabled ? "false" : "true") + ')">' + (s.enabled ? "Disable" : "Enable") + "</button>" +
+        '<button class="small" onclick="edit(\'' + esc(s.id) + '\')">Edit</button>' +
+        '<button class="small danger" onclick="remove(\'' + esc(s.id) + '\')">Delete</button>' : "") + "</div>" +
+      '<div class="facts">' +
+        '<span title="' + esc(s.url) + '"><code>' + esc(s.query) + "</code></span>" +
+        "<span>" + esc(paramsText(s.params)) + "</span>" +
+        "<span>every " + every(s.interval_minutes) + "</span>" +
+        "<span>last run " + fmtTime(s.last_run) + "</span>" +
+        "<span>" + (s.total_rows || 0) + " rows" + (s.last_rows ? " (" + s.last_rows + " last)" : "") + "</span>" +
+        '<span class="feats">features: ' + esc(feats) + "</span>" +
+      "</div>" +
+      (s.last_status === "error" && !s.running ? '<div class="why">' + esc(s.last_error || "") + "</div>" : "") +
+    "</div>";
+  }).join("");
 }
 
 function describeRun(r) {
@@ -323,6 +355,8 @@ function selectQuery(id) {
   $("columns").innerHTML = "";
   $("sampleBox").innerHTML = "";
   PREVIEW = null;
+  if (!EDITING) FEATS = new Set();
+  renderChips();
   if (!$("name").value) $("name").value = SELECTED.title || SELECTED.id;
   if (!$("model").value) $("model").value = (SELECTED.id.replace(/::simple$/, "").split("::").slice(-2).join("_") || "source")
     .replace(/[^A-Za-z0-9_]/g, "_");
@@ -338,9 +372,14 @@ function renderParams(values) {
   if (!ps.length) { $("params").innerHTML = '<div class="muted">This query takes no parameters.</div>'; return; }
   $("params").innerHTML = ps.map(p => {
     const v = values[p.name] !== undefined ? values[p.name] : (p.name === "timestep" ? "60" : "");
+    // A list of parameter names is the one field nobody should have to
+    // type: left empty, the service answers with its default set, and the
+    // columns are picked by tapping in step 3.
+    const isList = p.name === "parameters" || /NameList/i.test(p.type || "");
+    const ph = isList ? "optional — leave empty, pick columns in step 3" : (p.abstract ? p.abstract.trim().slice(0, 80) : "");
     return '<div class="p"><span>' + esc(p.name) + (p.type ? ' <span class="muted">(' + esc(p.type) + ")</span>" : "") +
       (p.title ? " — " + esc(p.title) : "") + '</span><input data-param="' + esc(p.name) + '" value="' + esc(v) +
-      '" placeholder="' + esc(p.abstract ? p.abstract.trim().slice(0, 80) : "") + '"></div>';
+      '" placeholder="' + esc(ph) + '"></div>';
   }).join("");
 }
 
@@ -360,35 +399,71 @@ async function preview() {
   const r = await api("POST", "/api/org/sources/preview", body);
   if (!r.ok) { $("prevStatus").innerHTML = '<span class="err">' + esc((r.data && r.data.message) || "failed") + "</span>"; return; }
   PREVIEW = r.data;
-  const chosen = new Set(EDITING ? ((SOURCES.find(s => s.id === EDITING) || {}).features || []) : []);
   $("prevStatus").textContent = PREVIEW.rows + " rows (location × time) in the last " + PREVIEW.hours + " h";
   const cols = PREVIEW.columns || [];
   if (!cols.length) { $("columns").innerHTML = '<div class="empty">No numeric columns came back — check the location parameters.</div>'; return; }
+  // A fresh source starts with every column but the coordinates taken; a
+  // saved one keeps its choice.
+  if (!FEATS.size) cols.forEach(c => { if (c.name !== "lat" && c.name !== "lon") FEATS.add(c.name); });
   $("columns").innerHTML = '<div class="tablewrap"><table><thead><tr><th><input type="checkbox" id="allCols" onchange="allCols(this.checked)"></th>' +
     "<th>column</th><th>rows</th><th>min</th><th>max</th><th>last</th></tr></thead><tbody>" +
     cols.map(c => {
-      const on = chosen.size ? chosen.has(c.name) : (c.name !== "lat" && c.name !== "lon");
-      return "<tr><td><input type=\"checkbox\" data-col=\"" + esc(c.name) + '"' + (on ? " checked" : "") + "></td>" +
+      const on = FEATS.has(c.name);
+      return '<tr data-col="' + esc(c.name) + '" class="' + (on ? "on" : "") + '"><td><input type="checkbox" data-col="' + esc(c.name) + '"' + (on ? " checked" : "") + "></td>" +
         "<td>" + esc(c.name) + "</td><td>" + c.count + "</td><td>" + fmtNum(c.min) + "</td><td>" + fmtNum(c.max) + "</td><td>" + fmtNum(c.last) + "</td></tr>";
     }).join("") + "</tbody></table></div>" +
-    '<div class="muted" style="font-size:12px;margin-top:6px">Ticked columns become the model\'s features. ' +
+    '<div class="muted" style="font-size:12px;margin-top:6px">Tap a row to take the column or leave it. ' +
     "<code>lat</code>/<code>lon</code> only matter when several stations answer.</div>";
+  // The whole row is the control: a 15 px checkbox is no target on a phone.
+  document.querySelectorAll("#columns tbody tr[data-col]").forEach(tr => {
+    tr.addEventListener("click", ev => {
+      const box = tr.querySelector("input[data-col]");
+      if (ev.target !== box) box.checked = !box.checked;
+      setFeat(tr.dataset.col, box.checked);
+      tr.classList.toggle("on", box.checked);
+    });
+  });
+  renderChips();
   const sample = PREVIEW.sample || [];
   $("sampleBox").innerHTML = sample.length ? '<div class="sample">' + esc(sample.map(r => JSON.stringify(r)).join("\n")) + "</div>" : "";
 }
 
-function allCols(on) { document.querySelectorAll("#columns input[data-col]").forEach(i => i.checked = on); }
+function setFeat(name, on) { if (on) FEATS.add(name); else FEATS.delete(name); renderChips(); }
 
-function readFeatures() {
-  const out = [];
-  document.querySelectorAll("#columns input[data-col]").forEach(i => { if (i.checked) out.push(i.dataset.col); });
-  return out;
+function allCols(on) {
+  document.querySelectorAll("#columns tbody tr[data-col]").forEach(tr => {
+    tr.querySelector("input[data-col]").checked = on;
+    tr.classList.toggle("on", on);
+    if (on) FEATS.add(tr.dataset.col); else FEATS.delete(tr.dataset.col);
+  });
+  renderChips();
 }
+
+// The chosen features as chips, each a tap to drop it (or take it back
+// while the preview still lists it). Shown under the preview, and alone
+// when a saved source is edited without one.
+function renderChips() {
+  const box = $("chips");
+  if (!box) return;
+  const known = PREVIEW ? (PREVIEW.columns || []).map(c => c.name) : [];
+  const names = [...new Set([...FEATS, ...known])];
+  if (!names.length) { box.innerHTML = SELECTED ? '<span class="muted" style="font-size:12px">No columns chosen yet — every column the query gives becomes a feature.</span>' : ""; return; }
+  box.innerHTML = '<div class="muted" style="font-size:12px;margin-top:8px">Features (tap to toggle):</div><div class="chips">' +
+    names.map(n => '<span class="chip ' + (FEATS.has(n) ? "on" : "") + '" data-chip="' + esc(n) + '">' + esc(n) + "</span>").join("") + "</div>";
+  box.querySelectorAll(".chip").forEach(ch => ch.addEventListener("click", () => {
+    const n = ch.dataset.chip, on = !FEATS.has(n);
+    setFeat(n, on);
+    const tr = document.querySelector('#columns tbody tr[data-col="' + CSS.escape(n) + '"]');
+    if (tr) { tr.querySelector("input[data-col]").checked = on; tr.classList.toggle("on", on); }
+  }));
+}
+
+function readFeatures() { return [...FEATS]; }
 
 async function save() {
   if (!SELECTED) { $("saveStatus").innerHTML = '<span class="err">pick a stored query first</span>'; return; }
   const feats = readFeatures();
-  if (PREVIEW && !feats.length) { $("saveStatus").innerHTML = '<span class="err">tick at least one column</span>'; return; }
+  if (PREVIEW && !feats.length) { $("saveStatus").innerHTML = '<span class="err">take at least one column</span>'; return; }
   const body = {
     name: $("name").value.trim(),
     url: $("url").value.trim(),
@@ -400,9 +475,9 @@ async function save() {
     calendar: $("calendar").value === "true",
     enabled: $("enabled").value === "true",
   };
-  // Without a preview the saved feature list stays as it was (an edit)
-  // or empty (every column): the server accepts both.
-  if (PREVIEW) body.features = feats;
+  // No preview and nothing chosen means every column (a fresh source)
+  // or the list as it was (an edit); the chips carry it either way.
+  body.features = feats;
   $("saveStatus").textContent = "saving…";
   const r = EDITING ? await api("PUT", "/api/org/sources/" + enc(EDITING), body)
                     : await api("POST", "/api/org/sources", body);
@@ -431,15 +506,14 @@ async function edit(id) {
   $("calendar").value = s.calendar ? "true" : "false";
   $("enabled").value = s.enabled ? "true" : "false";
   $("saveBtn").textContent = "Save changes";
-  const feats = s.features || [];
-  $("columns").innerHTML = feats.length
-    ? '<div class="muted" style="font-size:12px">Features: <code>' + esc(feats.join(", ")) + "</code> — preview to change them.</div>"
-    : '<div class="muted" style="font-size:12px">Every column is a feature — preview to choose.</div>';
+  FEATS = new Set(s.features || []);
+  renderChips();
   $("editor").scrollIntoView({ behavior: "smooth" });
 }
 
 function resetEditor() {
-  EDITING = null; SELECTED = null; PREVIEW = null;
+  EDITING = null; SELECTED = null; PREVIEW = null; FEATS = new Set();
+  const chips = $("chips"); if (chips) chips.innerHTML = "";
   $("editorTitle").textContent = "Add a source";
   $("saveBtn").textContent = "Save source";
   $("catBox").style.display = "none";
