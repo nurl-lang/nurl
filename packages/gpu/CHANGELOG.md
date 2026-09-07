@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.3
+
+- **The striped upload copy no longer leaks its closures.** `__gpu_par_memcpy`
+  spawned its three stripe threads with the borrowing `thread_spawn` and
+  never freed the closures' environments — three 16-byte blocks per large
+  upload, found by LeakSanitizer while `packages/arima` was being sanitized.
+  The stripes are now `thread_spawn_owned` (the runtime frees the env when
+  the body returns), and a spawn that fails runs the stripe inline and frees
+  the env by hand.
+
 ## 0.11.2
 
 - **`cuInit` runs once per process.** The driver's contract calls it
