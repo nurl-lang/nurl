@@ -6,7 +6,7 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.62.0] — 2026-09-08
 
 ### Added
 
@@ -42,6 +42,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the preview marks constant and sparse columns; the MCP catalogue is
   compact and filterable.
   [`packages/anomaly/CHANGELOG.md`](packages/anomaly/CHANGELOG.md).
+- **`packages/anomaly` 0.21.0 — data sources through MCP.** An agent
+  acting for an administrator adds a data source (`create_source`: a WFS
+  stored query or feature type, or a URL answering JSON, with its kind and
+  every setting the record takes), changes any field (`update_source`),
+  removes one (`delete_source`, confirmed), fetches now or backfills
+  (`run_source`), and browses a service's catalogue and a query's columns
+  first (`source_catalog`, `source_preview`); every member reads them
+  (`sources`, `source`, header values masked). The tools call the HTTP
+  routes in process under the caller's principal, so the rights are the
+  API's own.
+- **`packages/anomaly` 0.20.0 — the forecast version: a seasonal ARIMA
+  per feature.** The forests see a point as a whole and the guards one
+  reading at a time; a temperature that reads an ordinary trough value at
+  the top of its daily cycle passed every one of them. The new `forecast`
+  version fits one SARIMA per numeric feature at each retrain (the `arima`
+  package's stepwise order search, on the machine's threads), keeps each
+  model's state current point by point, and judges every reading by how
+  many standard errors of its own forecast it landed from it, naming the
+  feature; a missing reading is a gap, not a zero. States persist with the
+  ring position they stand at and are caught up from the stored rows when
+  a request opens the model. Off by default; the CLI (`train-fc`,
+  `forecast`), the HTTP routes (`POST /train/forecast/<m>`,
+  `GET /models/dynamic/<m>/forecast`), the dashboard's Forecast section
+  and the MCP tools `train_forecast` / `forecast` — under the autoencoder's
+  rights — fit and read it.
+  [`packages/anomaly/CHANGELOG.md`](packages/anomaly/CHANGELOG.md).
+- **`stdlib/std/float.nu`: `float_nan` and `float_inf`.** The stdlib could
+  test for NaN and infinity but not make them; a stream of doubles needs
+  "no value", and `( bits_to_f64 0x7ff8… )` is not how anyone should spell
+  it.
 
 ### Changed
 
@@ -90,39 +120,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameter, return and global sites now say which type is declared
   later and where to move it; a pointer to a later type stays fine.
   `compiler/tests/diag_forward_value_type.nu`.
-
-- **`packages/anomaly` 0.21.0 — data sources through MCP.** An agent
-  acting for an administrator adds a data source (`create_source`: a WFS
-  stored query or feature type, or a URL answering JSON, with its kind and
-  every setting the record takes), changes any field (`update_source`),
-  removes one (`delete_source`, confirmed), fetches now or backfills
-  (`run_source`), and browses a service's catalogue and a query's columns
-  first (`source_catalog`, `source_preview`); every member reads them
-  (`sources`, `source`, header values masked). The tools call the HTTP
-  routes in process under the caller's principal, so the rights are the
-  API's own.
-
-- **`packages/anomaly` 0.20.0 — the forecast version: a seasonal ARIMA
-  per feature.** The forests see a point as a whole and the guards one
-  reading at a time; a temperature that reads an ordinary trough value at
-  the top of its daily cycle passed every one of them. The new `forecast`
-  version fits one SARIMA per numeric feature at each retrain (the `arima`
-  package's stepwise order search, on the machine's threads), keeps each
-  model's state current point by point, and judges every reading by how
-  many standard errors of its own forecast it landed from it, naming the
-  feature; a missing reading is a gap, not a zero. States persist with the
-  ring position they stand at and are caught up from the stored rows when
-  a request opens the model. Off by default; the CLI (`train-fc`,
-  `forecast`), the HTTP routes (`POST /train/forecast/<m>`,
-  `GET /models/dynamic/<m>/forecast`), the dashboard's Forecast section
-  and the MCP tools `train_forecast` / `forecast` — under the autoencoder's
-  rights — fit and read it.
-  [`packages/anomaly/CHANGELOG.md`](packages/anomaly/CHANGELOG.md).
-- **`stdlib/std/float.nu`: `float_nan` and `float_inf`.** The stdlib could
-  test for NaN and infinity but not make them; a stream of doubles needs
-  "no value", and `( bits_to_f64 0x7ff8… )` is not how anyone should spell
-  it.
-
 - **`packages/gpu` 0.11.3: the striped upload copy leaked its closures.**
   `__gpu_par_memcpy` spawned its stripe threads with the borrowing
   `thread_spawn` and never freed the closures' environments — three blocks
