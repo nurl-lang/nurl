@@ -449,6 +449,15 @@ $ `stdlib/std/thread.nu`
 // ── Verdict → JSON ────────────────────────────────────────────────────
 
 @ __an_verdict_resp * Model mo s mname Json body Verdict vd → HttpResponse {
+    : Json o ( __an_verdict_json mo mname body vd )
+    : HttpResponse r ( response_json ? . vd ready 200 202 o )
+    ( json_free o )
+    ^ r
+}
+
+// The verdict as JSON: the "collecting" shape before the model is
+// ready, the full one after.
+@ __an_verdict_json * Model mo s mname Json body Verdict vd → Json {
     ? . vd ready {} {
         : *Meta mm ( model_metadata mo )
         : i n ( model_n_points mo )
@@ -464,9 +473,7 @@ $ `stdlib/std/thread.nu`
         ( json_obj_set o `min_data_points` ( json_int . mo min_points ) )
         ( json_obj_set o `model_name` ( json_str_lit mname ) )
         ( string_free msg )
-        : HttpResponse r ( response_json 202 o )
-        ( json_free o )
-        ^ r
+        ^ o
     }
 
     : *Meta vmm ( model_metadata mo )
@@ -531,10 +538,120 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `severity` ( json_float . vd severity ) )
     ( json_obj_set o `versions` vers )
     ( json_obj_set o `data_point` ( json_clone body ) )
+    ^ o
+}
 
-    : HttpResponse r ( response_json 200 o )
+// POST /forecast/<model>?horizon=H — /detect's twin: the point goes in
+// (the same ingest, the same rights), and the answer carries the
+// verdict AND the forecast from the point just stored — the next H
+// values of every watched feature, with intervals and times. A model
+// whose forecast version is not trained gets it fitted here, once the
+// model has trained (the season from the ring's step); until then the
+// answer says why there is no forecast yet.
+@ __an_h_forecast_point HttpRequest req Params p → HttpResponse {
+    : String mname ( __an_param_model p )
+    ? ( __an_name_ok ( string_data mname ) ) {} {
+        ( string_free mname )
+        ^ ( __an_bad_name )
+    }
+    : Gate gate ( __an_gate_ingest req ( string_data mname ) )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rd
+    }
+    : ~ i h ( __an_query_int . req query `horizon` 1 )
+    ? < h 1 { = h 1 } {}
+    ? > h 1000 { = h 1000 } {}
+    ?? ( __an_body_json req ) {
+        T body → {
+            ? ( json_is_obj body ) {} {
+                ( json_free body )
+                ( __an_gate_free gate )
+                ( string_free mname )
+                ^ ( __an_json_err 400 `The body must be a JSON object: the point's fields.` )
+            }
+            : Store st ( store_open g_an_root )
+            : *Model mo ( model_open st ( string_data mname ) )
+            : ~ HttpResponse resp ( response_status_only 500 )
+            : !Verdict String vr ( model_ingest mo body )
+            ?? vr {
+                T vd → {
+                    : Json o ( __an_verdict_json mo ( string_data mname ) body vd )
+                    : String why ( model_forecast_ensure_at mo ( model_now mo ) )
+                    ? == ( string_len why ) 0 {
+                        ( json_obj_set o `forecast` ( model_forecast_json mo h ) )
+                    } {
+                        ( json_obj_set o `forecast` ( json_null ) )
+                        ( json_obj_set o `forecast_unavailable` ( json_str_lit ( string_data why ) ) )
+                    }
+                    ( string_free why )
+                    ( http_response_free resp )
+                    = resp ( response_json ? . vd ready 200 202 o )
+                    ( json_free o )
+                    ( verdict_free vd )
+                }
+                F e → {
+                    ( http_response_free resp )
+                    = resp ( __an_json_err 400 ( string_data e ) )
+                    ( string_free e )
+                }
+            }
+            ( model_free mo )
+            ( store_free st )
+            ( json_free body )
+            ( __an_gate_claim gate ( string_data mname ) )
+            ( __an_gate_free gate )
+            ( string_free mname )
+            ^ resp
+        }
+        F _ → {
+            ( __an_gate_free gate )
+            ( string_free mname )
+            ^ ( __an_json_err 400 `No data provided` )
+        }
+    }
+}
+
+// GET /models/dynamic/<model>/forecast/backtest?horizon=H&points=N — how
+// good the forecasts are, measured on the stored rows (read-only).
+@ __an_h_forecast_backtest HttpRequest req Params p → HttpResponse {
+    : String mname ( __an_param_model p )
+    ? ( __an_name_ok ( string_data mname ) ) {} {
+        ( string_free mname )
+        ^ ( __an_bad_name )
+    }
+    : Gate gate ( __an_gate_model req ( string_data mname ) F F )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rd
+    }
+    ( __an_gate_free gate )
+    : Store st ( store_open g_an_root )
+    ? ( store_exists st ( string_data mname ) ) {} {
+        : HttpResponse r404 ( __an_404_model ( string_data mname ) )
+        ( store_free st )
+        ( string_free mname )
+        ^ r404
+    }
+    : ~ i h ( __an_query_int . req query `horizon` 12 )
+    ? < h 1 { = h 1 } {}
+    ? > h 1000 { = h 1000 } {}
+    : ~ i n ( __an_query_int . req query `points` 200 )
+    ? < n 1 { = n 1 } {}
+    ? > n 5000 { = n 5000 } {}
+    : *Model mo ( model_open st ( string_data mname ) )
+    : Json o ( model_forecast_backtest mo h n )
+    ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
+    : HttpResponse resp ( response_json ? ( json_obj_has o `error` ) 400 200 o )
     ( json_free o )
-    ^ r
+    ( model_free mo )
+    ( store_free st )
+    ( string_free mname )
+    ^ resp
 }
 
 // ── Route handlers ────────────────────────────────────────────────────
@@ -964,29 +1081,8 @@ $ `stdlib/std/thread.nu`
     : ~ HttpResponse resp ( response_status_only 500 )
     ? . fc trained {
         ( http_response_free resp )
-        ( model_forecast_sync mo )
-        : FcForecast ff ( fc_forecast fc h )
-        : Json o ( json_obj_new )
+        : Json o ( model_forecast_json mo h )
         ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
-        ( json_obj_set o `horizon` ( json_int h ) )
-        ( json_obj_set o `season` ( json_int . fc season ) )
-        ( json_obj_set o `points_absorbed` ( json_int . fc pos ) )
-        ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled ( model_metadata mo ) ANOM_FC_NAME F ) ) )
-        : Json fa ( json_arr_new )
-        : i nw ( vec_len [String] . ff feats )
-        : ~ i j 0
-        ~ < j nw {
-            : Json fo ( json_obj_new )
-            ?? ( vec_get [String] . ff feats j ) { T fn → { ( json_obj_set fo `feature` ( json_str_lit ( string_data fn ) ) ) } F _ → {} }
-            ?? ( vec_get [( Vec f )] . ff mean j ) { T mv → { ( json_obj_set fo `mean` ( _an_jarr_of_floats mv ) ) } F _ → {} }
-            ?? ( vec_get [( Vec f )] . ff se j ) { T sv → { ( json_obj_set fo `se` ( _an_jarr_of_floats sv ) ) } F _ → {} }
-            : *ArimaModel am ( model_forecast_model mo j )
-            ( json_obj_set fo `model` ( arima_coef am ) )
-            ( json_arr_push fa fo )
-            = j + j 1
-        }
-        ( json_obj_set o `forecasts` fa )
-        ( fc_forecast_free ff )
         = resp ( response_json 200 o )
         ( json_free o )
     } {
@@ -5424,6 +5520,8 @@ $ `stdlib/std/thread.nu`
     ( router_post r `/train/autoencoder/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_train_ae req p ) } )
     ( router_post r `/train/forecast/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_train_fc req p ) } )
     ( router_get r `/models/dynamic/:model/forecast` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_forecast req p ) } )
+    ( router_get r `/models/dynamic/:model/forecast/backtest` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_forecast_backtest req p ) } )
+    ( router_post r `/forecast/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_forecast_point req p ) } )
     ( router_post r `/models/dynamic/:model/claim` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_claim req p ) } )
     ( router_post r `/models/dynamic/:model/import` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_import req p ) } )
     ( router_get r `/api/auth/config` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_auth_config req p ) } )

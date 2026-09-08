@@ -322,7 +322,7 @@ $ `src/service.nu`
     ( check ( tools_has . ls body `ingest_point` ) `mcp: sign-in off = admin: ingest_point listed` )
     ( check ( tools_has . ls body `set_role` ) `mcp: sign-in off = admin: set_role listed` )
     ( check ( tools_has . ls body `org_keys` ) `mcp: sign-in off = admin: org_keys listed` )
-    ( check == ( tools_count . ls body ) 38 `mcp: every one of the 38 tools is listed` )
+    ( check == ( tools_count . ls body ) 40 `mcp: every one of the 40 tools is listed` )
     ( out_free ls )
 
     // A tool that does not exist is refused in the tool-result envelope.
@@ -838,11 +838,11 @@ $ `src/service.nu`
     ( check ! ( tools_has . gl body `org_keys` ) `mcp: ingest does not see org_keys` )
     ( check ! ( tools_has . gl body `org_users` ) `mcp: ingest does not see org_users` )
     ( check ! ( tools_has . gl body `claim_model` ) `mcp: ingest does not see claim_model` )
-    ( check == ( tools_count . gl body ) 28 `mcp: 28 tools for an ingest key` )
+    ( check == ( tools_count . gl body ) 30 `mcp: 30 tools for an ingest key` )
     ( out_free gl )
 
     : Out al ( rpc r `tools/list` `{}` AK )
-    ( check == ( tools_count . al body ) 38 `mcp: an admin key sees every tool` )
+    ( check == ( tools_count . al body ) 40 `mcp: an admin key sees every tool` )
     ( out_free al )
 
     // An invisible tool called by name is unknown to that caller.
@@ -916,7 +916,16 @@ $ `src/service.nu`
     : Call gfo ( call r `forecast` `{"model":"llm_mine","horizon":3}` GK )
     ( check . gfo ok `mcp: and reads its forecast` )
     ( check == ( jint_of . gfo data `horizon` ) 3 `mcp: three steps ahead` )
+    ( check ( string_contains . gfo text `"lo95"` ) `mcp: with intervals` )
     ( call_free gfo )
+    : Call gfp ( call r `forecast_point` `{"model":"llm_mine","values":{"temp":23.0,"load":1.1},"horizon":2}` GK )
+    ( check . gfp ok `mcp: ingest stores a point and gets the forecast from it` )
+    ( check ( string_contains . gfp text `"forecast":{` ) `mcp: the forecast rides with the verdict` )
+    ( call_free gfp )
+    : Call gbt ( call r `forecast_backtest` `{"model":"llm_mine","horizon":2,"points":10}` GK )
+    ( check . gbt ok `mcp: ingest reads the backtest` )
+    ( check == ( jint_of . gbt data `origins` ) 10 `mcp: ten origins` )
+    ( call_free gbt )
 
     // The admin sees it, and may touch production.
     : Call adm ( call r `describe_model` `{"model":"llm_mine"}` AK )

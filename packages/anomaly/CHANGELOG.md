@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.23.0
+
+- **Proper forecasts.** `POST /forecast/<m>?horizon=H` is `/detect`'s twin:
+  the point goes in under the same rights and the answer carries the
+  verdict and the forecast from it — the next H values of every watched
+  feature with 80 % and 95 % intervals and the time of each step, the
+  newest point's plus the ring's step. A model without a trained forecast
+  version gets one fitted on the first call once it has trained, the
+  season from the step (144 rows at ten minutes, 24 at an hour, 7 daily).
+  `GET …/forecast` answers the same shape from the newest stored point.
+- **Measured, not assumed.** `GET /models/dynamic/<m>/forecast/backtest`
+  (`anomaly backtest`, MCP `forecast_backtest`, the drawer's Backtest
+  button) replays copies of the models over the newest N stored rows and
+  reports, per feature and step, MAE, MAPE, the 95 % interval's coverage
+  and the skill against carrying the last value forward and against the
+  value one season earlier. The test pins it: on a 24-row rhythm the
+  seasonal model removes over 30 % of the naive error and the 95 %
+  interval holds over 70 % of one-step readings.
+- MCP `forecast_point` (ingest rights, like `ingest_point`) and
+  `forecast_backtest` (every member); forty tools. The visualiser draws
+  the forecast and its bands past the end of the trace.
+
 ## 0.22.0
 
 - **The first train calibrates.** A model fed by a data source or a file

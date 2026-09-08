@@ -1178,13 +1178,7 @@ $ `src/imptime.nu`
 // twelve hours (144 rows at ten minutes, 24 at an hour), the week for a
 // daily step, none otherwise.
 @ source_season_of i step → i {
-    ? < step 60 { ^ 0 } {}
-    ? <= step 43200 {
-        : i s / + 86400 / step 2 step
-        ^ ? >= s 2 s 0
-    } {}
-    ? & >= step 77760 <= step 95040 { ^ 7 } {}
-    ^ 0
+    ^ ( anomaly_season_of step )
 }
 
 // What a run's first train settles once: the margins, calibrated to

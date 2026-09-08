@@ -286,6 +286,56 @@ $ `src/dynamic.nu`
     ( check . pr2 anomaly `forecast: still catches the contextual point after a reopen` )
     ( string_free . pr2 feat )
 
+    // the forecast as the API answers it: times from the ring's step, intervals
+    ( check == ( model_step mo2 ) 60 `forecast: the ring's step is a minute` )
+    : Json fj ( model_forecast_json mo2 3 )
+    ( check == ( _an_jint fj `step_seconds` 0 ) 60 `forecast: the answer carries the step` )
+    : ~ i t1 0
+    ?? ( json_obj_get fj `times` ) { T ta → { ?? ( json_arr_get ta 0 ) { T e → { = t1 ( json_as_int e ) } F _ → {} } } F _ → {} }
+    ( check == t1 + ( model_last_ts mo2 ) 60 `forecast: the first step's time is the newest point's plus the step` )
+    : ~ b bands F
+    ?? ( json_obj_get fj `forecasts` ) {
+        T fa → {
+            ?? ( json_arr_get fa 0 ) {
+                T f0 → {
+                    : ~ f lo 0.0 : ~ f m 0.0 : ~ f hi 0.0
+                    ?? ( json_obj_get f0 `lo95` ) { T a → { ?? ( json_arr_get a 0 ) { T e → { ?? ( json_num_as_f e ) { T x → { = lo x } F _ → {} } } F _ → {} } } F _ → {} }
+                    ?? ( json_obj_get f0 `mean` ) { T a → { ?? ( json_arr_get a 0 ) { T e → { ?? ( json_num_as_f e ) { T x → { = m x } F _ → {} } } F _ → {} } } F _ → {} }
+                    ?? ( json_obj_get f0 `hi95` ) { T a → { ?? ( json_arr_get a 0 ) { T e → { ?? ( json_num_as_f e ) { T x → { = hi x } F _ → {} } } F _ → {} } } F _ → {} }
+                    = bands & < lo m < m hi
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check bands `forecast: the 95 % interval brackets the mean` )
+    ( json_free fj )
+
+    // measured: over the last 60 origins the model beats carrying the last value forward
+    : Json bt ( model_forecast_backtest mo2 6 60 )
+    ( check == ( _an_jint bt `origins` 0 ) 60 `backtest: sixty origins` )
+    : ~ f skill -1.0
+    : ~ f cov 0.0
+    ?? ( json_obj_get bt `features` ) {
+        T fa → {
+            ?? ( json_arr_get fa 0 ) {
+                T f0 → {
+                    ?? ( json_obj_get f0 `skill_vs_naive` ) { T e → { ?? ( json_num_as_f e ) { T x → { = skill x } F _ → {} } } F _ → {} }
+                    ?? ( json_obj_get f0 `coverage95` ) { T a → { ?? ( json_arr_get a 0 ) { T e → { ?? ( json_num_as_f e ) { T x → { = cov x } F _ → {} } } F _ → {} } } F _ → {} }
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check > skill 0.3 `backtest: the seasonal model beats the naive forecast on the rhythm` )
+    ( check > cov 0.7 `backtest: the 95 % interval holds most one-step readings` )
+    ( json_free bt )
+    : Json bt0 ( model_forecast_backtest mo2 6 100000 )
+    ( check > ( _an_jint bt0 `origins` 0 ) 0 `backtest: more origins than rows is clamped, not refused` )
+    ( json_free bt0 )
+
     // muted while disabled: no verdict, the models kept
     : b _off ( model_set_version_enabled mo2 ANOM_FC_NAME F )
     : Probe pm ( ingest mo2 + ( temp_at 514 ) * 0.3 ( gauss3 ) press + T0 * 514 60 )
@@ -298,6 +348,28 @@ $ `src/dynamic.nu`
     ( check . pn seen `forecast: judging again once on` )
     ( check == . fcb pos 516 `forecast: the rows ingested while off were caught up` )
     ( string_free . pn feat )
+
+    // a model whose forecast version is untrained: the ensure fits it, the season from the step
+    : *Model mo3 ( model_open_at st `ensure` T0 )
+    ( model_set_limits mo3 10 150000 )
+    ( model_set_schedule mo3 100000 100000 )
+    : String e0 ( model_forecast_ensure_at mo3 T0 )
+    ( check > ( string_len e0 ) 0 `ensure: an untrained model has no forecast, and says so` )
+    ( string_free e0 )
+    = k 0
+    ~ < k 200 {
+        : Probe p ( ingest mo3 + ( temp_at k ) * 0.3 ( gauss3 ) 1000.0 + T0 * k 3600 )
+        ( string_free . p feat )
+        = k + k 1
+    }
+    : i tr3 ( model_force_train_at mo3 + T0 * 200 3600 )
+    ( check > tr3 0 `ensure: the model trains` )
+    : String e1 ( model_forecast_ensure_at mo3 + T0 * 200 3600 )
+    ( check == ( string_len e1 ) 0 `ensure: fits the forecast version` )
+    ( string_free e1 )
+    ( check == . . mo3 fc season 24 `ensure: hourly points get the daily season` )
+    ( check ( meta_version_enabled ( model_metadata mo3 ) ANOM_FC_NAME F ) `ensure: and switches it on` )
+    ( model_free mo3 )
 
     // reset drops it
     ( model_reset mo2 )

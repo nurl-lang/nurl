@@ -39,7 +39,7 @@ $ `src/authz.nu`
 $ `src/imptime.nu`
 
 // One version for the CLI banner and the MCP handshake.
-: s ANOMALY_VERSION `0.22.0`
+: s ANOMALY_VERSION `0.23.0`
 
 // ── Wiring ───────────────────────────────────────────────────────────
 
@@ -1979,6 +1979,40 @@ $ `src/imptime.nu`
     ^ ( __mcp_pass o )
 }
 
+@ __mcp_t_forecast_point Json a Json ctx → Json {
+    : String model ( __mcp_need_model a ctx )
+    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    : ~ Json body ( json_obj_new )
+    ?? ( __mcp_arg a `values` ) {
+        T v → { ? ( json_is_obj v ) { ( json_free body ) = body ( json_clone v ) } {} }
+        F _ → {}
+    }
+    : String q ( string_from `horizon=` )
+    ( string_push_int q ( __mcp_arg_int a `horizon` 1 ) )
+    : String path ( __mcp_model_path `/forecast/` model `` )
+    : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { T body } )
+    ( string_free path )
+    ( string_free q )
+    ( json_free body )
+    ( string_free model )
+    ^ ( __mcp_pass o )
+}
+
+@ __mcp_t_forecast_backtest Json a Json ctx → Json {
+    : String model ( __mcp_need_model a ctx )
+    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    : String q ( string_from `horizon=` )
+    ( string_push_int q ( __mcp_arg_int a `horizon` 12 ) )
+    ( string_push_str q `&points=` )
+    ( string_push_int q ( __mcp_arg_int a `points` 200 ) )
+    : String path ( __mcp_model_path `/models/dynamic/` model `/forecast/backtest` )
+    : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
+    ( string_free path )
+    ( string_free q )
+    ( string_free model )
+    ^ ( __mcp_pass o )
+}
+
 @ __mcp_t_finetune Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
@@ -2567,6 +2601,20 @@ $ `src/imptime.nu`
     ^ sc
 }
 
+@ __mcp_sc_forecast_point → Json {
+    : Json sc ( __mcp_sc_model )
+    ( mcp_schema_prop sc `values` `object` `The point's fields, as ingest_point takes them.` T )
+    ( mcp_schema_prop sc `horizon` `integer` `How many steps ahead to forecast from this point (default 1, at most 1000).` F )
+    ^ sc
+}
+
+@ __mcp_sc_backtest → Json {
+    : Json sc ( __mcp_sc_model )
+    ( mcp_schema_prop sc `horizon` `integer` `Steps ahead to score (default 12).` F )
+    ( mcp_schema_prop sc `points` `integer` `How many of the newest stored rows are forecast origins (default 200).` F )
+    ^ sc
+}
+
 @ __mcp_sc_finetune → Json {
     : Json sc ( __mcp_sc_model )
     ( mcp_schema_prop sc `rate` `number` `Target alert rate: the share of the window each version should flag, e.g. 0.01 for 1% (default 0.01).` F )
@@ -2704,7 +2752,7 @@ $ `src/imptime.nu`
 
 Start with list_models. Then anomalies {model, last: "24h"} for the newest flagged rows with the features that caused them, anomaly_summary for counts, events, timeline and the features blamed most, point for one row in full, describe_model for how a model is built, calibration for how its margins sit against the recent data. Times are ISO-8601 UTC; a model on a count clock numbers its rows instead. "last" counts back from the model's newest point, not from now. Scores run downward into anomaly: a point is flagged when its score is at or below minus the version's margin. A forest's decision_margin is that margin as is; the autoencoder's decision_margin is a fraction of its reconstruction threshold (margin = threshold × decision_margin), so its scores are ~1e-4 where a forest's are ~1e-1; range_guard's decision_margin is a count of standard deviations; flatline's is a fraction (0.9 = nine tenths of the reference run identical, or the window ten times flatter than the stream's quiet periods); forecast's is a count of the forecast's standard errors (4 = the reading sat four standard errors from what was forecast), and point shows which column each of them named. Rank points and versions by severity (−score / margin: 1.0 is exactly on the alert line, 2.0 twice as far past it), never by raw score; a row's score and severity are those of its most severe version. Consecutive anomalous rows are one event: anomalies gives each row its event number, anomaly_summary lists the events — count events, not rows, when saying how often something went wrong. When the person says a flagged row was nothing, label_anomaly {model, index, label: "false_positive"} — from then on calibration and finetune leave it out, so the margins stop paying for known noise.
 
-Every member may build scratch models named llm_… (fork_model: a slice of an existing model's history, optionally fewer columns), tune them (finetune, train_autoencoder, train_forecast, retrain), edit and delete them — use them to test a hypothesis without touching production models. Changing or deleting any other model needs the administrator role; the reply says so when it does. Sending new points (ingest_point, import_data) needs the ingest capability. Data sources — a WFS stored query or feature type, or a URL answering JSON, fetched on a schedule into a model — are listed by sources and shown by source for every member; an administrator adds one with create_source (source_catalog and source_preview first, to find the query and choose its columns), changes it with update_source, fetches now with run_source, removes it with delete_source. analyze_data scores a file you provide without creating a model.`
+Every member may build scratch models named llm_… (fork_model: a slice of an existing model's history, optionally fewer columns), tune them (finetune, train_autoencoder, train_forecast, retrain), edit and delete them — use them to test a hypothesis without touching production models. Changing or deleting any other model needs the administrator role; the reply says so when it does. Sending new points (ingest_point, import_data) needs the ingest capability, and so does forecast_point, which stores a point and answers with the forecast from it; forecast reads the forecast from the newest stored point and forecast_backtest says how good the forecasts have been against naive baselines. Data sources — a WFS stored query or feature type, or a URL answering JSON, fetched on a schedule into a model — are listed by sources and shown by source for every member; an administrator adds one with create_source (source_catalog and source_preview first, to find the query and choose its columns), changes it with update_source, fetches now with run_source, removes it with delete_source. analyze_data scores a file you provide without creating a model.`
 }
 
 @ __mcp_add McpServer srv s name s desc Json sc b ro b destr b idem b ow ( @ b Json ) vis ( @ Json Json McpCall ) h → v {
@@ -2751,6 +2799,10 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     `How each version's margin sits against a window (default: the last 24 h before the newest point; last: "all" for the whole ring): how much it flags now, the worst and median scores, and the margin that would flag 0.1%, 1%, 5% … — the numbers to read before finetune. Each version gets a reading — quiet, loud or on target — and the model a verdict.`
     ( __mcp_sc_model_window ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_calibration a ( mcp_call_context c ) ) } )
+    ( __mcp_add srv `forecast_backtest`
+    `How good a model's forecasts are, measured: a rolling-origin backtest over the newest stored rows — per feature and step the mean absolute error, MAPE, the 95 % interval's coverage, and the skill against the two forecasts anyone can make without a model (the last value, the value a season earlier; 1 = perfect, 0 = no better, negative = worse).`
+    ( __mcp_sc_backtest ) T F T F member
+    \ Json a McpCall c → Json { ^ ( __mcp_t_forecast_backtest a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `sources`
     `The organisation's data sources: what is fetched from where into which model and how often, each with its last run's outcome (status, error, rows) and whether a fetch is in flight.`
     ( mcp_schema_empty ) T F T F member
@@ -2831,6 +2883,10 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     `Send one point to a model: it is stored, scored, and answered with the verdict. A new name creates a model, which warms up (HTTP 202) until it has 50 points. This changes what the model learns — use score_point to ask without teaching.`
     ( __mcp_sc_values `a column the model knows and the point leaves out is stored as absent, scored as 0, and listed under "missing" in the verdict.` ) F F F F ingest
     \ Json a McpCall c → Json { ^ ( __mcp_t_ingest_point a ( mcp_call_context c ) ) } )
+    ( __mcp_add srv `forecast_point`
+    `ingest_point's twin: store a point and get, with its verdict, the forecast from it — the next horizon values of every watched feature with 80 % and 95 % intervals and their times. A model without a trained forecast version gets one fitted here once it has trained.`
+    ( __mcp_sc_forecast_point ) F F F F ingest
+    \ Json a McpCall c → Json { ^ ( __mcp_t_forecast_point a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `import_data`
     `Load a file of history (csv text or rows) into a model — a new one or an existing one. The time column is detected (or named with time); rows are stamped, stored and the model trained. Returns counts of imported / skipped rows and the scan.`
     ( __mcp_sc_import ) F F F F ingest

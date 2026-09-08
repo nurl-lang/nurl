@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`packages/anomaly` 0.23.0 — proper forecasts.** `POST /forecast/<m>`
+  stores a point and answers with its verdict and the forecast from it
+  (intervals, times), fitting the forecast version on first use; the
+  backtest route, CLI command and MCP tool measure the forecasts against
+  naive and seasonal-naive baselines (MAE, MAPE, coverage, skill); MCP
+  `forecast_point`; the visualiser draws the forecast bands.
+  [`packages/anomaly/CHANGELOG.md`](packages/anomaly/CHANGELOG.md).
+
 - **`packages/anomaly` 0.22.0 — the first train calibrates; nothing from
   the future.** A model fed by a data source or an imported file is
   fine-tuned to 1 % of its ring (a source's `finetune_rate`, the import
