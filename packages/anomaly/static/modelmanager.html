@@ -510,6 +510,12 @@ const HELP = {
     "from what its own model forecast for that moment.\n" +
     "• 4 (the default) flags a reading four standard errors from its forecast; 3 flags more, 6 fewer.\n" +
     "Takes effect at the next point. The verdict names the feature.",
+  fcsel: "Per feature, the form the holdout chose: a plain ARIMA, the seasonal polynomial (sarima), " +
+    "or Fourier terms of the season with 2, 4 or 6 harmonics (fourierN), with the week added " +
+    "(+week) when the fit window holds three of them. Every form is fitted on the window's first " +
+    "part and judged on its last fifth by the error of its forecasts up to 12 steps ahead; the " +
+    "skill says how much of the naive forecast's error the chosen form removed there (negative: " +
+    "nothing beat carrying the last value forward).",
   season: "The seasonal period of the forecast models, in rows: 24 for hourly data with a " +
     "daily rhythm, 7 for daily data with a weekly one, 0 for none. Rows, not time — the " +
     "models see the stored points in order. Takes effect at the next forecast training.",
@@ -732,10 +738,11 @@ function renderDrawer(name) {
       "<dt>Margin " + q("margin_fc") + "</dt><dd>" + fmtNum(fc.decision_margin) + " standard errors</dd>" +
       "<dt>Trained on</dt><dd>" + (fc.training_data_points ?? 0).toLocaleString() + " pts</dd>" +
       "<dt>Trained at</dt><dd>" + fmtWhen(fc.trained_at) + "</dd>" +
-      "<dt>Orders</dt><dd>" + esc((fc.models || []).map(o => {
+      "<dt>Models " + q("fcsel") + "</dt><dd>" + esc((fc.models || []).map(o => {
           const od = o.order || {};
-          return (o.feature || "?") + " (" + (od.p ?? 0) + "," + (od.d ?? 0) + "," + (od.q ?? 0) + ")" +
-            (od.s > 0 ? "(" + (od.P ?? 0) + "," + (od.D ?? 0) + "," + (od.Q ?? 0) + ")" + od.s : "");
+          const sk = typeof o.holdout_skill === "number" ? " skill " + (100 * o.holdout_skill).toFixed(0) + " %" : "";
+          return (o.feature || "?") + ": " + (o.selected || "arima") + " (" + (od.p ?? 0) + "," + (od.d ?? 0) + "," + (od.q ?? 0) + ")" +
+            (od.s > 0 ? "(" + (od.P ?? 0) + "," + (od.D ?? 0) + "," + (od.Q ?? 0) + ")" + od.s : "") + sk;
         }).join(" · ") || "–") + "</dd>"
     : "";
   const aeState = ae.trained

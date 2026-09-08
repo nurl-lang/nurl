@@ -75,13 +75,17 @@ rights.
   anomalies from the same data uses both routes on one model, and a
   model without a trained forecast version gets one fitted on the first
   `/forecast` call once it has trained, the season from the ring's step.
-  A season up to 168 rows is a SARIMA polynomial; a longer one — the day
-  at a minute's step is 1 440 rows, which no filter state can carry — is
-  Fourier terms with four harmonics over a plain ARIMA, and the week is
-  added as Fourier terms whenever the fit window holds three of them,
-  so an hourly feed with a daily polynomial gets its weekend too. The
-  fit is seconds either way: three features at a minute's step over
-  5 700 points in 1.2 s, thirteen features over 18 000 rows in 0.6 s.
+  Which form a feature gets is chosen, not assumed: a plain ARIMA, the
+  seasonal polynomial (up to 168 rows), Fourier terms of the season with
+  two, four or six harmonics over a plain ARIMA (the day at a minute's
+  step is 1 440 rows, which no filter state can carry), and the week
+  added as Fourier terms when the fit window holds three of them — every
+  candidate is fitted on the window's first part and judged on its last
+  fifth by the error of its forecasts up to twelve steps ahead, the best
+  refitted on the whole window, and the holdout error beside the naive
+  forecast's kept in the metadata (`selected`, `holdout_skill`). The fit
+  is seconds either way: three features at a minute's step over 5 700
+  points in a few seconds, thirteen features over 18 000 rows likewise.
   Whether the forecasts are any good is measured, not assumed:
   `GET /models/dynamic/<m>/forecast/backtest?horizon=H&points=N`
   (`anomaly backtest`, the MCP tool `forecast_backtest`, the drawer's

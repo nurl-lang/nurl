@@ -163,8 +163,13 @@ $ `src/dynamic.nu`
     : ~ b named T
     ?? ( vec_get [String] . fc feats 0 ) { T f0 → { ? == ( nurl_str_eq ( string_data f0 ) `temp` ) 1 {} { = named F } } F _ → { = named F } }
     ( check named `forecast: the first watched feature is temp` )
-    : ArimaSpec sp0 ( arima_spec_of ( model_forecast_model mo 0 ) )
-    ( check | > . sp0 P 0 > . sp0 Q 0 `forecast: the temperature's model is seasonal` )
+    : *ArimaModel am0 ( model_forecast_model mo 0 )
+    : ArimaSpec sp0 ( arima_spec_of am0 )
+    ( check | | > . sp0 P 0 > . sp0 Q 0 > . am0 xk 0 `forecast: the temperature's model is seasonal (a polynomial or Fourier terms)` )
+    : ~ b selected F
+    ?? ( vec_get [String] . fc sel 0 ) { T sn → { = selected > ( string_len sn ) 0 } F _ → {} }
+    ( check selected `forecast: the holdout chose a form and named it` )
+    ( check < ( _fc_getf . fc sel_mae 0 ) ( _fc_getf . fc sel_naive 0 ) `forecast: the chosen form beats the naive forecast on the holdout` )
 
     // normal points: quiet
     : ~ b quiet T
