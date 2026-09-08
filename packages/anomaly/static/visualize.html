@@ -140,8 +140,18 @@ async function onModel() {
   await Promise.all([loadData(name), loadMeta(name)]);
 }
 
+let FC = null;      // the forecast answer for the current model, or null
+let FCH = 24;       // horizon asked for
+async function loadForecast(name) {
+  FC = null;
+  try {
+    const f = await api("/models/dynamic/" + enc(name) + "/forecast?horizon=" + FCH);
+    if (f && f.forecasts) FC = f;
+  } catch (e) { FC = null; }
+}
 async function loadData(name) {
   try {
+    await loadForecast(name);
     const d = await api("/models/dynamic/" + enc(name) + "/data?limit=all");
     DATA = d.data || [];
     $("count").textContent = DATA.length + " points";
@@ -213,23 +223,27 @@ function draw() {
   const empty = !FEATURE || SERIES.length === 0;
   $("chartEmpty").style.display = empty ? "block" : "none";
   cv.style.display = empty ? "none" : "block";
-  $("chartTitle").textContent = FEATURE ? FEATURE + " over time" : "Series";
+  const fc = FC && FEATURE ? (FC.forecasts || []).find(f => f.feature === FEATURE) : null;
+  $("chartTitle").textContent = FEATURE ? (FEATURE + " over time" + (fc ? " · forecast " + FC.horizon + " steps" : "")) : "Series";
   if (empty) return;
 
   const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth, H = 380;
-  cv.width = W * dpr; cv.height = H * dpr;
+  const W = cv.clientWidth, H_ = 380;
+  cv.width = W * dpr; cv.height = H_ * dpr;
   const g = cv.getContext("2d"); g.scale(dpr, dpr);
-  g.clearRect(0, 0, W, H);
+  g.clearRect(0, 0, W, H_);
   const pad = { l: 54, r: 14, t: 14, b: 26 };
-  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+  const iw = W - pad.l - pad.r, ih = H_ - pad.t - pad.b;
 
   const xs = SERIES.map(p => p.x);
+  const H = fc ? (fc.mean || []).length : 0;
   let mn = Math.min(...xs), mx = Math.max(...xs);
+  if (fc) { for (const v of fc.lo95 || []) if (isFinite(v)) mn = Math.min(mn, v); for (const v of fc.hi95 || []) if (isFinite(v)) mx = Math.max(mx, v); }
   if (mn === mx) { mn -= 1; mx += 1; }
   const padY = (mx - mn) * 0.08; mn -= padY; mx += padY;
   const N = SERIES.length;
-  const X = (i) => pad.l + (N <= 1 ? iw/2 : (i/(N-1))*iw);
+  const NT = N + H;   // the forecast takes the last H columns
+  const X = (i) => pad.l + (NT <= 1 ? iw/2 : (i/(NT-1))*iw);
   const Y = (v) => pad.t + ih - ((v - mn)/(mx - mn))*ih;
 
   // grid + y labels
@@ -243,15 +257,15 @@ function draw() {
   // x ticks
   for (let t = 0; t <= 4; t++) {
     const idx = Math.round((N-1)*t/4), x = X(idx);
-    g.fillText(String(idx), x-6, H-8);
+    g.fillText(String(idx), x-6, H_-8);
   }
 
   // area + line
-  const grad = g.createLinearGradient(0, pad.t, 0, H-pad.b);
+  const grad = g.createLinearGradient(0, pad.t, 0, H_-pad.b);
   grad.addColorStop(0, "rgba(76,154,255,.28)"); grad.addColorStop(1, "rgba(76,154,255,0)");
   g.beginPath();
   SERIES.forEach((p,i) => { const y=Y(p.x); i?g.lineTo(X(i),y):g.moveTo(X(i),y); });
-  g.lineTo(X(N-1), H-pad.b); g.lineTo(X(0), H-pad.b); g.closePath();
+  g.lineTo(X(N-1), H_-pad.b); g.lineTo(X(0), H_-pad.b); g.closePath();
   g.fillStyle = grad; g.fill();
 
   g.beginPath();
@@ -262,6 +276,24 @@ function draw() {
   if (N <= 400) {
     g.fillStyle = getVar("--accent");
     SERIES.forEach((p,i) => { g.beginPath(); g.arc(X(i), Y(p.x), 2, 0, 7); g.fill(); });
+  }
+
+  // the forecast: 95 % and 80 % bands, then the mean, from the last point on
+  if (fc && H > 0) {
+    const band = (lo, hi, color) => {
+      g.beginPath();
+      g.moveTo(X(N-1), Y(SERIES[N-1].x));
+      for (let k = 0; k < H; k++) g.lineTo(X(N+k), Y(hi[k]));
+      for (let k = H-1; k >= 0; k--) g.lineTo(X(N+k), Y(lo[k]));
+      g.closePath(); g.fillStyle = color; g.fill();
+    };
+    band(fc.lo95, fc.hi95, "rgba(255,171,64,.16)");
+    band(fc.lo80, fc.hi80, "rgba(255,171,64,.22)");
+    g.beginPath();
+    g.moveTo(X(N-1), Y(SERIES[N-1].x));
+    for (let k = 0; k < H; k++) g.lineTo(X(N+k), Y(fc.mean[k]));
+    g.setLineDash([5, 4]); g.strokeStyle = "#ffab40"; g.lineWidth = 1.8; g.stroke(); g.setLineDash([]);
+    g.strokeStyle = getVar("--grid"); g.beginPath(); g.moveTo(X(N-1), pad.t); g.lineTo(X(N-1), H_ - pad.b); g.stroke();
   }
 
   // hover

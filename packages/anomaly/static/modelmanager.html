@@ -834,7 +834,9 @@ function renderDrawer(name) {
         '<div class="field"><label>fit window (pts)</label>' +
           '<input type="text" id="fcWindow" placeholder="2000" value="' + esc(String(fc.window_points ?? 2000)) + '" title="How many of the newest stored points each feature\'s model is fitted on."></div>' +
         '<button id="fcTrain">' + (fc.trained ? "Retrain" : "Train") + " forecast</button>" +
+        (fc.trained ? '<button id="fcBacktest" class="ro" title="A rolling-origin backtest over the newest 200 stored rows: the error of the forecasts against the rows that followed, and against carrying the last value forward.">Backtest</button>' : "") +
       "</div>" +
+      '<div id="fcBacktestOut"></div>' +
       '<p class="hint">Fits a seasonal ARIMA to every numeric feature and judges each new ' +
         "reading by how far it lands from the feature’s own forecast, in the forecast’s standard " +
         "errors — the version that catches an ordinary value at the wrong moment, and names the " +
@@ -894,6 +896,7 @@ function renderDrawer(name) {
   $("schedSave").onclick= (e) => saveSchedule(name, e.currentTarget);
   $("aeTrain").onclick  = (e) => trainAE(name, e.currentTarget);
   $("fcTrain").onclick  = (e) => trainFC(name, e.currentTarget);
+  if ($("fcBacktest")) $("fcBacktest").onclick = (e) => backtestFC(name, e.currentTarget);
   $("ftPreview").onclick= (e) => runFinetune(name, false, e.currentTarget);
   $("ftApply").onclick  = (e) => runFinetune(name, true, e.currentTarget);
   $("calWin").onchange  = (e) => { CAL_LAST = e.target.value; loadCal(name); };
@@ -1175,6 +1178,28 @@ async function trainFC(name, btn) {
     await openDrawer(name);
   } catch (e) {
     toast(e.message, "err", "Forecast failed");
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+
+async function backtestFC(name, btn) {
+  const orig = btn.textContent;
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try {
+    const h = parseInt($("fcSeason").value, 10) > 0 ? Math.min(parseInt($("fcSeason").value, 10), 48) : 12;
+    const d = await api("GET", "/models/dynamic/" + enc(name) + "/forecast/backtest?horizon=" + h + "&points=200");
+    const rows = (d.features || []).map(f =>
+      "<tr><td>" + esc(f.feature) + "</td><td>" + fmtNum(f.mae_mean) + "</td>" +
+      "<td>" + fmtNum(f.mae[0]) + "</td><td>" + fmtNum(f.naive_mae[0]) + "</td>" +
+      "<td>" + fmtPct(f.skill_vs_naive, 1) + "</td>" +
+      "<td>" + (d.season > 0 ? fmtPct(f.skill_vs_seasonal_naive, 1) : "–") + "</td>" +
+      "<td>" + fmtPct(f.coverage95[0], 1) + "</td></tr>").join("");
+    $("fcBacktestOut").innerHTML =
+      '<p class="hint">' + d.origins + " origins, " + h + " steps ahead. Skill: how much of the naive forecast’s error the model removes (100 % = perfect, 0 = no better, negative = worse).</p>" +
+      '<div class="tablewrap"><table><thead><tr><th>feature</th><th>MAE (mean over steps)</th><th>MAE 1 step</th><th>naive 1 step</th><th>skill vs naive</th><th>skill vs seasonal naive</th><th>95 % coverage 1 step</th></tr></thead><tbody>' + rows + "</tbody></table></div>";
+  } catch (e) {
+    toast(e.message, "err", "Backtest failed");
   } finally {
     btn.disabled = false; btn.textContent = orig;
   }

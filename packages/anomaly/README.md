@@ -67,7 +67,23 @@ rights.
   at and caught up from the stored rows when a request opens the model;
   `GET /models/dynamic/<m>/forecast?horizon=H` (`anomaly forecast`, the
   MCP tool `forecast`) reads the next H values per feature with standard
-  errors. Fine-tune sets its margin like the guard's.
+  errors, 80 % and 95 % intervals and the time of each step (the newest
+  point's plus the ring's step). `POST /forecast/<m>?horizon=H` is
+  `/detect`'s twin: the point goes in and the answer carries the verdict
+  and the forecast from it — a stream that wants predictions and
+  anomalies from the same data uses both routes on one model, and a
+  model without a trained forecast version gets one fitted on the first
+  `/forecast` call once it has trained, the season from the ring's step.
+  Whether the forecasts are any good is measured, not assumed:
+  `GET /models/dynamic/<m>/forecast/backtest?horizon=H&points=N`
+  (`anomaly backtest`, the MCP tool `forecast_backtest`, the drawer's
+  *Backtest* button) replays the models over the newest N stored rows
+  and reports, per feature and step, the mean absolute error, MAPE, the
+  95 % interval's coverage and the skill against the two forecasts
+  anyone can make without a model — the last value carried forward and
+  the value one season earlier (1 = perfect, 0 = no better, negative =
+  worse). The visualiser draws the forecast and its bands past the end
+  of the trace. Fine-tune sets its margin like the guard's.
 - **timevector — the sliding window.** `window_size` consecutive points
   flatten to one window vector; the forest trains on window vectors and
   detection scores the window ending at the incoming point. This is the
@@ -835,10 +851,10 @@ says why and what would be allowed instead.
 | `fork_model` | every member | a new model trained on a slice of another's history — a window, some columns; `llm_…` is scratch |
 | `labels` | every member | what readers have said about a model's rows |
 | `label_anomaly` | member on `llm_…`, admin on any | say a flagged row was a `false_positive` (calibration and `finetune` leave it out from then on), `confirmed`, or `none` to withdraw |
-| `forecast` | every member | what the forecast version expects next, per feature, with standard errors |
+| `forecast`, `forecast_backtest` | every member | what the forecast version expects next, per feature, with intervals and times; how good its forecasts have been against naive baselines |
 | `sources`, `source` | every member (not an ingest key) | the organisation's data sources and one in full — header values masked |
 | `retrain`, `train_autoencoder`, `train_forecast`, `finetune`, `edit_model`, `reset_model`, `delete_model` | member on `llm_…`, admin on any | the model's lifecycle; destructive ones need `confirm: true` |
-| `ingest_point`, `import_data` | ingest key, admin | send a point / load a file of history — this teaches the model |
+| `ingest_point`, `forecast_point`, `import_data` | ingest key, admin | send a point / send a point and get the forecast from it / load a file of history — this teaches the model |
 | `claim_model`, `org_users`, `set_role`, `org_keys` | admin | ownership, the roster, roles, the key listing |
 | `create_source`, `update_source`, `delete_source`, `run_source`, `source_catalog`, `source_preview` | admin | data sources: add one (a WFS stored query or feature type, or a URL answering JSON, with its kind and settings), change any field, remove it (`confirm: true`), fetch now or backfill, browse a service's catalogue, preview a query's columns |
 
@@ -909,6 +925,7 @@ anomaly train  <model>                 # force a retrain now
 anomaly train-ae <model>               # train the autoencoder version
 anomaly train-fc <model> [--season S]  # train the forecast version (a SARIMA per feature)
 anomaly forecast <model> [--horizon H] # the next H values per watched feature
+anomaly backtest <model> [--horizon H] [--points N]  # forecast accuracy vs naive baselines
 anomaly calibrate <model> [--last S]   # alert rates vs margins over a window
 anomaly finetune <model> [--rate R]    # set every margin from a target rate
                [--last S|all|own] [-n] #   (own: each version its own period;
@@ -963,7 +980,9 @@ command with `--store DIR`.
 | `POST /api/dynamic/<m>/finetune` | set margins from a target alert rate — `{"rate": 0.01, "last": 86400 \| "all" \| "own", "dry_run": false, "versions": [..]}` |
 | `POST /train/autoencoder/<m>` | train the autoencoder version — optional `{"hidden": [..], "contamination": x}` |
 | `POST /train/forecast/<m>` | train the forecast version and switch it on — optional `{"season": S, "window_points": N, "window_minutes": M}` |
-| `GET /models/dynamic/<m>/forecast?horizon=H` | the next H values of every feature the forecast version watches, with standard errors and the fitted orders |
+| `POST /forecast/<m>?horizon=H` | `/detect`'s twin: store the point and answer with its verdict and the forecast from it (intervals, times); fits the forecast version on first use once the model has trained |
+| `GET /models/dynamic/<m>/forecast?horizon=H` | the next H values of every feature the forecast version watches, with standard errors, 80 % / 95 % intervals, times and the fitted models |
+| `GET /models/dynamic/<m>/forecast/backtest?horizon=H&points=N` | how good the forecasts are: a rolling-origin backtest over the newest N rows — MAE, MAPE, 95 % coverage, skill against the naive and seasonal-naive forecasts |
 
 Model names must match `^[a-zA-Z0-9_]+$`. The router is a plain function
 over `HttpRequest` — the test suite drives every route without a socket.
@@ -1224,7 +1243,7 @@ build step — plain HTML/CSS/JS that talks to the routes above):
 | --- | --- |
 | `/` · `/modelmanager.html` | list models — stored points beside the lifetime count, feature count, a button straight to the model's anomalies — train / finetune / reset / delete, export the stored points as CSV or JSONL; per model: toggle versions, edit margins and contamination with a live *flags in window* column from the calibration report, preview and apply a fine-tune for a target alert rate, train the autoencoder, train the forecast version (its season and fit window), edit the retrain schedule — or, under *Advanced*, the whole editable metadata, as a generated field form or as raw JSON. Every alert-affecting control carries a `?` that says what it means and which way to move it |
 | `/modeltrainer.html` | import a CSV/JSON/JSONL file of history — inspect first: the page shows where it found the time (a column, year/month/day parts, or none) and lets you confirm or change it; feed points (`/detect`) one at a time or in bulk; force-train |
-| `/visualize.html` | plot any numeric feature of a model's stored points over time |
+| `/visualize.html` | plot any numeric feature of a model's stored points over time, with the forecast version's next steps and their 80 % / 95 % bands drawn past the end |
 | `/admin.html` | the organization: users and their roles, API keys, model ownership |
 | `/sources.html` | data sources: what is fetched from where into which model and how often, with each run's outcome; add one by loading a WFS service's catalogue, picking a stored query, filling in the location, previewing the last hours and ticking the columns to use as features |
 | `/anomalies.html` | scan stored history over a time range: score timeline, a per-version ribbon showing *what* flagged *when*, any feature's own trace for context, and a table naming the features whose relationship broke — with the value each had and the one the autoencoder expected; forest-only flags list the point's most extreme values in σ. Drag across a chart to zoom into a stretch of points, double-click or *reset zoom* to see the whole range; click a point for its stored record and every feature as the model saw it. Filter chips isolate the joint (autoencoder) anomalies from the per-feature (forest) ones. *Max points* (50 000) bites only when the range holds more; *Export* downloads the range's stored points as CSV or JSONL |

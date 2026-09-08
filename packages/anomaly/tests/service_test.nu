@@ -574,6 +574,27 @@ $ `src/service.nu`
     ?? ( json_obj_get . fq1 body `forecasts` ) { T fa → { = nfc ( json_arr_len fa ) } F _ → {} }
     ( check > nfc 0 `svc: a forecast per watched feature` )
     ( json_free . fq1 body )
+    // /forecast: the point goes in, the forecast comes back with intervals and times
+    : SvcOut fp ( fire r `POST` `/forecast/svc` `horizon=2` `{"temp": 21.0}` )
+    ( check == . fp status 200 `svc: POST /forecast -> 200` )
+    ( check ( jstr_eq . fp body `status` `success` ) `svc: with the verdict` )
+    : ~ i fph 0
+    : ~ b fpt F
+    ?? ( json_obj_get . fp body `forecast` ) {
+        T fo → {
+            = fph ( jint_of fo `horizon` )
+            ?? ( json_obj_get fo `times` ) { T ta → { = fpt == ( json_arr_len ta ) 2 } F _ → {} }
+        }
+        F _ → {}
+    }
+    ( check == fph 2 `svc: two steps ahead` )
+    ( check fpt `svc: a time per step` )
+    ( check == ( jint_of . fp body `data_points` ) 51 `svc: the point was stored` )
+    ( json_free . fp body )
+    : SvcOut bt ( fire r `GET` `/models/dynamic/svc/forecast/backtest` `horizon=3&points=20` `` )
+    ( check == . bt status 200 `svc: backtest -> 200` )
+    ( check == ( jint_of . bt body `origins` ) 20 `svc: twenty origins` )
+    ( json_free . bt body )
     : SvcOut md7 ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
     : ~ b fc_on F
     ?? ( json_obj_get . md7 body `forecast` ) {

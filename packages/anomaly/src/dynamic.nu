@@ -1166,6 +1166,273 @@ $ `src/store.nu`
     ^ . mo fc
 }
 
+// The ring's step: the median gap between consecutive stored times, in
+// seconds (1 on a count clock; 0 when there are too few rows to say).
+@ model_step * Model mo → i {
+    ? . . mo meta count_clock { ^ 1 } {}
+    : i n ( vec_len [i] . mo times )
+    ? < n 3 { ^ 0 } {}
+    : ( Vec i ) gaps ( vec_with_cap [i] n )
+    : *i tp ( vec_data [i] . mo times )
+    : ~ i k 1
+    ~ < k n {
+        : i g - . tp k . tp - k 1
+        ? > g 0 { ( vec_push [i] gaps g ) } {}
+        = k + k 1
+    }
+    : i ng ( vec_len [i] gaps )
+    ? < ng 2 { ( vec_free [i] gaps ) ^ 0 } {}
+    ( sort_by [i] gaps \ i a i b → i { ? < a b { ^ -1 } {} ? > a b { ^ 1 } {} ^ 0 } )
+    : i med ( _fc_geti gaps / ng 2 )
+    ( vec_free [i] gaps )
+    ^ med
+}
+
+// The seasonal period, in rows, a step implies: the day for a step up
+// to twelve hours (144 rows at ten minutes, 24 at an hour), the week for
+// a daily step, none otherwise (or on a count clock, whose step says
+// nothing about time).
+@ anomaly_season_of i step → i {
+    ? < step 60 { ^ 0 } {}
+    ? <= step 43200 {
+        : i s / + 86400 / step 2 step
+        ^ ? >= s 2 s 0
+    } {}
+    ? & >= step 77760 <= step 95040 { ^ 7 } {}
+    ^ 0
+}
+
+// A forecast asked of a model whose forecast version is not trained: fit
+// it now, the season from the ring's step when the version has none
+// set, and switch it on. "" when the version is ready (already, or now);
+// otherwise why not (the model has not trained; no feature to forecast).
+@ model_forecast_ensure_at * Model mo i now → String {
+    : *FcModel fc . mo fc
+    ? . fc trained { ^ ( string_new ) } {}
+    ? ( model_is_trained mo ) {} { ^ ( string_from `the model has not trained yet: a forecast needs the first retrain (min_data_points stored)` ) }
+    ( _an_ensure_fc_cfg mo )
+    : *Meta mm . mo meta
+    : i at ( meta_find_version mm ANOM_FC_NAME )
+    : ~ b unset T
+    ? >= at 0 { ?? ( vec_get [VerCfg] . mm versions at ) { T vc → { ? > . vc window_size 0 { = unset F } {} } F _ → {} } } {}
+    ? unset {
+        : i season ( anomaly_season_of ( model_step mo ) )
+        ? > season 0 { : b _w ( model_set_version_window mo ANOM_FC_NAME season 0 ) } {}
+    } {}
+    ^ ( model_train_forecast_at mo now )
+}
+
+: f ANOM_Z80 1.2815515655446004
+: f ANOM_Z95 1.959963984540054
+
+// The next `h` values of every watched feature, from the states caught
+// up with the ring, as the API answers them: means, standard errors,
+// the 80 % and 95 % intervals, the time of each step (the newest stored
+// time plus the ring's step, or the row number on a count clock), and
+// each feature's fitted model.
+@ model_forecast_json * Model mo i h → Json {
+    ( model_forecast_sync mo )
+    : *FcModel fc . mo fc
+    : *Meta mm . mo meta
+    : FcForecast ff ( fc_forecast fc h )
+    : Json o ( json_obj_new )
+    ( json_obj_set o `horizon` ( json_int h ) )
+    ( json_obj_set o `season` ( json_int . fc season ) )
+    ( json_obj_set o `points_absorbed` ( json_int . fc pos ) )
+    ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm ANOM_FC_NAME F ) ) )
+    ( json_obj_set o `clock` ( json_str_lit ? . mm count_clock `count` `time` ) )
+    : i step ( model_step mo )
+    ( json_obj_set o `step_seconds` ( json_int step ) )
+    : i last ? . mm count_clock ( model_seq_base mo ) ( model_last_ts mo )
+    : i lastn ? . mm count_clock + last ( vec_len [String] . mo lines ) last
+    : Json times ( json_arr_new )
+    : ~ i k 1
+    ~ <= k h { ( json_arr_push times ( json_int + lastn * k ? . mm count_clock 1 step ) ) = k + k 1 }
+    ( json_obj_set o `times` times )
+    : Json fa ( json_arr_new )
+    : i nw ( vec_len [String] . ff feats )
+    : ~ i j 0
+    ~ < j nw {
+        : Json fo ( json_obj_new )
+        ?? ( vec_get [String] . ff feats j ) { T fn → { ( json_obj_set fo `feature` ( json_str_lit ( string_data fn ) ) ) } F _ → {} }
+        ?? ( vec_get [( Vec f )] . ff mean j ) {
+            T mv → {
+                ?? ( vec_get [( Vec f )] . ff se j ) {
+                    T sv → {
+                        ( json_obj_set fo `mean` ( _an_jarr_of_floats mv ) )
+                        ( json_obj_set fo `se` ( _an_jarr_of_floats sv ) )
+                        : ( Vec f ) lo80 ( vec_zeroed [f] h )
+                        : ( Vec f ) hi80 ( vec_zeroed [f] h )
+                        : ( Vec f ) lo95 ( vec_zeroed [f] h )
+                        : ( Vec f ) hi95 ( vec_zeroed [f] h )
+                        : ~ i q 0
+                        ~ < q h {
+                            : f m ( _fc_getf mv q )
+                            : f s ( _fc_getf sv q )
+                            ( vec_set [f] lo80 q - m * ANOM_Z80 s ) ( vec_set [f] hi80 q + m * ANOM_Z80 s )
+                            ( vec_set [f] lo95 q - m * ANOM_Z95 s ) ( vec_set [f] hi95 q + m * ANOM_Z95 s )
+                            = q + q 1
+                        }
+                        ( json_obj_set fo `lo80` ( _an_jarr_of_floats lo80 ) ) ( json_obj_set fo `hi80` ( _an_jarr_of_floats hi80 ) )
+                        ( json_obj_set fo `lo95` ( _an_jarr_of_floats lo95 ) ) ( json_obj_set fo `hi95` ( _an_jarr_of_floats hi95 ) )
+                        ( vec_free [f] lo80 ) ( vec_free [f] hi80 ) ( vec_free [f] lo95 ) ( vec_free [f] hi95 )
+                    }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+        ( json_obj_set fo `model` ( arima_coef ( _fc_model_at fc j ) ) )
+        ( json_arr_push fa fo )
+        = j + j 1
+    }
+    ( json_obj_set o `forecasts` fa )
+    ( fc_forecast_free ff )
+    ^ o
+}
+
+// How good the forecasts are, measured: a rolling-origin backtest over
+// the ring's last `n` origins. A copy of every model is replayed from
+// ANOM_FC_BURN rows before the first origin; at each origin the h-step
+// forecast is made from the state as it then stood and compared with
+// the rows that followed. Per feature and per step: the mean absolute
+// error, the mean absolute percentage error (rows with a reading
+// near zero left out), the 95 % interval's coverage, and the same error
+// for the two forecasts anyone can make without a model — the last
+// value carried forward, and the value one season earlier — with the
+// skill against each (1 − MAE/MAE_baseline: 0 is no better, 1 is
+// perfect, negative is worse). Gaps are skipped.
+@ model_forecast_backtest * Model mo i h i n → Json {
+    : Json o ( json_obj_new )
+    : *FcModel fc . mo fc
+    : i len ( vec_len [String] . mo lines )
+    : ~ i no n
+    ? > no - - len h 1 { = no - - len h 1 } {}
+    ( json_obj_set o `horizon` ( json_int h ) )
+    ? | ! . fc trained < no 1 {
+        ( json_obj_set o `origins` ( json_int 0 ) )
+        ( json_obj_set o `error` ( json_str_lit ? . fc trained `too few stored rows for the horizon` `the forecast version is not trained` ) )
+        ^ o
+    } {}
+    : i nw . fc nw
+    : i o0 - - len h no
+    : ~ i b0 - o0 ANOM_FC_BURN
+    ? < b0 0 { = b0 0 } {}
+    // the watched readings of rows [b0, len)
+    : i nr - len b0
+    : ( Vec f ) mat ( vec_with_cap [f] * nr nw )
+    : ~ i k b0
+    ~ < k len {
+        : ( Vec f ) fr ( __an_fc_row mo k )
+        ( vec_extend [f] mat fr )
+        ( vec_free [f] fr )
+        = k + k 1
+    }
+    : *f mp ( vec_data [f] mat )
+    // the sums, per feature and step
+    : i cells * nw h
+    : ( Vec f ) s_abs ( vec_zeroed [f] cells )
+    : ( Vec f ) s_pct ( vec_zeroed [f] cells )
+    : ( Vec f ) s_nai ( vec_zeroed [f] cells )
+    : ( Vec f ) s_sea ( vec_zeroed [f] cells )
+    : ( Vec i ) c_abs ( vec_zeroed [i] cells )
+    : ( Vec i ) c_pct ( vec_zeroed [i] cells )
+    : ( Vec i ) c_nai ( vec_zeroed [i] cells )
+    : ( Vec i ) c_sea ( vec_zeroed [i] cells )
+    : ( Vec i ) c_cov ( vec_zeroed [i] cells )
+    : *f pabs ( vec_data [f] s_abs ) : *f ppct ( vec_data [f] s_pct ) : *f pnai ( vec_data [f] s_nai ) : *f psea ( vec_data [f] s_sea )
+    : *i cabs ( vec_data [i] c_abs ) : *i cpct ( vec_data [i] c_pct ) : *i cnai ( vec_data [i] c_nai ) : *i csea ( vec_data [i] c_sea ) : *i ccov ( vec_data [i] c_cov )
+    : i season . fc season
+    : ( Vec i ) copies ( fc_replay_begin fc )
+    : ( Vec f ) noz ( vec_new [f] )
+    : ~ i t b0
+    ~ < t len {
+        : i r - t b0
+        : ( Vec f ) row ( vec_with_cap [f] nw )
+        : ~ i j 0
+        ~ < j nw { ( vec_push [f] row . mp + * r nw j ) = j + j 1 }
+        ( fc_replay_step copies row noz )
+        ( vec_free [f] row )
+        ? & >= t o0 <= t - - len h 1 {
+            = j 0
+            ~ < j nw {
+                : *ArimaModel cm # *ArimaModel ( _fc_geti copies j )
+                : ArimaForecast f1 ( arima_forecast cm h )
+                : f lastv . mp + * r nw j
+                : ~ i q 1
+                ~ <= q h {
+                    : f actual . mp + * + r q nw j
+                    ? ( float_is_nan actual ) {} {
+                        : i cell + * j h - q 1
+                        : f m ( _fc_getf . f1 mean - q 1 )
+                        : f se ( _fc_getf . f1 se - q 1 )
+                        : f e ( float_abs - actual m )
+                        = . pabs cell + . pabs cell e
+                        = . cabs cell + . cabs cell 1
+                        ? > ( float_abs actual ) 0.000000001 { = . ppct cell + . ppct cell / e ( float_abs actual ) = . cpct cell + . cpct cell 1 } {}
+                        ? <= e * ANOM_Z95 se { = . ccov cell + . ccov cell 1 } {}
+                        ? ( float_is_nan lastv ) {} { = . pnai cell + . pnai cell ( float_abs - actual lastv ) = . cnai cell + . cnai cell 1 }
+                        ? & > season 0 >= - + r q season 0 {
+                            : f sv . mp + * - + r q season nw j
+                            ? ( float_is_nan sv ) {} { = . psea cell + . psea cell ( float_abs - actual sv ) = . csea cell + . csea cell 1 }
+                        } {}
+                    }
+                    = q + q 1
+                }
+                ( arima_forecast_free f1 )
+                = j + j 1
+            }
+        } {}
+        = t + t 1
+    }
+    ( vec_free [f] noz )
+    ( fc_replay_end copies )
+    ( vec_free [f] mat )
+    ( json_obj_set o `origins` ( json_int no ) )
+    ( json_obj_set o `season` ( json_int season ) )
+    ( json_obj_set o `rows_from` ( json_int o0 ) )
+    : Json fa ( json_arr_new )
+    : ~ i j 0
+    ~ < j nw {
+        : Json fo ( json_obj_new )
+        ?? ( vec_get [String] . fc feats j ) { T fn → { ( json_obj_set fo `feature` ( json_str_lit ( string_data fn ) ) ) } F _ → {} }
+        : Json mae ( json_arr_new ) : Json mape ( json_arr_new ) : Json nai ( json_arr_new ) : Json sea ( json_arr_new ) : Json cov ( json_arr_new )
+        : ~ f tot_abs 0.0 : ~ f tot_nai 0.0 : ~ f tot_sea 0.0
+        : ~ i n_abs 0 : ~ i n_nai 0 : ~ i n_sea 0
+        : ~ i q 0
+        ~ < q h {
+            : i cell + * j h q
+            ( json_arr_push mae ( json_float ? > . cabs cell 0 / . pabs cell # f . cabs cell 0.0 ) )
+            ( json_arr_push mape ( json_float ? > . cpct cell 0 / . ppct cell # f . cpct cell 0.0 ) )
+            ( json_arr_push nai ( json_float ? > . cnai cell 0 / . pnai cell # f . cnai cell 0.0 ) )
+            ( json_arr_push sea ( json_float ? > . csea cell 0 / . psea cell # f . csea cell 0.0 ) )
+            ( json_arr_push cov ( json_float ? > . cabs cell 0 / # f . ccov cell # f . cabs cell 0.0 ) )
+            = tot_abs + tot_abs . pabs cell = n_abs + n_abs . cabs cell
+            = tot_nai + tot_nai . pnai cell = n_nai + n_nai . cnai cell
+            = tot_sea + tot_sea . psea cell = n_sea + n_sea . csea cell
+            = q + q 1
+        }
+        ( json_obj_set fo `mae` mae )
+        ( json_obj_set fo `mape` mape )
+        ( json_obj_set fo `naive_mae` nai )
+        ( json_obj_set fo `seasonal_naive_mae` sea )
+        ( json_obj_set fo `coverage95` cov )
+        : f m_abs ? > n_abs 0 / tot_abs # f n_abs 0.0
+        : f m_nai ? > n_nai 0 / tot_nai # f n_nai 0.0
+        : f m_sea ? > n_sea 0 / tot_sea # f n_sea 0.0
+        ( json_obj_set fo `mae_mean` ( json_float m_abs ) )
+        ( json_obj_set fo `skill_vs_naive` ( json_float ? > m_nai 0.0 - 1.0 / m_abs m_nai 0.0 ) )
+        ( json_obj_set fo `skill_vs_seasonal_naive` ( json_float ? > m_sea 0.0 - 1.0 / m_abs m_sea 0.0 ) )
+        ( json_obj_set fo `compared_points` ( json_int n_abs ) )
+        ( json_arr_push fa fo )
+        = j + j 1
+    }
+    ( json_obj_set o `features` fa )
+    ( vec_free [f] s_abs ) ( vec_free [f] s_pct ) ( vec_free [f] s_nai ) ( vec_free [f] s_sea )
+    ( vec_free [i] c_abs ) ( vec_free [i] c_pct ) ( vec_free [i] c_nai ) ( vec_free [i] c_sea ) ( vec_free [i] c_cov )
+    ^ o
+}
+
 @ model_forecast_model * Model mo i j → *ArimaModel {
     ^ ( _fc_model_at . mo fc j )
 }
