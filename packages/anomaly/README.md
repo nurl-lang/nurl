@@ -59,7 +59,9 @@ rights.
   feature ([`arima`](../arima) package: the stepwise order search, the
   season the version's `window_size` gives in rows — 0 takes it from
   the ring's step: the day at a step up to twelve hours, the week at a
-  daily one — the features fitted on the machine's threads), keeps each
+  daily one; −1 is no season — the features fitted on the machine's
+  threads; a numeric feature left out — constant, too few readings, no
+  fit — is named with its reason in `skipped`), keeps each
   model's Kalman state current point by point, and judges every reading by how many standard errors
   of its own one-step forecast it landed from it: the decision value is
   `−max|z|`, the margin a sigma count (4 by default), and the verdict
@@ -76,10 +78,12 @@ rights.
   model without a trained forecast version gets one fitted on the first
   `/forecast` call once it has trained, the season from the ring's step.
   Which form a feature gets is chosen, not assumed: a plain ARIMA, the
-  seasonal polynomial (up to 168 rows), Fourier terms of the season with
-  two, four or six harmonics over a plain ARIMA (the day at a minute's
-  step is 1 440 rows, which no filter state can carry), and the week
-  added as Fourier terms when the fit window holds three of them — every
+  persistence forecast (ARIMA(0,1,0), which on a slow smooth reading
+  nothing beats), the seasonal polynomial (up to 168 rows), Fourier
+  terms of the season with two, four or six harmonics over a plain ARIMA
+  (the day at a minute's step is 1 440 rows, which no filter state can
+  carry), and the week added as Fourier terms when the fit window holds
+  three of them — every
   candidate is fitted on the window's first part and judged on its last
   fifth by the error of its forecasts up to twelve steps ahead, the best
   refitted on the whole window, and the holdout error beside the naive
@@ -243,7 +247,15 @@ shifted slot; they change no verdict, so nothing is rescored.
 
 Fine-tune is calibration plus a write: pick the share of the window you are
 willing to alert on and every enabled version but `flatline` gets the
-margin that flags that share — rounded to the fewest significant digits that keep the count,
+margin that flags that share. Two things it will not do silently: write a
+margin of 0 (which flags every row whose score is at or below 0 — on a
+forest, a third of a quiet feed) when no margin at or above 0 flags this
+few, and pretend a rate was met when the scores tie in runs and the
+achievable count is under half or over twice the one asked; both leave
+the margin as it was, or apply it, with a `warning` in the report. A
+margin someone set marks the model tuned (`tuned_at`), so a source's or
+an import's first-train calibration never overwrites it; a fork inherits
+it. Every margin change is written to the audit log — rounded to the fewest significant digits that keep the count,
 so a margin reads `0.13`, not `0.12994712`. When the scores tie at the cut
 (a stuck sensor scores whole days identically) no margin flags exactly that
 share; the nearer edge of the run is taken and the response says so
@@ -864,6 +876,7 @@ says why and what would be allowed instead.
 | `labels` | every member | what readers have said about a model's rows |
 | `label_anomaly` | member on `llm_…`, admin on any | say a flagged row was a `false_positive` (calibration and `finetune` leave it out from then on), `confirmed`, or `none` to withdraw |
 | `forecast`, `forecast_backtest` | every member | what the forecast version expects next, per feature, with intervals and times; how good its forecasts have been against naive baselines |
+| `audit` | every member | who set which margin to what, when — a person's edit or finetune, a source's or an import's first-train calibration, a key |
 | `sources`, `source` | every member (not an ingest key) | the organisation's data sources and one in full — header values masked |
 | `retrain`, `train_autoencoder`, `train_forecast`, `finetune`, `edit_model`, `reset_model`, `delete_model` | member on `llm_…`, admin on any | the model's lifecycle; destructive ones need `confirm: true` |
 | `ingest_point`, `forecast_point`, `import_data` | ingest key, admin | send a point / send a point and get the forecast from it / load a file of history — this teaches the model |
@@ -994,7 +1007,8 @@ command with `--store DIR`.
 | `POST /train/forecast/<m>` | train the forecast version and switch it on — optional `{"season": S, "window_points": N, "window_minutes": M}` |
 | `POST /forecast/<m>?horizon=H` | `/detect`'s twin: store the point and answer with its verdict and the forecast from it (intervals, times); fits the forecast version on first use once the model has trained |
 | `GET /models/dynamic/<m>/forecast?horizon=H` | the next H values of every feature the forecast version watches, with standard errors, 80 % / 95 % intervals, times and the fitted models |
-| `GET /models/dynamic/<m>/forecast/backtest?horizon=H&points=N` | how good the forecasts are: a rolling-origin backtest over the newest N rows — MAE, MAPE, 95 % coverage, skill against the naive and seasonal-naive forecasts |
+| `GET /models/dynamic/<m>/forecast/backtest?horizon=H&points=N` | how good the forecasts are: a rolling-origin backtest over the newest N rows — MAE, MAPE, 95 % coverage, skill against the naive and seasonal-naive forecasts (a cell with nothing to compare is `null`) |
+| `GET /models/dynamic/<m>/audit?limit=N` | the margin changes, newest N: when, by whom (`actor`: an e-mail, `key:<id>`, `source:<id>`, `cli`), how (`action`: `edit`, `finetune`, `autotune`), which version, from what to what |
 
 Model names must match `^[a-zA-Z0-9_]+$`. The router is a plain function
 over `HttpRequest` — the test suite drives every route without a socket.

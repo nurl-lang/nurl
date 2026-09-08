@@ -322,7 +322,7 @@ $ `src/service.nu`
     ( check ( tools_has . ls body `ingest_point` ) `mcp: sign-in off = admin: ingest_point listed` )
     ( check ( tools_has . ls body `set_role` ) `mcp: sign-in off = admin: set_role listed` )
     ( check ( tools_has . ls body `org_keys` ) `mcp: sign-in off = admin: org_keys listed` )
-    ( check == ( tools_count . ls body ) 40 `mcp: every one of the 40 tools is listed` )
+    ( check == ( tools_count . ls body ) 41 `mcp: every one of the 41 tools is listed` )
     ( out_free ls )
 
     // A tool that does not exist is refused in the tool-result envelope.
@@ -838,11 +838,11 @@ $ `src/service.nu`
     ( check ! ( tools_has . gl body `org_keys` ) `mcp: ingest does not see org_keys` )
     ( check ! ( tools_has . gl body `org_users` ) `mcp: ingest does not see org_users` )
     ( check ! ( tools_has . gl body `claim_model` ) `mcp: ingest does not see claim_model` )
-    ( check == ( tools_count . gl body ) 30 `mcp: 30 tools for an ingest key` )
+    ( check == ( tools_count . gl body ) 31 `mcp: 31 tools for an ingest key` )
     ( out_free gl )
 
     : Out al ( rpc r `tools/list` `{}` AK )
-    ( check == ( tools_count . al body ) 40 `mcp: an admin key sees every tool` )
+    ( check == ( tools_count . al body ) 41 `mcp: an admin key sees every tool` )
     ( out_free al )
 
     // An invisible tool called by name is unknown to that caller.
@@ -926,6 +926,11 @@ $ `src/service.nu`
     ( check . gbt ok `mcp: ingest reads the backtest` )
     ( check == ( jint_of . gbt data `origins` ) 10 `mcp: ten origins` )
     ( call_free gbt )
+    : Call gau ( call r `audit` `{"model":"llm_mine","limit":50}` GK )
+    ( check . gau ok `mcp: the audit log reads` )
+    ( check ( string_contains . gau text `"action":"finetune"` ) `mcp: and holds the finetune's margin changes` )
+    ( check ( string_contains . gau text `"actor":"key:` ) `mcp: made by the key` )
+    ( call_free gau )
 
     // The admin sees it, and may touch production.
     : Call adm ( call r `describe_model` `{"model":"llm_mine"}` AK )

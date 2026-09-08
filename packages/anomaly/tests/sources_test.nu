@@ -734,6 +734,22 @@ $ `src/service.nu`
     ( check ( seq ( jstr e3 `message` ) `no such source` ) `run: unknown source` )
     ( json_free e3 )
 
+    // a changed model resets the span: the new model has seen none of it
+    : Json chm ( json_obj_new )
+    ( json_obj_set chm `model` ( json_str_lit `other_model` ) )
+    ?? ( source_update ORG ( string_data id ) chm + now 5 ) {
+        T upd → {
+            ( check == ( jint upd `first_time` ) 0 `run: a changed model resets first_time` )
+            ( check == ( jint upd `last_time` ) 0 `run: and last_time` )
+            ( json_free upd )
+        }
+        F e → { ( check F `run: model change` ) ( string_free e ) }
+    }
+    ( json_free chm )
+    : Json chb ( json_obj_new )
+    ( json_obj_set chb `model` ( json_str_lit `fmi_test` ) )
+    ?? ( source_update ORG ( string_data id ) chb + now 6 ) { T upd → { ( json_free upd ) } F e → { ( string_free e ) } }
+    ( json_free chb )
     : b _d ( source_delete ORG ( string_data id ) )
     ( string_free id )
 }

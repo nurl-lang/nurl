@@ -95,6 +95,7 @@ $ `deps/arima/src/arima.nu`
     ( Vec String ) sel  // per watched feature: the form the holdout chose ("arima", "sarima", "fourier4", "fourier4+week", …)
     ( Vec f ) sel_mae  // its holdout error
     ( Vec f ) sel_naive  // the naive forecast's on the same rows and steps
+    ( Vec String ) skipped  // numeric features not watched, each "name: why"
 }
 
 @ fc_new → *FcModel {
@@ -114,6 +115,7 @@ $ `deps/arima/src/arima.nu`
     = . fc sel ( vec_new [String] )
     = . fc sel_mae ( vec_new [f] )
     = . fc sel_naive ( vec_new [f] )
+    = . fc skipped ( vec_new [String] )
     ^ fc
 }
 
@@ -146,6 +148,8 @@ $ `deps/arima/src/arima.nu`
     = . fc sel_mae ( vec_new [f] )
     ( vec_free [f] . fc sel_naive )
     = . fc sel_naive ( vec_new [f] )
+    ( vec_free_with [String] . fc skipped \ String x → v { ( string_free x ) } )
+    = . fc skipped ( vec_new [String] )
     = . fc nw 0
     = . fc trained F
     = . fc pos 0
@@ -161,6 +165,7 @@ $ `deps/arima/src/arima.nu`
     ( vec_free [String] . fc sel )
     ( vec_free [f] . fc sel_mae )
     ( vec_free [f] . fc sel_naive )
+    ( vec_free [String] . fc skipped )
     ( nurl_free # s fc )
 }
 
@@ -207,6 +212,7 @@ $ `deps/arima/src/arima.nu`
     ( Vec i ) periods
     i k
     String name
+    b fixed  // ARIMA(0,1,0): the last value carried forward, as a candidate
 }
 
 @ __fc_cand_free FcCand c → v {
@@ -218,7 +224,7 @@ $ `deps/arima/src/arima.nu`
     : ( Vec i ) periods ( vec_new [i] )
     ? > p1 0 { ( vec_push [i] periods p1 ) } {}
     ? > p2 0 { ( vec_push [i] periods p2 ) } {}
-    ^ @ FcCand { sarima periods k ( string_from name ) }
+    ^ @ FcCand { sarima periods k ( string_from name ) F }
 }
 
 // The forms worth trying for a season of `season` rows over a fit
@@ -230,6 +236,11 @@ $ `deps/arima/src/arima.nu`
 @ fc_candidates i season i n → ( Vec FcCand ) {
     : ( Vec FcCand ) out ( vec_new [FcCand] )
     ( vec_push [FcCand] out ( __fc_cand 0 0 0 0 `arima` ) )
+    // The persistence forecast, as a form of its own: on a slow smooth
+    // reading nothing beats it, and then it is what the model should be.
+    : FcCand naive ( __fc_cand 0 0 0 0 `naive` )
+    = . naive fixed T
+    ( vec_push [FcCand] out naive )
     ? > season 0 {
         : b poly <= season ANOM_FC_SARIMA_MAX
         : i week * 7 season
@@ -248,6 +259,7 @@ $ `deps/arima/src/arima.nu`
 
 // Fit one form on `y`.
 @ __fc_fit_cand ( Vec f ) y FcCand c → *ArimaModel {
+    ? . c fixed { ^ ( arima_fit_method y ( arima_spec 0 1 0 ) ARIMA_ML ) } {}
     ? > ( vec_len [i] . c periods ) 0 { ^ ( arima_auto_harmonic y . c periods . c k . c sarima ) } {}
     ^ ( arima_auto y . c sarima )
 }
@@ -507,6 +519,16 @@ $ `deps/arima/src/arima.nu`
     ~ < j nc {
         : FcSeries fs ( __fc_fit_series hist nc j from ne )
         : ( Vec f ) y . fs y
+        ? & >= . fs present ANOM_FC_MIN_FIT . fs distinct {} {
+            : String why ( string_new )
+            ?? ( vec_get [String] cand j ) { T fn → { ( string_push_str why ( string_data fn ) ) } F _ → {} }
+            ? < . fs present ANOM_FC_MIN_FIT {
+                ( string_push_str why `: too few readings in the fit window (` )
+                ( string_push_int why . fs present )
+                ( string_push_str why ` of ` ) ( string_push_int why - ne from ) ( string_push_str why `)` )
+            } { ( string_push_str why `: constant in the fit window` ) }
+            ( vec_push [String] . fc skipped why )
+        }
         ? & >= . fs present ANOM_FC_MIN_FIT . fs distinct {
             : *FcJob jb # *FcJob ( nurl_malloc Z FcJob )
             = . jb y y
@@ -530,6 +552,12 @@ $ `deps/arima/src/arima.nu`
         : *ArimaModel m # *ArimaModel . jb out
         : ~ b keep F
         ? != . jb out 0 { ? & . m converged > ( arima_sigma2 m ) 0.0 { = keep T } {} } {}
+        ? keep {} {
+            : String why ( string_new )
+            ?? ( vec_get [String] cand cj ) { T fn → { ( string_push_str why ( string_data fn ) ) } F _ → {} }
+            ( string_push_str why `: no form fitted (the optimizer did not converge)` )
+            ( vec_push [String] . fc skipped why )
+        }
         ? keep {
             // the whole ring, from its first row: the regressors' clock
             // runs from the fit window's first row, so rows before it
@@ -762,6 +790,7 @@ $ `deps/arima/src/arima.nu`
     ( json_obj_set o `selected` ( _an_jarr_of_strs . fc sel ) )
     ( json_obj_set o `holdout_mae` ( _an_jarr_of_floats . fc sel_mae ) )
     ( json_obj_set o `holdout_naive_mae` ( _an_jarr_of_floats . fc sel_naive ) )
+    ( json_obj_set o `skipped` ( _an_jarr_of_strs . fc skipped ) )
     : Json ms ( json_arr_new )
     = j 0
     ~ < j nw {
@@ -866,6 +895,16 @@ $ `deps/arima/src/arima.nu`
             }
             ( __fc_read_floats o `holdout_mae` . fc sel_mae )
             ( __fc_read_floats o `holdout_naive_mae` . fc sel_naive )
+            ?? ( json_obj_get o `skipped` ) {
+                T sa → {
+                    ? ( json_is_arr sa ) {
+                        : i n ( json_arr_len sa )
+                        : ~ i k 0
+                        ~ < k n { ?? ( json_arr_get sa k ) { T e → { ? ( json_is_str e ) { ( vec_push [String] . fc skipped ( string_from ( json_str_data e ) ) ) } {} } F _ → {} } = k + k 1 }
+                    } {}
+                }
+                F _ → {}
+            }
             ( json_free o )
             : i nw ( vec_len [i] . fc models )
             ? & & good == ( vec_len [String] . fc feats ) nw == ( vec_len [i] . fc cols ) nw {} { = good F }
@@ -906,6 +945,7 @@ $ `deps/arima/src/arima.nu`
         ( json_obj_set o `trained_at` ( json_int . fc trained_at ) )
         ( json_obj_set o `training_data_points` ( json_int . fc trained_on ) )
         ( json_obj_set o `points_absorbed` ( json_int . fc pos ) )
+        ( json_obj_set o `skipped` ( _an_jarr_of_strs . fc skipped ) )
         : Json ms ( json_arr_new )
         : i nw . fc nw
         : ~ i j 0

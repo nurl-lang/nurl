@@ -337,8 +337,26 @@ $ `stdlib/std/thread.nu`
 
 // Authentication only: is there a caller at all, and (optionally) is it an
 // administrator of its organisation?
+// The audit log names who acted: a person by e-mail (or subject), a
+// key by its id, the public administrator of simple mode as such.
+@ __an_note_actor Principal p → v {
+    : ~ s who `anonymous`
+    ? . p authed {
+        ? . p via_key { = who `key` } {
+            = who ? > ( string_len . p email ) 0 ( string_data . p email ) ( string_data . p sub )
+        }
+    } {}
+    ? & . p authed . p via_key {
+        : String k ( string_from `key:` )
+        ( string_push_str k ( string_data . p key_id ) )
+        ( anomaly_set_actor ( string_data k ) )
+        ( string_free k )
+    } { ( anomaly_set_actor who ) }
+}
+
 @ __an_gate_auth HttpRequest req b need_admin → Gate {
     : Principal p ( authz_principal req )
+    ( __an_note_actor p )
     ? . p authed {} { ^ @ Gate { F AZ_GATE_UNAUTH p F } }
     ? need_admin {
         ? ( principal_is_admin p ) {} { ^ @ Gate { F AZ_GATE_FORBID p F } }
@@ -352,6 +370,7 @@ $ `stdlib/std/thread.nu`
 // Ownership is checked exactly when there is something to own.
 @ __an_gate_model HttpRequest req s name b allow_create b need_write → Gate {
     : Principal p ( authz_principal req )
+    ( __an_note_actor p )
     ? . p authed {} { ^ @ Gate { F AZ_GATE_UNAUTH p F } }
     ? ( anomaly_authz_enabled ) {} { ^ @ Gate { T AZ_GATE_OK p F } }
 
@@ -406,6 +425,7 @@ $ `stdlib/std/thread.nu`
     // conjuring an unowned model.
     ? ( anomaly_authz_open_ingest ) {
         : Principal p ( authz_principal req )
+        ( __an_note_actor p )
         : b have . p authed
         ( principal_free p )
         ? have {} { ^ @ Gate { T AZ_GATE_OK ( principal_public_admin ) T } }
@@ -612,6 +632,43 @@ $ `stdlib/std/thread.nu`
             ^ ( __an_json_err 400 `No data provided` )
         }
     }
+}
+
+// GET /models/dynamic/<model>/audit?limit=N — who set which margin to
+// what, when (read-only; the newest N, default 100).
+@ __an_h_audit HttpRequest req Params p → HttpResponse {
+    : String mname ( __an_param_model p )
+    ? ( __an_name_ok ( string_data mname ) ) {} {
+        ( string_free mname )
+        ^ ( __an_bad_name )
+    }
+    : Gate gate ( __an_gate_model req ( string_data mname ) F F )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rd
+    }
+    ( __an_gate_free gate )
+    : Store st ( store_open g_an_root )
+    ? ( store_exists st ( string_data mname ) ) {} {
+        : HttpResponse r404 ( __an_404_model ( string_data mname ) )
+        ( store_free st )
+        ( string_free mname )
+        ^ r404
+    }
+    : ~ i limit ( __an_query_int . req query `limit` 100 )
+    ? < limit 0 { = limit 0 } {}
+    : Json o ( json_obj_new )
+    ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
+    : Json entries ( store_load_audit st ( string_data mname ) limit )
+    ( json_obj_set o `count` ( json_int ( json_arr_len entries ) ) )
+    ( json_obj_set o `entries` entries )
+    : HttpResponse resp ( response_json 200 o )
+    ( json_free o )
+    ( store_free st )
+    ( string_free mname )
+    ^ resp
 }
 
 // GET /models/dynamic/<model>/forecast/backtest?horizon=H&points=N — how
@@ -1030,6 +1087,7 @@ $ `stdlib/std/thread.nu`
         : Json o ( __an_ok_msg ( string_data msg ) )
         ( string_free msg )
         ( json_obj_set o `features` ( _an_jarr_of_strs . fc feats ) )
+        ( json_obj_set o `skipped` ( _an_jarr_of_strs . fc skipped ) )
         ( json_obj_set o `training_data_points` ( json_int . fc trained_on ) )
         ( json_obj_set o `season` ( json_int . fc season ) )
         : HttpResponse rr ( response_json 200 o )
@@ -2449,6 +2507,7 @@ $ `stdlib/std/thread.nu`
     : i src_sched_below . sm sched_below
     : i src_sched_at_max . sm sched_at_max
     : b src_sched_ae . sm sched_ae
+    : i src_tuned . sm tuned_at
     : AeModel sae . smo ae
     : ( Vec i ) ae_layout ? . sae trained ( ae_hidden sae ) ( vec_new [i] )
     ( model_free smo )
@@ -2480,6 +2539,8 @@ $ `stdlib/std/thread.nu`
     = . mm count_clock count_clock
     ( vec_free_with [VerCfg] . mm versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
     = . mm versions src_versions
+    // margins the source's owner set stay set: the fork is tuned as it was
+    = . mm tuned_at src_tuned
     = . mm sched_below src_sched_below
     = . mm sched_at_max src_sched_at_max
     = . mm sched_ae src_sched_ae
@@ -3156,6 +3217,8 @@ $ `stdlib/std/thread.nu`
                 ( json_obj_set v `rate_after` ( json_float ra ) )
                 : b exact == . ft after # i ( float_round * rate # f . ft n )
                 ( json_obj_set v `exact` ( json_bool exact ) )
+                ( json_obj_set v `applied` ( json_bool . ft applied ) )
+                ? > ( string_len . ft warning ) 0 { ( json_obj_set v `warning` ( json_str_lit ( string_data . ft warning ) ) ) } {}
                 ? | exact <= . ft n 0 {} {
                     ? == ( string_len note ) 0 {
                         ( string_push_str note `Requested rate ` )
@@ -5521,6 +5584,7 @@ $ `stdlib/std/thread.nu`
     ( router_post r `/train/forecast/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_train_fc req p ) } )
     ( router_get r `/models/dynamic/:model/forecast` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_forecast req p ) } )
     ( router_get r `/models/dynamic/:model/forecast/backtest` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_forecast_backtest req p ) } )
+    ( router_get r `/models/dynamic/:model/audit` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_audit req p ) } )
     ( router_post r `/forecast/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_forecast_point req p ) } )
     ( router_post r `/models/dynamic/:model/claim` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_claim req p ) } )
     ( router_post r `/models/dynamic/:model/import` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_import req p ) } )

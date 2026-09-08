@@ -10,6 +10,7 @@
 //     version_<v>.forest       one binary forest blob per trained version
 //     autoencoder.json         the trained autoencoder, if any
 //     forecast.json            the forecast version's models and states, if trained
+//     audit.jsonl              who set which margin to what, when (store_append_audit)
 //     scores.bin               cached per-point verdicts (epoch-stamped)
 //
 // The forest blob ("ANOMFOR1") is a little-endian dump of the iforest node
@@ -892,6 +893,47 @@ $ `deps/iforest/src/iforest.nu`
 // `none` removes the entry. Ascending by seq is not promised — a reader
 // wanting the ring order joins on seq (model_label_map). Empty when the
 // file does not exist; a line that does not parse is skipped.
+// One line of the audit log: a margin change, with who made it and how.
+@ store_append_audit Store st s name Json ent → b {
+    : String txt ( json_stringify ent )
+    ( string_push_char txt 10 )
+    : String p ( __an_model_file st name `audit.jsonl` )
+    : !v IoErr r ( append_file ( string_data p ) ( string_data txt ) )
+    : ~ b ok T
+    ?? r { T _ → {} F _ → { = ok F } }
+    ( string_free p )
+    ( string_free txt )
+    ^ ok
+}
+
+// The newest `limit` audit entries, oldest first (all when limit ≤ 0).
+@ store_load_audit Store st s name i limit → Json {
+    : Json arr ( json_arr_new )
+    : String p ( __an_model_file st name `audit.jsonl` )
+    : !String IoErr r ( read_file ( string_data p ) )
+    ( string_free p )
+    ?? r {
+        T txt → {
+            : ( Vec String ) lines ( string_split txt `\n` )
+            : i n ( vec_len [String] lines )
+            : ~ i from 0
+            ? & > limit 0 > n limit { = from - n limit } {}
+            : ~ i k from
+            ~ < k n {
+                ?? ( vec_get [String] lines k ) {
+                    T l → { ? > ( string_len l ) 0 { ?? ( json_parse ( string_data l ) ) { T j → { ( json_arr_push arr j ) } F _ → {} } } {} }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( vec_free_with [String] lines \ String x → v { ( string_free x ) } )
+            ( string_free txt )
+        }
+        F _ → {}
+    }
+    ^ arr
+}
+
 @ store_load_labels Store st s name → ( Vec Label ) {
     : ( Vec Label ) out ( vec_new [Label] )
     : String p ( __an_model_file st name `labels.jsonl` )

@@ -39,7 +39,7 @@ $ `src/authz.nu`
 $ `src/imptime.nu`
 
 // One version for the CLI banner and the MCP handshake.
-: s ANOMALY_VERSION `0.25.0`
+: s ANOMALY_VERSION `0.26.0`
 
 // ── Wiring ───────────────────────────────────────────────────────────
 
@@ -1958,6 +1958,7 @@ $ `src/imptime.nu`
     ( __mcp_copy . o body `status` out )
     ( __mcp_copy . o body `message` out )
     ( __mcp_copy . o body `features` out )
+    ( __mcp_copy . o body `skipped` out )
     ( __mcp_copy . o body `training_data_points` out )
     ( __mcp_copy . o body `season` out )
     ( json_obj_set out `next` ( json_str_lit `forecast {model, horizon} for what the models expect next; anomalies {versions: ["forecast"]} for the points that landed far from their forecast, each naming the feature.` ) )
@@ -1994,6 +1995,19 @@ $ `src/imptime.nu`
     ( string_free path )
     ( string_free q )
     ( json_free body )
+    ( string_free model )
+    ^ ( __mcp_pass o )
+}
+
+@ __mcp_t_audit Json a Json ctx → Json {
+    : String model ( __mcp_need_model a ctx )
+    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    : String q ( string_from `limit=` )
+    ( string_push_int q ( __mcp_arg_int a `limit` 100 ) )
+    : String path ( __mcp_model_path `/models/dynamic/` model `/audit` )
+    : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
+    ( string_free path )
+    ( string_free q )
     ( string_free model )
     ^ ( __mcp_pass o )
 }
@@ -2099,6 +2113,8 @@ $ `src/imptime.nu`
                 ( __mcp_copy vv `n` e )
                 ( __mcp_copy vv `flagged_before` e )
                 ( __mcp_copy vv `flagged_after` e )
+                ( __mcp_copy vv `applied` e )
+                ( __mcp_copy vv `warning` e )
                 ( __mcp_copy_rounded vv `rate_before` e 4 )
                 ( __mcp_copy_rounded vv `rate_after` e 4 )
                 ( __mcp_copy vv `exact` e )
@@ -2590,7 +2606,7 @@ $ `src/imptime.nu`
 
 @ __mcp_sc_train_fc → Json {
     : Json sc ( __mcp_sc_model )
-    ( mcp_schema_prop sc `season` `integer` `Seasonal period in rows — 24 for hourly data with a daily rhythm, 1440 at a minute's step, 7 for daily data with a weekly one; 0 = from the ring's step (default: the version's current setting). Up to 168 rows it is a SARIMA polynomial, beyond that Fourier terms; the week is added as Fourier terms when the fit window holds three of them.` F )
+    ( mcp_schema_prop sc `season` `integer` `Seasonal period in rows — 24 for hourly data with a daily rhythm, 1440 at a minute's step, 7 for daily data with a weekly one; 0 = from the ring's step; -1 = no season (default: the version's current setting). Every form is tried and the holdout chooses: a plain ARIMA, the persistence forecast, the seasonal polynomial (up to 168 rows), Fourier terms with 2, 4 or 6 harmonics, the week added when the fit window holds three of them.` F )
     ( mcp_schema_prop sc `window_points` `integer` `Rows back from the newest the models are fitted on (default: the version's setting, 2000).` F )
     ^ sc
 }
@@ -2612,6 +2628,12 @@ $ `src/imptime.nu`
     : Json sc ( __mcp_sc_model )
     ( mcp_schema_prop sc `horizon` `integer` `Steps ahead to score (default 12).` F )
     ( mcp_schema_prop sc `points` `integer` `How many of the newest stored rows are forecast origins (default 200).` F )
+    ^ sc
+}
+
+@ __mcp_sc_audit → Json {
+    : Json sc ( __mcp_sc_model )
+    ( mcp_schema_prop sc `limit` `integer` `How many of the newest entries (default 100).` F )
     ^ sc
 }
 
@@ -2803,6 +2825,10 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     `How good a model's forecasts are, measured: a rolling-origin backtest over the newest stored rows — per feature and step the mean absolute error, MAPE, the 95 % interval's coverage, and the skill against the two forecasts anyone can make without a model (the last value, the value a season earlier; 1 = perfect, 0 = no better, negative = worse).`
     ( __mcp_sc_backtest ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_forecast_backtest a ( mcp_call_context c ) ) } )
+    ( __mcp_add srv `audit`
+    `Who set which margin to what, when: every change of a version's alert line — by a person's edit or finetune, by a source's or an import's first-train calibration (actor "source:<id>"), or by a key — newest last.`
+    ( __mcp_sc_audit ) T F T F member
+    \ Json a McpCall c → Json { ^ ( __mcp_t_audit a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `sources`
     `The organisation's data sources: what is fetched from where into which model and how often, each with its last run's outcome (status, error, rows) and whether a fetch is in flight.`
     ( mcp_schema_empty ) T F T F member
