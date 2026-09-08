@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.27.0
+
+- **The forecast verdict has a floor.** A calendar sine fed as data had a
+  standard error near zero, so a deviation invisible on its own scale was
+  a thousand sigma and one such feature set the version's line for the
+  whole model (margins of 180 and 2 700 on live models). A reading is now
+  judged against the larger of the forecast's standard error and 2 % of
+  the feature's own spread (1.4826 × the median absolute deviation of the
+  fit window), recorded per feature as `spread`.
+- **Features that are not readings are not forecast.** A two-valued flag,
+  a counter that rises by a step and resets (an uptime, a "seconds since"),
+  and a signal the chosen form reproduces exactly (holdout error under a
+  millionth of the spread) are left out, each named with its reason in
+  `skipped`; the temperature next to them is watched alone. An exact fit
+  (σ² = 0) is judged on the holdout like any other form instead of being
+  discarded, which is what lets the deterministic case be seen.
+
 ## 0.26.0
 
 The findings of an agent that ran the service through MCP alone, in the

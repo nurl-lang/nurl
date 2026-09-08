@@ -544,7 +544,7 @@ $ `src/store.nu`
         : ( Vec f ) noz ( vec_new [f] )
         ~ < b0 lo {
             : ( Vec f ) fr ( __an_fc_row mo b0 )
-            ( fc_replay_step copies fr noz )
+            ( fc_replay_step fc copies fr noz )
             ( vec_free [f] fr )
             = b0 + b0 1
         }
@@ -574,7 +574,7 @@ $ `src/store.nu`
                                 ? > fc_nw 0 {
                                     : ( Vec f ) fr ( fc_project p . fc feats )
                                     : ( Vec f ) zrow ( vec_zeroed [f] fc_nw )
-                                    ( fc_replay_step copies fr zrow )
+                                    ( fc_replay_step fc copies fr zrow )
                                     ( vec_extend [f] fc_z zrow )
                                     ( vec_free [f] zrow )
                                     ( vec_free [f] fr )
@@ -608,7 +608,7 @@ $ `src/store.nu`
                 : ~ i z 0
                 ~ < z fc_nw { = . gp z ( float_nan ) ( vec_push [f] fc_z ( float_nan ) ) = z + z 1 }
                 : ( Vec f ) noz ( vec_new [f] )
-                ( fc_replay_step copies gap noz )
+                ( fc_replay_step fc copies gap noz )
                 ( vec_free [f] noz )
                 ( vec_free [f] gap )
             } {}
@@ -1387,7 +1387,7 @@ $ `src/store.nu`
         : ( Vec f ) row ( vec_with_cap [f] nw )
         : ~ i j 0
         ~ < j nw { ( vec_push [f] row . mp + * r nw j ) = j + j 1 }
-        ( fc_replay_step copies row noz )
+        ( fc_replay_step fc copies row noz )
         ( vec_free [f] row )
         ? & >= t o0 <= t - - len h 1 {
             = j 0

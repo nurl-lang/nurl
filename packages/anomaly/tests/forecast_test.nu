@@ -362,43 +362,60 @@ $ `src/dynamic.nu`
     : String e0 ( model_forecast_ensure_at mo3 T0 )
     ( check > ( string_len e0 ) 0 `ensure: an untrained model has no forecast, and says so` )
     ( string_free e0 )
-    = k 0
-    ~ < k 200 {
-        : Probe p ( ingest mo3 + ( temp_at k ) * 0.3 ( gauss3 ) 1000.0 + T0 * k 3600 )
-        ( string_free . p feat )
-        = k + k 1
-    }
-    : i tr3 ( model_force_train_at mo3 + T0 * 200 3600 )
-    ( check > tr3 0 `ensure: the model trains` )
-    : String e1 ( model_forecast_ensure_at mo3 + T0 * 200 3600 )
-    ( check == ( string_len e1 ) 0 `ensure: fits the forecast version` )
-    ( string_free e1 )
-    ( check == . . mo3 fc season 24 `ensure: hourly points get the daily season` )
-    ( check ( meta_version_enabled ( model_metadata mo3 ) ANOM_FC_NAME F ) `ensure: and switches it on` )
-    // a constant feature is skipped with a reason; a season of -1 means none
-    : b _w3 ( model_set_version_window mo3 ANOM_FC_NAME -1 0 )
+    // 260 hourly rows: a temperature on the day's rhythm, a constant, a
+    // calendar sine fed as data, a counter that resets, a flag
     : ( Vec Json ) recs3 ( vec_new [Json] )
     = k 0
-    ~ < k 60 {
+    ~ < k 260 {
         : Json j ( json_obj_new )
-        ( json_obj_set j `temp` ( json_float + ( temp_at + 200 k ) * 0.3 ( gauss3 ) ) )
+        ( json_obj_set j `temp` ( json_float + ( temp_at k ) * 0.3 ( gauss3 ) ) )
         ( json_obj_set j `flat` ( json_float 7.0 ) )
-        ( json_obj_set j `timestamp` ( json_int + T0 * + 200 k 3600 ) )
+        ( json_obj_set j `hod` ( json_float ( sin / * 6.283185307179586 # f % k 24 24.0 ) ) )
+        ( json_obj_set j `cnt` ( json_float # f % k 50 ) )
+        ( json_obj_set j `flag` ( json_float ? < ( gauss3 ) 0.0 0.0 1.0 ) )
+        ( json_obj_set j `timestamp` ( json_int + T0 * k 3600 ) )
         ( vec_push [Json] recs3 j )
         = k + k 1
     }
     : ImportReport ir3 ( model_import_at mo3 recs3 + T0 * 260 3600 )
+    ( check . ir3 trained `ensure: the import trains the model` )
     ( import_report_free ir3 )
     ( vec_free_with [Json] recs3 \ Json j → v { ( json_free j ) } )
-    : String e3 ( model_train_forecast_at mo3 + T0 * 260 3600 )
-    ( check == ( string_len e3 ) 0 `skipped: the train succeeds` )
-    ( string_free e3 )
-    ( check == . . mo3 fc season 0 `season: -1 is no season` )
+    : String e1 ( model_forecast_ensure_at mo3 + T0 * 260 3600 )
+    ( check == ( string_len e1 ) 0 `ensure: fits the forecast version` )
+    ( string_free e1 )
+    ( check == . . mo3 fc season 24 `ensure: hourly points get the daily season` )
+    ( check ( meta_version_enabled ( model_metadata mo3 ) ANOM_FC_NAME F ) `ensure: and switches it on` )
+    // features that are not readings are skipped with a reason
     : ~ b flat_skipped F
+    : ~ b hod_skipped F
+    : ~ b cnt_skipped F
+    : ~ b flag_skipped F
     : i nsk ( vec_len [String] . . mo3 fc skipped )
     = k 0
-    ~ < k nsk { ?? ( vec_get [String] . . mo3 fc skipped k ) { T sk → { ? ( string_contains sk `flat: constant` ) { = flat_skipped T } {} } F _ → {} } = k + k 1 }
+    ~ < k nsk {
+        ?? ( vec_get [String] . . mo3 fc skipped k ) {
+            T sk → {
+                ? ( string_contains sk `flat: constant` ) { = flat_skipped T } {}
+                ? ( string_contains sk `hod: deterministic` ) { = hod_skipped T } {}
+                ? ( string_contains sk `cnt: counter` ) { = cnt_skipped T } {}
+                ? ( string_contains sk `flag: binary` ) { = flag_skipped T } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
     ( check flat_skipped `skipped: the constant feature is named with its reason` )
+    ( check hod_skipped `skipped: a calendar sine fed as data is deterministic` )
+    ( check cnt_skipped `skipped: a counter that rises by a step and resets` )
+    ( check flag_skipped `skipped: a two-valued flag` )
+    ( check == . . mo3 fc nw 1 `skipped: the temperature alone is watched` )
+    ( check > ( _fc_getf . . mo3 fc scale 0 ) 1.0 `skipped: the watched feature's spread is recorded` )
+    // a season of -1 means none
+    : b _w3 ( model_set_version_window mo3 ANOM_FC_NAME -1 0 )
+    : String e5 ( model_train_forecast_at mo3 + T0 * 260 3600 )
+    ( string_free e5 )
+    ( check == . . mo3 fc season 0 `season: -1 is no season` )
     ( model_free mo3 )
 
     // a minute's step: the day is 1 440 rows, which no polynomial state

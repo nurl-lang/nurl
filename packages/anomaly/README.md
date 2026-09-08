@@ -60,13 +60,20 @@ rights.
   season the version's `window_size` gives in rows — 0 takes it from
   the ring's step: the day at a step up to twelve hours, the week at a
   daily one; −1 is no season — the features fitted on the machine's
-  threads; a numeric feature left out — constant, too few readings, no
+  threads; a numeric feature left out — constant, too few readings, a
+  two-valued flag, a counter that rises by a step and resets, a signal
+  the chosen form reproduces exactly (a calendar sine fed as data), no
   fit — is named with its reason in `skipped`), keeps each
   model's Kalman state current point by point, and judges every reading by how many standard errors
   of its own one-step forecast it landed from it: the decision value is
   `−max|z|`, the margin a sigma count (4 by default), and the verdict
-  names the feature. A reading a point leaves out is a gap to its model,
-  not a zero. The states are persisted with the ring position they stand
+  names the feature. The sigma has a floor: a reading is judged against
+  the larger of the forecast's standard error and 2 % of the feature's
+  own spread (1.4826 × the median absolute deviation of its fit window),
+  so a feature the model reproduces almost exactly cannot turn a
+  deviation invisible on its own scale into a thousand sigma, and one
+  such feature cannot set the whole version's line. A reading a point
+  leaves out is a gap to its model, not a zero. The states are persisted with the ring position they stand
   at and caught up from the stored rows when a request opens the model;
   `GET /models/dynamic/<m>/forecast?horizon=H` (`anomaly forecast`, the
   MCP tool `forecast`) reads the next H values per feature with standard
