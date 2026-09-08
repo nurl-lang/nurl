@@ -222,6 +222,16 @@ $ `stdlib/std/thread.nu`
 
 // Integer query parameter (?key=N). `dflt` when missing/garbage; -1 for
 // the "everything" spellings (all / max / *).
+@ __an_query_float String q s key f dflt → f {
+    : String v ( __an_query_str q key )
+    : ~ f out dflt
+    ? > ( string_len v ) 0 {
+        ?? ( float_parse ( string_data v ) ) { T x → { = out x } F _ → {} }
+    } {}
+    ( string_free v )
+    ^ out
+}
+
 @ __an_query_int String q s key i dflt → i {
     : String needle ( string_from key )
     ( string_push_char needle 61 )
@@ -3777,6 +3787,12 @@ $ `stdlib/std/thread.nu`
     ( string_free cerr )
 
     : ImportReport rep ( model_import mo . ip rows )
+    // The first train of a model that arrived as a file calibrates its
+    // margins (model_autotune_at): ?finetune=R sets the rate, 0 leaves
+    // the defaults. A model tuned before keeps its margins.
+    : ~ f ftrate ( __an_query_float . req query `finetune` SRC_FINETUNE_DEFAULT )
+    ? | < ftrate 0.0 > ftrate 0.5 { = ftrate SRC_FINETUNE_DEFAULT } {}
+    : b tuned ? . rep trained ( model_autotune_at mo ftrate ( model_now mo ) ) F
 
     : ~ HttpResponse r ( response_status_only 500 )
     ? > ( string_len . rep err ) 0 {
@@ -3797,6 +3813,7 @@ $ `stdlib/std/thread.nu`
         ( json_obj_set o `skipped` ( json_int + . ip skipped . rep rejected ) )
         ( json_obj_set o `data_points` ( json_int . rep stored ) )
         ( json_obj_set o `trained` ( json_bool . rep trained ) )
+        ( json_obj_set o `calibrated` ( json_bool tuned ) )
         ( json_obj_set o `clock` ( json_str_lit ? . mm count_clock `count` `time` ) )
         : Json tj ( json_clone plan )
         ( json_obj_set tj `stamped` ( json_int . tr stamped ) )
@@ -4739,6 +4756,20 @@ $ `stdlib/std/thread.nu`
 
 @ __an_src_lock → v { ( __an_lock_acquire ) }
 
+// Does a header's name say it carries a credential? Authorization and
+// Cookie, and anything with key, token, secret or password in it.
+@ __an_header_secret s name → b {
+    : String low ( string_to_lower ( string_from name ) )
+    : s l ( string_data low )
+    : b hit | | | | | ( __an_has l `authorization` ) ( __an_has l `cookie` ) ( __an_has l `key` ) ( __an_has l `token` ) ( __an_has l `secret` ) ( __an_has l `password` )
+    ( string_free low )
+    ^ hit
+}
+
+@ __an_has s hay s needle → b {
+    ^ >= ( nurl_str_find hay needle ) 0
+}
+
 @ __an_bad_source_id → HttpResponse {
     ^ ( __an_json_err 400 `Invalid source id.` )
 }
@@ -4759,9 +4790,10 @@ $ `stdlib/std/thread.nu`
     : String id ( __an_src_id src )
     ( json_obj_set o `running` ( json_bool ( source_is_running org ( string_data id ) ) ) )
     ( string_free id )
-    // Header values are an administrator's secrets (a key, a token); the
-    // record is every member's to read. The names are shown, the values
-    // masked — and the mask sent back on an edit keeps the stored value.
+    // A header that carries a credential is an administrator's secret;
+    // the record is every member's to read. Those values are masked —
+    // and the mask sent back on an edit keeps the stored value — while a
+    // header that only names the caller (Digitraffic-User) is shown.
     ?? ( json_obj_get src `headers` ) {
         T h → {
             : Json masked ( json_obj_new )
@@ -4770,7 +4802,16 @@ $ `stdlib/std/thread.nu`
             : ~ i k 0
             ~ < k n {
                 ?? ( vec_get [String] keys k ) {
-                    T key → { ( json_obj_set masked ( string_data key ) ( json_str_lit SRC_MASK ) ) }
+                    T key → {
+                        ? ( __an_header_secret ( string_data key ) ) {
+                            ( json_obj_set masked ( string_data key ) ( json_str_lit SRC_MASK ) )
+                        } {
+                            ?? ( json_obj_get h ( string_data key ) ) {
+                                T v → { ( json_obj_set masked ( string_data key ) ( json_clone v ) ) }
+                                F _ → {}
+                            }
+                        }
+                    }
                     F _ → {}
                 }
                 = k + k 1
@@ -5118,6 +5159,7 @@ $ `stdlib/std/thread.nu`
 // and the newest value — what a person needs to decide whether a column
 // is a feature, and whether as a number or a category.
 @ __an_src_columns ( Vec Json ) rows → Json {
+    : i nrows ( vec_len [Json] rows )
     : Json cols ( json_obj_new )
     : i n ( vec_len [Json] rows )
     : ~ i r 0
@@ -5222,6 +5264,18 @@ $ `stdlib/std/thread.nu`
                         ? & == ntxt cnt == ntm cnt { = kind `time` } {}
                         ? & == ntxt cnt < ntm cnt { = kind `text` } {}
                         ( json_obj_set o `kind` ( json_str_lit kind ) )
+                        // What a person choosing features should know:
+                        // a column that never moves teaches nothing, a
+                        // column present in under half the rows is a gap
+                        // more often than a reading, and a date column
+                        // or the identity is not taken as a feature
+                        // unless named.
+                        : i nd ?? ( json_obj_get o `distinct` ) { T dv → ( json_as_int dv ) F _ → 0 }
+                        ( json_obj_set o `constant` ( json_bool & > cnt 1 == nd 1 ) )
+                        ( json_obj_set o `sparse` ( json_bool & > nrows 0 < * cnt 2 nrows ) )
+                        : s nms ( string_data nm )
+                        : b excluded | | | == ( nurl_str_eq kind `time` ) 1 == ( nurl_str_eq nms `time` ) 1 == ( nurl_str_eq nms `timestamp` ) 1 == ( nurl_str_eq nms `gml_id` ) 1
+                        ( json_obj_set o `used_as_feature` ( json_bool ! excluded ) )
                         ( json_arr_push arr o )
                     }
                     F _ → {}

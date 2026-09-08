@@ -2434,6 +2434,32 @@ $ `src/store.nu`
     i excluded  // labelled false positives left out of the window
 }
 
+// The first calibration of a model that arrived as a whole — a file
+// imported, a source's first run — and has never had its margins set: the
+// forests are trained but the margins are the defaults, which on a
+// weather feed at ten-minute steps flag a third of the ring. Fine-tune
+// once, to `rate` of the ring, and remember it (`tuned_at`), so the
+// runs that follow leave the margins to the person: a calibration
+// repeated on every run would fold the real anomalies into the rate.
+// A ring too small for the rate to flag even one row (82 rows at 1 %)
+// is left alone too — a margin set to flag nothing would flag nothing
+// until the data left its range — and stays untuned, so the run that
+// brings enough rows calibrates.
+// Returns whether it tuned (F when already tuned, untrained, rate ≤ 0,
+// or the ring too small for the rate).
+@ model_autotune_at * Model mo f rate i now → b {
+    : *Meta mm . mo meta
+    ? & & > rate 0.0 == . mm tuned_at 0 ( model_is_trained mo ) {} { ^ F }
+    ? >= * rate # f ( vec_len [String] . mo lines ) 1.0 {} { ^ F }
+    : ( Vec String ) none ( vec_new [String] )
+    : FineTuneReport ft ( model_finetune_at mo rate 0 0 T none )
+    ( finetune_free ft )
+    ( vec_free [String] none )
+    = . mm tuned_at now
+    ( store_save_meta . mo store ( string_data . mo mname ) mm )
+    ^ T
+}
+
 @ finetune_free FineTuneReport rep → v {
     ( vec_free_with [FtVer] . rep items \ FtVer x → v { ( string_free . x ftname ) } )
 }

@@ -941,7 +941,7 @@ command with `--store DIR`.
 | `GET /models/dynamic/<m>/export?format=csv\|jsonl` | the stored points as a download — the whole ring, or the `from`/`to`/`last` window and `fields` projection `/data` takes; CSV has one column per field any row carries, `timestamp` first; JSONL is the records line for line, which `/import?format=jsonl` takes back |
 | `GET /models/dynamic/<m>/anomalies` | re-score the stored ring, cached (see below) |
 | `POST /models/dynamic/<m>/claim` | adopt an unclaimed model into your organization |
-| `POST /models/dynamic/<m>/import?format=&inspect=&time=&tz=&calendar=&clock=` | import a CSV/JSON/JSONL file of history; `inspect=1` proposes where its time is |
+| `POST /models/dynamic/<m>/import?format=&inspect=&time=&tz=&calendar=&clock=&finetune=` | import a CSV/JSON/JSONL file of history; `inspect=1` proposes where its time is; the first train calibrates the margins to `finetune` of the ring (0.01; 0 = none) |
 | `POST /api/analyze?wait=&votes=&name=&format=&time=&tz=&calendar=&clock=` | analyse a file sent as the body: train, fine-tune to 1 %, return the anomalies (see below) |
 | `GET /api/org/tasks[/<id>]`, `DELETE /api/org/tasks/<id>` | the organization's analyses and their results |
 | `GET /api/org/files[/<name>]`, `POST /api/org/files/<name>/link?ttl=`, `DELETE /api/org/files/<name>` | the organization's folder: list, download, pre-authenticated link, delete |
@@ -1039,8 +1039,8 @@ from where, which columns, into which model and how often. That is a
   "params": { "place": "Helsinki", "timestep": "60" },
   "mode": "stored", "features": ["t2m", "ws_10min", "rh", "p_sea"],
   "categorical": [], "time_field": "",
-  "model": "helsinki_weather", "interval_minutes": 10, "history_hours": 24,
-  "calendar": true, "enabled": true,
+  "model": "helsinki_weather", "interval_minutes": 10, "history_hours": 168,
+  "calendar": true, "enabled": true, "allow_future": false, "finetune_rate": 0.01,
   "first_time": 1788670800, "last_time": 1788757200,
   "last_run": 1788757260, "last_status": "ok", "last_error": "",
   "last_rows": 1, "runs": 144, "total_rows": 168 }
@@ -1080,9 +1080,36 @@ record per element, an object one record; nested objects are flattened
 (`current_temperature_2m`), numbers and booleans are numbers, short
 strings are text, arrays and nulls are left out; the clock is read as for
 a feature type (`time_field`, detected, or `none` for a snapshot series),
-and the span moves with the records' clocks. Header values are secrets:
-`GET` shows them masked (`••••••••`), and the mask sent back in a `PUT`
-keeps the stored value.
+and the span moves with the records' clocks. A header that carries a credential
+(`Authorization`, `Cookie`, anything with key, token, secret or password
+in its name) is a secret: `GET` shows it masked (`••••••••`), and the
+mask sent back in a `PUT` keeps the stored value; a header that only
+names the caller (`Digitraffic-User`) is shown.
+
+**What the fetch window takes.** A stored query is asked for the window
+itself: `history_hours` back on the first run (168 by default, a week,
+so a daily rhythm is seen seven times), then from `last_time` on. A
+feature type or an http answer is fetched whole and the window says
+which of its records land: newer than what was seen, no older than
+`history_hours` on the first run, and nothing dated past the fetch
+time — a price list published a day ahead would put the span, the
+calendar features and the forecast ahead of the clock — unless
+`allow_future` is true. A second date column in the records (an
+interval's end, a publication time) is not taken as a feature unless
+named in `features`; as text it would be a category per row.
+
+**The first train calibrates.** A model fed by a source arrives as a
+whole, and its default margins were never meant for it: on ten-minute
+weather they flag a third of the ring. So the run that first trains the
+model fine-tunes it to `finetune_rate` of the ring (0.01; 0 leaves the
+defaults), the way `/api/analyze` does, and sets the forecast version's
+season from the points' step (144 rows for ten minutes, 24 for an hour,
+7 for daily data) so that switching that version on fits the rhythm the
+feed has. The metadata remembers it (`tuned_at`); runs after the first
+never touch the margins — a calibration repeated on every run would
+fold the real anomalies into the rate — and `finetune` does, on
+request. A file imported through `POST /models/dynamic/<m>/import` gets
+the same first calibration (`?finetune=R`, default 0.01, 0 = none).
 
 `POST /api/org/sources/catalog {"url": …}` fetches the service's
 `GetCapabilities` (every feature type, `kind: "type"`) and, where it

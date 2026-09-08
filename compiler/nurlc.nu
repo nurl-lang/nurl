@@ -16339,6 +16339,7 @@
         // "use of undefined identifier 'x'", blaming the NAME. Same
         // helper, same wording as the parameter case, so the two agree.
         ( check_type_known lex syms ptype `a binding type` __bt_line __bt_col )
+        ( __check_value_type_defined lex syms ptype `a binding type` __bt_line __bt_col )
         // Capture the NURL form of `! T E` when present, so gen_match can
         // recover the inner T (e.g. `Json`) for struct-handle reconstruction.
         // parse_type's recursive descent through parse_type_res leaves the
@@ -23748,6 +23749,7 @@
     : i __rt_col ( nurl_lex_col lex )
     : s ret_ty ( parse_type lex )
     ( check_type_known lex syms ret_ty `the return type` __rt_line __rt_col )
+    ( __check_value_type_defined lex syms ret_ty `the return type` __rt_line __rt_col )
     : s nurl_ret ( nurl_sym_get g_res_type_syms `__last_res_nurl__` )
     // LLVM type of the Ok-payload T (e.g. `%Vec__i8` for `! ( Vec u ) s`,
     // `i8*` for `! s E`). Recorded per-function — mirrors `<fname>__nurl_ret`
@@ -24312,6 +24314,7 @@
     : i __pt_col ( nurl_lex_col lex )
     : s lt ( parse_type lex )
     ( check_type_known lex syms lt `a parameter type` __pt_line __pt_col )
+    ( __check_value_type_defined lex syms lt `a parameter type` __pt_line __pt_col )
     // Capture the `! T E` / `? T` payload metadata for this parameter so a
     // `?? <param> { T x → … }` match can reconstruct a struct / pointer
     // payload from its i64 slot — exactly as gen_let_or_struct does for a
@@ -24641,6 +24644,44 @@
     }
 }
 
+// A named type used BY VALUE — a binding, a parameter, a return, a
+// global — must already be DEFINED in the emitted IR: LLVM sizes the
+// alloca / load / store / argument from the type's body, and a body that
+// arrives later in the module leaves an opaque struct at the use site.
+// The failure was location-free ("Cannot allocate unsized type
+// %FineTuneReport" from clang, or "type 'X' has no field 'a'" from the
+// field pass when the struct's fields were not registered yet, both
+// pointing away from the cause: a `: X x …` above the `: X { … }`).
+// Only the by-value form is affected — a pointer to a later-declared
+// type is resolved when the definition arrives — and generic
+// instantiations (`%Vec__i64`) are emitted ahead of every user struct,
+// so dunder names are skipped, as is the `%dyn.` fat pointer. The
+// pre-scan registered every type NAME, so a name that maps to `%Name`
+// without a `ty##` position is exactly "declared later".
+@ __check_value_type_defined i lex i syms s llvm_ty s ctx i tline i tcol → v {
+    : i n ( nurl_str_len llvm_ty )
+    : ~ i i 0
+    ~ < i n {
+        ? == ( nurl_str_get llvm_ty i ) 37
+        { : ~ i j + i 1
+            ~ & < j n ( __is_ident_char ( nurl_str_get llvm_ty j ) ) { = j + j 1 }
+            : s name ( nurl_str_slice llvm_ty + i 1 - j + i 1 )
+            : i by_value ? | >= j n != ( nurl_str_get llvm_ty j ) 42 1 0
+            ? & & & & != 0 by_value != 0 ( nurl_str_len name )
+            ! ( __has_dunder name ) ! ( seq name `dyn` ) ! ( is_tparam_like name )
+            { : s sv ( nurl_sym_get syms name )
+                ? & & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
+                == 0 ( nurl_str_len ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat `ty##` name ) ) )
+                { ( die_pos lex tline tcol ( nurl_str_cat
+                    ( nurl_str_cat4 `type '` name `' is used by value as ` ctx )
+                    ( nurl_str_cat3 ` here but is declared LATER in the program. A value of a named type needs the type's definition before this point — the compiler emits the program in order, and LLVM cannot size a struct whose body it has not seen (a pointer to it is fine). Move ': ` name `' above this use, or import the file that declares it before this one.` ) ) ) }
+                {} }
+            {}
+            = i j }
+        { = i + i 1 }
+    }
+}
+
 @ gen_struct_decl s sname i lex i syms → v {
     ( nurl_lex_advance lex )
     // Same flat-namespace guard as `@` functions (g_fn_pos_syms): a second
@@ -24806,7 +24847,8 @@
                 ( nurl_str_cat ( nurl_str_cat4
                 `', which is a type keyword. A declaration is ': TYPE name value' — the type comes FIRST. Swap them: ': ` cname ` ` ty_tok )
                 ` <value>'.` ) ) ) }
-            { ( check_type_known lex syms lt `a global declaration's type` __ct_line __ct_col ) }
+            { ( check_type_known lex syms lt `a global declaration's type` __ct_line __ct_col )
+                ( __check_value_type_defined lex syms lt `a global declaration's type` __ct_line __ct_col ) }
         }
         {}
         // Flat-namespace guard for globals, twin of the struct one above: a

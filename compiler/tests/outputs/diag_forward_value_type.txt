@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_forward_value_type.nu:13:7: error: type 'Later' is used by value as a binding type here but is declared LATER in the program. A value of a named type needs the type's definition before this point — the compiler emits the program in order, and LLVM cannot size a struct whose body it has not seen (a pointer to it is fine). Move ': Later' above this use, or import the file that declares it before this one.
+    : Later x ( make )
+      ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

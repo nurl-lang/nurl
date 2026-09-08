@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.22.0
+
+- **The first train calibrates.** A model fed by a data source or a file
+  arrived as a whole with its default margins, and nothing ever set them:
+  on ten-minute weather they flagged a third of the ring. The run — or the
+  import — that first trains a model now fine-tunes it to `finetune_rate`
+  of the ring (a source's field, default 0.01; `?finetune=R` on the import
+  route), sets the forecast version's season from the points' step (144
+  rows at ten minutes, 24 at an hour, 7 for daily data), and remembers it
+  in the metadata (`tuned_at`). Later runs never touch the margins — a
+  calibration repeated on every run would fold the real anomalies into
+  the rate — and `finetune` does, on request. A ring too small for the
+  rate to flag one row is left untuned until a run brings enough.
+- **Nothing from the future.** A feature type or an http answer is fetched
+  whole, and its window ran to a far future: a price list published a day
+  ahead landed as points dated tomorrow, and the span, the calendar
+  features and the forecast moved ahead of the clock. The window now stops
+  at the fetch time (`allow_future: true` opens it for a source where the
+  future is the point) and the first run honours `history_hours` for these
+  kinds too. `history_hours` defaults to 168 — a week, so a daily rhythm is
+  seen seven times.
+- **A second date column is not a feature.** A record's interval end or
+  publication time, taken as text, was a category per row. Unless named in
+  `features`, a string that reads as a date is left out.
+- **Only a credential is masked.** `Authorization`, `Cookie`, and any
+  header with key, token, secret or password in its name are shown as
+  `••••••••`; a header that only names the caller (`Digitraffic-User`) is
+  shown.
+- **The preview says what a person choosing features should know:** per
+  column `constant` (never moves), `sparse` (present in under half the
+  rows) and `used_as_feature` (a date column or the identity is not taken
+  unless named).
+- **The catalogue, sized for a context window.** The MCP tool
+  `source_catalog` answers with id, kind and title per entry, `filter`
+  narrows by a substring of id or title, and `query` shows one entry in
+  full with its parameters, instead of the whole 300 kB.
+- `create_source` / `update_source` take `allow_future` and `finetune_rate`.
+
 ## 0.21.0
 
 - **Data sources through MCP.** An agent acting for an administrator can

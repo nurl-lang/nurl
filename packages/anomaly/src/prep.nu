@@ -84,6 +84,7 @@ $ `stdlib/ext/json.nu`
     i n_stored  // rows in the ring right now (≤ max_points); n_seen minus the evicted
     i last_trained  // n_seen at the last train (a point count, not a time)
     i trained_time  // wall clock of the last train, unix seconds; 0 = never
+    i tuned_at  // wall clock of the first margin calibration, unix seconds; 0 = never (see model_autotune_at)
     i max_points
     i score_epoch
     i feat_enc  // the calendar-feature encoding the stored feature order uses
@@ -303,6 +304,7 @@ $ `stdlib/ext/json.nu`
     = . m n_stored 0
     = . m last_trained 0
     = . m trained_time 0
+    = . m tuned_at 0
     = . m max_points ANOM_MAX_POINTS
     = . m score_epoch 1
     = . m feat_enc ANOM_FEAT_ENC
@@ -1137,6 +1139,7 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set o `n_points_stored` ( json_int . m n_stored ) )
     ( json_obj_set o `last_trained_at` ( json_int . m last_trained ) )
     ( json_obj_set o `last_trained_time` ( json_int . m trained_time ) )
+    ( json_obj_set o `tuned_at` ( json_int . m tuned_at ) )
     ( json_obj_set o `max_data_points` ( json_int . m max_points ) )
     ( json_obj_set o `score_epoch` ( json_int . m score_epoch ) )
     ( json_obj_set o `feature_encoding` ( json_int . m feat_enc ) )
@@ -1397,6 +1400,7 @@ $ `stdlib/ext/json.nu`
     = . m n_seen ( _an_jint j `n_points_seen` 0 )
     = . m last_trained ( _an_jint j `last_trained_at` 0 )
     = . m trained_time ( _an_jint j `last_trained_time` 0 )
+    = . m tuned_at ( _an_jint j `tuned_at` 0 )
     = . m max_points ( _an_jint j `max_data_points` ANOM_MAX_POINTS )
     // Metadata from before the key existed: the ring holds every point
     // seen until it is full, then exactly `max_points` — the only ways a

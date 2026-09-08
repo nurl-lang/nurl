@@ -70,6 +70,16 @@ $ `src/service.nu`
     ^ ``
 }
 
+@ jbool Json o s key → b {
+    ?? ( json_obj_get o key ) { T v → { ^ ( json_as_bool v ) } F _ → { ^ F } }
+}
+
+@ jfloat Json o s key → f {
+    ?? ( json_obj_get o key ) { T v → { ?? ( json_num_as_f v ) { T x → { ^ x } F _ → { ^ 0.0 } } } F _ → { ^ 0.0 } }
+}
+
+@ near f a f b → b { ^ < ( float_abs - a b ) 0.000001 }
+
 @ jint Json o s key → i {
     ?? ( json_obj_get o key ) {
         T v → { ? ( json_is_num v ) { ^ ( json_as_int v ) } {} }
@@ -411,7 +421,9 @@ $ `src/service.nu`
             ( check ( seq ( jstr src `url` ) `https://opendata.fmi.fi/wfs` ) `sources: url stored as its base` )
             ( check ( seq ( jstr src `name` ) `fmi::observations::weather::simple` ) `sources: nameless → named after the query` )
             ( check == ( jint src `interval_minutes` ) 10 `sources: default interval` )
-            ( check == ( jint src `history_hours` ) 24 `sources: default history` )
+            ( check == ( jint src `history_hours` ) 168 `sources: default history is a week` )
+            ( check ! ( jbool src `allow_future` ) `sources: nothing from the future by default` )
+            ( check ( near ( jfloat src `finetune_rate` ) 0.01 ) `sources: the first train calibrates to 1 %` )
             ( check == ( jint src `created_at` ) 1000 `sources: created_at` )
             ( check ( seq ( jstr src `created_by` ) `tester` ) `sources: created_by` )
             ( check ( seq ( jstr src `kind` ) `wfs` ) `sources: kind` )
@@ -535,6 +547,65 @@ $ `src/service.nu`
     : SrcWindow w4 ( source_window src now T 1 )
     ( check > . w4 start . w4 end `window: a backfill inside the span is empty` )
     ( json_free src )
+
+    // The step of a run's points and the season it implies.
+    : ( Vec Json ) pts ( vec_new [Json] )
+    : ~ i k 0
+    ~ < k 20 {
+        : Json p ( json_obj_new )
+        ( json_obj_set p `timestamp` ( json_int + 1000000 * k 600 ) )
+        ( vec_push [Json] pts p )
+        = k + k 1
+    }
+    ( check == ( source_step_of pts ) 600 `step: ten minutes` )
+    ( check == ( source_season_of 600 ) 144 `season: ten minutes → 144 rows a day` )
+    ( check == ( source_season_of 3600 ) 24 `season: an hour → 24` )
+    ( check == ( source_season_of 86400 ) 7 `season: a day → the week` )
+    ( check == ( source_season_of 0 ) 0 `season: no step, no season` )
+    ( check == ( source_season_of 200000 ) 0 `season: a step past a day has none` )
+    ( vec_free_with [Json] pts \ Json j → v { ( json_free j ) } )
+}
+
+// The first train of a model that arrived as a whole calibrates its
+// margins once; a second call, and a later run, leave them alone.
+@ test_autotune Store st → v {
+    : *Model mo ( model_open_at st `tuned` 1000 )
+    ( model_set_limits mo 10 150000 )
+    ( model_set_schedule mo 100000 100000 )
+    : ~ i k 0
+    : ~ i seed 5
+    ~ < k 120 {
+        = seed % + * seed 1103515245 12345 2147483648
+        : Json j ( json_obj_new )
+        ( json_obj_set j `t` ( json_float + 20.0 / # f % seed 1000 100.0 ) )
+        ( json_obj_set j `p` ( json_float + 1000.0 / # f % + seed 77 1000 50.0 ) )
+        : !Verdict String r ( model_ingest_at mo j + 1000 * k 60 )
+        ?? r { T vd → { ( verdict_free vd ) } F e → { ( string_free e ) } }
+        ( json_free j )
+        = k + k 1
+    }
+    : i tr ( model_force_train_at mo + 1000 * 120 60 )
+    ( check > tr 0 `autotune: trained` )
+    : *Meta mm ( model_metadata mo )
+    ( check == . mm tuned_at 0 `autotune: never tuned yet` )
+    : f before ( meta_version_margin mm `short_term` -1.0 )
+    ( check ! ( model_autotune_at mo 0.005 9998 ) `autotune: a rate that would flag no row of 120 does nothing` )
+    ( check == . mm tuned_at 0 `autotune: and leaves the model untuned for a bigger ring` )
+    ( check ( model_autotune_at mo 0.05 9999 ) `autotune: the first train calibrates` )
+    ( check == . mm tuned_at 9999 `autotune: and remembers when` )
+    : f after ( meta_version_margin mm `short_term` -1.0 )
+    ( check ! ( near before after ) `autotune: the margin moved` )
+    ( check ! ( model_autotune_at mo 0.05 10000 ) `autotune: a second call does nothing` )
+    ( check == . mm tuned_at 9999 `autotune: the first time stands` )
+    ( check ! ( model_autotune_at mo 0.0 10001 ) `autotune: rate 0 does nothing` )
+    // the metadata carries it
+    : String js ( meta_to_json_str mm )
+    ?? ( meta_from_json_str ( string_data js ) ) {
+        T m2 → { ( check == . m2 tuned_at 9999 `autotune: tuned_at survives the JSON round trip` ) ( meta_free m2 ) }
+        F _ → { ( check F `autotune: metadata parses back` ) }
+    }
+    ( string_free js )
+    ( model_free mo )
 }
 
 // ── run ───────────────────────────────────────────────────────────────
@@ -788,9 +859,13 @@ $ `src/service.nu`
             ( check ( seq ( jstr src `mode` ) `type` ) `type source: mode kept` )
             ( check ( source_is_type src ) `type source: is a type` )
             : SrcWindow w ( source_window src 9000 F 0 )
-            ( check & == . w start 0 > . w end + 9000 100000000 `type source: first window is everything, open-ended` )
+            ( check & == . w start - 9000 604800 == . w end 9000 `type source: first window reaches history_hours back and stops at the fetch time` )
+            ( json_obj_set src `allow_future` ( json_bool T ) )
+            : SrcWindow wf ( source_window src 9000 F 0 )
+            ( check > . wf end + 9000 100000000 `type source: allow_future opens the end` )
+            ( json_obj_set src `allow_future` ( json_bool F ) )
             : SrcWindow wb ( source_window src 9000 T 24 )
-            ( check > . wb start . wb end `type source: a backfill is empty` )
+            ( check & == . wb start - 9000 86400 == . wb end 9000 `type source: a backfill reaches back from the fetch time` )
             ( json_free src )
         }
         F e → { ( check F `type source: create` ) ( string_free e ) }
@@ -996,7 +1071,10 @@ $ `src/service.nu`
     ( check ( seq ( jstr . c1 body `kind` ) `http` ) `http source: kind kept` )
     ( check ( seq ( jstr . c1 body `name` ) `http://127.0.0.1:9/api/v1/readings?station=1` ) `http source: named after the url` )
     ?? ( json_obj_get . c1 body `headers` ) {
-        T h → { ( check ( seq ( jstr h `Authorization` ) `••••••••` ) `http source: header values masked in the answer` ) }
+        T h → {
+            ( check ( seq ( jstr h `Authorization` ) `••••••••` ) `http source: a credential header is masked in the answer` )
+            ( check ( seq ( jstr h `Digitraffic-User` ) `anomaly-test` ) `http source: a header that only names the caller is shown` )
+        }
         F _ → { ( check F `http source: headers` ) }
     }
     ( json_free . c1 body )
@@ -1174,6 +1252,7 @@ $ `src/service.nu`
     ( test_wfs )
     ( test_sources )
     ( test_windows )
+    ( test_autotune st )
     ( test_run st )
     ( test_wide st )
     : Router rh ( anomaly_service_router )
