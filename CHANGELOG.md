@@ -6,6 +6,21 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`packages/anomaly` 0.26.0 — an agent's findings, fixed at the root.**
+  Margins someone set stay set (a fork inherits `tuned_at`; the
+  first-train calibration never overwrites a hand-set margin); an audit
+  log of margin changes with actor and action (`GET …/audit`, MCP
+  `audit`); fine-tune warns when the scores' ties keep it from the rate
+  asked and never writes a margin of 0; a source moved to another model
+  starts its span over; backtest cells with nothing to compare are
+  `null`; `season: -1` is no season; `train_forecast` names the features
+  it skipped and why; the persistence forecast is a selection candidate.
+  [`packages/anomaly/CHANGELOG.md`](packages/anomaly/CHANGELOG.md).
+
 ## [0.62.0] — 2026-09-08
 
 ### Added

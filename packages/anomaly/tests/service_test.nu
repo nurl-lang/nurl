@@ -536,6 +536,19 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check ft_applied `svc: finetune applied the margin` )
+    : SvcOut au ( fire r `GET` `/models/dynamic/svc/audit` `limit=10` `` )
+    ( check == . au status 200 `svc: audit -> 200` )
+    ( check > ( jint_of . au body `count` ) 0 `svc: the applied fine-tune is in the audit log` )
+    : ~ b au_ok F
+    ?? ( json_obj_get . au body `entries` ) {
+        T ea → { ?? ( json_arr_get ea 0 ) { T e → { = au_ok & ( jstr_eq e `action` `finetune` ) ( json_obj_has e `to` ) } F _ → {} } }
+        F _ → {}
+    }
+    ( check au_ok `svc: an entry names the action and the new margin` )
+    ( json_free . au body )
+    : SvcOut md6b ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
+    ( check > ( jint_of . md6b body `tuned_at` ) 0 `svc: a hand-set margin marks the model tuned` )
+    ( json_free . md6b body )
     ( json_free . ft body )
     : SvcOut md6 ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
     : ~ f stored_m -2.0

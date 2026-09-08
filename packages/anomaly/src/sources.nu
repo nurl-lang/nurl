@@ -651,6 +651,7 @@ $ `src/imptime.nu`
             ( string_push_str p0 ( string_data ( __src_jstr src `method` ) ) )
             ( string_push_str p0 ( string_data ( __src_jstr src `body` ) ) )
             ( string_push_str p0 ( string_data ( __src_jstr src `path` ) ) )
+            ( string_push_str p0 ( string_data ( __src_jstr src `model` ) ) )
             ?? ( json_obj_get src `headers` ) { T h → { : String ht ( json_stringify h ) ( string_push_str p0 ( string_data ht ) ) ( string_free ht ) } F _ → {} }
             : String err ( source_apply src body )
             ? > ( string_len err ) 0 {
@@ -667,7 +668,10 @@ $ `src/imptime.nu`
             ( string_push_str p1 ( string_data ( __src_jstr src `method` ) ) )
             ( string_push_str p1 ( string_data ( __src_jstr src `body` ) ) )
             ( string_push_str p1 ( string_data ( __src_jstr src `path` ) ) )
+            ( string_push_str p1 ( string_data ( __src_jstr src `model` ) ) )
             ?? ( json_obj_get src `headers` ) { T h → { : String ht ( json_stringify h ) ( string_push_str p1 ( string_data ht ) ) ( string_free ht ) } F _ → {} }
+            // A changed model, too: the span says what the OLD model has
+            // seen, and the new one has seen none of it.
             : b same & & ( string_eq u0 u1 ) ( string_eq q0 q1 ) ( string_eq p0 p1 )
             ( string_free u0 ) ( string_free q0 ) ( string_free p0 )
             ( string_free u1 ) ( string_free q1 ) ( string_free p1 )
@@ -1071,6 +1075,10 @@ $ `src/imptime.nu`
 // The caller holds the service lock.
 @ __src_ingest s org Json src SrcProject sp i now b trained_out → String {
     : String model ( __src_jstr src `model` )
+    : String who ( string_from `source:` )
+    ( string_push_str who ( string_data ( __src_jstr src `id` ) ) )
+    ( anomaly_set_actor ( string_data who ) )
+    ( string_free who )
     : Store st ( store_open ( orgfiles_root ) )
     : b existed ( store_exists st ( string_data model ) )
     : ~ String err ( string_new )

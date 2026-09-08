@@ -548,7 +548,7 @@ $ `src/mcp.nu`
     ? ( store_exists st ( string_data mname ) ) {
         : *Model mo ( model_open st ( string_data mname ) )
         : i season ( ctx_int x `season` )
-        ? >= season 0 {
+        ? >= season -1 {
             : Json vo ( json_obj_new )
             ( json_obj_set vo `window_size` ( json_int season ) )
             : Json vers ( json_obj_new )
@@ -919,7 +919,7 @@ $ `src/mcp.nu`
     ( cli_flag_int c `from` 0 `UNIX` `for calibrate/finetune: window start (unix seconds)` 0 `` )
     ( cli_flag_int c `to` 0 `UNIX` `for calibrate/finetune: window end (unix seconds)` 0 `` )
     ( cli_flag_bool c `dry-run` 110 `for finetune: report the margins without writing them` )
-    ( cli_flag_int c `season` 0 `ROWS` `for train-fc: the seasonal period in rows (24 = hourly data with a daily rhythm; 0 = from the ring's step; -1 = keep the setting)` -1 `` )
+    ( cli_flag_int c `season` 0 `ROWS` `for train-fc: the seasonal period in rows (24 = hourly data with a daily rhythm; 0 = from the ring's step; -1 = no season; absent = keep the setting)` -2 `` )
     ( cli_flag_int c `horizon` 0 `STEPS` `for forecast / backtest: how many steps ahead (default 12)` 12 `` )
     ( cli_flag_int c `points` 0 `N` `for backtest: how many of the newest rows are forecast origins (default 200)` 200 `` )
 
@@ -940,6 +940,7 @@ $ `src/mcp.nu`
     ( cli_cmd c `serve` `run the HTTP/JSON service + web dashboard` \ CliCtx x → i { ^ ( __an_cmd_serve x ) } )
     ( cli_cmd c `analyze-job` `run one analysis task (the service starts these; TASK_DIR)` \ CliCtx x → i { ^ ( __an_cmd_analyze_job x ) } )
 
+    ( anomaly_set_actor `cli` )
     : i rc ( cli_run c )
     ( cli_free c )
     ^ rc

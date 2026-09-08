@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.26.0
+
+The findings of an agent that ran the service through MCP alone, in the
+order they mattered.
+
+- **Margins someone set stay set.** A fork's metadata began untuned, so
+  the next scheduled train ran the first-train calibration over margins a
+  person had just fine-tuned, silently. A margin set by a person, a key or
+  a finetune now marks the model tuned (`tuned_at`), the calibration never
+  runs over it, and a fork inherits it from its source.
+- **An audit log of margin changes.** Every change of a version's alert
+  line is appended to `audit.jsonl` — when, by whom (`actor`: an e-mail or
+  subject, `key:<id>`, `source:<id>`, `cli`), how (`edit`, `finetune`,
+  `autotune`), which version, from what to what — and read back by
+  `GET /models/dynamic/<m>/audit` and the MCP tool `audit`.
+- **Fine-tune says when it could not do what was asked.** On a coarse
+  feed the forests' scores tie in runs and the cut takes or leaves a run
+  whole: 0.18 flagged nothing, 0.17 flagged 9.6 % of the window. The
+  report now carries a `warning` per version when the achieved count is
+  under half or over twice the one asked, and a margin of 0 — which flags
+  every row whose score is at or below 0 — is never written: when no
+  margin at or above 0 flags this few, the version is left as it was and
+  the report says so. `applied` per version.
+- **A source moved to another model starts its span over.** The span said
+  what the old model had seen; the new one had seen none of it, and the
+  history between the old span's ends never arrived. A changed `model` now
+  resets `first_time` / `last_time` like a changed query does.
+- **Backtest cells with nothing to compare are `null`**, not a 0 that reads
+  as a perfect forecast: `seasonal_naive_mae` when the season does not fit
+  the window, `mape` on zero readings, the skills without a baseline.
+- **`season: -1` is no season.** The 0.24.0 change made 0 mean "from the
+  step" and left no way to say none.
+- **`train_forecast` names what it left out and why** (`skipped`: a constant
+  feature, too few readings in the fit window, no fit).
+- **The persistence forecast is a candidate.** ARIMA(0,1,0) — the last
+  value carried forward — stands beside the other forms in the holdout
+  selection, and is what a feature gets when nothing beats it.
+
 ## 0.25.0
 
 - **The form of each feature's forecast model is chosen on a holdout.**

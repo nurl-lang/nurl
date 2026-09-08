@@ -100,6 +100,35 @@ $ `src/store.nu`
     i max_points
 }
 
+// Who is acting, and how, for the audit log: the service sets the actor
+// from the request's principal, the CLI and the scheduler name
+// themselves; the action is set by the operation that changes margins
+// (finetune, autotune, edit) around its calls to model_set_margin.
+: ~ s g_an_actor `library`
+: ~ s g_an_action `set_margin`
+: i ANOM_ACTOR_MAX 200
+
+// The actor is copied into a buffer allocated once for the process (the
+// caller's string lives only as long as its request; a long name is
+// cut). The action is always a literal and is kept as given.
+@ anomaly_set_actor s who → v {
+    ? == ( nurl_str_eq g_an_actor `library` ) 1 { = g_an_actor ( nurl_zalloc + ANOM_ACTOR_MAX 1 ) } {}
+    : ~ i n ( nurl_str_len who )
+    ? > n ANOM_ACTOR_MAX { = n ANOM_ACTOR_MAX } {}
+    ( nurl_memcpy g_an_actor who n )
+    : *u bp # *u g_an_actor
+    = . bp n # u 0
+}
+
+@ __an_set_action s what → v {
+    = g_an_action what
+}
+
+// The newest `limit` audit entries of a model (all when ≤ 0).
+@ model_audit * Model mo i limit → Json {
+    ^ ( store_load_audit . mo store ( string_data . mo mname ) limit )
+}
+
 @ verdict_free Verdict vd → v {
     ( vec_free_with [VerVerdict] . vd versions \ VerVerdict vv → v { ( string_free . vv vvname ) } )
 }
@@ -1146,7 +1175,7 @@ $ `src/store.nu`
     : *Meta mm . mo meta
     : i at ( meta_find_version mm ANOM_FC_NAME )
     ? >= at 0 {
-        ?? ( vec_get [VerCfg] . mm versions at ) { T vc → { ^ . vc window_size } F _ → {} }
+        ?? ( vec_get [VerCfg] . mm versions at ) { T vc → { ^ ? > . vc window_size 0 . vc window_size 0 } F _ → {} }
     } {}
     ^ 0
 }
@@ -1220,8 +1249,9 @@ $ `src/store.nu`
     ( _an_ensure_fc_cfg mo )
     : *Meta mm . mo meta
     : i at ( meta_find_version mm ANOM_FC_NAME )
+    // 0 = from the step; a season given, or -1 (none), stands
     : ~ b unset T
-    ? >= at 0 { ?? ( vec_get [VerCfg] . mm versions at ) { T vc → { ? > . vc window_size 0 { = unset F } {} } F _ → {} } } {}
+    ? >= at 0 { ?? ( vec_get [VerCfg] . mm versions at ) { T vc → { ? == . vc window_size 0 {} { = unset F } } F _ → {} } } {}
     ? unset {
         : i season ( anomaly_season_of ( model_step mo ) )
         ? > season 0 { : b _w ( model_set_version_window mo ANOM_FC_NAME season 0 ) } {}
@@ -1408,11 +1438,13 @@ $ `src/store.nu`
         : ~ i q 0
         ~ < q h {
             : i cell + * j h q
-            ( json_arr_push mae ( json_float ? > . cabs cell 0 / . pabs cell # f . cabs cell 0.0 ) )
-            ( json_arr_push mape ( json_float ? > . cpct cell 0 / . ppct cell # f . cpct cell 0.0 ) )
-            ( json_arr_push nai ( json_float ? > . cnai cell 0 / . pnai cell # f . cnai cell 0.0 ) )
-            ( json_arr_push sea ( json_float ? > . csea cell 0 / . psea cell # f . csea cell 0.0 ) )
-            ( json_arr_push cov ( json_float ? > . cabs cell 0 / # f . ccov cell # f . cabs cell 0.0 ) )
+            // a cell without a comparison is null, never a zero that
+            // reads as a perfect forecast
+            ( json_arr_push mae ? > . cabs cell 0 ( json_float / . pabs cell # f . cabs cell ) ( json_null ) )
+            ( json_arr_push mape ? > . cpct cell 0 ( json_float / . ppct cell # f . cpct cell ) ( json_null ) )
+            ( json_arr_push nai ? > . cnai cell 0 ( json_float / . pnai cell # f . cnai cell ) ( json_null ) )
+            ( json_arr_push sea ? > . csea cell 0 ( json_float / . psea cell # f . csea cell ) ( json_null ) )
+            ( json_arr_push cov ? > . cabs cell 0 ( json_float / # f . ccov cell # f . cabs cell ) ( json_null ) )
             = tot_abs + tot_abs . pabs cell = n_abs + n_abs . cabs cell
             = tot_nai + tot_nai . pnai cell = n_nai + n_nai . cnai cell
             = tot_sea + tot_sea . psea cell = n_sea + n_sea . csea cell
@@ -1426,9 +1458,9 @@ $ `src/store.nu`
         : f m_abs ? > n_abs 0 / tot_abs # f n_abs 0.0
         : f m_nai ? > n_nai 0 / tot_nai # f n_nai 0.0
         : f m_sea ? > n_sea 0 / tot_sea # f n_sea 0.0
-        ( json_obj_set fo `mae_mean` ( json_float m_abs ) )
-        ( json_obj_set fo `skill_vs_naive` ( json_float ? > m_nai 0.0 - 1.0 / m_abs m_nai 0.0 ) )
-        ( json_obj_set fo `skill_vs_seasonal_naive` ( json_float ? > m_sea 0.0 - 1.0 / m_abs m_sea 0.0 ) )
+        ( json_obj_set fo `mae_mean` ? > n_abs 0 ( json_float m_abs ) ( json_null ) )
+        ( json_obj_set fo `skill_vs_naive` ? & > n_nai 0 > m_nai 0.0 ( json_float - 1.0 / m_abs m_nai ) ( json_null ) )
+        ( json_obj_set fo `skill_vs_seasonal_naive` ? & > n_sea 0 > m_sea 0.0 ( json_float - 1.0 / m_abs m_sea ) ( json_null ) )
         ( json_obj_set fo `compared_points` ( json_int n_abs ) )
         ( json_arr_push fa fo )
         = j + j 1
@@ -2695,6 +2727,7 @@ $ `src/store.nu`
     b applied  // F on a dry run, or when the version was filtered out
     i ft_from  // the window's lower bound this version was tuned over
     i ft_n_rows  // ring rows inside that window
+    String warning  // why the rate was not met, or why the margin was left alone; "" when all is well
 }
 
 : FineTuneReport {
@@ -2724,6 +2757,7 @@ $ `src/store.nu`
     : *Meta mm . mo meta
     ? & & > rate 0.0 == . mm tuned_at 0 ( model_is_trained mo ) {} { ^ F }
     ? >= * rate # f ( vec_len [String] . mo lines ) 1.0 {} { ^ F }
+    ( __an_set_action `autotune` )
     : ( Vec String ) none ( vec_new [String] )
     : FineTuneReport ft ( model_finetune_at mo rate 0 0 T none )
     ( finetune_free ft )
@@ -2734,7 +2768,7 @@ $ `src/store.nu`
 }
 
 @ finetune_free FineTuneReport rep → v {
-    ( vec_free_with [FtVer] . rep items \ FtVer x → v { ( string_free . x ftname ) } )
+    ( vec_free_with [FtVer] . rep items \ FtVer x → v { ( string_free . x ftname ) ( string_free . x warning ) } )
 }
 
 // Set every enabled, trained version's margin so that a fraction `rate` of
@@ -2747,6 +2781,7 @@ $ `src/store.nu`
 // is a fraction with a fixed meaning (SPEC §5.4), and a stuck sensor is
 // not a 1 % property of a window — set it with the version editor.
 @ model_finetune_at * Model mo f rate i from_ts i to_ts b apply ( Vec String ) only → FineTuneReport {
+    ? apply { ( __an_set_action ? == ( nurl_str_eq g_an_action `autotune` ) 1 `autotune` `finetune` ) } {}
     : ( Vec FtVer ) items ( vec_new [FtVer] )
     : CalReport cal ( model_calibrate mo from_ts to_ts )
     : i ni ( vec_len [CalVer] . cal items )
@@ -2770,19 +2805,46 @@ $ `src/store.nu`
                             = q + q 1
                         }
                     } {}
+                    : i after ( cal_flagged_at cv nm_new )
+                    : i want # i ( float_round * rate # f . cv n )
+                    : ~ String warn ( string_new )
+                    // A margin of 0 flags every row whose score is at or
+                    // below 0 — on a forest, a third of a quiet feed. No
+                    // margin at or above 0 flags this few here (every
+                    // score in the window is above 0), so the margin is
+                    // left as it is and the report says so.
+                    : ~ b hold F
+                    ? & <= nm_new 0.0 > . cv n 0 {
+                        = hold T
+                        ( string_push_str warn `no margin at or above 0 flags this few here (every score in the window is above 0): the margin was left unchanged` )
+                    } {
+                        // Scores tie in runs on a coarse feed: the run the
+                        // cut falls in is taken or left whole, and the
+                        // achieved rate can be far from the one asked.
+                        ? & > want 0 | < * after 2 want > after * 2 want {
+                            ( string_push_str warn `the rate could not be met: the scores tie at the cut, so this margin flags ` )
+                            ( string_push_int warn after )
+                            ( string_push_str warn ` of ` )
+                            ( string_push_int warn . cv n )
+                            ( string_push_str warn ` rows where ` )
+                            ( string_push_int warn want )
+                            ( string_push_str warn ` were asked` )
+                        } {}
+                    }
                     : ~ b did F
-                    ? & apply wanted { = did ( model_set_margin mo nm nm_new ) } {}
+                    ? & & apply wanted ! hold { = did ( model_set_margin mo nm nm_new ) } {}
                     ( vec_push [FtVer] items @ FtVer {
                         ( string_from nm )
                         . cv cur_margin
-                        nm_new
+                        ? hold . cv cur_margin nm_new
                         . cv n
                         . cv flagged
-                        ( cal_flagged_at cv nm_new )
+                        ? hold . cv flagged after
                         . cv worst
                         did
                         from_ts
                         . cal n_rows
+                        warn
                     } )
                 }
             }
@@ -2793,6 +2855,7 @@ $ `src/store.nu`
     : i nr . cal n_rows
     : i nex . cal excluded
     ( cal_free cal )
+    ( __an_set_action `set_margin` )
     ^ @ FineTuneReport { items rate from_ts to_ts nr apply nex }
 }
 
@@ -3661,11 +3724,27 @@ $ `src/store.nu`
         ?? ( vec_get [VerCfg] . mm versions k ) {
             T vc → {
                 ? == ( nurl_str_eq ( string_data . vc vname ) vname ) 1 {
+                    : f before . vc decision_margin
                     : ~ VerCfg upd vc
                     = . upd decision_margin margin
                     ( vec_set [VerCfg] . mm versions k upd )
+                    // A margin someone set is a margin the first train's
+                    // calibration must not overwrite: the model counts
+                    // as tuned from here on (model_autotune_at).
+                    ? == . mm tuned_at 0 { = . mm tuned_at ( now_seconds ) } {}
                     ( meta_bump_epoch mm )
                     ( store_save_meta . mo store ( string_data . mo mname ) mm )
+                    ? == ( f64_to_bits before ) ( f64_to_bits margin ) {} {
+                        : Json e ( json_obj_new )
+                        ( json_obj_set e `at` ( json_int ( now_seconds ) ) )
+                        ( json_obj_set e `actor` ( json_str_lit g_an_actor ) )
+                        ( json_obj_set e `action` ( json_str_lit g_an_action ) )
+                        ( json_obj_set e `version` ( json_str_lit vname ) )
+                        ( json_obj_set e `from` ( json_float before ) )
+                        ( json_obj_set e `to` ( json_float margin ) )
+                        : b _a ( store_append_audit . mo store ( string_data . mo mname ) e )
+                        ( json_free e )
+                    }
                     ^ T
                 } {}
             }

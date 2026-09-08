@@ -1513,12 +1513,15 @@ $ `stdlib/ext/json.nu`
     : ~ VerCfg o vc
     ? < . o window_min 0 { = . o window_min 0 } {}
     ? < . o window_pts 0 { = . o window_pts 0 } {}
-    ? < . o window_size 0 { = . o window_size 0 } {}
+    // The forecast's window_size is a seasonal period: 0 takes it from
+    // the ring's step, -1 is no season at all, one row is no season.
+    : b fcv ( _an_is_fc_name ( string_data . o vname ) )
+    ? & fcv < . o window_size 0 { = . o window_size -1 } {}
+    ? & ! fcv < . o window_size 0 { = . o window_size 0 } {}
     ? > . o window_size 0 {
         ? < . o step_size 1 { = . o step_size 1 } {}
     } { = . o step_size 0 }
-    // The forecast's window_size is a seasonal period: one row is no season.
-    ? & ( _an_is_fc_name ( string_data . o vname ) ) == . o window_size 1 { = . o window_size 0 = . o step_size 0 } {}
+    ? & fcv == . o window_size 1 { = . o window_size 0 } {}
     // The autoencoder and the guards have no forest: their tree counts
     // stay 0 so the config round-trips unchanged. Every other version
     // must be trainable. The flatline guard's window is a run of rows and

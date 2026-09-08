@@ -158,6 +158,7 @@ $ `src/dynamic.nu`
     : *FcModel fc ( model_forecast mo )
     ( check . fc trained `forecast: trained` )
     ( check == . fc nw 2 `forecast: one model per numeric feature (temp, press)` )
+    ( check == ( vec_len [String] . fc skipped ) 0 `forecast: nothing skipped, nothing to explain` )
     ( check == . fc season 24 `forecast: with the season given` )
     ( check == . fc pos 480 `forecast: the states stand at the ring's end` )
     : ~ b named T
@@ -374,6 +375,30 @@ $ `src/dynamic.nu`
     ( string_free e1 )
     ( check == . . mo3 fc season 24 `ensure: hourly points get the daily season` )
     ( check ( meta_version_enabled ( model_metadata mo3 ) ANOM_FC_NAME F ) `ensure: and switches it on` )
+    // a constant feature is skipped with a reason; a season of -1 means none
+    : b _w3 ( model_set_version_window mo3 ANOM_FC_NAME -1 0 )
+    : ( Vec Json ) recs3 ( vec_new [Json] )
+    = k 0
+    ~ < k 60 {
+        : Json j ( json_obj_new )
+        ( json_obj_set j `temp` ( json_float + ( temp_at + 200 k ) * 0.3 ( gauss3 ) ) )
+        ( json_obj_set j `flat` ( json_float 7.0 ) )
+        ( json_obj_set j `timestamp` ( json_int + T0 * + 200 k 3600 ) )
+        ( vec_push [Json] recs3 j )
+        = k + k 1
+    }
+    : ImportReport ir3 ( model_import_at mo3 recs3 + T0 * 260 3600 )
+    ( import_report_free ir3 )
+    ( vec_free_with [Json] recs3 \ Json j → v { ( json_free j ) } )
+    : String e3 ( model_train_forecast_at mo3 + T0 * 260 3600 )
+    ( check == ( string_len e3 ) 0 `skipped: the train succeeds` )
+    ( string_free e3 )
+    ( check == . . mo3 fc season 0 `season: -1 is no season` )
+    : ~ b flat_skipped F
+    : i nsk ( vec_len [String] . . mo3 fc skipped )
+    = k 0
+    ~ < k nsk { ?? ( vec_get [String] . . mo3 fc skipped k ) { T sk → { ? ( string_contains sk `flat: constant` ) { = flat_skipped T } {} } F _ → {} } = k + k 1 }
+    ( check flat_skipped `skipped: the constant feature is named with its reason` )
     ( model_free mo3 )
 
     // a minute's step: the day is 1 440 rows, which no polynomial state
