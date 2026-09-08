@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`packages/anomaly` 0.21.0 — data sources through MCP.** An agent
+  acting for an administrator adds a data source (`create_source`: a WFS
+  stored query or feature type, or a URL answering JSON, with its kind and
+  every setting the record takes), changes any field (`update_source`),
+  removes one (`delete_source`, confirmed), fetches now or backfills
+  (`run_source`), and browses a service's catalogue and a query's columns
+  first (`source_catalog`, `source_preview`); every member reads them
+  (`sources`, `source`, header values masked). The tools call the HTTP
+  routes in process under the caller's principal, so the rights are the
+  API's own.
+
 - **`packages/anomaly` 0.20.0 — the forecast version: a seasonal ARIMA
   per feature.** The forests see a point as a whole and the guards one
   reading at a time; a temperature that reads an ordinary trough value at

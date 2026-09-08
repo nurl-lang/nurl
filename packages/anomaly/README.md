@@ -836,9 +836,11 @@ says why and what would be allowed instead.
 | `labels` | every member | what readers have said about a model's rows |
 | `label_anomaly` | member on `llm_…`, admin on any | say a flagged row was a `false_positive` (calibration and `finetune` leave it out from then on), `confirmed`, or `none` to withdraw |
 | `forecast` | every member | what the forecast version expects next, per feature, with standard errors |
+| `sources`, `source` | every member (not an ingest key) | the organisation's data sources and one in full — header values masked |
 | `retrain`, `train_autoencoder`, `train_forecast`, `finetune`, `edit_model`, `reset_model`, `delete_model` | member on `llm_…`, admin on any | the model's lifecycle; destructive ones need `confirm: true` |
 | `ingest_point`, `import_data` | ingest key, admin | send a point / load a file of history — this teaches the model |
 | `claim_model`, `org_users`, `set_role`, `org_keys` | admin | ownership, the roster, roles, the key listing |
+| `create_source`, `update_source`, `delete_source`, `run_source`, `source_catalog`, `source_preview` | admin | data sources: add one (a WFS stored query or feature type, or a URL answering JSON, with its kind and settings), change any field, remove it (`confirm: true`), fetch now or backfill, browse a service's catalogue, preview a query's columns |
 
 API keys are deliberately **listed but never created or revoked** through
 MCP: a new key's secret exists once, in the response that creates it, and a

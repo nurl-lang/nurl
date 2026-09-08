@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.21.0
+
+- **Data sources through MCP.** An agent acting for an administrator can
+  now do what the Sources page does: `create_source` adds a source — a WFS
+  stored query or feature type, or a URL answering JSON — with its kind
+  and every setting the record takes (URL, query, mode, parameters,
+  features, categorical columns, clock, model, schedule, method, headers,
+  body, path); `update_source` changes any field, the kind included;
+  `delete_source` removes one (`confirm: true`); `run_source` fetches now
+  or backfills; `source_catalog` and `source_preview` browse a service and
+  show a query's columns first. Every member (not an ingest key) reads
+  them with `sources` and `source`, header values masked, as the HTTP API
+  masks them. The rights are the API's own: the tools call the routes in
+  process under the caller's principal, so an ingest key is refused and a
+  viewer does not see the writing tools at all. Thirty-eight tools.
+
 ## 0.20.0
 
 - **The forecast version: a seasonal ARIMA per feature.** The forests see
