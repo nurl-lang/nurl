@@ -57,9 +57,10 @@ rights.
   other versions know; only a model of the sequence can say it is wrong
   for the moment. This version fits one seasonal ARIMA per numeric
   feature ([`arima`](../arima) package: the stepwise order search, the
-  season the version's `window_size` gives in rows, the features fitted
-  on the machine's threads), keeps each model's Kalman state current
-  point by point, and judges every reading by how many standard errors
+  season the version's `window_size` gives in rows — 0 takes it from
+  the ring's step: the day at a step up to twelve hours, the week at a
+  daily one — the features fitted on the machine's threads), keeps each
+  model's Kalman state current point by point, and judges every reading by how many standard errors
   of its own one-step forecast it landed from it: the decision value is
   `−max|z|`, the margin a sigma count (4 by default), and the verdict
   names the feature. A reading a point leaves out is a gap to its model,
@@ -74,6 +75,13 @@ rights.
   anomalies from the same data uses both routes on one model, and a
   model without a trained forecast version gets one fitted on the first
   `/forecast` call once it has trained, the season from the ring's step.
+  A season up to 168 rows is a SARIMA polynomial; a longer one — the day
+  at a minute's step is 1 440 rows, which no filter state can carry — is
+  Fourier terms with four harmonics over a plain ARIMA, and the week is
+  added as Fourier terms whenever the fit window holds three of them,
+  so an hourly feed with a daily polynomial gets its weekend too. The
+  fit is seconds either way: three features at a minute's step over
+  5 700 points in 1.2 s, thirteen features over 18 000 rows in 0.6 s.
   Whether the forecasts are any good is measured, not assumed:
   `GET /models/dynamic/<m>/forecast/backtest?horizon=H&points=N`
   (`anomaly backtest`, the MCP tool `forecast_backtest`, the drawer's

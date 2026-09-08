@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.24.0
+
+- **A long season no longer hangs the server.** A minute's step made the
+  forecast version's season 1 440 rows, and a SARIMA polynomial at that
+  lag is a 2 880-wide state with an 8-million-cell covariance per feature
+  — training it ate the memory and the service with it. A season past 168
+  rows is now Fourier terms (`arima` 0.3.0: four harmonics, least squares,
+  a plain ARIMA on the residuals), and the week is added as Fourier terms
+  whenever the fit window holds three of them, so a daily polynomial gets
+  its weekend too. The same three features over 5 700 minute points fit
+  in 1.2 s and 36 MB; thirteen features over 18 000 rows in 0.6 s, and
+  their backtest skill against the naive forecast went from 0.42 to 0.95
+  on the commit rate once the day was modelled. A version whose season
+  is 0 takes it from the ring's step on every explicit train, not only on
+  the first `/forecast`. The replays a scan and a backtest make keep the
+  regressors' phase (the fit window's first row is remembered as a
+  sequence number).
+
 ## 0.23.0
 
 - **Proper forecasts.** `POST /forecast/<m>?horizon=H` is `/detect`'s twin:

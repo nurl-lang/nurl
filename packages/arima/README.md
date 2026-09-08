@@ -75,6 +75,21 @@ conditioning each on its own order lets the higher orders win on the
 points they drop (measured on a true AR(1): AR(4) by 5 AICc, against the
 exact likelihood's AR(1) by 4).
 
+**Long and several seasons are Fourier terms.** A seasonal polynomial
+at lag s puts s rows into the state, and the filter carries an r² state
+covariance: at a minute's step the day is 1 440 rows and 2 880² is not a
+model, it is a memory. `arima_fit_harmonic` / `arima_auto_harmonic` fit
+the other standard form of a seasonal (Hyndman's `fourier()` with ARIMA
+errors): K harmonics per period, sine and cosine, by least squares, and
+the ARIMA on what is left — any period length, several at once (the day
+and the week), O(K) a row. The terms ride with the model: `arima_update`
+subtracts the row's seasonal before the filter and `arima_forecast` adds
+it back, the regressors' clock counts rows from the fit's origin
+(`arima_restart_at` sets it for a replay that begins elsewhere), and the
+JSON carries them. A fixed shape is the price — a SARIMA lets the season
+drift — so for a short season the polynomial is the better model and
+the Fourier terms the addition for a second, longer one.
+
 **Persistence** is JSON with every float as its IEEE bits, the filtered
 state included, so a reloaded model streams on bit for bit.
 
@@ -160,7 +175,10 @@ on a CUDA device.
 ( arima_forecast m h )                        → ArimaForecast { mean se }   (arima_forecast_free)
 ( arima_update m y )                          → ArimaUpdate { predicted innovation variance z }   NaN y = a gap
 ( arima_restart m )                           the state back to a fresh fit's; replay with arima_update
+( arima_restart_at m t0 )                     the same, the regressors' clock at row t0 of the fit's origin
 ( arima_clone m )                             → *ArimaModel  deep copy, state included
+( arima_fit_harmonic y periods k spec method ) → *ArimaModel  Fourier terms of `periods` (rows), k harmonics each, ARIMA on the rest
+( arima_auto_harmonic y periods k s )         → *ArimaModel  the same, the residual order searched (s = its season, 0 = none)
 ( arima_coef m )                              → Json
 ( arima_to_json m ) / ( arima_from_json s )   → String / ?*ArimaModel
 ( arima_phi m ) ( arima_theta m ) ( arima_sphi m ) ( arima_stheta m ) ( arima_mu m )
@@ -190,9 +208,11 @@ with, under `forecast`, the means and standard errors.
 
 ## Tests
 
-`tests/arima_test.sh` runs `arima_test.nu` (87 checks: algebra — the
+`tests/arima_test.sh` runs `arima_test.nu` (98 checks: algebra — the
 Chandrasekhar likelihood against the covariance filter's among them —
-the oracle, streaming, JSON, the batch driver, order selection),
+the oracle, streaming, JSON, the batch driver, order selection, the
+Fourier terms: a day of 1 440 rows and a week of 10 080 recovered, a
+thousand steps ahead at a fraction of the naive error),
 `gpu_test.nu` on both backends, and the CLI on the airline fixture — and
 passes under AddressSanitizer / LeakSanitizer (`NURL_SAN=1`) with nothing
 leaked. `tests/bench.nu` and `tests/bench_gpu.nu` time the shapes above.
