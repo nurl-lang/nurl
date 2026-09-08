@@ -39,7 +39,7 @@ $ `src/authz.nu`
 $ `src/imptime.nu`
 
 // One version for the CLI banner and the MCP handshake.
-: s ANOMALY_VERSION `0.20.0`
+: s ANOMALY_VERSION `0.21.0`
 
 // ── Wiring ───────────────────────────────────────────────────────────
 
@@ -2253,6 +2253,131 @@ $ `src/imptime.nu`
     ^ ( __mcp_pass o )
 }
 
+// ── Tools: data sources (src/sources.nu) ─────────────────────────────
+//
+// The record's fields as the API takes them, copied from the arguments
+// as given — the API validates and answers with the reason on a 400.
+: s __MCP_SOURCE_FIELDS `name kind url query mode params features categorical time_field model interval_minutes history_hours calendar enabled method headers body path`
+
+@ __mcp_source_body Json a → Json {
+    : Json body ( json_obj_new )
+    : String all ( string_from __MCP_SOURCE_FIELDS )
+    : ( Vec String ) keys ( string_split all ` ` )
+    ( string_free all )
+    : i n ( vec_len [String] keys )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] keys k ) {
+            T key → {
+                ?? ( __mcp_arg a ( string_data key ) ) {
+                    T v → { ( json_obj_set body ( string_data key ) ( json_clone v ) ) }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
+    ^ body
+}
+
+@ __mcp_need_source_id Json a → String {
+    ^ ( __mcp_arg_str a `id` )
+}
+
+@ __mcp_t_source Json a Json ctx → Json {
+    : String id ( __mcp_need_source_id a )
+    ? > ( string_len id ) 0 {} { ( string_free id ) ^ ( mcp_tool_result_error `id: required — a source id from sources` ) }
+    : String path ( __mcp_model_path `/api/org/sources/` id `` )
+    : String q ( string_new )
+    : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
+    ( string_free q )
+    ( string_free path )
+    ( string_free id )
+    ^ ( __mcp_pass o )
+}
+
+@ __mcp_t_create_source Json a Json ctx → Json {
+    : Json body ( __mcp_source_body a )
+    : String q ( string_new )
+    : ApiOut o ( __mcp_api ctx `POST` `/api/org/sources` q @ ?Json { T body } )
+    ( string_free q )
+    ( json_free body )
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    : Json out ( json_clone . o body )
+    ( json_obj_set out `next` ( json_str_lit `run_source {id} fetches now (backfill_hours reaches back); source {id} shows each run's outcome; the model named receives the points.` ) )
+    ( __mcp_api_out_free o )
+    ^ ( __mcp_result_json out )
+}
+
+@ __mcp_t_update_source Json a Json ctx → Json {
+    : String id ( __mcp_need_source_id a )
+    ? > ( string_len id ) 0 {} { ( string_free id ) ^ ( mcp_tool_result_error `id: required — a source id from sources` ) }
+    : Json body ( __mcp_source_body a )
+    : String path ( __mcp_model_path `/api/org/sources/` id `` )
+    : String q ( string_new )
+    : ApiOut o ( __mcp_api ctx `PUT` ( string_data path ) q @ ?Json { T body } )
+    ( string_free q )
+    ( string_free path )
+    ( json_free body )
+    ( string_free id )
+    ^ ( __mcp_pass o )
+}
+
+@ __mcp_t_delete_source Json a Json ctx → Json {
+    : String id ( __mcp_need_source_id a )
+    ? > ( string_len id ) 0 {} { ( string_free id ) ^ ( mcp_tool_result_error `id: required — a source id from sources` ) }
+    ? ( __mcp_arg_bool a `confirm` F ) {} {
+        ( string_free id )
+        ^ ( mcp_tool_result_error `confirm: true is required — delete removes the source and its schedule; the model and the points it fetched stay` )
+    }
+    : String path ( __mcp_model_path `/api/org/sources/` id `` )
+    : String q ( string_new )
+    : ApiOut o ( __mcp_api ctx `DELETE` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
+    ( string_free q )
+    ( string_free path )
+    ( string_free id )
+    ^ ( __mcp_pass o )
+}
+
+@ __mcp_t_run_source Json a Json ctx → Json {
+    : String id ( __mcp_need_source_id a )
+    ? > ( string_len id ) 0 {} { ( string_free id ) ^ ( mcp_tool_result_error `id: required — a source id from sources` ) }
+    : String q ( string_new )
+    : i back ( __mcp_arg_int a `backfill_hours` 0 )
+    ? > back 0 { ( string_push_str q `backfill_hours=` ) ( string_push_int q back ) } {}
+    : String path ( __mcp_model_path `/api/org/sources/` id `/run` )
+    : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
+    ( string_free q )
+    ( string_free path )
+    ( string_free id )
+    ^ ( __mcp_pass o )
+}
+
+@ __mcp_t_source_catalog Json a Json ctx → Json {
+    : String url ( __mcp_arg_str a `url` )
+    ? > ( string_len url ) 0 {} { ( string_free url ) ^ ( mcp_tool_result_error `url: required — the WFS endpoint` ) }
+    : Json body ( json_obj_new )
+    ( json_obj_set body `url` ( json_str_lit ( string_data url ) ) )
+    ( string_free url )
+    : String q ( string_new )
+    : ApiOut o ( __mcp_api ctx `POST` `/api/org/sources/catalog` q @ ?Json { T body } )
+    ( string_free q )
+    ( json_free body )
+    ^ ( __mcp_pass o )
+}
+
+@ __mcp_t_source_preview Json a Json ctx → Json {
+    : Json body ( __mcp_source_body a )
+    ? ( __mcp_arg_has a `hours` ) { ( json_obj_set body `hours` ( json_int ( __mcp_arg_int a `hours` 24 ) ) ) } {}
+    : String q ( string_new )
+    : ApiOut o ( __mcp_api ctx `POST` `/api/org/sources/preview` q @ ?Json { T body } )
+    ( string_free q )
+    ( json_free body )
+    ^ ( __mcp_pass o )
+}
+
 // ── Schemas ──────────────────────────────────────────────────────────
 
 @ __mcp_sc_model → Json {
@@ -2417,6 +2542,81 @@ $ `src/imptime.nu`
     ^ sc
 }
 
+@ __mcp_sc_source_id → Json {
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `id` `string` `Source id, as sources shows it.` T )
+    ^ sc
+}
+
+// The record's fields (every one optional on an update).
+@ __mcp_sc_source_fields Json sc b creating → v {
+    ( mcp_schema_prop sc `name` `string` `A name for people.` F )
+    : Json kinds ( json_arr_new )
+    ( json_arr_push kinds ( json_str_lit `wfs` ) )
+    ( json_arr_push kinds ( json_str_lit `http` ) )
+    ( mcp_schema_prop_enum sc `kind` `string` `The kind of service: "wfs" (an OGC WFS 2.0 endpoint) or "http" (any URL answering JSON).` kinds F )
+    ( mcp_schema_prop sc `url` `string` `For wfs: the endpoint (https://opendata.fmi.fi/wfs); for http: the URL as it is to be requested, query string and all.` creating )
+    ( mcp_schema_prop sc `model` `string` `The model the points go into (letters, numbers, underscores); created on the first run if it does not exist.` creating )
+    : Json modes ( json_arr_new )
+    ( json_arr_push modes ( json_str_lit `stored` ) )
+    ( json_arr_push modes ( json_str_lit `type` ) )
+    ( mcp_schema_prop_enum sc `mode` `string` `wfs: "stored" for a stored query (a weather service's fmi::observations::weather::simple), "type" for a feature type (a GeoServer's or MapServer's layer).` modes F )
+    ( mcp_schema_prop sc `query` `string` `wfs: the stored query id, or the feature type name — source_catalog lists them.` F )
+    ( mcp_schema_prop sc `params` `object` `wfs: the query's parameters as strings — a stored query's place / fmisid / bbox / timestep; a feature type's count / bbox / cql_filter / sortBy.` F )
+    ( mcp_schema_prop sc `features` `array` `The columns to take as features (names from source_preview); empty = every column.` F )
+    ( mcp_schema_prop sc `categorical` `array` `Columns to store as text so each value is an identity the anomaly is judged against — a station code, a place.` F )
+    ( mcp_schema_prop sc `time_field` `string` `A feature type's or an http source's clock: a date property's name, "" to detect one, "none" to stamp every record with the fetch time (a snapshot series).` F )
+    ( mcp_schema_prop sc `interval_minutes` `integer` `How often to fetch (default 10).` F )
+    ( mcp_schema_prop sc `history_hours` `integer` `How far back the first run reaches (default 24).` F )
+    ( mcp_schema_prop sc `calendar` `boolean` `Give the model the observation time as calendar features (default true).` F )
+    ( mcp_schema_prop sc `enabled` `boolean` `Fetch on the schedule (default true); false keeps the record and stops the runs.` F )
+    : Json methods ( json_arr_new )
+    ( json_arr_push methods ( json_str_lit `GET` ) )
+    ( json_arr_push methods ( json_str_lit `POST` ) )
+    ( json_arr_push methods ( json_str_lit `PUT` ) )
+    ( mcp_schema_prop_enum sc `method` `string` `http: GET, POST or PUT (default GET).` methods F )
+    ( mcp_schema_prop sc `headers` `object` `http: request headers as strings — an Authorization, the Digitraffic-User a service requires. Secrets: source shows them masked, and the mask sent back keeps the stored value.` F )
+    ( mcp_schema_prop sc `body` `string` `http: the request body for POST / PUT.` F )
+    ( mcp_schema_prop sc `path` `string` `http: where the records are in the answer — dotted, indexes allowed (data.items, stations.0.values); empty for the whole answer. An array gives one record per element, an object one record.` F )
+}
+
+@ __mcp_sc_create_source → Json {
+    : Json sc ( mcp_schema_obj )
+    ( __mcp_sc_source_fields sc T )
+    ^ sc
+}
+
+@ __mcp_sc_update_source → Json {
+    : Json sc ( __mcp_sc_source_id )
+    ( __mcp_sc_source_fields sc F )
+    ^ sc
+}
+
+@ __mcp_sc_delete_source → Json {
+    : Json sc ( __mcp_sc_source_id )
+    ( mcp_schema_prop sc `confirm` `boolean` `Must be true: the source and its schedule are removed for good (the model and the points it fetched stay).` T )
+    ^ sc
+}
+
+@ __mcp_sc_run_source → Json {
+    : Json sc ( __mcp_sc_source_id )
+    ( mcp_schema_prop sc `backfill_hours` `integer` `Reach this many hours back before what has been fetched, instead of forward from it.` F )
+    ^ sc
+}
+
+@ __mcp_sc_catalog → Json {
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `url` `string` `The WFS endpoint.` T )
+    ^ sc
+}
+
+@ __mcp_sc_preview → Json {
+    : Json sc ( mcp_schema_obj )
+    ( __mcp_sc_source_fields sc F )
+    ( mcp_schema_prop sc `hours` `integer` `How many of the last hours to fetch (default 24).` F )
+    ^ sc
+}
+
 @ __mcp_sc_role → Json {
     : Json sc ( mcp_schema_obj )
     ( mcp_schema_prop sc `subject` `string` `The member's subject, from org_users.` T )
@@ -2434,7 +2634,7 @@ $ `src/imptime.nu`
 
 Start with list_models. Then anomalies {model, last: "24h"} for the newest flagged rows with the features that caused them, anomaly_summary for counts, events, timeline and the features blamed most, point for one row in full, describe_model for how a model is built, calibration for how its margins sit against the recent data. Times are ISO-8601 UTC; a model on a count clock numbers its rows instead. "last" counts back from the model's newest point, not from now. Scores run downward into anomaly: a point is flagged when its score is at or below minus the version's margin. A forest's decision_margin is that margin as is; the autoencoder's decision_margin is a fraction of its reconstruction threshold (margin = threshold × decision_margin), so its scores are ~1e-4 where a forest's are ~1e-1; range_guard's decision_margin is a count of standard deviations; flatline's is a fraction (0.9 = nine tenths of the reference run identical, or the window ten times flatter than the stream's quiet periods); forecast's is a count of the forecast's standard errors (4 = the reading sat four standard errors from what was forecast), and point shows which column each of them named. Rank points and versions by severity (−score / margin: 1.0 is exactly on the alert line, 2.0 twice as far past it), never by raw score; a row's score and severity are those of its most severe version. Consecutive anomalous rows are one event: anomalies gives each row its event number, anomaly_summary lists the events — count events, not rows, when saying how often something went wrong. When the person says a flagged row was nothing, label_anomaly {model, index, label: "false_positive"} — from then on calibration and finetune leave it out, so the margins stop paying for known noise.
 
-Every member may build scratch models named llm_… (fork_model: a slice of an existing model's history, optionally fewer columns), tune them (finetune, train_autoencoder, train_forecast, retrain), edit and delete them — use them to test a hypothesis without touching production models. Changing or deleting any other model needs the administrator role; the reply says so when it does. Sending new points (ingest_point, import_data) needs the ingest capability. analyze_data scores a file you provide without creating a model.`
+Every member may build scratch models named llm_… (fork_model: a slice of an existing model's history, optionally fewer columns), tune them (finetune, train_autoencoder, train_forecast, retrain), edit and delete them — use them to test a hypothesis without touching production models. Changing or deleting any other model needs the administrator role; the reply says so when it does. Sending new points (ingest_point, import_data) needs the ingest capability. Data sources — a WFS stored query or feature type, or a URL answering JSON, fetched on a schedule into a model — are listed by sources and shown by source for every member; an administrator adds one with create_source (source_catalog and source_preview first, to find the query and choose its columns), changes it with update_source, fetches now with run_source, removes it with delete_source. analyze_data scores a file you provide without creating a model.`
 }
 
 @ __mcp_add McpServer srv s name s desc Json sc b ro b destr b idem b ow ( @ b Json ) vis ( @ Json Json McpCall ) h → v {
@@ -2481,6 +2681,14 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     `How each version's margin sits against a window (default: the last 24 h before the newest point; last: "all" for the whole ring): how much it flags now, the worst and median scores, and the margin that would flag 0.1%, 1%, 5% … — the numbers to read before finetune. Each version gets a reading — quiet, loud or on target — and the model a verdict.`
     ( __mcp_sc_model_window ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_calibration a ( mcp_call_context c ) ) } )
+    ( __mcp_add srv `sources`
+    `The organisation's data sources: what is fetched from where into which model and how often, each with its last run's outcome (status, error, rows) and whether a fetch is in flight.`
+    ( mcp_schema_empty ) T F T F member
+    \ Json a McpCall c → Json { ^ ( __mcp_t_get ( mcp_call_context c ) `/api/org/sources` ) } )
+    ( __mcp_add srv `source`
+    `One data source in full — its kind, URL, query and parameters, the columns taken, the model, the schedule, the span fetched so far and the run statistics. Header values are masked.`
+    ( __mcp_sc_source_id ) T F T F member
+    \ Json a McpCall c → Json { ^ ( __mcp_t_source a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `forecast`
     `What a model's forecast version expects next: for every feature it watches, the next horizon values with standard errors, and the fitted order. Needs a trained forecast version (train_forecast).`
     ( __mcp_sc_forecast ) T F T F member
@@ -2575,6 +2783,30 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     `The organisation's API keys: id, role, label, who created it, last use, revoked or not. Keys are created and revoked in the dashboard — a secret must not pass through a conversation.`
     ( mcp_schema_empty ) T F T F admin
     \ Json a McpCall c → Json { ^ ( __mcp_t_get ( mcp_call_context c ) `/api/org/keys` ) } )
+    ( __mcp_add srv `create_source`
+    `Add a data source the server fetches on a schedule into a model: a WFS stored query or feature type (source_catalog lists a service's; source_preview shows a query's columns), or any URL answering JSON with the headers it needs. Administrators only.`
+    ( __mcp_sc_create_source ) F F F F admin
+    \ Json a McpCall c → Json { ^ ( __mcp_t_create_source a ( mcp_call_context c ) ) } )
+    ( __mcp_add srv `update_source`
+    `Change a data source: any field of create_source — its kind and settings, the columns, the model, the schedule, enabled or not. Fields left out keep their values. Administrators only.`
+    ( __mcp_sc_update_source ) F F T F admin
+    \ Json a McpCall c → Json { ^ ( __mcp_t_update_source a ( mcp_call_context c ) ) } )
+    ( __mcp_add srv `delete_source`
+    `Remove a data source and its schedule (confirm: true). The model and the points already fetched stay. Administrators only.`
+    ( __mcp_sc_delete_source ) F T T F admin
+    \ Json a McpCall c → Json { ^ ( __mcp_t_delete_source a ( mcp_call_context c ) ) } )
+    ( __mcp_add srv `run_source`
+    `Fetch a data source now — forward from what has been fetched, or backfill_hours back before it — and report what came of it. Administrators only.`
+    ( __mcp_sc_run_source ) F F F T admin
+    \ Json a McpCall c → Json { ^ ( __mcp_t_run_source a ( mcp_call_context c ) ) } )
+    ( __mcp_add srv `source_catalog`
+    `What a WFS offers: its feature types and, where it publishes them, its stored queries with their parameters — the ids create_source's query takes. Fetches the service. Administrators only.`
+    ( __mcp_sc_catalog ) T F T T admin
+    \ Json a McpCall c → Json { ^ ( __mcp_t_source_catalog a ( mcp_call_context c ) ) } )
+    ( __mcp_add srv `source_preview`
+    `Fetch the last hours of a stored query, a feature type's features, or an http source's answer, and show the columns it would give — name, kind, count, distinct values, min, max, last — with a few sample rows, so the features and categorical columns can be chosen before create_source. Administrators only.`
+    ( __mcp_sc_preview ) T F T T admin
+    \ Json a McpCall c → Json { ^ ( __mcp_t_source_preview a ( mcp_call_context c ) ) } )
     ^ srv
 }
 
