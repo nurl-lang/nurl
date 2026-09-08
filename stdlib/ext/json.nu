@@ -54,7 +54,7 @@
 //   ( json_num_lit raw )              → Json    raw as i8* (gets copied)
 //   ( json_str_lit raw )              → Json    raw as i8* (gets copied)
 //   ( json_int  n )                   → Json    JNum from primitive int
-//   ( json_float x )                  → Json    JNum from primitive float
+//   ( json_float x )                  → Json    JNum from primitive float (NaN / ±inf → JNull)
 //   ( json_arr_new )                  → Json    empty []
 //   ( json_obj_new )                  → Json    empty {}
 //   ( json_arr v )                    → Json    takes ownership of Vec
@@ -173,6 +173,11 @@ $ `stdlib/core/vec.nu`
 }
 
 @ json_float f x → Json {
+    // JSON has no NaN and no infinity: `nan` in the output is a document
+    // no parser accepts, and a dashboard that reads such a listing gets
+    // nothing at all. The value that is not a number is `null` — what
+    // JavaScript's JSON.stringify writes for the same double.
+    ? | != 0 ( nurl_is_nan x ) != 0 ( nurl_is_inf x ) { ^ @ Json { JNull } } {}
     : s raw ( nurl_str_float x )
     : String s ( string_from raw )
     // An integral double prints as bare digits (`85.0` → `85`), which a
@@ -180,8 +185,8 @@ $ `stdlib/core/vec.nu`
     // drift when the value happens to land on a whole number. Keep the
     // float-ness in the text: when the raw form is digits (with an
     // optional leading `-`) and nothing else, append `.0`. Anything
-    // with a `.`, an exponent, or a non-finite spelling (inf/nan)
-    // already reads as a float and passes through untouched.
+    // with a `.` or an exponent already reads as a float and passes
+    // through untouched.
     : i n ( nurl_str_len raw )
     : *u bp # *u raw
     : ~ b plain > n 0

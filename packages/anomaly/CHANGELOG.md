@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.25.0
+
+- **The form of each feature's forecast model is chosen on a holdout.**
+  A minute-step temperature got a Fourier day it did not have, and the
+  naive forecast beat it an hour ahead. Now every candidate form — a plain
+  ARIMA, the seasonal polynomial where the season fits a state, Fourier
+  terms of the season with two, four or six harmonics, the week added
+  where the window holds three — is fitted on the fit window's first part
+  and judged on its last fifth by the mean absolute error of its
+  forecasts up to twelve steps ahead; the best is refitted on the whole
+  window; the metadata records the form (`selected`), its holdout error
+  and the naive forecast's beside it (`holdout_skill`), and the drawer
+  shows them per feature.
+- **A NaN in a JSON answer no longer takes the whole listing down.** A
+  model whose forecast state held a NaN standard error made
+  `/models/dynamic` an invalid document (`nan`), and the dashboard, unable
+  to parse it, failed to open any model ("Cannot read properties of null
+  (reading 'alias')"). The stdlib's `json_float` now writes `null` for a
+  NaN or an infinity, as JSON requires.
+
 ## 0.24.0
 
 - **A long season no longer hangs the server.** A minute's step made the

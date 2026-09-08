@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`packages/anomaly` 0.25.0 — each feature's forecast form is chosen on
+  a holdout** among a plain ARIMA, the seasonal polynomial, Fourier terms
+  with two to six harmonics and the week added; the metadata records the
+  form, its holdout error and the skill against the naive forecast.
+
 - **`packages/arima` 0.3.0 — Fourier terms for long and several seasons**
   (`arima_fit_harmonic`, `arima_auto_harmonic`, `arima_restart_at`): K
   harmonics per period by least squares, the ARIMA on the residuals, the
@@ -70,6 +75,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`stdlib/ext/json.nu`: `json_float` writes `null` for a NaN or an
+  infinity.** It wrote `nan`, which no parser accepts: one model's NaN
+  standard error made the anomaly service's model listing an invalid
+  document and the dashboard could open nothing. JSON has no such
+  number; `null` is what JavaScript's JSON.stringify writes.
+  `compiler/tests/json_float_nonfinite.nu`.
 - **nurlc: a named type used by value before its declaration is
   diagnosed at the use.** `: Later x …` above `: Later { … }` passed the
   type check (the pre-scan knows every type name) and failed later with
