@@ -50,12 +50,14 @@ $ `stdlib/std/time.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/std/sort.nu`
 $ `src/orgfiles.nu`
 $ `src/store.nu`
 $ `src/dynamic.nu`
 $ `src/authz.nu`
 $ `src/wfs.nu`
 $ `src/httpsrc.nu`
+$ `src/imptime.nu`
 
 : i SRC_ID_LEN 12
 : i SRC_NAME_MAX 80
@@ -64,7 +66,8 @@ $ `src/httpsrc.nu`
 : i SRC_FEATURES_MAX 200
 : i SRC_INTERVAL_DEFAULT 10  // minutes
 : i SRC_INTERVAL_MAX 10080  // a week
-: i SRC_HISTORY_DEFAULT 24  // hours, the first run
+: i SRC_HISTORY_DEFAULT 168  // hours, the first run: a week, so a daily rhythm is seen seven times
+: f SRC_FINETUNE_DEFAULT 0.01  // the share of the ring the first train's calibration flags
 : i SRC_HISTORY_MAX 8760  // a year
 : i SRC_CHUNK_SECS 86400  // one request covers at most a day
 : i SRC_TICK_MS 15000  // the scheduler's wake-up
@@ -95,6 +98,14 @@ $ `src/httpsrc.nu`
 @ _src_jint Json o s key i dflt → i {
     ?? ( json_obj_get o key ) {
         T v → { ? ( json_is_num v ) { ^ ( json_as_int v ) } {} }
+        F _ → {}
+    }
+    ^ dflt
+}
+
+@ __src_jfloat Json o s key f dflt → f {
+    ?? ( json_obj_get o key ) {
+        T v → { ? ( json_is_num v ) { ?? ( json_num_as_f v ) { T x → { ^ x } F _ → {} } } {} }
         F _ → {}
     }
     ^ dflt
@@ -516,6 +527,12 @@ $ `src/httpsrc.nu`
     } {}
 
     ? ( json_obj_has body `calendar` ) { ( json_obj_set src `calendar` ( json_bool ( __src_jbool body `calendar` T ) ) ) } {}
+    ? ( json_obj_has body `allow_future` ) { ( json_obj_set src `allow_future` ( json_bool ( __src_jbool body `allow_future` F ) ) ) } {}
+    ? ( json_obj_has body `finetune_rate` ) {
+        : f fr ( __src_jfloat body `finetune_rate` -1.0 )
+        ? | < fr 0.0 > fr 0.5 { ^ ( string_from `finetune_rate must be between 0 (no calibration) and 0.5` ) } {}
+        ( json_obj_set src `finetune_rate` ( json_float fr ) )
+    } {}
     ? ( json_obj_has body `enabled` ) { ( json_obj_set src `enabled` ( json_bool ( __src_jbool body `enabled` T ) ) ) } {}
 
     ? ( json_obj_has body `name` ) {
@@ -588,6 +605,8 @@ $ `src/httpsrc.nu`
     ( __src_set_int o `interval_minutes` SRC_INTERVAL_DEFAULT )
     ( __src_set_int o `history_hours` SRC_HISTORY_DEFAULT )
     ( json_obj_set o `calendar` ( json_bool T ) )
+    ( json_obj_set o `allow_future` ( json_bool F ) )
+    ( json_obj_set o `finetune_rate` ( json_float SRC_FINETUNE_DEFAULT ) )
     ( json_obj_set o `enabled` ( json_bool T ) )
     ( __src_set_str o `created_by` by )
     ( __src_set_int o `created_at` now )
@@ -688,21 +707,22 @@ $ `src/httpsrc.nu`
 @ source_window Json src i now b backfill i hours → SrcWindow {
     : i first ( _src_jint src `first_time` 0 )
     : i last ( _src_jint src `last_time` 0 )
-    // A feature type: everything newer than what was seen, however far
-    // ahead it is dated; the first run takes all of it; nothing to reach
-    // back to, so a backfill is an empty window.
-    ? ( source_is_type src ) {
-        ? backfill { ^ @ SrcWindow { 1 0 } } {}
-        ^ @ SrcWindow { ? > last 0 + last 1 0 + now SRC_FAR_FUTURE }
-    } {}
+    : i hist ( _src_jint src `history_hours` SRC_HISTORY_DEFAULT )
+    // Nothing dated past the fetch is taken unless the source says so
+    // (`allow_future`: a price list published ahead): a record from
+    // tomorrow would put the span, the calendar features and the
+    // forecast ahead of the clock.
+    : i cap ? ( __src_jbool src `allow_future` F ) + now SRC_FAR_FUTURE now
     ? backfill {
         : i start - now * hours 3600
         : i end ? > first 0 - first 1 now
         ^ @ SrcWindow { start end }
     } {}
-    : i hist ( _src_jint src `history_hours` SRC_HISTORY_DEFAULT )
+    // A feature type or an http answer is fetched whole; the window says
+    // which of its records land: newer than what was seen, and on the
+    // first run no older than history_hours.
     : i start ? > last 0 + last 1 - now * hist 3600
-    ^ @ SrcWindow { start now }
+    ^ @ SrcWindow { start ? ( source_is_type src ) cap now }
 }
 
 // ── Rows → points ─────────────────────────────────────────────────────
@@ -807,7 +827,18 @@ $ `src/httpsrc.nu`
                                         : b clock | | == ( nurl_str_eq ks `time` ) 1 == ( nurl_str_eq ks `timestamp` ) 1 == ( nurl_str_eq ks `gml_id` ) 1
                                         ? clock {} {
                                             ?? ( json_obj_get row ks ) {
-                                                T v → { ( json_obj_set pt ks ( __src_as_feature v ( __src_str_in cats ks ) ) ) = got + got 1 }
+                                                T v → {
+                                                    // A second date column (an interval's end, a
+                                                    // publication time) is not a reading: as text
+                                                    // it would be a category per row. Name it in
+                                                    // `features` to take it anyway.
+                                                    : ~ b date F
+                                                    ? & ( json_is_str v ) ! ( __src_str_in cats ks ) {
+                                                        : ImpStamp st ( imp_stamp_of_text ( json_str_data v ) )
+                                                        ? | == . st kind STAMP_DATETIME == . st kind STAMP_DATE { = date T } {}
+                                                    } {}
+                                                    ? date {} { ( json_obj_set pt ks ( __src_as_feature v ( __src_str_in cats ks ) ) ) = got + got 1 }
+                                                }
                                                 F _ → {}
                                             }
                                         }
@@ -1103,11 +1134,76 @@ $ `src/httpsrc.nu`
     ( __src_set_int src `last_rows` . rep accepted )
     ( __src_set_int src `total_rows` + ( _src_jint src `total_rows` 0 ) . rep accepted )
     ( json_obj_set src `last_trained` ( json_bool . rep trained ) )
+    ? . rep trained { ( json_obj_set src `last_tuned` ( json_bool ( __src_first_train mo src . sp points now ) ) ) } {}
     ( import_report_free rep )
     ( model_free mo )
     ( store_free st )
     ( string_free model )
     ^ err
+}
+
+// The step of a run's points: the median gap between their timestamps
+// in seconds, 0 when there are too few to say.
+@ source_step_of ( Vec Json ) points → i {
+    : i n ( vec_len [Json] points )
+    ? < n 3 { ^ 0 } {}
+    : ( Vec i ) ts ( vec_with_cap [i] n )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [Json] points k ) { T p → { ( vec_push [i] ts ( _src_jint p `timestamp` 0 ) ) } F _ → {} }
+        = k + k 1
+    }
+    ( sort_by [i] ts \ i a i b → i { ? < a b { ^ -1 } {} ? > a b { ^ 1 } {} ^ 0 } )
+    : ( Vec i ) gaps ( vec_new [i] )
+    = k 1
+    ~ < k ( vec_len [i] ts ) {
+        : i g - ( _src_geti ts k ) ( _src_geti ts - k 1 )
+        ? > g 0 { ( vec_push [i] gaps g ) } {}
+        = k + k 1
+    }
+    ( vec_free [i] ts )
+    : i ng ( vec_len [i] gaps )
+    ? < ng 2 { ( vec_free [i] gaps ) ^ 0 } {}
+    ( sort_by [i] gaps \ i a i b → i { ? < a b { ^ -1 } {} ? > a b { ^ 1 } {} ^ 0 } )
+    : i med ( _src_geti gaps / ng 2 )
+    ( vec_free [i] gaps )
+    ^ med
+}
+
+@ _src_geti ( Vec i ) v i k → i {
+    ?? ( vec_get [i] v k ) { T x → { ^ x } F _ → { ^ 0 } }
+}
+
+// The seasonal period, in rows, a step implies: the day for a step up to
+// twelve hours (144 rows at ten minutes, 24 at an hour), the week for a
+// daily step, none otherwise.
+@ source_season_of i step → i {
+    ? < step 60 { ^ 0 } {}
+    ? <= step 43200 {
+        : i s / + 86400 / step 2 step
+        ^ ? >= s 2 s 0
+    } {}
+    ? & >= step 77760 <= step 95040 { ^ 7 } {}
+    ^ 0
+}
+
+// What a run's first train settles once: the margins, calibrated to
+// `finetune_rate` of the ring (model_autotune_at), and the forecast
+// version's season from the points' step — so that switching the
+// version on fits the daily rhythm the feed has, not a plain ARIMA. A
+// model tuned before, by hand or by an earlier run, is left as it is.
+// Returns whether the margins were calibrated now.
+@ __src_first_train * Model mo Json src ( Vec Json ) points i now → b {
+    : *Meta mm ( model_metadata mo )
+    ? == . mm tuned_at 0 {} { ^ F }
+    : i season ( source_season_of ( source_step_of points ) )
+    ? > season 0 {
+        : i at ( meta_find_version mm ANOM_FC_NAME )
+        : ~ b unset T
+        ? >= at 0 { ?? ( vec_get [VerCfg] . mm versions at ) { T vc → { ? > . vc window_size 0 { = unset F } {} } F _ → {} } } {}
+        ? unset { : b _w ( model_set_version_window mo ANOM_FC_NAME season 0 ) } {}
+    } {}
+    ^ ( model_autotune_at mo ( __src_jfloat src `finetune_rate` SRC_FINETUNE_DEFAULT ) now )
 }
 
 // What a run does once the answer is in hand: the record re-read (it may

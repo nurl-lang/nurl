@@ -39,7 +39,7 @@ $ `src/authz.nu`
 $ `src/imptime.nu`
 
 // One version for the CLI banner and the MCP handshake.
-: s ANOMALY_VERSION `0.21.0`
+: s ANOMALY_VERSION `0.22.0`
 
 // ── Wiring ───────────────────────────────────────────────────────────
 
@@ -2257,7 +2257,7 @@ $ `src/imptime.nu`
 //
 // The record's fields as the API takes them, copied from the arguments
 // as given — the API validates and answers with the reason on a 400.
-: s __MCP_SOURCE_FIELDS `name kind url query mode params features categorical time_field model interval_minutes history_hours calendar enabled method headers body path`
+: s __MCP_SOURCE_FIELDS `name kind url query mode params features categorical time_field model interval_minutes history_hours calendar enabled method headers body path allow_future finetune_rate`
 
 @ __mcp_source_body Json a → Json {
     : Json body ( json_obj_new )
@@ -2355,6 +2355,11 @@ $ `src/imptime.nu`
     ^ ( __mcp_pass o )
 }
 
+// A service's catalogue is hundreds of entries with their parameters —
+// far more than a context window wants at once. The tool answers with
+// id, kind and title per entry, `filter` narrowing them by a substring
+// of id or title, and one entry in full (abstract, parameters) when
+// `query` names it.
 @ __mcp_t_source_catalog Json a Json ctx → Json {
     : String url ( __mcp_arg_str a `url` )
     ? > ( string_len url ) 0 {} { ( string_free url ) ^ ( mcp_tool_result_error `url: required — the WFS endpoint` ) }
@@ -2365,7 +2370,68 @@ $ `src/imptime.nu`
     : ApiOut o ( __mcp_api ctx `POST` `/api/org/sources/catalog` q @ ?Json { T body } )
     ( string_free q )
     ( json_free body )
-    ^ ( __mcp_pass o )
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    : String want ( __mcp_arg_str a `query` )
+    : String filt0 ( __mcp_arg_str a `filter` )
+    : String filt ( string_to_lower filt0 )
+    ( string_free filt0 )
+    : Json out ( json_obj_new )
+    ( __mcp_copy . o body `base_url` out )
+    : Json list ( json_arr_new )
+    : ~ i total 0
+    ?? ( json_obj_get . o body `queries` ) {
+        T qs → {
+            ? ( json_is_arr qs ) {
+                = total ( json_arr_len qs )
+                : ~ i k 0
+                ~ < k total {
+                    ?? ( json_arr_get qs k ) {
+                        T e → {
+                            : String id ( __mcp_jstr e `id` )
+                            : String title ( __mcp_jstr e `title` )
+                            : ~ b take T
+                            ? > ( string_len want ) 0 { = take ( string_eq id want ) } {
+                                ? > ( string_len filt ) 0 {
+                                    : String lid ( string_to_lower id )
+                                    : String lt ( string_to_lower title )
+                                    = take | >= ( nurl_str_find ( string_data lid ) ( string_data filt ) ) 0 >= ( nurl_str_find ( string_data lt ) ( string_data filt ) ) 0
+                                    ( string_free lid ) ( string_free lt )
+                                } {}
+                            }
+                            ? take {
+                                ? > ( string_len want ) 0 { ( json_arr_push list ( json_clone e ) ) } {
+                                    : Json c ( json_obj_new )
+                                    ( json_obj_set c `id` ( json_str_lit ( string_data id ) ) )
+                                    ( __mcp_copy e `kind` c )
+                                    ( json_obj_set c `title` ( json_str_lit ( string_data title ) ) )
+                                    ?? ( json_obj_get e `parameters` ) { T pa → { ? ( json_is_arr pa ) { ( json_obj_set c `parameters` ( json_int ( json_arr_len pa ) ) ) } {} } F _ → {} }
+                                    ( json_arr_push list c )
+                                }
+                            } {}
+                            ( string_free id ) ( string_free title )
+                        }
+                        F _ → {}
+                    }
+                    = k + k 1
+                }
+            } {}
+        }
+        F _ → {}
+    }
+    ( json_obj_set out `total` ( json_int total ) )
+    ( json_obj_set out `listed` ( json_int ( json_arr_len list ) ) )
+    ( json_obj_set out `queries` list )
+    ? & == ( string_len want ) 0 == ( json_arr_len list ) 0 {} {
+        ? == ( string_len want ) 0 { ( json_obj_set out `next` ( json_str_lit `source_catalog {url, query: "<id>"} shows one entry's parameters; source_preview {url, query, mode, params, hours} its columns.` ) ) } {}
+    }
+    ( string_free want ) ( string_free filt )
+    ( __mcp_api_out_free o )
+    ^ ( __mcp_result_json out )
+}
+
+@ __mcp_jstr Json o s key → String {
+    ?? ( json_obj_get o key ) { T v → { ? ( json_is_str v ) { ^ ( string_from ( json_str_data v ) ) } {} } F _ → {} }
+    ^ ( string_new )
 }
 
 @ __mcp_t_source_preview Json a Json ctx → Json {
@@ -2567,7 +2633,9 @@ $ `src/imptime.nu`
     ( mcp_schema_prop sc `categorical` `array` `Columns to store as text so each value is an identity the anomaly is judged against — a station code, a place.` F )
     ( mcp_schema_prop sc `time_field` `string` `A feature type's or an http source's clock: a date property's name, "" to detect one, "none" to stamp every record with the fetch time (a snapshot series).` F )
     ( mcp_schema_prop sc `interval_minutes` `integer` `How often to fetch (default 10).` F )
-    ( mcp_schema_prop sc `history_hours` `integer` `How far back the first run reaches (default 24).` F )
+    ( mcp_schema_prop sc `history_hours` `integer` `How far back the first run reaches (default 168, a week: a daily rhythm seen seven times).` F )
+    ( mcp_schema_prop sc `allow_future` `boolean` `Take records dated past the fetch time (a price list published ahead). Default false: they wait for their hour.` F )
+    ( mcp_schema_prop sc `finetune_rate` `number` `The share of the ring the first train's calibration flags (default 0.01; 0 = leave the default margins). Runs after the first never touch the margins; finetune does, on request.` F )
     ( mcp_schema_prop sc `calendar` `boolean` `Give the model the observation time as calendar features (default true).` F )
     ( mcp_schema_prop sc `enabled` `boolean` `Fetch on the schedule (default true); false keeps the record and stops the runs.` F )
     : Json methods ( json_arr_new )
@@ -2607,6 +2675,8 @@ $ `src/imptime.nu`
 @ __mcp_sc_catalog → Json {
     : Json sc ( mcp_schema_obj )
     ( mcp_schema_prop sc `url` `string` `The WFS endpoint.` T )
+    ( mcp_schema_prop sc `filter` `string` `Keep the entries whose id or title contains this (case-insensitive) — "observations", "weather", "t2m".` F )
+    ( mcp_schema_prop sc `query` `string` `One entry's id: answers with that entry in full, its parameters included.` F )
     ^ sc
 }
 
