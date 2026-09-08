@@ -822,6 +822,173 @@ $ `stdlib/std/thread.nu`
     ^ o
 }
 
+// The forecast version's block of the metadata response (src/forecast.nu).
+@ __an_fc_json Store st s name * Meta mm → Json {
+    : ~ Json o ( json_obj_new )
+    ?? ( store_load_fc st name ) {
+        T fc → {
+            ( json_free o )
+            = o ( fc_info_json fc )
+            ( fc_free fc )
+        }
+        F → { ( json_obj_set o `trained` ( json_bool F ) ) }
+    }
+    ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm ANOM_FC_NAME F ) ) )
+    ( json_obj_set o `decision_margin` ( json_float ( meta_version_margin mm ANOM_FC_NAME ANOM_FC_SIGMA ) ) )
+    : i at ( meta_find_version mm ANOM_FC_NAME )
+    ? >= at 0 {
+        ?? ( vec_get [VerCfg] . mm versions at ) {
+            T vc → {
+                ( json_obj_set o `season` ( json_int . vc window_size ) )
+                ( json_obj_set o `window_points` ( json_int . vc window_pts ) )
+                ( json_obj_set o `window_minutes` ( json_int . vc window_min ) )
+            }
+            F _ → {}
+        }
+    } {}
+    ^ o
+}
+
+// POST /train/forecast/<model>: fit the forecast version now, on the
+// ring as it stands, and switch it on. Optional body: {"season": S,
+// "window_points": N, "window_minutes": M} — written into the version's
+// config first (S = the seasonal period in rows, 0 = none).
+@ __an_h_train_fc HttpRequest req Params p → HttpResponse {
+    : String mname ( __an_param_model p )
+    ? ( __an_name_ok ( string_data mname ) ) {} {
+        ( string_free mname )
+        ^ ( __an_bad_name )
+    }
+    : Gate gate ( __an_gate_model req ( string_data mname ) F T )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rd
+    }
+    ( __an_gate_free gate )
+    : Store st ( store_open g_an_root )
+    ? ( store_exists st ( string_data mname ) ) {} {
+        : HttpResponse r404 ( __an_404_model ( string_data mname ) )
+        ( store_free st )
+        ( string_free mname )
+        ^ r404
+    }
+    : *Model mo ( model_open st ( string_data mname ) )
+    ?? ( __an_body_json req ) {
+        T body → {
+            : Json vo ( json_obj_new )
+            : ~ b any F
+            ?? ( json_obj_get body `season` ) { T sv → { ?? ( json_num_as_i sv ) { T x → { ( json_obj_set vo `window_size` ( json_int x ) ) = any T } F _ → {} } } F _ → {} }
+            ?? ( json_obj_get body `window_points` ) { T sv → { ?? ( json_num_as_i sv ) { T x → { ( json_obj_set vo `window_points` ( json_int x ) ) = any T } F _ → {} } } F _ → {} }
+            ?? ( json_obj_get body `window_minutes` ) { T sv → { ?? ( json_num_as_i sv ) { T x → { ( json_obj_set vo `window_minutes` ( json_int x ) ) = any T } F _ → {} } } F _ → {} }
+            ? any {
+                : Json vers ( json_obj_new )
+                ( json_obj_set vers ANOM_FC_NAME vo )
+                : Json patch ( json_obj_new )
+                ( json_obj_set patch `versions` vers )
+                : String perr ( model_apply_meta_patch mo patch )
+                ( string_free perr )
+                ( json_free patch )
+            } { ( json_free vo ) }
+            ( json_free body )
+        }
+        F _ → {}
+    }
+    : String err ( model_train_forecast mo )
+    ? == ( string_len err ) 0 {
+        : *FcModel fc ( model_forecast mo )
+        : String msg ( string_from `Forecast models trained for model ` )
+        ( string_push_str msg ( string_data mname ) )
+        : Json o ( __an_ok_msg ( string_data msg ) )
+        ( string_free msg )
+        ( json_obj_set o `features` ( _an_jarr_of_strs . fc feats ) )
+        ( json_obj_set o `training_data_points` ( json_int . fc trained_on ) )
+        ( json_obj_set o `season` ( json_int . fc season ) )
+        : HttpResponse rr ( response_json 200 o )
+        ( json_free o )
+        ( string_free err )
+        ( model_free mo )
+        ( store_free st )
+        ( string_free mname )
+        ^ rr
+    } {
+        : HttpResponse re ( __an_json_err 400 ( string_data err ) )
+        ( string_free err )
+        ( model_free mo )
+        ( store_free st )
+        ( string_free mname )
+        ^ re
+    }
+}
+
+// GET /models/dynamic/<model>/forecast?horizon=H: the next H values of
+// every watched feature from the states as they stand (the ring's
+// newest rows absorbed first), with standard errors.
+@ __an_h_forecast HttpRequest req Params p → HttpResponse {
+    : String mname ( __an_param_model p )
+    ? ( __an_name_ok ( string_data mname ) ) {} {
+        ( string_free mname )
+        ^ ( __an_bad_name )
+    }
+    : Gate gate ( __an_gate_model req ( string_data mname ) F F )
+    ? . gate allowed {} {
+        : HttpResponse rd ( __an_gate_deny gate )
+        ( __an_gate_free gate )
+        ( string_free mname )
+        ^ rd
+    }
+    ( __an_gate_free gate )
+    : Store st ( store_open g_an_root )
+    ? ( store_exists st ( string_data mname ) ) {} {
+        : HttpResponse r404 ( __an_404_model ( string_data mname ) )
+        ( store_free st )
+        ( string_free mname )
+        ^ r404
+    }
+    : ~ i h ( __an_query_int . req query `horizon` 12 )
+    ? < h 1 { = h 1 } {}
+    ? > h 1000 { = h 1000 } {}
+    : *Model mo ( model_open st ( string_data mname ) )
+    : *FcModel fc ( model_forecast mo )
+    : ~ HttpResponse resp ( response_status_only 500 )
+    ? . fc trained {
+        ( http_response_free resp )
+        ( model_forecast_sync mo )
+        : FcForecast ff ( fc_forecast fc h )
+        : Json o ( json_obj_new )
+        ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
+        ( json_obj_set o `horizon` ( json_int h ) )
+        ( json_obj_set o `season` ( json_int . fc season ) )
+        ( json_obj_set o `points_absorbed` ( json_int . fc pos ) )
+        ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled ( model_metadata mo ) ANOM_FC_NAME F ) ) )
+        : Json fa ( json_arr_new )
+        : i nw ( vec_len [String] . ff feats )
+        : ~ i j 0
+        ~ < j nw {
+            : Json fo ( json_obj_new )
+            ?? ( vec_get [String] . ff feats j ) { T fn → { ( json_obj_set fo `feature` ( json_str_lit ( string_data fn ) ) ) } F _ → {} }
+            ?? ( vec_get [( Vec f )] . ff mean j ) { T mv → { ( json_obj_set fo `mean` ( _an_jarr_of_floats mv ) ) } F _ → {} }
+            ?? ( vec_get [( Vec f )] . ff se j ) { T sv → { ( json_obj_set fo `se` ( _an_jarr_of_floats sv ) ) } F _ → {} }
+            : *ArimaModel am ( model_forecast_model mo j )
+            ( json_obj_set fo `model` ( arima_coef am ) )
+            ( json_arr_push fa fo )
+            = j + j 1
+        }
+        ( json_obj_set o `forecasts` fa )
+        ( fc_forecast_free ff )
+        = resp ( response_json 200 o )
+        ( json_free o )
+    } {
+        ( http_response_free resp )
+        = resp ( __an_json_err 400 `the forecast version is not trained: POST /train/forecast/<model> first` )
+    }
+    ( model_free mo )
+    ( store_free st )
+    ( string_free mname )
+    ^ resp
+}
+
 @ __an_h_metadata HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -863,6 +1030,7 @@ $ `stdlib/std/thread.nu`
             ( json_obj_set o `owner` ( json_str_lit ( string_data owner ) ) )
             ( json_obj_set o `editable_fields` ( meta_editable_fields ) )
             ( json_obj_set o `autoencoder` ( __an_ae_json st ( string_data mname ) mm ) )
+            ( json_obj_set o `forecast` ( __an_fc_json st ( string_data mname ) mm ) )
             ( http_response_free resp )
             = resp ( response_json 200 o )
             ( json_free o )
@@ -2559,6 +2727,7 @@ $ `stdlib/std/thread.nu`
 @ __an_margin_units s vname → s {
     ? ( _an_is_guard_name vname ) { ^ `standard_deviations` } {}
     ? ( _an_is_flat_name vname ) { ^ `fraction` } {}
+    ? ( _an_is_fc_name vname ) { ^ `forecast_standard_errors` } {}
     ^ ? == ( nurl_str_eq vname `autoencoder` ) 1 `relative_to_threshold` `absolute`
 }
 
@@ -5199,6 +5368,8 @@ $ `stdlib/std/thread.nu`
     ( router_post r `/api/dynamic/:model/finetune` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_finetune req p ) } )
     ( router_get r `/models/dynamic/:model/calibration` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_calibration req p ) } )
     ( router_post r `/train/autoencoder/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_train_ae req p ) } )
+    ( router_post r `/train/forecast/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_train_fc req p ) } )
+    ( router_get r `/models/dynamic/:model/forecast` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_forecast req p ) } )
     ( router_post r `/models/dynamic/:model/claim` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_claim req p ) } )
     ( router_post r `/models/dynamic/:model/import` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_import req p ) } )
     ( router_get r `/api/auth/config` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_auth_config req p ) } )

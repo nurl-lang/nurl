@@ -22,7 +22,7 @@ language model working on the same data — an [MCP endpoint](#mcp-the-service-f
 at `/mcp` that exposes the whole API as tools, under the signed-in user's own
 rights.
 
-## Four versions beyond the plain forests
+## Five versions beyond the plain forests
 
 - **range_guard — the univariate check.** A forest scores a point as a
   whole: an air temperature of 95 °C among eleven normal readings is one
@@ -48,6 +48,26 @@ rights.
   Fine-tune leaves it alone — a rate target would only ever loosen it, a
   healthy training set holds almost no stuck columns — and `edit_model`
   sets it.
+- **forecast — the model of the sequence** (off by default; trained on
+  demand: `anomaly train-fc <model> [--season S]` / `POST
+  /train/forecast/<model>` / the dashboard's Forecast section / the MCP
+  tool `train_forecast`, and it retrains with the forests once on). A
+  temperature that reads an ordinary trough value at the top of its
+  daily cycle is inside every range and every joint distribution the
+  other versions know; only a model of the sequence can say it is wrong
+  for the moment. This version fits one seasonal ARIMA per numeric
+  feature ([`arima`](../arima) package: the stepwise order search, the
+  season the version's `window_size` gives in rows, the features fitted
+  on the machine's threads), keeps each model's Kalman state current
+  point by point, and judges every reading by how many standard errors
+  of its own one-step forecast it landed from it: the decision value is
+  `−max|z|`, the margin a sigma count (4 by default), and the verdict
+  names the feature. A reading a point leaves out is a gap to its model,
+  not a zero. The states are persisted with the ring position they stand
+  at and caught up from the stored rows when a request opens the model;
+  `GET /models/dynamic/<m>/forecast?horizon=H` (`anomaly forecast`, the
+  MCP tool `forecast`) reads the next H values per feature with standard
+  errors. Fine-tune sets its margin like the guard's.
 - **timevector — the sliding window.** `window_size` consecutive points
   flatten to one window vector; the forest trains on window vectors and
   detection scores the window ending at the incoming point. This is the
@@ -117,7 +137,7 @@ rights.
 - **Multiple time-window versions.** Each model trains one forest per
   enabled version — `short_term` (180 min), `daily` (24 h), `weekly`,
   `seasonal` (90 d) and `timevector` (last 100 points) — and the forestless
-  `range_guard` and `flatline` beside them, so the same stream is judged
+  `range_guard`, `flatline` and, once trained, `forecast` beside them, so the same stream is judged
   against several horizons at once. A point is anomalous if
   **any** version flags it; the reported `score` and `severity` are those
   of the most severe version (by severity, the unit-free measure below —
@@ -815,7 +835,8 @@ says why and what would be allowed instead.
 | `fork_model` | every member | a new model trained on a slice of another's history — a window, some columns; `llm_…` is scratch |
 | `labels` | every member | what readers have said about a model's rows |
 | `label_anomaly` | member on `llm_…`, admin on any | say a flagged row was a `false_positive` (calibration and `finetune` leave it out from then on), `confirmed`, or `none` to withdraw |
-| `retrain`, `train_autoencoder`, `finetune`, `edit_model`, `reset_model`, `delete_model` | member on `llm_…`, admin on any | the model's lifecycle; destructive ones need `confirm: true` |
+| `forecast` | every member | what the forecast version expects next, per feature, with standard errors |
+| `retrain`, `train_autoencoder`, `train_forecast`, `finetune`, `edit_model`, `reset_model`, `delete_model` | member on `llm_…`, admin on any | the model's lifecycle; destructive ones need `confirm: true` |
 | `ingest_point`, `import_data` | ingest key, admin | send a point / load a file of history — this teaches the model |
 | `claim_model`, `org_users`, `set_role`, `org_keys` | admin | ownership, the roster, roles, the key listing |
 
@@ -884,6 +905,8 @@ anomaly score  <model> key=val ...     # score only (never ingests/retrains)
 anomaly batch  [-f FILE] [-H] [-m M]   # stateless CSV scoring (index⇥score)
 anomaly train  <model>                 # force a retrain now
 anomaly train-ae <model>               # train the autoencoder version
+anomaly train-fc <model> [--season S]  # train the forecast version (a SARIMA per feature)
+anomaly forecast <model> [--horizon H] # the next H values per watched feature
 anomaly calibrate <model> [--last S]   # alert rates vs margins over a window
 anomaly finetune <model> [--rate R]    # set every margin from a target rate
                [--last S|all|own] [-n] #   (own: each version its own period;
@@ -910,7 +933,7 @@ command with `--store DIR`.
 | `GET\|POST /force_train/<model>` | retrain now |
 | `POST /detect_anomalies` | batch-score a CSV file (`{"file_path": ..., "has_header": ...}`) |
 | `GET /models/dynamic` | list models with metadata |
-| `GET /models/dynamic/<m>/metadata` | model metadata, plus the autoencoder's own state |
+| `GET /models/dynamic/<m>/metadata` | model metadata, plus the autoencoder's and the forecast version's own state |
 | `PUT /models/dynamic/<m>/metadata` | edit the schedule and the per-version configs (see below) |
 | `GET /models/dynamic/<m>/data?limit=N\|all` | recent raw points |
 | `GET /models/dynamic/<m>/export?format=csv\|jsonl` | the stored points as a download — the whole ring, or the `from`/`to`/`last` window and `fields` projection `/data` takes; CSV has one column per field any row carries, `timestamp` first; JSONL is the records line for line, which `/import?format=jsonl` takes back |
@@ -937,6 +960,8 @@ command with `--store DIR`.
 | `POST\|GET /models/dynamic/<m>/labels` | `{"index": N, "label": "false_positive" \| "confirmed" \| "none", "note": ".."}` — a reader's word on a stored row; the list in force |
 | `POST /api/dynamic/<m>/finetune` | set margins from a target alert rate — `{"rate": 0.01, "last": 86400 \| "all" \| "own", "dry_run": false, "versions": [..]}` |
 | `POST /train/autoencoder/<m>` | train the autoencoder version — optional `{"hidden": [..], "contamination": x}` |
+| `POST /train/forecast/<m>` | train the forecast version and switch it on — optional `{"season": S, "window_points": N, "window_minutes": M}` |
+| `GET /models/dynamic/<m>/forecast?horizon=H` | the next H values of every feature the forecast version watches, with standard errors and the fitted orders |
 
 Model names must match `^[a-zA-Z0-9_]+$`. The router is a plain function
 over `HttpRequest` — the test suite drives every route without a socket.
@@ -1168,7 +1193,7 @@ build step — plain HTML/CSS/JS that talks to the routes above):
 
 | Page | What it does |
 | --- | --- |
-| `/` · `/modelmanager.html` | list models — stored points beside the lifetime count, feature count, a button straight to the model's anomalies — train / finetune / reset / delete, export the stored points as CSV or JSONL; per model: toggle versions, edit margins and contamination with a live *flags in window* column from the calibration report, preview and apply a fine-tune for a target alert rate, train the autoencoder, edit the retrain schedule — or, under *Advanced*, the whole editable metadata, as a generated field form or as raw JSON. Every alert-affecting control carries a `?` that says what it means and which way to move it |
+| `/` · `/modelmanager.html` | list models — stored points beside the lifetime count, feature count, a button straight to the model's anomalies — train / finetune / reset / delete, export the stored points as CSV or JSONL; per model: toggle versions, edit margins and contamination with a live *flags in window* column from the calibration report, preview and apply a fine-tune for a target alert rate, train the autoencoder, train the forecast version (its season and fit window), edit the retrain schedule — or, under *Advanced*, the whole editable metadata, as a generated field form or as raw JSON. Every alert-affecting control carries a `?` that says what it means and which way to move it |
 | `/modeltrainer.html` | import a CSV/JSON/JSONL file of history — inspect first: the page shows where it found the time (a column, year/month/day parts, or none) and lets you confirm or change it; feed points (`/detect`) one at a time or in bulk; force-train |
 | `/visualize.html` | plot any numeric feature of a model's stored points over time |
 | `/admin.html` | the organization: users and their roles, API keys, model ownership |
@@ -1194,7 +1219,7 @@ $ `deps/anomaly/src/dynamic.nu`
 `model_open / model_ingest / model_detect_only / model_scan /
 model_ae_contrib / model_point_json / model_force_train / model_reset /
 model_delete / model_calibrate / model_finetune / model_finetune_at /
-model_train_autoencoder /
+model_train_autoencoder / model_train_forecast / model_forecast /
 model_set_schedule / model_set_margin / model_set_version_enabled /
 model_set_version_window / model_apply_meta_patch / model_metadata /
 model_free`, plus the layers beneath:

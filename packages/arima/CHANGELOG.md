@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.2.0
+
+- **The exact likelihood by the Chandrasekhar recursions.** With a
+  time-invariant model started at its stationary covariance the covariance
+  recursion's increment has rank one and its own recursion, so a filter
+  step costs O(r) instead of the Kalman form's O(r²), and the start needs
+  only the first column of the covariance, solved in O(r²) instead of r³.
+  The innovations and their variances are the covariance filter's (pinned
+  to 1e-9 relative in the algebra test; the statsmodels oracle unchanged).
+  A weekly-season fit (r = 170, n = 3 000) went from 10 s to 0.34 s; the
+  stepwise search on a daily season from 42 s to 0.5 s and on a weekly one
+  from 250 s to 3 s. The device kernel runs the same recursion, one thread
+  per model with the working vectors interleaved across the models, bit for
+  bit the CPU's on both backends.
+- **The stepwise search screens fairly.** Candidates are screened by
+  conditional sum of squares past 150 points or a season longer than 12
+  (R's `approximation` rule) and the winner is always refitted exactly. Every
+  screened candidate now conditions on the largest order in play, so the
+  candidates are scored on the same observations: conditioning each on its
+  own order let the higher orders win on the points they drop — on a true
+  AR(1), AR(4) won by 5 AICc where the exact likelihood prefers AR(1) by 4.
+  A screened candidate no longer pays for standard errors or a filtered
+  state it will not keep. The CSS pass visits only the lags a seasonal
+  polynomial carries (bit-identical sums; 25× fewer terms for a season).
+- **Streaming additions for a detector.** `arima_update` with a NaN
+  observation is a gap: the time update alone, the answer carrying the
+  prediction and a NaN innovation. `arima_restart` puts the state back to a
+  fresh fit's so a stored history can be replayed; `arima_clone` deep-copies
+  a model so a copy can be stepped without moving the original. Restart +
+  replay reproduces the streamed state bit for bit (test).
+- Shared job helpers renamed to single-underscore names (`_ar_job_new`,
+  `_ar_jobs_run`, `_ar_jobs_free`), as the compiler's cross-file rule asks.
+
 ## 0.1.0
 
 - **Seasonal ARIMA, exact and fast.** SARIMA(p,d,q)(P,D,Q)_s with an optional

@@ -10,6 +10,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`packages/anomaly` 0.20.0 — the forecast version: a seasonal ARIMA
+  per feature.** The forests see a point as a whole and the guards one
+  reading at a time; a temperature that reads an ordinary trough value at
+  the top of its daily cycle passed every one of them. The new `forecast`
+  version fits one SARIMA per numeric feature at each retrain (the `arima`
+  package's stepwise order search, on the machine's threads), keeps each
+  model's state current point by point, and judges every reading by how
+  many standard errors of its own forecast it landed from it, naming the
+  feature; a missing reading is a gap, not a zero. States persist with the
+  ring position they stand at and are caught up from the stored rows when
+  a request opens the model. Off by default; the CLI (`train-fc`,
+  `forecast`), the HTTP routes (`POST /train/forecast/<m>`,
+  `GET /models/dynamic/<m>/forecast`), the dashboard's Forecast section
+  and the MCP tools `train_forecast` / `forecast` — under the autoencoder's
+  rights — fit and read it.
+  [`packages/anomaly/CHANGELOG.md`](packages/anomaly/CHANGELOG.md).
+- **`stdlib/std/float.nu`: `float_nan` and `float_inf`.** The stdlib could
+  test for NaN and infinity but not make them; a stream of doubles needs
+  "no value", and `( bits_to_f64 0x7ff8… )` is not how anyone should spell
+  it.
+
+### Changed
+
+- **`packages/arima` 0.2.0 — the exact likelihood by the Chandrasekhar
+  recursions.** With a time-invariant model started at its stationary
+  covariance the filter's covariance increment has rank one and its own
+  recursion, so a step costs O(r) instead of O(r²) and the start needs
+  only the first column of the covariance: a weekly-season fit went from
+  10 s to 0.34 s and the order search on a daily season from 42 s to 0.5 s,
+  the innovations and variances the covariance filter's (pinned by test).
+  The search screens by CSS past 150 points or a season over 12 (R's rule)
+  with every candidate conditioned on the largest order in play — R's
+  own-order conditioning let the higher orders win on the points they
+  drop — and always refits the winner exactly. The full model's streaming
+  step freezes its gain once the covariance has converged (O(r) per
+  update, persisted so a reload steps on bit for bit); `arima_update` with
+  NaN is a gap; `arima_restart` and `arima_clone` for replays and scans.
+
 - **`packages/arima` 0.1.0 — seasonal ARIMA forecasting: exact, fast,
   streaming.** SARIMA(p,d,q)(P,D,Q)_s estimated CSS-ML — exact Gaussian
   maximum likelihood by the Kalman filter with the model's own stationary

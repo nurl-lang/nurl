@@ -9,6 +9,7 @@
 //                              retrain can pick up new categories/columns)
 //     version_<v>.forest       one binary forest blob per trained version
 //     autoencoder.json         the trained autoencoder, if any
+//     forecast.json            the forecast version's models and states, if trained
 //     scores.bin               cached per-point verdicts (epoch-stamped)
 //
 // The forest blob ("ANOMFOR1") is a little-endian dump of the iforest node
@@ -28,6 +29,7 @@ $ `stdlib/std/sort.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
 $ `src/autoenc.nu`
+$ `src/forecast.nu`
 $ `deps/iforest/src/iforest.nu`
 
 // Refuse to load blobs claiming more than this many arena nodes / trees /
@@ -393,6 +395,45 @@ $ `deps/iforest/src/iforest.nu`
     } {}
     ( string_free d )
     ^ ok
+}
+
+// Persist / load / drop the forecast version (src/forecast.nu).
+@ store_save_fc Store st s name * FcModel fc → b {
+    : String d ( __an_model_dir st name )
+    : !v IoErr mk ( dir_create_all ( string_data d ) )
+    : ~ b ok T
+    ?? mk { T _ → {} F _ → { = ok F } }
+    ? ok {
+        : String txt ( fc_to_json_str fc )
+        : ( Vec u ) data ( bytes_from_str ( string_data txt ) )
+        : String p ( __an_model_file st name `forecast.json` )
+        = ok ( __an_write_atomic ( string_data p ) data )
+        ( string_free p )
+        ( vec_free [u] data )
+        ( string_free txt )
+    } {}
+    ( string_free d )
+    ^ ok
+}
+
+@ store_load_fc Store st s name → ?*FcModel {
+    : String p ( __an_model_file st name `forecast.json` )
+    : !String IoErr r ( read_file ( string_data p ) )
+    ( string_free p )
+    ?? r {
+        T txt → {
+            : ?*FcModel m ( fc_from_json_str ( string_data txt ) )
+            ( string_free txt )
+            ^ m
+        }
+        F _ → { ^ @ ?*FcModel { F } }
+    }
+}
+
+@ store_delete_fc Store st s name → v {
+    : String p ( __an_model_file st name `forecast.json` )
+    : !v IoErr _r ( file_delete ( string_data p ) )
+    ( string_free p )
 }
 
 @ store_load_ae Store st s name → ?AeModel {

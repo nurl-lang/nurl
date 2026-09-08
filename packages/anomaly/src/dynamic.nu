@@ -36,6 +36,7 @@ $ `src/prep.nu`
 $ `src/model.nu`
 $ `src/score.nu`
 $ `src/autoenc.nu`
+$ `src/forecast.nu`
 $ `src/store.nu`
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -93,6 +94,7 @@ $ `src/store.nu`
     Scaler sc
     AeModel ae
     b ae_stale  // the net names features the current encoding no longer makes
+    * FcModel fc  // the forecast version (src/forecast.nu); untrained handle when none
     i next_train_at
     i min_points
     i max_points
@@ -239,6 +241,31 @@ $ `src/store.nu`
     }
     = . mo ae_stale ( an_ae_stale mm . mo ae )
 
+    // The forecast version: its models with their states as last saved,
+    // placed in the ring by the sequence number the file carries. Rows
+    // the file has not seen are absorbed when the version next judges
+    // (__an_fc_sync); a file older than the ring's first row starts the
+    // states over. Models over a feature order the metadata no longer
+    // has are stale and dropped — the next train refits them.
+    ?? ( store_load_fc . mo store name ) {
+        T fc → { = . mo fc fc }
+        F → { = . mo fc ( fc_new ) }
+    }
+    ? . . mo fc trained {
+        ? ( __an_fc_stale mo ) { ( fc_clear . mo fc ) } {
+            : *FcModel fc . mo fc
+            : i np2 ( vec_len [String] . mo lines )
+            : ~ i pos - . fc seq ( model_seq_base mo )
+            ? > pos np2 { = pos np2 } {}
+            ? < pos 0 {
+                : ~ i j 0
+                ~ < j . fc nw { ( arima_restart ( _fc_model_at fc j ) ) = j + j 1 }
+                = pos 0
+            } {}
+            = . fc pos pos
+        }
+    } {}
+
     // Next scheduled training mark, from the lifetime counter.
     ? == ( vec_len [VerModel] . mo forests ) 0 {
         = . mo next_train_at . mo min_points
@@ -307,6 +334,7 @@ $ `src/store.nu`
     ( vec_free [i] . mo times )
     ( scaler_free . mo sc )
     ( ae_free . mo ae )
+    ( fc_free . mo fc )
     ( meta_free . mo meta )
     ( string_free . mo mname )
     ( store_free . mo store )
@@ -413,6 +441,9 @@ $ `src/store.nu`
     ( Vec f ) ae_x  // n × ae_nfeat, raw projection onto the autoencoder's own feature order
     ( Vec ( Vec f ) ) dfs  // per forest index: its decision for every row
     ( Vec ( Vec i ) ) dfs_ok  // per forest index: 1 where that decision stands (a timevector forest has none for a row whose window is not all here)
+    i fc_nw
+    ( Vec f ) fc_z  // n × fc_nw: the forecast version's z per watched feature, by replay (NaN = not judged)
+    ( Vec i ) fc_ok  // 1 where the row has forecast z-scores
 }
 
 @ __an_hist_free * Hist h → v {
@@ -422,6 +453,8 @@ $ `src/store.nu`
     ( vec_free [f] . h ae_x )
     ( vec_free_with [( Vec f )] . h dfs \ ( Vec f ) d → v { ( vec_free [f] d ) } )
     ( vec_free_with [( Vec i )] . h dfs_ok \ ( Vec i ) d → v { ( vec_free [i] d ) } )
+    ( vec_free [f] . h fc_z )
+    ( vec_free [i] . h fc_ok )
     ( nurl_free # *u h )
 }
 
@@ -464,9 +497,34 @@ $ `src/store.nu`
     : ( Vec f ) x ( vec_with_cap [f] * n nfeat )
     : ( Vec i ) ok ( vec_with_cap [i] n )
     : ( Vec f ) ae_x ( vec_with_cap [f] * n ae_nfeat )
+    // The forecast version replays a copy of its models over the rows:
+    // a restart ANOM_FC_BURN rows before the window (the diffuse start
+    // has faded by then), then every row, each row's z-scores kept when
+    // it is in the window.
+    : *FcModel fc . mo fc
+    : ~ i fc_nw 0
+    ? & . fc trained ( meta_version_enabled mm ANOM_FC_NAME F ) { = fc_nw . fc nw } {}
+    : ( Vec f ) fc_z ( vec_with_cap [f] * n fc_nw )
+    : ( Vec i ) fc_ok ( vec_with_cap [i] n )
+    : ~ ( Vec i ) copies ( vec_new [i] )
+    ? > fc_nw 0 {
+        ( vec_free [i] copies )
+        = copies ( fc_replay_begin fc )
+        : ~ i b0 - lo ANOM_FC_BURN
+        ? < b0 0 { = b0 0 } {}
+        : ( Vec f ) noz ( vec_new [f] )
+        ~ < b0 lo {
+            : ( Vec f ) fr ( __an_fc_row mo b0 )
+            ( fc_replay_step copies fr noz )
+            ( vec_free [f] fr )
+            = b0 + b0 1
+        }
+        ( vec_free [f] noz )
+    } {}
     : ~ i k lo
     ~ < k hi {
         : ~ b got F
+        : ~ b fgot F
         ?? ( vec_get [String] . mo lines k ) {
             T l → {
                 : !Json JsonError jr ( json_parse ( string_data l ) )
@@ -483,6 +541,15 @@ $ `src/store.nu`
                                     : ( Vec f ) araw ( anomaly_project p . cae feats )
                                     ( vec_extend [f] ae_x araw )
                                     ( vec_free [f] araw )
+                                } {}
+                                ? > fc_nw 0 {
+                                    : ( Vec f ) fr ( fc_project p . fc feats )
+                                    : ( Vec f ) zrow ( vec_zeroed [f] fc_nw )
+                                    ( fc_replay_step copies fr zrow )
+                                    ( vec_extend [f] fc_z zrow )
+                                    ( vec_free [f] zrow )
+                                    ( vec_free [f] fr )
+                                    = fgot T
                                 } {}
                                 ( enc_free p )
                                 = got T
@@ -503,8 +570,23 @@ $ `src/store.nu`
             = z 0
             ~ < z ae_nfeat { ( vec_push [f] ae_x 0.0 ) = z + z 1 }
         }
+        ? fgot { ( vec_push [i] fc_ok 1 ) } {
+            ( vec_push [i] fc_ok 0 )
+            ? > fc_nw 0 {
+                // a row that did not parse is a gap to the models too
+                : ( Vec f ) gap ( vec_zeroed [f] fc_nw )
+                : *f gp ( vec_data [f] gap )
+                : ~ i z 0
+                ~ < z fc_nw { = . gp z ( float_nan ) ( vec_push [f] fc_z ( float_nan ) ) = z + z 1 }
+                : ( Vec f ) noz ( vec_new [f] )
+                ( fc_replay_step copies gap noz )
+                ( vec_free [f] noz )
+                ( vec_free [f] gap )
+            } {}
+        }
         = k + k 1
     }
+    ( fc_replay_end copies )
     // Every forest over the whole matrix at once. A point-wide forest takes
     // the matrix as it is; a timevector forest takes each row's window —
     // the W−1 rows before it and itself, all encoded here — laid out in
@@ -596,6 +678,9 @@ $ `src/store.nu`
     = . h ae_x ae_x
     = . h dfs dfs
     = . h dfs_ok dfs_ok
+    = . h fc_nw fc_nw
+    = . h fc_z fc_z
+    = . h fc_ok fc_ok
     ^ h
 }
 
@@ -645,7 +730,7 @@ $ `src/store.nu`
 // Score `p` as though it sat at ring position `end` — the point's own slot,
 // exclusive: rows [0, end) are its past and everything from `end` on is
 // future the verdict must not see.
-@ __an_score_enc_upto * Model mo EncPoint p i end → Verdict {
+@ __an_score_enc_upto * Model mo EncPoint p i end b absorb → Verdict {
     : *Meta mm . mo meta
     : ( Vec f ) x ( anomaly_project p . mm feats )
     ( scaler_apply . mo sc x )
@@ -655,7 +740,13 @@ $ `src/store.nu`
         ( vec_free [f] araw )
         = araw ( anomaly_project p . cae feats )
     } {}
-    ^ ( __an_score_core mo x araw end # *Hist 0 )
+    : *FcModel fc . mo fc
+    : ~ ( Vec f ) fraw ( vec_new [f] )
+    ? . fc trained {
+        ( vec_free [f] fraw )
+        = fraw ( fc_project p . fc feats )
+    } {}
+    ^ ( __an_score_core mo x araw fraw end # *Hist 0 absorb )
 }
 
 // Score ring row `at` out of an encoded history that covers it.
@@ -666,21 +757,26 @@ $ `src/store.nu`
     : *f ap ( vec_data [f] . h ae_x )
     : ~ i c 0
     ~ < c . h ae_nfeat { ( vec_push [f] araw . ap + * r . h ae_nfeat c ) = c + c 1 }
-    ^ ( __an_score_core mo x araw at h )
+    ^ ( __an_score_core mo x araw ( vec_new [f] ) at h F )
 }
 
 // The verdict of a standardised point `x` (owned, freed here) sitting at
 // ring position `end`, with `araw` its raw projection onto the
-// autoencoder's feature order (owned; empty when the AE is untrained).
-// `h` is an encoded history covering the rows involved, or null: with one,
-// a forest's decision and the timevector window come out of it; without,
-// they are computed here and read from the ring.
-@ __an_score_core * Model mo ( Vec f ) x ( Vec f ) araw i end * Hist h → Verdict {
+// autoencoder's feature order (owned; empty when the AE is untrained)
+// and `fraw` its readings of the forecast version's watched features
+// (owned; empty when untrained or when `h` carries the replay). `h` is
+// an encoded history covering the rows involved, or null: with one, a
+// forest's decision, the timevector window and the forecast's z-scores
+// come out of it; without, they are computed here and read from the
+// ring, and `absorb` says the point is the ring's newest and the
+// forecast states take it in (the live ingest; detect_only leaves them).
+@ __an_score_core * Model mo ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i end * Hist h b absorb → Verdict {
     : ( Vec VerVerdict ) vvs ( vec_new [VerVerdict] )
     : b warm >= ( vec_len [String] . mo lines ) . mo min_points
     ? & ( model_is_trained mo ) warm {} {
         ( vec_free [f] x )
         ( vec_free [f] araw )
+        ( vec_free [f] fraw )
         ^ @ Verdict { F F 0.0 0.0 vvs }
     }
 
@@ -834,6 +930,61 @@ $ `src/store.nu`
         } {}
     } {}
 
+    // The forecast verdict: the reading furthest from its own forecast,
+    // in the forecast's standard errors, and the feature it is. Out of
+    // the history's replay when there is one; live otherwise, the states
+    // first caught up with the ring rows they have not seen.
+    : *FcModel fc . mo fc
+    ? & . fc trained ( meta_version_enabled mm ANOM_FC_NAME F ) {
+        : ~ b fready F
+        : ~ f fworst 0.0
+        : ~ i ffeat -1
+        ? hist {
+            : i r - end . h base
+            ? & & >= r 0 < r . h n > . h fc_nw 0 {
+                ? == ( _mlp_iget . h fc_ok r ) 1 {
+                    : ( Vec f ) zrow ( vec_with_cap [f] . h fc_nw )
+                    : *f zp ( vec_data [f] . h fc_z )
+                    : ~ i c 0
+                    ~ < c . h fc_nw { ( vec_push [f] zrow . zp + * r . h fc_nw c ) = c + c 1 }
+                    : FcPick pk ( fc_worst zrow . fc cols )
+                    ( vec_free [f] zrow )
+                    ? >= . pk feat 0 { = fready T = fworst . pk worst = ffeat . pk feat } {}
+                } {}
+            } {}
+        } {
+            ? == ( vec_len [f] fraw ) . fc nw {
+                ( __an_fc_sync mo end )
+                ? == . fc pos end {
+                    : FcOut fo ( fc_judge fc fraw absorb )
+                    = fready . fo ready
+                    = fworst . fo worst
+                    = ffeat . fo feat
+                    ( fc_out_free fo )
+                    ? & absorb >= . fc unsaved ANOM_FC_SAVE_EVERY { ( __an_fc_save mo ) } {}
+                } {}
+            } {}
+        }
+        ? fready {
+            : f fcdf - 0.0 fworst
+            : f fcmargin ( meta_version_margin mm ANOM_FC_NAME ANOM_FC_SIGMA )
+            : b fchit <= fcdf - 0.0 fcmargin
+            ? fchit { = any T } {}
+            : f fcsev ( anom_severity fcdf fcmargin )
+            ? || first > fcsev top_sev { = worst fcdf = top_sev fcsev } {}
+            = first F
+            ( vec_push [VerVerdict] vvs @ VerVerdict {
+                ( string_from ANOM_FC_NAME )
+                fchit
+                fcdf
+                fcmargin
+                fcmargin
+                ffeat
+            } )
+        } {}
+    } {}
+    ( vec_free [f] fraw )
+
     // The autoencoder verdict: reconstruction error against the trained
     // threshold, on the point projected onto the AE's OWN frozen feature
     // order (independent of the forests' scaler and current feats). Muted
@@ -867,7 +1018,208 @@ $ `src/store.nu`
 // has already been appended to the ring (ingest) and 0 when it has not
 // (detect_only).
 @ __an_score_enc * Model mo EncPoint p i ring_has_current → Verdict {
-    ^ ( __an_score_enc_upto mo p - ( vec_len [String] . mo lines ) ring_has_current )
+    ^ ( __an_score_enc_upto mo p - ( vec_len [String] . mo lines ) ring_has_current == ring_has_current 1 )
+}
+
+// ── The forecast version's place in the model ─────────────────────────
+
+// The watched features' readings of ring row `k` (NaN where the row has
+// none, or did not parse).
+@ __an_fc_row * Model mo i k → ( Vec f ) {
+    : *FcModel fc . mo fc
+    : ~ ( Vec f ) out ( vec_new [f] )
+    : ~ b got F
+    ?? ( vec_get [String] . mo lines k ) {
+        T l → {
+            : !Json JsonError jr ( json_parse ( string_data l ) )
+            ?? jr {
+                T j → {
+                    : !EncPoint String er ( anomaly_preprocess_ro . mo meta j )
+                    ?? er {
+                        T p → {
+                            ( vec_free [f] out )
+                            = out ( fc_project p . fc feats )
+                            ( enc_free p )
+                            = got T
+                        }
+                        F e → { ( string_free e ) }
+                    }
+                    ( json_free j )
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ? got {} {
+        : ~ i j 0
+        ~ < j . fc nw { ( vec_push [f] out ( float_nan ) ) = j + j 1 }
+    }
+    ^ out
+}
+
+// Bring the states up to ring row `target` (exclusive): the rows between
+// are read from the ring and absorbed in order.
+@ __an_fc_sync * Model mo i target → v {
+    : *FcModel fc . mo fc
+    : i n ( vec_len [String] . mo lines )
+    : ~ i t target
+    ? > t n { = t n } {}
+    ~ < . fc pos t {
+        : ( Vec f ) fr ( __an_fc_row mo . fc pos )
+        ( fc_absorb fc fr )
+        ( vec_free [f] fr )
+    }
+}
+
+// Write forecast.json with the states as they stand.
+@ __an_fc_save * Model mo → v {
+    : *FcModel fc . mo fc
+    = . fc seq + ( model_seq_base mo ) . fc pos
+    = . fc unsaved 0
+    ( store_save_fc . mo store ( string_data . mo mname ) fc )
+}
+
+// Do the trained models name features the metadata's order no longer
+// has at those places?
+@ __an_fc_stale * Model mo → b {
+    : *FcModel fc . mo fc
+    : *Meta mm . mo meta
+    : i nfeat ( vec_len [String] . mm feats )
+    : ~ b stale F
+    : ~ i j 0
+    ~ & ! stale < j . fc nw {
+        : i c ( _fc_geti . fc cols j )
+        ? >= c nfeat { = stale T } {
+            ?? ( vec_get [String] . mm feats c ) {
+                T fn → {
+                    ?? ( vec_get [String] . fc feats j ) {
+                        T wn → { ? ( string_eq fn wn ) {} { = stale T } }
+                        F _ → { = stale T }
+                    }
+                }
+                F _ → { = stale T }
+            }
+        }
+        = j + j 1
+    }
+    ^ stale
+}
+
+// Ensure a `forecast` VerCfg exists (off by default): a model from
+// before the version gains it at its next retrain.
+@ _an_ensure_fc_cfg * Model mo → v {
+    : *Meta mm . mo meta
+    ? < ( meta_find_version mm ANOM_FC_NAME ) 0 {} { ^ }
+    ( vec_push [VerCfg] . mm versions ( _an_vc_fc ) )
+}
+
+// The first row of the forecast's fit window over encoded rows whose
+// times are `ets`: the version's own window_minutes / window_points.
+@ __an_fc_from * Model mo ( Vec i ) ets i now → i {
+    : *Meta mm . mo meta
+    : i ne ( vec_len [i] ets )
+    : ~ i from 0
+    : i at ( meta_find_version mm ANOM_FC_NAME )
+    ? >= at 0 {
+        ?? ( vec_get [VerCfg] . mm versions at ) {
+            T vc → {
+                ? & > . vc window_min 0 ! . mm count_clock {
+                    : i cutoff - now * . vc window_min 60
+                    : *i sp ( vec_data [i] ets )
+                    : ~ i j 0
+                    ~ & < j ne < . sp j cutoff { = j + j 1 }
+                    = from j
+                } {}
+                ? > . vc window_pts 0 {
+                    : i tail - ne . vc window_pts
+                    ? > tail from { = from tail } {}
+                } {}
+            }
+            F _ → {}
+        }
+    } {}
+    ^ from
+}
+
+@ __an_fc_season * Model mo → i {
+    : *Meta mm . mo meta
+    : i at ( meta_find_version mm ANOM_FC_NAME )
+    ? >= at 0 {
+        ?? ( vec_get [VerCfg] . mm versions at ) { T vc → { ^ . vc window_size } F _ → {} }
+    } {}
+    ^ 0
+}
+
+// Fit the forecast version from encoded ring rows (in ring order, with
+// their times) and persist it. Returns the features watched.
+@ __an_fc_fit * Model mo ( Vec EncPoint ) encs ( Vec i ) ets i now → i {
+    : i from ( __an_fc_from mo ets now )
+    : i nw ( fc_train . mo fc . mo meta encs from ( __an_fc_season mo ) now )
+    ( __an_fc_save mo )
+    ^ nw
+}
+
+// The forecast version's handle, its j-th model, and its states caught
+// up with the ring (for a forecast from the newest row).
+@ model_forecast * Model mo → *FcModel {
+    ^ . mo fc
+}
+
+@ model_forecast_model * Model mo i j → *ArimaModel {
+    ^ ( _fc_model_at . mo fc j )
+}
+
+@ model_forecast_sync * Model mo → v {
+    ( __an_fc_sync mo ( vec_len [String] . mo lines ) )
+}
+
+// Train the forecast version now, on the ring as it stands, and switch
+// it on. The model must have trained once (a frozen feature order).
+// Returns the error text ("" = success).
+@ model_train_forecast * Model mo → String {
+    ^ ( model_train_forecast_at mo ( model_now mo ) )
+}
+
+@ model_train_forecast_at * Model mo i now → String {
+    : *Meta mm . mo meta
+    ? ( model_is_trained mo ) {} { ^ ( string_from `the model has not trained yet: the forecast version fits the feature order a first retrain freezes` ) }
+    : i n ( vec_len [String] . mo lines )
+    : ( Vec EncPoint ) encs ( vec_new [EncPoint] )
+    : ( Vec i ) ets ( vec_new [i] )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] . mo lines k ) {
+            T l → {
+                : !Json JsonError jr ( json_parse ( string_data l ) )
+                ?? jr {
+                    T j → {
+                        : !EncPoint String er ( anomaly_preprocess_ro mm j )
+                        ?? er {
+                            T p → {
+                                ( vec_push [EncPoint] encs p )
+                                : ~ i ts 0
+                                ?? ( vec_get [i] . mo times k ) { T t2 → { = ts t2 } F _ → {} }
+                                ( vec_push [i] ets ts )
+                            }
+                            F e → { ( string_free e ) }
+                        }
+                        ( json_free j )
+                    }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( _an_ensure_fc_cfg mo )
+    : i nw ( __an_fc_fit mo encs ets now )
+    ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
+    ( vec_free [i] ets )
+    ? > nw 0 {} { ^ ( string_from `no feature to forecast: a watched feature is a numeric column with at least 30 present, not all equal readings in the fit window` ) }
+    : b _on ( model_set_version_enabled mo ANOM_FC_NAME T )
+    ^ ( string_new )
 }
 
 // ── Training ──────────────────────────────────────────────────────────
@@ -959,6 +1311,11 @@ $ `src/store.nu`
         }
         = k + k 1
     }
+    // The forecast version, when it is on: a model per numeric feature,
+    // fitted on its own window of these rows and filtered over all of
+    // them (a version that is off keeps what it has, muted).
+    ( _an_ensure_fc_cfg mo )
+    ? ( meta_version_enabled mm ANOM_FC_NAME F ) { : i _nw ( __an_fc_fit mo encs ets now ) } {}
     ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
 
     // Shared scaler over the whole ring; standardise in place.
@@ -1478,6 +1835,7 @@ $ `src/store.nu`
                     F _ → {}
                 }
                 ?? ( vec_remove [i] . mo times 0 ) { T _ → {} F _ → {} }
+                ( fc_evict . mo fc )
                 ( store_write_points . mo store ( string_data . mo mname ) . mo lines )
             } {}
             ( __an_note_stored mo )
@@ -1719,6 +2077,9 @@ $ `src/store.nu`
     = . mo times mtimes
     = . mm n_seen + . mm n_seen accepted
     ( __an_note_stored mo )
+    // The merge re-indexed the ring under the forecast states; the train
+    // below refits them, and a ring still too small to train has none.
+    ? . . mo fc trained { ( fc_clear . mo fc ) ( store_delete_fc . mo store ( string_data . mo mname ) ) } {}
 
     // One write for the whole file, not one per point.
     ( store_write_points . mo store ( string_data . mo mname ) . mo lines )
@@ -2570,21 +2931,23 @@ $ `src/store.nu`
                             ? > ( vec_len [f] . . mo sc mean ) 0 { ( vec_push [String] out ( string_from nm ) ) } {}
                         } { ? ( _an_is_flat_name nm ) {
                                 ? ( __an_flat_fitted mo ) { ( vec_push [String] out ( string_from nm ) ) } {}
-                            } {
-                                : ~ b has F
-                                : i nf ( vec_len [VerModel] . mo forests )
-                                : ~ i j 0
-                                ~ < j nf {
-                                    ?? ( vec_get [VerModel] . mo forests j ) {
-                                        T vm → {
-                                            ? == ( nurl_str_eq ( string_data . vm vname ) nm ) 1 { = has T } {}
+                            } { ? ( _an_is_fc_name nm ) {
+                                    ? . . mo fc trained { ( vec_push [String] out ( string_from nm ) ) } {}
+                                } {
+                                    : ~ b has F
+                                    : i nf ( vec_len [VerModel] . mo forests )
+                                    : ~ i j 0
+                                    ~ < j nf {
+                                        ?? ( vec_get [VerModel] . mo forests j ) {
+                                            T vm → {
+                                                ? == ( nurl_str_eq ( string_data . vm vname ) nm ) 1 { = has T } {}
+                                            }
+                                            F _ → {}
                                         }
-                                        F _ → {}
+                                        = j + j 1
                                     }
-                                    = j + j 1
-                                }
-                                ? has { ( vec_push [String] out ( string_from nm ) ) } {}
-                            } } }
+                                    ? has { ( vec_push [String] out ( string_from nm ) ) } {}
+                                } } } }
                 } {}
             }
             F _ → {}
@@ -2969,6 +3332,8 @@ $ `src/store.nu`
     = . mo times ( vec_new [i] )
     ( scaler_free . mo sc )
     = . mo sc ( meta_scaler fresh )
+    ( fc_clear . mo fc )
+    ( store_delete_fc . mo store ( string_data . mo mname ) )
     = . mo next_train_at . mo min_points
 
     : ( Vec String ) none ( vec_new [String] )

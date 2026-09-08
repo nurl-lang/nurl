@@ -448,6 +448,15 @@ $ `stdlib/ext/json.nu`
     ( Vec f ) scratch  // rd × rd
     ( Vec f ) scratch2  // rd × rd
     ( Vec f ) pz  // rd
+    ( Vec f ) prev  // rd × rd, the covariance a step ago (the steady-state test)
+    ( Vec f ) kg  // rd, the gain once the covariance has converged
+    ( Vec f ) fz  // 2: [the innovation variance at convergence, 1.0 once converged]
+}
+
+// Has the covariance recursion converged (see _ar_step)?
+@ _ar_ss_steady ArimaSS ss → b {
+    : *f fz ( vec_data [f] . ss fz )
+    ^ != . fz 1 0.0
 }
 
 @ _ar_ss_free ArimaSS ss → v {
@@ -459,6 +468,9 @@ $ `stdlib/ext/json.nu`
     ( vec_free [f] . ss scratch )
     ( vec_free [f] . ss scratch2 )
     ( vec_free [f] . ss pz )
+    ( vec_free [f] . ss prev )
+    ( vec_free [f] . ss kg )
+    ( vec_free [f] . ss fz )
 }
 
 // Build the form from expanded polynomials (ar: "1 − Σ φ B^k" φ's; ma:
@@ -482,7 +494,7 @@ $ `stdlib/ext/json.nu`
     = . pth 0 1.0
     = k 0
     ~ < k qf { = . pth + k 1 . pma k = k + k 1 }
-    ^ @ ArimaSS { r nd rd phi th ( __ar_vec_copy delta ) ( vec_zeroed [f] rd ) ( vec_zeroed [f] * rd rd ) ( vec_zeroed [f] * rd rd ) ( vec_zeroed [f] * rd rd ) ( vec_zeroed [f] rd ) }
+    ^ @ ArimaSS { r nd rd phi th ( __ar_vec_copy delta ) ( vec_zeroed [f] rd ) ( vec_zeroed [f] * rd rd ) ( vec_zeroed [f] * rd rd ) ( vec_zeroed [f] * rd rd ) ( vec_zeroed [f] rd ) ( vec_zeroed [f] * rd rd ) ( vec_zeroed [f] rd ) ( vec_zeroed [f] 2 ) }
 }
 
 // out = T · X for a square X (rd × rd), T the transition matrix by its
@@ -643,13 +655,31 @@ $ `stdlib/ext/json.nu`
 // One filter step: observe y, update, predict the next. Returns the
 // innovation and its variance in σ² = 1 units; F ≤ 0 makes the step
 // report a negative variance (the caller treats that as failure).
-@ __ar_step ArimaSS ss f y → ArimaStep {
+// One filter step of the full model. The covariance recursion converges
+// (the model is time-invariant); once the step moved it by no more than
+// 10⁻¹⁴ (1 + F) in any element the gain is fixed — the steady state —
+// and a step is O(r_d): the innovation, the state moved by the gain, the
+// transition. Before that, the O(r_d²) covariance form. The two agree
+// to the last bit with what the covariance form would go on producing,
+// short of the increments it stopped adding.
+@ _ar_step ArimaSS ss f y → ArimaStep {
+    : i rd . ss rd
+    : *f A ( vec_data [f] . ss a )
+    : *f fz ( vec_data [f] . ss fz )
+    ? != . fz 1 0.0 {
+        : f fss . fz 0
+        : f pred ( __ar_predicted ss )
+        : f v - y pred
+        : *f G ( vec_data [f] . ss kg )
+        : ~ i i 0
+        ~ < i rd { = . A i + . A i * . G i v = i + i 1 }
+        ( __ar_tvec ss )
+        ^ @ ArimaStep { v fss pred }
+    } {}
     : f fv ( __ar_observe ss )
     : f pred ( __ar_predicted ss )
     : f v - y pred
     ? > fv 0.0 {} { ^ @ ArimaStep { v -1.0 pred } }
-    : i rd . ss rd
-    : *f A ( vec_data [f] . ss a )
     : *f P ( vec_data [f] . ss pm )
     : *f pz ( vec_data [f] . ss pz )
     : f g / v fv
@@ -664,6 +694,26 @@ $ `stdlib/ext/json.nu`
     }
     ( __ar_tvec ss )
     ( __ar_predict_cov ss )
+    // the steady-state test against the covariance a step ago
+    : *f Q ( vec_data [f] . ss prev )
+    : ~ f dmax 0.0
+    = i 0
+    ~ < i * rd rd {
+        : f dd ( float_abs - . P i . Q i )
+        ? > dd dmax { = dmax dd } {}
+        = . Q i . P i
+        = i + i 1
+    }
+    ? <= dmax * 0.00000000000001 + 1.0 ( float_abs . P 0 ) {
+        : f fss ( __ar_observe ss )
+        ? > fss 0.0 {
+            : *f G ( vec_data [f] . ss kg )
+            = i 0
+            ~ < i rd { = . G i / . pz i fss = i + i 1 }
+            = . fz 0 fss
+            = . fz 1 1.0
+        } {}
+    } {}
     ^ @ ArimaStep { v fv pred }
 }
 
@@ -986,75 +1036,221 @@ $ `stdlib/ext/json.nu`
     i n_used
 }
 
-// Exact Gaussian log-likelihood of the differenced series w under the
-// coefficients, σ² concentrated out.
+// The ARMA block alone, padded to the state's width: φ_1..φ_r and
+// θ_0 = 1, θ_1..θ_{r−1} — what the exact likelihood works from.
+: ArimaArma {
+    i r
+    ( Vec f ) phi
+    ( Vec f ) theta
+}
+
+@ _ar_arma_new ( Vec f ) ar ( Vec f ) ma → ArimaArma {
+    : i pf ( vec_len [f] ar )
+    : i qf ( vec_len [f] ma )
+    : ~ i r pf
+    ? > + qf 1 r { = r + qf 1 } {}
+    ? < r 1 { = r 1 } {}
+    : ( Vec f ) phi ( vec_zeroed [f] r )
+    : ( Vec f ) th ( vec_zeroed [f] r )
+    : *f pphi ( vec_data [f] phi )
+    : *f pth ( vec_data [f] th )
+    : *f par ( vec_data [f] ar )
+    : *f pma ( vec_data [f] ma )
+    : ~ i k 0
+    ~ < k pf { = . pphi k . par k = k + k 1 }
+    = . pth 0 1.0
+    = k 0
+    ~ < k qf { = . pth + k 1 . pma k = k + k 1 }
+    ^ @ ArimaArma { r phi th }
+}
+
+@ _ar_arma_free ArimaArma a → v {
+    ( vec_free [f] . a phi )
+    ( vec_free [f] . a theta )
+}
+
+// The first column of the stationary covariance, P e₀, in O(r²): the
+// four terms of _ar_init_cov applied to the unit vector instead of
+// multiplied out — Φ(Γ Φᵀe₀) + Φ(C Θᵀe₀) + Θ(Bᵀe₀) + Θ(Θᵀe₀) with B = ΦC.
+// It is all the Chandrasekhar recursion needs of P.
+@ _ar_init_col i r ( Vec f ) phiv ( Vec f ) thv ( Vec f ) out → b {
+    : *f phi ( vec_data [f] phiv )
+    : *f th ( vec_data [f] thv )
+    : *f po ( vec_data [f] out )
+    // the expanded polynomials back from the padded state form
+    : ~ i pf r
+    ~ & > pf 0 == . phi - pf 1 0.0 { = pf - pf 1 }
+    : ~ i qf - r 1
+    ~ & > qf 0 == . th qf 0.0 { = qf - qf 1 }
+    : ( Vec f ) ar ( vec_zeroed [f] pf )
+    : ( Vec f ) ma ( vec_zeroed [f] qf )
+    : ~ i k 0
+    ~ < k pf { ( vec_set [f] ar k . phi k ) = k + k 1 }
+    = k 0
+    ~ < k qf { ( vec_set [f] ma k . th + k 1 ) = k + k 1 }
+    : ( Vec f ) gamma ( vec_zeroed [f] r )
+    : ( Vec f ) psi ( vec_zeroed [f] r )
+    : b ok ( _ar_autocov ar ma r gamma psi )
+    ( vec_free [f] ar )
+    ( vec_free [f] ma )
+    ? ok {
+        : *f pg ( vec_data [f] gamma )
+        : *f pp ( vec_data [f] psi )
+        // x = Γ Φᵀe₀, y = C Θᵀe₀, b = Bᵀe₀ — Φ[i][m] = φ_{i+m}, Θ[i][l] = θ_{i+l},
+        // Γ[m][l] = γ(|m−l|), C[m][l] = ψ_{l−1−m} (l > m)
+        : ( Vec f ) xv ( vec_zeroed [f] r )
+        : ( Vec f ) yv ( vec_zeroed [f] r )
+        : ( Vec f ) bv ( vec_zeroed [f] r )
+        : *f x ( vec_data [f] xv )
+        : *f y ( vec_data [f] yv )
+        : *f b ( vec_data [f] bv )
+        : ~ i m 0
+        ~ < m r {
+            : ~ f sx 0.0
+            : ~ f sy 0.0
+            : ~ f sb 0.0
+            : ~ i l 0
+            ~ < l r {
+                : i dlt ? >= - m l 0 - m l - l m
+                = sx + sx * . pg dlt . phi l
+                ? > l m { = sy + sy * . pp - - l 1 m . th l } {}
+                ? < l m { = sb + sb * . phi l . pp - - m 1 l } {}
+                = l + l 1
+            }
+            = . x m sx
+            = . y m sy
+            = . b m sb
+            = m + m 1
+        }
+        : ~ i i 0
+        ~ < i r {
+            : ~ f v 0.0
+            : ~ i l 0
+            ~ < l - r i {
+                = v + v * . phi + i l + . x l . y l
+                = v + v * . th + i l + . b l . th l
+                = l + l 1
+            }
+            = . po i v
+            = i + i 1
+        }
+        ( vec_free [f] xv )
+        ( vec_free [f] yv )
+        ( vec_free [f] bv )
+    } {}
+    ( vec_free [f] gamma )
+    ( vec_free [f] psi )
+    ^ ok
+}
+
+// The exact Gaussian likelihood of the stationary series `w` (mean μ)
+// under the ARMA block, by the Chandrasekhar recursions (Morf, Sidhu &
+// Kailath 1974; Herbst 2015 for this form). The filter's covariance
+// recursion, started at the stationary P, moves by a rank-one increment
+// P_{t+1} − P_t = W_t M_t W_tᵀ, and that increment has its own recursion —
+// F_{t+1} = F_t + (Z W_t)² M_t, K_{t+1} = (K_t F_t + T W_t M_t Z W_t)/F_{t+1},
+// W_{t+1} = (T − K_{t+1} Z) W_t, M_{t+1} = M_t + (M_t Z W_t)²/F_t — so a
+// step costs O(r) where the covariance form costs O(r²): the same
+// innovations and variances, arrived at without P. `col` is P e₀ (the
+// start needs nothing else: F₁ = P₀₀, K₁ = T P e₀ / F₁, W₁ = K₁,
+// M₁ = −F₁). Once the increment is below 10⁻¹⁴ (1 + F) in every element
+// the gain is fixed — the steady state — and only the state moves.
+@ _ar_filter_arma ( Vec f ) phiv ( Vec f ) thv ( Vec f ) col ( Vec f ) w f mu → ArimaLik {
+    : i r ( vec_len [f] phiv )
+    : i n ( vec_len [f] w )
+    : *f phi ( vec_data [f] phiv )
+    : *f p0 ( vec_data [f] col )
+    : *f pw ( vec_data [f] w )
+    : f f0 . p0 0
+    ? > f0 0.0 {} { ^ @ ArimaLik { F 0.0 0.0 0 } }
+    : ( Vec f ) av ( vec_zeroed [f] r )
+    : ( Vec f ) kv ( vec_zeroed [f] r )
+    : ( Vec f ) wv ( vec_zeroed [f] r )
+    : ( Vec f ) ov ( vec_zeroed [f] r )
+    : *f A ( vec_data [f] av )
+    : *f K ( vec_data [f] kv )
+    : *f W ( vec_data [f] wv )
+    : *f O ( vec_data [f] ov )
+    : ~ i i 0
+    ~ < i r {
+        : ~ f v * . phi i . p0 0
+        ? < + i 1 r { = v + v . p0 + i 1 } {}
+        = . K i / v f0
+        = . W i . K i
+        = i + i 1
+    }
+    : ~ f fv f0
+    : ~ f mm - 0.0 f0
+    : ~ f logf ( float_log f0 )
+    : ~ b frozen F
+    : ~ b ok T
+    : ~ f ssq 0.0
+    : ~ f sumlog 0.0
+    : ~ i t 0
+    ~ & ok < t n {
+        : f v - - . pw t mu . A 0
+        = ssq + ssq / * v v fv
+        = sumlog + sumlog logf
+        // a ← T a + K v
+        = i 0
+        ~ < i r {
+            : ~ f x * . phi i . A 0
+            ? < + i 1 r { = x + x . A + i 1 } {}
+            = . O i + x * . K i v
+            = i + i 1
+        }
+        = i 0
+        ~ < i r { = . A i . O i = i + i 1 }
+        ? frozen {} {
+            : f w0 . W 0
+            : f fn + fv * * w0 w0 mm
+            : ~ f wmax 0.0
+            = i 0
+            ~ < i r {
+                : ~ f x * . phi i w0
+                ? < + i 1 r { = x + x . W + i 1 } {}
+                = . O i x
+                : f aw ( float_abs . W i )
+                ? > aw wmax { = wmax aw } {}
+                = i + i 1
+            }
+            ? <= * ( float_abs mm ) * wmax wmax * 0.00000000000001 + 1.0 fv { = frozen T } {
+                ? > fn 0.0 {
+                    = i 0
+                    ~ < i r {
+                        = . K i / + * . K i fv * * . O i mm w0 fn
+                        = . W i - . O i * . K i w0
+                        = i + i 1
+                    }
+                    = mm + mm / * * mm w0 * mm w0 fv
+                    = fv fn
+                    = logf ( float_log fv )
+                } { = ok F }
+            }
+        }
+        = t + t 1
+    }
+    ( vec_free [f] av )
+    ( vec_free [f] kv )
+    ( vec_free [f] wv )
+    ( vec_free [f] ov )
+    ? ok {} { ^ @ ArimaLik { F 0.0 0.0 0 } }
+    ^ ( _ar_lik_ml_from ssq sumlog n )
+}
+
 @ __ar_loglik_ml ArimaSpec sp ArimaCoef c ( Vec f ) w → ArimaLik {
     : ( Vec f ) ar ( _ar_expand_ar . c phi . c sphi . sp s )
     : ( Vec f ) ma ( _ar_expand_ma . c theta . c stheta . sp s )
-    : ( Vec f ) nodelta ( vec_new [f] )
-    : ArimaSS ss ( _ar_ss_new ar ma nodelta )
-    ( vec_free [f] nodelta )
+    : ArimaArma am ( _ar_arma_new ar ma )
     ( vec_free [f] ar )
     ( vec_free [f] ma )
+    : ( Vec f ) col ( vec_zeroed [f] . am r )
     : ~ ArimaLik out @ ArimaLik { F 0.0 0.0 0 }
-    ? ( _ar_init_cov ss ) {
-        : i n ( vec_len [f] w )
-        : *f pw ( vec_data [f] w )
-        : ~ f ssq 0.0
-        : ~ f sumlog 0.0
-        : ~ b ok T
-        : ~ i t 0
-        // The covariance recursion converges; once it has, every step
-        // costs O(r) instead of O(r²): the gain and the innovation
-        // variance are fixed and only the state moves.
-        : i r . ss r
-        : ( Vec f ) prev ( __ar_vec_copy . ss pm )
-        : *f pprev ( vec_data [f] prev )
-        : *f P ( vec_data [f] . ss pm )
-        : *f A ( vec_data [f] . ss a )
-        : *f phi ( vec_data [f] . ss phi )
-        : ( Vec f ) kv ( vec_zeroed [f] r )
-        : *f K ( vec_data [f] kv )
-        : ~ b frozen F
-        : ~ f fss 0.0
-        : ~ f logf 0.0
-        ~ & ok < t n {
-            ? frozen {
-                : f v - - . pw t . c mu . A 0
-                = ssq + ssq / * v v fss
-                = sumlog + sumlog logf
-                : ~ i i 0
-                ~ < i r { = . A i + . A i * . K i v = i + i 1 }
-                ( __ar_tvec ss )
-            } {
-                : ArimaStep st ( __ar_step ss - . pw t . c mu )
-                ? > . st variance 0.0 {
-                    = ssq + ssq / * . st innovation . st innovation . st variance
-                    = sumlog + sumlog ( float_log . st variance )
-                    : ~ f dmax 0.0
-                    : ~ i i 0
-                    ~ < i * r r {
-                        : f dd ( float_abs - . P i . pprev i )
-                        ? > dd dmax { = dmax dd } {}
-                        = . pprev i . P i
-                        = i + i 1
-                    }
-                    ? <= dmax * 0.00000000000001 + 1.0 ( float_abs . P 0 ) {
-                        = frozen T
-                        = fss . P 0
-                        = logf ( float_log fss )
-                        = i 0
-                        ~ < i r { = . K i / . P * i r fss = i + i 1 }
-                    } {}
-                } { = ok F }
-            }
-            = t + t 1
-        }
-        ( vec_free [f] prev )
-        ( vec_free [f] kv )
-        ? ok { = out ( _ar_lik_ml_from ssq sumlog n ) } {}
+    ? ( _ar_init_col . am r . am phi . am theta col ) {
+        = out ( _ar_filter_arma . am phi . am theta col w . c mu )
     } {}
-    ( _ar_ss_free ss )
+    ( vec_free [f] col )
+    ( _ar_arma_free am )
     ^ out
 }
 
@@ -1080,39 +1276,67 @@ $ `stdlib/ext/json.nu`
 }
 
 // Conditional sum of squares: residuals from the recursion with the
-// first p' values as given and earlier shocks zero; the "log-likelihood"
-// is the Gaussian one at those residuals.
-@ __ar_loglik_css ArimaSpec sp ArimaCoef c ( Vec f ) w → ArimaLik {
+// first values as given and earlier shocks zero; the "log-likelihood"
+// is the Gaussian one at those residuals. The recursion starts at
+// max(p', ncond): a model's own order on a plain fit (R's arima), and
+// the largest order in play when the stepwise search screens candidates
+// by CSS — conditioning each on its own order scores the candidates on
+// different observations, and the ones that drop more of the start win
+// on the drop, not the fit (measured on a true AR(1): AR(4) by 5 AICc,
+// against the exact likelihood's AR(1) by 4).
+@ __ar_loglik_css ArimaSpec sp ArimaCoef c ( Vec f ) w i ncond → ArimaLik {
     : ( Vec f ) ar ( _ar_expand_ar . c phi . c sphi . sp s )
     : ( Vec f ) ma ( _ar_expand_ma . c theta . c stheta . sp s )
     : i pf ( vec_len [f] ar )
     : i qf ( vec_len [f] ma )
     : i n ( vec_len [f] w )
+    : i nc ? > ncond pf ncond pf
     : ~ ArimaLik out @ ArimaLik { F 0.0 0.0 0 }
-    ? > n pf {
+    ? > n nc {
         : ( Vec f ) e ( vec_zeroed [f] n )
         : *f pe ( vec_data [f] e )
         : *f pw ( vec_data [f] w )
         : *f par ( vec_data [f] ar )
         : *f pma ( vec_data [f] ma )
+        // A seasonal polynomial is sparse — (p+1)(P+1)−1 terms across
+        // s·P+p lags — and a zero coefficient's term is exactly zero, so
+        // the lags that carry one are visited and the sums are the
+        // dense recursion's bit for bit.
+        : ( Vec i ) ari ( vec_new [i] )
+        : ( Vec i ) mai ( vec_new [i] )
+        : ~ i i 0
+        ~ < i pf { ? == . par i 0.0 {} { ( vec_push [i] ari i ) } = i + i 1 }
+        = i 0
+        ~ < i qf { ? == . pma i 0.0 {} { ( vec_push [i] mai i ) } = i + i 1 }
+        : i nar ( vec_len [i] ari )
+        : i nma ( vec_len [i] mai )
+        : *i pari ( vec_data [i] ari )
+        : *i pmai ( vec_data [i] mai )
         : ~ f ssq 0.0
-        : ~ i t pf
+        : ~ i t nc
         ~ < t n {
             : ~ f v - . pw t . c mu
-            : ~ i i 0
-            ~ < i pf { = v - v * . par i - . pw - t + i 1 . c mu = i + i 1 }
+            = i 0
+            ~ < i nar {
+                : i lag . pari i
+                = v - v * . par lag - . pw - t + lag 1 . c mu
+                = i + i 1
+            }
             : ~ i j 0
-            ~ < j qf {
-                : i at - t + j 1
-                ? >= at pf { = v - v * . pma j . pe at } {}
+            ~ < j nma {
+                : i lag . pmai j
+                : i at - t + lag 1
+                ? >= at nc { = v - v * . pma lag . pe at } {}
                 = j + j 1
             }
             = . pe t v
             = ssq + ssq * v v
             = t + t 1
         }
-        = out ( _ar_lik_css_from ssq - n pf )
+        = out ( _ar_lik_css_from ssq - n nc )
         ( vec_free [f] e )
+        ( vec_free [i] ari )
+        ( vec_free [i] mai )
     } {}
     ( vec_free [f] ar )
     ( vec_free [f] ma )
@@ -1122,19 +1346,20 @@ $ `stdlib/ext/json.nu`
 // ── The optimizer: BFGS over the transformed parameters ───────────────
 
 // What the objective needs to see: the spec, the differenced series, the
-// method, and a count of evaluations.
+// method (and CSS's conditioning count), and a count of evaluations.
 : ArimaObj {
     ArimaSpec sp
     ( Vec f ) w
     i method
+    i ncond
     i evals
 }
 
 // Negative log-likelihood at raw parameters; a huge value where the
 // likelihood does not exist. Pure: safe on any thread.
-@ __ar_eval ArimaSpec sp ( Vec f ) w i method ( Vec f ) raw → f {
+@ __ar_eval ArimaSpec sp ( Vec f ) w i method i ncond ( Vec f ) raw → f {
     : ArimaCoef c ( _ar_coef_of_raw sp raw )
-    : ArimaLik lk ? == method ARIMA_CSS ( __ar_loglik_css sp c w ) ( __ar_loglik_ml sp c w )
+    : ArimaLik lk ? == method ARIMA_CSS ( __ar_loglik_css sp c w ncond ) ( __ar_loglik_ml sp c w )
     ( _ar_coef_free c )
     ? . lk ok { ^ - 0.0 . lk loglik } {}
     ^ 1000000000000.0
@@ -1142,7 +1367,7 @@ $ `stdlib/ext/json.nu`
 
 @ __ar_objective * ArimaObj o ( Vec f ) raw → f {
     = . o evals + . o evals 1
-    ^ ( __ar_eval . o sp . o w . o method raw )
+    ^ ( __ar_eval . o sp . o w . o method . o ncond raw )
 }
 
 // One evaluation as a job: its parameters (raw, or — kind 1 — natural
@@ -1151,6 +1376,7 @@ $ `stdlib/ext/json.nu`
     ArimaSpec sp
     ( Vec f ) w
     i method
+    i ncond
     ( Vec f ) raw
     ( Vec f ) out
     i idx
@@ -1173,9 +1399,9 @@ $ `stdlib/ext/json.nu`
         ^
     } {}
     ? == . j kind 1 {
-        ( vec_set [f] . j out . j idx ( __ar_eval_natural . j sp . j w . j method . j raw ) )
+        ( vec_set [f] . j out . j idx ( __ar_eval_natural . j sp . j w . j method . j ncond . j raw ) )
     } {
-        ( vec_set [f] . j out . j idx ( __ar_eval . j sp . j w . j method . j raw ) )
+        ( vec_set [f] . j out . j idx ( __ar_eval . j sp . j w . j method . j ncond . j raw ) )
     }
 }
 
@@ -1191,7 +1417,7 @@ $ `stdlib/ext/json.nu`
 
 // Run every job: on a pool of __ar_threads workers striding the list
 // when `par`, else in place. Frees the jobs.
-@ __ar_jobs_run ( Vec i ) jobs b par → v {
+@ _ar_jobs_run ( Vec i ) jobs b par → v {
     : i n ( vec_len [i] jobs )
     : ~ i nt ? par ( __ar_threads ) 1
     ? > nt n { = nt n } {}
@@ -1228,7 +1454,7 @@ $ `stdlib/ext/json.nu`
 }
 
 // Free the jobs of a batch (their results have been read).
-@ __ar_jobs_free ( Vec i ) jobs → v {
+@ _ar_jobs_free ( Vec i ) jobs → v {
     : i n ( vec_len [i] jobs )
     : ~ i k 0
     ~ < k n { ( nurl_free # s ( _ar_geti jobs k ) ) = k + k 1 }
@@ -1236,14 +1462,15 @@ $ `stdlib/ext/json.nu`
 }
 
 // A state-space form at a parameter point, prepared for a device: the
-// expanded polynomials, the padded state vectors and, for ML, the
-// stationary covariance. What the kernel cannot compute itself.
+// expanded polynomials, the padded state vectors and, for ML, the first
+// column of the stationary covariance. What the kernel cannot compute
+// itself.
 : ArimaPrep {
     b ok
     i r
     ( Vec f ) phi
     ( Vec f ) theta
-    ( Vec f ) p0
+    ( Vec f ) p0  // ML: P e₀, r values
     ( Vec f ) ar
     ( Vec f ) ma
     f mu
@@ -1269,26 +1496,24 @@ $ `stdlib/ext/json.nu`
     = . p theta ( vec_new [f] )
     = . p p0 ( vec_new [f] )
     ? with_cov {
-        : ( Vec f ) nod ( vec_new [f] )
-        : ArimaSS ss ( _ar_ss_new . p ar . p ma nod )
-        ( vec_free [f] nod )
-        = . p ok ( _ar_init_cov ss )
-        = . p r . ss r
+        : ArimaArma am ( _ar_arma_new . p ar . p ma )
         ( vec_free [f] . p phi ) ( vec_free [f] . p theta ) ( vec_free [f] . p p0 )
-        = . p phi ( __ar_vec_copy . ss phi )
-        = . p theta ( __ar_vec_copy . ss theta )
-        = . p p0 ( __ar_vec_copy . ss pm )
-        ( _ar_ss_free ss )
+        = . p r . am r
+        = . p phi . am phi
+        = . p theta . am theta
+        = . p p0 ( vec_zeroed [f] . am r )
+        = . p ok ( _ar_init_col . am r . am phi . am theta . p p0 )
     } {}
     ( _ar_coef_free cf )
     ^ p
 }
 
-@ __ar_job_new ArimaSpec sp ( Vec f ) w i method ( Vec f ) raw ( Vec f ) out i idx i kind → i {
+@ _ar_job_new ArimaSpec sp ( Vec f ) w i method i ncond ( Vec f ) raw ( Vec f ) out i idx i kind → i {
     : *ArimaJob j # *ArimaJob ( nurl_malloc Z ArimaJob )
     = . j sp sp
     = . j w w
     = . j method method
+    = . j ncond ncond
     = . j raw raw
     = . j out out
     = . j idx idx
@@ -1305,7 +1530,8 @@ $ `stdlib/ext/json.nu`
     ? == . o method ARIMA_CSS { ^ * n + + pf qf 1 } {}
     : ~ i r pf
     ? > + qf 1 r { = r + qf 1 } {}
-    ^ * n * r r
+    // the Chandrasekhar step is O(r), the start O(r²) plus a (p'+1)-wide solve
+    ^ + * n * 4 r + * r r * * pf pf pf
 }
 
 // Evaluate the objective at every row of `raws` into `out`: on threads,
@@ -1319,13 +1545,13 @@ $ `stdlib/ext/json.nu`
     : ~ i i 0
     ~ < i m {
         ?? ( vec_get [( Vec f )] raws i ) {
-            T rw → { ( vec_push [i] jobs ( __ar_job_new . o sp . o w . o method rw out i 0 ) ) }
+            T rw → { ( vec_push [i] jobs ( _ar_job_new . o sp . o w . o method . o ncond rw out i 0 ) ) }
             F _ → {}
         }
         = i + i 1
     }
-    ( __ar_jobs_run jobs par )
-    ( __ar_jobs_free jobs )
+    ( _ar_jobs_run jobs par )
+    ( _ar_jobs_free jobs )
 }
 
 // ── The optimizer as a state machine ──────────────────────────────────
@@ -1718,7 +1944,7 @@ $ `stdlib/ext/json.nu`
     : ArimaSS ss . m ss
     : ~ i t 0
     ~ < t n {
-        : ArimaStep st ( __ar_step ss - . py t . mc mu )
+        : ArimaStep st ( _ar_step ss - . py t . mc mu )
         = . m last_innovation . st innovation
         = . m last_variance * . st variance . m sigma2
         = . m last_predicted + . st predicted . mc mu
@@ -1738,18 +1964,19 @@ $ `stdlib/ext/json.nu`
     : ( Vec i ) jobs ( vec_new [i] )
     : ~ i q 0
     ~ < q np {
-        ?? ( vec_get [( Vec f )] pts q ) { T pt → { ( vec_push [i] jobs ( __ar_job_new sp w . m method pt vals q 1 ) ) } F _ → {} }
+        ?? ( vec_get [( Vec f )] pts q ) { T pt → { ( vec_push [i] jobs ( _ar_job_new sp w . m method 0 pt vals q 1 ) ) } F _ → {} }
         = q + q 1
     }
     : *ArimaObj wo # *ArimaObj ( nurl_malloc Z ArimaObj )
     = . wo sp sp
     = . wo w w
     = . wo method . m method
+    = . wo ncond 0
     = . wo evals 0
     : b par > * ( __ar_work wo ) np ARIMA_PAR_WORK
     ( nurl_free # s wo )
-    ( __ar_jobs_run jobs par )
-    ( __ar_jobs_free jobs )
+    ( _ar_jobs_run jobs par )
+    ( _ar_jobs_free jobs )
     ( vec_free_with [( Vec f )] pts \ ( Vec f ) v → v { ( vec_free [f] v ) } )
     : ( Vec f ) se ( __ar_hessian_fold m vals )
     ( vec_free [f] vals )
@@ -1889,9 +2116,9 @@ $ `stdlib/ext/json.nu`
     ^ se
 }
 
-@ __ar_eval_natural ArimaSpec sp ( Vec f ) w i method ( Vec f ) x → f {
+@ __ar_eval_natural ArimaSpec sp ( Vec f ) w i method i ncond ( Vec f ) x → f {
     : ArimaCoef c ( _ar_coef_of_natural sp x )
-    : ArimaLik lk ? == method ARIMA_CSS ( __ar_loglik_css sp c w ) ( __ar_loglik_ml sp c w )
+    : ArimaLik lk ? == method ARIMA_CSS ( __ar_loglik_css sp c w ncond ) ( __ar_loglik_ml sp c w )
     ( _ar_coef_free c )
     ? . lk ok { ^ - 0.0 . lk loglik } {}
     ^ 1000000000000.0
@@ -1940,6 +2167,14 @@ $ `stdlib/ext/json.nu`
 }
 
 @ arima_fit_method ( Vec f ) y ArimaSpec sp0 i method → *ArimaModel {
+    ^ ( __ar_fit_cond y sp0 method 0 T )
+}
+
+// The fit with CSS's conditioning count given (0 = the model's own
+// order; the search passes the largest order it screens); without
+// `with_se` the model has neither standard errors nor a filtered state —
+// a screened candidate, judged by its AICc and discarded.
+@ __ar_fit_cond ( Vec f ) y ArimaSpec sp0 i method i ncond b with_se → *ArimaModel {
     : ArimaSpec sp ( arima_spec_with_mean sp0 . sp0 mean )
     : ( Vec f ) w ( arima_difference y . sp d . sp D . sp s )
     : ( Vec f ) raw ( __ar_raw_start w sp )
@@ -1947,6 +2182,7 @@ $ `stdlib/ext/json.nu`
     = . o sp sp
     = . o w w
     = . o method ARIMA_CSS
+    = . o ncond ncond
     = . o evals 0
     : ~ ArimaOpt opt ( __ar_bfgs o raw )
     : ~ i iters . opt iterations
@@ -1956,7 +2192,7 @@ $ `stdlib/ext/json.nu`
         = opt opt2
         = iters + iters . opt2 iterations
     } {}
-    : *ArimaModel m ( __ar_model_from_raw y w sp method raw . opt converged iters . o evals T )
+    : *ArimaModel m ( __ar_model_from_raw y w sp method ncond raw . opt converged iters . o evals with_se with_se )
     ( vec_free [f] raw )
     ( vec_free [f] w )
     ( nurl_free # s o )
@@ -1965,10 +2201,10 @@ $ `stdlib/ext/json.nu`
 
 // The model at an optimum: coefficients, statistics, standard errors,
 // and the full state filtered over the raw series.
-@ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method ( Vec f ) raw b converged i iters i evals b with_se → *ArimaModel {
+@ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i ncond ( Vec f ) raw b converged i iters i evals b with_se b with_state → *ArimaModel {
     : i k ( __ar_ncoef sp )
     : ArimaCoef c ( _ar_coef_of_raw sp raw )
-    : ArimaLik lk ? == method ARIMA_CSS ( __ar_loglik_css sp c w ) ( __ar_loglik_ml sp c w )
+    : ArimaLik lk ? == method ARIMA_CSS ( __ar_loglik_css sp c w ncond ) ( __ar_loglik_ml sp c w )
     : *ArimaModel m # *ArimaModel ( nurl_malloc Z ArimaModel )
     = . m spec sp
     = . m coef c
@@ -1991,7 +2227,10 @@ $ `stdlib/ext/json.nu`
     = . m last_innovation 0.0
     = . m last_variance 0.0
     = . m last_predicted 0.0
-    ( __ar_run_full m y )
+    // The full model's pass over the raw series is O(n · r_d²) — for a
+    // weekly season the cost of the fit itself over again — and a
+    // candidate the search will discard has no use for a state.
+    ? with_state { ( __ar_run_full m y ) } {}
     ^ m
 }
 
@@ -2029,11 +2268,13 @@ $ `stdlib/ext/json.nu`
     i kind  // 0 = transformed parameters, 1 = natural coefficients
 }
 
-// A context: the differenced series, the specification, the method.
+// A context: the differenced series, the specification, the method
+// (and CSS's conditioning count, 0 = the model's own order).
 : ArimaCtx {
     ArimaSpec sp
     ( Vec f ) w
     i method
+    i ncond
 }
 
 // The threaded CPU evaluator: every item on a thread of its own,
@@ -2051,6 +2292,7 @@ $ `stdlib/ext/json.nu`
                         = . o sp . cx sp
                         = . o w . cx w
                         = . o method . cx method
+                        = . o ncond . cx ncond
                         = . o evals 0
                         : i wk ( __ar_work o )
                         ? > wk big { = big wk } {}
@@ -2072,7 +2314,7 @@ $ `stdlib/ext/json.nu`
         ?? ( vec_get [ArimaEvalItem] items i ) {
             T it → {
                 ?? ( vec_get [ArimaCtx] ctxs . it ctx ) {
-                    T cx → { ( vec_push [i] jobs ( __ar_job_new . cx sp . cx w . cx method . it raw out i . it kind ) ) }
+                    T cx → { ( vec_push [i] jobs ( _ar_job_new . cx sp . cx w . cx method . cx ncond . it raw out i . it kind ) ) }
                     F _ → {}
                 }
             }
@@ -2080,8 +2322,8 @@ $ `stdlib/ext/json.nu`
         }
         = i + i 1
     }
-    ( __ar_jobs_run jobs par )
-    ( __ar_jobs_free jobs )
+    ( _ar_jobs_run jobs par )
+    ( _ar_jobs_free jobs )
 }
 
 : ArimaFitState {
@@ -2111,6 +2353,7 @@ $ `stdlib/ext/json.nu`
                 = . cx sp sp
                 = . cx w w
                 = . cx method ARIMA_CSS
+                = . cx ncond 0
                 ( vec_push [i] ctxp # i cx )
                 : ( Vec f ) raw ( __ar_raw_start w sp )
                 : *ArimaFitState f # *ArimaFitState ( nurl_malloc Z ArimaFitState )
@@ -2159,7 +2402,7 @@ $ `stdlib/ext/json.nu`
             = i 0
             ~ < i K {
                 : *ArimaCtx cx # *ArimaCtx ( _ar_geti ctxp i )
-                ( vec_push [ArimaCtx] ctxs @ ArimaCtx { . cx sp . cx w . cx method } )
+                ( vec_push [ArimaCtx] ctxs @ ArimaCtx { . cx sp . cx w . cx method . cx ncond } )
                 = i + i 1
             }
             ( evaluator items ctxs vals )
@@ -2203,7 +2446,7 @@ $ `stdlib/ext/json.nu`
         ?? ( vec_get [( Vec f )] series i ) {
             T y → {
                 : *ArimaBfgs st . f st
-                ( vec_push [* ArimaModel] out ( __ar_model_from_raw y . cx w sp method . st raw . f converged . f iters . f evals F ) )
+                ( vec_push [* ArimaModel] out ( __ar_model_from_raw y . cx w sp method 0 . st raw . f converged . f iters . f evals F T ) )
                 ( __ar_bfgs_free st )
             }
             F _ → {}
@@ -2220,7 +2463,7 @@ $ `stdlib/ext/json.nu`
     ~ < i K {
         : *ArimaCtx cx # *ArimaCtx ( _ar_geti ctxp i )
         = . cx method method
-        ( vec_push [ArimaCtx] hctx @ ArimaCtx { . cx sp . cx w . cx method } )
+        ( vec_push [ArimaCtx] hctx @ ArimaCtx { . cx sp . cx w . cx method . cx ncond } )
         ( vec_push [i] hat ( vec_len [ArimaEvalItem] hitems ) )
         ?? ( vec_get [* ArimaModel] out i ) {
             T mm → {
@@ -2342,17 +2585,78 @@ $ `stdlib/ext/json.nu`
 
 // One new observation: a Kalman step on the full model. The coefficients
 // do not change; refit when the schedule says so.
+//
+// A NaN `y` is a missing observation: the step is the filter's time
+// update alone — the state moves on, its uncertainty grows, nothing is
+// learned — so a gap in a stream costs a tick of the clock and not a
+// restart. The answer then carries what the model predicted and the
+// variance it would have judged an observation by; innovation and z are
+// NaN, because there was nothing to be surprised by.
 @ arima_update * ArimaModel m f y → ArimaUpdate {
     : ArimaCoef mc . m coef
     : ArimaSS ss . m ss
-    : ArimaStep st ( __ar_step ss - y . mc mu )
-    : f vr * . st variance . m sigma2
     = . m n + . m n 1
+    ? ( float_is_nan y ) {
+        : f fv ( __ar_observe ss )
+        : f pred + ( __ar_predicted ss ) . mc mu
+        : f vr * fv . m sigma2
+        ( __ar_tvec ss )
+        ( __ar_predict_cov ss )
+        = . m last_innovation y
+        = . m last_variance vr
+        = . m last_predicted pred
+        ^ @ ArimaUpdate { pred y vr y }
+    } {}
+    : ArimaStep st ( _ar_step ss - y . mc mu )
+    : f vr * . st variance . m sigma2
     = . m last_innovation . st innovation
     = . m last_variance vr
     = . m last_predicted + . st predicted . mc mu
     : f z ? > vr 0.0 / . st innovation ( float_sqrt vr ) 0.0
     ^ @ ArimaUpdate { + . st predicted . mc mu . st innovation vr z }
+}
+
+// Forget the observations: the state goes back to where a freshly fitted
+// model's stands before its first point (the stationary covariance for
+// the ARMA part, diffuse for the differencing), `n` to 0. The
+// coefficients stay. Feed the series again with arima_update and the
+// state after n points is the state a fit over them would have left —
+// which is how a caller replays a stored history through a model whose
+// state has moved past it.
+@ arima_restart * ArimaModel m → v {
+    ( _ar_ss_free . m ss )
+    = . m ss ( __ar_full_ss . m spec . m coef )
+    = . m n 0
+    = . m last_innovation 0.0
+    = . m last_variance 0.0
+    = . m last_predicted 0.0
+}
+
+// A deep copy: coefficients, fit statistics, standard errors and the
+// state, so the copy can be stepped without moving the original.
+@ arima_clone * ArimaModel m → *ArimaModel {
+    : *ArimaModel c # *ArimaModel ( nurl_malloc Z ArimaModel )
+    = . c spec . m spec
+    = . c coef ( __ar_coef_clone . m coef )
+    = . c sigma2 . m sigma2
+    = . c loglik . m loglik
+    = . c aic . m aic
+    = . c aicc . m aicc
+    = . c bic . m bic
+    = . c n . m n
+    = . c n_fit . m n_fit
+    = . c n_used . m n_used
+    = . c method . m method
+    = . c converged . m converged
+    = . c iterations . m iterations
+    = . c evals . m evals
+    : ArimaSS src . m ss
+    = . c ss @ ArimaSS { . src r . src nd . src rd ( __ar_vec_copy . src phi ) ( __ar_vec_copy . src theta ) ( __ar_vec_copy . src delta ) ( __ar_vec_copy . src a ) ( __ar_vec_copy . src pm ) ( __ar_vec_copy . src scratch ) ( __ar_vec_copy . src scratch2 ) ( __ar_vec_copy . src pz ) ( __ar_vec_copy . src prev ) ( __ar_vec_copy . src kg ) ( __ar_vec_copy . src fz ) }
+    = . c se ( __ar_vec_copy . m se )
+    = . c last_innovation . m last_innovation
+    = . c last_variance . m last_variance
+    = . c last_predicted . m last_predicted
+    ^ c
 }
 
 // ── Order selection ───────────────────────────────────────────────────
@@ -2454,18 +2758,18 @@ $ `stdlib/ext/json.nu`
     ^ ? > r 0.5 1 0
 }
 
-@ __ar_try ( Vec f ) y ArimaSpec sp i method → *ArimaModel {
-    ^ ( arima_fit_method y sp method )
+@ __ar_try ( Vec f ) y ArimaSpec sp i method i ncond → *ArimaModel {
+    ^ ( __ar_fit_cond y sp method ncond F )
 }
 
 // Is the candidate worth a look: within the bounds, not already tried.
-@ __ar_auto_step ( Vec f ) y ArimaSpec cand * ArimaModel best ( Vec i ) tried i max_pq i max_PQ i method → *ArimaModel {
+@ __ar_auto_step ( Vec f ) y ArimaSpec cand * ArimaModel best ( Vec i ) tried i max_pq i max_PQ i method i ncond → *ArimaModel {
     ? | | | | | < . cand p 0 < . cand q 0 > . cand p max_pq > . cand q max_pq < . cand P 0 < . cand Q 0 { ^ best } {}
     ? | > . cand P max_PQ > . cand Q max_PQ { ^ best } {}
     : i key + + + + * . cand p 1000000 * . cand q 10000 * . cand P 100 * . cand Q 10 ? . cand mean 1 0
     ? ( vec_contains [i] tried key \ i a i b → b { ^ == a b } ) { ^ best } {}
     ( vec_push [i] tried key )
-    : *ArimaModel m ( __ar_try y cand method )
+    : *ArimaModel m ( __ar_try y cand method ncond )
     ? & . m converged < . m aicc . best aicc {
         ( arima_free best )
         ^ m
@@ -2482,11 +2786,17 @@ $ `stdlib/ext/json.nu`
     ^ ( arima_auto_d y s d D )
 }
 
-// Candidates are screened by CSS when an exact likelihood of the largest
-// of them would be expensive (n · r² beyond ARIMA_SCREEN_WORK — a weekly
-// season on hourly data), the way auto.arima approximates; the winner is
-// then refitted by ML.
-: i ARIMA_SCREEN_WORK 20000000
+// Candidates are screened by conditional sum of squares — the way
+// auto.arima approximates — whenever the series is longer than
+// ARIMA_SCREEN_N points or the season longer than ARIMA_SCREEN_S (R's
+// rule: `approximation = n > 150 | frequency > 12`), and the winner is
+// then refitted by ML. Below that, every candidate gets the exact
+// likelihood. The rule is about the search, not one fit: a daily season
+// on hourly data makes a candidate's state 50 wide, and the stepwise
+// search evaluates thousands of likelihoods — 42 s exactly against 0.3 s
+// screened, for the same chosen order.
+: i ARIMA_SCREEN_N 150
+: i ARIMA_SCREEN_S 12
 
 @ arima_auto_d ( Vec f ) y i s i d i D → *ArimaModel {
     : b seasonal > s 1
@@ -2494,44 +2804,43 @@ $ `stdlib/ext/json.nu`
     : i max_PQ ? seasonal 2 0
     : b mean0 == + d D 0
     : i n ( vec_len [f] y )
-    : i rmax + + max_pq 1 * s max_PQ
-    : i method ? > * n * rmax rmax ARIMA_SCREEN_WORK ARIMA_CSS ARIMA_ML
+    : i method ? | > n ARIMA_SCREEN_N > s ARIMA_SCREEN_S ARIMA_CSS ARIMA_ML
+    // every screened candidate conditions on the largest order in play
+    : i ncond + max_pq * s max_PQ
     : ( Vec i ) tried ( vec_new [i] )
-    : ~ * ArimaModel best ( __ar_try y ( arima_spec_with_mean ( arima_spec_seasonal 2 d 2 ? seasonal 1 0 D ? seasonal 1 0 s ) mean0 ) method )
+    : ~ * ArimaModel best ( __ar_try y ( arima_spec_with_mean ( arima_spec_seasonal 2 d 2 ? seasonal 1 0 D ? seasonal 1 0 s ) mean0 ) method ncond )
     ( vec_push [i] tried + + + + * 2 1000000 * 2 10000 * ? seasonal 1 0 100 * ? seasonal 1 0 10 ? mean0 1 0 )
-    = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal 0 d 0 0 D 0 s ) mean0 ) best tried max_pq max_PQ method )
-    = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal 1 d 0 ? seasonal 1 0 D 0 s ) mean0 ) best tried max_pq max_PQ method )
-    = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal 0 d 1 0 D ? seasonal 1 0 s ) mean0 ) best tried max_pq max_PQ method )
+    = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal 0 d 0 0 D 0 s ) mean0 ) best tried max_pq max_PQ method ncond )
+    = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal 1 d 0 ? seasonal 1 0 D 0 s ) mean0 ) best tried max_pq max_PQ method ncond )
+    = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal 0 d 1 0 D ? seasonal 1 0 s ) mean0 ) best tried max_pq max_PQ method ncond )
     : ~ b improved T
     : ~ i rounds 0
     ~ & improved < rounds 30 {
         = improved F
         : ArimaSpec b . best spec
         : f before . best aicc
-        = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal + . b p 1 d . b q . b P D . b Q s ) . b mean ) best tried max_pq max_PQ method )
-        = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal - . b p 1 d . b q . b P D . b Q s ) . b mean ) best tried max_pq max_PQ method )
-        = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d + . b q 1 . b P D . b Q s ) . b mean ) best tried max_pq max_PQ method )
-        = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d - . b q 1 . b P D . b Q s ) . b mean ) best tried max_pq max_PQ method )
+        = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal + . b p 1 d . b q . b P D . b Q s ) . b mean ) best tried max_pq max_PQ method ncond )
+        = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal - . b p 1 d . b q . b P D . b Q s ) . b mean ) best tried max_pq max_PQ method ncond )
+        = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d + . b q 1 . b P D . b Q s ) . b mean ) best tried max_pq max_PQ method ncond )
+        = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d - . b q 1 . b P D . b Q s ) . b mean ) best tried max_pq max_PQ method ncond )
         ? seasonal {
-            = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d . b q + . b P 1 D . b Q s ) . b mean ) best tried max_pq max_PQ method )
-            = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d . b q - . b P 1 D . b Q s ) . b mean ) best tried max_pq max_PQ method )
-            = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d . b q . b P D + . b Q 1 s ) . b mean ) best tried max_pq max_PQ method )
-            = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d . b q . b P D - . b Q 1 s ) . b mean ) best tried max_pq max_PQ method )
+            = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d . b q + . b P 1 D . b Q s ) . b mean ) best tried max_pq max_PQ method ncond )
+            = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d . b q - . b P 1 D . b Q s ) . b mean ) best tried max_pq max_PQ method ncond )
+            = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d . b q . b P D + . b Q 1 s ) . b mean ) best tried max_pq max_PQ method ncond )
+            = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d . b q . b P D - . b Q 1 s ) . b mean ) best tried max_pq max_PQ method ncond )
         } {}
         ? == + d D 0 {
-            = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d . b q . b P D . b Q s ) ! . b mean ) best tried max_pq max_PQ method )
+            = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d . b q . b P D . b Q s ) ! . b mean ) best tried max_pq max_PQ method ncond )
         } {}
         ? < . best aicc before { = improved T } {}
         = rounds + rounds 1
     }
     ( vec_free [i] tried )
-    ? == method ARIMA_CSS {
-        // The screening was approximate: the chosen order, fitted exactly.
-        : *ArimaModel exact ( arima_fit_method y . best spec ARIMA_ML )
-        ( arima_free best )
-        ^ exact
-    } {}
-    ^ best
+    // The chosen order fitted in full — exactly where the screening was
+    // approximate, and with its standard errors and state either way.
+    : *ArimaModel exact ( arima_fit_method y . best spec ARIMA_ML )
+    ( arima_free best )
+    ^ exact
 }
 
 // ── Reporting ─────────────────────────────────────────────────────────
@@ -2657,6 +2966,11 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set o `se` ( __ar_jbits . m se ) )
     ( json_obj_set o `state_a` ( __ar_jbits . ss a ) )
     ( json_obj_set o `state_p` ( __ar_jbits . ss pm ) )
+    ? ( _ar_ss_steady ss ) {
+        // the fixed gain, so a reloaded model steps on exactly as this one
+        ( json_obj_set o `steady_gain` ( __ar_jbits . ss kg ) )
+        ( json_obj_set o `steady_f` ( json_int ( f64_to_bits ( _ar_at . ss fz 0 ) ) ) )
+    } {}
     ( json_obj_set o `last_innovation` ( __ar_jbit . m last_innovation ) )
     ( json_obj_set o `last_variance` ( __ar_jbit . m last_variance ) )
     ( json_obj_set o `last_predicted` ( __ar_jbit . m last_predicted ) )
@@ -2710,8 +3024,21 @@ $ `stdlib/ext/json.nu`
             ?? ( json_obj_get o `state_p` ) {
                 T a → {
                     : ( Vec f ) pv ( __ar_unbits a )
-                    ? == ( vec_len [f] pv ) * . fss rd . fss rd { ( __ar_copy_into . fss pm pv ) } {}
+                    ? == ( vec_len [f] pv ) * . fss rd . fss rd { ( __ar_copy_into . fss pm pv ) ( __ar_copy_into . fss prev pv ) } {}
                     ( vec_free [f] pv )
+                }
+                F _ → {}
+            }
+            ?? ( json_obj_get o `steady_gain` ) {
+                T a → {
+                    : ( Vec f ) gv ( __ar_unbits a )
+                    ? == ( vec_len [f] gv ) . fss rd {
+                        ( __ar_copy_into . fss kg gv )
+                        : *f fz ( vec_data [f] . fss fz )
+                        = . fz 0 ( __ar_unbit o `steady_f` )
+                        = . fz 1 1.0
+                    } {}
+                    ( vec_free [f] gv )
                 }
                 F _ → {}
             }

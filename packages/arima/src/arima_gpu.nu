@@ -11,11 +11,11 @@
 // candidate orders, in the time of one.
 //
 // What stays on the host, and why: the transform from raw parameters to
-// polynomials and the model's stationary covariance (small, and they use
-// libm — the device's `log` and `exp` are not the host's); and the sum
-// of the innovation variances' logarithms, which the kernel hands back
-// as the variances themselves. Only the filter's arithmetic — the part
-// that is O(n · r²) — runs on the device.
+// polynomials and the start of the model's stationary covariance (small,
+// and they use libm — the device's `log` and `exp` are not the host's);
+// and the sum of the innovation variances' logarithms, which the kernel
+// hands back as the variances themselves. Only the filter's arithmetic —
+// the Chandrasekhar recursions, O(n · r) — runs on the device.
 //
 // Selection: any `gpu` backend — a CUDA device, or the package's host
 // C++ backend (`NURL_GPU=cpu`) — gives the same numbers, so the choice is
@@ -38,8 +38,8 @@ $ `deps/gpukit/src/gpukit.nu`
 // ── the kernels ───────────────────────────────────────────────────────
 //
 // meta, per item, 8 long longs:
-//   [0] w_off   [1] n   [2] r (ML) / p' (CSS)   [3] f_off   [4] scratch_off
-//   [5] poly_off   [6] p0_off   [7] q' (CSS)
+//   [0] w_off   [1] n   [2] r (ML) / p' (CSS)   [3] f_off (ML) / ncond (CSS)
+//   [4] rmax (ML) / scratch_off (CSS)   [5] poly_off   [6] p0_off   [7] q' (CSS)
 @ _ag_kernel_src → s {
     ^ `#define ADD(a,b) __dadd_rn((a),(b))
 #define SUB(a,b) __dsub_rn((a),(b))
@@ -47,121 +47,81 @@ $ `deps/gpukit/src/gpukit.nu`
 #define DIV(a,b) __ddiv_rn((a),(b))
 extern "C" __global__ void arima_ml(const long long* meta, const double* series, const double* polys, const double* p0s, const double* mus, double* scratch, double* ssq_out, double* f_out, long long* ok_out, long long n_items)
 {
-    // One block per item; its threads share the rows of the state.
-    long long it = blockIdx.x;
+    // One thread per item: the Chandrasekhar recursions, O(r) a step,
+    // in the host's order (_ar_filter_arma) with every operation rounded
+    // once. p0s holds P e0 (r values) per item. The four working vectors
+    // live in scratch interleaved across the items (element i of item it
+    // at [i * n_items + it], rmax rows each, meta[4] = rmax) so that the
+    // threads of a warp touch neighbouring addresses.
+    long long it = (long long)blockIdx.x * blockDim.x + threadIdx.x;
     if (it >= n_items) return;
-    __shared__ double sc[8];
-    __shared__ double red[256];
     const long long* m = meta + it * 8;
-    long long woff = m[0], n = m[1], r = m[2], foff = m[3], soff = m[4], poff = m[5], p0off = m[6];
+    long long woff = m[0], n = m[1], r = m[2], foff = m[3], rmax = m[4], poff = m[5], p0off = m[6];
     const double* w = series + woff;
     const double* phi = polys + poff;
-    const double* th = polys + poff + r;
+    const double* p0 = p0s + p0off;
     double mu = mus[it];
-    double* P = scratch + soff;
-    double* prev = P + r * r;
-    double* S = prev + r * r;
-    double* A = S + r * r;
-    double* pz = A + r;
-    double* K = pz + r;
-    long long tid = threadIdx.x, nt = blockDim.x;
-    long long e, i, j, t;
-    for (e = tid; e < r * r; e += nt) { P[e] = p0s[p0off + e]; prev[e] = P[e]; }
-    for (i = tid; i < r; i += nt) { A[i] = 0.0; pz[i] = 0.0; K[i] = 0.0; }
-    if (tid == 0) { sc[3] = 1.0; sc[4] = 0.0; sc[5] = 0.0; sc[6] = 0.0; }
-    __syncthreads();
+    long long S = n_items;
+    double* A = scratch + it;
+    double* K = A + rmax * S;
+    double* W = K + rmax * S;
+    double* O = W + rmax * S;
+    long long i, t;
+    double F = p0[0];
+    if (!(F > 0.0)) { ssq_out[it] = 0.0; ok_out[it] = 0; return; }
+    for (i = 0; i < r; i++) {
+        double v = MUL(phi[i], p0[0]);
+        if (i + 1 < r) v = ADD(v, p0[i + 1]);
+        K[i * S] = DIV(v, F);
+        W[i * S] = K[i * S];
+        A[i * S] = 0.0;
+    }
+    double M = SUB(0.0, F);
+    int frozen = 0, ok = 1;
     double ssq = 0.0;
     for (t = 0; t < n; t++) {
-        double y = SUB(w[t], mu);
-        if (sc[4] != 0.0) {
-            // Frozen: O(r) a step, one thread's work; the others leave —
-            // no barrier follows, so the block is thread 0 from here on.
-            if (tid != 0) break;
-            double fss = sc[5];
-            for (; t < n; t++) {
-                double v = SUB(SUB(w[t], mu), A[0]);
-                ssq = ADD(ssq, DIV(MUL(v, v), fss));
-                f_out[foff + t] = fss;
-                for (i = 0; i < r; i++) A[i] = ADD(A[i], MUL(K[i], v));
+        double a0 = A[0];
+        double v = SUB(SUB(w[t], mu), a0);
+        ssq = ADD(ssq, DIV(MUL(v, v), F));
+        f_out[foff + t] = F;
+        for (i = 0; i < r; i++) {
+            double x = MUL(phi[i], a0);
+            if (i + 1 < r) x = ADD(x, A[(i + 1) * S]);
+            O[i * S] = ADD(x, MUL(K[i * S], v));
+        }
+        for (i = 0; i < r; i++) A[i * S] = O[i * S];
+        if (!frozen) {
+            double w0 = W[0];
+            double fn = ADD(F, MUL(MUL(w0, w0), M));
+            double wmax = 0.0;
+            for (i = 0; i < r; i++) {
+                double x = MUL(phi[i], w0);
+                if (i + 1 < r) x = ADD(x, W[(i + 1) * S]);
+                O[i * S] = x;
+                double aw = fabs(W[i * S]);
+                if (aw > wmax) wmax = aw;
+            }
+            if (MUL(fabs(M), MUL(wmax, wmax)) <= MUL(1e-14, ADD(1.0, F))) frozen = 1;
+            else if (fn > 0.0) {
                 for (i = 0; i < r; i++) {
-                    double o = MUL(phi[i], A[0]);
-                    if (i + 1 < r) o = ADD(o, A[i + 1]);
-                    pz[i] = o;
+                    K[i * S] = DIV(ADD(MUL(K[i * S], F), MUL(MUL(O[i * S], M), w0)), fn);
+                    W[i * S] = SUB(O[i * S], MUL(K[i * S], w0));
                 }
-                for (i = 0; i < r; i++) A[i] = pz[i];
-            }
-            break;
-        } else {
-            for (i = tid; i < r; i += nt) pz[i] = P[i * r];
-            __syncthreads();
-            if (tid == 0) {
-                double F = pz[0];
-                double v = SUB(y, A[0]);
-                if (!(F > 0.0)) { sc[3] = 0.0; }
-                else {
-                    f_out[foff + t] = F;
-                    ssq = ADD(ssq, DIV(MUL(v, v), F));
-                    sc[0] = F;
-                    sc[2] = DIV(v, F);
-                }
-            }
-            __syncthreads();
-            if (sc[3] == 0.0) break;
-            double F = sc[0];
-            double g = sc[2];
-            for (i = tid; i < r; i += nt) A[i] = ADD(A[i], MUL(pz[i], g));
-            __syncthreads();
-            for (i = tid; i < r; i += nt) {
-                double pi = DIV(pz[i], F);
-                for (j = 0; j < r; j++) P[i * r + j] = SUB(P[i * r + j], MUL(pi, pz[j]));
-            }
-            __syncthreads();
-            for (i = tid; i < r; i += nt) {
-                double o = MUL(phi[i], A[0]);
-                if (i + 1 < r) o = ADD(o, A[i + 1]);
-                pz[i] = o;
-            }
-            __syncthreads();
-            for (i = tid; i < r; i += nt) A[i] = pz[i];
-            for (i = tid; i < r; i += nt) for (j = 0; j < r; j++) {
-                double s2 = MUL(phi[i], P[j]);
-                if (i + 1 < r) s2 = ADD(s2, P[(i + 1) * r + j]);
-                S[i * r + j] = s2;
-            }
-            __syncthreads();
-            double dmax = 0.0;
-            for (i = tid; i < r; i += nt) for (j = 0; j < r; j++) {
-                double p2 = MUL(phi[j], S[i * r]);
-                if (j + 1 < r) p2 = ADD(p2, S[i * r + j + 1]);
-                p2 = ADD(p2, MUL(th[i], th[j]));
-                P[i * r + j] = p2;
-                double dd = fabs(SUB(p2, prev[i * r + j]));
-                if (dd > dmax) dmax = dd;
-                prev[i * r + j] = p2;
-            }
-            red[tid] = dmax;
-            __syncthreads();
-            if (tid == 0) {
-                double dm = 0.0;
-                for (i = 0; i < nt; i++) if (red[i] > dm) dm = red[i];
-                if (dm <= MUL(1e-14, ADD(1.0, fabs(P[0])))) { sc[4] = 1.0; sc[5] = P[0]; }
-            }
-            __syncthreads();
-            if (sc[4] != 0.0) {
-                double fss = sc[5];
-                for (i = tid; i < r; i += nt) K[i] = DIV(P[i * r], fss);
-                __syncthreads();
-            }
+                M = ADD(M, DIV(MUL(MUL(M, w0), MUL(M, w0)), F));
+                F = fn;
+            } else { ok = 0; break; }
         }
     }
-    if (tid == 0) { ssq_out[it] = ssq; ok_out[it] = (sc[3] != 0.0) ? 1 : 0; }
+    ssq_out[it] = ssq;
+    ok_out[it] = ok;
 }
 extern "C" __global__ void arima_css(const long long* meta, const double* series, const double* polys, const double* mus, double* scratch, double* ssq_out, long long n_items)
 {
     long long it = (long long)blockIdx.x * blockDim.x + threadIdx.x;
     if (it >= n_items) return;
     const long long* m = meta + it * 8;
-    long long woff = m[0], n = m[1], pf = m[2], soff = m[4], poff = m[5], qf = m[7];
+    long long woff = m[0], n = m[1], pf = m[2], nc = m[3], soff = m[4], poff = m[5], qf = m[7];
+    if (nc < pf) nc = pf;
     const double* w = series + woff;
     const double* ar = polys + poff;
     const double* ma = polys + poff + pf;
@@ -170,10 +130,10 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
     double ssq = 0.0;
     long long t, i, j;
     for (t = 0; t < n; t++) ev[t] = 0.0;
-    for (t = pf; t < n; t++) {
+    for (t = nc; t < n; t++) {
         double v = SUB(w[t], mu);
-        for (i = 0; i < pf; i++) v = SUB(v, MUL(ar[i], SUB(w[t - i - 1], mu)));
-        for (j = 0; j < qf; j++) { long long at = t - j - 1; if (at >= pf) v = SUB(v, MUL(ma[j], ev[at])); }
+        for (i = 0; i < pf; i++) if (ar[i] != 0.0) v = SUB(v, MUL(ar[i], SUB(w[t - i - 1], mu)));
+        for (j = 0; j < qf; j++) if (ma[j] != 0.0) { long long at = t - j - 1; if (at >= nc) v = SUB(v, MUL(ma[j], ev[at])); }
         ev[t] = v;
         ssq = ADD(ssq, MUL(v, v));
     }
@@ -236,8 +196,8 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
     : i m ( vec_len [ArimaEvalItem] items )
     : *f pout ( vec_data [f] out )
     // Every item's state-space form, prepared on the pool: the transform,
-    // the expansion and the stationary covariance are the host's part,
-    // and for a large state they are r³ apiece.
+    // the expansion and the start of the stationary covariance are the
+    // host's part.
     : ( Vec i ) pjobs ( vec_new [i] )
     : ~ i big 0
     : ~ i k 0
@@ -247,13 +207,13 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
                 ?? ( vec_get [ArimaCtx] ctxs . it ctx ) {
                     T cx → {
                         : i kind ? == . cx method ARIMA_ML ? == . it kind 1 3 2 ? == . it kind 1 5 4
-                        ( vec_push [i] pjobs ( __ar_job_new . cx sp . cx w . cx method . it raw out k kind ) )
+                        ( vec_push [i] pjobs ( _ar_job_new . cx sp . cx w . cx method . cx ncond . it raw out k kind ) )
                         : ArimaSpec csp . cx sp
                         : i pf + . csp p * . csp s . csp P
                         : i qf + . csp q * . csp s . csp Q
                         : ~ i r pf
                         ? > + qf 1 r { = r + qf 1 } {}
-                        : i wk * * r r r
+                        : i wk * r r
                         ? > wk big { = big wk } {}
                     }
                     F _ → {}
@@ -263,7 +223,7 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
         }
         = k + k 1
     }
-    ( __ar_jobs_run pjobs > * big m 2000000 )
+    ( _ar_jobs_run pjobs > * big m 2000000 )
     // ML items
     : ( Vec i ) ml_idx ( vec_new [i] )
     : ( Vec i ) meta ( vec_new [i] )
@@ -271,7 +231,7 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
     : ( Vec f ) p0s ( vec_new [f] )
     : ( Vec f ) mus ( vec_new [f] )
     : ~ i f_total 0
-    : ~ i s_total 0
+    : ~ i rmax 0
     // CSS items
     : ( Vec i ) css_idx ( vec_new [i] )
     : ( Vec i ) cmeta ( vec_new [i] )
@@ -293,7 +253,7 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
                                 : i r . pr r
                                 ( vec_push [i] ml_idx k )
                                 ( vec_push [i] meta wo ) ( vec_push [i] meta n ) ( vec_push [i] meta r )
-                                ( vec_push [i] meta f_total ) ( vec_push [i] meta s_total )
+                                ( vec_push [i] meta f_total ) ( vec_push [i] meta 0 )
                                 ( vec_push [i] meta ( vec_len [f] polys ) ) ( vec_push [i] meta ( vec_len [f] p0s ) ) ( vec_push [i] meta 0 )
                                 : *f pphi ( vec_data [f] . pr phi )
                                 : *f pth ( vec_data [f] . pr theta )
@@ -303,10 +263,10 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
                                 = q 0
                                 ~ < q r { ( vec_push [f] polys . pth q ) = q + q 1 }
                                 = q 0
-                                ~ < q * r r { ( vec_push [f] p0s . ppm q ) = q + q 1 }
+                                ~ < q r { ( vec_push [f] p0s . ppm q ) = q + q 1 }
                                 ( vec_push [f] mus . pr mu )
                                 = f_total + f_total n
-                                = s_total + s_total + * 3 * r r * 3 r
+                                ? > r rmax { = rmax r } {}
                             } { = . pout k 1000000000000.0 }
                         } {
                             : i pf ( vec_len [f] . pr ar )
@@ -314,7 +274,7 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
                             ? > n pf {
                                 ( vec_push [i] css_idx k )
                                 ( vec_push [i] cmeta wo ) ( vec_push [i] cmeta n ) ( vec_push [i] cmeta pf )
-                                ( vec_push [i] cmeta 0 ) ( vec_push [i] cmeta cs_total )
+                                ( vec_push [i] cmeta . cx ncond ) ( vec_push [i] cmeta cs_total )
                                 ( vec_push [i] cmeta ( vec_len [f] cpolys ) ) ( vec_push [i] cmeta 0 ) ( vec_push [i] cmeta qf )
                                 : *f par ( vec_data [f] . pr ar )
                                 : *f pma ( vec_data [f] . pr ma )
@@ -335,10 +295,13 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
         }
         = k + k 1
     }
-    ( __ar_jobs_free pjobs )
+    ( _ar_jobs_free pjobs )
     : i nml ( vec_len [i] ml_idx )
     ? > nml 0 {
-        : ( Vec f ) scratch ( vec_zeroed [f] s_total )
+        : *i pm4 ( vec_data [i] meta )
+        : ~ i q4 0
+        ~ < q4 nml { = . pm4 + * q4 8 4 rmax = q4 + q4 1 }
+        : ( Vec f ) scratch ( vec_zeroed [f] * * 4 rmax nml )
         : ( Vec f ) ssq ( vec_zeroed [f] nml )
         : ( Vec f ) fout ( vec_zeroed [f] f_total )
         : ( Vec i ) okv ( vec_zeroed [i] nml )
@@ -353,9 +316,8 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
         ( vec_push [GkArg] call ( gk_out_f fout ) )
         ( vec_push [GkArg] call ( gk_out_i okv ) )
         ( vec_push [GkArg] call ( gk_i64 nml ) )
-        // one block of 64 threads per item: the rows of the state in parallel
         : i t_r0 ( now_ms )
-        : b ran ( gk_run kit ( _ag_kernel_src ) `arima_ml` nml 64 call )
+        : b ran ( gk_run kit ( _ag_kernel_src ) `arima_ml` ( gk_grid nml 64 ) 64 call )
         = g_ag_t_run + g_ag_t_run - ( now_ms ) t_r0
         ( vec_free [GkArg] call )
         : *f pssq ( vec_data [f] ssq )
@@ -402,9 +364,11 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
             : i k2 ( _ar_geti css_idx q )
             : i n . pmeta + * q 8 1
             : i pfc . pmeta + * q 8 2
+            : i ncq . pmeta + * q 8 3
+            : i nc ? > ncq pfc ncq pfc
             : ~ f val 1000000000000.0
             ? ran {
-                : ArimaLik lk ( _ar_lik_css_from . pssq q - n pfc )
+                : ArimaLik lk ( _ar_lik_css_from . pssq q - n nc )
                 ? . lk ok { = val - 0.0 . lk loglik } {}
             } {}
             = . pout k2 val

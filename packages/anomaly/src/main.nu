@@ -5,6 +5,8 @@
 //   anomaly batch  [-f FILE] [-H]          score a CSV (index<TAB>score)
 //   anomaly train  <model>                 force a retrain now
 //   anomaly train-ae <model>               train the autoencoder version
+//   anomaly train-fc <model> [--season S]  train the forecast version (SARIMA per feature)
+//   anomaly forecast <model> [--horizon H] the next H values per watched feature
 //   anomaly calibrate <model> [--last S]   alert rate at the current margins,
 //                                          margin for each standard rate
 //   anomaly finetune <model> [--rate R]    set margins so R of the window is
@@ -536,6 +538,106 @@ $ `src/mcp.nu`
     ^ rc
 }
 
+@ __an_cmd_train_fc CliCtx x → i {
+    : String mname ( ctx_arg x 0 )
+    : String root ( __an_store_root x )
+    : Store st ( store_open ( string_data root ) )
+    ( string_free root )
+    : ~ i rc 0
+    ? ( store_exists st ( string_data mname ) ) {
+        : *Model mo ( model_open st ( string_data mname ) )
+        : i season ( ctx_int x `season` )
+        ? >= season 0 {
+            : Json vo ( json_obj_new )
+            ( json_obj_set vo `window_size` ( json_int season ) )
+            : Json vers ( json_obj_new )
+            ( json_obj_set vers ANOM_FC_NAME vo )
+            : Json patch ( json_obj_new )
+            ( json_obj_set patch `versions` vers )
+            ( _an_ensure_fc_cfg mo )
+            : String perr ( model_apply_meta_patch mo patch )
+            ( string_free perr )
+            ( json_free patch )
+        } {}
+        : String err ( model_train_forecast mo )
+        ? == ( string_len err ) 0 {
+            : *FcModel fc ( model_forecast mo )
+            : String msg ( string_from `forecast models fitted for ` )
+            ( string_push_int msg . fc nw )
+            ( string_push_str msg ` features on ` )
+            ( string_push_int msg . fc trained_on )
+            ( string_push_str msg ` points (season ` )
+            ( string_push_int msg . fc season )
+            ( string_push_str msg `)` )
+            ( pline ( string_data msg ) )
+            ( string_free msg )
+        } {
+            ( nurl_eprint `anomaly: ` )
+            ( nurl_eprintln ( string_data err ) )
+            = rc 1
+        }
+        ( string_free err )
+        ( model_free mo )
+    } {
+        ( nurl_eprint `anomaly: model not found: ` )
+        ( nurl_eprintln ( string_data mname ) )
+        = rc 1
+    }
+    ( store_free st )
+    ( string_free mname )
+    ^ rc
+}
+
+@ __an_cmd_forecast CliCtx x → i {
+    : String mname ( ctx_arg x 0 )
+    : String root ( __an_store_root x )
+    : Store st ( store_open ( string_data root ) )
+    ( string_free root )
+    : ~ i rc 0
+    ? ( store_exists st ( string_data mname ) ) {
+        : *Model mo ( model_open st ( string_data mname ) )
+        : *FcModel fc ( model_forecast mo )
+        ? . fc trained {
+            : ~ i h ( ctx_int x `horizon` )
+            ? < h 1 { = h 12 } {}
+            ( model_forecast_sync mo )
+            : FcForecast ff ( fc_forecast fc h )
+            : Json o ( json_obj_new )
+            ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
+            ( json_obj_set o `horizon` ( json_int h ) )
+            : Json fa ( json_arr_new )
+            : i nw ( vec_len [String] . ff feats )
+            : ~ i j 0
+            ~ < j nw {
+                : Json fo ( json_obj_new )
+                ?? ( vec_get [String] . ff feats j ) { T fn → { ( json_obj_set fo `feature` ( json_str_lit ( string_data fn ) ) ) } F _ → {} }
+                ?? ( vec_get [( Vec f )] . ff mean j ) { T mv → { ( json_obj_set fo `mean` ( _an_jarr_of_floats mv ) ) } F _ → {} }
+                ?? ( vec_get [( Vec f )] . ff se j ) { T sv → { ( json_obj_set fo `se` ( _an_jarr_of_floats sv ) ) } F _ → {} }
+                ( json_obj_set fo `model` ( arima_coef ( model_forecast_model mo j ) ) )
+                ( json_arr_push fa fo )
+                = j + j 1
+            }
+            ( json_obj_set o `forecasts` fa )
+            ( fc_forecast_free ff )
+            : String js ( json_stringify o )
+            ( pline ( string_data js ) )
+            ( string_free js )
+            ( json_free o )
+        } {
+            ( nurl_eprintln `anomaly: the forecast version is not trained: anomaly train-fc <model> first` )
+            = rc 1
+        }
+        ( model_free mo )
+    } {
+        ( nurl_eprint `anomaly: model not found: ` )
+        ( nurl_eprintln ( string_data mname ) )
+        = rc 1
+    }
+    ( store_free st )
+    ( string_free mname )
+    ^ rc
+}
+
 // Resolve --last / --from / --to into the calibration window (see
 // model_window_from_last): --last counts back from the newest stored
 // point, `--last all` means the whole ring.
@@ -803,12 +905,16 @@ $ `src/mcp.nu`
     ( cli_flag_int c `from` 0 `UNIX` `for calibrate/finetune: window start (unix seconds)` 0 `` )
     ( cli_flag_int c `to` 0 `UNIX` `for calibrate/finetune: window end (unix seconds)` 0 `` )
     ( cli_flag_bool c `dry-run` 110 `for finetune: report the margins without writing them` )
+    ( cli_flag_int c `season` 0 `ROWS` `for train-fc: the seasonal period in rows (24 = hourly data with a daily rhythm; 0 = none; -1 = keep the setting)` -1 `` )
+    ( cli_flag_int c `horizon` 0 `STEPS` `for forecast: how many steps ahead (default 12)` 12 `` )
 
     ( cli_cmd c `detect` `ingest one point, print the verdict` \ CliCtx x → i { ^ ( __an_cmd_detect x T ) } )
     ( cli_cmd c `score` `score only (never ingests or retrains)` \ CliCtx x → i { ^ ( __an_cmd_detect x F ) } )
     ( cli_cmd c `batch` `score a CSV, one index<TAB>score per row` \ CliCtx x → i { ^ ( __an_cmd_batch x ) } )
     ( cli_cmd c `train` `force a retrain now` \ CliCtx x → i { ^ ( __an_cmd_train x ) } )
     ( cli_cmd c `train-ae` `train the autoencoder version (iforest-filtered)` \ CliCtx x → i { ^ ( __an_cmd_train_ae x ) } )
+    ( cli_cmd c `train-fc` `train the forecast version (a SARIMA per feature) and switch it on` \ CliCtx x → i { ^ ( __an_cmd_train_fc x ) } )
+    ( cli_cmd c `forecast` `the forecast version's next values per feature` \ CliCtx x → i { ^ ( __an_cmd_forecast x ) } )
     ( cli_cmd c `calibrate` `alert rates vs margins over a recent window` \ CliCtx x → i { ^ ( __an_cmd_calibrate x ) } )
     ( cli_cmd c `finetune` `set every margin from a target alert rate` \ CliCtx x → i { ^ ( __an_cmd_finetune x ) } )
     ( cli_cmd c `reset` `drop data + forests, keep the name` \ CliCtx x → i { ^ ( __an_cmd_reset x ) } )

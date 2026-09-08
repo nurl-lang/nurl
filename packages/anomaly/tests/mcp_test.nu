@@ -322,7 +322,7 @@ $ `src/service.nu`
     ( check ( tools_has . ls body `ingest_point` ) `mcp: sign-in off = admin: ingest_point listed` )
     ( check ( tools_has . ls body `set_role` ) `mcp: sign-in off = admin: set_role listed` )
     ( check ( tools_has . ls body `org_keys` ) `mcp: sign-in off = admin: org_keys listed` )
-    ( check == ( tools_count . ls body ) 28 `mcp: every one of the 28 tools is listed` )
+    ( check == ( tools_count . ls body ) 30 `mcp: every one of the 30 tools is listed` )
     ( out_free ls )
 
     // A tool that does not exist is refused in the tool-result envelope.
@@ -838,11 +838,11 @@ $ `src/service.nu`
     ( check ! ( tools_has . gl body `org_keys` ) `mcp: ingest does not see org_keys` )
     ( check ! ( tools_has . gl body `org_users` ) `mcp: ingest does not see org_users` )
     ( check ! ( tools_has . gl body `claim_model` ) `mcp: ingest does not see claim_model` )
-    ( check == ( tools_count . gl body ) 24 `mcp: 24 tools for an ingest key` )
+    ( check == ( tools_count . gl body ) 26 `mcp: 26 tools for an ingest key` )
     ( out_free gl )
 
     : Out al ( rpc r `tools/list` `{}` AK )
-    ( check == ( tools_count . al body ) 28 `mcp: an admin key sees every tool` )
+    ( check == ( tools_count . al body ) 30 `mcp: an admin key sees every tool` )
     ( out_free al )
 
     // An invisible tool called by name is unknown to that caller.
@@ -909,6 +909,14 @@ $ `src/service.nu`
     : Call gae ( call r `train_autoencoder` `{"model":"llm_mine"}` GK )
     ( check . gae ok `mcp: ingest trains its scratch model's autoencoder` )
     ( call_free gae )
+
+    : Call gfc ( call r `train_forecast` `{"model":"llm_mine","season":0}` GK )
+    ( check . gfc ok `mcp: ingest trains its scratch model's forecast version` )
+    ( call_free gfc )
+    : Call gfo ( call r `forecast` `{"model":"llm_mine","horizon":3}` GK )
+    ( check . gfo ok `mcp: and reads its forecast` )
+    ( check == ( jint_of . gfo data `horizon` ) 3 `mcp: three steps ahead` )
+    ( call_free gfo )
 
     // The admin sees it, and may touch production.
     : Call adm ( call r `describe_model` `{"model":"llm_mine"}` AK )

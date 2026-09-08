@@ -28,17 +28,21 @@ when nothing is differenced (a mean under a differenced series is a
 drift, which is a regressor, not a mean).
 
 **Estimation is CSS-ML.** Conditional sum of squares first — cheap, and
-a good place to start — then exact Gaussian maximum likelihood by the
-Kalman filter over the state-space form (Harvey's), the initial state
-covariance being the model's own stationary covariance. That covariance
-is solved in closed form from the ARMA autocovariances (three r³
-products, no iteration), so the likelihood is the true likelihood of the
-differenced series, not an approximation that depends on how the series
-began. σ² is concentrated out. The optimizer is BFGS with a backtracking
-line search over parameters transformed by the Jones (1980) partial-
-autocorrelation map R uses, so every AR polynomial it tries is stationary
-and every MA polynomial invertible. Standard errors come from the
-numerical Hessian over the natural coefficients.
+a good place to start — then exact Gaussian maximum likelihood over the
+state-space form (Harvey's), started at the model's own stationary
+covariance, so the likelihood is the true likelihood of the differenced
+series, not an approximation that depends on how the series began. The
+filter is run by the Chandrasekhar recursions (Morf, Sidhu & Kailath
+1974): with a time-invariant model and a stationary start, the
+covariance recursion's increment has rank one and its own O(r)
+recursion, so a step costs O(r) where the Kalman form costs O(r²) — the
+same innovations and variances, arrived at without the covariance. The
+start needs only the first column of that covariance, solved in O(r²)
+from the ARMA autocovariances. σ² is concentrated out. The optimizer is
+BFGS with a backtracking line search over parameters transformed by the
+Jones (1980) partial-autocorrelation map R uses, so every AR polynomial
+it tries is stationary and every MA polynomial invertible. Standard
+errors come from the numerical Hessian over the natural coefficients.
 
 **Forecasting and streaming run on the full model.** After the fit, the
 ARMA state is extended with the differencing (R's `makeARIMA`) and
@@ -47,16 +51,29 @@ states. A forecast's mean and standard error come from that state; one
 new observation is one filter step. `arima_update` absorbs it, reports
 what the model had predicted, the innovation, its variance and the
 z-score — how surprising the point was — and the next forecast starts
-from there. The model's coefficients do not change; refit when the
-schedule says so. This is the shape `packages/anomaly` wants: a model
-per feature, trained once, kept current, judged on its innovations.
+from there. A NaN observation is a gap: the state moves on and its
+uncertainty grows, nothing is learned, the answer carries the prediction
+and a NaN innovation. `arima_restart` puts the state back to where a
+fresh fit's stands, so a stored history can be replayed through a model
+whose state has moved past it; `arima_clone` copies a model, state and
+all, so a copy can be stepped without moving the original. The model's
+coefficients do not change; refit when the schedule says so. This is the
+shape `packages/anomaly` wants: a model per feature, trained once, kept
+current, judged on its innovations.
 
 **Order selection** is the Hyndman–Khandakar stepwise search: how many
 differences by the KPSS test (level stationarity, 5 %), a seasonal
 difference when the autocorrelation at the seasonal lag exceeds 0.5,
 then from four starting orders the best by AICc, each neighbour tried
 in turn — one more or one fewer of p, q, P, Q, the mean toggled — until
-nothing nearby is better (p, q ≤ 5; P, Q ≤ 2).
+nothing nearby is better (p, q ≤ 5; P, Q ≤ 2). Past 150 points or a
+season longer than 12 the candidates are screened by conditional sum of
+squares, as `auto.arima` approximates, and the winner refitted exactly.
+One thing R does not do: every screened candidate conditions on the
+largest order in play, so they are all scored on the same observations —
+conditioning each on its own order lets the higher orders win on the
+points they drop (measured on a true AR(1): AR(4) by 5 AICc, against the
+exact likelihood's AR(1) by 4).
 
 **Persistence** is JSON with every float as its IEEE bits, the filtered
 state included, so a reloaded model streams on bit for bit.
@@ -88,37 +105,47 @@ machine's cores):
 
 | fit | n | arima | statsmodels |
 |---|---|---|---|
-| ARMA(2,1) | 10 000 | 16 ms | 460 ms |
+| ARMA(2,1) | 10 000 | 11 ms | 460 ms |
 | airline (0,1,1)(0,1,1)₁₂ | 144 | 5 ms | 450 ms |
-| SARMA(1,0,1)(1,0,1)₂₄, hourly | 5 000 | 0.10 s | — |
-| SARMA(1,0,1)(1,0,1)₁₆₈, weekly | 3 000 | 10 s | — |
+| SARMA(1,0,1)(1,0,1)₂₄, hourly | 5 000 | 36 ms | — |
+| SARMA(1,0,1)(1,0,1)₁₆₈, weekly | 3 000 | 0.34 s | — |
 
-Two things make the filter fast: the closed-form start (the doubling
-recursion needed dozens of r³ products for a seasonal polynomial with
-roots near the circle), and a steady state — once the covariance
-recursion has converged, a step costs O(r) instead of O(r²). A weekly
-period is still O(n · r²) per likelihood with r = 170; for that shape
-`arima_fit_method y spec ARIMA_CSS` is the practical choice, and
-`arima_auto` screens candidates that way when a likelihood is expensive.
+And the stepwise search, which evaluates thousands of likelihoods:
+
+| `arima_auto` | n | arima |
+|---|---|---|
+| no season | 5 000 | 20 ms |
+| season 24 | 2 000 | 0.5 s |
+| season 24 | 5 000 | 1.0 s |
+| season 144 | 2 000 | 3.1 s |
+
+Three things make the filter fast: the Chandrasekhar step, O(r) instead
+of the covariance form's O(r²) (a weekly season on hourly data has
+r = 170; the search above went from 250 s to 3); the O(r²) start; and a
+steady state — once the increment is below 10⁻¹⁴ the gain is fixed and
+only the state moves. The CSS pass visits only the lags a seasonal
+polynomial actually carries, bit for bit the dense recursion's sums.
 
 **Many series at once.** `arima_fit_many series spec method` fits K
 series under one specification together: every model's optimizer asks
 for its round of likelihoods, the rounds are joined into one batch, and
-the batch runs on the machine's threads — 256 series of 2 000 points in
-0.3 s where one after another takes 0.8 s. `arima_fit_many_gpu` sends
-the same batch to a CUDA device (`src/arima_gpu.nu`), one block per
-model with the rows of the state across the block's threads; it pays
-off for large states — 16 weekly-season models (r = 170, n = 3 000) in
-75 s on an RTX 4090 against 120 s on twelve CPU threads — and is at
-parity with the threads for small ones. Whichever route, the numbers are
-the same: the kernel runs the CPU's filter in the CPU's order with every
-operation rounded once (`__dadd_rn` and friends, never fused), the
-transform and the stationary covariance stay on the host, and the
-logarithms are summed on the host from the variances the device returns.
-`tests/gpu_test.nu` pins it: the device's fits — coefficients, σ²,
-log-likelihood, standard errors, evaluation counts — equal the CPU's bit
-for bit, on the `gpu` package's host C++ backend (`NURL_GPU=cpu`) and on
-a CUDA device.
+the batch runs on the machine's threads — 64 series of 2 000 points in
+58 ms where one after another takes 142. `arima_fit_many_gpu` sends the
+same batch to a CUDA device (`src/arima_gpu.nu`), one thread per model
+running the same recursions with the working vectors interleaved across
+the models. With the step now O(r) the threads are the faster route at
+every width measured (64 models: 0.47 s on an RTX 4090 against 58 ms on
+twelve threads; 1 024 models: 8.2 s against 0.58 s — the rounds are
+many, each small, and each re-uploads its inputs); the device path is
+kept for its guarantee, and is where a wide-batch design would go. Whichever route, the numbers
+are the same: the kernel runs the CPU's recursion in the CPU's order
+with every operation rounded once (`__dadd_rn` and friends, never
+fused), the transform and the start of the covariance stay on the host,
+and the logarithms are summed on the host from the variances the device
+returns. `tests/gpu_test.nu` pins it: the device's fits — coefficients,
+σ², log-likelihood, standard errors, evaluation counts — equal the CPU's
+bit for bit, on the `gpu` package's host C++ backend (`NURL_GPU=cpu`) and
+on a CUDA device.
 
 ## Surface
 
@@ -131,7 +158,9 @@ a CUDA device.
 ( arima_auto y s )                            → *ArimaModel  s = season, 0 = none
 ( arima_auto_d y s d D )                      → *ArimaModel  with the differences given
 ( arima_forecast m h )                        → ArimaForecast { mean se }   (arima_forecast_free)
-( arima_update m y )                          → ArimaUpdate { predicted innovation variance z }
+( arima_update m y )                          → ArimaUpdate { predicted innovation variance z }   NaN y = a gap
+( arima_restart m )                           the state back to a fresh fit's; replay with arima_update
+( arima_clone m )                             → *ArimaModel  deep copy, state included
 ( arima_coef m )                              → Json
 ( arima_to_json m ) / ( arima_from_json s )   → String / ?*ArimaModel
 ( arima_phi m ) ( arima_theta m ) ( arima_sphi m ) ( arima_stheta m ) ( arima_mu m )
@@ -161,8 +190,9 @@ with, under `forecast`, the means and standard errors.
 
 ## Tests
 
-`tests/arima_test.sh` runs `arima_test.nu` (76 checks: algebra, the
-oracle, streaming, JSON, the batch driver, order selection),
+`tests/arima_test.sh` runs `arima_test.nu` (87 checks: algebra — the
+Chandrasekhar likelihood against the covariance filter's among them —
+the oracle, streaming, JSON, the batch driver, order selection),
 `gpu_test.nu` on both backends, and the CLI on the airline fixture — and
 passes under AddressSanitizer / LeakSanitizer (`NURL_SAN=1`) with nothing
 leaked. `tests/bench.nu` and `tests/bench_gpu.nu` time the shapes above.
