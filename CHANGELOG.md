@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`packages/arima` 0.3.0 — Fourier terms for long and several seasons**
+  (`arima_fit_harmonic`, `arima_auto_harmonic`, `arima_restart_at`): K
+  harmonics per period by least squares, the ARIMA on the residuals, the
+  terms riding with the model's updates, forecasts and JSON.
+  **`packages/anomaly` 0.24.0** routes a season past 168 rows to them and
+  adds the week as Fourier terms when the fit window holds three — the
+  fix for a minute's step whose 1 440-row SARIMA state ate the service.
+
 - **`packages/anomaly` 0.23.0 — proper forecasts.** `POST /forecast/<m>`
   stores a point and answers with its verdict and the forecast from it
   (intervals, times), fitting the forecast version on first use; the

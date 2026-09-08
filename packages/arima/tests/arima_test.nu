@@ -400,6 +400,103 @@ $ `src/arima.nu`
     ( vec_free [f] head ) ( vec_free [f] y )
 }
 
+// ── harmonic ──────────────────────────────────────────────────────────
+
+// A day of 1 440 rows and a week of 7 × 1 440, both as sines, over AR(1)
+// noise: a seasonal polynomial at lag 1 440 is not a state a filter can
+// carry, the Fourier terms are a few numbers.
+@ test_harmonic → v {
+    : i n 12000
+    : ( Vec f ) noise ( sim_ar1 n 0.5 31 )
+    : ( Vec f ) y ( vec_zeroed [f] n )
+    : ~ i t 0
+    ~ < t n {
+        : f day * 5.0 ( float_sin / * 6.283185307179586 # f t 1440.0 )
+        : f week * 2.0 ( float_cos / * 6.283185307179586 # f t 10080.0 )
+        ( vec_set [f] y t + + + 20.0 day week ( _ar_at noise t ) )
+        = t + t 1
+    }
+    : ( Vec f ) head ( vec_zeroed [f] 11000 )
+    = t 0
+    ~ < t 11000 { ( vec_set [f] head t ( _ar_at y t ) ) = t + t 1 }
+    : ( Vec i ) periods ( vec_new [i] )
+    ( vec_push [i] periods 1440 )
+    ( vec_push [i] periods 10080 )
+    : i t0 ( now_ms )
+    : *ArimaModel m ( arima_auto_harmonic head periods 3 0 )
+    : i dt - ( now_ms ) t0
+    : String tl ( string_from `harmonic: two periods of 1 440 and 10 080 rows fitted on 11 000 points in ` )
+    ( string_push_int tl dt ) ( string_push_str tl ` ms` )
+    ( check < dt 5000 ( string_data tl ) )
+    ( string_free tl )
+    ( check == ( arima_n m ) 11000 `harmonic: the fit absorbed every point` )
+    ( check == . m xk 3 `harmonic: three harmonics per period` )
+    // the day's first sine weight is the 5 the series was made with
+    ( check ( near ( _ar_at . m xcoef 1 ) 5.0 0.15 ) `harmonic: the day's amplitude is recovered` )
+    ( check ( near ( _ar_at . m xcoef 8 ) 2.0 0.15 ) `harmonic: the week's amplitude is recovered` )
+    // forecasts follow the seasonal a day ahead, and the naive does not
+    : ArimaForecast fc ( arima_forecast m 1000 )
+    : ~ f e_model 0.0
+    : ~ f e_naive 0.0
+    : f last ( _ar_at head 10999 )
+    : ~ i k 0
+    ~ < k 1000 {
+        = e_model + e_model ( float_abs - ( _ar_at y + 11000 k ) ( _ar_at . fc mean k ) )
+        = e_naive + e_naive ( float_abs - ( _ar_at y + 11000 k ) last )
+        = k + k 1
+    }
+    : String sl ( string_from `harmonic: a thousand steps ahead the model's error is a fraction of the naive's (` )
+    : String s1 ( fmt / e_model 1000.0 ) ( string_push_str sl ( string_data s1 ) ) ( string_free s1 )
+    ( string_push_str sl ` vs ` )
+    : String s2 ( fmt / e_naive 1000.0 ) ( string_push_str sl ( string_data s2 ) ) ( string_free s2 )
+    ( string_push_str sl `)` )
+    ( check < e_model * 0.4 e_naive ( string_data sl ) )
+    ( string_free sl )
+    ( arima_forecast_free fc )
+    // streaming keeps the phase: updates over the held-out rows are judged against the seasonal
+    : ~ f worst_z 0.0
+    = k 0
+    ~ < k 1000 {
+        : ArimaUpdate u ( arima_update m ( _ar_at y + 11000 k ) )
+        : f az ( float_abs . u z )
+        ? > az worst_z { = worst_z az } {}
+        = k + k 1
+    }
+    ( check < worst_z 5.0 `harmonic: no held-out reading is a surprise past five sigma` )
+    ( check == . m xt 12000 `harmonic: the regressors' clock counts the rows` )
+    // the JSON carries the terms and the clock; a copy restarted at the fit's origin replays to the same state
+    : String j1 ( arima_to_json m )
+    ?? ( arima_from_json ( string_data j1 ) ) {
+        T m2 → {
+            : String j2 ( arima_to_json m2 )
+            ( check ( string_eq j1 j2 ) `harmonic: JSON round trip is exact` )
+            ( string_free j2 )
+            ( arima_free m2 )
+        }
+        F _ → { ( check F `harmonic: JSON parses back` ) }
+    }
+    ( string_free j1 )
+    : *ArimaModel m3 ( arima_clone m )
+    ( arima_restart_at m3 0 )
+    = k 0
+    ~ < k n { : ArimaUpdate _u ( arima_update m3 ( _ar_at y k ) ) = k + k 1 }
+    : ArimaForecast fa ( arima_forecast m 3 )
+    : ArimaForecast fb ( arima_forecast m3 3 )
+    ( check == ( f64_to_bits ( _ar_at . fa mean 2 ) ) ( f64_to_bits ( _ar_at . fb mean 2 ) ) `harmonic: a restart at the origin and a replay reach the streamed forecast bit for bit` )
+    : f next1 ( _ar_at . fa mean 0 )
+    ( arima_forecast_free fa ) ( arima_forecast_free fb )
+    // a restart elsewhere keeps the phase through t0
+    : *ArimaModel m4 ( arima_clone m )
+    ( arima_restart_at m4 6000 )
+    = k 6000
+    ~ < k n { : ArimaUpdate _u ( arima_update m4 ( _ar_at y k ) ) = k + k 1 }
+    : ArimaForecast fd ( arima_forecast m4 1 )
+    ( check ( near ( _ar_at . fd mean 0 ) next1 0.05 ) `harmonic: a replay from the middle, phased by t0, forecasts the same next value` )
+    ( arima_forecast_free fd )
+    ( arima_free m3 ) ( arima_free m4 ) ( arima_free m )
+    ( vec_free [i] periods ) ( vec_free [f] head ) ( vec_free [f] y ) ( vec_free [f] noise )
+}
+
 // ── select ────────────────────────────────────────────────────────────
 
 @ test_select → v {
@@ -506,6 +603,7 @@ $ `src/arima.nu`
     ( test_oracle )
     ( test_stream )
     ( test_many )
+    ( test_harmonic )
     ( test_select )
     ( nurl_print `arima_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )

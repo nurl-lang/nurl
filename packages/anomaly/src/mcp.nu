@@ -39,7 +39,7 @@ $ `src/authz.nu`
 $ `src/imptime.nu`
 
 // One version for the CLI banner and the MCP handshake.
-: s ANOMALY_VERSION `0.23.0`
+: s ANOMALY_VERSION `0.24.0`
 
 // ── Wiring ───────────────────────────────────────────────────────────
 
@@ -2590,7 +2590,7 @@ $ `src/imptime.nu`
 
 @ __mcp_sc_train_fc → Json {
     : Json sc ( __mcp_sc_model )
-    ( mcp_schema_prop sc `season` `integer` `Seasonal period in rows — 24 for hourly data with a daily rhythm, 7 for daily data with a weekly one; 0 = none (default: the version's current setting).` F )
+    ( mcp_schema_prop sc `season` `integer` `Seasonal period in rows — 24 for hourly data with a daily rhythm, 1440 at a minute's step, 7 for daily data with a weekly one; 0 = from the ring's step (default: the version's current setting). Up to 168 rows it is a SARIMA polynomial, beyond that Fourier terms; the week is added as Fourier terms when the fit window holds three of them.` F )
     ( mcp_schema_prop sc `window_points` `integer` `Rows back from the newest the models are fitted on (default: the version's setting, 2000).` F )
     ^ sc
 }

@@ -371,6 +371,53 @@ $ `src/dynamic.nu`
     ( check ( meta_version_enabled ( model_metadata mo3 ) ANOM_FC_NAME F ) `ensure: and switches it on` )
     ( model_free mo3 )
 
+    // a minute's step: the day is 1 440 rows, which no polynomial state
+    // can carry — the season goes to Fourier terms, the fit stays quick,
+    // and the forecast still follows the rhythm
+    : *Model mo4 ( model_open_at st `minute` T0 )
+    ( model_set_limits mo4 10 150000 )
+    ( model_set_schedule mo4 100000 100000 )
+    : ( Vec Json ) recs ( vec_new [Json] )
+    = k 0
+    ~ < k 4500 {
+        : Json j ( json_obj_new )
+        ( json_obj_set j `temp` ( json_float + + 20.0 * 5.0 ( sin / * 6.283185307179586 # f k 1440.0 ) * 0.3 ( gauss3 ) ) )
+        ( json_obj_set j `timestamp` ( json_int + T0 * k 60 ) )
+        ( vec_push [Json] recs j )
+        = k + k 1
+    }
+    : ImportReport ir ( model_import_at mo4 recs + T0 * 4500 60 )
+    ( check == . ir accepted 4500 `minute: 4 500 points imported` )
+    ( import_report_free ir )
+    ( vec_free_with [Json] recs \ Json j → v { ( json_free j ) } )
+    : i tm0 ( now_ms )
+    : String e4 ( model_forecast_ensure_at mo4 + T0 * 4500 60 )
+    : i tm1 - ( now_ms ) tm0
+    ( check == ( string_len e4 ) 0 `minute: the forecast version fits` )
+    ( string_free e4 )
+    : String tl ( string_from `minute: fitted a 1 440-row season on 2 000 rows in ` )
+    ( string_push_int tl tm1 ) ( string_push_str tl ` ms` )
+    ( check < tm1 20000 ( string_data tl ) )
+    ( string_free tl )
+    ( check == . . mo4 fc season 1440 `minute: the season is the day` )
+    : *ArimaModel am4 ( model_forecast_model mo4 0 )
+    ( check > . am4 xk 0 `minute: modelled as Fourier terms` )
+    ( check == . . am4 spec s 0 `minute: over a plain ARMA` )
+    : Json bt4 ( model_forecast_backtest mo4 60 100 )
+    : ~ f sk4 -1.0
+    ?? ( json_obj_get bt4 `features` ) { T fa → { ?? ( json_arr_get fa 0 ) { T f0 → { ?? ( json_obj_get f0 `skill_vs_naive` ) { T e → { ?? ( json_num_as_f e ) { T x → { = sk4 x } F _ → {} } } F _ → {} } } F _ → {} } } F _ → {} }
+    ( check > sk4 0.3 `minute: an hour ahead the Fourier model beats the naive forecast` )
+    ( json_free bt4 )
+    // a reopen keeps the regressors' phase
+    ( model_free mo4 )
+    : *Model mo5 ( model_open_at st `minute` + T0 * 4500 60 )
+    : Json fj5 ( model_forecast_json mo5 1 )
+    : ~ f m5 0.0
+    ?? ( json_obj_get fj5 `forecasts` ) { T fa → { ?? ( json_arr_get fa 0 ) { T f0 → { ?? ( json_obj_get f0 `mean` ) { T a → { ?? ( json_arr_get a 0 ) { T e → { ?? ( json_num_as_f e ) { T x → { = m5 x } F _ → {} } } F _ → {} } } F _ → {} } } F _ → {} } } F _ → {} }
+    ( check < ( float_abs - m5 + 20.0 * 5.0 ( sin / * 6.283185307179586 4500.0 1440.0 ) ) 1.0 `minute: after a reopen the next value is forecast on the rhythm` )
+    ( json_free fj5 )
+    ( model_free mo5 )
+
     // reset drops it
     ( model_reset mo2 )
     ( check ! . fcb trained `forecast: reset drops the models` )

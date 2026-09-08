@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0
+
+- **Fourier terms for long and several seasons.** `arima_fit_harmonic` /
+  `arima_auto_harmonic` fit K harmonics per period by least squares and the
+  ARIMA on the residuals, and the terms ride with the model: `arima_update`
+  subtracts the row's seasonal before the filter, `arima_forecast` adds it
+  back, the JSON carries the terms and the regressors' clock, and
+  `arima_restart_at` sets that clock for a replay that begins elsewhere
+  than the fit did. Any period length (the day at a minute's step is
+  1 440 rows, which a seasonal polynomial cannot carry as a state), several
+  at once (the day and the week), O(K) a row. Test: both periods recovered
+  from 11 000 points in well under a second; a thousand steps ahead the
+  error is a fraction of the naive forecast's; restart-and-replay is
+  bit-exact.
+
 ## 0.2.0
 
 - **The exact likelihood by the Chandrasekhar recursions.** With a

@@ -259,7 +259,7 @@ $ `src/store.nu`
             ? > pos np2 { = pos np2 } {}
             ? < pos 0 {
                 : ~ i j 0
-                ~ < j . fc nw { ( arima_restart ( _fc_model_at fc j ) ) = j + j 1 }
+                ~ < j . fc nw { ( arima_restart_at ( _fc_model_at fc j ) - ( model_seq_base mo ) . fc origin_seq ) = j + j 1 }
                 = pos 0
             } {}
             = . fc pos pos
@@ -508,10 +508,10 @@ $ `src/store.nu`
     : ( Vec i ) fc_ok ( vec_with_cap [i] n )
     : ~ ( Vec i ) copies ( vec_new [i] )
     ? > fc_nw 0 {
-        ( vec_free [i] copies )
-        = copies ( fc_replay_begin fc )
         : ~ i b0 - lo ANOM_FC_BURN
         ? < b0 0 { = b0 0 } {}
+        ( vec_free [i] copies )
+        = copies ( fc_replay_begin fc + ( model_seq_base mo ) b0 )
         : ( Vec f ) noz ( vec_new [f] )
         ~ < b0 lo {
             : ( Vec f ) fr ( __an_fc_row mo b0 )
@@ -1155,7 +1155,7 @@ $ `src/store.nu`
 // their times) and persist it. Returns the features watched.
 @ __an_fc_fit * Model mo ( Vec EncPoint ) encs ( Vec i ) ets i now → i {
     : i from ( __an_fc_from mo ets now )
-    : i nw ( fc_train . mo fc . mo meta encs from ( __an_fc_season mo ) now )
+    : i nw ( fc_train . mo fc . mo meta encs from ( __an_fc_season mo ) now ( model_seq_base mo ) )
     ( __an_fc_save mo )
     ^ nw
 }
@@ -1210,6 +1210,13 @@ $ `src/store.nu`
     : *FcModel fc . mo fc
     ? . fc trained { ^ ( string_new ) } {}
     ? ( model_is_trained mo ) {} { ^ ( string_from `the model has not trained yet: a forecast needs the first retrain (min_data_points stored)` ) }
+    ^ ( model_train_forecast_at mo now )
+}
+
+// A version whose season is 0 takes it from the ring's step (the day at
+// a step up to twelve hours, the week at a daily one); a season given
+// stands.
+@ __an_fc_season_from_step * Model mo → v {
     ( _an_ensure_fc_cfg mo )
     : *Meta mm . mo meta
     : i at ( meta_find_version mm ANOM_FC_NAME )
@@ -1219,7 +1226,6 @@ $ `src/store.nu`
         : i season ( anomaly_season_of ( model_step mo ) )
         ? > season 0 { : b _w ( model_set_version_window mo ANOM_FC_NAME season 0 ) } {}
     } {}
-    ^ ( model_train_forecast_at mo now )
 }
 
 : f ANOM_Z80 1.2815515655446004
@@ -1343,7 +1349,7 @@ $ `src/store.nu`
     : *f pabs ( vec_data [f] s_abs ) : *f ppct ( vec_data [f] s_pct ) : *f pnai ( vec_data [f] s_nai ) : *f psea ( vec_data [f] s_sea )
     : *i cabs ( vec_data [i] c_abs ) : *i cpct ( vec_data [i] c_pct ) : *i cnai ( vec_data [i] c_nai ) : *i csea ( vec_data [i] c_sea ) : *i ccov ( vec_data [i] c_cov )
     : i season . fc season
-    : ( Vec i ) copies ( fc_replay_begin fc )
+    : ( Vec i ) copies ( fc_replay_begin fc + ( model_seq_base mo ) b0 )
     : ( Vec f ) noz ( vec_new [f] )
     : ~ i t b0
     ~ < t len {
@@ -1480,7 +1486,7 @@ $ `src/store.nu`
         }
         = k + k 1
     }
-    ( _an_ensure_fc_cfg mo )
+    ( __an_fc_season_from_step mo )
     : i nw ( __an_fc_fit mo encs ets now )
     ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
     ( vec_free [i] ets )

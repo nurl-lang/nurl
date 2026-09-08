@@ -1888,13 +1888,44 @@ $ `stdlib/ext/json.nu`
     f last_innovation
     f last_variance
     f last_predicted
+    ( Vec i ) xper  // Fourier periods in rows (empty: no regressors) — see arima_fit_harmonic
+    i xk  // harmonics per period
+    ( Vec f ) xcoef  // 1 + 2·xk·|xper|: the intercept, then per period and harmonic the sine and cosine weights
+    i xt  // rows since the fit's origin: the index the next observation has in the regressors
 }
 
 @ arima_free * ArimaModel m → v {
     ( _ar_coef_free . m coef )
     ( _ar_ss_free . m ss )
     ( vec_free [f] . m se )
+    ( vec_free [i] . m xper )
+    ( vec_free [f] . m xcoef )
     ( nurl_free # s m )
+}
+
+// The deterministic seasonal at row `t`: the intercept and the Fourier
+// terms of every period (0.0 when the model has none).
+@ __ar_fourier * ArimaModel m i t → f {
+    ? > . m xk 0 {} { ^ 0.0 }
+    : *f c ( vec_data [f] . m xcoef )
+    : *i per ( vec_data [i] . m xper )
+    : i np ( vec_len [i] . m xper )
+    : ~ f mu . c 0
+    : ~ i q 1
+    : ~ i p 0
+    ~ < p np {
+        : f base / * TAU # f t # f . per p
+        : ~ i k 1
+        ~ <= k . m xk {
+            : f a * base # f k
+            = mu + mu * . c q ( float_sin a )
+            = mu + mu * . c + q 1 ( float_cos a )
+            = q + q 2
+            = k + k 1
+        }
+        = p + p 1
+    }
+    ^ mu
 }
 
 @ arima_spec_of * ArimaModel m → ArimaSpec { ^ . m spec }
@@ -2227,6 +2258,10 @@ $ `stdlib/ext/json.nu`
     = . m last_innovation 0.0
     = . m last_variance 0.0
     = . m last_predicted 0.0
+    = . m xper ( vec_new [i] )
+    = . m xk 0
+    = . m xcoef ( vec_new [f] )
+    = . m xt 0
     // The full model's pass over the raw series is O(n · r_d²) — for a
     // weekly season the cost of the fit itself over again — and a
     // candidate the search will discard has no use for a state.
@@ -2556,6 +2591,7 @@ $ `stdlib/ext/json.nu`
     ~ < j h {
         : f fv ( __ar_observe ss )
         = . pm j + ( __ar_predicted ss ) . mc mu
+        ? > . m xk 0 { = . pm j + . pm j ( __ar_fourier m + . m xt j ) } {}
         : f vr * fv . m sigma2
         = . pse j ? > vr 0.0 ( float_sqrt vr ) 0.0
         ( __ar_tvec ss )
@@ -2596,9 +2632,13 @@ $ `stdlib/ext/json.nu`
     : ArimaCoef mc . m coef
     : ArimaSS ss . m ss
     = . m n + . m n 1
+    // with regressors the filter sees the reading less the seasonal
+    // of this row, and the forecast is the filter's plus it
+    : ~ f mu 0.0
+    ? > . m xk 0 { = mu ( __ar_fourier m . m xt ) = . m xt + . m xt 1 } {}
     ? ( float_is_nan y ) {
         : f fv ( __ar_observe ss )
-        : f pred + ( __ar_predicted ss ) . mc mu
+        : f pred + + ( __ar_predicted ss ) . mc mu mu
         : f vr * fv . m sigma2
         ( __ar_tvec ss )
         ( __ar_predict_cov ss )
@@ -2607,13 +2647,16 @@ $ `stdlib/ext/json.nu`
         = . m last_predicted pred
         ^ @ ArimaUpdate { pred y vr y }
     } {}
-    : ArimaStep st ( _ar_step ss - y . mc mu )
+    : ~ f yy y
+    ? > . m xk 0 { = yy - y mu } {}
+    : ArimaStep st ( _ar_step ss - yy . mc mu )
     : f vr * . st variance . m sigma2
+    : f pred + + . st predicted . mc mu mu
     = . m last_innovation . st innovation
     = . m last_variance vr
-    = . m last_predicted + . st predicted . mc mu
+    = . m last_predicted pred
     : f z ? > vr 0.0 / . st innovation ( float_sqrt vr ) 0.0
-    ^ @ ArimaUpdate { + . st predicted . mc mu . st innovation vr z }
+    ^ @ ArimaUpdate { pred . st innovation vr z }
 }
 
 // Forget the observations: the state goes back to where a freshly fitted
@@ -2624,12 +2667,21 @@ $ `stdlib/ext/json.nu`
 // which is how a caller replays a stored history through a model whose
 // state has moved past it.
 @ arima_restart * ArimaModel m → v {
+    ( arima_restart_at m 0 )
+}
+
+// The same, with the regressors' clock set: `t0` is the row the next
+// observation has, counted from the fit's origin (negative for rows
+// before it) — a replay that begins elsewhere than the fit did keeps the
+// seasonal's phase. A model without regressors ignores it.
+@ arima_restart_at * ArimaModel m i t0 → v {
     ( _ar_ss_free . m ss )
     = . m ss ( __ar_full_ss . m spec . m coef )
     = . m n 0
     = . m last_innovation 0.0
     = . m last_variance 0.0
     = . m last_predicted 0.0
+    = . m xt t0
 }
 
 // A deep copy: coefficients, fit statistics, standard errors and the
@@ -2656,7 +2708,144 @@ $ `stdlib/ext/json.nu`
     = . c last_innovation . m last_innovation
     = . c last_variance . m last_variance
     = . c last_predicted . m last_predicted
+    = . c xper ( __ar_veci_copy . m xper )
+    = . c xk . m xk
+    = . c xcoef ( __ar_vec_copy . m xcoef )
+    = . c xt . m xt
     ^ c
+}
+
+@ __ar_veci_copy ( Vec i ) src → ( Vec i ) {
+    : i n ( vec_len [i] src )
+    : ( Vec i ) out ( vec_with_cap [i] n )
+    : ~ i k 0
+    ~ < k n { ( vec_push [i] out ( _ar_geti src k ) ) = k + k 1 }
+    ^ out
+}
+
+// ── Regressors: Fourier terms for long or several seasons ─────────────
+//
+// A seasonal polynomial at lag s puts s rows into the state: at a
+// minute's step the day is 1 440 of them, and a week at an hour's 168,
+// which a state-space filter carries as an r_d² covariance — 2880² is
+// not a model, it is a memory. The other standard form of a seasonal
+// (Hyndman's `fourier()` with ARIMA errors) is deterministic: K
+// harmonics per period, sine and cosine, fitted by least squares, and
+// an ARMA on what is left. It takes any period length, several at once
+// (the day and the week), and costs O(K) a row. It assumes the seasonal
+// shape is fixed — a SARIMA lets it drift — so for a short season the
+// polynomial is the better model and the Fourier terms an addition for
+// a second, longer one.
+
+// Fit `y` as Fourier terms of `periods` (rows) with `k` harmonics each,
+// by least squares, then the ARIMA `sp` on the residuals by `method`,
+// and attach the terms to the model: its updates and forecasts carry
+// them, its state and statistics are the residual model's. `t = 0` is
+// the first row of `y`.
+@ arima_fit_harmonic ( Vec f ) y ( Vec i ) periods i k ArimaSpec sp i method → *ArimaModel {
+    : ( Vec f ) coef ( __ar_fourier_ols y periods k )
+    : ( Vec f ) res ( __ar_fourier_residuals y periods k coef )
+    : *ArimaModel m ( arima_fit_method res sp method )
+    ( __ar_attach_fourier m periods k coef ( vec_len [f] y ) )
+    ( vec_free [f] res )
+    ^ m
+}
+
+// The same with the residual model's order chosen by the stepwise
+// search (`s` its season, 0 for none — the periods carry the long ones).
+@ arima_auto_harmonic ( Vec f ) y ( Vec i ) periods i k i s → *ArimaModel {
+    : ( Vec f ) coef ( __ar_fourier_ols y periods k )
+    : ( Vec f ) res ( __ar_fourier_residuals y periods k coef )
+    : *ArimaModel m ( arima_auto res s )
+    ( __ar_attach_fourier m periods k coef ( vec_len [f] y ) )
+    ( vec_free [f] res )
+    ^ m
+}
+
+@ __ar_attach_fourier * ArimaModel m ( Vec i ) periods i k ( Vec f ) coef i n → v {
+    ( vec_free [i] . m xper )
+    ( vec_free [f] . m xcoef )
+    = . m xper ( __ar_veci_copy periods )
+    = . m xk ? > ( vec_len [i] periods ) 0 k 0
+    = . m xcoef coef
+    = . m xt n
+}
+
+// One row of the design: 1, then per period and harmonic sin, cos.
+@ __ar_fourier_row ( Vec i ) periods i k i t ( Vec f ) row → v {
+    : *f x ( vec_data [f] row )
+    = . x 0 1.0
+    : ~ i q 1
+    : i np ( vec_len [i] periods )
+    : ~ i p 0
+    ~ < p np {
+        : f base / * TAU # f t # f ( _ar_geti periods p )
+        : ~ i j 1
+        ~ <= j k {
+            : f a * base # f j
+            = . x q ( float_sin a )
+            = . x + q 1 ( float_cos a )
+            = q + q 2
+            = j + j 1
+        }
+        = p + p 1
+    }
+}
+
+// Least squares by the normal equations (a handful of columns; rows
+// with a NaN reading are left out). Zeros when the system is singular
+// — fewer rows than columns.
+@ __ar_fourier_ols ( Vec f ) y ( Vec i ) periods i k → ( Vec f ) {
+    : i n ( vec_len [f] y )
+    : i nc + 1 * 2 * k ( vec_len [i] periods )
+    : ( Vec f ) M ( vec_zeroed [f] * nc nc )
+    : ( Vec f ) b ( vec_zeroed [f] nc )
+    : ( Vec f ) row ( vec_zeroed [f] nc )
+    : *f pm ( vec_data [f] M )
+    : *f pb ( vec_data [f] b )
+    : *f pr ( vec_data [f] row )
+    : *f py ( vec_data [f] y )
+    : ~ i t 0
+    ~ < t n {
+        : f v . py t
+        ? ( float_is_nan v ) {} {
+            ( __ar_fourier_row periods k t row )
+            : ~ i i 0
+            ~ < i nc {
+                = . pb i + . pb i * . pr i v
+                : ~ i j 0
+                ~ < j nc { = . pm + * i nc j + . pm + * i nc j * . pr i . pr j = j + j 1 }
+                = i + i 1
+            }
+        }
+        = t + t 1
+    }
+    ? ( _ar_solve M b nc ) {} { ( __ar_fill b 0.0 ) }
+    ( vec_free [f] M )
+    ( vec_free [f] row )
+    ^ b
+}
+
+@ __ar_fourier_residuals ( Vec f ) y ( Vec i ) periods i k ( Vec f ) coef → ( Vec f ) {
+    : i n ( vec_len [f] y )
+    : i nc ( vec_len [f] coef )
+    : ( Vec f ) res ( vec_zeroed [f] n )
+    : ( Vec f ) row ( vec_zeroed [f] nc )
+    : *f pr ( vec_data [f] row )
+    : *f pc ( vec_data [f] coef )
+    : *f py ( vec_data [f] y )
+    : *f po ( vec_data [f] res )
+    : ~ i t 0
+    ~ < t n {
+        ( __ar_fourier_row periods k t row )
+        : ~ f mu 0.0
+        : ~ i i 0
+        ~ < i nc { = mu + mu * . pr i . pc i = i + i 1 }
+        = . po t - . py t mu
+        = t + t 1
+    }
+    ( vec_free [f] row )
+    ^ res
 }
 
 // ── Order selection ───────────────────────────────────────────────────
@@ -2877,6 +3066,13 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set o `seasonal_phi` ( _ar_jarr . mc sphi ) )
     ( json_obj_set o `seasonal_theta` ( _ar_jarr . mc stheta ) )
     ( json_obj_set o `mu` ( json_float . mc mu ) )
+    ? > . m xk 0 {
+        : Json fo ( json_obj_new )
+        ( json_obj_set fo `periods` ( __ar_jints . m xper ) )
+        ( json_obj_set fo `k` ( json_int . m xk ) )
+        ( json_obj_set fo `coef` ( _ar_jarr . m xcoef ) )
+        ( json_obj_set o `fourier` fo )
+    } {}
     ( json_obj_set o `sigma2` ( json_float . m sigma2 ) )
     ( json_obj_set o `loglik` ( json_float . m loglik ) )
     ( json_obj_set o `aic` ( json_float . m aic ) )
@@ -2895,6 +3091,14 @@ $ `stdlib/ext/json.nu`
 // ── Persistence ───────────────────────────────────────────────────────
 //
 // Floats travel as their IEEE bits (hex) so a round trip is exact.
+
+@ __ar_jints ( Vec i ) v → Json {
+    : Json a ( json_arr_new )
+    : i n ( vec_len [i] v )
+    : ~ i k 0
+    ~ < k n { ( json_arr_push a ( json_int ( _ar_geti v k ) ) ) = k + k 1 }
+    ^ a
+}
 
 @ __ar_jbits ( Vec f ) v → Json {
     : Json a ( json_arr_new )
@@ -2935,6 +3139,10 @@ $ `stdlib/ext/json.nu`
     ^ 0.0
 }
 
+@ __ar_jint_of Json e → i {
+    ?? ( json_num_as_i e ) { T x → { ^ x } F _ → { ^ 0 } }
+}
+
 @ __ar_jint Json o s key → i {
     ?? ( json_obj_get o key ) { T v → { ^ ( json_as_int v ) } F _ → {} }
     ^ 0
@@ -2970,6 +3178,14 @@ $ `stdlib/ext/json.nu`
         // the fixed gain, so a reloaded model steps on exactly as this one
         ( json_obj_set o `steady_gain` ( __ar_jbits . ss kg ) )
         ( json_obj_set o `steady_f` ( json_int ( f64_to_bits ( _ar_at . ss fz 0 ) ) ) )
+    } {}
+    ? > . m xk 0 {
+        : Json fo ( json_obj_new )
+        ( json_obj_set fo `periods` ( __ar_jints . m xper ) )
+        ( json_obj_set fo `k` ( json_int . m xk ) )
+        ( json_obj_set fo `coef` ( __ar_jbits . m xcoef ) )
+        ( json_obj_set fo `t` ( json_int . m xt ) )
+        ( json_obj_set o `fourier` fo )
     } {}
     ( json_obj_set o `last_innovation` ( __ar_jbit . m last_innovation ) )
     ( json_obj_set o `last_variance` ( __ar_jbit . m last_variance ) )
@@ -3047,6 +3263,27 @@ $ `stdlib/ext/json.nu`
             = . m last_innovation ( __ar_unbit o `last_innovation` )
             = . m last_variance ( __ar_unbit o `last_variance` )
             = . m last_predicted ( __ar_unbit o `last_predicted` )
+            = . m xper ( vec_new [i] )
+            = . m xk 0
+            = . m xcoef ( vec_new [f] )
+            = . m xt 0
+            ?? ( json_obj_get o `fourier` ) {
+                T fo → {
+                    ?? ( json_obj_get fo `periods` ) {
+                        T pa → {
+                            : i np ( json_arr_len pa )
+                            : ~ i q 0
+                            ~ < q np { ?? ( json_arr_get pa q ) { T e → { ( vec_push [i] . m xper ( __ar_jint_of e ) ) } F _ → {} } = q + q 1 }
+                        }
+                        F _ → {}
+                    }
+                    = . m xk ( __ar_jint fo `k` )
+                    ?? ( json_obj_get fo `coef` ) { T a → { ( vec_free [f] . m xcoef ) = . m xcoef ( __ar_unbits a ) } F _ → {} }
+                    = . m xt ( __ar_jint fo `t` )
+                    ? == ( vec_len [f] . m xcoef ) + 1 * 2 * . m xk ( vec_len [i] . m xper ) {} { = . m xk 0 }
+                }
+                F _ → {}
+            }
             ( json_free o )
             ^ @ ?*ArimaModel { T m }
         }

@@ -51,6 +51,15 @@ $ `deps/arima/src/arima.nu`
 : i ANOM_FC_BURN 500
 // Fewer present readings than this in the fit window: not watched.
 : i ANOM_FC_MIN_FIT 30
+// A season up to this many rows is a SARIMA polynomial (the week at an
+// hour's step); a longer one — the day at a minute's — is Fourier terms
+// with `ANOM_FC_HARMONICS` harmonics, which cost O(K) a row where the
+// polynomial's state would be the season squared (see arima_fit_harmonic).
+: i ANOM_FC_SARIMA_MAX 168
+: i ANOM_FC_HARMONICS 4
+// The second season: the week, seven of the first, as Fourier terms
+// when the fit window covers at least this many weeks.
+: i ANOM_FC_WEEK_MIN 3
 // A forecast variance past this many σ² is the diffuse start still
 // speaking: no verdict.
 : f ANOM_FC_DIFFUSE 1000.0
@@ -72,6 +81,7 @@ $ `deps/arima/src/arima.nu`
     i trained_at
     i trained_on
     i unsaved  // rows absorbed since the file was last written
+    i origin_seq  // the absolute sequence number of the fit window's first row: the regressors' t = 0
 }
 
 @ fc_new → *FcModel {
@@ -87,6 +97,7 @@ $ `deps/arima/src/arima.nu`
     = . fc trained_at 0
     = . fc trained_on 0
     = . fc unsaved 0
+    = . fc origin_seq 0
     ^ fc
 }
 
@@ -153,11 +164,31 @@ $ `deps/arima/src/arima.nu`
 // ── Training ──────────────────────────────────────────────────────────
 
 // One feature's fit, as a job for a worker thread: the series (gaps
-// bridged), the season, the slot for the model.
+// bridged), the season, the Fourier periods, the slot for the model.
 : FcJob {
     ( Vec f ) y
-    i season
+    i season  // the SARIMA season (0 = none)
+    ( Vec i ) periods  // Fourier periods in rows (empty = none)
     i out  // *ArimaModel, 0 until fitted
+}
+
+// How a season is modelled for a fit window of `n` rows: a polynomial
+// up to ANOM_FC_SARIMA_MAX, Fourier terms beyond; the week as Fourier
+// terms too when the window holds ANOM_FC_WEEK_MIN of them.
+: FcPlan {
+    i sarima
+    ( Vec i ) periods
+}
+
+@ fc_plan i season i n → FcPlan {
+    : ( Vec i ) periods ( vec_new [i] )
+    : ~ i sarima 0
+    ? > season 0 {
+        ? <= season ANOM_FC_SARIMA_MAX { = sarima season } { ( vec_push [i] periods season ) }
+        : i week * 7 season
+        ? & != week season >= n * ANOM_FC_WEEK_MIN week { ( vec_push [i] periods week ) } {}
+    } {}
+    ^ @ FcPlan { sarima periods }
 }
 
 : FcLane {
@@ -167,7 +198,7 @@ $ `deps/arima/src/arima.nu`
 }
 
 @ __fc_job_run * FcJob j → v {
-    : *ArimaModel m ( arima_auto . j y . j season )
+    : *ArimaModel m ? > ( vec_len [i] . j periods ) 0 ( arima_auto_harmonic . j y . j periods ANOM_FC_HARMONICS . j season ) ( arima_auto . j y . j season )
     = . j out # i m
 }
 
@@ -289,7 +320,7 @@ $ `deps/arima/src/arima.nu`
 // the window gets a model; the models are then filtered over the whole
 // ring so their states stand at its end. Returns the number of features
 // watched.
-@ fc_train * FcModel fc * Meta mm ( Vec EncPoint ) encs i from i season i now → i {
+@ fc_train * FcModel fc * Meta mm ( Vec EncPoint ) encs i from i season i now i base_seq → i {
     ( fc_clear fc )
     : i ne ( vec_len [EncPoint] encs )
     : ( Vec i ) mask ( meta_numeric_feat_mask mm )
@@ -337,7 +368,9 @@ $ `deps/arima/src/arima.nu`
         ? & >= . fs present ANOM_FC_MIN_FIT . fs distinct {
             : *FcJob jb # *FcJob ( nurl_malloc Z FcJob )
             = . jb y y
-            = . jb season season
+            : FcPlan plan ( fc_plan season - ne from )
+            = . jb season . plan sarima
+            = . jb periods . plan periods
             = . jb out 0
             ( vec_push [i] jobs # i jb )
             ( vec_push [i] jfeat j )
@@ -355,7 +388,10 @@ $ `deps/arima/src/arima.nu`
         : ~ b keep F
         ? != . jb out 0 { ? & . m converged > ( arima_sigma2 m ) 0.0 { = keep T } {} } {}
         ? keep {
-            ( arima_restart m )
+            // the whole ring, from its first row: the regressors' clock
+            // runs from the fit window's first row, so rows before it
+            // count down from zero
+            ( arima_restart_at m - 0 from )
             : *f ph ( vec_data [f] hist )
             : ~ i t 0
             ~ < t ne { : ArimaUpdate _u ( arima_update m . ph + * t nc cj ) = t + t 1 }
@@ -367,6 +403,7 @@ $ `deps/arima/src/arima.nu`
             ( vec_push [i] . fc models # i m )
         } { ? != . jb out 0 { ( arima_free m ) } {} }
         ( vec_free [f] . jb y )
+        ( vec_free [i] . jb periods )
         ( nurl_free # s jb )
         = k + k 1
     }
@@ -382,6 +419,7 @@ $ `deps/arima/src/arima.nu`
     = . fc trained_at now
     = . fc trained_on - ne from
     = . fc unsaved 0
+    = . fc origin_seq + base_seq from
     ^ . fc nw
 }
 
@@ -490,14 +528,16 @@ $ `deps/arima/src/arima.nu`
 
 // ── Replay (scans) ────────────────────────────────────────────────────
 
-// A copy of every model, restarted: the stream begins again.
-@ fc_replay_begin * FcModel fc → ( Vec i ) {
+// A copy of every model, restarted: the stream begins again at the row
+// whose absolute sequence number is `seq` (the regressors' phase
+// follows from it).
+@ fc_replay_begin * FcModel fc i seq → ( Vec i ) {
     : ( Vec i ) out ( vec_new [i] )
     : i nw . fc nw
     : ~ i j 0
     ~ < j nw {
         : *ArimaModel c ( arima_clone ( _fc_model_at fc j ) )
-        ( arima_restart c )
+        ( arima_restart_at c - seq . fc origin_seq )
         ( vec_push [i] out # i c )
         = j + j 1
     }
@@ -572,6 +612,7 @@ $ `deps/arima/src/arima.nu`
     ( json_obj_set o `trained_at` ( json_int . fc trained_at ) )
     ( json_obj_set o `trained_on` ( json_int . fc trained_on ) )
     ( json_obj_set o `seq` ( json_int . fc seq ) )
+    ( json_obj_set o `origin_seq` ( json_int . fc origin_seq ) )
     : Json ms ( json_arr_new )
     = j 0
     ~ < j nw {
@@ -607,6 +648,7 @@ $ `deps/arima/src/arima.nu`
             = . fc trained_at ( _an_jint o `trained_at` 0 )
             = . fc trained_on ( _an_jint o `trained_on` 0 )
             = . fc seq ( _an_jint o `seq` 0 )
+            = . fc origin_seq ( _an_jint o `origin_seq` 0 )
             : ~ b good T
             ?? ( json_obj_get o `features` ) {
                 T fa → {
