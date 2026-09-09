@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0
+
+- **A linear drift among the regressors.** `arima_fit_regress` /
+  `arima_auto_regress` take a `trend` beside the Fourier periods: a series
+  that climbs by a fixed amount a row is ARIMA(0,1,0) with drift exactly,
+  and without the term the order search could only climb with a unit root
+  that stops at the last level (a ramp forecast twenty steps ahead at a
+  fraction of the naive error, test). The JSON carries it; the older
+  `arima_fit_harmonic` / `arima_auto_harmonic` are the same without it.
+
 ## 0.3.0
 
 - **Fourier terms for long and several seasons.** `arima_fit_harmonic` /

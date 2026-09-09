@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.28.0
+
+The findings of an agent's second session — synthetic data through MCP —
+and the visualiser it asked for.
+
+- **A drift form, and the tie goes to the simpler form.** An exact ramp
+  chose a Fourier form with near-unit roots that tracked it twelve steps
+  and then ran away (forecast 48 where the truth was 120; skill −14),
+  because the plain ARIMA has no drift and could only climb with a unit
+  root. `arima` 0.4.0 puts a linear drift among the regressors; `drift`
+  and `fourier4+drift` are candidates; the candidates are tried simplest
+  first and a richer form takes over only when its holdout error is 5 %
+  smaller. On a ramp with noise the drift form beats the naive forecast
+  by half twelve steps ahead (test); an exact ramp is deterministic and
+  skipped.
+- **An exact forecast that is wrong is an infinite surprise**, never a
+  silent zero: with no scale to floor the sigma (a model from before the
+  floor, a feature the fit reproduced exactly) a reading off the forecast
+  now scores ±1e6, so the feature cannot drop out of the verdict unseen.
+- **A point may carry its own clock.** `/detect` and `/forecast` read a
+  `timestamp` field (unix seconds or ISO-8601) as the time the point is
+  stored under, provided it is not older than the newest stored point —
+  a stream is a sequence, history has the import route. The forecast's
+  answer warns when the newest gap is unlike the ring's step: the models
+  forecast by row, and the times are the step counted from the newest
+  point.
+- **The forecast from any stored row.** `GET …/forecast?origin=R` and the
+  MCP tool's `origin` replay copies of the models up to row R and answer
+  with the forecast made there, to put beside what followed. The
+  visualiser draws it: a slider under the chart moves the origin, the
+  forecast and its bands lie over the actual rows that came after, a
+  drag across the chart zooms into a stretch (so a forecast is never a
+  few pixels wide at the end of a long ring), double-click restores,
+  `?origin=<row>` links to a view.
+- **Backtest:** the rows before the first origin now cover a season, so
+  the seasonal-naive baseline exists for a 1 440-row season; the answer
+  says that the coefficients are in-sample and the skill optimistic (the
+  form was chosen out of sample).
+- **`anomalies` under a `versions` / `min_votes` filter** says the filter
+  kept N of the window's M, instead of asking for a larger count.
+
 ## 0.27.0
 
 - **The forecast verdict has a floor.** A calendar sine fed as data had a

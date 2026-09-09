@@ -84,17 +84,21 @@ rights.
   anomalies from the same data uses both routes on one model, and a
   model without a trained forecast version gets one fitted on the first
   `/forecast` call once it has trained, the season from the ring's step.
-  Which form a feature gets is chosen, not assumed: a plain ARIMA, the
-  persistence forecast (ARIMA(0,1,0), which on a slow smooth reading
-  nothing beats), the seasonal polynomial (up to 168 rows), Fourier
+  Which form a feature gets is chosen, not assumed: the persistence
+  forecast (ARIMA(0,1,0), which on a slow smooth reading nothing beats),
+  a linear drift (a series that climbs by a fixed amount a row), a plain
+  ARIMA, the seasonal polynomial (up to 168 rows), Fourier
   terms of the season with two, four or six harmonics over a plain ARIMA
   (the day at a minute's step is 1 440 rows, which no filter state can
   carry), and the week added as Fourier terms when the fit window holds
   three of them — every
   candidate is fitted on the window's first part and judged on its last
-  fifth by the error of its forecasts up to twelve steps ahead, the best
-  refitted on the whole window, and the holdout error beside the naive
-  forecast's kept in the metadata (`selected`, `holdout_skill`). The fit
+  fifth by the error of its forecasts up to twelve steps ahead — tried
+  simplest first, a richer form taking over only when it is 5 % better,
+  because a near-unit-root ARIMA mimics a drift over twelve steps and
+  then runs away — the best refitted on the whole window, and the holdout
+  error beside the naive forecast's kept in the metadata (`selected`,
+  `holdout_skill`). The fit
   is seconds either way: three features at a minute's step over 5 700
   points in a few seconds, thirteen features over 18 000 rows likewise.
   Whether the forecasts are any good is measured, not assumed:
@@ -979,7 +983,7 @@ command with `--store DIR`.
 
 | Route | Meaning |
 | --- | --- |
-| `POST /detect/<model>` | ingest one point, train if due, verdict (202 while warming) |
+| `POST /detect/<model>` | ingest one point, train if due, verdict (202 while warming); a `timestamp` field (unix seconds or ISO-8601) is the time the point is stored under, provided it is not older than the newest stored point — without one the server's clock stamps it |
 | `POST /detect_only/<model>` | score only — no ingestion, no retrain, no writes |
 | `GET\|POST /force_train/<model>` | retrain now |
 | `POST /detect_anomalies` | batch-score a CSV file (`{"file_path": ..., "has_header": ...}`) |
@@ -1013,7 +1017,7 @@ command with `--store DIR`.
 | `POST /train/autoencoder/<m>` | train the autoencoder version — optional `{"hidden": [..], "contamination": x}` |
 | `POST /train/forecast/<m>` | train the forecast version and switch it on — optional `{"season": S, "window_points": N, "window_minutes": M}` |
 | `POST /forecast/<m>?horizon=H` | `/detect`'s twin: store the point and answer with its verdict and the forecast from it (intervals, times); fits the forecast version on first use once the model has trained |
-| `GET /models/dynamic/<m>/forecast?horizon=H` | the next H values of every feature the forecast version watches, with standard errors, 80 % / 95 % intervals, times and the fitted models |
+| `GET /models/dynamic/<m>/forecast?horizon=H&origin=R` | the next H values of every feature the forecast version watches, with standard errors, 80 % / 95 % intervals, times and the fitted models; `origin=<row>` answers with the forecast as it would have been made from that stored row (the models replayed up to it), to put beside what followed |
 | `GET /models/dynamic/<m>/forecast/backtest?horizon=H&points=N` | how good the forecasts are: a rolling-origin backtest over the newest N rows — MAE, MAPE, 95 % coverage, skill against the naive and seasonal-naive forecasts (a cell with nothing to compare is `null`) |
 | `GET /models/dynamic/<m>/audit?limit=N` | the margin changes, newest N: when, by whom (`actor`: an e-mail, `key:<id>`, `source:<id>`, `cli`), how (`action`: `edit`, `finetune`, `autotune`), which version, from what to what |
 
@@ -1276,7 +1280,7 @@ build step — plain HTML/CSS/JS that talks to the routes above):
 | --- | --- |
 | `/` · `/modelmanager.html` | list models — stored points beside the lifetime count, feature count, a button straight to the model's anomalies — train / finetune / reset / delete, export the stored points as CSV or JSONL; per model: toggle versions, edit margins and contamination with a live *flags in window* column from the calibration report, preview and apply a fine-tune for a target alert rate, train the autoencoder, train the forecast version (its season and fit window), edit the retrain schedule — or, under *Advanced*, the whole editable metadata, as a generated field form or as raw JSON. Every alert-affecting control carries a `?` that says what it means and which way to move it |
 | `/modeltrainer.html` | import a CSV/JSON/JSONL file of history — inspect first: the page shows where it found the time (a column, year/month/day parts, or none) and lets you confirm or change it; feed points (`/detect`) one at a time or in bulk; force-train |
-| `/visualize.html` | plot any numeric feature of a model's stored points over time, with the forecast version's next steps and their 80 % / 95 % bands drawn past the end |
+| `/visualize.html` | plot any numeric feature of a model's stored points over time, with the forecast version's next steps and their 80 % / 95 % bands drawn past the end; drag across the chart to zoom into a stretch (double-click for everything), move the slider to forecast from an earlier row and see the forecast over what actually followed (`?origin=<row>` links to it), set the steps |
 | `/admin.html` | the organization: users and their roles, API keys, model ownership |
 | `/sources.html` | data sources: what is fetched from where into which model and how often, with each run's outcome; add one by loading a WFS service's catalogue, picking a stored query, filling in the location, previewing the last hours and ticking the columns to use as features |
 | `/anomalies.html` | scan stored history over a time range: score timeline, a per-version ribbon showing *what* flagged *when*, any feature's own trace for context, and a table naming the features whose relationship broke — with the value each had and the one the autoencoder expected; forest-only flags list the point's most extreme values in σ. Drag across a chart to zoom into a stretch of points, double-click or *reset zoom* to see the whole range; click a point for its stored record and every feature as the model saw it. Filter chips isolate the joint (autoencoder) anomalies from the per-feature (forest) ones. *Max points* (50 000) bites only when the range holds more; *Export* downloads the range's stored points as CSV or JSONL |

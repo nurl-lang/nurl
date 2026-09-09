@@ -39,7 +39,10 @@
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
   .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
              margin: 0 0 14px; font-weight: 600; }
-  canvas { width: 100%; display: block; }
+  canvas { width: 100%; display: block; cursor: crosshair; }
+  .fcbar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .fcbar input[type=range] { flex: 1; min-width: 160px; accent-color: #ffab40; }
+  .fcbar .mono { font-family: var(--mono); color: var(--fg); }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip { font-family: var(--mono); font-size: 12px; background: var(--panel2); border: 1px solid var(--border);
           border-radius: 6px; padding: 3px 9px; cursor: pointer; }
@@ -89,6 +92,13 @@
         <h2 id="chartTitle">Series</h2>
         <canvas id="chart" height="380"></canvas>
         <div id="chartEmpty" class="empty" style="display:none">Select a model with numeric data.</div>
+        <div class="fcbar" id="fcbar" style="display:none">
+          <label>forecast from <span id="originLabel" class="mono">newest</span></label>
+          <input type="range" id="origin" min="0" max="0" value="0" step="1">
+          <label>steps <input type="text" id="horizon" value="24" size="4"></label>
+          <button id="zoomReset" title="Show the whole series (double-click the chart does the same)">Reset zoom</button>
+          <span class="muted">drag across the chart to zoom into a stretch; move the slider to forecast from an earlier point and see what followed</span>
+        </div>
       </div>
     </div>
     <div>
@@ -141,19 +151,28 @@ async function onModel() {
 }
 
 let FC = null;      // the forecast answer for the current model, or null
-let FCH = 24;       // horizon asked for
+let ORIGIN = null;  // the row the forecast is made from; null = the newest
+let VIEW = null;    // the zoomed stretch as SERIES positions {a, b}; null = everything
+function horizon() { const h = parseInt($("horizon").value, 10); return isFinite(h) && h > 0 ? Math.min(h, 1000) : 24; }
+let fcSeq = 0;
 async function loadForecast(name) {
-  FC = null;
+  const seq = ++fcSeq;
+  let f = null;
   try {
-    const f = await api("/models/dynamic/" + enc(name) + "/forecast?horizon=" + FCH);
-    if (f && f.forecasts) FC = f;
-  } catch (e) { FC = null; }
+    const url = "/models/dynamic/" + enc(name) + "/forecast?horizon=" + horizon() + (ORIGIN === null ? "" : "&origin=" + ORIGIN);
+    const d = await api(url);
+    if (d && d.forecasts) f = d;
+  } catch (e) { f = null; }
+  if (seq !== fcSeq) return;   // a newer request answered first
+  FC = f;
+  draw();
 }
 async function loadData(name) {
   try {
-    await loadForecast(name);
+    ORIGIN = PRESET_ORIGIN; PRESET_ORIGIN = null; VIEW = null; FC = null;
     const d = await api("/models/dynamic/" + enc(name) + "/data?limit=all");
     DATA = d.data || [];
+    loadForecast(name);
     $("count").textContent = DATA.length + " points";
     // discover numeric keys
     const keys = {};
@@ -223,8 +242,16 @@ function draw() {
   const empty = !FEATURE || SERIES.length === 0;
   $("chartEmpty").style.display = empty ? "block" : "none";
   cv.style.display = empty ? "none" : "block";
+  $("fcbar").style.display = empty ? "none" : "flex";
   const fc = FC && FEATURE ? (FC.forecasts || []).find(f => f.feature === FEATURE) : null;
-  $("chartTitle").textContent = FEATURE ? (FEATURE + " over time" + (fc ? " · forecast " + FC.horizon + " steps" : "")) : "Series";
+  const N = SERIES.length;
+  // the slider ranges over the stored rows; its label names the origin
+  const sl = $("origin");
+  const lastRow = N ? SERIES[N-1].i : 0;
+  sl.max = lastRow; sl.min = N ? SERIES[0].i : 0;
+  if (ORIGIN === null) sl.value = lastRow;
+  $("originLabel").textContent = ORIGIN === null ? "newest" : ("row #" + ORIGIN + (FC && FC.from_time ? " · " + fmtWhen(FC.from_time) : ""));
+  $("chartTitle").textContent = FEATURE ? (FEATURE + " over time" + (fc ? " · forecast " + FC.horizon + " steps" + (ORIGIN === null ? "" : " from #" + ORIGIN) : "")) : "Series";
   if (empty) return;
 
   const dpr = window.devicePixelRatio || 1;
@@ -235,15 +262,28 @@ function draw() {
   const pad = { l: 54, r: 14, t: 14, b: 26 };
   const iw = W - pad.l - pad.r, ih = H_ - pad.t - pad.b;
 
-  const xs = SERIES.map(p => p.x);
+  // the origin's position among the series, and the forecast's columns after it
+  let oi = N - 1;
+  if (ORIGIN !== null) { oi = 0; for (let k = 0; k < N; k++) if (SERIES[k].i <= ORIGIN) oi = k; }
   const H = fc ? (fc.mean || []).length : 0;
-  let mn = Math.min(...xs), mx = Math.max(...xs);
-  if (fc) { for (const v of fc.lo95 || []) if (isFinite(v)) mn = Math.min(mn, v); for (const v of fc.hi95 || []) if (isFinite(v)) mx = Math.max(mx, v); }
+  // the visible stretch: the zoom, or everything; the forecast's columns
+  // are always in view when the forecast is from the newest point
+  let a = VIEW ? Math.max(0, VIEW.a) : 0;
+  let b = VIEW ? Math.min(N - 1, VIEW.b) : N - 1;
+  if (b - a < 2) { a = Math.max(0, b - 2); }
+  let last = b;
+  if (H > 0 && oi >= a && oi <= b) last = Math.max(b, oi + H);
+  const cols = last - a;
+  const X = (pos) => pad.l + (cols <= 0 ? iw/2 : ((pos - a)/cols)*iw);
+
+  const ys = [];
+  for (let k = a; k <= b; k++) ys.push(SERIES[k].x);
+  if (fc && H > 0 && oi >= a && oi <= b) {
+    for (let k = 0; k < H; k++) { if (isFinite(fc.lo95[k])) ys.push(fc.lo95[k]); if (isFinite(fc.hi95[k])) ys.push(fc.hi95[k]); }
+  }
+  let mn = Math.min(...ys), mx = Math.max(...ys);
   if (mn === mx) { mn -= 1; mx += 1; }
   const padY = (mx - mn) * 0.08; mn -= padY; mx += padY;
-  const N = SERIES.length;
-  const NT = N + H;   // the forecast takes the last H columns
-  const X = (i) => pad.l + (NT <= 1 ? iw/2 : (i/(NT-1))*iw);
   const Y = (v) => pad.t + ih - ((v - mn)/(mx - mn))*ih;
 
   // grid + y labels
@@ -254,72 +294,127 @@ function draw() {
     g.beginPath(); g.moveTo(pad.l, y); g.lineTo(W-pad.r, y); g.stroke();
     g.fillText(fmtNum(yv), 6, y+3);
   }
-  // x ticks
+  // x ticks: row numbers
   for (let t = 0; t <= 4; t++) {
-    const idx = Math.round((N-1)*t/4), x = X(idx);
-    g.fillText(String(idx), x-6, H_-8);
+    const pos = Math.round(a + cols*t/4);
+    const row = pos <= b ? SERIES[Math.min(pos, N-1)].i : (SERIES[N-1].i + (pos - (N-1)));
+    g.fillText("#" + row, X(pos)-8, H_-8);
   }
 
-  // area + line
+  // area + line of the visible stretch
   const grad = g.createLinearGradient(0, pad.t, 0, H_-pad.b);
   grad.addColorStop(0, "rgba(76,154,255,.28)"); grad.addColorStop(1, "rgba(76,154,255,0)");
   g.beginPath();
-  SERIES.forEach((p,i) => { const y=Y(p.x); i?g.lineTo(X(i),y):g.moveTo(X(i),y); });
-  g.lineTo(X(N-1), H_-pad.b); g.lineTo(X(0), H_-pad.b); g.closePath();
+  for (let k = a; k <= b; k++) { const y = Y(SERIES[k].x); k === a ? g.moveTo(X(k), y) : g.lineTo(X(k), y); }
+  g.lineTo(X(b), H_-pad.b); g.lineTo(X(a), H_-pad.b); g.closePath();
   g.fillStyle = grad; g.fill();
-
   g.beginPath();
-  SERIES.forEach((p,i) => { const y=Y(p.x); i?g.lineTo(X(i),y):g.moveTo(X(i),y); });
+  for (let k = a; k <= b; k++) { const y = Y(SERIES[k].x); k === a ? g.moveTo(X(k), y) : g.lineTo(X(k), y); }
   g.strokeStyle = getVar("--accent"); g.lineWidth = 1.8; g.stroke();
-
-  // points (sparse)
-  if (N <= 400) {
+  if (b - a <= 400) {
     g.fillStyle = getVar("--accent");
-    SERIES.forEach((p,i) => { g.beginPath(); g.arc(X(i), Y(p.x), 2, 0, 7); g.fill(); });
+    for (let k = a; k <= b; k++) { g.beginPath(); g.arc(X(k), Y(SERIES[k].x), 2, 0, 7); g.fill(); }
   }
 
-  // the forecast: 95 % and 80 % bands, then the mean, from the last point on
-  if (fc && H > 0) {
+  // the forecast: 95 % and 80 % bands, then the mean, from the origin on —
+  // over the actual rows that followed when the origin is not the newest
+  if (fc && H > 0 && oi >= a && oi <= b) {
     const band = (lo, hi, color) => {
       g.beginPath();
-      g.moveTo(X(N-1), Y(SERIES[N-1].x));
-      for (let k = 0; k < H; k++) g.lineTo(X(N+k), Y(hi[k]));
-      for (let k = H-1; k >= 0; k--) g.lineTo(X(N+k), Y(lo[k]));
+      g.moveTo(X(oi), Y(SERIES[oi].x));
+      for (let k = 0; k < H; k++) g.lineTo(X(oi+1+k), Y(hi[k]));
+      for (let k = H-1; k >= 0; k--) g.lineTo(X(oi+1+k), Y(lo[k]));
       g.closePath(); g.fillStyle = color; g.fill();
     };
     band(fc.lo95, fc.hi95, "rgba(255,171,64,.16)");
     band(fc.lo80, fc.hi80, "rgba(255,171,64,.22)");
     g.beginPath();
-    g.moveTo(X(N-1), Y(SERIES[N-1].x));
-    for (let k = 0; k < H; k++) g.lineTo(X(N+k), Y(fc.mean[k]));
-    g.setLineDash([5, 4]); g.strokeStyle = "#ffab40"; g.lineWidth = 1.8; g.stroke(); g.setLineDash([]);
-    g.strokeStyle = getVar("--grid"); g.beginPath(); g.moveTo(X(N-1), pad.t); g.lineTo(X(N-1), H_ - pad.b); g.stroke();
+    g.moveTo(X(oi), Y(SERIES[oi].x));
+    for (let k = 0; k < H; k++) g.lineTo(X(oi+1+k), Y(fc.mean[k]));
+    g.setLineDash([5, 4]); g.strokeStyle = "#ffab40"; g.lineWidth = 2; g.stroke(); g.setLineDash([]);
+    g.strokeStyle = "#ffab40"; g.globalAlpha = 0.5; g.beginPath(); g.moveTo(X(oi), pad.t); g.lineTo(X(oi), H_ - pad.b); g.stroke(); g.globalAlpha = 1;
   }
 
-  // hover
-  cv._series = SERIES; cv._X = X; cv._Y = Y; cv._N = N; cv._pad = pad;
+  // the zoom selection in progress
+  if (DRAG && DRAG.x1 !== undefined) {
+    g.fillStyle = "rgba(76,154,255,.15)"; g.strokeStyle = getVar("--accent");
+    const x0 = Math.min(DRAG.x0, DRAG.x1), x1 = Math.max(DRAG.x0, DRAG.x1);
+    g.fillRect(x0, pad.t, x1 - x0, ih); g.strokeRect(x0 + 0.5, pad.t + 0.5, x1 - x0, ih);
+  }
+
+  // hover: positions → series index
+  cv._series = SERIES; cv._X = X; cv._Y = Y; cv._N = N; cv._pad = pad; cv._a = a; cv._cols = cols; cv._oi = oi; cv._fc = fc;
 }
+function fmtWhen(t) { if (!t) return ""; try { return new Date(t * 1000).toISOString().replace("T", " ").slice(0, 16); } catch (e) { return String(t); } }
 function getVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
 
+let DRAG = null;
+function posOf(cv, clientX) {
+  const rect = cv.getBoundingClientRect();
+  const mx = clientX - rect.left;
+  const pad = cv._pad, iw = cv.clientWidth - pad.l - pad.r;
+  return cv._a + ((mx - pad.l)/iw) * cv._cols;
+}
 $("chart").addEventListener("mousemove", (e) => {
   const cv = $("chart"); if (!cv._series) return;
-  const rect = cv.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const N = cv._N, pad = cv._pad, iw = cv.clientWidth - pad.l - pad.r;
-  let idx = Math.round(((mx - pad.l)/iw)*(N-1));
-  idx = Math.max(0, Math.min(N-1, idx));
-  const p = cv._series[idx]; if (!p) return;
+  if (DRAG) { DRAG.x1 = e.clientX - cv.getBoundingClientRect().left; draw(); return; }
+  const pos = Math.round(posOf(cv, e.clientX));
   const tip = $("tip");
+  const N = cv._N;
+  let text = null;
+  if (pos >= 0 && pos < N) {
+    const p = cv._series[pos];
+    text = "#" + p.i + " · " + FEATURE + " = " + fmtNum(p.x);
+    if (cv._fc && pos > cv._oi && pos - cv._oi - 1 < cv._fc.mean.length) {
+      const k = pos - cv._oi - 1;
+      text += " · forecast " + fmtNum(cv._fc.mean[k]) + " (95 % " + fmtNum(cv._fc.lo95[k]) + " … " + fmtNum(cv._fc.hi95[k]) + ")";
+    }
+  } else if (cv._fc && pos > cv._oi && pos - cv._oi - 1 < cv._fc.mean.length) {
+    const k = pos - cv._oi - 1;
+    text = "step +" + (k+1) + " · forecast " + fmtNum(cv._fc.mean[k]) + " (95 % " + fmtNum(cv._fc.lo95[k]) + " … " + fmtNum(cv._fc.hi95[k]) + ")";
+  }
+  if (!text) { tip.style.display = "none"; return; }
   tip.style.display = "block";
   tip.style.left = (e.clientX + 12) + "px"; tip.style.top = (e.clientY + 12) + "px";
-  tip.innerHTML = "#" + idx + " · " + FEATURE + " = " + fmtNum(p.x);
+  tip.innerHTML = text;
 });
-$("chart").addEventListener("mouseleave", () => { $("tip").style.display = "none"; });
+$("chart").addEventListener("mouseleave", () => { $("tip").style.display = "none"; if (DRAG) { DRAG = null; draw(); } });
+// drag across the chart: zoom into that stretch; double-click: everything
+$("chart").addEventListener("mousedown", (e) => {
+  const cv = $("chart"); if (!cv._series) return;
+  DRAG = { x0: e.clientX - cv.getBoundingClientRect().left };
+  e.preventDefault();
+});
+$("chart").addEventListener("mouseup", (e) => {
+  const cv = $("chart"); if (!DRAG) return;
+  const left = cv.getBoundingClientRect().left;
+  const x0 = DRAG.x0, x1 = e.clientX - left;
+  DRAG = null;
+  if (Math.abs(x1 - x0) < 6) { draw(); return; }   // a click, not a drag
+  const p0 = posOf(cv, x0 + left), p1 = posOf(cv, e.clientX);
+  const lo = Math.max(0, Math.floor(Math.min(p0, p1))), hi = Math.min(cv._N - 1, Math.ceil(Math.max(p0, p1)));
+  if (hi - lo >= 2) VIEW = { a: lo, b: hi };
+  draw();
+});
+$("chart").addEventListener("dblclick", () => { VIEW = null; draw(); });
+$("zoomReset").onclick = () => { VIEW = null; draw(); };
+let originTimer = null;
+$("origin").addEventListener("input", (e) => {
+  const row = parseInt(e.target.value, 10);
+  const lastRow = SERIES.length ? SERIES[SERIES.length-1].i : 0;
+  ORIGIN = row >= lastRow ? null : row;
+  $("originLabel").textContent = ORIGIN === null ? "newest" : "row #" + ORIGIN;
+  clearTimeout(originTimer);
+  originTimer = setTimeout(() => loadForecast($("model").value), 150);
+});
+$("horizon").addEventListener("change", () => loadForecast($("model").value));
 window.addEventListener("resize", draw);
 
 async function refresh() { await onModel(); }
 
 const qp = new URLSearchParams(location.search);
+// ?origin=<row> opens the page forecasting from that row (a link to share)
+let PRESET_ORIGIN = qp.get("origin") !== null && isFinite(parseInt(qp.get("origin"), 10)) ? parseInt(qp.get("origin"), 10) : null;
 Auth.ready().then(() => loadModels(qp.get("model"))).catch(e => $("count").textContent = e.message);
 </script>
 </body>

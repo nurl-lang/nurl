@@ -561,6 +561,38 @@ $ `stdlib/std/thread.nu`
     ^ o
 }
 
+// A point may carry its own clock: a `timestamp` field, unix seconds or
+// an ISO-8601 time, is the time it is stored under, provided it is not
+// older than the newest stored point (the ring is a sequence; a point
+// from the past has the import route). Without one the server's clock
+// stamps it, as before (-3: the model's own clock, a tick or the wall).
+// Returns the seconds, -1 for a timestamp that could not be read, -2
+// for one older than the newest stored point.
+@ __an_point_time * Model mo Json body → i {
+    ? ( json_obj_has body `timestamp` ) {} { ^ -3 }
+    ? . . mo meta count_clock { ^ -3 } {}
+    : ~ i ts -1
+    ?? ( json_obj_get body `timestamp` ) {
+        T tv → {
+            ? ( json_is_num tv ) { ?? ( json_num_as_i tv ) { T x → { = ts x } F _ → {} } } {
+                ? ( json_is_str tv ) {
+                    : ImpStamp st ( imp_stamp_of_text ( json_str_data tv ) )
+                    ? | == . st kind STAMP_DATETIME == . st kind STAMP_DATE { = ts . st secs } {}
+                } {}
+            }
+        }
+        F _ → {}
+    }
+    ? < ts 0 { ^ -1 } {}
+    ? < ts ( model_last_ts mo ) { ^ -2 } {}
+    ^ ts
+}
+
+@ __an_bad_time i code → HttpResponse {
+    ? == code -2 { ^ ( __an_json_err 400 `The point's timestamp is older than the newest stored point: a stream is a sequence, and history goes through /models/dynamic/<model>/import.` ) } {}
+    ^ ( __an_json_err 400 `The point's timestamp could not be read: unix seconds or an ISO-8601 time.` )
+}
+
 // POST /forecast/<model>?horizon=H — /detect's twin: the point goes in
 // (the same ingest, the same rights), and the answer carries the
 // verdict AND the forecast from the point just stored — the next H
@@ -595,7 +627,18 @@ $ `stdlib/std/thread.nu`
             : Store st ( store_open g_an_root )
             : *Model mo ( model_open st ( string_data mname ) )
             : ~ HttpResponse resp ( response_status_only 500 )
-            : !Verdict String vr ( model_ingest mo body )
+            : i pts ( __an_point_time mo body )
+            ? | == pts -1 == pts -2 {
+                ( http_response_free resp )
+                = resp ( __an_bad_time pts )
+                ( model_free mo )
+                ( store_free st )
+                ( json_free body )
+                ( __an_gate_free gate )
+                ( string_free mname )
+                ^ resp
+            } {}
+            : !Verdict String vr ? == pts -3 ( model_ingest mo body ) ( model_ingest_at mo body pts )
             ?? vr {
                 T vd → {
                     : Json o ( __an_verdict_json mo ( string_data mname ) body vd )
@@ -769,8 +812,19 @@ $ `stdlib/std/thread.nu`
                 }
             }
             : ~ HttpResponse resp ( response_status_only 500 )
+            : i pts ? ingest ( __an_point_time mo body ) -3
+            ? & ingest | == pts -1 == pts -2 {
+                ( http_response_free resp )
+                = resp ( __an_bad_time pts )
+                ( model_free mo )
+                ( store_free st )
+                ( json_free body )
+                ( __an_gate_free gate )
+                ( string_free mname )
+                ^ resp
+            } {}
             ? ingest {
-                : !Verdict String vr ( model_ingest mo body )
+                : !Verdict String vr ? == pts -3 ( model_ingest mo body ) ( model_ingest_at mo body pts )
                 ?? vr {
                     T vd → {
                         ( http_response_free resp )
@@ -1134,12 +1188,15 @@ $ `stdlib/std/thread.nu`
     : ~ i h ( __an_query_int . req query `horizon` 12 )
     ? < h 1 { = h 1 } {}
     ? > h 1000 { = h 1000 } {}
+    : i origin ( __an_query_int . req query `origin` -1 )
     : *Model mo ( model_open st ( string_data mname ) )
     : *FcModel fc ( model_forecast mo )
     : ~ HttpResponse resp ( response_status_only 500 )
     ? . fc trained {
         ( http_response_free resp )
-        : Json o ( model_forecast_json mo h )
+        // ?origin=<row>: the forecast as it would have been made from that
+        // stored row, a copy of the models replayed up to it
+        : Json o ? & >= origin 0 < origin - ( model_n_points mo ) 1 ( model_forecast_from_json mo h origin ) ( model_forecast_json mo h )
         ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
         = resp ( response_json 200 o )
         ( json_free o )

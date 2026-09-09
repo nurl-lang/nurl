@@ -39,7 +39,7 @@ $ `src/authz.nu`
 $ `src/imptime.nu`
 
 // One version for the CLI banner and the MCP handshake.
-: s ANOMALY_VERSION `0.27.0`
+: s ANOMALY_VERSION `0.28.0`
 
 // ── Wiring ───────────────────────────────────────────────────────────
 
@@ -990,7 +990,19 @@ $ `src/imptime.nu`
     : i shown ( json_arr_len rows )
     : i total ? all_points ( __mcp_int_of b `considered` ) ( __mcp_int_of b `anomalies` )
     ( json_obj_set out `returned` ( json_int shown ) )
-    ? > total shown {
+    // under a versions / min_votes filter the window's count is over
+    // every version: a short answer is the filter's doing, not the count's
+    : b filtered | ( __mcp_arg_has a `versions` ) ( __mcp_arg_has a `min_votes` )
+    ? & filtered > total shown {
+        : String fnote ( string_from `the filter (versions / min_votes) kept ` )
+        ( string_push_int fnote shown )
+        ( string_push_str fnote ` of the ` )
+        ( string_push_int fnote total )
+        ( string_push_str fnote ` anomalies the window holds over every version` )
+        ( json_obj_set out `note` ( json_str_lit ( string_data fnote ) ) )
+        ( string_free fnote )
+    } {}
+    ? & ! filtered > total shown {
         : String note ( string_from `the newest ` )
         ( string_push_int note shown )
         ( string_push_str note ? all_points ` points of ` ` anomalies of ` )
@@ -1971,6 +1983,7 @@ $ `src/imptime.nu`
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
     : String q ( string_from `horizon=` )
     ( string_push_int q ( __mcp_arg_int a `horizon` 12 ) )
+    ? ( __mcp_arg_has a `origin` ) { ( string_push_str q `&origin=` ) ( string_push_int q ( __mcp_arg_int a `origin` 0 ) ) } {}
     : String path ( __mcp_model_path `/models/dynamic/` model `/forecast` )
     : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
     ( string_free path )
@@ -2614,6 +2627,7 @@ $ `src/imptime.nu`
 @ __mcp_sc_forecast → Json {
     : Json sc ( __mcp_sc_model )
     ( mcp_schema_prop sc `horizon` `integer` `How many steps ahead (default 12, at most 1000).` F )
+    ( mcp_schema_prop sc `origin` `integer` `A stored row's index: the forecast as it would have been made from that row (the models replayed up to it), to put beside what followed. Default: from the newest row.` F )
     ^ sc
 }
 
