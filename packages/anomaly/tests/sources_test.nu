@@ -306,7 +306,7 @@ $ `src/service.nu`
                 T q → {
                     ( check ( seq ( jstr q `id` ) `fmi::observations::weather::simple` ) `wfs: query id` )
                     ( check ( seq ( jstr q `title` ) `Instantaneous Weather Observations` ) `wfs: query title` )
-                    ( check ( string_starts_with ( string_from ( jstr q `abstract` ) ) `Real time` ) `wfs: abstract trimmed` )
+                    ( check ( starts_text ( jstr q `abstract` ) `Real time` ) `wfs: abstract trimmed` )
                     ?? ( json_obj_get q `parameters` ) {
                         T ps → {
                             ( check == ( json_arr_len ps ) 3 `wfs: three parameters` )
@@ -329,7 +329,7 @@ $ `src/service.nu`
     }
     ( json_free cat )
     : Json cat2 ( wfs_catalog EXCEPTION_XML )
-    ( check ( string_contains ( string_from ( jstr cat2 `error` ) ) `exception` ) `wfs: an exception report is an error` )
+    ( check ( has_text ( jstr cat2 `error` ) `exception` ) `wfs: an exception report is an error` )
     ( json_free cat2 )
     : Json cat3 ( wfs_catalog `this is not xml` )
     ( check ( jhas cat3 `error` ) `wfs: garbage is an error` )
@@ -707,12 +707,12 @@ $ `src/service.nu`
     // A fetch that fails leaves the error on the record and the model alone.
     : Json e1 ( source_run_rows ORG ( string_data id ) @ !( Vec Json ) String { F ( string_from `HTTP 400 from the service: bad place` ) } w F + now 800 )
     ( check ( seq ( jstr e1 `status` ) `error` ) `run: a failed fetch is an error` )
-    ( check ( string_contains ( string_from ( jstr e1 `message` ) ) `HTTP 400` ) `run: the reason is passed on` )
+    ( check ( has_text ( jstr e1 `message` ) `HTTP 400` ) `run: the reason is passed on` )
     ( json_free e1 )
     ?? ( source_load ORG ( string_data id ) ) {
         T src → {
             ( check ( seq ( jstr src `last_status` ) `error` ) `run: record says error` )
-            ( check ( string_contains ( string_from ( jstr src `last_error` ) ) `bad place` ) `run: last_error kept` )
+            ( check ( has_text ( jstr src `last_error` ) `bad place` ) `run: last_error kept` )
             ( check == ( jint src `runs` ) 4 `run: every attempt counts as a run` )
             ( json_free src )
         }
@@ -727,7 +727,7 @@ $ `src/service.nu`
     ( json_free ch )
     : Json e2 ( source_run ORG ( string_data id ) F 0 + now 900 \ → v { ( nop ) } \ → v { ( nop ) } )
     ( check ( seq ( jstr e2 `status` ) `error` ) `run: an unreachable service is an error` )
-    ( check ( string_contains ( string_from ( jstr e2 `message` ) ) `could not fetch` ) `run: says it could not fetch` )
+    ( check ( has_text ( jstr e2 `message` ) `could not fetch` ) `run: says it could not fetch` )
     ( check ! ( source_is_running ORG ( string_data id ) ) `run: not marked running afterwards` )
     ( json_free e2 )
     : Json e3 ( source_run ORG `000000000000` F 0 now \ → v { ( nop ) } \ → v { ( nop ) } )
@@ -1144,7 +1144,7 @@ $ `src/service.nu`
     ( string_push_str rpath `/run` )
     : SvcOut r1 ( fire r `POST` ( string_data rpath ) `` `` )
     ( check == . r1 status 400 `http source: an unreachable url fails the run` )
-    ( check ( string_contains ( string_from ( jstr . r1 body `message` ) ) `could not fetch` ) `http source: and says why` )
+    ( check ( has_text ( jstr . r1 body `message` ) `could not fetch` ) `http source: and says why` )
     ( json_free . r1 body )
     ( string_free rpath )
     : SvcOut p1 ( fire r `POST` `/api/org/sources/preview` `` `{"kind":"http","url":"http://127.0.0.1:9/x","path":"","headers":{"X-Key":"k"}}` )
@@ -1255,6 +1255,24 @@ $ `src/service.nu`
     ( string_free path )
     ( string_free id )
     ( router_free r )
+}
+
+// `string_contains` takes a String, and a String built inline is never
+// freed. One helper, so a test does not leak per assertion.
+@ has_text s hay s needle → b {
+    ^ >= ( nurl_str_find hay needle ) 0
+}
+
+@ starts_text s hay s pre → b {
+    : i hn ( nurl_str_len hay )
+    : i pn ( nurl_str_len pre )
+    ? > pn hn { ^ F } {}
+    : ~ i k 0
+    ~ < k pn {
+        ? == ( nurl_str_at hay hn k ) ( nurl_str_at pre pn k ) {} { ^ F }
+        = k + k 1
+    }
+    ^ T
 }
 
 @ main → i {

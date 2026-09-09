@@ -186,9 +186,14 @@ $ `src/wfs.nu`
                         T v → {
                             ? ( json_is_str v ) {
                                 ( vec_push [Header] hs ( header_new ( string_data key ) ( json_str_data v ) ) )
+                                // `string_eq` takes two Strings, so the
+                                // literals must be built and freed: made
+                                // inline they were two allocations per
+                                // header of every fetch, forever.
                                 : String lower ( string_to_lower key )
-                                ? ( string_eq lower ( string_from `accept` ) ) { = has_accept T } {}
-                                ? ( string_eq lower ( string_from `content-type` ) ) { = has_ctype T } {}
+                                : s low ( string_data lower )
+                                ? == ( nurl_str_eq low `accept` ) 1 { = has_accept T } {}
+                                ? == ( nurl_str_eq low `content-type` ) 1 { = has_ctype T } {}
                                 ( string_free lower )
                             } {}
                         }

@@ -168,7 +168,9 @@ assert "legacy" in names, f"expected the public org to hold it, got {names}"
 PYX
 # ...and it is still invisible to the signed-in organization, which is a
 # different one.
-[ "$(code -H "$AH" "$B/models/dynamic/legacy/metadata")" = 403 ] \
+# 404, not 403: a model in another organization's database is not in this
+# one, and the answer says nothing about whether the name exists elsewhere.
+[ "$(code -H "$AH" "$B/models/dynamic/legacy/metadata")" = 404 ] \
     && ok "another organization still cannot read it" || bad "public org model leaked"
 
 # The public organization must NOT have taken the home marker. It is created

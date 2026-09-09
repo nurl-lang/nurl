@@ -1086,10 +1086,14 @@ $ `src/imptime.nu`
 @ __src_ingest s org Json src SrcProject sp i now b trained_out → String {
     : String model ( __src_jstr src `model` )
     : String who ( string_from `source:` )
-    ( string_push_str who ( string_data ( __src_jstr src `id` ) ) )
+    // `__src_jstr` hands back an owned String; used inline it was never
+    // freed, once per run of every source, forever.
+    : String sid ( __src_jstr src `id` )
+    ( string_push_str who ( string_data sid ) )
+    ( string_free sid )
     ( anomaly_set_actor ( string_data who ) )
     ( string_free who )
-    : Store st ( store_open ( orgfiles_root ) )
+    : Store st ( store_open_org ( orgfiles_root ) org )
     : b existed ( store_exists st ( string_data model ) )
     : ~ String err ( string_new )
     ? & existed ( anomaly_authz_enabled ) {

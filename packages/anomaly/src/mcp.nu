@@ -39,7 +39,7 @@ $ `src/authz.nu`
 $ `src/imptime.nu`
 
 // One version for the CLI banner and the MCP handshake.
-: s ANOMALY_VERSION `0.29.0`
+: s ANOMALY_VERSION `0.30.0`
 
 // ── Wiring ───────────────────────────────────────────────────────────
 

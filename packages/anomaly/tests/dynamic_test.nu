@@ -246,10 +246,8 @@ $ `src/dynamic.nu`
     ( check ( model_is_trained mo ) `corrupt: trained` )
     ( model_free mo )
 
-    : String root ( string_clone . st root )
-    ( string_push_str root `/corrupt/metadata.json` )
-    : !v IoErr w ( write_file ( string_data root ) `{"name": "corrupt", "created": "x", "scaler": {"mean": [null], "std": [null]}` )
-    ?? w { T _ → {} F _ → { ( check F `corrupt: test wrote the broken file` ) } }
+    // Break the stored metadata behind the model's back.
+    ( __st_meta_put_on_test st `corrupt` `{"name": "corrupt", "created": "x", "scaler": {"mean": [null], "std": [null]}` )
 
     : *Model mo2 ( model_open_at st `corrupt` + T0 * 56 60 )
     ( check ! ( model_is_trained mo2 ) `corrupt: the model reopens untrained (no forest over no columns)` )
@@ -257,12 +255,34 @@ $ `src/dynamic.nu`
     ( check . o2 ok `corrupt: the reopened model takes a point without crashing` )
     ( model_free mo2 )
 
-    : String q ( string_clone . st root )
-    ( string_push_str q `/corrupt/metadata.json.corrupt-` )
-    ( string_push_int q + T0 * 56 60 )
-    ( check ( file_exists ( string_data q ) ) `corrupt: the broken file is kept beside the model` )
-    ( string_free q )
-    ( string_free root )
+    ( check ( __st_corrupt_rows_test st `corrupt` ) `corrupt: the metadata that would not parse is kept aside` )
+}
+
+// Write a metadata row directly, to break it the way a truncated write or
+// a value that will not serialise would.
+@ __st_meta_put_on_test Store st s name s txt → v {
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → { : b _w ( __st_meta_put_on db name ( string_from txt ) ) }
+    }
+}
+
+// Whether anything sits in this model's quarantine table.
+@ __st_corrupt_rows_test Store st s name → b {
+    : ~ b there F
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT 1 FROM models_meta_corrupt WHERE name = ?1` ) {
+                F _ → {}
+                T q → {
+                    ( __st_bind_str q 1 ( string_from name ) )
+                    ?? ( sqlite_step q ) { T has → { = there has } F _ → {} }
+                }
+            }
+        }
+    }
+    ^ there
 }
 
 // ── Scenario B: streaming mechanics at tiny limits ────────────────────

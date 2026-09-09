@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.30.0
+
+A model belongs to an organisation, and an organisation is a database.
+
+- **The flat store is gone.** Every model was a directory under one root
+  shared by every tenant, with ownership recorded on the side. So a name
+  was global: the first organisation to use `boiler` took it, and the
+  second got a 403 that told it the name exists and could never create
+  its own. Everything a model is — metadata, the ring of raw points, the
+  forests, the autoencoder, the forecast, labels, the audit trail — now
+  lives in `<root>/orgs/<org>.db`, the same SQLite file that already held
+  the members and the keys. A name is unique WITHIN an organisation and
+  means nothing outside it, and a name another tenant uses answers 404.
+- **Evicting the oldest point is one DELETE.** At the cap the old store
+  appended the line and then rewrote the whole log — 15 ms at 14 700
+  points and linear in the cap, so a model at the 150 000-point default
+  spent about 300 ms per point rewriting. It is now a range delete over
+  an index, and the point, the eviction and the counter that says how
+  many points there are go in as ONE transaction: a crash between them
+  used to leave the ring and `n_seen` disagreeing.
+- **Thread-safe by construction.** A `Store` holds no connection — one is
+  opened for an operation and closed with it — so it never leaves the
+  thread that made it, and `Database`/`Statement` are now `% NotSend` in
+  the stdlib binding so the compiler enforces that instead of a comment.
+  Threads share the file: WAL for concurrent reads beside one writer,
+  `busy_timeout` so a second writer waits, and `BEGIN IMMEDIATE` for
+  every multi-statement write, which is the form the busy handler is
+  allowed to retry. A new suite (`storeconc_test`) runs four threads
+  writing into one database and checks every ring afterwards.
+- **Adoption moves the model.** A point that arrives without a credential
+  naming an owner still waits in `public`, and the home organisation may
+  still adopt it — but a model is rows in a file now, so adopting it
+  carries them across and removes them from `public`.
+- **Migration is automatic and reversible.** The first run of any command
+  moves each leftover model directory into the database of the
+  organisation whose `models` row claims it (`public` when none does) and
+  moves the directory aside under `<root>/migrated-<time>/`. Nothing is
+  deleted. 12 models and 116 MB migrated in 1.5 s here.
+- **`anomaly --org <id>`** picks which organisation the CLI works in;
+  without it the CLI sees `public`, the organisation a store with no
+  sign-in collects into.
+
+Two leaks ASan found on the way, both older than this change: an HTTP
+source built two Strings per header of every fetch and freed neither, and
+every source run leaked its own id.
+
 ## 0.29.0
 
 An agent's third session found the reading that took the service down.
