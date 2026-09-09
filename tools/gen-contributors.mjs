@@ -1,174 +1,59 @@
 // Copyright (c) 2026 The NURL Project Developers
 // SPDX-License-Identifier: MIT OR Apache-2.0
-// ============================================================
-//  gen-contributors.mjs — render the landing page's "Contributors" strip
-//  from GitHub's contributor list at publish time.
-//
-//  The strip used to be three hand-typed <a> tags, which meant a fourth
-//  contributor was invisible until someone remembered to edit HTML. The
-//  list now comes from the repo's contributor API and is written into
-//  index.html between the CONTRIBUTORS markers, so the page stays 100%
-//  static at serve time (no JS, no fetch from the browser) and still
-//  names whoever actually shipped the release it was built from.
-//
-//  Faces and names only — no role lines, no commit counts. Most commits
-//  first, `min_commits` to qualify, `limit` faces on the page; the full
-//  list is one click away on GitHub, which is where an exhaustive one
-//  belongs. The one thing an API cannot supply is how a person spells
-//  their display name, so nurlweb/contributors.json maps logins to
-//  names; anyone missing there is shown under their GitHub login.
-//
-//  Run it by hand any time:  node tools/gen-contributors.mjs
-//  It is also part of nurlweb's `predeploy` hook.
-//
-//  Best-effort, like the registry figures in gen-site-facts.sh: a rate
-//  limit or an offline build leaves the previous strip in place rather
-//  than failing the deploy or publishing an empty one.
-// ============================================================
-import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+// Generate webdocs' static contributor strip from GitHub at build time.
+// The checked-in output remains when GitHub is unavailable.
+import { readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const CONFIG = join(ROOT, "nurlweb", "contributors.json");
-const HTML = join(ROOT, "nurlweb", "public", "index.html");
-const WEBDOCS = process.argv.includes("--webdocs");
-const WEBDOCS_OUTPUT = join(ROOT, "webdocs", "lib", "contributors.generated.ts");
-const BEGIN = "<!-- CONTRIBUTORS:BEGIN -->";
-const END = "<!-- CONTRIBUTORS:END -->";
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const CONFIG = join(ROOT, 'webdocs', 'contributors.json');
+const OUTPUT = join(ROOT, 'webdocs', 'lib', 'contributors.generated.ts');
+const API = `https://api.github.com/repos/${process.env.NURL_REPO ?? 'nurl-lang/nurl'}/contributors?per_page=100`;
 
-const REPO = process.env.NURL_REPO ?? "nurl-lang/nurl";
-const API = `https://api.github.com/repos/${REPO}/contributors?per_page=100`;
-
-// Leave the page as it stands and exit green: a publish must not fail, or
-// publish a blank strip, because GitHub was unreachable for eight seconds.
 function keepExisting(reason) {
-    console.warn(`gen-contributors: ${reason} — leaving the existing strip in place`);
-    process.exit(0);
-}
-
-function escapeHtml(text) {
-    return String(text)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
+  console.warn(`gen-contributors: ${reason} — keeping ${OUTPUT}`);
+  process.exit(0);
 }
 
 let config;
 try {
-    config = JSON.parse(readFileSync(CONFIG, "utf8"));
+  config = JSON.parse(readFileSync(CONFIG, 'utf8'));
 } catch (err) {
-    console.error(`gen-contributors: cannot read ${CONFIG}: ${err.message}`);
-    process.exit(1);
+  console.error(`gen-contributors: cannot read ${CONFIG}: ${err.message}`);
+  process.exit(1);
 }
 
-// GitHub logins are case-insensitive and the API returns whatever casing the
-// account was registered with, which is not necessarily how it is spelled in
-// the config. Key the lookup on lowercase so `hindurable` still matches
-// `Hindurable` instead of silently falling back to the raw login.
-const people = new Map(Object.entries(config.people ?? {}).map(([login, name]) => [login.toLowerCase(), name]));
+const names = new Map(Object.entries(config.people ?? {}).map(([login, name]) => [login.toLowerCase(), name]));
+const excluded = new Set((config.exclude ?? []).map((name) => name.toLowerCase().replace(/\[bot\]$/, '')));
 const limit = Number.isInteger(config.limit) && config.limit > 0 ? config.limit : 6;
-// One merged typo fix is not what the strip is for. Two commits is the
-// floor for a face on the page; everyone else is one click away on GitHub.
 const minCommits = Number.isInteger(config.min_commits) && config.min_commits > 0 ? config.min_commits : 2;
-// Match on the bare login so an entry covers both `dependabot` and the
-// `dependabot[bot]` form the API actually returns.
-const excluded = new Set((config.exclude ?? []).map((name) => name.toLowerCase().replace(/\[bot\]$/, "")));
+const headers = { accept: 'application/vnd.github+json', 'user-agent': 'nurl-gen-contributors' };
+if (process.env.GITHUB_TOKEN || process.env.GH_TOKEN) headers.authorization = `Bearer ${process.env.GITHUB_TOKEN || process.env.GH_TOKEN}`;
 
-// A token lifts the API's 60-requests-per-hour-per-IP anonymous limit,
-// which shared CI runner addresses reach on their own. Optional: without
-// one this still works, it just fails more often on a busy runner.
-const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "";
-const headers = {
-    accept: "application/vnd.github+json",
-    "user-agent": `nurl-gen-contributors (${REPO})`,
-};
-if (token) headers.authorization = `Bearer ${token}`;
-
-let payload;
+let people;
 try {
-    const response = await fetch(API, { headers, signal: AbortSignal.timeout(8000) });
-    if (!response.ok) keepExisting(`GitHub returned ${response.status} ${response.statusText}`);
-    payload = await response.json();
+  const response = await fetch(API, { headers, signal: AbortSignal.timeout(8000) });
+  if (!response.ok) keepExisting(`GitHub returned ${response.status}`);
+  people = await response.json();
 } catch (err) {
-    keepExisting(`contributor fetch failed: ${err.message}`);
+  keepExisting(`contributor fetch failed: ${err.message}`);
 }
+if (!Array.isArray(people)) keepExisting('unexpected API response shape');
 
-if (!Array.isArray(payload)) keepExisting("unexpected API response shape");
+const contributors = people
+  .filter((person) => person?.type === 'User' && typeof person.login === 'string')
+  .filter((person) => !excluded.has(person.login.toLowerCase().replace(/\[bot\]$/, '')))
+  .filter((person) => (person.contributions ?? 0) >= minCommits)
+  .sort((a, b) => b.contributions - a.contributions)
+  .slice(0, limit)
+  .map((person) => ({ name: names.get(person.login.toLowerCase()) ?? person.login, login: person.login }));
 
-// Order: most commits first, nothing editorial on top of it. The page is a
-// contributor list, not a credits roll — whoever has put the most in stands
-// first, and the ordering needs no edit here when that changes.
-const humans = payload
-    .filter((c) => c && c.type === "User" && typeof c.login === "string")
-    .filter((c) => !excluded.has(c.login.toLowerCase().replace(/\[bot\]$/, "")));
-
-const eligible = humans.filter((c) => (c.contributions ?? 0) >= minCommits);
-
-const contributors = eligible.sort((a, b) => (b.contributions ?? 0) - (a.contributions ?? 0)).slice(0, limit);
-
-if (contributors.length === 0) keepExisting(`no contributor has the ${minCommits} commits the strip asks for`);
-
-// Never let `limit` or `min_commits` quietly hide people: say who did not
-// make the strip, and why.
-const belowFloor = humans.length - eligible.length;
-const overLimit = eligible.length - contributors.length;
-
-// GitHub serves whatever the account uploaded; ask for the size the page
-// actually renders so a 460px avatar is not shipped into a 40px slot.
-function avatar(contributor) {
-    const url = contributor.avatar_url || `https://github.com/${contributor.login}.png`;
-    return `${url}${url.includes("?") ? "&" : "?"}s=80`;
-}
-
-if (WEBDOCS) {
-    const entries = contributors.map((contributor) => ({
-        name: people.get(contributor.login.toLowerCase()) ?? contributor.login,
-        login: contributor.login,
-    }));
-    writeFileSync(
-        WEBDOCS_OUTPUT,
-        "// Generated by tools/gen-contributors.mjs --webdocs. Kept in git as the\n" +
-            "// fallback when GitHub's contributor API is unavailable during a build.\n" +
-            `export const contributors = ${JSON.stringify(entries, null, 2)} as const;\n`,
-    );
-    console.log(`contributors → ${WEBDOCS_OUTPUT}\n  ${contributors.length} shown: ${contributors.map((c) => c.login).join(", ")}`);
-    process.exit(0);
-}
-
-const entries = contributors
-    .map((contributor) => {
-        const name = people.get(contributor.login.toLowerCase()) ?? contributor.login;
-        return (
-            `    <a href="${escapeHtml(contributor.html_url)}" target="_blank" rel="noopener">` +
-            `<img src="${escapeHtml(avatar(contributor))}" alt="${escapeHtml(name)}" width="40" height="40" loading="lazy" />` +
-            `${escapeHtml(name)}</a>`
-        );
-    })
-    .join("\n");
-
-const strip = `${BEGIN}
-  <!-- Generated by tools/gen-contributors.mjs from the GitHub contributor API. -->
-  <!-- Do not edit by hand: the next publish overwrites it. Display names -->
-  <!-- come from nurlweb/contributors.json. -->
-  <p class="hero-contributors">
-    <span>Contributors</span>
-${entries}
-  </p>
-  ${END}`;
-
-const html = readFileSync(HTML, "utf8");
-const start = html.indexOf(BEGIN);
-const stop = html.indexOf(END);
-if (start === -1 || stop === -1 || stop < start) {
-    console.error(`gen-contributors: markers ${BEGIN} / ${END} not found in ${HTML}`);
-    process.exit(1);
-}
-
-writeFileSync(HTML, html.slice(0, start) + strip + html.slice(stop + END.length));
-console.log(
-    `contributors → ${HTML}\n  ${contributors.length} shown: ${contributors.map((c) => c.login).join(", ")}` +
-        (overLimit > 0 ? `\n  ${overLimit} contributor(s) over the limit of ${limit} are not on the page` : "") +
-        (belowFloor > 0 ? `\n  ${belowFloor} contributor(s) under ${minCommits} commits are not on the page` : ""),
+if (contributors.length === 0) keepExisting(`no contributor has ${minCommits} commits`);
+writeFileSync(
+  OUTPUT,
+  '// Generated by tools/gen-contributors.mjs. Kept in git as the\n' +
+    '// fallback when GitHub\'s contributor API is unavailable during a build.\n' +
+    `export const contributors = ${JSON.stringify(contributors, null, 2)} as const;\n`,
 );
+console.log(`contributors → ${OUTPUT}\n  ${contributors.length} shown: ${contributors.map((person) => person.login).join(', ')}`);

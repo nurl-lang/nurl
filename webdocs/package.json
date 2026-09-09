@@ -3,7 +3,7 @@
   "version": "0.0.6",
   "private": true,
   "scripts": {
-    "prebuild": "node ../tools/gen-contributors.mjs --webdocs && bash ../tools/gen-site-facts.sh --webdocs && node ../tools/gen-bench-table.mjs --webdocs",
+    "prebuild": "cp ../tools/get-nurl.sh public/install.sh && cp ../tools/get-nurl.ps1 public/install.ps1 && node ../tools/gen-contributors.mjs && bash ../tools/gen-site-facts.sh && node ../tools/gen-bench-table.mjs",
     "build": "next build",
     "dev": "next dev",
     "start": "next start",

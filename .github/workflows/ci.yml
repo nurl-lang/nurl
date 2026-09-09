@@ -40,8 +40,22 @@ jobs:
           filters: |
             webdocs:
               - 'webdocs/**'
+              - 'bench/results/latest.json'
+              - 'tools/get-nurl.sh'
+              - 'tools/get-nurl.ps1'
+              - 'tools/gen-site-facts.sh'
+              - 'tools/gen-bench-table.mjs'
+              - 'tools/gen-contributors.mjs'
+              - '.github/workflows/webdocs-deploy.yml'
             code:
               - '!webdocs/**'
+              - '!bench/results/latest.json'
+              - '!tools/get-nurl.sh'
+              - '!tools/get-nurl.ps1'
+              - '!tools/gen-site-facts.sh'
+              - '!tools/gen-bench-table.mjs'
+              - '!tools/gen-contributors.mjs'
+              - '!.github/workflows/webdocs-deploy.yml'
             # The self-compile leak gate (in the sanitizers job) runs when
             # the compiler source itself changes — that is what owns the
             # allocations it is asserting about — or when the gate script
@@ -148,8 +162,8 @@ jobs:
         run: ./tools/check_builtins_doc.sh
 
       - name: served installers match the canonical ones
-        # nurlweb/public/install.{sh,ps1} are copies of tools/get-nurl.*
-        # made by a MANUAL npm script, and they are what nurl-lang.org
+        # webdocs/public/install.{sh,ps1} are copies of tools/get-nurl.*
+        # made by webdocs' build step, and they are what nurl-lang.org
         # actually serves. They drifted once already: the fix that stopped
         # an upgrade from wiping the prefix (registry token, models/,
         # every installed tool) sat in tools/ for weeks while the website

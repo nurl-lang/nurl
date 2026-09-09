@@ -12,7 +12,7 @@
 #                  and do a day's work without hitting a "command not
 #                  found" every twenty minutes: the CI set, plus the
 #                  ecosystem toolchains (Node/pnpm for the Cloudflare
-#                  Workers under registry/, webdocs/, nurlweb/; Rust and
+#                  Workers under registry/, webdocs/; Rust and
 #                  Node for the bench comparison programs; Python with
 #                  numpy for the metamorph / fuzz / reference gates),
 #                  plus git, gh, an editor, a debugger and a shell that
@@ -246,8 +246,8 @@ RUN if [ "${TARGETARCH}" = "amd64" ]; then \
 
 # ── 4. Node + pnpm ─────────────────────────────────────────────────────
 # The workflows use both actions/setup-node (node 22 and 24) and
-# pnpm/action-setup. The Cloudflare Workers under registry/, webdocs/,
-# nurlweb/ and cloudflare/ are the consumers, together with the .mjs
+# pnpm/action-setup. The Cloudflare Workers under registry/, webdocs/, and
+# cloudflare/ are the consumers, together with the .mjs
 # generators in tools/ (gen-bench-table, gen-contributors).
 # NodeSource because Ubuntu 24.04's own nodejs is v18.
 #

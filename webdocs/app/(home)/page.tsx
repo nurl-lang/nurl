@@ -4,6 +4,7 @@ import { Bot, Code2, Cpu, GitBranch, Package, Rocket, ShieldCheck, Terminal } fr
 import { Pill } from '@/components/version-badges';
 import { benchmarkStats } from '@/lib/benchmark-stats.generated';
 import { contributors } from '@/lib/contributors.generated';
+import targetFacts from '@/site-facts.json';
 import { releaseFacts } from '@/lib/release-facts.generated';
 import { siteFacts } from '@/lib/site-facts';
 import { gitConfig } from '@/lib/shared';
@@ -230,7 +231,7 @@ export default function HomePage() {
           <h2 className="mt-2 text-3xl font-bold tracking-tight">One LLVM pipeline across targets</h2>
           <p className="mt-4 max-w-3xl text-fd-muted-foreground">The compiler emits target-agnostic LLVM IR for desktop, server, browser, unikernel, and embedded targets.</p>
           <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {['Linux, Windows, macOS, and FreeBSD', 'WebAssembly in the browser', 'ARM64 and RISC-V Linux', 'Unikernels on x64, ARM64, and RISC-V', 'Milk-V Duo on-device', 'ESP32 Xtensa and ESP32-C3/C6'].map((target) => (
+            {targetFacts.targets.map((target) => (
               <div key={target} className="rounded-lg border bg-fd-card px-4 py-3 text-sm font-medium">{target}</div>
             ))}
           </div>

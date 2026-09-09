@@ -2,11 +2,9 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "nurl-docs",
   "compatibility_date": "2026-07-20",
-  // Attaches docs.nurl-lang.org to this Worker on deploy (the zone lives on
-  // the same Cloudflare account as the other nurl-lang.org Workers), so no
-  // manual DNS/dashboard step is needed. Same domain the old VitePress
-  // Worker used, reattached here on cutover.
-  "routes": [{ "pattern": "docs.nurl-lang.org", "custom_domain": true }],
+  // The Fumadocs homepage is the front door. `/docs` remains the docs route;
+  // Cloudflare owns the custom-domain binding on deploy.
+  "routes": [{ "pattern": "nurl-lang.org", "custom_domain": true }],
   "observability": {
     "enabled": true
   },
