@@ -16,7 +16,7 @@
   ],
   "limit": 6,
   "min_commits": 2,
-  "exclude": ["dependabot", "renovate", "github-actions"],
+  "exclude": ["dependabot", "renovate", "github-actions", "claude"],
   "people": {
     "tero-punos": "Tero Andelin",
     "hindurable": "Hindurable",

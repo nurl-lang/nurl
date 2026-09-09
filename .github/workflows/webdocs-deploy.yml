@@ -1,17 +1,15 @@
 name: Publish Webdocs
 
-# Publishes the Fumadocs documentation site (webdocs/) to Cloudflare at
-# https://docs.nurl-lang.org. Runs on every push to main that touches
-# webdocs/ (or this workflow), and can also be triggered manually from the
-# Actions tab (Run workflow).
+# Publishes the Fumadocs homepage and documentation site (webdocs/) to
+# https://nurl-lang.org. `/docs` is served by the same static export. Runs on
+# source, generated-data, and release changes, or manually from Actions.
 #
 # `pnpm run deploy` runs `next build && wrangler deploy` — Next.js's static
 # export (`output: 'export'` in next.config.mjs) builds the site to `out/`,
 # which `wrangler deploy` uploads as an assets-only Worker and attaches the
-# docs.nurl-lang.org custom domain (see webdocs/wrangler.jsonc), same
-# pattern the old VitePress site used. Search runs against a build-time
-# Orama index fetched and queried client-side instead of a live API route
-# (see webdocs' own migration notes, content/docs/fumadocs-migration.mdx).
+# nurl-lang.org custom domain (see webdocs/wrangler.jsonc). Search runs
+# against a build-time Orama index fetched and queried client-side instead
+# of a live API route.
 #
 # Requires two GitHub Actions repo secrets (shared with the other Cloudflare
 # deploys):
@@ -23,8 +21,16 @@ name: Publish Webdocs
 on:
   push:
     branches: [main]
+    tags: ['v*']
     paths:
       - 'webdocs/**'
+      - 'bench/results/latest.json'
+      - 'CHANGELOG.md'
+      - 'tools/get-nurl.sh'
+      - 'tools/get-nurl.ps1'
+      - 'tools/gen-site-facts.sh'
+      - 'tools/gen-bench-table.mjs'
+      - 'tools/gen-contributors.mjs'
       - '.github/workflows/webdocs-deploy.yml'
   workflow_dispatch: {}
 

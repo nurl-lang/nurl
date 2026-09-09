@@ -4,7 +4,7 @@ name: bench
 # Rust, Node, Python) — on a fixed `ubuntu-latest` runner and commits the
 # result back to the repository:
 #
-#   bench/results/latest.json   machine-readable; nurlweb's publish step
+#   bench/results/latest.json   machine-readable; webdocs' build step
 #                               (tools/gen-bench-table.mjs) renders the
 #                               landing page's table straight from it, so
 #                               the site's numbers are whatever this

@@ -212,25 +212,22 @@ newer symbol), so portability is guaranteed by construction. The bundled
 zig and the user programs it builds target the box's *native* glibc, so
 those are unaffected.
 
-## Front-door wiring (nurlweb)
+## Front-door wiring (webdocs)
 
-`nurl-lang.org` serves the two installer scripts so the one-liners work:
-the web deploy's `predeploy` hook (`nurlweb/package.json`,
-`sync-installers`) copies `tools/get-nurl.sh` → `nurlweb/public/install.sh`
-and `tools/get-nurl.ps1` → `nurlweb/public/install.ps1` before
-`wrangler deploy`. **`tools/get-nurl.{sh,ps1}` are the canonical sources**
-— edit those, never the `public/` copies, or the next deploy overwrites
-the edit. `$NURL_INSTALL_BASE` overrides the download base for internal
-mirrors / air-gapped installs.
+`nurl-lang.org` and `nurl-lang.org/docs` are one Fumadocs static export.
+`webdocs` copies `tools/get-nurl.sh` → `webdocs/public/install.sh` and
+`tools/get-nurl.ps1` → `webdocs/public/install.ps1` during every build, so
+the one-line installers remain available at the root domain.
+**`tools/get-nurl.{sh,ps1}` are the canonical sources**.
+`$NURL_INSTALL_BASE` overrides the download base for internal mirrors /
+air-gapped installs.
 
-Pushing a `v*` tag also fires `.github/workflows/web-deploy.yml`, which
-runs `npm run deploy` in `nurlweb/`. Its `predeploy` hook regenerates the
-landing-page facts (`tools/gen-site-facts.sh`, version sourced from the top
-`CHANGELOG.md` section) and re-syncs the installer scripts before
-`wrangler deploy`, so `nurl-lang.org` refreshes its version and counts in
-lockstep with each release. The job is a green no-op when
-`CLOUDFLARE_API_TOKEN` is unset (forks), and can also be run manually from
-the Actions tab.
+`.github/workflows/webdocs-deploy.yml` runs on relevant pushes to `main`
+and on every `v*` tag. Its build regenerates homepage release facts,
+benchmark rows, contributor data, and installer copies before `wrangler
+deploy`, so the root site and `/docs` deploy together. The job is a green
+no-op when `CLOUDFLARE_API_TOKEN` is unset (forks), and can also run
+manually from Actions.
 
 ## Status / caveats
 

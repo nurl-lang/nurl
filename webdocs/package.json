@@ -3,19 +3,20 @@
   "version": "0.0.6",
   "private": true,
   "scripts": {
+    "prebuild": "cp ../tools/get-nurl.sh public/install.sh && cp ../tools/get-nurl.ps1 public/install.ps1 && node ../tools/gen-contributors.mjs && bash ../tools/gen-site-facts.sh && node ../tools/gen-bench-table.mjs",
     "build": "next build",
     "dev": "next dev",
     "start": "next start",
     "types:check": "fumadocs-mdx && next typegen && tsc --noEmit",
     "postinstall": "fumadocs-mdx",
     "lint": "eslint",
-    "deploy": "next build && wrangler deploy"
+    "deploy": "pnpm run build && wrangler deploy"
   },
   "dependencies": {
     "cnfast": "^0.0.8",
-    "fumadocs-core": "16.14.0",
-    "fumadocs-mdx": "15.2.1",
-    "fumadocs-ui": "npm:@fumadocs/base-ui@16.14.0",
+    "fumadocs-core": "16.15.8",
+    "fumadocs-mdx": "15.4.0",
+    "fumadocs-ui": "npm:@fumadocs/base-ui@16.15.8",
     "lucide-react": "^1.24.0",
     "next": "16.2.10",
     "react": "^19.2.7",

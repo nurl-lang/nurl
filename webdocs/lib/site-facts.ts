@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 // Computed once at build time (this is a static export — see next.config.mjs).
 // Mirrors the resolution order in ../tools/gen-site-facts.sh / version.sh so
-// the docs site stays consistent with nurlweb: CHANGELOG.md's newest released
+// the homepage stays consistent with the release process: CHANGELOG.md's newest released
 // section is the source of truth for the language version (it lands in the
 // same PR as a release, before the `v*` tag is cut), falling back to git tags.
 

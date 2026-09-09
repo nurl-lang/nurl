@@ -1,0 +1,15 @@
+{
+  "targets": [
+    "Linux x86_64",
+    "Windows x86_64",
+    "macOS x86_64 and ARM64",
+    "FreeBSD x86_64",
+    "WebAssembly",
+    "Linux ARM64",
+    "Linux RISC-V64",
+    "Unikernel x86_64, ARM64, and RISC-V64",
+    "Milk-V Duo",
+    "ESP32 Xtensa",
+    "ESP32-C3/C6"
+  ]
+}

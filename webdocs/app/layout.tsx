@@ -10,6 +10,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL('https://nurl-lang.org'),
   title: {
     template: `%s | ${appName}`,
     default: appName,
