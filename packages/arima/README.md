@@ -82,7 +82,11 @@ model, it is a memory. `arima_fit_harmonic` / `arima_auto_harmonic` fit
 the other standard form of a seasonal (Hyndman's `fourier()` with ARIMA
 errors): K harmonics per period, sine and cosine, by least squares, and
 the ARIMA on what is left — any period length, several at once (the day
-and the week), O(K) a row. The terms ride with the model: `arima_update`
+and the week), O(K) a row. A linear drift is a regressor of the same kind
+(`arima_fit_regress` / `arima_auto_regress` with `trend`): a series that
+climbs by a fixed amount a row is ARIMA(0,1,0) with drift exactly, and
+without the term the order search has only a unit root to climb with,
+which stops at the last level. The terms ride with the model: `arima_update`
 subtracts the row's seasonal before the filter and `arima_forecast` adds
 it back, the regressors' clock counts rows from the fit's origin
 (`arima_restart_at` sets it for a replay that begins elsewhere), and the
@@ -179,6 +183,8 @@ on a CUDA device.
 ( arima_clone m )                             → *ArimaModel  deep copy, state included
 ( arima_fit_harmonic y periods k spec method ) → *ArimaModel  Fourier terms of `periods` (rows), k harmonics each, ARIMA on the rest
 ( arima_auto_harmonic y periods k s )         → *ArimaModel  the same, the residual order searched (s = its season, 0 = none)
+( arima_fit_regress y periods k trend spec method ) → *ArimaModel  the regressors in full: Fourier terms and, with `trend`, a linear drift
+( arima_auto_regress y periods k trend s )    → *ArimaModel  the same, the residual order searched
 ( arima_coef m )                              → Json
 ( arima_to_json m ) / ( arima_from_json s )   → String / ?*ArimaModel
 ( arima_phi m ) ( arima_theta m ) ( arima_sphi m ) ( arima_stheta m ) ( arima_mu m )

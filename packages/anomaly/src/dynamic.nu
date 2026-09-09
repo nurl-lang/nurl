@@ -1285,6 +1285,22 @@ $ `src/store.nu`
     : ~ i k 1
     ~ <= k h { ( json_arr_push times ( json_int + lastn * k ? . mm count_clock 1 step ) ) = k + k 1 }
     ( json_obj_set o `times` times )
+    ( json_obj_set o `from_time` ( json_int lastn ) )
+    // the models step by row; a newest gap unlike the step says the
+    // times above are rows dressed as a clock
+    : i np2 ( vec_len [i] . mo times )
+    ? & & ! . mm count_clock > step 0 >= np2 2 {
+        : i gap - ( _fc_geti . mo times - np2 1 ) ( _fc_geti . mo times - np2 2 )
+        ? | > gap * 2 step < * 2 gap step {
+            : String w ( string_from `the newest point came ` )
+            ( string_push_int w gap )
+            ( string_push_str w ` s after the one before, where the ring's step is ` )
+            ( string_push_int w step )
+            ( string_push_str w ` s: the models forecast by row, and the times are the step counted from the newest point` )
+            ( json_obj_set o `warning` ( json_str_lit ( string_data w ) ) )
+            ( string_free w )
+        } {}
+    } {}
     : Json fa ( json_arr_new )
     : i nw ( vec_len [String] . ff feats )
     : ~ i j 0
@@ -1327,6 +1343,77 @@ $ `src/store.nu`
     ^ o
 }
 
+// The forecast as it would have been made from ring row `origin`
+// (inclusive): a copy of every model replayed from ANOM_FC_BURN rows
+// before it, then the next `h` steps — the same shape as
+// model_forecast_json, with the origin's row and time, so a reader can
+// put the forecast beside what followed. The live states are untouched.
+@ model_forecast_from_json * Model mo i h i origin → Json {
+    : *FcModel fc . mo fc
+    : *Meta mm . mo meta
+    : i len ( vec_len [String] . mo lines )
+    : ~ i at origin
+    ? >= at len { = at - len 1 } {}
+    ? < at 0 { = at 0 } {}
+    : ~ i b0 - + at 1 ANOM_FC_BURN
+    ? < b0 0 { = b0 0 } {}
+    : ( Vec i ) copies ( fc_replay_begin fc + ( model_seq_base mo ) b0 )
+    : ( Vec f ) noz ( vec_new [f] )
+    : ~ i t b0
+    ~ <= t at {
+        : ( Vec f ) fr ( __an_fc_row mo t )
+        ( fc_replay_step fc copies fr noz )
+        ( vec_free [f] fr )
+        = t + t 1
+    }
+    ( vec_free [f] noz )
+    : Json o ( json_obj_new )
+    ( json_obj_set o `horizon` ( json_int h ) )
+    ( json_obj_set o `season` ( json_int . fc season ) )
+    ( json_obj_set o `origin` ( json_int at ) )
+    ( json_obj_set o `clock` ( json_str_lit ? . mm count_clock `count` `time` ) )
+    : i step ( model_step mo )
+    ( json_obj_set o `step_seconds` ( json_int step ) )
+    : i t0 ? . mm count_clock + ( model_seq_base mo ) at ( _fc_geti . mo times at )
+    ( json_obj_set o `from_time` ( json_int t0 ) )
+    : Json times ( json_arr_new )
+    : ~ i k 1
+    ~ <= k h { ( json_arr_push times ( json_int + t0 * k ? . mm count_clock 1 step ) ) = k + k 1 }
+    ( json_obj_set o `times` times )
+    : Json fa ( json_arr_new )
+    : i nw . fc nw
+    : ~ i j 0
+    ~ < j nw {
+        : Json fo ( json_obj_new )
+        ?? ( vec_get [String] . fc feats j ) { T fn → { ( json_obj_set fo `feature` ( json_str_lit ( string_data fn ) ) ) } F _ → {} }
+        : *ArimaModel cm # *ArimaModel ( _fc_geti copies j )
+        : ArimaForecast f1 ( arima_forecast cm h )
+        ( json_obj_set fo `mean` ( _an_jarr_of_floats . f1 mean ) )
+        ( json_obj_set fo `se` ( _an_jarr_of_floats . f1 se ) )
+        : ( Vec f ) lo80 ( vec_zeroed [f] h )
+        : ( Vec f ) hi80 ( vec_zeroed [f] h )
+        : ( Vec f ) lo95 ( vec_zeroed [f] h )
+        : ( Vec f ) hi95 ( vec_zeroed [f] h )
+        : ~ i q 0
+        ~ < q h {
+            : f m ( _fc_getf . f1 mean q )
+            : f s ( _fc_getf . f1 se q )
+            ( vec_set [f] lo80 q - m * ANOM_Z80 s ) ( vec_set [f] hi80 q + m * ANOM_Z80 s )
+            ( vec_set [f] lo95 q - m * ANOM_Z95 s ) ( vec_set [f] hi95 q + m * ANOM_Z95 s )
+            = q + q 1
+        }
+        ( json_obj_set fo `lo80` ( _an_jarr_of_floats lo80 ) ) ( json_obj_set fo `hi80` ( _an_jarr_of_floats hi80 ) )
+        ( json_obj_set fo `lo95` ( _an_jarr_of_floats lo95 ) ) ( json_obj_set fo `hi95` ( _an_jarr_of_floats hi95 ) )
+        ( vec_free [f] lo80 ) ( vec_free [f] hi80 ) ( vec_free [f] lo95 ) ( vec_free [f] hi95 )
+        ( arima_forecast_free f1 )
+        ( json_arr_push fa fo )
+        = j + j 1
+    }
+    ( fc_replay_end copies )
+    ( json_obj_set o `forecasts` fa )
+    ^ o
+}
+
 // How good the forecasts are, measured: a rolling-origin backtest over
 // the ring's last `n` origins. A copy of every model is replayed from
 // ANOM_FC_BURN rows before the first origin; at each origin the h-step
@@ -1352,7 +1439,11 @@ $ `src/store.nu`
     } {}
     : i nw . fc nw
     : i o0 - - len h no
-    : ~ i b0 - o0 ANOM_FC_BURN
+    // the rows before the first origin: the burn-in for the replay, and
+    // a season for the seasonal-naive baseline
+    : ~ i back ANOM_FC_BURN
+    ? > + . fc season 1 back { = back + . fc season 1 } {}
+    : ~ i b0 - o0 back
     ? < b0 0 { = b0 0 } {}
     // the watched readings of rows [b0, len)
     : i nr - len b0
@@ -1427,6 +1518,7 @@ $ `src/store.nu`
     ( json_obj_set o `origins` ( json_int no ) )
     ( json_obj_set o `season` ( json_int season ) )
     ( json_obj_set o `rows_from` ( json_int o0 ) )
+    ( json_obj_set o `note` ( json_str_lit `The models were fitted on the fit window, which these origins are part of, and are not refitted at each origin: the errors are in-sample for the coefficients (the states are replayed), so the skill is optimistic. The form itself was chosen on a holdout the fit did not see.` ) )
     : Json fa ( json_arr_new )
     : ~ i j 0
     ~ < j nw {

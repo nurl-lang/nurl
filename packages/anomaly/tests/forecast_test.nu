@@ -166,7 +166,8 @@ $ `src/dynamic.nu`
     ( check named `forecast: the first watched feature is temp` )
     : *ArimaModel am0 ( model_forecast_model mo 0 )
     : ArimaSpec sp0 ( arima_spec_of am0 )
-    ( check | | > . sp0 P 0 > . sp0 Q 0 > . am0 xk 0 `forecast: the temperature's model is seasonal (a polynomial or Fourier terms)` )
+    // the holdout may prefer a plain ARIMA that follows the rhythm over twelve steps; what matters is that it does
+    ( check | | | > . sp0 P 0 > . sp0 Q 0 > . am0 xk 0 < ( _fc_getf . fc sel_mae 0 ) * 0.5 ( _fc_getf . fc sel_naive 0 ) `forecast: the temperature's model follows the rhythm (a seasonal form, or a plain one at half the naive error)` )
     : ~ b selected F
     ?? ( vec_get [String] . fc sel 0 ) { T sn → { = selected > ( string_len sn ) 0 } F _ → {} }
     ( check selected `forecast: the holdout chose a form and named it` )
@@ -411,6 +412,16 @@ $ `src/dynamic.nu`
     ( check flag_skipped `skipped: a two-valued flag` )
     ( check == . . mo3 fc nw 1 `skipped: the temperature alone is watched` )
     ( check > ( _fc_getf . . mo3 fc scale 0 ) 1.0 `skipped: the watched feature's spread is recorded` )
+    // the forecast as it would have been made from an earlier row, beside what followed
+    : Json fo ( model_forecast_from_json mo3 6 200 )
+    ( check == ( _an_jint fo `origin` 0 ) 200 `origin: the forecast starts at the row asked` )
+    ( check == ( _an_jint fo `from_time` 0 ) + T0 * 200 3600 `origin: with that row's time` )
+    : ~ f om 0.0
+    ?? ( json_obj_get fo `forecasts` ) { T fa → { ?? ( json_arr_get fa 0 ) { T f0 → { ?? ( json_obj_get f0 `mean` ) { T a → { ?? ( json_arr_get a 0 ) { T e → { ?? ( json_num_as_f e ) { T x → { = om x } F _ → {} } } F _ → {} } } F _ → {} } } F _ → {} } } F _ → {} }
+    ( check < ( float_abs - om ( temp_at 201 ) ) 1.5 `origin: the next value from there is forecast on the rhythm` )
+    ( json_free fo )
+    ( check == . . mo3 fc pos 260 `origin: the live states were not moved` )
+
     // a season of -1 means none
     : b _w3 ( model_set_version_window mo3 ANOM_FC_NAME -1 0 )
     : String e5 ( model_train_forecast_at mo3 + T0 * 260 3600 )
@@ -464,6 +475,36 @@ $ `src/dynamic.nu`
     ( check < ( float_abs - m5 + 20.0 * 5.0 ( sin / * 6.283185307179586 4500.0 1440.0 ) ) 1.0 `minute: after a reopen the next value is forecast on the rhythm` )
     ( json_free fj5 )
     ( model_free mo5 )
+
+    // a ramp with noise: the drift form, which nothing else can climb with
+    : *Model mo6 ( model_open_at st `ramp` T0 )
+    ( model_set_limits mo6 10 150000 )
+    ( model_set_schedule mo6 100000 100000 )
+    : ( Vec Json ) recs6 ( vec_new [Json] )
+    = k 0
+    ~ < k 300 {
+        : Json j ( json_obj_new )
+        ( json_obj_set j `level` ( json_float + + 10.0 * 0.5 # f k * 0.5 ( gauss3 ) ) )
+        ( json_obj_set j `timestamp` ( json_int + T0 * k 3600 ) )
+        ( vec_push [Json] recs6 j )
+        = k + k 1
+    }
+    : ImportReport ir6 ( model_import_at mo6 recs6 + T0 * 300 3600 )
+    ( import_report_free ir6 )
+    ( vec_free_with [Json] recs6 \ Json j → v { ( json_free j ) } )
+    : b _w6 ( model_set_version_window mo6 ANOM_FC_NAME -1 0 )
+    : String e6 ( model_train_forecast_at mo6 + T0 * 300 3600 )
+    ( check == ( string_len e6 ) 0 `drift: the ramp trains` )
+    ( string_free e6 )
+    : ~ b is_drift F
+    ?? ( vec_get [String] . . mo6 fc sel 0 ) { T sn → { = is_drift ( string_contains sn `drift` ) } F _ → {} }
+    ( check is_drift `drift: the holdout chooses the drift form for a ramp` )
+    : Json bt6 ( model_forecast_backtest mo6 12 60 )
+    : ~ f sk6 -1.0
+    ?? ( json_obj_get bt6 `features` ) { T fa → { ?? ( json_arr_get fa 0 ) { T f0 → { ?? ( json_obj_get f0 `skill_vs_naive` ) { T e → { ?? ( json_num_as_f e ) { T x → { = sk6 x } F _ → {} } } F _ → {} } } F _ → {} } } F _ → {} }
+    ( check > sk6 0.5 `drift: twelve steps ahead the drift beats the naive forecast by half` )
+    ( json_free bt6 )
+    ( model_free mo6 )
 
     // reset drops it
     ( model_reset mo2 )

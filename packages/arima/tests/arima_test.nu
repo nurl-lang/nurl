@@ -497,6 +497,51 @@ $ `src/arima.nu`
     ( vec_free [i] periods ) ( vec_free [f] head ) ( vec_free [f] y ) ( vec_free [f] noise )
 }
 
+// ── drift ─────────────────────────────────────────────────────────────
+
+// A ramp with noise: ARIMA(0,1,0) with drift exactly, which without the
+// trend term the search can only climb with a unit root that stops at
+// the last level.
+@ test_drift → v {
+    : ( Vec f ) noise ( sim_ar1 400 0.0 44 )
+    : ( Vec f ) y ( vec_zeroed [f] 400 )
+    : ~ i t 0
+    ~ < t 400 { ( vec_set [f] y t + + 10.0 * 0.5 # f t ( _ar_at noise t ) ) = t + t 1 }
+    : ( Vec f ) head ( vec_zeroed [f] 380 )
+    = t 0
+    ~ < t 380 { ( vec_set [f] head t ( _ar_at y t ) ) = t + t 1 }
+    : ( Vec i ) none ( vec_new [i] )
+    : *ArimaModel m ( arima_auto_regress head none 0 T 0 )
+    ( check == . m xtr 1 `drift: the trend is a regressor` )
+    ( check ( near ( _ar_at . m xcoef 1 ) 0.5 0.01 ) `drift: the slope is recovered` )
+    : ArimaForecast fc ( arima_forecast m 20 )
+    : ~ f e_drift 0.0
+    : ~ f e_naive 0.0
+    : f last ( _ar_at head 379 )
+    : ~ i k 0
+    ~ < k 20 {
+        = e_drift + e_drift ( float_abs - ( _ar_at y + 380 k ) ( _ar_at . fc mean k ) )
+        = e_naive + e_naive ( float_abs - ( _ar_at y + 380 k ) last )
+        = k + k 1
+    }
+    ( check < e_drift * 0.4 e_naive `drift: twenty steps ahead the drift model's error is a fraction of the naive's` )
+    ( arima_forecast_free fc )
+    : String j1 ( arima_to_json m )
+    ?? ( arima_from_json ( string_data j1 ) ) {
+        T m2 → {
+            ( check == . m2 xtr 1 `drift: the JSON carries the trend` )
+            : String j2 ( arima_to_json m2 )
+            ( check ( string_eq j1 j2 ) `drift: JSON round trip is exact` )
+            ( string_free j2 )
+            ( arima_free m2 )
+        }
+        F _ → { ( check F `drift: JSON parses back` ) }
+    }
+    ( string_free j1 )
+    ( arima_free m )
+    ( vec_free [i] none ) ( vec_free [f] head ) ( vec_free [f] y ) ( vec_free [f] noise )
+}
+
 // ── select ────────────────────────────────────────────────────────────
 
 @ test_select → v {
@@ -604,6 +649,7 @@ $ `src/arima.nu`
     ( test_stream )
     ( test_many )
     ( test_harmonic )
+    ( test_drift )
     ( test_select )
     ( nurl_print `arima_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )

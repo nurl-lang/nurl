@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`packages/arima` 0.4.0 — a linear drift among the regressors**
+  (`arima_fit_regress` / `arima_auto_regress` with `trend`).
+  **`packages/anomaly` 0.28.0** — drift candidates and simplest-first
+  selection, an exact forecast that is wrong scores as an infinite
+  surprise, a point may carry its own `timestamp` on `/detect` and
+  `/forecast`, the forecast from any stored row (`?origin=`), the
+  visualiser zooms by drag and forecasts from a slider-chosen row over
+  what followed.
 - **`packages/anomaly` 0.27.0 — the forecast verdict has a floor, and
   features that are not readings are not forecast.** A reading is judged
   against the larger of the forecast's standard error and 2 % of the

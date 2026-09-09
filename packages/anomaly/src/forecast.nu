@@ -71,6 +71,12 @@ $ `deps/arima/src/arima.nu`
 : i ANOM_FC_HOLDOUT_MIN 40
 : i ANOM_FC_HOLDOUT_MAX 600
 : i ANOM_FC_SELECT_H 12
+// The candidates are tried simplest first, and a later, richer form
+// replaces the best only when its holdout error is smaller by this
+// share: a near-unit-root ARIMA mimics a drift over twelve steps to
+// within a percent and then runs away, and the tie should go to the
+// form that says what the series does.
+: f ANOM_FC_SELECT_MARGIN 0.05
 // A forecast variance past this many σ² is the diffuse start still
 // speaking: no verdict.
 : f ANOM_FC_DIFFUSE 1000.0
@@ -232,6 +238,7 @@ $ `deps/arima/src/arima.nu`
     i k
     String name
     b fixed  // ARIMA(0,1,0): the last value carried forward, as a candidate
+    b trend  // a linear drift among the regressors
 }
 
 @ __fc_cand_free FcCand c → v {
@@ -243,7 +250,13 @@ $ `deps/arima/src/arima.nu`
     : ( Vec i ) periods ( vec_new [i] )
     ? > p1 0 { ( vec_push [i] periods p1 ) } {}
     ? > p2 0 { ( vec_push [i] periods p2 ) } {}
-    ^ @ FcCand { sarima periods k ( string_from name ) F }
+    ^ @ FcCand { sarima periods k ( string_from name ) F F }
+}
+
+@ __fc_cand_trend i sarima i p1 i p2 i k s name → FcCand {
+    : ~ FcCand c ( __fc_cand sarima p1 p2 k name )
+    = . c trend T
+    ^ c
 }
 
 // The forms worth trying for a season of `season` rows over a fit
@@ -254,12 +267,16 @@ $ `deps/arima/src/arima.nu`
 // daily form of each kind.
 @ fc_candidates i season i n → ( Vec FcCand ) {
     : ( Vec FcCand ) out ( vec_new [FcCand] )
-    ( vec_push [FcCand] out ( __fc_cand 0 0 0 0 `arima` ) )
-    // The persistence forecast, as a form of its own: on a slow smooth
-    // reading nothing beats it, and then it is what the model should be.
+    // simplest first (see ANOM_FC_SELECT_MARGIN): the persistence
+    // forecast — on a slow smooth reading nothing beats it, and then it
+    // is what the model should be; a linear drift — a series that climbs
+    // by a fixed amount a row is ARIMA(0,1,0) with drift exactly; the
+    // plain ARIMA; then the seasonal forms
     : FcCand naive ( __fc_cand 0 0 0 0 `naive` )
     = . naive fixed T
     ( vec_push [FcCand] out naive )
+    ( vec_push [FcCand] out ( __fc_cand_trend 0 0 0 0 `drift` ) )
+    ( vec_push [FcCand] out ( __fc_cand 0 0 0 0 `arima` ) )
     ? > season 0 {
         : b poly <= season ANOM_FC_SARIMA_MAX
         : i week * 7 season
@@ -268,6 +285,7 @@ $ `deps/arima/src/arima.nu`
         ( vec_push [FcCand] out ( __fc_cand 0 season 0 2 `fourier2` ) )
         ( vec_push [FcCand] out ( __fc_cand 0 season 0 4 `fourier4` ) )
         ( vec_push [FcCand] out ( __fc_cand 0 season 0 6 `fourier6` ) )
+        ( vec_push [FcCand] out ( __fc_cand_trend 0 season 0 4 `fourier4+drift` ) )
         ? weekly {
             ? poly { ( vec_push [FcCand] out ( __fc_cand season week 0 3 `sarima+week` ) ) } {}
             ( vec_push [FcCand] out ( __fc_cand 0 season week 4 `fourier4+week` ) )
@@ -279,7 +297,7 @@ $ `deps/arima/src/arima.nu`
 // Fit one form on `y`.
 @ __fc_fit_cand ( Vec f ) y FcCand c → *ArimaModel {
     ? . c fixed { ^ ( arima_fit_method y ( arima_spec 0 1 0 ) ARIMA_ML ) } {}
-    ? > ( vec_len [i] . c periods ) 0 { ^ ( arima_auto_harmonic y . c periods . c k . c sarima ) } {}
+    ? | > ( vec_len [i] . c periods ) 0 . c trend { ^ ( arima_auto_regress y . c periods . c k . c trend . c sarima ) } {}
     ^ ( arima_auto y . c sarima )
 }
 
@@ -360,7 +378,8 @@ $ `deps/arima/src/arima.nu`
             ?? ( vec_get [FcCand] cands c ) {
                 T cand → {
                     : FcScore sc ( __fc_holdout . j y nfit ANOM_FC_SELECT_H cand )
-                    ? < . sc mae best_mae { = best c = best_mae . sc mae = best_naive . sc naive } {}
+                    : b better ? ( float_is_inf best_mae ) < . sc mae best_mae < . sc mae * best_mae - 1.0 ANOM_FC_SELECT_MARGIN
+                    ? better { = best c = best_mae . sc mae = best_naive . sc naive } {}
                 }
                 F _ → {}
             }
@@ -846,7 +865,10 @@ $ `deps/arima/src/arima.nu`
     : ~ f se ? > variance 0.0 ( float_sqrt variance ) 0.0
     : f floor * ANOM_FC_SE_FLOOR ( _fc_getf . fc scale j )
     ? < se floor { = se floor } {}
-    ? > se 0.0 {} { ^ 0.0 }
+    // no scale at all (a model from before the floor, or a feature the
+    // fit reproduced exactly): a reading off an exact forecast is an
+    // infinite surprise, never a silent zero
+    ? > se 0.0 {} { ^ ? == innovation 0.0 0.0 ? > innovation 0.0 1000000.0 -1000000.0 }
     ^ / innovation se
 }
 
