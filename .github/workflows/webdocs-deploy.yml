@@ -2,8 +2,8 @@ name: Publish Webdocs
 
 # Publishes the Fumadocs documentation site (webdocs/) to Cloudflare at
 # https://docs.nurl-lang.org. Runs on every push to main that touches
-# webdocs/ (or this workflow), and can also be triggered manually from the
-# Actions tab (Run workflow).
+# webdocs/ or CHANGELOG.md (the docs' version source), and can also be
+# triggered manually from the Actions tab (Run workflow).
 #
 # `pnpm run deploy` runs `next build && wrangler deploy` — Next.js's static
 # export (`output: 'export'` in next.config.mjs) builds the site to `out/`,
@@ -25,6 +25,7 @@ on:
     branches: [main]
     paths:
       - 'webdocs/**'
+      - 'CHANGELOG.md'
       - '.github/workflows/webdocs-deploy.yml'
   workflow_dispatch: {}
 
