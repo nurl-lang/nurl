@@ -1749,6 +1749,34 @@ $ `src/store.nu`
         }
         = k + k 1
     }
+    // Readings that cannot be measurements of the same quantity are left
+    // out of every fit below — the scaler, the forests, the flatline
+    // reference — while the rows themselves stay exactly where they are
+    // (prep.nu, "Absurd readings"). The forecast and the autoencoder mask
+    // their own matrices, which are projected onto their own feature
+    // orders.
+    ( vec_free [f] . mm absurd_n )
+    = . mm absurd_n ( vec_new [f] )
+    : ( Vec i ) abs_counts ( vec_new [i] )
+    : i abs_total ( anomaly_mask_absurd big ne nfeat abs_counts )
+    : ~ i aci 0
+    ~ < aci ( vec_len [i] abs_counts ) {
+        ?? ( vec_get [i] abs_counts aci ) { T cnt → { ( vec_push [f] . mm absurd_n # f cnt ) } F _ → {} }
+        = aci + aci 1
+    }
+    ( vec_free [i] abs_counts )
+    ? > abs_total 0 {
+        : String amsg ( string_from `anomaly: model '` )
+        ( string_push_str amsg ( string_data . mo mname ) )
+        ( string_push_str amsg `': ` )
+        ( string_push_int amsg abs_total )
+        ( string_push_str amsg ` reading` )
+        ? > abs_total 1 { ( string_push_str amsg `s` ) } {}
+        ( string_push_str amsg ` too far from their feature's own range to be a measurement of it; left out of this fit, still stored and still scored` )
+        ( nurl_eprintln ( string_data amsg ) )
+        ( string_free amsg )
+    } {}
+
     // The forecast version, when it is on: a model per numeric feature,
     // fitted on its own window of these rows and filtered over all of
     // them (a version that is off keeps what it has, muted).
@@ -2223,6 +2251,14 @@ $ `src/store.nu`
         = k + k 1
     }
     ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
+
+    // A reading that cannot be a measurement of the same quantity would
+    // put the net's MinMax range at 1e200 and map every real value to
+    // zero. Left out here as everywhere else; __ae_fill_matrix reads the
+    // hole as the midpoint of what is left.
+    : ( Vec i ) ae_abs ( vec_new [i] )
+    : i _ae_masked ( anomaly_mask_absurd raw ne nfeat ae_abs )
+    ( vec_free [i] ae_abs )
 
     : AeTrainOut out ( ae_train_matrix raw ne nfeat afeats hidden contamination . mo min_points )
     ( vec_free_with [String] afeats \ String x → v { ( string_free x ) } )

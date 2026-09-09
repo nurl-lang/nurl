@@ -161,7 +161,19 @@ rights.
   verdict lists it under `missing`; a bare `/detect_only` question about
   such a point is refused with the column named, since a question about a
   point must carry the whole point. A reading must be a finite number:
-  `1e999` parses to an infinity and is refused with the column named. An
+  `1e999` parses to an infinity and is refused with the column named.
+- **A reading that cannot be a measurement sets nobody's boundaries.** A
+  sensor that answers `1e200`, or a unit conversion that multiplied by a
+  googol, is stored and flagged like any other point — flagged *harder*,
+  since the range guard sees it against a scale it did not move — but it
+  takes no part in fitting the scaler, the forests, the flatline
+  reference, the autoencoder or the forecast. Without that, one such
+  reading left the feature with a standard deviation of 1e199, every real
+  reading standardised to nought, and the feature stopped being watched
+  until the reading left the ring. "Cannot be a measurement" is judged
+  against the feature's own median and MAD, which one reading cannot
+  move; the metadata reports what was left out, per feature, under
+  `absurd_readings`. An
   autoencoder whose input names features the current encoding no longer
   makes (a shorter span dropped a cycle, or the encoding changed) is
   stale: it does not score, `retrain_required` says so, and the next

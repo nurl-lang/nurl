@@ -39,7 +39,7 @@ $ `src/authz.nu`
 $ `src/imptime.nu`
 
 // One version for the CLI banner and the MCP handshake.
-: s ANOMALY_VERSION `0.30.0`
+: s ANOMALY_VERSION `0.31.0`
 
 // ── Wiring ───────────────────────────────────────────────────────────
 
@@ -2921,7 +2921,7 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     // ── Feeding models (the ingest capability: administrators and ingest keys) ──
     ( __mcp_add srv `ingest_point`
     `Send one point to a model: it is stored, scored, and answered with the verdict. A new name creates a model, which warms up (HTTP 202) until it has 50 points. This changes what the model learns — use score_point to ask without teaching.`
-    ( __mcp_sc_values `a column the model knows and the point leaves out is stored as absent, scored as its training mean (no version blames it), and listed under "missing" in the verdict. A value must be a finite number: "1e999" and the like are refused.` ) F F F F ingest
+    ( __mcp_sc_values `a column the model knows and the point leaves out is stored as absent, scored as its training mean (no version blames it), and listed under "missing" in the verdict. A value must be a finite number: "1e999" and the like are refused. A reading too far from its feature's own range to be a measurement of it is stored and flagged like any other, but is left out of every fit, so one broken sensor cannot make its feature stop being watched; describe_model reports those under "absurd_readings".` ) F F F F ingest
     \ Json a McpCall c → Json { ^ ( __mcp_t_ingest_point a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `forecast_point`
     `ingest_point's twin: store a point and get, with its verdict, the forecast from it — the next horizon values of every watched feature with 80 % and 95 % intervals and their times. A model without a trained forecast version gets one fitted here once it has trained.`

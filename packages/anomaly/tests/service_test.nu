@@ -601,6 +601,33 @@ $ `src/service.nu`
     : SvcOut dt3 ( fire r `POST` `/detect/svc_iso` `` `{"temp": 20.9, "timestamp": "2026-01-01T00:00:10Z"}` )
     ( check == . dt3 status 202 `svc: an ISO-8601 timestamp is read (a new model, collecting)` )
     ( json_free . dt3 body )
+    // An absurd reading is stored and flagged, and sets nobody's scale.
+    // Its own model, so the counts every other assertion here rests on
+    // stay what they were.
+    : ~ i abk 1
+    ~ <= abk 55 {
+        : String abb ( string_from `{"temp": 2` )
+        ( string_push_int abb % abk 5 )
+        ( string_push_str abb `.5}` )
+        : SvcOut abo ( fire r `POST` `/detect/absurd` `` ( string_data abb ) )
+        ( string_free abb )
+        ( json_free . abo body )
+        = abk + abk 1
+    }
+    : SvcOut ab1 ( fire r `POST` `/detect/absurd` `` `{"temp": 1e200}` )
+    ( check == . ab1 status 200 `svc: an absurd reading is stored, not refused` )
+    ( check ( jbool_of . ab1 body `anomaly` ) `svc: and flagged` )
+    ( json_free . ab1 body )
+    : SvcOut abt ( fire r `POST` `/force_train/absurd` `` `` )
+    ( json_free . abt body )
+    : SvcOut abm ( fire r `GET` `/models/dynamic/absurd/metadata` `` `` )
+    : ~ b names_it F
+    ?? ( json_obj_get . abm body `absurd_readings` ) {
+        T ab → { ? ( json_is_obj ab ) { = names_it ( json_obj_has ab `temp` ) } {} }
+        F _ → {}
+    }
+    ( check names_it `svc: the metadata names the feature whose reading was left out of the fit` )
+    ( json_free . abm body )
     // a reading that is not a finite number is refused, named
     : SvcOut inf1 ( fire r `POST` `/detect/svc` `` `{"temp": 1e999}` )
     ( check == . inf1 status 400 `svc: an infinite reading -> 400` )

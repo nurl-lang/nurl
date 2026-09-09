@@ -6,6 +6,29 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`packages/anomaly` 0.31.0 — a reading that cannot be a measurement is
+  flagged, stored, and left out of every fit.** One reading of `1e200` used
+  to make its feature stop being watched: 0.29.0 stopped it crashing the
+  service, but the scaler's std became 9e198, every real reading
+  standardised to nought, and the feature was blind until the reading left
+  the ring — fourteen weeks at a minute's step and the default cap. The
+  point is now flagged HARDER (the range guard sees it against a scale it
+  did not move) and marked absent for fitting only, so the scaler, the
+  forests, the flatline reference, the autoencoder and the forecast all
+  skip it through the "absent reading" path 0.29.0 already built. Judged
+  against the feature's own median and MAD, which one reading cannot move.
+  The metadata reports what was left out, per feature. Also: a forecast fit
+  whose innovation variance is not finite is no longer "converged" (`inf >
+  0` is true, so the finiteness had to be asked for), a feature the
+  forecast cannot score is absent rather than 0.0 (which read as "it landed
+  exactly on the forecast"), and the forecast z-score is capped like every
+  other standardised value so an extreme reading gives a number instead of
+  `null`.
+
 ## [0.63.0] — 2026-09-09
 
 ### Changed

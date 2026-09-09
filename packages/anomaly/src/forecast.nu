@@ -642,6 +642,15 @@ $ `deps/arima/src/arima.nu`
         }
         = k + k 1
     }
+    // A reading that cannot be a measurement of the same quantity is a
+    // gap in the series, not a value to fit through: one of them sets the
+    // innovation variance so high that every later reading is nought
+    // sigma from the forecast, which reads as "it landed exactly on it"
+    // (prep.nu, "Absurd readings").
+    : ( Vec i ) fc_abs ( vec_new [i] )
+    : i _fc_masked ( anomaly_mask_absurd hist ne nc fc_abs )
+    ( vec_free [i] fc_abs )
+
     // the fit jobs, one per feature worth fitting
     : ( Vec i ) jobs ( vec_new [i] )
     : ( Vec i ) jfeat ( vec_new [i] )
@@ -689,7 +698,16 @@ $ `deps/arima/src/arima.nu`
         // its spread is a signal, not a reading: nothing to be surprised by
         : b determ & != . jb out 0 <= . jb sel_mae * ANOM_FC_DETERMINISTIC . jb spread
         : ~ b keep F
-        ? & ! determ != . jb out 0 { ? & . m converged > ( arima_sigma2 m ) 0.0 { = keep T } {} } {}
+        // A fit whose innovation variance is not a finite positive number
+        // has not converged, whatever the flag says: it would answer every
+        // later reading with a standard error of infinity and score it as
+        // a perfect hit. `> inf 0.0` is true, so the finiteness is the
+        // part that has to be asked for.
+        ? & ! determ != . jb out 0 {
+            ? & . m converged ( _an_finite ( arima_sigma2 m ) ) {
+                ? > ( arima_sigma2 m ) 0.0 { = keep T } {}
+            } {}
+        } {}
         ? keep {} {
             : String why ( string_new )
             ?? ( vec_get [String] cand cj ) { T fn → { ( string_push_str why ( string_data fn ) ) } F _ → {} }
@@ -865,11 +883,24 @@ $ `deps/arima/src/arima.nu`
     : ~ f se ? > variance 0.0 ( float_sqrt variance ) 0.0
     : f floor * ANOM_FC_SE_FLOOR ( _fc_getf . fc scale j )
     ? < se floor { = se floor } {}
-    // no scale at all (a model from before the floor, or a feature the
+    // A standard error that is not a finite number means the fit did not
+    // produce a scale to judge against — and dividing by it would answer
+    // ZERO, which reads as "the reading landed exactly on the forecast".
+    // That is the loudest way to say nothing. NaN instead: the caller
+    // leaves the feature out of the verdict and out of the maximum, the
+    // same way it leaves out a reading nobody sent.
+    ? & ( _an_finite se ) ( _an_finite innovation ) {} { ^ ( float_nan ) }
+    // No scale at all (a model from before the floor, or a feature the
     // fit reproduced exactly): a reading off an exact forecast is an
-    // infinite surprise, never a silent zero
-    ? > se 0.0 {} { ^ ? == innovation 0.0 0.0 ? > innovation 0.0 1000000.0 -1000000.0 }
-    ^ / innovation se
+    // infinite surprise, never a silent zero.
+    ? > se 0.0 {} { ^ ? == innovation 0.0 0.0 ? > innovation 0.0 ANOM_Z_CAP - 0.0 ANOM_Z_CAP }
+    : f z / innovation se
+    // Capped like every other standardised value, so a reading of 1e308
+    // gives a number and not the `null` a non-finite score serialises as.
+    ? > z ANOM_Z_CAP { ^ ANOM_Z_CAP } {}
+    ? < z - 0.0 ANOM_Z_CAP { ^ - 0.0 ANOM_Z_CAP } {}
+    ? ( float_is_nan z ) { ^ ( float_nan ) } {}
+    ^ z
 }
 
 @ fc_replay_step * FcModel fc ( Vec i ) copies ( Vec f ) raw ( Vec f ) z → v {

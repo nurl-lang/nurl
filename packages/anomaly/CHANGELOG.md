@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.31.0
+
+A reading that cannot be a measurement is flagged, stored, and left out
+of every fit.
+
+- **One reading of `1e200` used to make its feature stop being watched.**
+  0.29.0 stopped it crashing the service; it did not stop it poisoning
+  the model. The scaler's std became 9e198, every real reading
+  standardised to nought, and the feature was blind until the reading
+  left the ring — fourteen weeks at a minute's step and the default cap.
+  The forests were no better off (a split is drawn uniformly between a
+  column's min and max) and neither was the forecast (one such reading
+  sets the innovation variance so high that every later reading is nought
+  sigma from the forecast, which reads as a perfect hit).
+  Now the point is stored and flagged like any other — flagged HARDER,
+  because the range guard sees it against a scale it did not move — and
+  marked absent for fitting only. The scaler, the forests, the flatline
+  reference, the autoencoder and the forecast all skip it, each through
+  the "absent reading" path 0.29.0 already built. Judged against the
+  feature's own median and 1.4826·MAD over a bounded sample, past 1000 of
+  those; a column with too few readings, or no spread, is left alone.
+  The metadata reports what was left out per feature under
+  `absurd_readings`, and a retrain says so on the log. An existing
+  poisoned model heals on its next retrain.
+- **A forecast fit with a non-finite innovation variance is not
+  converged.** The check was `sigma2 > 0`, and `inf > 0` is true, so such
+  a fit was kept and then answered every reading with a standard error of
+  infinity.
+- **A feature the forecast cannot score is absent, not 0.0.** Dividing by
+  an infinite standard error answered zero, which reads as "the reading
+  landed exactly on the forecast" — the loudest way to say nothing, and
+  the same silent false coverage as the `se = 0` case fixed in 0.27.0,
+  by a different route. It is now left out of the verdict and out of the
+  maximum, like a reading nobody sent.
+- **The forecast's z-score is capped at ±1e6**, like every other
+  standardised value, so a reading of `1e308` gives a number instead of
+  the `null` a non-finite score serialises as.
+
 ## 0.30.0
 
 A model belongs to an organisation, and an organisation is a database.
