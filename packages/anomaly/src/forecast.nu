@@ -40,6 +40,7 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/std/sort.nu`
 $ `stdlib/std/sysinfo.nu`
 $ `stdlib/ext/json.nu`
 $ `src/prep.nu`
@@ -73,6 +74,18 @@ $ `deps/arima/src/arima.nu`
 // A forecast variance past this many σ² is the diffuse start still
 // speaking: no verdict.
 : f ANOM_FC_DIFFUSE 1000.0
+// The verdict's scale has a floor: a reading is judged against the
+// larger of the forecast's standard error and this share of the
+// feature's own spread (1.4826 × the median absolute deviation of the
+// fit window). A feature the model reproduces almost exactly — a
+// calendar sine fed as data, a smoothed reading — has a standard error
+// near zero, and without the floor a deviation invisible on the
+// feature's own scale is a thousand sigma.
+: f ANOM_FC_SE_FLOOR 0.02
+// A feature whose holdout error is below this share of its spread is
+// deterministic — a signal the model can write down — and is not
+// watched: there is nothing in it to be surprised by.
+: f ANOM_FC_DETERMINISTIC 0.000001
 
 // The trained version. `models` holds *ArimaModel per watched feature;
 // `feats` their names and `cols` their index in the metadata's feature
@@ -96,6 +109,7 @@ $ `deps/arima/src/arima.nu`
     ( Vec f ) sel_mae  // its holdout error
     ( Vec f ) sel_naive  // the naive forecast's on the same rows and steps
     ( Vec String ) skipped  // numeric features not watched, each "name: why"
+    ( Vec f ) scale  // per watched feature: its spread in the fit window (the verdict's floor is a share of it)
 }
 
 @ fc_new → *FcModel {
@@ -116,6 +130,7 @@ $ `deps/arima/src/arima.nu`
     = . fc sel_mae ( vec_new [f] )
     = . fc sel_naive ( vec_new [f] )
     = . fc skipped ( vec_new [String] )
+    = . fc scale ( vec_new [f] )
     ^ fc
 }
 
@@ -150,6 +165,8 @@ $ `deps/arima/src/arima.nu`
     = . fc sel_naive ( vec_new [f] )
     ( vec_free_with [String] . fc skipped \ String x → v { ( string_free x ) } )
     = . fc skipped ( vec_new [String] )
+    ( vec_free [f] . fc scale )
+    = . fc scale ( vec_new [f] )
     = . fc nw 0
     = . fc trained F
     = . fc pos 0
@@ -166,6 +183,7 @@ $ `deps/arima/src/arima.nu`
     ( vec_free [f] . fc sel_mae )
     ( vec_free [f] . fc sel_naive )
     ( vec_free [String] . fc skipped )
+    ( vec_free [f] . fc scale )
     ( nurl_free # s fc )
 }
 
@@ -203,6 +221,7 @@ $ `deps/arima/src/arima.nu`
     String sel  // the form chosen
     f sel_mae
     f sel_naive
+    f spread
 }
 
 // One form a feature's series can take: a SARIMA season (0 = none),
@@ -286,7 +305,11 @@ $ `deps/arima/src/arima.nu`
     : ~ f err 0.0
     : ~ f nai 0.0
     : ~ i cnt 0
-    ? & . m converged > ( arima_sigma2 m ) 0.0 {
+    // a form that reproduces the series exactly has σ² = 0 and no
+    // "convergence" to speak of; it is judged like any other, and its
+    // holdout error of nothing is what marks the feature deterministic
+    : ~ b bad F
+    ? T {
         = t - nfit 1
         ~ < t - n 1 {
             : ~ i hh h
@@ -296,7 +319,9 @@ $ `deps/arima/src/arima.nu`
             : ~ i q 1
             ~ <= q hh {
                 : f actual . py + t q
-                = err + err ( float_abs - actual ( _fc_getf . f1 mean - q 1 ) )
+                : f fm ( _fc_getf . f1 mean - q 1 )
+                ? | ( float_is_nan fm ) ( float_is_inf fm ) { = bad T } {}
+                = err + err ( float_abs - actual fm )
                 = nai + nai ( float_abs - actual origin )
                 = cnt + cnt 1
                 = q + q 1
@@ -307,7 +332,7 @@ $ `deps/arima/src/arima.nu`
         }
     } {}
     ( arima_free m )
-    ? > cnt 0 { ^ @ FcScore { / err # f cnt / nai # f cnt } } {}
+    ? & > cnt 0 ! bad { ^ @ FcScore { / err # f cnt / nai # f cnt } } {}
     ^ @ FcScore { ( float_inf ) ( float_inf ) }
 }
 
@@ -412,10 +437,91 @@ $ `deps/arima/src/arima.nu`
 // readings with the gaps between them bridged linearly (a gap at either
 // end takes the nearest reading); how many readings were real, and
 // whether they were not all one value.
+// `kind`: 0 a reading worth forecasting; 1 binary (two values at most);
+// 2 a counter — a non-decreasing count or a "seconds since" that rises
+// by a fixed step and resets, which no ARIMA should be asked to follow.
+// `spread` is 1.4826 × the median absolute deviation of the present
+// readings (their standard deviation when that is 0).
 : FcSeries {
     ( Vec f ) y
     i present
     b distinct
+    i kind
+    f spread
+}
+
+: s FC_KIND_BINARY `binary (two values at most)`
+: s FC_KIND_COUNTER `counter (rises by a fixed step and resets)`
+
+// The kind and the spread of the present readings.
+@ __fc_series_kind ( Vec f ) vals → FcSeries {
+    : i n ( vec_len [f] vals )
+    : ( Vec f ) y ( vec_new [f] )
+    ? < n 3 { ^ @ FcSeries { y n F 0 0.0 } } {}
+    : *f pv ( vec_data [f] vals )
+    // distinct values, up to three
+    : ~ f v1 . pv 0
+    : ~ f v2 v1
+    : ~ i nd 1
+    : ~ i k 1
+    ~ & < k n < nd 3 {
+        : f v . pv k
+        ? | == v v1 & > nd 1 == v v2 {} {
+            ? == nd 1 { = v2 v = nd 2 } { = nd 3 }
+        }
+        = k + k 1
+    }
+    ? <= nd 2 { ^ @ FcSeries { y n > nd 1 1 0.0 } } {}
+    // spread: 1.4826 × MAD
+    : ( Vec f ) sorted ( vec_with_cap [f] n )
+    = k 0
+    ~ < k n { ( vec_push [f] sorted . pv k ) = k + k 1 }
+    ( sort_by [f] sorted \ f a f b → i { ? < a b { ^ -1 } {} ? > a b { ^ 1 } {} ^ 0 } )
+    : f med ( _fc_getf sorted / n 2 )
+    : ( Vec f ) dev ( vec_with_cap [f] n )
+    = k 0
+    ~ < k n { ( vec_push [f] dev ( float_abs - . pv k med ) ) = k + k 1 }
+    ( sort_by [f] dev \ f a f b → i { ? < a b { ^ -1 } {} ? > a b { ^ 1 } {} ^ 0 } )
+    : ~ f spread * 1.4826 ( _fc_getf dev / n 2 )
+    ( vec_free [f] sorted )
+    ( vec_free [f] dev )
+    ? > spread 0.0 {} {
+        : ~ f sum 0.0
+        = k 0
+        ~ < k n { = sum + sum . pv k = k + k 1 }
+        : f mean / sum # f n
+        : ~ f sq 0.0
+        = k 0
+        ~ < k n { = sq + sq * - . pv k mean - . pv k mean = k + k 1 }
+        = spread ( float_sqrt / sq # f n )
+    }
+    // counter: it never goes down except to reset — every fall is a
+    // jump of more than ten typical rises, there is at least one, and
+    // they are rare (at most one per twenty rows). A reading that dips
+    // by its own quantum (a temperature at a tenth of a degree) is not
+    // a counter, and a monotone rise without a reset is a trend.
+    : ( Vec f ) pos ( vec_new [f] )
+    : ( Vec f ) falls ( vec_new [f] )
+    = k 1
+    ~ < k n {
+        : f d - . pv k . pv - k 1
+        ? > d 0.0 { ( vec_push [f] pos d ) } { ? < d 0.0 { ( vec_push [f] falls ( float_abs d ) ) } {} }
+        = k + k 1
+    }
+    : ~ i kind 0
+    : i np ( vec_len [f] pos )
+    : i nf ( vec_len [f] falls )
+    ? & & > np 2 > nf 0 <= * 20 nf n {
+        ( sort_by [f] pos \ f a f b → i { ? < a b { ^ -1 } {} ? > a b { ^ 1 } {} ^ 0 } )
+        : f step ( _fc_getf pos / np 2 )
+        : ~ b resets T
+        = k 0
+        ~ < k nf { ? > ( _fc_getf falls k ) * 10.0 step {} { = resets F } = k + k 1 }
+        ? resets { = kind 2 } {}
+    } {}
+    ( vec_free [f] pos )
+    ( vec_free [f] falls )
+    ^ @ FcSeries { y n T kind spread }
 }
 
 @ __fc_fit_series ( Vec f ) hist i nw i j i from i n → FcSeries {
@@ -426,16 +532,21 @@ $ `deps/arima/src/arima.nu`
     : ~ i cnt 0
     : ~ f first ( float_nan )
     : ~ b diff F
+    : ( Vec f ) present ( vec_new [f] )
     : ~ i t 0
     ~ < t len {
         : f v . ph + * + from t nw j
         = . py t v
         ? ( float_is_nan v ) {} {
             = cnt + cnt 1
+            ( vec_push [f] present v )
             ? ( float_is_nan first ) { = first v } { ? != v first { = diff T } {} }
         }
         = t + t 1
     }
+    : FcSeries kd ( __fc_series_kind present )
+    ( vec_free [f] . kd y )
+    ( vec_free [f] present )
     ? > cnt 0 {
         // bridge: walk the gaps
         : ~ i last -1
@@ -464,7 +575,7 @@ $ `deps/arima/src/arima.nu`
             ~ < g len { = . py g . py last = g + g 1 }
         } {}
     } {}
-    ^ @ FcSeries { y cnt diff }
+    ^ @ FcSeries { y cnt diff . kd kind . kd spread }
 }
 
 // Train from the encoded ring: `encs` are every ring row in order,
@@ -519,17 +630,21 @@ $ `deps/arima/src/arima.nu`
     ~ < j nc {
         : FcSeries fs ( __fc_fit_series hist nc j from ne )
         : ( Vec f ) y . fs y
-        ? & >= . fs present ANOM_FC_MIN_FIT . fs distinct {} {
+        : b fit & & >= . fs present ANOM_FC_MIN_FIT . fs distinct == . fs kind 0
+        ? fit {} {
             : String why ( string_new )
             ?? ( vec_get [String] cand j ) { T fn → { ( string_push_str why ( string_data fn ) ) } F _ → {} }
             ? < . fs present ANOM_FC_MIN_FIT {
                 ( string_push_str why `: too few readings in the fit window (` )
                 ( string_push_int why . fs present )
                 ( string_push_str why ` of ` ) ( string_push_int why - ne from ) ( string_push_str why `)` )
-            } { ( string_push_str why `: constant in the fit window` ) }
+            } { ? ! . fs distinct { ( string_push_str why `: constant in the fit window` ) } {
+                    ( string_push_str why `: ` )
+                    ( string_push_str why ? == . fs kind 1 FC_KIND_BINARY FC_KIND_COUNTER )
+                } }
             ( vec_push [String] . fc skipped why )
         }
-        ? & >= . fs present ANOM_FC_MIN_FIT . fs distinct {
+        ? fit {
             : *FcJob jb # *FcJob ( nurl_malloc Z FcJob )
             = . jb y y
             = . jb season season
@@ -537,6 +652,7 @@ $ `deps/arima/src/arima.nu`
             = . jb sel ( string_new )
             = . jb sel_mae 0.0
             = . jb sel_naive 0.0
+            = . jb spread . fs spread
             ( vec_push [i] jobs # i jb )
             ( vec_push [i] jfeat j )
         } { ( vec_free [f] y ) }
@@ -550,12 +666,15 @@ $ `deps/arima/src/arima.nu`
         : *FcJob jb # *FcJob ( _fc_geti jobs k )
         : i cj ( _fc_geti jfeat k )
         : *ArimaModel m # *ArimaModel . jb out
+        // a feature the chosen form reproduces to within a millionth of
+        // its spread is a signal, not a reading: nothing to be surprised by
+        : b determ & != . jb out 0 <= . jb sel_mae * ANOM_FC_DETERMINISTIC . jb spread
         : ~ b keep F
-        ? != . jb out 0 { ? & . m converged > ( arima_sigma2 m ) 0.0 { = keep T } {} } {}
+        ? & ! determ != . jb out 0 { ? & . m converged > ( arima_sigma2 m ) 0.0 { = keep T } {} } {}
         ? keep {} {
             : String why ( string_new )
             ?? ( vec_get [String] cand cj ) { T fn → { ( string_push_str why ( string_data fn ) ) } F _ → {} }
-            ( string_push_str why `: no form fitted (the optimizer did not converge)` )
+            ( string_push_str why ? determ `: deterministic (the chosen form reproduces the fit window exactly: a calendar signal fed as data, or a reading that never moves)` `: no form fitted (the optimizer did not converge)` )
             ( vec_push [String] . fc skipped why )
         }
         ? keep {
@@ -575,6 +694,7 @@ $ `deps/arima/src/arima.nu`
             ( vec_push [String] . fc sel ( string_from ( string_data . jb sel ) ) )
             ( vec_push [f] . fc sel_mae . jb sel_mae )
             ( vec_push [f] . fc sel_naive . jb sel_naive )
+            ( vec_push [f] . fc scale . jb spread )
         } { ? != . jb out 0 { ( arima_free m ) } {} }
         ( vec_free [f] . jb y )
         ( string_free . jb sel )
@@ -645,13 +765,13 @@ $ `deps/arima/src/arima.nu`
         : ~ f zj ( float_nan )
         ? absorb {
             : ArimaUpdate u ( arima_update m y )
-            ? & ! ( float_is_nan y ) <= . u variance * ANOM_FC_DIFFUSE ( arima_sigma2 m ) { = zj . u z } {}
+            ? & ! ( float_is_nan y ) <= . u variance * ANOM_FC_DIFFUSE ( arima_sigma2 m ) { = zj ( __fc_z fc j . u innovation . u variance ) } {}
         } {
             ? ( float_is_nan y ) {} {
                 : ArimaForecast f1 ( arima_forecast m 1 )
                 : f se ( _fc_getf . f1 se 0 )
                 : f vr * se se
-                ? & > se 0.0 <= vr * ANOM_FC_DIFFUSE ( arima_sigma2 m ) { = zj / - y ( _fc_getf . f1 mean 0 ) se } {}
+                ? & > se 0.0 <= vr * ANOM_FC_DIFFUSE ( arima_sigma2 m ) { = zj ( __fc_z fc j - y ( _fc_getf . f1 mean 0 ) vr ) } {}
                 ( arima_forecast_free f1 )
             }
         }
@@ -720,7 +840,17 @@ $ `deps/arima/src/arima.nu`
 
 // One row through the copies; the z per feature (NaN = not judged)
 // written into `z` when it is not empty.
-@ fc_replay_step ( Vec i ) copies ( Vec f ) raw ( Vec f ) z → v {
+// The z-score of an innovation against the larger of the forecast's
+// standard error and the feature's floor (ANOM_FC_SE_FLOOR × spread).
+@ __fc_z * FcModel fc i j f innovation f variance → f {
+    : ~ f se ? > variance 0.0 ( float_sqrt variance ) 0.0
+    : f floor * ANOM_FC_SE_FLOOR ( _fc_getf . fc scale j )
+    ? < se floor { = se floor } {}
+    ? > se 0.0 {} { ^ 0.0 }
+    ^ / innovation se
+}
+
+@ fc_replay_step * FcModel fc ( Vec i ) copies ( Vec f ) raw ( Vec f ) z → v {
     : i nw ( vec_len [i] copies )
     : *f pz ( vec_data [f] z )
     : b want == ( vec_len [f] z ) nw
@@ -731,7 +861,7 @@ $ `deps/arima/src/arima.nu`
         : ArimaUpdate u ( arima_update m y )
         ? want {
             : ~ f zj ( float_nan )
-            ? & ! ( float_is_nan y ) <= . u variance * ANOM_FC_DIFFUSE ( arima_sigma2 m ) { = zj . u z } {}
+            ? & ! ( float_is_nan y ) <= . u variance * ANOM_FC_DIFFUSE ( arima_sigma2 m ) { = zj ( __fc_z fc j . u innovation . u variance ) } {}
             = . pz j zj
         } {}
         = j + j 1
@@ -791,6 +921,7 @@ $ `deps/arima/src/arima.nu`
     ( json_obj_set o `holdout_mae` ( _an_jarr_of_floats . fc sel_mae ) )
     ( json_obj_set o `holdout_naive_mae` ( _an_jarr_of_floats . fc sel_naive ) )
     ( json_obj_set o `skipped` ( _an_jarr_of_strs . fc skipped ) )
+    ( json_obj_set o `scale` ( _an_jarr_of_floats . fc scale ) )
     : Json ms ( json_arr_new )
     = j 0
     ~ < j nw {
@@ -895,6 +1026,7 @@ $ `deps/arima/src/arima.nu`
             }
             ( __fc_read_floats o `holdout_mae` . fc sel_mae )
             ( __fc_read_floats o `holdout_naive_mae` . fc sel_naive )
+            ( __fc_read_floats o `scale` . fc scale )
             ?? ( json_obj_get o `skipped` ) {
                 T sa → {
                     ? ( json_is_arr sa ) {
@@ -912,6 +1044,7 @@ $ `deps/arima/src/arima.nu`
             ~ < ( vec_len [String] . fc sel ) nw { ( vec_push [String] . fc sel ( string_new ) ) }
             ~ < ( vec_len [f] . fc sel_mae ) nw { ( vec_push [f] . fc sel_mae 0.0 ) }
             ~ < ( vec_len [f] . fc sel_naive ) nw { ( vec_push [f] . fc sel_naive 0.0 ) }
+            ~ < ( vec_len [f] . fc scale ) nw { ( vec_push [f] . fc scale 0.0 ) }
             ? & good > nw 0 {
                 = . fc nw nw
                 = . fc trained T
@@ -959,6 +1092,7 @@ $ `deps/arima/src/arima.nu`
             ( json_obj_set c `holdout_mae` ( json_float hm ) )
             ( json_obj_set c `holdout_naive_mae` ( json_float hn ) )
             ( json_obj_set c `holdout_skill` ( json_float ? > hn 0.0 - 1.0 / hm hn 0.0 ) )
+            ( json_obj_set c `spread` ( json_float ( _fc_getf . fc scale j ) ) )
             ( json_arr_push ms c )
             = j + j 1
         }

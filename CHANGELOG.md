@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`packages/anomaly` 0.27.0 — the forecast verdict has a floor, and
+  features that are not readings are not forecast.** A reading is judged
+  against the larger of the forecast's standard error and 2 % of the
+  feature's own spread; flags, counters and signals the model reproduces
+  exactly are skipped with their reason.
 - **`packages/anomaly` 0.26.0 — an agent's findings, fixed at the root.**
   Margins someone set stay set (a fork inherits `tuned_at`; the
   first-train calibration never overwrites a hand-set margin); an audit
