@@ -146,6 +146,125 @@ $ `src/dynamic.nu`
     ( model_free mo )
 }
 
+// ── Scenario C: one absurd reading, and a reading left out ────────────
+//
+// A point of 1.0e200 once took the whole service down: the scaler's sum of
+// squares overflowed, the persisted std became a JSON null, the metadata
+// no longer parsed, the model reopened empty over it and the old forests
+// walked a point of no columns off address zero.
+
+@ test_extreme Store st → v {
+    = g_lcg 7
+    : *Model mo ( model_open_at st `extreme` T0 )
+    : ~ i k 1
+    ~ <= k 60 {
+        : IngestOut o ( ingest_pt mo + 20.0 ( gauss3 ) + 5.0 * ( gauss3 ) 0.5 k )
+        = k + k 1
+    }
+    ( check ( model_is_trained mo ) `extreme: trained on 60 normal points` )
+
+    // A reading the model cannot know: absent, not zero. Zero was 40
+    // standard deviations below a temperature of 20 and the range guard
+    // blamed a value nobody sent.
+    : Json half ( json_obj_new )
+    ( json_obj_set half `load` ( json_float 5.0 ) )
+    : !Verdict String hr ( model_ingest_at mo half + T0 * 61 60 )
+    ( json_free half )
+    ?? hr {
+        T vd → {
+            : ~ f guard 1.0
+            : ~ b guard_seen F
+            : i nv ( vec_len [VerVerdict] . vd versions )
+            : ~ i v 0
+            ~ < v nv {
+                ?? ( vec_get [VerVerdict] . vd versions v ) {
+                    T vv → { ? == ( nurl_str_eq ( string_data . vv vvname ) `range_guard` ) 1 { = guard . vv score = guard_seen T } {} }
+                    F _ → {}
+                }
+                = v + v 1
+            }
+            ( check guard_seen `extreme: the range guard judged the half point` )
+            ( check > guard -3.0 `extreme: an absent reading is not blamed by the range guard` )
+            ( check ! . vd anomaly `extreme: an absent reading is not an anomaly` )
+            ( verdict_free vd )
+        }
+        F e → { ( string_free e ) ( check F `extreme: a point missing a column is still stored` ) }
+    }
+
+    // 1.0e200 goes in (it is a finite number), the model retrains over it,
+    // and keeps scoring — finitely.
+    : IngestOut big ( ingest_pt mo 1.0e200 5.0 62 )
+    ( check . big ok `extreme: 1.0e200 is stored` )
+    ( check . big anomaly `extreme: 1.0e200 is flagged` )
+    ( check ( _an_finite . big score ) `extreme: the score of 1.0e200 is finite` )
+    : i used ( model_force_train_at mo + T0 * 63 60 )
+    ( check == used 62 `extreme: retrain over the extreme point` )
+    : IngestOut after ( ingest_pt mo 20.0 5.0 63 )
+    ( check . after ok `extreme: scoring after the retrain does not crash` )
+    ( check ( _an_finite . after score ) `extreme: the score after the retrain is finite` )
+    : *Meta mm ( model_metadata mo )
+    : ~ b std_ok T
+    : i nsd ( vec_len [f] . mm sc_std )
+    : ~ i c 0
+    ~ < c nsd {
+        ?? ( vec_get [f] . mm sc_std c ) { T sd → { ? & ( _an_finite sd ) > sd 0.0 {} { = std_ok F } } F _ → {} }
+        = c + c 1
+    }
+    ( check & > nsd 0 std_ok `extreme: every persisted std is finite and positive` )
+    ( model_free mo )
+
+    // Reopened from disk: the metadata parses, the columns are still there.
+    : *Model mo2 ( model_open_at st `extreme` + T0 * 64 60 )
+    : *Meta mm2 ( model_metadata mo2 )
+    ( check == ( vec_len [String] . mm2 feats ) 2 `extreme: the reopened model keeps its two features` )
+    ( check ( model_is_trained mo2 ) `extreme: the reopened model is trained` )
+    : IngestOut o2 ( ingest_pt mo2 20.0 5.0 64 )
+    ( check & . o2 ok ( _an_finite . o2 score ) `extreme: the reopened model scores` )
+    ( model_free mo2 )
+
+    // A point of 1.0e308: still a finite number, still a finite score.
+    : *Model mo3 ( model_open_at st `extreme` + T0 * 65 60 )
+    : IngestOut huge ( ingest_pt mo3 1.0e308 5.0 65 )
+    ( check & . huge ok ( _an_finite . huge score ) `extreme: 1.0e308 scores finitely` )
+    ( model_free mo3 )
+}
+
+// ── Scenario D: a metadata file that does not parse ───────────────────
+//
+// Not overwritten: set aside under a name that says what happened, the
+// model reopens empty, and the forests of the vanished metadata are not
+// loaded over it.
+
+@ test_corrupt_meta Store st → v {
+    = g_lcg 9
+    : *Model mo ( model_open_at st `corrupt` T0 )
+    : ~ i k 1
+    ~ <= k 55 {
+        : IngestOut o ( ingest_pt mo + 20.0 ( gauss3 ) + 5.0 * ( gauss3 ) 0.5 k )
+        = k + k 1
+    }
+    ( check ( model_is_trained mo ) `corrupt: trained` )
+    ( model_free mo )
+
+    : String root ( string_clone . st root )
+    ( string_push_str root `/corrupt/metadata.json` )
+    : !v IoErr w ( write_file ( string_data root ) `{"name": "corrupt", "created": "x", "scaler": {"mean": [null], "std": [null]}` )
+    ?? w { T _ → {} F _ → { ( check F `corrupt: test wrote the broken file` ) } }
+
+    : *Model mo2 ( model_open_at st `corrupt` + T0 * 56 60 )
+    ( check ! ( model_is_trained mo2 ) `corrupt: the model reopens untrained (no forest over no columns)` )
+    : IngestOut o2 ( ingest_pt mo2 20.0 5.0 56 )
+    ( check . o2 ok `corrupt: the reopened model takes a point without crashing` )
+    ( model_free mo2 )
+
+    : String q ( string_clone . st root )
+    ( string_push_str q `/corrupt/metadata.json.corrupt-` )
+    ( string_push_int q + T0 * 56 60 )
+    ( check ( file_exists ( string_data q ) ) `corrupt: the broken file is kept beside the model` )
+    ( string_free q )
+    ( string_free root )
+}
+
 // ── Scenario B: streaming mechanics at tiny limits ────────────────────
 
 @ test_mechanics Store st → v {
@@ -281,6 +400,8 @@ $ `src/dynamic.nu`
 
     ( test_stream st )
     ( test_mechanics st )
+    ( test_extreme st )
+    ( test_corrupt_meta st )
 
     ( store_free st )
     : !v IoErr fin ( dir_remove_all ( string_data root ) )

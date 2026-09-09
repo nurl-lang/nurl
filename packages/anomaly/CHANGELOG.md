@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.29.0
+
+An agent's third session found the reading that took the service down.
+
+- **`ingest_point {y: 1e200}` then `retrain` killed the whole service.**
+  Not the retrain: the score after it. The scaler's sum of squared
+  deviations overflowed to infinity, the persisted std became a JSON
+  `null`, the metadata no longer parsed, `model_open_at` replaced it
+  with a fresh one (0 features, 0 points) and saved that over the model,
+  the old two-column forests loaded anyway, and the next point — of no
+  columns — sent the forest walking off address zero. Every link is
+  fixed at its root:
+  - the scaler's arithmetic cannot overflow on finite input (mean as a
+    sum of `v/m`, deviations halved and scaled by the largest before
+    squaring): `{1e200, 0, 0, 0}` has a std of 4.3e199, not infinity;
+  - a reading that is not a finite number (`1e999` parses to one) is
+    refused, named, on every path that encodes a point;
+  - a metadata file that does not parse is set aside as
+    `metadata.json.corrupt-<time>` and logged, never overwritten; a
+    forest whose width is not the metadata's feature count (or a window
+    of it) is not loaded;
+  - `iforest` 0.1.3: a point of the wrong length scores 0.5 ("no
+    information") instead of being read past its end;
+  - a standardised value is capped at ±1e6 sigma, and the autoencoder's
+    normalised input likewise, so a reading of 1e308 gives a score that
+    is a number, not `null`;
+  - the persisted scaler never carries a non-finite mean or std.
+- **A column the point leaves out is scored at its training mean.** It
+  was a raw 0 for every forest and the range guard, which after
+  standardisation is however many sigma zero lies from the mean: a
+  sensor that skipped a tick read as a reading of nothing, and the
+  guard blamed a value nobody sent (`katoksen_ilmanpaine` at ~1000 hPa
+  missed the margin by 3e-4). Absent is now NaN through the projection,
+  the scaler standardises it to 0 (the mean, the one value that says
+  nothing), the forecast reads it as a gap, and the autoencoder fills it
+  with the midpoint of its training range. The verdict still lists the
+  columns under `missing`.
+- **A patch key the service does not read is refused with its name.**
+  `edit_model {schedule: {forecast: 500}, versions: {forecast:
+  {window_size: 48}}}` answered success and applied half of it. Unknown
+  keys are now named at every level (`patch.bogus`, `schedule.forecast`,
+  `versions.daily.window`), and a version value that is not an object
+  is refused too.
+
 ## 0.28.0
 
 The findings of an agent's second session — synthetic data through MCP —

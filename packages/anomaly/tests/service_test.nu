@@ -601,6 +601,38 @@ $ `src/service.nu`
     : SvcOut dt3 ( fire r `POST` `/detect/svc_iso` `` `{"temp": 20.9, "timestamp": "2026-01-01T00:00:10Z"}` )
     ( check == . dt3 status 202 `svc: an ISO-8601 timestamp is read (a new model, collecting)` )
     ( json_free . dt3 body )
+    // a reading that is not a finite number is refused, named
+    : SvcOut inf1 ( fire r `POST` `/detect/svc` `` `{"temp": 1e999}` )
+    ( check == . inf1 status 400 `svc: an infinite reading -> 400` )
+    : ~ b names_temp F
+    ?? ( json_obj_get . inf1 body `message` ) {
+        T m → {
+            ? ( json_is_str m ) {
+                : String ms ( string_from ( json_str_data m ) )
+                = names_temp ( string_contains ms `finite` )
+                ( string_free ms )
+            } {}
+        }
+        F _ → {}
+    }
+    ( check names_temp `svc: the refusal says the value must be finite` )
+    ( json_free . inf1 body )
+    // a patch key the service does not read is refused, named
+    : SvcOut unk ( fire r `PUT` `/models/dynamic/svc/metadata` `` `{"schedule":{"forecast":500}}` )
+    ( check == . unk status 400 `svc: metadata PUT with an unknown key -> 400` )
+    : ~ b names_key F
+    ?? ( json_obj_get . unk body `message` ) {
+        T m → {
+            ? ( json_is_str m ) {
+                : String ms ( string_from ( json_str_data m ) )
+                = names_key ( string_contains ms `schedule.forecast` )
+                ( string_free ms )
+            } {}
+        }
+        F _ → {}
+    }
+    ( check names_key `svc: the refusal names the unknown key` )
+    ( json_free . unk body )
     // /forecast: the point goes in, the forecast comes back with intervals and times
     : SvcOut fp ( fire r `POST` `/forecast/svc` `horizon=2` `{"temp": 21.0}` )
     ( check == . fp status 200 `svc: POST /forecast -> 200` )

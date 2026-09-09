@@ -504,8 +504,8 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `score` ( json_float . vd score ) )
     ( json_obj_set o `data_points` ( json_int ( model_n_points mo ) ) )
     // A stored point may leave columns out — a sensor that skipped a tick
-    // is still a point in the stream — but the verdict says so, because
-    // those columns were scored as 0.
+    // is still a point in the stream — but the verdict says so: those
+    // columns were scored at their training mean, which no version blames.
     : ( Vec String ) miss ( anomaly_missing_cols vmm body )
     ? > ( vec_len [String] miss ) 0 {
         : Json ma ( json_arr_new )
@@ -4975,7 +4975,9 @@ $ `stdlib/std/thread.nu`
 // Does a header's name say it carries a credential? Authorization and
 // Cookie, and anything with key, token, secret or password in it.
 @ __an_header_secret s name → b {
-    : String low ( string_to_lower ( string_from name ) )
+    : String raw ( string_from name )
+    : String low ( string_to_lower raw )
+    ( string_free raw )
     : s l ( string_data low )
     : b hit | | | | | ( __an_has l `authorization` ) ( __an_has l `cookie` ) ( __an_has l `key` ) ( __an_has l `token` ) ( __an_has l `secret` ) ( __an_has l `password` )
     ( string_free low )

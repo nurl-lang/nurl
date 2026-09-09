@@ -10,6 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`packages/anomaly` 0.29.0, `packages/iforest` 0.1.3 — one absurd
+  reading no longer takes the service down.** A point of `1e200` once
+  overflowed the scaler's sum of squares to infinity, the persisted std
+  became a JSON null, the metadata no longer parsed, the model reopened
+  EMPTY over it and the old forests walked a point of no columns off
+  address zero. Fixed at every link: the scaler's arithmetic cannot
+  overflow on finite input and leaves absent readings out; a reading
+  that is not a finite number is refused with its name; a metadata file
+  that does not parse is set aside as `metadata.json.corrupt-<time>`
+  and said so, never overwritten; a forest whose width is not the
+  metadata's is not loaded; `iforest_score` judges a point of the wrong
+  length as 0.5 instead of reading past it; standardised values are
+  capped at a million sigma so every score serialises as a number. A
+  column the point leaves out is now scored at its training mean — the
+  value no version blames — instead of a raw 0 that the range guard
+  blamed as a value nobody sent. A patch key the service does not read
+  (`schedule.forecast`, a typo in a version field) is refused with its
+  name at every level instead of vanishing.
 - **`packages/arima` 0.4.0 — a linear drift among the regressors**
   (`arima_fit_regress` / `arima_auto_regress` with `trend`).
   **`packages/anomaly` 0.28.0** — drift candidates and simplest-first

@@ -267,14 +267,21 @@ $ `stdlib/std/rng.nu`
 }
 
 // Anomaly score in (0, 1] for a single point given as a ( Vec f ) of length
-// n_cols. Higher = more anomalous.
+// n_cols. Higher = more anomalous. A point of any other length is not a
+// point this forest can judge and scores 0.5 — the score of an average
+// path, "no information" — rather than being read past its end: a
+// forest trained on two columns handed an empty point once walked its
+// trees over whatever lay at address zero.
 @ iforest_score IForest fo ( Vec f ) point → f {
+    ? == ( vec_len [f] point ) . fo n_cols {} { ^ 0.5 }
     : *f pp ( vec_data [f] point )
     ^ ( __score_ptr fo pp )
 }
 
 // Score row `row` of a row-major ( Vec f ) matrix without copying it out.
+// A row the matrix does not hold scores 0.5, as above.
 @ iforest_score_row IForest fo ( Vec f ) data i row → f {
+    ? & >= row 0 <= * + row 1 . fo n_cols ( vec_len [f] data ) {} { ^ 0.5 }
     : *f dp ( vec_data [f] data )
     : i base + # i dp * * row . fo n_cols 8
     : *f pp # *f base

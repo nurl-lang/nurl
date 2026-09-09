@@ -157,9 +157,11 @@ rights.
   train; scoring projects every point onto exactly that vector (unknown
   extras dropped), so one-hot columns never scramble between retrains. A
   column the model knows and a point leaves out is stored as absent and
-  scored as 0, and the verdict lists it under `missing`; a bare
-  `/detect_only` question about such a point is refused with the column
-  named, since a question about a point must carry the whole point. An
+  scored at its training mean (the one value no version blames), and the
+  verdict lists it under `missing`; a bare `/detect_only` question about
+  such a point is refused with the column named, since a question about a
+  point must carry the whole point. A reading must be a finite number:
+  `1e999` parses to an infinity and is refused with the column named. An
   autoencoder whose input names features the current encoding no longer
   makes (a shorter span dropped a cycle, or the encoding changed) is
   stale: it does not score, `retrain_required` says so, and the next

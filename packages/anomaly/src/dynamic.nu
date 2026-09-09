@@ -208,7 +208,25 @@ $ `src/store.nu`
                 = . mo meta got
                 = loaded T
             }
-            F _ → {}
+            F _ → {
+                // A metadata file that does not parse is not overwritten:
+                // it is set aside and said so. Reopening the model empty
+                // over it once silently replaced a trained model's
+                // columns, scaler and counts with a fresh file, and the
+                // forests loaded below then judged points of no columns.
+                : String kept ( store_quarantine_meta st name now )
+                : String msg ( string_from `anomaly: model '` )
+                ( string_push_str msg name )
+                ( string_push_str msg `': metadata.json could not be parsed; ` )
+                ? > ( string_len kept ) 0 {
+                    ( string_push_str msg `kept as ` )
+                    ( string_push_str msg ( string_data kept ) )
+                    ( string_push_str msg `, the model reopens empty` )
+                } { ( string_push_str msg `the model reopens empty` ) }
+                ( nurl_eprintln ( string_data msg ) )
+                ( string_free msg )
+                ( string_free kept )
+            }
         }
     } {}
     ? loaded {} {
@@ -243,6 +261,7 @@ $ `src/store.nu`
     // forest whose verdict shadowed the real autoencoder's) — ignored here
     // and deleted by the next retrain.
     : i nv ( vec_len [VerCfg] . mm versions )
+    : i nfeat0 ( vec_len [String] . mm feats )
     : ~ i vi 0
     ~ < vi nv {
         ?? ( vec_get [VerCfg] . mm versions vi ) {
@@ -250,7 +269,29 @@ $ `src/store.nu`
                 ? & . vc enabled ! ( __an_forestless ( string_data . vc vname ) ) {
                     : ?VerModel got ( store_load_forest . mo store name ( string_data . vc vname ) )
                     ?? got {
-                        T vm → { ( vec_push [VerModel] . mo forests vm ) }
+                        T vm → {
+                            // A forest is a function of the feature order
+                            // it was trained on: one whose width is not
+                            // that order (or a window of it) belongs to
+                            // some other metadata and is left unloaded —
+                            // the next retrain replaces it.
+                            ? & > nfeat0 0 == % . vm n_cols nfeat0 0 {
+                                ( vec_push [VerModel] . mo forests vm )
+                            } {
+                                : String msg ( string_from `anomaly: model '` )
+                                ( string_push_str msg name )
+                                ( string_push_str msg `': forest '` )
+                                ( string_push_str msg ( string_data . vm vname ) )
+                                ( string_push_str msg `' has ` )
+                                ( string_push_int msg . vm n_cols )
+                                ( string_push_str msg ` columns, the metadata ` )
+                                ( string_push_int msg nfeat0 )
+                                ( string_push_str msg ` features; not loaded` )
+                                ( nurl_eprintln ( string_data msg ) )
+                                ( string_free msg )
+                                ( anom_vermodel_free vm )
+                            }
+                        }
                         F _ → {}
                     }
                 } {}
@@ -3982,6 +4023,42 @@ $ `src/store.nu`
     ? ( json_is_obj patch ) {} { ^ ( string_from `metadata must be a JSON object` ) }
     : *Meta mm . mo meta
     : ~ b touched F
+
+    // Every key must be one the patch reads, at every level: a key it
+    // does not is refused with its name, not dropped. (`edit_model
+    // {schedule: {forecast: 500}}` once answered success and changed
+    // nothing.)
+    : String badtop ( _an_unknown_keys patch `alias clock schedule max_data_points versions replace_versions` `patch` )
+    ? > ( string_len badtop ) 0 {
+        : String why ( string_from `unknown field ` )
+        ( string_push_str why ( string_data badtop ) )
+        ( string_push_str why ` (editable: alias, clock, schedule, max_data_points, versions, replace_versions)` )
+        ( string_free badtop )
+        ^ why
+    } {}
+    ( string_free badtop )
+    ?? ( json_obj_get patch `schedule` ) {
+        T sj0 → {
+            : String bads ( _an_unknown_keys sj0 `below_max at_max autoencoder` `schedule` )
+            ? > ( string_len bads ) 0 {
+                : String why ( string_from `unknown field ` )
+                ( string_push_str why ( string_data bads ) )
+                ( string_push_str why ` (schedule has: below_max, at_max, autoencoder)` )
+                ( string_free bads )
+                ^ why
+            } {}
+            ( string_free bads )
+        }
+        F _ → {}
+    }
+    ?? ( json_obj_get patch `versions` ) {
+        T vj0 → {
+            : String badv ( meta_versions_patch_check vj0 )
+            ? > ( string_len badv ) 0 { ^ badv } {}
+            ( string_free badv )
+        }
+        F _ → {}
+    }
 
     // The alias is a display name, nothing more: it never reaches the
     // store, the feature order or a file path, so unlike `name` it is free
