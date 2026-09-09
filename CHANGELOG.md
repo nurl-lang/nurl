@@ -6,10 +6,13 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.63.0] — 2026-09-09
 
 ### Changed
 
+- **`nurl-lang.org` is served from `webdocs/`.** The landing page was
+  replaced and the old `nurlweb/` deployment retired; the site redeploys
+  when the project version changes.
 - **`stdlib/ext/sqlite`: `Database` and `Statement` are `% NotSend` /
   `% NotSync`.** `s` spells both a String and every opaque C pointer, so a
   `sqlite3*` derived as Send and crossed a thread boundary without a word —
