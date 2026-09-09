@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # ============================================================
 #  tests/anomaly_test.sh — the package's full test suite:
-#    1. unit suites  : prep (M1), model (M2), store (M3),
+#    1. unit suites  : prep (M1), model (M2), store + storeconc (M3),
 #                      dynamic (M4), versions (M5), scan (the cached ring
 #                      scan + the relative autoencoder margin), metaedit,
 #                      service (M6),
@@ -40,7 +40,7 @@ ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 
 echo "[1/4] unit suites"
-for t in prep model store dynamic versions timevector autoencoder forecast scan authz config import metaedit service mcp sources gpu; do
+for t in prep model store storeconc dynamic versions timevector autoencoder forecast scan authz config import metaedit service mcp sources gpu; do
     if ! $NURL "tests/${t}_test.nu" "$WORK/${t}_test" >/dev/null 2>"$WORK/build.err"; then
         echo "FAIL: could not build ${t}_test:"; tail -5 "$WORK/build.err"; exit 1
     fi
@@ -147,8 +147,13 @@ CODE=$(curl -s -o "$WORK/rput" -w '%{http_code}' -X PUT \
     && ok "HTTP metadata PUT applies a partial patch" || bad "HTTP metadata PUT ($CODE)"
 curl -s -X POST "http://127.0.0.1:$PORT/detect_only/live" -d '{"temp": 24.5}' | grep -q '"weekly"' \
     && bad "HTTP disabled version still scores" || ok "HTTP a disabled version stops scoring"
-[ -f "$WORK/svcmodels/live/version_weekly.forest" ] \
-    && bad "HTTP disabled version kept its forest blob" || ok "HTTP disabling drops the forest blob"
+python3 - "$WORK/svcmodels/orgs/public.db" <<'PYEOF' \
+    && ok "HTTP disabling drops the forest blob" || bad "HTTP disabled version kept its forest blob"
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+n = db.execute("SELECT COUNT(*) FROM blobs WHERE model='live' AND kind='forest:weekly'").fetchone()[0]
+sys.exit(1 if n else 0)
+PYEOF
 CODE=$(curl -s -o "$WORK/rput2" -w '%{http_code}' -X PUT \
     "http://127.0.0.1:$PORT/models/dynamic/live/metadata" -d '{"versions":[]}')
 [ "$CODE" = "400" ] && ok "HTTP metadata PUT rejects a bad shape" || bad "HTTP metadata PUT shape ($CODE)"

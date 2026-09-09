@@ -367,6 +367,14 @@ $ `stdlib/std/thread.nu`
 // Model access. `allow_create` marks the routes that bring a model into
 // existence: a model with no stored directory has no owner yet, and
 // refusing it there would mean only administrators could ever create one.
+// The store a request acts in. A model belongs to an organisation and an
+// organisation IS a database (store.nu), so the principal decides which
+// file the handler reads: there is no shared store to reach past it, and a
+// name another tenant uses is simply not in this one.
+@ __an_store_of Principal p → Store {
+    ^ ( store_open_org g_an_root ( string_data . p org ) )
+}
+
 // Ownership is checked exactly when there is something to own.
 @ __an_gate_model HttpRequest req s name b allow_create b need_write → Gate {
     : Principal p ( authz_principal req )
@@ -374,7 +382,7 @@ $ `stdlib/std/thread.nu`
     ? . p authed {} { ^ @ Gate { F AZ_GATE_UNAUTH p F } }
     ? ( anomaly_authz_enabled ) {} { ^ @ Gate { T AZ_GATE_OK p F } }
 
-    : Store st ( store_open g_an_root )
+    : Store st ( __an_store_of p )
     : b exists ( store_exists st name )
     ( store_free st )
     ? exists {} {
@@ -624,7 +632,7 @@ $ `stdlib/std/thread.nu`
                 ( string_free mname )
                 ^ ( __an_json_err 400 `The body must be a JSON object: the point's fields.` )
             }
-            : Store st ( store_open g_an_root )
+            : Store st ( __an_store_of . gate who )
             : *Model mo ( model_open st ( string_data mname ) )
             : ~ HttpResponse resp ( response_status_only 500 )
             : i pts ( __an_point_time mo body )
@@ -692,8 +700,8 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
+    : Store st ( __an_store_of . gate who )
     ( __an_gate_free gate )
-    : Store st ( store_open g_an_root )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -729,8 +737,8 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
+    : Store st ( __an_store_of . gate who )
     ( __an_gate_free gate )
-    : Store st ( store_open g_an_root )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -784,7 +792,7 @@ $ `stdlib/std/thread.nu`
                 ( string_free mname )
                 ^ ( __an_json_err 400 `No parameters provided. Need at least one numeric parameter.` )
             }
-            : Store st ( store_open g_an_root )
+            : Store st ( __an_store_of . gate who )
             ? ingest {} {
                 ? ( store_exists st ( string_data mname ) ) {} {
                     : HttpResponse r404 ( __an_404_model ( string_data mname ) )
@@ -887,8 +895,8 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
+    : Store st ( __an_store_of . gate who )
     ( __an_gate_free gate )
-    : Store st ( store_open g_an_root )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -951,7 +959,7 @@ $ `stdlib/std/thread.nu`
             }
         }
     }
-    : Store st ( store_open g_an_root )
+    : Store st ( __an_store_of lp )
     : Json models ( json_obj_new )
     : ( Vec String ) names ( store_list st )
     : i n ( vec_len [String] names )
@@ -1104,8 +1112,8 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
+    : Store st ( __an_store_of . gate who )
     ( __an_gate_free gate )
-    : Store st ( store_open g_an_root )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -1177,8 +1185,8 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
+    : Store st ( __an_store_of . gate who )
     ( __an_gate_free gate )
-    : Store st ( store_open g_an_root )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -1240,8 +1248,8 @@ $ `stdlib/std/thread.nu`
             }
         }
     } {}
+    : Store st ( __an_store_of mp )
     ( __an_gate_free gate )
-    : Store st ( store_open g_an_root )
     : ?*Meta mload ( store_load_meta st ( string_data mname ) )
     : ~ HttpResponse resp ( response_status_only 500 )
     ?? mload {
@@ -1284,8 +1292,8 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
+    : Store st ( __an_store_of . gate who )
     ( __an_gate_free gate )
-    : Store st ( store_open g_an_root )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -1497,16 +1505,17 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
-    ( __an_gate_free gate )
     : String fmtq ( __an_query_str . req query `format` )
     : b jsonl == ( nurl_str_eq ( string_data fmtq ) `jsonl` ) 1
     : b csv | == ( string_len fmtq ) 0 == ( nurl_str_eq ( string_data fmtq ) `csv` ) 1
     ( string_free fmtq )
     ? | jsonl csv {} {
         ( string_free mname )
+        ( __an_gate_free gate )
         ^ ( __an_json_err 400 `format must be csv or jsonl` )
     }
-    : Store st ( store_open g_an_root )
+    : Store st ( __an_store_of . gate who )
+    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -1772,8 +1781,8 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
+    : Store st ( __an_store_of . gate who )
     ( __an_gate_free gate )
-    : Store st ( store_open g_an_root )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -2124,8 +2133,8 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
+    : Store st ( __an_store_of . gate who )
     ( __an_gate_free gate )
-    : Store st ( store_open g_an_root )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -2186,7 +2195,7 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
-    : Store st ( store_open g_an_root )
+    : Store st ( __an_store_of . gate who )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -2282,8 +2291,8 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
+    : Store st ( __an_store_of . gate who )
     ( __an_gate_free gate )
-    : Store st ( store_open g_an_root )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -2342,7 +2351,7 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
-    : Store st ( store_open g_an_root )
+    : Store st ( __an_store_of . gate who )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -2479,7 +2488,7 @@ $ `stdlib/std/thread.nu`
         ( string_free src )
         ^ rd
     }
-    : Store st ( store_open g_an_root )
+    : Store st ( __an_store_of . gate who )
     ? ( store_exists st ( string_data src ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data src ) )
         ( store_free st )
@@ -2698,8 +2707,8 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
+    : Store st ( __an_store_of . gate who )
     ( __an_gate_free gate )
-    : Store st ( store_open g_an_root )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -2760,8 +2769,8 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
+    : Store st ( __an_store_of . gate who )
     ( __an_gate_free gate )
-    : Store st ( store_open g_an_root )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -2824,8 +2833,8 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
+    : Store st ( __an_store_of . gate who )
     ( __an_gate_free gate )
-    : Store st ( store_open g_an_root )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -3042,8 +3051,8 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
+    : Store st ( __an_store_of . gate who )
     ( __an_gate_free gate )
-    : Store st ( store_open g_an_root )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -3138,8 +3147,8 @@ $ `stdlib/std/thread.nu`
         ( string_free mname )
         ^ rd
     }
+    : Store st ( __an_store_of . gate who )
     ( __an_gate_free gate )
-    : Store st ( store_open g_an_root )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ( store_free st )
@@ -3762,8 +3771,25 @@ $ `stdlib/std/thread.nu`
         ^ rd
     }
     : Principal me . gate who
-    : Store st ( store_open g_an_root )
-    : b exists ( store_exists st ( string_data mname ) )
+    : Store st ( __an_store_of me )
+    : ~ b exists ( store_exists st ( string_data mname ) )
+    // A model this organisation does not have may still be one waiting in
+    // `public` — where a point that arrived without a credential naming an
+    // owner lands. Adopting it MOVES it: the model is rows in the
+    // organisation's database now, so taking it means carrying them over.
+    // Only the home organisation may, which is the rule below; the move
+    // happens here because the check for existence is here.
+    : ~ b adopted F
+    ? exists {} {
+        ? ( az_is_home_org ( string_data . me org ) ) {
+            : Store waiting ( store_open g_an_root )
+            ? ( store_exists waiting ( string_data mname ) ) {
+                = adopted ( store_move_model waiting st ( string_data mname ) ( now_seconds ) )
+                = exists adopted
+            } {}
+            ( store_free waiting )
+        } {}
+    }
     ( store_free st )
     ? exists {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
@@ -3911,7 +3937,7 @@ $ `stdlib/std/thread.nu`
     : b calendar > ( __an_query_int . req query `calendar` 0 ) 0
     : String clockq ( __an_query_str . req query `clock` )
 
-    : Store st ( store_open g_an_root )
+    : Store st ( __an_store_of . gate who )
     : b existed ( store_exists st ( string_data mname ) )
     : Json insp ( import_inspect . ip rows spec tz )
     ( json_free spec )
@@ -4819,7 +4845,7 @@ $ `stdlib/std/thread.nu`
         F _ → {}
         T db → {
             : ( Vec String ) ms ( az_org_model_names db )
-            : Store st ( store_open g_an_root )
+            : Store st ( store_open_org g_an_root org )
             : i n ( vec_len [String] ms )
             : ~ i k 0
             ~ < k n {

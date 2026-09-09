@@ -1,25 +1,15 @@
 // anomaly/store.nu — persistence (milestone M3).
 //
-// On-disk layout, one directory per model under the store root:
-//
-//   <root>/<name>/
-//     metadata.json            M1 metadata (feature order, scaler, versions…)
-//     data.jsonl               raw ingested points, one JSON record per line
-//                              (raw records — not projected vectors — so a
-//                              retrain can pick up new categories/columns)
-//     version_<v>.forest       one binary forest blob per trained version
-//     autoencoder.json         the trained autoencoder, if any
-//     forecast.json            the forecast version's models and states, if trained
-//     audit.jsonl              who set which margin to what, when (store_append_audit)
-//     scores.bin               cached per-point verdicts (epoch-stamped)
+// A model lives in its organisation's SQLite database, <root>/orgs/<org>.db
+// — the same file that holds the organisation's members, roles and API
+// keys. See "The organisation's database" below for the tables, for what
+// the flat directory-per-model store it replaced could not do, and for how
+// this behaves when several threads use one store.
 //
 // The forest blob ("ANOMFOR1") is a little-endian dump of the iforest node
 // arena plus the version's decision offset/margin. Loading re-validates
 // every structural invariant (lengths, index ranges, node-count caps), so a
 // corrupt or truncated blob comes back as None — never undefined behaviour.
-//
-// Writes are atomic: serialise to `<file>.tmp`, then rename(2) over the
-// final name, so a crash mid-write can't leave a half-written model.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -27,6 +17,8 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/sort.nu`
+$ `stdlib/ext/sqlite.nu`
+$ `stdlib/ext/json.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
 $ `src/autoenc.nu`
@@ -243,278 +235,7 @@ $ `deps/iforest/src/iforest.nu`
     ^ @ ?VerModel { T @ VerModel { vname fo off margin n_cols T } }
 }
 
-// ── File store backend ────────────────────────────────────────────────
-
-: Store {
-    String root
-}
-
-@ store_open s root → Store {
-    ^ @ Store { ( string_from root ) }
-}
-
-@ store_free Store st → v {
-    ( string_free . st root )
-}
-
-@ __an_model_dir Store st s name → String {
-    : String p ( string_from ( string_data . st root ) )
-    ( string_push_char p 47 )
-    ( string_push_str p name )
-    ^ p
-}
-
-@ __an_model_file Store st s name s file → String {
-    : String p ( __an_model_dir st name )
-    ( string_push_char p 47 )
-    ( string_push_str p file )
-    ^ p
-}
-
-@ __an_forest_file Store st s name s vname → String {
-    : String p ( __an_model_dir st name )
-    ( string_push_str p `/version_` )
-    ( string_push_str p vname )
-    ( string_push_str p `.forest` )
-    ^ p
-}
-
-// Write bytes atomically: <path>.tmp, then rename over <path>.
-@ __an_write_atomic s path ( Vec u ) data → b {
-    : String tmp ( string_from path )
-    ( string_push_str tmp `.tmp` )
-    : !v IoErr wr ( write_file_bytes ( string_data tmp ) data )
-    : ~ b ok T
-    ?? wr { T _ → {} F _ → { = ok F } }
-    ? ok {
-        : !v IoErr mv ( fs_rename ( string_data tmp ) path )
-        ?? mv { T _ → {} F _ → { = ok F } }
-    } {}
-    ( string_free tmp )
-    ^ ok
-}
-
-// A model exists iff its metadata file does.
-@ store_exists Store st s name → b {
-    : String p ( __an_model_file st name `metadata.json` )
-    : b there ( file_exists ( string_data p ) )
-    ( string_free p )
-    ^ there
-}
-
-// Sorted names of every model in the store (dirs with a metadata.json).
-@ store_list Store st → ( Vec String ) {
-    : ( Vec String ) out ( vec_new [String] )
-    : !( Vec String ) IoErr r ( dir_list ( string_data . st root ) )
-    ?? r {
-        T entries → {
-            : i n ( vec_len [String] entries )
-            : ~ i k 0
-            ~ < k n {
-                ?? ( vec_get [String] entries k ) {
-                    T e → {
-                        ? ( store_exists st ( string_data e ) ) {
-                            ( vec_push [String] out ( string_from ( string_data e ) ) )
-                        } {}
-                    }
-                    F _ → {}
-                }
-                = k + k 1
-            }
-            ( vec_free_with [String] entries \ String x → v { ( string_free x ) } )
-        }
-        F _ → {}
-    }
-    ( sort_by [String] out \ String a String b → i { ( nurl_str_cmp ( string_data a ) ( string_data b ) ) } )
-    ^ out
-}
-
-// Persist metadata (creates the model directory as needed).
-@ store_save_meta Store st s name * Meta m → b {
-    : String d ( __an_model_dir st name )
-    : !v IoErr mk ( dir_create_all ( string_data d ) )
-    : ~ b ok T
-    ?? mk { T _ → {} F _ → { = ok F } }
-    ? ok {
-        : String txt ( meta_to_json_str m )
-        : ( Vec u ) data ( bytes_from_str ( string_data txt ) )
-        : String p ( __an_model_file st name `metadata.json` )
-        = ok ( __an_write_atomic ( string_data p ) data )
-        ( string_free p )
-        ( vec_free [u] data )
-        ( string_free txt )
-    } {}
-    ( string_free d )
-    ^ ok
-}
-
-@ store_load_meta Store st s name → ?*Meta {
-    : String p ( __an_model_file st name `metadata.json` )
-    : !String IoErr r ( read_file ( string_data p ) )
-    ( string_free p )
-    ?? r {
-        T txt → {
-            : ?*Meta m ( meta_from_json_str ( string_data txt ) )
-            ( string_free txt )
-            ^ m
-        }
-        F _ → { ^ @ ?*Meta { F } }
-    }
-}
-
-// Set a metadata file that could not be parsed aside as
-// `metadata.json.corrupt-<now>` so the model can be reopened without
-// destroying the evidence. Returns the new file's path (empty when there
-// was nothing to move or the rename failed).
-@ store_quarantine_meta Store st s name i now → String {
-    : String p ( __an_model_file st name `metadata.json` )
-    ? ( file_exists ( string_data p ) ) {} { ( string_free p ) ^ ( string_new ) }
-    : String q ( string_clone p )
-    ( string_push_str q `.corrupt-` )
-    ( string_push_int q now )
-    : !v IoErr r ( fs_rename ( string_data p ) ( string_data q ) )
-    ( string_free p )
-    ?? r {
-        T _ → { ^ q }
-        F _ → { ( string_free q ) ^ ( string_new ) }
-    }
-}
-
-// Persist one trained version's forest blob.
-@ store_save_forest Store st s name VerModel vm → b {
-    : String d ( __an_model_dir st name )
-    : !v IoErr mk ( dir_create_all ( string_data d ) )
-    : ~ b ok T
-    ?? mk { T _ → {} F _ → { = ok F } }
-    ? ok {
-        : ( Vec u ) blob ( vermodel_to_bytes vm )
-        : String p ( __an_forest_file st name ( string_data . vm vname ) )
-        = ok ( __an_write_atomic ( string_data p ) blob )
-        ( string_free p )
-        ( vec_free [u] blob )
-    } {}
-    ( string_free d )
-    ^ ok
-}
-
-// Persist / load the autoencoder version (one JSON per model).
-@ store_save_ae Store st s name AeModel ae → b {
-    : String d ( __an_model_dir st name )
-    : !v IoErr mk ( dir_create_all ( string_data d ) )
-    : ~ b ok T
-    ?? mk { T _ → {} F _ → { = ok F } }
-    ? ok {
-        : String txt ( ae_to_json_str ae )
-        : ( Vec u ) data ( bytes_from_str ( string_data txt ) )
-        : String p ( __an_model_file st name `autoencoder.json` )
-        = ok ( __an_write_atomic ( string_data p ) data )
-        ( string_free p )
-        ( vec_free [u] data )
-        ( string_free txt )
-    } {}
-    ( string_free d )
-    ^ ok
-}
-
-// Persist / load / drop the forecast version (src/forecast.nu).
-@ store_save_fc Store st s name * FcModel fc → b {
-    : String d ( __an_model_dir st name )
-    : !v IoErr mk ( dir_create_all ( string_data d ) )
-    : ~ b ok T
-    ?? mk { T _ → {} F _ → { = ok F } }
-    ? ok {
-        : String txt ( fc_to_json_str fc )
-        : ( Vec u ) data ( bytes_from_str ( string_data txt ) )
-        : String p ( __an_model_file st name `forecast.json` )
-        = ok ( __an_write_atomic ( string_data p ) data )
-        ( string_free p )
-        ( vec_free [u] data )
-        ( string_free txt )
-    } {}
-    ( string_free d )
-    ^ ok
-}
-
-@ store_load_fc Store st s name → ?*FcModel {
-    : String p ( __an_model_file st name `forecast.json` )
-    : !String IoErr r ( read_file ( string_data p ) )
-    ( string_free p )
-    ?? r {
-        T txt → {
-            : ?*FcModel m ( fc_from_json_str ( string_data txt ) )
-            ( string_free txt )
-            ^ m
-        }
-        F _ → { ^ @ ?*FcModel { F } }
-    }
-}
-
-@ store_delete_fc Store st s name → v {
-    : String p ( __an_model_file st name `forecast.json` )
-    : !v IoErr _r ( file_delete ( string_data p ) )
-    ( string_free p )
-}
-
-@ store_load_ae Store st s name → ?AeModel {
-    : String p ( __an_model_file st name `autoencoder.json` )
-    : !String IoErr r ( read_file ( string_data p ) )
-    ( string_free p )
-    ?? r {
-        T txt → {
-            : ?AeModel m ( ae_from_json_str ( string_data txt ) )
-            ( string_free txt )
-            ^ m
-        }
-        F _ → { ^ @ ?AeModel { F } }
-    }
-}
-
-// Load one version's forest; None if absent or corrupt. The blob's
-// embedded version name must match the requested one — a renamed or
-// content-tampered file is treated as corrupt, not trusted.
-@ store_load_forest Store st s name s vname → ?VerModel {
-    : String p ( __an_forest_file st name vname )
-    : !( Vec u ) IoErr r ( read_file_bytes ( string_data p ) )
-    ( string_free p )
-    ?? r {
-        T blob → {
-            : ?VerModel vm ( vermodel_from_bytes blob )
-            ( vec_free [u] blob )
-            ?? vm {
-                T got → {
-                    ? == ( nurl_str_eq ( string_data . got vname ) vname ) 1 {
-                        ^ @ ?VerModel { T got }
-                    } {
-                        ( anom_vermodel_free got )
-                        ^ @ ?VerModel { F }
-                    }
-                }
-                F _ → { ^ @ ?VerModel { F } }
-            }
-        }
-        F _ → { ^ @ ?VerModel { F } }
-    }
-}
-
-// Remove a trained version's blob (used by reset). Missing file is fine.
-@ store_delete_forest Store st s name s vname → v {
-    : String p ( __an_forest_file st name vname )
-    : !v IoErr r ( file_delete ( string_data p ) )
-    ?? r { T _ → {} F _ → {} }
-    ( string_free p )
-}
-
-// Delete a model entirely (directory and everything in it).
-@ store_delete Store st s name → b {
-    : String d ( __an_model_dir st name )
-    : !v IoErr r ( dir_remove_all ( string_data d ) )
-    : ~ b ok T
-    ?? r { T _ → {} F _ → { = ok F } }
-    ( string_free d )
-    ^ ok
-}
-
-// ── Scored-verdict cache (scores.bin) ─────────────────────────────────
+// ── Scored-verdict cache ──────────────────────────────────────────────
 //
 // Re-scoring a stored ring is pure recomputation: the same point against
 // the same forests yields the same verdict every time. The dashboard's
@@ -622,209 +343,7 @@ $ `deps/iforest/src/iforest.nu`
     ^ T
 }
 
-@ __an_sc_file Store st s name → String {
-    ^ ( __an_model_file st name `scores.bin` )
-}
-
-@ store_save_scores Store st s name ScoreCache c → b {
-    : String d ( __an_model_dir st name )
-    : !v IoErr mk ( dir_create_all ( string_data d ) )
-    ( string_free d )
-    : ~ b ok T
-    ?? mk { T _ → {} F _ → { = ok F } }
-    ? ok {} { ^ F }
-
-    : ( Vec u ) out ( vec_new [u] )
-    ( bytes_extend_str out `ANOMSCR2` )
-    ( bytes_push_u64_le out # u64 . c epoch )
-    ( bytes_push_u64_le out # u64 . c base_seen )
-    : i nv ( vec_len [String] . c vnames )
-    ( bytes_push_u64_le out # u64 nv )
-    : ~ i k 0
-    ~ < k nv {
-        ?? ( vec_get [String] . c vnames k ) {
-            T nm → {
-                ( bytes_push_u64_le out # u64 ( string_len nm ) )
-                ( bytes_extend_str out ( string_data nm ) )
-            }
-            F _ → {}
-        }
-        = k + k 1
-    }
-    : i nr ( vec_len [i] . c state )
-    ( bytes_push_u64_le out # u64 nr )
-    : *i stp ( vec_data [i] . c state )
-    : *f scp ( vec_data [f] . c score )
-    : *f svp ( vec_data [f] . c severity )
-    : *i prp ( vec_data [i] . c present )
-    : *i flp ( vec_data [i] . c flagged )
-    = k 0
-    ~ < k nr {
-        ( bytes_push_f64_le out . scp k )
-        ( bytes_push_f64_le out . svp k )
-        ( bytes_push_u64_le out # u64 . stp k )
-        ( bytes_push_u64_le out # u64 . prp k )
-        ( bytes_push_u64_le out # u64 . flp k )
-        = k + k 1
-    }
-    : String p ( __an_sc_file st name )
-    = ok ( __an_write_atomic ( string_data p ) out )
-    ( string_free p )
-    ( vec_free [u] out )
-    ^ ok
-}
-
-// Load the cache; None when absent, truncated or structurally impossible.
-// A rejected cache costs a rescan, never a wrong verdict.
-@ store_load_scores Store st s name → ?ScoreCache {
-    : String p ( __an_sc_file st name )
-    : !( Vec u ) IoErr r ( read_file_bytes ( string_data p ) )
-    ( string_free p )
-    ?? r {
-        T buf → {
-            // ANOMSCR1 aggregated by minimum decision value; 2 by the
-            // most severe version. An old cache is a miss, never a
-            // wrong number.
-            : ( Vec u ) magic ( bytes_from_str `ANOMSCR2` )
-            : b magic_ok ( bytes_starts_with buf magic )
-            ( vec_free [u] magic )
-            ? magic_ok {} {
-                ( vec_free [u] buf )
-                ^ @ ?ScoreCache { F }
-            }
-            : *BlobRd rd ( __an_rd_new buf )
-            = . rd pos 8
-            : i epoch ( __an_rd_u64 rd )
-            : i base ( __an_rd_u64 rd )
-            : i nv ( __an_rd_u64 rd )
-            ? || < nv 0 > nv ANOM_SC_MAX_VERS { = . rd ok F } {}
-            : ScoreCache c ( scorecache_new epoch base )
-            : ~ i k 0
-            ~ & . rd ok < k nv {
-                : i nlen ( __an_rd_u64 rd )
-                ? || < nlen 0 > nlen ANOM_BLOB_MAX_NAME { = . rd ok F } {
-                    : i n ( vec_len [u] buf )
-                    ? > + . rd pos nlen n { = . rd ok F } {
-                        : *u bp ( vec_data [u] buf )
-                        : i base2 + # i bp . rd pos
-                        ( vec_push [String] . c vnames ( string_from_bytes # *u base2 nlen ) )
-                        = . rd pos + . rd pos nlen
-                    }
-                }
-                = k + k 1
-            }
-            : i nr ( __an_rd_u64 rd )
-            ? || < nr 0 > nr ANOM_SC_MAX_ROWS { = . rd ok F } {}
-            : ~ i safe nr
-            ? . rd ok {} { = safe 0 }
-            ( vec_reserve [i] . c state safe )
-            ( vec_reserve [f] . c score safe )
-            ( vec_reserve [f] . c severity safe )
-            ( vec_reserve [i] . c present safe )
-            ( vec_reserve [i] . c flagged safe )
-            = k 0
-            ~ & . rd ok < k safe {
-                ( vec_push [f] . c score ( __an_rd_f64 rd ) )
-                ( vec_push [f] . c severity ( __an_rd_f64 rd ) )
-                ( vec_push [i] . c state ( __an_rd_u64 rd ) )
-                ( vec_push [i] . c present ( __an_rd_u64 rd ) )
-                ( vec_push [i] . c flagged ( __an_rd_u64 rd ) )
-                = k + k 1
-            }
-            // Trailing garbage after a well-formed body is corruption too.
-            ? == . rd pos ( vec_len [u] buf ) {} { = . rd ok F }
-            : b good . rd ok
-            ( nurl_free rd )
-            ( vec_free [u] buf )
-            ? good { ^ @ ?ScoreCache { T c } } {}
-            ( scorecache_free c )
-            ^ @ ?ScoreCache { F }
-        }
-        F _ → { ^ @ ?ScoreCache { F } }
-    }
-}
-
-@ store_delete_scores Store st s name → v {
-    : String p ( __an_sc_file st name )
-    : !v IoErr r ( file_delete ( string_data p ) )
-    ?? r { T _ → {} F _ → {} }
-    ( string_free p )
-}
-
-// ── Raw point log (data.jsonl) ────────────────────────────────────────
-//
-// One compact JSON record per line, in ingest order, each carrying its
-// server-side `timestamp` (unix seconds) alongside the raw client fields.
-// Stored raw so retraining can re-encode with newly-learned categories.
-
-// Append one line (the record's compact JSON, no newline).
-@ store_append_point Store st s name s line → b {
-    : String p ( __an_model_file st name `data.jsonl` )
-    : String txt ( string_from line )
-    ( string_push_char txt 10 )
-    : !v IoErr r ( append_file ( string_data p ) ( string_data txt ) )
-    : ~ b ok T
-    ?? r { T _ → {} F _ → { = ok F } }
-    ( string_free txt )
-    ( string_free p )
-    ^ ok
-}
-
-// Rewrite the whole log (ring eviction / reset).
-@ store_write_points Store st s name ( Vec String ) lines → b {
-    : String all ( string_new )
-    : i n ( vec_len [String] lines )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [String] lines k ) {
-            T l → {
-                ( string_push_str all ( string_data l ) )
-                ( string_push_char all 10 )
-            }
-            F _ → {}
-        }
-        = k + k 1
-    }
-    : ( Vec u ) data ( bytes_from_str ( string_data all ) )
-    : String p ( __an_model_file st name `data.jsonl` )
-    : b ok ( __an_write_atomic ( string_data p ) data )
-    ( string_free p )
-    ( vec_free [u] data )
-    ( string_free all )
-    ^ ok
-}
-
-// Load the log as owned lines (empty vec if the file doesn't exist).
-@ store_load_points Store st s name → ( Vec String ) {
-    : ( Vec String ) out ( vec_new [String] )
-    : String p ( __an_model_file st name `data.jsonl` )
-    : !String IoErr r ( read_file ( string_data p ) )
-    ( string_free p )
-    ?? r {
-        T txt → {
-            : ( Vec String ) lines ( string_split txt `\n` )
-            : i n ( vec_len [String] lines )
-            : ~ i k 0
-            ~ < k n {
-                ?? ( vec_get [String] lines k ) {
-                    T l → {
-                        ? > ( string_len l ) 0 {
-                            ( vec_push [String] out ( string_from ( string_data l ) ) )
-                        } {}
-                    }
-                    F _ → {}
-                }
-                = k + k 1
-            }
-            ( vec_free_with [String] lines \ String x → v { ( string_free x ) } )
-            ( string_free txt )
-        }
-        F _ → {}
-    }
-    ^ out
-}
-
-// ── Labels (labels.jsonl) ─────────────────────────────────────────────
+// ── Labels ────────────────────────────────────────────────────────────
 //
 // What a reader said about a stored point: that a flagged row was a
 // false positive, or that it was the real thing. Keyed by the point's
@@ -892,131 +411,1622 @@ $ `deps/iforest/src/iforest.nu`
     }
 }
 
-// Append one label. Returns F when the record could not be written.
-@ store_append_label Store st s name Label l → b {
-    : Json o ( label_to_json l )
-    : String txt ( json_stringify o )
-    ( json_free o )
-    ( string_push_char txt 10 )
-    : String p ( __an_model_file st name `labels.jsonl` )
-    : !v IoErr r ( append_file ( string_data p ) ( string_data txt ) )
-    : ~ b ok T
-    ?? r { T _ → {} F _ → { = ok F } }
-    ( string_free p )
-    ( string_free txt )
-    ^ ok
+// ── The organisation's database ───────────────────────────────────────
+//
+// A model belongs to an organisation, and an organisation IS a database:
+// <root>/orgs/<org>.db, the same SQLite file that already holds the
+// organisation's members, their roles and its API keys. Everything a
+// model is — its metadata, its ring of raw points, its forests, its
+// autoencoder, its forecast, its labels and its audit trail — lives in
+// that file, keyed by the model's name.
+//
+// It used to be a directory per model in one flat store shared by every
+// organisation, with ownership recorded on the side. Two things follow
+// from moving it, and both were the reason to move:
+//
+//   * A model name is unique WITHIN an organisation and means nothing
+//     outside it. Two tenants may each keep a `boiler`; neither can see
+//     the other's, neither can take the name from the other, and asking
+//     for a name another tenant uses is an honest 404 instead of a 403
+//     that discloses the name exists.
+//   * Evicting the oldest point when the ring is full is one DELETE over
+//     an index. The flat store appended the line and then rewrote the
+//     WHOLE log — 15 ms at 14 700 points on this machine, linear in the
+//     cap, so a model at the 150 000-point default paid about 160 ms of
+//     pure rewriting for every point it accepted.
+//
+// The tables, all keyed by model name (the organisation is the FILE, so
+// no row carries an org column and no query can forget one):
+//
+//   models_meta         name → the metadata JSON. A model EXISTS iff it
+//                       has a row here.
+//   models_meta_corrupt metadata that would not parse, set aside with the
+//                       time it happened rather than overwritten.
+//   points              (model, seq) → the raw JSON line. `seq` is the
+//                       point's LIFETIME number, the same space labels
+//                       and the score cache are keyed in, so eviction is
+//                       a range delete and nothing is renumbered.
+//   blobs               (model, kind) → bytes. kind is `forest:<version>`,
+//                       `ae`, `fc` or `scores`.
+//   labels              (model, seq) → the label record. Last write wins
+//                       is the primary key doing it; `none` deletes.
+//   audit               an append-only log of margin changes per model.
+//
+// ── Threads ───────────────────────────────────────────────────────────
+//
+// A `Store` is a plain value: a root, an organisation, and whether the
+// database opened. It holds NO connection, and that is deliberate twice
+// over. A connection is opened for the length of one operation and closed
+// with it, so it never leaves the thread that made it — `Database` is
+// marked `% NotSend` in the binding, so the compiler enforces that rather
+// than trusting a comment. And a handle cannot be stored in a value that
+// is passed around by value: a `Database` has a Drop, a by-value struct
+// parameter runs it, and the caller's connection would be closed by the
+// callee's return. (It was: every command segfaulted on the first
+// statement after the first helper took a Store by value.)
+//
+// Threads therefore share the FILE, not the handle. WAL lets their reads
+// run concurrently with one writer; `busy_timeout` makes a second writer
+// wait rather than fail; and every write of more than one statement is one
+// BEGIN IMMEDIATE transaction, so it is all-or-nothing and never
+// interleaves with another thread's. IMMEDIATE and not the default
+// deferred BEGIN: a deferred transaction takes the write lock only when it
+// first writes, and if another connection took it meanwhile SQLite answers
+// SQLITE_BUSY_SNAPSHOT, which the busy handler is not allowed to retry.
+//
+// What this does NOT do is serialise a read-modify-write of one model
+// across threads — two requests that load the same model, change it and
+// save it can still lose one of the changes. That is the model layer's
+// business, not the store's, and today the service holds one lock for the
+// whole request.
+
+: s ANOM_ORG_DEFAULT `public`
+
+: s ANOM_KIND_AE `ae`
+: s ANOM_KIND_FC `fc`
+: s ANOM_KIND_SCORES `scores`
+
+: Store {
+    String root
+    String org
+    b ok
 }
 
-// The labels in force: one per sequence number, the last written; a
-// `none` removes the entry. Ascending by seq is not promised — a reader
-// wanting the ring order joins on seq (model_label_map). Empty when the
-// file does not exist; a line that does not parse is skipped.
-// One line of the audit log: a margin change, with who made it and how.
-@ store_append_audit Store st s name Json ent → b {
-    : String txt ( json_stringify ent )
-    ( string_push_char txt 10 )
-    : String p ( __an_model_file st name `audit.jsonl` )
-    : !v IoErr r ( append_file ( string_data p ) ( string_data txt ) )
-    : ~ b ok T
-    ?? r { T _ → {} F _ → { = ok F } }
-    ( string_free p )
-    ( string_free txt )
-    ^ ok
+// An org id is a filename, and an id that reaches here has been through
+// the authorization layer's key function (a GUID as itself, anything else
+// as a digest of itself). Checking the alphabet again makes that a
+// guarantee of this module rather than a promise from another: letters,
+// digits and a dash, so no separator, no dot, no dot-dot and no empty name
+// can name a file. A leading underscore is not a letter here on purpose:
+// `_root.db` is the tenant registry, not an organisation, and the flat-store
+// migration walks these names looking for one that claims a model.
+@ __st_org_ok s org → b {
+    : i n ( nurl_str_len org )
+    ? | == n 0 > n 64 { ^ F } {}
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_at org n k )
+        : b digit & >= c 48 <= c 57
+        : b lower & >= c 97 <= c 122
+        : b upper & >= c 65 <= c 90
+        : b dash == c 45
+        ? | | | digit lower upper dash {} { ^ F }
+        = k + k 1
+    }
+    ^ T
 }
 
-// The newest `limit` audit entries, oldest first (all when limit ≤ 0).
-@ store_load_audit Store st s name i limit → Json {
-    : Json arr ( json_arr_new )
-    : String p ( __an_model_file st name `audit.jsonl` )
-    : !String IoErr r ( read_file ( string_data p ) )
-    ( string_free p )
-    ?? r {
-        T txt → {
-            : ( Vec String ) lines ( string_split txt `\n` )
-            : i n ( vec_len [String] lines )
-            : ~ i from 0
-            ? & > limit 0 > n limit { = from - n limit } {}
-            : ~ i k from
+@ __st_orgs_dir s root → String {
+    : String p ( string_from root )
+    ( string_push_str p `/orgs` )
+    ^ p
+}
+
+@ __st_db_path Store st → String {
+    : String p ( __st_orgs_dir ( string_data . st root ) )
+    ( string_push_char p 47 )
+    ( string_push_str p ( string_data . st org ) )
+    ( string_push_str p `.db` )
+    ^ p
+}
+
+// The tables this module owns. `IF NOT EXISTS` throughout, so the
+// authorization layer's schema and this one may each ensure their half of
+// the same file, in either order, from any thread.
+@ __st_schema → ( Vec String ) {
+    : ( Vec String ) v ( vec_new [String] )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS models_meta (
+        name TEXT PRIMARY KEY,
+        meta TEXT NOT NULL
+    )` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS models_meta_corrupt (
+        name TEXT NOT NULL,
+        at INTEGER NOT NULL,
+        meta TEXT NOT NULL
+    )` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS points (
+        model TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        line TEXT NOT NULL,
+        PRIMARY KEY (model, seq)
+    )` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS blobs (
+        model TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        data BLOB NOT NULL,
+        PRIMARY KEY (model, kind)
+    )` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS labels (
+        model TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        rec TEXT NOT NULL,
+        PRIMARY KEY (model, seq)
+    )` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        model TEXT NOT NULL,
+        rec TEXT NOT NULL
+    )` ) )
+    ( vec_push [String] v ( string_from `CREATE INDEX IF NOT EXISTS audit_model ON audit (model, id)` ) )
+    ^ v
+}
+
+// One connection for one operation. WAL is a property of the FILE and
+// survives the connection; the busy timeout and the synchronous mode are
+// per connection and are set here every time. NORMAL fsyncs at a
+// checkpoint rather than at every commit: a power cut can cost the last
+// commits, never the database — and the file store this replaces did not
+// fsync at all.
+@ __st_conn Store st → !Database SqliteErr {
+    : String path ( __st_db_path st )
+    ?? ( sqlite_open ( string_data path ) ) {
+        F e → { ( string_free path ) ^ @ !Database SqliteErr { F e } }
+        T db → {
+            ( string_free path )
+            ?? ( sqlite_busy_timeout db 5000 ) { T _ → {} F _ → {} }
+            ?? ( sqlite_exec db `PRAGMA synchronous=NORMAL` ) { T _ → {} F _ → {} }
+            ^ @ !Database SqliteErr { T db }
+        }
+    }
+}
+
+// Open the organisation's store: make the directory, put the database's
+// journal into WAL and ensure this module's tables, once. Every operation
+// after this opens its own connection for the length of the operation.
+@ store_open_org s root s org → Store {
+    ? ( __st_org_ok org ) {} {
+        ^ @ Store { ( string_from root ) ( string_from org ) F }
+    }
+    : String dir ( __st_orgs_dir root )
+    : !v IoErr mk ( dir_create_all ( string_data dir ) )
+    ?? mk { T _ → {} F _ → {} }
+    ( string_free dir )
+    : Store st @ Store { ( string_from root ) ( string_from org ) T }
+    : ~ b ok F
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_exec db `PRAGMA journal_mode=WAL` ) { T _ → {} F _ → {} }
+            : ( Vec String ) stmts ( __st_schema )
+            : i n ( vec_len [String] stmts )
+            : ~ b failed F
+            : ~ i k 0
             ~ < k n {
-                ?? ( vec_get [String] lines k ) {
-                    T l → { ? > ( string_len l ) 0 { ?? ( json_parse ( string_data l ) ) { T j → { ( json_arr_push arr j ) } F _ → {} } } {} }
+                ?? ( vec_get [String] stmts k ) {
+                    T sq → {
+                        ?? ( sqlite_exec db ( string_data sq ) ) { T _ → {} F _ → { = failed T } }
+                        ( string_free sq )
+                    }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] lines \ String x → v { ( string_free x ) } )
-            ( string_free txt )
+            ( vec_free [String] stmts )
+            = ok ! failed
         }
-        F _ → {}
     }
+    ( store_free st )
+    ^ @ Store { ( string_from root ) ( string_from org ) ok }
+}
+
+// The organisation a store with no sign-in belongs to. Simple mode, the
+// CLI and the analysis sandbox all collect into `public`, which is a real
+// organisation with a real database — turning sign-in on later moves
+// nothing.
+@ store_open s root → Store { ^ ( store_open_org root ANOM_ORG_DEFAULT ) }
+
+@ store_free Store st → v {
+    ( string_free . st root )
+    ( string_free . st org )
+}
+
+@ store_org Store st → s { ^ ( string_data . st org ) }
+
+// ── Statement helpers ─────────────────────────────────────────────────
+
+// Bind an owned String and free it — sqlite_bind_text copies immediately,
+// so the two belong together and separating them is how a leak gets in.
+@ __st_bind_str Statement q i idx String v → v {
+    ?? ( sqlite_bind_text q idx v ) { T _ → {} F _ → {} }
+    ( string_free v )
+}
+
+@ __st_bind_i Statement q i idx i v → v {
+    ?? ( sqlite_bind_int q idx v ) { T _ → {} F _ → {} }
+}
+
+// Step to completion; F when a step failed.
+@ __st_run Statement q → b {
+    : ~ b ok T
+    : ~ b done F
+    ~ ! done {
+        ?? ( sqlite_step q ) {
+            F _ → { = ok F = done T }
+            T has → { ? has {} { = done T } }
+        }
+    }
+    ^ ok
+}
+
+// One statement whose only parameter is the model name.
+@ __st_name_on Database db s sql s name → b {
+    : ~ b ok F
+    ?? ( sqlite_prepare db sql ) {
+        F _ → {}
+        T q → {
+            ( __st_bind_str q 1 ( string_from name ) )
+            = ok ( __st_run q )
+        }
+    }
+    ^ ok
+}
+
+@ __st_begin Database db → b {
+    : ~ b ok F
+    ?? ( sqlite_exec db `BEGIN IMMEDIATE` ) { T _ → { = ok T } F _ → {} }
+    ^ ok
+}
+
+@ __st_commit Database db → b {
+    : ~ b ok F
+    ?? ( sqlite_exec db `COMMIT` ) { T _ → { = ok T } F _ → {} }
+    ^ ok
+}
+
+@ __st_rollback Database db → v {
+    ?? ( sqlite_exec db `ROLLBACK` ) { T _ → {} F _ → {} }
+}
+
+// ── Blobs: forests, the autoencoder, the forecast, the score cache ────
+
+@ __st_forest_kind s vname → String {
+    : String k ( string_from `forest:` )
+    ( string_push_str k vname )
+    ^ k
+}
+
+@ __st_blob_put_on Database db s name s kind ( Vec u ) data → b {
+    : ~ b ok F
+    ?? ( sqlite_prepare db `INSERT OR REPLACE INTO blobs (model, kind, data) VALUES (?1, ?2, ?3)` ) {
+        F _ → {}
+        T q → {
+            ( __st_bind_str q 1 ( string_from name ) )
+            ( __st_bind_str q 2 ( string_from kind ) )
+            ?? ( sqlite_bind_blob q 3 data ) { T _ → {} F _ → {} }
+            = ok ( __st_run q )
+        }
+    }
+    ^ ok
+}
+
+@ __st_blob_put Store st s name s kind ( Vec u ) data → b {
+    ? . st ok {} { ^ F }
+    : ~ b ok F
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → { = ok ( __st_blob_put_on db name kind data ) }
+    }
+    ^ ok
+}
+
+// The bytes of one blob, or None when the model has no such row.
+@ __st_blob_get Store st s name s kind → ?( Vec u ) {
+    ? . st ok {} { ^ @ ?( Vec u ) { F } }
+    : ~ b found F
+    : ~ ( Vec u ) out ( vec_new [u] )
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT data FROM blobs WHERE model = ?1 AND kind = ?2` ) {
+                F _ → {}
+                T q → {
+                    ( __st_bind_str q 1 ( string_from name ) )
+                    ( __st_bind_str q 2 ( string_from kind ) )
+                    ?? ( sqlite_step q ) {
+                        F _ → {}
+                        T has → {
+                            ? has {
+                                ( vec_free [u] out )
+                                = out ( sqlite_column_blob q 0 )
+                                = found T
+                            } {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ? found { ^ @ ?( Vec u ) { T out } } {}
+    ( vec_free [u] out )
+    ^ @ ?( Vec u ) { F }
+}
+
+@ __st_blob_del Store st s name s kind → v {
+    ? . st ok {} { ^ v }
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `DELETE FROM blobs WHERE model = ?1 AND kind = ?2` ) {
+                F _ → {}
+                T q → {
+                    ( __st_bind_str q 1 ( string_from name ) )
+                    ( __st_bind_str q 2 ( string_from kind ) )
+                    : b _r ( __st_run q )
+                }
+            }
+        }
+    }
+}
+
+// ── Existence and listing ─────────────────────────────────────────────
+
+@ __st_exists_on Database db s name → b {
+    : ~ b there F
+    ?? ( sqlite_prepare db `SELECT 1 FROM models_meta WHERE name = ?1` ) {
+        F _ → {}
+        T q → {
+            ( __st_bind_str q 1 ( string_from name ) )
+            ?? ( sqlite_step q ) { T has → { = there has } F _ → {} }
+        }
+    }
+    ^ there
+}
+
+// A model exists iff this organisation's database has its metadata row.
+@ store_exists Store st s name → b {
+    ? . st ok {} { ^ F }
+    : ~ b there F
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → { = there ( __st_exists_on db name ) }
+    }
+    ^ there
+}
+
+// Every model in this organisation, by name, sorted.
+@ store_list Store st → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    ? . st ok {} { ^ out }
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT name FROM models_meta ORDER BY name` ) {
+                F _ → {}
+                T q → {
+                    : ~ b done F
+                    ~ ! done {
+                        ?? ( sqlite_step q ) {
+                            F _ → { = done T }
+                            T has → {
+                                ? has { ( vec_push [String] out ( sqlite_column_text q 0 ) ) } { = done T }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ^ out
+}
+
+// ── Metadata ──────────────────────────────────────────────────────────
+
+@ __st_meta_put_on Database db s name String txt → b {
+    : ~ b ok F
+    ?? ( sqlite_prepare db `INSERT OR REPLACE INTO models_meta (name, meta) VALUES (?1, ?2)` ) {
+        F _ → {}
+        T q → {
+            ( __st_bind_str q 1 ( string_from name ) )
+            ( __st_bind_str q 2 txt )
+            = ok ( __st_run q )
+        }
+    }
+    ^ ok
+}
+
+@ store_save_meta Store st s name * Meta m → b {
+    ? . st ok {} { ^ F }
+    : String txt ( meta_to_json_str m )
+    : ~ b ok F
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → { = ok ( __st_meta_put_on db name ( string_clone txt ) ) }
+    }
+    ( string_free txt )
+    ^ ok
+}
+
+@ store_load_meta Store st s name → ?*Meta {
+    ? . st ok {} { ^ @ ?*Meta { F } }
+    : ~ b found F
+    : ~ String txt ( string_new )
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT meta FROM models_meta WHERE name = ?1` ) {
+                F _ → {}
+                T q → {
+                    ( __st_bind_str q 1 ( string_from name ) )
+                    ?? ( sqlite_step q ) {
+                        F _ → {}
+                        T has → {
+                            ? has {
+                                ( string_free txt )
+                                = txt ( sqlite_column_text q 0 )
+                                = found T
+                            } {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ? found {} { ( string_free txt ) ^ @ ?*Meta { F } }
+    : ?*Meta m ( meta_from_json_str ( string_data txt ) )
+    ( string_free txt )
+    ^ m
+}
+
+// Set metadata that would not parse aside, with the time it happened, so
+// a model can be reopened without destroying the evidence. Returns where
+// it went (empty when there was nothing to move).
+@ store_quarantine_meta Store st s name i now → String {
+    ? . st ok {} { ^ ( string_new ) }
+    : ~ b moved F
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            ? ( __st_begin db ) {} {}
+            ?? ( sqlite_prepare db `INSERT INTO models_meta_corrupt (name, at, meta)
+                 SELECT name, ?2, meta FROM models_meta WHERE name = ?1` ) {
+                F _ → {}
+                T q → {
+                    ( __st_bind_str q 1 ( string_from name ) )
+                    ( __st_bind_i q 2 now )
+                    ? ( __st_run q ) { = moved > ( sqlite_changes db ) 0 } {}
+                }
+            }
+            ? moved { : b _d ( __st_name_on db `DELETE FROM models_meta WHERE name = ?1` name ) } {}
+            : b _c ( __st_commit db )
+        }
+    }
+    ? moved {} { ^ ( string_new ) }
+    : String where ( string_from `models_meta_corrupt (` )
+    ( string_push_str where name )
+    ( string_push_str where ` at ` )
+    ( string_push_int where now )
+    ( string_push_char where 41 )
+    ^ where
+}
+
+// ── Forests ───────────────────────────────────────────────────────────
+
+@ store_save_forest Store st s name VerModel vm → b {
+    : ( Vec u ) blob ( vermodel_to_bytes vm )
+    : String kind ( __st_forest_kind ( string_data . vm vname ) )
+    : b ok ( __st_blob_put st name ( string_data kind ) blob )
+    ( string_free kind )
+    ( vec_free [u] blob )
+    ^ ok
+}
+
+// Load one version's forest; None if absent or corrupt. The blob's
+// embedded version name must match the requested one — a moved or
+// content-tampered blob is treated as corrupt, not trusted.
+@ store_load_forest Store st s name s vname → ?VerModel {
+    : String kind ( __st_forest_kind vname )
+    : ?( Vec u ) got ( __st_blob_get st name ( string_data kind ) )
+    ( string_free kind )
+    ?? got {
+        F _ → { ^ @ ?VerModel { F } }
+        T blob → {
+            : ?VerModel vm ( vermodel_from_bytes blob )
+            ( vec_free [u] blob )
+            ?? vm {
+                T v → {
+                    ? == ( nurl_str_eq ( string_data . v vname ) vname ) 1 {
+                        ^ @ ?VerModel { T v }
+                    } {
+                        ( anom_vermodel_free v )
+                        ^ @ ?VerModel { F }
+                    }
+                }
+                F _ → { ^ @ ?VerModel { F } }
+            }
+        }
+    }
+}
+
+@ store_delete_forest Store st s name s vname → v {
+    : String kind ( __st_forest_kind vname )
+    ( __st_blob_del st name ( string_data kind ) )
+    ( string_free kind )
+}
+
+// ── The autoencoder and the forecast ──────────────────────────────────
+
+@ store_save_ae Store st s name AeModel ae → b {
+    : String txt ( ae_to_json_str ae )
+    : ( Vec u ) data ( bytes_from_str ( string_data txt ) )
+    : b ok ( __st_blob_put st name ANOM_KIND_AE data )
+    ( vec_free [u] data )
+    ( string_free txt )
+    ^ ok
+}
+
+@ store_load_ae Store st s name → ?AeModel {
+    ?? ( __st_blob_get st name ANOM_KIND_AE ) {
+        F _ → { ^ @ ?AeModel { F } }
+        T data → {
+            : String txt ( string_from_bytes ( vec_data [u] data ) ( vec_len [u] data ) )
+            ( vec_free [u] data )
+            : ?AeModel m ( ae_from_json_str ( string_data txt ) )
+            ( string_free txt )
+            ^ m
+        }
+    }
+}
+
+@ store_save_fc Store st s name * FcModel fc → b {
+    : String txt ( fc_to_json_str fc )
+    : ( Vec u ) data ( bytes_from_str ( string_data txt ) )
+    : b ok ( __st_blob_put st name ANOM_KIND_FC data )
+    ( vec_free [u] data )
+    ( string_free txt )
+    ^ ok
+}
+
+@ store_load_fc Store st s name → ?*FcModel {
+    ?? ( __st_blob_get st name ANOM_KIND_FC ) {
+        F _ → { ^ @ ?*FcModel { F } }
+        T data → {
+            : String txt ( string_from_bytes ( vec_data [u] data ) ( vec_len [u] data ) )
+            ( vec_free [u] data )
+            : ?*FcModel m ( fc_from_json_str ( string_data txt ) )
+            ( string_free txt )
+            ^ m
+        }
+    }
+}
+
+@ store_delete_fc Store st s name → v {
+    ( __st_blob_del st name ANOM_KIND_FC )
+}
+
+// ── Deleting a model ──────────────────────────────────────────────────
+
+// Everything the model is, in one transaction: either the model is gone
+// or it is untouched. The rows the file backend removed as a directory.
+@ store_delete Store st s name → b {
+    ? . st ok {} { ^ F }
+    : ~ b ok F
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            : b own ( __st_begin db )
+            : ~ b good T
+            ? ( __st_name_on db `DELETE FROM points WHERE model = ?1` name ) {} { = good F }
+            ? ( __st_name_on db `DELETE FROM blobs WHERE model = ?1` name ) {} { = good F }
+            ? ( __st_name_on db `DELETE FROM labels WHERE model = ?1` name ) {} { = good F }
+            ? ( __st_name_on db `DELETE FROM audit WHERE model = ?1` name ) {} { = good F }
+            ? ( __st_name_on db `DELETE FROM models_meta_corrupt WHERE name = ?1` name ) {} { = good F }
+            ? ( __st_name_on db `DELETE FROM models_meta WHERE name = ?1` name ) {} { = good F }
+            ? own {
+                ? good { ? ( __st_commit db ) {} { = good F } } { ( __st_rollback db ) }
+            } {}
+            = ok good
+        }
+    }
+    ^ ok
+}
+
+// ── The scored-verdict cache, as a blob ───────────────────────────────
+
+@ store_save_scores Store st s name ScoreCache c → b {
+    ? . st ok {} { ^ F }
+    : ( Vec u ) out ( vec_new [u] )
+    ( bytes_extend_str out `ANOMSCR2` )
+    ( bytes_push_u64_le out # u64 . c epoch )
+    ( bytes_push_u64_le out # u64 . c base_seen )
+    : i nv ( vec_len [String] . c vnames )
+    ( bytes_push_u64_le out # u64 nv )
+    : ~ i k 0
+    ~ < k nv {
+        ?? ( vec_get [String] . c vnames k ) {
+            T nm → {
+                ( bytes_push_u64_le out # u64 ( string_len nm ) )
+                ( bytes_extend_str out ( string_data nm ) )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    : i nr ( vec_len [i] . c state )
+    ( bytes_push_u64_le out # u64 nr )
+    : *i stp ( vec_data [i] . c state )
+    : *f scp ( vec_data [f] . c score )
+    : *f svp ( vec_data [f] . c severity )
+    : *i prp ( vec_data [i] . c present )
+    : *i flp ( vec_data [i] . c flagged )
+    = k 0
+    ~ < k nr {
+        ( bytes_push_f64_le out . scp k )
+        ( bytes_push_f64_le out . svp k )
+        ( bytes_push_u64_le out # u64 . stp k )
+        ( bytes_push_u64_le out # u64 . prp k )
+        ( bytes_push_u64_le out # u64 . flp k )
+        = k + k 1
+    }
+    : b ok ( __st_blob_put st name ANOM_KIND_SCORES out )
+    ( vec_free [u] out )
+    ^ ok
+}
+
+// Load the cache; None when absent, truncated or structurally impossible.
+// A rejected cache costs a rescan, never a wrong verdict.
+@ store_load_scores Store st s name → ?ScoreCache {
+    ?? ( __st_blob_get st name ANOM_KIND_SCORES ) {
+        T buf → {
+            // ANOMSCR1 aggregated by minimum decision value; 2 by the
+            // most severe version. An old cache is a miss, never a
+            // wrong number.
+            : ( Vec u ) magic ( bytes_from_str `ANOMSCR2` )
+            : b magic_ok ( bytes_starts_with buf magic )
+            ( vec_free [u] magic )
+            ? magic_ok {} {
+                ( vec_free [u] buf )
+                ^ @ ?ScoreCache { F }
+            }
+            : *BlobRd rd ( __an_rd_new buf )
+            = . rd pos 8
+            : i epoch ( __an_rd_u64 rd )
+            : i base ( __an_rd_u64 rd )
+            : i nv ( __an_rd_u64 rd )
+            ? || < nv 0 > nv ANOM_SC_MAX_VERS { = . rd ok F } {}
+            : ScoreCache c ( scorecache_new epoch base )
+            : ~ i k 0
+            ~ & . rd ok < k nv {
+                : i nlen ( __an_rd_u64 rd )
+                ? || < nlen 0 > nlen ANOM_BLOB_MAX_NAME { = . rd ok F } {
+                    : i n ( vec_len [u] buf )
+                    ? > + . rd pos nlen n { = . rd ok F } {
+                        : *u bp ( vec_data [u] buf )
+                        : i base2 + # i bp . rd pos
+                        ( vec_push [String] . c vnames ( string_from_bytes # *u base2 nlen ) )
+                        = . rd pos + . rd pos nlen
+                    }
+                }
+                = k + k 1
+            }
+            : i nr ( __an_rd_u64 rd )
+            ? || < nr 0 > nr ANOM_SC_MAX_ROWS { = . rd ok F } {}
+            : ~ i safe nr
+            ? . rd ok {} { = safe 0 }
+            ( vec_reserve [i] . c state safe )
+            ( vec_reserve [f] . c score safe )
+            ( vec_reserve [f] . c severity safe )
+            ( vec_reserve [i] . c present safe )
+            ( vec_reserve [i] . c flagged safe )
+            = k 0
+            ~ & . rd ok < k safe {
+                ( vec_push [f] . c score ( __an_rd_f64 rd ) )
+                ( vec_push [f] . c severity ( __an_rd_f64 rd ) )
+                ( vec_push [i] . c state ( __an_rd_u64 rd ) )
+                ( vec_push [i] . c present ( __an_rd_u64 rd ) )
+                ( vec_push [i] . c flagged ( __an_rd_u64 rd ) )
+                = k + k 1
+            }
+            // Trailing garbage after a well-formed body is corruption too.
+            ? == . rd pos ( vec_len [u] buf ) {} { = . rd ok F }
+            : b good . rd ok
+            ( nurl_free rd )
+            ( vec_free [u] buf )
+            ? good { ^ @ ?ScoreCache { T c } } {}
+            ( scorecache_free c )
+            ^ @ ?ScoreCache { F }
+        }
+        F _ → { ^ @ ?ScoreCache { F } }
+    }
+}
+
+@ store_delete_scores Store st s name → v {
+    ( __st_blob_del st name ANOM_KIND_SCORES )
+}
+
+// ── The ring of raw points ────────────────────────────────────────────
+//
+// One row per stored point: the raw JSON record as it arrived, plus the
+// server-side timestamp, kept raw so a retrain can re-encode it with
+// categories learned since. `seq` is the point's LIFETIME number — the
+// space `Meta.n_seen` counts in, the space labels and the score cache are
+// keyed in — so the ring is the rows with the largest `seq`, and dropping
+// the oldest renumbers nothing.
+
+@ __st_point_put_on Database db s name i seq s line → b {
+    : ~ b ok F
+    ?? ( sqlite_prepare db `INSERT OR REPLACE INTO points (model, seq, line) VALUES (?1, ?2, ?3)` ) {
+        F _ → {}
+        T q → {
+            ( __st_bind_str q 1 ( string_from name ) )
+            ( __st_bind_i q 2 seq )
+            ( __st_bind_str q 3 ( string_from line ) )
+            = ok ( __st_run q )
+        }
+    }
+    ^ ok
+}
+
+@ __st_evict_on Database db s name i from_seq → b {
+    : ~ b ok F
+    ?? ( sqlite_prepare db `DELETE FROM points WHERE model = ?1 AND seq < ?2` ) {
+        F _ → {}
+        T q → {
+            ( __st_bind_str q 1 ( string_from name ) )
+            ( __st_bind_i q 2 from_seq )
+            = ok ( __st_run q )
+        }
+    }
+    ^ ok
+}
+
+// One ingested point, as one transaction: the row, the eviction it may
+// cause, and the metadata whose counter says how many points there are.
+// A crash between them would leave the ring and `n_seen` disagreeing, and
+// another thread must never read the ring half-updated. `evict_before` is
+// the lifetime number of the oldest row to keep (0 evicts nothing).
+@ store_commit_point Store st s name i seq s line i evict_before * Meta m → b {
+    ? . st ok {} { ^ F }
+    : String txt ( meta_to_json_str m )
+    : ~ b ok F
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            : b own ( __st_begin db )
+            : ~ b good ( __st_point_put_on db name seq line )
+            ? & good > evict_before 0 {
+                ? ( __st_evict_on db name evict_before ) {} { = good F }
+            } {}
+            ? good { ? ( __st_meta_put_on db name ( string_clone txt ) ) {} { = good F } } {}
+            ? own {
+                ? good { ? ( __st_commit db ) {} { = good F } } { ( __st_rollback db ) }
+            } {}
+            = ok good
+        }
+    }
+    ( string_free txt )
+    ^ ok
+}
+
+// Drop every point older than `from_seq`.
+@ store_evict_points Store st s name i from_seq → b {
+    ? . st ok {} { ^ F }
+    : ~ b ok F
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → { = ok ( __st_evict_on db name from_seq ) }
+    }
+    ^ ok
+}
+
+// Replace the whole ring: `lines` become the points from `base_seq` on.
+// Used where the ring is rebuilt rather than extended — a reset, a file of
+// history imported, a cap lowered below the fill. One transaction.
+@ store_write_points Store st s name ( Vec String ) lines i base_seq → b {
+    ? . st ok {} { ^ F }
+    : ~ b ok F
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            : b own ( __st_begin db )
+            : ~ b good ( __st_name_on db `DELETE FROM points WHERE model = ?1` name )
+            : i n ( vec_len [String] lines )
+            : ~ i k 0
+            ~ & good < k n {
+                ?? ( vec_get [String] lines k ) {
+                    T l → {
+                        ? ( __st_point_put_on db name + base_seq k ( string_data l ) ) {} { = good F }
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ? own {
+                ? good { ? ( __st_commit db ) {} { = good F } } { ( __st_rollback db ) }
+            } {}
+            = ok good
+        }
+    }
+    ^ ok
+}
+
+// The ring in order, oldest first. Owned lines.
+@ store_load_points Store st s name → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    ? . st ok {} { ^ out }
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT line FROM points WHERE model = ?1 ORDER BY seq` ) {
+                F _ → {}
+                T q → {
+                    ( __st_bind_str q 1 ( string_from name ) )
+                    : ~ b done F
+                    ~ ! done {
+                        ?? ( sqlite_step q ) {
+                            F _ → { = done T }
+                            T has → {
+                                ? has { ( vec_push [String] out ( sqlite_column_text q 0 ) ) } { = done T }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ^ out
+}
+
+// The newest `n` points, oldest first — what scoring one point actually
+// needs, without reading a ring that may hold a hundred thousand rows.
+@ store_load_points_tail Store st s name i n → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    ? & . st ok > n 0 {} { ^ out }
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT line FROM (
+                     SELECT seq, line FROM points WHERE model = ?1 ORDER BY seq DESC LIMIT ?2
+                 ) ORDER BY seq` ) {
+                F _ → {}
+                T q → {
+                    ( __st_bind_str q 1 ( string_from name ) )
+                    ( __st_bind_i q 2 n )
+                    : ~ b done F
+                    ~ ! done {
+                        ?? ( sqlite_step q ) {
+                            F _ → { = done T }
+                            T has → {
+                                ? has { ( vec_push [String] out ( sqlite_column_text q 0 ) ) } { = done T }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ^ out
+}
+
+// How many points the model holds.
+@ store_points_count Store st s name → i {
+    ? . st ok {} { ^ 0 }
+    : ~ i n 0
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT COUNT(*) FROM points WHERE model = ?1` ) {
+                F _ → {}
+                T q → {
+                    ( __st_bind_str q 1 ( string_from name ) )
+                    ?? ( sqlite_step q ) { T has → { ? has { = n ( sqlite_column_int q 0 ) } {} } F _ → {} }
+                }
+            }
+        }
+    }
+    ^ n
+}
+
+// ── Labels ────────────────────────────────────────────────────────────
+//
+// One row per labelled point, keyed by the point's lifetime sequence
+// number. Last write wins is the primary key doing it, and `none`
+// withdraws by deleting the row — the flat store replayed a log and
+// removed earlier entries in an O(n²) scan to reach the same state.
+
+@ __st_label_put_on Database db s name Label l → b {
+    ? == ( nurl_str_eq ( string_data . l label ) ANOM_LABEL_NONE ) 1 {
+        : ~ b okd F
+        ?? ( sqlite_prepare db `DELETE FROM labels WHERE model = ?1 AND seq = ?2` ) {
+            F _ → {}
+            T q → {
+                ( __st_bind_str q 1 ( string_from name ) )
+                ( __st_bind_i q 2 . l seq )
+                = okd ( __st_run q )
+            }
+        }
+        ^ okd
+    } {}
+    : Json o ( label_to_json l )
+    : String txt ( json_stringify o )
+    ( json_free o )
+    : ~ b ok F
+    ?? ( sqlite_prepare db `INSERT OR REPLACE INTO labels (model, seq, rec) VALUES (?1, ?2, ?3)` ) {
+        F _ → {}
+        T q → {
+            ( __st_bind_str q 1 ( string_from name ) )
+            ( __st_bind_i q 2 . l seq )
+            ( __st_bind_str q 3 ( string_clone txt ) )
+            = ok ( __st_run q )
+        }
+    }
+    ( string_free txt )
+    ^ ok
+}
+
+@ store_append_label Store st s name Label l → b {
+    ? . st ok {} { ^ F }
+    : ~ b ok F
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → { = ok ( __st_label_put_on db name l ) }
+    }
+    ^ ok
+}
+
+// The labels in force. Ascending by seq is not promised — a reader wanting
+// the ring order joins on seq (model_label_map).
+@ store_load_labels Store st s name → ( Vec Label ) {
+    : ( Vec Label ) out ( vec_new [Label] )
+    ? . st ok {} { ^ out }
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT rec FROM labels WHERE model = ?1 ORDER BY seq` ) {
+                F _ → {}
+                T q → {
+                    ( __st_bind_str q 1 ( string_from name ) )
+                    : ~ b done F
+                    ~ ! done {
+                        ?? ( sqlite_step q ) {
+                            F _ → { = done T }
+                            T has → {
+                                ? has {
+                                    : String rec ( sqlite_column_text q 0 )
+                                    ?? ( json_parse ( string_data rec ) ) {
+                                        T j → {
+                                            ? ( json_is_obj j ) {
+                                                : i seq ( __an_label_int j `seq` )
+                                                : String lab ( __an_label_str j `label` )
+                                                ? & >= seq 0 ( label_known ( string_data lab ) ) {
+                                                    ( vec_push [Label] out @ Label {
+                                                        seq
+                                                        ( __an_label_int j `timestamp` )
+                                                        lab
+                                                        ( __an_label_str j `by` )
+                                                        ( __an_label_int j `at` )
+                                                        ( __an_label_str j `note` )
+                                                    } )
+                                                } { ( string_free lab ) }
+                                            } {}
+                                            ( json_free j )
+                                        }
+                                        F _ → {}
+                                    }
+                                    ( string_free rec )
+                                } { = done T }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ^ out
+}
+
+@ store_delete_labels Store st s name → v {
+    ? . st ok {} { ^ v }
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → { : b _r ( __st_name_on db `DELETE FROM labels WHERE model = ?1` name ) }
+    }
+}
+
+// ── The audit log ─────────────────────────────────────────────────────
+
+@ __st_audit_put_on Database db s name Json ent → b {
+    : String txt ( json_stringify ent )
+    : ~ b ok F
+    ?? ( sqlite_prepare db `INSERT INTO audit (model, rec) VALUES (?1, ?2)` ) {
+        F _ → {}
+        T q → {
+            ( __st_bind_str q 1 ( string_from name ) )
+            ( __st_bind_str q 2 ( string_clone txt ) )
+            = ok ( __st_run q )
+        }
+    }
+    ( string_free txt )
+    ^ ok
+}
+
+@ store_append_audit Store st s name Json ent → b {
+    ? . st ok {} { ^ F }
+    : ~ b ok F
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → { = ok ( __st_audit_put_on db name ent ) }
+    }
+    ^ ok
+}
+
+// The newest `limit` entries, oldest first (all when limit <= 0). Taken by
+// the index rather than by reading the whole log and dropping the front.
+@ store_load_audit Store st s name i limit → Json {
+    : Json arr ( json_arr_new )
+    ? . st ok {} { ^ arr }
+    : ~ i lim -1
+    ? > limit 0 { = lim limit } {}
+    : ( Vec String ) rows ( vec_new [String] )
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT rec FROM audit WHERE model = ?1 ORDER BY id DESC LIMIT ?2` ) {
+                F _ → {}
+                T q → {
+                    ( __st_bind_str q 1 ( string_from name ) )
+                    ( __st_bind_i q 2 lim )
+                    : ~ b done F
+                    ~ ! done {
+                        ?? ( sqlite_step q ) {
+                            F _ → { = done T }
+                            T has → {
+                                ? has { ( vec_push [String] rows ( sqlite_column_text q 0 ) ) } { = done T }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    : i n ( vec_len [String] rows )
+    : ~ i k n
+    ~ > k 0 {
+        = k - k 1
+        ?? ( vec_get [String] rows k ) {
+            T l → { ?? ( json_parse ( string_data l ) ) { T j → { ( json_arr_push arr j ) } F _ → {} } }
+            F _ → {}
+        }
+    }
+    ( vec_free_with [String] rows \ String x → v { ( string_free x ) } )
     ^ arr
 }
 
-@ store_load_labels Store st s name → ( Vec Label ) {
-    : ( Vec Label ) out ( vec_new [Label] )
-    : String p ( __an_model_file st name `labels.jsonl` )
+// ── Migrating a model out of the flat store ───────────────────────────
+//
+// Before this, a model was a directory of files under the store root,
+// shared by every organisation, with ownership recorded on the side. The
+// move is a one-way trip taken once at startup: the rows go into the
+// owning organisation's database and the directory is MOVED ASIDE under
+// <root>/migrated-<time>/ rather than deleted, so an upgrade destroys
+// nothing and a rollback is a directory move back.
+
+@ __st_starts s hay s pre → b {
+    : i hn ( nurl_str_len hay )
+    : i pn ( nurl_str_len pre )
+    ? > pn hn { ^ F } {}
+    : ~ i k 0
+    ~ < k pn {
+        ? == ( nurl_str_at hay hn k ) ( nurl_str_at pre pn k ) {} { ^ F }
+        = k + k 1
+    }
+    ^ T
+}
+
+@ __st_ends s hay s suf → b {
+    : i hn ( nurl_str_len hay )
+    : i sn ( nurl_str_len suf )
+    ? > sn hn { ^ F } {}
+    : ~ i k 0
+    ~ < k sn {
+        ? == ( nurl_str_at hay hn + - hn sn k ) ( nurl_str_at suf sn k ) {} { ^ F }
+        = k + k 1
+    }
+    ^ T
+}
+
+@ __st_flat_file s root s name s file → String {
+    : String p ( string_from root )
+    ( string_push_char p 47 )
+    ( string_push_str p name )
+    ( string_push_char p 47 )
+    ( string_push_str p file )
+    ^ p
+}
+
+// Read one file of a flat model directory as text; empty when absent.
+@ __st_flat_text s root s name s file → String {
+    : String p ( __st_flat_file root name file )
     : !String IoErr r ( read_file ( string_data p ) )
     ( string_free p )
+    ?? r { T txt → { ^ txt } F _ → { ^ ( string_new ) } }
+}
+
+// Copy one file of a flat model directory into a blob row.
+@ __st_flat_blob s root s name s file Store st s kind → b {
+    : String p ( __st_flat_file root name file )
+    : !( Vec u ) IoErr r ( read_file_bytes ( string_data p ) )
+    ( string_free p )
     ?? r {
-        T txt → {
-            : ( Vec String ) lines ( string_split txt `\n` )
-            : i n ( vec_len [String] lines )
+        T data → {
+            : b ok ( __st_blob_put st name kind data )
+            ( vec_free [u] data )
+            ^ ok
+        }
+        F _ → { ^ T }
+    }
+}
+
+// One flat model directory into this organisation's database.
+@ store_migrate_dir Store st s root s name i now → b {
+    ? . st ok {} { ^ F }
+    : String meta ( __st_flat_text root name `metadata.json` )
+    ? > ( string_len meta ) 0 {} { ( string_free meta ) ^ F }
+
+    // The lifetime number of the ring's oldest row: what the metadata
+    // counted minus what the log holds. Metadata that does not parse is
+    // stored as it is, so the loader quarantines it exactly as it would
+    // have quarantined the file.
+    : String log ( __st_flat_text root name `data.jsonl` )
+    : ( Vec String ) raw ( string_split log `\n` )
+    : ( Vec String ) lines ( vec_new [String] )
+    : i nraw ( vec_len [String] raw )
+    : ~ i k 0
+    ~ < k nraw {
+        ?? ( vec_get [String] raw k ) {
+            T l → { ? > ( string_len l ) 0 { ( vec_push [String] lines ( string_clone l ) ) } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] raw \ String x → v { ( string_free x ) } )
+    ( string_free log )
+    : ~ i seen ( vec_len [String] lines )
+    ?? ( meta_from_json_str ( string_data meta ) ) {
+        T m → { = seen . m n_seen ( meta_free m ) }
+        F _ → {}
+    }
+    : ~ i base - seen ( vec_len [String] lines )
+    ? < base 0 { = base 0 } {}
+
+    // The metadata row and the organisation's ownership row, in one
+    // transaction. A blank subject is the same "nobody in particular, but
+    // the organisation's" the authorization layer already uses for a
+    // member who has left; the INSERT is ignored when that table is not
+    // there yet, which only happens before anyone has signed in.
+    : ~ b ok F
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            : b own ( __st_begin db )
+            ? ( __st_meta_put_on db name ( string_clone meta ) ) { = ok T } {}
+            ? ok {
+                ?? ( sqlite_prepare db `INSERT OR IGNORE INTO models (name, owner_sub, created_at) VALUES (?1, ?2, ?3)` ) {
+                    F _ → {}
+                    T q → {
+                        ( __st_bind_str q 1 ( string_from name ) )
+                        ( __st_bind_str q 2 ( string_new ) )
+                        ( __st_bind_i q 3 now )
+                        : b _w ( __st_run q )
+                    }
+                }
+            } {}
+            ? own { ? ok { ? ( __st_commit db ) {} { = ok F } } { ( __st_rollback db ) } } {}
+        }
+    }
+    ( string_free meta )
+
+    ? ok { ? ( store_write_points st name lines base ) {} { = ok F } } {}
+    ( vec_free_with [String] lines \ String x → v { ( string_free x ) } )
+
+    // The blobs: one forest per trained version, plus the autoencoder,
+    // the forecast and the score cache when they exist.
+    ? ok {
+        : String dir ( string_from root )
+        ( string_push_char dir 47 )
+        ( string_push_str dir name )
+        ?? ( dir_list ( string_data dir ) ) {
+            T entries → {
+                : i ne ( vec_len [String] entries )
+                : ~ i e 0
+                ~ < e ne {
+                    ?? ( vec_get [String] entries e ) {
+                        T fn → {
+                            : s f ( string_data fn )
+                            ? & ( __st_starts f `version_` ) ( __st_ends f `.forest` ) {
+                                : i fl ( nurl_str_len f )
+                                : String vn ( string_new )
+                                : ~ i c 8
+                                ~ < c - fl 7 { ( string_push_char vn ( nurl_str_at f fl c ) ) = c + c 1 }
+                                : String kind ( __st_forest_kind ( string_data vn ) )
+                                ? ( __st_flat_blob root name f st ( string_data kind ) ) {} { = ok F }
+                                ( string_free kind )
+                                ( string_free vn )
+                            } {}
+                        }
+                        F _ → {}
+                    }
+                    = e + e 1
+                }
+                ( vec_free_with [String] entries \ String x → v { ( string_free x ) } )
+            }
+            F _ → {}
+        }
+        ( string_free dir )
+    } {}
+
+    ? ok { ? ( __st_flat_blob root name `autoencoder.json` st ANOM_KIND_AE ) {} { = ok F } } {}
+    ? ok { ? ( __st_flat_blob root name `forecast.json` st ANOM_KIND_FC ) {} { = ok F } } {}
+    ? ok { ? ( __st_flat_blob root name `scores.bin` st ANOM_KIND_SCORES ) {} { = ok F } } {}
+
+    // Labels and the audit log, replayed in file order so the last word
+    // on a sequence number is the one that survives.
+    ? ok {
+        : String lab ( __st_flat_text root name `labels.jsonl` )
+        : ( Vec String ) ls ( string_split lab `\n` )
+        : i nl ( vec_len [String] ls )
+        : ~ i j 0
+        ~ < j nl {
+            ?? ( vec_get [String] ls j ) {
+                T l → {
+                    ? > ( string_len l ) 0 {
+                        ?? ( json_parse ( string_data l ) ) {
+                            T o → {
+                                ? ( json_is_obj o ) {
+                                    : i seq ( __an_label_int o `seq` )
+                                    : String lb ( __an_label_str o `label` )
+                                    ? & >= seq 0 ( label_known ( string_data lb ) ) {
+                                        : Label one @ Label {
+                                            seq
+                                            ( __an_label_int o `timestamp` )
+                                            lb
+                                            ( __an_label_str o `by` )
+                                            ( __an_label_int o `at` )
+                                            ( __an_label_str o `note` )
+                                        }
+                                        : b _w ( store_append_label st name one )
+                                        ( label_free one )
+                                    } { ( string_free lb ) }
+                                } {}
+                                ( json_free o )
+                            }
+                            F _ → {}
+                        }
+                    } {}
+                }
+                F _ → {}
+            }
+            = j + j 1
+        }
+        ( vec_free_with [String] ls \ String x → v { ( string_free x ) } )
+        ( string_free lab )
+    } {}
+
+    ? ok {
+        : String aud ( __st_flat_text root name `audit.jsonl` )
+        : ( Vec String ) as ( string_split aud `\n` )
+        : i na ( vec_len [String] as )
+        : ~ i j 0
+        ~ < j na {
+            ?? ( vec_get [String] as j ) {
+                T l → {
+                    ? > ( string_len l ) 0 {
+                        ?? ( json_parse ( string_data l ) ) {
+                            T o → { : b _w ( store_append_audit st name o ) ( json_free o ) }
+                            F _ → {}
+                        }
+                    } {}
+                }
+                F _ → {}
+            }
+            = j + j 1
+        }
+        ( vec_free_with [String] as \ String x → v { ( string_free x ) } )
+        ( string_free aud )
+    } {}
+
+    ^ ok
+}
+
+// The organisation whose database claims this model name, `public` when
+// none does — which is also the answer with sign-in off, where the
+// public organisation is the only one there is.
+@ __st_owner_org s root s name → String {
+    : String dir ( __st_orgs_dir root )
+    : ~ String found ( string_new )
+    ?? ( dir_list ( string_data dir ) ) {
+        T entries → {
+            : i n ( vec_len [String] entries )
             : ~ i k 0
             ~ < k n {
-                ?? ( vec_get [String] lines k ) {
-                    T l → {
-                        ? > ( string_len l ) 0 {
-                            : !Json JsonError jr ( json_parse ( string_data l ) )
-                            ?? jr {
-                                T j → {
-                                    ? ( json_is_obj j ) {
-                                        : i seq ( __an_label_int j `seq` )
-                                        : String lab ( __an_label_str j `label` )
-                                        ? & >= seq 0 ( label_known ( string_data lab ) ) {
-                                            // Drop what an earlier line said about this seq.
-                                            : ~ i q 0
-                                            ~ < q ( vec_len [Label] out ) {
-                                                : ~ b same F
-                                                ?? ( vec_get [Label] out q ) { T e → { = same == . e seq seq } F _ → {} }
-                                                ? same {
-                                                    ?? ( vec_remove [Label] out q ) { T e → { ( label_free e ) } F _ → {} }
-                                                } { = q + q 1 }
+                ?? ( vec_get [String] entries k ) {
+                    T e → {
+                        : s en ( string_data e )
+                        ? & == ( string_len found ) 0 ( __st_ends en `.db` ) {
+                            : i el ( nurl_str_len en )
+                            : String org ( string_new )
+                            : ~ i c 0
+                            ~ < c - el 3 { ( string_push_char org ( nurl_str_at en el c ) ) = c + c 1 }
+                            ? ( __st_org_ok ( string_data org ) ) {
+                                : Store probe ( store_open_org root ( string_data org ) )
+                                ? . probe ok {
+                                    ?? ( __st_conn probe ) {
+                                        F _ → {}
+                                        T pdb → {
+                                            ?? ( sqlite_prepare pdb `SELECT 1 FROM models WHERE name = ?1` ) {
+                                                F _ → {}
+                                                T q → {
+                                                    ( __st_bind_str q 1 ( string_from name ) )
+                                                    ?? ( sqlite_step q ) {
+                                                        T has → {
+                                                            ? has {
+                                                                ( string_free found )
+                                                                = found ( string_from ( string_data org ) )
+                                                            } {}
+                                                        }
+                                                        F _ → {}
+                                                    }
+                                                }
                                             }
-                                            ? == ( nurl_str_eq ( string_data lab ) ANOM_LABEL_NONE ) 1 {
-                                                ( string_free lab )
-                                            } {
-                                                ( vec_push [Label] out @ Label {
-                                                    seq
-                                                    ( __an_label_int j `timestamp` )
-                                                    lab
-                                                    ( __an_label_str j `by` )
-                                                    ( __an_label_int j `at` )
-                                                    ( __an_label_str j `note` )
-                                                } )
-                                            }
-                                        } { ( string_free lab ) }
-                                    } {}
-                                    ( json_free j )
-                                }
-                                F _ → {}
-                            }
+                                        }
+                                    }
+                                } {}
+                                ( store_free probe )
+                            } {}
+                            ( string_free org )
                         } {}
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] lines \ String x → v { ( string_free x ) } )
-            ( string_free txt )
+            ( vec_free_with [String] entries \ String x → v { ( string_free x ) } )
         }
         F _ → {}
+    }
+    ( string_free dir )
+    ? > ( string_len found ) 0 { ^ found } {}
+    ( string_free found )
+    ^ ( string_from ANOM_ORG_DEFAULT )
+}
+
+// Every flat model directory left under `root`, moved into the database
+// of the organisation that owns it. Returns how many moved. Called once
+// at startup; when there is nothing to move it costs one directory read.
+@ store_migrate_flat s root i now → i {
+    : ~ i moved 0
+    : String aside ( string_from root )
+    ( string_push_str aside `/migrated-` )
+    ( string_push_int aside now )
+    ?? ( dir_list root ) {
+        T entries → {
+            : i n ( vec_len [String] entries )
+            : ~ i k 0
+            ~ < k n {
+                ?? ( vec_get [String] entries k ) {
+                    T e → {
+                        : s en ( string_data e )
+                        : b skip | ( __st_starts en `migrated-` ) == ( nurl_str_eq en `orgs` ) 1
+                        ? skip {} {
+                            : String probe ( __st_flat_file root en `metadata.json` )
+                            : b is_model ( file_exists ( string_data probe ) )
+                            ( string_free probe )
+                            ? is_model {
+                                : String org ( __st_owner_org root en )
+                                : Store st ( store_open_org root ( string_data org ) )
+                                : b ok ( store_migrate_dir st root en now )
+                                ( store_free st )
+                                ? ok {
+                                    : !v IoErr mk ( dir_create_all ( string_data aside ) )
+                                    ?? mk { T _ → {} F _ → {} }
+                                    : String from ( string_from root )
+                                    ( string_push_char from 47 )
+                                    ( string_push_str from en )
+                                    : String to ( string_clone aside )
+                                    ( string_push_char to 47 )
+                                    ( string_push_str to en )
+                                    : !v IoErr mv ( fs_rename ( string_data from ) ( string_data to ) )
+                                    ?? mv { T _ → { = moved + moved 1 } F _ → {} }
+                                    ( string_free from )
+                                    ( string_free to )
+                                } {}
+                                ( string_free org )
+                            } {}
+                        }
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( vec_free_with [String] entries \ String x → v { ( string_free x ) } )
+        }
+        F _ → {}
+    }
+    ( string_free aside )
+    ^ moved
+}
+
+// ── Moving a model between organisations ──────────────────────────────
+//
+// Adoption. A point that arrives without a credential naming an owner
+// lands in `public`, which is where such data waits rather than an
+// organisation with a claim on it; the home organisation may then take
+// it. When the store was one flat directory that was a row rewrite —
+// nothing moved. Now the model IS rows in a file, so adopting it means
+// carrying every one of them into the other file and removing them here.
+
+// Every blob kind this model has.
+@ __st_blob_kinds Store st s name → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    ? . st ok {} { ^ out }
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT kind FROM blobs WHERE model = ?1 ORDER BY kind` ) {
+                F _ → {}
+                T q → {
+                    ( __st_bind_str q 1 ( string_from name ) )
+                    : ~ b done F
+                    ~ ! done {
+                        ?? ( sqlite_step q ) {
+                            F _ → { = done T }
+                            T has → {
+                                ? has { ( vec_push [String] out ( sqlite_column_text q 0 ) ) } { = done T }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     ^ out
 }
 
-@ store_delete_labels Store st s name → v {
-    : String p ( __an_model_file st name `labels.jsonl` )
-    : !v IoErr r ( file_delete ( string_data p ) )
-    ?? r { T _ → {} F _ → {} }
-    ( string_free p )
+// The metadata exactly as stored, unparsed. Empty when there is no row.
+@ __st_meta_text Store st s name → String {
+    : ~ String txt ( string_new )
+    ? . st ok {} { ^ txt }
+    ?? ( __st_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT meta FROM models_meta WHERE name = ?1` ) {
+                F _ → {}
+                T q → {
+                    ( __st_bind_str q 1 ( string_from name ) )
+                    ?? ( sqlite_step q ) {
+                        F _ → {}
+                        T has → {
+                            ? has { ( string_free txt ) = txt ( sqlite_column_text q 0 ) } {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ^ txt
+}
+
+// Everything `name` is, from `src` into `dst`. Refuses when `dst` already
+// has that name — two models of one name in one organisation is exactly
+// what the organisation-as-database rule exists to prevent. The source
+// keeps its rows if any part of the write fails.
+@ store_move_model Store src Store dst s name i now → b {
+    ? & . src ok . dst ok {} { ^ F }
+    ? ( store_exists src name ) {} { ^ F }
+    ? ( store_exists dst name ) { ^ F } {}
+
+    : String meta ( __st_meta_text src name )
+    ? > ( string_len meta ) 0 {} { ( string_free meta ) ^ F }
+    : ~ i seen 0
+    ?? ( meta_from_json_str ( string_data meta ) ) {
+        T m → { = seen . m n_seen ( meta_free m ) }
+        F _ → {}
+    }
+    : ( Vec String ) lines ( store_load_points src name )
+    : ~ i base - seen ( vec_len [String] lines )
+    ? < base 0 { = base 0 } {}
+
+    : ~ b ok F
+    ?? ( __st_conn dst ) {
+        F _ → {}
+        T db → {
+            : b own ( __st_begin db )
+            : ~ b good ( __st_meta_put_on db name ( string_clone meta ) )
+            : i n ( vec_len [String] lines )
+            : ~ i k 0
+            ~ & good < k n {
+                ?? ( vec_get [String] lines k ) {
+                    T l → { ? ( __st_point_put_on db name + base k ( string_data l ) ) {} { = good F } }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ? good {
+                ?? ( sqlite_prepare db `INSERT OR IGNORE INTO models (name, owner_sub, created_at) VALUES (?1, ?2, ?3)` ) {
+                    F _ → {}
+                    T q → {
+                        ( __st_bind_str q 1 ( string_from name ) )
+                        ( __st_bind_str q 2 ( string_new ) )
+                        ( __st_bind_i q 3 now )
+                        : b _w ( __st_run q )
+                    }
+                }
+            } {}
+            ? own {
+                ? good { ? ( __st_commit db ) {} { = good F } } { ( __st_rollback db ) }
+            } {}
+            = ok good
+        }
+    }
+    ( vec_free_with [String] lines \ String x → v { ( string_free x ) } )
+    ( string_free meta )
+    ? ok {} { ^ F }
+
+    // The blobs, the labels and the audit trail, each read from the source
+    // and written to the destination through the ordinary calls.
+    : ( Vec String ) kinds ( __st_blob_kinds src name )
+    : i nk ( vec_len [String] kinds )
+    : ~ i j 0
+    ~ < j nk {
+        ?? ( vec_get [String] kinds j ) {
+            T kd → {
+                ?? ( __st_blob_get src name ( string_data kd ) ) {
+                    T data → {
+                        ? ( __st_blob_put dst name ( string_data kd ) data ) {} { = ok F }
+                        ( vec_free [u] data )
+                    }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+        = j + j 1
+    }
+    ( vec_free_with [String] kinds \ String x → v { ( string_free x ) } )
+
+    : ( Vec Label ) labs ( store_load_labels src name )
+    : i nl ( vec_len [Label] labs )
+    = j 0
+    ~ < j nl {
+        ?? ( vec_get [Label] labs j ) { T l → { : b _w ( store_append_label dst name l ) } F _ → {} }
+        = j + j 1
+    }
+    ( labels_free labs )
+
+    : Json aud ( store_load_audit src name 0 )
+    : i na ( json_arr_len aud )
+    = j 0
+    ~ < j na {
+        ?? ( json_arr_get aud j ) { T e → { : b _w ( store_append_audit dst name e ) } F _ → {} }
+        = j + j 1
+    }
+    ( json_free aud )
+
+    ? ok { ? ( store_delete src name ) {} { = ok F } } {}
+    ? ok {
+        ?? ( __st_conn src ) {
+            F _ → {}
+            T db → { : b _d ( __st_name_on db `DELETE FROM models WHERE name = ?1` name ) }
+        }
+    } {}
+    ^ ok
 }

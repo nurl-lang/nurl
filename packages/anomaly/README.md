@@ -553,7 +553,8 @@ checks — nothing in that chain is C). Four things follow.
 
 **An organization is an OIDC tenant.** The `tid` claim (or, for a provider
 publishing none, the issuer) selects one SQLite database under
-`<store>/orgs/<org>.db`. The org is *implicit in the file*, so no query in
+`<store>/orgs/<org>.db` — the same file that holds the organisation's models,
+their points and their forests (SPEC §4.4). The org is *implicit in the file*, so no query in
 `authz.nu` carries an org column and none can forget one. An org id that is
 not a plain GUID is replaced by a digest of itself before it becomes a
 filename.

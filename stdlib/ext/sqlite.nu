@@ -77,6 +77,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/marker.nu`
 
 // ── libsqlite3 FFI ────────────────────────────────────────────────
 //
@@ -844,6 +845,24 @@ $ `stdlib/core/vec.nu`
 // A scope-local Database / Statement closes itself at scope exit on
 // every path. See the "Memory model" note at the top: do not also call
 // sqlite_close / sqlite_finalize by hand on an auto-dropped handle.
+
+// A connection and a statement are opaque C pointers, and `s` spells both
+// a String and every FFI handle — so without these the compiler derives
+// both as Send and a `sqlite3*` crosses a thread boundary without a word
+// (docs/LIMITATIONS.md). SQLite's own rule is that a connection belongs to
+// one thread at a time; the way to use one database from several threads
+// is a connection per thread over the same file, with WAL for concurrent
+// readers and `busy_timeout` for the writer. Marking the handles here
+// makes that the compiler's rule rather than a comment in every caller: a
+// struct holding one, a Vec of them and a closure capturing one are all
+// refused at the boundary.
+% NotSend Database {}
+
+% NotSend Statement {}
+
+% NotSync Database {}
+
+% NotSync Statement {}
 
 % Drop Database {
     @ drop Database db → v {

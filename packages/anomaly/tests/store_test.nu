@@ -268,36 +268,47 @@ $ `src/store.nu`
     ( check ( label_known ANOM_LABEL_FP ) `labels: false_positive is known` )
     ( check ! ( label_known `maybe` ) `labels: maybe is not` )
 
-    // Point log: append, load, rewrite.
-    ( store_append_point st `sensor_a` `{"temp":1,"timestamp":100}` )
-    ( store_append_point st `sensor_a` `{"temp":2,"timestamp":101}` )
+    // The ring: a point at its lifetime sequence number, the oldest
+    // evicted by a range delete, the whole ring replaced.
+    : *Meta pm ( meta_new `sensor_a` `2026-01-01T00:00:00Z` )
+    ( store_commit_point st `sensor_a` 100 `{"temp":1,"timestamp":100}` 0 pm )
+    ( store_commit_point st `sensor_a` 101 `{"temp":2,"timestamp":101}` 0 pm )
     : ( Vec String ) pts ( store_load_points st `sensor_a` )
-    ( check == ( vec_len [String] pts ) 2 `store: point log appends + loads` )
+    ( check == ( vec_len [String] pts ) 2 `store: a point goes in at its sequence number` )
     ( vec_free_with [String] pts \ String x → v { ( string_free x ) } )
+    ( check == ( store_points_count st `sensor_a` ) 2 `store: and is counted` )
+    ( store_commit_point st `sensor_a` 102 `{"temp":3,"timestamp":102}` 101 pm )
+    : ( Vec String ) pts_e ( store_load_points st `sensor_a` )
+    ( check == ( vec_len [String] pts_e ) 2 `store: eviction drops everything older` )
+    ?? ( vec_get [String] pts_e 0 ) {
+        T first → { ( check ( string_contains first `"temp":2` ) `store: and keeps the newest` ) }
+        F _ → { ( check F `store: eviction leaves rows` ) }
+    }
+    ( vec_free_with [String] pts_e \ String x → v { ( string_free x ) } )
+    : ( Vec String ) tail ( store_load_points_tail st `sensor_a` 1 )
+    ( check == ( vec_len [String] tail ) 1 `store: the tail reads only what was asked for` )
+    ( vec_free_with [String] tail \ String x → v { ( string_free x ) } )
     : ( Vec String ) one ( vec_new [String] )
-    ( vec_push [String] one ( string_from `{"temp":3,"timestamp":102}` ) )
-    ( store_write_points st `sensor_a` one )
+    ( vec_push [String] one ( string_from `{"temp":4,"timestamp":103}` ) )
+    ( store_write_points st `sensor_a` one 7 )
     ( vec_free_with [String] one \ String x → v { ( string_free x ) } )
     : ( Vec String ) pts2 ( store_load_points st `sensor_a` )
-    ( check == ( vec_len [String] pts2 ) 1 `store: point log rewrite` )
+    ( check == ( vec_len [String] pts2 ) 1 `store: the whole ring can be replaced` )
     ( vec_free_with [String] pts2 \ String x → v { ( string_free x ) } )
+    ( meta_free pm )
 
-    // Corrupt the forest file on disk: load returns None.
-    : String fpath ( string_from ( string_data root ) )
-    ( string_push_str fpath `/sensor_a/version_short_term.forest` )
-    : !( Vec u ) IoErr fraw ( read_file_bytes ( string_data fpath ) )
+    // Corrupt the stored forest: load returns None.
+    : ?( Vec u ) fraw ( __st_blob_get st `sensor_a` `forest:short_term` )
     ?? fraw {
         T fb → {
             ( vec_set [u] fb 20 # u 254 )
-            : !v IoErr wr ( write_file_bytes ( string_data fpath ) fb )
-            ?? wr { T _ → {} F _ → {} }
+            ( __st_blob_put st `sensor_a` `forest:short_term` fb )
             ( vec_free [u] fb )
             : ?VerModel cv ( store_load_forest st `sensor_a` `short_term` )
-            ?? cv { T bad → { ( anom_vermodel_free bad ) ( check F `store: on-disk corruption rejected` ) } F _ → { ( check T `store: on-disk corruption rejected` ) } }
+            ?? cv { T bad → { ( anom_vermodel_free bad ) ( check F `store: a corrupt blob is rejected` ) } F _ → { ( check T `store: a corrupt blob is rejected` ) } }
         }
-        F _ → { ( check F `store: forest file readable for tamper test` ) }
+        F _ → { ( check F `store: forest blob readable for tamper test` ) }
     }
-    ( string_free fpath )
 
     // Delete removes everything.
     ( check ( store_delete st `sensor_a` ) `store: delete` )

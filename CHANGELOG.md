@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`stdlib/ext/sqlite`: `Database` and `Statement` are `% NotSend` /
+  `% NotSync`.** `s` spells both a String and every opaque C pointer, so a
+  `sqlite3*` derived as Send and crossed a thread boundary without a word —
+  `docs/LIMITATIONS.md` names it as *the* example of the gap and prescribes
+  exactly this. SQLite's rule is one connection per thread; the markers make
+  that the compiler's rule, and a struct holding a handle, a Vec of them or a
+  closure capturing one are all refused at the boundary.
+- **`packages/anomaly` 0.30.0 — a model belongs to an organisation, and an
+  organisation is a database.** Every model used to be a directory under one
+  flat root shared by every tenant, with ownership recorded on the side, so a
+  model NAME was global: the first organisation to use `boiler` took it and
+  the second got a 403 that disclosed the name exists. Metadata, the ring of
+  raw points, the forests, the autoencoder, the forecast, labels and the
+  audit trail now live in `<root>/orgs/<org>.db`, the same SQLite file that
+  already held the members and the keys. Names are per organisation; a name
+  another tenant uses answers 404. Evicting the oldest point at the cap is
+  one range delete instead of a rewrite of the whole log (15 ms at 14 700
+  points, linear in the cap), and the point, the eviction and the counter
+  that says how many points there are go in as one transaction. The store
+  holds no connection — one per operation, closed with it — so several
+  threads may use one store over WAL with `BEGIN IMMEDIATE` writes; a new
+  suite runs four of them at once. A leftover flat store migrates on the
+  first run of any command and its directories are moved aside, not deleted.
+  `anomaly --org <id>` picks which organisation the CLI works in.
+
 ### Fixed
 
 - **`ext/xml`: the parser leaked a placeholder node per element.** A

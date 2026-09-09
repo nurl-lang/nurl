@@ -183,32 +183,67 @@ missing features default to `0`, unknown extras are dropped. This mirrors the
 reference (`model_features` in metadata) and is what keeps categorical one-hot
 encodings aligned across retrains.
 
-### 4.4 On-disk layout (file backend)
+### 4.4 On-disk layout
+
+A model belongs to an organisation, and an organisation IS a database. One
+SQLite file per organisation holds everything: its members and their roles,
+its API keys, and every model it has.
 
 ```
-<model_dir>/<name>/
-  metadata.json            # §4.3
-  data.jsonl               # ring of recent RAW points, one JSON record per
-                           # line, each stamped with its ingest `timestamp`
-                           # (raw — not projected vectors — so a retrain can
-                           # pick up new categories/columns)
-  version_<v>.forest       # one compact forest blob per enabled version
-  autoencoder.json         # the trained autoencoder, if one exists
-  scores.bin               # cached per-point verdicts, stamped with the
-                           # model's score_epoch (§5.6) — pure derived
-                           # state: deleting it costs a rescan, never a
-                           # wrong answer
-  labels.jsonl             # what readers said about points (§4.5): one
-                           # record per line, appended, keyed by the
-                           # point's LIFETIME sequence number, last
-                           # write wins; `none` withdraws
+<root>/orgs/<org>.db       # one SQLite database per organisation (§5.7)
 
-<root>/orgs/<org>.db       # one SQLite database per organisation (§5.7):
-                           # users + roles, model ownership, API keys.
-                           # The org is IMPLICIT in the filename, so no
-                           # query carries an org column and none can
-                           # forget one.
+  users, api_keys          # members + roles, keys (§5.7)
+  models                   # who created a model; blank when they left
+
+  models_meta              # name → the metadata JSON (§4.3). A model
+                           # EXISTS iff it has a row here.
+  models_meta_corrupt      # metadata that would not parse, set aside with
+                           # the time rather than overwritten
+  points                   # (model, seq) → the RAW ingested record, one
+                           # JSON object, stamped with its `timestamp`
+                           # (raw — not projected vectors — so a retrain
+                           # can pick up new categories/columns). `seq` is
+                           # the point's LIFETIME number, the space
+                           # `n_seen`, labels and the score cache all
+                           # count in, so the ring is the rows with the
+                           # largest seq and evicting the oldest is a
+                           # range delete that renumbers nothing.
+  blobs                    # (model, kind) → bytes: `forest:<version>`,
+                           # `ae`, `fc`, `scores`
+  labels                   # (model, seq) → what a reader said (§4.5).
+                           # Last write wins is the primary key doing it;
+                           # `none` withdraws by deleting the row.
+  audit                    # margin changes per model, append-only
 ```
+
+The organisation is the FILE, so no row carries an org column and no query
+can forget one. Two consequences, and both were the reason to put the data
+here rather than in a directory per model under one shared root:
+
+* **A model name is unique within an organisation and means nothing
+  outside it.** Two tenants may each keep a `boiler`. Neither can see the
+  other's, neither can take the name from the other by using it first, and
+  asking for a name another tenant uses is an honest 404 rather than a 403
+  that discloses the name exists.
+* **Evicting the oldest point when the ring is full is one DELETE.** The
+  flat store appended the line and then rewrote the whole log: 15 ms at
+  14 700 points, linear in the cap, so a model at the 150 000-point default
+  paid about 300 ms of pure rewriting for every point it accepted.
+
+A store still holding directory-per-model data is migrated on the first run
+of any command: each model moves into the database of the organisation whose
+`models` row claims it (`public` when none does), and the directory is moved
+aside under `<root>/migrated-<time>/` rather than deleted.
+
+**Threads.** A `Store` holds no connection: one is opened for the length of
+an operation and closed with it, so it never leaves the thread that made it
+(`Database` is `% NotSend`, so the compiler enforces that). Threads share
+the file, not the handle — WAL lets their reads run beside one writer,
+`busy_timeout` makes a second writer wait rather than fail, and every write
+of more than one statement is one `BEGIN IMMEDIATE` transaction, so it is
+all-or-nothing and never interleaves with another thread's. What the store
+does NOT do is serialise a read-modify-write of one MODEL across threads;
+that is the service's lock to hold.
 
 The forest blob is a straight serialisation of the `iforest` node arena (§the
 arena is already flat, so this is a length-prefixed dump of the SoA arrays plus
@@ -485,8 +520,10 @@ minute-denominated windows and point counts the same number, so a
 ### 5.7 Identity, organisations and ownership (`src/authz.nu`)
 
 The service was single-user by construction: every route reached every model
-in one flat store. Three concepts turn that into a shared service without
-moving a stored model.
+in one flat store. Three concepts turn that into a shared service. They were
+introduced without moving a stored model, and §4.4 finished the job: the
+model's data lives in the organisation's database now, so the boundary is
+the file rather than a row that says whose a shared directory is.
 
 **Off by default.** With `ANOMALY_AUTH` unset, `authz_principal` returns an
 authenticated admin of the reserved `local` organisation and every gate opens.

@@ -194,7 +194,7 @@ $ `src/store.nu`
 
 @ model_open_at Store st s name i now → *Model {
     : *Model mo # *Model ( nurl_malloc Z Model )
-    = . mo store ( store_open ( string_data . st root ) )
+    = . mo store ( store_open_org ( string_data . st root ) ( store_org st ) )
     = . mo mname ( string_from name )
     = . mo forests ( vec_new [VerModel] )
     = . mo min_points ANOM_MIN_POINTS
@@ -2261,12 +2261,15 @@ $ `src/store.nu`
             ( json_obj_set rec `timestamp` ( json_int now ) )
             : String line ( json_stringify rec )
             ( json_free rec )
-            ( store_append_point . mo store ( string_data . mo mname ) ( string_data line ) )
+            : i seq . mm n_seen
             ( vec_push [String] . mo lines line )
             ( vec_push [i] . mo times now )
             = . mm n_seen + . mm n_seen 1
 
-            // Ring eviction: drop the oldest beyond capacity, rewrite log.
+            // Ring eviction past the cap: the oldest row goes, and it goes
+            // as a range delete over an index whatever the cap is. This
+            // used to rewrite the entire log for every point past capacity.
+            : ~ i evict 0
             ? > ( vec_len [String] . mo lines ) . mo max_points {
                 ?? ( vec_remove [String] . mo lines 0 ) {
                     T old → { ( string_free old ) }
@@ -2274,10 +2277,15 @@ $ `src/store.nu`
                 }
                 ?? ( vec_remove [i] . mo times 0 ) { T _ → {} F _ → {} }
                 ( fc_evict . mo fc )
-                ( store_write_points . mo store ( string_data . mo mname ) . mo lines )
+                = evict - . mm n_seen ( vec_len [String] . mo lines )
             } {}
             ( __an_note_stored mo )
-            ( store_save_meta . mo store ( string_data . mo mname ) mm )
+            // The row, the eviction and the counter that says how many
+            // points there are go in as ONE transaction: a crash between
+            // them would leave the ring and `n_seen` disagreeing, and
+            // another thread must never read the ring half-updated.
+            ( store_commit_point . mo store ( string_data . mo mname )
+            seq ( string_data line ) evict mm )
 
             // Schedule: lifetime counter reaching the mark retrains all.
             ? & >= . mm n_seen . mo next_train_at >= ( vec_len [String] . mo lines ) . mo min_points {
@@ -2519,8 +2527,9 @@ $ `src/store.nu`
     // below refits them, and a ring still too small to train has none.
     ? . . mo fc trained { ( fc_clear . mo fc ) ( store_delete_fc . mo store ( string_data . mo mname ) ) } {}
 
-    // One write for the whole file, not one per point.
-    ( store_write_points . mo store ( string_data . mo mname ) . mo lines )
+    // One transaction for the whole merged ring, not one per point.
+    ( store_write_points . mo store ( string_data . mo mname ) . mo lines
+    - . mm n_seen ( vec_len [String] . mo lines ) )
     ( store_save_meta . mo store ( string_data . mo mname ) mm )
 
     // And one train, if there is now enough to train on. An import that
@@ -3832,7 +3841,7 @@ $ `src/store.nu`
     = . mo next_train_at . mo min_points
 
     : ( Vec String ) none ( vec_new [String] )
-    ( store_write_points . mo store ( string_data . mo mname ) none )
+    ( store_write_points . mo store ( string_data . mo mname ) none 0 )
     ( vec_free [String] none )
     // Sequence numbers start over with the ring, so labels keyed on the
     // old ones would name rows that never were.
@@ -4134,7 +4143,8 @@ $ `src/store.nu`
                 = trimmed T
             }
             ? trimmed {
-                ( store_write_points . mo store ( string_data . mo mname ) . mo lines )
+                ( store_evict_points . mo store ( string_data . mo mname )
+                - . mm n_seen ( vec_len [String] . mo lines ) )
             } {}
             = touched T
         }

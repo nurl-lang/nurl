@@ -58,13 +58,50 @@ $ `src/mcp.nu`
 // ~/.anomaly. The flag binds $ANOMALY_HOME, so an empty resolved value means
 // neither was set and we fall back to the home directory.
 @ __an_store_root CliCtx x → String {
-    : String s ( ctx_str x `store` )
-    ? > ( string_len s ) 0 { ^ s } {}
-    ( string_free s )
-    : String home ( env_var_or `HOME` `.` )
-    : String r ( path_join ( string_data home ) `.anomaly` )
-    ( string_free home )
+    : ~ String r ( ctx_str x `store` )
+    ? > ( string_len r ) 0 {} {
+        ( string_free r )
+        : String home ( env_var_or `HOME` `.` )
+        = r ( path_join ( string_data home ) `.anomaly` )
+        ( string_free home )
+    }
+    ( __an_migrate_store ( string_data r ) )
     ^ r
+}
+
+// The organisation this invocation works in. A model belongs to one, and
+// an organisation is a database (store.nu); without sign-in there is one,
+// `public`, which is what the CLI and simple mode collect into. `--org`
+// reaches another tenant's models on a store that serves several.
+@ __an_store_of CliCtx x s root → Store {
+    : String org ( ctx_str x `org` )
+    ? > ( string_len org ) 0 {} {
+        ( string_free org )
+        ^ ( store_open root )
+    }
+    : Store st ( store_open_org root ( string_data org ) )
+    ( string_free org )
+    ^ st
+}
+
+// A store still holding directory-per-model data from before models lived
+// in their organisation's database: move each into the database of the
+// organisation that owns it, and the directory aside under
+// <root>/migrated-<time>/. Idempotent, and one directory read once there
+// is nothing left to move, so every entry point may call it.
+@ __an_migrate_store s root → v {
+    : i n ( store_migrate_flat root ( now_seconds ) )
+    ? > n 0 {
+        : String msg ( string_from `anomaly: moved ` )
+        ( string_push_int msg n )
+        ( string_push_str msg ` model` )
+        ? > n 1 { ( string_push_str msg `s` ) } {}
+        ( string_push_str msg ` from the flat store into the organisation databases; the old directories are kept under ` )
+        ( string_push_str msg root )
+        ( string_push_str msg `/migrated-<time>` )
+        ( nurl_eprintln ( string_data msg ) )
+        ( string_free msg )
+    } {}
 }
 
 // The bind address a bare `anomaly serve` uses. Named so the flag's
@@ -242,7 +279,7 @@ $ `src/mcp.nu`
     ?? ro {
         T rec → {
             : String root ( __an_store_root x )
-            : Store st ( store_open ( string_data root ) )
+            : Store st ( __an_store_of x ( string_data root ) )
             ( string_free root )
             ? & == ingest F == ( store_exists st ( string_data mname ) ) F {
                 ( nurl_eprint `anomaly: model not found: ` )
@@ -459,7 +496,7 @@ $ `src/mcp.nu`
 
 @ __an_cmd_ls CliCtx x → i {
     : String root ( __an_store_root x )
-    : Store st ( store_open ( string_data root ) )
+    : Store st ( __an_store_of x ( string_data root ) )
     ( string_free root )
     : ( Vec String ) names ( store_list st )
     : i n ( vec_len [String] names )
@@ -479,7 +516,7 @@ $ `src/mcp.nu`
 @ __an_cmd_info CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
-    : Store st ( store_open ( string_data root ) )
+    : Store st ( __an_store_of x ( string_data root ) )
     ( string_free root )
     : ~ i rc 0
     ?? ( store_load_meta st ( string_data mname ) ) {
@@ -505,7 +542,7 @@ $ `src/mcp.nu`
 @ __an_cmd_train_ae CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
-    : Store st ( store_open ( string_data root ) )
+    : Store st ( __an_store_of x ( string_data root ) )
     ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
@@ -542,7 +579,7 @@ $ `src/mcp.nu`
 @ __an_cmd_train_fc CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
-    : Store st ( store_open ( string_data root ) )
+    : Store st ( __an_store_of x ( string_data root ) )
     ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
@@ -592,7 +629,7 @@ $ `src/mcp.nu`
 @ __an_cmd_forecast CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
-    : Store st ( store_open ( string_data root ) )
+    : Store st ( __an_store_of x ( string_data root ) )
     ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
@@ -625,7 +662,7 @@ $ `src/mcp.nu`
 @ __an_cmd_backtest CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
-    : Store st ( store_open ( string_data root ) )
+    : Store st ( __an_store_of x ( string_data root ) )
     ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
@@ -689,7 +726,7 @@ $ `src/mcp.nu`
 @ __an_cmd_calibrate CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
-    : Store st ( store_open ( string_data root ) )
+    : Store st ( __an_store_of x ( string_data root ) )
     ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
@@ -763,7 +800,7 @@ $ `src/mcp.nu`
 @ __an_cmd_finetune CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
-    : Store st ( store_open ( string_data root ) )
+    : Store st ( __an_store_of x ( string_data root ) )
     ( string_free root )
     : ~ i rc 0
     : f rate ( ctx_float x `rate` )
@@ -835,7 +872,7 @@ $ `src/mcp.nu`
 @ __an_cmd_train CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
-    : Store st ( store_open ( string_data root ) )
+    : Store st ( __an_store_of x ( string_data root ) )
     ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
@@ -865,7 +902,7 @@ $ `src/mcp.nu`
 @ __an_cmd_reset CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
-    : Store st ( store_open ( string_data root ) )
+    : Store st ( __an_store_of x ( string_data root ) )
     ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
@@ -886,7 +923,7 @@ $ `src/mcp.nu`
 @ __an_cmd_rm CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
-    : Store st ( store_open ( string_data root ) )
+    : Store st ( __an_store_of x ( string_data root ) )
     ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
@@ -908,6 +945,7 @@ $ `src/mcp.nu`
 @ main → i {
     : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` ANOMALY_VERSION )
     ( cli_flag_str c `store` 115 `DIR` `model store (default: $ANOMALY_HOME, else ~/.anomaly)` `` `ANOMALY_HOME` )
+    ( cli_flag_str c `org` 111 `ID` `organisation whose models to work on (default: public, the one a store with no sign-in collects into)` `` `ANOMALY_ORG` )
     ( cli_flag_str c `file` 102 `FILE` `for batch: read CSV from FILE instead of stdin` `` `` )
     ( cli_flag_str c `margin` 109 `M` `for batch: decision margin (default 0 = predict==-1)` `0` `` )
     ( cli_flag_str c `addr` 97 `HOST:PORT` `for serve: bind address` ANOM_DEFAULT_ADDR `ANOMALY_ADDR` )
