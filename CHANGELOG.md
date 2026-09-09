@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ext/xml`: the parser leaked a placeholder node per element.** A
+  child loop ends on a `</` that `__xml_parse_node` answers with an empty
+  node (two Strings, two Vecs) and `ok = 0`; the element parser read the
+  flag and dropped the node. ~2 KB per WFS response in `anomaly`'s
+  source scheduler, forever. The placeholder is freed where the flag is
+  read.
+
 ### Added
 
 - **`packages/anomaly` 0.29.0, `packages/iforest` 0.1.3 — one absurd

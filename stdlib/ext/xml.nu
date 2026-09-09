@@ -543,6 +543,12 @@ $ `stdlib/core/vec.nu`
                 = cdone T
             } {
                 : __XmlNode nd ( __xml_parse_node src cp n + depth 1 )
+                // A node that is not one (ok ≤ 0) still carries the
+                // placeholder __xml_empty built — two Strings and two
+                // Vecs — and nobody else will free it. Left alone it
+                // leaked once per element: every child loop ends on a
+                // `</` that comes back as an empty node.
+                ? <= . nd ok 0 { ( xml_free . nd node ) } {}
                 ? < . nd ok 0 {
                     = cerr T
                     = cdone T
