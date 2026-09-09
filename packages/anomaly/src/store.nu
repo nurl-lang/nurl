@@ -362,6 +362,24 @@ $ `deps/iforest/src/iforest.nu`
     }
 }
 
+// Set a metadata file that could not be parsed aside as
+// `metadata.json.corrupt-<now>` so the model can be reopened without
+// destroying the evidence. Returns the new file's path (empty when there
+// was nothing to move or the rename failed).
+@ store_quarantine_meta Store st s name i now → String {
+    : String p ( __an_model_file st name `metadata.json` )
+    ? ( file_exists ( string_data p ) ) {} { ( string_free p ) ^ ( string_new ) }
+    : String q ( string_clone p )
+    ( string_push_str q `.corrupt-` )
+    ( string_push_int q now )
+    : !v IoErr r ( fs_rename ( string_data p ) ( string_data q ) )
+    ( string_free p )
+    ?? r {
+        T _ → { ^ q }
+        F _ → { ( string_free q ) ^ ( string_new ) }
+    }
+}
+
 // Persist one trained version's forest blob.
 @ store_save_forest Store st s name VerModel vm → b {
     : String d ( __an_model_dir st name )

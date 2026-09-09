@@ -12,7 +12,8 @@
 //     numeric passthrough, categorical → deterministic one-hot (categories
 //     kept sorted), ISO-8601 timestamp → hour/day/month/weekday.
 //   - `anomaly_project` pins a named feature set onto the model's frozen
-//     feature order: missing features become 0, unknown extras are dropped.
+//     feature order: missing features become NaN (absent; the scaler
+//     standardises them to 0, the mean), unknown extras are dropped.
 //     This is the feature-order stability rule that keeps one-hot columns
 //     aligned across retrains.
 //   - `Scaler` is the StandardScaler analogue: per-feature zero-mean /
@@ -670,6 +671,11 @@ $ `stdlib/ext/json.nu`
         : ?f fx ( __an_num_of jv )
         ?? fx {
             T x → {
+                // JSON has no infinity, but "1e999" parses to one, and an
+                // infinite reading has no place in a mean, a split or a
+                // forecast: refused here, once, for every path that
+                // encodes a point (ingest, import, score, retrain).
+                ? ( _an_finite x ) {} { ^ ( __an_err_param cn `a finite number` ) }
                 ( vec_push [String] names ( string_from cn ) )
                 ( vec_push [f] vals x )
             }
@@ -830,14 +836,20 @@ $ `stdlib/ext/json.nu`
     ^ ( __an_preprocess m raw F )
 }
 
-// Project an encoded point onto an authoritative feature order: missing
-// features become 0, features not in `feats` are dropped. Owned result.
+// Project an encoded point onto an authoritative feature order: features
+// not in `feats` are dropped, and a feature the point does not carry is
+// NaN — "absent", which the scaler turns into 0 (the training mean, the
+// one value that says nothing) and which the forecast reads as a gap. It
+// used to be 0 in RAW units, which after standardisation was however many
+// standard deviations zero lies from the column's mean: a sensor that
+// skipped a tick read as a reading of nothing, the range guard blamed it,
+// and every forest saw a point nobody sent. Owned result.
 @ anomaly_project EncPoint p ( Vec String ) feats → ( Vec f ) {
     : i nf ( vec_len [String] feats )
     : ( Vec f ) out ( vec_with_cap [f] nf )
     : ~ i k 0
     ~ < k nf {
-        : ~ f x 0.0
+        : ~ f x ( float_nan )
         ?? ( vec_get [String] feats k ) {
             T fname → {
                 : i at ( enc_find p ( string_data fname ) )
@@ -855,48 +867,106 @@ $ `stdlib/ext/json.nu`
 
 // ── Standardisation ───────────────────────────────────────────────────
 
+// A finite float: neither NaN nor an infinity.
+@ _an_finite f x → b {
+    ? ( float_is_nan x ) { ^ F } {}
+    ^ ! ( float_is_inf x )
+}
+
+// The largest finite double, for the one std that would overflow it.
+: f ANOM_FLOAT_MAX 1.7976931348623157e308
+
+// The standardised value furthest from the mean a point can carry: a
+// million standard deviations. Past that a reading is not more anomalous,
+// only more likely to be a broken sensor, and the cap keeps every z-score
+// — and every JSON score computed from one — a finite number: a reading
+// of 1e308 against a std of 1e-3 would otherwise standardise to infinity
+// and serialise as null.
+: f ANOM_Z_CAP 1000000.0
+
 // Fit per-feature mean and 1/std over a row-major matrix (population
 // variance, like sklearn's StandardScaler). Zero-variance features get
-// inv_std = 1 so they centre but never divide by ~0.
+// inv_std = 1 so they centre but never divide by ~0. A NaN cell is an
+// absent reading (anomaly_project) and is left out of its column's
+// statistics; a column with no readings at all gets mean 0, inv_std 1.
+//
+// The arithmetic cannot overflow on finite input. The mean is a sum of
+// v/m, not a sum divided by m; the deviations are taken as halves
+// (v/2 − mu/2 is always finite) and squared only after being scaled by
+// the largest of them, so a single reading of 1e200 gives a std of about
+// 1e199 and not the infinity that once turned the persisted scaler into
+// JSON nulls the model could no longer be opened from.
 @ scaler_fit ( Vec f ) data i n_rows i n_cols → Scaler {
     : ( Vec f ) mean ( vec_with_cap [f] n_cols )
     : ( Vec f ) inv ( vec_with_cap [f] n_cols )
-    ? <= n_rows 0 {
-        : ~ i c0 0
-        ~ < c0 n_cols {
-            ( vec_push [f] mean 0.0 )
-            ( vec_push [f] inv 1.0 )
-            = c0 + c0 1
-        }
-        ^ @ Scaler { mean inv }
-    } {}
     : *f dp ( vec_data [f] data )
     : ~ i c 0
     ~ < c n_cols {
-        : ~ f total 0.0
+        // Pass 1: the readings present, and their mean.
+        : ~ i m 0
         : ~ i r 0
         ~ < r n_rows {
-            = total + total . dp + * r n_cols c
+            ? ( float_is_nan . dp + * r n_cols c ) {} { = m + m 1 }
             = r + r 1
         }
-        : f mu / total # f n_rows
-        : ~ f ss 0.0
+        : ~ f mu 0.0
+        ? > m 0 {
+            : f fm # f m
+            = r 0
+            ~ < r n_rows {
+                : f v . dp + * r n_cols c
+                ? ( float_is_nan v ) {} { = mu + mu / v fm }
+                = r + r 1
+            }
+        } {}
+        // Pass 2: the largest half-deviation, the scale of pass 3.
+        : f muh / mu 2.0
+        : ~ f scale 0.0
         = r 0
         ~ < r n_rows {
-            : f d - . dp + * r n_cols c mu
-            = ss + ss * d d
+            : f v . dp + * r n_cols c
+            ? ( float_is_nan v ) {} {
+                : f dh ( float_abs - / v 2.0 muh )
+                ? > dh scale { = scale dh } {}
+            }
             = r + r 1
         }
-        : f variance / ss # f n_rows
+        // Pass 3: the sum of squared deviations in units of that scale.
+        : ~ f ss 0.0
+        ? > scale 0.0 {
+            = r 0
+            ~ < r n_rows {
+                : f v . dp + * r n_cols c
+                ? ( float_is_nan v ) {} {
+                    : f u / - / v 2.0 muh scale
+                    = ss + ss * u u
+                }
+                = r + r 1
+            }
+        } {}
         ( vec_push [f] mean mu )
-        ? > variance 0.0 {
-            ( vec_push [f] inv / 1.0 ( float_sqrt variance ) )
+        ? & > scale 0.0 > ss 0.0 {
+            : ~ f sd * * 2.0 scale ( float_sqrt / ss # f m )
+            ? ( _an_finite sd ) {} { = sd ANOM_FLOAT_MAX }
+            ( vec_push [f] inv / 1.0 sd )
         } {
             ( vec_push [f] inv 1.0 )
         }
         = c + c 1
     }
     ^ @ Scaler { mean inv }
+}
+
+// One cell standardised: (x − mean)·inv_std, an absent reading (NaN) as
+// 0 — the mean, the value that says nothing — and the result capped at
+// ±ANOM_Z_CAP so it is finite whatever the reading was.
+@ __an_standardise f x f mu f inv → f {
+    ? ( float_is_nan x ) { ^ 0.0 } {}
+    : f z * - x mu inv
+    ? > z ANOM_Z_CAP { ^ ANOM_Z_CAP } {}
+    ? < z - 0.0 ANOM_Z_CAP { ^ - 0.0 ANOM_Z_CAP } {}
+    ? ( float_is_nan z ) { ^ 0.0 } {}
+    ^ z
 }
 
 // Standardise one point in place: x → (x - mean) * inv_std.
@@ -908,7 +978,7 @@ $ `stdlib/ext/json.nu`
     : *f ip ( vec_data [f] . sc inv_std )
     : ~ i k 0
     ~ & < k n < k nm {
-        = . pp k * - . pp k . mp k . ip k
+        = . pp k ( __an_standardise . pp k . mp k . ip k )
         = k + k 1
     }
 }
@@ -924,7 +994,7 @@ $ `stdlib/ext/json.nu`
         : ~ i c 0
         ~ & < c n_cols < c nm {
             : i off + * r n_cols c
-            = . dp off * - . dp off . mp c . ip c
+            = . dp off ( __an_standardise . dp off . mp c . ip c )
             = c + c 1
         }
         = r + r 1
@@ -948,8 +1018,15 @@ $ `stdlib/ext/json.nu`
     : *f ip ( vec_data [f] . sc inv_std )
     : ~ i k 0
     ~ < k n {
-        ( vec_push [f] ms . mp k )
-        ( vec_push [f] ss / 1.0 . ip k )
+        // The file must parse back: a std that is not a positive finite
+        // number is written as 1 (and the mean as 0), never as the JSON
+        // null a NaN or an infinity would become.
+        : ~ f mu . mp k
+        ? ( _an_finite mu ) {} { = mu 0.0 }
+        : ~ f sd / 1.0 . ip k
+        ? & ( _an_finite sd ) > sd 0.0 {} { = sd 1.0 }
+        ( vec_push [f] ms mu )
+        ( vec_push [f] ss sd )
         = k + k 1
     }
     = . m sc_mean ms
@@ -967,7 +1044,7 @@ $ `stdlib/ext/json.nu`
     ~ < k n {
         ( vec_push [f] mean . mp k )
         : ~ f sd . sp k
-        ? <= sd 0.0 { = sd 1.0 } {}
+        ? & ( _an_finite sd ) > sd 0.0 {} { = sd 1.0 }
         ( vec_push [f] inv / 1.0 sd )
         = k + k 1
     }
@@ -1571,6 +1648,99 @@ $ `stdlib/ext/json.nu`
     }
     ?? ( json_obj_get vo `enabled` ) { T ej → { = . o enabled ( json_as_bool ej ) } F _ → {} }
     ^ ( _an_vercfg_sane o )
+}
+
+// The keys a JSON object carries that are not in `allowed` (a
+// space-separated list), as "<prefix>.<key>" joined with ", "; empty when
+// every key is known. A patch is a statement of intent, and a key the
+// service does not read — a typo, a field from a later version, a
+// setting that lives somewhere else — used to vanish without a word
+// while the rest of the patch went through.
+@ _an_unknown_keys Json o s allowed s prefix → String {
+    : String out ( string_new )
+    ? ( json_is_obj o ) {} { ^ out }
+    : ( Vec String ) keys ( json_obj_keys o )
+    : String allowed_s ( string_from allowed )
+    : ( Vec String ) ok ( string_split allowed_s ` ` )
+    ( string_free allowed_s )
+    : i nk ( vec_len [String] keys )
+    : i na ( vec_len [String] ok )
+    : ~ i k 0
+    ~ < k nk {
+        ?? ( vec_get [String] keys k ) {
+            T key → {
+                : ~ b known F
+                : ~ i a 0
+                ~ < a na {
+                    ?? ( vec_get [String] ok a ) {
+                        T al → { ? == ( nurl_str_eq ( string_data al ) ( string_data key ) ) 1 { = known T } {} }
+                        F _ → {}
+                    }
+                    = a + a 1
+                }
+                ? known {} {
+                    ? > ( string_len out ) 0 { ( string_push_str out `, ` ) } {}
+                    ( string_push_str out prefix )
+                    ( string_push_char out 46 )
+                    ( string_push_str out ( string_data key ) )
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
+    ( vec_free_with [String] ok \ String x → v { ( string_free x ) } )
+    ^ out
+}
+
+// The fields a version config accepts in a patch, one string for the
+// checker and the tool descriptions alike.
+: s ANOM_VERCFG_FIELDS `enabled decision_margin window_minutes window_points window_size step_size n_estimators max_samples contamination`
+
+// Check a `versions` patch before applying it: every value an object,
+// every field a VerCfg field. Returns the reason to refuse, or "".
+@ meta_versions_patch_check Json vers → String {
+    ? ( json_is_obj vers ) {} { ^ ( string_from `versions must be a JSON object of version configs` ) }
+    : ( Vec String ) keys ( json_obj_keys vers )
+    : i nk ( vec_len [String] keys )
+    : ~ String why ( string_new )
+    : ~ i k 0
+    ~ & < k nk == ( string_len why ) 0 {
+        ?? ( vec_get [String] keys k ) {
+            T vn → {
+                ?? ( json_obj_get vers ( string_data vn ) ) {
+                    T vo → {
+                        ? ( json_is_obj vo ) {
+                            : String pre ( string_from `versions.` )
+                            ( string_push_str pre ( string_data vn ) )
+                            : String bad ( _an_unknown_keys vo ANOM_VERCFG_FIELDS ( string_data pre ) )
+                            ( string_free pre )
+                            ? > ( string_len bad ) 0 {
+                                ( string_free why )
+                                = why ( string_from `unknown field ` )
+                                ( string_push_str why ( string_data bad ) )
+                                ( string_push_str why ` (a version config has: ` )
+                                ( string_push_str why ANOM_VERCFG_FIELDS )
+                                ( string_push_char why 41 )
+                            } {}
+                            ( string_free bad )
+                        } {
+                            ( string_free why )
+                            = why ( string_from `versions.` )
+                            ( string_push_str why ( string_data vn ) )
+                            ( string_push_str why ` must be a JSON object` )
+                        }
+                    }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
+    ^ why
 }
 
 // Apply a `versions` JSON object (the shape meta_to_json emits) to the

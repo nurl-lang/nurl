@@ -35,6 +35,10 @@ The score `s(x)` maps a point's mean path length over the forest to `(0, 1]`:
 There is no universal cutoff; rank the rows (`--top`) or threshold on the
 score distribution for your data.
 
+A point whose length is not the forest's column count (or a row index the
+matrix does not hold) scores exactly `0.5` — "no information" — rather
+than being read past its end.
+
 ## CLI options
 
 | Option | Meaning |

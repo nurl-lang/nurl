@@ -640,41 +640,51 @@ $ `src/imptime.nu`
 
 // Change a source. A changed query, url or parameters make the fetched
 // span meaningless — the next run starts over from `history_hours` back.
+// Append the string field `key` of `o` to `acc` (nothing when absent).
+@ __src_push_jstr String acc Json o s key → v {
+    : String v ( __src_jstr o key )
+    ( string_push_str acc ( string_data v ) )
+    ( string_free v )
+}
+
+// What a source's span depends on, as one String: the URL, the query,
+// the parameters, the mode and time field, the request shape, the model.
+// Two sources with the same fingerprint have seen the same data; a
+// different one means `first_time`/`last_time` describe something else.
+@ __src_fingerprint Json src → String {
+    : String p ?? ( json_obj_get src `params` ) { T pj → ( json_stringify pj ) F _ → ( string_new ) }
+    ( string_push_char p 31 )
+    ( __src_push_jstr p src `url` )
+    ( string_push_char p 31 )
+    ( __src_push_jstr p src `query` )
+    ( string_push_char p 31 )
+    ( __src_push_jstr p src `mode` )
+    ( __src_push_jstr p src `time_field` )
+    ( __src_push_jstr p src `method` )
+    ( __src_push_jstr p src `body` )
+    ( __src_push_jstr p src `path` )
+    ( __src_push_jstr p src `model` )
+    ?? ( json_obj_get src `headers` ) { T h → { : String ht ( json_stringify h ) ( string_push_str p ( string_data ht ) ) ( string_free ht ) } F _ → {} }
+    ^ p
+}
+
 @ source_update s org s id Json body i now → !Json String {
     ?? ( source_load org id ) {
         T src → {
-            : String u0 ( __src_jstr src `url` )
-            : String q0 ( __src_jstr src `query` )
-            : String p0 ?? ( json_obj_get src `params` ) { T p → ( json_stringify p ) F _ → ( string_new ) }
-            ( string_push_str p0 ( string_data ( __src_jstr src `mode` ) ) )
-            ( string_push_str p0 ( string_data ( __src_jstr src `time_field` ) ) )
-            ( string_push_str p0 ( string_data ( __src_jstr src `method` ) ) )
-            ( string_push_str p0 ( string_data ( __src_jstr src `body` ) ) )
-            ( string_push_str p0 ( string_data ( __src_jstr src `path` ) ) )
-            ( string_push_str p0 ( string_data ( __src_jstr src `model` ) ) )
-            ?? ( json_obj_get src `headers` ) { T h → { : String ht ( json_stringify h ) ( string_push_str p0 ( string_data ht ) ) ( string_free ht ) } F _ → {} }
+            : String f0 ( __src_fingerprint src )
             : String err ( source_apply src body )
             ? > ( string_len err ) 0 {
-                ( string_free u0 ) ( string_free q0 ) ( string_free p0 )
+                ( string_free f0 )
                 ( json_free src )
                 ^ @ !Json String { F err }
             } {}
             ( string_free err )
-            : String u1 ( __src_jstr src `url` )
-            : String q1 ( __src_jstr src `query` )
-            : String p1 ?? ( json_obj_get src `params` ) { T p → ( json_stringify p ) F _ → ( string_new ) }
-            ( string_push_str p1 ( string_data ( __src_jstr src `mode` ) ) )
-            ( string_push_str p1 ( string_data ( __src_jstr src `time_field` ) ) )
-            ( string_push_str p1 ( string_data ( __src_jstr src `method` ) ) )
-            ( string_push_str p1 ( string_data ( __src_jstr src `body` ) ) )
-            ( string_push_str p1 ( string_data ( __src_jstr src `path` ) ) )
-            ( string_push_str p1 ( string_data ( __src_jstr src `model` ) ) )
-            ?? ( json_obj_get src `headers` ) { T h → { : String ht ( json_stringify h ) ( string_push_str p1 ( string_data ht ) ) ( string_free ht ) } F _ → {} }
+            : String f1 ( __src_fingerprint src )
             // A changed model, too: the span says what the OLD model has
             // seen, and the new one has seen none of it.
-            : b same & & ( string_eq u0 u1 ) ( string_eq q0 q1 ) ( string_eq p0 p1 )
-            ( string_free u0 ) ( string_free q0 ) ( string_free p0 )
-            ( string_free u1 ) ( string_free q1 ) ( string_free p1 )
+            : b same ( string_eq f0 f1 )
+            ( string_free f0 )
+            ( string_free f1 )
             ? same {} {
                 ( __src_set_int src `first_time` 0 )
                 ( __src_set_int src `last_time` 0 )

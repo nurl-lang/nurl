@@ -99,10 +99,76 @@ $ `deps/mlp/src/mlp.nu`
     String err
 }
 
-@ ae_train_matrix ( Vec f ) raw i n i d ( Vec String ) feats ( Vec i ) hidden f contamination i min_rows → AeTrainOut {
+// The normalised value furthest from the training range a point can
+// carry into the net: a reading a million ranges out is not more
+// anomalous than one a thousand out, and the cap keeps the error — and
+// the decision the service serialises — a finite number.
+: f AE_NORM_CAP 1000000.0
+
+// A projected point carries NaN where the point had no reading
+// (anomaly_project). The net cannot take one, so an absent reading is
+// filled with the midpoint of the column's training range — the value
+// that leans nowhere — and the normalised coordinates are capped.
+@ __ae_prepare_point MinMax amm ( Vec f ) x → v {
+    : i d . amm n_cols
+    : i n ( vec_len [f] x )
+    : *f xp ( vec_data [f] x )
+    : *f lop ( vec_data [f] . amm lo )
+    : *f hip ( vec_data [f] . amm hi )
+    : ~ i k 0
+    ~ & < k n < k d {
+        ? ( float_is_nan . xp k ) { = . xp k / + . lop k . hip k 2.0 } {}
+        = k + k 1
+    }
+    ( minmax_apply amm x 1 )
+    : *f xq ( vec_data [f] x )
+    = k 0
+    ~ < k n {
+        : ~ f v . xq k
+        ? > v AE_NORM_CAP { = v AE_NORM_CAP } {}
+        ? < v - 0.0 AE_NORM_CAP { = v - 0.0 AE_NORM_CAP } {}
+        ? ( float_is_nan v ) { = v 0.0 } {}
+        = . xq k v
+        = k + k 1
+    }
+}
+
+// The training matrix with every absent reading filled with the
+// midpoint of its column's range over the readings present (a column
+// nobody ever sent is all 0). Owned copy.
+@ __ae_fill_matrix ( Vec f ) raw i n i d → ( Vec f ) {
+    : ( Vec f ) out ( vec_clone [f] raw )
+    : *f op ( vec_data [f] out )
+    : ~ i c 0
+    ~ < c d {
+        : ~ f lo 0.0
+        : ~ f hi 0.0
+        : ~ b any F
+        : ~ i r 0
+        ~ < r n {
+            : f v . op + * r d c
+            ? ( float_is_nan v ) {} {
+                ? any { ? < v lo { = lo v } {} ? > v hi { = hi v } {} } { = lo v = hi v = any T }
+            }
+            = r + r 1
+        }
+        : f fill / + lo hi 2.0
+        = r 0
+        ~ < r n {
+            : i o + * r d c
+            ? ( float_is_nan . op o ) { = . op o fill } {}
+            = r + r 1
+        }
+        = c + c 1
+    }
+    ^ out
+}
+
+@ ae_train_matrix ( Vec f ) raw0 i n i d ( Vec String ) feats ( Vec i ) hidden f contamination i min_rows → AeTrainOut {
     ? < n min_rows {
         ^ @ AeTrainOut { ( ae_empty ) ( string_from `not enough data points to train the autoencoder` ) }
     } {}
+    : ( Vec f ) raw ( __ae_fill_matrix raw0 n d )
 
     // 1. the anomaly pre-filter: a temporary forest at a FIXED
     // contamination (the reference found 'auto' unreliable here).
@@ -126,6 +192,7 @@ $ `deps/mlp/src/mlp.nu`
     : i nk ( vec_len [i] keep )
     ? < nk min_rows {
         ( vec_free [i] keep )
+        ( vec_free [f] raw )
         ^ @ AeTrainOut { ( ae_empty ) ( string_from `too few normal points remain after anomaly filtering` ) }
     } {}
 
@@ -143,6 +210,7 @@ $ `deps/mlp/src/mlp.nu`
         = k + k 1
     }
     ( vec_free [i] keep )
+    ( vec_free [f] raw )
     : MinMax mm ( minmax_fit Xn nk d )
     ( minmax_apply mm Xn nk )
 
@@ -214,7 +282,7 @@ $ `deps/mlp/src/mlp.nu`
     : MinMax amm . ae mm
     : i d . amm n_cols
     : ( Vec f ) x ( vec_clone [f] raw_point )
-    ( minmax_apply amm x 1 )
+    ( __ae_prepare_point amm x )
     : Mlp anet . ae net
     : ( Vec f ) y ( mlp_predict anet x )
     : ~ f se 0.0
@@ -285,7 +353,7 @@ $ `deps/mlp/src/mlp.nu`
     : MinMax amm . ae mm
     : i d . amm n_cols
     : ( Vec f ) x ( vec_clone [f] raw_point )
-    ( minmax_apply amm x 1 )
+    ( __ae_prepare_point amm x )
     : Mlp anet . ae net
     : ( Vec f ) y ( mlp_predict anet x )
     : ( Vec f ) out ( vec_with_cap [f] d )
@@ -308,7 +376,7 @@ $ `deps/mlp/src/mlp.nu`
     : MinMax amm . ae mm
     : i d . amm n_cols
     : ( Vec f ) x ( vec_clone [f] raw_point )
-    ( minmax_apply amm x 1 )
+    ( __ae_prepare_point amm x )
     : Mlp anet . ae net
     : ( Vec f ) y ( mlp_predict anet x )
     : ( Vec f ) out ( vec_with_cap [f] d )

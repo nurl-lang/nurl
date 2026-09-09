@@ -241,7 +241,7 @@ $ `src/prep.nu`
                 T p → {
                     : ( Vec f ) x ( anomaly_project p . m feats )
                     ( check == ( vec_len [f] x ) 2 `proj: projected length = frozen length` )
-                    ?? ( vec_get [f] x 0 ) { T v0 → { ( check ( feq v0 0.0 ) `proj: missing numeric = 0` ) } F _ → {} }
+                    ?? ( vec_get [f] x 0 ) { T v0 → { ( check ( float_is_nan v0 ) `proj: missing numeric = NaN (absent)` ) } F _ → {} }
                     ?? ( vec_get [f] x 1 ) { T v1 → { ( check ( feq v1 0.0 ) `proj: unseen category = all-zero one-hot` ) } F _ → {} }
                     ( vec_free [f] x )
                     ( enc_free p )
@@ -398,6 +398,70 @@ $ `src/prep.nu`
     ( meta_free m )
 }
 
+// ── 5b. Scaler: absent readings, extreme readings, the cap ────────────
+
+@ test_scaler_robust → v {
+    // col0 has an absent reading (NaN): the mean and std come from the
+    // readings present, and the absent one standardises to 0.
+    : ( Vec f ) data ( vec_new [f] )
+    ( vec_push [f] data 1.0 ) ( vec_push [f] data 1.0e200 )
+    ( vec_push [f] data ( float_nan ) ) ( vec_push [f] data 0.0 )
+    ( vec_push [f] data 3.0 ) ( vec_push [f] data 0.0 )
+    ( vec_push [f] data 2.0 ) ( vec_push [f] data 0.0 )
+    : Scaler sc ( scaler_fit data 4 2 )
+    ?? ( vec_get [f] . sc mean 0 ) { T mu → { ( check ( feq mu 2.0 ) `scaler: an absent reading is left out of the mean` ) } F _ → {} }
+    // col1 holds a reading of 1.0e200: the old sum of squares overflowed to
+    // infinity, the std was infinite and the persisted scaler became JSON
+    // nulls. Now std ≈ 4.33e199 and every number stays finite.
+    ?? ( vec_get [f] . sc mean 1 ) { T mu1 → { ( check ( _an_finite mu1 ) `scaler: the mean of a 1.0e200 column is finite` ) } F _ → {} }
+    ?? ( vec_get [f] . sc inv_std 1 ) {
+        T iv1 → {
+            ( check & ( _an_finite iv1 ) > iv1 0.0 `scaler: inv_std of a 1.0e200 column is finite and positive` )
+            : f sd / 1.0 iv1
+            ( check & > sd 4.0e199 < sd 5.0e199 `scaler: std of {1.0e200,0,0,0} is about 4.33e199` )
+        }
+        F _ → {}
+    }
+    : ( Vec f ) pt ( vec_new [f] )
+    ( vec_push [f] pt ( float_nan ) ) ( vec_push [f] pt 1.0e200 )
+    ( scaler_apply sc pt )
+    ?? ( vec_get [f] pt 0 ) { T y0 → { ( check ( feq y0 0.0 ) `scaler: an absent reading standardises to 0` ) } F _ → {} }
+    ?? ( vec_get [f] pt 1 ) { T y1 → { ( check & ( _an_finite y1 ) > y1 1.0 `scaler: the extreme reading standardises to a finite z` ) } F _ → {} }
+    ( vec_free [f] pt )
+
+    // The cap: a reading a googol standard deviations out is ±1e6.
+    : ( Vec f ) tiny ( vec_new [f] )
+    ( vec_push [f] tiny 0.000 ) ( vec_push [f] tiny 0.001 ) ( vec_push [f] tiny 0.002 )
+    : Scaler sc2 ( scaler_fit tiny 3 1 )
+    : ( Vec f ) far ( vec_new [f] )
+    ( vec_push [f] far 1.0e308 )
+    ( scaler_apply sc2 far )
+    ?? ( vec_get [f] far 0 ) { T z → { ( check ( feq z ANOM_Z_CAP ) `scaler: 1.0e308 against a std of 1e-3 is capped at 1e6` ) } F _ → {} }
+    ( vec_free [f] far )
+    : ( Vec f ) far2 ( vec_new [f] )
+    ( vec_push [f] far2 -1.0e308 )
+    ( scaler_apply sc2 far2 )
+    ?? ( vec_get [f] far2 0 ) { T z → { ( check ( feq z - 0.0 ANOM_Z_CAP ) `scaler: the cap is symmetric` ) } F _ → {} }
+    ( vec_free [f] far2 )
+
+    // The persisted form never carries a non-finite std.
+    : *Meta m ( meta_new `robust` `2026-01-01T00:00:00Z` )
+    : ( Vec f ) badinv ( vec_new [f] )
+    ( vec_push [f] badinv 0.0 )
+    : ( Vec f ) badmean ( vec_new [f] )
+    ( vec_push [f] badmean ( float_inf ) )
+    : Scaler bad @ Scaler { badmean badinv }
+    ( meta_set_scaler m bad )
+    ( scaler_free bad )
+    ?? ( vec_get [f] . m sc_std 0 ) { T s0 → { ( check ( feq s0 1.0 ) `scaler: a std that is not finite persists as 1` ) } F _ → {} }
+    ?? ( vec_get [f] . m sc_mean 0 ) { T m0 → { ( check ( feq m0 0.0 ) `scaler: a mean that is not finite persists as 0` ) } F _ → {} }
+    ( meta_free m )
+    ( scaler_free sc )
+    ( scaler_free sc2 )
+    ( vec_free [f] data )
+    ( vec_free [f] tiny )
+}
+
 @ main → i {
     ( test_golden )
     ( test_calendar_clock )
@@ -405,6 +469,7 @@ $ `src/prep.nu`
     ( test_projection )
     ( test_numeric_error )
     ( test_scaler )
+    ( test_scaler_robust )
     ( test_meta_roundtrip )
     : String summary ( string_from `prep_test: ` )
     ( string_push_int summary g_pass )

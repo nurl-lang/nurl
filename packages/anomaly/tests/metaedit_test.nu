@@ -290,6 +290,7 @@ $ `src/dynamic.nu`
     = g_lcg 5
     : *Model mo ( model_open_at st `errs` T0 )
     ( seed mo )
+    : *Meta mm0 ( model_metadata mo )
 
     : String e1 ( patch_text mo `{}` )
     ( check > ( string_len e1 ) 0 `error: an empty patch is refused` )
@@ -306,6 +307,25 @@ $ `src/dynamic.nu`
     : String e5 ( patch_text mo `[1,2,3]` )
     ( check > ( string_len e5 ) 0 `error: the patch itself must be an object` )
     ( string_free e5 )
+
+    // A key the patch does not read is refused with its name, at every
+    // level — it used to vanish while the rest of the patch went through.
+    : String e6 ( patch_text mo `{"schedule":{"forecast":500},"versions":{"daily":{"window_size":48}}}` )
+    ( check ( string_contains e6 `schedule.forecast` ) `error: an unknown schedule key is named` )
+    ( string_free e6 )
+    : ~ i daily_ws -1
+    : i dat ( meta_find_version mm0 `daily` )
+    ? >= dat 0 { ?? ( vec_get [VerCfg] . mm0 versions dat ) { T dvc → { = daily_ws . dvc window_size } F _ → {} } } {}
+    ( check == daily_ws 0 `error: the rest of a refused patch is not applied` )
+    : String e7 ( patch_text mo `{"versions":{"daily":{"window":48}}}` )
+    ( check ( string_contains e7 `versions.daily.window` ) `error: an unknown version field is named` )
+    ( string_free e7 )
+    : String e8 ( patch_text mo `{"alias":"x","bogus":1}` )
+    ( check ( string_contains e8 `patch.bogus` ) `error: an unknown top-level key is named` )
+    ( string_free e8 )
+    : String e9 ( patch_text mo `{"versions":{"daily":3}}` )
+    ( check ( string_contains e9 `versions.daily must be a JSON object` ) `error: a version value that is not an object is named` )
+    ( string_free e9 )
 
     // A refused patch changes nothing.
     : *Meta mm ( model_metadata mo )
