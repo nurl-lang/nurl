@@ -229,9 +229,29 @@ $ `src/imptime.nu`
         }
     }
     ? said {} { ( string_push_str m ( __mcp_status_text . o status ) ) }
+    // Where to go next. A successful answer here names its follow-up
+    // tool; a failure named none, and the tool that could resolve it —
+    // "which models are there", "who am I acting for" — is exactly what
+    // a caller staring at a 404 or a 403 needs to be told.
+    : s hint ( __mcp_status_next . o status )
+    ? > ( nurl_str_len hint ) 0 {
+        ( string_push_str m ` — ` )
+        ( string_push_str m hint )
+    } {}
     : Json out ( mcp_tool_result_error ( string_data m ) )
     ( string_free m )
     ^ out
+}
+
+@ __mcp_status_next i status → s {
+    ? == status 400 { ^ `check the arguments against the tool's schema; the message names the field` } {}
+    ? == status 401 { ^ `whoami says who this session is acting for, and whether it is signed in` } {}
+    ? == status 403 { ^ `whoami shows the role this session has; a model named llm_<something> is yours to create and change whatever that role is` } {}
+    ? == status 404 { ^ `list_models shows the model names, sources the data sources, list_tasks the jobs, list_files the folder` } {}
+    ? == status 409 { ^ `the name is taken — list_models shows what exists; delete_model frees a scratch name` } {}
+    ? == status 413 { ^ `send less: analyze_data and import_data take a file in pieces, and a big file comes back as a task to poll with task` } {}
+    ? >= status 500 { ^ `the service failed, not the request; try again, and list_tasks if a background job was involved` } {}
+    ^ ``
 }
 
 @ __mcp_status_text i status → s {
@@ -473,6 +493,47 @@ $ `src/imptime.nu`
     ^ out
 }
 
+// The keys that carry a wall-clock instant, wherever they appear in a
+// record. `list_models` promises "Times are ISO-8601 UTC", and the tools
+// that hand a record back whole — sources, tasks, the audit trail, the
+// forecast's trained_at — were handing back Unix seconds, so a reader had
+// two spellings of a moment in one session and no rule for which was
+// which. Row stamps are NOT in this list: on a count clock they are
+// ordinals, and the tools that carry them already say so.
+@ __mcp_is_time_key s k → b {
+    ? == ( nurl_str_eq k `at` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq k `created` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq k `created_at` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq k `updated_at` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq k `started` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq k `finished` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq k `last_run` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq k `first_time` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq k `last_time` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq k `trained_at` ) 1 { ^ T } {}
+    ? == ( nurl_str_eq k `last_trained_time` ) 1 { ^ T } {}
+    ^ == ( nurl_str_eq k `expires_at` ) 1
+}
+
+// Every wall-clock key in a record, ISO-8601 UTC. A 0 stays 0: "never
+// happened" is not a moment, and 1970 in its place is a lie.
+@ __mcp_iso_times Json o → Json {
+    ? ( json_is_arr o ) {
+        : Json arr ( json_arr_new )
+        ( json_arr_each o \ Json e → v { ( json_arr_push arr ( __mcp_iso_times e ) ) } )
+        ^ arr
+    } {}
+    ? ( json_is_obj o ) {} { ^ ( json_clone o ) }
+    : Json out ( json_obj_new )
+    ( json_obj_each o \ s k Json v → v {
+        ? & ( __mcp_is_time_key k ) ( json_is_num v ) {
+            : i t ( json_as_int v )
+            ( json_obj_set out k ? > t 0 ( __mcp_when t F ) ( json_clone v ) )
+        } { ( json_obj_set out k ( __mcp_iso_times v ) ) }
+    } )
+    ^ out
+}
+
 // Copy `key` from `src` as a readable stamp under `dst_key`.
 @ __mcp_when_of Json src s key Json dst s dst_key b count_clock → v {
     ?? ( json_obj_get src key ) {
@@ -552,6 +613,44 @@ $ `src/imptime.nu`
         T v → { ( json_obj_set dst key ( __mcp_round v digits ) ) }
         F _ → {}
     }
+}
+
+// An array of numbers under `key`, rounded; an empty array when the key
+// is absent or is not an array.
+@ __mcp_round_arr Json src s key i digits → Json {
+    : Json out ( json_arr_new )
+    ?? ( json_obj_get src key ) {
+        T v → {
+            ? ( json_is_arr v ) {
+                ( json_arr_each v \ Json e → v { ( json_arr_push out ( __mcp_round e digits ) ) } )
+            } {}
+        }
+        F _ → {}
+    }
+    ^ out
+}
+
+// Is `name` one of the comma-separated entries of `csv`?
+@ __mcp_csv_has s csv s name → b {
+    : String hay ( string_from csv )
+    : ( Vec String ) parts ( string_split hay `,` )
+    ( string_free hay )
+    : ~ b hit F
+    : i n ( vec_len [String] parts )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] parts k ) {
+            T pp → {
+                : String t ( string_trim pp )
+                ? == ( nurl_str_eq ( string_data t ) name ) 1 { = hit T } {}
+                ( string_free t )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] parts \ String x → v { ( string_free x ) } )
+    ^ hit
 }
 
 // A `{field: number}` object with every number rounded.
@@ -671,7 +770,12 @@ $ `src/imptime.nu`
 
 // One model, as a line in a listing: what it watches, how much it has
 // seen, when it was last trained, what its versions flag at.
-@ __mcp_model_brief s name Json mj → Json {
+// One model in a listing. `detail` decides how much: an organisation with
+// a dozen thirty-column models spent four thousand tokens on the full
+// form before a reader had asked about any single one of them, and the
+// listing exists to answer "what is here" — the columns and every
+// version's margin belong to describe_model, which is one call away.
+@ __mcp_model_brief s name Json mj b detail → Json {
     : Json m ( json_obj_new )
     ( json_obj_set m `name` ( json_str_lit name ) )
     : s alias ( __mcp_ctx_str mj `alias` )
@@ -682,24 +786,38 @@ $ `src/imptime.nu`
         T ct → {
             : Json cols ( json_arr_new )
             ( json_obj_each ct \ s k Json v → v { ( json_arr_push cols ( json_str_lit k ) ) } )
-            ( json_obj_set m `columns` cols )
+            ? detail { ( json_obj_set m `columns` cols ) } {
+                ( json_obj_set m `columns` ( json_int ( json_arr_len cols ) ) )
+                ( json_free cols )
+            }
         }
         F _ → {}
     }
     ( __mcp_copy mj `n_points_seen` m )
     ( __mcp_copy mj `n_points_stored` m )
-    ( __mcp_copy mj `max_data_points` m )
+    ? detail { ( __mcp_copy mj `max_data_points` m ) } {}
     ( __mcp_training_of mj m )
     ?? ( json_obj_get mj `versions` ) {
         T vs → {
-            : Json out ( json_obj_new )
-            ( json_obj_each vs \ s vn Json vo → v {
-                : Json v ( json_obj_new )
-                ( __mcp_copy vo `decision_margin` v )
-                ( __mcp_copy vo `enabled` v )
-                ( json_obj_set out vn v )
-            } )
-            ( json_obj_set m `versions` out )
+            ? detail {
+                : Json out ( json_obj_new )
+                ( json_obj_each vs \ s vn Json vo → v {
+                    : Json v ( json_obj_new )
+                    ( __mcp_copy vo `decision_margin` v )
+                    ( __mcp_copy vo `enabled` v )
+                    ( json_obj_set out vn v )
+                } )
+                ( json_obj_set m `versions` out )
+            } {
+                : Json on ( json_arr_new )
+                ( json_obj_each vs \ s vn Json vo → v {
+                    ?? ( json_obj_get vo `enabled` ) {
+                        T e → { ? ( json_as_bool e ) { ( json_arr_push on ( json_str_lit vn ) ) } {} }
+                        F _ → {}
+                    }
+                } )
+                ( json_obj_set m `versions_on` on )
+            }
         }
         F _ → {}
     }
@@ -752,15 +870,29 @@ $ `src/imptime.nu`
     : ApiOut o ( __mcp_api ctx `GET` `/models/dynamic` q @ ?Json { F @ Json { JNull } } )
     ( string_free q )
     ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    : b detail ( __mcp_arg_bool a `detail` F )
     : Json out ( json_obj_new )
     ( json_obj_set out `organization` ( json_str_lit ( __mcp_ctx_str ctx `organization` ) ) )
     : Json arr ( json_arr_new )
     : ~ i n 0
     ?? ( json_obj_get . o body `models` ) {
         T ms → {
-            ( json_obj_each ms \ s name Json mj → v {
-                ( json_arr_push arr ( __mcp_model_brief name mj ) )
-            } )
+            : ( Vec String ) names ( json_obj_keys ms )
+            : i nn ( vec_len [String] names )
+            : ~ i k 0
+            ~ < k nn {
+                ?? ( vec_get [String] names k ) {
+                    T nm → {
+                        ?? ( json_obj_get ms ( string_data nm ) ) {
+                            T mj → { ( json_arr_push arr ( __mcp_model_brief ( string_data nm ) mj detail ) ) }
+                            F _ → {}
+                        }
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
             = n ( json_arr_len arr )
         }
         F _ → {}
@@ -769,7 +901,9 @@ $ `src/imptime.nu`
     ( json_obj_set out `models` arr )
     ( json_obj_set out `hint` ( json_str_lit ? == n 0
     `No models yet. fork_model needs a source; analyze_data scores a file without a model; import_data (ingest role) creates one from a file.`
-    `Times are ISO-8601 UTC; on a count clock rows are numbered instead. Next: anomalies {model, last:"24h"} or anomaly_summary.` ) )
+    ? detail
+    `Times are ISO-8601 UTC; on a count clock rows are numbered instead. Next: anomalies {model, last:"24h"} or anomaly_summary.`
+    `Times are ISO-8601 UTC; on a count clock rows are numbered instead. columns is a count and versions_on the versions that judge — describe_model {model} names them, detail: true lists them here for every model. Next: anomalies {model, last:"24h"} or anomaly_summary.` ) )
     ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
@@ -822,17 +956,13 @@ $ `src/imptime.nu`
     ^ out
 }
 
-@ __mcp_t_describe_model Json a Json ctx → Json {
-    : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
-    : String path ( __mcp_model_path `/models/dynamic/` model `/metadata` )
-    : String q ( string_new )
-    : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
-    ( string_free q )
-    ( string_free path )
-    ( string_free model )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
-    : Json b . o body
+// One model's metadata as a reader sees it. `describe_model` and
+// `edit_model` are two doors onto the same thing, so they answer with the
+// same shape: the write tool used to hand back the raw record — the
+// scaler, the score epoch, the positional flatline arrays — while the
+// read tool showed less than it, and a reader had to edit something to
+// see what a model held.
+@ __mcp_model_desc Json b → Json {
     : Json out ( json_obj_new )
     ( __mcp_copy b `model_name` out )
     ( __mcp_copy b `alias` out )
@@ -871,7 +1001,52 @@ $ `src/imptime.nu`
         }
         F _ → {}
     }
+    ?? ( json_obj_get b `flatline` ) {
+        T fl → {
+            : Json fo ( json_obj_new )
+            ( __mcp_copy fl `enabled` fo )
+            ( __mcp_copy fl `margin` fo )
+            ( __mcp_copy fl `window_rows` fo )
+            ( __mcp_copy fl `columns` fo )
+            ( __mcp_copy fl `unwatched` fo )
+            ( __mcp_copy fl `note` fo )
+            ( json_obj_set out `flatline` fo )
+        }
+        F _ → {}
+    }
+    ?? ( json_obj_get b `forecast` ) {
+        T fc → {
+            : Json fo ( json_obj_new )
+            ( __mcp_copy fc `trained` fo )
+            ( __mcp_copy fc `enabled` fo )
+            ( __mcp_copy fc `season` fo )
+            ( __mcp_copy fc `features` fo )
+            ( __mcp_copy fc `skipped` fo )
+            ( __mcp_copy fc `training_data_points` fo )
+            ( __mcp_when_of fc `trained_at` fo `trained` F )
+            ( json_obj_set out `forecast` fo )
+        }
+        F _ → {}
+    }
+    ?? ( json_obj_get b `absurd_readings` ) {
+        T ab → { ? > ( __mcp_obj_len ab ) 0 { ( json_obj_set out `absurd_readings` ( json_clone ab ) ) } {} }
+        F _ → {}
+    }
     ( __mcp_copy b `editable_fields` out )
+    ^ out
+}
+
+@ __mcp_t_describe_model Json a Json ctx → Json {
+    : String model ( __mcp_need_model a ctx )
+    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    : String path ( __mcp_model_path `/models/dynamic/` model `/metadata` )
+    : String q ( string_new )
+    : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
+    ( string_free q )
+    ( string_free path )
+    ( string_free model )
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    : Json out ( __mcp_model_desc . o body )
     ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
@@ -938,10 +1113,44 @@ $ `src/imptime.nu`
                 ( json_arr_push arr co )
             } )
             ( json_obj_set o `contributions` arr )
+            // Blame from the autoencoder is reconstruction error per
+            // field, and a broken RELATION puts error on both ends of it:
+            // when a temperature freezes, the net's humidity prediction —
+            // which it learnt to make from the temperature — goes wrong
+            // too, and can carry the larger share. Naming one field there
+            // sends a reader to the wrong sensor. When the top two shares
+            // are of the same order, the finding is the pair.
+            ? >= ( json_arr_len arr ) 2 {
+                : f s0 ( __mcp_share_at arr 0 )
+                : f s1 ( __mcp_share_at arr 1 )
+                ? & > s0 0.0 >= s1 * 0.5 s0 {
+                    : String m ( string_from `` )
+                    ( string_push_str m ( __mcp_feat_at arr 0 ) )
+                    ( string_push_str m ` and ` )
+                    ( string_push_str m ( __mcp_feat_at arr 1 ) )
+                    ( string_push_str m ` carry the blame together: what broke is the relation between them, not necessarily the field with the larger share — the net predicts each from the other, so the field that FOLLOWED a failure is blamed as loudly as the one that failed. A version that judges one field alone (range_guard, flatline, forecast) names the culprit when there is a single one; see this row's versions.` )
+                    ( json_obj_set o `blame` ( json_str_lit ( string_data m ) ) )
+                    ( string_free m )
+                } {}
+            } {}
         }
         F _ → {}
     }
     ^ o
+}
+
+@ __mcp_share_at Json arr i k → f {
+    ?? ( json_arr_get arr k ) {
+        T c → { ^ ( __mcp_f_of c `share` ) }
+        F _ → { ^ 0.0 }
+    }
+}
+
+@ __mcp_feat_at Json arr i k → s {
+    ?? ( json_arr_get arr k ) {
+        T c → { ^ ( __mcp_ctx_str c `feature` ) }
+        F _ → { ^ `` }
+    }
 }
 
 // The window as the API saw it (data_points_count / considered /
@@ -958,6 +1167,34 @@ $ `src/imptime.nu`
     ( __mcp_copy b `model_versions` out )
 }
 
+// A filter that can never match is a caller's mistake, and answering it
+// with "0 anomalies" reads as good news. The scan body names every
+// version the model judges with, so the impossible ask can be refused
+// with the number that makes it impossible.
+@ __mcp_votes_impossible Json b i votes → Json {
+    ?? ( json_obj_get b `model_versions` ) {
+        T mv → {
+            ? ( json_is_arr mv ) {
+                : i n ( json_arr_len mv )
+                ? > votes n {
+                    : String m ( string_from `min_votes: ` )
+                    ( string_push_int m votes )
+                    ( string_push_str m ` — the model judges with ` )
+                    ( string_push_int m n )
+                    ( string_push_str m ` version` )
+                    ? > n 1 { ( string_push_char m 115 ) } {}
+                    ( string_push_str m `, so no row can carry that many votes. describe_model lists them; 2 is the usual "more than one version agrees".` )
+                    : Json e ( mcp_tool_result_error ( string_data m ) )
+                    ( string_free m )
+                    ^ e
+                } {}
+            } {}
+        }
+        F _ → {}
+    }
+    ^ ( json_null )
+}
+
 @ __mcp_int_of Json o s key → i {
     ?? ( json_obj_get o key ) {
         T v → { ^ ( json_as_int v ) }
@@ -968,7 +1205,8 @@ $ `src/imptime.nu`
 @ __mcp_t_anomalies Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
-    : ~ i count ( __mcp_arg_int a `count` 20 )
+    : i asked ( __mcp_arg_int a `count` 20 )
+    : ~ i count asked
     ? <= count 0 { = count 20 } {}
     ? > count 200 { = count 200 } {}
     : ~ i contrib ( __mcp_arg_int a `contributions` 3 )
@@ -979,9 +1217,20 @@ $ `src/imptime.nu`
     ? == . o status 0 { ^ . o body } {}
     ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
     : Json b . o body
+    : Json vbad ( __mcp_votes_impossible b ( __mcp_arg_int a `min_votes` 1 ) )
+    ? ( json_is_null vbad ) {} { ( __mcp_api_out_free o ) ^ vbad }
     : b cc ( __mcp_count_clock b )
     : Json out ( json_obj_new )
     ( __mcp_scan_summary b out )
+    // A count the tool had to cut is said out loud: a caller who asked
+    // for 9999 and got 200 must not read the answer as the whole window.
+    ? > asked count {
+        : String cm ( string_from `count: ` )
+        ( string_push_int cm asked )
+        ( string_push_str cm ` is past the cap of 200 rows a tool answer carries; 200 were listed. Narrow the window (from/to/last) or read anomaly_summary for the whole of it.` )
+        ( json_obj_set out `count_capped` ( json_str_lit ( string_data cm ) ) )
+        ( string_free cm )
+    } {}
     : Json rows ( json_arr_new )
     ?? ( json_obj_get b `points` ) {
         T pts → { ( json_arr_each pts \ Json r → v { ( json_arr_push rows ( __mcp_row_json r cc ) ) } ) }
@@ -1046,6 +1295,8 @@ $ `src/imptime.nu`
     ? == . o status 0 { ^ . o body } {}
     ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
     : Json b . o body
+    : Json vbad ( __mcp_votes_impossible b ( __mcp_arg_int a `min_votes` 1 ) )
+    ? ( json_is_null vbad ) {} { ( __mcp_api_out_free o ) ^ vbad }
     : b cc ( __mcp_count_clock b )
     : Json out ( json_obj_new )
     ( __mcp_scan_summary b out )
@@ -1057,7 +1308,22 @@ $ `src/imptime.nu`
 
     // One pass over the flagged rows: time span, per-version counts,
     // per-feature attribution, the worst score.
+    // Every version starts at zero, so "this version flagged nothing" and
+    // "there is no such version" are different answers. Leaving the zeros
+    // out made a quiet version indistinguishable from an absent one, and
+    // a reader chasing "which version is loud" could not tell whether the
+    // one it expected was even enabled.
     : Json per_version ( json_obj_new )
+    ?? ( json_obj_get b `model_versions` ) {
+        T mv → {
+            ? ( json_is_arr mv ) {
+                ( json_arr_each mv \ Json vn → v {
+                    ( json_obj_set per_version ( json_as_str vn ) ( json_int 0 ) )
+                } )
+            } {}
+        }
+        F _ → {}
+    }
     : ( Vec FeatShare ) feats ( vec_new [FeatShare] )
     : ~ i first_ts 0
     : ~ i last_ts 0
@@ -1499,11 +1765,17 @@ $ `src/imptime.nu`
     ^ `a column was stuck for this share of the window — see anomalies for which; the margin is a fraction with a fixed meaning, not a rate to tune`
 }
 
+// The band around ANOM_FT_RATE that counts as "on target": a third of it
+// to three times it. A version flagging six rows in ten thousand is a
+// seventeenth of what a 1 % margin aims for, and reading that back as "on
+// target" told a reader the margin was set when it was loose enough to
+// see almost nothing — the rule was, in effect, "flagged > 0".
 @ __mcp_cal_reading i n f rate → s {
     ? < n 100 { ^ `too few rows to read (under 100)` } {}
     ? == rate 0.0 { ^ `quiet: flags nothing here — the margin may be loose; margin_for_rate shows the one for 1 %` } {}
     ? >= rate 0.1 { ^ `loud: flags a tenth or more of the window — the margin is too tight, or the version was trained on data unlike this; finetune {rate: 0.01} sets a margin from this window` } {}
     ? > rate 0.03 { ^ `louder than the 1 % a margin aims for` } {}
+    ? < rate 0.0033 { ^ `quieter than the 1 % a margin aims for — this window is calmer than the one the margin came from, or the margin is loose; margin_for_rate shows the one for 1 %` } {}
     ^ `on target: near the 1 % a margin aims for`
 }
 
@@ -1562,6 +1834,7 @@ $ `src/imptime.nu`
                 } {
                     ( json_obj_set one `reading` ( json_str_lit ( __mcp_cal_reading ( __mcp_int_of v `n` ) ( __mcp_f_of v `rate` ) ) ) )
                 }
+                ( __mcp_copy v `alert_line` one )
                 ?? ( json_obj_get v `margin_for_rate` ) {
                     T mfr → {
                         : Json mo ( json_obj_new )
@@ -1592,7 +1865,7 @@ $ `src/imptime.nu`
         }
         F _ → {}
     }
-    ( json_obj_set out `reading` ( json_str_lit `A version flags a row when its score is at or below -margin (score = decision function; the more negative, the more anomalous); rate = flagged / n over this window. margin_for_rate gives, per requested rate, the nearest margin the window's scores can supply: when scores tie at the cut the achieved rate differs from the requested one (exact = false) — a run of identical scores is taken or left whole. Margins are shown exactly as stored, in each version's own units (units: a forest's margin is absolute on its decision function; the autoencoder's is a fraction of its reconstruction threshold, and its scores here are scaled the same way; range_guard's is a count of standard deviations — its score is -max|z| over the features, and it names the feature; flatline's is a fraction — its score is minus the largest stuck fraction over the numeric columns, and it names the column). finetune {model, rate} sets them, the flatline excepted: its margin has a fixed meaning and is set with edit_model.` ) )
+    ( json_obj_set out `reading` ( json_str_lit `A version flags a row when its score is at or below -margin (score = decision function; the more negative, the more anomalous); rate = flagged / n over this window. margin_for_rate gives, per requested rate, the nearest margin the window's scores can supply: when scores tie at the cut the achieved rate differs from the requested one (exact = false) — a run of identical scores is taken or left whole. Margins are shown exactly as stored, in each version's own units (units: a forest's margin is absolute on its decision function; the autoencoder's is a fraction of its reconstruction threshold, and its scores here are scaled the same way; range_guard's is a count of standard deviations — its score is -max|z| over the features, and it names the feature; flatline's is a fraction of each column's OWN reference run — its score is minus the largest stuck fraction over the numeric columns, and it names the column). finetune {model, rate} sets them, the flatline excepted: its margin is not a rate, so it has no margin_for_rate table; alert_line says instead what the current margin asks of each column, in rows and in minutes, and edit_model sets it.` ) )
     ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
@@ -1610,10 +1883,16 @@ $ `src/imptime.nu`
 }
 
 // A verdict for a reader: the aggregate, then each version with its
-// score, severity and the margin it was held to — margins verbatim,
-// since a rounded margin is a different threshold. The API's echo of
-// the submitted values is dropped; the caller sent them. A model still
-// collecting its first points says so instead of scoring.
+// score, severity and the margin it was held to. `decision_margin` — the
+// number stored in the metadata, the one an edit or a fine-tune writes —
+// goes out verbatim: a rounded setting is a different setting. `margin`
+// is DERIVED from it (for the autoencoder, the reconstruction threshold
+// times that fraction), so it is a computed number like the score beside
+// it and is rounded like one; whole-precision it was the single
+// unrounded figure in the whole answer and read as a different KIND of
+// number rather than as the same one arrived at differently. The API's
+// echo of the submitted values is dropped; the caller sent them. A model
+// still collecting its first points says so instead of scoring.
 @ __mcp_verdict_out ApiOut o b ingested → Json {
     ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
     : Json b . o body
@@ -1639,7 +1918,7 @@ $ `src/imptime.nu`
                     ?? ( json_obj_get vv `threshold_info` ) {
                         T ti → {
                             : Json t ( json_obj_new )
-                            ( __mcp_copy ti `margin` t )
+                            ( __mcp_copy_rounded ti `margin` t 6 )
                             ( __mcp_copy ti `decision_margin` t )
                             ( __mcp_copy ti `units` t )
                             ( json_obj_set e `threshold_info` t )
@@ -1699,11 +1978,16 @@ $ `src/imptime.nu`
 
 // ── Tools: files, tasks, analyses ────────────────────────────────────
 
+// A record listing, passed through with every wall-clock key spelt as a
+// moment rather than as Unix seconds.
 @ __mcp_t_get Json ctx s path → Json {
     : String q ( string_new )
     : ApiOut o ( __mcp_api ctx `GET` path q @ ?Json { F @ Json { JNull } } )
     ( string_free q )
-    ^ ( __mcp_pass o )
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    : Json out ( __mcp_iso_times . o body )
+    ( __mcp_api_out_free o )
+    ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_task Json a Json ctx → Json {
@@ -1718,7 +2002,14 @@ $ `src/imptime.nu`
 
 // The file to analyse or import: `csv` text, or `rows` (an array of
 // objects) sent as JSON. Returns the content type, `` when neither.
+// The file to work on: inline `csv` text, inline `rows`, or the name of
+// one the organisation's folder already holds. A folder file leaves
+// `text` empty and answers `folder`; the caller then puts the name on the
+// query string and sends no body.
 @ __mcp_file_arg Json a String text → s {
+    : String fname ( __mcp_arg_str a `file` )
+    ? > ( string_len fname ) 0 { ( string_free fname ) ^ `folder` } {}
+    ( string_free fname )
     : String csv ( __mcp_arg_str a `csv` )
     ? > ( string_len csv ) 0 {
         ( string_push_str text ( string_data csv ) )
@@ -1741,11 +2032,16 @@ $ `src/imptime.nu`
 }
 
 @ __mcp_no_file → Json {
-    ^ ( mcp_tool_result_error `csv or rows: required — csv is the file's text (header row first); rows is an array of objects, one per point` )
+    ^ ( mcp_tool_result_error `csv, rows or file: required — csv is the file's text (header row first), rows an array of objects one per point, file the name of one the organisation's folder already holds (list_files shows them)` )
 }
 
 // The import/analyze query the two share: format, time, tz, calendar, clock.
 @ __mcp_q_file Json a String q s content_type → v {
+    ? == ( nurl_str_eq content_type `folder` ) 1 {
+        : String fname ( __mcp_arg_str a `file` )
+        ( __mcp_q_add q `file` ( string_data fname ) )
+        ( string_free fname )
+    } {}
     : String fmt ( __mcp_arg_str a `format` )
     ? > ( string_len fmt ) 0 { ( __mcp_q_add q `format` ( string_data fmt ) ) } {
         ? == ( nurl_str_eq content_type `application/json` ) 1 { ( __mcp_q_add q `format` `json` ) } {}
@@ -1796,7 +2092,8 @@ $ `src/imptime.nu`
     ? > votes 0 { ( __mcp_q_add_int q `votes` votes ) } {}
     : i wait ( __mcp_arg_int a `wait` 30 )
     ( __mcp_q_add_int q `wait` wait )
-    : ApiOut o ( __mcp_api_send ctx `POST` `/api/analyze` q ct ( string_data text ) )
+    : b folder == ( nurl_str_eq ct `folder` ) 1
+    : ApiOut o ( __mcp_api_send ctx `POST` `/api/analyze` q ? folder `text/csv` ct ( string_data text ) )
     ( string_free q )
     ( string_free text )
     ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
@@ -1815,13 +2112,43 @@ $ `src/imptime.nu`
     ? > ( nurl_str_len ct ) 0 {} { ( string_free text ) ( string_free model ) ^ ( __mcp_no_file ) }
     : String q ( string_new )
     ( __mcp_q_file a q ct )
+    // The share of the file the margins should flag, the same knob
+    // fork_model calls `rate` and a data source calls `finetune_rate`.
+    // It only bites on a model this import TRAINS for the first time; a
+    // model already trained keeps the margins its owner left it, and the
+    // answer says which of those two happened.
+    ? ( __mcp_arg_has a `rate` ) {
+        : String rs ( string_new )
+        ( string_push_float rs ( __mcp_arg_f a `rate` 0.01 ) )
+        ( __mcp_q_add q `finetune` ( string_data rs ) )
+        ( string_free rs )
+    } {}
     : String path ( __mcp_model_path `/models/dynamic/` model `/import` )
-    : ApiOut o ( __mcp_api_send ctx `POST` ( string_data path ) q ct ( string_data text ) )
+    : b folder == ( nurl_str_eq ct `folder` ) 1
+    : ApiOut o ( __mcp_api_send ctx `POST` ( string_data path ) q ? folder `text/csv` ct ( string_data text ) )
     ( string_free path )
     ( string_free q )
     ( string_free text )
     ( string_free model )
-    ^ ( __mcp_pass o )
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    : Json b . o body
+    : Json out ( json_obj_new )
+    ( __mcp_copy b `model_name` out )
+    ( __mcp_copy b `format` out )
+    ( __mcp_copy b `imported` out )
+    ( __mcp_copy b `skipped` out )
+    ( __mcp_copy b `data_points` out )
+    ( __mcp_copy b `clock` out )
+    ( __mcp_copy b `trained` out )
+    ( __mcp_copy b `calibrated` out )
+    ( __mcp_copy b `calibrated_rate` out )
+    ( __mcp_copy b `not_calibrated_because` out )
+    ( __mcp_copy b `time` out )
+    ( __mcp_copy b `notes` out )
+    ( __mcp_copy b `warning` out )
+    ( json_obj_set out `next` ( json_str_lit `calibration {model} says what the margins flag over this history — read it before anomalies, especially when calibrated is false.` ) )
+    ( __mcp_api_out_free o )
+    ^ ( __mcp_result_json out )
 }
 
 // ── Tools: changing models ───────────────────────────────────────────
@@ -1840,15 +2167,16 @@ $ `src/imptime.nu`
     : i from ( __mcp_arg_instant a `from` )
     : i to ( __mcp_arg_instant a `to` )
     : i last ( __mcp_arg_span a `last` )
-    ? | | < from 0 < to 0 < last 0 {
+    ? | | < from 0 < to 0 & < last 0 != last MCP_SPAN_ALL {
         ( json_free body )
         ( string_free name )
         ( string_free src )
-        ^ ( mcp_tool_result_error `from/to: ISO-8601 or Unix seconds; last: seconds or 24h / 7d / 2w` )
+        ^ ( mcp_tool_result_error `from/to: ISO-8601 or Unix seconds; last: seconds, 90s / 15m / 24h / 7d / 2w, or "all" for the source's whole ring` )
     } {}
     ? > from 0 { ( json_obj_set body `from` ( json_int from ) ) } {}
     ? > to 0 { ( json_obj_set body `to` ( json_int to ) ) } {}
     ? > last 0 { ( json_obj_set body `last` ( json_int last ) ) } {}
+    ? == last MCP_SPAN_ALL { ( json_obj_set body `last` ( json_str_lit `all` ) ) } {}
     ?? ( __mcp_arg a `fields` ) {
         T fv → { ? ( json_is_arr fv ) { ( json_obj_set body `fields` ( json_clone fv ) ) } {} }
         F _ → {}
@@ -1887,6 +2215,21 @@ $ `src/imptime.nu`
     ( __mcp_copy b `anomalies` out )
     ( __mcp_copy b `considered` out )
     ( __mcp_copy b `model_versions` out )
+    // `rate` is what EACH version is set to flag. A point is anomalous if
+    // ANY of them flags it, so the share of the window the model calls
+    // anomalous is the union — several times the rate on a model with
+    // several versions, and the number a reader is actually looking at.
+    // Asking for 1 % and reading back 3.9 % with nothing to explain it
+    // looks like a broken knob; both numbers, side by side, is the truth.
+    : i fc_cons ( __mcp_int_of b `considered` )
+    : i fc_an ( __mcp_int_of b `anomalies` )
+    ? > fc_cons 0 {
+        : Json rj ( json_obj_new )
+        ( json_obj_set rj `per_version_target` ( json_float ( __mcp_f_of b `target_rate` ) ) )
+        ( json_obj_set rj `union` ( __mcp_round_f / # f fc_an # f fc_cons 4 ) )
+        ( json_obj_set rj `note` ( json_str_lit `per_version_target is what each version's margin was set to flag on its own; union is the share of the training window the model as a whole calls anomalous, since any one version flagging is enough. Lower the rate, or switch versions off with edit_model, to bring the union down.` ) )
+        ( json_obj_set out `alert_rate` rj )
+    } {}
     ( json_obj_set out `next` ( json_str_lit `anomalies {model: <model_name>} shows what it flags on its own history; calibration to see the margins; delete_model when done with it.` ) )
     ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
@@ -1978,6 +2321,44 @@ $ `src/imptime.nu`
     ^ ( __mcp_result_json out )
 }
 
+// An ARIMA order as one line — "(0,1,0)" or "(1,1,1)(0,1,1)[144]" —
+// instead of eight named integers a reader has to reassemble.
+@ __mcp_order_str Json m → String {
+    : String out ( string_new )
+    ?? ( json_obj_get m `order` ) {
+        T sp → {
+            ( string_push_char out 40 )
+            ( string_push_int out ( __mcp_int_of sp `p` ) )
+            ( string_push_char out 44 )
+            ( string_push_int out ( __mcp_int_of sp `d` ) )
+            ( string_push_char out 44 )
+            ( string_push_int out ( __mcp_int_of sp `q` ) )
+            ( string_push_char out 41 )
+            : i sper ( __mcp_int_of sp `s` )
+            ? > sper 0 {
+                ( string_push_char out 40 )
+                ( string_push_int out ( __mcp_int_of sp `P` ) )
+                ( string_push_char out 44 )
+                ( string_push_int out ( __mcp_int_of sp `D` ) )
+                ( string_push_char out 44 )
+                ( string_push_int out ( __mcp_int_of sp `Q` ) )
+                ( string_push_str out `)[` )
+                ( string_push_int out sper )
+                ( string_push_char out 93 )
+            } {}
+        }
+        F _ → {}
+    }
+    ^ out
+}
+
+// The forecast, sized for a context window. One ARIMA per numeric
+// feature times loglik/aic/aicc/bic/phi/theta/se is a page of fit
+// diagnostics per column, and on a thirty-column model the answer was
+// unreadable — and unusable, because what a reader came for (the next
+// values and the band around them) was buried in it. The order and the
+// chosen form stay, as one line each; `detail: true` brings the rest
+// back, and `features` narrows to the columns asked for.
 @ __mcp_t_forecast Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
@@ -1990,7 +2371,88 @@ $ `src/imptime.nu`
     ( string_free q )
     ( string_free model )
     ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
-    ^ ( __mcp_pass o )
+    : Json b . o body
+    : b detail ( __mcp_arg_bool a `detail` F )
+    : String want ( __mcp_arg_csv a `features` )
+    : b cc == ( nurl_str_eq ( __mcp_ctx_str b `clock` ) `count` ) 1
+    : Json out ( json_obj_new )
+    ( __mcp_copy b `horizon` out )
+    ( __mcp_copy b `season` out )
+    ( __mcp_copy b `seasonal_features` out )
+    ( __mcp_copy b `season_note` out )
+    ( __mcp_copy b `enabled` out )
+    ( __mcp_copy b `clock` out )
+    ( __mcp_copy b `step_seconds` out )
+    ( __mcp_copy b `origin` out )
+    ( __mcp_copy b `warning` out )
+    ?? ( json_obj_get b `times` ) {
+        T ts → {
+            : Json arr ( json_arr_new )
+            ( json_arr_each ts \ Json t → v { ( json_arr_push arr ( __mcp_when ( json_as_int t ) cc ) ) } )
+            ( json_obj_set out `times` arr )
+        }
+        F _ → {}
+    }
+    : Json fa ( json_arr_new )
+    : ~ i shown 0
+    : ~ i total 0
+    ?? ( json_obj_get b `forecasts` ) {
+        T fs → {
+            = total ( json_arr_len fs )
+            : ~ i fi 0
+            ~ < fi total {
+                ?? ( json_arr_get fs fi ) {
+                    T fo → {
+                        : s fname ( __mcp_ctx_str fo `feature` )
+                        ? | == ( string_len want ) 0 ( __mcp_csv_has ( string_data want ) fname ) {
+                            = shown + shown 1
+                            : Json e ( json_obj_new )
+                            ( __mcp_copy fo `feature` e )
+                            ( __mcp_copy fo `selected` e )
+                            ?? ( json_obj_get fo `model` ) {
+                                T m → {
+                                    : String os ( __mcp_order_str m )
+                                    ( json_obj_set e `order` ( json_str_lit ( string_data os ) ) )
+                                    ( string_free os )
+                                    ( __mcp_copy_rounded m `sigma2` e 6 )
+                                    ? detail { ( json_obj_set e `fit` ( json_clone m ) ) } {}
+                                }
+                                F _ → {}
+                            }
+                            ( json_obj_set e `mean` ( __mcp_round_arr fo `mean` 4 ) )
+                            ( json_obj_set e `se` ( __mcp_round_arr fo `se` 4 ) )
+                            ( json_obj_set e `lo95` ( __mcp_round_arr fo `lo95` 4 ) )
+                            ( json_obj_set e `hi95` ( __mcp_round_arr fo `hi95` 4 ) )
+                            ? detail {
+                                ( json_obj_set e `lo80` ( __mcp_round_arr fo `lo80` 4 ) )
+                                ( json_obj_set e `hi80` ( __mcp_round_arr fo `hi80` 4 ) )
+                            } {}
+                            ( json_arr_push fa e )
+                        } {}
+                    }
+                    F _ → {}
+                }
+                = fi + fi 1
+            }
+        }
+        F _ → {}
+    }
+    ( string_free want )
+    ( json_obj_set out `forecasts` fa )
+    ? > total shown {
+        : String n ( string_from `` )
+        ( string_push_int n shown )
+        ( string_push_str n ` of ` )
+        ( string_push_int n total )
+        ( string_push_str n ` watched features shown (features narrowed the list)` )
+        ( json_obj_set out `note` ( json_str_lit ( string_data n ) ) )
+        ( string_free n )
+    } {}
+    ? ! detail {
+        ( json_obj_set out `fit_note` ( json_str_lit `order is the fitted ARIMA in one line and selected the form the holdout chose; detail: true adds the coefficients and the fit statistics, and the 80 % band. forecast_backtest measures whether these forecasts are any good — read it before trusting the band, whose width comes from the fit and is routinely optimistic.` ) )
+    } {}
+    ( __mcp_api_out_free o )
+    ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_forecast_point Json a Json ctx → Json {
@@ -2022,9 +2484,42 @@ $ `src/imptime.nu`
     ( string_free path )
     ( string_free q )
     ( string_free model )
-    ^ ( __mcp_pass o )
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    : Json out ( __mcp_iso_times . o body )
+    ( __mcp_api_out_free o )
+    ^ ( __mcp_result_json out )
 }
 
+// The mean of an array's non-null numbers, or -1 when there are none.
+@ __mcp_arr_mean Json src s key → f {
+    : ~ f sum 0.0
+    : ~ i n 0
+    ?? ( json_obj_get src key ) {
+        T v → {
+            ? ( json_is_arr v ) {
+                : i m ( json_arr_len v )
+                : ~ i k 0
+                ~ < k m {
+                    ?? ( json_arr_get v k ) {
+                        T e → { ?? ( json_num_as_f e ) { T x → { = sum + sum x = n + n 1 } F → {} } }
+                        F _ → {}
+                    }
+                    = k + k 1
+                }
+            } {}
+        }
+        F _ → {}
+    }
+    ^ ? > n 0 / sum # f n -1.0
+}
+
+// A backtest that measures a forecast worse than carrying the last value
+// forward, or a 95 % band that covers three readings in four, is telling
+// a reader something about the version they are about to trust as a
+// detector — and it was telling it only in numbers, beside a
+// skill_vs_seasonal_naive of 0.85 that flatters because the seasonal
+// naive is dreadful. The readings say it in words, per feature and for
+// the model.
 @ __mcp_t_forecast_backtest Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
     ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
@@ -2037,7 +2532,79 @@ $ `src/imptime.nu`
     ( string_free path )
     ( string_free q )
     ( string_free model )
-    ^ ( __mcp_pass o )
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    : Json b . o body
+    : Json out ( json_clone b )
+    : ~ i n_feat 0
+    : ~ i n_useless 0
+    : ~ i n_narrow 0
+    ?? ( json_obj_get out `features` ) {
+        T fs → {
+            : i nf ( json_arr_len fs )
+            : ~ i k 0
+            ~ < k nf {
+                ?? ( json_arr_get fs k ) {
+                    T fo → {
+                        = n_feat + n_feat 1
+                        : f cov ( __mcp_arr_mean fo `coverage95` )
+                        ? >= cov 0.0 { ( json_obj_set fo `coverage95_mean` ( __mcp_round_f cov 3 ) ) } {}
+                        : ~ b useless F
+                        ?? ( json_obj_get fo `skill_vs_naive` ) {
+                            T sv → { ?? ( json_num_as_f sv ) { T x → { = useless <= x 0.0 } F → {} } }
+                            F _ → {}
+                        }
+                        : b narrow & >= cov 0.0 < cov 0.9
+                        ? useless { = n_useless + n_useless 1 } {}
+                        ? narrow { = n_narrow + n_narrow 1 } {}
+                        : ~ String rd ( string_new )
+                        ? useless {
+                            ( string_push_str rd `no skill: the fitted model forecasts this feature no better than carrying the last value forward, so a reading judged against it is judged against persistence with extra machinery. ` )
+                        } {}
+                        ? narrow {
+                            ( string_push_str rd `the 95 % band covers only ` )
+                            ( string_push_int rd # i ( float_round * cov 100.0 ) )
+                            ( string_push_str rd ` % of what followed: the standard errors are optimistic, so a margin read as a plain sigma count would over-flag. The version's margin is calibrated from the stream's own z-scores at train_forecast for exactly this reason — leave it to calibration rather than setting a sigma by hand. ` )
+                        } {}
+                        ? & ! useless ! narrow {
+                            ( string_push_str rd `the model beats persistence and its band covers about what it claims.` )
+                        } {}
+                        ( json_obj_set fo `reading` ( json_str_lit ( string_data rd ) ) )
+                        ( string_free rd )
+                        // skill_vs_seasonal_naive flatters when the
+                        // seasonal naive is bad; the two baselines'
+                        // errors are already here, and naming that is
+                        // cheaper than a reader noticing it.
+                        ( json_obj_set fo `baseline_note` ( json_str_lit `skill is 1 - MAE/MAE_baseline. Compare naive_mae and seasonal_naive_mae before reading either skill: a high skill against a baseline that is itself far off says little.` ) )
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+        }
+        F _ → {}
+    }
+    ? > n_feat 0 {
+        : String v ( string_new )
+        ? == n_useless n_feat {
+            ( string_push_str v `no feature's forecast beats carrying the last value forward. As a detector this version is flagging distance from persistence, which the other versions already see — switch it off with edit_model {versions: {forecast: {enabled: false}}} unless a backtest over more history says otherwise.` )
+        } {
+            ? > n_useless 0 {
+                ( string_push_int v n_useless )
+                ( string_push_str v ` of ` )
+                ( string_push_int v n_feat )
+                ( string_push_str v ` features have no skill over persistence; the rest do.` )
+            } { ( string_push_str v `every feature's forecast beats carrying the last value forward.` ) }
+        }
+        ? > n_narrow 0 {
+            ( string_push_str v ` The 95 % band is narrower than its name on ` )
+            ( string_push_int v n_narrow )
+            ( string_push_str v ` of them.` )
+        } {}
+        ( json_obj_set out `verdict` ( json_str_lit ( string_data v ) ) )
+        ( string_free v )
+    } {}
+    ( __mcp_api_out_free o )
+    ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_finetune Json a Json ctx → Json {
@@ -2140,6 +2707,12 @@ $ `src/imptime.nu`
         }
         F _ → {}
     }
+    // `rate` is per version, and a point is anomalous if ANY version
+    // flags it, so the share of the window the model calls anomalous is
+    // the union of the versions' — several times the rate on a model with
+    // several versions.
+    ( json_obj_set out `rate_is_per_version` ( json_str_lit `the rate above is what EACH version's margin now flags on its own; a row is an anomaly if any version flags it, so the model's own rate over this window is the union — calibration's aggregate.rate, or anomaly_summary's anomaly_rate, is that number.` ) )
+    ( json_obj_set out `next` ( json_str_lit `calibration {model} to read the aggregate rate these margins produce; anomalies to see what they flag.` ) )
     ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
@@ -2153,9 +2726,26 @@ $ `src/imptime.nu`
                 ( string_free model )
                 ^ ( mcp_tool_result_error `patch: required — an object with one or more of alias, clock, schedule, max_data_points, versions (describe_model lists editable_fields and the current values)` )
             }
-            : Json out ( __mcp_model_post ctx `/models/dynamic/` model `/metadata` `PUT` @ ?Json { T pv } )
+            : String q ( string_new )
+            : String path ( __mcp_model_path `/models/dynamic/` model `/metadata` )
+            : ApiOut o ( __mcp_api ctx `PUT` ( string_data path ) q @ ?Json { T pv } )
+            ( string_free path )
+            ( string_free q )
             ( string_free model )
-            ^ out
+            ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+            : Json b . o body
+            : Json out ( json_obj_new )
+            ( __mcp_copy b `message` out )
+            // What the patch asked for and the config could not hold — a
+            // step of 0 under a seasonal window, a forest of no trees.
+            ( __mcp_copy b `adjusted` out )
+            ?? ( json_obj_get b `metadata` ) {
+                T mj → { ( json_obj_set out `model` ( __mcp_model_desc mj ) ) }
+                F _ → {}
+            }
+            ( json_obj_set out `next` ( json_str_lit `calibration to see what the margins now flag over a window; audit lists every margin this and every other change moved.` ) )
+            ( __mcp_api_out_free o )
+            ^ ( __mcp_result_json out )
         }
         F _ → {
             ( string_free model )
@@ -2353,12 +2943,10 @@ $ `src/imptime.nu`
     : String id ( __mcp_need_source_id a )
     ? > ( string_len id ) 0 {} { ( string_free id ) ^ ( mcp_tool_result_error `id: required — a source id from sources` ) }
     : String path ( __mcp_model_path `/api/org/sources/` id `` )
-    : String q ( string_new )
-    : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
-    ( string_free q )
+    : Json out ( __mcp_t_get ctx ( string_data path ) )
     ( string_free path )
     ( string_free id )
-    ^ ( __mcp_pass o )
+    ^ out
 }
 
 @ __mcp_t_create_source Json a Json ctx → Json {
@@ -2522,6 +3110,12 @@ $ `src/imptime.nu`
     ( mcp_schema_prop sc `to` `string` `Window end, same forms as from. With last, the span ends here.` F )
 }
 
+@ __mcp_sc_list_models → Json {
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `detail` `boolean` `List every column name and every version's margin, as this tool did before it learned to be brief. Default false: a count of columns and the versions that are on.` F )
+    ^ sc
+}
+
 @ __mcp_sc_model_window → Json {
     : Json sc ( __mcp_sc_model )
     ( __mcp_sc_window sc )
@@ -2576,8 +3170,9 @@ $ `src/imptime.nu`
 
 // csv / rows / format / time / tz / calendar / clock — the file vocabulary.
 @ __mcp_sc_file Json sc → v {
-    ( mcp_schema_prop sc `csv` `string` `The file as text: a header row, then one row per point. Either csv or rows.` F )
-    ( mcp_schema_prop sc `rows` `array` `The points as an array of objects (one key per column). Either csv or rows.` F )
+    ( mcp_schema_prop sc `csv` `string` `The file as text: a header row, then one row per point. One of csv, rows or file.` F )
+    ( mcp_schema_prop sc `rows` `array` `The points as an array of objects (one key per column). One of csv, rows or file.` F )
+    ( mcp_schema_prop sc `file` `string` `A file already in the organisation's folder, by the name list_files gives — the input an earlier analysis or import left behind, or an export. Prefer this to inlining the bytes: a file sent as csv or rows costs its whole size in the conversation, twice.` F )
     ( mcp_schema_prop sc `format` `string` `csv, json, jsonl or fmi; omitted = detected from the content.` F )
     ( mcp_schema_prop sc `time` `string` `The column holding each row's time (default: detected). Without a time column the model runs on a point count.` F )
     ( mcp_schema_prop sc `tz` `string` `Zone for naive stamps: local (default), utc, or +03:00.` F )
@@ -2597,6 +3192,7 @@ $ `src/imptime.nu`
     : Json sc ( __mcp_sc_model )
     ( __mcp_sc_file sc )
     ( mcp_schema_prop sc `clock` `string` `For a NEW model: time or count. Default: time when the rows are stamped, count when not.` F )
+    ( mcp_schema_prop sc `rate` `number` `The share of the imported history each version's margin should flag, 0 < rate ≤ 0.5 (default 0.01). Applies only when this import is what first trains the model: a model already trained keeps the margins it has, and the answer says so under not_calibrated_because.` F )
     ^ sc
 }
 
@@ -2628,6 +3224,8 @@ $ `src/imptime.nu`
     : Json sc ( __mcp_sc_model )
     ( mcp_schema_prop sc `horizon` `integer` `How many steps ahead (default 12, at most 1000).` F )
     ( mcp_schema_prop sc `origin` `integer` `A stored row's index: the forecast as it would have been made from that row (the models replayed up to it), to put beside what followed. Default: from the newest row.` F )
+    ( mcp_schema_prop sc `features` `array` `Only these columns (default: every watched one). A model watching thirty features answers with thirty forecasts otherwise.` F )
+    ( mcp_schema_prop sc `detail` `boolean` `Add each fit's coefficients and statistics (phi, theta, loglik, aic, bic, standard errors) and the 80 % band. Default false: the order in one line, the chosen form, the values and the 95 % band.` F )
     ^ sc
 }
 
@@ -2727,7 +3325,7 @@ $ `src/imptime.nu`
     ( json_arr_push methods ( json_str_lit `POST` ) )
     ( json_arr_push methods ( json_str_lit `PUT` ) )
     ( mcp_schema_prop_enum sc `method` `string` `http: GET, POST or PUT (default GET).` methods F )
-    ( mcp_schema_prop sc `headers` `object` `http: request headers as strings — an Authorization, the Digitraffic-User a service requires. Secrets: source shows them masked, and the mask sent back keeps the stored value.` F )
+    ( mcp_schema_prop sc `headers` `object` `http: request headers as strings — an Authorization, the Digitraffic-User a service requires. A header whose NAME contains authorization, cookie, key, token, secret or password is treated as a credential: source and sources show its value masked, and sending the mask back keeps the stored value. Any other header is shown as it is.` F )
     ( mcp_schema_prop sc `body` `string` `http: the request body for POST / PUT.` F )
     ( mcp_schema_prop sc `path` `string` `http: where the records are in the answer — dotted, indexes allowed (data.items, stations.0.values); empty for the whole answer. An array gives one record per element, an object one record.` F )
 }
@@ -2808,11 +3406,11 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     ( mcp_schema_empty ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_whoami a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `list_models`
-    `Every model the organisation has: name, columns, points seen, last training time, and each version's margin. Start here; a name from this list is what the other tools take as "model".`
-    ( mcp_schema_empty ) T F T F member
+    `Every model the organisation has: name, how many columns it watches, points seen, last training time, and which versions judge. Start here; a name from this list is what the other tools take as "model". detail: true adds every column name, every version's margin and the ring cap — one model's worth of that is describe_model.`
+    ( __mcp_sc_list_models ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_list_models a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `describe_model`
-    `How one model is built: column types, categories, feature names, the retraining schedule, every version's geometry and margin, the autoencoder's state, the owner — and which fields edit_model may change.`
+    `How one model is built: column types, categories, feature names, the retraining schedule, every version's geometry and margin, the autoencoder's and the forecast's state, the flatline guard's reference per column (what each column's own habit is, and the run of identical readings the margin flags it at), the readings left out of the last fit as impossible, the owner — and which fields edit_model may change. edit_model answers with the same record.`
     ( __mcp_sc_model ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_describe_model a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `anomalies`
@@ -2848,7 +3446,7 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     ( mcp_schema_empty ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_get ( mcp_call_context c ) `/api/org/sources` ) } )
     ( __mcp_add srv `source`
-    `One data source in full — its kind, URL, query and parameters, the columns taken, the model, the schedule, the span fetched so far and the run statistics. Header values are masked.`
+    `One data source in full — its kind, URL, query and parameters, the columns taken, the model, the schedule, the span fetched so far and the run statistics. A header value that carries a credential is masked (a name containing authorization, cookie, key, token, secret or password); one that only names the caller — a Digitraffic-User, an Accept — is shown as it is, because knowing what is being sent is the point of reading the record. Sending a masked value back on an edit keeps the stored secret.`
     ( __mcp_sc_source_id ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_source a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `forecast`
@@ -2860,7 +3458,7 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     ( __mcp_sc_values `a column the model knows and the point leaves out is an error that names it.` ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_score_point a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `analyze_data`
-    `Score a file you provide (csv text or rows) on its own, with no model kept: a self-trained model finds the time column, learns the file, and reports its anomalies, margins and notes. The margins are set from the file itself, so about 1 % of any file is flagged — read "reading" and "separation" first: they say whether the flagged rows stand apart from the file or are merely its least typical tail. For a one-off "what is odd in this data". Big files return a task to poll with task.`
+    `Score a file on its own, with no model kept: a self-trained model finds the time column, learns the file, and reports its anomalies, margins and notes. The file is csv text, rows, or — cheapest by far — the name of one the organisation's folder already holds (list_files). The margins are set from the file itself, so about 1 % of any file is flagged — read "reading", "separation" and "stands_apart_rows" first: they say whether some block of rows really stands apart from the file or whether what is flagged is merely its least typical tail. For a one-off "what is odd in this data". Big files return a task to poll with task.`
     ( __mcp_sc_analyze ) F F F F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_analyze_data a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `list_tasks`
@@ -2921,14 +3519,14 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     // ── Feeding models (the ingest capability: administrators and ingest keys) ──
     ( __mcp_add srv `ingest_point`
     `Send one point to a model: it is stored, scored, and answered with the verdict. A new name creates a model, which warms up (HTTP 202) until it has 50 points. This changes what the model learns — use score_point to ask without teaching.`
-    ( __mcp_sc_values `a column the model knows and the point leaves out is stored as absent, scored as its training mean (no version blames it), and listed under "missing" in the verdict. A value must be a finite number: "1e999" and the like are refused. A reading too far from its feature's own range to be a measurement of it is stored and flagged like any other, but is left out of every fit, so one broken sensor cannot make its feature stop being watched; describe_model reports those under "absurd_readings".` ) F F F F ingest
+    ( __mcp_sc_values `a column the model knows and the point leaves out is stored as absent, scored as its training mean (no version blames it), and listed under "missing" in the verdict. A value is a finite number, or something that reads as one: a numeric string ("12.5"), and true/false as 1/0 — a status flag is a 0/1 channel and is one of the things a stream watches. "1e999" and anything else with no finite value are refused, and a boolean landing in a column of real measurements is stored and judged like any other reading far outside that column's range (range_guard names it, and absurd_readings keeps it out of the fits). A reading too far from its feature's own range to be a measurement of it is stored and flagged like any other, but is left out of every fit, so one broken sensor cannot make its feature stop being watched; describe_model reports those under "absurd_readings".` ) F F F F ingest
     \ Json a McpCall c → Json { ^ ( __mcp_t_ingest_point a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `forecast_point`
     `ingest_point's twin: store a point and get, with its verdict, the forecast from it — the next horizon values of every watched feature with 80 % and 95 % intervals and their times. A model without a trained forecast version gets one fitted here once it has trained.`
     ( __mcp_sc_forecast_point ) F F F F ingest
     \ Json a McpCall c → Json { ^ ( __mcp_t_forecast_point a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `import_data`
-    `Load a file of history (csv text or rows) into a model — a new one or an existing one. The time column is detected (or named with time); rows are stamped, stored and the model trained. Returns counts of imported / skipped rows and the scan.`
+    `Load a file of history into a model — a new one or an existing one. The file is csv text, rows, or the name of one the organisation's folder already holds (list_files), which costs nothing to send. The time column is detected (or named with time); rows are stamped, stored and the model trained. Answers with the counts imported and skipped, and with whether the margins were calibrated from this history — a model already trained keeps the margins it has, and not_calibrated_because says so.`
     ( __mcp_sc_import ) F F F F ingest
     \ Json a McpCall c → Json { ^ ( __mcp_t_import_data a ( mcp_call_context c ) ) } )
 

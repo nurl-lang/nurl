@@ -345,20 +345,43 @@ $ `src/service.nu`
     : Call lm ( call r `list_models` `{}` `` )
     ( check . lm ok `mcp: list_models answers` )
     ( check == ( jint_of . lm data `count` ) 1 `mcp: list_models counts the one model` )
+    // The default listing is brief: a COUNT of columns, and the versions
+    // that judge — a dozen thirty-column models are an orientation, not a
+    // dump of every column and margin.
     : ~ b saw F
+    : ~ b brief F
     ?? ( json_obj_get . lm data `models` ) {
         T ms → {
             ?? ( json_arr_get ms 0 ) {
                 T m0 → {
-                    = saw & ( jstr_eq m0 `name` `pub` ) & == ( jarr_len m0 `columns` ) 2 == ( jint_of m0 `n_points_seen` ) 61
+                    = saw & ( jstr_eq m0 `name` `pub` ) & == ( jint_of m0 `columns` ) 2 == ( jint_of m0 `n_points_seen` ) 61
+                    = brief & ! ( json_obj_has m0 `versions` ) ( json_obj_has m0 `versions_on` )
                 }
                 F _ → {}
             }
         }
         F _ → {}
     }
-    ( check saw `mcp: the brief has name, columns and points seen` )
+    ( check saw `mcp: the brief has name, a column count and points seen` )
+    ( check brief `mcp: and names the versions that are on, not every margin` )
     ( call_free lm )
+
+    : Call lmd ( call r `list_models` `{"detail":true}` `` )
+    ( check . lmd ok `mcp: list_models detail answers` )
+    : ~ b full F
+    ?? ( json_obj_get . lmd data `models` ) {
+        T ms → {
+            ?? ( json_arr_get ms 0 ) {
+                T m0 → {
+                    = full & == ( jarr_len m0 `columns` ) 2 ( json_obj_has m0 `versions` )
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check full `mcp: detail: true lists the columns and every version's margin` )
+    ( call_free lmd )
 
     : Call dm ( call r `describe_model` `{"model":"pub"}` `` )
     ( check . dm ok `mcp: describe_model answers` )
@@ -486,6 +509,24 @@ $ `src/service.nu`
     }
     ( check worst_ok `mcp: summary names the worst anomaly by index` )
     ( check ( jobj_at . su data `by_version` ) `mcp: summary counts per version` )
+    // Every version the model judges with is in the count, zeros
+    // included: "flagged nothing" and "there is no such version" are
+    // different answers and must not look alike.
+    : ~ b zeros F
+    ?? ( json_obj_get . su data `by_version` ) {
+        T bv → {
+            ?? ( json_obj_get . su data `model_versions` ) {
+                T mv → {
+                    : ( Vec String ) bk ( json_obj_keys bv )
+                    = zeros == ( vec_len [String] bk ) ( json_arr_len mv )
+                    ( vec_free_with [String] bk \ String x → v { ( string_free x ) } )
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( check zeros `mcp: by_version carries a line for every version, flagged or not` )
     ( call_free su )
 
     : Call pt ( call r `points` `{"model":"pub","count":3}` `` )
@@ -631,6 +672,18 @@ $ `src/service.nu`
     : Call va ( call r `anomalies` `{"model":"pub","min_votes":2,"all_points":true}` `` )
     ( check . va ok `mcp: anomalies takes min_votes` )
     ( call_free va )
+    // A filter no row can satisfy is a caller's mistake, and "0
+    // anomalies" reads as good news. It is refused, with the number that
+    // makes it impossible.
+    : Call vb ( call r `anomalies` `{"model":"pub","min_votes":99}` `` )
+    ( check ! . vb ok `mcp: an impossible min_votes is refused, not answered with zero` )
+    ( check ( string_contains . vb text `min_votes` ) `mcp: and the refusal names the filter` )
+    ( call_free vb )
+    // A count past the answer's cap says it was cut.
+    : Call vc ( call r `anomalies` `{"model":"pub","count":9999,"all_points":true}` `` )
+    ( check . vc ok `mcp: a count past the cap still answers` )
+    ( check ( json_obj_has . vc data `count_capped` ) `mcp: and says the count was cut` )
+    ( call_free vc )
     ( call_free sc )
 }
 

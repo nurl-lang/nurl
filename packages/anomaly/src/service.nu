@@ -1034,6 +1034,84 @@ $ `stdlib/std/thread.nu`
 // (autoencoder.json, not meta.json) and so has no place in meta_to_json.
 // `enabled` is read back from the metadata: disabling the version mutes
 // the verdict but keeps the trained net.
+// The flatline guard as a reader needs it: the reference the last fit
+// wrote for each numeric column, named rather than positional, and what
+// the margin therefore asks of that column — the run of identical
+// readings that trips it. A column with no reference is listed apart
+// with the reason, so "the guard is on" never has to mean "every column
+// is watched".
+// What the flatline's margin asks of each column, in rows and — when the
+// ring has a step to read it by — in minutes.
+@ _an_flat_alert_json * Model mo → Json {
+    : *Meta mm . mo meta
+    : i step ( model_step mo )
+    : f margin ( meta_version_margin mm ANOM_FLAT_NAME ANOM_FLAT_MARGIN )
+    : Json o ( json_obj_new )
+    ( json_obj_set o `step_seconds` ( json_int step ) )
+    : Json cols ( json_obj_new )
+    : i nf ( vec_len [String] . mm feats )
+    : ~ i j 0
+    ~ < j nf {
+        ?? ( vec_get [String] . mm feats j ) {
+            T fn → {
+                : f len ( _an_flat_ref_len mm j )
+                ? > len 0.0 {
+                    : ~ i at # i ( float_ceil * margin len )
+                    ? < at 1 { = at 1 } {}
+                    : Json c ( json_obj_new )
+                    ( json_obj_set c `rows` ( json_int at ) )
+                    ? & > step 0 ! . mm count_clock {
+                        ( json_obj_set c `minutes` ( json_float / # f * at step 60.0 ) )
+                    } {}
+                    ( json_obj_set cols ( string_data fn ) c )
+                } {}
+            }
+            F _ → {}
+        }
+        = j + j 1
+    }
+    ( json_obj_set o `columns` cols )
+    ( json_obj_set o `note` ( json_str_lit `Per column, the run of identical readings this margin flags at. The reference is the column's own habit, so the same margin asks more of a coarsely quantised column than of a smooth one — raise or lower the margin to move every column's line together, in proportion to what each one normally does.` ) )
+    ^ o
+}
+
+@ _an_flat_json * Meta mm → Json {
+    : Json o ( json_obj_new )
+    : f margin ( meta_version_margin mm ANOM_FLAT_NAME ANOM_FLAT_MARGIN )
+    ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm ANOM_FLAT_NAME F ) ) )
+    ( json_obj_set o `margin` ( json_float margin ) )
+    ( json_obj_set o `window_rows` ( json_int ( _an_flat_window mm ) ) )
+    ( json_obj_set o `look_back_rows` ( json_int ( _an_flat_need mm ) ) )
+    : Json cols ( json_obj_new )
+    : Json unwatched ( json_arr_new )
+    : i nf ( vec_len [String] . mm feats )
+    : ~ i j 0
+    ~ < j nf {
+        ?? ( vec_get [String] . mm feats j ) {
+            T fn → {
+                : f len ( _an_flat_ref_len mm j )
+                ? < len 0.0 { ( json_arr_push unwatched ( json_str_lit ( string_data fn ) ) ) } {
+                    : Json c ( json_obj_new )
+                    ( json_obj_set c `reference_run_rows` ( json_float ( _fc_getf . mm flat_run j ) ) )
+                    ( json_obj_set c `quiet_window_sd` ( json_float ( _fc_getf . mm flat_sd j ) ) )
+                    : ~ i at # i ( float_ceil * margin len )
+                    ? < at 1 { = at 1 } {}
+                    ( json_obj_set c `flags_after_rows` ( json_int at ) )
+                    ( json_obj_set cols ( string_data fn ) c )
+                }
+            }
+            F _ → {}
+        }
+        = j + j 1
+    }
+    ( json_obj_set o `columns` cols )
+    ( json_obj_set o `unwatched` unwatched )
+    ( json_obj_set o `ref_run` ( _an_jarr_of_floats . mm flat_run ) )
+    ( json_obj_set o `ref_sd` ( _an_jarr_of_floats . mm flat_sd ) )
+    ( json_obj_set o `note` ( json_str_lit `The reference is per column: reference_run_rows is the run length that column's own training rows reach, and the margin is read against twice that (never under a floor), so flags_after_rows is what this margin asks of THIS column. A column quantised to whole units that legitimately repeats for half an hour and a smooth one beside it answer to the same margin and different run lengths. unwatched lists the columns with no reference — not numeric, a ring shorter than the window at the last fit, or a run so long the guard cannot see past it.` ) )
+    ^ o
+}
+
 @ __an_ae_json Store st s name * Meta mm → Json {
     : Json o ( json_obj_new )
     ?? ( store_load_ae st name ) {
@@ -1260,6 +1338,7 @@ $ `stdlib/std/thread.nu`
             ( json_obj_set o `editable_fields` ( meta_editable_fields ) )
             ( json_obj_set o `autoencoder` ( __an_ae_json st ( string_data mname ) mm ) )
             ( json_obj_set o `forecast` ( __an_fc_json st ( string_data mname ) mm ) )
+            ( json_obj_set o `flatline` ( _an_flat_json mm ) )
             ( http_response_free resp )
             = resp ( response_json 200 o )
             ( json_free o )
@@ -2232,6 +2311,28 @@ $ `stdlib/std/thread.nu`
         ^ ( __an_json_err 400 `label must be "false_positive", "confirmed" or "none"` )
     }
     : *Model mo ( model_open st ( string_data mname ) )
+    // A false positive is a verdict a reader disputes, and calibration
+    // leaves it out for exactly that reason. A row the model never
+    // flagged has no verdict to dispute: accepting the label there let
+    // any row at all be taken out of the sample the margins are measured
+    // on, which is a way to move a margin without an audit entry.
+    ? == ( nurl_str_eq ( string_data label ) ANOM_LABEL_FP ) 1 {
+        : i fl ( model_row_is_anomaly mo index )
+        ? == fl 0 {
+            : String why ( string_from `Point ` )
+            ( string_push_int why index )
+            ( string_push_str why ` is not flagged by this model, so it cannot be a false positive. Label a row the model calls an anomaly (anomalies lists them); "confirmed" and "none" apply to any stored row.` )
+            : HttpResponse rfp ( __an_json_err 400 ( string_data why ) )
+            ( string_free why )
+            ( model_free mo )
+            ( string_free label )
+            ( string_free note )
+            ( store_free st )
+            ( __an_gate_free gate )
+            ( string_free mname )
+            ^ rfp
+        } {}
+    } {}
     : Principal who . gate who
     : String by ( __an_principal_handle who )
     : i at ( now_seconds )
@@ -2425,6 +2526,17 @@ $ `stdlib/std/thread.nu`
                 = q_from ( _an_jint body `from` 0 )
                 = q_to ( _an_jint body `to` 0 )
                 = q_last ( _an_jint body `last` 0 )
+                // "all" is the span vocabulary every other window takes;
+                // a fork that refused it was the one place a caller had
+                // to know that "the whole ring" is spelt by omission.
+                ?? ( json_obj_get body `last` ) {
+                    T lj → {
+                        ? ( json_is_str lj ) {
+                            ? == ( nurl_str_eq ( json_str_data lj ) `all` ) 1 { = q_last -1 } {}
+                        } {}
+                    }
+                    F _ → {}
+                }
                 ?? ( json_obj_get body `rate` ) {
                     T rj → {
                         : ~ b okr F
@@ -2646,8 +2758,10 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `model_name` ( json_str_lit ( string_data name ) ) )
     ( json_obj_set o `source` ( json_str_lit ( string_data src ) ) )
     : Json wj ( json_obj_new )
-    ( json_obj_set wj `from` ( json_int from_ts ) )
-    ( json_obj_set wj `to` ( json_int to_ts ) )
+    : ( Vec i ) wb ( model_window_bounds mo from_ts to_ts )
+    ( json_obj_set wj `from` ( json_int ( _mlp_iget wb 0 ) ) )
+    ( json_obj_set wj `to` ( json_int ( _mlp_iget wb 1 ) ) )
+    ( vec_free [i] wb )
     ( json_obj_set wj `source_points` ( json_int np ) )
     ( json_obj_set o `window` wj )
     ( json_obj_set o `points` ( json_int . rep accepted ) )
@@ -2781,11 +2895,13 @@ $ `stdlib/std/thread.nu`
     ?? bodyo {
         T body → {
             : *Model mo ( model_open st ( string_data mname ) )
-            : String err ( model_apply_meta_patch mo body )
+            : ( Vec String ) adj ( vec_new [String] )
+            : String err ( model_apply_meta_patch_notes mo body adj )
             ( json_free body )
             ? == ( string_len err ) 0 {} {
                 : HttpResponse rbad ( __an_json_err 400 ( string_data err ) )
                 ( string_free err )
+                ( vec_free_with [String] adj \ String x → v { ( string_free x ) } )
                 ( model_free mo )
                 ( store_free st )
                 ( string_free mname )
@@ -2797,10 +2913,26 @@ $ `stdlib/std/thread.nu`
             ( string_push_str msg ( string_data mname ) )
             : Json o ( __an_ok_msg ( string_data msg ) )
             ( string_free msg )
+            // What the patch asked for and the config could not hold.
+            ? > ( vec_len [String] adj ) 0 {
+                : Json aj ( json_arr_new )
+                : ~ i ak 0
+                ~ < ak ( vec_len [String] adj ) {
+                    ?? ( vec_get [String] adj ak ) {
+                        T m → { ( json_arr_push aj ( json_str_lit ( string_data m ) ) ) }
+                        F _ → {}
+                    }
+                    = ak + ak 1
+                }
+                ( json_obj_set o `adjusted` aj )
+            } {}
+            ( vec_free_with [String] adj \ String x → v { ( string_free x ) } )
             : Json meta ( meta_to_json mm )
             ( json_obj_set meta `model_name` ( json_str_lit ( string_data mname ) ) )
             ( json_obj_set meta `editable_fields` ( meta_editable_fields ) )
             ( json_obj_set meta `autoencoder` ( __an_ae_json st ( string_data mname ) mm ) )
+            ( json_obj_set meta `forecast` ( __an_fc_json st ( string_data mname ) mm ) )
+            ( json_obj_set meta `flatline` ( _an_flat_json mm ) )
             ( json_obj_set o `metadata` meta )
             : HttpResponse r ( response_json 200 o )
             ( json_free o )
@@ -2976,6 +3108,13 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `rate` ( json_float rate ) )
     ( json_obj_set o `worst` ( json_float . cv worst ) )
     ( json_obj_set o `median` ( json_float . cv median ) )
+    // A margin that is not a rate gets no table of rates. The flatline's
+    // is the fraction of a column's own reference run it has repeated
+    // for: "the margin that would flag 1 % of this window" is a number
+    // with no meaning, and printing it next to a reading that says so in
+    // words is a contradiction a reader has to resolve. The alert line in
+    // runs is added by the caller, which knows the ring's step.
+    ? ( _an_is_flat_name ( string_data . cv cvname ) ) { ^ o } {}
     : Json mfr ( json_obj_new )
     : ( Vec f ) rates ( __an_cal_rates )
     : i nr ( vec_len [f] rates )
@@ -3090,8 +3229,10 @@ $ `stdlib/std/thread.nu`
     : *Meta cmm . mo meta
     ( json_obj_set o `clock` ( json_str_lit ? . cmm count_clock `count` `time` ) )
     : Json wj ( json_obj_new )
-    ( json_obj_set wj `from` ( json_int from_ts ) )
-    ( json_obj_set wj `to` ( json_int to_ts ) )
+    : ( Vec i ) wb ( model_window_bounds mo from_ts to_ts )
+    ( json_obj_set wj `from` ( json_int ( _mlp_iget wb 0 ) ) )
+    ( json_obj_set wj `to` ( json_int ( _mlp_iget wb 1 ) ) )
+    ( vec_free [i] wb )
     ( json_obj_set wj `rows` ( json_int . cal n_rows ) )
     ( json_obj_set wj `excluded` ( json_int . cal excluded ) )
     ( json_obj_set wj `total` ( json_int ( model_n_points mo ) ) )
@@ -3107,7 +3248,19 @@ $ `stdlib/std/thread.nu`
     : ~ i k 0
     ~ < k ni {
         ?? ( vec_get [CalVer] . cal items k ) {
-            T cv → { ( json_obj_set vers ( string_data . cv cvname ) ( __an_cal_ver_json cv with_curve ) ) }
+            T cv → {
+                : Json cvj ( __an_cal_ver_json cv with_curve )
+                // The flatline's margin is not a rate, so margin_for_rate
+                // says nothing a reader can act on. What it can act on is
+                // the run that margin asks of each column — in rows and,
+                // where the ring has a step, in minutes: "flag when this
+                // column has not moved for half an hour" is the sentence
+                // a person wants, and this is where the step is known.
+                ? ( _an_is_flat_name ( string_data . cv cvname ) ) {
+                    ( json_obj_set cvj `alert_line` ( _an_flat_alert_json mo ) )
+                } {}
+                ( json_obj_set vers ( string_data . cv cvname ) cvj )
+            }
             F _ → {}
         }
         = k + k 1
@@ -3328,8 +3481,10 @@ $ `stdlib/std/thread.nu`
     ? > ( string_len note ) 0 { ( json_obj_set o `note` ( json_str_lit ( string_data note ) ) ) } {}
     ( string_free note )
     : Json wj ( json_obj_new )
-    ( json_obj_set wj `from` ( json_int from_ts ) )
-    ( json_obj_set wj `to` ( json_int to_ts ) )
+    : ( Vec i ) wb ( model_window_bounds mo from_ts to_ts )
+    ( json_obj_set wj `from` ( json_int ( _mlp_iget wb 0 ) ) )
+    ( json_obj_set wj `to` ( json_int ( _mlp_iget wb 1 ) ) )
+    ( vec_free [i] wb )
     ( json_obj_set wj `rows` ( json_int . rep n_rows ) )
     ( json_obj_set wj `excluded` ( json_int . rep excluded ) )
     ( json_obj_set wj `own` ( json_bool own ) )
@@ -3905,8 +4060,49 @@ $ `stdlib/std/thread.nu`
         ^ rd
     }
 
-    : String fmt ( __an_query_str . req query `format` )
-    : String body ( bytes_to_str . req body )
+    : ~ String fmt ( __an_query_str . req query `format` )
+    // The history is the request body — or, with ?file=, one the
+    // organisation's folder already holds (the same rule /api/analyze
+    // follows: a file the service has already written is not worth
+    // sending back through the caller).
+    : String fileq ( __an_query_str . req query `file` )
+    : ~ String body ( string_new )
+    ? > ( string_len fileq ) 0 {
+        ? ( orgfiles_name_ok ( string_data fileq ) ) {} {
+            ( string_free body )
+            ( string_free fileq )
+            ( string_free fmt )
+            ( __an_gate_free gate )
+            ( string_free mname )
+            ^ ( __an_json_err 400 `file: not a name in this organisation's folder.` )
+        }
+        : Principal ime . gate who
+        : String fp ( orgfiles_path ( string_data . ime org ) ( string_data fileq ) )
+        : ~ b got F
+        ?? ( read_file ( string_data fp ) ) {
+            T txt → { ( string_free body ) = body txt = got T }
+            F _ → {}
+        }
+        ( string_free fp )
+        ? got {} {
+            : String msg ( string_from `file: ` )
+            ( string_push_str msg ( string_data fileq ) )
+            ( string_push_str msg ` is not in this organisation's folder — GET /api/org/files lists what is.` )
+            : HttpResponse rnf ( __an_json_err 404 ( string_data msg ) )
+            ( string_free msg )
+            ( string_free body )
+            ( string_free fileq )
+            ( string_free fmt )
+            ( __an_gate_free gate )
+            ( string_free mname )
+            ^ rnf
+        }
+        ? > ( string_len fmt ) 0 {} {
+            ( string_free fmt )
+            = fmt ( string_from ? ( string_ends_with fileq `.csv` ) `csv` `` )
+        }
+    } { ( string_free body ) = body ( bytes_to_str . req body ) }
+    ( string_free fileq )
     : ImportParse ip ( import_parse ( string_data body ) ( string_data fmt ) )
     ( string_free body )
     ( string_free fmt )
@@ -4034,6 +4230,12 @@ $ `stdlib/std/thread.nu`
     // the defaults. A model tuned before keeps its margins.
     : ~ f ftrate ( __an_query_float . req query `finetune` SRC_FINETUNE_DEFAULT )
     ? | < ftrate 0.0 > ftrate 0.5 { = ftrate SRC_FINETUNE_DEFAULT } {}
+    // Why the margins were or were not set from this file, in words: the
+    // reason has to be read BEFORE the call that changes it.
+    : ~ String tune_why ( string_new )
+    ? . rep trained { ( string_push_str tune_why ( model_autotune_why mo ftrate ) ) } {
+        ( string_push_str tune_why `this import did not train the model — it was trained already, and an import leaves a trained model's margins where its owner left them. finetune {rate: 0.01} sets them from the history as it now stands, and calibration says what they flag first` )
+    }
     : b tuned ? . rep trained ( model_autotune_at mo ftrate ( model_now mo ) ) F
 
     : ~ HttpResponse r ( response_status_only 500 )
@@ -4056,6 +4258,13 @@ $ `stdlib/std/thread.nu`
         ( json_obj_set o `data_points` ( json_int . rep stored ) )
         ( json_obj_set o `trained` ( json_bool . rep trained ) )
         ( json_obj_set o `calibrated` ( json_bool tuned ) )
+        ? tuned {
+            ( json_obj_set o `calibrated_rate` ( json_float ftrate ) )
+        } {
+            ? > ( string_len tune_why ) 0 {
+                ( json_obj_set o `not_calibrated_because` ( json_str_lit ( string_data tune_why ) ) )
+            } {}
+        }
         ( json_obj_set o `clock` ( json_str_lit ? . mm count_clock `count` `time` ) )
         : Json tj ( json_clone plan )
         ( json_obj_set tj `stamped` ( json_int . tr stamped ) )
@@ -4381,10 +4590,20 @@ $ `stdlib/std/thread.nu`
                     ( json_obj_set o `votes` ( json_int ( _ana_jint st `votes` 1 ) ) )
                     ?? ( json_obj_get st `worst_severity` ) { T v → { ( json_obj_set o `worst_severity` ( json_clone v ) ) } F _ → {} }
                     ?? ( json_obj_get st `separation` ) { T v → { ( json_obj_set o `separation` ( json_clone v ) ) } F _ → {} }
+                    ?? ( json_obj_get st `stands_apart_rows` ) { T v → { ( json_obj_set o `stands_apart_rows` ( json_clone v ) ) } F _ → {} }
                     ?? ( json_obj_get st `reading` ) { T v → { ( json_obj_set o `reading` ( json_clone v ) ) } F _ → {} }
                     ?? ( json_obj_get st `model_versions` ) { T v → { ( json_obj_set o `model_versions` ( json_clone v ) ) } F _ → {} }
                     ?? ( json_obj_get st `margins` ) { T v → { ( json_obj_set o `margins` ( json_clone v ) ) } F _ → {} }
                     ?? ( json_obj_get st `notes` ) { T v → { ( json_obj_set o `notes` ( json_clone v ) ) } F _ → {} }
+                    // A result is written once and read for as long as it
+                    // is kept, so an old one can predate a field this
+                    // response otherwise always carries. Say that, rather
+                    // than let the key's absence look like a value: a
+                    // reader comparing two analyses must not read
+                    // "separation missing" as "separation zero".
+                    ? ( json_obj_has st `reading` ) {} {
+                        ( json_obj_set o `schema_note` ( json_str_lit `this analysis ran before the service reported separation, reading and worst_severity; its result has none. Re-run analyze_data on the same file to get them.` ) )
+                    }
                     // The result file, and the link to it.
                     : String fname ( _ana_jstr st `file` )
                     : OrgFile f ( orgfiles_stat org ( string_data fname ) )
@@ -4447,9 +4666,49 @@ $ `stdlib/std/thread.nu`
         ^ rd
     }
     : Principal me . gate who
-    ? > ( vec_len [u] . req body ) 0 {} {
+    // The file to analyse is the request body — or, with ?file=, one the
+    // organisation's folder already holds. A caller that has to inline
+    // the bytes pays for them twice (once to send, once to keep in its
+    // own context), and every analysis and import this service runs
+    // leaves its input right there in the folder already.
+    : String fileq ( __an_query_str . req query `file` )
+    : ~ ( Vec u ) content ( vec_new [u] )
+    : ~ b from_folder F
+    ? > ( string_len fileq ) 0 {
+        ? ( orgfiles_name_ok ( string_data fileq ) ) {} {
+            ( vec_free [u] content )
+            ( string_free fileq )
+            ( __an_gate_free gate )
+            ^ ( __an_json_err 400 `file: not a name in this organisation's folder.` )
+        }
+        : String fp ( orgfiles_path ( string_data . me org ) ( string_data fileq ) )
+        ?? ( read_file ( string_data fp ) ) {
+            T txt → {
+                ( vec_free [u] content )
+                = content ( bytes_from_str ( string_data txt ) )
+                ( string_free txt )
+                = from_folder T
+            }
+            F _ → {}
+        }
+        ( string_free fp )
+        ? from_folder {} {
+            : String msg ( string_from `file: ` )
+            ( string_push_str msg ( string_data fileq ) )
+            ( string_push_str msg ` is not in this organisation's folder — GET /api/org/files lists what is.` )
+            : HttpResponse rnf ( __an_json_err 404 ( string_data msg ) )
+            ( string_free msg )
+            ( string_free fileq )
+            ( vec_free [u] content )
+            ( __an_gate_free gate )
+            ^ rnf
+        }
+    } {}
+    ? | from_folder > ( vec_len [u] . req body ) 0 {} {
+        ( vec_free [u] content )
+        ( string_free fileq )
         ( __an_gate_free gate )
-        ^ ( __an_json_err 400 `The request body is empty: send the file to analyse as the body.` )
+        ^ ( __an_json_err 400 `The request body is empty: send the file to analyse as the body, or name one the folder holds with ?file=.` )
     }
 
     : Json params ( json_obj_new )
@@ -4488,7 +4747,10 @@ $ `stdlib/std/thread.nu`
     ? < wait 0 { = wait 0 } {}
     ? > wait AN_ANALYZE_WAIT_MAX { = wait AN_ANALYZE_WAIT_MAX } {}
 
-    : String id ( analyze_task_create ( string_data . me org ) params . req body )
+    ? from_folder { ( json_obj_set params `source_file` ( json_str_lit ( string_data fileq ) ) ) } {}
+    : String id ( analyze_task_create ( string_data . me org ) params ? from_folder content . req body )
+    ( vec_free [u] content )
+    ( string_free fileq )
     ( json_free params )
     ? > ( string_len id ) 0 {} {
         ( string_free id )

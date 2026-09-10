@@ -91,8 +91,8 @@ $ `stdlib/ext/json.nu`
     i score_epoch
     i feat_enc  // the calendar-feature encoding the stored feature order uses
     i train_span  // seconds the last train's rows covered; 0 = unknown, every cycle kept
-    ( Vec f ) flat_run  // flatline reference per feature: longest identical run in training (-1 = not watched)
-    ( Vec f ) flat_sd  // flatline reference per feature: the quiet-window std of training (see ANOM_FLAT_QUANTILE)
+    ( Vec f ) flat_run  // flatline reference per feature: the run length its training runs recur at (see ANOM_FLAT_RUN_Q; -1 = not watched)
+    ( Vec f ) flat_sd  // flatline reference per feature: the quiet-window std of training (see ANOM_FLAT_SD_Q)
     ( Vec f ) absurd_n  // readings left out of the last fit per feature (see anomaly_mask_absurd)
     ( Vec VerCfg ) versions
 }
@@ -173,24 +173,62 @@ $ `stdlib/ext/json.nu`
 // The flatline guard (SPEC §5.4): the stuck sensor is the commonest single
 // fault in a sensor stream and structurally invisible to a point scorer —
 // every row of a flat stretch is, on its own, an ordinary reading; the
-// signal is that nothing moves. This version looks at the last
-// `window_size` rows of each numeric column and measures two things
-// against what a retrain learned from the ring: how long the run of
-// identical values ending at this row is, relative to twice the longest
-// run the training rows held (or the window, whichever is longer), and
-// how far the window's standard deviation has collapsed below the
-// stream's own quiet windows (the ANOM_FLAT_QUANTILE-th quantile of the
-// training window stds). Both are fractions; the decision value is minus
-// the larger, over the columns, so the margin reads as a fraction: 0.9
-// flags a column when 90 % of the reference run is identical, or the
-// window is ten times flatter than the stream's quietest periods. A
-// column that already sat flat in training — a rain gauge, a status
-// flag — sets its own reference and is not flagged for doing it again.
-// It names the column, like the range guard.
+// signal is that nothing moves. This version measures two things per
+// numeric column against what a retrain learned from the ring:
+//
+//   run      how long the run of identical values ending at this row is,
+//            as a fraction of the column's OWN reference run — twice the
+//            length its runs reach in training (`flat_run`, the
+//            ANOM_FLAT_RUN_Q row-weighted quantile of run length), or
+//            ANOM_FLAT_MIN_RUN rows, whichever is longer.
+//   collapse how far the window's standard deviation has fallen below the
+//            stream's own quiet windows (the ANOM_FLAT_SD_Q-th quantile
+//            of the training window stds over `window_size` rows).
+//
+// Both are fractions; the decision value is minus the larger, over the
+// columns, so the margin reads as a fraction: 0.9 flags a column that has
+// repeated one value for 90 % of its own reference run, or a window ten
+// times flatter than the stream's quietest periods.
+//
+// The reference is PER FEATURE and it decides: a temperature quantised to
+// whole degrees, sampled every minute, legitimately repeats for half an
+// hour, and its reference says so; a smooth flow meter's reference is the
+// floor, so a genuine freeze of ANOM_FLAT_MIN_RUN rows trips it while the
+// coarse column beside it in the same bundle stays quiet. Scoring the run
+// against the model-wide window instead — what this guard did until
+// 0.32.0 — made one number mean two things: a column whose reference run
+// passed half the window could never reach the margin at all (the run is
+// counted over the window, so its fraction was capped below 1), and every
+// other column needed 0.9 × window identical rows before it counted.
+//
+// The reference run must describe what the column DOES, not the longest
+// thing that ever happened to it — otherwise one freeze inside the
+// training ring teaches the guard that freezing is normal, and the guard
+// immunises itself against the very fault it exists to catch. Two rules
+// together make it a description of habit:
+//
+//   * every maximal run of L identical values is entered into the sample
+//     min(L, ANOM_FLAT_RUN_CAP × n) times, so a run counts for MORE the
+//     longer it is — a rain gauge's long dry stretches are its normal —
+//     but no SINGLE stretch, however long, can weigh more than a
+//     hundredth of the ring;
+//   * the reference is the ANOM_FLAT_RUN_Q quantile of that sample.
+//
+// The two together say: a column's reference is set by behaviour that
+// RECURS. A sensor that legitimately sits still for half an hour does it
+// again and again, and every one of those runs votes; a fault does it
+// once, and one stretch cannot outvote the rest of the ring no matter how
+// long it lasts. A column whose reference run is longer than the guard can
+// look back (ANOM_FLAT_TAIL_MAX) is left unwatched rather than watched
+// with a bar it can never reach.
 : s ANOM_FLAT_NAME `flatline`
 : i ANOM_FLAT_WINDOW 60
 : f ANOM_FLAT_MARGIN 0.9
-: f ANOM_FLAT_QUANTILE 0.05
+: f ANOM_FLAT_SD_Q 0.05
+: f ANOM_FLAT_RUN_Q 0.9
+: f ANOM_FLAT_RUN_CAP 0.01
+: i ANOM_FLAT_MIN_RUN 20
+: i ANOM_FLAT_TAIL_MAX 600
 
 @ _an_is_flat_name s vname → b {
     ^ == ( nurl_str_eq vname ANOM_FLAT_NAME ) 1
@@ -679,11 +717,11 @@ $ `stdlib/ext/json.nu`
                 // infinite reading has no place in a mean, a split or a
                 // forecast: refused here, once, for every path that
                 // encodes a point (ingest, import, score, retrain).
-                ? ( _an_finite x ) {} { ^ ( __an_err_param cn `a finite number` ) }
+                ? ( _an_finite x ) {} { ^ ( __an_err_param cn `a finite number (a boolean reads as 1/0 and a numeric string as its number, but nothing here has a finite value)` ) }
                 ( vec_push [String] names ( string_from cn ) )
                 ( vec_push [f] vals x )
             }
-            F _ → { ^ ( __an_err_param cn `a numeric value` ) }
+            F _ → { ^ ( __an_err_param cn `a number, a numeric string ("12.5"), or true/false for a 0/1 channel` ) }
         }
     } {}
     ? == kind COL_CATEGORICAL {
@@ -824,6 +862,30 @@ $ `stdlib/ext/json.nu`
                     F _ → {}
                 }
                 ? have {} { ( vec_push [String] out ( string_clone c ) ) }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ out
+}
+
+// Of the columns `anomaly_missing_cols` named, the ones the point DID
+// carry — as null. A JSON null is not a reading, so it counts as absent;
+// but "Missing columns: TW" over a point that says `"TW": null` reads as
+// the service not seeing what the caller plainly sent, and the caller
+// looks for a transport bug instead of for the null.
+@ anomaly_null_cols * Meta m Json raw ( Vec String ) missing → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : i n ( vec_len [String] missing )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] missing k ) {
+            T c → {
+                ?? ( json_obj_get raw ( string_data c ) ) {
+                    T jv → { ? ( json_is_null jv ) { ( vec_push [String] out ( string_clone c ) ) } {} }
+                    F _ → {}
+                }
             }
             F _ → {}
         }
@@ -1871,7 +1933,16 @@ $ `stdlib/ext/json.nu`
 
 // Check a `versions` patch before applying it: every value an object,
 // every field a VerCfg field. Returns the reason to refuse, or "".
-@ meta_versions_patch_check Json vers → String {
+// A `versions` patch, checked before anything is applied: every key must
+// name a version the model has, and every field inside it must be one a
+// VerCfg carries. A name the model does not have is a typo far more often
+// than a new version — `{"autoenocder": {"enabled": false}}` used to
+// answer success and leave the real autoencoder on — so it is refused
+// here, with the names that do exist. Creating a version is still
+// possible and still one flag away: `replace_versions` makes the object
+// the WHOLE list, which is how the dashboard's JSON editor adds and
+// removes them, and there the names it does not know are the point.
+@ meta_versions_patch_check * Meta m Json vers b replace → String {
     ? ( json_is_obj vers ) {} { ^ ( string_from `versions must be a JSON object of version configs` ) }
     : ( Vec String ) keys ( json_obj_keys vers )
     : i nk ( vec_len [String] keys )
@@ -1883,6 +1954,27 @@ $ `stdlib/ext/json.nu`
                 ?? ( json_obj_get vers ( string_data vn ) ) {
                     T vo → {
                         ? ( json_is_obj vo ) {
+                            ? | replace >= ( meta_find_version m ( string_data vn ) ) 0 {} {
+                                ( string_free why )
+                                = why ( string_from `versions.` )
+                                ( string_push_str why ( string_data vn ) )
+                                ( string_push_str why ` is not a version of this model (it has: ` )
+                                : ( Vec String ) have ( vec_new [String] )
+                                : i nvv ( vec_len [VerCfg] . m versions )
+                                : ~ i vk 0
+                                ~ < vk nvv {
+                                    ?? ( vec_get [VerCfg] . m versions vk ) {
+                                        T vc → { ( vec_push [String] have ( string_clone . vc vname ) ) }
+                                        F _ → {}
+                                    }
+                                    = vk + vk 1
+                                }
+                                : String names ( string_join have `, ` )
+                                ( string_push_str why ( string_data names ) )
+                                ( string_free names )
+                                ( vec_free_with [String] have \ String x → v { ( string_free x ) } )
+                                ( string_push_str why `). To ADD a version, send the whole list with replace_versions: true.` )
+                            }
                             : String pre ( string_from `versions.` )
                             ( string_push_str pre ( string_data vn ) )
                             : String bad ( _an_unknown_keys vo ANOM_VERCFG_FIELDS ( string_data pre ) )
@@ -1921,6 +2013,11 @@ $ `stdlib/ext/json.nu`
 // the keys given — versions the object omits are dropped, which is how the
 // advanced JSON editor deletes one. Returns the version count afterwards,
 // or -1 when `vers` is not a JSON object.
+//
+// Creation is gated ABOVE this, in `meta_versions_patch_check`: a partial
+// patch may only edit versions the model has, and only a whole-list patch
+// (`replace_versions`) may name one it does not. This function is the
+// mechanism; the rule about who may use it lives with the patch.
 @ meta_apply_versions_json * Meta m Json vers b replace → i {
     ? ( json_is_obj vers ) {} { ^ -1 }
     : ( Vec String ) keys ( json_obj_keys vers )

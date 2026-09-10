@@ -1,5 +1,214 @@
 # Changelog
 
+## 0.32.0
+
+Every version answers for its own column, every answer says what it is
+worth, and the tools stop keeping two spellings of the same thing.
+
+This release is one review's worth of findings, worked back to their
+roots. A language model was given the MCP endpoint, synthetic data with
+faults it knew about, and no other instructions. Where its diagnosis was
+right the cause is fixed here; where the diagnosis was wrong but the
+surprise was real, what surprised it is fixed instead; and two findings
+were neither, and are answered in the docs.
+
+### The flatline guard learns each column, not the model
+
+**A stuck column could not be caught and an ordinary one could not stop
+being suspected — for the same reason.** The guard scored a column's run
+of identical readings as `run / max(window, 2·reference_run)`, one
+model-wide window (60 rows) standing in for every column. Two consequences,
+both fatal, both invisible:
+
+- The run is counted over the window, so its fraction can never exceed 1.
+  A column whose own reference run passed half the window — a temperature
+  quantised to whole degrees, sampled every minute, which legitimately
+  repeats for half an hour — had a bar it could **never** reach, at any
+  margin. The guard was on, the column was listed, and nothing that
+  happened to it could ever be flagged.
+- Every other column needed `0.9 × 60` = 54 identical rows in a 60-row
+  window before it counted. A sensor that freezes for twenty-five rows —
+  the commonest single fault in a sensor stream — went unremarked, and the
+  only way to catch it was a margin so low that the coarse column beside
+  it in the same bundle screamed on every ordinary step.
+
+The reference is now read per column and the score is `run /
+max(2·reference_run, 20 rows)`. One margin, and it asks proportionally
+more of a coarse column than of a smooth one, which is what a reader means
+by "this channel is stuck". The look-back grows with the longest reference
+so no watched column has an unreachable bar, and a column whose reference
+outruns the look-back entirely is listed as unwatched instead of pretending.
+
+**And the reference no longer learns the fault.** It was the longest run in
+the training rows, so a single freeze inside the ring taught the guard that
+freezing was normal — the guard immunising itself against the fault it
+exists to catch. Now every maximal run votes `min(length, 1 % of the ring)`
+times and the reference is the 0.9 quantile of that sample: longer runs
+weigh more, because a rain gauge's dry stretches *are* its normal, but no
+single stretch can outvote the rest of the ring. A column's reference is
+set by what RECURS. A sensor that legitimately sits still for half an hour
+does it again and again; a fault does it once.
+
+`describe_model` publishes the fitted reference per column with the run
+each one is flagged at, the unwatched columns listed apart with the reason;
+`calibration` adds the same lines in minutes, where the ring has a step to
+read them by. `calibration` no longer prints a `margin_for_rate` table for
+the flatline: its margin is not a rate, the same answer's `reading` said
+so in words, and two contradicting halves of one answer are worse than
+either.
+
+### A file can be wrong in more places than the margins expect
+
+`analyze_data` sets its margins from the file itself, so about 1 % of any
+file is flagged and only `separation` says whether that 1 % means anything.
+Separation was one ratio — the worst row against the row at twice the
+target rate — which can only see a fault SMALLER than 1 % of the file. A
+twenty-row collapse in a fifteen-hundred-row file put fault rows on both
+sides of that single ratio, which then read ~1, and the answer said
+"nothing stands out … the tail of the file rather than a fault" over a
+column that had dropped by a factor of twenty.
+
+Separation is now the largest step anywhere in the sorted scores: for every
+block size, the block's worst row against the row at twice that depth, and
+the answer is the biggest of those with the block size that produced it
+(`stands_apart_rows`). A tail thins gradually and every ratio stays near 1;
+a fault has one block size where the ratio jumps, wherever it is.
+
+### The forecast says what it is worth
+
+- **The default margin was four of the model's own standard errors, and
+  those standard errors are optimistic.** A backtest routinely finds the
+  95 % interval covering three readings in four; judging a stream at four
+  of them is not "four sigma" but "however loud this model's optimism makes
+  it", and on a real feed it was a version flagging several percent of every
+  window from the moment it was switched on. `train_forecast` now sets the
+  margin from the stream's own z-scores, the way an import calibrates the
+  forests it has just trained. A margin a reader has moved is left alone.
+- **`season: 144` beside ARIMA(0,1,0) with s = 0.** The number was the
+  period the order search was OFFERED, not one anything modelled. Every
+  forecast answer now says how many features' chosen forms actually use it,
+  and says plainly when the answer is none.
+- **`forecast_backtest` reads its own numbers.** Per feature: whether the
+  fit beats carrying the last value forward, and whether the 95 % band
+  covers what it claims. For the model: a verdict, including the case where
+  no feature beats persistence and the version is adding noise to the
+  ensemble. `skill_vs_seasonal_naive` flatters when the seasonal naive is
+  dreadful, and the reading says to compare the baselines' errors first.
+- **`forecast` is readable on a wide model.** One ARIMA per numeric feature
+  times loglik/aic/aicc/bic/phi/theta/standard errors is a page of
+  diagnostics per column; on a thirty-column model the values a reader came
+  for were buried in it. The order is now one line, the chosen form is
+  named, and `detail: true` brings the rest back; `features` narrows to the
+  columns asked for.
+
+### The metadata patch
+
+- **A version name the model does not have is refused.** It used to create
+  one, silently, with default geometry — so `{"autoenocder": {"enabled":
+  false}}` answered success while the real autoencoder stayed on. Adding a
+  version is still one flag away: `replace_versions: true` makes the object
+  the whole list, which is what the dashboard's JSON editor sends and where
+  unknown names are the point.
+- **A margin moved by an edit is in the audit trail.** The tool promises
+  "every change of a version's alert line — by a person's edit or
+  finetune", and only fine-tune was writing. Every door now goes through
+  one function.
+- **What the config could not hold is reported.** `step_size: 0` under a
+  seasonal window becomes 1, a forest of no trees becomes one tree: rules
+  that have always existed and always applied in silence, so a caller read
+  back a value it never sent and blamed the nearest flag. The answer now
+  lists every field the patch named and the config did not keep.
+- `editable_fields` and the error message agreed on five fields and six.
+  `replace_versions` is not a field but a flag on the patch, and the
+  message says so.
+
+### One shape for one thing
+
+- `describe_model` and `edit_model` answer with the same record. The write
+  tool used to hand back the raw metadata — the scaler, the score epoch,
+  the positional flatline arrays — while the read tool showed less than it,
+  so a reader had to edit a model to see what it held. Both now carry the
+  flatline references, the forecast summary and the absurd readings; neither
+  carries the internals.
+- **Times are ISO-8601 UTC wherever they are a wall clock.** `list_models`
+  has always promised it; `sources`, `list_tasks`, `task`, `audit` and the
+  forecast's `trained_at` were answering in Unix seconds, so one session
+  held two spellings of a moment with no rule for which was which. Row
+  stamps are untouched: on a count clock they are ordinals, and the tools
+  that carry them say so.
+- **A window reports both its bounds.** `to: null` meant "the newest stored
+  point", which is a moment the service knows and the reader does not.
+- **`by_version` counts every version, including the zeros.** Leaving them
+  out made "this version flagged nothing" and "there is no such version"
+  the same answer.
+- **A source record written before a field existed gets that field.** An
+  old source answered with eight fewer keys than a new one and every reader
+  had to know which absences meant "not set". An analysis result cannot be
+  rewritten — it was produced once — so an old one now says so instead.
+- The margin a score was compared against is rounded like the score. It is
+  derived from the stored setting, not the setting itself (which stays
+  verbatim: a rounded setting is a different setting), and at seventeen
+  digits it was the one unrounded figure in the answer.
+
+### Answers a reader can act on
+
+- **`import_data` says why the margins were or were not set.** `calibrated:
+  false` covered four different situations, one of them the normal case —
+  a model already trained keeps the margins its owner left it. It now says
+  which, and takes the same `rate` knob `fork_model` and a data source have.
+- **`fork_model` reports both alert rates.** `rate` is what EACH version is
+  set to flag; a point is anomalous if any of them does. Asking for 1 % and
+  reading back 3.9 % with nothing to explain it looks like a broken knob.
+- **A filter that cannot match is refused.** `min_votes: 99` on a
+  nine-version model answered "0 anomalies", which reads as good news. A
+  `count` past the 200-row cap now says it was cut.
+- **`calibration`'s "on target" means on target.** A version flagging six
+  rows in ten thousand — a seventeenth of what a 1 % margin aims for — read
+  as on target, because the rule was in effect "flagged > 0".
+- **`false_positive` needs a verdict to dispute.** The label could be
+  attached to any stored row, and calibration leaves labelled rows out — a
+  way to move a margin with no audit entry.
+- **A column sent as `null` is named as null**, not merely as missing.
+- **Errors carry a next step.** Successful answers have named their
+  follow-up tool for several releases; failures named none, and a 404 or a
+  403 is exactly where a caller needs one.
+- **The blame for a broken relation names the pair.** The autoencoder's
+  attribution is reconstruction error per field, and a broken relation puts
+  error on both ends: when a temperature freezes, the humidity the net
+  predicts FROM it goes wrong too and can carry the larger share. Where the
+  top two shares are of the same order, the finding is reported as the pair.
+
+### Sending less
+
+- **`analyze_data` and `import_data` take a file the organisation's folder
+  already holds**, by the name `list_files` gives. Inlining a five-kilobyte
+  CSV into a tool call costs its whole size in the conversation, twice —
+  and every analysis and import this service runs leaves its input right
+  there in the folder.
+- **`list_models` is an orientation, not a dump.** A dozen thirty-column
+  models cost four thousand tokens of column names and margins before a
+  reader had asked about any one of them. The default is a column count and
+  the versions that judge; `detail: true` is the old shape.
+
+### Not bugs
+
+- **`Authorization` headers were never leaked.** A header whose name
+  carries a credential — authorization, cookie, key, token, secret,
+  password — has always been masked, and `Digitraffic-User` is shown
+  deliberately: knowing what is being sent is the point of reading the
+  record. The tool description said "Header values are masked" without
+  qualification, and that is what was wrong.
+- **`true` reads as 1 on purpose.** A status flag is a 0/1 channel and one
+  of the things a stream watches; a boolean landing in a column of real
+  measurements is judged like any other reading far outside that column's
+  range. The schema said "must be a finite number", which is not what the
+  service does.
+- **`replace_versions` resets nothing.** The `step_size` that came back as
+  1 was the version-config sanity rule above, which has nothing to do with
+  the flag; the flatline margin that survived is `replace_versions` working
+  exactly as documented. The surprise was the silent normalisation, and
+  that is what is fixed.
+
 ## 0.31.0
 
 A reading that cannot be a measurement is flagged, stored, and left out

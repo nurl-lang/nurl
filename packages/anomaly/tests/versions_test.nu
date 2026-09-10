@@ -494,6 +494,168 @@ $ `src/dynamic.nu`
     ( model_free mo )
 }
 
+// ── Scenario 3b: one margin, two resolutions ──────────────────────────
+//
+// The bundle a real feed sends: a temperature quantised to whole degrees
+// that legitimately repeats for 35 minutes at a time, and a smooth flow
+// beside it in the same rows. The guard's reference is per feature, so
+// one margin has to answer for both — the coarse column's habit must stay
+// quiet while a genuine 25-row freeze in the smooth one is named. Scoring
+// the run against the model-wide window (60) instead made both
+// impossible at once: 25/60 never reached 0.9, and lowering the margin
+// far enough to catch it lit the coarse column on every ordinary step.
+
+: MixProbe { b anomaly f score String feat }
+
+@ mix_ingest * Model mo f coarse f flow i at → MixProbe {
+    : Json j ( json_obj_new )
+    ( json_obj_set j `coarse` ( json_float coarse ) )
+    ( json_obj_set j `flow` ( json_float flow ) )
+    : !Verdict String r ( model_ingest_at mo j at )
+    ( json_free j )
+    : ~ MixProbe out @ MixProbe { F 0.0 ( string_new ) }
+    ?? r {
+        T vd → {
+            : *Meta mm ( model_metadata mo )
+            : i nv ( vec_len [VerVerdict] . vd versions )
+            : ~ i k 0
+            ~ < k nv {
+                ?? ( vec_get [VerVerdict] . vd versions k ) {
+                    T vv → {
+                        ? ( _an_is_flat_name ( string_data . vv vvname ) ) {
+                            = . out anomaly . vv anomaly
+                            = . out score . vv score
+                            ? >= . vv vv_feat 0 {
+                                ?? ( vec_get [String] . mm feats . vv vv_feat ) {
+                                    T fn → { ( string_push_str . out feat ( string_data fn ) ) }
+                                    F _ → {}
+                                }
+                            } {}
+                        } {}
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( verdict_free vd )
+        }
+        F e → { ( string_free e ) }
+    }
+    ^ out
+}
+
+// The reference the fit wrote for a named column.
+@ mix_ref * Meta mm s col → f {
+    : i n ( vec_len [String] . mm feats )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] . mm feats k ) {
+            T fn → {
+                ? == ( nurl_str_eq ( string_data fn ) col ) 1 {
+                    ?? ( vec_get [f] . mm flat_run k ) { T x → { ^ x } F _ → {} }
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ -1.0
+}
+
+@ test_flatline_mixed Store st → v {
+    = g_lcg 7
+    : *Model mo ( model_open_at st `flatmix` T0 )
+    ( model_set_limits mo 10 150000 )
+    ( model_set_schedule mo 100000 100000 )
+    : ~ i k 0
+    ~ < k 700 {
+        : f coarse # f % / k 35 10
+        ( string_free . ( mix_ingest mo coarse + 5.0 ( gauss3 ) + T0 * k 60 ) feat )
+        = k + k 1
+    }
+    : i tr ( model_force_train_at mo + T0 * 700 60 )
+    ( check > tr 0 `flatline/mixed: trained` )
+    : *Meta mm ( model_metadata mo )
+    : f rc ( mix_ref mm `coarse` )
+    : f rf ( mix_ref mm `flow` )
+    ( check & >= rc 30.0 <= rc 40.0 `flatline/mixed: the coarse column's reference run is its own 35-row habit` )
+    ( check & > rf 0.0 <= rf 3.0 `flatline/mixed: the smooth column's reference run is short` )
+
+    // The coarse column goes on being coarse: every one of its ordinary
+    // 35-minute steps is judged, and none of them is an anomaly.
+    : ~ b coarse_flagged F
+    = k 0
+    ~ < k 140 {
+        : f coarse # f % / + 700 k 35 10
+        : MixProbe fp ( mix_ingest mo coarse + 5.0 ( gauss3 ) + T0 * + 700 k 60 )
+        ? . fp anomaly { = coarse_flagged T } {}
+        ( string_free . fp feat )
+        = k + k 1
+    }
+    ( check ! coarse_flagged `flatline/mixed: a column that repeats by its own habit is not flagged for it` )
+
+    // The smooth column freezes for 25 rows while the coarse one carries
+    // on: the guard names the column that actually stopped.
+    : ~ MixProbe pf @ MixProbe { F 0.0 ( string_new ) }
+    = k 0
+    ~ < k 25 {
+        ( string_free . pf feat )
+        : f coarse # f % / + 840 k 35 10
+        = pf ( mix_ingest mo coarse 5.125 + T0 * + 840 k 60 )
+        = k + k 1
+    }
+    ( check . pf anomaly `flatline/mixed: a genuine 25-row freeze is flagged` )
+    ( check == ( nurl_str_eq ( string_data . pf feat ) `flow` ) 1 `flatline/mixed: and the guard names flow, not the coarse column` )
+    ( string_free . pf feat )
+    ( model_free mo )
+}
+
+// ── Scenario 3c: the guard must not learn the fault ───────────────────
+//
+// The freeze is INSIDE the training data this time — 25 rows at the end
+// of 900, which is what a file import looks like when the sensor failed
+// before anyone noticed. A reference taken as the longest run in training
+// would come back as 25, the guard would ask for 50 before it counted,
+// and it would have immunised itself against the very fault it exists to
+// catch. Each run votes at most a hundredth of the ring, so one stretch
+// cannot set the reference however long it is.
+
+@ test_flatline_learns_habit_not_fault Store st → v {
+    = g_lcg 21
+    : *Model mo ( model_open_at st `flatfit` T0 )
+    ( model_set_limits mo 10 150000 )
+    ( model_set_schedule mo 100000 100000 )
+    : ~ i k 0
+    ~ < k 900 {
+        : f coarse # f % / k 35 10
+        : f flow ? >= k 875 5.125 + 5.0 ( gauss3 )
+        ( string_free . ( mix_ingest mo coarse flow + T0 * k 60 ) feat )
+        = k + k 1
+    }
+    : i tr ( model_force_train_at mo + T0 * 900 60 )
+    ( check > tr 0 `flatline/fit: trained on a ring that holds the freeze` )
+    : *Meta mm ( model_metadata mo )
+    : f rf ( mix_ref mm `flow` )
+    : f rc ( mix_ref mm `coarse` )
+    ( check <= rf 3.0 `flatline/fit: a freeze in the training rows does not become the reference` )
+    ( check & >= rc 30.0 <= rc 40.0 `flatline/fit: while a habit that recurs still does` )
+
+    // And the guard fires on the next freeze, having learnt nothing from
+    // the one it was trained through.
+    : ~ MixProbe pg @ MixProbe { F 0.0 ( string_new ) }
+    = k 0
+    ~ < k 25 {
+        ( string_free . pg feat )
+        : f coarse # f % / + 900 k 35 10
+        = pg ( mix_ingest mo coarse 4.875 + T0 * + 900 k 60 )
+        = k + k 1
+    }
+    ( check . pg anomaly `flatline/fit: the next freeze is flagged` )
+    ( check == ( nurl_str_eq ( string_data . pg feat ) `flow` ) 1 `flatline/fit: and named` )
+    ( string_free . pg feat )
+    ( model_free mo )
+}
+
 @ main → i {
     : ~ String root ( string_from `./anomaly_ver_test` )
     ?? ( env_get `ANOMALY_TEST_DIR` ) {
@@ -507,6 +669,8 @@ $ `src/dynamic.nu`
     ( test_routing st )
     ( test_aggregate_finetune st )
     ( test_flatline st )
+    ( test_flatline_mixed st )
+    ( test_flatline_learns_habit_not_fault st )
 
     ( store_free st )
     : !v IoErr fin ( dir_remove_all ( string_data root ) )

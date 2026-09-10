@@ -131,6 +131,24 @@ $ `src/dynamic.nu`
     ( check == ( string_len e1 ) 0 `patch: a one-field version object is accepted` )
     ( string_free e1 )
     ( check ( near ( meta_version_margin mm `daily` -1.0 ) 0.33 ) `patch: the named field changed` )
+    // The audit trail promises "every change of a version's alert line";
+    // a margin set through the metadata patch is one.
+    : Json aud ( model_audit mo 0 )
+    ( check == ( json_arr_len aud ) 1 `patch: the margin change is in the audit trail` )
+    ?? ( json_arr_get aud 0 ) {
+        T ent → {
+            : ~ String av ( string_new )
+            ?? ( json_obj_get ent `version` ) { T v → { ( string_push_str av ( json_as_str v ) ) } F _ → {} }
+            ( check == ( nurl_str_eq ( string_data av ) `daily` ) 1 `patch: and it names the version` )
+            ( string_free av )
+            : ~ String ac ( string_new )
+            ?? ( json_obj_get ent `action` ) { T v → { ( string_push_str ac ( json_as_str v ) ) } F _ → {} }
+            ( check == ( nurl_str_eq ( string_data ac ) `edit` ) 1 `patch: and the action is the edit` )
+            ( string_free ac )
+        }
+        F _ → { ( check F `patch: the audit entry reads back` ) }
+    }
+    ( json_free aud )
     ( check == ( vec_len [VerCfg] . mm versions ) before `patch: no version was added or lost` )
     ( check == ( meta_version_margin mm `weekly` -1.0 ) 0.06 `patch: other versions are untouched` )
 
@@ -144,9 +162,20 @@ $ `src/dynamic.nu`
         F _ → { ( check F `patch: daily still present` ) }
     }
 
-    // An unknown key adds a version, defaults filling the gaps.
-    : String e2 ( patch_text mo `{"versions":{"hourly":{"window_minutes":60,"n_estimators":150}}}` )
-    ( check == ( string_len e2 ) 0 `add: an unknown version name is accepted` )
+    // A name the model does not have is a typo far more often than a new
+    // version: a partial patch refuses it and names the ones that exist.
+    : String etypo ( patch_text mo `{"versions":{"autoenocder":{"enabled":false}}}` )
+    ( check > ( string_len etypo ) 0 `add: a misspelt version name is refused, not silently created` )
+    ( check ( string_contains etypo `autoenocder` ) `add: and the refusal names it` )
+    ( check ( string_contains etypo `replace_versions` ) `add: and says how a version IS added` )
+    ( string_free etypo )
+    ( check < ( meta_find_version mm `autoenocder` ) 0 `add: nothing was created` )
+    ( check == ( vec_len [VerCfg] . mm versions ) before `add: and the version list is as it was` )
+
+    // Adding one is the whole-list flag away, which is what the JSON
+    // editor sends.
+    : String e2 ( patch_text mo `{"versions":{"short_term":{},"daily":{},"weekly":{},"seasonal":{},"timevector":{},"range_guard":{},"flatline":{},"forecast":{},"autoencoder":{},"hourly":{"window_minutes":60,"n_estimators":150}},"replace_versions":true}` )
+    ( check == ( string_len e2 ) 0 `add: a whole-list patch may name a version the model does not have` )
     ( string_free e2 )
     : i at_h ( meta_find_version mm `hourly` )
     ( check >= at_h 0 `add: the new version is in the metadata` )

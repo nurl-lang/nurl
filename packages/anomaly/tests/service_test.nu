@@ -539,12 +539,31 @@ $ `src/service.nu`
     : SvcOut au ( fire r `GET` `/models/dynamic/svc/audit` `limit=10` `` )
     ( check == . au status 200 `svc: audit -> 200` )
     ( check > ( jint_of . au body `count` ) 0 `svc: the applied fine-tune is in the audit log` )
+    // Newest last, as the route documents it: the fine-tune just applied
+    // is the last line, behind the margins the metadata PUTs above moved.
     : ~ b au_ok F
+    : ~ b au_edit F
     ?? ( json_obj_get . au body `entries` ) {
-        T ea → { ?? ( json_arr_get ea 0 ) { T e → { = au_ok & ( jstr_eq e `action` `finetune` ) ( json_obj_has e `to` ) } F _ → {} } }
+        T ea → {
+            ?? ( json_arr_get ea - ( json_arr_len ea ) 1 ) {
+                T e → { = au_ok & ( jstr_eq e `action` `finetune` ) ( json_obj_has e `to` ) }
+                F _ → {}
+            }
+            // An edit that moves a margin is a change of a version's
+            // alert line and belongs in the same log.
+            : ~ i ai 0
+            ~ < ai ( json_arr_len ea ) {
+                ?? ( json_arr_get ea ai ) {
+                    T e → { ? ( jstr_eq e `action` `edit` ) { = au_edit T } {} }
+                    F _ → {}
+                }
+                = ai + ai 1
+            }
+        }
         F _ → {}
     }
     ( check au_ok `svc: an entry names the action and the new margin` )
+    ( check au_edit `svc: a margin moved by a metadata edit is in the audit log too` )
     ( json_free . au body )
     : SvcOut md6b ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
     ( check > ( jint_of . md6b body `tuned_at` ) 0 `svc: a hand-set margin marks the model tuned` )

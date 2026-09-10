@@ -47,35 +47,68 @@ $ `src/orgfiles.nu`
 // Whether the flagged rows stand apart from the file or are merely its
 // tail. The margins are the file's own 1 % quantile, so about 1 % of ANY
 // file is flagged and severity says ~1 for all of them — a lone spike
-// sets the very margin it is measured against. What tells a spike from
-// a tail is the gap below the cut: the worst row against the row at
-// twice the rate (the 2k-th worst). A file's tail thins gradually and
-// the ratio stays near 1 — the worst of 1500 Gaussian draws is ~3.3 σ,
-// the 30th ~2.3 σ; a real outlier sits several times above the rows
-// just under the cut. Read on range_guard alone, whose score is a
-// linear magnitude (−max |z|, in standard deviations). A forest's
-// decision function saturates, and the autoencoder's reconstruction
-// error is heavy-tailed even on Gaussian data (the net fits the bulk),
-// so their ratios say nothing about the file. −1 when range_guard gave
-// no verdict (disabled, or too few rows).
-@ _ana_separation * Model mo f rate → f {
+// sets the very margin it is measured against. What tells a fault from a
+// tail is a STEP in the sorted scores: a block of rows far out, and then
+// the rest of the file well below it. Read on range_guard alone, whose
+// score is a linear magnitude (−max |z|, in standard deviations). A
+// forest's decision function saturates, and the autoencoder's
+// reconstruction error is heavy-tailed even on Gaussian data (the net
+// fits the bulk), so their ratios say nothing about the file.
+//
+// For each block size j the statistic is |score of the j-th worst row| /
+// |score of the 2j-th worst|, and the answer is the largest of those over
+// j — with the j that produced it, which is how many rows stand apart. A
+// file's tail thins gradually and every ratio stays near 1 (the worst of
+// 1500 Gaussian draws is ~3.3 σ, the 30th ~2.3 σ); a real fault has one
+// j where the ratio jumps.
+//
+// Fixing j at the target rate — the one ratio this measured until
+// 0.32.0 — could only see a fault SMALLER than 1 % of the file. A stuck
+// sensor or a collapsed reading lasting 25 rows in 1500 put fault rows on
+// BOTH sides of that single ratio, which then read ~1, and the file was
+// reported as having nothing that stands out while a fifth of a column's
+// range had gone missing. The maximum over j has no such blind spot: the
+// step is found wherever it is.
+: AnaSep { f sep i rows }
+
+@ _ana_separation * Model mo f rate → AnaSep {
     : CalReport cr ( model_calibrate mo 0 0 )
-    : ~ f sep -1.0
+    : ~ AnaSep out @ AnaSep { -1.0 0 }
     : i ni ( vec_len [CalVer] . cr items )
     : ~ i k 0
     ~ < k ni {
         ?? ( vec_get [CalVer] . cr items k ) {
             T cv → {
                 : i n ( vec_len [f] . cv dfs )
-                ? & == ( nurl_str_eq ( string_data . cv cvname ) `range_guard` ) 1 > n 1 {
+                ? & == ( nurl_str_eq ( string_data . cv cvname ) `range_guard` ) 1 > n 3 {
                     : *f dp ( vec_data [f] . cv dfs )
                     : ~ i cut # i ( float_round * rate # f n )
                     ? < cut 1 { = cut 1 } {}
-                    : ~ i j - * 2 cut 1
-                    ? >= j n { = j - n 1 } {}
-                    : f w - 0.0 . dp 0
-                    : f ref - 0.0 . dp j
-                    ? > w 0.0 { = sep ? > ref 0.0 / w ref 1000000.0 } { = sep 1.0 }
+                    // Look for the step over block sizes up to a quarter
+                    // of the file, and never fewer than the target rate's
+                    // own block: a fault may be many times the 1 % the
+                    // margins aim at, and it may be one row.
+                    : ~ i jmax / n 4
+                    ? < jmax * 2 cut { = jmax * 2 cut } {}
+                    ? > jmax / n 2 { = jmax / n 2 } {}
+                    ? < jmax 1 { = jmax 1 } {}
+                    : ~ f best 1.0
+                    : ~ i bestj 0
+                    : ~ i j 1
+                    ~ <= j jmax {
+                        : i lo - * 2 j 1
+                        ? < lo n {
+                            : f w - 0.0 . dp - j 1
+                            : f ref - 0.0 . dp lo
+                            ? & > w 0.0 > ref 0.0 {
+                                : f r / w ref
+                                ? > r best { = best r = bestj j } {}
+                            } {}
+                        } {}
+                        = j + j 1
+                    }
+                    = . out sep best
+                    = . out rows bestj
                 } {}
             }
             F _ → {}
@@ -83,16 +116,25 @@ $ `src/orgfiles.nu`
         = k + k 1
     }
     ( cal_free cr )
-    ^ sep
+    ^ out
 }
 
 // One sentence on what the flagged rows are worth: the margins are set
 // from the file itself, so the count alone says nothing.
-@ _ana_reading i nanom f sep → s {
-    ? == nanom 0 { ^ `nothing flagged: no row falls past the margins the file's own scores set` } {}
-    ? < sep 0.0 { ^ `the margins are set from the file itself, so its least typical 1 % is flagged whatever it holds; range_guard gave no verdict, so whether any row stands apart from that tail is not read` } {}
-    ? < sep ANA_STANDOUT { ^ `nothing stands out: the margins are set from the file itself, so its least typical 1 % is flagged whatever it holds — and the worst row is under three times as far out, in standard deviations, as the rows just below the cut (separation < 3): the tail of the file rather than a fault` } {}
-    ^ `the flagged rows stand apart from the file: the worst row is separation times as many standard deviations out as the rows just below the 1 % cut — a fault or a real event, not the tail`
+@ _ana_reading i nanom AnaSep sp → String {
+    : f sep . sp sep
+    ? == nanom 0 { ^ ( string_from `nothing flagged: no row falls past the margins set from the scores of the file itself` ) } {}
+    ? < sep 0.0 { ^ ( string_from `the margins are set from the file itself, so its least typical 1 % is flagged whatever it holds; range_guard gave no verdict, so whether any row stands apart from that tail is not read` ) } {}
+    ? < sep ANA_STANDOUT {
+        ^ ( string_from `nothing stands out: the margins are set from the file itself, so its least typical 1 % is flagged whatever it holds — and nowhere in the sorted scores is there a block of rows several times further out than the rows below it (separation < 3, at any block size): the tail of the file rather than a fault` )
+    } {}
+    : f rounded / ( float_round * sep 10.0 ) 10.0
+    : String m ( string_from `the ` )
+    ( string_push_int m . sp rows )
+    ( string_push_str m ` worst rows stand apart from the file: they are ` )
+    ( string_push_float m rounded )
+    ( string_push_str m ` times as many standard deviations out as the rows below them — a fault or a real event, not the tail. Read those rows first; the flagged list may be longer, since the margins flag the least typical 1 % of any file whatever it holds` )
+    ^ m
 }
 
 // ── The task directory ────────────────────────────────────────────────
@@ -617,8 +659,9 @@ $ `src/orgfiles.nu`
         = k + k 1
     }
 
-    : ~ f sep ( _ana_separation mo ANA_TARGET_RATE )
-    ? > sep 0.0 { = sep / ( float_round * sep 100.0 ) 100.0 } {}
+    : ~ AnaSep sp ( _ana_separation mo ANA_TARGET_RATE )
+    ? > . sp sep 0.0 { = . sp sep / ( float_round * . sp sep 100.0 ) 100.0 } {}
+    : f sep . sp sep
 
     // The result file, into the organisation's folder.
     : String label ( _ana_jstr params `name` )
@@ -645,7 +688,10 @@ $ `src/orgfiles.nu`
     ( json_obj_set res `considered` ( json_int . so considered ) )
     ( json_obj_set res `worst_severity` ( json_float worst ) )
     ( json_obj_set res `separation` ( json_float sep ) )
-    ( json_obj_set res `reading` ( json_str_lit ( _ana_reading nanom sep ) ) )
+    ( json_obj_set res `stands_apart_rows` ( json_int . sp rows ) )
+    : String rd1 ( _ana_reading nanom sp )
+    ( json_obj_set res `reading` ( json_str_lit ( string_data rd1 ) ) )
+    ( string_free rd1 )
     ( json_obj_set res `model_versions` ( json_clone vers ) )
     ( json_obj_set res `margins` ( json_clone margins ) )
     : Json tj ( json_clone plan )
@@ -674,7 +720,10 @@ $ `src/orgfiles.nu`
         ( json_obj_set st `considered` ( json_int . so considered ) )
         ( json_obj_set st `worst_severity` ( json_float worst ) )
         ( json_obj_set st `separation` ( json_float sep ) )
-        ( json_obj_set st `reading` ( json_str_lit ( _ana_reading nanom sep ) ) )
+        ( json_obj_set st `stands_apart_rows` ( json_int . sp rows ) )
+        : String rd2 ( _ana_reading nanom sp )
+        ( json_obj_set st `reading` ( json_str_lit ( string_data rd2 ) ) )
+        ( string_free rd2 )
         ( json_obj_set st `model_versions` vers )
         ( json_obj_set st `margins` margins )
         ( json_obj_set st `notes` notes )
