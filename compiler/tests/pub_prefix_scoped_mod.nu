@@ -1,4 +1,4 @@
-// pub_prefix_scoped_mod.nu — helper for pub_prefix_scoped.nu.
+// fixture: module; pub_prefix_scoped_mod.nu — helper for pub_prefix_scoped.nu.
 //
 // The shape that mattered: a module whose LAST top-level declaration
 // carries a `pub` prefix on something other than an `@`-function. The

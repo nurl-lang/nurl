@@ -1,4 +1,4 @@
-// The importing program supplies Reading AFTER importing this module.
+// fixture: module; The importing program supplies Reading AFTER importing this module.
 : IntReading { i value }
 : FloatReading { f value }
 

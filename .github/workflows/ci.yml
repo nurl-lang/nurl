@@ -64,6 +64,21 @@ jobs:
               - 'compiler/nurlc.nu'
               - 'tools/leakgate.sh'
 
+  runner-controls:
+    name: compiler runner fault-injection controls
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: POSIX and PowerShell runner controls
+        shell: bash
+        run: |
+          NURL_TEST_PWSH=$(command -v pwsh)
+          export NURL_TEST_PWSH
+          python3 tools/tests/test_compiler_runners.py
+
   build-test:
     name: build + bootstrap fixed point + test corpus
     needs: changes

@@ -1,9 +1,11 @@
 # Building NURL
 
-The only build-time dependency is **clang / LLVM 15+**. No Python, no make,
-no language-specific package manager. Clone the repo and run `./build.sh`
-(or `build.bat` on Windows). The committed `compiler/nurlc_lastgood.ll`
-snapshot is the only thing that boots the self-hosted chain.
+The bootstrap uses **clang / LLVM 15+**, the host shell and standard system
+utilities. It needs no Python, make or language-specific package manager.
+The full POSIX test suite also requires `timeout` or `gtimeout`; the Windows
+suite uses PowerShell 7. Clone the repo and run `./build.sh` (or `build.bat`
+on Windows). The committed `compiler/nurlc_lastgood.ll` snapshot boots the
+self-hosted chain.
 
 Optional stdlib features pull in their own pkg-config libraries at link
 time (`libpq-dev`, `libsqlite3-dev`, `libssl`, `libcurl`, `libz`, …); each
@@ -14,7 +16,10 @@ degrades with a clear diagnostic when absent. See
 
 | Tool | Purpose |
 |---|---|
-| clang / LLVM 15+ | Compile LLVM IR (`.ll`) to a native binary; the only required build-time dependency |
+| clang / LLVM 15+ | Compile LLVM IR (`.ll`) to a native binary |
+| Bash + standard POSIX utilities | Run `build.sh` and the POSIX test suite |
+| `timeout` or `gtimeout` | Bound compiler and runtime execution in POSIX tests; Homebrew coreutils on macOS |
+| PowerShell 7 (Windows) | Run `run_tests.ps1` |
 
 **Windows** — install LLVM from [llvm.org/releases](https://llvm.org/releases/)
 (the Windows installer adds `clang.exe` to `PATH`). Command Prompt,
@@ -42,12 +47,13 @@ export CLANG="$(brew --prefix llvm)/bin/clang"
 Also `brew install coreutils` — the test runner's hang watchdog is
 `timeout(1)`, which macOS ships under no name (Homebrew installs it as
 `gtimeout`, which the runner looks for). macOS host builds are covered
-by CI on both Apple Silicon and Intel; see [`PLATFORMS.md`](PLATFORMS.md).
+by CI on Apple Silicon; Intel host builds remain unverified. See [`PLATFORMS.md`](PLATFORMS.md).
 
 **FreeBSD** — the base system already ships `clang`; `build.sh` needs `bash`
 (`pkg install -y bash`), plus `pkgconf` + `sqlite3` for the SQLite FFI tests.
-The toolchain binaries themselves link only libc, so they also run on
-musl/Alpine without extra packages (see [`PLATFORMS.md`](PLATFORMS.md)).
+The shipped Linux archives use the glibc ABI and do not load under musl.
+Alpine/musl requires a source build; a libc-only dependency list does not
+imply compatibility between libc ABIs (see [`PLATFORMS.md`](PLATFORMS.md)).
 
 ## Step 1 — Build the C runtime
 

@@ -1,4 +1,4 @@
-// alias_import_mod.nu — library consumed by alias_import_use.nu.
+// fixture: module; alias_import_mod.nu — library consumed by alias_import_use.nu.
 // When imported with an alias (`$ `...` m`) every top-level @ function
 // defined here is renamed to `m__name` by the compiler's import-alias
 // pass, so internal calls (ai_double → ai_add) are rewritten together

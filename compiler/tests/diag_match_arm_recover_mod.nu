@@ -1,4 +1,4 @@
-// Module for diag_match_arm_recover.nu — its only declaration dies on a
+// fixture: module; Module for diag_match_arm_recover.nu — its only declaration dies on a
 // diagnostic INSIDE a `??` result-match arm, so the multi-error recovery
 // frame unwinds out of the open function + arm scopes. Not a test itself.
 

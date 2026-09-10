@@ -141,19 +141,8 @@ MAX_OUT_LINES="${MAX_OUT_LINES:-200}"
 TIMEOUT="${TIMEOUT:-60}"
 JOBS="${NURL_TEST_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
-# `timeout(1)` is coreutils on Linux and base on FreeBSD, but macOS ships
-# neither — there it arrives as `gtimeout` with Homebrew coreutils. Resolve
-# the name once. With no watchdog at all a hung test would wedge the whole
-# runner forever, so say so loudly rather than discovering it as a stalled
-# CI job; the run continues, because a corpus that cannot run is worse than
-# one that cannot bound a hang.
-TIMEOUT_CMD=""
-if command -v timeout >/dev/null 2>&1; then TIMEOUT_CMD="timeout"
-elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT_CMD="gtimeout"
-else
-    echo "WARNING: neither timeout nor gtimeout on PATH — tests run unbounded." >&2
-    echo "         On macOS: brew install coreutils" >&2
-fi
+. "$SCRIPT_DIR/test_harness.sh"
+init_test_harness || exit 2
 
 mkdir -p "$OUTDIR" "$WORKDIR"
 
@@ -195,82 +184,31 @@ run_one() {
 
     if [[ -n "$(is_skipped "$name")" ]]; then echo SKIP; return; fi
 
-    # ── nobck_* — the `--no-borrowck` escape hatch, exercised. The
-    #             checker is a diagnostic pass, so switching it off must
-    #             change nothing but the diagnostics: the program still
-    #             compiles, links and runs, and the record below is the
-    #             ordinary one. Nothing in the tree ran this flag until a
-    #             closure body's unguarded save/restore of the checker's
-    #             own state turned it into an internal compiler panic on
-    #             every program containing a closure.
-    local nbflag=""
-    [[ "$name" == nobck_* ]] && nbflag="--no-borrowck"
-
-    # ── borrow_* — violations are compile errors; the diagnostic is
-    #               baselined. borrow_strict_* only fire under the
-    #               stricter checker flag.
-    if [[ "$name" == borrow_* ]]; then
-        local flag=""
-        [[ "$name" == borrow_strict_* ]] && flag="--strict-borrowck"
-        if "$NURLC" $flag "$src" > "$ll" 2>"$err"; then
-            { echo "COMPILE OK"; echo "(expected COMPILE FAIL but compiler accepted it)"; } > "$act"
-        else
-            { echo "COMPILE FAIL"; } > "$act"
-            if [[ -s "$err" ]]; then strip_root "$err"; echo "ERRORS" >> "$act"; append_capped "$act" "$err"; fi
+    local mode code
+    mode=$(test_mode "$name")
+    case "$mode" in reject|compile|run) ;; *) echo "Invalid test mode: $mode" > "$WORKDIR/$name.diff"; echo FAIL; return ;; esac
+    compile_test "$name" "$src" > "$ll" 2>"$err"
+    code=$?
+    if [[ "$code" != 0 && "$code" != 1 ]]; then
+        printf 'Compiler failed with exit %s (timeout=%ss); see %s\n' "$code" "$NURL_COMPILE_TIMEOUT" "$err" > "$WORKDIR/$name.diff"
+        echo FAIL; return
+    fi
+    if [[ "$mode" == reject && "$code" == 0 || "$mode" != reject && "$code" != 0 ]]; then
+        printf 'Unexpected compiler exit %s for %s test; see %s\n' "$code" "$mode" "$err" > "$WORKDIR/$name.diff"
+        echo FAIL; return
+    fi
+    if [[ "$mode" == reject ]]; then
+        echo "COMPILE FAIL" > "$act"
+        if [[ "$name" != should_fail_* && -s "$err" ]]; then
+            strip_root "$err"; echo ERRORS >> "$act"; append_capped "$act" "$err"
         fi
-    # ── lint_* — diagnostics that only fire under --lint. Compiles
-    #             clean (the program is valid); it is the WARNINGS that
-    #             are baselined, so a lint that stops firing, starts
-    #             firing somewhere new, or moves its caret is caught.
-    elif [[ "$name" == lint_* ]]; then
-        if "$NURLC" --lint "$src" > "$ll" 2>"$err"; then
-            { echo "COMPILE OK"; } > "$act"
-            if [[ -s "$err" ]]; then strip_root "$err"; echo "WARNINGS" >> "$act"; append_capped "$act" "$err"; fi
-        else
-            { echo "COMPILE FAIL"; echo "(expected COMPILE OK)"; } > "$act"
-            if [[ -s "$err" ]]; then strip_root "$err"; append_capped "$act" "$err"; fi
-        fi
-    # ── arity_strict_* — the n-ary '&'/'|' trap, an error by default
-    #                     (--strict-arity is kept as an explicit no-op
-    #                     here). The diagnostic text is baselined
-    #                     because WHERE it points is the point: it must
-    #                     name the `?`, not the `{}` that finally
-    #                     revealed the mistake.
-    elif [[ "$name" == arity_strict_* ]]; then
-        if "$NURLC" --strict-arity "$src" > "$ll" 2>"$err"; then
-            { echo "COMPILE OK"; echo "(expected COMPILE FAIL but compiler accepted it)"; } > "$act"
-        else
-            { echo "COMPILE FAIL"; } > "$act"
-            if [[ -s "$err" ]]; then strip_root "$err"; echo "ERRORS" >> "$act"; append_capped "$act" "$err"; fi
-        fi
-    # ── should_fail_* — COMPILE FAIL is the expected outcome ──
-    elif [[ "$name" == should_fail_* ]]; then
-        if "$NURLC" "$src" > "$ll" 2>"$err"; then
-            { echo "COMPILE OK"; echo "(expected COMPILE FAIL but compiler accepted it)"; } > "$act"
-        else
-            echo "COMPILE FAIL" > "$act"
-        fi
-    # ── diag_* — like should_fail_ but the diagnostic TEXT is baselined
-    #            (default flags, front-end stderr captured verbatim).
-    #            For multi-error / diagnostic-quality regressions where
-    #            WHAT was reported matters, not just that compilation
-    #            failed.
-    elif [[ "$name" == diag_* ]]; then
-        if "$NURLC" "$src" > "$ll" 2>"$err"; then
-            { echo "COMPILE OK"; echo "(expected COMPILE FAIL but compiler accepted it)"; } > "$act"
-        else
-            { echo "COMPILE FAIL"; } > "$act"
-            if [[ -s "$err" ]]; then strip_root "$err"; echo "ERRORS" >> "$act"; append_capped "$act" "$err"; fi
-        fi
+    elif [[ "$mode" == compile ]]; then
+        echo "COMPILE OK" > "$act"
+        if [[ -s "$err" ]]; then strip_root "$err"; echo WARNINGS >> "$act"; append_capped "$act" "$err"; fi
     else
-        # ── should_warn_* keep the compile diagnostic as WARNINGS ──
         local werr=""
-        [[ "$name" == should_warn_* ]] && werr="$WORKDIR/$name.werr" && rm -f "$werr"
-        local cerr="${werr:-$err}"
-        if ! "$NURLC" $nbflag "$src" > "$ll" 2>"$cerr"; then
-            strip_root "$cerr"
-            { echo "COMPILE FAIL"; echo "ERRORS"; } > "$act"; append_capped "$act" "$cerr"
-        elif ! "$CLANG" -O2 -flto $OPAQUE_FLAGS "$ll" "$RUNTIME" $LINK_LIBS -o "$bin" 2>"$err"; then
+        if [[ "$name" == should_warn_* ]]; then werr="$WORKDIR/$name.werr"; cp "$err" "$werr"; fi
+        if ! "$CLANG" -O2 -flto $OPAQUE_FLAGS "$ll" "$RUNTIME" $LINK_LIBS -o "$bin" 2>"$err"; then
             strip_root "$err"
             { echo "COMPILE OK"; echo "LINK FAIL"; } > "$act"; append_capped "$act" "$err"
         else
@@ -288,8 +226,12 @@ run_one() {
             # found burning a core each 12 hours after their run. Declaring a
             # hang is not the same as ending it.
             ( cd "$rundir" && $TIMEOUT_CMD ${TIMEOUT_CMD:+-k 5s "${TIMEOUT}s"} "./$name" > "$out" 2>&1 ) 2>/dev/null
-            local code=$?
+            code=$?
             rm -rf "$rundir"
+            if [[ "$code" == 124 || "$code" == 137 ]]; then
+                echo "Runtime timed out or was killed; see $out" > "$WORKDIR/$name.diff"
+                echo FAIL; return
+            fi
             { echo "COMPILE OK"; } > "$act"
             if [[ -n "$werr" && -s "$werr" ]]; then
                 strip_root "$werr"; echo "WARNINGS" >> "$act"; append_capped "$act" "$werr"
@@ -308,7 +250,7 @@ run_one() {
     # binary "-dirty". The Windows runner (run_tests.ps1) already normalises;
     # this makes the posix runner honour the same contract.
     sed 's/\r$//' "$act" > "$act.nrm" && mv -f "$act.nrm" "$act"
-    if [[ "$UPDATE" == "1" ]]; then cp "$act" "$gold"; echo UPDATED; return; fi
+    if [[ "$UPDATE" == "1" ]]; then cp "$act" "$gold" || return 1; echo UPDATED; return; fi
     if [[ ! -f "$gold" ]]; then echo MISSING; return; fi
     if cmp -s "$act" "$gold"; then echo PASS; else
         diff -u "$gold" "$act" > "$WORKDIR/$name.diff" 2>/dev/null
@@ -333,13 +275,21 @@ declare -a names=()
 for src in "${all_tests[@]}"; do names+=("$(basename "$src" .nu)"); done
 IFS=$'\n' names=($(printf '%s\n' "${names[@]}" | LC_ALL=C sort)); unset IFS
 
-# When given explicit NAMEs (only with --update), restrict to those.
+# When given explicit NAMEs, restrict to those.
 if [[ ${#ONLY[@]} -gt 0 ]]; then names=("${ONLY[@]}"); fi
 
+validate_test_selection "${names[@]}" || exit 2
+printf '%s\n' "${names[@]}" > "$WORKDIR/.selected"
+
 # ── run in parallel ─────────────────────────────────────────────
+worker_status=0
 printf '%s\n' "${names[@]}" \
-    | xargs -P "$JOBS" -I{} bash -c 'echo "{} $(run_one "{}")"' \
-    > "$WORKDIR/.verdicts" 2>/dev/null
+    | xargs -P "$JOBS" -I{} bash -c 'v=$(run_one "$1") || exit; printf "%s %s\n" "$1" "$v"' _ '{}' \
+    > "$WORKDIR/.verdicts" 2>"$WORKDIR/.workers.stderr" || worker_status=$?
+if ! validate_test_verdicts "$WORKDIR/.selected" "$WORKDIR/.verdicts" 'PASS FAIL MISSING UPDATED SKIP' || (( worker_status != 0 )); then
+    echo "ERROR: test worker protocol failed (xargs exit $worker_status); see $WORKDIR/.workers.stderr" >&2
+    exit 1
+fi
 
 # ── aggregate ───────────────────────────────────────────────────
 pass=0 fail=0 missing=0 updated=0 skip=0
@@ -369,11 +319,16 @@ fi
 status=0
 
 if [[ "$UPDATE" == "1" ]]; then
-    echo "Updated $updated golden(s); skipped $skip."
+    echo "Updated $updated golden(s); skipped $skip; failed $fail."
+    for name in "${failed[@]}"; do
+        echo "--- $name ---"
+        cat "$WORKDIR/$name.diff" 2>/dev/null
+    done
     [[ ${#orphans[@]} -gt 0 ]] && {
         echo "NOTE: ${#orphans[@]} orphan golden(s) remain (no .nu): ${orphans[*]}"
     }
-    exit 0
+    (( fail == 0 && missing == 0 && ${#orphans[@]} == 0 ))
+    exit $?
 fi
 
 if [[ $fail -gt 0 ]]; then

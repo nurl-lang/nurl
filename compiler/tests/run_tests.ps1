@@ -129,6 +129,8 @@ if (Test-Path $winFile) {
 }
 $MaxOutLines = if ($env:MAX_OUT_LINES) { [int]$env:MAX_OUT_LINES } else { 200 }
 $Timeout     = if ($env:TIMEOUT)       { [int]$env:TIMEOUT }       else { 60 }
+$CompileTimeout = if ($env:NURL_COMPILE_TIMEOUT) { [double]$env:NURL_COMPILE_TIMEOUT } else { 60 }
+if ($CompileTimeout -le 0) { throw 'NURL_COMPILE_TIMEOUT must be positive' }
 $Jobs        = if ($env:NURL_TEST_JOBS){ [int]$env:NURL_TEST_JOBS} else { [Environment]::ProcessorCount }
 $EnableLive     = if ($env:NURL_LIVE_TESTS) { $env:NURL_LIVE_TESTS } else { '1' }
 # See the header: no Win64 context-switch backend, so this one differs
@@ -142,7 +144,13 @@ New-Item -ItemType Directory -Force -Path $OutDir, $WorkDir | Out-Null
 $names = @(Get-ChildItem -Path $ScriptDir -Filter '*.nu' -File | ForEach-Object { $_.BaseName })
 if ($names.Count -eq 0) { Write-Error "no .nu files in $ScriptDir"; exit 2 }
 [Array]::Sort($names, [System.StringComparer]::Ordinal)
-if ($Only) { $names = $Only }
+if ($Only) {
+    foreach ($name in $Only) {
+        if ($name -cnotin $names) { throw "Unknown fixture: $name" }
+    }
+    $names = $Only
+}
+if (@($names | Select-Object -Unique).Count -ne $names.Count) { throw 'Duplicate selected tests' }
 
 $updateFlag = [bool]$Update
 
@@ -151,6 +159,7 @@ $updateFlag = [bool]$Update
 # compares/updates its own golden and returns a verdict object.
 # Writing distinct golden files from parallel threads is race-free.
 $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
+    $ErrorActionPreference = 'Stop'
     $name        = $_
     $ScriptDir   = $using:ScriptDir
     $RootDir     = $using:RootDir
@@ -162,6 +171,7 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     $WinLibs     = $using:WinLibs
     $MaxOutLines = $using:MaxOutLines
     $Timeout     = $using:Timeout
+    $CompileTimeout = $using:CompileTimeout
     $Update      = $using:updateFlag
     $EnableLive     = $using:EnableLive
     $EnableFibers   = $using:EnableFibers
@@ -192,7 +202,11 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
         $proc = [System.Diagnostics.Process]::Start($psi)
         $o = $proc.StandardOutput.ReadToEndAsync()
         $e = $proc.StandardError.ReadToEndAsync()
-        $proc.WaitForExit()
+        if (-not $proc.WaitForExit([int]($CompileTimeout * 1000))) {
+            $proc.Kill($true)
+            $proc.WaitForExit()
+            throw "Tool timed out after ${CompileTimeout}s: $exe"
+        }
         return @{ Code = $proc.ExitCode; Out = $o.Result; Err = $e.Result }
     }
     function Normalize([string]$s) {
@@ -284,9 +298,30 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
         return @()
     }
 
+    # Explicit helper intent; entry points and filename suffixes do not
+    # distinguish parser rejection fixtures from imported modules.
+    $mode = $null
+    foreach ($line in [System.IO.File]::ReadLines((Join-Path $ScriptDir "$name.nu"))) {
+        if ($line -match '^\s*$') { continue }
+        if ($line -notmatch '^\s*//') { break }
+        if ($line -match '^\s*//\s*fixture:\s*([^;\s]+)') { $mode = $Matches[1]; break }
+    }
+    $expectedGold = $gold
+    if (-not (Test-Path -LiteralPath $expectedGold)) {
+        $expectedGold = Join-Path (Join-Path $ScriptDir 'outputs') "$name.txt"
+    }
+    if (-not $mode) {
+        if ($name -match '^(diag_|borrow_|should_fail_|arity_strict_)' -or
+            (Read-TextOrEmpty $expectedGold) -match '^COMPILE FAIL\r?\n') { $mode = 'reject' }
+        elseif ($name -like 'lint_*') { $mode = 'compile' }
+        else { $mode = 'run' }
+    }
+    if ($mode -notin @('module', 'reject', 'compile', 'run')) { throw "Invalid test mode: $mode" }
+    if ($mode -eq 'module' -and (Test-Path -LiteralPath $expectedGold)) { throw "Module has a test golden: $name" }
+
     # ── is_skipped ──────────────────────────────────────────────
     $skip = $false
-    if ($name -match '(_mod|_helper|_lib)$') { $skip = $true }
+    if ($mode -eq 'module') { $skip = $true }
     # POSIX-only surfaces with no Windows equivalent: termios raw mode and
     # AF_UNIX socketpair. Their link errors are environment text (lld/MSVC
     # version-dependent), so golden-ing the failure is brittle — skip.
@@ -327,116 +362,66 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
 
     $enc0 = New-Object System.Text.UTF8Encoding $false
 
-    if ($name -like 'borrow_*') {
-        # borrow_* — violations are compile errors; the diagnostic is
-        # baselined. borrow_strict_* only fire under the stricter flag.
-        $nargs = @()
-        if ($name -like 'borrow_strict_*') { $nargs += '--strict-borrowck' }
-        $nargs += $src
-        $r = Run-Proc $Nurlc $nargs $RootDir
-        if ($r.Code -eq 0) {
-            $act = "COMPILE OK`n(expected COMPILE FAIL but compiler accepted it)`n"
-        } else {
-            $act = "COMPILE FAIL`n"
-            $e = Normalize $r.Err
-            if ($e.Length -gt 0) { $act += "ERRORS`n" + (Cap-Lines (Strip-Root $e)) }
+    $nargs = @()
+    if ($name -like 'borrow_strict_*') { $nargs += '--strict-borrowck' }
+    elseif ($name -like 'nobck_*') { $nargs += '--no-borrowck' }
+    elseif ($name -like 'lint_*') { $nargs += '--lint' }
+    elseif ($name -like 'arity_strict_*') { $nargs += '--strict-arity' }
+    $r = Run-Proc $Nurlc ($nargs + @($src)) $RootDir
+    $cc = $r.Code
+    $cerr = Normalize $r.Err
+    if ($cc -notin @(0, 1)) { throw "Compiler failed with exit ${cc}: $cerr" }
+    if (($mode -eq 'reject' -and $cc -ne 1) -or ($mode -ne 'reject' -and $cc -ne 0)) {
+        # Optional native library availability is not a compiler defect.
+        if ($mode -eq 'run' -and $cerr -match 'no build-time sentinel') {
+            return [pscustomobject]@{ Name = $name; Verdict = 'SKIP'; Diff = '' }
+        }
+        return [pscustomobject]@{ Name = $name; Verdict = 'FAIL'; Diff = "Unexpected compiler exit $cc for $mode fixture: $cerr" }
+    }
+    if ($mode -eq 'reject') {
+        $act = "COMPILE FAIL`n"
+        if ($name -notlike 'should_fail_*' -and $cerr.Length -gt 0) {
+            $act += "ERRORS`n" + (Cap-Lines (Strip-Root $cerr))
         }
     }
-    elseif ($name -like 'lint_*') {
-        # lint_* — diagnostics that only fire under --lint. Compiles
-        # clean (the program is valid); it is the WARNINGS that are
-        # baselined. Mirrors run_tests.sh.
-        $r = Run-Proc $Nurlc @('--lint', $src) $RootDir
-        if ($r.Code -eq 0) {
-            $act = "COMPILE OK`n"
-            $e = Normalize $r.Err
-            if ($e.Length -gt 0) { $act += "WARNINGS`n" + (Cap-Lines (Strip-Root $e)) }
-        } else {
-            $act = "COMPILE FAIL`n(expected COMPILE OK)`n"
-            $e = Normalize $r.Err
-            if ($e.Length -gt 0) { $act += (Cap-Lines (Strip-Root $e)) }
-        }
-    }
-    elseif ($name -like 'arity_strict_*') {
-        # arity_strict_* — the n-ary '&'/'|' trap, an error only under
-        # --strict-arity. The diagnostic TEXT is baselined because where
-        # it points is the point. Mirrors run_tests.sh.
-        $r = Run-Proc $Nurlc @('--strict-arity', $src) $RootDir
-        if ($r.Code -eq 0) {
-            $act = "COMPILE OK`n(expected COMPILE FAIL but compiler accepted it)`n"
-        } else {
-            $act = "COMPILE FAIL`n"
-            $e = Normalize $r.Err
-            if ($e.Length -gt 0) { $act += "ERRORS`n" + (Cap-Lines (Strip-Root $e)) }
-        }
-    }
-    elseif ($name -like 'should_fail_*') {
-        # should_fail_* — COMPILE FAIL is the expected outcome.
-        $r = Run-Proc $Nurlc @($src) $RootDir
-        if ($r.Code -eq 0) {
-            $act = "COMPILE OK`n(expected COMPILE FAIL but compiler accepted it)`n"
-        } else {
-            $act = "COMPILE FAIL`n"
-        }
-    }
-    elseif ($name -like 'diag_*') {
-        # diag_* — like should_fail_ but the diagnostic TEXT is baselined
-        # (default flags; front-end stderr captured verbatim).
-        $r = Run-Proc $Nurlc @($src) $RootDir
-        if ($r.Code -eq 0) {
-            $act = "COMPILE OK`n(expected COMPILE FAIL but compiler accepted it)`n"
-        } else {
-            $act = "COMPILE FAIL`n"
-            $e = Normalize $r.Err
-            if ($e.Length -gt 0) { $act += "ERRORS`n" + (Cap-Lines (Strip-Root $e)) }
-        }
+    elseif ($mode -eq 'compile') {
+        $act = "COMPILE OK`n"
+        if ($cerr.Length -gt 0) { $act += "WARNINGS`n" + (Cap-Lines (Strip-Root $cerr)) }
     }
     else {
         $isWarn = $name -like 'should_warn_*'
-        $r = Run-Proc $Nurlc @($src) $RootDir
-        $cc  = $r.Code
-        $cerr = Normalize $r.Err
-        if ($cc -ne 0) {
-            # nurlc refuses FFI decls whose external lib wasn't found at
-            # build time. build.bat ships no feature sentinels, so this is
-            # an environment gap, not a regression — skip (mirrors the .bat).
-            if ($cerr -match 'no build-time sentinel') {
-                return [pscustomobject]@{ Name = $name; Verdict = 'SKIP'; Diff = '' }
-            }
-            $act = "COMPILE FAIL`nERRORS`n" + (Cap-Lines (Strip-Root $cerr))
+        # IR must hit disk for clang to consume it.
+        [System.IO.File]::WriteAllText($ll, $r.Out, $enc0)
+        $linkArgs = @('-O2', $ll, $Runtime, '-lwinhttp') + $WinLibs + @('-o', $bin)
+        $lr = Run-Proc $Clang $linkArgs $RootDir
+        if ($lr.Code -ne 0) {
+            # link.exe reports the unresolved SYMBOLS (LNK2019) on
+            # STDOUT and clang only relays the exit code on stderr —
+            # capture both, or every link failure reads "exit code
+            # 1120" with the one fact that matters missing.
+            $le = Normalize ($lr.Out + $lr.Err)
+            $act = "COMPILE OK`nLINK FAIL`n" + (Cap-Lines (Strip-Root $le))
         } else {
-            # IR must hit disk for clang to consume it.
-            [System.IO.File]::WriteAllText($ll, $r.Out, $enc0)
-            $linkArgs = @('-O2', $ll, $Runtime, '-lwinhttp') + $WinLibs + @('-o', $bin)
-            $lr = Run-Proc $Clang $linkArgs $RootDir
-            if ($lr.Code -ne 0) {
-                # link.exe reports the unresolved SYMBOLS (LNK2019) on
-                # STDOUT and clang only relays the exit code on stderr —
-                # capture both, or every link failure reads "exit code
-                # 1120" with the one fact that matters missing.
-                $le = Normalize ($lr.Out + $lr.Err)
-                $act = "COMPILE OK`nLINK FAIL`n" + (Cap-Lines (Strip-Root $le))
-            } else {
-                # Each test runs in its OWN scratch dir so relative-path
-                # file side effects can't collide with a sibling. The exe
-                # is invoked as ".\name.exe" so argv[0] stays stable.
-                $rundir = Join-Path $WorkDir "run\$name"
-                if (Test-Path -LiteralPath $rundir) { Remove-Item -LiteralPath $rundir -Recurse -Force }
-                New-Item -ItemType Directory -Force -Path $rundir | Out-Null
-                $runExe = Join-Path $rundir "$name.exe"
-                Copy-Item -LiteralPath $bin -Destination $runExe -Force
-                $r = Invoke-WithTimeout $runExe $rundir $Timeout
-                Remove-Item -LiteralPath $rundir -Recurse -Force -ErrorAction SilentlyContinue
+            # Each test runs in its OWN scratch dir so relative-path
+            # file side effects can't collide with a sibling. The exe
+            # is invoked as ".\name.exe" so argv[0] stays stable.
+            $rundir = Join-Path $WorkDir "run\$name"
+            if (Test-Path -LiteralPath $rundir) { Remove-Item -LiteralPath $rundir -Recurse -Force }
+            New-Item -ItemType Directory -Force -Path $rundir | Out-Null
+            $runExe = Join-Path $rundir "$name.exe"
+            Copy-Item -LiteralPath $bin -Destination $runExe -Force
+            $r = Invoke-WithTimeout $runExe $rundir $Timeout
+            Remove-Item -LiteralPath $rundir -Recurse -Force -ErrorAction SilentlyContinue
 
-                $act = "COMPILE OK`n"
-                if ($isWarn -and $cerr.Length -gt 0) {
-                    $act += "WARNINGS`n" + (Cap-Lines (Strip-Root $cerr))
-                }
-                # Strip the repo root from output too: the full-path launch
-                # means argv[0] (and any path a program echoes) is absolute;
-                # rewriting to repo-relative keeps goldens checkout-portable.
-                $act += "LINK OK`nEXIT $($r.Code)`nOUTPUT`n" + (Cap-Lines (Strip-Root (Normalize $r.Out)))
+            if ($r.Code -eq 124) { throw "Runtime timed out: $name" }
+            $act = "COMPILE OK`n"
+            if ($isWarn -and $cerr.Length -gt 0) {
+                $act += "WARNINGS`n" + (Cap-Lines (Strip-Root $cerr))
             }
+            # Strip the repo root from output too: the full-path launch
+            # means argv[0] (and any path a program echoes) is absolute;
+            # rewriting to repo-relative keeps goldens checkout-portable.
+            $act += "LINK OK`nEXIT $($r.Code)`nOUTPUT`n" + (Cap-Lines (Strip-Root (Normalize $r.Out)))
         }
     }
 
@@ -486,6 +471,21 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     return [pscustomobject]@{ Name = $name; Verdict = 'FAIL'; Diff = $diff }
 }
 
+# Every selected test must yield exactly one recognized record. A worker
+# exception or unexpected pipeline output cannot silently shrink coverage.
+$seen = @{}
+foreach ($r in $results) {
+    if ($null -eq $r -or $r.Name -cnotin $names -or
+        $r.Verdict -cnotin @('PASS', 'FAIL', 'MISSING', 'UPDATED', 'SKIP')) {
+        throw "Invalid test verdict: $r"
+    }
+    if ($seen.ContainsKey($r.Name)) { throw "Duplicate test verdict: $($r.Name)" }
+    $seen[$r.Name] = $true
+}
+foreach ($name in $names) {
+    if (-not $seen.ContainsKey($name)) { throw "Missing test verdict: $name" }
+}
+
 # ── aggregate ───────────────────────────────────────────────────
 $pass = 0; $fail = 0; $missing = 0; $updated = 0; $skip = 0
 $failed = @(); $missed = @()
@@ -511,10 +511,12 @@ if (-not $Only) {
 
 # ── report ──────────────────────────────────────────────────────
 if ($Update) {
-    Write-Host "Updated $updated golden(s); skipped $skip."
+    Write-Host "Updated $updated golden(s); skipped $skip; failed $fail."
+    foreach ($f in $failed) { Write-Host "$($f.Name): $($f.Diff)" }
     if ($orphans.Count -gt 0) {
         Write-Host "NOTE: $($orphans.Count) orphan golden(s) remain (no .nu): $($orphans -join ' ')"
     }
+    if ($fail -gt 0 -or $missing -gt 0 -or $orphans.Count -gt 0) { exit 1 }
     exit 0
 }
 

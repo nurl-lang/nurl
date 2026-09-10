@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Compiler test runners reject missing coverage and compiler failures.**
+  Imported helper fixtures now declare their intent, so parser rejection tests
+  without `main` run. Both POSIX runners and the Windows runner bound compiler
+  invocations, distinguish rejection from crashes/tool failures, and require one
+  recognized verdict per selected test. Sanitized rejection tests fail if the
+  compiler accepts them; failed workers cannot disappear from a green summary.
+  Fault-injection controls cover the runner itself.
+
 - **Trait contracts no longer depend on declaration or import order.**
   Associated-type checks and default-method registration now run after the
   whole program's signature scan, before body or vtable emission. An impl

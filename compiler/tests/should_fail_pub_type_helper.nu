@@ -1,4 +1,4 @@
-// should_fail_pub_type_helper.nu — helper module consumed by the
+// fixture: module; should_fail_pub_type_helper.nu — helper module consumed by the
 // pub-type negative tests + the positive pub_type_visibility test.
 // The first `pub` flips this file into grammar v2.0+ strict mode, so
 // any unmarked top-level decl becomes private to this file.
