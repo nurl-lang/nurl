@@ -73,6 +73,7 @@ $ `src/imptime.nu`
 : i SRC_TICK_MS 15000  // the scheduler's wake-up
 : s SRC_KIND_WFS `wfs`
 : s SRC_KIND_HTTP `http`
+: s SRC_KIND_CSV `csv`
 : i SRC_HEADERS_MAX 20
 : i SRC_BODY_MAX 65536
 // What the API shows in place of a header's value: a key is an admin's
@@ -331,12 +332,14 @@ $ `src/imptime.nu`
 
     ? ( json_obj_has body `kind` ) {
         : String kind ( __src_jstr body `kind` )
-        : b ok | == ( nurl_str_eq ( string_data kind ) SRC_KIND_WFS ) 1 == ( nurl_str_eq ( string_data kind ) SRC_KIND_HTTP ) 1
+        : b ok || == ( nurl_str_eq ( string_data kind ) SRC_KIND_WFS ) 1
+        || == ( nurl_str_eq ( string_data kind ) SRC_KIND_HTTP ) 1
+        == ( nurl_str_eq ( string_data kind ) SRC_KIND_CSV ) 1
         ? ok { ( __src_set_str src `kind` ( string_data kind ) ) } {}
         ( string_free kind )
-        ? ok {} { ^ ( string_from `kind must be "wfs" or "http"` ) }
+        ? ok {} { ^ ( string_from `kind must be "wfs" (an OGC WFS 2.0 endpoint), "http" (a URL answering JSON) or "csv" (a URL answering a CSV file)` ) }
     } {}
-    : b is_http ( source_is_http src )
+    : b is_http ( source_is_url src )
 
     ? ( json_obj_has body `url` ) {
         : String url0 ( __src_jstr body `url` )
@@ -620,6 +623,22 @@ $ `src/imptime.nu`
     ^ h
 }
 
+@ source_is_csv Json src → b {
+    : String kind ( __src_jstr src `kind` )
+    : b c == ( nurl_str_eq ( string_data kind ) SRC_KIND_CSV ) 1
+    ( string_free kind )
+    ^ c
+}
+
+// A source that is a URL fetched WHOLE — an HTTP endpoint answering JSON,
+// or one answering a CSV file. Both are the URL exactly as given, one
+// request, no query built for them and no window in the request: what
+// bounds them is which of the records that come back are newer than the
+// ones already seen. Only a WFS is the other thing.
+@ source_is_url Json src → b {
+    ^ | ( source_is_http src ) ( source_is_csv src )
+}
+
 // A record with every field present, so a reader never has to default.
 @ __src_blank s id s by i now → Json {
     : Json o ( json_obj_new )
@@ -747,7 +766,7 @@ $ `src/imptime.nu`
 // Fetched whole on every run, its clock in the records: a feature type,
 // and an HTTP source alike.
 @ source_is_type Json src → b {
-    ? ( source_is_http src ) { ^ T } {}
+    ? ( source_is_url src ) { ^ T } {}
     : String mode ( __src_jstr src `mode` )
     : b t == ( nurl_str_eq ( string_data mode ) SRC_MODE_TYPE ) 1
     ( string_free mode )
@@ -959,7 +978,8 @@ $ `src/imptime.nu`
     // answer, no window.
     ? ( source_is_type src ) {
         : String tf ( __src_jstr src `time_field` )
-        : b is_http ( source_is_http src )
+        : b is_http ( source_is_url src )
+        : b is_csv ( source_is_csv src )
         : ~ String u ( string_new )
         ? is_http { ( string_push_str u ( string_data url ) ) } {
             ( string_free u )
@@ -975,7 +995,9 @@ $ `src/imptime.nu`
         ( json_free headers )
         ?? fr {
             T body → {
-                : WfsPivot pv ? is_http ( http_pivot ( string_data body ) ( string_data path ) ( string_data tf ) ( now_seconds ) ) ( wfs_pivot_wide ( string_data body ) ( string_data tf ) ( now_seconds ) )
+                : WfsPivot pv ? is_csv ( csv_pivot ( string_data body ) ( string_data tf ) ( now_seconds ) )
+                ? is_http ( http_pivot ( string_data body ) ( string_data path ) ( string_data tf ) ( now_seconds ) )
+                ( wfs_pivot_wide ( string_data body ) ( string_data tf ) ( now_seconds ) )
                 ? > ( string_len . pv err ) 0 {
                     ? & == . pv members 0 ( string_starts_with . pv err `the feature collection holds no` ) {} {
                         ( string_free err )

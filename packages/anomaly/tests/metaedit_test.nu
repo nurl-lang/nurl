@@ -202,6 +202,27 @@ $ `src/dynamic.nu`
     ( check < ( meta_find_version mm `daily` ) 0 `replace: an omitted version is gone` )
     ( check >= ( meta_find_version mm `hourly` ) 0 `replace: a named version stays` )
 
+    // votes: the model's own consensus rule. It is checked against the
+    // versions as the patch LEAVES them, so a patch may switch versions on
+    // and raise the bar in one call — and may not ask for more agreement
+    // than there are versions to give it.
+    : String ev1 ( patch_text mo `{"votes":2}` )
+    ( check == ( string_len ev1 ) 0 `votes: a consensus within reach is accepted` )
+    ( string_free ev1 )
+    ( check == . mm votes 2 `votes: and applied` )
+    : String ev2 ( patch_text mo `{"votes":20}` )
+    ( check > ( string_len ev2 ) 0 `votes: more agreement than there are versions is refused` )
+    ( check ( string_contains ev2 `versions must agree` ) `votes: and the refusal says why` )
+    ( string_free ev2 )
+    ( check == . mm votes 2 `votes: a refused patch leaves it where it was` )
+    : String ev3 ( patch_text mo `{"votes":0}` )
+    ( check > ( string_len ev3 ) 0 `votes: zero is refused` )
+    ( string_free ev3 )
+    : String ev4 ( patch_text mo `{"votes":1}` )
+    ( check == ( string_len ev4 ) 0 `votes: back to one` )
+    ( string_free ev4 )
+    ( check == . mm votes 1 `votes: one again` )
+
     // The schedule half of the patch.
     : String e4 ( patch_text mo `{"schedule":{"below_max":25,"at_max":500}}` )
     ( check == ( string_len e4 ) 0 `schedule: accepted` )
@@ -215,6 +236,7 @@ $ `src/dynamic.nu`
     : *Model re ( model_open_at st `patch` T0 )
     : *Meta rm ( model_metadata re )
     ( check == ( vec_len [VerCfg] . rm versions ) 2 `persist: the version list reloads` )
+    ( check == . rm votes 1 `persist: the consensus rule reloads` )
     ( check == . rm sched_below 25 `persist: the schedule reloads` )
     ( model_free re )
 }

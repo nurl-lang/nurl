@@ -564,6 +564,12 @@ $ `stdlib/std/thread.nu`
         = k + k 1
     }
     ( json_obj_set o `severity` ( json_float . vd severity ) )
+    // The rule the aggregate came out of: how many enabled versions
+    // flagged, and how many had to. With the default of one they say the
+    // same thing every earlier release said in one boolean; above it, a
+    // reader can see a point that two versions disliked and three had to.
+    ( json_obj_set o `versions_flagged` ( json_int . vd hits ) )
+    ( json_obj_set o `votes_required` ( json_int . vd votes_needed ) )
     ( json_obj_set o `versions` vers )
     ( json_obj_set o `data_point` ( json_clone body ) )
     ^ o
@@ -3238,6 +3244,7 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set wj `total` ( json_int ( model_n_points mo ) ) )
     ( json_obj_set o `window` wj )
     : Json agg ( json_obj_new )
+    ( json_obj_set agg `votes_required` ( json_int ? > . cmm votes 1 . cmm votes 1 ) )
     ( json_obj_set agg `flagged` ( json_int . cal agg_flagged ) )
     : ~ f arate 0.0
     ? > . cal n_rows 0 { = arate / # f . cal agg_flagged # f . cal n_rows } {}
@@ -3478,6 +3485,23 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `clock` ( json_str_lit ? . fmm count_clock `count` `time` ) )
     ( json_obj_set o `rate` ( json_float rate ) )
     ( json_obj_set o `dry_run` ( json_bool dry ) )
+    // What `rate` was a share OF. At one vote it is each version's own
+    // share, as it always was; above one it is the window's, and the
+    // versions were placed at a shared quantile to reach it together.
+    ( json_obj_set o `votes_required` ( json_int . rep votes ) )
+    ? > . rep votes 1 {
+        : Json cj ( json_obj_new )
+        ( json_obj_set cj `target_rate` ( json_float rate ) )
+        ( json_obj_set cj `per_version_rate` ( json_float . rep per_version_rate ) )
+        ( json_obj_set cj `flagged_before` ( json_int . rep consensus_before ) )
+        ( json_obj_set cj `flagged_after` ( json_int . rep consensus_after ) )
+        : ~ f car 0.0
+        ? > . rep n_rows 0 { = car / # f . rep consensus_after # f . rep n_rows } {}
+        ( json_obj_set cj `rate_after` ( json_float car ) )
+        ? > ( string_len . rep note ) 0 { ( json_obj_set cj `note` ( json_str_lit ( string_data . rep note ) ) ) } {}
+        ( json_obj_set cj `reading` ( json_str_lit `target_rate is the share of the WINDOW the model should call anomalous; per_version_rate is what each version was set to flag on its own to reach it with the others. A version's own rate is higher than the model's, because agreement is rarer than any one opinion.` ) )
+        ( json_obj_set o `consensus` cj )
+    } {}
     ? > ( string_len note ) 0 { ( json_obj_set o `note` ( json_str_lit ( string_data note ) ) ) } {}
     ( string_free note )
     : Json wj ( json_obj_new )

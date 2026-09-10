@@ -785,6 +785,10 @@ function renderDrawer(name) {
         '<span class="muted small-lbl">calibrate on the last</span>' + winSel +
         (COUNT ? '<span class="muted small-lbl" title="A count-clock model has no real times: 1 point = 1 tick, so a 24 h window is 1,440 points.">(points)</span>' : "") +
         '<div class="spacer"></div>' +
+        '<span class="muted small-lbl" title="How many enabled versions must flag a point before the MODEL calls it an anomaly. 1 = any one of them, which is what a guard is for. Above 1 the versions have to agree, and fine-tune then aims its rate at the MODEL\'s share of the window rather than at each version\'s own.">votes</span>' +
+        '<input id="votes" class="num" style="width:52px" type="number" min="1" step="1" value="' +
+          esc(String(m.votes || 1)) + '" title="versions that must agree; 1 = any one">' +
+        '<span class="muted small-lbl">of ' + esc(String(Object.keys(vers).filter(n => vers[n].enabled).length)) + ' on</span>' +
         '<button class="small primary" id="vSave">Save versions</button></div>' +
       '<div class="cal-note" id="calNote"></div>' +
       '<div class="vwrap"><table class="vtable" id="vTbl">' +
@@ -1093,7 +1097,13 @@ function saveVersions(name, btn) {
     }
   });
   if (bad) { toast(bad, "err", "Not saved"); return; }
-  return putMeta(name, { versions }, btn, "versions").then(ok => { if (ok) loadCal(name); });
+  const patch = { versions };
+  // The consensus rule travels with the versions it counts: a save that
+  // switches versions on and raises votes in one go is checked against
+  // the list as it WILL be, not as it was.
+  const votes = parseInt($("votes").value, 10);
+  if (isFinite(votes) && votes >= 1) patch.votes = votes;
+  return putMeta(name, patch, btn, "versions").then(ok => { if (ok) loadCal(name); });
 }
 
 // Fine-tune: one POST for preview (dry_run) and apply. The response is the

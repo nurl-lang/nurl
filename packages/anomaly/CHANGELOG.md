@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.33.0
+
+A data source can be a file, and a model can require agreement.
+
+### A source that answers with a CSV file
+
+`kind: "csv"` fetches a URL and reads the answer as a CSV file — a header
+row, then one row per record. Not a parser of its own: it is the reader the
+import route and `analyze_data` already use, so a file that imports cleanly
+fetches cleanly, with the same delimiter sniffing, the same missing-value
+rules, the same cell typing and the same quoted-field handling. The clock is
+a column, named or detected, exactly as in the JSON and WFS pivots, and a
+file with no readable stamp is a snapshot of the moment it was fetched.
+
+Everything else a source has, it has: the schedule, the headers, the columns
+tapped as features or as categories, the first run's calibration, the span
+already fetched. A rolling feed that republishes the same window on every
+request — `https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.csv`
+— can be polled as often as you like: each run keeps only the rows newer
+than the newest one already stored.
+
+### A model can require more than one version to agree
+
+`votes` is a model setting now, beside the versions it counts. One — the
+default, and every model that has never touched it — is the rule this
+package has always had: any enabled version flagging is enough, which is
+what a guard is for, since a single reading at ten sigma is an anomaly
+whether or not the forests concur. Above one, the versions have to agree,
+and the number decides everywhere the answer is used: what a detect
+returns, what the ring scan stores, what calibration counts, what fine-tune
+aims at. `anomalies?votes=N` still narrows on top of it — the model says
+what an anomaly IS, a reader may ask for stricter agreement within that.
+
+**Fine-tune understands the rule.** At one vote `rate` stays what it has
+always been: the share of the window each version flags on its own. Above
+one that would be an answer to a question nobody asked — three versions
+each flagging 1 % of a window agree on far less than 1 % of it, and often
+on none of it at all — so the target becomes the MODEL's share and the knob
+becomes shared: every tunable version is placed at the same quantile of its
+own scores, and that quantile is found by bisection so that `votes` of them
+together flag the rate asked for. Bisection is right here because the
+consensus count rises monotonically with the quantile: a looser margin can
+only add rows to a version's hit set, so it can only add agreements.
+
+Measured on a 1500-row model with seven versions, asking for 5 %:
+
+| votes | each version flags | the model flags |
+| --- | --- | --- |
+| 2 | 3.9 % | 4.6 % |
+| 3 | 5.2 % | 4.9 % |
+| 4 | 10.9 % | 4.9 % |
+| 5 | 14.6 % | 5.0 % |
+
+The answer carries both numbers and says which is which. A consensus the
+window cannot reach — more agreement asked for than the versions ever
+manage — is reported rather than approximated in silence, and `votes` past
+the number of enabled versions is refused when it is set, since no point
+could ever reach it.
+
+The flatline guard's margin is left alone by fine-tune as it always was (it
+is a fraction of each column's own reference run, not a rate) — but it
+counts towards the consensus like any other version, and the tunable ones
+absorb what it contributes.
+
+### Also
+
+- `anomaly --version` and the MCP handshake report 0.33.0. They said 0.31.0
+  in the 0.32.0 release: the number lives in one constant and the manifest
+  bump did not reach it. `tools/check_package_version_strings.sh` could not
+  see a constant — every rule it had reads the call site, and a call site
+  that names a constant hides the number from all of them — and now can.
+- A detect's verdict says `versions_flagged` and `votes_required` beside
+  `anomaly`, so the aggregate can be read rather than trusted.
+- `describe_model` and the metadata carry `votes`; `list_models` shows it
+  when it is not 1. The dashboard has it next to the version table, with
+  the count of versions that are on beside it.
+
 ## 0.32.0
 
 Every version answers for its own column, every answer says what it is

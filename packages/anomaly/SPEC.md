@@ -458,9 +458,25 @@ model's alarm. The scan rows carry the same pair, and the score cache
 past it, negative comfortably normal — the one unit-free number an operator
 or an agent can compare across versions and models.
 
-Aggregation: a point is anomalous if **any** enabled version flags it; the
-reported `score` is the most-severe version's score. (The reference checks all
-versions and surfaces each; §6 preserves that in the JSON.)
+Aggregation: a point is anomalous when **`votes`** enabled versions or more
+flag it; the reported `score` is the most-severe version's score, whichever
+versions those were. (The reference checks all versions and surfaces each;
+§6 preserves that in the JSON.) `votes` is a field of `Meta`
+(`ANOM_VOTES_DEFAULT` 1, editable, capped at `ANOM_VOTES_MAX` and at the
+number of enabled versions), and the verdict carries `hits` and
+`votes_needed` beside `anomaly` so the aggregate can be read rather than
+trusted.
+
+**One is the rule this package has always had and the one that stays.** Any
+enabled version flagging is enough, which is what a guard is *for*: a single
+reading at ten sigma is an anomaly whether or not the forests concur, and
+the flatline guard's stuck column is a fault no forest can see. Above one,
+the model asks for agreement instead, and the number decides everywhere the
+aggregate is used — a detect's answer, `ScoredPt.sp_anomaly` in the ring
+scan and therefore the score cache, `CalReport.agg_flagged`, and what
+fine-tune aims at (§5.5). The scan's `?votes=N` is a *filter on top of*
+that (`scan_agreed` requires `sp_anomaly` first): the model says what an
+anomaly is, a reader may ask for stricter agreement within it.
 
 `margin` is the *effective* band the score was compared against, so the rule
 `score <= -margin ⇒ anomaly` holds for every version without exception;
@@ -523,6 +539,30 @@ the report says what was flagged before and after.
 skips it and deletes a stale `version_autoencoder.forest`, and the loader
 ignores one: a zero-tree forest scored under that name would be a second
 "autoencoder" verdict reading the relative margin as an absolute one.
+
+**Fine-tuning a consensus.** With `votes` at 1 (§5.4) the rule above is the
+whole story: `rate` is what each version flags on its own, and the model's
+own rate is the union of them. Above 1 that would answer a question nobody
+asked — three versions each flagging 1 % of a window agree on far less than
+1 % of it, and often on none of it — so the target becomes the MODEL's share
+and the knob becomes shared: every tunable version's margin is placed at the
+SAME quantile `q` of its own scores, and `q` is found by bisection
+(`_an_consensus_q`, 32 halvings, the largest `q` that does not overshoot) so
+that `votes` versions together flag `rate` of the window.
+
+Bisection is sound because the consensus count is monotone non-decreasing in
+`q`: a looser margin can only add rows to a version's hit set, never remove
+one, so it can only add agreements. Evaluating it needs a row × version
+grid, which a per-version sorted list cannot give — `CalVer.row_df` is that
+column, in ring order, `NaN` where the version had no verdict, and
+`_an_cal_consensus` reads it across.
+
+The flatline guard keeps its margin here as everywhere else (§5.4), but it
+COUNTS towards the consensus like any other version and the tunable ones
+absorb what it contributes. `FineTuneReport` carries `votes`,
+`per_version_rate` (the `q` chosen), `consensus_before` / `consensus_after`,
+and a `note` when even the loosest margins cannot reach the rate at that
+consensus.
 
 ### 5.6 Scanning the stored ring
 
