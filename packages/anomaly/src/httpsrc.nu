@@ -26,6 +26,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/http.nu`
 $ `deps/http-client/src/http_client.nu`
+$ `src/importer.nu`
 $ `src/wfs.nu`
 
 : i HTTP_TEXT_MAX 200
@@ -161,6 +162,71 @@ $ `src/wfs.nu`
             ^ pe
         }
     }
+}
+
+// CSV text → records. A feed that answers with a file rather than with an
+// API — the USGS earthquake summaries, a station's export, anything a
+// spreadsheet would open — is a data source like any other, and it needs
+// no parser of its own: `import_parse` is the one the import route and
+// `analyze_data` already use, so a file that imports cleanly as history
+// fetches cleanly as a feed, with the same delimiter sniffing, the same
+// missing-value rules and the same cell typing.
+//
+// The clock is a column, named or detected, exactly as in the JSON and
+// WFS pivots; a row with no readable stamp is stamped `now`, which makes
+// an undated file a snapshot of the moment it was fetched.
+@ csv_pivot s text s time_field i now → WfsPivot {
+    : ImportParse ip ( import_parse text `csv` )
+    ? > ( string_len . ip err ) 0 {
+        : String msg ( string_from `the answer is not readable as CSV (` )
+        ( string_push_str msg ( string_data . ip err ) )
+        ( string_push_char msg 41 )
+        ( import_parse_free ip )
+        : WfsPivot pe ( _wfs_pivot_err ( string_data msg ) )
+        ( string_free msg )
+        ^ pe
+    } {}
+    : ( Vec Json ) rows ( vec_new [Json] )
+    : ( Vec String ) cols ( vec_new [String] )
+    : ~ i members 0
+    : ~ i missing . ip skipped
+    : i n ( vec_len [Json] . ip rows )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [Json] . ip rows k ) {
+            T srcrow → {
+                : Json row ( json_clone srcrow )
+                : ( Vec String ) keys ( json_obj_keys row )
+                : i nk ( vec_len [String] keys )
+                : ~ i q 0
+                ~ < q nk {
+                    ?? ( vec_get [String] keys q ) {
+                        T kn → { ( _wfs_col_add cols ( string_data kn ) ) }
+                        F _ → {}
+                    }
+                    = q + q 1
+                }
+                ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
+                ? == nk 0 {
+                    ( json_free row )
+                    = missing + missing 1
+                } {
+                    ? ( _wfs_wide_clock row time_field ) {} { ( json_obj_set row `timestamp` ( json_int now ) ) }
+                    ( vec_push [Json] rows row )
+                    = members + members 1
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( import_parse_free ip )
+    : ~ String err ( string_new )
+    ? == members 0 {
+        ( string_free err )
+        = err ( string_from `the answer parsed as CSV but held no rows with values in them` )
+    } {}
+    ^ @ WfsPivot { rows cols members missing err }
 }
 
 // ── The network ───────────────────────────────────────────────────────

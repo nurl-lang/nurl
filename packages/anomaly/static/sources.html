@@ -152,6 +152,7 @@
     <div class="kinds">
       <button id="kindWfs" class="on" onclick="setKind('wfs')">WFS — stored queries and feature types</button>
       <button id="kindHttp" onclick="setKind('http')">HTTP — a URL answering JSON (REST)</button>
+      <button id="kindCsv" onclick="setKind('csv')">CSV — a URL answering a file</button>
     </div>
     <div class="row" id="wfsRow">
       <input id="url" class="wide" placeholder="https://opendata.fmi.fi/wfs" value="https://opendata.fmi.fi/wfs">
@@ -159,14 +160,20 @@
       <span id="catStatus" class="muted" style="font-size:12px"></span>
     </div>
     <div id="httpBox" style="display:none">
-      <p class="hint">The URL is requested as given, query string and all, with the headers below — an API key, a token,
+      <p class="hint" id="httpHint">The URL is requested as given, query string and all, with the headers below — an API key, a token,
         a <code>Digitraffic-User</code>. Header values are stored on the server and shown masked afterwards. The answer's
         JSON is read at <em>path</em>: an array gives one record per element, an object one record; nested objects are
         flattened (<code>current_temperature_2m</code>), arrays inside a record are left out.</p>
+      <p class="hint" id="csvHint" style="display:none">The URL is requested as given, with the headers below, and the answer is read as a
+        CSV FILE — the header row names the columns, one row is one record. The same reader the import route and
+        <code>analyze_data</code> use, so a file that imports cleanly fetches cleanly: the delimiter is sniffed, empty
+        cells are missing values, and a column of ISO-8601 stamps is the clock (pick it below, or let it be detected).
+        Each run keeps only the rows newer than the newest one already stored, so a rolling feed —
+        <code>…/summary/2.5_day.csv</code> — can be fetched as often as you like.</p>
       <div class="grid">
         <label>URL <input id="httpUrl" placeholder="https://api.example.com/v1/readings?station=1"></label>
         <label>method <select id="httpMethod" onchange="$('bodyBox').style.display = this.value === 'GET' ? 'none' : ''"><option>GET</option><option>POST</option><option>PUT</option></select></label>
-        <label>path to the records <input id="httpPath" placeholder="empty = the whole answer; data.items; stations.0.values"></label>
+        <label id="pathRow">path to the records <input id="httpPath" placeholder="empty = the whole answer; data.items; stations.0.values"></label>
       </div>
       <div style="margin-top:10px">
         <div class="muted" style="font-size:12px;margin-bottom:6px">Headers</div>
@@ -297,9 +304,9 @@ async function loadSources() {
         '<button class="small" onclick="edit(\'' + esc(s.id) + '\')">Edit</button>' +
         '<button class="small danger" onclick="remove(\'' + esc(s.id) + '\')">Delete</button>' : "") + "</div>" +
       '<div class="facts">' +
-        (s.kind === "http"
-          ? '<span title="' + esc(s.url) + '"><span class="pill run">' + esc(s.method || "GET") + " JSON</span> <code>" + esc(s.url.length > 70 ? s.url.slice(0, 70) + "…" : s.url) + "</code>" +
-            (s.path ? ' <span class="muted">at</span> <code>' + esc(s.path) + "</code>" : "") +
+        (isUrlKind(s.kind)
+          ? '<span title="' + esc(s.url) + '"><span class="pill run">' + esc(s.method || "GET") + (s.kind === "csv" ? " CSV" : " JSON") + "</span> <code>" + esc(s.url.length > 70 ? s.url.slice(0, 70) + "…" : s.url) + "</code>" +
+            (s.kind === "http" && s.path ? ' <span class="muted">at</span> <code>' + esc(s.path) + "</code>" : "") +
             (Object.keys(s.headers || {}).length ? ' <span class="muted">headers: ' + esc(Object.keys(s.headers).join(", ")) + "</span>" : "") + "</span>"
           : '<span title="' + esc(s.url) + '"><code>' + esc(s.query) + "</code>" + (s.mode === "type" ? ' <span class="pill run">feature type</span>' : "") + "</span>") +
         "<span>" + esc(paramsText(s.params)) + "</span>" +
@@ -360,18 +367,27 @@ async function remove(id) {
 
 // ── the editor: which kind ────────────────────────────────────────────
 
+// "http" and "csv" are one editor: the same URL, method, headers and body,
+// differing only in how the ANSWER is read. `path` is a JSON pointer and
+// means nothing to a file.
+function isUrlKind(k) { return k === "http" || k === "csv"; }
+
 function setKind(k) {
   KIND = k;
   $("kindWfs").classList.toggle("on", k === "wfs");
   $("kindHttp").classList.toggle("on", k === "http");
+  $("kindCsv").classList.toggle("on", k === "csv");
   $("wfsRow").style.display = k === "wfs" ? "" : "none";
-  $("httpBox").style.display = k === "http" ? "" : "none";
+  $("httpBox").style.display = isUrlKind(k) ? "" : "none";
+  $("httpHint").style.display = k === "http" ? "" : "none";
+  $("csvHint").style.display = k === "csv" ? "" : "none";
+  $("pathRow").style.display = k === "http" ? "" : "none";
   $("catBox").style.display = "none";
   $("paramsBox").style.display = "none";
   $("previewBox").style.display = "none";
   $("targetBox").style.display = "none";
   SELECTED = null; PREVIEW = null;
-  if (k === "http" && !$("headers").children.length) addHeader("", "");
+  if (isUrlKind(k) && !$("headers").children.length) addHeader("", "");
 }
 
 function addHeader(name, value) {
@@ -397,7 +413,7 @@ function readHeaders() {
 function httpReady() {
   const url = $("httpUrl").value.trim();
   if (!/^https?:\/\//.test(url)) { alert("The URL must start with http:// or https://"); return; }
-  SELECTED = { id: url, kind: "http", title: url, parameters: [] };
+  SELECTED = { id: url, kind: KIND, title: url, parameters: [] };
   PREVIEW = null;
   if (!EDITING) { FEATS = new Set(); CATS = new Set(); TIME_FIELD = ""; }
   $("hoursBox").style.display = "none";
@@ -509,15 +525,15 @@ function readParams() {
 async function preview() {
   if (!SELECTED) return;
   $("prevStatus").textContent = "asking the service…";
-  const body = KIND === "http"
-    ? { kind: "http", url: $("httpUrl").value.trim(), method: $("httpMethod").value, headers: readHeaders(),
+  const body = isUrlKind(KIND)
+    ? { kind: KIND, url: $("httpUrl").value.trim(), method: $("httpMethod").value, headers: readHeaders(),
         body: $("httpBody").value, path: $("httpPath").value.trim(), time_field: TIME_FIELD, id: EDITING || undefined }
     : { url: $("url").value.trim(), query: SELECTED.id, params: readParams(), hours: parseInt($("hours").value, 10),
         mode: SELECTED.kind === "type" ? "type" : "stored", time_field: TIME_FIELD };
   const r = await api("POST", "/api/org/sources/preview", body);
   if (!r.ok) { $("prevStatus").innerHTML = '<span class="err">' + esc((r.data && r.data.message) || "failed") + "</span>"; return; }
   PREVIEW = r.data;
-  $("prevStatus").textContent = (SELECTED && SELECTED.kind === "http")
+  $("prevStatus").textContent = (SELECTED && isUrlKind(SELECTED.kind))
     ? PREVIEW.rows + " record" + (PREVIEW.rows === 1 ? "" : "s") + " in the answer"
     : (SELECTED && SELECTED.kind === "type")
     ? PREVIEW.rows + " features fetched (one record each)"
@@ -532,7 +548,7 @@ async function preview() {
   // Text columns that are taken are categories unless said otherwise.
   cols.forEach(c => { if (FEATS.has(c.name) && c.kind === "text" && !CATS.has(c.name)) CATS.add(c.name); });
   const timeCols = cols.filter(c => c.kind === "time").map(c => c.name);
-  const isType = SELECTED && (SELECTED.kind === "type" || SELECTED.kind === "http");
+  const isType = SELECTED && (SELECTED.kind === "type" || isUrlKind(SELECTED.kind));
   $("columns").innerHTML = '<div class="tablewrap"><table><thead><tr><th><input type="checkbox" id="allCols" onchange="allCols(this.checked)"></th>' +
     "<th>column</th><th>as</th><th>rows</th><th>distinct</th><th>min</th><th>max</th><th>last</th></tr></thead><tbody>" +
     cols.map(c => {
@@ -622,8 +638,8 @@ async function save() {
   if (!SELECTED) { $("saveStatus").innerHTML = '<span class="err">pick a stored query first</span>'; return; }
   const feats = readFeatures();
   if (PREVIEW && !feats.length) { $("saveStatus").innerHTML = '<span class="err">take at least one column</span>'; return; }
-  const body = KIND === "http" ? {
-    kind: "http",
+  const body = isUrlKind(KIND) ? {
+    kind: KIND,
     name: $("name").value.trim(),
     url: $("httpUrl").value.trim(),
     method: $("httpMethod").value,
@@ -651,7 +667,7 @@ async function save() {
   // or the list as it was (an edit); the chips carry it either way.
   body.features = feats;
   body.categorical = [...CATS].filter(n => FEATS.has(n));
-  if (KIND !== "http") body.mode = SELECTED.kind === "type" ? "type" : "stored";
+  if (!isUrlKind(KIND)) body.mode = SELECTED.kind === "type" ? "type" : "stored";
   body.time_field = TIME_FIELD;
   $("saveStatus").textContent = "saving…";
   const r = EDITING ? await api("PUT", "/api/org/sources/" + enc(EDITING), body)
@@ -669,8 +685,8 @@ async function edit(id) {
   resetEditor();
   EDITING = id;
   $("editorTitle").textContent = "Edit source · " + s.name;
-  if (s.kind === "http") {
-    setKind("http");
+  if (isUrlKind(s.kind)) {
+    setKind(s.kind);
     $("httpUrl").value = s.url;
     $("httpMethod").value = s.method || "GET";
     $("bodyBox").style.display = $("httpMethod").value === "GET" ? "none" : "";

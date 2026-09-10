@@ -259,6 +259,18 @@ $ `src/service.nu`
   {"id":"st-3","name":"Harmaja","measured":"2026-09-07T06:00:00Z","reading":{"temperature":"NaN","humidity":90}}
 ]}}`
 
+// A CSV feed of the shape a public file service answers with: a header
+// row, an ISO-8601 clock column, numbers, quoted text with a comma in it,
+// and an empty cell.
+: s CSV_FEED `time,latitude,mag,place,depth
+2026-09-07T05:00:00Z,57.842,2.5,"33 km W of Port Lions, Alaska",51.6
+2026-09-07T06:00:00Z,9.0275,5.0,"45 km SSE of Quepos, Costa Rica",10
+2026-09-07T06:30:00Z,-26.1386,4.4,,`
+
+: s CSV_NOCLOCK `station,reading
+a,1.5
+b,2.5`
+
 : s JSON_OBJECT `{"latitude":60.17,"longitude":24.94,"current":{"time":"2026-09-07T13:15","temperature_2m":18.3,"wind_speed_10m":9.4},"units":{"temperature_2m":"°C"}}`
 
 : s EMPTY_FC_XML `<?xml version="1.0" encoding="UTF-8"?>
@@ -1079,6 +1091,49 @@ $ `src/service.nu`
     : WfsPivot pj ( http_pivot `<html>` `` `` 1 )
     ( check ( string_contains . pj err `not JSON` ) `http pivot: HTML is not JSON` )
     ( wfs_pivot_free pj )
+
+    // ── csv ───────────────────────────────────────────────────────────
+    //
+    // A URL that answers a FILE rather than an API. The reader is the one
+    // the import route and analyze_data use, so anything that imports
+    // cleanly fetches cleanly — including a quoted field with a comma in
+    // it, which is the shape that separates a CSV reader from a split.
+    : WfsPivot pc ( csv_pivot CSV_FEED `time` 5000 )
+    ( check == ( string_len . pc err ) 0 `csv pivot: the file parses` )
+    ( check == ( vec_len [Json] . pc rows ) 3 `csv pivot: three records` )
+    ( check ( has_col . pc columns `mag` ) `csv pivot: a number column` )
+    ( check ( has_col . pc columns `place` ) `csv pivot: a text column` )
+    ?? ( vec_get [Json] . pc rows 0 ) {
+        T r0 → {
+            ( check == ( jint r0 `timestamp` ) T_0500 `csv pivot: the named clock column is the clock` )
+            ( check ( seq ( jstr r0 `place` ) `33 km W of Port Lions, Alaska` ) `csv pivot: a quoted field keeps its comma` )
+            ( check == ( jint r0 `depth` ) 51 `csv pivot: numbers are numbers` )
+        }
+        F _ → { ( check F `csv pivot: row 0` ) }
+    }
+    ?? ( vec_get [Json] . pc rows 2 ) {
+        T r2 → { ( check ! ( jhas r2 `place` ) `csv pivot: an empty cell is a missing value, not an empty string` ) }
+        F _ → { ( check F `csv pivot: row 2` ) }
+    }
+    ( wfs_pivot_free pc )
+    // The clock is detected when none is named.
+    : WfsPivot pd ( csv_pivot CSV_FEED `` 5000 )
+    ?? ( vec_get [Json] . pd rows 0 ) {
+        T r0 → { ( check == ( jint r0 `timestamp` ) T_0500 `csv pivot: the clock column is detected` ) }
+        F _ → { ( check F `csv pivot: detected row 0` ) }
+    }
+    ( wfs_pivot_free pd )
+    // No clock anywhere: the fetch time, so an undated file is a snapshot.
+    : WfsPivot pn ( csv_pivot CSV_NOCLOCK `` 4242 )
+    ( check == ( vec_len [Json] . pn rows ) 2 `csv pivot: a file with no clock still parses` )
+    ?? ( vec_get [Json] . pn rows 0 ) {
+        T r0 → { ( check == ( jint r0 `timestamp` ) 4242 `csv pivot: and every row is stamped with the fetch time` ) }
+        F _ → { ( check F `csv pivot: unstamped row 0` ) }
+    }
+    ( wfs_pivot_free pn )
+    : WfsPivot pe ( csv_pivot `` `` 1 )
+    ( check > ( string_len . pe err ) 0 `csv pivot: an empty answer is an error, not zero rows` )
+    ( wfs_pivot_free pe )
 
     // A source: created with headers, listed masked, edited with the mask.
     : SvcOut c1 ( fire r `POST` `/api/org/sources` `` `{"kind":"http","url":"http://127.0.0.1:9/api/v1/readings?station=1","method":"GET","headers":{"Digitraffic-User":"anomaly-test","Authorization":"Bearer s3cret"},"path":"data.items","features":["reading_temperature","name"],"categorical":["name"],"model":"http_test"}` )

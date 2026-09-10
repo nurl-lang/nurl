@@ -39,7 +39,8 @@ $ `src/authz.nu`
 $ `src/imptime.nu`
 
 // One version for the CLI banner and the MCP handshake.
-: s ANOMALY_VERSION `0.32.0`
+: s ANOMALY_VERSION `0.33.0`
+
 
 // ── Wiring ───────────────────────────────────────────────────────────
 
@@ -797,6 +798,7 @@ $ `src/imptime.nu`
     ( __mcp_copy mj `n_points_stored` m )
     ? detail { ( __mcp_copy mj `max_data_points` m ) } {}
     ( __mcp_training_of mj m )
+    ? > ( __mcp_int_of mj `votes` ) 1 { ( __mcp_copy mj `votes` m ) } {}
     ?? ( json_obj_get mj `versions` ) {
         T vs → {
             ? detail {
@@ -978,6 +980,7 @@ $ `src/imptime.nu`
     ( __mcp_copy b `max_data_points` out )
     ( __mcp_training_of b out )
     ( __mcp_copy b `schedule` out )
+    ( __mcp_copy b `votes` out )
     ( __mcp_copy b `versions` out )
     ?? ( json_obj_get b `autoencoder` ) {
         T ae → {
@@ -1811,6 +1814,7 @@ $ `src/imptime.nu`
     ?? ( json_obj_get b `aggregate` ) {
         T ag → {
             : Json ao ( json_obj_new )
+            ( __mcp_copy ag `votes_required` ao )
             ( __mcp_copy ag `flagged` ao )
             ( __mcp_copy_rounded ag `rate` ao 4 )
             ( json_obj_set out `aggregate` ao )
@@ -2711,7 +2715,14 @@ $ `src/imptime.nu`
     // flags it, so the share of the window the model calls anomalous is
     // the union of the versions' — several times the rate on a model with
     // several versions.
-    ( json_obj_set out `rate_is_per_version` ( json_str_lit `the rate above is what EACH version's margin now flags on its own; a row is an anomaly if any version flags it, so the model's own rate over this window is the union — calibration's aggregate.rate, or anomaly_summary's anomaly_rate, is that number.` ) )
+    ( __mcp_copy b `votes_required` out )
+    ( __mcp_copy b `consensus` out )
+    // With one vote `rate` is each version's own share and the model's is
+    // the union of them; with more, `rate` is the model's and `consensus`
+    // says what each version was set to on its own to reach it.
+    ? <= ( __mcp_int_of b `votes_required` ) 1 {
+        ( json_obj_set out `rate_is_per_version` ( json_str_lit `the rate above is what EACH version's margin now flags on its own; this model calls a row an anomaly if ANY version flags it (votes = 1), so its own rate over this window is the union — calibration's aggregate.rate, or anomaly_summary's anomaly_rate, is that number. edit_model {votes: N} makes N versions have to agree, and then rate becomes the model's own share.` ) )
+    } {}
     ( json_obj_set out `next` ( json_str_lit `calibration {model} to read the aggregate rate these margins produce; anomalies to see what they flag.` ) )
     ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
@@ -2724,7 +2735,7 @@ $ `src/imptime.nu`
         T pv → {
             ? & ( json_is_obj pv ) > ( __mcp_obj_len pv ) 0 {} {
                 ( string_free model )
-                ^ ( mcp_tool_result_error `patch: required — an object with one or more of alias, clock, schedule, max_data_points, versions (describe_model lists editable_fields and the current values)` )
+                ^ ( mcp_tool_result_error `patch: required — an object with one or more of alias, clock, schedule, max_data_points, versions, votes (describe_model lists editable_fields and the current values)` )
             }
             : String q ( string_new )
             : String path ( __mcp_model_path `/models/dynamic/` model `/metadata` )
@@ -2749,7 +2760,7 @@ $ `src/imptime.nu`
         }
         F _ → {
             ( string_free model )
-            ^ ( mcp_tool_result_error `patch: required — an object with one or more of alias, clock, schedule, max_data_points, versions` )
+            ^ ( mcp_tool_result_error `patch: required — an object with one or more of alias, clock, schedule, max_data_points, versions, votes` )
         }
     }
 }
@@ -3127,7 +3138,7 @@ $ `src/imptime.nu`
     ( mcp_schema_prop sc `count` `integer` `How many of the newest matching rows to return (default 20, max 200). The reply says how many the window had.` F )
     ( mcp_schema_prop sc `all_points` `boolean` `true: every scored row, flagged or not (default false: only anomalies).` F )
     ( mcp_schema_prop sc `versions` `array` `Keep only rows flagged by one of these model versions (names from list_models), e.g. ["autoencoder"].` F )
-    ( mcp_schema_prop sc `min_votes` `integer` `Count a row as an anomaly only when this many versions flagged it (default 1). 2 on a three-version model drops the rows one version alone disputes.` F )
+    ( mcp_schema_prop sc `min_votes` `integer` `Narrow this listing to rows at least this many versions flagged. It is a FILTER on top of the model's own rule (describe_model's votes, 1 unless it was raised): the model says what an anomaly is, this asks for stricter agreement within that. Raising the model's votes instead changes what is stored, calibrated and tuned for — edit_model {votes: N}.` F )
     ( mcp_schema_prop sc `fields` `array` `Which of the row's columns to include as values (default: all of them).` F )
     ( mcp_schema_prop sc `contributions` `integer` `Per flagged row, the N features the autoencoder blames most, with the value it saw and the value it expected (default 3, 0 = none). Needs a trained autoencoder.` F )
     ^ sc
@@ -3136,7 +3147,7 @@ $ `src/imptime.nu`
 @ __mcp_sc_summary → Json {
     : Json sc ( __mcp_sc_model_window )
     ( mcp_schema_prop sc `buckets` `integer` `Timeline slices between the first and the latest anomaly (default 12, max 48).` F )
-    ( mcp_schema_prop sc `min_votes` `integer` `Count a row as an anomaly only when this many versions flagged it (default 1).` F )
+    ( mcp_schema_prop sc `min_votes` `integer` `Narrow to rows at least this many versions flagged — a filter on top of the model's own votes rule, not a replacement for it.` F )
     ^ sc
 }
 
@@ -3302,8 +3313,9 @@ $ `src/imptime.nu`
     : Json kinds ( json_arr_new )
     ( json_arr_push kinds ( json_str_lit `wfs` ) )
     ( json_arr_push kinds ( json_str_lit `http` ) )
-    ( mcp_schema_prop_enum sc `kind` `string` `The kind of service: "wfs" (an OGC WFS 2.0 endpoint) or "http" (any URL answering JSON).` kinds F )
-    ( mcp_schema_prop sc `url` `string` `For wfs: the endpoint (https://opendata.fmi.fi/wfs); for http: the URL as it is to be requested, query string and all.` creating )
+    ( json_arr_push kinds ( json_str_lit `csv` ) )
+    ( mcp_schema_prop_enum sc `kind` `string` `The kind of service: "wfs" (an OGC WFS 2.0 endpoint), "http" (any URL answering JSON) or "csv" (any URL answering a CSV file — a header row, then one row per record; read by the same parser the import route uses, so a file that imports cleanly fetches cleanly).` kinds F )
+    ( mcp_schema_prop sc `url` `string` `For wfs: the endpoint (https://opendata.fmi.fi/wfs); for http and csv: the URL as it is to be requested, query string and all.` creating )
     ( mcp_schema_prop sc `model` `string` `The model the points go into (letters, numbers, underscores); created on the first run if it does not exist.` creating )
     : Json modes ( json_arr_new )
     ( json_arr_push modes ( json_str_lit `stored` ) )
@@ -3313,7 +3325,7 @@ $ `src/imptime.nu`
     ( mcp_schema_prop sc `params` `object` `wfs: the query's parameters as strings — a stored query's place / fmisid / bbox / timestep; a feature type's count / bbox / cql_filter / sortBy.` F )
     ( mcp_schema_prop sc `features` `array` `The columns to take as features (names from source_preview); empty = every column.` F )
     ( mcp_schema_prop sc `categorical` `array` `Columns to store as text so each value is an identity the anomaly is judged against — a station code, a place.` F )
-    ( mcp_schema_prop sc `time_field` `string` `A feature type's or an http source's clock: a date property's name, "" to detect one, "none" to stamp every record with the fetch time (a snapshot series).` F )
+    ( mcp_schema_prop sc `time_field` `string` `The clock of a feature type, an http source or a csv source: a date column's name, "" to detect one, "none" to stamp every record with the fetch time (a snapshot series). A csv feed that repeats rows on every fetch — a rolling "last day" file — needs this: only rows newer than the newest already stored are taken.` F )
     ( mcp_schema_prop sc `interval_minutes` `integer` `How often to fetch (default 10).` F )
     ( mcp_schema_prop sc `history_hours` `integer` `How far back the first run reaches (default 168, a week: a daily rhythm seen seven times).` F )
     ( mcp_schema_prop sc `allow_future` `boolean` `Take records dated past the fetch time (a price list published ahead). Default false: they wait for their hour.` F )
@@ -3492,7 +3504,7 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     ( __mcp_sc_train_fc ) F F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_train_forecast a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `finetune`
-    `Set every version's margin so that a chosen share of a window is flagged (rate 0.01 = 1%). dry_run=true shows the margins without applying them; calibration shows the same numbers for several rates at once. The flatline guard is left alone (its margin is a fraction with a fixed meaning; edit_model sets it). Members: llm_… models only; administrators: any.`
+    `Set the margins so that a chosen share of a window is flagged (rate 0.01 = 1%). On a model with votes = 1 — the default, where any one version flagging is enough — the share is EACH version's own, as it always has been. On a model that requires a consensus (votes = N), the share is the MODEL's: every tunable version is placed at the same quantile of its own scores, found so that N of them together flag the rate asked for, and the answer's "consensus" block says what each version was set to on its own to get there. dry_run=true shows the margins without applying them; calibration shows the same numbers for several rates at once. The flatline guard's margin is left alone either way (it is a fraction of each column's own reference run, not a rate; edit_model sets it) — but it counts towards the consensus like any other version. Members: llm_… models only; administrators: any.`
     ( __mcp_sc_finetune ) F F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_finetune a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `label_anomaly`
@@ -3504,7 +3516,7 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     ( __mcp_sc_model ) T F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_labels a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `edit_model`
-    `Change a model's settings: alias, clock, retraining schedule, ring size, and per-version enabled / decision_margin / geometry. Rejected fields come back with the reason. Members: llm_… models only; administrators: any.`
+    `Change a model's settings: alias, clock, retraining schedule, ring size, votes (how many versions must agree before the model calls a point an anomaly — 1, any one, unless raised), and per-version enabled / decision_margin / geometry. Rejected fields come back with the reason, and so does anything the config could not hold. Members: llm_… models only; administrators: any.`
     ( __mcp_sc_patch ) F F T F member
     \ Json a McpCall c → Json { ^ ( __mcp_t_edit_model a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `reset_model`
@@ -3568,7 +3580,7 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     ( __mcp_sc_catalog ) T F T T admin
     \ Json a McpCall c → Json { ^ ( __mcp_t_source_catalog a ( mcp_call_context c ) ) } )
     ( __mcp_add srv `source_preview`
-    `Fetch the last hours of a stored query, a feature type's features, or an http source's answer, and show the columns it would give — name, kind, count, distinct values, min, max, last — with a few sample rows, so the features and categorical columns can be chosen before create_source. Administrators only.`
+    `Fetch the last hours of a stored query, a feature type's features, or an http or csv source's answer, and show the columns it would give — name, kind, count, distinct values, min, max, last — with a few sample rows, so the features and categorical columns can be chosen before create_source. Administrators only.`
     ( __mcp_sc_preview ) T F T T admin
     \ Json a McpCall c → Json { ^ ( __mcp_t_source_preview a ( mcp_call_context c ) ) } )
     ^ srv

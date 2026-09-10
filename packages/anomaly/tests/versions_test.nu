@@ -77,6 +77,14 @@ $ `src/dynamic.nu`
     f df_seasonal
 }
 
+// A patch literal as Json, for the metadata-patch calls below.
+@ _jparse s text → Json {
+    ?? ( json_parse text ) {
+        T j → { ^ j }
+        F _ → { ^ ( json_obj_new ) }
+    }
+}
+
 @ probe_temp * Model mo f temp → ProbeOut {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
@@ -266,6 +274,58 @@ $ `src/dynamic.nu`
     ( check . post anomaly `finetune: worst observed point crosses the margin` )
     : ProbeOut norm ( probe_temp mo 20.0 )
     ( check == . norm anomaly F `finetune: normal point still normal` )
+
+    // ── The consensus rule ────────────────────────────────────────────
+    //
+    // The margins above make every version flag the one outlier, so the
+    // model calls it an anomaly whatever `votes` says. Loosen one version
+    // alone and the rule shows: at one vote its opinion is the model's, at
+    // two it needs company.
+    // Every version but `seasonal` is loosened past reach, so the outlier
+    // is flagged by exactly one of them.
+    : b l1 ( model_set_margin mo `short_term` 100.0 )
+    : b l2 ( model_set_margin mo `daily` 100.0 )
+    : b l3 ( model_set_margin mo `weekly` 100.0 )
+    : b l4 ( model_set_margin mo `timevector` 100.0 )
+    : b l5 ( model_set_margin mo ANOM_GUARD_NAME 1000.0 )
+    ( check & & & & l1 l2 l3 l4 l5 `votes: five versions are loosened past reach` )
+    : ProbeOut v1 ( probe_temp mo 23.0 )
+    ( check == . v1 hits 1 `votes=1: exactly one version flags the outlier` )
+    ( check . v1 anomaly `votes=1: and one is enough to make it an anomaly` )
+    : String pv ( model_apply_meta_patch mo ( _jparse `{"votes":2}` ) )
+    ( check == ( string_len pv ) 0 `votes: the rule is raised to two` )
+    ( string_free pv )
+    : ProbeOut v2 ( probe_temp mo 23.0 )
+    ( check == . v2 hits 1 `votes=2: the version still says so` )
+    ( check == . v2 anomaly F `votes=2: but one alone is no longer the model's answer` )
+    : b b1 ( model_set_margin mo `short_term` ( meta_version_margin ( model_metadata mo ) `seasonal` 0.1 ) )
+    ( check b1 `votes: a second version is brought back within reach` )
+
+    // And fine-tune aims the rate at the MODEL under that rule: with two
+    // versions having to agree, each is placed at a quantile of its own
+    // scores chosen so that the pair together flags the share asked for.
+    : ( Vec String ) nonec ( vec_new [String] )
+    : FineTuneReport cft ( model_finetune_at mo 0.05 0 0 T nonec )
+    ( vec_free [String] nonec )
+    ( check == . cft votes 2 `consensus: the report names the rule it tuned under` )
+    ( check == . cft consensus_after 1 `consensus: 5 % of 20 rows = one row two versions agree on` )
+    ( check >= . cft per_version_rate 0.05 `consensus: each version alone flags at least the model's share` )
+    ( finetune_free cft )
+    : ProbeOut v3 ( probe_temp mo 23.0 )
+    ( check . v3 anomaly `consensus: the worst row is the one the versions agree on` )
+    ( check >= . v3 hits 2 `consensus: and at least two of them flag it` )
+    : ProbeOut v4 ( probe_temp mo 20.0 )
+    ( check == . v4 anomaly F `consensus: a normal point is not` )
+
+    // Back to one vote for the rest of the scenario.
+    : String pv1 ( model_apply_meta_patch mo ( _jparse `{"votes":1}` ) )
+    ( string_free pv1 )
+    : b _re ( model_set_margin mo `seasonal` 0.5 )
+    : ( Vec String ) none1b ( vec_new [String] )
+    : FineTuneReport reset1 ( model_finetune_at mo 0.05 0 0 T none1b )
+    ( vec_free [String] none1b )
+    ( check == . reset1 votes 1 `consensus: one vote again, and rate is per version` )
+    ( finetune_free reset1 )
 
     // Rate 0: the margin sits just above the worst point, nothing flags.
     : ( Vec String ) none2 ( vec_new [String] )

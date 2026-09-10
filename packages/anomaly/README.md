@@ -203,8 +203,9 @@ rights.
   enabled version — `short_term` (180 min), `daily` (24 h), `weekly`,
   `seasonal` (90 d) and `timevector` (last 100 points) — and the forestless
   `range_guard`, `flatline` and, once trained, `forecast` beside them, so the same stream is judged
-  against several horizons at once. A point is anomalous if
-  **any** version flags it; the reported `score` and `severity` are those
+  against several horizons at once. A point is anomalous when **`votes`**
+  versions or more flag it — 1 by default, so any one of them is enough;
+  the reported `score` and `severity` are those
   of the most severe version (by severity, the unit-free measure below —
   not by raw score, which is on a different scale per version).
 - **Isolation-forest decision conventions.** `score` is `decision_function`:
@@ -285,7 +286,35 @@ anomalous if *any* enabled version flags it, so the share of the window the
 model as a whole calls anomalous is the union of them — several times the
 rate on a model with several versions. `calibration`'s `aggregate.rate` and
 `anomaly_summary`'s `anomaly_rate` are that number, and `fork_model` reports
-both side by side. Two things it will not do silently: write a
+both side by side.
+
+**Unless the model asks for a consensus.** `votes` (an editable field, 1 by
+default) is how many enabled versions must flag a point before the *model*
+calls it an anomaly. One is what a guard is for: a single reading at ten
+sigma is an anomaly whether or not the forests concur. Above one, the
+versions have to agree — and the number decides everywhere the aggregate is
+used, not just in a listing: what a detect answers, what the ring scan
+stores, what calibration counts, what fine-tune aims at.
+
+With a consensus asked for, `rate` changes what it is a share *of*. Each
+version flagging 1 % on its own would be an answer to a question nobody
+asked: three versions each flagging 1 % of a window agree on far less than
+1 % of it, and often on none of it. So the target becomes the model's share
+and the knob becomes shared — every tunable version is placed at the same
+quantile of its own scores, chosen so that `votes` of them *together* flag
+the rate you asked for. On a seven-version model asked for 5 %:
+
+| votes | each version flags | the model flags |
+| --- | --- | --- |
+| 2 | 3.9 % | 4.6 % |
+| 3 | 5.2 % | 4.9 % |
+| 4 | 10.9 % | 4.9 % |
+| 5 | 14.6 % | 5.0 % |
+
+Both numbers come back, and a consensus the window cannot reach is said out
+loud rather than approximated in silence. `anomalies?votes=N` still narrows
+on top of the model's rule: the model says what an anomaly *is*, a reader
+may ask for stricter agreement within it. Two things it will not do silently: write a
 margin of 0 (which flags every row whose score is at or below 0 — on a
 forest, a third of a quiet feed) when no margin at or above 0 flags this
 few, and pretend a rate was met when the scores tie in runs and the
@@ -920,7 +949,7 @@ says why and what would be allowed instead.
 | `retrain`, `train_autoencoder`, `train_forecast`, `finetune`, `edit_model`, `reset_model`, `delete_model` | member on `llm_…`, admin on any | the model's lifecycle; destructive ones need `confirm: true` |
 | `ingest_point`, `forecast_point`, `import_data` | ingest key, admin | send a point / send a point and get the forecast from it / load a file of history (inline, or a name from `list_files`) — this teaches the model |
 | `claim_model`, `org_users`, `set_role`, `org_keys` | admin | ownership, the roster, roles, the key listing |
-| `create_source`, `update_source`, `delete_source`, `run_source`, `source_catalog`, `source_preview` | admin | data sources: add one (a WFS stored query or feature type, or a URL answering JSON, with its kind and settings), change any field, remove it (`confirm: true`), fetch now or backfill, browse a service's catalogue, preview a query's columns |
+| `create_source`, `update_source`, `delete_source`, `run_source`, `source_catalog`, `source_preview` | admin | data sources: add one (a WFS stored query or feature type, or a URL answering JSON or a CSV file, with its kind and settings), change any field, remove it (`confirm: true`), fetch now or backfill, browse a service's catalogue, preview a query's columns |
 
 API keys are deliberately **listed but never created or revoked** through
 MCP: a new key's secret exists once, in the response that creates it, and a
@@ -1112,12 +1141,13 @@ that file of that organization until it expires; a tampered or expired one
 is a 403. Admins `DELETE` files. Names are `[A-Za-z0-9._-]`, no leading
 dot, at most 128 characters.
 
-### Data sources: a WFS fetched on a schedule
+### Data sources: a feed fetched on a schedule
 
 A model fed by a producer gets its points pushed. A model fed from a
 public service has to go and get them — a weather office's WFS, a
-hydrology office's, a radiation network's — and an administrator says
-from where, which columns, into which model and how often. That is a
+hydrology office's, a radiation network's, a REST endpoint, a published
+CSV file — and an administrator says from where, which columns, into
+which model and how often. That is a
 *source*, kept at `orgs/<org>/sources/<id>.json`:
 
 ```json
@@ -1158,7 +1188,26 @@ Two kinds of WFS answer, and the source's `mode` says which:
   that landed, so the same features never land twice and a reading
   published late is not skipped.
 
-A third kind is not a WFS at all: **`kind: "http"`**, a URL answering
+Two more kinds are not a WFS at all, and both are a URL fetched whole.
+
+**`kind: "csv"`** is a URL answering a *file*: a header row, then one row
+per record. Not every public feed is an API — the USGS publishes its
+earthquakes as
+`https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.csv`, a
+station publishes an export, an agency publishes a table — and there is no
+reason a file should be harder to watch than a JSON endpoint. It is read by
+the same parser the import route and `analyze_data` use, so a file that
+imports cleanly fetches cleanly: the delimiter is sniffed, a quoted field
+keeps its commas, an empty cell is a missing value rather than an empty
+string, and a cell is typed as it would be on import. The clock is a column
+— `time_field` named, detected, or `none` for a snapshot series — and a
+file with no readable stamp is stamped with the fetch time. Everything else
+a source has, it has: the schedule, the headers, the columns tapped as
+features or categories, the first run's calibration. A rolling feed that
+republishes the same window on every request can be polled as often as you
+like: each run keeps only the rows newer than the newest already stored.
+
+**`kind: "http"`** is a URL answering
 JSON. The record keeps the URL as given (query string and all), a
 `method` (GET, POST or PUT), `headers` (an `Authorization`, the
 `Digitraffic-User` a service requires), a `body` for POST, and a `path`

@@ -91,6 +91,7 @@ $ `stdlib/ext/json.nu`
     i score_epoch
     i feat_enc  // the calendar-feature encoding the stored feature order uses
     i train_span  // seconds the last train's rows covered; 0 = unknown, every cycle kept
+    i votes  // versions that must agree before the model calls a point an anomaly (1 = any one; see ANOM_VOTES_DEFAULT)
     ( Vec f ) flat_run  // flatline reference per feature: the run length its training runs recur at (see ANOM_FLAT_RUN_Q; -1 = not watched)
     ( Vec f ) flat_sd  // flatline reference per feature: the quiet-window std of training (see ANOM_FLAT_SD_Q)
     ( Vec f ) absurd_n  // readings left out of the last fit per feature (see anomaly_mask_absurd)
@@ -221,6 +222,20 @@ $ `stdlib/ext/json.nu`
 // long it lasts. A column whose reference run is longer than the guard can
 // look back (ANOM_FLAT_TAIL_MAX) is left unwatched rather than watched
 // with a bar it can never reach.
+// How many enabled versions must flag a point before the MODEL calls it an
+// anomaly. One is the historical rule and the default: any version alone
+// is enough, which is what a guard is for — a single reading at ten sigma
+// is an anomaly whether or not the forests agree. Raising it asks for
+// CONSENSUS instead, and a stream where every version has a say is a
+// stream where one loud version stops being the whole answer.
+//
+// The number is the model's, not a filter on a query: it decides what is
+// stored as an anomaly, what calibration counts, and what fine-tune aims
+// at. `anomalies?votes=N` still narrows further on top of it — the model
+// says what an anomaly IS, a reader may ask for a stricter agreement.
+: i ANOM_VOTES_DEFAULT 1
+: i ANOM_VOTES_MAX 32
+
 : s ANOM_FLAT_NAME `flatline`
 : i ANOM_FLAT_WINDOW 60
 : f ANOM_FLAT_MARGIN 0.9
@@ -349,6 +364,7 @@ $ `stdlib/ext/json.nu`
     = . m tuned_at 0
     = . m max_points ANOM_MAX_POINTS
     = . m score_epoch 1
+    = . m votes ANOM_VOTES_DEFAULT
     = . m feat_enc ANOM_FEAT_ENC
     = . m train_span 0
     = . m flat_run ( vec_new [f] )
@@ -1416,6 +1432,7 @@ $ `stdlib/ext/json.nu`
         = vi + vi 1
     }
     ( json_obj_set o `versions` vers )
+    ( json_obj_set o `votes` ( json_int . m votes ) )
 
     ( json_obj_set o `n_points_seen` ( json_int . m n_seen ) )
     ( json_obj_set o `n_points_stored` ( json_int . m n_stored ) )
@@ -1720,6 +1737,10 @@ $ `stdlib/ext/json.nu`
         = . m n_stored ? < . m n_seen . m max_points . m n_seen . m max_points
     } {}
     = . m score_epoch ( _an_jint j `score_epoch` 1 )
+    // A model written before the setting existed agrees with every model
+    // that has never touched it: one version is enough.
+    = . m votes ( _an_jint j `votes` ANOM_VOTES_DEFAULT )
+    ? < . m votes 1 { = . m votes 1 } {}
     // Metadata written before the key existed was trained under encoding 1.
     = . m feat_enc ( _an_jint j `feature_encoding` 1 )
     = . m train_span ( _an_jint j `train_span` 0 )

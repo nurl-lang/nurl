@@ -69,6 +69,8 @@ $ `src/store.nu`
     f score  // the most severe version's decision value (own units)
     f severity  // that version's severity: the aggregate, unit-free
     ( Vec VerVerdict ) versions
+    i hits  // enabled versions that flagged this point
+    i votes_needed  // how many had to (the model's `votes`)
 }
 
 // The one unit-free number every version shares (SPEC §5.4): how far past
@@ -870,14 +872,14 @@ $ `src/store.nu`
         ( vec_free [f] x )
         ( vec_free [f] araw )
         ( vec_free [f] fraw )
-        ^ @ Verdict { F F 0.0 0.0 vvs }
+        ^ @ Verdict { F F 0.0 0.0 vvs 0 0 }
     }
 
     : *Meta mm . mo meta
     : i nfeat ( vec_len [String] . mm feats )
     : b hist != # i h 0
 
-    : ~ b any F
+    : ~ i hits 0
     // `worst` is the aggregate score: the decision value of the version
     // that is most severe in its own margins (anom_severity).
     : ~ f worst 0.0
@@ -926,7 +928,7 @@ $ `src/store.nu`
                                 ? have {} { = dfw ( anom_decision vm tail ) }
                                 : f marginw ( meta_version_margin mm ( string_data . vm vname ) . vm margin )
                                 : b hitw <= dfw - 0.0 marginw
-                                ? hitw { = any T } {}
+                                ? hitw { = hits + hits 1 } {}
                                 : f sevw ( anom_severity dfw marginw )
                                 ? || first > sevw top_sev { = worst dfw = top_sev sevw } {}
                                 = first F
@@ -950,7 +952,7 @@ $ `src/store.nu`
                     ? have {} { = df ( anom_decision vm x ) }
                     : f margin ( meta_version_margin mm ( string_data . vm vname ) . vm margin )
                     : b hit <= df - 0.0 margin
-                    ? hit { = any T } {}
+                    ? hit { = hits + hits 1 } {}
                     : f sev ( anom_severity df margin )
                     ? || first > sev top_sev { = worst df = top_sev sev } {}
                     = first F
@@ -987,7 +989,7 @@ $ `src/store.nu`
         : f gdf - 0.0 gz
         : f gmargin ( meta_version_margin mm ANOM_GUARD_NAME ANOM_GUARD_SIGMA )
         : b ghit <= gdf - 0.0 gmargin
-        ? ghit { = any T } {}
+        ? ghit { = hits + hits 1 } {}
         : f gsev ( anom_severity gdf gmargin )
         ? || first > gsev top_sev { = worst gdf = top_sev gsev } {}
         = first F
@@ -1008,7 +1010,7 @@ $ `src/store.nu`
             : f fdf - 0.0 . fo worst
             : f fmargin ( meta_version_margin mm ANOM_FLAT_NAME ANOM_FLAT_MARGIN )
             : b fhit <= fdf - 0.0 fmargin
-            ? fhit { = any T } {}
+            ? fhit { = hits + hits 1 } {}
             : f fsev ( anom_severity fdf fmargin )
             ? || first > fsev top_sev { = worst fdf = top_sev fsev } {}
             = first F
@@ -1062,7 +1064,7 @@ $ `src/store.nu`
             : f fcdf - 0.0 fworst
             : f fcmargin ( meta_version_margin mm ANOM_FC_NAME ANOM_FC_SIGMA )
             : b fchit <= fcdf - 0.0 fcmargin
-            ? fchit { = any T } {}
+            ? fchit { = hits + hits 1 } {}
             : f fcsev ( anom_severity fcdf fcmargin )
             ? || first > fcsev top_sev { = worst fcdf = top_sev fcsev } {}
             = first F
@@ -1089,7 +1091,7 @@ $ `src/store.nu`
         : f arel ( meta_version_margin mm `autoencoder` ANOM_AE_MARGIN )
         : f amargin ( anom_ae_margin cae arel )
         : b ahit <= adf - 0.0 amargin
-        ? ahit { = any T } {}
+        ? ahit { = hits + hits 1 } {}
         : f asev ( anom_severity adf amargin )
         ? || first > asev top_sev { = worst adf = top_sev asev } {}
         = first F
@@ -1104,7 +1106,15 @@ $ `src/store.nu`
     } {}
     ( vec_free [f] araw )
     ( vec_free [f] x )
-    ^ @ Verdict { T any worst top_sev vvs }
+    // The model's rule, not a query's: `votes` enabled versions must have
+    // flagged before the point is an anomaly. One — the default and every
+    // model that has never touched the setting — is "any version alone",
+    // which is what a guard is for. More is consensus, and it is the
+    // model that says so, because the answer has to mean the same thing
+    // to a stored scan, to calibration, to fine-tune and to a detect.
+    : ~ i need . mm votes
+    ? < need 1 { = need 1 } {}
+    ^ @ Verdict { T >= hits need worst top_sev vvs hits need }
 }
 
 // The live-point entry: `ring_has_current` is 1 when the point being scored
@@ -2742,6 +2752,7 @@ $ `src/store.nu`
     f worst  // the most negative decision value
     f median
     ( Vec f ) dfs  // ascending
+    ( Vec f ) row_df  // per WINDOW ROW, in ring order, NaN where this version had no verdict
 }
 
 : CalReport {
@@ -2757,6 +2768,7 @@ $ `src/store.nu`
     ( vec_free_with [CalVer] . rep items \ CalVer x → v {
         ( string_free . x cvname )
         ( vec_free [f] . x dfs )
+        ( vec_free [f] . x row_df )
     } )
 }
 
@@ -2953,14 +2965,39 @@ $ `src/store.nu`
                             : ~ i at ( __an_cal_find items nm )
                             ? < at 0 {
                                 = at ( vec_len [CalVer] items )
+                                : ( Vec f ) rd0 ( vec_new [f] )
+                                // A version first seen at row r had no
+                                // verdict for the rows before it: the
+                                // grid is rectangular or it cannot be
+                                // read by row.
+                                : ~ i pad 0
+                                ~ < pad - n_rows 1 { ( vec_push [f] rd0 ( float_nan ) ) = pad + pad 1 }
                                 ( vec_push [CalVer] items @ CalVer {
-                                    ( string_from nm ) . vv cfg_margin 0 0 0.0 0.0 ( vec_new [f] )
+                                    ( string_from nm ) . vv cfg_margin 0 0 0.0 0.0 ( vec_new [f] ) rd0
                                 } )
                             } {}
                             ?? ( vec_get [CalVer] items at ) {
-                                T cv → { ( vec_push [f] . cv dfs own ) }
+                                T cv → {
+                                    ( vec_push [f] . cv dfs own )
+                                    ( vec_push [f] . cv row_df own )
+                                }
                                 F _ → {}
                             }
+                        }
+                        F _ → {}
+                    }
+                    = q + q 1
+                }
+                // Every version that said nothing about this row gets a
+                // NaN, so `row_df` stays one column of a rectangular
+                // grid: the consensus rule has to read a ROW across the
+                // versions, which a per-version sorted list cannot give.
+                : i nitems ( vec_len [CalVer] items )
+                = q 0
+                ~ < q nitems {
+                    ?? ( vec_get [CalVer] items q ) {
+                        T cv → {
+                            ~ < ( vec_len [f] . cv row_df ) n_rows { ( vec_push [f] . cv row_df ( float_nan ) ) }
                         }
                         F _ → {}
                     }
@@ -3037,12 +3074,17 @@ $ `src/store.nu`
 
 : FineTuneReport {
     ( Vec FtVer ) items
-    f rate
+    f rate  // the share asked for: of the WINDOW when votes > 1, of each version's own rows when votes = 1
     i from_ts
     i to_ts
     i n_rows
     b applied
     i excluded  // labelled false positives left out of the window
+    i votes  // the model's consensus rule at the time of the tune
+    f per_version_rate  // the share each version was set to flag on its own (= rate when votes = 1)
+    i consensus_before  // window rows `votes` versions flagged at the old margins
+    i consensus_after  // …and at the new ones
+    String note  // why a consensus could not be met; "" when all is well
 }
 
 // The first calibration of a model that arrived as a whole — a file
@@ -3101,6 +3143,7 @@ $ `src/store.nu`
 
 @ finetune_free FineTuneReport rep → v {
     ( vec_free_with [FtVer] . rep items \ FtVer x → v { ( string_free . x ftname ) ( string_free . x warning ) } )
+    ( string_free . rep note )
 }
 
 // Set every enabled, trained version's margin so that a fraction `rate` of
@@ -3112,10 +3155,158 @@ $ `src/store.nu`
 // effect at the next detect. The flatline guard is left out: its margin
 // is a fraction with a fixed meaning (SPEC §5.4), and a stuck sensor is
 // not a 1 % property of a window — set it with the version editor.
+// ── Fine-tuning a consensus ───────────────────────────────────────────
+//
+// With `votes` at 1 the model calls a point an anomaly when ANY version
+// flags it, and `rate` is what each version flags on its own — the rule
+// this package has always had, and the one that stays.
+//
+// Above 1 the question changes: `votes` versions must agree, so the share
+// of the window the MODEL calls anomalous is not any one version's share
+// but the share of rows where enough of them coincide. Setting each
+// version to flag 1 % on its own would then be an answer to a question
+// nobody asked — three versions each flagging 1 % of a window agree on far
+// less than 1 % of it, and often on none of it at all.
+//
+// So the target is the model's, and the knob is shared: every tunable
+// version's margin is placed at the SAME quantile q of its own scores,
+// and q is found by bisection so that `votes` versions together flag the
+// rate asked for. That the consensus count rises monotonically with q is
+// what makes bisection right: a looser margin can only add rows to a
+// version's hit set, never remove one, so it can only add agreements.
+//
+// The flatline guard keeps its margin here as it does everywhere else —
+// its number is a fraction of a column's own reference run, not a rate —
+// but it COUNTS towards the consensus, because it is a version that
+// flags. The tunable versions absorb what it contributes.
+
+// The margins as they stand, for the consensus a window reaches today.
+@ _an_cal_margins_now CalReport cal → ( Vec f ) {
+    : ( Vec f ) out ( vec_new [f] )
+    : i ni ( vec_len [CalVer] . cal items )
+    : ~ i k 0
+    ~ < k ni {
+        ?? ( vec_get [CalVer] . cal items k ) {
+            T cv → { ( vec_push [f] out . cv cur_margin ) }
+            F _ → { ( vec_push [f] out 0.0 ) }
+        }
+        = k + k 1
+    }
+    ^ out
+}
+
+// Per version, the margin at quantile `q` of its own scores; the flatline
+// keeps the one it has.
+@ _an_cal_margins_at CalReport cal f q → ( Vec f ) {
+    : ( Vec f ) out ( vec_new [f] )
+    : i ni ( vec_len [CalVer] . cal items )
+    : ~ i k 0
+    ~ < k ni {
+        ?? ( vec_get [CalVer] . cal items k ) {
+            T cv → {
+                ? ( _an_is_flat_name ( string_data . cv cvname ) ) { ( vec_push [f] out . cv cur_margin ) }
+                { ( vec_push [f] out ( cal_margin_for_rate cv q ) ) }
+            }
+            F _ → { ( vec_push [f] out 0.0 ) }
+        }
+        = k + k 1
+    }
+    ^ out
+}
+
+// Rows of the window that `need` versions or more flag at these margins.
+@ _an_cal_consensus CalReport cal ( Vec f ) margins i need → i {
+    : i ni ( vec_len [CalVer] . cal items )
+    : i nr . cal n_rows
+    : ~ i hits 0
+    : ~ i r 0
+    ~ < r nr {
+        : ~ i c 0
+        : ~ i k 0
+        ~ < k ni {
+            ?? ( vec_get [CalVer] . cal items k ) {
+                T cv → {
+                    ?? ( vec_get [f] . cv row_df r ) {
+                        T d → {
+                            ? ( float_is_nan d ) {} {
+                                ? <= d - 0.0 ( _mlp_fget margins k ) { = c + c 1 } {}
+                            }
+                        }
+                        F _ → {}
+                    }
+                }
+                F _ → {}
+            }
+            = k + k 1
+        }
+        ? >= c need { = hits + hits 1 } {}
+        = r + r 1
+    }
+    ^ hits
+}
+
+// The per-version quantile at which `need` versions together flag `target`
+// of the window — the largest one that does not overshoot, so a consensus
+// is never louder than it was asked to be. The consensus count is a step
+// function of q, so ~32 halvings land on the step exactly.
+@ _an_consensus_q CalReport cal i need f target → f {
+    : i want # i ( float_round * target # f . cal n_rows )
+    : ~ f lo 0.0
+    : ~ f hi 1.0
+    : ~ i it 0
+    ~ < it 32 {
+        : f mid * 0.5 + lo hi
+        : ( Vec f ) ms ( _an_cal_margins_at cal mid )
+        : i got ( _an_cal_consensus cal ms need )
+        ( vec_free [f] ms )
+        ? <= got want { = lo mid } { = hi mid }
+        = it + it 1
+    }
+    ^ lo
+}
+
+// The consensus a set of margins reaches, for the report.
+@ _an_consensus_at CalReport cal i need f q → i {
+    : ( Vec f ) ms ( _an_cal_margins_at cal q )
+    : i got ( _an_cal_consensus cal ms need )
+    ( vec_free [f] ms )
+    ^ got
+}
+
 @ model_finetune_at * Model mo f rate i from_ts i to_ts b apply ( Vec String ) only → FineTuneReport {
     ? apply { ( _an_set_action ? == ( nurl_str_eq g_an_action `autotune` ) 1 `autotune` `finetune` ) } {}
     : ( Vec FtVer ) items ( vec_new [FtVer] )
     : CalReport cal ( model_calibrate mo from_ts to_ts )
+    : *Meta ftmm . mo meta
+    : ~ i need . ftmm votes
+    ? < need 1 { = need 1 } {}
+    // With one vote `rate` is each version's own share, as it always was.
+    // With more, it is the MODEL's share and the versions share a
+    // quantile — see _an_consensus_q.
+    : ~ f q rate
+    : ~ String cnote ( string_new )
+    : ~ i cons_before 0
+    : ~ i cons_after 0
+    ? > need 1 {
+        : ( Vec f ) mnow ( _an_cal_margins_now cal )
+        = cons_before ( _an_cal_consensus cal mnow need )
+        ( vec_free [f] mnow )
+        = q ( _an_consensus_q cal need rate )
+        = cons_after ( _an_consensus_at cal need q )
+        : i want # i ( float_round * rate # f . cal n_rows )
+        : i ceiling ( _an_consensus_at cal need 1.0 )
+        ? & > want 0 < ceiling want {
+            ( string_push_str cnote `the rate cannot be met at this consensus: even with every margin as loose as the window allows, ` )
+            ( string_push_int cnote need )
+            ( string_push_str cnote ` versions agree on only ` )
+            ( string_push_int cnote ceiling )
+            ( string_push_str cnote ` of ` )
+            ( string_push_int cnote . cal n_rows )
+            ( string_push_str cnote ` rows where ` )
+            ( string_push_int cnote want )
+            ( string_push_str cnote ` were asked. Lower votes, or ask for less.` )
+        } {}
+    } {}
     : i ni ( vec_len [CalVer] . cal items )
     : ~ i k 0
     ~ < k ni {
@@ -3123,7 +3314,7 @@ $ `src/store.nu`
             T cv → {
                 : s nm ( string_data . cv cvname )
                 ? ( _an_is_flat_name nm ) {} {
-                    : f nm_new ( cal_margin_for_rate cv rate )
+                    : f nm_new ( cal_margin_for_rate cv q )
                     : ~ b wanted T
                     : i nonly ( vec_len [String] only )
                     ? > nonly 0 {
@@ -3138,7 +3329,7 @@ $ `src/store.nu`
                         }
                     } {}
                     : i after ( cal_flagged_at cv nm_new )
-                    : i want # i ( float_round * rate # f . cv n )
+                    : i want # i ( float_round * q # f . cv n )
                     : ~ String warn ( string_new )
                     // A margin of 0 flags every row whose score is at or
                     // below 0 — on a forest, a third of a quiet feed. No
@@ -3188,7 +3379,7 @@ $ `src/store.nu`
     : i nex . cal excluded
     ( cal_free cal )
     ( _an_set_action `set_margin` )
-    ^ @ FineTuneReport { items rate from_ts to_ts nr apply nex }
+    ^ @ FineTuneReport { items rate from_ts to_ts nr apply nex need q cons_before cons_after cnote }
 }
 
 // The lower bound of a version's OWN window, anchored on the newest stored
@@ -4244,6 +4435,7 @@ $ `src/store.nu`
     ( json_arr_push a ( json_str_lit `schedule` ) )
     ( json_arr_push a ( json_str_lit `max_data_points` ) )
     ( json_arr_push a ( json_str_lit `versions` ) )
+    ( json_arr_push a ( json_str_lit `votes` ) )
     ^ a
 }
 
@@ -4316,6 +4508,22 @@ $ `src/store.nu`
     }
 }
 
+// How many versions are switched on right now — the ceiling on `votes`,
+// since a point cannot be flagged by a version that does not judge.
+@ _an_enabled_count * Meta mm → i {
+    : ~ i n 0
+    : i nv ( vec_len [VerCfg] . mm versions )
+    : ~ i k 0
+    ~ < k nv {
+        ?? ( vec_get [VerCfg] . mm versions k ) {
+            T vc → { ? . vc enabled { = n + n 1 } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ n
+}
+
 @ model_apply_meta_patch * Model mo Json patch → String {
     : ( Vec String ) sink ( vec_new [String] )
     : String r ( model_apply_meta_patch_notes mo patch sink )
@@ -4332,11 +4540,11 @@ $ `src/store.nu`
     // does not is refused with its name, not dropped. (`edit_model
     // {schedule: {forecast: 500}}` once answered success and changed
     // nothing.)
-    : String badtop ( _an_unknown_keys patch `alias clock schedule max_data_points versions replace_versions` `patch` )
+    : String badtop ( _an_unknown_keys patch `alias clock schedule max_data_points versions votes replace_versions` `patch` )
     ? > ( string_len badtop ) 0 {
         : String why ( string_from `unknown field ` )
         ( string_push_str why ( string_data badtop ) )
-        ( string_push_str why ` (editable: alias, clock, schedule, max_data_points, versions — the same list every metadata response publishes as editable_fields; replace_versions is not a field but a flag on this patch, making versions the whole list)` )
+        ( string_push_str why ` (editable: alias, clock, schedule, max_data_points, versions, votes — the same list every metadata response publishes as editable_fields; replace_versions is not a field but a flag on this patch, making versions the whole list)` )
         ( string_free badtop )
         ^ why
     } {}
@@ -4505,8 +4713,30 @@ $ `src/store.nu`
         F _ → {}
     }
 
+    // After `versions`: a patch may switch versions on and raise the
+    // consensus in one call, and the ceiling is the list as it will BE.
+    ?? ( json_obj_get patch `votes` ) {
+        T _ → {
+            : i want ( _an_jint patch `votes` . mm votes )
+            ? >= want 1 {} { ^ ( string_from `votes must be at least 1 (1 = any one enabled version is enough, which is the default)` ) }
+            ? <= want ANOM_VOTES_MAX {} { ^ ( string_from `votes is far past any model's version count` ) }
+            : i on ( _an_enabled_count mm )
+            ? <= want on {} {
+                : String why ( string_from `votes: ` )
+                ( string_push_int why want )
+                ( string_push_str why ` versions must agree, but only ` )
+                ( string_push_int why on )
+                ( string_push_str why ` are enabled — no point could ever reach it. Switch versions on, or lower votes.` )
+                ^ why
+            }
+            = . mm votes want
+            = touched T
+        }
+        F _ → {}
+    }
+
     ? touched {} {
-        ^ ( string_from `nothing to update: expected alias, schedule, max_data_points and/or versions` )
+        ^ ( string_from `nothing to update: expected alias, schedule, max_data_points, versions and/or votes` )
     }
 
     ( __an_prune_disabled mo )
