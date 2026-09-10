@@ -27,6 +27,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
+$ `stdlib/std/sort.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
 
@@ -92,6 +93,7 @@ $ `stdlib/ext/json.nu`
     i train_span  // seconds the last train's rows covered; 0 = unknown, every cycle kept
     ( Vec f ) flat_run  // flatline reference per feature: longest identical run in training (-1 = not watched)
     ( Vec f ) flat_sd  // flatline reference per feature: the quiet-window std of training (see ANOM_FLAT_QUANTILE)
+    ( Vec f ) absurd_n  // readings left out of the last fit per feature (see anomaly_mask_absurd)
     ( Vec VerCfg ) versions
 }
 
@@ -297,6 +299,7 @@ $ `stdlib/ext/json.nu`
     = . m feats ( vec_new [String] )
     = . m sc_mean ( vec_new [f] )
     = . m sc_std ( vec_new [f] )
+    = . m absurd_n ( vec_new [f] )
     = . m sched_below ANOM_SCHED_BELOW
     = . m sched_at_max ANOM_SCHED_AT_MAX
     = . m sched_ae F
@@ -330,6 +333,7 @@ $ `stdlib/ext/json.nu`
     ( vec_free [f] . m sc_std )
     ( vec_free [f] . m flat_run )
     ( vec_free [f] . m flat_sd )
+    ( vec_free [f] . m absurd_n )
     ( vec_free_with [VerCfg] . m versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
     ( nurl_free m )
 }
@@ -865,6 +869,123 @@ $ `stdlib/ext/json.nu`
     ^ out
 }
 
+// ── Absurd readings ───────────────────────────────────────────────────
+//
+// A reading that cannot be a measurement of the same quantity — a sensor
+// that answered 1e200, a unit conversion that multiplied by a googol —
+// must not set anybody's boundaries. It is still stored, still scored and
+// still flagged; it is flagged HARDER, because the range guard now sees it
+// against a scale it did not move. It simply takes no part in FITTING.
+//
+// Why it has to be left out rather than merely survived. The fitted scale
+// is a mean and a standard deviation, and one reading D robust sigmas out
+// inflates the std to about D/√n. Every real reading then standardises to
+// z ≈ √n/D, so a few hundred sigmas is where the feature stops being
+// watched at all — and it stays unwatched until the reading leaves the
+// ring, which at a minute's step and the 150 000-point default is fourteen
+// weeks. The forests fare no better: a split is drawn uniformly between a
+// column's min and max, so one absurd reading makes nearly every split of
+// that column useless. The autoencoder's MinMax and the forecast's ARIMA
+// go the same way.
+//
+// "Absurd" is measured against the feature's OWN robust statistics — the
+// median and 1.4826·MAD, neither of which one reading can move — over a
+// bounded, evenly spaced sample, so the cost does not grow with the ring.
+// A cell past ANOM_ABSURD_SIGMAS of those becomes NaN in the TRAINING
+// MATRIX only; the stored point keeps its value. Everything downstream
+// already knows what NaN means there (0.29.0): the scaler leaves it out of
+// the fit, the standardiser reads it as the mean, the autoencoder fills it
+// with the midpoint of its column's range, and the forecast reads it as a
+// gap in the series.
+//
+// The threshold is not an anomaly threshold and must not be read as one.
+// A hundred sigmas is a spectacular anomaly and belongs in the fit; a
+// thousand is past where the fit survives at all, for any ring size this
+// service supports.
+: f ANOM_ABSURD_SIGMAS 1000.0
+: i ANOM_ABSURD_SAMPLE 2000
+: i ANOM_ABSURD_MIN_SAMPLE 8
+
+// The median of `xs`, which is SORTED in place.
+@ __an_median_of ( Vec f ) xs → f {
+    : i n ( vec_len [f] xs )
+    ? > n 0 {} { ^ 0.0 }
+    ( sort_by [f] xs \ f a f b → i { ? < a b { ^ -1 } {} ? > a b { ^ 1 } {} ^ 0 } )
+    : ~ f m 0.0
+    ?? ( vec_get [f] xs / n 2 ) { T v → { = m v } F _ → {} }
+    ^ m
+}
+
+// Replace every absurd cell of a row-major training matrix with NaN, in
+// place. One entry per column is pushed onto `counts`. Returns the total
+// number of cells masked. A column with too few readings to say, or with
+// no spread at all, is left exactly as it is: not being able to tell is
+// not a licence to erase.
+@ anomaly_mask_absurd ( Vec f ) data i n_rows i n_cols ( Vec i ) counts → i {
+    ? & > n_rows 0 > n_cols 0 {} { ^ 0 }
+    : ~ i total 0
+    : ~ i c 0
+    ~ < c n_cols {
+        : ~ i stride / n_rows ANOM_ABSURD_SAMPLE
+        ? < stride 1 { = stride 1 } {}
+        : ( Vec f ) sample ( vec_new [f] )
+        : *f dp ( vec_data [f] data )
+        : ~ i r 0
+        ~ < r n_rows {
+            : f v . dp + * r n_cols c
+            ? ( float_is_nan v ) {} { ( vec_push [f] sample v ) }
+            = r + r stride
+        }
+        : i ns ( vec_len [f] sample )
+        : ~ i masked 0
+        ? >= ns ANOM_ABSURD_MIN_SAMPLE {
+            : f med ( __an_median_of sample )
+            : ( Vec f ) dev ( vec_with_cap [f] ns )
+            : ~ i k 0
+            ~ < k ns {
+                ?? ( vec_get [f] sample k ) { T v → { ( vec_push [f] dev ( float_abs - v med ) ) } F _ → {} }
+                = k + k 1
+            }
+            : ~ f sigma * 1.4826 ( __an_median_of dev )
+            ? > sigma 0.0 {} {
+                // More than half the sample is the same number, so the MAD
+                // says nothing. The mean absolute deviation still does,
+                // unless the column really is constant — and then there is
+                // no scale to be absurd against.
+                : ~ f tot 0.0
+                = k 0
+                ~ < k ns {
+                    ?? ( vec_get [f] dev k ) { T d → { = tot + tot d } F _ → {} }
+                    = k + k 1
+                }
+                = sigma / tot # f ns
+            }
+            ( vec_free [f] dev )
+            ? & > sigma 0.0 ( _an_finite sigma ) {
+                : f lim * ANOM_ABSURD_SIGMAS sigma
+                : *f wp ( vec_data [f] data )
+                = r 0
+                ~ < r n_rows {
+                    : i off + * r n_cols c
+                    : f v . wp off
+                    ? ( float_is_nan v ) {} {
+                        ? > ( float_abs - v med ) lim {
+                            = . wp off ( float_nan )
+                            = masked + masked 1
+                        } {}
+                    }
+                    = r + r 1
+                }
+            } {}
+        } {}
+        ( vec_free [f] sample )
+        ( vec_push [i] counts masked )
+        = total + total masked
+        = c + c 1
+    }
+    ^ total
+}
+
 // ── Standardisation ───────────────────────────────────────────────────
 
 // A finite float: neither NaN nor an infinity.
@@ -1178,6 +1299,28 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set fl `ref_sd` ( _an_jarr_of_floats . m flat_sd ) )
     ( json_obj_set o `flatline` fl )
 
+    // What the last fit refused to learn from, by feature. Named rather
+    // than positional: it is read by people and by agents, and a count
+    // nobody can attach to a feature says nothing.
+    : Json ab ( json_obj_new )
+    : i nab ( vec_len [f] . m absurd_n )
+    : ~ i ai 0
+    ~ & < ai nab < ai ( vec_len [String] . m feats ) {
+        ?? ( vec_get [f] . m absurd_n ai ) {
+            T cnt → {
+                ? > cnt 0.0 {
+                    ?? ( vec_get [String] . m feats ai ) {
+                        T fn → { ( json_obj_set ab ( string_data fn ) ( json_int # i cnt ) ) }
+                        F _ → {}
+                    }
+                } {}
+            }
+            F _ → {}
+        }
+        = ai + ai 1
+    }
+    ( json_obj_set o `absurd_readings` ab )
+
     : Json sched ( json_obj_new )
     ( json_obj_set sched `below_max` ( json_int . m sched_below ) )
     ( json_obj_set sched `at_max` ( json_int . m sched_at_max ) )
@@ -1429,6 +1572,34 @@ $ `stdlib/ext/json.nu`
                 F _ → {}
             }
             ? == ( vec_len [f] . m flat_run ) ( vec_len [f] . m flat_sd ) {} { = ok F }
+        }
+        F _ → {}
+    }
+
+    // The readings the last fit left out, by feature name, back onto the
+    // frozen order. A feature the object does not mention had none.
+    ?? ( json_obj_get j `absurd_readings` ) {
+        T abj → {
+            ? ( json_is_obj abj ) {
+                ( vec_free [f] . m absurd_n )
+                = . m absurd_n ( vec_new [f] )
+                : i nf2 ( vec_len [String] . m feats )
+                : ~ i ai 0
+                ~ < ai nf2 {
+                    : ~ f cnt 0.0
+                    ?? ( vec_get [String] . m feats ai ) {
+                        T fn → {
+                            ?? ( json_obj_get abj ( string_data fn ) ) {
+                                T cv → { ? ( json_is_num cv ) { = cnt # f ( json_as_int cv ) } {} }
+                                F _ → {}
+                            }
+                        }
+                        F _ → {}
+                    }
+                    ( vec_push [f] . m absurd_n cnt )
+                    = ai + ai 1
+                }
+            } {}
         }
         F _ → {}
     }

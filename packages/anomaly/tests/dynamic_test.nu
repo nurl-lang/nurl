@@ -227,6 +227,44 @@ $ `src/dynamic.nu`
     : IngestOut huge ( ingest_pt mo3 1.0e308 5.0 65 )
     ( check & . huge ok ( _an_finite . huge score ) `extreme: 1.0e308 scores finitely` )
     ( model_free mo3 )
+
+    // The reading was flagged and stored — and it did NOT set the scale.
+    // Before this, one of them left the feature with a std of 1e199, and
+    // every real reading standardised to nought: the feature stopped
+    // being watched until the reading left the ring.
+    : *Model mo4 ( model_open_at st `extreme` + T0 * 66 60 )
+    : *Meta mm4 ( model_metadata mo4 )
+    : ~ b scale_sane F
+    ?? ( vec_get [f] . mm4 sc_std 0 ) { T sd → { = scale_sane & > sd 0.01 < sd 100.0 } F _ → {} }
+    ( check scale_sane `extreme: the absurd readings did not set the scale` )
+    : ~ f absurd_count 0.0
+    ?? ( vec_get [f] . mm4 absurd_n 0 ) { T c → { = absurd_count c } F _ → {} }
+    ( check > absurd_count 0.0 `extreme: and the metadata says how many were left out` )
+
+    // The feature is still watched: a reading five degrees out is flagged.
+    : Json probe ( json_obj_new )
+    ( json_obj_set probe `temp` ( json_float 26.0 ) )
+    ( json_obj_set probe `load` ( json_float 5.0 ) )
+    : !Verdict String pr ( model_detect_only mo4 probe )
+    ( json_free probe )
+    ?? pr {
+        T vd → {
+            : ~ f guard 0.0
+            : i nv ( vec_len [VerVerdict] . vd versions )
+            : ~ i v 0
+            ~ < v nv {
+                ?? ( vec_get [VerVerdict] . vd versions v ) {
+                    T vv → { ? == ( nurl_str_eq ( string_data . vv vvname ) `range_guard` ) 1 { = guard - 0.0 . vv score } {} }
+                    F _ → {}
+                }
+                = v + v 1
+            }
+            ( check > guard 2.0 `extreme: the feature is still watched afterwards` )
+            ( verdict_free vd )
+        }
+        F e → { ( string_free e ) ( check F `extreme: the reopened model scores a probe` ) }
+    }
+    ( model_free mo4 )
 }
 
 // ── Scenario D: a metadata file that does not parse ───────────────────

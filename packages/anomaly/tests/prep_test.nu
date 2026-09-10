@@ -462,8 +462,57 @@ $ `src/prep.nu`
     ( vec_free [f] tiny )
 }
 
+// ── 5c. Absurd readings: out of the fit, not out of the data ──────────
+
+@ test_absurd → v {
+    // col0 is a temperature-shaped series with one reading of 1e200;
+    // col1 is constant; col2 varies normally.
+    : ( Vec f ) data ( vec_new [f] )
+    : ~ i k 0
+    ~ < k 40 {
+        : f t + 20.0 / # f % k 7 10.0
+        ( vec_push [f] data ? == k 20 1.0e200 t )
+        ( vec_push [f] data 5.0 )
+        ( vec_push [f] data + 100.0 # f % k 11 )
+        = k + k 1
+    }
+    : ( Vec i ) counts ( vec_new [i] )
+    : i total ( anomaly_mask_absurd data 40 3 counts )
+    ( check == total 1 `absurd: exactly the one reading that cannot be a temperature` )
+    ( check == ( vec_len [i] counts ) 3 `absurd: a count per column` )
+    ?? ( vec_get [i] counts 0 ) { T c0 → { ( check == c0 1 `absurd: counted against its own feature` ) } F _ → {} }
+    ?? ( vec_get [i] counts 1 ) { T c1 → { ( check == c1 0 `absurd: a constant column has no scale to be absurd against` ) } F _ → {} }
+    ?? ( vec_get [i] counts 2 ) { T c2 → { ( check == c2 0 `absurd: an ordinary column is untouched` ) } F _ → {} }
+    ?? ( vec_get [f] data * 20 3 ) { T v → { ( check ( float_is_nan v ) `absurd: the cell is absent for the fit` ) } F _ → {} }
+    ?? ( vec_get [f] data * 21 3 ) { T v → { ( check ! ( float_is_nan v ) `absurd: the row after it is not` ) } F _ → {} }
+
+    // And the scaler, which is what the reading used to destroy, now fits
+    // the readings that are left.
+    : Scaler sc ( scaler_fit data 40 3 )
+    ?? ( vec_get [f] . sc inv_std 0 ) {
+        T iv → {
+            : f sd / 1.0 iv
+            ( check & > sd 0.1 < sd 10.0 `absurd: the scale is the one the real readings imply` )
+        }
+        F _ → {}
+    }
+    ( scaler_free sc )
+    ( vec_free [i] counts )
+    ( vec_free [f] data )
+
+    // A column with too few readings to say is left alone: not being able
+    // to tell is not a licence to erase.
+    : ( Vec f ) few ( vec_new [f] )
+    ( vec_push [f] few 1.0 ) ( vec_push [f] few 2.0 ) ( vec_push [f] few 1.0e200 )
+    : ( Vec i ) fc2 ( vec_new [i] )
+    ( check == ( anomaly_mask_absurd few 3 1 fc2 ) 0 `absurd: three readings are not enough to call one impossible` )
+    ( vec_free [i] fc2 )
+    ( vec_free [f] few )
+}
+
 @ main → i {
     ( test_golden )
+    ( test_absurd )
     ( test_calendar_clock )
     ( test_categories )
     ( test_projection )

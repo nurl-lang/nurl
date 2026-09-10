@@ -282,6 +282,42 @@ caller-owned handles, `( Vec f )` row-major matrices).
 | `( scaler_apply scaler point )` | `( Vec f )` standardised in place |
 | `( scaler_free scaler )` | `v` |
 
+### 5.1b Readings that cannot be measurements
+
+A sensor that answers `1e200`, or a unit conversion that multiplied by a
+googol, is a point like any other: it is stored, it is scored, and it is
+flagged. What it must not do is set anybody's boundaries.
+
+The fitted scale is a mean and a standard deviation, and one reading `D`
+robust sigmas out inflates the std to about `D/√n`. Every real reading then
+standardises to `z ≈ √n/D`, so a few hundred sigmas is where the feature
+stops being watched — and it stays unwatched until the reading leaves the
+ring, which at a minute's step and the 150 000-point default is fourteen
+weeks. The forests fare no better: a split is drawn uniformly between a
+column's min and max, so one such reading makes nearly every split of that
+column useless. The autoencoder's MinMax and the forecast's ARIMA go the
+same way; an ARIMA fitted through one sets its innovation variance so high
+that every later reading is nought sigma from the forecast, which reads as
+"it landed exactly on it".
+
+So `anomaly_mask_absurd` marks those cells **absent for fitting only**,
+against the feature's own median and 1.4826·MAD — neither of which one
+reading can move — estimated over a bounded, evenly spaced sample, so the
+cost does not grow with the ring. Past `ANOM_ABSURD_SIGMAS` (1000) the cell
+becomes NaN in the training matrix; the stored point keeps its value.
+Everything downstream already knows what NaN means there (§4.3): the scaler
+leaves it out of the fit, the standardiser reads it as the mean, the
+autoencoder fills it with the midpoint of its column's range, and the
+forecast reads it as a gap.
+
+The threshold is not an anomaly threshold and must not be read as one. A
+hundred sigmas is a spectacular anomaly and belongs in the fit; a thousand
+is past where the fit survives at all. A column with too few readings to
+say, or with no spread, is left exactly as it is: not being able to tell is
+not a licence to erase. What was left out is reported per feature in the
+metadata as `absurd_readings`, because a model that quietly refuses to
+learn from its data is the failure nobody can see.
+
 ### 5.2 Model lifecycle (dynamic / streaming)
 
 | Function | Result |
