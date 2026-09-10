@@ -61,6 +61,37 @@ server with diagnostics, go-to-definition, hover, document symbols,
 completion, formatting, workspace symbol search, and folding ranges. Wired
 to the editors through the `tooling/vscode-nurl` extension.
 
+The server finds `nurlc` and `nurlfmt` from initialization options
+`compilerPath` / `formatterPath`, then `NURLC` / `NURLFMT`, then beside its
+own executable, then on `PATH`. Explicit configuration takes precedence even
+if it is invalid: execution failures produce diagnostics or formatting errors.
+An installed layout can put all three binaries in `<prefix>/bin` or
+`<prefix>/build` and its sources in `<prefix>/stdlib`. The server discovers
+that stdlib directory unless `NURL_STDLIB` or `stdlibRoot` selects another.
+The current toolchain installer does not bundle the LSP automatically; build
+and place the server alongside the compiler or configure its paths explicitly.
+
+Initialization selects the workspace root for project imports. Each diagnostic
+compile passes the current document over stdin with its original filename:
+`nurlc --lint --stdin --check -- <file.nu>`. This preserves sibling imports,
+source locations and unsaved edits without writing source temporary files.
+`--check` performs the normal semantic checks but discards buffered LLVM IR;
+it does not write stdout IR or split files. The compiler still constructs IR
+during its fused frontend walk. `--stdin` also works without `--check` for
+ordinary compilation, including a logical filename that does not exist yet.
+
+The server uses UTF-16 positions for diagnostics, cursor lookup and formatting,
+percent-encoded file URIs for imported definitions, and related locations for
+errors in imported files. Its declaration index remains a lightweight scanner,
+not compiler name resolution; duplicate names, invalidation and other editor
+features require their own coverage. The synchronous subprocess API also has
+no per-request timeout. These limits are not closed by the diagnostics tests.
+
+After building the compiler and server, exercise relocated binaries and a
+separate consumer project with `python3 tools/tests/test_lsp_toolchain.py`.
+`python3 tools/tests/test_source_io.py` independently tests the C source readers
+under ASan/UBSan, including capacity boundaries, pipes and I/O failures.
+
 ## Package manager (`nurlpkg`)
 
 `./tools/nurlpkg/build.sh` produces `build/nurlpkg` — a Cargo-shaped package

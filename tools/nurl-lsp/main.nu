@@ -4,8 +4,8 @@
 //   1. Protocol lifecycle (initialize / initialized / shutdown / exit).
 //   2. Document tracking + compile-driven diagnostics.
 //      * textDocument/didOpen / didChange / didClose
-//      * On every store-or-update, write the buffer to a temp file,
-//        run `build/nurlc` against it, parse stderr GCC-style lines
+//      * On every store-or-update, pipe the buffer to nurlc --stdin
+//        with its original path, parse stderr GCC-style lines
 //        (`file:line:col: msg` and `... warning: msg`), and emit a
 //        `textDocument/publishDiagnostics` notification per URI.
 //   3. textDocument/definition (go-to-def).
@@ -21,6 +21,9 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/symtab.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/process.nu`
+$ `stdlib/std/path.nu`
+$ `stdlib/std/url.nu`
+$ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `tools/nurl-lsp/jsonrpc.nu`
 
@@ -69,10 +72,8 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 // `$`-import paths to absolute files.
 : ~ i g_workspace_root_set 0
 
-// Counter for unique temp-file names within a single server run. Per-
-// pid is enough — we don't expect concurrent LSP sessions sharing a
-// /tmp.
-: ~ i g_tmp_counter 0
+// Per-session tool configuration and compiler capability result.
+: ~ i g_tools 0
 
 @ __build_capabilities → Json {
     : Json caps ( json_obj_new )
@@ -161,64 +162,119 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ^ d
 }
 
-// ── Parse one diagnostic line ─────────────────────────────────────
-//
-// Input format (from nurlc's `die` / `warn`):
-//   <path>:<line>:<col>: <msg>            (error)
-//   <path>:<line>:<col>: warning: <msg>   (warning)
-//
-// Returns Some(Diagnostic-Json) on a successful parse, None for the
-// follow-up "<source>" and "<pad>^" decoration lines or anything that
-// doesn't match the prefix shape.
-
-@ __parse_diag_line s line → ?Json {
-    : i n ( nurl_str_len line )
-    // Must contain at least two ':' separators; brute-force scan.
-    : i lc1 ( __index_of_byte line 0 n 58 )  // first ':'
-    ? < lc1 0 { ^ @ ?Json { F } } {}
-    : i lc2 ( __index_of_byte line + lc1 1 n 58 )
-    ? < lc2 0 { ^ @ ?Json { F } } {}
-    : i lc3 ( __index_of_byte line + lc2 1 n 58 )
-    ? < lc3 0 { ^ @ ?Json { F } } {}
-
-    // Line and column must parse as decimal ints.
-    : String ls ( __substr line + lc1 1 lc2 )
-    : !i ParseErr lr ( string_to_int ls )
-    ( string_free ls )
-    : ~ i ln 0
-    : b ok_ln ?? lr { T n → { = ln n T } F _ → F }
-    ? ! ok_ln { ^ @ ?Json { F } } {}
-
-    : String cs ( __substr line + lc2 1 lc3 )
-    : !i ParseErr cr ( string_to_int cs )
-    ( string_free cs )
-    : ~ i cn 0
-    : b ok_cn ?? cr { T n → { = cn n T } F _ → F }
-    ? ! ok_cn { ^ @ ?Json { F } } {}
-
-    // Message starts after the third ':' plus a space (skip leading
-    // whitespace defensively).
-    : ~ i mstart + lc3 1
-    ~ & < mstart n | == ( nurl_str_get line mstart ) 32 == ( nurl_str_get line mstart ) 9 {
-        = mstart + mstart 1
+// LSP positions count UTF-16 code units; the source and compiler offsets are
+// UTF-8 bytes. This also represents EOF on a final line without a newline.
+@ __position_at_byte s text i at → Json {
+    : i n ( nurl_str_len text )
+    : *u p # *u text
+    : ~ i k 0
+    : ~ i line 0
+    : ~ i col 0
+    ~ & < k n < k at {
+        : i c & # i . p k 255
+        ? == c 10 { = line + line 1 = col 0 } {
+            ? | < c 128 >= c 192 { = col + col ? >= c 240 2 1 } {}
+        }
+        = k + k 1
     }
-    : String msg_s ( __substr line mstart n )
+    ^ ( __build_position line col )
+}
 
-    : ~ i severity 1
-    // Warning if the message text begins with "warning: ".
-    ? & >= ( string_len msg_s ) 9 ( __string_starts_with msg_s `warning: ` ) {
-        = severity 2
-        // Strip the prefix from the surfaced message.
-        : String stripped ( __substr ( string_data msg_s ) 9 ( string_len msg_s ) )
-        ( string_free msg_s )
-        : Json d ( __build_diagnostic ln cn severity ( string_data stripped ) )
-        ( string_free stripped )
-        ^ @ ?Json { T d }
+// A source byte column is clamped at the end of its line, then converted
+// to UTF-16. Missing columns (borrow diagnostics) underline the whole line.
+@ __diagnostic_range s content i ln i cn → Json {
+    : i n ( nurl_str_len content )
+    : ~ i start 0
+    : ~ i row 1
+    ~ & < start n < row ln {
+        ? == ( nurl_str_get content start ) 10 { = row + row 1 } {}
+        = start + start 1
+    }
+    : ~ i end start
+    ~ & < end n & != ( nurl_str_get content end ) 10 != ( nurl_str_get content end ) 13 { = end + end 1 }
+    ? > cn 0 {
+        = start + start - cn 1
+        ? > start end { = start end } {}
+        : ~ i next + start 1
+        // Include an entire UTF-8 character, never half a surrogate pair.
+        ~ & < next end & >= ( nurl_str_get content next ) 128 < ( nurl_str_get content next ) 192 { = next + next 1 }
+        ? < next end { = end next } {}
     } {}
+    : Json range ( json_obj_new )
+    ( json_obj_set range `start` ( __position_at_byte content start ) )
+    ( json_obj_set range `end` ( __position_at_byte content end ) )
+    ^ range
+}
 
-    : Json d ( __build_diagnostic ln cn severity ( string_data msg_s ) )
-    ( string_free msg_s )
-    ^ @ ?Json { T d }
+// Recognise path:line[:column]: error/warning prefixes. A drive-letter or
+// another colon inside a filename is not a diagnostic separator. Requiring
+// the severity prefix also excludes the compiler's source/caret decoration.
+@ __parse_diag_line s line s source_path s content → ?Json {
+    : i n ( nurl_str_len line )
+    : ~ i k 0
+    ~ < k n {
+        ? != ( nurl_str_get line k ) 58 { = k + k 1 continue } {}
+        : i path_end k
+        = k + k 1
+        : i digits k
+        : ~ i ln 0
+        ~ & < k n & >= ( nurl_str_get line k ) 48 <= ( nurl_str_get line k ) 57 {
+            ? > ln 100000000 { ^ @ ?Json { F } } {}
+            = ln + * ln 10 - ( nurl_str_get line k ) 48
+            = k + k 1
+        }
+        ? | == k digits | <= ln 0 | >= k n != ( nurl_str_get line k ) 58 { continue } {}
+        = k + k 1
+        : ~ i cn 0
+        : i cols k
+        ~ & < k n & >= ( nurl_str_get line k ) 48 <= ( nurl_str_get line k ) 57 {
+            ? > cn 100000000 { ^ @ ?Json { F } } {}
+            = cn + * cn 10 - ( nurl_str_get line k ) 48
+            = k + k 1
+        }
+        ? > k cols {
+            ? | <= cn 0 | >= k n != ( nurl_str_get line k ) 58 { continue } {}
+            = k + k 1
+        } {}
+        ~ & < k n | == ( nurl_str_get line k ) 32 == ( nurl_str_get line k ) 9 { = k + k 1 }
+        : String msg ( __substr line k n )
+        : b warning ( __string_starts_with msg `warning: ` )
+        ? ! | warning ( __string_starts_with msg `error: ` ) { ( string_free msg ) continue } {}
+        : String path ( __substr line 0 path_end )
+        : b same != 0 ( nurl_str_eq ( string_data path ) source_path )
+        : Json d ( __build_diagnostic 1 1 ? warning 2 1 ( string_data msg ) )
+        ? same {
+            ( json_obj_set d `range` ( __diagnostic_range content ln cn ) )
+        } {
+            // Imported-file errors belong to that file. Anchor the root
+            // notification at its start and retain the real related location.
+            ( json_obj_set d `message` ( json_str_lit line ) )
+            ( json_obj_set d `range` ( __diagnostic_range content 1 1 ) )
+            : s imported ( __read_if_exists ( string_data path ) )
+            : Path raw ( path_new ( string_data path ) )
+            : ?Path canonical ( path_canonical raw )
+            ( path_free raw )
+            ?? canonical {
+                T real → {
+                    : String uri ( __path_to_uri ( path_str real ) )
+                    : Json location ( json_obj_new )
+                    ( json_obj_set location `uri` ( json_str_lit ( string_data uri ) ) )
+                    ( json_obj_set location `range` ( __diagnostic_range imported ln cn ) )
+                    : Json related ( json_obj_new )
+                    ( json_obj_set related `location` location )
+                    ( json_obj_set related `message` ( json_str_lit ( string_data msg ) ) )
+                    : Json list ( json_arr_new )
+                    ( json_arr_push list related )
+                    ( json_obj_set d `relatedInformation` list )
+                    ( string_free uri ) ( path_free real )
+                }
+                F → {}
+            }
+        }
+        ( string_free path ) ( string_free msg )
+        ^ @ ?Json { T d }
+    }
+    ^ @ ?Json { F }
 }
 
 // ── URI ↔ path conversion ────────────────────────────────────────
@@ -240,7 +296,21 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     {
         // Three slashes total: `file:///`. Skip the first two only,
         // keeping the third as the absolute-path leading slash.
-        ^ ( __substr uri 7 n )
+        : ~ i start 7
+        ? != 0 ( nurl_str_starts uri `file://localhost/` ) { = start 16 } {}
+        ? & >= n + start 3 & == ( nurl_str_get uri start ) 47 == ( nurl_str_get uri + start 2 ) 58 {
+            = start + start 1  // file:///C:/... → C:/...
+        } {}
+        : String raw ( string_new )
+        ? & == start 7 & < start n != ( nurl_str_get uri start ) 47 {
+            ( string_push_str raw `//` )  // file://server/share → //server/share
+        } {}
+        : String suffix ( __substr uri start n )
+        ( string_push_str raw ( string_data suffix ) )
+        ( string_free suffix )
+        : String decoded ( url_percent_decode ( string_data raw ) )
+        ( string_free raw )
+        ^ decoded
     } {}
     ^ ( string_from uri )
 }
@@ -248,7 +318,26 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 @ __path_to_uri s path → String {
     : String out ( string_with_cap + 7 ( nurl_str_len path ) )
     ( string_push_str out `file://` )
-    ( string_push_str out path )
+    // Forward slashes form URI paths on every host. A Windows drive gets
+    // the extra leading slash; UNC paths retain their authority.
+    : String normalized ( string_from path )
+    ? | & >= ( string_len normalized ) 2 == ( string_get normalized 1 ) 58 != 0 ( nurl_str_starts path `\\\\` ) {
+        : ~ i k 0
+        ~ < k ( string_len normalized ) {
+            ? == ( string_get normalized k ) 92 { = . # *u ( string_data normalized ) k # u 47 } {}
+            = k + k 1
+        }
+    } {}
+    : String encoded ( url_path_encode ( string_data normalized ) )
+    ? & >= ( string_len normalized ) 2 == ( string_get normalized 1 ) 58 {
+        ( string_push_char out 47 )
+    } {}
+    ? != 0 ( nurl_str_starts ( string_data encoded ) `//` ) {
+        : String authority_path ( __substr ( string_data encoded ) 2 ( string_len encoded ) )
+        ( string_push_str out ( string_data authority_path ) )
+        ( string_free authority_path )
+    } { ( string_push_str out ( string_data encoded ) ) }
+    ( string_free encoded ) ( string_free normalized )
     ^ out
 }
 
@@ -307,65 +396,206 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 
 // ── Compile + collect diagnostics ─────────────────────────────────
 //
-// Writes `content` to a fresh temp file, invokes `build/nurlc <tmp>`,
-// parses stderr line by line, returns a Json array of Diagnostics.
-// `build/nurlc` is assumed to live relative to the LSP server's cwd
-// (the editor typically opens it at the workspace root).
+// The compiler owns source loading and import identity. stdin carries the
+// current buffer; the path remains the document's real logical filename.
+// No shared temp files, original-file writes or renamed-source imports.
 
-@ __compile_diagnostics s content → Json {
-    = g_tmp_counter + g_tmp_counter 1
-    : String tmp ( string_with_cap 64 )
-    ( string_push_str tmp `/tmp/nurl-lsp-` )
-    ( string_push_str tmp ( nurl_str_int g_tmp_counter ) )
-    ( string_push_str tmp `.nu` )
-
-    // Best-effort write. If this fails (out of /tmp space etc.) we
-    // give up and surface an empty diagnostics array — the client
-    // will keep last known errors but won't crash.
-    : !v IoErr wr ( write_file ( string_data tmp ) content )
-    ?? wr {
-        T _ → {}
-        F _ → {
-            ( string_free tmp )
-            ^ ( json_arr_new )
+@ __init_option Json params s key → String {
+    ?? ( json_obj_get params `initializationOptions` ) {
+        T options → {
+            ?? ( json_obj_get options key ) {
+                T value → { ^ ( string_from ( json_str_data value ) ) }
+                F → {}
+            }
         }
+        F → {}
     }
+    ^ ( string_new )
+}
+
+@ __tool_directory s command → String {
+    : Path path ( path_new command )
+    : ?Path canonical ( path_canonical path )
+    ( path_free path )
+    ?? canonical {
+        T real → {
+            : String dir ( path_dirname ( path_str real ) )
+            ( path_free real )
+            ^ dir
+        }
+        F → { ^ ( path_dirname command ) }
+    }
+}
+
+@ __is_executable s path → b {
+    : i mode ? == ( posix_const `PATH_LIST_SEPARATOR` ) 59 0 1
+    ^ & == ( nurl_path_type_follow path ) 1 == ( access path # i32 mode ) # i32 0
+}
+
+@ __resolve_tool Json params s key s envname s name → String {
+    : String explicit ( __init_option params key )
+    ? > ( string_len explicit ) 0 { ^ explicit } {}
+    ( string_free explicit )
+    : String configured ( env_var_or envname `` )
+    ? > ( string_len configured ) 0 { ^ configured } {}
+    ( string_free configured )
+    : s self ( nurl_argv 0 )
+    ? | >= ( nurl_str_find self `/` ) 0 >= ( nurl_str_find self `\\` ) 0 {
+        : String dir ( __tool_directory self )
+        : String candidate ( path_join ( string_data dir ) name )
+        ( string_free dir )
+        ? ( __is_executable ( string_data candidate ) ) { ^ candidate } {}
+        : String exe ( string_from ( nurl_str_cat ( string_data candidate ) `.exe` ) )
+        ( string_free candidate )
+        ? ( __is_executable ( string_data exe ) ) { ^ exe } {}
+        ( string_free exe )
+    } {}
+    ^ ( string_from name )  // process_run performs the platform PATH search
+}
+
+// Resolve PATH before selecting the workspace, preserving both relative
+// PATH entries and the installed compiler's directory for stdlib discovery.
+@ __stable_command s command → String {
+    ? ( path_is_absolute command ) { ^ ( string_from command ) } {}
+    : ~ s selected ( nurl_str_cat command `` )
+    ? & < ( nurl_str_find command `/` ) 0 < ( nurl_str_find command `\\` ) 0 {
+        : String paths ( env_var_or `PATH` `` )
+        : i sep ( posix_const `PATH_LIST_SEPARATOR` )
+        : i n ( string_len paths )
+        : ~ i pos 0
+        : ~ b found F
+        ~ & <= pos n ! found {
+            : i next ( __index_of_byte ( string_data paths ) pos n sep )
+            : i end ? < next 0 n next
+            : String dir ( __substr ( string_data paths ) pos end )
+            : String candidate ( path_join ( string_data dir ) command )
+            : ~ i trial 0
+            ~ & < trial ? == sep 59 2 1 ! found {
+                : s name ? == trial 0 ( nurl_str_cat ( string_data candidate ) `` ) ( nurl_str_cat ( string_data candidate ) `.exe` )
+                ? ( __is_executable name ) {
+                    = selected ( nurl_str_cat name `` ) = found T
+                } {}
+                = trial + trial 1
+            }
+            ( string_free dir ) ( string_free candidate )
+            = pos ? < next 0 + n 1 + next 1
+        }
+        ( string_free paths )
+        ? ! found { ^ ( string_from command ) } {}
+    } {}
+    ? ( path_is_absolute selected ) { ^ ( string_from selected ) } {}
+    ?? ( env_cwd ) {
+        T cwd → {
+            : String absolute ( path_join ( string_data cwd ) selected )
+            ( string_free cwd )
+            ^ absolute
+        }
+        F _ → { ^ ( string_from selected ) }
+    }
+}
+
+@ __configure_tools Json params → v {
+    : String compiler_config ( __resolve_tool params `compilerPath` `NURLC` `nurlc` )
+    : String formatter_config ( __resolve_tool params `formatterPath` `NURLFMT` `nurlfmt` )
+    : String compiler ( __stable_command ( string_data compiler_config ) )
+    : String formatter ( __stable_command ( string_data formatter_config ) )
+    ( string_free compiler_config ) ( string_free formatter_config )
+    ( nurl_sym_def g_tools `compiler` ( string_data compiler ) )
+    ( nurl_sym_def g_tools `formatter` ( string_data formatter ) )
+    ( nurl_sym_def g_tools `compiler_checked` `` )
+    ( nurl_sym_def g_tools `compiler_error` `` )
+    : String root ( __init_option params `stdlibRoot` )
+    ? > ( string_len root ) 0 { : !v IoErr _set ( env_set `NURL_STDLIB` ( string_data root ) ) } {
+        : String existing ( env_var_or `NURL_STDLIB` `` )
+        ? == ( string_len existing ) 0 {
+            : String dir ( __tool_directory ( string_data compiler ) )
+            : String prefix ( path_dirname ( string_data dir ) )
+            : String stdlib ( path_join ( string_data prefix ) `stdlib` )
+            ? ( file_exists ( string_data stdlib ) ) { : !v IoErr _set ( env_set `NURL_STDLIB` ( string_data prefix ) ) } {}
+            ( string_free stdlib ) ( string_free prefix ) ( string_free dir )
+        } {}
+        ( string_free existing )
+    }
+    ( string_free root ) ( string_free compiler ) ( string_free formatter )
+}
+
+@ __compiler_error → s {
+    : s workspace_error ( nurl_sym_get g_tools `workspace_error` )
+    ? > ( nurl_str_len workspace_error ) 0 { ^ workspace_error } {}
+    ? == 0 ( nurl_str_len ( nurl_sym_get g_tools `compiler_checked` ) ) {
+        ( nurl_sym_def g_tools `compiler_error` `` )
+        : s compiler ( nurl_sym_get g_tools `compiler` )
+        : !Output ProcessErr result ( process_run1 compiler `--help` )
+        ?? result {
+            F e → { ( nurl_sym_def g_tools `compiler_error` ( nurl_str_cat3 `cannot execute compiler '` compiler ( nurl_str_cat `': ` ( process_err_name e ) ) ) ) }
+            T out → {
+                ? | ! ( output_success out ) | < ( nurl_str_find ( output_stdout out ) `--stdin` ) 0 < ( nurl_str_find ( output_stdout out ) `--check` ) 0 {
+                    ( nurl_sym_def g_tools `compiler_error` ( nurl_str_cat3 `compiler '` compiler `' does not support --stdin and --check; rebuild or select a matching toolchain` ) )
+                } {}
+                ( output_free out )
+            }
+        }
+        ? == 0 ( nurl_str_len ( nurl_sym_get g_tools `compiler_error` ) ) {
+            ( nurl_sym_def g_tools `compiler_checked` `1` )
+        } {}
+    } {}
+    ^ ( nurl_sym_get g_tools `compiler_error` )
+}
+
+@ __compile_diagnostics s uri s content → Json {
+    : Json diags ( json_arr_new )
+    : s error ( __compiler_error )
+    ? != 0 ( nurl_str_len error ) {
+        ( json_arr_push diags ( __build_diagnostic 1 1 1 error ) )
+        ^ diags
+    } {}
+    : String path ( __uri_to_path uri )
 
     // `--lint` enables the unused-binding / unused-private-function
     // warnings; they ride out on stderr in the same `file:line:col:
     // warning:` shape the diag parser already understands.
-    : ( Vec s ) nc_args ( vec_with_cap [s] 2 )
+    : ( Vec s ) nc_args ( vec_with_cap [s] 5 )
     ( vec_push [s] nc_args `--lint` )
-    ( vec_push [s] nc_args ( string_data tmp ) )
-    : !Output ProcessErr pr ( process_run `build/nurlc` nc_args `` )
+    ( vec_push [s] nc_args `--stdin` )
+    ( vec_push [s] nc_args `--check` )
+    ( vec_push [s] nc_args `--` )
+    ( vec_push [s] nc_args ( string_data path ) )
+    : s compiler ( nurl_sym_get g_tools `compiler` )
+    : !Output ProcessErr pr ( process_run compiler nc_args content )
     ( vec_free [s] nc_args )
-    : Json diags ( json_arr_new )
     ?? pr {
-        F _ → { ( string_free tmp ) ^ diags }
+        F e → { ( json_arr_push diags ( __build_diagnostic 1 1 1 ( nurl_str_cat `cannot execute compiler: ` ( process_err_name e ) ) ) ) }
         T out → {
             : s stderr_s ( output_stderr out )
             : i n ( nurl_str_len stderr_s )
             : ~ i pos 0
+            : ~ b reported_error F
             ~ < pos n {
                 : i nl ( __index_of_byte stderr_s pos n 10 )
                 : i end ? < nl 0 n nl
                 : String line ( __substr stderr_s pos end )
-                : ?Json dr ( __parse_diag_line ( string_data line ) )
+                : ?Json dr ( __parse_diag_line ( string_data line ) ( string_data path ) content )
                 ?? dr {
-                    T d → ( json_arr_push diags d )
+                    T d → {
+                        ?? ( json_obj_get d `severity` ) {
+                            T severity → { ? == ( json_as_int severity ) 1 { = reported_error T } {} }
+                            F → {}
+                        }
+                        ( json_arr_push diags d )
+                    }
                     F _ → {}
                 }
                 ( string_free line )
                 = pos ? < nl 0 n + nl 1
             }
+            ? & ! ( output_success out ) ! reported_error {
+                ( json_arr_push diags ( __build_diagnostic 1 1 1 ( nurl_str_cat3 `compiler failed: ` ( nurl_str_int ( output_exit_code out ) ) ( nurl_str_cat `\n` stderr_s ) ) ) )
+            } {}
             ( output_free out )
         }
     }
 
-    // Remove temp file.
-    : !v IoErr _rm ( file_delete ( string_data tmp ) )
-    ?? _rm { T _ → {} F _ → {} }
-    ( string_free tmp )
+    ( string_free path )
     ^ diags
 }
 
@@ -665,25 +895,46 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ^ ( nurl_sym_get g_indexed `:root` )
 }
 
-// Resolve a `$`-import path (e.g. `stdlib/core/string.nu`) against
-// the workspace root. Strips a leading `./` (matches the compiler's
-// `__norm_import_path` rule).
-@ __resolve_import_path s rel → String {
-    : i n ( nurl_str_len rel )
-    : ~ i k 0
-    ~ & >= n + k 2
-    & == ( nurl_str_get rel k ) 46
-    == ( nurl_str_get rel + k 1 ) 47
-    { = k + k 2 }
-    : String tail ( __substr rel k n )
+// Match the compiler's importer-relative, workspace and installed-stdlib
+// search, retrying with .nu only after every as-written tier misses.
+@ __resolve_import_path s rel s importer → String {
+    : String dir ( path_dirname importer )
+    : String installed ( env_var_or `NURL_STDLIB` `` )
     : s root ( __get_workspace_root )
-    ? == 0 ( nurl_str_len root ) { ^ tail } {}
-    : String out ( string_with_cap + + ( nurl_str_len root ) 1 ( nurl_str_len rel ) )
-    ( string_push_str out root )
-    ( string_push_char out 47 )
-    ( string_push_str out ( string_data tail ) )
-    ( string_free tail )
-    ^ out
+    : ~ i pass 0
+    ~ < pass 2 {
+        : s name ? == pass 0 ( nurl_str_cat rel `` ) ( nurl_str_cat rel `.nu` )
+        ? ( path_is_absolute name ) {
+            ? ( file_exists name ) {
+                ( string_free dir ) ( string_free installed )
+                ^ ( string_from name )
+            } {}
+        } {
+            : String sibling ( path_join ( string_data dir ) name )
+            ? ( file_exists ( string_data sibling ) ) {
+                ( string_free dir ) ( string_free installed )
+                ^ sibling
+            } {}
+            ( string_free sibling )
+            : String local ( path_join root name )
+            ? ( file_exists ( string_data local ) ) {
+                ( string_free dir ) ( string_free installed )
+                ^ local
+            } {}
+            ( string_free local )
+            ? > ( string_len installed ) 0 {
+                : String shipped ( path_join ( string_data installed ) name )
+                ? ( file_exists ( string_data shipped ) ) {
+                    ( string_free dir ) ( string_free installed )
+                    ^ shipped
+                } {}
+                ( string_free shipped )
+            } {}
+        }
+        ? != 0 ( nurl_str_ends rel `.nu` ) { = pass 2 } { = pass + pass 1 }
+    }
+    ( string_free dir ) ( string_free installed )
+    ^ ( string_from rel )
 }
 
 // Walk `content` and collect every `$ `path`` import as raw relative
@@ -742,15 +993,17 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ^ out
 }
 
-// Best-effort read for the indexer / hover paths: the compiler's
-// `nurl_read_file` calls `exit(1)` on a missing file (a missing import
-// is fatal to a COMPILE, but must never be fatal to the language
-// server — e.g. a package whose registry deps under `deps/` aren't
-// installed yet). Probe with `file_exists` first; return "" on a miss
-// so the existing `nurl_str_len > 0` guards skip it gracefully.
+// Indexing must tolerate unreadable, removed or missing import files.
+// read_file reports an error without a check/open race or exiting the server.
 @ __read_if_exists s path → s {
-    ? ( file_exists path ) { ^ ( nurl_read_file path ) } {}
-    ^ ``
+    ?? ( read_file path ) {
+        T text → {
+            : s owned ( nurl_str_cat ( string_data text ) `` )
+            ( string_free text )
+            ^ owned
+        }
+        F _ → { ^ ( nurl_str_cat `` `` ) }
+    }
 }
 
 // Index one absolute path. Reads the file, marks it indexed, scans
@@ -760,9 +1013,11 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     : s marker ( nurl_sym_get g_indexed abs_path )
     ? == 0 ( nurl_str_len marker ) {
         ( nurl_sym_def g_indexed abs_path `1` )
-        : s content ( __read_if_exists abs_path )
+        : s open_uri ( nurl_sym_get g_docs ( nurl_str_cat `:path:` abs_path ) )
+        : s content ? > ( nurl_str_len open_uri ) 0
+        ( nurl_sym_get g_docs open_uri ) ( __read_if_exists abs_path )
         ? > ( nurl_str_len content ) 0 {
-            : String uri ( __path_to_uri abs_path )
+            : String uri ? > ( nurl_str_len open_uri ) 0 ( string_from open_uri ) ( __path_to_uri abs_path )
             ( __index_content ( string_data uri ) content )
             ( string_free uri )
             : ( Vec String ) imports ( __collect_imports content )
@@ -772,7 +1027,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                 : ?String pk ( vec_get [String] imports k )
                 ?? pk {
                     T pv → {
-                        : String abs ( __resolve_import_path ( string_data pv ) )
+                        : String abs ( __resolve_import_path ( string_data pv ) abs_path )
                         ( __index_path ( string_data abs ) )
                         ( string_free abs )
                         ( string_free pv )
@@ -795,6 +1050,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     // flag first; imports remain cached. Also reset the TSV slot so
     // re-indexing replaces rather than appends — otherwise outline
     // entries would double on every keystroke.
+    ( nurl_sym_def g_docs ( nurl_str_cat `:path:` ( string_data path ) ) uri )
     ( nurl_sym_def g_indexed ( string_data path ) `` )
     ( nurl_sym_def g_defs_by_uri uri `` )
     ( __index_path ( string_data path ) )
@@ -816,7 +1072,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 // from didOpen / didChange after the store mutates.
 @ __recompile_and_publish s uri → v {
     : s text ( nurl_sym_get g_docs uri )
-    : Json diags ( __compile_diagnostics text )
+    : Json diags ( __compile_diagnostics uri text )
     // Unused-import warnings arrive from `nurlc --lint` itself (it
     // attributes every decl to its defining file and tracks which file
     // references what), so no LSP-side text heuristic is layered on
@@ -899,6 +1155,9 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ? > ( nurl_str_len uri ) 0 {
         // Clear stored content + clear client-side diagnostics.
         ( nurl_sym_def g_docs uri `` )
+        : String path ( __uri_to_path uri )
+        ( nurl_sym_def g_docs ( nurl_str_cat `:path:` ( string_data path ) ) `` )
+        ( string_free path )
         ( __publish_diagnostics uri ( json_arr_new ) )
     } {}
 }
@@ -920,13 +1179,15 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         ? == ( nurl_str_get content pos ) 10 { = cur_line + cur_line 1 } {}
         = pos + pos 1
     }
-    // pos is now at the start of `line`. Advance by `col` bytes,
+    // pos is now at the start of `line`. Advance by UTF-16 code units,
     // stopping at newline.
     : i line_start pos
     : ~ i k 0
     ~ & & < pos n != ( nurl_str_get content pos ) 10 < k col {
+        : i c ( nurl_str_get content pos )
+        ? | < c 128 >= c 192 { = k + k ? >= c 240 2 1 } {}
         = pos + pos 1
-        = k + k 1
+        ~ & < pos n & >= ( nurl_str_get content pos ) 128 < ( nurl_str_get content pos ) 192 { = pos + pos 1 }
     }
     ? >= pos n { ^ @ ?String { F } } {}
     : i c ( nurl_str_get content pos )
@@ -1457,59 +1718,53 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 
 // ── Formatting (textDocument/formatting) ─────────────────────────
 //
-// Pipes the current buffer through `build/nurlfmt --stdin` and
+// Pipes the current buffer through the configured formatter's --stdin and
 // returns a single TextEdit covering the whole document. The
 // `--stdin` mode is the project-canonical entry point — same code
 // path as `git diff | nurlfmt --stdin --check` in CI.
 //
-// LSP TextEdit range semantics: `start` inclusive, `end` exclusive.
-// To replace the whole document we point `end` at the position
-// immediately past the last character — line N+1, char 0 — which
-// VS Code interprets as "everything up to the end of file".
-
-@ __count_lines s content → i {
-    : i n ( nurl_str_len content )
-    : ~ i k 0
-    : ~ i lines 0
-    ~ < k n {
-        ? == ( nurl_str_get content k ) 10 { = lines + lines 1 } {}
-        = k + k 1
-    }
-    ^ lines
-}
+// LSP TextEdit ranges end at the actual EOF position, in UTF-16 units.
 
 @ __handle_formatting Json id Json params → v {
     : Json edits ( json_arr_new )
     : s uri ( __extract_uri params )
     ? > ( nurl_str_len uri ) 0 {
         : s content ( nurl_sym_get g_docs uri )
-        ? > ( nurl_str_len content ) 0 {
-            // Call nurlfmt --stdin; feed the buffer via process_run's
-            // stdin_str parameter. nurlfmt: 1 arg = `--stdin`.
-            : ( Vec s ) args ( vec_with_cap [s] 1 )
-            ( vec_push [s] args `--stdin` )
-            : !Output ProcessErr pr ( process_run `build/nurlfmt` args content )
-            ( vec_free [s] args )
-            ?? pr {
-                F _ → {}
-                T out → {
-                    ? ( output_success out ) {
-                        : s formatted ( output_stdout out )
-                        // Build a single TextEdit covering the full
-                        // document. end-of-file position = (linecount, 0).
-                        : i nl ( __count_lines content )
-                        : Json range ( json_obj_new )
-                        ( json_obj_set range `start` ( __build_position 0 0 ) )
-                        ( json_obj_set range `end` ( __build_position nl 0 ) )
-                        : Json edit ( json_obj_new )
-                        ( json_obj_set edit `range` range )
-                        ( json_obj_set edit `newText` ( json_str_lit formatted ) )
-                        ( json_arr_push edits edit )
-                    } {}
-                    ( output_free out )
-                }
+        // Call nurlfmt --stdin; feed the buffer via process_run's
+        // stdin_str parameter. nurlfmt: 1 arg = `--stdin`.
+        : ( Vec s ) args ( vec_with_cap [s] 1 )
+        ( vec_push [s] args `--stdin` )
+        : s formatter ( nurl_sym_get g_tools `formatter` )
+        : !Output ProcessErr pr ( process_run formatter args content )
+        ( vec_free [s] args )
+        ?? pr {
+            F e → {
+                ( json_free edits )
+                : Json failure ( __make_error id -32603 ( nurl_str_cat3 `cannot execute formatter '` formatter ( nurl_str_cat `': ` ( process_err_name e ) ) ) )
+                ( write_message failure ) ( json_free failure )
+                ^
             }
-        } {}
+            T out → {
+                ? ( output_success out ) {
+                    : s formatted ( output_stdout out )
+                    // Replace through EOF, including a final line with
+                    // no newline and any non-BMP Unicode characters.
+                    : Json range ( json_obj_new )
+                    ( json_obj_set range `start` ( __build_position 0 0 ) )
+                    ( json_obj_set range `end` ( __position_at_byte content ( nurl_str_len content ) ) )
+                    : Json edit ( json_obj_new )
+                    ( json_obj_set edit `range` range )
+                    ( json_obj_set edit `newText` ( json_str_lit formatted ) )
+                    ( json_arr_push edits edit )
+                } {
+                    ( json_free edits )
+                    : Json failure ( __make_error id -32603 ( nurl_str_cat `formatter failed: ` ( output_stderr out ) ) )
+                    ( write_message failure ) ( json_free failure ) ( output_free out )
+                    ^
+                }
+                ( output_free out )
+            }
+        }
     } {}
     : Json resp ( __make_response id edits )
     ( write_message resp )
@@ -2060,6 +2315,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 // ── Request / notification dispatch ────────────────────────────────
 
 @ __handle_initialize Json id Json params → v {
+    ( __configure_tools params )
     // Capture rootUri / rootPath if the client sent one. Either field
     // is enough; rootUri is the modern form, rootPath is deprecated
     // but still seen from older clients.
@@ -2088,6 +2344,15 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         }
     }
 
+    // A workspace may differ from the server's launch directory. This is
+    // also the CLI context for project-root imports such as deps/<name>.
+    ? != 0 g_workspace_root_set {
+        : s root ( __get_workspace_root )
+        ?? ( env_chdir root ) {
+            T → {}
+            F _ → { ( nurl_sym_def g_tools `workspace_error` ( nurl_str_cat `cannot enter workspace directory: ` root ) ) }
+        }
+    } {}
     : Json caps ( __build_capabilities )
     : Json info ( __build_server_info )
     : Json result ( json_obj_new )
@@ -2281,6 +2546,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 }
 
 @ main → i {
+    = g_tools ( nurl_sym_new )
     = g_docs ( nurl_sym_new )
     = g_doc_uris ( nurl_sym_new )
     = g_defs ( nurl_sym_new )

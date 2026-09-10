@@ -70,6 +70,10 @@ never needs a second look at the source: by the time `parse_program` runs,
 every signature, type name, template and dyn-trait requirement is already in
 a table.
 
+With `--check`, the complete fused walk and deferred checks still run; main
+unwinds the output buffer without making the final module copy or invoking
+DCE/splitting, then follows normal cleanup.
+
 `dce_emit_module` is the only stage that looks at the emitted IR as
 *text*. It indexes every `define … }` block, marks the ones reachable
 from `main` (roots: `main`, plus anything named between blocks — a
@@ -94,6 +98,7 @@ get — returned values are owned copies).
 
 | family | key globals | role & lifetime |
 |---|---|---|
+| input snapshot | `g_input_source`, `g_input_key` | borrowed aliases of main's live owned stdin source and canonical logical path; `compiler_read_source` returns owned copies to every replay/diagnostic reader; zero in ordinary file mode |
 | diagnostics | `g_err_count`, `g_diag_recover_active` | error count + multi-error recovery mode; whole run |
 | codegen cursor | `g_str_idx`, `g_did_ret`, `g_ret_forbidden`, `g_in_match_arm`, `g_defer_count`, `g_stmt_line/col/bare_*` | per-statement/-function flags; must be reset on the boundaries that own them (grep their writers before trusting a reset) |
 | **last-type channel** | `g_last_type_ptr` | the expression walk's implicit return value: every `gen_expr` sets it; the *caller* reads it. Signedness is carried **in the type string itself** (`u8`/`u16`/… stay distinct from `i8`/`i16`/… in this channel; readers use `ty_is_unsigned`, emission normalises via `nurl_llty`) — the former separate unsigned flag was removed in the A1 rework; see the comment at `nurl_set_last_type` |
@@ -216,15 +221,15 @@ Regenerate after adding/renaming globals:
 | `g_dbg_placeholder_ty` | :1442 | `dbg_init` | dbg_init and reused for every fn. Phase 6 will replace with per-fn signature types. |
 | `g_dbg_subroutine_ty` | :1439 | `dbg_init` | emit_dbg_eol then omits `, !dbg !N`) |
 | `g_dbg_type_syms` | :1481 | `dbg_init` |  |
-| `g_dce` | :30000 | `main` |  |
-| `g_dce_end` | :30026 | `dce_emit_module`, `dce_free` |  |
-| `g_dce_keep` | :30011 | `main` | `--keep=a,b,c` — extra DCE roots.  The pass's root set is `main` plus whatever module-scope constants name. Th |
-| `g_dce_live` | :30027 | `dce_emit_module`, `dce_free` |  |
-| `g_dce_map` | :30030 | `dce_emit_module`, `dce_free` |  |
-| `g_dce_mod` | :30024 | `dce_emit_module` | The module text, as an integer cast of a BORROWED `s`. Deliberately not a `: ~ s` global: a mutable string glo |
-| `g_dce_qn` | :30029 | `__dce_mark_name`, `dce_emit_module` |  |
-| `g_dce_queue` | :30028 | `dce_emit_module`, `dce_free` |  |
-| `g_dce_start` | :30025 | `dce_emit_module`, `dce_free` |  |
+| `g_dce` | :30007 | `main` |  |
+| `g_dce_end` | :30033 | `dce_emit_module`, `dce_free` |  |
+| `g_dce_keep` | :30018 | `main` | `--keep=a,b,c` — extra DCE roots.  The pass's root set is `main` plus whatever module-scope constants name. Th |
+| `g_dce_live` | :30034 | `dce_emit_module`, `dce_free` |  |
+| `g_dce_map` | :30037 | `dce_emit_module`, `dce_free` |  |
+| `g_dce_mod` | :30031 | `dce_emit_module` | The module text, as an integer cast of a BORROWED `s`. Deliberately not a `: ~ s` global: a mutable string glo |
+| `g_dce_qn` | :30036 | `__dce_mark_name`, `dce_emit_module` |  |
+| `g_dce_queue` | :30035 | `dce_emit_module`, `dce_free` |  |
+| `g_dce_start` | :30032 | `dce_emit_module`, `dce_free` |  |
 | `g_defer_count` | :959 | `gen_defer`, `gen_fn_decl_concrete` |  |
 | `g_deferred_bck` | :1346 | `main` | Functions whose borrow-check walk is parked until the whole module has compiled (see borrowck_fn_end). `n` is  |
 | `g_diag_ctx` | :124 | `dyn_subst_parts`, `emit_missing_defaults`, `emit_one_instantiation`, `register_missing_defaults` | Diagnostic context suffix, appended to every die/warn message while non-empty. Set (and saved/restored — insta |
@@ -262,6 +267,8 @@ Regenerate after adding/renaming globals:
 | `g_impl_ret_syms` | :965 | `main` |  |
 | `g_impl_trait_syms` | :967 | `main` |  |
 | `g_in_match_arm` | :947 | `gen_match` | Non-zero while parsing a `??` match-arm body. The XOR-confusion warning in gen_ret keys off "a non-terminator  |
+| `g_input_key` | :30162 | `main` |  |
+| `g_input_source` | :30161 | `main` | Borrowed aliases to main's live source/key bindings when --stdin supplies an overlay. Every source read (inclu |
 | `g_last_closure_nonsend` | :1060 | `gen_closure_expr` | record per impl block, verified after scan_fn_sigs once every impl across the program (incl. imports) is regis |
 | `g_last_closure_sharedmut` | :1087 | `gen_call`, `gen_closure_expr` | Thread-safety, the SHARED-MUTATION half (docs/MEMORY.md §6.5). Set to the offending binding name while a closu |
 | `g_last_type_ptr` | :5524 | `nurl_set_last_type` |  |
@@ -290,15 +297,15 @@ Regenerate after adding/renaming globals:
 | `g_ptrtab` | :1196 | `main` |  |
 | `g_res_type_syms` | :343 | `main` | ── Res-type NURL tracking (must be declared before parse_type_res) ── g_res_type_syms is initialized to a new  |
 | `g_ret_forbidden` | :941 | `gen_cond`, `gen_logical_or_bitwise_and`, `gen_logical_or_bitwise_or`, `gen_operand` +1 | Cascade guard: 1 while parsing a VALUE OPERAND (a binary/unary/cast/ member operand, a call argument, a `?`/`? |
-| `g_sanitize_address` | :30149 | `main` | Emission policy, set by main's --sanitize-address flag. |
-| `g_split_fh` | :30020 | `__sp_close`, `__sp_open` |  |
-| `g_split_fill` | :30018 | `split_emit_module` |  |
-| `g_split_max` | :30014 | `main` |  |
-| `g_split_min` | :30015 | `main` |  |
-| `g_split_n` | :30013 | `__sp_whole`, `dce_emit_module`, `split_emit_module` | Partitioned emission — see "Partitioned emission" below. |
-| `g_split_out` | :30016 | `main` |  |
-| `g_split_part` | :30017 | `split_emit_module` |  |
-| `g_split_priv` | :30019 | `split_emit_module` |  |
+| `g_sanitize_address` | :30156 | `main` | Emission policy, set by main's --sanitize-address flag. |
+| `g_split_fh` | :30027 | `__sp_close`, `__sp_open` |  |
+| `g_split_fill` | :30025 | `split_emit_module` |  |
+| `g_split_max` | :30021 | `main` |  |
+| `g_split_min` | :30022 | `main` |  |
+| `g_split_n` | :30020 | `__sp_whole`, `dce_emit_module`, `split_emit_module` | Partitioned emission — see "Partitioned emission" below. |
+| `g_split_out` | :30023 | `main` |  |
+| `g_split_part` | :30024 | `split_emit_module` |  |
+| `g_split_priv` | :30026 | `split_emit_module` |  |
 | `g_stmt_bare_lit` | :3602 | `gen_stmt` | g_stmt_bare_lit — set by gen_stmt to 1 when the statement it just parsed was a bare numeric/string LITERAL in  |
 | `g_stmt_bare_value` | :3629 | `gen_stmt` | g_stmt_bare_value — the literal flag's general sibling (critic A2, the last silent prefix-arity cascade): set  |
 | `g_stmt_col` | :3544 | `gen_stmt` | g_stmt_col — column of the current statement's first token, captured alongside g_stmt_line. `die_stmt` anchors |

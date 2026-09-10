@@ -8,9 +8,9 @@ in reviewable groups. No item below certifies the whole language or ecosystem.
 
 | Audit item | Evidence required before closure | Current disposition |
 |---|---|---|
-| A01: sanitizer coverage | Ordinary driver, bootstrap, split output and fuzz paths detect deliberate memory faults in generated code; clean controls, corpus and fuzz pass; UBSan/LLVM semantics documented | ASan emission implemented and calibrated; revealed HTTP/3 UAF and compiler leaks repaired; lexical stack-lifetime and arithmetic work remains open |
+| A01: sanitizer coverage | Ordinary driver, bootstrap, split output and fuzz paths detect deliberate memory faults in generated code; clean controls, corpus and fuzz pass; UBSan/LLVM semantics documented | ASan emission implemented and calibrated; revealed HTTP/3 UAF and compiler leaks repaired; lexical stack-lifetime, rejected-compilation cleanup and arithmetic work remains open |
 | A02: trustworthy compiler runners | Missing-main rejection fixtures run; crash/hang/worker fault controls fail closed; complete corpus verdict accounting | Verified in local normal/sanitized corpus and POSIX/PowerShell controls; native Windows execution remains CI evidence |
-| A03: installed LSP | Separate installed project, unsaved edits, sibling/dependency imports, visible execution errors | Pending reproduction |
+| A03: installed LSP | Separate installed project, unsaved edits, sibling/dependency imports, visible execution errors | Independently reproduced; repaired and verified with relocated binaries and 20 normal/ASan protocol/compiler controls on Linux; native Windows and actual distribution installation remain unverified |
 | A04: registry identity | Two local registries with equal package names; fetch, resolution, signing and lock identity preserved; errors never print success | Pending reproduction |
 | A05: signed install smoke | Signed fixtures install after relocation with transitive dependencies; missing/wrong/tampered signatures reject; CI runs it | Pending reproduction |
 | A06: JS dependencies | Fresh manager-native audits, reachability analysis, lockfile updates and builds/tests for all four trees; recurring checks | Pending fresh advisory evidence |
@@ -19,7 +19,7 @@ in reviewable groups. No item below certifies the whole language or ecosystem.
 | A09: package development | Clean checkout and unpacked consumer tests, shared environment setup, explicit public import surfaces | Pending reproduction |
 | A10: tree gates | Tracked formatting inventory, package-aware frontend coverage, recursive import checks with reported exclusions | Pending current scope inventory |
 | A11: toolchain build integrity | Injected required-tool failures fail the build; stale binaries cannot substitute; logs and totals retained | Required tools now fail the build, use the canonical driver and remove stale outputs; isolated full-build controls pass locally and are wired into CI |
-| A12: LSP temporary files | Secure portable per-session files, concurrent servers remain independent, all failure paths clean up | Pending reproduction; investigate with A03 |
+| A12: LSP temporary files | Concurrent servers remain independent and no shared source files can be overwritten or leaked on errors | Source temporary files eliminated through compiler stdin snapshots; concurrent-server and missing-tool controls pass |
 | A13: safety contract | Default/strict/raw/FFI guarantees agree; witnesses and valid controls; opaque wrappers and container ownership audited | Pending implementation and contract review |
 | A14: crypto/parser evidence | Instrumented fuzz controls and retained seeds; pinned ACVP/HTTP oracles; measured backend timing; explicit X.509 policy and independent crypto review | Pending; requires A01 and external validation for independent review |
 | A15: release integrity | Mandatory target artifact gates, pinned tool downloads, installer integrity and state-preserving failure controls | Pending source review and isolated tests |
@@ -169,3 +169,87 @@ stale binary and retain a versioned build log. The CI job runs these controls
 and uploads their logs. Local evidence is in
 `build/v1-hardening/required-tool-faults-final2.log` and
 `build/build-failure-controls/`; CI execution remains separate evidence.
+
+## A03 / A12: document snapshots and installed tool discovery
+
+The old server was rebuilt and driven with identical JSON-RPC messages from
+both the checkout and a separate project. An undefined identifier produced an
+error in the checkout and an empty diagnostic array outside it. Its hardcoded
+`build/nurlc` and `build/nurlfmt` paths, shared `/tmp/nurl-lsp-<counter>.nu`
+files and early error return independently confirmed the audit's report.
+The audit's suggested secure temporary directory was not adopted: the compiler
+now accepts stdin plus an explicit logical source path, eliminating those
+source files and retaining the document's import identity.
+
+`compiler_read_source` serves the same owned snapshot to source replays and
+borrow diagnostics. `--check` runs semantic analysis and skips the final IR
+copy/index/emission. The checked runtime reader preserves source newlines,
+handles nonseekable input and read errors, and uses only opened regular-file
+sizes as allocation hints. A sanitized directory-read control caught a bogus
+LONG_MAX size from directory SEEK_END; switching the hint to `fstat` repaired
+that cause instead of imposing an arbitrary file-size cap.
+
+The LSP discovers configured, environment, sibling or PATH tools before changing
+to the workspace root. Compiler capability/execution failures and formatting
+failures are visible. The VS Code launcher retains the resolved executable path
+and passes tool settings. Open-buffer indexing, importer-relative/dependency/
+stdlib lookup, percent-escaped definition URIs, diagnostic UTF-16 ranges,
+columnless borrow errors and imported related locations were also exercised.
+
+Local controls (build fresh binaries first):
+
+```sh
+./tools/nurl-lsp/build.sh
+python3 tools/tests/test_lsp_toolchain.py
+python3 tools/tests/test_source_io.py
+node tools/tests/test_vscode_launcher.cjs
+bash compiler/tests/lsp_rename_smoke.sh
+./build.sh --san --no-tests
+NURL_SAN=1 ./tools/nurl-lsp/build.sh
+ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 python3 tools/tests/test_lsp_toolchain.py
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 python3 tools/tests/test_lsp_toolchain.py ToolchainTest.test_check_self_compile_from_stdin
+```
+
+The protocol suite has 20 cases, using copied binaries and standard-library
+sources in a relocated prefix, a separate project, and a restricted PATH.
+It exercises unsaved/nonexistent sources, source-vs-disk IR identity, no-output
+checking, invalid CLI arguments, CRLF and capacity boundaries, sibling and
+project imports, tool selection/failure, imported error/definition locations,
+UTF-16 ranges, PATH launch, concurrent servers and stdin self-compilation.
+Four C reader tests run under ASan/UBSan with leak detection. The editor launcher
+has separate Node controls, including simulated Windows paths; these do not
+establish native Windows runtime behavior. The tests are wired into CI, whose
+remote result is not asserted by local evidence.
+
+The normal full bootstrap/corpus passed locally (41 s build, 2 m 09 s corpus),
+and the final instrumented bootstrap passed (71 s). All 20 protocol/compiler
+controls passed with ASan, and stdin `--check` self-compilation separately passed
+LSan with zero leaks. The ordinary self-compile/drop/nested-store leak gate
+also passed both output modes. C read failures, exact capacities, named pipes
+and procfs reads passed their sanitizer controls.
+
+**New open evidence:** compiling an undefined identifier with the instrumented
+compiler and `ASAN_OPTIONS=symbolize=0:detect_leaks=1` reports 249 bytes in 26
+allocations before process exit. A same-file comparison with the saved pre-change sanitized compiler also
+reproduced rejection leaks (366 bytes/28 allocations before, 332/27 after,
+298/26 through stdin for that longer path). This predates the stdin change.
+Normal error exits and panic recovery need ownership cleanup; the general protocol suite therefore measures memory
+accesses, while the successful stdin self-compile is a separate zero-leak gate.
+This is not a claim that compiler rejection paths or the long-lived LSP are
+leak-free. The declaration index's invalidation/name resolution and the
+synchronous subprocess API's missing timeout also remain separate follow-up
+work. A03/A12 progress does not certify all editor features or all platforms.
+
+An instrumented `nurlfmt --check tools/nurl-lsp/main.nu` additionally reported
+721,951 bytes in 13,324 allocations at exit. Formatter ownership cleanup is
+open alongside compiler rejection cleanup. The initial report appeared to hang
+because llvm-symbolizer attempted remote debuginfod lookups; resolving the same
+local address with `DEBUGINFOD_URLS=` returned immediately. The new tests disable
+optional remote debug downloads while retaining local symbolization; they do
+not suppress sanitizer findings.
+
+Final confirmation for this change set: normal bootstrap/corpus passed again
+(42 s build, 2 m 08 s corpus); both normal and sanitized corpora report 980
+records, 961 PASS and 19 SKIP with no failures. The final server passed all 20
+controls in both normal and ASan builds, plus the rename smoke. Self-compile
+peak RSS was 26 MB and the DCE gate passed. The remaining items above stay open.

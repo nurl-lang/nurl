@@ -37,6 +37,21 @@
           "default": "",
           "description": "Absolute path to the nurl-lsp binary. Empty string falls back to <workspace>/build/nurl-lsp, then a PATH lookup for 'nurl-lsp'."
         },
+        "nurl.compiler.path": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to nurlc. Empty uses NURLC, the server's sibling binary, then PATH. Restart the language server after changes."
+        },
+        "nurl.formatter.path": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to nurlfmt. Empty uses NURLFMT, the server's sibling binary, then PATH. Restart the language server after changes."
+        },
+        "nurl.stdlibRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Toolchain directory containing stdlib/. Empty preserves NURL_STDLIB or discovers it beside the compiler installation. Restart the language server after changes."
+        },
         "nurl.server.trace": {
           "type": "string",
           "enum": ["off", "messages", "verbose"],

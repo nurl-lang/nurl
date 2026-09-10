@@ -65,6 +65,10 @@
 // owned string; "" at EOF (check nurl_stdin_eof).
 & `c` @ nurl_read_line → s
 
+// Read all remaining stdin bytes into an owned string, preserving newlines.
+// Exits with a diagnostic on an I/O error; for recoverable I/O use bufio.
+& `c` @ nurl_read_stdin → s
+
 // 1 once a previous read hit end-of-file on stdin, else 0.
 & `c` @ nurl_stdin_eof → i
 

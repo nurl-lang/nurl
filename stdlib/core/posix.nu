@@ -38,6 +38,8 @@ $ `stdlib/core/cell.nu`
 
 // ── Native constants + errno ──────────────────────────────────────
 
+// PATH_LIST_SEPARATOR is available on every target (Windows: semicolon;
+// other targets: colon) for native executable search paths.
 // Look up a platform integer constant (O_NONBLOCK, F_GETFL, POLLIN,
 // SIGTERM, …). Returns -1 for unknown names on every target, and -1
 // for POSIX names on Win32 / WASI. See runtime.c §2 for the full list.

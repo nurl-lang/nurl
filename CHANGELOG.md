@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **LSP diagnostics work outside the compiler checkout.** Tool paths are
+  configurable, installed companion binaries and stdlib are discovered, and
+  execution failures are visible. The new compiler `--stdin` mode preserves
+  the logical filename and unsaved source across imports and deferred borrow
+  diagnostics; `--check` discards generated IR without emitting output files.
+  The LSP no longer writes shared temporary source files. Its index reads open
+  buffers, imported definitions use escaped file URIs, and diagnostics and
+  formatter ranges use UTF-16 positions. Relocated-toolchain protocol tests
+  cover concurrent servers, missing tools and real source errors.
+- **Source readers preserve stream contents and reject I/O errors.** The
+  runtime reads stdin, regular files and pipes through one checked reader;
+  only regular-file sizes are allocation hints. It no longer trusts a failed
+  seek, exposes unread bytes after a short read, or allocates from a directory's
+  meaningless end offset. Sanitized controls cover growth boundaries and read
+  failures.
+
 - **Sanitizer builds instrument generated NURL memory accesses.** The compiler
   now emits ASan attributes through one function-writing path, shared by normal,
   library and split output. The driver, all bootstrap stages, corpus and fuzz

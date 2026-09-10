@@ -74,6 +74,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Editor launcher controls
+        run: node tools/tests/test_vscode_launcher.cjs
       - name: POSIX and PowerShell runner controls
         shell: bash
         run: |
@@ -134,6 +139,13 @@ jobs:
         # AND the test corpus baseline matches. Any failure surfaces
         # the relevant diff so we don't need extra grep here.
         run: ./build.sh
+
+      - name: Installed LSP and source stream controls
+        run: |
+          ./tools/nurl-lsp/build.sh
+          python3 tools/tests/test_lsp_toolchain.py
+          python3 tools/tests/test_source_io.py
+          bash compiler/tests/lsp_rename_smoke.sh
 
       - name: Retain complete build logs
         if: always()
@@ -608,6 +620,13 @@ jobs:
         with:
           name: sanitizer-build-logs
           path: build/logs/
+
+      - name: Instrumented installed LSP and compiler stdin controls
+        run: |
+          NURL_SAN=1 ./tools/nurl-lsp/build.sh
+          # Rejected compiler paths still need leak cleanup (A01 ledger).
+          ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 python3 tools/tests/test_lsp_toolchain.py
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 python3 tools/tests/test_lsp_toolchain.py ToolchainTest.test_check_self_compile_from_stdin
 
       - name: Generated-code sanitizer detection controls
         run: python3 tools/sanitizer_controls.py

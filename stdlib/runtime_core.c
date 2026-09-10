@@ -73,6 +73,8 @@
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #  include <windows.h>
+#  include <io.h>
+#  include <fcntl.h>
 #endif
 #if defined(__SSE2__)
 #  include <emmintrin.h>
@@ -1671,20 +1673,80 @@ const char* nurl_argv_get(long long i){
 
 void nurl_exit(long long code) { exit((int)code); }
 
-/* Read entire file into a malloc'd, NUL-terminated string; exit on error.
- * The compiler's source-file load path goes through here. */
+/* Read a complete stream, preserving every byte. The initial capacity is
+ * a file-size hint when available; streams grow geometrically. Look ahead
+ * before growing a full buffer so an exact-size regular file needs only
+ * one allocation. Short reads and errors never expose uninitialised bytes. */
+static char *nurl__read_all(FILE *f, const char *name, size_t cap) {
+    if (!cap) cap = 4096;
+    if (cap == SIZE_MAX) nurl__oom((unsigned long long)cap);
+    char *buf = (char*)malloc(cap + 1);
+    size_t len = 0;
+    for (;;) {
+        len += fread(buf + len, 1, cap - len, f);
+        if (ferror(f)) {
+            int error = errno;
+            free(buf);
+            fprintf(stderr, "nurlc: cannot read '%s' (I/O error, errno %d)\n", name, error);
+            exit(1);
+        }
+        if (feof(f)) break;
+        if (len == cap) {
+            int next = fgetc(f);
+            if (next == EOF) {
+                if (ferror(f)) {
+                    int error = errno;
+                    free(buf);
+                    fprintf(stderr, "nurlc: cannot read '%s' (I/O error, errno %d)\n", name, error);
+                    exit(1);
+                }
+                break;
+            }
+            if (cap > (SIZE_MAX - 1) / 2) nurl__oom((unsigned long long)SIZE_MAX);
+            cap *= 2;
+            buf = (char*)realloc(buf, cap + 1);
+            buf[len++] = (char)next;
+        }
+    }
+    buf[len] = '\0';
+    return buf;
+}
+
+/* Owned source text from stdin, without newline translation or a temporary
+ * file. Its logical filename is supplied separately by the compiler caller. */
+const char* nurl_read_stdin(void) {
+#ifdef _WIN32
+    int old_mode = _setmode(_fileno(stdin), _O_BINARY);
+    if (old_mode == -1) {
+        fprintf(stderr, "nurlc: cannot read stdin in binary mode\n");
+        exit(1);
+    }
+#endif
+    char *buf = nurl__read_all(stdin, "<stdin>", 4096);
+#ifdef _WIN32
+    _setmode(_fileno(stdin), old_mode);
+#endif
+    return buf;
+}
+
+/* Read entire file into an owned, NUL-terminated string; exit on error.
+ * Seekable files keep the single-allocation path; pipes are read to EOF. */
 const char* nurl_read_file(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "nurlc: cannot open '%s'\n", path);
         exit(1);
     }
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *buf = (char*)malloc((size_t)sz + 1);
-    fread(buf, 1, (size_t)sz, f);
-    buf[sz] = '\0';
+    /* Only regular-file sizes are allocation hints. Seeking a directory
+     * to END can report LONG_MAX; seekable devices also need stream reads.
+     * fstat uses the opened handle and leaves its read position untouched. */
+    size_t cap = 0;
+    struct stat st;
+    if (fstat(fileno(f), &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG && st.st_size > 0) {
+        if ((uintmax_t)st.st_size >= SIZE_MAX) nurl__oom((unsigned long long)st.st_size);
+        cap = (size_t)st.st_size;
+    }
+    char *buf = nurl__read_all(f, path, cap);
     fclose(f);
     return buf;
 }
@@ -3247,6 +3309,13 @@ long long nurl_native_sizeof(const char *name) {
  * names — NURL callers gate the whole code path on a target check. */
 long long nurl_native_constant(const char *name) {
     if (!name) return -1;
+    if (strcmp(name, "PATH_LIST_SEPARATOR") == 0) {
+#ifdef _WIN32
+        return ';';
+#else
+        return ':';
+#endif
+    }
 #if !defined(_WIN32) && !defined(__wasi__)
     if (strcmp(name, "F_GETFL")     == 0) return F_GETFL;
     if (strcmp(name, "F_SETFL")     == 0) return F_SETFL;

@@ -15152,7 +15152,7 @@
     ( nurl_str_cat `: error: ` msg ) ) )
     // Owned strings (`src`, `lt`) are reclaimed by auto-drop at scope
     // exit — no manual frees here (they would double-free).
-    : s src ( nurl_read_file file )
+    : s src ( compiler_read_source file )
     ? != 0 ( nurl_str_len src ) {
         : s lt ( __src_line_text src ( nurl_str_len src ) line )
         ? != 0 ( nurl_str_len lt ) { ( nurl_eprintln lt ) } {}
@@ -26019,7 +26019,7 @@
     {}
     { ( mem_mark_imported syms __imp_key )
         ( __require_import_file lex __li_line __li_col path )
-        : s src ( nurl_read_file path )
+        : s src ( compiler_read_source path )
         : s eff_src ? != 0 ( nurl_str_len alias )
         { : s names ( collect_alias_targets src path )
             ( alias_rewrite_source src names ( nurl_str_cat alias `__` ) )
@@ -26913,6 +26913,7 @@
     ( __emit_rt_decl syms `declare void @nurl_eprintln_int(i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_read_int()` )
     ( __emit_rt_decl syms `declare i8*  @nurl_read_line()` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_read_stdin()` )
     // nurl_read_n_bytes lives as pure NURL `read_n_bytes` in
     // `stdlib/core/io.nu`; it reads stdin via `nurl_stdin_read`
     // (declared by FFI in stdlib/core/posix.nu, no built-in declare).
@@ -27464,6 +27465,7 @@
     ( nurl_sym_def syms `nurl_version` `i8*` )
     ( nurl_sym_def syms `nurl_read_file` `i8*` )
     ( nurl_sym_def syms `nurl_read_line` `i8*` )
+    ( nurl_sym_def syms `nurl_read_stdin` `i8*` )
     // nurl_str_cat / _cat3 / _cat4 / _slice / _str_int are pure-NURL
     // @-fns. The sym_def keeps cross-module callers typed correctly
     // even when they don't `$`-import string.nu — omitting it makes
@@ -27502,6 +27504,7 @@
         ( nurl_sym_def syms `nurl_str_slice__ret_owned` `str` )
         ( nurl_sym_def syms `nurl_read_file__ret_owned` `str` )
         ( nurl_sym_def syms `nurl_read_line__ret_owned` `str` )
+        ( nurl_sym_def syms `nurl_read_stdin__ret_owned` `str` )
         // The strdup-returning getters. Each returns a FRESH copy on
         // every path (`^ # s ( nurl_strdup … )` — the `# s` cast hid the
         // ownership from the return-site inference, so callers never
@@ -29154,7 +29157,7 @@
                     ( nurl_str_cat3 marker ` ` __gs_key )
                     ( nurl_sym_def g_generic_struct_syms `__scanned__` new_marker )
                     ( __require_import_file lex __im_ln __im_cl path )
-                    : s src2 ( nurl_read_file path )
+                    : s src2 ( compiler_read_source path )
                     : i lex2 ( nurl_lex_new src2 path )
                     // Track the imported file so its imports resolve
                     // importer-relative (mirrors the other scan passes).
@@ -29618,7 +29621,7 @@
                             ( nurl_str_cat3 scanned ` ` __fs_key )
                             ( nurl_sym_def syms `__scanned_files__` new_scanned )
                             ( __require_import_file lex __im_ln __im_cl path )
-                            : s src2 ( nurl_read_file path )
+                            : s src2 ( compiler_read_source path )
                             : s eff_src2 ? != 0 ( nurl_str_len alias )
                             { : s names ( collect_alias_targets src2 path )
                                 ( alias_rewrite_source src2 names ( nurl_str_cat alias `__` ) )
@@ -29725,7 +29728,7 @@
                             ( nurl_str_cat3 marker ` ` __tn_key )
                             ( nurl_sym_def syms `__tn_scanned__` new_marker )
                             ( __require_import_file lex __im_ln __im_cl path )
-                            : s src2 ( nurl_read_file path )
+                            : s src2 ( compiler_read_source path )
                             : s eff_src2 ? != 0 ( nurl_str_len alias )
                             { : s names ( collect_alias_targets src2 path )
                                 ( alias_rewrite_source src2 names ( nurl_str_cat alias `__` ) )
@@ -29853,6 +29856,10 @@
 // parks the block in that cache — taking the copy from libc instead
 // meant nothing ever came back out of it. See runtime_core.c §9a.
 & `c` @ nurl_strdup s x → s
+
+// Bootstrap declaration: the prior compiler's preamble does not know this
+// runtime entry yet. Current preamble emission deduplicates the declaration.
+& `c` @ nurl_read_stdin → s
 
 // Minimal recover for the compiler's own multi-error frames (nurlc.nu
 // imports no stdlib): decompose the closure into (fn, env), run it under
@@ -30147,6 +30154,20 @@
 
 // Emission policy, set by main's --sanitize-address flag.
 : ~ i g_sanitize_address 0
+
+// Borrowed aliases to main's live source/key bindings when --stdin supplies
+// an overlay. Every source read (including deferred diagnostic excerpts and
+// import replay) sees that same snapshot; normal file reads need no cache.
+: ~ i g_input_source 0
+: ~ i g_input_key 0
+
+@ compiler_read_source s path → s {
+    ? != 0 g_input_source {
+        : s key ( __canon_import_key path )
+        ? ( seq key # s g_input_key ) { ^ ( nurl_str_cat # s g_input_source `` ) } {}
+    } {}
+    ^ ( nurl_read_file path )
+}
 
 // Print module bytes [from, to) without copying them out.
 @ __dce_print_range i from i to → v {
@@ -30792,6 +30813,8 @@
     ( nurl_print `  --help, -h          print this help and exit\n` )
     ( nurl_print `  --version, -v       print the toolchain version and exit\n` )
     ( nurl_print `  --g, -g             emit DWARF debug info (nurl.sh --debug forwards this)\n` )
+    ( nurl_print `  --check             validate without writing LLVM IR or split files\n` )
+    ( nurl_print `  --stdin             read source from stdin; <file.nu> keeps its logical path\n` )
     ( nurl_print `  --sanitize-address  mark every generated function for AddressSanitizer\n` )
     ( nurl_print `  --lint              run lint-only diagnostics: unused symbols and imports,\n` )
     ( nurl_print `                      an unreleased handle, an allocation owned by nothing\n` )
@@ -30827,8 +30850,16 @@
     //                  the pass is on by default
     : ~ s path ``
     : ~ i ai 1
+    : ~ b stdin_source F
+    : ~ b check_only F
+    : ~ b options_done F
+    : ~ i path_count 0
     ~ < ai ( nurl_argc ) {
         : s a ( nurl_argv ai )
+        ? options_done { = path a = path_count + path_count 1 = ai + ai 1 continue } {}
+        ? ( seq a `--` ) { = options_done T = ai + ai 1 continue } {}
+        ? ( seq a `--stdin` ) { = stdin_source T = ai + ai 1 continue } {}
+        ? ( seq a `--check` ) { = check_only T = ai + ai 1 continue } {}
         ? ( seq a `--sanitize-address` ) { = g_sanitize_address 1 } {
             ? | ( seq a `--version` ) ( seq a `-v` )
             { ( nurl_print ( nurl_version ) ) ( nurl_print `\n` ) ( nurl_exit 0 ) }
@@ -30862,12 +30893,16 @@
                                                                     { = g_split_out ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) }
                                                                     { ? != 0 ( nurl_str_starts a `--split-min=` )
                                                                         { = g_split_min ( nurl_str_to_int ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) ) }
-                                                                        { = path a } } } } } } } } } } } } } } } }
+                                                                        { ? != 0 ( nurl_str_starts a `-` ) {
+                                                                                ( nurl_eprintln ( nurl_str_cat `nurlc: unknown option: ` a ) )
+                                                                                ( nurl_exit 2 )
+                                                                            } {}
+                                                                            = path a = path_count + path_count 1 } } } } } } } } } } } } } } } }
         }
         = ai + ai 1
     }
-    ? == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--sanitize-address] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch] [--no-dce] [--keep=a,b] [--split=N --split-out=PREFIX] <file.nu>` ) ( nurl_exit 1 ) }
+    ? | != path_count 1 == 0 ( nurl_str_len path )
+    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--check] [--stdin] [--sanitize-address] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch] [--no-dce] [--keep=a,b] [--split=N --split-out=PREFIX] [--] <file.nu>` ) ( nurl_exit 1 ) }
     {}
     // --split writes files, so it needs somewhere to write them. Cap it
     // at 64: past the core count the parts only get smaller, and each
@@ -30887,7 +30922,9 @@
     { ( nurl_eprintln `nurlc: --split cannot be combined with --g (DWARF metadata is per-module)` ) ( nurl_exit 1 ) }
     {}
     ? != g_lint 0 { ( lint_init path ) } {}
-    : s src ( nurl_read_file path )
+    : s src ? stdin_source ( nurl_read_stdin ) ( compiler_read_source path )
+    : s input_key ? stdin_source ( __canon_import_key path ) ``
+    ? stdin_source { = g_input_source # i src = g_input_key # i input_key } {}
     : s marker ( nurl_str_cat `@@nurl-disable` `-autodrop-strings@@` )
     ? >= ( nurl_str_find src marker ) 0
     { = g_auto_drop_strings 0 }
@@ -31054,8 +31091,14 @@
     {}
     // Every function this compile will ever emit is now in the buffer:
     // close it and write out the part `main` can reach.
-    : s __mod ( nurl_print_buf_stop )
-    ( dce_emit_module __mod )
+    ? check_only {
+        // The fused walk has completed every semantic check. Discard its
+        // buffered IR without copying, indexing, printing or splitting it.
+        ( nurl_print_buf_unwind )
+    } {
+        : s __mod ( nurl_print_buf_stop )
+        ( dce_emit_module __mod )
+    }
     ( nurl_lex_free lex )
     // Exit-time release of the global symbol tables. Their handles
     // live in `: ~ i` globals as integer casts, which a leak scanner's
