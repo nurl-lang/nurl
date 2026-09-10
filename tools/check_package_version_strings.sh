@@ -32,6 +32,10 @@ for toml in packages/*/nurl.toml; do
     manifest=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$toml" | head -1)
     [ -n "$manifest" ] || continue
 
+    # Every source of the package, comments stripped, for the rules that
+    # must look past the file a literal happens to sit in.
+    pkgsrc=$(sed 's://.*::' packages/"$pkg"/src/*.nu 2>/dev/null || true)
+
     for src in packages/"$pkg"/src/*.nu; do
         [ -e "$src" ] || continue
         # Strip `//` comments, then find `cli_new … `X.Y.Z``.
@@ -85,8 +89,10 @@ for toml in packages/*/nurl.toml; do
         stripped=$(sed 's://.*::' "$src")
         while IFS='|' read -r fn lit; do
             [ -n "$fn" ] || continue
-            printf '%s\n' "$stripped" \
-                | grep -q "\`$pkg\`.*( *$fn *)" || continue
+            # A here-string, not a pipe — see the constant rule below for
+            # why a `grep -q` at the end of a pipeline can make this gate
+            # skip the check it just passed.
+            grep -q "\`$pkg\`.*( *$fn *)" <<<"$stripped" || continue
             checked=$((checked + 1))
             if [ "$lit" != "$manifest" ]; then
                 echo "MISMATCH: $pkg — nurl.toml says '$manifest' but $src returns '$lit' from $fn"
@@ -95,6 +101,34 @@ for toml in packages/*/nurl.toml; do
         done < <(printf '%s\n' "$stripped" \
                  | grep -oE '@ [A-Za-z_][A-Za-z0-9_]* → s \{ \^ `[0-9]+\.[0-9]+\.[0-9]+` \}' \
                  | sed -E 's/@ ([A-Za-z_][A-Za-z0-9_]*) → s \{ \^ `([0-9]+\.[0-9]+\.[0-9]+)` \}/\1|\2/')
+
+        # …and a FOURTH spelling, which is the third one without the
+        # function: a top-level CONSTANT, `: s ANOMALY_VERSION `0.31.0``,
+        # named at the call site instead of a literal. Every rule above
+        # reads the call site, and a call site that names a constant hides
+        # the number from all of them — so anomaly 0.32.0 published a
+        # `--version` and an MCP `initialize` reply that both said 0.31.0,
+        # through a gate written twice over to stop exactly this. Resolved
+        # like the accessor and keyed the same way (the package's own name
+        # beside the constant at a call site), but searched over the whole
+        # package: the constant and the call that uses it need not share a
+        # file, and in anomaly they do not.
+        # A here-string, not a pipe: under `set -o pipefail` a `grep -q`
+        # that matches early closes the pipe, the writer takes SIGPIPE,
+        # the PIPELINE reports failure — and `|| continue` then skips the
+        # very check that just succeeded. This gate is silent when it is
+        # wrong, so it must not have a way to be silently right either.
+        while IFS='|' read -r cname lit; do
+            [ -n "$cname" ] || continue
+            grep -q "\`$pkg\`.*\b$cname\b" <<<"$pkgsrc" || continue
+            checked=$((checked + 1))
+            if [ "$lit" != "$manifest" ]; then
+                echo "MISMATCH: $pkg — nurl.toml says '$manifest' but $src binds $cname = '$lit'"
+                fail=1
+            fi
+        done < <(printf '%s\n' "$stripped" \
+                 | grep -oE '^: s [A-Za-z_][A-Za-z0-9_]* `[0-9]+\.[0-9]+\.[0-9]+`' \
+                 | sed -E 's/^: s ([A-Za-z_][A-Za-z0-9_]*) `([0-9]+\.[0-9]+\.[0-9]+)`/\1|\2/')
     done
 done
 
