@@ -99,12 +99,14 @@ run_gate() {  # run_gate <label> [nurlc flags...]
         return 1
     fi
 
-    # Zero stderr and exit 0 could also mean "compiled nothing at all", which
-    # is exactly how a broken gate looks green. Assert real IR came out.
+    # Zero stderr and exit 0 could also mean "compiled nothing at all".
+    # Require emitted function bodies, not a byte-count floor: small targeted
+    # regressions are valid compilations too (the former 100 KB minimum
+    # falsely reported a clean 7 KB trait program as an incomplete compile).
     local ir_bytes
     ir_bytes="$(wc -c < "$ir")"
-    if [ "$ir_bytes" -lt 100000 ]; then
-        echo "leakgate: FAIL — only $ir_bytes bytes of IR emitted by the $label compile; it did not run to completion." >&2
+    if ! grep -q '^define ' "$ir" || ! grep -q '^}' "$ir"; then
+        echo "leakgate: FAIL — the $label compile emitted no function bodies to exercise ($ir_bytes bytes)." >&2
         return 1
     fi
 

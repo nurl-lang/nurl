@@ -275,6 +275,9 @@ jobs:
         # Two seconds, and it uses the build/nurlc from ./build.sh above.
         run: ./tools/metamorph/spellings.py
 
+      - name: trait declaration-order and method ABI gate
+        run: ./tools/metamorph/trait_order.py
+
       - name: CRC-32 gate (two code paths, one answer)
         # std/deflate computes CRC-32 bitwise below 512 bytes and with a
         # Sarwate table above it — the table costs 2048 steps to build and

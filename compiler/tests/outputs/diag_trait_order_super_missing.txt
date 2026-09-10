@@ -1,0 +1,3 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_trait_order_super_missing.nu:1: error: type 'i' implements trait 'Scored' but not its supertrait 'Readable' — every 'Scored' type must also implement 'Readable'

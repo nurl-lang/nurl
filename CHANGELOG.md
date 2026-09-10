@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Trait contracts no longer depend on declaration or import order.**
+  Associated-type checks and default-method registration now run after the
+  whole program's signature scan, before body or vtable emission. An impl
+  preceding its trait (including a later nested import) gets the same defaults
+  and binding checks as one following it. Deferred diagnostics retain the
+  source snapshot and point at the impl; repeated imports remain idempotent.
+- **Explicit and default trait methods share complete signature registration.**
+  Defaults previously registered only their return type and arity: an `inout`
+  default passed a value where the callee expected an address and could crash,
+  while incompatible argument types could bypass the dispatched-call check.
+  Both paths now register parameter types, `inout` and `sink` conventions before
+  callers are emitted, including forward calls and non-receiver parameters.
+- **Impl coherence distinguishes definitions on the same source line.**
+  Import replay previously identified a method by file and line only, allowing
+  distinct conflicting definitions on one line to evade the duplicate check.
+  The identity now includes the source column.
+- **The compiler leak gate accepts small regression programs.** It now checks
+  for emitted function bodies instead of assuming every successful compile
+  produces at least 100 KB of IR; sanitizer findings still fail unconditionally.
+
 ### Added
 
 - **`packages/anomaly` 0.31.0 — a reading that cannot be a measurement is

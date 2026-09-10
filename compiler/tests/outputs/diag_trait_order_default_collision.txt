@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_trait_order_default_collision.nu:2:1: error: method 'value' for type 'i' is provided by both trait 'Second' and trait 'First' — bare-name dispatch cannot disambiguate
+% First i {}
+^

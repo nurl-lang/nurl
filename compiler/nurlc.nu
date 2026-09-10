@@ -1009,7 +1009,7 @@
 //   re-registration is idempotent (a file imported by several importers is
 //   scanned once per importer); a DIFFERENT position is the real conflict,
 //   and it is reported with both locations while they are still known.
-: ~ i g_impl_pos_syms 0  // coherence: method##llvm_type → "file:line" of the
+: ~ i g_impl_pos_syms 0  // coherence: method##llvm_type → "file:line:column" of the
 //   first registration. A `$`-imported impl is scanned once per importer, so
 //   the SAME (method, type) is registered from the SAME source location more
 //   than once — those re-scans are idempotent (allowed). A registration from a
@@ -1028,6 +1028,9 @@
 //   <Trait>__assoc            → space-separated associated-type names (type Item)
 //   <Trait>__methods          → method names in declaration order (dyn seam)
 //   <Trait>__<method>__sig    → that method's "params → ret" signature (dyn seam)
+// Impl contracts awaiting the complete trait table; owned by scan_impl_decl
+// and resolved once before emission. Includes source snapshots for diagnostics.
+: ~ i g_trait_pending 0
 // Dynamic trait objects (`%Trait`, docs/spec.md §4.9). Space-separated set of
 // trait names that appear as a `%Trait` object type or in a `( dyn Trait v )`
 // construction anywhere in the program (collected by scan_dyn_types, a body-
@@ -28005,26 +28008,55 @@
     ( expect lex TT_RBRACE )  // consume '}' — clean error if unterminated at EOF
 }
 
-// trait_default_ret: given a default method's substituted source
-// "params → ret { body }", return the ret type as an LLVM type string.
-@ trait_default_ret s subst_src → s {
-    : i lex2 ( nurl_lex_new subst_src `<trait_default_ret>` )
-    ~ & != ( nurl_lex_type lex2 ) TT_ARROW != ( nurl_lex_type lex2 ) TT_EOF {
-        ( nurl_lex_advance lex2 )
+// One signature reader for explicit AND default trait methods. A method's
+// ABI must be complete before callers are emitted: arity alone loses inout
+// addresses, sink transfers and argument-type agreement. Default signatures
+// are re-lexed after Self/associated substitution; explicit ones use the
+// original lexer, so both paths register exactly the same metadata.
+@ scan_method_signature i lex s key s mname s mangled → s {
+    : ~ i count 0
+    : ~ s ptypes ``
+    : ~ s inouts ``
+    : ~ s sinks ``
+    ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF {
+        : ~ b io F
+        ? ( seq ( nurl_lex_val lex ) `inout` ) {
+            = io T
+            = inouts ( nurl_str_cat3 inouts ( nurl_str_int count ) ` ` )
+            ( nurl_lex_advance lex )
+        } {
+            ? ( seq ( nurl_lex_val lex ) `sink` ) {
+                = sinks ( nurl_str_cat3 sinks ( nurl_str_int count ) ` ` )
+                ( nurl_lex_advance lex )
+            } {}
+        }
+        : s pt ( parse_type lex )
+        : s ll ? io ( nurl_str_cat ( nurl_llty pt ) `*` ) ( nurl_llty pt )
+        = ptypes ? == count 0 ( nurl_str_cat ll `` ) ( nurl_str_cat3 ptypes `;` ll )
+        ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
+        = count + count 1
     }
-    : ~ s ret ( nurl_str_cat `i64` `` )
-    ? == ( nurl_lex_type lex2 ) TT_ARROW
-    { ( nurl_lex_advance lex2 )
-        = ret ( parse_type lex2 )
-    }
-    {}
-    ( nurl_lex_free lex2 )
-    ret
+    ( expect lex TT_ARROW )
+    : s ret ( parse_type lex )
+    ( nurl_sym_def g_impl_ret_syms key ret )
+    ( nurl_sym_def g_impl_ret_syms ( nurl_str_cat key `__arity` ) ( nurl_str_int count ) )
+    ( nurl_sym_def g_impl_ret_syms ( nurl_str_cat key `__ptypes` ) ptypes )
+    // Calls start from the bare method name; emitted bodies and deferred
+    // ownership checks use the concrete name. Populate both before emission.
+    ? != 0 ( nurl_str_len inouts ) {
+        ( nurl_sym_def g_fn_inout mname inouts )
+        ( nurl_sym_def g_fn_inout mangled inouts )
+    } {}
+    ? != 0 ( nurl_str_len sinks ) {
+        ( nurl_sym_def g_fn_sink mname sinks )
+        ( nurl_sym_def g_fn_sink mangled sinks )
+    } {}
+    ^ ret
 }
 
 // register_missing_defaults: for each of a trait's default methods that the
 // impl did NOT override, register a dispatch entry (method##ImplLLVM →
-// ret_ty) so that call sites resolve. Called during impl scan.
+// ret_ty) so that call sites resolve. Called after the whole signature scan.
 @ register_missing_defaults i lex s tname s impl_nurl s impl_llvm s impl_mangle s provided s bindings i syms → v {
     : s tparam ( nurl_sym_get2 g_trait_syms tname `__tparam` )
     : ~ s defaults ( nurl_sym_get2 g_trait_syms tname `__defaults` )
@@ -28040,23 +28072,21 @@
             // Substitute the trait's associated types to this impl's bindings,
             // so a default that returns/uses one lowers to the impl's choice.
             : s subst ( subst_assoc subst0 bindings )
-            : s ret_ty ( trait_default_ret subst )
             : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
+            : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
+            : i siglex ( nurl_lex_new subst `<trait_default_signature>` )
+            : s saved_ctx ( nurl_str_cat g_diag_ctx `` )
+            = g_diag_ctx ( nurl_str_cat ( nurl_str_cat4
+            ` [in the signature of method '` mname `' of trait '` tname )
+            ( nurl_str_cat3 `' (Self = '` impl_nurl `') — fix it at the trait declaration]` ) )
+            : s ret_ty ( scan_method_signature siglex key mname mangled )
+            = g_diag_ctx saved_ctx
+            ( nurl_lex_free siglex )
             ( __coherence_register lex mname impl_llvm impl_nurl tname )
-            ( nurl_sym_def g_impl_ret_syms key ret_ty )
-            // Declared param count (receiver included) for the call-site
-            // arity check — same entry the explicit-method scan writes.
-            // dyn_sig_parts fields: ret|recvmode|recv|p1|…, so the count
-            // is fields minus the ret and recvmode slots.
-            : ~ i __dpn 0
-            : ~ s __dpr ( nurl_str_cat ( dyn_sig_parts subst ) `` )
-            ~ != 0 ( nurl_str_len __dpr ) { = __dpn + __dpn 1 = __dpr ( pipe_rest __dpr ) }
-            ( nurl_sym_def g_impl_ret_syms ( nurl_str_cat key `__arity` ) ( nurl_str_int - __dpn 2 ) )
             ( nurl_sym_def g_impl_name_syms key impl_mangle )
             // Mark the bare method name as impl-backed so gen_call's
             // unknown-callee check lets it through to impl dispatch.
             ( nurl_sym_def g_impl_name_syms ( nurl_str_cat mname `__impl_seen` ) `1` )
-            : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
             ( nurl_sym_def syms mangled ret_ty )
         }
     }
@@ -28107,7 +28137,8 @@
 @ __coherence_register i lex s mname s impl_llvm s impl_nurl s tname → v {
     : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
     : s pos ( nurl_str_cat ( nurl_lex_filename lex )
-    ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+    ( nurl_str_cat3 `:` ( nurl_str_int ( nurl_lex_line lex ) )
+    ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_col lex ) ) ) ) )
     : s prior ( nurl_sym_get g_impl_name_syms key )
     ? != 0 ( nurl_str_len prior ) {
         : s prior_pos ( nurl_sym_get g_impl_pos_syms key )
@@ -28131,9 +28162,10 @@
 }
 
 // For trait_decl: stores default-method templates in g_trait_syms.
-// For impl_decl: after scanning explicit methods, fills in dispatch entries
-// for any of the trait's defaults that the impl did not override.
+// For impl_decl: register explicit method signatures, then defer contract
+// checks and default registration until every trait declaration is known.
 @ scan_impl_decl i lex i syms → v {
+    : i impl_pos ( nurl_lex_cur_start lex )
     ( nurl_lex_advance lex )  // skip '%'
     : s tname ( nurl_lex_val lex )
     ( nurl_lex_advance lex )  // skip trait name
@@ -28240,51 +28272,13 @@
                         = provided ? == 0 ( nurl_str_len provided )
                         ( nurl_str_cat mname `` )
                         ( nurl_str_cat provided ( nurl_str_cat ` ` mname ) )
-                        // Walk (not blind-skip) the params until `→`,
-                        // COUNTING them: the call-site arity check needs
-                        // the declared count, receiver included. An
-                        // `inout`/`sink` marker prefixes a param and is
-                        // not one itself.
-                        : ~ i __mpct 0
-                        : ~ s __mptys ``
-                        ~ & != ( nurl_lex_type lex ) TT_ARROW
-                        != ( nurl_lex_type lex ) TT_EOF
-                        { : ~ b __mpio F
-                            ? & ( is_ident_tok ( nurl_lex_type lex ) )
-                            | ( seq ( nurl_lex_val lex ) `inout` ) ( seq ( nurl_lex_val lex ) `sink` )
-                            { ? ( seq ( nurl_lex_val lex ) `inout` ) { = __mpio T } {}
-                                ( nurl_lex_advance lex ) } {}
-                            : s __mpt ( parse_type lex )
-                            // Keep the parsed parameter type: the dispatch
-                            // site checks the assembled argstr against this
-                            // roster, the way the direct-call battery checks
-                            // each argument against __ptypes_src. An `inout`
-                            // parameter is passed by ADDRESS, so its roster
-                            // entry is the pointer spelling.
-                            : ~ s __mpll ( nurl_llty __mpt )
-                            ? __mpio { = __mpll ( nurl_str_cat __mpll `*` ) } {}
-                            = __mptys ? == 0 ( nurl_str_len __mptys )
-                            ( nurl_str_cat __mpll `` ) ( nurl_str_cat3 __mptys `;` __mpll )
-                            ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
-                            = __mpct + __mpct 1
-                        }
-                        ? == ( nurl_lex_type lex ) TT_ARROW
-                        { ( nurl_lex_advance lex )
-                            : s ret_ty ( parse_type lex )
-                            : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
-                            ( __coherence_register lex mname impl_llvm impl_nurl tname )
-                            ( nurl_sym_def g_impl_ret_syms key ret_ty )
-                            ( nurl_sym_def g_impl_ret_syms ( nurl_str_cat key `__arity` ) ( nurl_str_int __mpct ) )
-                            ( nurl_sym_def g_impl_ret_syms ( nurl_str_cat key `__ptypes` ) __mptys )
-                            ( nurl_sym_def g_impl_name_syms key impl_mangle )
-                            // Mark the bare method name as impl-backed so
-                            // gen_call's unknown-callee check lets it
-                            // through to impl dispatch.
-                            ( nurl_sym_def g_impl_name_syms ( nurl_str_cat mname `__impl_seen` ) `1` )
-                            : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
-                            ( nurl_sym_def syms mangled ret_ty )
-                        }
-                        {}
+                        : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
+                        : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
+                        : s ret_ty ( scan_method_signature lex key mname mangled )
+                        ( __coherence_register lex mname impl_llvm impl_nurl tname )
+                        ( nurl_sym_def g_impl_name_syms key impl_mangle )
+                        ( nurl_sym_def g_impl_name_syms ( nurl_str_cat mname `__impl_seen` ) `1` )
+                        ( nurl_sym_def syms mangled ret_ty )
                         ( skip_balanced lex )  // skip method body
                     }
                     { ( nurl_lex_advance lex ) }
@@ -28292,17 +28286,91 @@
                 { ( nurl_lex_advance lex ) } }
         }
         ( expect lex TT_RBRACE )  // consume '}' — clean error if unterminated at EOF
-        // Associated-type coherence: the impl must bind exactly the trait's
-        // declared associated types — every one, and no unknown name. (The
-        // trait, like its defaults, must be scanned before the impl for its
-        // __assoc list to be visible; the substitution below relies on it too.)
+        // The trait may be declared later, in this file or a later import.
+        // Record the dependency instead of consulting a partial trait table.
+        // Explicit signatures are already registered; defaults and associated
+        // type coherence are resolved after the complete signature scan.
+        ( defer_trait_impl lex impl_pos tname impl_nurl impl_llvm impl_mangle provided bindings )
+    }
+}
+
+// Queue each source impl once: gen_import_decl replays the signature scan,
+// so a resolved impl must not re-enter the queue or synthesize defaults twice.
+// Fields are separate symbol entries (paths and type strings may contain
+// spaces). Keep one effective-source snapshot per file, not per impl, so
+// deferred diagnostics retain their real source and alias rewriting.
+@ defer_trait_impl i lex i impl_pos s tname s impl_nurl s impl_llvm s impl_mangle s provided s bindings → v {
+    : s file ( nurl_lex_filename lex )
+    : s pos ( nurl_str_int impl_pos )
+    : s seen ( nurl_str_cat4 `seen##` file `##` pos )
+    ? != 0 ( nurl_sym_len g_trait_pending seen ) { ^ } {}
+    ( nurl_sym_def g_trait_pending seen `1` )
+    : i n ( nurl_str_to_int ( nurl_sym_get g_trait_pending `count` ) )
+    : s key ( nurl_str_cat ( nurl_str_int n ) `##` )
+    ( nurl_sym_def g_trait_pending `count` ( nurl_str_int + n 1 ) )
+    ( nurl_sym_def g_trait_pending ( nurl_str_cat key `file` ) file )
+    ( nurl_sym_def g_trait_pending ( nurl_str_cat key `pos` ) pos )
+    ( nurl_sym_def g_trait_pending ( nurl_str_cat key `trait` ) tname )
+    ( nurl_sym_def g_trait_pending ( nurl_str_cat key `nurl` ) impl_nurl )
+    ( nurl_sym_def g_trait_pending ( nurl_str_cat key `llvm` ) impl_llvm )
+    ( nurl_sym_def g_trait_pending ( nurl_str_cat key `mangle` ) impl_mangle )
+    ( nurl_sym_def g_trait_pending ( nurl_str_cat key `provided` ) provided )
+    ( nurl_sym_def g_trait_pending ( nurl_str_cat key `bindings` ) bindings )
+    : s skey ( nurl_str_cat `src##` file )
+    // Test key existence, not snapshot length: strlen of the whole file
+    // for every impl would make this ostensibly shared capture quadratic.
+    ? < ( __sym_find_here g_trait_pending skey ) 0
+    { ( nurl_sym_def g_trait_pending skey
+        ( nurl_lex_src_slice lex 0 ( nurl_peek # s lex LX_LEN ) ) ) } {}
+}
+
+// Resolve against the WHOLE program, before any body or vtable is emitted.
+// Recreate only the diagnostic cursor; impl bodies are never parsed twice
+// here. Explicit-method registrations from every file are already visible,
+// so coherence also catches a default colliding with a later explicit impl.
+@ resolve_trait_impls i syms → v {
+    : s saved_sf ( vis_current_src_file )
+    : i n ( nurl_str_to_int ( nurl_sym_get g_trait_pending `count` ) )
+    : ~ i idx 0
+    ~ < idx n {
+        : s key ( nurl_str_cat ( nurl_str_int idx ) `##` )
+        : s file ( nurl_sym_get2 g_trait_pending key `file` )
+        ( vis_set_current_src_file file )
+        // One lexer/line index per file, reused at every impl position.
+        // Rebuilding it per impl would be quadratic in an impl-heavy file.
+        : s lkey ( nurl_str_cat `lex##` file )
+        : ~ i lex ( nurl_str_to_int ( nurl_sym_get g_trait_pending lkey ) )
+        ? == lex 0 {
+            : s src ( nurl_sym_get2 g_trait_pending `src##` file )
+            = lex ( nurl_lex_new src file )
+            ( nurl_sym_def g_trait_pending lkey ( nurl_str_int lex ) )
+        } {}
+        ( nurl_lex_set_pos lex ( nurl_str_to_int ( nurl_sym_get2 g_trait_pending key `pos` ) ) )
+        : s tname ( nurl_sym_get2 g_trait_pending key `trait` )
+        : s impl_nurl ( nurl_sym_get2 g_trait_pending key `nurl` )
+        : s bindings ( nurl_sym_get2 g_trait_pending key `bindings` )
         ( verify_assoc_bindings lex tname impl_nurl bindings )
-        // After the impl's explicit methods, synthesize dispatch entries for
-        // any of the trait's defaults that this impl did not override, with the
-        // trait's associated types substituted to this impl's bindings.
         ? != 0 ( nurl_str_len impl_nurl )
-        { ( register_missing_defaults lex tname impl_nurl impl_llvm impl_mangle provided bindings syms ) }
-        {}
+        { ( register_missing_defaults lex tname impl_nurl
+            ( nurl_sym_get2 g_trait_pending key `llvm` )
+            ( nurl_sym_get2 g_trait_pending key `mangle` )
+            ( nurl_sym_get2 g_trait_pending key `provided` ) bindings syms ) } {}
+        = idx + idx 1
+    }
+    ( vis_set_current_src_file saved_sf )
+    // Only the seen keys are needed by import replays. Release source
+    // snapshots before body emission, where the compiler's peak memory lies.
+    = idx 0
+    ~ < idx n {
+        : s file ( nurl_sym_get2 g_trait_pending ( nurl_str_cat ( nurl_str_int idx ) `##` ) `file` )
+        : s lkey ( nurl_str_cat `lex##` file )
+        : i lex ( nurl_str_to_int ( nurl_sym_get g_trait_pending lkey ) )
+        ? != lex 0 {
+            ( nurl_lex_free lex )
+            ( nurl_sym_def g_trait_pending lkey `0` )
+            ( nurl_sym_def g_trait_pending ( nurl_str_cat `src##` file ) `` )
+        } {}
+        = idx + idx 1
     }
 }
 
@@ -30801,6 +30869,7 @@
     = g_priv_owner_files ( nurl_sym_new )
     = g_priv_warned ( nurl_sym_new )
     = g_trait_syms ( nurl_sym_new )
+    = g_trait_pending ( nurl_sym_new )
     = g_res_type_syms ( nurl_sym_new )
     = g_closure_defs ( nurl_sym_new )
     = g_closure_types ( nurl_sym_new )
@@ -30860,6 +30929,7 @@
     : i lex1 ( nurl_lex_new src path )
     ( scan_fn_sigs lex1 syms )
     ( nurl_lex_free lex1 )
+    ( resolve_trait_impls syms )
     // AFTER scan_fn_sigs, and this is load-bearing: the preamble must
     // not declare a symbol the program itself defines (__emit_rt_decl),
     // and only the whole-program signature pass knows which those are.
@@ -30968,6 +31038,7 @@
     ( nurl_sym_free g_priv_owner_files )
     ( nurl_sym_free g_priv_warned )
     ( nurl_sym_free g_trait_syms )
+    ( nurl_sym_free g_trait_pending )
     ( nurl_sym_free g_res_type_syms )
     ( nurl_sym_free g_closure_defs )
     ( nurl_sym_free g_closure_types )

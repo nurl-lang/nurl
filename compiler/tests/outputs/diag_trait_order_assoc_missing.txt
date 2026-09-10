@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_trait_order_assoc_missing.nu:2:1: error: impl of trait 'Reading' for type 'i' must bind associated type 'Elem' (add a 'type' line)
+% Reading i {}
+^
