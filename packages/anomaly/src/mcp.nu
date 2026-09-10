@@ -41,6 +41,7 @@ $ `src/imptime.nu`
 // One version for the CLI banner and the MCP handshake.
 : s ANOMALY_VERSION `0.33.0`
 
+
 // ── Wiring ───────────────────────────────────────────────────────────
 
 // The router the tools call back into (a shallow copy of the service
