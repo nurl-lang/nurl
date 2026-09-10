@@ -145,6 +145,8 @@ jobs:
           ./tools/nurl-lsp/build.sh
           python3 tools/tests/test_lsp_toolchain.py
           python3 tools/tests/test_source_io.py
+          python3 tools/tests/test_stream_io.py
+          python3 tools/tests/test_formatter.py
           bash compiler/tests/lsp_rename_smoke.sh
 
       - name: Retain complete build logs
@@ -627,6 +629,9 @@ jobs:
           # Rejected compiler paths still need leak cleanup (A01 ledger).
           ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 python3 tools/tests/test_lsp_toolchain.py
           ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 python3 tools/tests/test_lsp_toolchain.py ToolchainTest.test_check_self_compile_from_stdin
+
+      - name: Instrumented formatter ownership and CLI controls
+        run: NURL_SAN=1 python3 tools/tests/test_formatter.py
 
       - name: Generated-code sanitizer detection controls
         run: python3 tools/sanitizer_controls.py

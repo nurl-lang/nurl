@@ -407,16 +407,38 @@ const char* nurl_read_line(void) {
 
 long long nurl_stdin_eof(void) { return g_stdin_eof_flag ? 1 : 0; }
 
+/* A signal may interrupt fread after it has already copied a prefix. Keep
+ * those bytes and retry only EINTR; callers inspect ferror for other errors. */
+static size_t nurl__fread_retry(void *buf, size_t n, FILE *stream) {
+    size_t done = 0;
+    while (done < n) {
+        done += fread((char *)buf + done, 1, n - done, stream);
+        if (ferror(stream) && errno == EINTR) {
+            clearerr(stream);
+            continue;
+        }
+        break;
+    }
+    return done;
+}
+
 /* Buffered binary read from stdin that shares nurl_read_line's FILE*
  * buffer. Framed stdio protocols (LSP / DAP / JSON-RPC) read the
  * Content-Length header line with nurl_read_line (fgetc) and then the
  * opaque body with this — both go through stdin's stdio buffer, so the
  * header read can't silently swallow body bytes that a raw read(2) on
  * the descriptor would then miss. Returns the number of bytes read
- * (0 at EOF). */
-long long nurl_stdin_read(void *buf, long long n) {
+ * (0 at EOF, -1 on an I/O error; a failed read is not an EOF). */
+long long nurl_stream_read(void *stream, void *buf, long long n) {
     if (n <= 0) return 0;
-    return (long long)fread(buf, 1, (size_t)n, stdin);
+    if (!stream || !buf || (unsigned long long)n > SIZE_MAX) { errno = EINVAL; return -1; }
+    FILE *f = (FILE *)stream;
+    size_t got = nurl__fread_retry(buf, (size_t)n, f);
+    return ferror(f) ? -1 : (long long)got;
+}
+
+long long nurl_stdin_read(void *buf, long long n) {
+    return nurl_stream_read(stdin, buf, n);
 }
 
 /* NURL_IO_LOCK is defined further down (with nurl_print); these two are
@@ -1683,7 +1705,7 @@ static char *nurl__read_all(FILE *f, const char *name, size_t cap) {
     char *buf = (char*)malloc(cap + 1);
     size_t len = 0;
     for (;;) {
-        len += fread(buf + len, 1, cap - len, f);
+        len += nurl__fread_retry(buf + len, cap - len, f);
         if (ferror(f)) {
             int error = errno;
             free(buf);
@@ -1692,8 +1714,8 @@ static char *nurl__read_all(FILE *f, const char *name, size_t cap) {
         }
         if (feof(f)) break;
         if (len == cap) {
-            int next = fgetc(f);
-            if (next == EOF) {
+            unsigned char next;
+            if (nurl__fread_retry(&next, 1, f) == 0) {
                 if (ferror(f)) {
                     int error = errno;
                     free(buf);

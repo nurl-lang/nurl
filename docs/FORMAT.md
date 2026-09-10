@@ -288,14 +288,16 @@ statements inside `main` collapsed to one.
 nurlfmt [OPTIONS] [FILE...]
 
 Options:
-    --check         Exit 0 if every FILE is already canonical, exit 1
+    --check         Exit 0 if the input is already canonical, exit 1
                     otherwise. Print the names of files that need
-                    reformatting to stderr. Suitable for CI.
+                    reformatting to stderr. Emits no source, including
+                    with stdin. Suitable for CI.
     --write         Reformat each FILE in place. Without this flag the
                     formatted source is written to stdout.
     --stdin         Read a single source from stdin and write the
                     formatted result to stdout. Cannot be combined
-                    with FILE arguments.
+                    with FILE arguments or --write.
+    --              End options; remaining arguments are file paths.
 
 With no FILE and no --stdin, reads stdin → writes stdout (same as
 --stdin).
@@ -304,8 +306,18 @@ With no FILE and no --stdin, reads stdin → writes stdout (same as
 Exit codes:
 
 * `0` — success (formatted output written, or `--check` passed).
-* `1` — `--check` found at least one non-canonical file.
-* `2` — usage error or I/O error.
+* `1` — `--check` found non-canonical input.
+* `2` — usage error, I/O error or a NUL byte in the source.
+
+`--check` and `--write` are mutually exclusive; `--write` requires file
+paths. Unknown options are errors. Read failures preserve the file, and NUL
+bytes are rejected before formatting to prevent writing only a source prefix.
+Writing an already canonical file leaves its modification time unchanged.
+
+`tools/nurlfmt/format.nu` exposes `format_source String → String` for repeated
+use. It borrows the source and returns an owned result; the caller releases
+that result with `string_free`. Each call frees the intermediate token slices
+and vector. EOF is a borrowed literal, so token cleanup never frees it.
 
 ## Non-goals (v1)
 

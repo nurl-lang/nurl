@@ -455,4 +455,5 @@ long ftell(FILE *f) {
 int putchar(int c) { return fputc(c, stdout); }
 int feof(FILE *f)   { return (f->flags & NL_F_EOF) ? 1 : 0; }
 int ferror(FILE *f) { return (f->flags & NL_F_ERR) ? 1 : 0; }
+void clearerr(FILE *f) { f->flags &= ~(NL_F_EOF | NL_F_ERR); }
 int remove(const char *path) { extern int unlink(const char *); return unlink(path); }

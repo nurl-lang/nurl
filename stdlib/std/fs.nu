@@ -9,7 +9,7 @@
 // `nurl_file_close`) are still available raw; this module only adds the
 // safe one-shot variants used by application code.
 //
-//   ( read_file path )           → ! String IoErr   owned String, '\0' stripped at len
+//   ( read_file path )           → ! String IoErr   owned String, actual byte length
 //   ( write_file path content )  → ! v IoErr        truncates / creates
 //   ( append_file path content ) → ! v IoErr        opens "a"; creates if missing
 //   ( file_exists path )         → b
@@ -42,16 +42,16 @@
 //   }
 //
 // Ownership: read_file returns an OWNED `String`; the caller is
-// responsible for `string_free`-ing it (or letting auto-drop do so at
-// scope exit). write_file/append_file BORROW the content string —
+// responsible for `string_free`-ing it. write_file/append_file BORROW the content string —
 // callers may pass `( string_data s )` from an owned String without
 // transferring ownership.
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/io.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/errors.nu`
 $ `stdlib/std/path.nu`
-$ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
+$ `stdlib/core/posix.nu`
 
 // errno-kind → IoErr enum value. Order matches `nurl_errno_kind` in
 // runtime.c (NotFound=0, PermissionDenied=1, AlreadyExists=2,
@@ -67,157 +67,13 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ^ @ IoErr { Other }
 }
 
-// Read until EOF, trusting no reported size.
-//
-// A file can report a length of zero and still have content: every
-// `/proc` and `/sys` entry does, and so do character devices and a FIFO
-// opened by name. Both size-first readers below would hand such a file
-// back as empty — silently, which is the worst way to be wrong — so
-// when the size comes out zero they come here instead. For a genuinely
-// empty regular file this costs one `fopen` and returns the same
-// nothing.
-@ __read_file_stream_pure s path → s {
-    ? == # i path 0 { ^ # s 0 } {}
-    : s fp ( fopen path `rb` )
-    ? == # i fp 0 { ^ # s 0 } {}
-    : ~ i cap 8192
-    : ~ s buf ( nurl_alloc + cap 1 )
-    ? == # i buf 0 {
-        : i32 _u ( fclose fp )
-        ^ # s 0
-    } {}
-    : ~ i got 0
-    : ~ b done F
-    : ~ b failed F
-    ~ ! done {
-        : i room - cap got
-        : i r ( fread # s # *u + # i buf got 1 room fp )
-        = got + got ? > r 0 r 0
-        ? < r room { = done T } {
-            = cap * cap 2
-            : s grown # s ( nurl_realloc # *u buf + cap 1 )
-            ? == # i grown 0 {
-                = done T
-                = failed T
-            } { = buf grown }
-        }
-    }
-    : i32 _u ( fclose fp )
-    ? failed {
-        ( nurl_free buf )
-        ^ # s 0
-    } {}
-    : *u bp # *u buf
-    = . bp got # u 0
-    ^ buf
-}
-
-// Win32 / WASI fallback for `read_file` — same fopen + fseek(SEEK_END)
-// + ftell + fread + fclose pattern the old `nurl_read_file_safe`
-// followed. Allocates exactly `len + 1` bytes (matches what
-// `string_from_take`'s cap expects) and writes a trailing NUL.
-@ __read_file_fread_pure s path → s {
-    ? == # i path 0 { ^ # s 0 } {}
-    : s fp ( fopen path `rb` )
-    ? == # i fp 0 { ^ # s 0 } {}
-    : i32 sr ( fseek fp 0 # i32 2 )
-    ? != sr # i32 0 {
-        : i32 _u ( fclose fp )
-        ^ # s 0
-    } {}
-    : i sz ( ftell fp )
-    ? <= sz 0 {
-        // Zero LENGTH is not zero CONTENT, and a failed tell says the
-        // same thing — see __read_file_stream_pure.
-        : i32 _u ( fclose fp )
-        ^ ( __read_file_stream_pure path )
-    } {}
-    : i32 _r ( fseek fp 0 # i32 0 )
-    : s buf ( nurl_alloc + sz 1 )
-    ? == # i buf 0 {
-        : i32 _u ( fclose fp )
-        ^ # s 0
-    } {}
-    : i got ? > sz 0 ( fread buf 1 sz fp ) 0
-    : i32 _u ( fclose fp )
-    : *u bp # *u buf
-    = . bp got # u 0
-    ^ buf
-}
-
-// Pure-NURL mmap-backed file read (PURIFY §4 batch 5). On POSIX the
-// kernel page-cache is mapped read-only into the process, sequential
-// access is hinted via `madvise(MADV_SEQUENTIAL)`, and the bytes are
-// copied into a malloc'd `nurl_alloc` buffer that the caller wraps
-// via `string_from_take` (no second copy). Returns 0 on any failure
-// — the gate `read_file` below classifies it via `nurl_errno_kind`.
-//
-// The size is learned via `lseek(fd, 0, SEEK_END)` rather than
-// `fstat(fd)` so the implementation doesn't need to know the
-// platform-specific `struct stat::st_size` offset. SEEK_END = 2 is
-// universal POSIX.
-@ __read_file_mmap_pure s path → s {
-    ? == # i path 0 { ^ # s 0 } {}
-    : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
-    ? < fd # i32 0 { ^ # s 0 } {}
-    : i sz ( lseek fd 0 # i32 2 )
-    // A seek that FAILS says the same thing a size of zero says here:
-    // the length is not knowable in advance. /proc entries answer both
-    // ways depending on the file.
-    ? <= sz 0 {
-        // Zero LENGTH is not zero CONTENT: /proc and /sys entries,
-        // character devices and named FIFOs all seek to zero and read
-        // fine. Nothing can be mmap'd from them, so stream instead.
-        : i _c ( close # i fd )
-        ^ ( __read_file_stream_pure path )
-    } {}
-    : *u m ( mmap # *u 0 sz
-    # i32 ( posix_const `PROT_READ` )
-    # i32 ( posix_const `MAP_PRIVATE` )
-    fd 0 )
-    : i _c ( close # i fd )
-    // MAP_FAILED = (void*)-1 on every supported target; check via ptrtoint.
-    ? == # i m -1 { ^ # s 0 } {}
-    // Best-effort read-ahead hint; ignore the return.
-    : i32 _mr ( madvise m sz # i32 ( posix_const `MADV_SEQUENTIAL` ) )
-    : s buf ( nurl_alloc + sz 1 )
-    ? == # i buf 0 {
-        : i32 _u ( munmap m sz )
-        ^ # s 0
-    } {}
-    ( memcpy # *u buf m sz )
-    : *u bp # *u buf
-    = . bp sz # u 0
-    : i32 _u ( munmap m sz )
-    ^ buf
-}
-
-// `raw` is either the malloc'd file contents (owned) or NULL on failure.
-// Cast to i64 to detect NULL — calling nurl_str_len on NULL would crash.
+// Text and binary reads share one EOF/error policy. Adopt the Vec control
+// block without copying; String retains the actual byte length, including NULs.
 @ read_file s path → !String IoErr {
-    // POSIX path: pure-NURL mmap → memcpy. Win32 / WASI use a
-    // fopen+fseek+fread fallback (also pure NURL) since
-    // `MAP_PRIVATE` is unavailable in `nurl_native_constant` there.
-    : ~ s raw # s 0
-    ? != ( posix_const `MAP_PRIVATE` ) -1 {
-        = raw # s ( __read_file_mmap_pure path )
-    } {
-        = raw ( __read_file_fread_pure path )
+    ?? ( read_file_bytes path ) {
+        T bytes → { ^ @ !String IoErr { T @ String { . bytes ctl } } }
+        F e → { ^ @ !String IoErr { F e } }
     }
-    : i p # i raw
-    ? == p 0 {
-        : IoErr e ( _io_err_of_kind ( errno_kind ) )
-        ^ @ !String IoErr { F e }
-    } {}
-    // Wrap the malloc'd buffer in a String WITHOUT copying. The
-    // buffer was allocated as `nurl_str_len raw + 1` (NUL pad),
-    // so cap = len + 1 matches the malloc size — `string_free`
-    // can `nurl_free` it correctly later. Saves ~33 ms / 100 MB
-    // vs the previous `string_from raw; nurl_free raw` path
-    // which copied every byte.
-    : i n ( nurl_str_len raw )
-    : String out ( string_from_take raw + n 1 )
-    ^ @ !String IoErr { T out }
 }
 
 // Always opens the file in binary mode (`wb`/`ab`). On POSIX this is a
@@ -745,37 +601,43 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 // and any other non-text payload. For UTF-8 text use read_file/write_file.
 //
 // Memory model: read_file_bytes returns an OWNED Vec[u]; the caller must
-// `( vec_free [u] v )` (or let auto-drop do so at scope exit). The
-// runtime buffer is freed inside read_file_bytes — callers never see it.
+// call `( vec_free [u] v )`. The
+// buffer has a spare NUL terminator while Vec length retains every input byte.
 // write_file_bytes BORROWS its byte buffer.
 
-// PURIFY (2026-05-24): read_file_bytes / write_file_bytes /
-// append_file_bytes now call fopen / fseek / ftell / fread / fwrite /
-// fclose directly via libc FFI — no more `nurl_read_file_bytes` /
-// `nurl_write_file_bytes` / `nurl_last_bytes_len` sideband in C.
-// fread writes into the Vec[u]'s data buffer directly; vec_set_len
-// records the actual byte count.
+// Buffered stdio bridge: retries interrupted reads, distinguishes I/O errors
+// from EOF, and preserves a prefix already read before an interruption.
+& `c` @ nurl_stream_read s stream *u dst i room → i
+
+& `c` @ fileno s stream → i32
+
+// File size is only a capacity hint from the opened regular file. Pipes,
+// procfs, growing files and short reads all use the same EOF-driven reader.
 @ read_file_bytes s path → !( Vec u ) IoErr {
+    ? == # i path 0 { ^ @ !( Vec u ) IoErr { F @ IoErr { Other } } } {}
     : s f # s ( fopen path `rb` )
     ? == # i f 0 {
         : IoErr e ( _io_err_of_kind ( errno_kind ) )
         ^ @ !( Vec u ) IoErr { F e }
     } {}
-    : i32 _e1 ( fseek f 0 # i32 2 )  // SEEK_END
-    : i sz ( ftell f )
-    : i32 _e2 ( fseek f 0 # i32 0 )  // SEEK_SET
-    ? < sz 0 {
-        : i32 _ ( fclose f )
-        : IoErr e ( _io_err_of_kind ( errno_kind ) )
-        ^ @ !( Vec u ) IoErr { F e }
-    } {}
-    : i cap_n ? > sz 0 sz 1
-    : ( Vec u ) v ( vec_with_cap [u] cap_n )
-    : *u dst ( vec_data [u] v )
-    : i got ? > sz 0 ( fread # s dst 1 sz f ) 0
-    : i32 _r ( fclose f )
-    : b _ok ( vec_set_len [u] v got )
-    ^ @ !( Vec u ) IoErr { T v }
+    : ~ i hint 4096
+    ?? ( fs_fstat # i ( fileno f ) ) {
+        T st → { ? & ( stat_is_file st ) > . st size 0 { = hint . st size } {} }
+        F _ → {}
+    }
+    : !( Vec u ) IoErr result ( read_to_end \ * u dst i room → i { ^ ( nurl_stream_read f dst room ) } hint )
+    : i32 closed ( fclose f )
+    : IoErr close_error ( _io_err_of_kind ( errno_kind ) )
+    ?? result {
+        F e → { ^ @ !( Vec u ) IoErr { F e } }
+        T bytes → {
+            ? != closed # i32 0 {
+                ( vec_free [u] bytes )
+                ^ @ !( Vec u ) IoErr { F close_error }
+            } {}
+            ^ @ !( Vec u ) IoErr { T bytes }
+        }
+    }
 }
 
 @ write_file_bytes s path ( Vec u ) v → !v IoErr {
@@ -1078,9 +940,11 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     } {}
     : ( Vec u ) out ( vec_with_cap [u] n )
     : *u dst ( vec_data [u] out )
-    : i got ( fread # s dst 1 n hp )
-    ? & == got 0 != 0 # i ( ferror hp ) {
-        ^ @ !( Vec u ) IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
+    : i got ( nurl_stream_read hp dst n )
+    ? < got 0 {
+        : IoErr e ( _io_err_of_kind ( errno_kind ) )
+        ( vec_free [u] out )
+        ^ @ !( Vec u ) IoErr { F e }
     } {}
     : b _ok ( vec_set_len [u] out got )
     ^ @ !( Vec u ) IoErr { T out }

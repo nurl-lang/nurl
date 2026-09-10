@@ -177,6 +177,7 @@ $ `stdlib/core/cell.nu`
 // nurl_read_line's stdio buffer so framed stdio protocols (LSP/DAP) can
 // read a header line with `read_line` (fgetc) then the body with
 // `read_n_bytes` without a buffered-vs-raw split losing body bytes.
+// Returns a byte count, zero at EOF, or -1 on failure. EINTR is retried.
 & `c` @ nurl_stdin_read *u buf i n → i
 
 // ── File descriptor / mmap primitives ─────────────────────────────

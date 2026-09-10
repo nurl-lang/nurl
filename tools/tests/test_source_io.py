@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Runtime source readers must preserve bytes and reject incomplete reads."""
 import os
+import platform
 from pathlib import Path
 import shutil
 import subprocess
@@ -19,12 +20,51 @@ class SourceIOTest(unittest.TestCase):
         cls.addClassCleanup(cls.tmp.cleanup)
         cls.root = Path(cls.tmp.name)
         probe = cls.root / 'probe.c'
-        probe.write_text('''#include <stdio.h>
+        probe.write_text('''#define _GNU_SOURCE
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+extern long long nurl_stream_read(void *, void *, long long);
 extern const char *nurl_read_stdin(void);
 extern const char *nurl_read_file(const char *path);
+#ifdef __GLIBC__
+struct input { int calls; int fail; size_t prefix; };
+static ssize_t cookie_read(void *raw, char *buf, size_t count) {
+    struct input *in = raw;
+    switch (in->calls++) {
+    case 0:
+        if (count < in->prefix) abort();
+        memset(buf, 'x', in->prefix);
+        return in->prefix;
+    case 1: errno = in->fail ? EIO : EINTR; return -1;
+    case 2: memcpy(buf, "tail", 4); return 4;
+    default: return 0;
+    }
+}
+#endif
 int main(int argc, char **argv) {
+#ifdef __GLIBC__
+    if (argc == 5 && strcmp(argv[1], "--cookie") == 0) {
+        struct input in = {0, atoi(argv[3]), (size_t)atoi(argv[4])};
+        cookie_io_functions_t ops = {.read = cookie_read};
+        FILE *stream = fopencookie(&in, "r", ops);
+        if (!stream) return 3;
+        if (strcmp(argv[2], "source") == 0) {
+            stdin = stream;
+            char *text = (char *)nurl_read_stdin();
+            fwrite(text, 1, strlen(text), stdout);
+            free(text);
+        } else {
+            char buf[8192];
+            long long got = nurl_stream_read(stream, buf, sizeof(buf));
+            if (got < 0) { fclose(stream); return 2; }
+            fwrite(buf, 1, (size_t)got, stdout);
+        }
+        fclose(stream);
+        return 0;
+    }
+#endif
     char *text = (char *)(argc == 1 ? nurl_read_stdin() : nurl_read_file(argv[1]));
     size_t length = strlen(text);
     int failed = fwrite(text, 1, length, stdout) != length;
@@ -85,6 +125,21 @@ int main(int argc, char **argv) {
             self.assertEqual(run.stdout, b'')
             self.assertIn(b'cannot read', run.stderr)
             self.assertNotIn(b'AddressSanitizer', run.stderr)
+
+    @unittest.skipUnless(platform.libc_ver()[0] == 'glibc', 'glibc stdio fault injection')
+    def test_partial_eintr_is_retried_but_io_errors_are_rejected(self):
+        # The cookie makes fread deliver a prefix then fail. 4096 places
+        # that failure in the source reader's one-byte capacity lookahead.
+        for reader in ['source', 'stream']:
+            for prefix in [3, 4096]:
+                with self.subTest(reader=reader, prefix=prefix):
+                    retry = self.run_probe('--cookie', reader, '0', prefix)
+                    self.assertEqual((retry.returncode, retry.stdout, retry.stderr),
+                                     (0, b'x' * prefix + b'tail', b''))
+                    failure = self.run_probe('--cookie', reader, '1', prefix)
+                    self.assertNotEqual(failure.returncode, 0)
+                    self.assertEqual(failure.stdout, b'')
+                    self.assertNotIn(b'Sanitizer', failure.stderr)
 
     @unittest.skipUnless(Path('/proc/version').exists(), 'Linux procfs control')
     def test_zero_reported_size_can_have_content(self):

@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Formatter ownership and failure handling are explicit.** Token cleanup
+  releases source slices while preserving the borrowed EOF sentinel. Every
+  CLI path frees arguments, source and output, and the reusable formatter can
+  run repeatedly without leaking. `--check` validates stdin without emitting
+  source; incompatible/unknown flags, unreadable input and embedded NUL bytes
+  return errors. Canonical files are not rewritten.
+- **Library text and binary reads share checked stream handling.**
+  `read_file`, `read_file_bytes` and the new fallible `read_stdin` preserve
+  actual byte lengths, grow geometrically and distinguish read errors from
+  EOF. Interrupted reads retain their prefix and retry. Buffered stdin stays
+  coherent after `read_line`; infallible convenience readers panic on failure.
+  The previous mmap/seek/reopen fallbacks are removed; regular-file sizes are
+  capacity hints. Streaming chunk reads also free buffers on error.
+
 - **LSP diagnostics work outside the compiler checkout.** Tool paths are
   configurable, installed companion binaries and stdlib are discovered, and
   execution failures are visible. The new compiler `--stdin` mode preserves

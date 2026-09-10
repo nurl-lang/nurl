@@ -11,7 +11,7 @@ in reviewable groups. No item below certifies the whole language or ecosystem.
 | A01: sanitizer coverage | Ordinary driver, bootstrap, split output and fuzz paths detect deliberate memory faults in generated code; clean controls, corpus and fuzz pass; UBSan/LLVM semantics documented | ASan emission implemented and calibrated; revealed HTTP/3 UAF and compiler leaks repaired; lexical stack-lifetime, rejected-compilation cleanup and arithmetic work remains open |
 | A02: trustworthy compiler runners | Missing-main rejection fixtures run; crash/hang/worker fault controls fail closed; complete corpus verdict accounting | Verified in local normal/sanitized corpus and POSIX/PowerShell controls; native Windows execution remains CI evidence |
 | A03: installed LSP | Separate installed project, unsaved edits, sibling/dependency imports, visible execution errors | Independently reproduced; repaired and verified with relocated binaries and 20 normal/ASan protocol/compiler controls on Linux; native Windows and actual distribution installation remain unverified |
-| A04: registry identity | Two local registries with equal package names; fetch, resolution, signing and lock identity preserved; errors never print success | Pending reproduction |
+| A04: registry identity | Two local registries with equal package names; fetch, resolution, signing and lock identity preserved; errors never print success | Explicit-registry lookup and false success independently reproduced; repair and full identity controls pending |
 | A05: signed install smoke | Signed fixtures install after relocation with transitive dependencies; missing/wrong/tampered signatures reject; CI runs it | Pending reproduction |
 | A06: JS dependencies | Fresh manager-native audits, reachability analysis, lockfile updates and builds/tests for all four trees; recurring checks | Pending fresh advisory evidence |
 | A07: continuous package/service tests | Suite/prerequisite manifest, changed packages and reverse dependencies, scheduled coverage; registry/cloud and diagnostic gates in CI | Pending current workflow inventory |
@@ -241,8 +241,9 @@ synchronous subprocess API's missing timeout also remain separate follow-up
 work. A03/A12 progress does not certify all editor features or all platforms.
 
 An instrumented `nurlfmt --check tools/nurl-lsp/main.nu` additionally reported
-721,951 bytes in 13,324 allocations at exit. Formatter ownership cleanup is
-open alongside compiler rejection cleanup. The initial report appeared to hang
+721,951 bytes in 13,324 allocations at exit. Formatter ownership cleanup was
+open at this point; the follow-up below addresses it. Compiler rejection cleanup
+remains open. The initial report appeared to hang
 because llvm-symbolizer attempted remote debuginfod lookups; resolving the same
 local address with `DEBUGINFOD_URLS=` returned immediately. The new tests disable
 optional remote debug downloads while retaining local symbolization; they do
@@ -253,3 +254,96 @@ Final confirmation for this change set: normal bootstrap/corpus passed again
 records, 961 PASS and 19 SKIP with no failures. The final server passed all 20
 controls in both normal and ASan builds, plus the rename smoke. Self-compile
 peak RSS was 26 MB and the DCE gate passed. The remaining items above stay open.
+
+## Formatter ownership and shared stream reads
+
+The formatter's leak comment was an incorrect diagnosis, not a design
+constraint. A private control that re-enabled the old `tokens_free` crashed
+under ASan even on empty input: its EOF token points at a static empty literal.
+Skipping that sentinel released all real token slices without a double free.
+Remaining leaks came from the input String and manually owned argument copies;
+the CLI now adopts path buffers, frees flag buffers and releases every String
+and path vector. The reusable `format.nu` entry point frees its token vector
+on each invocation. No compiler-wide ownership exception was added.
+
+Independent controls also found that `--check --stdin` emitted source and
+ignored the check, a directory read could appear to be valid empty input, and
+an embedded NUL could discard the source suffix. These now fail or validate
+according to the documented CLI contract, before any in-place write.
+
+Rather than special-case those inputs in the formatter, library text and byte
+reads share `read_to_end`: the opened regular-file size is only a hint, short
+positive reads remain data, zero means EOF and negative results mean failure.
+The runtime stdio bridge retries EINTR without losing an already-read prefix;
+other errors cannot become successful partial reads. Text adopts the Vec's
+terminated buffer without copying and retains its byte length. The previous
+mmap/seek/reopen fallbacks were removed. Stdin uses the same FILE buffer as
+`read_line`, preventing loss of prefetched body bytes; convenience readers
+panic on I/O failure and `read_stdin` exposes a recoverable Result. Chunk reads
+release their allocation on error. The nolibc twin supplies `clearerr` too.
+
+Focused controls:
+
+```sh
+python3 tools/tests/test_formatter.py
+NURL_SAN=1 NURLFMT="$PWD/build/v1-hardening/nurlfmt-cleanup-san" python3 tools/tests/test_formatter.py
+python3 tools/tests/test_source_io.py
+python3 tools/tests/test_stream_io.py
+```
+
+The formatter suite covers every CLI mode, unchanged-file writes, multiple
+files, read/write errors, invalid options, NUL input, large sources and 1,000
+calls in one process. Runtime fault injection makes `fread` return a prefix
+then EINTR or EIO, including the source reader's capacity lookahead. Library
+controls cover short reads, invalid reader counts, all capacity boundaries,
+embedded NULs, line-header/body mixing, named pipes, procfs and errors. They
+assert clean sanitizer output even for expected nonzero exits; no leak
+suppression is used. These are local Linux results, not native Windows proof.
+Run the compiler-dependent suites after bootstrap finishes: building at the
+same time removes `build/nurlc`, allowing the driver to find an older installed
+compiler. The probe's instrumentation assertion correctly rejected that run.
+
+A local five-sample, alternating-order comparison against the previous text
+reader measured 10,000 reads of 4 KiB at median 95 ms before / 56 ms after.
+Twenty reads of 32 MiB measured 427 ms / 345 ms, with peak process RSS 66,896 /
+34,264 KiB. Data was page-cache resident; this is evidence on this host, not a
+cross-platform throughput claim. Inputs, benchmark programs and samples are
+retained in `build/v1-hardening/read-benchmark/`.
+
+**Separate open evidence:** `( read_file_bytes ( nurl_argv 1 ) )` leaks the
+anonymous owned argument even when the returned Vec is released. The compiler
+conservatively retains argument temporaries for aggregate-returning consumers
+without a proven ownership summary. A minimized ASan witness is retained in
+`build/v1-hardening/aggregate-argument-leak/`. Named bindings in the stream
+probe make its own ownership explicit; they do not close this compiler gap.
+General temporary/sink/return ownership remains part of A01/A13, alongside
+rejected-compilation cleanup. Formatter success is not whole-toolchain closure.
+
+Final validation for the formatter/stream change: normal bootstrap and corpus
+passed (42 s build, 2 m 21 s corpus); the sanitized bootstrap passed in 68 s.
+Both corpora have 980 records, 961 PASS and 19 SKIP, with zero failures or
+timeouts. All 11 formatter controls pass in normal and fully instrumented
+builds with leak detection enabled. Five runtime source-reader controls and
+six NURL stream controls pass under ASan/UBSan/LSan. All 20 LSP controls pass
+in both builds; successful stdin self-compilation and all six compiler leak
+gate cases pass with zero leaks. Modified formatter/library sources pass
+idempotence and IR-equivalence checks (the tokenizer helper retains the gate's
+existing standalone-IR exclusion). The nolibc symbol gate covers all 69
+required symbols, and the builtin documentation gate covers all 119 entries.
+The results do not close the separately listed ownership, platform or registry
+issues. Per-suite logs and complete corpus verdicts are under
+`build/v1-hardening/formatter-*` and `build/v1-hardening/stream-*`.
+
+## A04 independent reproduction
+
+A new loopback HTTP fixture gives the project default registry `/a/` and its
+`foo` dependency an explicit `/b/` registry. The current CLI requests only
+`/a/index/foo.json`, exits 1 with `ResolveNotFound`, and still prints
+`identity-probe 0.1.0: dependencies installed`. This reproduces both claims
+without relying on the audit's output. The fixture serves a package index at
+`/b/index/foo.json`; no archive is installed. Source inspection also confirms
+that the resolver's fetch callback accepts only a name, while constraint and
+index-cache lookup keys omit the registry. The complete identity/signing/lock
+repair remains open. Script and captured requests/output are retained as
+`build/v1-hardening/registry-identity-probe.py` and
+`build/v1-hardening/registry-identity-independent.json`.
