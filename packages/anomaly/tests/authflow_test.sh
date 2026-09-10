@@ -520,21 +520,38 @@ assert r["isError"] is False, r
 d = json.loads(r["content"][0]["text"])
 assert d["model_name"] == "mine" and d["points_stored"] == 3 and d["stored"] is True, d
 PYX
-call "$AH" label_anomaly '{"model":"history","index":3,"label":"false_positive","note":"maintenance"}' > "$WORK/alab.json"
-python3 - "$WORK/alab.json" <<'PYX' && ok "an admin labels a row, and the label names the admin" || bad "admin label_anomaly"
+# A false positive is a verdict disputed, so it needs a row the model
+# actually flags: the service refuses the label anywhere else, which is
+# what stops a reader quietly taking rows out of calibration.
+call "$AH" label_anomaly '{"model":"history","index":3,"label":"false_positive","note":"maintenance"}' > "$WORK/alabx.json"
+python3 - "$WORK/alabx.json" <<'PYX' && ok "false_positive on a row nobody flagged is refused" || bad "admin label_anomaly on an unflagged row"
+import json, sys
+r = json.load(open(sys.argv[1]))["result"]
+assert r["isError"] is True, r
+assert "not flagged" in r["content"][0]["text"], r
+PYX
+call "$AH" anomalies '{"model":"history","last":"all","count":1}' > "$WORK/aan.json"
+FLAGGED=$(python3 - "$WORK/aan.json" <<'PYX'
+import json, sys
+d = json.loads(json.load(open(sys.argv[1]))["result"]["content"][0]["text"])
+print(d["rows"][0]["index"])
+PYX
+)
+call "$AH" label_anomaly "{\"model\":\"history\",\"index\":$FLAGGED,\"label\":\"false_positive\",\"note\":\"maintenance\"}" > "$WORK/alab.json"
+python3 - "$WORK/alab.json" "$FLAGGED" <<'PYX' && ok "an admin labels a flagged row, and the label names the admin" || bad "admin label_anomaly"
 import json, sys
 r = json.load(open(sys.argv[1]))["result"]
 assert r["isError"] is False, r
 d = json.loads(r["content"][0]["text"])
-assert d["index"] == 3 and d["label"] == "false_positive" and d["note"] == "maintenance", d
+assert d["index"] == int(sys.argv[2]) and d["label"] == "false_positive" and d["note"] == "maintenance", d
 assert d["by"] and "at" in d and "time" in d, d
 PYX
 call "$AH" labels '{"model":"history"}' > "$WORK/alabs.json"
-python3 - "$WORK/alabs.json" <<'PYX' && ok "and the label is listed" || bad "admin labels"
+python3 - "$WORK/alabs.json" "$FLAGGED" <<'PYX' && ok "and the label is listed" || bad "admin labels"
 import json, sys
 r = json.load(open(sys.argv[1]))["result"]
 d = json.loads(r["content"][0]["text"])
-assert d["count"] == 1 and d["false_positives"] == 1 and d["labels"][0]["index"] == 3, d
+assert d["count"] == 1 and d["false_positives"] == 1 and d["labels"][0]["index"] == int(sys.argv[2]), d
 PYX
 
 echo "== anomaly auth flow: PASS=$PASS FAIL=$FAIL"

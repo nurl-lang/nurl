@@ -108,6 +108,12 @@ $ `src/store.nu`
 : ~ s g_an_action `set_margin`
 : i ANOM_ACTOR_MAX 200
 
+// The share of a window a margin aims to flag when the service, rather
+// than a person, sets it: a file import's first calibration, a data
+// source's first run, the forecast version's first fit, `finetune` with
+// no rate given.
+: f ANOM_FT_RATE 0.01
+
 // The actor is copied into a buffer allocated once for the process (the
 // caller's string lives only as long as its request; a long name is
 // cut). The action is always a literal and is kept as given.
@@ -120,7 +126,7 @@ $ `src/store.nu`
     = . bp n # u 0
 }
 
-@ __an_set_action s what → v {
+@ _an_set_action s what → v {
     = g_an_action what
 }
 
@@ -382,6 +388,23 @@ $ `src/store.nu`
     : i np ( vec_len [i] . mo times )
     ? > np 0 { ?? ( vec_get [i] . mo times - np 1 ) { T x → { ^ x } F _ → {} } } {}
     ^ 0
+}
+
+// The oldest stored stamp, 0 for an empty ring.
+@ model_first_ts * Model mo → i {
+    ?? ( vec_get [i] . mo times 0 ) { T x → { ^ x } F _ → {} }
+    ^ 0
+}
+
+// A window as a reader must be able to read it: an unbounded end is the
+// newest stored point and an unbounded start the oldest, never a `null`
+// that says "no end" where the answer is "the end of the data". Both
+// bounds are the ones the rows were actually taken between.
+@ model_window_bounds * Model mo i from_ts i to_ts → ( Vec i ) {
+    : ( Vec i ) w ( vec_new [i] )
+    ( vec_push [i] w ? > from_ts 0 from_ts ( model_first_ts mo ) )
+    ( vec_push [i] w ? > to_ts 0 to_ts ( model_last_ts mo ) )
+    ^ w
 }
 
 // The tick the NEXT point gets on the count clock: one past the newest.
@@ -1307,6 +1330,20 @@ $ `src/store.nu`
 // the 80 % and 95 % intervals, the time of each step (the newest stored
 // time plus the ring's step, or the row number on a count clock), and
 // each feature's fitted model.
+// The season, said so a reader cannot mistake what is modelled for what
+// was offered: the period in rows, and how many of the fitted models use
+// it. `season: 144` beside ARIMA(0,1,0) with s = 0 is not a daily rhythm
+// being watched — it is the number the search was given and every
+// feature declined.
+@ _an_fc_season_json * FcModel fc Json o → v {
+    ( json_obj_set o `season` ( json_int . fc season ) )
+    : i used ( fc_seasonal_count fc )
+    ( json_obj_set o `seasonal_features` ( json_int used ) )
+    ? & > . fc season 0 == used 0 {
+        ( json_obj_set o `season_note` ( json_str_lit `season is the period the order search was offered, in rows; no feature's chosen form uses it (see "selected" per feature), so nothing here models a cycle of that length. train_forecast {season: N} offers a different one, -1 none at all.` ) )
+    } {}
+}
+
 @ model_forecast_json * Model mo i h → Json {
     ( model_forecast_sync mo )
     : *FcModel fc . mo fc
@@ -1314,7 +1351,7 @@ $ `src/store.nu`
     : FcForecast ff ( fc_forecast fc h )
     : Json o ( json_obj_new )
     ( json_obj_set o `horizon` ( json_int h ) )
-    ( json_obj_set o `season` ( json_int . fc season ) )
+    ( _an_fc_season_json fc o )
     ( json_obj_set o `points_absorbed` ( json_int . fc pos ) )
     ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm ANOM_FC_NAME F ) ) )
     ( json_obj_set o `clock` ( json_str_lit ? . mm count_clock `count` `time` ) )
@@ -1375,6 +1412,7 @@ $ `src/store.nu`
             }
             F _ → {}
         }
+        ( json_obj_set fo `selected` ( json_str_lit ( fc_selected_of fc j ) ) )
         ( json_obj_set fo `model` ( arima_coef ( _fc_model_at fc j ) ) )
         ( json_arr_push fa fo )
         = j + j 1
@@ -1410,7 +1448,7 @@ $ `src/store.nu`
     ( vec_free [f] noz )
     : Json o ( json_obj_new )
     ( json_obj_set o `horizon` ( json_int h ) )
-    ( json_obj_set o `season` ( json_int . fc season ) )
+    ( _an_fc_season_json fc o )
     ( json_obj_set o `origin` ( json_int at ) )
     ( json_obj_set o `clock` ( json_str_lit ? . mm count_clock `count` `time` ) )
     : i step ( model_step mo )
@@ -1657,6 +1695,19 @@ $ `src/store.nu`
     ( vec_free [i] ets )
     ? > nw 0 {} { ^ ( string_from `no feature to forecast: a watched feature is a numeric column with at least 30 present, not all equal readings in the fit window` ) }
     : b _on ( model_set_version_enabled mo ANOM_FC_NAME T )
+    // The default margin is a sigma count, and it is a sigma count of the
+    // model's OWN standard errors — which an ARIMA reports from the fit
+    // and which a backtest routinely finds optimistic (a 95 % interval
+    // covering 75 % of what followed). Judging a stream at four of those
+    // is not "four sigma", it is "however loud this model's optimism
+    // makes it", and on a real feed that was a version flagging several
+    // percent of every window from the moment it was switched on. So the
+    // first fit measures instead: the margin becomes the one that flags
+    // ANOM_FT_RATE of the stored rows, in the version's own units, exactly
+    // as a file import calibrates the forests it has just trained. A
+    // margin a reader has already moved is left alone — only the untouched
+    // default is a placeholder.
+    ( _an_fc_autotune mo )
     ^ ( string_new )
 }
 
@@ -2009,7 +2060,7 @@ $ `src/store.nu`
 }
 
 // The configured window, in rows.
-@ __an_flat_window * Meta mm → i {
+@ _an_flat_window * Meta mm → i {
     : i at ( meta_find_version mm ANOM_FLAT_NAME )
     ? >= at 0 {
         ?? ( vec_get [VerCfg] . mm versions at ) {
@@ -2030,13 +2081,17 @@ $ `src/store.nu`
 }
 
 // Fit the references from the standardised training matrix: per watched
-// feature, the longest run of identical values, and the
-// ANOM_FLAT_QUANTILE-th quantile of the window standard deviations (the
-// stream's own quiet periods). A feature that is not a numeric column, or
-// a ring shorter than the window, gets -1: not watched.
+// feature, the run length its rows reach (the ANOM_FLAT_RUN_Q quantile of
+// the run each ROW belongs to, so one freeze among thousands of rows
+// barely moves it while a column that sits still for most of the ring
+// moves it all the way), and the ANOM_FLAT_SD_Q-th quantile of the window
+// standard deviations (the stream's own quiet periods). A feature that is
+// not a numeric column, a ring shorter than the window, or a column whose
+// reference run is longer than the guard can look back gets -1: not
+// watched.
 @ __an_flat_fit * Model mo ( Vec f ) big i n i nfeat → v {
     : *Meta mm . mo meta
-    : i W ( __an_flat_window mm )
+    : i W ( _an_flat_window mm )
     : ( Vec i ) mask ( meta_numeric_feat_mask mm )
     : ( Vec f ) runs ( vec_with_cap [f] nfeat )
     : ( Vec f ) sds ( vec_with_cap [f] nfeat )
@@ -2048,15 +2103,41 @@ $ `src/store.nu`
             ( vec_push [f] runs -1.0 )
             ( vec_push [f] sds -1.0 )
         } {
-            : ~ i best 1
+            // Each maximal run of L identical values votes min(L, cap)
+            // times: longer runs weigh more (a rain gauge's dry stretches
+            // ARE its normal), but no single stretch outvotes the rest of
+            // the ring, so one freeze in the training data cannot set the
+            // reference it would then be measured against.
+            : ~ i cap # i ( float_ceil * ANOM_FLAT_RUN_CAP # f n )
+            ? < cap 1 { = cap 1 } {}
+            : ( Vec f ) rl ( vec_with_cap [f] n )
             : ~ i run 1
             : ~ i r 1
             ~ < r n {
-                ? == . bp + * r nfeat j . bp + * - r 1 nfeat j { = run + run 1 } { = run 1 }
-                ? > run best { = best run } {}
+                ? == . bp + * r nfeat j . bp + * - r 1 nfeat j { = run + run 1 } {
+                    : ~ i w ? < run cap run cap
+                    : ~ i q 0
+                    ~ < q w { ( vec_push [f] rl # f run ) = q + q 1 }
+                    = run 1
+                }
                 = r + r 1
             }
-            ( vec_push [f] runs # f best )
+            : ~ i w2 ? < run cap run cap
+            : ~ i q2 0
+            ~ < q2 w2 { ( vec_push [f] rl # f run ) = q2 + q2 1 }
+            ( sort_by [f] rl \ f a f b → i {
+                ? < a b { ^ -1 } {}
+                ? > a b { ^ 1 } {}
+                ^ 0
+            } )
+            : ~ f refrun ( _an_percentile rl ANOM_FLAT_RUN_Q )
+            ( vec_free [f] rl )
+            ? < refrun 1.0 { = refrun 1.0 } {}
+            // A column whose own reference already fills the guard's
+            // look-back is a constant, not a sensor to watch: watching it
+            // would mean a bar the run can never reach.
+            ? > * 2.0 refrun # f ANOM_FLAT_TAIL_MAX { = refrun -1.0 } {}
+            ( vec_push [f] runs refrun )
             // Window stds by a sliding sum; the values are standardised,
             // so the sums do not cancel badly.
             : ( Vec f ) wsd ( vec_with_cap [f] + - n W 1 )
@@ -2085,7 +2166,7 @@ $ `src/store.nu`
                 ? > a b { ^ 1 } {}
                 ^ 0
             } )
-            ( vec_push [f] sds ( _an_percentile wsd ANOM_FLAT_QUANTILE ) )
+            ( vec_push [f] sds ( _an_percentile wsd ANOM_FLAT_SD_Q ) )
             ( vec_free [f] wsd )
         }
         = j + j 1
@@ -2097,60 +2178,96 @@ $ `src/store.nu`
     = . mm flat_sd sds
 }
 
+// The run length a feature's reference asks for: twice what its training
+// rows reached, never under ANOM_FLAT_MIN_RUN. −1 for a feature that is
+// not watched. The margin is read against THIS, so one number (0.9) means
+// the same thing on a column quantised to whole degrees and on a smooth
+// one beside it.
+@ _an_flat_ref_len * Meta mm i j → f {
+    : ( Vec f ) rr . mm flat_run
+    ? < j ( vec_len [f] rr ) {} { ^ -1.0 }
+    : f r ( _fc_getf rr j )
+    ? < r 0.0 { ^ -1.0 } {}
+    : ~ f len * 2.0 r
+    ? < len # f ANOM_FLAT_MIN_RUN { = len # f ANOM_FLAT_MIN_RUN } {}
+    ^ len
+}
+
+// How far back the guard must look: the collapse window, and enough rows
+// for the longest reference run to be reached (so no watched column has a
+// bar its run can never touch). Bounded by the same cap the fit used to
+// decide what is watchable at all.
+@ _an_flat_need * Meta mm → i {
+    : i W ( _an_flat_window mm )
+    : ~ i need W
+    : i nf ( vec_len [f] . mm flat_run )
+    : ~ i j 0
+    ~ < j nf {
+        : f len ( _an_flat_ref_len mm j )
+        ? > len 0.0 {
+            : i want + # i ( float_ceil len ) 1
+            ? > want need { = need want } {}
+        } {}
+        = j + j 1
+    }
+    ? & > need ANOM_FLAT_TAIL_MAX > ANOM_FLAT_TAIL_MAX W { = need ANOM_FLAT_TAIL_MAX } {}
+    ^ need
+}
+
 // Judge the standardised point `x` at ring position `end` (exclusive) —
-// the window is the W−1 rows before it plus the point itself. Per watched
-// feature: the run of values identical to this one, as a fraction of
-// max(W, 2·reference run), and — when the window is not one value
-// throughout — its std collapse below the reference, 1 − sd/ref (0 when
-// the reference is 0: a column that never moved in training is not
-// expected to). The larger of the two, over the features, is the
-// verdict's fraction.
+// the look-back is the N−1 rows before it plus the point itself, N wide
+// enough for both rules. Per watched feature: the run of values identical
+// to this one, as a fraction of the feature's own reference run
+// (_an_flat_ref_len), and — when the window is not one value throughout
+// — its std collapse below the reference, 1 − sd/ref (0 when the
+// reference is 0: a column that never moved in training is not expected
+// to). The larger of the two, over the features, is the verdict's
+// fraction. The collapse rule reads the newest W rows of the look-back.
 @ __an_flat_judge * Model mo ( Vec f ) x i end * Hist h → FlatOut {
     : *Meta mm . mo meta
     ? ( __an_flat_fitted mo ) {} { ^ @ FlatOut { F 0.0 -1 } }
     : i nfeat ( vec_len [String] . mm feats )
-    : i W ( __an_flat_window mm )
-    ?? ( __an_tail_for mo h - W 1 end ) {
+    : i W ( _an_flat_window mm )
+    : i N ( _an_flat_need mm )
+    ?? ( __an_tail_for mo h - N 1 end ) {
         T tail → {
-            ? == ( vec_len [f] tail ) * - W 1 nfeat {} {
+            ? == ( vec_len [f] tail ) * - N 1 nfeat {} {
                 ( vec_free [f] tail )
                 ^ @ FlatOut { F 0.0 -1 }
             }
             : *f tp ( vec_data [f] tail )
             : *f xp ( vec_data [f] x )
-            : *f rrp ( vec_data [f] . mm flat_run )
             : *f rsp ( vec_data [f] . mm flat_sd )
             : ~ f worst 0.0
             : ~ i wf -1
             : ~ i j 0
             ~ < j nfeat {
-                ? < . rrp j 0.0 {} {
+                : f ref_run ( _an_flat_ref_len mm j )
+                ? < ref_run 0.0 {} {
                     : f cur . xp j
                     : ~ i run 1
                     : ~ b same T
-                    : ~ i r - W 2
+                    : ~ i r - N 2
                     ~ & same >= r 0 {
                         ? == . tp + * r nfeat j cur { = run + run 1 } { = same F }
                         = r - r 1
                     }
-                    : ~ f ref_run * 2.0 . rrp j
-                    ? < ref_run # f W { = ref_run # f W } {}
                     : ~ f frac / # f run ref_run
                     // The collapse rule is for the sensor that hangs
                     // with dither; a window that is one value throughout
                     // is the run rule's case alone, so a column that sat
                     // flat in training (a rain gauge) answers to its own
                     // reference run and not to a spread of zero.
-                    : f ref_sd . rsp j
+                    : f ref_sd ( _fc_getf . mm flat_sd j )
                     ? & > ref_sd 0.0 < run W {
                         : ~ f sum cur
                         : ~ f sq * cur cur
-                        = r 0
-                        ~ < r - W 1 {
+                        = r - N 1
+                        ~ > r - N W {
+                            = r - r 1
                             : f v . tp + * r nfeat j
                             = sum + sum v
                             = sq + sq * v v
-                            = r + r 1
                         }
                         : f mean / sum # f W
                         : ~ f var - / sq # f W * mean mean
@@ -2355,6 +2472,16 @@ $ `src/store.nu`
             ( string_push_str e ( string_data names ) )
             ( string_push_str e `. A point to score carries every column the model knows; columns it does not know are ignored.` )
             ( string_free names )
+            : ( Vec String ) nulls ( anomaly_null_cols . mo meta raw miss )
+            ? > ( vec_len [String] nulls ) 0 {
+                : String nn ( string_join nulls `, ` )
+                ( string_push_str e ` ` )
+                ( string_push_str e ( string_data nn ) )
+                ? > ( vec_len [String] nulls ) 1 { ( string_push_str e ` were given as null` ) } { ( string_push_str e ` was given as null` ) }
+                ( string_push_str e `, and a null is not a reading — send a number, or leave the column out of an ingest (where a gap is scored as the training mean and listed under "missing").` )
+                ( string_free nn )
+            } {}
+            ( vec_free_with [String] nulls \ String x → v { ( string_free x ) } )
             ( vec_free_with [String] miss \ String x → v { ( string_free x ) } )
             ^ @ !Verdict String { F e }
         } {}
@@ -2930,12 +3057,24 @@ $ `src/store.nu`
 // until the data left its range — and stays untuned, so the run that
 // brings enough rows calibrates.
 // Returns whether it tuned (F when already tuned, untrained, rate ≤ 0,
-// or the ring too small for the rate).
+// or the ring too small for the rate). `model_autotune_why` gives the
+// same answer in words: "calibrated: false" with nothing beside it left a
+// reader to guess between four different situations, one of which
+// (already tuned) is the normal case and none of which is an error.
+@ model_autotune_why * Model mo f rate → s {
+    : *Meta mm . mo meta
+    ? > rate 0.0 {} { ^ `the caller asked for no calibration (rate 0)` }
+    ? ( model_is_trained mo ) {} { ^ `the model has not trained yet — too few points; the run that brings enough calibrates` }
+    ? == . mm tuned_at 0 {} { ^ `the margins were set once already, by an earlier import, a fine-tune or an edit; a calibration repeated on every import would fold real anomalies into the target rate. finetune {rate: 0.01} sets them again from the history as it now stands` }
+    ? >= * rate # f ( vec_len [String] . mo lines ) 1.0 {} { ^ `the history is too short for the rate to flag even one row; the import that brings enough rows calibrates` }
+    ^ ``
+}
+
 @ model_autotune_at * Model mo f rate i now → b {
     : *Meta mm . mo meta
     ? & & > rate 0.0 == . mm tuned_at 0 ( model_is_trained mo ) {} { ^ F }
     ? >= * rate # f ( vec_len [String] . mo lines ) 1.0 {} { ^ F }
-    ( __an_set_action `autotune` )
+    ( _an_set_action `autotune` )
     : ( Vec String ) none ( vec_new [String] )
     : FineTuneReport ft ( model_finetune_at mo rate 0 0 T none )
     ( finetune_free ft )
@@ -2943,6 +3082,21 @@ $ `src/store.nu`
     = . mm tuned_at now
     ( store_save_meta . mo store ( string_data . mo mname ) mm )
     ^ T
+}
+
+// The forecast version's first margin, measured rather than assumed (see
+// model_train_forecast_at). Lives here because it needs FineTuneReport,
+// which is declared with the fine-tune machinery below.
+@ _an_fc_autotune * Model mo → v {
+    : *Meta mm . mo meta
+    ? == ( f64_to_bits ( meta_version_margin mm ANOM_FC_NAME ANOM_FC_SIGMA ) ) ( f64_to_bits ANOM_FC_SIGMA ) {} { ^ }
+    ? >= * ANOM_FT_RATE # f ( vec_len [String] . mo lines ) 1.0 {} { ^ }
+    ( _an_set_action `autotune` )
+    : ( Vec String ) only ( vec_new [String] )
+    ( vec_push [String] only ( string_from ANOM_FC_NAME ) )
+    : FineTuneReport ft ( model_finetune_at mo ANOM_FT_RATE 0 0 T only )
+    ( finetune_free ft )
+    ( vec_free_with [String] only \ String x → v { ( string_free x ) } )
 }
 
 @ finetune_free FineTuneReport rep → v {
@@ -2959,7 +3113,7 @@ $ `src/store.nu`
 // is a fraction with a fixed meaning (SPEC §5.4), and a stuck sensor is
 // not a 1 % property of a window — set it with the version editor.
 @ model_finetune_at * Model mo f rate i from_ts i to_ts b apply ( Vec String ) only → FineTuneReport {
-    ? apply { ( __an_set_action ? == ( nurl_str_eq g_an_action `autotune` ) 1 `autotune` `finetune` ) } {}
+    ? apply { ( _an_set_action ? == ( nurl_str_eq g_an_action `autotune` ) 1 `autotune` `finetune` ) } {}
     : ( Vec FtVer ) items ( vec_new [FtVer] )
     : CalReport cal ( model_calibrate mo from_ts to_ts )
     : i ni ( vec_len [CalVer] . cal items )
@@ -3033,7 +3187,7 @@ $ `src/store.nu`
     : i nr . cal n_rows
     : i nex . cal excluded
     ( cal_free cal )
-    ( __an_set_action `set_margin` )
+    ( _an_set_action `set_margin` )
     ^ @ FineTuneReport { items rate from_ts to_ts nr apply nex }
 }
 
@@ -3197,8 +3351,8 @@ $ `src/store.nu`
     }
 }
 
-// The one-call form: 1 % of the last 24 hours, applied to every version.
-: f ANOM_FT_RATE 0.01
+// The one-call form: 1 % of the last 24 hours, applied to every version
+// (ANOM_FT_RATE, declared with the other tuning constants above).
 
 // A `last` as a caller says it — seconds on a time clock, points on a count
 // clock — as the span model_window_from_last takes. N points back from the
@@ -3447,6 +3601,27 @@ $ `src/store.nu`
 @ scan_free ScanOut so → v {
     ( vec_free [ScoredPt] . so pts )
     ( vec_free_with [String] . so vnames \ String x → v { ( string_free x ) } )
+}
+
+// Does the model flag the stored row at `index`? Read from the cached
+// ring scan, so a second question about the same model costs nothing.
+// -1 when there is no such row.
+@ model_row_is_anomaly * Model mo i index → i {
+    : i n ( vec_len [String] . mo lines )
+    ? & >= index 0 < index n {} { ^ -1 }
+    : ScanOut so ( model_scan_at mo 0 0 0 F )
+    : ~ i out -1
+    : i np ( vec_len [ScoredPt] . so pts )
+    : ~ i k 0
+    ~ < k np {
+        ?? ( vec_get [ScoredPt] . so pts k ) {
+            T r → { ? == . r sp_idx index { = out ? . r sp_anomaly 1 0 } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( scan_free so )
+    ^ out
 }
 
 // The canonical version order a scan's bitmasks are indexed by: every
@@ -3891,6 +4066,24 @@ $ `src/store.nu`
     ^ ( store_delete st name )
 }
 
+// One line of the audit trail: a version's alert line moved, by whom and
+// how. Every path that changes a margin goes through here — model_set_margin
+// (fine-tune, autotune, the CLI, a source's first train) and the metadata
+// patch (`edit`), which sets margins straight into the VerCfg and for two
+// releases moved them without a word in the log the tool promises.
+@ _an_audit_margin * Model mo s vname f before f after → v {
+    ? == ( f64_to_bits before ) ( f64_to_bits after ) { ^ } {}
+    : Json e ( json_obj_new )
+    ( json_obj_set e `at` ( json_int ( now_seconds ) ) )
+    ( json_obj_set e `actor` ( json_str_lit g_an_actor ) )
+    ( json_obj_set e `action` ( json_str_lit g_an_action ) )
+    ( json_obj_set e `version` ( json_str_lit vname ) )
+    ( json_obj_set e `from` ( json_float before ) )
+    ( json_obj_set e `to` ( json_float after ) )
+    : b _a ( store_append_audit . mo store ( string_data . mo mname ) e )
+    ( json_free e )
+}
+
 // Set one version's decision margin in the metadata (persisted, effective
 // immediately at scoring — no retrain needed). Returns F for an unknown
 // version name.
@@ -3912,17 +4105,7 @@ $ `src/store.nu`
                     ? == . mm tuned_at 0 { = . mm tuned_at ( now_seconds ) } {}
                     ( meta_bump_epoch mm )
                     ( store_save_meta . mo store ( string_data . mo mname ) mm )
-                    ? == ( f64_to_bits before ) ( f64_to_bits margin ) {} {
-                        : Json e ( json_obj_new )
-                        ( json_obj_set e `at` ( json_int ( now_seconds ) ) )
-                        ( json_obj_set e `actor` ( json_str_lit g_an_actor ) )
-                        ( json_obj_set e `action` ( json_str_lit g_an_action ) )
-                        ( json_obj_set e `version` ( json_str_lit vname ) )
-                        ( json_obj_set e `from` ( json_float before ) )
-                        ( json_obj_set e `to` ( json_float margin ) )
-                        : b _a ( store_append_audit . mo store ( string_data . mo mname ) e )
-                        ( json_free e )
-                    }
+                    ( _an_audit_margin mo vname before margin )
                     ^ T
                 } {}
             }
@@ -4064,7 +4247,83 @@ $ `src/store.nu`
     ^ a
 }
 
+// What the patch asked for and what the config actually holds, per
+// version and field. `_an_vercfg_sane` refuses impossible combinations —
+// a seasonal window with a zero step, a forest of no trees, a flatline
+// window of one row — and it used to do that in silence, so a caller who
+// sent `step_size: 0` read back a 1 and had nothing to blame but the
+// nearest flag it had also sent. Every field the patch names and the
+// config did not keep is reported back beside the change.
+@ _an_patch_adjustments * Meta mm Json vers ( Vec String ) notes → v {
+    ? ( json_is_obj vers ) {} { ^ }
+    ( json_obj_each vers \ s vn Json vo → v {
+        ? ( json_is_obj vo ) {} { ^ }
+        : i at ( meta_find_version mm vn )
+        ? >= at 0 {} { ^ }
+        ?? ( vec_get [VerCfg] . mm versions at ) {
+            T vc → {
+                ( _an_note_int notes vn `window_minutes` vo . vc window_min )
+                ( _an_note_int notes vn `window_points` vo . vc window_pts )
+                ( _an_note_int notes vn `window_size` vo . vc window_size )
+                ( _an_note_int notes vn `step_size` vo . vc step_size )
+                ( _an_note_int notes vn `n_estimators` vo . vc n_estimators )
+                ( _an_note_int notes vn `max_samples` vo . vc max_samples )
+                ( _an_note_f notes vn `decision_margin` vo . vc decision_margin )
+            }
+            F _ → {}
+        }
+    } )
+}
+
+@ _an_note_int ( Vec String ) notes s vn s field Json vo i kept → v {
+    ?? ( json_obj_get vo field ) {
+        T jv → {
+            ? ( json_is_num jv ) {} { ^ }
+            : i want ( json_as_int jv )
+            ? == want kept { ^ } {}
+            : String m ( string_from `versions.` )
+            ( string_push_str m vn )
+            ( string_push_char m 46 )
+            ( string_push_str m field )
+            ( string_push_str m `: ` )
+            ( string_push_int m want )
+            ( string_push_str m ` is not a value this version can hold; kept ` )
+            ( string_push_int m kept )
+            ( vec_push [String] notes m )
+        }
+        F _ → {}
+    }
+}
+
+@ _an_note_f ( Vec String ) notes s vn s field Json vo f kept → v {
+    ?? ( json_obj_get vo field ) {
+        T jv → {
+            ? ( json_is_num jv ) {} { ^ }
+            : ~ f want 0.0
+            ?? ( json_num_as_f jv ) { T x → { = want x } F _ → { ^ } }
+            ? == ( f64_to_bits want ) ( f64_to_bits kept ) { ^ } {}
+            : String m ( string_from `versions.` )
+            ( string_push_str m vn )
+            ( string_push_char m 46 )
+            ( string_push_str m field )
+            ( string_push_str m `: ` )
+            ( string_push_float m want )
+            ( string_push_str m ` is not a value this version can hold; kept ` )
+            ( string_push_float m kept )
+            ( vec_push [String] notes m )
+        }
+        F _ → {}
+    }
+}
+
 @ model_apply_meta_patch * Model mo Json patch → String {
+    : ( Vec String ) sink ( vec_new [String] )
+    : String r ( model_apply_meta_patch_notes mo patch sink )
+    ( vec_free_with [String] sink \ String x → v { ( string_free x ) } )
+    ^ r
+}
+
+@ model_apply_meta_patch_notes * Model mo Json patch ( Vec String ) notes → String {
     ? ( json_is_obj patch ) {} { ^ ( string_from `metadata must be a JSON object` ) }
     : *Meta mm . mo meta
     : ~ b touched F
@@ -4077,7 +4336,7 @@ $ `src/store.nu`
     ? > ( string_len badtop ) 0 {
         : String why ( string_from `unknown field ` )
         ( string_push_str why ( string_data badtop ) )
-        ( string_push_str why ` (editable: alias, clock, schedule, max_data_points, versions, replace_versions)` )
+        ( string_push_str why ` (editable: alias, clock, schedule, max_data_points, versions — the same list every metadata response publishes as editable_fields; replace_versions is not a field but a flag on this patch, making versions the whole list)` )
         ( string_free badtop )
         ^ why
     } {}
@@ -4096,9 +4355,14 @@ $ `src/store.nu`
         }
         F _ → {}
     }
+    : ~ b want_replace F
+    ?? ( json_obj_get patch `replace_versions` ) {
+        T rj0 → { = want_replace ( json_as_bool rj0 ) }
+        F _ → {}
+    }
     ?? ( json_obj_get patch `versions` ) {
         T vj0 → {
-            : String badv ( meta_versions_patch_check vj0 )
+            : String badv ( meta_versions_patch_check mm vj0 want_replace )
             ? > ( string_len badv ) 0 { ^ badv } {}
             ( string_free badv )
         }
@@ -4189,14 +4453,53 @@ $ `src/store.nu`
 
     ?? ( json_obj_get patch `versions` ) {
         T vj → {
-            : ~ b repl F
-            ?? ( json_obj_get patch `replace_versions` ) {
-                T rj → { = repl ( json_as_bool rj ) }
-                F _ → {}
+            // The alert lines as they stood, so the audit trail can name
+            // the ones this patch moved: `edit_model` sets margins
+            // straight into the VerCfg, and the log must not care which
+            // door a change came through.
+            : ( Vec String ) an ( vec_new [String] )
+            : ( Vec f ) am ( vec_new [f] )
+            : i nv0 ( vec_len [VerCfg] . mm versions )
+            : ~ i vk 0
+            ~ < vk nv0 {
+                ?? ( vec_get [VerCfg] . mm versions vk ) {
+                    T vc → {
+                        ( vec_push [String] an ( string_clone . vc vname ) )
+                        ( vec_push [f] am . vc decision_margin )
+                    }
+                    F _ → {}
+                }
+                = vk + vk 1
             }
-            ? < ( meta_apply_versions_json mm vj repl ) 0 {
+            ? < ( meta_apply_versions_json mm vj want_replace ) 0 {
+                ( vec_free_with [String] an \ String x → v { ( string_free x ) } )
+                ( vec_free [f] am )
                 ^ ( string_from `versions must be a JSON object of version configs` )
             } {}
+            ( _an_set_action `edit` )
+            = vk 0
+            ~ < vk ( vec_len [String] an ) {
+                ?? ( vec_get [String] an vk ) {
+                    T nm → {
+                        : i at ( meta_find_version mm ( string_data nm ) )
+                        ? >= at 0 {
+                            ?? ( vec_get [VerCfg] . mm versions at ) {
+                                T now2 → { ( _an_audit_margin mo ( string_data nm ) ( _fc_getf am vk ) . now2 decision_margin ) }
+                                F _ → {}
+                            }
+                        } {}
+                    }
+                    F _ → {}
+                }
+                = vk + vk 1
+            }
+            ( vec_free_with [String] an \ String x → v { ( string_free x ) } )
+            ( vec_free [f] am )
+            ( _an_patch_adjustments mm vj notes )
+            // A margin a reader set is a margin the first train's
+            // calibration must not overwrite (model_set_margin does the
+            // same for its own door).
+            ? == . mm tuned_at 0 { = . mm tuned_at ( now_seconds ) } {}
             = touched T
         }
         F _ → {}

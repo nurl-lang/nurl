@@ -40,14 +40,22 @@ rights.
   each numeric column's recent run — how long it has repeated the same
   value, or, when it dithers in its last digit instead, how far its spread
   over the window has collapsed against what the training data showed at
-  its quietest — and flags when the run fills the window (`window_size`
-  points, 60 by default) or twice the longest run seen in training,
-  whichever is longer, so a rain gauge that reads zero for hours has to be
-  quieter than it ever was before it counts. Its margin is a fraction of
-  the window (0.9 by default) and the verdict names the column.
-  Fine-tune leaves it alone — a rate target would only ever loosen it, a
-  healthy training set holds almost no stuck columns — and `edit_model`
-  sets it.
+  its quietest.
+
+  **Each column is judged against its own habit.** A temperature quantised
+  to whole degrees, sampled every minute, legitimately repeats for half an
+  hour; the smooth flow meter next to it in the same bundle does not, and
+  a freeze of twenty rows there is a fault. Every retrain measures, per
+  column, the run length that column's own rows reach — a row-weighted
+  0.98 quantile, so one genuine freeze among thousands of rows barely
+  moves it while a rain gauge that reads zero for most of the ring moves
+  it all the way — and the margin (0.9 by default) is read against twice
+  that, never below a floor of twenty rows. One number, and it means the
+  same thing on both columns. `describe_model` shows the reference and the
+  run each column is flagged at; `calibration` adds the same lines in
+  minutes. The verdict names the column. Fine-tune leaves the margin alone
+  — a rate target would only ever loosen it, a healthy training set holds
+  almost no stuck columns — and `edit_model` sets it.
 - **forecast — the model of the sequence** (off by default; trained on
   demand: `anomaly train-fc <model> [--season S]` / `POST
   /train/forecast/<model>` / the dashboard's Forecast section / the MCP
@@ -272,7 +280,12 @@ shifted slot; they change no verdict, so nothing is rescored.
 
 Fine-tune is calibration plus a write: pick the share of the window you are
 willing to alert on and every enabled version but `flatline` gets the
-margin that flags that share. Two things it will not do silently: write a
+margin that flags that share. That share is **per version**: a point is
+anomalous if *any* enabled version flags it, so the share of the window the
+model as a whole calls anomalous is the union of them — several times the
+rate on a model with several versions. `calibration`'s `aggregate.rate` and
+`anomaly_summary`'s `anomaly_rate` are that number, and `fork_model` reports
+both side by side. Two things it will not do silently: write a
 margin of 0 (which flags every row whose score is at or below 0 — on a
 forest, a third of a quiet feed) when no margin at or above 0 flags this
 few, and pretend a rate was met when the scores tie in runs and the
@@ -889,23 +902,23 @@ says why and what would be allowed instead.
 | Tool | Who | What |
 | --- | --- | --- |
 | `whoami` | every member | organization, role, and what the role allows through these tools |
-| `list_models` | every member | every model: columns, points seen, last training, each version's margin |
+| `list_models` | every member | every model: how many columns it watches, points seen, last training, the versions that judge (`detail: true` for every column name and margin) |
 | `describe_model` | every member | how a model is built, and which fields `edit_model` may change |
 | `anomalies` | every member | the newest flagged points of a window with the features blamed; says how many the window held |
 | `anomaly_summary` | every member | a window in one screen: counts, rate, per-version counts, worst point, events, timeline, most-blamed features |
 | `points`, `point` | every member | the raw stored rows of a window; one row in full by ring index |
 | `calibration` | every member | how each margin sits against a window — the numbers to read before `finetune` |
 | `score_point` | every member | the verdict for a hypothetical point, without storing it |
-| `analyze_data` | every member | a one-off analysis of a file (CSV text or rows), no model kept; large files become a task |
+| `analyze_data` | every member | a one-off analysis of a file — CSV text, rows, or the name of one the organisation's folder already holds — no model kept; large files become a task |
 | `list_tasks`, `task`, `list_files` | every member | the organization's background jobs and its folder |
 | `fork_model` | every member | a new model trained on a slice of another's history — a window, some columns; `llm_…` is scratch |
 | `labels` | every member | what readers have said about a model's rows |
 | `label_anomaly` | member on `llm_…`, admin on any | say a flagged row was a `false_positive` (calibration and `finetune` leave it out from then on), `confirmed`, or `none` to withdraw |
 | `forecast`, `forecast_backtest` | every member | what the forecast version expects next, per feature, with intervals and times; how good its forecasts have been against naive baselines |
 | `audit` | every member | who set which margin to what, when — a person's edit or finetune, a source's or an import's first-train calibration, a key |
-| `sources`, `source` | every member (not an ingest key) | the organisation's data sources and one in full — header values masked |
+| `sources`, `source` | every member (not an ingest key) | the organisation's data sources and one in full — a header value that carries a credential is masked, one that only names the caller is shown |
 | `retrain`, `train_autoencoder`, `train_forecast`, `finetune`, `edit_model`, `reset_model`, `delete_model` | member on `llm_…`, admin on any | the model's lifecycle; destructive ones need `confirm: true` |
-| `ingest_point`, `forecast_point`, `import_data` | ingest key, admin | send a point / send a point and get the forecast from it / load a file of history — this teaches the model |
+| `ingest_point`, `forecast_point`, `import_data` | ingest key, admin | send a point / send a point and get the forecast from it / load a file of history (inline, or a name from `list_files`) — this teaches the model |
 | `claim_model`, `org_users`, `set_role`, `org_keys` | admin | ownership, the roster, roles, the key listing |
 | `create_source`, `update_source`, `delete_source`, `run_source`, `source_catalog`, `source_preview` | admin | data sources: add one (a WFS stored query or feature type, or a URL answering JSON, with its kind and settings), change any field, remove it (`confirm: true`), fetch now or backfill, browse a service's catalogue, preview a query's columns |
 
@@ -950,9 +963,13 @@ this window — `flagged_by_version` shows which), and when every row of the
 window carries the same timestamp (a file imported without its time column
 named, so the time windows all see one instant); `calibration` gives every
 version a one-word `reading` — quiet, loud, or on target — and the model a
-`verdict`, and `analyze_data` says up front whether its flagged rows stand
-apart from the file (`separation`, `reading`) or are merely its least
-typical 1 %.
+`verdict`, and `analyze_data` says up front whether some block of rows
+really stands apart from the file (`separation`, `stands_apart_rows`,
+`reading`) or whether what is flagged is merely its least typical 1 %.
+`forecast_backtest` gives every feature a reading too — whether the fit
+beats carrying the last value forward, and whether its 95 % band covers
+what it claims — and the model a verdict, because a version with no skill
+over persistence is a version adding noise to the ensemble.
 
 The server's `instructions` tell the agent the things it most often gets
 wrong: that `last: "24h"` counts back from the model's newest point, not from

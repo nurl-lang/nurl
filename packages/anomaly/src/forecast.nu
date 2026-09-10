@@ -1121,6 +1121,34 @@ $ `deps/arima/src/arima.nu`
     }
 }
 
+// How many of the fitted models actually use the season — the seasonal
+// polynomial or Fourier terms of it. `season` is what the search was
+// OFFERED; a stream whose features all chose the plain ARIMA reports a
+// season it does not model, and a reader who takes the number at face
+// value believes a daily rhythm is being watched when nothing of the
+// kind is happening.
+@ fc_seasonal_count * FcModel fc → i {
+    : ~ i n 0
+    : ~ i j 0
+    ~ < j . fc nw {
+        ?? ( vec_get [String] . fc sel j ) {
+            T sn → {
+                : s t ( string_data sn )
+                ? | >= ( nurl_str_find t `sarima` ) 0 >= ( nurl_str_find t `fourier` ) 0 { = n + n 1 } {}
+            }
+            F _ → {}
+        }
+        = j + j 1
+    }
+    ^ n
+}
+
+// The form a feature's fit chose ("naive", "arima", "fourier4", …).
+@ fc_selected_of * FcModel fc i j → s {
+    ?? ( vec_get [String] . fc sel j ) { T sn → { ^ ( string_data sn ) } F _ → {} }
+    ^ ``
+}
+
 // What a reader sees of the version (the metadata response's block).
 @ fc_info_json * FcModel fc → Json {
     : Json o ( json_obj_new )
@@ -1128,6 +1156,11 @@ $ `deps/arima/src/arima.nu`
     ? . fc trained {
         ( json_obj_set o `features` ( _an_jarr_of_strs . fc feats ) )
         ( json_obj_set o `season` ( json_int . fc season ) )
+        : i _seas ( fc_seasonal_count fc )
+        ( json_obj_set o `seasonal_features` ( json_int _seas ) )
+        ? & > . fc season 0 == _seas 0 {
+            ( json_obj_set o `season_note` ( json_str_lit `season is the period the order search was offered, in rows; no feature's chosen form uses it, so nothing here models a cycle of that length.` ) )
+        } {}
         ( json_obj_set o `trained_at` ( json_int . fc trained_at ) )
         ( json_obj_set o `training_data_points` ( json_int . fc trained_on ) )
         ( json_obj_set o `points_absorbed` ( json_int . fc pos ) )

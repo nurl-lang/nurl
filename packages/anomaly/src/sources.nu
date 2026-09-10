@@ -188,7 +188,12 @@ $ `src/imptime.nu`
     ?? ( read_file ( string_data p ) ) {
         T txt → {
             ?? ( json_parse ( string_data txt ) ) {
-                T j → { ? ( json_is_obj j ) { = out @ ?Json { T j } } { ( json_free j ) } }
+                T j → {
+                    ? ( json_is_obj j ) {
+                        ( __src_fill_defaults j )
+                        = out @ ?Json { T j }
+                    } { ( json_free j ) }
+                }
                 F _ → {}
             }
             ( string_free txt )
@@ -197,6 +202,37 @@ $ `src/imptime.nu`
     }
     ( string_free p )
     ^ out
+}
+
+// A record written before a field existed gets that field, with the value
+// a fresh record would have. The alternative is what the API did until
+// 0.32.0: an old source answered with eight fewer keys than a new one,
+// and every reader — the dashboard, an agent, a script — had to know
+// which absences meant "not set" and which meant "written last spring".
+// One shape for one kind of thing, whatever the record's age.
+@ __src_fill_defaults Json src → v {
+    : String id ( __src_jstr src `id` )
+    : Json blank ( __src_blank ( string_data id ) `` 0 )
+    ( string_free id )
+    : ( Vec String ) keys ( json_obj_keys blank )
+    : i n ( vec_len [String] keys )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] keys k ) {
+            T key → {
+                ? ( json_obj_has src ( string_data key ) ) {} {
+                    ?? ( json_obj_get blank ( string_data key ) ) {
+                        T v → { ( json_obj_set src ( string_data key ) ( json_clone v ) ) }
+                        F _ → {}
+                    }
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
+    ( json_free blank )
 }
 
 // Written whole to a temp name and renamed over the old: a crash

@@ -280,7 +280,7 @@ $ `src/prep.nu`
             ?? e2 {
                 T p → { ( enc_free p ) ( check F `numerr: bad value rejected` ) }
                 F e → {
-                    : ?i at ( string_index_of e `must be a numeric value` )
+                    : ?i at ( string_index_of e `must be a number, a numeric string` )
                     ?? at { T _ → { ( check T `numerr: bad value rejected` ) } F _ → { ( check F `numerr: message names the rule` ) } }
                     ( string_free e )
                 }

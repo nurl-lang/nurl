@@ -392,26 +392,61 @@ the other check the forests cannot make: a sensor that has stopped moving
 sits inside its training range, so every per-point score stays quiet.
 Each retrain fits two references per numeric feature from the
 standardised training matrix (`__an_flat_fit`; `flat_run`, `flat_sd` in
-`Meta`, serialised under `flatline`): the longest run of identical values
-and the `ANOM_FLAT_QUANTILE` (0.05) quantile of the standard deviation over
-sliding windows of `window_size` points (`ANOM_FLAT_WINDOW`, 60, the
-VerCfg's `window_size`). At scoring, the tail of the ring ending at the
-point gives each feature a run fraction `run / max(W, 2·ref_run)` — a
-feature that legitimately sits still for `ref_run` points in training
-needs twice that before it counts — and, while the run is still shorter
-than `W` and the reference is positive, a collapse `1 − sd_window /
-ref_sd`, which catches the gauge that dithers in its last digit rather than
-repeating a value. The decision value is `−max` over the numeric features
-and `feat` names the one, so `score <= −margin` with the default
-`ANOM_FLAT_MARGIN` 0.9 reads "a column has been flat for 90 % of its
-window" (`units` is `fraction`). Features without a reference (a ring
-shorter than `W` at retrain, a non-numeric column) are not watched, so
+`Meta`, serialised under `flatline`):
+
+- **`flat_run`** — the run length that feature's training rows reach: the
+  `ANOM_FLAT_RUN_Q` (0.98) quantile of run length, weighted BY ROW (every
+  row of a run of L contributes L). Row-weighting is what makes it a
+  description of the column's habit rather than of its worst moment: a
+  genuine freeze inside the training ring is a handful of rows out of
+  thousands and barely moves the quantile, while a rain gauge that reads
+  zero for most of the ring — where sitting still *is* the column's
+  normal — moves it all the way. A column whose reference is longer than
+  the guard can look back (`ANOM_FLAT_TAIL_MAX`, 600 rows) is left
+  unwatched rather than watched with a bar it can never reach.
+- **`flat_sd`** — the `ANOM_FLAT_SD_Q` (0.05) quantile of the standard
+  deviation over sliding windows of `window_size` points
+  (`ANOM_FLAT_WINDOW`, 60, the VerCfg's `window_size`).
+
+At scoring, the tail of the ring ending at the point gives each feature a
+run fraction `run / ref_len`, where `ref_len = max(2·flat_run,
+ANOM_FLAT_MIN_RUN)` (20 rows) — a feature that legitimately sits still for
+`flat_run` points needs twice that before it counts, and a feature that
+never sits still needs the floor. Beside it, while the run is still
+shorter than `W` and `flat_sd` is positive, a collapse `1 − sd_window /
+flat_sd`, which catches the gauge that dithers in its last digit rather
+than repeating a value. The decision value is `−max` over the numeric
+features and `feat` names the one, so `score <= −margin` with the default
+`ANOM_FLAT_MARGIN` 0.9 reads "a column has repeated one value for 90 % of
+its own reference run" (`units` is `fraction`). The look-back is
+`_an_flat_need` — the collapse window, widened so the longest reference
+run is reachable.
+
+**The reference is per feature and it decides.** A temperature quantised
+to whole degrees, sampled every minute, legitimately repeats for half an
+hour; a smooth flow meter beside it in the same bundle does not. One
+margin has to answer for both, and it can only do that by being read
+against each column's own habit. Scoring the run against the model-wide
+window instead — `run / max(W, 2·ref_run)`, what this guard did until
+0.32.0 — made one number mean two things and both cases impossible at
+once: the run is counted over the window, so a column whose reference
+passed half the window could never reach the margin *at all*, and every
+other column needed `0.9 × W` = 54 identical rows before it counted, which
+no ordinary fault reaches. `GET /models/dynamic/<m>/metadata` publishes
+the fitted references by column name under `flatline.columns`
+(`reference_run_rows`, `flags_after_rows`) with the unwatched columns
+listed apart, and `calibration` adds `alert_line`, the same lines in rows
+and — where the ring has a step — in minutes.
+
+Features without a reference (a ring shorter than `W` at retrain, a
+non-numeric column, a run past `ANOM_FLAT_TAIL_MAX`) are not watched, so
 `model_scan_versions` lists the version only once it has been fitted.
 Fine-tune leaves its margin alone — a rate target would only ever loosen
-it, since a stuck column is rare in a healthy training set — while
-calibration still reports it; `edit_model` sets it. A column missing for a
-stretch reads as flat (its standardised value repeats), which is what a
-person would call it too.
+it, since a stuck column is rare in a healthy training set — and
+calibration reports it with no `margin_for_rate` table, because a margin
+that is not a rate has no margin for a rate; `edit_model` sets it. A
+column missing for a stretch reads as flat (its standardised value
+repeats), which is what a person would call it too.
 
 `severity = −score / margin` (`anom_severity`; `margin = 0` gives 1.0 when
 flagged, 0.0 otherwise) is computed for every version verdict; the
@@ -654,22 +689,40 @@ service so existing dashboards and the `modelmanager` UI keep working:
   `training_data_points`, `filtered_anomalies`, `decision_margin` (a
   fraction of the threshold, §5.5), `effective_margin` (threshold ×
   decision_margin — the band in the score's own units), `feature_names`, `layer_sizes`, `prefilter_contamination`, `trained_at`,
-  `retrain_with_forests`. Every metadata response (this one, the
-  listing, and the PUT echo) also carries `editable_fields`: the top-level
-  keys the PUT below accepts, published so a client never has to keep its
-  own copy of the list. It is service-shaped and deliberately absent from
-  the stored `metadata.json`.
+  `retrain_with_forests`. Alongside it a `forecast` block (§5.4) and a
+  `flatline` block for a reader rather than for the disk: `enabled`,
+  `margin`, `window_rows`, `look_back_rows`, `columns { <feature>:
+  { reference_run_rows, quiet_window_sd, flags_after_rows } }` — the
+  reference the last fit wrote for each numeric column, named rather than
+  positional, and the run of identical readings the current margin asks of
+  THAT column — `unwatched[]` for the columns with no reference, and the
+  raw `ref_run` / `ref_sd` arrays the stored metadata carries. Every
+  metadata response (this one, the listing, and the PUT echo) also carries
+  `editable_fields`: the top-level keys the PUT below accepts, published so
+  a client never has to keep its own copy of the list. It is
+  service-shaped and deliberately absent from the stored `metadata.json`.
 - `PUT /models/dynamic/<model>/metadata` body = `{ alias?, schedule?,
   max_data_points?, versions?, replace_versions? }`, every field within
-  optional (an omitted field keeps its value; an unknown version name adds
-  a version; `replace_versions` deletes the versions the object omits).
+  optional (an omitted field keeps its value).
+  A key of `versions` naming a version the model does not have is **400**,
+  with the names it does have: it used to create one with default geometry,
+  so `{"autoenocder": {"enabled": false}}` answered success while the real
+  autoencoder stayed on. Adding a version is `replace_versions: true` —
+  the object is then the WHOLE list, versions it omits are deleted, and
+  names the model does not have are the point. That is what the
+  dashboard's JSON editor sends.
   `max_data_points` is the raw-point ring size: it must be positive and at
   least `min_data_points`, and lowering it below the current fill evicts
   the oldest points and rewrites the log before the response, so the cap
   holds immediately rather than converging one ingest at a time. 400 on a
   shape that is not a JSON object of objects, on a rejected
   `max_data_points`, or on an empty patch. Response echoes the full
-  metadata.
+  metadata, and — when the version-config sanity rules changed a field the
+  patch named (a `step_size` of 0 under a seasonal window, a forest of no
+  trees) — an `adjusted[]` saying which and to what: the rules have always
+  applied and used to apply in silence, so a caller read back a value it
+  never sent. A margin this patch moved is written to the audit log with
+  the action `edit`, the same as one fine-tune moves.
 - `GET /models/dynamic/<model>/anomalies` — the scan of §5.6, served from
   one model load. Query: `from` / `to` (unix seconds), `last=<seconds>`
   (relative to `to`, else to the newest stored point — never to the server
@@ -754,6 +807,11 @@ service so existing dashboards and the `modelmanager` UI keep working:
   for an unknown label or an index outside the ring; write access to the
   model, as fine-tune. Verdicts do not change, so the epoch does not move.
   Response echoes the record with `index` and `seq`.
+  `false_positive` is a verdict DISPUTED, so it is 400 on a row the model
+  does not flag: calibration and fine-tune leave labelled rows out of the
+  sample the margins are measured on, and a label that any row could carry
+  is a way to move a margin with no audit entry. `confirmed` and `none`
+  apply to any stored row.
 - `GET /models/dynamic/<model>/labels` — the labels in force: `count`,
   `false_positives`, `confirmed`, `labels[] { seq, timestamp, label, by,
   at, note, index | evicted }` — `index` the row's current ring index,
@@ -762,12 +820,19 @@ service so existing dashboards and the `modelmanager` UI keep working:
   the same window query as the scan (`from` / `to` / `last`, default the
   last 24 h of stored data, `last=all` the whole ring; on a count clock
   `last` is a number of points, default 1440), read-only. Response:
-  `window { from, to, rows, excluded, total }` (`excluded`: rows in the
+  `window { from, to, rows, excluded, total }` — `from` and `to` are the
+  bounds the rows were actually taken between, so an unbounded end is the
+  newest stored point and not a `null` (`excluded`: rows in the
   window labelled false positives, left out of every number below), `aggregate { flagged, rate }` and per
   enabled, trained version `{ units, margin, n, flagged, rate, worst, median,
   margin_for_rate: { "0.1%": { margin, flagged, requested_rate,
   achieved_rate, exact }, "0.5%", "1%", "2%", "5%", "10%" }, curve: [[rate,
-  margin], …] }` — 110 points, 0.1 % steps to 1 % then 1 % steps to 100 %,
+  margin], …] }`. The flatline guard gets no `margin_for_rate`: its margin
+  is a fraction of each column's own reference run and not a rate, so
+  "the margin that would flag 1 % of this window" is a number with no
+  meaning — and printing it beside a `reading` that says as much in words
+  is a contradiction a reader has to resolve. `curve` is 110 points, 0.1 %
+  steps to 1 % then 1 % steps to 100 %,
   so a dashboard can turn a typed margin into an estimated alert rate
   without a round trip. `curve=0` omits it. 400 on an untrained model.
   `margin` is the stored value verbatim, and every number of a version is
@@ -796,9 +861,12 @@ service so existing dashboards and the `modelmanager` UI keep working:
   The response also carries the legacy `adjusted_margins` and
   `max_anomaly_scores` maps. 400 on
   a rate outside `[0, 1]`.
-- `POST /api/analyze` (members) — the body is a file (the import route's
+- `POST /api/analyze` (members) — the body is a file, or `?file=<name>`
+  names one the organisation's folder already holds (the import route's
   `format`, `time`, `tz`, `calendar`, `clock` apply; `name` labels the
-  result, default `analysis`). A task directory (`orgs/<org>/tasks/<id>`,
+  result, default `analysis`). The import route takes `?file=` too: every
+  analysis and import this service runs leaves its input in the folder,
+  and a caller should not have to send it back. A task directory (`orgs/<org>/tasks/<id>`,
   id = 24 hex chars) receives the input and `params.json`; a child process
   (`anomaly analyze-job <dir>`) opens a store under it, imports the rows
   with the warm-up shrunk to the file, opens every version's window to
@@ -808,14 +876,22 @@ service so existing dashboards and the `modelmanager` UI keep working:
   (1 %) over the file, scans, and writes the result — `task_id`, `name`,
   `format`, `rows`, `imported`, `skipped`, `clock`, `target_rate`, `votes`,
   `anomalies`, `considered`, `model_versions`, `margins`, `time`, `notes`,
-  `worst_severity`, `separation`, `reading` — the margins are fitted to
-  the file, so `anomalies` is ~1 % of it whatever it holds; `separation`
-  is the range guard's `|z|` of the worst row over that of the row at
-  twice the cut (a linear magnitude — a forest's decision function
+  `worst_severity`, `separation`, `stands_apart_rows`, `reading` — the
+  margins are fitted to the file, so `anomalies` is ~1 % of it whatever it
+  holds. `separation` is the largest STEP anywhere in the range guard's
+  sorted `|z|`: over block sizes `j`, the `j`-th worst row over the
+  `2j`-th worst, maximised, with the `j` that produced it as
+  `stands_apart_rows` (a linear magnitude — a forest's decision function
   saturates and the autoencoder's error is heavy-tailed, so their ratios
-  say nothing; −1 when the guard gave no verdict) and `reading` says in
-  one sentence whether the flagged rows stand apart from the file
-  (`separation ≥ ANA_STANDOUT`, 3) or are its tail —
+  say nothing; −1 when the guard gave no verdict). A tail thins gradually
+  and every ratio stays near 1; a fault has one block size where the ratio
+  jumps. Fixing `j` at the target rate — one ratio, which is what this was
+  until 0.32.0 — could only see a fault SMALLER than 1 % of the file: a
+  twenty-row collapse in fifteen hundred rows put fault rows on both sides
+  of that ratio, which then read ~1, and the answer said "the tail of the
+  file rather than a fault" over a column that had dropped twentyfold.
+  `reading` says in one sentence whether some block stands apart
+  (`separation ≥ ANA_STANDOUT`, 3) or the flagged rows are the file's tail —
   `points[] { index, timestamp, score, severity, votes, versions[], contributions[]
   { feature, share, value, expected }, values }` — as
   `<safe name>-<id>.json` into the organisation's folder, then
