@@ -53,6 +53,17 @@ sanitized runtime aside and point at it:
 NURL_SAN_RUNTIME=/tmp/rt-san.o tools/metamorph/spellings.py --verify
 ```
 
+## Trait declaration order
+
+`./tools/metamorph/trait_order.py` checks all 132 permutations of three small
+programs using associated types, mutable defaults, and dynamic supertrait
+methods. Every ordering goes through `nurl.sh`, runs and must print `42`.
+Another 68 cases permute invalid contracts and require the specific binding
+or coherence diagnostic. These include multiple definitions on one physical
+line, generated here because the formatter separates top-level declarations.
+The ordinary corpus separately covers nested/aliased imports and `sink`
+ownership. This gate runs in Linux CI after the compiler build.
+
 ## How a finding is judged
 
 A disagreement between spellings is **not** proof of a compiler bug — the

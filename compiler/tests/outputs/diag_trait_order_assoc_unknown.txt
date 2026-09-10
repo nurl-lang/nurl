@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_trait_order_assoc_unknown.nu:1:1: error: trait 'Reading' has no associated type 'Typo' to bind for type 'i'. An impl may only bind the associated types the trait declares — check the name, or add 'type Typo' to the trait declaration.
+% Reading i { type Typo i }
+^

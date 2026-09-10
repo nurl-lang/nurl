@@ -856,10 +856,17 @@ trait-default substitution carries). There is **no projection** yet: an
 associated type cannot be named as `A::Elem` at a generic call site; it is only
 usable inside the trait's own method bodies/signatures.
 
-**Ordering.** A trait must be scanned before its impls — defaults, supertrait
-names, and associated types are read from the trait when an impl is processed.
-In practice this means the trait declaration (or its `$`-import) precedes the
-impl, which is the natural order.
+**Ordering.** Trait declarations and their impls may appear in either order,
+including across later or nested `$`-imports. The compiler collects the whole
+program's explicit signatures and trait declarations before checking impl
+associated-type bindings and registering omitted defaults. Supertrait checks
+and dynamic vtables use that completed information. Import replay registers
+each source impl once; distinct definitions remain distinct even on one line.
+
+Explicit and default methods share signature registration: argument types,
+arity, `inout` borrows and `sink` transfers are known before any caller is
+emitted. Defaults therefore preserve the same calling and ownership
+conventions as methods written in the impl.
 
 **Marker traits — `Send` / `Sync`.** A trait with no methods carries no
 behaviour; an impl of one is a pure *assertion about the type*. Four such

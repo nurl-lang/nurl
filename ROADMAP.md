@@ -153,6 +153,10 @@ A high-level map of what exists. Dates and per-feature detail are in
   must equal the declared one, so a pair nobody enumerated is a
   diagnostic rather than a `call` clang assembles and the callee reads
   as garbage ([`docs/spec.md` §4.1](docs/spec.md)).
+- Trait contracts are resolved across the complete import graph before body
+  emission: declarations may follow their impls, associated types and defaults
+  are order-independent, and explicit/default methods share argument-type and
+  `inout`/`sink` signature registration.
 - Generics: monomorphised generic structs and functions (signedness-aware
   monomorphs, including behind `*`/`?` prefixes), generic nesting
   (`Channel[A]`, `Vec[Thread]`), and generics over `?T` / `!T E`.
