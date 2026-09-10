@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sanitizer builds instrument generated NURL memory accesses.** The compiler
+  now emits ASan attributes through one function-writing path, shared by normal,
+  library and split output. The driver, all bootstrap stages, corpus and fuzz
+  harnesses request it. Deliberate memory faults and valid controls calibrate
+  detection in CI; documentation distinguishes ASan coverage from C-only UBSan
+  checks and the remaining lexical stack-lifetime gap.
+- **HTTP/3 releases a completed stream after evaluating its terminal state.**
+  Two consecutive cleanup conditions could read the stream after the first
+  freed it; the instrumented client/server regression exposed the use-after-free.
+- **Compiler drop generation and nested-field lookahead stop leaking.** Drop
+  emitters use borrowed integer counters instead of heap cells. Name mangling
+  and lexer lookahead return uniformly owned strings, removing a lexer-specific
+  ownership exception. The compiler leak gate now exercises both paths in
+  addition to the self-compile.
+- **Required tool failures fail the complete build.** Formatter, formatter
+  round-trip and package-manager failures retain the build log and return
+  failure. Tool builders share the driver's sanitizer/link configuration and
+  remove stale executables before rebuilding. Isolated full-build fault
+  controls run in CI.
+
 - **Compiler test runners reject missing coverage and compiler failures.**
   Imported helper fixtures now declare their intent, so parser rejection tests
   without `main` run. Both POSIX runners and the Windows runner bound compiler

@@ -28,7 +28,11 @@ class RunnerTests(unittest.TestCase):
         shutil.copy2(ROOT / 'compiler/tests/run_tests.ps1', self.tests / 'run_tests.ps1')
         self.bin = self.root / 'bin'
         self.bin.mkdir()
-        self.script(self.root / 'build/nurlc', '''if [[ -n ${EXPECTED_FLAG:-} && ${1:-} != $EXPECTED_FLAG ]]; then exit 2; fi
+        self.script(self.root / 'build/nurlc', '''if [[ -n ${EXPECTED_FLAG:-} ]]; then
+ found=0
+ for arg in "$@"; do [[ "$arg" == "$EXPECTED_FLAG" ]] && found=1; done
+ [[ "$found" == 1 ]] || exit 2
+fi
 case "$FAULT" in
   accept|valid) exit 0 ;;
   crash) kill -SEGV $$ ;;

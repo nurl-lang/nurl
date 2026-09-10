@@ -23,8 +23,11 @@ TIMEOUT="${3:-10}"
 
 [[ -x "$ROOT/build/nurlc" ]] || { echo "fuzz_parsers: build/nurlc missing — run ./build.sh" >&2; exit 2; }
 
-HARNESS="$(mktemp)"
-trap 'rm -f "$HARNESS"' EXIT
+HARNESS_DIR="$(mktemp -d)"
+HARNESS="$HARNESS_DIR/harness"
+trap 'rm -rf "$HARNESS_DIR"' EXIT
+
+python3 tools/sanitizer_controls.py --quick || exit 2
 
 echo "[build] harness (ASan+UBSan, via NURL_SAN=1 ./nurl.sh)"
 NURL_SAN=1 ./nurl.sh -O1 tools/fuzz/parse_harness.nu "$HARNESS" \
@@ -33,6 +36,6 @@ NURL_SAN=1 ./nurl.sh -O1 tools/fuzz/parse_harness.nu "$HARNESS" \
 echo "[run] $ITERS iterations, seed $SEED, ${TIMEOUT}s per-input timeout"
 SUMMARY_ARGS=()
 [[ -n "${FUZZ_SUMMARY:-}" ]] && SUMMARY_ARGS=(--summary "$FUZZ_SUMMARY")
-exec python3 tools/fuzz/fuzz_parsers.py \
+python3 tools/fuzz/fuzz_parsers.py \
     --harness "$HARNESS" --seed "$SEED" --iters "$ITERS" --timeout "$TIMEOUT" \
     "${SUMMARY_ARGS[@]}"

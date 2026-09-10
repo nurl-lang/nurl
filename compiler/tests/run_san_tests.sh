@@ -184,7 +184,7 @@ run_one_san() {
     mode=$(test_mode "$name")
     case "$mode" in reject|compile|run) ;; *) echo "$name COMPILE_FAIL"; return ;; esac
     if [[ ! -f "$OUTDIR/$name.txt" ]]; then echo "$name COMPILE_FAIL"; return; fi
-    compile_test "$name" "$src" > "$ll" 2>"$cerr"
+    compile_test "$name" "$src" --sanitize-address > "$ll" 2>"$cerr"
     code=$?
     if grep -qE "$SAN_MARKERS" "$cerr"; then
         cp -f "$cerr" "$stderr_log"; echo "$name SAN_FAIL"; return

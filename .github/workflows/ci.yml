@@ -63,6 +63,8 @@ jobs:
             compiler:
               - 'compiler/nurlc.nu'
               - 'tools/leakgate.sh'
+              - 'compiler/tests/enum_tree_drop.nu'
+              - 'compiler/tests/nested_field_store.nu'
 
   runner-controls:
     name: compiler runner fault-injection controls
@@ -78,6 +80,28 @@ jobs:
           NURL_TEST_PWSH=$(command -v pwsh)
           export NURL_TEST_PWSH
           python3 tools/tests/test_compiler_runners.py
+
+  build-failure-controls:
+    name: required tools fail the complete build
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container:
+      image: nurllang/ci:ubuntu24-20260821
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject broken formatter and package-manager builds
+        run: python3 tools/tests/test_build_failures.py
+      - name: Retain failure-control logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-controls
+          path: build/build-failure-controls/
 
   build-test:
     name: build + bootstrap fixed point + test corpus
@@ -110,6 +134,13 @@ jobs:
         # AND the test corpus baseline matches. Any failure surfaces
         # the relevant diff so we don't need extra grep here.
         run: ./build.sh
+
+      - name: Retain complete build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: build/logs/
 
       - name: self-compile peak-RSS gate
         # Peak memory to compile the compiler is its existential
@@ -571,10 +602,20 @@ jobs:
         # sanitiser-aware corpus driver.
         run: ./build.sh --san --no-tests
 
-      - name: self-compile leak gate (LSan) — hard, zero tolerance
+      - name: Retain sanitized build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitizer-build-logs
+          path: build/logs/
+
+      - name: Generated-code sanitizer detection controls
+        run: python3 tools/sanitizer_controls.py
+
+      - name: compiler leak gate (self-compile, drop graph, nested stores)
         # Runs only when compiler/nurlc.nu (or the gate itself) changed: that
-        # source owns the allocations this asserts about. Reuses the --san
-        # build above, so the whole gate costs ~3 s.
+        # source owns the allocations this asserts about. The regression
+        # inputs also exercise paths absent from the self-compile.
         #
         # The July 2026 ownership campaign took `nurlc compiler/nurlc.nu` from
         # 2,793,226 leaked allocations / 33.4 MB to ZERO (peak RSS 115.9 ->

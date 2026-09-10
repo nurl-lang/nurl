@@ -168,3 +168,8 @@ checks sanitizer reports. Goldens identify existing rejection tests and the
 expected runtime exit; diagnostic/output text is compared by the normal runner.
 A clean sanitizer run only establishes coverage of the code actually instrumented;
 linking sanitizer libraries alone does not instrument generated LLVM functions.
+The runner requests `--sanitize-address` from the compiler. Run
+`python3 tools/sanitizer_controls.py` to check deliberate faults and clean
+counterparts through the driver and split emitter before relying on a campaign.
+See [coverage boundaries](../../docs/BUILDING.md#sanitizer-coverage), including
+NURL stack-use-after-scope and source-level UBSan gaps.

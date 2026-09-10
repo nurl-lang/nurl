@@ -68,7 +68,8 @@
 #    NURL_CACHE_DIR=DIR  Move the cache (default $XDG_CACHE_HOME/nurl,
 #                        i.e. usually ~/.cache/nurl; the ThinLTO part
 #                        is auto-pruned to 2 GB).
-#    NURL_SAN=1          Link with AddressSanitizer + UndefinedBehaviorSanitizer.
+#    NURL_SAN=1          Instrument generated memory accesses with ASan;
+#                        instrument the C runtime with ASan + UBSan.
 #                        Auto-builds a side-by-side stdlib/runtime_san.o (non-LTO,
 #                        same -fsanitize flags). LTO is dropped because clang's
 #                        LTO + sanitizers combination produces opaque link-time
@@ -310,7 +311,9 @@ if [ "$SPLIT_N" -gt 0 ]; then
     rm -f "$OUTBASE".[0-9]*.ll "$OUTBASE".[0-9]*.o
 fi
 # shellcheck disable=SC2086
-"$NURLC" $NURLC_G $NURLC_CPU $NURLC_DIAG $SPLIT_FLAGS "$SRCFILE" > "$LLFILE"
+NURLC_SAN=""
+if [ "${NURL_SAN:-0}" = 1 ]; then NURLC_SAN="--sanitize-address"; fi
+"$NURLC" $NURLC_G $NURLC_CPU $NURLC_DIAG $NURLC_SAN $SPLIT_FLAGS "$SRCFILE" > "$LLFILE"
 
 # `--split=N` is a ceiling, and nurlc holds the policy: it writes no
 # parts at all for a module too small for two of them to be worth it

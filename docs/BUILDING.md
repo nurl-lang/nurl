@@ -324,9 +324,51 @@ Two knobs cooperate:
 
 Runtime panics print a stack backtrace before aborting; pipe each frame's
 `binary+0xOFFSET` through `addr2line -e <binary>` to recover `.nu:LINE`
-locations. ASan / UBSan reports under `./build.sh --san` render `.nu`
-locations directly. End-to-end regression: `./tools/dwarf_test.sh` (no-op
+locations. Combine `NURL_SAN=1` with `--debug` for `.nu` locations in ASan
+reports; `./build.sh --san` alone does not request NURL DWARF metadata.
+End-to-end regression: `./tools/dwarf_test.sh` (no-op
 when `gdb` isn't installed).
+
+## Sanitizer coverage
+
+```sh
+./build.sh --san --no-tests
+python3 tools/sanitizer_controls.py
+./compiler/tests/run_san_tests.sh
+./tools/leakgate.sh
+# Or instrument a single program with an ordinary built compiler:
+NURL_SAN=1 ./nurl.sh -O0 --debug examples/fizzbuzz.nu
+```
+
+`nurlc --sanitize-address` marks every emitted function for LLVM's ASan
+pass, including closures, drop glue, dyn/SIMD thunks and split definitions.
+The driver, bootstrap, corpus and fuzz runners use this compiler option.
+The committed bootstrap IR carries the attribute too, so stage 0 is covered
+when linked with sanitizer instrumentation. Normal builds do not run that
+pass, and ordinary compiler output omits the attribute.
+
+Detection controls require the expected ASan report and a failing exit for
+heap out-of-bounds access, use-after-free and stack-use-after-return; valid
+counterparts must produce the expected output without reports. They also
+compile and execute split output. Optimisation can eliminate an invalid
+access or inline a stack frame, so the stack-return control runs at `-O0`.
+See [LLVM's ASan guide](https://clang.llvm.org/docs/AddressSanitizer.html).
+
+There are two remaining coverage boundaries. NURL does not yet emit lexical
+`llvm.lifetime` boundaries, so `-fsanitize-address-use-after-scope` does not
+establish detection after a NURL block ends. Also, `-fsanitize=undefined`
+adds UBSan checks to the **C runtime**, not source-level checks to previously
+generated NURL IR. In particular, it does not check dynamic shift counts,
+signed division overflow or out-of-range float-to-integer conversions in
+NURL. Integer `+`, `-` and `*` wrap at their width; integer division by zero
+has a separate compiler-emitted panic check. The remaining arithmetic and
+lifetime work is tracked in [the v1 ledger](dev/V1_HARDENING.md).
+
+The whole runtime corpus runs without leak detection because some examples
+intentionally omit cleanup. `tools/leakgate.sh` requires zero compiler leaks
+for the self-compile, recursive drop generation and nested field stores, in
+both module emission modes. The corpus's selected cleanup tests use
+`LSAN_DETECT_LEAKS=1`; those results are separate from memory-access coverage.
 
 ## Bootstrap chain
 

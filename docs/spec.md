@@ -1191,9 +1191,11 @@ instantiation `( Name A )`.
 && ||           strict logical (b only) — alternate spelling of & / |
 ```
 
-`<<` and `>>` lower to LLVM `shl` / `ashr`. The shift count is `i64` by
-convention; only the low 6 bits matter for `i64` operands. Out-of-range
-counts behave per LLVM (poison for `>=` bitwidth).
+`<<` lowers to LLVM `shl`; `>>` uses `ashr` for signed operands and `lshr`
+for unsigned operands. Counts must be nonnegative and smaller than the
+operand's bit width. The compiler rejects an out-of-range constant count;
+dynamic counts outside that range produce LLVM poison. Counts are not
+implicitly masked to their low bits.
 
 Comparison operators yield `b` (`i1`). All other binary operators
 require operand types to match: mixing float/non-float,

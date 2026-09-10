@@ -20,8 +20,9 @@ init_test_harness() {
 
 compile_test() {
     local name="$1" src="$2" flag
+    shift 2
     flag=$(test_compiler_flag "$name")
-    "$TIMEOUT_CMD" -k 1s "${NURL_COMPILE_TIMEOUT}s" "$NURLC" ${flag:+"$flag"} "$src"
+    "$TIMEOUT_CMD" -k 1s "${NURL_COMPILE_TIMEOUT}s" "$NURLC" "$@" ${flag:+"$flag"} "$src"
 }
 
 test_compiler_flag() {

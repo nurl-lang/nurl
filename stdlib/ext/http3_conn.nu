@@ -603,8 +603,9 @@ $ `stdlib/ext/http3_qpack.nu`
         ? == . s kind ( h3_kind_qpack_encoder ) { ( __h3_qpack_stream h s fin T ) } {}
         ? == . s kind ( h3_kind_qpack_decoder ) { ( __h3_qpack_stream h s fin F ) } {}
     } {}
-    ? & == . s kind ( h3_kind_request ) != . s done 0 { ( __h3_stream_drop h id ) } {}
-    ? & == . s kind ( h3_kind_ignored ) fin { ( __h3_stream_drop h id ) } {}
+    // Decide terminal state while the stream is alive, then release it once.
+    ? | & == . s kind ( h3_kind_request ) != . s done 0
+    & == . s kind ( h3_kind_ignored ) fin { ( __h3_stream_drop h id ) } {}
 }
 
 @ h3_conn_on_readable * H3Conn h ( @ HttpResponse HttpRequest ) handler → v {

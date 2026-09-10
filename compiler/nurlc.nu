@@ -7046,13 +7046,14 @@
 // borrow-checker's Phase 5+ field-access aliasing detection to
 // recover the root identifier of a `. obj field` argument
 // expression without rolling the current-token state forward.
-// strdup'd, owned by the caller (mirrors nurl_lex_val).
+// Return an owned string copy; nurl_strdup is the raw, manually managed
+// allocator, whereas nurl_str_cat publishes ownership to the caller.
 @ nurl_lex_peek_val i h → s {
     : s p # s h
     ? == 0 ( nurl_peek p + LX_PEEK TF_VALID ) {
         ( __lex_one # i p LX_PEEK )
     } {}
-    ^ # s ( nurl_strdup # s ( nurl_peek p + LX_PEEK TF_VAL ) )
+    ^ ( nurl_str_cat # s ( nurl_peek p + LX_PEEK TF_VAL ) `` )
 }
 
 @ nurl_lex_peek2_type i h → i {
@@ -7066,12 +7067,12 @@
 // further out. `= . . . o a b v` puts the base identifier two tokens ahead
 // of the current `.`, and gen_field_store has to decide whether the path is
 // an aggregate chain BEFORE consuming anything — a decision it cannot take
-// back. strdup'd, owned by the caller.
+// back. An owned string copy, with the same contract as peek_val.
 @ nurl_lex_peek2_val i h → s {
     : s p # s h
     ? == 0 ( nurl_peek p + LX_PEEK TF_VALID ) { ( __lex_one # i p LX_PEEK ) } {}
     ? == 0 ( nurl_peek p + LX_PEEK2 TF_VALID ) { ( __lex_one # i p LX_PEEK2 ) } {}
-    ^ # s ( nurl_strdup # s ( nurl_peek p + LX_PEEK2 TF_VAL ) )
+    ^ ( nurl_str_cat # s ( nurl_peek p + LX_PEEK2 TF_VAL ) `` )
 }
 
 @ nurl_lex_peek3_type i h → i {
@@ -25294,11 +25295,12 @@
     ^ != 0 ( nurl_sym_len2 g_impl_name_syms `autodrop##` ty )
 }
 
-// Strip a leading `%` to form a drop-function name suffix.
+// Strip a leading `%` to form an owned drop-function name suffix. Both
+// branches return fresh strings so callers can release the result uniformly.
 @ __drop_mangle s ty → s {
     ? & != 0 ( nurl_str_len ty ) == ( nurl_str_get ty 0 ) 37
     { ^ ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 ) } {}
-    ^ ty
+    ^ ( nurl_str_cat ty `` )
 }
 
 // `%Vec__<m>` → the element's LLVM type (via demangle).
@@ -25306,10 +25308,10 @@
     ^ ( demangle_type ( nurl_str_slice ty 6 - ( nurl_str_len ty ) 6 ) )
 }
 
-// Fresh local register/label name (%d<n>) backed by a 1-slot counter.
-@ __dr s ctr → s {
-    : i n ( nurl_peek ctr 0 )
-    ( nurl_poke ctr 0 + n 1 )
+// Fresh local register/label name (%d<n>); the emitter owns the counter.
+@ __dr inout i ctr → s {
+    : i n ctr
+    = ctr + n 1
     ^ ( nurl_str_cat `%d` ( nurl_str_int n ) )
 }
 
@@ -25380,7 +25382,7 @@
 // String / Vec reclaim their backing store via nurl_vec_drop (passing a
 // drop_ptr thunk for owned elements); a struct / enum delegates to its
 // generated drop__ function.
-@ emit_drop_value s ty s valreg s ctr i syms → v {
+@ emit_drop_value s ty s valreg inout i ctr i syms → v {
     // Dynamic trait object: delegate to the synthesized `%dyn.<T>` destructor
     // (runs the vtable slot-0 drop on the boxed value, then frees the box).
     ? != 0 ( nurl_str_starts ty `%dyn.` ) {
@@ -25422,7 +25424,7 @@
 // and drop it. Passed by value to nurl_vec_drop for owned Vec elements.
 @ emit_drop_ptr_thunk s elem i syms → v {
     : s m ( __drop_mangle elem )
-    : s ctr ( nurl_zalloc 8 )
+    : ~ i ctr 0
     ( nurl_print `define void @drop_ptr__` ) ( nurl_print m ) ( nurl_print `(i8* %p) {\nentry:\n` )
     : s ep ( __dr ctr )
     ( nurl_print `  ` ) ( nurl_print ep ) ( nurl_print ` = bitcast i8* %p to ` ) ( nurl_print ( nurl_llty elem ) ) ( nurl_print `*\n` )
@@ -25433,7 +25435,7 @@
 }
 
 @ emit_drop_struct_fn s sname i syms → v {
-    : s ctr ( nurl_zalloc 8 )
+    : ~ i ctr 0
     ( nurl_print `define void @drop__` ) ( nurl_print sname )
     ( nurl_print `(%` ) ( nurl_print sname ) ( nurl_print ` %v) {\nentry:\n` )
     : s fcs ( nurl_sym_get2 syms sname `__field_count` )
@@ -25454,7 +25456,7 @@
 // Drop one payload slot (enum field index `fidx`) of a known payload
 // type. String / Vec slots hold the unwrapped handle (its f0); a boxed
 // struct / wide-enum slot holds a heap-box pointer (load → drop → free).
-@ emit_drop_enum_payload s ename s pt i fidx s ctr i syms → v {
+@ emit_drop_enum_payload s ename s pt i fidx inout i ctr i syms → v {
     : s slot ( __dr ctr )
     ( nurl_print `  ` ) ( nurl_print slot ) ( nurl_print ` = extractvalue %` ) ( nurl_print ename ) ( nurl_print ` %v, ` ) ( nurl_print ( nurl_str_int fidx ) ) ( nurl_print `\n` )
     // The i64 slot holds a pointer (String/Vec f0, or a heap-box) —
@@ -25489,7 +25491,7 @@
 }
 
 @ emit_drop_enum_fn s ename s variants i syms → v {
-    : s ctr ( nurl_zalloc 8 )
+    : ~ i ctr 0
     ( nurl_print `define void @drop__` ) ( nurl_print ename )
     ( nurl_print `(%` ) ( nurl_print ename ) ( nurl_print ` %v) {\nentry:\n` )
     ( nurl_print `  %dtag = extractvalue %` ) ( nurl_print ename ) ( nurl_print ` %v, 0\n` )
@@ -27514,7 +27516,6 @@
         ( nurl_sym_def syms `nurl_get_last_type__ret_owned` `str` )
         ( nurl_sym_def syms `nurl_lex_val__ret_owned` `str` )
         ( nurl_sym_def syms `nurl_lex_filename__ret_owned` `str` )
-        ( nurl_sym_def syms `nurl_lex_peek_val__ret_owned` `str` )
         ( nurl_sym_def syms `nurl_llty__ret_owned` `str` )
         ( nurl_sym_def syms `ty_to_unsigned__ret_owned` `str` )
         // Forward-called fresh-returning helpers. Return ownership is
@@ -30144,6 +30145,9 @@
     ^ n
 }
 
+// Emission policy, set by main's --sanitize-address flag.
+: ~ i g_sanitize_address 0
+
 // Print module bytes [from, to) without copying them out.
 @ __dce_print_range i from i to → v {
     ? >= from to { ^ v } {}
@@ -30152,6 +30156,39 @@
     = . mp to # u 0
     ( nurl_print # s + # i mp from )
     = . mp to sv
+}
+
+// All generated definitions pass this boundary, including closure bodies,
+// drop/dyn/SIMD thunks and replicated split definitions. The module index
+// owns the ranges; adding an attribute during writing does not invalidate
+// it or allocate a second module-sized buffer. Normal emission is unchanged.
+@ __ir_write_range i from i to i part → v {
+    ? == part 0 { ( __dce_print_range from to ) } { ( __sp_write from to ) }
+}
+
+@ __ir_write_function i st i en i part → v {
+    ? == 0 g_sanitize_address { ( __ir_write_range st en part ) ^ v } {}
+    : *u mp # *u # s g_dce_mod
+    // Return types may contain parentheses (function pointers/closures).
+    // The parameter list starts after the function NAME, at the first @.
+    : ~ i p st
+    ~ & < p en != # i . mp p 64 { = p + p 1 }
+    ~ & < p en != # i . mp p 40 { = p + p 1 }
+    : ~ i depth 1
+    = p + p 1
+    ~ & < p en > depth 0 {
+        : i c # i . mp p
+        ? == c 40 { = depth + depth 1 } {}
+        ? == c 41 { = depth - depth 1 } {}
+        = p + p 1
+    }
+    ? | >= p en != depth 0 {
+        ( nurl_eprintln `nurlc: malformed generated function header` )
+        ( nurl_exit 1 )
+    } {}
+    ( __ir_write_range st p part )
+    ? == part 0 { ( nurl_print ` sanitize_address` ) } { ( __sp_puts ` sanitize_address` ) }
+    ( __ir_write_range p en part )
 }
 
 // Emit the collected module: everything that is not a function body,
@@ -30203,7 +30240,7 @@
     = g_dce_mod # i mod
     = g_split_n 0
     // Neither pass wants the index — hand the module straight to stdout.
-    ? & == 0 g_dce == 0 g_split_max { ( __dce_print_range 0 mlen ) ^ v } {}
+    ? & & == 0 g_dce == 0 g_split_max == 0 g_sanitize_address { ( __dce_print_range 0 mlen ) ^ v } {}
     : i n ( __dce_index mlen 1 )
     ? == 0 n { ( __sp_whole mlen ) ^ v } {}
     = g_dce_start # i # s ( nurl_zalloc * n 8 )
@@ -30267,7 +30304,7 @@
         : i st ( nurl_peek # s g_dce_start ei )
         : i en ( nurl_peek # s g_dce_end ei )
         ( __dce_print_range pos st )
-        ? != 0 ( nurl_peek # s g_dce_live ei ) { ( __dce_print_range st en ) } {}
+        ? != 0 ( nurl_peek # s g_dce_live ei ) { ( __ir_write_function st en 0 ) } {}
         = pos en
         = ei + ei 1
     }
@@ -30729,7 +30766,7 @@
             ( __sp_emit_gap pos st k )
             : i pk ( nurl_peek # s g_split_part ei )
             ? | == pk k == pk + g_split_n 1
-            { ( __sp_write st en ) }
+            { ( __ir_write_function st en 1 ) }
             { ? != pk g_split_n { ( __sp_declare st en ) } {} }
             = pos en
             = ei + ei 1
@@ -30755,6 +30792,7 @@
     ( nurl_print `  --help, -h          print this help and exit\n` )
     ( nurl_print `  --version, -v       print the toolchain version and exit\n` )
     ( nurl_print `  --g, -g             emit DWARF debug info (nurl.sh --debug forwards this)\n` )
+    ( nurl_print `  --sanitize-address  mark every generated function for AddressSanitizer\n` )
     ( nurl_print `  --lint              run lint-only diagnostics: unused symbols and imports,\n` )
     ( nurl_print `                      an unreleased handle, an allocation owned by nothing\n` )
     ( nurl_print `  --no-borrowck       disable the borrow-checker pass (on by default)\n` )
@@ -30791,43 +30829,45 @@
     : ~ i ai 1
     ~ < ai ( nurl_argc ) {
         : s a ( nurl_argv ai )
-        ? | ( seq a `--version` ) ( seq a `-v` )
-        { ( nurl_print ( nurl_version ) ) ( nurl_print `\n` ) ( nurl_exit 0 ) }
-        { ? | ( seq a `--help` ) ( seq a `-h` )
-            { ( nurlc_print_help ) ( nurl_exit 0 ) }
-            { ? | ( seq a `--g` ) ( seq a `-g` )
-                { = g_dbg_enabled 1 }
-                { ? ( seq a `--lint` )
-                    { = g_lint 1 }
-                    { ? ( seq a `--borrowck` )
-                        { = g_borrowck 1 }
-                        { ? ( seq a `--no-borrowck` )
-                            { = g_borrowck 0 }
-                            { ? ( seq a `--strict-borrowck` )
-                                { = g_borrowck 1 = g_strict_borrowck 1 }
-                                { ? ( seq a `--strict-arity` )
-                                    { = g_strict_arity 1 }
-                                    { ? ( seq a `--no-strict-arity` )
-                                        { = g_strict_arity 0 }
-                                        { ? ( seq a `--ffi-host-imports` )
-                                            { = g_ffi_host_imports 1 }
-                                            { ? ( seq a `--no-cpu-dispatch` )
-                                                { = g_cpu_dispatch 0 }
-                                                { ? ( seq a `--no-dce` )
-                                                    { = g_dce 0 }
-                                                    { ? != 0 ( nurl_str_starts a `--keep=` )
-                                                        { = g_dce_keep ( nurl_str_slice a 7 - ( nurl_str_len a ) 7 ) }
-                                                        { ? != 0 ( nurl_str_starts a `--split=` )
-                                                            { = g_split_max ( nurl_str_to_int ( nurl_str_slice a 8 - ( nurl_str_len a ) 8 ) ) }
-                                                            { ? != 0 ( nurl_str_starts a `--split-out=` )
-                                                                { = g_split_out ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) }
-                                                                { ? != 0 ( nurl_str_starts a `--split-min=` )
-                                                                    { = g_split_min ( nurl_str_to_int ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) ) }
-                                                                    { = path a } } } } } } } } } } } } } } } }
+        ? ( seq a `--sanitize-address` ) { = g_sanitize_address 1 } {
+            ? | ( seq a `--version` ) ( seq a `-v` )
+            { ( nurl_print ( nurl_version ) ) ( nurl_print `\n` ) ( nurl_exit 0 ) }
+            { ? | ( seq a `--help` ) ( seq a `-h` )
+                { ( nurlc_print_help ) ( nurl_exit 0 ) }
+                { ? | ( seq a `--g` ) ( seq a `-g` )
+                    { = g_dbg_enabled 1 }
+                    { ? ( seq a `--lint` )
+                        { = g_lint 1 }
+                        { ? ( seq a `--borrowck` )
+                            { = g_borrowck 1 }
+                            { ? ( seq a `--no-borrowck` )
+                                { = g_borrowck 0 }
+                                { ? ( seq a `--strict-borrowck` )
+                                    { = g_borrowck 1 = g_strict_borrowck 1 }
+                                    { ? ( seq a `--strict-arity` )
+                                        { = g_strict_arity 1 }
+                                        { ? ( seq a `--no-strict-arity` )
+                                            { = g_strict_arity 0 }
+                                            { ? ( seq a `--ffi-host-imports` )
+                                                { = g_ffi_host_imports 1 }
+                                                { ? ( seq a `--no-cpu-dispatch` )
+                                                    { = g_cpu_dispatch 0 }
+                                                    { ? ( seq a `--no-dce` )
+                                                        { = g_dce 0 }
+                                                        { ? != 0 ( nurl_str_starts a `--keep=` )
+                                                            { = g_dce_keep ( nurl_str_slice a 7 - ( nurl_str_len a ) 7 ) }
+                                                            { ? != 0 ( nurl_str_starts a `--split=` )
+                                                                { = g_split_max ( nurl_str_to_int ( nurl_str_slice a 8 - ( nurl_str_len a ) 8 ) ) }
+                                                                { ? != 0 ( nurl_str_starts a `--split-out=` )
+                                                                    { = g_split_out ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) }
+                                                                    { ? != 0 ( nurl_str_starts a `--split-min=` )
+                                                                        { = g_split_min ( nurl_str_to_int ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) ) }
+                                                                        { = path a } } } } } } } } } } } } } } } }
+        }
         = ai + ai 1
     }
     ? == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch] [--no-dce] [--keep=a,b] [--split=N --split-out=PREFIX] <file.nu>` ) ( nurl_exit 1 ) }
+    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--sanitize-address] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch] [--no-dce] [--keep=a,b] [--split=N --split-out=PREFIX] <file.nu>` ) ( nurl_exit 1 ) }
     {}
     // --split writes files, so it needs somewhere to write them. Cap it
     // at 64: past the core count the parts only get smaller, and each

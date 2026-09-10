@@ -12,7 +12,7 @@ and every incremental step here is gated (see §5).
 
 ## 1. Shape
 
-`compiler/nurlc.nu` is **one self-contained file** (~18.8k lines, no `$`
+`compiler/nurlc.nu` is **one self-contained file** (no `$`
 imports — it defines its own string/symtab/lexer helpers so stage0 can
 build it from `nurlc_lastgood.ll` with nothing but clang). There is **no
 AST and no IR data structure**: parsing, type checking, borrow checking
@@ -77,13 +77,16 @@ from `main` (roots: `main`, plus anything named between blocks — a
 the live sub-sequence. Working on the finished text rather than a
 source-level call graph is what keeps it indifferent to how a function
 came to exist: closures, monomorphisations, drop glue and dyn thunks are
-all just `@name` references by then. Nothing is rewritten or reordered,
-only dropped, and dropping something still referenced surfaces as an
-undefined symbol at link time.
+all just `@name` references by then. Normal output only drops unreachable
+definitions. With `--sanitize-address`, `__ir_write_function` inserts the
+ASan function attribute as each indexed range is written. The same boundary
+writes split definitions, including replicas; it neither shifts the index
+nor allocates another module buffer. Dropping something still referenced
+surfaces as an undefined symbol at link time.
 
 ## 3. Global state — families and owners
 
-~70 globals fall into a dozen families. The generated appendix (§6)
+Globals fall into the families below. The generated appendix (§6)
 lists every one with its writers; this section is the mental model.
 "Sym table" below = the compiler's own scoped string→string map
 (`nurl_sym_new/def/get`, push/pop for scopes; `strdup` on both def and
@@ -107,6 +110,7 @@ get — returned values are owned copies).
 | DWARF | `g_dbg_*` | metadata id allocator + queued `!DI*` blobs; only live under `--g` |
 | lint | `g_lint*` | usage recording; only under `--lint` |
 | visibility/modules | `g_vis_syms`, `g_pending_pub` | import graph + pub tracking for cross-file access checks |
+| module emission | `g_dce_*`, `g_split_*`, `g_sanitize_address` | buffered module, live-function index, partitioning and ASan attribute policy; whole run, written at final emission |
 
 Reset discipline: everything is initialised in `main()` and the process
 compiles exactly one program — **there is no reuse between files**
@@ -212,15 +216,15 @@ Regenerate after adding/renaming globals:
 | `g_dbg_placeholder_ty` | :1442 | `dbg_init` | dbg_init and reused for every fn. Phase 6 will replace with per-fn signature types. |
 | `g_dbg_subroutine_ty` | :1439 | `dbg_init` | emit_dbg_eol then omits `, !dbg !N`) |
 | `g_dbg_type_syms` | :1481 | `dbg_init` |  |
-| `g_dce` | :29999 | `main` |  |
-| `g_dce_end` | :30025 | `dce_emit_module`, `dce_free` |  |
-| `g_dce_keep` | :30010 | `main` | `--keep=a,b,c` — extra DCE roots.  The pass's root set is `main` plus whatever module-scope constants name. Th |
-| `g_dce_live` | :30026 | `dce_emit_module`, `dce_free` |  |
-| `g_dce_map` | :30029 | `dce_emit_module`, `dce_free` |  |
-| `g_dce_mod` | :30023 | `dce_emit_module` | The module text, as an integer cast of a BORROWED `s`. Deliberately not a `: ~ s` global: a mutable string glo |
-| `g_dce_qn` | :30028 | `__dce_mark_name`, `dce_emit_module` |  |
-| `g_dce_queue` | :30027 | `dce_emit_module`, `dce_free` |  |
-| `g_dce_start` | :30024 | `dce_emit_module`, `dce_free` |  |
+| `g_dce` | :30000 | `main` |  |
+| `g_dce_end` | :30026 | `dce_emit_module`, `dce_free` |  |
+| `g_dce_keep` | :30011 | `main` | `--keep=a,b,c` — extra DCE roots.  The pass's root set is `main` plus whatever module-scope constants name. Th |
+| `g_dce_live` | :30027 | `dce_emit_module`, `dce_free` |  |
+| `g_dce_map` | :30030 | `dce_emit_module`, `dce_free` |  |
+| `g_dce_mod` | :30024 | `dce_emit_module` | The module text, as an integer cast of a BORROWED `s`. Deliberately not a `: ~ s` global: a mutable string glo |
+| `g_dce_qn` | :30029 | `__dce_mark_name`, `dce_emit_module` |  |
+| `g_dce_queue` | :30028 | `dce_emit_module`, `dce_free` |  |
+| `g_dce_start` | :30025 | `dce_emit_module`, `dce_free` |  |
 | `g_defer_count` | :959 | `gen_defer`, `gen_fn_decl_concrete` |  |
 | `g_deferred_bck` | :1346 | `main` | Functions whose borrow-check walk is parked until the whole module has compiled (see borrowck_fn_end). `n` is  |
 | `g_diag_ctx` | :124 | `dyn_subst_parts`, `emit_missing_defaults`, `emit_one_instantiation`, `register_missing_defaults` | Diagnostic context suffix, appended to every die/warn message while non-empty. Set (and saved/restored — insta |
@@ -286,14 +290,15 @@ Regenerate after adding/renaming globals:
 | `g_ptrtab` | :1196 | `main` |  |
 | `g_res_type_syms` | :343 | `main` | ── Res-type NURL tracking (must be declared before parse_type_res) ── g_res_type_syms is initialized to a new  |
 | `g_ret_forbidden` | :941 | `gen_cond`, `gen_logical_or_bitwise_and`, `gen_logical_or_bitwise_or`, `gen_operand` +1 | Cascade guard: 1 while parsing a VALUE OPERAND (a binary/unary/cast/ member operand, a call argument, a `?`/`? |
-| `g_split_fh` | :30019 | `__sp_close`, `__sp_open` |  |
-| `g_split_fill` | :30017 | `split_emit_module` |  |
-| `g_split_max` | :30013 | `main` |  |
-| `g_split_min` | :30014 | `main` |  |
-| `g_split_n` | :30012 | `__sp_whole`, `dce_emit_module`, `split_emit_module` | Partitioned emission — see "Partitioned emission" below. |
-| `g_split_out` | :30015 | `main` |  |
-| `g_split_part` | :30016 | `split_emit_module` |  |
-| `g_split_priv` | :30018 | `split_emit_module` |  |
+| `g_sanitize_address` | :30149 | `main` | Emission policy, set by main's --sanitize-address flag. |
+| `g_split_fh` | :30020 | `__sp_close`, `__sp_open` |  |
+| `g_split_fill` | :30018 | `split_emit_module` |  |
+| `g_split_max` | :30014 | `main` |  |
+| `g_split_min` | :30015 | `main` |  |
+| `g_split_n` | :30013 | `__sp_whole`, `dce_emit_module`, `split_emit_module` | Partitioned emission — see "Partitioned emission" below. |
+| `g_split_out` | :30016 | `main` |  |
+| `g_split_part` | :30017 | `split_emit_module` |  |
+| `g_split_priv` | :30019 | `split_emit_module` |  |
 | `g_stmt_bare_lit` | :3602 | `gen_stmt` | g_stmt_bare_lit — set by gen_stmt to 1 when the statement it just parsed was a bare numeric/string LITERAL in  |
 | `g_stmt_bare_value` | :3629 | `gen_stmt` | g_stmt_bare_value — the literal flag's general sibling (critic A2, the last silent prefix-arity cascade): set  |
 | `g_stmt_col` | :3544 | `gen_stmt` | g_stmt_col — column of the current statement's first token, captured alongside g_stmt_line. `die_stmt` anchors |
