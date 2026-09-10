@@ -53,7 +53,7 @@ $ `stdlib/ext/resolver.nu`
 }
 
 @ main → i {
-    : ( @ String s ) fetch \ s name → String { ^ ( idx_for name ) }
+    : ( @ String s s ) fetch \ s registry s name → String { ^ ( idx_for name ) }
 
     // Satisfiable diamond → c 1.4.0.
     ( nurl_print `── diamond ──\n` )

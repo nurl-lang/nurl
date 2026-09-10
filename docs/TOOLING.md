@@ -123,6 +123,49 @@ deps follow the newest published version, path deps the local copy's
 `lock`, `verify`, `publish`, `login`, `logout [--revoke]`, `search`,
 `yank` / `unyank`, `test`, `bench`, `self-update`, `version`, `help`.
 
+Registry dependencies carry a `(registry URL, package name)` identity through
+resolution, index caching, downloads, signature checks and `nurl.lock`.
+An explicit dependency `registry` selects that origin; transitive index
+requirements inherit their parent's registry. Custom `resolve_registry` fetch
+callbacks now receive `(registry, name)` and return an owned `String`. URL normalization lowercases the
+scheme and host, removes the default port and adds a trailing slash. Path bytes
+are preserved. Credentials, queries and fragments are rejected.
+
+For private registries, configure signing keys in
+`$NURL_HOME/registries.toml` (or `~/.nurl/registries.toml` when `NURL_HOME` is
+unset). `NURL_REGISTRY_CONFIG` selects an explicit file instead:
+
+```toml
+[registries]
+"https://packages.example.org/" = "<minisign public-key base64 payload>"
+"https://another.example.org/team/" = "<that registry's public-key payload>"
+```
+
+Obtain each key from the registry operator through a trusted channel. Downloaded
+manifests and index responses cannot add trusted keys. The public NURL registry
+has a built-in key. An absent default config is allowed; an unreadable explicit
+file, malformed key or conflicting keys for one normalized URL fail the install.
+The legacy `NURL_REGISTRY_PUBKEY` variable is scoped to `NURL_REGISTRY`, or to
+the public default when that variable is absent. It cannot authorize another
+explicit dependency registry. A conflicting file/env pin is an error.
+
+Index fields must have the expected JSON types and contain no embedded NUL;
+malformed indexes and truncated text sources are rejected before archive downloads.
+Every registry archive requires a matching SHA-256 and minisign signature.
+Before extraction, its root `nurl.toml` must name the requested package and
+version exactly, and all archive paths and member types are checked. Failed
+resolution or authentication returns nonzero, preserves the prior lock and
+prints no project installation success. `nurlpkg lock` retains existing source
+and checksum fields and refuses missing/renamed registry packages or
+installed-version drift. Local development versions can still be refreshed.
+
+The resolver can distinguish equal package names in separate registries, but
+the current `deps/<name>` installation layout cannot expose both. The CLI
+reports that conflict before downloading archives. Resolution is still greedy
+with one version per identity; a nonconverging graph is an error. These checks
+do not provide frozen-lock installation or an atomic transaction across the
+whole dependency tree; those remain tracked in `docs/dev/V1_HARDENING.md`.
+
 **`publish` runs five gates before it packs anything**, and refuses on
 any of them — a published version can be yanked but never replaced, so
 the tool is deliberately harder to talk into an upload than out of one:

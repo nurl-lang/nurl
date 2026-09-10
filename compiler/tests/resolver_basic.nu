@@ -44,7 +44,7 @@ $ `stdlib/ext/resolver.nu`
 }
 
 @ main → i {
-    : ( @ String s ) fetch \ s name → String { ^ ( idx_for name ) }
+    : ( @ String s s ) fetch \ s registry s name → String { ^ ( idx_for name ) }
 
     // ── happy path ───────────────────────────────────────────────
     ( nurl_print `── resolve ──\n` )

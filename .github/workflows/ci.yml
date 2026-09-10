@@ -149,6 +149,12 @@ jobs:
           python3 tools/tests/test_formatter.py
           bash compiler/tests/lsp_rename_smoke.sh
 
+      - name: Signed registry identities and installed ecosystem
+        timeout-minutes: 10
+        run: |
+          python3 tools/tests/test_registry_identity.py
+          ./tools/nurlpkg/test-install-tool.sh
+
       - name: Retain complete build logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -632,6 +638,14 @@ jobs:
 
       - name: Instrumented formatter ownership and CLI controls
         run: NURL_SAN=1 python3 tools/tests/test_formatter.py
+
+      - name: Instrumented registry identity and trust controls
+        run: |
+          NURL_SAN=1 python3 tools/tests/test_registry_identity.py
+          NURL_SAN=1 ./nurl.sh compiler/tests/registry_trust.nu build/registry-trust-leaks
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 ./build/registry-trust-leaks
+          NURL_SAN=1 ./nurl.sh compiler/tests/resolver_registry.nu build/resolver-registry-leaks
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 ./build/resolver-registry-leaks
 
       - name: Generated-code sanitizer detection controls
         run: python3 tools/sanitizer_controls.py

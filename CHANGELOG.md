@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Registry origin and signing trust stay attached to package identity.**
+  Explicit dependency registries now select their own indexes and archives,
+  including transitive dependencies. Per-registry user key configuration
+  replaces the global cross-registry override; missing keys/signatures,
+  changed bytes and mismatched archive manifests fail closed. Index shape
+  and full text lengths are checked before projecting metadata; embedded NUL
+  cannot truncate identities, requirements, checksums or trust config. Lock refresh
+  retains origins/checksums, escapes strings and rejects version drift.
+  Failed installs preserve the prior lock and no longer print success.
+  Equal-name source collisions are reported before archive downloads until
+  the installation layout supports coexistence. Signed tests exercise real
+  CLI failures and five installed ecosystem programs; CI runs both suites.
+
 - **Formatter ownership and failure handling are explicit.** Token cleanup
   releases source slices while preserving the borrowed EOF sentinel. Every
   CLI path frees arguments, source and output, and the reusable formatter can

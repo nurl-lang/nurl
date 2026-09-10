@@ -891,7 +891,7 @@ $ `stdlib/std/float.nu`
 // Emit one value in its inline form.
 @ __toml_emit_value String out TomlValue v → v {
     ?? v {
-        TStr s → ( __toml_emit_str out ( string_data s ) )
+        TStr s → ( toml_append_quoted out ( string_data s ) )
         TInt n → ( string_push_int out n )
         TFloat x → ( __toml_emit_float out x )
         TBool x → {
@@ -934,7 +934,7 @@ $ `stdlib/std/float.nu`
 
 // Emit a quoted TOML basic string. Bytes are pushed directly to avoid
 // any ambiguity over escape handling in NURL string literals.
-@ __toml_emit_str String out s text → v {
+@ toml_append_quoted String out s text → v {
     ( string_push_char out 34 )
     : i n ( nurl_str_len text )
     : *u p # *u text
@@ -968,5 +968,5 @@ $ `stdlib/std/float.nu`
         ? ( __t_is_bare & 255 # i . p k ) {} { = bare F }
         = k + k 1
     }
-    ? bare { ( string_push_str out key ) } { ( __toml_emit_str out key ) }
+    ? bare { ( string_push_str out key ) } { ( toml_append_quoted out key ) }
 }

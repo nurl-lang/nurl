@@ -11,8 +11,8 @@ in reviewable groups. No item below certifies the whole language or ecosystem.
 | A01: sanitizer coverage | Ordinary driver, bootstrap, split output and fuzz paths detect deliberate memory faults in generated code; clean controls, corpus and fuzz pass; UBSan/LLVM semantics documented | ASan emission implemented and calibrated; revealed HTTP/3 UAF and compiler leaks repaired; lexical stack-lifetime, rejected-compilation cleanup and arithmetic work remains open |
 | A02: trustworthy compiler runners | Missing-main rejection fixtures run; crash/hang/worker fault controls fail closed; complete corpus verdict accounting | Verified in local normal/sanitized corpus and POSIX/PowerShell controls; native Windows execution remains CI evidence |
 | A03: installed LSP | Separate installed project, unsaved edits, sibling/dependency imports, visible execution errors | Independently reproduced; repaired and verified with relocated binaries and 20 normal/ASan protocol/compiler controls on Linux; native Windows and actual distribution installation remain unverified |
-| A04: registry identity | Two local registries with equal package names; fetch, resolution, signing and lock identity preserved; errors never print success | Explicit-registry lookup and false success independently reproduced; repair and full identity controls pending |
-| A05: signed install smoke | Signed fixtures install after relocation with transitive dependencies; missing/wrong/tampered signatures reject; CI runs it | Pending reproduction |
+| A04: registry identity | Two local registries with equal package names; fetch, resolution, signing and lock identity preserved; errors never print success | Origin/key/index/archive/lock binding repaired and locally tested; flat-layout coexistence, backtracking and transactional/frozen installation remain open |
+| A05: signed install smoke | Signed fixtures install after relocation with transitive dependencies; missing/wrong/tampered signatures reject; CI runs it | Unsigned/stale smoke independently reproduced; signed five-program relocation smoke and CLI negative controls pass locally, wired into CI; remote run pending |
 | A06: JS dependencies | Fresh manager-native audits, reachability analysis, lockfile updates and builds/tests for all four trees; recurring checks | Pending fresh advisory evidence |
 | A07: continuous package/service tests | Suite/prerequisite manifest, changed packages and reverse dependencies, scheduled coverage; registry/cloud and diagnostic gates in CI | Pending current workflow inventory |
 | A08: documentation consistency | Grammar, spec, platform claims, generated facts and executable docs agree with implementation | Runner prerequisites, macOS/musl claims and stale leak comments corrected from source; remaining claims pending |
@@ -347,3 +347,115 @@ index-cache lookup keys omit the registry. The complete identity/signing/lock
 repair remains open. Script and captured requests/output are retained as
 `build/v1-hardening/registry-identity-probe.py` and
 `build/v1-hardening/registry-identity-independent.json`.
+
+
+## A04/A05 registry identity and signed installation
+
+The initial 12-method signed CLI fixture produced 16 assertion failures against
+`e08f622b` and passed after repair. It serves two independent registries under
+one ephemeral localhost listener, uses independent deterministic test keys,
+records every requested path, and uses OpenSSL to sign archives independently
+of NURL's verifier. The expanded suite also checks existing package/lock
+preservation, malformed locks, installed-version drift and missing checksums.
+The initial 17-method suite passes in ordinary and instrumented CLI builds;
+final coverage below includes additional malformed-input controls. These
+controls do not validate the cryptographic primitive itself (A14 remains open).
+
+The resolver now keys constraints, selected versions and its index cache by
+normalized registry URL plus name. Its fetch callback receives both fields;
+transitive index dependencies inherit the parent origin. An index must identify
+the requested package. Locks carry that origin through downloads and key lookup.
+The standalone serializer sorts borrowed record pointers by complete identity,
+leaving callers' records intact with one word of sorting storage per package;
+shared TOML quoting replaces the incorrect assumption that paths cannot contain
+quotes or backslashes. `lock` retains prior registry pins and refuses missing/renamed registry
+packages or version drift, while allowing local development versions to change.
+Both CLI and library now use the same typed lock serializer. Failed resolution/authentication does not replace the prior lock or print
+project installation success.
+
+`registry_trust` loads one user-owned URL→key map per resolved installation
+batch. No registry response or downloaded manifest can establish a key. The
+legacy single-key environment override is bound only to the selected default
+registry. Unknown origins, malformed config and conflicting normalized pins
+fail before archive downloads. SHA-256, signature, root manifest name/version,
+duplicate manifests and archive member safety are checked before extraction.
+The parsed archive is reused for validation and extraction instead of parsed
+and copied twice.
+
+The previous ecosystem smoke independently failed: it supplied no signatures,
+looked for obsolete `Installed <name>` text, ignored installer exit codes and
+hardcoded md2html 0.1.1 despite the actual manifest being 0.1.2. It now derives
+versions/dependencies from manifests, signs every fixture archive, configures
+the relocated toolchain's own trust file, uses a private ephemeral port with a
+readiness check, and fails on command exits. Its five installed programs (`nq`,
+`md2html`, `chart`, `iforest`, and synthetic `mdcat`) must execute correctly;
+`mdcat` exercises transitive registry resolution and compilation. It passes
+locally and both suites are wired into CI. No remote CI result is claimed.
+
+Reproduction commands:
+
+```sh
+python3 tools/tests/test_registry_identity.py
+./tools/nurlpkg/test-install-tool.sh
+./compiler/tests/run_tests.sh resolver_registry registry_trust
+NURL_SAN=1 ./nurl.sh compiler/tests/registry_trust.nu build/registry-trust-leaks
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 ./build/registry-trust-leaks
+```
+
+The pure resolver and trust/lock controls run with leak detection enabled and
+pass. CLI controls disable leak detection because existing package-manager
+ownership paths are not yet leak-clean; ASan/UBSan errors still fail each test.
+A capturing comparator passed through `sort_by` also exposed the compiler's
+conservative callback-escape analysis: the environment leaks because forwarding
+through recursive generic helpers is not proved to borrow it. The serializer
+needs no captured context when sorting record pointers, but that independent
+compiler limitation remains A01/A13 work, not a claimed compiler fix.
+
+**Remaining scope:** the resolver can represent equal names from different
+registries, but the compiler's global imports and the CLI's flat `deps/<name>`
+layout do not yet support their coexistence. The CLI detects and refuses this
+collision before downloading either archive; this is an explicit limitation,
+not A04 closure. Greedy resolution still lacks backtracking; exceeding the
+convergence bound now errors rather than returning an unchecked lock. Lock
+shape/version validation, typed transport failures, frozen installation, package-scoped import/symbol
+identity, mixed local/registry graphs, exclusive staging, existing symlink
+protection and atomic publication of the dependency tree remain open A04/A09/A15
+work. Archive preflight does not make filesystem I/O failure transactional.
+The NURL registry service's own publish/install test still has separate unsigned
+fixtures and requires its own signing-path investigation under A07/A17.
+
+
+Additional boundary controls reproduced seven accepted invalid inputs: decoded
+NUL in the index name, version, checksum, dependency name or requirement, plus
+raw NUL after an otherwise valid HTTP index or trust-config file. The original
+`__ridx_str` projected JSON through a C string and silently discarded the suffix.
+Index parsing now validates field types and complete strings before projection;
+HTTP fetches preserve the actual body length, and resolver/config readers reject
+embedded NUL before handing a source to a C-string parser. Unknown JSON fields
+remain allowed. The negative fixture also covers incorrectly typed version,
+checksum, yanked and dependency fields. Missing checksums now fail as a bad
+index before an archive download. All 19 CLI controls pass in the updated
+instrumented build; the seven pre-fix failures are retained in
+`build/v1-hardening/registry-nul-before.log`.
+
+The registry service's existing socket-free wire suite was also compiled and
+executed with ASan/UBSan: all 55 checks passed, covering publish/read/yank/auth
+operations with the shared name validator. This does not establish that its
+separate unsigned network install fixture works, nor that a live deployment is
+configured correctly. Native Windows archive-path semantics and existing
+filesystem symlinks still require dedicated A15 validation.
+
+
+Final validation for this change on Linux x86_64 (clang 18): the normal
+bootstrap passed in 41 s and its corpus in 2 m 21 s; the sanitized bootstrap
+passed in 69 s. Both complete corpora account for 982 inputs: 963 PASS,
+19 SKIP, no failures or timeouts. All 19 signed CLI controls pass in the final
+normal and ASan/UBSan builds, and all five installed ecosystem programs pass
+with the final normal toolchain. The pure registry trust/index error controls
+and the two-origin resolver run with LSan enabled and report zero leaks.
+Formatter idempotence/IR checks pass, including an explicit two-file run for
+nurlpkg and the registry store (neither skipped). Normal tools are restored.
+Final logs are retained under `build/v1-hardening/registry-complete-*`,
+`registry-final-san-corpus.log`, `registry-nul-san-controls.log`,
+`registry-trust-complete-*` and `resolver-registry-complete-*`. The goal remains
+open for the separate architectural, transactional and platform items above.

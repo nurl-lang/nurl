@@ -2,14 +2,14 @@
 //
 // Given a manifest's registry dependencies and a way to fetch a package's
 // index JSON, walk the transitive dependency graph, pick for each package
-// name the highest version satisfying ALL of its accumulated requirements,
+// (registry, name) the highest version satisfying ALL of its accumulated requirements,
 // and emit a `Vec[LockPkg]` ready for `lock_serialize`. The index fetcher is
-// injected as a closure (`name → index-JSON String`, empty = not found) so
+// injected as a closure (`registry, name → index-JSON String`, empty = not found) so
 // the resolver is pure and offline-testable; nurlpkg wires it to an HTTP GET
 // of `<registry>/index/<name>.json`.
 //
-// Resolution policy (greedy, single version per name):
-//   * One version per package name (no multi-major coexistence / SAT solving).
+// Resolution policy (greedy, single version per registry/name):
+//   * One version per registry/name pair (no multi-major coexistence / SAT solving).
 //   * A name's version is the HIGHEST published, non-yanked version that
 //     satisfies the INTERSECTION of every requirement placed on it — direct
 //     or transitive. This is a fixpoint: select against the accumulated
@@ -36,12 +36,15 @@ $ `stdlib/ext/manifest.nu`
 $ `stdlib/ext/lockfile.nu`
 $ `stdlib/ext/registry_index.nu`
 $ `stdlib/ext/semver.nu`
+$ `stdlib/ext/registry_id.nu`
 
 : | ResolveErr {
     ResolveNotFound  // a package has no index (fetch returned empty)
     ResolveBadIndex  // a fetched index didn't parse
     ResolveNoMatch  // no published version satisfies the requirement
-    ResolveConflict  // two requirements on one name can't share a version
+    ResolveConflict  // two requirements on one identity cannot share a version
+    ResolveBadRegistry  // not an HTTP(S) registry directory URL
+    ResolveUnstable  // selection did not converge; never return an unchecked lock
 }
 
 @ resolve_err_name ResolveErr e → s {
@@ -50,6 +53,8 @@ $ `stdlib/ext/semver.nu`
         ResolveBadIndex → `ResolveBadIndex`
         ResolveNoMatch → `ResolveNoMatch`
         ResolveConflict → `ResolveConflict`
+        ResolveBadRegistry → `ResolveBadRegistry`
+        ResolveUnstable → `ResolveUnstable`
     }
 }
 
@@ -64,18 +69,9 @@ $ `stdlib/ext/semver.nu`
     ( vec_free [String] v )
 }
 
-// "registry+<reg>"
-@ __reg_source s reg → String {
-    : String out ( string_with_cap 48 )
-    ( string_push_str out `registry+` )
-    ( string_push_str out reg )
-    ^ out
-}
-
-// ── Accumulated constraints for one package name ──────────────────────
+// ── Accumulated constraints for one registry/name pair ──────────────────────
 // `reqs` is every requirement placed on `name` so far; `registry` is the
-// registry it (and its own sub-deps) are fetched/sourced from, kept from the
-// first time the name is seen.
+// registry it and its transitive dependencies are fetched from.
 : __NameReq { String name ( Vec String ) reqs String registry }
 
 @ __nreq_free __NameReq nr → v {
@@ -96,12 +92,12 @@ $ `stdlib/ext/semver.nu`
 }
 
 // Index of the __NameReq for `name`, or -1.
-@ __nreq_find ( Vec __NameReq ) cs s name → i {
+@ __nreq_find ( Vec __NameReq ) cs s name s registry → i {
     : i n ( vec_len [__NameReq] cs )
     : ~ i k 0
     ~ < k n {
         : ?__NameReq o ( vec_get [__NameReq] cs k )
-        ?? o { T nr → { ? != 0 ( nurl_str_eq ( string_data . nr name ) name ) { ^ k } {} } F → {} }
+        ?? o { T nr → { ? & != 0 ( nurl_str_eq ( string_data . nr name ) name ) != 0 ( nurl_str_eq ( string_data . nr registry ) registry ) { ^ k } {} } F → {} }
         = k + k 1
     }
     ^ -1
@@ -119,10 +115,10 @@ $ `stdlib/ext/semver.nu`
 }
 
 // Add (name, req, registry) to the constraint set, deduping reqs; the
-// registry is kept from the first time a name is seen. (Vec is a shared
+// registry is part of the key. (Vec is a shared
 // boxed handle, so pushing to `. nr reqs` mutates the stored entry.)
 @ __nreq_add ( Vec __NameReq ) cs s name s req s registry → v {
-    : i i ( __nreq_find cs name )
+    : i i ( __nreq_find cs name registry )
     ? >= i 0 {
         : ?__NameReq o ( vec_get [__NameReq] cs i )
         ?? o {
@@ -168,18 +164,18 @@ $ `stdlib/ext/semver.nu`
 
 // ── Fetched-index cache ───────────────────────────────────────────────
 // status: 1 = parsed ok, 0 = not found (empty fetch), -1 = bad index.
-: __IdxCache { String name i status RegIndex idx }
+: __IdxCache { String name String registry i status RegIndex idx }
 
 @ __empty_regindex → RegIndex {
     ^ @ RegIndex { ( string_new ) ( vec_new [IdxVersion] ) }
 }
 
-@ __cache_find ( Vec __IdxCache ) cache s name → i {
+@ __cache_find ( Vec __IdxCache ) cache s name s registry → i {
     : i n ( vec_len [__IdxCache] cache )
     : ~ i k 0
     ~ < k n {
         : ?__IdxCache o ( vec_get [__IdxCache] cache k )
-        ?? o { T c → { ? != 0 ( nurl_str_eq ( string_data . c name ) name ) { ^ k } {} } F → {} }
+        ?? o { T c → { ? & != 0 ( nurl_str_eq ( string_data . c name ) name ) != 0 ( nurl_str_eq ( string_data . c registry ) registry ) { ^ k } {} } F → {} }
         = k + k 1
     }
     ^ -1
@@ -187,20 +183,28 @@ $ `stdlib/ext/semver.nu`
 
 // Ensure `name`'s index is cached; return its cache index. Fetches + parses
 // on first request.
-@ __cache_ensure ( Vec __IdxCache ) cache s name ( @ String s ) fetch → i {
-    : i hit ( __cache_find cache name )
+@ __cache_ensure ( Vec __IdxCache ) cache s name s registry ( @ String s s ) fetch → i {
+    : i hit ( __cache_find cache name registry )
     ? >= hit 0 { ^ hit } {}
-    : String json ( fetch name )
+    : String json ( fetch registry name )
     ? == ( string_len json ) 0 {
         ( string_free json )
-        ( vec_push [__IdxCache] cache @ __IdxCache { ( string_from name ) 0 ( __empty_regindex ) } )
+        ( vec_push [__IdxCache] cache @ __IdxCache { ( string_from name ) ( string_from registry ) 0 ( __empty_regindex ) } )
         ^ - ( vec_len [__IdxCache] cache ) 1
     } {}
-    : !RegIndex RegIndexErr ir ( regindex_parse ( string_data json ) )
+    : !RegIndex RegIndexErr ir ? == ( string_len json ) ( nurl_str_len ( string_data json ) )
+    ( regindex_parse ( string_data json ) ) @ !RegIndex RegIndexErr { F RegIdxParseFailed }
     ( string_free json )
     ?? ir {
-        T idx → ( vec_push [__IdxCache] cache @ __IdxCache { ( string_from name ) 1 idx } )
-        F _ → ( vec_push [__IdxCache] cache @ __IdxCache { ( string_from name ) -1 ( __empty_regindex ) } )
+        T idx → {
+            ? != 0 ( nurl_str_eq ( string_data . idx name ) name ) {
+                ( vec_push [__IdxCache] cache @ __IdxCache { ( string_from name ) ( string_from registry ) 1 idx } )
+            } {
+                ( regindex_free idx )
+                ( vec_push [__IdxCache] cache @ __IdxCache { ( string_from name ) ( string_from registry ) -1 ( __empty_regindex ) } )
+            }
+        }
+        F _ → ( vec_push [__IdxCache] cache @ __IdxCache { ( string_from name ) ( string_from registry ) -1 ( __empty_regindex ) } )
     }
     ^ - ( vec_len [__IdxCache] cache ) 1
 }
@@ -210,7 +214,7 @@ $ `stdlib/ext/semver.nu`
     : ~ i k 0
     ~ < k n {
         : ?__IdxCache o ( vec_get [__IdxCache] cache k )
-        ?? o { T c → { ( string_free . c name ) ( regindex_free . c idx ) } F → {} }
+        ?? o { T c → { ( string_free . c name ) ( string_free . c registry ) ( regindex_free . c idx ) } F → {} }
         = k + k 1
     }
     ( vec_free [__IdxCache] cache )
@@ -284,12 +288,12 @@ $ `stdlib/ext/semver.nu`
 // ── Constraint expansion from the current selection ───────────────────
 
 // Raw version string locked for `name`, or `` if not selected.
-@ __lock_version_of ( Vec LockPkg ) locked s name → s {
+@ __lock_version_of ( Vec LockPkg ) locked s name s source → s {
     : i n ( vec_len [LockPkg] locked )
     : ~ i k 0
     ~ < k n {
         : ?LockPkg o ( vec_get [LockPkg] locked k )
-        ?? o { T p → { ? != 0 ( nurl_str_eq ( string_data . p name ) name ) { ^ ( string_data . p version ) } {} } F → {} }
+        ?? o { T p → { ? & != 0 ( nurl_str_eq ( string_data . p name ) name ) != 0 ( nurl_str_eq ( string_data . p source ) source ) { ^ ( string_data . p version ) } {} } F → {} }
         = k + k 1
     }
     ^ ``
@@ -334,9 +338,11 @@ $ `stdlib/ext/semver.nu`
             T nr → {
                 : s nm ( string_data . nr name )
                 : s reg ( string_data . nr registry )
-                : s ver ( __lock_version_of locked nm )
+                : String source ( registry_source reg )
+                : s ver ( __lock_version_of locked nm ( string_data source ) )
+                ( string_free source )
                 ? != 0 ( nurl_str_len ver ) {
-                    : i ic ( __cache_find cache nm )
+                    : i ic ( __cache_find cache nm reg )
                     ? >= ic 0 {
                         : ?__IdxCache ico ( vec_get [__IdxCache] cache ic )
                         ?? ico {
@@ -353,7 +359,7 @@ $ `stdlib/ext/semver.nu`
     ^ out
 }
 
-// Order-independent equality of two selections (name → version).
+// Order-independent equality of two selections ((source, name) → version).
 @ __lock_same ( Vec LockPkg ) a ( Vec LockPkg ) b → b {
     ? != ( vec_len [LockPkg] a ) ( vec_len [LockPkg] b ) { ^ F } {}
     : i n ( vec_len [LockPkg] a )
@@ -363,7 +369,7 @@ $ `stdlib/ext/semver.nu`
         : ?LockPkg o ( vec_get [LockPkg] a k )
         ?? o {
             T p → {
-                : s bv ( __lock_version_of b ( string_data . p name ) )
+                : s bv ( __lock_version_of b ( string_data . p name ) ( string_data . p source ) )
                 ? ! & != 0 ( nurl_str_len bv ) != 0 ( nurl_str_eq bv ( string_data . p version ) ) { = ok F } {}
             }
             F → {}
@@ -373,7 +379,7 @@ $ `stdlib/ext/semver.nu`
     ^ ok
 }
 
-@ resolve_registry ( Vec Dep ) roots s default_registry ( @ String s ) fetch → !( Vec LockPkg ) ResolveErr {
+@ resolve_registry ( Vec Dep ) roots s default_registry ( @ String s s ) fetch → !( Vec LockPkg ) ResolveErr {
     : ( Vec __IdxCache ) cache ( vec_new [__IdxCache] )
     : ( Vec __NameReq ) rootcs ( vec_new [__NameReq] )
 
@@ -386,7 +392,18 @@ $ `stdlib/ext/semver.nu`
             T d → {
                 ? ( dep_is_registry d ) {
                     : s reg ? > ( string_len . d registry ) 0 ( string_data . d registry ) default_registry
-                    ( __nreq_add rootcs ( string_data . d name ) ( string_data . d version ) reg )
+                    ?? ( registry_url reg ) {
+                        T normalized → {
+                            ( __nreq_add rootcs ( string_data . d name ) ( string_data . d version ) ( string_data normalized ) )
+                            ( string_free normalized )
+                        }
+                        F empty → {
+                            ( string_free empty )
+                            ( __nreqs_free rootcs )
+                            ( __cache_free cache )
+                            ^ @ !( Vec LockPkg ) ResolveErr { F ResolveBadRegistry }
+                        }
+                    }
                 } {}
             }
             F → {}
@@ -414,7 +431,7 @@ $ `stdlib/ext/semver.nu`
                 T nreq → {
                     : s nm ( string_data . nreq name )
                     : s reg ( string_data . nreq registry )
-                    : i icx ( __cache_ensure cache nm fetch )
+                    : i icx ( __cache_ensure cache nm reg fetch )
                     : ?__IdxCache ico ( vec_get [__IdxCache] cache icx )
                     ?? ico {
                         T ce → {
@@ -431,7 +448,7 @@ $ `stdlib/ext/semver.nu`
                                             T iv → ( vec_push [LockPkg] newlocked @ LockPkg {
                                                 ( string_from nm )
                                                 ( string_from ( string_data . iv version ) )
-                                                ( __reg_source reg )
+                                                ( registry_source reg )
                                                 ( string_from ( string_data . iv checksum ) )
                                             } )
                                             F → {}
@@ -466,6 +483,7 @@ $ `stdlib/ext/semver.nu`
         }
     }
 
+    ? ! done { = failed 1 = ferr ResolveUnstable } {}
     ( __nreqs_free cs )
     ( __nreqs_free rootcs )
     ( __cache_free cache )

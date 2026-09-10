@@ -16,13 +16,15 @@
 //
 //   ( tar_create entries )         → ! ( Vec u ) TarErr   entries → archive bytes
 //   ( tar_parse  archive )         → ! ( Vec TarEntry ) TarErr   bytes → entries (in-memory)
+//   ( tar_unpack_entries entries dest ) → ! i TarErr   validate and extract borrowed entries
 //   ( tar_unpack archive dest )    → ! i TarErr     path-safe extract to disk (returns count)
 //
 // Security (this parser consumes UNTRUSTED archives from the registry):
 //
 //   * `tar_unpack` rejects any member path that is absolute (`/…`) or
-//     contains a `..` component → TarUnsafePath. No path can escape
-//     `dest`.
+//     contains a `..` component → TarUnsafePath. All member paths and types
+//     are validated before writing. Existing destination symlinks are not
+//     protected against; use a fresh, exclusively owned destination.
 //   * Only regular files (typeflag '0'/NUL) and directories ('5') are
 //     extracted. Symlinks / hardlinks / device nodes are refused
 //     (TarUnsupported) so a malicious archive can't plant a link that
@@ -403,59 +405,59 @@ $ `stdlib/std/fs.nu`
 // Rejects unsafe paths and non-file/dir members (see the security note
 // in the module header).
 @ tar_unpack ( Vec u ) archive s dest → !i TarErr {
-    : !( Vec TarEntry ) TarErr pr ( tar_parse archive )
-    ?? pr {
+    ?? ( tar_parse archive ) {
         F e → { ^ @ !i TarErr { F e } }
         T entries → {
-            : i n ( vec_len [TarEntry] entries )
-            : ~ i count 0
-            : ~ i fail 0  // 0 = ok; otherwise set + carry the variant in `ferr`
-            : ~ TarErr ferr TarIoError
-            : ~ i k 0
-            ~ & == fail 0 < k n {
-                : ?TarEntry eo ( vec_get [TarEntry] entries k )
-                ?? eo {
-                    F → {}
-                    T e → {
-                        ? ! ( __tar_path_safe . e path ) {
-                            = fail 1
-                            = ferr TarUnsafePath
-                        } {
-                            : i tflag . e typeflag
-                            ? == tflag 53 {
-                                : String full ( __tar_join dest . e path )
-                                : !v IoErr dr ( dir_create_all ( string_data full ) )
-                                ?? dr { T _ → { = count + count 1 } F _ → { = fail 1 = ferr TarIoError } }
-                                ( string_free full )
-                            } {
-                                ? | == tflag 48 == tflag 0 {
-                                    : String full ( __tar_join dest . e path )
-                                    : String parent ( __tar_parent_dir full )
-                                    : !v IoErr pdr ( dir_create_all ( string_data parent ) )
-                                    ?? pdr {
-                                        T _ → {
-                                            : !v IoErr wr ( write_file_bytes ( string_data full ) . e data )
-                                            ?? wr { T _ → { = count + count 1 } F _ → { = fail 1 = ferr TarIoError } }
-                                        }
-                                        F _ → { = fail 1 = ferr TarIoError }
-                                    }
-                                    ( string_free parent )
-                                    ( string_free full )
-                                } {
-                                    = fail 1
-                                    = ferr TarUnsupported
-                                }
-                            }
-                        }
-                    }
-                }
-                = k + k 1
-            }
+            : !i TarErr result ( tar_unpack_entries entries dest )
             ( tar_entries_free entries )
-            ? != fail 0 {
-                ^ @ !i TarErr { F ferr }
-            } {}
-            ^ @ !i TarErr { T count }
+            ^ result
         }
     }
+}
+
+// Borrow already parsed entries so package metadata can be checked before
+// extraction without parsing/copying the complete archive a second time.
+// Validate all paths and types before the first filesystem mutation.
+@ tar_unpack_entries ( Vec TarEntry ) entries s dest → !i TarErr {
+    : i total ( vec_len [TarEntry] entries )
+    : ~ i index 0
+    ~ < index total {
+        ?? ( vec_get [TarEntry] entries index ) {
+            T entry → {
+                ? ! ( __tar_path_safe . entry path ) { ^ @ !i TarErr { F TarUnsafePath } } {}
+                : i kind . entry typeflag
+                ? ! | == kind 53 | == kind 48 == kind 0 { ^ @ !i TarErr { F TarUnsupported } } {}
+            }
+            F _ → {}
+        }
+        = index + index 1
+    }
+    : ~ i count 0
+    : ~ i k 0
+    ~ < k total {
+        ?? ( vec_get [TarEntry] entries k ) {
+            F _ → {}
+            T entry → {
+                : String full ( __tar_join dest . entry path )
+                : ~ b ok T
+                ? == . entry typeflag 53 {
+                    ?? ( dir_create_all ( string_data full ) ) { T _ → {} F _ → { = ok F } }
+                } {
+                    : String parent ( __tar_parent_dir full )
+                    ?? ( dir_create_all ( string_data parent ) ) {
+                        T _ → {
+                            ?? ( write_file_bytes ( string_data full ) . entry data ) { T _ → {} F _ → { = ok F } }
+                        }
+                        F _ → { = ok F }
+                    }
+                    ( string_free parent )
+                }
+                ( string_free full )
+                ? ! ok { ^ @ !i TarErr { F TarIoError } } {}
+                = count + count 1
+            }
+        }
+        = k + k 1
+    }
+    ^ @ !i TarErr { T count }
 }

@@ -26,6 +26,9 @@ $ `stdlib/ext/http_cli.nu`
 $ `stdlib/ext/compress.nu`
 $ `stdlib/ext/tar.nu`
 $ `stdlib/ext/registry_index.nu`
+$ `stdlib/ext/registry_trust.nu`
+$ `stdlib/ext/lockfile.nu`
+$ `stdlib/ext/manifest.nu`
 
 : | PkgFetchErr {
     PkgHttp  // non-200 status or transport failure
@@ -34,6 +37,9 @@ $ `stdlib/ext/registry_index.nu`
     PkgBadSig  // missing or invalid registry signature (fail-closed)
     PkgDecompress  // gzip_decompress failed
     PkgUnpack  // tar_unpack failed (bad/unsafe archive, I/O)
+    PkgBadIdentity  // URL/index/archive does not identify the requested package
+    PkgUntrustedRegistry  // no signing key configured for this registry
+    PkgTrustConfig  // malformed or unreadable explicit trust configuration
 }
 
 @ pkg_err_name PkgFetchErr e → s {
@@ -44,6 +50,9 @@ $ `stdlib/ext/registry_index.nu`
         PkgBadSig → `PkgBadSig`
         PkgDecompress → `PkgDecompress`
         PkgUnpack → `PkgUnpack`
+        PkgBadIdentity → `PkgBadIdentity`
+        PkgUntrustedRegistry → `PkgUntrustedRegistry`
+        PkgTrustConfig → `PkgTrustConfig`
     }
 }
 
@@ -71,6 +80,7 @@ $ `stdlib/ext/registry_index.nu`
 // GET the index JSON; returns the body, or "" on any non-200 / transport
 // failure (the resolver treats "" as not-found).
 @ pkg_fetch_index s registry s name → String {
+    ? ! ( registry_name_valid name ) { ^ ( string_new ) } {}
     : String url ( __pkg_index_url registry name )
     : !HttpcResp HttpcErr rr ( httpc_get ( string_data url ) )
     ?? rr {
@@ -79,7 +89,7 @@ $ `stdlib/ext/registry_index.nu`
             : i st ( httpc_status resp )
             ? == st 200 {
                 ( string_free out )
-                = out ( string_from ( httpc_body_str resp ) )
+                = out ( string_from_bytes # *u ( httpc_body_str resp ) . resp blen )
             } {
                 // 404 is the registry's honest "no such package" and stays
                 // silent; anything else is the registry misbehaving and
@@ -121,28 +131,11 @@ $ `stdlib/ext/registry_index.nu`
     }
 }
 
-// Pinned registry signing key (minisign public key — the base64 payload line,
-// no comment header). The registry signs every published tarball with the
-// matching Ed25519 secret; pinning the public key here means a compromised
-// R2/CDN can't substitute tarball bytes without also forging this key. This
-// is the trust anchor the pure-NURL minisign verifier checks against.
-//
-// $NURL_REGISTRY_PUBKEY overrides it — required when pointing nurlpkg at a
-// self-hosted registry (with $NURL_REGISTRY), and used by the e2e test. It is
-// a trust anchor, so treat it like a CA pin: only set it to a key you control.
-@ __pkg_reg_pubkey → String {
-    : ?String ev ( env_get `NURL_REGISTRY_PUBKEY` )
-    ^ ?? ev {
-        T v → v
-        F → ( string_from `RWTGgah04Ft7n6+UNxc/MKT4eMViHBo4DLgKryJVbv9ZwedeQWpmmPq5` )
-    }
-}
-
 // Fetch <tarball_url>.minisig and verify it over the tarball bytes with the
 // pinned registry key. MANDATORY + fail-closed: a missing signature, a
 // transport failure, or a bad signature all return F. `gz` is the exact
 // .tar.gz bytes the registry signed (legacy 'Ed' minisign: raw Ed25519).
-@ __pkg_verify_sig s registry s name s version ( Vec u ) gz → b {
+@ __pkg_verify_sig s registry s name s version ( Vec u ) gz s pubkey → b {
     : String sigurl ( regindex_tarball_url registry name version )
     ( string_push_str sigurl `.minisig` )
     : !HttpcResp HttpcErr sr ( httpc_get ( string_data sigurl ) )
@@ -154,9 +147,7 @@ $ `stdlib/ext/registry_index.nu`
             ? == ( httpc_status sresp ) 200 {
                 : String sigbody ( string_from ( httpc_body_str sresp ) )
                 : String sl ( _ms_line2 ( string_data sigbody ) )
-                : String pubkey ( __pkg_reg_pubkey )
-                = ok ( minisign_verify_b64 gz ( string_data pubkey ) ( string_data sl ) )
-                ( string_free pubkey )
+                = ok ( minisign_verify_b64 gz pubkey ( string_data sl ) )
                 ( string_free sl )
                 ( string_free sigbody )
             } {}
@@ -167,10 +158,83 @@ $ `stdlib/ext/registry_index.nu`
 }
 
 // Download <registry>/pkgs/<name>/<name>-<version>.tar.gz, verify its
-// SHA-256 against `checksum` (skipped only when `checksum` is empty), verify
+// SHA-256 against the required `checksum`, verify
 // the registry's minisign signature (mandatory, fail-closed), gunzip, and
 // tar_unpack into <dest>/<name>. Returns 0 on success.
 @ pkg_install_one s registry s name s version s checksum s dest → !i PkgFetchErr {
+    ?? ( registry_trust_load ) {
+        F _ → { ^ @ !i PkgFetchErr { F PkgTrustConfig } }
+        T trust → {
+            : LockPkg pkg ( lock_pkg_new name version `registry+` checksum )
+            ( string_push_str . pkg source registry )
+            : !i PkgFetchErr result ( pkg_install_locked trust pkg dest )
+            ( lock_pkg_free pkg )
+            ( registry_trust_free trust )
+            ^ result
+        }
+    }
+}
+
+// Download origin, signing key and lock source are the same identity.
+// Load trust once per batch and borrow it for every package.
+@ pkg_install_locked RegistryTrust trust LockPkg pkg s dest → !i PkgFetchErr {
+    ? ! ( registry_name_valid ( string_data . pkg name ) ) { ^ @ !i PkgFetchErr { F PkgBadIdentity } } {}
+    ?? ( semver_parse ( string_data . pkg version ) ) {
+        F _ → { ^ @ !i PkgFetchErr { F PkgBadIdentity } }
+        T parsed → { ( semver_free parsed ) }
+    }
+    ?? ( registry_from_source ( string_data . pkg source ) ) {
+        F empty → { ( string_free empty ) ^ @ !i PkgFetchErr { F PkgBadIdentity } }
+        T registry → {
+            : s key ( registry_trust_key trust ( string_data registry ) )
+            ? == ( nurl_str_len key ) 0 {
+                ( string_free registry )
+                ^ @ !i PkgFetchErr { F PkgUntrustedRegistry }
+            } {}
+            : !i PkgFetchErr result ( __pkg_install_verified ( string_data registry )
+            ( string_data . pkg name ) ( string_data . pkg version )
+            ( string_data . pkg checksum ) dest key )
+            ( string_free registry )
+            ^ result
+        }
+    }
+}
+
+@ __pkg_archive_identity ( Vec TarEntry ) entries s name s version → b {
+    : ~ i manifests 0
+    : ~ b valid F
+    : i n ( vec_len [TarEntry] entries )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [TarEntry] entries k ) {
+            T entry → {
+                : String path ( path_normalize ( string_data . entry path ) )
+                ? != 0 ( nurl_str_eq ( string_data path ) `nurl.toml` ) {
+                    = manifests + manifests 1
+                    : String text ( bytes_to_str . entry data )
+                    ? & | == . entry typeflag 48 == . entry typeflag 0
+                    == ( string_len text ) ( nurl_str_len ( string_data text ) ) {
+                        ?? ( manifest_parse ( string_data text ) `nurl.toml` ) {
+                            T manifest → {
+                                = valid & != 0 ( nurl_str_eq ( string_data . manifest name ) name )
+                                != 0 ( nurl_str_eq ( string_data . manifest version ) version )
+                                ( manifest_free manifest )
+                            }
+                            F _ → {}
+                        }
+                    } {}
+                    ( string_free text )
+                } {}
+                ( string_free path )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ & == manifests 1 valid
+}
+
+@ __pkg_install_verified s registry s name s version s checksum s dest s pubkey → !i PkgFetchErr {
     : String url ( regindex_tarball_url registry name version )
     : !HttpcResp HttpcErr rr ( httpc_get ( string_data url ) )
     ( string_free url )
@@ -188,23 +252,21 @@ $ `stdlib/ext/registry_index.nu`
                 ^ @ !i PkgFetchErr { F # PkgFetchErr PkgEmpty }
             } {}
 
-            // Integrity: sha256 over the downloaded .tar.gz bytes.
-            ? > ( nurl_str_len checksum ) 0 {
-                : ( Vec u ) digest ( sha256_pure gz )
-                : String hex ( bytes_to_hex digest )
-                : i ok ( nurl_str_eq ( string_data hex ) checksum )
-                ( vec_free [u] digest )
-                ( string_free hex )
-                ? == ok 0 {
-                    ( vec_free [u] gz )
-                    ^ @ !i PkgFetchErr { F # PkgFetchErr PkgChecksumMismatch }
-                } {}
+            // Integrity: an empty or malformed expected hash cannot match.
+            : ( Vec u ) digest ( sha256_pure gz )
+            : String hex ( bytes_to_hex digest )
+            : i ok ( nurl_str_eq ( string_data hex ) checksum )
+            ( vec_free [u] digest )
+            ( string_free hex )
+            ? == ok 0 {
+                ( vec_free [u] gz )
+                ^ @ !i PkgFetchErr { F # PkgFetchErr PkgChecksumMismatch }
             } {}
 
             // Authenticity: the registry signs every tarball with its Ed25519
             // project key. Verification is mandatory and fail-closed — no
             // signature, no install (even when the checksum matched).
-            ? ( __pkg_verify_sig registry name version gz ) {} {
+            ? ( __pkg_verify_sig registry name version gz pubkey ) {} {
                 ( vec_free [u] gz )
                 ^ @ !i PkgFetchErr { F # PkgFetchErr PkgBadSig }
             }
@@ -214,13 +276,24 @@ $ `stdlib/ext/registry_index.nu`
             ?? dr {
                 F _ → ^ @ !i PkgFetchErr { F # PkgFetchErr PkgDecompress }
                 T raw → {
-                    : String destdir ( __pkg_join dest name )
-                    : !i TarErr ur ( tar_unpack raw ( string_data destdir ) )
+                    : !( Vec TarEntry ) TarErr parsed ( tar_parse raw )
                     ( vec_free [u] raw )
-                    ( string_free destdir )
-                    ?? ur {
-                        F _ → ^ @ !i PkgFetchErr { F # PkgFetchErr PkgUnpack }
-                        T _ → ^ @ !i PkgFetchErr { T 0 }
+                    ?? parsed {
+                        F _ → { ^ @ !i PkgFetchErr { F PkgUnpack } }
+                        T entries → {
+                            ? ! ( __pkg_archive_identity entries name version ) {
+                                ( tar_entries_free entries )
+                                ^ @ !i PkgFetchErr { F PkgBadIdentity }
+                            } {}
+                            : String destdir ( __pkg_join dest name )
+                            : !i TarErr result ( tar_unpack_entries entries ( string_data destdir ) )
+                            ( string_free destdir )
+                            ( tar_entries_free entries )
+                            ?? result {
+                                F _ → { ^ @ !i PkgFetchErr { F PkgUnpack } }
+                                T _ → { ^ @ !i PkgFetchErr { T 0 } }
+                            }
+                        }
                     }
                 }
             }
