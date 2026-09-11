@@ -1957,11 +1957,28 @@ the behavior under test". `callarg_width` builds one `Vec` and frees
 nothing; that is the test, not the compiler.
 
 The 34 that allocate inside a callee are led by `nurl_str_int` (6),
-`bytes_from_hex` (5) and `string_from` (4). The `nurl_str_int` six are the
-escape-classification class root-caused above: a fresh owned temporary
-handed to a callee whose parameter is marked escaping because it is stored
-into a container that dies inside that same callee. Counting them gives that
-root cause a size.
+`bytes_from_hex` (5) and `string_from` (4).
+
+That split is by where the allocation was MADE, and it over-counts the
+callee column, because where a value is made says nothing about whose job
+it is to free. The question that separates the two kinds is sharper: **can
+the program free it?**
+
+- For the `nurl_str_int` six, no. Those are the escape-classification class
+  root-caused above: the caller's free is compiled out by the parameter
+  summary's verdict, and the callee never frees it either. The only way out
+  is to bind the temporary and free it by hand.
+- For the `bytes_from_hex` five, yes. The function hands a `Vec` to its
+  caller inside a Result; `x25519_vectors` unwraps it, returns it, and the
+  whole file contains no `vec_free` at all. Writing the same call with the
+  free present is leak-clean, which is the control that settles it: the
+  program could have freed it and does not. Test-side omission, the class
+  the runner's comment describes.
+
+So the eleven that allocate in their own `main` and the `bytes_from_hex`
+five belong together, and the real compiler-side count is smaller than the
+frame split suggests. Applying the same control to the remaining callee
+groups is the way to finish the triage.
 
 ### A13: what the fourth strict check would actually cost (2026-09-11)
 

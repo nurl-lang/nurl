@@ -169,8 +169,13 @@ loop. Correct values, zero findings.
    cleanup to isolate the behaviour" class the runner's own comment
    describes), and 34 allocate inside a callee — led by `nurl_str_int` (6),
    `bytes_from_hex` (5) and `string_from` (4). The `nurl_str_int` six are
-   the second class above, which gives it a size. Pull `bytes_from_hex`
-   next: five programs, one function.
+   the second class above, which gives it a size. `bytes_from_hex` was
+   pulled next and is the OTHER kind: it hands its `Vec` to the caller in a
+   Result, and the five callers contain no `vec_free` at all — writing the
+   same call with the free present is leak-clean. The criterion that
+   separates the two kinds is "can the program free it?", not where the
+   allocation was made; apply that control to the remaining callee groups to
+   finish the triage.
 5. A13's container and opaque-handle half now has witnesses (see the
    ledger): ten violations by construction, every one the default rules
    promise to catch caught, the three that compile are holes
