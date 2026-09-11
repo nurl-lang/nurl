@@ -354,15 +354,18 @@ compile and execute split output. Optimisation can eliminate an invalid
 access or inline a stack frame, so the stack-return control runs at `-O0`.
 See [LLVM's ASan guide](https://clang.llvm.org/docs/AddressSanitizer.html).
 
-There are two remaining coverage boundaries. NURL does not yet emit lexical
+NURL does not yet emit lexical
 `llvm.lifetime` boundaries, so `-fsanitize-address-use-after-scope` does not
 establish detection after a NURL block ends. Also, `-fsanitize=undefined`
 adds UBSan checks to the **C runtime**, not source-level checks to previously
-generated NURL IR. In particular, it does not check dynamic shift counts,
-signed division overflow or out-of-range float-to-integer conversions in
-NURL. Integer `+`, `-` and `*` wrap at their width; integer division by zero
-has a separate compiler-emitted panic check. The remaining arithmetic and
-lifetime work is tracked in [the v1 ledger](dev/V1_HARDENING.md).
+generated NURL IR. NURL separately emits checked panic paths for invalid dynamic
+shift counts, integer division/remainder by zero, signed `MIN / -1` and
+`MIN % -1`, and out-of-range/NaN/infinite float-to-integer casts. These checks
+also apply without sanitizers and with borrow checking disabled. Integer `+`,
+`-` and `*` wrap at their width. `tools/tests/test_arithmetic_safety.py` checks
+the source panic behavior and valid boundaries in normal, instrumented and
+split builds. Remaining lifetime and safety work is tracked in
+[the v1 ledger](dev/V1_HARDENING.md).
 
 The whole runtime corpus runs without leak detection because some examples
 intentionally omit cleanup. `tools/leakgate.sh` requires zero compiler leaks

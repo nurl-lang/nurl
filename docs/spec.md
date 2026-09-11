@@ -1194,8 +1194,15 @@ instantiation `( Name A )`.
 `<<` lowers to LLVM `shl`; `>>` uses `ashr` for signed operands and `lshr`
 for unsigned operands. Counts must be nonnegative and smaller than the
 operand's bit width. The compiler rejects an out-of-range constant count;
-dynamic counts outside that range produce LLVM poison. Counts are not
-implicitly masked to their low bits.
+dynamic counts outside that range panic with `shift amount out of range`.
+Counts are not implicitly masked to their low bits.
+
+Integer `+`, `-` and `*` wrap at the operand width. Integer division and
+remainder by zero panic with `division by zero` / `remainder by zero`.
+Signed `MIN / -1` and `MIN % -1` panic with `division overflow` /
+`remainder overflow`. These checks apply in ordinary and instrumented builds,
+including with borrow checking disabled. Floating division/remainder retain
+their IEEE infinity/NaN behavior.
 
 Comparison operators yield `b` (`i1`). All other binary operators
 require operand types to match: mixing float/non-float,
@@ -1502,6 +1509,14 @@ The trailing INT (0 or 1) is consumed only when the source expression
 is a closure-shaped struct and the destination type is a pointer — the
 common shape for feeding C-runtime callback APIs (`thread_spawn`,
 signal handlers) the raw fn-ptr / env-ptr pair.
+
+Float-to-integer casts truncate toward zero and use the target's signedness.
+The truncated value must fit the target: `-128.9` converts to `i8(-128)` and
+`-0.9` to `u8(0)`, but `128.0` does not fit `i8`. Out-of-range values, NaN and
+infinities panic with `float-to-integer conversion out of range`. The same
+rules apply when an integer cast extracts a floating first field from a
+structure. A float-to-`b` cast is a compile error in both forms; write an
+explicit comparison to produce a truth value.
 
 ### 6.8 Sizeof `Z`
 

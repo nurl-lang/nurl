@@ -8,12 +8,12 @@ in reviewable groups. No item below certifies the whole language or ecosystem.
 
 | Audit item | Evidence required before closure | Current disposition |
 |---|---|---|
-| A01: sanitizer coverage | Ordinary driver, bootstrap, split output and fuzz paths detect deliberate memory faults in generated code; clean controls, corpus and fuzz pass; UBSan/LLVM semantics documented | ASan emission implemented and calibrated; revealed HTTP/3 UAF and compiler leaks repaired; lexical stack-lifetime and source-level arithmetic remain open |
+| A01: sanitizer coverage | Ordinary driver, bootstrap, split output and fuzz paths detect deliberate memory faults in generated code; clean controls, corpus and fuzz pass; UBSan/LLVM semantics documented | ASan emission implemented and calibrated; revealed HTTP/3 UAF and compiler leaks repaired; integer division/remainder, shifts and float casts now guard invalid domains; lexical stack-lifetime and broader fuzz coverage remain open |
 | A02: trustworthy compiler runners | Missing-main rejection fixtures run; crash/hang/worker fault controls fail closed; complete corpus verdict accounting | Verified in local normal/sanitized corpus and POSIX/PowerShell controls; native Windows execution remains CI evidence |
 | A03: installed LSP | Separate installed project, unsaved edits, sibling/dependency imports, visible execution errors | Independently reproduced; repaired and verified with relocated binaries and 20 normal/ASan/LSan protocol/compiler controls on Linux; native Windows and actual distribution installation remain unverified |
 | A04: registry identity | Two local registries with equal package names; fetch, resolution, signing and lock identity preserved; errors never print success | Origin/key/index/archive/lock binding repaired; conflict-directed resolver checked against an exhaustive oracle; flat-layout coexistence and transactional/frozen installation remain open |
 | A05: signed install smoke | Signed fixtures install after relocation with transitive dependencies; missing/wrong/tampered signatures reject; CI runs it | Unsigned/stale smoke independently reproduced; signed five-program relocation smoke and CLI negative controls pass locally, wired into CI; remote run pending |
-| A06: JS dependencies | Fresh manager-native audits, reachability analysis, lockfile updates and builds/tests for all four trees; recurring checks | Fresh audits repaired; all four clean installs, builds/checks and zero-finding re-audits pass locally; weekly/PR checks added, remote run pending |
+| A06: JS dependencies | Fresh manager-native audits, reachability analysis, lockfile updates and builds/tests for all four trees; recurring checks | Fresh audits repaired; all four clean installs, builds/checks and zero-finding re-audits pass locally; weekly/PR checks added; all four remote audit/build jobs pass at `5b2a9b3a` |
 | A07: continuous package/service tests | Suite/prerequisite manifest, changed packages and reverse dependencies, scheduled coverage; registry/cloud and diagnostic gates in CI | Pending current workflow inventory |
 | A08: documentation consistency | Grammar, spec, platform claims, generated facts and executable docs agree with implementation | Runner prerequisites, macOS/musl claims and stale leak comments corrected from source; remaining claims pending |
 | A09: package development | Clean checkout and unpacked consumer tests, shared environment setup, explicit public import surfaces | Pending reproduction |
@@ -1223,3 +1223,56 @@ confirm the overflow/poison boundaries. Sources, IR, stdout/stderr and the
 14-run result matrix are retained in `build/v1-hardening/arithmetic-before/`;
 the generator is `arithmetic-before.py`. No arithmetic codegen change is included
 in the primitive-effects checkpoint.
+
+
+### A01: source arithmetic guards (2026-09-11)
+
+The compiler now branches to a NURL panic before integer zero division or
+remainder, signed `MIN / -1` or `MIN % -1`, and dynamic shift counts outside
+`[0, width)`. Scalar and aggregate-first-field float casts share truncation,
+signedness and ordered bounds checks. NaN, infinity and values whose truncated
+result is unrepresentable panic before LLVM conversion. Fractional lower-edge
+values such as `-128.9 → i8` and `-0.9 → u8` remain valid. Aggregate unsigned
+casts now use `fptoui`; aggregate float-to-bool casts reject like scalar casts.
+IEEE floating division/remainder behavior and integer wrapping remain unchanged.
+The spec and build documentation describe the source checks separately from
+C-runtime UBSan; LLVM poison is not itself a sanitizer success.
+
+`tools/tests/test_arithmetic_safety.py` has seven methods: **596 runtime cases
+in each of three modes (1,788 executions), plus two compile rejection controls**.
+Independent C inputs prevent source constant folding. The modes are O0 with
+ASan/UBSan/LSan, ordinary unsanitized O2, and instrumented O2 three-part output
+with `--no-borrowck`. Controls cover all four integer widths/signs, f32/f64,
+scalar/aggregate conversion, exact representability boundaries, short-circuit
+and phi contexts, and owned-string panic cleanup. Linux sanitizer and macOS
+workflows run this suite. The before matrix fails on the old implementation;
+final normal and sanitized compilers pass all seven methods.
+
+Both refreshed bootstraps pass; source and bootstrap source are identical.
+Normal build: 75 s, corpus 2 m 48 s. Sanitized bootstrap: 85 s. Both corpora:
+**974 PASS / 19 SKIP / 0 failures, 993 records**. The final instrumented toolchain
+also passes all 31 ownership, seven compiler-cleanup and 20 LSP methods,
+all six leak-gate inputs in both emission modes, and sanitizer detection
+calibration. Normal RSS is 36 MB (600 MB budget); DCE is 180 emitted / 12
+reachable with identical behavior. Logs are `arithmetic-final-*` under ignored
+`build/v1-hardening/`; copied verdicts distinguish normal and sanitized runs.
+A01 remains open for lexical stack lifetimes and broader fuzz requirements.
+
+### Remote checkpoint and runner startup control (2026-09-11)
+
+Draft PR #1107 at `5b2a9b3a` passes macOS ARM64, Windows, FreeBSD, the sanitizer
+job, required-tool fault injection, webdocs and all four JavaScript audit/build
+jobs. This validates that revision and those workflow scopes, not later edits
+or every distribution target. The Linux job is cancelled at its overall budget
+while installing MinGW with apt; it is not a passing whole-job result.
+The unikernel job exposes LLVM parameter attributes being parsed as value types
+by the shared wasmbuilder rewriter. Both need follow-up before a green PR.
+
+The runner fault-injection job times out its initial PowerShell control.
+An independent nine-second launcher delay reproduces a false failure of the
+old eight-second outer watchdog. Commit `3cf6974b` separates bounded PowerShell
+startup (30 seconds) from the eight-second compiler watchdog, starting the
+latter at an explicit fake-compiler entry marker. Another control proves an
+unbounded compiler still fails after entry. All 20 POSIX/PowerShell methods
+pass locally with the real PowerShell executable; new remote execution is
+pending. The original CI log alone did not identify startup as its cause.

@@ -3972,6 +3972,81 @@
         { ( die lex ( nurl_str_cat3 `unexpected ` un ` where a value was required. Every NURL operator has FIXED arity and no closing bracket, so a missing operand silently swallows whatever follows — count the operands on the operator before this point. Calls need parentheses: '( f a b )', never 'f a b'.` ) ) } }
 }
 
+// Reject an invalid numeric domain before evaluating an LLVM operation.
+// The valid continuation becomes the current block for surrounding phi nodes.
+@ emit_numeric_guard i syms i cg s bad s message → v {
+    : s fail ( nurl_cg_lbl cg `numeric_fail` )
+    : s ok ( nurl_cg_lbl cg `numeric_ok` )
+    ( nurl_print `  br i1 ` ) ( nurl_print bad )
+    ( nurl_print `, label %` ) ( nurl_print fail )
+    ( nurl_print `, label %` ) ( nurl_print ok ) ( nurl_print `\n` )
+    ( emit ( nurl_str_cat fail `:` ) )
+    : s msg ( emit_deferred_cstr cg message )
+    ( nurl_print `  call void @nurl_panic(i8* ` ) ( nurl_print msg ) ( nurl_print `)\n` )
+    ( emit `  unreachable` )
+    ( emit ( nurl_str_cat ok `:` ) )
+    ( nurl_sym_def syms `__cur_lbl__` ok )
+}
+
+// Scalar and aggregate-field casts share signedness, bool rejection and range
+// checks. Check the rounded value: -128.9 fits i8 and -0.9 fits u8 because the
+// conversion truncates toward zero. Ordered comparisons also reject NaN/Inf.
+@ emit_fp_to_int i lex i syms i cg s st s val s dt s res i line i col → v {
+    // Except `# b`: an i1 can only represent 0 and 1, so `fptosi
+    // double 3.5 to i1` is poison, not a truth test — and there is no
+    // meaning of "cast a float to bool" that a reader could rely on.
+    // Demand the comparison instead.
+    ? ( seq ( nurl_llty dt ) `i1` )
+    { ( die_pos lex line col `'# b' of a float value is not a truth test — an i1 holds only 0 or 1, so the conversion is poison for any other value (LLVM 'fptosi double 3.5 to i1'). Write the comparison you mean: ': b nz != 0.0 x' (non-zero), or compare against the threshold you have in mind.` ) }
+    {}
+    // …and only an INTEGER target takes a float at all. A pointer or
+    // aggregate target emitted `fptosi double … to i8*` / `to %S` —
+    // invalid IR only clang reported, with no source location.
+    // (Width off the LLVM spelling: int_width does not read the
+    // `u8`/`u16`/`u32` source spellings.)
+    ? == 0 ( int_width ( nurl_llty dt ) )
+    { ( die_pos lex line col ( nurl_str_cat3
+        `a float value does not cast to '` ( llvm_to_nurl dt )
+        `' — only integer targets take a float ('# i x' truncates toward zero). Format to text with ( nurl_str_float x ), or construct the aggregate you mean from its fields.` ) ) }
+    {}
+
+    : b unsigned ( ty_is_unsigned dt )
+    : i bits - ( int_width ( nurl_llty dt ) ) ? unsigned 0 1
+    : ~ f bound 1.0
+    : ~ i bit 0
+    ~ < bit bits { = bound * bound 2.0 = bit + bit 1 }
+    // nurl_str_float round-trips its f64 value. These powers of two are exact
+    // in both f32/f64; LLVM requires a decimal point for a fixed-form literal.
+    : s digits ( nurl_str_float bound )
+    : s upper ? & < ( nurl_str_find digits `.` ) 0 < ( nurl_str_find digits `e` ) 0
+    ( nurl_str_cat digits `.0` ) ( nurl_str_cat digits `` )
+    : s lower ? unsigned ( nurl_str_cat `0.0` `` ) ( nurl_str_cat `-` upper )
+    : s rounded ( nurl_cg_reg cg )
+    : s above ( nurl_cg_reg cg )
+    : s below ( nurl_cg_reg cg )
+    : s valid ( nurl_cg_reg cg )
+    : s bad ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print rounded ) ( nurl_print ` = call ` )
+    ( nurl_print st ) ( nurl_print ` @llvm.trunc.` )
+    ( nurl_print ? ( seq st `float` ) `f32` `f64` ) ( nurl_print `(` )
+    ( nurl_print st ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `)\n` )
+    ( nurl_print `  ` ) ( nurl_print above ) ( nurl_print ` = fcmp oge ` )
+    ( nurl_print st ) ( nurl_print ` ` ) ( nurl_print rounded )
+    ( nurl_print `, ` ) ( nurl_print lower ) ( nurl_print `\n` )
+    ( nurl_print `  ` ) ( nurl_print below ) ( nurl_print ` = fcmp olt ` )
+    ( nurl_print st ) ( nurl_print ` ` ) ( nurl_print rounded )
+    ( nurl_print `, ` ) ( nurl_print upper ) ( nurl_print `\n` )
+    ( nurl_print `  ` ) ( nurl_print valid ) ( nurl_print ` = and i1 ` )
+    ( nurl_print above ) ( nurl_print `, ` ) ( nurl_print below ) ( nurl_print `\n` )
+    ( nurl_print `  ` ) ( nurl_print bad ) ( nurl_print ` = xor i1 ` )
+    ( nurl_print valid ) ( nurl_print `, true\n` )
+    ( emit_numeric_guard syms cg bad `float-to-integer conversion out of range` )
+    ( nurl_print `  ` ) ( nurl_print res )
+    ( nurl_print ? unsigned ` = fptoui ` ` = fptosi ` )
+    ( nurl_print st ) ( nurl_print ` ` ) ( nurl_print val )
+    ( nurl_print ` to ` ) ( nurl_print ( nurl_llty dt ) ) ( nurl_print `\n` )
+}
+
 // ── Binary op OP lhs rhs ─────────────────────────────────────────
 
 // `isu` = unsigned-operand path: selects unsigned compare predicates,
@@ -4299,8 +4374,8 @@
     // A CONSTANT shift amount out of the value type's range is LLVM
     // poison at every opt level (spec §6.1) — statically known, so
     // reject it here instead of letting an optimised build turn the
-    // poison into arbitrary misbehaviour. Runtime-computed amounts stay
-    // the documented poison contract.
+    // poison into arbitrary misbehaviour. Runtime-computed amounts take
+    // the checked panic path below.
     ? & & | == tt TT_SHL == tt TT_SHR > __lw 0
     != ( nurl_str_get rv 0 ) 37
     { : i __sa ( nurl_str_to_int rv )
@@ -4327,29 +4402,38 @@
         } {}
         = cmp_ty `i64`
     } {}
-    // Integer division / remainder by zero is LLVM UB (SIGFPE on native, a
-    // trap on wasm; INT_MIN / -1 likewise). NURL is a safe language, so guard
-    // the divisor and panic with a clear message instead of trapping. Float
-    // div/rem (fdiv/frem) is IEEE-defined (±inf / NaN) and left untouched —
-    // only sdiv/udiv/srem/urem get the check.
-    ? & ! isf | == tt TT_SLASH == tt TT_PERCENT
-    { : s __dz ( nurl_cg_reg cg )
-        : s __lz ( nurl_cg_lbl cg `divzero` )
-        : s __lo ( nurl_cg_lbl cg `divok` )
-        ( nurl_print `  ` ) ( nurl_print __dz )
-        ( nurl_print ` = icmp eq ` ) ( nurl_print ( nurl_llty cmp_ty ) ) ( nurl_print ` ` )
-        ( nurl_print rv ) ( nurl_print `, 0\n` )
-        ( nurl_print `  br i1 ` ) ( nurl_print __dz )
-        ( nurl_print `, label %` ) ( nurl_print __lz )
-        ( nurl_print `, label %` ) ( nurl_print __lo ) ( nurl_print `\n` )
-        ( emit ( nurl_str_cat __lz `:` ) )
-        : s __dmsg ( emit_deferred_cstr cg ? == tt TT_SLASH `division by zero` `remainder by zero` )
-        ( nurl_print `  call void @nurl_panic(i8* ` ) ( nurl_print __dmsg ) ( nurl_print `)\n` )
-        ( nurl_print `  unreachable\n` )
-        ( emit ( nurl_str_cat __lo `:` ) )
-        ( nurl_sym_def syms `__cur_lbl__` __lo )
-    }
-    {}
+    : s numeric_ty ( nurl_llty cmp_ty )
+    : i numeric_width ( int_width numeric_ty )
+    // Compare unsigned so a negative count also falls outside the domain.
+    ? & > numeric_width 0 | == tt TT_SHL == tt TT_SHR {
+        : s bad ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print bad ) ( nurl_print ` = icmp uge ` )
+        ( nurl_print numeric_ty ) ( nurl_print ` ` ) ( nurl_print rv )
+        ( nurl_print `, ` ) ( nurl_print ( nurl_str_int numeric_width ) ) ( nurl_print `\n` )
+        ( emit_numeric_guard syms cg bad `shift amount out of range` )
+    } {}
+    // Signed MIN/-1 is undefined for srem as well as sdiv. Floating-point
+    // division/remainder retain IEEE infinity/NaN behavior.
+    ? & ! isf | == tt TT_SLASH == tt TT_PERCENT {
+        : s zero ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print zero ) ( nurl_print ` = icmp eq ` )
+        ( nurl_print numeric_ty ) ( nurl_print ` ` ) ( nurl_print rv ) ( nurl_print `, 0\n` )
+        ( emit_numeric_guard syms cg zero ? == tt TT_SLASH `division by zero` `remainder by zero` )
+        ? & ! isu > numeric_width 0 {
+            : i minimum - 0 << 1 - numeric_width 1
+            : s low ( nurl_cg_reg cg )
+            : s negative_one ( nurl_cg_reg cg )
+            : s overflow ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print low ) ( nurl_print ` = icmp eq ` )
+            ( nurl_print numeric_ty ) ( nurl_print ` ` ) ( nurl_print lv )
+            ( nurl_print `, ` ) ( nurl_print ( nurl_str_int minimum ) ) ( nurl_print `\n` )
+            ( nurl_print `  ` ) ( nurl_print negative_one ) ( nurl_print ` = icmp eq ` )
+            ( nurl_print numeric_ty ) ( nurl_print ` ` ) ( nurl_print rv ) ( nurl_print `, -1\n` )
+            ( nurl_print `  ` ) ( nurl_print overflow ) ( nurl_print ` = and i1 ` )
+            ( nurl_print low ) ( nurl_print `, ` ) ( nurl_print negative_one ) ( nurl_print `\n` )
+            ( emit_numeric_guard syms cg overflow ? == tt TT_SLASH `division overflow` `remainder overflow` )
+        } {}
+    } {}
     ( nurl_print `  ` ) ( nurl_print res ) ( nurl_print ` = ` )
     ( nurl_print ins ) ( nurl_print ` ` )
     ( nurl_print ( nurl_llty cmp_ty ) ) ( nurl_print ` ` )
@@ -18033,13 +18117,10 @@
         : i f0iw ( int_width f0t )
         : b f0_is_ptr == ( nurl_str_get f0t - ( nurl_str_len f0t ) 1 ) 42
         : b f0_is_fp | ( seq f0t `double` ) ( seq f0t `float` )
-        ? f0_is_fp
-        { ( nurl_print `  ` ) ( nurl_print res )
-            ( nurl_print ` = fptosi ` ) ( nurl_print ( nurl_llty f0t ) )
-            ( nurl_print ` ` ) ( nurl_print xv ) ( nurl_print ` to ` )
-            ( nurl_print ( nurl_llty dt ) ) ( nurl_print `\n` )
-            ( nurl_set_last_type dt ) ^ res }
-        {}
+        ? f0_is_fp {
+            ( emit_fp_to_int lex syms cg ( nurl_llty f0t ) xv dt res __cast_line __cast_col )
+            ( nurl_set_last_type dt ) ^ res
+        } {}
         ? & & ! f0_is_fp ! f0_is_ptr == f0iw 0
         { ( die_pos lex __cast_line __cast_col ( nurl_str_cat3 `cannot cast '` st `' to an integer: its first field is itself an aggregate, so there is no scalar to take. Convert the inner field explicitly.` ) ) }
         {}
@@ -18089,34 +18170,8 @@
             ( nurl_set_last_type dt ) ^ res }
     }
     {}
-    ? & src_is_fp ! dst_is_fp
-    {  // float-or-double → int: fptoui when the TARGET is unsigned (so a
-        // value above the signed max converts correctly instead of becoming
-        // poison via fptosi), else fptosi.
-        // Except `# b`: an i1 can only represent 0 and 1, so `fptosi
-        // double 3.5 to i1` is poison, not a truth test — and there is no
-        // meaning of "cast a float to bool" that a reader could rely on.
-        // Demand the comparison instead.
-        ? ( seq ( nurl_llty dt ) `i1` )
-        { ( die_pos lex __cast_line __cast_col `'# b' of a float value is not a truth test — an i1 holds only 0 or 1, so the conversion is poison for any other value (LLVM 'fptosi double 3.5 to i1'). Write the comparison you mean: ': b nz != 0.0 x' (non-zero), or compare against the threshold you have in mind.` ) }
-        {}
-        // …and only an INTEGER target takes a float at all. A pointer or
-        // aggregate target emitted `fptosi double … to i8*` / `to %S` —
-        // invalid IR only clang reported, with no source location.
-        // (Width off the LLVM spelling: int_width does not read the
-        // `u8`/`u16`/`u32` source spellings.)
-        ? == 0 ( int_width ( nurl_llty dt ) )
-        { ( die_pos lex __cast_line __cast_col ( nurl_str_cat3
-            `a float value does not cast to '` ( llvm_to_nurl dt )
-            `' — only integer targets take a float ('# i x' truncates toward zero). Format to text with ( nurl_str_float x ), or construct the aggregate you mean from its fields.` ) ) }
-        {}
-        ( nurl_print `  ` ) ( nurl_print res )
-        ( nurl_print ? dst_unsigned ` = fptoui ` ` = fptosi ` )
-        ( nurl_print ( nurl_llty st ) ) ( nurl_print ` ` )
-        ( nurl_print val ) ( nurl_print ` to ` ) ( nurl_print ( nurl_llty dt ) )
-        ( nurl_print `\n` )
-        // The integer result's signedness is the cast TARGET's — and dt
-        // IS the target type, unsigned spelling included.
+    ? & src_is_fp ! dst_is_fp {
+        ( emit_fp_to_int lex syms cg ( nurl_llty st ) val dt res __cast_line __cast_col )
         ( nurl_set_last_type dt )
         ^ res
     }
@@ -27355,6 +27410,8 @@
     // unconditionally; with --g off the compiler never calls it, so
     // the unused declaration is dead and the optimizer drops it.
     ( __emit_rt_decl syms `declare void @llvm.dbg.declare(metadata, metadata, metadata)` )
+    ( __emit_rt_decl syms `declare float @llvm.trunc.f32(float)` )
+    ( __emit_rt_decl syms `declare double @llvm.trunc.f64(double)` )
     ( __emit_rt_decl syms `declare i32  @puts(i8* nocapture nofree)` )
     ( __emit_rt_decl syms `declare i32  @printf(i8* nocapture nofree, ...)` )
     ( __emit_rt_decl syms `declare i8*  @malloc(i64) "nurl.value-only"="0"` )

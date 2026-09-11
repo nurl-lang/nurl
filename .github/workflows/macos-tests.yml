@@ -171,6 +171,9 @@ jobs:
       - name: Split driver paths with spaces and glob characters
         run: python3 tools/tests/test_driver_paths.py
 
+      - name: Source arithmetic domains and recovery
+        run: python3 tools/tests/test_arithmetic_safety.py
+
       - name: examples corpus frontend gate
         # Frontend-only, so it costs seconds and cannot depend on
         # platform libraries — but it does depend on the compiler, and

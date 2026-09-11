@@ -67,6 +67,7 @@ jobs:
               - 'tools/leakgate.sh'
               - 'tools/tests/test_compiler_cleanup.py'
               - 'tools/tests/test_string_argument_ownership.py'
+              - 'tools/tests/test_arithmetic_safety.py'
               - 'compiler/tests/enum_tree_drop.nu'
               - 'compiler/tests/nested_field_store.nu'
 
@@ -681,6 +682,9 @@ jobs:
 
       - name: Generated-code sanitizer detection controls
         run: python3 tools/sanitizer_controls.py
+
+      - name: Source arithmetic domains and recovery
+        run: python3 tools/tests/test_arithmetic_safety.py
 
       - name: compiler leak gate (self-compile, drop graph, nested stores)
         # Runs only when compiler/nurlc.nu (or the gate itself) changed: that
