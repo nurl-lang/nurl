@@ -21,7 +21,14 @@
 #
 # nurlc emits plain `add`/`mul`/`shl` (no nsw/nuw), so signed overflow is
 # defined wrapping — the oracle wraps to match. Division/shift UB is avoided
-# by construction (positive small divisors, shift amounts < width).
+# by construction, but in two shapes. A LITERAL divisor / shift amount lets
+# the compiler drop its domain guard at compile time; a COMPUTED one cannot
+# be resolved that way at -O0, so the emitted guard branch actually runs.
+# Both shapes appear: `small_pos` / a literal amount, and `safe_divisor` /
+# `safe_shift`, which clamp an arbitrary sub-expression into the legal
+# domain (`| 1 & x 63` is odd and in [1,63]; `& x (w-1)` is in [0,w-1]).
+# The oracle models the clamp exactly, so a guard that fires on a legal
+# operand shows up as a divergence rather than as a silent panic.
 
 import sys
 import random
@@ -286,6 +293,25 @@ class Gen:
         """A positive literal in [1, 63] — safe nonzero divisor / shift amount."""
         return Lit(ty, self.rng.randint(1, 63))
 
+    def safe_divisor(self, ty, depth):
+        """A COMPUTED divisor that is legal for every width and signedness.
+
+        `| 1 & <expr> 63` is in [1, 63]: the mask clears every high bit
+        (so the value is non-negative in the narrowest type, i8) and the
+        `| 1` sets the low bit (so it is never 0 and never -1). Zero and
+        `MIN / -1` are exactly the two domains the division guard rejects,
+        so this expression must never trip it — while staying a runtime
+        value the guard cannot fold away at -O0."""
+        return Bin(ty, "|", Bin(ty, "&", self.gen(ty, depth), Lit(ty, 63)),
+                   Lit(ty, 1))
+
+    def safe_shift(self, ty, depth):
+        """A COMPUTED shift amount in [0, width): `& <expr> (width-1)`.
+        Outside that range the shift guard panics, so the mask is what
+        keeps the program legal; the amount is still unknown at -O0."""
+        w, _ = TYPES[ty]
+        return Bin(ty, "&", self.gen(ty, depth), Lit(ty, w - 1))
+
     def gen(self, ty, depth):
         if depth <= 0:
             return self.leaf(ty)
@@ -305,14 +331,18 @@ class Gen:
             return Bin(ty, op, self.gen(ty, depth - 1), self.gen(ty, depth - 1))
         if kind == "divrem":
             op = self.rng.choice(["/", "%"])
-            return Bin(ty, op, self.gen(ty, depth - 1), self.small_pos(ty))
+            div = (self.safe_divisor(ty, max(0, depth - 2))
+                   if self.rng.random() < 0.5 else self.small_pos(ty))
+            return Bin(ty, op, self.gen(ty, depth - 1), div)
         if kind == "bitwise":
             op = self.rng.choice(["&", "|", "^^"])
             return Bin(ty, op, self.gen(ty, depth - 1), self.gen(ty, depth - 1))
         if kind == "shift":
             w, _ = TYPES[ty]
             op = self.rng.choice(["<<", ">>"])
-            sh = Lit(ty, self.rng.randrange(w))   # 0..w-1, defined shift
+            sh = (self.safe_shift(ty, max(0, depth - 2))
+                  if self.rng.random() < 0.5
+                  else Lit(ty, self.rng.randrange(w)))  # both stay in [0, w)
             return Bin(ty, op, self.gen(ty, depth - 1), sh)
         if kind == "cmp":
             s = self.rng.choice(TYPE_NAMES)
