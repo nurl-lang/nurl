@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import shlex
+import time
 import subprocess
 import tempfile
 import unittest
@@ -28,7 +30,8 @@ class RunnerTests(unittest.TestCase):
         shutil.copy2(ROOT / 'compiler/tests/run_tests.ps1', self.tests / 'run_tests.ps1')
         self.bin = self.root / 'bin'
         self.bin.mkdir()
-        self.script(self.root / 'build/nurlc', '''if [[ -n ${EXPECTED_FLAG:-} ]]; then
+        self.script(self.root / 'build/nurlc', '''printf started > "$NURL_COMPILER_STARTED"
+if [[ -n ${EXPECTED_FLAG:-} ]]; then
  found=0
  for arg in "$@"; do [[ "$arg" == "$EXPECTED_FLAG" ]] && found=1; done
  [[ "$found" == 1 ]] || exit 2
@@ -56,7 +59,8 @@ chmod +x "$output"
         self.env = {**os.environ, 'PATH': f'{self.bin}:{os.environ["PATH"]}',
                     'CLANG': str(self.bin / 'clang'), 'NURL_SAN': '0',
                     'NURL_TEST_JOBS': '2', 'NURL_SAN_JOBS': '2',
-                    'NURL_COMPILE_TIMEOUT': '0.2', 'FAULT': 'reject'}
+                    'NURL_COMPILE_TIMEOUT': '0.2', 'FAULT': 'reject',
+                    'NURL_COMPILER_STARTED': str(self.root / 'compiler-started')}
         self.fixture('should_fail_probe', '@ main → i { ^ 0 }\n')
 
     def script(self, path, body):
@@ -68,22 +72,38 @@ chmod +x "$output"
         if gold is not None:
             (self.tests / 'outputs' / f'{name}.txt').write_text(gold)
 
-    def run_runner(self, san, *args):
+    def run_runner(self, san, *args, execution_timeout=8):
         if san == 'powershell':
             script = 'run_tests.ps1'
             args = tuple('-Update' if arg == '--update' else arg for arg in args)
-            command = [os.environ['NURL_TEST_PWSH'], '-NoProfile', '-File', str(self.tests / script), *args]
+            command = [self.env['NURL_TEST_PWSH'], '-NoProfile', '-File', str(self.tests / script), *args]
         else:
             script = 'run_san_tests.sh' if san else 'run_tests.sh'
             command = ['bash', str(self.tests / script), *args]
+        started = Path(self.env['NURL_COMPILER_STARTED'])
+        started.unlink(missing_ok=True)
         proc = subprocess.Popen(command, env=self.env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 start_new_session=True)
+        # PowerShell's first .NET/runspace startup can exceed the compiler's
+        # outer watchdog on a cold runner. Budget startup separately, then
+        # enforce the original bound from the fake compiler's entry marker.
+        deadline = time.monotonic() + (30 if san == 'powershell' else execution_timeout)
+        entered = False
         try:
-            stdout, stderr = proc.communicate(timeout=8)
-            return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
-        except subprocess.TimeoutExpired:
-            self.fail(f'{script} exceeded outer watchdog; compiler was not bounded')
+            while True:
+                if not entered and started.is_file():
+                    entered = True
+                    deadline = time.monotonic() + execution_timeout
+                try:
+                    stdout, stderr = proc.communicate(timeout=min(0.1, max(0.001, deadline-time.monotonic())))
+                    return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+                except subprocess.TimeoutExpired as error:
+                    if time.monotonic() < deadline:
+                        continue
+                    phase = 'after compiler entry' if entered else 'before compiler entry'
+                    self.fail(f'{script} exceeded outer watchdog {phase}; '
+                              f'stdout={error.stdout!r}; stderr={error.stderr!r}')
         finally:
             # Fault injection can kill a worker before its child; cleanup the
             # isolated process group even if the runner already exited.
@@ -202,6 +222,19 @@ esac
 
 @unittest.skipUnless(os.environ.get('NURL_TEST_PWSH'), 'set NURL_TEST_PWSH to exercise PowerShell on POSIX')
 class PowerShellRunnerTests(RunnerTests):
+    def test_startup_has_a_separate_budget(self):
+        wrapper = self.root / 'slow-pwsh'
+        self.script(wrapper, 'sleep 9\nexec ' +
+                    shlex.quote(self.env['NURL_TEST_PWSH']) + ' "$@"\n')
+        self.env['NURL_TEST_PWSH'] = str(wrapper)
+        result = self.run_runner('powershell')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_outer_watchdog_still_catches_an_unbounded_compiler(self):
+        self.env.update(FAULT='hang', NURL_COMPILE_TIMEOUT='30')
+        with self.assertRaisesRegex(AssertionError, 'outer watchdog after compiler entry'):
+            self.run_runner('powershell', execution_timeout=1)
+
     runners = ('powershell',)
 
     def test_verdict_protocol(self):
