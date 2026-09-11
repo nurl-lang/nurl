@@ -35,18 +35,30 @@ amounts are computed sub-expressions clamped into the legal domain rather than
 literals, so the guard branch is live at -O0 and the oracle catches a guard
 that fires on a legal operand.
 
-Nine parser defects of one shape are closed. A construct the grammar allows,
-handled by an ad-hoc token skip instead of the path that parses it, with the
-skip running past the end of the declaration: a binding initialised by a
-block, a global constant with no value, a struct or generic function with no
-body, an unclosed type-parameter list, a `:` followed by junk, a function
-whose body is empty, two parameters sharing a name, and a match with no arms.
-Each exited 0 and lost the declaration after it, or emitted IR only clang
-rejected. `tools/tests/test_declaration_forms.py` pins the class with one
-invariant over 35 forms; the corpus pins each fix with its own rejection.
-Opening the block-initialiser path also exposed a borrow-checker hole:
-`bck_esc_let` recorded a referent depth without comparing it, so a closure
-over a block-local `: ~` struct could be bound outside that block.
+Thirteen defects of one shape are closed: a construct the language allows,
+reached by a path that skipped its own check. Ten in the parser — a binding
+initialised by a block, a global constant with no value, a struct or generic
+function with no body, an unclosed type-parameter list, a `:` followed by
+junk, a function whose body is empty, two parameters sharing a name, a match
+with no arms, and a foreach over something that is not a slice. Each exited 0
+and lost the declaration after it, or emitted IR only clang rejected — or, in
+the foreach case, IR with empty types and nothing on stderr at all.
+
+Three more in the type checker. A field WRITE to a name the struct does not
+have stored into field 0 and printed `store  5, * %r` with no types; the read
+side had rejected the same typo for years, with a comment explaining exactly
+this miscompile. And the pre-registered C-runtime surface — `nurl_print` and
+the 117 others every program calls — was registered with a return type only,
+so its call sites had no arity or argument check at all: `( nurl_print 5 )`
+compiled and segfaulted dereferencing 5. Those symbols now get the FFI path's
+own side-tables, filled by parsing the `declare` lines the compiler already
+emits, so there is no second table to drift.
+
+`tools/tests/test_declaration_forms.py` pins the class with one invariant
+over 44 forms; the corpus pins each fix with its own rejection. Opening the
+block-initialiser path also exposed a borrow-checker hole: `bck_esc_let`
+recorded a referent depth without comparing it, so a closure over a
+block-local `: ~` struct could be bound outside that block.
 
 Two tree gates were checking less than they claimed. The canonical-form gate
 named five directories and left 464 first-party files ungated (18 had
@@ -97,13 +109,15 @@ loop. Correct values, zero findings.
    audit/build jobs. That validates those revisions and those workflow
    scopes, not every distribution target. Keep PR #1107 a draft. The commits
    after `070ff0a8` are pushed; confirm their remote results.
-2. Continue the sweep that found the nine parser defects. Take a construct
+2. Continue the sweep that found those thirteen defects. Take a construct
    the grammar allows, write it in a spelling nothing in the tree uses, and
    check the implementation against `spec/grammar.ebnf`. Declarations and
    simple statements are done; expression position, trait/impl bodies,
    select arms, foreach and the `!`/`?` operator forms are not. The
    permanent control is `tools/tests/test_declaration_forms.py` — extend its
-   table rather than writing a second harness.
+   table rather than writing a second harness. The two questions that found
+   the most: what does this construct do in a spelling nothing in the tree
+   uses, and does the WRITE side of a check exist as well as the read side.
 3. A token-deletion sweep over corpus programs (delete one token; the
    compiler must either reject the file or still emit `main`) is written but
    has not completed a clean run — twice interrupted by rebuilding or
