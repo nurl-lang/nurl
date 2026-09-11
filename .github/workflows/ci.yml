@@ -91,6 +91,12 @@ jobs:
           export NURL_TEST_PWSH
           python3 tools/tests/test_compiler_runners.py
           python3 tools/tests/test_git_hooks.py
+      - name: Release artifact-set controls
+        # The gate the release workflow runs before publishing. It needs
+        # no toolchain — it reads a directory of archives — so it belongs
+        # here rather than behind the compiler build.
+        shell: bash
+        run: python3 tools/tests/test_release_artifacts.py
 
   build-failure-controls:
     name: required tools fail the complete build

@@ -22,7 +22,7 @@ in reviewable groups. No item below certifies the whole language or ecosystem.
 | A12: LSP temporary files | Concurrent servers remain independent and no shared source files can be overwritten or leaked on errors | Source temporary files eliminated through compiler stdin snapshots; concurrent-server and missing-tool controls pass |
 | A13: safety contract | Default/strict/raw/FFI guarantees agree; witnesses and valid controls; opaque wrappers and container ownership audited | Pending implementation and contract review |
 | A14: crypto/parser evidence | Instrumented fuzz controls and retained seeds; pinned ACVP/HTTP oracles; measured backend timing; explicit X.509 policy and independent crypto review | Pending; requires A01 and external validation for independent review |
-| A15: release integrity | Mandatory target artifact gates, pinned tool downloads, installer integrity and state-preserving failure controls | Pending source review and isolated tests |
+| A15: release integrity | Mandatory target artifact gates, pinned tool downloads, installer integrity and state-preserving failure controls | The artifact set is now gated before publication, with eleven controls in CI; installer checksum/signature verification reviewed and found fail-closed; pinned tool downloads and state-preserving unpack remain open |
 | A16: compiler architecture | Ownership/state boundaries, current global writer map, interacting-feature differential tests, diagnostic-site dispositions | Trait ordering work is merged; remaining acceptance is unverified |
 | A17: ecosystem capabilities | All package public surfaces mapped to executable consumer/runtime/install evidence and prerequisites; device/platform results distinguished from CPU substitutes | Pending package inventory and execution matrix |
 
@@ -1462,3 +1462,48 @@ imports resolve from the repository root.
 
 The gate's failure message also pointed at `./tools/nurlfmt/fix.sh`, which
 does not exist anywhere in the tree.
+
+### A15: the release publishes the set it promises (2026-09-11)
+
+`RELEASING.md` names four targets and calls exactly one of them —
+FreeBSD — best-effort. The workflow enforced less than that. The publish
+step attaches `artifacts/*.tar.gz`, `*.zip`, `*.sha256` and `*.minisig` by
+glob, and its condition requires only `verify-ci` and the Linux matrix to
+have succeeded; the comment beside it says plainly that the Windows job "is
+a required-to-build job (its failure reds the run) but neither is a hard
+publish gate". A failed Windows leg therefore published a release with no
+`.zip`, and the one-line PowerShell installer 404s for that version — the
+installers compute an archive name by rule and cannot fall back.
+
+`tools/check_release_artifacts.sh` now runs immediately before the publish
+step, with the tree checked out first so it exists (the release job had no
+checkout at all, and `actions/checkout` would have deleted the downloaded
+artifacts had it run after them). It requires both Linux archives and the
+Windows zip, warns for the best-effort FreeBSD archive, requires each
+present archive to be non-empty and to carry a `.sha256` whose first field
+matches the file — read exactly the way the installers read it, so the
+Windows leg's CRLF checksum file parses — and, when signing ran, a
+`.minisig` beside every archive. An archive matching no known target name
+fails the release: the four target names live in the RELEASING.md table,
+the workflow matrix, the installers' name rule and this gate, and this is
+what notices when one of them moves.
+
+`tools/tests/test_release_artifacts.py` is eleven controls over that gate:
+the complete set, a missing required target (named in the message), a
+missing best-effort target (a warning, not a failure), an archive with no
+checksum, a checksum that does not match, a Windows-style CRLF checksum
+file, an empty archive, a signed release missing one signature, an unsigned
+release not demanding any, an unknown target name, and a missing directory
+as an environment error. They run in the ordinary CI job — the gate needs
+no toolchain.
+
+This closes the "mandatory target artifact gates" half of A15. Pinned tool
+downloads, installer integrity beyond the archive set, and state-preserving
+failure controls remain open; note that `tools/get-nurl.sh` already
+verifies the checksum fail-closed, verifies the minisign signature
+fail-closed when `minisign` is present, refuses to install into `/`, `$HOME`
+or a non-NURL directory, and removes only the toolchain's own paths so an
+upgrade cannot log the user out or delete their model cache. What it does
+not do is stage the unpack: it removes the old toolchain before extracting,
+so an extraction interrupted after verification leaves a broken prefix that
+only a re-run repairs.

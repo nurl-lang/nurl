@@ -403,6 +403,11 @@ jobs:
     # workflow_dispatch dry run.
     if: ${{ !cancelled() && needs.verify-ci.result == 'success' && needs.linux.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
     steps:
+      # Checkout FIRST: actions/checkout cleans the workspace, which would
+      # delete the downloaded artifacts if it ran after them. The release
+      # job needs the tree for tools/check_release_artifacts.sh.
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -432,6 +437,20 @@ jobs:
               -c "nurl release $GITHUB_REF_NAME" -t "nurl $GITHUB_REF_NAME"
             echo "signed $f -> $f.minisig"
           done
+          echo "RELEASE_SIGNED=1" >> "$GITHUB_ENV"
+
+      - name: Verify the artifact set
+        # The publish step attaches whatever the build jobs produced,
+        # through a glob. RELEASING.md names four targets and calls
+        # exactly one — FreeBSD — best-effort, so a Windows leg that
+        # failed used to publish a release with no .zip and the one-line
+        # PowerShell installer then 404s for that version. Fail here
+        # instead, before anything is published, and check that every
+        # archive carries the checksum (and signature) the installers
+        # verify fail-closed.
+        run: |
+          ./tools/check_release_artifacts.sh artifacts "$GITHUB_REF_NAME" \
+            ${RELEASE_SIGNED:+--signed}
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
