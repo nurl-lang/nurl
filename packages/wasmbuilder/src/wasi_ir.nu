@@ -160,34 +160,90 @@ $ `stdlib/core/vec.nu`
     ^ out
 }
 
-// Parameter types of a `declare` line, in order, trimmed. `()` → empty.
-// A vararg marker (`...`) is dropped: a shim mirrors only the fixed
-// parameters its call sites pass, and `... %aN` in a define's parameter
-// list is not legal LLVM — emitting it made every module whose IR
-// declares a vararg libc symbol (`open`, `fcntl`, `printf`) fail to link.
+// Read the LLVM type prefix, excluding parameter names and attributes.
+// Balanced aggregate/function types and quoted identifiers may contain spaces.
+@ __wb_ir_param_type String part → String {
+    : String t ( string_trim part )
+    : i n ( string_len t )
+    : ~ i k 0
+    : ~ i depth 0
+    : ~ b quoted F
+    : ~ b escaped F
+    : ~ b done F
+    ~ & < k n == done F {
+        : i c ( string_get t k )
+        ? quoted {
+            ? escaped { = escaped F } {
+                ? == c 92 { = escaped T } { ? == c 34 { = quoted F } {} }
+            }
+        } {
+            ? == c 34 { = quoted T } {
+                ? | | == c 40 == c 91 | == c 123 == c 60 { = depth + depth 1 } {
+                    ? | | == c 41 == c 93 | == c 125 == c 62 { = depth - depth 1 } {
+                        ? & == depth 0 | == c 32 == c 9 {
+                            : ~ i next k
+                            ~ & < next n | == ( string_get t next ) 32 == ( string_get t next ) 9 { = next + next 1 }
+                            : String rest ( string_substr t next - n next )
+                            : b continues | | == ( string_get t next ) 42 == ( string_get t next ) 40 ( string_starts_with rest `addrspace(` )
+                            ( string_free rest )
+                            ? continues {} { = done T }
+                        } {}
+                    }
+                }
+            }
+        }
+        ? done {} { = k + k 1 }
+    }
+    : String out ( string_substr t 0 k )
+    ( string_free t )
+    ^ out
+}
+
+@ __wb_ir_push_param ( Vec String ) out String line i first i end → v {
+    : String raw ( string_substr line first - end first )
+    : String ty ( __wb_ir_param_type raw )
+    ( string_free raw )
+    ? | == ( string_len ty ) 0 != 0 ( nurl_str_eq ( string_data ty ) `...` ) {
+        ( string_free ty )
+    } { ( vec_push [String] out ty ) }
+}
+
+// Split only at the declaration's outer parameter commas, ignoring nested
+// type/attribute syntax and quoted strings. The matching ')' ends parameters;
+// function attributes after it are never part of a parameter. Drop varargs.
 @ __wb_ir_decl_params String line → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
     : ?i lp_o ( string_index_of line `(` )
     ?? lp_o {
         T lp → {
             : i n ( string_len line )
-            : ~ i rp - n 1
-            ~ & > rp lp != ( string_get line rp ) 41 { = rp - rp 1 }
-            : i first + lp 1
-            ? > rp first {
-                : String inner ( string_substr line first - rp first )
-                : ( Vec String ) parts ( string_split inner `,` )
-                : ~ i i 0
-                ~ < i ( vec_len [String] parts ) {
-                    ?? ( vec_get [String] parts i ) { T p → {
-                            : String tp ( string_trim p )
-                            ? != 0 ( nurl_str_eq ( string_data tp ) `...` ) { ( string_free tp ) } { ( vec_push [String] out tp ) }
-                        } F → {} }
-                    = i + i 1
+            : ~ i first + lp 1
+            : ~ i k first
+            : ~ i depth 0
+            : ~ b quoted F
+            : ~ b escaped F
+            : ~ b done F
+            ~ & < k n == done F {
+                : i c ( string_get line k )
+                ? quoted {
+                    ? escaped { = escaped F } {
+                        ? == c 92 { = escaped T } { ? == c 34 { = quoted F } {} }
+                    }
+                } {
+                    ? == c 34 { = quoted T } {
+                        ? & == depth 0 | == c 44 == c 41 {
+                            ( __wb_ir_push_param out line first k )
+                            = first + k 1
+                            ? == c 41 { = done T } {}
+                        } {
+                            ? | | == c 40 == c 91 | == c 123 == c 60 { = depth + depth 1 } {
+                                ? | | == c 41 == c 93 | == c 125 == c 62 { = depth - depth 1 } {}
+                            }
+                        }
+                    }
                 }
-                ( vec_free_with [String] parts \ String s → v { ( string_free s ) } )
-                ( string_free inner )
-            } {}
+                = k + k 1
+            }
         }
         F _ → {}
     }
@@ -447,7 +503,7 @@ $ `stdlib/core/vec.nu`
                     : ~ String name ( string_new ) : ~ String ret ( string_new ) : ~ String pms ( string_new )
                     : ?String n_o ( vec_get [String] parts 0 ) ?? n_o { T s → { ( string_free name ) = name ( string_from ( string_data s ) ) } F → {} }
                     : ?String r_o ( vec_get [String] parts 1 ) ?? r_o { T s → { ( string_free ret ) = ret ( string_from ( string_data s ) ) } F → {} }
-                    : ?String p_o ( vec_get [String] parts 2 ) ?? p_o { T s → { = pms ( string_from ( string_data s ) ) } F → {} }
+                    : ?String p_o ( vec_get [String] parts 2 ) ?? p_o { T s → { ( string_free pms ) = pms ( string_from ( string_data s ) ) } F → {} }
 
                     : String pat ( string_from `@` ) ( string_push_str pat ( string_data name ) ) ( string_push_char pat 40 )
 

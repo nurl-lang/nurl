@@ -683,6 +683,9 @@ jobs:
       - name: Generated-code sanitizer detection controls
         run: python3 tools/sanitizer_controls.py
 
+      - name: WASI rewriter LLVM types and leak control
+        run: python3 tools/tests/test_wasi_ir.py
+
       - name: Source arithmetic domains and recovery
         run: python3 tools/tests/test_arithmetic_safety.py
 

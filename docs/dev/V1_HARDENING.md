@@ -1276,3 +1276,30 @@ latter at an explicit fake-compiler entry marker. Another control proves an
 unbounded compiler still fails after entry. All 20 POSIX/PowerShell methods
 pass locally with the real PowerShell executable; new remote execution is
 pending. The original CI log alone did not identify startup as its cause.
+
+
+### Shared WASI parameter parser (2026-09-11)
+
+The first remote primitive-contract checkpoint fails the unikernel compiler
+and swarm gates with `inttoptr i8* nocapture nofree %a0 to i8*`. An independent
+IR fixture reproduces that exact LLVM assembly error. The shared rewriter
+(imported by both wasmbuilder and nurlapi) now extracts a balanced LLVM type
+prefix and splits only top-level declaration parameters. Parameter attributes,
+varargs and trailing function attributes cannot enter operand types. Nested
+aggregate/function-pointer types and quoted identifiers retain their syntax.
+This does not establish ABI adaptation for arbitrary LLVM types/address spaces.
+
+The focused leak control also reproduces a preexisting 1,008-byte allocation
+leak per rewrite: the initialized parameter-code string was replaced without
+freeing it. That replacement now releases its old value. The permanent
+`tools/tests/test_wasi_ir.py` compiles the public rewriter control with
+ASan/UBSan/LSan, requires clean stderr and assembles its output for wasm32.
+It passes with zero leaks; the sanitizer workflow runs it.
+
+The existing package gate passes **18 controls**: all 16 native/Wasmtime corpus
+pairs match exit and output, the IR assertions pass, and the library API builds
+Wasm successfully. The real `wasmc_gate.sh` builds nurlc.wasm and runs it inside
+the QEMU unikernel; all **eight programs produce byte-identical IR** to the
+native compiler. Evidence is `wasm-attrs-*` under ignored `build/v1-hardening/`.
+The end-to-end gates use a normal shared toolchain rebuilt after all arithmetic
+sanitizer checks finished; isolated IR leak tests compile their own runtime.

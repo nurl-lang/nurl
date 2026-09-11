@@ -33,7 +33,8 @@ into range remain valid; IEEE floating arithmetic is unchanged.
 
 Published checkpoints are `8d34f800` (JS audits), `b3975cdb` (return ownership),
 `5e673886` (driver split paths) and `5b2a9b3a` (inferred consumer effects).
-Local commit `3cf6974b` separates PowerShell startup from the compiler watchdog;
+Local commits `eec0b3c1` (arithmetic) and `3cf6974b` (PowerShell watchdog)
+are the next verified compiler checkpoints;
 all 20 real POSIX/PowerShell controls pass. See the ledger for the exact bounds
 and the limitation of the old remote failure log.
 
@@ -66,9 +67,11 @@ The ledger retains earlier ownership counterexamples and their failed candidates
 2. The unikernel job fails because shared `packages/wasmbuilder/src/wasi_ir.nu`
    includes `nocapture nofree` attributes in parameter value types. A local
    regression reproduces the exact LLVM assembly failure. The working-tree
-   fix parses balanced type/parameter syntax and strips attributes; complete
-   focused leak/LLVM checks and real wasm compiler/swarm guest gates before
-   publishing it. `nurlapi` imports this shared file.
+   fix parses balanced type/parameter syntax and strips attributes. The permanent
+   ASan/UBSan/LSan/LLVM control passes, all 18 package checks pass (16 actual
+   native/Wasmtime comparisons), and the QEMU compiler gate produces identical
+   IR for all eight programs. Complete the swarm guest gate before publishing.
+   `nurlapi` imports this shared file.
 3. The main Linux job is cancelled while apt installs MinGW after the other
    compiler gates. Fix the prerequisite/CI setup while retaining the cross-link
    gate; cancellation is not success. The pinned CI image lacks MinGW.
@@ -89,6 +92,8 @@ The ledger retains earlier ownership counterexamples and their failed candidates
 - `./build.sh --san --no-tests`, then `NURL_SAN=1 ./tools/nurl-lsp/build.sh`.
 - `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 LSAN_OPTIONS=use_stacks=0 python3 tools/tests/test_lsp_toolchain.py`
 - `./tools/leakgate.sh` and `NURL_SAN_JOBS=8 ./compiler/tests/run_san_tests.sh`.
+- `python3 tools/tests/test_wasi_ir.py` — isolated shared-rewriter LLVM/leak control.
+- `./packages/wasmbuilder/tests/build_test.sh` — require actual Wasmtime execution.
 - `python3 tools/tests/test_driver_paths.py` — two real split/path controls.
 - `NURL_TEST_PWSH=/absolute/path/to/pwsh python3 tools/tests/test_compiler_runners.py`
 - Never rebuild shared compiler/runtime outputs while tests consume them; never
