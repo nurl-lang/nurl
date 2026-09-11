@@ -124,17 +124,29 @@ loop. Correct values, zero findings.
    cleaning the tree underneath it. Run it against a PRIVATE copy of
    `build/nurlc` and keep its mutants out of `compiler/tests/`; one was
    committed by accident and had to be removed.
-4. Continue A01's lexical alloca/defer lifetime policy. Note what the probes
-   here established: every NURL alloca is hoisted to the entry block and
-   lives for the whole function, so a use-after-scope inside one frame is not
-   a memory error today — at worst a slot reused across loop iterations. The
+4. A01's stack-lifetime item is narrower than the ledger recorded, and its
+   cited probe has been resolved. Written with a `: ~` struct the capture is
+   by pointer and the assignment is rejected at compile time; written with a
+   scalar — which is how a probe that PRINTS 42 must have been written — the
+   capture is by VALUE, so there is no dangling reference to detect and the
+   clean exit was the right answer. Running that probe under LeakSanitizer
+   instead found two real leaks in the closure-env machinery, both fixed and
+   pinned by `closure_env_assign.nu`.
+
+   What remains: every NURL alloca is hoisted to the entry block and lives
+   for the whole function, so a use-after-scope inside one frame is not a
+   memory error today — at worst a slot reused across loop iterations. The
    escape that IS a dangling pointer, a stack reference outliving its
-   function, is rejected by the borrow checker in every spelling tried
-   (assignment, struct field store, conditional arm, closure of closure,
-   nested blocks, loop body, and now block-expression initialisers). A
-   lifetime-marker policy therefore buys detection and stack reuse, not
-   correctness, and must still account for deferred cleanup reaching a slot
-   after its lexical block.
+   function, is rejected in every spelling tried (assignment, struct field
+   store, conditional arm, closure of closure, nested blocks, loop body,
+   interprocedural, and block-expression initialisers). A lifetime-marker
+   policy therefore buys detection and stack reuse, not correctness, and
+   must still account for deferred cleanup reaching a slot after its lexical
+   block. Decide whether that trade is worth making before writing it.
+
+   The technique that paid here is worth repeating on its own: run existing
+   probes under LSan, not only ASan. The leak was invisible to every ASan
+   run and to the default sanitized corpus, which sets `detect_leaks=0`.
 5. Continue A13/A16 indirect/generic/embedded-origin and cleanup
    counterexamples; borrowed-initial mutable bindings and raw/FFI boundaries
    need broader review.
