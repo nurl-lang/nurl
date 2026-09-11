@@ -182,9 +182,20 @@ loop. Correct values, zero findings.
 - `python3 tools/tests/test_wasi_ir.py` — isolated shared-rewriter LLVM/leak control.
 - `./packages/wasmbuilder/tests/build_test.sh` — require actual Wasmtime execution.
 - `python3 tools/tests/test_driver_paths.py` — two real split/path controls.
+- `python3 tools/tests/test_declaration_forms.py` — 44 declaration and
+  statement forms against one invariant; needs only `build/nurlc`, under 0.2 s.
+- `python3 tools/tests/test_release_artifacts.py` — eleven controls over the
+  release artifact-set gate; needs no toolchain at all.
+- `python3 tools/fuzz/mutate_delete.py --files 40` — the token-deletion sweep.
+  Tens of thousands of compiles; a hunting tool, not a gate.
+- `LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh` — the whole corpus
+  with leak detection on, which the default run leaves off.
 - `NURL_TEST_PWSH=/absolute/path/to/pwsh python3 tools/tests/test_compiler_runners.py`
 - Never rebuild shared compiler/runtime outputs while tests consume them; never
-  overlap corpus runners using the same verdict directory.
+  overlap corpus runners using the same verdict directory. Both rules were
+  broken in one session: a sweep died when `./build.sh` replaced `build/nurlc`
+  underneath it, and a corpus run flaked with "Text file busy" when a second
+  build started while the first was alive.
 - `python3 tools/gen_globals_map.py` after compiler edits; keep both bootstrap
   snapshots together. Preserve `vec_push_temp_owned`'s golden: `item3`, exit 0.
 - Set `DEBUGINFOD_URLS=''` for isolated sanitizer probes to avoid symbol-server
