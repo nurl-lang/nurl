@@ -164,10 +164,15 @@ loop. Correct values, zero findings.
    uses it (`mem_env_owner` / `mem_emit_env_flags`). Three programs, 89
    leakers to 86; it needed a bootstrap refresh, which is done.
 
-   The rest of the closure-env class is a different sub-shape and is the
-   next thing to look at: a closure RETURNED by a generic function, whose
-   env has no argument-position flag at all. `iter_zip_enum` is the witness
-   (`iter_enumerate` builds the iterator).
+   The rest of the closure-env class is a different sub-shape, characterised
+   in the ledger: a closure RETURNED by a function. `iter_zip_enum` binds an
+   iterator and ends it with `( ab 1 )`, which IS `iter_free` — the protocol
+   frees the chain but cannot free the closure's own env, because that is
+   what the call is executing on. The binding path registers an env only for
+   a closure LITERAL initialiser, so a call result has no owner. The env
+   pointer is knowable at the binding; what is missing is the fresh-vs-alias
+   answer the string path gets from `__last_call_ret_owned__`. Registering
+   without it is a double free, so this needs a summary bit, not a patch.
    A second class is root-caused in the ledger too: a parameter stored into
    a container that dies inside the same callee is classified as escaping,
    so the caller's fresh temporary is never freed by anyone. The whole

@@ -2084,10 +2084,25 @@ Honest size: three programs, not thirteen. `dwarf_closure_drop` now emits
 `@.__nurl_envdrop.0 = private constant i1 true` and frees the env its
 `vec_free_with` closure literal owns; the corpus goes from 89 leaking
 programs to 86. The rest of the closure-env class is a DIFFERENT sub-shape
-that this does not touch: `iter_zip_enum` leaks an iterator built by
-`iter_enumerate`, a closure RETURNED by a generic function rather than
-passed to one, so no argument-position flag exists for it at all. Env
-ownership on the return path is the next thing to look at.
+that this does not touch, and it is worth stating exactly, because the
+witness looks at first like a test that forgot to clean up and is not.
+
+`iter_zip_enum` binds an iterator — `: ( @ ?( Pair i i ) i ) ab
+( iter_enumerate [i] … )` — and ends it with `( ab 1 )`, which IS the free:
+`iter_free [A] sink ( @ ?A i ) src → v { ( src 1 ) }` is that one call. The
+protocol frees the chain's internal state, and it cannot free the closure's
+own heap env, because the env is what the call is executing on. That block
+belongs to the owner.
+
+The owner is the binding, and the binding path registers an env only when
+its initialiser is a closure LITERAL: a call RESULT never gets registered,
+so the env has no owner at all. The env pointer is knowable at the binding
+(field 1 of the closure value), so the registration is mechanically easy —
+what is missing is the question the string path answers with
+`__last_call_ret_owned__`: does this call return a FRESH env, or an alias of
+one the callee still owns? Registering without that answer is a double free,
+not a leak. A summary bit for "returns a closure with a fresh env" is what
+the fix needs, and that is a design addition rather than a repair.
 
 This is a codegen change, so the bootstrap was refreshed: source and
 snapshot are identical, the fixed point holds on a second plain build, and
