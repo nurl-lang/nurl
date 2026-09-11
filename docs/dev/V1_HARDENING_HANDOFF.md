@@ -155,8 +155,17 @@ loop. Correct values, zero findings.
    evidence (`g_fn_invoke_only`) does not exist until after the
    instantiation is emitted. Fixing it is an ordering change in
    monomorphisation; freeing without the evidence would be a use-after-free.
-   The other 45 leakers, the ones with no closure literal in them, are not
-   triaged.
+   A second class is root-caused in the ledger too: a parameter stored into
+   a container that dies inside the same callee is classified as escaping,
+   so the caller's fresh temporary is never freed by anyone. The whole
+   `fmt` family does this, which makes it the idiomatic-printing leak.
+   Fixing it needs either a dataflow refinement (a store into a container
+   that provably dies before return is not an escape) or a parameter marker
+   that asserts non-escape the way `sink` asserts consumption — the second
+   is a language decision, not a repair. The remaining leakers are not
+   individually triaged, but 25 of the 45 non-closure ones allocate through
+   the same `__vec_grow` frame, so they are likely one or two more clusters
+   rather than 45 separate defects.
 5. Continue A13/A16 indirect/generic/embedded-origin and cleanup
    counterexamples; borrowed-initial mutable bindings and raw/FFI boundaries
    need broader review.

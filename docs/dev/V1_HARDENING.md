@@ -1813,3 +1813,58 @@ The instrumented toolchain is otherwise healthy with this session's changes:
 the same run reports zero ASan/UBSan findings and zero timeouts, the compiler
 self-compile leak gate is clean in both emission modes, and the curated
 leak-clean list passes with `closure_env_assign.nu` added to it.
+
+### A01: the second leak class — a parameter stored in a container that dies (2026-09-11)
+
+`fmt_basic` leaks three bytes, the smallest leak in the corpus, and it is
+the most instructive one. The program is written correctly:
+
+```nurl
+( println_fmt2 `{} is {} years old` ( string_data name ) ( nurl_str_int age ) )
+```
+
+`( nurl_str_int age )` is a fresh owned string handed to a function that
+does not consume it, so by NURL's ownership rule the CALLER frees it after
+the call. The compiler emits exactly that free — guarded by a private
+constant, `@.__nurl_argdrop.N`, whose value is the parameter summary's
+verdict. Here the verdict is false, so the free is compiled out and nothing
+frees the string. The caller cannot fix it except by binding the temporary
+and freeing it by hand.
+
+Instrumenting `mem_consumer_arg_drop_safe` names the disqualifier exactly:
+parameters 1 and 2 of `println_fmt2` are classified as **escaping**. They
+are, by the rule the analysis applies. `println_fmt2` hands them to `fmt2`,
+and `fmt2` does this:
+
+```nurl
+: ( Vec s ) v ( vec_with_cap [s] 2 )
+( vec_push [s] v a )        — the parameter's pointer is STORED
+( vec_push [s] v b )
+: String r ( fmt tmpl v )
+( vec_free [s] v )          — and the container dies here
+^ r
+```
+
+Storing a pointer into a heap container is an escape. What the analysis has
+no way to express is that this container is freed before the callee returns,
+so the escape is bounded by the callee's own frame and the caller's
+temporary was never at risk. Every caller of the `fmt` family that passes a
+fresh temporary pays a leak for that imprecision, and the family is the
+idiomatic way to print formatted output.
+
+Two ways to fix it, neither a late edit. The inference could learn that a
+store into a container that provably dies before return is not an escape —
+a dataflow change, and getting it wrong is a use-after-free rather than a
+leak. Or the language could gain a parameter marker that ASSERTS
+non-escape, the way `sink` asserts consumption; `in` exists but parses to
+the default and carries no such promise (`parse_param_marker` returns 0 for
+it). That second one is a language decision, not a repair.
+
+Both root-caused classes — this one and the generic higher-order call above
+— have the same shape: the conservative branch is correct, and what is
+missing is evidence the compiler could in principle have. Neither is a
+safety defect. Four other plausible explanations were tested against this
+one and are NOT the cause: a single owned temporary as the only argument, a
+temporary in second position, a borrow and a temporary mixed in one call,
+a two-level helper chain that builds a fresh value, and the same helper
+reached across an import boundary are all leak-clean.
