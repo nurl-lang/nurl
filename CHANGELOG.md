@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dependency resolution backtracks across version-dependent conflicts.**
+  Valid diamonds, cycles and fallback versions no longer fail because a greedy
+  pass selected an incompatible latest version. Explicit decision and constraint
+  stacks remove the 256-round cutoff. Conflict causes let the solver skip
+  unrelated choices, including redundant wildcard edges. An indexed candidate
+  heap and cached indexes, parsed versions and requirements avoid whole-graph
+  rescans. Selection is deterministic under root, index and dependency ordering.
+  Invalid root names/ranges report `ResolveBadPackage`/`ResolveBadRequirement`;
+  malformed version metadata and duplicate versions report `ResolveBadIndex`.
+  `ResolveUnstable` is retired. CI compares finite graphs against an independent
+  exhaustive oracle and exercises the resulting signed installation.
+
 - **Registry origin and signing trust stay attached to package identity.**
   Explicit dependency registries now select their own indexes and archives,
   including transitive dependencies. Per-registry user key configuration

@@ -159,12 +159,23 @@ prints no project installation success. `nurlpkg lock` retains existing source
 and checksum fields and refuses missing/renamed registry packages or
 installed-version drift. Local development versions can still be refreshed.
 
+Resolution selects one version per `(registry, name)` and backtracks when a
+candidate's dependencies conflict. It tries non-yanked versions in descending
+SemVer order, choosing the package with the fewest remaining candidates first.
+Package name and normalized registry URL break package ties; descending lexical
+build metadata breaks equal SemVer precedence ties. Input order does not select
+the result. This policy finds a compatible selection when one exists in the
+finite fetched graph; it does not promise to maximize every package's version.
+Cycles are checked against existing assignments, and long chains have no
+arbitrary iteration limit. Indexes and distinct requirements are parsed once
+per resolution. Invalid versions, dependency requirements and duplicate version
+identities make an index invalid, including metadata of unselected versions.
+
 The resolver can distinguish equal package names in separate registries, but
 the current `deps/<name>` installation layout cannot expose both. The CLI
-reports that conflict before downloading archives. Resolution is still greedy
-with one version per identity; a nonconverging graph is an error. These checks
-do not provide frozen-lock installation or an atomic transaction across the
-whole dependency tree; those remain tracked in `docs/dev/V1_HARDENING.md`.
+reports that conflict before downloading archives. Frozen-lock installation,
+typed transport failures and an atomic transaction across the whole dependency
+tree remain tracked in `docs/dev/V1_HARDENING.md`.
 
 **`publish` runs five gates before it packs anything**, and refuses on
 any of them — a published version can be yanked but never replaced, so

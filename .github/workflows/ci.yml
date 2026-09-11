@@ -153,6 +153,7 @@ jobs:
         timeout-minutes: 10
         run: |
           python3 tools/tests/test_registry_identity.py
+          python3 tools/tests/test_resolver.py
           ./tools/nurlpkg/test-install-tool.sh
 
       - name: Retain complete build logs
@@ -642,6 +643,7 @@ jobs:
       - name: Instrumented registry identity and trust controls
         run: |
           NURL_SAN=1 python3 tools/tests/test_registry_identity.py
+          NURL_SAN=1 python3 tools/tests/test_resolver.py
           NURL_SAN=1 ./nurl.sh compiler/tests/registry_trust.nu build/registry-trust-leaks
           ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 ./build/registry-trust-leaks
           NURL_SAN=1 ./nurl.sh compiler/tests/resolver_registry.nu build/resolver-registry-leaks

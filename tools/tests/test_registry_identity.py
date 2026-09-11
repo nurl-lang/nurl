@@ -142,6 +142,27 @@ class RegistryIdentityTest(unittest.TestCase):
         app = subprocess.run([str(self.project / 'app')], capture_output=True, env=self.env, timeout=10)
         self.assertEqual((app.returncode, app.stdout, app.stderr), (0, b'22\n', b''))
 
+    def test_backtracking_installs_only_the_selected_signed_version(self):
+        first = self.package('b', 'foo')
+        index = '/b/index/foo.json'
+        old = json.loads(self.routes[index])['versions'][0]
+        second = self.package('b', 'foo', version='2.0.0', deps=['bar'])
+        versions = json.loads(self.routes[index])
+        versions['versions'].append(old)
+        self.routes[index] = json.dumps(versions).encode()
+        self.package('b', 'bar', deps=['foo'])
+        self.manifest([('foo', 'b')])
+        manifest = self.project / 'nurl.toml'
+        manifest.write_text(manifest.read_text().replace('version="^1"', 'version="*"'))
+        installed = self.run_pkg('install')
+        self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+        self.assertIn(first, self.requests)
+        self.assertNotIn(second, self.requests)
+        self.assertFalse(any('/pkgs/bar/' in path for path in self.requests))
+        self.assertFalse((self.project / 'deps/bar').exists())
+        package, = tomllib.loads((self.project / 'nurl.lock').read_text())['package']
+        self.assertEqual((package['name'], package['version']), ('foo', '1.0.0'))
+
     def test_two_registries_use_independent_keys(self):
         self.package('a', 'alpha')
         self.package('b', 'bravo')

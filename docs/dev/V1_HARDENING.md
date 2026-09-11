@@ -11,7 +11,7 @@ in reviewable groups. No item below certifies the whole language or ecosystem.
 | A01: sanitizer coverage | Ordinary driver, bootstrap, split output and fuzz paths detect deliberate memory faults in generated code; clean controls, corpus and fuzz pass; UBSan/LLVM semantics documented | ASan emission implemented and calibrated; revealed HTTP/3 UAF and compiler leaks repaired; lexical stack-lifetime, rejected-compilation cleanup and arithmetic work remains open |
 | A02: trustworthy compiler runners | Missing-main rejection fixtures run; crash/hang/worker fault controls fail closed; complete corpus verdict accounting | Verified in local normal/sanitized corpus and POSIX/PowerShell controls; native Windows execution remains CI evidence |
 | A03: installed LSP | Separate installed project, unsaved edits, sibling/dependency imports, visible execution errors | Independently reproduced; repaired and verified with relocated binaries and 20 normal/ASan protocol/compiler controls on Linux; native Windows and actual distribution installation remain unverified |
-| A04: registry identity | Two local registries with equal package names; fetch, resolution, signing and lock identity preserved; errors never print success | Origin/key/index/archive/lock binding repaired and locally tested; flat-layout coexistence, backtracking and transactional/frozen installation remain open |
+| A04: registry identity | Two local registries with equal package names; fetch, resolution, signing and lock identity preserved; errors never print success | Origin/key/index/archive/lock binding repaired; conflict-directed resolver checked against an exhaustive oracle; flat-layout coexistence and transactional/frozen installation remain open |
 | A05: signed install smoke | Signed fixtures install after relocation with transitive dependencies; missing/wrong/tampered signatures reject; CI runs it | Unsigned/stale smoke independently reproduced; signed five-program relocation smoke and CLI negative controls pass locally, wired into CI; remote run pending |
 | A06: JS dependencies | Fresh manager-native audits, reachability analysis, lockfile updates and builds/tests for all four trees; recurring checks | Pending fresh advisory evidence |
 | A07: continuous package/service tests | Suite/prerequisite manifest, changed packages and reverse dependencies, scheduled coverage; registry/cloud and diagnostic gates in CI | Pending current workflow inventory |
@@ -415,8 +415,8 @@ compiler limitation remains A01/A13 work, not a claimed compiler fix.
 registries, but the compiler's global imports and the CLI's flat `deps/<name>`
 layout do not yet support their coexistence. The CLI detects and refuses this
 collision before downloading either archive; this is an explicit limitation,
-not A04 closure. Greedy resolution still lacks backtracking; exceeding the
-convergence bound now errors rather than returning an unchecked lock. Lock
+not A04 closure. At this checkpoint, greedy resolution still lacked backtracking;
+the subsequent resolver section below replaces it and removes the convergence bound. Lock
 shape/version validation, typed transport failures, frozen installation, package-scoped import/symbol
 identity, mixed local/registry graphs, exclusive staging, existing symlink
 protection and atomic publication of the dependency tree remain open A04/A09/A15
@@ -459,3 +459,92 @@ Final logs are retained under `build/v1-hardening/registry-complete-*`,
 `registry-final-san-corpus.log`, `registry-nul-san-controls.log`,
 `registry-trust-complete-*` and `resolver-registry-complete-*`. The goal remains
 open for the separate architectural, transactional and platform items above.
+
+## A04 dependency search: independent reproduction and replacement
+
+The audit's resolver criticism was checked against the implementation at
+`9e272375`. Four offline positive controls failed: a diamond requiring an older
+parent, a version-dependent cycle with a valid older version, an unavailable
+dependency that an older parent avoids, and a 600-package chain exceeding the
+256-round bound. A separate signed HTTP/CLI fixture reproduced `ResolveUnstable`
+when `foo@2` required `bar@1`, `bar@1` required `foo@1`, and the root allowed
+either version of `foo`. The compatible installation is just `foo@1`.
+
+Resolution now uses explicit decision frames and a reversible constraint trail.
+Every package identity has one assignment; edges to assigned packages check
+that assignment directly. Candidate failure removes the candidate's edges and
+tries another version. Indexes are fetched once per identity, semantic versions
+are parsed once, and identical requirements share one parsed representation.
+An indexed minimum heap orders only required, unassigned packages; a constraint
+change refreshes its target's candidate domain instead of rescanning every node.
+All state is owned by the resolution call and released on success and failure.
+
+Plain chronological backtracking was insufficient: 28 unrelated binary-version
+roots made a two-package contradiction enumerate irrelevant combinations. The
+replacement records the earlier decisions responsible for a failed candidate
+and jumps over choices that cannot change the contradiction. Domain filtering
+retains a condition as a cause only when it removes a still-possible candidate;
+package presence needs one cause unless a root already requires it. This also
+prevents redundant wildcard edges from reconnecting unrelated decisions to the
+same contradiction. Both intermediate implementations exceeded a three-second
+probe on their respective controls; the final regression requires termination
+within the suite's per-process watchdog. General dependency solving can still
+require exponential search; these controls do not establish a polynomial bound.
+
+`tools/tests/test_resolver.py` supplies an independent exhaustive oracle, using
+a deliberately small integer-major version/range grammar. It enumerates all
+assignments for 400 seeded graphs, verifies both satisfiable and unsatisfiable
+results, then reverses roots, index versions and dependency edges and requires
+the same selection: 800 resolver executions across those graph pairs. Separate
+controls cover the four original failures, valid and invalid cycles, yanked
+versions, equal-precedence build metadata, duplicate versions, malformed unused
+metadata, lazy dependency fetching and the unrelated-choice cases. Every fetch
+is recorded and duplicate fetching per identity fails the test. The adapter and
+solver run with ASan/UBSan and LSan enabled, with stack roots disabled so stale
+pointers in the returned main frame cannot conceal leaked owners. The real signed CLI control requires
+the selected `foo@1` archive and lock entry, and rejects any download or installed
+directory from the abandoned `foo@2`/`bar@1` branch.
+
+Selection remains one version per `(registry, name)`: fewest candidates first,
+then name and normalized URL, with descending SemVer candidates and descending
+lexical build metadata for equal precedence. The policy is deterministic; it
+does not claim to maximize all versions simultaneously. Invalid root names or
+ranges have dedicated errors; invalid dependency names/ranges, malformed versions
+and duplicate version identities invalidate an index, including unused versions.
+`ResolveUnstable` and its arbitrary convergence limit are removed.
+
+This repairs dependency search, not the remaining source-layout and installation
+architecture. Equal-name registry coexistence, package-scoped imports, frozen
+locks, typed HTTP failures, mixed local/registry graphs, filesystem symlinks and
+atomic tree publication remain open. In particular, the current fetch callback
+still represents transport failures and missing indexes with the same empty
+string; successful backtracking cannot turn that API into a reliable transport
+diagnostic. The ownership analysis limitation for captured callbacks also remains
+separate A01/A13 work.
+
+Local performance comparison (Linux x86_64, clang 18, normal optimized binaries)
+used the same stdin JSON adapter against the old and final resolver, alternating
+seven runs of each. The measurements include process startup, fixture JSON
+parsing, fetch logging and lock serialization, with no network traffic. Median
+elapsed time for 1,000 independent roots with two versions each fell from
+60.3 ms to 25.7 ms; median process peak RSS fell from 6,740 KiB to 6,376 KiB.
+A 200-package single-version chain fell from 78.0 ms to 4.90 ms, with peak RSS
+2,420 KiB versus 2,312 KiB. The unrelated-choice and redundant-wildcard
+contradictions completed in 1.86 ms and 1.46 ms in single final-binary probes.
+These are local workload measurements, not universal throughput or memory bounds.
+Inputs, the measurement script and raw samples are retained under
+`build/v1-hardening/benchmark_resolver.py` and
+`build/v1-hardening/resolver-backjump-benchmark.json`.
+
+Final local validation for the resolver replacement: the normal bootstrap
+passed in 43 s and its complete corpus in 2 m 11 s; the instrumented bootstrap
+passed in 70 s. Both corpora account for 982 inputs: 963 PASS, 19 SKIP, with no
+failures or timeouts. All 10 oracle/regression methods pass in normal and
+instrumented builds (including LSan with stack roots disabled); all 20 signed
+CLI controls pass in both builds. The five installed ecosystem programs pass
+with normal tools. The separate registry trust/index controls and two-origin
+resolver also pass with leak detection enabled. Explicit formatter idempotence
+and IR-equivalence checks cover all four selected files without skips: the
+resolver module, diamond fixture, new oracle adapter and package CLI.
+Logs are retained under `build/v1-hardening/resolver-complete-*`. Normal
+development tools were restored successfully after the instrumented checks.

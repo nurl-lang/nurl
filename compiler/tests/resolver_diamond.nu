@@ -4,7 +4,7 @@
 //   b 1.0.0 → c >=1.0.0 <1.5.0    (allows 1.0.0 .. <1.5.0)
 //   c: 1.0.0, 1.4.0, 1.9.0
 // First-requirement-wins would lock c at 1.9.0 (a's ^1) then spuriously
-// ResolveConflict on b. The fixpoint resolver intersects → c 1.4.0.
+// ResolveConflict on b. The resolver intersects → c 1.4.0.
 //
 // The second graph is a genuine empty intersection (c ^1 from a vs c ^2 from
 // b') → ResolveConflict.
