@@ -366,7 +366,7 @@ $ `stdlib/ext/json.nu`
     ^ @ ArimaCoef { ( vec_zeroed [f] . sp p ) ( vec_zeroed [f] . sp q ) ( vec_zeroed [f] . sp P ) ( vec_zeroed [f] . sp Q ) 0.0 }
 }
 
-@ _ar_coef_free ArimaCoef c → v {
+@ _ar_coef_free sink ArimaCoef c → v {
     ( vec_free [f] . c phi )
     ( vec_free [f] . c theta )
     ( vec_free [f] . c sphi )
@@ -459,7 +459,7 @@ $ `stdlib/ext/json.nu`
     ^ != . fz 1 0.0
 }
 
-@ _ar_ss_free ArimaSS ss → v {
+@ _ar_ss_free sink ArimaSS ss → v {
     ( vec_free [f] . ss phi )
     ( vec_free [f] . ss theta )
     ( vec_free [f] . ss delta )
@@ -1064,7 +1064,7 @@ $ `stdlib/ext/json.nu`
     ^ @ ArimaArma { r phi th }
 }
 
-@ _ar_arma_free ArimaArma a → v {
+@ _ar_arma_free sink ArimaArma a → v {
     ( vec_free [f] . a phi )
     ( vec_free [f] . a theta )
 }
@@ -1454,7 +1454,7 @@ $ `stdlib/ext/json.nu`
 }
 
 // Free the jobs of a batch (their results have been read).
-@ _ar_jobs_free ( Vec i ) jobs → v {
+@ _ar_jobs_free sink ( Vec i ) jobs → v {
     : i n ( vec_len [i] jobs )
     : ~ i k 0
     ~ < k n { ( nurl_free # s ( _ar_geti jobs k ) ) = k + k 1 }
@@ -1476,7 +1476,7 @@ $ `stdlib/ext/json.nu`
     f mu
 }
 
-@ _ar_prep_free * ArimaPrep p → v {
+@ _ar_prep_free sink * ArimaPrep p → v {
     ( vec_free [f] . p phi ) ( vec_free [f] . p theta ) ( vec_free [f] . p p0 )
     ( vec_free [f] . p ar ) ( vec_free [f] . p ma )
     ( nurl_free # s p )
@@ -1619,7 +1619,7 @@ $ `stdlib/ext/json.nu`
     ^ st
 }
 
-@ __ar_bfgs_free * ArimaBfgs st → v {
+@ __ar_bfgs_free sink * ArimaBfgs st → v {
     ( vec_free [f] . st raw ) ( vec_free [f] . st g ) ( vec_free [f] . st d ) ( vec_free [f] . st s )
     ( vec_free [f] . st yv ) ( vec_free [f] . st hy ) ( vec_free [f] . st trial ) ( vec_free [f] . st H )
     ( vec_free [f] . st hs )
@@ -1900,7 +1900,7 @@ $ `stdlib/ext/json.nu`
     ^ > ( vec_len [f] . m xcoef ) 0
 }
 
-@ arima_free * ArimaModel m → v {
+@ arima_free sink * ArimaModel m → v {
     ( _ar_coef_free . m coef )
     ( _ar_ss_free . m ss )
     ( vec_free [f] . m se )
@@ -2564,7 +2564,7 @@ $ `stdlib/ext/json.nu`
     ^ ( arima_fit_many_with series sp method \ ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec f ) out → v { ( arima_eval_cpu items ctxs out ) } )
 }
 
-@ arima_models_free ( Vec * ArimaModel ) ms → v {
+@ arima_models_free sink ( Vec * ArimaModel ) ms → v {
     ( vec_free_with [* ArimaModel] ms \ * ArimaModel m → v { ( arima_free m ) } )
 }
 
@@ -2579,7 +2579,7 @@ $ `stdlib/ext/json.nu`
     ( Vec f ) se
 }
 
-@ arima_forecast_free ArimaForecast fc → v {
+@ arima_forecast_free sink ArimaForecast fc → v {
     ( vec_free [f] . fc mean )
     ( vec_free [f] . fc se )
 }

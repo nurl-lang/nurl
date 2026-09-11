@@ -82,7 +82,7 @@ $ `stdlib/ext/toml.nu`
 
 // ── Cascade-free helpers ─────────────────────────────────────────
 
-@ dep_free Dep d → v {
+@ dep_free sink Dep d → v {
     ( string_free . d name )
     ( string_free . d path )
     ( string_free . d version )
@@ -109,7 +109,7 @@ $ `stdlib/ext/toml.nu`
     ^ > ( string_len . d version ) 0
 }
 
-@ manifest_free Manifest m → v {
+@ manifest_free sink Manifest m → v {
     ( string_free . m name )
     ( string_free . m version )
     ( string_free . m description )

@@ -67,17 +67,17 @@ $ `stdlib/std/args.nu`
 @ __nq_norm s rawpath → String {
     : i n ( nurl_str_len rawpath )
     : String out ( string_with_cap n )
-    : ~ b any F        // emitted any real (non-dot) char yet?
-    : ~ b pending F    // a separator is pending, flush it before next char
+    : ~ b any F  // emitted any real (non-dot) char yet?
+    : ~ b pending F  // a separator is pending, flush it before next char
     : ~ i i 0
     ~ < i n {
         : i c ( nurl_str_get rawpath i )
-        ? == c 93 {                       // ']' — drop
+        ? == c 93 {  // ']' — drop
         } {
             : ~ i cc c
-            ? == c 91 { = cc 46 } {}       // '[' → '.'
+            ? == c 91 { = cc 46 } {}  // '[' → '.'
             ? == cc 46 {
-                ? any { = pending T } {}   // ignore leading dots
+                ? any { = pending T } {}  // ignore leading dots
             } {
                 ? pending { ( string_push_char out 46 ) = pending F } {}
                 ( string_push_char out cc )
@@ -119,12 +119,12 @@ $ `stdlib/std/args.nu`
             : ~ i k 0
             ~ < k n {
                 ?? ( vec_get [String] ks k ) {
-                    T s → { ( json_arr_push arr @ Json { JStr s } ) }   // moves s into arr
+                    T s → { ( json_arr_push arr @ Json { JStr s } ) }  // moves s into arr
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free [String] ks )   // shallow: the String handles now live in arr
+            ( vec_free [String] ks )  // shallow: the String handles now live in arr
             ^ @ ?Json { T arr }
         } {}
         ? ( json_is_arr j ) {
@@ -178,7 +178,7 @@ $ `stdlib/std/args.nu`
     : ~ i rc 0
     ?? sub {
         T sj → { = rc ( __nq_out sj func compact raw ) }
-        F _ → { = rc ( __nq_out ( json_null ) func compact raw ) }   // missing → null
+        F _ → { = rc ( __nq_out ( json_null ) func compact raw ) }  // missing → null
     }
     ^ rc
 }
@@ -300,10 +300,10 @@ $ `stdlib/std/args.nu`
 
 @ main → i {
     : ArgParser p ( args_new `nq` `a tiny JSON query tool (jq-lite)` )
-    ( args_flag p `compact` 99  `compact single-line output` )  // -c
-    ( args_flag p `raw`     114 `raw output for string results (no quotes)` )  // -r
-    ( args_flag p `help`    104 `show this help` )  // -h
-    ( args_opt  p `file`    102 `FILE` `read JSON from FILE instead of stdin` )  // -f
+    ( args_flag p `compact` 99 `compact single-line output` )  // -c
+    ( args_flag p `raw` 114 `raw output for string results (no quotes)` )  // -r
+    ( args_flag p `help` 104 `show this help` )  // -h
+    ( args_opt p `file` 102 `FILE` `read JSON from FILE instead of stdin` )  // -f
 
     : ( Vec String ) argv ( vec_new [String] )
     : i ac ( env_args_count )

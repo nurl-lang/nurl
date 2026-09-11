@@ -88,9 +88,10 @@ Heap double-free and heap use-after-free showed up; anything about the
 code nurlc emitted did not. A dangling *stack* reference — the whole
 content of the two escape classes — ran clean and was filed
 UNCONFIRMED, the harness reading its own blind spot as evidence of
-innocence. The escalation now stamps the attribute on every `define`
-and runs with `detect_stack_use_after_return=1`, and those programs
-report `stack-use-after-return` immediately.
+innocence. The escalation now requests `nurlc --sanitize-address`, the
+same codegen path used by `NURL_SAN=1 nurl.sh` and the sanitized corpus.
+It runs with `detect_stack_use_after_return=1`; the generated-code
+controls in `tools/sanitizer_controls.py` verify actual detection.
 
 ## The classes
 

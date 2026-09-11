@@ -47,7 +47,7 @@ $ `stdlib/ext/toml.nu`
     ^ @ MmdTheme { ( string_from name ) ( string_new ) ( vec_new [MmdKV] ) }
 }
 
-@ mmd_theme_free MmdTheme t → v {
+@ mmd_theme_free sink MmdTheme t → v {
     ( string_free . t name )
     ( string_free . t desc )
     : i n ( vec_len [MmdKV] . t kv )
@@ -287,7 +287,7 @@ $ `stdlib/ext/toml.nu`
     String default_name
 }
 
-@ mmd_templates_free MmdTemplateSet ts → v {
+@ mmd_templates_free sink MmdTemplateSet ts → v {
     ( string_free . ts root )
     ( string_free . ts default_name )
     : i n ( vec_len [MmdTemplate] . ts items )

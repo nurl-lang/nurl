@@ -142,7 +142,7 @@ $ `deps/tensor/src/ops.nu`
     } {}
 }
 
-@ tape_free * GTape tp → v {
+@ tape_free sink * GTape tp → v {
     : i n ( vec_len [s] . tp vals )
     : ~ i k 0
     ~ < k n {

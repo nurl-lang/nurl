@@ -186,7 +186,7 @@ $ `stdlib/std/bytes.nu`
     ^ p
 }
 
-@ __cd_free * CborDec p → v { ( nurl_free # s p ) }
+@ __cd_free sink * CborDec p → v { ( nurl_free # s p ) }
 
 @ __cd_remaining * CborDec p → i { ^ - . p len . p pos }
 

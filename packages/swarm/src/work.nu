@@ -115,10 +115,10 @@ $ `stdlib/std/bytes.nu`
     ^ out
 }
 
-@ shard_free ( Vec s ) chunks → v {
+@ shard_free sink ( Vec s ) chunks → v {
     : i n ( vec_len [s] chunks )
     : ~ i k 0
-    ~ < k n { ?? ( vec_get [s] chunks k ) { T pp → ?!= # i pp 0 { ( nurl_free pp ) } {} F → {} } = k + k 1 }
+    ~ < k n { ?? ( vec_get [s] chunks k ) { T pp → ? != # i pp 0 { ( nurl_free pp ) } {} F → {} } = k + k 1 }
     ( vec_free [s] chunks )
 }
 

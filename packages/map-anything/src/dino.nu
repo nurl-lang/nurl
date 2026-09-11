@@ -62,7 +62,7 @@ $ `src/patchembed.nu`
     ( Vec f ) poscache
 }
 
-@ dn_free Dino d → v {
+@ dn_free sink Dino d → v {
     ( vec_free_with [MaBlk] . d blocks \ MaBlk b → v { ( ma_blk_free b ) } )
     ( gk_dbuf_free . d proj_w ) ( gk_dbuf_free . d proj_b )
     ( vec_free [f] . d cls )

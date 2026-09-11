@@ -40,14 +40,14 @@ $ `stdlib/ext/json.nu`
     b lfs
 }
 
-@ hub_ref_free HubRef r → v {
+@ hub_ref_free sink HubRef r → v {
     ( string_free . r url )
     ( string_free . r repo )
     ( string_free . r rev )
     ( string_free . r subpath )
 }
 
-@ hub_file_free HubFile f → v {
+@ hub_file_free sink HubFile f → v {
     ( string_free . f path )
     ( string_free . f sha )
 }

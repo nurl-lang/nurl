@@ -124,8 +124,10 @@ cd nurl
 Requirements: clang/LLVM 15+. Nothing else — the bootstrap snapshot is
 committed LLVM IR (`compiler/nurlc_lastgood.ll`) that clang links
 directly into a working boot compiler. Windows users have `build.bat`;
-macOS builds with Homebrew LLVM (`brew install llvm`) but is not covered
-by CI.
+macOS builds with Homebrew LLVM and coreutils (`brew install llvm coreutils`).
+The Apple Silicon host path runs in CI; Intel host builds remain unverified.
+The POSIX corpus requires `timeout` or `gtimeout` so compiler hangs are bounded.
+See [`docs/PLATFORMS.md`](docs/PLATFORMS.md) for the full matrix.
 
 Work beyond the compiler proper — the unikernel (QEMU, GRUB, xorriso),
 the cross-compiled targets (zig), the Cloudflare Workers (Node, pnpm,

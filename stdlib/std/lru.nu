@@ -257,12 +257,12 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
     ( nurl_free . c ctl )
 }
 
-@ lru_free [V] ( LruCache V ) c → v {
+@ lru_free [V] sink ( LruCache V ) c → v {
     ( __lru_free_keys [V] c )
     ( __lru_free_arrays [V] c )
 }
 
-@ lru_free_with [V] ( LruCache V ) c ( @ v V ) drop → v {
+@ lru_free_with [V] sink ( LruCache V ) c ( @ v V ) drop → v {
     : ~ i cur ( __lru_head . c ctl )
     ~ >= cur 0 {
         : i nx ( __lru_gi . c nxt cur )

@@ -1,0 +1,93 @@
+name: JavaScript dependency audit
+
+on:
+  pull_request:
+    paths:
+      - 'registry/**'
+      - 'cloudflare/**'
+      - 'tooling/vscode-nurl/**'
+      - 'webdocs/**'
+      - 'tools/tests/test_vscode_launcher.cjs'
+      - '.github/workflows/dependency-audit.yml'
+  push:
+    branches: [main]
+    paths:
+      - '**/package.json'
+      - '**/package-lock.json'
+      - '**/pnpm-lock.yaml'
+      - '.github/workflows/dependency-audit.yml'
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  npm:
+    name: audit and test ${{ matrix.directory }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - directory: registry
+            checks: npm run typecheck && npm run test:readme
+            artifact: registry
+          - directory: cloudflare
+            checks: npm run typecheck && npm run test:recovery && npm run test:artifacts
+            artifact: cloudflare
+          - directory: tooling/vscode-nurl
+            checks: node ../../tools/tests/test_vscode_launcher.cjs && npm pack --dry-run
+            artifact: vscode
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ${{ matrix.directory }}/package-lock.json
+      - run: npm ci
+      - name: Audit all dependencies
+        run: npm audit --audit-level=low --json > audit.json
+      - name: Check the installed project
+        run: ${{ matrix.checks }}
+      - name: Retain advisory evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit-${{ matrix.artifact }}
+          path: ${{ matrix.directory }}/audit.json
+
+  webdocs:
+    name: audit and build webdocs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: webdocs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: webdocs/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Audit all dependencies
+        run: pnpm audit --audit-level=low --json > audit.json
+      - run: pnpm run types:check
+      - run: pnpm run build
+      - name: Retain advisory evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit-webdocs
+          path: webdocs/audit.json

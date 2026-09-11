@@ -12,13 +12,14 @@ $ `deps/onnx/src/runtime.nu`
 
 & `c` @ nurl_peek_f32 *u base i idx → f
 
-@ load_f32 s path *u pcell → *u {
+@ load_f32 s path * u pcell → *u {
     ?? ( read_file_bytes path ) {
         T bytes → { : i n / ( vec_len [u] bytes ) 4 : *u host ( nurl_alloc * n 4 )
             : *PbR r ( pb_new bytes ) ( pb_read_f32_into r host n ) ( pb_free r ) ( nurl_poke pcell 0 n ) ^ host }
         F _ → { ( nurl_poke pcell 0 0 ) ^ # *u 0 }
     }
 }
+
 @ shape4 i a i b i c i d → ( Vec i ) {
     : ( Vec i ) v ( vec_new [i] ) ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ( vec_push [i] v d ) ^ v
 }

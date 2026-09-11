@@ -22,7 +22,7 @@ $ `stdlib/std/random.nu`
     i family  // 1 = IPv4, 2 = IPv6
 }
 
-@ stun_addr_free StunAddr a → v { ( string_free . a host ) }
+@ stun_addr_free sink StunAddr a → v { ( string_free . a host ) }
 
 // 0x2112A442
 @ __stun_cookie → i { ^ 554869826 }
@@ -47,7 +47,7 @@ $ `stdlib/std/random.nu`
     ( Vec u ) msg
 }
 
-@ stun_request_free StunRequest r → v {
+@ stun_request_free sink StunRequest r → v {
     ( vec_free [u] . r txid )
     ( vec_free [u] . r msg )
 }

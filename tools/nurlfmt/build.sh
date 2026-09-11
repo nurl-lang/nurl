@@ -1,100 +1,11 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 The NURL Project Developers
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# ============================================================
-#  tools/nurlfmt/build.sh — build the nurlfmt formatter binary.
-#
-#  Stage:
-#    1. Compile tools/nurlfmt/nurlfmt.nu to LLVM IR using ./build/nurlc
-#    2. Link with stdlib/runtime.o → ./build/nurlfmt
-#
-#  Requires that ./build.sh has already run (so build/nurlc and
-#  stdlib/runtime.o exist).
-# ============================================================
+# Build with the same driver/ABI/sanitizer policy as every NURL program.
 set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
-
-NURLC="$ROOT_DIR/build/nurlc"
-RUNTIME="$ROOT_DIR/stdlib/runtime.o"
-SRC="$ROOT_DIR/tools/nurlfmt/nurlfmt.nu"
-
-if [[ ! -x "$NURLC" ]]; then
-    echo "ERROR: $NURLC not found." >&2
-    echo "       Run ./build.sh first to bootstrap the compiler." >&2
-    exit 1
-fi
-if [[ ! -f "$RUNTIME" ]]; then
-    echo "ERROR: $RUNTIME not found." >&2
-    echo "       Run ./build.sh first to compile the runtime." >&2
-    exit 1
-fi
-
-CLANG="${CLANG:-clang}"
-
-# The link flags build.sh resolved, when this runs under it. `--as-needed`
-# is GNU ld / lld spelling and Apple's ld64 errors on it; $OPAQUE_FLAGS
-# carries whatever this clang needs to parse nurlc's opaque-pointer IR.
-# Standalone, fall back the way build.sh does.
-OPAQUE_FLAGS="${OPAQUE_FLAGS-}"
-if [ -z "${AS_NEEDED+set}" ]; then
-    AS_NEEDED="-Wl,--as-needed"
-    case "$(uname -s)" in Darwin) AS_NEEDED="-Wl,-dead_strip_dylibs" ;; esac
-fi
-if ! command -v "$CLANG" >/dev/null 2>&1; then
-    echo "ERROR: clang not on PATH (set CLANG=/path/to/clang to override)." >&2
-    exit 1
-fi
-
-mkdir -p "$ROOT_DIR/build"
-
-echo "[1/2] $SRC → build/nurlfmt.ll"
-"$NURLC" "$SRC" > "$ROOT_DIR/build/nurlfmt.ll"
-
-# nurlfmt itself uses none of these libraries, but stdlib/runtime.o is
-# always built with the back-ends it found at build.sh time, so we must
-# match the link line that ./build.sh used. The marker files
-# stdlib/runtime.{curl,openssl,sqlite3,pq} tell us which libraries
-# the runtime expects.
-EXTRA_LIBS=()
-if [[ -f "$ROOT_DIR/stdlib/runtime.curl" ]]; then
-    if pkg-config --exists libcurl 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs libcurl) )
-    else
-        EXTRA_LIBS+=( -lcurl )
-    fi
-fi
-if [[ -f "$ROOT_DIR/stdlib/runtime.openssl" ]]; then
-    if pkg-config --exists openssl 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs openssl) )
-    else
-        EXTRA_LIBS+=( -lssl -lcrypto )
-    fi
-fi
-if [[ -f "$ROOT_DIR/stdlib/runtime.sqlite3" ]]; then
-    if pkg-config --exists sqlite3 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs sqlite3) )
-    else
-        EXTRA_LIBS+=( -lsqlite3 )
-    fi
-fi
-if [[ -f "$ROOT_DIR/stdlib/runtime.pq" ]]; then
-    if pkg-config --exists libpq 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs libpq) )
-    else
-        EXTRA_LIBS+=( -lpq )
-    fi
-fi
-
-echo "[2/2] build/nurlfmt.ll → build/nurlfmt"
-# shellcheck disable=SC2086
-"$CLANG" -O2 -flto $OPAQUE_FLAGS "$ROOT_DIR/build/nurlfmt.ll" "$RUNTIME" $AS_NEEDED -lm -lpthread "${EXTRA_LIBS[@]}" -o "$ROOT_DIR/build/nurlfmt"
-
-echo ""
-echo "Done: $ROOT_DIR/build/nurlfmt"
+mkdir -p build
+# A failed rebuild must not leave an old executable looking freshly built.
+rm -f "build/nurlfmt"
+exec "$ROOT_DIR/nurl.sh" -O2 "tools/nurlfmt/nurlfmt.nu" "$ROOT_DIR/build/nurlfmt"

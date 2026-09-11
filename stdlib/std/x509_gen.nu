@@ -41,7 +41,7 @@ $ `stdlib/std/time.nu`
     String key_pem
 }
 
-@ x509_selfsigned_free X509SelfSigned c → v {
+@ x509_selfsigned_free sink X509SelfSigned c → v {
     ( string_free . c cert_pem )
     ( string_free . c key_pem )
 }

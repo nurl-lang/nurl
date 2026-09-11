@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_sink_enum_after.nu:12: error: use of moved value 'value' — a heap handle has exactly one owner, and this one was consumed at line 11 by consume. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ?? value { Item payload → { ^ . payload number } }
+error: compilation aborted — 1 borrow-checker violation (re-run with --no-borrowck to bypass)

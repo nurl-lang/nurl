@@ -70,7 +70,7 @@ $ `stdlib/std/csr.nu`
     String expires_iso
 }
 
-@ pki_cert_free PkiCert c → v {
+@ pki_cert_free sink PkiCert c → v {
     ( string_free . c cert_pem )
     ( string_free . c key_pem )
     ( string_free . c serial_hex )
@@ -83,7 +83,7 @@ $ `stdlib/std/csr.nu`
     b ok
 }
 
-@ pki_cert_info_free PkiCertInfo i → v {
+@ pki_cert_info_free sink PkiCertInfo i → v {
     ( string_free . i serial_hex )
     ( string_free . i cn )
 }
@@ -115,7 +115,7 @@ $ `stdlib/std/csr.nu`
     ^ ca
 }
 
-@ pki_ca_free * PkiCa ca → v {
+@ pki_ca_free sink * PkiCa ca → v {
     ? == # i ca 0 { ^ v } {}
     ( vec_free [u] . ca scalar )
     ( vec_free [u] . ca pubkey )
@@ -1149,7 +1149,7 @@ $ `stdlib/std/csr.nu`
     ( Vec i ) times
 }
 
-@ pki_revoked_free PkiRevoked r → v {
+@ pki_revoked_free sink PkiRevoked r → v {
     ( vec_free_with [String] . r serials \ String s → v { ( string_free s ) } )
     ( vec_free [i] . r times )
 }

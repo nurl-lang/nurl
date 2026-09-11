@@ -335,7 +335,7 @@ $ `stdlib/std/sort.nu`
     ^ st
 }
 
-@ vad_stream_free * VadStream st → v {
+@ vad_stream_free sink * VadStream st → v {
     ( vec_free [f] . st buf )
     ( vec_free [f] . st e )
     ( nurl_free # s st )

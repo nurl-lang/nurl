@@ -120,7 +120,7 @@ $ `stdlib/std/quic_frame.nu`
     ^ r
 }
 
-@ __qr_pkt_free i h → v {
+@ __qr_pkt_free sink i h → v {
     : *QuicSentPkt p # *QuicSentPkt h
     ( vec_free [u] . p frames )
     ( nurl_free # s p )
@@ -135,7 +135,7 @@ $ `stdlib/std/quic_frame.nu`
     ( vec_free [i] l )
 }
 
-@ quic_rec_free * QuicRecovery r → v {
+@ quic_rec_free sink * QuicRecovery r → v {
     ? == # i r 0 { ^ } {}
     ( __qr_free_list . r sent0 )
     ( __qr_free_list . r sent1 )

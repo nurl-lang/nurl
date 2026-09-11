@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_sink_generic_second.nu:8: error: use of moved value 'owned' — a heap handle has exactly one owner, and this one was consumed at line 6 by second. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ( vec_free [i] owned )
+error: compilation aborted — 1 borrow-checker violation (re-run with --no-borrowck to bypass)

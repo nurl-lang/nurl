@@ -80,7 +80,7 @@ $ `stdlib/std/quic_varint.nu`
     ^ k
 }
 
-@ quic_keys_free * QuicKeys k → v {
+@ quic_keys_free sink * QuicKeys k → v {
     ? == # i k 0 { ^ } {}
     ( vec_free [u] . k secret )
     ( vec_free [u] . k key )
@@ -244,7 +244,7 @@ $ `stdlib/std/quic_varint.nu`
     i end
 }
 
-@ quic_hdr_free * QuicHdr h → v {
+@ quic_hdr_free sink * QuicHdr h → v {
     ? == # i h 0 { ^ } {}
     ( nurl_free # s h )
 }

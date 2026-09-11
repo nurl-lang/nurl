@@ -312,7 +312,7 @@ $ `stdlib/std/rng.nu`
 
 @ iforest_sample_size IForest fo → i { ^ . fo sample_size }
 
-@ iforest_free IForest fo → v {
+@ iforest_free sink IForest fo → v {
     ( vec_free [i] . fo roots )
     ( vec_free [i] . fo feature )
     ( vec_free [f] . fo split )

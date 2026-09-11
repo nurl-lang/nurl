@@ -48,16 +48,19 @@ fi
 if [[ $# -ge 1 ]]; then
     FILES=("$@")
 else
+    # The tracked inventory, minus bench/ (recorded model outputs, not
+    # first-party source) and vendored deps/ copies. A hand-listed set of
+    # directories silently skips whatever is added next: this one named
+    # six and left unikernel/ and pttvoice/ out.
     mapfile -t FILES < <(
         {
-            find stdlib         -name '*.nu' -type f
-            find examples       -name '*.nu' -type f
-            find compiler/tests -name '*.nu' -type f
-            find tools          -name '*.nu' -type f
-            find nurlapi        -name '*.nu' -type f
-            find packages       -name '*.nu' -type f -not -path '*/deps/*'
-            echo compiler/nurlc.nu
-        } | sort -u
+            if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1
+            then
+                git -C "$ROOT_DIR" ls-files '*.nu'
+            else
+                find . -name '*.nu' -type f | sed 's|^\./||'
+            fi
+        } | grep -Ev '^bench/|/deps/' | sort -u
     )
 fi
 
@@ -89,17 +92,32 @@ is_deliberate_failure() {
 # Only the arity diagnostic counts. A file that fails to compile for an
 # unrelated reason (a package module that needs its deps/ resolved, say)
 # is not this gate's business — it has its own.
-OFFENDERS=()
+#
+# One compiler process per file over ~2,500 files is six minutes of CI
+# wall time, nearly all of it process startup, and it was the step that
+# pushed the compiler job past its budget and into a cancelled — that
+# is, undiagnosable — run. The work is embarrassingly parallel: each
+# file is compiled alone and only its own diagnostics are read.
+CHECK=()
 SKIPPED=0
 for f in "${FILES[@]}"; do
     [[ -f "$f" ]] || continue
     if is_deliberate_failure "$f"; then SKIPPED=$((SKIPPED + 1)); continue; fi
-    hit="$("$NURLC" --strict-arity "$f" 2>&1 >/dev/null \
-           | grep -F "consumed bare then/else values" || true)"
-    if [[ -n "$hit" ]]; then
-        OFFENDERS+=("$hit")
-    fi
+    CHECK+=("$f")
 done
+
+JOBS="${NURL_CHECK_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
+HITS="$(mktemp)"
+trap 'rm -f "$HITS"' EXIT
+if (( ${#CHECK[@]} > 0 )); then
+    printf '%s\n' "${CHECK[@]}" | NURLC_BIN="$NURLC" xargs -P "$JOBS" -I{} bash -c '
+        out="$("$NURLC_BIN" --strict-arity "$1" 2>&1 >/dev/null \
+              | grep -F "consumed bare then/else values")"
+        [[ -n "$out" ]] && printf "%s\n" "$out"
+        exit 0
+    ' _ {} > "$HITS"
+fi
+mapfile -t OFFENDERS < "$HITS"
 
 if (( ${#OFFENDERS[@]} > 0 )); then
     echo "ERROR: the n-ary '&'/'|' arity trap is present in ${#OFFENDERS[@]} place(s):" >&2

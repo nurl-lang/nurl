@@ -77,7 +77,7 @@ $ `stdlib/std/sort.nu`
     ^ r
 }
 
-@ ring_free * Ring r → v {
+@ ring_free sink * Ring r → v {
     : i n ( vec_len [s] . r points )
     : ~ i k 0
     ~ < k n {

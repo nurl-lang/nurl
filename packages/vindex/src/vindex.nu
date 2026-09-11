@@ -314,7 +314,7 @@ $ `stdlib/std/floatbits.nu`
 
 @ vx_nlist * VIndex idx → i { ^ . idx nlist }
 
-@ vx_free * VIndex idx → v {
+@ vx_free sink * VIndex idx → v {
     ( vec_free [f] . idx data )
     ( vec_free [f] . idx norm )
     ( vec_free [f] . idx cent )

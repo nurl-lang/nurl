@@ -358,7 +358,7 @@ $ `gguf.nu`
     }
 }
 
-@ gw_free * GgufW w → v {
+@ gw_free sink * GgufW w → v {
     ( vec_free [u] . w kvb )
     ( vec_free_with [String] . w tnames \ String s → v { ( string_free s ) } )
     ( vec_free [i] . w ttype )
@@ -648,7 +648,7 @@ $ `gguf.nu`
     ^ @ !v String { T 0 }
 }
 
-@ gws_free * GgufS s → v {
+@ gws_free sink * GgufS s → v {
     ? != 0 # i . s fh { ( file_close @ File { . s fh } ) } {}
     ( vec_free [u] . s kvb )
     ( vec_free_with [String] . s tnames \ String t → v { ( string_free t ) } )

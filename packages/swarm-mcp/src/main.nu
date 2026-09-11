@@ -114,7 +114,7 @@ $ `cudakernel.nu`
     ^ sw
 }
 
-@ swarm_free * Swarm sw → v {
+@ swarm_free sink * Swarm sw → v {
     ( job_node_free # *JobNode . sw job )
     ( ring_free # *Ring . sw ring )
     ( ring_free # *Ring . sw gpu_ring )
@@ -265,7 +265,7 @@ $ `cudakernel.nu`
     ^ out
 }
 
-@ relay_list_free ( Vec String ) lst → v {
+@ relay_list_free sink ( Vec String ) lst → v {
     : ~ i k 0
     ~ < k ( vec_len [String] lst ) {
         ?? ( vec_get [String] lst k ) { T seg → { ( string_free seg ) } F → {} }
@@ -495,7 +495,7 @@ $ `cudakernel.nu`
     ^ t
 }
 
-@ chunkjobs_free ( Vec s ) jobs → v {
+@ chunkjobs_free sink ( Vec s ) jobs → v {
     : i n ( vec_len [s] jobs )
     : ~ i k 0
     ~ < k n {

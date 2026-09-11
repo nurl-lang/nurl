@@ -76,7 +76,7 @@ $ `stdlib/net/transport.nu`
     ( Vec u ) payload
 }
 
-@ jobmsg_free JobMsg m → v {
+@ jobmsg_free sink JobMsg m → v {
     ( vec_free [u] . m submitter )
     ( vec_free [u] . m key )
     ( vec_free [u] . m payload )
@@ -193,7 +193,7 @@ $ `stdlib/net/transport.nu`
     ^ n
 }
 
-@ job_node_free * JobNode n → v {
+@ job_node_free sink * JobNode n → v {
     ( vec_free [u] . n self_pk )
     : i hn ( vec_len [s] . n handlers )
     : ~ i k 0

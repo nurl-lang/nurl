@@ -920,13 +920,13 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
 
 @ mlkem_ss * MlkemEncap h → ( Vec u ) { ^ . h ss }
 
-@ mlkem_keys_free * MlkemKeys h → v {
+@ mlkem_keys_free sink * MlkemKeys h → v {
     ( vec_free [u] . h ek )
     ( vec_free [u] . h dk )
     ( nurl_free # s h )
 }
 
-@ mlkem_encap_free * MlkemEncap h → v {
+@ mlkem_encap_free sink * MlkemEncap h → v {
     ( vec_free [u] . h ct )
     ( vec_free [u] . h ss )
     ( nurl_free # s h )

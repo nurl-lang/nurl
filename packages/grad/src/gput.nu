@@ -908,7 +908,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 
 @ gput_ok * GProg pg → b { ^ . pg ok }
 
-@ gput_free * GProg pg → v {
+@ gput_free sink * GProg pg → v {
     : i n ( vec_len [GpNode] . pg nodes )
     : ~ i k 0
     ~ < k n {
@@ -1595,7 +1595,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 
 @ gpopt_adam_new f lr → *GpOpt { ^ ( gpopt_new 1 lr ) }
 
-@ gpopt_free * GpOpt o → v {
+@ gpopt_free sink * GpOpt o → v {
     : i n ( vec_len [GkBuf] . o m )
     : ~ i k 0
     ~ < k n {

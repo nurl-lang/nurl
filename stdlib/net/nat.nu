@@ -228,7 +228,7 @@ $ `stdlib/net/stun.nu`
     ^ cs
 }
 
-@ nat_candidates_free ( Vec s ) cs → v {
+@ nat_candidates_free sink ( Vec s ) cs → v {
     : i n ( vec_len [s] cs )
     : ~ i k 0
     ~ < k n {
@@ -292,7 +292,7 @@ $ `stdlib/net/stun.nu`
     ( Vec u ) token
 }
 
-@ punch_msg_free PunchMsg m → v { ( vec_free [u] . m token ) }
+@ punch_msg_free sink PunchMsg m → v { ( vec_free [u] . m token ) }
 
 @ nat_punch_build i kind ( Vec u ) token → ( Vec u ) {
     : ( Vec u ) m ( vec_new [u] )

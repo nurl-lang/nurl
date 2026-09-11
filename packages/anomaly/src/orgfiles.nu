@@ -174,7 +174,7 @@ $ `stdlib/ext/json.nu`
     i mtime
 }
 
-@ orgfiles_free ( Vec OrgFile ) xs → v {
+@ orgfiles_free sink ( Vec OrgFile ) xs → v {
     ( vec_free_with [OrgFile] xs \ OrgFile x → v { ( string_free . x name ) } )
 }
 

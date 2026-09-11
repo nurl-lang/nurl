@@ -222,7 +222,7 @@ $ `safetensor.nu`
     ^ @ !v String { F ( string_from `safetensor: cannot write file` ) }
 }
 
-@ stw_free * StWriter w → v {
+@ stw_free sink * StWriter w → v {
     ( string_free . w hdr )
     : ~ i c 0
     ~ < c ( vec_len [StwChunk] . w chunks ) {

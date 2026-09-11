@@ -93,7 +93,20 @@ Each job builds `nurlc` + `nurlpkg`, assembles the prefix with
 the final `release` job signs and attaches the produced archives +
 `.sha256` + `.minisig` to the GitHub Release. The FreeBSD leg is
 **best-effort** (`continue-on-error`): a release can ship without the
-FreeBSD archive if that VM build fails. Use the `workflow_dispatch` input
+FreeBSD archive if that VM build fails.
+
+Every other target is mandatory, and `tools/check_release_artifacts.sh`
+enforces it just before the publish step: each required archive must be
+present and non-empty, each archive must carry a `.sha256` that actually
+matches it, a signed release must carry a `.minisig` beside every
+archive, and an archive whose name matches no known target fails the
+release. The publish step attaches by glob, so without that gate a
+Windows leg that failed simply published a release with no `.zip` — and
+`install.ps1` then 404s for that version. The target list lives in four
+places (the table above, the workflow matrix, the installers' name rule
+and that gate); the gate is what notices when one of them moves.
+`tools/tests/test_release_artifacts.py` is its control suite and runs in
+the ordinary CI job. Use the `workflow_dispatch` input
 for a dry run that builds the artifacts without publishing.
 
 An archive is just the `~/.nurl` layout (`bin/`, `build/`, `stdlib/`,

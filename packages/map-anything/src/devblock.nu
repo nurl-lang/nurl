@@ -44,7 +44,7 @@ $ `deps/gpukit/src/devops.nu`
     f eps
 }
 
-@ ma_blk_free MaBlk w → v {
+@ ma_blk_free sink MaBlk w → v {
     ( gk_dbuf_free . w n1g ) ( gk_dbuf_free . w n1b )
     ( gk_dbuf_free . w qkvw ) ( gk_dbuf_free . w qkvb )
     ( gk_dbuf_free . w pw ) ( gk_dbuf_free . w pb )
@@ -95,7 +95,7 @@ $ `deps/gpukit/src/devops.nu`
         n }
 }
 
-@ ma_ws_free MaWs ws → v {
+@ ma_ws_free sink MaWs ws → v {
     ( gk_dbuf_free . ws norm ) ( gk_dbuf_free . ws qkv )
     ( gk_dbuf_free . ws qkvp ) ( gk_dbuf_free . ws kt )
     ( gk_dbuf_free . ws att ) ( gk_dbuf_free . ws ctx )

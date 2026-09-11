@@ -3,7 +3,7 @@
 # ecosystem, with NO external account: it stands up a LOCAL static registry
 # (the read path is just files: index/<name>.json + pkgs/**/*.tar.gz),
 # installs the toolchain into a throwaway prefix, and drives `nurlpkg
-# install <name>` through fetch → compile-against-installed-stdlib →
+# install <name>` through signed fetch → compile-against-installed-stdlib →
 # binary-on-$PATH, then runs the result.
 #
 # The shipped registry tools (nq, md2html, chart, iforest) are now
@@ -18,13 +18,11 @@
 # binary on $PATH → run it.
 #
 # Prereqs: ./build.sh + ./tools/nurlpkg/build.sh (nurlc, nurlpkg) and
-# python3 (static file server) + sha256sum.
-set -u
+# python3 >= 3.11 (static server, TOML) + openssl (test signatures).
+set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PKGS="$ROOT/packages"
 WORK="$(mktemp -d)"
-PORT="${PORT:-8913}"
-REG="http://127.0.0.1:$PORT/"
 PREFIX="$WORK/prefix"
 fail=0
 say() { printf '\n=== %s ===\n' "$1"; }
@@ -32,7 +30,18 @@ say() { printf '\n=== %s ===\n' "$1"; }
 [[ -x "$ROOT/build/nurlc" && -x "$ROOT/build/nurlpkg" ]] || {
     echo "build/nurlc or build/nurlpkg missing — run ./build.sh && ./tools/nurlpkg/build.sh"; exit 2; }
 
-cleanup() { kill "${HTTPPID:-}" 2>/dev/null; rm -rf "$WORK"; }
+cleanup() {
+    local result=$?
+    if [[ -n "${HTTPPID:-}" ]]; then kill "$HTTPPID" 2>/dev/null || true; wait "$HTTPPID" 2>/dev/null || true; fi
+    if [[ $result -ne 0 ]]; then
+        mkdir -p "$ROOT/build/logs"
+        local retained
+        retained=$(mktemp -d "$ROOT/build/logs/install-smoke.XXXXXX")
+        cp "$WORK/"*.log "$retained/" 2>/dev/null || true
+        echo "failure logs: $retained" >&2
+    fi
+    rm -rf "$WORK"
+}
 trap cleanup EXIT
 
 # ── 1. Build a format-correct tarball for a package via NURL's own packer ──
@@ -49,14 +58,20 @@ $ `stdlib/ext/pkg_publish.nu`
     : String dir ( env_arg 1 )
     : String out ( env_arg 2 )
     : !( Vec u ) PackErr pr ( pkg_pack ( string_data dir ) )
+    ( string_free dir )
+    : ~ i rc 0
     ?? pr {
-        F e → { ( nurl_eprintln ( pack_err_name e ) ) ^ 1 }
-        T bytes → { ?? ( write_file_bytes ( string_data out ) bytes ) { T _ → {} F _ → { ^ 1 } } }
+        F e → { ( nurl_eprintln ( pack_err_name e ) ) = rc 1 }
+        T bytes → {
+            ?? ( write_file_bytes ( string_data out ) bytes ) { T _ → {} F _ → { = rc 1 } }
+            ( vec_free [u] bytes )
+        }
     }
-    ^ 0
+    ( string_free out )
+    ^ rc
 }
 EOF
-( cd "$ROOT" && ./nurl.sh "$WORK/pack.nu" "$WORK/pack" >/dev/null 2>&1 ) || { echo "packer build failed"; exit 2; }
+( cd "$ROOT" && ./nurl.sh "$WORK/pack.nu" "$WORK/pack" >"$WORK/packer.log" 2>&1 ) || { cat "$WORK/packer.log"; echo "packer build failed"; exit 2; }
 
 # ── 1b. Synthesize a consumer package `mdcat` that depends on md2html ──────
 # Lives ONLY in this test's tmp dir (never under packages/). It declares
@@ -97,58 +112,73 @@ $ `deps/md2html/src/markdown.nu`
 EOF
 
 REGDIR="$WORK/registry"
-mkdir -p "$REGDIR/index" \
-    "$REGDIR/pkgs/nq" "$REGDIR/pkgs/md2html" "$REGDIR/pkgs/chart" \
-    "$REGDIR/pkgs/iforest" "$REGDIR/pkgs/mdcat"
-"$WORK/pack" "$PKGS/nq"        "$REGDIR/pkgs/nq/nq-0.1.1.tar.gz"           || fail=1
-"$WORK/pack" "$PKGS/md2html"   "$REGDIR/pkgs/md2html/md2html-0.1.1.tar.gz" || fail=1
-"$WORK/pack" "$PKGS/chart"     "$REGDIR/pkgs/chart/chart-0.1.1.tar.gz"     || fail=1
-"$WORK/pack" "$PKGS/iforest"   "$REGDIR/pkgs/iforest/iforest-0.1.1.tar.gz" || fail=1
-"$WORK/pack" "$MDCAT"          "$REGDIR/pkgs/mdcat/mdcat-0.1.0.tar.gz"     || fail=1
-SUM_NQ=$(sha256sum "$REGDIR/pkgs/nq/nq-0.1.1.tar.gz" | cut -d' ' -f1)
-SUM_MD=$(sha256sum "$REGDIR/pkgs/md2html/md2html-0.1.1.tar.gz" | cut -d' ' -f1)
-SUM_CH=$(sha256sum "$REGDIR/pkgs/chart/chart-0.1.1.tar.gz" | cut -d' ' -f1)
-SUM_IF=$(sha256sum "$REGDIR/pkgs/iforest/iforest-0.1.1.tar.gz" | cut -d' ' -f1)
-SUM_MDCAT=$(sha256sum "$REGDIR/pkgs/mdcat/mdcat-0.1.0.tar.gz" | cut -d' ' -f1)
-printf '{"name":"nq","versions":[{"version":"0.1.1","checksum":"%s","yanked":false,"deps":[]}]}\n' \
-    "$SUM_NQ" > "$REGDIR/index/nq.json"
-printf '{"name":"md2html","versions":[{"version":"0.1.1","checksum":"%s","yanked":false,"deps":[]}]}\n' \
-    "$SUM_MD" > "$REGDIR/index/md2html.json"
-printf '{"name":"chart","versions":[{"version":"0.1.1","checksum":"%s","yanked":false,"deps":[]}]}\n' \
-    "$SUM_CH" > "$REGDIR/index/chart.json"
-printf '{"name":"iforest","versions":[{"version":"0.1.1","checksum":"%s","yanked":false,"deps":[]}]}\n' \
-    "$SUM_IF" > "$REGDIR/index/iforest.json"
-printf '{"name":"mdcat","versions":[{"version":"0.1.0","checksum":"%s","yanked":false,"deps":[{"name":"md2html","req":"^0.1"}]}]}\n' \
-    "$SUM_MDCAT" > "$REGDIR/index/mdcat.json"
+python3 - "$ROOT" "$WORK" "$REGDIR" "$MDCAT" <<'PYFIXTURE'
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tomllib
+root, work, registry, mdcat = map(Path, sys.argv[1:])
+sys.path.insert(0, str(root / 'tools/tests'))
+from signed_registry_fixture import make_key, sign_file
+key = make_key(work, 1)
+(work / 'public-key').write_text(key[2])
+(registry / 'index').mkdir(parents=True)
+for directory in [*(root / 'packages' / name for name in ['nq', 'md2html', 'chart', 'iforest']), mdcat]:
+    manifest = tomllib.loads((directory / 'nurl.toml').read_text())
+    name, version = manifest['package']['name'], manifest['package']['version']
+    archive = registry / 'pkgs' / name / f'{name}-{version}.tar.gz'
+    archive.parent.mkdir(parents=True)
+    subprocess.run([str(work / 'pack'), str(directory), str(archive)], check=True, timeout=60)
+    archive.with_name(archive.name + '.minisig').write_bytes(sign_file(archive, key))
+    deps = [{'name': name, 'req': req} for name, req in manifest.get('dependencies', {}).items()]
+    (registry / 'index' / f'{name}.json').write_text(json.dumps({'name': name, 'versions': [{
+        'version': version, 'checksum': hashlib.sha256(archive.read_bytes()).hexdigest(),
+        'yanked': False, 'deps': deps}]}))
+PYFIXTURE
 
-# ── 2. Serve the static registry ──────────────────────────────────────────
+# ── 2. Serve on a private ephemeral port; publish readiness after binding ──
 say "serve registry"
-# Run python directly (not in a subshell) so $! is the server itself and
-# the EXIT trap actually reaps it — a subshell wrapper orphans the python
-# child, leaving the port bound and breaking the next run.
-python3 -m http.server "$PORT" --directory "$REGDIR" >/dev/null 2>&1 &
+python3 - "$REGDIR" "$WORK/port" "${PORT:-0}" >"$WORK/server.log" 2>&1 <<'PYSERVER' &
+import functools
+import http.server
+from pathlib import Path
+import sys
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
+with http.server.ThreadingHTTPServer(('127.0.0.1', int(sys.argv[3])), handler) as server:
+    Path(sys.argv[2]).write_text(str(server.server_port))
+    server.serve_forever()
+PYSERVER
 HTTPPID=$!
-for i in $(seq 1 40); do curl -sf "$REG/index/nq.json" >/dev/null 2>&1 && break; sleep 0.25; done
+for ((i=0; i<100; i++)); do
+    [[ -s "$WORK/port" ]] && break
+    kill -0 "$HTTPPID" 2>/dev/null || { cat "$WORK/server.log"; exit 1; }
+    sleep 0.05
+done
+[[ -s "$WORK/port" ]] || { echo "registry did not become ready" >&2; exit 1; }
+REG="http://127.0.0.1:$(cat "$WORK/port")/"
 
 # ── 3. Install the toolchain into a throwaway prefix ──────────────────────
 say "install toolchain"
-NURL_HOME="$PREFIX" "$ROOT/tools/install-toolchain.sh" >/dev/null || fail=1
+NURL_HOME="$PREFIX" "$ROOT/tools/install-toolchain.sh" >"$WORK/toolchain.log" 2>&1
+printf '[registries]\n"%s" = "%s"\n' "$REG" "$(cat "$WORK/public-key")" > "$PREFIX/registries.toml"
 [[ -x "$PREFIX/bin/nurlpkg" ]] && echo "toolchain: OK" || { echo "toolchain: MISSING"; fail=1; }
 
 # ── 4. `nurlpkg install nq` from a clean env (only env + registry) ────────
 say "nurlpkg install nq"
-OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -euo pipefail -c "
     source '$PREFIX/env'
-    export NURL_REGISTRY='$REG'
+    export NURL_REGISTRY='$REG' NURL_NO_UPDATE_CHECK=1
     nurlpkg install nq 2>&1
-")
+") || { echo "$OUT" >&2; exit 1; }
 echo "$OUT"
-echo "$OUT" | grep -q 'Installed nq' && echo "install: OK" || { echo "install: FAILED"; fail=1; }
+[[ -x "$PREFIX/bin/nq" ]] && echo "install: OK" || { echo "install: FAILED"; fail=1; }
 
 say "run installed nq"
 # Feed a small document and exercise navigation + array iteration + a raw
 # string projection — the everyday jq-lite path.
-NQ_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+NQ_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -euo pipefail -c "
     source '$PREFIX/env'
     printf '%s' '{\"items\":[{\"id\":1},{\"id\":2},{\"id\":3}],\"who\":\"Ecosystem\"}' | nq -r '.items[].id'
     printf '%s' '{\"items\":[{\"id\":1},{\"id\":2},{\"id\":3}],\"who\":\"Ecosystem\"}' | nq -r .who
@@ -159,17 +189,17 @@ NQ_WANT=$'1\n2\n3\nEcosystem'
 
 # ── 5. `nurlpkg install md2html` ──────────────────────────────────────────
 say "nurlpkg install md2html"
-OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -euo pipefail -c "
     source '$PREFIX/env'
-    export NURL_REGISTRY='$REG'
+    export NURL_REGISTRY='$REG' NURL_NO_UPDATE_CHECK=1
     nurlpkg install md2html 2>&1
-")
+") || { echo "$OUT" >&2; exit 1; }
 echo "$OUT"
-echo "$OUT" | grep -q 'Installed md2html' && echo "install: OK" || { echo "install: FAILED"; fail=1; }
+[[ -x "$PREFIX/bin/md2html" ]] && echo "install: OK" || { echo "install: FAILED"; fail=1; }
 
 say "run installed md2html"
 # Render a tiny Markdown doc and assert the key rendered tags.
-MD_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+MD_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -euo pipefail -c "
     source '$PREFIX/env'
     printf '# Hi\n\nA **bold** word.\n' | md2html
 ")
@@ -179,18 +209,18 @@ echo "$MD_OUT" | grep -q '<strong>bold</strong>' && echo "  bold: OK" || { echo 
 
 # ── 6. `nurlpkg install chart` ────────────────────────────────────────────
 say "nurlpkg install chart"
-OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -euo pipefail -c "
     source '$PREFIX/env'
-    export NURL_REGISTRY='$REG'
+    export NURL_REGISTRY='$REG' NURL_NO_UPDATE_CHECK=1
     nurlpkg install chart 2>&1
-")
+") || { echo "$OUT" >&2; exit 1; }
 echo "$OUT"
-echo "$OUT" | grep -q 'Installed chart' && echo "install: OK" || { echo "install: FAILED"; fail=1; }
+[[ -x "$PREFIX/bin/chart" ]] && echo "install: OK" || { echo "install: FAILED"; fail=1; }
 
 say "run installed chart"
 # A simple ascending series → a sparkline; the max value (5) maps to the
 # full block █, the min (1) to ▁, so both must appear.
-CH_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+CH_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -euo pipefail -c "
     source '$PREFIX/env'
     printf '1\n2\n3\n4\n5\n' | chart spark
 ")
@@ -200,18 +230,18 @@ printf '%s' "$CH_OUT" | grep -q '▁' && echo "  low block: OK" || { echo "  low
 
 # ── 7. `nurlpkg install iforest` ──────────────────────────────────────────
 say "nurlpkg install iforest"
-OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -euo pipefail -c "
     source '$PREFIX/env'
-    export NURL_REGISTRY='$REG'
+    export NURL_REGISTRY='$REG' NURL_NO_UPDATE_CHECK=1
     nurlpkg install iforest 2>&1
-")
+") || { echo "$OUT" >&2; exit 1; }
 echo "$OUT"
-echo "$OUT" | grep -q 'Installed iforest' && echo "install: OK" || { echo "install: FAILED"; fail=1; }
+[[ -x "$PREFIX/bin/iforest" ]] && echo "install: OK" || { echo "install: FAILED"; fail=1; }
 
 say "run installed iforest"
 # A 2-D cluster near the origin plus one obvious outlier on the last row;
 # --top 1 must surface that outlier (row index 8).
-IF_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+IF_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -euo pipefail -c "
     source '$PREFIX/env'
     printf '0,0\n0.1,0\n0,0.1\n0.1,0.1\n0.2,0.1\n0.1,0.2\n0.05,0.15\n0.15,0.05\n9,9\n' | iforest --top 1
 ")
@@ -223,18 +253,18 @@ echo "$IF_OUT" | cut -f1 | grep -qx '8' && echo "  outlier ranked first: OK" || 
 # synthetic mdcat package declares md2html as a dependency, so installing it
 # must resolve+symlink md2html into ./deps and compile against it.
 say "nurlpkg install mdcat (resolves md2html)"
-OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -euo pipefail -c "
     source '$PREFIX/env'
-    export NURL_REGISTRY='$REG'
+    export NURL_REGISTRY='$REG' NURL_NO_UPDATE_CHECK=1
     nurlpkg install mdcat 2>&1
-")
+") || { echo "$OUT" >&2; exit 1; }
 echo "$OUT"
 echo "$OUT" | grep -Eq 'md2html .*\(registry\)' && echo "  dependency resolved: OK" || { echo "  dependency: FAILED (md2html not resolved)"; fail=1; }
-echo "$OUT" | grep -q 'Installed mdcat' && echo "install: OK" || { echo "install: FAILED"; fail=1; }
+[[ -x "$PREFIX/bin/mdcat" ]] && echo "install: OK" || { echo "install: FAILED"; fail=1; }
 
 say "run installed mdcat"
 # Renders via the resolved md2html library: `# Hi` → an <h1> heading.
-MDCAT_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+MDCAT_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -euo pipefail -c "
     source '$PREFIX/env'
     printf '# Hi\n\nplain text\n' | mdcat
 ")

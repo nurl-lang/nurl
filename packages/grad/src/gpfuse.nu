@@ -257,7 +257,7 @@ $ `deps/gpukit/src/dev.nu`
 
 // ── the plan ─────────────────────────────────────────────────────────
 
-@ gpfuse_free * GpPlan pl → v {
+@ gpfuse_free sink * GpPlan pl → v {
     ( vec_free [i] . pl segs )
     ( string_free . pl src )
     : ~ i k 0

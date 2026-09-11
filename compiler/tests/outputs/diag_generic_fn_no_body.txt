@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_generic_fn_no_body.nu:9:5: error: a generic function declaration continues with its body — '@ f [ … ] … → <type> { … }'. This one has no '{', so the declaration after it would be read as its body.
+@ f [T] → T
+    ^

@@ -1268,7 +1268,7 @@ $ `stdlib/std/async_ffi.nu`
 
 @ _cli_hs_set_compat * CliHs h i on → v { = . h compat on }
 
-@ _cli_hs_free * CliHs h → v {
+@ _cli_hs_free sink * CliHs h → v {
     ? == # i h 0 { ^ } {}
     ? != # i . h trh 0 { ( _trh_abort . h trh ) } {}
     ( vec_free [u] . h sni )

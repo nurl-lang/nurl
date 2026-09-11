@@ -34,7 +34,7 @@ $ `stdlib/std/float.nu`
     i bits  // as stored in the file (informational)
 }
 
-@ wav_free Wav w → v {
+@ wav_free sink Wav w → v {
     ( vec_free [f] . w samples )
 }
 

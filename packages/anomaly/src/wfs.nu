@@ -415,7 +415,7 @@ $ `src/imptime.nu`
     String err  // non-empty ⇒ nothing was read
 }
 
-@ wfs_pivot_free WfsPivot p → v {
+@ wfs_pivot_free sink WfsPivot p → v {
     ( vec_free_with [Json] . p rows \ Json j → v { ( json_free j ) } )
     ( vec_free_with [String] . p columns \ String s → v { ( string_free s ) } )
     ( string_free . p err )

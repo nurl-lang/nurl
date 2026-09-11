@@ -41,7 +41,7 @@ $ `stdlib/std/bigint.nu`
 
 : | DecErr { DecDivZero }
 
-@ dec_free Decimal d → v { ( bigint_free . d coeff ) }
+@ dec_free sink Decimal d → v { ( bigint_free . d coeff ) }
 
 @ dec_clone Decimal d → Decimal { ^ @ Decimal { ( bigint_clone . d coeff ) . d scale } }
 

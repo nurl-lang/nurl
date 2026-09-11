@@ -133,7 +133,7 @@ $ `stdlib/std/ecdsa_p256.nu`
 // path, which needs only d and n.
 : RsaPriv { ( Vec u ) n ( Vec u ) e ( Vec u ) d }
 
-@ rsa_priv_free RsaPriv k → v {
+@ rsa_priv_free sink RsaPriv k → v {
     ( vec_free [u] . k n ) ( vec_free [u] . k e ) ( vec_free [u] . k d )
 }
 
@@ -201,7 +201,7 @@ $ `stdlib/std/ecdsa_p256.nu`
 // just to check one integer would cost every pkey user the import.
 : MldsaPriv { i level ( Vec u ) sk }
 
-@ mldsa_priv_free MldsaPriv k → v { ( vec_free [u] . k sk ) }
+@ mldsa_priv_free sink MldsaPriv k → v { ( vec_free [u] . k sk ) }
 
 @ __pk_mldsa_level ( Vec u ) b DerTlv oid → i {
     ? ( _der_oid_is b oid `608648016503040311` ) { ^ 44 } {}

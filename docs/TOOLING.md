@@ -61,6 +61,37 @@ server with diagnostics, go-to-definition, hover, document symbols,
 completion, formatting, workspace symbol search, and folding ranges. Wired
 to the editors through the `tooling/vscode-nurl` extension.
 
+The server finds `nurlc` and `nurlfmt` from initialization options
+`compilerPath` / `formatterPath`, then `NURLC` / `NURLFMT`, then beside its
+own executable, then on `PATH`. Explicit configuration takes precedence even
+if it is invalid: execution failures produce diagnostics or formatting errors.
+An installed layout can put all three binaries in `<prefix>/bin` or
+`<prefix>/build` and its sources in `<prefix>/stdlib`. The server discovers
+that stdlib directory unless `NURL_STDLIB` or `stdlibRoot` selects another.
+The current toolchain installer does not bundle the LSP automatically; build
+and place the server alongside the compiler or configure its paths explicitly.
+
+Initialization selects the workspace root for project imports. Each diagnostic
+compile passes the current document over stdin with its original filename:
+`nurlc --lint --stdin --check -- <file.nu>`. This preserves sibling imports,
+source locations and unsaved edits without writing source temporary files.
+`--check` performs the normal semantic checks but discards buffered LLVM IR;
+it does not write stdout IR or split files. The compiler still constructs IR
+during its fused frontend walk. `--stdin` also works without `--check` for
+ordinary compilation, including a logical filename that does not exist yet.
+
+The server uses UTF-16 positions for diagnostics, cursor lookup and formatting,
+percent-encoded file URIs for imported definitions, and related locations for
+errors in imported files. Its declaration index remains a lightweight scanner,
+not compiler name resolution; duplicate names, invalidation and other editor
+features require their own coverage. The synchronous subprocess API also has
+no per-request timeout. These limits are not closed by the diagnostics tests.
+
+After building the compiler and server, exercise relocated binaries and a
+separate consumer project with `python3 tools/tests/test_lsp_toolchain.py`.
+`python3 tools/tests/test_source_io.py` independently tests the C source readers
+under ASan/UBSan, including capacity boundaries, pipes and I/O failures.
+
 ## Package manager (`nurlpkg`)
 
 `./tools/nurlpkg/build.sh` produces `build/nurlpkg` — a Cargo-shaped package
@@ -92,6 +123,68 @@ deps follow the newest published version, path deps the local copy's
 `lock`, `verify`, `publish`, `login`, `logout [--revoke]`, `search`,
 `yank` / `unyank`, `test`, `bench`, `self-update`, `version`, `help`.
 
+Registry dependencies carry a `(registry URL, package name)` identity through
+resolution, index caching, downloads, signature checks and `nurl.lock`.
+An explicit dependency `registry` selects that origin; transitive index
+requirements inherit their parent's registry. Custom `resolve_registry` fetch
+callbacks receive `(registry, name)` and return `!RegIndex RegistryFetchErr`.
+A successful index owns its fields; `registry_index_decode` validates raw JSON
+and binds it to the requested name. Only `RegistryNotFound` (HTTP 404) permits
+missing-package backtracking. Other HTTP statuses, transport failures and
+malformed responses abort resolution with their origin and cause; install,
+info, update and the publish dependency gate report the failure. Failed
+resolution preserves the existing manifest and lock.
+
+URL normalization lowercases the
+scheme and host, removes the default port and adds a trailing slash. Path bytes
+are preserved. Credentials, queries and fragments are rejected.
+
+For private registries, configure signing keys in
+`$NURL_HOME/registries.toml` (or `~/.nurl/registries.toml` when `NURL_HOME` is
+unset). `NURL_REGISTRY_CONFIG` selects an explicit file instead:
+
+```toml
+[registries]
+"https://packages.example.org/" = "<minisign public-key base64 payload>"
+"https://another.example.org/team/" = "<that registry's public-key payload>"
+```
+
+Obtain each key from the registry operator through a trusted channel. Downloaded
+manifests and index responses cannot add trusted keys. The public NURL registry
+has a built-in key. An absent default config is allowed; an unreadable explicit
+file, malformed key or conflicting keys for one normalized URL fail the install.
+The legacy `NURL_REGISTRY_PUBKEY` variable is scoped to `NURL_REGISTRY`, or to
+the public default when that variable is absent. It cannot authorize another
+explicit dependency registry. A conflicting file/env pin is an error.
+
+Index fields must have the expected JSON types and contain no embedded NUL;
+malformed indexes and truncated text sources are rejected before archive downloads.
+Every registry archive requires a matching SHA-256 and minisign signature.
+Before extraction, its root `nurl.toml` must name the requested package and
+version exactly, and all archive paths and member types are checked. Failed
+resolution or authentication returns nonzero, preserves the prior lock and
+prints no project installation success. `nurlpkg lock` retains existing source
+and checksum fields and refuses missing/renamed registry packages or
+installed-version drift. Local development versions can still be refreshed.
+
+Resolution selects one version per `(registry, name)` and backtracks when a
+candidate's dependencies conflict. It tries non-yanked versions in descending
+SemVer order, choosing the package with the fewest remaining candidates first.
+Package name and normalized registry URL break package ties; descending lexical
+build metadata breaks equal SemVer precedence ties. Input order does not select
+the result. This policy finds a compatible selection when one exists in the
+finite fetched graph; it does not promise to maximize every package's version.
+Cycles are checked against existing assignments, and long chains have no
+arbitrary iteration limit. Indexes and distinct requirements are parsed once
+per resolution. Invalid versions, dependency requirements and duplicate version
+identities make an index invalid, including metadata of unselected versions.
+
+The resolver can distinguish equal package names in separate registries, but
+the current `deps/<name>` installation layout cannot expose both. The CLI
+reports that conflict before downloading archives. Frozen-lock installation,
+typed transport failures and an atomic transaction across the whole dependency
+tree remain tracked in `docs/dev/V1_HARDENING.md`.
+
 **`publish` runs five gates before it packs anything**, and refuses on
 any of them — a published version can be yanked but never replaced, so
 the tool is deliberately harder to talk into an upload than out of one:
@@ -104,9 +197,11 @@ not the checkout you developed in. That last gate compiles with
 because a package can import stdlib files that have shipped for years
 while calling a function added to one of them last week: every path
 exists, and the tarball still fails to build for everyone who installs
-it. If no installed compiler is found the gate WARNs and lets the
-publish through rather than passing silently — an unverifiable check
-should say so. `--dry-run` runs all five and uploads nothing (and needs
+it. A missing target root, missing compiler, failed compiler launch or
+compiler diagnostic refuses publication, including `--dry-run`. Install the
+target toolchain before retrying. The compiler runs directly with `--check`;
+toolchain paths are literal arguments, and no C compiler or linker is needed.
+`--dry-run` runs all five and uploads nothing (and needs
 no token). Know what that gate does **not** cover: a **library** package
 has no `src/main.nu`, so the compile gate returns success without
 compiling anything — `every gate passed` on a library means the manifest

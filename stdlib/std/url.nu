@@ -48,7 +48,7 @@ $ `stdlib/core/vec.nu`
 
 : UrlParam { String key String val }
 
-@ url_free Url u → v {
+@ url_free sink Url u → v {
     ( string_free . u scheme )
     ( string_free . u userinfo )
     ( string_free . u host )
@@ -57,7 +57,7 @@ $ `stdlib/core/vec.nu`
     ( string_free . u fragment )
 }
 
-@ url_params_free ( Vec UrlParam ) ps → v {
+@ url_params_free sink ( Vec UrlParam ) ps → v {
     : i n ( vec_len [UrlParam] ps )
     : ~ i k 0
     ~ < k n {
@@ -133,7 +133,7 @@ $ `stdlib/core/vec.nu`
 // 1 byte or a 3-byte `%XX`, so 3n is a hard upper bound. We reserve that
 // once and commit the actual length — `string_push_char` per emitted
 // byte was ~12x the cost of a cursor store.
-@ url_percent_encode s in → String {
+@ __url_encode s in b path → String {
     : i n ( nurl_str_len in )
     : *u p # *u in
     : String out ( string_with_cap + n 1 )
@@ -143,7 +143,7 @@ $ `stdlib/core/vec.nu`
         : ~ i o 0
         ~ < k n {
             : i c & # i . p k 255
-            ? ( __url_is_unreserved c ) {
+            ? | ( __url_is_unreserved c ) & path | == c 47 == c 58 {
                 = . w o # u c
                 = o + o 1
             } {
@@ -158,6 +158,13 @@ $ `stdlib/core/vec.nu`
     } {}
     ^ out
 }
+
+// Encode a component, including its path separators.
+@ url_percent_encode s in → String { ( __url_encode in F ) }
+
+// Encode a URI path while preserving slash separators and drive colons.
+// Spaces, percent signs, query/fragment delimiters and UTF-8 bytes escape.
+@ url_path_encode s in → String { ( __url_encode in T ) }
 
 // ── Scheme defaults ────────────────────────────────────────────────
 

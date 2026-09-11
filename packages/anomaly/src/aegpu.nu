@@ -208,7 +208,7 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
     GpuBuffer bode  // eval outdiff: eval_chunk × dout
 }
 
-@ _aeg_free AeGpu cx → v {
+@ _aeg_free sink AeGpu cx → v {
     ( gpu_free . cx bmeta ) ( gpu_free . cx bx ) ( gpu_free . cx bidx )
     ( gpu_free . cx bw ) ( gpu_free . cx bb )
     ( gpu_free . cx bmw ) ( gpu_free . cx bvw ) ( gpu_free . cx bmb ) ( gpu_free . cx bvb )

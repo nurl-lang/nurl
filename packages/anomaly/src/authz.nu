@@ -385,7 +385,7 @@ $ `deps/oauth/src/oauth.nu`
     String key_id  // empty unless via_key
 }
 
-@ principal_free Principal p → v {
+@ principal_free sink Principal p → v {
     ( string_free . p org )
     ( string_free . p sub )
     ( string_free . p email )
@@ -1351,7 +1351,7 @@ $ `deps/oauth/src/oauth.nu`
     String secret  // the plaintext, which exists only here and in the response
 }
 
-@ key_issue_free KeyIssue k → v {
+@ key_issue_free sink KeyIssue k → v {
     ( string_free . k key_id )
     ( string_free . k secret )
 }
@@ -1475,7 +1475,7 @@ $ `deps/oauth/src/oauth.nu`
     ^ @ KeyParts { T id sec }
 }
 
-@ key_parts_free KeyParts k → v {
+@ key_parts_free sink KeyParts k → v {
     ( string_free . k kp_id )
     ( string_free . k kp_secret )
 }

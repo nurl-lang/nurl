@@ -46,12 +46,12 @@ $ `deps/gguf/src/gguf.nu`
     ^ @ ChatMsg { ( string_from role ) ( string_from content ) }
 }
 
-@ chat_msg_free ChatMsg m → v {
+@ chat_msg_free sink ChatMsg m → v {
     ( string_free . m role )
     ( string_free . m content )
 }
 
-@ chat_msgs_free ( Vec ChatMsg ) v → v {
+@ chat_msgs_free sink ( Vec ChatMsg ) v → v {
     ( vec_free_with [ChatMsg] v \ ChatMsg m → v { ( chat_msg_free m ) } )
 }
 

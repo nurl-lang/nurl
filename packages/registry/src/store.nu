@@ -13,27 +13,10 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/semver.nu`
+$ `stdlib/ext/registry_id.nu`
 
-// Package name: ^[a-z0-9][a-z0-9_-]{0,63}$ (the registry convention the
-// Worker enforced; nurlpkg lowercases on its side too).
-@ reg_name_valid s name → b {
-    : i n ( nurl_str_len name )
-    ? | == n 0 > n 64 { ^ F } {}
-    : ~ i k 0
-    : ~ b ok T
-    ~ & < k n ok {
-        : i c ( nurl_str_get name k )
-        : ~ b good F
-        ? & >= c 97 <= c 122 { = good T } {}  // a-z
-        ? & >= c 48 <= c 57 { = good T } {}  // 0-9
-        ? > k 0 {
-            ? | == c 45 == c 95 { = good T } {}  // - _ (not leading)
-        } {}
-        ? ! good { = ok F } {}
-        = k + k 1
-    }
-    ^ ok
-}
+// Share the published-name grammar with the resolver and installer.
+@ reg_name_valid s name → b { ^ ( registry_name_valid name ) }
 
 // Version: full semver incl. pre-release/build metadata — validated by
 // actually parsing it with the same engine the resolver uses, not by a

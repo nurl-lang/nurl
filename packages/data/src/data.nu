@@ -59,7 +59,7 @@ $ `stdlib/std/floatbits.nu`
     ^ ds
 }
 
-@ data_free * DataSet ds → v {
+@ data_free sink * DataSet ds → v {
     ( vec_free [f] . ds x )
     ( vec_free [f] . ds y )
     ( nurl_free # s ds )
@@ -316,7 +316,7 @@ $ `stdlib/std/floatbits.nu`
 
 @ dl_last_rows * DataLoader dl → i { ^ . dl last_rows }
 
-@ dl_free * DataLoader dl → v {
+@ dl_free sink * DataLoader dl → v {
     ( vec_free [i] . dl idx )
     ( nurl_free # s dl )
 }

@@ -47,7 +47,7 @@ $ `src/imptime.nu`
     String format  // what it turned out to be
 }
 
-@ import_parse_free ImportParse ip → v {
+@ import_parse_free sink ImportParse ip → v {
     ( vec_free_with [Json] . ip rows \ Json j → v { ( json_free j ) } )
     ( vec_free_with [String] . ip notes \ String s → v { ( string_free s ) } )
     ( string_free . ip err )

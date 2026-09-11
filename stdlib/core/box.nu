@@ -186,7 +186,7 @@ $ `stdlib/core/mem.nu`
 // where alloc returned NULL); not idempotent over an already-freed
 // non-NULL box — calling twice is undefined behaviour (double-free),
 // matching `vec_free` / `nurl_free`.
-@ box_free [T] ( Box T ) b → v {
+@ box_free [T] sink ( Box T ) b → v {
     : *T p # *T . b ptr
     ? != 0 # i p { ( nurl_free # s p ) } {}
 }
@@ -195,7 +195,7 @@ $ `stdlib/core/mem.nu`
 //   ( box_free_with [String] sb \ x → v { ( string_free x ) } )
 // Equivalent to `( drop ( box_get b ) )` followed by `( box_free b )`,
 // but expressed as one call to mirror `vec_free_with`.
-@ box_free_with [T] ( Box T ) b ( @ v T ) drop → v {
+@ box_free_with [T] sink ( Box T ) b ( @ v T ) drop → v {
     : *T p # *T . b ptr
     ? != 0 # i p {
         : T v . p 0

@@ -12,15 +12,17 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 
 @ proto_type_voice → i { ^ 1 }
-@ __pv_magic0 → i { ^ 80 }   // 'P'
-@ __pv_magic1 → i { ^ 86 }   // 'V'
+
+@ __pv_magic0 → i { ^ 80 }  // 'P'
+@ __pv_magic1 → i { ^ 86 }  // 'V'
 
 : VoiceMsg {
     i mtype
     i seq
     ( Vec u ) opus
 }
-@ voicemsg_free VoiceMsg m → v { ( vec_free [u] . m opus ) }
+
+@ voicemsg_free sink VoiceMsg m → v { ( vec_free [u] . m opus ) }
 
 // Build a VOICE frame carrying `opus` at sequence `seq`.
 @ proto_voice_encode i seq ( Vec u ) opus → ( Vec u ) {

@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_const_missing_value.nu:7:5: error: a global constant needs its value — ': i MAX_CONN <value>'. Found '@' where the value belongs. Only a literal, or an integer expression folded from literals ('* 60 60'), can initialise a global. If the value was left out, this token starts the next declaration — which the constant would otherwise swallow.
+: i MAX_CONN
+    ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

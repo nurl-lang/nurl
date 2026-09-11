@@ -999,7 +999,7 @@ MldsaParams p ( Vec u ) out → v {
 
 @ mldsa_sk * MldsaKeys h → ( Vec u ) { ^ . h sk }
 
-@ mldsa_keys_free * MldsaKeys h → v {
+@ mldsa_keys_free sink * MldsaKeys h → v {
     ( vec_free [u] . h pk )
     ( vec_free [u] . h sk )
     ( nurl_free # s h )

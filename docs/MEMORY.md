@@ -11,18 +11,16 @@ v2.3).
   exactly one owning binding. The compiler inserts the matching free
   at the end of that binding's scope. No garbage collector, no
   reference counting. A small, explicit set of **manually-managed
-  handles** sits outside auto-drop — `Vec`, `String`, a `sink`
-  argument, and a closure that *escapes* its creating frame — and is
+  handles** sits outside auto-drop — `Vec`, `String`, and a closure
+  that *escapes* its creating frame — and is
   freed by you, exactly like C's `malloc`/`free` (§7.4).
-- **No known compiler-owned leaks.** The compiler never leaks an
-  allocation it owns — not on the normal path, and not across a
-  `panic`/`recover` unwind (a thread-local journal reclaims the
-  scope-exit drops the `longjmp` skips, §7.2). Owned strings, slices,
-  struct fields, `% Drop` values, and the heap env of a *non-escaping*
-  capturing closure are all reclaimed automatically. The **only**
-  memory you must free yourself is the manual-handle set above; used
-  per that contract, NURL programs are leak-free. There is no
-  "by-design leak" — see §7.
+- **Automatic cleanup includes unwind paths.** A thread-local journal
+  runs registered scope drops across `panic`/`recover` (§7.2). The compiler
+  tracks owned strings, slices, struct fields, enum owners, `% Drop` values
+  and non-escaping closure environments. Compiler leak gates and selected
+  program leak tests verify these paths. Remaining ownership limitations,
+  including unsupported sink transfers, are described below; this is not a
+  guarantee that every accepted program is memory-safe or leak-free.
 - **A borrow checker runs by default.** A diagnostic analysis pass
   catches use-after-move, alias double-free, and closures that escape
   the stack frame they point into. It is on unless you pass
@@ -194,10 +192,9 @@ be a mutable (`: ~`) binding; it is passed by address, so the
 callee's writes land on the caller's storage. `inout` is the
 preferred replacement for the three older mutation idioms — returning
 the modified struct, a `*T` parameter, or a single-handle struct
-wrapper — though all three still work. An `inout` function must be
-defined before it is called. Generic functions may take `inout`
-parameters too (`@ store [A] inout ( Box A ) b → v`); the
-define-before-call rule applies to them as well.
+wrapper — though all three still work. Ordinary and generic `inout` signatures are available before body
+compilation, including calls before the declaration
+(`@ store [A] inout ( Box A ) b → v`).
 
 An `inout` argument may also be a *field target* — `. obj field`
 passes the address of that single struct field, so the callee
@@ -217,26 +214,21 @@ use-after-move):
 ( give_away xs )                 // xs is consumed; using it now is a move error
 ```
 
-`sink` lowers to an ordinary by-value parameter (no IR change), and the
-callee is responsible for releasing the value (the `vec_free` above) — a
-`sink` parameter is **not** auto-dropped. It therefore applies to `Vec`
-and other manually-managed handles. `sink` works on ordinary functions
-and on trait **impl methods** (`% Bumpable (Counter) { @ take sink … }`).
+`sink` uses a by-value ABI. For manually managed handles such as `Vec`
+and `String`, the callee is responsible for releasing the handle. For a
+compiler-managed enum, ownership transfers to the callee: the caller's
+owner slot becomes inactive before the call, and the callee drops its owner
+on exit unless it returns or transfers it onward. An inferred conditional
+sink owns the argument on both paths, including a path that does not
+explicitly release it. Borrowed enum parameters do not acquire this drop
+obligation. Ordinary functions, generic instances and trait impl methods
+can declare `sink` parameters.
 
-Passing a *compiler-auto-dropped* value — an owned string (from an
-allocating call), an owned slice, a `Drop`-trait value, or a struct with
-owned fields — to a `sink` parameter is **rejected by design**, not a
-missing feature. The auto-drop obligation for such values is tracked in
-per-scope owned-sets that are snapshotted and restored across `?` / `??`
-/ loop boundaries; transferring the obligation to the callee by
-un-tracking the value would be silently undone by an enclosing arm's
-restore, reintroducing the very double-free the checker exists to
-prevent. The conservative rejection keeps the model sound. **Workaround:**
-wrap the value in a manually-managed handle (a one-field `{ s data }`
-struct, or a `Vec`), or pass it as an ordinary by-value parameter and let
-the caller's scope drop it. `compiler/tests/should_fail_sink_autodrop.nu`
-pins the diagnostic. Generic functions may take `sink` parameters
-(`@ consume [A] sink ( Box A ) b → v`).
+Transfer support for the other compiler-managed ownership kinds (raw owned
+strings, slices, user `Drop` values and tracked struct fields) remains
+incomplete. The compiler currently rejects their transfer to an explicit
+sink; this is an implementation limitation, not a language design rule.
+`compiler/tests/should_fail_sink_autodrop.nu` records the current rejection.
 
 A parameter does not have to be *spelled* `sink` to be one. When a
 function's body consumes a parameter — passes it to a typed destructor,
@@ -250,17 +242,22 @@ binding exactly as if the marker had been written:
 ( dispose xs ) ( dispose xs )     // use-after-move at the second call
 ```
 
-For an ordinary function this falls out of compiling the body. A
-**generic** template is not compiled where it is written — it is stored
-and instantiated later under a mangled name — so its summary is instead
-derived from the stored template at declaration time
-(`compute_generic_inout_sink`), covering the auto-`sink` case by reading
-the body for a call whose first argument is a bare parameter. Without
-it, `@ dispose [T] ( Vec T ) xs → v { ( vec_free [T] xs ) }` was invisible
-to the checker and the double free above compiled clean
-(`compiler/tests/borrow_generic_sink_wrapper.nu`). The template scan is
-narrower than the codegen inference — it reads the first argument of a
-call, not every argument position — so it can miss, never invent.
+Explicit contracts are collected with signatures. Ordinary bodies and actual
+generic instances then contribute parameter-to-parameter implications, at
+any argument position. These implications propagate to a fixed point after
+all bodies have been compiled, including forward calls. A function's name
+and return type are never evidence of consumption: a void `report_free`
+can borrow, and a consuming function can return a value. Local callable
+bindings use their own identity rather than a same-named global contract. Destructors that release
+fields or raw memory should declare their consuming parameters explicitly:
+inference propagates bare-parameter calls and does not provide general
+field-level ownership provenance. Existing custom release functions that
+relied on a `_free` spelling need this contract.
+
+Compiler-managed enum transfer uses static LLVM constants emitted after this
+inference. They let LLVM remove the unused ownership path without depending
+on declaration order. Ownership inference and transfer code generation remain
+active with `--no-borrowck`; that flag only disables diagnostics.
 
 ## 2. The borrow checker
 
@@ -279,9 +276,8 @@ see §2.9.
 
 Ownership *moves* out of a binding when it is consumed:
 
-- passed as the argument of a typed destructor (`vec_free`,
-  `string_free`, ... — any `*_free`; raw `nurl_free` of `*T`/`i8*`
-  FFI memory is excluded), or
+- passed to an explicit or inferred `sink` parameter (`vec_free`,
+  `string_free` and other release APIs declare their consuming positions), or
 - copied into another binding (see 2.2).
 
 After a move the binding holds freed-or-about-to-be-freed memory.
@@ -1290,13 +1286,28 @@ leaked any owned allocation made inside the extent. A thread-local
   *forgotten* from the journal at the assignment, so the drain never
   frees what the caller now owns.
 
-So a panic reclaims **every** kind of allocation auto-drop owns — owned
-strings, owned slices, owned struct-field buffers, and user `% Drop` /
-autodrop-enum values. The mechanism can never turn a leak into a
-double-free or use-after-free (raw entries are pointer-keyed and removed
-at `nurl_free`; typed entries are forgotten at their normal drop site and
-deduped on drain); it clears the sanitizer gate, and `recover_unwind` is
-one of the leak-pinned tests (§6.6) that pins the round trip leak-clean.
+The journal supports owned strings, slices, struct-field buffers and user
+`% Drop` / autodrop-enum values. Its recovery marks are registration sequence
+numbers, so removing an outer owner or compacting the entry array cannot move
+a new inner owner outside its recovery extent. A pointer index makes normal
+removal proportional to one hash bucket, with amortized compaction and growth;
+normal frees do not scan every live allocation. Registrations are removed
+before invoking a destructor, which may itself forget another owner or enter
+a nested recovery scope.
+
+String argument temporaries use the callee's completed parameter summaries.
+An integer result can preserve an input buffer's address through casts,
+arithmetic, locals, assignments or calls, so a scalar return type alone is
+not evidence that the caller may free that buffer. The dependency graph keeps
+loop and forward-call origins until the module reaches a fixed point. Named
+arguments use their declared parameter position. A forward result used directly
+as an argument captures its dynamic ownership proof before another call runs.
+
+This relies on the compiler registering each ownership obligation correctly.
+`recover_unwind` and `recover_reassign_temps` pin reclamation on their covered
+paths; `tools/tests/test_panic_journal.py` also compares generated nested scopes
+with an independent ownership model. Known gaps in forward string-return and
+argument ownership remain tracked in [the hardening ledger](dev/V1_HARDENING.md).
 Where in the extent the allocation was made does not change that either:
 the `panic-reclaim` class (§6.6) enumerates the spellings — a `?` arm, a
 `??` arm, a loop body, two frames deep, a nested extent, a second extent

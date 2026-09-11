@@ -17,8 +17,8 @@
 #  a use-after-free or UB in the same run is free signal.
 #
 #  Usage:  tools/leakgate.sh [source.nu]
-#    source.nu   what to compile (default: compiler/nurlc.nu — the
-#                self-compile, the largest NURL program that exists)
+#    source.nu   compile only this source; by default compile the compiler
+#                and regressions for drop-graph generation and nested stores.
 #
 #  Pre-req: ./build.sh --san --no-tests, so build/nurlc and
 #  stdlib/runtime.o carry the sanitizer instrumentation. Like
@@ -34,10 +34,23 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 NURLC="$ROOT/build/nurlc"
 RUNTIME="$ROOT/stdlib/runtime.o"
-SRC="${1:-$ROOT/compiler/nurlc.nu}"
+if (( $# > 1 )); then
+    echo 'usage: tools/leakgate.sh [source.nu]' >&2
+    exit 2
+fi
+# alias_rewrite_types.nu is here for the same reason the select test is in
+# the CI leak step: nurlc.nu contains no ALIASED import, so the source
+# rewriter that aliasing runs never reached this gate, and it leaked a whole
+# rewritten copy of every aliased import — 1,743 bytes compiling this one
+# file. A gate that only compiles the compiler cannot see a path the
+# compiler's own source does not take.
+sources=("$ROOT/compiler/nurlc.nu" "$ROOT/compiler/tests/enum_tree_drop.nu" "$ROOT/compiler/tests/nested_field_store.nu" "$ROOT/compiler/tests/enum_nested_tag_payload.nu" "$ROOT/compiler/tests/sink_enum_owned.nu" "$ROOT/compiler/tests/sink_summary_storage.nu" "$ROOT/compiler/tests/alias_rewrite_types.nu")
+if (( $# == 1 )); then sources=("$1"); fi
 
 [ -x "$NURLC" ] || { echo "leakgate: $NURLC missing — run ./build.sh --san --no-tests first" >&2; exit 2; }
-[ -f "$SRC" ]   || { echo "leakgate: source not found: $SRC" >&2; exit 2; }
+for source in "${sources[@]}"; do
+    [ -f "$source" ] || { echo "leakgate: source not found: $source" >&2; exit 2; }
+done
 
 # An uninstrumented build would sail through this gate reporting nothing,
 # which is the one failure mode a leak gate must not have. Both the
@@ -69,6 +82,7 @@ run_gate() {  # run_gate <label> [nurlc flags...]
 
     # exitcode=23 is LSan's own convention for "leaks were found"; spelling it
     # out keeps the verdict readable when a future ASan default changes.
+    LSAN_OPTIONS="${LSAN_OPTIONS:+${LSAN_OPTIONS}:}use_stacks=0" \
     ASAN_OPTIONS="detect_leaks=1:exitcode=23:abort_on_error=0:halt_on_error=0:print_stacktrace=1" \
     UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=0" \
         "$NURLC" "$@" "$SRC" > "$ir" 2> "$err"
@@ -118,6 +132,7 @@ run_gate() {  # run_gate <label> [nurlc flags...]
     echo "leakgate: OK — zero leaks, ${ir_bytes} bytes of IR emitted ($label)"
 }
 
+for SRC in "${sources[@]}"; do
 run_gate "one module" || exit 1
 
 # The partitioned emitter (--split) is a whole second set of allocations —
@@ -128,7 +143,8 @@ run_gate "one module" || exit 1
 # exactly the shape of "nothing in CI was looking" that this gate exists to
 # fix. --split-min=1 defeats the size floor so the path runs regardless of
 # how big the module happens to be.
-run_gate "partitioned (--split)" --split=4 --split-min=1 --split-out="$parts/p" || exit 1
+rm -f "$parts"/p.[0-9]*.ll
+run_gate "instrumented partitioned (--split)" --sanitize-address --split=4 --split-min=1 --split-out="$parts/p" || exit 1
 
 emitted="$(ls "$parts"/p.[0-9]*.ll 2>/dev/null | wc -l)"
 if [ "$emitted" -lt 2 ]; then
@@ -136,3 +152,4 @@ if [ "$emitted" -lt 2 ]; then
     exit 1
 fi
 echo "leakgate: OK — both emission modes clean ($emitted parts written)"
+done

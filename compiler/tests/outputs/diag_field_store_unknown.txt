@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_field_store_unknown.nu:13:19: error: type 'Pt' has no field 'nofield'. Check the field name against the struct's declaration; a field write is prefix ('= . obj field value').
+    = . p nofield 5
+                  ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

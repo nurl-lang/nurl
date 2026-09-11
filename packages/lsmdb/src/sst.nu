@@ -153,7 +153,7 @@ $ `memtable.nu`
     }
 }
 
-@ __sstw_free * SstWriter w → v {
+@ __sstw_free sink * SstWriter w → v {
     ( crc32_ctx_free . w crc )
     ( vec_free [u] . w buf )
     ( vec_free [u] . w index )
@@ -319,7 +319,7 @@ $ `memtable.nu`
     ( Vec u ) val
 }
 
-@ sst_hit_free SstHit h → v { ( vec_free [u] . h val ) }
+@ sst_hit_free sink SstHit h → v { ( vec_free [u] . h val ) }
 
 @ __sst_err s path s what → String {
     : String msg ( string_from `lsmdb: ` )
@@ -651,7 +651,7 @@ $ `memtable.nu`
     ^ c
 }
 
-@ sc_free * SstCursor c → v {
+@ sc_free sink * SstCursor c → v {
     ( vec_free [u] . c blk )
     ( string_free . c err )
     ( nurl_free # s c )

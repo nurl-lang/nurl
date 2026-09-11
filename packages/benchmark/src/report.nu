@@ -24,7 +24,7 @@ $ `stdlib/std/bench.nu`
     String unit
 }
 
-@ bench_row_free BenchRow r → v {
+@ bench_row_free sink BenchRow r → v {
     ( string_free . r name )
     ( string_free . r unit )
 }

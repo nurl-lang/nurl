@@ -378,7 +378,7 @@ static void __nurl_ensure(int n) {
 // threads alive; unloading it out from under them crashes libgomp at thread
 // teardown. Leaving the (small) module mapped for the process lifetime is the
 // standard workaround — it's freed when the process exits anyway.
-@ cpu_module_free * u handle → v {}
+@ cpu_module_free sink * u handle → v {}
 
 // ── "device" memory — plain host RAM on this backend ──────────────
 // Buffers are f32/i32/i64 arrays (4-byte-aligned, sizes a multiple of 4), so
@@ -386,7 +386,7 @@ static void __nurl_ensure(int n) {
 // own memcpy for aggregate copies, and a duplicate FFI declaration collides).
 @ cpu_malloc i bytes → i { ^ # i ( nurl_alloc bytes ) }
 
-@ cpu_free i ptr → v { ( nurl_free # *u ptr ) }
+@ cpu_free sink i ptr → v { ( nurl_free # *u ptr ) }
 
 @ __copy_words * u dst * u src i bytes → v {
     : i words / bytes 4

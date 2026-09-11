@@ -23,43 +23,43 @@ let client = null;
 function resolveServerPath(context) {
     const cfg = vscode.workspace.getConfiguration('nurl');
     const explicit = (cfg.get('server.path') || '').trim();
-    if (explicit && isExecutable(explicit)) return explicit;
+    if (explicit) return isExecutable(explicit) ? path.resolve(explicit) : null;
 
     // Look in the workspace's build/ directory.
     const folders = vscode.workspace.workspaceFolders || [];
     for (const f of folders) {
-        const candidate = path.join(f.uri.fsPath, 'build', 'nurl-lsp');
+        const candidate = path.join(f.uri.fsPath, 'build',
+            process.platform === 'win32' ? 'nurl-lsp.exe' : 'nurl-lsp');
         if (isExecutable(candidate)) return candidate;
     }
 
-    // PATH fallback — let the OS resolve.
-    if (commandExists('nurl-lsp')) return 'nurl-lsp';
-
-    return null;
+    // Preserve the resolved executable path so the server can find its
+    // companion compiler/formatter beside itself after changing directories.
+    return findCommand('nurl-lsp');
 }
 
 function isExecutable(p) {
     try {
         fs.accessSync(p, fs.constants.X_OK);
-        return true;
+        return fs.statSync(p).isFile();
     } catch {
         return false;
     }
 }
 
-function commandExists(cmd) {
+function findCommand(cmd) {
     const sep = process.platform === 'win32' ? ';' : ':';
     const exts = process.platform === 'win32'
-        ? (process.env.PATHEXT || '').split(';')
+        ? (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';')
         : [''];
     const dirs = (process.env.PATH || '').split(sep);
     for (const d of dirs) {
         for (const ext of exts) {
             const full = path.join(d, cmd + ext);
-            if (isExecutable(full)) return true;
+            if (isExecutable(full)) return path.resolve(full);
         }
     }
-    return false;
+    return null;
 }
 
 function activate(context) {
@@ -77,7 +77,13 @@ function activate(context) {
         debug: { command: serverPath, args: [], transport: TransportKind.stdio },
     };
 
+    const cfg = vscode.workspace.getConfiguration('nurl');
     const clientOptions = {
+        initializationOptions: {
+            compilerPath: (cfg.get('compiler.path') || '').trim(),
+            formatterPath: (cfg.get('formatter.path') || '').trim(),
+            stdlibRoot: (cfg.get('stdlibRoot') || '').trim(),
+        },
         documentSelector: [{ scheme: 'file', language: 'nurl' }],
         // Surface server stderr in the OutputChannel for debugging.
         outputChannelName: 'NURL Language Server',

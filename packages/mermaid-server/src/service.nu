@@ -73,7 +73,7 @@ $ `render.nu`
     ( Vec String ) warnings
 }
 
-@ mmd_render_res_free MmdRenderRes r → v {
+@ mmd_render_res_free sink MmdRenderRes r → v {
     ( string_free . r svg )
     : i n ( vec_len [String] . r warnings )
     : ~ i i 0

@@ -209,7 +209,7 @@ $ `stdlib/fs/fat.nu`
     ^ p
 }
 
-@ __dp_free * DirPos p → v { ( nurl_free # s p ) }
+@ __dp_free sink * DirPos p → v { ( nurl_free # s p ) }
 
 @ __dp_lba * DirPos p → i { ^ . p lba }
 

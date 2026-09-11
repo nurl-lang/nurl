@@ -42,14 +42,14 @@ $ `stdlib/std/time.nu`
 
 @ cookie_jar_count CookieJar j → i { ^ ( vec_len [Cookie] . j cookies ) }
 
-@ __cookie_free Cookie c → v {
+@ __cookie_free sink Cookie c → v {
     ( string_free . c name )
     ( string_free . c value )
     ( string_free . c domain )
     ( string_free . c path )
 }
 
-@ cookie_jar_free CookieJar j → v {
+@ cookie_jar_free sink CookieJar j → v {
     : ~ i k 0
     ~ < k ( vec_len [Cookie] . j cookies ) {
         ?? ( vec_get [Cookie] . j cookies k ) { T c → ( __cookie_free c ) F _ → {} }

@@ -588,7 +588,7 @@ $ `stdlib/std/tls.nu`
     ?? ( vec_get [String] . r cells idx ) { T s → ^ s F _ → ^ ( string_with_cap 0 ) }
 }
 
-@ pg_result_free PgResult r → v {
+@ pg_result_free sink PgResult r → v {
     ( vec_free_with [String] . r colnames \ String s → v { ( string_free s ) } )
     ( vec_free_with [String] . r cells \ String s → v { ( string_free s ) } )
     ( vec_free [u] . r nulls )

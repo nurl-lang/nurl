@@ -47,7 +47,7 @@ $ `stdlib/ext/toml.nu`
     ^ @ AnomalyConfig { F ( string_new ) ( string_new ) # TomlValue TBool }
 }
 
-@ config_free AnomalyConfig c → v {
+@ config_free sink AnomalyConfig c → v {
     ( string_free . c cpath )
     ( string_free . c cerr )
     ? . c loaded { ( toml_value_free . c root ) } {}

@@ -453,7 +453,7 @@ $ `stdlib/core/vec.nu`
     ^ @ Path { c }
 }
 
-@ path_free Path p → v {
+@ path_free sink Path p → v {
     ( string_free . p inner )
 }
 

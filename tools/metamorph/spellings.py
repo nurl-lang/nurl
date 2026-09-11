@@ -1850,23 +1850,10 @@ def runtime_is_broken(src_path, tmpdir):
     not the template's."""
     ll = tmpdir / "m.ll"
     exe = tmpdir / "m.bin"
-    r = subprocess.run([str(NURLC), "--no-borrowck", str(src_path)],
+    r = subprocess.run([str(NURLC), "--sanitize-address", "--no-borrowck", str(src_path)],
                        stdout=open(ll, "wb"), stderr=subprocess.DEVNULL, cwd=ROOT)
     if r.returncode != 0:
         return None, "did not compile with --no-borrowck"
-    # ASan instruments only functions carrying the `sanitize_address`
-    # attribute, which the C frontend adds and hand-written IR does not
-    # have. Without this line every escalation here saw ONLY what the
-    # sanitized runtime's malloc interceptors caught — heap double-free,
-    # heap use-after-free — and nothing at all about the code nurlc
-    # emitted. A dangling STACK reference, which is what the escape
-    # classes are made of, ran clean and was reported "UNCONFIRMED":
-    # the harness was reading its own blind spot as evidence of
-    # innocence. Stamping the attribute on every `define` is what makes
-    # the generated code answerable to the sanitizer.
-    src_ll = ll.read_text()
-    ll.write_text(re.sub(r"^(define .*) \{$", r"\1 sanitize_address {",
-                         src_ll, flags=re.M))
     # Prefer the runtime `./build.sh --san` just produced; the standalone
     # runtime_san.o can be an older artifact, and linking IR against a
     # stale ABI produces confusing hangs that look like findings.
@@ -1950,16 +1937,11 @@ def runtime_verdict(src_path, tmpdir, san):
     it emits with the checker disabled."""
     ll = tmpdir / f"{src_path.stem}.ll"
     exe = tmpdir / f"{src_path.stem}.bin"
-    r = subprocess.run([str(NURLC), str(src_path)],
+    r = subprocess.run([str(NURLC), "--sanitize-address", str(src_path)],
                        stdout=open(ll, "wb"), stderr=subprocess.PIPE, cwd=ROOT)
     if r.returncode != 0:
         first = r.stderr.decode("utf-8", "replace").strip().splitlines()
         return INVALID, (first[0][:100] if first else "did not compile")
-    # Same reason as runtime_is_broken: hand-written IR carries no
-    # `sanitize_address` attribute, so without this ASan sees only the
-    # runtime's own allocations and every spelling "runs clean".
-    ll.write_text(re.sub(r"^(define .*) \{$", r"\1 sanitize_address {",
-                         ll.read_text(), flags=re.M))
     link = subprocess.run(
         ["clang", "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
          "-o", str(exe), str(ll), str(san), "-lm", "-lpthread"],

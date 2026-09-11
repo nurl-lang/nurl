@@ -39,16 +39,14 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/ext/env.nu`
-
-// HttpcErr tags — mirror ext/http.nu so callers' match arms are identical.
-: | HttpcErr { HttpcConnect HttpcTimeout HttpcTls HttpcDns HttpcInvalidUrl HttpcOther }
+$ `stdlib/ext/http_cli_types.nu`
 
 // HttpcResp carries the status, the true body length `blen`, and the body
 // bytes with one extra trailing NUL (so httpc_body_str can hand back a
 // NUL-terminated `s` view). The wrapper owns `body`; callers MUST call
 // `httpc_resp_free` exactly once on the Ok path (NURL does not auto-drop
 // struct fields), matching ext/http.nu's manual ownership model.
-: HttpcResp { i status i blen ( Vec u ) body }
+// The shared declaration lives in http_cli_types.nu.
 
 // ── Temp directory ──────────────────────────────────────────────────
 // $TMPDIR if set and non-empty, else /tmp.
@@ -335,6 +333,6 @@ $ `stdlib/ext/env.nu`
     ^ out
 }
 
-@ httpc_resp_free HttpcResp r → v {
+@ httpc_resp_free sink HttpcResp r → v {
     ( vec_free [u] . r body )
 }

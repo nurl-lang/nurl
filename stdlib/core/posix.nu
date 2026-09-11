@@ -38,6 +38,8 @@ $ `stdlib/core/cell.nu`
 
 // ── Native constants + errno ──────────────────────────────────────
 
+// PATH_LIST_SEPARATOR is available on every target (Windows: semicolon;
+// other targets: colon) for native executable search paths.
 // Look up a platform integer constant (O_NONBLOCK, F_GETFL, POLLIN,
 // SIGTERM, …). Returns -1 for unknown names on every target, and -1
 // for POSIX names on Win32 / WASI. See runtime.c §2 for the full list.
@@ -175,6 +177,7 @@ $ `stdlib/core/cell.nu`
 // nurl_read_line's stdio buffer so framed stdio protocols (LSP/DAP) can
 // read a header line with `read_line` (fgetc) then the body with
 // `read_n_bytes` without a buffered-vs-raw split losing body bytes.
+// Returns a byte count, zero at EOF, or -1 on failure. EINTR is retried.
 & `c` @ nurl_stdin_read *u buf i n → i
 
 // ── File descriptor / mmap primitives ─────────────────────────────

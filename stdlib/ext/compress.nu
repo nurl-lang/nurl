@@ -336,7 +336,7 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
     : b _r ( vec_set_len [u] . d history 0 )
 }
 
-@ raw_deflate_free ZDeflate d → v {
+@ raw_deflate_free sink ZDeflate d → v {
     ( vec_free [u] . d history )
 }
 
@@ -370,6 +370,6 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
     : b _r ( vec_set_len [u] . d history 0 )
 }
 
-@ raw_inflate_free ZInflate d → v {
+@ raw_inflate_free sink ZInflate d → v {
     ( vec_free [u] . d history )
 }

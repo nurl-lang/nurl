@@ -185,7 +185,7 @@ $ `stdlib/ext/http2_hpack.nu`
     }
 }
 
-@ __h2_stream_free H2Stream s → v {
+@ __h2_stream_free sink H2Stream s → v {
     ( vec_free [u] . s header_block )
     ( vec_free_with [Header] . s decoded_headers
     \ Header h → v { ( header_free h ) } )
@@ -248,7 +248,7 @@ $ `stdlib/ext/http2_hpack.nu`
     // replaced it — one HttpResponse leaked per HTTP/2 request.
 }
 
-@ h2_conn_free H2Connection c → v {
+@ h2_conn_free sink H2Connection c → v {
     ( hpack_dyn_free . c enc_dyn )
     ( hpack_dyn_free . c dec_dyn )
     ( vec_free_with [H2Stream] . c streams

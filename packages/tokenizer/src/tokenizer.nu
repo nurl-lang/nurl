@@ -282,7 +282,7 @@ $ `stdlib/std/utf8.nu`
     ^ @ !*Tok String { T t }
 }
 
-@ tok_free * Tok t → v {
+@ tok_free sink * Tok t → v {
     ( vec_free_with [String] . t pieces \ String s → v { ( string_free s ) } )
     ( vec_free [f] . t scores )
     ( vec_free [i] . t ttype )

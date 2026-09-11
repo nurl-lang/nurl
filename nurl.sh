@@ -68,7 +68,8 @@
 #    NURL_CACHE_DIR=DIR  Move the cache (default $XDG_CACHE_HOME/nurl,
 #                        i.e. usually ~/.cache/nurl; the ThinLTO part
 #                        is auto-pruned to 2 GB).
-#    NURL_SAN=1          Link with AddressSanitizer + UndefinedBehaviorSanitizer.
+#    NURL_SAN=1          Instrument generated memory accesses with ASan;
+#                        instrument the C runtime with ASan + UBSan.
 #                        Auto-builds a side-by-side stdlib/runtime_san.o (non-LTO,
 #                        same -fsanitize flags). LTO is dropped because clang's
 #                        LTO + sanitizers combination produces opaque link-time
@@ -289,9 +290,14 @@ case "$(uname -m)" in
     x86_64 | amd64) ;;
     *) NURLC_CPU="--no-cpu-dispatch" ;;
 esac
-SPLIT_FLAGS=""
+NURLC_SAN=""
+if [ "${NURL_SAN:-0}" = 1 ]; then NURLC_SAN="--sanitize-address"; fi
+# Only the fixed, whitespace-free switches may be expanded as flag strings.
+# A split prefix is a path; preserve it as one positional argument.
+# shellcheck disable=SC2086
+set -- $NURLC_G $NURLC_CPU $NURLC_DIAG $NURLC_SAN
 if [ "$SPLIT_N" -gt 0 ]; then
-    SPLIT_FLAGS="--split=$SPLIT_N --split-out=$OUTBASE"
+    set -- "$@" "--split=$SPLIT_N" "--split-out=$OUTBASE"
     if [ -n "${NURL_SPLIT_MIN:-}" ]; then
         # NURL_SPLIT_MIN=16384 is the fast-edit-loop knob on the cached
         # ThinLTO path: finer parts mean the parts an edit didn't touch
@@ -303,14 +309,13 @@ if [ "$SPLIT_N" -gt 0 ]; then
         # retires +7% instructions split ×12, and a raised
         # -import-instr-limit only halves that) — and the default
         # posture is that a NURL binary is never quietly slower.
-        SPLIT_FLAGS="$SPLIT_FLAGS --split-min=$NURL_SPLIT_MIN"
+        set -- "$@" "--split-min=$NURL_SPLIT_MIN"
     fi
     # A previous build may have left MORE parts than this one writes;
     # linking a stale one in would resurrect the code it holds.
     rm -f "$OUTBASE".[0-9]*.ll "$OUTBASE".[0-9]*.o
 fi
-# shellcheck disable=SC2086
-"$NURLC" $NURLC_G $NURLC_CPU $NURLC_DIAG $SPLIT_FLAGS "$SRCFILE" > "$LLFILE"
+"$NURLC" "$@" "$SRCFILE" > "$LLFILE"
 
 # `--split=N` is a ceiling, and nurlc holds the policy: it writes no
 # parts at all for a module too small for two of them to be worth it
@@ -902,11 +907,11 @@ if [ "$SPLIT_N" -gt 0 ]; then
     # was doing, though measurably not all of it (see the note above).
     # Its backend is parallel too, so the link is faster than the
     # full-LTO one it replaces even before the parallel -c.
-    SPLIT_OBJS=""
+    set --
     SPLIT_PIDS=""
     for _part in "$OUTBASE".[0-9]*.ll; do
         _pobj="${_part%.ll}.o"
-        SPLIT_OBJS="$SPLIT_OBJS $_pobj"
+        set -- "$@" "$_pobj"
         cc_c_cached "$_part" "$_pobj" &
         SPLIT_PIDS="$SPLIT_PIDS $!"
     done
@@ -919,11 +924,10 @@ if [ "$SPLIT_N" -gt 0 ]; then
         exit 1
     fi
     # shellcheck disable=SC2086
-    cc_run $OPT $ZIG_OPT_FIX -flto=thin $LTO_TUNE_FLAGS $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS $SPLIT_OBJS "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+    cc_run $OPT $ZIG_OPT_FIX -flto=thin $LTO_TUNE_FLAGS $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS "$@" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
     # The parts are an artifact of how the link was parallelised; the
     # documented one is $LLFILE, which still holds the whole module.
-    # shellcheck disable=SC2086
-    rm -f $SPLIT_OBJS "$OUTBASE".[0-9]*.ll
+    rm -f -- "$@" "$OUTBASE".[0-9]*.ll
 elif [ -n "$OBJ_CACHE_DIR" ]; then
     # Cached-path variant of the one-shot below: compile the module
     # through the object cache first, then link the (possibly copied)

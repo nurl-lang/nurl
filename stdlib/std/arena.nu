@@ -308,7 +308,7 @@
 
 // Release every chunk and the impl block. After this the handle is dead
 // — do not pass it to any other arena_* function.
-@ arena_free Arena a → v {
+@ arena_free sink Arena a → v {
     : *ArenaImpl impl # *ArenaImpl . a ctl
     : ~ * ArenaChunk cur . impl head
     ~ != 0 # i cur {

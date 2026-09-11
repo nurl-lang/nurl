@@ -59,7 +59,7 @@ $ `stdlib/std/bytes.nu`
 // mirrors use to point nurlpkg at a loopback or internal registry.
 
 @ __default_registry → s {
-    ^ `https://reg.nurl-lang.org/`
+    ^ ( registry_default )
 }
 
 @ __registry_url Manifest m → String {
@@ -187,7 +187,7 @@ $ `stdlib/std/bytes.nu`
     ^ out
 }
 
-// Index of the registry LockPkg named `name`, or -1.
+// Index of the LockPkg named `name`, or -1; callers check its source kind.
 @ __reg_lookup ( Vec LockPkg ) regpkgs s name → i {
     : i n ( vec_len [LockPkg] regpkgs )
     : ~ i k 0
@@ -1120,55 +1120,53 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 // comments survive.
 
 // Candidate "newest" version for one dependency; "" when unknown.
-@ __update_candidate Manifest m Dep d → String {
+@ __report_registry_fetch s registry s name RegistryFetchErr error → v {
+    : String text ( registry_fetch_err_text error )
+    : String url ( registry_index_url registry name )
+    ( nurl_eprint `nurlpkg: ` ) ( nurl_eprint ( string_data url ) ) ( nurl_eprint `: ` )
+    ( string_free url )
+    ( nurl_eprintln ( string_data text ) ) ( string_free text )
+}
+
+@ __report_resolve_error ResolveErr error → v {
+    : String text ( resolve_err_text error )
+    ( nurl_eprint `nurlpkg: registry resolution failed (` )
+    ( nurl_eprint ( string_data text ) ) ( nurl_eprintln `)` )
+    ( string_free text ) ( resolve_err_free error )
+}
+
+@ __update_candidate Manifest m Dep d → !String i {
     ? > ( string_len . d path ) 0 {
-        // Path dep: the local copy is authoritative.
-        : String mf ( string_from ( string_data . d path ) )
-        ( string_push_str mf `/nurl.toml` )
+        : String mf ( string_clone . d path ) ( string_push_str mf `/nurl.toml` )
         : !Manifest ManifestErr mr ( manifest_load ( string_data mf ) )
         ( string_free mf )
         ?? mr {
-            T dm → {
-                : String out ( string_from ( string_data . dm version ) )
-                ( manifest_free dm )
-                ^ out
-            }
-            F _ → ^ ( string_new )
+            T dm → { : String out ( string_clone . dm version ) ( manifest_free dm ) ^ @ !String i { T out } }
+            F _ → { ( nurl_eprint `nurlpkg: cannot read local dependency: ` ) ( nurl_eprintln ( string_data . d name ) ) ^ @ !String i { F 1 } }
         }
     } {}
-    // Registry dep: newest non-yanked published version.
-    : ~ String reg ( string_new )
-    ? > ( string_len . d registry ) 0 {
-        ( string_free reg )
-        = reg ( string_from ( string_data . d registry ) )
-    } {
-        ( string_free reg )
-        = reg ( __registry_url m )
+    : String reg ? > ( string_len . d registry ) 0 ( string_clone . d registry ) ( __registry_url m )
+    : !RegIndex RegistryFetchErr result ( pkg_fetch_index ( string_data reg ) ( string_data . d name ) )
+    ?? result {
+        F error → {
+            ?? error {
+                RegistryNotFound → { ( string_free reg ) ^ @ !String i { T ( string_new ) } }
+                _ → { ( __report_registry_fetch ( string_data reg ) ( string_data . d name ) error ) }
+            }
+            ( string_free reg ) ^ @ !String i { F 1 }
+        }
+        T index → {
+            ( string_free reg )
+            : ~ String out ( string_new )
+            : i selected ( regindex_select index `*` )
+            ? >= selected 0 {
+                : IdxVersion version . ( vec_data [IdxVersion] . index versions ) selected
+                ( string_free out ) = out ( string_clone . version version )
+            } {}
+            ( regindex_free index )
+            ^ @ !String i { T out }
+        }
     }
-    : String body ( pkg_fetch_index ( string_data reg ) ( string_data . d name ) )
-    ( string_free reg )
-    : ~ String out ( string_new )
-    ? > ( string_len body ) 0 {
-        ?? ( regindex_parse ( string_data body ) ) {
-            T idx → {
-                : i sel ( regindex_select idx `*` )
-                ? >= sel 0 {
-                    : ?IdxVersion vo ( vec_get [IdxVersion] . idx versions sel )
-                    ?? vo {
-                        T v → {
-                            ( string_free out )
-                            = out ( string_from ( string_data . v version ) )
-                        }
-                        F → {}
-                    }
-                } {}
-                ( regindex_free idx )
-            }
-            F _ → {}
-        }
-    } {}
-    ( string_free body )
-    ^ out
 }
 
 // True when `oldreq` already admits `ver` — nothing to update. An
@@ -1425,47 +1423,51 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                                 ( nurl_print dname )
                                 ( nurl_print `: path-only (no version requirement) — skipped\n` )
                             } {
-                                : String cand ( __update_candidate m d )
-                                : s oldreq ( string_data . d version )
-                                ? == ( string_len cand ) 0 {
-                                    ( nurl_print `  ` )
-                                    ( nurl_print dname )
-                                    ( nurl_print `: no published version found — skipped\n` )
-                                } {
-                                    ? ( __req_admits oldreq ( string_data cand ) ) {
-                                        ( nurl_print `  ` )
-                                        ( nurl_print dname )
-                                        ( nurl_print ` ` )
-                                        ( nurl_print oldreq )
-                                        ( nurl_print ` — up to date (newest is ` )
-                                        ( nurl_print ( string_data cand ) )
-                                        ( nurl_print `)\n` )
-                                    } {
-                                        : String newreq ( __styled_req oldreq ( string_data cand ) )
-                                        : ~ b go != 0 all
-                                        ? == all 0 {
-                                            = go ( __confirm_update dname oldreq ( string_data newreq ) )
-                                        } {}
-                                        ? go {
-                                            ? == ( __rewrite_dep_req dname ( string_data newreq ) ) 0 {
-                                                ( nurl_print `  ` )
-                                                ( nurl_print dname )
-                                                ( nurl_print `: ` )
-                                                ( nurl_print oldreq )
-                                                ( nurl_print ` -> ` )
-                                                ( nurl_print ( string_data newreq ) )
-                                                ( nurl_print `\n` )
-                                                = changed + changed 1
-                                            } { = failed + failed 1 }
-                                        } {
+                                ?? ( __update_candidate m d ) {
+                                    F _ → { = failed + failed 1 }
+                                    T cand → {
+                                        : s oldreq ( string_data . d version )
+                                        ? == ( string_len cand ) 0 {
                                             ( nurl_print `  ` )
                                             ( nurl_print dname )
-                                            ( nurl_print `: skipped\n` )
+                                            ( nurl_print `: no published version found — skipped\n` )
+                                        } {
+                                            ? ( __req_admits oldreq ( string_data cand ) ) {
+                                                ( nurl_print `  ` )
+                                                ( nurl_print dname )
+                                                ( nurl_print ` ` )
+                                                ( nurl_print oldreq )
+                                                ( nurl_print ` — up to date (newest is ` )
+                                                ( nurl_print ( string_data cand ) )
+                                                ( nurl_print `)\n` )
+                                            } {
+                                                : String newreq ( __styled_req oldreq ( string_data cand ) )
+                                                : ~ b go != 0 all
+                                                ? == all 0 {
+                                                    = go ( __confirm_update dname oldreq ( string_data newreq ) )
+                                                } {}
+                                                ? go {
+                                                    ? == ( __rewrite_dep_req dname ( string_data newreq ) ) 0 {
+                                                        ( nurl_print `  ` )
+                                                        ( nurl_print dname )
+                                                        ( nurl_print `: ` )
+                                                        ( nurl_print oldreq )
+                                                        ( nurl_print ` -> ` )
+                                                        ( nurl_print ( string_data newreq ) )
+                                                        ( nurl_print `\n` )
+                                                        = changed + changed 1
+                                                    } { = failed + failed 1 }
+                                                } {
+                                                    ( nurl_print `  ` )
+                                                    ( nurl_print dname )
+                                                    ( nurl_print `: skipped\n` )
+                                                }
+                                                ( string_free newreq )
+                                            }
                                         }
-                                        ( string_free newreq )
+                                        ( string_free cand )
                                     }
                                 }
-                                ( string_free cand )
                             }
                         } {}
                     }
@@ -1719,57 +1721,14 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 }
 
 // ── lockfile ────────────────────────────────────────────────────
-//
-// `nurl.lock` is a Cargo-shaped lockfile: one [[package]] block per
-// resolved dependency. We regenerate from the actual on-disk `deps/`
-// tree (resolved symlinks → manifests), so the lockfile is a pure
-// "snapshot of current install state" rather than a separate state
-// machine. Entries are sorted alphabetically by package name for
-// deterministic diffs.
-
-// Append `name = "<value>"` to `out`. Values are NOT escaped — TOML's
-// basic-string escape rules apply (\\, \", \n, \t, \r). v1: the
-// fields we write (name, version, source) come from manifests that
-// already passed our own parser, and source paths are filesystem
-// paths that on POSIX cannot contain " or \. If a Windows port lands
-// or someone hand-crafts a manifest with quoted strings, this needs
-// proper escaping.
-@ __lock_kv_str String out s key s value → v {
-    ( string_push_str out key )
-    ( string_push_str out ` = "` )
-    ( string_push_str out value )
-    ( string_push_str out `"\n` )
-}
-
-// Write the lockfile by walking deps/. Returns 0 on success, 1 on
-// any I/O failure. Missing deps/ is treated as an empty install →
-// writes an empty lockfile (so a project with zero deps still gets
-// a tracked file for reproducibility).
+// Refresh local development versions while retaining existing registry
+// records. All records are validated before the shared serializer writes them.
 @ __write_lockfile ( Vec LockPkg ) regpkgs → i {
-    : ( Vec String ) names ( vec_new [String] )
+    ? ! ( __registry_layout_valid regpkgs ) { ^ 1 } {}
+    : ~ ( Vec String ) names ( vec_new [String] )
     ? ( file_exists `deps` ) {
-        : !( Vec String ) IoErr lr ( dir_list `deps` )
-        ?? lr {
-            T entries → {
-                : i n ( vec_len [String] entries )
-                : ~ i k 0
-                ~ < k n {
-                    : ?String ek ( vec_get [String] entries k )
-                    ?? ek {
-                        T name → ( vec_push [String] names ( string_from ( string_data name ) ) )
-                        F _ → {}
-                    }
-                    = k + k 1
-                }
-                : i fn ( vec_len [String] entries )
-                : ~ i fk 0
-                ~ < fk fn {
-                    : ?String pk ( vec_get [String] entries fk )
-                    ?? pk { T s → ( string_free s ) F _ → {} }
-                    = fk + fk 1
-                }
-                ( vec_free [String] entries )
-            }
+        ?? ( dir_list `deps` ) {
+            T entries → { ( vec_free [String] names ) = names entries }
             F _ → {
                 ( nurl_eprintln `nurlpkg: failed to list deps/ directory while writing lockfile` )
                 ( vec_free [String] names )
@@ -1777,88 +1736,101 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             }
         }
     } {}
-    ( sort_by [String] names \ String a String b → i { ^ ( cmp_string a b ) } )
-
-    : String body ( string_with_cap 512 )
-    ( string_push_str body `# nurl.lock — generated by nurlpkg.\n` )
-    ( string_push_str body `# Do not edit this file by hand.\n` )
-    ( string_push_str body `version = 1\n` )
-
-    : i nn ( vec_len [String] names )
-    : ~ i j 0
-    ~ < j nn {
-        : ?String nk ( vec_get [String] names j )
-        ?? nk {
+    : ( Vec LockPkg ) actual ( vec_new [LockPkg] )
+    : ~ b valid T
+    : i n ( vec_len [String] names )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] names k ) {
             T name → {
-                // Read deps/<name>/nurl.toml — go through the symlink
-                // transparently. If the target has no manifest, skip
-                // silently (install would have warned about it).
-                : String mfpath ( string_from `deps/` )
-                ( string_push_str mfpath ( string_data name ) )
+                : String source ( string_from `deps/` )
+                ( string_push_str source ( string_data name ) )
+                : String mfpath ( string_from ( string_data source ) )
                 ( string_push_str mfpath `/nurl.toml` )
                 ? ( file_exists ( string_data mfpath ) ) {
-                    : !Manifest ManifestErr mr ( manifest_load ( string_data mfpath ) )
-                    ?? mr {
+                    ?? ( manifest_load ( string_data mfpath ) ) {
+                        F _ → {
+                            = valid F
+                            ( nurl_eprint `nurlpkg: unreadable package manifest: ` )
+                            ( nurl_eprintln ( string_data mfpath ) )
+                        }
                         T m → {
-                            ( string_push_str body `\n[[package]]\n` )
-                            ( __lock_kv_str body `name` ( string_data . m name ) )
-                            ( __lock_kv_str body `version` ( string_data . m version ) )
-                            : i ridx ( __reg_lookup regpkgs ( string_data . m name ) )
-                            ? >= ridx 0 {
-                                // Registry dep: pin the registry source +
-                                // tarball checksum from resolution.
-                                : ?LockPkg rpo ( vec_get [LockPkg] regpkgs ridx )
-                                ?? rpo {
-                                    T rp → {
-                                        ( __lock_kv_str body `source` ( string_data . rp source ) )
-                                        ? > ( string_len . rp checksum ) 0 {
-                                            ( __lock_kv_str body `checksum` ( string_data . rp checksum ) )
+                            // Lookup by the installed directory, not by untrusted
+                            // manifest contents that could rename the package.
+                            : i prior ( __reg_lookup regpkgs ( string_data name ) )
+                            : ~ b registry F
+                            ? >= prior 0 {
+                                ?? ( vec_get [LockPkg] regpkgs prior ) {
+                                    T p → {
+                                        = registry != 0 ( nurl_str_starts ( string_data . p source ) `registry+` )
+                                        ? registry {
+                                            ? | == 0 ( nurl_str_eq ( string_data . p name ) ( string_data . m name ) )
+                                            == 0 ( nurl_str_eq ( string_data . p version ) ( string_data . m version ) ) {
+                                                = valid F
+                                                ( nurl_eprint `nurlpkg: installed version differs or package name changed from locked identity: ` )
+                                                ( nurl_eprintln ( string_data name ) )
+                                            } {}
+                                            ( vec_push [LockPkg] actual ( lock_pkg_new
+                                            ( string_data . p name ) ( string_data . p version )
+                                            ( string_data . p source ) ( string_data . p checksum ) ) )
                                         } {}
                                     }
-                                    F → {}
+                                    F _ → {}
                                 }
-                            } {
-                                // Path dep: source is the local deps/ entry.
-                                : String src ( string_from `deps/` )
-                                ( string_push_str src ( string_data name ) )
-                                ( __lock_kv_str body `source` ( string_data src ) )
-                                ( string_free src )
-                            }
+                            } {}
+                            ? ! registry {
+                                ( vec_push [LockPkg] actual ( lock_pkg_new ( string_data . m name )
+                                ( string_data . m version ) ( string_data source ) `` ) )
+                            } {}
                             ( manifest_free m )
-                        }
-                        F _ → {
-                            // Manifest reachable through the symlink
-                            // but unparseable. Skip the entry.
-                            ( nurl_eprint `  warning: deps/` )
-                            ( nurl_eprint ( string_data name ) )
-                            ( nurl_eprintln `/nurl.toml is unparseable — omitted from lockfile` )
                         }
                     }
                 } {}
                 ( string_free mfpath )
+                ( string_free source )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] names \ String name → v { ( string_free name ) } )
+    // A missing directory/manifest cannot erase a registry pin. Local packages
+    // can be removed or updated during development and are refreshed from disk.
+    : i count ( vec_len [LockPkg] regpkgs )
+    : ~ i j 0
+    ~ < j count {
+        ?? ( vec_get [LockPkg] regpkgs j ) {
+            T p → {
+                ? != 0 ( nurl_str_starts ( string_data . p source ) `registry+` ) {
+                    : i found ( __reg_lookup actual ( string_data . p name ) )
+                    : ~ b retained F
+                    ? >= found 0 {
+                        ?? ( vec_get [LockPkg] actual found ) {
+                            T q → { = retained != 0 ( nurl_str_eq ( string_data . p source ) ( string_data . q source ) ) }
+                            F _ → {}
+                        }
+                    } {}
+                    ? ! retained {
+                        = valid F
+                        ( nurl_eprint `nurlpkg: locked registry package is missing: ` )
+                        ( nurl_eprintln ( string_data . p name ) )
+                    } {}
+                } {}
             }
             F _ → {}
         }
         = j + j 1
     }
-
-    : !v IoErr wr ( write_file `nurl.lock` ( string_data body ) )
-    ( string_free body )
-    : ~ i nfree 0
-    ~ < nfree nn {
-        : ?String pk ( vec_get [String] names nfree )
-        ?? pk { T s → ( string_free s ) F _ → {} }
-        = nfree + nfree 1
-    }
-    ( vec_free [String] names )
-    : ~ i rc 0
-    ?? wr {
-        T _ → {}
-        F _ → {
-            ( nurl_eprintln `nurlpkg: failed to write nurl.lock` )
-            = rc 1
+    : ~ i rc 1
+    ? & valid ( __registry_layout_valid actual ) {
+        : String body ( lock_serialize actual )
+        ?? ( write_file `nurl.lock` ( string_data body ) ) {
+            T _ → { = rc 0 }
+            F _ → { ( nurl_eprintln `nurlpkg: failed to write nurl.lock` ) }
         }
-    }
+        ( string_free body )
+    } {}
+    ( lockpkgs_free actual )
     ^ rc
 }
 
@@ -2053,14 +2025,81 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         ( nurl_eprintln `nurlpkg: no nurl.toml in the current directory` )
         ^ 1
     } {}
-    // `lock` regenerates from the on-disk deps/ tree only; it does not
-    // re-resolve registry deps over the network, so registry checksums
-    // come from `install`. Pass an empty registry set here.
-    : ( Vec LockPkg ) empty ( vec_new [LockPkg] )
-    : i rc ( __write_lockfile empty )
-    ( lockpkgs_free empty )
+    // Preserve existing registry identities when refreshing disk state.
+    // An unreadable existing lock is an error, never an empty replacement.
+    : ~ ( Vec LockPkg ) existing ( vec_new [LockPkg] )
+    ? ( file_exists `nurl.lock` ) {
+        ?? ( lock_load `nurl.lock` ) {
+            T locked → { ( lockpkgs_free existing ) = existing locked }
+            F _ → {
+                ( lockpkgs_free existing )
+                ( nurl_eprintln `nurlpkg: cannot read existing nurl.lock` )
+                ^ 1
+            }
+        }
+    } {}
+    : i rc ( __write_lockfile existing )
+    ( lockpkgs_free existing )
     ? == rc 0 { ( nurl_print `wrote nurl.lock\n` ) } {}
     ^ rc
+}
+
+// The current import/install layout exposes one deps/<name> entry. A
+// same-name source conflict must be reported before either source writes it.
+@ __registry_layout_valid ( Vec LockPkg ) locked → b {
+    : i n ( vec_len [LockPkg] locked )
+    : *LockPkg data ( vec_data [LockPkg] locked )
+    : ~ i k 0
+    ~ < k n {
+        : LockPkg a . data k
+        : ~ i j + k 1
+        ~ < j n {
+            : LockPkg b . data j
+            ? & != 0 ( nurl_str_eq ( string_data . a name ) ( string_data . b name ) )
+            == 0 ( nurl_str_eq ( string_data . a source ) ( string_data . b source ) ) {
+                ( nurl_eprint `nurlpkg: dependency name has multiple registry sources in the flat deps/ layout: ` )
+                ( nurl_eprintln ( string_data . a name ) )
+                ^ F
+            } {}
+            = j + j 1
+        }
+        = k + k 1
+    }
+    ^ T
+}
+
+@ __registry_batch_trust ( Vec LockPkg ) locked → !RegistryTrust RegistryTrustErr {
+    ? ! ( __registry_layout_valid locked ) { ^ @ !RegistryTrust RegistryTrustErr { F RegistryBadConfig } } {}
+    ?? ( registry_trust_load ) {
+        F e → { ( nurl_eprintln `nurlpkg: invalid registry trust configuration` ) ^ @ !RegistryTrust RegistryTrustErr { F e } }
+        T trust → {
+            : ~ b ok T
+            : i n ( vec_len [LockPkg] locked )
+            : ~ i k 0
+            ~ & ok < k n {
+                ?? ( vec_get [LockPkg] locked k ) {
+                    T p → {
+                        ?? ( registry_from_source ( string_data . p source ) ) {
+                            F empty → { ( string_free empty ) = ok F }
+                            T registry → {
+                                ? == ( nurl_str_len ( registry_trust_key trust ( string_data registry ) ) ) 0 {
+                                    ( nurl_eprint `nurlpkg: no trusted signing key for registry ` )
+                                    ( nurl_eprintln ( string_data registry ) )
+                                    = ok F
+                                } {}
+                                ( string_free registry )
+                            }
+                        }
+                    }
+                    F _ → { = ok F }
+                }
+                = k + k 1
+            }
+            ? ok { ^ @ !RegistryTrust RegistryTrustErr { T trust } } {}
+            ( registry_trust_free trust )
+            ^ @ !RegistryTrust RegistryTrustErr { F RegistryBadConfig }
+        }
+    }
 }
 
 // Resolve + download + verify + unpack the registry dependencies of `m`
@@ -2078,45 +2117,49 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ( nurl_print `resolving registry dependencies against ` )
     ( nurl_print ( string_data reg ) )
     ( nurl_print `\n` )
-    : ( @ String s ) fetch \ s nm → String { ^ ( pkg_fetch_index ( string_data reg ) nm ) }
+    : ( @ !RegIndex RegistryFetchErr s s ) fetch \ s registry s nm → !RegIndex RegistryFetchErr { ^ ( pkg_fetch_index registry nm ) }
     : ~ i rc 0
     : !( Vec LockPkg ) ResolveErr rr ( resolve_registry roots ( string_data reg ) fetch )
     ?? rr {
         F e → {
-            ( nurl_eprint `nurlpkg: registry resolution failed (` )
-            ( nurl_eprint ( resolve_err_name e ) )
-            ( nurl_eprintln `)` )
+            ( __report_resolve_error e )
             = rc 1
         }
         T locked → {
-            : i ln ( vec_len [LockPkg] locked )
-            : ~ i k 0
-            ~ < k ln {
-                : ?LockPkg po ( vec_get [LockPkg] locked k )
-                ?? po {
-                    T p → {
-                        : !i PkgFetchErr ir ( pkg_install_one ( string_data reg ) ( string_data . p name ) ( string_data . p version ) ( string_data . p checksum ) `deps` )
-                        ?? ir {
-                            T _ → {
-                                ( nurl_print `  ` ) ( nurl_print ( string_data . p name ) )
-                                ( nurl_print ` ` ) ( nurl_print ( string_data . p version ) )
-                                ( nurl_print ` (registry)\n` )
-                                ( vec_push [LockPkg] out ( lock_pkg_new
-                                ( string_data . p name )
-                                ( string_data . p version )
-                                ( string_data . p source )
-                                ( string_data . p checksum ) ) )
+            ?? ( __registry_batch_trust locked ) {
+                F _ → { = rc 1 }
+                T trust → {
+                    : i ln ( vec_len [LockPkg] locked )
+                    : ~ i k 0
+                    ~ < k ln {
+                        : ?LockPkg po ( vec_get [LockPkg] locked k )
+                        ?? po {
+                            T p → {
+                                : !i PkgFetchErr ir ( pkg_install_locked trust p `deps` )
+                                ?? ir {
+                                    T _ → {
+                                        ( nurl_print `  ` ) ( nurl_print ( string_data . p name ) )
+                                        ( nurl_print ` ` ) ( nurl_print ( string_data . p version ) )
+                                        ( nurl_print ` (registry)\n` )
+                                        ( vec_push [LockPkg] out ( lock_pkg_new
+                                        ( string_data . p name )
+                                        ( string_data . p version )
+                                        ( string_data . p source )
+                                        ( string_data . p checksum ) ) )
+                                    }
+                                    F fe → {
+                                        ( nurl_eprint `  ` ) ( nurl_eprint ( string_data . p name ) )
+                                        ( nurl_eprint `: ` ) ( nurl_eprintln ( pkg_err_name fe ) )
+                                        = rc 1
+                                    }
+                                }
                             }
-                            F fe → {
-                                ( nurl_eprint `  ` ) ( nurl_eprint ( string_data . p name ) )
-                                ( nurl_eprint `: ` ) ( nurl_eprintln ( pkg_err_name fe ) )
-                                = rc 1
-                            }
+                            F → {}
                         }
+                        = k + k 1
                     }
-                    F → {}
+                    ( registry_trust_free trust )
                 }
-                = k + k 1
             }
             ( lockpkgs_free locked )
         }
@@ -2241,38 +2284,23 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 
 @ __cmd_registry_info s name → i {
     : String reg ( __reg_default )
-    : String body ( pkg_fetch_index ( string_data reg ) name )
+    : !RegIndex RegistryFetchErr response ( pkg_fetch_index ( string_data reg ) name )
     : ~ i rc 0
-    ? == ( string_len body ) 0 {
-        ( nurl_eprint `nurlpkg: package not found: ` ) ( nurl_eprintln name )
-        = rc 1
-    } {
-        : !RegIndex RegIndexErr ir ( regindex_parse ( string_data body ) )
-        ?? ir {
-            F _ → { ( nurl_eprintln `nurlpkg: bad index response` ) = rc 1 }
-            T idx → {
-                ( nurl_print ( string_data . idx name ) ) ( nurl_print `\nversions:\n` )
-                : i n ( vec_len [IdxVersion] . idx versions )
-                : ~ i k 0
-                ~ < k n {
-                    : ?IdxVersion vo ( vec_get [IdxVersion] . idx versions k )
-                    ?? vo {
-                        T v → {
-                            ( nurl_print `  ` ) ( nurl_print ( string_data . v version ) )
-                            ? . v yanked { ( nurl_print ` (yanked)` ) } {}
-                            ( nurl_print `\n` )
-                        }
-                        F → {}
-                    }
-                    = k + k 1
-                }
-                ( regindex_free idx )
+    ?? response {
+        F error → { ( __report_registry_fetch ( string_data reg ) name error ) = rc 1 }
+        T idx → {
+            ( nurl_print ( string_data . idx name ) ) ( nurl_print `\nversions:\n` )
+            : ~ i k 0
+            ~ < k ( vec_len [IdxVersion] . idx versions ) {
+                : IdxVersion version . ( vec_data [IdxVersion] . idx versions ) k
+                ( nurl_print `  ` ) ( nurl_print ( string_data . version version ) )
+                ? . version yanked { ( nurl_print ` (yanked)` ) } {}
+                ( nurl_print `\n` ) = k + k 1
             }
+            ( regindex_free idx )
         }
     }
-    ( string_free body )
-    ( string_free reg )
-    ^ rc
+    ( string_free reg ) ^ rc
 }
 
 // ── yank / unyank ────────────────────────────────────────────────
@@ -2602,22 +2630,19 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 }
 
 // Typecheck the package's entry point with the toolchain the user will
-// actually install with: front-end only, no link step (nurlc writes IR to
-// stdout, which is discarded), so this needs no C toolchain and costs a
+// actually install with: --check runs the front end without emitting IR or
+// linking, so this needs no C toolchain and costs a
 // fraction of a build.
 //
 // Which toolchain that is comes from __toolchain_stdlib_root — $NURL_STDLIB
 // when set, else ~/.nurl. Pointing $NURL_STDLIB at a checkout therefore aims
-// the gate at that checkout, which is the documented escape hatch for "I am
-// publishing against this tree, not the release" and makes the check pass
-// trivially. That is deliberate; the default, with $NURL_STDLIB unset, is the
-// one that protects users.
+// the gate at that tree's bin/nurlc and stdlib. The default, with NURL_STDLIB
+// unset, checks the installed release. Either target must actually compile
+// the package successfully.
 //
-// Two conditions leave the question unanswered rather than answered "yes":
-// no compiler at <root>/bin/nurlc, and a compiler that will not launch. Both
-// WARN on stderr and let the publish through — an unverifiable gate has to say
-// so out loud rather than pass quietly, and refusing would make the tool
-// unusable on a box that has no toolchain installed.
+// Missing or unlaunchable compilers cannot establish compatibility. Refuse
+// publication in both cases. Invoke the compiler with argv, never shell text:
+// toolchain paths are literal paths even when they contain shell metacharacters.
 @ __installed_nurlc String root → String {
     : String p ( string_from ( string_data root ) )
     ( string_push_str p ? ( __is_windows ) `/bin/nurlc.exe` `/bin/nurlc` )
@@ -2629,55 +2654,57 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 @ __check_builds_against_installed → i {
     ? ! ( file_exists `src/main.nu` ) { ^ 0 } {}
     : String root ( __toolchain_stdlib_root )
-    ? == 0 ( string_len root ) { ( string_free root ) ^ 0 } {}
+    ? == 0 ( string_len root ) {
+        ( nurl_eprintln `nurlpkg: cannot locate the target toolchain; set NURL_STDLIB or install the toolchain under HOME/.nurl before publishing.` )
+        ( string_free root )
+        ^ 1
+    } {}
 
     : String cc ( __installed_nurlc root )
     ? == 0 ( string_len cc ) {
-        ( nurl_eprint `nurlpkg: WARNING — no installed compiler at ` )
-        ( nurl_eprint ( string_data root ) )
-        ( nurl_eprintln `/bin/nurlc, so "does this build against the released toolchain?" went UNCHECKED.` )
-        ( nurl_eprintln `nurlpkg:          Install the toolchain you are targeting before publishing.` )
+        ( nurl_eprint `nurlpkg: no installed compiler under ` )
+        ( nurl_eprintln ( string_data root ) )
+        ( nurl_eprintln `nurlpkg: install the target toolchain before publishing; compilation was not checked.` )
         ( string_free cc )
         ( string_free root )
-        ^ 0
+        ^ 1
     } {}
 
-    : String cmd ( string_with_cap 160 )
-    ( string_push_str cmd `NURL_STDLIB=` )
-    ( string_push_str cmd ( string_data root ) )
-    ( string_push_char cmd 32 )
-    ( string_push_str cmd ( string_data cc ) )
-    ( string_push_str cmd ` src/main.nu >/dev/null` )
+    // Pin the selected root for this command's children. In particular, an
+    // unset or empty NURL_STDLIB must use HOME/.nurl, not a compiler checkout
+    // discovered by the compiler's own import fallback.
+    ?? ( env_set `NURL_STDLIB` ( string_data root ) ) {
+        T _ → {}
+        F _ → {
+            ( nurl_eprintln `nurlpkg: could not configure the target toolchain environment; publication refused.` )
+            ( string_free cc )
+            ( string_free root )
+            ^ 1
+        }
+    }
 
     : ~ i bad 0
-    ?? ( process_run_shell ( string_data cmd ) ) {
+    ?? ( process_run2 ( string_data cc ) `--check` `src/main.nu` ) {
         T out → {
             ? ( output_success out ) {} {
                 : s err ( output_stderr out )
                 ( nurl_eprint `nurlpkg: this package does not compile against the INSTALLED toolchain at ` )
                 ( nurl_eprintln ( string_data root ) )
                 ( nurl_eprint err )
-                // Two very different causes land here, and telling the
-                // publisher the wrong one wastes their afternoon: an
-                // unresolved deps/ tree is "run the build first", while
-                // anything else is "the released stdlib is too old".
-                ? > ( nurl_str_find err `cannot open import 'deps/` ) -1 {
-                    ( nurl_eprintln `nurlpkg: deps/ is not resolved in this working tree — run 'nurlpkg build' (or link the` )
-                    ( nurl_eprintln `nurlpkg: path deps) and try again. Nothing about the released toolchain was established.` )
-                } {
-                    ( nurl_eprintln `nurlpkg: every imported stdlib FILE exists there, but something the package calls does not.` )
-                    ( nurl_eprintln `nurlpkg: publishing is irreversible, so this is refused — cut a toolchain release that ships` )
-                    ( nurl_eprintln `nurlpkg: what this needs first, then publish.` )
-                }
+                ( nurl_eprintln `nurlpkg: resolve the compiler diagnostics and rerun publication; target-toolchain compatibility has not been established.` )
                 = bad 1
             }
             ( output_free out )
         }
-        F _ → {
-            ( nurl_eprintln `nurlpkg: WARNING — could not launch the installed compiler; the released-toolchain build went UNCHECKED.` )
+        F error → {
+            ( nurl_eprint `nurlpkg: could not launch the installed compiler (` )
+            ( nurl_eprint ( process_err_name error ) )
+            ( nurl_eprint `): ` )
+            ( nurl_eprintln ( string_data cc ) )
+            ( nurl_eprintln `nurlpkg: compilation was not checked; publication refused.` )
+            = bad 1
         }
     }
-    ( string_free cmd )
     ( string_free cc )
     ( string_free root )
     ^ bad
@@ -2858,46 +2885,45 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                         T dm → {
                             : s dname ( string_data . dm name )
                             : s dver ( string_data . dm version )
-                            : String idx ( pkg_fetch_index reg dname )
-                            ? > ( string_len idx ) 0 {
-                                ?? ( regindex_parse ( string_data idx ) ) {
-                                    T ridx → {
-                                        // is THIS local version already published?
-                                        : ~ i hit -1
-                                        : ~ i vi 0
-                                        ~ < vi ( vec_len [IdxVersion] . ridx versions ) {
-                                            ?? ( vec_get [IdxVersion] . ridx versions vi ) {
-                                                T iv → {
-                                                    ? ( nurl_str_eq ( string_data . iv version ) dver ) { = hit vi } {}
-                                                }
-                                                F → {}
+                            ?? ( pkg_fetch_index reg dname ) {
+                                T ridx → {
+                                    // is THIS local version already published?
+                                    : ~ i hit -1
+                                    : ~ i vi 0
+                                    ~ < vi ( vec_len [IdxVersion] . ridx versions ) {
+                                        ?? ( vec_get [IdxVersion] . ridx versions vi ) {
+                                            T iv → {
+                                                ? ( nurl_str_eq ( string_data . iv version ) dver ) { = hit vi } {}
                                             }
-                                            = vi + vi 1
+                                            F → {}
                                         }
-                                        ? >= hit 0 {
-                                            ?? ( vec_get [IdxVersion] . ridx versions hit ) {
-                                                T iv → {
-                                                    ? != 0 ( __dep_drifts reg dname ( string_data . iv version ) ( string_data . iv checksum ) ( string_data . d path ) ) {
-                                                        ( nurl_eprint `nurlpkg: local '` )
-                                                        ( nurl_eprint dname )
-                                                        ( nurl_eprint `' differs from the published ` )
-                                                        ( nurl_eprint dname )
-                                                        ( nurl_eprint ` ` )
-                                                        ( nurl_eprint dver )
-                                                        ( nurl_eprintln ` — bump its version and publish it BEFORE publishing this package.` )
-                                                        ( nurl_eprintln `  (a path dep is built locally here but fetched from the registry by everyone else)` )
-                                                        = bad 1
-                                                    } {}
-                                                }
-                                                F → {}
-                                            }
-                                        } {}
-                                        ( regindex_free ridx )
+                                        = vi + vi 1
                                     }
-                                    F _ → {}
+                                    ? >= hit 0 {
+                                        ?? ( vec_get [IdxVersion] . ridx versions hit ) {
+                                            T iv → {
+                                                ? != 0 ( __dep_drifts reg dname ( string_data . iv version ) ( string_data . iv checksum ) ( string_data . d path ) ) {
+                                                    ( nurl_eprint `nurlpkg: local '` )
+                                                    ( nurl_eprint dname )
+                                                    ( nurl_eprint `' differs from the published ` )
+                                                    ( nurl_eprint dname )
+                                                    ( nurl_eprint ` ` )
+                                                    ( nurl_eprint dver )
+                                                    ( nurl_eprintln ` — bump its version and publish it BEFORE publishing this package.` )
+                                                    ( nurl_eprintln `  (a path dep is built locally here but fetched from the registry by everyone else)` )
+                                                    = bad 1
+                                                } {}
+                                            }
+                                            F → {}
+                                        }
+                                    } {}
+                                    ( regindex_free ridx )
                                 }
-                            } {}
-                            ( string_free idx )
+                                F error → { ?? error {
+                                        RegistryNotFound → {}
+                                        _ → { ( __report_registry_fetch reg dname error ) = bad 1 }
+                                    } }
+                            }
                             ( manifest_free dm )
                         }
                         F _ → {}
@@ -2965,6 +2991,16 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ^ drift
 }
 
+// These checks borrow the manifest and registry. Keep their early returns
+// outside the command's owning scope so every failure reaches one cleanup path.
+@ __check_publish Manifest m s reg → i {
+    ? != 0 ( __check_declared_deps m ) { ^ 1 } {}
+    ? != 0 ( __check_stdlib_available ) { ^ 1 } {}
+    ? != 0 ( __check_builds_against_installed ) { ^ 1 } {}
+    ? != 0 ( __check_pathdep_req m ) { ^ 1 } {}
+    ^ ( __check_pathdep_drift m reg )
+}
+
 @ __cmd_publish b dry → i {
     ? ! ( file_exists `nurl.toml` ) {
         ( nurl_eprintln `nurlpkg: no nurl.toml in the current directory` )
@@ -2986,145 +3022,129 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ( nurl_eprintln `nurlpkg: no auth token — run 'nurlpkg login' or set $NURL_TOKEN` )
                 = rc 1
             } {
-                ? != 0 ( __check_declared_deps m ) {
-                    ( manifest_free m )
-                    ^ 1
-                } {}
-                ? != 0 ( __check_stdlib_available ) {
-                    ( manifest_free m )
-                    ^ 1
-                } {}
-                ? != 0 ( __check_builds_against_installed ) {
-                    ( manifest_free m )
-                    ^ 1
-                } {}
-                ? != 0 ( __check_pathdep_req m ) {
-                    ( manifest_free m )
-                    ^ 1
-                } {}
-                ? != 0 ( __check_pathdep_drift m ( string_data reg ) ) {
-                    ( manifest_free m )
-                    ^ 1
-                } {}
-                : !( Vec u ) PackErr pr ( pkg_pack `.` )
-                ?? pr {
-                    F pe → {
-                        ( nurl_eprint `nurlpkg: packaging failed (` )
-                        ( nurl_eprint ( pack_err_name pe ) )
-                        ( nurl_eprintln `)` )
-                        = rc 1
-                    }
-                    T tarball → {
-                        : ( Vec u ) digest ( sha256_pure tarball )
-                        : String hex ( bytes_to_hex digest )
-                        ( nurl_print ? dry `dry-run: would publish ` `publishing ` )
-                        ( nurl_print ( string_data . m name ) )
-                        ( nurl_print ` ` )
-                        ( nurl_print ( string_data . m version ) )
-                        ( nurl_print ` (` )
-                        ( nurl_print ( nurl_str_int ( vec_len [u] tarball ) ) )
-                        ( nurl_print ` bytes, sha256 ` )
-                        ( nurl_print ( string_data hex ) )
-                        ( nurl_print `)\nto ` )
-                        ( nurl_print ( string_data reg ) )
-                        ( nurl_print `\n` )
-                        ? dry {
-                            // What is IN the tarball, not just how big it is.
-                            // The packer decides what counts as source, and a
-                            // wrong answer in either direction used to look
-                            // exactly like success.
-                            ?? ( pkg_pack_list `.` ) {
-                                T files → {
-                                    ( nurl_print `dry-run: ` )
-                                    ( nurl_print ( nurl_str_int ( vec_len [String] files ) ) )
-                                    ( nurl_print ` files:\n` )
-                                    : i fn ( vec_len [String] files )
-                                    : ~ i fk 0
-                                    ~ < fk fn {
-                                        ?? ( vec_get [String] files fk ) {
-                                            T fp → {
-                                                ( nurl_print `  ` )
-                                                ( nurl_print ( string_data fp ) )
-                                                ( nurl_print `\n` )
+                ? != 0 ( __check_publish m ( string_data reg ) ) {
+                    = rc 1
+                } {
+                    : !( Vec u ) PackErr pr ( pkg_pack `.` )
+                    ?? pr {
+                        F pe → {
+                            ( nurl_eprint `nurlpkg: packaging failed (` )
+                            ( nurl_eprint ( pack_err_name pe ) )
+                            ( nurl_eprintln `)` )
+                            = rc 1
+                        }
+                        T tarball → {
+                            : ( Vec u ) digest ( sha256_pure tarball )
+                            : String hex ( bytes_to_hex digest )
+                            ( nurl_print ? dry `dry-run: would publish ` `publishing ` )
+                            ( nurl_print ( string_data . m name ) )
+                            ( nurl_print ` ` )
+                            ( nurl_print ( string_data . m version ) )
+                            ( nurl_print ` (` )
+                            ( nurl_print ( nurl_str_int ( vec_len [u] tarball ) ) )
+                            ( nurl_print ` bytes, sha256 ` )
+                            ( nurl_print ( string_data hex ) )
+                            ( nurl_print `)\nto ` )
+                            ( nurl_print ( string_data reg ) )
+                            ( nurl_print `\n` )
+                            ? dry {
+                                // What is IN the tarball, not just how big it is.
+                                // The packer decides what counts as source, and a
+                                // wrong answer in either direction used to look
+                                // exactly like success.
+                                ?? ( pkg_pack_list `.` ) {
+                                    T files → {
+                                        ( nurl_print `dry-run: ` )
+                                        ( nurl_print ( nurl_str_int ( vec_len [String] files ) ) )
+                                        ( nurl_print ` files:\n` )
+                                        : i fn ( vec_len [String] files )
+                                        : ~ i fk 0
+                                        ~ < fk fn {
+                                            ?? ( vec_get [String] files fk ) {
+                                                T fp → {
+                                                    ( nurl_print `  ` )
+                                                    ( nurl_print ( string_data fp ) )
+                                                    ( nurl_print `\n` )
+                                                }
+                                                F _ → {}
                                             }
-                                            F _ → {}
+                                            = fk + fk 1
                                         }
-                                        = fk + fk 1
+                                        ( vec_free_with [String] files \ String q → v { ( string_free q ) } )
                                     }
-                                    ( vec_free_with [String] files \ String q → v { ( string_free q ) } )
+                                    F _ → {}
                                 }
-                                F _ → {}
+                                ( nurl_print `dry-run: every gate passed; nothing was uploaded.\n` )
+                                ( vec_free [u] digest )
+                                ( string_free hex )
+                                ( vec_free [u] tarball )
+                                ( string_free reg )
+                                ( string_free token )
+                                ( manifest_free m )
+                                ^ 0
+                            } {}
+                            : String deps_json ( __deps_json m )
+                            : !i PublishErr ur ( pkg_publish ( string_data reg ) ( string_data token ) tarball ( string_data . m name ) ( string_data . m version ) ( string_data deps_json ) )
+                            ( string_free deps_json )
+                            ?? ur {
+                                T _ → ( nurl_print `published.\n` )
+                                F ue → {
+                                    ?? ue {
+                                        // 401: a real auth failure — tokens expire
+                                        // after 90 days, the usual cause on a setup
+                                        // that used to work.
+                                        PubAuth → {
+                                            ( nurl_eprintln `nurlpkg: publish failed (auth)` )
+                                            ( nurl_eprintln `hint: registry tokens expire after 90 days - run 'nurlpkg login' to mint a fresh one` )
+                                        }
+                                        // 403: NOT auth. The registry refused the
+                                        // name/version — point at the real causes
+                                        // instead of sending them to re-login.
+                                        PubForbidden → {
+                                            ( nurl_eprintln `nurlpkg: publish forbidden (the registry refused this package)` )
+                                            ( nurl_eprintln `hint: the name may be reserved, too similar to an existing package, or outside your token's package scope — it is NOT a token problem` )
+                                        }
+                                        PubConflict → {
+                                            ( nurl_eprintln `nurlpkg: this version is already published (versions are immutable — bump the version)` )
+                                        }
+                                        // The upload got a connection but no reply.
+                                        // Small requests (login, search, info) still
+                                        // work, so this reads as "the registry is up
+                                        // but publish is broken" — when the usual
+                                        // cause is a network path that drops
+                                        // full-size packets: a publish body is the
+                                        // only request big enough to need them.
+                                        PubTimeout → {
+                                            ( nurl_eprintln `nurlpkg: publish timed out — the upload stalled after connecting` )
+                                            ( nurl_eprintln `hint: if 'nurlpkg search' works but publish stalls, suspect the network path, not the registry — a broken path MTU drops full-size packets, and only the upload is big enough to send them. Test with:` )
+                                            ( nurl_eprintln `        ping -M do -s 1472 <registry-host>` )
+                                            ( nurl_eprintln `      and try a smaller MSS (sysctl net.ipv4.tcp_mtu_probing=1, or clamp MSS on the router) before assuming the registry is down` )
+                                        }
+                                        PubConnect → {
+                                            ( nurl_eprintln `nurlpkg: cannot connect to the registry` )
+                                            ( nurl_eprintln `hint: check the registry URL ($NURL_REGISTRY or [package].registry) and any proxy/firewall` )
+                                        }
+                                        PubDns → {
+                                            ( nurl_eprintln `nurlpkg: the registry host does not resolve` )
+                                            ( nurl_eprintln `hint: check the registry URL ($NURL_REGISTRY or [package].registry) and your DNS` )
+                                        }
+                                        PubTls → {
+                                            ( nurl_eprintln `nurlpkg: TLS handshake with the registry failed` )
+                                            ( nurl_eprintln `hint: check the system CA bundle and the clock; a TLS-intercepting proxy will also do this` )
+                                        }
+                                        _ → {
+                                            ( nurl_eprint `nurlpkg: publish failed (` )
+                                            ( nurl_eprint ( publish_err_name ue ) )
+                                            ( nurl_eprintln `)` )
+                                        }
+                                    }
+                                    = rc 1
+                                }
                             }
-                            ( nurl_print `dry-run: every gate passed; nothing was uploaded.\n` )
                             ( vec_free [u] digest )
                             ( string_free hex )
                             ( vec_free [u] tarball )
-                            ( string_free reg )
-                            ( string_free token )
-                            ( manifest_free m )
-                            ^ 0
-                        } {}
-                        : String deps_json ( __deps_json m )
-                        : !i PublishErr ur ( pkg_publish ( string_data reg ) ( string_data token ) tarball ( string_data . m name ) ( string_data . m version ) ( string_data deps_json ) )
-                        ( string_free deps_json )
-                        ?? ur {
-                            T _ → ( nurl_print `published.\n` )
-                            F ue → {
-                                ?? ue {
-                                    // 401: a real auth failure — tokens expire
-                                    // after 90 days, the usual cause on a setup
-                                    // that used to work.
-                                    PubAuth → {
-                                        ( nurl_eprintln `nurlpkg: publish failed (auth)` )
-                                        ( nurl_eprintln `hint: registry tokens expire after 90 days - run 'nurlpkg login' to mint a fresh one` )
-                                    }
-                                    // 403: NOT auth. The registry refused the
-                                    // name/version — point at the real causes
-                                    // instead of sending them to re-login.
-                                    PubForbidden → {
-                                        ( nurl_eprintln `nurlpkg: publish forbidden (the registry refused this package)` )
-                                        ( nurl_eprintln `hint: the name may be reserved, too similar to an existing package, or outside your token's package scope — it is NOT a token problem` )
-                                    }
-                                    PubConflict → {
-                                        ( nurl_eprintln `nurlpkg: this version is already published (versions are immutable — bump the version)` )
-                                    }
-                                    // The upload got a connection but no reply.
-                                    // Small requests (login, search, info) still
-                                    // work, so this reads as "the registry is up
-                                    // but publish is broken" — when the usual
-                                    // cause is a network path that drops
-                                    // full-size packets: a publish body is the
-                                    // only request big enough to need them.
-                                    PubTimeout → {
-                                        ( nurl_eprintln `nurlpkg: publish timed out — the upload stalled after connecting` )
-                                        ( nurl_eprintln `hint: if 'nurlpkg search' works but publish stalls, suspect the network path, not the registry — a broken path MTU drops full-size packets, and only the upload is big enough to send them. Test with:` )
-                                        ( nurl_eprintln `        ping -M do -s 1472 <registry-host>` )
-                                        ( nurl_eprintln `      and try a smaller MSS (sysctl net.ipv4.tcp_mtu_probing=1, or clamp MSS on the router) before assuming the registry is down` )
-                                    }
-                                    PubConnect → {
-                                        ( nurl_eprintln `nurlpkg: cannot connect to the registry` )
-                                        ( nurl_eprintln `hint: check the registry URL ($NURL_REGISTRY or [package].registry) and any proxy/firewall` )
-                                    }
-                                    PubDns → {
-                                        ( nurl_eprintln `nurlpkg: the registry host does not resolve` )
-                                        ( nurl_eprintln `hint: check the registry URL ($NURL_REGISTRY or [package].registry) and your DNS` )
-                                    }
-                                    PubTls → {
-                                        ( nurl_eprintln `nurlpkg: TLS handshake with the registry failed` )
-                                        ( nurl_eprintln `hint: check the system CA bundle and the clock; a TLS-intercepting proxy will also do this` )
-                                    }
-                                    _ → {
-                                        ( nurl_eprint `nurlpkg: publish failed (` )
-                                        ( nurl_eprint ( publish_err_name ue ) )
-                                        ( nurl_eprintln `)` )
-                                    }
-                                }
-                                = rc 1
-                            }
                         }
-                        ( vec_free [u] digest )
-                        ( string_free hex )
-                        ( vec_free [u] tarball )
                     }
                 }
             }
@@ -3527,45 +3547,50 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ( vec_push [Dep] roots @ Dep {
         ( string_from name ) ( string_new ) ( string_from `*` ) ( string_new )
     } )
-    : ( @ String s ) fetch \ s nm → String { ^ ( pkg_fetch_index reg nm ) }
+    : ( @ !RegIndex RegistryFetchErr s s ) fetch \ s registry s nm → !RegIndex RegistryFetchErr { ^ ( pkg_fetch_index registry nm ) }
     : ~ i rc 0
     : ~ String rootver ( string_new )
     : !( Vec LockPkg ) ResolveErr rr ( resolve_registry roots reg fetch )
     ?? rr {
         F e → {
-            ( nurl_eprint `nurlpkg: registry resolution failed (` )
-            ( nurl_eprint ( resolve_err_name e ) ) ( nurl_eprintln `)` )
+            ( __report_resolve_error e )
             = rc 1
         }
         T locked → {
-            : i ln ( vec_len [LockPkg] locked )
-            : ~ i k 0
-            ~ < k ln {
-                : ?LockPkg po ( vec_get [LockPkg] locked k )
-                ?? po {
-                    T p → {
-                        : !i PkgFetchErr ir ( pkg_install_one reg ( string_data . p name ) ( string_data . p version ) ( string_data . p checksum ) `deps` )
-                        ?? ir {
-                            T _ → {
-                                ( nurl_print `  ` ) ( nurl_print ( string_data . p name ) )
-                                ( nurl_print ` ` ) ( nurl_print ( string_data . p version ) )
-                                ( nurl_print ` → deps/` ) ( nurl_print ( string_data . p name ) )
-                                ( nurl_print `\n` )
-                                ? != 0 ( nurl_str_eq ( string_data . p name ) name ) {
-                                    ( string_free rootver )
-                                    = rootver ( string_from ( string_data . p version ) )
-                                } {}
+            ?? ( __registry_batch_trust locked ) {
+                F _ → { = rc 1 }
+                T trust → {
+                    : i ln ( vec_len [LockPkg] locked )
+                    : ~ i k 0
+                    ~ < k ln {
+                        : ?LockPkg po ( vec_get [LockPkg] locked k )
+                        ?? po {
+                            T p → {
+                                : !i PkgFetchErr ir ( pkg_install_locked trust p `deps` )
+                                ?? ir {
+                                    T _ → {
+                                        ( nurl_print `  ` ) ( nurl_print ( string_data . p name ) )
+                                        ( nurl_print ` ` ) ( nurl_print ( string_data . p version ) )
+                                        ( nurl_print ` → deps/` ) ( nurl_print ( string_data . p name ) )
+                                        ( nurl_print `\n` )
+                                        ? != 0 ( nurl_str_eq ( string_data . p name ) name ) {
+                                            ( string_free rootver )
+                                            = rootver ( string_from ( string_data . p version ) )
+                                        } {}
+                                    }
+                                    F fe → {
+                                        ( nurl_eprint `  ` ) ( nurl_eprint ( string_data . p name ) )
+                                        ( nurl_eprint `: ` ) ( nurl_eprintln ( pkg_err_name fe ) )
+                                        = rc 1
+                                    }
+                                }
                             }
-                            F fe → {
-                                ( nurl_eprint `  ` ) ( nurl_eprint ( string_data . p name ) )
-                                ( nurl_eprint `: ` ) ( nurl_eprintln ( pkg_err_name fe ) )
-                                = rc 1
-                            }
+                            F _ → {}
                         }
+                        = k + k 1
                     }
-                    F _ → {}
+                    ( registry_trust_free trust )
                 }
-                = k + k 1
             }
             ( lockpkgs_free locked )
         }
@@ -3593,20 +3618,11 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 @ __cmd_install_tool s name → i {
     : String regS ( __reg_default )
     : s reg ( string_data regS )
-    : String idx ( pkg_fetch_index reg name )
-    ? == 0 ( string_len idx ) {
-        ( nurl_eprint `nurlpkg: package '` ) ( nurl_eprint name )
-        ( nurl_eprintln `' not found in the registry` )
-        ( string_free idx ) ( string_free regS )
-        ^ 1
-    } {}
-    : !RegIndex RegIndexErr pr ( regindex_parse ( string_data idx ) )
-    ( string_free idx )
+    : !RegIndex RegistryFetchErr pr ( pkg_fetch_index reg name )
     : ~ i rc 1
     ?? pr {
         F e → {
-            ( nurl_eprint `nurlpkg: malformed registry index (` )
-            ( nurl_eprint ( regindex_err_name e ) ) ( nurl_eprintln `)` )
+            ( __report_registry_fetch reg name e )
         }
         T ridx → {
             : i sel ( regindex_select ridx `*` )
@@ -3802,15 +3818,16 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ( string_push_str who ( string_data . root version ) )
             } {}
             ( manifest_free root )
-            // Regenerate the lockfile from the resulting deps/ tree. We do
-            // this even if some deps failed — a partial lockfile correctly
-            // reflects what's actually installed. Registry entries carry
-            // their resolved source + tarball checksum.
-            : i lr ( __write_lockfile regpkgs )
-            ? != lr 0 { = rc 1 } {}
+            // Publish the lock and success only after the entire install succeeds.
+            ? == rc 0 {
+                : i lr ( __write_lockfile regpkgs )
+                ? != lr 0 { = rc 1 } {}
+            } {}
             ( lockpkgs_free regpkgs )
-            ( nurl_print ( string_data who ) )
-            ( nurl_print `: dependencies installed\n` )
+            ? == rc 0 {
+                ( nurl_print ( string_data who ) )
+                ( nurl_print `: dependencies installed\n` )
+            } {}
             ( string_free who )
         }
     }

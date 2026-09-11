@@ -100,7 +100,7 @@ $ `stdlib/ext/http_response.nu`
     ^ @ Params { ( vec_new [QueryPair] ) }
 }
 
-@ params_free Params p → v {
+@ params_free sink Params p → v {
     ( query_pairs_free . p entries )
 }
 
@@ -150,7 +150,7 @@ $ `stdlib/ext/http_response.nu`
 
 : Route { s ctl }
 
-@ __route_free Route route → v {
+@ __route_free sink Route route → v {
     : *RouteImpl impl # *RouteImpl . route ctl
     ( string_free . impl method )
     ( string_free . impl pattern )
@@ -174,7 +174,7 @@ $ `stdlib/ext/http_response.nu`
     ^ @ Router { ( vec_new [Route] ) }
 }
 
-@ router_free Router r → v {
+@ router_free sink Router r → v {
     ( vec_free_with [Route] . r routes \ Route route → v { ( __route_free route ) } )
 }
 

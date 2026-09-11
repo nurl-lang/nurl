@@ -144,7 +144,7 @@ $ `stdlib/net/eth.nu`
     ^ c
 }
 
-@ arp_cache_free * ArpCache c → v {
+@ arp_cache_free sink * ArpCache c → v {
     ( vec_free [ArpEntry] . c entries )
     ( free c )
 }

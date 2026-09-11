@@ -180,7 +180,7 @@ $ `deps/arima/src/arima.nu`
     = . fc unsaved 0
 }
 
-@ fc_free * FcModel fc → v {
+@ fc_free sink * FcModel fc → v {
     ( fc_clear fc )
     ( vec_free [i] . fc models )
     ( vec_free [String] . fc feats )
@@ -241,7 +241,7 @@ $ `deps/arima/src/arima.nu`
     b trend  // a linear drift among the regressors
 }
 
-@ __fc_cand_free FcCand c → v {
+@ __fc_cand_free sink FcCand c → v {
     ( vec_free [i] . c periods )
     ( string_free . c name )
 }
@@ -781,7 +781,7 @@ $ `deps/arima/src/arima.nu`
     ( Vec f ) z  // per watched feature; NaN where not judged
 }
 
-@ fc_out_free FcOut o → v {
+@ fc_out_free sink FcOut o → v {
     ( vec_free [f] . o z )
 }
 
@@ -835,7 +835,7 @@ $ `deps/arima/src/arima.nu`
     ( Vec ( Vec f ) ) se
 }
 
-@ fc_forecast_free FcForecast o → v {
+@ fc_forecast_free sink FcForecast o → v {
     ( vec_free_with [String] . o feats \ String x → v { ( string_free x ) } )
     ( vec_free_with [( Vec f )] . o mean \ ( Vec f ) v → v { ( vec_free [f] v ) } )
     ( vec_free_with [( Vec f )] . o se \ ( Vec f ) v → v { ( vec_free [f] v ) } )

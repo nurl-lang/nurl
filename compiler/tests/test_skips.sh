@@ -110,23 +110,39 @@ test_requires() {
          { exit }' "$src"
 }
 
+# Fixture intent precedes host capability checks. Explicit module headers
+# distinguish imported helpers even when their names begin diag_/should_fail_.
+# Existing COMPILE FAIL goldens also cover negative tests without a prefix.
+test_mode() {
+    local name="$1" declared first gold="$NURL_TESTS_DIR/outputs/$1.txt"
+    declared=$(awk '/^[[:space:]]*$/ { next }
+        /^[[:space:]]*\/\// {
+            if (sub(/^[[:space:]]*\/\/[[:space:]]*fixture:[[:space:]]*/, "")) {
+                sub(/[;[:space:]].*$/, ""); print; exit
+            }
+            next
+        }
+        { exit }' "$NURL_TESTS_DIR/$name.nu")
+    if [[ -n "$declared" ]]; then echo "$declared"; return; fi
+    case "$name" in
+        diag_*|borrow_*|should_fail_*|arity_strict_*) echo reject; return ;;
+        lint_*) echo compile; return ;;
+    esac
+    if [[ -f "$gold" ]]; then
+        IFS= read -r first < "$gold"
+        if [[ "${first%$'\r'}" == 'COMPILE FAIL' ]]; then echo reject; return; fi
+    fi
+    echo run
+}
+
 # Decide whether a test is skipped in the current environment.
 # Echoes "skip" if so. Kept in sync with run_tests.sh's golden-bijection
 # check (skipped tests are exempt from missing/orphan accounting).
 is_skipped() {
     local name="$1"
-    # Modules imported by other tests: no main(), nothing to run. ASK THE
-    # FILE, the way the rest of this script does — the rule used to be a
-    # NAME rule (*_mod / *_helper / *_lib), and a name rule silently
-    # swallows a real test that happens to end that way. It had:
-    # diag_thread_arc_shared_mutation_helper.nu, the regression test for
-    # the shared-mutation race one call deep (PR #902), has a main() and
-    # has never run once — it had no golden either, and neither the
-    # MISSING-golden check nor the ORPHAN check fires for a skipped
-    # test, so nothing anywhere said so. The only trace was the SKIP
-    # count.
-    if [[ -f "$NURL_TESTS_DIR/$name.nu" ]] \
-       && ! grep -qE '^@ main( |$)' "$NURL_TESTS_DIR/$name.nu"; then
+    # Helpers declare their intent. Missing main is also a valid parser
+    # rejection fixture, and a filename suffix can belong to a real test.
+    if [[ "$(test_mode "$name")" == module ]]; then
         echo skip; return
     fi
     # FFI tests whose ext/ module needs an optional native library. build.sh
@@ -160,6 +176,6 @@ is_skipped() {
 
 # Exported together so a runner that fans out with `xargs -P bash -c`
 # gets the whole predicate set in each worker, and cannot half-export it.
-export -f is_skipped test_requires
+export -f is_skipped test_requires test_mode
 export NURL_TESTS_DIR NURL_TESTS_ROOT \
        ENABLE_LIVE_TESTS ENABLE_FIBER_TESTS ENABLE_INTERNET_TESTS

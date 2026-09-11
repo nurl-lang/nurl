@@ -107,7 +107,7 @@ $ `bx.nu`
     b fixed
 }
 
-@ __grep_pat_free GrepPat p → v {
+@ __grep_pat_free sink GrepPat p → v {
     ? . p fixed { ( string_free . p lit ) } { ( regex_free . p rx ) ( string_free . p lit ) }
 }
 

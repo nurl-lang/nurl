@@ -40,7 +40,7 @@ $ `src/image.nu`
     // ── packed pixel access ───────────────────────────────────────────
     ( check == ( image_get_rgba im 2 1 ) | | | << 80 24 << 70 16 << 3 8 255 `get_rgba packs 0xRRGGBBAA` )
     ( check == ( image_get_rgba im 9 9 ) 255 `get_rgba out of bounds reads channels as 0` )
-    ( image_set_rgba im 0 0 305419896 )      // 0x12345678
+    ( image_set_rgba im 0 0 305419896 )  // 0x12345678
     ( check & & == ( image_get im 0 0 0 ) 18 == ( image_get im 0 0 1 ) 52 == ( image_get im 0 0 2 ) 86 `set_rgba maps channels` )
     // x == width used to wrap onto the next row — must be ignored now
     : i keep ( image_get_rgba im 0 1 )
@@ -106,7 +106,7 @@ $ `src/image.nu`
 
     // bilinear on a constant image stays constant
     : Image flat ( image_new 5 4 3 )
-    ( image_fill flat 2864434431 )           // 0xAABBCCFF
+    ( image_fill flat 2864434431 )  // 0xAABBCCFF
     : Image fb ( image_resize flat 13 9 )
     ( check & == ( image_get fb 6 4 0 ) 170 & == ( image_get fb 6 4 1 ) 187 == ( image_get fb 12 8 2 ) 204 `bilinear keeps a constant image constant` )
     ( image_free flat ) ( image_free fb )
@@ -128,32 +128,32 @@ $ `src/image.nu`
 
     // ── fill / rect / line ────────────────────────────────────────────
     : Image cv ( image_new 8 8 3 )
-    ( image_fill_rect cv 2 2 5 5 4278190335 )      // 0xFF0000FF red
+    ( image_fill_rect cv 2 2 5 5 4278190335 )  // 0xFF0000FF red
     ( check & & == ( image_get cv 2 2 0 ) 255 == ( image_get cv 5 5 0 ) 255 == ( image_get cv 6 5 0 ) 0 `fill_rect inclusive corners` )
-    ( image_fill_rect cv -3 -3 20 20 255 )          // clipped full clear
+    ( image_fill_rect cv -3 -3 20 20 255 )  // clipped full clear
     ( check == ( image_get_rgba cv 7 7 ) 255 `fill_rect clips` )
-    ( image_draw_rect cv 1 1 6 6 2 65535 )          // 0x0000FFFF blue, t=2
+    ( image_draw_rect cv 1 1 6 6 2 65535 )  // 0x0000FFFF blue, t=2
     ( check & & == ( image_get cv 2 2 2 ) 255 == ( image_get cv 3 3 2 ) 0 & == ( image_get cv 6 1 2 ) 255 == ( image_get cv 3 2 2 ) 255 `draw_rect outline thickness 2` )
     ( image_fill cv 0 )
-    ( image_draw_line cv 0 0 7 7 16711935 )         // 0x00FF00FF green diagonal
+    ( image_draw_line cv 0 0 7 7 16711935 )  // 0x00FF00FF green diagonal
     ( check & & == ( image_get cv 0 0 1 ) 255 == ( image_get cv 4 4 1 ) 255 & == ( image_get cv 7 7 1 ) 255 == ( image_get cv 4 5 1 ) 0 `draw_line diagonal` )
-    ( image_draw_line cv -5 3 30 3 255 )            // clipped horizontal: must not crash
+    ( image_draw_line cv -5 3 30 3 255 )  // clipped horizontal: must not crash
     ( check == ( image_get_rgba cv 7 3 ) 255 `draw_line clips per pixel` )
     ( image_free cv )
 
     // ── blit ──────────────────────────────────────────────────────────
     : Image bg ( image_new 6 6 3 )
-    ( image_fill bg | << 100 24 255 )               // r=100 backdrop
+    ( image_fill bg | << 100 24 255 )  // r=100 backdrop
     : Image sp ( image_new 2 2 4 )
-    ( image_fill sp | | << 200 24 << 255 16 255 )   // opaque r=200,g=255
-    ( image_set sp 1 1 3 0 )                        // one transparent px
-    ( image_set sp 0 1 3 128 )                      // one half-alpha px
+    ( image_fill sp | | << 200 24 << 255 16 255 )  // opaque r=200,g=255
+    ( image_set sp 1 1 3 0 )  // one transparent px
+    ( image_set sp 0 1 3 128 )  // one half-alpha px
     ( image_blit bg sp 2 2 )
     ( check == ( image_get bg 2 2 0 ) 200 `blit copies opaque pixels` )
     ( check == ( image_get bg 3 3 0 ) 100 `blit skips fully transparent` )
     // half alpha: (200*128 + 100*127 + 127)/255 = 150
     ( check == ( image_get bg 2 3 0 ) 150 `blit source-over blends` )
-    ( image_blit bg sp 5 5 )                        // clipped bottom-right
+    ( image_blit bg sp 5 5 )  // clipped bottom-right
     ( check == ( image_get bg 5 5 0 ) 200 `blit clips` )
     ( image_free sp )
     // 3-channel source overwrites

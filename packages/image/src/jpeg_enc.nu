@@ -156,7 +156,7 @@ $ `jpeg.nu`
     ^ e
 }
 
-@ __jpe_free * JEnc e → v {
+@ __jpe_free sink * JEnc e → v {
     ( vec_free [i] . e qy ) ( vec_free [i] . e qc )
     ( vec_free [i] . e ydc_co ) ( vec_free [i] . e ydc_si )
     ( vec_free [i] . e yac_co ) ( vec_free [i] . e yac_si )

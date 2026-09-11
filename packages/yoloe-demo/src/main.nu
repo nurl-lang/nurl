@@ -133,7 +133,7 @@ $ `index_html_data.nu`
 
 // ── query-string helpers ─────────────────────────────────────────────
 
-@ yd_params_free ( Vec UrlParam ) ps → v {
+@ yd_params_free sink ( Vec UrlParam ) ps → v {
     : i n ( vec_len [UrlParam] ps )
     : ~ i k 0
     ~ < k n {

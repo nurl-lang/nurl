@@ -1,4 +1,4 @@
-// Helper for pub_trait_ffi_visibility.nu — the DELIBERATELY UNENFORCED
+// fixture: module; Helper for pub_trait_ffi_visibility.nu — the DELIBERATELY UNENFORCED
 // half of the grammar-v2 visibility contract.
 //
 // The file is in strict mode (vtf_anchor is `pub`), and only the anchor

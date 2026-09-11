@@ -87,7 +87,7 @@ $ `src/rope.nu`
     = . out 0 4 = . out 1 11 = . out 2 17 = . out 3 23
 }
 
-@ ag_free Agg a → v {
+@ ag_free sink Agg a → v {
     ( dn_free . a dino )
     ( vec_free_with [LmBlk] . a fb \ LmBlk b → v { ( lm_blk_free b ) } )
     ( vec_free_with [LmBlk] . a gb \ LmBlk b → v { ( lm_blk_free b ) } )

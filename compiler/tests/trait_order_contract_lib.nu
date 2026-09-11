@@ -1,3 +1,4 @@
+// fixture: module
 % Reading [T] {
     type Elem
     @ read T self → Elem

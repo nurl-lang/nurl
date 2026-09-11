@@ -46,7 +46,7 @@ $ `cas.nu`
     ^ @ CasManifest { ( vec_new [String] ) ( vec_new [i] ) ( vec_new [String] ) }
 }
 
-@ manifest_free CasManifest m → v {
+@ manifest_free sink CasManifest m → v {
     ( vec_free_with [String] . m hashes \ String s → v { ( string_free s ) } )
     ( vec_free [i] . m sizes )
     ( vec_free_with [String] . m paths \ String s → v { ( string_free s ) } )

@@ -63,7 +63,7 @@ $ `stdlib/std/fs.nu`
 
 : JiraConfig { String url String headers }
 
-@ jira_config_free JiraConfig c → v {
+@ jira_config_free sink JiraConfig c → v {
     ( string_free . c url )
     ( string_free . c headers )
 }

@@ -63,7 +63,7 @@ $ `theme.nu`
     i ranks
 }
 
-@ mmd_layout_free MmdLayout l → v {
+@ mmd_layout_free sink MmdLayout l → v {
     ( vec_free [MmdBox] . l boxes )
     ( vec_free [MmdPt] . l route )
     ( vec_free [i] . l route_start )

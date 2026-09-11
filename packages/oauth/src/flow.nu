@@ -64,7 +64,7 @@ $ `provider.nu`
     ^ c
 }
 
-@ oauth_config_free * OauthConfig c → v {
+@ oauth_config_free sink * OauthConfig c → v {
     ( string_free . c client_id )
     ( string_free . c client_secret )
     ( string_free . c redirect_uri )
@@ -147,7 +147,7 @@ $ `provider.nu`
     String error_description
 }
 
-@ callback_params_free CallbackParams cb → v {
+@ callback_params_free sink CallbackParams cb → v {
     ( string_free . cb code )
     ( string_free . cb state )
     ( string_free . cb error )
@@ -220,7 +220,7 @@ $ `provider.nu`
     i obtained_at  // our clock when the response arrived
 }
 
-@ token_set_free TokenSet t → v {
+@ token_set_free sink TokenSet t → v {
     ( string_free . t access_token )
     ( string_free . t id_token )
     ( string_free . t refresh_token )

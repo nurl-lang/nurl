@@ -81,7 +81,7 @@ $ `stdlib/std/quic_varint.nu`
     ^ t
 }
 
-@ quic_tp_free * QuicTp t → v {
+@ quic_tp_free sink * QuicTp t → v {
     ? == # i t 0 { ^ } {}
     ( vec_free [u] . t original_dcid )
     ( vec_free [u] . t initial_scid )

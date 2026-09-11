@@ -85,7 +85,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ semver_free Semver v → v {
+@ semver_free sink Semver v → v {
     ( string_free . v prerelease )
     ( string_free . v build )
 }
@@ -596,7 +596,7 @@ $ `stdlib/core/vec.nu`
     ^ @ !VersionReq SemverErr { T @ VersionReq { alts } }
 }
 
-@ semver_req_free VersionReq r → v {
+@ semver_req_free sink VersionReq r → v {
     : i n ( vec_len [SvInterval] . r alts )
     : ~ i k 0
     ~ < k n { ?? ( vec_get [SvInterval] . r alts k ) { T iv → { ( __sv_free_interval iv ) } F _ → {} } = k + k 1 }

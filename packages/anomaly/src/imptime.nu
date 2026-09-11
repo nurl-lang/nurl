@@ -511,7 +511,7 @@ $ `stdlib/std/time.nu`
     String sample
 }
 
-@ __it_col_free ImpCol c → v {
+@ __it_col_free sink ImpCol c → v {
     ( string_free . c cname )
     ( string_free . c norm )
     ( string_free . c sample )
@@ -979,7 +979,7 @@ $ `stdlib/std/time.nu`
     String first_fail  // what the first of them looked like
 }
 
-@ imp_time_result_free ImpTimeResult r → v { ( string_free . r first_fail ) }
+@ imp_time_result_free sink ImpTimeResult r → v { ( string_free . r first_fail ) }
 
 // Rewrite `rows` in place under `plan`. With mode `none` nothing changes.
 // A row whose time cannot be read is removed: a history point with no
@@ -1074,7 +1074,7 @@ $ `stdlib/std/time.nu`
     String err
 }
 
-@ imp_plan_free ImpPlan p → v {
+@ imp_plan_free sink ImpPlan p → v {
     ( json_free . p plan )
     ( string_free . p err )
 }

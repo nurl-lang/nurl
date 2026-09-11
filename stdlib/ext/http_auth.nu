@@ -46,7 +46,7 @@ $ `stdlib/core/errors.nu`
     String pass
 }
 
-@ basic_auth_free BasicAuth ba → v {
+@ basic_auth_free sink BasicAuth ba → v {
     ( string_free . ba user )
     ( string_free . ba pass )
 }

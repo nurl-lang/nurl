@@ -36,7 +36,7 @@ $ `bx.nu`
     b ok  // F when the entry could not be stat'ed at all
 }
 
-@ __ent_free BxEnt e → v { ( string_free . e name ) }
+@ __ent_free sink BxEnt e → v { ( string_free . e name ) }
 
 @ __ent_of s dir s name b follow → BxEnt {
     : String full ? == ( nurl_str_len dir ) 0 ( string_from name ) ( path_join dir name )

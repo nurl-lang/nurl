@@ -318,7 +318,7 @@ $ `src/imptime.nu`
     ^ out
 }
 
-@ sources_free ( Vec Json ) xs → v {
+@ sources_free sink ( Vec Json ) xs → v {
     ( vec_free_with [Json] xs \ Json j → v { ( json_free j ) } )
 }
 
@@ -805,7 +805,7 @@ $ `src/imptime.nu`
     i newest
 }
 
-@ __src_project_free SrcProject sp → v {
+@ __src_project_free sink SrcProject sp → v {
     ( vec_free_with [Json] . sp points \ Json j → v { ( json_free j ) } )
 }
 
@@ -1461,7 +1461,7 @@ $ `src/imptime.nu`
     ^ out
 }
 
-@ __src_refs_free ( Vec SrcRef ) xs → v {
+@ __src_refs_free sink ( Vec SrcRef ) xs → v {
     ( vec_free_with [SrcRef] xs \ SrcRef r → v { ( string_free . r org ) ( string_free . r id ) } )
 }
 

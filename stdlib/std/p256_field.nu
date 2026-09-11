@@ -114,7 +114,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ _p256_scr_free P256Scratch s → v {
+@ _p256_scr_free sink P256Scratch s → v {
     ( vec_free [i] . s modp ) ( vec_free [i] . s t ) ( vec_free [i] . s diff )
     ( vec_free [i] . s g0 ) ( vec_free [i] . s g1 ) ( vec_free [i] . s g2 )
     ( vec_free [i] . s g3 ) ( vec_free [i] . s g4 ) ( vec_free [i] . s g5 )
@@ -809,7 +809,7 @@ $ `stdlib/core/vec.nu`
     = . op 3 . ap 3
 }
 
-@ p256ct_free ( Vec i ) a → v { ( vec_free [i] a ) }
+@ p256ct_free sink ( Vec i ) a → v { ( vec_free [i] a ) }
 
 // ── constant-time P-256 point arithmetic (homogeneous projective) ──────
 // Points are (X : Y : Z), x = X/Z, y = Y/Z, identity = (0 : 1 : 0); every
@@ -822,7 +822,7 @@ $ `stdlib/core/vec.nu`
 
 : P256Pt { ( Vec i ) x ( Vec i ) y ( Vec i ) z }
 
-@ p256pt_free P256Pt p → v {
+@ p256pt_free sink P256Pt p → v {
     ( vec_free [i] . p x ) ( vec_free [i] . p y ) ( vec_free [i] . p z )
 }
 

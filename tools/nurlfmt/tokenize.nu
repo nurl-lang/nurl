@@ -5,7 +5,7 @@
 // source from scratch onto a Vec[FmtTok], where each token carries:
 //
 //   kind       — TT_FMT_* discriminant (see below)
-//   text       — exact source slice (owned)
+//   text       — exact source slice (owned except the literal EOF sentinel)
 //   nl_before  — count of source newlines between the previous token
 //                and this one (0 = same line, 1 = next line, ≥2 =
 //                blank line in between, clamped to 2 for the
@@ -362,13 +362,14 @@ $ `stdlib/core/vec.nu`
     ^ toks
 }
 
-// Release every token's owned text plus the backing vec.
-@ tokens_free ( Vec FmtTok ) toks → v {
+// Release owned token slices and the backing vec. EOF borrows a literal;
+// it is not an allocation and must never be passed to nurl_free.
+@ tokens_free sink ( Vec FmtTok ) toks → v {
     : i n ( vec_len [FmtTok] toks )
     : ~ i i 0
     ~ < i n {
         ?? ( vec_get [FmtTok] toks i ) {
-            T t → ( nurl_free . t text )
+            T t → { ? != . t kind TT_FMT_EOF { ( nurl_free . t text ) } {} }
             F _ → {}
         }
         = i + i 1

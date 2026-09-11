@@ -1,4 +1,4 @@
-// alias_rewrite_types_mod.nu — helper module for the alias-rewrite-
+// fixture: module; alias_rewrite_types_mod.nu — helper module for the alias-rewrite-
 // types regression. When imported with an alias `m`, every top-level
 // decl name here gets renamed to `m__<name>` at compile time so callers
 // can reach them via `m::<name>` namespacing:

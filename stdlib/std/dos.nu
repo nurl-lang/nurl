@@ -222,7 +222,7 @@ $ `stdlib/std/thread.nu`
     ^ c
 }
 
-@ dos_state_free i state → v {
+@ dos_state_free sink i state → v {
     ? == state 0 {} {
         : s sp # s state
         : s keys_buf # s ( nurl_peek sp 5 )

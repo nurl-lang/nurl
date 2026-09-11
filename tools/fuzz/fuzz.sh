@@ -128,6 +128,9 @@ JSON
 fi
 
 mkdir -p "$FAILDIR"
+if (( SAN_EVERY > 0 )); then
+    python3 "$ROOT/tools/sanitizer_controls.py" --quick || exit 2
+fi
 
 # reduce_finding SEED REASON PROGRAM — shrink a finding to a reproducer a
 # human can read. A raw seed is 150–400 lines across a dozen unrelated

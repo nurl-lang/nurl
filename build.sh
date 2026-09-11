@@ -24,16 +24,15 @@
 #                The build then proceeds normally with the new
 #                snapshot. Commit both `.nu` and `.ll` files together.
 #    --san       Build runtime.o + every stage binary with
-#                AddressSanitizer + UndefinedBehaviorSanitizer. Catches
-#                use-after-free, double-free, OOB reads/writes, integer
-#                overflow, null deref, etc. that the conservative
-#                single-owner / auto-drop model cannot statically rule
-#                out. ~3× slower at runtime; off by default. Exports
+#                AddressSanitizer for generated memory accesses and
+#                ASan + UndefinedBehaviorSanitizer for the C runtime.
+#                It does not add source-level UBSan checks to NURL IR;
+#                see docs/BUILDING.md for the coverage boundaries. Exports
 #                NURL_SAN=1 so run_tests.sh / nurl.sh / tools build
 #                scripts pick up the same flags transparently.
-#                Use ASAN_OPTIONS=detect_leaks=1 to enable leak checks
-#                (off by default because some intentional stdlib globals
-#                live until process exit).
+#                Leak checking is a separate gate: tools/leakgate.sh
+#                for the compiler, LSAN_DETECT_LEAKS=1 with
+#                run_san_tests.sh for selected cleanup tests.
 # ============================================================
 set -uo pipefail
 
@@ -81,14 +80,16 @@ fi
 # Sanitizer toolchain. -fno-omit-frame-pointer keeps stack traces
 # readable; -fno-sanitize-recover=all turns soft UBSan diagnostics into
 # hard fail-on-detection (so a single overflow exits the test binary
-# instead of just printing to stderr); -fsanitize-address-use-after-scope
-# catches use-after-scope on stack allocas, which matches NURL's
-# closure-captures-stack-alloca pattern that we want to break loudly.
+# instead of just printing to stderr). Use-after-scope instrumentation
+# applies to the C runtime; NURL IR does not yet describe lexical stack
+# lifetimes. ASan's distinct stack-use-after-return check is tested separately.
 SAN_CFLAGS=""
 SAN_LDFLAGS=""
+SAN_NURL_FLAGS=""
 if (( SAN == 1 )); then
     SAN_CFLAGS="-fsanitize=address,undefined -fsanitize-address-use-after-scope -fno-omit-frame-pointer -fno-sanitize-recover=all"
     SAN_LDFLAGS="-fsanitize=address,undefined"
+    SAN_NURL_FLAGS="--sanitize-address"
     # LTO and sanitizers are theoretically compatible but in practice
     # clang's combination produces opaque link-time diagnostics for
     # NURL's pattern of cross-module function pointers. Disable LTO in
@@ -96,25 +97,16 @@ if (( SAN == 1 )); then
     # the point of a san run anyway (we're after correctness, not perf).
     NO_LTO_IN_SAN=1
     export NURL_SAN=1
-    # Disable LSan during the BUILD itself: nurlc_lastgood.bin / nurlc_self run
-    # to completion and exit without freeing their str-pool / sym-arena
-    # globals (an intentional process-lifetime allocation strategy).
-    # LSan would flag every one as a leak and tank the build with
-    # exit-1-on-detect. run_san_tests.sh re-enables leak detection on
-    # demand via LSAN_DETECT_LEAKS=1 for the test corpus, where the
-    # release-and-cleanup discipline is meaningfully different.
+    # Build instrumentation and leak acceptance are separate gates. The
+    # current compiler must pass tools/leakgate.sh with zero leaks;
+    # run_san_tests.sh enables LSan for selected cleanup fixtures. The
+    # full corpus also contains short examples that omit cleanup.
     #
-    # Memory knobs: the instrumented self-compile (stage1/stage2 ir)
-    # holds tens of millions of live small allocations (that same
-    # process-lifetime str-pool strategy), and default ASan redzones on
-    # the larger pool blocks push the stage peak right against the
-    # 16 GB GitHub runner — the job then dies as a 143/OOM with no
-    # output. max_redzone=16 alone cuts ~1.9 GB off the self-compile
-    # peak (measured); the small quarantine + shallow malloc stacks
-    # trim the rest of the always-on cost. Error DETECTION is
-    # unaffected — only the free-reuse distance and the alloc-stack
-    # depth in reports shrink, and run_san_tests.sh (the corpus that
-    # actually hunts bugs in small programs) sets its own defaults.
+    # These sanitizer memory limits originated before the compiler's
+    # ownership cleanup. Keep their scope explicit: they bound quarantine,
+    # allocation backtraces and redzones during bootstrap only. A smaller
+    # quarantine changes the use-after-free detection window; it is not an
+    # equivalent coverage guarantee. Corpus runs use their own defaults.
     export ASAN_OPTIONS="detect_leaks=0:abort_on_error=0:halt_on_error=0:print_stacktrace=1:quarantine_size_mb=4:malloc_context_size=2:max_redzone=16"
     export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=0"
 else
@@ -148,8 +140,9 @@ else
     fi
 fi
 
-LOG="$(mktemp)"
-trap 'rm -f "$LOG"' EXIT
+mkdir -p "$SCRIPT_DIR/build/logs"
+LOG="$(mktemp "$SCRIPT_DIR/build/logs/build.XXXXXX")"
+trap 'echo "Build log: $LOG"' EXIT
 
 fail() {
     echo "BUILD FAILED: $1"
@@ -179,6 +172,8 @@ if ! command -v "$CLANG" &>/dev/null; then
         echo "ERROR: clang not found"; exit 1
     fi
 fi
+
+step "clang version" "$CLANG" --version
 
 # ── Can this clang read the IR nurlc emits? ──────────────────
 # nurlc emits opaque pointers (`ptr`), the LLVM default since 15, and
@@ -429,7 +424,7 @@ if (( REFRESH_BOOTSTRAP == 1 )); then
     log "[refresh] cp compiler/nurlc.nu → compiler/nurlc_lastgood.nu"
     cp compiler/nurlc.nu compiler/nurlc_lastgood.nu
     step "refresh lastgood ir" \
-        bash -c "./build/nurlc compiler/nurlc_lastgood.nu > compiler/nurlc_lastgood.ll"
+        bash -c "./build/nurlc --sanitize-address compiler/nurlc_lastgood.nu > compiler/nurlc_lastgood.ll"
     log "[refresh] $(wc -l < compiler/nurlc_lastgood.ll) lines, $(wc -c < compiler/nurlc_lastgood.ll) bytes"
     log "[refresh] commit BOTH compiler/nurlc_lastgood.nu + .ll together"
 fi
@@ -526,9 +521,9 @@ split_capable() { [ "$SPLIT_N" -gt 0 ] && "$1" --help 2>/dev/null | grep -q -- '
 stage_ir() {  # stage_ir <compiler> <ir-prefix>
     rm -f "$2".[0-9]*.ll "$2".[0-9]*.o
     if split_capable "$1"; then
-        "$1" "--split=$SPLIT_N" "--split-out=$2" compiler/nurlc.nu > "$2.ll"
+        "$1" $SAN_NURL_FLAGS "--split=$SPLIT_N" "--split-out=$2" compiler/nurlc.nu > "$2.ll"
     else
-        "$1" compiler/nurlc.nu > "$2.ll"
+        "$1" $SAN_NURL_FLAGS compiler/nurlc.nu > "$2.ll"
     fi
 }
 
@@ -559,6 +554,18 @@ link_stage() {  # link_stage <ir-prefix> <out> <opt-level>
     fi
 }
 
+# The checked-in seed is emitted with --sanitize-address so sanitizer
+# builds cover stage 0 too. Normal links do not run the sanitizer pass.
+check_san_ir() {
+    awk '
+        /^define / { n++; if ($0 !~ / sanitize_address/) bad=1 }
+        END { exit (n == 0 || bad) }
+    ' "$1"
+}
+if (( SAN == 1 )); then
+    step "sanitizer-ready seed" check_san_ir compiler/nurlc_lastgood.ll
+fi
+
 # Stage 0 is the one link that cannot be split — the committed snapshot
 # is a single file by definition — so it is also the one that gains most
 # from $BOOT_OPT: 8.4 s to 1.6 s, link and emit together.
@@ -570,6 +577,9 @@ step "stage0 link"   "$CLANG" $BOOT_OPT $LTO_FLAG $OPAQUE_FLAGS $SAN_LDFLAGS $AS
 # clangs beat one), and it is what keeps `nurlc --split` on the path
 # every build walks, not just the ones that run the test suite.
 step "stage1 ir"     stage_ir ./build/nurlc_lastgood.bin build/nurlc_self
+if (( SAN == 1 )); then
+    step "stage1 sanitizer coverage" check_san_ir build/nurlc_self.ll
+fi
 step "stage1 link"   link_stage build/nurlc_self build/nurlc_self "$BOOT_OPT"
 
 # Stage 2 is NOT. It is copied to build/nurlc and is the compiler this
@@ -577,7 +587,10 @@ step "stage1 link"   link_stage build/nurlc_self build/nurlc_self "$BOOT_OPT"
 # retired instructions (see "Partitioned emission" in compiler/nurlc.nu).
 # The rule is the same one nurl.sh applies to your program, pointed the
 # other way: split what you rebuild constantly, not what you ship once.
-step "stage2 ir"     bash -c './build/nurlc_self compiler/nurlc.nu > build/nurlc_self2.ll'
+step "stage2 ir"     bash -c './build/nurlc_self "$@" compiler/nurlc.nu > build/nurlc_self2.ll' _ $SAN_NURL_FLAGS
+if (( SAN == 1 )); then
+    step "stage2 sanitizer coverage" check_san_ir build/nurlc_self2.ll
+fi
 step "stage2 link"   link_stage build/nurlc_self2 build/nurlc_self2 -O2
 
 # Fixed-point: nurlc_self must match nurlc_self2.
@@ -620,42 +633,12 @@ if (( RUN_TESTS == 1 )); then
     step "simd baseline agree" bash compiler/tests/simd_baseline_agree.sh
 fi
 
-# ── nurlfmt ──────────────────────────────────────────────────
-# Build the canonical source formatter on top of the freshly-
-# bootstrapped nurlc. Treated as a soft step: failure here logs a
-# warning but does not block the build, since the formatter is a
-# tooling concern rather than a compiler invariant.
-if bash "$SCRIPT_DIR/tools/nurlfmt/build.sh" >> "$LOG" 2>&1; then
-    log "[info] nurlfmt built → build/nurlfmt"
-    # Spot-check: a handful of representative files must still round-
-    # trip through the formatter without changing their LLVM IR. The
-    # full-tree gate lives in compiler/tests/nurlfmt_idempotent.sh
-    # — run that manually for a complete sweep.
-    if bash compiler/tests/nurlfmt_idempotent.sh \
-            examples/fizzbuzz.nu examples/calculator.nu \
-            stdlib/core/string.nu >> "$LOG" 2>&1; then
-        log "[info] nurlfmt round-trip spot-check passed"
-    else
-        log "[warn] nurlfmt round-trip spot-check FAILED — see log"
-    fi
-else
-    log "[warn] nurlfmt build failed; skipping"
-fi
-
-# ── nurlpkg ──────────────────────────────────────────────────
-# The package manager, same soft-step treatment as nurlfmt. It used to be
-# built only by .github/workflows/release.yml, so a developer's build/nurlpkg
-# was whatever they last built by hand — while ./build.sh handed them a fresh
-# nurlc and let them believe the whole toolchain was current. That went wrong
-# in exactly the way you would expect: a months-old nurlpkg predating
-# `publish --dry-run` silently ignored the flag (its unknown-flag rejection
-# came later too) and published for real. Building it here keeps the local
-# toolchain internally consistent.
-if bash "$SCRIPT_DIR/tools/nurlpkg/build.sh" >> "$LOG" 2>&1; then
-    log "[info] nurlpkg built → build/nurlpkg"
-else
-    log "[warn] nurlpkg build failed; skipping"
-fi
+# Both tools are required outputs of a complete toolchain build. Their
+# builders remove stale binaries and use nurl.sh, including sanitizer mode.
+step "nurlfmt" bash "$SCRIPT_DIR/tools/nurlfmt/build.sh"
+step "nurlfmt round-trip" bash compiler/tests/nurlfmt_idempotent.sh \
+    examples/fizzbuzz.nu examples/calculator.nu stdlib/core/string.nu
+step "nurlpkg" bash "$SCRIPT_DIR/tools/nurlpkg/build.sh"
 
 # ── Test suite ───────────────────────────────────────────────
 BUILD_SECS=$(( SECONDS - BUILD_T0 ))

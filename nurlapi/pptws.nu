@@ -22,15 +22,15 @@ $ `stdlib/ext/http_full.nu`
 
 : PptMember {
     TcpConn conn
-    Mutex wlock      // serialise concurrent writes to this conn
+    Mutex wlock  // serialise concurrent writes to this conn
     String channel
-    i alive          // 1 = connected, 0 = gone / write failed
+    i alive  // 1 = connected, 0 = gone / write failed
 }
 : PptReg {
-    ( Vec s ) members   // *PptMember
-    Mutex lock          // guards the member list + all fan-out writes
+    ( Vec s ) members  // *PptMember
+    Mutex lock  // guards the member list + all fan-out writes
 }
-: ~ i g_ppt_reg 0       // *PptReg as int (set once in ppt_install)
+: ~ i g_ppt_reg 0  // *PptReg as int (set once in ppt_install)
 
 @ __ppt_reg → *PptReg { ^ # *PptReg g_ppt_reg }
 
@@ -46,14 +46,15 @@ $ `stdlib/ext/http_full.nu`
 @ __ppt_same String a String b → b { ^ != 0 ( nurl_str_eq ( string_data a ) ( string_data b ) ) }
 
 // write under the per-conn write lock; mark the member dead on any write error
-@ __ppt_send_bin *PptMember m ( Vec u ) payload → v {
+@ __ppt_send_bin * PptMember m ( Vec u ) payload → v {
     ? != . m alive 1 { ^ v } {}
     ( mutex_lock . m wlock )
     : !v WsErr wr ( ws_send_binary . m conn payload )
     ?? wr { T _ → {} F _ → { = . m alive 0 } }
     ( mutex_unlock . m wlock )
 }
-@ __ppt_send_text *PptMember m s text → v {
+
+@ __ppt_send_text * PptMember m s text → v {
     ? != . m alive 1 { ^ v } {}
     ( mutex_lock . m wlock )
     : !v WsErr wr ( ws_send_text . m conn text )
@@ -61,7 +62,7 @@ $ `stdlib/ext/http_full.nu`
     ( mutex_unlock . m wlock )
 }
 
-@ __ppt_count *PptReg reg String chan → i {
+@ __ppt_count * PptReg reg String chan → i {
     : i n ( vec_len [s] . reg members )
     : ~ i c 0 : ~ i k 0
     ~ < k n {
@@ -73,7 +74,7 @@ $ `stdlib/ext/http_full.nu`
 }
 
 // presence: tell everyone on `chan` the current member count
-@ __ppt_presence *PptReg reg String chan → v {
+@ __ppt_presence * PptReg reg String chan → v {
     ( mutex_lock . reg lock )
     : i cnt ( __ppt_count reg chan )
     : String js ( string_from `{"type":"presence","count":` )
@@ -91,7 +92,7 @@ $ `stdlib/ext/http_full.nu`
 }
 
 // forward one voice frame to every OTHER member on the sender's channel
-@ __ppt_forward *PptReg reg *PptMember from ( Vec u ) payload → v {
+@ __ppt_forward * PptReg reg * PptMember from ( Vec u ) payload → v {
     ( mutex_lock . reg lock )
     : i n ( vec_len [s] . reg members )
     : ~ i k 0
@@ -106,7 +107,7 @@ $ `stdlib/ext/http_full.nu`
     ( mutex_unlock . reg lock )
 }
 
-@ __ppt_join *PptReg reg TcpConn conn String chan → *PptMember {
+@ __ppt_join * PptReg reg TcpConn conn String chan → *PptMember {
     : *PptMember m # *PptMember ( nurl_alloc Z PptMember )
     = . m conn conn
     = . m wlock ( mutex_new )
@@ -118,7 +119,7 @@ $ `stdlib/ext/http_full.nu`
     ^ m
 }
 
-@ __ppt_leave *PptReg reg *PptMember m → v {
+@ __ppt_leave * PptReg reg * PptMember m → v {
     ( mutex_lock . reg lock )
     : i n ( vec_len [s] . reg members )
     : ~ i k 0
@@ -135,7 +136,7 @@ $ `stdlib/ext/http_full.nu`
 }
 
 // per-connection frame loop: forward binary (voice), answer ping, end on close
-@ __ppt_loop *PptReg reg *PptMember me TcpConn conn → v {
+@ __ppt_loop * PptReg reg * PptMember me TcpConn conn → v {
     : WsLimits lim @ WsLimits { 262144 1048576 30000 64 }
     : ~ b done F
     ~ ! done {

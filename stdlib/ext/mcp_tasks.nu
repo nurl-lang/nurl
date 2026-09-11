@@ -307,7 +307,7 @@ $ `stdlib/core/vec.nu`
     ^ ?? ( vec_get [s] . store tasks k ) { T x → x F → # s 0 }
 }
 
-@ __mcp_task_free s tp → v {
+@ __mcp_task_free sink s tp → v {
     ? == # i tp 0 { ^ v } {}
     : *McpTask t # *McpTask tp
     ( string_free . t id )
@@ -421,7 +421,7 @@ $ `stdlib/core/vec.nu`
     ^ dropped
 }
 
-@ mcp_task_store_free McpTaskStore store → v {
+@ mcp_task_store_free sink McpTaskStore store → v {
     : i n ( vec_len [s] . store tasks )
     : ~ i k 0
     ~ < k n {

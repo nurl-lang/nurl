@@ -44,7 +44,7 @@ $ `stdlib/std/lifeguard.nu`
     ( Vec s ) relays  // ping-req: borrowed *PkMember relays (table-owned)
 }
 
-@ fd_action_free FdAction a → v { ( vec_free [u] . a target ) ( vec_free [s] . a relays ) }
+@ fd_action_free sink FdAction a → v { ( vec_free [u] . a target ) ( vec_free [s] . a relays ) }
 
 @ __fd_none → FdAction { ^ @ FdAction { ( fd_none ) ( vec_new [u] ) 0 ( vec_new [s] ) } }
 
@@ -80,7 +80,7 @@ $ `stdlib/std/lifeguard.nu`
     ^ fd
 }
 
-@ fd_free * FdState fd → v { ( vec_free [u] . fd probe_target ) ( nurl_free # s fd ) }
+@ fd_free sink * FdState fd → v { ( vec_free [u] . fd probe_target ) ( nurl_free # s fd ) }
 
 @ fd_probing * FdState fd → i { ^ . fd probing }
 

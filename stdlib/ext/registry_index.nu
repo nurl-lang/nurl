@@ -3,10 +3,10 @@
 // A registry serves, per package, a static JSON index document at
 // `<registry>/index/<name>.json`. nurlpkg fetches it, picks the highest
 // version satisfying a semver requirement, then downloads the tarball at
-// the content-addressed path `<registry>/pkgs/<name>/<name>-<ver>.tar.gz`
+// the name/version path `<registry>/pkgs/<name>/<name>-<ver>.tar.gz`
 // and verifies its SHA-256 against the `checksum` recorded here. Because
-// the index and tarballs are immutable static objects, the read path is a
-// dumb CDN — no compute, infinitely cacheable (ROADMAP §4).
+// indexes change as versions are published or yanked, they must be refreshed;
+// published archive contents remain immutable.
 //
 // Index schema (`<registry>/index/<name>.json`):
 //
@@ -23,7 +23,7 @@
 //   }
 //
 // The tarball URL is derived from name+version, so the index carries no
-// URLs — a version is fully identified by (name, version, checksum).
+// URLs. The resolver adds the registry origin to (name, version, checksum).
 //
 // API:
 //   ( regindex_parse json )        → ! RegIndex RegIndexErr
@@ -68,12 +68,12 @@ $ `stdlib/ext/semver.nu`
 
 // ── Lifecycle ─────────────────────────────────────────────────────────
 
-@ idxdep_free IdxDep d → v {
+@ idxdep_free sink IdxDep d → v {
     ( string_free . d name )
     ( string_free . d req )
 }
 
-@ idxversion_free IdxVersion v → v {
+@ idxversion_free sink IdxVersion v → v {
     ( string_free . v version )
     ( string_free . v checksum )
     : i n ( vec_len [IdxDep] . v deps )
@@ -86,7 +86,7 @@ $ `stdlib/ext/semver.nu`
     ( vec_free [IdxDep] . v deps )
 }
 
-@ regindex_free RegIndex idx → v {
+@ regindex_free sink RegIndex idx → v {
     ( string_free . idx name )
     : i n ( vec_len [IdxVersion] . idx versions )
     : ~ i k 0
@@ -145,6 +145,68 @@ $ `stdlib/ext/semver.nu`
     ^ @ IdxVersion { version checksum yanked deps }
 }
 
+// Validate the wire shape before projecting strings through the C-string
+// APIs below. JSON strings can contain NUL; accepting a truncated name,
+// requirement or checksum would silently change the selected identity.
+@ __ridx_text_field Json obj s key → b {
+    ?? ( json_obj_get obj key ) {
+        T field → { ?? field {
+                JStr text → { ^ & > ( string_len text ) 0 == ( string_len text ) ( nurl_str_len ( string_data text ) ) }
+                _ → { ^ F }
+            } }
+        F _ → { ^ F }
+    }
+}
+
+@ __ridx_deps_shape Json array → b {
+    ?? array {
+        JArr deps → {
+            : i n ( vec_len [Json] deps )
+            : *Json data ( vec_data [Json] deps )
+            : ~ i k 0
+            ~ < k n {
+                : Json dep . data k
+                ? ! & ( json_is_obj dep ) & ( __ridx_text_field dep `name` ) ( __ridx_text_field dep `req` ) { ^ F } {}
+                = k + k 1
+            }
+            ^ T
+        }
+        _ → { ^ F }
+    }
+}
+
+@ __ridx_version_shape Json version → b {
+    ? ! & ( json_is_obj version ) & ( __ridx_text_field version `version` ) ( __ridx_text_field version `checksum` ) { ^ F } {}
+    ?? ( json_obj_get version `yanked` ) {
+        T yanked → { ? ! ( json_is_bool yanked ) { ^ F } {} }
+        F _ → {}
+    }
+    ?? ( json_obj_get version `deps` ) {
+        T deps → { ^ ( __ridx_deps_shape deps ) }
+        F _ → { ^ T }
+    }
+}
+
+@ __ridx_shape Json root → b {
+    ? ! & ( json_is_obj root ) ( __ridx_text_field root `name` ) { ^ F } {}
+    ?? ( json_obj_get root `versions` ) {
+        T versions → { ?? versions {
+                JArr entries → {
+                    : i n ( vec_len [Json] entries )
+                    : *Json data ( vec_data [Json] entries )
+                    : ~ i k 0
+                    ~ < k n {
+                        ? ! ( __ridx_version_shape . data k ) { ^ F } {}
+                        = k + k 1
+                    }
+                    ^ T
+                }
+                _ → { ^ F }
+            } }
+        F _ → { ^ F }
+    }
+}
+
 // ── Parse ─────────────────────────────────────────────────────────────
 
 @ regindex_parse s src → !RegIndex RegIndexErr {
@@ -152,6 +214,10 @@ $ `stdlib/ext/semver.nu`
     ?? jr {
         F _ → ^ @ !RegIndex RegIndexErr { F # RegIndexErr RegIdxParseFailed }
         T root → {
+            ? ! ( __ridx_shape root ) {
+                ( json_free root )
+                ^ @ !RegIndex RegIndexErr { F RegIdxBadShape }
+            } {}
             : String name ( __ridx_str root `name` )
             : ( Vec IdxVersion ) versions ( vec_new [IdxVersion] )
             : ?Json va ( json_obj_get root `versions` )

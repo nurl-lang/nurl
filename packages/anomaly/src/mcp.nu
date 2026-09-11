@@ -41,7 +41,6 @@ $ `src/imptime.nu`
 // One version for the CLI banner and the MCP handshake.
 : s ANOMALY_VERSION `0.33.0`
 
-
 // ── Wiring ───────────────────────────────────────────────────────────
 
 // The router the tools call back into (a shallow copy of the service
@@ -157,7 +156,7 @@ $ `src/imptime.nu`
     Json body  // the parsed body, or JSON null when it was not JSON
 }
 
-@ __mcp_api_out_free ApiOut o → v { ( json_free . o body ) }
+@ __mcp_api_out_free sink ApiOut o → v { ( json_free . o body ) }
 
 @ __mcp_api Json ctx s method s path String query ? Json body → ApiOut {
     ?? body {

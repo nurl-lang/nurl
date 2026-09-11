@@ -42,7 +42,7 @@ $ `stdlib/dist/ring.nu`
 
 : Hello { i id i role i want ( Vec u ) pubkey }
 
-@ hello_free Hello h → v { ( vec_free [u] . h pubkey ) }
+@ hello_free sink Hello h → v { ( vec_free [u] . h pubkey ) }
 
 @ hello_decode ( Vec u ) buf → Hello {
     : i id ?? ( bytes_read_u64_be buf 1 ) { T x → # i x F → 0 }
@@ -69,7 +69,7 @@ $ `stdlib/dist/ring.nu`
     ^ r
 }
 
-@ roster_free * Roster r → v {
+@ roster_free sink * Roster r → v {
     : i n ( vec_len [s] . r members )
     : ~ i k 0
     ~ < k n {

@@ -121,7 +121,7 @@ $ `deps/gpukit/src/dev.nu`
     ( vec_free [s] v )
 }
 
-@ ft_free * FtModel m → v {
+@ ft_free sink * FtModel m → v {
     ( vec_free [f] . m embd )
     ( __ft_wfree . m wout )
     ( vec_free [f] . m norm_f )
@@ -884,7 +884,7 @@ $ `deps/gpukit/src/dev.nu`
     ( Vec f ) bflat
 }
 
-@ ft_train_free FtTrain t → v {
+@ ft_train_free sink FtTrain t → v {
     ( vec_free [f] . t aflat )
     ( vec_free [f] . t bflat )
 }

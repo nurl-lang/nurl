@@ -89,7 +89,7 @@ $ `stdlib/std/quic_conn.nu`
 
 @ quic_client_connected * QuicClient cl → b { ^ == ( quic_conn_state . cl conn ) 1 }
 
-@ quic_client_free * QuicClient cl → v {
+@ quic_client_free sink * QuicClient cl → v {
     ? == # i cl 0 { ^ } {}
     ( quic_conn_free . cl conn )
     ? != . cl has_sock 0 { ( udp_close . cl sock ) } {}

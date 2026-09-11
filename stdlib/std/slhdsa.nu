@@ -286,7 +286,7 @@ $ `stdlib/std/random.nu`
     ^ v
 }
 
-@ __slhx4_free * SlhCtx c → v {
+@ __slhx4_free sink * SlhCtx c → v {
     ( vec_free [u64] . c st )
     ( vec_free [u64] . c scr )
     ( vec_free [u64] . c rc )
@@ -963,7 +963,7 @@ $ `stdlib/std/random.nu`
 
 @ slhdsa_sk * SlhKeys h → ( Vec u ) { ^ . h sk }
 
-@ slhdsa_keys_free * SlhKeys h → v {
+@ slhdsa_keys_free sink * SlhKeys h → v {
     ( vec_free [u] . h pk )
     ( vec_free [u] . h sk )
     ( nurl_free # s h )

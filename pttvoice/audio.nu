@@ -14,20 +14,30 @@ $ `stdlib/core/vec.nu`
 // snd_pcm_open's first arg is snd_pcm_t** (out); name is a C string; format/
 // access are enums; writei/readi take a frame count and return frames or -errno.
 & `asound` @ snd_pcm_open *u pcmp s name i stream i mode → i
+
 & `asound` @ snd_pcm_set_params s pcm i format i access i channels i rate i soft_resample i latency → i
+
 & `asound` @ snd_pcm_writei s pcm *u buffer i size → i
+
 & `asound` @ snd_pcm_readi s pcm *u buffer i size → i
+
 & `asound` @ snd_pcm_recover s pcm i err i silent → i
+
 & `asound` @ snd_pcm_prepare s pcm → i
+
 & `asound` @ snd_pcm_drain s pcm → i
+
 & `asound` @ snd_pcm_close s pcm → i
 
 @ __snd_stream_playback → i { ^ 0 }
-@ __snd_stream_capture  → i { ^ 1 }
-@ __snd_format_s16_le   → i { ^ 2 }    // SND_PCM_FORMAT_S16_LE
-@ __snd_access_rw_inter → i { ^ 3 }    // SND_PCM_ACCESS_RW_INTERLEAVED
-@ audio_rate            → i { ^ 48000 }
-@ audio_channels        → i { ^ 1 }
+
+@ __snd_stream_capture → i { ^ 1 }
+
+@ __snd_format_s16_le → i { ^ 2 }  // SND_PCM_FORMAT_S16_LE
+@ __snd_access_rw_inter → i { ^ 3 }  // SND_PCM_ACCESS_RW_INTERLEAVED
+@ audio_rate → i { ^ 48000 }
+
+@ audio_channels → i { ^ 1 }
 
 @ __aud_open i stream → s {
     : ( Vec u ) hp ( vec_with_cap [u] 8 )
@@ -45,7 +55,8 @@ $ `stdlib/core/vec.nu`
 }
 
 // Open the default playback / capture device, or 0 if none (headless).
-@ audio_play_open    → s { ^ ( __aud_open ( __snd_stream_playback ) ) }
+@ audio_play_open → s { ^ ( __aud_open ( __snd_stream_playback ) ) }
+
 @ audio_capture_open → s { ^ ( __aud_open ( __snd_stream_capture ) ) }
 
 @ audio_close s pcm → v { ? != # i pcm 0 { ( snd_pcm_drain pcm ) ( snd_pcm_close pcm ) } {} }

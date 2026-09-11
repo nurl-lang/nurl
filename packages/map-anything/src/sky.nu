@@ -54,7 +54,7 @@ $ `deps/onnx/src/runtime.nu`
     ^ @ Sky { g e T }
 }
 
-@ sky_free Sky s → v {
+@ sky_free sink Sky s → v {
     ? != # i . s e 0 { ( rt_close . s e ) } {}
     ( graph_free . s g )
 }

@@ -31,7 +31,7 @@ $ `stdlib/ext/json.nu`
     String models_dir
 }
 
-@ cfg_free NlConfig c → v {
+@ cfg_free sink NlConfig c → v {
     ( string_free . c model )
     ( string_free . c host )
     ( string_free . c auth )

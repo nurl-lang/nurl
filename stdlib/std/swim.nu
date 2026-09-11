@@ -71,7 +71,7 @@ $ `stdlib/std/async.nu`
     ^ @ Member { ( string_from host ) port incarnation state ( monotonic_ns ) }
 }
 
-@ member_free Member m → v {
+@ member_free sink Member m → v {
     ( string_free . m host )
 }
 
@@ -111,7 +111,7 @@ $ `stdlib/std/async.nu`
     ( Vec Member ) gossip
 }
 
-@ swim_msg_free SwimMsg m → v {
+@ swim_msg_free sink SwimMsg m → v {
     ( string_free . m from_host )
     ( string_free . m target_host )
     ( vec_free_with [Member] . m gossip \ Member mm → v { ( member_free mm ) } )
@@ -248,7 +248,7 @@ $ `stdlib/std/async.nu`
     ^ t
 }
 
-@ mtable_free * MemberTable t → v {
+@ mtable_free sink * MemberTable t → v {
     ( vec_free_with [Member] . t members \ Member mm → v { ( member_free mm ) } )
     ( mutex_free . t m )
     ( string_free . t self_host )
@@ -572,7 +572,7 @@ $ `stdlib/std/async.nu`
 
 @ swim_table * SwimNode n → *MemberTable { ^ ( __node_table n ) }
 
-@ swim_node_free * SwimNode n → v {
+@ swim_node_free sink * SwimNode n → v {
     ( mtable_free ( __node_table n ) )
     ( udp_close . n sock )
     ( mutex_free . n ack_m )

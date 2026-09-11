@@ -147,7 +147,7 @@ $ `stdlib/std/net.nu`
     }
 }
 
-@ h2_frame_free H2Frame f → v { ( vec_free [u] . f payload ) }
+@ h2_frame_free sink H2Frame f → v { ( vec_free [u] . f payload ) }
 
 // ── Pure serializer ───────────────────────────────────────────────────
 
@@ -187,7 +187,7 @@ $ `stdlib/std/net.nu`
     i consumed  // bytes consumed from input (9 + payload_len)
 }
 
-@ h2_parsed_frame_free H2ParsedFrame p → v { ( h2_frame_free . p frame ) }
+@ h2_parsed_frame_free sink H2ParsedFrame p → v { ( h2_frame_free . p frame ) }
 
 // Parse one frame from a byte buffer starting at `from`. Returns
 // H2FrameReadShort when fewer than 9+payload_len bytes are available

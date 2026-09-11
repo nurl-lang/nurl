@@ -80,7 +80,7 @@ $ `stdlib/ext/json.nu`
     ^ >= ( __tset_find t name ) 0
 }
 
-@ tset_free * TplSet t → v {
+@ tset_free sink * TplSet t → v {
     : ( @ v String ) sdrop \ String x → v { ( string_free x ) }
     ( vec_free_with [String] . t names sdrop )
     ( vec_free_with [String] . t srcs sdrop )
@@ -165,7 +165,7 @@ $ `stdlib/ext/json.nu`
     ^ r
 }
 
-@ __tpl_free * TplR r b free_out → v {
+@ __tpl_free sink * TplR r b free_out → v {
     ( string_free . r err )
     ( string_free . r key )
     ( string_free . r va_str )

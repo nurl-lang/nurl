@@ -341,7 +341,7 @@ $ `deps/gpukit/src/gpukit.nu`
     ^ @ BatchReport { n_rows n_hits pct hits > n_hits 0 scores }
 }
 
-@ anomaly_report_free BatchReport rep → v {
+@ anomaly_report_free sink BatchReport rep → v {
     ( vec_free [i] . rep anomaly_indices )
     ( vec_free [f] . rep scores )
 }

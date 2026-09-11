@@ -85,7 +85,7 @@ $ `src/iforest.nu`
     ~ < li nl {
         ?? ( vec_get [String] lines li ) {
             T line → {
-                ? & == li 0 skip_header { } {
+                ? & == li 0 skip_header {} {
                     : String tl ( string_trim line )
                     ? > ( string_len tl ) 0 {
                         : ( Vec String ) fields ( string_split tl delim )
@@ -182,14 +182,14 @@ $ `src/iforest.nu`
 
 @ main → i {
     : ArgParser p ( args_new `iforest` `Isolation Forest anomaly detection over a numeric CSV` )
-    ( args_flag p `help`   104 `show this help` )  // -h
-    ( args_flag p `header` 72  `skip the first line (treat it as a header)` )  // -H
-    ( args_opt  p `file`   102 `FILE` `read CSV from FILE instead of stdin` )  // -f
-    ( args_opt  p `trees`  116 `N`    `number of trees in the forest (default 100)` )  // -t
-    ( args_opt  p `sample` 115 `N`    `subsample size per tree (default 256)` )  // -s
-    ( args_opt  p `seed`   83  `SEED` `PRNG seed for reproducible forests (default 42)` )  // -S
-    ( args_opt  p `top`    107 `K`    `print only the K most anomalous rows (index<TAB>score, desc)` )  // -k
-    ( args_opt  p `delim`  100 `C`    `field delimiter (default ",")` )  // -d
+    ( args_flag p `help` 104 `show this help` )  // -h
+    ( args_flag p `header` 72 `skip the first line (treat it as a header)` )  // -H
+    ( args_opt p `file` 102 `FILE` `read CSV from FILE instead of stdin` )  // -f
+    ( args_opt p `trees` 116 `N` `number of trees in the forest (default 100)` )  // -t
+    ( args_opt p `sample` 115 `N` `subsample size per tree (default 256)` )  // -s
+    ( args_opt p `seed` 83 `SEED` `PRNG seed for reproducible forests (default 42)` )  // -S
+    ( args_opt p `top` 107 `K` `print only the K most anomalous rows (index<TAB>score, desc)` )  // -k
+    ( args_opt p `delim` 100 `C` `field delimiter (default ",")` )  // -d
 
     : ( Vec String ) argv ( vec_new [String] )
     : i ac ( env_args_count )
@@ -210,9 +210,9 @@ $ `src/iforest.nu`
             ( nurl_print ( string_data h ) )
             ( string_free h )
         } {
-            : i trees  ( __opt_int p `trees`  100 )
+            : i trees ( __opt_int p `trees` 100 )
             : i sample ( __opt_int p `sample` 256 )
-            : i seed   ( __opt_int p `seed`   42 )
+            : i seed ( __opt_int p `seed` 42 )
             : ~ i topk -1
             ? ( args_present p `top` ) { = topk ( __opt_int p `top` 10 ) } {}
             // args_value returns an owned ?String; keep it alive so `delim`

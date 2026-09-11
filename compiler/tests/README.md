@@ -11,8 +11,8 @@ golden file** in `outputs/<name>.txt`.
 ```
 
 A run is green only when **every** test matches its golden, no golden
-is missing, and no golden is orphaned. Wall-clock target: under 3 min
-(currently ~80 s, fully parallel).
+is missing, and no golden is orphaned. Tests run in parallel; wall-clock time
+depends on the host, selected capabilities and worker count.
 
 ## How a test is classified (by filename prefix)
 
@@ -23,8 +23,33 @@ is missing, and no golden is orphaned. Wall-clock target: under 3 min
 | `diag_*`            | compile fails and the **diagnostic text is baselined** — use this whenever the wording is the point |
 | `borrow_*`          | borrow-checker rejects it; the diagnostic is baselined. `borrow_strict_*` only fire under `--strict-borrowck` |
 | `should_warn_*`     | compiles, but the warning text is baselined        |
-| `*_mod` `*_helper` `*_lib` | not a test — a module `$`-imported by another test (skipped) |
-| `http_*` `net_*`    | network-dependent; most are skipped unless `NURL_HTTP_TESTS=1` / `NURL_NET_TESTS=1` |
+| `lint_*` | compiles with `--lint`; warnings are baselined without linking |
+
+Imported helper modules declare `// fixture: module` in their leading comment
+block. Every other source is a test, including rejection fixtures without
+`main` and tests whose names end in `_helper`, `_mod` or `_lib`. Existing
+`COMPILE FAIL` goldens also identify negative tests without a conventional
+prefix. Explicit `// fixture: reject`, `compile` or `run` declarations can be used
+for new tests without a conventional prefix. A module must not have a golden.
+
+Host requirements use a separate leading comment, for example
+`// requires: live openssl python3`. `live` and `fibers` run by default on POSIX;
+`NURL_LIVE_TESTS=0` and `NURL_FIBER_TESTS=0` disable them. `internet` is opt-in
+through `NURL_HTTP_TESTS=1` or `NURL_NET_TESTS=1`. Other tokens name required
+commands on PATH. Optional native libraries and platform APIs also affect
+availability; see `test_skips.sh`. Windows defaults fibers off because its
+runtime has no context-switch backend. Filename network prefixes do not gate
+execution.
+
+Compiler invocations are bounded by `NURL_COMPILE_TIMEOUT` (seconds, default
+60). POSIX runners require `timeout` or Homebrew `gtimeout`; Windows uses a
+process-tree watchdog. Only compiler exit 1 counts as a rejection. A crash,
+timeout, missing executable or unexpected acceptance fails even in update mode.
+Every selected test must return exactly one recognized verdict; missing,
+duplicate and malformed records or failed workers fail the run. Worker stderr
+is retained in `build/tests/.workers.stderr` (`tests-san` for sanitizer runs).
+Run `python3 tools/tests/test_compiler_runners.py` to exercise the runners with
+injected compiler and worker failures in a temporary checkout.
 
 ### `should_fail_*` vs `diag_*`
 
@@ -131,10 +156,20 @@ binary executes in its own scratch directory under `build/tests/run/`,
 so relative-path file side effects can't collide between concurrent
 tests. Keep tests free of wall-clock, randomness, network, and
 absolute shared paths (`/tmp/fixed_name`) so their output is stable —
-otherwise gate them behind `NURL_NET_TESTS=1`.
+declare any required host capabilities with `// requires:`. Public-network
+requirements are opt-in; loopback tests normally run.
 
 ## Sanitized runs
 
 `./compiler/tests/run_san_tests.sh` re-runs the corpus under
 ASan/UBSan (requires `./build.sh --san` first). It has its own
-pass/fail logic and does not use the goldens.
+pass/fail logic: it requires the expected compiler acceptance/rejection and
+checks sanitizer reports. Goldens identify existing rejection tests and the
+expected runtime exit; diagnostic/output text is compared by the normal runner.
+A clean sanitizer run only establishes coverage of the code actually instrumented;
+linking sanitizer libraries alone does not instrument generated LLVM functions.
+The runner requests `--sanitize-address` from the compiler. Run
+`python3 tools/sanitizer_controls.py` to check deliberate faults and clean
+counterparts through the driver and split emitter before relying on a campaign.
+See [coverage boundaries](../../docs/BUILDING.md#sanitizer-coverage), including
+NURL stack-use-after-scope and source-level UBSan gaps.

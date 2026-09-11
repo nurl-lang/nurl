@@ -1,9 +1,11 @@
 # Building NURL
 
-The only build-time dependency is **clang / LLVM 15+**. No Python, no make,
-no language-specific package manager. Clone the repo and run `./build.sh`
-(or `build.bat` on Windows). The committed `compiler/nurlc_lastgood.ll`
-snapshot is the only thing that boots the self-hosted chain.
+The bootstrap uses **clang / LLVM 15+**, the host shell and standard system
+utilities. It needs no Python, make or language-specific package manager.
+The full POSIX test suite also requires `timeout` or `gtimeout`; the Windows
+suite uses PowerShell 7. Clone the repo and run `./build.sh` (or `build.bat`
+on Windows). The committed `compiler/nurlc_lastgood.ll` snapshot boots the
+self-hosted chain.
 
 Optional stdlib features pull in their own pkg-config libraries at link
 time (`libpq-dev`, `libsqlite3-dev`, `libssl`, `libcurl`, `libz`, …); each
@@ -14,7 +16,10 @@ degrades with a clear diagnostic when absent. See
 
 | Tool | Purpose |
 |---|---|
-| clang / LLVM 15+ | Compile LLVM IR (`.ll`) to a native binary; the only required build-time dependency |
+| clang / LLVM 15+ | Compile LLVM IR (`.ll`) to a native binary |
+| Bash + standard POSIX utilities | Run `build.sh` and the POSIX test suite |
+| `timeout` or `gtimeout` | Bound compiler and runtime execution in POSIX tests; Homebrew coreutils on macOS |
+| PowerShell 7 (Windows) | Run `run_tests.ps1` |
 
 **Windows** — install LLVM from [llvm.org/releases](https://llvm.org/releases/)
 (the Windows installer adds `clang.exe` to `PATH`). Command Prompt,
@@ -42,12 +47,13 @@ export CLANG="$(brew --prefix llvm)/bin/clang"
 Also `brew install coreutils` — the test runner's hang watchdog is
 `timeout(1)`, which macOS ships under no name (Homebrew installs it as
 `gtimeout`, which the runner looks for). macOS host builds are covered
-by CI on both Apple Silicon and Intel; see [`PLATFORMS.md`](PLATFORMS.md).
+by CI on Apple Silicon; Intel host builds remain unverified. See [`PLATFORMS.md`](PLATFORMS.md).
 
 **FreeBSD** — the base system already ships `clang`; `build.sh` needs `bash`
 (`pkg install -y bash`), plus `pkgconf` + `sqlite3` for the SQLite FFI tests.
-The toolchain binaries themselves link only libc, so they also run on
-musl/Alpine without extra packages (see [`PLATFORMS.md`](PLATFORMS.md)).
+The shipped Linux archives use the glibc ABI and do not load under musl.
+Alpine/musl requires a source build; a libc-only dependency list does not
+imply compatibility between libc ABIs (see [`PLATFORMS.md`](PLATFORMS.md)).
 
 ## Step 1 — Build the C runtime
 
@@ -318,9 +324,54 @@ Two knobs cooperate:
 
 Runtime panics print a stack backtrace before aborting; pipe each frame's
 `binary+0xOFFSET` through `addr2line -e <binary>` to recover `.nu:LINE`
-locations. ASan / UBSan reports under `./build.sh --san` render `.nu`
-locations directly. End-to-end regression: `./tools/dwarf_test.sh` (no-op
+locations. Combine `NURL_SAN=1` with `--debug` for `.nu` locations in ASan
+reports; `./build.sh --san` alone does not request NURL DWARF metadata.
+End-to-end regression: `./tools/dwarf_test.sh` (no-op
 when `gdb` isn't installed).
+
+## Sanitizer coverage
+
+```sh
+./build.sh --san --no-tests
+python3 tools/sanitizer_controls.py
+./compiler/tests/run_san_tests.sh
+./tools/leakgate.sh
+# Or instrument a single program with an ordinary built compiler:
+NURL_SAN=1 ./nurl.sh -O0 --debug examples/fizzbuzz.nu
+```
+
+`nurlc --sanitize-address` marks every emitted function for LLVM's ASan
+pass, including closures, drop glue, dyn/SIMD thunks and split definitions.
+The driver, bootstrap, corpus and fuzz runners use this compiler option.
+The committed bootstrap IR carries the attribute too, so stage 0 is covered
+when linked with sanitizer instrumentation. Normal builds do not run that
+pass, and ordinary compiler output omits the attribute.
+
+Detection controls require the expected ASan report and a failing exit for
+heap out-of-bounds access, use-after-free and stack-use-after-return; valid
+counterparts must produce the expected output without reports. They also
+compile and execute split output. Optimisation can eliminate an invalid
+access or inline a stack frame, so the stack-return control runs at `-O0`.
+See [LLVM's ASan guide](https://clang.llvm.org/docs/AddressSanitizer.html).
+
+NURL does not yet emit lexical
+`llvm.lifetime` boundaries, so `-fsanitize-address-use-after-scope` does not
+establish detection after a NURL block ends. Also, `-fsanitize=undefined`
+adds UBSan checks to the **C runtime**, not source-level checks to previously
+generated NURL IR. NURL separately emits checked panic paths for invalid dynamic
+shift counts, integer division/remainder by zero, signed `MIN / -1` and
+`MIN % -1`, and out-of-range/NaN/infinite float-to-integer casts. These checks
+also apply without sanitizers and with borrow checking disabled. Integer `+`,
+`-` and `*` wrap at their width. `tools/tests/test_arithmetic_safety.py` checks
+the source panic behavior and valid boundaries in normal, instrumented and
+split builds. Remaining lifetime and safety work is tracked in
+[the v1 ledger](dev/V1_HARDENING.md).
+
+The whole runtime corpus runs without leak detection because some examples
+intentionally omit cleanup. `tools/leakgate.sh` requires zero compiler leaks
+for the self-compile, recursive drop generation and nested field stores, in
+both module emission modes. The corpus's selected cleanup tests use
+`LSAN_DETECT_LEAKS=1`; those results are separate from memory-access coverage.
 
 ## Bootstrap chain
 

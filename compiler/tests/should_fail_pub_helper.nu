@@ -1,4 +1,4 @@
-// should_fail_pub_helper.nu — helper module consumed by
+// fixture: module; should_fail_pub_helper.nu — helper module consumed by
 // pub_visibility.nu. The `pub` on `pub_greet` flips this file into
 // grammar v2.0 strict-visibility mode, which means any unmarked
 // @-function (here `__priv_greet`) becomes private to this file.

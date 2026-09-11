@@ -5,13 +5,14 @@
 //
 //   ( read_line )         → String  owned line from stdin (trailing '\n' stripped)
 //                                   On EOF with no data: empty String, ( stdin_eof ) turns T.
-//   ( read_all_stdin )    → String  slurp stdin to EOF; empty String when no data.
+//   ( read_stdin )        → !String IoErr  remaining stdin, preserving byte length; errors are explicit.
+//   ( read_all_stdin )    → String  same data, panics on I/O failure.
 //   ( read_n_bytes i n )  → ( Vec u )  exactly n bytes from stdin (or fewer on EOF).
 //                                       Use for framed binary protocols (LSP, DAP,
 //                                       JSON-RPC over stdio with `Content-Length` headers)
 //                                       where the payload may contain '\n' or NUL bytes
 //                                       and `read_line` is the wrong tool.
-//   ( stdin_eof )         → b       T iff a previous read hit EOF
+//   ( stdin_eof )         → b       T after read_line returned no bytes at EOF
 //   ( flush )             → v       fflush(stdout)
 //   ( eflush )            → v       fflush(stderr)
 //
@@ -34,71 +35,47 @@
 //     must see a line the moment you print it (a server announcing its
 //     port to a supervisor, a progress line piped into `tee`).
 
+$ `stdlib/core/errors.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/posix.nu`  // read(2) for the pure-NURL stdin slurp
+$ `stdlib/core/posix.nu`  // buffered stdin bridge
 
-// ── Pure-NURL stdin slurp ───────────────────────────────────────────
-//
-// PURIFY §13 batch 2 (2026-05-24): `nurl_read_all_stdin` is now a NURL
-// @-function reading fd 0 via `read(2)` (declared in `stdlib/core/posix.nu`)
-// in a 4 KB-stepped grow-and-retry loop. Both libc flavours we target
-// (Linux/macOS, mingw-w64 libmingwex `read = _read`) accept fd 0 with
-// blocking semantics for the controlling terminal / piped stdin. WASI
-// routes the read through wasi-libc's POSIX shim.
-//
-// Returns a malloc'd NUL-terminated buffer (caller frees) or `0` on
-// failure. The trailing NUL is written at `len`; the malloc'd region
-// is sized `cap` (>= len + 1). The wrapper `read_all_stdin` below
-// translates to an owned String for normal callers.
-@ __read_all_stdin_pure → s {
-    : ~ i cap 4096
-    : ~ i len 0
-    : ~ s buf ( nurl_alloc cap )
-    ? == # i buf 0 { ^ # s 0 } {}
+// Reader contract: write at most room bytes, return the count, zero at EOF,
+// or -1 on error. Short positive reads are data, never assumed to be EOF.
+// The destination pointer is borrowed only for the duration of that call.
+// The returned Vec owns its buffer and keeps one spare NUL terminator byte,
+// so a text caller can adopt the same control block as a String without copying.
+// At capacity the terminator slot permits one-byte lookahead: grow only when
+// input actually continues, including when a regular-file size hint is stale.
+@ read_to_end ( @ i * u i ) reader i hint → !( Vec u ) IoErr {
+    : i initial ? > hint 0 hint 4096
+    ? >= initial 9223372036854775807 { ^ @ !( Vec u ) IoErr { F @ IoErr { Other } } } {}
+    : ( Vec u ) bytes ( vec_with_cap [u] + initial 1 )
     : ~ b done F
-    : ~ b ok F
     ~ ! done {
-        // Ensure room for at least 1 byte read + NUL.
-        ? <= - cap len 1 {
-            : i ncap * cap 2
-            : s nb ( nurl_realloc buf ncap )
-            ? == # i nb 0 {
-                // realloc failed; the original buf is still valid —
-                // free it explicitly so the failure path doesn't leak.
-                ( nurl_free buf )
-                = buf # s 0
-                = done T
-            } {
-                = buf nb
-                = cap ncap
-            }
+        : i len ( vec_len [u] bytes )
+        : i room - - ( vec_cap [u] bytes ) len 1
+        : i want ? > room 0 room 1
+        : *u dst # *u + # i ( vec_data [u] bytes ) len
+        : i got ( reader dst want )
+        ? | < got 0 > got want {
+            ( vec_free [u] bytes )
+            ^ @ !( Vec u ) IoErr { F @ IoErr { ReadFailed } }
         } {}
-        ? ! done {
-            : i room - cap - len 1
-            : *u dst # *u + # i buf len
-            : i got ( read # i32 0 dst room )
-            ? > got 0 {
-                = len + len got
-            } {
-                ? == got 0 {
-                    // EOF — clean completion
-                    = ok T
-                    = done T
-                } {
-                    // -1 read error
-                    = done T
-                }
-            }
-        } {}
+        : b _set ( vec_set_len [u] bytes + len got )
+        ( vec_reserve [u] bytes 1 )
+        = . ( vec_data [u] bytes ) + len got # u 0
+        ? == got 0 { = done T } {}
     }
-    ? ok {
-        : *u p # *u + # i buf len
-        = . p 0 # u 0
-        ^ buf
-    } {
-        ? != # i buf 0 { ( nurl_free buf ) } {}
-        ^ # s 0
+    ^ @ !( Vec u ) IoErr { T bytes }
+}
+
+// Shared stdio, not descriptor reads: read_line may already have prefetched
+// bytes past its newline. Text retains its real byte length, including NULs.
+@ read_stdin → !String IoErr {
+    ?? ( read_to_end \ * u dst i room → i { ^ ( nurl_stdin_read dst room ) } 4096 ) {
+        T bytes → { ^ @ !String IoErr { T @ String { . bytes ctl } } }
+        F e → { ^ @ !String IoErr { F e } }
     }
 }
 
@@ -108,20 +85,13 @@ $ `stdlib/core/posix.nu`  // read(2) for the pure-NURL stdin slurp
     ^ out
 }
 
-// Read everything from stdin until EOF and return it as a single owned
-// String. CLI tools that consume stdin (e.g. `cat`, `wc`, JSON formatters)
-// use this when line-at-a-time iteration isn't required. Returns an empty
-// String on allocation failure too — the runtime falls back to NULL which
-// `string_from` turns into "" rather than crashing.
+// Convenience form for callers that cannot recover from an input failure.
+// Errors panic; returning an empty String would make truncated input look valid.
 @ read_all_stdin → String {
-    : s raw ( __read_all_stdin_pure )
-    : i p # i raw
-    ? == p 0 {
-        ^ ( string_new )
-    } {}
-    : String out ( string_from raw )
-    ( nurl_free raw )
-    ^ out
+    ?? ( read_stdin ) {
+        T text → { ^ text }
+        F _ → { ( nurl_panic `read_all_stdin: input read failed` ) ^ ( string_new ) }
+    }
 }
 
 // Binary stdin reader: returns up to `n` bytes as an OWNED Vec[u].
@@ -135,7 +105,7 @@ $ `stdlib/core/posix.nu`  // read(2) for the pure-NURL stdin slurp
 // PURIFY (2026-05-24): reads stdin in a retry loop until `n` bytes are
 // accumulated or a read returns 0 (EOF). No more runtime-side sideband —
 // the byte count is the returned Vec's length. Caller frees via
-// `vec_free [u]` or auto-drop.
+// `vec_free [u]`. Read failures panic instead of looking like early EOF.
 //
 // Reads through `nurl_stdin_read` (a buffered `fread(stdin)`) rather
 // than a raw `read(2)` on fd 0 so that it stays coherent with
@@ -154,7 +124,8 @@ $ `stdlib/core/posix.nu`  // read(2) for the pure-NURL stdin slurp
         ? <= room 0 { = done T } {
             : *u at # *u + # i dst got
             : i r ( nurl_stdin_read at room )
-            ? <= r 0 { = done T } {
+            ? < r 0 { ( vec_free [u] out ) ( nurl_panic `read_n_bytes: input read failed` ) ^ ( vec_new [u] ) } {}
+            ? == r 0 { = done T } {
                 = got + got r
             }
         }
@@ -167,27 +138,16 @@ $ `stdlib/core/posix.nu`  // read(2) for the pure-NURL stdin slurp
     ^ != 0 ( nurl_stdin_eof )
 }
 
-// Everything on stdin, as BYTES. `read_all_stdin` returns a String, and
-// a String stops at its first NUL — so a program in the middle of a
-// pipe (`cat a.zst | zst d | wc -c`) could read a text stream whole but
-// not a binary one, with the truncation silent. This is the dual of
-// `write_bytes`, and the pair makes a byte-clean filter possible.
+// Everything on stdin as bytes, paired with write_bytes for binary filters.
+// Both this function and read_stdin retain NUL bytes; converting String data
+// to a raw `s` for C-string APIs still loses the explicit byte length.
 //
-// Grows in 64 KiB steps and stops at the first zero-length read, so an
-// input of unknown length costs O(size) copies and no length header.
+// Shares read_to_end's geometric buffer growth and explicit error handling.
 @ read_all_stdin_bytes → ( Vec u ) {
-    : ( Vec u ) out ( vec_new [u] )
-    : ~ b done F
-    ~ ! done {
-        ( vec_reserve [u] out 65536 )
-        : i len ( vec_len [u] out )
-        : *u dst # *u + # i ( vec_data [u] out ) len
-        : i r ( nurl_stdin_read dst 65536 )
-        ? <= r 0 { = done T } {
-            : b _ok ( vec_set_len [u] out + len r )
-        }
+    ?? ( read_to_end \ * u dst i room → i { ^ ( nurl_stdin_read dst room ) } 4096 ) {
+        T bytes → { ^ bytes }
+        F _ → { ( nurl_panic `read_all_stdin_bytes: input read failed` ) ^ ( vec_new [u] ) }
     }
-    ^ out
 }
 
 // ── Binary stdout ───────────────────────────────────────────────────

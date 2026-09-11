@@ -23,7 +23,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Wc does not own `buf` (the module bytes outlive it); free only the struct.
-@ wc_free * Wc c → v { ( nurl_free # s c ) }
+@ wc_free sink * Wc c → v { ( nurl_free # s c ) }
 
 @ wc_eof * Wc c → b { ^ >= . c pos . c len }
 
@@ -133,9 +133,9 @@ $ `stdlib/std/bytes.nu`
     ( Vec u ) err
 }
 
-@ __ft_free * FuncType ft → v { ( vec_free [i] . ft params ) ( vec_free [i] . ft results ) ( nurl_free # s ft ) }
+@ __ft_free sink * FuncType ft → v { ( vec_free [i] . ft params ) ( vec_free [i] . ft results ) ( nurl_free # s ft ) }
 
-@ module_free * Module m → v {
+@ module_free sink * Module m → v {
     : i tn ( vec_len [s] . m types )
     : ~ i k 0
     ~ < k tn { ?? ( vec_get [s] . m types k ) { T pp → ? != # i pp 0 { ( __ft_free # *FuncType pp ) } {} F → {} } = k + k 1 }

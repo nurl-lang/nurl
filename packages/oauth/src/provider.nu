@@ -83,7 +83,7 @@ $ `claims.nu`
     ^ p
 }
 
-@ oidc_provider_free * OidcProvider p → v {
+@ oidc_provider_free sink * OidcProvider p → v {
     ( string_free . p issuer )
     ( string_free . p authorization_endpoint )
     ( string_free . p token_endpoint )

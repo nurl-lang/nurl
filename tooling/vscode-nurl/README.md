@@ -74,6 +74,21 @@ If none resolves to an executable, the extension surfaces a warning
 notification once and falls back to **syntax-only mode** — bracket
 matching and highlighting keep working independently of the LSP.
 
+### Compiler and formatter configuration
+
+The server uses `nurl.compiler.path` and `nurl.formatter.path` when set;
+otherwise it checks `NURLC` / `NURLFMT`, sibling binaries and `PATH`, in that
+order. `nurl.stdlibRoot` selects the directory containing `stdlib/`;
+otherwise the server preserves `NURL_STDLIB` or discovers the installed tree.
+Restart the language server after changing these settings. A configured
+executable that cannot run surfaces an error instead of silently using a
+different toolchain. An invalid `nurl.server.path` stops server startup.
+
+Diagnostics compile the unsaved buffer with the original file path; the project
+does not need its own `build/nurlc`. A matching compiler must support `--stdin`
+and `--check`. Formatting errors are reported as failed requests, and the
+replacement range ends at the document's actual UTF-16 EOF position.
+
 ## Installation
 
 ### From VSIX file

@@ -414,7 +414,7 @@ $ `stdlib/core/vec.nu`
 
 // ── Cleanup ───────────────────────────────────────────────────────────
 
-@ args_free ArgParser p → v {
+@ args_free sink ArgParser p → v {
     ( string_free . p prog )
     ( string_free . p about )
     ( string_free . p error )

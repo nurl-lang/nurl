@@ -104,7 +104,7 @@ $ `core.nu`
     ^ j
 }
 
-@ __jpg_free * Jpeg j → v {
+@ __jpg_free sink * Jpeg j → v {
     ( vec_free [i] . j cid ) ( vec_free [i] . j chf ) ( vec_free [i] . j cvf )
     ( vec_free [i] . j ctq ) ( vec_free [i] . j ctd ) ( vec_free [i] . j cta )
     ( vec_free [i] . j cpred ) ( vec_free [i] . j qt )

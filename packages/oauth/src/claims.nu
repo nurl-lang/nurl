@@ -135,7 +135,7 @@ $ `stdlib/ext/json.nu`
     ^ out
 }
 
-@ claims_strings_free ( Vec String ) v → v {
+@ claims_strings_free sink ( Vec String ) v → v {
     ( vec_free_with [String] v \ String s → v { ( string_free s ) } )
 }
 
@@ -201,7 +201,7 @@ $ `stdlib/ext/json.nu`
     ^ p
 }
 
-@ oidc_policy_free * OidcPolicy p → v {
+@ oidc_policy_free sink * OidcPolicy p → v {
     ( string_free . p issuer )
     ( string_free . p audience )
     ( string_free . p nonce )
@@ -356,7 +356,7 @@ $ `stdlib/ext/json.nu`
     }
 }
 
-@ oidc_identity_free OidcIdentity id → v {
+@ oidc_identity_free sink OidcIdentity id → v {
     ( string_free . id subject )
     ( string_free . id issuer )
     ( string_free . id email )

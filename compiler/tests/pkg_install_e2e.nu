@@ -44,7 +44,7 @@ $ `stdlib/ext/env.nu`
     ^ @ Dep { ( string_from name ) ( string_new ) ( string_from req ) ( string_new ) }
 }
 
-@ deps_free ( Vec Dep ) v → v {
+@ deps_free sink ( Vec Dep ) v → v {
     : i n ( vec_len [Dep] v )
     : ~ i k 0
     ~ < k n { : ?Dep d ( vec_get [Dep] v k ) ?? d { T dv → ( dep_free dv ) F → {} } = k + k 1 }
@@ -143,6 +143,8 @@ version = "1.0.0"
     : ( Vec u ) keyid ( test_keyid )
     : ( Vec u ) pubkey ( ed25519_pubkey_pure seed )
     : String publine ( build_publine keyid pubkey )
+    : !v IoErr scope ( env_set `NURL_REGISTRY` `http://127.0.0.1:18943/` )
+    ?? scope { T _ → {} F _ → {} }
     : !v IoErr es ( env_set `NURL_REGISTRY_PUBKEY` ( string_data publine ) )
     ?? es { T _ → {} F _ → {} }
     : ( Vec u ) sigbytes ( ed25519_sign_pure seed tarball )
@@ -193,10 +195,10 @@ version = "1.0.0"
                 : s REG `http://127.0.0.1:18943/`
                 : ( Vec Dep ) roots ( vec_new [Dep] )
                 ( vec_push [Dep] roots ( reg_dep `foo` `^1.0` ) )
-                : ( @ String s ) fetch \ s nm → String { ^ ( pkg_fetch_index `http://127.0.0.1:18943/` nm ) }
+                : ( @ !RegIndex RegistryFetchErr s s ) fetch \ s registry s nm → !RegIndex RegistryFetchErr { ^ ( pkg_fetch_index registry nm ) }
                 : !( Vec LockPkg ) ResolveErr rr ( resolve_registry roots REG fetch )
                 ?? rr {
-                    F e → ( nurl_print `resolve_err\n` )
+                    F e → { ( nurl_print `resolve_err\n` ) ( resolve_err_free e ) }
                     T locked → {
                         ( nurl_print `resolved=` ) ( nurl_println_int ( vec_len [LockPkg] locked ) )
                         : ?LockPkg p0 ( vec_get [LockPkg] locked 0 )
@@ -216,9 +218,9 @@ version = "1.0.0"
                                     F e → { ( nurl_print `badcheck=` ) ( nurl_print ( pkg_err_name e ) ) ( nurl_print `\n` ) }
                                 }
                                 // Fail-closed: foo-2.0.0 has no signature ⇒ reject
-                                // (empty checksum skips the sha step, isolating the
-                                // signature gate).
-                                : !i PkgFetchErr nosig ( pkg_install_one REG nm `2.0.0` `` `/tmp/nurl_pkg_e2e_nosig` )
+                                // The tarball bytes match foo-1.0.0, so the real checksum
+                                // isolates the signature gate.
+                                : !i PkgFetchErr nosig ( pkg_install_one REG nm `2.0.0` chk `/tmp/nurl_pkg_e2e_nosig` )
                                 ?? nosig {
                                     T _ → ( nurl_print `nosig=accepted(bug)\n` )
                                     F e → { ( nurl_print `nosig=` ) ( nurl_print ( pkg_err_name e ) ) ( nurl_print `\n` ) }

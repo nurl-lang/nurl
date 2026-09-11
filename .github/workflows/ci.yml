@@ -62,7 +62,86 @@ jobs:
             # changes, so a change to the gate is exercised by its own PR.
             compiler:
               - 'compiler/nurlc.nu'
+              - 'compiler/nurlc_lastgood.*'
+              - 'stdlib/runtime*.c'
               - 'tools/leakgate.sh'
+              - 'tools/tests/test_compiler_cleanup.py'
+              - 'tools/tests/test_string_argument_ownership.py'
+              - 'tools/tests/test_arithmetic_safety.py'
+              - 'compiler/tests/enum_tree_drop.nu'
+              - 'compiler/tests/nested_field_store.nu'
+
+  runner-controls:
+    name: compiler runner fault-injection controls
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Editor launcher controls
+        run: node tools/tests/test_vscode_launcher.cjs
+      - name: POSIX and PowerShell runner controls
+        shell: bash
+        run: |
+          NURL_TEST_PWSH=$(command -v pwsh)
+          export NURL_TEST_PWSH
+          python3 tools/tests/test_compiler_runners.py
+          python3 tools/tests/test_git_hooks.py
+      - name: Release artifact-set controls
+        # The gate the release workflow runs before publishing. It needs
+        # no toolchain — it reads a directory of archives — so it belongs
+        # here rather than behind the compiler build.
+        shell: bash
+        run: python3 tools/tests/test_release_artifacts.py
+
+  build-failure-controls:
+    name: required tools fail the complete build
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container:
+      image: nurllang/ci:ubuntu24-20260821
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject broken formatter and package-manager builds
+        run: python3 tools/tests/test_build_failures.py
+      - name: Retain failure-control logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-controls
+          path: build/build-failure-controls/
+
+  mingw-cross:
+    name: Windows cross runtime links against msvcrt
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # This C-runtime gate needs no NURL build. Keep package installation
+      # outside the compiler container's budget; the dated CI image has no
+      # MinGW. Hosted runners may already have it. A missing prerequisite
+      # after installation fails explicitly instead of letting the gate skip.
+      - name: Ensure the distro MinGW toolchain
+        timeout-minutes: 4
+        run: |
+          if ! command -v x86_64-w64-mingw32-gcc >/dev/null; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 update --error-on=any
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 install -y --no-install-recommends gcc-mingw-w64-x86-64
+          fi
+          command -v x86_64-w64-mingw32-gcc
+      - name: Compile and link the whole runtime against msvcrt
+        run: ./tools/check_mingw_cross.sh
 
   build-test:
     name: build + bootstrap fixed point + test corpus
@@ -95,6 +174,45 @@ jobs:
         # AND the test corpus baseline matches. Any failure surfaces
         # the relevant diff so we don't need extra grep here.
         run: ./build.sh
+
+      - name: Enum ownership across compiled modules
+        run: |
+          NURL_SPLIT=4 NURL_SPLIT_MIN=1 ./nurl.sh compiler/tests/sink_enum_owned.nu build/sink-owned-split
+          ./build/sink-owned-split
+
+      - name: Driver paths through split lowering
+        run: python3 tools/tests/test_driver_paths.py
+
+      - name: Declaration and statement forms (reject, or emit main)
+        # One invariant over many spellings: a source that still declares
+        # '@ main' either fails to compile or defines main. Nine parser
+        # defects shared the shape this catches — an ad-hoc token skip
+        # that ran past the end of a declaration and swallowed the next
+        # one, silently.
+        run: python3 tools/tests/test_declaration_forms.py
+
+      - name: Installed LSP and source stream controls
+        run: |
+          ./tools/nurl-lsp/build.sh
+          python3 tools/tests/test_lsp_toolchain.py
+          python3 tools/tests/test_source_io.py
+          python3 tools/tests/test_stream_io.py
+          python3 tools/tests/test_formatter.py
+          bash compiler/tests/lsp_rename_smoke.sh
+
+      - name: Signed registry identities and installed ecosystem
+        timeout-minutes: 10
+        run: |
+          python3 tools/tests/test_registry_identity.py
+          python3 tools/tests/test_resolver.py
+          ./tools/nurlpkg/test-install-tool.sh
+
+      - name: Retain complete build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: build/logs/
 
       - name: self-compile peak-RSS gate
         # Peak memory to compile the compiler is its existential
@@ -223,21 +341,6 @@ jobs:
         # reserved characters, trailing dots or spaces, and paths that
         # differ only in case.
         run: ./tools/check_windows_paths.sh
-
-      - name: the Windows runtime links on msvcrt, not only on UCRT
-        # windows-tests.yml builds with LLVM clang and with zig — both
-        # UCRT. nurlapi's /build_windows cross-compiles with the DISTRO
-        # mingw-w64, which targets the older msvcrt.dll, and nothing ran
-        # that toolchain. So `_get_timezone` (a UCRT export, added with
-        # time_local in 0.54.0) took down EVERY Windows cross build,
-        # hello world included — mingw links the whole runtime object —
-        # for two releases while every Windows gate stayed green.
-        # Ten seconds: compile stdlib/runtime.c for mingw, link a
-        # trivial main against it. No Windows, no emulator, no nurlc.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
-          ./tools/check_mingw_cross.sh
 
       - name: nurlfmt --check (canonical-form gate)
         # Every first-party .nu file must be in canonical nurlfmt
@@ -556,10 +659,62 @@ jobs:
         # sanitiser-aware corpus driver.
         run: ./build.sh --san --no-tests
 
-      - name: self-compile leak gate (LSan) — hard, zero tolerance
+      - name: Retain sanitized build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitizer-build-logs
+          path: build/logs/
+
+      - name: Instrumented installed LSP and compiler stdin controls
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          LSAN_OPTIONS: use_stacks=0
+        run: |
+          NURL_SAN=1 ./tools/nurl-lsp/build.sh
+          python3 tools/tests/test_lsp_toolchain.py
+
+      - name: Instrumented formatter ownership and CLI controls
+        run: NURL_SAN=1 python3 tools/tests/test_formatter.py
+
+      - name: Instrumented registry identity and trust controls
+        run: |
+          NURL_SAN=1 python3 tools/tests/test_registry_identity.py
+          NURL_SAN=1 python3 tools/tests/test_resolver.py
+          NURL_SAN=1 ./nurl.sh compiler/tests/registry_trust.nu build/registry-trust-leaks
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 ./build/registry-trust-leaks
+          NURL_SAN=1 ./nurl.sh compiler/tests/resolver_registry.nu build/resolver-registry-leaks
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 ./build/resolver-registry-leaks
+
+      - name: Enum payload representation and sink ownership
+        run: LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh enum_nested_tag_payload sink_enum_owned sink_contract_names sink_callable_shadow sink_rebind_owned
+
+      - name: Publication gate resource cleanup
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          LSAN_OPTIONS: use_stacks=0
+        run: |
+          python3 tools/tests/test_registry_identity.py \
+            RegistryIdentityTest.test_publish_requires_installed_compiler \
+            RegistryIdentityTest.test_publish_requires_toolchain_root \
+            RegistryIdentityTest.test_publish_reports_compiler_launch_failure \
+            RegistryIdentityTest.test_publish_compiler_paths_are_literal_arguments \
+            RegistryIdentityTest.test_publish_uses_default_installed_toolchain \
+            RegistryIdentityTest.test_publish_drift_check_refuses_failed_index
+
+      - name: Generated-code sanitizer detection controls
+        run: python3 tools/sanitizer_controls.py
+
+      - name: WASI rewriter LLVM types and leak control
+        run: python3 tools/tests/test_wasi_ir.py
+
+      - name: Source arithmetic domains and recovery
+        run: python3 tools/tests/test_arithmetic_safety.py
+
+      - name: compiler leak gate (self-compile, drop graph, nested stores)
         # Runs only when compiler/nurlc.nu (or the gate itself) changed: that
-        # source owns the allocations this asserts about. Reuses the --san
-        # build above, so the whole gate costs ~3 s.
+        # source owns the allocations this asserts about. The regression
+        # inputs also exercise paths absent from the self-compile.
         #
         # The July 2026 ownership campaign took `nurlc compiler/nurlc.nu` from
         # 2,793,226 leaked allocations / 33.4 MB to ZERO (peak RSS 115.9 ->
@@ -569,6 +724,15 @@ jobs:
         # unlike the RSS gate. ASan/UBSan findings in the same run fail too.
         if: needs.changes.outputs.compiler == 'true'
         run: ./tools/leakgate.sh
+
+      - name: panic journal nested-scope and owner-model controls
+        run: python3 tools/tests/test_panic_journal.py
+
+      - name: string argument address and ownership controls
+        run: python3 tools/tests/test_string_argument_ownership.py
+
+      - name: rejected-source compiler leak gate (all rejection goldens)
+        run: python3 tools/tests/test_compiler_cleanup.py
 
       - name: metamorphic reclamation gate (§7.2, runtime axis)
         # The compile-verdict classes run in the build-test job; this one
@@ -642,6 +806,7 @@ jobs:
           LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh \
             struct_nested_field_drop arm_local_drop arm_local_trailing_drop \
             recover_unwind loop_drop_reclaim closure_env_reclaim closure_env_binding \
+            closure_env_assign \
             ternary_slice_owned match_slice_owned arm_assign_tail_drop arm_join_verdict_drop \
             defer_drop_reclaim defer_scoped defer_ret_transfer \
             net_inet net_frames net_dhcp net_stack net_tcp net_tcp_fuzz \

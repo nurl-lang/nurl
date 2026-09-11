@@ -22,7 +22,7 @@ $ `stdlib/std/hash_sha512.nu`
 
 @ __ed_pt → EdPt { ^ @ EdPt { ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) } }
 
-@ __ed_pt_free EdPt p → v {
+@ __ed_pt_free sink EdPt p → v {
     ( vec_free [i] . p x ) ( vec_free [i] . p y ) ( vec_free [i] . p z ) ( vec_free [i] . p t )
 }
 
@@ -122,7 +122,7 @@ $ `stdlib/std/hash_sha512.nu`
     }
 }
 
-@ __ed_scr_free EdScratch s → v {
+@ __ed_scr_free sink EdScratch s → v {
     ( vec_free [i] . s a ) ( vec_free [i] . s b ) ( vec_free [i] . s c )
     ( vec_free [i] . s d ) ( vec_free [i] . s e ) ( vec_free [i] . s f )
     ( vec_free [i] . s g ) ( vec_free [i] . s h ) ( vec_free [i] . s tt )

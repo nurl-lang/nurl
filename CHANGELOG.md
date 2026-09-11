@@ -10,6 +10,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Argument lifetime follows completed address and consumption summaries.**
+  Stable binding identities preserve pointer-to-integer origins through casts,
+  assignments, loop backedges and forward calls. A worklist closes conditional
+  call dependencies without a round or parameter-count cap. Named and positional
+  string temporaries share the final ownership decision, including forward
+  results passed directly as arguments. Root buffers and embedded references
+  remain distinct, and lifted closures have separate parameter domains.
+
+- **Nested panic recovery preserves owner boundaries.** Journal marks use
+  registration sequences across deletion and compaction; pointer-indexed
+  removal avoids scanning the live allocation set on each free. Reassigned
+  owned strings/slices and known caller-owned argument temporaries retain
+  their unwind registrations. Compiler diagnostics use ordinary journalled
+  recovery and common cleanup; the internal `nurl_recover_nojournal` bypass
+  has been removed. Forward string ownership remains under investigation.
+
+- **Publication requires a successful target-compiler check.** Packages with
+  `src/main.nu` can no longer publish when the target toolchain or compiler is
+  absent. Compiler launch failures and compilation failures retain their actual
+  cause instead of blaming a missing stdlib API. The compiler is invoked with
+  literal arguments and `--check`, removing shell interpretation of toolchain
+  paths. Both publication and dry-run stop before upload on these failures.
+
+- **Registry failures preserve their cause.** Index fetch callbacks return
+  `!RegIndex RegistryFetchErr`. HTTP/transport errors and invalid indexes abort
+  resolution instead of masquerading as missing packages and silently selecting
+  an older version. Genuine HTTP 404 remains retryable. CLI failures include the
+  requested index URL and preserve existing lock/manifest files.
+
+- **Consuming parameters follow signatures and call effects.** Release APIs
+  declare their consuming positions with `sink`; function-name suffixes and
+  return types no longer imply ownership. Custom destructors that release fields
+  or raw memory must declare their consuming parameters. Inference reaches a fixed point across
+  forward calls and generic instances at every argument position. Local
+  callbacks no longer inherit same-named global ownership contracts.
+
+- **Compiler-managed enum ownership transfers through consuming calls.**
+  Caller and callee owner slots account for conditional consumption and return
+  transfer. Named payload construction, matching and dropping use the same
+  storage classification, including nested tag-only enums and multi-field
+  pointer-leading structs. Forward payload layouts are available before
+  ownership decisions, and drop definitions follow type emission.
+
+- **Dependency resolution backtracks across version-dependent conflicts.**
+  Valid diamonds, cycles and fallback versions no longer fail because a greedy
+  pass selected an incompatible latest version. Explicit decision and constraint
+  stacks remove the 256-round cutoff. Conflict causes let the solver skip
+  unrelated choices, including redundant wildcard edges. An indexed candidate
+  heap and cached indexes, parsed versions and requirements avoid whole-graph
+  rescans. Selection is deterministic under root, index and dependency ordering.
+  Invalid root names/ranges report `ResolveBadPackage`/`ResolveBadRequirement`;
+  malformed version metadata and duplicate versions report `ResolveBadIndex`.
+  `ResolveUnstable` is retired. CI compares finite graphs against an independent
+  exhaustive oracle and exercises the resulting signed installation.
+
+- **Registry origin and signing trust stay attached to package identity.**
+  Explicit dependency registries now select their own indexes and archives,
+  including transitive dependencies. Per-registry user key configuration
+  replaces the global cross-registry override; missing keys/signatures,
+  changed bytes and mismatched archive manifests fail closed. Index shape
+  and full text lengths are checked before projecting metadata; embedded NUL
+  cannot truncate identities, requirements, checksums or trust config. Lock refresh
+  retains origins/checksums, escapes strings and rejects version drift.
+  Failed installs preserve the prior lock and no longer print success.
+  Equal-name source collisions are reported before archive downloads until
+  the installation layout supports coexistence. Signed tests exercise real
+  CLI failures and five installed ecosystem programs; CI runs both suites.
+
+- **Formatter ownership and failure handling are explicit.** Token cleanup
+  releases source slices while preserving the borrowed EOF sentinel. Every
+  CLI path frees arguments, source and output, and the reusable formatter can
+  run repeatedly without leaking. `--check` validates stdin without emitting
+  source; incompatible/unknown flags, unreadable input and embedded NUL bytes
+  return errors. Canonical files are not rewritten.
+- **Library text and binary reads share checked stream handling.**
+  `read_file`, `read_file_bytes` and the new fallible `read_stdin` preserve
+  actual byte lengths, grow geometrically and distinguish read errors from
+  EOF. Interrupted reads retain their prefix and retry. Buffered stdin stays
+  coherent after `read_line`; infallible convenience readers panic on failure.
+  The previous mmap/seek/reopen fallbacks are removed; regular-file sizes are
+  capacity hints. Streaming chunk reads also free buffers on error.
+
+- **LSP diagnostics work outside the compiler checkout.** Tool paths are
+  configurable, installed companion binaries and stdlib are discovered, and
+  execution failures are visible. The new compiler `--stdin` mode preserves
+  the logical filename and unsaved source across imports and deferred borrow
+  diagnostics; `--check` discards generated IR without emitting output files.
+  The LSP no longer writes shared temporary source files. Its index reads open
+  buffers, imported definitions use escaped file URIs, and diagnostics and
+  formatter ranges use UTF-16 positions. Relocated-toolchain protocol tests
+  cover concurrent servers, missing tools and real source errors.
+- **Source readers preserve stream contents and reject I/O errors.** The
+  runtime reads stdin, regular files and pipes through one checked reader;
+  only regular-file sizes are allocation hints. It no longer trusts a failed
+  seek, exposes unread bytes after a short read, or allocates from a directory's
+  meaningless end offset. Sanitized controls cover growth boundaries and read
+  failures.
+
+- **Sanitizer builds instrument generated NURL memory accesses.** The compiler
+  now emits ASan attributes through one function-writing path, shared by normal,
+  library and split output. The driver, all bootstrap stages, corpus and fuzz
+  harnesses request it. Deliberate memory faults and valid controls calibrate
+  detection in CI; documentation distinguishes ASan coverage from C-only UBSan
+  checks and the remaining lexical stack-lifetime gap.
+- **HTTP/3 releases a completed stream after evaluating its terminal state.**
+  Two consecutive cleanup conditions could read the stream after the first
+  freed it; the instrumented client/server regression exposed the use-after-free.
+- **Compiler drop generation and nested-field lookahead stop leaking.** Drop
+  emitters use borrowed integer counters instead of heap cells. Name mangling
+  and lexer lookahead return uniformly owned strings, removing a lexer-specific
+  ownership exception. The compiler leak gate now exercises both paths in
+  addition to the self-compile.
+- **Required tool failures fail the complete build.** Formatter, formatter
+  round-trip and package-manager failures retain the build log and return
+  failure. Tool builders share the driver's sanitizer/link configuration and
+  remove stale executables before rebuilding. Isolated full-build fault
+  controls run in CI.
+
+- **Compiler test runners reject missing coverage and compiler failures.**
+  Imported helper fixtures now declare their intent, so parser rejection tests
+  without `main` run. Both POSIX runners and the Windows runner bound compiler
+  invocations, distinguish rejection from crashes/tool failures, and require one
+  recognized verdict per selected test. Sanitized rejection tests fail if the
+  compiler accepts them; failed workers cannot disappear from a green summary.
+  Fault-injection controls cover the runner itself.
+
 - **Trait contracts no longer depend on declaration or import order.**
   Associated-type checks and default-method registration now run after the
   whole program's signature scan, before body or vtable emission. An impl

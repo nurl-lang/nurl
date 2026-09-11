@@ -181,7 +181,7 @@ $ `deps/tensor/src/tensor.nu`
     ^ @ Blk { x wq bq wk bk wv bv wo wg wu wd n1 n2 nf wout cosv sinv mask onehot la lb }
 }
 
-@ blk_free Blk b → v {
+@ blk_free sink Blk b → v {
     ( vec_free [f] . b x )
     ( vec_free [f] . b wq ) ( vec_free [f] . b bq )
     ( vec_free [f] . b wk ) ( vec_free [f] . b bk )

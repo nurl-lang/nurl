@@ -333,7 +333,7 @@ $ `stdlib/std/bufio.nu`
 
 @ bx_ok BxOpts o → b { ^ . o ok }
 
-@ bx_opts_free BxOpts o → v {
+@ bx_opts_free sink BxOpts o → v {
     ( vec_free_with [String] . o vals \ String x → v { ( string_free x ) } )
     ( vec_free_with [String] . o allvals \ String x → v { ( string_free x ) } )
     ( vec_free [i] . o allords )

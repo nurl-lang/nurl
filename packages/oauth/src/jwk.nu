@@ -76,7 +76,7 @@ $ `stdlib/ext/json.nu`
 
 // ── Lifecycle ──────────────────────────────────────────────────────
 
-@ jwk_free JwkKey jk → v {
+@ jwk_free sink JwkKey jk → v {
     ( string_free . jk kty )
     ( string_free . jk kid )
     ( string_free . jk alg )
@@ -89,7 +89,7 @@ $ `stdlib/ext/json.nu`
     ( vec_free [u] . jk oct )
 }
 
-@ jwks_free ( Vec JwkKey ) ks → v {
+@ jwks_free sink ( Vec JwkKey ) ks → v {
     ( vec_free_with [JwkKey] ks \ JwkKey jk → v { ( jwk_free jk ) } )
 }
 

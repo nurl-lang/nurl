@@ -39,7 +39,7 @@ $ `stdlib/core/vec.nu`
     ^ p
 }
 
-@ pktbuf_free * PktBuf p → v {
+@ pktbuf_free sink * PktBuf p → v {
     ? == # i p 0 { ^ } {}
     ( vec_free [u] . p bytes )
     ( vec_free [i] . p ends )

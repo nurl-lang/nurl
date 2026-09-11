@@ -278,7 +278,7 @@ $ `stdlib/std/floatbits.nu`
 }
 
 // Frees the parser's arena/token vectors AND the struct itself.
-@ eparser_free * EParser p → v {
+@ eparser_free sink * EParser p → v {
     ( vec_free [i] . p tk )
     ( vec_free [i] . p tv )
     ( vec_free [i] . p arena )

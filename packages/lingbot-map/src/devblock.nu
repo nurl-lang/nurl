@@ -60,7 +60,7 @@ $ `deps/gpukit/src/devops.nu`
     f eps
 }
 
-@ lm_blk_free LmBlk w → v {
+@ lm_blk_free sink LmBlk w → v {
     ( gk_dbuf_free . w n1g ) ( gk_dbuf_free . w n1b )
     ( gk_dbuf_free . w qkvw ) ( gk_dbuf_free . w qkvb )
     ( gk_dbuf_free . w qng ) ( gk_dbuf_free . w qnb )
@@ -150,7 +150,7 @@ $ `deps/gpukit/src/devops.nu`
         maxkv }
 }
 
-@ lm_ws_free LmWs ws → v {
+@ lm_ws_free sink LmWs ws → v {
     ( gk_dbuf_free . ws norm ) ( gk_dbuf_free . ws qkv )
     ( gk_dbuf_free . ws qkvp ) ( gk_dbuf_free . ws kt )
     ( gk_dbuf_free . ws kpack ) ( gk_dbuf_free . ws vpack )
@@ -318,7 +318,7 @@ i heads i n i dim i nt i nh → b {
         ( gk_dbuf_new kit * heads * maxkv hd GK_F32 ) maxkv 0 0 }
 }
 
-@ lm_kv_free LmKv c → v { ( gk_dbuf_free . c k ) ( gk_dbuf_free . c v ) }
+@ lm_kv_free sink LmKv c → v { ( gk_dbuf_free . c k ) ( gk_dbuf_free . c v ) }
 
 // Transformer block over `n` tokens; `x` is [n, dim], updated in place.
 //

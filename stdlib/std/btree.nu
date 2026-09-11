@@ -95,7 +95,7 @@ $ `stdlib/core/vec.nu`
 }
 
 // Free a node block (arrays + block). Entries must already be handled.
-@ __bt_node_free s n → v {
+@ __bt_node_free sink s n → v {
     ( nurl_free # s ( nurl_peek n 0 ) )
     ( nurl_free # s ( nurl_peek n 1 ) )
     ? ( __bt_leaf n ) {} { ( nurl_free # s ( nurl_peek n 2 ) ) }
@@ -601,7 +601,7 @@ $ `stdlib/core/vec.nu`
     ( __bt_node_free n )
 }
 
-@ btree_free [K V] ( BTree K V ) m → v {
+@ btree_free [K V] sink ( BTree K V ) m → v {
     : s root # s ( nurl_peek . m ctl 0 )
     ? == 0 # i root {} { ( __bt_free_rec [K V] root ) }
     ( nurl_free . m ctl )
@@ -624,7 +624,7 @@ $ `stdlib/core/vec.nu`
     ( __bt_node_free n )
 }
 
-@ btree_free_with [K V] ( BTree K V ) m ( @ v K ) dk ( @ v V ) dv → v {
+@ btree_free_with [K V] sink ( BTree K V ) m ( @ v K ) dk ( @ v V ) dv → v {
     : s root # s ( nurl_peek . m ctl 0 )
     ? == 0 # i root {} { ( __bt_free_with_rec [K V] root dk dv ) }
     ( nurl_free . m ctl )

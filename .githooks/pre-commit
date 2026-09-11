@@ -30,12 +30,16 @@ mapfile -t FILES < <(git diff --cached --name-only --diff-filter=ACM -- '*.nu' |
 
 blocked=()
 fixed=()
+failed=()
 for f in "${FILES[@]}"; do
     [[ -f "$f" ]] || continue
     if git diff --quiet -- "$f"; then
         # No unstaged edits — safe to rewrite and re-stage.
         before="$(git hash-object "$f")"
-        "$FMT" --write "$f" >/dev/null 2>&1 || true
+        if ! "$FMT" --write "$f" >/dev/null; then
+            failed+=("$f")
+            continue
+        fi
         after="$(git hash-object "$f")"
         if [[ "$before" != "$after" ]]; then
             git add -- "$f"
@@ -46,6 +50,12 @@ for f in "${FILES[@]}"; do
         "$FMT" --check "$f" >/dev/null 2>&1 || blocked+=("$f")
     fi
 done
+
+if (( ${#failed[@]} > 0 )); then
+    echo "pre-commit: formatter failed; commit blocked:" >&2
+    for f in "${failed[@]}"; do echo "  $f" >&2; done
+    exit 1
+fi
 
 if (( ${#fixed[@]} > 0 )); then
     echo "pre-commit: nurlfmt formatted and re-staged:" >&2

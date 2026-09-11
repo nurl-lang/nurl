@@ -809,7 +809,7 @@ $ `bx.nu`
     ^ rc
 }
 
-@ __dd_free String a String b String c String d String e String f String g String h → v {
+@ __dd_free sink String a sink String b sink String c sink String d sink String e sink String f sink String g sink String h → v {
     ( string_free a )
     ( string_free b )
     ( string_free c )

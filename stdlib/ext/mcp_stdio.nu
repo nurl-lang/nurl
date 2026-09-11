@@ -144,7 +144,7 @@ $ `stdlib/core/vec.nu`
     ^ r
 }
 
-@ mcp_stdio_free McpStdioClient c → v {
+@ mcp_stdio_free sink McpStdioClient c → v {
     ( proc_free . c child )
 }
 

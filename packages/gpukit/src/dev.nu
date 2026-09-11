@@ -96,7 +96,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ^ @ GkBuf { . gb dptr n dtype }
 }
 
-@ gk_dbuf_free GkBuf b → v {
+@ gk_dbuf_free sink GkBuf b → v {
     ? != . b dptr 0 {
         : i bytes * . b n ( __gk_esz . b dtype )
         ? ( _gk_pool_give . b dptr bytes ) {} {

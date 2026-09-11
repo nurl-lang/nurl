@@ -54,7 +54,7 @@ $ `stdlib/ext/http2_hpack.nu`
     ^ hs
 }
 
-@ headers_free ( Vec Header ) hs → v {
+@ headers_free sink ( Vec Header ) hs → v {
     ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
 }
 

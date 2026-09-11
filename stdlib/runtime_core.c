@@ -73,6 +73,8 @@
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #  include <windows.h>
+#  include <io.h>
+#  include <fcntl.h>
 #endif
 #if defined(__SSE2__)
 #  include <emmintrin.h>
@@ -405,16 +407,38 @@ const char* nurl_read_line(void) {
 
 long long nurl_stdin_eof(void) { return g_stdin_eof_flag ? 1 : 0; }
 
+/* A signal may interrupt fread after it has already copied a prefix. Keep
+ * those bytes and retry only EINTR; callers inspect ferror for other errors. */
+static size_t nurl__fread_retry(void *buf, size_t n, FILE *stream) {
+    size_t done = 0;
+    while (done < n) {
+        done += fread((char *)buf + done, 1, n - done, stream);
+        if (ferror(stream) && errno == EINTR) {
+            clearerr(stream);
+            continue;
+        }
+        break;
+    }
+    return done;
+}
+
 /* Buffered binary read from stdin that shares nurl_read_line's FILE*
  * buffer. Framed stdio protocols (LSP / DAP / JSON-RPC) read the
  * Content-Length header line with nurl_read_line (fgetc) and then the
  * opaque body with this — both go through stdin's stdio buffer, so the
  * header read can't silently swallow body bytes that a raw read(2) on
  * the descriptor would then miss. Returns the number of bytes read
- * (0 at EOF). */
-long long nurl_stdin_read(void *buf, long long n) {
+ * (0 at EOF, -1 on an I/O error; a failed read is not an EOF). */
+long long nurl_stream_read(void *stream, void *buf, long long n) {
     if (n <= 0) return 0;
-    return (long long)fread(buf, 1, (size_t)n, stdin);
+    if (!stream || !buf || (unsigned long long)n > SIZE_MAX) { errno = EINVAL; return -1; }
+    FILE *f = (FILE *)stream;
+    size_t got = nurl__fread_retry(buf, (size_t)n, f);
+    return ferror(f) ? -1 : (long long)got;
+}
+
+long long nurl_stdin_read(void *buf, long long n) {
+    return nurl_stream_read(stdin, buf, n);
 }
 
 /* NURL_IO_LOCK is defined further down (with nurl_print); these two are
@@ -1671,20 +1695,80 @@ const char* nurl_argv_get(long long i){
 
 void nurl_exit(long long code) { exit((int)code); }
 
-/* Read entire file into a malloc'd, NUL-terminated string; exit on error.
- * The compiler's source-file load path goes through here. */
+/* Read a complete stream, preserving every byte. The initial capacity is
+ * a file-size hint when available; streams grow geometrically. Look ahead
+ * before growing a full buffer so an exact-size regular file needs only
+ * one allocation. Short reads and errors never expose uninitialised bytes. */
+static char *nurl__read_all(FILE *f, const char *name, size_t cap) {
+    if (!cap) cap = 4096;
+    if (cap == SIZE_MAX) nurl__oom((unsigned long long)cap);
+    char *buf = (char*)malloc(cap + 1);
+    size_t len = 0;
+    for (;;) {
+        len += nurl__fread_retry(buf + len, cap - len, f);
+        if (ferror(f)) {
+            int error = errno;
+            free(buf);
+            fprintf(stderr, "nurlc: cannot read '%s' (I/O error, errno %d)\n", name, error);
+            exit(1);
+        }
+        if (feof(f)) break;
+        if (len == cap) {
+            unsigned char next;
+            if (nurl__fread_retry(&next, 1, f) == 0) {
+                if (ferror(f)) {
+                    int error = errno;
+                    free(buf);
+                    fprintf(stderr, "nurlc: cannot read '%s' (I/O error, errno %d)\n", name, error);
+                    exit(1);
+                }
+                break;
+            }
+            if (cap > (SIZE_MAX - 1) / 2) nurl__oom((unsigned long long)SIZE_MAX);
+            cap *= 2;
+            buf = (char*)realloc(buf, cap + 1);
+            buf[len++] = (char)next;
+        }
+    }
+    buf[len] = '\0';
+    return buf;
+}
+
+/* Owned source text from stdin, without newline translation or a temporary
+ * file. Its logical filename is supplied separately by the compiler caller. */
+const char* nurl_read_stdin(void) {
+#ifdef _WIN32
+    int old_mode = _setmode(_fileno(stdin), _O_BINARY);
+    if (old_mode == -1) {
+        fprintf(stderr, "nurlc: cannot read stdin in binary mode\n");
+        exit(1);
+    }
+#endif
+    char *buf = nurl__read_all(stdin, "<stdin>", 4096);
+#ifdef _WIN32
+    _setmode(_fileno(stdin), old_mode);
+#endif
+    return buf;
+}
+
+/* Read entire file into an owned, NUL-terminated string; exit on error.
+ * Seekable files keep the single-allocation path; pipes are read to EOF. */
 const char* nurl_read_file(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "nurlc: cannot open '%s'\n", path);
         exit(1);
     }
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *buf = (char*)malloc((size_t)sz + 1);
-    fread(buf, 1, (size_t)sz, f);
-    buf[sz] = '\0';
+    /* Only regular-file sizes are allocation hints. Seeking a directory
+     * to END can report LONG_MAX; seekable devices also need stream reads.
+     * fstat uses the opened handle and leaves its read position untouched. */
+    size_t cap = 0;
+    struct stat st;
+    if (fstat(fileno(f), &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG && st.st_size > 0) {
+        if ((uintmax_t)st.st_size >= SIZE_MAX) nurl__oom((unsigned long long)st.st_size);
+        cap = (size_t)st.st_size;
+    }
+    char *buf = nurl__read_all(f, path, cap);
     fclose(f);
     return buf;
 }
@@ -2527,6 +2611,17 @@ long long nurl_alloc_count(void)               { return (long long)nurl__actr_to
 long long nurl_free_count(void)                { return (long long)nurl__actr_total(1); }
 void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)bytes); }
 
+/* Dynamic string-return proof belongs to the executing thread. The compiler
+ * captures it immediately after a call, before any destructor or defer can
+ * publish another result. WASI without threads has one execution context. */
+#if defined(__wasi__) && !defined(__wasm_atomics__)
+static long long nurl__ret_owned;
+#else
+static __thread long long nurl__ret_owned;
+#endif
+long long nurl_ret_owned_get(void) { return nurl__ret_owned; }
+void nurl_ret_owned_set(long long proof) { nurl__ret_owned = proof; }
+
 /* ── §9b  Panic-unwind allocation journal ──────────────────────────
  *
  * A `recover` frame establishes a setjmp landing pad; a `panic` inside
@@ -2564,108 +2659,135 @@ void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)byt
  * the unwind path. A typed entry is not a heap pointer, so nurl_free
  * never matches it — the compiler forgets it explicitly at the value's
  * normal drop site instead. */
-static __thread void          **nurl__jrnl     = NULL;
-static __thread void          (**nurl__jrnl_fn)(void*) = NULL;
-static __thread long long       nurl__jrnl_len = 0;
-static __thread long long       nurl__jrnl_cap = 0;
-static __thread int             nurl__jrnl_active = 0;   /* recover-extent depth */
+/* Ordered registrations with a pointer index. Removal is proportional to
+ * registrations in one hash bucket, not all live allocations. Sequence marks
+ * belong to recovery extents, not array positions: deleting an outer owner or
+ * compacting holes cannot move a new inner owner before its frame's mark. */
+typedef struct {
+    void *ptr;
+    void (*drop)(void*);
+    uint64_t sequence;
+    size_t next;                 /* index + 1 in this pointer's hash bucket */
+} NurlJournalEntry;
+static __thread NurlJournalEntry *nurl__jrnl = NULL;
+static __thread size_t *nurl__jrnl_buckets = NULL;
+static __thread size_t nurl__jrnl_len = 0, nurl__jrnl_cap = 0;
+static __thread size_t nurl__jrnl_live = 0;
+static __thread uint64_t nurl__jrnl_sequence = 0;
+static __thread int nurl__jrnl_active = 0;
 
-static int nurl__jrnl_grow(void) {
-    if (nurl__jrnl_len != nurl__jrnl_cap) return 1;
-    long long nc = nurl__jrnl_cap ? nurl__jrnl_cap * 2 : 32;
-    /* raw (realloc): this path deliberately degrades to a leak on OOM
-     * rather than aborting — the journal is best-effort cleanup. */
-    void **nb = (void**)(realloc)(nurl__jrnl, (size_t)nc * sizeof(void*));
-    if (!nb) return 0;               /* OOM: degrade to a leak, never crash */
-    void (**nf)(void*) = (void(**)(void*))(realloc)(nurl__jrnl_fn,
-                                                    (size_t)nc * sizeof(void(*)(void*)));
-    if (!nf) { nurl__jrnl = nb; return 0; }
-    nurl__jrnl = nb; nurl__jrnl_fn = nf; nurl__jrnl_cap = nc;
-    return 1;
+static size_t nurl__jrnl_bucket(void *p) {
+    uint64_t h = (uint64_t)(uintptr_t)p;
+    h ^= h >> 30; h *= UINT64_C(0xbf58476d1ce4e5b9);
+    h ^= h >> 27; h *= UINT64_C(0x94d049bb133111eb);
+    h ^= h >> 31;
+    return (size_t)h & (nurl__jrnl_cap * 2 - 1);
 }
 
-/* Record an owned heap buffer for panic-unwind cleanup (free on drain).
- * No-op outside a recover extent (the common case): one branch. */
-void nurl_journal_push(void *p) {
-    if (!nurl__jrnl_active || !p) return;
-    if (!nurl__jrnl_grow()) return;
-    nurl__jrnl[nurl__jrnl_len] = p;
-    nurl__jrnl_fn[nurl__jrnl_len] = NULL;
-    nurl__jrnl_len++;
-}
-
-/* Record an owned value with a typed destructor: `slot` is its alloca,
- * `fn` a `void(*)(void*)` thunk that loads + drops it. Drained on panic,
- * forgotten by the compiler at the value's normal drop site. */
-void nurl_journal_push_drop(void *slot, void (*fn)(void*)) {
-    if (!nurl__jrnl_active || !slot || !fn) return;
-    if (!nurl__jrnl_grow()) return;
-    nurl__jrnl[nurl__jrnl_len] = slot;
-    nurl__jrnl_fn[nurl__jrnl_len] = fn;
-    nurl__jrnl_len++;
-}
-
-/* Removed entries are NULLed in place (indices are load-bearing: recover
- * frames hold marks into this array), which leaves the tail of the
- * journal as a growing run of dead slots under LIFO churn — and LIFO
- * churn is exactly what a request handler is: a temporary is pushed,
- * freed a few instructions later, and the next free's scan walks the
- * whole dead run again. Measured on an embedding server whose handler
- * built a 65k-float response: the journal reached 65k mostly-NULL slots
- * and nurl_free's scan was 95% of a 3.9 s request. Popping the trailing
- * NULLs after every removal keeps the journal at the size of the LIVE
- * set instead. Only trailing dead slots are dropped, so no live entry
- * moves; a mark above the shrunken length simply has nothing left to
- * truncate or drain, which is exactly what it had before. */
-static void nurl__jrnl_pop_nulls(void) {
-    while (nurl__jrnl_len > 0 && nurl__jrnl[nurl__jrnl_len - 1] == NULL)
-        nurl__jrnl_len--;
-}
-
-/* Drop every recorded occurrence of `p` without running its dropper —
- * used at an escape sink, and at a typed value's normal drop site. */
-void nurl_journal_forget(void *p) {
-    if (nurl__jrnl_len == 0 || !p) return;
-    for (long long i = nurl__jrnl_len; i-- > 0; )
-        if (nurl__jrnl[i] == p) nurl__jrnl[i] = NULL;
-    nurl__jrnl_pop_nulls();
-}
-
-/* nurl_free removal — every occurrence, so a value can never resurface
- * on the unwind path after it was released normally. */
-static void nurl__jrnl_remove(void *p) {
-    for (long long i = nurl__jrnl_len; i-- > 0; )
-        if (nurl__jrnl[i] == p) nurl__jrnl[i] = NULL;
-    nurl__jrnl_pop_nulls();
-}
-
-/* Current journal depth — captured by a recover frame as its mark. */
-static long long nurl__jrnl_mark(void) { return nurl__jrnl_len; }
-
-/* Forget entries back to `mark` without dropping (normal completion). */
-static void nurl__jrnl_truncate(long long mark) {
-    if (mark < nurl__jrnl_len) nurl__jrnl_len = mark;
-    nurl__jrnl_pop_nulls();
-}
-
-/* Reclaim every still-live entry recorded since `mark`, deduping aliased
- * co-owners, then truncate. Runs on the panic path while the owning
- * frames are still valid (before the longjmp). A typed entry runs its
- * dropper on the alloca; a raw entry is freed. */
-static void nurl__jrnl_drain(long long mark) {
-    for (long long i = nurl__jrnl_len; i-- > mark; ) {
-        void *p = nurl__jrnl[i];
-        if (!p) continue;
-        void (*fn)(void*) = nurl__jrnl_fn[i];
-        nurl__jrnl[i] = NULL;
-        /* dedup: null any earlier alias so we reclaim it once */
-        for (long long k = mark; k < i; k++)
-            if (nurl__jrnl[k] == p) nurl__jrnl[k] = NULL;
-        if (fn) fn(p);
-        else    free(p);   /* already removed from the journal above */
+static void nurl__jrnl_reindex(void) {
+    memset(nurl__jrnl_buckets, 0, nurl__jrnl_cap * 2 * sizeof(size_t));
+    for (size_t i = 0; i < nurl__jrnl_len; ++i) {
+        if (!nurl__jrnl[i].ptr) continue;
+        size_t bucket = nurl__jrnl_bucket(nurl__jrnl[i].ptr);
+        nurl__jrnl[i].next = nurl__jrnl_buckets[bucket];
+        nurl__jrnl_buckets[bucket] = i + 1;
     }
-    nurl__jrnl_len = mark;
+}
+
+static void nurl__jrnl_grow(void) {
+    if (nurl__jrnl_len < nurl__jrnl_cap) return;
+    if (nurl__jrnl_cap && nurl__jrnl_live <= nurl__jrnl_cap / 2) {
+        /* FIFO churn leaves holes below live entries. Compact only after at
+         * least half the capacity was removed; this amortizes the copy and
+         * keeps space proportional to the live high-water mark. */
+        size_t dst = 0;
+        for (size_t i = 0; i < nurl__jrnl_len; ++i)
+            if (nurl__jrnl[i].ptr) nurl__jrnl[dst++] = nurl__jrnl[i];
+        nurl__jrnl_len = dst;
+    } else {
+        if (nurl__jrnl_cap > SIZE_MAX / (2 * sizeof(NurlJournalEntry)))
+            nurl__oom(SIZE_MAX);
+        size_t cap = nurl__jrnl_cap ? nurl__jrnl_cap * 2 : 32;
+        nurl__jrnl = realloc(nurl__jrnl, cap * sizeof(NurlJournalEntry));
+        nurl__jrnl_buckets = realloc(nurl__jrnl_buckets, cap * 2 * sizeof(size_t));
+        nurl__jrnl_cap = cap;
+    }
+    nurl__jrnl_reindex();
+}
+
+static void nurl__jrnl_push(void *p, void (*drop)(void*)) {
+    if (!nurl__jrnl_active || !p) return;
+    nurl__jrnl_grow();
+    if (nurl__jrnl_sequence == UINT64_MAX) {
+        fputs("nurl: panic journal sequence exhausted\n", stderr);
+        abort();
+    }
+    size_t bucket = nurl__jrnl_bucket(p);
+    NurlJournalEntry *entry = &nurl__jrnl[nurl__jrnl_len];
+    entry->ptr = p; entry->drop = drop;
+    entry->sequence = ++nurl__jrnl_sequence;
+    entry->next = nurl__jrnl_buckets[bucket];
+    nurl__jrnl_buckets[bucket] = ++nurl__jrnl_len;
+    ++nurl__jrnl_live;
+}
+
+void nurl_journal_push(void *p) { nurl__jrnl_push(p, NULL); }
+void nurl_journal_push_drop(void *slot, void (*fn)(void*)) {
+    if (fn) nurl__jrnl_push(slot, fn);
+}
+
+static void nurl__jrnl_pop_nulls(void) {
+    while (nurl__jrnl_len && !nurl__jrnl[nurl__jrnl_len - 1].ptr)
+        --nurl__jrnl_len;
+}
+
+/* Remove all aliases; normal frees and explicit ownership transfers share
+ * this operation. Bucket links are stable until growth or compaction. */
+void nurl_journal_forget(void *p) {
+    if (!nurl__jrnl_live || !p) return;
+    size_t *link = &nurl__jrnl_buckets[nurl__jrnl_bucket(p)];
+    while (*link) {
+        NurlJournalEntry *entry = &nurl__jrnl[*link - 1];
+        if (entry->ptr == p) {
+            *link = entry->next;
+            entry->ptr = NULL;
+            --nurl__jrnl_live;
+        } else link = &entry->next;
+    }
     nurl__jrnl_pop_nulls();
+}
+
+static void nurl__jrnl_remove(void *p) { nurl_journal_forget(p); }
+static uint64_t nurl__jrnl_mark(void) { return nurl__jrnl_sequence; }
+
+/* Normal completion forgets only registrations made in this extent: an
+ * outer registration for the same address retains its own obligation. */
+static void nurl__jrnl_truncate(uint64_t mark) {
+    nurl__jrnl_pop_nulls();
+    while (nurl__jrnl_len && nurl__jrnl[nurl__jrnl_len - 1].sequence > mark) {
+        size_t index = nurl__jrnl_len - 1;
+        NurlJournalEntry *entry = &nurl__jrnl[index];
+        size_t *link = &nurl__jrnl_buckets[nurl__jrnl_bucket(entry->ptr)];
+        while (*link != index + 1) link = &nurl__jrnl[*link - 1].next;
+        *link = entry->next;
+        entry->ptr = NULL;
+        --nurl__jrnl_live;
+        nurl__jrnl_pop_nulls();
+    }
+}
+
+/* Re-read the tail after every drop: destructors may forget other owners,
+ * register scratch storage, or enter nested recovery. No index/pointer into
+ * the journal survives the call. Raw frees forget aliases in outer extents
+ * too, so an outer panic cannot reclaim already-freed storage a second time. */
+static void nurl__jrnl_drain(uint64_t mark) {
+    nurl__jrnl_pop_nulls();
+    while (nurl__jrnl_len && nurl__jrnl[nurl__jrnl_len - 1].sequence > mark) {
+        NurlJournalEntry entry = nurl__jrnl[nurl__jrnl_len - 1];
+        nurl_journal_forget(entry.ptr);
+        if (entry.drop) entry.drop(entry.ptr);
+        else free(entry.ptr);
+    }
 }
 
 void  nurl_free(void *ptr)                     { if (!ptr) return; nurl__actr_bump(&nurl__actr_slot()->freed); if (nurl__jrnl_len) nurl__jrnl_remove(ptr); if (!nurl__sc_push(ptr)) free(ptr); }
@@ -3247,6 +3369,13 @@ long long nurl_native_sizeof(const char *name) {
  * names — NURL callers gate the whole code path on a target check. */
 long long nurl_native_constant(const char *name) {
     if (!name) return -1;
+    if (strcmp(name, "PATH_LIST_SEPARATOR") == 0) {
+#ifdef _WIN32
+        return ';';
+#else
+        return ':';
+#endif
+    }
 #if !defined(_WIN32) && !defined(__wasi__)
     if (strcmp(name, "F_GETFL")     == 0) return F_GETFL;
     if (strcmp(name, "F_SETFL")     == 0) return F_SETFL;
@@ -3759,11 +3888,11 @@ const char* nurl_dirent_name(const void *de) {
 /* ── §20  Panic / recover (setjmp/longjmp) ────────────────────── */
 /*
  * NURL's panic is a narrow setjmp/longjmp unwind to the nearest recover
- * frame — NOT exception-style with destructor calls. Owned heap allocs
- * made inside the recover scope LEAK; this is the price of skipping EH
- * tables, and acceptable because recover is for crash-mitigation
- * (handler bug, LLM-scaffold misfire), not routine errors (`! T E`
- * stays canonical). Signal faults (SIGSEGV etc.) are NOT bridged in —
+ * frame. Before jumping, the ownership journal releases registered raw
+ * buffers and invokes registered typed destructors while their stack
+ * slots are still valid. Values not registered by the compiler remain
+ * the explicit owner's responsibility. Signal faults (SIGSEGV etc.) are
+ * NOT bridged in —
  * async-signal-safety would force the whole runtime into an unsafe
  * "may run during panic" contract.
  *
@@ -3775,7 +3904,7 @@ const char* nurl_dirent_name(const void *de) {
 typedef struct NurlPanicFrame {
     jmp_buf                  jb;
     char                    *msg;   /* owned panic message or NULL */
-    long long                jmark; /* journal depth at recover entry */
+    uint64_t                 jmark; /* registration sequence at recover entry */
     struct NurlPanicFrame   *prev;
 } NurlPanicFrame;
 
@@ -3810,32 +3939,6 @@ long long nurl_recover(void *fn_ptr, void *env_ptr) {
      * longjmp; truncate defensively in case the jump came from a path
      * that did not (it always does, but keep the invariant local). */
     nurl__jrnl_truncate(frame.jmark);
-    free(nurl__panic_last_msg);
-    nurl__panic_last_msg = frame.msg ? frame.msg : strdup("(no panic message)");
-    return 1;
-}
-
-/* Like nurl_recover but WITHOUT activating the allocation journal.
- * For recovery extents on a program's error/exit path (nurlc's
- * multi-error resync): the journal exists to prevent unwind leaks, but
- * it makes every nurl_free scan the live journal — quadratic when the
- * extent allocates heavily. Here the caller accepts that a panic leaks
- * whatever the extent allocated (the process is about to exit non-zero
- * anyway) in exchange for ZERO happy-path overhead: with jrnl_active
- * unchanged, journal pushes stay no-ops and nurl_free never scans. */
-long long nurl_recover_nojournal(void *fn_ptr, void *env_ptr) {
-    if (!fn_ptr) return 0;
-    NurlPanicFrame frame;
-    frame.msg   = NULL;
-    frame.jmark = nurl__jrnl_mark();
-    frame.prev  = nurl__panic_top;
-    nurl__panic_top = &frame;
-    if (setjmp(frame.jb) == 0) {
-        ((void (*)(void *))fn_ptr)(env_ptr);
-        nurl__panic_top = frame.prev;
-        return 0;
-    }
-    nurl__panic_top = frame.prev;
     free(nurl__panic_last_msg);
     nurl__panic_last_msg = frame.msg ? frame.msg : strdup("(no panic message)");
     return 1;
@@ -3895,14 +3998,6 @@ void nurl_panic(const char *msg) {
         *   - nurl_panic_last_msg always returns "". */
 
 long long nurl_recover(void *fn_ptr, void *env_ptr) {
-    if (!fn_ptr) return 0;
-    ((void (*)(void *))fn_ptr)(env_ptr);
-    return 0;
-}
-
-/* Same stub shape: run inline, no unwind (a panic aborts). nurlc's
- * multi-error resync therefore degrades to fail-fast on wasm. */
-long long nurl_recover_nojournal(void *fn_ptr, void *env_ptr) {
     if (!fn_ptr) return 0;
     ((void (*)(void *))fn_ptr)(env_ptr);
     return 0;

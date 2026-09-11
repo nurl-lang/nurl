@@ -300,7 +300,7 @@ $ `stdlib/std/async_ffi.nu`
 
 // ── UdpPacket helpers ──────────────────────────────────────────────
 
-@ udp_packet_free UdpPacket p → v {
+@ udp_packet_free sink UdpPacket p → v {
     : ( Vec u ) d . p data
     : String pr . p peer
     ( vec_free [u] d )
