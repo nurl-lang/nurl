@@ -38,7 +38,13 @@ if (( $# > 1 )); then
     echo 'usage: tools/leakgate.sh [source.nu]' >&2
     exit 2
 fi
-sources=("$ROOT/compiler/nurlc.nu" "$ROOT/compiler/tests/enum_tree_drop.nu" "$ROOT/compiler/tests/nested_field_store.nu" "$ROOT/compiler/tests/enum_nested_tag_payload.nu" "$ROOT/compiler/tests/sink_enum_owned.nu" "$ROOT/compiler/tests/sink_summary_storage.nu")
+# alias_rewrite_types.nu is here for the same reason the select test is in
+# the CI leak step: nurlc.nu contains no ALIASED import, so the source
+# rewriter that aliasing runs never reached this gate, and it leaked a whole
+# rewritten copy of every aliased import — 1,743 bytes compiling this one
+# file. A gate that only compiles the compiler cannot see a path the
+# compiler's own source does not take.
+sources=("$ROOT/compiler/nurlc.nu" "$ROOT/compiler/tests/enum_tree_drop.nu" "$ROOT/compiler/tests/nested_field_store.nu" "$ROOT/compiler/tests/enum_nested_tag_payload.nu" "$ROOT/compiler/tests/sink_enum_owned.nu" "$ROOT/compiler/tests/sink_summary_storage.nu" "$ROOT/compiler/tests/alias_rewrite_types.nu")
 if (( $# == 1 )); then sources=("$1"); fi
 
 [ -x "$NURLC" ] || { echo "leakgate: $NURLC missing — run ./build.sh --san --no-tests first" >&2; exit 2; }

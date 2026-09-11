@@ -2005,3 +2005,40 @@ That is a structural addition to the checker, not an `if`.
 
 Both measurements argue for deciding the question deliberately rather than
 patching toward it. They are recorded here so the decision has numbers.
+
+### The compiler leaked every aliased import (2026-09-11)
+
+Grouping the corpus's leaks by the function that allocated them —
+`tools/fuzz/leak_triage.py`, written for that purpose — put six programs
+under `alias_rewrite_source`. That is not a stdlib function. It is the
+COMPILER's, and the logs were the `.compile` step, not the program run:
+`nurlc` itself leaked 1,743 bytes in three allocations compiling
+`alias_rewrite_types.nu`.
+
+Three call sites shared one shape:
+
+```nurl
+: s eff_src ? != 0 ( nurl_str_len alias )
+{ … ( alias_rewrite_source src names … ) }     — a fresh rewritten copy
+src                                            — a borrow
+```
+
+A `?` whose arms mix a fresh allocation with a borrow has mixed ownership,
+so the binding owns nothing and the rewritten copy of the whole source is
+never freed: one per aliased import, at every one of the three sites that
+read an import. Spelling the other arm `( nurl_str_cat src `` )` makes the
+binding uniformly owned, and scope exit frees it like any other string. The
+copy that arm now makes is transient; self-compile peak RSS is 38 MB against
+a 600 MB budget.
+
+`tools/leakgate.sh` says "ANY LeakSanitizer report fails, no allowance, no
+budget" and compiles the compiler plus five regressions — none of which
+contains an aliased import, because `compiler/nurlc.nu` does not use one.
+The same hole the CI leak step already documents for `gen_select` ("the
+self-compile gate cannot cover that path — nurlc.nu contains no select").
+`alias_rewrite_types.nu` joins the gate's source list, so the path stays
+covered by the thing that is supposed to cover it.
+
+This is what the leak inventory was for. Ninety-odd leaking programs is a
+list nobody reads; grouped by allocating function it was six programs and
+one name, and the name was the compiler's own.

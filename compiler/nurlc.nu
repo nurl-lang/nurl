@@ -26788,11 +26788,19 @@
     { ( mem_mark_imported syms __imp_key )
         ( __require_import_file lex __li_line __li_col path )
         : s src ( compiler_read_source path )
+        // Both arms allocate. The alias arm hands back a freshly rewritten
+        // copy of the source; spelling the other arm as a bare `src`
+        // borrow made the binding mixed-ownership, so nothing owned the
+        // rewritten copy and it leaked — 581 bytes per aliased import,
+        // three of them compiling alias_rewrite_types.nu, on a path the
+        // leak gate never reached because nurlc.nu has no aliased import.
+        // The copy the other arm now makes is freed at scope exit like
+        // any other owned string.
         : s eff_src ? != 0 ( nurl_str_len alias )
         { : s names ( collect_alias_targets src path )
             ( alias_rewrite_source src names ( nurl_str_cat alias `__` ) )
         }
-        src
+        ( nurl_str_cat src `` )
         // Save / restore the current source-file across the nested scan
         // + parse passes so vis_record_fn and gen_call attribute decls
         // (and visibility checks) to the imported file's path, not the
@@ -30553,11 +30561,12 @@
                             ( nurl_sym_def syms `__scanned_files__` new_scanned )
                             ( __require_import_file lex __im_ln __im_cl path )
                             : s src2 ( compiler_read_source path )
+                            // Uniform ownership, as at the other two sites.
                             : s eff_src2 ? != 0 ( nurl_str_len alias )
                             { : s names ( collect_alias_targets src2 path )
                                 ( alias_rewrite_source src2 names ( nurl_str_cat alias `__` ) )
                             }
-                            src2
+                            ( nurl_str_cat src2 `` )
                             : i lex2 ( nurl_lex_new eff_src2 path )
                             // Save / restore the current source-file across the nested
                             // scan so vis_record_fn attributes decls in the imported
@@ -30724,11 +30733,12 @@
                             ( nurl_sym_def syms `__tn_scanned__` new_marker )
                             ( __require_import_file lex __im_ln __im_cl path )
                             : s src2 ( compiler_read_source path )
+                            // Uniform ownership, as at the other two sites.
                             : s eff_src2 ? != 0 ( nurl_str_len alias )
                             { : s names ( collect_alias_targets src2 path )
                                 ( alias_rewrite_source src2 names ( nurl_str_cat alias `__` ) )
                             }
-                            src2
+                            ( nurl_str_cat src2 `` )
                             : i lex2 ( nurl_lex_new eff_src2 path )
                             // Track the imported file as current so its own
                             // `$`-imports resolve importer-relative (mirrors
