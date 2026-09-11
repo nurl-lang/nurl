@@ -64,13 +64,18 @@ else
     )
 fi
 
-OFFENDERS=()
-for rel in "${FILES[@]}"; do
-    [[ -f "$rel" ]] || continue
-    if ! "$NURLFMT" --check "$rel" >/dev/null 2>&1; then
-        OFFENDERS+=("$rel")
-    fi
-done
+# One formatter process per file, serially, over the whole tracked tree
+# is most of a minute of CI wall time spent on process startup. Each file
+# is independent, so run them in parallel and collect the offenders.
+JOBS="${NURL_CHECK_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
+HITS="$(mktemp)"
+trap 'rm -f "$HITS"' EXIT
+printf '%s\n' "${FILES[@]}" | NURLFMT_BIN="$NURLFMT" xargs -P "$JOBS" -I{} bash -c '
+    [[ -f "$1" ]] || exit 0
+    "$NURLFMT_BIN" --check "$1" >/dev/null 2>&1 || printf "%s\n" "$1"
+    exit 0
+' _ {} > "$HITS"
+mapfile -t OFFENDERS < <(sort "$HITS")
 
 if (( ${#OFFENDERS[@]} == 0 )); then
     echo "nurlfmt --check: OK — ${#FILES[@]} files are canonical."

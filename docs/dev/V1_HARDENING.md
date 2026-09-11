@@ -1507,3 +1507,34 @@ upgrade cannot log the user out or delete their model cache. What it does
 not do is stage the unpack: it removes the old toolchain before extracting,
 so an extraction interrupted after verification leaves a broken prefix that
 only a re-run repairs.
+
+### The compiler job's budget, and two serial gates (2026-09-11)
+
+The Linux compiler job was cancelled 15 minutes in, during the strict-arity
+gate. A cancelled job is the worst shape a CI failure can take: no gate
+reported anything, so the log says only that time ran out. The step timings
+show it was not a regression but a budget with no room. The previous green
+run of the same job totalled 843 s against a 15-minute limit — 57 seconds of
+headroom — with 306 s in the strict-arity gate and 258 s in `build.sh`. The
+next run drew a slower machine, both grew about a quarter, and the sum
+crossed the line.
+
+Both gates spent nearly all of that on process startup: one compiler (or
+formatter) invocation per file, strictly serially, over the tracked tree.
+Each file is compiled alone and only its own diagnostics are read, so the
+work is embarrassingly parallel. Running it under `xargs -P` takes the
+strict-arity gate from 12 min 20 s of CPU to 1 min 20 s of wall time on a
+12-core machine; the formatting gate is now floored by its single largest
+file (`nurlfmt --check compiler/nurlc.nu` alone is 23 s), which no amount of
+parallelism can shorten.
+
+Raising the limit was the other option and the worse one: the job would have
+kept spending six minutes on startup overhead, and the next slow runner
+would have found the new line instead.
+
+The strict-arity gate also took its file list from six hand-named
+directories, which left `unikernel/` and `pttvoice/` unchecked — the same
+defect A10 found in the formatting gate. It now uses the tracked inventory
+minus `bench/` and vendored `deps/` copies: 1,407 files, up from 1,374.
+Both gates were re-verified against a deliberate offender: each still exits
+1 and names the file.
