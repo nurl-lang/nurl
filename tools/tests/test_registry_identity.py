@@ -23,6 +23,7 @@ class RegistryIdentityTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.binary = Path(os.environ.get('NURLPKG', ROOT / 'build/nurlpkg')).resolve()
+        cls.compiler = Path(os.environ.get('NURLC', ROOT / 'build/nurlc')).resolve()
         cls.tmp = tempfile.TemporaryDirectory(prefix='nurl-registry-keys-')
         cls.addClassCleanup(cls.tmp.cleanup)
         cls.keys = {registry: make_key(cls.tmp.name, index + 1)
@@ -38,6 +39,12 @@ class RegistryIdentityTest(unittest.TestCase):
         self.disconnect = set()
         owner = self
         class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                owner.requests.append(self.path)
+                self.send_response(500)
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+
             def do_GET(self):
                 owner.requests.append(self.path)
                 if self.path in owner.disconnect:
@@ -61,7 +68,8 @@ class RegistryIdentityTest(unittest.TestCase):
         self.env = {key: value for key, value in os.environ.items()
                     if key not in ['NURL_REGISTRY', 'NURL_REGISTRY_PUBKEY', 'NURL_REGISTRY_CONFIG']}
         self.env.update(NURL_REGISTRY_CONFIG=str(self.config), NURL_NO_UPDATE_CHECK='1',
-                        DEBUGINFOD_URLS='', ASAN_OPTIONS='detect_leaks=0:halt_on_error=1',
+                        DEBUGINFOD_URLS='', ASAN_OPTIONS=os.environ.get(
+                            'ASAN_OPTIONS', 'detect_leaks=0:halt_on_error=1'),
                         UBSAN_OPTIONS='halt_on_error=1')
 
     def stop_server(self):
@@ -225,6 +233,83 @@ class RegistryIdentityTest(unittest.TestCase):
                 self.assertEqual((self.project/'nurl.toml').read_bytes(), manifest)
         self.assertFalse(any('/pkgs/' in path for path in self.requests), self.requests)
 
+    def publish_project(self):
+        self.manifest([])
+        (self.project/'src').mkdir()
+        (self.project/'src/main.nu').write_text('@ main → i { ^ 0 }\n')
+        (self.project/'nurl.lock').write_bytes(b'prior lock must survive\n')
+        return {**self.env, 'HOME': str(self.project/'home'), 'NURL_STDLIB': '',
+                'NURL_TOKEN': 'isolated-publish-gate-test'}
+
+    def publish_toolchain(self, name='toolchain'):
+        temp = tempfile.TemporaryDirectory(prefix='nurl-publish-target-')
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)/name
+        (root/'bin').mkdir(parents=True)
+        (root/'bin/nurlc').symlink_to(self.compiler)
+        (root/'stdlib').symlink_to(ROOT/'stdlib', target_is_directory=True)
+        return root
+
+    def assert_publish_gate_failed(self, env, diagnostic):
+        manifest = (self.project/'nurl.toml').read_bytes()
+        for args in [('publish', '--dry-run'), ('publish',)]:
+            run = self.run_pkg(*args, env=env)
+            self.assertNotEqual(run.returncode, 0, run.stdout+run.stderr)
+            self.assertIn(diagnostic, run.stderr)
+            self.assertNotIn(b'every gate passed', run.stdout)
+            self.assertEqual((self.project/'nurl.toml').read_bytes(), manifest)
+            self.assertEqual((self.project/'nurl.lock').read_bytes(), b'prior lock must survive\n')
+            self.assertEqual(self.requests, [])
+        return run
+
+    def test_publish_requires_installed_compiler(self):
+        env = self.publish_project()
+        self.assert_publish_gate_failed(env, b'no installed compiler')
+
+    def test_publish_requires_toolchain_root(self):
+        env = self.publish_project()
+        del env['HOME']
+        self.assert_publish_gate_failed(env, b'cannot locate the target toolchain')
+
+    def test_publish_reports_compiler_launch_failure(self):
+        env = self.publish_project()
+        root = self.project/'unlaunchable'
+        (root/'bin').mkdir(parents=True)
+        (root/'bin/nurlc').write_text('not an executable\n')
+        self.assert_publish_gate_failed({**env, 'NURL_STDLIB': str(root)},
+                                       b'could not launch the installed compiler')
+
+    def test_publish_preserves_compiler_diagnostics(self):
+        env = self.publish_project()
+        root = self.publish_toolchain()
+        (self.project/'src/main.nu').write_text('@ main → i { ^ missing_symbol }\n')
+        run = self.assert_publish_gate_failed({**env, 'NURL_STDLIB': str(root)}, b'missing_symbol')
+        self.assertNotIn(b'every imported stdlib FILE exists', run.stderr)
+
+    def test_publish_compiler_paths_are_literal_arguments(self):
+        env = self.publish_project()
+        # A shell must never interpret either the spaces or this substitution.
+        root = self.publish_toolchain('target $(touch EXECUTED) toolchain')
+        run = self.run_pkg('publish', '--dry-run', env={**env, 'NURL_STDLIB': str(root)})
+        self.assertFalse((self.project/'EXECUTED').exists())
+        self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
+        self.assertIn(b'every gate passed', run.stdout)
+
+    def test_publish_uses_default_installed_toolchain(self):
+        env = self.publish_project()
+        root = self.publish_toolchain('home/.nurl')
+        env['HOME'] = str(root.parent)
+        # Only this target has the imported module. A compiler-checkout fallback
+        # cannot make this positive control pass.
+        (root/'stdlib').unlink()
+        (root/'stdlib').mkdir()
+        (root/'stdlib/target_probe.nu').write_text('@ target_answer → i { ^ 7 }\n')
+        (self.project/'src/main.nu').write_text(
+            '$ `stdlib/target_probe.nu`\n@ main → i { ^ - ( target_answer ) 7 }\n')
+        run = self.run_pkg('publish', '--dry-run', env=env)
+        self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
+        self.assertIn(b'every gate passed', run.stdout)
+
     def test_publish_drift_check_refuses_failed_index(self):
         self.project.joinpath('src').mkdir()
         self.project.joinpath('src/main.nu').write_text('@ main → i { ^ 0 }\n')
@@ -239,7 +324,7 @@ class RegistryIdentityTest(unittest.TestCase):
         self.addCleanup(prefix.cleanup)
         toolchain = Path(prefix.name)
         (toolchain/'bin').mkdir()
-        (toolchain/'bin/nurlc').symlink_to(ROOT/'build/nurlc')
+        (toolchain/'bin/nurlc').symlink_to(self.compiler)
         (toolchain/'stdlib').symlink_to(ROOT/'stdlib', target_is_directory=True)
         run = self.run_pkg('publish', '--dry-run', env={**self.env,
             'NURL_STDLIB': str(toolchain)})

@@ -197,9 +197,11 @@ not the checkout you developed in. That last gate compiles with
 because a package can import stdlib files that have shipped for years
 while calling a function added to one of them last week: every path
 exists, and the tarball still fails to build for everyone who installs
-it. If no installed compiler is found the gate WARNs and lets the
-publish through rather than passing silently — an unverifiable check
-should say so. `--dry-run` runs all five and uploads nothing (and needs
+it. A missing target root, missing compiler, failed compiler launch or
+compiler diagnostic refuses publication, including `--dry-run`. Install the
+target toolchain before retrying. The compiler runs directly with `--check`;
+toolchain paths are literal arguments, and no C compiler or linker is needed.
+`--dry-run` runs all five and uploads nothing (and needs
 no token). Know what that gate does **not** cover: a **library** package
 has no `src/main.nu`, so the compile gate returns success without
 compiling anything — `every gate passed` on a library means the manifest

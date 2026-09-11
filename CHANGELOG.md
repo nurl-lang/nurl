@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Publication requires a successful target-compiler check.** Packages with
+  `src/main.nu` can no longer publish when the target toolchain or compiler is
+  absent. Compiler launch failures and compilation failures retain their actual
+  cause instead of blaming a missing stdlib API. The compiler is invoked with
+  literal arguments and `--check`, removing shell interpretation of toolchain
+  paths. Both publication and dry-run stop before upload on these failures.
+
 - **Registry failures preserve their cause.** Index fetch callbacks return
   `!RegIndex RegistryFetchErr`. HTTP/transport errors and invalid indexes abort
   resolution instead of masquerading as missing packages and silently selecting

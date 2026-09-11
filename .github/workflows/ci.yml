@@ -658,6 +658,19 @@ jobs:
       - name: Enum payload representation and sink ownership
         run: LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh enum_nested_tag_payload sink_enum_owned sink_contract_names sink_callable_shadow sink_rebind_owned
 
+      - name: Publication gate resource cleanup
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          LSAN_OPTIONS: use_stacks=0
+        run: |
+          python3 tools/tests/test_registry_identity.py \
+            RegistryIdentityTest.test_publish_requires_installed_compiler \
+            RegistryIdentityTest.test_publish_requires_toolchain_root \
+            RegistryIdentityTest.test_publish_reports_compiler_launch_failure \
+            RegistryIdentityTest.test_publish_compiler_paths_are_literal_arguments \
+            RegistryIdentityTest.test_publish_uses_default_installed_toolchain \
+            RegistryIdentityTest.test_publish_drift_check_refuses_failed_index
+
       - name: Generated-code sanitizer detection controls
         run: python3 tools/sanitizer_controls.py
 

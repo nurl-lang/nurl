@@ -763,3 +763,49 @@ split-build driver; that exact command passed locally too. Final logs are in
 `contracts-compiler-leaks-final.log`, with the corresponding formatter, resolver,
 registry and installed-program logs alongside them. These checks complete this
 unit, not the broader v1 goal or the remaining limitations recorded above.
+
+### Publication compiler gate: verified failures and literal process arguments
+
+Six isolated CLI controls independently checked the existing executable's
+compiler gate. Five failed: a missing compiler and an unavailable target root
+reported success, an unlaunchable compiler and a source diagnostic were
+mislabelled as missing stdlib APIs, and shell substitution inside the toolchain
+path executed a command. The valid default-prefix control passed. The baseline
+is retained in `build/v1-hardening/publish-compiler-before.log`.
+
+The gate now requires an available target root and compiler, pins that root
+in the command's child environment, and invokes `process_run2` with literal
+arguments and `--check`. Launch errors retain their typed process cause;
+compiler errors retain their diagnostics without inferring a different cause.
+Negative controls run both dry-run and authenticated publication against an
+isolated local server and require no network request, unchanged manifest/lock
+bytes and a nonzero exit status. Positive controls cover shell metacharacters
+in the prefix and a module available only in the default installed target.
+
+LSan then exposed 112 leaked bytes in four allocations on each tested gate
+failure: registry and token owners were bypassed by early returns. All five
+validation checks now run in a borrowing helper, leaving the owning command
+to release these resources at its common cleanup point. The failing log remains
+`publish-compiler-leaks.log`. All seven focused controls pass after that fix
+with an instrumented CLI and normal compiler (`publish-compiler-leaks-final.log`).
+The six CI controls that do not reject compiler input also pass with both the
+CLI and compiler instrumented (`publish-compiler-ci-leaks.log`).
+
+The separate rejected-input compiler limitation remains independently
+reproducible: instrumented `nurlc --check` on one undefined identifier reports
+61460 leaked bytes in 942 allocations with stack roots disabled
+(`publish-rejected-compiler-leaks.log`). This is not suppressed or counted as a
+passing leak check. The full registry CLI suite exercises compiler diagnostics
+with ASan/UBSan; the focused CI leak gate covers the six controls above until
+compiler error-path ownership is repaired. Library packages without
+`src/main.nu` still skip the compile gate, and path-dependency archive fetch
+failures and complete source-tree comparison remain open work. This change
+does not establish full release completeness or native Windows behavior.
+
+Final normal and instrumented CLI suites each passed all 30 methods; the
+instrumented suite also used the instrumented compiler for its target-toolchain
+fixtures. Logs are `publish-compiler-final-normal.log` and
+`publish-compiler-final-san.log`. The normal `build/nurlpkg` is restored, and
+the changed NURL source passes the formatter check. No compiler semantics or
+bootstrap snapshot changed in this unit, so the complete compiler corpus was
+not repeated for this CLI-only change.

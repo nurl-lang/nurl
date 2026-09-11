@@ -2630,22 +2630,19 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 }
 
 // Typecheck the package's entry point with the toolchain the user will
-// actually install with: front-end only, no link step (nurlc writes IR to
-// stdout, which is discarded), so this needs no C toolchain and costs a
+// actually install with: --check runs the front end without emitting IR or
+// linking, so this needs no C toolchain and costs a
 // fraction of a build.
 //
 // Which toolchain that is comes from __toolchain_stdlib_root — $NURL_STDLIB
 // when set, else ~/.nurl. Pointing $NURL_STDLIB at a checkout therefore aims
-// the gate at that checkout, which is the documented escape hatch for "I am
-// publishing against this tree, not the release" and makes the check pass
-// trivially. That is deliberate; the default, with $NURL_STDLIB unset, is the
-// one that protects users.
+// the gate at that tree's bin/nurlc and stdlib. The default, with NURL_STDLIB
+// unset, checks the installed release. Either target must actually compile
+// the package successfully.
 //
-// Two conditions leave the question unanswered rather than answered "yes":
-// no compiler at <root>/bin/nurlc, and a compiler that will not launch. Both
-// WARN on stderr and let the publish through — an unverifiable gate has to say
-// so out loud rather than pass quietly, and refusing would make the tool
-// unusable on a box that has no toolchain installed.
+// Missing or unlaunchable compilers cannot establish compatibility. Refuse
+// publication in both cases. Invoke the compiler with argv, never shell text:
+// toolchain paths are literal paths even when they contain shell metacharacters.
 @ __installed_nurlc String root → String {
     : String p ( string_from ( string_data root ) )
     ( string_push_str p ? ( __is_windows ) `/bin/nurlc.exe` `/bin/nurlc` )
@@ -2657,55 +2654,57 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 @ __check_builds_against_installed → i {
     ? ! ( file_exists `src/main.nu` ) { ^ 0 } {}
     : String root ( __toolchain_stdlib_root )
-    ? == 0 ( string_len root ) { ( string_free root ) ^ 0 } {}
+    ? == 0 ( string_len root ) {
+        ( nurl_eprintln `nurlpkg: cannot locate the target toolchain; set NURL_STDLIB or install the toolchain under HOME/.nurl before publishing.` )
+        ( string_free root )
+        ^ 1
+    } {}
 
     : String cc ( __installed_nurlc root )
     ? == 0 ( string_len cc ) {
-        ( nurl_eprint `nurlpkg: WARNING — no installed compiler at ` )
-        ( nurl_eprint ( string_data root ) )
-        ( nurl_eprintln `/bin/nurlc, so "does this build against the released toolchain?" went UNCHECKED.` )
-        ( nurl_eprintln `nurlpkg:          Install the toolchain you are targeting before publishing.` )
+        ( nurl_eprint `nurlpkg: no installed compiler under ` )
+        ( nurl_eprintln ( string_data root ) )
+        ( nurl_eprintln `nurlpkg: install the target toolchain before publishing; compilation was not checked.` )
         ( string_free cc )
         ( string_free root )
-        ^ 0
+        ^ 1
     } {}
 
-    : String cmd ( string_with_cap 160 )
-    ( string_push_str cmd `NURL_STDLIB=` )
-    ( string_push_str cmd ( string_data root ) )
-    ( string_push_char cmd 32 )
-    ( string_push_str cmd ( string_data cc ) )
-    ( string_push_str cmd ` src/main.nu >/dev/null` )
+    // Pin the selected root for this command's children. In particular, an
+    // unset or empty NURL_STDLIB must use HOME/.nurl, not a compiler checkout
+    // discovered by the compiler's own import fallback.
+    ?? ( env_set `NURL_STDLIB` ( string_data root ) ) {
+        T _ → {}
+        F _ → {
+            ( nurl_eprintln `nurlpkg: could not configure the target toolchain environment; publication refused.` )
+            ( string_free cc )
+            ( string_free root )
+            ^ 1
+        }
+    }
 
     : ~ i bad 0
-    ?? ( process_run_shell ( string_data cmd ) ) {
+    ?? ( process_run2 ( string_data cc ) `--check` `src/main.nu` ) {
         T out → {
             ? ( output_success out ) {} {
                 : s err ( output_stderr out )
                 ( nurl_eprint `nurlpkg: this package does not compile against the INSTALLED toolchain at ` )
                 ( nurl_eprintln ( string_data root ) )
                 ( nurl_eprint err )
-                // Two very different causes land here, and telling the
-                // publisher the wrong one wastes their afternoon: an
-                // unresolved deps/ tree is "run the build first", while
-                // anything else is "the released stdlib is too old".
-                ? > ( nurl_str_find err `cannot open import 'deps/` ) -1 {
-                    ( nurl_eprintln `nurlpkg: deps/ is not resolved in this working tree — run 'nurlpkg build' (or link the` )
-                    ( nurl_eprintln `nurlpkg: path deps) and try again. Nothing about the released toolchain was established.` )
-                } {
-                    ( nurl_eprintln `nurlpkg: every imported stdlib FILE exists there, but something the package calls does not.` )
-                    ( nurl_eprintln `nurlpkg: publishing is irreversible, so this is refused — cut a toolchain release that ships` )
-                    ( nurl_eprintln `nurlpkg: what this needs first, then publish.` )
-                }
+                ( nurl_eprintln `nurlpkg: resolve the compiler diagnostics and rerun publication; target-toolchain compatibility has not been established.` )
                 = bad 1
             }
             ( output_free out )
         }
-        F _ → {
-            ( nurl_eprintln `nurlpkg: WARNING — could not launch the installed compiler; the released-toolchain build went UNCHECKED.` )
+        F error → {
+            ( nurl_eprint `nurlpkg: could not launch the installed compiler (` )
+            ( nurl_eprint ( process_err_name error ) )
+            ( nurl_eprint `): ` )
+            ( nurl_eprintln ( string_data cc ) )
+            ( nurl_eprintln `nurlpkg: compilation was not checked; publication refused.` )
+            = bad 1
         }
     }
-    ( string_free cmd )
     ( string_free cc )
     ( string_free root )
     ^ bad
@@ -2992,6 +2991,16 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ^ drift
 }
 
+// These checks borrow the manifest and registry. Keep their early returns
+// outside the command's owning scope so every failure reaches one cleanup path.
+@ __check_publish Manifest m s reg → i {
+    ? != 0 ( __check_declared_deps m ) { ^ 1 } {}
+    ? != 0 ( __check_stdlib_available ) { ^ 1 } {}
+    ? != 0 ( __check_builds_against_installed ) { ^ 1 } {}
+    ? != 0 ( __check_pathdep_req m ) { ^ 1 } {}
+    ^ ( __check_pathdep_drift m reg )
+}
+
 @ __cmd_publish b dry → i {
     ? ! ( file_exists `nurl.toml` ) {
         ( nurl_eprintln `nurlpkg: no nurl.toml in the current directory` )
@@ -3013,145 +3022,129 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ( nurl_eprintln `nurlpkg: no auth token — run 'nurlpkg login' or set $NURL_TOKEN` )
                 = rc 1
             } {
-                ? != 0 ( __check_declared_deps m ) {
-                    ( manifest_free m )
-                    ^ 1
-                } {}
-                ? != 0 ( __check_stdlib_available ) {
-                    ( manifest_free m )
-                    ^ 1
-                } {}
-                ? != 0 ( __check_builds_against_installed ) {
-                    ( manifest_free m )
-                    ^ 1
-                } {}
-                ? != 0 ( __check_pathdep_req m ) {
-                    ( manifest_free m )
-                    ^ 1
-                } {}
-                ? != 0 ( __check_pathdep_drift m ( string_data reg ) ) {
-                    ( manifest_free m )
-                    ^ 1
-                } {}
-                : !( Vec u ) PackErr pr ( pkg_pack `.` )
-                ?? pr {
-                    F pe → {
-                        ( nurl_eprint `nurlpkg: packaging failed (` )
-                        ( nurl_eprint ( pack_err_name pe ) )
-                        ( nurl_eprintln `)` )
-                        = rc 1
-                    }
-                    T tarball → {
-                        : ( Vec u ) digest ( sha256_pure tarball )
-                        : String hex ( bytes_to_hex digest )
-                        ( nurl_print ? dry `dry-run: would publish ` `publishing ` )
-                        ( nurl_print ( string_data . m name ) )
-                        ( nurl_print ` ` )
-                        ( nurl_print ( string_data . m version ) )
-                        ( nurl_print ` (` )
-                        ( nurl_print ( nurl_str_int ( vec_len [u] tarball ) ) )
-                        ( nurl_print ` bytes, sha256 ` )
-                        ( nurl_print ( string_data hex ) )
-                        ( nurl_print `)\nto ` )
-                        ( nurl_print ( string_data reg ) )
-                        ( nurl_print `\n` )
-                        ? dry {
-                            // What is IN the tarball, not just how big it is.
-                            // The packer decides what counts as source, and a
-                            // wrong answer in either direction used to look
-                            // exactly like success.
-                            ?? ( pkg_pack_list `.` ) {
-                                T files → {
-                                    ( nurl_print `dry-run: ` )
-                                    ( nurl_print ( nurl_str_int ( vec_len [String] files ) ) )
-                                    ( nurl_print ` files:\n` )
-                                    : i fn ( vec_len [String] files )
-                                    : ~ i fk 0
-                                    ~ < fk fn {
-                                        ?? ( vec_get [String] files fk ) {
-                                            T fp → {
-                                                ( nurl_print `  ` )
-                                                ( nurl_print ( string_data fp ) )
-                                                ( nurl_print `\n` )
+                ? != 0 ( __check_publish m ( string_data reg ) ) {
+                    = rc 1
+                } {
+                    : !( Vec u ) PackErr pr ( pkg_pack `.` )
+                    ?? pr {
+                        F pe → {
+                            ( nurl_eprint `nurlpkg: packaging failed (` )
+                            ( nurl_eprint ( pack_err_name pe ) )
+                            ( nurl_eprintln `)` )
+                            = rc 1
+                        }
+                        T tarball → {
+                            : ( Vec u ) digest ( sha256_pure tarball )
+                            : String hex ( bytes_to_hex digest )
+                            ( nurl_print ? dry `dry-run: would publish ` `publishing ` )
+                            ( nurl_print ( string_data . m name ) )
+                            ( nurl_print ` ` )
+                            ( nurl_print ( string_data . m version ) )
+                            ( nurl_print ` (` )
+                            ( nurl_print ( nurl_str_int ( vec_len [u] tarball ) ) )
+                            ( nurl_print ` bytes, sha256 ` )
+                            ( nurl_print ( string_data hex ) )
+                            ( nurl_print `)\nto ` )
+                            ( nurl_print ( string_data reg ) )
+                            ( nurl_print `\n` )
+                            ? dry {
+                                // What is IN the tarball, not just how big it is.
+                                // The packer decides what counts as source, and a
+                                // wrong answer in either direction used to look
+                                // exactly like success.
+                                ?? ( pkg_pack_list `.` ) {
+                                    T files → {
+                                        ( nurl_print `dry-run: ` )
+                                        ( nurl_print ( nurl_str_int ( vec_len [String] files ) ) )
+                                        ( nurl_print ` files:\n` )
+                                        : i fn ( vec_len [String] files )
+                                        : ~ i fk 0
+                                        ~ < fk fn {
+                                            ?? ( vec_get [String] files fk ) {
+                                                T fp → {
+                                                    ( nurl_print `  ` )
+                                                    ( nurl_print ( string_data fp ) )
+                                                    ( nurl_print `\n` )
+                                                }
+                                                F _ → {}
                                             }
-                                            F _ → {}
+                                            = fk + fk 1
                                         }
-                                        = fk + fk 1
+                                        ( vec_free_with [String] files \ String q → v { ( string_free q ) } )
                                     }
-                                    ( vec_free_with [String] files \ String q → v { ( string_free q ) } )
+                                    F _ → {}
                                 }
-                                F _ → {}
+                                ( nurl_print `dry-run: every gate passed; nothing was uploaded.\n` )
+                                ( vec_free [u] digest )
+                                ( string_free hex )
+                                ( vec_free [u] tarball )
+                                ( string_free reg )
+                                ( string_free token )
+                                ( manifest_free m )
+                                ^ 0
+                            } {}
+                            : String deps_json ( __deps_json m )
+                            : !i PublishErr ur ( pkg_publish ( string_data reg ) ( string_data token ) tarball ( string_data . m name ) ( string_data . m version ) ( string_data deps_json ) )
+                            ( string_free deps_json )
+                            ?? ur {
+                                T _ → ( nurl_print `published.\n` )
+                                F ue → {
+                                    ?? ue {
+                                        // 401: a real auth failure — tokens expire
+                                        // after 90 days, the usual cause on a setup
+                                        // that used to work.
+                                        PubAuth → {
+                                            ( nurl_eprintln `nurlpkg: publish failed (auth)` )
+                                            ( nurl_eprintln `hint: registry tokens expire after 90 days - run 'nurlpkg login' to mint a fresh one` )
+                                        }
+                                        // 403: NOT auth. The registry refused the
+                                        // name/version — point at the real causes
+                                        // instead of sending them to re-login.
+                                        PubForbidden → {
+                                            ( nurl_eprintln `nurlpkg: publish forbidden (the registry refused this package)` )
+                                            ( nurl_eprintln `hint: the name may be reserved, too similar to an existing package, or outside your token's package scope — it is NOT a token problem` )
+                                        }
+                                        PubConflict → {
+                                            ( nurl_eprintln `nurlpkg: this version is already published (versions are immutable — bump the version)` )
+                                        }
+                                        // The upload got a connection but no reply.
+                                        // Small requests (login, search, info) still
+                                        // work, so this reads as "the registry is up
+                                        // but publish is broken" — when the usual
+                                        // cause is a network path that drops
+                                        // full-size packets: a publish body is the
+                                        // only request big enough to need them.
+                                        PubTimeout → {
+                                            ( nurl_eprintln `nurlpkg: publish timed out — the upload stalled after connecting` )
+                                            ( nurl_eprintln `hint: if 'nurlpkg search' works but publish stalls, suspect the network path, not the registry — a broken path MTU drops full-size packets, and only the upload is big enough to send them. Test with:` )
+                                            ( nurl_eprintln `        ping -M do -s 1472 <registry-host>` )
+                                            ( nurl_eprintln `      and try a smaller MSS (sysctl net.ipv4.tcp_mtu_probing=1, or clamp MSS on the router) before assuming the registry is down` )
+                                        }
+                                        PubConnect → {
+                                            ( nurl_eprintln `nurlpkg: cannot connect to the registry` )
+                                            ( nurl_eprintln `hint: check the registry URL ($NURL_REGISTRY or [package].registry) and any proxy/firewall` )
+                                        }
+                                        PubDns → {
+                                            ( nurl_eprintln `nurlpkg: the registry host does not resolve` )
+                                            ( nurl_eprintln `hint: check the registry URL ($NURL_REGISTRY or [package].registry) and your DNS` )
+                                        }
+                                        PubTls → {
+                                            ( nurl_eprintln `nurlpkg: TLS handshake with the registry failed` )
+                                            ( nurl_eprintln `hint: check the system CA bundle and the clock; a TLS-intercepting proxy will also do this` )
+                                        }
+                                        _ → {
+                                            ( nurl_eprint `nurlpkg: publish failed (` )
+                                            ( nurl_eprint ( publish_err_name ue ) )
+                                            ( nurl_eprintln `)` )
+                                        }
+                                    }
+                                    = rc 1
+                                }
                             }
-                            ( nurl_print `dry-run: every gate passed; nothing was uploaded.\n` )
                             ( vec_free [u] digest )
                             ( string_free hex )
                             ( vec_free [u] tarball )
-                            ( string_free reg )
-                            ( string_free token )
-                            ( manifest_free m )
-                            ^ 0
-                        } {}
-                        : String deps_json ( __deps_json m )
-                        : !i PublishErr ur ( pkg_publish ( string_data reg ) ( string_data token ) tarball ( string_data . m name ) ( string_data . m version ) ( string_data deps_json ) )
-                        ( string_free deps_json )
-                        ?? ur {
-                            T _ → ( nurl_print `published.\n` )
-                            F ue → {
-                                ?? ue {
-                                    // 401: a real auth failure — tokens expire
-                                    // after 90 days, the usual cause on a setup
-                                    // that used to work.
-                                    PubAuth → {
-                                        ( nurl_eprintln `nurlpkg: publish failed (auth)` )
-                                        ( nurl_eprintln `hint: registry tokens expire after 90 days - run 'nurlpkg login' to mint a fresh one` )
-                                    }
-                                    // 403: NOT auth. The registry refused the
-                                    // name/version — point at the real causes
-                                    // instead of sending them to re-login.
-                                    PubForbidden → {
-                                        ( nurl_eprintln `nurlpkg: publish forbidden (the registry refused this package)` )
-                                        ( nurl_eprintln `hint: the name may be reserved, too similar to an existing package, or outside your token's package scope — it is NOT a token problem` )
-                                    }
-                                    PubConflict → {
-                                        ( nurl_eprintln `nurlpkg: this version is already published (versions are immutable — bump the version)` )
-                                    }
-                                    // The upload got a connection but no reply.
-                                    // Small requests (login, search, info) still
-                                    // work, so this reads as "the registry is up
-                                    // but publish is broken" — when the usual
-                                    // cause is a network path that drops
-                                    // full-size packets: a publish body is the
-                                    // only request big enough to need them.
-                                    PubTimeout → {
-                                        ( nurl_eprintln `nurlpkg: publish timed out — the upload stalled after connecting` )
-                                        ( nurl_eprintln `hint: if 'nurlpkg search' works but publish stalls, suspect the network path, not the registry — a broken path MTU drops full-size packets, and only the upload is big enough to send them. Test with:` )
-                                        ( nurl_eprintln `        ping -M do -s 1472 <registry-host>` )
-                                        ( nurl_eprintln `      and try a smaller MSS (sysctl net.ipv4.tcp_mtu_probing=1, or clamp MSS on the router) before assuming the registry is down` )
-                                    }
-                                    PubConnect → {
-                                        ( nurl_eprintln `nurlpkg: cannot connect to the registry` )
-                                        ( nurl_eprintln `hint: check the registry URL ($NURL_REGISTRY or [package].registry) and any proxy/firewall` )
-                                    }
-                                    PubDns → {
-                                        ( nurl_eprintln `nurlpkg: the registry host does not resolve` )
-                                        ( nurl_eprintln `hint: check the registry URL ($NURL_REGISTRY or [package].registry) and your DNS` )
-                                    }
-                                    PubTls → {
-                                        ( nurl_eprintln `nurlpkg: TLS handshake with the registry failed` )
-                                        ( nurl_eprintln `hint: check the system CA bundle and the clock; a TLS-intercepting proxy will also do this` )
-                                    }
-                                    _ → {
-                                        ( nurl_eprint `nurlpkg: publish failed (` )
-                                        ( nurl_eprint ( publish_err_name ue ) )
-                                        ( nurl_eprintln `)` )
-                                    }
-                                }
-                                = rc 1
-                            }
                         }
-                        ( vec_free [u] digest )
-                        ( string_free hex )
-                        ( vec_free [u] tarball )
                     }
                 }
             }
