@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_match_no_arms.nu:12:5: error: a '??' match has no arms, so nothing is dispatched. Each arm is '<pattern> → { … }': enum variants ('Red → { … }'), 'T v'/'F e' for an option or result, or literal values for an integer or string scrutinee — with '_ → { … }' as the catch-all.
+    ?? k {}
+    ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

@@ -1581,3 +1581,16 @@ sees them all, so both the `@` path and the closure path check it there.
 `diag_generic_fn_no_body.nu`, `diag_empty_body_value_fn.nu` and
 `diag_duplicate_param_name.nu` are the rejections. Every existing corpus
 input passes unchanged.
+
+The same sweep at STATEMENT level — each snippet placed inside a `main` that
+must still print, the program compiled, linked and run — found one more.
+A `??` with an empty arm block dispatched nothing and then emitted its merge
+label immediately after a non-terminator instruction: invalid IR, reported
+by clang as "expected instruction opcode" at a line number in generated text
+with no NURL source location. An enum scrutinee never reached it (the
+non-exhaustive check fires first), nor did an option or result; an integer
+or string one did. A match with no arms is now a rejection anchored at the
+`??` itself (`diag_match_no_arms.nu`). The neighbouring shapes were already
+covered: an empty select says so, an empty ternary in value position is the
+ordinary no-value binding error, and an empty defer or closure body is
+legal and harmless.

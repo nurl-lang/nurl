@@ -11307,6 +11307,9 @@
     // Borrow checker (Phase 0d): source line of the `??`, for the
     // `match`/`endmatch` structural markers bracketing this match.
     : i bck_mline ( nurl_lex_line lex )
+    // The `??`'s own column, so a diagnostic about the match as a whole
+    // points at the match and not at whatever token ended it.
+    : i bck_mcol ( nurl_lex_col lex )
     // Does this `??` head a statement? Decided before the arms move the
     // statement anchor; the parked-drop verdict at the join reads it.
     : b m_is_stmt ( mem_join_heads_stmt lex )
@@ -12518,6 +12521,17 @@
         { ( mem_exits_pend_add m_exits ) }
         { : b m_used & m_val ! m_is_stmt
             ( mem_arm_exits_emit syms cg m_exits ! m_used ) } }
+    {}
+
+    // A match with no arms is not a match: nothing is dispatched, and
+    // the merge label below has no predecessor — a label immediately
+    // after a non-terminator instruction is invalid IR. Only clang
+    // reported it ("expected instruction opcode"), at a line number in
+    // generated text with no NURL source location. An enum scrutinee
+    // never reached here (non-exhaustive catches it first) and neither
+    // did an option or result; an integer or string one did.
+    ? == arms_total 0
+    { ( die_pos lex bck_mline bck_mcol `a '??' match has no arms, so nothing is dispatched. Each arm is '<pattern> → { … }': enum variants ('Red → { … }'), 'T v'/'F e' for an option or result, or literal values for an integer or string scrutinee — with '_ → { … }' as the catch-all.` ) }
     {}
 
     // End label
