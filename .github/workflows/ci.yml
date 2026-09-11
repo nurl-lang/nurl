@@ -85,6 +85,7 @@ jobs:
           NURL_TEST_PWSH=$(command -v pwsh)
           export NURL_TEST_PWSH
           python3 tools/tests/test_compiler_runners.py
+          python3 tools/tests/test_git_hooks.py
 
   build-failure-controls:
     name: required tools fail the complete build
