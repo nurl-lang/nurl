@@ -148,8 +148,13 @@ loop. Correct values, zero findings.
    probes under LSan, not only ASan. The leak was invisible to every ASan
    run and to the default sanitized corpus, which sets `detect_leaks=0`.
 
-   Turning it on for the whole corpus measured the boundary: 900 of 992
-   programs are leak-clean, 92 are not, with zero other sanitizer findings.
+   Turning it on for the whole corpus measured the boundary: 903 of 992
+   programs are leak-clean, 89 are not, with zero other sanitizer findings.
+   Grouping them by the function that allocated (`tools/fuzz/leak_triage.py`)
+   is what made them tractable — and what found that the COMPILER leaked a
+   whole rewritten copy of every aliased import, on a path `leakgate.sh`
+   could not reach because `nurlc.nu` has no aliased import. That is fixed
+   and the gate now covers it.
    One cause is root-caused in the ledger — a closure literal passed to a
    GENERIC higher-order function leaks its env, because the call site's
    evidence (`g_fn_invoke_only`) does not exist until after the

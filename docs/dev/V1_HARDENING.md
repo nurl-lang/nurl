@@ -1767,8 +1767,8 @@ behaviour of the other 950 has not been measured. It is now:
 | corpus under `LSAN_DETECT_LEAKS=1` | programs |
 |---|---|
 | run | 992 |
-| clean | 900 |
-| leaking | 92 |
+| clean | 900 → 903 after the compiler leak below was fixed |
+| leaking | 92 → 89 |
 | sanitizer failures other than leaks | 0 |
 | timeouts | 0 |
 
@@ -2042,3 +2042,11 @@ covered by the thing that is supposed to cover it.
 This is what the leak inventory was for. Ninety-odd leaking programs is a
 list nobody reads; grouped by allocating function it was six programs and
 one name, and the name was the compiler's own.
+
+After the fix the grouping is `_nurl_main` 30, `nurl_str_int` 6,
+`string_from` 6, `bytes_from_hex` 5, `main` 4, then threes and ones — and
+the `alias_rewrite_source` row is gone. The thirty under `_nurl_main`
+allocate in the test's own code and are where the "can the program free
+it?" control has to be applied one at a time; the six under `nurl_str_int`
+are the escape-classification class, which no spelling of the program can
+reclaim.
