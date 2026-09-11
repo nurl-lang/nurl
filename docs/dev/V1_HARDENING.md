@@ -1891,3 +1891,50 @@ So the boundary is honest in the direction that matters — a number cannot
 silently become an address. What this does NOT establish is the rest of
 A13: opaque wrappers, container ownership, and whether the default, strict
 and raw guarantees agree on everything else remain unexamined.
+
+### A13: witnesses for the safety contract's declared holes (2026-09-11)
+
+A13 asks whether the default, strict, raw and FFI guarantees agree. Ten
+ownership violations written by construction were put to the compiler; the
+result is a verification, not a defect list. Every violation the default
+contract PROMISES to catch, it caught, and every one it declines to catch is
+declined exactly where `docs/MEMORY.md` says it is.
+
+Caught by the default rules, each with the same "use of moved value"
+diagnostic: using a Vec after `vec_free`, freeing one twice, using a String
+after `string_free`, freeing a Vec through an alias and through the
+original, using a Channel after `chan_free`, freeing a Channel twice, and
+passing a container to a `sink` parameter and then reading it. A `chan_send`
+on a CLOSED channel is legal and returns false, which is the valid control
+beside them.
+
+Three compile cleanly and are genuine heap-use-after-free at run time under
+ASan. All three are the declared holes:
+
+- A handle stored into an aggregate literal is marked *maybe-moved*, not
+  moved, because recording it as definite rejects the option-wrapper idiom
+  the MCP tests are built on. Freeing through the struct field and again
+  through the original binding is therefore accepted by default — and
+  reported under `--strict-borrowck`, which is what that knob is for.
+- Pushing a String into a Vec and then freeing the String directly, before
+  `vec_free_with` frees each element, is the same shape and is likewise
+  reported under `--strict-borrowck`.
+- A free on one arm of a `?` followed by an unconditional READ after the
+  join is not reported in either mode. §2.1 says so in as many words:
+  "reads of a maybe-moved binding are never flagged", and the opt-in
+  conditional-double-free check is about a second CONSUME.
+
+That last one is the only place where a witness suggests a gap rather than a
+boundary. The read is a guaranteed use-after-free on the path that took the
+arm, and `--strict-borrowck` is explicitly the mode where false positives
+are acceptable — the docs call it "a tightening knob for auditing a specific
+module, not part of the standard contract". A fourth strict check, "a read
+of a maybe-moved binding", would have a witness and a home. It is a change
+to the safety contract's opt-in surface, so it belongs to whoever owns that
+contract, not to a late edit; the witness is recorded here so the decision
+can be made with one.
+
+Note also that `docs/MEMORY.md` §2.9 is titled "three opt-in checks" and
+enumerates three, while the aggregate-literal maybe-move above is a fourth
+thing `--strict-borrowck` reports. The prose and the implementation should
+be reconciled.
