@@ -5307,6 +5307,58 @@
     ^ owner
 }
 
+// A closure literal's env, handed to a parameter the callee only ever
+// INVOKES, is the caller's to free after the call. Whether the callee
+// only invokes it is `g_fn_invoke_only[callee]` — and for a GENERIC
+// callee that set does not exist when the call is generated: the name
+// is the mangled instantiation, and instantiations are flushed after
+// the code that calls them. Deciding inline therefore always said "no"
+// for a generic callee, and the env leaked; a closure literal passed to
+// `vec_free_with` or any other generic higher-order function cost one
+// env per call.
+//
+// The argument-temporary path already solved this shape: emit the free
+// unconditionally against a value that is either the pointer or null,
+// selected by a private constant whose value is computed at module end,
+// after `flush_deferred_instantiations`. `nurl_free(null)` is a no-op,
+// so a false flag is exactly today's behaviour. This is that mechanism
+// with the invoke-only predicate instead of the consumer one.
+@ mem_env_owner i cg s callee i index s value → s {
+    : s key ( nurl_str_cat4 `envdrop##` callee `##` ( nurl_str_int index ) )
+    : s known ( nurl_sym_get g_pending_impl key )
+    : ~ i number ( nurl_str_to_int known )
+    ? == 0 ( nurl_str_len known ) {
+        = number ( nurl_str_to_int ( nurl_sym_get g_pending_impl `envdrop_count` ) )
+        ( nurl_sym_def g_pending_impl `envdrop_count` ( nurl_str_int + number 1 ) )
+        ( nurl_sym_def g_pending_impl key ( nurl_str_int number ) )
+        ( __park_append g_pending_impl `envdrops`
+        ( nurl_str_cat4 ( nurl_str_int number ) ` ` callee
+        ( nurl_str_cat ` ` ( nurl_str_int index ) ) ) )
+    } {}
+    : s flag ( nurl_str_cat `@.__nurl_envdrop.` ( nurl_str_int number ) )
+    : s cond ( nurl_cg_reg cg )
+    : s owner ( nurl_cg_reg cg )
+    ( emit_sink_flag_load flag cond )
+    ( emit_sink_owner_select cond `i8*` value `null` owner )
+    ^ owner
+}
+
+// The env-drop constants, emitted at module end where every generic
+// instantiation has compiled and `g_fn_invoke_only` is final.
+@ mem_emit_env_flags → v {
+    : ~ s rest ( nurl_sym_get g_pending_impl `envdrops` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s number ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s callee ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s index ( str_first_word rest ) = rest ( str_skip_word rest )
+        ( nurl_print `@.__nurl_envdrop.` ) ( nurl_print number )
+        ( nurl_print ` = private constant i1 ` )
+        ( nurl_print ? ( str_contains_word ( nurl_sym_get g_fn_invoke_only callee ) index )
+        `true` `false` )
+        ( nurl_print `\n` )
+    }
+}
+
 @ mem_emit_arg_flags i syms → v {
     : ~ s rest ( nurl_sym_get g_pending_impl `argdrops` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -8914,10 +8966,10 @@
         { ( bck_note_closure_caps syms bck_arg_val ) }
         {}
         : s __cle ( nurl_sym_get syms `__last_closure_env__` )
-        ? & != 0 ( nurl_str_len __cle )
-        ( str_contains_word ( nurl_sym_get g_fn_invoke_only call_name ) ( nurl_str_int arg_idx ) )
-        { = closure_envs_free ? == 0 ( nurl_str_len closure_envs_free )
-            __cle ( nurl_str_cat3 closure_envs_free ` ` __cle ) }
+        ? != 0 ( nurl_str_len __cle )
+        { : s __ceo ( mem_env_owner cg call_name arg_idx __cle )
+            = closure_envs_free ? == 0 ( nurl_str_len closure_envs_free )
+            __ceo ( nurl_str_cat3 closure_envs_free ` ` __ceo ) }
         {}
         ( nurl_sym_def syms `__last_closure_env__` `` )
         // Closure-env reclamation: a tracked `:`-bound closure passed at a
@@ -31951,6 +32003,7 @@
         ( resolve_pending_impls )
         ( emit_sink_flags )
         ( mem_emit_arg_flags syms )
+        ( mem_emit_env_flags )
         ( mem_emit_guard_flags )
         ( resolve_pending_escapes )
         ( resolve_deferred_borrowck )

@@ -2062,3 +2062,36 @@ elsewhere are tests that do not clean up, the `nurl_str_int` six are the
 escape-classification class no spelling of the program can reclaim, the
 `bytes_from_hex` five are callers that could free and do not, and the
 closure-env class covers the rest. Two root causes, one test-side habit.
+
+### A01: deciding the closure-env free when the evidence exists (2026-09-11)
+
+The generic higher-order leak above was called an ordering problem, and the
+ordering turned out to be already right — just not used. `mem_emit_arg_flags`
+runs at module end, AFTER `flush_deferred_instantiations`, under a comment
+that says so: "every function (incl. just-flushed generic instantiations) has
+now compiled, so the escape summaries are final". Argument temporaries
+already exploit that: the call site emits the free against a value that is
+either the pointer or null, selected by a private constant whose value is
+computed at module end. `nurl_free(null)` is a no-op, so a false flag is
+exactly the old behaviour.
+
+The closure-env free now uses the same mechanism — `mem_env_owner` parks the
+(callee, index) pair and `mem_emit_env_flags` resolves each against
+`g_fn_invoke_only` once every instantiation has compiled. The call site no
+longer asks a question whose answer does not exist yet.
+
+Honest size: three programs, not thirteen. `dwarf_closure_drop` now emits
+`@.__nurl_envdrop.0 = private constant i1 true` and frees the env its
+`vec_free_with` closure literal owns; the corpus goes from 89 leaking
+programs to 86. The rest of the closure-env class is a DIFFERENT sub-shape
+that this does not touch: `iter_zip_enum` leaks an iterator built by
+`iter_enumerate`, a closure RETURNED by a generic function rather than
+passed to one, so no argument-position flag exists for it at all. Env
+ownership on the return path is the next thing to look at.
+
+This is a codegen change, so the bootstrap was refreshed: source and
+snapshot are identical, the fixed point holds on a second plain build, and
+the leak gate passes on all seven sources in both emission modes. Corpus 992
+pass / 19 skip; sanitized corpus 906 pass / 86 leak / zero other sanitizer
+findings; RSS 38 MB; DCE 180 emitted / 12 reachable with identical
+behaviour; the tree's 303 diagnostics are unchanged.
