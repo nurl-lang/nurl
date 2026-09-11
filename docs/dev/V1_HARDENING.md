@@ -1538,3 +1538,46 @@ defect A10 found in the formatting gate. It now uses the tracked inventory
 minus `bench/` and vendored `deps/` copies: 1,407 files, up from 1,374.
 Both gates were re-verified against a deliberate offender: each still exits
 1 and names the file.
+
+### Three more declarations that vanished (2026-09-11)
+
+The sweep that found the `:` parser's silent skips was run again over the
+other declaration kinds — `@`, `&`, `%`, `$` — with one invariant: a file
+that still declares `@ main` must either fail to compile or emit `main`.
+Fifteen spellings, three findings, and one form that looked wrong and is not
+(`$ \`path\` name` is the documented import alias, `import_decl = '$' STR
+IDENT?`).
+
+**A generic function with no body swallowed the next declaration.** The
+template pre-scan walks from the return arrow to the body's `{`, and walked
+straight through `@ main → i {` to land on main's body, which
+`skip_balanced` then consumed as the template. The compiler exited 0,
+emitted a module with no `main`, and the only report was the linker's
+`undefined reference to 'main'` — no source location at all, the same shape
+`: S [ T ]` produced. A closure type is always parenthesised (`( @ v )`), so
+an `@` at paren depth zero cannot be part of a type; the walk stops there
+and reports. The type-parameter list's own walk also had no EOF guard and
+now has one.
+
+**A value-returning function with an EMPTY body returned garbage.**
+`@ f → i {}` emitted `ret i64 undef` and compiled clean — `main` included, so
+an empty `main` returned an undefined exit status. The fall-off battery does
+check for a body that ends without a value, but it reads
+`nurl_get_last_type`, and `gen_block_ret` never typed an empty block: the
+type left over from whatever ran last anywhere was still there, and it was
+usually i64, which the check liked. `gen_block_expr` has typed `{}` as void
+all along and says why; `gen_block_ret` now does the same, and the fall-off
+message mentions an empty body among the shapes that yield nothing. The
+error is anchored at the body's `{` rather than at `:0:0:`, which is what a
+missing statement anchor printed.
+
+**Two parameters could share a name.** `@ f i a i a → i` lowered to
+`define i64 @f(i64 %a, i64 %a)`. LLVM requires distinct argument names, so
+clang rejected the module with `redefinition of argument '%a'`, a line
+number into generated IR and no NURL source location — and the body could
+only ever reach one of the two. The parameter roster is the one place that
+sees them all, so both the `@` path and the closure path check it there.
+
+`diag_generic_fn_no_body.nu`, `diag_empty_body_value_fn.nu` and
+`diag_duplicate_param_name.nu` are the rejections. Every existing corpus
+input passes unchanged.

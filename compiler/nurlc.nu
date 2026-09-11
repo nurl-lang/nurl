@@ -2954,7 +2954,7 @@
     { : s hint ? hint_match
         `) — match arms contain '^' so '?? …' is statement-form, not an expression. Refactor to ': ~ T rc init / ?? mr { … = rc v } / ^ rc'.`
         ? is_falloff
-        `) — the final statement yields nothing (a call returning 'v', an assignment, a loop or a bare block produce no value). End the body with an expression of the declared type, or return one explicitly with '^ <value>'. If the body LOOKS like it ends with a value, count the braces: an extra '}' closes the function early and strands the rest at the top level.`
+        `) — the final statement yields nothing (an empty body has no statement at all; a call returning 'v', an assignment, a loop or a bare block produce no value). End the body with an expression of the declared type, or return one explicitly with '^ <value>'. If the body LOOKS like it ends with a value, count the braces: an extra '}' closes the function early and strands the rest at the top level.`
         `) — the commonest cause is returning a call whose declared return type is 'v', which yields nothing to return; a conditional whose branches disagree on type does the same. Check what the '^' operand produces.`
         : s lead ? is_falloff
         `the function body ends without a return value (expected `
@@ -13432,6 +13432,21 @@
         ( __tail_noreturn_close syms __tail_callee ) }
     {}
     ( __close_dead_block __dead_any )
+    // An EMPTY body has no value, and says so — the same unit typing
+    // gen_block_expr gives `{}`. Without it `nurl_get_last_type` keeps
+    // whatever the last statement anywhere left behind (i64 by default),
+    // so the fall-off battery's no-value check never fired and
+    // `@ f → i {}` emitted `ret i64 undef`: a function returning garbage,
+    // accepted silently. A `→ v` function with an empty body is
+    // unaffected — void is what it returns.
+    ? ! __tail_any { ( nurl_set_last_type `void` )
+        // No statement ran, so `die_stmt`'s anchor (g_stmt_line) still
+        // holds whatever the previous one left — 0 in a file whose first
+        // function is the empty one, which prints `:0:0:`. Point it at
+        // the body's own '{': that IS the thing with nothing in it.
+        = g_stmt_line bck_line
+        = g_stmt_col ( nurl_lex_col lex ) }
+    {}
     // Tail bare literal: exempt-but-recorded, gen_block_expr's twin.
     ? != 0 g_stmt_bare_lit
     { = g_blk_tail_lit_line g_stmt_line
@@ -21240,6 +21255,14 @@
         ( nurl_sym_def body_syms ( nurl_str_cat bpname `__param` ) `1` )
         // Mirror into the closure-local shadow-check roster.
         : s c_name_roster ( nurl_sym_get body_syms `__fn_param_names__` )
+        // Same rule as an `@` declaration's parameters, and for the same
+        // reason: the lowered closure body is a function, and LLVM
+        // requires its arguments to have distinct names.
+        ? & != 0 ( nurl_str_len c_name_roster ) ( str_contains_word c_name_roster bpname )
+        { ( die lex ( nurl_str_cat3
+            `duplicate parameter name '` bpname
+            `' in this closure — each parameter needs its own name; the body can only reach one of them, and the emitted function would declare the same argument twice. Rename one.` ) ) }
+        {}
         : s c_name_next ? == 0 ( nurl_str_len c_name_roster ) ( nurl_str_cat bpname `` ) ( nurl_str_cat3 c_name_roster ` ` bpname )
         ( nurl_sym_def body_syms `__fn_param_names__` c_name_next )
         ( origin_parameter body_syms bpname bpi )
@@ -24982,6 +25005,18 @@
         // gen_let_or_struct's shadow check. Space-separated; matches
         // `str_contains_word` semantics.
         : s name_roster ( nurl_sym_get syms `__fn_param_names__` )
+        // Two parameters cannot share a name. The roster is the one
+        // place that sees them all, so the check belongs here. Without
+        // it `@ f i a i a → i` emitted `define i64 @f(i64 %a, i64 %a)`
+        // — LLVM requires unique argument names, so clang rejected the
+        // module with "redefinition of argument '%a'", a line number
+        // into generated IR and no NURL source location at all. The
+        // body meanwhile resolved `a` to whichever registration won.
+        ? & != 0 ( nurl_str_len name_roster ) ( str_contains_word name_roster pname )
+        { ( die lex ( nurl_str_cat3
+            `duplicate parameter name '` pname
+            `' — each parameter of a declaration needs its own name; the body can only reach one of them, and the emitted function would declare the same argument twice. Rename one.` ) ) }
+        {}
         : s name_next ? == 0 ( nurl_str_len name_roster ) ( nurl_str_cat pname `` ) ( nurl_str_cat3 name_roster ` ` pname )
         ( nurl_sym_def syms `__fn_param_names__` name_next )
         // An `inout` parameter's LLVM type is a pointer to T. The
@@ -30080,8 +30115,15 @@
                             { : i template_start ( nurl_lex_cur_start lex )
                                 : i template_line ( nurl_lex_line lex )
                                 : i template_col ( nurl_lex_col lex )
-                                ~ != ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) }
-                                ( nurl_lex_advance lex )  // consume ']'
+                                // Guard on EOF as well as ']': a list that is
+                                // never closed must end the walk, not spin on
+                                // a token that no longer advances.
+                                ~ & != ( nurl_lex_type lex ) TT_RBRACK != ( nurl_lex_type lex ) TT_EOF
+                                { ( nurl_lex_advance lex ) }
+                                ? == ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) }
+                                { ( die_pos lex template_line template_col ( nurl_str_cat3
+                                    `the type parameters of '@ ` fname
+                                    ` [ … ]' are never closed — add the ']' that ends the list.` ) ) }
                                 ( nurl_sym_def syms ( nurl_str_cat fname `__generic` ) `1` )
                                 // Scan the parameter region (from here to the
                                 // body `{`) for the `inout` marker, just
@@ -30122,8 +30164,23 @@
                                 ? gpc_ok
                                 { ( nurl_sym_def syms ( nurl_str_cat fname `__ptypes_src` ) gptypes ) }
                                 {}
-                                ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF
-                                { ? & ( is_ident_tok ( nurl_lex_type lex ) )
+                                // Walk the return type to the body's '{'. A
+                                // closure type is always parenthesised
+                                // (`( @ v )`), so an '@' at paren depth 0 is
+                                // not part of a type — it is the NEXT
+                                // declaration, and this one has no body.
+                                // Without that stop the walk ran straight
+                                // through it and `skip_balanced` ate the next
+                                // function's body as this template's:
+                                // `@ f [T] → T` with no body silently
+                                // consumed `main`, the module linked without
+                                // one, and the only report was the linker's.
+                                : ~ i __gd 0
+                                ~ & & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF
+                                ! & == ( nurl_lex_type lex ) TT_AT == __gd 0
+                                { ? == ( nurl_lex_type lex ) TT_LPAREN { = __gd + __gd 1 } {}
+                                    ? == ( nurl_lex_type lex ) TT_RPAREN { = __gd - __gd 1 } {}
+                                    ? & ( is_ident_tok ( nurl_lex_type lex ) )
                                     ( seq ( nurl_lex_val lex ) `inout` )
                                     { = g_saw_inout T }
                                     {}
@@ -30131,7 +30188,10 @@
                                 ? g_saw_inout
                                 { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
                                 {}
-                                ( skip_balanced lex )
+                                ? == ( nurl_lex_type lex ) TT_LBRACE { ( skip_balanced lex ) }
+                                { ( die_pos lex template_line template_col ( nurl_str_cat3
+                                    `a generic function declaration continues with its body — '@ ` fname
+                                    ` [ … ] … → <type> { … }'. This one has no '{', so the declaration after it would be read as its body.` ) ) }
                                 // Forward instantiations need the template itself,
                                 // not merely its raw parameter roster. Store it with
                                 // the same parser used at the declaration site.
