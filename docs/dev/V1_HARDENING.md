@@ -1938,3 +1938,53 @@ Note also that `docs/MEMORY.md` §2.9 is titled "three opt-in checks" and
 enumerates three, while the aggregate-literal maybe-move above is a fourth
 thing `--strict-borrowck` reports. The prose and the implementation should
 be reconciled.
+
+### A01: the leak inventory, triaged as far as machines go (2026-09-11)
+
+The 92 leaking corpus programs split by where the leaked allocation was
+made, which is the question that separates a compiler defect from a test
+that simply does not clean up:
+
+| group | programs |
+|---|---|
+| contain a closure literal | 47 |
+| no closure literal, allocated in the test's own `main` | 11 |
+| no closure literal, allocated inside a called function | 34 |
+
+The eleven that allocate in their own `main` are the class the sanitized
+runner's comment describes — "some corpus programs omit cleanup to isolate
+the behavior under test". `callarg_width` builds one `Vec` and frees
+nothing; that is the test, not the compiler.
+
+The 34 that allocate inside a callee are led by `nurl_str_int` (6),
+`bytes_from_hex` (5) and `string_from` (4). The `nurl_str_int` six are the
+escape-classification class root-caused above: a fresh owned temporary
+handed to a callee whose parameter is marked escaping because it is stored
+into a container that dies inside that same callee. Counting them gives that
+root cause a size.
+
+### A13: what the fourth strict check would actually cost (2026-09-11)
+
+The witness above suggests a `--strict-borrowck` check for a READ of a
+maybe-moved binding. Two measurements bear on whether to build it.
+
+First, the mode's current state on first-party code: `--strict-borrowck`
+over `compiler/tests/`, `stdlib/` and `examples/` reports **1,070 distinct
+sites across 553 files** (38,026 lines of output before deduplicating the
+same stdlib site seen through many importers). The docs describe "a
+meaningful false-positive rate against existing stdlib code"; this is that
+rate, measured. The acceptance criterion the docs used for strict check #1 —
+"measured against the whole first-party corpus, the generalisation adds no
+new strict failures" — cannot be applied to a mode that is already this far
+from clean.
+
+Second, the implementation cost. Reads of a maybe-moved binding are not
+"never flagged" because of a policy line that could be flipped: the
+borrow-check walk has **no read events at all**. Its record kinds are `let`,
+`assign`, `move`, `maybemove`, `pendcall`, `cond`, `match` and `block`. A
+read check needs a new record stream emitted from `gen_ident`, which fires
+on every identifier in every program, plus a rule for which reads matter.
+That is a structural addition to the checker, not an `if`.
+
+Both measurements argue for deciding the question deliberately rather than
+patching toward it. They are recorded here so the decision has numbers.
