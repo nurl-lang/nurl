@@ -60,29 +60,40 @@ The ledger retains earlier ownership counterexamples and their failed candidates
 
 ## Remote state and next work
 
-1. PR #1107 at `5b2a9b3a` passes macOS ARM64 (including driver path controls),
-   Windows, FreeBSD, sanitizer, required-tool fault injection, webdocs and all
-   four JavaScript audit/build jobs. The runner watchdog change and arithmetic
-   change still need publication and remote results. Keep the PR a draft.
-2. The unikernel job fails because shared `packages/wasmbuilder/src/wasi_ir.nu`
-   includes `nocapture nofree` attributes in parameter value types. A local
-   regression reproduces the exact LLVM assembly failure. The working-tree
-   fix parses balanced type/parameter syntax and strips attributes. The permanent
-   ASan/UBSan/LSan/LLVM control passes, all 18 package checks pass (16 actual
-   native/Wasmtime comparisons), and the QEMU compiler gate produces identical
-   IR for all eight programs. The swarm guest gate also passes census, expression
-   and in-process Wasm execution. Commit `1ddef061` contains the shared fix.
-   `nurlapi` imports this shared file.
-3. The main Linux job is cancelled while apt installs MinGW after the other
-   compiler gates. MinGW now has an independent Ubuntu 24.04 job with a bounded
-   prerequisite step and an explicit compiler-presence check. The local runtime
-   cross-link passes; inspect the new remote job after publication.
-4. Continue A01's lexical alloca/defer lifetime policy and broader fuzz controls.
-   Continue A13/A16 indirect/generic/embedded-origin and cleanup counterexamples;
-   borrowed-initial mutable bindings and raw/FFI boundaries need broader review.
-5. Retain every A01–A17 requirement. Package/release inventories, transactional
-   installation, actual distribution checks and independent crypto review remain
-   open. Current platform jobs do not certify their complete requirements.
+1. All fifteen remote jobs pass on this branch: the Linux compiler job,
+   FreeBSD, macOS ARM64, Windows, the sanitizer job, the runner
+   fault-injection controls, the unikernel job, the new MinGW msvcrt
+   cross-link job, required-tool fault injection, webdocs and all four
+   JavaScript audit/build jobs. That validates those revisions and those
+   workflow scopes, not every distribution target. Keep PR #1107 a draft;
+   the two newest commits are pushed and their remote results are pending.
+   The runtime-builtins doc gate needed `llvm.trunc.f32/f64` in its SKIP
+   list — they entered the preamble with the float-to-integer range guard
+   and, like `llvm.dbg.declare`, no NURL program can call them.
+2. The `:` declaration parser's five silent skips are closed (see the
+   ledger). The technique that found them is worth continuing: take a
+   construct the grammar allows, write it in a spelling nothing in the tree
+   uses, and check the implementation agrees with `spec/grammar.ebnf`. The
+   same sweep has not been run on `@`, `&`, `%` or `$` declarations, nor on
+   statement-level constructs.
+3. Continue A01's lexical alloca/defer lifetime policy. Note what the
+   probes here established: every NURL alloca is hoisted to the entry block
+   and lives for the whole function, so a use-after-scope inside one frame
+   is not a memory error today — it is at worst a slot reused across loop
+   iterations. The escape that IS a dangling pointer, a stack reference
+   outliving its function, is rejected by the borrow checker in every
+   spelling tried (assignment, struct field store, conditional arm, closure
+   of closure, nested blocks, loop body, and now block-expression
+   initialisers). A lifetime-marker policy therefore buys detection and
+   stack reuse, not correctness, and must still account for deferred
+   cleanup reaching a slot after its lexical block.
+4. Continue A13/A16 indirect/generic/embedded-origin and cleanup
+   counterexamples; borrowed-initial mutable bindings and raw/FFI
+   boundaries need broader review.
+5. Retain every A01-A17 requirement. Package/release inventories,
+   transactional installation, actual distribution checks and independent
+   crypto review remain open. Current platform jobs do not certify their
+   complete requirements.
 
 ## Reproduction
 
