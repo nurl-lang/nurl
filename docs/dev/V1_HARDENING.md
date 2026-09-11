@@ -8,14 +8,14 @@ in reviewable groups. No item below certifies the whole language or ecosystem.
 
 | Audit item | Evidence required before closure | Current disposition |
 |---|---|---|
-| A01: sanitizer coverage | Ordinary driver, bootstrap, split output and fuzz paths detect deliberate memory faults in generated code; clean controls, corpus and fuzz pass; UBSan/LLVM semantics documented | ASan emission implemented and calibrated; revealed HTTP/3 UAF and compiler leaks repaired; integer division/remainder, shifts and float casts now guard invalid domains; lexical stack-lifetime and broader fuzz coverage remain open |
+| A01: sanitizer coverage | Ordinary driver, bootstrap, split output and fuzz paths detect deliberate memory faults in generated code; clean controls, corpus and fuzz pass; UBSan/LLVM semantics documented | ASan emission implemented and calibrated; revealed HTTP/3 UAF and compiler leaks repaired; integer division/remainder, shifts and float casts now guard invalid domains, and the differential fuzzer now reaches those guards with computed operands; lexical stack-lifetime coverage remains open |
 | A02: trustworthy compiler runners | Missing-main rejection fixtures run; crash/hang/worker fault controls fail closed; complete corpus verdict accounting | Verified in local normal/sanitized corpus and POSIX/PowerShell controls; native Windows execution remains CI evidence |
 | A03: installed LSP | Separate installed project, unsaved edits, sibling/dependency imports, visible execution errors | Independently reproduced; repaired and verified with relocated binaries and 20 normal/ASan/LSan protocol/compiler controls on Linux; native Windows and actual distribution installation remain unverified |
 | A04: registry identity | Two local registries with equal package names; fetch, resolution, signing and lock identity preserved; errors never print success | Origin/key/index/archive/lock binding repaired; conflict-directed resolver checked against an exhaustive oracle; flat-layout coexistence and transactional/frozen installation remain open |
 | A05: signed install smoke | Signed fixtures install after relocation with transitive dependencies; missing/wrong/tampered signatures reject; CI runs it | Unsigned/stale smoke independently reproduced; signed five-program relocation smoke and CLI negative controls pass locally, wired into CI; remote run pending |
 | A06: JS dependencies | Fresh manager-native audits, reachability analysis, lockfile updates and builds/tests for all four trees; recurring checks | Fresh audits repaired; all four clean installs, builds/checks and zero-finding re-audits pass locally; weekly/PR checks added; all four remote audit/build jobs pass at `5b2a9b3a` |
 | A07: continuous package/service tests | Suite/prerequisite manifest, changed packages and reverse dependencies, scheduled coverage; registry/cloud and diagnostic gates in CI | Pending current workflow inventory |
-| A08: documentation consistency | Grammar, spec, platform claims, generated facts and executable docs agree with implementation | Runner prerequisites, macOS/musl claims and stale leak comments corrected from source; remaining claims pending |
+| A08: documentation consistency | Grammar, spec, platform claims, generated facts and executable docs agree with implementation | Runner prerequisites, macOS/musl claims and stale leak comments corrected from source; the binding path now accepts the block-expression initialiser its own grammar specifies; remaining claims pending |
 | A09: package development | Clean checkout and unpacked consumer tests, shared environment setup, explicit public import surfaces | Pending reproduction |
 | A10: tree gates | Tracked formatting inventory, package-aware frontend coverage, recursive import checks with reported exclusions | Pending current scope inventory |
 | A11: toolchain build integrity | Injected required-tool failures fail the build; stale binaries cannot substitute; logs and totals retained | Required tools now fail the build, use the canonical driver and remove stale outputs; isolated full-build controls pass locally and are wired into CI |
@@ -1323,3 +1323,108 @@ runtime cross-compiles and links locally with `x86_64-w64-mingw32-gcc`;
 workflow YAML and changed shell syntax pass validation. Remote execution of the
 new job remains required. This isolates the observed package-install stall
 without dropping the msvcrt check or increasing the compiler job's budget.
+
+### Block-expression bindings and the escape they opened (2026-09-11)
+
+`spec/grammar.ebnf` has said since v1 that a binding's initialiser is an
+expression (`let_stmt = ':' '~'? type? IDENT expr`) and that a block is one
+(`block_expr = '{' stmt* '}'`, "block used as expression, yields last value").
+The assignment path honoured that — `= x { 7 }` stores 7 — but the binding
+path did not. It skipped the initialiser token by token up to the FIRST `}`
+and returned `undef` without ever defining the name. Three consequences, all
+silent: the declaration vanished, so a later use reported an undefined
+identifier at the USE site; an unused binding compiled clean with nothing
+bound; and because the scan did not balance braces, a nested block ended it
+early and the remainder of the statement was re-parsed as ordinary statements.
+Nothing in the tree used the shape, so nothing failed — the corpus, the
+stdlib and every package are free of it.
+
+The initialiser now goes through the ordinary expression path, where
+`gen_expr` already dispatches a leading `{` to `gen_block_expr`. An empty
+block, or one whose tail statement yields nothing, is the ordinary "no value
+to bind" rejection; that diagnostic's wording no longer claims a block never
+yields a value.
+
+Opening the path exposed a second hole one level down. A `:` binding normally
+cannot name anything declared deeper than itself, so `bck_esc_let` recorded a
+referent depth without ever comparing it — only `bck_esc_assign` compared.
+A block-expression initialiser is exactly the exception: a closure that
+captures a block-local `: ~` multi-field struct holds a pointer into the
+block's frame (docs/MEMORY.md §2.3), and binding it outside the block dangles
+precisely as assigning it there does. `bck_esc_let` now applies the same
+comparison and the same wording in the `:` voice.
+
+Evidence. `block_expr_binding.nu` binds through a tail value, through
+statements plus a tail, through a nested block initialiser, through a call
+tail, through an outer binding read, and — the control for the escape case —
+through a closure over a FUNCTION-level `: ~` struct, which is legal and runs.
+`diag_block_binding_escape.nu` is the rejection; `diag_block_binding_void.nu`
+is the empty-block rejection. Ownership traffic through the new path was
+checked separately under ASan+LSan with leak detection on: an owned string as
+the tail value, one bound inside the block and handed out, one with a second
+owned local that must still be dropped at block exit, nested block
+initialisers, and a block initialiser allocating inside a loop — all correct
+values, zero leaks, zero sanitizer findings. `^`, `;` defer and `break` inside
+a block initialiser behave as the spec describes (return from the function,
+run at function exit, leave the loop). The tree's other unbalanced token skip,
+the generic parameter list in `scan_fn_sigs`, cannot swallow a body: an
+unterminated `[` is rejected earlier by the type parser.
+
+The full build passes with the bootstrap fixed point; the corpus is 981 PASS
+/ 19 SKIP over 1000 inputs, and the 303 diagnostics the stdlib, packages and
+examples produce are byte-identical before and after. The globals appendix is
+regenerated.
+
+### A01: computed divisors and shift amounts in the differential fuzzer (2026-09-11)
+
+`gen.py` kept the integer fuzzer out of the undefined domain by making every
+divisor and every shift amount a LITERAL. The arithmetic guards added earlier
+today are emitted either way, but against a constant operand their compare is
+constant too: nothing exercises the taken/not-taken decision at run time, and
+`-O2` deletes the branch before the program is run. The generator now derives
+half of them from an arbitrary sub-expression clamped into the legal domain —
+`| 1 & x 63` is odd and in [1, 63], so it is neither 0 nor -1, and
+`& x (width-1)` is in [0, width). The oracle models each clamp exactly, so a
+guard that fires on a legal operand becomes a divergence rather than a silent
+panic.
+
+Verified on the emitted IR: with a computed divisor both guard branches are
+live at `-O0` and compare against a loaded value; at `-O2` LLVM proves the
+operand nonzero and not -1 and removes both, so the differential run also
+checks that the fold preserves the answer.
+
+### The ':' declaration parser's silent skips (2026-09-11)
+
+A `:` at the top level introduces a struct, an enum or a global constant.
+Four points in that parser advanced past a token they did not understand
+instead of reporting it, and each could consume the declaration that
+followed.
+
+- A global constant with no value advanced one token and returned, defining
+  nothing. The token it swallowed was the next declaration's `@`, so the
+  report landed a line later as "unexpected 'main' at the top level" and
+  suggested unbalanced braces. The declaration that was actually incomplete
+  was never named.
+- The same path skipped one token when the NAME slot held something else —
+  which is exactly where a struct declaration whose `{ … }` body is missing
+  arrives.
+- A generic struct's `[ … ]` was followed by `skip_balanced`, which walks to
+  the next `{` ANYWHERE in the file. `: S [ T ]` with no body therefore
+  consumed the whole function after it, `main` included: the compiler exited
+  0, emitted a module with no `main`, and the only report was the linker's
+  `undefined reference to 'main'`, with no source location at all. An
+  unterminated `[` was equally silent.
+- A `:` followed by neither `|` nor a name skipped one token per turn.
+
+Each now reports, names the declaration and the token found, and is anchored
+at the declaration rather than at the token that revealed it — the
+constant's name for a missing value, the type for the other three. This is
+the same closure the top-level loop already had: it stopped silently
+advancing past stray tokens precisely because an unbalanced brace could
+slip a whole function past the parser.
+
+Nothing in the tree relied on any of the four: every existing corpus input
+passes unchanged beside the four new rejections
+(`diag_const_missing_value`, `diag_const_missing_name`,
+`diag_generic_struct_no_body`, `diag_colon_decl_junk`), and the stdlib,
+packages and examples produce the same diagnostics they did before.

@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+bound
+a=7
+b=21
+c=10
+d=17
+e=107
+ctr=2
