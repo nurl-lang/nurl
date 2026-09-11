@@ -11,7 +11,7 @@
     "migrate:remote": "wrangler d1 migrations apply REG_DB --remote"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250601.0",
+    "@cloudflare/workers-types": "^5.20260911.1",
     "typescript": "^5.5.0",
     "wrangler": "^4.0.0"
   }

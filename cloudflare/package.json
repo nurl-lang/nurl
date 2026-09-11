@@ -7,13 +7,14 @@
     "deploy": "wrangler deploy",
     "test:recovery": "node --test test-recovery.ts",
     "test:artifacts": "node --test test-artifacts.ts",
-    "cf-typegen": "wrangler types"
+    "cf-typegen": "wrangler types",
+    "typecheck": "wrangler types && tsc --noEmit"
   },
   "dependencies": {
     "@cloudflare/containers": "^0.0.20"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250515.0",
+    "@cloudflare/workers-types": "^5.20260911.1",
     "typescript": "^5.5.4",
     "wrangler": "^4.15.0"
   }
