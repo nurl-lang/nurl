@@ -29,10 +29,11 @@ cd "$ROOT"
 #   llvm.dbg.declare       — LLVM debug-info intrinsic, not callable
 #   nurl_init              — argv stash called by the generated main()
 #   nurl_journal_*         — panic-unwind allocation journal (compiler-emitted)
+#   nurl_ret_owned_*       — compiler-private thread-local return proof
 #   nurl_vec_drop          — compiler-emitted container destructor hook
 #   printf                 — variadic libc; documented C everywhere
 #   strtod                 — i8** out-param; use float.nu's checked parsers
-SKIP='^(llvm\.dbg\.declare|nurl_init|nurl_journal_push|nurl_journal_push_drop|nurl_journal_forget|nurl_vec_drop|printf|strtod)$'
+SKIP='^(llvm\.dbg\.declare|nurl_init|nurl_journal_push|nurl_journal_push_drop|nurl_journal_forget|nurl_ret_owned_get|nurl_ret_owned_set|nurl_vec_drop|printf|strtod)$'
 
 preamble="$(grep -oE '__emit_rt_decl syms `declare [^`]+' compiler/nurlc.nu \
   | grep -oE '@[A-Za-z0-9_.]+' | sed 's/^@//' | sort -u)"

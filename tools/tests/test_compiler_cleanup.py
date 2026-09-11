@@ -50,10 +50,25 @@ class CompilerCleanupTest(unittest.TestCase):
                  'diag_generic_body_error_loc', 'diag_match_arm_recover',
                  'borrow_sink_enum_after', 'diag_bad_type_token',
                  'diag_closure_arity_few', 'diag_send_chan_send',
-                 'should_fail_unterminated_trait']
+                 'should_fail_unterminated_trait', 'diag_removed_print_bool']
         for case in cases:
             with self.subTest(case=case):
                 self.reject(ROOT/f'compiler/tests/{case}.nu', '--check')
+
+    def test_all_corpus_rejections_release_the_compilation(self):
+        # Derive the sweep from current golden verdicts instead of preserving
+        # a historical count. Use the real runners' per-fixture compiler flags.
+        cases = sorted(path.stem for path in (ROOT/'compiler/tests/outputs').glob('*.txt')
+                       if path.read_bytes().startswith(b'COMPILE FAIL\n'))
+        self.assertTrue(cases, 'no rejected-source fixtures found')
+        for case in cases:
+            with self.subTest(case=case):
+                flag = subprocess.run(['bash', '-c',
+                    'source compiler/tests/test_harness.sh; test_compiler_flag "$1"',
+                    'compiler-cleanup', case], cwd=ROOT, capture_output=True,
+                    text=True, timeout=10, check=True).stdout.strip()
+                self.reject(ROOT/f'compiler/tests/{case}.nu', '--check',
+                            *([flag] if flag else []))
 
     def test_error_limit_still_cleans_the_compilation(self):
         path = self.root/'many.nu'

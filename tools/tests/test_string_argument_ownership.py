@@ -57,6 +57,193 @@ class StringArgumentOwnershipTest(unittest.TestCase):
             (ROOT / 'compiler/tests/recover_forward_consumer.nu').read_text(),
             'normal argument\nstill alive\n')
 
+    def test_dynamic_return_proof_survives_forward_chains_and_defer(self):
+        for tail in ['^ ( leaf fresh )', '( leaf fresh )']:
+            for fresh in ['T', 'F']:
+                with self.subTest(tail=tail, fresh=fresh):
+                    self.run_source("""$ `stdlib/core/string.nu`
+@ relay b fresh → s {
+    ; { ( clobber ) }
+    """ + tail + """
+}
+@ main → i {
+    : s value ( relay """ + fresh + """ )
+    ( nurl_println value )
+    ^ 0
+}
+@ leaf b fresh → s {
+    ? fresh { ^ ( nurl_str_cat `live` ` value` ) } {}
+    ^ `live value`
+}
+@ clobber → v { : s value ( noise ) }
+@ noise → s { ^ `borrowed noise` }
+""", 'live value\n')
+
+    def test_return_proofs_are_isolated_between_threads(self):
+        probe = self.directory / 'proof_threads.c'
+        binary = self.directory / 'proof_threads'
+        probe.write_text(r"""
+#include <assert.h>
+#include <pthread.h>
+extern long long nurl_ret_owned_get(void);
+extern void nurl_ret_owned_set(long long);
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t changed = PTHREAD_COND_INITIALIZER;
+static int phase;
+static void *worker(void *unused) {
+    pthread_mutex_lock(&mutex);
+    nurl_ret_owned_set(0);
+    phase = 1;
+    pthread_cond_broadcast(&changed);
+    while (phase != 2) pthread_cond_wait(&changed, &mutex);
+    assert(nurl_ret_owned_get() == 0);
+    nurl_ret_owned_set(0);
+    phase = 3;
+    pthread_cond_broadcast(&changed);
+    pthread_mutex_unlock(&mutex);
+    return 0;
+}
+int main(void) {
+    pthread_t thread;
+    assert(pthread_create(&thread, 0, worker, 0) == 0);
+    pthread_mutex_lock(&mutex);
+    while (phase != 1) pthread_cond_wait(&changed, &mutex);
+    nurl_ret_owned_set(1);
+    phase = 2;
+    pthread_cond_broadcast(&changed);
+    while (phase != 3) pthread_cond_wait(&changed, &mutex);
+    assert(nurl_ret_owned_get() == 1);
+    pthread_mutex_unlock(&mutex);
+    assert(pthread_join(thread, 0) == 0);
+    return 0;
+}
+""")
+        link = subprocess.run([self.clang, '-O1', *self.sanitizers,
+            str(probe), str(self.runtime), '-lm', '-lpthread', '-ldl',
+            '-o', str(binary)], capture_output=True, timeout=60)
+        self.assertEqual(link.returncode, 0, link.stderr.decode(errors='replace'))
+        run = subprocess.run([str(binary)], capture_output=True, timeout=30,
+            env={**os.environ, 'DEBUGINFOD_URLS': '',
+                 'ASAN_OPTIONS': 'detect_leaks=1:halt_on_error=1',
+                 'UBSAN_OPTIONS': 'halt_on_error=1'})
+        self.assertEqual(run.returncode, 0, run.stderr.decode(errors='replace'))
+        self.assertEqual(run.stderr, b'')
+
+    def test_indirect_string_returns_publish_their_own_proof(self):
+        for tail in ['^ ( nurl_str_cat `live` ` value` )',
+                     '( nurl_str_cat `live` ` value` )', '^ `live value`',
+                     '`live value`']:
+            for through_parameter in [False, True]:
+                with self.subTest(tail=tail, through_parameter=through_parameter):
+                    invoke = '( apply callback )' if through_parameter else '( callback )'
+                    self.run_source(r"""$ `stdlib/core/string.nu`
+@ main → i {
+    : callback \ → s { """ + tail + """ }
+    : s value """ + invoke + """
+    ( nurl_println value )
+    ^ 0
+}
+@ apply ( @ s ) callback → s { ^ ( callback ) }
+""", 'live value\n')
+
+    def test_bound_dynamic_returns_preserve_owner_and_opaque_borrow(self):
+        for explicit in [False, True]:
+            for fresh in ['T', 'F']:
+                with self.subTest(explicit=explicit, fresh=fresh):
+                    tail = '^ value' if explicit else 'value'
+                    self.run_source("""$ `stdlib/core/string.nu`
+@ relay b fresh → s { : s value ( leaf fresh ) """ + tail + """ }
+@ main → i {
+    : s value ( relay """ + fresh + """ )
+    """ + ('( nurl_println value )' if fresh == 'T' else
+             '( nurl_println_int # i value )') + """
+    ^ 0
+}
+@ leaf b fresh → s {
+    ? fresh { ^ ( nurl_str_cat `live` ` value` ) } {}
+    ^ # s 42
+}
+""", 'live value\n' if fresh == 'T' else '42\n')
+
+    def test_guarded_store_in_inner_block_survives_function_exit(self):
+        for flags in [(), ('--no-borrowck',)]:
+            with self.subTest(flags=flags):
+                self.run_source("""$ `stdlib/core/string.nu`
+@ store *i slot → v {
+    : s value ( later )
+    ? T { = . slot 0 # i value } {}
+}
+@ main → i {
+    : *i slot # *i ( nurl_alloc 8 )
+    ( store slot )
+    : i address . slot 0
+    ( nurl_println # s address )
+    ( nurl_free # s address )
+    ( nurl_free # s slot )
+    ^ 0
+}
+@ later → s { ^ ( nurl_str_cat `live` ` value` ) }
+""", 'live value\n', flags)
+
+    def test_guarded_return_cleans_the_nonreturning_path(self):
+        for fresh in ['T', 'F']:
+            with self.subTest(fresh=fresh):
+                self.run_source("""$ `stdlib/core/string.nu`
+@ choose b fresh → s {
+    : s value ( later fresh )
+    ? != 0 ( nurl_str_len value ) { ^ value } {}
+    ^ ( nurl_str_cat `live` ` value` )
+}
+@ main → i {
+    : s result ( choose """ + fresh + """ )
+    ( nurl_println result )
+    ^ 0
+}
+@ later b fresh → s {
+    ? fresh { ^ ( nurl_str_cat `live` ` value` ) } {}
+    ^ ( nurl_str_cat `` `` )
+}
+""", 'live value\n')
+
+    def test_guarded_binding_is_reclaimed_on_panic(self):
+        self.run_source(r"""$ `stdlib/std/panic.nu`
+@ main → i {
+    ?? ( recover \ → v {
+        : s value ( later )
+        ( nurl_println value )
+        ( panic `expected` )
+    } ) {
+        T _ → { ^ 2 }
+        F info → { ( panic_info_free info ) }
+    }
+    ^ 0
+}
+@ later → s { : s value ( leaf ) ^ value }
+@ leaf → s { ^ ( nurl_str_cat `live` ` value` ) }
+""", 'live value\n')
+
+    def test_guarded_escaping_binding_outlives_inner_panic(self):
+        self.run_source(r"""$ `stdlib/std/panic.nu`
+@ main → i {
+    : *i saved_slot # *i ( nurl_alloc 8 )
+    ?? ( recover \ → v {
+        : s value ( later )
+        = . saved_slot 0 # i value
+        ( panic `expected` )
+    } ) {
+        T _ → { ^ 2 }
+        F info → { ( panic_info_free info ) }
+    }
+    : i saved . saved_slot 0
+    ( nurl_println # s saved )
+    ( nurl_free # s saved )
+    ( nurl_free # s saved_slot )
+    ^ 0
+}
+@ later → s { : s value ( leaf ) ^ value }
+@ leaf → s { ^ ( nurl_str_cat `live` ` value` ) }
+""", 'live value\n')
+
     def test_returned_address_remains_live_in_both_declaration_orders(self):
         main = '''@ main → i {
     : i address ( address_of ( nurl_str_cat `still` ` alive` ) )

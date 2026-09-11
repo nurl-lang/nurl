@@ -2611,6 +2611,17 @@ long long nurl_alloc_count(void)               { return (long long)nurl__actr_to
 long long nurl_free_count(void)                { return (long long)nurl__actr_total(1); }
 void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)bytes); }
 
+/* Dynamic string-return proof belongs to the executing thread. The compiler
+ * captures it immediately after a call, before any destructor or defer can
+ * publish another result. WASI without threads has one execution context. */
+#if defined(__wasi__) && !defined(__wasm_atomics__)
+static long long nurl__ret_owned;
+#else
+static __thread long long nurl__ret_owned;
+#endif
+long long nurl_ret_owned_get(void) { return nurl__ret_owned; }
+void nurl_ret_owned_set(long long proof) { nurl__ret_owned = proof; }
+
 /* ── §9b  Panic-unwind allocation journal ──────────────────────────
  *
  * A `recover` frame establishes a setjmp landing pad; a `panic` inside

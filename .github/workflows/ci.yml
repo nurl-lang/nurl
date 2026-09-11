@@ -62,7 +62,11 @@ jobs:
             # changes, so a change to the gate is exercised by its own PR.
             compiler:
               - 'compiler/nurlc.nu'
+              - 'compiler/nurlc_lastgood.*'
+              - 'stdlib/runtime*.c'
               - 'tools/leakgate.sh'
+              - 'tools/tests/test_compiler_cleanup.py'
+              - 'tools/tests/test_string_argument_ownership.py'
               - 'compiler/tests/enum_tree_drop.nu'
               - 'compiler/tests/nested_field_store.nu'
 
@@ -639,7 +643,7 @@ jobs:
       - name: Instrumented installed LSP and compiler stdin controls
         run: |
           NURL_SAN=1 ./tools/nurl-lsp/build.sh
-          # Rejected compiler paths still need leak cleanup (A01 ledger).
+          # LSP message construction still leaks in five controls (A03 ledger).
           ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 python3 tools/tests/test_lsp_toolchain.py
           ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 python3 tools/tests/test_lsp_toolchain.py ToolchainTest.test_check_self_compile_from_stdin
 
@@ -693,6 +697,9 @@ jobs:
 
       - name: string argument address and ownership controls
         run: python3 tools/tests/test_string_argument_ownership.py
+
+      - name: rejected-source compiler leak gate (all rejection goldens)
+        run: python3 tools/tests/test_compiler_cleanup.py
 
       - name: metamorphic reclamation gate (§7.2, runtime axis)
         # The compile-verdict classes run in the build-test job; this one

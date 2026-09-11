@@ -13,7 +13,7 @@ in reviewable groups. No item below certifies the whole language or ecosystem.
 | A03: installed LSP | Separate installed project, unsaved edits, sibling/dependency imports, visible execution errors | Independently reproduced; repaired and verified with relocated binaries and 20 normal/ASan protocol/compiler controls on Linux; native Windows and actual distribution installation remain unverified |
 | A04: registry identity | Two local registries with equal package names; fetch, resolution, signing and lock identity preserved; errors never print success | Origin/key/index/archive/lock binding repaired; conflict-directed resolver checked against an exhaustive oracle; flat-layout coexistence and transactional/frozen installation remain open |
 | A05: signed install smoke | Signed fixtures install after relocation with transitive dependencies; missing/wrong/tampered signatures reject; CI runs it | Unsigned/stale smoke independently reproduced; signed five-program relocation smoke and CLI negative controls pass locally, wired into CI; remote run pending |
-| A06: JS dependencies | Fresh manager-native audits, reachability analysis, lockfile updates and builds/tests for all four trees; recurring checks | Pending fresh advisory evidence |
+| A06: JS dependencies | Fresh manager-native audits, reachability analysis, lockfile updates and builds/tests for all four trees; recurring checks | Fresh audits repaired; all four clean installs, builds/checks and zero-finding re-audits pass locally; weekly/PR checks added, remote run pending |
 | A07: continuous package/service tests | Suite/prerequisite manifest, changed packages and reverse dependencies, scheduled coverage; registry/cloud and diagnostic gates in CI | Pending current workflow inventory |
 | A08: documentation consistency | Grammar, spec, platform claims, generated facts and executable docs agree with implementation | Runner prerequisites, macOS/musl claims and stale leak comments corrected from source; remaining claims pending |
 | A09: package development | Clean checkout and unpacked consumer tests, shared environment setup, explicit public import surfaces | Pending reproduction |
@@ -1019,3 +1019,114 @@ instrumented compiler**, in 98.931s (`string-origin-stores-instrumented-compiler
 No full sanitized bootstrap/corpus or complete multi-mode leak-gate result is
 claimed for this checkpoint. Continue from
 [V1_HARDENING_HANDOFF.md](V1_HARDENING_HANDOFF.md); the PR remains a draft.
+
+## A06: dependency audits and clean installs (2026-09-11)
+
+Fresh npm audits reported six vulnerable dependency packages in each Worker
+project (five high, one low), and one high-severity `brace-expansion` finding
+in the VS Code extension. The pnpm audit reported 33 advisory findings for
+webdocs, including two critical Next.js advisories. These are manager-reported
+findings, not independently demonstrated exploits against the deployed sites.
+
+The Worker findings are in Wrangler's development/deployment dependency tree
+(`miniflare`, `undici`, `ws`, `sharp`, `esbuild`); both manifests classify
+Wrangler as a development dependency. The extension finding is in its packaging
+tooling. Webdocs exports static files (`next.config.mjs`: `output: 'export'`),
+so the deployed site does not run the Next.js server, Server Actions or its
+image-optimization endpoint. The affected packages still execute during local
+and CI development/build work; static export is not used to dismiss the audit.
+No advisory exclusions or forced incompatible npm resolutions were added.
+
+The lockfiles now resolve Wrangler 4.131.0, `brace-expansion` 2.1.4 for the
+extension, and Next.js / eslint-config-next 16.3.3. Both Worker projects use
+Workers types 5.20260911.1 to satisfy the updated Wrangler peer requirement.
+Webdocs' compatible dependency updates were resolved by pnpm 10.34.5. Fresh
+manager-native audits after clean installs report zero findings in all four
+trees, including development dependencies.
+
+Clean-install verification on Node 24.15.0 / npm 11.12.1:
+
+- Registry: TypeScript and 73 README-rendering assertions pass.
+- Cloudflare: generated Worker types and TypeScript pass; recovery and all eight
+  artifact controls pass. Typechecking now regenerates ignored bindings first,
+  and `src/env.d.ts` declares the optional deploy-workflow `NURL_DEPLOY_ID`.
+- VS Code: launcher controls and `npm pack --dry-run` pass.
+- Webdocs: frozen pnpm install, MDX/Next/TypeScript checks and the complete
+  production static export pass.
+
+`.github/workflows/dependency-audit.yml` adds changed-tree PR checks, main-branch
+lockfile checks, a weekly audit and manual dispatch. Each job retains the audit
+JSON, checks all severities and runs the corresponding project checks without
+service credentials or deployments. Remote workflow execution remains pending;
+zero findings describe this dated local audit, not future advisory databases.
+Evidence is retained in `build/v1-hardening/audit-*.json`, `audit-fix*.log`,
+`audit-webdocs-after.json` and `js-*.log`.
+
+### Return ownership and diagnostic cleanup (2026-09-11)
+
+This checkpoint supersedes the two open diagnostic leaks above. Independent
+controls reproduced forward return-proof loss, proof clobbering by `defer`,
+indirect closure-return leaks, and a bound dynamic return that tried to copy an
+opaque `s` value (`# s 42`). A further control stored a guarded string address
+inside a nested conditional; scope-local read counters lost that use and freed
+the buffer at function exit. The original sources fail their sanitizer controls;
+the unchanged vector golden remains `item3`, exit 0.
+
+Result ownership is saved per activation before cleanup, published at the final
+LLVM return, and captured immediately after direct/indirect calls. The runtime
+channel is thread-local (plain storage on single-threaded WASI), with a
+deterministic two-thread isolation control. Bound returns preserve the original
+owner pointer, including null for borrowed or opaque results. Successful owner
+transfer removes the callee's panic-journal registration only after cleanup.
+
+Guarded bindings now use the stable address graph to select the owner eligible
+for cleanup and panic registration. The selected drop slot is distinct from
+the original result-proof slot. Reachability survives scope exit, aliases and
+forward calls; storage, captures and unknown dispatch conservatively retain
+owners. A direct guarded return transfers at that return site while other
+paths still reclaim the binding. Local owners add no fabricated parameter bits,
+and guard analysis does not modify summary solver state. The existing temporary
+consumer whitelist was not expanded; the guarded-binding read counters were
+removed.
+
+The first graph-lifetime candidate fixed the nested-store use-after-free but
+leaked empty recursive `__thr_check` results on 24 rejected-source controls.
+Treating all possible returns as lifetime escapes had also disabled cleanup on
+paths that did not return that binding. Return-site transfer edges fixed this
+cause; no helper reordering, name exceptions or leak suppressions were used.
+The wider diagnostic sweep also found `__diag_lit`'s raw result allocation; it
+now uses the existing owned string API and preserves the diagnostic text.
+
+Focused verification:
+
+- All 25 address/return ownership methods pass with both the normal candidate
+  and the ASan/UBSan candidate; emitted programs also run with ASan/UBSan/LSan.
+- All six compiler-cleanup methods pass, including a sweep derived from all
+  366 current rejection goldens and their actual runner flags. Output-mode,
+  stdin, error-limit and invalid-CLI controls remain included.
+- The instrumented compiler emits its complete source with leak detection
+  enabled and `LSAN_OPTIONS=use_stacks=0`, with no sanitizer findings.
+
+Failed and passing stages are retained under `build/v1-hardening/`: the
+`*-before.log` witnesses, `guard-graph-cleanup.log` (failed),
+`guard2-{ownership,san-ownership,cleanup,self}.log` (passed). The final shared
+bootstrap/corpus results are recorded separately below. These results close the
+listed rejection regressions, not A01's lexical lifetime/arithmetic work or the
+entire safety, architecture and package audits.
+
+Final shared verification for this checkpoint: refreshed normal bootstrap and
+993-input corpus pass (974 PASS / 19 SKIP, 59 s build and 2 m 47 s tests).
+Sanitized bootstrap passes (85 s); its complete corpus also reports 974 PASS /
+19 SKIP with zero sanitizer/compiler/link/runtime/timeout failures. All six
+compiler leak-gate inputs pass both ordinary and instrumented split emission
+(12 modes), and the shared compiler passes all six diagnostic-cleanup methods.
+RSS is 35 MB against the unchanged 600 MB budget; DCE is 180 emitted / 12
+reachable with matching behavior; all seven runtime-journal controls pass.
+Logs are `guard-final-*.log`; the normal verdicts are also retained separately.
+
+Enabling LSan for the complete installed LSP suite yields five failures out of
+20 controls: message-building argument temporaries leak in compiler-failure and
+formatter-failure paths. This is separate from the now-clean rejected compiler
+processes. The failed `guard-final-lsp.log` is retained. The remaining aggregate
+consumer restriction and unknown-call handling need investigation before this
+service suite can truthfully become a zero-leak CI gate.
