@@ -50,7 +50,7 @@ $ `grep.nu`
 : i SED_S_PRINT 2
 : i SED_S_ICASE 4
 
-@ __sed_cmd_free SedCmd c → v {
+@ __sed_cmd_free sink SedCmd c → v {
     ? . c has_re { ( regex_free . c re ) } {}
     ? == . c a1kind SED_ADDR_RE { ( regex_free . c a1re ) } {}
     ? == . c a2kind SED_ADDR_RE { ( regex_free . c a2re ) } {}

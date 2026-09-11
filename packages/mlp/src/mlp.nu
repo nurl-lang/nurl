@@ -171,7 +171,7 @@ $ `stdlib/ext/json.nu`
     ^ @ MlpCfg { 0.001 0.0001 500 0 T 0.1 10 0.0001 42 F }
 }
 
-@ mlp_free Mlp m → v {
+@ mlp_free sink Mlp m → v {
     ( vec_free [i] . m sizes )
     ( vec_free [i] . m w_off )
     ( vec_free [i] . m b_off )
@@ -717,7 +717,7 @@ $ `stdlib/ext/json.nu`
     }
 }
 
-@ minmax_free MinMax mm → v {
+@ minmax_free sink MinMax mm → v {
     ( vec_free [f] . mm lo )
     ( vec_free [f] . mm hi )
 }

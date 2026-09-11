@@ -107,7 +107,7 @@ $ `src/service.nu`
     ^ @ TextOut { status txt hv }
 }
 
-@ text_out_free TextOut t → v {
+@ text_out_free sink TextOut t → v {
     ( string_free . t text )
     ( string_free . t header )
 }

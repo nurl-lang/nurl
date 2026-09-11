@@ -48,7 +48,7 @@ $ `stdlib/core/vec.nu`
 
 : UrlParam { String key String val }
 
-@ url_free Url u → v {
+@ url_free sink Url u → v {
     ( string_free . u scheme )
     ( string_free . u userinfo )
     ( string_free . u host )
@@ -57,7 +57,7 @@ $ `stdlib/core/vec.nu`
     ( string_free . u fragment )
 }
 
-@ url_params_free ( Vec UrlParam ) ps → v {
+@ url_params_free sink ( Vec UrlParam ) ps → v {
     : i n ( vec_len [UrlParam] ps )
     : ~ i k 0
     ~ < k n {

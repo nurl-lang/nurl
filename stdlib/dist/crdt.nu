@@ -43,7 +43,7 @@ $ `stdlib/core/vec.nu`
     ^ c
 }
 
-@ pncounter_free * PNCounter c → v {
+@ pncounter_free sink * PNCounter c → v {
     ( vec_free [i] . c inc_id ) ( vec_free [i] . c inc_amt )
     ( vec_free [i] . c dec_id ) ( vec_free [i] . c dec_amt )
     ( nurl_free # s c )
@@ -149,7 +149,7 @@ $ `stdlib/core/vec.nu`
     ( vec_free [s] v )
 }
 
-@ orset_free * OrSet s → v { ( __orset_free_vec . s adds ) ( __orset_free_vec . s tombs ) ( nurl_free # s s ) }
+@ orset_free sink * OrSet s → v { ( __orset_free_vec . s adds ) ( __orset_free_vec . s tombs ) ( nurl_free # s s ) }
 
 @ __tag_in ( Vec s ) v i elem i replica i seq → b {
     : i n ( vec_len [s] v ) : ~ b found F : ~ i k 0

@@ -156,7 +156,7 @@ $ `stdlib/ext/http_pure.nu`
     ^ @ Header { n v }
 }
 
-@ header_free Header h → v {
+@ header_free sink Header h → v {
     ( string_free . h name )
     ( string_free . h value )
 }
@@ -436,7 +436,7 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
     ^ ? == vp 0 `` # s vp
 }
 
-@ response_free Response r → v {
+@ response_free sink Response r → v {
     : s rp . r raw
     : i raw # i rp
     ( nurl_http_response_free raw )
@@ -659,7 +659,7 @@ i timeout_ms i connect_timeout_ms
     ^ out
 }
 
-@ sse_event_free SseEvent e → v {
+@ sse_event_free sink SseEvent e → v {
     ( string_free . e name )
     ( string_free . e data )
     ( string_free . e id )

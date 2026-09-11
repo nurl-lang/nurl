@@ -84,7 +84,7 @@ $ `src/service.nu`
     String www
 }
 
-@ out_free Out o → v {
+@ out_free sink Out o → v {
     ( json_free . o body )
     ( string_free . o www )
 }
@@ -171,7 +171,7 @@ $ `src/service.nu`
     Json data
 }
 
-@ call_free Call c → v {
+@ call_free sink Call c → v {
     ( string_free . c text )
     ( json_free . c data )
 }

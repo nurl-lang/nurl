@@ -42,7 +42,7 @@ $ `stdlib/std/bytes.nu`
     ^ r
 }
 
-@ quic_rxbuf_free * QuicRxBuf r → v {
+@ quic_rxbuf_free sink * QuicRxBuf r → v {
     ? == # i r 0 { ^ } {}
     ( vec_free [u] . r buf )
     ( vec_free [i] . r ranges )

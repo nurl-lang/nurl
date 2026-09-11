@@ -54,7 +54,7 @@ $ `deps/iforest/src/iforest.nu`
     ^ <= df - 0.0 . vm margin
 }
 
-@ anom_vermodel_free VerModel vm → v {
+@ anom_vermodel_free sink VerModel vm → v {
     ( string_free . vm vname )
     ( iforest_free . vm forest )
 }

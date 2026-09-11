@@ -114,7 +114,7 @@ $ `stdlib/std/p256_field.nu`
     ^ @ RJac { ( bigint_from_i 1 ) ( bigint_from_i 1 ) ( bigint_from_i 0 ) T }
 }
 
-@ rj_free RJac q → v {
+@ rj_free sink RJac q → v {
     ( bigint_free . q x )
     ( bigint_free . q y )
     ( bigint_free . q z )

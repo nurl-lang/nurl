@@ -44,7 +44,7 @@ $ `stdlib/ext/env.nu`
     ^ @ Dep { ( string_from name ) ( string_new ) ( string_from req ) ( string_new ) }
 }
 
-@ deps_free ( Vec Dep ) v → v {
+@ deps_free sink ( Vec Dep ) v → v {
     : i n ( vec_len [Dep] v )
     : ~ i k 0
     ~ < k n { : ?Dep d ( vec_get [Dep] v k ) ?? d { T dv → ( dep_free dv ) F → {} } = k + k 1 }
@@ -195,10 +195,10 @@ version = "1.0.0"
                 : s REG `http://127.0.0.1:18943/`
                 : ( Vec Dep ) roots ( vec_new [Dep] )
                 ( vec_push [Dep] roots ( reg_dep `foo` `^1.0` ) )
-                : ( @ String s s ) fetch \ s registry s nm → String { ^ ( pkg_fetch_index registry nm ) }
+                : ( @ !RegIndex RegistryFetchErr s s ) fetch \ s registry s nm → !RegIndex RegistryFetchErr { ^ ( pkg_fetch_index registry nm ) }
                 : !( Vec LockPkg ) ResolveErr rr ( resolve_registry roots REG fetch )
                 ?? rr {
-                    F e → ( nurl_print `resolve_err\n` )
+                    F e → { ( nurl_print `resolve_err\n` ) ( resolve_err_free e ) }
                     T locked → {
                         ( nurl_print `resolved=` ) ( nurl_println_int ( vec_len [LockPkg] locked ) )
                         : ?LockPkg p0 ( vec_get [LockPkg] locked 0 )

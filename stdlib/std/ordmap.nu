@@ -125,12 +125,12 @@ $ `stdlib/core/vec.nu`
     ^ ( vec_get [K] . m keys - n 1 )
 }
 
-@ ordmap_free [K V] ( OrdMap K V ) m → v {
+@ ordmap_free [K V] sink ( OrdMap K V ) m → v {
     ( vec_free [K] . m keys )
     ( vec_free [V] . m vals )
 }
 
-@ ordmap_free_with [K V] ( OrdMap K V ) m ( @ v K ) dk ( @ v V ) dv → v {
+@ ordmap_free_with [K V] sink ( OrdMap K V ) m ( @ v K ) dk ( @ v V ) dv → v {
     ( vec_free_with [K] . m keys dk )
     ( vec_free_with [V] . m vals dv )
 }

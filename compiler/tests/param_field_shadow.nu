@@ -26,7 +26,7 @@
 
 @ box_get_len * Box b → i { ^ . b len }
 
-@ box_free * Box b → v { ( nurl_free # s b ) }
+@ box_free sink * Box b → v { ( nurl_free # s b ) }
 
 // Negative control: variable-index array store on a *Match-like pointer
 // must still work. The Vec[A] vec_push pattern (`= . data len x` where

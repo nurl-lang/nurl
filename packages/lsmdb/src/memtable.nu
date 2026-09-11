@@ -97,7 +97,7 @@ $ `stdlib/core/vec.nu`
     ^ m
 }
 
-@ mt_free * MemTable m → v {
+@ mt_free sink * MemTable m → v {
     ( vec_free [u] . m arena )
     ( vec_free [i] . m koff )
     ( vec_free [i] . m klen )

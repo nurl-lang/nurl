@@ -927,7 +927,7 @@ $ `stdlib/ext/compress.nu`
 
 // ── Teardown ──────────────────────────────────────────────────────────
 
-@ http_client_free * HttpClient c → v {
+@ http_client_free sink * HttpClient c → v {
     : i n ( vec_len [i] . c origins )
     : ~ i k 0
     ~ < k n {

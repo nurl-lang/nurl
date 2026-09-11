@@ -178,7 +178,7 @@ $ `stdlib/ext/env.nu`
     ^ out
 }
 
-@ blob_manifest_free ( Vec ( Vec u ) ) m → v {
+@ blob_manifest_free sink ( Vec ( Vec u ) ) m → v {
     : i n ( vec_len [( Vec u )] m )
     : ~ i k 0
     ~ < k n {

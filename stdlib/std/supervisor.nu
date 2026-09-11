@@ -320,7 +320,7 @@ $ `stdlib/std/panic.nu`
     ^ . child restarts
 }
 
-@ supervisor_free Supervisor s → v {
+@ supervisor_free sink Supervisor s → v {
     : *SupImpl sup # *SupImpl . s ctl
     : ( @ v ChildSpec ) freeing \ ChildSpec c → v {
         : *ChildImpl ci # *ChildImpl . c ctl

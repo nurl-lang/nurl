@@ -1120,55 +1120,53 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 // comments survive.
 
 // Candidate "newest" version for one dependency; "" when unknown.
-@ __update_candidate Manifest m Dep d → String {
+@ __report_registry_fetch s registry s name RegistryFetchErr error → v {
+    : String text ( registry_fetch_err_text error )
+    : String url ( registry_index_url registry name )
+    ( nurl_eprint `nurlpkg: ` ) ( nurl_eprint ( string_data url ) ) ( nurl_eprint `: ` )
+    ( string_free url )
+    ( nurl_eprintln ( string_data text ) ) ( string_free text )
+}
+
+@ __report_resolve_error ResolveErr error → v {
+    : String text ( resolve_err_text error )
+    ( nurl_eprint `nurlpkg: registry resolution failed (` )
+    ( nurl_eprint ( string_data text ) ) ( nurl_eprintln `)` )
+    ( string_free text ) ( resolve_err_free error )
+}
+
+@ __update_candidate Manifest m Dep d → !String i {
     ? > ( string_len . d path ) 0 {
-        // Path dep: the local copy is authoritative.
-        : String mf ( string_from ( string_data . d path ) )
-        ( string_push_str mf `/nurl.toml` )
+        : String mf ( string_clone . d path ) ( string_push_str mf `/nurl.toml` )
         : !Manifest ManifestErr mr ( manifest_load ( string_data mf ) )
         ( string_free mf )
         ?? mr {
-            T dm → {
-                : String out ( string_from ( string_data . dm version ) )
-                ( manifest_free dm )
-                ^ out
-            }
-            F _ → ^ ( string_new )
+            T dm → { : String out ( string_clone . dm version ) ( manifest_free dm ) ^ @ !String i { T out } }
+            F _ → { ( nurl_eprint `nurlpkg: cannot read local dependency: ` ) ( nurl_eprintln ( string_data . d name ) ) ^ @ !String i { F 1 } }
         }
     } {}
-    // Registry dep: newest non-yanked published version.
-    : ~ String reg ( string_new )
-    ? > ( string_len . d registry ) 0 {
-        ( string_free reg )
-        = reg ( string_from ( string_data . d registry ) )
-    } {
-        ( string_free reg )
-        = reg ( __registry_url m )
+    : String reg ? > ( string_len . d registry ) 0 ( string_clone . d registry ) ( __registry_url m )
+    : !RegIndex RegistryFetchErr result ( pkg_fetch_index ( string_data reg ) ( string_data . d name ) )
+    ?? result {
+        F error → {
+            ?? error {
+                RegistryNotFound → { ( string_free reg ) ^ @ !String i { T ( string_new ) } }
+                _ → { ( __report_registry_fetch ( string_data reg ) ( string_data . d name ) error ) }
+            }
+            ( string_free reg ) ^ @ !String i { F 1 }
+        }
+        T index → {
+            ( string_free reg )
+            : ~ String out ( string_new )
+            : i selected ( regindex_select index `*` )
+            ? >= selected 0 {
+                : IdxVersion version . ( vec_data [IdxVersion] . index versions ) selected
+                ( string_free out ) = out ( string_clone . version version )
+            } {}
+            ( regindex_free index )
+            ^ @ !String i { T out }
+        }
     }
-    : String body ( pkg_fetch_index ( string_data reg ) ( string_data . d name ) )
-    ( string_free reg )
-    : ~ String out ( string_new )
-    ? > ( string_len body ) 0 {
-        ?? ( regindex_parse ( string_data body ) ) {
-            T idx → {
-                : i sel ( regindex_select idx `*` )
-                ? >= sel 0 {
-                    : ?IdxVersion vo ( vec_get [IdxVersion] . idx versions sel )
-                    ?? vo {
-                        T v → {
-                            ( string_free out )
-                            = out ( string_from ( string_data . v version ) )
-                        }
-                        F → {}
-                    }
-                } {}
-                ( regindex_free idx )
-            }
-            F _ → {}
-        }
-    } {}
-    ( string_free body )
-    ^ out
 }
 
 // True when `oldreq` already admits `ver` — nothing to update. An
@@ -1425,47 +1423,51 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                                 ( nurl_print dname )
                                 ( nurl_print `: path-only (no version requirement) — skipped\n` )
                             } {
-                                : String cand ( __update_candidate m d )
-                                : s oldreq ( string_data . d version )
-                                ? == ( string_len cand ) 0 {
-                                    ( nurl_print `  ` )
-                                    ( nurl_print dname )
-                                    ( nurl_print `: no published version found — skipped\n` )
-                                } {
-                                    ? ( __req_admits oldreq ( string_data cand ) ) {
-                                        ( nurl_print `  ` )
-                                        ( nurl_print dname )
-                                        ( nurl_print ` ` )
-                                        ( nurl_print oldreq )
-                                        ( nurl_print ` — up to date (newest is ` )
-                                        ( nurl_print ( string_data cand ) )
-                                        ( nurl_print `)\n` )
-                                    } {
-                                        : String newreq ( __styled_req oldreq ( string_data cand ) )
-                                        : ~ b go != 0 all
-                                        ? == all 0 {
-                                            = go ( __confirm_update dname oldreq ( string_data newreq ) )
-                                        } {}
-                                        ? go {
-                                            ? == ( __rewrite_dep_req dname ( string_data newreq ) ) 0 {
-                                                ( nurl_print `  ` )
-                                                ( nurl_print dname )
-                                                ( nurl_print `: ` )
-                                                ( nurl_print oldreq )
-                                                ( nurl_print ` -> ` )
-                                                ( nurl_print ( string_data newreq ) )
-                                                ( nurl_print `\n` )
-                                                = changed + changed 1
-                                            } { = failed + failed 1 }
-                                        } {
+                                ?? ( __update_candidate m d ) {
+                                    F _ → { = failed + failed 1 }
+                                    T cand → {
+                                        : s oldreq ( string_data . d version )
+                                        ? == ( string_len cand ) 0 {
                                             ( nurl_print `  ` )
                                             ( nurl_print dname )
-                                            ( nurl_print `: skipped\n` )
+                                            ( nurl_print `: no published version found — skipped\n` )
+                                        } {
+                                            ? ( __req_admits oldreq ( string_data cand ) ) {
+                                                ( nurl_print `  ` )
+                                                ( nurl_print dname )
+                                                ( nurl_print ` ` )
+                                                ( nurl_print oldreq )
+                                                ( nurl_print ` — up to date (newest is ` )
+                                                ( nurl_print ( string_data cand ) )
+                                                ( nurl_print `)\n` )
+                                            } {
+                                                : String newreq ( __styled_req oldreq ( string_data cand ) )
+                                                : ~ b go != 0 all
+                                                ? == all 0 {
+                                                    = go ( __confirm_update dname oldreq ( string_data newreq ) )
+                                                } {}
+                                                ? go {
+                                                    ? == ( __rewrite_dep_req dname ( string_data newreq ) ) 0 {
+                                                        ( nurl_print `  ` )
+                                                        ( nurl_print dname )
+                                                        ( nurl_print `: ` )
+                                                        ( nurl_print oldreq )
+                                                        ( nurl_print ` -> ` )
+                                                        ( nurl_print ( string_data newreq ) )
+                                                        ( nurl_print `\n` )
+                                                        = changed + changed 1
+                                                    } { = failed + failed 1 }
+                                                } {
+                                                    ( nurl_print `  ` )
+                                                    ( nurl_print dname )
+                                                    ( nurl_print `: skipped\n` )
+                                                }
+                                                ( string_free newreq )
+                                            }
                                         }
-                                        ( string_free newreq )
+                                        ( string_free cand )
                                     }
                                 }
-                                ( string_free cand )
                             }
                         } {}
                     }
@@ -2115,14 +2117,12 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ( nurl_print `resolving registry dependencies against ` )
     ( nurl_print ( string_data reg ) )
     ( nurl_print `\n` )
-    : ( @ String s s ) fetch \ s registry s nm → String { ^ ( pkg_fetch_index registry nm ) }
+    : ( @ !RegIndex RegistryFetchErr s s ) fetch \ s registry s nm → !RegIndex RegistryFetchErr { ^ ( pkg_fetch_index registry nm ) }
     : ~ i rc 0
     : !( Vec LockPkg ) ResolveErr rr ( resolve_registry roots ( string_data reg ) fetch )
     ?? rr {
         F e → {
-            ( nurl_eprint `nurlpkg: registry resolution failed (` )
-            ( nurl_eprint ( resolve_err_name e ) )
-            ( nurl_eprintln `)` )
+            ( __report_resolve_error e )
             = rc 1
         }
         T locked → {
@@ -2284,38 +2284,23 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 
 @ __cmd_registry_info s name → i {
     : String reg ( __reg_default )
-    : String body ( pkg_fetch_index ( string_data reg ) name )
+    : !RegIndex RegistryFetchErr response ( pkg_fetch_index ( string_data reg ) name )
     : ~ i rc 0
-    ? == ( string_len body ) 0 {
-        ( nurl_eprint `nurlpkg: package not found: ` ) ( nurl_eprintln name )
-        = rc 1
-    } {
-        : !RegIndex RegIndexErr ir ( regindex_parse ( string_data body ) )
-        ?? ir {
-            F _ → { ( nurl_eprintln `nurlpkg: bad index response` ) = rc 1 }
-            T idx → {
-                ( nurl_print ( string_data . idx name ) ) ( nurl_print `\nversions:\n` )
-                : i n ( vec_len [IdxVersion] . idx versions )
-                : ~ i k 0
-                ~ < k n {
-                    : ?IdxVersion vo ( vec_get [IdxVersion] . idx versions k )
-                    ?? vo {
-                        T v → {
-                            ( nurl_print `  ` ) ( nurl_print ( string_data . v version ) )
-                            ? . v yanked { ( nurl_print ` (yanked)` ) } {}
-                            ( nurl_print `\n` )
-                        }
-                        F → {}
-                    }
-                    = k + k 1
-                }
-                ( regindex_free idx )
+    ?? response {
+        F error → { ( __report_registry_fetch ( string_data reg ) name error ) = rc 1 }
+        T idx → {
+            ( nurl_print ( string_data . idx name ) ) ( nurl_print `\nversions:\n` )
+            : ~ i k 0
+            ~ < k ( vec_len [IdxVersion] . idx versions ) {
+                : IdxVersion version . ( vec_data [IdxVersion] . idx versions ) k
+                ( nurl_print `  ` ) ( nurl_print ( string_data . version version ) )
+                ? . version yanked { ( nurl_print ` (yanked)` ) } {}
+                ( nurl_print `\n` ) = k + k 1
             }
+            ( regindex_free idx )
         }
     }
-    ( string_free body )
-    ( string_free reg )
-    ^ rc
+    ( string_free reg ) ^ rc
 }
 
 // ── yank / unyank ────────────────────────────────────────────────
@@ -2901,46 +2886,45 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                         T dm → {
                             : s dname ( string_data . dm name )
                             : s dver ( string_data . dm version )
-                            : String idx ( pkg_fetch_index reg dname )
-                            ? > ( string_len idx ) 0 {
-                                ?? ( regindex_parse ( string_data idx ) ) {
-                                    T ridx → {
-                                        // is THIS local version already published?
-                                        : ~ i hit -1
-                                        : ~ i vi 0
-                                        ~ < vi ( vec_len [IdxVersion] . ridx versions ) {
-                                            ?? ( vec_get [IdxVersion] . ridx versions vi ) {
-                                                T iv → {
-                                                    ? ( nurl_str_eq ( string_data . iv version ) dver ) { = hit vi } {}
-                                                }
-                                                F → {}
+                            ?? ( pkg_fetch_index reg dname ) {
+                                T ridx → {
+                                    // is THIS local version already published?
+                                    : ~ i hit -1
+                                    : ~ i vi 0
+                                    ~ < vi ( vec_len [IdxVersion] . ridx versions ) {
+                                        ?? ( vec_get [IdxVersion] . ridx versions vi ) {
+                                            T iv → {
+                                                ? ( nurl_str_eq ( string_data . iv version ) dver ) { = hit vi } {}
                                             }
-                                            = vi + vi 1
+                                            F → {}
                                         }
-                                        ? >= hit 0 {
-                                            ?? ( vec_get [IdxVersion] . ridx versions hit ) {
-                                                T iv → {
-                                                    ? != 0 ( __dep_drifts reg dname ( string_data . iv version ) ( string_data . iv checksum ) ( string_data . d path ) ) {
-                                                        ( nurl_eprint `nurlpkg: local '` )
-                                                        ( nurl_eprint dname )
-                                                        ( nurl_eprint `' differs from the published ` )
-                                                        ( nurl_eprint dname )
-                                                        ( nurl_eprint ` ` )
-                                                        ( nurl_eprint dver )
-                                                        ( nurl_eprintln ` — bump its version and publish it BEFORE publishing this package.` )
-                                                        ( nurl_eprintln `  (a path dep is built locally here but fetched from the registry by everyone else)` )
-                                                        = bad 1
-                                                    } {}
-                                                }
-                                                F → {}
-                                            }
-                                        } {}
-                                        ( regindex_free ridx )
+                                        = vi + vi 1
                                     }
-                                    F _ → {}
+                                    ? >= hit 0 {
+                                        ?? ( vec_get [IdxVersion] . ridx versions hit ) {
+                                            T iv → {
+                                                ? != 0 ( __dep_drifts reg dname ( string_data . iv version ) ( string_data . iv checksum ) ( string_data . d path ) ) {
+                                                    ( nurl_eprint `nurlpkg: local '` )
+                                                    ( nurl_eprint dname )
+                                                    ( nurl_eprint `' differs from the published ` )
+                                                    ( nurl_eprint dname )
+                                                    ( nurl_eprint ` ` )
+                                                    ( nurl_eprint dver )
+                                                    ( nurl_eprintln ` — bump its version and publish it BEFORE publishing this package.` )
+                                                    ( nurl_eprintln `  (a path dep is built locally here but fetched from the registry by everyone else)` )
+                                                    = bad 1
+                                                } {}
+                                            }
+                                            F → {}
+                                        }
+                                    } {}
+                                    ( regindex_free ridx )
                                 }
-                            } {}
-                            ( string_free idx )
+                                F error → { ?? error {
+                                        RegistryNotFound → {}
+                                        _ → { ( __report_registry_fetch reg dname error ) = bad 1 }
+                                    } }
+                            }
                             ( manifest_free dm )
                         }
                         F _ → {}
@@ -3570,14 +3554,13 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ( vec_push [Dep] roots @ Dep {
         ( string_from name ) ( string_new ) ( string_from `*` ) ( string_new )
     } )
-    : ( @ String s s ) fetch \ s registry s nm → String { ^ ( pkg_fetch_index registry nm ) }
+    : ( @ !RegIndex RegistryFetchErr s s ) fetch \ s registry s nm → !RegIndex RegistryFetchErr { ^ ( pkg_fetch_index registry nm ) }
     : ~ i rc 0
     : ~ String rootver ( string_new )
     : !( Vec LockPkg ) ResolveErr rr ( resolve_registry roots reg fetch )
     ?? rr {
         F e → {
-            ( nurl_eprint `nurlpkg: registry resolution failed (` )
-            ( nurl_eprint ( resolve_err_name e ) ) ( nurl_eprintln `)` )
+            ( __report_resolve_error e )
             = rc 1
         }
         T locked → {
@@ -3642,20 +3625,11 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 @ __cmd_install_tool s name → i {
     : String regS ( __reg_default )
     : s reg ( string_data regS )
-    : String idx ( pkg_fetch_index reg name )
-    ? == 0 ( string_len idx ) {
-        ( nurl_eprint `nurlpkg: package '` ) ( nurl_eprint name )
-        ( nurl_eprintln `' not found in the registry` )
-        ( string_free idx ) ( string_free regS )
-        ^ 1
-    } {}
-    : !RegIndex RegIndexErr pr ( regindex_parse ( string_data idx ) )
-    ( string_free idx )
+    : !RegIndex RegistryFetchErr pr ( pkg_fetch_index reg name )
     : ~ i rc 1
     ?? pr {
         F e → {
-            ( nurl_eprint `nurlpkg: malformed registry index (` )
-            ( nurl_eprint ( regindex_err_name e ) ) ( nurl_eprintln `)` )
+            ( __report_registry_fetch reg name e )
         }
         T ridx → {
             : i sel ( regindex_select ridx `*` )

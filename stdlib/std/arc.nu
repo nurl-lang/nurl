@@ -149,7 +149,7 @@
 // Atomic-decrement the strong count. If it reaches zero, the storage
 // is released. Caller is responsible for any per-payload cleanup
 // when T is owned — use `arc_free_with` instead.
-@ arc_free [T] ( Arc T ) r → v {
+@ arc_free [T] sink ( Arc T ) r → v {
     : *u cp # *u . r ctl
     ? == 0 # i cp {} {
         : i n ( nurl_atomic_i64_dec_fetch cp )
@@ -159,7 +159,7 @@
 
 // Atomic-decrement; if the count reached zero, run `drop` on the
 // final value and then release the storage.
-@ arc_free_with [T] ( Arc T ) r ( @ v T ) drop → v {
+@ arc_free_with [T] sink ( Arc T ) r ( @ v T ) drop → v {
     : *u cp # *u . r ctl
     ? == 0 # i cp {} {
         : i n ( nurl_atomic_i64_dec_fetch cp )

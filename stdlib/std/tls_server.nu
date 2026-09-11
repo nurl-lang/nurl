@@ -747,7 +747,7 @@ $ `stdlib/std/aes_gcm.nu`
     ( bytes_extend_bytes . h ext_out ext_out )
 }
 
-@ _srv_hs_free * SrvHs h → v {
+@ _srv_hs_free sink * SrvHs h → v {
     ? == # i h 0 { ^ } {}
     ? != # i . h trh 0 { ( _trh_abort . h trh ) } {}
     ( vec_free [u] . h cert_chain )

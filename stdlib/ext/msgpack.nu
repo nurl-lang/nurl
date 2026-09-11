@@ -258,7 +258,7 @@ $ `stdlib/std/bytes.nu`
     ^ p
 }
 
-@ __md_free * MsgpackDec p → v {
+@ __md_free sink * MsgpackDec p → v {
     ( nurl_free # s p )
 }
 

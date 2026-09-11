@@ -25,9 +25,9 @@ $ `stdlib/core/vec.nu`
 // RNode.kind: 0 nil · 1 integer · 2 string (simple or bulk) · 3 error · 4 array
 : RNode {
     i kind
-    i ival          // integer value; for arrays, the element count
-    String sval     // string / error text (empty otherwise)
-    ( Vec i ) kids   // child node indices (only populated for arrays)
+    i ival  // integer value; for arrays, the element count
+    String sval  // string / error text (empty otherwise)
+    ( Vec i ) kids  // child node indices (only populated for arrays)
 }
 
 // A decoded reply: the node arena plus the index of the root node.
@@ -84,14 +84,14 @@ $ `stdlib/core/vec.nu`
 @ resp_encode ( Vec String ) args → ( Vec u ) {
     : i n ( vec_len [String] args )
     : ( Vec u ) out ( vec_new [u] )
-    ( vec_push [u] out # u 42 )           // '*'
+    ( vec_push [u] out # u 42 )  // '*'
     ( __resp_push_int_ascii out n )
     ( __resp_push_crlf out )
     : ~ i k 0
     ~ < k n {
         : String a ?? ( vec_get [String] args k ) { T x → x F _ → ( string_new ) }
         : i alen ( string_len a )
-        ( vec_push [u] out # u 36 )       // '$'
+        ( vec_push [u] out # u 36 )  // '$'
         ( __resp_push_int_ascii out alen )
         ( __resp_push_crlf out )
         ( __resp_push_s out ( string_data a ) alen )
@@ -140,7 +140,7 @@ $ `stdlib/core/vec.nu`
 }
 
 // Append a leaf node to the arena; returns its index.
-@ __rb_push *RespBuilder b i kind i ival String sval → i {
+@ __rb_push * RespBuilder b i kind i ival String sval → i {
     : RNode nd @ RNode { kind ival sval ( vec_new [i] ) }
     : i idx ( vec_len [RNode] . b nodes )
     ( vec_push [RNode] . b nodes nd )
@@ -148,7 +148,7 @@ $ `stdlib/core/vec.nu`
 }
 
 // Append an array node (kids already collected); returns its index.
-@ __rb_push_arr *RespBuilder b i n ( Vec i ) kids → i {
+@ __rb_push_arr * RespBuilder b i n ( Vec i ) kids → i {
     : RNode nd @ RNode { 4 n ( string_new ) kids }
     : i idx ( vec_len [RNode] . b nodes )
     ( vec_push [RNode] . b nodes nd )
@@ -157,7 +157,7 @@ $ `stdlib/core/vec.nu`
 
 // Parse one value at the builder's cursor. Returns its node index, or -1
 // with b.status set to 1 (incomplete) or 2 (malformed).
-@ __resp_val *RespBuilder b ( Vec u ) buf i end → i {
+@ __resp_val * RespBuilder b ( Vec u ) buf i end → i {
     ? != . b status 0 { ^ -1 } {}
     : i pos . b cur
     ? >= pos end { = . b status 1 ^ -1 } {}
@@ -166,24 +166,24 @@ $ `stdlib/core/vec.nu`
     : i le ( __resp_find_crlf buf ls end )
     ? < le 0 { = . b status 1 ^ -1 } {}
 
-    ? == tb 43 {                                   // '+' simple string
+    ? == tb 43 {  // '+' simple string
         : String s ( __resp_slice buf ls le )
         = . b cur + le 2
         ^ ( __rb_push b 2 0 s )
     } {}
-    ? == tb 45 {                                   // '-' error
+    ? == tb 45 {  // '-' error
         : String s ( __resp_slice buf ls le )
         = . b cur + le 2
         ^ ( __rb_push b 3 0 s )
     } {}
-    ? == tb 58 {                                   // ':' integer
+    ? == tb 58 {  // ':' integer
         : i v ( __resp_parse_int buf ls le )
         = . b cur + le 2
         ^ ( __rb_push b 1 v ( string_new ) )
     } {}
-    ? == tb 36 {                                   // '$' bulk string
+    ? == tb 36 {  // '$' bulk string
         : i blen ( __resp_parse_int buf ls le )
-        ? < blen 0 {                               // $-1 → nil
+        ? < blen 0 {  // $-1 → nil
             = . b cur + le 2
             ^ ( __rb_push b 0 0 ( string_new ) )
         } {}
@@ -194,9 +194,9 @@ $ `stdlib/core/vec.nu`
         = . b cur + dend 2
         ^ ( __rb_push b 2 0 s )
     } {}
-    ? == tb 42 {                                   // '*' array
+    ? == tb 42 {  // '*' array
         : i n ( __resp_parse_int buf ls le )
-        ? < n 0 {                                  // *-1 → nil
+        ? < n 0 {  // *-1 → nil
             = . b cur + le 2
             ^ ( __rb_push b 0 0 ( string_new ) )
         } {}
@@ -212,7 +212,7 @@ $ `stdlib/core/vec.nu`
         ^ ( __rb_push_arr b n kids )
     } {}
 
-    = . b status 2                                 // unknown type byte
+    = . b status 2  // unknown type byte
     ^ -1
 }
 
@@ -232,7 +232,7 @@ $ `stdlib/core/vec.nu`
     ^ @ RespParse { st rep cur }
 }
 
-@ resp_reply_free RedisReply r → v {
+@ resp_reply_free sink RedisReply r → v {
     : i n ( vec_len [RNode] . r nodes )
     : ~ i k 0
     ~ < k n {

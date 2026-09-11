@@ -343,7 +343,7 @@ $ `stdlib/core/string.nu`
 
 // ── Cleanup ─────────────────────────────────────────────────────────
 
-@ map_free [K V] ( HashMap K V ) m → v {
+@ map_free [K V] sink ( HashMap K V ) m → v {
     : s ctl . m ctl
     : s keys ( __map_keys_raw ctl )
     : s vals ( __map_vals_raw ctl )

@@ -191,7 +191,7 @@ $ `stdlib/ext/http2_frame.nu`
     ^ @ HpackDynTable { ( vec_new [Header] ) 0 max_size }
 }
 
-@ hpack_dyn_free HpackDynTable t → v {
+@ hpack_dyn_free sink HpackDynTable t → v {
     ( vec_free_with [Header] . t entries \ Header h → v { ( header_free h ) } )
 }
 
@@ -363,7 +363,7 @@ $ `stdlib/ext/http2_frame.nu`
 
 : HpackString { String value i consumed }
 
-@ hpack_string_free HpackString s → v { ( string_free . s value ) }
+@ hpack_string_free sink HpackString s → v { ( string_free . s value ) }
 
 @ hpack_decode_string ( Vec u ) buf i from → !HpackString HpackErr {
     : i n ( vec_len [u] buf )
@@ -428,11 +428,11 @@ $ `stdlib/ext/http2_frame.nu`
 
 // Local copy of http_request.nu's headers_free — keeps this module
 // importable on its own without pulling in the whole request stack.
-@ __hpack_headers_free ( Vec Header ) hs → v {
+@ __hpack_headers_free sink ( Vec Header ) hs → v {
     ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
 }
 
-@ hpack_decoded_free HpackDecoded d → v {
+@ hpack_decoded_free sink HpackDecoded d → v {
     ( __hpack_headers_free . d headers )
     ( hpack_dyn_free . d dyn )
 }

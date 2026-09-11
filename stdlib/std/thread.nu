@@ -262,7 +262,7 @@ $ `stdlib/core/marker.nu`
     ( pthread_mutex_unlock ( cell_ptr . m c ) )
 }
 
-@ mutex_free Mutex m → v {
+@ mutex_free sink Mutex m → v {
     : Cell c . m c
     ? ( cell_is_null c ) {} {
         ( pthread_mutex_destroy ( cell_ptr c ) )
@@ -302,7 +302,7 @@ $ `stdlib/core/marker.nu`
     ( pthread_cond_broadcast ( cell_ptr . c c ) )
 }
 
-@ cond_free Cond c → v {
+@ cond_free sink Cond c → v {
     : Cell cell . c c
     ? ( cell_is_null cell ) {} {
         ( pthread_cond_destroy ( cell_ptr cell ) )
@@ -378,7 +378,7 @@ $ `stdlib/core/marker.nu`
     ^ v
 }
 
-@ sem_free Semaphore s → v {
+@ sem_free sink Semaphore s → v {
     ( mutex_free . s m )
     ( cond_free . s c )
     ( nurl_free # s . s count )

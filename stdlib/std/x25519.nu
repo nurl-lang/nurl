@@ -505,11 +505,11 @@ $ `stdlib/core/vec.nu`
 
 @ __xe_pt → XEP { ^ @ XEP { ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) } }
 
-@ __xe_pt_free XEP p → v { ( vec_free [i] . p x ) ( vec_free [i] . p y ) ( vec_free [i] . p z ) ( vec_free [i] . p t ) }
+@ __xe_pt_free sink XEP p → v { ( vec_free [i] . p x ) ( vec_free [i] . p y ) ( vec_free [i] . p z ) ( vec_free [i] . p t ) }
 
 @ __xe_scr → XEScr { ^ @ XEScr { ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) } }
 
-@ __xe_scr_free XEScr s → v {
+@ __xe_scr_free sink XEScr s → v {
     ( vec_free [i] . s a ) ( vec_free [i] . s b ) ( vec_free [i] . s c ) ( vec_free [i] . s d ) ( vec_free [i] . s e )
     ( vec_free [i] . s f ) ( vec_free [i] . s g ) ( vec_free [i] . s h ) ( vec_free [i] . s tt )
 }

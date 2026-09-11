@@ -295,7 +295,7 @@ $ `cpu.nu`
     ^ # i * ms 1000000.0
 }
 
-@ gpu_timer_free Gpu g i ev → v {
+@ gpu_timer_free Gpu g sink i ev → v {
     ? | != __gpu_backend 0 == ev 0 { ^ } {}
     ( cuda_event_free ev )
 }
@@ -320,7 +320,7 @@ $ `cpu.nu`
     ^ ( cuda_graph_launch exec )
 }
 
-@ gpu_graph_free i exec → v {
+@ gpu_graph_free sink i exec → v {
     ? != __gpu_backend 0 {} { ( cuda_graph_free exec ) }
 }
 
@@ -545,7 +545,7 @@ $ `cpu.nu`
 
 @ gpu_kernel_ok GpuKernel k → b { ^ != . k func 0 }
 
-@ gpu_kernel_free GpuKernel k → v {
+@ gpu_kernel_free sink GpuKernel k → v {
     ? >= __gpu_backend 2 { ^ {} } {}
     ? == __gpu_backend 1 { ( cpu_module_free # *u . k module ) } { ( cuda_module_unload . k module ) }
 }
@@ -556,7 +556,7 @@ $ `cpu.nu`
 
 @ gpu_host_alloc i bytes → *u { ^ ( nurl_alloc bytes ) }
 
-@ gpu_host_free * u buf → v { ( nurl_free buf ) }
+@ gpu_host_free sink * u buf → v { ( nurl_free buf ) }
 
 @ gpu_host_set_f32 * u buf i idx f v → v { ( nurl_poke_f32 buf idx v ) }
 
@@ -574,7 +574,7 @@ $ `cpu.nu`
     ^ @ GpuBuffer { dptr bytes }
 }
 
-@ gpu_free GpuBuffer b → v {
+@ gpu_free sink GpuBuffer b → v {
     ? == __gpu_backend 3 { ( wgpu_free . b dptr ) } {
         ? != __gpu_backend 0 { ( cpu_free . b dptr ) } { ( cuda_free . b dptr ) } }
 }

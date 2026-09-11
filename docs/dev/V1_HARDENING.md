@@ -548,3 +548,218 @@ and IR-equivalence checks cover all four selected files without skips: the
 resolver module, diamond fixture, new oracle adapter and package CLI.
 Logs are retained under `build/v1-hardening/resolver-complete-*`. Normal
 development tools were restored successfully after the instrumented checks.
+
+### In progress: registry failures and compiler ownership prerequisites
+
+The backtracking fetch callback's empty-string convention had a reproducible
+failure beyond dependency search. With `foo@2` depending on `bar`, failures
+fetching `bar` (HTTP 503, HTTP 401, malformed JSON, an empty HTTP 200 body, or a
+disconnected socket) all caused the old CLI to install `foo@1`, report success
+and replace the lock. An honest HTTP 404 remains a separate, valid missing-
+package branch. Other controls reproduced a misleading not-found diagnostic
+from `info`/tool installation, a successful `update --all` on HTTP 503, and a
+successful publish dry-run despite the failed dependency-index gate. The publish
+control supplies a real relocated compiler/stdlib, so the unrelated missing-
+compiler bypass does not account for that result.
+
+The current, uncommitted API returns `!RegIndex RegistryFetchErr`, preserving
+HTTP status and transport cause and decoding the index once. Only genuine
+absence is a retryable missing package; invalid responses and transport errors
+abort resolution and preserve the old lock. `ResolveFetch` owns the failing
+origin/name and its cause. The CLI propagates these distinctions through install,
+info, update and the publish dependency gate. The targeted signed CLI suite has
+24 methods and the resolver/oracle suite has 11. These are implementation work
+in progress, not a completed release gate.
+
+Owning the new resolver error exposed compiler defects independently of the
+registry fixture. A tag-only enum used as a nested payload was boxed for some
+expressions but stored inline for literals, while matching always dereferenced
+it. A multi-field struct with a pointer first field was also mistaken for a
+single-pointer handle. Named payload construction, decoding and drop
+classification now share one representation decision. Anonymous aggregate
+payload storage is a separate unresolved question; this does not establish its
+safety.
+
+A later-declared payload then exposed premature drop generation: the full
+normal corpus reported a link failure in `forward_enum_payload` while the
+other 965 runnable/compile/reject cases passed (19 skipped). The current code
+captures declared layouts before ownership decisions and schedules recursive
+drop graphs after type definitions and generic instances. The original forward
+payload test, the nested-payload regression and the owned-enum sink regression
+all pass as generated-code ASan probes with LSan and stack roots disabled.
+These probes link the normal native runtime object, so they do not replace the
+pending complete instrumented bootstrap/runtime gates.
+
+Forward calls required a second ownership repair. Moving an inferred consuming
+helper below its caller reproduced an ASan heap-use-after-free in the caller's
+automatic drop. Sink implications now propagate to a finite fixed point across
+all named bodies and instantiated generics. Static LLVM constants connect these
+final facts to caller neutralization and the callee's ownership slot. The
+non-consuming path of an inferred conditional sink also releases the received
+owner. Borrowed enum parameters retain their readable value separately from
+the inactive owner slot; conditional journal and cleanup gates disappear when
+the final summary is borrowed. The optimized `inspect` control contains no
+ownership/journal work. Explicit and implicit return transfer and `inout`
+borrowing are covered by the expanded `sink_enum_owned` control.
+
+Two integration errors found during this work were also corrected: branch-local
+sink evidence must accumulate in its own function frame, and a nested closure's
+parameter indices must not escape into the surrounding function's summary.
+Forward generic calls need their actual template before argument substitution;
+the signature pass now stores that template. Type-layout discovery must skip
+trait supertrait headers rather than reading their colon as a struct declaration.
+
+**Not ready to bootstrap or commit yet.** The broader inference also exposes an
+existing invalid assumption in the borrow checker: a `_free`/`_free_with` name
+plus a void return is treated as proof that parameter zero is consumed. The
+independent `sink-name-contract-probe.nu` is rejected by the pre-change compiler
+although its `report_free` function only prints a vector length. In the compiler
+itself, `mem_emit_slice_free` only emits IR and borrows its symbol table; treating
+it as a destructor causes 634 transitive false diagnostics in the new self-
+compile. Renaming that helper, adding an exception for it, disabling borrow
+checking, or suppressing the new propagation would not repair this contract.
+The consuming API contract and its inference need to be made explicit and
+sound before accepting this work. The complete normal/sanitized bootstraps,
+all relevant corpora, leak gates, installed tools, documentation and snapshots
+must then be refreshed and verified. A01/A13 and the wider audit remain open.
+
+Reproduction and iteration artifacts are under `build/v1-hardening/`:
+`registry-transport-before.log`, `registry-transport-commands-before.log`,
+`sink-enum-forward-before.log`, `sink-name-contract-before.log`,
+`nurlc-layout-sink-self.log`, `layout-sink-full-corpus*.log`, and the
+`*-layout` probes/IR/logs. Intermediate corpus failures are retained rather than
+rebaselined as successes. No native Windows validation has been performed.
+
+Follow-up validation of this iteration: the 11 resolver methods pass using the
+new generated-code ASan probe (with leak checking), and the 24 signed CLI
+methods pass using a newly compiled normal CLI. The second full corpus reduced
+the 101 intermediate failures to four: two diagnostic-text changes, the newly
+supported forward generic `inout` call, and `ptr_borrow_arms` passing the same
+value onward after a potentially consuming call. The last fixture now expresses
+its consuming helper as `sink`, releases it on both paths and gives it a separate
+input; the sibling-arm and early-return pointer-borrow controls remain intact.
+The generic test is now `inout_generic_forward` and checks the mutated value.
+All four targeted checks pass. The two malformed-program fixtures still fail
+at the intended source sites; the earlier generic-template validation and
+available enum metadata explain the changed diagnostic counts. Windows golden
+twins were synchronized without claiming a native Windows run. The self-compile
+contract failure remains open and prevents refreshing bootstrap snapshots.
+
+The third complete corpus run passes: 985 inputs, 966 PASS and 19 SKIP, no
+failures, missing records or orphans (`layout-sink-full-corpus-3.log`). The
+owned-enum regression also passes at `-O0` with generated-code ASan/LSan when
+borrow diagnostics are disabled; ownership inference must remain active in that
+mode and does. The development compiler was restored after the isolated runs.
+This corpus result does not resolve the separately failing compiler self-compile.
+
+A read-only inventory of release-named declarations and their body calls is
+retained in `destructor-contract-inventory.json` with its generating Python
+script. Call spellings are investigation aids, not evidence of ownership.
+Inspection also identified `packages/nwasm/src/interp.nu::__cu_mem_free`: it
+pops a device pointer and calls `cuMemFree`, then continues using its interpreter
+argument. Like the compiler's IR emitter, it does not consume argument zero.
+Conversely, the CUDA/Opus destructors call foreign destroy functions, and
+`iter_free` calls a closure with its release selector. A correct replacement
+cannot equate either a suffix or the presence/absence of a release-named body
+call with a consuming parameter contract.
+
+
+### Consumption contracts and integration follow-up
+
+The suffix heuristic is now removed. Release APIs declare the parameters they
+consume with `sink`; the migration covers 445 additional release declarations,
+plus CUDA release calls that return status. Inspection left the compiler's IR
+emitter, the REPL's pop-and-free-element helper and the interpreter's CUDA
+instruction handler borrowed. GPU timer disposal consumes its event argument,
+not its GPU context; the eight-string cleanup helper consumes all eight inputs.
+These are signature contracts, not a replacement list of compiler name rules.
+The actual generic instances now feed the fixed point; the earlier lexical
+first-argument template scan is removed.
+
+An independent callback control reproduced a second false ownership transfer:
+a local callback named like a global sink inherited the global's contract.
+Call resolution now establishes local-callable shadowing before consulting
+parameter summaries and trait dispatch. The control owns a nested enum, reads
+it through the callback twice and reads it again afterwards; ASan/LSan passes.
+
+The wider package check exposed a statement-order defect: consuming an old
+value on the RHS of `= x (replace x)` was recorded after binding the result,
+so the new value looked moved. A separate Vec control reproduced three false
+diagnostics. Binding records now apply RHS reads and call effects before
+installing the result. Repeated Vec and enum replacement/identity paths pass
+ASan/LSan. ARIMA's existing stepwise search then compiles without changing its
+algorithm. The CLI cache notice now captures its freshness bit before releasing
+the cache record, respecting the record's explicit consumption contract.
+
+Normal bootstrap reached its byte-identical fixed point. The complete normal
+corpus passed 971 cases with 19 skips (990 selected); the 11 resolver methods,
+24 signed CLI methods and all five installed ecosystem programs passed.
+The memory gate measured 27 MB peak RSS, and the DCE gate passed. Checked and
+`--no-borrowck` IR is identical for five ownership regressions. A package-root
+frontend check covered 199 entries/tests: 161 passed, 35 lacked imports, and
+three produced diagnostics also reproduced by the old compiler. No remaining
+new compiler regression appeared in that check; it is not a claim that those
+38 sources or all package runtime tests passed.
+
+The first complete generated-code sanitizer corpus also passed all 971 cases
+with 19 skips. A separate formatter-library control then exposed a compiler
+leak in construction of a pending sink implication (6186 bytes in 191 records
+for that fixture). The minimal `sink_summary_storage` reproduces one leaked
+18-byte record. The summary table copies the record, so `gen_call` now owns
+and releases its temporary record after that copy. The minimal source and a
+complete compiler self-compile pass with the repaired instrumented compiler,
+leak detection enabled and stack roots disabled. The compiler leak gate now
+includes this regression. This is source-level ownership of the compiler's
+record buffer; it does not claim to finish general owned-string temporary
+transfer across arbitrary forward/escaping calls.
+
+Leak-test stack-root options are now passed through `LSAN_OPTIONS`, including
+the compiler leak gate, rather than placing that LSan-specific option in
+`ASAN_OPTIONS`. The first focused leak run failed in compiler compilation
+before it could execute its seven programs; those failures are retained as
+failures. Final sanitizer bootstrap, focused leak checks and full validation
+are pending at this point. The broad v1 goal and the remaining ownership,
+callback, package-layout and platform limitations remain open.
+
+
+The next focused compiler leak checks exposed an additional lifetime mismatch
+in newly returned flag/register name buffers. Sink flags now return their
+numeric identity; their textual names are formed in their owning caller.
+Load/select emitters borrow explicit result-register names instead of allocating
+and returning them. This also removes an unnecessary cached-name copy. The five
+previously failing source controls compile with zero leaks and emit byte-
+identical instrumented LLVM IR before and after this change. Self-compilation
+is leak-clean too. All eight focused compilation/runtime leak controls pass with
+the refreshed sanitized bootstrap. The earlier failing reports are retained in
+`contracts-owned-leaks-registers-before.log`; they were not reclassified as passes.
+A token comparison verified that 250 existing NURL files outside the substantive
+implementation and fixtures changed only in `sink` markers, comments or layout.
+
+
+Review of the final commit path found another false-success gate: the pre-commit
+hook discarded `nurlfmt --write` failures and could stage partial formatter
+output anyway. Two isolated Git-index controls fail against the previous hook.
+The hook now blocks on formatter failure and leaves the staged source intact;
+all four controls (including successful formatting and partially staged input)
+pass. CI runs these checks. This correction does not change the configured
+policy of skipping the hook's formatter check when no formatter is installed.
+
+Final validation of this unit is complete. Both the normal bootstrap/corpus
+and the generated-code sanitizer corpus selected 991 tests: 972 passed and 19
+were skipped, with no failures or timeouts. The eight focused compilation and
+runtime leak controls passed, as did all twelve compiler leak checks (six
+sources in single-module and partitioned emission). Formatter tests passed all
+11 methods, resolver tests all 11 methods, signed registry CLI tests all 24
+methods, and all five installed ecosystem programs passed. Final normal build
+artifacts are restored; self-compilation reached its byte-identical fixed point,
+peak RSS was 27 MB, and the DCE gate passed.
+
+Three ownership fixtures also compiled, linked and ran successfully as four
+separate modules with generated-code ASan/UBSan and leak detection enabled.
+The normal CI job now builds and executes `sink_enum_owned` through the public
+split-build driver; that exact command passed locally too. Final logs are in
+`build/v1-hardening/contracts-final-normal-build.log`,
+`contracts-full-san-final.log`, `contracts-owned-leaks-final.log` and
+`contracts-compiler-leaks-final.log`, with the corresponding formatter, resolver,
+registry and installed-program logs alongside them. These checks complete this
+unit, not the broader v1 goal or the remaining limitations recorded above.

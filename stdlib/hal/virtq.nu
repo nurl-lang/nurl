@@ -116,7 +116,7 @@ $ `stdlib/std/bytes.nu`
     ^ q
 }
 
-@ virtq_free * Virtq q → v {
+@ virtq_free sink * Virtq q → v {
     ( vec_free [u] . q mem )
     ( free q )
 }

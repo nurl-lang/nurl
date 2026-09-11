@@ -96,7 +96,7 @@ $ `stdlib/std/floatbits.nu`
     ^ @ Tensor { dtype shape data }
 }
 
-@ tensor_free Tensor t → v {
+@ tensor_free sink Tensor t → v {
     ( vec_free [i] . t shape )
     ( vec_free [f] . t data )
 }

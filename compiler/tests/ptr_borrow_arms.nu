@@ -16,15 +16,18 @@ $ `stdlib/core/string.nu`
     }
 }
 
-@ early ( Vec u ) v → i {
+@ early sink ( Vec u ) v → i {
     : *u p ( vec_data [u] v )
-    // 2. the freeing arm RETURNS, so its mutation cannot reach the code
+    // 2. this function consumes its input on both paths. The freeing arm
+    // RETURNS, so its mutation cannot reach the code
     //    after the `?` — the classic guard-clause shape
     ? == 0 ( vec_len [u] v ) {
         ( vec_free [u] v )
         ^ -1
     } {}
-    ^ # i . p 0
+    : i value # i . p 0
+    ( vec_free [u] v )
+    ^ value
 }
 
 @ opt i k → ?i { ? > k 0 { ^ @ ?i { T k } } {} ^ @ ?i { F } }
@@ -43,7 +46,9 @@ $ `stdlib/core/string.nu`
     : ( Vec u ) a ( vec_with_cap [u] 4 )
     ( vec_push [u] a # u 7 )
     ( nurl_print ( nurl_str_int ( pick F a ) ) ) ( nurl_print `\n` )
-    ( nurl_print ( nurl_str_int ( early a ) ) ) ( nurl_print `\n` )
+    : ( Vec u ) consumed ( vec_with_cap [u] 4 )
+    ( vec_push [u] consumed # u 7 )
+    ( nurl_print ( nurl_str_int ( early consumed ) ) ) ( nurl_print `\n` )
     ( nurl_print ( nurl_str_int ( viamatch 0 a ) ) ) ( nurl_print `\n` )
     ( vec_free [u] a )
     ^ 0

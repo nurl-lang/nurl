@@ -9,7 +9,7 @@
 // neither the generic name nor any call site preceding the deferred
 // instantiation, and this exact program compiled clean and
 // double-freed at runtime while the identical non-generic wrapper was
-// rejected. compute_generic_inout_sink now reads the template body.
+// rejected. Compiled instances now contribute to the sink fixed point.
 //
 // One positive (the second `dispose` is a use-after-move) plus a
 // control: `borrow` takes the same parameter and does NOT free it, so

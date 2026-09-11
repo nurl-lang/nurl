@@ -1308,7 +1308,7 @@ $ `deps/gpu/src/gpu.nu`
     ^ @ LlmKernels { k1 q1 q2 qb1 qb2 q6 q7 q3 q8 q4 q5 w1 w2 w3 w4 w5 w6 w7 w8 warp k2 k3 k3n k4 k4a k4b k5 k5g k5s k6 k6b k7 k8 me1 me2 me3 me4 me5 me5w rp ok }
 }
 
-@ lk_free LlmKernels ks → v {
+@ lk_free sink LlmKernels ks → v {
     ( gpu_kernel_free . ks matvec )
     ( gpu_kernel_free . ks mv_q4_0 )
     ( gpu_kernel_free . ks mv_q8_0 )

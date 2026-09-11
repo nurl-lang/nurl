@@ -357,7 +357,7 @@ $ `stdlib/core/vec.nu`
     ^ @ BigInt { . x neg ( __mag_clone . x limbs ) }
 }
 
-@ bigint_free BigInt x → v {
+@ bigint_free sink BigInt x → v {
     ( vec_free [i] . x limbs )
 }
 

@@ -38,7 +38,7 @@ $ `stdlib/core/vec.nu`
     ^ . imp count
 }
 
-@ outer_free [A] ( Outer A ) o → v {
+@ outer_free [A] sink ( Outer A ) o → v {
     : *( Inner A ) imp # *( Inner A ) . o ctl
     ( nurl_free # s imp )
 }
@@ -63,7 +63,7 @@ $ `stdlib/core/vec.nu`
     ^ ( vec_len [A] . w items )
 }
 
-@ wrap_free [A] * ( Wrap A ) w → v {
+@ wrap_free [A] sink * ( Wrap A ) w → v {
     ( vec_free [A] . w items )
     ( nurl_free # s w )
 }

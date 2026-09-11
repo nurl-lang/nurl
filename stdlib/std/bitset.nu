@@ -203,6 +203,6 @@
     }
 }
 
-@ bitset_free Bitset bs → v {
+@ bitset_free sink Bitset bs → v {
     ? != 0 # i . bs words { ( nurl_free . bs words ) } {}
 }

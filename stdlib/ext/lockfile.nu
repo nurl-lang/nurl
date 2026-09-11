@@ -70,14 +70,14 @@ $ `stdlib/std/fs.nu`
     }
 }
 
-@ lock_pkg_free LockPkg p → v {
+@ lock_pkg_free sink LockPkg p → v {
     ( string_free . p name )
     ( string_free . p version )
     ( string_free . p source )
     ( string_free . p checksum )
 }
 
-@ lockpkgs_free ( Vec LockPkg ) pkgs → v {
+@ lockpkgs_free sink ( Vec LockPkg ) pkgs → v {
     : i n ( vec_len [LockPkg] pkgs )
     : ~ i k 0
     ~ < k n {

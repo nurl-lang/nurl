@@ -82,7 +82,7 @@ $ `stdlib/core/vec.nu`
     ^ @ McpClient { ( string_from endpoint ) ito }
 }
 
-@ mcp_client_free McpClient c → v {
+@ mcp_client_free sink McpClient c → v {
     ( string_free . c endpoint )
 }
 

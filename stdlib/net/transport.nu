@@ -114,7 +114,7 @@ $ `stdlib/net/relay.nu`
     ( Vec u ) payload
 }
 
-@ transport_msg_free TransportMsg m → v { ( vec_free [u] . m src ) ( vec_free [u] . m payload ) }
+@ transport_msg_free sink TransportMsg m → v { ( vec_free [u] . m src ) ( vec_free [u] . m payload ) }
 
 // Open over both legs. `node` may be 0 (relay-only peer with no UDP path).
 @ transport_open s node RelayClient relay i has_relay → s {
@@ -242,7 +242,7 @@ $ `stdlib/net/relay.nu`
     ^ out
 }
 
-@ transport_free * Transport t → v {
+@ transport_free sink * Transport t → v {
     : i n ( vec_len [s] . t peers )
     : ~ i k 0
     ~ < k n {

@@ -12,17 +12,22 @@ $ `stdlib/core/vec.nu`
 // int* error / opus_int16* pcm / unsigned char* data are all passed as raw
 // buffer pointers (*u); opus reads them at the right width.
 & `opus` @ opus_encoder_create i Fs i channels i application *u error → s
+
 & `opus` @ opus_encoder_destroy s st → v
+
 & `opus` @ opus_encode s st *u pcm i frame_size *u data i max_data_bytes → i
+
 & `opus` @ opus_decoder_create i Fs i channels *u error → s
+
 & `opus` @ opus_decoder_destroy s st → v
+
 & `opus` @ opus_decode s st *u data i len *u pcm i frame_size i decode_fec → i
 
-@ opus_rate          → i { ^ 48000 }   // VoIP sample rate (Hz)
-@ opus_channels      → i { ^ 1 }       // mono
-@ opus_frame_samples → i { ^ 960 }     // 20 ms @ 48 kHz
-@ __opus_app_voip    → i { ^ 2048 }    // OPUS_APPLICATION_VOIP
-@ __opus_max_packet  → i { ^ 4000 }    // generous per-frame ceiling
+@ opus_rate → i { ^ 48000 }  // VoIP sample rate (Hz)
+@ opus_channels → i { ^ 1 }  // mono
+@ opus_frame_samples → i { ^ 960 }  // 20 ms @ 48 kHz
+@ __opus_app_voip → i { ^ 2048 }  // OPUS_APPLICATION_VOIP
+@ __opus_max_packet → i { ^ 4000 }  // generous per-frame ceiling
 
 // a zero-filled byte buffer of length n (n>=1)
 @ __obuf i n → ( Vec u ) {
@@ -38,7 +43,8 @@ $ `stdlib/core/vec.nu`
     ( vec_free [u] err )
     ^ enc
 }
-@ opus_enc_free s enc → v { ? != # i enc 0 { ( opus_encoder_destroy enc ) } {} }
+
+@ opus_enc_free sink s enc → v { ? != # i enc 0 { ( opus_encoder_destroy enc ) } {} }
 
 // Encode one frame of PCM (2*frame_samples bytes) → opaque packet bytes.
 // Empty (Vec u) on failure.
@@ -57,7 +63,8 @@ $ `stdlib/core/vec.nu`
     ( vec_free [u] err )
     ^ dec
 }
-@ opus_dec_free s dec → v { ? != # i dec 0 { ( opus_decoder_destroy dec ) } {} }
+
+@ opus_dec_free sink s dec → v { ? != # i dec 0 { ( opus_decoder_destroy dec ) } {} }
 
 // Decode one packet → PCM (2*samples bytes). Empty (Vec u) on failure.
 @ opus_decode_frame s dec ( Vec u ) packet → ( Vec u ) {
@@ -83,6 +90,7 @@ $ `stdlib/core/vec.nu`
     : i v + lo * hi 256
     ^ ? >= v 32768 - v 65536 v
 }
+
 @ pcm_samples ( Vec u ) buf → i { ^ / ( vec_len [u] buf ) 2 }
 // total absolute energy (0 for silence) — used by tests
 @ pcm_energy ( Vec u ) buf → i {

@@ -66,7 +66,7 @@ $ `stdlib/std/hash_sha256.nu`
     ^ @ Pkce { verifier challenge ( string_from `S256` ) }
 }
 
-@ pkce_free Pkce pk → v {
+@ pkce_free sink Pkce pk → v {
     ( string_free . pk verifier )
     ( string_free . pk challenge )
     ( string_free . pk method )

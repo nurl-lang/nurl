@@ -87,12 +87,12 @@ $ `stdlib/std/fs.nu`
     ^ @ TarEntry { ( string_from path ) 493 0 0 53 ( vec_new [u] ) }
 }
 
-@ tar_entry_free TarEntry e → v {
+@ tar_entry_free sink TarEntry e → v {
     ( string_free . e path )
     ( vec_free [u] . e data )
 }
 
-@ tar_entries_free ( Vec TarEntry ) entries → v {
+@ tar_entries_free sink ( Vec TarEntry ) entries → v {
     : i n ( vec_len [TarEntry] entries )
     : ~ i k 0
     ~ < k n {

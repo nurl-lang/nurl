@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Registry failures preserve their cause.** Index fetch callbacks return
+  `!RegIndex RegistryFetchErr`. HTTP/transport errors and invalid indexes abort
+  resolution instead of masquerading as missing packages and silently selecting
+  an older version. Genuine HTTP 404 remains retryable. CLI failures include the
+  requested index URL and preserve existing lock/manifest files.
+
+- **Consuming parameters follow signatures and call effects.** Release APIs
+  declare their consuming positions with `sink`; function-name suffixes and
+  return types no longer imply ownership. Custom destructors that release fields
+  or raw memory must declare their consuming parameters. Inference reaches a fixed point across
+  forward calls and generic instances at every argument position. Local
+  callbacks no longer inherit same-named global ownership contracts.
+
+- **Compiler-managed enum ownership transfers through consuming calls.**
+  Caller and callee owner slots account for conditional consumption and return
+  transfer. Named payload construction, matching and dropping use the same
+  storage classification, including nested tag-only enums and multi-field
+  pointer-leading structs. Forward payload layouts are available before
+  ownership decisions, and drop definitions follow type emission.
+
 - **Dependency resolution backtracks across version-dependent conflicts.**
   Valid diamonds, cycles and fallback versions no longer fail because a greedy
   pass selected an incompatible latest version. Explicit decision and constraint

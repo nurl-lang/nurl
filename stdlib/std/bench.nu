@@ -40,7 +40,7 @@ $ `stdlib/std/time.nu`
 
 @ bench_result_allocs_per_op BenchResult r → i { ^ . r allocs_per_op }
 
-@ bench_result_free BenchResult r → v { ( string_free . r name ) }
+@ bench_result_free sink BenchResult r → v { ( string_free . r name ) }
 
 // Run `body` `iters` times (after a short warmup) and measure.
 @ bench_run s name i iters ( @ v ) body → BenchResult {

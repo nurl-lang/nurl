@@ -278,7 +278,7 @@ $ `stdlib/std/async_ffi.nu`
 
 // ── Cleanup ────────────────────────────────────────────────────────
 
-@ chan_free [A] ( Channel A ) ch → v {
+@ chan_free [A] sink ( Channel A ) ch → v {
     : *( ChannelImpl A ) impl # *( ChannelImpl A ) . ch ctl
     ( vec_free [A] . impl q )
     ( vec_free [i] . impl recv_fibers )
@@ -320,7 +320,7 @@ $ `stdlib/std/async_ffi.nu`
     ^ # i w
 }
 
-@ select_waiter_free i wp → v {
+@ select_waiter_free sink i wp → v {
     : *SelectWaiter w # *SelectWaiter wp
     ( cond_free . w c )
     ( mutex_free . w m )

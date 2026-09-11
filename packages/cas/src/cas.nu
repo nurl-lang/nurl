@@ -37,7 +37,7 @@ $ `stdlib/std/time.nu`
     String root
 }
 
-@ cas_free Cas c → v { ( string_free . c root ) }
+@ cas_free sink Cas c → v { ( string_free . c root ) }
 
 // The naming function: BLAKE3-256, lowercase hex.
 @ cas_hash_hex ( Vec u ) data → String {

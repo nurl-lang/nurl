@@ -521,7 +521,7 @@ inline @ __mem_base * Interp it → i {
     ( nurl_free # s f )
 }
 
-@ interp_free * Interp it → v {
+@ interp_free sink * Interp it → v {
     // A spawned thread owns only what interp_thread_new made for it: the
     // memory, table, argv/envp and every host table belong to the Interp
     // that instantiated, and are freed exactly once, there.
@@ -1266,7 +1266,7 @@ inline @ __fr_setpos s tp i v → v {
     = . fr pos v
 }
 
-@ __frame_free s pp → v {
+@ __frame_free sink s pp → v {
     ? == # i pp 0 { ^ v } {}
     : *Frame fr # *Frame pp
     ( vec_free [i] . fr regs )
@@ -1284,7 +1284,7 @@ inline @ __fr_setpos s tp i v → v {
     = . pf free pp
 }
 
-@ __pf_free s pp → v {
+@ __pf_free sink s pp → v {
     ? == # i pp 0 { ^ v } {}
     : *PFunc pf # *PFunc pp
     : ~ s fp . pf free
@@ -1712,7 +1712,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ # s k
 }
 
-@ __pblk_free s pp → v {
+@ __pblk_free sink s pp → v {
     ? == # i pp 0 { ^ v } {}
     : *PBlk k # *PBlk pp
     ( vec_free [i] . k patches )

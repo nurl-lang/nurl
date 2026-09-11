@@ -85,14 +85,14 @@ $ `stdlib/ext/http_request.nu`
     ( Vec u ) data
 }
 
-@ multipart_part_free MultipartPart p → v {
+@ multipart_part_free sink MultipartPart p → v {
     ( string_free . p name )
     ( string_free . p filename )
     ( string_free . p content_type )
     ( vec_free [u] . p data )
 }
 
-@ multipart_parts_free ( Vec MultipartPart ) parts → v {
+@ multipart_parts_free sink ( Vec MultipartPart ) parts → v {
     ( vec_free_with [MultipartPart] parts \ MultipartPart p → v { ( multipart_part_free p ) } )
 }
 

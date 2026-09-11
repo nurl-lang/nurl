@@ -167,13 +167,13 @@ $ `stdlib/ext/cluster.nu`
     ( mutex_unlock . s m )
 }
 
-@ __dq_free * DQueue q → v {
+@ __dq_free sink * DQueue q → v {
     ( vec_free_with [Json] . q items \ Json j → v { ( json_free j ) } )
     ( mutex_free . q m )
     ( nurl_free # s q )
 }
 
-@ dstore_free DStore s → v {
+@ dstore_free sink DStore s → v {
     ( vec_free_with [DStoreEntry] . s entries
     \ DStoreEntry e → v {
         ( string_free . e name )
@@ -348,7 +348,7 @@ $ `stdlib/ext/cluster.nu`
     \ Json j → v { ( json_free j ) } )
 }
 
-@ dchan_free [A] ( DChannel A ) ch → v {
+@ dchan_free [A] sink ( DChannel A ) ch → v {
     : *( DChannelImpl A ) impl # *( DChannelImpl A ) . ch ctl
     ( node_free . impl node )
     ( string_free . impl name )

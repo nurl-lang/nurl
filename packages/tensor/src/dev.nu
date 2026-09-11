@@ -29,7 +29,7 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
 
 @ dtensor_ok DTensor d → b { ^ ( gk_buf_ok . d buf ) }
 
-@ dtensor_free DTensor d → v {
+@ dtensor_free sink DTensor d → v {
     ( gk_dbuf_free . d buf )
     ( vec_free [i] . d shape )
 }

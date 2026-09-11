@@ -141,6 +141,11 @@ jobs:
         # the relevant diff so we don't need extra grep here.
         run: ./build.sh
 
+      - name: Enum ownership across compiled modules
+        run: |
+          NURL_SPLIT=4 NURL_SPLIT_MIN=1 ./nurl.sh compiler/tests/sink_enum_owned.nu build/sink-owned-split
+          ./build/sink-owned-split
+
       - name: Installed LSP and source stream controls
         run: |
           ./tools/nurl-lsp/build.sh
@@ -649,6 +654,9 @@ jobs:
           ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 ./build/registry-trust-leaks
           NURL_SAN=1 ./nurl.sh compiler/tests/resolver_registry.nu build/resolver-registry-leaks
           ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 ./build/resolver-registry-leaks
+
+      - name: Enum payload representation and sink ownership
+        run: LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh enum_nested_tag_payload sink_enum_owned sink_contract_names sink_callable_shadow sink_rebind_owned
 
       - name: Generated-code sanitizer detection controls
         run: python3 tools/sanitizer_controls.py

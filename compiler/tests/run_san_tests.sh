@@ -150,9 +150,10 @@ JOBS="${NURL_SAN_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 # binary leaky, and the leak was real. Without this the gate is a coin
 # flip that lands heads on the developer's machine. The whole pinned set
 # passes with it, so nothing here relies on a stack root.
-LSAN_ROOT_OPTS=""
-[[ "${LSAN_DETECT_LEAKS:-0}" == "1" ]] && LSAN_ROOT_OPTS="use_stacks=0:"
-export ASAN_OPTIONS="${ASAN_OPTIONS:-${LSAN_ROOT_OPTS}detect_leaks=${LSAN_DETECT_LEAKS:-0}:abort_on_error=0:halt_on_error=0:print_stacktrace=1}"
+if [[ "${LSAN_DETECT_LEAKS:-0}" == "1" ]]; then
+    export LSAN_OPTIONS="${LSAN_OPTIONS:+${LSAN_OPTIONS}:}use_stacks=0"
+fi
+export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=${LSAN_DETECT_LEAKS:-0}:abort_on_error=0:halt_on_error=0:print_stacktrace=1}"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1:halt_on_error=0}"
 
 # The one definition of "a sanitizer said something": ASan

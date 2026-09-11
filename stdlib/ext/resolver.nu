@@ -7,19 +7,22 @@
 // Indexes, versions and distinct requirements are parsed once per resolution.
 //
 // resolve_registry roots default_registry fetch → ! (Vec LockPkg) ResolveErr
-// fetch(registry, name) returns an owned index JSON String; empty means absent.
+// fetch(registry, name) returns !RegIndex RegistryFetchErr with explicit absence.
 // Path roots are installed by the caller and are ignored here.
 
 $ `stdlib/ext/manifest.nu`
 $ `stdlib/ext/lockfile.nu`
-$ `stdlib/ext/registry_index.nu`
+$ `stdlib/ext/registry_fetch.nu`
 $ `stdlib/ext/registry_id.nu`
 $ `stdlib/ext/semver.nu`
 $ `stdlib/std/hashmap.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/std/cmp.nu`
 
+: ResolveFetchFailure { RegistryFetchErr cause String registry String name }
+
 : | ResolveErr {
+    ResolveFetch ResolveFetchFailure
     ResolveNotFound
     ResolveBadIndex
     ResolveNoMatch
@@ -31,6 +34,7 @@ $ `stdlib/std/cmp.nu`
 
 @ resolve_err_name ResolveErr error → s {
     ^ ?? error {
+        ResolveFetch _ → `ResolveFetch`
         ResolveNotFound → `ResolveNotFound`
         ResolveBadIndex → `ResolveBadIndex`
         ResolveNoMatch → `ResolveNoMatch`
@@ -39,6 +43,28 @@ $ `stdlib/std/cmp.nu`
         ResolveBadPackage → `ResolveBadPackage`
         ResolveBadRequirement → `ResolveBadRequirement`
     }
+}
+
+// Consumes the error. The compiler releases its box and owned context once.
+@ resolve_err_free sink ResolveErr error → v {}
+
+@ resolve_err_text ResolveErr error → String {
+    : String text ( string_from ( resolve_err_name error ) )
+    ?? error {
+        ResolveFetch failure → {
+            : String url ( registry_index_url ( string_data . failure registry ) ( string_data . failure name ) )
+            ( string_push_str text `: ` ) ( string_push_str text ( string_data url ) )
+            ( string_push_str text `: ` ) ( string_free url )
+            : String cause ( registry_fetch_err_text . failure cause )
+            ( string_push_str text ( string_data cause ) ) ( string_free cause )
+        }
+        _ → {}
+    }
+    ^ text
+}
+
+@ __resolve_retryable ResolveErr error → b {
+    ^ ?? error { ResolveNotFound → T ResolveNoMatch → T ResolveConflict → T _ → F }
 }
 
 // Map keys borrow immutable strings owned by the node and requirement pools.
@@ -73,7 +99,7 @@ $ `stdlib/std/cmp.nu`
     }
 }
 
-@ __solver_free __Solver solver → v {
+@ __solver_free sink __Solver solver → v {
     ( map_free [s i] . solver registry_ids )
     ( map_free [s i] . solver requirement_ids )
     ( map_free [__SolveKey i] . solver node_ids )
@@ -148,53 +174,57 @@ $ `stdlib/std/cmp.nu`
     ^ ( cmp_string . . b value build . . a value build )
 }
 
-@ __solver_load __Solver solver i id ( @ String s s ) fetch → v {
+@ __solver_load __Solver solver i id ( @ !RegIndex RegistryFetchErr s s ) fetch → !i ResolveErr {
     : ~ __SolveNode node . ( vec_data [__SolveNode] . solver nodes ) id
-    ? != . node loaded 0 { ^ v } {}
+    ? != . node loaded 0 { ^ @ !i ResolveErr { T 0 } } {}
     : String registry . ( vec_data [String] . solver registries ) . node registry
-    : String text ( fetch ( string_data registry ) ( string_data . node name ) )
-    = . node loaded ? == ( string_len text ) 0 -1 -2
-    ? & > ( string_len text ) 0 == ( string_len text ) ( nurl_str_len ( string_data text ) ) {
-        ?? ( regindex_parse ( string_data text ) ) {
-            F _ → {}
-            T index → {
-                ? ( string_eq . index name . node name ) {
-                    ( regindex_free . node index ) = . node index index
-                    = . node loaded 1
-                    : i n ( vec_len [IdxVersion] . index versions )
-                    : ~ i k 0
-                    ~ & == . node loaded 1 < k n {
-                        : IdxVersion version . ( vec_data [IdxVersion] . index versions ) k
-                        ?? ( semver_parse ( string_data . version version ) ) {
-                            F _ → { = . node loaded -2 }
-                            T value → { ( vec_push [__SolveVersion] . node versions @ __SolveVersion { value k ( vec_new [__SolveEdge] ) 0 } ) }
-                        }
-                        : ~ i d 0
-                        ~ & == . node loaded 1 < d ( vec_len [IdxDep] . version deps ) {
-                            : IdxDep dep . ( vec_data [IdxDep] . version deps ) d
-                            ? ! ( registry_name_valid ( string_data . dep name ) ) { = . node loaded -2 } {
-                                ?? ( __solver_requirement solver ( string_data . dep req ) ) {
-                                    F _ → { = . node loaded -2 }
-                                    T _ → {}
-                                }
-                            }
-                            = d + d 1
-                        }
-                        = k + k 1
-                    }
-                    ( sort_by [__SolveVersion] . node versions \ __SolveVersion a __SolveVersion b → i { ^ ( __solve_version_cmp a b ) } )
-                    : *__SolveVersion versions ( vec_data [__SolveVersion] . node versions )
-                    : ~ i j 1
-                    ~ < j ( vec_len [__SolveVersion] . node versions ) {
-                        ? == ( __solve_version_cmp . versions - j 1 . versions j ) 0 { = . node loaded -2 } {}
-                        = j + j 1
-                    }
-                } { ( regindex_free index ) }
+    ?? ( fetch ( string_data registry ) ( string_data . node name ) ) {
+        F error → {
+            ?? error {
+                RegistryNotFound → { = . node loaded -1 }
+                RegistryBadIndex → { ^ @ !i ResolveErr { F ResolveBadIndex } }
+                _ → { ^ @ !i ResolveErr { F @ ResolveErr { ResolveFetch @ ResolveFetchFailure {
+                                error ( string_clone registry ) ( string_clone . node name )
+                            } } } }
             }
         }
-    } {}
-    ( string_free text )
+        T index → {
+            ? ! ( string_eq . index name . node name ) { ( regindex_free index ) ^ @ !i ResolveErr { F ResolveBadIndex } } {}
+            ( regindex_free . node index ) = . node index index
+            = . node loaded 1
+            : i n ( vec_len [IdxVersion] . index versions )
+            : ~ i k 0
+            ~ & == . node loaded 1 < k n {
+                : IdxVersion version . ( vec_data [IdxVersion] . index versions ) k
+                ?? ( semver_parse ( string_data . version version ) ) {
+                    F _ → { = . node loaded -2 }
+                    T value → { ( vec_push [__SolveVersion] . node versions @ __SolveVersion { value k ( vec_new [__SolveEdge] ) 0 } ) }
+                }
+                : ~ i d 0
+                ~ & == . node loaded 1 < d ( vec_len [IdxDep] . version deps ) {
+                    : IdxDep dep . ( vec_data [IdxDep] . version deps ) d
+                    ? ! ( registry_name_valid ( string_data . dep name ) ) { = . node loaded -2 } {
+                        ?? ( __solver_requirement solver ( string_data . dep req ) ) {
+                            F _ → { = . node loaded -2 }
+                            T _ → {}
+                        }
+                    }
+                    = d + d 1
+                }
+                = k + k 1
+            }
+            ( sort_by [__SolveVersion] . node versions \ __SolveVersion a __SolveVersion b → i { ^ ( __solve_version_cmp a b ) } )
+            : *__SolveVersion versions ( vec_data [__SolveVersion] . node versions )
+            : ~ i j 1
+            ~ < j ( vec_len [__SolveVersion] . node versions ) {
+                ? == ( __solve_version_cmp . versions - j 1 . versions j ) 0 { = . node loaded -2 } {}
+                = j + j 1
+            }
+
+        }
+    }
     ( vec_set [__SolveNode] . solver nodes id node )
+    ^ @ !i ResolveErr { T 0 }
 }
 
 @ __solver_conflict __SolveNode node → ResolveErr {
@@ -362,13 +392,13 @@ $ `stdlib/std/cmp.nu`
     ( __solver_sift solver pos )
 }
 
-@ __solver_decision __Solver solver ( @ String s s ) fetch → !__SolveFrame ResolveErr {
+@ __solver_decision __Solver solver ( @ !RegIndex RegistryFetchErr s s ) fetch → !__SolveFrame ResolveErr {
     ~ > ( vec_len [i] . solver pending ) 0 {
         : i id . ( vec_data [i] . solver pending ) 0
         : __SolveNode node . ( vec_data [__SolveNode] . solver nodes ) id
         ? == . node loaded 0 {
             ( __solver_unqueue solver id )
-            ( __solver_load solver id fetch )
+            ?? ( __solver_load solver id fetch ) { F error → { ^ @ !__SolveFrame ResolveErr { F error } } T _ → {} }
             ( __solver_refresh solver id )
         } {
             ? < . node loaded 0 { ( __solver_blame solver id ) ^ @ !__SolveFrame ResolveErr { F ? == . node loaded -1 ResolveNotFound ResolveBadIndex } } {}
@@ -505,7 +535,7 @@ $ `stdlib/std/cmp.nu`
     ^ result
 }
 
-@ __solver_frame_free __SolveFrame frame → v {
+@ __solver_frame_free sink __SolveFrame frame → v {
     ( vec_free [i] . frame candidates ) ( vec_free [i] . frame conflicts )
 }
 
@@ -531,7 +561,7 @@ $ `stdlib/std/cmp.nu`
     ^ T
 }
 
-@ resolve_registry ( Vec Dep ) roots s default_registry ( @ String s s ) fetch → !( Vec LockPkg ) ResolveErr {
+@ resolve_registry ( Vec Dep ) roots s default_registry ( @ !RegIndex RegistryFetchErr s s ) fetch → !( Vec LockPkg ) ResolveErr {
     : __Solver solver ( __solver_new )
     ?? ( __solver_roots solver roots default_registry ) {
         F error → { ( __solver_free solver ) ^ @ !( Vec LockPkg ) ResolveErr { F error } }
@@ -542,7 +572,10 @@ $ `stdlib/std/cmp.nu`
     ~ searching {
         : ~ b jumping F
         ?? ( __solver_decision solver fetch ) {
-            F error → { = failure error = jumping T }
+            F error → {
+                ? ! ( __resolve_retryable error ) { ( __solver_free solver ) ^ @ !( Vec LockPkg ) ResolveErr { F error } } {}
+                = failure error = jumping T
+            }
             T frame → {
                 ? < . frame node 0 {
                     ( __solver_frame_free frame )

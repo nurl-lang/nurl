@@ -62,7 +62,7 @@ $ `stdlib/core/vec.nu`
     ^ t
 }
 
-@ lease_free * LeaseTable t → v {
+@ lease_free sink * LeaseTable t → v {
     : i n ( vec_len [s] . t entries )
     : ~ i k 0
     ~ < k n {

@@ -65,7 +65,8 @@ class ResolverTest(unittest.TestCase):
         cls.env = {**os.environ, 'DEBUGINFOD_URLS': '',
                    # Ignore stale pointers in main's returned stack frame, as
                    # the corpus leak gate does; they must not hide leaked owners.
-                   'ASAN_OPTIONS': 'use_stacks=0:detect_leaks=1:halt_on_error=1',
+                   'ASAN_OPTIONS': 'detect_leaks=1:halt_on_error=1',
+                   'LSAN_OPTIONS': 'use_stacks=0',
                    'UBSAN_OPTIONS': 'halt_on_error=1'}
 
     def resolve(self, case):
@@ -108,6 +109,16 @@ class ResolverTest(unittest.TestCase):
             possible = solutions(case)
             actual = self.resolve(case)
             self.assertTrue(actual in possible if possible else actual is None, (case, actual, possible))
+
+    def test_transport_errors_abort_with_owned_context(self):
+        for cause in ['503', '401', 'connect', 'timeout', 'tls', 'dns', 'invalid URL', 'transport']:
+            with self.subTest(cause=cause):
+                case = graph({'a': [version(1), version(2, [('b', '*')])]}, [('a', '*')])
+                case['errors'] = {REG+'b': cause}
+                self.assertIsNone(self.resolve(case))
+                self.assertIn('ResolveFetch: '+REG+'index/b.json:', self.last_error)
+                self.assertIn(cause, self.last_error)
+                self.assertEqual(self.last_calls, ['FETCH '+REG+'a', 'FETCH '+REG+'b'])
 
     def test_small_graphs_match_exhaustive_oracle_and_input_permutations(self):
         rng = random.Random(4904)

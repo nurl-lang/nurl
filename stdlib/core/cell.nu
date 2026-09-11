@@ -183,7 +183,7 @@
 
 // ── Lifecycle ───────────────────────────────────────────────────────
 
-@ cell_free Cell c → v {
+@ cell_free sink Cell c → v {
     : s p . c ptr
     ? != 0 # i p { ( nurl_free p ) } {}
 }

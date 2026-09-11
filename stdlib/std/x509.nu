@@ -533,7 +533,7 @@ $ `stdlib/std/bytes.nu`
 
 @ __lower i c → i { ^ ? & >= c 65 <= c 90 + c 32 c }
 
-@ x509_free X509 c → v {
+@ x509_free sink X509 c → v {
     ( vec_free [u] . c tbs )
     ( vec_free [u] . c sig )
     ( vec_free [u] . c rsa_n )

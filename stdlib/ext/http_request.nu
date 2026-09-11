@@ -137,7 +137,7 @@ $ `stdlib/std/simd.nu`
     String query
 }
 
-@ url_split_free UrlSplit u → v {
+@ url_split_free sink UrlSplit u → v {
     ( string_free . u path )
     ( string_free . u query )
 }
@@ -149,7 +149,7 @@ $ `stdlib/std/simd.nu`
     String value
 }
 
-@ query_pair_free QueryPair p → v {
+@ query_pair_free sink QueryPair p → v {
     ( string_free . p key )
     ( string_free . p value )
 }
@@ -323,7 +323,7 @@ $ `stdlib/std/simd.nu`
 
 // ── Headers helpers ───────────────────────────────────────────────────
 
-@ headers_free ( Vec Header ) hs → v {
+@ headers_free sink ( Vec Header ) hs → v {
     ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
 }
 
@@ -360,7 +360,7 @@ $ `stdlib/std/simd.nu`
     }
 }
 
-@ request_free HttpRequest req → v {
+@ request_free sink HttpRequest req → v {
     ( string_free . req method )
     ( string_free . req path )
     ( string_free . req query )
@@ -536,7 +536,7 @@ $ `stdlib/std/simd.nu`
     ^ out
 }
 
-@ query_pairs_free ( Vec QueryPair ) v → v {
+@ query_pairs_free sink ( Vec QueryPair ) v → v {
     ( vec_free_with [QueryPair] v \ QueryPair p → v { ( query_pair_free p ) } )
 }
 
@@ -556,7 +556,7 @@ $ `stdlib/std/simd.nu`
     b ok
 }
 
-@ __req_line_parts_free ReqLineParts r → v {
+@ __req_line_parts_free sink ReqLineParts r → v {
     ( string_free . r method )
     ( string_free . r path )
     ( string_free . r query )

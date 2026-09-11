@@ -127,7 +127,15 @@ Registry dependencies carry a `(registry URL, package name)` identity through
 resolution, index caching, downloads, signature checks and `nurl.lock`.
 An explicit dependency `registry` selects that origin; transitive index
 requirements inherit their parent's registry. Custom `resolve_registry` fetch
-callbacks now receive `(registry, name)` and return an owned `String`. URL normalization lowercases the
+callbacks receive `(registry, name)` and return `!RegIndex RegistryFetchErr`.
+A successful index owns its fields; `registry_index_decode` validates raw JSON
+and binds it to the requested name. Only `RegistryNotFound` (HTTP 404) permits
+missing-package backtracking. Other HTTP statuses, transport failures and
+malformed responses abort resolution with their origin and cause; install,
+info, update and the publish dependency gate report the failure. Failed
+resolution preserves the existing manifest and lock.
+
+URL normalization lowercases the
 scheme and host, removes the default port and adds a trailing slash. Path bytes
 are preserved. Credentials, queries and fragments are rejected.
 

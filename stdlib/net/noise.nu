@@ -110,7 +110,7 @@ $ `stdlib/ext/crypto.nu`
     ^ s
 }
 
-@ __sym_free * SymState s → v {
+@ __sym_free sink * SymState s → v {
     ( vec_free [u] . s ck )
     ( vec_free [u] . s h )
     ( vec_free [u] . s k )
@@ -223,7 +223,7 @@ $ `stdlib/ext/crypto.nu`
     ^ h
 }
 
-@ noise_free * Handshake h → v {
+@ noise_free sink * Handshake h → v {
     ( __sym_free ( __hs_sym h ) )
     ( vec_free [u] . h s_priv )
     ( vec_free [u] . h s_pub )
@@ -360,7 +360,7 @@ $ `stdlib/ext/crypto.nu`
     ( Vec u ) recv
 }
 
-@ noise_keys_free NoiseKeys k → v {
+@ noise_keys_free sink NoiseKeys k → v {
     ( vec_free [u] . k send )
     ( vec_free [u] . k recv )
 }

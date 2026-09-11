@@ -44,7 +44,7 @@ $ `stdlib/std/bytes.nu`
     ^ @ Image { w h ch data }
 }
 
-@ image_free Image im → v { ( vec_free [u] . im data ) }
+@ image_free sink Image im → v { ( vec_free [u] . im data ) }
 
 @ image_width Image im → i { ^ . im width }
 

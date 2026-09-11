@@ -590,7 +590,7 @@ $ `stdlib/core/char.nu`
     ( _string_seal str )
 }
 
-@ string_free String str → v {
+@ string_free sink String str → v {
     ( vec_free [u] ( __sbuf str ) )
 }
 

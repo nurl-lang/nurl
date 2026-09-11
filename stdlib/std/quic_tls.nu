@@ -94,7 +94,7 @@ $ `stdlib/std/quic_rxbuf.nu`
     ( _srv_hs_set_pq . s hs pq_chain pq_level pq_sk )
 }
 
-@ quic_tls_srv_free * QuicTlsSrv s → v {
+@ quic_tls_srv_free sink * QuicTlsSrv s → v {
     ? == # i s 0 { ^ } {}
     ( _srv_hs_free . s hs )
     ( quic_rxbuf_free . s rx0 )
@@ -262,7 +262,7 @@ $ `stdlib/std/quic_rxbuf.nu`
     ^ s
 }
 
-@ quic_tls_cli_free * QuicTlsCli s → v {
+@ quic_tls_cli_free sink * QuicTlsCli s → v {
     ? == # i s 0 { ^ } {}
     ( _cli_hs_free . s hs )
     ( quic_rxbuf_free . s rx0 )

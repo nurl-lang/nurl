@@ -654,7 +654,7 @@ $ `stdlib/core/posix.nu`
     ^ == 0 ( output_exit_code o )
 }
 
-@ output_free Output o → v {
+@ output_free sink Output o → v {
     : s rp . o raw
     : i raw # i rp
     ( nurl_proc_free raw )
@@ -1433,7 +1433,7 @@ $ `stdlib/core/posix.nu`
     ^ ( nurl_proc_spawn_kill raw sig )
 }
 
-@ proc_free ProcChild p → v {
+@ proc_free sink ProcChild p → v {
     : s rp . p raw
     : i raw # i rp
     ? != ( posix_const `O_NONBLOCK` ) -1 {

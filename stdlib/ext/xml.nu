@@ -382,7 +382,7 @@ $ `stdlib/core/vec.nu`
 
 // ── Free ──────────────────────────────────────────────────────────────
 
-@ xml_free Xml x → v {
+@ xml_free sink Xml x → v {
     ( string_free . x text )
     ( string_free . x tag )
     ( vec_free_with [XmlAttr] . x attrs \ XmlAttr a → v { ( string_free . a name ) ( string_free . a value ) } )

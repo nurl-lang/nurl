@@ -34,12 +34,17 @@ class RegistryIdentityTest(unittest.TestCase):
         self.project = Path(self.temp.name)
         self.routes = {}
         self.requests = []
+        self.statuses = {}
+        self.disconnect = set()
         owner = self
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 owner.requests.append(self.path)
+                if self.path in owner.disconnect:
+                    self.close_connection = True
+                    return
                 body = owner.routes.get(self.path)
-                self.send_response(200 if body is not None else 404)
+                self.send_response(owner.statuses.get(self.path, 200 if body is not None else 404))
                 body = body if body is not None else b'not found'
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers()
@@ -162,6 +167,87 @@ class RegistryIdentityTest(unittest.TestCase):
         self.assertFalse((self.project / 'deps/bar').exists())
         package, = tomllib.loads((self.project / 'nurl.lock').read_text())['package']
         self.assertEqual((package['name'], package['version']), ('foo', '1.0.0'))
+
+    def fallback_graph(self):
+        first = self.package('b', 'foo')
+        index = '/b/index/foo.json'
+        old = json.loads(self.routes[index])['versions'][0]
+        self.package('b', 'foo', version='2.0.0', deps=['bar'])
+        versions = json.loads(self.routes[index])
+        versions['versions'].append(old)
+        self.routes[index] = json.dumps(versions).encode()
+        self.manifest([('foo', 'b')])
+        manifest = self.project / 'nurl.toml'
+        manifest.write_text(manifest.read_text().replace('version="^1"', 'version="*"'))
+        return first
+
+    def test_missing_transitive_index_allows_a_real_fallback(self):
+        first = self.fallback_graph()
+        run = self.run_pkg('install')
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn(first, self.requests)
+        package, = tomllib.loads((self.project / 'nurl.lock').read_text())['package']
+        self.assertEqual(package['version'], '1.0.0')
+
+    def test_index_failure_cannot_silently_downgrade(self):
+        for defect in ['server_error', 'unauthorized', 'malformed', 'empty', 'disconnect']:
+            with self.subTest(defect=defect):
+                self.fallback_graph()
+                target = '/b/index/bar.json'
+                self.requests.clear()
+                self.statuses.clear()
+                self.disconnect.clear()
+                self.routes[target] = b'' if defect == 'empty' else b'invalid index'
+                if defect in ['server_error', 'unauthorized']:
+                    self.statuses[target] = 503 if defect == 'server_error' else 401
+                if defect == 'disconnect':
+                    self.disconnect.add(target)
+                run = self.assert_failed_without_publish()
+                if defect in ['server_error', 'unauthorized']:
+                    self.assertIn(b'HTTP 503' if defect == 'server_error' else b'HTTP 401', run.stderr)
+                    self.assertIn((self.base+'/b/index/bar.json').encode(), run.stderr)
+                if defect == 'disconnect':
+                    self.assertIn(b'request failed: transport', run.stderr)
+                self.assertFalse(any('/pkgs/' in path for path in self.requests), self.requests)
+
+    def test_registry_commands_report_http_failure(self):
+        self.manifest([('foo', 'b')])
+        self.statuses['/b/index/foo.json'] = 503
+        env = {**self.env, 'NURL_REGISTRY': self.base+'/b/'}
+        manifest = (self.project/'nurl.toml').read_bytes()
+        for command in [('info', 'foo'), ('install', 'foo'), ('update', '--all')]:
+            with self.subTest(command=command):
+                run = self.run_pkg(*command, env=env)
+                self.assertNotEqual(run.returncode, 0, run.stdout+run.stderr)
+                self.assertIn(b'HTTP 503', run.stderr)
+                self.assertNotIn(b'not found', run.stdout+run.stderr)
+                self.assertNotIn(b'no published version', run.stdout+run.stderr)
+                self.assertEqual((self.project/'nurl.toml').read_bytes(), manifest)
+        self.assertFalse(any('/pkgs/' in path for path in self.requests), self.requests)
+
+    def test_publish_drift_check_refuses_failed_index(self):
+        self.project.joinpath('src').mkdir()
+        self.project.joinpath('src/main.nu').write_text('@ main → i { ^ 0 }\n')
+        local = self.project/'local/foo'
+        local.mkdir(parents=True)
+        (local/'nurl.toml').write_text('[package]\nname="foo"\nversion="1.0.0"\n')
+        self.project.joinpath('nurl.toml').write_text(
+            f'[package]\nname="consumer"\nversion="1.0.0"\nregistry="{self.base}/b/"\n'
+            '[dependencies]\nfoo={path="local/foo",version="^1"}\n')
+        self.statuses['/b/index/foo.json'] = 503
+        prefix = tempfile.TemporaryDirectory(prefix='nurl-registry-publish-toolchain-')
+        self.addCleanup(prefix.cleanup)
+        toolchain = Path(prefix.name)
+        (toolchain/'bin').mkdir()
+        (toolchain/'bin/nurlc').symlink_to(ROOT/'build/nurlc')
+        (toolchain/'stdlib').symlink_to(ROOT/'stdlib', target_is_directory=True)
+        run = self.run_pkg('publish', '--dry-run', env={**self.env,
+            'NURL_STDLIB': str(toolchain)})
+        self.assertNotEqual(run.returncode, 0, run.stdout+run.stderr)
+        self.assertIn(b'HTTP 503', run.stderr)
+        self.assertIn('/b/index/foo.json', self.requests)
+        self.assertNotIn(b'UNCHECKED', run.stderr)
+        self.assertNotIn(b'every gate passed', run.stdout)
 
     def test_two_registries_use_independent_keys(self):
         self.package('a', 'alpha')

@@ -297,7 +297,7 @@ $ `stdlib/ext/http_response.nu`
 // Borrowed; `json_is_null` when the failure carries none.
 @ mcp_rpc_err_get_data McpRpcErr e → Json { ^ . e __data }
 
-@ mcp_rpc_err_free McpRpcErr e → v {
+@ mcp_rpc_err_free sink McpRpcErr e → v {
     ( string_free . e __message )
     ( json_free . e __data )
 }
@@ -477,7 +477,7 @@ $ `stdlib/ext/http_response.nu`
     ?? ( vec_get [i] . r __ctl MCP_CTL_SERVING ) { T v → { ^ != v 0 } F → { ^ F } }
 }
 
-@ mcp_server_free McpServer r → v {
+@ mcp_server_free sink McpServer r → v {
     ( string_free . r __name )
     ( string_free . r __version )
     // Tools

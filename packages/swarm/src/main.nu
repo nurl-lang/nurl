@@ -90,7 +90,7 @@ $ `work.nu`
     ^ sw
 }
 
-@ swarm_free * Swarm sw → v {
+@ swarm_free sink * Swarm sw → v {
     ( job_node_free # *JobNode . sw job )
     ( ring_free # *Ring . sw ring )
     ( roster_free # *Roster . sw roster )

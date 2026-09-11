@@ -144,7 +144,7 @@ $ `stdlib/ext/http_server.nu`
     ^ @ Registry { ( vec_new [RpcEntry] ) }
 }
 
-@ __rpc_entry_free RpcEntry e → v {
+@ __rpc_entry_free sink RpcEntry e → v {
     : *RpcImpl impl # *RpcImpl . e ctl
     ( string_free . impl name )
     // The closure value is a by-value { fn_ptr, env_ptr } pair; only the
@@ -155,7 +155,7 @@ $ `stdlib/ext/http_server.nu`
     ( nurl_free # s impl )
 }
 
-@ registry_free Registry r → v {
+@ registry_free sink Registry r → v {
     ( vec_free_with [RpcEntry] . r entries
     \ RpcEntry e → v { ( __rpc_entry_free e ) } )
 }
@@ -451,7 +451,7 @@ $ `stdlib/ext/http_server.nu`
     ^ @ CircuitBreaker { # s impl }
 }
 
-@ cb_free CircuitBreaker cb → v {
+@ cb_free sink CircuitBreaker cb → v {
     ( nurl_free . cb ctl )
 }
 
@@ -499,7 +499,7 @@ $ `stdlib/ext/http_server.nu`
     ^ @ Node { ( string_from host ) port }
 }
 
-@ node_free Node n → v {
+@ node_free sink Node n → v {
     ( string_free . n host )
 }
 

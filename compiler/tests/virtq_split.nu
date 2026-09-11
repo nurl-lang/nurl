@@ -37,7 +37,7 @@ $ `stdlib/hal/virtq.nu`
     ^ d
 }
 
-@ mock_free * MockDev d → v { ( free d ) }
+@ mock_free sink * MockDev d → v { ( free d ) }
 
 @ mock_has_work * MockDev d * Virtq q → b {
     ^ ( vq_idx_lt . d last_avail ( virtq_avail_idx q ) )

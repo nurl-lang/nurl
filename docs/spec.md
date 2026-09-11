@@ -1435,20 +1435,22 @@ A function parameter may carry a leading convention marker (§7.2):
 - *(none)* / `in` — immutable borrow by value (the default).
 - `inout` — exclusive mutable borrow. The argument MUST be a mutable
   (`: ~`) binding or a field target `. obj field`; it is passed by
-  address. The callee mutates the caller's storage in place. An
-  `inout` function MUST be defined before it is called.
+  address. The callee mutates the caller's storage in place. Ordinary
+  and generic declarations may follow their callers.
 - `sink` — consume / move. The callee takes ownership; the caller may
-  not use the argument binding afterwards. Compiler-auto-dropped
-  values (owned strings / slices / Drop-trait values) cannot yet be
-  `sink`-passed.
+  not use the argument binding afterwards. Compiler-managed enum owners
+  transfer their drop obligation. Transfer for raw owned strings, slices,
+  user Drop-trait values and tracked struct fields remains unsupported.
 
 #### Auto-inferred `sink` (v2.1, 2026-05-25)
 
-A function whose body passes one of its own parameters to a `*_free`
-destructor or to another function's `sink` slot has that parameter
+A function whose body passes one of its own parameters to another
+function's `sink` slot has that parameter
 **auto-inferred** as `sink`. Call sites of such a wrapper see the
-sink-arg-path: the argument is move-marked, and a subsequent read is a
-use-after-move error.
+same ownership contract: the argument is moved, and a subsequent read is a
+use-after-move error. Explicit signatures seed a fixed point of call effects
+across ordinary bodies and generic instances, including forward calls and
+all argument positions. Names and return types never imply consumption.
 
 ```
 @ take String s → v { ( string_free s ) }   // s auto-inferred sink
@@ -1584,9 +1586,10 @@ conventions:
   the caller's storage. Generic functions may take `inout` parameters
   too.
 - **`sink`** — consume. The callee takes ownership; the caller's
-  binding is marked moved. Lowers to an ordinary by-value parameter
-  (no IR change beyond the value pass-through); the move check is
-  enforced at the call site.
+  binding is marked moved. The ABI is by value. Compiler-managed enum
+  ownership transfers before the call; the callee drops the value on exit
+  unless it returns or transfers it onward. Manual handles remain the
+  callee's responsibility.
 
 `in` / `inout` / `sink` are contextual keywords — recognised only as a
 parameter's leading token. `inout` is additionally banned as a
@@ -1631,9 +1634,9 @@ materialises one mangled monomorphic copy. The body is stored as source
 text at the declaration and re-parsed per instantiation.
 
 Generic functions support `inout` and `sink` parameter conventions —
-since parameter conventions depend only on parameter *position*, not
-the instantiating type, the convention sets are computed once per
-generic template and shared across all instantiations.
+explicit conventions are collected from each template before its callers
+are compiled. Inferred consumption also uses the compiled instances and the
+whole-module fixed point.
 
 ## 8. Memory model
 
@@ -1716,8 +1719,8 @@ exact phrasing and the soundness contract see
 
 ### 9.1 Move (use-after-move)
 
-A binding is *moved* when consumed: passed to a `*_free` family
-destructor, or to a `sink` parameter, or copied into another binding
+A binding is *moved* when consumed: passed to an explicit or inferred
+`sink` parameter, or copied into another binding
 (see §9.2). After a move, reading the binding is rejected.
 
 ### 9.2 Alias / double-free

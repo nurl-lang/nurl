@@ -1314,7 +1314,7 @@ $ `stdlib/ext/websocket.nu`
 // Free a user-property list and every String inside it. (A manual loop
 // rather than vec_free_with — a `\`-closure parameter cannot carry the
 // compound type `( Pair String String )`.)
-@ mqtt_props_free ( Vec ( Pair String String ) ) props → v {
+@ mqtt_props_free sink ( Vec ( Pair String String ) ) props → v {
     : i n ( vec_len [( Pair String String )] props )
     : *( Pair String String ) d ( vec_data [( Pair String String )] props )
     : ~ i k 0
@@ -1328,7 +1328,7 @@ $ `stdlib/ext/websocket.nu`
 }
 
 // Free an MqttMessage — topic, payload, and every user-property pair.
-@ mqtt_message_free MqttMessage m → v {
+@ mqtt_message_free sink MqttMessage m → v {
     ( string_free . m topic )
     ( string_free . m payload )
     ( mqtt_props_free . m props )

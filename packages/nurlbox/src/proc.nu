@@ -634,7 +634,7 @@ $ `filter.nu`
     ^ T
 }
 
-@ __mount_free MountEnt m → v {
+@ __mount_free sink MountEnt m → v {
     ( string_free . m dev )
     ( string_free . m dir )
     ( string_free . m kind )

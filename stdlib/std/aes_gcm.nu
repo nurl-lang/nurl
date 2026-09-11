@@ -760,7 +760,7 @@ $ `stdlib/std/bytes.nu`
     ^ k
 }
 
-@ aes_gcm_key_free * AesGcmKey k → v {
+@ aes_gcm_key_free sink * AesGcmKey k → v {
     ? == # i k 0 { ^ } {}
     ( nurl_free . k skey )
     ( nurl_free . k hsub )

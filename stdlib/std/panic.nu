@@ -58,7 +58,7 @@ $ `stdlib/core/string.nu`
     String msg
 }
 
-@ panic_info_free PanicInfo p → v {
+@ panic_info_free sink PanicInfo p → v {
     ( string_free . p msg )
 }
 

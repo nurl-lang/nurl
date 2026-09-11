@@ -61,7 +61,7 @@
     ^ ( eq_b . a second . b second )
 }
 
-@ pair_free_with [A B] ( Pair A B ) p ( @ v A ) drop_a ( @ v B ) drop_b → v {
+@ pair_free_with [A B] sink ( Pair A B ) p ( @ v A ) drop_a ( @ v B ) drop_b → v {
     ( drop_a . p first )
     ( drop_b . p second )
 }

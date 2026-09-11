@@ -619,7 +619,7 @@ $ `stdlib/ext/json.nu`
     }
 }
 
-@ uni_free * Unigram u → v {
+@ uni_free sink * Unigram u → v {
     : ~ i k 0
     : i np ( vec_len [String] . u pieces )
     ~ < k np {

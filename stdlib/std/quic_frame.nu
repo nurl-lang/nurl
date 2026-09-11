@@ -122,7 +122,7 @@ $ `stdlib/std/quic_varint.nu`
     ^ f
 }
 
-@ quic_frame_free * QuicFrame f → v {
+@ quic_frame_free sink * QuicFrame f → v {
     ? == # i f 0 { ^ } {}
     ( vec_free [u] . f bytes )
     ( vec_free [i] . f ints )

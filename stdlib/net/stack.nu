@@ -145,7 +145,7 @@ $ `stdlib/net/pktbuf.nu`
     ^ st
 }
 
-@ stack_free * NetStack st → v {
+@ stack_free sink * NetStack st → v {
     ( arp_cache_free . st arp )
     ( vec_free [i] . st drops )
     ( free st )

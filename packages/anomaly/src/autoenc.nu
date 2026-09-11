@@ -62,7 +62,7 @@ $ `deps/mlp/src/mlp.nu`
     ^ @ AeModel { net mm ( vec_new [String] ) 0.0 0 0 0.0 0 F }
 }
 
-@ ae_free AeModel ae → v {
+@ ae_free sink AeModel ae → v {
     ( mlp_free . ae net )
     ( minmax_free . ae mm )
     ( vec_free_with [String] . ae feats \ String s2 → v { ( string_free s2 ) } )

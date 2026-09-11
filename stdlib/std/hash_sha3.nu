@@ -219,7 +219,7 @@ pub @ sha3_new i rate i dom → *Sha3 {
     ^ h
 }
 
-pub @ sha3_free * Sha3 h → v {
+pub @ sha3_free sink * Sha3 h → v {
     ( vec_free [u64] . h st )
     ( vec_free [u64] . h scr )
     ( vec_free [u64] . h rc )

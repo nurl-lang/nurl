@@ -1319,7 +1319,7 @@ $ `stdlib/std/hash_xxh64.nu`
     i log
 }
 
-@ __zs_ct_free ZsCt ct → v {
+@ __zs_ct_free sink ZsCt ct → v {
     ( vec_free [i] . ct next )
     ( vec_free [i] . ct dnb )
     ( vec_free [i] . ct dfs )
@@ -1498,7 +1498,7 @@ $ `stdlib/std/hash_xxh64.nu`
     ^ st
 }
 
-@ __zs_wst_free * ZsWst st → v {
+@ __zs_wst_free sink * ZsWst st → v {
     ( vec_free [i] . st hlen )
     ( vec_free [i] . st lldist )
     ( vec_free [i] . st ofdist )

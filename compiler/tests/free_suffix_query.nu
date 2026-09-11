@@ -1,21 +1,6 @@
-// free_suffix_query.nu — a `_free`-suffixed QUERY is not a destructor.
-//
-// The borrow checker's move rule keys on a `_free` callee suffix. On the
-// suffix alone, any function whose name ends in `_free` is read as a
-// destructor that consumes its first argument, so the second use of that
-// argument is reported as a use-after-move. That is a false positive
-// with no workaround except renaming a correctly-named function:
-// "how many free slots?" is naturally `_num_free`, and asking it twice
-// is not a double free.
-//
-// A real destructor releases the value and has nothing left to report —
-// every `_free` in the stdlib returns `v`. A `_free`-suffixed function
-// that returns a value is a query about free space, not a destructor.
-// That return-type test is what this pins.
-//
-// Both halves matter, so both are here: the query compiles, and a real
-// destructor still consumes (the last block would be a use-after-free
-// if the checker had gone blind).
+// Names do not imply ownership. Queries borrow the pool; the actual
+// release API declares a consuming parameter. Void borrowing functions
+// and consuming functions that return values are in sink_contract_names.
 
 $ `stdlib/core/vec.nu`
 
@@ -30,14 +15,14 @@ $ `stdlib/core/vec.nu`
     ^ p
 }
 
-// The query. Returns a count, so it is not a destructor.
+// A borrowing query.
 @ pool_num_free * Pool p → i { ^ ( vec_len [i] . p slots ) }
 
 // A second shape: takes an extra argument, still returns a value.
 @ pool_bytes_free * Pool p i unit → i { ^ * ( pool_num_free p ) unit }
 
-// The real destructor: returns v, consumes the pool.
-@ pool_free * Pool p → v {
+// The release contract consumes the pool.
+@ pool_free sink * Pool p → v {
     ( vec_free [i] . p slots )
     ( free p )
 }

@@ -150,7 +150,7 @@ $ `stdlib/ext/http2_hpack.nu`
     }
 }
 
-@ __h2c_stream_free H2CStream s → v {
+@ __h2c_stream_free sink H2CStream s → v {
     ( vec_free_with [Header] . s headers \ Header h → v { ( header_free h ) } )
     ( vec_free [u] . s body )
     ( vec_free [u] . s pending_body )
@@ -1004,7 +1004,7 @@ $ `stdlib/ext/http2_hpack.nu`
 
 : H2Url { b tls String host i port String path }
 
-@ _h2_url_free H2Url u → v {
+@ _h2_url_free sink H2Url u → v {
     ( string_free . u host )
     ( string_free . u path )
 }

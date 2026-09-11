@@ -136,7 +136,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ mmd_graph_free MmdGraph g → v {
+@ mmd_graph_free sink MmdGraph g → v {
     : i nn ( vec_len [MmdNode] . g nodes )
     : ~ i i 0
     ~ < i nn {

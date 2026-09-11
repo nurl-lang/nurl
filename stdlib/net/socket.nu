@@ -170,7 +170,7 @@ $ `stdlib/net/tcpstack.nu`
     ^ st
 }
 
-@ sock_free * SockTab st → v {
+@ sock_free sink * SockTab st → v {
     : i n ( vec_len [i] . st fds )
     : ~ i k 0
     ~ < k n {

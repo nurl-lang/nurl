@@ -151,7 +151,7 @@ $ `stdlib/net/stack.nu`
     ^ ts
 }
 
-@ tstack_free * TcpStack ts → v {
+@ tstack_free sink * TcpStack ts → v {
     : i n ( vec_len [i] . ts conns )
     : ~ i k 0
     ~ < k n {

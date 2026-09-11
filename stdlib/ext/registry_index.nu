@@ -68,12 +68,12 @@ $ `stdlib/ext/semver.nu`
 
 // ── Lifecycle ─────────────────────────────────────────────────────────
 
-@ idxdep_free IdxDep d → v {
+@ idxdep_free sink IdxDep d → v {
     ( string_free . d name )
     ( string_free . d req )
 }
 
-@ idxversion_free IdxVersion v → v {
+@ idxversion_free sink IdxVersion v → v {
     ( string_free . v version )
     ( string_free . v checksum )
     : i n ( vec_len [IdxDep] . v deps )
@@ -86,7 +86,7 @@ $ `stdlib/ext/semver.nu`
     ( vec_free [IdxDep] . v deps )
 }
 
-@ regindex_free RegIndex idx → v {
+@ regindex_free sink RegIndex idx → v {
     ( string_free . idx name )
     : i n ( vec_len [IdxVersion] . idx versions )
     : ~ i k 0

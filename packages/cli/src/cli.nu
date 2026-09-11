@@ -166,7 +166,7 @@ $ `prompt.nu`
     ( vec_free [CliCmd] v )
 }
 
-@ cli_free * Cli c → v {
+@ cli_free sink * Cli c → v {
     ( string_free . c prog )
     ( string_free . c about )
     ( string_free . c version )

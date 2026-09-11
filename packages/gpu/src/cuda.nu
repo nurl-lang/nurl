@@ -377,7 +377,7 @@ $ `stdlib/core/string.nu`
     ^ dptr
 }
 
-@ cuda_free i dptr → i { ^ # i ( cuMemFree_v2 dptr ) }
+@ cuda_free sink i dptr → i { ^ # i ( cuMemFree_v2 dptr ) }
 
 @ cuda_htod i dptr * u host i bytes → i { ^ # i ( cuMemcpyHtoD_v2 dptr host bytes ) }
 
@@ -396,7 +396,7 @@ $ `stdlib/core/string.nu`
     ^ # *u p
 }
 
-@ cuda_host_free * u p → i { ^ # i ( cuMemFreeHost p ) }
+@ cuda_host_free sink * u p → i { ^ # i ( cuMemFreeHost p ) }
 
 // Page-lock an EXISTING host range (e.g. an mmap'd model file) so HtoD
 // copies out of it are direct DMA instead of driver-staged. Flag 8 =
@@ -461,7 +461,7 @@ $ `stdlib/core/string.nu`
     ^ & bits 4294967295
 }
 
-@ cuda_event_free i ev → v { ? != ev 0 { : i32 _r ( cuEventDestroy_v2 ev ) } {} }
+@ cuda_event_free sink i ev → v { ? != ev 0 { : i32 _r ( cuEventDestroy_v2 ev ) } {} }
 
 // ── CUDA Graphs: capture a launch sequence once, replay it as ONE call ──
 // The per-node replay engine's cost on small graphs is pure launch
@@ -524,6 +524,6 @@ $ `stdlib/core/string.nu`
     ^ rc
 }
 
-@ cuda_graph_free i exec → v {
+@ cuda_graph_free sink i exec → v {
     ? != exec 0 { : i _d # i ( cuGraphExecDestroy exec ) } {}
 }

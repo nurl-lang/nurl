@@ -289,7 +289,7 @@ $ `deps/iforest/src/iforest.nu`
     }
 }
 
-@ scorecache_free ScoreCache c → v {
+@ scorecache_free sink ScoreCache c → v {
     ( vec_free_with [String] . c vnames \ String x → v { ( string_free x ) } )
     ( vec_free [i] . c state )
     ( vec_free [f] . c score )
@@ -368,13 +368,13 @@ $ `deps/iforest/src/iforest.nu`
     String note
 }
 
-@ label_free Label l → v {
+@ label_free sink Label l → v {
     ( string_free . l label )
     ( string_free . l by )
     ( string_free . l note )
 }
 
-@ labels_free ( Vec Label ) ls → v {
+@ labels_free sink ( Vec Label ) ls → v {
     ( vec_free_with [Label] ls \ Label l → v { ( label_free l ) } )
 }
 
@@ -635,7 +635,7 @@ $ `deps/iforest/src/iforest.nu`
 // nothing.
 @ store_open s root → Store { ^ ( store_open_org root ANOM_ORG_DEFAULT ) }
 
-@ store_free Store st → v {
+@ store_free sink Store st → v {
     ( string_free . st root )
     ( string_free . st org )
 }

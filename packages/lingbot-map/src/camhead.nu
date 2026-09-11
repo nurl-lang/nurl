@@ -74,7 +74,7 @@ $ `src/rope.nu`
     GkBuf cos3 GkBuf sin3
 }
 
-@ ch_free CamHead c → v {
+@ ch_free sink CamHead c → v {
     ( vec_free_with [LmBlk] . c trunk \ LmBlk b → v { ( lm_blk_free b ) } )
     ( gk_dbuf_free . c tokng ) ( gk_dbuf_free . c tokngb )
     ( gk_dbuf_free . c trnkg ) ( gk_dbuf_free . c trnkb )
@@ -201,7 +201,7 @@ $ `src/rope.nu`
         kvs mf }
 }
 
-@ ch_ws_free ChWs w → v {
+@ ch_ws_free sink ChWs w → v {
     ( gk_dbuf_free . w tok ) ( gk_dbuf_free . w cond )
     ( gk_dbuf_free . w mod ) ( gk_dbuf_free . w norm )
     ( gk_dbuf_free . w x ) ( gk_dbuf_free . w hid )

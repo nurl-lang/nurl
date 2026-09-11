@@ -90,7 +90,7 @@ $ `stdlib/ext/http3_conn.nu`
 
 @ http3_server_accepted * H3Server s → i { ^ ( quic_server_accepted . s qs ) }
 
-@ http3_server_free * H3Server s → v {
+@ http3_server_free sink * H3Server s → v {
     ? == # i s 0 { ^ } {}
     ( quic_server_free . s qs )
     ( map_free [i i] . s h3s )

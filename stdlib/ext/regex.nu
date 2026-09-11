@@ -615,7 +615,7 @@ $ `stdlib/core/vec.nu`
     ^ @ !Regex ParseErr { T r }
 }
 
-@ regex_free Regex r → v {
+@ regex_free sink Regex r → v {
     : *RegexImpl impl # *RegexImpl . r ctl
     ( vec_free [i] . impl states )
     ( vec_free [i] . impl classes )
@@ -763,7 +763,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ __rx_scratch_free RxScratch sc → v {
+@ __rx_scratch_free sink RxScratch sc → v {
     ( vec_free [i] . sc cur )
     ( vec_free [i] . sc nxt )
     ( vec_free [i] . sc marked_cur )

@@ -16,7 +16,7 @@ $ `stdlib/std/encode.nu`
 : RegistryTrust { ( Vec RegistryKey ) keys }
 : | RegistryTrustErr { RegistryBadConfig }
 
-@ registry_trust_free RegistryTrust trust → v {
+@ registry_trust_free sink RegistryTrust trust → v {
     ( vec_free_with [RegistryKey] . trust keys \ RegistryKey item → v {
         ( string_free . item registry ) ( string_free . item key )
     } )

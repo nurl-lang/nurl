@@ -81,7 +81,7 @@ $ `wal.nu`
     i filtered
 }
 
-@ lsm_get_free LsmGet g → v { ( vec_free [u] . g val ) }
+@ lsm_get_free sink LsmGet g → v { ( vec_free [u] . g val ) }
 
 @ __lsm_err s what → String { ^ ( string_from what ) }
 
@@ -284,7 +284,7 @@ next ` )
 // Free everything a partially-built handle may own. The wal field is the
 // one that may still be unset, so it is never touched here — lsm_close
 // closes it and then calls this.
-@ __lsm_free * Lsm db → v {
+@ __lsm_free sink * Lsm db → v {
     ( string_free . db dir )
     ( string_free . db walpath )
     ( string_free . db manpath )
@@ -427,7 +427,7 @@ next ` )
     ^ it
 }
 
-@ __it_free * LsmIter it → v {
+@ __it_free sink * LsmIter it → v {
     ( vec_free_with [* SstCursor] . it curs \ * SstCursor c → v { ( sc_free c ) } )
     ( string_free . it err )
     ( nurl_free # s it )
@@ -530,7 +530,7 @@ next ` )
     i count
 }
 
-@ lsm_scan_free LsmScan s → v {
+@ lsm_scan_free sink LsmScan s → v {
     ( vec_free [u] . s keys ) ( vec_free [i] . s koff ) ( vec_free [i] . s klen )
     ( vec_free [u] . s vals ) ( vec_free [i] . s voff ) ( vec_free [i] . s vlen )
 }

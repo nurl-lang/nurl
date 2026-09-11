@@ -278,7 +278,7 @@ $ `stdlib/net/udp4.nu`
     ^ c
 }
 
-@ dhcp_client_free * DhcpClient c → v { ( free c ) }
+@ dhcp_client_free sink * DhcpClient c → v { ( free c ) }
 
 @ dhcp_bound * DhcpClient c → b {
     ^ || || == . c state ( dhcp_state_bound ) == . c state ( dhcp_state_renewing ) == . c state ( dhcp_state_rebinding )

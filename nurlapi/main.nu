@@ -2039,7 +2039,7 @@ s combined_stdout s combined_stderr → v {
     ^ found
 }
 
-@ __oauth_pairs_free ( Vec QueryPair ) pairs → v {
+@ __oauth_pairs_free sink ( Vec QueryPair ) pairs → v {
     : i n ( vec_len [QueryPair] pairs )
     : ~ i k 0
     ~ < k n {

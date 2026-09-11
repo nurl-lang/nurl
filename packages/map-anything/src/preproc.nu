@@ -53,7 +53,7 @@ $ `deps/image/src/image.nu`
 
 @ pp_data * Frame fr → *f { ^ ( vec_data [f] . fr data ) }
 
-@ pp_free * Frame fr → v {
+@ pp_free sink * Frame fr → v {
     ( vec_free [f] . fr data )
     ( nurl_free # s fr )
 }

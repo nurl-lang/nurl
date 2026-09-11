@@ -127,7 +127,7 @@ $ `stdlib/ext/http_cli.nu`
     b is_zig
 }
 
-@ wb_compiler_free WbCompiler c → v { ( string_free . c cmd ) }
+@ wb_compiler_free sink WbCompiler c → v { ( string_free . c cmd ) }
 
 // Probe a zig binary: `zig version` must run and exit 0.
 @ __wb_zig_ok s zig → b { ^ ( __wb_runs zig `version` ) }

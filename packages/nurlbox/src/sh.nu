@@ -42,7 +42,7 @@ $ `bx.nu`
 
 @ __shw_new → ShWord { ^ @ ShWord { ( string_new ) ( string_new ) } }
 
-@ __shw_free ShWord w → v {
+@ __shw_free sink ShWord w → v {
     ( string_free . w text )
     ( string_free . w mask )
 }
@@ -88,7 +88,7 @@ $ `bx.nu`
     String op  // for SHT_OP
 }
 
-@ __sht_free ShTok t → v {
+@ __sht_free sink ShTok t → v {
     ( __shw_free . t word )
     ( string_free . t op )
 }
@@ -389,7 +389,7 @@ $ `bx.nu`
     ^ @ ShNode { kind -1 -1 -1 ( vec_new [i] ) ( vec_new [ShWord] ) ( vec_new [ShRedir] ) ( string_new ) }
 }
 
-@ __shn_free ShNode n → v {
+@ __shn_free sink ShNode n → v {
     ( vec_free [i] . n kids )
     ( __shw_free_vec . n words )
     ( vec_free_with [ShRedir] . n redirs \ ShRedir r → v { ( __shw_free . r word ) } )

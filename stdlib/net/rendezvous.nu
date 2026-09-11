@@ -60,7 +60,7 @@ $ `stdlib/std/async.nu`
     i relay_port
 }
 
-@ endpoint_free * Endpoint e → v { ( string_free . e host ) ( nurl_free # s e ) }
+@ endpoint_free sink * Endpoint e → v { ( string_free . e host ) ( nurl_free # s e ) }
 
 @ peer_record_new ( Vec u ) pubkey s relay_host i relay_port → s {
     : *PeerRecord r # *PeerRecord ( nurl_alloc Z PeerRecord )
@@ -80,7 +80,7 @@ $ `stdlib/std/async.nu`
     ( vec_push [s] . r endpoints # s e )
 }
 
-@ peer_record_free * PeerRecord r → v {
+@ peer_record_free sink * PeerRecord r → v {
     ( vec_free [u] . r pubkey )
     : i n ( vec_len [s] . r endpoints )
     : ~ i k 0
@@ -195,7 +195,7 @@ $ `stdlib/std/async.nu`
     ( Vec u ) body
 }
 
-@ rz_frame_free RzFrame fr → v { ( vec_free [u] . fr body ) }
+@ rz_frame_free sink RzFrame fr → v { ( vec_free [u] . fr body ) }
 
 @ __rz_frame i ftype ( Vec u ) body → ( Vec u ) {
     : ( Vec u ) f ( vec_new [u] )
@@ -408,7 +408,7 @@ $ `stdlib/std/async.nu`
 
 @ rz_server_stop * RzServer rs → v { ( tcp_close_listener . rs lst ) }
 
-@ rz_server_free * RzServer rs → v {
+@ rz_server_free sink * RzServer rs → v {
     : i n ( vec_len [s] . rs records )
     : ~ i k 0
     ~ < k n {

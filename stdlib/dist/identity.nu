@@ -70,7 +70,7 @@ $ `stdlib/core/vec.nu`
     ^ r
 }
 
-@ identity_free * IdRegistry r → v {
+@ identity_free sink * IdRegistry r → v {
     : i n ( vec_len [s] . r entries )
     : ~ i k 0
     ~ < k n {

@@ -290,7 +290,7 @@ $ `stdlib/std/thread.nu`
     b creating  // the named model does not exist yet; this call would make it
 }
 
-@ __an_gate_free Gate g → v {
+@ __an_gate_free sink Gate g → v {
     ( principal_free . g who )
 }
 

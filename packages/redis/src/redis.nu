@@ -57,7 +57,7 @@ $ `resp.nu`
 
 @ redis_str_val RedisStr s → s { ^ ( string_data . s val ) }
 
-@ redis_str_free RedisStr s → v { ( string_free . s val ) }
+@ redis_str_free sink RedisStr s → v { ( string_free . s val ) }
 
 // A pub/sub frame. kind: 0 message · 1 subscribe · 2 unsubscribe ·
 // 3 pmessage · 4 psubscribe · 5 punsubscribe · -1 unrecognised.
@@ -84,7 +84,7 @@ $ `resp.nu`
 // subscribe/unsubscribe control frame.
 @ redis_message_is_payload RedisMessage m → b { ^ | == . m kind 0 == . m kind 3 }
 
-@ redis_message_free RedisMessage m → v {
+@ redis_message_free sink RedisMessage m → v {
     ( string_free . m channel ) ( string_free . m pattern ) ( string_free . m payload )
 }
 
@@ -202,7 +202,7 @@ $ `resp.nu`
     : String s ( string_new ) ( string_push_int s n ) ( vec_push [String] v s )
 }
 
-@ redis_args_free ( Vec String ) v → v {
+@ redis_args_free sink ( Vec String ) v → v {
     : i n ( vec_len [String] v )
     : ~ i k 0
     ~ < k n { ?? ( vec_get [String] v k ) { T s → ( string_free s ) F _ → {} } = k + k 1 }

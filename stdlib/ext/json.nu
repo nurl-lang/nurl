@@ -279,7 +279,7 @@ $ `stdlib/core/vec.nu`
     ( vec_free [Json] v )
 }
 
-@ json_free Json j → v {
+@ json_free sink Json j → v {
     ?? j {
         JNull → {}
         JBool _ → {}

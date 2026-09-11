@@ -40,7 +40,7 @@ $ `stdlib/net/noise.nu`
     ^ s
 }
 
-@ session_free * NoiseSession s → v {
+@ session_free sink * NoiseSession s → v {
     ( vec_free [u] . s send_key )
     ( vec_free [u] . s recv_key )
     ( nurl_free # s s )
@@ -51,7 +51,7 @@ $ `stdlib/net/noise.nu`
     ( Vec u ) ct
 }
 
-@ sealed_free Sealed s → v { ( vec_free [u] . s ct ) }
+@ sealed_free sink Sealed s → v { ( vec_free [u] . s ct ) }
 
 @ session_seal * NoiseSession s ( Vec u ) ad ( Vec u ) pt → Sealed {
     : i ctr . s send_n

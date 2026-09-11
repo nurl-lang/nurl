@@ -135,7 +135,7 @@ $ `stdlib/std/bytes.nu`
 
 @ crc32_ctx → Crc32 { ^ @ Crc32 { ( __crc32_table ) } }
 
-@ crc32_ctx_free Crc32 c → v { ( vec_free [i] . c tbl ) }
+@ crc32_ctx_free sink Crc32 c → v { ( vec_free [i] . c tbl ) }
 
 @ crc32_ctx_update Crc32 c i crc0 ( Vec u ) data → i {
     : ~ i crc ^^ crc0 4294967295
@@ -452,7 +452,7 @@ $ `stdlib/std/bytes.nu`
     ( __df_huff_free clcode )
 }
 
-@ __df_huff_free Huff h → v {
+@ __df_huff_free sink Huff h → v {
     ( vec_free [i] . h count )
     ( vec_free [i] . h symbol )
 }

@@ -174,7 +174,7 @@
 // Decrement the strong count. If the count reaches zero, release the
 // storage — but DOES NOT run any per-payload drop. For owned-T
 // payloads use `rc_free_with`.
-@ rc_free [T] ( Rc T ) r → v {
+@ rc_free [T] sink ( Rc T ) r → v {
     : *( RcImpl T ) impl # *( RcImpl T ) . r ctl
     ? == 0 # i impl {} {
         = . impl count - . impl count 1
@@ -185,7 +185,7 @@
 // Decrement the strong count. If it reaches zero, run `drop` on the
 // final value, then release the storage. Use for owned-T payloads:
 //   ( rc_free_with [Config] cfg \ c → v { ( config_free c ) } )
-@ rc_free_with [T] ( Rc T ) r ( @ v T ) drop → v {
+@ rc_free_with [T] sink ( Rc T ) r ( @ v T ) drop → v {
     : *( RcImpl T ) impl # *( RcImpl T ) . r ctl
     ? == 0 # i impl {} {
         = . impl count - . impl count 1

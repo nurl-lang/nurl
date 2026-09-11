@@ -881,7 +881,7 @@ $ `deps/gpu/src/gpu.nu`
     ^ @ WhKernels { k1 k1w k1t k1m warp k2 k2b k3 k4 k5f k5d k5m k5 k6 k7 k8 k9 k12 k13 k10 k11 k14 ok }
 }
 
-@ wk_free WhKernels ks → v {
+@ wk_free sink WhKernels ks → v {
     ( gpu_kernel_free . ks matvec )
     ? . ks warp {
         ( gpu_kernel_free . ks matvec_w )

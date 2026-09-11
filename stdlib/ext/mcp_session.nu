@@ -180,7 +180,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ __mcp_session_free McpSession se → v {
+@ __mcp_session_free sink McpSession se → v {
     ( string_free . se id )
     ( vec_free_with [Json] . se notify \ Json j → v { ( json_free j ) } )
     ( vec_free [i] . se pending_ids )
@@ -560,7 +560,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ mcp_session_store_free McpSessionStore store → v {
+@ mcp_session_store_free sink McpSessionStore store → v {
     : i n ( vec_len [McpSession] . store sessions )
     : ~ i k 0
     ~ < k n {

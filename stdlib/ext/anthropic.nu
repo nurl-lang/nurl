@@ -1331,7 +1331,7 @@ i thinking_budget
     ^ ( __claude_usage_int r `cache_read_input_tokens` )
 }
 
-@ claude_response_free Json r → v {
+@ claude_response_free sink Json r → v {
     ( json_free r )
 }
 

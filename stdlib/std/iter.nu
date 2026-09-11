@@ -84,7 +84,7 @@ $ `stdlib/core/pair.nu`
 // Use only when you abandon a chain mid-stream without running it
 // through a consumer. Consumers all call cmd=1 internally.
 
-@ iter_free [A] ( @ ?A i ) src → v {
+@ iter_free [A] sink ( @ ?A i ) src → v {
     ( src 1 )
 }
 

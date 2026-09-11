@@ -128,7 +128,7 @@ $ `stdlib/core/vec.nu`
     ^ @ Metrics { v }
 }
 
-@ metrics_free Metrics m → v {
+@ metrics_free sink Metrics m → v {
     ( vec_free [i] . m counters )
 }
 

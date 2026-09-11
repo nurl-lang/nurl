@@ -48,7 +48,7 @@ $ `stdlib/std/pkey.nu`
     b ok  // parse success
 }
 
-@ csr_free Csr c → v {
+@ csr_free sink Csr c → v {
     ( vec_free [u] . c req_info )
     ( vec_free [u] . c sig )
     ( vec_free [u] . c pubkey )
@@ -68,7 +68,7 @@ $ `stdlib/std/pkey.nu`
 
 : __CsrNames { String cn String org String country }
 
-@ __csr_names_free __CsrNames n → v {
+@ __csr_names_free sink __CsrNames n → v {
     ( string_free . n cn )
     ( string_free . n org )
     ( string_free . n country )

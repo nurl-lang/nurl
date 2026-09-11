@@ -364,7 +364,7 @@ $ `stdlib/core/vec.nu`
 
 // Release owned token slices and the backing vec. EOF borrows a literal;
 // it is not an allocation and must never be passed to nurl_free.
-@ tokens_free ( Vec FmtTok ) toks → v {
+@ tokens_free sink ( Vec FmtTok ) toks → v {
     : i n ( vec_len [FmtTok] toks )
     : ~ i i 0
     ~ < i n {

@@ -143,7 +143,7 @@ $ `stdlib/ext/http_cli.nu`
     String latest
 }
 
-@ __uc_cache_free UcCache c → v { ( string_free . c latest ) }
+@ __uc_cache_free sink UcCache c → v { ( string_free . c latest ) }
 
 @ __uc_read_cache s path i now → UcCache {
     : ~ b fresh F
@@ -236,9 +236,10 @@ $ `stdlib/ext/http_cli.nu`
     : String cp ( __uc_cache_path )
     : UcCache c ( __uc_read_cache ( string_data cp ) now )
     : ~ String latest ( string_from ( string_data . c latest ) )
+    : b fresh . c fresh
     ( __uc_cache_free c )
 
-    ? . c fresh {} {
+    ? fresh {} {
         // one probe per day; record the outcome either way so a persistent
         // failure does not re-probe on every run
         ?? ( __uc_fetch_latest ) {

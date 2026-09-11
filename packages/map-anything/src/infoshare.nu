@@ -65,7 +65,7 @@ $ `src/load.nu`
     ( Vec f ) scaletok  // [1536] host — placed once per run
 }
 
-@ is_free InfoShare ish → v {
+@ is_free sink InfoShare ish → v {
     ( vec_free_with [MaBlk] . ish blocks \ MaBlk b → v { ( ma_blk_free b ) } )
     ( gk_dbuf_free . ish normg ) ( gk_dbuf_free . ish normb )
     ( gk_dbuf_free . ish fng ) ( gk_dbuf_free . ish fnb )

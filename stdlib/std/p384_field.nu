@@ -112,7 +112,7 @@ $ `stdlib/std/bytes.nu`
     }
 }
 
-@ __p384_scr_free P384Scr s → v {
+@ __p384_scr_free sink P384Scr s → v {
     ( vec_free [i] . s md ) ( vec_free [i] . s r2 )
     ( vec_free [i] . s acc ) ( vec_free [i] . s diff )
     ( vec_free [i] . s g0 ) ( vec_free [i] . s g1 ) ( vec_free [i] . s g2 )
@@ -402,7 +402,7 @@ $ `stdlib/std/bytes.nu`
     ^ @ P384Pt { ( _mag6 ) ( _mag6 ) ( _mag6 ) }
 }
 
-@ __p384_pt_free P384Pt p → v {
+@ __p384_pt_free sink P384Pt p → v {
     ( vec_free [i] . p x ) ( vec_free [i] . p y ) ( vec_free [i] . p z )
 }
 

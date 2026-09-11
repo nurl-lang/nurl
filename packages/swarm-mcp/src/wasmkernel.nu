@@ -169,7 +169,7 @@ $ `token.nu`
     ( Vec u ) wasm
 }
 
-@ gpu_chunk_free GpuChunk c → v {
+@ gpu_chunk_free sink GpuChunk c → v {
     ( vec_free [i] . c params )
     ( vec_free [u] . c data )
     ( blob_manifest_free . c blobs )

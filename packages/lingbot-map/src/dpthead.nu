@@ -80,7 +80,7 @@ $ `src/load.nu`
     ^ @ DpConv { w @ GkBuf { 0 0 GK_F32 } 0 }
 }
 
-@ __dp_conv_free DpConv c → v {
+@ __dp_conv_free sink DpConv c → v {
     ( gk_dbuf_free . c w )
     ? == . c hasb 1 { ( gk_dbuf_free . c b ) } {}
 }
@@ -176,9 +176,9 @@ $ `src/load.nu`
         ( __dp_conv lw kit `depth_head.scratch.output_conv2.` `2` T ) }
 }
 
-@ __dp_rcu_free DpRcu r → v { ( __dp_conv_free . r c1 ) ( __dp_conv_free . r c2 ) }
+@ __dp_rcu_free sink DpRcu r → v { ( __dp_conv_free . r c1 ) ( __dp_conv_free . r c2 ) }
 
-@ dp_free Dpt d → v {
+@ dp_free sink Dpt d → v {
     ( gk_dbuf_free . d normg ) ( gk_dbuf_free . d normb )
     ( vec_free_with [DpPe] . d pecache \ DpPe e → v { ( gk_dbuf_free . e pe ) } )
     ( vec_free_with [DpConv] . d projects \ DpConv c → v { ( __dp_conv_free c ) } )

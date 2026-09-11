@@ -70,7 +70,7 @@ $ `deps/tensor/src/tensor.nu`
 
 @ opt_adam_new f lr → *Opt { ^ ( _opt_new 1 lr ) }
 
-@ opt_free * Opt o → v {
+@ opt_free sink * Opt o → v {
     ( vec_free [i] . o ids )
     ( vec_free [f] . o alphas )
     ( vec_free [i] . o offs )

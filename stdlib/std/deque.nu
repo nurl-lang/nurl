@@ -158,14 +158,14 @@
     ( nurl_poke . d ctl 3 0 )
 }
 
-@ deque_free [A] ( Deque A ) d → v {
+@ deque_free [A] sink ( Deque A ) d → v {
     : s ctl . d ctl
     : s buf # s ( nurl_peek ctl 0 )
     ? != 0 # i buf { ( nurl_free buf ) } {}
     ( nurl_free ctl )
 }
 
-@ deque_free_with [A] ( Deque A ) d ( @ v A ) drop → v {
+@ deque_free_with [A] sink ( Deque A ) d ( @ v A ) drop → v {
     : s ctl . d ctl
     : i len ( nurl_peek ctl 3 )
     : i cap ( nurl_peek ctl 1 )

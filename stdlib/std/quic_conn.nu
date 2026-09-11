@@ -117,7 +117,7 @@ $ `stdlib/std/quic_recovery.nu`
     = . k pq_level pq_level
 }
 
-@ quic_creds_free * QuicCreds k → v {
+@ quic_creds_free sink * QuicCreds k → v {
     ? == # i k 0 { ^ } {}
     ( vec_free [u] . k cert_chain ) ( vec_free [u] . k ec_priv )
     ( vec_free [u] . k rsa_n ) ( vec_free [u] . k rsa_e ) ( vec_free [u] . k rsa_d )
@@ -180,7 +180,7 @@ $ `stdlib/std/quic_recovery.nu`
     ^ s
 }
 
-@ __qc_stream_free * QuicStream s → v {
+@ __qc_stream_free sink * QuicStream s → v {
     ( quic_rxbuf_free . s rx )
     ( vec_free [u] . s tx_buf )
     ( nurl_free # s s )
@@ -488,7 +488,7 @@ $ `stdlib/std/quic_recovery.nu`
     ^ c
 }
 
-@ quic_conn_free * QuicConn c → v {
+@ quic_conn_free sink * QuicConn c → v {
     ? == # i c 0 { ^ } {}
     ( vec_free [u] . c scid ) ( vec_free [u] . c dcid ) ( vec_free [u] . c odcid )
     ( vec_free [u] . c peer ) ( vec_free [u] . c cids ) ( vec_free [i] . c cid_seqs )

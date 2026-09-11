@@ -29,7 +29,7 @@ $ `stdlib/core/vec.nu`
     ( Vec u ) bytes
 }
 
-@ sim_msg_free * SimMsg m → v { ( vec_free [u] . m bytes ) ( nurl_free # s m ) }
+@ sim_msg_free sink * SimMsg m → v { ( vec_free [u] . m bytes ) ( nurl_free # s m ) }
 
 : SimNet {
     ( Vec s ) inflight  // *SimMsg, not yet delivered
@@ -61,7 +61,7 @@ $ `stdlib/core/vec.nu`
     ^ net
 }
 
-@ sim_net_free * SimNet net → v {
+@ sim_net_free sink * SimNet net → v {
     : i m ( vec_len [s] . net inflight )
     : ~ i k 0
     ~ < k m { : s pp ?? ( vec_get [s] . net inflight k ) { T x → x F → # s 0 } ? != # i pp 0 { ( sim_msg_free # *SimMsg pp ) } {} = k + k 1 }

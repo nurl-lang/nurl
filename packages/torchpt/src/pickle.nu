@@ -171,7 +171,7 @@ $ `stdlib/std/floatbits.nu`
     ^ k
 }
 
-@ pk_free * Pk k → v {
+@ pk_free sink * Pk k → v {
     ( vec_free [i] . k kind )
     ( vec_free [i] . k va )
     ( vec_free [i] . k vb )

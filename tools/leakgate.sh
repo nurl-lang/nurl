@@ -38,7 +38,7 @@ if (( $# > 1 )); then
     echo 'usage: tools/leakgate.sh [source.nu]' >&2
     exit 2
 fi
-sources=("$ROOT/compiler/nurlc.nu" "$ROOT/compiler/tests/enum_tree_drop.nu" "$ROOT/compiler/tests/nested_field_store.nu")
+sources=("$ROOT/compiler/nurlc.nu" "$ROOT/compiler/tests/enum_tree_drop.nu" "$ROOT/compiler/tests/nested_field_store.nu" "$ROOT/compiler/tests/enum_nested_tag_payload.nu" "$ROOT/compiler/tests/sink_enum_owned.nu" "$ROOT/compiler/tests/sink_summary_storage.nu")
 if (( $# == 1 )); then sources=("$1"); fi
 
 [ -x "$NURLC" ] || { echo "leakgate: $NURLC missing — run ./build.sh --san --no-tests first" >&2; exit 2; }
@@ -76,6 +76,7 @@ run_gate() {  # run_gate <label> [nurlc flags...]
 
     # exitcode=23 is LSan's own convention for "leaks were found"; spelling it
     # out keeps the verdict readable when a future ASan default changes.
+    LSAN_OPTIONS="${LSAN_OPTIONS:+${LSAN_OPTIONS}:}use_stacks=0" \
     ASAN_OPTIONS="detect_leaks=1:exitcode=23:abort_on_error=0:halt_on_error=0:print_stacktrace=1" \
     UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=0" \
         "$NURLC" "$@" "$SRC" > "$ir" 2> "$err"

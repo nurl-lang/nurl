@@ -258,7 +258,7 @@
 
 // ── Cleanup ─────────────────────────────────────────────────────────
 
-@ set_free [E] ( Set E ) st → v {
+@ set_free [E] sink ( Set E ) st → v {
     : s ctl . st ctl
     : s keys ( __set_keys_raw ctl )
     : s states ( __set_states_raw ctl )
@@ -269,7 +269,7 @@
 
 // Drop-aware free: invoke `drop` for every live element before
 // releasing the buffers. Use for Set[String] etc.
-@ set_free_with [E] ( Set E ) st ( @ v E ) drop → v {
+@ set_free_with [E] sink ( Set E ) st ( @ v E ) drop → v {
     ( set_each [E] st drop )
     ( set_free [E] st )
 }

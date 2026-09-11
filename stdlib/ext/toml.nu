@@ -62,7 +62,7 @@ $ `stdlib/std/float.nu`
 
 // ── Memory (cascading free) ──────────────────────────────────────
 
-@ toml_value_free TomlValue v → v {
+@ toml_value_free sink TomlValue v → v {
     ?? v {
         TStr s → ( string_free s )
         TInt _ → {}

@@ -82,7 +82,7 @@ $ `stdlib/std/lifeguard.nu`
     ^ t
 }
 
-@ pktable_free * PkMemberTable t → v {
+@ pktable_free sink * PkMemberTable t → v {
     ( vec_free [u] . t self_pk )
     : i n ( vec_len [s] . t members )
     : ~ i k 0
@@ -284,7 +284,7 @@ $ `stdlib/std/lifeguard.nu`
 
 // Free only the container returned by pktable_sweep (members stay owned by
 // the table).
-@ _pk_dead_free ( Vec s ) dead → v { ( vec_free [s] dead ) }
+@ _pk_dead_free sink ( Vec s ) dead → v { ( vec_free [s] dead ) }
 
 // Round-robin pick an alive member to probe (its pubkey, copied). None if no
 // alive members. Advances the cursor.
@@ -347,7 +347,7 @@ $ `stdlib/std/lifeguard.nu`
     ( Vec s ) gossip  // *PkMember snapshots piggybacked
 }
 
-@ pkmsg_free PkMsg m → v {
+@ pkmsg_free sink PkMsg m → v {
     ( vec_free [u] . m target )
     : i n ( vec_len [s] . m gossip )
     : ~ i k 0

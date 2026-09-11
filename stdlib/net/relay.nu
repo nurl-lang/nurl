@@ -93,7 +93,7 @@ $ `stdlib/std/async.nu`
     ( Vec u ) body
 }
 
-@ relay_frame_free RelayFrame fr → v { ( vec_free [u] . fr body ) }
+@ relay_frame_free sink RelayFrame fr → v { ( vec_free [u] . fr body ) }
 
 @ __frame i ftype ( Vec u ) body → ( Vec u ) {
     : ( Vec u ) f ( vec_new [u] )
@@ -513,7 +513,7 @@ $ `stdlib/std/async.nu`
 
 @ relay_server_stop * RelayServer rs → v { ( tcp_close_listener . rs lst ) }
 
-@ relay_server_free * RelayServer rs → v {
+@ relay_server_free sink * RelayServer rs → v {
     : i n ( vec_len [s] . rs clients )
     : ~ i k 0
     ~ < k n {
@@ -555,7 +555,7 @@ $ `stdlib/std/async.nu`
     ( Vec u ) payload
 }
 
-@ relay_msg_free RelayMsg m → v { ( vec_free [u] . m src ) ( vec_free [u] . m payload ) }
+@ relay_msg_free sink RelayMsg m → v { ( vec_free [u] . m src ) ( vec_free [u] . m payload ) }
 
 @ relay_dial s host i port → !RelayClient NetErr {
     : i raw ( nurl_tcp_connect host port )

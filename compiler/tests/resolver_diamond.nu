@@ -37,11 +37,18 @@ $ `stdlib/ext/resolver.nu`
     ^ ( string_new )
 }
 
+@ fetch_index s registry s name → !RegIndex RegistryFetchErr {
+    : String text ( idx_for name )
+    ? == ( string_len text ) 0 { ( string_free text ) ^ @ !RegIndex RegistryFetchErr { F RegistryNotFound } } {}
+    : !RegIndex RegistryFetchErr result ( registry_index_decode name text )
+    ( string_free text ) ^ result
+}
+
 @ reg_dep s name s req → Dep {
     ^ @ Dep { ( string_from name ) ( string_new ) ( string_from req ) ( string_new ) }
 }
 
-@ deps_free ( Vec Dep ) v → v {
+@ deps_free sink ( Vec Dep ) v → v {
     : i n ( vec_len [Dep] v )
     : ~ i k 0
     ~ < k n {
@@ -53,7 +60,7 @@ $ `stdlib/ext/resolver.nu`
 }
 
 @ main → i {
-    : ( @ String s s ) fetch \ s registry s name → String { ^ ( idx_for name ) }
+    : ( @ !RegIndex RegistryFetchErr s s ) fetch \ s registry s name → !RegIndex RegistryFetchErr { ^ ( fetch_index registry name ) }
 
     // Satisfiable diamond → c 1.4.0.
     ( nurl_print `── diamond ──\n` )
@@ -62,7 +69,7 @@ $ `stdlib/ext/resolver.nu`
     ( vec_push [Dep] roots ( reg_dep `b` `^1.0` ) )
     : !( Vec LockPkg ) ResolveErr rr ( resolve_registry roots `https://reg/` fetch )
     ?? rr {
-        F e → { ( nurl_print ( resolve_err_name e ) ) ( nurl_print `\n` ) }
+        F e → { ( nurl_print ( resolve_err_name e ) ) ( resolve_err_free e ) ( nurl_print `\n` ) }
         T locked → {
             : String text ( lock_serialize locked )
             ( nurl_print ( string_data text ) )
@@ -79,7 +86,7 @@ $ `stdlib/ext/resolver.nu`
     ( vec_push [Dep] r2 ( reg_dep `bx` `^1.0` ) )
     : !( Vec LockPkg ) ResolveErr rr2 ( resolve_registry r2 `https://reg/` fetch )
     ?? rr2 {
-        F e → { ( nurl_print ( resolve_err_name e ) ) ( nurl_print `\n` ) }
+        F e → { ( nurl_print ( resolve_err_name e ) ) ( resolve_err_free e ) ( nurl_print `\n` ) }
         T l → { ( nurl_print `ok(bug)\n` ) ( lockpkgs_free l ) }
     }
     ( deps_free r2 )

@@ -98,7 +98,7 @@ $ `stdlib/ext/http3_server.nu`
     ^ a
 }
 
-@ http_app_free * HttpApp a → v {
+@ http_app_free sink * HttpApp a → v {
     ( router_free . a router )
     ( string_free . a webroot )
     ( string_free . a pq_cert )

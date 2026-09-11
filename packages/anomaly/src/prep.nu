@@ -297,7 +297,7 @@ $ `stdlib/ext/json.nu`
     ^ vs
 }
 
-@ _an_vercfg_free VerCfg vc → v {
+@ _an_vercfg_free sink VerCfg vc → v {
     ( string_free . vc vname )
 }
 
@@ -373,7 +373,7 @@ $ `stdlib/ext/json.nu`
     ^ m
 }
 
-@ meta_free * Meta m → v {
+@ meta_free sink * Meta m → v {
     ( string_free . m name )
     ( string_free . m created )
     ( string_free . m alias )
@@ -646,7 +646,7 @@ $ `stdlib/ext/json.nu`
 
 // ── Preprocessing ─────────────────────────────────────────────────────
 
-@ enc_free EncPoint p → v {
+@ enc_free sink EncPoint p → v {
     ( vec_free_with [String] . p names \ String x → v { ( string_free x ) } )
     ( vec_free [f] . p vals )
 }
@@ -1200,7 +1200,7 @@ $ `stdlib/ext/json.nu`
     }
 }
 
-@ scaler_free Scaler sc → v {
+@ scaler_free sink Scaler sc → v {
     ( vec_free [f] . sc mean )
     ( vec_free [f] . sc inv_std )
 }

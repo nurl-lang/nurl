@@ -583,7 +583,7 @@
 
 // ── Cleanup ─────────────────────────────────────────────────────────
 
-@ vec_free [A] ( Vec A ) v → v {
+@ vec_free [A] sink ( Vec A ) v → v {
     : s ctl . v ctl
     : s data ( __vec_data_raw ctl )
     // A borrowed view (vec_borrow_raw) never owned its buffer: release
@@ -603,7 +603,7 @@
 // (`string_free`, nested `vec_free`, `map_free`, …). For trivial
 // element types use the bare `vec_free` instead — calling
 // `vec_free_with` with a no-op closure works but is wasteful.
-@ vec_free_with [A] ( Vec A ) v ( @ v A ) drop → v {
+@ vec_free_with [A] sink ( Vec A ) v ( @ v A ) drop → v {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     : s data ( __vec_data_raw ctl )

@@ -96,7 +96,7 @@ $ `stdlib/ext/json.nu`
     }
 }
 
-@ http_response_free HttpResponse r → v {
+@ http_response_free sink HttpResponse r → v {
     ( vec_free_with [Header] . r headers \ Header h → v { ( header_free h ) } )
     ( vec_free [u] . r body )
 }

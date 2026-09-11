@@ -137,7 +137,7 @@ $ `src/store.nu`
     ^ ( store_load_audit . mo store ( string_data . mo mname ) limit )
 }
 
-@ verdict_free Verdict vd → v {
+@ verdict_free sink Verdict vd → v {
     ( vec_free_with [VerVerdict] . vd versions \ VerVerdict vv → v { ( string_free . vv vvname ) } )
 }
 
@@ -422,7 +422,7 @@ $ `src/store.nu`
     ^ ( now_seconds )
 }
 
-@ model_free * Model mo → v {
+@ model_free sink * Model mo → v {
     ( __an_free_forests mo )
     ( vec_free [VerModel] . mo forests )
     ( __an_free_lines . mo lines )
@@ -541,7 +541,7 @@ $ `src/store.nu`
     ( Vec i ) fc_ok  // 1 where the row has forecast z-scores
 }
 
-@ __an_hist_free * Hist h → v {
+@ __an_hist_free sink * Hist h → v {
     ? == # i h 0 { ^ } {}
     ( vec_free [f] . h x )
     ( vec_free [i] . h ok )
@@ -2550,7 +2550,7 @@ $ `src/store.nu`
     ( Vec String ) notes
 }
 
-@ import_report_free ImportReport r → v {
+@ import_report_free sink ImportReport r → v {
     ( string_free . r err )
     ( vec_free_with [String] . r notes \ String s → v { ( string_free s ) } )
 }
@@ -2764,7 +2764,7 @@ $ `src/store.nu`
     i excluded  // rows in the window left out: labelled false positives
 }
 
-@ cal_free CalReport rep → v {
+@ cal_free sink CalReport rep → v {
     ( vec_free_with [CalVer] . rep items \ CalVer x → v {
         ( string_free . x cvname )
         ( vec_free [f] . x dfs )
@@ -3141,7 +3141,7 @@ $ `src/store.nu`
     ( vec_free_with [String] only \ String x → v { ( string_free x ) } )
 }
 
-@ finetune_free FineTuneReport rep → v {
+@ finetune_free sink FineTuneReport rep → v {
     ( vec_free_with [FtVer] . rep items \ FtVer x → v { ( string_free . x ftname ) ( string_free . x warning ) } )
     ( string_free . rep note )
 }
@@ -3586,7 +3586,7 @@ $ `src/store.nu`
     Json notes  // strings: what could not be done, and why
 }
 
-@ whole_train_free WholeTrain w → v {
+@ whole_train_free sink WholeTrain w → v {
     ( json_free . w margins )
     ( json_free . w notes )
 }
@@ -3784,12 +3784,12 @@ $ `src/store.nu`
     ^ @ ScanRuns { runs run_of }
 }
 
-@ scan_runs_free ScanRuns sr → v {
+@ scan_runs_free sink ScanRuns sr → v {
     ( vec_free [ScanRun] . sr runs )
     ( vec_free [i] . sr run_of )
 }
 
-@ scan_free ScanOut so → v {
+@ scan_free sink ScanOut so → v {
     ( vec_free [ScoredPt] . so pts )
     ( vec_free_with [String] . so vnames \ String x → v { ( string_free x ) } )
 }
@@ -4120,7 +4120,7 @@ $ `src/store.nu`
     f ac_expected
 }
 
-@ ae_contrib_free ( Vec AeContrib ) xs → v {
+@ ae_contrib_free sink ( Vec AeContrib ) xs → v {
     ( vec_free_with [AeContrib] xs \ AeContrib c → v { ( string_free . c ac_name ) } )
 }
 

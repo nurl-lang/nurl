@@ -174,6 +174,6 @@
 // ── Lifecycle ────────────────────────────────────────────────────────
 
 // Release the generator's state. The handle is dead afterwards.
-@ rng_free Rng g → v {
+@ rng_free sink Rng g → v {
     ( nurl_free # *u . g ctl )
 }

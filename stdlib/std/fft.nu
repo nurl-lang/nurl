@@ -374,7 +374,7 @@ $ `stdlib/std/float.nu`
     ^ p
 }
 
-@ fft_free * FftPlan p → v {
+@ fft_free sink * FftPlan p → v {
     ? != . p half 0 { ( fft_free # *FftPlan . p half ) } {}
     ( vec_free [f] . p hre )
     ( vec_free [f] . p him )

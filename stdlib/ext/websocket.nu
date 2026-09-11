@@ -243,11 +243,11 @@ $ `stdlib/ext/compress.nu`
 
 // ── Free helpers ─────────────────────────────────────────────────────
 
-@ ws_frame_free WsFrame f → v { ( vec_free [u] . f payload ) }
+@ ws_frame_free sink WsFrame f → v { ( vec_free [u] . f payload ) }
 
-@ ws_message_free WsMessage m → v { ( vec_free [u] . m payload ) }
+@ ws_message_free sink WsMessage m → v { ( vec_free [u] . m payload ) }
 
-@ ws_close_info_free WsCloseInfo c → v { ( string_free . c reason ) }
+@ ws_close_info_free sink WsCloseInfo c → v { ( string_free . c reason ) }
 
 // ── Handshake (RFC 6455 §4) ───────────────────────────────────────────
 
@@ -1680,7 +1680,7 @@ $ `stdlib/ext/compress.nu`
     String path
 }
 
-@ ws_url_free WsUrl u → v {
+@ ws_url_free sink WsUrl u → v {
     ( string_free . u host )
     ( string_free . u path )
 }
@@ -1997,7 +1997,7 @@ $ `stdlib/ext/compress.nu`
     }
 }
 
-@ ws_deflate_free WsDeflate d → v {
+@ ws_deflate_free sink WsDeflate d → v {
     ( raw_deflate_free . d deflater )
     ( raw_inflate_free . d inflater )
 }

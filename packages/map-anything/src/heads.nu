@@ -52,7 +52,7 @@ $ `src/load.nu`
     ^ l
 }
 
-@ __ph_lin_free PhLin l → v { ( gk_dbuf_free . l w ) ( gk_dbuf_free . l b ) }
+@ __ph_lin_free sink PhLin l → v { ( gk_dbuf_free . l w ) ( gk_dbuf_free . l b ) }
 
 // y[m, n] = x[m, k] · w + b, the shape every layer here is.
 @ __ph_gemm * GpuKit kit GkBuf y GkBuf x PhLin l i m i n i k → b {
@@ -93,7 +93,7 @@ $ `src/load.nu`
         ( __ph_lin lw kit `pose_head.fc_rot` 4 PH_HID ) }
 }
 
-@ ph_free PoseH p → v {
+@ ph_free sink PoseH p → v {
     ( __ph_lin_free . p proj )
     ( vec_free_with [PhLin] . p res \ PhLin l → v { ( __ph_lin_free l ) } )
     ( __ph_lin_free . p mlp0 )
@@ -203,7 +203,7 @@ $ `src/load.nu`
         ( __ph_lin lw kit `scale_head.output_proj` 1 SH_HID ) }
 }
 
-@ sh_free ScaleH s → v {
+@ sh_free sink ScaleH s → v {
     ( __ph_lin_free . s proj )
     ( __ph_lin_free . s m0 )
     ( __ph_lin_free . s m1 )

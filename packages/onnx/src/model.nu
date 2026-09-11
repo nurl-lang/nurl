@@ -340,13 +340,13 @@ $ `pb.nu`
 // every initializer (name, dims, host data buffer), and the graph's
 // input/output name strings. The OGraph value itself is by-value — after
 // graph_free it must not be used again.
-@ __attr_free OAttr a → v {
+@ __attr_free sink OAttr a → v {
     ( string_free . a name )
     ( string_free . a s )
     ( vec_free [i] . a ints )
 }
 
-@ __node_free ONode n → v {
+@ __node_free sink ONode n → v {
     ( string_free . n op_type )
     ( vec_free_with [String] . n inputs \ String x → v { ( string_free x ) } )
     ( vec_free_with [String] . n outputs \ String x → v { ( string_free x ) } )
@@ -359,13 +359,13 @@ $ `pb.nu`
     ( vec_free [OAttr] . n attrs )
 }
 
-@ __otensor_free OTensor t → v {
+@ __otensor_free sink OTensor t → v {
     ( string_free . t name )
     ( vec_free [i] . t dims )
     ? != . t host 0 { ( nurl_free # *u . t host ) } {}
 }
 
-@ graph_free OGraph g → v {
+@ graph_free sink OGraph g → v {
     : i nn ( vec_len [ONode] . g nodes )
     : ~ i k 0
     ~ < k nn {

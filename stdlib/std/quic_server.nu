@@ -60,7 +60,7 @@ $ `stdlib/std/quic_conn.nu`
     ^ s
 }
 
-@ quic_server_free * QuicServer s → v {
+@ quic_server_free sink * QuicServer s → v {
     ? == # i s 0 { ^ } {}
     : ~ i k 0
     ~ < k ( vec_len [i] . s conns ) {

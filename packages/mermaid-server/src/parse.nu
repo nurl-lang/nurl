@@ -51,7 +51,7 @@ $ `graph.nu`
     ^ ps
 }
 
-@ __mmd_parser_free * MmdParser ps → v {
+@ __mmd_parser_free sink * MmdParser ps → v {
     ( string_free . ps err )
     ( nurl_free # s ps )
 }
@@ -595,7 +595,7 @@ $ `graph.nu`
     i col
 }
 
-@ mmd_parse_result_free MmdParseResult r → v {
+@ mmd_parse_result_free sink MmdParseResult r → v {
     ( mmd_graph_free . r graph )
     ( string_free . r message )
 }

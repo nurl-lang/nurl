@@ -261,7 +261,7 @@ $ `bx.nu`
     ^ F
 }
 
-@ __cut_free CutList c → v {
+@ __cut_free sink CutList c → v {
     ( vec_free [i] . c lo )
     ( vec_free [i] . c hi )
 }

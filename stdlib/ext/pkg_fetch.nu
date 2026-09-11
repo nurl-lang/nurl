@@ -12,7 +12,7 @@
 // package stack: http (binary body) + hash + compress + tar.
 //
 // API:
-//   ( pkg_fetch_index registry name )                       → String  ("" on miss)
+//   ( pkg_fetch_index registry name )                       → !RegIndex RegistryFetchErr
 //   ( pkg_install_one registry name version checksum dest )  → ! i PkgFetchErr  (0 = ok)
 //   ( pkg_err_name e )                                       → s
 
@@ -25,7 +25,7 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/ext/http_cli.nu`
 $ `stdlib/ext/compress.nu`
 $ `stdlib/ext/tar.nu`
-$ `stdlib/ext/registry_index.nu`
+$ `stdlib/ext/registry_fetch.nu`
 $ `stdlib/ext/registry_trust.nu`
 $ `stdlib/ext/lockfile.nu`
 $ `stdlib/ext/manifest.nu`
@@ -56,18 +56,6 @@ $ `stdlib/ext/manifest.nu`
     }
 }
 
-// <registry>/index/<name>.json  (single '/' separator ensured)
-@ __pkg_index_url s registry s name → String {
-    : String out ( string_with_cap 80 )
-    ( string_push_str out registry )
-    : i rn ( nurl_str_len registry )
-    ? > rn 0 { ? != ( nurl_str_get registry - rn 1 ) 47 { ( string_push_char out 47 ) } {} } {}
-    ( string_push_str out `index/` )
-    ( string_push_str out name )
-    ( string_push_str out `.json` )
-    ^ out
-}
-
 // dest + '/' + name
 @ __pkg_join s dest s name → String {
     : String out ( string_with_cap + + ( nurl_str_len dest ) ( nurl_str_len name ) 2 )
@@ -77,56 +65,27 @@ $ `stdlib/ext/manifest.nu`
     ^ out
 }
 
-// GET the index JSON; returns the body, or "" on any non-200 / transport
-// failure (the resolver treats "" as not-found).
-@ pkg_fetch_index s registry s name → String {
-    ? ! ( registry_name_valid name ) { ^ ( string_new ) } {}
-    : String url ( __pkg_index_url registry name )
-    : !HttpcResp HttpcErr rr ( httpc_get ( string_data url ) )
-    ?? rr {
+// A successful response is decoded once and bound to the requested identity.
+// Library code returns errors without printing; callers decide how to report.
+@ pkg_fetch_index s registry s name → !RegIndex RegistryFetchErr {
+    ? ! ( registry_name_valid name ) { ^ @ !RegIndex RegistryFetchErr { F RegistryBadIdentity } } {}
+    : String url ( registry_index_url registry name )
+    : !HttpcResp HttpcErr response ( httpc_get ( string_data url ) )
+    ( string_free url )
+    ?? response {
+        F error → { ^ @ !RegIndex RegistryFetchErr { F @ RegistryFetchErr { RegistryTransport error } } }
         T resp → {
-            : ~ String out ( string_new )
-            : i st ( httpc_status resp )
-            ? == st 200 {
-                ( string_free out )
-                = out ( string_from_bytes # *u ( httpc_body_str resp ) . resp blen )
-            } {
-                // 404 is the registry's honest "no such package" and stays
-                // silent; anything else is the registry misbehaving and
-                // must not be reported downstream as a missing package.
-                ? != st 404 {
-                    ( nurl_eprint `nurlpkg: registry returned HTTP ` )
-                    : String ss ( string_new )
-                    ( string_push_int ss st )
-                    ( nurl_eprint ( string_data ss ) )
-                    ( string_free ss )
-                    ( nurl_eprint ` for ` )
-                    ( nurl_eprint ( string_data url ) )
-                    ( nurl_eprint `\n` )
-                } {}
-            }
+            : i status ( httpc_status resp )
+            ? != status 200 {
+                ( httpc_resp_free resp )
+                ? == status 404 { ^ @ !RegIndex RegistryFetchErr { F RegistryNotFound } } {}
+                ^ @ !RegIndex RegistryFetchErr { F @ RegistryFetchErr { RegistryHttp status } }
+            } {}
+            : String text ( string_from_bytes # *u ( httpc_body_str resp ) . resp blen )
             ( httpc_resp_free resp )
-            ( string_free url )
-            ^ out
-        }
-        F e → {
-            // A TRANSPORT failure — no bytes ever moved. Say so, with the
-            // failing URL: on Windows this was a dead temp-dir path being
-            // reported as "package not found" with zero network calls.
-            ( nurl_eprint `nurlpkg: registry request FAILED (` )
-            ( nurl_eprint ?? e {
-                HttpcConnect → `connect`
-                HttpcTimeout → `timeout`
-                HttpcTls → `tls`
-                HttpcDns → `dns`
-                HttpcInvalidUrl → `bad url`
-                HttpcOther → `transport — is curl on PATH, and is the temp dir writable?`
-            } )
-            ( nurl_eprint `) for ` )
-            ( nurl_eprint ( string_data url ) )
-            ( nurl_eprint `\n` )
-            ( string_free url )
-            ^ ( string_new )
+            : !RegIndex RegistryFetchErr result ( registry_index_decode name text )
+            ( string_free text )
+            ^ result
         }
     }
 }

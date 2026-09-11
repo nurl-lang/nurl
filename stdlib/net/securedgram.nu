@@ -133,7 +133,7 @@ $ `stdlib/net/session.nu`
 
 @ __sdg_max_partials → i { ^ 4 }
 
-@ __partial_free * Partial q → v {
+@ __partial_free sink * Partial q → v {
     : i n ( vec_len [s] . q chunks )
     : ~ i k 0
     ~ < k n {
@@ -415,7 +415,7 @@ $ `stdlib/net/session.nu`
     ( Vec u ) data
 }
 
-@ recvdata_free RecvData r → v {
+@ recvdata_free sink RecvData r → v {
     ( vec_free [u] . r peer_pubkey )
     ( vec_free [u] . r data )
 }
@@ -572,7 +572,7 @@ $ `stdlib/net/session.nu`
     }
 }
 
-@ __peer_free * PeerState p → v {
+@ __peer_free sink * PeerState p → v {
     : i qn ( vec_len [s] . p partials )
     : ~ i qk 0
     ~ < qk qn {

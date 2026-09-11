@@ -18,7 +18,7 @@ $ `stdlib/core/string.nu`
     ( Vec String ) headers
 }
 
-@ anom_csv_free AnomCsv ds → v {
+@ anom_csv_free sink AnomCsv ds → v {
     ( vec_free [f] . ds data )
     ( vec_free_with [String] . ds headers \ String x → v { ( string_free x ) } )
 }

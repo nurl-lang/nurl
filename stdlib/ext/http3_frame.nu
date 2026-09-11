@@ -94,7 +94,7 @@ $ `stdlib/std/quic_varint.nu`
     i head_len
 }
 
-@ h3_frame_head_free * H3FrameHead h → v {
+@ h3_frame_head_free sink * H3FrameHead h → v {
     ? == # i h 0 { ^ } {}
     ( nurl_free # s h )
 }

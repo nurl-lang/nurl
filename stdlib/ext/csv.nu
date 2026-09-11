@@ -73,7 +73,7 @@ $ `stdlib/std/hashmap.nu`
 
 @ __csv_drop_string String s → v { ( string_free s ) }
 
-@ _csv_row_free ( Vec String ) row → v {
+@ _csv_row_free sink ( Vec String ) row → v {
     ( vec_free_with [String] row \ String s → v { ( string_free s ) } )
 }
 
@@ -101,7 +101,7 @@ $ `stdlib/std/hashmap.nu`
     ^ r
 }
 
-@ csv_reader_free * CSVReader r → v {
+@ csv_reader_free sink * CSVReader r → v {
     ( string_free . r content )
     ( nurl_free r )
 }
@@ -261,7 +261,7 @@ $ `stdlib/std/hashmap.nu`
     }
 }
 
-@ csv_dict_reader_free * CSVDictReader dr → v {
+@ csv_dict_reader_free sink * CSVDictReader dr → v {
     ( _csv_row_free . dr header )
     ( csv_reader_free . dr reader )
     ( nurl_free dr )
@@ -436,7 +436,7 @@ $ `stdlib/std/hashmap.nu`
     ^ t
 }
 
-@ csv_table_free * CSVTable t → v {
+@ csv_table_free sink * CSVTable t → v {
     ( string_free . t content )
     ( _csv_row_free . t headers )
     ( vec_free [i] . t flat_cells )

@@ -62,7 +62,7 @@ $ `stdlib/ext/http3_qpack.nu`
     ^ s
 }
 
-@ __h3_stream_free * H3Stream s → v {
+@ __h3_stream_free sink * H3Stream s → v {
     ( vec_free [u] . s buf )
     ( vec_free_with [Header] . s headers \ Header h → v { ( header_free h ) } )
     ( vec_free [u] . s body )
@@ -126,7 +126,7 @@ $ `stdlib/ext/http3_qpack.nu`
     ^ h
 }
 
-@ h3_conn_free * H3Conn h → v {
+@ h3_conn_free sink * H3Conn h → v {
     ? == # i h 0 { ^ } {}
     : ~ i k 0
     ~ < k ( vec_len [i] . h streams ) {

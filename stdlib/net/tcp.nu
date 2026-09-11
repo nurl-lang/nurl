@@ -204,7 +204,7 @@ $ `stdlib/net/tcpseg.nu`
     ^ c
 }
 
-@ tcb_free * Tcb c → v {
+@ tcb_free sink * Tcb c → v {
     ( vec_free [u] . c sndbuf )
     ( vec_free [u] . c rcvbuf )
     ( free c )

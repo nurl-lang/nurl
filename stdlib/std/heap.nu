@@ -103,10 +103,10 @@ $ `stdlib/core/vec.nu`
     ^ @ ?A { T root }
 }
 
-@ heap_free [A] ( Heap A ) h → v {
+@ heap_free [A] sink ( Heap A ) h → v {
     ( vec_free [A] . h data )
 }
 
-@ heap_free_with [A] ( Heap A ) h ( @ v A ) drop → v {
+@ heap_free_with [A] sink ( Heap A ) h ( @ v A ) drop → v {
     ( vec_free_with [A] . h data drop )
 }
