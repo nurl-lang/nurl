@@ -183,6 +183,14 @@ jobs:
       - name: Driver paths through split lowering
         run: python3 tools/tests/test_driver_paths.py
 
+      - name: Declaration and statement forms (reject, or emit main)
+        # One invariant over many spellings: a source that still declares
+        # '@ main' either fails to compile or defines main. Nine parser
+        # defects shared the shape this catches — an ad-hoc token skip
+        # that ran past the end of a declaration and swallowed the next
+        # one, silently.
+        run: python3 tools/tests/test_declaration_forms.py
+
       - name: Installed LSP and source stream controls
         run: |
           ./tools/nurl-lsp/build.sh

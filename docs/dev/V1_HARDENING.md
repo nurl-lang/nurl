@@ -1594,3 +1594,15 @@ or string one did. A match with no arms is now a rejection anchored at the
 covered: an empty select says so, an empty ternary in value position is the
 ordinary no-value binding error, and an empty defer or closure body is
 legal and harmless.
+
+All nine defects shared one shape: a construct the grammar allows, handled
+by an ad-hoc token skip rather than by the path that parses it, with the
+skip running past the end of the declaration. The corpus pins each fix with
+its own rejection fixture; `tools/tests/test_declaration_forms.py` pins the
+CLASS. Twenty-six declaration forms and nine statement forms are checked
+against the one invariant that binds them — a file that still declares
+`@ main` either fails to compile, or the module it produces defines main —
+so a new parser path that skips instead of reporting fails there even in a
+spelling nobody thought to write a fixture for. It runs in the compiler job
+and takes under a tenth of a second. Its own negative control was run: with
+one expectation deliberately inverted the suite fails and names the form.
