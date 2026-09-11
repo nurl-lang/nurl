@@ -114,6 +114,29 @@ jobs:
           name: build-failure-controls
           path: build/build-failure-controls/
 
+  mingw-cross:
+    name: Windows cross runtime links against msvcrt
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # This C-runtime gate needs no NURL build. Keep package installation
+      # outside the compiler container's budget; the dated CI image has no
+      # MinGW. Hosted runners may already have it. A missing prerequisite
+      # after installation fails explicitly instead of letting the gate skip.
+      - name: Ensure the distro MinGW toolchain
+        timeout-minutes: 4
+        run: |
+          if ! command -v x86_64-w64-mingw32-gcc >/dev/null; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 update --error-on=any
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 install -y --no-install-recommends gcc-mingw-w64-x86-64
+          fi
+          command -v x86_64-w64-mingw32-gcc
+      - name: Compile and link the whole runtime against msvcrt
+        run: ./tools/check_mingw_cross.sh
+
   build-test:
     name: build + bootstrap fixed point + test corpus
     needs: changes
@@ -304,21 +327,6 @@ jobs:
         # reserved characters, trailing dots or spaces, and paths that
         # differ only in case.
         run: ./tools/check_windows_paths.sh
-
-      - name: the Windows runtime links on msvcrt, not only on UCRT
-        # windows-tests.yml builds with LLVM clang and with zig — both
-        # UCRT. nurlapi's /build_windows cross-compiles with the DISTRO
-        # mingw-w64, which targets the older msvcrt.dll, and nothing ran
-        # that toolchain. So `_get_timezone` (a UCRT export, added with
-        # time_local in 0.54.0) took down EVERY Windows cross build,
-        # hello world included — mingw links the whole runtime object —
-        # for two releases while every Windows gate stayed green.
-        # Ten seconds: compile stdlib/runtime.c for mingw, link a
-        # trivial main against it. No Windows, no emulator, no nurlc.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
-          ./tools/check_mingw_cross.sh
 
       - name: nurlfmt --check (canonical-form gate)
         # Every first-party .nu file must be in canonical nurlfmt

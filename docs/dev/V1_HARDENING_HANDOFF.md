@@ -70,11 +70,13 @@ The ledger retains earlier ownership counterexamples and their failed candidates
    fix parses balanced type/parameter syntax and strips attributes. The permanent
    ASan/UBSan/LSan/LLVM control passes, all 18 package checks pass (16 actual
    native/Wasmtime comparisons), and the QEMU compiler gate produces identical
-   IR for all eight programs. Complete the swarm guest gate before publishing.
+   IR for all eight programs. The swarm guest gate also passes census, expression
+   and in-process Wasm execution. Commit `1ddef061` contains the shared fix.
    `nurlapi` imports this shared file.
 3. The main Linux job is cancelled while apt installs MinGW after the other
-   compiler gates. Fix the prerequisite/CI setup while retaining the cross-link
-   gate; cancellation is not success. The pinned CI image lacks MinGW.
+   compiler gates. MinGW now has an independent Ubuntu 24.04 job with a bounded
+   prerequisite step and an explicit compiler-presence check. The local runtime
+   cross-link passes; inspect the new remote job after publication.
 4. Continue A01's lexical alloca/defer lifetime policy and broader fuzz controls.
    Continue A13/A16 indirect/generic/embedded-origin and cleanup counterexamples;
    borrowed-initial mutable bindings and raw/FFI boundaries need broader review.

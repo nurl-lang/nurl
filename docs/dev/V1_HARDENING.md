@@ -1303,3 +1303,23 @@ the QEMU unikernel; all **eight programs produce byte-identical IR** to the
 native compiler. Evidence is `wasm-attrs-*` under ignored `build/v1-hardening/`.
 The end-to-end gates use a normal shared toolchain rebuilt after all arithmetic
 sanitizer checks finished; isolated IR leak tests compile their own runtime.
+
+
+The swarm appliance gate also passes both execution paths: its guest joins
+the host census, the expression kernel returns 332833500, and the host-compiled
+Wasm kernel returns 328350 when executed in-process by the guest. Cold start
+to the first expression answer is nine seconds on this TCG run; this is a local
+measurement, not a performance promise. No Wasm half was skipped.
+
+### MinGW cross-link CI scheduling (2026-09-11)
+
+The msvcrt C-runtime cross-link gate moves to a separate Ubuntu 24.04 job;
+it requires no compiler bootstrap or NURL corpus. A preinstalled distro MinGW
+compiler is reused, otherwise a bounded four-minute prerequisite step installs
+it with finite network retries/timeouts. An explicit executable check prevents
+a missing prerequisite from becoming the script's optional local skip. The
+main compiler container now performs no per-run apt installation. The full
+runtime cross-compiles and links locally with `x86_64-w64-mingw32-gcc`;
+workflow YAML and changed shell syntax pass validation. Remote execution of the
+new job remains required. This isolates the observed package-install stall
+without dropping the msvcrt check or increasing the compiler job's budget.
