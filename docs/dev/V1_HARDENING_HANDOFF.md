@@ -155,11 +155,19 @@ loop. Correct values, zero findings.
    whole rewritten copy of every aliased import, on a path `leakgate.sh`
    could not reach because `nurlc.nu` has no aliased import. That is fixed
    and the gate now covers it.
-   One cause is root-caused in the ledger — a closure literal passed to a
-   GENERIC higher-order function leaks its env, because the call site's
-   evidence (`g_fn_invoke_only`) does not exist until after the
-   instantiation is emitted. Fixing it is an ordering change in
-   monomorphisation; freeing without the evidence would be a use-after-free.
+   One cause is root-caused and now FIXED: a closure literal passed to a
+   GENERIC higher-order function leaked its env, because the call site asked
+   `g_fn_invoke_only` a question whose answer does not exist until the
+   instantiation is flushed. The argument-temporary path already solved that
+   shape — emit the free against a null-or-pointer value selected by a
+   private constant computed at module end — and the closure-env free now
+   uses it (`mem_env_owner` / `mem_emit_env_flags`). Three programs, 89
+   leakers to 86; it needed a bootstrap refresh, which is done.
+
+   The rest of the closure-env class is a different sub-shape and is the
+   next thing to look at: a closure RETURNED by a generic function, whose
+   env has no argument-position flag at all. `iter_zip_enum` is the witness
+   (`iter_enumerate` builds the iterator).
    A second class is root-caused in the ledger too: a parameter stored into
    a container that dies inside the same callee is classified as escaping,
    so the caller's fresh temporary is never freed by anyone. The whole
