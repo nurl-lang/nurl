@@ -8391,7 +8391,15 @@
     { ( nurl_lex_advance lex )  // consume '['
         : ~ s type_args ``
         : ~ s mangle_sfx ``
-        ~ != ( nurl_lex_type lex ) TT_RBRACK {
+        // EOF ends the walk as surely as ']' does. Without that guard a
+        // type-argument list whose ']' is missing — `( vec_new [i )` —
+        // spun here forever: the lexer sits on TT_EOF, which is not
+        // TT_RBRACK, and nothing consumes it. `nurlc file.nu` HUNG, the
+        // same shape the unclosed generic STRUCT body once had. The
+        // `expect` below then reports it. (Found by deleting one token
+        // at a time from every corpus program and requiring the compiler
+        // to answer.)
+        ~ & != ( nurl_lex_type lex ) TT_RBRACK != ( nurl_lex_type lex ) TT_EOF {
             : i tt_arg ( nurl_lex_type lex )
             : ~ s ta ``
             // A bare anonymous slice (`[ T`) cannot be mangled as a call

@@ -56,6 +56,28 @@ of real bugs lives in [`FINDINGS.json`](FINDINGS.json).
    usable. Called automatically by `fuzz.sh` on every finding; see
    [Reducing a finding](#reducing-a-finding-reducepy) below.
 
+3b. **Token-deletion robustness** (`mutate_delete.py`) — not a differential
+   fuzzer and not a gate: it takes programs that compile, blanks one token
+   at a time, and requires the compiler to ANSWER each mutant — reject the
+   file, or emit the `main` the source still declares. A clean exit whose
+   module has lost main means the construct under the deleted token
+   swallowed it; a timeout means the parser spun. Deletion is the mutation
+   that matters because it produces the truncations people actually write —
+   a missing brace, a missing bracket — and the invariant needs no oracle.
+
+   ```bash
+   python3 tools/fuzz/mutate_delete.py --files 40
+   ```
+
+   Its first run found a HANG: deleting the `]` from a call's generic
+   type-argument list (`( vec_new [i )`) spun the type-argument walk on
+   TT_EOF forever. One finding in ~80,000 mutants, which is also a result
+   about the parser — every other truncation was already answered.
+
+   The harness copies the corpus out of the tree and runs against a private
+   copy of `build/nurlc`, so a concurrent `./build.sh` cannot replace the
+   binary underneath it and a mutant can never be left in `compiler/tests/`.
+
 4. **Mutational parser fuzzer** (`fuzz_parsers.sh` + `fuzz_parsers.py` +
    `parse_harness.nu`) — mutates seeds for the untrusted-input parsers
    (x509/DER, cbor, msgpack, json, yaml, xml, toml) against an ASan+UBSan

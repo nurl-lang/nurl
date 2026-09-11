@@ -1682,3 +1682,28 @@ Both halves now use the same check and the same wording. The nested-path
 writer (`= . . o a b v`) already had it; only the single-dot by-value path
 did not. The corpus passes 990 of 1,009 inputs, and the tree's 303
 diagnostics are unchanged.
+
+### A token deleted from every corpus program (2026-09-11)
+
+A second sweep, mechanical rather than hand-written: take a program that
+compiles, blank one token, and require the compiler to answer — reject the
+file, or emit the `main` the source still declares. Deletion is the right
+mutation because it produces the truncations a human actually writes (a
+missing brace, a missing bracket) rather than random noise, and the
+invariant needs no oracle. Two earlier attempts died on my own carelessness:
+the first ran against `build/nurlc` while a build replaced it, the second had
+its mutants deleted mid-run, and one mutant was committed by accident because
+they were written beside the originals. Run it against a private copy of the
+compiler with the corpus copied out of the tree.
+
+Forty programs, roughly 80,000 mutants, one finding — and it is the kind
+only a machine finds. Deleting the `]` from a call's generic type-argument
+list (`( vec_new [i )`) HUNG the compiler: the walk that collects the type
+arguments ended only on `]`, so at end of input it spun on TT_EOF forever.
+That is the same shape `diag_generic_struct_unclosed.nu` exists for, in a
+construct nobody had thought to truncate. EOF now ends the walk and the
+existing `expect` reports it (`diag_call_targs_unclosed.nu`).
+
+One finding in 80,000 mutants is also a result about the parser: every other
+truncation of every other construct in those forty programs was already
+answered.
