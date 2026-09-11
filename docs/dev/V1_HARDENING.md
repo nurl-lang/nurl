@@ -1667,3 +1667,18 @@ byte-identical to before, so nothing in the tree was relying on the
 looseness. `diag_builtin_arity.nu`, `diag_builtin_arg_type.nu` and
 `diag_builtin_literal_pointer.nu` are the rejections, and seven builtin-call
 forms joined `tools/tests/test_declaration_forms.py`.
+
+### The write side of a field access (2026-09-11)
+
+`gen_member` rejects a read of a field the struct does not have, and its
+comment says exactly why: the index lookup returns an empty string,
+`nurl_str_to_int ""` is 0, and the access silently reads field 0 — "a
+miscompile". The write side kept that bug. `= . p nofield 5` stored into
+field `x`, and the field's empty TYPE printed `store  5, * %r6` with no
+types at all: emitted with status 0, rejected only by clang, against
+generated IR with no source location.
+
+Both halves now use the same check and the same wording. The nested-path
+writer (`= . . o a b v`) already had it; only the single-dot by-value path
+did not. The corpus passes 990 of 1,009 inputs, and the tree's 303
+diagnostics are unchanged.

@@ -17829,6 +17829,17 @@
                 ( nurl_lex_advance lex )
                 : s fidx_s ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) )
                 : s ftype ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) )
+                // No such field. gen_member rejects this on the READ side
+                // and says why: `nurl_str_to_int ""` is 0, so the write
+                // went to field 0 — a struct-corrupting miscompile — and
+                // the empty field type printed `store  5, * %r` with no
+                // types at all, which nurlc emitted with status 0 and only
+                // clang rejected. The write side gets the read side's
+                // check, in the same words.
+                ? == 0 ( nurl_str_len fidx_s )
+                { ( die lex ( nurl_str_cat3 `type '` ( llvm_to_nurl pt )
+                    ( nurl_str_cat3 `' has no field '` fname `'. Check the field name against the struct's declaration; a field write is prefix ('= . obj field value').` ) ) ) }
+                {}
                 : i fidx ( nurl_str_to_int fidx_s )
                 : s rhs ( gen_field_rhs lex syms cg )
                 ? ( __store_type_clash ( nurl_get_last_type ) ftype )

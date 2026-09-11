@@ -91,9 +91,14 @@ STATEMENTS = [
     ("builtin_float",    "( nurl_print 1.5 )",                     "rejects"),
     ("builtin_literal",  "( nurl_print 5 )",                       "rejects"),
     ("builtin_ptr_int",  "( nurl_print ( nurl_str_int `s` ) )",    "rejects"),
+    # A field write gets the same check the read side has.
+    ("field_store_ok",   ": ~ Pt q @ Pt { 1 2 }\n    = . q x 5",   "compiles"),
+    ("field_store_bad",  ": ~ Pt q @ Pt { 1 2 }\n    = . q nope 5", "rejects"),
 ]
 
-STMT_TEMPLATE = """@ main → i {
+STMT_TEMPLATE = """: Pt { i x i y }
+
+@ main → i {
     : ~ i k 0
     %s
     ( nurl_print `MAIN RAN\\n` )
