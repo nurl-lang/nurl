@@ -12733,6 +12733,17 @@
     //                          Vec branch below replaces that with the
     //                          control-block accessor pair.
     : b is_vec != 0 ( nurl_str_starts slice_ty `%Vec__` )
+    // Only those two carriers can be iterated. Anything else fell into
+    // the slice branch below, which takes the element type by slicing
+    // fixed offsets out of `{ T*, i64 }` — on an `i64` that yields an
+    // EMPTY type, and the loop emitted `alloca `, `getelementptr , `,
+    // `load , ` and an `extractvalue` on a non-aggregate: invalid IR,
+    // with nothing on stderr at all. clang reported "expected type" at a
+    // line in generated text, which is no report at all.
+    ? | is_vec ( mem_is_slice_ty slice_ty ) {} {
+        ( die lex ( nurl_str_cat
+        ( nurl_str_cat4 `'~ ` var_name ` <values> { … }' iterates a slice or a Vec, but this one is of type '` ( llvm_to_nurl slice_ty ) )
+        `'. Take a slice of it ('[T ptr len'), build a Vec, or — if a counting loop was meant — write the while form: '~ < i n { … }'.` ) ) }
     : ~ s ptr_ty ( nurl_str_cat `` `` )
     : ~ s elem_ty ( nurl_str_cat `` `` )
     : ~ s ptr_val ``

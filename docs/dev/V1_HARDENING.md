@@ -1606,3 +1606,15 @@ so a new parser path that skips instead of reporting fails there even in a
 spelling nobody thought to write a fixture for. It runs in the compiler job
 and takes under a tenth of a second. Its own negative control was run: with
 one expectation deliberately inverted the suite fails and names the form.
+
+Extending that sweep into expression position found a tenth defect of the
+same family. `~ e k { … }` — a foreach whose collection is neither a slice
+nor a Vec — took the element type by slicing fixed offsets out of the
+`{ T*, i64 }` carrier shape. On an `i64` those offsets yield an EMPTY type,
+and the loop emitted `alloca `, `getelementptr , `, `load , ` and an
+`extractvalue` on a non-aggregate. Invalid IR with nothing on stderr at all:
+clang reported "expected type" at a line number in generated text, which is
+no report at all. Iterating anything but those two carriers is now a
+diagnostic that names the type it was given
+(`diag_foreach_not_iterable.nu`), and both foreach shapes joined the form
+table.

@@ -80,6 +80,8 @@ STATEMENTS = [
     ("bind_void_cond",   ": i x ? T { } { }",                      "rejects"),
     ("bind_block",       ": i x { 7 }",                            "compiles"),
     ("bind_block_empty", ": i x { }",                              "rejects"),
+    ("foreach_slice",    ": [i xs [i | 1 2 3]\n    ~ e xs { = k + k e }", "compiles"),
+    ("foreach_scalar",   "~ e k { = k 1 }",                        "rejects"),
 ]
 
 STMT_TEMPLATE = """@ main → i {
