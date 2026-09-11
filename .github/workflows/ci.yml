@@ -150,6 +150,9 @@ jobs:
           NURL_SPLIT=4 NURL_SPLIT_MIN=1 ./nurl.sh compiler/tests/sink_enum_owned.nu build/sink-owned-split
           ./build/sink-owned-split
 
+      - name: Driver paths through split lowering
+        run: python3 tools/tests/test_driver_paths.py
+
       - name: Installed LSP and source stream controls
         run: |
           ./tools/nurl-lsp/build.sh
@@ -641,11 +644,12 @@ jobs:
           path: build/logs/
 
       - name: Instrumented installed LSP and compiler stdin controls
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          LSAN_OPTIONS: use_stacks=0
         run: |
           NURL_SAN=1 ./tools/nurl-lsp/build.sh
-          # LSP message construction still leaks in five controls (A03 ledger).
-          ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 python3 tools/tests/test_lsp_toolchain.py
-          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 python3 tools/tests/test_lsp_toolchain.py ToolchainTest.test_check_self_compile_from_stdin
+          python3 tools/tests/test_lsp_toolchain.py
 
       - name: Instrumented formatter ownership and CLI controls
         run: NURL_SAN=1 python3 tools/tests/test_formatter.py

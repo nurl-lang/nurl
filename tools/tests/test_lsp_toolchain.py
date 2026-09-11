@@ -57,8 +57,9 @@ class ToolchainTest(unittest.TestCase):
         cls.prefix = Path(cls.suite_tmp.name) / 'tool chain'
         cls.bin = cls.prefix / 'bin'
         cls.bin.mkdir(parents=True)
+        toolchain = Path(os.environ.get('NURL_TEST_TOOLCHAIN_DIR', ROOT / 'build')).resolve()
         for name in ('nurlc', 'nurlfmt', 'nurl-lsp'):
-            source = ROOT / 'build' / name
+            source = toolchain / name
             if not source.is_file():
                 raise RuntimeError(f'Build {source} before running this suite')
             shutil.copy2(source, cls.bin / name)

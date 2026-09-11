@@ -8,9 +8,9 @@ in reviewable groups. No item below certifies the whole language or ecosystem.
 
 | Audit item | Evidence required before closure | Current disposition |
 |---|---|---|
-| A01: sanitizer coverage | Ordinary driver, bootstrap, split output and fuzz paths detect deliberate memory faults in generated code; clean controls, corpus and fuzz pass; UBSan/LLVM semantics documented | ASan emission implemented and calibrated; revealed HTTP/3 UAF and compiler leaks repaired; lexical stack-lifetime, rejected-compilation cleanup and arithmetic work remains open |
+| A01: sanitizer coverage | Ordinary driver, bootstrap, split output and fuzz paths detect deliberate memory faults in generated code; clean controls, corpus and fuzz pass; UBSan/LLVM semantics documented | ASan emission implemented and calibrated; revealed HTTP/3 UAF and compiler leaks repaired; lexical stack-lifetime and source-level arithmetic remain open |
 | A02: trustworthy compiler runners | Missing-main rejection fixtures run; crash/hang/worker fault controls fail closed; complete corpus verdict accounting | Verified in local normal/sanitized corpus and POSIX/PowerShell controls; native Windows execution remains CI evidence |
-| A03: installed LSP | Separate installed project, unsaved edits, sibling/dependency imports, visible execution errors | Independently reproduced; repaired and verified with relocated binaries and 20 normal/ASan protocol/compiler controls on Linux; native Windows and actual distribution installation remain unverified |
+| A03: installed LSP | Separate installed project, unsaved edits, sibling/dependency imports, visible execution errors | Independently reproduced; repaired and verified with relocated binaries and 20 normal/ASan/LSan protocol/compiler controls on Linux; native Windows and actual distribution installation remain unverified |
 | A04: registry identity | Two local registries with equal package names; fetch, resolution, signing and lock identity preserved; errors never print success | Origin/key/index/archive/lock binding repaired; conflict-directed resolver checked against an exhaustive oracle; flat-layout coexistence and transactional/frozen installation remain open |
 | A05: signed install smoke | Signed fixtures install after relocation with transitive dependencies; missing/wrong/tampered signatures reject; CI runs it | Unsigned/stale smoke independently reproduced; signed five-program relocation smoke and CLI negative controls pass locally, wired into CI; remote run pending |
 | A06: JS dependencies | Fresh manager-native audits, reachability analysis, lockfile updates and builds/tests for all four trees; recurring checks | Fresh audits repaired; all four clean installs, builds/checks and zero-finding re-audits pass locally; weekly/PR checks added, remote run pending |
@@ -1130,3 +1130,96 @@ formatter-failure paths. This is separate from the now-clean rejected compiler
 processes. The failed `guard-final-lsp.log` is retained. The remaining aggregate
 consumer restriction and unknown-call handling need investigation before this
 service suite can truthfully become a zero-leak CI gate.
+
+### Primitive effects and aggregate consumers (2026-09-11)
+
+The complete LSP leak experiment above exposed two compiler defects. A Json
+copy consumer leaked its owned argument because temporary cleanup required a
+fresh string or scalar result. Conversely, a source wrapper around an unknown
+foreign pointer-retaining call freed its argument too soon. Independent C
+translation units retain and later read both pointer arguments and addresses
+cast to integers, so these controls do not depend on NURL's own inference.
+Simply allowing all analyzed result types fixed the leak but not the
+use-after-free, and that intermediate candidate was rejected.
+
+The stable graph now propagates unverified foreign/indirect-call effects per
+argument in a lifetime-only summary. Primitive declarations carry audited LLVM
+`nocapture`/`nofree` contracts; `readonly` return aliases remain in the address
+graph. Explicit scalar data roles use a custom `nurl.value-only` ABI attribute,
+never an assumption that integer arguments cannot retain addresses. Source
+functions are inferred from their bodies, including definitions that shadow a
+primitive name. This removes the temporary-consumer helper whitelist entirely.
+The contracts and their LLVM 15 basis are described in
+[compiler memory discipline](COMPILER_INTERNALS.md#4-memory-discipline).
+
+The initial unverified-call candidate leaked 1,028,315,679 bytes during
+self-compilation because it could not prove local use through `strcmp` and
+`nurl_strdup`; a later candidate leaked 1,224 bytes on the SIMD rejection path
+because length/index arguments carried false unknown-call retention. Both
+failures remain in the local logs. The primitive contracts close those proof
+gaps without declaring unknown C functions safe.
+
+After the service leaks were repaired, LSP tests exposed an additional,
+independently reproduced preexisting compiler leak: `--lint --check` on
+`argv_test.nu` leaked 2,706 bytes while walking imported definitions. A mutable
+cursor initialized from a proved owned local was untracked; owned replacements
+and the mixed join that preserved the previous cursor leaked. Such initializers
+now receive their own copy in both explicit and inferred binding paths. The
+new standalone cursor witness leaked 33 bytes before repair. Borrowed parameter
+and opaque-address controls still preserve identity.
+
+The ownership suite now contains 31 methods, including Json copies in both
+declaration orders, unknown foreign pointer/integer retention, returned
+`strstr`/`memmem` aliases, source overrides of primitive names and mutable cursor
+replacement. Diagnostic cleanup has seven methods: all 366 current rejection
+goldens plus output modes, stdin, limits, CLI errors and the positive lint
+walk. An isolated toolchain selector lets the full 20-test installed LSP suite
+exercise the candidate without replacing shared build outputs. All three
+focused suites and instrumented self-compilation pass with LSan enabled and
+stack roots disabled in the no-whitelist candidate (`consumer-nohelpers-*.log`,
+`lsp-nohelpers-tests.log`).
+
+Final shared verification: both refreshed bootstraps reach their fixed point,
+and both 993-input corpora report **974 PASS / 19 SKIP** with no failures. Normal
+build/test times are 60 s / 2 m 52 s; the sanitized bootstrap is 86 s. All 31
+ownership methods pass with normal and instrumented shared compilers; all seven
+cleanup methods and all 20 installed LSP controls pass with the instrumented
+toolchain and LSan enabled. Six compiler leak-gate inputs pass both ordinary and
+split emission (12 modes), and deliberate generated-code sanitizer controls
+still detect their faults. Normal RSS is 36 MB against 600 MB; DCE remains
+180 emitted / 12 reachable with matching output. Logs and separate normal/san
+verdict files use `consumer-final-*`. The full LSP CI step now enables leak
+checking without the former exception. These results do not close the full
+safety, platform, architecture or package audit.
+
+### A11: split driver paths (2026-09-11)
+
+The existing draft PR's macOS ARM64 build passed bootstrap/corpus but failed its
+`nurl.sh` smoke step on `smoke dir/s.nu`: the unquoted split-prefix flag became
+two compiler arguments. This is independently reproducible on Linux. Quoting
+that prefix alone would still leave the forced-split link and cleanup splitting
+the object paths. The driver now preserves both the compiler flags containing
+paths and the split-object list as individual POSIX shell arguments.
+
+Both new real-toolchain controls fail before repair and pass after it, using
+relocated compiler/runtime paths, source/output names with spaces and literal
+brackets, and both a small unsplit program and forced two-part lowering. They
+verify execution and intermediate cleanup; Linux and macOS CI run them. Commit
+`5e673886` contains the driver fix. The old remote log is `pr-arm64-before.log`,
+and local evidence is `driver-paths-{before,after}.log`. New remote execution
+remains pending.
+
+### A01: arithmetic boundary reproduction (2026-09-11)
+
+Seven additional probes take values from independent C functions so optimized
+NURL compilation cannot resolve the inputs. Both O0 and O2 use generated-code
+ASan and the sanitized C runtime. Signed `INT_MIN / -1` and `INT_MIN % -1` report
+native FPE under ASan at O0 but return silently at O2. Dynamic negative/width-sized
+shifts, NaN/infinity-to-signed casts and negative-to-unsigned casts return without
+any finding at both levels. None produces a NURL panic. These outcomes do not
+meet a source-level safety/detection contract; they remain open controls.
+The [LLVM 15 operation contracts](https://releases.llvm.org/15.0.0/docs/LangRef.html#srem-instruction)
+confirm the overflow/poison boundaries. Sources, IR, stdout/stderr and the
+14-run result matrix are retained in `build/v1-hardening/arithmetic-before/`;
+the generator is `arithmetic-before.py`. No arithmetic codegen change is included
+in the primitive-effects checkpoint.

@@ -44,6 +44,15 @@ class CompilerCleanupTest(unittest.TestCase):
                     data='@ main → i { ^ unsaved_name }\n'.encode(),
                     diagnostic=b'unsaved_name')
 
+    def test_lint_import_walk_releases_mutable_cursors(self):
+        run = subprocess.run([str(self.compiler), '--lint', '--check',
+                              str(ROOT/'compiler/tests/argv_test.nu')],
+            cwd=ROOT, capture_output=True, env=self.env, timeout=60)
+        self.assertEqual(run.returncode, 0, run.stderr.decode(errors='replace'))
+        self.assertEqual(run.stdout, b'')
+        self.assertNotIn(b'Sanitizer', run.stderr)
+        self.assertNotIn(b'runtime error:', run.stderr)
+
     def test_prepasses_deferred_checks_and_import_recovery(self):
         cases = ['diag_import_missing', 'diag_generic_fn_unclosed',
                  'diag_generic_struct_unclosed', 'diag_trait_order_assoc_missing',

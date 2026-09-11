@@ -26,7 +26,7 @@ class StringArgumentOwnershipTest(unittest.TestCase):
         if run.returncode:
             raise RuntimeError(run.stderr.decode(errors='replace'))
 
-    def run_source(self, source, expected, flags=()):
+    def run_source(self, source, expected, flags=(), foreign_source=None):
         path = self.directory / 'input.nu'
         ir = self.directory / 'input.ll'
         binary = self.directory / 'program'
@@ -41,9 +41,14 @@ class StringArgumentOwnershipTest(unittest.TestCase):
                          compile_run.stderr.decode(errors='replace'))
         self.assertNotIn(b'Sanitizer', compile_run.stderr)
         ir.write_bytes(compile_run.stdout)
+        foreign_files = []
+        if foreign_source is not None:
+            foreign = self.directory / 'foreign.c'
+            foreign.write_text(foreign_source)
+            foreign_files.append(str(foreign))
         link = subprocess.run(
             [self.clang, '-O1', '-g', *self.sanitizers, str(ir), str(self.runtime),
-             '-lm', '-lpthread', '-ldl', '-o', str(binary)],
+             *foreign_files, '-lm', '-lpthread', '-ldl', '-o', str(binary)],
             capture_output=True, timeout=60)
         self.assertEqual(link.returncode, 0, link.stderr.decode(errors='replace'))
         run = subprocess.run([str(binary)], env=env, capture_output=True, timeout=30)
@@ -56,6 +61,110 @@ class StringArgumentOwnershipTest(unittest.TestCase):
         self.run_source(
             (ROOT / 'compiler/tests/recover_forward_consumer.nu').read_text(),
             'normal argument\nstill alive\n')
+
+    def test_aggregate_copy_consumer_releases_its_string_argument(self):
+        helper = '@ make i unused s text → Json { ^ ( json_str_lit text ) }\n'
+        main = '''@ main → i {
+    : Json value ( make 0 ( nurl_str_cat `live` ` value` ) )
+    ( nurl_println ( json_str_data value ) )
+    ( json_free value )
+    ^ 0
+}
+'''
+        for forward in [False, True]:
+            with self.subTest(forward=forward):
+                self.run_source('$ `stdlib/ext/json.nu`\n' +
+                    (main + helper if forward else helper + main), 'live value\n')
+
+    def test_unknown_foreign_retention_survives_a_source_wrapper(self):
+        foreign = '''
+static const char *saved;
+void ffi_keep(const char *p) { saved = p; }
+const char *ffi_recall(void) { return saved; }
+'''
+        for named in [False, True]:
+            for flags in [(), ('--no-borrowck',)]:
+                with self.subTest(named=named, flags=flags):
+                    argument = 'value : ' if named else ''
+                    self.run_source('''$ `stdlib/core/string.nu`
+& `c` @ ffi_keep s value → v
+& `c` @ ffi_recall → s
+@ main → i {
+    ( keep ''' + argument + '''( nurl_str_cat `live` ` value` ) )
+    : s value ( ffi_recall )
+    ( nurl_println value )
+    ( nurl_free value )
+    ^ 0
+}
+@ keep s value → v { ( ffi_keep value ) }
+''', 'live value\n', flags, foreign_source=foreign)
+
+    def test_foreign_return_alias_survives_its_source_wrapper(self):
+        for expression in ['( strstr text `live` )',
+                           '( memmem text ( nurl_str_len text ) `live` 4 )']:
+            with self.subTest(expression=expression):
+                self.run_source('''$ `stdlib/core/string.nu`
+@ locate s text → s { ^ ''' + expression + ''' }
+@ main → i {
+    : s value ( locate ( nurl_str_cat `live` ` value` ) )
+    ( nurl_println value )
+    ( nurl_free value )
+    ^ 0
+}
+''', 'live value\n')
+
+    def test_unknown_foreign_integer_argument_can_retain_an_address(self):
+        self.run_source('''$ `stdlib/core/string.nu`
+& `c` @ ffi_keep_bits i address → v
+& `c` @ ffi_recall → s
+@ keep s value → v { ( ffi_keep_bits # i value ) }
+@ main → i {
+    ( keep ( nurl_str_cat `live` ` value` ) )
+    : s value ( ffi_recall )
+    ( nurl_println value )
+    ( nurl_free value )
+    ^ 0
+}
+''', 'live value\n', foreign_source='''
+#include <stdint.h>
+static uintptr_t saved;
+void ffi_keep_bits(long long address) { saved = (uintptr_t)address; }
+const char *ffi_recall(void) { return (const char *)saved; }
+''')
+
+    def test_source_definition_does_not_inherit_foreign_contract(self):
+        self.run_source('''$ `stdlib/core/string.nu`
+& `c` @ ffi_keep s value → v
+& `c` @ ffi_recall → s
+@ atoll s value → i { ( ffi_keep value ) ^ 0 }
+@ main → i {
+    : i ignored ( atoll ( nurl_str_cat `live` ` value` ) )
+    : s value ( ffi_recall )
+    ( nurl_println value )
+    ( nurl_free value )
+    ^ 0
+}
+''', 'live value\n', foreign_source='''
+static const char *saved;
+void ffi_keep(const char *p) { saved = p; }
+const char *ffi_recall(void) { return saved; }
+''')
+
+    def test_mutable_cursor_copied_from_an_owner_releases_replacements(self):
+        self.run_source('''$ `stdlib/core/string.nu`
+@ main → i {
+    : s original ( nurl_str_cat `live` ` value` )
+    : ~ s cursor original
+    : ~ i iteration 0
+    ~ < iteration 2 {
+        : s previous ? == iteration 0 cursor ( nurl_str_cat cursor `` )
+        = cursor ( nurl_str_cat `next` ` value` )
+        ( nurl_println previous )
+        = iteration + iteration 1
+    }
+    ^ 0
+}
+''', 'live value\nnext value\n')
 
     def test_dynamic_return_proof_survives_forward_chains_and_defer(self):
         for tail in ['^ ( leaf fresh )', '( leaf fresh )']:
