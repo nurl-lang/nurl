@@ -1868,3 +1868,26 @@ one and are NOT the cause: a single owned temporary as the only argument, a
 temporary in second position, a borrow and a temporary mixed in one call,
 a two-level helper chain that builds a fresh value, and the same helper
 reached across an import boundary are all leak-clean.
+
+### A13: the raw-pointer boundary behaves as documented (2026-09-11)
+
+`*T` is described as NURL's unsafe FFI ABI, outside the borrow checker. The
+shapes tried agree with that description rather than contradicting it:
+
+- An integer does NOT become a pointer implicitly. `: *u p 5` and `: *u p 0`
+  are both rejected as "value of type 'i64' cannot initialise / assign".
+- An explicit cast does make one. `: *u p # *u 4096` is accepted — that is
+  the escape hatch, spelled.
+- The reverse, `# i <pointer>`, is accepted too, and is the spelling the FFI
+  argument diagnostic already points at for a genuine `uintptr_t`.
+- Pointer types are mutually assignable without a cast: `s` flows into `*u`
+  and back, and a `*u` can be passed where an `s` is expected. Under opaque
+  pointers they are one LLVM type, and "no implicit conversions" is a rule
+  about values, not addresses. The consequence is real but is exactly what
+  the raw ABI means: `( nurl_print p )` with a `*u` that is not
+  NUL-terminated is undefined, and nothing claims otherwise.
+
+So the boundary is honest in the direction that matters — a number cannot
+silently become an address. What this does NOT establish is the rest of
+A13: opaque wrappers, container ownership, and whether the default, strict
+and raw guarantees agree on everything else remain unexamined.
