@@ -169,18 +169,19 @@ loop. Correct values, zero findings.
    that asserts non-escape the way `sink` asserts consumption — the second
    is a language decision, not a repair.
 
-   The 92 are triaged as far as a machine can take them: 47 contain a
-   closure literal, 11 allocate in the test's own `main` (the "omits
-   cleanup to isolate the behaviour" class the runner's own comment
-   describes), and 34 allocate inside a callee — led by `nurl_str_int` (6),
-   `bytes_from_hex` (5) and `string_from` (4). The `nurl_str_int` six are
-   the second class above, which gives it a size. `bytes_from_hex` was
-   pulled next and is the OTHER kind: it hands its `Vec` to the caller in a
-   Result, and the five callers contain no `vec_free` at all — writing the
-   same call with the free present is leak-clean. The criterion that
-   separates the two kinds is "can the program free it?", not where the
-   allocation was made; apply that control to the remaining callee groups to
-   finish the triage.
+   The inventory is attributed at the group level. Tests that allocate and
+   never free anything are the largest group and need nothing from the
+   compiler. `bytes_from_hex`'s five callers could free and do not — the
+   same call written with the free present is leak-clean. The
+   `nurl_str_int` six are the escape-classification class, which no
+   spelling of the program can reclaim. Everything else is the closure-env
+   class, including `iter_zip_enum`, whose iterator is a closure returned
+   by a generic function rather than a literal in the test.
+
+   So: two root causes and one test-side habit, not ninety defects. The
+   criterion that separates them is "can the program free it?", not where
+   the allocation was made — apply it with a control, by writing the same
+   call with the free present.
 5. A13's container and opaque-handle half now has witnesses (see the
    ledger): ten violations by construction, every one the default rules
    promise to catch caught, the three that compile are holes

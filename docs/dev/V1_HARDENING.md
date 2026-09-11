@@ -2045,8 +2045,20 @@ one name, and the name was the compiler's own.
 
 After the fix the grouping is `_nurl_main` 30, `nurl_str_int` 6,
 `string_from` 6, `bytes_from_hex` 5, `main` 4, then threes and ones — and
-the `alias_rewrite_source` row is gone. The thirty under `_nurl_main`
-allocate in the test's own code and are where the "can the program free
-it?" control has to be applied one at a time; the six under `nurl_str_int`
-are the escape-classification class, which no spelling of the program can
-reclaim.
+the `alias_rewrite_source` row is gone.
+
+The thirty under `_nurl_main` split cleanly. Seventeen contain no free call
+at all: they allocate and exit, which is the class the runner's comment
+describes and needs nothing from the compiler. The other thirteen do free,
+and still leak — and twelve of those thirteen contain a closure literal.
+The thirteenth, `iter_zip_enum`, abandons an `iter_enumerate` iterator
+mid-stream, and an iterator IS a closure here: it is returned by a generic
+function rather than written in the test, which is why a grep for a literal
+missed it. So all thirteen are the closure-env class, the same one the
+generic higher-order call above root-causes.
+
+That attributes the inventory at the group level: seventeen plus the eleven
+elsewhere are tests that do not clean up, the `nurl_str_int` six are the
+escape-classification class no spelling of the program can reclaim, the
+`bytes_from_hex` five are callers that could free and do not, and the
+closure-env class covers the rest. Two root causes, one test-side habit.
