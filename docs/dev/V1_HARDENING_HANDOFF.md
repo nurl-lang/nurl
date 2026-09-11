@@ -166,9 +166,24 @@ loop. Correct values, zero findings.
    individually triaged, but 25 of the 45 non-closure ones allocate through
    the same `__vec_grow` frame, so they are likely one or two more clusters
    rather than 45 separate defects.
-5. Continue A13/A16 indirect/generic/embedded-origin and cleanup
-   counterexamples; borrowed-initial mutable bindings and raw/FFI boundaries
-   need broader review.
+5. A13's container and opaque-handle half now has witnesses (see the
+   ledger): ten violations by construction, every one the default rules
+   promise to catch caught, the three that compile are holes
+   `docs/MEMORY.md` declares, and two of those three are reported under
+   `--strict-borrowck`. Two things came out of it that need an owner's
+   decision rather than an edit:
+   - A free on one arm of a `?` followed by an unconditional READ after the
+     join is a guaranteed use-after-free on the taken path and is reported
+     in neither mode. §2.1 says reads of a maybe-moved binding are never
+     flagged; strict mode is where false positives are acceptable, so a
+     fourth strict check has a witness and a home.
+   - `docs/MEMORY.md` §2.9 says "three opt-in checks" and lists three, while
+     strict mode also reports the aggregate-literal maybe-move.
+
+   Still open in A13: opaque wrappers beyond Channel, whether the default,
+   strict and raw guarantees agree on everything else, and A16's
+   indirect/generic/embedded-origin cleanup counterexamples. Borrowed-initial
+   mutable bindings are untouched.
 6. Retain every A01-A17 requirement. A07 (continuous package/service tests)
    is still only an inventory question, and it sits against the standing
    decision not to wire package tests into compiler CI — that needs a
