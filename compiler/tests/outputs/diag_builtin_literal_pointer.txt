@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_builtin_literal_pointer.nu:10:20: error: argument 1 to 'nurl_print' is the integer literal 5 where the parameter is a pointer ('s') — a literal is not an address, and the callee would dereference it. Pass a string or buffer of that type; '0' is accepted as the null pointer, and a handle held in a binding is converted as before.
+    ( nurl_print 5 )
+                   ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

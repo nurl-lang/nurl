@@ -82,6 +82,15 @@ STATEMENTS = [
     ("bind_block_empty", ": i x { }",                              "rejects"),
     ("foreach_slice",    ": [i xs [i | 1 2 3]\n    ~ e xs { = k + k e }", "compiles"),
     ("foreach_scalar",   "~ e k { = k 1 }",                        "rejects"),
+    # The pre-registered C-runtime surface is checked like an '&'-declared
+    # symbol: arity, argument types, and a literal in a pointer position.
+    ("builtin_ok",       "( nurl_print `x` )",                     "compiles"),
+    ("builtin_null_ptr", "( nurl_print 0 )",                       "compiles"),
+    ("builtin_arity",    "( nurl_print )",                         "rejects"),
+    ("builtin_arity_hi", "( nurl_print `a` `b` )",                 "rejects"),
+    ("builtin_float",    "( nurl_print 1.5 )",                     "rejects"),
+    ("builtin_literal",  "( nurl_print 5 )",                       "rejects"),
+    ("builtin_ptr_int",  "( nurl_print ( nurl_str_int `s` ) )",    "rejects"),
 ]
 
 STMT_TEMPLATE = """@ main → i {

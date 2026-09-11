@@ -20,7 +20,7 @@ in reviewable groups. No item below certifies the whole language or ecosystem.
 | A10: tree gates | Tracked formatting inventory, package-aware frontend coverage, recursive import checks with reported exclusions | The canonical-form gate now covers the tracked inventory (1,779 files) instead of five hand-listed directories, and the 18 files that had drifted are reformatted; package-aware frontend coverage and recursive import checks remain open |
 | A11: toolchain build integrity | Injected required-tool failures fail the build; stale binaries cannot substitute; logs and totals retained | Required tools now fail the build, use the canonical driver and remove stale outputs; isolated full-build controls pass locally and are wired into CI |
 | A12: LSP temporary files | Concurrent servers remain independent and no shared source files can be overwritten or leaked on errors | Source temporary files eliminated through compiler stdin snapshots; concurrent-server and missing-tool controls pass |
-| A13: safety contract | Default/strict/raw/FFI guarantees agree; witnesses and valid controls; opaque wrappers and container ownership audited | Pending implementation and contract review |
+| A13: safety contract | Default/strict/raw/FFI guarantees agree; witnesses and valid controls; opaque wrappers and container ownership audited | The pre-registered C-runtime surface is now checked at call sites exactly as an '&'-declared FFI symbol is — it had no argument or arity check at all; opaque wrappers, container ownership and the rest of the contract review remain open |
 | A14: crypto/parser evidence | Instrumented fuzz controls and retained seeds; pinned ACVP/HTTP oracles; measured backend timing; explicit X.509 policy and independent crypto review | Pending; requires A01 and external validation for independent review |
 | A15: release integrity | Mandatory target artifact gates, pinned tool downloads, installer integrity and state-preserving failure controls | The artifact set is now gated before publication, with eleven controls in CI; installer checksum/signature verification reviewed and found fail-closed; pinned tool downloads and state-preserving unpack remain open |
 | A16: compiler architecture | Ownership/state boundaries, current global writer map, interacting-feature differential tests, diagnostic-site dispositions | Trait ordering work is merged; remaining acceptance is unverified |
@@ -1618,3 +1618,52 @@ no report at all. Iterating anything but those two carriers is now a
 diagnostic that names the type it was given
 (`diag_foreach_not_iterable.nu`), and both foreach shapes joined the form
 table.
+
+### A13: the pre-registered runtime surface was the unchecked one (2026-09-11)
+
+A NURL function's call sites are type-checked. An `&`-declared FFI symbol's
+call sites are type-checked — arity, float against integer, pointer against
+integer, aggregate against scalar, each with its own diagnostic. The
+C-runtime surface the compiler pre-registers — `nurl_print`, `nurl_str_int`
+and the 117 others `stdlib/core/builtins.nu` documents, the functions in
+every NURL program — was checked not at all. It was registered with a
+RETURN type only, so the call path had nothing to compare against:
+
+    ( nurl_print )              → call void @nurl_print()
+    ( nurl_print `a` `b` )      → call void @nurl_print(i8*, i8*)
+    ( nurl_print 1.5 )          → call void @nurl_print(double 1.5)
+    ( nurl_print 5 )            → call void @nurl_print(i64 5)
+
+All four compiled. None is valid against
+`declare void @nurl_print(i8* nocapture nofree)` — and under opaque pointers
+none is an IR error either: the call carries its own signature, LLVM's
+verifier accepts it, clang assembles it, and the ABI mismatch arrives at run
+time. `( nurl_print 5 )` segfaulted dereferencing 5. A trait impl whose
+return type disagreed with its trait reached the same place by a different
+road: `( nurl_print ( show 1 ) )` passed an i64 to the pointer parameter.
+
+The signatures were never missing. `emit_header` emits a `declare` line for
+every one of these symbols, and `__emit_rt_decl` sees each line. Reading the
+parameter list out of it fills the same side-tables the FFI path fills —
+`<name>__ffi_params` and `<name>__arity` — so a builtin call is now checked
+by exactly the code that checks an `&` declaration, with no second table to
+drift and nothing hand-written to keep in sync. The one variadic builtin,
+`printf`, keeps its existing hand-written registration and is left without
+an arity.
+
+One gap remained after that. An integer in a pointer position is converted
+with `inttoptr` rather than rejected, deliberately: a handle held as `i64`
+is how NURL passes a C pointer around, and on wasm the call's signature must
+match the declaration or `wasm-ld` emits a trapping stub. But a handle
+arrives in a register and a literal does not, so an integer LITERAL in a
+pointer position is now rejected — except `0`, which is the null pointer.
+That is what closes `( nurl_print 5 )`.
+
+Evidence: the bootstrap reaches its fixed point with the check active, which
+is the compiler's own 35,000 lines of builtin calls agreeing with the
+declares. The corpus passes 989 of 1,007 inputs with 19 skips. The 303
+diagnostics the stdlib, packages and examples produce over 719 files are
+byte-identical to before, so nothing in the tree was relying on the
+looseness. `diag_builtin_arity.nu`, `diag_builtin_arg_type.nu` and
+`diag_builtin_literal_pointer.nu` are the rejections, and seven builtin-call
+forms joined `tools/tests/test_declaration_forms.py`.

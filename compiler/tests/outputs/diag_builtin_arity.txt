@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_builtin_arity.nu:13:18: error: call to 'nurl_print' has the wrong number of arguments: expected 1, got 0 — every NURL operator has fixed arity, so a missing or extra argument shifts every token after it; check this call.
+    ( nurl_print )
+                 ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

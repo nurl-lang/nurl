@@ -9315,6 +9315,22 @@
                             // to a pointer parameter: inttoptr. A wasm call
                             // otherwise needs a function-signature bitcast, which
                             // is invalid → wasm-ld emits a trapping stub.
+                            //
+                            // A handle arrives in a register. A literal does
+                            // not: `( nurl_print 5 )` compiled to
+                            // `inttoptr i64 5 to i8*` and the program
+                            // segfaulted dereferencing 5. Zero is the one
+                            // literal that means something here — the null
+                            // pointer — so every other constant is rejected
+                            // rather than converted.
+                            ? & & != 0 ( nurl_str_len av )
+                            | ( __lx_is_digit ( nurl_str_get av 0 ) ) == ( nurl_str_get av 0 ) 45
+                            ! ( seq av `0` )
+                            { ( die lex ( nurl_str_cat3
+                                ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                                ( nurl_str_cat4 `' is the integer literal ` av ` where the parameter is a pointer ('` ( llvm_to_nurl ( nurl_llty __want ) ) )
+                                `') — a literal is not an address, and the callee would dereference it. Pass a string or buffer of that type; '0' is accepted as the null pointer, and a handle held in a binding is converted as before.` ) ) }
+                            {}
                             : s __nv ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print __nv )
                             ( nurl_print ` = inttoptr ` ) ( nurl_print ( nurl_llty at ) ) ( nurl_print ` ` ) ( nurl_print av )
@@ -26922,6 +26938,101 @@
 // the sans-IO stack) got a declare it never asked for and could not
 // compile. It reads `__arity`, which is why emit_header runs after
 // scan_fn_sigs.
+// ── Preamble builtin signatures ──────────────────────────────────────
+// The C-runtime surface the compiler pre-registers carried a RETURN type
+// only, so nothing checked a call to it. `( nurl_print 5 )` emitted
+// `call void @nurl_print(i64 5)` against a `declare` whose parameter is
+// `i8*`; under opaque pointers the call carries its own signature, so
+// LLVM's verifier accepts it, and the program segfaulted dereferencing 5.
+// Arity was unchecked too — `( nurl_print )` and `( nurl_print `a` `b` )`
+// both compiled. An `&`-declared FFI symbol has been checked all along.
+//
+// The signatures were never missing: emit_header emits a `declare` line
+// for every one of these symbols. Reading the parameter list out of that
+// line fills the same side-tables the FFI path fills, so a builtin call
+// is checked exactly like an FFI call and there is no second table to
+// drift out of sync.
+
+// The text between the '(' that opens a declare's parameter list and its
+// matching ')'. Empty when there is none.
+@ __rt_decl_region s line → s {
+    : i lp ( nurl_str_find line `(` )
+    ? < lp 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : i n ( nurl_str_len line )
+    : ~ i i + lp 1
+    : ~ i depth 1
+    : ~ i end -1
+    ~ & < i n < end 0 {
+        : i c ( nurl_str_get line i )
+        ? == c 40 { = depth + depth 1 } {}
+        ? == c 41 { = depth - depth 1 ? == depth 0 { = end i } {} } {}
+        = i + i 1
+    }
+    ? < end 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_slice line + lp 1 - end + lp 1 )
+}
+
+// The LLVM type that starts `part`, with leading space skipped. Every
+// parameter is `<type> <attribute>*`, so the type is the first word —
+// unless it is an aggregate, which starts with '{' and is taken
+// balanced so its inner commas and spaces stay inside it.
+@ __rt_param_type s part → s {
+    : i n ( nurl_str_len part )
+    : ~ i b 0
+    ~ & < b n == ( nurl_str_get part b ) 32 { = b + b 1 }
+    ? >= b n { ^ ( nurl_str_cat `` `` ) } {}
+    ? == ( nurl_str_get part b ) 123 {
+        : ~ i i b
+        : ~ i depth 0
+        ~ < i n {
+            : i c ( nurl_str_get part i )
+            ? == c 123 { = depth + depth 1 } {}
+            ? == c 125 { = depth - depth 1
+                ? == depth 0 { ^ ( nurl_str_slice part b - + i 1 b ) } {} } {}
+            = i + i 1
+        }
+        ^ ( nurl_str_slice part b - n b )
+    } {}
+    : ~ i e b
+    ~ & < e n != ( nurl_str_get part e ) 32 { = e + e 1 }
+    ^ ( nurl_str_slice part b - e b )
+}
+
+// How many `;`-separated entries a parameter list holds.
+@ __seplist_count s lst → i {
+    : i n ( nurl_str_len lst )
+    ? == n 0 { ^ 0 } {}
+    : ~ i k 1
+    : ~ i i 0
+    ~ < i n { ? == ( nurl_str_get lst i ) 59 { = k + k 1 } {} = i + i 1 }
+    ^ k
+}
+
+// `;`-joined LLVM parameter types of a declare's parameter region.
+// Splits on top-level commas only; a `...` tail is not a parameter.
+@ __rt_decl_ptypes s region → s {
+    : i n ( nurl_str_len region )
+    : ~ s out ``
+    : ~ i start 0
+    : ~ i i 0
+    : ~ i depth 0
+    ~ <= i n {
+        : i c ? < i n ( nurl_str_get region i ) 44
+        ? | == c 123 | == c 40 == c 91 { = depth + depth 1 } {}
+        ? | == c 125 | == c 41 == c 93 { = depth - depth 1 } {}
+        ? & == c 44 == depth 0 {
+            : s ty ( __rt_param_type ( nurl_str_slice region start - i start ) )
+            ? & != 0 ( nurl_str_len ty ) ! ( seq ty `...` )
+            { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ty `` )
+                ( nurl_str_cat3 out `;` ty ) }
+            {}
+            = start + i 1
+        } {}
+        = i + i 1
+    }
+    ^ out
+}
+
 @ __emit_rt_decl i syms s line → v {
     : i at ( nurl_str_find line `@` )
     : i lp ( nurl_str_find line `(` )
@@ -26929,6 +27040,18 @@
         : s nm ( nurl_str_slice line + at 1 - lp + at 1 )
         ? != 0 ( nurl_sym_len2 syms nm `__arity` ) { ^ } {}
         ( mem_read_abi_attrs syms line )
+        // Give the symbol the same call-site contract an `&`-declared
+        // one has: per-parameter types for the argument check, and a
+        // count for the arity check. A variadic builtin (printf alone)
+        // carries its own hand-written registration — leave its arity
+        // unset, or every call would be measured against the fixed
+        // count.
+        : s __rt_pt ( __rt_decl_ptypes ( __rt_decl_region line ) )
+        ( nurl_sym_def syms ( nurl_str_cat nm `__ffi_params` ) __rt_pt )
+        ? == 0 ( nurl_sym_len2 syms nm `__variadic` )
+        { ( nurl_sym_def syms ( nurl_str_cat nm `__arity` )
+            ( nurl_str_int ( __seplist_count __rt_pt ) ) ) }
+        {}
         ( emit line )
         ( nurl_sym_def syms ( nurl_str_cat nm `__ffi_emitted` ) `1` )
         ^
