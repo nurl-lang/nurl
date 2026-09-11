@@ -16393,6 +16393,14 @@
         ( nurl_sym_def syms `__last_call_ret_struct_fields__` `` )
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         ( nurl_sym_def syms `__last_value_borrow__` `` )
+        // Whether the RHS identifier owns a closure env, snapshotted
+        // BEFORE the RHS is generated. Reading a closure binding as a
+        // value drops it from the owned set (gen_ident treats a value
+        // read as an escape), so by the time the transfer below runs the
+        // source is already gone from the list and the env belonged to
+        // nobody: `: h g` and `= f g` each leaked one env.
+        : b __src_owned_env & ( is_ident_tok bck_rhs_tt )
+        ( str_contains_word ( nurl_sym_get syms `__owned_closure_envs__` ) bck_rhs_val )
         ( nurl_sym_def syms `__last_closure_env__` `` )
         ( nurl_sym_def syms `__last_closure_caps__` `` )
         ( nurl_sym_def syms `__last_slice_owned__` `` )
@@ -16542,8 +16550,7 @@
         // so transfer the registration rather than tracking both.
         ? != 0 ( nurl_str_len rhs_closure_env )
         { ( mem_own_closure_add syms name ) }
-        { ? & ( is_ident_tok bck_rhs_tt )
-            ( str_contains_word ( nurl_sym_get syms `__owned_closure_envs__` ) bck_rhs_val )
+        { ? __src_owned_env
             { ( mem_own_closure_remove syms bck_rhs_val ) ( mem_own_closure_add syms name ) }
             {} }
         // Phase 2B: string ownership tracking (opt-in)
@@ -16656,6 +16663,14 @@
             ( nurl_sym_def syms `__last_call_guard__` `` )
             ( nurl_sym_def syms `__last_expr_refdepth__` `` )
             ( nurl_sym_def syms `__last_value_borrow__` `` )
+            // Whether the RHS identifier owns a closure env, snapshotted
+            // BEFORE the RHS is generated. Reading a closure binding as a
+            // value drops it from the owned set (gen_ident treats a value
+            // read as an escape), so by the time the transfer below runs the
+            // source is already gone from the list and the env belonged to
+            // nobody: `: h g` and `= f g` each leaked one env.
+            : b __src_owned_env & ( is_ident_tok bck_rhs_tt )
+            ( str_contains_word ( nurl_sym_get syms `__owned_closure_envs__` ) bck_rhs_val )
             ( nurl_sym_def syms `__last_closure_env__` `` )
             ( nurl_sym_def syms `__last_closure_caps__` `` )
             ( nurl_sym_def syms `__last_slice_owned__` `` )
@@ -16812,10 +16827,14 @@
                 ( __ptr_revive name )
             } {}
             // Closure-env reclamation (§7.4): track a capturing closure
-            // bound here for the function-exit free.
+            // bound here for the function-exit free. A bare-identifier
+            // RHS MOVES the env instead (the borrow checker forbids
+            // reusing the source), so the registration transfers.
             ? != 0 ( nurl_str_len rhs_closure_env )
             { ( mem_own_closure_add syms name ) }
-            {}
+            { ? __src_owned_env
+                { ( mem_own_closure_remove syms bck_rhs_val ) ( mem_own_closure_add syms name ) }
+                {} }
             // Phase 2B: string ownership tracking (opt-in)
             ? != 0 g_auto_drop_strings
             { ? & | ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
@@ -16951,6 +16970,11 @@
         ( nurl_sym_def syms `__last_phi_definite__` `` )
         ( nurl_sym_def syms `__last_closure_env__` `` )
         ( nurl_sym_def syms `__last_closure_caps__` `` )
+        // Same snapshot the `:` paths take, and for the same reason:
+        // generating the RHS reads the identifier, and a value read of a
+        // closure binding drops it from the owned set.
+        : b __src_owned_env & ( is_ident_tok bck_rhs_tt )
+        ( str_contains_word ( nurl_sym_get syms `__owned_closure_envs__` ) bck_rhs_val )
         : ~ s val ( gen_operand lex syms cg )
         : s __asn_rt ( nurl_get_last_type )
         // Borrow checker: `= f \ … { … v … }` rebinds `f` to a closure
@@ -16959,11 +16983,40 @@
         // with `=`. A non-closure RHS clears the list (the resets above),
         // so a rebound `f` never keeps a stale capture set.
         : s __asn_caps ( nurl_sym_get syms `__last_closure_caps__` )
-        ? & != 0 ( nurl_str_len ( nurl_sym_get syms `__last_closure_env__` ) )
-        != 0 ( nurl_str_len __asn_caps )
+        : s __asn_env ( nurl_sym_get syms `__last_closure_env__` )
+        ? & != 0 ( nurl_str_len __asn_env ) != 0 ( nurl_str_len __asn_caps )
         { ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) __asn_caps )
             ( bck_add_cap_name name ) }
         { ( bck_clear_cap_name syms name ) }
+        // Env ownership, the `:` binding's rule in the `=` spelling. A
+        // capturing closure owns a heap env block; the binding path
+        // registers it so the function-exit drain frees it, and the
+        // assignment path did not — every `= f \ … x …` leaked one env
+        // (LeakSanitizer, 16 bytes per assignment, 32 for two). The gate
+        // is the ENV, not the capture list beside it: that list holds
+        // only the heap handles the borrow checker tracks, so a closure
+        // over a plain integer published an env and an empty list.
+        //
+        // Free the env this binding already owns BEFORE the store
+        // overwrites the alloca, exactly as the string and slice
+        // reassignment drops below do, then register the new one. The
+        // membership test is what keeps that safe: a name leaves the
+        // owned set the moment its closure escapes, so an aliased or
+        // escaped env is never freed here.
+        // A bare-identifier RHS MOVES an owned env, exactly as `: h g`
+        // does — the borrow checker forbids reusing the source, so the
+        // registration transfers rather than being held twice. Without
+        // the transfer the env was orphaned: registered to a name whose
+        // slot no longer holds it, freed through that slot, and the new
+        // holder's copy leaked.
+        : b __asn_move_env __src_owned_env
+        ? | != 0 ( nurl_str_len __asn_env ) __asn_move_env
+        { ? ( str_contains_word ( nurl_sym_get syms `__owned_closure_envs__` ) name )
+            { ( mem_emit_closure_env_drop syms cg name ) }
+            {}
+            ? __asn_move_env { ( mem_own_closure_remove syms bck_rhs_val ) } {}
+            ( mem_own_closure_add syms name ) }
+        {}
         // A fresh owned slice reaching the RHS through a `?` / `??` (whose
         // first token isn't `[`) still frees the old buffer below.
         : b rhs_slice_owned != 0 ( nurl_sym_len syms `__last_slice_owned__` )

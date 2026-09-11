@@ -1707,3 +1707,52 @@ existing `expect` reports it (`diag_call_targs_unclosed.nu`).
 One finding in 80,000 mutants is also a result about the parser: every other
 truncation of every other construct in those forty programs was already
 answered.
+
+### A01: the closure env the `=` spelling never released (2026-09-11)
+
+The ledger's own A01 probe — "assigns a closure over a mutable block local
+to an outer binding, then invokes it after that block: it prints 42 and
+exits 0 without an ASan report" — turns out to describe two different
+things, and neither is a missing detection.
+
+Written with a `: ~` multi-field struct, the capture is by pointer and the
+assignment is rejected at compile time: `bck_esc_assign` has always compared
+the referent depth on the `=` path, and since today's work `bck_esc_let`
+compares it on the `:` path too. Written with a scalar — which is how a
+probe that PRINTS 42 and exits 0 must have been written — the capture is by
+VALUE: the closure holds a snapshot in its env, not a pointer into the
+block's frame, so there is no dangling reference for a sanitizer to find.
+The clean exit was the correct answer to that program.
+
+Running the probe under LeakSanitizer rather than ASan found the real
+defect beneath it. A capturing closure owns a heap env block, and the
+binding path registers it for the function-exit free; the assignment path
+never did. Every `= f \ … x …` leaked one env — 16 bytes, 32 for two
+assignments, one per iteration for a closure reassigned in a loop. The gate
+had to be the ENV, not the capture list beside it: that list holds only the
+heap handles the borrow checker tracks, so a closure over a plain integer
+publishes an env and an empty list.
+
+A second leak sat under that one, in BOTH spellings. `: h g` and `= f g`
+move an owned env between bindings, and each path tried to transfer the
+registration by asking whether the source still owned one — after
+generating the right-hand side. But generating it reads the identifier, and
+`gen_ident` treats a value read of a closure binding as an escape and drops
+it from the owned set. The source was always already gone, so the transfer
+never happened and the env belonged to nobody. Both paths now snapshot that
+membership BEFORE the right-hand side is generated.
+
+`closure_env_assign.nu` pins all five shapes — assigned over a
+non-capturing value, assigned twice, moved by `=`, moved by `:`, and
+reassigned in a loop — and joins the curated `LSAN_DETECT_LEAKS=1` list in
+CI beside `closure_env_reclaim` and `closure_env_binding`. Verified clean
+under ASan+LSan. Corpus: 992 pass, 19 skip; the tree's 303 diagnostics are
+unchanged.
+
+What this leaves open for A01 is narrower than the ledger recorded. Within
+one frame a use-after-scope is not a memory error today: every alloca is
+hoisted to the entry block and lives for the whole function, so the worst
+case is a slot reused across loop iterations. The escape that IS a dangling
+pointer — a stack reference outliving its function — is rejected in every
+spelling tried. A lifetime-marker policy therefore buys detection and stack
+reuse, not correctness.
