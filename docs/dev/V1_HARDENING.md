@@ -1756,3 +1756,60 @@ case is a slot reused across loop iterations. The escape that IS a dangling
 pointer — a stack reference outliving its function — is rejected in every
 spelling tried. A lifetime-marker policy therefore buys detection and stack
 reuse, not correctness.
+
+### A01: what the corpus leaks when anyone looks (2026-09-11)
+
+`run_san_tests.sh` sets `detect_leaks=0` by default, for a stated reason —
+"some corpus programs omit cleanup to isolate the behavior under test" — and
+CI turns leak detection on for a curated list of about forty. So the leak
+behaviour of the other 950 has not been measured. It is now:
+
+| corpus under `LSAN_DETECT_LEAKS=1` | programs |
+|---|---|
+| run | 992 |
+| clean | 900 |
+| leaking | 92 |
+| sanitizer failures other than leaks | 0 |
+| timeouts | 0 |
+
+Ninety-one percent of the corpus is already leak-clean, which is the useful
+half of the number: the default is hiding a boundary, not a swamp. Of the 92,
+47 contain a closure literal and 45 do not, so at least two distinct causes
+are in there.
+
+One is root-caused. A closure literal passed straight to a GENERIC
+higher-order function leaks its env:
+
+```nurl
+@ apply_each [A] ( @ v A ) f A x → v { ( f x ) ( f x ) }
+…
+( apply_each [i] \ i k → v { ( use n k ) } 1 )     — 16 bytes, every call
+```
+
+The same call to a NON-generic helper is clean. The call site decides
+whether to free the literal's env from `g_fn_invoke_only[callee]` — the set
+of parameters the callee only ever invokes, never loads as a value — and for
+a generic callee that set does not exist yet: the call name is the mangled
+instantiation, instantiations are emitted after the code that calls them, and
+the template itself is never compiled under its own name. Freeing without
+that evidence would be a use-after-free whenever the callee stores or
+detaches the closure, so the conservative branch is correct as written; what
+is missing is the evidence, which needs the summary to exist before the call
+site is generated. That is an ordering change in monomorphisation, not a
+patch to this branch, and it should not be attempted as a late edit.
+
+The other 45 are not triaged. `boss` leaks 5 bytes through `json_to_str`,
+and the obvious neighbouring shapes are all clean — a ternary of string
+literals, an owned string returned by a user function and passed straight
+into a call, an owned string bound and dropped — so it is something narrower
+inside that module rather than a general rule. Reproduce the inventory with:
+
+```sh
+./build.sh --san --no-tests
+LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh
+```
+
+The instrumented toolchain is otherwise healthy with this session's changes:
+the same run reports zero ASan/UBSan findings and zero timeouts, the compiler
+self-compile leak gate is clean in both emission modes, and the curated
+leak-clean list passes with `closure_env_assign.nu` added to it.

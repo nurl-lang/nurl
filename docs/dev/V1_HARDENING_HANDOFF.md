@@ -147,6 +147,16 @@ loop. Correct values, zero findings.
    The technique that paid here is worth repeating on its own: run existing
    probes under LSan, not only ASan. The leak was invisible to every ASan
    run and to the default sanitized corpus, which sets `detect_leaks=0`.
+
+   Turning it on for the whole corpus measured the boundary: 900 of 992
+   programs are leak-clean, 92 are not, with zero other sanitizer findings.
+   One cause is root-caused in the ledger — a closure literal passed to a
+   GENERIC higher-order function leaks its env, because the call site's
+   evidence (`g_fn_invoke_only`) does not exist until after the
+   instantiation is emitted. Fixing it is an ordering change in
+   monomorphisation; freeing without the evidence would be a use-after-free.
+   The other 45 leakers, the ones with no closure literal in them, are not
+   triaged.
 5. Continue A13/A16 indirect/generic/embedded-origin and cleanup
    counterexamples; borrowed-initial mutable bindings and raw/FFI boundaries
    need broader review.
