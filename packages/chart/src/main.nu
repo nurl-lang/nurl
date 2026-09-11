@@ -191,12 +191,12 @@ $ `src/chart.nu`
 
 @ main → i {
     : ArgParser p ( args_new `chart` `draw charts in your terminal` )
-    ( args_opt  p `width`  119 `COLS` `chart width in cells (default 40)` )  // -w
-    ( args_opt  p `height` 72  `ROWS` `plot height in rows (default 10)` )  // -H
-    ( args_opt  p `bins`   98  `N`    `histogram buckets (default 10)` )  // -b
-    ( args_opt  p `file`   102 `FILE` `read numbers from FILE instead of stdin` )  // -f
-    ( args_opt  p `title`  116 `TEXT` `print TITLE above the chart` )  // -t
-    ( args_flag p `help`   104 `show this help` )  // -h
+    ( args_opt p `width` 119 `COLS` `chart width in cells (default 40)` )  // -w
+    ( args_opt p `height` 72 `ROWS` `plot height in rows (default 10)` )  // -H
+    ( args_opt p `bins` 98 `N` `histogram buckets (default 10)` )  // -b
+    ( args_opt p `file` 102 `FILE` `read numbers from FILE instead of stdin` )  // -f
+    ( args_opt p `title` 116 `TEXT` `print TITLE above the chart` )  // -t
+    ( args_flag p `help` 104 `show this help` )  // -h
 
     : ( Vec String ) argv ( vec_new [String] )
     : i ac ( env_args_count )
@@ -211,91 +211,91 @@ $ `src/chart.nu`
         ? ( args_present p `help` ) {
             ( __usage p )
         } {
-                // Mode = first positional (default "spark").
-                : ( Vec String ) ps ( args_positionals p )
-                : ~ s mode `spark`
-                ? > ( vec_len [String] ps ) 0 {
-                    ?? ( vec_get [String] ps 0 ) {
-                        T m0 → { = mode ( string_data m0 ) }
-                        F _ → {}
-                    }
-                } {}
+            // Mode = first positional (default "spark").
+            : ( Vec String ) ps ( args_positionals p )
+            : ~ s mode `spark`
+            ? > ( vec_len [String] ps ) 0 {
+                ?? ( vec_get [String] ps 0 ) {
+                    T m0 → { = mode ( string_data m0 ) }
+                    F _ → {}
+                }
+            } {}
 
-                // Read input: --file or stdin.
-                : ~ String input ( string_new )
-                : ~ b ok T
-                ?? ( args_value p `file` ) {
-                    T fv → {
-                        ?? ( read_file ( string_data fv ) ) {
-                            T txt → { ( string_free input ) = input txt }
-                            F _ → {
-                                ( nurl_eprint `chart: cannot read file: ` )
-                                ( nurl_eprintln ( string_data fv ) )
-                                = rc 1 = ok F
-                            }
+            // Read input: --file or stdin.
+            : ~ String input ( string_new )
+            : ~ b ok T
+            ?? ( args_value p `file` ) {
+                T fv → {
+                    ?? ( read_file ( string_data fv ) ) {
+                        T txt → { ( string_free input ) = input txt }
+                        F _ → {
+                            ( nurl_eprint `chart: cannot read file: ` )
+                            ( nurl_eprintln ( string_data fv ) )
+                            = rc 1 = ok F
                         }
-                        ( string_free fv )
                     }
-                    F _ → {
-                        ( string_free input )
-                        = input ( read_all_stdin )
+                    ( string_free fv )
+                }
+                F _ → {
+                    ( string_free input )
+                    = input ( read_all_stdin )
+                }
+            }
+
+            ? ok {
+                : i width ( __opt_int p `width` 40 )
+                : i height ( __opt_int p `height` 10 )
+                : i bins ( __opt_int p `bins` 10 )
+
+                // Optional title line.
+                ?? ( args_value p `title` ) {
+                    T tv → {
+                        ( nurl_print ( string_data tv ) ) ( nurl_print `\n` )
+                        ( string_free tv )
                     }
+                    F _ → {}
                 }
 
-                ? ok {
-                    : i width  ( __opt_int p `width`  40 )
-                    : i height ( __opt_int p `height` 10 )
-                    : i bins   ( __opt_int p `bins`   10 )
-
-                    // Optional title line.
-                    ?? ( args_value p `title` ) {
-                        T tv → {
-                            ( nurl_print ( string_data tv ) ) ( nurl_print `\n` )
-                            ( string_free tv )
-                        }
-                        F _ → {}
-                    }
-
-                    ? != 0 ( nurl_str_eq mode `bar` ) {
-                        : ( Vec String ) labels ( vec_new [String] )
-                        : ( Vec f ) values ( vec_new [f] )
-                        ( __parse_bar input labels values )
-                        ( __emit ( chart_bars labels values width ) )
-                        ( vec_free_with [String] labels \ String s → v { ( string_free s ) } )
-                        ( vec_free [f] values )
+                ? != 0 ( nurl_str_eq mode `bar` ) {
+                    : ( Vec String ) labels ( vec_new [String] )
+                    : ( Vec f ) values ( vec_new [f] )
+                    ( __parse_bar input labels values )
+                    ( __emit ( chart_bars labels values width ) )
+                    ( vec_free_with [String] labels \ String s → v { ( string_free s ) } )
+                    ( vec_free [f] values )
+                } {
+                    : ( Vec f ) values ( __parse_floats input )
+                    ? == 0 ( vec_len [f] values ) {
+                        ( nurl_eprintln `chart: no numbers in input` )
+                        = rc 1
                     } {
-                        : ( Vec f ) values ( __parse_floats input )
-                        ? == 0 ( vec_len [f] values ) {
-                            ( nurl_eprintln `chart: no numbers in input` )
-                            = rc 1
+                        ? != 0 ( nurl_str_eq mode `hist` ) {
+                            ( __emit ( chart_hist values bins width ) )
                         } {
-                            ? != 0 ( nurl_str_eq mode `hist` ) {
-                                ( __emit ( chart_hist values bins width ) )
+                            ? != 0 ( nurl_str_eq mode `line` ) {
+                                ( __emit ( chart_plot values width height ) )
                             } {
-                                ? != 0 ( nurl_str_eq mode `line` ) {
+                                ? != 0 ( nurl_str_eq mode `plot` ) {
                                     ( __emit ( chart_plot values width height ) )
                                 } {
-                                    ? != 0 ( nurl_str_eq mode `plot` ) {
-                                        ( __emit ( chart_plot values width height ) )
+                                    ? != 0 ( nurl_str_eq mode `spark` ) {
+                                        ( __emit ( chart_sparkline values ) )
+                                        ( nurl_print `\n` )
                                     } {
-                                        ? != 0 ( nurl_str_eq mode `spark` ) {
-                                            ( __emit ( chart_sparkline values ) )
-                                            ( nurl_print `\n` )
-                                        } {
-                                            ( nurl_eprint `chart: unknown mode '` )
-                                            ( nurl_eprint mode )
-                                            ( nurl_eprintln `' (try spark|bar|hist|line)` )
-                                            = rc 2
-                                        }
+                                        ( nurl_eprint `chart: unknown mode '` )
+                                        ( nurl_eprint mode )
+                                        ( nurl_eprintln `' (try spark|bar|hist|line)` )
+                                        = rc 2
                                     }
                                 }
                             }
                         }
-                        ( vec_free [f] values )
                     }
-                } {}
-                ( string_free input )
-            }
+                    ( vec_free [f] values )
+                }
+            } {}
+            ( string_free input )
+        }
     } {
         ( nurl_eprint `chart: ` ) ( nurl_eprintln ( args_error p ) )
         ( nurl_eprintln `try 'chart --help'` )

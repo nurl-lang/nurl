@@ -10,11 +10,22 @@
 #  semantic guarantee — that reformatting never changes a byte of
 #  emitted IR — is the separate, slower nurlfmt_idempotent.sh.
 #
-#  Coverage mirrors nurlfmt_idempotent.sh: stdlib/, examples/,
-#  compiler/tests/, tools/nurlfmt/, and the bootstrap compiler.
+#  Coverage is the TRACKED inventory: every .nu file git knows
+#  about, minus bench/. A hand-listed set of directories cannot
+#  notice a new one — it named five and left 464 first-party files
+#  (packages/, unikernel/, tools/ outside nurlfmt, nurlapi/,
+#  pttvoice/) ungated, 18 of which had drifted. Asking git removes
+#  that whole failure mode: a directory added tomorrow is covered
+#  the day it is committed.
+#
 #  bench/ is deliberately excluded — those .nu files are recorded
 #  model outputs from the generation-accuracy study, not first-party
 #  source, and must keep the exact bytes the model emitted.
+#
+#  The stronger IR-equivalence gate (nurlfmt_idempotent.sh) keeps
+#  its narrower tree on purpose: it compiles a copy of the file in a
+#  temporary directory, which only works for sources whose imports
+#  resolve from the repository root. This gate compiles nothing.
 #
 #  Usage:
 #    nurlfmt_check.sh            # check the whole covered tree
@@ -42,13 +53,14 @@ if [[ $# -ge 1 ]]; then
 else
     mapfile -t FILES < <(
         {
-            find stdlib         -name '*.nu' -type f
-            find examples       -name '*.nu' -type f
-            find compiler/tests -name '*.nu' -type f
-            find tools/nurlfmt  -name '*.nu' -type f
-            echo compiler/nurlc.nu
-            echo compiler/nurlc_lastgood.nu
-        } | sort -u
+            if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1
+            then
+                git -C "$ROOT_DIR" ls-files '*.nu'
+            else
+                # Exported tree with no git: fall back to the filesystem.
+                find . -name '*.nu' -type f | sed 's|^\./||'
+            fi
+        } | grep -Ev '^bench/' | sort -u
     )
 fi
 
@@ -69,5 +81,5 @@ echo "nurlfmt --check: ${#OFFENDERS[@]} file(s) are NOT canonical:" >&2
 for f in "${OFFENDERS[@]}"; do
     echo "  $f" >&2
 done
-echo "Run: build/nurlfmt --write <file>   (or ./tools/nurlfmt/fix.sh)" >&2
+echo "Run: build/nurlfmt --write <file>   (or pass them all at once)" >&2
 exit 1

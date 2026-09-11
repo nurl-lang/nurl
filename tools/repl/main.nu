@@ -82,10 +82,10 @@ $ `stdlib/std/fs.nu`
     ~ < k n {
         : i c ( nurl_str_get code k )
         ? == c 96 { = instr ? == instr 0 1 0 } {
-        ? == instr 0 {
-            ? | == c 123 | == c 40 == c 91 { = depth + depth 1 } {}
-            ? | == c 125 | == c 41 == c 93 { = depth - depth 1 } {}
-        } {} }
+            ? == instr 0 {
+                ? | == c 123 | == c 40 == c 91 { = depth + depth 1 } {}
+                ? | == c 125 | == c 41 == c 93 { = depth - depth 1 } {}
+            } {} }
         = k + k 1
     }
     ^ depth
@@ -153,7 +153,7 @@ $ `stdlib/std/fs.nu`
 // the frontend accepts the whole thing.
 @ __repl_add_def String line ( Vec String ) imports ( Vec String ) defs → v {
     : i c0 ( __char_at line 0 )
-    : b is_import == c0 36   // '$'
+    : b is_import == c0 36  // '$'
     ? is_import { ( vec_push [String] imports ( __clone_str line ) ) } { ( vec_push [String] defs ( __clone_str line ) ) }
     : String prog ( __build_program imports defs `` )
     : !v IoErr _w ( write_file `/tmp/nurl_repl_check.nu` ( string_data prog ) )
@@ -298,7 +298,7 @@ $ `stdlib/std/fs.nu`
 @ __repl_dispatch String full ( Vec String ) imports ( Vec String ) defs → i {
     : i c0 ( __char_at full 0 )
     : i c1 ( __char_at full 1 )
-    ? & == c0 58 & != c1 32 != c1 -1 {            // ':' + non-space → meta
+    ? & == c0 58 & != c1 32 != c1 -1 {  // ':' + non-space → meta
         ^ ( __repl_meta full imports defs )
     } {}
     ? | | == c0 64 == c0 38 | == c0 36 & == c0 58 == c1 32 {  // @ & $  or ': '

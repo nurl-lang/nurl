@@ -12,28 +12,47 @@ $ `stdlib/core/string.nu`
 $ `image.nu`
 
 & `X11` @ XOpenDisplay *u name → *u
+
 & `X11` @ XDefaultScreen *u dpy → i
+
 & `X11` @ XRootWindow *u dpy i screen → i
+
 & `X11` @ XDefaultVisual *u dpy i screen → *u
+
 & `X11` @ XDefaultDepth *u dpy i screen → i
+
 & `X11` @ XCreateSimpleWindow *u dpy i parent i x i y i w i h i bw i border i bg → i
+
 & `X11` @ XStoreName *u dpy i win s name → i
+
 & `X11` @ XSelectInput *u dpy i win i mask → i
+
 & `X11` @ XMapWindow *u dpy i win → i
+
 & `X11` @ XCreateGC *u dpy i drawable i valuemask *u values → *u
+
 & `X11` @ XCreateImage *u dpy *u visual i depth i format i offset *u data i width i height i pad i bpl → *u
+
 & `X11` @ XPutImage *u dpy i d *u gc *u image i sx i sy i dx i dy i w i h → i
+
 & `X11` @ XFlush *u dpy → i
+
 & `X11` @ XPending *u dpy → i
+
 & `X11` @ XNextEvent *u dpy *u event → i
+
 & `X11` @ XInternAtom *u dpy s name i only → i
+
 & `X11` @ XSetWMProtocols *u dpy i win *u protocols i count → i
+
 & `X11` @ XCloseDisplay *u dpy → i
+
 & `c` @ nurl_poke_i32 *u base i idx i32 val → v
+
 & `c` @ nurl_peek_i32 *u base i idx → i32
 
 // Pointers (Display*, GC, XImage*, data) carried as i64; w/h the frame size.
-: XWin { i dpy  i win  i gc  i img  i data  i w  i h  i ok }
+: XWin { i dpy i win i gc i img i data i w i h i ok }
 
 @ xwin_ok XWin x → b { ^ != . x ok 0 }
 
@@ -47,14 +66,14 @@ $ `image.nu`
     : i depth ( XDefaultDepth dpy screen )
     : i win ( XCreateSimpleWindow dpy root 0 0 w h 0 0 0 )
     ( XStoreName dpy win title )
-    ( XSelectInput dpy win 5 )            // KeyPressMask(1) | ButtonPressMask(4)
+    ( XSelectInput dpy win 5 )  // KeyPressMask(1) | ButtonPressMask(4)
     : i wmdel ( XInternAtom dpy `WM_DELETE_WINDOW` 0 )
     : *u protos ( nurl_alloc 8 ) ( nurl_poke protos 0 wmdel )
     ( XSetWMProtocols dpy win protos 1 )
     ( nurl_free protos )
     ( XMapWindow dpy win )
     : *u gc ( XCreateGC dpy win 0 # *u 0 )
-    : *u data ( nurl_alloc * * w h 4 )     // 32-bit BGRX per pixel
+    : *u data ( nurl_alloc * * w h 4 )  // 32-bit BGRX per pixel
     : *u img ( XCreateImage dpy vis depth 2 0 data w h 32 0 )  // ZPixmap=2, pad 32
     ( XFlush dpy )
     ^ @ XWin { # i dpy win # i gc # i img # i data w h 1 }

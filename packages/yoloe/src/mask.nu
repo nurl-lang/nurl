@@ -22,16 +22,19 @@ $ `image.nu`
 $ `decode.nu`
 
 & `c` @ nurl_peek_f32 *u base i idx → f
+
 & `c` @ nurl_poke_f32 *u base i idx f val → v
 
 // Mask prototype geometry: 32 coefficients, 160×160 prototypes at stride 4.
 @ mask_nm → i { ^ 32 }
+
 @ mask_dim → i { ^ 160 }
+
 @ mask_stride → i { ^ 4 }
 
 // Read a detection's nm mask coefficients from output0 (channels
 // 4+nc .. 4+nc+nm at anchor `ai`) into a fresh host buffer (caller frees).
-@ mask_coeffs *u out i na i nc i ai → *u {
+@ mask_coeffs * u out i na i nc i ai → *u {
     : i nm ( mask_nm )
     : *u c ( nurl_alloc * nm 4 )
     : ~ i m 0
@@ -45,7 +48,7 @@ $ `decode.nu`
 // Build the 160×160 mask logit map for one detection: logit[y,x] =
 // Σ_m coeff[m]·proto[m,y,x]. proto is laid out [nm, MH, MW] row-major.
 // Returns a fresh host f32 buffer of MH*MW (caller frees).
-@ mask_logits *u proto *u coeff i MH i MW → *u {
+@ mask_logits * u proto * u coeff i MH i MW → *u {
     : i nm ( mask_nm )
     : i hw * MH MW
     : *u L ( nurl_alloc * hw 4 )
@@ -65,7 +68,7 @@ $ `decode.nu`
 
 // Bilinear sample of an MH×MW grid at fractional (fy,fx); out-of-range
 // coordinates clamp to the edge (align_corners=False convention).
-@ mask_sample *u L i MH i MW f fy f fx → f {
+@ mask_sample * u L i MH i MW f fy f fx → f {
     : f cy ? < fy 0.0 0.0 ? > fy # f - MH 1 # f - MH 1 fy
     : f cx ? < fx 0.0 0.0 ? > fx # f - MW 1 # f - MW 1 fx
     : i y0 # i cy
@@ -99,7 +102,7 @@ $ `decode.nu`
 // ORIGINAL-image pixels (x0,y0,ow,oh); for each pixel we map back through the
 // letterbox to the 160×160 mask grid and threshold the bilinearly-sampled
 // logit at 0 (sigmoid > 0.5). `S` is the model input side (640).
-@ mask_overlay Image im *u L Letterbox lb i S i x0 i y0 i ow i oh i r i gg i bb i alpha → i {
+@ mask_overlay Image im * u L Letterbox lb i S i x0 i y0 i ow i oh i r i gg i bb i alpha → i {
     : i MH ( mask_dim )
     : i MW ( mask_dim )
     : f scale . lb scale

@@ -223,11 +223,11 @@ $ `stdlib/std/float.nu`
 // Built on top of `chart_bars`, so it inherits the sub-cell bars.
 
 @ __push_range_label String dst f lo f hi → v {
-    ( string_push_char dst 91 )         // [
+    ( string_push_char dst 91 )  // [
     ( string_push_float dst lo )
     ( string_push_str dst `, ` )
     ( string_push_float dst hi )
-    ( string_push_char dst 41 )         // )
+    ( string_push_char dst 41 )  // )
 }
 
 @ chart_hist ( Vec f ) values i bins i width → String {

@@ -17,14 +17,16 @@ $ `src/runtime.nu`
 & `c` @ nurl_peek_f32 *u base i idx → f
 
 : ~ i g_fail 0
+
 @ check b cond s name → v {
     ? cond { ( nurl_print `  ok  ` ) } { ( nurl_print `  FAIL ` ) = g_fail + g_fail 1 }
     ( nurl_print name ) ( nurl_print `\n` )
 }
+
 @ streqt s a s b → b { ^ != ( nurl_str_eq a b ) 0 }
 
 // Load a raw little-endian f32 file into a host buffer (count via pcell).
-@ load_f32t s path *u pcell → *u {
+@ load_f32t s path * u pcell → *u {
     ?? ( read_file_bytes path ) {
         T bytes → {
             : i n / ( vec_len [u] bytes ) 4

@@ -12,9 +12,9 @@ $ `deps/onnx/src/runtime.nu`
 
 & `c` @ nurl_peek_f32 *u base i idx → f
 
-@ load_f32 s path *u pc → *u {
+@ load_f32 s path * u pc → *u {
     ?? ( read_file_bytes path ) { T b → { : i n / ( vec_len [u] b ) 4 : *u h ( nurl_alloc * n 4 )
-        : *PbR r ( pb_new b ) ( pb_read_f32_into r h n ) ( pb_free r ) ( nurl_poke pc 0 n ) ^ h }
+            : *PbR r ( pb_new b ) ( pb_read_f32_into r h n ) ( pb_free r ) ( nurl_poke pc 0 n ) ^ h }
         F _ → { ( nurl_poke pc 0 0 ) ^ # *u 0 } }
 }
 
@@ -32,7 +32,7 @@ $ `deps/onnx/src/runtime.nu`
     ( nurl_print ` input=` ) ( nurl_print ( string_data . g input_name ) ) ( nurl_print `\n` )
 
     // tokens.i64 is already int64 LE — upload its bytes directly
-    : ~ *u tokhost # *u 0
+    : ~ * u tokhost # *u 0
     ?? ( read_file_bytes ( string_data tp ) ) { T tb → = tokhost # *u ( vec_data [u] tb ) F _ → { ( nurl_print `tokens fail\n` ) ^ 1 } }
 
     : *Engine e ( rt_open 0 )
@@ -40,7 +40,7 @@ $ `deps/onnx/src/runtime.nu`
     ( nurl_print `device ` ) ( nurl_print ( rt_name e ) ) ( nurl_print `\n` )
 
     : RTensor out ( rt_run_tokens e g tokhost nrow ncol )
-    
+
     : *u host ( rt_download e out )
     ( nurl_print `output floats ` ) ( nurl_print ( nurl_str_int . out nelem ) ) ( nurl_print `\n` )
 

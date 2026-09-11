@@ -48,7 +48,7 @@ $ `image.nu`
 }
 
 // Parse `WxH` / `Wx` / `xH`; scaled dims land in wh[0], wh[1] (0 = derive).
-@ __img_parse_wh String spec *u wh → b {
+@ __img_parse_wh String spec * u wh → b {
     : i n ( string_len spec )
     : ~ i w 0
     : ~ i h 0
@@ -56,7 +56,7 @@ $ `image.nu`
     : ~ i k 0
     ~ < k n {
         : i c ( string_get spec k )
-        ? || == c 120 == c 88 { = xpos k } {}     // 'x' / 'X'
+        ? || == c 120 == c 88 { = xpos k } {}  // 'x' / 'X'
         = k + k 1
     }
     ? < xpos 0 { ^ F } {}
@@ -89,10 +89,10 @@ $ `image.nu`
             ( string_push_str m ` ` )
             : i ch ( image_channels im )
             ? == ch 1 { ( string_push_str m `greyscale` ) } {
-            ? == ch 2 { ( string_push_str m `greyscale+alpha` ) } {
-            ? == ch 3 { ( string_push_str m `RGB` ) } {
-                ( string_push_str m `RGBA` )
-            } } }
+                ? == ch 2 { ( string_push_str m `greyscale+alpha` ) } {
+                    ? == ch 3 { ( string_push_str m `RGB` ) } {
+                        ( string_push_str m `RGBA` )
+                    } } }
             ( puts ( string_data m ) )
             ( string_free m )
             ( image_free im )

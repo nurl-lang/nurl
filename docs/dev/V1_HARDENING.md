@@ -17,7 +17,7 @@ in reviewable groups. No item below certifies the whole language or ecosystem.
 | A07: continuous package/service tests | Suite/prerequisite manifest, changed packages and reverse dependencies, scheduled coverage; registry/cloud and diagnostic gates in CI | Pending current workflow inventory |
 | A08: documentation consistency | Grammar, spec, platform claims, generated facts and executable docs agree with implementation | Runner prerequisites, macOS/musl claims and stale leak comments corrected from source; the binding path now accepts the block-expression initialiser its own grammar specifies; remaining claims pending |
 | A09: package development | Clean checkout and unpacked consumer tests, shared environment setup, explicit public import surfaces | Pending reproduction |
-| A10: tree gates | Tracked formatting inventory, package-aware frontend coverage, recursive import checks with reported exclusions | Pending current scope inventory |
+| A10: tree gates | Tracked formatting inventory, package-aware frontend coverage, recursive import checks with reported exclusions | The canonical-form gate now covers the tracked inventory (1,779 files) instead of five hand-listed directories, and the 18 files that had drifted are reformatted; package-aware frontend coverage and recursive import checks remain open |
 | A11: toolchain build integrity | Injected required-tool failures fail the build; stale binaries cannot substitute; logs and totals retained | Required tools now fail the build, use the canonical driver and remove stale outputs; isolated full-build controls pass locally and are wired into CI |
 | A12: LSP temporary files | Concurrent servers remain independent and no shared source files can be overwritten or leaked on errors | Source temporary files eliminated through compiler stdin snapshots; concurrent-server and missing-tool controls pass |
 | A13: safety contract | Default/strict/raw/FFI guarantees agree; witnesses and valid controls; opaque wrappers and container ownership audited | Pending implementation and contract review |
@@ -1428,3 +1428,37 @@ passes unchanged beside the four new rejections
 (`diag_const_missing_value`, `diag_const_missing_name`,
 `diag_generic_struct_no_body`, `diag_colon_decl_junk`), and the stdlib,
 packages and examples produce the same diagnostics they did before.
+
+### A10: the formatting gate's inventory (2026-09-11)
+
+`compiler/tests/nurlfmt_check.sh` opens by asserting that "every first-party
+NURL source file is already in canonical form" and then checked five
+hand-listed directories. The tracked inventory is 1,817 `.nu` files; the gate
+saw 1,315 of them, `bench/` accounts for 38 deliberately excluded recorded
+model outputs, and **464 first-party files were gated by nothing** —
+`packages/`, `unikernel/`, `tools/` outside `tools/nurlfmt/`, `nurlapi/`,
+`pttvoice/`. Eighteen of those had drifted out of canonical form.
+
+The drift stayed small because `.githooks/pre-commit` has always used the
+right rule — every staged `.nu` minus `bench/` — so anything touched since
+the hook was installed was corrected on the way in. The gate and the hook
+disagreed about what they were guarding; the eighteen are the files nobody
+had staged since.
+
+The gate now asks git for the inventory (`git ls-files '*.nu'` minus
+`bench/`, with a filesystem fallback for an exported tree), which is the
+whole point of an inventory gate: a directory added tomorrow is covered the
+day it is committed, with no list to update. It reports 1,779 canonical
+files.
+
+Reformatting the eighteen was checked for meaning, not just for bytes: for
+each file the formatted copy was written beside the original so its imports
+still resolved, and both were compiled. Seven produce byte-identical IR; the
+other eleven do not compile standalone (their vendored `deps/` are not in the
+tree) and were left to the idempotence property alone. No file changed its
+IR. The stronger IR-equivalence gate keeps its narrower tree on purpose — it
+compiles a copy in a temporary directory, which only works for sources whose
+imports resolve from the repository root.
+
+The gate's failure message also pointed at `./tools/nurlfmt/fix.sh`, which
+does not exist anywhere in the tree.

@@ -73,14 +73,14 @@ $ `src/cli.nu`
 
 @ main → i {
     : *Cli c ( cli_new `demo` `cli facade demo` `1.0.0` )
-    ( cli_flag_str  c `name` 110 `NAME` `who to greet` `world` `DEMO_NAME` )
+    ( cli_flag_str c `name` 110 `NAME` `who to greet` `world` `DEMO_NAME` )
     ( cli_flag_bool c `loud` 108 `shout the greeting` )
-    ( cli_flag_int  c `port` 112 `PORT` `a port number` 8080 `DEMO_PORT` )
+    ( cli_flag_int c `port` 112 `PORT` `a port number` 8080 `DEMO_PORT` )
     ( cli_cmd c `hello` `print a greeting` \ CliCtx x → i { ^ ( cmd_hello x ) } )
-    ( cli_cmd c `add`   `sum integer arguments` \ CliCtx x → i { ^ ( cmd_add x ) } )
-    ( cli_cmd c `port`  `show the resolved port` \ CliCtx x → i { ^ ( cmd_port x ) } )
-    ( cli_cmd c `wc`    `count bytes on stdin` \ CliCtx x → i { ^ ( cmd_wc x ) } )
-    ( cli_cmd c `rm`    `delete with confirmation` \ CliCtx x → i { ^ ( cmd_rm x ) } )
+    ( cli_cmd c `add` `sum integer arguments` \ CliCtx x → i { ^ ( cmd_add x ) } )
+    ( cli_cmd c `port` `show the resolved port` \ CliCtx x → i { ^ ( cmd_port x ) } )
+    ( cli_cmd c `wc` `count bytes on stdin` \ CliCtx x → i { ^ ( cmd_wc x ) } )
+    ( cli_cmd c `rm` `delete with confirmation` \ CliCtx x → i { ^ ( cmd_rm x ) } )
     : i rc ( cli_run c )
     ( cli_free c )
     ^ rc

@@ -12,13 +12,15 @@ $ `deps/onnx/src/runtime.nu`
 
 & `c` @ nurl_peek_f32 *u base i idx → f
 
-@ load_f32 s path *u pc → *u {
+@ load_f32 s path * u pc → *u {
     ?? ( read_file_bytes path ) { T b → { : i n / ( vec_len [u] b ) 4 : *u h ( nurl_alloc * n 4 )
-        : *PbR r ( pb_new b ) ( pb_read_f32_into r h n ) ( pb_free r ) ( nurl_poke pc 0 n ) ^ h }
+            : *PbR r ( pb_new b ) ( pb_read_f32_into r h n ) ( pb_free r ) ( nurl_poke pc 0 n ) ^ h }
         F _ → { ( nurl_poke pc 0 0 ) ^ # *u 0 } }
 }
+
 @ shape4 i a i b i c i d → ( Vec i ) { : ( Vec i ) v ( vec_new [i] )
     ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ( vec_push [i] v d ) ^ v }
+
 @ shape3 i a i b i c → ( Vec i ) { : ( Vec i ) v ( vec_new [i] )
     ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ^ v }
 
@@ -33,7 +35,6 @@ $ `deps/onnx/src/runtime.nu`
     : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
     ?? ( read_file_bytes ( string_data mp ) ) { T mb → = g ( onnx_parse mb ) F _ → { ( nurl_print `model fail\n` ) ^ 1 } }
     ( nurl_print `nodes ` ) ( nurl_print ( nurl_str_int ( vec_len [ONode] . g nodes ) ) )
-
 
     : *u nc ( nurl_alloc 8 )
     : *u img ( load_f32 ( string_data ip ) nc )
