@@ -168,6 +168,9 @@ jobs:
           [ "$out" = "ok" ] || { echo "unexpected output: $out" >&2; exit 1; }
           echo "driver OK"
 
+      - name: Split driver paths with spaces and glob characters
+        run: python3 tools/tests/test_driver_paths.py
+
       - name: examples corpus frontend gate
         # Frontend-only, so it costs seconds and cannot depend on
         # platform libraries — but it does depend on the compiler, and
