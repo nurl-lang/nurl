@@ -162,10 +162,15 @@ loop. Correct values, zero findings.
    Fixing it needs either a dataflow refinement (a store into a container
    that provably dies before return is not an escape) or a parameter marker
    that asserts non-escape the way `sink` asserts consumption — the second
-   is a language decision, not a repair. The remaining leakers are not
-   individually triaged, but 25 of the 45 non-closure ones allocate through
-   the same `__vec_grow` frame, so they are likely one or two more clusters
-   rather than 45 separate defects.
+   is a language decision, not a repair.
+
+   The 92 are triaged as far as a machine can take them: 47 contain a
+   closure literal, 11 allocate in the test's own `main` (the "omits
+   cleanup to isolate the behaviour" class the runner's own comment
+   describes), and 34 allocate inside a callee — led by `nurl_str_int` (6),
+   `bytes_from_hex` (5) and `string_from` (4). The `nurl_str_int` six are
+   the second class above, which gives it a size. Pull `bytes_from_hex`
+   next: five programs, one function.
 5. A13's container and opaque-handle half now has witnesses (see the
    ledger): ten violations by construction, every one the default rules
    promise to catch caught, the three that compile are holes
@@ -176,7 +181,12 @@ loop. Correct values, zero findings.
      join is a guaranteed use-after-free on the taken path and is reported
      in neither mode. §2.1 says reads of a maybe-moved binding are never
      flagged; strict mode is where false positives are acceptable, so a
-     fourth strict check has a witness and a home.
+     fourth strict check has a witness and a home. Two numbers before
+     building it, both in the ledger: `--strict-borrowck` already reports
+     1,070 distinct sites across 553 first-party files, so the "adds no new
+     strict failures" bar the docs used for check #1 cannot be applied; and
+     the walk has no read events at all, so the check is a new record stream
+     out of `gen_ident`, not an `if`.
    - `docs/MEMORY.md` §2.9 says "three opt-in checks" and lists three, while
      strict mode also reports the aggregate-literal maybe-move.
 
