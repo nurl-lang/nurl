@@ -25,75 +25,113 @@ A mutable string initialized from a proved owned local receives its own copy,
 repairing the compiler's lint cursor leak while preserving borrowed-parameter
 and opaque-address identity. All 20 LSP tests now enable LSan in CI.
 
-Source arithmetic now guards integer zero division/remainder, signed MIN/-1,
+Source arithmetic guards integer zero division/remainder, signed MIN/-1,
 dynamic invalid shifts and out-of-range/NaN/infinite float-to-integer casts
 before LLVM undefined behavior or poison. Scalar and aggregate-field casts
 share unsignedness, bounds and bool rejection. Fractional values that truncate
-into range remain valid; IEEE floating arithmetic is unchanged.
+into range remain valid; IEEE floating arithmetic is unchanged. The
+differential fuzzer now reaches those guards: half of its divisors and shift
+amounts are computed sub-expressions clamped into the legal domain rather than
+literals, so the guard branch is live at -O0 and the oracle catches a guard
+that fires on a legal operand.
 
-Published checkpoints are `8d34f800` (JS audits), `b3975cdb` (return ownership),
-`5e673886` (driver split paths) and `5b2a9b3a` (inferred consumer effects).
-Local commits `eec0b3c1` (arithmetic) and `3cf6974b` (PowerShell watchdog)
-are the next verified compiler checkpoints;
-all 20 real POSIX/PowerShell controls pass. See the ledger for the exact bounds
-and the limitation of the old remote failure log.
+Nine parser defects of one shape are closed. A construct the grammar allows,
+handled by an ad-hoc token skip instead of the path that parses it, with the
+skip running past the end of the declaration: a binding initialised by a
+block, a global constant with no value, a struct or generic function with no
+body, an unclosed type-parameter list, a `:` followed by junk, a function
+whose body is empty, two parameters sharing a name, and a match with no arms.
+Each exited 0 and lost the declaration after it, or emitted IR only clang
+rejected. `tools/tests/test_declaration_forms.py` pins the class with one
+invariant over 35 forms; the corpus pins each fix with its own rejection.
+Opening the block-initialiser path also exposed a borrow-checker hole:
+`bck_esc_let` recorded a referent depth without comparing it, so a closure
+over a block-local `: ~` struct could be bound outside that block.
+
+Two tree gates were checking less than they claimed. The canonical-form gate
+named five directories and left 464 first-party files ungated (18 had
+drifted); the strict-arity gate named six and left `unikernel/` and
+`pttvoice/` out. Both now take the tracked inventory from git. Both were
+serial, one process per file, which is what pushed the compiler job past its
+15-minute budget into a cancelled run; both now run under `xargs -P`, and the
+job finishes in about eleven minutes.
+
+The release workflow attached whatever the build jobs produced, by glob, with
+only the Linux matrix as a hard gate — a failed Windows leg published a
+release with no `.zip`, and the PowerShell one-liner then 404s.
+`tools/check_release_artifacts.sh` runs before publication and requires the
+documented set, its checksums, and its signatures when signing ran; eleven
+controls cover it.
 
 ## Latest compiler verification
 
-Both refreshed arithmetic bootstraps pass. Normal build: 75 seconds; corpus
-2 m 48 s. Sanitized bootstrap: 85 seconds. Both 993-input corpora report
-**974 PASS / 19 SKIP**, with zero compiler/link/runtime/timeout/sanitizer failures.
-All seven arithmetic methods pass with both normal and instrumented compilers:
-596 runtime cases across three modes, **1,788 executions plus two rejections**.
-These use independent C inputs, O0/O2, ordinary and sanitized programs, split
-output, `--no-borrowck`, all integer widths/signs, f32/f64, aggregate casts and
-panic cleanup. All 31 ownership, seven compiler-cleanup and 20 LSP methods pass
-on the final shared instrumented toolchain. All six compiler leak-gate sources
-pass ordinary and split emission; sanitizer detection calibration also passes.
-RSS is 36 MB (600 MB budget); DCE is 180 emitted / 12 reachable with identical
-behavior. Source and bootstrap `.nu` are identical; generated facts are current.
+Both refreshed bootstraps pass. Normal build: 55-57 s; corpus 2 m 30 s. The
+corpus reports **985 PASS / 19 SKIP** over 1,004 inputs, with zero
+compiler/link/runtime/timeout failures. All seven arithmetic methods pass
+with both normal and instrumented compilers: 596 runtime cases across three
+modes, **1,788 executions plus two rejections**. All 31 ownership, seven
+compiler-cleanup and 20 LSP methods pass on the final shared instrumented
+toolchain. All six compiler leak-gate sources pass ordinary and split
+emission; sanitizer detection calibration also passes.
 
-Retained evidence is under ignored `build/v1-hardening/`: `arithmetic-before/`
-records the old undefined/poison outcomes; `arithmetic-final-*` records final
-builds, focused gates and separately copied normal/sanitized verdicts.
-The ledger retains earlier ownership counterexamples and their failed candidates.
+After the parser changes, the 303 diagnostics the stdlib, packages and
+examples produce are byte-identical to those the pre-change compiler produced
+over the same 719 files. That is the check that matters most for a parser
+edit: the corpus cannot see code it does not contain.
+
+Fuzz campaigns on the changed compiler: 600 integer seeds, 150 structural
+seeds with 37 sanitizer runs, and 200 inverse-oracle seeds — all clean.
+
+Ownership traffic through the newly reachable block-expression path was
+checked separately under ASan+LSan with leak detection on: an owned tail
+value, one bound inside the block and handed out, a second owned local
+dropped at block exit, nested block initialisers, and allocation inside a
+loop. Correct values, zero findings.
 
 ## Remote state and next work
 
-1. All fifteen remote jobs pass on this branch: the Linux compiler job,
-   FreeBSD, macOS ARM64, Windows, the sanitizer job, the runner
-   fault-injection controls, the unikernel job, the new MinGW msvcrt
-   cross-link job, required-tool fault injection, webdocs and all four
-   JavaScript audit/build jobs. That validates those revisions and those
-   workflow scopes, not every distribution target. Keep PR #1107 a draft;
-   the two newest commits are pushed and their remote results are pending.
-   The runtime-builtins doc gate needed `llvm.trunc.f32/f64` in its SKIP
-   list — they entered the preamble with the float-to-integer range guard
-   and, like `llvm.dbg.declare`, no NURL program can call them.
-2. The `:` declaration parser's five silent skips are closed (see the
-   ledger). The technique that found them is worth continuing: take a
-   construct the grammar allows, write it in a spelling nothing in the tree
-   uses, and check the implementation agrees with `spec/grammar.ebnf`. The
-   same sweep has not been run on `@`, `&`, `%` or `$` declarations, nor on
-   statement-level constructs.
-3. Continue A01's lexical alloca/defer lifetime policy. Note what the
-   probes here established: every NURL alloca is hoisted to the entry block
-   and lives for the whole function, so a use-after-scope inside one frame
-   is not a memory error today — it is at worst a slot reused across loop
-   iterations. The escape that IS a dangling pointer, a stack reference
-   outliving its function, is rejected by the borrow checker in every
-   spelling tried (assignment, struct field store, conditional arm, closure
-   of closure, nested blocks, loop body, and now block-expression
-   initialisers). A lifetime-marker policy therefore buys detection and
-   stack reuse, not correctness, and must still account for deferred
-   cleanup reaching a slot after its lexical block.
-4. Continue A13/A16 indirect/generic/embedded-origin and cleanup
-   counterexamples; borrowed-initial mutable bindings and raw/FFI
-   boundaries need broader review.
-5. Retain every A01-A17 requirement. Package/release inventories,
-   transactional installation, actual distribution checks and independent
-   crypto review remain open. Current platform jobs do not certify their
-   complete requirements.
+1. Every remote job passed on this branch at `070ff0a8`: the Linux compiler
+   job, FreeBSD, macOS ARM64, Windows, the sanitizer job, the runner
+   fault-injection controls, the unikernel job, the MinGW msvcrt cross-link
+   job, required-tool fault injection, webdocs and all four JavaScript
+   audit/build jobs. That validates those revisions and those workflow
+   scopes, not every distribution target. Keep PR #1107 a draft. The commits
+   after `070ff0a8` are pushed; confirm their remote results.
+2. Continue the sweep that found the nine parser defects. Take a construct
+   the grammar allows, write it in a spelling nothing in the tree uses, and
+   check the implementation against `spec/grammar.ebnf`. Declarations and
+   simple statements are done; expression position, trait/impl bodies,
+   select arms, foreach and the `!`/`?` operator forms are not. The
+   permanent control is `tools/tests/test_declaration_forms.py` — extend its
+   table rather than writing a second harness.
+3. A token-deletion sweep over corpus programs (delete one token; the
+   compiler must either reject the file or still emit `main`) is written but
+   has not completed a clean run — twice interrupted by rebuilding or
+   cleaning the tree underneath it. Run it against a PRIVATE copy of
+   `build/nurlc` and keep its mutants out of `compiler/tests/`; one was
+   committed by accident and had to be removed.
+4. Continue A01's lexical alloca/defer lifetime policy. Note what the probes
+   here established: every NURL alloca is hoisted to the entry block and
+   lives for the whole function, so a use-after-scope inside one frame is not
+   a memory error today — at worst a slot reused across loop iterations. The
+   escape that IS a dangling pointer, a stack reference outliving its
+   function, is rejected by the borrow checker in every spelling tried
+   (assignment, struct field store, conditional arm, closure of closure,
+   nested blocks, loop body, and now block-expression initialisers). A
+   lifetime-marker policy therefore buys detection and stack reuse, not
+   correctness, and must still account for deferred cleanup reaching a slot
+   after its lexical block.
+5. Continue A13/A16 indirect/generic/embedded-origin and cleanup
+   counterexamples; borrowed-initial mutable bindings and raw/FFI boundaries
+   need broader review.
+6. Retain every A01-A17 requirement. A07 (continuous package/service tests)
+   is still only an inventory question, and it sits against the standing
+   decision not to wire package tests into compiler CI — that needs a
+   direction before work, not after. A09, A14 and A17 are untouched. A15's
+   remaining halves are pinned tool downloads and a staged unpack: the
+   installer removes the old toolchain before extracting, so an extraction
+   interrupted after verification leaves a broken prefix that only a re-run
+   repairs.
 
 ## Reproduction
 
