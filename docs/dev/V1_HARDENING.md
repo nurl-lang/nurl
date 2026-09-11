@@ -809,3 +809,213 @@ fixtures. Logs are `publish-compiler-final-normal.log` and
 the changed NURL source passes the formatter check. No compiler semantics or
 bootstrap snapshot changed in this unit, so the complete compiler corpus was
 not repeated for this CLI-only change.
+
+### Compiler diagnostic cleanup — work in progress
+
+The next continuation reproduced the compiler leak and traced it to two
+separate causes: frontend failures bypassed main's cleanup, and per-declaration
+recovery deliberately disabled the allocation journal to avoid its linear
+search on every free. The journal's array-index marks also failed when an inner
+extent removed an outer owner and reused its slot. Two public runtime controls
+failed against the previous implementation: an inner panic missed its new owner,
+and an outer panic incorrectly dropped an owner from a completed inner extent.
+
+The candidate runtime indexes registrations by pointer and uses monotonic
+sequence marks across deletion and compaction. Seven ASan/LSan test methods pass,
+including 40 generated nested-scope programs compared with an independent owner
+model. The FIFO registration benchmark (three runs, median, clang -O2) changed
+from 0.1201 s to 0.00384 s for 10000 live owners and from 2.0165 s to 0.00691 s
+for 40000; logs are `panic-journal-before.log`, `panic-journal-oracle.log` and
+`panic-journal-benchmark.log` under `build/v1-hardening`.
+
+The candidate compiler uses journalled recovery and a common frontend boundary.
+Its compilation context owns all lexer and symbol-table instances through
+intrusive lists, with constant-time early release and final cleanup of objects
+abandoned by diagnostics. Error recovery retains buffered IR instead of exposing
+partial definitions. Argument temporaries and reassigned owned string/slice
+bindings now register their unwind obligations. `recover_reassign_temps` leaked
+69 bytes in four allocations before the codegen correction and passes LSan
+after it. Five compiler cleanup methods cover body/prepass/deferred/import
+failures, stdin, CLI failures, the error limit and output modes; they pass with
+the instrumented candidate (`compiler-cleanup-controls.log`).
+
+This unit is not complete. A broader --check sweep of 363 existing diagnostic
+fixtures found 44 remaining small leaks, largely involving ownership guards for
+forward string-returning calls and their argument temporaries. The complete
+results are in `diagnostic-memory/results.json` and the individual stderr logs;
+the 44 failures have not been suppressed or relabelled. Return/consumer ownership
+must be repaired at its general source rather than adding compiler-helper names
+to ownership whitelists or reordering their declarations. The instrumented
+candidate's self-compile already reaches byte-identical IR at stage 3 with no
+leaks: 10.41 s / 1354552 KB peak RSS versus 9.87 s / 1355512 KB for the previous
+instrumented compiler on the same current source. These are ASan measurements,
+not the normal-build memory gate. Full normal validation is in progress in
+`error-cleanup-normal-build.log`; bootstrap snapshots have been refreshed for
+the candidate and remain uncommitted with this work.
+
+The normal bootstrap completed in 50 s; its corpus passed all 972 previous
+cases with 19 skips. The new recovery fixture initially failed only because
+its handwritten golden lacked the runner's compile/link/exit header. The
+runner regenerated that golden from the verified output. The normal memory
+gate remains 27 MB and the DCE gate passes (180 emitted, 12 reachable; equal
+behavior). Four representative failures from the wider sweep have now been
+added to the compiler cleanup test itself, so that suite deliberately remains
+red under LSan until the forward-return/consumer ownership defect is fixed.
+There has been no commit or publication of this unfinished unit.
+
+The next independent consumer test, `recover_forward_consumer`, leaks 31 bytes
+in two allocations with the current candidate: an inline owned argument to a
+forward reader and another to a forward function that panics. A trial deferred
+consumer predicate removed those leaks, but a counterexample invalidated its
+proof: `@ address_of s value → i { ^ # i value }` returns the argument's address,
+so a scalar result is insufficient evidence for releasing that argument. The
+same use-after-free already occurs in the existing compiler when this helper
+is defined before its caller, including when the cast is first bound to a
+local. `tools/tests/test_string_argument_ownership.py` reproduces both orders
+under ASan/LSan; it currently reports three failures (the forward reader/panic
+case and the two backward address-return cases). The experimental predicate
+was removed from the source; its diff and results remain in
+`build/v1-hardening/forward-consumer-rejected.patch`,
+`recover-forward-{before,after}.log`, `backward-address.log` and
+`string-argument-ownership-before.log`. The required fix must preserve address
+provenance through casts, bindings and calls before extending consumer drops.
+
+The now-unused `nurl_recover_nojournal` implementation and its WASI stub have
+been removed; neither compiler source nor refreshed bootstrap IR references
+it. All seven standalone journal methods still pass, and a normal bootstrap
+with `--no-tests` completes in 27 seconds after removal. The journal owner-model
+suite is now wired into the sanitizer CI job. This does not turn the outstanding
+compiler ownership tests green, and the unit remains uncommitted.
+
+The following continuation extends returned-parameter provenance through casts,
+integer arithmetic/bitwise operations, named locals, assignments, conditionals,
+match arms and value blocks, including implicit returns. These ownership facts
+remain active with `--no-borrowck`. Positional and named argument temporaries
+now share `mem_consumer_arg_drop_safe`; a returned-parameter fact vetoes a drop
+even for an integer return type. A forward helper whose body frees its argument
+previously caused a named call to free that same argument again. The new helper
+removes that double free (`string-named-sink-before.log` / `-after.log`). Explicit
+`sink` parameters are currently excluded from named-call dispatch; that syntax
+was not the accepted input reproducing this bug.
+
+The expanded address test covers 15 source spellings in both declaration orders,
+with and without borrow checking. The normal candidate passes those 60 ASan/LSan
+program runs, along with named arguments and a scalar-conversion control. A
+proposed copy control was corrected after inspecting emitted IR: an untracked
+mutable `s` alias need not copy its parameter. The actual copy control now uses
+`nurl_str_cat value` with an empty suffix; a separate alias control transfers
+the same pointer back for explicit release. Both controls pass.
+
+This is still an incomplete dataflow implementation. Two additional independent
+controls fail with heap use-after-free: a forward call nested inside a cast, and
+an address carried through a loop backedge. Eagerly expanding binding names to
+their currently known parameters loses both dependencies. The next change must
+retain stable origin identities and symbolic dependency edges across scopes,
+assignments and calls, then solve the finite graph before emitting ownership
+decisions. Extending the old scalar predicate to forward consumers remains
+unsound until this is fixed. `string-address-dataflow-frontier.log` contains
+both counterexamples; they are permanent methods in the ownership test.
+
+The instrumented compiler's own self-check currently reports 603 bytes in 135
+allocations from `nurl_sym_get` (`nurlc-address-stage2-check.log`). This regression
+is not accepted: new analysis calls exercise the still-unfixed forward argument
+temporary path. The four diagnostic cleanup representatives also remain red
+(`compiler-cleanup-address-provenance.log`). Instrumented program tests are run
+separately with a normal compiler to distinguish generated-program lifetime
+failures from the compiler's own leak gate; neither result replaces the other.
+Normal full bootstrap/corpus validation is in
+`address-provenance-normal-build.log`. No changes in this unit have been committed.
+
+
+### Address graph continuation (draft checkpoint, 2026-09-11)
+
+The eager-name analysis has been supplemented by a compilation-owned root
+address graph. Binding nodes survive scope exit and retain assignment and
+loop-backedge dependencies. Conditional call edges read the completed callee
+return/consumption facts; a worklist propagates inline parameter bits with
+sparse overflow words. Legacy diagnostic implications participate in the same
+finite convergence, with the 64-round cap removed. Named and positional string
+argument temporaries use shared deferred LLVM constants for their final drop
+proof. A forward string result passed directly as an argument captures its
+existing dynamic ownership guard instead of abandoning the returned buffer.
+
+The first graph candidate fixed the two address use-after-free witnesses and
+the 31-byte forward-consumer leak, but exposed missing raw-free consumption
+facts. Adding those facts exposed a second distinction: a new closure's root
+environment is not any of the objects it captures. Root-address facts are now
+separate from embedded-reference facts. A full toolchain build additionally
+found that lifted closures inherited the enclosing function's summary nodes.
+Closure summaries now have their own parameter domain, including hidden capture
+inputs. The corrected candidate passes the nurlpkg source check; the failed
+intermediate build remains recorded in `origin-normal-build.log` and must not
+be mistaken for the final result.
+
+Verified focused results for the corrected candidate:
+
+- `tools/tests/test_string_argument_ownership.py`: 15 methods pass, including
+  the original 60 spelling/order/borrowck combinations, 70-parameter functions,
+  an 81-function return chain, named arguments, cast/alias consumption, closure
+  environment ownership and closure parameter isolation.
+- `tools/tests/test_panic_journal.py`: all 7 methods pass.
+- An independently linked ASan/UBSan compiler candidate successfully checks its
+  own current source with `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1` and
+  `LSAN_OPTIONS=use_stacks=0`. The earlier 603-byte self-check regression is gone.
+- `tools/tests/test_compiler_cleanup.py` still fails two representative inputs:
+  `diag_bad_type_token` leaks 4 bytes in one allocation;
+  `diag_closure_arity_few` leaks 2 bytes in two allocations. The other two prior
+  diagnostic regressions (`diag_send_chan_send`, `should_fail_unterminated_trait`)
+  and the ordinary/error/CLI test methods pass. These remaining failures are
+  deliberately unsuppressed.
+
+Local evidence is in `build/v1-hardening/string-origin-scopes.log`,
+`panic-journal-origin.log`, `nurlc-origin-scopes-selfcheck.log` and
+`compiler-cleanup-origin-scopes.log`. `nurlc-origin-scopes-san` is the isolated
+instrumented compiler used for the last two checks; its runtime was separately
+compiled with ASan/UBSan. This focused candidate check does not replace the
+repository's full sanitized bootstrap, corpus or multi-mode leak gate.
+The final normal bootstrap/corpus run is `origin-scopes-normal-build.log`.
+
+Remaining work before merge: fix the two diagnostic lifetimes at their general
+source (forward return-proof propagation and guarded owners across panic),
+rerun the wider diagnostic sweep, and complete the full sanitized bootstrap,
+corpus and multi-mode leak gates. Audit indirect calls, aggregate-contained
+origins, generic dispatch and all forward-result exit paths against independent
+counterexamples; passing the focused address suite alone is not proof that
+all lifetime cases are covered. Do not add helper whitelists, reorder helper
+definitions, or suppress leak detection to pass a gate. The v1 hardening goal
+remains open; the audit document is a hypothesis source, not an oracle.
+
+
+The next full normal run found `vec_push_temp_owned` returning 1 with empty
+output (973 passes, one failure). This was a real premature drop, not a golden
+mismatch: the new generic-call decision lacked the address-retention fact for
+`= . data len x`. Pointer/slice writes now contribute their RHS's root origins
+to the function's escape summary, and the `nurl_poke` ABI declares its stored
+value position as retained. The unchanged fixture again prints `item3` and
+exits zero. Additional ASan/LSan controls cover typed pointer stores, raw-word
+stores, forward/backward definitions, `--no-borrowck`, and freeing a vector's
+stored string exactly once. The expanded suite passes all 17 methods with the
+normal isolated candidate (`string-origin-stores.log`).
+
+The final isolated candidate is `nurlc-origin-stores-san`; it emits its own
+current source successfully under ASan/UBSan/LSan with no findings, including
+full IR emission (`origin-stores-self-emit.log`). The diagnostic cleanup suite
+still reports exactly the same two failures (4 bytes and 2 bytes), recorded in
+`compiler-cleanup-origin-stores.log`. The latest complete normal run is
+`origin-stores-normal-build.log`; earlier logs above describe intermediate
+candidates and must not be used to claim the latest build passed.
+
+
+Final normal validation for this checkpoint is green: full refreshed bootstrap
+and corpus **974 PASS, 19 SKIP, no failures** (`origin-stores-normal-build.log`,
+`build/logs/build.pDABto`), including the unchanged `vec_push_temp_owned` golden.
+Build time was 1m01s and corpus time 2m53s. Source and bootstrap source are
+byte-identical. The normal memory gate reports **34 MB** peak RSS (budget
+600 MB), and DCE reports **180 emitted / 12 reachable**, with identical
+behavior. The previous pre-graph candidate measured 28 MB on its then-current
+source; these are separate source revisions, not a controlled performance
+comparison. The final address suite also passes all **17 methods with an
+instrumented compiler**, in 98.931s (`string-origin-stores-instrumented-compiler.log`).
+No full sanitized bootstrap/corpus or complete multi-mode leak-gate result is
+claimed for this checkpoint. Continue from
+[V1_HARDENING_HANDOFF.md](V1_HARDENING_HANDOFF.md); the PR remains a draft.

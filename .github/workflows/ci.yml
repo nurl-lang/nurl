@@ -688,6 +688,12 @@ jobs:
         if: needs.changes.outputs.compiler == 'true'
         run: ./tools/leakgate.sh
 
+      - name: panic journal nested-scope and owner-model controls
+        run: python3 tools/tests/test_panic_journal.py
+
+      - name: string argument address and ownership controls
+        run: python3 tools/tests/test_string_argument_ownership.py
+
       - name: metamorphic reclamation gate (§7.2, runtime axis)
         # The compile-verdict classes run in the build-test job; this one
         # cannot, because its verdict is an LSan RUN rather than anything

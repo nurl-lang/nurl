@@ -1286,13 +1286,28 @@ leaked any owned allocation made inside the extent. A thread-local
   *forgotten* from the journal at the assignment, so the drain never
   frees what the caller now owns.
 
-So a panic reclaims **every** kind of allocation auto-drop owns — owned
-strings, owned slices, owned struct-field buffers, and user `% Drop` /
-autodrop-enum values. The mechanism can never turn a leak into a
-double-free or use-after-free (raw entries are pointer-keyed and removed
-at `nurl_free`; typed entries are forgotten at their normal drop site and
-deduped on drain); it clears the sanitizer gate, and `recover_unwind` is
-one of the leak-pinned tests (§6.6) that pins the round trip leak-clean.
+The journal supports owned strings, slices, struct-field buffers and user
+`% Drop` / autodrop-enum values. Its recovery marks are registration sequence
+numbers, so removing an outer owner or compacting the entry array cannot move
+a new inner owner outside its recovery extent. A pointer index makes normal
+removal proportional to one hash bucket, with amortized compaction and growth;
+normal frees do not scan every live allocation. Registrations are removed
+before invoking a destructor, which may itself forget another owner or enter
+a nested recovery scope.
+
+String argument temporaries use the callee's completed parameter summaries.
+An integer result can preserve an input buffer's address through casts,
+arithmetic, locals, assignments or calls, so a scalar return type alone is
+not evidence that the caller may free that buffer. The dependency graph keeps
+loop and forward-call origins until the module reaches a fixed point. Named
+arguments use their declared parameter position. A forward result used directly
+as an argument captures its dynamic ownership proof before another call runs.
+
+This relies on the compiler registering each ownership obligation correctly.
+`recover_unwind` and `recover_reassign_temps` pin reclamation on their covered
+paths; `tools/tests/test_panic_journal.py` also compares generated nested scopes
+with an independent ownership model. Known gaps in forward string-return and
+argument ownership remain tracked in [the hardening ledger](dev/V1_HARDENING.md).
 Where in the extent the allocation was made does not change that either:
 the `panic-reclaim` class (§6.6) enumerates the spellings — a `?` arm, a
 `??` arm, a loop body, two frames deep, a nested extent, a second extent

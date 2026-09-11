@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Argument lifetime follows completed address and consumption summaries.**
+  Stable binding identities preserve pointer-to-integer origins through casts,
+  assignments, loop backedges and forward calls. A worklist closes conditional
+  call dependencies without a round or parameter-count cap. Named and positional
+  string temporaries share the final ownership decision, including forward
+  results passed directly as arguments. Root buffers and embedded references
+  remain distinct, and lifted closures have separate parameter domains.
+
+- **Nested panic recovery preserves owner boundaries.** Journal marks use
+  registration sequences across deletion and compaction; pointer-indexed
+  removal avoids scanning the live allocation set on each free. Reassigned
+  owned strings/slices and known caller-owned argument temporaries retain
+  their unwind registrations. Compiler diagnostics use ordinary journalled
+  recovery and common cleanup; the internal `nurl_recover_nojournal` bypass
+  has been removed. Forward string ownership remains under investigation.
+
 - **Publication requires a successful target-compiler check.** Packages with
   `src/main.nu` can no longer publish when the target toolchain or compiler is
   absent. Compiler launch failures and compilation failures retain their actual
