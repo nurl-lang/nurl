@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+<select>:4:127: error: argument 1 to 'chan_try_recv': value of type '%Channel__i64' passed where parameter expects '%Channel__str' — wrong named type passed by value. Structs and enums are both NOMINAL: two of them are different types even when their fields or tags line up, and no conversion is implied. The call would reinterpret this value as the declared type's fields. [in an arm of the select at compiler/tests/diag_select_arm_context.nu:30:5 — the text above is the lowering of that '??', not your source; fix it at the arm]
+? ! __sel_1done { : i __sel_1p0 ( chan_raw_poll __sel_1ctl0 ) ? > __sel_1p0 0 { = __sel_1done T : ?s o ( chan_try_recv [s] c  ) {}
+                                                                                                                              ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

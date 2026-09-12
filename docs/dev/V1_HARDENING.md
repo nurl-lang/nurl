@@ -20,7 +20,7 @@ in reviewable groups. No item below certifies the whole language or ecosystem.
 | A10: tree gates | Tracked formatting inventory, package-aware frontend coverage, recursive import checks with reported exclusions | The canonical-form gate now covers the tracked inventory (1,779 files) instead of five hand-listed directories, and the 18 files that had drifted are reformatted; package-aware frontend coverage and recursive import checks remain open |
 | A11: toolchain build integrity | Injected required-tool failures fail the build; stale binaries cannot substitute; logs and totals retained | Required tools now fail the build, use the canonical driver and remove stale outputs; isolated full-build controls pass locally and are wired into CI |
 | A12: LSP temporary files | Concurrent servers remain independent and no shared source files can be overwritten or leaked on errors | Source temporary files eliminated through compiler stdin snapshots; concurrent-server and missing-tool controls pass |
-| A13: safety contract | Default/strict/raw/FFI guarantees agree; witnesses and valid controls; opaque wrappers and container ownership audited | The pre-registered C-runtime surface is now checked at call sites exactly as an '&'-declared FFI symbol is — it had no argument or arity check at all. An impl is now checked against the trait it names: a missing required method, a wrong arity, wrong non-receiver parameter types and a wrong return type were all accepted, and the last of those is a type confusion, because 'dyn' builds its thunk from the DECLARED signature. Container and opaque-handle ownership has witnesses: every violation the default rules promise to catch is caught, the three that compile are the holes MEMORY.md declares, and two of those three are reported under --strict-borrowck. MEMORY.md §2.9 is reconciled (three checks; the third one's description was too narrow). A read of a maybe-moved binding is a recorded decision not to build, with both measurements. Open: opaque wrappers beyond Channel, and whether the remaining guarantees agree |
+| A13: safety contract | Default/strict/raw/FFI guarantees agree; witnesses and valid controls; opaque wrappers and container ownership audited | The pre-registered C-runtime surface is now checked at call sites exactly as an '&'-declared FFI symbol is — it had no argument or arity check at all. An impl is now checked against the trait it names: a missing required method, a wrong arity, wrong non-receiver parameter types and a wrong return type were all accepted, and the last of those is a type confusion, because 'dyn' builds its thunk from the DECLARED signature. Container and opaque-handle ownership has witnesses: every violation the default rules promise to catch is caught, the three that compile are the holes MEMORY.md declares, and two of those three are reported under --strict-borrowck. MEMORY.md §2.9 is reconciled (three checks; the third one's description was too narrow). A read of a maybe-moved binding is a recorded decision not to build, with both measurements. A binding declared '*T' now rejects an aggregate VALUE (the mirror of the String-vs-C-string clause: every other clause in that battery wanted one side not to be a pointer), and a select arm's diagnostics name the real '??' instead of only the generated text they are checked against. The '&'-FFI surface now enforces what the grammar says about '...' (last, and one) and counts a variadic call's fixed prefix, which had no arity check at all; '\\' requires an enclosing return type that can carry the failure, instead of returning a zero of the declared type — a null pointer, and a segfault, for a '→ s' function; an option and a result are no longer interchangeable across '\\', which invented an Err payload in one direction and dropped one in the other; a non-exhaustive match on '?T' / '!T E' is rejected as the enum spelling has been for years, instead of yielding undef; '#' no longer reinterprets one named struct as another; and an impl's SUBJECT gets the declared-type check every other type position has — the case that matters is a misspelled '% NotSend', which asserted a safety property about a type that does not exist while the real one crossed the thread boundary. 'select' / channel typing and the Send/Sync derivation itself were swept and held up. Open: opaque wrappers beyond Channel, whether the remaining guarantees agree, and an impl of an UNDECLARED trait, which is deliberately still accepted (Drop/Ord/Show have no declaration) |
 | A14: crypto/parser evidence | Instrumented fuzz controls and retained seeds; pinned ACVP/HTTP oracles; measured backend timing; explicit X.509 policy and independent crypto review | Pending; requires A01 and external validation for independent review |
 | A15: release integrity | Mandatory target artifact gates, pinned tool downloads, installer integrity and state-preserving failure controls | The artifact set is gated before publication, with eleven controls in CI; installer checksum/signature verification reviewed and found fail-closed; the installer now stages its unpack so a failed extraction leaves the existing install intact (six controls, two of which fail against the previous installer); every tool a workflow downloads is pinned by sha256, including the zig that ships inside the published archive, with tools/check_pinned_downloads.py keeping it that way in CI |
 | A16: compiler architecture | Ownership/state boundaries, current global writer map, interacting-feature differential tests, diagnostic-site dispositions | Trait ordering work is merged; remaining acceptance is unverified |
@@ -2394,3 +2394,196 @@ and one 12 KB corpus program is several thousand compiles, so seeds 2 and 4
 took roughly an hour each. Run several `--seed`s in parallel rather than one
 long `--files`. **Seeds 1-4 are now clean** against the repaired compiler;
 seed 5 onwards is where the next one is.
+
+### A13: the last five surfaces, and the nine they held (2026-09-12)
+
+The previous round left five surfaces unswept and named them: the `&`-FFI
+surface, `!T E` / `?T` try-propagation, the `#` cast surface, `select` /
+channel typing, and `Send`/`Sync` marker derivation. All five are swept now.
+
+Two gave nothing, and that is worth stating plainly because it is the only
+way a sweep's yield means anything. **`select` / channel typing held up**: a
+wrong element type, a non-channel scrutinee, an undeclared channel name, a
+`_`-only select, a mistyped `chan_send` and a `chan_new` whose type argument
+disagrees with the binding are each already rejected, most of them with a
+message that names the monomorph. **`Send`/`Sync` derivation held up as
+derivation** — `Rc` over a channel, an `Rc` behind a struct field, a bound
+`[T: Send]` against an `Rc`, and a `% NotSend` type against the same bound
+are all caught. What failed in the second was not the derivation but the
+marker's SUBJECT, which is a type position, and that is the seventh item
+below.
+
+The other three gave seven defects, and two more turned up afterwards — every
+one the same shape the round has been finding: **a construct the language allows, reached by a path that
+skipped a check the same compiler already performs in another spelling.**
+
+1. **The `...` variadic marker was not required to be last, or to be one.**
+   The grammar is `ffi_param* ( '...' )? '→' type`. The parameter loop took
+   a `...` wherever it landed and continued, so the `declare` line and the
+   call-site signature — both built from that one loop — could disagree.
+   A parameter after the marker emitted `declare i64 @xpf(i8*, ..., i64)`; a
+   second marker emitted `(i8*, ..., ...)`; `llvm-as` rejects both. A LEADING
+   marker is the interesting one: the first parameter's `pct == 0` branch
+   OVERWRITES the accumulated string, destroying the marker in the `declare`
+   while `__variadic_sig` keeps it, so the module declared `@xpf(i8*)` and
+   emitted `call i64 (...) @xpf(i8* %r1)`. That form exits 0 and clang
+   accepts it, and it is a genuine ABI difference on every target that
+   passes variadic arguments differently from fixed ones — reported by
+   nothing at all. One check answers all three: after the marker, the next
+   token must be `→`.
+
+2. **A variadic call's FIXED prefix was never counted.** `...` makes the
+   TAIL optional, never the parameters ahead of it. `gen_ffi_decl` registers
+   no `__arity` for a variadic symbol — there is no single right count — and
+   the call-site check was conditioned on `! is_variadic`, so it skipped the
+   minimum too. `( xpf )` against `xpf s fmt ... → i` emitted
+   `call i64 (i8*, ...) @xpf()`: "not enough parameters specified for call".
+   The count was already recorded as `__variadic_fixed` for the
+   argument-promotion path; nothing had asked it this question. The comment
+   on the non-variadic registration states the hazard exactly — "a missing
+   argument read an unset ABI register, silently" — and it is the same one.
+
+3. **An empty FFI library name skipped its gate instead of failing it.**
+   The sentinel check ran under `? > llen 0`, so `` & `` @ f … `` silently
+   disabled the check that turns a missing dev package into a compile error.
+   The `$` import surface rejects an empty path for the same reason.
+
+4. **`\` in a function whose return type cannot carry the failure.** This is
+   the round's segfault. The error-type check beside it has compared the two
+   error types for years — but only when the enclosing function returns a
+   Result. When it returned anything else there was nothing to compare and
+   nothing said so, and the fail path fell to `zeroinitializer`. That is not
+   propagation: it discards what the callee reported and returns a zero of
+   the declared type. `→ i` returned 0, indistinguishable from a real
+   answer; `→ s` returned `ret i8* zeroinitializer`, and printing it
+   dereferenced null — a clean compile, a clean link and a segfault.
+   `stdlib/core/result.nu` had already written the rule in prose: at "a site
+   that cannot `\`-propagate (a `→ i` main, a callback with a fixed
+   signature)", `res_expect` / `res_unwrap` take the payload or PANIC. The
+   compiler had never enforced the sentence its own stdlib wrote.
+
+5. **An option and a result are not interchangeable across `\`.** Both
+   shapes start `{ i1, `, so the check above accepts either; the fail path
+   then zeroes the OTHER shape. An option tried inside a `!T E` function
+   returns Err with an error payload of 0 that no callee produced — an
+   invented error, worse than a dropped one — and a result tried inside a
+   `?T` function returns None with the Err payload gone. Both conversions
+   are real and the stdlib spells them (`res_ok`, `opt_ok_or`).
+
+6. **A non-exhaustive match on `?T` / `!T E` yielded `undef`.** The grammar
+   states one exhaustiveness rule for all three scrutinee kinds and the enum
+   spelling has been rejected for years. `check_exhaustive` looks the
+   variants up by enum NAME in a `__variants` entry only a user enum has, so
+   an option or result scrutinee fell through the loop entirely. The
+   uncovered path reaches the join as
+   `phi i64 [ %r8, %arm_2 ], [ undef, %next_3 ]`.
+
+7. **An impl's SUBJECT was the last type position with no declared-type
+   check** — the hole `Z NoSuchType`, the `#` cast target and `%Trait` each
+   closed in their own spelling. The marker traits are what make it matter:
+   `% NotSend Db { }` asserts a danger the structural derivation cannot see,
+   and on a misspelled subject it asserted it about a type that does not
+   exist. Nothing said so, the real `Db` stayed Send, and it crossed the
+   thread boundary the marker was written to forbid. A safety assertion that
+   silently does nothing is worse than none, because the author reads it and
+   stops looking. `check_type_known` is the wrong instrument — it rejects a
+   bare generic TEMPLATE name, and an impl subject may be one (`% NotSend
+   Rc { }` covers every `Rc` monomorph, one of `__thr_marked`'s three
+   spellings) — so the check accepts what an impl may name and rejects only
+   a name that is none of them.
+
+And one more, from the `#` cast surface, which is the same shape as 7 but in
+the value domain: **`#` between two named struct types was a reinterpret.**
+Nothing above the final fallthrough in `gen_cast` converts an aggregate, so
+that path handed the operand register back wearing the target's type:
+`ret %Q %r1` with `%r1` a `%Pt`, two structs of different field counts. The
+anonymous-aggregate source is diagnosed a few lines above with the same
+reasoning and almost the same words; the named one reached the fallthrough
+because `%Struct` sources are handled far above ONLY when the destination is
+an integer.
+
+**Recorded rather than forced.** An impl of a trait that is not declared
+anywhere still compiles. `check_impl_contract` says why in its own comment:
+`Drop`, `Ord` and `Show` are implemented with no declaration, which is how
+the built-in protocols work. Closing it means enumerating that set, which is
+a language decision, not a check; and a typo'd trait name is still caught
+downstream when the method is called. Same standard as the unreachable
+type-parameter diagnostic of the previous round.
+
+**The methodology finding, which outlives the seven.** The first version of
+this round's probe asked clang its question with
+`clang -fsyntax-only -x ir`. **That does not parse the IR.** It exits 0 on a
+module `llvm-as` rejects outright, and it reported every defect above as
+clean. `tools/fuzz/mutate_delete.py` uses `clang -c`, which does parse, so
+no published seed result is affected — but a hand-written probe is written
+fresh each round, and this is the second round running whose first
+measurement was wrong in the same direction (the previous one read an
+unresolved `$` import as a rejection). **A harness that cannot fail reports
+whatever you hoped for.** Both traps are now in the harness rather than in
+prose: `test_declaration_forms.py` asks the clang question itself with
+`clang -c` and a comment saying why, and it is that second invariant — not
+the old "exit 0 and `main` is there" — that sees six of this round's seven.
+
+Two more turned up after the five surfaces were closed, and they belong in
+the same list.
+
+**A select arm's diagnostics pointed at generated text.** A select lowers to
+a whole program — a poll loop, a shared waiter, one `chan_try_recv` per arm
+— which is re-lexed through a sub-lexer, so every check inside it reports
+against THAT text: `<select>:4:127`, a caret into a line the author never
+wrote, and no file, no real line and no `??` anywhere in the message.
+`<dynsig>`, the compiler's other synthetic buffer, had the same problem and
+already had the cure (`g_diag_ctx`, a suffix appended to every diagnostic
+raised while the re-parse runs); nothing had applied it here. It now carries
+the `??`'s own position, which `gen_match` has always captured for the borrow
+checker's structural markers. The synthetic location stays — the caret does
+point at the lowered call — and what was missing was the sentence telling the
+reader where to look instead. Note that `tools/check_diag_anchor.sh` reports
+"every baselined diagnostic points at real code" and did not see this: it
+asks whether the caret lands on a closing delimiter, and a synthetic BUFFER
+is a different way to point at nothing. Extending that gate is left for the
+next round, with `<dynsig>` as its known-good baseline.
+
+**An aggregate value bound to a pointer binding**, from the token-deletion
+sweep: seed 14, `mut_pointer.nu`, one deleted `*`. `# *Node x` minus its star
+is `# Node x`, a legal cast producing a `%Node` VALUE, while the binding
+still says `*Node` — `store %Node* %r1, %Node** %r2` with `%r1` a `%Node`.
+The binding's never-legal-mix battery has six clauses and this fell through
+all six: the integer clause knows only INTEGERS into a pointer, the nominal
+clause requires NEITHER side to be a pointer, the pointer clause runs the
+other direction, and the aggregate clauses all want a scalar or aggregate
+TARGET. It is the exact mirror of the String-vs-raw-C-string clause added the
+round before — that one existed because every other clause wanted one side
+not to be a pointer; this one because they wanted the other side not to be.
+All three aggregate shapes reached it, so the clause asks about shape, not
+name. Both mutants are rejected by the repaired compiler.
+
+**Evidence.** Corpus 1,035 PASS / 19 SKIP, zero FAIL/MISSING/ORPHAN, the
+same sanitized with zero ASan/UBSan/LSan findings. Twenty new
+`test_declaration_forms.py` rows fail against a compiler built from the
+branch point and pass against this one, and all 188 rows the previous rounds
+left pass on both. Of the ten new corpus fixtures, nine are controls: four
+the branch-point compiler exits 0 on while emitting IR clang refuses, five it
+accepts outright — and four of those five are wrong at RUN time (a segfault,
+an invented Err payload, an `undef`, and a `% NotSend` type crossing the
+bound it was written to forbid). The tenth pins a WORDING change.
+**`tools/tree_sweep.sh` reports zero differences across all 1,823 tracked
+first-party `.nu` files**: nine new rejections, and nothing in the tree was
+written in any of the nine ways. Three files did differ on the first run and
+all three were one fixture — `routertrap.nu` and
+`test_06_torture_chamber.nu`, plus the latter's byte-identical copy under
+`examples/`, each using `\` inside `@ main → i`. Each keeps the `\` it
+exists to exercise, moved into a helper whose return type can carry the
+failure; all three goldens are unchanged.
+
+**And the baseline trap, for the third time in three rounds.**
+`tools/tree_sweep.sh` links its baseline compiler against the working tree's
+`stdlib/runtime.o`, which a `./build.sh --san` run replaces with an
+ASan-instrumented one. A baseline built during the sanitized corpus run did
+not link, and the missing binary's exit 127 read as "the baseline rejects
+this" — the `$`-import trap again, in a third spelling. The numbers above
+were taken with `stdlib/runtime.o` in its normal state and cross-checked
+against a clean `./build.sh` of the branch point in a separate worktree. The
+scare was worth one check: the branch point's `nurlc.nu` compiled by the
+branch-point bootstrap and by this branch's bootstrap is byte-identical IR,
+so nothing here changed how the compiler compiles itself.

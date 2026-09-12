@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_ffi_variadic_missing_fixed.nu:23:17: error: call to variadic 'xpf' is missing a fixed argument: it declares 1 before the '...' but this call passes 0 — the '...' makes the TAIL optional, never the parameters ahead of it, and the callee reads those from ABI registers this call never set.
+    : i r ( xpf )
+                ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
