@@ -8,21 +8,21 @@ in reviewable groups. No item below certifies the whole language or ecosystem.
 
 | Audit item | Evidence required before closure | Current disposition |
 |---|---|---|
-| A01: sanitizer coverage | Ordinary driver, bootstrap, split output and fuzz paths detect deliberate memory faults in generated code; clean controls, corpus and fuzz pass; UBSan/LLVM semantics documented | ASan emission implemented and calibrated; revealed HTTP/3 UAF and compiler leaks repaired; integer division/remainder, shifts and float casts now guard invalid domains, and the differential fuzzer now reaches those guards with computed operands; lexical stack-lifetime coverage remains open |
+| A01: sanitizer coverage | Ordinary driver, bootstrap, split output and fuzz paths detect deliberate memory faults in generated code; clean controls, corpus and fuzz pass; UBSan/LLVM semantics documented | ASan emission implemented and calibrated; revealed HTTP/3 UAF and compiler leaks repaired; integer division/remainder, shifts and float casts now guard invalid domains, and the differential fuzzer now reaches those guards with computed operands; lexical stack lifetimes are a recorded DECISION not to build (every alloca is entry-hoisted, so markers buy detection and stack reuse, not correctness, and owe an account of deferred cleanup) rather than pending work |
 | A02: trustworthy compiler runners | Missing-main rejection fixtures run; crash/hang/worker fault controls fail closed; complete corpus verdict accounting | Verified in local normal/sanitized corpus and POSIX/PowerShell controls; native Windows execution remains CI evidence |
 | A03: installed LSP | Separate installed project, unsaved edits, sibling/dependency imports, visible execution errors | Independently reproduced; repaired and verified with relocated binaries and 20 normal/ASan/LSan protocol/compiler controls on Linux; native Windows and actual distribution installation remain unverified |
 | A04: registry identity | Two local registries with equal package names; fetch, resolution, signing and lock identity preserved; errors never print success | Origin/key/index/archive/lock binding repaired; conflict-directed resolver checked against an exhaustive oracle; flat-layout coexistence and transactional/frozen installation remain open |
 | A05: signed install smoke | Signed fixtures install after relocation with transitive dependencies; missing/wrong/tampered signatures reject; CI runs it | Unsigned/stale smoke independently reproduced; signed five-program relocation smoke and CLI negative controls pass locally, wired into CI; remote run pending |
 | A06: JS dependencies | Fresh manager-native audits, reachability analysis, lockfile updates and builds/tests for all four trees; recurring checks | Fresh audits repaired; all four clean installs, builds/checks and zero-finding re-audits pass locally; weekly/PR checks added; all four remote audit/build jobs pass at `5b2a9b3a` |
 | A07: continuous package/service tests | Suite/prerequisite manifest, changed packages and reverse dependencies, scheduled coverage; registry/cloud and diagnostic gates in CI | Pending current workflow inventory |
-| A08: documentation consistency | Grammar, spec, platform claims, generated facts and executable docs agree with implementation | Runner prerequisites, macOS/musl claims and stale leak comments corrected from source; the binding path now accepts the block-expression initialiser its own grammar specifies; remaining claims pending |
+| A08: documentation consistency | Grammar, spec, platform claims, generated facts and executable docs agree with implementation | Runner prerequisites, macOS/musl claims and stale leak comments corrected from source; the binding path now accepts the block-expression initialiser its own grammar specifies; the grammar's "required methods are a compile error if an impl doesn't provide them" is now true; MEMORY.md §2.9's opt-in checks are counted correctly; remaining claims pending |
 | A09: package development | Clean checkout and unpacked consumer tests, shared environment setup, explicit public import surfaces | Pending reproduction |
 | A10: tree gates | Tracked formatting inventory, package-aware frontend coverage, recursive import checks with reported exclusions | The canonical-form gate now covers the tracked inventory (1,779 files) instead of five hand-listed directories, and the 18 files that had drifted are reformatted; package-aware frontend coverage and recursive import checks remain open |
 | A11: toolchain build integrity | Injected required-tool failures fail the build; stale binaries cannot substitute; logs and totals retained | Required tools now fail the build, use the canonical driver and remove stale outputs; isolated full-build controls pass locally and are wired into CI |
 | A12: LSP temporary files | Concurrent servers remain independent and no shared source files can be overwritten or leaked on errors | Source temporary files eliminated through compiler stdin snapshots; concurrent-server and missing-tool controls pass |
-| A13: safety contract | Default/strict/raw/FFI guarantees agree; witnesses and valid controls; opaque wrappers and container ownership audited | The pre-registered C-runtime surface is now checked at call sites exactly as an '&'-declared FFI symbol is — it had no argument or arity check at all. Container and opaque-handle ownership now has witnesses: every violation the default rules promise to catch is caught, the three that compile are the holes MEMORY.md declares, and two of those three are reported under --strict-borrowck. Open: a read of a maybe-moved binding has a witness but no check in either mode; MEMORY.md §2.9 undercounts strict mode's checks; the rest of the contract review is untouched |
+| A13: safety contract | Default/strict/raw/FFI guarantees agree; witnesses and valid controls; opaque wrappers and container ownership audited | The pre-registered C-runtime surface is now checked at call sites exactly as an '&'-declared FFI symbol is — it had no argument or arity check at all. An impl is now checked against the trait it names: a missing required method, a wrong arity, wrong non-receiver parameter types and a wrong return type were all accepted, and the last of those is a type confusion, because 'dyn' builds its thunk from the DECLARED signature. Container and opaque-handle ownership has witnesses: every violation the default rules promise to catch is caught, the three that compile are the holes MEMORY.md declares, and two of those three are reported under --strict-borrowck. MEMORY.md §2.9 is reconciled (three checks; the third one's description was too narrow). A read of a maybe-moved binding is a recorded decision not to build, with both measurements. Open: opaque wrappers beyond Channel, and whether the remaining guarantees agree |
 | A14: crypto/parser evidence | Instrumented fuzz controls and retained seeds; pinned ACVP/HTTP oracles; measured backend timing; explicit X.509 policy and independent crypto review | Pending; requires A01 and external validation for independent review |
-| A15: release integrity | Mandatory target artifact gates, pinned tool downloads, installer integrity and state-preserving failure controls | The artifact set is now gated before publication, with eleven controls in CI; installer checksum/signature verification reviewed and found fail-closed; pinned tool downloads and state-preserving unpack remain open |
+| A15: release integrity | Mandatory target artifact gates, pinned tool downloads, installer integrity and state-preserving failure controls | The artifact set is gated before publication, with eleven controls in CI; installer checksum/signature verification reviewed and found fail-closed; the installer now stages its unpack so a failed extraction leaves the existing install intact (six controls, two of which fail against the previous installer); every tool a workflow downloads is pinned by sha256, including the zig that ships inside the published archive, with tools/check_pinned_downloads.py keeping it that way in CI |
 | A16: compiler architecture | Ownership/state boundaries, current global writer map, interacting-feature differential tests, diagnostic-site dispositions | Trait ordering work is merged; remaining acceptance is unverified |
 | A17: ecosystem capabilities | All package public surfaces mapped to executable consumer/runtime/install evidence and prerequisites; device/platform results distinguished from CPU substitutes | Pending package inventory and execution matrix |
 
@@ -1937,7 +1937,10 @@ can be made with one.
 Note also that `docs/MEMORY.md` §2.9 is titled "three opt-in checks" and
 enumerates three, while the aggregate-literal maybe-move above is a fourth
 thing `--strict-borrowck` reports. The prose and the implementation should
-be reconciled.
+be reconciled. (Reconciled on 2026-09-12: there are three checks, and the
+third one's DESCRIPTION named only one of the seven routes into the
+maybe-moved state. See "A13 / MEMORY.md §2.9: the opt-in checks, counted
+correctly" below.)
 
 ### A01: the leak inventory, triaged as far as machines go (2026-09-11)
 
@@ -2110,3 +2113,278 @@ the leak gate passes on all seven sources in both emission modes. Corpus 992
 pass / 19 skip; sanitized corpus 906 pass / 86 leak / zero other sanitizer
 findings; RSS 38 MB; DCE 180 emitted / 12 reachable with identical
 behaviour; the tree's 303 diagnostics are unchanged.
+
+### The sweep past declarations: expression position, arms, terminators (2026-09-12)
+
+The declaration sweep that found thirteen defects was continued into the
+positions it had not reached: expression position, trait and impl bodies,
+match and select arms, foreach, and the `!` / `?` / `Z` / `#` / `@` / `.`
+operator forms. Method unchanged — take a construct the grammar allows,
+write it in a spelling nothing in the tree uses, and check the
+implementation against `spec/grammar.ebnf`. About 140 spellings; four
+defects, three of which the declaration invariant cannot see because they
+keep `main` and fail later.
+
+**`Z NoSuchType` was the one type position with no type check.** Binding,
+return, parameter, struct field, global, FFI parameter, FFI return and enum
+payload types all run `check_type_known`; `Z` did not. It fell through to
+the getelementptr-null path and emitted `getelementptr %NoSuchType,
+%NoSuchType* null, i64 1` for a type nothing declares. nurlc exited 0 and
+clang said "base element of getelementptr must be sized" — about generated
+IR, with no NURL source location. `gen_sizeof` now takes `syms` and runs
+the same check every other type position runs.
+
+**An or-pattern's alternatives were never checked against the enum.** The
+FIRST name of a match arm has been checked for years, with a comment
+explaining precisely this miscompile: an unknown name emits `load i64,
+i64* @<name>` for a global nothing defines. `A | B → body` checked `A` and
+not `B`. `?? c { Red | Nope → … }` compiled, exited 0, and clang reported
+`use of undefined value '@Nope'`. The same check now runs over every
+alternative, anchored on the arm's own pattern token.
+
+**`break` and `continue` inside a `;` defer body compiled to an infinite
+loop.** `^` inside a defer is already rejected, with the reason: the defer
+chain runs DURING return and cannot itself return. The other two block
+terminators had no such check, and the enclosing loop's labels were still
+in scope, so the jump branched into `loop_exit` — a block the chain had
+already come from — which fell straight back into the defer chain with its
+armed flag still set. `~ < k 3 { ; { break } = k + k 1 }` compiled, exited
+0, and printed its epilogue forever. The defer body now shadows the loop
+labels, so a `break` there is reported with its own message, while a loop
+written INSIDE the defer body still breaks normally.
+
+The fourth is A13's, below. `tools/tests/test_declaration_forms.py` grew
+from 44 forms to 95 across three tables (declarations, statements, match
+arms). Sixteen of the new rows are rejections the pre-change compiler
+accepted; running the extended table against a compiler built from the parent
+commit fails exactly those sixteen and passes the other 79, which is what
+makes them evidence rather than assertion.
+
+Two forms were checked, found to be the language rather than a defect, and
+are pinned as `compiles` with the reason: an impl of a trait that is not
+declared anywhere (`Drop`, `Ord` and `Show` are implemented with no
+declaration), and a receiver type in a non-generic trait's impl that
+differs from the declaration's (that slot is a placeholder each impl
+replaces — `% Show { @ show i n → s }` is implemented for `i` and for `b`).
+
+One hole was found and is NOT closed: a trait method header with no return
+arrow (`% Sh { @ area i o }`) is accepted at the declaration. Nothing
+consumes the recorded signature unless the trait is used dynamically, and
+the dyn re-parse is where it is reported today
+(`compiler/tests/diag_dynsig_context.nu` pins that message and its
+context). Rejecting it at the declaration is the right place, and it would
+retire that fixture's witness; the signature check below therefore skips a
+header with no arrow rather than shadowing the existing diagnostic with a
+worse-located one.
+
+Evidence: corpus 992 PASS / 19 SKIP / 0 FAIL / 0 MISSING / 0 ORPHAN;
+the sanitized corpus 992 PASS / 19 SKIP with zero sanitizer findings;
+`nurlfmt --check` canonical over 1,790 files; strict-arity, memgate and
+dcegate pass; seven arithmetic methods, 31 ownership methods, seven
+compiler-cleanup methods, two driver-path controls, the WASI IR control and
+eleven release-artifact controls all pass. The check that matters most for
+a change that ADDS diagnostics is the tree sweep: every tracked first-party
+`.nu` file (816 of them) compiled with the parent commit's compiler and
+with this one produces **byte-identical** output and exit codes.
+
+### A13: an impl was never checked against the trait it names (2026-09-12)
+
+`% Trait Type { … }` registered whatever methods it contained and checked
+none of them against the trait's declaration. Three things followed, and
+the third is a type confusion rather than a missing convenience:
+
+- A required method — one the trait declares with a signature and no body —
+  could simply be absent. The grammar says "Required methods are a compile
+  error if an impl doesn't provide them"; nothing enforced it.
+- The arity and the non-receiver parameter types could disagree.
+- The RETURN type could disagree, and `dyn` dispatch builds its thunk from
+  the DECLARED signature. A trait declaring `→ i` implemented with `→ s`
+  produced a vtable whose thunk returns i64, called a function returning
+  i8*, and handed the caller a pointer to read as an integer. The witness
+  prints a raw pointer value and exits 0 with no diagnostic anywhere.
+
+`check_impl_contract` now runs in `resolve_trait_impls`, which is already
+the point where the whole program's traits are known, so declaration order
+and imports are not a factor. For each method the trait declares: if the
+impl provides it, its signature is compared; if not, it must have a default
+body. The comparison substitutes the trait's type parameter with this
+impl's Self type and its associated types with this impl's bindings — the
+same two substitutions `register_missing_defaults` applies to a default
+body — and then lowers BOTH sides with `scan_method_signature`, the same
+scanner the impl's own registration went through. Comparing lowered types
+rather than source spelling is what makes `inout` receivers
+(`%Counter*`), associated-type returns (`type Elem i`) and type aliases
+(`i` / `i64`) compare correctly; all three are in the corpus and all three
+were what the first two attempts got wrong.
+
+Three boundaries the corpus taught, each now a comment at the check:
+
+- A trait that is not DECLARED is not an error. `Drop`, `Ord` and `Show`
+  are implemented with no declaration; that is how the built-in protocols
+  work. There is no contract to check for one, so the check returns.
+- A NON-generic trait's receiver slot is a placeholder. Only a generic
+  trait's receiver is contractual, because substitution makes it exact.
+- An impl body the parser could not read (`@ 5 Dog self → i`) is recorded
+  as malformed at scan time, so "missing required method" does not shadow
+  the parse error that explains it.
+
+### A15: a staged unpack, and tools pinned by content (2026-09-12)
+
+Both remaining A15 halves are closed.
+
+**The installer no longer destroys a working install to make room for one.**
+`tools/get-nurl.sh` removed the toolchain's paths and let `tar` write over
+the hole. Every failure from that point on — a truncated archive, a full
+disk, a killed terminal — left a prefix with no compiler in it, repairable
+only by a successful re-run. It now unpacks into `$PREFIX/.stage.$$`,
+checks the staged tree for `bin/nurl`, and only then swaps: directories
+replaced wholesale so a file dropped upstream cannot linger, `bin/` merged
+file by file because it also holds programs installed with `nurlpkg
+install`. The destructive window is a handful of renames on one filesystem
+instead of the length of an extraction, and the staging directory is on the
+existing `EXIT` trap. `webdocs/public/install.sh` was re-synced, which
+`tools/check_installer_sync.sh` confirms.
+
+`tools/tests/test_installer_unpack.py` serves a release over `file://` so
+the real download, checksum and unpack path runs with no network: a fresh
+install; an upgrade that replaces the toolchain and keeps `credentials`,
+`models/` and a `nurlpkg`-installed `bin/mytool`; a truncated archive; an
+archive with no `bin/nurl`; a checksum mismatch; and the pre-existing
+refusal to overwrite a prefix that is not a NURL install. Six controls, all
+passing, and two of them FAIL against the pre-change installer — which is
+what makes them a control rather than a description.
+
+**Downloaded tools are pinned by content, not only by URL.** A
+version-pinned URL says what was asked for, not what came back. Twelve
+sites were unpinned, including the zig the release job unpacks INTO the
+published archive — bytes that reach every user of the installer — and two
+benchmark jobs whose reference runtime was whatever `curl
+https://wasmtime.dev/install.sh | bash` installed that day, under numbers
+the repo publishes. Now: zig 0.16.0 by sha256 in `release.yml`, `fuzz.yml`
+and `wasm-bench.yml` (digests from ziglang.org's own index); wasmtime
+v48.0.2 as a pinned release archive with a checksum in place of both
+`curl | bash` sites; cloud-hypervisor v46.0 by sha256; and `rustup-init`
+1.29.1 from the archive URL with a checksum across all seven bench
+workflows, in place of `curl https://sh.rustup.rs | sh`. The Rust
+TOOLCHAIN stays `stable` deliberately — the point of that column is what
+current stable Rust does, and the resolved version is recorded in each
+run's toolchain-versions step.
+
+`tools/check_pinned_downloads.py` keeps it that way: per `run:` block, a
+download of an executable or archive must be followed by `sha256sum -c` in
+the same block, and nothing may pipe a downloaded script into a shell.
+Fetches that are not tool installs — an `api.github.com` query whose body
+the job parses, traffic to a server the job started — are excluded by host,
+not by naming files. It reports all twelve sites against the parent
+commit's workflows and passes on all sixteen workflow files now; it runs in
+CI beside `check_installer_sync.sh`.
+
+### A13 / MEMORY.md §2.9: the opt-in checks, counted correctly (2026-09-12)
+
+The ledger noted that `docs/MEMORY.md` §2.9 is titled "three opt-in checks"
+and enumerates three, while the aggregate-literal maybe-move is a fourth
+thing `--strict-borrowck` reports. Reading the implementation resolves it
+the other way: there are three checks, and the third one's DESCRIPTION was
+too narrow. Check 3 fires on a consume of a binding in the MAYBE-MOVED
+state, and §2.9 described only one of the routes into that state ("freed on
+one arm of a `?`"). The state is also reached by a value-producing `?` /
+`??` selecting the handle, by storing it in an aggregate literal, by
+pushing it into a container that frees its elements, by an alias assignment
+`= z a`, by a closure that captures and frees it, and by a call whose
+effect is not decidable at that point (the callee may `sink` the parameter
+or return the handle). §2.9 now lists all seven and says explicitly that a
+*read* of a maybe-moved binding is not covered, with a pointer here.
+
+Five of the seven were confirmed against the current compiler rather than
+taken from the code: a `Vec` handle selected by a `?`, stored into an
+aggregate literal, handed over by `= z a`, captured by a closure that frees
+it, and passed to a `sink` parameter. Each program compiles clean by
+default and each is reported under `--strict-borrowck`, naming the route it
+took ("its handle was stored into an aggregate literal at line 8", "a
+closure that captured it frees it at line 6"). That is the same one check
+firing on five spellings, which is the point.
+
+### Decisions recorded: the fourth strict check, and stack lifetimes (2026-09-12)
+
+Two items were carrying a witness and a measurement each, waiting on a
+decision rather than on work. Both are decided as **not now**, with the
+reasons, so the next reader inherits a position rather than a question.
+
+**A fourth `--strict-borrowck` check for a READ of a maybe-moved binding:
+not built.** The witness is real — a free on one arm of a `?` followed by
+an unconditional read after the join is a use-after-free on the taken path,
+reported in neither mode. The two measurements argue against building it
+now. Strict mode already reports 1,070 distinct sites across 553
+first-party files, so the acceptance bar the docs used for strict check #1
+("adds no new strict failures") cannot be applied, and a new check makes a
+mode nobody can run clean noisier still. And the borrow-check walk has no
+read events at all — its record kinds are `let`, `assign`, `move`,
+`maybemove`, `pendcall`, `cond`, `match`, `block` — so this is a new record
+stream out of `gen_ident`, which fires on every identifier in every
+program, plus a rule for which reads matter. The right order is: get strict
+mode to a state where its output can be read, then add checks to it.
+§2.9 now states the gap explicitly, which is the part that was missing.
+
+**A lexical stack-lifetime policy (`llvm.lifetime.start/end`): not built.**
+Every NURL alloca is hoisted to the entry block and lives for the whole
+function, so a use-after-scope inside one frame is not a memory error
+today — at worst a slot reused across loop iterations. The escape that IS
+a dangling pointer, a stack reference outliving its function, is rejected
+in every spelling tried: assignment, struct field store, conditional arm,
+closure of closure, nested blocks, loop body, interprocedural, and
+block-expression initialisers. Lifetime markers would therefore buy
+detection and stack reuse, not correctness, and they must still account for
+deferred cleanup reaching a slot after its lexical block — a defer runs
+during return, long after the block that allocated the slot has closed.
+That is a codegen change with a real correctness obligation for a benefit
+that is not correctness. It stays open in A01's row as a documented
+boundary rather than a pending repair.
+
+### A token deleted, again: two shapes no hand-written spelling reached (2026-09-12)
+
+The sweep from 2026-09-11 was re-run — seeds 1 and 3, fifty corpus programs,
+against a private copy of the compiler with the corpus copied out of the tree,
+as the harness enforces on itself. Three findings, two distinct defects, and
+both are the class this whole sweep exists for: a construct the language
+allows, reached by a path that skipped its own check, exiting 0 with no
+`main` and nothing on stderr.
+
+**An unterminated trait body swallowed the rest of the file.** Deleting one
+`}` from `% Speaker [T] { @ speak T self → i }` left the body open. The
+method-header scan advanced to "the first `{`", which is now the NEXT
+declaration's brace, so `: Dog { i pitch }` became the method's default body
+and the trait appeared to end at some inner `}`. The EMIT pass does not scan
+that way — it skips balanced braces — so it consumed to end of file. The two
+passes disagreed about where the trait ended, and `main` was inside the
+difference. Found twice independently (seed 3 on `diag_dyn_no_impl.nu`, seed
+1 on `showcase.nu`), which is what a real defect looks like from two seeds.
+
+Fixed in two places, because one alone is not the rule. The header scan now
+stops at the `→` and consumes exactly the return type — `skip_one_type`, a
+structural walk, because `parse_type` cannot stand in here: inside a trait
+declaration the type parameter lexes as the boolean literal (`% Maker [T] {
+@ make T self → T }`) and only the declaration's own context knows it names a
+type. And a trait or impl body now REJECTS any token that is neither a method
+nor an associated type, instead of skipping it. The skip is what made an
+unterminated body dangerous in the first place, and it was also silently
+accepting `% Sh { 42 }`, a nested declaration, and an impl body full of junk.
+
+**A generic template whose body brace was missing swallowed the next
+declaration.** `@ ship [T: Send] T v → i` with its `{` deleted: the template
+collector took tokens "until the next `{` anywhere", found `@ main → i {`'s
+brace, and called everything before it the signature and everything after it
+the body. Only the BOUNDED form reaches that path (`[T]` alone is rejected by
+the concrete path), which is why no hand-written spelling had found it. The
+collector now finds the end of the signature with the same structural walk,
+collects up to that point, and then requires the brace — which the concrete
+function path has always required.
+
+Both are pinned in `tools/tests/test_declaration_forms.py` (`trait_unterminated`,
+`generic_fn_bound_no_body`, plus the junk-in-body forms the same fix closed),
+and the `showcase.nu` mutant — found independently, before the fix existed —
+is rejected by the repaired compiler, which is the control that matters.
+
+Seeds 2 and 4 were still running on two very large corpus programs when this
+was written; the sweep is single-threaded per invocation and one 12 KB
+program is several thousand compiles. Run several `--seed`s in parallel
+rather than one long `--files`, and record which seeds have been run clean.

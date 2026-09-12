@@ -80,9 +80,19 @@ jobs:
         # rustc ships wasm32-wasip1 as a rustup component, not by default;
         # wasmbench.sh refuses to start without it rather than leaving a
         # hole in the table.
+        # rustup-init pinned by version and checksum, from the archive URL —
+        # `curl https://sh.rustup.rs | sh` pipes whatever that endpoint serves
+        # into a shell. The TOOLCHAIN stays `stable` on purpose: the point of
+        # this column is what current stable Rust does, and the version it
+        # resolved to is recorded in the run's toolchain-versions step.
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-            | sh -s -- -y --default-toolchain stable --profile minimal
+          RUSTUP_VER=1.29.1
+          RUSTUP_SHA=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
+          curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/rustup-init \
+            "https://static.rust-lang.org/rustup/archive/${RUSTUP_VER}/x86_64-unknown-linux-gnu/rustup-init"
+          echo "$RUSTUP_SHA  /tmp/rustup-init" | sha256sum -c -
+          chmod +x /tmp/rustup-init
+          /tmp/rustup-init -y --default-toolchain stable --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           "$HOME/.cargo/bin/rustup" target add wasm32-wasip1
 
@@ -99,7 +109,9 @@ jobs:
         # it has to match how the repo builds it everywhere else.
         run: |
           ZIG_VER=0.16.0
+          ZIG_SHA=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
           curl -fsSL "https://ziglang.org/download/${ZIG_VER}/zig-x86_64-linux-${ZIG_VER}.tar.xz" -o /tmp/zig.tar.xz
+          echo "$ZIG_SHA  /tmp/zig.tar.xz" | sha256sum -c -
           mkdir -p "$HOME/zig-toolchain"
           tar -xf /tmp/zig.tar.xz -C "$HOME/zig-toolchain" --strip-components=1
           echo "$HOME/zig-toolchain" >> "$GITHUB_PATH"
@@ -117,8 +129,20 @@ jobs:
         # the very runtime it exists to compare against. It is now installed
         # as `nwasm` and the names cannot collide, but pinning stays — it
         # documents which binary the column measured.
+        #
+        # Pinned by version and checksum, not `curl … | bash`: a benchmark
+        # whose reference runtime can change between runs cannot be compared
+        # across runs, and the number is published.
         run: |
-          curl https://wasmtime.dev/install.sh -sSf | bash
+          WASMTIME_VER=v48.0.2
+          WASMTIME_SHA=f2b0ad1ce9253f2f9a38793c2c42cd1cba4e90b27dc40d685eaf723dc8438d94
+          WASMTIME_DIR="wasmtime-${WASMTIME_VER}-x86_64-linux"
+          curl -fsSL --retry 5 -o /tmp/wasmtime.tar.xz \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/${WASMTIME_VER}/${WASMTIME_DIR}.tar.xz"
+          echo "$WASMTIME_SHA  /tmp/wasmtime.tar.xz" | sha256sum -c -
+          mkdir -p "$HOME/.wasmtime/bin"
+          tar -xf /tmp/wasmtime.tar.xz -C /tmp
+          install -m755 "/tmp/${WASMTIME_DIR}/wasmtime" "$HOME/.wasmtime/bin/wasmtime"
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
           echo "WASMTIME=$HOME/.wasmtime/bin/wasmtime" >> "$GITHUB_ENV"
 
