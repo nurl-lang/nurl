@@ -175,7 +175,8 @@ Twelve seeds, 168 corpus programs, **515 findings** — and eleven root
 causes. Each wave was run against the compiler the previous wave's fixes had
 already repaired, and each still found its own: seeds 1-4 gave three causes,
 seeds 5, 6 and 8 three more, seed 7 four more again, and seed 12 one more
-after that. (Seed 9 was clean; 10 and 11 had not finished.)
+after that. **Seeds 9, 10 and 11 were clean** — the first wave in which most
+seeds found nothing.
 
 **A note on how that was measured, because the first two attempts were
 wrong.** The recheck — recompile every saved mutant against the repaired
@@ -445,11 +446,26 @@ against the repaired compiler.
    whether clang accepts the module. Seeds 1-8 under the weak invariant alone
    were clean; under `--clang`, twelve seeds produced **515 findings and
    eleven root causes** (see "The second oracle" above). Every wave was run
-   against the compiler the previous wave's fixes had already repaired and
-   every wave but one still found its own. The yield may be falling off —
-   seed 9 was clean and seed 12 gave one — but seeds 10 and 11 had not
-   finished when this was written, so that is a hint, not a measurement.
-   **Finish 10 and 11, then seed 13 onwards.**
+   against the compiler the previous wave's fixes had already repaired.
+
+   **The yield is now falling off, and that is a measurement.** Seeds 1-4
+   gave three causes, 5-8 gave four, and 9-12 gave one — with 9, 10 and 11
+   each finding nothing at all across 36 corpus programs. Seed 13 onwards is
+   still worth running, but it is no longer the highest-value thing to run:
+
+   What "falling off" does NOT mean is that the language is clean. It means
+   this oracle, with this mutation, over this corpus, is close to exhausted.
+   Deleting one token reaches the shapes a deletion can reach. The surfaces
+   named in item 1 (`&`-FFI, `!T E` / `?T` try-propagation, `#` casts,
+   `select` / channel typing, `Send`/`Sync` derivation) need a probe of their
+   own, and the shape of the next one is already visible in what the clang
+   oracle taught: **ask a stronger question of the programs that already
+   compile.** "Exit 0" was the weak invariant; "clang accepts it" was the
+   strong one, and it paid eleven root causes. The next rung is "the program
+   RUNS and answers correctly" — a differential or metamorphic oracle over
+   mutants that survive both questions. Two of this round's defects
+   (`( MAX )` segfaulting, a default of 1 arriving as 0) would have been
+   caught only there.
 
    Recheck from the REPOSITORY ROOT. A mutant that cannot resolve its
    `$`-imports exits 1, and a harness that reads exit 1 as "rejected" counts
