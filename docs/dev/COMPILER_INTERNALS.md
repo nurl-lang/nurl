@@ -74,6 +74,11 @@ never needs a second look at the source: by the time `parse_program` runs,
 every signature, type name, template and dyn-trait requirement is already in
 a table.
 
+The ordinary signature prepass records every `inout` parameter's position in
+`g_fn_inout`, just as generic template registration does. Forward calls and
+mutually recursive functions therefore use the same address ABI as calls after
+a definition. Never infer that ABI from definition order.
+
 With `--check`, the complete fused walk and deferred checks still run; main
 unwinds the output buffer without making the final module copy or invoking
 DCE/splitting, then follows normal cleanup.
@@ -212,6 +217,14 @@ be broken:
   found the last one in two runs.
 
 ## 5. Changing the compiler safely
+
+The ownership walk's dense state string also has a control-flow bottom value,
+`!`, meaning no continuing path. `bck_walk_seq` produces it on a return and
+stops that path. `bck_join_state` excludes it, so a release followed by return
+cannot become a loop-carried move. Explicit conditional else edges and match
+arm boundaries cover both bare expressions and brace blocks. Match ownership
+remains isolated per arm to avoid conflating payload bindings; only all-arm
+termination propagates to its caller.
 
 1. `./check.sh compiler/nurlc.nu` — fast frontend syntax/type gate.
 2. Build and self-compare: the OLD binary and your NEW binary must emit

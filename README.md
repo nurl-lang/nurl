@@ -215,6 +215,7 @@ pure-NURL runtime. Details: [`docs/TOOLING.md`](docs/TOOLING.md).
 | Topic | Document |
 |---|---|
 | Language reference (normative) | [`docs/spec.md`](docs/spec.md) |
+| Standard library module guides | [`docs/stdlib/`](docs/stdlib/README.md) |
 | Grammar (authoritative) | [`spec/grammar.ebnf`](spec/grammar.ebnf) |
 | Building, bootstrap & debugging | [`docs/BUILDING.md`](docs/BUILDING.md) |
 | Tooling — editor / LSP / formatter / package manager | [`docs/TOOLING.md`](docs/TOOLING.md) |

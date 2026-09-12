@@ -1,0 +1,9 @@
+COMPILE OK
+WARNINGS
+compiler/tests/should_warn_discarded_closure.nu:8:5: warning: the statement on line 7 has no effect — it produces a value that is discarded. If it was meant as an operand, the prefix operator before it is short an argument (fixed arity, no closing bracket); otherwise bind the value (': T name …') or remove the statement.
+    ( nurl_print `closure discarded\n` )
+    ^
+LINK OK
+EXIT 0
+OUTPUT
+closure discarded
