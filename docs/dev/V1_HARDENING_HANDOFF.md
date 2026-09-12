@@ -170,9 +170,10 @@ compiler, so the repair answers a witness it was not written against.
    `main`. It found the eighteenth defect this round, in a construct no
    hand-written spelling had reached. It is single-threaded per invocation
    and a large corpus program is thousands of compiles, so run several
-   `--seed`s in parallel rather than one long `--files`. The ledger records
-   which seeds have been run clean; a seed nobody has run is where the next
-   one is.
+   `--seed`s in parallel rather than one long `--files` — one 12 KB corpus
+   program is several thousand compiles, and two of the four seeds took about
+   an hour each. **Seeds 1-4 are clean** against the repaired compiler; seed 5
+   onwards is where the next one is.
 
 4. **A01's remaining item is a recorded decision, not pending work.** Lexical
    stack lifetimes: every NURL alloca is entry-hoisted and lives for the whole

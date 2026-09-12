@@ -2342,12 +2342,13 @@ boundary rather than a pending repair.
 
 ### A token deleted, again: two shapes no hand-written spelling reached (2026-09-12)
 
-The sweep from 2026-09-11 was re-run — seeds 1 and 3, fifty corpus programs,
-against a private copy of the compiler with the corpus copied out of the tree,
-as the harness enforces on itself. Three findings, two distinct defects, and
-both are the class this whole sweep exists for: a construct the language
-allows, reached by a path that skipped its own check, exiting 0 with no
-`main` and nothing on stderr.
+The sweep from 2026-09-11 was re-run to completion — **seeds 1, 2, 3 and 4,
+one hundred corpus programs**, against a private copy of the compiler with the
+corpus copied out of the tree, as the harness enforces on itself. **Four
+findings, two distinct defects**, and both are the class this whole sweep
+exists for: a construct the language allows, reached by a path that skipped
+its own check, exiting 0 with no `main` and nothing on stderr. Seed 2 found
+nothing over its 25 programs.
 
 **An unterminated trait body swallowed the rest of the file.** Deleting one
 `}` from `% Speaker [T] { @ speak T self → i }` left the body open. The
@@ -2374,17 +2375,22 @@ declaration.** `@ ship [T: Send] T v → i` with its `{` deleted: the template
 collector took tokens "until the next `{` anywhere", found `@ main → i {`'s
 brace, and called everything before it the signature and everything after it
 the body. Only the BOUNDED form reaches that path (`[T]` alone is rejected by
-the concrete path), which is why no hand-written spelling had found it. The
-collector now finds the end of the signature with the same structural walk,
-collects up to that point, and then requires the brace — which the concrete
-function path has always required.
+the concrete path), which is why no hand-written spelling had found it — and
+seed 4 found it again independently in `trait_order.nu`
+(`@ measure [A: Reading] A self → i`), which is what a real defect looks like
+from two seeds. The collector now finds the end of the signature with the same
+structural walk, collects up to that point, and then requires the brace —
+which the concrete function path has always required.
 
 Both are pinned in `tools/tests/test_declaration_forms.py` (`trait_unterminated`,
-`generic_fn_bound_no_body`, plus the junk-in-body forms the same fix closed),
-and the `showcase.nu` mutant — found independently, before the fix existed —
-is rejected by the repaired compiler, which is the control that matters.
+`generic_fn_bound_no_body`, plus the junk-in-body forms the same fix closed).
+The control that matters is the other direction: **all four mutants — found
+before either fix existed, three of them in programs no hand-written form
+resembles — are rejected by the repaired compiler**, each with a message and a
+position. The repairs answer witnesses they were not written against.
 
-Seeds 2 and 4 were still running on two very large corpus programs when this
-was written; the sweep is single-threaded per invocation and one 12 KB
-program is several thousand compiles. Run several `--seed`s in parallel
-rather than one long `--files`, and record which seeds have been run clean.
+Practical note for the next run: the sweep is single-threaded per invocation
+and one 12 KB corpus program is several thousand compiles, so seeds 2 and 4
+took roughly an hour each. Run several `--seed`s in parallel rather than one
+long `--files`. **Seeds 1-4 are now clean** against the repaired compiler;
+seed 5 onwards is where the next one is.
