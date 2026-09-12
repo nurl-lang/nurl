@@ -6,7 +6,7 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.64.0] — 2026-09-13
 
 ### Added
 
@@ -17,6 +17,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are checked. Differential and sanitizer tests cover official protobuf
   interoperability and malformed input. ONNX adopts it after the next toolchain
   release; see `docs/stdlib/protobuf.md`.
+
+- **`packages/anomaly` 0.33.0 — a data source can be a file, and a model can
+  require agreement.** `kind: "csv"` fetches a URL and reads the answer as a
+  file: a header row, then one row per record. It is not a parser of its own
+  but the reader the import route and `analyze_data` already use, so a file
+  that imports cleanly fetches cleanly — same delimiter sniffing, quoted
+  fields, missing-value rules and cell typing. The clock is a column, named or
+  detected; a file with no readable stamp is a snapshot of the moment it was
+  fetched, and a rolling feed that republishes the same window (the USGS
+  earthquake summaries) can be polled as often as you like, since each run
+  keeps only rows newer than the newest already stored. Separately, `votes` is
+  a model setting beside the versions it counts. One — the default, and every
+  model that has never touched it — keeps the rule this package has always
+  had: any enabled version flagging is enough, because a single reading at ten
+  sigma is an anomaly whether or not the forests concur. Above one the
+  versions must agree, and the number decides everywhere the aggregate is
+  used: a detect's answer, the ring scan's stored verdict, calibration's
+  count, fine-tune's target. Fine-tune understands the rule — at one vote
+  `rate` stays each version's own share; above one it becomes the *model's*
+  share and the knob is shared, every tunable version placed at the same
+  quantile of its own scores by bisection (sound because the consensus count
+  is monotone in the quantile). Measured over seven versions and 1500 rows
+  asking for 5 %: at two votes each version sits at 3.9 % and the model flags
+  4.6 %; at five votes each sits at 14.6 % and the model flags 5.0 %. Both
+  numbers come back, a consensus the window cannot reach is said out loud
+  rather than approximated in silence, and `votes` past the number of enabled
+  versions is refused when it is set.
+
+- **`packages/anomaly` 0.32.0 — every version answers for its own column, and
+  every answer says what it is worth.** The flatline guard learns each column
+  instead of the model. Scoring a run of identical readings against one
+  model-wide window made two things impossible at once: a column whose own
+  reference run passed half that window could never reach the margin at all
+  (the run is counted over the window, so its fraction is capped below 1), and
+  every other column needed 54 identical rows in a 60-row window before it
+  counted — a coarse temperature and the smooth flow beside it cannot both be
+  served by one number. The reference is read per column now,
+  `run / max(2·reference, 20 rows)`, and the look-back grows so no watched
+  column has an unreachable bar. The reference also no longer learns the
+  fault: it was the longest run in training, so one freeze inside the ring
+  taught the guard that freezing was normal. Every maximal run now votes
+  `min(length, 1 % of the ring)` times and the reference is the 0.9 quantile of
+  that, so a column's reference is set by what recurs and one stretch cannot
+  outvote the rest of the ring however long it lasts. `analyze_data`'s
+  `separation` was one ratio at the target rate, so it could only see a fault
+  smaller than 1 % of the file; it is now the largest step anywhere in the
+  sorted scores, with the block size that produced it. `train_forecast`
+  measures its own margin instead of assuming four of the model's standard
+  errors — which a backtest routinely finds cover 75 % of what follows, not 95
+  — `forecast_backtest` reads its own numbers per feature and gives the model a
+  verdict, and `season` says how many features' fits actually use it. A version
+  name the model does not have is refused instead of silently created with
+  default geometry, a margin moved by an edit reaches the audit log the tool
+  promises, and what the config sanity rules changed is reported rather than
+  applied in silence. `describe_model` and `edit_model` answer with one shape,
+  wall-clock times are ISO-8601 in every tool, a window reports both bounds,
+  `by_version` counts the zeros, `false_positive` needs a verdict to dispute,
+  an impossible `min_votes` is refused rather than answered "0 anomalies", and
+  `import_data` says why the margins were or were not set and takes the same
+  rate knob `fork_model` has. Errors carry a next step. `analyze_data` and
+  `import_data` take a file the organisation's folder already holds,
+  `list_models` is an orientation rather than four thousand tokens of column
+  names, and `forecast` is readable on a wide model.
+
+- **`packages/anomaly` 0.31.0 — a reading that cannot be a measurement is
+  flagged, stored, and left out of every fit.** One reading of `1e200` used
+  to make its feature stop being watched: 0.29.0 stopped it crashing the
+  service, but the scaler's std became 9e198, every real reading
+  standardised to nought, and the feature was blind until the reading left
+  the ring — fourteen weeks at a minute's step and the default cap. The
+  point is now flagged HARDER (the range guard sees it against a scale it
+  did not move) and marked absent for fitting only, so the scaler, the
+  forests, the flatline reference, the autoencoder and the forecast all
+  skip it through the "absent reading" path 0.29.0 already built. Judged
+  against the feature's own median and MAD, which one reading cannot move.
+  The metadata reports what was left out, per feature. Also: a forecast fit
+  whose innovation variance is not finite is no longer "converged" (`inf >
+  0` is true, so the finiteness had to be asked for), a feature the
+  forecast cannot score is absent rather than 0.0 (which read as "it landed
+  exactly on the forecast"), and the forecast z-score is capped like every
+  other standardised value so an extreme reading gives a number instead of
+  `null`.
 
 ### Fixed
 
@@ -182,26 +264,183 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for emitted function bodies instead of assuming every successful compile
   produces at least 100 KB of IR; sanitizer findings still fail unconditionally.
 
-### Added
+- **Every type position checks that the type is declared.** `Z NoSuchType` was
+  the one position with no such check and emitted a `getelementptr` over a type
+  nothing declares; `%Trait` in a type position never checked the trait exists,
+  because the object-safety check runs only once the trait is known and the
+  declared-type check skipped `%dyn.<Trait>` outright; and an impl's *subject*
+  was unchecked, so `% NotSend Db { }` on a misspelled subject asserted a
+  danger about nothing while the real type kept crossing the boundary. A
+  generic struct applied to the wrong number of type arguments is now counted
+  as a generic function call has been for years: too few left a type parameter
+  unsubstituted in the emitted type, too many mangled the definition and every
+  reference differently, so the reference named a type nothing defines.
 
-- **`packages/anomaly` 0.31.0 — a reading that cannot be a measurement is
-  flagged, stored, and left out of every fit.** One reading of `1e200` used
-  to make its feature stop being watched: 0.29.0 stopped it crashing the
-  service, but the scaler's std became 9e198, every real reading
-  standardised to nought, and the feature was blind until the reading left
-  the ring — fourteen weeks at a minute's step and the default cap. The
-  point is now flagged HARDER (the range guard sees it against a scale it
-  did not move) and marked absent for fitting only, so the scaler, the
-  forests, the flatline reference, the autoencoder and the forecast all
-  skip it through the "absent reading" path 0.29.0 already built. Judged
-  against the feature's own median and MAD, which one reading cannot move.
-  The metadata reports what was left out, per feature. Also: a forecast fit
-  whose innovation variance is not finite is no longer "converged" (`inf >
-  0` is true, so the finiteness had to be asked for), a feature the
-  forecast cannot score is absent rather than 0.0 (which read as "it landed
-  exactly on the forecast"), and the forecast z-score is capped like every
-  other standardised value so an extreme reading gives a number instead of
-  `null`.
+- **An impl is checked against the trait it names.** A missing required method,
+  a wrong arity, wrong non-receiver parameter types and a wrong return type all
+  compiled. The last is a type confusion rather than a cosmetic mismatch:
+  `dyn` builds its thunk from the *declared* signature, so a trait promising
+  `→ i` implemented with `→ s` handed the caller a pointer to read as an
+  integer. The comparison substitutes `Self` and the associated types and then
+  compares *lowered* types, which is what makes `inout` receivers,
+  associated-type returns and type aliases compare correctly. An impl of an
+  undeclared trait is still accepted, because the built-in protocol traits
+  (`Drop`, `Ord`, `Show`, the marker traits) have no declaration.
+
+- **`\` requires a return type that can carry the failure.** The error-type
+  check beside it has compared error types for years, but only when the
+  enclosing function returns a result; otherwise there was nothing to compare
+  and the fail path fell through to `zeroinitializer`. `→ i` returned 0,
+  indistinguishable from a real answer, and `→ s` returned a null pointer that
+  printing dereferenced. An option tried inside a `!T E` function is rejected
+  too: both shapes start `{ i1,`, so the check accepted either and then zeroed
+  the *other* one, returning an `Err` with a payload no callee produced.
+  `stdlib/core/result.nu` had already written the rule in prose — at a site
+  that cannot `\`-propagate, use `res_expect` / `res_unwrap`.
+
+- **A non-exhaustive `match` on `?T` / `!T E` is rejected.** One rule, three
+  scrutinee kinds, and only the user-enum spelling was enforced, because
+  exhaustiveness looked variants up in a table only a user enum has. The
+  option and result spellings yielded `undef`.
+
+- **Variadic FFI declarations agree with their call sites.** The `...` marker
+  is now required to be last and to appear once: a parameter after it emitted
+  `declare i64 @xpf(i8*, ..., i64)` and a second marker `(i8*, ..., ...)`,
+  both of which `llvm-as` rejects. A *leading* marker was worse — the first
+  parameter overwrote the accumulated declaration string and destroyed the
+  marker there while the call-site signature kept it, so the module declared a
+  non-variadic symbol and called it variadically. That one exits 0, clang
+  accepts it, and it is a real ABI difference on every target that passes
+  variadic arguments differently. A variadic call's *fixed* prefix is counted
+  as well; `...` makes the tail optional, never the parameters ahead of it, and
+  a missing fixed argument read an unset ABI register. An empty FFI library
+  name now fails its sentinel gate instead of skipping it and turning a missing
+  dev package back into a link-time surprise.
+
+- **A call whose callee names a value is rejected.** Identifier generation has
+  carried the taxonomy for years and refuses a name that is neither a binding,
+  a global nor a parameter; call generation had no such guard. The dangerous
+  spelling is a constant: `( MAX )` emitted `call i64 @MAX()` against
+  `@MAX = global i64 10`, which clang *accepts* because the global has an
+  address, and which jumps into the constant — a clean compile, a clean link
+  and a segfault. The "is this binding callable" test was also too loose, since
+  it said yes to any struct-shaped type and so let a slice or option binding
+  shadow a function of the same name; it now asks whether the struct's first
+  field is a function pointer at the struct's own nesting depth.
+
+- **Default parameter values are checked, and are refused on `inout`.** The
+  positional-fill path never compared a default against its parameter, so
+  `@ show f x = 1 → v` called as `( show )` emitted an integer argument against
+  a `double` parameter and the callee printed 0; one helper now answers for all
+  three spellings. A default on an `inout` parameter compiled and put the
+  literal in the callee's pointer slot — a clean compile, a clean link and a
+  segfault — and is rejected at the declaration like the grammar's other three
+  cases.
+
+- **`break` and `continue` inside a `;` defer body are rejected.** The chain
+  runs during return, after the loop has exited, so the jump branched into the
+  loop exit, which fell straight back into the chain with the armed flag still
+  set: `; { break }` inside a loop exited 0 and printed its epilogue forever.
+  `^` was already rejected there; these are the other two block terminators.
+
+- **An or-pattern's alternatives are checked against the enum.** Only the first
+  name ever was, with a comment explaining exactly this miscompile — an unknown
+  name emits a load of a global nothing defines — so `Red | Nope` checked
+  `Red` and emitted the load for the other.
+
+- **`#` between two named struct types is rejected**, and so is an aggregate
+  value bound to a pointer binding. The final fallthrough in cast generation
+  handed the operand back wearing the target's type, which is a reinterpret,
+  not a cast.
+
+- **A terminated statement no longer leaves malformed IR behind.** Three
+  spellings of the same arity trap: a binding whose initialiser terminated left
+  a basic block whose last instruction is a store, because the dead-block
+  parking runs *between* statements and the binding was the block's last; an
+  operand that produces no value emitted an empty one (`%r8 = icmp eq i64 3,`),
+  the third spelling of "no value" after the `v` type and a void call's
+  `undef`; and a `foreach` whose body ends in `break` left the returned flag
+  set, so the enclosing loop believed its own body had terminated and emitted
+  two labels back to back. LLVM rejects each, with no NURL source location.
+  The last needs no mutation to reach — it is ordinary code that nothing in
+  1,815 tracked files happened to be written as.
+
+- **An element index must be an integer on the store side.** The read side has
+  said so for years; the five index-store paths never asked, so
+  `= . xs 1.5 7` emitted `getelementptr i64, i64* %p, double 1.5`. An option or
+  result literal's tag is checked as well: field 0 is the tag, five diagnostics
+  covered the ways a payload can disagree with its declared type and the tag
+  had none, so a missing tag shifted every value one slot left.
+
+- **`pub` on a `$` import is a diagnostic** rather than read and discarded in
+  silence, so a file whose only `pub` sat on its import no longer stays out of
+  strict visibility without a word; the alias slot takes a plain identifier, as
+  the grammar says. A trait method header with no return arrow is rejected at
+  the declaration, keeping the ASCII-arrow hint. A `select` arm's diagnostics
+  name the real file and line instead of generated text (`<select>:4:127`),
+  which is the cure `<dynsig>` already had.
+
+- **Unterminated trait and generic-template headers no longer swallow the rest
+  of the file.** A trait body whose `}` is missing let the method-header scan
+  advance to "the first `{`", which is the *next* declaration's brace, while
+  the emit pass skips balanced braces and ate everything after it: the two
+  passes disagreed about where the trait ended, `main` was inside the
+  difference, and the compiler exited 0 with nothing on stderr. A generic
+  template with a trait bound and a missing `{` did the same. Both scans now
+  stop at the `→` and consume exactly the return type, and a trait or impl body
+  rejects any token that is neither a method nor an associated type instead of
+  skipping it.
+
+- **`nurlpkg`'s package version-string gate resolves a constant.** `anomaly`
+  0.32.0 shipped reporting 0.31.0: the number lives in one constant that the
+  manifest bump did not reach, and every gate rule read the *call site*, which
+  in that spelling names the constant rather than the number. The gate also had
+  a way to be silently right — under `pipefail`, a `grep -q` that matches exits
+  at once, the writer upstream takes SIGPIPE, the pipeline reports failure, and
+  `|| continue` then skipped the check that had just succeeded. Both call-site
+  rules use a here-string now.
+
+- **The installer stages its unpack.** `tools/get-nurl.sh` used to delete the
+  toolchain and let `tar` write over the hole, so any failure after that point
+  left a prefix with no compiler. It now unpacks into a staging directory,
+  checks it, and swaps.
+
+- **The Windows HTTP/2 flood tests stopped racing the server's reset.** Ten of
+  eighty-seven `windows-tests` runs were red on one line, and every re-run was
+  green. The cause was the test writing bytes the server will never read: it
+  flooded 1100 `RST_STREAM`s at a ceiling of 1000, the server stops reading the
+  instant the ceiling trips, and closing a socket over unread data is a TCP
+  reset rather than a FIN. Linux still hands the application the bytes queued
+  ahead of that reset, so the client read its `GOAWAY` anyway; Winsock discards
+  them. Both flood tests now drive the counter to the ceiling and exactly one
+  frame past it, prove with a `PING` ACK that the ceiling did not trip early,
+  require a real `GOAWAY` with the right error code, and assert a clean EOF
+  after it, so a future overshoot fails on Linux too. Every exit names its own
+  step. The two ceilings lose an underscore (`_h2_max_resets`,
+  `_h2_max_header_block_bytes`) so the tests can read them from the stdlib and
+  cannot drift from it.
+
+- **The diagnostic coverage and anchor gates run in CI.** Asking which of the
+  compiler's 311 `die`/`warn` sites some test makes it print was a by-hand
+  tool, which is how fourteen diagnostics added in one hardening round reached
+  `main` with nothing printing any of them. Sixteen fixtures now pin their
+  wording (coverage 80% → 84%, never-fired 32 → 18; the one gap left is
+  unreachable behind its own lookahead and is baselined as such), and the gate
+  went from three and a half minutes of one process per file to thirty-four
+  seconds under `xargs -P`, which is what lets both gates join the compiler
+  job. That job's budget goes from 15 to 20 minutes: it measured 13m28s before
+  the gates joined, and a run cancelled at the cap reads as infrastructure
+  trouble rather than as a gate saying no.
+
+### Security
+
+- **Every download in CI is pinned by sha256.** That includes the zig whose
+  bytes ship *inside* the published toolchain archive, the wasmtime and rustup
+  fetches two `curl | bash` benchmark runtimes use, and the unikernel job's
+  `cloud-hypervisor`. `tools/check_pinned_downloads.py` keeps it that way in
+  CI. Only `ci.yml` runs on a pull request, so the pinning in `release.yml`,
+  `fuzz.yml` and the seven bench workflows is verified by that gate and by
+  inspection rather than by having run.
 
 ## [0.63.0] — 2026-09-09
 

@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-09-09 · Current release: **0.63.0** · Language: **Grammar
+_Last reviewed: 2026-09-13 · Current release: **0.64.0** · Language: **Grammar
 v2.7** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -174,13 +174,26 @@ A high-level map of what exists. Dates and per-feature detail are in
   verifier or linker; every return path is type-checked (implicit fall-off
   and closure tails included), and errors inside generic/trait re-parses
   point at the template's real file:line with the instantiation named.
-- Diagnostics are *measured*, not asserted. `check_diag_coverage.sh` reports
-  which of the compiler's ~230 messages a test has ever made it print;
+- Diagnostics are *measured*, not asserted, and since 0.64.0 measured **in
+  CI**: `check_diag_coverage.sh` reports which of the compiler's 311
+  `die`/`warn` sites a test has ever made it print (84%, with the never-fired
+  set baselined so a new silent diagnostic fails the build);
   `check_diag_anchor.sh` gates that every baselined diagnostic points at the
   mistake rather than at the token after it; `diag_mutate.py` injects one
   realistic error into a working program and reads the answer. Between them
   they have found messages that were false, messages that were unreachable,
   and programs the compiler accepted and miscompiled.
+- The v1-hardening sweep asks one question of every language surface: is this
+  construct reached by a path that skips a check the compiler already performs
+  in another spelling? Round after round it says yes, and the ledger of what
+  was closed and what remains open is
+  [`docs/dev/V1_HARDENING.md`](docs/dev/V1_HARDENING.md) — silent
+  reinterprets, invented error payloads, calls that jump into a constant, IR
+  only `llvm-as` rejects. Two oracles keep it honest: a token-deletion
+  mutation sweep (`tools/fuzz/mutate_delete.py --clang`) that asks clang
+  whether a surviving mutant's module is even valid, and `tools/tree_sweep.sh`,
+  which requires byte-identical diagnostics over every tracked first-party
+  `.nu` file so a new rejection rejects nothing that was valid.
 - Emission: only the functions `main` can reach the `.ll`
   (`--no-dce` to emit everything). Reachability is computed over the
   finished IR, so closures, monomorphs, drop glue and dyn vtable thunks
@@ -232,7 +245,9 @@ platform-specific shims.
   `file_truncate`, `set_permissions`, `set_times`), `path` (typed),
   `net` (TCP/TLS), `udp`, `dns`, `dos`.
 - **ext/serialization** — `json`, `toml`, `csv`, `msgpack`, `cbor`, `xml`, `yaml`,
-  `serde`, `regex` (a Pike VM, with capture groups and back references).
+  `protobuf` (checked Protocol Buffers wire readers/writers,
+  [`docs/stdlib/protobuf.md`](docs/stdlib/protobuf.md)), `serde`, `regex` (a
+  Pike VM, with capture groups and back references).
 - **ext/web stack** — full HTTP/1.1 server (keep-alive, pipelining, static,
   auth, JWT bearer-auth with HS256/EdDSA/**ES256**, cookies, forms, multipart, router, middleware, access log + Prometheus
   metrics, DoS caps, graceful shutdown, per-request timeouts, panic recovery),
