@@ -191,6 +191,11 @@ jobs:
       - name: Driver paths through split lowering
         run: python3 tools/tests/test_driver_paths.py
 
+      - name: Protobuf differential wire and schema tests
+        run: |
+          python3 -m pip install --target /tmp/protobuf-oracle protobuf==7.36.1
+          PYTHONPATH=/tmp/protobuf-oracle python3 tools/tests/test_protobuf.py
+
       - name: Declaration and statement forms (reject, or emit main)
         # One invariant over many spellings: a source that still declares
         # '@ main' either fails to compile or defines main. Nine parser
@@ -716,6 +721,12 @@ jobs:
 
       - name: Instrumented formatter ownership and CLI controls
         run: NURL_SAN=1 python3 tools/tests/test_formatter.py
+
+      - name: Instrumented protobuf interoperability and malformed input
+        run: |
+          python3 -m pip install --target /tmp/protobuf-oracle protobuf==7.36.1
+          PYTHONPATH=/tmp/protobuf-oracle NURL_SAN=1 python3 tools/tests/test_protobuf.py
+          LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh protobuf return_paths try_statement_effect inout_forward
 
       - name: Instrumented registry identity and trust controls
         run: |

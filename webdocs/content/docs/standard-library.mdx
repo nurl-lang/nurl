@@ -77,9 +77,15 @@ for formatted output.
 
 ## Data formats and serialization
 
-`json.nu`, `msgpack.nu`, `cbor.nu`, `toml.nu`, `yaml.nu`, `xml.nu`,
+`json.nu`, `msgpack.nu`, `cbor.nu`, `protobuf.nu`, `toml.nu`, `yaml.nu`, `xml.nu`,
 `csv.nu`, `serde.nu` (a `Serialize` trait), `zip.nu`, `tar.nu`,
 `compress.nu`, `deflate.nu`.
+
+`protobuf.nu` provides checked Protocol Buffers wire readers and writers for
+all scalar types, borrowed byte/submessage views, UTF-8 strings, packed fields
+and groups. Message schemas remain in application code. See the
+[protobuf guide](https://github.com/nurl-lang/nurl/blob/main/docs/stdlib/protobuf.md)
+for the API, ownership contract, limits and examples.
 
 ## Packages and the registry
 

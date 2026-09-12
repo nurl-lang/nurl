@@ -8,7 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Protocol Buffers wire codec in `stdlib/ext/protobuf.nu`.** Typed scalar
+  readers/writers preserve all 64 bits, with bounded borrowed submessages,
+  packed fields, validated UTF-8 strings, unknown fields and matching groups.
+  Failed operations preserve cursors/output; lengths, tags, varints and nesting
+  are checked. Differential and sanitizer tests cover official protobuf
+  interoperability and malformed input. ONNX adopts it after the next toolchain
+  release; see `docs/stdlib/protobuf.md`.
+
 ### Fixed
+
+- **Forward and mutually recursive `inout` calls use the correct ABI.** The
+  signature prepass records parameter positions before bodies are compiled,
+  removing the definition-order restriction while retaining mutability and
+  exact parameter-type checks.
+
+- **Try statements are recognized as effectful.** Discarding the success value
+  of `\` no longer triggers a false dead-value warning. Discarded closure
+  literals still warn, including closures containing a try expression.
+
+- **Returning branches do not carry freed handles into later iterations.**
+  Borrow analysis represents a terminated path separately from a live ownership
+  state and excludes it from joins. Conditional and match arm boundaries cover
+  bare returns as well as blocks. Strict checking now accepts release-and-return
+  error paths while retaining diagnostics for live conditional and loop-carried
+  double frees. Adjacent bare return arms no longer trigger the XOR warning.
 
 - **Argument lifetime follows completed address and consumption summaries.**
   Stable binding identities preserve pointer-to-integer origins through casts,

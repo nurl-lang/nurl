@@ -1265,12 +1265,10 @@
 
 // Per-function inout-parameter map.
 // `g_fn_inout[fname]` is the space-separated list of 0-based indices
-// of `inout` parameters, recorded by gen_fn_decl_concrete as each
-// function is compiled. gen_call consults it to pass those arguments
-// by address. Allocated in main(). It is a *codegen-order* table:
-// an `inout` function must be defined before it is called (a forward
-// call would pass the argument by value and LLVM would reject the
-// type mismatch — loud, never silent).
+// of `inout` parameters. scan_fn_sigs publishes ordinary signatures;
+// generic template registration and gen_fn_decl_concrete confirm them.
+// gen_call therefore passes addresses for forward and mutually recursive
+// calls as well as calls after a definition. Allocated in main().
 : ~ i g_fn_inout 0
 
 // Per-function sink-parameter map: space-separated parameter indices from
@@ -3433,8 +3431,9 @@
     : i __xor_nl ( nurl_lex_line lex )
     // TT_LBRACE is excluded because `^ X { ... }` is the canonical
     // shape for the then-arm of a `?` ternary whose else-arm follows
-    // on the same line: `? cond ^ then_val { else_block }`.
-    : b __xor_blocks | | | | | | | == __xor_nt TT_COLON == __xor_nt TT_EQ
+    // on the same line: `? cond ^ then_val { else_block }`. TT_CARET
+    // likewise starts a bare returning else-arm: `? c ^ x ^ y`.
+    : b __xor_blocks | | | | | | | | == __xor_nt TT_CARET == __xor_nt TT_COLON == __xor_nt TT_EQ
     == __xor_nt TT_SEMICOL == __xor_nt TT_RBRACE == __xor_nt TT_RPAREN
     == __xor_nt TT_RBRACK == __xor_nt TT_LBRACE == __xor_nt TT_EOF
     // Suppressed inside a `??` arm body: there the token after `^ X` is the
@@ -8749,8 +8748,8 @@
     ( seq fname `thread_spawn` )
     : ~ i arg_idx 0
     // Space-separated 0-based indices of the callee's `inout`
-    // parameters (recorded into g_fn_inout by gen_fn_decl_concrete as
-    // the callee is compiled). An argument at one of these positions
+    // parameters (recorded into g_fn_inout by the signature prepass and
+    // when the callee is compiled). An argument at one of these positions
     // is passed by address — see the per-argument handling below.
     // Empty for an ordinary function.
     : ~ s callee_inout ( nurl_sym_get g_fn_inout ? __callee_shadowed `` call_name )
@@ -8795,17 +8794,13 @@
     ? & & ! __callee_shadowed == 0 ( nurl_str_len callee_ret_alias ) ! ( seq call_name fname )
     { = callee_ret_alias ( nurl_sym_get g_fn_ret_alias fname ) }
     {}
-    // If the callee is known (scan_fn_sigs) to have `inout` parameters
-    // but g_fn_inout still has no entry, it is being called BEFORE its
-    // definition was compiled — passing the argument by value would
-    // mismatch the `<T>*` parameter and miscompile silently. Holds for
-    // both ordinary and generic functions: scan_fn_sigs records
-    // `<fname>__has_inout` for either. Reject it.
+    // Never guess an address/value ABI if a malformed signature kept
+    // the prepass from resolving all parameter positions.
     ? & & ! __callee_shadowed == 0 ( nurl_str_len callee_inout )
     ( seq ( nurl_sym_get2 syms fname `__has_inout` ) `1` )
     { ( die lex ( nurl_str_cat3
         `function '` fname
-        `' has 'inout' parameters and must be defined before it is called - move its definition above this call site` ) ) }
+        `' has an unresolved 'inout' parameter signature — check its parameter types and names` ) ) }
     {}
     // Phase 2B parameter-ownership: collect register values for arg expressions
     // whose result is a fresh owned-string allocation (e.g. `nurl_str_cat`),
@@ -10958,6 +10953,7 @@
     // Borrow checker (Phase 0c): the else-arm `{` is a forward join.
     // Setting this also re-arms over any `cond-then` left pending by a
     // bare (block-less) then-arm.
+    ( bck_record `cond-else-edge` `` bck_cline )
     ( bck_set_block_kind `cond-else` )
     = g_ret_forbidden 0
     // Mirror of the then-arm's escaping-ident snapshot above.
@@ -12545,6 +12541,7 @@
             // join. A bare (block-less) arm leaves this armed; the
             // next arm re-arms it, and the post-loop disarm clears a
             // trailing bare arm's residue.
+            ( bck_record `match-arm-edge` `` bck_mline )
             ( bck_set_block_kind `match-arm` )
             : i __saved_in_arm g_in_match_arm
             = g_in_match_arm 1
@@ -12575,6 +12572,7 @@
             : s arm_pend0 ( nurl_sym_get g_fn_escapes `__pend_exits__` )
             ( mem_arm_body_mark lex )
             : ~ s arm_result ( gen_stmt lex syms cg )
+            ( bck_record `endmatch-arm-edge` `` bck_mline )
             ? == g_did_ret 0 {
                 ( bck_save_expr_carriers syms `__last_match_params__` arm_tt0 arm_v0 )
                 : s arm_params ( nurl_sym_get syms `__last_match_params__` )
@@ -12801,7 +12799,6 @@
     // otherwise leak `match-arm` onto the next sibling block (Phase
     // 0c) — then close the match with its `endmatch` marker (0d).
     ( bck_set_block_kind `` )
-    ( bck_record `endmatch` `` bck_mline )
 
     // Exhaustive match check
     : i mtype_len ( nurl_str_len match_type )
@@ -12809,6 +12806,14 @@
     ( nurl_str_slice match_type 1 - mtype_len 1 )
     match_type
     ( check_exhaustive lex ename seen_variants has_wildcard syms )
+    // Integer/string matches can have an uncovered fallthrough. The
+    // written arms all returning does not make that path unreachable.
+    : b match_exhaustive | | | != has_wildcard 0
+    != 0 ( nurl_sym_len2 syms ename `__variants` )
+    & >= mtype_len 6 ( seq ( nurl_str_slice match_type 0 6 ) `{ i1, ` )
+    & ( seq match_type `i1` ) & ( str_contains_word seen_variants `T` ) ( str_contains_word seen_variants `F` )
+    ? ! match_exhaustive { ( bck_record `match-fallthrough` `` bck_mline ) } {}
+    ( bck_record `endmatch` `` bck_mline )
 
     // Fallback br for the no-match case — only when an open `next_label:`
     // block is sitting at the bottom (i.e. the last arm was non-wildcard).
@@ -12860,7 +12865,7 @@
     // the fall-off return battery knows this `??` tail closed every
     // path (it used to see a void tail and demand a value the code
     // provably never needs).
-    ? & > arms_total 0 == arms_ret arms_total
+    ? & & match_exhaustive > arms_total 0 == arms_ret arms_total
     { ( emit_call_term `unreachable` ) = g_did_ret 1 } { = g_did_ret 0 }
 
     // Emit phi if every live arm produced a value of one consistent
@@ -15556,6 +15561,11 @@
 // from the loop's fixpoint join as Moved and was wrongly flagged as a
 // use-after-move on re-read.)
 @ bck_join_state s a s b → s {
+    // "!" is unreachable (no continuing control-flow edge), the bottom
+    // element of the state lattice. A returning arm cannot contribute
+    // ownership to a later statement or the next loop iteration.
+    ? ( seq a `!` ) { ^ ( nurl_str_cat b `` ) } {}
+    ? ( seq b `!` ) { ^ ( nurl_str_cat a `` ) } {}
     // Pointwise lattice join over max(na, nb) bytes — either side
     // reads as Uninit past its end, exactly the absent-token case of
     // the old probe loop. One output buffer, no searching.
@@ -15839,7 +15849,7 @@
 @ bck_walk_seq i lo i hi s state → s {
     : ~ s st ( nurl_str_cat state `` )
     : ~ i p lo
-    ~ < p hi {
+    ~ & < p hi ! ( seq st `!` ) {
         : s rec ( bck_rec p )
         : s kind ( bck_field rec 0 )
         : ~ b done F
@@ -15848,6 +15858,11 @@
         // (move flushed AFTER it) reads its arg while still Owned.
         ( bck_check_moved_reads ( bck_field rec 2 )
         ( nurl_str_to_int ( bck_field rec 3 ) ) st )
+        ? ( seq kind `ret` ) {
+            = st ( nurl_str_cat `!` `` )
+            = p hi
+            = done T
+        } {}
         ? ( seq kind `let` ) {
             // A `let` (re)binds the name — Owned, reviving a Moved one.
             = st ( bck_st_set st ( nurl_str_to_int ( bck_field rec 1 ) ) BCK_OWNED )
@@ -15958,49 +15973,37 @@
             = p + eb 1
             = done T
         } {}
-        // ret / expr / stray end-marker — reads already checked above
+        // expr / stray end-marker — reads already checked above
         ? ! done { = p + p 1 } {}
     }
     st
 }
 
-// `?` — walk the then-arm and the else-arm each from the conditional's
-// entry state, then join. A block-less (bare) arm contributes the
-// entry state unchanged. Nested `cond`/`match` inside a bare arm are
-// stepped over wholesale so their arm-blocks are not mistaken for this
-// conditional's arms.
+// `?` — split at the explicit else edge and walk both complete arm
+// ranges. This includes bare arms as well as brace blocks; a returning
+// arm contributes unreachable, never the ownership at its return site.
 @ bck_handle_cond i ci i ec s state → s {
-    : ~ s s_then ( nurl_str_cat state `` )
-    : ~ s s_else ( nurl_str_cat state `` )
+    : ~ i middle ec
     : ~ i j + ci 1
     ~ < j ec {
-        : s rec ( bck_rec j )
-        : s k ( bck_field rec 0 )
-        : ~ b adv F
-        ? ( seq k `cond` ) {
-            = j + ( bck_match_close j `cond` `endcond` ) 1
-            = adv T
-        } {}
-        ? & ! adv ( seq k `match` ) {
-            = j + ( bck_match_close j `match` `endmatch` ) 1
-            = adv T
-        } {}
-        ? & ! adv ( seq k `block` ) {
-            : i eb ( bck_match_close j `block` `endblock` )
-            : s bk ( bck_field rec 1 )
-            ? ( seq bk `cond-then` )
-            { = s_then ( bck_walk_seq + j 1 eb state ) } {}
-            ? ( seq bk `cond-else` )
-            { = s_else ( bck_walk_seq + j 1 eb state ) } {}
-            = j + eb 1
-            = adv T
-        } {}
-        ? ! adv { = j + j 1 } {}
+        : s kind ( bck_field ( bck_rec j ) 0 )
+        ? ( seq kind `cond-else-edge` ) { = middle j = j ec } {
+            ? ( seq kind `cond` ) { = j + ( bck_match_close j `cond` `endcond` ) 1 } {
+                ? ( seq kind `match` ) { = j + ( bck_match_close j `match` `endmatch` ) 1 } {
+                    ? ( seq kind `block` ) { = j + ( bck_match_close j `block` `endblock` ) 1 } {
+                        = j + j 1
+                    }
+                }
+            }
+        }
     }
-    ( bck_join_state s_then s_else )
+    : s s_then ( bck_walk_seq + ci 1 middle state )
+    : s s_else ( bck_walk_seq + middle 1 ec state )
+    ^ ( bck_join_state s_then s_else )
 }
 
-// `??` — walk each arm in ISOLATION, then leave the outer state alone.
+// `??` — walk each arm in ISOLATION. Continuing arms leave outer
+// ownership alone; an exhaustive all-returning match is unreachable.
 //
 // A `??` arm binds payload variables (`T v -> ...`) that have no `let`
 // row, so the flat name-keyed state cannot tell an arm's `v` from a
@@ -16027,28 +16030,30 @@
 // widening the lattice, and cannot report anything that was not a
 // definite bug.
 @ bck_handle_match i mi i em s state → s {
+    : ~ b saw_arm F
+    : ~ b live_arm F
     : ~ i j + mi 1
     ~ < j em {
-        : s rec ( bck_rec j )
-        : s k ( bck_field rec 0 )
-        : ~ b adv F
-        // Step over a nested conditional / match wholesale, so its own
-        // arm-blocks are not mistaken for this match's arms.
-        ? ( seq k `cond` ) { = j + ( bck_match_close j `cond` `endcond` ) 1 = adv T } {}
-        ? & ! adv ( seq k `match` ) { = j + ( bck_match_close j `match` `endmatch` ) 1 = adv T } {}
-        ? & ! adv ( seq k `block` ) {
-            : i eb ( bck_match_close j `block` `endblock` )
-            ? ( seq ( bck_field rec 1 ) `match-arm` )
-            { : s armfinal ( bck_walk_seq + j 1 eb `` )
-                // The walk reports as it goes; its result is not needed.
-                ? != 0 ( nurl_str_len armfinal ) {} {} }
-            {}
-            = j + eb 1
-            = adv T
-        } {}
-        ? ! adv { = j + j 1 } {}
+        : s kind ( bck_field ( bck_rec j ) 0 )
+        ? ( seq kind `match-fallthrough` ) { = live_arm T } {}
+        ? ( seq kind `match-arm-edge` ) {
+            : i end ( bck_match_close j `match-arm-edge` `endmatch-arm-edge` )
+            : s armfinal ( bck_walk_seq + j 1 end `` )
+            = saw_arm T
+            ? ! ( seq armfinal `!` ) { = live_arm T } {}
+            = j + end 1
+        } {
+            ? ( seq kind `cond` ) { = j + ( bck_match_close j `cond` `endcond` ) 1 } {
+                ? ( seq kind `match` ) { = j + ( bck_match_close j `match` `endmatch` ) 1 } {
+                    ? ( seq kind `block` ) { = j + ( bck_match_close j `block` `endblock` ) 1 } {
+                        = j + j 1
+                    }
+                }
+            }
+        }
     }
-    ( nurl_str_cat state `` )
+    ? & saw_arm ! live_arm { ^ ( nurl_str_cat `!` `` ) } {}
+    ^ ( nurl_str_cat state `` )
 }
 
 // Build the loop's back-edge seed: the state on entry to iterations
@@ -16059,6 +16064,7 @@
 // the loop, or a foreach element) are fresh every iteration and are
 // deliberately dropped, so they never carry a stale Moved state.
 @ bck_loop_carry_seed s pre s post → s {
+    ? ( seq post `!` ) { ^ ( nurl_str_cat pre `` ) } {}
     // One pointwise pass: a binding present in pre carries its pre
     // digit unless the body left it Moved; an id Uninit in pre (or
     // past pre's end — the output is pre-sized) is loop-local and
@@ -16431,6 +16437,12 @@
     // NEXT statement, so the diagnostic embeds the real line instead
     // of blaming the innocent neighbour.
     = g_stmt_bare_value ? ( __stmt_is_bare_value tt ( nurl_get_last_type ) ) bck_line 0
+    // Try propagation has a control-flow effect even when its success
+    // payload is discarded. The backslash dispatcher publishes its own
+    // classification after nested expressions, so a discarded closure
+    // literal still receives the ordinary dead-value warning.
+    ? & == tt TT_BACKSLASH ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` )
+    { = g_stmt_bare_value 0 } {}
     // A `:` or `=` statement's VALUE is the pointer just stored into the
     // binding — an alias, whatever the right-hand side was. Its own
     // scope-exit drop owns that buffer, and a join containing such an
@@ -20628,8 +20640,16 @@
     : b lparen_type & == t1 TT_LPAREN | | | | | | | | == t2 TT_AT == t2 TT_TYPE_KW == t2 TT_STAR == t2 TT_QUEST == t2 TT_QUESTQUEST == t2 TT_LBRACK == t2 TT_BANG == t2 TT_PIPE t2_is_type
     : b is_closure | | | | | == t1 TT_ARROW == t1 TT_TYPE_KW t1_is_type | | | == t1 TT_STAR == t1 TT_QUEST == t1 TT_LBRACK == t1 TT_BANG lparen_type & & == t1 TT_IDENT t2_is_name == t3 TT_ARROW
     ? is_closure
-    { ^ ( gen_closure_expr lex syms cg ) }
-    { ^ ( gen_try_expr lex syms cg ) }
+    {
+        : s value ( gen_closure_expr lex syms cg )
+        ( nurl_sym_def syms `__last_backslash_try__` `0` )
+        ^ value
+    }
+    {
+        : s value ( gen_try_expr lex syms cg )
+        ( nurl_sym_def syms `__last_backslash_try__` `1` )
+        ^ value
+    }
 }
 
 // ── Integer width coercion ──────────────────────────────────────
@@ -31370,14 +31390,14 @@
                                 // lexically via scan_skip_type — and note whether the
                                 // `inout` marker appears. `inout` is banned as a
                                 // parameter NAME (see gen_fn_param) so a bare `inout`
-                                // here is exact: `<fname>__has_inout` lets a forward
-                                // call site reject calling an `inout` function before
-                                // its definition is compiled. If the walk meets a
+                                // here is exact. Record its parameter index so
+                                // forward calls use the same address ABI. If the walk meets a
                                 // shape scan_skip_type can't classify it abandons the
                                 // count (pc_ok → F) and blind-advances the rest, so
                                 // `<fname>__arity` is simply not recorded — a missed
                                 // arity check, never a wrong one.
                                 : ~ b saw_inout F
+                                : ~ s explicit_inouts ``
                                 : ~ s explicit_sinks ``
                                 : ~ i pcount 0
                                 : ~ b pc_ok T
@@ -31391,7 +31411,10 @@
                                 { ? & ( is_ident_tok ( nurl_lex_type lex ) )
                                     ( __is_param_marker_word ( nurl_lex_val lex ) )
                                     { ? ( seq ( nurl_lex_val lex ) `inout` )
-                                        { = saw_inout T } {}
+                                        {
+                                            = saw_inout T
+                                            = explicit_inouts ( nurl_str_cat3 explicit_inouts ( nurl_str_int pcount ) ` ` )
+                                        } {}
                                         ? ( seq ( nurl_lex_val lex ) `sink` ) {
                                             = explicit_sinks ( nurl_str_cat3 explicit_sinks ( nurl_str_int pcount ) ` ` )
                                         } {}
@@ -31432,7 +31455,8 @@
                                 { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
                                 {}
                                 ? pc_ok
-                                { ( nurl_sym_def g_fn_sink fname explicit_sinks ) ( nurl_sym_def syms ( nurl_str_cat fname `__kw_n` ) ( nurl_str_int pcount ) )
+                                { ( nurl_sym_def g_fn_inout fname explicit_inouts )
+                                    ( nurl_sym_def g_fn_sink fname explicit_sinks ) ( nurl_sym_def syms ( nurl_str_cat fname `__kw_n` ) ( nurl_str_int pcount ) )
                                     ( nurl_sym_def syms ( nurl_str_cat fname `__ptypes_src` ) ptypes_src )
                                     : s ar_key ( nurl_str_cat fname `__arity` )
                                     : s ar_prev ( nurl_sym_get syms ar_key )
