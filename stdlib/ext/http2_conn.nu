@@ -547,7 +547,12 @@ $ `stdlib/ext/http2_hpack.nu`
 // unbounded CONTINUATION frames, growing `header_block` without limit
 // (the CONTINUATION-flood DoS, CVE-2024-27316 class). 64 KiB of ENCODED
 // header bytes is far beyond any legitimate request yet bounds memory.
-@ __h2_max_header_block_bytes → i { ^ 65536 }
+//
+// ONE underscore, for the same reason as _h2_max_resets: compiler/tests/
+// http2_continuation_flood.nu reads the ceiling so it can flood to
+// exactly it, leaving the server no unread bytes to abort the connection
+// over.
+@ _h2_max_header_block_bytes → i { ^ 65536 }
 
 // Hard cap on the accumulated DATA body per stream. HTTP/2 receive flow
 // control (the recv_window enforcement below) bounds the IN-FLIGHT unacked
@@ -570,7 +575,14 @@ $ `stdlib/ext/http2_hpack.nu`
 // we treat the peer as launching a reset flood. Legitimate cancellation
 // is rare; a client that resets 1 000 streams on one connection is
 // abusive regardless of whether each was dispatched.
-@ __h2_max_resets → i { ^ 1000 }
+//
+// ONE underscore, unlike its two neighbours: compiler/tests/
+// http2_flood_budget.nu reads the ceiling instead of restating it, so
+// the regression test floods to exactly this boundary rather than to a
+// hand-picked number that has to be kept in step by hand. A `__` name
+// stops resolving across files, so the shared ones are spelled `_`
+// (same reason as _h2_prune_closed, which http2_stream_prune.nu calls).
+@ _h2_max_resets → i { ^ 1000 }
 // No-progress frames (PING / SETTINGS / PRIORITY / WINDOW_UPDATE / empty
 // DATA / unknown / surplus CONTINUATION) tolerated between two moments of
 // real request progress. Reset to zero whenever a stream is opened or a
@@ -1272,7 +1284,7 @@ $ `stdlib/ext/http2_hpack.nu`
                 ? == ft ( h2_type_rst_stream ) {
                     = . cur peer_resets + . cur peer_resets 1
                 } {}
-                ? & ok | > . cur idle_frames ( __h2_max_idle_frames ) > . cur peer_resets ( __h2_max_resets ) {
+                ? & ok | > . cur idle_frames ( __h2_max_idle_frames ) > . cur peer_resets ( _h2_max_resets ) {
                     = err H2ConnEnhanceCalm = ok F
                 } {}
 
@@ -1518,7 +1530,7 @@ $ `stdlib/ext/http2_hpack.nu`
                                     // peer that keeps offering streams past
                                     // the cap is a flood, not a client.
                                     = . cur peer_resets + . cur peer_resets 1
-                                    ? > . cur peer_resets ( __h2_max_resets ) {
+                                    ? > . cur peer_resets ( _h2_max_resets ) {
                                         = err H2ConnEnhanceCalm = ok F
                                     } {}
                                 } {
@@ -1531,7 +1543,7 @@ $ `stdlib/ext/http2_hpack.nu`
                                         T hb → {
                                             ( vec_extend [u] . new_s header_block hb )
                                             ( vec_free [u] hb )
-                                            ? > ( vec_len [u] . new_s header_block ) ( __h2_max_header_block_bytes ) {
+                                            ? > ( vec_len [u] . new_s header_block ) ( _h2_max_header_block_bytes ) {
                                                 = err H2ConnProtocol = ok F
                                             } {}
                                             = . new_s state ( h2_state_open )
@@ -1605,8 +1617,8 @@ $ `stdlib/ext/http2_hpack.nu`
                                 ( vec_extend [u] . s header_block . frame payload )
                                 // CONTINUATION-flood guard: bound the total
                                 // accumulated header block (see
-                                // __h2_max_header_block_bytes).
-                                ? > ( vec_len [u] . s header_block ) ( __h2_max_header_block_bytes ) {
+                                // _h2_max_header_block_bytes).
+                                ? > ( vec_len [u] . s header_block ) ( _h2_max_header_block_bytes ) {
                                     = err H2ConnProtocol = ok F
                                 } {}
                                 ? != 0 & . frame flags ( h2_flag_end_headers ) {
