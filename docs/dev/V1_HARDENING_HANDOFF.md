@@ -222,15 +222,24 @@ compiler, so the repair answers a witness it was not written against.
    additionally requires external validation for the independent cryptographic
    review, which cannot be closed from inside this repo. A15 is closed.
 
-7. **Remote results.** Confirm the remote runs for these commits. Previous
-   remote state: every job passed at `070ff0a8` — the Linux compiler job,
-   FreeBSD, macOS ARM64, Windows, the sanitizer job, the runner
-   fault-injection controls, the unikernel job, the MinGW msvcrt cross-link
-   job, required-tool fault injection, webdocs and all four JavaScript
-   audit/build jobs. That validates those revisions and those workflow scopes,
-   not every distribution target. The workflow edits in this round change how
-   zig, wasmtime, cloud-hypervisor and rustup are fetched in the release,
-   fuzz, CI and seven bench workflows; those legs have not run remotely since.
+7. **Remote results, and the workflows CI cannot reach.** Every remote check
+   passed on this branch at `359ac597` — all seventeen: the Linux compiler job
+   with the bootstrap fixed point and corpus (13m28s), the same on arm64,
+   FreeBSD in a VM, Windows, the AddressSanitizer + UBSan job (20m22s), the
+   unikernel job, the MinGW msvcrt cross-link job, required-tool fault
+   injection, the runner fault-injection controls, webdocs and all four
+   JavaScript audit/build jobs. `check_pinned_downloads.py` ran there too, and
+   the unikernel job's `cloud-hypervisor` fetch printed `/tmp/cloud-hypervisor:
+   OK` — one of the new checksums verified on a real runner.
+
+   The honest gap: **only `ci.yml` runs on a pull request.** `release.yml` runs
+   on push/dispatch, `fuzz.yml` on a schedule, and all seven bench workflows on
+   dispatch only. So the zig, wasmtime and rustup pinning in those nine files
+   is verified by inspection and by the gate, not by having run — including
+   the release job's zig, which is the one whose bytes ship inside the
+   published archive. Dispatch `fuzz.yml` and one bench workflow before
+   trusting them, and watch the next release's "Fetch bundled zig backend"
+   step for its `OK` line.
 
 ## Reproduction
 
