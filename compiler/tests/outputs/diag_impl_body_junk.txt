@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_impl_body_junk.nu:14:5: error: expected a method ('@ name params → ret { ... }') or an associated-type binding ('type Name ConcreteType') in this impl body, found '42'. Nothing else belongs between an impl's braces; a token that is neither used to be skipped, which silently swallowed whatever followed an unterminated body.
+    42
+    ^

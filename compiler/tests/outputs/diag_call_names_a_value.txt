@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_call_names_a_value.nu:22:7: error: 'MAX' names a value of type 'i', not a function, so '( MAX … )' has nothing to call. Only a closure or function-pointer binding can be called through — a '( @ ret params )'-typed local, parameter or field. If the name was meant as an ARGUMENT, the callee is missing: a call is '( name args )', and the first word inside the parentheses is always the thing being called.
+    ( MAX )
+      ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

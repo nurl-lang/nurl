@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_impl_ret_mismatch.nu:13:1: error: method 'area' of trait 'Sh' implemented for type 'i' returns 'i8*', but the trait declares 'i64'. A 'dyn' object calls through a vtable built from the DECLARATION, so a disagreeing return type reaches the caller as the declared type with no conversion and no diagnostic.
+% Sh i {
+^

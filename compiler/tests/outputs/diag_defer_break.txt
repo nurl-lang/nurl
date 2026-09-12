@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_defer_break.nu:12:13: error: 'break' inside a ';' defer block — the defer chain runs DURING return, after the loop has already exited, so there is no iteration to leave. Move the jump out of the defer, or put the loop it belongs to inside the defer body.
+        ; { break }
+            ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

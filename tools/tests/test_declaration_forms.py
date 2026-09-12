@@ -33,6 +33,33 @@ so the program ran forever; and an impl was never checked against the
 trait it names — a missing required method, a wrong arity, wrong parameter
 types or a wrong return type all compiled, and `dyn` dispatch then called
 through a vtable built from the DECLARED signature.
+
+The 2026-09-12 sweep continued into the surfaces that were left: the
+`$`-import surface, generic instantiation, `%Trait` objects, the
+`inout` / `sink` conventions and the `pub` boundary. It found five more,
+and every one is the same question answered in one spelling and not the
+other:
+
+  * a generic STRUCT applied to the wrong number of type arguments was
+    never counted, though the generic FUNCTION call path has counted for
+    years. Too few leaves a parameter unsubstituted in the emitted type;
+    too many mangles the definition from the declared parameters and each
+    reference from all of them, so the reference names a type nothing
+    defines. Both exit 0 and only clang objects.
+  * `%Name` in a type position never checked that Name is a declared
+    trait — the last type position still missing the check that closed
+    `Z NoSuchType`.
+  * a default value was never checked against its parameter on the
+    POSITIONAL fill path: `@ show f x = 1` called `( show )` passed an
+    integer register where the callee reads a float one and printed 0.
+    The explicit-argument path has rejected that for years.
+  * a default on an `inout` parameter compiled and passed the literal
+    where the callee expects an address — a clean compile and a segfault.
+    The grammar names four places a default is unavailable; the other
+    three already rejected one.
+  * `pub` on a `$` import was read and discarded in silence, so a file
+    whose only `pub` sat on its import never entered strict visibility —
+    while `simd` and `inline` in that exact position are diagnostics.
 """
 import os
 import subprocess
@@ -123,7 +150,88 @@ DECLARATIONS = [
     ("trait_method_no_name",  "% Sh { @ → i }", "rejects"),
     ("trait_nested_decl",     "% Sh { : Pt { i x } }", "rejects"),
     ("impl_junk_in_body",     "% Sh { @ area i o → i }\n% Sh i { 42 }", "rejects"),
+    # ── generic instantiation at a TYPE position ─────────────────────
+    # A generic names a family of types; the type arguments pick one.
+    # A wrong COUNT is not a smaller mistake than a wrong name: too few
+    # leaves the surplus parameter in the emitted type (`%P__i64 =
+    # type { i64, %V }`), too many mangles the definition and the
+    # reference differently (`%Box__i64` defined, `%Box__i64__f64`
+    # referenced). The generic FUNCTION call path counts; this one did
+    # not.
+    ("gstruct_targs_ok",      ": Box [T] { T v }\n@ f ( Box i ) b → i { ^ 1 }", "compiles"),
+    ("gstruct_targs_none",    ": Box [T] { T v }\n@ f Box b → i { ^ 1 }",       "rejects"),
+    ("gstruct_targs_few",     ": P [K V] { K a V b }\n@ f ( P i ) x → i { ^ 1 }", "rejects"),
+    ("gstruct_targs_many",    ": Box [T] { T v }\n@ f ( Box i f ) x → i { ^ 1 }", "rejects"),
+    ("gstruct_targs_nested",  ": Box [T] { T v }\n@ f ( Box ( Box i f ) ) x → i { ^ 1 }", "rejects"),
+    # ── '%Trait' — the dynamic trait object in a type position ───────
+    # The name must be a trait DECLARED with a body. Nothing checked it:
+    # parse_type_dyn runs its object-safety check only when the trait is
+    # already known, and check_type_known skipped `%dyn.<Trait>` outright
+    # on the claim that parse_type_dyn had validated it.
+    ("dyn_type_ok",           "% Sp [T] { @ speak T s → i }\n@ f %Sp d → i { ^ 1 }", "compiles"),
+    ("dyn_type_field",        "% Sp [T] { @ speak T s → i }\n: H { %Sp d }", "compiles"),
+    ("dyn_type_unknown",      "@ f %NoTrait d → i { ^ 1 }",     "rejects"),
+    ("dyn_type_field_unknown", ": H { %NoTrait d }",            "rejects"),
+    ("dyn_type_is_struct",    ": Dog { i p }\n@ f %Dog d → i { ^ 1 }", "rejects"),
+    # ── default parameter values ────────────────────────────
+    # A default is spliced into the argument list of every call that
+    # omits it, so it is an argument and owes an argument's agreement.
+    # `g` supplies that call: every row but the two convention rows is
+    # checked at the call site, not at the declaration.
+    ("default_ok",            "@ f i a i b = 2 → i { ^ + a b }\n@ g → i { ^ ( f 1 ) }", "compiles"),
+    ("default_float_for_int", "@ f i a i b = 1.5 → i { ^ b }\n@ g → i { ^ ( f 1 ) }", "rejects"),
+    ("default_int_for_float", "@ f i a f b = 1 → f { ^ b }\n@ g → f { ^ ( f 1 ) }", "rejects"),
+    ("default_str_for_int",   "@ f i a i b = `x` → i { ^ b }\n@ g → i { ^ ( f 1 ) }", "rejects"),
+    ("default_int_for_str",   "@ f i a s b = 1 → i { ^ a }\n@ g → i { ^ ( f 1 ) }", "rejects"),
+    # The named-argument spelling reaches the defaults by a different
+    # path; it must answer the same.
+    ("default_named_mismatch", "@ f i a f b = 1 → f { ^ b }\n@ g → f { ^ ( f a: 1 ) }", "rejects"),
+    # ── the callee of a call ─────────────────────────────────────────
+    # A call's first word is the thing being called, and only a function
+    # or something function-TYPED can be it. gen_ident has refused a name
+    # that resolves to nothing for years; gen_call emitted `call @name`
+    # for a name that resolves to a VALUE — an undefined global for a
+    # local, and for a const a call into the constant's own storage,
+    # which clang accepts and which segfaults.
+    ("call_const_value",      ": i MAX 10\n@ g → i { ( MAX ) ^ 0 }", "rejects"),
+    ("call_variant_value",    ": | C { Red Green }\n@ g → i { ( Red ) ^ 0 }", "rejects"),
+    ("call_closure_binding",  "@ g → i { : (@ i i) f \\ i x → i { ^ x }\n : i q ( f 5 ) ^ q }", "compiles"),
+    ("call_closure_param",    "@ run ( @ i i ) h i x → i { ^ ( h x ) }", "compiles"),
+    # The grammar names four places a default is not available. All four.
+    ("default_on_inout",      "@ f inout i b = 0 → v { = b 1 }", "rejects"),
+    ("default_on_sink",       "@ f sink s b = `x` → i { ^ 1 }",  "rejects"),
+    ("default_on_generic",    "@ f [T] T a i b = 2 → i { ^ b }", "rejects"),
+    ("default_on_ffi",        "& `libc` @ abs i x = 0 → i",      "rejects"),
 ]
+
+# The '$'-import surface. Each row compiles `a.nu` with `lib.nu` written
+# beside it, so the import resolves from the importing file's own
+# directory and the test needs no particular working directory.
+#
+# `pub` is the point of the last three rows: the grammar excludes
+# import_decl from the visibility prefix, and it was read-and-cleared in
+# silence — so a file whose only `pub` sat on its import stayed in legacy
+# visibility with every function globally callable, and said nothing.
+# `simd` and `inline` in the same position have been diagnostics since
+# grammar v2.6.
+IMPORTS = [
+    ("import_plain",         "$ `lib.nu`",            "compiles"),
+    ("import_no_ext",        "$ `lib`",               "compiles"),
+    ("import_alias",         "$ `lib.nu` m",          "compiles"),
+    ("import_twice",         "$ `lib.nu`\n$ `lib.nu`", "compiles"),
+    # The duplicate-include guard keys on the RESOLVED file, so two
+    # spellings of one path include it once — not twice, which would
+    # redefine everything in it.
+    ("import_twice_spelled", "$ `lib`\n$ `lib.nu`",   "compiles"),
+    ("import_self",          "$ `a.nu`",              "compiles"),
+    ("import_missing",       "$ `no_such_module.nu`", "rejects"),
+    ("import_empty_path",    "$ ``",                  "rejects"),
+    ("import_pub",           "pub $ `lib.nu`",        "rejects"),
+    ("import_simd",          "simd $ `lib.nu`",       "rejects"),
+    ("import_inline",        "inline $ `lib.nu`",     "rejects"),
+]
+
+IMPORT_LIB = "@ lib_helper → i { ^ 7 }\n"
 
 # Statement forms, placed inside main's body ahead of the print.
 STATEMENTS = [
@@ -147,6 +255,30 @@ STATEMENTS = [
     ("builtin_float",    "( nurl_print 1.5 )",                     "rejects"),
     ("builtin_literal",  "( nurl_print 5 )",                       "rejects"),
     ("builtin_ptr_int",  "( nurl_print ( nurl_str_int `s` ) )",    "rejects"),
+    # A binding whose initialiser is the `^` that was meant to be the
+    # function's return. The reading is correct — the binding takes the
+    # return as its value and the body has none left — and the IR on the
+    # way there was not: the store landed after the block's terminator.
+    ("bind_value_is_return", ": i a",                             "rejects"),
+    # The legal twin, which the '^'-vs-'^^' warning keeps compiling:
+    # `^ k` returns and the binding is dead code, but the block is
+    # well-formed.
+    ("bind_value_is_return_live", ": i x ^ k\n    ^ x",            "compiles"),
+    # An element INDEX is an integer. The read side has always said so
+    # ('. xs 1.5' is "expected a field name or an index"); the five
+    # index-STORE paths never asked, and emitted a getelementptr with a
+    # double index. The spelling that reaches it is a MISSING index.
+    ("elem_store_index_ok",    ": ~ [i xs [i | 1 2 3]\n    = . xs 0 7",   "compiles"),
+    ("elem_store_index_expr",  ": ~ [i xs [i | 1 2 3]\n    = . xs + k 1 7", "compiles"),
+    ("elem_store_index_float", ": ~ [i xs [i | 1 2 3]\n    = . xs 1.5 7",  "rejects"),
+    ("elem_store_index_str",   ": ~ [i xs [i | 1 2 3]\n    = . xs `x` 7",  "rejects"),
+    ("elem_store_index_gone",  ": ~ [i xs [i | 1 2 3]\n    = . xs   1.5",  "rejects"),
+    # A call whose callee names a local value, in the two shapes the
+    # token-deletion sweep produces by deleting a callee name.
+    ("call_local_value",  "( k )",                                  "rejects"),
+    ("call_local_value_args", "( k 1 2 )",                          "rejects"),
+    ("call_slice_value",  ": [i xs [i | 1 2 3]\n    ( xs )",        "rejects"),
+    ("call_struct_value", ": Pt p @ Pt { 1 2 }\n    ( p )",         "rejects"),
     # A field write gets the same check the read side has.
     ("field_store_ok",   ": ~ Pt q @ Pt { 1 2 }\n    = . q x 5",   "compiles"),
     ("field_store_bad",  ": ~ Pt q @ Pt { 1 2 }\n    = . q nope 5", "rejects"),
@@ -232,7 +364,9 @@ class DeclarationForms(unittest.TestCase):
             os.unlink(path)
 
     def check(self, name, src, expectation):
-        r = self.compile_source(src)
+        self.verdict(name, self.compile_source(src), expectation)
+
+    def verdict(self, name, r, expectation):
         emitted = b"define i32 @main(" in r.stdout
         if expectation == "rejects":
             self.assertEqual(
@@ -269,6 +403,22 @@ class DeclarationForms(unittest.TestCase):
         for name, stmt, expectation in MATCHES:
             with self.subTest(form=name):
                 self.check(name, MATCH_TEMPLATE % stmt, expectation)
+
+    def test_import_forms(self):
+        # A real directory with a real sibling: an import resolves from
+        # the importing file's own directory first, so these rows say
+        # nothing about the working directory the test was started in.
+        for name, decl, expectation in IMPORTS:
+            with self.subTest(form=name):
+                with tempfile.TemporaryDirectory() as d:
+                    with open(os.path.join(d, "lib.nu"), "w") as f:
+                        f.write(IMPORT_LIB)
+                    main = os.path.join(d, "a.nu")
+                    with open(main, "w") as f:
+                        f.write(decl + "\n" + MAIN)
+                    r = subprocess.run([NURLC, "a.nu"], capture_output=True,
+                                       timeout=60, cwd=d)
+                self.verdict(name, r, expectation)
 
 
 if __name__ == "__main__":

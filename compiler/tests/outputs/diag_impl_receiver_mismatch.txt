@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_impl_receiver_mismatch.nu:19:1: error: method 'speak' of trait 'Sp' implemented for type 'Dog' takes a receiver of type 'i64', but the trait declares '%Dog' for this Self. An impl must have the signature the trait declares.
+% Sp Dog {
+^

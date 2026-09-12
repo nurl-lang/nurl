@@ -12,6 +12,14 @@
 #  main means the construct under the deleted token swallowed it; a
 #  timeout means the parser spun.
 #
+#  With --clang there is a second question, asked of every mutant that
+#  exits 0: does clang accept the IR it emitted? "Exit 0 and main is
+#  there" is a weak invariant — most of the defects the declaration
+#  sweep found KEEP main and emit IR only clang rejects (a reference to
+#  an undefined named type, a getelementptr on an unsized one). One
+#  clang invocation per surviving mutant asks the stronger question, and
+#  a compiler that exits 0 owes valid IR whatever was deleted.
+#
 #  Deletion is the mutation that matters here because it produces the
 #  truncations people actually write — a missing brace, a missing
 #  bracket — and the invariant needs no oracle to judge them.
@@ -67,7 +75,28 @@ def tokens(src):
     return out
 
 
-def check_file(nurlc, path, workdir, timeout, findings):
+def clang_rejects(ir, workdir, timeout):
+    """Ask clang whether the emitted module is well-formed. Returns the
+    first error line, or None. A clang that is missing is not a finding:
+    the caller turns the check off rather than reporting every mutant."""
+    ll = os.path.join(workdir, ".mutant.ll")
+    with open(ll, "w") as f:
+        f.write(ir)
+    try:
+        r = subprocess.run(["clang", "-c", "-Wno-override-module", ll,
+                            "-o", os.path.join(workdir, ".mutant.o")],
+                           capture_output=True, timeout=timeout)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    if r.returncode == 0:
+        return None
+    for line in r.stderr.decode("utf-8", "replace").splitlines():
+        if ": error: " in line:
+            return line.strip()[:200]
+    return "clang rejected the module"
+
+
+def check_file(nurlc, path, workdir, timeout, findings, with_clang=False):
     src = open(path).read()
     name = os.path.basename(path)
     for k, (a, b) in enumerate(tokens(src)):
@@ -82,8 +111,16 @@ def check_file(nurlc, path, workdir, timeout, findings):
         except subprocess.TimeoutExpired:
             findings.append((name, k, src[a:b], "HANG", mutated))
             continue
-        if r.returncode == 0 and b"define i32 @main(" not in r.stdout:
+        if r.returncode != 0:
+            continue
+        if b"define i32 @main(" not in r.stdout:
             findings.append((name, k, src[a:b], "exit 0, main never emitted", mutated))
+            continue
+        if with_clang:
+            why = clang_rejects(r.stdout.decode("utf-8", "replace"), workdir, timeout)
+            if why:
+                findings.append((name, k, src[a:b],
+                                 "exit 0, IR clang rejects: " + why, mutated))
 
 
 def main():
@@ -93,6 +130,10 @@ def main():
     ap.add_argument("--timeout", type=int, default=30, help="seconds per compile")
     ap.add_argument("--nurlc", default=os.path.join(ROOT, "build", "nurlc"))
     ap.add_argument("--out", default=os.path.join(ROOT, "tools", "fuzz", "failures"))
+    ap.add_argument("--clang", action="store_true",
+                    help="also require clang to accept the IR of every "
+                         "mutant that exits 0 (slower, and the question "
+                         "that finds the defects which keep main)")
     ap.add_argument("paths", nargs="*", help="specific .nu files (default: the corpus)")
     args = ap.parse_args()
 
@@ -126,7 +167,7 @@ def main():
         findings = []
         for n, path in enumerate(sources, 1):
             print(f"[{n}/{len(sources)}] {os.path.basename(path)}", flush=True)
-            check_file(nurlc, path, corpus, args.timeout, findings)
+            check_file(nurlc, path, corpus, args.timeout, findings, args.clang)
 
         if findings:
             os.makedirs(args.out, exist_ok=True)

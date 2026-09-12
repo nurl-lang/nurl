@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_trait_method_no_arrow.nu:20:7: error: NURL's arrow is '→' (U+2192, a single character), not the two-character '->', and the header of method 'sound' of trait 'Speaker' has no arrow at all. The ASCII pair does not lex as an arrow — '-' and '>' are read as two separate operators — so the signature has no return type. Write '@ name params → ret'.
+    @ sound T self - > s
+      ^

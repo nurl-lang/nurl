@@ -1431,9 +1431,25 @@ fall back to their defaults:
 Defaults are filled **at the call site** — the callee receives a full,
 fixed-length argument list, so a defaulted function is an ordinary
 fixed-arity function with no runtime cost. A positional argument after a
-named one is rejected. Defaults and named arguments are **not** available
-on generic functions, FFI / variadic declarations, or parameters carrying
-the `inout` / `sink` convention. `kwargs.nu` pins the feature.
+named one is rejected. A positional call fills from the end and stops at
+the first omitted parameter with no default, so a default is usable
+positionally only when every parameter after it also has one; a named
+call can omit any defaulted parameter wherever it sits.
+
+A default is an **argument**, and is type-checked as one at every call
+that omits it — the same battery a written argument goes through, in
+both the positional and the named spelling. (It was not, on the
+positional path: `@ show f x = 1 → v` called `( show )` passed an
+integer register where the callee reads a float one, and printed 0.)
+
+Defaults and named arguments are **not** available on generic functions,
+FFI / variadic declarations, or parameters carrying the `inout` / `sink`
+convention; all four are rejected at the declaration. An `inout`
+argument is the ADDRESS of a mutable binding, and a default is a value
+with no address — the literal went into the pointer slot and the callee
+stored through it. A `sink` parameter consumes its argument, which one
+value spliced into every call cannot give more than once. `kwargs.nu`
+pins the feature.
 
 #### Parameter conventions
 
@@ -1584,7 +1600,7 @@ Function declarations are top-level only (the `@` token in expression
 position is the aggregate-literal start). A function MUST have at
 least the return-type arrow `→` and a body block.
 
-A trailing parameter may carry a **default value** `= atom`
+A parameter may carry a **default value** `= atom`
 (`@ sum3 i a i b = 100 i c = 1000 → i { ... }`); callers may then omit it
 or pass it by name. See §6.5 for the call-site rules and restrictions.
 

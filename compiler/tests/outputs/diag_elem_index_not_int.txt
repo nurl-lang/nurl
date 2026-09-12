@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_elem_index_not_int.nu:18:5: error: the element index has type 'f', and an index must be an integer. If the index looks missing, it is: '= . container <index> <value>' takes BOTH, and with one of them absent the value is read as the position.
+    ^ 0
+    ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

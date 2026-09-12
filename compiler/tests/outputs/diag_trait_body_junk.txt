@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_trait_body_junk.nu:7:5: error: expected a method ('@ name params → ret') or an associated type ('type Name') in this trait body, found '42'. Nothing else belongs between a trait's braces; a token that is neither used to be skipped, which silently swallowed whatever followed an unterminated body.
+    42
+    ^

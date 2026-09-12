@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_optlit_tag_not_bool.nu:18:19: error: field 0 of this option/result literal is the TAG and must be a bool ('T' present / Ok, 'F' absent / Err), but this value has type 'i'. A literal is written '@ ?T { T payload }' or '@ !T E { F err }' — if the payload is there but the tag is not, every value has shifted one slot left.
+    : ?i o @ ?i { 1 3 }
+                  ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

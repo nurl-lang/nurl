@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_bind_string_to_cstr.nu:25:5: error: value of type '%String' cannot initialise / assign a binding of type 'i8*' — NURL has no implicit conversions; use a matching value or convert with '# T expr'
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

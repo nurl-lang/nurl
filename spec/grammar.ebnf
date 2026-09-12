@@ -47,9 +47,12 @@ program = decl* EOF ;
    addressable; the `pub` parse-prefix is accepted on every decl
    kind for forward-compat.
 
-   `import_decl` is intentionally excluded: imports never define a
-   symbol that other files could call across the visibility
-   boundary. *)
+   `import_decl` is intentionally excluded, and writing `pub` on one is
+   a diagnostic rather than a silent no-op: an import defines no symbol
+   of its own, and a file enters strict-vis at its FIRST `pub`, so a
+   `pub` accepted and discarded there left the author believing the file
+   was strict when it was not. `simd` and `inline` on a non-`@`
+   declaration are rejected for the same reason. *)
 
 decl = import_decl                 (*  $                             *)
      | ('pub')? ffi_decl           (*  &                             *)
@@ -104,6 +107,9 @@ decl_prefix = 'pub' | 'simd' | 'inline' ;
      Nested aliased imports compose: an alias applied here is in effect
      only for names defined directly in `path`; any further `$` declared
      inside `path` is handled by its own alias (or lack thereof). *)
+   The alias is a plain identifier. A type keyword (`i`, `u`, `f`, …),
+   a bool literal, `Z`, or a prefix keyword in that slot is not an
+   alias and is reported where it lands, not silently taken as one. *)
 import_decl = '$' STR IDENT? ;
 
 
@@ -165,13 +171,27 @@ fn_decl   = '@' IDENT type_params? param* '→' type block ;
 param     = param_conv? type IDENT ( '=' atom )? ;
 param_conv = 'in' | 'inout' | 'sink' ;
 
-(* Default parameter value (keyword args). `= atom` gives a trailing
-   parameter a default; `atom` is a single token (literal / const name /
-   T / F). A call may then omit defaulted trailing arguments. Defaults
-   are filled at the CALL SITE (the callee receives a full argument
-   list), so a function with a default is an ordinary fixed-arity
-   function. Not available on generic functions, FFI / variadic decls,
-   or parameters carrying the `inout` / `sink` convention. *)
+(* Default parameter value (keyword args). `= atom` gives a parameter a
+   default; `atom` is a single token (literal / const name / T / F).
+   Defaults are filled at the CALL SITE (the callee receives a full
+   argument list), so a function with a default is an ordinary
+   fixed-arity function.
+
+   A POSITIONAL call fills defaults from the end and stops at the first
+   omitted parameter that has none, so a default is usable positionally
+   only when every parameter after it also has one. A NAMED call
+   (`( f b: 5 )`) can omit any defaulted parameter, wherever it sits.
+
+   A default is an ARGUMENT, and carries an argument's obligations: its
+   type must be the parameter's, checked at every call that omits it
+   (no implicit integer↔float conversion, no pointer-vs-scalar
+   reinterpretation) — the same battery a written argument goes through.
+
+   Not available on generic functions, FFI / variadic decls, or
+   parameters carrying the `inout` / `sink` convention. All four are
+   diagnostics at the declaration: `inout` is passed by ADDRESS and a
+   default is a value with no address, and `sink` consumes its argument,
+   which a value spliced into every call cannot give more than once. *)
 
 
 (* : Name type_params? { field* }
@@ -245,7 +265,15 @@ const_int_expr = INT
                    ( nurl_print ( nurl_str_int ( area obj ) ) )
                    ^ ( area obj )
                  }
-             } *)
+             }
+   A trait body holds methods and associated types, and nothing else;
+   any other token is a diagnostic rather than a skip. `fn_header`'s
+   arrow and return type are required at the DECLARATION, like every
+   other function header's — a header without them records a signature
+   nothing can dispatch through, and used to be reported (when it was
+   reported at all) only from the `dyn` path's re-parse of it, from a
+   synthetic location, and only if the program happened to use the trait
+   as an object. *)
 trait_decl = '%' IDENT type_params? '{' ( fn_header | fn_decl )* '}' ;
 fn_header  = '@' IDENT type_params? param* '→' type ;
 
@@ -715,11 +743,21 @@ sized_type = 'i8' | 'i16' | 'i32' | 'u16' | 'u32' | 'u64' | 'f32' ;
 (* dyn_type: a DYNAMIC trait object (grammar v2.3, docs/spec.md §4.9). The '%'
    sigil — otherwise the trait/impl declaration sigil and the modulo operator —
    in a TYPE position names a fat pointer `%dyn.<Trait> = { i8*, i8* }` (a
-   heap-boxed value + a per-impl vtable). The named trait must be object-safe:
-   it has a Self type parameter and no method (a) lacks a Self receiver,
-   (b) names Self beyond the receiver, (c) consumes self by value, or
-   (d) mentions an associated type. Constructed with `dyn_construct`; a bare-name
-   call whose first argument is a `%Trait` dispatches through the vtable. *)
+   heap-boxed value + a per-impl vtable).
+
+   The name must be a trait DECLARED with a body — a type position runs
+   the same declared-type check every other one does, so a typo or a
+   struct name written here is reported at the type, not left to clang
+   as a reference to an undefined `%dyn.<name>`.
+
+   The trait must be object-safe: it has a Self type parameter and no
+   method (a) lacks a Self receiver, (b) names Self beyond the receiver,
+   (c) consumes self by value, or (d) mentions an associated type. Each
+   clause is about a METHOD: a trait that declares an associated type no
+   method's signature mentions is object-safe like any other, because
+   nothing in the erased ABI depends on it. Constructed with
+   `dyn_construct`; a bare-name call whose first argument is a `%Trait`
+   dispatches through the vtable. *)
 dyn_type     = '%' IDENT ;
 (* '* void' is rewritten to 'i8*' in the IR (LLVM forbids void*). *)
 ptr_type     = '*' type ;
@@ -751,7 +789,15 @@ fn_type      = '(' '@' type type* ')' ;
    `( id [i] 42 )` — see call_expr) AND generic STRUCT types
    (`( Vec i )`, `( Pair i s )`, `( Pair ( Box i ) i )`) used in any type
    position (param, return, let annotation, aggregate constructor). Each
-   distinct instantiation yields one `%Name__T1[__T2...]` named type. *)
+   distinct instantiation yields one `%Name__T1[__T2...]` named type.
+
+   The number of type arguments must equal the number of type parameters
+   the generic declares, and a different count is a diagnostic at the
+   type. Neither direction is benign: too few leaves the surplus
+   parameter unsubstituted in the emitted type (`%Pair__i64 =
+   type { i64, %V }`), and too many mangles the DEFINITION from the
+   declared parameters while every reference carries all of them, so the
+   reference names a type nothing defines. *)
 generic_arg  = IDENT | ptr_type | opt_type | generic_inst | fn_type ;
 generic_inst = '(' IDENT generic_arg+ ')' ;
 
@@ -803,8 +849,11 @@ BOOL = 'T'    (*  true  *)
         alias::name        →  single IDENT token `alias__name`
         outer::inner::leaf →  single IDENT token `outer__inner__leaf`
    `::` produces no token on its own; it is purely a lexer glue for
-   identifier chains. Only identifiers (not type keywords / bool literals /
-   sizeof keyword) participate in the merge. *)
+   word chains: the merge is LEXICAL and does not consult the class of
+   the words it joins, so `i::x` and `T::x` fuse into the single IDENTs
+   `i__x` and `T__x` exactly as `m::x` does. (The reserved word alone
+   keeps its own class — `i` is still a type keyword, `T` still `true`.
+   Only the joined form is an identifier.) *)
 IDENT_PLAIN = [a-zA-Z_] [a-zA-Z0-9_]* ;
 IDENT       = IDENT_PLAIN ( '::' IDENT_PLAIN )* ;
 

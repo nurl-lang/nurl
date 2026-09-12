@@ -561,7 +561,7 @@ CLASSES = [
                 extra=": | Wrap { Held ( Rc i )  Empty }\n"),
             "option-payload": prog(
                 "    : ( Rc i ) r ( rc_new [i] 1 )\n"
-                "    : ?( Rc i ) o @ ?( Rc i ) { r }\n"
+                "    : ?( Rc i ) o @ ?( Rc i ) { T r }\n"
                 "    : ( @ v ) w \\ → v { : ?( Rc i ) c o }\n"
                 "    : !Thread ThreadErr t ( thread_spawn w )\n"
                 "    ?? t { T h → { ( thread_join h ) } F e → {} }",

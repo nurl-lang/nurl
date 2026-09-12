@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_dyn_unknown_trait.nu:17:12: error: unknown trait 'Speaker' in a parameter type — '%Speaker' is a dynamic trait object, so the name must be a trait DECLARED with a body ('% Name [T] { @ method … }'); no such declaration is in this file or any '$'-imported one (a typo, a missing import, or a struct name written where a trait was meant).
+@ describe %Speaker s → i {
+           ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
