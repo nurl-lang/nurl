@@ -168,28 +168,74 @@ esac
 #   share/               assets of tools installed via nurlpkg
 #   bin/<other tools>    programs installed via nurlpkg install
 # Wiping the whole prefix (as this did) silently logged the user out and
-# removed every installed tool. Remove only the toolchain's OWN paths —
-# the four shipped binaries, build/, stdlib/, docs/, zig/, libexec/, the shims —
-# and let tar overwrite the rest. Those directories are removed wholesale
-# so a file deleted upstream cannot linger.
-#
-# Unlinking a RUNNING binary is fine on POSIX (the kernel keeps the inode
-# alive for the running process), which is what makes `nurl upgrade` —
-# nurlpkg upgrading the very tree it is executing from — safe here. The
-# Windows installer has to work around the same case differently.
+# removed every installed tool. Only the toolchain's OWN paths are replaced —
+# the four shipped binaries, build/, stdlib/, docs/, zig/, libexec/, the shims.
+# Those directories are replaced wholesale so a file deleted upstream cannot
+# linger; everything else in the prefix is left alone.
 if [ -e "$PREFIX" ]; then
     if [ -x "$PREFIX/bin/nurl" ] || [ -x "$PREFIX/bin/nurlc" ] || [ -z "$(ls -A "$PREFIX" 2>/dev/null)" ]; then
-        rm -rf "$PREFIX/build" "$PREFIX/stdlib" "$PREFIX/docs" "$PREFIX/zig" "$PREFIX/libexec"
-        rm -f  "$PREFIX/nurl.sh" "$PREFIX/nurl.bat" "$PREFIX/env" \
-               "$PREFIX/bin/nurl" "$PREFIX/bin/nurlc" \
-               "$PREFIX/bin/nurlfmt" "$PREFIX/bin/nurlpkg"
+        :
     else
         err "'$PREFIX' exists, is not empty, and is not a NURL install (no bin/nurl) — refusing to overwrite it. Remove it yourself or set NURL_HOME to a fresh path."
     fi
 fi
 info "installing to $PREFIX…"
 mkdir -p "$PREFIX"
-tar xzf "$tmp/$archive" -C "$PREFIX" --strip-components=1
+
+# Unpack into a staging directory INSIDE the prefix, check the result, and only
+# then touch the installed tree. The order used to be the other way round: the
+# old toolchain was deleted first and tar wrote over the hole, so an extraction
+# that stopped part-way — a full disk, a killed terminal — left a prefix with
+# no compiler in it, and only a successful re-run repaired that. Staging first
+# means every failure up to the last moment leaves the existing install intact,
+# and the destructive window is a handful of renames on one filesystem rather
+# than the length of an extraction.
+stage="$PREFIX/.stage.$$"
+rm -rf "$stage"
+mkdir -p "$stage" || err "cannot create staging directory $stage"
+# The staging directory is inside the prefix, so it must be cleaned up on every
+# exit path, not just this one — extend the trap that already owns $tmp.
+trap 'rm -rf "$tmp" "$stage"' EXIT
+tar xzf "$tmp/$archive" -C "$stage" --strip-components=1 \
+    || err "unpacking $archive failed — the existing install in $PREFIX was not touched."
+
+# Completeness is checked on the STAGED tree, before anything is removed.
+[ -x "$stage/bin/nurl" ] || err "the downloaded archive looks incomplete (no bin/nurl) — the existing install in $PREFIX was not touched."
+
+# Now the swap. Directories are replaced wholesale so a file deleted upstream
+# cannot linger; bin/ is merged file by file, because it also holds programs
+# the user installed with `nurlpkg install`.
+#
+# Unlinking a RUNNING binary is fine on POSIX (the kernel keeps the inode
+# alive for the running process), which is what makes `nurl upgrade` —
+# nurlpkg upgrading the very tree it is executing from — safe here. The
+# Windows installer has to work around the same case differently.
+for d in build stdlib docs zig libexec; do
+    if [ -e "$stage/$d" ]; then
+        rm -rf "$PREFIX/$d"
+        mv "$stage/$d" "$PREFIX/$d"
+    fi
+done
+mkdir -p "$PREFIX/bin"
+# bin/ is merged file by file: it also holds programs installed with
+# `nurlpkg install`, which an upgrade must not remove.
+if [ -d "$stage/bin" ]; then
+    for f in "$stage/bin/"*; do
+        [ -e "$f" ] || continue
+        rm -f "$PREFIX/bin/$(basename "$f")"
+        mv "$f" "$PREFIX/bin/$(basename "$f")"
+    done
+    rmdir "$stage/bin" 2>/dev/null || true
+fi
+# Everything else the archive ships at the top level — nurl.sh, nurl.bat, env,
+# and whatever a future release adds — without deleting what is already there.
+for f in "$stage"/* "$stage"/.[!.]*; do
+    [ -e "$f" ] || continue
+    rm -rf "$PREFIX/$(basename "$f")"
+    mv "$f" "$PREFIX/$(basename "$f")"
+done
+rm -rf "$stage"
+trap 'rm -rf "$tmp"' EXIT
 
 [ -x "$PREFIX/bin/nurl" ] || err "install looks incomplete: $PREFIX/bin/nurl missing."
 

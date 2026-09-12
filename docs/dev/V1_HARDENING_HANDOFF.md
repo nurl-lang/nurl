@@ -1,10 +1,9 @@
 # v1 hardening continuation
 
-Work on branch `codex/v1-validation-hardening`. PR #1107 is a draft;
-do not merge it or declare v1 hardening complete from focused results.
-The complete scope and evidence requirements remain in
+The complete scope and evidence requirements are in
 [V1_HARDENING.md](V1_HARDENING.md). The external LLM-written audit supplies
-hypotheses, not authority.
+hypotheses, not authority. No item below certifies the whole language or
+ecosystem, and passing a narrow check does not establish a broad guarantee.
 
 ## Current implementation
 
@@ -30,35 +29,73 @@ dynamic invalid shifts and out-of-range/NaN/infinite float-to-integer casts
 before LLVM undefined behavior or poison. Scalar and aggregate-field casts
 share unsignedness, bounds and bool rejection. Fractional values that truncate
 into range remain valid; IEEE floating arithmetic is unchanged. The
-differential fuzzer now reaches those guards: half of its divisors and shift
+differential fuzzer reaches those guards: half of its divisors and shift
 amounts are computed sub-expressions clamped into the legal domain rather than
 literals, so the guard branch is live at -O0 and the oracle catches a guard
 that fires on a legal operand.
 
-Thirteen defects of one shape are closed: a construct the language allows,
-reached by a path that skipped its own check. Ten in the parser — a binding
-initialised by a block, a global constant with no value, a struct or generic
-function with no body, an unclosed type-parameter list, a `:` followed by
-junk, a function whose body is empty, two parameters sharing a name, a match
-with no arms, and a foreach over something that is not a slice. Each exited 0
-and lost the declaration after it, or emitted IR only clang rejected — or, in
-the foreach case, IR with empty types and nothing on stderr at all.
+**Nineteen defects of one shape are closed: a construct the language allows,
+reached by a path that skipped its own check.** Thirteen were found by
+sweeping declarations and simple statements; four more by continuing the same
+sweep into expression position, trait and impl bodies, match and select arms,
+and the block terminators; two more by the token-deletion sweep.
 
-Three more in the type checker. A field WRITE to a name the struct does not
-have stored into field 0 and printed `store  5, * %r` with no types; the read
-side had rejected the same typo for years, with a comment explaining exactly
-this miscompile. And the pre-registered C-runtime surface — `nurl_print` and
-the 117 others every program calls — was registered with a return type only,
-so its call sites had no arity or argument check at all: `( nurl_print 5 )`
+Ten in the parser — a binding initialised by a block, a global constant with
+no value, a struct or generic function with no body, an unclosed type-parameter
+list, a `:` followed by junk, a function whose body is empty, two parameters
+sharing a name, a match with no arms, and a foreach over something that is not
+a slice. Each exited 0 and lost the declaration after it, or emitted IR only
+clang rejected — or, in the foreach case, IR with empty types and nothing on
+stderr at all.
+
+Three in the type checker. A field WRITE to a name the struct does not have
+stored into field 0 and printed `store  5, * %r` with no types; the read side
+had rejected the same typo for years, with a comment explaining exactly this
+miscompile. And the pre-registered C-runtime surface — `nurl_print` and the
+117 others every program calls — was registered with a return type only, so
+its call sites had no arity or argument check at all: `( nurl_print 5 )`
 compiled and segfaulted dereferencing 5. Those symbols now get the FFI path's
 own side-tables, filled by parsing the `declare` lines the compiler already
 emits, so there is no second table to drift.
 
-`tools/tests/test_declaration_forms.py` pins the class with one invariant
-over 44 forms; the corpus pins each fix with its own rejection. Opening the
-block-initialiser path also exposed a borrow-checker hole: `bck_esc_let`
-recorded a referent depth without comparing it, so a closure over a
-block-local `: ~` struct could be bound outside that block.
+Four more from the continued sweep. `Z NoSuchType` was the one type position
+with no declared-type check, and emitted a getelementptr on a type nothing
+declares. An or-pattern's ALTERNATIVES were never checked against the enum,
+though the first name has been for years — `Red | Nope` emitted a load of a
+global nothing defines. `break` and `continue` inside a `;` defer body
+branched into a loop exit the defer chain had already left and re-entered the
+chain from there, so `; { break }` inside a loop compiled, exited 0 and ran
+forever; `^` was already rejected for that exact reason. And an impl was never
+checked against the trait it names: a missing required method, a wrong arity,
+wrong non-receiver parameter types and a wrong return type all compiled. The
+last is a type confusion, not a convenience — `dyn` builds its thunk from the
+DECLARED signature, so a trait promising `→ i` implemented with `→ s` hands
+the caller a pointer to read as an integer, with no diagnostic anywhere.
+
+Two more came from the token-deletion sweep, and both swallowed a whole
+declaration. Deleting one `}` left a trait body unterminated: the method-header
+scan advanced to "the first `{`", which is then the NEXT declaration's brace,
+so `: Dog { i pitch }` became the method's default body and the trait appeared
+to end at some inner `}` — while the emit pass skips BALANCED braces and
+therefore consumed to end of file. The two passes disagreed about where the
+trait ended and `main` was inside the difference: exit 0, no `main`, nothing
+on stderr. Deleting one `{` did the same to a generic template with a trait
+bound (`@ ship [T: Send] T v → i`): the collector took tokens "until the next
+`{` anywhere", found `@ main → i {`'s brace, and called everything after it
+the template's body. Only the BOUNDED form reaches that path, which is why no
+hand-written spelling had found it.
+
+Both header scans now stop at the `→` and consume exactly the return type,
+and a trait or impl body rejects any token that is neither a method nor an
+associated type instead of skipping it — that skip is what made an
+unterminated body dangerous, and it was also silently accepting `% Sh { 42 }`
+and an impl body full of junk.
+
+`tools/tests/test_declaration_forms.py` pins the class with one invariant over
+**95 forms** in three tables; the corpus pins each fix with its own rejection.
+Opening the block-initialiser path also exposed a borrow-checker hole:
+`bck_esc_let` recorded a referent depth without comparing it, so a closure over
+a block-local `: ~` struct could be bound outside that block.
 
 Two tree gates were checking less than they claimed. The canonical-form gate
 named five directories and left 464 first-party files ungated (18 had
@@ -73,159 +110,136 @@ only the Linux matrix as a hard gate — a failed Windows leg published a
 release with no `.zip`, and the PowerShell one-liner then 404s.
 `tools/check_release_artifacts.sh` runs before publication and requires the
 documented set, its checksums, and its signatures when signing ran; eleven
-controls cover it.
+controls cover it. The installer now stages its unpack, so a failed extraction
+leaves the existing install intact, and every tool a workflow downloads is
+pinned by sha256 — including the zig that ships inside the published archive.
 
 ## Latest compiler verification
 
-Both refreshed bootstraps pass. Normal build: 55-57 s; corpus 2 m 30 s. The
-corpus reports **985 PASS / 19 SKIP** over 1,004 inputs, with zero
-compiler/link/runtime/timeout failures. All seven arithmetic methods pass
-with both normal and instrumented compilers: 596 runtime cases across three
-modes, **1,788 executions plus two rejections**. All 31 ownership, seven
-compiler-cleanup and 20 LSP methods pass on the final shared instrumented
-toolchain. All six compiler leak-gate sources pass ordinary and split
-emission; sanitizer detection calibration also passes.
+Corpus **992 PASS / 19 SKIP** over 1,011 inputs, zero
+FAIL/MISSING/ORPHAN. Normal build 59 s; tests 2 m 56 s. The sanitized
+corpus reports **992 PASS / 19 SKIP with zero AddressSanitizer, UBSan or
+LSan findings**, zero timeouts and zero compile/link/run failures.
+All seven arithmetic methods, all 31 ownership methods, seven
+compiler-cleanup methods, two driver-path controls, the WASI IR control,
+eleven release-artifact controls and six installer-unpack controls pass.
+`nurlfmt --check` is canonical over 1,790 files; strict-arity, memgate,
+dcegate and leakgate pass, the last on both emission modes.
 
-After the parser changes, the 303 diagnostics the stdlib, packages and
-examples produce are byte-identical to those the pre-change compiler produced
-over the same 719 files. That is the check that matters most for a parser
-edit: the corpus cannot see code it does not contain.
+The check that matters most for a change that ADDS diagnostics is the tree
+sweep: every tracked first-party `.nu` file — **816 of them** — compiled with
+the parent commit's compiler and with this one produces **byte-identical**
+output and exit codes. The corpus cannot see code it does not contain; the
+tree can.
 
-Fuzz campaigns on the changed compiler: 600 integer seeds, 150 structural
-seeds with 37 sanitizer runs, and 200 inverse-oracle seeds — all clean.
+**Sixteen** of the new `test_declaration_forms.py` rows FAIL against a
+compiler built from the parent commit and pass against this one, and two of
+the six installer controls FAIL against the previous installer. That is what
+makes them controls rather than descriptions. The strongest single piece of
+evidence is a mutant the sweep found BEFORE the fix existed
+(`showcase.nu` with one `}` deleted): it is rejected by the repaired
+compiler, so the repair answers a witness it was not written against.
 
-Ownership traffic through the newly reachable block-expression path was
-checked separately under ASan+LSan with leak detection on: an owned tail
-value, one bound inside the block and handed out, a second owned local
-dropped at block exit, nested block initialisers, and allocation inside a
-loop. Correct values, zero findings.
+## Next work
 
-## Remote state and next work
+1. **Continue the same sweep.** Take a construct the grammar allows, write it
+   in a spelling nothing in the tree uses, and check the implementation
+   against `spec/grammar.ebnf`. Declarations, simple statements, expression
+   position, trait/impl bodies, match and select arms and the block
+   terminators are done. Not done: the `$`-import surface (aliased imports,
+   nested aliases, the duplicate-include guard), generic instantiation at
+   call sites, `dyn` construction and object safety, `inout` / `sink`
+   conventions, and the `pub` visibility boundary. Extend
+   `test_declaration_forms.py`'s tables rather than writing a second harness.
+   The two questions that found the most: what does this construct do in a
+   spelling nothing in the tree uses, and does the WRITE side of a check
+   exist as well as the read side.
 
-1. Every remote job passed on this branch at `070ff0a8`: the Linux compiler
-   job, FreeBSD, macOS ARM64, Windows, the sanitizer job, the runner
-   fault-injection controls, the unikernel job, the MinGW msvcrt cross-link
-   job, required-tool fault injection, webdocs and all four JavaScript
-   audit/build jobs. That validates those revisions and those workflow
-   scopes, not every distribution target. Keep PR #1107 a draft. The commits
-   after `070ff0a8` are pushed; confirm their remote results.
-2. Continue the sweep that found those thirteen defects. Take a construct
-   the grammar allows, write it in a spelling nothing in the tree uses, and
-   check the implementation against `spec/grammar.ebnf`. Declarations and
-   simple statements are done; expression position, trait/impl bodies,
-   select arms, foreach and the `!`/`?` operator forms are not. The
-   permanent control is `tools/tests/test_declaration_forms.py` — extend its
-   table rather than writing a second harness. The two questions that found
-   the most: what does this construct do in a spelling nothing in the tree
-   uses, and does the WRITE side of a check exist as well as the read side.
-3. A token-deletion sweep over corpus programs (delete one token; the
-   compiler must either reject the file or still emit `main`) is written but
-   has not completed a clean run — twice interrupted by rebuilding or
-   cleaning the tree underneath it. Run it against a PRIVATE copy of
-   `build/nurlc` and keep its mutants out of `compiler/tests/`; one was
-   committed by accident and had to be removed.
-4. A01's stack-lifetime item is narrower than the ledger recorded, and its
-   cited probe has been resolved. Written with a `: ~` struct the capture is
-   by pointer and the assignment is rejected at compile time; written with a
-   scalar — which is how a probe that PRINTS 42 must have been written — the
-   capture is by VALUE, so there is no dangling reference to detect and the
-   clean exit was the right answer. Running that probe under LeakSanitizer
-   instead found two real leaks in the closure-env machinery, both fixed and
-   pinned by `closure_env_assign.nu`.
+2. **One hole from the sweep is found and NOT closed.** A trait method header
+   with no return arrow (`% Sh { @ area i o }`) is accepted at the
+   declaration. Nothing consumes the recorded signature unless the trait is
+   used dynamically, and the dyn re-parse is where it is reported today —
+   `compiler/tests/diag_dynsig_context.nu` exists to pin that message and its
+   context. Rejecting it at the declaration is the right place and would
+   retire that fixture's witness, so it needs a decision about the fixture,
+   not just an edit. The impl-signature check skips a header with no arrow
+   for the same reason.
 
-   What remains: every NURL alloca is hoisted to the entry block and lives
-   for the whole function, so a use-after-scope inside one frame is not a
-   memory error today — at worst a slot reused across loop iterations. The
-   escape that IS a dangling pointer, a stack reference outliving its
-   function, is rejected in every spelling tried (assignment, struct field
-   store, conditional arm, closure of closure, nested blocks, loop body,
-   interprocedural, and block-expression initialisers). A lifetime-marker
-   policy therefore buys detection and stack reuse, not correctness, and
-   must still account for deferred cleanup reaching a slot after its lexical
-   block. Decide whether that trade is worth making before writing it.
+3. **Keep running the token-deletion sweep** (`tools/fuzz/mutate_delete.py`):
+   delete one token; the compiler must either reject the file or still emit
+   `main`. It found the eighteenth defect this round, in a construct no
+   hand-written spelling had reached. It is single-threaded per invocation
+   and a large corpus program is thousands of compiles, so run several
+   `--seed`s in parallel rather than one long `--files` — one 12 KB corpus
+   program is several thousand compiles, and two of the four seeds took about
+   an hour each. **Seeds 1-4 are clean** against the repaired compiler; seed 5
+   onwards is where the next one is.
 
-   The technique that paid here is worth repeating on its own: run existing
-   probes under LSan, not only ASan. The leak was invisible to every ASan
-   run and to the default sanitized corpus, which sets `detect_leaks=0`.
+4. **A01's remaining item is a recorded decision, not pending work.** Lexical
+   stack lifetimes: every NURL alloca is entry-hoisted and lives for the whole
+   function, so a use-after-scope inside one frame is not a memory error
+   today, and the escape that IS a dangling pointer is rejected in every
+   spelling tried. Lifetime markers buy detection and stack reuse, not
+   correctness, and owe an account of deferred cleanup reaching a slot after
+   its lexical block. Reopen it with that trade in hand, or leave it.
 
-   Turning it on for the whole corpus measured the boundary: 903 of 992
-   programs are leak-clean, 89 are not, with zero other sanitizer findings.
-   Grouping them by the function that allocated (`tools/fuzz/leak_triage.py`)
-   is what made them tractable — and what found that the COMPILER leaked a
-   whole rewritten copy of every aliased import, on a path `leakgate.sh`
-   could not reach because `nurlc.nu` has no aliased import. That is fixed
-   and the gate now covers it.
-   One cause is root-caused and now FIXED: a closure literal passed to a
-   GENERIC higher-order function leaked its env, because the call site asked
-   `g_fn_invoke_only` a question whose answer does not exist until the
-   instantiation is flushed. The argument-temporary path already solved that
-   shape — emit the free against a null-or-pointer value selected by a
-   private constant computed at module end — and the closure-env free now
-   uses it (`mem_env_owner` / `mem_emit_env_flags`). Three programs, 89
-   leakers to 86; it needed a bootstrap refresh, which is done.
+   What remains genuinely open in A01 is the leak inventory: 86 of 992 corpus
+   programs leak under `LSAN_DETECT_LEAKS=1`, and the ledger attributes them
+   to two root causes and one test-side habit rather than 86 defects.
+   - **The closure-env class.** A closure RETURNED by a function has no
+     owner: the binding path registers an env only for a closure LITERAL
+     initialiser. The env pointer is knowable at the binding; what is missing
+     is the fresh-vs-alias answer the string path gets from
+     `__last_call_ret_owned__`. Registering without it is a double free, so
+     this needs a summary bit, not a patch.
+   - **The escape-classification class.** A parameter stored into a container
+     that dies inside the same callee is classified as escaping, so the
+     caller's fresh temporary is never freed by anyone. The whole `fmt` family
+     does this, which makes it the idiomatic-printing leak. Fixing it needs
+     either a dataflow refinement (a store into a container that provably dies
+     before return is not an escape) or a parameter marker asserting
+     non-escape the way `sink` asserts consumption — the second is a language
+     decision.
+   The criterion that separates a compiler defect from a test that simply
+   never frees is "can the program free it?", not where the allocation was
+   made. Apply it with a control, by writing the same call with the free
+   present.
 
-   The rest of the closure-env class is a different sub-shape, characterised
-   in the ledger: a closure RETURNED by a function. `iter_zip_enum` binds an
-   iterator and ends it with `( ab 1 )`, which IS `iter_free` — the protocol
-   frees the chain but cannot free the closure's own env, because that is
-   what the call is executing on. The binding path registers an env only for
-   a closure LITERAL initialiser, so a call result has no owner. The env
-   pointer is knowable at the binding; what is missing is the fresh-vs-alias
-   answer the string path gets from `__last_call_ret_owned__`. Registering
-   without it is a double free, so this needs a summary bit, not a patch.
-   A second class is root-caused in the ledger too: a parameter stored into
-   a container that dies inside the same callee is classified as escaping,
-   so the caller's fresh temporary is never freed by anyone. The whole
-   `fmt` family does this, which makes it the idiomatic-printing leak.
-   Fixing it needs either a dataflow refinement (a store into a container
-   that provably dies before return is not an escape) or a parameter marker
-   that asserts non-escape the way `sink` asserts consumption — the second
-   is a language decision, not a repair.
-
-   The inventory is attributed at the group level. Tests that allocate and
-   never free anything are the largest group and need nothing from the
-   compiler. `bytes_from_hex`'s five callers could free and do not — the
-   same call written with the free present is leak-clean. The
-   `nurl_str_int` six are the escape-classification class, which no
-   spelling of the program can reclaim. Everything else is the closure-env
-   class, including `iter_zip_enum`, whose iterator is a closure returned
-   by a generic function rather than a literal in the test.
-
-   So: two root causes and one test-side habit, not ninety defects. The
-   criterion that separates them is "can the program free it?", not where
-   the allocation was made — apply it with a control, by writing the same
-   call with the free present.
-5. A13's container and opaque-handle half now has witnesses (see the
-   ledger): ten violations by construction, every one the default rules
-   promise to catch caught, the three that compile are holes
-   `docs/MEMORY.md` declares, and two of those three are reported under
-   `--strict-borrowck`. Two things came out of it that need an owner's
-   decision rather than an edit:
-   - A free on one arm of a `?` followed by an unconditional READ after the
-     join is a guaranteed use-after-free on the taken path and is reported
-     in neither mode. §2.1 says reads of a maybe-moved binding are never
-     flagged; strict mode is where false positives are acceptable, so a
-     fourth strict check has a witness and a home. Two numbers before
-     building it, both in the ledger: `--strict-borrowck` already reports
-     1,070 distinct sites across 553 first-party files, so the "adds no new
-     strict failures" bar the docs used for check #1 cannot be applied; and
-     the walk has no read events at all, so the check is a new record stream
-     out of `gen_ident`, not an `if`.
-   - `docs/MEMORY.md` §2.9 says "three opt-in checks" and lists three, while
-     strict mode also reports the aggregate-literal maybe-move.
-
-   Still open in A13: opaque wrappers beyond Channel, whether the default,
-   strict and raw guarantees agree on everything else, and A16's
+5. **A13's remaining scope.** The fourth strict check (a READ of a maybe-moved
+   binding) is a recorded decision not to build: strict mode already reports
+   1,070 sites across 553 first-party files, so its own acceptance bar cannot
+   be applied, and the walk has no read events at all — it is a new record
+   stream out of `gen_ident`, not an `if`. `docs/MEMORY.md` §2.9 now states
+   that gap explicitly. Still open: opaque wrappers beyond `Channel`, whether
+   the default, strict and raw guarantees agree on everything else, and A16's
    indirect/generic/embedded-origin cleanup counterexamples. Borrowed-initial
    mutable bindings are untouched.
-6. Retain every A01-A17 requirement. A07 (continuous package/service tests)
-   is still only an inventory question, and it sits against the standing
-   decision not to wire package tests into compiler CI — that needs a
-   direction before work, not after. A09, A14 and A17 are untouched. A15's
-   remaining halves are pinned tool downloads and a staged unpack: the
-   installer removes the old toolchain before extracting, so an extraction
-   interrupted after verification leaves a broken prefix that only a re-run
-   repairs.
+
+6. **Retain every A01-A17 requirement.** A07 (continuous package/service
+   tests) is still only an inventory question, and it sits against the
+   standing decision not to wire package tests into compiler CI — that needs
+   a direction before work, not after. A09, A14 and A17 are untouched; A14
+   additionally requires external validation for the independent cryptographic
+   review, which cannot be closed from inside this repo. A15 is closed.
+
+7. **Remote results, and the workflows CI cannot reach.** Every remote check
+   passed on this branch at `359ac597` — all seventeen: the Linux compiler job
+   with the bootstrap fixed point and corpus (13m28s), the same on arm64,
+   FreeBSD in a VM, Windows, the AddressSanitizer + UBSan job (20m22s), the
+   unikernel job, the MinGW msvcrt cross-link job, required-tool fault
+   injection, the runner fault-injection controls, webdocs and all four
+   JavaScript audit/build jobs. `check_pinned_downloads.py` ran there too, and
+   the unikernel job's `cloud-hypervisor` fetch printed `/tmp/cloud-hypervisor:
+   OK` — one of the new checksums verified on a real runner.
+
+   The honest gap: **only `ci.yml` runs on a pull request.** `release.yml` runs
+   on push/dispatch, `fuzz.yml` on a schedule, and all seven bench workflows on
+   dispatch only. So the zig, wasmtime and rustup pinning in those nine files
+   is verified by inspection and by the gate, not by having run — including
+   the release job's zig, which is the one whose bytes ship inside the
+   published archive. Dispatch `fuzz.yml` and one bench workflow before
+   trusting them, and watch the next release's "Fetch bundled zig backend"
+   step for its `OK` line.
 
 ## Reproduction
 
@@ -240,15 +254,27 @@ loop. Correct values, zero findings.
 - `python3 tools/tests/test_wasi_ir.py` — isolated shared-rewriter LLVM/leak control.
 - `./packages/wasmbuilder/tests/build_test.sh` — require actual Wasmtime execution.
 - `python3 tools/tests/test_driver_paths.py` — two real split/path controls.
-- `python3 tools/tests/test_declaration_forms.py` — 44 declaration and
-  statement forms against one invariant; needs only `build/nurlc`, under 0.2 s.
+- `python3 tools/tests/test_declaration_forms.py` — 95 declaration, statement
+  and match-arm forms against one invariant; needs only `build/nurlc`, under 0.3 s.
 - `python3 tools/tests/test_release_artifacts.py` — eleven controls over the
   release artifact-set gate; needs no toolchain at all.
+- `python3 tools/tests/test_installer_unpack.py` — six controls over the
+  staged unpack; serves a release over `file://`, no network, no toolchain.
+- `python3 tools/check_pinned_downloads.py` and `./tools/check_installer_sync.sh`
+  — the workflow and served-installer gates; both need no toolchain.
+- `./compiler/tests/nurlfmt_check.sh` and `./tools/check_strict_arity.sh`.
 - `python3 tools/fuzz/mutate_delete.py --files 40` — the token-deletion sweep.
   Tens of thousands of compiles; a hunting tool, not a gate.
 - `LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh` — the whole corpus
   with leak detection on, which the default run leaves off.
 - `NURL_TEST_PWSH=/absolute/path/to/pwsh python3 tools/tests/test_compiler_runners.py`
+- **The tree sweep, for any change that adds a diagnostic.** Compile every
+  tracked first-party `.nu` file with the parent commit's compiler and with
+  the new one, and diff the two transcripts. A corpus fixture cannot see code
+  it does not contain; 816 real files can, and byte-identical output is the
+  only evidence that a new rejection rejects nothing that was valid. Build the
+  baseline by compiling `git show HEAD:compiler/nurlc.nu` with
+  `build/nurlc_lastgood.bin` and linking against `stdlib/runtime.o`.
 - Never rebuild shared compiler/runtime outputs while tests consume them; never
   overlap corpus runners using the same verdict directory. Both rules were
   broken in one session: a sweep died when `./build.sh` replaced `build/nurlc`

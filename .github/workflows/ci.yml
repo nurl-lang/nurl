@@ -288,6 +288,15 @@ jobs:
         # kept handing out the destructive version.
         run: ./tools/check_installer_sync.sh
 
+      - name: Downloaded tools are pinned by content
+        # A version-pinned URL says what was asked for, not what came back.
+        # The release job unpacks a downloaded zig INTO the published archive,
+        # so those bytes reach users; two benchmark jobs took their reference
+        # runtime from `curl … | bash`, which can change between runs of a
+        # number we publish. Every such download now carries a checksum, and
+        # this keeps the next one from arriving without.
+        run: python3 tools/check_pinned_downloads.py
+
       - name: Windows goldens not stale (they are checked on main, not per-PR)
         # outputs-windows/ is a parallel corpus and windows-tests.yml runs
         # on pushes to main, so a PR that adds assertions updates outputs/
@@ -520,9 +529,10 @@ jobs:
         # image. Whether it actually boots depends on the runner having
         # /dev/kvm; the gate reports which half it ran.
         run: |
-          sudo curl -fsSL --retry 5 -o /usr/local/bin/cloud-hypervisor \
+          curl -fsSL --retry 5 -o /tmp/cloud-hypervisor \
             https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v46.0/cloud-hypervisor-static
-          sudo chmod +x /usr/local/bin/cloud-hypervisor
+          echo "00b5cf2976847d2f21d2b7266038c8fc40bd14f2a542115055e9e214867edc9e  /tmp/cloud-hypervisor" | sha256sum -c -
+          sudo install -m755 /tmp/cloud-hypervisor /usr/local/bin/cloud-hypervisor
           # The runner HAS /dev/kvm and denies the job user access to it
           # (group kvm). Granting it turns the gate's boot half from a
           # skip into a real boot on a real hypervisor — which is the

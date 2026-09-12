@@ -2763,9 +2763,17 @@
 // gen_sizeof: Z type  →  i64 byte size of type.
 // Base types return an immediate constant; struct types use the
 // getelementptr-null trick to let LLVM compute the size at codegen.
-@ gen_sizeof i lex i cg → s {
+@ gen_sizeof i lex i syms i cg → s {
     ( nurl_lex_advance lex )
+    : i __zt_line ( nurl_lex_line lex )
+    : i __zt_col ( nurl_lex_col lex )
     : s lty ( parse_type lex )  // parse_type already returns the LLVM type
+    // Every other type position runs this; `Z` did not. `Z NoSuchType`
+    // reached the getelementptr-null path below and emitted
+    // `getelementptr %NoSuchType, %NoSuchType* null, i64 1` for a type
+    // nothing declares — nurlc exited 0 and clang said "base element of
+    // getelementptr must be sized", about generated IR, not the source.
+    ( check_type_known lex syms lty `a 'Z' size-of type` __zt_line __zt_col )
     // Known-size base types: return string constant directly
     ? ( seq lty `void` ) { ( nurl_set_last_type `i64` ) ^ ( nurl_str_cat `0` `` ) } {}
     ? ( seq lty `i64` ) { ( nurl_set_last_type `i64` ) ^ ( nurl_str_cat `8` `` ) } {}
@@ -3688,7 +3696,7 @@
     ? == tt TT_FLOAT ( gen_float_lit lex )
     ? == tt TT_STR ( gen_str_lit_expr lex syms cg )
     ? == tt TT_BOOL ( gen_bool_lit lex )
-    ? == tt TT_SIZEOF ( gen_sizeof lex cg )
+    ? == tt TT_SIZEOF ( gen_sizeof lex syms cg )
     ? == tt TT_CARET ( gen_ret lex syms cg )
     ? == tt TT_BANG ( gen_unary_not lex syms cg )
     ? == tt TT_QUEST ( gen_cond lex syms cg )
@@ -11875,9 +11883,29 @@
                         ? has_lit { ( die lex ( nurl_str_cat `an or-pattern cannot mix a literal constraint with variant names — write the literal case as its own arm.` `` ) ) } {}
                         ? is_bool_pat { ( die lex ( nurl_str_cat `an or-pattern lists named enum variants; 'T' and 'F' are the option/result arms and there are only two of them, so 'T | F' is the wildcard. Write '_ → body' instead.` `` ) ) } {}
                         : ~ s orr ( nurl_str_cat or_names `` )
+                        // The first name is checked against the enum's own
+                        // variants above. An ALTERNATIVE was not: it fell
+                        // through to the same `load i64, i64* @<name>` for
+                        // a global nothing defines, so nurlc exited 0 and
+                        // clang reported generated IR instead.
+                        : s __or_en ? & > ( nurl_str_len match_type ) 1
+                        == ( nurl_str_get match_type 0 ) 37
+                        ( nurl_str_slice match_type 1 - ( nurl_str_len match_type ) 1 )
+                        ``
+                        : s __or_vl ? != 0 ( nurl_str_len __or_en )
+                        ( nurl_sym_get2 syms __or_en `__variants` )
+                        ``
                         ~ != 0 ( nurl_str_len orr ) {
                             : s vn ( str_first_word orr )
                             = orr ( str_skip_word orr )
+                            ? & != 0 ( nurl_str_len __or_vl )
+                            ! ( str_contains_word __or_vl vn )
+                            { ( die_pos lex pat_line pat_col ( nurl_str_cat4
+                                ( nurl_str_cat3 `'` vn `' is not a variant of enum '` )
+                                ( nurl_str_cat3 __or_en `'. Its variants are: ` __or_vl )
+                                `. An or-pattern's alternatives all belong to the enum being matched — `
+                                `check the spelling, or write '_ → body' for a catch-all.` ) ) }
+                            {}
                             ? ( str_contains_word seen_variants vn )
                             { ( die lex ( nurl_str_cat3 `this or-pattern repeats variant '` vn `' — an or-pattern lists each alternative once, and a repeat is either a typo or a variant the arms above already took. Remove it.` ) ) } {}
                             = seen_variants ? == 0 ( nurl_str_len seen_variants )
@@ -13016,6 +13044,12 @@
     ( nurl_lex_advance lex )
     : s target ? is_break ( nurl_sym_get syms `__loop_exit__` )
     ( nurl_sym_get syms `__loop_check__` )
+    ? & == 0 ( nurl_str_len target )
+    ( seq ( nurl_sym_get g_fn_escapes `__in_defer_body__` ) `1` )
+    { ( die_pos lex jline jcol ? is_break
+        `'break' inside a ';' defer block — the defer chain runs DURING return, after the loop has already exited, so there is no iteration to leave. Move the jump out of the defer, or put the loop it belongs to inside the defer body.`
+        `'continue' inside a ';' defer block — the defer chain runs DURING return, after the loop has already exited, so there is no next iteration. Move the jump out of the defer, or put the loop it belongs to inside the defer body.` ) }
+    {}
     ? == 0 ( nurl_str_len target )
     { ( die_pos lex jline jcol ? is_break
         `'break' outside a loop — there is nothing to leave. It is valid only inside a '~' loop body.`
@@ -13255,7 +13289,21 @@
     ( nurl_sym_def syms `__cur_lbl__` lbody )
     = g_did_ret 0
     ( nurl_sym_set g_fn_escapes `__in_defer_body__` `1` )
+    // The enclosing loop's labels do not reach into this body. The defer
+    // chain runs DURING return, after that loop has already exited, so a
+    // `break`/`continue` here branched BACKWARDS into the exit block —
+    // which then re-entered the defer chain, because the armed flag is
+    // still set. `; { break }` inside a loop compiled, exited 0 and ran
+    // forever. `^` was already rejected for the same reason; these are
+    // the other two block terminators. A loop written INSIDE the defer
+    // body redefines both labels, so its own break still works.
+    : s old_df_exit ( nurl_sym_get syms `__loop_exit__` )
+    : s old_df_check ( nurl_sym_get syms `__loop_check__` )
+    ( nurl_sym_def syms `__loop_exit__` `` )
+    ( nurl_sym_def syms `__loop_check__` `` )
     ( gen_block_stmts lex syms cg )
+    ( nurl_sym_def syms `__loop_exit__` old_df_exit )
+    ( nurl_sym_def syms `__loop_check__` old_df_check )
     ( nurl_sym_set g_fn_escapes `__in_defer_body__` `` )
     // After the defer block: chain to previous defer or to fn_cleanup
     : s lnext ? != 0 ( nurl_str_len prev_top ) prev_top ( nurl_sym_get syms `__fn_cleanup__` )
@@ -23720,8 +23768,26 @@
     // several lines and a diagnostic inside an instantiation must keep
     // pointing at the template's real lines.
     : ~ s src ( nurl_str_cat `` `` )
+    // Where the SIGNATURE ends, found first with a lexer-only walk and then
+    // used as the collection loop's stop. The old rule was "collect until the
+    // next '{' anywhere", which is not the same thing: a template whose body
+    // brace was missing — `@ f [T: Send] T x → i  ^ 0 }` — collected the NEXT
+    // declaration's '{' as its own body opener and swallowed that declaration
+    // whole. nurlc exited 0, emitted no `main`, and printed nothing at all.
+    // Found by the token-deletion sweep. The concrete path has always
+    // required the brace; this is the same rule for a template.
+    : i __gc_sig_start ( nurl_lex_cur_start lex )
+    ~ & & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_LBRACE
+    != ( nurl_lex_type lex ) TT_EOF {
+        ( nurl_lex_advance lex )
+    }
+    ? == ( nurl_lex_type lex ) TT_ARROW
+    { ( nurl_lex_advance lex ) ( skip_one_type lex ) }
+    {}
+    : i __gc_sig_end ( nurl_lex_cur_start lex )
+    ( nurl_lex_set_pos lex __gc_sig_start )
     : ~ i __gc_prev_ln ( nurl_lex_line lex )
-    ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF {
+    ~ & < ( nurl_lex_cur_start lex ) __gc_sig_end != ( nurl_lex_type lex ) TT_EOF {
         : i __gc_ln ( nurl_lex_line lex )
         ~ < __gc_prev_ln __gc_ln {
             = src ( nurl_str_cat src `\n` )
@@ -23730,6 +23796,11 @@
         = src ( nurl_str_cat src ( nurl_str_cat ( __tok_src_text lex ) ` ` ) )
         ( nurl_lex_advance lex )
     }
+    ? != ( nurl_lex_type lex ) TT_LBRACE
+    { ( die lex ( nurl_str_cat3
+        `expected '{' to open the body of generic function '` fname
+        ( nurl_str_cat3 `', found ` ( tok_here lex ) `. A generic is declared '@ name [T] params → ret { body }' — the brace follows the return type. A template with no body cannot be instantiated.` ) ) ) }
+    {}
     ? != ( nurl_lex_type lex ) TT_EOF
     { : i __gc_bln ( nurl_lex_line lex )
         ~ < __gc_prev_ln __gc_bln {
@@ -28846,6 +28917,47 @@
 // Both loops guard against EOF so a malformed source (e.g. missing
 // `→` in a function header, or an unclosed `{`) cannot park the
 // compiler in an infinite loop.
+// skip_one_type: consume exactly one TYPE at the current position — enough to
+// know where it ENDS, without judging whether it is valid. `parse_type` cannot
+// stand in for this inside a trait DECLARATION: the type parameter there lexes
+// as the boolean literal (`% Maker [T] { @ make T self → T }`) and only the
+// declaration's own context knows it names a type, so parse_type reports it as
+// "expected a type, found 'T'".
+//
+// A type is a chain of prefixes ending in one base token. Counting the base
+// tokens still owed keeps this iterative: a prefix leaves the count alone, `!`
+// (result) adds one because it takes two, and anything else settles one.
+@ skip_one_type i lex → v {
+    : ~ i owed 1
+    ~ & > owed 0 != ( nurl_lex_type lex ) TT_EOF {
+        : i tt ( nurl_lex_type lex )
+        ? | | | == tt TT_STAR == tt TT_QUEST == tt TT_QUESTQUEST == tt TT_LBRACK
+        { ( nurl_lex_advance lex ) }  // prefix: '* T', '? T', '?? T', '[ T'
+        { ? == tt TT_BANG
+            { ( nurl_lex_advance lex ) = owed + owed 1 }  // '! T E' takes two
+            { ? == tt TT_LPAREN
+                { ( skip_balanced_parens lex ) = owed - owed 1 }  // '( @ R P* )', '( Name A B )'
+                { ? == tt TT_PERCENT
+                    { ( nurl_lex_advance lex )  // '%' Trait
+                        ? != ( nurl_lex_type lex ) TT_EOF { ( nurl_lex_advance lex ) } {}
+                        = owed - owed 1 }
+                    { ( nurl_lex_advance lex ) = owed - owed 1 } } } }
+    }
+}
+
+// skip_balanced_parens: consume a '( ... )' group, nesting included. The
+// brace version below is the same walk over '{' / '}'.
+@ skip_balanced_parens i lex → v {
+    : ~ i depth 0
+    ~ != ( nurl_lex_type lex ) TT_EOF {
+        : i tt ( nurl_lex_type lex )
+        ? == tt TT_LPAREN { = depth + depth 1 } {}
+        ? == tt TT_RPAREN { = depth - depth 1 } {}
+        ( nurl_lex_advance lex )
+        ? <= depth 0 { ^ } {}
+    }
+}
+
 @ skip_balanced i lex → v {
     ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF
     { ( nurl_lex_advance lex ) }
@@ -28904,14 +29016,30 @@
                     ( lint_note_def mname )
                     ( nurl_lex_advance lex )  // consume method name
                     : i sig_start ( nurl_lex_cur_start lex )
-                    // Skip params / → / ret_ty until we hit '{' (body), next '@',
-                    // or '}' (end of trait).
-                    ~ & & & != ( nurl_lex_type lex ) TT_LBRACE
+                    // Params up to the '→', then EXACTLY the return type.
+                    // Scanning to the first '{' instead — which is what this
+                    // did — runs off the end of an UNTERMINATED trait body:
+                    // `% Sp [T] { @ speak T self → i` with no '}' read the
+                    // NEXT declaration's `{ i pitch }` as this method's
+                    // default body, and the two passes then disagreed about
+                    // where the trait ended (the emit pass skips balanced
+                    // braces, so it ate the rest of the file). nurlc exited
+                    // 0, emitted no `main`, and printed nothing at all.
+                    // Found by the token-deletion sweep, deleting one '}'.
+                    ~ & & & & != ( nurl_lex_type lex ) TT_ARROW
+                    != ( nurl_lex_type lex ) TT_LBRACE
                     != ( nurl_lex_type lex ) TT_AT
                     != ( nurl_lex_type lex ) TT_RBRACE
                     != ( nurl_lex_type lex ) TT_EOF {
                         ( nurl_lex_advance lex )
                     }
+                    // No arrow at all: a malformed header (the ASCII '->' is
+                    // the usual cause). Leave the slice as scanned — the
+                    // paths that consume it report that with a trait, a
+                    // method and a Self type, which this scan cannot give.
+                    ? == ( nurl_lex_type lex ) TT_ARROW
+                    { ( nurl_lex_advance lex ) ( skip_one_type lex ) }
+                    {}
                     // Dynamic-dispatch seam (docs/spec.md §4.9): record the trait's
                     // method set in declaration order plus each method's signature
                     // ("params → ret") — the vtable layout a future `dyn Trait` would
@@ -28953,9 +29081,9 @@
                     }
                     {}  // header only — required method, no template to store
                 }
-                { ( nurl_lex_advance lex ) }
+                { ( die lex ( nurl_str_cat3 `expected a method name after '@' in this trait body, found ` ( tok_here lex ) `. A trait declares each method as '@ name params → ret' — a signature alone for a required method, or a signature and a body for a default one.` ) ) }
             }
-            { ( nurl_lex_advance lex ) } }
+            { ( die lex ( nurl_str_cat3 `expected a method ('@ name params → ret') or an associated type ('type Name') in this trait body, found ` ( tok_here lex ) `. Nothing else belongs between a trait's braces; a token that is neither used to be skipped, which silently swallowed whatever followed an unterminated body.` ) ) } }
     }
     ( expect lex TT_RBRACE )  // consume '}' — clean error if unterminated at EOF
 }
@@ -29210,6 +29338,7 @@
         ( nurl_str_cat spos ` ` ) ) ) ) ) ) ) )
         ( expect lex TT_LBRACE )
         : ~ s provided ``
+        : ~ b malformed F
         : ~ s bindings ``  // "name val …" associated-type bindings of this impl
         ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
             ? & == ( nurl_lex_type lex ) TT_IDENT ( seq ( nurl_lex_val lex ) `type` )
@@ -29233,16 +29362,28 @@
                         ( nurl_sym_def syms mangled ret_ty )
                         ( skip_balanced lex )  // skip method body
                     }
-                    { ( nurl_lex_advance lex ) }
+                    {  // `@` with no method name after it. The emit pass
+                        // reports that with the position and the form; note
+                        // it so the contract check does not shadow it with a
+                        // "missing required method" the parse error explains.
+                        = malformed T
+                        ( nurl_lex_advance lex ) }
                 }
-                { ( nurl_lex_advance lex ) } }
+                { ? malformed
+                    {  // The '@' above had no method name. The emit pass
+                        // reports THAT, with the position and the form the
+                        // reader needs; a second complaint about the tokens
+                        // it left behind would only get there first and say
+                        // less. Skip to the end of the body as before.
+                        ( nurl_lex_advance lex ) }
+                    { ( die lex ( nurl_str_cat3 `expected a method ('@ name params → ret { ... }') or an associated-type binding ('type Name ConcreteType') in this impl body, found ` ( tok_here lex ) `. Nothing else belongs between an impl's braces; a token that is neither used to be skipped, which silently swallowed whatever followed an unterminated body.` ) ) } } }
         }
         ( expect lex TT_RBRACE )  // consume '}' — clean error if unterminated at EOF
         // The trait may be declared later, in this file or a later import.
         // Record the dependency instead of consulting a partial trait table.
         // Explicit signatures are already registered; defaults and associated
         // type coherence are resolved after the complete signature scan.
-        ( defer_trait_impl lex impl_pos tname impl_nurl impl_llvm impl_mangle provided bindings )
+        ( defer_trait_impl lex impl_pos tname impl_nurl impl_llvm impl_mangle provided bindings malformed )
     }
 }
 
@@ -29251,7 +29392,7 @@
 // Fields are separate symbol entries (paths and type strings may contain
 // spaces). Keep one effective-source snapshot per file, not per impl, so
 // deferred diagnostics retain their real source and alias rewriting.
-@ defer_trait_impl i lex i impl_pos s tname s impl_nurl s impl_llvm s impl_mangle s provided s bindings → v {
+@ defer_trait_impl i lex i impl_pos s tname s impl_nurl s impl_llvm s impl_mangle s provided s bindings b malformed → v {
     : s file ( nurl_lex_filename lex )
     : s pos ( nurl_str_int impl_pos )
     : s seen ( nurl_str_cat4 `seen##` file `##` pos )
@@ -29268,6 +29409,7 @@
     ( nurl_sym_def g_trait_pending ( nurl_str_cat key `mangle` ) impl_mangle )
     ( nurl_sym_def g_trait_pending ( nurl_str_cat key `provided` ) provided )
     ( nurl_sym_def g_trait_pending ( nurl_str_cat key `bindings` ) bindings )
+    ? malformed { ( nurl_sym_def g_trait_pending ( nurl_str_cat key `malformed` ) `1` ) } {}
     : s skey ( nurl_str_cat `src##` file )
     // Test key existence, not snapshot length: strlen of the whole file
     // for every impl would make this ostensibly shared capture quadratic.
@@ -29302,6 +29444,10 @@
         : s impl_nurl ( nurl_sym_get2 g_trait_pending key `nurl` )
         : s bindings ( nurl_sym_get2 g_trait_pending key `bindings` )
         ( verify_assoc_bindings lex tname impl_nurl bindings )
+        ( check_impl_contract lex tname impl_nurl
+        ( nurl_sym_get2 g_trait_pending key `llvm` )
+        ( nurl_sym_get2 g_trait_pending key `provided` ) bindings
+        != 0 ( nurl_str_len ( nurl_sym_get2 g_trait_pending key `malformed` ) ) )
         ? != 0 ( nurl_str_len impl_nurl )
         { ( register_missing_defaults lex tname impl_nurl
             ( nurl_sym_get2 g_trait_pending key `llvm` )
@@ -29358,6 +29504,129 @@
             ( nurl_str_cat ( nurl_str_cat3 impl_nurl `' must bind associated type '` an )
             `' (add a 'type' line)` ) ) ) }
         {}
+    }
+}
+
+// __ptypes_head / __ptypes_tail: the first entry of a ';'-separated lowered
+// parameter list, and everything after it. The receiver slot is compared
+// separately from the rest, because a NON-generic trait writes it as a
+// placeholder — `% Show { @ show i n → s }` is implemented for `i` AND for
+// `b` — while a generic one writes it as the type parameter, which
+// substitution makes exact.
+@ __ptypes_head s pt → s {
+    : i n ( nurl_str_len pt )
+    : ~ i i 0
+    ~ < i n {
+        ? == ( nurl_str_get pt i ) 59 { ^ ( nurl_str_slice pt 0 i ) } {}
+        = i + i 1
+    }
+    ( nurl_str_cat pt `` )
+}
+
+@ __ptypes_tail s pt → s {
+    : i n ( nurl_str_len pt )
+    : ~ i i 0
+    ~ < i n {
+        ? == ( nurl_str_get pt i ) 59 { ^ ( nurl_str_slice pt + i 1 - n + i 1 ) } {}
+        = i + i 1
+    }
+    ( nurl_str_cat `` `` )
+}
+
+// __impl_sig_check: one provided method against the trait's own declaration.
+// The trait records each method's signature source ("params → ret") at scan
+// time. Substituting the type parameter with this impl's Self type and the
+// associated types with this impl's bindings gives the signature the impl is
+// required to have — the same two substitutions `register_missing_defaults`
+// applies to a default body. Both sides are then lowered by the SAME scanner
+// the impl's own registration went through, so the comparison is of lowered
+// types and conventions (`inout` included), not of source spelling.
+@ __impl_sig_check i lex s tname s mname s impl_nurl s impl_llvm s ty s tparam s bindings → v {
+    : s sig ( nurl_sym_get2 g_trait_syms tname ( nurl_str_cat3 `__` mname `__sig` ) )
+    ? == 0 ( nurl_str_len sig ) { ^ } {}
+    // A type parameter with no Self name to put in its place (a compound impl
+    // type such as `* T`) cannot be substituted — the same restriction trait
+    // defaults already carry. Leave those impls unchecked rather than compare
+    // against a signature that still says `T`.
+    ? & != 0 ( nurl_str_len tparam ) == 0 ( nurl_str_len impl_nurl ) { ^ } {}
+    // A header with no arrow is not a signature at all. Nothing rejects that
+    // at the trait declaration yet (recorded in the v1 hardening ledger); the
+    // paths that consume it report it with a location and a context, and a
+    // second report here would only shadow theirs.
+    ? < ( nurl_str_find sig `→` ) 0 { ^ } {}
+    // Bound, never inline in an argument list: an owned temp handed straight
+    // to a user function is not collected (the LSan lesson this file repeats).
+    : s subst0 ? != 0 ( nurl_str_len tparam )
+    ( subst_source_raw sig tparam impl_nurl )
+    ( nurl_str_cat sig `` )
+    : s subst ( subst_assoc subst0 bindings )
+    : s key ( nurl_str_cat3 mname `##` impl_llvm )
+    : s skey ( nurl_str_cat3 mname `##__traitsig##` impl_llvm )
+    : i siglex ( nurl_lex_new subst `<trait_method_signature>` )
+    : s saved_ctx ( nurl_str_cat g_diag_ctx `` )
+    = g_diag_ctx ( nurl_str_cat ( nurl_str_cat4
+    ` [in the declared signature of method '` mname `' of trait '` tname )
+    ( nurl_str_cat3 `' (Self = '` ty `') — fix it at the trait declaration]` ) )
+    : s want_ret ( scan_method_signature siglex skey `__traitsig` `__traitsig` )
+    = g_diag_ctx saved_ctx
+    ( nurl_lex_free siglex )
+    : s got_ret ( nurl_sym_get g_impl_ret_syms key )
+    : s want_ar ( nurl_sym_get2 g_impl_ret_syms skey `__arity` )
+    : s got_ar ( nurl_sym_get2 g_impl_ret_syms key `__arity` )
+    : s want_all ( nurl_sym_get2 g_impl_ret_syms skey `__ptypes` )
+    : s got_all ( nurl_sym_get2 g_impl_ret_syms key `__ptypes` )
+    : s want_recv ( __ptypes_head want_all )
+    : s got_recv ( __ptypes_head got_all )
+    : s want_pt ( __ptypes_tail want_all )
+    : s got_pt ( __ptypes_tail got_all )
+    : s where ( nurl_str_cat ( nurl_str_cat4 `method '` mname `' of trait '` tname )
+    ( nurl_str_cat3 `' implemented for type '` ty `'` ) )
+    ? ! ( seq want_ar got_ar )
+    { ( die lex ( nurl_str_cat ( nurl_str_cat3 where ` takes ` got_ar )
+        ( nurl_str_cat3 ` parameter(s), but the trait declares ` want_ar ` — an impl must have the signature the trait declares, because every call site is type-checked against the declaration and a 'dyn' object dispatches through it.` ) ) ) }
+    {}
+    ? & != 0 ( nurl_str_len tparam ) ! ( seq want_recv got_recv )
+    { ( die lex ( nurl_str_cat ( nurl_str_cat3 where ` takes a receiver of type '` got_recv )
+        ( nurl_str_cat3 `', but the trait declares '` want_recv `' for this Self. An impl must have the signature the trait declares.` ) ) ) }
+    {}
+    ? ! ( seq want_pt got_pt )
+    { ( die lex ( nurl_str_cat ( nurl_str_cat3 where ` has non-receiver parameter types '` got_pt )
+        ( nurl_str_cat3 `', but the trait declares '` want_pt `' (';'-separated, lowered). An impl must have the signature the trait declares, because every call site is type-checked against the declaration.` ) ) ) }
+    {}
+    ? ! ( seq want_ret got_ret )
+    { ( die lex ( nurl_str_cat ( nurl_str_cat3 where ` returns '` got_ret )
+        ( nurl_str_cat3 `', but the trait declares '` want_ret `'. A 'dyn' object calls through a vtable built from the DECLARATION, so a disagreeing return type reaches the caller as the declared type with no conversion and no diagnostic.` ) ) ) }
+    {}
+}
+
+// check_impl_contract: an impl must satisfy the trait it names. Nothing did.
+// An impl that omitted a REQUIRED method compiled, though the grammar says
+// that is an error; and a method whose signature disagreed with the trait's
+// was registered exactly as written. The second is not cosmetic: `dyn` builds
+// its thunk from the DECLARED signature, so an impl returning `s` where the
+// trait declares `i` handed the caller a pointer read as an i64 — exit 0, no
+// diagnostic, wrong value at run time.
+//
+// A trait that is not DECLARED anywhere is not an error: `Drop`, `Ord` and
+// `Show` are implemented with no declaration, which is how the built-in
+// protocols work. There is simply no contract to check for one.
+@ check_impl_contract i lex s tname s impl_nurl s impl_llvm s provided s bindings b malformed → v {
+    ? == 0 ( nurl_str_len ( nurl_sym_get2 g_trait_syms tname `__istrait` ) ) { ^ } {}
+    : s ty ? != 0 ( nurl_str_len impl_nurl ) impl_nurl impl_llvm
+    : s tparam ( nurl_sym_get2 g_trait_syms tname `__tparam` )
+    : s defaults ( nurl_sym_get2 g_trait_syms tname `__defaults` )
+    : ~ s methods ( nurl_sym_get2 g_trait_syms tname `__methods` )
+    ~ != 0 ( nurl_str_len methods ) {
+        : s mname ( str_first_word methods )
+        = methods ( str_skip_word methods )
+        ? ( str_contains_word provided mname )
+        { ( __impl_sig_check lex tname mname impl_nurl impl_llvm ty tparam bindings ) }
+        { ? | malformed ( str_contains_word defaults mname )
+            {}  // the trait supplies a body, or the impl body did not parse
+            { ( die lex ( nurl_str_cat
+                ( nurl_str_cat3 `impl of trait '` tname `' for type '` )
+                ( nurl_str_cat ( nurl_str_cat3 ty `' is missing required method '` mname )
+                `'. The trait declares it with a signature and no body, so every impl must provide one — add it, or give the trait a default body.` ) ) ) } }
     }
 }
 

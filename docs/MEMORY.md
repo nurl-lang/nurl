@@ -635,13 +635,36 @@ default) adds three further checks, all diagnostic-only and all emitting
    owned binding whose pointer may outlive that binding's drop is
    reported — a narrow check on the otherwise-untracked `*T` surface
    (§3).
-3. **Conditional double-free (the maybe-moved hole, §6.2/§6.5).**
-   Consuming a binding that is *maybe*-moved — freed on one arm of a
-   `?`, still owned on the other — is reported: it is a real
-   double-free on the path where the first free ran. Off by default
-   because it also flags the legitimate mutually-exclusive-frees
-   pattern (free under `cond` here, free under `! cond` later), which
-   the default no-false-positive contract protects.
+3. **Consuming a MAYBE-MOVED binding (§6.2/§6.5).** It is a real
+   double-free on the path where the first consume ran. The check is
+   one rule, but a binding reaches the maybe-moved state by more than
+   one route, and every one of them is covered here — the heading used
+   to name only the first, which read as though the other shapes were
+   a fourth check:
+   - freed on one arm of a `?` and still owned on the other;
+   - its handle selected by a value-producing `?` / `??` and bound
+     elsewhere;
+   - stored into an aggregate literal (`@ Wrap { h }`) — recorded as
+     maybe-moved rather than moved on purpose, because recording it as
+     definite rejects the option-wrapper idiom;
+   - pushed into a container that will free its elements;
+   - handed to another name by an alias assignment (`= z a`);
+   - captured by a closure whose body frees it (the closure may run
+     zero times, once, or many);
+   - passed to a call whose effect is not decidable at that point —
+     the callee may `sink` the parameter or hand the handle back.
+
+   Off by default because it also flags the legitimate
+   mutually-exclusive-frees pattern (free under `cond` here, free under
+   `! cond` later), which the default no-false-positive contract
+   protects.
+
+   What this check does NOT cover is a *read* of a maybe-moved binding
+   (§2.1): a free on one arm of a `?` followed by an unconditional read
+   after the join is a use-after-free on the taken path and is reported
+   in neither mode. That is a known boundary with a witness, not an
+   oversight; see the v1 hardening ledger for the two measurements that
+   bear on closing it.
 
 It is **off by default** because the extensions have a meaningful
 false-positive rate against existing stdlib code; it is a tightening

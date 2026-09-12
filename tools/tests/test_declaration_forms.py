@@ -20,6 +20,19 @@ here even in a spelling nobody thought to write a fixture for.
 
 A form listed as `compiles` must produce main; a form listed as `rejects`
 must exit 1. Nothing may exit 0 without main.
+
+The 2026-09-12 sweep extended the table past declarations and simple
+statements, into expression position, trait and impl bodies, match and
+select arms, and the block terminators. It found four more of the same
+shape, three of which the invariant above cannot see because they keep
+main and fail later: `Z NoSuchType` emitted a getelementptr on a type
+nothing declares; an or-pattern alternative that named no variant emitted
+a load of a global nothing defines; a `break`/`continue` inside a `;`
+defer block branched into the loop exit the defer chain had already left,
+so the program ran forever; and an impl was never checked against the
+trait it names — a missing required method, a wrong arity, wrong parameter
+types or a wrong return type all compiled, and `dyn` dispatch then called
+through a vtable built from the DECLARED signature.
 """
 import os
 import subprocess
@@ -61,12 +74,55 @@ DECLARATIONS = [
     ("generic_fn",            "@ g [T] T x → T { ^ x }",        "compiles"),
     ("generic_fn_no_body",    "@ g [T] → T",                    "rejects"),
     ("generic_fn_unclosed",   "@ g [T x → T { ^ x }",           "rejects"),
+    # A template's signature ends at its return type, not at "the next '{'
+    # anywhere in the file". With the old rule, a generic whose body brace was
+    # missing collected the NEXT declaration's '{' as its own body opener and
+    # swallowed that declaration whole — exit 0, no main, nothing on stderr.
+    # Only the bounded form (`[T: Trait]`) reached that path, which is why no
+    # hand-written spelling had found it; deleting one token did.
+    ("generic_fn_bound",      "@ g [T : Send] T x → i { ^ 0 }", "compiles"),
+    ("generic_fn_bound_no_body", "@ g [T : Send] T x → i   ^ 0 }", "rejects"),
     # ── '&' / '%' / '$' ──────────────────────────────────────────────
     ("ffi_complete",          "& `libm` @ cbrt f x → f",        "compiles"),
     ("trait_empty",           "% Show { }",                     "compiles"),
     ("trait_no_body",         "% Show",                         "rejects"),
     ("impl_no_body",          "% Show i",                       "rejects"),
     ("import_missing",        "$ `no_such_module.nu`",          "rejects"),
+    # An impl must satisfy the trait it names: the trait has to exist, every
+    # method it declares without a body has to be provided, and a provided
+    # method has to have the signature the trait declares. `dyn` builds its
+    # thunk from the DECLARATION, so a disagreement is a type confusion at
+    # the call, not a local matter.
+    ("impl_complete",         "% Sh { @ area i o → i }\n% Sh i { @ area i o → i { ^ * o 2 } }", "compiles"),
+    ("impl_uses_default",     "% Sh { @ area i o → i { ^ o } }\n% Sh i { }", "compiles"),
+    ("impl_overrides_default", "% Sh { @ area i o → i { ^ o } }\n% Sh i { @ area i o → i { ^ * o 2 } }", "compiles"),
+    ("impl_missing_required", "% Sh { @ area i o → i }\n% Sh i { }", "rejects"),
+    # An impl of a trait that is not DECLARED anywhere is the idiom, not an
+    # error: `Drop`, `Ord` and `Show` are implemented with no declaration.
+    # There is simply no contract to check for one.
+    ("impl_undeclared_trait", "% NoSuchTrait i { @ f i o → i { ^ 1 } }", "compiles"),
+    ("impl_ret_mismatch",     "% Sh { @ area i o → i }\n% Sh i { @ area i o → s { ^ `x` } }", "rejects"),
+    ("impl_arity_mismatch",   "% Sh { @ area i o i k → i }\n% Sh i { @ area i o → i { ^ o } }", "rejects"),
+    ("impl_param_mismatch",   "% Sh { @ area i o i k → i }\n% Sh i { @ area i o f k → i { ^ o } }", "rejects"),
+    # A NON-generic trait's receiver slot is a placeholder each impl replaces
+    # — `% Show { @ show i n → s }` is implemented for `i` and for `b` — so a
+    # differing receiver there is the idiom, not a violation. In a GENERIC
+    # trait the receiver is the type parameter, and substitution makes it
+    # exact; `impl_generic_mismatch` covers that side.
+    ("impl_receiver_placeholder", "% Sh { @ area i o → i }\n% Sh b { @ area b o → i { ^ ? o 1 0 } }", "compiles"),
+    ("impl_generic_ok",       ": Dog { i n }\n% Sp [T] { @ speak T d → i }\n% Sp Dog { @ speak Dog d → i { ^ . d n } }", "compiles"),
+    ("impl_generic_mismatch", ": Dog { i n }\n% Sp [T] { @ speak T d → i }\n% Sp Dog { @ speak Dog d → s { ^ `x` } }", "rejects"),
+    # A trait body holds methods and associated types. Any other token used
+    # to be skipped, and the skip is what made an UNTERMINATED body
+    # dangerous: the scan stopped at the next declaration's closing brace
+    # while the emit pass skipped balanced braces to end of file, so the two
+    # disagreed about where the trait ended and `main` vanished with no
+    # diagnostic at all. Found by deleting one '}' from a corpus program.
+    ("trait_unterminated",    "% Sp [T] { @ speak T self → i\n: Dog { i pitch }\n% Sp Dog { @ speak Dog d → i { ^ . d pitch } }", "rejects"),
+    ("trait_junk_in_body",    "% Sh { 42 }", "rejects"),
+    ("trait_method_no_name",  "% Sh { @ → i }", "rejects"),
+    ("trait_nested_decl",     "% Sh { : Pt { i x } }", "rejects"),
+    ("impl_junk_in_body",     "% Sh { @ area i o → i }\n% Sh i { 42 }", "rejects"),
 ]
 
 # Statement forms, placed inside main's body ahead of the print.
@@ -94,7 +150,64 @@ STATEMENTS = [
     # A field write gets the same check the read side has.
     ("field_store_ok",   ": ~ Pt q @ Pt { 1 2 }\n    = . q x 5",   "compiles"),
     ("field_store_bad",  ": ~ Pt q @ Pt { 1 2 }\n    = . q nope 5", "rejects"),
+    # ── expression position ──────────────────────────────────────────
+    # Every other type position runs the declared-type check; `Z` did not,
+    # and emitted a getelementptr on an undeclared type.
+    ("sizeof_base",      ": i q Z i",                              "compiles"),
+    ("sizeof_struct",    ": i q Z Pt",                             "compiles"),
+    ("sizeof_ptr",       ": i q Z *Pt",                            "compiles"),
+    ("sizeof_unknown",   ": i q Z NoSuchType",                     "rejects"),
+    ("sizeof_ptr_unknown", ": i q Z *NoSuchType",                  "rejects"),
+    ("bin_one_operand",  ": i q + 1",                              "rejects"),
+    ("not_no_operand",   ": i q !",                                "rejects"),
+    ("cond_two_operands", ": i q ? > k 0 1",                       "rejects"),
+    ("agg_over_fields",  ": Pt p @ Pt { 1 2 3 }",                  "rejects"),
+    ("agg_unclosed",     ": Pt p @ Pt { 1 2",                      "rejects"),
+    ("slice_no_bar",     ": [i ys [i 1 2 3]",                      "rejects"),
+    ("slice_unclosed",   ": [i ys [i | 1 2 3",                     "rejects"),
+    ("call_unclosed",    "( nurl_print `x`",                       "rejects"),
+    ("closure_zero_param", ": (@ v) f \\ → v { }",               "compiles"),
+    ("closure_empty_body", ": (@ i i) f \\ i x → i { }",         "rejects"),
+    ("closure_dup_param",  ": (@ i i i) f \\ i a i a → i { ^ a }", "rejects"),
+    # ── block terminators inside a ';' defer body ────────────────────
+    # The defer chain runs DURING return, after the loop has exited. `^`
+    # was rejected here; `break` and `continue` were not, and branched
+    # back into the exit block the chain had just come from — an infinite
+    # loop that compiled, exited 0 and printed forever.
+    ("defer_return",     "; { ^ 1 }",                              "rejects"),
+    ("defer_break",      "~ < k 3 { ; { break } = k + k 1 }",      "rejects"),
+    ("defer_continue",   "~ < k 3 { ; { continue } = k + k 1 }",   "rejects"),
+    ("defer_own_loop",   "; { ~ < k 3 { = k + k 1 } }",            "compiles"),
+    # ── select arms ──────────────────────────────────────────────────
+    ("select_arm_no_block", "?? { [i] k → o }",                    "rejects"),
+    ("select_default_only", "?? { _ → { } }",                      "rejects"),
+    ("select_two_defaults", "?? { _ → { } _ → { } }",              "rejects"),
 ]
+
+# Match arms need an enum to match on; kept in their own template so the
+# statement rows above stay in the context their expectations were set in.
+MATCHES = [
+    ("match_variant",      "?? c { Red → { } _ → { } }",           "compiles"),
+    ("match_no_arms",      "?? c { }",                             "rejects"),
+    ("match_unknown",      "?? c { Nope → { } _ → { } }",          "rejects"),
+    ("match_nonexhaustive", "?? c { Red → { } }",                  "rejects"),
+    ("match_dup_variant",  "?? c { Red → { } Red → { } _ → { } }", "rejects"),
+    # The first name is checked against the enum's variants; an or-pattern
+    # ALTERNATIVE was not, and emitted a load of a global nothing defines.
+    ("match_or_known",     "?? c { Red | Green → { } _ → { } }",   "compiles"),
+    ("match_or_unknown",   "?? c { Red | Nope → { } _ → { } }",    "rejects"),
+    ("match_or_repeat",    "?? c { Red | Red → { } _ → { } }",     "rejects"),
+]
+
+MATCH_TEMPLATE = """: | Color { Red Green Blue }
+
+@ main → i {
+    : Color c @ Color { Green }
+    %s
+    ( nurl_print `MAIN RAN\\n` )
+    ^ 0
+}
+"""
 
 STMT_TEMPLATE = """: Pt { i x i y }
 
@@ -151,6 +264,11 @@ class DeclarationForms(unittest.TestCase):
         for name, stmt, expectation in STATEMENTS:
             with self.subTest(form=name):
                 self.check(name, STMT_TEMPLATE % stmt, expectation)
+
+    def test_match_forms(self):
+        for name, stmt, expectation in MATCHES:
+            with self.subTest(form=name):
+                self.check(name, MATCH_TEMPLATE % stmt, expectation)
 
 
 if __name__ == "__main__":
