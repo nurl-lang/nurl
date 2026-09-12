@@ -34,14 +34,14 @@ amounts are computed sub-expressions clamped into the legal domain rather than
 literals, so the guard branch is live at -O0 and the oracle catches a guard
 that fires on a legal operand.
 
-**Thirty-five defects of one shape are closed: a construct the language
+**Thirty-six defects of one shape are closed: a construct the language
 allows, reached by a path that skipped its own check.** Thirteen were found by
 sweeping declarations and simple statements; four more by continuing the same
 sweep into expression position, trait and impl bodies, match and select arms,
 and the block terminators; two more by the token-deletion sweep; six more by
 carrying the sweep into the surfaces that were still untouched — the
 `$`-import surface, generic instantiation, `%Trait` objects, the
-`inout` / `sink` conventions and the `pub` boundary; and **ten more by
+`inout` / `sink` conventions and the `pub` boundary; and **eleven more by
 giving the token-deletion sweep a second oracle**, which is the finding
 this round would pass on if it could pass on only one.
 
@@ -161,7 +161,7 @@ and the impl-signature check dropped the skip it carried for exactly this
 case. `diag_dynsig_context.nu` keeps its subject — a synthetic buffer's error
 carrying trait, method and Self — on a witness that still reaches it.
 
-### The second oracle, and the ten it found
+### The second oracle, and the eleven it found
 
 `mutate_delete.py` deletes one token and asks one question: does the compiler
 reject the file, or still emit the `main` the source declares? Every defect
@@ -171,10 +171,11 @@ the sweep learned a second question, `--clang`: of every mutant that exits 0,
 does clang accept the module? A compiler that exits 0 owes valid IR whatever
 was deleted.
 
-Eight seeds, 120 corpus programs, **514 findings** — and ten root causes.
-Each wave was run against the compiler the previous wave's fixes had already
-repaired, and each still found its own: seeds 1-4 gave three causes, seeds
-5, 6 and 8 three more, seed 7 four more again.
+Twelve seeds, 168 corpus programs, **515 findings** — and eleven root
+causes. Each wave was run against the compiler the previous wave's fixes had
+already repaired, and each still found its own: seeds 1-4 gave three causes,
+seeds 5, 6 and 8 three more, seed 7 four more again, and seed 12 one more
+after that. (Seed 9 was clean; 10 and 11 had not finished.)
 
 **A note on how that was measured, because the first two attempts were
 wrong.** The recheck — recompile every saved mutant against the repaired
@@ -275,10 +276,20 @@ Seed 7 added four more, each the same shape one spelling over:
     `~ { }` emitted `xor void undef, -1`. The loop form checks its condition;
     the complement form did not.
 
-All 514 findings are answered by the ten: recompiled against the repaired
+Seed 12 added one more, and it is the plainest statement of the round's
+question yet. **`String` initialising a raw C-string binding.** `String` is a
+managed handle (a by-value `{ ptr }` struct); `s` is a bare `i8*`; nothing
+converts between them implicitly. The ARGUMENT path has said so for years
+("String vs raw C-string mismatch") and so has the ASSIGNMENT path — whose
+own comment calls itself "the store dual of the let-binding / call-arg
+checks". The let-binding did not have it: every clause of its never-legal-mix
+test wanted one side not to be a pointer, and here both are. `: s raw t`
+emitted `store i8* %r4` with `%r4` a `%String`. It calls the same shared
+helper now, which is what that comment already claimed.
+
+All 515 findings are answered by the eleven: recompiled against the repaired
 compiler from the repository root, **every one of them either fails to
-compile or emits IR clang accepts** — 513 are now rejected outright and the
-one that still compiles produces IR clang is happy with.
+compile or emits IR clang accepts**.
 
 Opening the block-initialiser path also exposed a borrow-checker hole:
 `bck_esc_let` recorded a referent depth without comparing it, so a closure over
@@ -324,9 +335,9 @@ pinned by sha256 — including the zig that ships inside the published archive.
 
 ## Latest compiler verification
 
-Corpus **1,024 PASS / 19 SKIP** over 1,043 inputs, zero
+Corpus **1,025 PASS / 19 SKIP** over 1,044 inputs, zero
 FAIL/MISSING/ORPHAN. Normal build 58 s; tests 2 m 33 s. The sanitized
-corpus reports the same **1,024 PASS / 19 SKIP with zero AddressSanitizer,
+corpus reports the same **1,025 PASS / 19 SKIP with zero AddressSanitizer,
 UBSan or LSan findings**, zero timeouts and zero compile/link/run failures.
 All seven arithmetic methods, all 31 ownership methods, seven
 compiler-cleanup methods, two driver-path controls, the WASI IR control,
@@ -346,10 +357,10 @@ cannot see code it does not contain; the tree can. (The earlier rounds
 reported 816; that was a hand-assembled subset, not a smaller tree.)
 
 **Twenty-one** of the new `test_declaration_forms.py` rows FAIL against a
-compiler built from the branch point and pass against this one. Of the 32 new
-corpus fixtures, **19 are controls**: the branch-point compiler does not
+compiler built from the branch point and pass against this one. Of the 33 new
+corpus fixtures, **20 are controls**: the branch-point compiler does not
 reject them. Eight it accepts outright and emits IR clang is happy with — the
-check was simply missing — and eleven it exits 0 on while emitting IR clang
+check was simply missing — and twelve it exits 0 on while emitting IR clang
 refuses. The remaining 13 are rejected by both, because they pin the WORDING
 of diagnostics that already existed and that no test made the compiler print.
 
@@ -432,11 +443,13 @@ against the repaired compiler.
    yield is.** "Exit 0 and `main` is there" is a weak invariant: most of what
    this round found KEEPS main. `--clang` asks, of every mutant that exits 0,
    whether clang accepts the module. Seeds 1-8 under the weak invariant alone
-   were clean; under `--clang` the same eight produced **514 findings and ten
-   root causes** (see "The second oracle" above). Every wave was run against
-   the compiler the previous wave's fixes had already repaired and every wave
-   still found its own — the yield is not falling off yet. **Seed 9 onwards,
-   under `--clang`, is where the next one is.**
+   were clean; under `--clang`, twelve seeds produced **515 findings and
+   eleven root causes** (see "The second oracle" above). Every wave was run
+   against the compiler the previous wave's fixes had already repaired and
+   every wave but one still found its own. The yield may be falling off —
+   seed 9 was clean and seed 12 gave one — but seeds 10 and 11 had not
+   finished when this was written, so that is a hint, not a measurement.
+   **Finish 10 and 11, then seed 13 onwards.**
 
    Recheck from the REPOSITORY ROOT. A mutant that cannot resolve its
    `$`-imports exits 1, and a harness that reads exit 1 as "rejected" counts

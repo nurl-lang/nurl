@@ -97339,8 +97339,9 @@ entry:
   %r438 = alloca i1
   %r456 = alloca i1
   %r464 = alloca i1
-  %r477 = alloca i8*
-  store i8* null, i8** %r477
+  %r466 = alloca i1
+  %r479 = alloca i8*
+  store i8* null, i8** %r479
   %r3 = getelementptr [18 x i8], [18 x i8]* @.str.5794, i64 0, i64 0
   %r4 = call i8* @nurl_sym_get(i64 %syms, i8* %r3)
   %r5 = load i1, ptr @.__nurl_argdrop.2
@@ -98238,123 +98239,131 @@ and_right_105:
 and_end_106:
   %r463 = phi i1 [ 0, %and_end_102 ], [ %r462, %and_right_105 ]
   store i1 %r463, i1* %r464
-  %r465 = load i1, i1* %r421
-  br i1 %r465, label %or_end_108, label %or_right_107
+  %r465 = call i1 @__store_type_clash__fp1(i8* %from_ty, i8* %to_ty)
+  store i1 %r465, i1* %r466
+  %r467 = load i1, i1* %r421
+  br i1 %r467, label %or_end_108, label %or_right_107
 or_right_107:
-  %r466 = load i1, i1* %r438
+  %r468 = load i1, i1* %r438
   br label %or_end_108
 or_end_108:
-  %r467 = phi i1 [ 1, %and_end_106 ], [ %r466, %or_right_107 ]
-  br i1 %r467, label %then_109, label %else_110
+  %r469 = phi i1 [ 1, %and_end_106 ], [ %r468, %or_right_107 ]
+  br i1 %r469, label %then_109, label %else_110
 then_109:
-  %r468 = getelementptr [177 x i8], [177 x i8]* @.str.5868, i64 0, i64 0
+  %r470 = getelementptr [177 x i8], [177 x i8]* @.str.5868, i64 0, i64 0
   br label %end_111
 else_110:
-  %r469 = load i1, i1* %r456
-  br i1 %r469, label %then_112, label %else_113
+  %r471 = load i1, i1* %r456
+  br i1 %r471, label %then_112, label %else_113
 then_112:
-  %r470 = getelementptr [254 x i8], [254 x i8]* @.str.5869, i64 0, i64 0
+  %r472 = getelementptr [254 x i8], [254 x i8]* @.str.5869, i64 0, i64 0
   br label %end_114
 else_113:
-  %r471 = load i1, i1* %r464
-  br i1 %r471, label %then_115, label %else_116
+  %r473 = load i1, i1* %r464
+  br i1 %r473, label %then_115, label %else_116
 then_115:
-  %r472 = getelementptr [185 x i8], [185 x i8]* @.str.5870, i64 0, i64 0
+  %r474 = getelementptr [185 x i8], [185 x i8]* @.str.5870, i64 0, i64 0
   br label %end_117
 else_116:
-  %r473 = getelementptr [88 x i8], [88 x i8]* @.str.5871, i64 0, i64 0
+  %r475 = getelementptr [88 x i8], [88 x i8]* @.str.5871, i64 0, i64 0
   br label %end_117
 end_117:
-  %r474 = phi i8* [ %r472, %then_115 ], [ %r473, %else_116 ]
+  %r476 = phi i8* [ %r474, %then_115 ], [ %r475, %else_116 ]
   br label %end_114
 end_114:
-  %r475 = phi i8* [ %r470, %then_112 ], [ %r474, %end_117 ]
+  %r477 = phi i8* [ %r472, %then_112 ], [ %r476, %end_117 ]
   br label %end_111
 end_111:
-  %r476 = phi i8* [ %r468, %then_109 ], [ %r475, %end_114 ]
-  store i8* %r476, i8** %r477
-  %r478 = load i1, i1* %r379
-  %r479 = load i1, i1* %r385
-  %r480 = icmp ne i1 %r478, %r479
-  br i1 %r480, label %or_end_119, label %or_right_118
+  %r478 = phi i8* [ %r470, %then_109 ], [ %r477, %end_114 ]
+  store i8* %r478, i8** %r479
+  %r480 = load i1, i1* %r379
+  %r481 = load i1, i1* %r385
+  %r482 = icmp ne i1 %r480, %r481
+  br i1 %r482, label %or_end_119, label %or_right_118
 or_right_118:
-  %r481 = call i1 @is_ptr_ty(i8* %from_ty)
-  br i1 %r481, label %and_right_120, label %and_end_121
+  %r483 = call i1 @is_ptr_ty(i8* %from_ty)
+  br i1 %r483, label %and_right_120, label %and_end_121
 and_right_120:
-  %r482 = call i1 @is_ptr_ty(i8* %to_ty)
-  %r483 = xor i1 %r482, 1
+  %r484 = call i1 @is_ptr_ty(i8* %to_ty)
+  %r485 = xor i1 %r484, 1
   br label %and_end_121
 and_end_121:
-  %r484 = phi i1 [ 0, %or_right_118 ], [ %r483, %and_right_120 ]
+  %r486 = phi i1 [ 0, %or_right_118 ], [ %r485, %and_right_120 ]
   br label %or_end_119
 or_end_119:
-  %r485 = phi i1 [ 1, %end_111 ], [ %r484, %and_end_121 ]
-  br i1 %r485, label %or_end_123, label %or_right_122
+  %r487 = phi i1 [ 1, %end_111 ], [ %r486, %and_end_121 ]
+  br i1 %r487, label %or_end_123, label %or_right_122
 or_right_122:
-  %r486 = load i1, i1* %r394
+  %r488 = load i1, i1* %r394
   br label %or_end_123
 or_end_123:
-  %r487 = phi i1 [ 1, %or_end_119 ], [ %r486, %or_right_122 ]
-  br i1 %r487, label %or_end_125, label %or_right_124
+  %r489 = phi i1 [ 1, %or_end_119 ], [ %r488, %or_right_122 ]
+  br i1 %r489, label %or_end_125, label %or_right_124
 or_right_124:
-  %r488 = load i1, i1* %r421
+  %r490 = load i1, i1* %r421
   br label %or_end_125
 or_end_125:
-  %r489 = phi i1 [ 1, %or_end_123 ], [ %r488, %or_right_124 ]
-  br i1 %r489, label %or_end_127, label %or_right_126
+  %r491 = phi i1 [ 1, %or_end_123 ], [ %r490, %or_right_124 ]
+  br i1 %r491, label %or_end_127, label %or_right_126
 or_right_126:
-  %r490 = load i1, i1* %r438
+  %r492 = load i1, i1* %r438
   br label %or_end_127
 or_end_127:
-  %r491 = phi i1 [ 1, %or_end_125 ], [ %r490, %or_right_126 ]
-  br i1 %r491, label %or_end_129, label %or_right_128
+  %r493 = phi i1 [ 1, %or_end_125 ], [ %r492, %or_right_126 ]
+  br i1 %r493, label %or_end_129, label %or_right_128
 or_right_128:
-  %r492 = load i1, i1* %r456
+  %r494 = load i1, i1* %r456
   br label %or_end_129
 or_end_129:
-  %r493 = phi i1 [ 1, %or_end_127 ], [ %r492, %or_right_128 ]
-  br i1 %r493, label %or_end_131, label %or_right_130
+  %r495 = phi i1 [ 1, %or_end_127 ], [ %r494, %or_right_128 ]
+  br i1 %r495, label %or_end_131, label %or_right_130
 or_right_130:
-  %r494 = load i1, i1* %r464
+  %r496 = load i1, i1* %r464
   br label %or_end_131
 or_end_131:
-  %r495 = phi i1 [ 1, %or_end_129 ], [ %r494, %or_right_130 ]
-  br i1 %r495, label %then_132, label %else_133
-then_132:
-  %r496 = getelementptr [16 x i8], [16 x i8]* @.str.5872, i64 0, i64 0
-  %r497 = getelementptr [49 x i8], [49 x i8]* @.str.5873, i64 0, i64 0
-  %r498 = call i8* @nurl_str_cat4(i8* %r496, i8* %from_ty, i8* %r497, i8* %to_ty)
-  %r499 = load i1, ptr @.__nurl_argdrop.2
-  %r500 = select i1 %r499, i8* %r498, i8* null
-  call void @nurl_journal_push(i8* %r500)
-  %r501 = load i8*, i8** %r477
-  %r502 = call i8* @nurl_str_cat(i8* %r498, i8* %r501)
-  call void @nurl_free(i8* %r500)
-  %r503 = load i1, ptr @.__nurl_argdrop.24
+  %r497 = phi i1 [ 1, %or_end_129 ], [ %r496, %or_right_130 ]
+  br i1 %r497, label %or_end_133, label %or_right_132
+or_right_132:
+  %r498 = load i1, i1* %r466
+  br label %or_end_133
+or_end_133:
+  %r499 = phi i1 [ 1, %or_end_131 ], [ %r498, %or_right_132 ]
+  br i1 %r499, label %then_134, label %else_135
+then_134:
+  %r500 = getelementptr [16 x i8], [16 x i8]* @.str.5872, i64 0, i64 0
+  %r501 = getelementptr [49 x i8], [49 x i8]* @.str.5873, i64 0, i64 0
+  %r502 = call i8* @nurl_str_cat4(i8* %r500, i8* %from_ty, i8* %r501, i8* %to_ty)
+  %r503 = load i1, ptr @.__nurl_argdrop.2
   %r504 = select i1 %r503, i8* %r502, i8* null
   call void @nurl_journal_push(i8* %r504)
-  call void @die_stmt(i64 %lex, i8* %r502)
+  %r505 = load i8*, i8** %r479
+  %r506 = call i8* @nurl_str_cat(i8* %r502, i8* %r505)
   call void @nurl_free(i8* %r504)
+  %r507 = load i1, ptr @.__nurl_argdrop.24
+  %r508 = select i1 %r507, i8* %r506, i8* null
+  call void @nurl_journal_push(i8* %r508)
+  call void @die_stmt(i64 %lex, i8* %r506)
+  call void @nurl_free(i8* %r508)
   unreachable
-else_133:
-  br label %end_134
-end_134:
+else_135:
+  br label %end_136
+end_136:
   br label %end_84
 else_83:
   br label %end_84
 end_84:
   store i8* null, i8** %r1
   store i64 0, i64* %r0
-  %r505 = load i8*, i8** %r9
-  call void @nurl_free(i8* %r505)
-  %r506 = load i8*, i8** %r269
-  call void @nurl_free(i8* %r506)
-  %r507 = load i8*, i8** %r273
-  call void @nurl_free(i8* %r507)
-  %r508 = load i8*, i8** %r1
-  call void @nurl_journal_forget(i8* %r508)
-  %r509 = load i64, i64* %r0
-  call void @nurl_ret_owned_set(i64 %r509)
+  %r509 = load i8*, i8** %r9
+  call void @nurl_free(i8* %r509)
+  %r510 = load i8*, i8** %r269
+  call void @nurl_free(i8* %r510)
+  %r511 = load i8*, i8** %r273
+  call void @nurl_free(i8* %r511)
+  %r512 = load i8*, i8** %r1
+  call void @nurl_journal_forget(i8* %r512)
+  %r513 = load i64, i64* %r0
+  call void @nurl_ret_owned_set(i64 %r513)
   ret i8* %val
 }
 

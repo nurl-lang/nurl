@@ -20800,6 +20800,17 @@
         // with an i64 register or integer constant of pointer type —
         // invalid IR that nurlc accepted (rc 0) and only clang rejected.
         : b csv_int_ptr & > ( int_width from_ty ) 0 ( is_ptr_ty ( nurl_llty to_ty ) )
+        // `String` vs raw C-string, the one never-legal pair every clause
+        // above misses because BOTH sides are pointer-ish: `%String` is a
+        // by-value handle struct and `s` is `i8*`, so `csv_named` (which
+        // requires neither side to be a pointer) skips it. The assignment
+        // path calls this shared helper and calls itself "the store dual
+        // of the let-binding check"; the let-binding did not have it, so
+        // `: s raw t` from a String emitted `store i8* %r4` with %r4 a
+        // `%String` — invalid IR only clang saw. The argument path has
+        // said "String vs raw C-string mismatch" for years; this is the
+        // same law in the spelling that was left out.
+        : b csv_store_clash ( __store_type_clash from_ty to_ty )
         // The cure differs by shape: an aggregate value wants '??'
         // destructuring (or matching shapes), a named type is nominal,
         // a scalar wants a cast.
@@ -20810,7 +20821,7 @@
         ? csv_int_ptr
         `' — NURL has no implicit integer-to-pointer conversion; use a pointer-typed value, or cast an address intentionally with '# T expr' (the null pointer is '# T 0' for a pointer type T)`
         `' — NURL has no implicit conversions; use a matching value or convert with '# T expr'`
-        ? | | | | | | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty ) csv_agg csv_agg2 csv_agg_src csv_named csv_int_ptr
+        ? | | | | | | | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty ) csv_agg csv_agg2 csv_agg_src csv_named csv_int_ptr csv_store_clash
         { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `value of type '` from_ty `' cannot initialise / assign a binding of type '` to_ty )
             __csv_cure ) ) }
