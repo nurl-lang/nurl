@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_binop_operand_terminates.nu:26:38: error: an operand of this binary operator produces no value — a block that BREAKS, CONTINUES or RETURNS hands back no register at all. Usually the operator is one operand SHORT and has swallowed the block that follows it: every NURL operator has fixed arity and no closing bracket, so count the operands before this one.
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

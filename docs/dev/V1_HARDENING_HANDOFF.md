@@ -34,14 +34,14 @@ amounts are computed sub-expressions clamped into the legal domain rather than
 literals, so the guard branch is live at -O0 and the oracle catches a guard
 that fires on a legal operand.
 
-**Twenty-eight defects of one shape are closed: a construct the language
+**Thirty-one defects of one shape are closed: a construct the language
 allows, reached by a path that skipped its own check.** Thirteen were found by
 sweeping declarations and simple statements; four more by continuing the same
 sweep into expression position, trait and impl bodies, match and select arms,
 and the block terminators; two more by the token-deletion sweep; six more by
 carrying the sweep into the surfaces that were still untouched — the
 `$`-import surface, generic instantiation, `%Trait` objects, the
-`inout` / `sink` conventions and the `pub` boundary; and **three more by
+`inout` / `sink` conventions and the `pub` boundary; and **six more by
 giving the token-deletion sweep a second oracle**, which is the finding
 this round would pass on if it could pass on only one.
 
@@ -161,7 +161,7 @@ and the impl-signature check dropped the skip it carried for exactly this
 case. `diag_dynsig_context.nu` keeps its subject — a synthetic buffer's error
 carrying trait, method and Self — on a witness that still reaches it.
 
-### The second oracle, and the three it found
+### The second oracle, and the six it found
 
 `mutate_delete.py` deletes one token and asks one question: does the compiler
 reject the file, or still emit the `main` the source declares? Every defect
@@ -171,7 +171,10 @@ the sweep learned a second question, `--clang`: of every mutant that exits 0,
 does clang accept the module? A compiler that exits 0 owes valid IR whatever
 was deleted.
 
-Four seeds, 60 corpus programs, **497 findings** — and three root causes.
+Seven finished seeds, 105 corpus programs, **508 findings** — and six root
+causes. Seeds 1-4 produced 497 of them between three causes; seeds 5, 6 and 8,
+run against the compiler those three fixes had already repaired, produced
+eleven more between three. (Seed 7 was still running when this was written.)
 
 **A call whose callee names a VALUE was emitted as a direct call to it.**
 `gen_ident` has carried the taxonomy for years — `__ptr` is a local binding,
@@ -211,7 +214,38 @@ result — two corpus fixtures that exercise the shape on purpose and
 `nurlapi/main.nu` — each moving one dead store from after an `unreachable` to
 inside the `dead_N:` block where it belongs, with no behaviour change.
 
-All 497 findings are answered by those three: recompiled against the repaired
+**An operand of a binary operator that produces no value was emitted as an
+empty one.** There are three spellings of "no value" and the binary battery
+knew two: the literal `v` type, and the `undef` a void-returning call yields
+(both learned from earlier arity-cascade hunts). A block that TERMINATES —
+`{ ( string_free t ) break }` — hands back no register at all, the empty
+string. So `? == 3 { … break } {}`, an `==` one operand short that swallowed
+the then-block, emitted `%r8 = icmp eq i64 3,` with nothing after the comma.
+Same arity trap, same cure, third spelling.
+
+**An element INDEX was never required to be an integer on the store side.**
+The read side has always said so — `. xs 1.5` is "expected a field name or an
+index after '.'" — and the five index-store paths never asked, so
+`= . xs 1.5 7` emitted `getelementptr i64, i64* %p, double 1.5`. The spelling
+that reaches it is a MISSING index: `= . xs 0 1.5` with the `0` deleted
+leaves the value standing where the position belongs. The write side of a
+check the read side has had for years — this round's signature question,
+answered once more.
+
+**A foreach's exit path was not marked live, so an EMPTY basic block was
+emitted.** `gen_loop` says the rule at its own exit label — "a loop that CAN
+exit resets did_ret: its exit path is live even when the body returned
+somewhere" — and a foreach always can, since the check block branches to the
+exit the moment the index reaches the length. It did not reset the flag, so a
+foreach whose body ends in `break` left `g_did_ret` set and the ENCLOSING
+loop believed its own body had terminated and emitted its exit label with no
+branch before it. Two labels back to back is an empty basic block, which LLVM
+rejects. Same rule, the other loop — and unlike the rest of this section it
+needs no mutation to reach: `~ x xs { = s += x break }` as the last statement
+of a `~` body is ordinary code, and `compiler/tests/foreach_exit_live.nu`
+writes it that way.
+
+All 508 findings are answered by those six: recompiled against the repaired
 compiler, **every one of them either fails to compile or emits IR clang
 accepts**.
 
@@ -259,9 +293,9 @@ pinned by sha256 — including the zig that ships inside the published archive.
 
 ## Latest compiler verification
 
-Corpus **1,017 PASS / 19 SKIP** over 1,036 inputs, zero
+Corpus **1,020 PASS / 19 SKIP** over 1,039 inputs, zero
 FAIL/MISSING/ORPHAN. Normal build 58 s; tests 2 m 33 s. The sanitized
-corpus reports the same **1,017 PASS / 19 SKIP with zero AddressSanitizer,
+corpus reports the same **1,020 PASS / 19 SKIP with zero AddressSanitizer,
 UBSan or LSan findings**, zero timeouts and zero compile/link/run failures.
 All seven arithmetic methods, all 31 ownership methods, seven
 compiler-cleanup methods, two driver-path controls, the WASI IR control,
@@ -280,15 +314,21 @@ but the three files named below. The corpus
 cannot see code it does not contain; the tree can. (The earlier rounds
 reported 816; that was a hand-assembled subset, not a smaller tree.)
 
-**Nineteen** of the new `test_declaration_forms.py` rows FAIL against a
-compiler built from the parent commit and pass against this one, and **twelve**
-of the new `diag_*` corpus fixtures exit 0 on that compiler and are rejected
-by this one. That is what makes them controls rather than descriptions. The
-sharpest witnesses are the three that are wrong at RUN time, not just in the
-IR: `diag_default_on_inout.nu` compiles cleanly on the parent compiler, links
-cleanly, and segfaults; `diag_call_names_a_value.nu` does the same, calling a
-data global; `diag_default_arg_type.nu` compiles cleanly and prints `x = 0`
-for a parameter whose declared default is 1.
+**Twenty-one** of the new `test_declaration_forms.py` rows FAIL against a
+compiler built from the branch point and pass against this one. Of the 28 new
+corpus fixtures, **15 are controls**: the branch-point compiler does not
+reject them. Eight it accepts outright and emits IR clang is happy with — the
+check was simply missing — and seven it exits 0 on while emitting IR clang
+refuses. The remaining 13 are rejected by both, because they pin the WORDING
+of diagnostics that already existed and that no test made the compiler print.
+
+Three of the fifteen are wrong at RUN time, not just in the IR:
+`diag_default_on_inout.nu` compiles cleanly on the branch-point compiler,
+links cleanly and segfaults; `diag_call_names_a_value.nu` does the same,
+calling a data global; `diag_default_arg_type.nu` compiles cleanly and prints
+`x = 0` for a parameter whose declared default is 1. A fourth,
+`foreach_exit_live.nu`, is ordinary code that the branch-point compiler
+cannot compile at all.
 
 The tree sweep reports **three** intended differences against the branch
 point, all of them IR-only with identical exit codes and stderr:
@@ -360,11 +400,18 @@ against the repaired compiler.
    **`--clang` is a second oracle over the same mutants, and it is where the
    yield is.** "Exit 0 and `main` is there" is a weak invariant: most of what
    this round found KEEPS main. `--clang` asks, of every mutant that exits 0,
-   whether clang accepts the module. Seeds 1-4 under the weak invariant alone
-   were clean; under `--clang` the same four seeds produced **497 findings
-   and three root causes** (see "The second oracle, and the three it found"
-   above). Seeds 5-8 are clean under the weak invariant and have NOT been run
-   under `--clang` — that, not seed 9, is where to go next.
+   whether clang accepts the module. Seeds 1-8 under the weak invariant alone
+   were clean; under `--clang` seven finished seeds produced **508 findings
+   and six root causes** (see "The second oracle" above) — and seeds 5, 6 and
+   8, run against the compiler the first three fixes had already repaired,
+   still produced three causes of their own. **Seed 7 has not finished and
+   seed 9 onwards has not been run. That is where the next one is.**
+
+   One of the six needed no mutation at all: a foreach ending in `break`, as
+   the last statement of a `~` body, emits an empty basic block. Ordinary
+   code, and nothing in 1,815 tracked files happened to be written that way.
+   A mutation oracle is worth running against a tree that passes every gate
+   precisely because the tree is a sample, not the language.
 
    It costs one clang invocation per surviving mutant, so a 40-file seed is
    too big: use `--files 15` and run four seeds in parallel. Triage by root

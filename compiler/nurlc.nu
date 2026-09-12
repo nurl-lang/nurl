@@ -267,6 +267,23 @@
     {}
 }
 
+// An element INDEX must be an integer. The read side has always said so
+// — `. xs 1.5` is "expected a field name or an index after '.'" — and
+// the store side never asked, so `= . xs 1.5 7` emitted
+// `getelementptr i64, i64* %p, double 1.5` and clang answered
+// "getelementptr index must be an integer" about generated IR. The
+// spelling that reaches it is a MISSING index: `= . xs 0 1.5` with the
+// `0` deleted leaves the value where the index belongs, which is how the
+// token-deletion sweep's clang oracle found it. A bool is refused for
+// the same reason the read side refuses it: `T` is not a position.
+@ die_if_not_index i lex s idx_type s ctx → v {
+    : s ll ( nurl_llty idx_type )
+    ? & > ( int_width ll ) 0 ! ( seq ll `i1` ) { ^ } {}
+    ( die lex ( nurl_str_cat ( nurl_str_cat4
+    `the ` ctx ` index has type '` ( llvm_to_nurl ll ) )
+    `', and an index must be an integer. If the index looks missing, it is: '= . container <index> <value>' takes BOTH, and with one of them absent the value is read as the position.` ) )
+}
+
 // Record where a binding was declared, so a later "cannot assign to
 // immutable …" diagnostic can point the author at the exact line to
 // add `~` to. Keyed off the binding name; declfile carries the source
@@ -4157,6 +4174,21 @@
     // (dead_store_both_arms_ret), so die_if_void itself stays value-only.
     ? | & ( seq lv `undef` ) ( seq lt `void` ) & ( seq rv `undef` ) ( seq rt `void` )
     { ( die_stmt lex `an operand of this binary operator is a call that returns 'v', so it has no value to combine. Usually the operator is one operand SHORT and has swallowed the following statement: every NURL operator has fixed arity and no closing bracket, so count the operands before this one. If the call was meant to run for its effect, put it on its own line.` ) }
+    {}
+    // The THIRD spelling of "no value", and the one neither check above
+    // sees: the EMPTY string. A block that terminates — `{ ( free t )
+    // break }`, or one ending in `^` / `continue` — hands back no
+    // register at all rather than `undef`, so `? == 3 { … break } {}`
+    // (an `==` one operand short, swallowing the then-block) emitted
+    //
+    //     %r8 = icmp eq i64 3,
+    //
+    // with nothing after the comma, and clang answered `expected value
+    // token` on the NEXT line. Found by deleting one token from
+    // loop_break_continue.nu with the clang oracle on. Same arity trap,
+    // same cure, third spelling.
+    ? | == 0 ( nurl_str_len lv ) == 0 ( nurl_str_len rv )
+    { ( die_stmt lex `an operand of this binary operator produces no value — a block that BREAKS, CONTINUES or RETURNS hands back no register at all. Usually the operator is one operand SHORT and has swallowed the block that follows it: every NURL operator has fixed arity and no closing bracket, so count the operands before this one.` ) }
     {}
     // ── Enum operands are NOMINAL ─────────────────────────────────────
     // `== c Green` used to emit `icmp eq %Color %r4, %r5` with %r5 an
@@ -13146,6 +13178,17 @@
     ( emit ( nurl_str_cat le `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` le )
     ( nurl_set_last_type `void` )
+    // The exit path is LIVE, whatever the body did. gen_loop says so at
+    // its own exit label — "a loop that CAN exit resets did_ret: its
+    // exit path is live even when the body returned somewhere" — and a
+    // foreach always can: the check block branches here the moment the
+    // index reaches the length. This one did not, so a body ending in
+    // `break` left g_did_ret set, and the ENCLOSING construct believed
+    // its own body had terminated and emitted its exit label with no
+    // branch before it. Two labels back to back is an EMPTY basic block,
+    // which LLVM rejects (`expected instruction opcode`, pointing at the
+    // second label). Same rule, the other loop.
+    = g_did_ret 0
     ( nurl_str_cat `undef` `` )
 }
 
@@ -17883,6 +17926,7 @@
             // load paths were already correct, so a program could read at
             // an unsigned index but not write at one.
             : s idx_type ( nurl_get_last_type )
+            ( die_if_not_index lex idx_type `element` )
             : s rhs ( gen_field_rhs lex syms cg )
             // Same store-time contract as the named-field path:
             // reject never-valid mixes, width-coerce the rest.
@@ -17987,6 +18031,7 @@
                         // shadowing a field) — array-style store *T[idx] = rhs.
                         : s idx_val ( gen_expr lex syms cg )
                         : s idx_type ( nurl_get_last_type )
+                        ( die_if_not_index lex idx_type `element` )
                         : s rhs ( gen_field_rhs lex syms cg )
                         // Same store-time contract as the named-field path:
                         // reject never-valid mixes, width-coerce the rest.
@@ -18055,6 +18100,7 @@
                             ? | != 0 ( nurl_str_len var_t ) ! is_field_ident
                             { : s idx_val ( gen_expr lex syms cg )
                                 : s idx_type ( nurl_get_last_type )
+                                ( die_if_not_index lex idx_type `element` )
                                 : s rhs ( gen_field_rhs lex syms cg )
                                 // Same store-time contract as the named-field path:
                                 // reject never-valid mixes, width-coerce the rest.
@@ -18086,6 +18132,7 @@
                 {  // Raw pointer with variable index: one-index GEP
                     : s idx_val ( gen_expr lex syms cg )
                     : s idx_type ( nurl_get_last_type )
+                    ( die_if_not_index lex idx_type `element` )
                     : s rhs ( gen_field_rhs lex syms cg )
                     // Same store-time contract as the named-field path:
                     // reject never-valid mixes, width-coerce the rest.
@@ -18892,6 +18939,7 @@
             {  // Variable / arbitrary expression index → array-style access
                 : s idx_val ( gen_expr lex syms cg )
                 : s idx_type ( nurl_get_last_type )
+                ( die_if_not_index lex idx_type `element` )
                 : s gep ( nurl_cg_reg cg )
                 : s res ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print gep )

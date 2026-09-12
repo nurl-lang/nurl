@@ -264,6 +264,15 @@ STATEMENTS = [
     # `^ k` returns and the binding is dead code, but the block is
     # well-formed.
     ("bind_value_is_return_live", ": i x ^ k\n    ^ x",            "compiles"),
+    # An element INDEX is an integer. The read side has always said so
+    # ('. xs 1.5' is "expected a field name or an index"); the five
+    # index-STORE paths never asked, and emitted a getelementptr with a
+    # double index. The spelling that reaches it is a MISSING index.
+    ("elem_store_index_ok",    ": ~ [i xs [i | 1 2 3]\n    = . xs 0 7",   "compiles"),
+    ("elem_store_index_expr",  ": ~ [i xs [i | 1 2 3]\n    = . xs + k 1 7", "compiles"),
+    ("elem_store_index_float", ": ~ [i xs [i | 1 2 3]\n    = . xs 1.5 7",  "rejects"),
+    ("elem_store_index_str",   ": ~ [i xs [i | 1 2 3]\n    = . xs `x` 7",  "rejects"),
+    ("elem_store_index_gone",  ": ~ [i xs [i | 1 2 3]\n    = . xs   1.5",  "rejects"),
     # A call whose callee names a local value, in the two shapes the
     # token-deletion sweep produces by deleting a callee name.
     ("call_local_value",  "( k )",                                  "rejects"),
