@@ -1,0 +1,10 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_call_inout_unresolved_signature.nu:6:12: error: function 'bump' has an unresolved 'inout' parameter signature — check its parameter types and names
+    ( bump n )
+           ^
+compiler/tests/diag_call_inout_unresolved_signature.nu:10:16: error: expected a parameter name after its type in this declaration's parameter list, found '→'. Parameters are written 'type name', repeated, with no commas: '@ f i a i b → i'. A parenthesised type keeps the pair shape: '( Vec i ) v'.
+@ bump inout i → v { ^ }
+               ^
+error: aborting due to 2 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
