@@ -817,7 +817,19 @@ against the repaired compiler.
    exceeded, the run was cancelled rather than failed, which reads as
    infrastructure rather than as a gate.
 
-   The previous round's remote results, unchanged: every check passed at
+   **This round's remote results: every check passed on PR #1111** — twelve
+   pass, one skipping. The Linux compiler job with the bootstrap fixed point
+   and corpus, the same on arm64, FreeBSD in a VM, Windows, the
+   AddressSanitizer + UBSan job, the unikernel job, the MinGW msvcrt
+   cross-link job, required-tool fault injection, the runner fault-injection
+   controls, and the three path-classifier jobs. The webdocs job skipped
+   (no `webdocs/` change), and the four JavaScript audit/build jobs did not
+   run for the same reason — a compiler-only change does not reach them, so
+   this round says nothing about those five. The compiler job's fifteen-
+   minute budget was not exceeded with the two gates the previous round
+   added.
+
+   The round before's remote results, unchanged: every check passed at
    `359ac597` — all seventeen: the Linux compiler job
    with the bootstrap fixed point and corpus (13m28s), the same on arm64,
    FreeBSD in a VM, Windows, the AddressSanitizer + UBSan job (20m22s), the
