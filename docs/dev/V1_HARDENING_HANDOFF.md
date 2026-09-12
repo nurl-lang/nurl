@@ -34,14 +34,16 @@ amounts are computed sub-expressions clamped into the legal domain rather than
 literals, so the guard branch is live at -O0 and the oracle catches a guard
 that fires on a legal operand.
 
-**Twenty-five defects of one shape are closed: a construct the language
+**Twenty-eight defects of one shape are closed: a construct the language
 allows, reached by a path that skipped its own check.** Thirteen were found by
 sweeping declarations and simple statements; four more by continuing the same
 sweep into expression position, trait and impl bodies, match and select arms,
 and the block terminators; two more by the token-deletion sweep; six more by
 carrying the sweep into the surfaces that were still untouched — the
 `$`-import surface, generic instantiation, `%Trait` objects, the
-`inout` / `sink` conventions and the `pub` boundary.
+`inout` / `sink` conventions and the `pub` boundary; and **three more by
+giving the token-deletion sweep a second oracle**, which is the finding
+this round would pass on if it could pass on only one.
 
 Ten in the parser — a binding initialised by a block, a global constant with
 no value, a struct or generic function with no body, an unclosed type-parameter
@@ -159,6 +161,60 @@ and the impl-signature check dropped the skip it carried for exactly this
 case. `diag_dynsig_context.nu` keeps its subject — a synthetic buffer's error
 carrying trait, method and Self — on a witness that still reaches it.
 
+### The second oracle, and the three it found
+
+`mutate_delete.py` deletes one token and asks one question: does the compiler
+reject the file, or still emit the `main` the source declares? Every defect
+the declaration sweep found this round is invisible to that question — they
+keep `main` and emit IR only clang rejects, or IR that runs and is wrong. So
+the sweep learned a second question, `--clang`: of every mutant that exits 0,
+does clang accept the module? A compiler that exits 0 owes valid IR whatever
+was deleted.
+
+Four seeds, 60 corpus programs, **497 findings** — and three root causes.
+
+**A call whose callee names a VALUE was emitted as a direct call to it.**
+`gen_ident` has carried the taxonomy for years — `__ptr` is a local binding,
+`__global` a const or enum variant, `__param` a by-value parameter — and
+refuses a name that is none of them rather than emit an undefined `%name` only
+clang would catch. `gen_call` had no such guard: `: i a 5` then `( a )` emitted
+`call i64 @a()`, a reference to a global nothing defines. The dangerous
+spelling is a const: `( MAX )` emits `call i64 @MAX()` against
+`@MAX = global i64 10`, which clang ACCEPTS — the global has an address — and
+which jumps into the constant at run time. A clean compile, a clean link, and
+a segfault. One deleted token produces this shape everywhere, because
+`( print_vec a )` minus its callee name is `( a )`, which is why 300 of the
+497 mutants were this. The "is this binding callable" test was also too loose
+— it accepted any `{`-prefixed type, so a slice or option binding shadowed a
+function of the same name; it now asks whether the struct's FIRST field is a
+function pointer, at the struct's own nesting depth (a closure may return an
+aggregate, and `stdlib/ext/resolver.nu` has one that does).
+
+**Field 0 of an option or result literal is the TAG, and nothing checked it.**
+Every payload slot has five separate diagnostics for the ways it can disagree
+with its declared type; the tag slot had none, so `@ ?i { 1 3 }` emitted
+`insertvalue { i1, i64 } undef, i64 1, 0`. The spelling that reaches it is not
+a wrong tag but a MISSING one — `@ ?f { 3 }` shifts every value one slot left,
+which is what deleting a single `T` does. The check found a latent bug in the
+metamorphic harness on its first run: `tools/metamorph/spellings.py` had a
+tagless `@ ?( Rc i ) { r }` in one template.
+
+**A binding whose initialiser TERMINATED left the block without one.**
+`: i x ^ a` is legal and deliberately so — the `^`-vs-`^^` warning keeps it
+compiling — and the statement's remaining instructions (the store, the drop
+bookkeeping) belong in a dead block. `__handle_unreachable_stmt` parks exactly
+those, but it runs BETWEEN statements: it caught this when another statement
+followed and missed it when the binding was the block's last, leaving a basic
+block whose final instruction is a store. clang: `expected instruction opcode`
+at the closing brace, no source location. Three tree files' IR moved as a
+result — two corpus fixtures that exercise the shape on purpose and
+`nurlapi/main.nu` — each moving one dead store from after an `unreachable` to
+inside the `dead_N:` block where it belongs, with no behaviour change.
+
+All 497 findings are answered by those three: recompiled against the repaired
+compiler, **every one of them either fails to compile or emits IR clang
+accepts**.
+
 Opening the block-initialiser path also exposed a borrow-checker hole:
 `bck_esc_let` recorded a referent depth without comparing it, so a closure over
 a block-local `: ~` struct could be bound outside that block.
@@ -203,9 +259,9 @@ pinned by sha256 — including the zig that ships inside the published archive.
 
 ## Latest compiler verification
 
-Corpus **1,014 PASS / 19 SKIP** over 1,033 inputs, zero
+Corpus **1,017 PASS / 19 SKIP** over 1,036 inputs, zero
 FAIL/MISSING/ORPHAN. Normal build 58 s; tests 2 m 33 s. The sanitized
-corpus reports the same **1,014 PASS / 19 SKIP with zero AddressSanitizer,
+corpus reports the same **1,017 PASS / 19 SKIP with zero AddressSanitizer,
 UBSan or LSan findings**, zero timeouts and zero compile/link/run failures.
 All seven arithmetic methods, all 31 ownership methods, seven
 compiler-cleanup methods, two driver-path controls, the WASI IR control,
@@ -218,19 +274,28 @@ diagnostic gates pass.
 The check that matters most for a change that ADDS diagnostics is the tree
 sweep, and it is `tools/tree_sweep.sh` now rather than a paragraph: every
 tracked first-party `.nu` file — **1,790 of them**, the whole tracked
-inventory minus `bench/` — compiled with the parent commit's compiler and
-with this one produces **byte-identical** output and exit codes. The corpus
+inventory minus `bench/` — compiled with the branch-point compiler and with
+this one produces identical output and exit codes, and identical IR in all
+but the three files named below. The corpus
 cannot see code it does not contain; the tree can. (The earlier rounds
 reported 816; that was a hand-assembled subset, not a smaller tree.)
 
-**Thirteen** of the new `test_declaration_forms.py` rows FAIL against a
-compiler built from the parent commit and pass against this one, and **nine**
+**Nineteen** of the new `test_declaration_forms.py` rows FAIL against a
+compiler built from the parent commit and pass against this one, and **twelve**
 of the new `diag_*` corpus fixtures exit 0 on that compiler and are rejected
 by this one. That is what makes them controls rather than descriptions. The
-sharpest witnesses are the two that are wrong at RUN time, not just in the
+sharpest witnesses are the three that are wrong at RUN time, not just in the
 IR: `diag_default_on_inout.nu` compiles cleanly on the parent compiler, links
-cleanly, and segfaults; `diag_default_arg_type.nu` compiles cleanly and prints
-`x = 0` for a parameter whose declared default is 1.
+cleanly, and segfaults; `diag_call_names_a_value.nu` does the same, calling a
+data global; `diag_default_arg_type.nu` compiles cleanly and prints `x = 0`
+for a parameter whose declared default is 1.
+
+The tree sweep reports **three** intended differences against the branch
+point, all of them IR-only with identical exit codes and stderr:
+`compiler/tests/dead_store_both_arms_ret.nu`,
+`compiler/tests/should_warn_caret_xor.nu` and `nurlapi/main.nu` each move one
+dead store out of a block that had already terminated and into the `dead_N:`
+block that follows it. The other **1,787** files are byte-identical.
 
 The token-deletion sweep is clean through **seed 8**: seeds 5, 6, 7 and 8 —
 160 corpus programs, tens of thousands of mutants — produced no finding
@@ -292,17 +357,23 @@ against the repaired compiler.
    where the next one is. Four seeds in parallel is comfortable on eight
    cores and finishes inside two hours.
 
-   **`--clang` is a second oracle over the same mutants, and it changes what
-   the sweep can see.** "Exit 0 and `main` is there" is a weak invariant:
-   most of what the declaration sweep found this round KEEPS main and emits
-   IR only clang rejects. `--clang` asks, of every mutant that exits 0,
-   whether clang accepts the module — one invocation per survivor, and a
-   compiler that exits 0 owes valid IR whatever was deleted. Run against the
-   PARENT compiler on `diag_generic_type_args_many.nu` it reports four
-   findings, three of them this round's generic-arity defect reached by
-   deleting a token; against the repaired compiler, none. **Seeds 1-8 are
-   clean under the weak invariant only** — none of them has been run under
-   `--clang`, so that is where to start, not at seed 9.
+   **`--clang` is a second oracle over the same mutants, and it is where the
+   yield is.** "Exit 0 and `main` is there" is a weak invariant: most of what
+   this round found KEEPS main. `--clang` asks, of every mutant that exits 0,
+   whether clang accepts the module. Seeds 1-4 under the weak invariant alone
+   were clean; under `--clang` the same four seeds produced **497 findings
+   and three root causes** (see "The second oracle, and the three it found"
+   above). Seeds 5-8 are clean under the weak invariant and have NOT been run
+   under `--clang` — that, not seed 9, is where to go next.
+
+   It costs one clang invocation per surviving mutant, so a 40-file seed is
+   too big: use `--files 15` and run four seeds in parallel. Triage by root
+   cause before reading individual mutants — 300 of the 497 were one defect,
+   and the fastest way to see that is to group the clang error lines:
+   `grep -o "error: [^(]*" seed.log | sed "s/'[^']*'/'X'/g" | sort | uniq -c`.
+   Then, after a fix, recompile every saved mutant against the repaired
+   compiler; the count that still emits IR clang rejects is the honest
+   measure of what is left.
 
 4. **A01's remaining item is a recorded decision, not pending work.** Lexical
    stack lifetimes: every NURL alloca is entry-hoisted and lives for the whole

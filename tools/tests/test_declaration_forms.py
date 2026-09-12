@@ -186,6 +186,17 @@ DECLARATIONS = [
     # The named-argument spelling reaches the defaults by a different
     # path; it must answer the same.
     ("default_named_mismatch", "@ f i a f b = 1 → f { ^ b }\n@ g → f { ^ ( f a: 1 ) }", "rejects"),
+    # ── the callee of a call ─────────────────────────────────────────
+    # A call's first word is the thing being called, and only a function
+    # or something function-TYPED can be it. gen_ident has refused a name
+    # that resolves to nothing for years; gen_call emitted `call @name`
+    # for a name that resolves to a VALUE — an undefined global for a
+    # local, and for a const a call into the constant's own storage,
+    # which clang accepts and which segfaults.
+    ("call_const_value",      ": i MAX 10\n@ g → i { ( MAX ) ^ 0 }", "rejects"),
+    ("call_variant_value",    ": | C { Red Green }\n@ g → i { ( Red ) ^ 0 }", "rejects"),
+    ("call_closure_binding",  "@ g → i { : (@ i i) f \\ i x → i { ^ x }\n : i q ( f 5 ) ^ q }", "compiles"),
+    ("call_closure_param",    "@ run ( @ i i ) h i x → i { ^ ( h x ) }", "compiles"),
     # The grammar names four places a default is not available. All four.
     ("default_on_inout",      "@ f inout i b = 0 → v { = b 1 }", "rejects"),
     ("default_on_sink",       "@ f sink s b = `x` → i { ^ 1 }",  "rejects"),
@@ -244,6 +255,21 @@ STATEMENTS = [
     ("builtin_float",    "( nurl_print 1.5 )",                     "rejects"),
     ("builtin_literal",  "( nurl_print 5 )",                       "rejects"),
     ("builtin_ptr_int",  "( nurl_print ( nurl_str_int `s` ) )",    "rejects"),
+    # A binding whose initialiser is the `^` that was meant to be the
+    # function's return. The reading is correct — the binding takes the
+    # return as its value and the body has none left — and the IR on the
+    # way there was not: the store landed after the block's terminator.
+    ("bind_value_is_return", ": i a",                             "rejects"),
+    # The legal twin, which the '^'-vs-'^^' warning keeps compiling:
+    # `^ k` returns and the binding is dead code, but the block is
+    # well-formed.
+    ("bind_value_is_return_live", ": i x ^ k\n    ^ x",            "compiles"),
+    # A call whose callee names a local value, in the two shapes the
+    # token-deletion sweep produces by deleting a callee name.
+    ("call_local_value",  "( k )",                                  "rejects"),
+    ("call_local_value_args", "( k 1 2 )",                          "rejects"),
+    ("call_slice_value",  ": [i xs [i | 1 2 3]\n    ( xs )",        "rejects"),
+    ("call_struct_value", ": Pt p @ Pt { 1 2 }\n    ( p )",         "rejects"),
     # A field write gets the same check the read side has.
     ("field_store_ok",   ": ~ Pt q @ Pt { 1 2 }\n    = . q x 5",   "compiles"),
     ("field_store_bad",  ": ~ Pt q @ Pt { 1 2 }\n    = . q nope 5", "rejects"),

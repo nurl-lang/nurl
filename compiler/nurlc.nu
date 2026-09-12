@@ -2056,6 +2056,14 @@
 : ~ i g_lint_handles 0
 : ~ i g_lint_released 0
 : ~ i g_lint_gen 0
+// g_init_terminated — 1 while a `:` binding's own INITIALISER terminated
+// the block and the statement's remaining instructions (the store, the
+// drop bookkeeping) have been parked in a fresh dead label. It carries
+// "this store is dead" across to the store-time void check, which used
+// to read that from `g_did_ret` alone — and `g_did_ret` is necessarily 0
+// again once the dead label is open. Set by gen_let_or_struct, cleared
+// at the top of the next one, so it never outlives its statement.
+: ~ i g_init_terminated 0
 // 1 only during the main parse_program pass. Cleared before
 // flush_deferred_instantiations so synthetic generic monomorphisations
 // (e.g. vec_with_cap__i64), which are emitted after the parse and carry
@@ -8408,6 +8416,48 @@
     {}
 }
 
+// __ty_is_callable: does this LLVM type spell something a call can go
+// THROUGH — a bare function pointer (`i64 (i8*, i64)*`) or a closure
+// struct, whose first field is one (`{ i64 (i8*, i64)*, i8* }`)?
+//
+// The bare `{`-prefix test this replaces said yes to every anonymous
+// aggregate: a slice `{ i64*, i64 }`, an option `{ i1, i64 }`, a result.
+// `( xs )` on a slice binding was then emitted as a call through its
+// first field, and clang reported `'%r16' defined with type 'i64' but
+// expected 'ptr'` — a type error in generated code, with no NURL
+// location. The discriminator is what comes first at the STRUCT's own
+// nesting level: a `(` (the first field is a function pointer, and that
+// paren opens its parameter list) or a `,` (the first field ended, so it
+// was something else). Depth matters — a closure may RETURN an
+// aggregate, and `{ { i1, %RegIndex, %Err } (i8*, i8*, i8*)*, i8* }` has
+// three commas inside its return type before the paren that makes it a
+// function. stdlib/ext/resolver.nu holds exactly that binding, which is
+// how a depth-blind first version of this predicate announced itself.
+@ __min_i i a i b → i { ^ ? < a b a b }
+
+@ __ty_is_callable s ty → b {
+    ? != 0 ( nurl_str_starts ty `i64 (` ) { ^ T } {}
+    ? != 0 ( nurl_str_starts ty `void (` ) { ^ T } {}
+    ? != 0 ( nurl_str_starts ty `i8* (` ) { ^ T } {}
+    ? != 0 ( nurl_str_starts ty `i8*(` ) { ^ T } {}
+    ? == 0 ( nurl_str_starts ty `{` ) { ^ F } {}
+    : i n ( nurl_str_len ty )
+    : ~ i depth 0
+    : ~ i i 1
+    ~ < i n {
+        : i c ( nurl_str_get ty i )
+        ? == c 123 { = depth + depth 1 } {}
+        ? == c 125 {
+            ? == depth 0 { ^ F } {}
+            = depth - depth 1
+        } {}
+        ? & == depth 0 == c 40 { ^ T } {}
+        ? & == depth 0 == c 44 { ^ F } {}
+        = i + i 1
+    }
+    F
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : ~ s fname ( nurl_lex_val lex )
@@ -8422,10 +8472,36 @@
     // Resolve the callable before reading any declaration ownership contract.
     // A closure parameter/local shadows a global of the same spelling.
     : s __cal_ll ( nurl_llty ( nurl_sym_get syms fname ) )
-    : b __cal_fnish | | | | != 0 ( nurl_str_starts __cal_ll `i64 (` ) != 0 ( nurl_str_starts __cal_ll `void (` ) != 0 ( nurl_str_starts __cal_ll `i8* (` ) != 0 ( nurl_str_starts __cal_ll `i8*(` ) != 0 ( nurl_str_starts __cal_ll `{` )
+    : b __cal_fnish ( __ty_is_callable __cal_ll )
     : b __callee_shadowed & | != 0 ( nurl_sym_len2 syms fname `__ptr` )
     != 0 ( nurl_sym_len2 syms fname `__param` )
     __cal_fnish
+    // The callee names a VALUE, not a function. gen_ident has carried
+    // this taxonomy for years on the read side — `__ptr` is a local /
+    // match-payload / loop / inout / closure-capture binding, `__global`
+    // a const or enum variant, `__param` a by-value parameter — and it
+    // rejects a name that is none of them rather than emit an undefined
+    // `%name` that only clang would catch. The CALL side had no such
+    // guard: `: i a 5` then `( a )` emitted `call i64 @a()`, a reference
+    // to a global nothing defines; `: i MAX 10` then `( MAX )` emitted
+    // `call i64 @MAX()`, which clang ACCEPTS — `@MAX` is a data global —
+    // and which jumps into the constant at run time. One deleted token
+    // produces this shape everywhere (`( print_vec a )` minus its callee
+    // name is `( a )`), so the token-deletion sweep's clang oracle found
+    // it in three hundred mutants across thirty corpus programs.
+    //
+    // A binding whose type IS callable is the legitimate case and is
+    // exactly `__callee_shadowed` above: a closure binding, a closure
+    // parameter, a function-pointer field read into one.
+    ? & & ! __cal_fnish
+    | | != 0 ( nurl_sym_len2 syms fname `__ptr` )
+    != 0 ( nurl_sym_len2 syms fname `__param` )
+    != 0 ( nurl_sym_len2 syms fname `__global` )
+    != 0 ( nurl_str_len __cal_ll )
+    { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        `'` fname `' names a value of type '` ( llvm_to_nurl __cal_ll ) )
+        ( nurl_str_cat3 `', not a function, so '( ` fname ` … )' has nothing to call. Only a closure or function-pointer binding can be called through — a '( @ ret params )'-typed local, parameter or field. If the name was meant as an ARGUMENT, the callee is missing: a call is '( name args )', and the first word inside the parentheses is always the thing being called.` ) ) ) }
+    {}
     // A call is the only thing that can produce a borrow; clear the
     // side-channel so a stale one from a previous call cannot be read
     // by the `:` that binds THIS call's result.
@@ -16483,6 +16559,8 @@
 }
 
 @ gen_let_or_struct i lex i syms i cg → s {
+    // One statement's worth of lifetime — see g_init_terminated.
+    = g_init_terminated 0
     // Borrow checker: source line of the `:` token, for the record.
     : i bck_line ( nurl_lex_line lex )
     // …and its column. The handle lint reports at the DECLARATION; by
@@ -16557,6 +16635,21 @@
         ( nurl_sym_def syms `__last_phi_cause__` `` )
         ( nurl_sym_def syms `__last_phi_definite__` `` )
         : ~ s val ( gen_expr lex syms cg )
+        // The INITIALISER terminated the block — `: i x ^ a` returns and
+        // the binding is dead, an idiom the `^`-vs-`^^` warning
+        // deliberately keeps compiling. Everything this statement emits
+        // from here (the store, the drop bookkeeping) lands after that
+        // terminator, and __handle_unreachable_stmt only runs between
+        // STATEMENTS: it caught this when another statement followed and
+        // missed it when the binding was the block's last, leaving a
+        // basic block whose final instruction is a store. clang reports
+        // `expected instruction opcode` at the closing brace, with no
+        // source location. Park the remainder in a dead block here, the
+        // same cure one level finer.
+        ? != 0 g_did_ret
+        { ( __handle_unreachable_stmt lex syms cg )
+            = g_init_terminated 1 }
+        {}
         : s vt ( nurl_get_last_type )
         // Mutable string binding initialised from a string LITERAL: own
         // a heap copy and track it from birth. The accumulator idiom
@@ -16827,6 +16920,13 @@
             ( nurl_sym_def syms `__last_phi_cause__` `` )
             ( nurl_sym_def syms `__last_phi_definite__` `` )
             : ~ s val ( gen_expr lex syms cg )
+            // See the twin above: an initialiser that terminated leaves
+            // this statement's remaining instructions past the block's
+            // terminator.
+            ? != 0 g_did_ret
+            { ( __handle_unreachable_stmt lex syms cg )
+                = g_init_terminated 1 }
+            {}
             : s vt ( nurl_get_last_type )
             // Literals and proved owned local strings give a mutable
             // binding its own copy; preserve unproved/opaque identities.
@@ -19165,6 +19265,11 @@
             // wearing a different syntax.
             ( bck_agg_field_alias syms fld_first_val ( nurl_lex_line lex ) ) }
         {}
+        // The field's own position, taken before its expression is
+        // consumed: a report anchored where the lexer STOPS points at the
+        // NEXT field, which is the wrong-line anchor the gate rejects.
+        : i __fld_line ( nurl_lex_line lex )
+        : i __fld_col ( nurl_lex_col lex )
         : s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
         // A POINTER read out of something else, stored into this
@@ -19380,6 +19485,22 @@
         }
         {}
 
+        // Field 0 of an option or result literal is the TAG, and the tag
+        // is a bool: `T` for present / Ok, `F` for absent / Err. Every
+        // payload slot below is checked against its declared type, and
+        // the tag slot was checked against nothing — so `@ ?i { 1 3 }`
+        // and `@ ?i { `x` 3 }` emitted `insertvalue { i1, i64 } undef,
+        // i64 1, 0`, invalid IR that only clang saw. The spelling that
+        // reaches it in practice is not a wrong tag but a MISSING one:
+        // `@ ?f { 3 }` slides the payload into field 0, which is how
+        // deleting a single `T` from an option literal produced this.
+        ? & & == idx 0 ( seq ( nurl_str_slice agg_ty 0 ( __min_i 6 ( nurl_str_len agg_ty ) ) ) `{ i1, ` )
+        ! ( seq ( nurl_llty fty ) `i1` )
+        { ( die_pos lex __fld_line __fld_col ( nurl_str_cat ( nurl_str_cat4
+            `field 0 of this option/result literal is the TAG and must be a bool ('T' present / Ok, 'F' absent / Err), but this value has type '`
+            ( llvm_to_nurl ( nurl_llty fty ) ) `'` `` )
+            `. A literal is written '@ ?T { T payload }' or '@ !T E { F err }' — if the payload is there but the tag is not, every value has shifted one slot left.` ) ) }
+        {}
         // For payload fields (idx > 0): conversion depends on aggregate type.
         // opt/res types ({ i1, ... }) need i64 coercion; enum types need ptr coercion.
         : ~ s actual_fval ( nurl_str_cat fval `` )
@@ -20507,7 +20628,7 @@
     // the join leaves g_did_ret=1 and a 'void' last-type residue that is
     // not a value at all. The nominal/aggregate checks below used to fire
     // on that residue and reject code that cannot run.
-    ? & ( seq from_ty `void` ) != 0 g_did_ret { ^ val } {}
+    ? & ( seq from_ty `void` ) | != 0 g_did_ret != 0 g_init_terminated { ^ val } {}
     // A void source can NEVER initialise anything — it is not a type clash,
     // it is the absence of a value. Before this check, `: i x ?? m { T v → v
     // F → 0.0 }` (arms of different types) bound `undef` and the program

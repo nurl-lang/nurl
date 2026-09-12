@@ -148,7 +148,15 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 20, not 15. The job was measured at 13m28s before the two
+    # diagnostic gates below joined it, and the first run with them was
+    # cancelled at 15m03s — in the h2spec gate, long after the new steps
+    # had passed. A cancelled run reads as infrastructure trouble rather
+    # than as a gate saying no, which is the worst failure mode a gate
+    # can have, so the budget moves rather than the coverage. Watch this
+    # number: the job grows with the corpus, and the next thing added
+    # here should come with a measurement, not a hope.
+    timeout-minutes: 20
     container:
       # containers/ci/Dockerfile — clang/llvm, the FFI dev libraries,
       # qemu + grub for the unikernel gates, gdb, zstd, and zig at
