@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_match_option_nonexhaustive.nu:22:5: error: non-exhaustive match: no arm covers 'F' (absent). An option and a result each have exactly two arms, 'T' and 'F' — handle both, or add a wildcard arm '_ → body'. The uncovered path yields an undefined value, not a zero.
+    ( nurl_print_int v )
+    ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

@@ -231,6 +231,150 @@ IMPORTS = [
     ("import_inline",        "inline $ `lib.nu`",     "rejects"),
 ]
 
+FFI = [
+    ("ffi_plain",          "& `libc` @ xhelp s msg → i",                  "compiles"),
+    ("ffi_no_param_name",  "& `libm` @ xhelp f → f",                      "compiles"),
+    ("ffi_no_params",      "& `libc` @ xhelp → i",                        "compiles"),
+    ("ffi_variadic",       "& `libc` @ xpf s fmt ... → i",                "compiles"),
+    ("ffi_variadic_only",  "& `libc` @ xpf ... → i",                      "compiles"),
+    ("ffi_no_arrow",       "& `libc` @ xhelp s msg",                      "rejects"),
+    ("ffi_no_name",        "& `libc` @ → i",                              "rejects"),
+    ("ffi_no_at",          "& `libc` xhelp s msg → i",                    "rejects"),
+    ("ffi_unknown_ret",    "& `libc` @ xhelp s msg → NoSuchType",         "rejects"),
+    ("ffi_unknown_param",  "& `libc` @ xhelp NoSuchType m → i",           "rejects"),
+    ("ffi_default_value",  "& `libc` @ xhelp s msg = 1 → i",              "rejects"),
+    ("ffi_generic",        "& `libc` @ xhelp [T] T msg → i",              "rejects"),
+    ("ffi_body",           "& `libc` @ xhelp s msg → i { ^ 0 }",          "rejects"),
+    ("ffi_redecl_same",    "& `libc` @ xhelp i a → i\n& `libc` @ xhelp i a → i", "compiles"),
+    ("ffi_redecl_diff",    "& `libc` @ xhelp i a → i\n& `libc` @ xhelp f a → i", "rejects"),
+    # The '...' marker is LAST and appears once. The parameter loop took
+    # one wherever it landed, and the `declare` line and the call-site
+    # signature then disagreed about what the declaration said: a trailing
+    # parameter emitted `(i8*, ..., i64)` and a second marker
+    # `(i8*, ..., ...)`, both of which llvm-as rejects. A LEADING marker
+    # was overwritten in the declare and kept at the call site, so the
+    # module declared `@xpf(i8*)` and called `xpf(...)`.
+    ("ffi_ellipsis_mid",   "& `libc` @ xpf s fmt ... i n → i",            "rejects"),
+    ("ffi_ellipsis_twice", "& `libc` @ xpf s fmt ... ... → i",            "rejects"),
+    ("ffi_ellipsis_first", "& `libc` @ xpf ... s fmt → i",                "rejects"),
+    # The library name is what turns a missing dev package into a compile
+    # error. An empty one did not PASS that gate, it skipped it.
+    ("ffi_empty_library",  "& `` @ xhelp i a → i",                        "rejects"),
+]
+
+# Call sites against an FFI declaration, placed inside main.
+FFI_CALLS = [
+    ("ffi_call_ok",        "& `libc` @ xhelp i a → i",  ": i r ( xhelp 1 )",       "compiles"),
+    ("ffi_call_few",       "& `libc` @ xhelp i a → i",  ": i r ( xhelp )",         "rejects"),
+    ("ffi_call_many",      "& `libc` @ xhelp i a → i",  ": i r ( xhelp 1 2 )",     "rejects"),
+    ("ffi_call_literal",   "& `libc` @ xhelp s a → i",  ": i r ( xhelp 5 )",       "rejects"),
+    ("var_call_tail",      "& `libc` @ xpf s f ... → i", ": i r ( xpf `x` 1 2 3 )", "compiles"),
+    ("var_call_prefix",    "& `libc` @ xpf s f ... → i", ": i r ( xpf `x` )",      "compiles"),
+    # '...' makes the TAIL optional, never the fixed prefix. A variadic
+    # symbol gets no `__arity`, so the call-site count check skipped it
+    # entirely — including the minimum the declaration does state.
+    ("var_call_no_fixed",  "& `libc` @ xpf s f ... → i", ": i r ( xpf )",          "rejects"),
+    ("var_call_literal",   "& `libc` @ xpf s f ... → i", ": i r ( xpf 5 5 )",      "rejects"),
+]
+
+# '\\' propagation, the '?T' / '!T E' surfaces, and '#' casts. Each row is
+# a whole program: these forms are about a function's RETURN type, which
+# the statement template fixes.
+TRY_AND_CAST = [
+    ("try_res_in_res",  "@ p i a → !i i { ^ @ !i i { T a } }\n"
+                        "@ g → !i i { : i v \\ ( p 1 ) ^ @ !i i { T v } }", "compiles"),
+    ("try_opt_in_opt",  "@ p i a → ?i { ^ @ ?i { T a } }\n"
+                        "@ g → ?i { : i v \\ ( p 1 ) ^ @ ?i { T v } }",     "compiles"),
+    ("try_err_match",   "@ p i a → !i s { ^ @ !i s { T a } }\n"
+                        "@ g → !i s { : i v \\ ( p 1 ) ^ @ !i s { T v } }", "compiles"),
+    ("try_err_differ",  "@ p i a → !i s { ^ @ !i s { T a } }\n"
+                        "@ g → !i i { : i v \\ ( p 1 ) ^ @ !i i { T v } }", "rejects"),
+    # The enclosing function must be able to CARRY the failure. When it
+    # returned anything else the fail path fell to `zeroinitializer`,
+    # which is not propagation: `→ i` returned 0 and `→ s` returned a
+    # null pointer that segfaulted the moment it was printed.
+    ("try_res_in_int",  "@ p i a → !i i { ^ @ !i i { T a } }\n"
+                        "@ g → i { : i v \\ ( p 1 ) ^ v }",                 "rejects"),
+    ("try_opt_in_int",  "@ p i a → ?i { ^ @ ?i { T a } }\n"
+                        "@ g → i { : i v \\ ( p 1 ) ^ v }",                 "rejects"),
+    ("try_res_in_str",  "@ p i a → !i i { ^ @ !i i { T a } }\n"
+                        "@ g → s { : i v \\ ( p 1 ) ^ `x` }",               "rejects"),
+    ("try_res_in_void", "@ p i a → !i i { ^ @ !i i { T a } }\n"
+                        "@ g → v { : i v \\ ( p 1 ) }",                     "rejects"),
+    # Both shapes start `{ i1, `, so "can it carry a failure" accepts
+    # either — and the fail path then zeroes the OTHER shape: an option
+    # tried in a result function returns Err with an invented payload of
+    # 0, a result tried in an option function drops the error entirely.
+    ("try_res_in_opt",  "@ p i a → !i i { ^ @ !i i { T a } }\n"
+                        "@ g → ?i { : i v \\ ( p 1 ) ^ @ ?i { T v } }",     "rejects"),
+    ("try_opt_in_res",  "@ p i a → ?i { ^ @ ?i { T a } }\n"
+                        "@ g → !i i { : i v \\ ( p 1 ) ^ @ !i i { T v } }", "rejects"),
+    ("try_over_int",    "@ p i a → i { ^ a }\n"
+                        "@ g → !i i { : i v \\ ( p 1 ) ^ @ !i i { T v } }", "rejects"),
+    # '?T' / '!T E' literals: field 0 is the TAG.
+    ("opt_lit_some",    "@ g → ?i { ^ @ ?i { T 5 } }",                        "compiles"),
+    ("opt_lit_none",    "@ g → ?i { ^ @ ?i { F } }",                          "compiles"),
+    ("opt_lit_no_tag",  "@ g → ?i { ^ @ ?i { 5 } }",                          "rejects"),
+    ("opt_lit_extra",   "@ g → ?i { ^ @ ?i { T 5 6 } }",                      "rejects"),
+    ("res_lit_ok",      "@ g → !i i { ^ @ !i i { T 5 } }",                    "compiles"),
+    ("res_lit_err",     "@ g → !i i { ^ @ !i i { F 5 } }",                    "compiles"),
+    ("res_lit_no_tag",  "@ g → !i i { ^ @ !i i { 5 } }",                      "rejects"),
+    # An option and a result each have exactly two arms. The enum
+    # spelling of a non-exhaustive match has been rejected for years;
+    # these two fell through check_exhaustive's `__variants` lookup and
+    # the uncovered path became `undef` in the join phi.
+    ("match_opt_full",  "@ p i a → ?i { ^ @ ?i { T a } }\n"
+                        "@ g → i { : ?i o ( p 1 ) ^ ?? o { T v → v F → 0 } }", "compiles"),
+    ("match_opt_wild",  "@ p i a → ?i { ^ @ ?i { T a } }\n"
+                        "@ g → i { : ?i o ( p 1 ) ^ ?? o { T v → v _ → 0 } }", "compiles"),
+    ("match_opt_no_f",  "@ p i a → ?i { ^ @ ?i { T a } }\n"
+                        "@ g → i { : ?i o ( p 1 ) ^ ?? o { T v → v } }",       "rejects"),
+    ("match_opt_no_t",  "@ p i a → ?i { ^ @ ?i { T a } }\n"
+                        "@ g → i { : ?i o ( p 1 ) ^ ?? o { F → 0 } }",         "rejects"),
+    ("match_res_no_f",  "@ p i a → !i i { ^ @ !i i { T a } }\n"
+                        "@ g → i { : !i i r ( p 1 ) ^ ?? r { T v → v } }",     "rejects"),
+    ("match_res_okerr", "@ p i a → !i i { ^ @ !i i { T a } }\n"
+                        "@ g → i { : !i i r ( p 1 ) ^ ?? r { Ok v → v F e → e } }", "rejects"),
+    # '#' converts a value; it does not reinterpret one aggregate as
+    # another. The named-struct source reached the final no-op because
+    # `%Struct` sources are handled above ONLY for an integer target.
+    ("cast_widen",      "@ g → i { ^ # i64 # u8 5 }",                          "compiles"),
+    ("cast_struct_f0",  ": Pt { i x i y }\n@ m → Pt { ^ @ Pt { 1 2 } }\n"
+                        "@ g → i { ^ # i ( m ) }",                             "compiles"),
+    ("cast_same_struct", ": Pt { i x i y }\n@ m → Pt { ^ @ Pt { 1 2 } }\n"
+                        "@ g → Pt { ^ # Pt ( m ) }",                           "compiles"),
+    ("cast_struct_other", ": Pt { i x i y }\n: Q { i a i b i c }\n"
+                        "@ m → Pt { ^ @ Pt { 1 2 } }\n@ g → Q { ^ # Q ( m ) }", "rejects"),
+    ("cast_unknown_ty", "@ g → i { ^ # NoSuchType 5 }",                        "rejects"),
+    ("cast_agg_source", "@ p i a → ?i { ^ @ ?i { T a } }\n"
+                        "@ g → i { ^ # i ( p 1 ) }",                           "rejects"),
+    # A binding declared `*T` wants an ADDRESS. An aggregate VALUE fell
+    # through all six clauses of the never-legal-mix battery: the integer
+    # clause knows only integers, the nominal clause requires neither side
+    # to be a pointer, and the pointer clause runs the other direction.
+    # Found by deleting one '*' from a cast (`# *Node x` → `# Node x`).
+    ("bind_ptr_from_ptr",  ": Node { i a i b }\n@ g → i { : *Node p # *Node 0 ^ 0 }", "compiles"),
+    ("bind_ptr_from_val",  ": Node { i a i b }\n@ g → i { : *Node p # Node 0 ^ 0 }",  "rejects"),
+    ("bind_ptr_from_opt",  "@ p i a → ?i { ^ @ ?i { T a } }\n"
+                           "@ g → i { : *i q ( p 1 ) ^ 0 }",                    "rejects"),
+    ("bind_ptr_from_slice", "@ g → i { : [i xs [i | 1 2 3]\n    : *i q xs ^ 0 }", "rejects"),
+]
+
+# Trait / impl / marker subjects. An impl's SUBJECT is a type position.
+IMPLS = [
+    ("impl_known",        ": Pt { i x }\n% Boxed [T] {\n    @ unwrap T self → i\n}\n"
+                          "% Boxed Pt { @ unwrap Pt self → i { ^ . self x } }", "compiles"),
+    ("impl_unknown_type", "% Boxed [T] {\n    @ unwrap T self → i\n}\n"
+                          "% Boxed NoSuchType { @ unwrap i self → i { ^ 0 } }", "rejects"),
+    # A marker asserts what the structural derivation cannot see. On a
+    # misspelled subject it asserted it about nothing at all, silently —
+    # and the type it was written to protect stayed Send.
+    ("marker_known",      ": Db { s handle }\n% NotSend Db { }",              "compiles"),
+    ("marker_send_known", ": Db { s handle }\n% Send Db { }",                 "compiles"),
+    ("marker_unknown",    ": Db { s handle }\n% NotSend Dbb { }",             "rejects"),
+    ("marker_sync_unknown", ": Db { s handle }\n% Sync Nope { }",             "rejects"),
+]
+
 IMPORT_LIB = "@ lib_helper → i { ^ 7 }\n"
 
 # Statement forms, placed inside main's body ahead of the print.
@@ -366,6 +510,34 @@ class DeclarationForms(unittest.TestCase):
     def check(self, name, src, expectation):
         self.verdict(name, self.compile_source(src), expectation)
 
+    def clang_verdict(self, stdout):
+        """The second question, asked of everything that compiles: does
+        clang accept the module? "Exit 0 and main is there" is a weak
+        invariant — most of what the 2026-09-12 sweeps found KEEPS main
+        and emits IR only the LLVM parser or verifier objects to. Asking
+        it here is what lets a hand-written row see those.
+
+        Note `clang -c`, not `clang -fsyntax-only -x ir`: the latter does
+        not parse the IR at all and exits 0 on a module llvm-as rejects.
+        A probe written that way reported every one of these forms clean.
+        A missing clang is not a finding — skip the question then."""
+        with tempfile.TemporaryDirectory() as d:
+            ll = os.path.join(d, "m.ll")
+            with open(ll, "wb") as f:
+                f.write(stdout)
+            try:
+                c = subprocess.run(
+                    ["clang", "-c", "-Wno-override-module", ll,
+                     "-o", os.path.join(d, "m.o")],
+                    capture_output=True, timeout=120)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                return None
+            if c.returncode == 0:
+                return None
+            errs = [l for l in c.stderr.decode("utf-8", "replace").splitlines()
+                    if "error:" in l]
+            return errs[0] if errs else "clang rejected the module"
+
     def verdict(self, name, r, expectation):
         emitted = b"define i32 @main(" in r.stdout
         if expectation == "rejects":
@@ -388,6 +560,12 @@ class DeclarationForms(unittest.TestCase):
                 emitted,
                 f"{name}: compiled cleanly but emitted no main — the "
                 f"declaration under test swallowed it")
+            # …and the stronger one: a compiler that exits 0 owes valid IR.
+            why = self.clang_verdict(r.stdout)
+            self.assertIsNone(
+                why,
+                f"{name}: compiled cleanly but emitted IR clang rejects — "
+                f"{why}")
 
     def test_declaration_forms(self):
         for name, decl, expectation in DECLARATIONS:
@@ -403,6 +581,32 @@ class DeclarationForms(unittest.TestCase):
         for name, stmt, expectation in MATCHES:
             with self.subTest(form=name):
                 self.check(name, MATCH_TEMPLATE % stmt, expectation)
+
+    def test_ffi_forms(self):
+        for name, decl, expectation in FFI:
+            with self.subTest(form=name):
+                self.check(name, decl + "\n" + MAIN, expectation)
+
+    def test_ffi_call_forms(self):
+        for name, decl, stmt, expectation in FFI_CALLS:
+            with self.subTest(form=name):
+                src = (decl + "\n@ main → i {\n    " + stmt +
+                       "\n    ( nurl_print `MAIN RAN\\n` )\n    ^ 0\n}\n")
+                self.check(name, src, expectation)
+
+    def test_try_and_cast_forms(self):
+        # `g` must be CALLED or the whole declaration is dead-code
+        # eliminated and the form under test never reaches codegen.
+        for name, decl, expectation in TRY_AND_CAST:
+            with self.subTest(form=name):
+                src = (decl + "\n@ main → i {\n    ( g )\n"
+                       "    ( nurl_print `MAIN RAN\\n` )\n    ^ 0\n}\n")
+                self.check(name, src, expectation)
+
+    def test_impl_forms(self):
+        for name, decl, expectation in IMPLS:
+            with self.subTest(form=name):
+                self.check(name, decl + "\n" + MAIN, expectation)
 
     def test_import_forms(self):
         # A real directory with a real sibling: an import resolves from

@@ -24,6 +24,11 @@
     ^ \ i x → i { ^ * x factor }
 }
 
+@ unwrap_seed ? i opt_num → ?i {
+    : ~ i seed \ opt_num
+    ^ @ ?i { T seed }
+}
+
 @ main → i {
     ( nurl_print `== Torture chamber ==\n` )
 
@@ -76,8 +81,14 @@
 
     // 4. Try-operaattori (\) epätavallisessa paikassa: loopin alustuksessa.
     // Purkaa 7:n suoraan loop_cnt-muuttujaan.
+    //
+    // '\' tapahtuu 'unwrap_seed'issä, koska se palauttaa epäonnistumisen
+    // OMASTA funktiostaan: paluutyypin on oltava '?T' tai '!T E'.
+    // '@ main → i' ei ole sellainen — siellä None olisi muuttunut hiljaa
+    // nollaksi. Disambiguaatio '\'-sulkimen ja '\'-tryn välillä on yhä se,
+    // mitä tämä rivi testaa.
     : ?i opt_num @ ?i { T 7 }
-    : ~ i loop_cnt \ opt_num
+    : ~ i loop_cnt ?? ( unwrap_seed opt_num ) { T v → v F → 0 }
     ( nurl_print `[4] loop_cnt start=` )
     ( nurl_print ( nurl_str_int loop_cnt ) )
     ( nurl_print `\n` )

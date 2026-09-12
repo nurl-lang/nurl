@@ -34,16 +34,20 @@ amounts are computed sub-expressions clamped into the legal domain rather than
 literals, so the guard branch is live at -O0 and the oracle catches a guard
 that fires on a legal operand.
 
-**Thirty-six defects of one shape are closed: a construct the language
+**Forty-five defects of one shape are closed: a construct the language
 allows, reached by a path that skipped its own check.** Thirteen were found by
 sweeping declarations and simple statements; four more by continuing the same
 sweep into expression position, trait and impl bodies, match and select arms,
 and the block terminators; two more by the token-deletion sweep; six more by
 carrying the sweep into the surfaces that were still untouched — the
 `$`-import surface, generic instantiation, `%Trait` objects, the
-`inout` / `sink` conventions and the `pub` boundary; and **eleven more by
+`inout` / `sink` conventions and the `pub` boundary; **eleven more by
 giving the token-deletion sweep a second oracle**, which is the finding
-this round would pass on if it could pass on only one.
+this round would pass on if it could pass on only one; and **nine more from
+the last five surfaces item 1 had left** — the `&`-FFI surface, `\`
+try-propagation, the `?T` / `!T E` match, the `#` cast target, a select
+arm's diagnostics and an aggregate bound to a pointer (see "The last five
+surfaces" below).
 
 Ten in the parser — a binding initialised by a block, a global constant with
 no value, a struct or generic function with no body, an unclosed type-parameter
@@ -96,8 +100,10 @@ associated type instead of skipping it — that skip is what made an
 unterminated body dangerous, and it was also silently accepting `% Sh { 42 }`
 and an impl body full of junk.
 
-`tools/tests/test_declaration_forms.py` pins the class with one invariant over
-**95 forms** in three tables; the corpus pins each fix with its own rejection.
+`tools/tests/test_declaration_forms.py` pins the class over **208 forms** in
+eight tables, under two invariants — a clean exit must keep `main`, and the
+IR it emitted must be one clang accepts; the corpus pins each fix with its
+own rejection.
 Six more from the import / generic / `dyn` / convention / visibility sweep,
 and each is the same question answered in one spelling and not the other.
 
@@ -334,51 +340,286 @@ controls cover it. The installer now stages its unpack, so a failed extraction
 leaves the existing install intact, and every tool a workflow downloads is
 pinned by sha256 — including the zig that ships inside the published archive.
 
+### The last five surfaces, and the nine they held
+
+Item 1 named five surfaces the sweep had not reached: the `&`-FFI surface,
+`!T E` / `?T` try-propagation, the `#` cast surface, `select` / channel
+typing, and `Send`/`Sync` derivation. Working them gave seven of the same
+shape, and two more turned up afterwards (below), and it is worth saying
+which two surfaces gave nothing: **`select` /
+channel typing held up** — a wrong element type, a non-channel scrutinee, an
+undeclared channel, a `_`-only select and a mistyped `chan_send` are each
+already rejected — and **`Send`/`Sync` derivation held up as derivation**;
+what failed there was the marker's SUBJECT, which is a type position, not
+the derivation.
+
+**The `...` variadic marker was not required to be last, or to be one.**
+The grammar is `ffi_param* ( '...' )? '→' type`. The parameter loop took a
+`...` wherever it landed and carried on, and the two consumers of the
+parameter list then disagreed about what the declaration said. A parameter
+AFTER the marker emitted `declare i64 @xpf(i8*, ..., i64)` and a second
+marker emitted `(i8*, ..., ...)`; llvm-as rejects both. A LEADING marker is
+worse than either: the first parameter's `pct == 0` branch OVERWRITES the
+accumulated string, destroying the marker in the `declare` while
+`__variadic_sig` keeps it — so the module declared `@xpf(i8*)` and emitted
+`call i64 (...) @xpf(i8* %r1)`, a variadic call against a non-variadic
+callee. That one exits 0 and clang accepts it; it is a real ABI difference
+on every target that passes variadic arguments differently from fixed ones,
+reported by nothing at all.
+
+**A variadic call's FIXED prefix was never counted.** `...` makes the TAIL
+optional, never the parameters ahead of it. `gen_ffi_decl` registers no
+`__arity` for a variadic symbol — there is no single right count — and the
+call-site check was conditioned on `! is_variadic`, so it skipped the
+minimum as well. `( xpf )` against `xpf s fmt ... → i` emitted
+`call i64 (i8*, ...) @xpf()`: "not enough parameters specified for call".
+The count was already recorded, as `__variadic_fixed`, for the
+argument-promotion path; nothing had ever asked it this question. The
+comment on the non-variadic registration says why that check exists — "a
+missing argument read an unset ABI register, silently" — and this is the
+same hazard one spelling over.
+
+**An empty FFI library name skipped its gate rather than failing it.** The
+library is what turns a missing dev package into a compile error instead of
+a link error, through the `stdlib/runtime.<lib>` sentinel; the check ran
+under `? > llen 0`, so `& `` @ f …` silently disabled it. The `$` import
+surface has rejected an empty path for the same reason.
+
+**`\` in a function whose return type cannot carry the failure.** This is
+the round's segfault. The grammar says `\` "immediately returns the same
+shape from the enclosing function, propagating the error value unchanged",
+and the error-type check beside it (T8) has compared the two error types for
+years — but only when the enclosing function returns a Result. When it
+returned anything else there was nothing to compare against and nothing said
+so, and the fail path fell to the `zeroinitializer` default. That is not
+propagation: it discards what the callee reported and hands the caller a
+zero of the declared type. For `→ i` that is 0, indistinguishable from a
+real answer. For `→ s` it is `ret i8* zeroinitializer`, and printing the
+result is a null dereference — a clean compile, a clean link and a
+segfault. `stdlib/core/result.nu` already named the alternative in so many
+words: at "a site that cannot `\`-propagate (a `→ i` main, a callback with
+a fixed signature)", `res_expect` / `res_unwrap` take the payload or PANIC.
+The compiler had never enforced the sentence its own stdlib wrote.
+
+Two corpus fixtures were written that way and are now the other spelling —
+`routertrap.nu` and `test_06_torture_chamber.nu` (and its copy under
+`examples/`), each keeping the `\` it exists to exercise, in a helper whose
+return type can carry the failure, with both goldens byte-identical.
+
+**An option and a result are not interchangeable across `\`.** Both shapes
+start `{ i1, `, so the check above accepts either; what it cannot see is
+that the fail path then zeroes the OTHER shape. An option tried inside a
+`!T E` function returns Err with an error payload of 0 that no callee ever
+produced — an invented error, which is worse than a dropped one — and a
+result tried inside a `?T` function returns None with the Err payload gone.
+Both conversions are real and the stdlib spells them (`res_ok`,
+`opt_ok_or`); requiring one is what keeps `\` a propagation.
+
+**A non-exhaustive match on `?T` / `!T E` yielded `undef`.** The grammar
+states one rule for all three scrutinee kinds, and the enum spelling has
+been rejected for years. `check_exhaustive` looks the variants up by enum
+NAME in a `__variants` entry only a user enum has, so an option or result
+scrutinee fell straight through the loop. The uncovered path reaches the
+join as `phi i64 [ %r8, %arm_2 ], [ undef, %next_3 ]`: `?? o { T v → v }`
+over a None yields whatever was in the register, not a zero and not the same
+value twice.
+
+**`#` between two named struct types was a reinterpret.** Nothing above the
+final fallthrough in `gen_cast` converts an aggregate, so that path handed
+the operand register back wearing the TARGET's type. For two integer
+spellings of one width that is right — the bits are the value. For a named
+struct it is not a conversion at all: `ret %Q %r1` with `%r1` a `%Pt`, two
+structs of different field counts, and clang answering about generated IR
+with no NURL location. The anonymous-aggregate source is diagnosed a few
+lines above with the same reasoning and almost the same words; the named one
+reached the fallthrough because `%Struct` sources are handled far above ONLY
+when the destination is an integer.
+
+**An impl's SUBJECT was the last type position with no declared-type
+check** — the hole `Z NoSuchType`, the `#` cast target and `%Trait` each
+closed in their own spelling. The marker traits are what make it matter.
+`% NotSend Db { }` asserts a danger the structural derivation cannot see (a
+`sqlite3*` is an `s`, and `s` is Send); on a MISSPELLED subject it asserted
+it about a type that does not exist. Nothing said so, the real `Db` stayed
+Send, and it crossed the thread boundary the marker was written to forbid.
+A safety assertion that silently does nothing is worse than none, because
+the author reads it and stops looking. `check_type_known` is not the
+instrument here — it rejects a bare generic TEMPLATE name, and an impl
+subject is allowed to be one (`% NotSend Rc { }` covers every `Rc`
+monomorph, which is one of `__thr_marked`'s three spellings), so the check
+accepts what an impl may name and rejects only a name that is none of them.
+
+Three things were found and deliberately NOT changed, and they share one
+cause: **the built-in protocol traits have no declaration.** `% Drop Database
+{ }` in `stdlib/ext/sqlite.nu` names a trait that no `% Drop [T] { … }`
+declares anywhere, and `Ord` and `Show` are the same. So:
+
+  * **An impl of a trait that is not declared compiles.**
+    `check_impl_contract` says why in its own comment — there is no contract
+    to check. Closing it means enumerating the built-in set, which is a
+    language decision, not a check; and a typo'd trait name is still caught
+    downstream when the method is called ("call to unknown function").
+  * **A BOUND naming an undeclared trait reports against the type**, not the
+    name: `[T: NoSuchMarker]` says "type 'i' does not implement trait
+    'NoSuchMarker'", which blames the author's typo on the argument. It is
+    rejected, so this is message quality, not a miscompile — but the better
+    message needs the same closed set the item above does.
+  * **`% Send` / `% Sync` / `% NotSend` / `% NotSync` as BOUNDS** are
+    answered by the structural derivation rather than by an impl lookup, so
+    they are undeclared traits by design. Any rule about undeclared trait
+    names has to exempt them explicitly.
+
+All three are recorded rather than forced, on the same standard as the
+unreachable type-parameter diagnostic above. Whoever closes the first closes
+all three, and the deliverable is the list of built-in protocol names.
+
+One probe result that is NOT a finding, recorded so it is not re-probed:
+declaring the same FFI symbol from two different libraries compiles and the
+second library name is dropped. That is correct. The library name's only job
+is the build-time sentinel check, `__ffi_lib_check` runs for EVERY `&`
+declaration before anything is dropped, and the linker resolves by symbol
+name — so both libraries are still checked and the attribution has no effect
+on the emitted module. The signature disagreement, which does matter, has
+been a diagnostic since the round before.
+
+**Two more, found after the five surfaces were closed.**
+
+**A select arm's diagnostics pointed at generated text.** A select lowers
+to a whole program — a poll loop, a shared waiter, one `chan_try_recv` per
+arm — which is then re-lexed through a sub-lexer, so every check inside it
+reports against THAT text. A mistyped arm element printed
+`<select>:4:127` with a caret into a line the author never wrote, naming no
+file, no line of real source, and no `??`: which arm of which select was
+left entirely to the reader. `<dynsig>`, the compiler's other synthetic
+buffer, had the same problem and already had the cure — `g_diag_ctx`, a
+suffix appended to every diagnostic raised while the re-parse runs — and
+nothing had applied it here. It carries the `??`'s own position, which
+`gen_match` has always captured for the borrow checker's structural markers
+and now hands to `gen_select`. The synthetic location stays: the caret does
+point at the lowered call, and moving it would mean threading a position
+through every token of generated text. What was missing was the sentence
+telling the reader where to look instead.
+
+`tools/check_diag_anchor.sh` did not see this, and its report says "every
+baselined diagnostic points at real code". It asks one question — does the
+caret land on a closing delimiter — and a synthetic BUFFER is a different
+way to point at nothing. No corpus golden anchored in one before
+`diag_select_arm_context.nu`, which is why it had never come up. Extending
+the gate to ask about synthetic buffers is the obvious next step and is
+left for the next round, with the `<dynsig>` case as its known-good
+baseline.
+
+**An aggregate value bound to a pointer binding**, which is the
+token-deletion sweep paying out again: seed 14, `mut_pointer.nu`, one
+deleted `*`. `# *Node x` minus its star is `# Node x`, a legal cast
+producing a `%Node` VALUE, while the binding still says `*Node` — so the
+store was `store %Node* %r1, %Node** %r2` with `%r1` a `%Node`. Exit 0,
+and clang's "'%r1' defined with type '%Node' but expected 'ptr'" the only
+report. The binding's never-legal-mix battery has six clauses and this fell
+through all six: the integer clause knows only INTEGERS into a pointer, the
+nominal clause requires NEITHER side to be a pointer, the pointer clause
+runs the other direction, and the aggregate clauses all want a scalar or
+aggregate TARGET. It is the exact mirror of the String-vs-raw-C-string
+clause added the round before — that one existed because every other clause
+wanted one side not to be a pointer; this one because they wanted the
+other side not to be. All three aggregate shapes reached it (a named
+struct or enum, an anonymous option or result, and a slice), so the clause
+asks about the shape rather than the name. The two mutants that found it
+are rejected by the repaired compiler.
+
+**A methodology finding, which is the one to carry forward.** The first
+version of this round's probe asked clang the question with
+`clang -fsyntax-only -x ir`. **That does not parse the IR.** It exits 0 on a
+module `llvm-as` rejects outright, and it reported every form in this
+section clean. `tools/fuzz/mutate_delete.py` uses `clang -c`, which does
+parse, so the published seed results are unaffected — but a hand-written
+probe is written fresh each time, and this is the second round in a row
+whose first measurement was wrong in the same direction: a harness that
+cannot fail reports whatever you hoped for. `test_declaration_forms.py` now
+asks the clang question itself, with `clang -c` and a comment saying why,
+so the table sees the class of defect that keeps `main`. None of this
+round's seven is visible to the old invariant.
+
+
 ## Latest compiler verification
 
-Corpus **1,025 PASS / 19 SKIP** over 1,044 inputs, zero
-FAIL/MISSING/ORPHAN. Normal build 58 s; tests 2 m 33 s. The sanitized
-corpus reports the same **1,025 PASS / 19 SKIP with zero AddressSanitizer,
-UBSan or LSan findings**, zero timeouts and zero compile/link/run failures.
+Corpus **1,035 PASS / 19 SKIP** over 1,054 inputs, zero
+FAIL/MISSING/ORPHAN. Normal build 1 m 06 s (with `--refresh-bootstrap`);
+tests 3 m 15 s. The sanitized corpus reports the same **1,035 PASS / 19 SKIP
+with zero AddressSanitizer, UBSan or LSan findings**, zero timeouts and zero
+compile/link/run failures.
 All seven arithmetic methods, all 31 ownership methods, seven
 compiler-cleanup methods, two driver-path controls, the WASI IR control,
-eleven release-artifact controls and the 20 sanitized LSP tests pass.
-`nurlfmt --check` is canonical over 1,810 files; strict-arity (1,408 files),
+eleven release-artifact controls, six installer-unpack controls and the 20
+sanitized LSP tests pass.
+`nurlfmt --check` is canonical over 1,823 files; strict-arity (1,409 files),
 memgate, dcegate, leakgate (both emission modes), the metamorphic spelling
-and trait-order gates, the pinned-download and installer-sync gates, and both
-diagnostic gates pass.
+(0 gaps) and trait-order (200/200) gates, the pinned-download and
+installer-sync gates, and both diagnostic gates pass. Diagnostic coverage is
+84% of **327** sites with **18** never-fired — unchanged from the previous
+round's 18, so every diagnostic this round added is printed by a test.
 
 The check that matters most for a change that ADDS diagnostics is the tree
 sweep, and it is `tools/tree_sweep.sh` now rather than a paragraph: every
-tracked first-party `.nu` file — **1,790 of them**, the whole tracked
+tracked first-party `.nu` file — **1,823 of them**, the whole tracked
 inventory minus `bench/` — compiled with the branch-point compiler and with
-this one produces identical output and exit codes, and identical IR in all
-but the three files named below. The corpus
-cannot see code it does not contain; the tree can. (The earlier rounds
-reported 816; that was a hand-assembled subset, not a smaller tree.)
+this one produces **byte-identical output, exit codes and IR, with zero
+differences**. Nine new rejections, and nothing in the tree was written in
+any of the nine ways. The corpus cannot see code it does not contain; the
+tree can. (The earlier rounds reported 816; that was a hand-assembled
+subset, not a smaller tree.)
 
-**Twenty-one** of the new `test_declaration_forms.py` rows FAIL against a
-compiler built from the branch point and pass against this one. Of the 33 new
-corpus fixtures, **20 are controls**: the branch-point compiler does not
-reject them. Eight it accepts outright and emits IR clang is happy with — the
-check was simply missing — and twelve it exits 0 on while emitting IR clang
-refuses. The remaining 13 are rejected by both, because they pin the WORDING
-of diagnostics that already existed and that no test made the compiler print.
+**Twenty** of the new `test_declaration_forms.py` rows FAIL against a
+compiler built from the branch point and pass against this one, and every one
+of the 188 rows the previous rounds left still passes on both — the new clang
+invariant did not retroactively condemn anything.
 
-Three of the fifteen are wrong at RUN time, not just in the IR:
-`diag_default_on_inout.nu` compiles cleanly on the branch-point compiler,
-links cleanly and segfaults; `diag_call_names_a_value.nu` does the same,
-calling a data global; `diag_default_arg_type.nu` compiles cleanly and prints
-`x = 0` for a parameter whose declared default is 1. A fourth,
-`foreach_exit_live.nu`, is ordinary code that the branch-point compiler
-cannot compile at all.
+Of the **ten** new corpus fixtures, **nine are controls**: the branch-point
+compiler rejects none of them. Four it exits 0 on while emitting IR clang
+refuses (`diag_ffi_ellipsis_not_last`, `diag_ffi_variadic_missing_fixed`,
+`diag_cast_between_structs`, `diag_aggregate_into_pointer`); the other five
+it accepts outright, emitting IR clang is happy with — the check was simply
+missing. The tenth, `diag_select_arm_context.nu`, is rejected by both,
+because what changed there is the WORDING: the branch-point compiler says
+the same thing about `<select>:4:127` and names no file, no line of real
+source and no `??`.
 
-The tree sweep reports **three** intended differences against the branch
-point, all of them IR-only with identical exit codes and stderr:
-`compiler/tests/dead_store_both_arms_ret.nu`,
-`compiler/tests/should_warn_caret_xor.nu` and `nurlapi/main.nu` each move one
-dead store out of a block that had already terminated and into the `dead_N:`
-block that follows it. The other **1,787** files are byte-identical.
+Four of the five it accepts are wrong at RUN time, not just in principle.
+Built with the branch-point compiler: `diag_try_in_plain_return.nu` compiles
+cleanly, links cleanly and **segfaults** — `\` in a `→ s` function returned
+`ret i8* zeroinitializer` and printing it dereferenced null.
+`diag_try_option_in_result_fn.nu` exits 0 carrying an Err payload of 0 that
+no callee produced. `diag_match_option_nonexhaustive.nu` prints whatever the
+`undef` in the join phi happened to be. And
+`diag_marker_impl_unknown_type.nu` ships a `% NotSend` type across the Send
+bound that marker was written to forbid, silently, because the marker named
+a type that does not exist.
+
+**How that baseline was built, because the first attempt was wrong again.**
+`tools/tree_sweep.sh` links its baseline compiler against the working tree's
+`stdlib/runtime.o`, and a `./build.sh --san` run replaces that file with an
+AddressSanitizer-instrumented one. A baseline built while the sanitized
+corpus was running did not link at all, and the harness read the missing
+binary's exit 127 as "the baseline rejects this" — the same failure as the
+`$`-import trap of the previous round, in a third spelling. Two stale sweep
+workdirs then disagreed with each other, which is what surfaced it. The
+numbers above were taken against a baseline built from
+`git show <branch point>:compiler/nurlc.nu`, with `stdlib/runtime.o` in its
+normal state, and cross-checked against a clean `./build.sh` of the branch
+point in a separate worktree; both agree. The scare it caused was worth one
+check: main's `nurlc.nu` compiled by the branch-point bootstrap and by this
+branch's bootstrap is **byte-identical IR**, so nothing here changed how the
+compiler compiles itself.
+
+The tree sweep reports **zero** differences against the branch point:
+all **1,823** tracked first-party `.nu` files produce identical output, exit
+codes and IR under both compilers. Nine new rejections, and nothing in the
+tree was written in any of the nine ways. (Three files did differ on the
+first run, and all three were the same fixture: `routertrap.nu` and
+`test_06_torture_chamber.nu` used `\` inside `@ main → i`, and the second
+has a byte-identical copy under `examples/`. Each keeps the `\` it exists
+to exercise, moved into a helper whose return type can carry the failure;
+both goldens are unchanged.)
 
 The token-deletion sweep is clean through **seed 8**: seeds 5, 6, 7 and 8 —
 160 corpus programs, tens of thousands of mutants — produced no finding
@@ -392,15 +633,24 @@ against the repaired compiler.
    position, trait/impl bodies, match and select arms, the block terminators,
    the `$`-import surface, generic instantiation (call site AND type
    position), `dyn` construction and object safety, the `inout` / `sink`
-   conventions and the `pub` boundary are done — **126 forms** across four
-   tables in `test_declaration_forms.py`. Extend those tables rather than
-   writing a second harness.
+   conventions, the `pub` boundary, the `&`-FFI surface (declaration AND
+   call site), `\` try-propagation, the `?T` / `!T E` literal and match
+   surfaces, the `#` cast target, `select` / channel typing and the
+   `Send`/`Sync` marker subjects are done — **208 forms** across eight
+   tables in `test_declaration_forms.py`, which now asks the clang question
+   of everything that compiles. Extend those tables rather than writing a
+   second harness.
 
-   Not done: the `&`-FFI surface (variadic `...`, a parameter with no name,
-   a library name that is not a library, the same symbol declared twice with
-   different signatures), the `!T E` result and `?T` option surfaces
-   (try-propagation across a type the callee does not declare), the `#` cast
-   surface, `select` / channel typing, and `Send`/`Sync` marker derivation.
+   **Every surface the last round listed as not done is now done**, and two
+   of the five gave nothing: `select` / channel typing and the `Send`/`Sync`
+   derivation itself both held up (what failed in the second was the
+   marker's SUBJECT, a type position). The remaining unswept surfaces are
+   smaller and were never on a list: `%`-trait DECLARATION bodies
+   (supertraits, associated types, defaults), the `simd` / `inline`
+   prefixes, `Z`-sizeof over compound types, string and char literal
+   escapes, and the `--strict-borrowck` / `--raw` mode boundaries. None has
+   the shape of the ones above — they are not "one spelling of a check that
+   exists elsewhere" — so expect a lower yield and say so if it is lower.
 
    The three questions that found the most, in order of yield:
    *what does this construct do in a spelling nothing in the tree uses*;
@@ -436,9 +686,15 @@ against the repaired compiler.
    corpus program is thousands of compiles, so run several `--seed`s in
    parallel rather than one long `--files` — one 12 KB corpus program is
    several thousand compiles, and a 40-file seed is one to two hours.
-   **Seeds 1-8 are clean** against the repaired compiler; seed 9 onwards is
-   where the next one is. Four seeds in parallel is comfortable on eight
-   cores and finishes inside two hours.
+   **Seeds 1-12 are clean** against the repaired compiler; **seed 14 found
+   one more** (an aggregate value bound to a `*T` binding, from one deleted
+   `*` in `mut_pointer.nu` — see "The last five surfaces" above), which is
+   now closed, and seeds 13, 15 and 16 were still running when this was
+   written. Seed 17 onwards is where the next one is. Four seeds in parallel
+   is comfortable on eight cores; do not start a build while they run, but
+   note the harness copies `build/nurlc` privately at startup, so a rebuild
+   cannot corrupt a seed already in flight — only the seeds you start
+   afterwards see the new compiler.
 
    **`--clang` is a second oracle over the same mutants, and it is where the
    yield is.** "Exit 0 and `main` is there" is a weak invariant: most of what
@@ -448,19 +704,25 @@ against the repaired compiler.
    eleven root causes** (see "The second oracle" above). Every wave was run
    against the compiler the previous wave's fixes had already repaired.
 
-   **The yield is now falling off, and that is a measurement.** Seeds 1-4
-   gave three causes, 5-8 gave four, and 9-12 gave one — with 9, 10 and 11
-   each finding nothing at all across 36 corpus programs. Seed 13 onwards is
-   still worth running, but it is no longer the highest-value thing to run:
+   **The yield is falling off but has not stopped, and that is the
+   measurement.** Seeds 1-4 gave three causes, 5-8 gave four, 9-12 gave one
+   — with 9, 10 and 11 each finding nothing at all across 36 corpus
+   programs — and **seed 14 gave one more** after four surfaces of
+   hand-written sweeping had already been closed. One root cause per four
+   seeds is a low rate and still not zero, and the one it found needed no
+   cleverness: a deleted `*`. Keep running it in the background of whatever
+   else is being swept; it is no longer the highest-value thing to run, and
+   it is the cheapest thing to leave running.
 
    What "falling off" does NOT mean is that the language is clean. It means
    this oracle, with this mutation, over this corpus, is close to exhausted.
    Deleting one token reaches the shapes a deletion can reach. The surfaces
    named in item 1 (`&`-FFI, `!T E` / `?T` try-propagation, `#` casts,
-   `select` / channel typing, `Send`/`Sync` derivation) need a probe of their
-   own, and the shape of the next one is already visible in what the clang
-   oracle taught: **ask a stronger question of the programs that already
-   compile.** "Exit 0" was the weak invariant; "clang accepts it" was the
+   `select` / channel typing, `Send`/`Sync` derivation) each got that probe
+   in the 2026-09-12 round and gave nine more root causes, so this paragraph
+   is now a finished prediction rather than a plan. What made those probes
+   work is exactly what the clang oracle taught: **ask a stronger question of
+   the programs that already compile.** "Exit 0" was the weak invariant; "clang accepts it" was the
    strong one, and it paid eleven root causes. The next rung is "the program
    RUNS and answers correctly" — a differential or metamorphic oracle over
    mutants that survive both questions. Two of this round's defects
@@ -469,8 +731,21 @@ against the repaired compiler.
 
    Recheck from the REPOSITORY ROOT. A mutant that cannot resolve its
    `$`-imports exits 1, and a harness that reads exit 1 as "rejected" counts
-   it as answered; that mistake hid three live findings twice in this round
+   it as answered; that mistake hid three live findings twice in one round
    before the third attempt caught them.
+
+   **That trap has now appeared three rounds running, in three spellings,
+   and it is the same trap every time: a harness that cannot distinguish
+   "rejected for the reason under test" from "did not run".** The three so
+   far are an unresolved `$` import (exit 1), `clang -fsyntax-only -x ir`
+   (which exits 0 without parsing the IR at all, so nothing is ever
+   rejected), and a baseline compiler that failed to LINK because
+   `./build.sh --san` had replaced `stdlib/runtime.o` underneath it (exit
+   127, read as a rejection). Before trusting any probe you write, make it
+   fail on purpose once and check that it says so — and prefer a harness
+   that reports a distinct verdict for "could not run" over one that folds
+   it into "rejected". The probe used this round does; see the HARNESS
+   verdict in its source.
 
    One of the six needed no mutation at all: a foreach ending in `break`, as
    the last statement of a `~` body, emits an empty basic block. Ordinary
@@ -574,9 +849,16 @@ against the repaired compiler.
 - `python3 tools/tests/test_wasi_ir.py` — isolated shared-rewriter LLVM/leak control.
 - `./packages/wasmbuilder/tests/build_test.sh` — require actual Wasmtime execution.
 - `python3 tools/tests/test_driver_paths.py` — two real split/path controls.
-- `python3 tools/tests/test_declaration_forms.py` — 126 declaration,
-  statement, match-arm and import forms against one invariant; needs only
-  `build/nurlc`, under 0.4 s.
+- `python3 tools/tests/test_declaration_forms.py` — 208 declaration,
+  statement, match-arm, import, FFI (declaration and call site), try /
+  option / result / cast and impl-subject forms against two invariants:
+  a clean exit must keep `main`, AND the IR it emitted must be one clang
+  accepts. Needs `build/nurlc` and, for the second question, `clang` —
+  which is skipped, not failed, when missing. Under 3 s.
+  The clang call is `clang -c`. NOT `clang -fsyntax-only -x ir`, which
+  does not parse the IR at all and exits 0 on a module `llvm-as` rejects;
+  a probe written that way reported every defect of the 2026-09-12 FFI /
+  try / cast round clean.
 - `python3 tools/tests/test_release_artifacts.py` — eleven controls over the
   release artifact-set gate; needs no toolchain at all.
 - `python3 tools/tests/test_installer_unpack.py` — six controls over the
@@ -584,6 +866,14 @@ against the repaired compiler.
 - `python3 tools/check_pinned_downloads.py` and `./tools/check_installer_sync.sh`
   — the workflow and served-installer gates; both need no toolchain.
 - `./compiler/tests/nurlfmt_check.sh` and `./tools/check_strict_arity.sh`.
+- `python3 tools/fuzz/probe_forms.py FORMS.py` — the exploratory probe the
+  2026-09-12 surface sweep was written with: a list of hand-written source
+  forms, each asked both questions (does nurlc reject it; if not, does clang
+  accept the IR). Not a gate — it prints verdicts and nothing fails. Once a
+  form has an answer worth keeping, move it into
+  `tools/tests/test_declaration_forms.py`, which asserts the same two.
+  Its HARNESS verdict is the part to keep: a run that could not run (an
+  unresolved `$` import, a missing clang) is never reported as a rejection.
 - `python3 tools/fuzz/mutate_delete.py --files 40` — the token-deletion sweep.
   Tens of thousands of compiles; a hunting tool, not a gate. Add `--clang` for
   the second oracle (does clang accept what a surviving mutant emitted?) —

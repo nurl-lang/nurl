@@ -121,7 +121,20 @@ import_decl = '$' STR IDENT? ;
    variadic. The number of named params before the `...` is the
    "fixed" prefix; every argument passed beyond that count at a call
    site undergoes C default argument promotion (see Changes since
-   v1.8 in the prelude).
+   v1.8 in the prelude). TRAILING is part of the rule and so is "at
+   most one": a parameter after the marker, or a second marker, emitted
+   `declare i64 @f(i8*, ..., i64)` / `(i8*, ..., ...)` — IR llvm-as
+   rejects — and a LEADING marker survived in the call-site signature
+   while being overwritten in the `declare`, so the module declared a
+   non-variadic callee and emitted a variadic call to it.
+   The fixed prefix is a MINIMUM at every call site. '...' makes the
+   tail optional, never the parameters ahead of it; a call passing fewer
+   than the fixed count emits `call i64 (i8*, ...) @f()`, which the LLVM
+   verifier rejects, and where such a call assembles the callee reads an
+   ABI register nobody set.
+   The library name may not be empty. It is what checks, at compile
+   time, that the library is installed — an empty one skipped that
+   check rather than passing it.
    Example:  & `libc` @ puts s msg → i
    Example:  & `libm` @ sqrt f    → f                     — no param name
    Example:  & `libc` @ printf s fmt ... → i32             — variadic *)
@@ -282,7 +295,22 @@ fn_header  = '@' IDENT type_params? param* '→' type ;
    Monomorphised dispatch: each method is emitted as  method__TypeMangle.
    Dispatch at call sites is based on the first argument's LLVM type.
    Example:  % Stringify i { @ stringify i n → s { ^ ( nurl_str_int n ) } }
-             ( stringify 42 )  →  call @stringify__i64  *)
+             ( stringify 42 )  →  call @stringify__i64
+
+   `impl_type` is a TYPE POSITION and carries the declared-type check
+   every other one does: a name that is neither a declared struct/enum,
+   a generic template (`% NotSend Rc { }` covers every Rc monomorph), a
+   monomorphised instantiation, nor a type parameter is a diagnostic.
+   The marker traits are why it matters — `% NotSend Db { }` asserts a
+   property the compiler cannot derive, and on a misspelled subject it
+   asserted it about nothing while the real type kept crossing the
+   boundary the marker forbade.
+
+   The TRAIT name is deliberately NOT required to be declared: `Drop`,
+   `Ord` and `Show` are implemented with no declaration, which is how
+   the built-in protocols work. An impl of an undeclared trait has no
+   contract to check and emits its methods under the mangled name; a
+   typo is caught at the call site instead. *)
 impl_decl = '%' IDENT type_params? type '{' fn_decl* '}' ;
 
 
@@ -499,6 +527,21 @@ complement_expr = '~' expr ;
    If expr is None / Err(e):   immediately returns the same shape from
                                the enclosing function, propagating the
                                error value unchanged.
+   The enclosing function must therefore be able to SAY that it failed:
+   its return type must itself be an option or a result, and of the same
+   KIND as the operand. Neither half was checked before 2026-09-12. A
+   function returning anything else fell to a `zeroinitializer` fail
+   path, which discards what the callee reported and hands the caller a
+   zero of the declared type — 0 for `→ i`, a null pointer for `→ s`
+   (a clean compile and a segfault). Mixing the two kinds zeroes the
+   OTHER shape: an option tried inside `!T E` returns Err with an error
+   payload of 0 no callee produced, and a result tried inside `?T`
+   returns None with the Err payload gone. Both conversions are real and
+   explicit — `( res_ok r )` drops the error, `( opt_ok_or o err )`
+   supplies one — and '\' is propagation, not conversion.
+   At a site that cannot propagate (a `→ i` main, a callback with a
+   fixed signature), take the payload with `res_expect` / `res_unwrap` /
+   `opt_unwrap_or`, which say what happens on failure.
    For Result types, the error payload's NURL type is compared against
    the enclosing function's declared error type; a mismatch is a compile
    error.
@@ -630,13 +673,24 @@ member_expr = '.' expr ( IDENT | INT | expr ) ;
    closure-shaped struct ({ R (i8*…)*, i8* }) and the destination type
    is a pointer; otherwise the cast follows the standard form. Used to
    feed C-runtime callback APIs (thread_spawn, signal handlers, etc.)
-   the raw fn-ptr/env-ptr pair NURL closures decompose into. *)
+   the raw fn-ptr/env-ptr pair NURL closures decompose into.
+
+   '#' converts a VALUE. It does not reinterpret one aggregate as
+   another: NURL named types are nominal, and `# Q pt` for two distinct
+   structs used to hand the operand register back wearing Q's type —
+   `ret %Q %r1` with %r1 a %Pt, which only clang objected to. A named
+   aggregate SOURCE with an integer destination still recovers field 0
+   (an enum's tag, a struct's first field), which is what makes
+   `# E e` work for a bare-variant error payload. *)
 cast_expr = '#' type expr [ INT ] ;
 
 (* ?? expr { match_arm* }
    Pattern match on enum values, Option (?T), or Result (!T E).
    Exhaustiveness is checked at compile time: every variant must be
-   covered OR a '_' wildcard arm must be present. Duplicate variant arms
+   covered OR a '_' wildcard arm must be present. An option and a result
+   each have exactly two arms, 'T' and 'F'; before 2026-09-12 only the
+   ENUM spelling of this rule was enforced, and the uncovered path of an
+   option or result match reached the join as `undef`. Duplicate variant arms
    (without literal constraints) are rejected at compile time.
    Literal-constrained arms (e.g. `Ok 200 → …`) do NOT satisfy
    exhaustiveness on their own — a catch-all arm for the same variant is

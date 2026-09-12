@@ -9918,6 +9918,24 @@
             ` — every NURL operator has fixed arity, so a missing or extra argument shifts every token after it; check this call.` ) ) }
         {} }
     {}
+    // A variadic callee has no fixed arity, so gen_ffi_decl registers no
+    // `__arity` for it and the check above skips it — but it does have a
+    // MINIMUM, the fixed prefix before the '...', and that is exactly the
+    // count gen_ffi_decl already stashed in `__variadic_fixed`. Nothing
+    // asked for it: `( printf )` against `printf s fmt ... → i` emitted
+    // `call i64 (i8*, ...) @printf()`, which the LLVM verifier rejects as
+    // "not enough parameters specified for call" — and where it assembles
+    // (a callee whose fixed prefix is a scalar) it reads an ABI register
+    // nobody set. The comment on the non-variadic registration above says
+    // why that check exists — "a missing argument read an unset ABI
+    // register, silently" — and the variadic spelling has the same hazard.
+    // Only a MINIMUM: everything past the prefix is the variadic tail.
+    ? & is_variadic < arg_idx fixed_count
+    { ( die lex ( nurl_str_cat3
+        ( nurl_str_cat3 `call to variadic '` fname `' is missing a fixed argument: it declares ` )
+        ( nurl_str_cat3 ( nurl_str_int fixed_count ) ` before the '...' but this call passes ` ( nurl_str_int arg_idx ) )
+        ` — the '...' makes the TAIL optional, never the parameters ahead of it, and the callee reads those from ABI registers this call never set.` ) ) }
+    {}
     ( expect lex TT_RPAREN )
     // Escape analysis (docs/MEMORY.md §2.8): the call result is a stack
     // reference exactly when the callee RETURNS one of its parameters
@@ -11380,7 +11398,12 @@
 //
 // With a `_` default arm there is no waiter and no loop: poll each case
 // once, then run the default body.
-@ gen_select i lex i syms i cg → s {
+// `sel_line` / `sel_col` are the '??'s OWN position, captured by gen_match
+// before it consumed the token — by the time a select arm's body is
+// re-lexed the outer lexer has moved past the whole construct, and the
+// sub-lexer knows only its own synthetic buffer.
+@ gen_select i lex i syms i cg i sel_line i sel_col → s {
+    : s __sel_file ( nurl_lex_filename lex )
     ( expect lex TT_LBRACE )  // consume the '{'
 
     : s uid ( nurl_cg_lbl cg `sel` )
@@ -11527,7 +11550,19 @@
     // hides the second one from ASan until the compiler hangs on some
     // later input.
     : i sub ( nurl_lex_new src `<select>` )
+    // Context for any diagnostic the re-parse raises. A select lowers to
+    // a whole generated program — poll loop, waiter, one `chan_try_recv`
+    // per arm — and every check inside it reports against THAT text: a
+    // mistyped arm element printed `<select>:4:127` with a caret into a
+    // line the author never wrote, naming no file and no '??'. The
+    // `<dynsig>` re-parse had the same problem and the same cure; this
+    // is that cure at the second synthetic buffer.
+    : s __sel_saved_ctx ( nurl_str_cat g_diag_ctx `` )
+    = g_diag_ctx ( nurl_str_cat ( nurl_str_cat4
+    ` [in an arm of the select at ` __sel_file `:` ( nurl_str_int sel_line ) )
+    ( nurl_str_cat3 `:` ( nurl_str_int sel_col ) ` — the text above is the lowering of that '??', not your source; fix it at the arm]` ) )
     : s __sub_rv ( gen_stmt sub syms cg )
+    = g_diag_ctx __sel_saved_ctx
     ( nurl_lex_free sub )
     ( nurl_set_last_type `void` )
     ^ ( nurl_str_cat `` `` )
@@ -11574,7 +11609,7 @@
     ( nurl_lex_advance lex )  // consume '??'
 
     // `?? {` (no scrutinee) is a Go-style channel select, not a match.
-    ? == ( nurl_lex_type lex ) TT_LBRACE { ^ ( gen_select lex syms cg ) } {}
+    ? == ( nurl_lex_type lex ) TT_LBRACE { ^ ( gen_select lex syms cg bck_mline bck_mcol ) } {}
 
     // Peek the variable name (if any) BEFORE gen_expr consumes it, so we
     // can later look up `<name>__res_nurl_T` (set by gen_let_or_struct)
@@ -18877,7 +18912,30 @@
                             ( nurl_set_last_type dt )
                             ^ res
                         }
-                        { ( nurl_set_last_type dt )
+                        {  // Last stop: nothing above converted anything, so
+                            // this path hands `val` straight back wearing the
+                            // TARGET's type. For two integer spellings of one
+                            // width (`# u <i8>`) that is exactly right — the
+                            // bits are the value. For a NAMED aggregate it is
+                            // not a conversion at all: `# Q ( mk )` where mk
+                            // returns a %Pt emitted `ret %Q %r1` with %r1 a
+                            // %Pt, two structs of different field counts, and
+                            // clang answered "'%r1' defined with type '%Pt'
+                            // but expected '%Q'" about generated IR with no
+                            // NURL location. The anonymous-aggregate source is
+                            // already diagnosed a few lines above, with the
+                            // same reasoning and almost the same words; the
+                            // named one reached here because `%Struct` sources
+                            // are handled far above ONLY when the destination
+                            // is an integer.
+                            ? & | & > ( nurl_str_len st ) 0 == ( nurl_str_get st 0 ) 37
+                            & > ( nurl_str_len dt ) 0 == ( nurl_str_get dt 0 ) 37
+                            ! ( seq st dt )
+                            { ( die_pos lex __cast_line __cast_col ( nurl_str_cat ( nurl_str_cat3
+                                `cannot cast '` ( llvm_to_nurl st ) ( nurl_str_cat3 `' to '` ( llvm_to_nurl dt ) `'` ) )
+                                ` — these are distinct named types, and '#' converts a value, it does not reinterpret one aggregate as another. NURL named types are NOMINAL: build the target with its own '@ Name { … }' literal from the fields you want, or cast a FIELD ('# i . v x').` ) ) }
+                            {}
+                            ( nurl_set_last_type dt )
                             ^ val }
                     }
                 }
@@ -20811,6 +20869,26 @@
         // said "String vs raw C-string mismatch" for years; this is the
         // same law in the spelling that was left out.
         : b csv_store_clash ( __store_type_clash from_ty to_ty )
+        // An AGGREGATE value into a POINTER binding — the mirror of
+        // csv_store_clash, and the other half of what csv_int_ptr does.
+        // csv_int_ptr knows only INTEGERS into a pointer, csv_named
+        // requires neither side to be a pointer, and the pointer-into-
+        // non-pointer clause runs the other direction, so a struct,
+        // enum, option, result or slice VALUE bound to a `*T` fell
+        // through all four: `: *Node p # Node 0` emitted
+        // `store %Node* %r1, %Node** %r2` with %r1 a `%Node` — exit 0,
+        // and clang answering "'%r1' defined with type '%Node' but
+        // expected 'ptr'" about generated IR with no NURL location.
+        // Every legal wrap (enum tag, single-handle inttoptr) returned
+        // far above, so anything of aggregate shape that reaches here
+        // is the missing '*' the token-deletion sweep found by deleting
+        // one: `# *Node x` minus its star is `# Node x`, a VALUE where
+        // the binding wants an ADDRESS.
+        : s __cvap_f ( nurl_llty from_ty )
+        : b csv_agg_ptr & & ! ( is_ptr_ty from_ty ) ( is_ptr_ty ( nurl_llty to_ty ) )
+        | | == ( nurl_str_get __cvap_f 0 ) 37
+        == ( nurl_str_get __cvap_f 0 ) 123
+        == ( nurl_str_get __cvap_f 0 ) 91
         // The cure differs by shape: an aggregate value wants '??'
         // destructuring (or matching shapes), a named type is nominal,
         // a scalar wants a cast.
@@ -20820,8 +20898,16 @@
         `' — NURL named types are NOMINAL: no value converts into or out of one implicitly (two enums stay distinct even when their tags overlap). Construct/pass the declared type; an enum takes a variant by name, and '# i x' reads an enum's tag intentionally.`
         ? csv_int_ptr
         `' — NURL has no implicit integer-to-pointer conversion; use a pointer-typed value, or cast an address intentionally with '# T expr' (the null pointer is '# T 0' for a pointer type T)`
+        // AFTER csv_store_clash's own case: `%String` into `i8*` is a
+        // named aggregate into a pointer and so matches csv_agg_ptr too,
+        // but "drop the '*' from the binding's type" is the wrong advice
+        // for it — a raw C-string binding has no '*' to drop, and the
+        // String handle is the thing to convert. That pair keeps the
+        // general cure it has had since the clause was added.
+        ? & csv_agg_ptr ! csv_store_clash
+        `' — the binding wants an ADDRESS and this is the value itself. A struct, enum, option, result or slice does not decay to a pointer in NURL. Drop the '*' from the binding's type to hold the value, or take an address: a missing '*' in a cast ('# Node x' where '# *Node x' was meant) is the usual cause.`
         `' — NURL has no implicit conversions; use a matching value or convert with '# T expr'`
-        ? | | | | | | | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty ) csv_agg csv_agg2 csv_agg_src csv_named csv_int_ptr csv_store_clash
+        ? | | | | | | | | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty ) csv_agg csv_agg2 csv_agg_src csv_named csv_int_ptr csv_store_clash csv_agg_ptr
         { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `value of type '` from_ty `' cannot initialise / assign a binding of type '` to_ty )
             __csv_cure ) ) }
@@ -22561,6 +22647,52 @@
     ? ! is_opt_res
     { ( die lex ( nurl_str_cat3 `the try operator can only be applied to a Result ('!T E'), not to ` ( llvm_to_nurl vt ) `. It unwraps the Ok value and returns the Err early, so the enclosing function must itself return a Result with a compatible error type. To inspect a non-Result, match it with '??'.` ) ) }
     {}
+    // T7b: the enclosing function must be able to CARRY the failure.
+    // T8 below compares the two error types, but only when the enclosing
+    // function returns a Result — when it returns anything else there was
+    // nothing to compare and nothing said so. The fail path then fell to
+    // the `zeroinitializer` default below, which is not propagation: it
+    // discards the Err/None the callee reported and hands the caller a
+    // zero of the declared return type. `@ g → i` returned 0, which is
+    // an ordinary answer; `@ g → s` returned `ret i8* zeroinitializer`,
+    // and printing that is a null dereference — a clean compile, a clean
+    // link and a segfault. The grammar says '\' "immediately returns the
+    // same shape from the enclosing function, propagating the error value
+    // unchanged"; a return type that is neither an option nor a result
+    // has no such shape.
+    : s __try_fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
+    : b __try_fn_carries & >= ( nurl_str_len __try_fn_rt ) 6
+    ( seq ( nurl_str_slice __try_fn_rt 0 6 ) `{ i1, ` )
+    ? ! __try_fn_carries
+    { ( die lex ( nurl_str_cat4
+        `the try operator returns the failure from the ENCLOSING function, so that function must return an option ('?T') or a result ('!T E') — this one returns `
+        ( llvm_to_nurl __try_fn_rt )
+        `, which has no way to say that `
+        ( nurl_str_cat ( llvm_to_nurl vt ) ` failed. Give the enclosing function a '?T' / '!T E' return type, or handle the failure here: match it with '??', or take the payload at a leaf site with res_expect / res_unwrap_or / opt_unwrap_or, which say what happens on failure instead of returning a zero of the declared type.` ) ) ) }
+    {}
+    // T7c: option and result are not interchangeable across '\'. Both
+    // shapes start `{ i1, `, so T7b above accepts either one; what it
+    // cannot see is that the fail path then falls to `zeroinitializer`
+    // of the OTHER shape. Trying a result inside a `?T` function
+    // discarded the Err payload and returned None; trying an option
+    // inside a `!T E` function returned Err with an error value of 0
+    // that no callee ever produced — an invented error, which is worse
+    // than a dropped one. The grammar says '\' propagates "the error
+    // value unchanged", and neither direction can. The conversions are
+    // real and the stdlib spells them: ( res_ok r ) turns !T E into ?T,
+    // ( opt_ok_or o err ) turns ?T into !T E with an error the author
+    // chose. Requiring one of those is what keeps '\' a propagation.
+    : i __try_fn_n ( agg_field_count syms __try_fn_rt )
+    : i __try_val_n ( agg_field_count syms vt )
+    ? != __try_fn_n __try_val_n
+    { : s __tv_kind ? == __try_val_n 3 `a result ('!T E')` `an option ('?T')`
+        : s __tf_kind ? == __try_fn_n 3 `a result ('!T E')` `an option ('?T')`
+        ( die lex ( nurl_str_cat4
+        `the try operator propagates the failure unchanged, and an option and a result are not the same shape: this '\' received `
+        __tv_kind
+        ` while the enclosing function returns `
+        ( nurl_str_cat __tf_kind `. Convert it explicitly — ( res_ok r ) turns a result into an option by DROPPING the error, ( opt_ok_or o err ) turns an option into a result with an error you choose — then try the converted value.` ) ) ) }
+    {}
     // T8: for res_type, verify error type matches enclosing function's error type
     : s call_nurl ( nurl_sym_get syms `__last_nurl_call__` )
     : s fn_nurl ( nurl_sym_get syms `__fn_nurl_ret__` )
@@ -23647,6 +23779,34 @@
 // has_wildcard: 1 if a '_' arm was present
 @ check_exhaustive i lex s ename s seen i has_wildcard i syms → v {
     ? == has_wildcard 0 {
+        // An option ('?T') or a result ('!T E') has exactly two arms, 'T'
+        // and 'F', and they are not listed in a `__variants` entry — the
+        // loop below looks one up by enum NAME and finds nothing, so a
+        // non-exhaustive option/result match fell straight through it.
+        // The enum spelling of the same mistake has been rejected for
+        // years. What the missing arm produced is `undef`: the join phi
+        // reads `[ undef, %next_N ]` for the path no arm covers, so
+        // `?? o { T v → v }` over a None yields whatever was in the
+        // register. The grammar states the rule for all three: "every
+        // variant must be covered OR a '_' wildcard arm must be present".
+        : b __ce_optres & >= ( nurl_str_len ename ) 6
+        ( seq ( nurl_str_slice ename 0 6 ) `{ i1, ` )
+        ? __ce_optres
+        { : b __ce_res == ( agg_field_count syms ename ) 3
+            : s __ce_fdesc ? __ce_res `'F e' (the Err payload)` `'F' (absent)`
+            : s __ce_tdesc ? __ce_res `'T v' (the Ok payload)` `'T v' (the value)`
+            ? ! ( str_contains_word seen `T` )
+            { ( die lex ( nurl_str_cat3
+                `non-exhaustive match: no arm covers ` __ce_tdesc
+                `. An option and a result each have exactly two arms, 'T' and 'F' — handle both, or add a wildcard arm '_ → body'. The uncovered path yields an undefined value, not a zero.` ) ) }
+            {}
+            ? ! ( str_contains_word seen `F` )
+            { ( die lex ( nurl_str_cat3
+                `non-exhaustive match: no arm covers ` __ce_fdesc
+                `. An option and a result each have exactly two arms, 'T' and 'F' — handle both, or add a wildcard arm '_ → body'. The uncovered path yields an undefined value, not a zero.` ) ) }
+            {}
+        }
+        {}
         : s all ( nurl_sym_get2 syms ename `__variants` )
         ? != 0 ( nurl_str_len all ) {
             : ~ s rest ( nurl_str_cat all `` )
@@ -26256,6 +26416,16 @@
     // embedder as imports, not linked natively — skip the native sentinel gate.
     ? != g_ffi_host_imports 0 { ^ v } {}
     : i llen ( nurl_str_len lib )
+    // An empty library name is the one spelling that skipped this gate
+    // entirely rather than passing it. The library is the whole reason
+    // the '&' form names one: it is what turns a missing dev package
+    // into a compile error instead of a link error, and `& '' @ f …`
+    // silently turned that off. The '$' import surface has rejected an
+    // empty path for the same reason — a string that names nothing is a
+    // typo, not a declaration of "nothing".
+    ? == llen 0
+    { ( die lex `this FFI declaration's library name is empty — '&' names the library the symbol comes from, and that name is what checks a dev package is installed before the link fails. Write the library ('c', 'm', 'sqlite3', …) between the backticks, or drop the declaration.` ) }
+    {}
     ? > llen 0 {
         // Strip a leading `lib` prefix if present (`libcurl` → `curl`).
         // Owned from birth for the same reason as __ptr_dead_union's `out`:
@@ -26347,6 +26517,25 @@
             // explicit callee function type (`call i32 (i8*, ...) @f`),
             // which LLVM requires for a correct variadic ABI.
             ( nurl_sym_def syms ( nurl_str_cat fname `__variadic_sig` ) params_str )
+            // The grammar is `ffi_param* ( '...' )? '→' type`: the marker
+            // comes LAST and appears once. This loop used to take a '...'
+            // wherever it landed and carry on, and the two consumers of
+            // `params_str` then disagreed about what the declaration said.
+            // `s fmt ... i n` emitted `declare i64 @f(i8*, ..., i64)`,
+            // which llvm-as rejects; a second '...' emitted
+            // `(i8*, ..., ...)`, likewise. A LEADING '...' is worse than
+            // either: the first parameter's `pct == 0` branch OVERWRITES
+            // params_str, destroying the marker in the `declare` while
+            // `__variadic_sig` keeps it — so the module declares
+            // `@f(i8*)` and calls `f(...)`, a variadic call against a
+            // non-variadic callee, which differs in the ABI on every
+            // target that passes variadic arguments differently. Each
+            // exited 0 with the news coming from clang, or from nowhere.
+            ? != ( nurl_lex_type lex ) TT_ARROW
+            { ( die lex ( nurl_str_cat3
+                `the '...' variadic marker must be the LAST thing in an FFI parameter list, but ` ( tok_here lex )
+                ` follows it. An FFI declaration is '&', the library name, then '@ name params ... → ret': every named parameter comes BEFORE the marker, and there is only one marker. Move the remaining parameter(s) ahead of the '...', or delete the extra one.` ) ) }
+            {}
         }
         { : i __ff_line ( nurl_lex_line lex )
             : i __ff_col ( nurl_lex_col lex )
@@ -30554,8 +30743,44 @@
     ? == ( nurl_lex_type lex ) TT_LBRACE
     { ( skip_balanced lex ) }  // trait: skip whole block, no IR
     {  // impl_decl: read implementing type, emit methods with mangled names
+        : i __impl_ty_line ( nurl_lex_line lex )
+        : i __impl_ty_col ( nurl_lex_col lex )
         : s impl_nurl ( capture_impl_nurl_name lex )
         : s impl_llvm ( parse_type lex )
+        // An impl's SUBJECT is a type position, and it was the last one
+        // with no declared-type check — the hole `Z NoSuchType`, the cast
+        // target and `%Trait` each closed in their own spelling. The
+        // marker traits are what make it matter: `% NotSend Db { }`
+        // asserts a danger the compiler cannot derive, and a MISSPELLED
+        // subject asserted it about a type that does not exist. Nothing
+        // said so, the real type stayed Send, and it crossed the thread
+        // boundary the marker was written to forbid — a safety assertion
+        // that silently does nothing is worse than none, because the
+        // author reads it and stops looking.
+        //
+        // check_type_known is not the right instrument here: it rejects a
+        // bare generic TEMPLATE name, and an impl subject is allowed to be
+        // one (`% NotSend Rc { }` covers every `Rc` monomorph — see
+        // __thr_marked's three spellings). So accept what an impl may name
+        // and reject only a `%`-name that is none of them.
+        ? & > ( nurl_str_len impl_llvm ) 1 == ( nurl_str_get impl_llvm 0 ) 37
+        { : s __impl_bn ( nurl_str_slice impl_llvm 1 - ( nurl_str_len impl_llvm ) 1 )
+            // The BARE name is the syms key; a declared struct / enum maps
+            // to `%Name` there (check_type_known reads it the same way).
+            : s __impl_ent ( nurl_sym_get syms __impl_bn )
+            : b __impl_declared & != 0 ( nurl_str_len __impl_ent )
+            == ( nurl_str_get __impl_ent 0 ) 37
+            : b __impl_generic & != 0 g_generic_struct_syms
+            != 0 ( nurl_sym_len2 g_generic_struct_syms __impl_bn `__stparams` )
+            : b __impl_mono ( __has_dunder __impl_bn )
+            : b __impl_tparam ( is_tparam_like __impl_bn )
+            ? | | | __impl_declared __impl_generic __impl_mono __impl_tparam
+            {}
+            { ( die_pos lex __impl_ty_line __impl_ty_col ( nurl_str_cat
+                ( nurl_str_cat4 `impl of '` tname `' names the type '` __impl_bn )
+                `', but no struct or enum with that name is declared in this file or any '$'-imported one (a typo, or a missing import?). An impl attaches to a type that exists; on a name that does not, it attaches to nothing — and for a marker ('% Send' / '% Sync' / '% NotSend' / '% NotSync') that means the assertion is silently not made about anything.` ) ) }
+        }
+        {}
         : s impl_mangle ( mangle_type impl_llvm )
         ( expect lex TT_LBRACE )
         : ~ s provided ``

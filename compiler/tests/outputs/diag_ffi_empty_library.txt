@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_ffi_empty_library.nu:12:3: error: this FFI declaration's library name is empty — '&' names the library the symbol comes from, and that name is what checks a dev package is installed before the link fails. Write the library ('c', 'm', 'sqlite3', …) between the backticks, or drop the declaration.
+& `` @ xhelp i a → i
+  ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

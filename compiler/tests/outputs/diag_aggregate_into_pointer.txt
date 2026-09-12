@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_aggregate_into_pointer.nu:29:5: error: value of type '%Node' cannot initialise / assign a binding of type '%Node*' — the binding wants an ADDRESS and this is the value itself. A struct, enum, option, result or slice does not decay to a pointer in NURL. Drop the '*' from the binding's type to hold the value, or take an address: a missing '*' in a cast ('# Node x' where '# *Node x' was meant) is the usual cause.
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
