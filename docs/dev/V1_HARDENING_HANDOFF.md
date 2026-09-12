@@ -34,14 +34,14 @@ amounts are computed sub-expressions clamped into the legal domain rather than
 literals, so the guard branch is live at -O0 and the oracle catches a guard
 that fires on a legal operand.
 
-**Thirty-one defects of one shape are closed: a construct the language
+**Thirty-five defects of one shape are closed: a construct the language
 allows, reached by a path that skipped its own check.** Thirteen were found by
 sweeping declarations and simple statements; four more by continuing the same
 sweep into expression position, trait and impl bodies, match and select arms,
 and the block terminators; two more by the token-deletion sweep; six more by
 carrying the sweep into the surfaces that were still untouched — the
 `$`-import surface, generic instantiation, `%Trait` objects, the
-`inout` / `sink` conventions and the `pub` boundary; and **six more by
+`inout` / `sink` conventions and the `pub` boundary; and **ten more by
 giving the token-deletion sweep a second oracle**, which is the finding
 this round would pass on if it could pass on only one.
 
@@ -161,7 +161,7 @@ and the impl-signature check dropped the skip it carried for exactly this
 case. `diag_dynsig_context.nu` keeps its subject — a synthetic buffer's error
 carrying trait, method and Self — on a witness that still reaches it.
 
-### The second oracle, and the six it found
+### The second oracle, and the ten it found
 
 `mutate_delete.py` deletes one token and asks one question: does the compiler
 reject the file, or still emit the `main` the source declares? Every defect
@@ -171,10 +171,21 @@ the sweep learned a second question, `--clang`: of every mutant that exits 0,
 does clang accept the module? A compiler that exits 0 owes valid IR whatever
 was deleted.
 
-Seven finished seeds, 105 corpus programs, **508 findings** — and six root
-causes. Seeds 1-4 produced 497 of them between three causes; seeds 5, 6 and 8,
-run against the compiler those three fixes had already repaired, produced
-eleven more between three. (Seed 7 was still running when this was written.)
+Eight seeds, 120 corpus programs, **514 findings** — and ten root causes.
+Each wave was run against the compiler the previous wave's fixes had already
+repaired, and each still found its own: seeds 1-4 gave three causes, seeds
+5, 6 and 8 three more, seed 7 four more again.
+
+**A note on how that was measured, because the first two attempts were
+wrong.** The recheck — recompile every saved mutant against the repaired
+compiler — was run from a scratch directory the first two times, where the
+mutants' `$ \`stdlib/...\`` imports did not resolve. Those mutants exited 1,
+the harness read that as "rejected", and they were counted as answered. Run
+from the repository root, where the imports resolve, three mutants that had
+been reported clean were not. A harness that cannot tell "rejected for the
+reason under test" from "rejected because it could not find a file" reports
+whatever you hoped for; the count below was taken the correct way, and the
+two published earlier (497 and 508) were not.
 
 **A call whose callee names a VALUE was emitted as a direct call to it.**
 `gen_ident` has carried the taxonomy for years — `__ptr` is a local binding,
@@ -245,9 +256,29 @@ needs no mutation to reach: `~ x xs { = s += x break }` as the last statement
 of a `~` body is ordinary code, and `compiler/tests/foreach_exit_live.nu`
 writes it that way.
 
-All 508 findings are answered by those six: recompiled against the repaired
-compiler, **every one of them either fails to compile or emits IR clang
-accepts**.
+Seed 7 added four more, each the same shape one spelling over:
+
+  * **An ENUM literal's field 0 is the variant TAG**, and nothing checked it
+    — the exact twin of the option/result tag above, one type constructor
+    over. `@ Node { NText ( string_from t ) }` minus the variant name emitted
+    `insertvalue %Node zeroinitializer, %String %r1, 0`.
+  * **A binary operand that RETURNS** hands back the register the `^`
+    returned while the recorded type stays the operator's, so
+    `? != ( f x ) { ^ ( string_from … ) }` emitted `icmp ne i64 %r2, %r4`
+    with `%r4` a `%String`. The empty-operand rule above catches the `break`
+    spelling; this is the `^` one.
+  * **A cast's TARGET type** was the last type position with no declared-type
+    check. `# * g 1` — a function name where a type belongs, one deleted `u`
+    from `# *u g 1` — emitted `inttoptr i64 1 to %g*`.
+  * **`~` complementing a void operand.** `~` is a loop and a bitwise
+    complement; with the condition deleted the BODY becomes the operand, and
+    `~ { }` emitted `xor void undef, -1`. The loop form checks its condition;
+    the complement form did not.
+
+All 514 findings are answered by the ten: recompiled against the repaired
+compiler from the repository root, **every one of them either fails to
+compile or emits IR clang accepts** — 513 are now rejected outright and the
+one that still compiles produces IR clang is happy with.
 
 Opening the block-initialiser path also exposed a borrow-checker hole:
 `bck_esc_let` recorded a referent depth without comparing it, so a closure over
@@ -293,9 +324,9 @@ pinned by sha256 — including the zig that ships inside the published archive.
 
 ## Latest compiler verification
 
-Corpus **1,020 PASS / 19 SKIP** over 1,039 inputs, zero
+Corpus **1,024 PASS / 19 SKIP** over 1,043 inputs, zero
 FAIL/MISSING/ORPHAN. Normal build 58 s; tests 2 m 33 s. The sanitized
-corpus reports the same **1,020 PASS / 19 SKIP with zero AddressSanitizer,
+corpus reports the same **1,024 PASS / 19 SKIP with zero AddressSanitizer,
 UBSan or LSan findings**, zero timeouts and zero compile/link/run failures.
 All seven arithmetic methods, all 31 ownership methods, seven
 compiler-cleanup methods, two driver-path controls, the WASI IR control,
@@ -315,10 +346,10 @@ cannot see code it does not contain; the tree can. (The earlier rounds
 reported 816; that was a hand-assembled subset, not a smaller tree.)
 
 **Twenty-one** of the new `test_declaration_forms.py` rows FAIL against a
-compiler built from the branch point and pass against this one. Of the 28 new
-corpus fixtures, **15 are controls**: the branch-point compiler does not
+compiler built from the branch point and pass against this one. Of the 32 new
+corpus fixtures, **19 are controls**: the branch-point compiler does not
 reject them. Eight it accepts outright and emits IR clang is happy with — the
-check was simply missing — and seven it exits 0 on while emitting IR clang
+check was simply missing — and eleven it exits 0 on while emitting IR clang
 refuses. The remaining 13 are rejected by both, because they pin the WORDING
 of diagnostics that already existed and that no test made the compiler print.
 
@@ -401,11 +432,16 @@ against the repaired compiler.
    yield is.** "Exit 0 and `main` is there" is a weak invariant: most of what
    this round found KEEPS main. `--clang` asks, of every mutant that exits 0,
    whether clang accepts the module. Seeds 1-8 under the weak invariant alone
-   were clean; under `--clang` seven finished seeds produced **508 findings
-   and six root causes** (see "The second oracle" above) — and seeds 5, 6 and
-   8, run against the compiler the first three fixes had already repaired,
-   still produced three causes of their own. **Seed 7 has not finished and
-   seed 9 onwards has not been run. That is where the next one is.**
+   were clean; under `--clang` the same eight produced **514 findings and ten
+   root causes** (see "The second oracle" above). Every wave was run against
+   the compiler the previous wave's fixes had already repaired and every wave
+   still found its own — the yield is not falling off yet. **Seed 9 onwards,
+   under `--clang`, is where the next one is.**
+
+   Recheck from the REPOSITORY ROOT. A mutant that cannot resolve its
+   `$`-imports exits 1, and a harness that reads exit 1 as "rejected" counts
+   it as answered; that mistake hid three live findings twice in this round
+   before the third attempt caught them.
 
    One of the six needed no mutation at all: a foreach ending in `break`, as
    the last statement of a `~` body, emits an empty basic block. Ordinary

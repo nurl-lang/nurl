@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_enumlit_tag_not_variant.nu:19:17: error: field 0 of this enum literal is the variant TAG, but this value has type 'f'. A literal names its variant first ('@ Color { Red }', '@ Node { NText payload }') — if the payload is there but the variant name is not, every value has shifted one slot left.
+    : N n @ N { 1.5 5 }
+                ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

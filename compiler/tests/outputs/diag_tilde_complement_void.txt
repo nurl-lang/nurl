@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_tilde_complement_void.nu:15:5: error: '~' has no value to complement — its operand is 'v'/void. A '~' is either a LOOP ('~ cond { body }') or a bitwise complement of a value ('~ mask'); with the condition missing, the body block becomes the operand and a block yields no value.
+    ^ 0
+    ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

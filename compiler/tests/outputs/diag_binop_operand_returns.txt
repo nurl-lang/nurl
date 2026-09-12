@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_binop_operand_returns.nu:22:9: error: an operand of this binary operator RETURNS, so the operator can never run — a '^' inside the operand terminates the function before the result is used. Usually the operator is one operand short and has swallowed the block that follows it: every NURL operator has fixed arity and no closing bracket, so count the operands before this one.
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

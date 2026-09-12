@@ -4152,6 +4152,10 @@
     // side-channel (whose stale value is load-bearing elsewhere).
     : i __ltok ( nurl_lex_type lex )
     : s __lvid ( nurl_str_cat ( nurl_lex_val lex ) `` )
+    // Was control already dead before this operator's operands? If it
+    // was NOT and it is afterwards, one of them terminated the block —
+    // see the check below.
+    : i __bin_dr0 g_did_ret
     : ~ s lv ( gen_operand lex syms cg )
     ( bck_save_expr_carriers syms `__last_arith_params__` __ltok __lvid )
     : s left_params ( nurl_sym_get syms `__last_arith_params__` )
@@ -4187,8 +4191,21 @@
     // token` on the NEXT line. Found by deleting one token from
     // loop_break_continue.nu with the clang oracle on. Same arity trap,
     // same cure, third spelling.
-    ? | == 0 ( nurl_str_len lv ) == 0 ( nurl_str_len rv )
+    ? & | == 0 ( nurl_str_len lv ) == 0 ( nurl_str_len rv ) == __bin_dr0 0
     { ( die_stmt lex `an operand of this binary operator produces no value — a block that BREAKS, CONTINUES or RETURNS hands back no register at all. Usually the operator is one operand SHORT and has swallowed the block that follows it: every NURL operator has fixed arity and no closing bracket, so count the operands before this one.` ) }
+    {}
+    // The same cause, the other outcome. A block operand ending in `^`
+    // does hand back a register — the one the `^` returned — and the
+    // recorded TYPE is the operator's, not that value's, so
+    // `? != ( f x ) { ^ ( string_from `…` ) }` emitted
+    // `icmp ne i64 %r2, %r4` with %r4 a `%String`: the aggregate-operand
+    // rule below never saw an aggregate. Control being dead AFTER the
+    // operands when it was live before is the exact tell, and it means
+    // the operator cannot run at all. Found by deleting the `0` from
+    // `? != 0 ( nurl_str_eq name `a` ) { ^ … }`, which is what puts a
+    // block in operand position in the first place.
+    ? & == __bin_dr0 0 != g_did_ret 0
+    { ( die_stmt lex `an operand of this binary operator RETURNS, so the operator can never run — a '^' inside the operand terminates the function before the result is used. Usually the operator is one operand short and has swallowed the block that follows it: every NURL operator has fixed arity and no closing bracket, so count the operands before this one.` ) }
     {}
     // ── Enum operands are NOMINAL ─────────────────────────────────────
     // `== c Green` used to emit `icmp eq %Color %r4, %r5` with %r5 an
@@ -13392,6 +13409,16 @@
         // statement (grammar alternative 3). `cv` already holds the
         // operand value (emitted into `lc`); apply the complement and
         // return it. `lc` stays as a harmless single-predecessor block.
+        //
+        // The operand has to BE a value. The loop form above checks its
+        // condition ("this condition produces no value"); this form did
+        // not, and `~ { }` — a `~` whose condition was deleted, so the
+        // BODY became the operand — emitted `xor void undef, -1`. Found
+        // by deleting the `more` from `~ more {` in fat_fs.nu.
+        ( die_if_void lex cv `'~' complement` )
+        ? ( seq cvt `void` )
+        { ( die lex `'~' has no value to complement — its operand is 'v'/void. A '~' is either a LOOP ('~ cond { body }') or a bitwise complement of a value ('~ mask'); with the condition missing, the body block becomes the operand and a block yields no value.` ) }
+        {}
         : s res_c ( nurl_cg_reg cg )
         ? ( seq cvt `double` )
         { ( nurl_print `  ` ) ( nurl_print res_c )
@@ -18423,6 +18450,21 @@
             } {}
         } {}
     } {}
+    // A cast's TARGET is a type position, and every other one runs the
+    // declared-type check. This one did not: `# * NoSuchTy 1` emitted
+    // `inttoptr i64 1 to %NoSuchTy*`, a reference to a type nothing
+    // defines, and clang answered "use of undefined type" about
+    // generated IR with no source location. The BARE form is caught
+    // downstream by whatever consumes the value, which is why only the
+    // pointer form reached clang — and a function's NAME in that slot
+    // (`# * g 1`, one deleted `u` away from `# *u g 1`) is how the
+    // token-deletion sweep produced it.
+    //
+    // AFTER the binding-name case above, deliberately: that one knows
+    // the name is a live binding and can say "did you mean to ASSIGN to
+    // it", which is the better message whenever it applies. This is the
+    // backstop for every other name.
+    ( check_type_known lex syms dt `a cast target type` __cast_line __cast_col )
     : i source_tt ( nurl_lex_type lex )
     : s source_val ( nurl_lex_val lex )
     : s val ( gen_operand lex syms cg )
@@ -19548,6 +19590,24 @@
             `field 0 of this option/result literal is the TAG and must be a bool ('T' present / Ok, 'F' absent / Err), but this value has type '`
             ( llvm_to_nurl ( nurl_llty fty ) ) `'` `` )
             `. A literal is written '@ ?T { T payload }' or '@ !T E { F err }' — if the payload is there but the tag is not, every value has shifted one slot left.` ) ) }
+        {}
+        // An ENUM literal's field 0 is the variant TAG, and the same
+        // rule applies to it for the same reason. The tag lowers to an
+        // integer — a variant NAME is how it is written, and its tag is
+        // what it lowers to — so anything that is not one slid into the
+        // slot from somewhere else. `@ Node { NText ( string_from t ) }`
+        // with the variant name deleted emitted
+        // `insertvalue %Node zeroinitializer, %String %r1, 0`: a String
+        // in the tag slot, exit 0, invalid IR. Same shape as the
+        // option/result tag above, one type constructor over; the
+        // token-deletion sweep produced both.
+        ? & & & == idx 0 == ( nurl_str_get agg_ty 0 ) 37
+        != 0 ( nurl_sym_len2 syms ( nurl_str_slice agg_ty 1 - ( nurl_str_len agg_ty ) 1 ) `__variants` )
+        == 0 ( int_width ( nurl_llty fty ) )
+        { ( die_pos lex __fld_line __fld_col ( nurl_str_cat ( nurl_str_cat4
+            `field 0 of this enum literal is the variant TAG, but this value has type '`
+            ( llvm_to_nurl ( nurl_llty fty ) ) `'` `` )
+            `. A literal names its variant first ('@ Color { Red }', '@ Node { NText payload }') — if the payload is there but the variant name is not, every value has shifted one slot left.` ) ) }
         {}
         // For payload fields (idx > 0): conversion depends on aggregate type.
         // opt/res types ({ i1, ... }) need i64 coercion; enum types need ptr coercion.
