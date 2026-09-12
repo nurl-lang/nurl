@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_trait_method_no_name.nu:7:7: error: expected a method name after '@' in this trait body, found '→'. A trait declares each method as '@ name params → ret' — a signature alone for a required method, or a signature and a body for a default one.
+    @ → i
+      ^

@@ -237,147 +237,147 @@ Regenerate after adding/renaming globals:
 
 | global | declared | written by | holds |
 |---|---|---|---|
-| `g_arg_ident_log` | :1070 | `gen_call`, `gen_ident` | --strict-borrowck only: every binding NAME read while generating the current call argument, including reads ne |
-| `g_auto_drop_strings` | :1954 | `main` | Phase 2B auto-drop-strings feature flag. Default ON. Compiler's own source uses patterns (strings stored via n |
-| `g_bck` | :1192 | `main` |  |
-| `g_bck_cap_names` | :1127 | `bck_add_cap_name`, `bck_fn_begin`, `gen_closure_expr` | Names of `:`-bound closures in the CURRENT function whose capture list is non-empty — the allocation-free pre- |
-| `g_bck_cap_via` | :1138 | `bck_fn_begin`, `bck_note_closure_caps`, `gen_closure_expr`, `resolve_deferred_borrowck` | `<handle> <closure>` pairs for the current function: which closure binding made a captured handle reachable at |
-| `g_bck_closure_depth` | :1212 | `gen_closure_expr` |  |
-| `g_bck_depth` | :1195 | `bck_block_enter`, `bck_block_exit`, `bck_fn_begin`, `gen_closure_expr` | data (statement list etc.); allocated in main() only when --borrowck is set |
-| `g_bck_errors` | :1216 | `bck_emit_error` | capture hooks no-op so closure statements do not inline into the enclosing function's list (so closure scopes  |
-| `g_bck_gen` | :1196 | `bck_analyze` |  |
-| `g_bck_inn` | :1200 | `bck_analyze`, `bck_intern` | intern table — bumped per bck_analyze so entries from earlier functions read as misses without any table clear |
-| `g_bck_rec_off` | :1211 | (init only) | >0 while the borrow checker's capture hooks must not record. Used to be spelled `g_bck_closure_depth != 0`, wh |
-| `g_blk_tail_lit_col` | :3641 | `gen_block_expr`, `gen_block_ret` |  |
-| `g_blk_tail_lit_line` | :3640 | `gen_block_expr`, `gen_block_ret`, `gen_block_stmts`, `gen_cond` +1 | g_blk_tail_lit_line/col — the dangling-literal exemption's escape hatch, closed. A bare literal as a value blo |
-| `g_borrowck` | :1153 | `main` | ── Borrow-checker state ───────────────────────────────────────── g_borrowck is 1 (ON) by default; `--no-borro |
-| `g_closure_consumed` | :1117 | `bck_stash_move`, `gen_closure_expr` | Names a closure BODY consumed. bck_stash_move drops its records while inside a closure — the body's statements |
-| `g_closure_defs` | :1139 | `main` |  |
-| `g_closure_emit_base` | :1143 | `emit_closure_globals`, `main` |  |
-| `g_closure_types` | :1140 | `main` |  |
-| `g_cond_depth` | :1190 | `gen_cond`, `gen_loop` | Nesting depth of "we are parsing an enclosing construct's CONDITION". The arity check above fires when a `{` f |
-| `g_cpu_dispatch` | :1995 | `main` | Which wider ISA the `simd` prefix dispatches to. 1 = x86-64-v3 (AVX2 + BMI2 + FMA), 0 = no dispatch, emit the  |
+| `g_arg_ident_log` | :1094 | `gen_call`, `gen_ident` | --strict-borrowck only: every binding NAME read while generating the current call argument, including reads ne |
+| `g_auto_drop_strings` | :1978 | `main` | Phase 2B auto-drop-strings feature flag. Default ON. Compiler's own source uses patterns (strings stored via n |
+| `g_bck` | :1216 | `main` |  |
+| `g_bck_cap_names` | :1151 | `bck_add_cap_name`, `bck_fn_begin`, `gen_closure_expr` | Names of `:`-bound closures in the CURRENT function whose capture list is non-empty — the allocation-free pre- |
+| `g_bck_cap_via` | :1162 | `bck_fn_begin`, `bck_note_closure_caps`, `gen_closure_expr`, `resolve_deferred_borrowck` | `<handle> <closure>` pairs for the current function: which closure binding made a captured handle reachable at |
+| `g_bck_closure_depth` | :1236 | `gen_closure_expr` |  |
+| `g_bck_depth` | :1219 | `bck_block_enter`, `bck_block_exit`, `bck_fn_begin`, `gen_closure_expr` | data (statement list etc.); allocated in main() only when --borrowck is set |
+| `g_bck_errors` | :1240 | `bck_emit_error` | capture hooks no-op so closure statements do not inline into the enclosing function's list (so closure scopes  |
+| `g_bck_gen` | :1220 | `bck_analyze` |  |
+| `g_bck_inn` | :1224 | `bck_analyze`, `bck_intern` | intern table — bumped per bck_analyze so entries from earlier functions read as misses without any table clear |
+| `g_bck_rec_off` | :1235 | (init only) | >0 while the borrow checker's capture hooks must not record. Used to be spelled `g_bck_closure_depth != 0`, wh |
+| `g_blk_tail_lit_col` | :3665 | `gen_block_expr`, `gen_block_ret` |  |
+| `g_blk_tail_lit_line` | :3664 | `gen_block_expr`, `gen_block_ret`, `gen_block_stmts`, `gen_cond` +1 | g_blk_tail_lit_line/col — the dangling-literal exemption's escape hatch, closed. A bare literal as a value blo |
+| `g_borrowck` | :1177 | `main` | ── Borrow-checker state ───────────────────────────────────────── g_borrowck is 1 (ON) by default; `--no-borro |
+| `g_closure_consumed` | :1141 | `bck_stash_move`, `gen_closure_expr` | Names a closure BODY consumed. bck_stash_move drops its records while inside a closure — the body's statements |
+| `g_closure_defs` | :1163 | `main` |  |
+| `g_closure_emit_base` | :1167 | `emit_closure_globals`, `main` |  |
+| `g_closure_types` | :1164 | `main` |  |
+| `g_cond_depth` | :1214 | `gen_cond`, `gen_loop` | Nesting depth of "we are parsing an enclosing construct's CONDITION". The arity check above fires when a `{` f |
+| `g_cpu_dispatch` | :2019 | `main` | Which wider ISA the `simd` prefix dispatches to. 1 = x86-64-v3 (AVX2 + BMI2 + FMA), 0 = no dispatch, emit the  |
 | `g_cur_ret_llty` | :133 | `gen_fn_decl_concrete` | LLVM return type of the function whose body is currently being generated. Diagnostics-only: gen_field_store co |
-| `g_dbg_blob_syms` | :1432 | `dbg_init` | module-flag id we might add later |
-| `g_dbg_cu_id` | :1435 | `dbg_init` |  |
-| `g_dbg_current_file_id` | :1464 | `gen_fn_decl_concrete` | defining path for the mono being emitted (the mono's lexer filename is the synthetic `<generic …>`). Set/resto |
-| `g_dbg_current_loc` | :1438 | `dbg_synth_begin`, `dbg_synth_end`, `gen_closure_expr`, `gen_fn_decl_concrete` +1 | (0 outside any function) |
-| `g_dbg_current_subprogram` | :1436 | `dbg_synth_begin`, `dbg_synth_end`, `gen_closure_expr`, `gen_fn_decl_concrete` |  |
-| `g_dbg_enabled` | :1429 | `main` | ── DWARF debug-info state ─────────────────────────────────────── All zero/empty when --g is OFF; emit helpers |
-| `g_dbg_file_id` | :1434 | `dbg_init` | flushed at end-of-module by dbg_flush |
-| `g_dbg_file_syms` | :1453 | `dbg_init` | uses this instead of `nurl_lex_line` for the !DISubprogram source line. Set by emit_one_instantiation so per-m |
-| `g_dbg_next_id` | :1430 | `dbg_alloc_id` |  |
-| `g_dbg_override_file` | :1458 | `emit_one_instantiation` | every source file gets its own !DIFile and a subprogram debug-attributes to the file that DEFINES it (imports, |
-| `g_dbg_override_line` | :1447 | `emit_one_instantiation` | the type for every local until Phase 6 lays down per-LLVM-type DIBasicType entries indexed by `vt`. |
-| `g_dbg_placeholder_ty` | :1443 | `dbg_init` | dbg_init and reused for every fn. Phase 6 will replace with per-fn signature types. |
-| `g_dbg_subroutine_ty` | :1440 | `dbg_init` | emit_dbg_eol then omits `, !dbg !N`) |
-| `g_dbg_type_syms` | :1482 | `dbg_init` |  |
-| `g_dce` | :31343 | `main` |  |
-| `g_dce_end` | :31369 | `dce_emit_module`, `dce_free` |  |
-| `g_dce_keep` | :31354 | `main` | `--keep=a,b,c` — extra DCE roots.  The pass's root set is `main` plus whatever module-scope constants name. Th |
-| `g_dce_live` | :31370 | `dce_emit_module`, `dce_free` |  |
-| `g_dce_map` | :31373 | `dce_emit_module`, `dce_free` |  |
-| `g_dce_mod` | :31367 | `dce_emit_module` | The module text, as an integer cast of a BORROWED `s`. Deliberately not a `: ~ s` global: a mutable string glo |
-| `g_dce_qn` | :31372 | `__dce_mark_name`, `dce_emit_module` |  |
-| `g_dce_queue` | :31371 | `dce_emit_module`, `dce_free` |  |
-| `g_dce_start` | :31368 | `dce_emit_module`, `dce_free` |  |
-| `g_defer_count` | :954 | `gen_defer`, `gen_fn_decl_concrete` |  |
-| `g_deferred_bck` | :1347 | `main` | Functions whose borrow-check walk is parked until the whole module has compiled (see borrowck_fn_end). `n` is  |
+| `g_dbg_blob_syms` | :1456 | `dbg_init` | module-flag id we might add later |
+| `g_dbg_cu_id` | :1459 | `dbg_init` |  |
+| `g_dbg_current_file_id` | :1488 | `gen_fn_decl_concrete` | defining path for the mono being emitted (the mono's lexer filename is the synthetic `<generic …>`). Set/resto |
+| `g_dbg_current_loc` | :1462 | `dbg_synth_begin`, `dbg_synth_end`, `gen_closure_expr`, `gen_fn_decl_concrete` +1 | (0 outside any function) |
+| `g_dbg_current_subprogram` | :1460 | `dbg_synth_begin`, `dbg_synth_end`, `gen_closure_expr`, `gen_fn_decl_concrete` |  |
+| `g_dbg_enabled` | :1453 | `main` | ── DWARF debug-info state ─────────────────────────────────────── All zero/empty when --g is OFF; emit helpers |
+| `g_dbg_file_id` | :1458 | `dbg_init` | flushed at end-of-module by dbg_flush |
+| `g_dbg_file_syms` | :1477 | `dbg_init` | uses this instead of `nurl_lex_line` for the !DISubprogram source line. Set by emit_one_instantiation so per-m |
+| `g_dbg_next_id` | :1454 | `dbg_alloc_id` |  |
+| `g_dbg_override_file` | :1482 | `emit_one_instantiation` | every source file gets its own !DIFile and a subprogram debug-attributes to the file that DEFINES it (imports, |
+| `g_dbg_override_line` | :1471 | `emit_one_instantiation` | the type for every local until Phase 6 lays down per-LLVM-type DIBasicType entries indexed by `vt`. |
+| `g_dbg_placeholder_ty` | :1467 | `dbg_init` | dbg_init and reused for every fn. Phase 6 will replace with per-fn signature types. |
+| `g_dbg_subroutine_ty` | :1464 | `dbg_init` | emit_dbg_eol then omits `, !dbg !N`) |
+| `g_dbg_type_syms` | :1506 | `dbg_init` |  |
+| `g_dce` | :31502 | `main` |  |
+| `g_dce_end` | :31528 | `dce_emit_module`, `dce_free` |  |
+| `g_dce_keep` | :31513 | `main` | `--keep=a,b,c` — extra DCE roots.  The pass's root set is `main` plus whatever module-scope constants name. Th |
+| `g_dce_live` | :31529 | `dce_emit_module`, `dce_free` |  |
+| `g_dce_map` | :31532 | `dce_emit_module`, `dce_free` |  |
+| `g_dce_mod` | :31526 | `dce_emit_module` | The module text, as an integer cast of a BORROWED `s`. Deliberately not a `: ~ s` global: a mutable string glo |
+| `g_dce_qn` | :31531 | `__dce_mark_name`, `dce_emit_module` |  |
+| `g_dce_queue` | :31530 | `dce_emit_module`, `dce_free` |  |
+| `g_dce_start` | :31527 | `dce_emit_module`, `dce_free` |  |
+| `g_defer_count` | :978 | `gen_defer`, `gen_fn_decl_concrete` |  |
+| `g_deferred_bck` | :1371 | `main` | Functions whose borrow-check walk is parked until the whole module has compiled (see borrowck_fn_end). `n` is  |
 | `g_diag_ctx` | :124 | `__impl_sig_check`, `dyn_subst_parts`, `emit_missing_defaults`, `emit_one_instantiation` +1 | Diagnostic context suffix, appended to every die/warn message while non-empty. Set (and saved/restored — insta |
 | `g_diag_recover_active` | :115 | `main`, `parse_program` |  |
-| `g_did_ret` | :921 | `__close_dead_block`, `__handle_unreachable_stmt`, `__tail_noreturn_close`, `gen_closure_expr` +9 |  |
-| `g_dyn_dtout` | :1044 | `dyn_method_decltrait` | dyn_method_decltrait's result rides a global too: its callers sit ABOVE its definition, so an owned return wou |
-| `g_dyn_flat_out` | :1038 | `__dyn_flat_add`, `__dyn_flat_reset` | Scratch accumulators for dyn_flat_methods (a NURL fn returns one value, so the recursive supertrait walk threa |
-| `g_dyn_flat_seen` | :1039 | `__dyn_flat_add`, `__dyn_flat_reset` |  |
-| `g_dyn_needed` | :1035 | `dyn_note_needed` | Dynamic trait objects (`%Trait`, docs/spec.md §4.9). Space-separated set of trait names that appear as a `%Tra |
+| `g_did_ret` | :945 | `__close_dead_block`, `__handle_unreachable_stmt`, `__tail_noreturn_close`, `gen_closure_expr` +9 |  |
+| `g_dyn_dtout` | :1068 | `dyn_method_decltrait` | dyn_method_decltrait's result rides a global too: its callers sit ABOVE its definition, so an owned return wou |
+| `g_dyn_flat_out` | :1062 | `__dyn_flat_add`, `__dyn_flat_reset` | Scratch accumulators for dyn_flat_methods (a NURL fn returns one value, so the recursive supertrait walk threa |
+| `g_dyn_flat_seen` | :1063 | `__dyn_flat_add`, `__dyn_flat_reset` |  |
+| `g_dyn_needed` | :1059 | `dyn_note_needed` | Dynamic trait objects (`%Trait`, docs/spec.md §4.9). Space-separated set of trait names that appear as a `%Tra |
 | `g_err_count` | :114 | `__diag_abort` | Multi-error mode (rustc-style): while parse_program's per-declaration recovery frame is active (g_diag_recover |
-| `g_ffi_host_imports` | :1160 | `main` | g_ffi_host_imports is 1 when `--ffi-host-imports` is passed: external `&`-FFI libraries are then satisfied by  |
-| `g_fn_arc_mut` | :1388 | `main` | Per-function shared-mutation summary (docs/MEMORY.md §6.5). `g_fn_arc_mut[fname]` is `1` when the body mutates |
-| `g_fn_arc_mut_witness` | :1091 | `gen_call`, `gen_closure_expr`, `gen_fn_decl_concrete` | Function-level witness for the same property. NOT a symbol-table key: the mutation is usually inside a loop or |
-| `g_fn_compiled` | :1353 | `main` | Names of functions whose body has been compiled — the "is the inline summary trustworthy for this callee?" tes |
-| `g_fn_embeds` | :1280 | `main` | Per-function EMBEDDED-parameter map. `g_fn_embeds[fname]` is the space-separated list of 0-based indices of pa |
-| `g_fn_escapes` | :1260 | `main` | Per-function escaping-parameter map. `g_fn_escapes[fname]` is the space-separated list of 0-based indices of p |
-| `g_fn_inout` | :1233 | `main` | Per-function inout-parameter map. `g_fn_inout[fname]` is the space-separated list of 0-based indices of `inout |
-| `g_fn_invoke_only` | :1307 | `main` | Per-function *invoke-only* parameter map (closure-env reclamation, docs/MEMORY.md §7.4). `g_fn_invoke_only[fna |
-| `g_fn_mutates` | :1397 | `main` | Per-function container-mutation summary (docs/MEMORY.md §2.5). `g_fn_mutates[fname]` lists the 0-based paramet |
-| `g_fn_mutates_witness` | :1398 | `gen_call`, `gen_closure_expr`, `gen_fn_decl_concrete` |  |
-| `g_fn_noreturn` | :1411 | `main` | Noreturn registry. `g_fn_noreturn[fname]` is `1` when a call to fname never returns to its caller. Seeded with |
-| `g_fn_pos_syms` | :998 | `main` |  |
-| `g_fn_ret_alias` | :1379 | `main` | Per-function returned-HANDLE map — the ownership dual of g_fn_ret_param, and deliberately a separate map rathe |
-| `g_fn_ret_count` | :1416 | `gen_fn_decl_concrete`, `gen_ret` | Count of `^` statements seen while compiling the current function body (closure bodies included — that over-co |
-| `g_fn_ret_param` | :1365 | `main` | Per-function returned-parameter map. `g_fn_ret_param[fname]` is the space-separated list of 0-based indices of |
-| `g_fn_ret_view` | :1293 | `main` | Per-function RETURNS-A-VIEW map. `g_fn_ret_view[fname]` is set when the body builds an aggregate one of whose  |
-| `g_fn_sink` | :1241 | `main` | Per-function sink-parameter map: space-separated parameter indices from explicit signatures and consuming call |
-| `g_fn_slice_decls` | :952 | `gen_fn_decl_concrete`, `mem_slice_decl_add` | Cheap per-function gate for the Phase 2D slice machinery: most functions declare no owned slices at all, and t |
-| `g_fn_unverified` | :1245 | `main` | Retention through an unverified foreign or indirect call. Lifetime-only facts; kept separate from diagnostic e |
-| `g_func_count` | :1142 | `gen_call_kwargs`, `gen_closure_expr`, `main`, `store_closure_func` |  |
-| `g_generic_struct_syms` | :956 | `main` |  |
-| `g_generic_syms` | :955 | `main` |  |
-| `g_have_simd_fn` | :1984 | `emit_multiversion` | Set by emit_multiversion the first time it runs. The splitter reads it and declines to partition the module —  |
-| `g_impl_name_syms` | :961 | `main` |  |
-| `g_impl_pos_syms` | :1007 | `main` | `@ fname` scan registration. Two files are free to each have a private `__get`-style helper IN THEIR OWN HEADS |
-| `g_impl_ret_syms` | :960 | `main` |  |
-| `g_impl_trait_syms` | :962 | `main` |  |
-| `g_in_match_arm` | :942 | `gen_match` | Non-zero while parsing a `??` match-arm body. The XOR-confusion warning in gen_ret keys off "a non-terminator  |
-| `g_input_key` | :31498 | `main` |  |
-| `g_input_source` | :31497 | `main` | Borrowed aliases to main's live source/key bindings when --stdin supplies an overlay. Every source read (inclu |
-| `g_last_closure_nonsend` | :1055 | `gen_closure_expr` | record per impl block, verified after scan_fn_sigs once every impl across the program (incl. imports) is regis |
-| `g_last_closure_sharedmut` | :1082 | `gen_call`, `gen_closure_expr` | Thread-safety, the SHARED-MUTATION half (docs/MEMORY.md §6.5). Set to the offending binding name while a closu |
-| `g_last_type_ptr` | :5898 | `nurl_set_last_type` |  |
-| `g_lint` | :2019 | `main` | Unused-symbol lint (opt-in via `--lint`). Default OFF so ordinary builds — and the compiler's own bootstrap, w |
-| `g_lint_gen` | :2034 | `lint_fn_begin` |  |
-| `g_lint_handles` | :2032 | `lint_init` | g_lint_handles — per-function roster of MANUALLY-MANAGED handles (docs/MEMORY.md §7.4: Vec and String, the two |
-| `g_lint_reads` | :2022 | `lint_init` |  |
-| `g_lint_recording` | :2041 | `__compile_pipeline` | 1 only during the main parse_program pass. Cleared before flush_deferred_instantiations so synthetic generic m |
-| `g_lint_released` | :2033 | `lint_init` |  |
-| `g_lint_syms` | :2020 | `lint_init` |  |
-| `g_lint_used` | :2021 | `lint_init` |  |
-| `g_live_lexers` | :6025 | `nurl_lex_free`, `nurl_lex_new` |  |
-| `g_live_symtables` | :6024 | `nurl_sym_free`, `nurl_sym_new` |  |
-| `g_lock_depth` | :1107 | `gen_call`, `gen_closure_expr` | Lock depth, for the same check. A mutation of shared contents is only a race when nothing serialises it, so th |
-| `g_loop_break_used` | :1424 | `main` | `g_loop_break_used[exit_label]` is `1` when a `break` targeting that loop's exit label was compiled. Exit labe |
-| `g_mono_tparam_tys` | :1481 | `emit_one_instantiation` | Space-separated list of the concrete type-arguments substituted for a generic function's type parameters in th |
-| `g_origin_functions` | :22537 | `main` |  |
-| `g_origin_nodes` | :22535 | `origin_free`, `origin_new` | Return-escape inference (docs/MEMORY.md §2.8): record that the enclosing function may RETURN this bare-identif |
-| `g_origin_returns` | :22538 | `main` |  |
-| `g_origin_work` | :22536 | `origin_free`, `origin_queue`, `origin_resolve` |  |
-| `g_owned_globals` | :925 | `gen_const_decl` | Names of the mutable string globals that own their buffer (each has a compiler-emitted `<name>__nurlown` flag) |
-| `g_pending_escape` | :1319 | `main` | Deferred interprocedural-escape checks (docs/MEMORY.md §3 forward / generic boundary). A stack reference passe |
-| `g_pending_impl` | :1341 | `main` | Deferred summary IMPLICATIONS (docs/MEMORY.md §2.7 / §2.8). A summary is inferred as each body compiles, so a  |
-| `g_pending_inline` | :1980 | `gen_fn_decl_concrete`, `parse_toplevel_decl`, `scan_fn_sigs` | g_pending_inline is the `inline` prefix's counterpart to g_pending_simd: set when the parser consumes a TT_INL |
-| `g_pending_pub` | :1969 | `parse_toplevel_decl`, `scan_fn_sigs`, `vis_take_pending_pub` | Visibility (grammar v2.0). Tracks the source-file of every @-defined function and per-file strict-mode opt-in. |
-| `g_pending_simd` | :1975 | `gen_fn_decl_concrete`, `parse_toplevel_decl`, `scan_fn_sigs` | g_pending_simd is the `simd` prefix's counterpart to g_pending_pub: set when the parser consumes a TT_SIMD ahe |
-| `g_priv_file_count` | :994 | `priv_file_id` |  |
-| `g_priv_file_ids` | :993 | `main` | `??`/`?` arms). Consumers that NEED a value (a cast, a let/assign) die with this appended, so "produced no val |
-| `g_priv_owner_files` | :996 | `main` |  |
-| `g_priv_owner_ids` | :995 | `main` |  |
-| `g_priv_warned` | :997 | `main` |  |
-| `g_ptrtab` | :1191 | `main` |  |
+| `g_ffi_host_imports` | :1184 | `main` | g_ffi_host_imports is 1 when `--ffi-host-imports` is passed: external `&`-FFI libraries are then satisfied by  |
+| `g_fn_arc_mut` | :1412 | `main` | Per-function shared-mutation summary (docs/MEMORY.md §6.5). `g_fn_arc_mut[fname]` is `1` when the body mutates |
+| `g_fn_arc_mut_witness` | :1115 | `gen_call`, `gen_closure_expr`, `gen_fn_decl_concrete` | Function-level witness for the same property. NOT a symbol-table key: the mutation is usually inside a loop or |
+| `g_fn_compiled` | :1377 | `main` | Names of functions whose body has been compiled — the "is the inline summary trustworthy for this callee?" tes |
+| `g_fn_embeds` | :1304 | `main` | Per-function EMBEDDED-parameter map. `g_fn_embeds[fname]` is the space-separated list of 0-based indices of pa |
+| `g_fn_escapes` | :1284 | `main` | Per-function escaping-parameter map. `g_fn_escapes[fname]` is the space-separated list of 0-based indices of p |
+| `g_fn_inout` | :1257 | `main` | Per-function inout-parameter map. `g_fn_inout[fname]` is the space-separated list of 0-based indices of `inout |
+| `g_fn_invoke_only` | :1331 | `main` | Per-function *invoke-only* parameter map (closure-env reclamation, docs/MEMORY.md §7.4). `g_fn_invoke_only[fna |
+| `g_fn_mutates` | :1421 | `main` | Per-function container-mutation summary (docs/MEMORY.md §2.5). `g_fn_mutates[fname]` lists the 0-based paramet |
+| `g_fn_mutates_witness` | :1422 | `gen_call`, `gen_closure_expr`, `gen_fn_decl_concrete` |  |
+| `g_fn_noreturn` | :1435 | `main` | Noreturn registry. `g_fn_noreturn[fname]` is `1` when a call to fname never returns to its caller. Seeded with |
+| `g_fn_pos_syms` | :1022 | `main` |  |
+| `g_fn_ret_alias` | :1403 | `main` | Per-function returned-HANDLE map — the ownership dual of g_fn_ret_param, and deliberately a separate map rathe |
+| `g_fn_ret_count` | :1440 | `gen_fn_decl_concrete`, `gen_ret` | Count of `^` statements seen while compiling the current function body (closure bodies included — that over-co |
+| `g_fn_ret_param` | :1389 | `main` | Per-function returned-parameter map. `g_fn_ret_param[fname]` is the space-separated list of 0-based indices of |
+| `g_fn_ret_view` | :1317 | `main` | Per-function RETURNS-A-VIEW map. `g_fn_ret_view[fname]` is set when the body builds an aggregate one of whose  |
+| `g_fn_sink` | :1265 | `main` | Per-function sink-parameter map: space-separated parameter indices from explicit signatures and consuming call |
+| `g_fn_slice_decls` | :976 | `gen_fn_decl_concrete`, `mem_slice_decl_add` | Cheap per-function gate for the Phase 2D slice machinery: most functions declare no owned slices at all, and t |
+| `g_fn_unverified` | :1269 | `main` | Retention through an unverified foreign or indirect call. Lifetime-only facts; kept separate from diagnostic e |
+| `g_func_count` | :1166 | `gen_call_kwargs`, `gen_closure_expr`, `main`, `store_closure_func` |  |
+| `g_generic_struct_syms` | :980 | `main` |  |
+| `g_generic_syms` | :979 | `main` |  |
+| `g_have_simd_fn` | :2008 | `emit_multiversion` | Set by emit_multiversion the first time it runs. The splitter reads it and declines to partition the module —  |
+| `g_impl_name_syms` | :985 | `main` |  |
+| `g_impl_pos_syms` | :1031 | `main` | `@ fname` scan registration. Two files are free to each have a private `__get`-style helper IN THEIR OWN HEADS |
+| `g_impl_ret_syms` | :984 | `main` |  |
+| `g_impl_trait_syms` | :986 | `main` |  |
+| `g_in_match_arm` | :966 | `gen_match` | Non-zero while parsing a `??` match-arm body. The XOR-confusion warning in gen_ret keys off "a non-terminator  |
+| `g_input_key` | :31657 | `main` |  |
+| `g_input_source` | :31656 | `main` | Borrowed aliases to main's live source/key bindings when --stdin supplies an overlay. Every source read (inclu |
+| `g_last_closure_nonsend` | :1079 | `gen_closure_expr` | record per impl block, verified after scan_fn_sigs once every impl across the program (incl. imports) is regis |
+| `g_last_closure_sharedmut` | :1106 | `gen_call`, `gen_closure_expr` | Thread-safety, the SHARED-MUTATION half (docs/MEMORY.md §6.5). Set to the offending binding name while a closu |
+| `g_last_type_ptr` | :5922 | `nurl_set_last_type` |  |
+| `g_lint` | :2043 | `main` | Unused-symbol lint (opt-in via `--lint`). Default OFF so ordinary builds — and the compiler's own bootstrap, w |
+| `g_lint_gen` | :2058 | `lint_fn_begin` |  |
+| `g_lint_handles` | :2056 | `lint_init` | g_lint_handles — per-function roster of MANUALLY-MANAGED handles (docs/MEMORY.md §7.4: Vec and String, the two |
+| `g_lint_reads` | :2046 | `lint_init` |  |
+| `g_lint_recording` | :2065 | `__compile_pipeline` | 1 only during the main parse_program pass. Cleared before flush_deferred_instantiations so synthetic generic m |
+| `g_lint_released` | :2057 | `lint_init` |  |
+| `g_lint_syms` | :2044 | `lint_init` |  |
+| `g_lint_used` | :2045 | `lint_init` |  |
+| `g_live_lexers` | :6049 | `nurl_lex_free`, `nurl_lex_new` |  |
+| `g_live_symtables` | :6048 | `nurl_sym_free`, `nurl_sym_new` |  |
+| `g_lock_depth` | :1131 | `gen_call`, `gen_closure_expr` | Lock depth, for the same check. A mutation of shared contents is only a race when nothing serialises it, so th |
+| `g_loop_break_used` | :1448 | `main` | `g_loop_break_used[exit_label]` is `1` when a `break` targeting that loop's exit label was compiled. Exit labe |
+| `g_mono_tparam_tys` | :1505 | `emit_one_instantiation` | Space-separated list of the concrete type-arguments substituted for a generic function's type parameters in th |
+| `g_origin_functions` | :22586 | `main` |  |
+| `g_origin_nodes` | :22584 | `origin_free`, `origin_new` | Return-escape inference (docs/MEMORY.md §2.8): record that the enclosing function may RETURN this bare-identif |
+| `g_origin_returns` | :22587 | `main` |  |
+| `g_origin_work` | :22585 | `origin_free`, `origin_queue`, `origin_resolve` |  |
+| `g_owned_globals` | :949 | `gen_const_decl` | Names of the mutable string globals that own their buffer (each has a compiler-emitted `<name>__nurlown` flag) |
+| `g_pending_escape` | :1343 | `main` | Deferred interprocedural-escape checks (docs/MEMORY.md §3 forward / generic boundary). A stack reference passe |
+| `g_pending_impl` | :1365 | `main` | Deferred summary IMPLICATIONS (docs/MEMORY.md §2.7 / §2.8). A summary is inferred as each body compiles, so a  |
+| `g_pending_inline` | :2004 | `gen_fn_decl_concrete`, `parse_toplevel_decl`, `scan_fn_sigs` | g_pending_inline is the `inline` prefix's counterpart to g_pending_simd: set when the parser consumes a TT_INL |
+| `g_pending_pub` | :1993 | `parse_toplevel_decl`, `scan_fn_sigs`, `vis_take_pending_pub` | Visibility (grammar v2.0). Tracks the source-file of every @-defined function and per-file strict-mode opt-in. |
+| `g_pending_simd` | :1999 | `gen_fn_decl_concrete`, `parse_toplevel_decl`, `scan_fn_sigs` | g_pending_simd is the `simd` prefix's counterpart to g_pending_pub: set when the parser consumes a TT_SIMD ahe |
+| `g_priv_file_count` | :1018 | `priv_file_id` |  |
+| `g_priv_file_ids` | :1017 | `main` | `??`/`?` arms). Consumers that NEED a value (a cast, a let/assign) die with this appended, so "produced no val |
+| `g_priv_owner_files` | :1020 | `main` |  |
+| `g_priv_owner_ids` | :1019 | `main` |  |
+| `g_priv_warned` | :1021 | `main` |  |
+| `g_ptrtab` | :1215 | `main` |  |
 | `g_res_type_syms` | :338 | `main` | ── Res-type NURL tracking (must be declared before parse_type_res) ── g_res_type_syms is initialized to a new  |
-| `g_ret_forbidden` | :936 | `gen_cond`, `gen_logical_or_bitwise_and`, `gen_logical_or_bitwise_or`, `gen_operand` +1 | Cascade guard: 1 while parsing a VALUE OPERAND (a binary/unary/cast/ member operand, a call argument, a `?`/`? |
-| `g_sanitize_address` | :31492 | `main` | Emission policy, set by main's --sanitize-address flag. |
-| `g_split_fh` | :31363 | `__sp_close`, `__sp_open` |  |
-| `g_split_fill` | :31361 | `split_emit_module` |  |
-| `g_split_max` | :31357 | `main` |  |
-| `g_split_min` | :31358 | `main` |  |
-| `g_split_n` | :31356 | `__sp_whole`, `dce_emit_module`, `split_emit_module` | Partitioned emission — see "Partitioned emission" below. |
-| `g_split_out` | :31359 | `main` |  |
-| `g_split_part` | :31360 | `split_emit_module` |  |
-| `g_split_priv` | :31362 | `split_emit_module` |  |
-| `g_stmt_bare_lit` | :3627 | `gen_stmt` | g_stmt_bare_lit — set by gen_stmt to 1 when the statement it just parsed was a bare numeric/string LITERAL in  |
-| `g_stmt_bare_value` | :3654 | `gen_stmt` | g_stmt_bare_value — the literal flag's general sibling (critic A2, the last silent prefix-arity cascade): set  |
-| `g_stmt_col` | :3569 | `gen_block_ret`, `gen_stmt` | g_stmt_col — column of the current statement's first token, captured alongside g_stmt_line. `die_stmt` anchors |
-| `g_stmt_line` | :3562 | `gen_block_ret`, `gen_stmt` | g_stmt_line — source line of the statement gen_stmt is currently parsing. Read by gen_ident's "unexpected toke |
-| `g_str_idx` | :919 | `emit_deferred_cstr`, `emit_str_global`, `gen_str_lit` |  |
-| `g_str_syms` | :920 | `main` |  |
-| `g_strict_arity` | :1181 | `main` | strict-arity: the n-ary `&`/`\|` arity trap is an ERROR by default. The trap is the language's one documented f |
-| `g_strict_borrowck` | :1170 | `main` | `--strict-borrowck` (off by default) enables three additional checks: (1) aliased mutation through `. obj fiel |
-| `g_struct_inst_syms` | :959 | `main` | <sname>__stparams → space-separated type-var names (e.g. "T" or "K V") <sname>__sbody    → raw body source inc |
-| `g_super_obligations` | :1045 | `scan_impl_decl` |  |
-| `g_trait_pending` | :1028 | `main` | <Trait>__tparam           → trait's generic type-var name (e.g. "T") <Trait>__defaults         → space-separat |
-| `g_trait_syms` | :1014 | `main` | first registration. A `$`-imported impl is scanned once per importer, so the SAME (method, type) is registered |
-| `g_type_count` | :1141 | `main`, `store_closure_type` |  |
-| `g_type_emit_base` | :1144 | `main` |  |
-| `g_type_layouts` | :1249 | `main` | Type layout metadata precedes cleanup decisions; IR definitions retain their source ordering. This table owns  |
-| `g_vis_syms` | :1970 | `main` |  |
-| `g_void_reason` | :963 | `__void_reason_clear`, `gen_cond`, `gen_match`, `int_width` |  |
+| `g_ret_forbidden` | :960 | `gen_cond`, `gen_logical_or_bitwise_and`, `gen_logical_or_bitwise_or`, `gen_operand` +1 | Cascade guard: 1 while parsing a VALUE OPERAND (a binary/unary/cast/ member operand, a call argument, a `?`/`? |
+| `g_sanitize_address` | :31651 | `main` | Emission policy, set by main's --sanitize-address flag. |
+| `g_split_fh` | :31522 | `__sp_close`, `__sp_open` |  |
+| `g_split_fill` | :31520 | `split_emit_module` |  |
+| `g_split_max` | :31516 | `main` |  |
+| `g_split_min` | :31517 | `main` |  |
+| `g_split_n` | :31515 | `__sp_whole`, `dce_emit_module`, `split_emit_module` | Partitioned emission — see "Partitioned emission" below. |
+| `g_split_out` | :31518 | `main` |  |
+| `g_split_part` | :31519 | `split_emit_module` |  |
+| `g_split_priv` | :31521 | `split_emit_module` |  |
+| `g_stmt_bare_lit` | :3651 | `gen_stmt` | g_stmt_bare_lit — set by gen_stmt to 1 when the statement it just parsed was a bare numeric/string LITERAL in  |
+| `g_stmt_bare_value` | :3678 | `gen_stmt` | g_stmt_bare_value — the literal flag's general sibling (critic A2, the last silent prefix-arity cascade): set  |
+| `g_stmt_col` | :3593 | `gen_block_ret`, `gen_stmt` | g_stmt_col — column of the current statement's first token, captured alongside g_stmt_line. `die_stmt` anchors |
+| `g_stmt_line` | :3586 | `gen_block_ret`, `gen_stmt` | g_stmt_line — source line of the statement gen_stmt is currently parsing. Read by gen_ident's "unexpected toke |
+| `g_str_idx` | :943 | `emit_deferred_cstr`, `emit_str_global`, `gen_str_lit` |  |
+| `g_str_syms` | :944 | `main` |  |
+| `g_strict_arity` | :1205 | `main` | strict-arity: the n-ary `&`/`\|` arity trap is an ERROR by default. The trap is the language's one documented f |
+| `g_strict_borrowck` | :1194 | `main` | `--strict-borrowck` (off by default) enables three additional checks: (1) aliased mutation through `. obj fiel |
+| `g_struct_inst_syms` | :983 | `main` | <sname>__stparams → space-separated type-var names (e.g. "T" or "K V") <sname>__sbody    → raw body source inc |
+| `g_super_obligations` | :1069 | `scan_impl_decl` |  |
+| `g_trait_pending` | :1052 | `main` | <Trait>__tparam           → trait's generic type-var name (e.g. "T") <Trait>__defaults         → space-separat |
+| `g_trait_syms` | :1038 | `main` | first registration. A `$`-imported impl is scanned once per importer, so the SAME (method, type) is registered |
+| `g_type_count` | :1165 | `main`, `store_closure_type` |  |
+| `g_type_emit_base` | :1168 | `main` |  |
+| `g_type_layouts` | :1273 | `main` | Type layout metadata precedes cleanup decisions; IR definitions retain their source ordering. This table owns  |
+| `g_vis_syms` | :1994 | `main` |  |
+| `g_void_reason` | :987 | `__void_reason_clear`, `gen_cond`, `gen_match`, `int_width` |  |

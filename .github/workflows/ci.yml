@@ -374,6 +374,28 @@ jobs:
         # every frame, which is the class of bug it exists to stop.
         run: ./tools/check_strict_arity.sh
 
+      - name: diagnostic-coverage gate (does anything print this?)
+        # Every `die` / `warn` site in the compiler against the corpus:
+        # which messages does some test actually make it print? A message
+        # nothing prints is a message nobody has read, and the wording of
+        # a diagnostic is most of its value — `tools/diag_coverage_baseline.txt`
+        # ratchets on message IDENTITY, so a rewrite counts as new.
+        #
+        # It ran only by hand until this step, and that is exactly how
+        # fourteen diagnostics added in one hardening round reached main
+        # with nothing printing any of them. It was also three and a half
+        # minutes of one-process-per-file; it is thirty seconds in
+        # parallel, which is what makes it affordable here.
+        run: NURL_CHECK_JOBS=4 ./tools/check_diag_coverage.sh
+
+      - name: diagnostic anchor gate (where does it point?)
+        # The other half of the same question: a precise message against
+        # the wrong line is worse than a vague one against the right
+        # line. Reads the committed goldens and reports any diagnostic
+        # anchored on a line that is nothing but closing delimiters, or
+        # with a caret past the end of the line it echoes.
+        run: ./tools/check_diag_anchor.sh
+
       - name: metamorphic diagnostic-coverage gate
         # The same semantic situation, written N ways, must get the same
         # verdict from the checker. Every August 2026 borrow-checker fix

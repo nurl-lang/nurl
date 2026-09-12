@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_impl_param_mismatch.nu:12:1: error: method 'area' of trait 'Sh' implemented for type 'i' has non-receiver parameter types 'double', but the trait declares 'i64' (';'-separated, lowered). An impl must have the signature the trait declares, because every call site is type-checked against the declaration.
+% Sh i {
+^

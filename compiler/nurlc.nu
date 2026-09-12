@@ -661,9 +661,27 @@
         ? ( is_ident_tok ( nurl_lex_type lex ) )
         { : s sname ( nurl_lex_val lex )
             ( lint_note_used sname )
+            // The name's own position, captured before the argument walk
+            // consumes it: an arity report anchored where the lexer
+            // STOPS lands on the statement after the type, which is
+            // exactly the "precise message against the wrong line" the
+            // anchor gate exists to prevent.
+            : i __gt_line ( nurl_lex_line lex )
+            : i __gt_col ( nurl_lex_col lex )
             ( nurl_lex_advance lex )
             : ~ s mangle_sfx ``
             : ~ b has_tparam_arg F
+            // How many type arguments this application supplies. The
+            // generic FUNCTION call path has counted them for years
+            // ("declares 1 type parameter(s) (T) but this call supplies
+            // 2"); the TYPE path never did, and neither wrong count is
+            // benign: too FEW leaves the surplus parameter unsubstituted
+            // in the emitted type (`%P__i64 = type { i64, %V }` — a type
+            // nothing defines), and too MANY mangles the DEFINITION from
+            // the first n args while every reference carries all of them
+            // (`%Box__i64` defined, `%Box__i64__f64` referenced). Both
+            // exit 0 and are rejected by clang, with no NURL location.
+            : ~ i ta_count 0
             // EOF guard: an unterminated type application `( Name a b …` (which
             // can be reached as an enum payload type, e.g. a stray `( foo` with
             // no `)`) otherwise spins here on a no-op `nurl_lex_advance` at EOF.
@@ -686,16 +704,22 @@
                 // so `( Vec u64 )` and `( Vec i )` stay distinct monomorphs.
                 ? | | == ta_tt TT_LPAREN == ta_tt TT_QUEST | == ta_tt TT_QUESTQUEST == ta_tt TT_STAR
                 { : s ta_lty ( parse_type lex )
+                    = ta_count + ta_count 1
                     = mangle_sfx ( nurl_str_cat mangle_sfx
                     ( nurl_str_cat `__` ( mangle_type ta_lty ) ) ) }
                 { : s ta ( nurl_lex_val lex )
                     ( lint_note_used ta )
                     ( nurl_lex_advance lex )
                     ? ( is_tparam_like ta ) { = has_tparam_arg T } {}
+                    = ta_count + ta_count 1
                     = mangle_sfx ( nurl_str_cat mangle_sfx
                     ( nurl_str_cat `__` ( mangle_src_word ta ) ) ) }
             }
             ( expect lex TT_RPAREN )
+            // Arity first: a wrong COUNT makes every later question
+            // (unknown generic, instantiation, field types) answer about
+            // a type the program never named.
+            ( __die_if_generic_arity lex sname ta_count __gt_line __gt_col )
             // Unknown-generic check (critic A7): `( Vec i )` with no
             // generic struct template named `Vec` in scope produces a
             // `%Vec__i64` reference that nothing ever defines — LLVM
@@ -7937,8 +7961,23 @@
     : ~ s __kdt ( str_first_word __kdp )
     : ~ s __kdv ( str_skip_word __kdp )
     : s __kdroster ( nurl_sym_get2 syms fname `__ptypes_src` )
-    ? != 0 ( nurl_str_len __kdroster ) {
+    ? & != 0 ( nurl_str_len __kdroster )
+    == 0 ( nurl_sym_len2 g_generic_syms fname `__tparams` ) {
         : s __kdpsrc ( __kw_trim ( __ptypes_nth __kdroster k ) )
+        ? != 0 ( nurl_str_len __kdpsrc ) {
+            // The never-legal-clash battery, the same one gen_call runs on
+            // an argument that was WRITTEN. A default is a value spliced
+            // into the argument list, so every clash it can make is the
+            // same clash — and pointer-vs-scalar was the one neither
+            // default path checked: `@ f i a s b = 1 → i` emitted
+            // `call i64 @f(i64 1, i64 1)` against an `i8*` parameter, and
+            // `@ f i a i b = ``x`` → i` the reverse. Both assemble under
+            // opaque pointers and hand the callee reinterpreted bytes.
+            : i __kdplx ( nurl_lex_new __kdpsrc `<param>` )
+            : s __kdpllvm ( parse_type __kdplx )
+            ( nurl_lex_free __kdplx )
+            ( __arg_param_checks lex fname k __kdt __kdpllvm )
+        } {}
         : s __kdsc ( __call_arg_scalar lex syms cg fname k __kdpsrc __kdt __kdv )
         ? != 0 ( nurl_str_len __kdsc ) {
             = __kdt ( str_first_word __kdsc )
@@ -9625,8 +9664,18 @@
         : ~ b kw_stop F
         ~ & & < arg_idx kw_n ! kw_stop
         != 0 ( nurl_sym_len syms ( __kw_key fname `pd` arg_idx ) )
-        { : s dsrc ( nurl_sym_get syms ( __kw_key fname `pd` arg_idx ) )
-            : s argpiece ( __kw_emit_default syms cg dsrc )
+        {  // The SAME helper the named-argument path uses. This loop used
+            // to splice `__kw_emit_default`'s piece raw, so a positional
+            // call that omitted a defaulted argument ran no argument check
+            // at all — not the float↔integer law, not the pointer-vs-
+            // scalar law, not the integer-width coercion. `@ f i a f b = 1`
+            // called `( f 7 )` emitted `call void @f(i64 7, i64 1)`: the
+            // callee read xmm0 and printed 0, with no diagnostic anywhere.
+            // The explicit-argument path has checked all of this for years;
+            // one helper now answers for both spellings. (The missing-
+            // argument die inside it cannot fire here — the loop condition
+            // is that this parameter HAS a default.)
+            : s argpiece ( __kw_default_or_die lex syms cg fname arg_idx )
             ? == 0 ( nurl_str_len argstr )
             { = argstr argpiece = first 0 }
             { = argstr ( nurl_str_cat3 argstr `, ` argpiece ) }
@@ -23942,12 +23991,32 @@
             ~ & < j n ( __is_ident_char ( nurl_str_get llvm_ty j ) ) { = j + j 1 }
             : s name ( nurl_str_slice llvm_ty + i 1 - j + i 1 )
             // `%dyn.<Trait>` fat-pointer object type: the ident scan stops at
-            // the '.', reading just `dyn`. Recognise it and skip the trailing
-            // `.<Trait>` — validity (trait exists + object-safe) was already
-            // checked by parse_type_dyn / gen_dyn_construct, so it is known.
+            // the '.', reading just `dyn`. Skip the trailing `.<Trait>` —
+            // but check the trait NAME here, because nothing else does.
+            // parse_type_dyn runs its object-safety check only when the
+            // trait is already known (so a forward-referenced signature
+            // does not fail before its declaration is scanned), and an
+            // UNKNOWN name therefore fell through both: `Z %NoTrait`,
+            // `@ f %NoTrait d → i` and `[ %NoTrait` each exited 0 and
+            // emitted a reference to `%dyn.NoTrait`, a type the module
+            // never defines. This is the one type position that kept the
+            // hole `Z NoSuchType` closed everywhere else. By the time any
+            // body is emitted the pre-scan has marked every trait in the
+            // unit, so a name with no `__istrait` names no trait — and a
+            // value of the type could not exist anyway: `( dyn X v )`
+            // already rejects an undeclared X at construction.
             ? & ( seq name `dyn` ) & < j n == ( nurl_str_get llvm_ty j ) 46
-            { = j + j 1
-                ~ & < j n ( __is_ident_char ( nurl_str_get llvm_ty j ) ) { = j + j 1 } }
+            { : i __dts + j 1
+                = j + j 1
+                ~ & < j n ( __is_ident_char ( nurl_str_get llvm_ty j ) ) { = j + j 1 }
+                : s __dtn ( nurl_str_slice llvm_ty __dts - j __dts )
+                ? & != 0 g_trait_syms != 0 ( nurl_str_len __dtn )
+                { ? == 0 ( nurl_sym_len2 g_trait_syms __dtn `__istrait` )
+                    { ( die_pos lex tline tcol ( nurl_str_cat
+                        ( nurl_str_cat4 `unknown trait '` __dtn `' in ` ctx )
+                        ( nurl_str_cat3 ` — '%` __dtn `' is a dynamic trait object, so the name must be a trait DECLARED with a body ('% Name [T] { @ method … }'); no such declaration is in this file or any '$'-imported one (a typo, a missing import, or a struct name written where a trait was meant).` ) ) ) }
+                    {} }
+                {} }
             { ? != 0 ( nurl_str_len name )
                 { ? ( is_tparam_like name ) {}
                     { ? ( __has_dunder name ) {}
@@ -24007,6 +24076,31 @@
         {}
     }
     {}
+}
+
+// Type-argument ARITY for a generic struct application `( Name T₁ … )`.
+// The template's declared parameter list is the authority; `supplied` is
+// what the use site wrote. Only fires when the template is known (an
+// unknown name is __die_if_unknown_generic's report) and when at least
+// one argument was written (`( Name )` is a parenthesised plain type, not
+// an instantiation — the same exemption __die_if_unknown_generic makes).
+@ __die_if_generic_arity i lex s sname i supplied i tline i tcol → v {
+    ? == supplied 0 { ^ } {}
+    ? == 0 g_generic_struct_syms { ^ } {}
+    : s tparams ( nurl_sym_get2 g_generic_struct_syms sname `__stparams` )
+    ? == 0 ( nurl_str_len tparams ) { ^ } {}
+    : ~ i want 0
+    : ~ s w ( nurl_str_cat tparams `` )
+    ~ != 0 ( nurl_str_len w ) {
+        ? != 0 ( nurl_str_len ( str_first_word w ) ) { = want + want 1 } {}
+        = w ( str_skip_word w )
+    }
+    ? | == want 0 == want supplied { ^ } {}
+    ( die_pos lex tline tcol ( nurl_str_cat
+    ( nurl_str_cat4 `generic struct '` sname `' declares ` ( nurl_str_int want ) )
+    ( nurl_str_cat
+    ( nurl_str_cat4 ` type parameter(s) (` tparams `) but this type supplies ` ( nurl_str_int supplied ) )
+    ` — every parameter is substituted by position, so a different count leaves a parameter unsubstituted in the emitted type (or mangles a reference to a type nothing defines). Write one type argument per declared parameter.` ) ) )
 }
 
 @ ensure_struct_instantiated i syms s sname s ta_list → v {
@@ -25146,7 +25240,26 @@
         // not use it — callers splice it for omitted arguments — so here
         // we only consume the tokens. Only fires when `=` is present.
         ? == ( nurl_lex_type lex ) TT_EQ
-        { ( nurl_lex_advance lex ) ( nurl_lex_advance lex ) }
+        {  // A default is a VALUE the call site splices in place of the
+            // omitted argument, and neither convention that takes its
+            // argument specially can receive one: `inout` is passed by
+            // ADDRESS, so the spliced literal lands in the callee's
+            // pointer slot — `@ f i a inout i b = 0 → v` called `( f 1 )`
+            // emitted `call void @f(i64 1, i64 0)` against
+            // `define void @f(i64 %a, i64* %b)`, which clang accepts and
+            // which stores through a null pointer at run time; and `sink`
+            // consumes its argument, which a shared literal has no
+            // ownership to give. The grammar says so ("Not available on
+            // generic functions, FFI / variadic decls, or parameters
+            // carrying the 'inout' / 'sink' convention") and the other
+            // three of those four already reject it at the declaration.
+            ? == pconv 1
+            { ( die lex ( nurl_str_cat3 `parameter '` pname `' is 'inout' and cannot carry a default value — an inout argument is the ADDRESS of a mutable ': ~' binding the callee writes through, and a default is a value with no address. Drop the '= …', or drop the 'inout' and return the new value instead.` ) ) }
+            {}
+            ? == pconv 2
+            { ( die lex ( nurl_str_cat3 `parameter '` pname `' is 'sink' and cannot carry a default value — a 'sink' parameter CONSUMES its argument, and a default is spliced into every call that omits it, so the same value would be consumed more than once. Drop the '= …', or drop the 'sink'.` ) ) }
+            {}
+            ( nurl_lex_advance lex ) ( nurl_lex_advance lex ) }
         {}
         ( nurl_sym_def syms pname lt )
         // Mark parameter as immutable by design
@@ -26899,7 +27012,13 @@
     ( lint_note_import path __li_line __li_col )
     ( nurl_lex_advance lex )  // consume path STR
     : ~ s alias ``
-    ? ( is_ident_tok ( nurl_lex_type lex ) )
+    // A PLAIN identifier, not `is_ident_tok` — that helper also admits a
+    // type keyword, and `$ `lib` i` was quietly taken as an alias named
+    // `i`, reachable only as `i::name`. The grammar says IDENT
+    // (`import_decl = '$' STR IDENT?`), and a type keyword there reads as
+    // a typo in every case anyone would write. Falling through leaves the
+    // token to the top-level dispatcher, which names it.
+    ? == ( nurl_lex_type lex ) TT_IDENT
     { = alias ( nurl_lex_val lex )
         ( nurl_lex_advance lex )
     }
@@ -29014,6 +29133,13 @@
                 ? ( is_ident_tok ( nurl_lex_type lex ) )
                 { : s mname ( nurl_lex_val lex )
                     ( lint_note_def mname )
+                    // The method NAME's position, kept for the malformed-
+                    // header report below: the scan ends on the trait's
+                    // closing '}', and a diagnostic anchored there points at
+                    // a brace — the one anchor check_diag_anchor.py calls
+                    // objectively wrong, because '}' is never the subject.
+                    : i __mh_line ( nurl_lex_line lex )
+                    : i __mh_col ( nurl_lex_col lex )
                     ( nurl_lex_advance lex )  // consume method name
                     : i sig_start ( nurl_lex_cur_start lex )
                     // Params up to the '→', then EXACTLY the return type.
@@ -29033,13 +29159,38 @@
                     != ( nurl_lex_type lex ) TT_EOF {
                         ( nurl_lex_advance lex )
                     }
-                    // No arrow at all: a malformed header (the ASCII '->' is
-                    // the usual cause). Leave the slice as scanned — the
-                    // paths that consume it report that with a trait, a
-                    // method and a Self type, which this scan cannot give.
+                    // Every other spelling of a function header requires the
+                    // arrow: a plain `@ f i o { … }` and an IMPL method both
+                    // say "expected a type, found '{'". A trait method header
+                    // did not — the scan simply recorded a signature with no
+                    // return type, and nothing read it back unless the trait
+                    // was used as a `dyn` object, which is a use the program
+                    // may never make. `% Sh [T] { @ area T o i }` compiled,
+                    // and so did the ASCII-arrow spelling of the same
+                    // mistake. The declaration is where a declaration's
+                    // mistakes belong; the ASCII-arrow hint that the dyn
+                    // re-parse used to give comes along, because that is the
+                    // cause in almost every case that reaches here.
                     ? == ( nurl_lex_type lex ) TT_ARROW
                     { ( nurl_lex_advance lex ) ( skip_one_type lex ) }
-                    {}
+                    { : i __ma_end ( nurl_lex_cur_start lex )
+                        : s __ma_hdr ( __strip_spaces
+                        ( nurl_lex_src_slice lex sig_start - __ma_end sig_start ) )
+                        : s __ma_where ( nurl_str_cat ( nurl_str_cat4
+                        `method '` mname `' of trait '` tname ) `'` )
+                        // Spaces stripped first: the ASCII mistake is written
+                        // `- >` as often as `->`, and both lex as two separate
+                        // operators, which is exactly why the header has no
+                        // arrow.
+                        ? >= ( nurl_str_find __ma_hdr `->` ) 0
+                        { ( die_pos lex __mh_line __mh_col ( nurl_str_cat3
+                            `NURL's arrow is '→' (U+2192, a single character), not the two-character '->', and the header of `
+                            __ma_where
+                            ` has no arrow at all. The ASCII pair does not lex as an arrow — '-' and '>' are read as two separate operators — so the signature has no return type. Write '@ name params → ret'.` ) ) }
+                        {}
+                        ( die_pos lex __mh_line __mh_col ( nurl_str_cat3
+                        `the header of ` __ma_where
+                        ` has no return type: a trait method is declared '@ name params → ret', with the arrow and a return type even when that type is 'v'. Without it the trait records a signature nothing can dispatch through — which is why an impl of it, and a '%Trait' object built from it, had nothing to be checked against.` ) ) }
                     // Dynamic-dispatch seam (docs/spec.md §4.9): record the trait's
                     // method set in declaration order plus each method's signature
                     // ("params → ret") — the vtable layout a future `dyn Trait` would
@@ -29549,11 +29700,6 @@
     // defaults already carry. Leave those impls unchecked rather than compare
     // against a signature that still says `T`.
     ? & != 0 ( nurl_str_len tparam ) == 0 ( nurl_str_len impl_nurl ) { ^ } {}
-    // A header with no arrow is not a signature at all. Nothing rejects that
-    // at the trait declaration yet (recorded in the v1 hardening ledger); the
-    // paths that consume it report it with a location and a context, and a
-    // second report here would only shadow theirs.
-    ? < ( nurl_str_find sig `→` ) 0 { ^ } {}
     // Bound, never inline in an argument list: an owned temp handed straight
     // to a user function is not collected (the LSan lesson this file repeats).
     : s subst0 ? != 0 ( nurl_str_len tparam )
@@ -31139,6 +31285,19 @@
     // reject it here rather than let it drift.
     ? & != g_pending_simd 0 != tt TT_AT
     { ( die lex `'simd' is a prefix on function declarations only — it selects CPU-dispatched code generation for an '@' declaration, and has no meaning on a const, struct, enum, import, trait or FFI declaration` ) }
+    {}
+    // `pub` is accepted on every other decl kind for forward-compat, but
+    // an import is the one the grammar excludes: it defines no symbol
+    // that another file could reach across the visibility boundary, so
+    // there is nothing for the prefix to mark. It was read-and-cleared
+    // silently, which is worse than a no-op — strict-vis mode is entered
+    // by the FIRST `pub` in a file, so a file whose only `pub` sat on its
+    // import stayed in legacy mode with every function globally callable,
+    // and said nothing. `simd` and `inline` in this exact position have
+    // been diagnostics since v2.6; this is the same rule in the spelling
+    // that was left out.
+    ? & != g_pending_pub 0 == tt TT_DOLLAR
+    { ( die lex `'pub' has no meaning on a '$' import — an import inlines another file's declarations and defines no symbol of its own, so there is nothing to export. Mark the declarations in the imported file instead. (Note that a file enters strict visibility at its first 'pub': if this prefix was meant to do that, it did not.)` ) }
     {}
     // Same rule for `inline`: it is an attribute on a definition, and the
     // only declaration that has one is '@'.

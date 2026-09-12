@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_generic_type_args_few.nu:15:15: error: generic struct 'Pair' declares 2 type parameter(s) (K V) but this type supplies 1 — every parameter is substituted by position, so a different count leaves a parameter unsubstituted in the emitted type (or mangles a reference to a type nothing defines). Write one type argument per declared parameter.
+    : i q Z ( Pair i )
+              ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

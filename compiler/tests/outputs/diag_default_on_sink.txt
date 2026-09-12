@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_default_on_sink.nu:6:25: error: parameter 'label' is 'sink' and cannot carry a default value — a 'sink' parameter CONSUMES its argument, and a default is spliced into every call that omits it, so the same value would be consumed more than once. Drop the '= …', or drop the 'sink'.
+@ take i n sink s label = `none` → i { ^ n }
+                        ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

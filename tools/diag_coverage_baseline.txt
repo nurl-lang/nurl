@@ -11,6 +11,7 @@
 88d59a9c07fe  element of this slice literal has type ' ' but the slice's declared element type is ' ' — pointer-vs
 89608f397d6c  cannot mutate immutable parameter ' ' — parameters are immutable bindings. Copy it into a ': ~' loca
 8fa0e2858d9c  unexpected where a value was required. Every NURL operator has FIXED arity and no closing bracket, s
+9ef4f77193b2  the type parameters of '@ [ … ]' are never closed — add the ']' that ends the list.
 a7b912fa462f  expected '→' after the match guard, found . A guarded arm is 'Variant payload ? guard → body' — the 
 af5a83d74d0f  cannot cast ' ' to an integer — '# i expr' converts numbers and pointers, not this type. There are n
 d82fbf1f85b6  an or-pattern cannot mix a literal constraint with variant names — write the literal case as its own

@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_trait_method_no_return_type.nu:11:7: error: the header of method 'area' of trait 'Sh' has no return type: a trait method is declared '@ name params → ret', with the arrow and a return type even when that type is 'v'. Without it the trait records a signature nothing can dispatch through — which is why an impl of it, and a '%Trait' object built from it, had nothing to be checked against.
+    @ area T o i
+      ^

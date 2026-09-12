@@ -1,7 +1,5 @@
 COMPILE FAIL
 ERRORS
-<dynsig>:1:10: error: NURL's arrow is '→' (U+2192, a single character), not the two-character '->'. Write '@ f i x → i { ... }'. The ASCII pair does not lex as an arrow at all — '-' and '>' are read as two separate operators, which is why the parse asks for a type here. [in the signature of method 'sound' of trait 'Speaker' (Self = 'Dog') — fix it at the trait declaration]
-Dog self - > s
+<trait_method_signature>:1:10: error: expected a type, found '42'. Types are the single-letter keywords 'i u f b s v', a fixed width like 'i32' / 'u64', a declared struct or enum name, or a parenthesised form: '( Vec i )', '( @ i i )' for a closure, '*T' for a pointer, '?T' for an option, '!T E' for a result. [in the declared signature of method 'sound' of trait 'Speaker' (Self = 'Dog') — fix it at the trait declaration]
+Dog self 42 x → s
          ^
-error: aborting due to 1 previous error
-note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_impl_arity_mismatch.nu:9:1: error: method 'area' of trait 'Sh' implemented for type 'i' takes 1 parameter(s), but the trait declares 2 — an impl must have the signature the trait declares, because every call site is type-checked against the declaration and a 'dyn' object dispatches through it.
+% Sh i {
+^

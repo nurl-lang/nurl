@@ -68,21 +68,33 @@ command -v python3 >/dev/null 2>&1 || { echo "error: python3 not on PATH" >&2; e
 # already baselined, so every diagnostic it raises is one the project
 # has committed to. --lint is on so the lint-only diagnostics count as
 # exercised too. Failures are the point here, so no `set -e`.
+#
+# One nurlc per file, serially, over a thousand files was three and a
+# half minutes of wall time spent almost entirely on process startup —
+# which is what kept this gate out of CI, and out of CI is where the
+# fourteen unbaselined gaps it now reports were able to accumulate. The
+# files are independent; run them in parallel. (Same fix as the
+# canonical-form and strict-arity gates, in the spelling that was left
+# out.)
 rm -rf "$ERRDIR"
 mkdir -p "$ERRDIR"
-for src in "$ROOT_DIR"/compiler/tests/*.nu; do
-    name="$(basename "$src" .nu)"
-    "$NURLC" --lint "$src" >/dev/null 2>"$ERRDIR/$name.err"
-done
+JOBS="${NURL_CHECK_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
+
+capture() {  # capture <prefix> <src>
+    local name="$1$(basename "$2" .nu)"
+    "$NURLC" --lint "$2" >/dev/null 2>"$ERRDIR/$name.err"
+}
+export -f capture
+export NURLC ERRDIR
+
+find "$ROOT_DIR/compiler/tests" -maxdepth 1 -name '*.nu' -print0 \
+    | xargs -0 -P "$JOBS" -I{} bash -c 'capture "" "$0"' {}
 
 # Probe programs live beside the corpus and exist only to make a
 # diagnostic speak; they are not compiled by the test runner.
 if [[ -d "$ROOT_DIR/compiler/tests/diagprobes" ]]; then
-    for src in "$ROOT_DIR"/compiler/tests/diagprobes/*.nu; do
-        [[ -e "$src" ]] || continue
-        name="probe_$(basename "$src" .nu)"
-        "$NURLC" --lint "$src" >/dev/null 2>"$ERRDIR/$name.err"
-    done
+    find "$ROOT_DIR/compiler/tests/diagprobes" -maxdepth 1 -name '*.nu' -print0 \
+        | xargs -0 -P "$JOBS" -I{} bash -c 'capture probe_ "$0"' {}
 fi
 
 # ── analyse ─────────────────────────────────────────────────────

@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_impl_missing_method.nu:12:1: error: impl of trait 'Sh' for type 'i' is missing required method 'area'. The trait declares it with a signature and no body, so every impl must provide one — add it, or give the trait a default body.
+% Sh i {
+^
