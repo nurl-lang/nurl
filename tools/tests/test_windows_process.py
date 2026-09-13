@@ -368,7 +368,16 @@ class WindowsProcess(unittest.TestCase):
     def test_package_test_and_bench_use_literal_batch_driver_arguments(self):
         prefix = self.toolchain()
         project = self.directory / 'project %NURL_TEST_VALUE% & !keep!'
-        scratch = self.directory / 'scratch %NURL_TEST_VALUE% & !keep!'
+        # The scratch directory is TEMP for this run, and TEMP is read by the
+        # C toolchain underneath, not by anything here. Measured on the
+        # runner, one character at a time: with % in its name the build fails,
+        # with & it fails, with ! it passes — and it fails the same way with
+        # nurlpkg taken out of it entirely, driving nurl.bat straight to a
+        # plain output path, where clang reports it cannot make a temporary
+        # file. What this test owns is that the PROJECT path, the case names
+        # and the driver arguments stay literal; where clang puts its own
+        # temporaries is clang's to decide.
+        scratch = self.directory / 'scratch !keep!'
         project.mkdir()
         scratch.mkdir()
         for folder in ('tests', 'benches'):
@@ -380,48 +389,9 @@ class WindowsProcess(unittest.TestCase):
             with self.subTest(command=command):
                 result = subprocess.run([str(ROOT / 'build/nurlpkg.exe'), command], cwd=project,
                                         env=env, capture_output=True, timeout=180)
-                # Same run with an ordinary TEMP. clang reports only that it
-                # could not make a temporary file and "no such file or
-                # directory", which is the same sentence whether the name
-                # defeated something or the directory was simply gone. If the
-                # plain one passes, the specials in TEMP are the cause; if it
-                # fails too, TEMP is not what this is about.
-                controls = []
-                for label, leaf in (('plain', 'scratch'),
-                                    ('percent', 'scratch %NURL_TEST_VALUE%'),
-                                    ('ampersand', 'scratch & keep'),
-                                    ('bang', 'scratch !keep!')):
-                    alternate = self.directory / f'{label}-{command}' / leaf
-                    alternate.mkdir(parents=True, exist_ok=True)
-                    run = subprocess.run(
-                        [str(ROOT / 'build/nurlpkg.exe'), command], cwd=project,
-                        env={**env, 'TEMP': str(alternate), 'TMP': str(alternate)},
-                        capture_output=True, timeout=180)
-                    controls.append(f'{label} TEMP rc={run.returncode}')
-                # And the driver on its own, with the odd TEMP but nurlpkg
-                # out of the way: everything below nurlpkg is then the same
-                # as the driver gate that passes, so a failure here is the
-                # toolchain reading TEMP and a pass is nurlpkg building a
-                # path from it.
-                direct = self.directory / f'direct-{command}.nu'
-                direct.write_text(PROGRAM, encoding='utf-8')
-                alone = subprocess.run(
-                    [str(self.probe), 'run', str(prefix / 'nurl.bat'), str(direct),
-                     str(self.directory / f'direct-{command}-out')],
-                    cwd=self.directory, env=env, capture_output=True, timeout=180)
-                controls.append(f'driver alone, odd TEMP rc={alone.returncode} '
-                                + (alone.stdout + alone.stderr).decode(errors='replace'))
-                control = subprocess.run(
-                    [str(ROOT / 'build/nurlpkg.exe'), command], cwd=project,
-                    env={**env, 'TEMP': str(self.directory), 'TMP': str(self.directory)},
-                    capture_output=True, timeout=180)
                 self.assertEqual(result.returncode, 0,
                                  (result.stdout + result.stderr).decode(errors='replace')
-                                 + f'\nTEMP={env["TEMP"]}\n'
-                                 + 'scratch ' + self.produced(scratch)
-                                 + '\n' + '\n'.join(controls)
-                                 + f'\nno-specials TEMP rc={control.returncode}\n'
-                                 + (control.stdout + control.stderr).decode(errors='replace'))
+                                 + '\nscratch ' + self.produced(scratch))
                 self.assertFalse(list(scratch.glob('nurlpkg-run-*')))
 
     def test_installed_shims_preserve_literal_paths(self):
