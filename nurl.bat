@@ -473,30 +473,33 @@ if not exist "!LINK_OUTPUT!" (
 )
 REM MOVE accepts directories as operands/destinations. Only regular files
 REM may enter this transaction: otherwise cleanup could remove caller data.
-REM `if exist "path\"` is the canonical directory test. %%~a is consulted
-REM only for the reparse-point bit, because it reports an EMPTY string for
-REM anything it cannot stat -- a missing file and one it declines to
-REM describe look alike -- and "no attributes" is not the same fact as
-REM "not a regular file". Reading it as one rejected an ordinary staged
-REM executable and failed the link with a message about regular files.
+REM Two traps, one on each side of the question. %%~a reports an EMPTY
+REM string for anything it declines to stat, and "no attributes" is not
+REM the same fact as "not a regular file" -- reading it as one rejected an
+REM ordinary staged executable. And `if exist "path\"` only answers the
+REM directory question for a path that EXISTS: with a trailing backslash
+REM cmd resolves a missing path to its parent, so it answered yes for a
+REM destination that was not there at all. Ask whether it exists first,
+REM then whether the thing that exists is a directory; %%~a is left with
+REM the one bit it does report reliably.
 set "PUB_ATTRIBUTES="
 set "PUB_SUBJECT=staged executable !LINK_OUTPUT!"
-if exist "!LINK_OUTPUT!\" goto invalid_link_artifact
+if exist "!LINK_OUTPUT!" if exist "!LINK_OUTPUT!\" goto invalid_link_artifact
 for %%I in ("!LINK_OUTPUT!") do set "PUB_ATTRIBUTES=%%~aI"
 if not "!PUB_ATTRIBUTES:l=!"=="!PUB_ATTRIBUTES!" goto invalid_link_artifact
 set "PUB_ATTRIBUTES="
 set "PUB_SUBJECT=staged debug symbols !LINK_PDB!"
-if exist "!LINK_PDB!\" goto invalid_link_artifact
+if exist "!LINK_PDB!" if exist "!LINK_PDB!\" goto invalid_link_artifact
 for %%I in ("!LINK_PDB!") do set "PUB_ATTRIBUTES=%%~aI"
 if not "!PUB_ATTRIBUTES:l=!"=="!PUB_ATTRIBUTES!" goto invalid_link_artifact
 set "PUB_ATTRIBUTES="
 set "PUB_SUBJECT=destination executable !EXEFILE!"
-if exist "!EXEFILE!\" goto invalid_link_artifact
+if exist "!EXEFILE!" if exist "!EXEFILE!\" goto invalid_link_artifact
 for %%I in ("!EXEFILE!") do set "PUB_ATTRIBUTES=%%~aI"
 if not "!PUB_ATTRIBUTES:l=!"=="!PUB_ATTRIBUTES!" goto invalid_link_artifact
 set "PUB_ATTRIBUTES="
 set "PUB_SUBJECT=destination debug symbols !FINAL_PDB!"
-if exist "!FINAL_PDB!\" goto invalid_link_artifact
+if exist "!FINAL_PDB!" if exist "!FINAL_PDB!\" goto invalid_link_artifact
 for %%I in ("!FINAL_PDB!") do set "PUB_ATTRIBUTES=%%~aI"
 if not "!PUB_ATTRIBUTES:l=!"=="!PUB_ATTRIBUTES!" goto invalid_link_artifact
 REM Publish the companion before its binary and restore it if either move
@@ -530,7 +533,7 @@ exit /b 1
 REM Recheck before DEL: unlike a file unlink, DEL on a directory removes
 REM its contents. Preserve recovery state if a publication path changed.
 set "PUB_ATTRIBUTES="
-if exist "!FINAL_PDB!\" goto unsafe_pdb_restore
+if exist "!FINAL_PDB!" if exist "!FINAL_PDB!\" goto unsafe_pdb_restore
 for %%I in ("!FINAL_PDB!") do set "PUB_ATTRIBUTES=%%~aI"
 if not "!PUB_ATTRIBUTES:l=!"=="!PUB_ATTRIBUTES!" goto unsafe_pdb_restore
 if exist "!FINAL_PDB!" del /q "!FINAL_PDB!"
