@@ -1104,9 +1104,11 @@ $ `stdlib/core/posix.nu`
 
 // ── Rename / copy / tempfile (B6) ──────────────────────────────────
 
-// libc rename(2): atomically move/rename within a filesystem (cross-
-// filesystem moves fail with EXDEV — use fs_copy_file + file_delete).
-& `c` @ rename s oldp s newp → i32
+// The runtime maps POSIX rename and Windows replace-in-place to one atomic
+// publication boundary. It never unlinks the old destination before success.
+& `c` @ nurl_fs_rename s oldp s newp → i32
+
+& `c` @ nurl_fs_tempdir s template → i32
 
 // libc mkstemp(3): the template's trailing "XXXXXX" is replaced in
 // place with a unique suffix; creates the file 0600 and returns an
@@ -1114,41 +1116,11 @@ $ `stdlib/core/posix.nu`
 // write through the normal write_file* helpers.
 & `c` @ mkstemp s template → i32
 
-// Rename / move `from` to `to`. Atomic within a filesystem; an
-// existing `to` is replaced (POSIX rename semantics). Cross-device
-// moves surface as IoErr {Other} (EXDEV) — copy + delete instead.
+// Rename / move `from` to `to`, atomically replacing an existing file on
+// the same filesystem. Cross-device and platform sharing restrictions fail
+// without removing `to`; callers may retain or remove their staged source.
 @ fs_rename s from s to → !v IoErr {
-    : ~ i32 rc ( rename from to )
-    ? == rc # i32 0 { ^ @ !v IoErr { T 0 } } {}
-    // Windows' CRT rename(2) does not implement the POSIX replace: handed an
-    // existing `to` it fails EEXIST and leaves BOTH files where they were.
-    // That breaks the write-to-`.tmp`-then-rename-over pattern this function
-    // exists to serve — and breaks it silently, because the caller sees a
-    // successful write followed by a stale file and a `.tmp` accumulating
-    // beside it. Every atomic writer in the tree rides on this (packages
-    // anomaly, cas, gpu's kernel cache, hub, lsmdb, nurllama, nwasm,
-    // wasmbuilder), so the divergence has to be absorbed here rather than at
-    // each call site. Drop the destination and retry.
-    //
-    // Gated on EEXIST specifically, and not on "did it fail": the only POSIX
-    // rename that reports EEXIST is a directory onto a NON-EMPTY directory,
-    // and `remove` refuses exactly that (it unlinks files and empty
-    // directories only), so the retry cannot destroy a `to` here either. A
-    // real failure — EXDEV, EACCES, EBUSY — maps to a different kind and
-    // never reaches this branch, leaving `to` alone.
-    //
-    // The retry is NOT atomic the way rename(2) is: a crash in the window
-    // between the remove and the rename loses `to`. `from` is untouched
-    // there, so the new content is still on disk under the temp name; a
-    // reader is the one that loses, seeing neither file. Win32 MoveFileExA
-    // with MOVEFILE_REPLACE_EXISTING closes that window, but it is a
-    // kernel32 FFI, and its declaration would need a build-time sentinel
-    // that no POSIX build has any reason to produce.
-    ? == ( errno_kind ) 2 {
-        : i32 _rm ( remove to )
-        = rc ( rename from to )
-        ? == rc # i32 0 { ^ @ !v IoErr { T 0 } } {}
-    } {}
+    ? == # i32 0 ( nurl_fs_rename from to ) { ^ @ !v IoErr { T 0 } } {}
     ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
 }
 
@@ -1161,27 +1133,34 @@ $ `stdlib/core/posix.nu`
     ? == # i rf 0 { ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) } } {}
     : s wf # s ( fopen dst `wb` )
     ? == # i wf 0 {
+        : IoErr e ( _io_err_of_kind ( errno_kind ) )
         : i32 _rc ( fclose rf )
-        ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
+        ^ @ !v IoErr { F e }
     } {}
     : i chunk 65536
     : ( Vec u ) buf ( vec_with_cap [u] chunk )
     : *u dp ( vec_data [u] buf )
     : ~ b ok T
+    : ~ IoErr error @ IoErr { ReadFailed }
     : ~ b going T
     ~ & going ok {
         : i got ( fread # s dp 1 chunk rf )
-        ? > got 0 {
+        ? != # i32 0 ( ferror rf ) { = ok F } {}
+        ? & ok > got 0 {
             : i put ( fwrite # s dp 1 got wf )
-            ? != put got { = ok F } {}
+            ? != put got { = ok F = error @ IoErr { WriteFailed } } {}
         } {}
         ? < got chunk { = going F } {}
     }
     ( vec_free [u] buf )
-    : i32 _wc ( fclose wf )
-    : i32 _rc2 ( fclose rf )
+    // fclose flushes buffered writes; success from fwrite alone does not
+    // mean a complete copy (e.g. a full device can fail only at close).
+    : i32 wc ( fclose wf )
+    ? & ok != wc # i32 0 { = ok F = error @ IoErr { WriteFailed } } {}
+    : i32 rc ( fclose rf )
+    ? & ok != rc # i32 0 { = ok F = error @ IoErr { ReadFailed } } {}
     ? ok { ^ @ !v IoErr { T 0 } }
-    { ^ @ !v IoErr { F @ IoErr { WriteFailed } } }
+    { ^ @ !v IoErr { F error } }
 }
 
 // Create a fresh, uniquely-named empty file under `dir` whose name
@@ -1206,6 +1185,26 @@ $ `stdlib/core/posix.nu`
     } {}
     : i _c ( close # i fd )
     ^ @ !String IoErr { T tmpl }  // mkstemp filled XXXXXX in place
+}
+
+// Exclusively create a uniquely named directory under `dir` ("" means
+// "."). POSIX permissions are 0700; Windows applies the parent's ACL.
+// The owned path is returned only after creation succeeds. No temporary
+// file is unlinked to make room, so another process cannot claim the path
+// between allocation and mkdir. Remove the tree with dir_remove_all.
+@ fs_tempdir s dir s prefix → !String IoErr {
+    : s d ? == 0 ( nurl_str_len dir ) `.` dir
+    : String tmpl ( string_with_cap + + ( nurl_str_len d ) ( nurl_str_len prefix ) 10 )
+    ( string_push_str tmpl d )
+    ? ! ( string_ends_with tmpl `/` ) { ( string_push_char tmpl 47 ) } {}
+    ( string_push_str tmpl prefix )
+    ( string_push_str tmpl `XXXXXX` )
+    ? != # i32 0 ( nurl_fs_tempdir ( string_data tmpl ) ) {
+        : IoErr e ( _io_err_of_kind ( errno_kind ) )
+        ( string_free tmpl )
+        ^ @ !String IoErr { F e }
+    } {}
+    ^ @ !String IoErr { T tmpl }
 }
 
 // ── Glob (B7) ──────────────────────────────────────────────────────

@@ -2,6 +2,28 @@
 # Shared compiler invocation and worker protocol for both corpus runners.
 # A compiler rejection is exit 1; crashes, watchdogs and tool errors are
 # infrastructure failures and must never become COMPILE FAIL goldens.
+# A runner invocation owns every generated artifact, including same-test IR,
+# binaries, scratch directories and the worker verdict protocol. Per-test names
+# only isolate workers within ONE invocation; concurrent runners need this outer
+# namespace too. Keep it after completion so printed failure paths stay useful.
+create_test_workdir() {
+    local base="$1"
+    mkdir -p "$base" || return 2
+    mktemp -d "$base/run.XXXXXXXX" || return 2
+}
+
+# Publish complete records atomically. A check running beside --update must
+# never observe a truncated golden; two updates each publish one whole record.
+publish_test_golden() {
+    local actual="$1" golden="$2" temporary
+    temporary=$(mktemp "${golden}.tmp.XXXXXXXX") || return 1
+    if cp -p "$actual" "$temporary" && mv -f "$temporary" "$golden"; then
+        return 0
+    fi
+    rm -f "$temporary"
+    return 1
+}
+
 init_test_harness() {
     NURL_COMPILE_TIMEOUT="${NURL_COMPILE_TIMEOUT:-60}"
     TIMEOUT_CMD=""
@@ -72,4 +94,4 @@ validate_test_verdicts() {
             exit bad
         }' "$selected" "$verdicts" >&2
 }
-export -f compile_test test_compiler_flag
+export -f compile_test test_compiler_flag publish_test_golden

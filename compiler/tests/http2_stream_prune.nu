@@ -24,7 +24,7 @@ $ `stdlib/ext/http2_conn.nu`
     ( vec_push [u] hb # u 0xCD )
     : ( Vec u ) bd ( vec_new [u] )
     ( vec_push [u] bd # u 0xEF )
-    ^ @ H2Stream { id st hb F F ( vec_new [Header] ) bd F 65535 65535 }
+    ^ @ H2Stream { id st hb F F ( vec_new [Header] ) bd F 65535 65535 0 F F F }
 }
 
 // Build an H2Connection with an empty stream table and a dummy socket
@@ -49,6 +49,8 @@ $ `stdlib/ext/http2_conn.nu`
         ( vec_new [u] )
         ( h2_default_max_body_bytes )
         ( response_text 500 `internal server error\n` )
+        F F
+        ( h2_frame_writer tc 1048576 )
     }
 }
 

@@ -842,6 +842,27 @@ $ `stdlib/std/pkey.nu`
     ( nurl_tcp_set_timeout ( __conn_fd c ) ms )
 }
 
+& `c` @ nurl_tcp_set_send_buffer i handle i bytes → i
+
+// Request the native TCP send-buffer size in bytes (1..2147483647).
+// The operating system may adjust this value. TLS uses the same underlying
+// socket; providers without native buffer tuning return NetOther.
+@ tcp_set_send_buffer TcpConn c i bytes → !v NetErr {
+    : i error ( nurl_tcp_set_send_buffer ( __conn_fd c ) bytes )
+    ? != error 0 { ^ @ !v NetErr { F ( _net_err_of error ) } } {}
+    ^ @ !v NetErr { T 0 }
+}
+
+// Absolute monotonic nanoseconds; zero clears the write bound. Unlike
+// the idle timeout this survives partial writes and every TLS record.
+@ tcp_set_write_deadline TcpConn c i ns → v {
+    ( nurl_tcp_set_write_deadline ( __conn_fd c ) ns )
+}
+
+@ tcp_write_deadline TcpConn c → i {
+    ^ ( nurl_tcp_write_deadline ( __conn_fd c ) )
+}
+
 // ── Reading ────────────────────────────────────────────────────────
 
 // Issue ONE recv(2). The returned Vec[u] holds 0..max bytes. EOF is
@@ -869,7 +890,7 @@ $ `stdlib/std/pkey.nu`
 @ __tls_write_net TcpConn c ( Vec u ) bytes → !v NetErr {
     : *TlsConn tc # *TlsConn ( __conn_tlsptr c )
     : !v TlsErr r ? == . c kind 2 ( tls_server_write tc bytes ) ( tls_write tc bytes )
-    ?? r { T _ → ^ @ !v NetErr { T 0 } F _ → ^ @ !v NetErr { F # NetErr NetWrite } }
+    ?? r { T _ → ^ @ !v NetErr { T 0 } F _ → ^ @ !v NetErr { F ? == ( nurl_tcp_err_kind ( __conn_fd c ) ) 7 # NetErr NetTimeout # NetErr NetWrite } }
 }
 
 // Two-buffer TLS write: the record layer seals `head`‖`body` into
@@ -878,7 +899,7 @@ $ `stdlib/std/pkey.nu`
 @ __tls_write_net2 TcpConn c ( Vec u ) head ( Vec u ) body → !v NetErr {
     : *TlsConn tc # *TlsConn ( __conn_tlsptr c )
     : !v TlsErr r ? == . c kind 2 ( tls_server_write2 tc head body ) ( tls_write2 tc head body )
-    ?? r { T _ → ^ @ !v NetErr { T 0 } F _ → ^ @ !v NetErr { F # NetErr NetWrite } }
+    ?? r { T _ → ^ @ !v NetErr { T 0 } F _ → ^ @ !v NetErr { F ? == ( nurl_tcp_err_kind ( __conn_fd c ) ) 7 # NetErr NetTimeout # NetErr NetWrite } }
 }
 
 // with a clean peer shutdown. Caller frees the Vec on the Ok path.
@@ -975,6 +996,128 @@ $ `stdlib/std/pkey.nu`
     ^ @ !i NetErr { F # NetErr NetOther }
 }
 
+// Queue-ready I/O: encoding and socket progress are separate. Prepared
+// TLS records must leave in FIFO order and be retried by byte offset.
+@ tcp_prepare_write TcpConn c ( Vec u ) bytes → !( Vec u ) NetErr {
+    : i tls ( __conn_tlsptr c )
+    ? == tls 0 { ^ @ !( Vec u ) NetErr { T ( bytes_slice bytes 0 ( vec_len [u] bytes ) ) } } {}
+    : *TlsConn state # *TlsConn tls
+    : !( Vec u ) TlsErr result ? == . c kind 2
+    ( tls_server_prepare_write state bytes ) ( tls_prepare_write state bytes )
+    ?? result {
+        T wire → ^ @ !( Vec u ) NetErr { T wire }
+        F _ → ^ @ !( Vec u ) NetErr { F NetClosed }
+    }
+}
+
+// Flush source-generated TLS control records through the caller's existing
+// ciphertext FIFO. Empty output means none pending; no socket I/O occurs.
+@ tcp_prepare_control TcpConn c → !( Vec u ) NetErr {
+    : ( Vec u ) wire ( vec_new [u] )
+    : i tls ( __conn_tlsptr c )
+    ? != tls 0 {
+        : *TlsConn state # *TlsConn tls
+        ? == . state closed 0 { ( _tls_control_to state wire ? == . c kind 2 0 1 ) } {}
+    } {}
+    ^ @ !( Vec u ) NetErr { T wire }
+}
+
+@ __tcp_write_failed TcpConn c → v {
+    : i tls ( __conn_tlsptr c )
+    ? != tls 0 { : *TlsConn state # *TlsConn tls = . state closed 1 } {}
+}
+
+// Positive byte count, zero would-block, or a typed terminal error. No
+// blocking-mode or read-timeout changes, and no encryption on retries.
+@ tcp_try_write_wire TcpConn c ( Vec u ) wire i offset → !i NetErr {
+    : i size ( vec_len [u] wire )
+    ? | < offset 0 > offset size { ^ @ !i NetErr { F NetOther } } {}
+    ? == offset size { ^ @ !i NetErr { T 0 } } {}
+    : i raw ( __conn_fd c )
+    : i wrote ( nurl_tcp_write_nowait raw # s + # i ( vec_data [u] wire ) offset - size offset )
+    ? > wrote 0 { ^ @ !i NetErr { T wrote } } {}
+    : i error ( nurl_tcp_err_kind raw )
+    ? & == error 7 != ( nurl_tcp_write_wait_ms raw ) 0 { ^ @ !i NetErr { T 0 } } {}
+    ( __tcp_write_failed c )
+    ^ @ !i NetErr { F ? == wrote 0 # NetErr NetWrite ( _net_err_of error ) }
+}
+
+// Append immediately available plaintext, retaining incomplete TLS records.
+// Zero means would-block; EOF is NetClosed. Control records may be consumed
+// without producing plaintext, and never force a blocking read for the next.
+@ tcp_try_read_into TcpConn c ( Vec u ) bytes i max → !i NetErr {
+    ? <= max 0 { ^ @ !i NetErr { T 0 } } {}
+    : i raw ( __conn_fd c )
+    : i tls ( __conn_tlsptr c )
+    ? != tls 0 {
+        : *TlsConn state # *TlsConn tls
+        : i previous . state read_nowait
+        = . state read_nowait 1
+        : !( Vec u ) TlsErr result ? == . c kind 2 ( tls_server_read state max ) ( tls_read state max )
+        = . state read_nowait previous
+        ?? result {
+            T decoded → {
+                : i count ( vec_len [u] decoded )
+                ( vec_extend [u] bytes decoded )
+                ( vec_free [u] decoded )
+                ? == count 0 { ^ @ !i NetErr { F NetClosed } } {}
+                ^ @ !i NetErr { T count }
+            }
+            F error → {
+                ?? error {
+                    TlsRead → { ? | != . state update_pending 0 == ( nurl_tcp_err_kind raw ) 7 { ^ @ !i NetErr { T 0 } } {} }
+                    TlsProtocol → { ? != . state fatal_alert 0 { ^ @ !i NetErr { T 0 } } {} }
+                    TlsClosed → { ^ @ !i NetErr { F NetClosed } }
+                    _ → {}
+                }
+                ^ @ !i NetErr { F NetRead }
+            }
+        }
+    } {}
+    ( vec_reserve [u] bytes max )
+    : i length ( vec_len [u] bytes )
+    : i got ( nurl_tcp_read_nowait raw # s + # i ( vec_data [u] bytes ) length max )
+    ? > got 0 {
+        : b sized ( vec_set_len [u] bytes + length got )
+        ^ @ !i NetErr { T got }
+    } {}
+    ? == got 0 { ^ @ !i NetErr { F NetClosed } } {}
+    : i error ( nurl_tcp_err_kind raw )
+    ? == error 7 { ^ @ !i NetErr { T 0 } } {}
+    ^ @ !i NetErr { F ( _net_err_of error ) }
+}
+
+@ __tcp_buffered_read TcpConn c → b {
+    : i tls ( __conn_tlsptr c )
+    ? == tls 0 { ^ F } {}
+    : *TlsConn state # *TlsConn tls
+    ? | != . state closed 0 | != . state fatal_alert 0 > ( vec_len [u] . state appbuf ) 0 { ^ T } {}
+    : i size ( vec_len [u] . state rxbuf )
+    ? < size 5 { ^ F } {}
+    : *u data ( vec_data [u] . state rxbuf )
+    ^ >= size + 5 | << # i . data 3 8 # i . data 4
+}
+
+@ tcp_wait_io TcpConn c b readable b writable i timeout_ms → i {
+    ? & readable ( __tcp_buffered_read c ) { ^ 1 } {}
+    : i events + ? readable 1 0 ? writable 2 0
+    ? == events 0 { ^ -1 } {}
+    : i raw ( __conn_fd c )
+    : ~ i wait timeout_ms
+    ? writable {
+        : i remaining ( nurl_tcp_write_wait_ms raw )
+        ? == remaining 0 { ^ 0 } {}
+        ? & >= remaining 0 | < wait 0 < remaining wait { = wait remaining } {}
+    } {}
+    ? != ( nurl_fiber_current ) 0 {
+        ^ ( nurl_reactor_wait_io ( nurl_tcp_get_fd raw ) events wait )
+    } {}
+    ^ ( nurl_tcp_wait_io raw events wait )
+}
+
+// Readiness permits a try-read; a TLS peer may have sent a partial record.
+@ tcp_read_ready TcpConn c → b { ^ > ( tcp_wait_io c T F 0 ) 0 }
+
 // ── Writing ────────────────────────────────────────────────────────
 
 // Two-segment send: `b1[0..n1)` then `b2[0..n2)` through ONE
@@ -1005,7 +1148,6 @@ $ `stdlib/std/pkey.nu`
     : i total + n1 n2
     ? <= total 0 { ^ @ !v NetErr { T 0 } } {}
     : ~ i sent 0
-    : ~ i idle 0
     ~ < sent total {
         : ~ s a p1
         : ~ i an - n1 sent
@@ -1016,16 +1158,9 @@ $ `stdlib/std/pkey.nu`
             = bn 0
         }
         : i wn ( nurl_tcp_write2 raw a an p2 bn )
-        ? > wn 0 { = sent + sent wn = idle 0 } {
+        ? > wn 0 { = sent + sent wn } {
             : i ek ( nurl_tcp_err_kind raw )
-            // ek 7 is EAGAIN / SO_SNDTIMEO. The peer is still connected and
-            // the rest still has to go, so retry — bounded, so a peer that
-            // stops draining forever cannot wedge us. wn == 0 with no error
-            // is the same situation: no progress, do not spin on it.
-            ? | == ek 7 == wn 0 {
-                = idle + idle 1
-                ? > idle 2400 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
-            } { ^ @ !v NetErr { F ( _net_err_of ek ) } }
+            ^ @ !v NetErr { F ? == wn 0 # NetErr NetWrite ( _net_err_of ek ) }
         }
     }
     ^ @ !v NetErr { T 0 }
@@ -1255,22 +1390,8 @@ $ `stdlib/std/async_ffi.nu`
     : i total + n1 n2
     ? <= total 0 { ^ @ !v NetErr { T 0 } } {}
     : ~ i sent 0
-    // Once ANY byte of this buffer is on the wire, giving up is not an
-    // option the caller can recover from. Callers frame their writes
-    // (relay.nu puts a 5-byte type+length header in front of every
-    // message), so a half-written buffer does not lose a message — it
-    // DESYNCS the stream: the peer reads the announced length, takes the
-    // tail from whatever is written next, and every frame after that is
-    // garbage of plausible length. It surfaces far away as an integrity
-    // failure, not as a write error.
-    //
-    // So a reactor timeout is fatal only while `sent` is still 0. Past
-    // that we keep waiting, bounded exactly like __read_exact's mirror of
-    // this rule on the reading side — the peer is still connected and the
-    // rest of the buffer still has to go. A peer that never drains ends
-    // the loop with an error, and the caller drops the connection, which
-    // is the only correct way out of a partial frame.
-    : ~ i idle 0
+    // A timeout ends this write even after partial progress. The caller
+    // must retire the connection rather than reuse a truncated frame.
     ~ < sent total {
         : ~ s a p1
         : ~ i an - n1 sent
@@ -1283,30 +1404,13 @@ $ `stdlib/std/async_ffi.nu`
         : i n ( nurl_tcp_write2 raw a an p2 bn )
         ? > n 0 {
             = sent + sent n
-            = idle 0
         } {
-            ? < n 0 {
-                : i ek ( nurl_tcp_err_kind raw )
-                ? == ek 7 {
-                    : i rc ( nurl_reactor_wait_write fd ( __wait_ms raw ) )
-                    ? <= rc 0 {
-                        ? == sent 0 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
-                        = idle + idle 1
-                        ? > idle 2400 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
-                    } {}
-                } {
-                    ^ @ !v NetErr { F ( _net_err_of ek ) }
-                }
-            } {
-                // n == 0 — kernel says "wrote nothing" without error.
-                // Treat as EAGAIN to avoid spinning.
-                : i rc ( nurl_reactor_wait_write fd ( __wait_ms raw ) )
-                ? <= rc 0 {
-                    ? == sent 0 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
-                    = idle + idle 1
-                    ? > idle 2400 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
-                } {}
-            }
+            : i error ( nurl_tcp_err_kind raw )
+            ? & < n 0 != error 7 { ^ @ !v NetErr { F ( _net_err_of error ) } } {}
+            : i remaining ( nurl_tcp_write_wait_ms raw )
+            ? == remaining 0 { ^ @ !v NetErr { F NetTimeout } } {}
+            : i ready ( nurl_reactor_wait_write fd remaining )
+            ? <= ready 0 { ^ @ !v NetErr { F NetTimeout } } {}
         }
     }
     ^ @ !v NetErr { T 0 }

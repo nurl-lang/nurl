@@ -549,6 +549,7 @@ $ `stdlib/net/dnsclient.nu`
 
 @ __ready i fd i for_write → b {
     : *SockTab st ( __tab )
+    ? == for_write 2 { ^ | ( sock_readable st fd ) ( sock_writable st fd ) } {}
     ? != for_write 0 { ^ ( sock_writable st fd ) } {}
     ^ ( sock_readable st fd )
 }
@@ -643,7 +644,8 @@ $ `stdlib/net/dnsclient.nu`
 @ __should_retry i fd i for_write → i {
     : *SockTab st ( __tab )
     ? ( sock_is_nonblock st fd ) { ^ 0 } {}
-    : i tmo ( __block_ms ( sock_timeout st fd ) )
+    : i tmo ? != for_write 0 ( sock_write_wait_ms st fd ( monotonic_ns ) ) ( __block_ms ( sock_timeout st fd ) )
+    ? == tmo 0 { ^ 0 } {}
     : i r ( __wait fd for_write tmo )
     ? == r 1 { ^ 1 } {}
     // A deadline that passed is SO_RCVTIMEO firing, which the socket
@@ -664,10 +666,25 @@ $ `stdlib/net/dnsclient.nu`
 
 @ nurl_tcp_set_timeout i handle i ms → v { ( sock_set_timeout ( __tab ) handle ms ) }
 
+// This provider owns its bounded TCP queues; it has no native SO_SNDBUF.
+@ nurl_tcp_set_send_buffer i handle i bytes → i { ^ 8 }
+
 // What a read on this socket should wait for, in ms; 0 = for ever. The
 // fiber path in std/net.nu asks, because it parks on the reactor rather
 // than on SO_RCVTIMEO and has to be told the deadline.
 @ nurl_tcp_timeout_ms i handle → i { ^ ( sock_timeout ( __tab ) handle ) }
+
+@ nurl_tcp_set_write_deadline i handle i ns → v {
+    ( sock_set_write_deadline ( __tab ) handle ns )
+}
+
+@ nurl_tcp_write_deadline i handle → i {
+    ^ ( sock_write_deadline ( __tab ) handle )
+}
+
+@ nurl_tcp_write_wait_ms i handle → i {
+    ^ ( sock_write_wait_ms ( __tab ) handle ( monotonic_ns ) )
+}
 
 @ nurl_tcp_ref i handle → v { ( sock_ref ( __tab ) handle ) }
 
@@ -800,31 +817,71 @@ $ `stdlib/net/dnsclient.nu`
     : ~ i rc -1
     : ~ b again T
     ~ again {
-        : i n ( sock_write st conn src sent - len sent ( __ms ) )
-        ? > n 0 {
-            = sent + sent n
-            // Push what was queued out of the door: the caller's next
-            // act is usually to wait for the answer, and the peer
-            // cannot answer bytes that never left.
-            ( __drive ( __ms ) )
-            ? >= sent len { = rc sent = again F } {
-                ? ( sock_is_nonblock st conn ) { = rc sent = again F } {}
-            }
+        ? == ( sock_write_wait_ms st conn ( monotonic_ns ) ) 0 {
+            = rc ? > sent 0 sent -1
+            = again F
         } {
-            : i err - 0 n
-            ? != err ( sock_err_again ) {
-                = rc ? > sent 0 sent -1
-                = again F
+            : i n ( sock_write st conn src sent - len sent ( __ms ) )
+            ? > n 0 {
+                = sent + sent n
+                // Push what was queued out of the door: the caller's next
+                // act is usually to wait for the answer, and the peer
+                // cannot answer bytes that never left.
+                ( __drive ( __ms ) )
+                ? >= sent len { = rc sent = again F } {
+                    ? ( sock_is_nonblock st conn ) { = rc sent = again F } {}
+                }
             } {
-                ? == ( __should_retry conn 1 ) 0 {
+                : i err - 0 n
+                ? != err ( sock_err_again ) {
                     = rc ? > sent 0 sent -1
                     = again F
-                } {}
+                } {
+                    ? == ( __should_retry conn 1 ) 0 {
+                        = rc ? > sent 0 sent -1
+                        = again F
+                    } {}
+                }
             }
         }
     }
     ( vec_free [u] src )
     ^ rc
+}
+
+@ nurl_tcp_read_nowait i conn s buf i len → i {
+    : *SockTab st ( __tab )
+    : b previous ( sock_is_nonblock st conn )
+    ( sock_set_nonblock st conn T )
+    : i got ( nurl_tcp_read conn buf len )
+    ( sock_set_nonblock st conn previous )
+    ^ got
+}
+
+@ nurl_tcp_write_nowait i conn s buf i len → i {
+    : *SockTab st ( __tab )
+    ? == ( sock_write_wait_ms st conn ( monotonic_ns ) ) 0 { ^ -1 } {}
+    : b previous ( sock_is_nonblock st conn )
+    ( sock_set_nonblock st conn T )
+    : i written ( nurl_tcp_write conn buf len )
+    ( sock_set_nonblock st conn previous )
+    ^ written
+}
+
+@ nurl_tcp_wait_io i fd i events i timeout_ms → i {
+    ? == & events 3 0 { ^ -1 } {}
+    : ~ i wait timeout_ms
+    ? != & events 2 0 {
+        : i remaining ( sock_write_wait_ms ( __tab ) fd ( monotonic_ns ) )
+        ? == remaining 0 { ^ 0 } {}
+        ? & >= remaining 0 | < wait 0 < remaining wait { = wait remaining } {}
+    } {}
+    : i direction ? == & events 3 3 2 ? != & events 2 0 1 0
+    ^ ( __wait fd direction wait )
+}
+
+@ nurl_reactor_wait_io i fd i events i timeout_ms → i {
+    ^ ( nurl_tcp_wait_io fd events timeout_ms )
 }
 
 // Two-segment write (std/net.nu's `tcp_write_all2` → head + body in one

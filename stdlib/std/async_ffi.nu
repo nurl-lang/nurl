@@ -60,3 +60,19 @@
 & `c` @ nurl_tcp_timeout_ms i handle → i
 
 & `c` @ nurl_tcp_set_nonblock i handle i on → v
+
+// Absolute write budget shared by native syscalls, TLS records and fibers.
+& `c` @ nurl_tcp_set_write_deadline i handle i ns → v
+
+& `c` @ nurl_tcp_write_deadline i handle → i
+
+& `c` @ nurl_tcp_write_wait_ms i handle → i
+
+// Wait for either readable(1) or writable(2) readiness on one fd.
+& `c` @ nurl_reactor_wait_io i fd i events i timeout_ms → i
+
+& `c` @ nurl_tcp_write_nowait i handle s bytes i length → i
+
+& `c` @ nurl_tcp_wait_io i handle i events i timeout_ms → i
+
+& `c` @ nurl_tcp_read_nowait i handle s bytes i length → i

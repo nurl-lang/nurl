@@ -51,7 +51,8 @@ $ `stdlib/std/async_ffi.nu`
 @ __tls_io_wait i raw i want → b {
     : i fd ( nurl_tcp_get_fd raw )
     : i ms ( nurl_tcp_timeout_ms raw )
-    : i deadline ? > ms 0 ms - 0 1
+    : i deadline ? != want 0 ( nurl_tcp_write_wait_ms raw ) ? > ms 0 ms - 0 1
+    ? == deadline 0 { ^ F } {}
     : i rc ? != want 0 ( nurl_reactor_wait_write fd deadline ) ( nurl_reactor_wait_read fd deadline )
     ^ > rc 0
 }
@@ -119,6 +120,7 @@ $ `stdlib/std/async_ffi.nu`
 // (handshake → application) and as buffers are consumed.
 : TlsConn {
     i fd
+    i read_nowait  // one try-read call must not park on partial records
     ( Vec u ) rxbuf  // raw socket bytes not yet split into records
     ( Vec u ) hsbuf  // decrypted handshake bytes not yet a full message
     ( Vec u ) appbuf  // decrypted application bytes for the caller
@@ -126,6 +128,10 @@ $ `stdlib/std/async_ffi.nu`
     ( Vec u ) s_iv
     ( Vec u ) c_key
     ( Vec u ) c_iv
+    ( Vec u ) s_secret  // retained TLS 1.3 traffic secrets for KeyUpdate
+    ( Vec u ) c_secret
+    i update_pending  // peer requested our next write-key generation
+    i fatal_alert  // queued protocol failure, emitted before closing
     i s_seq
     i c_seq
     i enc_read  // 1 once server records are encrypted
@@ -293,7 +299,7 @@ $ `stdlib/std/async_ffi.nu`
 @ __fill * TlsConn c i n → !i TlsErr {
     : i raw . c fd
     : b on_fiber != ( nurl_fiber_current ) 0
-    ? on_fiber { ( nurl_tcp_set_nonblock raw 1 ) } {}
+    ? & on_fiber == . c read_nowait 0 { ( nurl_tcp_set_nonblock raw 1 ) } {}
     ~ < ( vec_len [u] . c rxbuf ) n {
         // Read straight into rxbuf's spare capacity — the previous
         // per-fill 16 KB scratch Vec + copy-append + free was pure
@@ -304,9 +310,9 @@ $ `stdlib/std/async_ffi.nu`
         : i len ( vec_len [u] . c rxbuf )
         : *u p ( vec_data [u] . c rxbuf )
         : s pbuf # s + # i p len
-        : ~ i got ( nurl_tcp_read raw pbuf 16384 )
+        : ~ i got ? != . c read_nowait 0 ( nurl_tcp_read_nowait raw pbuf 16384 ) ( nurl_tcp_read raw pbuf 16384 )
         : ~ b timed_out F
-        ~ & ! timed_out & on_fiber & < got 0 == ( nurl_tcp_err_kind raw ) 7 {
+        ~ & == . c read_nowait 0 & ! timed_out & on_fiber & < got 0 == ( nurl_tcp_err_kind raw ) 7 {
             ? ( __tls_io_wait raw 0 ) {
                 = got ( nurl_tcp_read raw pbuf 16384 )
             } { = timed_out T }
@@ -417,7 +423,11 @@ $ `stdlib/std/async_ffi.nu`
 
 // Seal `inner` (plaintext WITHOUT the type byte yet; consumed here) as
 // one TLS 1.3 record under the client write keys and send it.
-@ __send_inner_encrypted * TlsConn c i content_type ( Vec u ) inner → !v TlsErr {
+@ _tls_seal_inner_to * TlsConn c ( Vec u ) out i content_type ( Vec u ) inner → v {
+    ( _tls_seal_direction_to c out 1 content_type inner )
+}
+
+@ _tls_seal_direction_to * TlsConn c ( Vec u ) out i dir i content_type ( Vec u ) inner → v {
     ( vec_push [u] inner # u content_type )
     : i total + ( vec_len [u] inner ) 16
     : ( Vec u ) aad ( vec_with_cap [u] 5 )
@@ -425,22 +435,27 @@ $ `stdlib/std/async_ffi.nu`
     ( vec_push [u] aad # u 3 )
     ( vec_push [u] aad # u 3 )
     ( _tls_u16 aad total )
-    : ( Vec u ) nonce ( _nonce . c c_iv . c c_seq )
-    : ( Vec u ) sealed ( _aead_seal . c cipher . c c_key nonce aad inner )
-    : ( Vec u ) rec ( vec_with_cap [u] + total 5 )
-    ( vec_push [u] rec # u 23 )
-    ( vec_push [u] rec # u 3 )
-    ( vec_push [u] rec # u 3 )
-    ( _tls_u16 rec total )
-    ( _tls_cat rec sealed )
-    : b w ( _tls_sock_write . c fd rec )
+    : ( Vec u ) nonce ( _nonce ? == dir 0 . c s_iv . c c_iv ? == dir 0 . c s_seq . c c_seq )
+    : ( Vec u ) sealed ( _aead_seal . c cipher ? == dir 0 . c s_key . c c_key nonce aad inner )
+    ( vec_push [u] out # u 23 )
+    ( vec_push [u] out # u 3 )
+    ( vec_push [u] out # u 3 )
+    ( _tls_u16 out total )
+    ( _tls_cat out sealed )
     ( vec_free [u] inner )
     ( vec_free [u] aad )
     ( vec_free [u] nonce )
     ( vec_free [u] sealed )
-    ( vec_free [u] rec )
-    = . c c_seq + . c c_seq 1
-    ^ ? w @ !v TlsErr { T 0 } @ !v TlsErr { F # TlsErr TlsWrite }
+    ? == dir 0 { = . c s_seq + . c s_seq 1 } { = . c c_seq + . c c_seq 1 }
+}
+
+@ __send_inner_encrypted * TlsConn c i content_type ( Vec u ) inner → !v TlsErr {
+    : ( Vec u ) record ( vec_new [u] )
+    ( _tls_seal_inner_to c record content_type inner )
+    : b written ( _tls_sock_write . c fd record )
+    ( vec_free [u] record )
+    ? ! written { = . c closed 1 } {}
+    ^ ? written @ !v TlsErr { T 0 } @ !v TlsErr { F TlsWrite }
 }
 
 // Write a plaintext record straight to the socket.
@@ -828,18 +843,21 @@ $ `stdlib/std/async_ffi.nu`
 // From a traffic secret, derive (key, iv) and store on the conn for the
 // given direction. dir 0 = server-read, 1 = client-write.
 @ _set_keys * TlsConn c i dir ( Vec u ) secret → v {
+    : ( Vec u ) retained ( bytes_slice secret 0 ( vec_len [u] secret ) )
     : ( Vec u ) emptyc ( vec_new [u] )
     : i klen ? == . c cipher 1 16 32
     : ( Vec u ) key ( hkdf_expand_label secret `key` emptyc klen )
     : ( Vec u ) iv ( hkdf_expand_label secret `iv` emptyc 12 )
     ( vec_free [u] emptyc )
     ? == dir 0 {
+        ( vec_free [u] . c s_secret ) = . c s_secret retained
         ( vec_free [u] . c s_key )
         ( vec_free [u] . c s_iv )
         = . c s_key key
         = . c s_iv iv
         = . c s_seq 0
     } {
+        ( vec_free [u] . c c_secret ) = . c c_secret retained
         ( vec_free [u] . c c_key )
         ( vec_free [u] . c c_iv )
         = . c c_key key
@@ -919,29 +937,90 @@ $ `stdlib/std/async_ffi.nu`
     ^ == . c resumed 1
 }
 
-// Post-handshake messages that arrive inside the application-data
-// stream. NewSessionTicket (4) is kept — its PSK is derived from this
-// connection's resumption_master_secret — so tls_session_export can hand
-// it on; KeyUpdate (24) and anything else are ignored, as before.
-@ __client_post_hs * TlsConn c ( Vec u ) inner → v {
+// RFC 8446 §§4.6.3, 7.2: rotate the indicated sender's keys and
+// reset that direction's record sequence without retaining old generations.
+@ _tls_rotate_keys * TlsConn c i dir → v {
+    : ( Vec u ) empty ( vec_new [u] )
+    : ( Vec u ) next ( hkdf_expand_label ? == dir 0 . c s_secret . c c_secret `traffic upd` empty 32 )
+    ( vec_free [u] empty )
+    ( _set_keys c dir next )
+    ( vec_free [u] next )
+}
+
+// Encoding joins the same FIFO as already prepared ciphertext. The KU
+// itself uses the old write keys; all subsequent records use the new ones.
+@ _tls_control_to * TlsConn c ( Vec u ) out i dir → v {
+    ? != . c fatal_alert 0 {
+        : ( Vec u ) alert ( vec_new [u] )
+        ( vec_push [u] alert # u 2 ) ( vec_push [u] alert # u . c fatal_alert )
+        ( _tls_seal_direction_to c out dir 21 alert )
+        = . c fatal_alert 0 = . c update_pending 0 = . c closed 1
+        ^
+    } {}
+    ? | != . c version 13 == . c update_pending 0 { ^ } {}
+    : ( Vec u ) update ( vec_new [u] )
+    ( vec_push [u] update # u 24 ) ( _u24 update 1 )
+    ( vec_push [u] update # u 0 )
+    ( _tls_seal_direction_to c out dir 22 update )
+    ( _tls_rotate_keys c dir )
+    = . c update_pending 0
+}
+
+@ _tls_flush_control * TlsConn c i dir → !v TlsErr {
+    ? & == . c update_pending 0 == . c fatal_alert 0 { ^ @ !v TlsErr { T 0 } } {}
+    : ( Vec u ) wire ( vec_new [u] )
+    ( _tls_control_to c wire dir )
+    : b sent ( _tls_sock_write . c fd wire )
+    ( vec_free [u] wire )
+    ? ! sent { = . c closed 1 ^ @ !v TlsErr { F TlsWrite } } {}
+    ^ @ !v TlsErr { T 0 }
+}
+
+// Blocking readers send the fatal alert before returning the error.
+// Try-read leaves it for the existing ordered writer; once encoded, reads
+// report closed. Neither path emits further application data after failure.
+@ _tls_post_fail * TlsConn c i peer i alert → !v TlsErr {
+    = . c fatal_alert alert
+    ? == . c read_nowait 0 {
+        : !v TlsErr sent ( _tls_flush_control c - 1 peer )
+        ?? sent { T _ → {} F _ → {} }
+    } {}
+    ^ @ !v TlsErr { F TlsProtocol }
+}
+
+// Post-handshake fragments are bounded and cannot cross content-type or
+// key-generation boundaries. dir identifies the peer (0 server,1 client).
+@ _tls_post_hs * TlsConn c ( Vec u ) inner i dir → !v TlsErr {
+    ? | == ( vec_len [u] inner ) 0 > + ( vec_len [u] . c hsbuf ) ( vec_len [u] inner ) 262144 {
+        ^ ( _tls_post_fail c dir 50 )
+    } {}
     ( _tls_cat . c hsbuf inner )
-    : ~ b more T
-    ~ more {
-        = more F
+    ~ >= ( vec_len [u] . c hsbuf ) 4 {
         : i have ( vec_len [u] . c hsbuf )
-        ? >= have 4 {
-            : i mlen ( _rdint . c hsbuf 1 3 )
-            ? >= have + 4 mlen {
-                : ( Vec u ) msg ( bytes_slice . c hsbuf 0 + 4 mlen )
-                : ( Vec u ) rest ( bytes_slice . c hsbuf + 4 mlen have )
-                ( vec_free [u] . c hsbuf )
-                = . c hsbuf rest
-                ? == ( _t_bget msg 0 ) 4 { ( __client_take_ticket c msg ) } {}
-                ( vec_free [u] msg )
-                = more T
-            } {}
+        : i kind ( _t_bget . c hsbuf 0 )
+        : i mlen ( _rdint . c hsbuf 1 3 )
+        ? | > mlen 262140 & != kind 24 | != dir 0 != kind 4 {
+            ^ ( _tls_post_fail c dir 10 )
         } {}
+        ? & == kind 24 != mlen 1 { ^ ( _tls_post_fail c dir 50 ) } {}
+        ? < have + 4 mlen { ^ @ !v TlsErr { T 0 } } {}
+        ? == kind 24 {
+            // KU must end its record, so no bytes may follow it under old keys.
+            : i request ( _t_bget . c hsbuf 4 )
+            ? != have 5 { ^ ( _tls_post_fail c dir 10 ) } {}
+            ? > request 1 { ^ ( _tls_post_fail c dir 47 ) } {}
+            ( vec_clear [u] . c hsbuf )
+            ( _tls_rotate_keys c dir )
+            ? == request 1 { = . c update_pending 1 } {}
+        } {
+            : ( Vec u ) msg ( bytes_slice . c hsbuf 0 + 4 mlen )
+            : ( Vec u ) rest ( bytes_slice . c hsbuf + 4 mlen have )
+            ( vec_free [u] . c hsbuf ) = . c hsbuf rest
+            ( __client_take_ticket c msg )
+            ( vec_free [u] msg )
+        }
     }
+    ^ @ !v TlsErr { T 0 }
 }
 
 // NewSessionTicket body: u32 lifetime, u32 age_add, nonce<u8>, ticket<u16>,
@@ -1613,6 +1692,11 @@ $ `stdlib/std/async_ffi.nu`
     // buffer consumption) in the helpers persist across calls.
     : *TlsConn c # *TlsConn ( nurl_alloc Z TlsConn )
     = . c fd raw
+    = . c read_nowait 0
+    = . c s_secret ( vec_new [u] )
+    = . c c_secret ( vec_new [u] )
+    = . c update_pending 0
+    = . c fatal_alert 0
     = . c rxbuf ( vec_new [u] )
     = . c hsbuf ( vec_new [u] )
     = . c appbuf ( vec_new [u] )
@@ -1963,6 +2047,8 @@ $ `stdlib/std/async_ffi.nu`
 // the record header's u16 length field wraps outright. Split
 // application data into ≤16384-byte records.
 @ tls_write * TlsConn c ( Vec u ) data → !v TlsErr {
+    ?? ( _tls_flush_control c 1 ) { T _ → {} F error → { ^ @ !v TlsErr { F error } } }
+    ? != . c closed 0 { ^ @ !v TlsErr { F TlsClosed } } {}
     : i n ( vec_len [u] data )
     ? <= n 16384 {
         ? == . c version 12 { ^ ( __send_record_12 c 23 data ) } {}
@@ -2009,12 +2095,38 @@ $ `stdlib/std/async_ffi.nu`
     ^ out
 }
 
+// Encode application records once for a nonblocking FIFO writer. The
+// returned bytes own their storage; advancing the sequence belongs here,
+// never in a retry of a partial socket write. No socket I/O occurs.
+@ tls_prepare_write * TlsConn c ( Vec u ) data → !( Vec u ) TlsErr {
+    ? | != . c closed 0 != . c established 1 {
+        ^ @ !( Vec u ) TlsErr { F TlsClosed }
+    } {}
+    ? & != . c fatal_alert 0 > ( vec_len [u] data ) 0 { ^ @ !( Vec u ) TlsErr { F TlsProtocol } } {}
+    : ( Vec u ) wire ( vec_new [u] )
+    ( _tls_control_to c wire 1 )
+    : ~ i offset 0
+    : i size ( vec_len [u] data )
+    ~ < offset size {
+        : i end ? < - size offset 16384 size + offset 16384
+        : ( Vec u ) part ( bytes_slice data offset end )
+        ? == . c version 12 {
+            ( _tls_record12_to c wire 23 part )
+            ( vec_free [u] part )
+        } { ( _tls_seal_inner_to c wire 23 part ) }
+        = offset end
+    }
+    ^ @ !( Vec u ) TlsErr { T wire }
+}
+
 // Two-buffer variant of tls_write (client side of tcp_write_all2):
 // records are cut from `head`‖`body` without joining the two first.
 // TLS 1.3 assembles each record's plaintext straight from the pair;
 // TLS 1.2 hands the AEAD a plaintext Vec, so it cuts one per record
 // (the same one bytes_slice cut before).
 @ tls_write2 * TlsConn c ( Vec u ) head ( Vec u ) body → !v TlsErr {
+    ?? ( _tls_flush_control c 1 ) { T _ → {} F error → { ^ @ !v TlsErr { F error } } }
+    ? != . c closed 0 { ^ @ !v TlsErr { F TlsClosed } } {}
     : i n + ( vec_len [u] head ) ( vec_len [u] body )
     : ~ i off 0
     ~ < off n {
@@ -2037,6 +2149,11 @@ $ `stdlib/std/async_ffi.nu`
 // consumed transparently.
 @ tls_read * TlsConn c i max → !( Vec u ) TlsErr {
     ~ & == ( vec_len [u] . c appbuf ) 0 == . c closed 0 {
+        ? != . c fatal_alert 0 { ^ @ !( Vec u ) TlsErr { F TlsProtocol } } {}
+        ? != . c update_pending 0 {
+            ? != . c read_nowait 0 { ^ @ !( Vec u ) TlsErr { F TlsRead } } {}
+            ?? ( _tls_flush_control c 1 ) { T _ → {} F error → { ^ @ !( Vec u ) TlsErr { F error } } }
+        } {}
         : !TlsRecord TlsErr rr ( _read_record c )
         ?? rr {
             F e → {
@@ -2071,11 +2188,21 @@ $ `stdlib/std/async_ffi.nu`
                                 ( vec_free [u] . rec body )
                                 : i ct ( _inner_type inner )
                                 ? == ct 23 {
+                                    ? != ( vec_len [u] . c hsbuf ) 0 {
+                                        ( vec_free [u] inner )
+                                        : !v TlsErr failed ( _tls_post_fail c 0 10 )
+                                        ?? failed { T _ → {} F _ → {} }
+                                        ^ @ !( Vec u ) TlsErr { F TlsProtocol }
+                                    } {}
                                     ( _tls_cat . c appbuf inner )
                                 } {
                                     ? == ct 21 { = . c closed 1 } {}
-                                    // post-handshake: keep a NewSessionTicket, ignore the rest
-                                    ? == ct 22 { ( __client_post_hs c inner ) } {}
+                                    ? == ct 22 {
+                                        ?? ( _tls_post_hs c inner 0 ) {
+                                            T _ → {}
+                                            F error → { ( vec_free [u] inner ) ^ @ !( Vec u ) TlsErr { F error } }
+                                        }
+                                    } {}
                                 }
                                 ( vec_free [u] inner )
                             }
@@ -2100,6 +2227,10 @@ $ `stdlib/std/async_ffi.nu`
 }
 
 @ tls_close * TlsConn c → v {
+    ? != . c fatal_alert 0 {
+        : !v TlsErr sent ( _tls_flush_control c 1 )
+        ?? sent { T _ → {} F _ → {} }
+    } {}
     ? == . c closed 0 {
         // best-effort close_notify alert (encrypted if established)
         ? == . c established 1 {
@@ -2117,6 +2248,7 @@ $ `stdlib/std/async_ffi.nu`
     ( vec_free [u] . c appbuf )
     ( vec_free [u] . c s_key ) ( vec_free [u] . c s_iv )
     ( vec_free [u] . c c_key ) ( vec_free [u] . c c_iv )
+    ( vec_free [u] . c s_secret ) ( vec_free [u] . c c_secret )
     ( vec_free [u] . c cert_msg )
     ( vec_free [u] . c cv_sig )
     ( vec_free [u] . c th_cert )
@@ -2195,7 +2327,7 @@ $ `stdlib/std/async_ffi.nu`
 }
 
 // Send one TLS 1.2 record of `content` (real content type `rtype`).
-@ __send_record_12 * TlsConn c i rtype ( Vec u ) content → !v TlsErr {
+@ _tls_record12_to * TlsConn c ( Vec u ) out i rtype ( Vec u ) content → v {
     : i ptlen ( vec_len [u] content )
     : ( Vec u ) aad ( __aad12 . c c_seq rtype ptlen )
     : ( Vec u ) body ( vec_new [u] )
@@ -2215,18 +2347,23 @@ $ `stdlib/std/async_ffi.nu`
         ( vec_free [u] nonce )
         ( vec_free [u] sealed )
     }
-    : ( Vec u ) rec ( vec_with_cap [u] + ( vec_len [u] body ) 5 )
-    ( vec_push [u] rec # u rtype )
-    ( vec_push [u] rec # u 3 )
-    ( vec_push [u] rec # u 3 )
-    ( _tls_u16 rec ( vec_len [u] body ) )
-    ( _tls_cat rec body )
-    : b w ( _tls_sock_write . c fd rec )
+    ( vec_push [u] out # u rtype )
+    ( vec_push [u] out # u 3 )
+    ( vec_push [u] out # u 3 )
+    ( _tls_u16 out ( vec_len [u] body ) )
+    ( _tls_cat out body )
     ( vec_free [u] aad )
     ( vec_free [u] body )
-    ( vec_free [u] rec )
     = . c c_seq + . c c_seq 1
-    ^ ? w @ !v TlsErr { T 0 } @ !v TlsErr { F # TlsErr TlsWrite }
+}
+
+@ __send_record_12 * TlsConn c i rtype ( Vec u ) content → !v TlsErr {
+    : ( Vec u ) record ( vec_new [u] )
+    ( _tls_record12_to c record rtype content )
+    : b written ( _tls_sock_write . c fd record )
+    ( vec_free [u] record )
+    ? ! written { = . c closed 1 } {}
+    ^ ? written @ !v TlsErr { T 0 } @ !v TlsErr { F TlsWrite }
 }
 
 // Decrypt a TLS 1.2 record body (real type `rtype`) → plaintext.

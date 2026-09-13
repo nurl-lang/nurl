@@ -93,6 +93,34 @@ $ `../../http/src/http.nu`
     ^ r
 }
 
+// mode: 0 deflate, 1 corrupt gzip CRC, 2 valid expansion beyond a cap,
+// 3 zlib data incorrectly labelled gzip.
+@ h_compression i mode → HttpResponse {
+    : ( Vec u ) plain ( bytes_from_str `the quick brown fox jumps over the lazy dog` )
+    ? == mode 2 {
+        : ~ i k 0
+        ~ < k 4096 { ( vec_push [u] plain # u 65 ) = k + k 1 }
+    } {}
+    : HttpResponse r ( response_new 200 )
+    : !( Vec u ) CompressErr result ? | == mode 0 == mode 3
+    ( zlib_compress plain ) ( gzip_compress plain )
+    ?? result {
+        T encoded → {
+            ? == mode 1 {
+                : *u data ( vec_data [u] encoded )
+                : i crc - ( vec_len [u] encoded ) 8
+                = . data crc # u ^^ # i . data crc 1
+            } {}
+            ( response_set_header r `Content-Encoding` ? == mode 0 `deflate` `gzip` )
+            ( response_set_body_bytes r encoded )
+            ( vec_free [u] encoded )
+        }
+        F _ → {}
+    }
+    ( vec_free [u] plain )
+    ^ r
+}
+
 @ h_echo_body HttpRequest req Params p → HttpResponse {
     : HttpResponse r ( response_new 200 )
     ( response_set_body_bytes r . req body )
@@ -111,6 +139,10 @@ $ `../../http/src/http.nu`
     ( http_app_get a `/setcookie` \ HttpRequest req Params p → HttpResponse { ^ ( h_setcookie req p ) } )
     ( http_app_get a `/readcookie` \ HttpRequest req Params p → HttpResponse { ^ ( h_readcookie req p ) } )
     ( http_app_get a `/gzip` \ HttpRequest req Params p → HttpResponse { ^ ( h_gzip req p ) } )
+    ( http_app_get a `/deflate` \ HttpRequest req Params p → HttpResponse { ^ ( h_compression 0 ) } )
+    ( http_app_get a `/gzip-bad` \ HttpRequest req Params p → HttpResponse { ^ ( h_compression 1 ) } )
+    ( http_app_get a `/gzip-large` \ HttpRequest req Params p → HttpResponse { ^ ( h_compression 2 ) } )
+    ( http_app_get a `/gzip-wrong-format` \ HttpRequest req Params p → HttpResponse { ^ ( h_compression 3 ) } )
     ( http_app_post a `/echo` \ HttpRequest req Params p → HttpResponse { ^ ( h_echo_body req p ) } )
 }
 

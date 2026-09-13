@@ -1016,9 +1016,10 @@ $ `stdlib/ext/http2_conn.nu`
     : !H2Connection H2ConnErr cr ( h2_conn_new_buffered conn carry . lim body_default_max )
     ?? cr {
         T h2c → {
-            : !v H2ConnErr sr ( h2_conn_serve h2c . s handler )
+            : ~ H2Connection active h2c
+            : !v H2ConnErr sr ( h2_conn_serve active . s handler )
             ?? sr { T _ → {} F _ → {} }
-            ( h2_conn_free h2c )
+            ( h2_conn_free active )
         }
         F _ → {}
     }

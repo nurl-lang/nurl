@@ -373,7 +373,7 @@ $ `stdlib/core/char.nu`
 // Used by fast file I/O paths (CSV / arena loaders) to avoid the
 // `nurl_memcpy` over the full content — for a 100 MB CSV that's
 // ~33 ms saved per load.
-@ string_from_take s raw i raw_cap → String {
+@ string_from_take sink s raw i raw_cap → String {
     : i n ( nurl_str_len raw )
     : s ctl ( nurl_zalloc 24 )
     ( nurl_poke ctl 0 # i raw )
@@ -619,33 +619,39 @@ $ `stdlib/core/char.nu`
     ^ >= ( nurl_str_find ( string_data str ) needle ) 0
 }
 
-// Strict decimal parse. Accepts optional leading '-' or '+', then one
-// or more decimal digits, and nothing else. Empty input (or just a sign
-// with no digits) → Empty. Any non-digit byte after the optional sign →
-// BadFormat. Overflow is not currently detected (atoll wraps silently);
-// a future revision may return Overflow for > i64 magnitude.
-@ string_to_int String str → !i ParseErr {
-    : i len ( string_len str )
-    ? == len 0 { ^ @ !i ParseErr { F @ ParseErr { Empty } } } {}
-
-    : ~ i idx 0
-    : i first ( string_get str 0 )
-    // '-' = 45, '+' = 43
-    ? | == first 45 == first 43 { = idx 1 } {}
-
-    // bare sign with no digits
-    ? == idx len { ^ @ !i ParseErr { F @ ParseErr { Empty } } } {}
-
-    ~ < idx len {
-        : i c ( string_get str idx )
-        ? == ( is_digit c ) 0 {
-            ^ @ !i ParseErr { F @ ParseErr { BadFormat } }
+// Shared strict decimal parser for String and raw-s APIs. Accumulate a
+// nonpositive value so INT_MIN never needs an unrepresentable positive
+// magnitude. Check before multiplying/subtracting; malformed suffixes still
+// report BadFormat even when an earlier prefix exceeded the numeric range.
+@ _string_parse_decimal s data i length → !i ParseErr {
+    ? == length 0 { ^ @ !i ParseErr { F Empty } } {}
+    : *u bytes # *u data
+    : i first # i . bytes 0
+    : b negative == first 45
+    : ~ i index ? | negative == first 43 1 0
+    ? == index length { ^ @ !i ParseErr { F Empty } } {}
+    : i last ? negative 8 7
+    : ~ i value 0
+    : ~ b overflow F
+    ~ < index length {
+        : i digit - # i . bytes index 48
+        ? | < digit 0 > digit 9 { ^ @ !i ParseErr { F BadFormat } } {}
+        ? ! overflow {
+            ? | < value -922337203685477580 & == value -922337203685477580 > digit last {
+                = overflow T
+            } { = value - * value 10 digit }
         } {}
-        = idx + idx 1
+        = index + index 1
     }
+    ? overflow { ^ @ !i ParseErr { F Overflow } } {}
+    ^ @ !i ParseErr { T ? negative value - 0 value }
+}
 
-    : s buf ( string_data str )
-    ^ @ !i ParseErr { T ( nurl_str_to_int buf ) }
+// Optional sign followed by decimal digits. Empty/sign-only input is Empty,
+// malformed bytes are BadFormat, and values outside signed i64 are Overflow.
+// Use the String's full byte length: embedded NUL cannot hide a suffix.
+@ string_to_int String str → !i ParseErr {
+    ^ ( _string_parse_decimal ( string_data str ) ( string_len str ) )
 }
 
 // First byte index at which `needle` occurs in `str`. Empty needle

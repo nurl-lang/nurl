@@ -191,10 +191,21 @@ jobs:
       - name: Driver paths through split lowering
         run: python3 tools/tests/test_driver_paths.py
 
+      - name: Consistent source snapshots during compilation
+        run: python3 tools/tests/test_compiler_source_snapshot.py
+
+      - name: NURL and C function linkage boundaries
+        run: python3 tools/tests/test_function_linkage.py
+
       - name: Protobuf differential wire and schema tests
         run: |
           python3 -m pip install --target /tmp/protobuf-oracle protobuf==7.36.1
           PYTHONPATH=/tmp/protobuf-oracle python3 tools/tests/test_protobuf.py
+
+      - name: gRPC interoperability, malformed peers and full duplex
+        run: |
+          python3 -m pip install --target /tmp/grpc-oracle -r packages/gRPC/tests/requirements.txt
+          PYTHONPATH=/tmp/grpc-oracle python3 tools/tests/test_grpc.py
 
       - name: Declaration and statement forms (reject, or emit main)
         # One invariant over many spellings: a source that still declares
@@ -217,6 +228,8 @@ jobs:
         timeout-minutes: 10
         run: |
           python3 tools/tests/test_registry_identity.py
+          python3 tools/tests/test_tool_publication.py
+          python3 tools/tests/test_package_runners.py
           python3 tools/tests/test_resolver.py
           ./tools/nurlpkg/test-install-tool.sh
 
@@ -435,6 +448,20 @@ jobs:
         # python3's zlib.crc32.
         run: ./tools/crc32_gate.sh
 
+      - name: Absolute TCP and TLS write deadlines under backpressure
+        run: |
+          ./nurl.sh tools/net_write_deadline.nu build/net_write_deadline
+          python3 tools/tests/test_net_write_deadline.py
+          ./nurl.sh tools/net_duplex_probe.nu build/net_duplex_probe
+          python3 tools/tests/test_net_duplex.py
+          ./nurl.sh tools/net_key_update.nu build/net_key_update
+          python3 tools/tests/test_net_key_update.py
+
+      - name: DEFLATE, gzip and zlib framing against reference codecs
+        run: |
+          ./nurl.sh tools/compress_gate.nu build/compress_gate
+          python3 tools/tests/test_compress_framing.py
+
       - name: XXH64 gate (against the reference implementation)
         # std/hash_xxh64 is what a Zstandard frame checksum is. Its four
         # code paths — the 32-byte striped loop and the 8/4/1-byte tails —
@@ -516,6 +543,11 @@ jobs:
         # (dwarf_closure_drop, the -O2 inliner crash) plus the gdb
         # behavioural checks; gdb makes the source-level asserts run too.
         run: ./tools/dwarf_test.sh
+
+      - name: NURL line and branch coverage
+        # Assert real counts, including missed branches and accumulated runs;
+        # accepting --coverage or merely linking is not evidence of coverage.
+        run: python3 tools/tests/test_driver_coverage.py
 
   unikernel:
     name: unikernel (no libc, and then no operating system)
@@ -722,15 +754,26 @@ jobs:
       - name: Instrumented formatter ownership and CLI controls
         run: NURL_SAN=1 python3 tools/tests/test_formatter.py
 
+      - name: Windows process encoder memory and error controls
+        run: python3 tools/tests/test_windows_process.py EncoderControls
+
       - name: Instrumented protobuf interoperability and malformed input
         run: |
           python3 -m pip install --target /tmp/protobuf-oracle protobuf==7.36.1
           PYTHONPATH=/tmp/protobuf-oracle NURL_SAN=1 python3 tools/tests/test_protobuf.py
           LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh protobuf return_paths try_statement_effect inout_forward
 
+      - name: Instrumented gRPC interoperability and connection cleanup
+        run: |
+          python3 -m pip install --target /tmp/grpc-oracle -r packages/gRPC/tests/requirements.txt
+          PYTHONPATH=/tmp/grpc-oracle NURL_SAN=1 python3 tools/tests/test_grpc.py
+
       - name: Instrumented registry identity and trust controls
         run: |
-          NURL_SAN=1 python3 tools/tests/test_registry_identity.py
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 LSAN_OPTIONS=use_stacks=0 NURL_SAN=1 python3 tools/tests/test_registry_identity.py
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 LSAN_OPTIONS=use_stacks=0 python3 tools/tests/test_tool_publication.py
+          LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh fs_atomic
+          python3 tools/tests/test_package_runners.py
           NURL_SAN=1 python3 tools/tests/test_resolver.py
           NURL_SAN=1 ./nurl.sh compiler/tests/registry_trust.nu build/registry-trust-leaks
           ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 ./build/registry-trust-leaks
@@ -781,6 +824,9 @@ jobs:
 
       - name: string argument address and ownership controls
         run: python3 tools/tests/test_string_argument_ownership.py
+
+      - name: Instrumented NURL and C function linkage boundaries
+        run: python3 tools/tests/test_function_linkage.py
 
       - name: rejected-source compiler leak gate (all rejection goldens)
         run: python3 tools/tests/test_compiler_cleanup.py
@@ -863,6 +909,7 @@ jobs:
             net_inet net_frames net_dhcp net_stack net_tcp net_tcp_fuzz \
             net_frame_fuzz \
             net_tcpstack net_socket \
+            toml_error_cleanup manifest_load_errors int_parse_boundaries \
             virtq_split free_suffix_query closure_env_escape_loop \
             ctx_switch async_basic async_chan async_mn async_sleep \
             select_basic

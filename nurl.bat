@@ -1,5 +1,5 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal DisableDelayedExpansion
 
 REM Copyright (c) 2026 The NURL Project Developers
 REM SPDX-License-Identifier: MIT OR Apache-2.0
@@ -55,23 +55,23 @@ if /i "%~1"=="self-update"  goto do_upgrade
 if /i "%~1"=="self-upgrade" goto do_upgrade
 
 :parse_flags
-if /i "%~1"=="--emit-ir"  set "EMIT_IR=1"     & shift & goto parse_flags
-if /i "%~1"=="--emit=ir"  set "EMIT_IR=1"     & shift & goto parse_flags
-if /i "%~1"=="--emit-asm" set "EMIT_ASM=1"    & shift & goto parse_flags
-if /i "%~1"=="--emit=asm" set "EMIT_ASM=1"    & shift & goto parse_flags
-if /i "%~1"=="-g"         set "DEBUG_INFO=1"  & shift & goto parse_flags
-if /i "%~1"=="--debug"    set "DEBUG_INFO=1"  & shift & goto parse_flags
-if /i "%~1"=="-O0"        set "CLI_OPT=-O0"   & shift & goto parse_flags
-if /i "%~1"=="-O1"        set "CLI_OPT=-O1"   & shift & goto parse_flags
-if /i "%~1"=="-O2"        set "CLI_OPT=-O2"   & shift & goto parse_flags
-if /i "%~1"=="-O3"        set "CLI_OPT=-O3"   & shift & goto parse_flags
+if /i "%~1"=="--emit-ir"  ( set "EMIT_IR=1"     & shift & goto parse_flags )
+if /i "%~1"=="--emit=ir"  ( set "EMIT_IR=1"     & shift & goto parse_flags )
+if /i "%~1"=="--emit-asm" ( set "EMIT_ASM=1"    & shift & goto parse_flags )
+if /i "%~1"=="--emit=asm" ( set "EMIT_ASM=1"    & shift & goto parse_flags )
+if /i "%~1"=="-g"         ( set "DEBUG_INFO=1"  & shift & goto parse_flags )
+if /i "%~1"=="--debug"    ( set "DEBUG_INFO=1"  & shift & goto parse_flags )
+if /i "%~1"=="-O0"        ( set "CLI_OPT=-O0"   & shift & goto parse_flags )
+if /i "%~1"=="-O1"        ( set "CLI_OPT=-O1"   & shift & goto parse_flags )
+if /i "%~1"=="-O2"        ( set "CLI_OPT=-O2"   & shift & goto parse_flags )
+if /i "%~1"=="-O3"        ( set "CLI_OPT=-O3"   & shift & goto parse_flags )
 REM Diagnostic flags forwarded verbatim — `--no-borrowck` is what the
 REM compiler's own borrow-checker error tells the user to re-run with,
 REM and without this it was read as the source file name.
-if /i "%~1"=="--no-borrowck"     set "NURLC_DIAG=%NURLC_DIAG% --no-borrowck"     & shift & goto parse_flags
-if /i "%~1"=="--strict-borrowck" set "NURLC_DIAG=%NURLC_DIAG% --strict-borrowck" & shift & goto parse_flags
-if /i "%~1"=="--strict-arity"    set "NURLC_DIAG=%NURLC_DIAG% --strict-arity"    & shift & goto parse_flags
-if /i "%~1"=="--no-strict-arity" set "NURLC_DIAG=%NURLC_DIAG% --no-strict-arity" & shift & goto parse_flags
+if /i "%~1"=="--no-borrowck"     ( set "NURLC_DIAG=%NURLC_DIAG% --no-borrowck"     & shift & goto parse_flags )
+if /i "%~1"=="--strict-borrowck" ( set "NURLC_DIAG=%NURLC_DIAG% --strict-borrowck" & shift & goto parse_flags )
+if /i "%~1"=="--strict-arity"    ( set "NURLC_DIAG=%NURLC_DIAG% --strict-arity"    & shift & goto parse_flags )
+if /i "%~1"=="--no-strict-arity" ( set "NURLC_DIAG=%NURLC_DIAG% --no-strict-arity" & shift & goto parse_flags )
 
 if "%~1"=="" (
     echo Usage: nurl.bat [flags] ^<file.nu^> [output_name]
@@ -87,11 +87,7 @@ if "%~1"=="" (
     exit /b 1
 )
 
-set "SRCFILE=%~1"
-if not exist "%SRCFILE%" (
-    echo ERROR: Source file not found: %SRCFILE%
-    exit /b 1
-)
+set "SRCFILE=%~f1"
 
 REM ── Derive output names ──────────────────────────────────────
 if "%~2"=="" (
@@ -99,17 +95,28 @@ if "%~2"=="" (
 ) else (
     set "OUTBASE=%~2"
 )
-set "LLFILE=%OUTBASE%.ll"
-set "SFILE=%OUTBASE%.s"
-set "EXEFILE=%OUTBASE%.exe"
+for %%I in ("%OUTBASE%") do set "OUTBASE=%%~fI"
+for %%I in ("%OUTBASE%") do set "EXEDIR=%%~dpI"
+for %%I in ("%OUTBASE%") do set "OUTNAME=%%~nxI"
+set "SCRIPTDIR=%~dp0"
+REM Values inserted through delayed expansion are not parsed as command
+REM operators and their embedded ! characters are not expanded again.
+setlocal EnableDelayedExpansion
+if not defined NURL_STDLIB set "NURL_STDLIB=!SCRIPTDIR!"
+if not exist "!SRCFILE!" (
+    echo ERROR: Source file not found: !SRCFILE!
+    exit /b 1
+)
+set "LLFILE=!OUTBASE!.ll"
+set "SFILE=!OUTBASE!.s"
+set "EXEFILE=!OUTBASE!.exe"
 
 REM ── Locate nurlc.exe ─────────────────────────────────────────
-set "SCRIPTDIR=%~dp0"
-set "NURLC=%SCRIPTDIR%build\nurlc.exe"
-if not exist "%NURLC%" (
+set "NURLC=!SCRIPTDIR!build\nurlc.exe"
+if not exist "!NURLC!" (
     REM Fall back to old location for backwards compatibility
-    set "NURLC=%SCRIPTDIR%nurlc.exe"
-    if not exist "%NURLC%" (
+    set "NURLC=!SCRIPTDIR!nurlc.exe"
+    if not exist "!NURLC!" (
         REM Fall back to nurlc.exe on PATH
         where nurlc.exe >nul 2>&1
         if !errorlevel! neq 0 (
@@ -137,16 +144,16 @@ set "CLANG=clang"
 if exist "C:\Program Files\LLVM\bin\clang.exe" (
     set "CLANG=C:\Program Files\LLVM\bin\clang.exe"
 )
-set "ZIG_BIN=%NURL_ZIG%"
-if "%ZIG_BIN%"=="" set "ZIG_BIN=%SCRIPTDIR%zig\zig.exe"
+set "ZIG_BIN=!NURL_ZIG!"
+if "!ZIG_BIN!"=="" set "ZIG_BIN=!SCRIPTDIR!zig\zig.exe"
 set "USING_ZIG=0"
 REM The quotes live INSIDE the variable: an install path with a space
 REM (C:\Users\First Last\.nurl\) otherwise splits the command.
-if exist "%ZIG_BIN%" (
+if exist "!ZIG_BIN!" (
     set "USING_ZIG=1"
-    set "CC="%ZIG_BIN%" cc"
+    set "CC="!ZIG_BIN!" cc"
 ) else (
-    set "CC="%CLANG%""
+    set "CC="!CLANG!""
 )
 
 REM ── Locate the runtime object matching that compiler's ABI ───
@@ -156,17 +163,17 @@ REM _fltused, none of which MinGW's CRT provides. The zig above targets
 REM x86_64-windows-gnu, so linking it against runtime.o fails on exactly
 REM those three. build.bat builds stdlib\runtime.mingw.o with zig for
 REM this path; pick whichever object matches the compiler chosen above.
-set "RUNTIME=%SCRIPTDIR%stdlib\runtime.o"
+set "RUNTIME=!SCRIPTDIR!stdlib\runtime.o"
 set "MINGW_ABI=0"
-if "%USING_ZIG%"=="1" (
-    if exist "%SCRIPTDIR%stdlib\runtime.mingw.o" (
-        set "RUNTIME=%SCRIPTDIR%stdlib\runtime.mingw.o"
+if "!USING_ZIG!"=="1" (
+    if exist "!SCRIPTDIR!stdlib\runtime.mingw.o" (
+        set "RUNTIME=!SCRIPTDIR!stdlib\runtime.mingw.o"
         set "MINGW_ABI=1"
     ) else (
         REM Built on a box with no zig, so no MinGW runtime was produced.
         REM clang's ABI matches the object we do have — use it rather than
         REM emitting a link that cannot possibly resolve.
-        "%CLANG%" --version >nul 2>&1
+        "!CLANG!" --version >nul 2>&1
         if errorlevel 1 (
             echo ERROR: the bundled zig needs stdlib\runtime.mingw.o, which this
             echo        toolchain does not carry, and no clang was found either.
@@ -175,31 +182,33 @@ if "%USING_ZIG%"=="1" (
             exit /b 1
         )
         set "USING_ZIG=0"
-        set "CC="%CLANG%""
+        set "CC="!CLANG!""
     )
 )
-if not exist "%RUNTIME%" (
+if not exist "!RUNTIME!" (
     echo ERROR: !RUNTIME! not found
     echo        Run build.bat to build the NURL stdlib first.
     exit /b 1
 )
 
 REM ── Step 1: .nu → LLVM IR ────────────────────────────────────
-if "%EMIT_IR%"=="1" (
-    echo [1/1] %SRCFILE% → %LLFILE%
+if "!EMIT_IR!"=="1" (
+    echo [1/1] !SRCFILE! → !LLFILE!
 ) else (
-    echo [1/2] %SRCFILE% → %LLFILE%
+    echo [1/2] !SRCFILE! → !LLFILE!
 )
-"%NURLC%"%NURLC_DIAG% "%SRCFILE%" > "%LLFILE%"
+set "NURLC_G="
+if "!DEBUG_INFO!"=="1" set "NURLC_G=--g"
+"!NURLC!" !NURLC_G!!NURLC_DIAG! "!SRCFILE!" > "!LLFILE!"
 if !errorlevel! neq 0 (
-    if exist "%LLFILE%" del "%LLFILE%"
+    if exist "!LLFILE!" del "!LLFILE!"
     echo ERROR: NURL compilation failed
     exit /b 1
 )
 
-if "%EMIT_IR%"=="1" (
+if "!EMIT_IR!"=="1" (
     echo.
-    echo Done: %LLFILE%
+    echo Done: !LLFILE!
     endlocal
     exit /b 0
 )
@@ -210,31 +219,30 @@ REM each loop iteration leaks a stack slot and long-running programs
 REM overflow the default stack. -O2 runs mem2reg which hoists them out;
 REM override with `set NURL_OPT=-O0` or `-O0` CLI flag when debugging.
 if defined CLI_OPT (
-    set "NURL_OPT=%CLI_OPT%"
-) else if "%NURL_OPT%"=="" (
+    set "NURL_OPT=!CLI_OPT!"
+) else if "!NURL_OPT!"=="" (
     set "NURL_OPT=-O2"
 )
 
 REM zig needs the level restated for cc1 (see the CC selection above).
 set "CC_OPT_FIX="
-if "%USING_ZIG%"=="1" set "CC_OPT_FIX=-Xclang %NURL_OPT%"
+if "!USING_ZIG!"=="1" set "CC_OPT_FIX=-Xclang !NURL_OPT!"
 
-REM Debug flag passthrough. With no `!dbg` metadata in the IR, `-g` yields
-REM only crude line info from the inlined .ll filename; still useful in
-REM debuggers for frame isolation and symbol demangling.
+REM The frontend emits source locations above; clang preserves them in
+REM the native object when debug information was requested.
 set "DEBUG_FLAG="
-if "%DEBUG_INFO%"=="1" set "DEBUG_FLAG=-g"
+if "!DEBUG_INFO!"=="1" set "DEBUG_FLAG=-g"
 
 REM --emit-asm: stop after clang -S, skip linking.
-if "%EMIT_ASM%"=="1" (
-    echo [2/2] %LLFILE% → %SFILE%  ^(%NURL_OPT% %DEBUG_FLAG% -S^)
-    %CC% %NURL_OPT% %CC_OPT_FIX% %DEBUG_FLAG% -S "%LLFILE%" -o "%SFILE%"
+if "!EMIT_ASM!"=="1" (
+    echo [2/2] !LLFILE! → !SFILE!  ^(!NURL_OPT! !DEBUG_FLAG! -S^)
+    !CC! !NURL_OPT! !CC_OPT_FIX! !DEBUG_FLAG! -S "!LLFILE!" -o "!SFILE!"
     if !errorlevel! neq 0 (
         echo ERROR: -S step failed
         exit /b 1
     )
     echo.
-    echo Done: %SFILE%
+    echo Done: !SFILE!
     endlocal
     exit /b 0
 )
@@ -244,7 +252,7 @@ set "EXTRA_OBJS="
 set "EXTRA_LIBS="
 set "SDL2_LIBDIR="
 set "SDL2_BINDIR="
-findstr /R /C:"@canvas_open\>" /C:"@canvas_present\>" /C:"@canvas_sleep\>" /C:"@canvas_should_close\>" /C:"@canvas_close\>" /C:"@canvas_mouse_x\>" /C:"@canvas_mouse_y\>" /C:"@canvas_mouse_btn\>" "%LLFILE%" >nul 2>&1
+findstr /R /C:"@canvas_open\>" /C:"@canvas_present\>" /C:"@canvas_sleep\>" /C:"@canvas_should_close\>" /C:"@canvas_close\>" /C:"@canvas_mouse_x\>" /C:"@canvas_mouse_y\>" /C:"@canvas_mouse_btn\>" "!LLFILE!" >nul 2>&1
 if not errorlevel 1 (
     REM canvas.o is clang-built and SDL2.lib is an MSVC import lib, so
     REM neither can go into a MinGW image. Say so here rather than let the
@@ -257,18 +265,18 @@ if not errorlevel 1 (
         echo            set NURL_ZIG=none
         exit /b 1
     )
-    set "CANVAS_O=%SCRIPTDIR%stdlib\canvas.o"
+    set "CANVAS_O=!SCRIPTDIR!stdlib\canvas.o"
     if not exist "!CANVAS_O!" (
         echo ERROR: program uses canvas FFI but !CANVAS_O! is missing.
         echo        Run build.bat to build the NURL stdlib first.
         exit /b 1
     )
-    set "EXTRA_OBJS=!CANVAS_O!"
+    set EXTRA_OBJS="!CANVAS_O!"
     REM Was canvas.o compiled with the real SDL2 back-end? build.bat
     REM drops a marker file next to canvas.o in that case. On a stub
     REM build we link *without* -lSDL2 — the exe runs fine, and any
     REM canvas_* call prints a clear diagnostic and exits.
-    if exist "%SCRIPTDIR%stdlib\canvas.sdl2" (
+    if exist "!SCRIPTDIR!stdlib\canvas.sdl2" (
         REM Locate SDL2.lib + SDL2.dll. vcpkg's x64-windows triplet keeps the
         REM import library under `lib\` and the DLL under `bin\`.
         if exist "C:\SDL2\lib\SDL2.lib" (
@@ -276,9 +284,9 @@ if not errorlevel 1 (
             if exist "C:\SDL2\lib\SDL2.dll"  set "SDL2_BINDIR=C:\SDL2\lib"
             if exist "C:\SDL2\bin\SDL2.dll"  set "SDL2_BINDIR=C:\SDL2\bin"
         )
-        if not defined SDL2_LIBDIR if exist "%VCPKG_ROOT%\installed\x64-windows\lib\SDL2.lib" (
-            set "SDL2_LIBDIR=%VCPKG_ROOT%\installed\x64-windows\lib"
-            set "SDL2_BINDIR=%VCPKG_ROOT%\installed\x64-windows\bin"
+        if not defined SDL2_LIBDIR if exist "!VCPKG_ROOT!\installed\x64-windows\lib\SDL2.lib" (
+            set "SDL2_LIBDIR=!VCPKG_ROOT!\installed\x64-windows\lib"
+            set "SDL2_BINDIR=!VCPKG_ROOT!\installed\x64-windows\bin"
         )
         if not defined SDL2_LIBDIR if exist "C:\vcpkg\installed\x64-windows\lib\SDL2.lib" (
             set "SDL2_LIBDIR=C:\vcpkg\installed\x64-windows\lib"
@@ -303,7 +311,7 @@ REM packages\gpu binds the driver (& `cuda` @ cu…) and NVRTC
 REM (& `nvrtc` @ nvrtc…) directly, with no runtime.c bridge, so those ~40
 REM symbols must come from somewhere at link time or lld reports every one
 REM as undefined. Two sources:
-REM   - a CUDA Toolkit (cuda.lib + nvrtc.lib under %CUDA_PATH%\lib\x64) —
+REM   - a CUDA Toolkit (cuda.lib + nvrtc.lib under !CUDA_PATH!\lib\x64) —
 REM     GPU compute runs for real. Both are needed: packages\gpu has no
 REM     precompiled kernels, it feeds CUDA-C through NVRTC at runtime
 REM     (cuda_compile → PTX/CUBIN → cuModuleLoadData), so the driver alone
@@ -320,11 +328,11 @@ REM     pulls in gpu transitively — anomaly → tensor → gpukit → gpu — 
 REM     and it wants no GPU at all.
 REM The stubs go in as SOURCE rather than a prebuilt object because this
 REM script links MSVC-ABI under clang and MinGW-ABI under the bundled zig;
-REM handing %CC% the .c compiles the translation unit with whichever ABI
+REM handing !CC! the .c compiles the translation unit with whichever ABI
 REM this particular link is using, so one file serves both.
 REM `set NURL_GPU_STUBS=1` forces the stub path (same knob as nurl.sh).
 set "CUDA_LIBDIR="
-if not defined NURL_GPU_STUBS if defined CUDA_PATH if exist "%CUDA_PATH%\lib\x64\nvrtc.lib" (
+if not defined NURL_GPU_STUBS if defined CUDA_PATH if exist "!CUDA_PATH!\lib\x64\nvrtc.lib" (
     REM Those are MSVC import libs, so they can only go into an MSVC-ABI
     REM image — the same constraint canvas.o + SDL2.lib carry above. Under
     REM the bundled zig, say so and fall through to the stubs rather than
@@ -336,35 +344,35 @@ if not defined NURL_GPU_STUBS if defined CUDA_PATH if exist "%CUDA_PATH%\lib\x64
         echo        with NURL_ZIG pointing at a path that does not exist, e.g.
         echo            set NURL_ZIG=none
     ) else (
-        set "CUDA_LIBDIR=%CUDA_PATH%\lib\x64"
+        set "CUDA_LIBDIR=!CUDA_PATH!\lib\x64"
     )
 )
-findstr /R /C:"@cu[A-Z]" "%LLFILE%" >nul 2>&1
+findstr /R /C:"@cu[A-Z]" "!LLFILE!" >nul 2>&1
 if not errorlevel 1 (
     if defined CUDA_LIBDIR (
         set EXTRA_LIBS=!EXTRA_LIBS! -L"!CUDA_LIBDIR!" -lcuda
         echo [info] CUDA driver linked from "!CUDA_LIBDIR!"
     ) else (
-        if not exist "%SCRIPTDIR%stdlib\cuda_stubs.c" (
-            echo ERROR: program uses the CUDA FFI but %SCRIPTDIR%stdlib\cuda_stubs.c
+        if not exist "!SCRIPTDIR!stdlib\cuda_stubs.c" (
+            echo ERROR: program uses the CUDA FFI but !SCRIPTDIR!stdlib\cuda_stubs.c
             echo        is missing. Run build.bat to build the NURL stdlib first.
             exit /b 1
         )
-        set EXTRA_OBJS=!EXTRA_OBJS! "%SCRIPTDIR%stdlib\cuda_stubs.c"
+        set EXTRA_OBJS=!EXTRA_OBJS! "!SCRIPTDIR!stdlib\cuda_stubs.c"
         echo [info] no linkable CUDA Toolkit - cu* uses stubs; packages\gpu runs on the CPU
     )
 )
-findstr /R /C:"@nvrtc[A-Z]" "%LLFILE%" >nul 2>&1
+findstr /R /C:"@nvrtc[A-Z]" "!LLFILE!" >nul 2>&1
 if not errorlevel 1 (
     if defined CUDA_LIBDIR (
         set EXTRA_LIBS=!EXTRA_LIBS! -lnvrtc
     ) else (
-        if not exist "%SCRIPTDIR%stdlib\nvrtc_stubs.c" (
-            echo ERROR: program uses the NVRTC FFI but %SCRIPTDIR%stdlib\nvrtc_stubs.c
+        if not exist "!SCRIPTDIR!stdlib\nvrtc_stubs.c" (
+            echo ERROR: program uses the NVRTC FFI but !SCRIPTDIR!stdlib\nvrtc_stubs.c
             echo        is missing. Run build.bat to build the NURL stdlib first.
             exit /b 1
         )
-        set EXTRA_OBJS=!EXTRA_OBJS! "%SCRIPTDIR%stdlib\nvrtc_stubs.c"
+        set EXTRA_OBJS=!EXTRA_OBJS! "!SCRIPTDIR!stdlib\nvrtc_stubs.c"
     )
 )
 
@@ -377,15 +385,15 @@ REM packages\gpu — anomaly → tensor → gpukit → gpu, none of which asks f
 REM GPU — died with "undefined symbol: dlopen" out of cpu_compile. Compile
 REM the LoadLibraryA forwarders in when the IR reaches for them. Source, not
 REM an object, for the same ABI reason as the CUDA stubs above.
-findstr /R /C:"@dlopen\>" /C:"@dlsym\>" /C:"@dlclose\>" "%LLFILE%" >nul 2>&1
+findstr /R /C:"@dlopen\>" /C:"@dlsym\>" /C:"@dlclose\>" "!LLFILE!" >nul 2>&1
 if not errorlevel 1 (
-    if not exist "%SCRIPTDIR%stdlib\dl_win32.c" (
+    if not exist "!SCRIPTDIR!stdlib\dl_win32.c" (
         echo ERROR: program uses the POSIX dynamic loader ^(dlopen/dlsym/dlclose^)
-        echo        but %SCRIPTDIR%stdlib\dl_win32.c is missing. Run build.bat
+        echo        but !SCRIPTDIR!stdlib\dl_win32.c is missing. Run build.bat
         echo        to build the NURL stdlib first.
         exit /b 1
     )
-    set EXTRA_OBJS=!EXTRA_OBJS! "%SCRIPTDIR%stdlib\dl_win32.c"
+    set EXTRA_OBJS=!EXTRA_OBJS! "!SCRIPTDIR!stdlib\dl_win32.c"
 )
 
 REM Auto-link the FFI libs build.bat detected (issue #229). These are for
@@ -398,11 +406,11 @@ REM     resolved against THIS prefix — self-contained, no vcpkg on the box.
 REM   - An in-repo build with no winlib\ falls back to the build-time
 REM     runtime.winlibs (its vcpkg -L"<dir>" paths are valid locally).
 set "WINLIBS="
-if exist "%SCRIPTDIR%stdlib\winlib\winlibs.reloc" (
-    set /p WINLIBS=<"%SCRIPTDIR%stdlib\winlib\winlibs.reloc"
-    set "WINLIBS=!WINLIBS:$NURL_LIB$=%SCRIPTDIR%stdlib\winlib!"
-) else if exist "%SCRIPTDIR%stdlib\runtime.winlibs" (
-    set /p WINLIBS=<"%SCRIPTDIR%stdlib\runtime.winlibs"
+if exist "!SCRIPTDIR!stdlib\winlib\winlibs.reloc" (
+    set /p WINLIBS=<"!SCRIPTDIR!stdlib\winlib\winlibs.reloc"
+    set "WINLIBS=!WINLIBS:$NURL_LIB$=.\stdlib\winlib!"
+) else if exist "!SCRIPTDIR!stdlib\runtime.winlibs" (
+    set /p WINLIBS=<"!SCRIPTDIR!stdlib\runtime.winlibs"
 )
 REM Those are vcpkg's MSVC static libs, which cannot go into a MinGW
 REM image. Nothing in the runtime references them (gzip/deflate have been
@@ -427,33 +435,151 @@ REM they are compiled out there and the libs must be named here instead.
 REM Naming them is harmless for clang: they are all in the Windows SDK.
 REM This is the same set, for the same reason, as the mingw-w64 cross link
 REM in nurlapi/main.nu.
-echo [2/2] %LLFILE% → %EXEFILE%  (%NURL_OPT% %DEBUG_FLAG% %EXTRA_LIBS%)
-%CC% %NURL_OPT% %CC_OPT_FIX% %DEBUG_FLAG% "%LLFILE%" "%RUNTIME%" %EXTRA_OBJS% -o "%EXEFILE%" %EXTRA_LIBS% -lwinhttp -lws2_32 -lbcrypt -ladvapi32
-if !errorlevel! neq 0 (
+echo [2/2] !LLFILE! → !EXEFILE!  (!NURL_OPT! !DEBUG_FLAG! !EXTRA_LIBS!)
+set "LINK_TRIES=0"
+:allocate_link_dir
+set /a LINK_TRIES+=1 >nul
+if !LINK_TRIES! gtr 16 (
+    echo ERROR: could not create an exclusive link directory
+    exit /b 1
+)
+set "LINK_DIR=!OUTBASE!.link.!RANDOM!.!RANDOM!"
+mkdir "!LINK_DIR!" >nul 2>&1
+if errorlevel 1 goto allocate_link_dir
+set "LINK_OUTPUT=!LINK_DIR!\!OUTNAME!.exe"
+set "LINK_PDB=!LINK_DIR!\!OUTNAME!.pdb"
+set "FINAL_PDB=!OUTBASE!.pdb"
+set "DEBUG_LINK_FLAGS="
+REM The binary records a stable adjacent PDB name, not the staging path.
+REM %%_PDB%% is expanded by the MSVC linker to its PDB filename.
+if "!DEBUG_INFO!"=="1" if "!MINGW_ABI!"=="0" set "DEBUG_LINK_FLAGS=-Xlinker /PDBALTPATH:%%_PDB%%"
+pushd "!SCRIPTDIR!"
+if errorlevel 1 (
+    rmdir /s /q "!LINK_DIR!"
+    exit /b 1
+)
+!CC! !NURL_OPT! !CC_OPT_FIX! !DEBUG_FLAG! !DEBUG_LINK_FLAGS! "!LLFILE!" "!RUNTIME!" !EXTRA_OBJS! -o "!LINK_OUTPUT!" !EXTRA_LIBS! -lwinhttp -lws2_32 -lbcrypt -ladvapi32
+set "LINK_RC=!errorlevel!"
+popd
+if not "!LINK_RC!"=="0" (
+    rmdir /s /q "!LINK_DIR!"
     echo ERROR: clang linking failed
     exit /b 1
 )
+if not exist "!LINK_OUTPUT!" (
+    rmdir /s /q "!LINK_DIR!"
+    echo ERROR: linker did not produce an executable
+    exit /b 1
+)
+REM MOVE accepts directories as operands/destinations. Only regular files
+REM may enter this transaction: otherwise cleanup could remove caller data.
+REM %%~a answers what a path IS, and reports an empty string for anything
+REM it declines to stat -- a path that is not there. That must read as
+REM "nothing here to refuse", and the test below cannot say so on its own:
+REM substring substitution needs a DEFINED variable, and on an undefined
+REM one `!VAR:d=!` is left standing as literal text, which never compares
+REM equal to the expansion of !VAR!. Every absent path therefore rejected
+REM itself. Give the variable a value that is neither d nor l instead, so
+REM the comparison means what it reads as. (`if exist "path\"` is not the
+REM way out: with a trailing backslash cmd answered yes for a destination
+REM that had just been deleted.)
+set "PUB_ATTRIBUTES="
+set "PUB_SUBJECT=staged executable !LINK_OUTPUT!"
+for %%I in ("!LINK_OUTPUT!") do set "PUB_ATTRIBUTES=%%~aI"
+if not defined PUB_ATTRIBUTES set "PUB_ATTRIBUTES=absent"
+if not "!PUB_ATTRIBUTES:d=!"=="!PUB_ATTRIBUTES!" goto invalid_link_artifact
+if not "!PUB_ATTRIBUTES:l=!"=="!PUB_ATTRIBUTES!" goto invalid_link_artifact
+set "PUB_ATTRIBUTES="
+set "PUB_SUBJECT=staged debug symbols !LINK_PDB!"
+for %%I in ("!LINK_PDB!") do set "PUB_ATTRIBUTES=%%~aI"
+if not defined PUB_ATTRIBUTES set "PUB_ATTRIBUTES=absent"
+if not "!PUB_ATTRIBUTES:d=!"=="!PUB_ATTRIBUTES!" goto invalid_link_artifact
+if not "!PUB_ATTRIBUTES:l=!"=="!PUB_ATTRIBUTES!" goto invalid_link_artifact
+set "PUB_ATTRIBUTES="
+set "PUB_SUBJECT=destination executable !EXEFILE!"
+for %%I in ("!EXEFILE!") do set "PUB_ATTRIBUTES=%%~aI"
+if not defined PUB_ATTRIBUTES set "PUB_ATTRIBUTES=absent"
+if not "!PUB_ATTRIBUTES:d=!"=="!PUB_ATTRIBUTES!" goto invalid_link_artifact
+if not "!PUB_ATTRIBUTES:l=!"=="!PUB_ATTRIBUTES!" goto invalid_link_artifact
+set "PUB_ATTRIBUTES="
+set "PUB_SUBJECT=destination debug symbols !FINAL_PDB!"
+for %%I in ("!FINAL_PDB!") do set "PUB_ATTRIBUTES=%%~aI"
+if not defined PUB_ATTRIBUTES set "PUB_ATTRIBUTES=absent"
+if not "!PUB_ATTRIBUTES:d=!"=="!PUB_ATTRIBUTES!" goto invalid_link_artifact
+if not "!PUB_ATTRIBUTES:l=!"=="!PUB_ATTRIBUTES!" goto invalid_link_artifact
+REM Publish the companion before its binary and restore it if either move
+REM fails. A linker failure above never touches the prior binary or PDB.
+set "HAD_PDB=0"
+if exist "!FINAL_PDB!" (
+    move /Y "!FINAL_PDB!" "!LINK_DIR!\.previous-pdb" >nul
+    if errorlevel 1 (
+        rmdir /s /q "!LINK_DIR!"
+        echo ERROR: could not preserve prior debug symbols
+        exit /b 1
+    )
+    set "HAD_PDB=1"
+)
+if exist "!LINK_PDB!" (
+    move /Y "!LINK_PDB!" "!FINAL_PDB!" >nul
+    if errorlevel 1 goto restore_link_pdb
+)
+move /Y "!LINK_OUTPUT!" "!EXEFILE!" >nul
+if errorlevel 1 goto restore_link_pdb
+rmdir /s /q "!LINK_DIR!"
+goto link_published
 
+:invalid_link_artifact
+rmdir /s /q "!LINK_DIR!"
+echo ERROR: executable and debug symbol paths must be regular files
+echo ERROR: rejected !PUB_SUBJECT! ^(attributes "!PUB_ATTRIBUTES!"^)
+exit /b 1
+
+:restore_link_pdb
+REM Recheck before DEL: unlike a file unlink, DEL on a directory removes
+REM its contents. Preserve recovery state if a publication path changed.
+set "PUB_ATTRIBUTES="
+for %%I in ("!FINAL_PDB!") do set "PUB_ATTRIBUTES=%%~aI"
+if not defined PUB_ATTRIBUTES set "PUB_ATTRIBUTES=absent"
+if not "!PUB_ATTRIBUTES:d=!"=="!PUB_ATTRIBUTES!" goto unsafe_pdb_restore
+if not "!PUB_ATTRIBUTES:l=!"=="!PUB_ATTRIBUTES!" goto unsafe_pdb_restore
+if exist "!FINAL_PDB!" del /q "!FINAL_PDB!"
+if "!HAD_PDB!"=="1" (
+    move /Y "!LINK_DIR!\.previous-pdb" "!FINAL_PDB!" >nul
+    if errorlevel 1 (
+        echo ERROR: could not restore debug symbols; prior copy retained in !LINK_DIR!
+        exit /b 1
+    )
+)
+rmdir /s /q "!LINK_DIR!"
+echo ERROR: could not publish executable and debug symbols
+exit /b 1
+
+:unsafe_pdb_restore
+echo ERROR: debug symbol path changed type; recovery files retained in !LINK_DIR!
+exit /b 1
+
+:link_published
 REM Copy SDL2.dll next to the produced exe so it runs without PATH tweaks.
-if defined SDL2_BINDIR if exist "%SDL2_BINDIR%\SDL2.dll" (
-    for %%F in ("%EXEFILE%") do set "EXEDIR=%%~dpF"
-    if not exist "!EXEDIR!SDL2.dll" copy /Y "%SDL2_BINDIR%\SDL2.dll" "!EXEDIR!" >nul
+if defined SDL2_BINDIR if exist "!SDL2_BINDIR!\SDL2.dll" (
+    REM EXEDIR was captured before delayed expansion was enabled.
+    if not exist "!EXEDIR!SDL2.dll" copy /Y "!SDL2_BINDIR!\SDL2.dll" "!EXEDIR!" >nul
 )
 
 echo.
-echo Done: %EXEFILE%
+echo Done: !EXEFILE!
 endlocal
 
 goto :eof
 
 :show_version
 set "SDIR=%~dp0"
-if exist "%SDIR%build\nurlc.exe" (
-    "%SDIR%build\nurlc.exe" --version
+setlocal EnableDelayedExpansion
+if exist "!SDIR!build\nurlc.exe" (
+    "!SDIR!build\nurlc.exe" --version
 ) else (
     nurlc.exe --version
 )
-exit /b %ERRORLEVEL%
+exit /b !ERRORLEVEL!
 
 :do_upgrade
 set "SDIR=%~dp0"
@@ -461,15 +587,15 @@ shift
 set "PKGARGS="
 :collect_upgrade_args
 if not "%~1"=="" (
-    set "PKGARGS=!PKGARGS! %~1"
+    set PKGARGS=%PKGARGS% "%~1"
     shift
     goto collect_upgrade_args
 )
 if exist "%SDIR%bin\nurlpkg.bat" (
-    call "%SDIR%bin\nurlpkg.bat" self-update !PKGARGS!
+    "%SDIR%bin\nurlpkg.bat" self-update %PKGARGS%
 ) else if exist "%SDIR%build\nurlpkg.exe" (
-    "%SDIR%build\nurlpkg.exe" self-update !PKGARGS!
+    "%SDIR%build\nurlpkg.exe" self-update %PKGARGS%
 ) else (
-    nurlpkg self-update !PKGARGS!
+    nurlpkg self-update %PKGARGS%
 )
 exit /b %ERRORLEVEL%

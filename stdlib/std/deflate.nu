@@ -5,7 +5,7 @@
 // inflater (stored / fixed-Huffman / dynamic-Huffman blocks); the encoder
 // emits fixed-Huffman blocks with greedy LZ77 matching (a valid DEFLATE
 // stream any inflater reads — including zlib's). The gzip/zlib framing
-// wrappers live in stdlib/std/gzip.nu over this core.
+// wrappers live in stdlib/ext/compress.nu over this core.
 //
 // Surface:
 //   ( inflate ( Vec u ) src )            → !( Vec u ) DeflateErr   raw DEFLATE → bytes
@@ -24,6 +24,7 @@ $ `stdlib/std/bytes.nu`
     DeflateBadDist
     DeflateTruncated
     DeflateOther
+    DeflateLimit
 }
 
 @ deflate_err_name DeflateErr e → s {
@@ -34,6 +35,7 @@ $ `stdlib/std/bytes.nu`
         DeflateBadDist → `DeflateBadDist`
         DeflateTruncated → `DeflateTruncated`
         DeflateOther → `DeflateOther`
+        DeflateLimit → `DeflateLimit`
     }
 }
 
@@ -199,16 +201,19 @@ $ `stdlib/std/bytes.nu`
     i bitcnt
     ( Vec u ) out
     i err
-    i max_out  // stop (err 6) once `out` grows past this; 0 = unlimited
+    i max_out  // exact bound; -1 = unlimited
+    i window  // maximum allowed back-reference distance
 }
 
-// The decompression-bomb guard, checked after every emitted byte run:
-// 1 KB of DEFLATE can expand to ~1 MB, so a cap enforced only after the
-// fact is no cap at all — the memory is already gone.
-@ __infl_over_cap * InflState st → b {
-    ? <= . st max_out 0 { ^ F } {}
-    ? > ( vec_len [u] . st out ) . st max_out { = . st err 6 ^ T } {}
-    ^ F
+// Check before allocation/emission, including whole stored blocks and
+// match runs. Subtraction avoids overflowing on a very large caller cap.
+@ __infl_room * InflState st i amount → b {
+    ? < . st max_out 0 { ^ T } {}
+    ? > amount - . st max_out ( vec_len [u] . st out ) {
+        = . st err 6
+        ^ F
+    } {}
+    ^ T
 }
 
 : Huff {
@@ -218,6 +223,7 @@ $ `stdlib/std/bytes.nu`
 
 // Read `need` bits LSB-first. Sets st.err on input underflow.
 @ __infl_bits * InflState st i need → i {
+    ? != . st err 0 { ^ 0 } {}
     : ~ i val . st bitbuf
     : ~ i cnt . st bitcnt
     ~ < cnt need {
@@ -244,6 +250,7 @@ $ `stdlib/std/bytes.nu`
     : *i sym ( vec_data [i] . h symbol )
     ~ & ! done <= len 15 {
         = code | code ( __infl_bits st 1 )
+        ? != . st err 0 { ^ -1 } {}
         : i count # i . cnt len
         ? < - code count first {
             = ret # i . sym + index - code first
@@ -286,6 +293,24 @@ $ `stdlib/std/bytes.nu`
     }
     ( vec_free [i] offs )
     ^ @ Huff { count symbol }
+}
+
+// A complete tree fills every code slot. Literal/distance alphabets may
+// instead contain one one-bit code; an unused distance alphabet may be empty.
+// Oversubscribed trees and every other incomplete tree are malformed.
+@ __infl_huff_valid Huff h b single b empty → b {
+    : ~ i left 1
+    : ~ i symbols 0
+    : ~ i bits 1
+    ~ <= bits 15 {
+        : i count ( __df_get . h count bits )
+        = left - << left 1 count
+        ? < left 0 { ^ F } {}
+        = symbols + symbols count
+        = bits + bits 1
+    }
+    ^ | == left 0 | & empty == symbols 0
+    & single & == symbols 1 == ( __df_get . h count 1 ) 1
 }
 
 // length base + extra-bit tables for codes 257..285 (index 0..28).
@@ -332,22 +357,25 @@ $ `stdlib/std/bytes.nu`
 ( Vec i ) lenbase ( Vec i ) lenext ( Vec i ) distbase ( Vec i ) distext → v {
     : ~ b done F
     ~ & ! done == . st err 0 {
-        ? ( __infl_over_cap st ) { = done T } {}
         : i sym ( __infl_decode st lencode )
+        ? != . st err 0 { ^ v } {}
         ? < sym 0 { = . st err 2 } {
             ? == sym 256 { = done T } {
                 ? < sym 256 {
-                    ( vec_push [u] . st out # u sym )
+                    ? ( __infl_room st 1 ) { ( vec_push [u] . st out # u sym ) } {}
                 } {
                     // length/distance back-reference
                     : i li - sym 257
                     ? >= li 29 { = . st err 2 } {
                         : i length + ( __df_get lenbase li ) ( __infl_bits st ( __df_get lenext li ) )
                         : i dsym ( __infl_decode st distcode )
+                        ? != . st err 0 { ^ v } {}
                         ? | < dsym 0 >= dsym 30 { = . st err 4 } {
                             : i dist + ( __df_get distbase dsym ) ( __infl_bits st ( __df_get distext dsym ) )
                             : i outlen ( vec_len [u] . st out )
-                            ? > dist outlen { = . st err 4 } {
+                            ? != . st err 0 { ^ v } {}
+                            ? | > dist outlen > dist . st window { = . st err 4 } {
+                                ? ! ( __infl_room st length ) { ^ v } {}
                                 : ~ i k 0
                                 ~ < k length {
                                     : i srcidx - ( vec_len [u] . st out ) dist
@@ -376,10 +404,10 @@ $ `stdlib/std/bytes.nu`
 }
 
 @ __infl_fixed_dist → Huff {
-    : ( Vec i ) lengths ( vec_with_cap [i] 30 )
+    : ( Vec i ) lengths ( vec_with_cap [i] 32 )
     : ~ i k 0
-    ~ < k 30 { ( vec_push [i] lengths 5 ) = k + k 1 }
-    : Huff h ( __infl_construct lengths 30 )
+    ~ < k 32 { ( vec_push [i] lengths 5 ) = k + k 1 }
+    : Huff h ( __infl_construct lengths 32 )
     ( vec_free [i] lengths )
     ^ h
 }
@@ -392,6 +420,8 @@ $ `stdlib/std/bytes.nu`
     : i hclen + 4 ( __infl_bits st 4 )
     ? != . st err 0 { ^ v } {}
 
+    ? | > hlit 286 > hdist 30 { = . st err 2 ^ v } {}
+
     // Code-length code lengths in the spec's permuted order.
     : ( Vec i ) order ( vec_new [i] )
     ( __df_push_list order 16 17 18 0 8 7 9 6 10 5 )
@@ -403,6 +433,7 @@ $ `stdlib/std/bytes.nu`
         = i + i 1
     }
     : Huff clcode ( __infl_construct cllen 19 )
+    ? ! ( __infl_huff_valid clcode F F ) { = . st err 2 } {}
 
     // Read hlit+hdist code lengths using the code-length Huffman table.
     : i total + hlit hdist
@@ -424,8 +455,9 @@ $ `stdlib/std/bytes.nu`
                     ? == sym 17 { = rep + 3 ( __infl_bits st 3 ) } {
                         = rep + 11 ( __infl_bits st 7 )
                     } }
+                ? > rep - total idx { = . st err 2 } {}
                 : ~ i r 0
-                ~ & < r rep < idx total {
+                ~ & == . st err 0 < r rep {
                     ( __df_set lengths idx val )
                     = idx + idx 1
                     = r + r 1
@@ -443,7 +475,10 @@ $ `stdlib/std/bytes.nu`
         ~ < i hdist { ( __df_set distlen i ( __df_get lengths + i hlit ) ) = i + i 1 }
         : Huff lencode ( __infl_construct litlen hlit )
         : Huff distcode ( __infl_construct distlen hdist )
-        ( __infl_codes st lencode distcode lenbase lenext distbase distext )
+        ? | == ( __df_get litlen 256 ) 0
+        | ! ( __infl_huff_valid lencode T F ) ! ( __infl_huff_valid distcode T T ) {
+            = . st err 2
+        } { ( __infl_codes st lencode distcode lenbase lenext distbase distext ) }
         ( vec_free [i] litlen ) ( vec_free [i] distlen )
         ( __df_huff_free lencode ) ( __df_huff_free distcode )
     } {}
@@ -484,16 +519,18 @@ $ `stdlib/std/bytes.nu`
                         : i lo # i . d . st pos
                         : i hi # i . d + . st pos 1
                         : i blen | lo << hi 8
+                        : i complement | # i . d + . st pos 2 << # i . d + . st pos 3 8
                         = . st pos + . st pos 4
-                        ? > + . st pos blen . st len { = . st err 5 } {
+                        ? != ^^ blen complement 65535 { = . st err 3 } {}
+                        ? > blen - . st len . st pos { = . st err 5 } {}
+                        ? & == . st err 0 ( __infl_room st blen ) {
                             : ~ i k 0
                             ~ < k blen {
                                 ( vec_push [u] . st out # u . d + . st pos k )
                                 = k + k 1
                             }
                             = . st pos + . st pos blen
-                            : b _cap ( __infl_over_cap st )
-                        }
+                        } {}
                     }
                 } {
                     ? == btype 1 {
@@ -519,31 +556,55 @@ $ `stdlib/std/bytes.nu`
     ^ ( inflate_max src 0 )
 }
 
-// inflate with an output cap: decoding stops with DeflateBadLength as
-// soon as the output would exceed `max_out` bytes (0 = unlimited) — the
-// guard against a decompression bomb, enforced while decoding, not after.
-@ inflate_max ( Vec u ) src i max_out → !( Vec u ) DeflateErr {
+// A decoded prefix owns its bytes; consumed includes the final partially
+// used byte. Framing codecs use it to locate their trailer and next member.
+: Inflated { ( Vec u ) bytes i consumed }
+
+// Prefix decoder with exact internal cap (-1 = unlimited) and window bound.
+@ _inflate_prefix_window ( Vec u ) src i start i max_out i window → !Inflated DeflateErr {
+    ? | < start 0 > start ( vec_len [u] src ) {
+        ^ @ !Inflated DeflateErr { F DeflateBadLength }
+    } {}
     : *InflState st ( nurl_alloc Z InflState )
-    = . st data ( vec_data [u] src )
-    = . st len ( vec_len [u] src )
+    = . st data # *u + # i ( vec_data [u] src ) start
+    = . st len - ( vec_len [u] src ) start
     = . st pos 0
     = . st bitbuf 0
     = . st bitcnt 0
     = . st out ( vec_new [u] )
     = . st err 0
     = . st max_out max_out
-
+    = . st window window
     ( __inflate_run st 0 )
-
     : i err . st err
+    : i consumed . st pos
     : ( Vec u ) out . st out
     ( nurl_free # s st )
-
     ? != err 0 {
         ( vec_free [u] out )
-        ^ @ !( Vec u ) DeflateErr { F ( __df_err err ) }
+        ^ @ !Inflated DeflateErr { F ( __df_err err ) }
     } {}
-    ^ @ !( Vec u ) DeflateErr { T out }
+    ^ @ !Inflated DeflateErr { T @ Inflated { out consumed } }
+}
+
+// Decode one stream from src[start..], leaving trailers to the caller.
+// Public caps use 0 = unlimited. DeflateLimit distinguishes output limits
+// from malformed block lengths (DeflateBadLength).
+@ inflate_prefix_max ( Vec u ) src i start i max_out → !Inflated DeflateErr {
+    ^ ( _inflate_prefix_window src start ? > max_out 0 max_out -1 32768 )
+}
+
+@ inflate_max ( Vec u ) src i max_out → !( Vec u ) DeflateErr {
+    ?? ( inflate_prefix_max src 0 max_out ) {
+        F error → ^ @ !( Vec u ) DeflateErr { F error }
+        T decoded → {
+            ? != . decoded consumed ( vec_len [u] src ) {
+                ( vec_free [u] . decoded bytes )
+                ^ @ !( Vec u ) DeflateErr { F DeflateBadLength }
+            } {}
+            ^ @ !( Vec u ) DeflateErr { T . decoded bytes }
+        }
+    }
 }
 
 // Streaming inflate for permessage-deflate (RFC 7692) context-takeover:
@@ -562,18 +623,22 @@ $ `stdlib/std/bytes.nu`
     = . st bitcnt 0
     = . st out history
     = . st err 0
-    = . st max_out ? > max_out 0 + oldlen max_out 0
+    = . st max_out ? & > max_out 0 <= max_out - 9223372036854775807 oldlen + oldlen max_out -1
+    = . st window 32768
 
     ( __inflate_run st 1 )
 
     : i err . st err
     ( nurl_free # s st )
-    ? != err 0 { ^ @ !( Vec u ) DeflateErr { F ( __df_err err ) } } {}
+    ? != err 0 {
+        : b restored ( vec_set_len [u] history oldlen )
+        ^ @ !( Vec u ) DeflateErr { F ( __df_err err ) }
+    } {}
 
     : i newlen ( vec_len [u] history )
     : i produced - newlen oldlen
     ? & > max_out 0 > produced max_out {
-        ^ @ !( Vec u ) DeflateErr { F DeflateBadLength }
+        ^ @ !( Vec u ) DeflateErr { F DeflateLimit }
     } {}
 
     : ( Vec u ) suffix ( vec_with_cap [u] ? > produced 1 produced 1 )
@@ -595,9 +660,10 @@ $ `stdlib/std/bytes.nu`
 @ __df_err i e → DeflateErr {
     ? == e 1 { ^ # DeflateErr DeflateBadBlock } {}
     ? == e 2 { ^ # DeflateErr DeflateBadCode } {}
+    ? == e 3 { ^ # DeflateErr DeflateBadLength } {}
     ? == e 4 { ^ # DeflateErr DeflateBadDist } {}
     ? == e 5 { ^ # DeflateErr DeflateTruncated } {}
-    ? == e 6 { ^ # DeflateErr DeflateBadLength } {}
+    ? == e 6 { ^ # DeflateErr DeflateLimit } {}
     ^ # DeflateErr DeflateOther
 }
 

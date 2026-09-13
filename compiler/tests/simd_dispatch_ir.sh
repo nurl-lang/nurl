@@ -22,7 +22,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-NURLC="$ROOT/build/nurlc"
+NURLC="${NURLC:-$ROOT/build/nurlc}"
 SRC="$SCRIPT_DIR/simd_dispatch.nu"
 
 [ -x "$NURLC" ] || { echo "simd_dispatch_ir: $NURLC not found — run ./build.sh" >&2; exit 2; }
@@ -48,8 +48,8 @@ cd "$ROOT" || exit 2
     echo "simd_dispatch_ir: nurlc --no-cpu-dispatch failed"; cat "$WORK/off.err"; exit 1; }
 
 # ── 1. Both clones exist, and only the wide one carries features ────
-n_base=$(grep -cE "^define .*@($MARKED)[a-z0-9_]*\.base\(" "$WORK/on.ll")
-n_wide=$(grep -cE "^define .*@($MARKED)[a-z0-9_]*\.x86v3\(" "$WORK/on.ll")
+n_base=$(grep -cE "^define .*@__nurl_fn\.($MARKED)[a-z0-9_]*\.base\(" "$WORK/on.ll")
+n_wide=$(grep -cE "^define .*@__nurl_fn\.($MARKED)[a-z0-9_]*\.x86v3\(" "$WORK/on.ll")
 if [ "$n_base" -ge 5 ] && [ "$n_base" -eq "$n_wide" ]; then
     ok "baseline and wide clones pair up" "$n_base each"
 else
@@ -86,7 +86,7 @@ done
 
 # The dispatcher must be reachable under the UNDECORATED name, or every
 # caller in the program silently kept calling something else.
-if grep -qE "^define i64 @__sum[a-z0-9_]*\(i8\* %p, i64 %n\) \{" "$WORK/on.ll"; then
+if grep -qE "^define i64 @__nurl_fn\.__sum[a-z0-9_]*\(i8\* %p, i64 %n\) \{" "$WORK/on.ll"; then
     ok "dispatcher owns the undecorated symbol" "__sum"
 else
     bad "dispatcher owns the undecorated symbol" "no plain @__sum define"
@@ -100,7 +100,7 @@ if [ "$n_off" -eq 0 ] && [ "$n_off_disp" -eq 0 ]; then
 else
     bad "--no-cpu-dispatch emits no clones" "$n_off clones, $n_off_disp dispatchers"
 fi
-n_off_fn=$(grep -cE "^define .*@($MARKED)[a-z0-9_]*\(" "$WORK/off.ll")
+n_off_fn=$(grep -cE "^define .*@__nurl_fn\.($MARKED)[a-z0-9_]*\(" "$WORK/off.ll")
 if [ "$n_off_fn" -ge 5 ]; then
     ok "--no-cpu-dispatch still defines the functions" "$n_off_fn"
 else

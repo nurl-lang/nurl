@@ -2218,6 +2218,84 @@ long long nurl_cpu_count(void) {
 #endif
 }
 
+#ifdef _WIN32
+#  include <bcrypt.h>
+#  ifndef __MINGW32__
+#    pragma comment(lib, "bcrypt.lib")
+#  endif
+static int nurl__fs_windows_error(DWORD error) {
+    switch (error) {
+    case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND: errno = ENOENT; break;
+    case ERROR_ACCESS_DENIED: case ERROR_SHARING_VIOLATION:
+    case ERROR_LOCK_VIOLATION: errno = EACCES; break;
+    case ERROR_ALREADY_EXISTS: case ERROR_FILE_EXISTS: errno = EEXIST; break;
+    case ERROR_NOT_SAME_DEVICE: errno = EXDEV; break;
+    case ERROR_DIR_NOT_EMPTY: errno = ENOTEMPTY; break;
+    case ERROR_INVALID_PARAMETER: case ERROR_INVALID_NAME: errno = EINVAL; break;
+    default: errno = EIO; break;
+    }
+    return -1;
+}
+#endif
+
+/* Atomic publication never deletes the old destination before replacement.
+ * Without MOVEFILE_COPY_ALLOWED, cross-volume moves fail just like POSIX. */
+int nurl_fs_rename(const char *from, const char *to) {
+    if (!from || !to) { errno = EINVAL; return -1; }
+#ifdef _WIN32
+    if (MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING)) return 0;
+    return nurl__fs_windows_error(GetLastError());
+#else
+    return rename(from, to);
+#endif
+}
+
+/* Allocate the directory itself exclusively; an unlink/mkdir sequence after
+ * mkstemp would leave a race in the primitive intended to provide isolation. */
+int nurl_fs_tempdir(char *tmpl) {
+    if (!tmpl) { errno = EINVAL; return -1; }
+    size_t len = strlen(tmpl);
+    if (len < 6 || strcmp(tmpl + len - 6, "XXXXXX") != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+#ifdef _WIN32
+    static const char alphabet[] =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
+    for (int attempt = 0; attempt < 128; attempt++) {
+        unsigned char random[6];
+        if (BCryptGenRandom(NULL, random, sizeof random,
+                           BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+            errno = EIO;
+            return -1;
+        }
+        for (int k = 0; k < 6; k++) tmpl[len - 6 + k] = alphabet[random[k] & 63];
+        if (CreateDirectoryA(tmpl, NULL)) return 0;
+        DWORD error = GetLastError();
+        if (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS)
+            return nurl__fs_windows_error(error);
+    }
+    errno = EEXIST;
+    return -1;
+#elif defined(__wasi__)
+    /* wasi-libc has mkdir and random_get-backed getentropy, but no mkdtemp.
+     * Preopened-directory capabilities still govern where creation succeeds. */
+    static const char alphabet[] =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
+    for (int attempt = 0; attempt < 128; attempt++) {
+        unsigned char random[6];
+        if (getentropy(random, sizeof random) != 0) return -1;
+        for (int k = 0; k < 6; k++) tmpl[len - 6 + k] = alphabet[random[k] & 63];
+        if (mkdir(tmpl, 0700) == 0) return 0;
+        if (errno != EEXIST) return -1;
+    }
+    errno = EEXIST;
+    return -1;
+#else
+    return mkdtemp(tmpl) ? 0 : -1;
+#endif
+}
+
 /* Force a file's bytes out of the kernel's page cache onto the storage
  * device. fflush() only pushes libc's userspace buffer into the kernel —
  * a crash between that and writeback still loses the data, which is

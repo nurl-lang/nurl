@@ -102,6 +102,41 @@ int isatty(int fd) { (void)fd; return 0; }
 int tcgetattr(int fd, void *t) { (void)fd; (void)t; return -1; }
 int tcsetattr(int fd, int act, const void *t) { (void)fd; (void)act; (void)t; return -1; }
 
+/* mkdtemp belongs above the platform syscall layer: Linux mkdir and the
+ * guest VFS both provide exclusive directory creation, and their errors
+ * describe when a filesystem is read-only or unavailable. */
+extern long long getrandom(void *buf, unsigned long len, unsigned int flags);
+extern int mkdir(const char *path, int mode);
+
+char *mkdtemp(char *tmpl) {
+    static const char alphabet[] =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
+    if (!tmpl) { errno = 22 /* EINVAL */; return 0; }
+    nl_size_t len = strlen(tmpl);
+    if (len < 6 || strcmp(tmpl + len - 6, "XXXXXX") != 0) {
+        errno = 22;
+        return 0;
+    }
+    for (int attempt = 0; attempt < 128; attempt++) {
+        unsigned char random[6];
+        unsigned long have = 0;
+        while (have < sizeof random) {
+            long long count = getrandom(random + have, sizeof random - have, 0);
+            if (count < 0 && errno == 4 /* EINTR */) continue;
+            if (count <= 0) {
+                if (count == 0) errno = 5 /* EIO */;
+                return 0;
+            }
+            have += (unsigned long)count;
+        }
+        for (int k = 0; k < 6; k++) tmpl[len - 6 + k] = alphabet[random[k] & 63];
+        if (mkdir(tmpl, 0700) == 0) return tmpl;
+        if (errno != 17 /* EEXIST */) return 0;
+    }
+    errno = 17;
+    return 0;
+}
+
 /* ── directories and stat ───────────────────────────────────────
  * Real, over getdents64 and the stat syscalls, because the stubs that
  * "refused honestly" turned out to refuse a test the corpus expects to

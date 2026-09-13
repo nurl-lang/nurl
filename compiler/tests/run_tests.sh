@@ -37,6 +37,10 @@
 #    run_tests.sh --update NAME…  # update only the named tests
 #    NURL_TEST_JOBS=N             # parallelism (default: nproc)
 #
+#  Artifacts are retained under a unique build/tests/run.* directory, printed
+#  at startup. Independent invocations, even of the same tests, never overwrite
+#  each other's compiler output, binaries, scratch data or worker records.
+#
 #  Exit code: 0 iff every test matches its golden, no failures, no
 #  missing goldens and no orphans. 1 otherwise. 2 on setup error.
 # ============================================================
@@ -54,7 +58,10 @@ cd "$ROOT_DIR" || { echo "ERROR: cannot cd to $ROOT_DIR" >&2; exit 2; }
 NURLC="$ROOT_DIR/build/nurlc"
 RUNTIME="$ROOT_DIR/stdlib/runtime.o"
 OUTDIR="$SCRIPT_DIR/outputs"
-WORKDIR="$ROOT_DIR/build/tests"
+# Shared helper is loaded before allocating the compiler probe path.
+. "$SCRIPT_DIR/test_harness.sh"
+WORKDIR=$(create_test_workdir "$ROOT_DIR/build/tests") || exit 2
+printf 'Artifacts: %s\n' "$WORKDIR"
 
 UPDATE=0
 declare -a ONLY=()
@@ -141,7 +148,6 @@ MAX_OUT_LINES="${MAX_OUT_LINES:-200}"
 TIMEOUT="${TIMEOUT:-60}"
 JOBS="${NURL_TEST_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
-. "$SCRIPT_DIR/test_harness.sh"
 init_test_harness || exit 2
 
 mkdir -p "$OUTDIR" "$WORKDIR"
@@ -165,7 +171,16 @@ append_capped() {
 # place, but BSD sed (FreeBSD, macOS) requires a backup-suffix argument and
 # otherwise mis-parses the script as the suffix (this silently left paths
 # unstripped on FreeBSD). Write to a temp file and move it back instead.
-strip_root() { sed "s|$ROOT_DIR/||g" "$1" > "$1.sr" && mv -f "$1.sr" "$1"; }
+# Rewrite absolute paths to repo-relative, and collapse this invocation's
+# own artifact directory. WORKDIR is build/tests/run.<random> so concurrent
+# runners cannot overwrite each other; that random name must never reach a
+# golden, or the golden can never match again (the Windows runner records
+# argv[0], which is exactly such a path). Both runners honour the rule.
+WORKDIR_LEAF=$(basename "$WORKDIR")
+strip_root() {
+    sed -e "s|$ROOT_DIR/||g" -e "s|build/tests/$WORKDIR_LEAF/|build/tests/|g" \
+        "$1" > "$1.sr" && mv -f "$1.sr" "$1"
+}
 
 # ── run_one <name> ──────────────────────────────────────────────
 #   Produces $WORKDIR/$name.actual (the record) and prints a single
@@ -250,7 +265,7 @@ run_one() {
     # binary "-dirty". The Windows runner (run_tests.ps1) already normalises;
     # this makes the posix runner honour the same contract.
     sed 's/\r$//' "$act" > "$act.nrm" && mv -f "$act.nrm" "$act"
-    if [[ "$UPDATE" == "1" ]]; then cp "$act" "$gold" || return 1; echo UPDATED; return; fi
+    if [[ "$UPDATE" == "1" ]]; then publish_test_golden "$act" "$gold" || return 1; echo UPDATED; return; fi
     if [[ ! -f "$gold" ]]; then echo MISSING; return; fi
     if cmp -s "$act" "$gold"; then echo PASS; else
         diff -u "$gold" "$act" > "$WORKDIR/$name.diff" 2>/dev/null

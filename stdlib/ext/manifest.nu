@@ -10,6 +10,7 @@
 //   [package]
 //   name = "demo"               # required
 //   version = "0.1.0"           # required
+//   nurl-version = "0.65.0"     # optional minimum toolchain (SemVer)
 //   description = "..."         # optional
 //   license = "MIT"             # optional
 //   registry = "https://..."    # optional: default registry for bare deps
@@ -41,7 +42,9 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/std/fs.nu`
 $ `stdlib/ext/toml.nu`
+$ `stdlib/ext/semver.nu`
 
 : Dep {
     String name
@@ -53,6 +56,7 @@ $ `stdlib/ext/toml.nu`
 : Manifest {
     String name
     String version
+    String nurl_version  // minimum compiler/stdlib/runtime release; empty → unrestricted
     String description
     String license
     String registry  // default registry URL for bare deps; empty → tool default
@@ -63,7 +67,7 @@ $ `stdlib/ext/toml.nu`
 }
 
 : | ManifestErr {
-    ManifestReadFailed  // file_read returned empty / nurl_read_file failed
+    ManifestReadFailed  // the manifest could not be read, or is empty
     ManifestParseFailed  // TOML didn't parse
     ManifestMissingName  // [package].name missing
     ManifestMissingVersion  // [package].version missing
@@ -112,6 +116,7 @@ $ `stdlib/ext/toml.nu`
 @ manifest_free sink Manifest m → v {
     ( string_free . m name )
     ( string_free . m version )
+    ( string_free . m nurl_version )
     ( string_free . m description )
     ( string_free . m license )
     ( string_free . m repository )
@@ -293,6 +298,26 @@ $ `stdlib/ext/toml.nu`
                 ^ @ !Manifest ManifestErr { F # ManifestErr ManifestMissingVersion }
             } {}
             // Optional fields.
+            : String nurl_min ( __field_str root `package.nurl-version` )
+            : ~ b min_valid T
+            ?? ( toml_get_path root `package.nurl-version` ) {
+                T value → { ?? value {
+                        TStr _ → { ? == ( string_len nurl_min ) 0 { = min_valid F } {} }
+                        _ → { = min_valid F }
+                    } }
+                F _ → {}
+            }
+            ? > ( string_len nurl_min ) 0 {
+                ?? ( semver_parse ( string_data nurl_min ) ) {
+                    T parsed → ( semver_free parsed )
+                    F _ → { = min_valid F }
+                }
+            } {}
+            ? ! min_valid {
+                ( string_free name ) ( string_free version ) ( string_free nurl_min )
+                ( toml_value_free root )
+                ^ @ !Manifest ManifestErr { F ManifestBadShape }
+            } {}
             : String description ( __field_str root `package.description` )
             : String license ( __field_str root `package.license` )
             : String registry ( __field_str root `package.registry` )
@@ -330,7 +355,29 @@ $ `stdlib/ext/toml.nu`
                 F _ → {}
             }
             ( toml_value_free root )
-            ^ @ !Manifest ManifestErr { T @ Manifest { name version description license registry repository postinstall deps assets } }
+            ^ @ !Manifest ManifestErr { T @ Manifest { name version nurl_min description license registry repository postinstall deps assets } }
+        }
+    }
+}
+
+// Minimum toolchain comparison follows SemVer, including prereleases.
+// Toolchain --version output has a conventional leading 'v'; manifests do not.
+@ manifest_supports_toolchain Manifest manifest s actual → b {
+    ? == ( string_len . manifest nurl_version ) 0 { ^ T } {}
+    : s version ? == ( nurl_str_get actual 0 ) 118 # s + # i actual 1 actual
+    ?? ( semver_parse version ) {
+        F _ → ^ F
+        T current → {
+            : ~ b supported F
+            ?? ( semver_parse ( string_data . manifest nurl_version ) ) {
+                F _ → {}
+                T required → {
+                    = supported >= ( semver_compare current required ) 0
+                    ( semver_free required )
+                }
+            }
+            ( semver_free current )
+            ^ supported
         }
     }
 }
@@ -338,9 +385,19 @@ $ `stdlib/ext/toml.nu`
 // Read `path` from disk and parse it. Returns ManifestReadFailed when
 // the file can't be read OR is empty.
 @ manifest_load s path → !Manifest ManifestErr {
-    : s raw ( nurl_read_file path )
-    ? == 0 ( nurl_str_len raw ) {
-        ^ @ !Manifest ManifestErr { F # ManifestErr ManifestReadFailed }
-    } {}
-    ^ ( manifest_parse raw path )
+    ?? ( read_file path ) {
+        F _ → { ^ @ !Manifest ManifestErr { F ManifestReadFailed } }
+        T text → {
+            : ~ ! Manifest ManifestErr result @ !Manifest ManifestErr { F ManifestReadFailed }
+            ? > ( string_len text ) 0 {
+                ? == ( string_len text ) ( nurl_str_len ( string_data text ) ) {
+                    = result ( manifest_parse ( string_data text ) path )
+                } {
+                    = result @ !Manifest ManifestErr { F ManifestParseFailed }
+                }
+            } {}
+            ( string_free text )
+            ^ result
+        }
+    }
 }

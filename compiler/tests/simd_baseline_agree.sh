@@ -49,7 +49,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT_DIR" || exit 2
 
-NURLC="$ROOT_DIR/build/nurlc"
+NURLC="${NURLC:-$ROOT_DIR/build/nurlc}"
 [[ -x "$NURLC" ]] || NURLC="$ROOT_DIR/nurlc"
 if [[ ! -x "$NURLC" ]]; then
     echo "ERROR: nurlc not found — run ./build.sh first." >&2
@@ -234,7 +234,7 @@ else
         found=0
         for name in "${DRIVERS[@]}"; do
             [[ -f "$WORK/$name.on.ll" ]] || continue
-            if grep -qE "^define .*@${fn}[a-z0-9_]*\.x86v3\(" "$WORK/$name.on.ll"; then
+            if grep -qE "^define .*@__nurl_fn\.${fn}[a-z0-9_]*\.x86v3\(" "$WORK/$name.on.ll"; then
                 found=1; break
             fi
         done

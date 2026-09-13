@@ -300,6 +300,12 @@ $ `stdlib/core/errors.nu`
             }
         }
     }
+    // A final group needs at least two alphabet digits. If padding is
+    // present it must fill exactly a quartet; accepting "A", "A=" or
+    // "AA=" silently turns malformed binary metadata into different bytes.
+    ? | == nbits 6 & > pad 0 ! | & == nbits 4 == pad 2 & == nbits 2 == pad 1 {
+        ^ @ !v ParseErr { F @ ParseErr { BadFormat } }
+    } {}
     // Partial group with non-zero residual bits is malformed.
     ? > nbits 0 {
         ? != acc 0 {

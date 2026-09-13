@@ -1,7 +1,7 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_try_in_plain_return.nu:29:5: error: the try operator returns the failure from the ENCLOSING function, so that function must return an option ('?T') or a result ('!T E') — this one returns s, which has no way to say that { i1, i64, i64 } failed. Give the enclosing function a '?T' / '!T E' return type, or handle the failure here: match it with '??', or take the payload at a leaf site with res_expect / res_unwrap_or / opt_unwrap_or, which say what happens on failure instead of returning a zero of the declared type.
-    ^ `found`
-    ^
+compiler/tests/diag_try_in_plain_return.nu:28:11: error: the try operator returns the failure from the ENCLOSING function, so that function must return an option ('?T') or a result ('!T E') — this one returns s, which has no way to say that { i1, i64, i64 } failed. Give the enclosing function a '?T' / '!T E' return type, or handle the failure here: match it with '??', or take the payload at a leaf site with res_expect / res_unwrap_or / opt_unwrap_or, which say what happens on failure instead of returning a zero of the declared type.
+    : i v \ ( lookup 1 )
+          ^
 error: aborting due to 1 previous error
 note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

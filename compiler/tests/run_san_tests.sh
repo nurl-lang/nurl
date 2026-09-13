@@ -40,7 +40,9 @@
 #  Parallelism mirrors run_tests.sh: a `run_one_san` function is
 #  exported and fanned out with `xargs -P`. The per-test work touches
 #  only $name-keyed files (.ll / bin / logs/$name.*), so there are no
-#  shared-state races. Default worker count is nproc; override with
+#  shared-state races. Each invocation also owns a unique build/tests-san/run.*
+#  directory, so concurrently running the same test never shares artifacts.
+#  Default worker count is nproc; override with
 #  NURL_SAN_JOBS (CI may cap it to bound peak RAM from concurrent
 #  sanitizer links + sanitized processes).
 #
@@ -128,7 +130,9 @@ ZSTD_LIBS=""
 [[ -f "$ROOT_DIR/stdlib/runtime.zstd" ]]    && ZSTD_LIBS="$(pkg-config --libs libzstd 2>/dev/null || echo -lzstd)"
 LINK_LIBS="-lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS"
 
-WORKDIR="$ROOT_DIR/build/tests-san"
+. "$SCRIPT_DIR/test_harness.sh"
+WORKDIR=$(create_test_workdir "$ROOT_DIR/build/tests-san") || exit 2
+printf 'Artifacts: %s\n' "$WORKDIR"
 LOGDIR="$WORKDIR/logs"
 mkdir -p "$WORKDIR" "$LOGDIR"
 
@@ -163,7 +167,6 @@ export UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1:halt_on_error=0}"
 # match cannot be a test legitimately printing one.
 SAN_MARKERS='AddressSanitizer|UndefinedBehaviorSanitizer|runtime error:|LeakSanitizer'
 
-. "$SCRIPT_DIR/test_harness.sh"
 init_test_harness || exit 2
 
 # ── per-test worker (exported, fanned out with xargs -P) ─────────

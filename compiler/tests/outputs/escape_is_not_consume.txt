@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+still here
+adopted
+borrow_survives=T
+adoption_moves=T

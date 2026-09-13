@@ -79,6 +79,27 @@ The ordinary signature prepass records every `inout` parameter's position in
 mutually recursive functions therefore use the same address ABI as calls after
 a definition. Never infer that ABI from definition order.
 
+Function identities in semantic tables remain source names. LLVM emission
+uses `llvm_source_fn` for definitions and `llvm_call_fn` for references, after
+the signature prepass has recorded source functions and external declarations.
+Programs place ordinary functions in the `__nurl_fn.` namespace so names such
+as `open` and `strlen` cannot collide with libc or acquire its optimizer
+semantics. Explicit external declarations, `--keep` roots and no-main modules
+retain their external ABI; the existing main wrapper remains unchanged.
+Calls, function addresses, methods, deferred drop bodies and vtables must all
+use this boundary. Diagnostics and DWARF keep readable source names.
+
+The borrow-checker records a `defer` block as a registration, with a synthetic
+arming slot in its existing ownership state. It skips the body on normal flow
+and checks definitely armed bodies in reverse order at each return and normal
+function exit. A consuming call in deferred cleanup must not mark its argument
+moved at registration. As with conditional moves, the default checker does not
+diagnose a cleanup whose arming state is uncertain after a branch join.
+After each body, the checker revisits the newest armed site: nested cleanup
+registered by that body runs before older defers. Code generation builds a
+child cleanup chain against the previous top and restores the parent's entry
+as the enclosing top; an unreached parent skips its entire child chain.
+
 With `--check`, the complete fused walk and deferred checks still run; main
 unwinds the output buffer without making the final module copy or invoking
 DCE/splitting, then follows normal cleanup.
@@ -117,7 +138,7 @@ get — returned values are owned copies).
 
 | family | key globals | role & lifetime |
 |---|---|---|
-| input snapshot | `g_input_source`, `g_input_key` | borrowed aliases of main's live owned stdin source and canonical logical path; `compiler_read_source` returns owned copies to every replay/diagnostic reader; zero in ordinary file mode |
+| input snapshots | `g_input_source`, `g_input_key`, `g_source_snapshots` | stdin overlay borrows main's live source/key; ordinary reads cache their first bytes by canonical path for this invocation; `compiler_read_source` returns owned copies to every replay/diagnostic reader, and main frees the cache |
 | diagnostics | `g_err_count`, `g_diag_recover_active` | error count + multi-error recovery mode; whole run |
 | codegen cursor | `g_str_idx`, `g_did_ret`, `g_ret_forbidden`, `g_in_match_arm`, `g_defer_count`, `g_stmt_line/col/bare_*` | per-statement/-function flags; must be reset on the boundaries that own them (grep their writers before trusting a reset) |
 | **last-type channel** | `g_last_type_ptr` | the expression walk's implicit return value: every `gen_expr` sets it; the *caller* reads it. Signedness is carried **in the type string itself** (`u8`/`u16`/… stay distinct from `i8`/`i16`/… in this channel; readers use `ty_is_unsigned`, emission normalises via `nurl_llty`) — the former separate unsigned flag was removed in the A1 rework; see the comment at `nurl_set_last_type` |

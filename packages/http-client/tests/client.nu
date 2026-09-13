@@ -53,6 +53,29 @@ $ `../src/http_client.nu`
     ( string_free url )
 }
 
+@ check_compressed_error * HttpClient c s name s scheme i port s path b limit i proto → v {
+    : String url ( base scheme port path )
+    ?? ( http_client_get c ( string_data url ) ) {
+        T r → { ( bad name `returned encoded content as success` ) ( http_response_free r ) }
+        F error → {
+            : b expected ?? error { HcTooLarge → limit HcProtocol → ! limit _ → F }
+            ? & expected == ( http_client_last_proto c ) proto { ( ok name ) }
+            { ( bad name ( http_client_err_name error ) ) }
+        }
+    }
+    ( string_free url )
+}
+
+@ check_compressed_responses * HttpClient c s scheme i port i proto → v {
+    ( check_get c `deflate_decode` scheme port `/deflate` 200 `lazy dog` proto )
+    ( check_compressed_error c `gzip_checksum_rejected` scheme port `/gzip-bad` F proto )
+    ( check_compressed_error c `gzip_format_rejected` scheme port `/gzip-wrong-format` F proto )
+    ( http_client_set_body_max c 256 )
+    ( check_compressed_error c `gzip_expansion_capped` scheme port `/gzip-large` T proto )
+    ( http_client_set_body_max c 0 )
+    ( check_get c `after_compression_error` scheme port `/gzip` 200 `lazy dog` proto )
+}
+
 @ run i http_port i https_port → v {
     : *HttpClient c ( http_client_new )
     ( http_client_set_verify c F )  // self-signed test cert
@@ -99,6 +122,7 @@ $ `../src/http_client.nu`
 
     // ── gzip body decoded transparently ──
     ( check_get c `gzip_decode` `http` http_port `/gzip` 200 `lazy dog` 0 )
+    ( check_compressed_responses c `http` http_port 1 )
 
     // ── POST body echo (h1) ──
     : String eurl ( base `http` http_port `/echo` )
@@ -120,6 +144,7 @@ $ `../src/http_client.nu`
         ? ( http_client_last_pq c ) { ( ok `h2_post_quantum` ) } { ( bad `h2_post_quantum` `classical kx` ) }
         ( check_get c `h2_reuse` `https` https_port `/dest` 200 `arrived` 2 )  // multiplexed reuse
         ( check_get c `h2_gzip` `https` https_port `/gzip` 200 `lazy dog` 2 )
+        ( check_compressed_responses c `https` https_port 2 )
         // cookies over h2
         : String s2 ( base `https` https_port `/setcookie` )
         ?? ( http_client_get c ( string_data s2 ) ) { T r → ( http_response_free r ) F _ → {} }
@@ -139,6 +164,7 @@ $ `../src/http_client.nu`
         ? ( http_client_last_pq a ) { ( ok `h3_post_quantum` ) } { ( bad `h3_post_quantum` `classical kx` ) }
         ( check_get a `h3_reuse` `https` https_port `/` 200 `root` 3 )
         ( check_get a `h3_gzip` `https` https_port `/gzip` 200 `lazy dog` 3 )
+        ( check_compressed_responses a `https` https_port 3 )
         ( check_get a `h3_redirect` `https` https_port `/redir1` 200 `arrived` 3 )
         : String s3 ( base `https` https_port `/setcookie` )
         ?? ( http_client_get a ( string_data s3 ) ) { T r → ( http_response_free r ) F _ → {} }
