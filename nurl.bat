@@ -99,14 +99,26 @@ if "%~1"=="" (
 set "SRCFILE=%~f1"
 
 REM ── Derive output names ──────────────────────────────────────
+REM Read the output path with %~f2 / %~dp2 / %~nx2, not with a FOR over
+REM %OUTBASE%. A path may hold % or &, and %VAR% puts its value on the line
+REM BEFORE the line is parsed: the & then ends the command and a %NAME%
+REM inside the value is read as a variable. A parameter modifier never does
+REM that -- cmd resolves it from the argument it is already holding.
+REM Measured on the runner: with a TEMP whose name carried a % the package
+REM gate failed, with an & it failed, with a ! it passed. That is this
+REM signature and no other.
 if "%~2"=="" (
     set "OUTBASE=%~n1"
 ) else (
-    set "OUTBASE=%~2"
+    set "OUTBASE=%~f2"
+    set "EXEDIR=%~dp2"
+    set "OUTNAME=%~nx2"
 )
-for %%I in ("%OUTBASE%") do set "OUTBASE=%%~fI"
-for %%I in ("%OUTBASE%") do set "EXEDIR=%%~dpI"
-for %%I in ("%OUTBASE%") do set "OUTNAME=%%~nxI"
+REM Only the defaulted name still needs qualifying, and it is a bare name
+REM beside the source rather than a caller's path.
+if "%~2"=="" for %%I in ("%OUTBASE%") do set "OUTBASE=%%~fI"
+if "%~2"=="" for %%I in ("%OUTBASE%") do set "EXEDIR=%%~dpI"
+if "%~2"=="" for %%I in ("%OUTBASE%") do set "OUTNAME=%%~nxI"
 REM Values inserted through delayed expansion are not parsed as command
 REM operators and their embedded ! characters are not expanded again.
 setlocal EnableDelayedExpansion
