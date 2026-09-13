@@ -6308,35 +6308,44 @@
     : s types_old # s ( nurl_peek t 4 )
     : s depths_old # s ( nurl_peek t 5 )
     : s prev_old # s ( nurl_peek t 8 )
+    : s lens_old # s ( nurl_peek t 11 )
     : s names_new # s ( nurl_alloc * newcap 8 )
     : s types_new # s ( nurl_alloc * newcap 8 )
     : s depths_new # s ( nurl_alloc * newcap 8 )
     : s prev_new # s ( nurl_alloc * newcap 8 )
+    : s lens_new # s ( nurl_zalloc * newcap 8 )
     : i nbytes * count 8
     ( memcpy names_new names_old nbytes )
     ( memcpy types_new types_old nbytes )
     ( memcpy depths_new depths_old nbytes )
     ( memcpy prev_new prev_old nbytes )
+    ( memcpy lens_new lens_old nbytes )
     ( nurl_free names_old )
     ( nurl_free types_old )
     ( nurl_free depths_old )
     ( nurl_free prev_old )
+    ( nurl_free lens_old )
     ( nurl_poke t 2 newcap )
     ( nurl_poke t 3 # i names_new )
     ( nurl_poke t 4 # i types_new )
     ( nurl_poke t 5 # i depths_new )
     ( nurl_poke t 8 # i prev_new )
+    ( nurl_poke t 11 # i lens_new )
 }
 
 : ~ i g_live_symtables 0
 : ~ i g_live_lexers 0
 
 @ nurl_sym_new → i {
-    // 11 slots: 0 count, 1 depth, 2 cap, 3 names, 4 types, 5 depths,
+    // 12 slots: 0 count, 1 depth, 2 cap, 3 names, 4 types, 5 depths,
     // 6 nbuckets, 7 buckets (head index+1 per bucket; 0 = empty),
-    // 8 prev (per-entry link to the previous entry in the same bucket).
+    // 8 prev (per-entry link to the previous entry in the same bucket),
+    // 11 lens (cached byte length of the value, 0 = "ask strlen").
+    // Only nurl_sym_append_word maintains slot 11, because it is the only
+    // writer whose cost is dominated by re-deriving a length it just
+    // computed; every other writer stores 0 and the readers never look.
     : i nb 4096
-    : s t # s ( nurl_zalloc 88 )
+    : s t # s ( nurl_zalloc 96 )
     // Compilation owns every table until its explicit release. Intrusive
     // links (slots 9/10) let final cleanup reclaim handles abandoned by a
     // diagnostic without scanning on normal release or allocating a tracker.
@@ -6350,6 +6359,7 @@
     ( nurl_poke t 6 nb )
     ( nurl_poke t 7 # i # s ( nurl_zalloc * nb 8 ) )
     ( nurl_poke t 8 # i # s ( nurl_alloc * 64 8 ) )
+    ( nurl_poke t 11 # i # s ( nurl_zalloc * 64 8 ) )
     ^ # i t
 }
 
@@ -6390,6 +6400,7 @@
     ( nurl_free # s ( nurl_peek t 5 ) )
     ( nurl_free # s ( nurl_peek t 7 ) )
     ( nurl_free # s ( nurl_peek t 8 ) )
+    ( nurl_free # s ( nurl_peek t 11 ) )
     ( nurl_free t )
 }
 
@@ -6410,6 +6421,10 @@
     = . names count # s ( nurl_strdup name )
     = . types count # s ( nurl_strdup type )
     = . depths count ( nurl_peek t 1 )
+    // Slot 11 caches the value's length for nurl_sym_append_word; 0 means
+    // "not known, ask strlen", which is also what an empty value measures.
+    : *i lens # *i # s ( nurl_peek t 11 )
+    = . lens count 0
     // Push onto the front of the bucket chain — newest-first, so a
     // later definition of the same name shadows the earlier one, exactly
     // like the old backward linear scan.
@@ -6497,6 +6512,8 @@
     : *s types # *s # s ( nurl_peek # s h 4 )
     ( nurl_free . types idx )
     = . types idx # s ( nurl_strdup value )
+    : *i lens # *i # s ( nurl_peek # s h 11 )
+    = . lens idx 0
 }
 
 // Overwrite the value of `name` WHERE IT LIVES, at whatever scope depth
@@ -6533,6 +6550,8 @@
             ? == 0 # i ( strcmp name . names idx )
             { ( nurl_free . types idx )
                 = . types idx # s ( nurl_strdup value )
+                : *i lens # *i # s ( nurl_peek t 11 )
+                = . lens idx 0
                 ^ v }
             { = cur . prev idx }
         }
@@ -6561,6 +6580,8 @@
     : s grown # s ( nurl_realloc # *u old + + ol sl 1 )
     ( memcpy # s + # i # *u grown ol suffix + sl 1 )
     = . types idx grown
+    : *i lens # *i # s ( nurl_peek # s h 11 )
+    = . lens idx + ol sl
 }
 
 // Append `word` to the space-separated list under `name`, WHEREVER in
@@ -6595,7 +6616,13 @@
         ? >= idx count { = cur 0 } {
             ? == 0 # i ( strcmp name . names idx )
             { : s old . types idx
-                : i ol ( nurl_str_len old )
+                : *i lens # *i # s ( nurl_peek t 11 )
+                // The cached length is what keeps this O(1) in the list's
+                // size. Without it the strlen alone is O(L) per append,
+                // which is the same quadratic one term smaller: 400 KB
+                // rescanned for every record added to it.
+                : i cl . lens idx
+                : i ol ? != cl 0 cl ( nurl_str_len old )
                 : i wl ( nurl_str_len word )
                 : i sep ? == ol 0 0 1
                 : s grown # s ( nurl_realloc # *u old + + + ol sep wl 1 )
@@ -6603,6 +6630,7 @@
                 ? == sep 1 { = . gp ol # u 32 } {}
                 ( memcpy # s + # i gp + ol sep word + wl 1 )
                 = . types idx grown
+                = . lens idx + + ol sep wl
                 ^ v }
             { = cur . prev idx }
         }
@@ -29568,6 +29596,7 @@
         // inference cannot prove either.
         ( nurl_sym_def syms `str_first_word__ret_owned` `str` )
         ( nurl_sym_def syms `str_skip_word__ret_owned` `str` )
+        ( nurl_sym_def syms `__span_dup__ret_owned` `str` )
         ( nurl_sym_def syms `seplist_first__ret_owned` `str` )
         ( nurl_sym_def syms `seplist_rest__ret_owned` `str` )
         ( nurl_sym_def syms `__kw_trim__ret_owned` `str` )
