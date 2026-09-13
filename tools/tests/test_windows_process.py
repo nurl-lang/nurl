@@ -136,12 +136,21 @@ class WindowsProcess(unittest.TestCase):
                                     capture_output=True, timeout=30)
             # Name the command. Four run through here and the stderr alone
             # does not say which one answered.
+            # Beside our own encoding, the same command through the OS's
+            # plain `cmd /c` (no /S, no wrapping quotes of ours). If that one
+            # works and ours does not, the difference is in what we build; if
+            # both fail, cmd cannot do it and the case is asking for the
+            # impossible.
+            native = subprocess.run(command, shell=True, env=env,
+                                    capture_output=True, timeout=30)
             self.assertEqual(result.returncode, code,
                              repr(command) + '\n' + result.stderr.decode(errors='replace')
                              + '\n' + subprocess.run(
                                  [str(self.probe), 'encodeshell', command], env=env,
                                  capture_output=True, timeout=30
-                             ).stdout.decode(errors='replace'))
+                             ).stdout.decode(errors='replace')
+                             + f'\nshell=True rc={native.returncode} '
+                             + f'out={native.stdout!r} err={native.stderr!r}')
             self.assertEqual(result.stdout.replace(b'\r\n', b'\n'), stdout)
         result = subprocess.run([str(self.probe), 'shell', 'nurl_command_that_does_not_exist_7654321'],
                                 env=env, capture_output=True, timeout=30)
