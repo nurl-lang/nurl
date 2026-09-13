@@ -33,7 +33,7 @@ $ `decode.nu`
 @ load_f32 s path * u pcell → *u {
     ?? ( read_file_bytes path ) {
         T b → { : i n / ( vec_len [u] b ) 4 : *u h ( nurl_alloc * n 4 )
-            : *PbR r ( pb_new b ) ( pb_read_f32_into r h n ) ( pb_free r ) ( nurl_poke pcell 0 n ) ^ h }
+            ( vec_f32_into b h n ) ( nurl_poke pcell 0 n ) ^ h }
         F _ → { ( nurl_poke pcell 0 0 ) ^ # *u 0 } }
 }
 

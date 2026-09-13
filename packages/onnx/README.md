@@ -1,8 +1,9 @@
 # onnx — run ONNX models from pure NURL, on the GPU
 
 Load a trained [ONNX](https://onnx.ai) model and run inference on the GPU —
-written entirely in NURL. The model's protobuf is decoded by a pure-NURL
-wire-format reader (no `protoc`, no protobuf library); inference runs on
+written entirely in NURL. The model's protobuf is decoded by the standard
+library's checked wire-format reader (no `protoc`, no protobuf library);
+inference runs on
 the GPU through the [`gpu`](../gpu) package, with each operator a CUDA-C
 kernel compiled to PTX at runtime (NVRTC) and every weight and activation
 resident on the device.
@@ -30,17 +31,25 @@ A 784→128→10 MLP (MNIST-shaped) matches the onnxruntime reference to within
 
 ```
 model.onnx ──pb.nu──▶ ONNX graph ──runtime.nu──▶ GPU execution ──▶ output
-            (protobuf            (value map,        (gpukit gkd_*
-             wire decode)         node order)        kernel library)
+            (stdlib              (value map,        (gpukit gkd_*
+             protobuf)            node order)        kernel library)
 ```
 
-- **`src/pb.nu`** — a minimal protobuf wire decoder (varints, the four wire
-  types, length-delimited sub-messages, packed repeated). Pure NURL over a
-  `Vec u` byte buffer.
+- **`src/pb.nu`** — the seam onto `stdlib/ext/protobuf.nu`, which owns the
+  wire format itself (varints, tags, length-delimited regions, packed
+  repeated fields, groups, bounds and depth limits, all checked). A
+  `PReader` is a checked stdlib reader plus a **sticky error**: every read
+  is infallible at the call site and returns a neutral value once the
+  reader has failed, so a message parser stays a flat `while more` loop —
+  but the first failure latches, the loop stops, and the reason and offset
+  survive to the top. Also here: decoding a little-endian block into a host
+  buffer of f32 or int64 values, which was never protobuf.
 - **`src/model.nu`** — the ONNX schema on top of `pb.nu`: `ModelProto →
   GraphProto → { NodeProto[], TensorProto initializers, I/O names }`,
-  `AttributeProto`, and `TensorProto.raw_data` (little-endian f32) read
-  straight into a host buffer.
+  `AttributeProto`, and `TensorProto.raw_data` (little-endian f32)
+  **borrowed in place** out of the model buffer and read straight into a
+  host buffer. `onnx_parse_checked` reports the first wire-format error;
+  `onnx_parse` keeps the older contract and degrades to an empty graph.
 - **`src/runtime.nu`** — the executor: uploads weights + input once, walks
   the graph in node order keeping activations on the GPU, downloads the
   named output. Each node dispatches to **gpukit's dev-layer kernel
