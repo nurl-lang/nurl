@@ -220,10 +220,19 @@ $ `stdlib/std/thread.nu`
                                     = ok & & ok == . response status 200 == ( vec_len [u] . response body ) 1048576
                                     ( http_response_free response )
                                 }
-                                F _ → { = ok F }
+                                F e → {
+                                    ( nurl_print `client_take_response=` )
+                                    ( nurl_print ( h2_client_err_name e ) )
+                                    ( nurl_print `\n` )
+                                    = ok F
+                                }
                             }
                         }
-                        F e → { ( nurl_print ( h2_client_err_name e ) ) ( nurl_print `\n` ) = ok F }
+                        F e → {
+                            ( nurl_print `client_run=` )
+                            ( nurl_print ( h2_client_err_name e ) ) ( nurl_print `\n` )
+                            = ok F
+                        }
                     }
                 }
                 F _ → { = ok F }
