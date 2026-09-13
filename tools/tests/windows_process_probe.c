@@ -89,6 +89,21 @@ int main(int argc, char **argv) {
         nurl_proc_free(raw);
         return code;
     }
+    /* The command line as cmd.exe will receive it. A launch that goes wrong
+     * inside the child leaves only the child's idea of what it was told;
+     * this is the other half, and the two together say whether the encoder
+     * or cmd's reading of it is at fault. */
+    if (argc >= 3 && !strcmp(argv[1], "encode")) {
+        NurlProcLaunch launch = {0};
+        char prompt[MAX_PATH + 16];
+        int ok = nurl__proc_prepare_launch(argv[2], (const char *const *)(argv + 3),
+                                           argc - 3, &launch, prompt, sizeof(prompt));
+        printf("encoded=%d\napplication=%s\ncommand=%s\n", ok,
+               launch.application ? launch.application : "(none)",
+               launch.command.data ? launch.command.data : "(none)");
+        nurl__proc_launch_free(&launch);
+        return 0;
+    }
     if (argc >= 3 && !strcmp(argv[1], "run")) {
         long long raw = nurl_proc_run(argv[2], (const char *)(argv + 3), argc - 3, "");
         NurlProcResult *r = (NurlProcResult *)(uintptr_t)raw;

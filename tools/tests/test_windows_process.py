@@ -193,11 +193,22 @@ class WindowsProcess(unittest.TestCase):
             return f'(cannot list {directory}: {error})'
         return '\n'.join(['produced:', *(f'  {name}' for name in found)] or ['produced: nothing'])
 
+    def encoded(self, driver, args, env=None):
+        """The command line cmd.exe is handed for this launch.
+
+        A driver that misreads its own path reports only what it concluded;
+        this is what it was told. The two together separate an encoder that
+        built the wrong line from a cmd that read a correct one wrongly.
+        """
+        result = self.invoke('encode', driver, args, env=env or self.env, cwd=self.directory)
+        return (result.stdout + result.stderr).decode(errors='replace')
+
     def compile_program(self, driver, source, output, flags=(), env=None):
         result = self.invoke('run', driver, [*flags, source, output], env=env or self.env,
                              cwd=self.directory)
         self.assertEqual(result.returncode, 0,
-                         (result.stdout + result.stderr).decode(errors='replace'))
+                         (result.stdout + result.stderr).decode(errors='replace')
+                         + '\n' + self.encoded(driver, [*flags, source, output], env))
         executable = output.with_name(output.name + '.exe')
         self.assertTrue(executable.exists(),
                         f'driver reported success but {executable.name} is not there\n'
