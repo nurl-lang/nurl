@@ -398,6 +398,19 @@ class WindowsProcess(unittest.TestCase):
                         env={**env, 'TEMP': str(alternate), 'TMP': str(alternate)},
                         capture_output=True, timeout=180)
                     controls.append(f'{label} TEMP rc={run.returncode}')
+                # And the driver on its own, with the odd TEMP but nurlpkg
+                # out of the way: everything below nurlpkg is then the same
+                # as the driver gate that passes, so a failure here is the
+                # toolchain reading TEMP and a pass is nurlpkg building a
+                # path from it.
+                direct = self.directory / f'direct-{command}.nu'
+                direct.write_text(PROGRAM, encoding='utf-8')
+                alone = subprocess.run(
+                    [str(self.probe), 'run', str(prefix / 'nurl.bat'), str(direct),
+                     str(self.directory / f'direct-{command}-out')],
+                    cwd=self.directory, env=env, capture_output=True, timeout=180)
+                controls.append(f'driver alone, odd TEMP rc={alone.returncode} '
+                                + (alone.stdout + alone.stderr).decode(errors='replace'))
                 control = subprocess.run(
                     [str(ROOT / 'build/nurlpkg.exe'), command], cwd=project,
                     env={**env, 'TEMP': str(self.directory), 'TMP': str(self.directory)},
