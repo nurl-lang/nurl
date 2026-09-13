@@ -1,13 +1,23 @@
 // Simultaneous 1 MiB request/response with 4 KiB socket send buffers and large
 // peer flow windows. Neither endpoint can finish writing before reading. This
 // exercises persistent frame offsets, not a timeout escape from a deadlock.
+//
+// What it does NOT assert is that a short write was observed. Whether a
+// given flush comes back partial is the kernel's socket-buffer accounting
+// talking, not this stack's: with the same 4 KiB SO_SNDBUF the exchange
+// goes partial on Linux and completes whole on macOS, and a golden is one
+// file for all three unixes. Handling a partial write is pinned where it
+// can be made to happen on purpose — tools/net_write_deadline.nu, whose
+// peer stops reading — and what stays here is the part that is the same
+// everywhere: a megabyte crosses in each direction and both ends finish.
 // requires: live
 $ `stdlib/ext/http2_client.nu`
 $ `stdlib/std/thread.nu`
 
-// Name the failing half on the way out. A bare T/F golden says a duplex
-// exchange went wrong somewhere in a megabyte, which is the same report for
-// a rejected socket option and for a stalled write loop.
+// Name the failing half on the way out — only when something failed, so the
+// recorded output stays identical on every platform. A bare T/F golden says
+// a duplex exchange went wrong somewhere in a megabyte, which is the same
+// report for a rejected socket option and for a stalled write loop.
 @ note s label b value → b {
     ? ! value { ( nurl_print label ) ( nurl_print `=F\n` ) } {}
     ^ value
@@ -142,11 +152,14 @@ $ `stdlib/std/thread.nu`
         ?? ( h2_frame_writer_flush writer ) { T _ → {} F _ → { = ok F } }
         ? > ( h2_frame_writer_pending writer ) 0 { : i ready ( tcp_wait_io tcp T T 100 ) } {}
     }
-    ( note `peer_ok` ok )
-    ( note `peer_saw_backpressure` pressure )
-    ( note `peer_received_all` == received 1048576 )
-    ( note `peer_sent_end_stream` response_end )
-    ( vec_set [i] outcome 0 ? & & & ok pressure == received 1048576 response_end 1 0 )
+    : b complete & & ok == received 1048576 response_end
+    ? ! complete {
+        ( note `peer_ok` ok )
+        ( note `peer_received_all` == received 1048576 )
+        ( note `peer_sent_end_stream` response_end )
+        ( note `peer_saw_backpressure` pressure )
+    } {}
+    ( vec_set [i] outcome 0 ? complete 1 0 )
     // A completed response can leave WINDOW_UPDATE frames in flight. Drain
     // until the client closes, so closing this raw test peer does not reset
     // the socket while those legitimate control frames are being delivered.
@@ -206,9 +219,12 @@ $ `stdlib/std/thread.nu`
         F _ → { = ok F }
     }
     ?? worker { T thread → { : i ignored ( thread_join thread ) } F _ → { = ok F } }
-    ( note `client_ok` ok )
-    ( note `peer_outcome` == . ( vec_data [i] outcome ) 0 1 )
-    = ok & ok == . ( vec_data [i] outcome ) 0 1
+    : b final & ok == . ( vec_data [i] outcome ) 0 1
+    ? ! final {
+        ( note `client_ok` ok )
+        ( note `peer_outcome` == . ( vec_data [i] outcome ) 0 1 )
+    } {}
+    = ok final
     ( vec_free [i] outcome ) ( tcp_close_listener listener )
     ( nurl_print ? ok `duplex_small_buffers=T\n` `duplex_small_buffers=F\n` )
     ^ ? ok 0 1

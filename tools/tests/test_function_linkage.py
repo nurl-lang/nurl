@@ -11,6 +11,21 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class FunctionLinkageTest(unittest.TestCase):
+    # This same command runs in two jobs. The sanitizer job builds the tree
+    # with ./build.sh --san, which leaves stdlib/runtime.native.o carrying
+    # ASan+UBSan, and linking that without the matching flags leaves every
+    # __asan_*/__ubsan_* reference undefined — the link fails before a single
+    # linkage boundary has been checked. Mirror whatever the runtime object
+    # was actually built with rather than assuming either build.
+    SANITIZERS = ['-fsanitize=address,undefined', '-fno-sanitize-recover=all']
+
+    @staticmethod
+    def runtime_is_instrumented():
+        try:
+            return b'__asan_' in (ROOT / 'stdlib/runtime.native.o').read_bytes()
+        except OSError:
+            return False
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='nurl-function-linkage-')
         self.addCleanup(self.tmp.cleanup)
@@ -20,6 +35,7 @@ class FunctionLinkageTest(unittest.TestCase):
         self.env = {**os.environ, 'NURL_STDLIB': str(ROOT), 'DEBUGINFOD_URLS': '',
                     'ASAN_OPTIONS': 'detect_leaks=1:halt_on_error=1',
                     'LSAN_OPTIONS': 'use_stacks=0', 'UBSAN_OPTIONS': 'halt_on_error=1'}
+        self.sanitizers = self.SANITIZERS if self.runtime_is_instrumented() else []
 
     def command(self, args):
         run = subprocess.run([str(x) for x in args], cwd=ROOT, env=self.env,
@@ -45,8 +61,8 @@ class FunctionLinkageTest(unittest.TestCase):
             inputs.append(c)
         output = self.directory / 'program'
         self.command([self.clang, '-O2', '-fno-builtin', '-Wno-override-module',
-                      *inputs, ROOT / 'stdlib/runtime.native.o', '-lm', '-lpthread',
-                      '-ldl', '-o', output])
+                      *self.sanitizers, *inputs, ROOT / 'stdlib/runtime.native.o',
+                      '-lm', '-lpthread', '-ldl', '-o', output])
         self.assertEqual(self.command([output]), expected)
 
     def test_source_open_and_strlen_coexist_with_real_libc(self):
