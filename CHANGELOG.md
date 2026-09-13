@@ -6,30 +6,6 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Fixed
-
-- HTTP/2 server throughput regressed 32–39 % in 0.65.0 (h2c 10×10 streams:
-  213k → 136k req/s on the bench box): the bounded frame writer flushed after
-  every queued frame — two sends per response instead of the one `sendmsg`
-  0.64.0 issued — and copied each frame three times (serialize, prepare,
-  append) before it reached the socket. Frames are now sealed straight onto
-  the writer's queue (header via a scratch buffer, payload read in place)
-  and the queue is flushed once per read attempt, so every frame produced
-  while handling one batch of peer frames leaves in one send: 0.1 sends per
-  request at ten streams, h2c 213k → 275k req/s and TLS h2 165k → 226k,
-  p99 4.5 → 0.9 ms — ahead of 0.64.0, not merely back to it. A refused
-  queue (no room) now marks the writer starved, and the control event that
-  invites the application to refill is raised only when a flush frees room
-  it was denied. GOAWAY still flushes itself; `h2_conn_free` flushes what a
-  backed-up socket had refused, best effort.
-- Setting or clearing a TCP write deadline marked the socket's idle timeout
-  dirty unconditionally, so a pool-served HTTP/2 connection — which
-  brackets every frame read with set/restore — paid two `setsockopt()` per
-  blocking read. The idle timeout is re-pushed only when a deadline
-  remainder actually replaced it in the kernel.
-
 ## [0.65.0] — 2026-09-13
 
 ### Added
@@ -108,6 +84,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default batch lookup on PATH work through the same argument contract.
   Explicit shell execution uses the system `cmd.exe`; debug executable
   publication preserves its PDB alongside the binary.
+- HTTP/2 server throughput would have dropped 32–39 % against 0.64.0 (h2c
+  10×10 streams: 213k → 136k req/s on the bench box) with the bounded frame
+  writer the incremental APIs above introduced: it flushed after every
+  queued frame — two sends per response instead of the one `sendmsg` 0.64.0
+  issued — and copied each frame three times (serialize, prepare, append)
+  before it reached the socket. Frames are now sealed straight onto the
+  writer's queue (header via a scratch buffer, payload read in place) and
+  the queue is flushed once per read attempt, so every frame produced while
+  handling one batch of peer frames leaves in one send: 0.1 sends per
+  request at ten streams, h2c 213k → 275k req/s and TLS h2 165k → 226k,
+  p99 4.5 → 0.9 ms — ahead of 0.64.0, not merely level with it. A refused
+  queue (no room) now marks the writer starved, and the control event that
+  invites the application to refill is raised only when a flush frees room
+  it was denied. GOAWAY still flushes itself; `h2_conn_free` flushes what a
+  backed-up socket had refused, best effort.
+- Setting or clearing a TCP write deadline marked the socket's idle timeout
+  dirty unconditionally, so a pool-served HTTP/2 connection — which
+  brackets every frame read with set/restore — paid two `setsockopt()` per
+  blocking read. The idle timeout is re-pushed only when a deadline
+  remainder actually replaced it in the kernel.
 
 ## [0.64.0] — 2026-09-13
 
