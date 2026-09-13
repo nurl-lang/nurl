@@ -203,12 +203,25 @@ class WindowsProcess(unittest.TestCase):
         result = self.invoke('encode', driver, args, env=env or self.env, cwd=self.directory)
         return (result.stdout + result.stderr).decode(errors='replace')
 
+    def spellings(self, directory, env=None):
+        """Ask cmd itself which spelling of a batch path it keeps.
+
+        The encoded line is correct — a real cmd under wine carries the whole
+        of a `%VAR% & !keep!` directory through it — and this runner still
+        hands the batch a %0 with the install's own directory missing. Only
+        the cmd that does that can say what it does accept, so it writes a
+        batch that reports its own %~dp0 and launches it four ways.
+        """
+        result = self.invoke('cmdspellings', directory, env=env or self.env, cwd=self.directory)
+        return (result.stdout + result.stderr).decode(errors='replace')
+
     def compile_program(self, driver, source, output, flags=(), env=None):
         result = self.invoke('run', driver, [*flags, source, output], env=env or self.env,
                              cwd=self.directory)
         self.assertEqual(result.returncode, 0,
                          (result.stdout + result.stderr).decode(errors='replace')
-                         + '\n' + self.encoded(driver, [*flags, source, output], env))
+                         + '\n' + self.encoded(driver, [*flags, source, output], env)
+                         + '\n' + self.spellings(driver.parent, env))
         executable = output.with_name(output.name + '.exe')
         self.assertTrue(executable.exists(),
                         f'driver reported success but {executable.name} is not there\n'

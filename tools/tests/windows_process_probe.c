@@ -89,6 +89,64 @@ int main(int argc, char **argv) {
         nurl_proc_free(raw);
         return code;
     }
+    /* Which spelling of a batch path survives cmd's own reading of it.
+     * The encoder's line is correct -- a real cmd under wine carries the
+     * whole of `tool chain %VAR% & !keep!` through intact -- and the Windows
+     * runner still hands the batch a %0 with the install's directory missing.
+     * Only that cmd can say which spelling it does keep, so ask it: write a
+     * batch that reports its own %~dp0, launch it four ways, print what each
+     * one got back. Run as `probe cmdspellings <dir-with-specials>`. */
+    if (argc >= 3 && !strcmp(argv[1], "cmdspellings")) {
+        char script[MAX_PATH * 2];
+        snprintf(script, sizeof(script), "%s\\report.bat", argv[2]);
+        FILE *f = fopen(script, "wb");
+        check(f != NULL, "cannot write probe batch");
+        /* Quoted: an unquoted & in the value ends the echo, and the report
+         * then shows a prefix of the path as though that were all of it. */
+        fputs("@echo off\r\necho DP0=\"%~dp0\"\r\n", f);
+        fclose(f);
+        char prompt[MAX_PATH + 16];
+        UINT n = GetSystemDirectoryA(prompt, (UINT)sizeof(prompt));
+        check(n && n + sizeof("\\cmd.exe") <= sizeof(prompt), "no system directory");
+        memcpy(prompt + n, "\\cmd.exe", sizeof("\\cmd.exe"));
+        /* 0: as encoded today. 1: the same without /S. 2: the batch named by
+         * bare filename with its own directory as the working directory, so
+         * no special ever reaches the command line. 3: 2 without /S. A caret
+         * is not among these: inside the quotes it stays a literal ^ and the
+         * path is simply not found. */
+        for (int variant = 0; variant < 4; ++variant) {
+            int by_name = variant >= 2;
+            const char *leaf = script;
+            for (const char *q = script; *q; ++q) if (*q == '\\') leaf = q + 1;
+            const char *spelled = by_name ? leaf : script;
+            NurlProcBuf line = {0};
+            nurl__proc_buf_append(&line, prompt, strlen(prompt));
+            const char *modes = (variant & 1) ? " /D /E:ON /V:OFF /C \"\""
+                                              : " /D /E:ON /V:OFF /S /C \"\"";
+            nurl__proc_buf_append(&line, modes, strlen(modes));
+            for (const char *q = spelled; *q; ++q) {
+                if (*q == '%') nurl__proc_buf_append(&line, "%%cd:~,%", 8);
+                else nurl__proc_buf_append(&line, q, 1);
+            }
+            nurl__proc_buf_append(&line, "\"\"", 2);
+            printf("variant %d (cwd=%s): %s\n", variant, by_name ? argv[2] : "(caller)", line.data);
+            fflush(stdout);
+            STARTUPINFOA si = {0};
+            PROCESS_INFORMATION pi = {0};
+            si.cb = sizeof(si);
+            if (CreateProcessA(prompt, line.data, NULL, NULL, TRUE, 0, NULL,
+                               by_name ? argv[2] : NULL, &si, &pi)) {
+                WaitForSingleObject(pi.hProcess, 20000);
+                CloseHandle(pi.hThread);
+                CloseHandle(pi.hProcess);
+            } else {
+                printf("  CreateProcess failed: %lu\n", (unsigned long)GetLastError());
+            }
+            fflush(stdout);
+            free(line.data);
+        }
+        return 0;
+    }
     /* The command line as cmd.exe will receive it. A launch that goes wrong
      * inside the child leaves only the child's idea of what it was told;
      * this is the other half, and the two together say whether the encoder
