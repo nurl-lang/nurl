@@ -3448,7 +3448,7 @@
     //     parameters: if the callee returns that position, so does this
     //     function, and its own callers must see it.
     ? & & != g_borrowck 0 ret_is_direct_call
-    != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_forward__` ) )
+    != 0 ( nurl_sym_len syms `__last_call_forward__` )
     { : s __fw ( nurl_sym_get syms `__last_call_forward__` )
         : s __fw_cn ( str_first_word __fw )
         : s __fw_fn ( str_first_word ( str_skip_word __fw ) )
@@ -9537,7 +9537,7 @@
         ! | arg_pos_escapes
         | ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
         ( str_contains_word ( nurl_sym_get g_fn_embeds fname ) ( nurl_str_int arg_idx ) )
-        == 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_view__` ) )
+        == 0 ( nurl_sym_len syms `__last_call_ret_view__` )
         { ? | ( lint_is_manual_handle at )
             != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
             { ( lint_warn ( vis_current_src_file ) bck_arg_line bck_arg_col
@@ -17246,7 +17246,7 @@
         { ( nurl_sym_def syms ( nurl_str_cat name `__guardslot` ) __lcg )
             ( mem_bind_guard syms cg name __lcg )
             ( nurl_sym_def syms `__owned_strings__`
-            ? == 0 ( nurl_str_len ( nurl_sym_get syms `__owned_strings__` ) )
+            ? == 0 ( nurl_sym_len syms `__owned_strings__` )
             ( nurl_str_cat __lcg `` )
             ( nurl_str_cat3 ( nurl_sym_get syms `__owned_strings__` ) ` ` __lcg ) ) }
         {}
@@ -17282,7 +17282,7 @@
         {}
         ( lint_note_handle bck_line bck_col name vt
         & & == 0 ( nurl_str_len rhs_borrow )
-        == 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_view__` ) )
+        == 0 ( nurl_sym_len syms `__last_call_ret_view__` )
         | == bck_rhs_tt TT_LPAREN & ( is_ident_tok bck_rhs_tt ) ! is_mutable )
         ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
         ( bck_alias_from_phi syms ! is_mutable name vt bck_line )
@@ -17508,7 +17508,7 @@
             { ( nurl_sym_def syms ( nurl_str_cat name `__guardslot` ) __lcg )
                 ( mem_bind_guard syms cg name __lcg )
                 ( nurl_sym_def syms `__owned_strings__`
-                ? == 0 ( nurl_str_len ( nurl_sym_get syms `__owned_strings__` ) )
+                ? == 0 ( nurl_sym_len syms `__owned_strings__` )
                 ( nurl_str_cat __lcg `` )
                 ( nurl_str_cat3 ( nurl_sym_get syms `__owned_strings__` ) ` ` __lcg ) ) }
             {}
@@ -17564,7 +17564,7 @@
             {}
             ( lint_note_handle bck_line bck_col name vt
             & & == 0 ( nurl_str_len rhs_borrow )
-            == 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_view__` ) )
+            == 0 ( nurl_sym_len syms `__last_call_ret_view__` )
             | == bck_rhs_tt TT_LPAREN & ( is_ident_tok bck_rhs_tt ) ! is_mutable )
             ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
             ( bck_alias_from_phi syms ! is_mutable name vt bck_line )
@@ -18921,8 +18921,8 @@
     // registered type is untouched.
     ? & > ( nurl_str_len dt ) 1 == ( nurl_str_get dt 0 ) 37 {
         : s cname ( nurl_str_slice dt 1 - ( nurl_str_len dt ) 1 )
-        ? == 0 ( nurl_str_len ( nurl_sym_get2 syms cname `__variants` ) ) {
-            ? == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat3 cname `__idx_0` `__type` ) ) ) {
+        ? == 0 ( nurl_sym_len2 syms cname `__variants` ) {
+            ? == 0 ( nurl_sym_len syms ( nurl_str_cat3 cname `__idx_0` `__type` ) ) {
                 : s bty ( nurl_sym_get syms cname )
                 ? != 0 ( nurl_str_len bty ) { ( die lex ( nurl_str_cat4
                     ( nurl_str_cat3 `'# ` cname `' casts to the type '` )
@@ -25745,7 +25745,7 @@
     ? != 0 ( nurl_str_len __em_set )
     { ( nurl_sym_def g_fn_embeds fname __em_set ) }
     {}
-    ? != 0 ( nurl_str_len ( nurl_sym_get syms `__fn_builds_view__` ) )
+    ? != 0 ( nurl_sym_len syms `__fn_builds_view__` )
     { ( nurl_sym_def g_fn_ret_view fname `1` ) }
     {}
     // Invoke-only inference (docs/MEMORY.md §7.4): a parameter never
@@ -26507,7 +26507,7 @@
             ! ( seq name `dyn` )
             { : s sv ( nurl_sym_get syms name )
                 ? & & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
-                == 0 ( nurl_str_len ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat `ty##` name ) ) )
+                == 0 ( nurl_sym_len g_fn_pos_syms ( nurl_str_cat `ty##` name ) )
                 { ( die lex ( nurl_str_cat
                     ( nurl_str_cat3 `type '` name `' is used inside a closure type here but is declared LATER in the program` )
                     ( nurl_str_cat3 `. A named type inside a function type must already be defined when this one is emitted — LLVM treats a forward reference as an opaque struct, which is not a valid function argument or return type, and the module then fails to assemble with no source location (some toolchains accept it, so it can pass locally and fail on another platform). Move ': ` name `' above this declaration.` ) ) ) }
@@ -26545,7 +26545,7 @@
             ! ( __has_dunder name ) ! ( seq name `dyn` ) ! ( is_tparam_like name )
             { : s sv ( nurl_sym_get syms name )
                 ? & & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
-                == 0 ( nurl_str_len ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat `ty##` name ) ) )
+                == 0 ( nurl_sym_len g_fn_pos_syms ( nurl_str_cat `ty##` name ) )
                 { ( die_pos lex tline tcol ( nurl_str_cat
                     ( nurl_str_cat4 `type '` name `' is used by value as ` ctx )
                     ( nurl_str_cat3 ` here but is declared LATER in the program. A value of a named type needs the type's definition before this point — the compiler emits the program in order, and LLVM cannot size a struct whose body it has not seen (a pointer to it is fine). Move ': ` name `' above this use, or import the file that declares it before this one.` ) ) ) }
@@ -30536,7 +30536,7 @@
         ( check_impl_contract lex tname impl_nurl
         ( nurl_sym_get2 g_trait_pending key `llvm` )
         ( nurl_sym_get2 g_trait_pending key `provided` ) bindings
-        != 0 ( nurl_str_len ( nurl_sym_get2 g_trait_pending key `malformed` ) ) )
+        != 0 ( nurl_sym_len2 g_trait_pending key `malformed` ) )
         ? != 0 ( nurl_str_len impl_nurl )
         { ( register_missing_defaults lex tname impl_nurl
             ( nurl_sym_get2 g_trait_pending key `llvm` )
@@ -30695,7 +30695,7 @@
 // `Show` are implemented with no declaration, which is how the built-in
 // protocols work. There is simply no contract to check for one.
 @ check_impl_contract i lex s tname s impl_nurl s impl_llvm s provided s bindings b malformed → v {
-    ? == 0 ( nurl_str_len ( nurl_sym_get2 g_trait_syms tname `__istrait` ) ) { ^ } {}
+    ? == 0 ( nurl_sym_len2 g_trait_syms tname `__istrait` ) { ^ } {}
     : s ty ? != 0 ( nurl_str_len impl_nurl ) impl_nurl impl_llvm
     : s tparam ( nurl_sym_get2 g_trait_syms tname `__tparam` )
     : s defaults ( nurl_sym_get2 g_trait_syms tname `__defaults` )
