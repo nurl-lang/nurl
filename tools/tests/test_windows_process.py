@@ -137,7 +137,11 @@ class WindowsProcess(unittest.TestCase):
             # Name the command. Four run through here and the stderr alone
             # does not say which one answered.
             self.assertEqual(result.returncode, code,
-                             repr(command) + '\n' + result.stderr.decode(errors='replace'))
+                             repr(command) + '\n' + result.stderr.decode(errors='replace')
+                             + '\n' + subprocess.run(
+                                 [str(self.probe), 'encodeshell', command], env=env,
+                                 capture_output=True, timeout=30
+                             ).stdout.decode(errors='replace'))
             self.assertEqual(result.stdout.replace(b'\r\n', b'\n'), stdout)
         result = subprocess.run([str(self.probe), 'shell', 'nurl_command_that_does_not_exist_7654321'],
                                 env=env, capture_output=True, timeout=30)

@@ -151,6 +151,15 @@ int main(int argc, char **argv) {
      * inside the child leaves only the child's idea of what it was told;
      * this is the other half, and the two together say whether the encoder
      * or cmd's reading of it is at fault. */
+    if (argc >= 3 && !strcmp(argv[1], "encodeshell")) {
+        NurlProcLaunch launch = {0};
+        char prompt[MAX_PATH + 16];
+        int ok = nurl__proc_prepare_shell(argv[2], &launch, prompt, sizeof(prompt));
+        printf("encoded=%d\ncommand=%s\n", ok,
+               launch.command.data ? launch.command.data : "(none)");
+        nurl__proc_launch_free(&launch);
+        return 0;
+    }
     if (argc >= 3 && !strcmp(argv[1], "encode")) {
         NurlProcLaunch launch = {0};
         char prompt[MAX_PATH + 16];
