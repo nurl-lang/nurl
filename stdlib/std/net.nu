@@ -1010,15 +1010,43 @@ $ `stdlib/std/pkey.nu`
     }
 }
 
-// Flush source-generated TLS control records through the caller's existing
-// ciphertext FIFO. Empty output means none pending; no socket I/O occurs.
+// Pair form for a queued writer: `head`‖`body` goes straight onto the end
+// of `out` — appended as-is on plaintext, sealed into ≤16 KB records on
+// TLS — so a frame header and its payload never meet in a scratch buffer.
+@ tcp_prepare_write2_to TcpConn c ( Vec u ) out ( Vec u ) head ( Vec u ) body → !v NetErr {
+    : i tls ( __conn_tlsptr c )
+    ? == tls 0 {
+        ( vec_extend [u] out head )
+        ( vec_extend [u] out body )
+        ^ @ !v NetErr { T 0 }
+    } {}
+    : *TlsConn state # *TlsConn tls
+    : !v TlsErr result ? == . c kind 2
+    ( tls_server_prepare_write2_to state out head body ) ( tls_prepare_write2_to state out head body )
+    ?? result {
+        T _ → ^ @ !v NetErr { T 0 }
+        F _ → ^ @ !v NetErr { F NetClosed }
+    }
+}
+
+// Append source-generated TLS control records to the caller's existing
+// ciphertext FIFO; returns the byte count (0 = none pending, and nothing
+// is touched — plaintext connections cost a handle check). No socket I/O.
+@ tcp_prepare_control_to TcpConn c ( Vec u ) out → i {
+    : i tls ( __conn_tlsptr c )
+    ? == tls 0 { ^ 0 } {}
+    : *TlsConn state # *TlsConn tls
+    ? != . state closed 0 { ^ 0 } {}
+    ? & == . state update_pending 0 == . state fatal_alert 0 { ^ 0 } {}
+    : i before ( vec_len [u] out )
+    ( _tls_control_to state out ? == . c kind 2 0 1 )
+    ^ - ( vec_len [u] out ) before
+}
+
+// Same, into a fresh Vec. Empty output means none pending.
 @ tcp_prepare_control TcpConn c → !( Vec u ) NetErr {
     : ( Vec u ) wire ( vec_new [u] )
-    : i tls ( __conn_tlsptr c )
-    ? != tls 0 {
-        : *TlsConn state # *TlsConn tls
-        ? == . state closed 0 { ( _tls_control_to state wire ? == . c kind 2 0 1 ) } {}
-    } {}
+    : i appended ( tcp_prepare_control_to c wire )
     ^ @ !( Vec u ) NetErr { T wire }
 }
 

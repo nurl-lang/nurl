@@ -266,6 +266,10 @@ $ `stdlib/ext/http2_hpack.nu`
 }
 
 @ h2_conn_free sink H2Connection c → v {
+    // Best effort, never waits: whatever a backed-up socket still refuses
+    // is dropped exactly as a failed final send always was.
+    : !i H2FrameErr flushed ( h2_frame_writer_flush . c writer )
+    ?? flushed { T _ → {} F _ → {} }
     ( hpack_dyn_free . c enc_dyn )
     ( hpack_dyn_free . c dec_dyn )
     ( vec_free_with [H2Stream] . c streams
@@ -1192,15 +1196,14 @@ $ `stdlib/ext/http2_hpack.nu`
     }
 }
 
-// Release receive credit only as the caller asks for another event. At most
-// the advertised window is outstanding; the transport never queues bodies.
+// Queue only. The bytes leave in __h2_duplex_ensure's flush, right before
+// the next read attempt — so everything produced while handling one batch
+// of peer frames (each response's HEADERS + DATA, WINDOW_UPDATEs, ACKs)
+// goes out in one send instead of one per frame. Terminal frames
+// (GOAWAY) flush themselves: nothing reads after them.
 @ __h2_queue_frame H2Connection c i kind i flags i sid ( Vec u ) payload → !v H2FrameErr {
     : H2Frame frame @ H2Frame { kind flags sid payload }
-    : !v H2FrameErr queued ( h2_frame_writer_queue . c writer frame . c peer_max_frame_size )
-    ?? queued { T _ → {} F e → { ^ @ !v H2FrameErr { F e } } }
-    : !i H2FrameErr flushed ( h2_frame_writer_flush . c writer )
-    ?? flushed { T _ → {} F e → { ^ @ !v H2FrameErr { F e } } }
-    ^ @ !v H2FrameErr { T 0 }
+    ^ ( h2_frame_writer_queue . c writer frame . c peer_max_frame_size )
 }
 
 @ __h2_send_settings_ack H2Connection c → !v H2FrameErr {
@@ -1237,7 +1240,10 @@ $ `stdlib/ext/http2_hpack.nu`
     ( bytes_extend_str payload debug )
     : !v H2FrameErr result ( __h2_queue_frame c ( h2_type_goaway ) 0 0 payload )
     ( vec_free [u] payload )
-    ^ result
+    ?? result { T _ → {} F e → { ^ @ !v H2FrameErr { F e } } }
+    : !i H2FrameErr flushed ( h2_frame_writer_flush . c writer )
+    ?? flushed { T _ → {} F e → { ^ @ !v H2FrameErr { F e } } }
+    ^ @ !v H2FrameErr { T 0 }
 }
 
 @ __h2_receive_credit inout H2Connection c → !v H2ConnErr {
@@ -1506,13 +1512,25 @@ $ `stdlib/ext/http2_hpack.nu`
 
 // Try both directions before parking. Neither raw TCP backpressure nor a
 // partial TLS record may trap the connection in a blocking write/read loop.
-// Yield a control event when pending output progresses, so the application
-// can refill its bounded writer without waiting for an unrelated peer frame.
+// Everything queued since the last read attempt is flushed FIRST — one send
+// per batch of peer frames, and a peer that keeps sending never starves our
+// output. Yield a control event when a flush frees room an application was
+// refused, so it can refill its bounded writer without waiting for an
+// unrelated peer frame.
 @ __h2_duplex_ensure H2Connection c i count i deadline_ns → !v H2FrameErr {
     ~ < ( vec_len [u] . c rx ) count {
         ? & > deadline_ns 0 >= ( monotonic_ns ) deadline_ns {
             ^ @ !v H2FrameErr { F H2FrameReadTimeout }
         } {}
+        : !i H2FrameErr flushed ( h2_frame_writer_flush . c writer )
+        ?? flushed {
+            F e → { ^ @ !v H2FrameErr { F e } }
+            T n → {
+                ? & > n 0 ( h2_frame_writer_take_starved . c writer ) {
+                    ^ @ !v H2FrameErr { F H2FrameWouldBlock }
+                } {}
+            }
+        }
         : !i NetErr read ( tcp_try_read_into . c tcp . c rx 16384 )
         : ~ i received 0
         ?? read {
@@ -1526,11 +1544,6 @@ $ `stdlib/ext/http2_hpack.nu`
             }
         }
         ? == received 0 {
-            : !i H2FrameErr flushed ( h2_frame_writer_flush . c writer )
-            ?? flushed {
-                F e → { ^ @ !v H2FrameErr { F e } }
-                T n → { ? > n 0 { ^ @ !v H2FrameErr { F H2FrameWouldBlock } } {} }
-            }
             : ~ i wait_ms -1
             ? > deadline_ns 0 {
                 : i remaining - deadline_ns ( monotonic_ns )
@@ -1739,6 +1752,7 @@ $ `stdlib/ext/http2_hpack.nu`
     } {}
     : i length ( vec_len [u] data )
     ? & > length 0 >= ( h2_frame_writer_pending . c writer ) 65536 {
+        ( h2_frame_writer_starve . c writer )
         ^ @ !i H2ConnErr { T 0 }
     } {}
     : ~ i count length
@@ -1750,7 +1764,10 @@ $ `stdlib/ext/http2_hpack.nu`
     // Empty END_STREAM is permitted even with zero or negative credit.
     ? == length 0 { = count 0 } {}
     : b ended & end_stream == count length
-    ? ! ( h2_frame_writer_room . c writer + count 9 ) { ^ @ !i H2ConnErr { T 0 } } {}
+    ? ! ( h2_frame_writer_room . c writer + count 9 ) {
+        ( h2_frame_writer_starve . c writer )
+        ^ @ !i H2ConnErr { T 0 }
+    } {}
     : ( Vec u ) view ( vec_borrow_raw [u] ( vec_data [u] data ) count )
     : !v H2FrameErr wr ( __h2_queue_frame c ( h2_type_data ) ? ended ( h2_flag_end_stream ) 0 sid view )
     ( vec_free [u] view )

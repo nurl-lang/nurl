@@ -1542,6 +1542,13 @@ typedef struct NurlTcp {
      * it parks on the reactor instead, and has to be told how long. */
     long long     timeout_ms;
     long long     write_deadline_ns; /* absolute CLOCK_MONOTONIC; 0 clears */
+    /* SO_SNDTIMEO currently holds a deadline remainder, not timeout_ms.
+     * Only then does clearing the deadline have to restore the idle
+     * timeout: an HTTP/2 connection brackets EVERY frame read with
+     * set/restore of its write deadline, and a fiber-served socket never
+     * pushes SO_SNDTIMEO at all, so dirtying unconditionally made every
+     * blocking read of a pool-served connection pay two setsockopt(). */
+    int           sndtimeo_deadline;
     /* SO_RCVTIMEO/SO_SNDTIMEO not yet pushed to the kernel. Set by
      * nurl_tcp_set_timeout, consumed by the first BLOCKING read/write:
      * a fiber-served connection never blocks, so eagerly issuing the
@@ -2155,8 +2162,9 @@ void nurl_tcp_set_write_deadline(long long handle, long long ns) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return;
     h->write_deadline_ns = ns > 0 ? ns : 0;
-    /* Restore the configured idle timeout when the deadline is cleared. */
-    h->timeo_dirty = 1;
+    /* Restore the configured idle timeout once a deadline remainder has
+     * actually replaced it in the kernel (see sndtimeo_deadline). */
+    if (h->sndtimeo_deadline) h->timeo_dirty = 1;
 }
 
 long long nurl_tcp_write_deadline(long long handle) {
@@ -2206,6 +2214,7 @@ static int nurl__tcp_prepare_write(NurlTcp *h) {
         return 0;
     }
 #endif
+    h->sndtimeo_deadline = 1;
     return 1;
 }
 
@@ -2666,6 +2675,7 @@ long long nurl_tcp_timeout_ms(long long handle) {
 static void nurl__tcp_apply_timeo(NurlTcp *h) {
     long long ms = h->timeout_ms;
     h->timeo_dirty = 0;
+    h->sndtimeo_deadline = 0;
 #ifdef _WIN32
     /* Win32 SO_RCVTIMEO is a DWORD of ms (not a timeval). */
     DWORD tv = (ms > 0) ? (DWORD)ms : 0;

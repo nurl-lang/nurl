@@ -1474,6 +1474,26 @@ $ `stdlib/std/aes_gcm.nu`
     ^ @ !( Vec u ) TlsErr { T wire }
 }
 
+// Pair variant of tls_server_prepare_write: records are cut from
+// `head`‖`body` straight into `out` — the caller's ciphertext FIFO — so a
+// queued HTTP/2 frame (9-byte header + payload) is sealed once with no
+// intermediate plaintext or wire buffer. Same record boundaries as
+// tls_server_write2 over the joined bytes.
+@ tls_server_prepare_write2_to * TlsConn c ( Vec u ) out ( Vec u ) head ( Vec u ) body → !v TlsErr {
+    ? | != . c closed 0 != . c established 1 { ^ @ !v TlsErr { F TlsClosed } } {}
+    : i n + ( vec_len [u] head ) ( vec_len [u] body )
+    ? & != . c fatal_alert 0 > n 0 { ^ @ !v TlsErr { F TlsProtocol } } {}
+    ( _tls_control_to c out 0 )
+    : ~ i off 0
+    ~ < off n {
+        : ~ i hi + off 16384
+        ? > hi n { = hi n } {}
+        ( __srv_enc_rec_pair_to c out 23 head body off hi )
+        = off hi
+    }
+    ^ @ !v TlsErr { T 0 }
+}
+
 // Two-buffer variant for net.nu's tcp_write_all2: records are cut from
 // the logical concatenation `head`‖`body` (see _tls_pair_slice), so the
 // HTTP server's response head and body are never joined into one

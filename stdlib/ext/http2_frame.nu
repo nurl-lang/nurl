@@ -596,20 +596,30 @@ $ `stdlib/std/net.nu`
 }
 
 // A bounded ordered HTTP/2 wire writer. A queued frame is serialized and TLS
-// sealed exactly once; partial socket writes retain their offset. All frames
-// on a connection (including control frames) must share this writer so neither
-// HTTP/2 bytes nor TLS record sequence numbers can interleave on backpressure.
-// queue borrows its frame; flush never waits for writability or reads a socket.
-// The owner alternates flush with receiving and waits for read OR write readiness
-// through tcp_wait_io when both sides need progress. A failed write is fatal.
-: H2FrameWriter { TcpConn tcp ( Vec u ) pending s state i max_pending }
+// sealed exactly once, straight onto the tail of `pending`: the 9-byte header
+// goes through the writer's own scratch `head`, the payload is read from the
+// caller's buffer — no per-frame wire Vec, no second copy. Partial socket
+// writes retain their offset. All frames on a connection (including control
+// frames) must share this writer so neither HTTP/2 bytes nor TLS record
+// sequence numbers can interleave on backpressure. queue borrows its frame and
+// never touches the socket; flush never waits for writability or reads a
+// socket. The owner flushes once per read attempt, so every frame queued
+// while handling one batch of peer frames — the HEADERS and DATA of every
+// response, every WINDOW_UPDATE and ACK — leaves in ONE send, and waits for
+// read OR write readiness through tcp_wait_io when both sides need progress.
+// A failed write is fatal.
+//
+// state: [0] flushed offset into pending, [1] failed, [2] starved — a queue
+// was refused for lack of room, so the owner owes the application a control
+// event once a flush frees some.
+: H2FrameWriter { TcpConn tcp ( Vec u ) pending ( Vec u ) head s state i max_pending }
 
 @ h2_frame_writer TcpConn tcp i max_pending → H2FrameWriter {
-    ^ @ H2FrameWriter { tcp ( vec_new [u] ) ( nurl_zalloc 16 ) max_pending }
+    ^ @ H2FrameWriter { tcp ( vec_new [u] ) ( vec_with_cap [u] 9 ) ( nurl_zalloc 24 ) max_pending }
 }
 
 @ h2_frame_writer_free sink H2FrameWriter writer → v {
-    ( vec_free [u] . writer pending ) ( nurl_free . writer state )
+    ( vec_free [u] . writer pending ) ( vec_free [u] . writer head ) ( nurl_free . writer state )
 }
 
 @ h2_frame_writer_pending H2FrameWriter writer → i {
@@ -625,31 +635,41 @@ $ `stdlib/std/net.nu`
     ^ <= reserve - . writer max_pending ( h2_frame_writer_pending writer )
 }
 
+// The application asked for room and was refused: remember to tell it when
+// a flush makes some.
+@ h2_frame_writer_starve H2FrameWriter writer → v { ( nurl_poke . writer state 2 1 ) }
+
+@ h2_frame_writer_take_starved H2FrameWriter writer → b {
+    : i starved ( nurl_peek . writer state 2 )
+    ? != starved 0 { ( nurl_poke . writer state 2 0 ) } {}
+    ^ != starved 0
+}
+
 @ h2_frame_writer_queue H2FrameWriter writer H2Frame frame i max_frame_size → !v H2FrameErr {
     ? != 0 ( nurl_peek . writer state 1 ) { ^ @ !v H2FrameErr { F H2FrameWriteIo } } {}
-    : i size + 9 ( vec_len [u] . frame payload )
-    ? ! ( h2_frame_writer_room writer size ) { ^ @ !v H2FrameErr { F H2FrameWouldBlock } } {}
-    : ( Vec u ) plain \ ( h2_serialize_frame frame max_frame_size )
-    : !( Vec u ) NetErr encoded ( tcp_prepare_write . writer tcp plain )
-    ( vec_free [u] plain )
-    : ( Vec u ) wire ?? encoded {
-        T data → data F _ → {
+    : i n ( vec_len [u] . frame payload )
+    ? > n max_frame_size { ^ @ !v H2FrameErr { F H2FrameOversized } } {}
+    ? ! ( h2_frame_writer_room writer + 9 n ) {
+        ( h2_frame_writer_starve writer )
+        ^ @ !v H2FrameErr { F H2FrameWouldBlock }
+    } {}
+    : i offset ( nurl_peek . writer state 0 )
+    ? > offset 0 { ( h2_rx_consume . writer pending offset ) ( nurl_poke . writer state 0 0 ) } {}
+    ( vec_clear [u] . writer head )
+    ( h2_push_frame_header . writer head n . frame frame_type . frame flags . frame stream_id )
+    : !v NetErr encoded ( tcp_prepare_write2_to . writer tcp . writer pending . writer head . frame payload )
+    ?? encoded {
+        T _ → ^ @ !v H2FrameErr { T 0 }
+        F _ → {
             ( nurl_poke . writer state 1 1 )
             ^ @ !v H2FrameErr { F H2FrameWriteIo }
         }
     }
-    : i offset ( nurl_peek . writer state 0 )
-    ? > offset 0 { ( h2_rx_consume . writer pending offset ) ( nurl_poke . writer state 0 0 ) } {}
-    ( vec_extend [u] . writer pending wire )
-    ( vec_free [u] wire )
-    ^ @ !v H2FrameErr { T 0 }
 }
 
 @ h2_frame_writer_flush H2FrameWriter writer → !i H2FrameErr {
     ? != 0 ( nurl_peek . writer state 1 ) { ^ @ !i H2FrameErr { F H2FrameWriteIo } } {}
-    ?? ( h2_frame_writer_controls writer ) {
-        T _ → {} F e → { ^ @ !i H2FrameErr { F e } }
-    }
+    ( h2_frame_writer_controls writer )
     ? == ( h2_frame_writer_pending writer ) 0 { ^ @ !i H2FrameErr { T 0 } } {}
     : i offset ( nurl_peek . writer state 0 )
     : !i NetErr sent ( tcp_try_write_wire . writer tcp . writer pending offset )
@@ -671,22 +691,9 @@ $ `stdlib/std/net.nu`
 // TLS control records belong to the same ciphertext FIFO as application data.
 // A read can request a KeyUpdate reply even when no new HTTP/2 frame is queued.
 // Leave its encoding pending until capacity exists; already queued bytes must
-// retain both their order and their original TLS key generation.
-@ h2_frame_writer_controls H2FrameWriter writer → !v H2FrameErr {
-    ? < - . writer max_pending ( h2_frame_writer_pending writer ) 64 {
-        ^ @ !v H2FrameErr { T 0 }
-    } {}
-    : ( Vec u ) control ?? ( tcp_prepare_control . writer tcp ) {
-        T data → data F _ → {
-            ( nurl_poke . writer state 1 1 )
-            ^ @ !v H2FrameErr { F H2FrameWriteIo }
-        }
-    }
-    ? > ( vec_len [u] control ) 0 {
-        : i offset ( nurl_peek . writer state 0 )
-        ? > offset 0 { ( h2_rx_consume . writer pending offset ) ( nurl_poke . writer state 0 0 ) } {}
-        ( vec_extend [u] . writer pending control )
-    } {}
-    ( vec_free [u] control )
-    ^ @ !v H2FrameErr { T 0 }
+// retain both their order and their original TLS key generation. Appending
+// behind the flushed prefix is fine: only pending[offset..) is ever sent.
+@ h2_frame_writer_controls H2FrameWriter writer → v {
+    ? < - . writer max_pending ( h2_frame_writer_pending writer ) 64 { ^ } {}
+    : i appended ( tcp_prepare_control_to . writer tcp . writer pending )
 }
