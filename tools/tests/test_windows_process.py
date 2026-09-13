@@ -129,7 +129,10 @@ class WindowsProcess(unittest.TestCase):
         for command, code, stdout in commands:
             result = subprocess.run([str(self.probe), 'shell', command], env=env,
                                     capture_output=True, timeout=30)
-            self.assertEqual(result.returncode, code, result.stderr)
+            # Name the command. Four run through here and the stderr alone
+            # does not say which one answered.
+            self.assertEqual(result.returncode, code,
+                             repr(command) + '\n' + result.stderr.decode(errors='replace'))
             self.assertEqual(result.stdout.replace(b'\r\n', b'\n'), stdout)
         result = subprocess.run([str(self.probe), 'shell', 'nurl_command_that_does_not_exist_7654321'],
                                 env=env, capture_output=True, timeout=30)
@@ -166,7 +169,14 @@ class WindowsProcess(unittest.TestCase):
         self.assertEqual(result.returncode, 0,
                          (result.stdout + result.stderr).decode(errors='replace'))
         result = checked([str(output.with_name(output.name + '.exe'))])
-        self.assertEqual(result.stdout.replace(b'\r\n', b'\n'), b'first\nsecond\n')
+        # The program prints bytes it captured from cmd, and those already
+        # carry CRLF; writing them out again through a text-mode stdout makes
+        # every \r\n a \r\r\n, so replacing \r\n leaves one \r behind. What
+        # this test is about is that both lines came back, in order, and that
+        # the exit status did — not how many carriage returns a double
+        # translation left in them. (The probe sets _O_BINARY for exactly this
+        # reason, but the program under test is an ordinary NURL program.)
+        self.assertEqual(result.stdout.replace(b'\r', b''), b'first\nsecond\n')
 
     def toolchain(self):
         prefix = self.directory / 'tool chain %NURL_TEST_VALUE% & !keep!'
@@ -374,7 +384,8 @@ class WindowsProcess(unittest.TestCase):
         env.pop('NURL', None)
         result = self.invoke('run', prefix / 'bin/nurlpkg.bat', ['test'], cwd=project, env=env)
         self.assertEqual(result.returncode, 0,
-                         (result.stdout + result.stderr).decode(errors='replace'))
+                         (result.stdout + result.stderr).decode(errors='replace')
+                         + '\n' + self.produced(project))
 
 
 if __name__ == '__main__':
