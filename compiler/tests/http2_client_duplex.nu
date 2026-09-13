@@ -5,11 +5,23 @@
 $ `stdlib/ext/http2_client.nu`
 $ `stdlib/std/thread.nu`
 
+// Name the failing half on the way out. A bare T/F golden says a duplex
+// exchange went wrong somewhere in a megabyte, which is the same report for
+// a rejected socket option and for a stalled write loop.
+@ note s label b value → b {
+    ? ! value { ( nurl_print label ) ( nurl_print `=F\n` ) } {}
+    ^ value
+}
+
 @ small_send_buffer TcpConn tcp → b {
     : b zero ?? ( tcp_set_send_buffer tcp 0 ) { T _ → F F _ → T }
     : b negative ?? ( tcp_set_send_buffer tcp -1 ) { T _ → F F _ → T }
     : b overflow ?? ( tcp_set_send_buffer tcp 2147483648 ) { T _ → F F _ → T }
     : b valid ?? ( tcp_set_send_buffer tcp 4096 ) { T _ → T F _ → F }
+    ( note `sndbuf_rejects_zero` zero )
+    ( note `sndbuf_rejects_negative` negative )
+    ( note `sndbuf_rejects_overflow` overflow )
+    ( note `sndbuf_accepts_4096` valid )
     ^ & & zero negative & overflow valid
 }
 
@@ -130,6 +142,10 @@ $ `stdlib/std/thread.nu`
         ?? ( h2_frame_writer_flush writer ) { T _ → {} F _ → { = ok F } }
         ? > ( h2_frame_writer_pending writer ) 0 { : i ready ( tcp_wait_io tcp T T 100 ) } {}
     }
+    ( note `peer_ok` ok )
+    ( note `peer_saw_backpressure` pressure )
+    ( note `peer_received_all` == received 1048576 )
+    ( note `peer_sent_end_stream` response_end )
     ( vec_set [i] outcome 0 ? & & & ok pressure == received 1048576 response_end 1 0 )
     // A completed response can leave WINDOW_UPDATE frames in flight. Drain
     // until the client closes, so closing this raw test peer does not reset
@@ -190,6 +206,8 @@ $ `stdlib/std/thread.nu`
         F _ → { = ok F }
     }
     ?? worker { T thread → { : i ignored ( thread_join thread ) } F _ → { = ok F } }
+    ( note `client_ok` ok )
+    ( note `peer_outcome` == . ( vec_data [i] outcome ) 0 1 )
     = ok & ok == . ( vec_data [i] outcome ) 0 1
     ( vec_free [i] outcome ) ( tcp_close_listener listener )
     ( nurl_print ? ok `duplex_small_buffers=T\n` `duplex_small_buffers=F\n` )

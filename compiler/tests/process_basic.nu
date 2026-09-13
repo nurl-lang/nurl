@@ -66,10 +66,22 @@ $ `stdlib/std/process.nu`
     }
 
     // 4. shell pipeline: write to stderr, non-zero exit.
-    //    `printf` is mandated by POSIX shells.
-    : !Output ProcessErr r4 ( process_run_shell `printf oops 1>&2; exit 7` )
+    //    `printf` and `;` are mandated by POSIX shells and cmd.exe has
+    //    neither, so each shell states the same contract in its own
+    //    syntax: send a word to stderr, then exit 7. The verdict is
+    //    normalised rather than golden-ing raw bytes — the exact stderr
+    //    spelling (and, on Windows, whether some printf.exe happens to
+    //    sit on PATH) is not what this test is about.
+    : b cmd_shell == ( posix_const `O_NONBLOCK` ) -1
+    : !Output ProcessErr r4 ( process_run_shell
+    ? cmd_shell `>&2 echo oops& exit 7` `printf oops 1>&2; exit 7` )
     ?? r4 {
-        T o → { ( show_output `4` o ) ( output_free o ) }
+        T o → {
+            : b verdict & & == ( output_exit_code o ) 7 ! ( output_success o )
+            >= ( nurl_str_find ( output_stderr o ) `oops` ) 0
+            ( nurl_print ? verdict `4=stderr+exit7\n` `4=unexpected\n` )
+            ( output_free o )
+        }
         F e → ( show_err `4` # ProcessErr e )
     }
 

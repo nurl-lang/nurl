@@ -1567,6 +1567,15 @@ void nurl__reactor_wake_if_started(void);
 #ifdef _WIN32
 static long long nurl__net_map_wsa(int we, long long deflt) {
     switch (we) {
+    /* The twin of EAGAIN/EWOULDBLOCK below, and it must land on the same
+     * code: the nonblocking paths (nurl_tcp_write_nowait /
+     * nurl_tcp_read_nowait) tell "the buffer is full, retry" apart from a
+     * dead connection ONLY by NURL_NET_ERR_TIMEOUT. Without this case a
+     * would-block fell through to the caller's default — WRITE or READ —
+     * so on Windows every write that met backpressure was a terminal
+     * error, and an HTTP/2 client with a small send buffer failed its
+     * first big request instead of waiting for the peer to drain. */
+    case WSAEWOULDBLOCK:
     case WSAETIMEDOUT:    return NURL_NET_ERR_TIMEOUT;
     case WSAEADDRINUSE:   return NURL_NET_ERR_ADDRINUSE;
     case WSAECONNRESET:

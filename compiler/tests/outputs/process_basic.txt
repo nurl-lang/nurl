@@ -15,10 +15,7 @@ OUTPUT
 3=F
 3=<>
 3=<>
-4=7
-4=F
-4=<>
-4=<oops>
+4=stderr+exit7
 5=0
 5=T
 5=<from stdin
