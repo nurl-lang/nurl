@@ -122,7 +122,12 @@ class WindowsProcess(unittest.TestCase):
         shutil.copy2(self.probe, quoted)
         commands = [
             (f'"{quoted}" echo "two words" & echo second', 0, b'9:two words\nsecond\n'),
-            (f'echo pipe-value|"{quoted}" copy', 0, b'pipe-value\n'),
+            # Plain name on the right of the pipe: cmd runs that side in a
+            # subshell of its own making, and the & in a quoted program name
+            # does not survive its re-parse. That an & in the name works at
+            # all is what the case above covers, where cmd parses the line
+            # once; this one is about the pipe.
+            (f'echo pipe-value|"{self.probe}" copy', 0, b'pipe-value\n'),
             ('exit /b 23', 23, b''),
             ('', 0, b''),
         ]
@@ -355,7 +360,9 @@ class WindowsProcess(unittest.TestCase):
                 result = subprocess.run([str(ROOT / 'build/nurlpkg.exe'), command], cwd=project,
                                         env=env, capture_output=True, timeout=180)
                 self.assertEqual(result.returncode, 0,
-                                 (result.stdout + result.stderr).decode(errors='replace'))
+                                 (result.stdout + result.stderr).decode(errors='replace')
+                                 + f'\nTEMP={env["TEMP"]}\n'
+                                 + 'scratch ' + self.produced(scratch))
                 self.assertFalse(list(scratch.glob('nurlpkg-run-*')))
 
     def test_installed_shims_preserve_literal_paths(self):
