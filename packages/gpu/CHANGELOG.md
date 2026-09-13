@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.12.0
+
+`gpu_free`, `gpu_kernel_free`, `gpu_host_free`, `gpu_timer_free` and
+`gpu_graph_free` now take **`sink`** parameters, as do the backend frees
+behind them — `cpu_free`, `cpu_module_free`, `cuda_free`,
+`cuda_host_free`, `cuda_event_free` and `cuda_graph_free`.
+
+The compiler-ownership hardening in the toolchain (#1107) reached these
+signatures: a free function must consume the handle it releases, so the
+checker can prove the caller cannot use it again. The change landed in the
+monorepo at the time but this package was never republished, so the
+registry has been serving 0.11.3 — the same version number, different
+source — ever since. That is what this release closes.
+
+For a caller the effect is the ownership rule, not the call: the value is
+gone after the free, and using it again is now a compile error instead of a
+use-after-free. Code that already treated it that way needs no edit.
+
 ## 0.11.3
 
 - **The striped upload copy no longer leaks its closures.** `__gpu_par_memcpy`
