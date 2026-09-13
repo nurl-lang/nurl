@@ -140,7 +140,9 @@ REM Name the directory that was searched. "not found in build\" describes a
 REM layout, not a location, and the two differ exactly when this fails: the
 REM install is where it should be and the driver is looking somewhere else.
 echo ERROR: nurlc.exe not found in build\, next to this script, or in PATH
-echo        searched: !SCRIPTDIR!
+REM Quoted: an unquoted & in the value ends the echo, and the line then
+REM reports a prefix of the path as if it were the whole of it.
+echo        searched: "!SCRIPTDIR!"
 echo        Run build.bat first to build nurlc.exe
 exit /b 1
 
