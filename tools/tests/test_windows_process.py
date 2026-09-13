@@ -177,12 +177,32 @@ class WindowsProcess(unittest.TestCase):
         shutil.copy2(ROOT / 'stdlib/runtime.o', prefix / 'stdlib/runtime.o')
         return prefix
 
+    def produced(self, directory):
+        """Every artifact under `directory`, one per line.
+
+        A driver that reports success and leaves nothing at the requested
+        path has put it somewhere else, and the name it chose instead is
+        the whole diagnosis — %VAR% expanded, !VAR! eaten, the path
+        truncated at an unquoted &. Opening the child's exe by its expected
+        name answers that with FileNotFoundError, which names only what is
+        absent. Name what is present.
+        """
+        try:
+            found = sorted(entry.name for entry in directory.iterdir())
+        except OSError as error:
+            return f'(cannot list {directory}: {error})'
+        return '\n'.join(['produced:', *(f'  {name}' for name in found)] or ['produced: nothing'])
+
     def compile_program(self, driver, source, output, flags=(), env=None):
         result = self.invoke('run', driver, [*flags, source, output], env=env or self.env,
                              cwd=self.directory)
         self.assertEqual(result.returncode, 0,
                          (result.stdout + result.stderr).decode(errors='replace'))
         executable = output.with_name(output.name + '.exe')
+        self.assertTrue(executable.exists(),
+                        f'driver reported success but {executable.name} is not there\n'
+                        + (result.stdout + result.stderr).decode(errors='replace')
+                        + '\n' + self.produced(self.directory))
         result = checked([str(executable)])
         self.assertEqual(result.stdout.strip(), b'literal paths ok')
         self.assertFalse(list(self.directory.glob('*.link.*')))
