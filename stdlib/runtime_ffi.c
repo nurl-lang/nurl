@@ -370,7 +370,27 @@ static int nurl__proc_prepare_launch(const char *cmd, const char *const *args,
         return 0;
     }
     memcpy(command_prompt + length, "\\cmd.exe", sizeof("\\cmd.exe"));
+    /* This path is about to be embedded in a cmd.exe command line, and
+     * quoting it there is not enough: an & inside the quotes still ends the
+     * command, and the batch's own %0 comes back cut off at it. A driver
+     * installed in a directory whose name carries one then resolves %~dp0 to
+     * one level UP and reports that its compiler was never built. The %
+     * guard below has the same job for %VAR%; & has no such spelling, so
+     * take the short (8.3) name of the same file, which carries no &, %, !
+     * or space. Where the volume has 8.3 names disabled the call says so and
+     * the long path is used exactly as before. */
+    char *shortened = NULL;
+    DWORD compact = GetShortPathNameA(cmd, NULL, 0);
+    if (compact) {
+        shortened = (char *)malloc((size_t)compact + 1);
+        if (shortened) {
+            DWORD written = GetShortPathNameA(cmd, shortened, compact + 1);
+            if (written && written <= compact) cmd = shortened;
+            else { free(shortened); shortened = NULL; }
+        }
+    }
     int result = nurl__proc_build_launch(cmd, args, argc, command_prompt, out);
+    free(shortened);
     free(resolved);
     return result;
 }
