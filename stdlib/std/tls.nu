@@ -2119,6 +2119,27 @@ $ `stdlib/std/async_ffi.nu`
     ^ @ !( Vec u ) TlsErr { T wire }
 }
 
+// Pair variant of tls_prepare_write: records cut from `head`‖`body` are
+// sealed straight into `out`, the caller's ciphertext FIFO. No socket I/O.
+@ tls_prepare_write2_to * TlsConn c ( Vec u ) out ( Vec u ) head ( Vec u ) body → !v TlsErr {
+    ? | != . c closed 0 != . c established 1 { ^ @ !v TlsErr { F TlsClosed } } {}
+    : i n + ( vec_len [u] head ) ( vec_len [u] body )
+    ? & != . c fatal_alert 0 > n 0 { ^ @ !v TlsErr { F TlsProtocol } } {}
+    ( _tls_control_to c out 1 )
+    : ~ i off 0
+    ~ < off n {
+        : ~ i hi + off 16384
+        ? > hi n { = hi n } {}
+        : ( Vec u ) part ( _tls_pair_slice head body off hi )
+        ? == . c version 12 {
+            ( _tls_record12_to c out 23 part )
+            ( vec_free [u] part )
+        } { ( _tls_seal_inner_to c out 23 part ) }
+        = off hi
+    }
+    ^ @ !v TlsErr { T 0 }
+}
+
 // Two-buffer variant of tls_write (client side of tcp_write_all2):
 // records are cut from `head`‖`body` without joining the two first.
 // TLS 1.3 assembles each record's plaintext straight from the pair;
