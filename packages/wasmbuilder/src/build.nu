@@ -73,6 +73,15 @@ $ `toolchain.nu`
     // ever points at table renumbering again (see the link-flags
     // note at the top of this file). Costs ~25 % module size and
     // most of a JIT runtime's module-load floor.
+    b debug  // keep the DWARF sections instead of the default
+    // --strip-debug. Off by default so the wasm artefact matches
+    // what `nurl.sh` produces natively, where debug info is what
+    // `-g` asks for and 17 KB is what you get without it. A wasm
+    // module is a SHIPPING artefact — it goes over a network
+    // before it runs — and the debug info dominates it: an empty
+    // program links to 1,126,353 bytes of which 3,070 are code
+    // and 1,121,271 are DWARF. Stripping is a link flag, not a
+    // post-pass, so it needs no binaryen and costs no build time.
 }
 
 // Split a space-separated flag string into owned Strings (caller frees).
@@ -102,7 +111,7 @@ $ `toolchain.nu`
 }
 
 @ wb_opts_default → WbOpts {
-    ^ @ WbOpts { `-O2` T F F F `` `` `` F F }
+    ^ @ WbOpts { `-O2` T F F F `` `` `` F F F }
 }
 
 @ __wb_say b quiet s msg → v {
@@ -287,6 +296,12 @@ $ `toolchain.nu`
     ? . opts no_gc_sections
     { ( vec_push [s] args `-Wl,--no-gc-sections` ) }
     { ( vec_push [s] args `-Wl,--gc-sections` ) }
+    // DWARF is 99.6 % of an unstripped module and nothing in the default
+    // pipeline asks for it. wasm-ld drops it at link time; the asyncify
+    // path below reaches for binaryen's --strip-dwarf for its own reason
+    // (wasm-opt aborts on these tables), which is the same removal one
+    // tool later and does not cover the default build.
+    ? . opts debug {} { ( vec_push [s] args `-Wl,--strip-debug` ) }
     ? > ( nurl_str_len . opts extra_cflags ) 0 {
         // split the space-separated flag string into separate argv slots
         : ( Vec String ) fl ( string_split_borrow . opts extra_cflags )

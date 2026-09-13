@@ -67,6 +67,7 @@ wasmbuilder <file.nu> [options]
       --cflags FLAGS       extra compile/link flags, space-separated
                            (e.g. "-msimd128" for wasm SIMD)
       --no-gc-sections     keep unreachable code at link time — see below
+  -g, --debug              keep the DWARF debug sections — see below
       --no-host-imports    don't pass --ffi-host-imports to nurlc
   -q, --quiet              suppress progress output
       --doctor             show how nurlc / zig / runtime resolve here
@@ -104,6 +105,30 @@ please report it. Use the flag rather than
 `--cflags "-Wl,--no-gc-sections"` — the latter appends after the flag
 this builder already passes and leaves the outcome to wasm-ld's
 last-one-wins ordering.
+
+### DWARF is stripped by default (and `-g` keeps it)
+
+Since 0.3.0 modules are linked with `-Wl,--strip-debug`. A wasm module is
+a *shipping* artefact — it crosses a network before it runs — and the
+debug info dominated it completely: the empty program linked to
+**1,126,353 bytes, of which 3,070 were code and 1,121,271 were DWARF**.
+Stripped, the same program is 3,889 bytes; `bench/sort_window.nu` goes
+from 1,149,844 to 26,965.
+
+This makes the wasm default match the native one. `nurl.sh` has always
+treated debug info as something you *ask* for with `-g`, which is why a
+native NURL binary is ~17 KB; the wasm path shipped it unconditionally
+and offered no way to turn it off short of post-processing with
+`wasm-tools strip` or binaryen. Nothing else changes: stripping happens
+in wasm-ld, so it needs no extra tool and costs no build time, the code
+and data sections are untouched, and both `wasmtime` and `packages/nwasm`
+run the result bit-identically (module-load time measured unchanged —
+a runtime skips custom sections anyway).
+
+`-g` / `--debug` (library: `WbOpts.debug`) keeps every debug section, for
+source-level stepping in a browser's devtools or `wasmtime`'s debugger.
+Use the flag rather than `--cflags "-Wl,--strip-debug"`-style workarounds,
+for the same last-one-wins reason as `--no-gc-sections` above.
 
 ## Library use (embed the builder)
 
