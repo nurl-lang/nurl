@@ -6563,6 +6563,53 @@
     = . types idx grown
 }
 
+// Append `word` to the space-separated list under `name`, WHEREVER in
+// the scope chain that name lives — the depth rule of nurl_sym_set_deep
+// with the in-place growth of nurl_sym_append above.
+//
+// `__park_append` spelled this get + cat3 + set_deep, which is the same
+// three-copies-per-append shape nurl_sym_append was written to kill,
+// one scope rule over: the fix landed on the current-scope spelling and
+// the parked lists kept the bug. They are the compiler's largest
+// accumulators — the pending-implication list reaches 363 KB on a large
+// import closure, and building it copied 1.2 GB. That is the
+// superlinear term in every frontend compile, and it grows with the
+// import closure, so it is worst exactly where compiles already hurt.
+//
+// The separator is part of the contract: a list's words are joined by a
+// single space, and only a non-empty list needs one, which is a fact the
+// append already knows and the caller would have to re-derive.
+@ nurl_sym_append_word i h s name s word → v {
+    : s t # s h
+    : i count ( nurl_peek t 0 )
+    : *s names # *s # s ( nurl_peek t 3 )
+    : *s types # *s # s ( nurl_peek t 4 )
+    : *i buckets # *i # s ( nurl_peek t 7 )
+    : *i prev # *i # s ( nurl_peek t 8 )
+    : i bh ( __sym_hash name ( nurl_peek t 6 ) )
+    // Same newest-first bucket walk as nurl_sym_set_deep, so the entry
+    // this grows is the entry nurl_sym_get would read back.
+    : ~ i cur . buckets bh
+    ~ != cur 0 {
+        : i idx - cur 1
+        ? >= idx count { = cur 0 } {
+            ? == 0 # i ( strcmp name . names idx )
+            { : s old . types idx
+                : i ol ( nurl_str_len old )
+                : i wl ( nurl_str_len word )
+                : i sep ? == ol 0 0 1
+                : s grown # s ( nurl_realloc # *u old + + + ol sep wl 1 )
+                : *u gp # *u grown
+                ? == sep 1 { = . gp ol # u 32 } {}
+                ( memcpy # s + # i gp + ol sep word + wl 1 )
+                = . types idx grown
+                ^ v }
+            { = cur . prev idx }
+        }
+    }
+    ( nurl_sym_def h name word )
+}
+
 // Index of the newest entry for `name` when it sits at the CURRENT
 // depth, else -1 (absent, or only defined by an enclosing scope).
 @ __sym_find_here i h s name → i {
@@ -23189,6 +23236,43 @@
     ( nurl_str_slice str pos - slen pos )
 }
 
+// ── Cursor walk over a space-separated list ──────────────────────
+//
+// `str_first_word` + `str_skip_word` answer "next word, then the rest"
+// by allocating BOTH the word and a copy of the entire remaining tail,
+// and each of those allocations re-derives the list length with strlen.
+// Walking a W-word, L-byte list that way moves O(L^2) bytes and scans
+// O(W*L) more looking for the terminator — invisible on the short lists
+// the pair was written for, and the dominant cost of a frontend compile
+// on the parked implication lists, which reach 363 KB.
+//
+// These two are the same walk with the length hoisted: the caller keeps
+// a byte offset, so nothing but the word it asked for is ever copied.
+// `__word_end` finds the end of the word at `pos`; the next word starts
+// one byte past it.
+@ __word_end s list i n i pos → i {
+    : *u p # *u list
+    : ~ i k pos
+    ~ & < k n != 32 # i . p k { = k + k 1 }
+    k
+}
+
+// The byte span [pos, end) of `list` as a fresh string. `nurl_str_slice`
+// is this with a strlen in front of it to clamp the range; a cursor walk
+// already knows the length, and on a 363 KB list that strlen costs far
+// more than the handful of bytes being copied.
+@ __span_dup s list i pos i end → s {
+    : ~ i k - end pos
+    ? < k 0 { = k 0 } {}
+    : s r # s ( nurl_alloc + k 1 )
+    : *u sp # *u list
+    ( memcpy r # s + # i sp pos k )
+    : *u rp # *u r
+    : u zero # u 0
+    = . rp k zero
+    ^ r
+}
+
 // str_contains_word: true if 'word' appears as a whole word in space-separated 'list'.
 // Is `word` a whole word of the space-separated `list`?
 //
@@ -23620,13 +23704,10 @@
 
 // Append one space-separated record to a symbol-map list under `key`.
 // The parked-work lists (implications, deferred checks) all grow this
-// way; the ternary keeps both arms owning, which is what stops the
-// join from leaking its copy.
+// way, and they are the compiler's largest, so the append has to grow
+// the list in place rather than rebuild it — see nurl_sym_append_word.
 @ __park_append i m s key s rec → v {
-    : s cur ( nurl_sym_get m key )
-    ( nurl_sym_set_deep m key
-    ? == 0 ( nurl_str_len cur ) ( nurl_str_cat rec `` )
-    ( nurl_str_cat3 cur ` ` rec ) )
+    ( nurl_sym_append_word m key rec )
 }
 
 // Move the 4-word implication records a body parked in `syms` into the
@@ -24030,13 +24111,15 @@
 // True when anything was added.
 @ __resolve_impl_round s key i dst → b {
     : ~ b changed F
-    : ~ s rest ( nurl_sym_get g_pending_impl key )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s fnm ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s pidx ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s cn ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s fn ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s aidx ( str_first_word rest ) = rest ( str_skip_word rest )
+    : s rest ( nurl_sym_get g_pending_impl key )
+    : i rn ( nurl_str_len rest )
+    : ~ i pos 0
+    ~ < pos rn {
+        : i e1 ( __word_end rest rn pos ) : s fnm ( __span_dup rest pos e1 ) = pos + e1 1
+        : i e2 ( __word_end rest rn pos ) : s pidx ( __span_dup rest pos e2 ) = pos + e2 1
+        : i e3 ( __word_end rest rn pos ) : s cn ( __span_dup rest pos e3 ) = pos + e3 1
+        : i e4 ( __word_end rest rn pos ) : s fn ( __span_dup rest pos e4 ) = pos + e4 1
+        : i e5 ( __word_end rest rn pos ) : s aidx ( __span_dup rest pos e5 ) = pos + e5 1
         // Mangled name first, then the generic name — the same lookup
         // order gen_call uses, so a generic callee resolves through its
         // instantiation or through the template, whichever carries it.
