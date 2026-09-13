@@ -270,25 +270,7 @@ $ `stdlib/std/aes_gcm.nu`
 // Seal `inner` (plaintext WITHOUT the type byte yet; consumed here) as
 // one TLS 1.3 record under the server write keys, appended to `out`.
 @ __srv_seal_inner_to * TlsConn c ( Vec u ) out i content_type ( Vec u ) inner → v {
-    ( vec_push [u] inner # u content_type )
-    : i total + ( vec_len [u] inner ) 16
-    : ( Vec u ) aad ( vec_with_cap [u] 5 )
-    ( vec_push [u] aad # u 23 )
-    ( vec_push [u] aad # u 3 )
-    ( vec_push [u] aad # u 3 )
-    ( _tls_u16 aad total )
-    : ( Vec u ) nonce ( _nonce . c s_iv . c s_seq )
-    : ( Vec u ) sealed ( _aead_seal . c cipher . c s_key nonce aad inner )
-    ( vec_push [u] out # u 23 )
-    ( vec_push [u] out # u 3 )
-    ( vec_push [u] out # u 3 )
-    ( _tls_u16 out total )
-    ( _tls_cat out sealed )
-    ( vec_free [u] inner )
-    ( vec_free [u] aad )
-    ( vec_free [u] nonce )
-    ( vec_free [u] sealed )
-    = . c s_seq + . c s_seq 1
+    ( _tls_seal_direction_to c out 0 content_type inner )
 }
 
 // Append one PLAINTEXT record (rtype, body) to `out` — the unencrypted
@@ -307,6 +289,7 @@ $ `stdlib/std/aes_gcm.nu`
     ( __srv_enc_rec_to c rec content_type content )
     : b w ( _tls_sock_write . c fd rec )
     ( vec_free [u] rec )
+    ? ! w { = . c closed 1 } {}
     ^ ? w @ !v TlsErr { T 0 } @ !v TlsErr { F # TlsErr TlsWrite }
 }
 
@@ -1198,6 +1181,11 @@ $ `stdlib/std/aes_gcm.nu`
     ? <= raw 0 { ^ @ !*TlsConn TlsErr { F # TlsErr TlsConnect } } {}
     : *TlsConn c ( nurl_alloc Z TlsConn )
     = . c fd raw
+    = . c read_nowait 0
+    = . c s_secret ( vec_new [u] )
+    = . c c_secret ( vec_new [u] )
+    = . c update_pending 0
+    = . c fatal_alert 0
     = . c rxbuf ( vec_new [u] )
     = . c hsbuf ( vec_new [u] )
     = . c appbuf ( vec_new [u] )
@@ -1449,6 +1437,8 @@ $ `stdlib/std/aes_gcm.nu`
 // header's u16 length wraps (a >64 KB response used to come out as
 // garbage the client reported as "bad record mac").
 @ tls_server_write * TlsConn c ( Vec u ) data → !v TlsErr {
+    ?? ( _tls_flush_control c 0 ) { T _ → {} F error → { ^ @ !v TlsErr { F error } } }
+    ? != . c closed 0 { ^ @ !v TlsErr { F TlsClosed } } {}
     : i n ( vec_len [u] data )
     ? <= n 16384 { ^ ( __srv_send_enc c 23 data ) } {}
     : ~ i off 0
@@ -1464,12 +1454,34 @@ $ `stdlib/std/aes_gcm.nu`
     ^ @ !v TlsErr { T 0 }
 }
 
+// Server-direction counterpart of tls_prepare_write; no socket I/O.
+@ tls_server_prepare_write * TlsConn c ( Vec u ) data → !( Vec u ) TlsErr {
+    ? | != . c closed 0 != . c established 1 {
+        ^ @ !( Vec u ) TlsErr { F TlsClosed }
+    } {}
+    ? & != . c fatal_alert 0 > ( vec_len [u] data ) 0 { ^ @ !( Vec u ) TlsErr { F TlsProtocol } } {}
+    : ( Vec u ) wire ( vec_new [u] )
+    ( _tls_control_to c wire 0 )
+    : ~ i offset 0
+    : i size ( vec_len [u] data )
+    ~ < offset size {
+        : i end ? < - size offset 16384 size + offset 16384
+        : ( Vec u ) part ( bytes_slice data offset end )
+        ( __srv_enc_rec_to c wire 23 part )
+        ( vec_free [u] part )
+        = offset end
+    }
+    ^ @ !( Vec u ) TlsErr { T wire }
+}
+
 // Two-buffer variant for net.nu's tcp_write_all2: records are cut from
 // the logical concatenation `head`‖`body` (see _tls_pair_slice), so the
 // HTTP server's response head and body are never joined into one
 // plaintext buffer first. Record boundaries are identical to
 // tls_server_write over the joined bytes — same wire, one copy less.
 @ tls_server_write2 * TlsConn c ( Vec u ) head ( Vec u ) body → !v TlsErr {
+    ?? ( _tls_flush_control c 0 ) { T _ → {} F error → { ^ @ !v TlsErr { F error } } }
+    ? != . c closed 0 { ^ @ !v TlsErr { F TlsClosed } } {}
     : i n + ( vec_len [u] head ) ( vec_len [u] body )
     : ~ i off 0
     ~ < off n {
@@ -1479,7 +1491,7 @@ $ `stdlib/std/aes_gcm.nu`
         ( __srv_enc_rec_pair_to c rec 23 head body off hi )
         : b w ( _tls_sock_write . c fd rec )
         ( vec_free [u] rec )
-        ? w {} { ^ @ !v TlsErr { F # TlsErr TlsWrite } }
+        ? w {} { = . c closed 1 ^ @ !v TlsErr { F # TlsErr TlsWrite } }
         = off hi
     }
     ^ @ !v TlsErr { T 0 }
@@ -1493,6 +1505,10 @@ $ `stdlib/std/aes_gcm.nu`
 // noticed). Send the alert under s_key/s_seq here, then let tls_close
 // do the shared teardown (its alert is skipped once closed = 1).
 @ tls_server_close * TlsConn c → v {
+    ? != . c fatal_alert 0 {
+        : !v TlsErr sent ( _tls_flush_control c 0 )
+        ?? sent { T _ → {} F _ → {} }
+    } {}
     ? & == . c closed 0 == . c established 1 {
         : ( Vec u ) alert ( vec_with_cap [u] 2 )
         ( vec_push [u] alert # u 1 )
@@ -1506,6 +1522,11 @@ $ `stdlib/std/aes_gcm.nu`
 
 @ tls_server_read * TlsConn c i max → !( Vec u ) TlsErr {
     ~ & == ( vec_len [u] . c appbuf ) 0 == . c closed 0 {
+        ? != . c fatal_alert 0 { ^ @ !( Vec u ) TlsErr { F TlsProtocol } } {}
+        ? != . c update_pending 0 {
+            ? != . c read_nowait 0 { ^ @ !( Vec u ) TlsErr { F TlsRead } } {}
+            ?? ( _tls_flush_control c 0 ) { T _ → {} F error → { ^ @ !( Vec u ) TlsErr { F error } } }
+        } {}
         : !TlsRecord TlsErr rr ( _read_record c )
         ?? rr {
             F e → {
@@ -1522,8 +1543,22 @@ $ `stdlib/std/aes_gcm.nu`
                         T inner → {
                             ( vec_free [u] . rec body )
                             : i ct ( _inner_type inner )
-                            ? == ct 23 { ( _tls_cat . c appbuf inner ) } {
+                            ? == ct 23 {
+                                ? != ( vec_len [u] . c hsbuf ) 0 {
+                                    ( vec_free [u] inner )
+                                    : !v TlsErr failed ( _tls_post_fail c 1 10 )
+                                    ?? failed { T _ → {} F _ → {} }
+                                    ^ @ !( Vec u ) TlsErr { F TlsProtocol }
+                                } {}
+                                ( _tls_cat . c appbuf inner )
+                            } {
                                 ? == ct 21 { = . c closed 1 } {}
+                                ? == ct 22 {
+                                    ?? ( _tls_post_hs c inner 1 ) {
+                                        T _ → {}
+                                        F error → { ( vec_free [u] inner ) ^ @ !( Vec u ) TlsErr { F error } }
+                                    }
+                                } {}
                             }
                             ( vec_free [u] inner )
                         }

@@ -116,9 +116,8 @@ $ `tools/nurlfmt/format.nu`
     : ( Vec String ) paths ( vec_with_cap [String] 4 )
     : ~ i idx 1
     ~ & < idx argc & == rc 0 ! version_mode {
-        // This public accessor returns a manually-owned heap copy.
-        // Paths adopt it without another byte copy; flag values are freed
-        // here. Every collected String is released at the single exit below.
+        // Paths adopt the owned argv copy; flags are auto-dropped here.
+        // Every collected String is released at the single exit below.
         : s a ( nurl_argv_get idx )
         : ~ b path_arg options_done
         ? ! options_done {
@@ -141,7 +140,7 @@ $ `tools/nurlfmt/format.nu`
         } {}
         ? path_arg {
             ( vec_push [String] paths ( string_from_take a + ( nurl_str_len a ) 1 ) )
-        } { ( nurl_free a ) }
+        } {}
         = idx + idx 1
     }
     : i nfiles ( vec_len [String] paths )

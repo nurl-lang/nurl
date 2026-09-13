@@ -40,6 +40,7 @@ $ `stdlib/ext/manifest.nu`
     PkgBadIdentity  // URL/index/archive does not identify the requested package
     PkgUntrustedRegistry  // no signing key configured for this registry
     PkgTrustConfig  // malformed or unreadable explicit trust configuration
+    PkgToolchain  // package requires a newer compiler/stdlib/runtime
 }
 
 @ pkg_err_name PkgFetchErr e → s {
@@ -53,6 +54,7 @@ $ `stdlib/ext/manifest.nu`
         PkgBadIdentity → `PkgBadIdentity`
         PkgUntrustedRegistry → `PkgUntrustedRegistry`
         PkgTrustConfig → `PkgTrustConfig`
+        PkgToolchain → `PkgToolchain: upgrade NURL to satisfy package.nurl-version`
     }
 }
 
@@ -121,12 +123,17 @@ $ `stdlib/ext/manifest.nu`
 // the registry's minisign signature (mandatory, fail-closed), gunzip, and
 // tar_unpack into <dest>/<name>. Returns 0 on success.
 @ pkg_install_one s registry s name s version s checksum s dest → !i PkgFetchErr {
+    ^ ( pkg_install_one_for_toolchain registry name version checksum dest ( nurl_version ) )
+}
+
+// Explicit target version for tools selecting a separately installed compiler.
+@ pkg_install_one_for_toolchain s registry s name s version s checksum s dest s toolchain → !i PkgFetchErr {
     ?? ( registry_trust_load ) {
         F _ → { ^ @ !i PkgFetchErr { F PkgTrustConfig } }
         T trust → {
             : LockPkg pkg ( lock_pkg_new name version `registry+` checksum )
             ( string_push_str . pkg source registry )
-            : !i PkgFetchErr result ( pkg_install_locked trust pkg dest )
+            : !i PkgFetchErr result ( pkg_install_locked_for_toolchain trust pkg dest toolchain )
             ( lock_pkg_free pkg )
             ( registry_trust_free trust )
             ^ result
@@ -137,6 +144,10 @@ $ `stdlib/ext/manifest.nu`
 // Download origin, signing key and lock source are the same identity.
 // Load trust once per batch and borrow it for every package.
 @ pkg_install_locked RegistryTrust trust LockPkg pkg s dest → !i PkgFetchErr {
+    ^ ( pkg_install_locked_for_toolchain trust pkg dest ( nurl_version ) )
+}
+
+@ pkg_install_locked_for_toolchain RegistryTrust trust LockPkg pkg s dest s toolchain → !i PkgFetchErr {
     ? ! ( registry_name_valid ( string_data . pkg name ) ) { ^ @ !i PkgFetchErr { F PkgBadIdentity } } {}
     ?? ( semver_parse ( string_data . pkg version ) ) {
         F _ → { ^ @ !i PkgFetchErr { F PkgBadIdentity } }
@@ -152,14 +163,15 @@ $ `stdlib/ext/manifest.nu`
             } {}
             : !i PkgFetchErr result ( __pkg_install_verified ( string_data registry )
             ( string_data . pkg name ) ( string_data . pkg version )
-            ( string_data . pkg checksum ) dest key )
+            ( string_data . pkg checksum ) dest key toolchain )
             ( string_free registry )
             ^ result
         }
     }
 }
 
-@ __pkg_archive_identity ( Vec TarEntry ) entries s name s version → b {
+@ __pkg_archive_identity ( Vec TarEntry ) entries s name s version s toolchain → !v PkgFetchErr {
+    : ~ b compatible T
     : ~ i manifests 0
     : ~ b valid F
     : i n ( vec_len [TarEntry] entries )
@@ -177,6 +189,7 @@ $ `stdlib/ext/manifest.nu`
                             T manifest → {
                                 = valid & != 0 ( nurl_str_eq ( string_data . manifest name ) name )
                                 != 0 ( nurl_str_eq ( string_data . manifest version ) version )
+                                = compatible ( manifest_supports_toolchain manifest toolchain )
                                 ( manifest_free manifest )
                             }
                             F _ → {}
@@ -190,10 +203,12 @@ $ `stdlib/ext/manifest.nu`
         }
         = k + k 1
     }
-    ^ & == manifests 1 valid
+    ? | != manifests 1 ! valid { ^ @ !v PkgFetchErr { F PkgBadIdentity } } {}
+    ? ! compatible { ^ @ !v PkgFetchErr { F PkgToolchain } } {}
+    ^ @ !v PkgFetchErr { T 0 }
 }
 
-@ __pkg_install_verified s registry s name s version s checksum s dest s pubkey → !i PkgFetchErr {
+@ __pkg_install_verified s registry s name s version s checksum s dest s pubkey s toolchain → !i PkgFetchErr {
     : String url ( regindex_tarball_url registry name version )
     : !HttpcResp HttpcErr rr ( httpc_get ( string_data url ) )
     ( string_free url )
@@ -240,10 +255,13 @@ $ `stdlib/ext/manifest.nu`
                     ?? parsed {
                         F _ → { ^ @ !i PkgFetchErr { F PkgUnpack } }
                         T entries → {
-                            ? ! ( __pkg_archive_identity entries name version ) {
-                                ( tar_entries_free entries )
-                                ^ @ !i PkgFetchErr { F PkgBadIdentity }
-                            } {}
+                            ?? ( __pkg_archive_identity entries name version toolchain ) {
+                                F error → {
+                                    ( tar_entries_free entries )
+                                    ^ @ !i PkgFetchErr { F error }
+                                }
+                                T _ → {}
+                            }
                             : String destdir ( __pkg_join dest name )
                             : !i TarErr result ( tar_unpack_entries entries ( string_data destdir ) )
                             ( string_free destdir )

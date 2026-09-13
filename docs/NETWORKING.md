@@ -38,6 +38,34 @@ reactor elsewhere (see [`ASYNC.md`](ASYNC.md)).
   `"[ip]:port"` (IPv6, RFC 3986) ready for `tcp_connect` / `udp_connect`;
   `dns_reverse ip → ? String` runs `NI_NAMEREQD`.
 
+TCP writes can share an absolute operation budget with
+`tcp_set_write_deadline(conn, monotonic_ns)`. Zero clears it, and
+`tcp_write_deadline` returns the current value so a caller can save and
+restore an earlier bound. The deadline covers short writes, TLS records
+and fiber waits; partial progress never extends it. The independent
+read/idle timeout remains configured through `tcp_set_timeout`.
+
+`tcp_set_send_buffer(conn, bytes)` requests the underlying socket's send
+buffer size on POSIX and Windows. It accepts 1 through 2147483647 bytes;
+the kernel may adjust the request. Providers without native buffer tuning
+return `NetOther`. The setting also applies to TLS connections.
+
+For full duplex protocols, `tcp_prepare_write` returns owned wire bytes
+without sending them. Keep these buffers in FIFO order and advance a byte
+offset with `tcp_try_write_wire`; zero means would block. Encoding a TLS
+record advances its sequence once, so retry the same buffer rather than
+encoding it again. `tcp_try_read_into` appends available plaintext, returns
+zero when more ciphertext is needed, and retains partial TLS records.
+`tcp_wait_io` waits for read, write, or either direction, including buffered
+TLS plaintext. After each try-read, append `tcp_prepare_control` output to
+the same FIFO, even when no application bytes arrived: a TLS 1.3 KeyUpdate
+request can require a response. Both peer directions rotate their receive
+keys on KeyUpdate; the response uses the previous write keys before the
+next generation and resets that direction's sequence. A terminal write
+error requires closing the connection.
+These APIs work on native sockets, the WASI socket provider, and the
+freestanding socket layer.
+
 ## MQTT 5.0 client — `stdlib/ext/mqtt.nu`
 
 A production-grade MQTT 5.0 client built on the TCP/TLS layer. The whole
@@ -169,6 +197,25 @@ assembly, response emission), `http2_client.nu` (multiplexed client:
 `http2_serve` (`stdlib/ext/http2_server.nu`) drives one HTTP/2 connection
 for a program with its own accept loop (`examples/h2c_server.nu`).
 
+For RPCs and incremental bodies, `h2_conn_next` returns one owned `H2Event`
+per frame: headers, DATA, trailers, reset, GOAWAY, close, or control progress.
+The connection retains no DATA body. `h2_conn_next_until` and
+`h2_conn_new_until` take an absolute monotonic deadline; a read timeout keeps
+partial frame bytes so another stream can continue after an RPC expires.
+Free each event with `h2_event_free`. The response APIs
+`h2_stream_headers`, `h2_stream_data`, and `h2_stream_trailers` keep metadata,
+message bytes, and final status separate. DATA returns the accepted byte
+count; after zero credit, process another event and retry the unsent suffix.
+Each operation takes the connection `inout`, preserving flow-control and
+compression state. A write error requires closing the connection because a
+partially emitted HTTP/2 frame cannot be retried as a new frame.
+
+The buffered HttpApp adapter uses the same dispatcher and queues responses
+while waiting for flow credit. It continues to process other streams,
+SETTINGS, PING, and cancellation without truncating an outstanding response.
+Request and queued response bodies share a 64 MiB connection bound, in
+addition to the configured per-request body limit and 256-stream cap.
+
 Conformance is a CI gate, not a claim: `tools/h2spec_gate.sh` runs h2spec
 2.6.0 against the HttpApp TLS listener and the HTTP/2-only example
 (146/146, strict 147/147) and the shared plaintext port (145/146 with
@@ -181,8 +228,10 @@ next to the HTTP/1.1 report.
 Limits: the handler runs synchronously inside the connection's frame loop,
 one stream at a time — a slow handler delays the other streams on that
 connection (each connection is its own fiber, so other connections are
-unaffected). Server push is disabled (`SETTINGS_ENABLE_PUSH = 0`); the
-streaming / WebSocket upgrade hooks are HTTP/1.1-only. An idle HTTP/2
+unaffected). The incremental event API permits streaming application work.
+Server push is disabled; servers do not send the client-only
+`SETTINGS_ENABLE_PUSH` setting. The HttpApp WebSocket upgrade hooks remain
+HTTP/1.1-only. An idle HTTP/2
 connection whose deadline fires is closed with GOAWAY(NO_ERROR).
 
 ## HTTP/3

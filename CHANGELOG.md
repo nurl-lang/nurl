@@ -6,6 +6,87 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.65.0] — 2026-09-13
+
+### Added
+
+- Native `packages/gRPC` client and server with unary, client streaming,
+  server streaming and bidirectional calls, TLS/ALPN, deadlines, cancellation,
+  metadata, rich status details and bounded identity/gzip message codecs.
+  Interoperability fixtures exercise the official gRPC runtime and independent
+  HTTP/2 peers, including concurrent streams, malformed messages and cleanup.
+- Incremental HTTP/2 client/server APIs with distinct initial headers and
+  trailers. Serialized frame queues preserve partial writes and service reads
+  while writes are blocked, allowing simultaneous large requests and responses.
+- Absolute TCP/TLS write deadlines, nonblocking prepared writes/reads, and
+  combined read/write readiness across native, fiber, WASI and freestanding
+  networking providers.
+- Optional `package.nurl-version` minimum toolchain in manifests. Package
+  installation validates local and authenticated registry manifests against the
+  selected compiler before linking or extracting incompatible dependencies.
+- `fs_tempdir` creates an exclusive temporary directory, with private POSIX
+  permissions and an owned path for explicit cleanup.
+
+### Fixed
+
+- HTTP/2 flow control, stream state validation, request trailers and response
+  queues: queued writes no longer consume unrelated incoming frames or truncate
+  responses when send windows are exhausted. Explicit server `ENABLE_PUSH=0`
+  is accepted as required by RFC 9113.
+- gzip/zlib/DEFLATE framing, empty streams, checksums, concatenated gzip members,
+  malformed Huffman trees and bounded expansion. HTTP clients propagate corrupt
+  or oversized decoding failures instead of returning encoded bytes as success.
+- Base64 rejects impossible terminal groups and incorrect padding.
+- Borrow checking evaluates deferred cleanup at function exit in reverse order,
+  allowing use before deferred release while detecting duplicate or late frees.
+  Try-expression diagnostics retain the operator's source location.
+- Owned command-line argument strings are reclaimed or transferred at retaining
+  calls, including conditional and forward calls. Typed pointer elements and
+  named pointee fields can be passed directly to `inout` parameters with exact
+  pointee-type checking and single evaluation of the index.
+- Package publication typechecks every packaged source module against the
+  installed toolchain, including libraries without `main.nu`. Reinstalling
+  existing path links rechecks their transitive dependencies.
+- Publication verifies local path overrides against their declared registry,
+  including root and nested source modules, and rejects missing or yanked
+  versions, unreadable sources and failed downloads or signatures. Manifest
+  read failures return typed errors without terminating the caller.
+- Package installation releases its initial working-directory String on every
+  path and refuses existing directories that would substitute different local
+  dependency contents; registry CLI controls now enforce leak detection.
+- TOML malformed-input cleanup and conflicting table declarations; strict i64
+  parsing and SemVer numeric/range overflow checks prevent wrapped values from
+  bypassing toolchain requirements.
+- Nested deferred cleanup executes in last-in-first-out order. Each compiler
+  invocation snapshots its source files so concurrent saves cannot change a
+  module between signature scanning, emission and diagnostics.
+- TLS 1.3 KeyUpdate rotates read/write traffic keys and handles requested
+  responses in the same ordered ciphertext queue as application data.
+- Compiler test runners isolate every invocation's generated artifacts and
+  atomically publish golden records, including concurrent runs of the same test.
+- Package test and benchmark runners pass paths as literal arguments and own
+  private temporary directories. A matching output golden cannot hide a
+  nonzero test exit, and failed runs include the program's diagnostic output.
+- File copies report source-read and buffered-close failures. File replacement
+  preserves the previous destination on failure on POSIX and Windows; installed
+  tools are copied and made executable before replacing the live binary.
+- Mixed owned/borrowed conditional strings retain ownership only for the arm
+  that allocated a buffer, including arguments, bindings and returned values.
+- Program-local functions use a separate LLVM symbol namespace, allowing NURL
+  names such as `open` and `strlen` to coexist with libc. Explicit C linkage,
+  retained external roots and library-module ABI remain stable.
+- Builds replace completed executables atomically and preserve working binaries
+  on failure, including coverage notes and macOS debug bundles. Coverage emits
+  real line/branch counters with imported-source attribution; saved LLVM IR
+  remains usable after the driver's temporary staging directory is removed.
+- Windows process APIs launch executables directly and encode batch arguments
+  without expanding literal path characters. Driver flags, installed shims and
+  default batch lookup on PATH work through the same argument contract.
+  Explicit shell execution uses the system `cmd.exe`; debug executable
+  publication preserves its PDB alongside the binary.
+
 ## [0.64.0] — 2026-09-13
 
 ### Added
@@ -18929,7 +19010,13 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.59.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.65.0...HEAD
+[0.65.0]: https://github.com/nurl-lang/nurl/compare/v0.64.0...v0.65.0
+[0.64.0]: https://github.com/nurl-lang/nurl/compare/v0.63.0...v0.64.0
+[0.63.0]: https://github.com/nurl-lang/nurl/compare/v0.62.0...v0.63.0
+[0.62.0]: https://github.com/nurl-lang/nurl/compare/v0.61.0...v0.62.0
+[0.61.0]: https://github.com/nurl-lang/nurl/compare/v0.60.0...v0.61.0
+[0.60.0]: https://github.com/nurl-lang/nurl/compare/v0.59.0...v0.60.0
 [0.59.0]: https://github.com/nurl-lang/nurl/compare/v0.58.0...v0.59.0
 [0.58.0]: https://github.com/nurl-lang/nurl/compare/v0.57.0...v0.58.0
 [0.57.0]: https://github.com/nurl-lang/nurl/compare/v0.56.0...v0.57.0

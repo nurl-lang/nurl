@@ -211,6 +211,43 @@ fi
 LLFILE="${OUTBASE}.ll"
 SFILE="${OUTBASE}.s"
 
+# Stage a linked executable and its compiler-generated companion artifacts
+# beside their destination. A failed compile/link leaves the last working
+# executable, coverage notes, and macOS debug bundle together.
+LINK_STAGE=""
+LINK_PUBLISHED=0
+link_cleanup() {
+    if [ "$LINK_PUBLISHED" -eq 0 ]; then
+        for _suffix in gcno dSYM; do
+            if [ -e "$LINK_STAGE/previous.$_suffix" ] || [ -L "$LINK_STAGE/previous.$_suffix" ]; then
+                rm -rf -- "$OUTBASE.$_suffix"
+                mv -f -- "$LINK_STAGE/previous.$_suffix" "$OUTBASE.$_suffix"
+            elif [ -f "$LINK_STAGE/created.$_suffix" ]; then
+                rm -rf -- "$OUTBASE.$_suffix"
+            fi
+        done
+    fi
+    rm -rf -- "$LINK_STAGE"
+}
+if [ "$EMIT_IR" -eq 0 ] && [ "$EMIT_ASM" -eq 0 ]; then
+    if [ -d "$OUTBASE" ]; then
+        echo "ERROR: executable destination is a directory: $OUTBASE" >&2
+        exit 1
+    fi
+    case "$OUTBASE" in
+        */*) LINK_PARENT="${OUTBASE%/*}"; [ -n "$LINK_PARENT" ] || LINK_PARENT=/ ;;
+        *) LINK_PARENT=. ;;
+    esac
+    LINK_PARENT="$(cd "$LINK_PARENT" && pwd)"
+    LINK_STAGE="$(mktemp -d "$LINK_PARENT/.nurl-link.XXXXXX")"
+    # dsymutil uses this basename inside its bundle, so keep the final name.
+    LINK_OUTPUT="$LINK_STAGE/${OUTBASE##*/}"
+    trap 'link_cleanup' 0
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+fi
+
 # ── Parallel lowering ────────────────────────────────────────
 # The clang step is what a NURL build waits on — 11.3 s of the
 # compiler's own 12.0 s — and it is ONE single-threaded LLVM -O2
@@ -296,6 +333,15 @@ if [ "${NURL_SAN:-0}" = 1 ]; then NURLC_SAN="--sanitize-address"; fi
 # A split prefix is a path; preserve it as one positional argument.
 # shellcheck disable=SC2086
 set -- $NURLC_G $NURLC_CPU $NURLC_DIAG $NURLC_SAN
+if [ "$COVERAGE" -eq 1 ]; then
+    # GCOV embeds the output stem in the generated executable. Resolve it
+    # before linking so runtime cwd and atomic linker staging cannot move it.
+    COVERAGE_OUT="$(cd "$(dirname "$OUTBASE")" && pwd)/$(basename "$OUTBASE")"
+    set -- "$@" "--coverage=$COVERAGE_OUT"
+    if [ -n "${LINK_STAGE:-}" ]; then
+        set -- "$@" "--coverage-notes=$LINK_STAGE/coverage.gcno" "--coverage-link-ir=$LINK_STAGE/module.ll"
+    fi
+fi
 if [ "$SPLIT_N" -gt 0 ]; then
     set -- "$@" "--split=$SPLIT_N" "--split-out=$OUTBASE"
     if [ -n "${NURL_SPLIT_MIN:-}" ]; then
@@ -508,8 +554,8 @@ if [ $DEBUG_INFO -eq 1 ]; then
 fi
 # --coverage: gcov-style instrumentation. -fprofile-arcs/-ftest-coverage
 # run as IR passes (unlike the C-frontend-only -fcoverage-mapping), keyed
-# off the !dbg line metadata --debug already turned on — so `llvm-cov
-# gcov <unit>.gcda` reports per-line hit counts against the .nu source.
+# off the compiler's !llvm.gcov mapping plus !dbg line metadata, so
+# `llvm-cov gcov <unit>.gcda` reports hits against the .nu source.
 COVERAGE_FLAGS=""
 if [ $COVERAGE -eq 1 ]; then
     COVERAGE_FLAGS="-fprofile-arcs -ftest-coverage"
@@ -519,7 +565,7 @@ fi
 if [ $EMIT_ASM -eq 1 ]; then
     echo "[2/2] $LLFILE → $SFILE  ($OPT${DEBUG_FLAGS:+ $DEBUG_FLAGS} -S)"
     # shellcheck disable=SC2086
-    cc_run $OPT $DEBUG_FLAGS $OPAQUE_FLAGS $QUIET_FLAGS -S "$LLFILE" -o "$SFILE"
+    cc_run $OPT $DEBUG_FLAGS $COVERAGE_FLAGS $OPAQUE_FLAGS $QUIET_FLAGS -S "$LLFILE" -o "$SFILE"
     echo ""
     echo "Done: $SFILE"
     exit 0
@@ -924,7 +970,7 @@ if [ "$SPLIT_N" -gt 0 ]; then
         exit 1
     fi
     # shellcheck disable=SC2086
-    cc_run $OPT $ZIG_OPT_FIX -flto=thin $LTO_TUNE_FLAGS $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS "$@" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+    cc_run $OPT $ZIG_OPT_FIX -flto=thin $LTO_TUNE_FLAGS $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS "$@" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$LINK_OUTPUT" -lm -lpthread $DL_LIB $EXTRA_LIBS
     # The parts are an artifact of how the link was parallelised; the
     # documented one is $LLFILE, which still holds the whole module.
     rm -f -- "$@" "$OUTBASE".[0-9]*.ll
@@ -935,15 +981,41 @@ elif [ -n "$OBJ_CACHE_DIR" ]; then
     # entirely on a rebuild.
     cc_c_cached "$LLFILE" "$OUTBASE.__cc.o"
     # shellcheck disable=SC2086
-    cc_run $OPT $ZIG_OPT_FIX $LTO_FLAG $LTO_TUNE_FLAGS $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS $DEBUG_FLAGS $SAN_LINK_FLAGS "$OUTBASE.__cc.o" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+    cc_run $OPT $ZIG_OPT_FIX $LTO_FLAG $LTO_TUNE_FLAGS $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS $DEBUG_FLAGS $SAN_LINK_FLAGS "$OUTBASE.__cc.o" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$LINK_OUTPUT" -lm -lpthread $DL_LIB $EXTRA_LIBS
     rm -f "$OUTBASE.__cc.o"
 else
     # An LTO-flavoured link is required because stdlib/runtime.o is
     # compiled with -flto=thin (build.sh) and therefore carries LLVM
     # bitcode instead of native code.
     # shellcheck disable=SC2086
-    cc_run $OPT $ZIG_OPT_FIX $LTO_FLAG $LTO_TUNE_FLAGS $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS $DEBUG_FLAGS $COVERAGE_FLAGS $SAN_LINK_FLAGS "$LLFILE" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+    LINK_INPUT="$LLFILE"
+    if [ "$COVERAGE" -eq 1 ]; then LINK_INPUT="$LINK_STAGE/module.ll"; fi
+    cc_run $OPT $ZIG_OPT_FIX $LTO_FLAG $LTO_TUNE_FLAGS $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS $DEBUG_FLAGS $COVERAGE_FLAGS $SAN_LINK_FLAGS "$LINK_INPUT" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$LINK_OUTPUT" -lm -lpthread $DL_LIB $EXTRA_LIBS
 fi
+
+if [ ! -f "$LINK_OUTPUT" ] || [ ! -s "$LINK_OUTPUT" ] || [ ! -x "$LINK_OUTPUT" ]; then
+    echo "ERROR: linker did not produce a complete executable: $LINK_OUTPUT" >&2
+    exit 1
+fi
+# Publish only companions actually generated by this invocation. Save old
+# versions until the executable rename commits the publication, so an error
+# while publishing restores them through the exit trap.
+for _suffix in gcno dSYM; do
+    case "$_suffix" in
+        gcno) _companion="$LINK_STAGE/coverage.gcno" ;;
+        dSYM) _companion="$LINK_OUTPUT.dSYM" ;;
+    esac
+    if [ -e "$_companion" ]; then
+        if [ -e "$OUTBASE.$_suffix" ] || [ -L "$OUTBASE.$_suffix" ]; then
+            mv -f -- "$OUTBASE.$_suffix" "$LINK_STAGE/previous.$_suffix"
+        else
+            : > "$LINK_STAGE/created.$_suffix"
+        fi
+        mv -f -- "$_companion" "$OUTBASE.$_suffix"
+    fi
+done
+mv -f -- "$LINK_OUTPUT" "$OUTBASE"
+LINK_PUBLISHED=1
 
 echo ""
 echo "Done: $OUTBASE"

@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+argv_scopes=T
+argv_transfer=T
+argv_wrappers=T

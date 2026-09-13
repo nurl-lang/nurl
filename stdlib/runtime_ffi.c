@@ -18,6 +18,8 @@
  * defines the symbol set a `no_std` target must provide (ROADMAP D2).
  */
 
+#include <limits.h>
+
 /* ── §14  HTTP client response ABI ────────────────────────────── */
 /*
  * The HTTP client itself is now pure NURL (stdlib/ext/http_pure.nu over
@@ -178,6 +180,109 @@ static int nurl__proc_buf_append(NurlProcBuf *b, const char *src, size_t n) {
     return 1;
 }
 
+
+#if (defined(_WIN32) && !defined(__wasi__)) || defined(NURL_PROCESS_COMMANDLINE_TEST)
+/* Quote one argv entry per CommandLineToArgvW rules (Colascione 2011). */
+static int nurl__proc_quote_arg(const char *arg, NurlProcBuf *out) {
+    if (!arg) arg = "";
+    int needs_quote = (*arg == 0);
+    for (const char *p = arg; *p && !needs_quote; p++) {
+        if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\v' || *p == '"') {
+            needs_quote = 1;
+        }
+    }
+    if (!needs_quote) {
+        return nurl__proc_buf_append(out, arg, strlen(arg));
+    }
+    if (!nurl__proc_buf_append(out, "\"", 1)) return 0;
+    const char *p = arg;
+    while (*p) {
+        size_t bs = 0;
+        while (*p == '\\') { bs++; p++; }
+        if (*p == 0) {
+            for (size_t i = 0; i < 2 * bs; i++)
+                if (!nurl__proc_buf_append(out, "\\", 1)) return 0;
+            break;
+        } else if (*p == '"') {
+            for (size_t i = 0; i < 2 * bs + 1; i++)
+                if (!nurl__proc_buf_append(out, "\\", 1)) return 0;
+            if (!nurl__proc_buf_append(out, "\"", 1)) return 0;
+            p++;
+        } else {
+            for (size_t i = 0; i < bs; i++)
+                if (!nurl__proc_buf_append(out, "\\", 1)) return 0;
+            if (!nurl__proc_buf_append(out, p, 1)) return 0;
+            p++;
+        }
+    }
+    return nurl__proc_buf_append(out, "\"", 1);
+}
+
+
+/* Native executables consume CRT quoting. Batch files are parsed by
+ * cmd.exe first and need a different encoder, with delayed expansion off.
+ * A literal '%' is followed by an empty substring of cmd's built-in CD
+ * variable, preventing the remainder of the argument from becoming %VAR%.
+ * This is the same documented cmd substring mechanism used by Rust std's
+ * Windows batch-argument encoder. Batch quotes/newlines are rejected because
+ * they cannot preserve the ordinary argv contract; native argv is unaffected.
+ * https://github.com/rust-lang/rust/blob/master/library/std/src/sys/args/windows.rs */
+typedef struct NurlProcLaunch {
+    NurlProcBuf command;
+    const char *application;  /* borrowed trusted system cmd.exe, or NULL */
+} NurlProcLaunch;
+static int nurl__proc_ascii_lower(int c) {
+    return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c;
+}
+static int nurl__proc_batch_file(const char *cmd) {
+    size_t n = strlen(cmd);
+    if (n < 4 || cmd[n - 4] != '.') return 0;
+    const char *e = cmd + n - 3;
+    return (nurl__proc_ascii_lower(e[0]) == 'b' &&
+            nurl__proc_ascii_lower(e[1]) == 'a' && nurl__proc_ascii_lower(e[2]) == 't') ||
+           (nurl__proc_ascii_lower(e[0]) == 'c' &&
+            nurl__proc_ascii_lower(e[1]) == 'm' && nurl__proc_ascii_lower(e[2]) == 'd');
+}
+static void nurl__proc_launch_free(NurlProcLaunch *launch) {
+    free(launch->command.data);
+    memset(launch, 0, sizeof(*launch));
+}
+static int nurl__proc_batch_quote(const char *arg, NurlProcBuf *out) {
+    if (!arg) arg = "";
+    if (!nurl__proc_buf_append(out, "\"", 1)) return 0;
+    size_t trailing = 0;
+    for (const char *p = arg; *p; ++p) {
+        if (*p == '"' || *p == '\r' || *p == '\n') return 0;
+        trailing = *p == '\\' ? trailing + 1 : 0;
+        if (*p == '%') {
+            if (!nurl__proc_buf_append(out, "%%cd:~,%", 8)) return 0;
+        } else if (!nurl__proc_buf_append(out, p, 1)) return 0;
+    }
+    for (size_t i = 0; i < trailing; ++i)
+        if (!nurl__proc_buf_append(out, "\\", 1)) return 0;
+    return nurl__proc_buf_append(out, "\"", 1);
+}
+static int nurl__proc_build_launch(const char *cmd, const char *const *args,
+                                  long long argc, const char *command_prompt,
+                                  NurlProcLaunch *out) {
+    int batch = nurl__proc_batch_file(cmd);
+    if (batch) {
+        if (!command_prompt || !*command_prompt) return 0;
+        out->application = command_prompt;
+        if (!nurl__proc_quote_arg(command_prompt, &out->command) ||
+            !nurl__proc_buf_append(&out->command, " /D /E:ON /V:OFF /S /C \"", 24) ||
+            !nurl__proc_batch_quote(cmd, &out->command)) return 0;
+    } else if (!nurl__proc_quote_arg(cmd, &out->command)) return 0;
+    for (long long i = 0; i < argc; ++i) {
+        const char *arg = args && args[i] ? args[i] : "";
+        if (!nurl__proc_buf_append(&out->command, " ", 1)) return 0;
+        if (batch ? !nurl__proc_batch_quote(arg, &out->command)
+                  : !nurl__proc_quote_arg(arg, &out->command)) return 0;
+    }
+    return !batch || nurl__proc_buf_append(&out->command, "\"", 1);
+}
+#endif
+
 #if !defined(_WIN32) && !defined(__wasi__)
 /* POSIX path is in pure NURL; this stub is link-time only. */
 long long nurl_proc_run(const char *cmd, const char *argv_buf,
@@ -232,47 +337,64 @@ static unsigned __stdcall nurl__proc_reader_thread(void *p) {
     return 0;
 }
 
-/* Quote one argv entry per CommandLineToArgvW rules (Colascione 2011). */
-static int nurl__proc_quote_arg(const char *arg, NurlProcBuf *out) {
-    if (!arg) arg = "";
-    int needs_quote = (*arg == 0);
-    for (const char *p = arg; *p && !needs_quote; p++) {
-        if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\v' || *p == '"') {
-            needs_quote = 1;
+
+static int nurl__proc_prepare_launch(const char *cmd, const char *const *args,
+                                    long long argc, NurlProcLaunch *out,
+                                    char *command_prompt, size_t prompt_size) {
+    char *resolved = NULL;
+    if (!nurl__proc_batch_file(cmd)) {
+        const char *base = cmd;
+        for (const char *p = cmd; *p; ++p)
+            if (*p == '/' || *p == '\\') base = p + 1;
+        /* CreateProcess appends .exe, but does not search for PATH batch
+         * shims. Preserve native precedence, then resolve extensionless
+         * tools such as the installed `nurl` -> bin\nurl.bat. */
+        if (strchr(base, '.') || SearchPathA(NULL, cmd, ".exe", 0, NULL, NULL))
+            return nurl__proc_build_launch(cmd, args, argc, NULL, out);
+        const char *extension = ".bat";
+        DWORD needed = SearchPathA(NULL, cmd, extension, 0, NULL, NULL);
+        if (!needed) {
+            extension = ".cmd";
+            needed = SearchPathA(NULL, cmd, extension, 0, NULL, NULL);
         }
+        if (!needed) return nurl__proc_build_launch(cmd, args, argc, NULL, out);
+        resolved = (char *)malloc((size_t)needed + 1);
+        if (!resolved) return 0;
+        DWORD length = SearchPathA(NULL, cmd, extension, needed + 1, resolved, NULL);
+        if (!length || length > needed) { free(resolved); return 0; }
+        cmd = resolved;
     }
-    if (!needs_quote) {
-        return nurl__proc_buf_append(out, arg, strlen(arg));
+    UINT length = GetSystemDirectoryA(command_prompt, (UINT)prompt_size);
+    if (!length || length + sizeof("\\cmd.exe") > prompt_size) {
+        free(resolved);
+        return 0;
     }
-    if (!nurl__proc_buf_append(out, "\"", 1)) return 0;
-    const char *p = arg;
-    while (*p) {
-        size_t bs = 0;
-        while (*p == '\\') { bs++; p++; }
-        if (*p == 0) {
-            for (size_t i = 0; i < 2 * bs; i++)
-                if (!nurl__proc_buf_append(out, "\\", 1)) return 0;
-            break;
-        } else if (*p == '"') {
-            for (size_t i = 0; i < 2 * bs + 1; i++)
-                if (!nurl__proc_buf_append(out, "\\", 1)) return 0;
-            if (!nurl__proc_buf_append(out, "\"", 1)) return 0;
-            p++;
-        } else {
-            for (size_t i = 0; i < bs; i++)
-                if (!nurl__proc_buf_append(out, "\\", 1)) return 0;
-            if (!nurl__proc_buf_append(out, p, 1)) return 0;
-            p++;
-        }
-    }
-    return nurl__proc_buf_append(out, "\"", 1);
+    memcpy(command_prompt + length, "\\cmd.exe", sizeof("\\cmd.exe"));
+    int result = nurl__proc_build_launch(cmd, args, argc, command_prompt, out);
+    free(resolved);
+    return result;
 }
 
-long long nurl_proc_run(const char *cmd, const char *argv_buf,
-                        long long argc, const char *stdin_blob) {
+static int nurl__proc_prepare_shell(const char *command, NurlProcLaunch *out,
+                                    char *command_prompt, size_t prompt_size) {
+    UINT length = GetSystemDirectoryA(command_prompt, (UINT)prompt_size);
+    if (!length || length + sizeof("\\cmd.exe") > prompt_size) return 0;
+    memcpy(command_prompt + length, "\\cmd.exe", sizeof("\\cmd.exe"));
+    out->application = command_prompt;
+    /* This entry point deliberately accepts shell syntax. /S strips just
+     * our outer quote pair, leaving the caller's quotes/operators intact. */
+    return nurl__proc_quote_arg(command_prompt, &out->command) &&
+           nurl__proc_buf_append(&out->command, " /D /E:ON /V:OFF /S /C \"", 24) &&
+           nurl__proc_buf_append(&out->command, command, strlen(command)) &&
+           nurl__proc_buf_append(&out->command, "\"", 1);
+}
+
+static long long nurl__proc_run_mode(const char *cmd, const char *argv_buf,
+                                    long long argc, const char *stdin_blob,
+                                    int shell) {
     NurlProcResult *r = (NurlProcResult*)calloc(1, sizeof(NurlProcResult));
     if (!r) return 0;
-    if (!cmd || !*cmd) {
+    if (!cmd || (!*cmd && !shell)) {
         r->err_kind   = NURL_PROC_ERR_NOTFOUND;
         r->stdout_buf = strdup("");
         r->stderr_buf = strdup("");
@@ -281,15 +403,14 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
     if (argc < 0) argc = 0;
     const char *const *argv_user = (const char *const *)argv_buf;
 
-    NurlProcBuf cmdline = {0};
-    int build_ok = nurl__proc_quote_arg(cmd, &cmdline);
-    for (long long i = 0; i < argc && build_ok; i++) {
-        if (!nurl__proc_buf_append(&cmdline, " ", 1)) { build_ok = 0; break; }
-        const char *a = argv_user ? argv_user[i] : "";
-        if (!nurl__proc_quote_arg(a, &cmdline)) { build_ok = 0; break; }
-    }
-    if (!build_ok || !cmdline.data) {
-        free(cmdline.data);
+    NurlProcLaunch launch = {0};
+    char command_prompt[MAX_PATH + 16];
+    int build_ok = shell
+        ? nurl__proc_prepare_shell(cmd, &launch, command_prompt, sizeof(command_prompt))
+        : nurl__proc_prepare_launch(cmd, argv_user, argc, &launch,
+                                    command_prompt, sizeof(command_prompt));
+    if (!build_ok || !launch.command.data) {
+        nurl__proc_launch_free(&launch);
         r->err_kind   = NURL_PROC_ERR_OTHER;
         r->stdout_buf = strdup("");
         r->stderr_buf = strdup("");
@@ -313,7 +434,7 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
         if (out_w) CloseHandle(out_w);
         if (err_r) CloseHandle(err_r);
         if (err_w) CloseHandle(err_w);
-        free(cmdline.data);
+        nurl__proc_launch_free(&launch);
         r->err_kind   = NURL_PROC_ERR_IO;
         r->stdout_buf = strdup("");
         r->stderr_buf = strdup("");
@@ -331,17 +452,18 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
     si.hStdOutput = out_w;
     si.hStdError  = err_w;
     PROCESS_INFORMATION pi = {0};
-    BOOL ok = CreateProcessA(NULL, cmdline.data,
+    BOOL ok = CreateProcessA(launch.application, launch.command.data,
                              NULL, NULL, TRUE, 0,
                              NULL, NULL, &si, &pi);
-    free(cmdline.data);
+    DWORD spawn_err = ok ? 0 : GetLastError();
+    nurl__proc_launch_free(&launch);
     /* Close inherited ends on the parent side once the child owns them. */
     CloseHandle(in_r);
     CloseHandle(out_w);
     CloseHandle(err_w);
 
     if (!ok) {
-        DWORD le = GetLastError();
+        DWORD le = spawn_err;
         CloseHandle(in_w);
         CloseHandle(out_r);
         CloseHandle(err_r);
@@ -393,6 +515,15 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
     return (long long)(uintptr_t)r;
 }
 
+long long nurl_proc_run(const char *cmd, const char *argv_buf,
+                        long long argc, const char *stdin_blob) {
+    return nurl__proc_run_mode(cmd, argv_buf, argc, stdin_blob, 0);
+}
+
+long long nurl_proc_run_shell(const char *command) {
+    return nurl__proc_run_mode(command, NULL, 0, "", 1);
+}
+
 #else  /* WASI — stub */
 
 long long nurl_proc_run(const char *cmd, const char *argv_buf,
@@ -406,6 +537,13 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
     return (long long)(uintptr_t)r;
 }
 
+#endif
+
+#if !defined(_WIN32) || defined(__wasi__)
+/* POSIX shells use std/process.nu; unsupported runtimes retain ProcessOther. */
+long long nurl_proc_run_shell(const char *command) {
+    return nurl_proc_run(command, NULL, 0, "");
+}
 #endif
 
 long long nurl_proc_exit_code(long long h) {
@@ -670,14 +808,12 @@ long long nurl_proc_spawn(const char *cmd, const char *argv_buf, long long argc)
     if (argc < 0) argc = 0;
     const char *const *argv_user = (const char *const *)argv_buf;
 
-    NurlProcBuf cmdline = {0};
-    int build_ok = nurl__proc_quote_arg(cmd, &cmdline);
-    for (long long i = 0; i < argc && build_ok; i++) {
-        if (!nurl__proc_buf_append(&cmdline, " ", 1)) { build_ok = 0; break; }
-        build_ok = nurl__proc_quote_arg(argv_user ? argv_user[i] : "", &cmdline);
-    }
-    if (!build_ok || !cmdline.data) {
-        free(cmdline.data);
+    NurlProcLaunch launch = {0};
+    char command_prompt[MAX_PATH + 16];
+    int build_ok = nurl__proc_prepare_launch(cmd, argv_user, argc, &launch,
+                                             command_prompt, sizeof(command_prompt));
+    if (!build_ok || !launch.command.data) {
+        nurl__proc_launch_free(&launch);
         c->err_kind = NURL_PROC_ERR_OTHER;
         return (long long)(uintptr_t)c;
     }
@@ -688,7 +824,7 @@ long long nurl_proc_spawn(const char *cmd, const char *argv_buf, long long argc)
 
     HANDLE in_r = NULL, in_w = NULL, out_r = NULL, out_w = NULL;
     if (!CreatePipe(&in_r, &in_w, &sa, 0)) {
-        free(cmdline.data);
+        nurl__proc_launch_free(&launch);
         c->err_kind    = NURL_PROC_ERR_IO;
         c->last_io_err = (long long)GetLastError();
         return (long long)(uintptr_t)c;
@@ -697,7 +833,7 @@ long long nurl_proc_spawn(const char *cmd, const char *argv_buf, long long argc)
     if (!nurl__proc_overlapped_pipe(&out_r, &out_w)) {
         DWORD le = GetLastError();
         CloseHandle(in_r); CloseHandle(in_w);
-        free(cmdline.data);
+        nurl__proc_launch_free(&launch);
         c->err_kind    = NURL_PROC_ERR_IO;
         c->last_io_err = (long long)le;
         return (long long)(uintptr_t)c;
@@ -711,7 +847,7 @@ long long nurl_proc_spawn(const char *cmd, const char *argv_buf, long long argc)
         DWORD le = GetLastError();
         CloseHandle(in_r); CloseHandle(in_w);
         CloseHandle(out_r); CloseHandle(out_w);
-        free(cmdline.data);
+        nurl__proc_launch_free(&launch);
         c->err_kind    = NURL_PROC_ERR_IO;
         c->last_io_err = (long long)le;
         return (long long)(uintptr_t)c;
@@ -746,11 +882,11 @@ long long nurl_proc_spawn(const char *cmd, const char *argv_buf, long long argc)
     si.hStdOutput = out_w;
     si.hStdError  = err_dup;
     PROCESS_INFORMATION pi = {0};
-    BOOL ok = CreateProcessA(NULL, cmdline.data,
+    BOOL ok = CreateProcessA(launch.application, launch.command.data,
                              NULL, NULL, TRUE, 0,
                              NULL, NULL, &si, &pi);
     DWORD spawn_err = ok ? 0 : GetLastError();
-    free(cmdline.data);
+    nurl__proc_launch_free(&launch);
     /* The child owns its ends now; the parent must drop them or the
      * pipes never report EOF. */
     CloseHandle(in_r);
@@ -1405,6 +1541,7 @@ typedef struct NurlTcp {
      * this copy is for the fiber path, which cannot use SO_RCVTIMEO —
      * it parks on the reactor instead, and has to be told how long. */
     long long     timeout_ms;
+    long long     write_deadline_ns; /* absolute CLOCK_MONOTONIC; 0 clears */
     /* SO_RCVTIMEO/SO_SNDTIMEO not yet pushed to the kernel. Set by
      * nurl_tcp_set_timeout, consumed by the first BLOCKING read/write:
      * a fiber-served connection never blocks, so eagerly issuing the
@@ -2001,74 +2138,213 @@ long long nurl_tcp_read(long long handle, const char *buf, long long n) {
     return -1;
 }
 
-/* What a send() that moved nothing means for the write loop around it.
- * Shared by nurl_tcp_write and nurl_tcp_write2 so the two cannot drift.
- *
- * SO_SNDTIMEO (set by nurl_tcp_set_timeout for the keep-alive idle
- * deadline) also caps every blocking send(): when a SLOW-BUT-ALIVE
- * client (a phone on WiFi pulling a 50 MB model) drains the socket
- * more slowly than we fill it, send() can spend the whole window
- * waiting for buffer space and fail with EAGAIN — which used to be
- * treated as fatal, cutting the response mid-body. A send timeout
- * is only a DEAD peer if there is no progress across consecutive
- * windows: retry zero-progress timeouts up to twice (≈2-3× the
- * idle deadline of total stall), and let any progress reset the
- * allowance (the caller zeroes *stalls on progress). */
-enum { NURL_SEND_FAIL = 0, NURL_SEND_RETRY = 1, NURL_SEND_PROGRESS = 2 };
-static int nurl__tcp_short_send(NurlTcp *h, long long wn, long long total,
-                                int *stalls) {
-#ifdef _WIN32
-    /* WSAETIMEDOUT only fires on BLOCKING sockets (SO_SNDTIMEO);
-     * the async path's would-block is WSAEWOULDBLOCK and must
-     * still return immediately for the reactor. */
-    int we = WSAGetLastError();
-    if (wn < 0 && we == WSAETIMEDOUT && ++*stalls <= 2) return NURL_SEND_RETRY;
-    /* Would-block on a non-blocking socket is PROGRESS, not
-     * failure — see the POSIX branch below for why -1 here
-     * corrupts the caller's stream. */
-    if (wn < 0 && we == WSAEWOULDBLOCK && total > 0) {
-        h->err_kind = NURL_NET_ERR_OK;
-        return NURL_SEND_PROGRESS;
-    }
-    h->err_kind = nurl__net_map_wsa(we, NURL_NET_ERR_WRITE);
-#else
-    int err = errno;
-    /* On POSIX a SO_SNDTIMEO expiry and a nonblocking would-block
-     * are both EAGAIN — only retry on BLOCKING sockets, so the
-     * fiber reactor's park-on-EAGAIN contract stays intact. */
-    if (wn < 0 && (err == EAGAIN ||
-#  if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
-                   err == EWOULDBLOCK ||
-#  endif
-                   0)) {
-        int fl = fcntl(h->fd, F_GETFL, 0);
-        if (fl >= 0 && !(fl & O_NONBLOCK) && ++*stalls <= 2) return NURL_SEND_RETRY;
-        /* NON-BLOCKING would-block after a PARTIAL send: those
-         * bytes are already on the wire, so this is progress,
-         * and the count is the only record of it. Returning -1
-         * threw it away — the async wrapper in std/net.nu then
-         * parked on the reactor and retried from its own `sent`,
-         * which had never advanced, so it re-sent the buffer
-         * from the front. The peer got the prefix again instead
-         * of the continuation, and since callers frame their
-         * writes (relay.nu's 5-byte type+length header), reading
-         * the announced length spliced a repeat into the middle
-         * of the message: a frame of exactly the right size with
-         * the wrong bytes, and every frame after it garbage.
-         * Measured before the fix: a 1.1 MB relay frame put
-         * 37.7 MB on the wire, ~17 copies of its own prefix.
-         * Loopback hid it completely — the peer drains as fast
-         * as we fill, so send() never blocks and the whole
-         * buffer goes in one call. Report the count; -1 is for
-         * "nothing was written". */
-        if (total > 0) {
-            h->err_kind = NURL_NET_ERR_OK;
-            return NURL_SEND_PROGRESS;
+/* A write budget belongs to the operation, not to each syscall or TLS
+ * record. Partial progress must never extend this absolute monotonic bound. */
+extern long long nurl_monotonic_ns(void);
+
+void nurl_tcp_set_write_deadline(long long handle, long long ns) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return;
+    h->write_deadline_ns = ns > 0 ? ns : 0;
+    /* Restore the configured idle timeout when the deadline is cleared. */
+    h->timeo_dirty = 1;
+}
+
+long long nurl_tcp_write_deadline(long long handle) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    return h ? h->write_deadline_ns : 0;
+}
+
+/* Reactor vocabulary: -1 unlimited, 0 expired, positive rounded-up ms.
+ * The configured idle timeout may shorten a wait, but never extend a bound. */
+long long nurl_tcp_write_wait_ms(long long handle) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return 0;
+    long long ms = h->timeout_ms > 0 ? h->timeout_ms : -1;
+    if (h->write_deadline_ns > 0) {
+        long long now = nurl_monotonic_ns();
+        if (now <= 0 || now >= h->write_deadline_ns) {
+            h->err_kind = NURL_NET_ERR_TIMEOUT;
+            return 0;
         }
+        long long left = (h->write_deadline_ns - now - 1) / 1000000 + 1;
+        if (ms < 0 || left < ms) ms = left;
     }
-    h->err_kind = nurl__net_map_errno(err, NURL_NET_ERR_WRITE);
+    return ms;
+}
+
+/* Check and configure before EVERY blocking syscall, including EINTR
+ * retries. SO_SNDTIMEO never changes the independent read timeout. */
+static int nurl__tcp_prepare_write(NurlTcp *h) {
+    if (h->timeo_dirty && !h->nonblock) nurl__tcp_apply_timeo(h);
+    long long ms = nurl_tcp_write_wait_ms((long long)(uintptr_t)h);
+    if (ms == 0) return 0;
+    if (h->write_deadline_ns == 0 || h->nonblock) return 1;
+#ifdef _WIN32
+    DWORD timeout = (DWORD)(ms > 2147483647 ? 2147483647 : ms);
+    if (setsockopt(h->fd, SOL_SOCKET, SO_SNDTIMEO,
+                   (const char*)&timeout, (int)sizeof(timeout)) != 0) {
+        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_WRITE);
+        return 0;
+    }
+#else
+    struct timeval timeout;
+    timeout.tv_sec = (time_t)(ms / 1000);
+    timeout.tv_usec = (suseconds_t)((ms % 1000) * 1000);
+    if (setsockopt(h->fd, SOL_SOCKET, SO_SNDTIMEO,
+                   &timeout, (socklen_t)sizeof(timeout)) != 0) {
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_WRITE);
+        return 0;
+    }
 #endif
-    return NURL_SEND_FAIL;
+    return 1;
+}
+
+/* No repeated SO_SNDTIMEO windows. Return every byte already sent; a
+ * caller continuing a short write rechecks the same absolute deadline. */
+static long long nurl__tcp_short_send(NurlTcp *h, long long wn, long long total) {
+    if (wn == 0) h->err_kind = NURL_NET_ERR_WRITE;
+#ifdef _WIN32
+    else h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_WRITE);
+#else
+    else h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_WRITE);
+#endif
+    return total > 0 ? total : -1;
+}
+
+/* One nonblocking attempt, preserving the connection's normal blocking
+ * mode and read timeout. A caller retains its encoded bytes after EAGAIN. */
+long long nurl_tcp_write_nowait(long long handle, const char *buf, long long n) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (h->fd == NURL_INVALID_SOCK) { h->err_kind = NURL_NET_ERR_CLOSED; return -1; }
+    if (n <= 0) return 0;
+    if (!buf) { h->err_kind = NURL_NET_ERR_WRITE; return -1; }
+    for (;;) {
+        if (nurl_tcp_write_wait_ms(handle) == 0) return -1;
+#ifdef _WIN32
+        u_long on = 1, restore = h->nonblock ? 1 : 0;
+        if (!restore && ioctlsocket(h->fd, FIONBIO, &on) != 0) {
+            h->err_kind = NURL_NET_ERR_WRITE; return -1;
+        }
+        int wn = send(h->fd, buf, (int)(n > 0x40000000 ? 0x40000000 : n), 0);
+        int saved = WSAGetLastError();
+        if (!restore && ioctlsocket(h->fd, FIONBIO, &restore) != 0) {
+            h->err_kind = NURL_NET_ERR_WRITE; return wn > 0 ? wn : -1;
+        }
+        WSASetLastError(saved);
+        if (wn < 0 && saved == WSAEINTR) continue;
+#else
+        int flags = 0;
+# ifdef MSG_NOSIGNAL
+        flags |= MSG_NOSIGNAL;
+# endif
+# ifdef MSG_DONTWAIT
+        flags |= MSG_DONTWAIT;
+# else
+        int original = fcntl(h->fd, F_GETFL, 0);
+        if (original < 0 || fcntl(h->fd, F_SETFL, original | O_NONBLOCK) != 0) {
+            h->err_kind = NURL_NET_ERR_WRITE; return -1;
+        }
+# endif
+        ssize_t wn = send(h->fd, buf, (size_t)n, flags);
+        int saved = errno;
+# ifndef MSG_DONTWAIT
+        if (fcntl(h->fd, F_SETFL, original) != 0) {
+            h->err_kind = NURL_NET_ERR_WRITE; return wn > 0 ? wn : -1;
+        }
+# endif
+        errno = saved;
+        if (wn < 0 && saved == EINTR) continue;
+#endif
+        if (wn <= 0) return nurl__tcp_short_send(h, (long long)wn, 0);
+        h->err_kind = NURL_NET_ERR_OK;
+        return (long long)wn;
+    }
+}
+
+/* One receive attempt; EAGAIN leaves partial TLS ciphertext in the
+ * source-layer buffer instead of parking with an unsent output queue. */
+long long nurl_tcp_read_nowait(long long handle, const char *buf, long long n) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (h->fd == NURL_INVALID_SOCK) { h->err_kind = NURL_NET_ERR_CLOSED; return -1; }
+    if (n <= 0) return 0;
+    if (!buf) { h->err_kind = NURL_NET_ERR_READ; return -1; }
+    for (;;) {
+#ifdef _WIN32
+        u_long on = 1, restore = h->nonblock ? 1 : 0;
+        if (!restore && ioctlsocket(h->fd, FIONBIO, &on) != 0) { h->err_kind = NURL_NET_ERR_READ; return -1; }
+        int got = recv(h->fd, (char*)buf, (int)(n > 0x40000000 ? 0x40000000 : n), 0);
+        int saved = WSAGetLastError();
+        if (!restore && ioctlsocket(h->fd, FIONBIO, &restore) != 0) { h->err_kind = NURL_NET_ERR_READ; return got > 0 ? got : -1; }
+        WSASetLastError(saved);
+        if (got < 0 && saved == WSAEINTR) continue;
+#else
+        int flags = 0;
+# ifdef MSG_DONTWAIT
+        flags = MSG_DONTWAIT;
+# else
+        int original = fcntl(h->fd, F_GETFL, 0);
+        if (original < 0 || fcntl(h->fd, F_SETFL, original | O_NONBLOCK) != 0) { h->err_kind = NURL_NET_ERR_READ; return -1; }
+# endif
+        ssize_t got = recv(h->fd, (void*)buf, (size_t)n, flags);
+        int saved = errno;
+# ifndef MSG_DONTWAIT
+        if (fcntl(h->fd, F_SETFL, original) != 0) { h->err_kind = NURL_NET_ERR_READ; return got > 0 ? got : -1; }
+# endif
+        errno = saved;
+        if (got < 0 && saved == EINTR) continue;
+#endif
+        if (got >= 0) { h->err_kind = NURL_NET_ERR_OK; return (long long)got; }
+#ifdef _WIN32
+        h->err_kind = nurl__net_map_wsa(saved, NURL_NET_ERR_READ);
+#else
+        h->err_kind = nurl__net_map_errno(saved, NURL_NET_ERR_READ);
+#endif
+        return -1;
+    }
+}
+
+/* Wait for either read (bit 1) or write (bit 2). EINTR does not restart
+ * the timeout; a pending absolute write budget additionally bounds POLLOUT. */
+long long nurl_tcp_wait_io(long long handle, long long events, long long ms) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK || !(events & 3)) return -1;
+    long long start = nurl_monotonic_ns();
+    for (;;) {
+        long long wait_ms = ms;
+        if (ms > 0) {
+            long long elapsed = (nurl_monotonic_ns() - start) / 1000000;
+            if (elapsed >= ms) return 0;
+            wait_ms = ms - elapsed;
+        }
+        if (events & 2) {
+            long long remaining = nurl_tcp_write_wait_ms(handle);
+            if (remaining == 0) return 0;
+            if (remaining >= 0 && (wait_ms < 0 || remaining < wait_ms)) wait_ms = remaining;
+        }
+        int bounded = wait_ms < 0 ? -1 : (int)(wait_ms > 2147483647 ? 2147483647 : wait_ms);
+#ifdef _WIN32
+        fd_set reads, writes, errors;
+        FD_ZERO(&reads); FD_ZERO(&writes); FD_ZERO(&errors);
+        if (events & 1) FD_SET(h->fd, &reads);
+        if (events & 2) FD_SET(h->fd, &writes);
+        FD_SET(h->fd, &errors);
+        struct timeval timeout, *timep = NULL;
+        if (bounded >= 0) { timeout.tv_sec = bounded / 1000; timeout.tv_usec = (bounded % 1000) * 1000; timep = &timeout; }
+        int ready = select(0, &reads, &writes, &errors, timep);
+        if (ready < 0 && WSAGetLastError() == WSAEINTR) continue;
+#else
+        struct pollfd fd;
+        fd.fd = h->fd;
+        fd.events = (short)(((events & 1) ? POLLIN : 0) | ((events & 2) ? POLLOUT : 0));
+        fd.revents = 0;
+        int ready = poll(&fd, 1, bounded);
+        if (ready < 0 && errno == EINTR) continue;
+#endif
+        return ready > 0 ? 1 : ready;
+    }
 }
 
 long long nurl_tcp_write(long long handle, const char *buf, long long n) {
@@ -2083,31 +2359,23 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
         h->err_kind = NURL_NET_ERR_WRITE;
         return -1;
     }
-    if (h->timeo_dirty && !h->nonblock) nurl__tcp_apply_timeo(h);
     long long total = 0;
-    int stalls = 0;   /* see nurl__tcp_short_send */
     while (total < n) {
+        if (!nurl__tcp_prepare_write(h)) return total > 0 ? total : -1;
         long long want = n - total;
 #ifdef _WIN32
         int chunk = (int)(want > 0x40000000 ? 0x40000000 : want);
         int wn = send(h->fd, buf + total, chunk, 0);
 #else
-        ssize_t wn;
-        do {
-            wn = send(h->fd, buf + total, (size_t)want,
+        ssize_t wn = send(h->fd, buf + total, (size_t)want,
 #  ifdef MSG_NOSIGNAL
                       MSG_NOSIGNAL);
 #  else
                       0);
 #  endif
-        } while (wn < 0 && errno == EINTR);
+        if (wn < 0 && errno == EINTR) continue;
 #endif
-        if (wn <= 0) {
-            int verdict = nurl__tcp_short_send(h, (long long)wn, total, &stalls);
-            if (verdict == NURL_SEND_RETRY) continue;
-            return verdict == NURL_SEND_PROGRESS ? total : -1;
-        }
-        stalls = 0;
+        if (wn <= 0) return nurl__tcp_short_send(h, (long long)wn, total);
         total += (long long)wn;
     }
     h->err_kind = NURL_NET_ERR_OK;
@@ -2143,11 +2411,10 @@ long long nurl_tcp_write2(long long handle, const char *b1, long long n1,
         h->err_kind = NURL_NET_ERR_WRITE;
         return -1;
     }
-    if (h->timeo_dirty && !h->nonblock) nurl__tcp_apply_timeo(h);
     long long n = n1 + n2;
     long long total = 0;
-    int stalls = 0;
     while (total < n) {
+        if (!nurl__tcp_prepare_write(h)) return total > 0 ? total : -1;
         /* Re-point the vector at whatever is still unsent. */
 #ifdef _WIN32
         WSABUF bufs[2];
@@ -2187,22 +2454,15 @@ long long nurl_tcp_write2(long long handle, const char *b1, long long n1,
         memset(&msg, 0, sizeof msg);
         msg.msg_iov    = iov;
         msg.msg_iovlen = cnt;
-        ssize_t wn;
-        do {
-            wn = sendmsg(h->fd, &msg,
+        ssize_t wn = sendmsg(h->fd, &msg,
 #  ifdef MSG_NOSIGNAL
                          MSG_NOSIGNAL);
 #  else
                          0);
 #  endif
-        } while (wn < 0 && errno == EINTR);
+        if (wn < 0 && errno == EINTR) continue;
 #endif
-        if (wn <= 0) {
-            int verdict = nurl__tcp_short_send(h, (long long)wn, total, &stalls);
-            if (verdict == NURL_SEND_RETRY) continue;
-            return verdict == NURL_SEND_PROGRESS ? total : -1;
-        }
-        stalls = 0;
+        if (wn <= 0) return nurl__tcp_short_send(h, (long long)wn, total);
         total += (long long)wn;
     }
     h->err_kind = NURL_NET_ERR_OK;
@@ -2423,6 +2683,26 @@ void nurl_tcp_set_timeout(long long handle, long long ms) {
     if (!h || h->fd == NURL_INVALID_SOCK) return;
     h->timeout_ms = ms > 0 ? ms : 0;
     h->timeo_dirty = 1;
+}
+
+/* Return the NetErr ABI code directly (zero on success), so even a
+ * provider without native socket options can report an explicit refusal.
+ * The kernel may clamp or enlarge the requested buffer. Keep SOCKET,
+ * int and socklen_t widths on this side of the portable NURL ABI. */
+long long nurl_tcp_set_send_buffer(long long handle, long long bytes) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK) return NURL_NET_ERR_CLOSED;
+    if (bytes <= 0 || bytes > INT_MAX) return NURL_NET_ERR_OTHER;
+    int size = (int)bytes;
+    if (setsockopt(h->fd, SOL_SOCKET, SO_SNDBUF,
+                   (const char*)&size, (socklen_t)sizeof(size)) != 0) {
+#ifdef _WIN32
+        return nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_OTHER);
+#else
+        return nurl__net_map_errno(errno, NURL_NET_ERR_OTHER);
+#endif
+    }
+    return NURL_NET_ERR_OK;
 }
 
 /* ── §18b  UDP sockets (dual-stack IPv4/IPv6 + multicast) ──────── */
@@ -3526,7 +3806,14 @@ NURL_NET_IMPORT("tcp_close")    extern void      nurl__ni_tcp_close(long long);
 NURL_NET_IMPORT("tcp_shutdown") extern void      nurl__ni_tcp_shutdown(long long);
 NURL_NET_IMPORT("tcp_err_kind") extern long long nurl__ni_tcp_err_kind(long long);
 NURL_NET_IMPORT("tcp_set_timeout") extern void   nurl__ni_tcp_set_timeout(long long, long long);
+NURL_NET_IMPORT("tcp_set_send_buffer") extern long long nurl__ni_tcp_set_send_buffer(long long, long long);
 NURL_NET_IMPORT("tcp_timeout_ms")  extern long long nurl__ni_tcp_timeout_ms(long long);
+NURL_NET_IMPORT("tcp_set_write_deadline") extern void nurl__ni_tcp_set_write_deadline(long long, long long);
+NURL_NET_IMPORT("tcp_write_deadline") extern long long nurl__ni_tcp_write_deadline(long long);
+NURL_NET_IMPORT("tcp_write_wait_ms") extern long long nurl__ni_tcp_write_wait_ms(long long);
+NURL_NET_IMPORT("tcp_write_nowait") extern long long nurl__ni_tcp_write_nowait(long long, const char*, long long);
+NURL_NET_IMPORT("tcp_wait_io") extern long long nurl__ni_tcp_wait_io(long long, long long, long long);
+NURL_NET_IMPORT("tcp_read_nowait") extern long long nurl__ni_tcp_read_nowait(long long, const char*, long long);
 NURL_NET_IMPORT("tcp_peer_addr")   extern long long nurl__ni_tcp_peer_addr(long long, char*, long long);
 NURL_NET_IMPORT("tcp_local_addr")  extern long long nurl__ni_tcp_local_addr(long long, char*, long long);
 NURL_NET_IMPORT("tcp_get_fd")      extern long long nurl__ni_tcp_get_fd(long long);
@@ -3624,7 +3911,14 @@ char *nurl_tcp_local_addr(long long h) {
     return nurl__net_take(buf, n);
 }
 void nurl_tcp_set_timeout(long long h, long long ms) { nurl__ni_tcp_set_timeout(h, ms); }
+long long nurl_tcp_set_send_buffer(long long h, long long bytes) { return nurl__ni_tcp_set_send_buffer(h, bytes); }
 long long nurl_tcp_timeout_ms(long long h)           { return nurl__ni_tcp_timeout_ms(h); }
+void nurl_tcp_set_write_deadline(long long h, long long ns) { nurl__ni_tcp_set_write_deadline(h, ns); }
+long long nurl_tcp_write_deadline(long long h) { return nurl__ni_tcp_write_deadline(h); }
+long long nurl_tcp_write_wait_ms(long long h) { return nurl__ni_tcp_write_wait_ms(h); }
+long long nurl_tcp_write_nowait(long long h, const char *buf, long long n) { return nurl__ni_tcp_write_nowait(h, buf, n); }
+long long nurl_tcp_wait_io(long long h, long long events, long long ms) { return nurl__ni_tcp_wait_io(h, events, ms); }
+long long nurl_tcp_read_nowait(long long h, const char *buf, long long n) { return nurl__ni_tcp_read_nowait(h, buf, n); }
 long long nurl_tcp_get_fd(long long h)                { return nurl__ni_tcp_get_fd(h); }
 void nurl_tcp_set_nonblock(long long h, long long on) { nurl__ni_tcp_set_nonblock(h, on); }
 void nurl_tcp_ref(long long h)                        { nurl__ni_tcp_ref(h); }
@@ -3787,6 +4081,7 @@ long long nurl_tcp_err_kind(long long h) { (void)h; return NURL_NET_ERR_OTHER; }
 const char *nurl_tcp_peer_addr(long long h) { (void)h; return ""; }
 char       *nurl_tcp_local_addr(long long h) { (void)h; return strdup(""); }
 void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
+long long nurl_tcp_set_send_buffer(long long h, long long bytes) { (void)h; (void)bytes; return 8; }
 /* Async-runtime hooks. The non-WASI variants live above the #else gate;
  * mirror them as no-ops here so wasm-ld doesn't fail with undefined
  * symbols for any example that imports the async/HTTP-server stack
@@ -3859,6 +4154,12 @@ long long nurl_tcp_connect(const char *host, long long port) {
     (void)host; (void)port; return 0;
 }
 long long nurl_tcp_timeout_ms(long long h) { (void)h; return 0; }
+void nurl_tcp_set_write_deadline(long long h, long long ns) { (void)h; (void)ns; }
+long long nurl_tcp_write_deadline(long long h) { (void)h; return 0; }
+long long nurl_tcp_write_wait_ms(long long h) { (void)h; return 0; }
+long long nurl_tcp_write_nowait(long long h, const char *buf, long long n) { (void)h; (void)buf; (void)n; return -1; }
+long long nurl_tcp_wait_io(long long h, long long events, long long ms) { (void)h; (void)events; (void)ms; return -1; }
+long long nurl_tcp_read_nowait(long long h, const char *buf, long long n) { (void)h; (void)buf; (void)n; return -1; }
 #endif /* __wasi__ guard for §18 */
 
 
@@ -6320,6 +6621,12 @@ long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
     return (long long)nurl__reactor_wait((int)fd, POLLOUT, timeout_ms);
 }
 
+long long nurl_reactor_wait_io(long long fd, long long events, long long timeout_ms) {
+    short mask = (short)(((events & 1) ? POLLIN : 0) | ((events & 2) ? POLLOUT : 0));
+    if (!mask) return -1;
+    return (long long)nurl__reactor_wait((int)fd, mask, timeout_ms);
+}
+
 long long nurl_fiber_sleep_ms(long long ms) {
     if (ms <= 0) { nurl_fiber_yield(); return 0; }
     nurl__reactor_wait(-1, 0, ms);
@@ -6720,6 +7027,12 @@ long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
     return (long long)nurl__reactor_wait((int)fd, POLLOUT, timeout_ms);
 }
 
+long long nurl_reactor_wait_io(long long fd, long long events, long long timeout_ms) {
+    short mask = (short)(((events & 1) ? POLLIN : 0) | ((events & 2) ? POLLOUT : 0));
+    if (!mask) return -1;
+    return (long long)nurl__reactor_wait((int)fd, mask, timeout_ms);
+}
+
 long long nurl_fiber_sleep_ms(long long ms) {
     if (ms <= 0) { nurl_fiber_yield(); return 0; }
     nurl__reactor_wait(-1, 0, ms);
@@ -6758,6 +7071,9 @@ long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
 }
 long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
     (void)fd; (void)timeout_ms; return -1;
+}
+long long nurl_reactor_wait_io(long long fd, long long events, long long timeout_ms) {
+    (void)fd; (void)events; (void)timeout_ms; return -1;
 }
 long long nurl_fiber_sleep_ms(long long ms) {
     /* WASI/Windows fall-through; real sleep awaits port. */

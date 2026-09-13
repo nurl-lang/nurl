@@ -57,6 +57,69 @@ class StringArgumentOwnershipTest(unittest.TestCase):
         self.assertNotIn(b'runtime error:', run.stderr)
         self.assertEqual(run.stdout, expected.encode())
 
+    def test_argv_owned_copies_and_conditional_adoption(self):
+        for flags in [(), ('--no-borrowck',)]:
+            with self.subTest(flags=flags):
+                self.run_source(
+                    (ROOT / 'compiler/tests/argv_owned.nu').read_text(),
+                    'argv_scopes=T\nargv_transfer=T\nargv_wrappers=T\n', flags)
+
+    def test_mixed_join_argument_preserves_branch_ownership(self):
+        joins = [
+            '? choose borrowed ( nurl_str_cat `allocated` ` branch` )',
+            '? ! choose ( nurl_str_cat `allocated` ` branch` ) borrowed',
+            '? choose borrowed ? choose borrowed ( nurl_str_cat `allocated` ` branch` )',
+            '?? choose { T → borrowed F → ( nurl_str_cat `allocated` ` branch` ) }',
+            '?? choose { F → ? choose borrowed ( nurl_str_cat `allocated` ` branch` ) T → borrowed }',
+            '? choose borrowed ( choose_text choose borrowed )',
+        ]
+        helper = '@ copy_text s text → s { ^ ( nurl_str_cat text `` ) }\n'
+        for join in joins:
+            for named in (False, True):
+                with self.subTest(join=join, named=named):
+                    argument = 'text: ' + join if named else join
+                    self.run_source('''$ `stdlib/core/string.nu`
+: s borrowed `borrowed`
+@ exercise b choose → v {
+    : s text ( copy_text ''' + argument + ''' )
+    ( nurl_println text )
+}
+@ main → i { ( exercise T ) ( exercise F ) ^ 0 }
+''' + helper + '''@ choose_text b choose s original → s {
+    ^ ? choose original ( nurl_str_cat `allocated` ` branch` )
+}
+''', 'borrowed\nallocated branch\n')
+
+    def test_mixed_join_binding_return_and_reassignment(self):
+        self.run_source('''$ `stdlib/core/string.nu`
+: s borrowed `borrowed`
+@ select_text b choose → s {
+    : s selected ? choose borrowed ( nurl_str_cat `allocated` ` branch` )
+    ^ selected
+}
+@ exercise b choose → v {
+    : s bound ?? choose { T → borrowed F → ( nurl_str_cat `allocated` ` branch` ) }
+    ( nurl_println bound )
+    : s returned ( select_text choose )
+    ( nurl_println returned )
+    : ~ s replaced ``
+    = replaced ? choose borrowed ( nurl_str_cat `allocated` ` branch` )
+    ( nurl_println replaced )
+}
+@ main → i { ( exercise T ) ( exercise F ) ^ 0 }
+''', 'borrowed\n' * 3 + 'allocated branch\n' * 3)
+
+    def test_mixed_join_never_copies_an_opaque_borrow(self):
+        self.run_source('''$ `stdlib/core/string.nu`
+@ is_opaque s value → b { ^ == # i value 7 }
+@ exercise b choose s borrowed → v {
+    : b first ( is_opaque ? choose borrowed ( nurl_str_cat `owned` ` buffer` ) )
+    : b second ( is_opaque ?? choose { T → borrowed F → ( nurl_str_cat `owned` ` buffer` ) } )
+    ( nurl_println ? == first second `same` `wrong` )
+}
+@ main → i { ( exercise T # s 7 ) ( exercise F # s 7 ) ^ 0 }
+''', 'same\nsame\n')
+
     def test_forward_consumers_on_normal_return_and_panic(self):
         self.run_source(
             (ROOT / 'compiler/tests/recover_forward_consumer.nu').read_text(),

@@ -37,8 +37,9 @@ $ `stdlib/ext/http2_conn.nu`
     : !H2Connection H2ConnErr cr ( h2_conn_new conn )
     ?? cr {
         T h2c → {
-            : !v H2ConnErr sr ( h2_conn_serve h2c handler )
-            ( h2_conn_free h2c )
+            : ~ H2Connection active h2c
+            : !v H2ConnErr sr ( h2_conn_serve active handler )
+            ( h2_conn_free active )
             ^ sr
         }
         F e → { ^ @ !v H2ConnErr { F e } }

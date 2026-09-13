@@ -411,12 +411,17 @@ FILE *fdopen(int fd, const char *mode) {
 }
 
 int fclose(FILE *f) {
-    int r;
     if (!f) return -1;
-    fflush(f);
-    r = nl_close(f->fd);
+    int flushed = fflush(f);
+    int flush_errno = errno;
+    int closed = nl_close(f->fd);
+    int close_errno = errno;
     if (f->flags & NL_F_ALLOC) free(f);
-    return r;
+    /* Always release the descriptor and stream, but report buffered writes
+     * that failed at flush even when closing the descriptor itself worked. */
+    if (flushed < 0) { errno = flush_errno; return -1; }
+    if (closed < 0) errno = close_errno;
+    return closed;
 }
 
 int fseek(FILE *f, long off, int whence) {

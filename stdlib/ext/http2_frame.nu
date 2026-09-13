@@ -130,6 +130,7 @@ $ `stdlib/std/net.nu`
     H2FrameOversized  // length > MAX_FRAME_SIZE
     H2FrameBadStreamId  // reserved bit set or zero where positive required
     H2FrameBadPadding  // pad length > payload length
+    H2FrameWouldBlock  // bounded queued writer has no room yet
     H2FrameOther
 }
 
@@ -143,6 +144,7 @@ $ `stdlib/std/net.nu`
         H2FrameOversized → `H2FrameOversized`
         H2FrameBadStreamId → `H2FrameBadStreamId`
         H2FrameBadPadding → `H2FrameBadPadding`
+        H2FrameWouldBlock → `H2FrameWouldBlock`
         H2FrameOther → `H2FrameOther`
     }
 }
@@ -383,7 +385,7 @@ $ `stdlib/std/net.nu`
 }
 
 // Drop the first `n` bytes of rx (the tail moves down in place).
-@ __h2_rx_consume ( Vec u ) rx i n → v {
+@ h2_rx_consume ( Vec u ) rx i n → v {
     : i total ( vec_len [u] rx )
     ? >= n total { ( vec_clear [u] rx ) } {
         : i remaining - total n
@@ -407,7 +409,7 @@ $ `stdlib/std/net.nu`
         = k + k 1
     }
     ? ok {} { ^ @ !v H2FrameErr { F H2FrameBadPreface } }
-    ( __h2_rx_consume rx ( h2_conn_preface_len ) )
+    ( h2_rx_consume rx ( h2_conn_preface_len ) )
     ^ @ !v H2FrameErr { T 0 }
 }
 
@@ -440,7 +442,7 @@ $ `stdlib/std/net.nu`
         ( nurl_memcpy ( vec_data [u] payload ) # *u + # i q 9 length )
         ( vec_set_len [u] payload length )
     } {}
-    ( __h2_rx_consume rx + 9 length )
+    ( h2_rx_consume rx + 9 length )
     ^ @ !H2Frame H2FrameErr { T @ H2Frame { ftype fflags stream_id payload } }
 }
 
@@ -591,4 +593,100 @@ $ `stdlib/std/net.nu`
         = k + k 1
     }
     ^ @ !( Vec u ) H2FrameErr { T out }
+}
+
+// A bounded ordered HTTP/2 wire writer. A queued frame is serialized and TLS
+// sealed exactly once; partial socket writes retain their offset. All frames
+// on a connection (including control frames) must share this writer so neither
+// HTTP/2 bytes nor TLS record sequence numbers can interleave on backpressure.
+// queue borrows its frame; flush never waits for writability or reads a socket.
+// The owner alternates flush with receiving and waits for read OR write readiness
+// through tcp_wait_io when both sides need progress. A failed write is fatal.
+: H2FrameWriter { TcpConn tcp ( Vec u ) pending s state i max_pending }
+
+@ h2_frame_writer TcpConn tcp i max_pending → H2FrameWriter {
+    ^ @ H2FrameWriter { tcp ( vec_new [u] ) ( nurl_zalloc 16 ) max_pending }
+}
+
+@ h2_frame_writer_free sink H2FrameWriter writer → v {
+    ( vec_free [u] . writer pending ) ( nurl_free . writer state )
+}
+
+@ h2_frame_writer_pending H2FrameWriter writer → i {
+    ^ - ( vec_len [u] . writer pending ) ( nurl_peek . writer state 0 )
+}
+
+// Conservative TLS overhead reservation (covers TLS1.2 AES explicit nonces as
+// well as TLS1.3). Check before sealing: rejected data must not consume a nonce.
+@ h2_frame_writer_room H2FrameWriter writer i plaintext_bytes → b {
+    : i records + / plaintext_bytes 16384 1
+    // Also reserve one TLS KeyUpdate response that prepare_write may prepend.
+    : i reserve + 64 + plaintext_bytes * records 40
+    ^ <= reserve - . writer max_pending ( h2_frame_writer_pending writer )
+}
+
+@ h2_frame_writer_queue H2FrameWriter writer H2Frame frame i max_frame_size → !v H2FrameErr {
+    ? != 0 ( nurl_peek . writer state 1 ) { ^ @ !v H2FrameErr { F H2FrameWriteIo } } {}
+    : i size + 9 ( vec_len [u] . frame payload )
+    ? ! ( h2_frame_writer_room writer size ) { ^ @ !v H2FrameErr { F H2FrameWouldBlock } } {}
+    : ( Vec u ) plain \ ( h2_serialize_frame frame max_frame_size )
+    : !( Vec u ) NetErr encoded ( tcp_prepare_write . writer tcp plain )
+    ( vec_free [u] plain )
+    : ( Vec u ) wire ?? encoded {
+        T data → data F _ → {
+            ( nurl_poke . writer state 1 1 )
+            ^ @ !v H2FrameErr { F H2FrameWriteIo }
+        }
+    }
+    : i offset ( nurl_peek . writer state 0 )
+    ? > offset 0 { ( h2_rx_consume . writer pending offset ) ( nurl_poke . writer state 0 0 ) } {}
+    ( vec_extend [u] . writer pending wire )
+    ( vec_free [u] wire )
+    ^ @ !v H2FrameErr { T 0 }
+}
+
+@ h2_frame_writer_flush H2FrameWriter writer → !i H2FrameErr {
+    ? != 0 ( nurl_peek . writer state 1 ) { ^ @ !i H2FrameErr { F H2FrameWriteIo } } {}
+    ?? ( h2_frame_writer_controls writer ) {
+        T _ → {} F e → { ^ @ !i H2FrameErr { F e } }
+    }
+    ? == ( h2_frame_writer_pending writer ) 0 { ^ @ !i H2FrameErr { T 0 } } {}
+    : i offset ( nurl_peek . writer state 0 )
+    : !i NetErr sent ( tcp_try_write_wire . writer tcp . writer pending offset )
+    ?? sent {
+        T count → {
+            : i next + offset count
+            ? == next ( vec_len [u] . writer pending ) {
+                ( vec_clear [u] . writer pending ) ( nurl_poke . writer state 0 0 )
+            } { ( nurl_poke . writer state 0 next ) }
+            ^ @ !i H2FrameErr { T count }
+        }
+        F _ → {
+            ( nurl_poke . writer state 1 1 )
+            ^ @ !i H2FrameErr { F H2FrameWriteIo }
+        }
+    }
+}
+
+// TLS control records belong to the same ciphertext FIFO as application data.
+// A read can request a KeyUpdate reply even when no new HTTP/2 frame is queued.
+// Leave its encoding pending until capacity exists; already queued bytes must
+// retain both their order and their original TLS key generation.
+@ h2_frame_writer_controls H2FrameWriter writer → !v H2FrameErr {
+    ? < - . writer max_pending ( h2_frame_writer_pending writer ) 64 {
+        ^ @ !v H2FrameErr { T 0 }
+    } {}
+    : ( Vec u ) control ?? ( tcp_prepare_control . writer tcp ) {
+        T data → data F _ → {
+            ( nurl_poke . writer state 1 1 )
+            ^ @ !v H2FrameErr { F H2FrameWriteIo }
+        }
+    }
+    ? > ( vec_len [u] control ) 0 {
+        : i offset ( nurl_peek . writer state 0 )
+        ? > offset 0 { ( h2_rx_consume . writer pending offset ) ( nurl_poke . writer state 0 0 ) } {}
+        ( vec_extend [u] . writer pending control )
+    } {}
+    ( vec_free [u] control )
+    ^ @ !v H2FrameErr { T 0 }
 }

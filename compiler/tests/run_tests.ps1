@@ -85,7 +85,7 @@ Set-Location $RootDir
 $Nurlc   = Join-Path $RootDir 'build\nurlc.exe'
 $Runtime = Join-Path $RootDir 'stdlib\runtime.o'
 $OutDir  = Join-Path $ScriptDir 'outputs-windows'
-$WorkDir = Join-Path $RootDir 'build\tests'
+$WorkDir = Join-Path (Join-Path $RootDir 'build\tests') ('run.' + [guid]::NewGuid().ToString('N'))
 
 if (-not (Test-Path $Nurlc)) {
     Write-Error "nurlc not found at $Nurlc — run build.bat"; exit 2
@@ -139,6 +139,7 @@ $EnableFibers   = if ($env:NURL_FIBER_TESTS) { $env:NURL_FIBER_TESTS } else { '0
 $EnableInternet = if (($env:NURL_HTTP_TESTS -eq '1') -or ($env:NURL_NET_TESTS -eq '1')) { '1' } else { '0' }
 
 New-Item -ItemType Directory -Force -Path $OutDir, $WorkDir | Out-Null
+Write-Host "Artifacts: $WorkDir"
 
 # ── collect the test set (ordinal sort, LC_ALL=C equivalent) ─────
 $names = @(Get-ChildItem -Path $ScriptDir -Filter '*.nu' -File | ForEach-Object { $_.BaseName })
@@ -439,7 +440,13 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     # wins, so a Windows drift can never masquerade as a Linux regression.
     $enc = New-Object System.Text.UTF8Encoding $false
     if ($Update) {
-        [System.IO.File]::WriteAllText($gold, $act, $enc)
+        $temporary = $gold + '.tmp.' + [guid]::NewGuid().ToString('N')
+        try {
+            [System.IO.File]::WriteAllText($temporary, $act, $enc)
+            [System.IO.File]::Move($temporary, $gold, $true)
+        } finally {
+            if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+        }
         return [pscustomobject]@{ Name = $name; Verdict = 'UPDATED'; Diff = '' }
     }
     if (-not (Test-Path -LiteralPath $gold)) {
