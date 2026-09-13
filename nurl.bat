@@ -1,6 +1,15 @@
 @echo off
 setlocal DisableDelayedExpansion
 
+REM Take the script's own directory NOW, before anything shifts. SHIFT
+REM replaces %0 with %1, so after the flag loop below %~dp0 is no longer
+REM this file's directory but the directory of whichever argument has
+REM arrived at position 0 -- the source file. Reading it afterwards sent
+REM every flagged build looking for nurlc.exe and runtime.o beside the
+REM SOURCE, which is why `nurl.bat -g x.nu out` could not find a toolchain
+REM that `nurl.bat x.nu out` found perfectly well.
+set "SCRIPTDIR=%~dp0"
+
 REM Copyright (c) 2026 The NURL Project Developers
 REM SPDX-License-Identifier: MIT OR Apache-2.0
 REM Dual-licensed under MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE) at your option.
@@ -98,13 +107,6 @@ if "%~2"=="" (
 for %%I in ("%OUTBASE%") do set "OUTBASE=%%~fI"
 for %%I in ("%OUTBASE%") do set "EXEDIR=%%~dpI"
 for %%I in ("%OUTBASE%") do set "OUTNAME=%%~nxI"
-REM `set "VAR=%~dp0"` and nothing cleverer. An install directory may be
-REM named with % ! or & in it, and the assignment's quotes are what keep
-REM those from being read as syntax. Handing the same %~dp0 to a FOR
-REM instead -- to shorten it to its 8.3 form, which would have had none of
-REM them -- put it somewhere the quotes did not cover: the & ended the
-REM command, and SCRIPTDIR came back as the PARENT directory.
-set "SCRIPTDIR=%~dp0"
 REM Values inserted through delayed expansion are not parsed as command
 REM operators and their embedded ! characters are not expanded again.
 setlocal EnableDelayedExpansion
