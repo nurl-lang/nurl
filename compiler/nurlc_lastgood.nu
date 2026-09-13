@@ -5571,16 +5571,25 @@
         : s index ( str_first_word rest ) = rest ( str_skip_word rest )
         ( nurl_print `@.__nurl_argtransfer.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` )
-        ( nurl_print ? ( str_contains_word ( nurl_sym_get g_fn_escapes callee ) index ) `true` `false` )
+        ( nurl_print ? ( str_contains_word ( nurl_sym_get g_fn_sink callee ) index ) `true` `false` )
         ( nurl_print `\n` )
     }
 }
 
-// An owned binding passed to a retaining argument leaves this scope's
+// An owned binding passed to a CONSUMING argument leaves this scope's
 // ownership at the CALL, not at the declaration or the branch join. Keep
 // the move queued until all arguments have been evaluated (a later argument
 // may inspect the same buffer, e.g. string_from_take raw (strlen raw)).
-// Forward/generic helpers use their final whole-module escape summary.
+// Forward/generic helpers use their final whole-module sink summary.
+//
+// Consuming means `sink` (declared or inferred), never merely escaping.
+// g_fn_escapes answers a lifetime question — "could this pointer outlive
+// the call?" — and over-approximates on purpose, so that a stack address
+// handed to such a parameter is rejected. Ownership is a different
+// question. __build_argv stores its `cmd` argument into the argv block it
+// hands to execvp: an escape, but nothing there ever frees it. Reading
+// that as a move strands the buffer AND nulls the caller's binding, which
+// is still live on the arms below the call.
 @ mem_string_arg_transfer i syms s callee i index i tt s ident i line → s {
     ? | == 0 g_auto_drop_strings ! ( is_ident_tok tt ) { ^ ( nurl_str_cat `` `` ) } {}
     : s slot ( nurl_sym_get2 syms ident `__ptr` )
@@ -6299,35 +6308,44 @@
     : s types_old # s ( nurl_peek t 4 )
     : s depths_old # s ( nurl_peek t 5 )
     : s prev_old # s ( nurl_peek t 8 )
+    : s lens_old # s ( nurl_peek t 11 )
     : s names_new # s ( nurl_alloc * newcap 8 )
     : s types_new # s ( nurl_alloc * newcap 8 )
     : s depths_new # s ( nurl_alloc * newcap 8 )
     : s prev_new # s ( nurl_alloc * newcap 8 )
+    : s lens_new # s ( nurl_zalloc * newcap 8 )
     : i nbytes * count 8
     ( memcpy names_new names_old nbytes )
     ( memcpy types_new types_old nbytes )
     ( memcpy depths_new depths_old nbytes )
     ( memcpy prev_new prev_old nbytes )
+    ( memcpy lens_new lens_old nbytes )
     ( nurl_free names_old )
     ( nurl_free types_old )
     ( nurl_free depths_old )
     ( nurl_free prev_old )
+    ( nurl_free lens_old )
     ( nurl_poke t 2 newcap )
     ( nurl_poke t 3 # i names_new )
     ( nurl_poke t 4 # i types_new )
     ( nurl_poke t 5 # i depths_new )
     ( nurl_poke t 8 # i prev_new )
+    ( nurl_poke t 11 # i lens_new )
 }
 
 : ~ i g_live_symtables 0
 : ~ i g_live_lexers 0
 
 @ nurl_sym_new → i {
-    // 11 slots: 0 count, 1 depth, 2 cap, 3 names, 4 types, 5 depths,
+    // 12 slots: 0 count, 1 depth, 2 cap, 3 names, 4 types, 5 depths,
     // 6 nbuckets, 7 buckets (head index+1 per bucket; 0 = empty),
-    // 8 prev (per-entry link to the previous entry in the same bucket).
+    // 8 prev (per-entry link to the previous entry in the same bucket),
+    // 11 lens (cached byte length of the value, 0 = "ask strlen").
+    // Only nurl_sym_append_word maintains slot 11, because it is the only
+    // writer whose cost is dominated by re-deriving a length it just
+    // computed; every other writer stores 0 and the readers never look.
     : i nb 4096
-    : s t # s ( nurl_zalloc 88 )
+    : s t # s ( nurl_zalloc 96 )
     // Compilation owns every table until its explicit release. Intrusive
     // links (slots 9/10) let final cleanup reclaim handles abandoned by a
     // diagnostic without scanning on normal release or allocating a tracker.
@@ -6341,6 +6359,7 @@
     ( nurl_poke t 6 nb )
     ( nurl_poke t 7 # i # s ( nurl_zalloc * nb 8 ) )
     ( nurl_poke t 8 # i # s ( nurl_alloc * 64 8 ) )
+    ( nurl_poke t 11 # i # s ( nurl_zalloc * 64 8 ) )
     ^ # i t
 }
 
@@ -6381,6 +6400,7 @@
     ( nurl_free # s ( nurl_peek t 5 ) )
     ( nurl_free # s ( nurl_peek t 7 ) )
     ( nurl_free # s ( nurl_peek t 8 ) )
+    ( nurl_free # s ( nurl_peek t 11 ) )
     ( nurl_free t )
 }
 
@@ -6401,6 +6421,10 @@
     = . names count # s ( nurl_strdup name )
     = . types count # s ( nurl_strdup type )
     = . depths count ( nurl_peek t 1 )
+    // Slot 11 caches the value's length for nurl_sym_append_word; 0 means
+    // "not known, ask strlen", which is also what an empty value measures.
+    : *i lens # *i # s ( nurl_peek t 11 )
+    = . lens count 0
     // Push onto the front of the bucket chain — newest-first, so a
     // later definition of the same name shadows the earlier one, exactly
     // like the old backward linear scan.
@@ -6488,6 +6512,8 @@
     : *s types # *s # s ( nurl_peek # s h 4 )
     ( nurl_free . types idx )
     = . types idx # s ( nurl_strdup value )
+    : *i lens # *i # s ( nurl_peek # s h 11 )
+    = . lens idx 0
 }
 
 // Overwrite the value of `name` WHERE IT LIVES, at whatever scope depth
@@ -6524,6 +6550,8 @@
             ? == 0 # i ( strcmp name . names idx )
             { ( nurl_free . types idx )
                 = . types idx # s ( nurl_strdup value )
+                : *i lens # *i # s ( nurl_peek t 11 )
+                = . lens idx 0
                 ^ v }
             { = cur . prev idx }
         }
@@ -6552,6 +6580,62 @@
     : s grown # s ( nurl_realloc # *u old + + ol sl 1 )
     ( memcpy # s + # i # *u grown ol suffix + sl 1 )
     = . types idx grown
+    : *i lens # *i # s ( nurl_peek # s h 11 )
+    = . lens idx + ol sl
+}
+
+// Append `word` to the space-separated list under `name`, WHEREVER in
+// the scope chain that name lives — the depth rule of nurl_sym_set_deep
+// with the in-place growth of nurl_sym_append above.
+//
+// `__park_append` spelled this get + cat3 + set_deep, which is the same
+// three-copies-per-append shape nurl_sym_append was written to kill,
+// one scope rule over: the fix landed on the current-scope spelling and
+// the parked lists kept the bug. They are the compiler's largest
+// accumulators — the pending-implication list reaches 363 KB on a large
+// import closure, and building it copied 1.2 GB. That is the
+// superlinear term in every frontend compile, and it grows with the
+// import closure, so it is worst exactly where compiles already hurt.
+//
+// The separator is part of the contract: a list's words are joined by a
+// single space, and only a non-empty list needs one, which is a fact the
+// append already knows and the caller would have to re-derive.
+@ nurl_sym_append_word i h s name s word → v {
+    : s t # s h
+    : i count ( nurl_peek t 0 )
+    : *s names # *s # s ( nurl_peek t 3 )
+    : *s types # *s # s ( nurl_peek t 4 )
+    : *i buckets # *i # s ( nurl_peek t 7 )
+    : *i prev # *i # s ( nurl_peek t 8 )
+    : i bh ( __sym_hash name ( nurl_peek t 6 ) )
+    // Same newest-first bucket walk as nurl_sym_set_deep, so the entry
+    // this grows is the entry nurl_sym_get would read back.
+    : ~ i cur . buckets bh
+    ~ != cur 0 {
+        : i idx - cur 1
+        ? >= idx count { = cur 0 } {
+            ? == 0 # i ( strcmp name . names idx )
+            { : s old . types idx
+                : *i lens # *i # s ( nurl_peek t 11 )
+                // The cached length is what keeps this O(1) in the list's
+                // size. Without it the strlen alone is O(L) per append,
+                // which is the same quadratic one term smaller: 400 KB
+                // rescanned for every record added to it.
+                : i cl . lens idx
+                : i ol ? != cl 0 cl ( nurl_str_len old )
+                : i wl ( nurl_str_len word )
+                : i sep ? == ol 0 0 1
+                : s grown # s ( nurl_realloc # *u old + + + ol sep wl 1 )
+                : *u gp # *u grown
+                ? == sep 1 { = . gp ol # u 32 } {}
+                ( memcpy # s + # i gp + ol sep word + wl 1 )
+                = . types idx grown
+                = . lens idx + + ol sep wl
+                ^ v }
+            { = cur . prev idx }
+        }
+    }
+    ( nurl_sym_def h name word )
 }
 
 // Index of the newest entry for `name` when it sits at the CURRENT
@@ -9680,8 +9764,7 @@
         ? & ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
         ( is_ident_tok bck_arg_tt )
         { : s sink_ptr ( nurl_sym_get2 syms bck_arg_val `__ptr` )
-            ? & ! ( __is_autodrop_enum at syms ) | | ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) bck_arg_val )
-            ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) sink_ptr )
+            ? & ! ( __is_autodrop_enum at syms ) | ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) bck_arg_val )
             | ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) sink_ptr )
             ( str_contains_word ( nurl_sym_get syms `__owned_struct_fields__` ) sink_ptr )
             { ( die lex ( nurl_str_cat3
@@ -16224,9 +16307,13 @@
             : i pvid ( nurl_str_to_int pvn )
             : s pcal ( bck_field rec 5 )
             : s paix ( bck_field rec 6 )
-            // A tracked raw-string owner also moves when the callee keeps
-            // its address. The same final escape fact controls emitted IR.
-            : s psink ( nurl_sym_get ? ( seq kind `pendretain` ) g_fn_escapes g_fn_sink pcal )
+            // A tracked raw-string owner moves only when the callee CONSUMES
+            // that parameter. Escaping is not consuming: a callee may store a
+            // borrowed pointer in a scratch container it never frees (argv for
+            // execvp), and calling that a move both strands the buffer and
+            // nulls a binding the caller still reads. The same consumption
+            // fact controls emitted IR (mem_emit_arg_flags).
+            : s psink ( nurl_sym_get g_fn_sink pcal )
             : s palias ? ( seq kind `pendretain` ) `` ( nurl_sym_get g_fn_ret_alias pcal )
             ? ( str_contains_word psink paix )
             { ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st pvid )
@@ -23177,6 +23264,43 @@
     ( nurl_str_slice str pos - slen pos )
 }
 
+// ── Cursor walk over a space-separated list ──────────────────────
+//
+// `str_first_word` + `str_skip_word` answer "next word, then the rest"
+// by allocating BOTH the word and a copy of the entire remaining tail,
+// and each of those allocations re-derives the list length with strlen.
+// Walking a W-word, L-byte list that way moves O(L^2) bytes and scans
+// O(W*L) more looking for the terminator — invisible on the short lists
+// the pair was written for, and the dominant cost of a frontend compile
+// on the parked implication lists, which reach 363 KB.
+//
+// These two are the same walk with the length hoisted: the caller keeps
+// a byte offset, so nothing but the word it asked for is ever copied.
+// `__word_end` finds the end of the word at `pos`; the next word starts
+// one byte past it.
+@ __word_end s list i n i pos → i {
+    : *u p # *u list
+    : ~ i k pos
+    ~ & < k n != 32 # i . p k { = k + k 1 }
+    k
+}
+
+// The byte span [pos, end) of `list` as a fresh string. `nurl_str_slice`
+// is this with a strlen in front of it to clamp the range; a cursor walk
+// already knows the length, and on a 363 KB list that strlen costs far
+// more than the handful of bytes being copied.
+@ __span_dup s list i pos i end → s {
+    : ~ i k - end pos
+    ? < k 0 { = k 0 } {}
+    : s r # s ( nurl_alloc + k 1 )
+    : *u sp # *u list
+    ( memcpy r # s + # i sp pos k )
+    : *u rp # *u r
+    : u zero # u 0
+    = . rp k zero
+    ^ r
+}
+
 // str_contains_word: true if 'word' appears as a whole word in space-separated 'list'.
 // Is `word` a whole word of the space-separated `list`?
 //
@@ -23608,13 +23732,10 @@
 
 // Append one space-separated record to a symbol-map list under `key`.
 // The parked-work lists (implications, deferred checks) all grow this
-// way; the ternary keeps both arms owning, which is what stops the
-// join from leaking its copy.
+// way, and they are the compiler's largest, so the append has to grow
+// the list in place rather than rebuild it — see nurl_sym_append_word.
 @ __park_append i m s key s rec → v {
-    : s cur ( nurl_sym_get m key )
-    ( nurl_sym_set_deep m key
-    ? == 0 ( nurl_str_len cur ) ( nurl_str_cat rec `` )
-    ( nurl_str_cat3 cur ` ` rec ) )
+    ( nurl_sym_append_word m key rec )
 }
 
 // Move the 4-word implication records a body parked in `syms` into the
@@ -24018,13 +24139,15 @@
 // True when anything was added.
 @ __resolve_impl_round s key i dst → b {
     : ~ b changed F
-    : ~ s rest ( nurl_sym_get g_pending_impl key )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s fnm ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s pidx ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s cn ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s fn ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s aidx ( str_first_word rest ) = rest ( str_skip_word rest )
+    : s rest ( nurl_sym_get g_pending_impl key )
+    : i rn ( nurl_str_len rest )
+    : ~ i pos 0
+    ~ < pos rn {
+        : i e1 ( __word_end rest rn pos ) : s fnm ( __span_dup rest pos e1 ) = pos + e1 1
+        : i e2 ( __word_end rest rn pos ) : s pidx ( __span_dup rest pos e2 ) = pos + e2 1
+        : i e3 ( __word_end rest rn pos ) : s cn ( __span_dup rest pos e3 ) = pos + e3 1
+        : i e4 ( __word_end rest rn pos ) : s fn ( __span_dup rest pos e4 ) = pos + e4 1
+        : i e5 ( __word_end rest rn pos ) : s aidx ( __span_dup rest pos e5 ) = pos + e5 1
         // Mangled name first, then the generic name — the same lookup
         // order gen_call uses, so a generic callee resolves through its
         // instantiation or through the template, whichever carries it.
@@ -29473,6 +29596,7 @@
         // inference cannot prove either.
         ( nurl_sym_def syms `str_first_word__ret_owned` `str` )
         ( nurl_sym_def syms `str_skip_word__ret_owned` `str` )
+        ( nurl_sym_def syms `__span_dup__ret_owned` `str` )
         ( nurl_sym_def syms `seplist_first__ret_owned` `str` )
         ( nurl_sym_def syms `seplist_rest__ret_owned` `str` )
         ( nurl_sym_def syms `__kw_trim__ret_owned` `str` )
