@@ -372,10 +372,24 @@ class WindowsProcess(unittest.TestCase):
             with self.subTest(command=command):
                 result = subprocess.run([str(ROOT / 'build/nurlpkg.exe'), command], cwd=project,
                                         env=env, capture_output=True, timeout=180)
+                # Same run with an ordinary TEMP. clang reports only that it
+                # could not make a temporary file and "no such file or
+                # directory", which is the same sentence whether the name
+                # defeated something or the directory was simply gone. If the
+                # plain one passes, the specials in TEMP are the cause; if it
+                # fails too, TEMP is not what this is about.
+                plain = self.directory / f'plain-scratch-{command}'
+                plain.mkdir(exist_ok=True)
+                control = subprocess.run(
+                    [str(ROOT / 'build/nurlpkg.exe'), command], cwd=project,
+                    env={**env, 'TEMP': str(plain), 'TMP': str(plain)},
+                    capture_output=True, timeout=180)
                 self.assertEqual(result.returncode, 0,
                                  (result.stdout + result.stderr).decode(errors='replace')
                                  + f'\nTEMP={env["TEMP"]}\n'
-                                 + 'scratch ' + self.produced(scratch))
+                                 + 'scratch ' + self.produced(scratch)
+                                 + f'\nplain TEMP rc={control.returncode}\n'
+                                 + (control.stdout + control.stderr).decode(errors='replace'))
                 self.assertFalse(list(scratch.glob('nurlpkg-run-*')))
 
     def test_installed_shims_preserve_literal_paths(self):
