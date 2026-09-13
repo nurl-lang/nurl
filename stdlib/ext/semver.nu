@@ -39,6 +39,9 @@
 // with the same core); we do not special-case that yet — a prerelease that
 // falls inside the derived [lo, hi) range matches. Document a dependency on
 // prerelease versions accordingly.
+// Core components and constructed range bounds must fit a nonnegative i64;
+// inputs exceeding that representation fail instead of wrapping. Numeric
+// prerelease identifiers are compared as decimal strings without a size cap.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -128,6 +131,9 @@ $ `stdlib/core/vec.nu`
     ~ < k to {
         : i c ( nurl_str_at text to k )
         ? & >= c 48 <= c 57 {
+            ? > r / - 9223372036854775807 - c 48 10 {
+                ^ @ !i SemverErr { F # SemverErr SvBadNumber }
+            } {}
             = r + * r 10 - c 48
         } {
             = bad 1
@@ -214,17 +220,6 @@ $ `stdlib/core/vec.nu`
     ^ 1
 }
 
-@ __sv_to_int s a → i {
-    : i n ( nurl_str_len a )
-    : ~ i r 0
-    : ~ i k 0
-    ~ < k n {
-        = r + * r 10 - ( nurl_str_at a n k ) 48
-        = k + k 1
-    }
-    ^ r
-}
-
 @ __sv_strcmp s a s b → i {
     : i an ( nurl_str_len a )
     : i bn ( nurl_str_len b )
@@ -248,11 +243,15 @@ $ `stdlib/core/vec.nu`
     : i an ( __sv_all_digits a )
     : i bn ( __sv_all_digits b )
     ? & != an 0 != bn 0 {
-        : i av ( __sv_to_int a )
-        : i bv ( __sv_to_int b )
-        ? < av bv { ^ -1 } {}
-        ? > av bv { ^ 1 } {}
-        ^ 0
+        : i alen ( nurl_str_len a )
+        : i blen ( nurl_str_len b )
+        : ~ i ai 0
+        : ~ i bi 0
+        ~ & < ai - alen 1 == ( nurl_str_at a alen ai ) 48 { = ai + ai 1 }
+        ~ & < bi - blen 1 == ( nurl_str_at b blen bi ) 48 { = bi + bi 1 }
+        ? < - alen ai - blen bi { ^ -1 } {}
+        ? > - alen ai - blen bi { ^ 1 } {}
+        ^ ( __sv_strcmp # s + # i a ai # s + # i b bi )
     } {}
     ? != an 0 { ^ -1 } {}  // numeric has lower precedence
     ? != bn 0 { ^ 1 } {}
@@ -433,6 +432,21 @@ $ `stdlib/core/vec.nu`
     ? == . p count 0 { ^ @ !SvInterval SemverErr { T ( __sv_any_interval ) } } {}
     : i full ? >= . p count 3 { 1 } { 0 }
 
+    // Upper bounds bump one component. Check before constructing any owned
+    // interval fields, so an unrepresentable bound neither wraps nor leaks.
+    : ~ i bumped -1
+    ? | == op 1 & == full 0 | | == op 2 == op 3 | == op 6 == op 9 {
+        = bumped ? >= . p count 2 . p minor . p major
+    } {}
+    ? == op 0 {
+        ? != . p major 0 { = bumped . p major } {
+            ? != . p minor 0 { = bumped . p minor } {
+                ? >= . p count 3 { = bumped . p patch } {}
+            }
+        }
+    } {}
+    ? == bumped 9223372036854775807 { ^ @ !SvInterval SemverErr { F # SemverErr SvBadReq } } {}
+
     // > : full → exclusive lower at the version; partial → inclusive lower at X-range hi
     ? == op 3 {
         ? full { ^ @ !SvInterval SemverErr { T @ SvInterval { 1 ( __sv_partial_lo p ) 0 0 ( __sv_make 0 0 0 ) 0 } } } {}
@@ -506,6 +520,9 @@ $ `stdlib/core/vec.nu`
     : PartialVer pa ( __sv_parse_partial text af at )
     : PartialVer pb ( __sv_parse_partial text bf bt )
     ? | < . pa count 1 < . pb count 1 { ^ @ !SvInterval SemverErr { F # SemverErr SvBadReq } } {}
+    ? & < . pb count 3 == ? >= . pb count 2 . pb minor . pb major 9223372036854775807 {
+        ^ @ !SvInterval SemverErr { F # SemverErr SvBadReq }
+    } {}
     : Semver lo ( __sv_partial_lo pa )
     ? >= . pb count 3 {
         ^ @ !SvInterval SemverErr { T @ SvInterval { 1 lo 1 1 ( __sv_partial_lo pb ) 1 } }

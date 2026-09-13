@@ -32,6 +32,36 @@ $ `stdlib/std/dns.nu`
                     ?? ( tcp_accept l ) {
                         F e → { ( nurl_print `accept: ERR ` ) ( nurl_println ( net_err_name e ) ) = rc 1 }
                         T sc → {
+                            : b tuned ?? ( tcp_set_send_buffer c 4096 ) { T _ → T F _ → F }
+                            : b refused ?? ( tcp_set_send_buffer c 0 ) { T _ → F F _ → T }
+                            ( nurl_println ? & tuned refused `send buffer tuning: yes` `send buffer tuning: no` )
+                            ? ! & tuned refused { = rc 1 } {}
+                            : ( Vec u ) probe ( bytes_from_str `must not be sent` )
+                            ( tcp_set_write_deadline c 1 )
+                            ( nurl_print `write deadline preserved: ` )
+                            ( nurl_println ? == ( tcp_write_deadline c ) 1 `yes` `no` )
+                            ? != ( tcp_write_deadline c ) 1 { = rc 1 } {}
+                            ?? ( tcp_try_write_wire c probe 0 ) {
+                                T _ → { ( nurl_println `expired write rejected: no` ) = rc 1 }
+                                F error → {
+                                    : b timed ?? error { NetTimeout → T _ → F }
+                                    ( nurl_println ? timed `expired write rejected: yes` `expired write rejected: no` )
+                                    ? ! timed { = rc 1 } {}
+                                }
+                            }
+                            ( tcp_set_write_deadline c 0 )
+                            ( vec_clear [u] probe )
+                            ?? ( tcp_try_read_into sc probe 64 ) {
+                                T count → {
+                                    ( nurl_println ? == count 0 `try read would block: yes` `try read would block: no` )
+                                    ? != count 0 { = rc 1 } {}
+                                }
+                                F _ → { ( nurl_println `try read would block: no` ) = rc 1 }
+                            }
+                            : i ready ( tcp_wait_io c T T 0 )
+                            ( nurl_println ? == ready 1 `combined readiness: yes` `combined readiness: no` )
+                            ? != ready 1 { = rc 1 } {}
+                            ( vec_free [u] probe )
                             ?? ( tcp_write_str c `ping over wasm\n` ) { T _ → {} F e → { ( nurl_println `write: ERR` ) = rc 1 } }
                             ?? ( tcp_read_chunk sc 64 ) {
                                 T bytes → {

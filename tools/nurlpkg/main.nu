@@ -294,7 +294,7 @@ $ `stdlib/std/bytes.nu`
         ( nurl_print `  2. every deps/... import is declared in [dependencies]
 ` )
         ( nurl_print `  3. every imported stdlib file exists in the RELEASED toolchain, and
-     src/main.nu typechecks against it
+     every packaged root/src NURL module typechecks against it
 ` )
         ( nurl_print `  4. path-deps carry a version requirement
 ` )
@@ -1604,6 +1604,22 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         ( string_free target )
         ^ 1
     } {}
+    : String mfpath ( string_from target_s )
+    ( string_push_str mfpath `/nurl.toml` )
+    : ~ i minimum_rc 1
+    ?? ( manifest_load ( string_data mfpath ) ) {
+        T manifest → {
+            = minimum_rc ( __check_selected_toolchain manifest )
+            ( manifest_free manifest )
+        }
+        F error → {
+            ( nurl_eprint `nurlpkg: cannot parse local dependency ` )
+            ( nurl_eprint ( string_data mfpath ) ) ( nurl_eprint `: ` )
+            ( nurl_eprintln ( manifest_err_name error ) )
+        }
+    }
+    ( string_free mfpath )
+    ? != minimum_rc 0 { ( string_free target ) ^ 1 } {}
     : String linkpath ( __deps_path name )
     : s linkpath_s ( string_data linkpath )
     ? ( file_exists linkpath_s ) {
@@ -1611,8 +1627,8 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         // symlink pointing where we expect — a mismatch means a name
         // collision across transitive deps (two different targets want
         // the same `deps/<name>` slot), which we surface as an error.
-        // A non-symlink entry (readlink → EINVAL) falls back to the v1
-        // idempotent behaviour: treat it as already-installed.
+        // A real directory cannot silently substitute a different local
+        // source tree. Only an explicitly in-place path dependency may use it.
         : ~ i existing_rc 0
         : !String IoErr rl ( fs_readlink linkpath_s )
         ?? rl {
@@ -1631,13 +1647,26 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ( string_free existing )
             }
             F _ → {
-                ( nurl_print `  ` ) ( nurl_print name )
-                ( nurl_print ` (already installed)\n` )
+                : String installed_absolute ( __abs_join cwd linkpath_s )
+                : String installed_normal ( path_normalize ( string_data installed_absolute ) )
+                : String target_normal ( path_normalize target_s )
+                ? != ( nurl_str_eq ( string_data installed_normal ) ( string_data target_normal ) ) 0 {
+                    ( nurl_print `  ` ) ( nurl_print name )
+                    ( nurl_print ` (using declared in-place path)\n` )
+                } {
+                    ( nurl_eprint `  ` ) ( nurl_eprint name )
+                    ( nurl_eprintln `: existing deps entry is not the declared path dependency link; refusing to substitute different source contents` )
+                    = existing_rc 1
+                }
+                ( string_free installed_absolute ) ( string_free installed_normal ) ( string_free target_normal )
             }
         }
         // Record it as seen so the transitive walker doesn't try
         // to re-process the same target.
         ( vec_push [String] seen ( string_from target_s ) )
+        // Existing path links still need traversal: a dependency's manifest
+        // (including its transitive minimum toolchain) may have changed.
+        ? == existing_rc 0 { ( vec_push [String] queue ( string_from target_s ) ) } {}
         ( string_free linkpath )
         ( string_free target )
         ^ existing_rc
@@ -2135,7 +2164,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                         : ?LockPkg po ( vec_get [LockPkg] locked k )
                         ?? po {
                             T p → {
-                                : !i PkgFetchErr ir ( pkg_install_locked trust p `deps` )
+                                : !i PkgFetchErr ir ( __install_locked_for_selected_toolchain trust p `deps` )
                                 ?? ir {
                                     T _ → {
                                         ( nurl_print `  ` ) ( nurl_print ( string_data . p name ) )
@@ -2485,7 +2514,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 // calling `set_permissions` and `mldsa_priv_from_pem`, which the released
 // stdlib does not define. Every path existed, the gate passed, and the tarball
 // would have been unbuildable for every user of `nurlpkg install`. Publishing
-// is irreversible, so the check has to be the real one: typecheck `src/main.nu`
+// is irreversible, so the check has to be the real one: typecheck source modules
 // with the INSTALLED compiler against the INSTALLED stdlib, and believe it.
 @ __scan_stdlib_imports_file s path ( Vec String ) acc → v {
     ?? ( read_file path ) {
@@ -2629,7 +2658,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ^ ? > missing 0 1 0
 }
 
-// Typecheck the package's entry point with the toolchain the user will
+// Typecheck the package's source modules with the toolchain the user will
 // actually install with: --check runs the front end without emitting IR or
 // linking, so this needs no C toolchain and costs a
 // fraction of a build.
@@ -2651,8 +2680,118 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ^ ( string_new )
 }
 
-@ __check_builds_against_installed → i {
-    ? ! ( file_exists `src/main.nu` ) { ^ 0 } {}
+// Root-level modules and src/ are package code. Tests, examples and data
+// fixtures have separate entry points and are verified by their own commands.
+// Use the packer's inventory so ignored source is not treated as shipped code.
+@ __packaged_source String path → b {
+    ^ & ( string_ends_with path `.nu` )
+    | ( string_starts_with path `src/` ) ! ( string_contains path `/` )
+}
+
+@ __check_packaged_sources s cc s root ( Vec String ) files → i {
+    : ~ i bad 0
+    : ~ i k 0
+    ~ < k ( vec_len [String] files ) {
+        ?? ( vec_get [String] files k ) {
+            T path → {
+                ? ( __packaged_source path ) {
+                    ?? ( process_run2 cc `--check` ( string_data path ) ) {
+                        T out → {
+                            ? ( output_success out ) {} {
+                                ( nurl_eprint `nurlpkg: source module ` )
+                                ( nurl_eprint ( string_data path ) )
+                                ( nurl_eprint ` does not compile against the INSTALLED toolchain at ` )
+                                ( nurl_eprintln root )
+                                ( nurl_eprint ( output_stderr out ) )
+                                ( nurl_eprintln `nurlpkg: resolve the compiler diagnostics and rerun publication; target-toolchain compatibility has not been established.` )
+                                = bad 1
+                            }
+                            ( output_free out )
+                        }
+                        F error → {
+                            ( nurl_eprint `nurlpkg: could not launch the installed compiler (` )
+                            ( nurl_eprint ( process_err_name error ) )
+                            ( nurl_eprint `): ` )
+                            ( nurl_eprintln cc )
+                            ( nurl_eprintln `nurlpkg: compilation was not checked; publication refused.` )
+                            = bad 1
+                        }
+                    }
+                } {}
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ bad
+}
+
+@ __check_manifest_toolchain Manifest m s actual → i {
+    ? ( manifest_supports_toolchain m actual ) { ^ 0 } {}
+    ( nurl_eprint `nurlpkg: ` ) ( nurl_eprint ( string_data . m name ) )
+    ( nurl_eprint ` requires NURL >= ` ) ( nurl_eprint ( string_data . m nurl_version ) )
+    ( nurl_eprint `; selected toolchain is ` ) ( nurl_eprintln actual )
+    ( nurl_eprintln `nurlpkg: run nurl upgrade or select a compatible installed toolchain.` )
+    ^ 1
+}
+
+// Match installation to the same target compiler used by the publication gate.
+// Without an installed prefix, the source-built CLI and runtime form the target.
+// An explicitly selected prefix with no working compiler fails closed.
+@ __selected_toolchain_version → String {
+    : String root ( __toolchain_stdlib_root )
+    : String cc ( __installed_nurlc root )
+    : ~ String version ( string_new )
+    ? > ( string_len cc ) 0 {
+        : ( Vec s ) args ( vec_new [s] )
+        ( vec_push [s] args `--version` )
+        ?? ( process_run ( string_data cc ) args `` ) {
+            F _ → {}
+            T output → {
+                ? ( output_success output ) {
+                    : String raw ( string_from ( output_stdout output ) )
+                    ( string_free version ) = version ( string_trim raw )
+                    ( string_free raw )
+                } {}
+                ( output_free output )
+            }
+        }
+        ( vec_free [s] args )
+    } {
+        : ~ b selected F
+        ?? ( env_get `NURL_STDLIB` ) {
+            T value → { = selected > ( string_len value ) 0 ( string_free value ) }
+            F empty → ( string_free empty )
+        }
+        ? ! selected { ( string_push_str version ( nurl_version ) ) } {}
+    }
+    ( string_free cc ) ( string_free root )
+    ^ version
+}
+
+@ __check_selected_toolchain Manifest manifest → i {
+    ? == ( string_len . manifest nurl_version ) 0 { ^ 0 } {}
+    : String version ( __selected_toolchain_version )
+    : i result ( __check_manifest_toolchain manifest ( string_data version ) )
+    ( string_free version )
+    ^ result
+}
+
+@ __install_locked_for_selected_toolchain RegistryTrust trust LockPkg pkg s dest → !i PkgFetchErr {
+    : String version ( __selected_toolchain_version )
+    : !i PkgFetchErr result ( pkg_install_locked_for_toolchain trust pkg dest ( string_data version ) )
+    ( string_free version )
+    ^ result
+}
+
+@ __install_for_selected_toolchain s registry s name s version s checksum s dest → !i PkgFetchErr {
+    : String toolchain ( __selected_toolchain_version )
+    : !i PkgFetchErr result ( pkg_install_one_for_toolchain registry name version checksum dest ( string_data toolchain ) )
+    ( string_free toolchain )
+    ^ result
+}
+
+@ __check_builds_against_installed Manifest manifest → i {
     : String root ( __toolchain_stdlib_root )
     ? == 0 ( string_len root ) {
         ( nurl_eprintln `nurlpkg: cannot locate the target toolchain; set NURL_STDLIB or install the toolchain under HOME/.nurl before publishing.` )
@@ -2684,24 +2823,32 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     }
 
     : ~ i bad 0
-    ?? ( process_run2 ( string_data cc ) `--check` `src/main.nu` ) {
-        T out → {
-            ? ( output_success out ) {} {
-                : s err ( output_stderr out )
-                ( nurl_eprint `nurlpkg: this package does not compile against the INSTALLED toolchain at ` )
-                ( nurl_eprintln ( string_data root ) )
-                ( nurl_eprint err )
-                ( nurl_eprintln `nurlpkg: resolve the compiler diagnostics and rerun publication; target-toolchain compatibility has not been established.` )
-                = bad 1
+    ? > ( string_len . manifest nurl_version ) 0 {
+        : ( Vec s ) args ( vec_new [s] )
+        ( vec_push [s] args `--version` )
+        ?? ( process_run ( string_data cc ) args `` ) {
+            F _ → { = bad 1 ( nurl_eprintln `nurlpkg: could not query installed compiler version` ) }
+            T output → {
+                : String raw_version ( string_from ( output_stdout output ) )
+                : String version ( string_trim raw_version )
+                ? ! ( output_success output ) { = bad 1 } {
+                    = bad ( __check_manifest_toolchain manifest ( string_data version ) )
+                }
+                ( string_free version ) ( string_free raw_version ) ( output_free output )
             }
-            ( output_free out )
+        }
+        ( vec_free [s] args )
+    } {}
+    ? != bad 0 { ( string_free cc ) ( string_free root ) ^ bad } {}
+    ?? ( pkg_pack_list `.` ) {
+        T files → {
+            = bad ( __check_packaged_sources ( string_data cc ) ( string_data root ) files )
+            ( vec_free_with [String] files \ String path → v { ( string_free path ) } )
         }
         F error → {
-            ( nurl_eprint `nurlpkg: could not launch the installed compiler (` )
-            ( nurl_eprint ( process_err_name error ) )
-            ( nurl_eprint `): ` )
-            ( nurl_eprintln ( string_data cc ) )
-            ( nurl_eprintln `nurlpkg: compilation was not checked; publication refused.` )
+            ( nurl_eprint `nurlpkg: cannot enumerate the package sources (` )
+            ( nurl_eprint ( pack_err_name error ) )
+            ( nurl_eprintln `); compilation was not checked; publication refused.` )
             = bad 1
         }
     }
@@ -2749,246 +2896,263 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 // unpublished local http.
 //
 // 0 = every requirement covers its local dep; 1 = refuse (message printed).
+// Validate local overrides before trusting their names or comparing registry code.
 @ __check_pathdep_req Manifest m → i {
     : ~ i bad 0
     : ~ i di 0
     ~ < di ( vec_len [Dep] . m dependencies ) {
-        ?? ( vec_get [Dep] . m dependencies di ) {
-            T d → {
-                ? & ( dep_is_path d ) ( dep_has_version d ) {
-                    : String dtoml ( string_from ( string_data . d path ) )
-                    ( string_push_str dtoml `/nurl.toml` )
-                    ?? ( manifest_load ( string_data dtoml ) ) {
-                        T dm → {
-                            ?? ( semver_req_parse ( string_data . d version ) ) {
-                                T req → {
-                                    ?? ( semver_parse ( string_data . dm version ) ) {
-                                        T lv → {
-                                            ? ( semver_req_matches req lv ) {} {
-                                                ( nurl_eprint `nurlpkg: dependency '` )
-                                                ( nurl_eprint ( string_data . dm name ) )
-                                                ( nurl_eprint `' requires '` )
-                                                ( nurl_eprint ( string_data . d version ) )
-                                                ( nurl_eprint `' but the local copy is ` )
-                                                ( nurl_eprintln ( string_data . dm version ) )
-                                                ( nurl_eprintln `  You build against the local source; everyone else resolves the requirement from the registry — they would compile against different code. Widen the requirement (and publish that version) before publishing this package.` )
-                                                = bad 1
-                                            }
-                                            ( semver_free lv )
-                                        }
-                                        F _ → {}
-                                    }
-                                    ( semver_req_free req )
-                                }
-                                F _ → {}
-                            }
-                            ( manifest_free dm )
-                        }
-                        F _ → {}
+        : Dep d . ( vec_data [Dep] . m dependencies ) di
+        ? ( dep_is_path d ) {
+            ? ! ( dep_has_version d ) {
+                ( nurl_eprint `nurlpkg: path dependency has no registry version requirement: ` )
+                ( nurl_eprintln ( string_data . d name ) )
+                = bad 1
+            } {
+                : String dtoml ( path_join ( string_data . d path ) `nurl.toml` )
+                ?? ( manifest_load ( string_data dtoml ) ) {
+                    F e → {
+                        ( nurl_eprint `nurlpkg: cannot validate local dependency manifest ` )
+                        ( nurl_eprint ( string_data dtoml ) ) ( nurl_eprint `: ` )
+                        ( nurl_eprintln ( manifest_err_name e ) )
+                        = bad 1
                     }
-                    ( string_free dtoml )
-                } {}
+                    T dm → {
+                        ? ! ( string_eq . d name . dm name ) {
+                            ( nurl_eprint `nurlpkg: local dependency name does not match declared name: ` )
+                            ( nurl_eprintln ( string_data . d name ) )
+                            = bad 1
+                        } {}
+                        ?? ( semver_req_parse ( string_data . d version ) ) {
+                            F _ → {
+                                ( nurl_eprint `nurlpkg: invalid path dependency version requirement: ` )
+                                ( nurl_eprintln ( string_data . d version ) )
+                                = bad 1
+                            }
+                            T req → {
+                                ?? ( semver_parse ( string_data . dm version ) ) {
+                                    F _ → {
+                                        ( nurl_eprint `nurlpkg: invalid local dependency version: ` )
+                                        ( nurl_eprintln ( string_data . dm version ) )
+                                        = bad 1
+                                    }
+                                    T lv → {
+                                        ? ( semver_req_matches req lv ) {} {
+                                            ( nurl_eprint `nurlpkg: dependency '` )
+                                            ( nurl_eprint ( string_data . d name ) )
+                                            ( nurl_eprint `' requires '` )
+                                            ( nurl_eprint ( string_data . d version ) )
+                                            ( nurl_eprint `' but the local copy is ` )
+                                            ( nurl_eprintln ( string_data . dm version ) )
+                                            = bad 1
+                                        }
+                                        ( semver_free lv )
+                                    }
+                                }
+                                ( semver_req_free req )
+                            }
+                        }
+                        ( manifest_free dm )
+                    }
+                }
+                ( string_free dtoml )
             }
-            F → {}
-        }
+        } {}
         = di + di 1
     }
     ^ bad
 }
 
-// ── path-dep drift audit (publish gate) ─────────────────────────────
-//
-// A path dependency with a version requirement is built LOCALLY here but
-// resolved from the REGISTRY by everyone else. If the local copy has been
-// edited without bumping its version, the two are different code under the
-// same version number: the author's build succeeds and every registry
-// install compiles against the old published source. That is exactly how
-// nurllama 0.1.1 shipped calling http_app_stream — a function added to the
-// local http package without republishing it.
-//
-// So: for every path dep whose version is already published, fetch that
-// published tarball and compare its sources with the local ones. Any
-// difference is refused, naming the dependency.
-
-@ __srcs_of s dir → ( Vec String ) {
-    : ( Vec String ) out ( vec_new [String] )
-    : String pat ( string_from dir )
-    ( string_push_str pat `/src/*.nu` )
-    ?? ( fs_glob ( string_data pat ) ) {
-        T fs → {
+// Local overrides must match verified registry code before publishing a parent.
+// Keep relative paths and the packer's ignore rules identical to compilation.
+@ __srcs_of s dir → !( Vec String ) PackErr {
+    ?? ( pkg_pack_list dir ) {
+        F e → { ^ @ !( Vec String ) PackErr { F e } }
+        T files → {
+            : ( Vec String ) out ( vec_new [String] )
             : ~ i k 0
-            ~ < k ( vec_len [String] fs ) {
-                ?? ( vec_get [String] fs k ) {
-                    T f → { ( vec_push [String] out ( string_from ( string_data f ) ) ) }
-                    F → {}
-                }
+            ~ < k ( vec_len [String] files ) {
+                : String path . ( vec_data [String] files ) k
+                ? ( __packaged_source path ) { ( vec_push [String] out ( string_clone path ) ) } {}
                 = k + k 1
             }
-            ( vec_free_with [String] fs \ String x → v { ( string_free x ) } )
+            ( vec_free_with [String] files \ String x → v { ( string_free x ) } )
+            ^ @ !( Vec String ) PackErr { T out }
         }
-        F _ → {}
     }
-    ( string_free pat )
-    ^ out
 }
 
-// basename after the last '/'
-@ __basename s p → String {
-    : i n ( nurl_str_len p )
-    : ~ i st 0
-    : ~ i k 0
-    ~ < k n {
-        ? == ( nurl_str_get p k ) 47 { = st + k 1 } {}
-        = k + k 1
-    }
-    : String out ( string_new )
-    = k st
-    ~ < k n {
-        ( string_push_char out ( nurl_str_get p k ) )
-        = k + k 1
-    }
-    ^ out
-}
-
-@ __files_same s a s b → b {
+@ __files_same s a s b → !b IoErr {
     ?? ( read_file_bytes a ) {
+        F e → { ^ @ !b IoErr { F e } }
         T ba → {
+            : ~ ! b IoErr result @ !b IoErr { T F }
             ?? ( read_file_bytes b ) {
+                F e → { = result @ !b IoErr { F e } }
                 T bb → {
-                    : b same ( bytes_eq ba bb )
-                    ( vec_free [u] ba )
+                    = result @ !b IoErr { T ( bytes_eq ba bb ) }
                     ( vec_free [u] bb )
-                    ^ same
-                }
-                F _ → {
-                    ( vec_free [u] ba )
-                    ^ F
                 }
             }
+            ( vec_free [u] ba )
+            ^ result
         }
-        F _ → { ^ F }
     }
 }
 
-// 0 = no drift (or nothing to compare); 1 = refuse (message printed).
-@ __check_pathdep_drift Manifest m s reg → i {
-    : ~ i bad 0
-    : ~ i di 0
-    ~ < di ( vec_len [Dep] . m dependencies ) {
-        ?? ( vec_get [Dep] . m dependencies di ) {
-            T d → {
-                ? & ( dep_is_path d ) ( dep_has_version d ) {
-                    // local version of the dependency
-                    : String dtoml ( string_from ( string_data . d path ) )
-                    ( string_push_str dtoml `/nurl.toml` )
-                    ?? ( manifest_load ( string_data dtoml ) ) {
-                        T dm → {
-                            : s dname ( string_data . dm name )
-                            : s dver ( string_data . dm version )
-                            ?? ( pkg_fetch_index reg dname ) {
-                                T ridx → {
-                                    // is THIS local version already published?
-                                    : ~ i hit -1
-                                    : ~ i vi 0
-                                    ~ < vi ( vec_len [IdxVersion] . ridx versions ) {
-                                        ?? ( vec_get [IdxVersion] . ridx versions vi ) {
-                                            T iv → {
-                                                ? ( nurl_str_eq ( string_data . iv version ) dver ) { = hit vi } {}
-                                            }
-                                            F → {}
-                                        }
-                                        = vi + vi 1
-                                    }
-                                    ? >= hit 0 {
-                                        ?? ( vec_get [IdxVersion] . ridx versions hit ) {
-                                            T iv → {
-                                                ? != 0 ( __dep_drifts reg dname ( string_data . iv version ) ( string_data . iv checksum ) ( string_data . d path ) ) {
-                                                    ( nurl_eprint `nurlpkg: local '` )
-                                                    ( nurl_eprint dname )
-                                                    ( nurl_eprint `' differs from the published ` )
-                                                    ( nurl_eprint dname )
-                                                    ( nurl_eprint ` ` )
-                                                    ( nurl_eprint dver )
-                                                    ( nurl_eprintln ` — bump its version and publish it BEFORE publishing this package.` )
-                                                    ( nurl_eprintln `  (a path dep is built locally here but fetched from the registry by everyone else)` )
-                                                    = bad 1
-                                                } {}
-                                            }
-                                            F → {}
-                                        }
-                                    } {}
-                                    ( regindex_free ridx )
-                                }
-                                F error → { ?? error {
-                                        RegistryNotFound → {}
-                                        _ → { ( __report_registry_fetch reg dname error ) = bad 1 }
-                                    } }
-                            }
-                            ( manifest_free dm )
-                        }
-                        F _ → {}
-                    }
-                    ( string_free dtoml )
-                } {}
-            }
-            F → {}
+// 0 = identical, 1 = source drift, 2 = comparison failed (already diagnosed).
+@ __compare_source_files s localdir s pubdir ( Vec String ) locals ( Vec String ) pubs → i {
+    ? != ( vec_len [String] locals ) ( vec_len [String] pubs ) { ^ 1 } {}
+    : ~ i k 0
+    ~ < k ( vec_len [String] locals ) {
+        : String relative . ( vec_data [String] locals ) k
+        : ~ b found F
+        : ~ i j 0
+        ~ < j ( vec_len [String] pubs ) {
+            ? ( string_eq relative . ( vec_data [String] pubs ) j ) { = found T } {}
+            = j + j 1
         }
-        = di + di 1
+        ? ! found { ^ 1 } {}
+        : String local ( path_join localdir ( string_data relative ) )
+        : String published ( path_join pubdir ( string_data relative ) )
+        : ~ i result 0
+        ?? ( __files_same ( string_data local ) ( string_data published ) ) {
+            T same → { ? ! same { = result 1 } {} }
+            F e → {
+                ( nurl_eprint `nurlpkg: cannot compare dependency source ` )
+                ( nurl_eprint ( string_data relative ) ) ( nurl_eprint `: ` )
+                ( nurl_eprintln ( io_err_msg e ) )
+                = result 2
+            }
+        }
+        ( string_free local ) ( string_free published )
+        ? != result 0 { ^ result } {}
+        = k + k 1
     }
-    ^ bad
+    ^ 0
 }
 
-// 1 = the published tarball's sources differ from the local ones.
-@ __dep_drifts s reg s name s ver s checksum s localdir → i {
-    : String troot ( __tmp_root )
-    : String stage ( string_with_cap 96 )
-    ( string_push_str stage ( string_data troot ) )
-    ( string_push_str stage `/nurlpkg-drift-` )
-    ( string_push_str stage name )
-    ( string_free troot )
-    ?? ( dir_remove_all ( string_data stage ) ) { T _ → {} F _ → {} }
-    ?? ( dir_create_all ( string_data stage ) ) { T _ → {} F _ → {} }
-    : !i PkgFetchErr fr ( pkg_install_one reg name ver checksum ( string_data stage ) )
-    : ~ i drift 0
-    ?? fr {
-        F _ → {
-            // cannot fetch/verify → do not block the publish on a network
-            // failure; the undeclared-dep gate above still applies
-            = drift 0
+@ __compare_package_sources s localdir s pubdir → i {
+    : ~ i result 2
+    ?? ( __srcs_of localdir ) {
+        F e → {
+            ( nurl_eprint `nurlpkg: cannot enumerate local dependency sources: ` )
+            ( nurl_eprintln ( pack_err_name e ) )
         }
-        T _ → {
-            : String pubdir ( string_with_cap 96 )
-            ( string_push_str pubdir ( string_data stage ) )
-            ( string_push_char pubdir 47 )
-            ( string_push_str pubdir name )
-            : ( Vec String ) locals ( __srcs_of localdir )
-            : ( Vec String ) pubs ( __srcs_of ( string_data pubdir ) )
-            ? != ( vec_len [String] locals ) ( vec_len [String] pubs ) { = drift 1 } {}
-            : ~ i k 0
-            ~ & < k ( vec_len [String] locals ) == drift 0 {
-                ?? ( vec_get [String] locals k ) {
-                    T lf → {
-                        : String bn ( __basename ( string_data lf ) )
-                        : String pf ( string_with_cap 96 )
-                        ( string_push_str pf ( string_data pubdir ) )
-                        ( string_push_str pf `/src/` )
-                        ( string_push_str pf ( string_data bn ) )
-                        ? ( __files_same ( string_data lf ) ( string_data pf ) ) {} { = drift 1 }
-                        ( string_free pf )
-                        ( string_free bn )
-                    }
-                    F → {}
+        T locals → {
+            ?? ( __srcs_of pubdir ) {
+                F e → {
+                    ( nurl_eprint `nurlpkg: cannot enumerate published dependency sources: ` )
+                    ( nurl_eprintln ( pack_err_name e ) )
                 }
-                = k + k 1
+                T pubs → {
+                    = result ( __compare_source_files localdir pubdir locals pubs )
+                    ( vec_free_with [String] pubs \ String x → v { ( string_free x ) } )
+                }
             }
             ( vec_free_with [String] locals \ String x → v { ( string_free x ) } )
-            ( vec_free_with [String] pubs \ String x → v { ( string_free x ) } )
-            ( string_free pubdir )
         }
     }
-    ?? ( dir_remove_all ( string_data stage ) ) { T _ → {} F _ → {} }
-    ( string_free stage )
-    ^ drift
+    ^ result
+}
+
+@ __dep_drifts s reg s name s ver s checksum s localdir → i {
+    : String troot ( __tmp_root )
+    : !String IoErr sr ( fs_tempdir ( string_data troot ) `nurlpkg-drift-` )
+    ( string_free troot )
+    : ~ i result 2
+    ?? sr {
+        F e → {
+            ( nurl_eprint `nurlpkg: cannot create dependency comparison directory: ` )
+            ( nurl_eprintln ( io_err_msg e ) )
+        }
+        T stage → {
+            ?? ( __install_for_selected_toolchain reg name ver checksum ( string_data stage ) ) {
+                F e → {
+                    ( nurl_eprint `nurlpkg: cannot verify published dependency ` )
+                    ( nurl_eprint name ) ( nurl_eprint ` ` ) ( nurl_eprint ver )
+                    ( nurl_eprint ` from ` ) ( nurl_eprint reg ) ( nurl_eprint `: ` )
+                    ( nurl_eprintln ( pkg_err_name e ) )
+                }
+                T _ → {
+                    : String pubdir ( path_join ( string_data stage ) name )
+                    = result ( __compare_package_sources localdir ( string_data pubdir ) )
+                    ( string_free pubdir )
+                }
+            }
+            ?? ( dir_remove_all ( string_data stage ) ) {
+                T _ → {}
+                F e → {
+                    ( nurl_eprint `nurlpkg: cannot clean dependency comparison directory: ` )
+                    ( nurl_eprintln ( io_err_msg e ) )
+                    = result 2
+                }
+            }
+            ( string_free stage )
+        }
+    }
+    ^ result
+}
+
+@ __check_published_override Dep d Manifest local s reg → i {
+    : s name ( string_data . d name )
+    : s version ( string_data . local version )
+    : ~ i bad 1
+    ?? ( pkg_fetch_index reg name ) {
+        F error → { ( __report_registry_fetch reg name error ) }
+        T index → {
+            : ~ i hit -1
+            : ~ i k 0
+            ~ < k ( vec_len [IdxVersion] . index versions ) {
+                : IdxVersion entry . ( vec_data [IdxVersion] . index versions ) k
+                ? & ! . entry yanked != 0 ( nurl_str_eq ( string_data . entry version ) version ) { = hit k } {}
+                = k + k 1
+            }
+            ? < hit 0 {
+                ( nurl_eprint `nurlpkg: local dependency version is not published and installable: ` )
+                ( nurl_eprint name ) ( nurl_eprint ` ` ) ( nurl_eprint version )
+                ( nurl_eprint ` in ` ) ( nurl_eprintln reg )
+                ( nurl_eprintln `nurlpkg: publish the dependency before publishing this package.` )
+            } {
+                : IdxVersion entry . ( vec_data [IdxVersion] . index versions ) hit
+                : i drift ( __dep_drifts reg name version ( string_data . entry checksum ) ( string_data . d path ) )
+                = bad ? == drift 0 0 1
+                ? == drift 1 {
+                    ( nurl_eprint `nurlpkg: local '` ) ( nurl_eprint name )
+                    ( nurl_eprint `' differs from the published ` ) ( nurl_eprint name )
+                    ( nurl_eprint ` ` ) ( nurl_eprintln version )
+                    ( nurl_eprintln `nurlpkg: bump and publish the dependency version before publishing this package.` )
+                } {}
+            }
+            ( regindex_free index )
+        }
+    }
+    ^ bad
+}
+
+@ __check_pathdep_drift Manifest m s reg → i {
+    : ~ i bad 0
+    : ~ i k 0
+    ~ < k ( vec_len [Dep] . m dependencies ) {
+        : Dep d . ( vec_data [Dep] . m dependencies ) k
+        ? & ( dep_is_path d ) ( dep_has_version d ) {
+            : String manifest ( path_join ( string_data . d path ) `nurl.toml` )
+            ?? ( manifest_load ( string_data manifest ) ) {
+                F e → {
+                    ( nurl_eprint `nurlpkg: cannot read local dependency manifest: ` )
+                    ( nurl_eprintln ( manifest_err_name e ) )
+                    = bad 1
+                }
+                T local → {
+                    : s origin ? > ( string_len . d registry ) 0 ( string_data . d registry ) reg
+                    ? != 0 ( __check_published_override d local origin ) { = bad 1 } {}
+                    ( manifest_free local )
+                }
+            }
+            ( string_free manifest )
+        } {}
+        = k + k 1
+    }
+    ^ bad
 }
 
 // These checks borrow the manifest and registry. Keep their early returns
@@ -2996,7 +3160,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 @ __check_publish Manifest m s reg → i {
     ? != 0 ( __check_declared_deps m ) { ^ 1 } {}
     ? != 0 ( __check_stdlib_available ) { ^ 1 } {}
-    ? != 0 ( __check_builds_against_installed ) { ^ 1 } {}
+    ? != 0 ( __check_builds_against_installed m ) { ^ 1 } {}
     ? != 0 ( __check_pathdep_req m ) { ^ 1 } {}
     ^ ( __check_pathdep_drift m reg )
 }
@@ -3218,7 +3382,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ?? nh {
         T h → {
             ? > ( string_len h ) 0 {
-                : String d ( string_concat h ( string_from `/bin` ) )
+                : String d ( path_join ( string_data h ) `bin` )
                 ( string_free h )
                 ^ d
             } { ( string_free h ) }
@@ -3226,31 +3390,17 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         F → {}
     }
     : String home ? ( __is_windows ) ( __env_or `USERPROFILE` `.` ) ( __env_or `HOME` `.` )
-    : String out ( string_concat home ( string_from `/.nurl/bin` ) )
+    : String out ( path_join ( string_data home ) `.nurl/bin` )
     ( string_free home )
     ^ out
 }
 
-// Spawn `prog args...` WITHOUT a shell (no POSIX-/cmd-specific syntax). On
-// Windows a build driver is a `.bat`, which CreateProcess can't launch
-// directly, so route through `cmd /c`. Returns 1 on success (exit 0).
+// Spawn an argv vector. The shared process backend handles Windows batch
+// drivers and launches executables directly. Returns 1 on success (exit 0).
 // Inherits the current working directory, so callers `env_chdir` first.
 @ __spawn s prog ( Vec s ) args s label → i {
-    : ~ s rprog prog
-    : ( Vec s ) rargs ( vec_new [s] )
-    ? ( __is_windows ) {
-        = rprog `cmd`
-        ( vec_push [s] rargs `/c` )
-        ( vec_push [s] rargs prog )
-    } {}
-    : i n ( vec_len [s] args )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [s] args i ) { T a → ( vec_push [s] rargs a ) F _ → {} }
-        = i + i 1
-    }
     : ~ i ok 0
-    ?? ( process_run rprog rargs `` ) {
+    ?? ( process_run prog args `` ) {
         T out → {
             ? ( output_success out ) { = ok 1 } {
                 ( nurl_eprint `nurlpkg: ` ) ( nurl_eprint label ) ( nurl_eprintln ` failed:` )
@@ -3260,7 +3410,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         }
         F _ → { ( nurl_eprint `nurlpkg: ` ) ( nurl_eprint label ) ( nurl_eprintln ` could not launch` ) }
     }
-    ( vec_free [s] rargs )
     ^ ok
 }
 
@@ -3399,6 +3548,19 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ^ rc
 }
 
+// Copy into a unique sibling and set its final permissions before the
+// atomic rename. The destination stays runnable on every earlier failure.
+@ __tool_publish_binary s source s destination s bindir b win → !v IoErr {
+    \ ( dir_create_all bindir )
+    : String stage \ ( fs_tempfile bindir `.nurlpkg-install-` )
+    ; { ( string_free stage ) }
+    ; { ?? ( file_delete ( string_data stage ) ) { T _ → {} F _ → {} } }
+    \ ( fs_copy_file source ( string_data stage ) )
+    ? ! win { \ ( set_permissions ( string_data stage ) 493 ) } {}
+    \ ( fs_rename ( string_data stage ) destination )
+    ^ @ !v IoErr { T 0 }
+}
+
 @ __tool_build_and_install s name s pkgdir s binsrc → i {
     : String nurl ( __env_or `NURL` `nurl` )
     : String bindir ( __tool_bindir )
@@ -3406,7 +3568,14 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 
     // Remember where we started so we can return after building in pkgdir.
     : ~ String orig ( string_new )
-    ?? ( env_cwd ) { T c → { ( string_free orig ) = orig c } F _ → {} }
+    ?? ( env_cwd ) {
+        T c → { ( string_free orig ) = orig c }
+        F _ → {
+            ( nurl_eprintln `nurlpkg: cannot determine the working directory` )
+            ( string_free orig ) ( string_free nurl ) ( string_free bindir )
+            ^ 1
+        }
+    }
 
     : ~ i rc 1
     ?? ( env_chdir pkgdir ) {
@@ -3430,7 +3599,10 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     // Back to the original directory before touching bindir (which may be
     // relative, e.g. the "." fallback).
     ? > ( string_len orig ) 0 {
-        ?? ( env_chdir ( string_data orig ) ) { T _ → {} F _ → {} }
+        ?? ( env_chdir ( string_data orig ) ) {
+            T _ → {}
+            F _ → { ( nurl_eprintln `nurlpkg: cannot restore the working directory` ) = rc 1 }
+        }
     } {}
 
     ? == rc 0 {
@@ -3450,27 +3622,13 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         ( string_push_str dest name )
         ? win { ( string_push_str dest `.exe` ) } {}
 
-        ?? ( dir_create_all ( string_data bindir ) ) { T _ → {} F _ → {} }
-        // Unlink the destination first. Writing INTO a binary that some
-        // process is executing fails with ETXTBSY on Linux; unlinking the
-        // directory entry and creating a fresh file succeeds, and the
-        // running process keeps its old inode until it exits — which is
-        // how every package manager replaces a running executable. This
-        // surfaced as a bare "failed to install binary" while an old
-        // `lingbot-map view` was still serving.
-        : i32 _unl ( unlink ( string_data dest ) )
-        ?? ( fs_copy_file ( string_data outbin ) ( string_data dest ) ) {
-            F _ → { ( nurl_eprintln `nurlpkg: failed to install binary` ) = rc 1 }
+        ?? ( __tool_publish_binary ( string_data outbin ) ( string_data dest ) ( string_data bindir ) win ) {
+            F e → {
+                ( nurl_eprint `nurlpkg: failed to install binary: ` )
+                ( nurl_eprintln ( io_err_msg e ) )
+                = rc 1
+            }
             T _ → {
-                // Restore the exec bit (fs_copy_file makes a 0644 content
-                // copy); a no-op concept on Windows, so POSIX-only.
-                ? ! win {
-                    : ( Vec s ) chargs ( vec_new [s] )
-                    ( vec_push [s] chargs `+x` )
-                    ( vec_push [s] chargs ( string_data dest ) )
-                    ?? ( process_run `chmod` chargs `` ) { T o → ( output_free o ) F _ → {} }
-                    ( vec_free [s] chargs )
-                } {}
                 // Stage the package's declared runtime assets ([install].assets)
                 // into <prefix>/share/<name>/ so the tool finds them relative to
                 // its own executable (a registry install ships data, not just a
@@ -3566,7 +3724,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                         : ?LockPkg po ( vec_get [LockPkg] locked k )
                         ?? po {
                             T p → {
-                                : !i PkgFetchErr ir ( pkg_install_locked trust p `deps` )
+                                : !i PkgFetchErr ir ( __install_locked_for_selected_toolchain trust p `deps` )
                                 ?? ir {
                                     T _ → {
                                         ( nurl_print `  ` ) ( nurl_print ( string_data . p name ) )
@@ -3630,40 +3788,49 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ?? ( vec_get [IdxVersion] . ridx versions sel ) {
                     F _ → {}
                     T iv → {
-                        // Staging dir under the platform temp root (absolute,
-                        // so we can chdir back out after building).
+                        // Each invocation owns a private directory, including
+                        // simultaneous installs of the same package name.
                         : String troot ( __tmp_root )
-                        : String stage ( string_with_cap 96 )
-                        ( string_push_str stage ( string_data troot ) )
-                        ( string_push_str stage `/nurlpkg-tool-` )
-                        ( string_push_str stage name )
+                        : !String IoErr sr ( fs_tempdir ( string_data troot ) `nurlpkg-tool-` )
                         ( string_free troot )
-                        // Clean + recreate it with cross-platform fs ops
-                        // (no rm -rf / mkdir -p shell-out).
-                        ?? ( dir_remove_all ( string_data stage ) ) { T _ → {} F _ → {} }
-                        ?? ( dir_create_all ( string_data stage ) ) { T _ → {} F _ → {} }
-                        : !i PkgFetchErr fr ( pkg_install_one reg name ( string_data . iv version ) ( string_data . iv checksum ) ( string_data stage ) )
-                        ?? fr {
-                            F fe → {
-                                ( nurl_eprint `nurlpkg: download failed (` )
-                                ( nurl_eprint ( pkg_err_name fe ) ) ( nurl_eprintln `)` )
+                        ?? sr {
+                            F e → {
+                                ( nurl_eprint `nurlpkg: cannot create tool staging directory: ` )
+                                ( nurl_eprintln ( io_err_msg e ) )
                             }
-                            T _ → {
-                                : String pkgdir ( string_with_cap 96 )
-                                ( string_push_str pkgdir ( string_data stage ) )
-                                ( string_push_char pkgdir 47 ) ( string_push_str pkgdir name )
-                                : String binsrc ( string_concat ( string_from ( string_data pkgdir ) ) ( string_from `/src/main.nu` ) )
-                                ? ! ( file_exists ( string_data binsrc ) ) {
-                                    // No src/main.nu → a library. Install it
-                                    // under ./deps/ instead of erroring.
-                                    = rc ( __install_lib_deps name reg )
-                                } {
-                                    = rc ( __tool_build_and_install name ( string_data pkgdir ) ( string_data binsrc ) )
+                            T stage → {
+                                : !i PkgFetchErr fr ( __install_for_selected_toolchain reg name ( string_data . iv version ) ( string_data . iv checksum ) ( string_data stage ) )
+                                ?? fr {
+                                    F fe → {
+                                        ( nurl_eprint `nurlpkg: download failed (` )
+                                        ( nurl_eprint ( pkg_err_name fe ) ) ( nurl_eprintln `)` )
+                                    }
+                                    T _ → {
+                                        : String pkgdir ( string_with_cap 96 )
+                                        ( string_push_str pkgdir ( string_data stage ) )
+                                        ( string_push_char pkgdir 47 ) ( string_push_str pkgdir name )
+                                        : String binsrc ( path_join ( string_data pkgdir ) `src/main.nu` )
+                                        ? ! ( file_exists ( string_data binsrc ) ) {
+                                            // No src/main.nu → a library. Install it
+                                            // under ./deps/ instead of erroring.
+                                            = rc ( __install_lib_deps name reg )
+                                        } {
+                                            = rc ( __tool_build_and_install name ( string_data pkgdir ) ( string_data binsrc ) )
+                                        }
+                                        ( string_free binsrc ) ( string_free pkgdir )
+                                    }
                                 }
-                                ( string_free binsrc ) ( string_free pkgdir )
+                                ?? ( dir_remove_all ( string_data stage ) ) {
+                                    T _ → {}
+                                    F e → {
+                                        ( nurl_eprint `nurlpkg: cannot clean tool staging directory: ` )
+                                        ( nurl_eprintln ( io_err_msg e ) )
+                                        = rc 1
+                                    }
+                                }
+                                ( string_free stage )
                             }
                         }
-                        ( string_free stage )
                     }
                 }
             }
@@ -3682,9 +3849,10 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : !String IoErr cwdR ( env_cwd )
     : ~ String cwd ( string_new )
     ?? cwdR {
-        T c → = cwd c
+        T c → { ( string_free cwd ) = cwd c }
         F _ → {
             ( nurl_eprintln `nurlpkg: failed to determine current directory` )
+            ( string_free cwd )
             ^ 1
         }
     }
@@ -3714,6 +3882,9 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             = rc 1
         }
         T root → {
+            ? != ( __check_selected_toolchain root ) 0 {
+                ( manifest_free root ) ( string_free cwd ) ^ 1
+            } {}
             : i n ( vec_len [Dep] . root dependencies )
             ( nurl_print `installing ` )
             ( nurl_print ( nurl_str_int n ) )
@@ -3893,7 +4064,8 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 // `nurl` on PATH. Defaulting to a bare `./nurl.sh` made `test` and `bench`
 // the only commands that worked in the toolchain repo and nowhere else — an
 // installed-toolchain package got "./nurl.sh: not found" for every test.
-// Test binaries land in /tmp.
+// Each invocation owns a fresh temporary directory, including compiler
+// sidecars. No filename or driver path is interpreted as shell syntax.
 
 @ __test_basename s path → String {
     : i n ( nurl_str_len path )
@@ -3940,51 +4112,58 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ^ ok
 }
 
-// Compile + run one test. Returns 0 on pass.
-@ __run_one s src s driver → i {
-    : String name ( __test_basename src )
-    : String bin ( string_with_cap 64 )
-    ( string_push_str bin `/tmp/nurlpkg_test_` )
-    ( string_push_str bin ( string_data name ) )
+@ __test_workspace → !String IoErr {
+    : String root ( __tmp_root )
+    : !String IoErr created ( fs_tempdir ( string_data root ) `nurlpkg-run-` )
+    ( string_free root )
+    ^ created
+}
 
-    : String ccmd ( string_with_cap 128 )
-    ( string_push_str ccmd driver )
-    ( string_push_str ccmd ` -O0 ` )
-    ( string_push_str ccmd src )
-    ( string_push_char ccmd 32 )
-    ( string_push_str ccmd ( string_data bin ) )
+@ __test_workspace_remove String directory → b {
+    : ~ b ok T
+    ?? ( dir_remove_all ( string_data directory ) ) {
+        T _ → {}
+        F _ → { ( nurl_eprintln `nurlpkg: failed to clean test artifacts` ) = ok F }
+    }
+    ( string_free directory )
+    ^ ok
+}
+
+// Compile + run one test. Returns 0 on pass.
+@ __run_one s src s driver s directory → i {
+    : String name ( __test_basename src )
+    : String bin ( path_join directory ( string_data name ) )
+    : ( Vec s ) args ( vec_new [s] )
+    ( vec_push [s] args `-O0` )
+    ( vec_push [s] args src )
+    ( vec_push [s] args ( string_data bin ) )
 
     : ~ i result 1
-    : ~ b compiled F
-    ?? ( process_run_shell ( string_data ccmd ) ) {
-        T out → {
-            ? ( output_success out ) { = compiled T } {
-                ( __test_report name `FAIL` `(compile error)` )
-                ( nurl_eprint ( output_stderr out ) )
-            }
-            ( output_free out )
-        }
-        F _ → { ( __test_report name `FAIL` `(could not launch compiler)` ) }
-    }
-    ( string_free ccmd )
+    : b compiled != ( __spawn driver args `test compile` ) 0
+    ( vec_free [s] args )
+    ? ! compiled { ( __test_report name `FAIL` `(compile error)` ) } {}
 
     ? compiled {
-        ?? ( process_run_shell ( string_data bin ) ) {
+        ? ( __is_windows ) { ( string_push_str bin `.exe` ) } {}
+        ?? ( process_run0 ( string_data bin ) ) {
             T out → {
                 : i ec ( output_exit_code out )
                 : String goldp ( string_with_cap 64 )
                 ( string_push_str goldp `tests/outputs/` )
                 ( string_push_str goldp ( string_data name ) )
                 ( string_push_str goldp `.txt` )
-                ? ( file_exists ( string_data goldp ) ) {
+                ? != ec 0 {
+                    ( __test_report name `FAIL` `(nonzero exit)` )
+                } ? ( file_exists ( string_data goldp ) ) {
                     ? ( __golden_match ( string_data goldp ) ( output_stdout out ) ( output_stdout_len out ) ) {
                         ( __test_report name `PASS` `` ) = result 0
                     } {
                         ( __test_report name `FAIL` `(output mismatch)` )
                     }
                 } {
-                    ? == ec 0 { ( __test_report name `PASS` `` ) = result 0 } { ( __test_report name `FAIL` `(nonzero exit)` ) }
+                    ( __test_report name `PASS` `` ) = result 0
                 }
+                ? != result 0 { ( nurl_eprint ( output_stderr out ) ) } {}
                 ( string_free goldp )
                 ( output_free out )
             }
@@ -3999,6 +4178,16 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 
 // Owns `files` (the fs_glob result): runs each, frees them, reports.
 @ __run_tests ( Vec String ) files → i {
+    : ~ String directory ( string_new )
+    ?? ( __test_workspace ) {
+        T made → { ( string_free directory ) = directory made }
+        F _ → {
+            ( nurl_eprintln `nurlpkg: could not create test artifact directory` )
+            ( string_free directory )
+            ( vec_free_with [String] files \ String path → v { ( string_free path ) } )
+            ^ 1
+        }
+    }
     : ( @ i String String ) cs \ String a String b → i { ^ ( cmp_string a b ) }
     ( sort_by [String] files cs )
     : String driver ( __test_driver )
@@ -4008,7 +4197,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ~ < k ( vec_len [String] files ) {
         ?? ( vec_get [String] files k ) {
             T src → {
-                ? == ( __run_one ( string_data src ) ( string_data driver ) ) 0 { = pass + pass 1 } { = fail + fail 1 }
+                ? == ( __run_one ( string_data src ) ( string_data driver ) ( string_data directory ) ) 0 { = pass + pass 1 } { = fail + fail 1 }
                 ( string_free src )
             }
             F _ → {}
@@ -4017,6 +4206,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     }
     ( vec_free [String] files )
     ( string_free driver )
+    ? ! ( __test_workspace_remove directory ) { = fail + fail 1 } {}
     ( nurl_print `\n` )
     ( nurl_print `PASS ` ) ( nurl_print ( nurl_str_int pass ) )
     ( nurl_print ` · FAIL ` ) ( nurl_print ( nurl_str_int fail ) ) ( nurl_print `\n` )
@@ -4052,40 +4242,28 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 // won't compile or exits nonzero. Build driver as for `test` ($NURL_CC,
 // else a checkout's ./nurl.sh, else the installed nurl).
 
-@ __run_bench_one s src s driver → i {
+@ __run_bench_one s src s driver s directory → i {
     : String name ( __test_basename src )
-    : String bin ( string_with_cap 64 )
-    ( string_push_str bin `/tmp/nurlpkg_bench_` )
-    ( string_push_str bin ( string_data name ) )
-
-    : String ccmd ( string_with_cap 128 )
-    ( string_push_str ccmd driver )
-    ( string_push_str ccmd ` -O2 ` )
-    ( string_push_str ccmd src )
-    ( string_push_char ccmd 32 )
-    ( string_push_str ccmd ( string_data bin ) )
+    : String bin ( path_join directory ( string_data name ) )
+    : ( Vec s ) args ( vec_new [s] )
+    ( vec_push [s] args `-O2` )
+    ( vec_push [s] args src )
+    ( vec_push [s] args ( string_data bin ) )
 
     : ~ i result 1
-    : ~ b compiled F
-    ?? ( process_run_shell ( string_data ccmd ) ) {
-        T out → {
-            ? ( output_success out ) { = compiled T } {
-                ( nurl_print `── ` ) ( nurl_print ( string_data name ) ) ( nurl_print ` (compile error)\n` )
-                ( nurl_eprint ( output_stderr out ) )
-            }
-            ( output_free out )
-        }
-        F _ → { ( nurl_print `── ` ) ( nurl_print ( string_data name ) ) ( nurl_print ` (could not launch compiler)\n` ) }
-    }
-    ( string_free ccmd )
+    : b compiled != ( __spawn driver args `benchmark compile` ) 0
+    ( vec_free [s] args )
+    ? ! compiled { ( nurl_print `── ` ) ( nurl_print ( string_data name ) ) ( nurl_print ` (compile error)\n` ) } {}
 
     ? compiled {
         ( nurl_print `── ` ) ( nurl_print ( string_data name ) ) ( nurl_print `\n` )
-        ?? ( process_run_shell ( string_data bin ) ) {
+        ? ( __is_windows ) { ( string_push_str bin `.exe` ) } {}
+        ?? ( process_run0 ( string_data bin ) ) {
             T out → {
                 : i olen ( output_stdout_len out )
                 ? > olen 0 { : i _w ( write 1 # *u ( output_stdout out ) olen ) } {}
                 ? == ( output_exit_code out ) 0 { = result 0 } {}
+                ? != result 0 { ( nurl_eprint ( output_stderr out ) ) } {}
                 ( output_free out )
             }
             F _ → { ( nurl_print `(could not run)\n` ) }
@@ -4098,6 +4276,16 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 }
 
 @ __run_benches ( Vec String ) files → i {
+    : ~ String directory ( string_new )
+    ?? ( __test_workspace ) {
+        T made → { ( string_free directory ) = directory made }
+        F _ → {
+            ( nurl_eprintln `nurlpkg: could not create benchmark artifact directory` )
+            ( string_free directory )
+            ( vec_free_with [String] files \ String path → v { ( string_free path ) } )
+            ^ 1
+        }
+    }
     : ( @ i String String ) cs \ String a String b → i { ^ ( cmp_string a b ) }
     ( sort_by [String] files cs )
     : String driver ( __test_driver )
@@ -4107,7 +4295,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ~ < k ( vec_len [String] files ) {
         ?? ( vec_get [String] files k ) {
             T src → {
-                ? == ( __run_bench_one ( string_data src ) ( string_data driver ) ) 0 { = ran + ran 1 } { = failed + failed 1 }
+                ? == ( __run_bench_one ( string_data src ) ( string_data driver ) ( string_data directory ) ) 0 { = ran + ran 1 } { = failed + failed 1 }
                 ( string_free src )
             }
             F _ → {}
@@ -4116,6 +4304,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     }
     ( vec_free [String] files )
     ( string_free driver )
+    ? ! ( __test_workspace_remove directory ) { = failed + failed 1 } {}
     ( nurl_print `\nran ` ) ( nurl_print ( nurl_str_int ran ) )
     ( nurl_print ` · failed ` ) ( nurl_print ( nurl_str_int failed ) ) ( nurl_print `\n` )
     ^ ? == failed 0 0 1

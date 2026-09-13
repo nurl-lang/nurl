@@ -6,6 +6,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 mkdir -p build
-# A failed rebuild must not leave an old executable looking freshly built.
-rm -f "build/nurlfmt"
+# The driver publishes atomically on success. A failed rebuild stays failed
+# while preserving the last working tool for other invocations.
 exec "$ROOT_DIR/nurl.sh" -O2 "tools/nurlfmt/nurlfmt.nu" "$ROOT_DIR/build/nurlfmt"

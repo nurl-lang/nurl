@@ -155,6 +155,18 @@ jobs:
             Write-Host "$mode OK"
           }
 
+      - name: Build package manager for native process and installed-driver regressions
+        if: ${{ !inputs.update_goldens }}
+        shell: cmd
+        run: call tools\nurlpkg\build.bat
+
+      - name: Native Windows argv, batch drivers, atomic output and installed package runners
+        if: ${{ !inputs.update_goldens }}
+        shell: cmd
+        run: |
+          set "CLANG=C:\Program Files\LLVM\bin\clang.exe"
+          python tools/tests/test_windows_process.py
+
       # ── Golden regeneration mode (workflow_dispatch only) ──────────
       # The Windows goldens can only be produced on Windows; this runner
       # IS the canonical environment. Build without tests, then rewrite

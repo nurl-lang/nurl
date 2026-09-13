@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+zero_window_rejected=T
+window_overflow_rejected=T
+data_before_headers_rejected=T
+malformed_status_rejected=T
+receive_buffer_limit_resets_stream=T
+content_length_mismatch_rejected=T
+data_forbidden_status_rejected=T
+headers_only_length_mismatch_rejected=T

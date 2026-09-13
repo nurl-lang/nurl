@@ -32,10 +32,12 @@ def main():
             source = root / f'tools/{tool}/{entry}'
             original = source.read_bytes()
             source.write_bytes(b'@\n')  # invalid declaration, rejected by the real compiler
-            stale = root / f'build/{tool}'
-            stale.parent.mkdir(exist_ok=True)
-            stale.write_text('stale executable must not survive\n')
-            stale.chmod(0o755)
+            previous = root / f'build/{tool}'
+            previous.parent.mkdir(exist_ok=True)
+            previous.write_text('#!/bin/sh\nprintf "previous working tool\\n"\n')
+            previous.chmod(0o755)
+            previous_bytes = previous.read_bytes()
+            previous_inode = previous.stat().st_ino
             env = {**os.environ, 'NURL_SAN': '0'}
             run = subprocess.run(['bash', './build.sh', '--no-tests'], cwd=root, env=env,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
@@ -43,12 +45,16 @@ def main():
             source.write_bytes(original)
             if run.returncode == 0 or f'BUILD FAILED: {tool}'.encode() not in run.stdout:
                 raise RuntimeError(f'{tool}: failure was not attributed to the required tool; see {EVIDENCE}')
-            if stale.exists():
-                raise RuntimeError(f'{tool}: failed rebuild left a stale executable')
+            if (not previous.is_file() or previous.read_bytes() != previous_bytes
+                    or previous.stat().st_ino != previous_inode):
+                raise RuntimeError(f'{tool}: failed rebuild replaced the previous working executable')
+            old = subprocess.run([str(previous)], capture_output=True, check=True)
+            if old.stdout != b'previous working tool\n':
+                raise RuntimeError(f'{tool}: previous tool is no longer runnable')
             logs = list((root / 'build/logs').glob('build.*'))
             if not logs or not any(b'clang version' in p.read_bytes() for p in logs):
                 raise RuntimeError(f'{tool}: build evidence was discarded')
-            print(f'{tool}: full build failed, stale binary removed, log retained', flush=True)
+            print(f'{tool}: full build failed, previous binary preserved, log retained', flush=True)
     return 0
 
 

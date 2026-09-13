@@ -174,7 +174,8 @@ $ `stdlib/std/float.nu`
 //
 // Parser primitives return small typed records that pair the parsed
 // value with the new cursor position. We avoid out-params by always
-// flowing the new `pos` back through the struct.
+// flowing the new `pos` back through the struct. Every payload is owned,
+// including the empty String/Vec on failure; callers must release it.
 
 : KeyResult {
     b ok
@@ -457,10 +458,13 @@ $ `stdlib/std/float.nu`
                     : i nc ( __t_get src cur n )
                     ? == nc 44 { = cur + cur 1 } {
                         ? != nc 93 {
-                            = err T = ek . vr err = done T
+                            = err T = ek # TomlErr TomlSyntax = done T
                         } {}
                     }
-                } { = err T = ek . vr err = done T }
+                } {
+                    ( toml_value_free . vr value )
+                    = err T = ek . vr err = done T
+                }
             }
         }
     }
@@ -515,10 +519,14 @@ $ `stdlib/std/float.nu`
                         }
                     } {
                         ( string_free . kr key )
+                        ( toml_value_free . vr value )
                         = err T = ek . vr err = done T
                     }
                 }
-            } { = err T = ek . kr err = done T }
+            } {
+                ( string_free . kr key )
+                = err T = ek . kr err = done T
+            }
         }
     }
     ? err {
@@ -550,7 +558,7 @@ $ `stdlib/std/float.nu`
 // component becomes a TArr whose elements are TTable; this fn appends
 // a fresh TTable and returns its entry vec.
 
-@ __t_descend ( Vec TomlEntry ) target ( Vec String ) path b as_array → ( Vec TomlEntry ) {
+@ __t_descend ( Vec TomlEntry ) target ( Vec String ) path b as_array → !( Vec TomlEntry ) TomlErr {
     : i depth ( vec_len [String] path )
     : ~ ( Vec TomlEntry ) cur target
     : ~ i d 0
@@ -575,26 +583,31 @@ $ `stdlib/std/float.nu`
                     = k + k 1
                 }
                 ? & == d - depth 1 as_array {
-                    // Leaf level for [[name]] — append a fresh TTable to
-                    // the array. Reuse / create the array.
-                    : ( Vec TomlEntry ) inner ( vec_new [TomlEntry] )
+                    // Allocate only after proving the new table will be owned
+                    // by the root. A scalar/table collision must not detach it.
                     ? >= found 0 {
-                        : ?TomlEntry old_o ( vec_get [TomlEntry] cur found )
-                        ?? old_o {
-                            T old → {
-                                ?? . old value {
-                                    TArr arr → ( vec_push [TomlValue] arr @ TomlValue { TTable inner } )
-                                    _ → {}
+                        : TomlEntry old . ( vec_data [TomlEntry] cur ) found
+                        ?? . old value {
+                            TArr arr → {
+                                : i count ( vec_len [TomlValue] arr )
+                                ? == count 0 { ^ @ !( Vec TomlEntry ) TomlErr { F TomlSyntax } } {}
+                                ?? . ( vec_data [TomlValue] arr ) - count 1 {
+                                    TTable _ → {}
+                                    _ → { ^ @ !( Vec TomlEntry ) TomlErr { F TomlSyntax } }
                                 }
+                                : ( Vec TomlEntry ) inner ( vec_new [TomlEntry] )
+                                ( vec_push [TomlValue] arr @ TomlValue { TTable inner } )
+                                = next_tbl inner
                             }
-                            F _ → {}
+                            _ → { ^ @ !( Vec TomlEntry ) TomlErr { F TomlSyntax } }
                         }
                     } {
+                        : ( Vec TomlEntry ) inner ( vec_new [TomlEntry] )
                         : ( Vec TomlValue ) arr ( vec_new [TomlValue] )
                         ( vec_push [TomlValue] arr @ TomlValue { TTable inner } )
                         ( vec_push [TomlEntry] cur @ TomlEntry { ( string_from ( string_data key ) ) @ TomlValue { TArr arr } } )
+                        = next_tbl inner
                     }
-                    = next_tbl inner
                 } {
                     // Plain descent — find or create TTable child.
                     ? >= found 0 {
@@ -603,7 +616,17 @@ $ `stdlib/std/float.nu`
                             T old → {
                                 ?? . old value {
                                     TTable t → = next_tbl t
-                                    _ → {}
+                                    TArr arr → {
+                                        // A nested section of an array-of-tables
+                                        // belongs to the most recently declared table.
+                                        : i count ( vec_len [TomlValue] arr )
+                                        ? == count 0 { ^ @ !( Vec TomlEntry ) TomlErr { F TomlSyntax } } {}
+                                        ?? . ( vec_data [TomlValue] arr ) - count 1 {
+                                            TTable t → = next_tbl t
+                                            _ → { ^ @ !( Vec TomlEntry ) TomlErr { F TomlSyntax } }
+                                        }
+                                    }
+                                    _ → { ^ @ !( Vec TomlEntry ) TomlErr { F TomlSyntax } }
                                 }
                             }
                             F _ → {}
@@ -620,7 +643,7 @@ $ `stdlib/std/float.nu`
         = cur next_tbl
         = d + d 1
     }
-    ^ cur
+    ^ @ !( Vec TomlEntry ) TomlErr { T cur }
 }
 
 // ── Section header parser ────────────────────────────────────────
@@ -704,20 +727,14 @@ $ `stdlib/std/float.nu`
             ? == c 91 {
                 : HeaderResult hr ( __t_parse_header src n pos )
                 ? . hr ok {
-                    = current ( __t_descend root . hr path . hr as_array )
-                    : i pn ( vec_len [String] . hr path )
-                    : ~ i fk 0
-                    ~ < fk pn {
-                        : ?String sk ( vec_get [String] . hr path fk )
-                        ?? sk {
-                            T sv → ( string_free sv )
-                            F _ → {}
-                        }
-                        = fk + fk 1
+                    ?? ( __t_descend root . hr path . hr as_array ) {
+                        T table → = current table
+                        F error → { = err T = ek error }
                     }
-                    ( vec_free [String] . hr path )
-                    = pos . hr pos
-                } { = err T = ek # TomlErr TomlSyntax = pos . hr pos }
+                } { = err T = ek # TomlErr TomlSyntax }
+                // Both branches own hr.path, even the empty failure payload.
+                ( vec_free_with [String] . hr path \ String component → v { ( string_free component ) } )
+                = pos . hr pos
             } {
                 : KeyResult kr ( __t_parse_key src n pos )
                 ? . kr ok {
@@ -732,10 +749,14 @@ $ `stdlib/std/float.nu`
                             = pos . vr pos
                         } {
                             ( string_free . kr key )
+                            ( toml_value_free . vr value )
                             = err T = ek . vr err = pos . vr pos
                         }
                     }
-                } { = err T = ek . kr err = pos . kr pos }
+                } {
+                    ( string_free . kr key )
+                    = err T = ek . kr err = pos . kr pos
+                }
             }
         }
     }

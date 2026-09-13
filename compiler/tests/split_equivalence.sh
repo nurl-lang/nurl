@@ -43,7 +43,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT_DIR"
 
-NURLC="$ROOT_DIR/build/nurlc"
+NURLC="${NURLC:-$ROOT_DIR/build/nurlc}"
 [[ -x "$NURLC" ]] || NURLC="$ROOT_DIR/nurlc"
 if [[ ! -x "$NURLC" ]]; then
     echo "ERROR: nurlc not found — run ./build.sh first." >&2

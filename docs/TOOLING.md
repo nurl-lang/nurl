@@ -10,6 +10,9 @@ top of those, registry packages extend the toolchain itself:
 `wasmbuilder` / `nwasm` (compile NURL to wasm32-wasi and run it, fully
 locally).
 
+The build driver also supports [GCOV coverage](BUILDING.md#line-and-branch-coverage), including
+source and branch counters, imported modules and reusable LLVM IR artifacts.
+
 ## Editor support
 
 Syntax highlighting **plus a full Language Server** (go-to-definition,
@@ -123,6 +126,27 @@ deps follow the newest published version, path deps the local copy's
 `lock`, `verify`, `publish`, `login`, `logout [--revoke]`, `search`,
 `yank` / `unyank`, `test`, `bench`, `self-update`, `version`, `help`.
 
+Packages can declare a minimum compiler, standard library and runtime release:
+
+```toml
+[package]
+name = "example"
+version = "1.0.0"
+nurl-version = "0.65.0"
+```
+
+`nurl-version` is an optional, nonempty SemVer version, compared using SemVer
+precedence (a release candidate does not satisfy the corresponding stable
+release). Installation checks the root project and local dependencies, including
+existing links, and authenticated registry manifests before extracting files.
+Incompatible packages leave the prior package and lock intact. The target is
+the compiler selected by `NURL_STDLIB`, the default installed compiler, or the
+CLI's own version when no installed compiler exists. An explicitly selected but
+unusable compiler cannot satisfy a declared minimum. The publication gate queries
+the installed compiler's version and typechecks every packaged source module
+against its standard library. Legacy package managers predating this field
+cannot enforce it; upgrade the toolchain before using packages that require it.
+
 Registry dependencies carry a `(registry URL, package name)` identity through
 resolution, index caching, downloads, signature checks and `nurl.lock`.
 An explicit dependency `registry` selects that origin; transitive index
@@ -191,7 +215,7 @@ the tool is deliberately harder to talk into an upload than out of one:
 the manifest parses and carries a name + version; every `deps/…` import
 is declared in `[dependencies]`; path-deps carry a version requirement
 and match the local copies you built against; and — the one that costs
-real time — **`src/main.nu` typechecks against the INSTALLED toolchain**,
+real time — **every packaged NURL module at the root or under `src/` typechecks against the INSTALLED toolchain**,
 not the checkout you developed in. That last gate compiles with
 `$NURL_STDLIB`'s (or `~/.nurl`'s) compiler and stdlib, front-end only,
 because a package can import stdlib files that have shipped for years
@@ -202,11 +226,17 @@ compiler diagnostic refuses publication, including `--dry-run`. Install the
 target toolchain before retrying. The compiler runs directly with `--check`;
 toolchain paths are literal arguments, and no C compiler or linker is needed.
 `--dry-run` runs all five and uploads nothing (and needs
-no token). Know what that gate does **not** cover: a **library** package
-has no `src/main.nu`, so the compile gate returns success without
-compiling anything — `every gate passed` on a library means the manifest
-and the imports agree, not that the code builds. Run `nurlpkg test`
-against a library before publishing it.
+no token). Library modules are checked individually, including modules not
+imported by an application entry point. Runtime behavior and tests are separate:
+run `nurlpkg test` against the package before publishing it.
+
+Each local path override must identify a non-yanked published version in its
+declared registry (or the package's default registry), satisfy its version
+requirement, and match the authenticated archive's packaged root and `src/`
+modules at their relative paths. Missing versions, index/download failures,
+invalid archive identities or signatures, incompatible toolchains and source
+read failures refuse publication in both modes. Each comparison owns a private
+temporary directory, so concurrent checks cannot replace each other's sources.
 
 `self-update` is the odd one out: it upgrades the **toolchain**, not a
 package, and `nurl upgrade` is its canonical spelling (that is what the

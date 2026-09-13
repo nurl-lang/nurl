@@ -57,6 +57,11 @@
 //
 //   * POSIX backend uses fork + execvp + poll(2) to multiplex
 //     stdout/stderr drain — no deadlock on long output streams.
+//   * Windows run/spawn launch native executables directly. A .bat/.cmd
+//     command uses the system cmd.exe with automatic commands and delayed
+//     expansion disabled; argv spaces, %, &, ! and = remain literal.
+//     Batch arguments containing a double quote, CR or LF return an error;
+//     these cannot represent the ordinary argv contract through cmd.exe.
 //   * Win32 `process_run` uses CreateProcess + reader threads; the
 //     duplex `process_spawn` family uses CreateProcess with an
 //     OVERLAPPED named pipe for the child's stdout, which is what
@@ -609,7 +614,12 @@ $ `stdlib/core/posix.nu`
 // Run a shell pipeline via /bin/sh -c (or cmd.exe /c on Windows).
 // Convenient for one-liners with quoting / redirection / pipes that
 // would otherwise need awkward argv handling.
+& `c` @ nurl_proc_run_shell s command → i
+
 @ process_run_shell s sh_cmd → !Output ProcessErr {
+    ? == ( posix_const `O_NONBLOCK` ) -1 {
+        ^ ( __process_dispatch ( nurl_proc_run_shell sh_cmd ) )
+    } {}
     : ( Vec s ) args ( vec_with_cap [s] 2 )
     ( vec_push [s] args `-c` )
     ( vec_push [s] args sh_cmd )

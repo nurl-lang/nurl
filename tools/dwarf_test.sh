@@ -78,14 +78,19 @@ fi
 pass ".debug_info section present"
 
 echo "[3/5] gdb-batch: break + run + info locals + print"
+# Two questions, two sessions. A function-name breakpoint lands wherever the
+# line table says the prologue ends, and that is exactly the thing under test
+# here — it moved to `square`'s FIRST statement once the line table stopped
+# skipping it. Asking about a local's value from there read `sq` before its
+# own assignment had run and called a more accurate line table a regression.
+# Resolution is asked of the function name; the value is asked at the line
+# that has the value, which is stable however the prologue is mapped.
 GDB_OUT=$(gdb -batch \
     -ex 'set debuginfod enabled off' \
     -ex 'break square' \
     -ex 'run' \
     -ex 'info args' \
     -ex 'info locals' \
-    -ex 'next' \
-    -ex 'print sq' \
     -ex 'backtrace' \
     -ex 'quit' "$BIN" 2>&1)
 
@@ -97,9 +102,19 @@ echo "$GDB_OUT" | grep -q 'dwarf_basic\.nu' \
     || fail "gdb did not associate frames with dwarf_basic.nu"
 pass "frames carry source-file association"
 
-echo "$GDB_OUT" | grep -Eq 'sq = ?49' \
-    || fail "print sq did not return 49 (expected square(7) = 49)"
-pass "print sq returned 49"
+# dwarf_basic.nu:14 is `^ sq`, after the assignment on 13. The file's own
+# header says these line numbers are load-bearing for this harness.
+VALUE_OUT=$(gdb -batch \
+    -ex 'set debuginfod enabled off' \
+    -ex 'break dwarf_basic.nu:14' \
+    -ex 'run' \
+    -ex 'info locals' \
+    -ex 'print sq' \
+    -ex 'quit' "$BIN" 2>&1)
+
+echo "$VALUE_OUT" | grep -Eq '(sq|\$1) = ?49' \
+    || fail "sq was not 49 at dwarf_basic.nu:14 (expected square(7) = 49)"
+pass "sq is 49 where the source says it is"
 
 echo "[4/5] llvm-dwarfdump (optional)"
 if command -v llvm-dwarfdump >/dev/null 2>&1; then

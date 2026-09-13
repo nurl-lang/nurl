@@ -99,6 +99,20 @@ $ `module.nu`
 
 & `c` @ nurl_tcp_timeout_ms i handle → i
 
+& `c` @ nurl_tcp_set_send_buffer i handle i bytes → i
+
+& `c` @ nurl_tcp_set_write_deadline i handle i ns → v
+
+& `c` @ nurl_tcp_write_deadline i handle → i
+
+& `c` @ nurl_tcp_write_wait_ms i handle → i
+
+& `c` @ nurl_tcp_write_nowait i handle s bytes i length → i
+
+& `c` @ nurl_tcp_read_nowait i handle s bytes i length → i
+
+& `c` @ nurl_tcp_wait_io i handle i events i timeout_ms → i
+
 & `c` @ nurl_tcp_get_fd i handle → i
 
 & `c` @ nurl_tcp_set_nonblock i handle i on → v
@@ -7288,9 +7302,33 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
         : i ms ( __pop it ) : i h ( __net_h it ( __pop it ) )
         ? != h 0 { ( nurl_tcp_set_timeout h ms ) } {}
         ^ T } {}
+    ? ( __feq field `tcp_set_send_buffer` ) {
+        : i bytes ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 6 ( nurl_tcp_set_send_buffer h bytes ) ) ^ T } {}
     ? ( __feq field `tcp_timeout_ms` ) {
         : i h ( __net_h it ( __pop it ) )
         ( __push it ? == h 0 0 ( nurl_tcp_timeout_ms h ) ) ^ T } {}
+    ? ( __feq field `tcp_set_write_deadline` ) {
+        : i ns ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ? != h 0 { ( nurl_tcp_set_write_deadline h ns ) } {}
+        ^ T } {}
+    ? ( __feq field `tcp_write_deadline` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 0 ( nurl_tcp_write_deadline h ) ) ^ T } {}
+    ? ( __feq field `tcp_write_wait_ms` ) {
+        : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 0 ( nurl_tcp_write_wait_ms h ) ) ^ T } {}
+    ? ( __feq field `tcp_write_nowait` ) {
+        : i n ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        : s p ( __net_span it bp n )
+        ( __push it ? | == h 0 == # i p 0 -1 ( nurl_tcp_write_nowait h p n ) ) ^ T } {}
+    ? ( __feq field `tcp_wait_io` ) {
+        : i ms ( __pop it ) : i events ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        ( __push it ? == h 0 -1 ( nurl_tcp_wait_io h events ms ) ) ^ T } {}
+    ? ( __feq field `tcp_read_nowait` ) {
+        : i n ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
+        : s p ( __net_span it bp n )
+        ( __push it ? | == h 0 == # i p 0 -1 ( nurl_tcp_read_nowait h p n ) ) ^ T } {}
     ? ( __feq field `tcp_peer_addr` ) {
         : i cap ( __pop it ) : i bp ( __pop it ) : i h ( __net_h it ( __pop it ) )
         ( __push it ? == h 0 0 ( __net_put_str it bp cap ( nurl_tcp_peer_addr h ) ) ) ^ T } {}

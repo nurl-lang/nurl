@@ -4,7 +4,7 @@ EXIT 0
 OUTPUT
 zlib round_trip=T comp_len=58 decomp_len=720
 zstd round_trip=T comp_len=69 decomp_len=720
-zlib empty ok len=0
+zlib empty ok len=8
 zstd empty ok len=0
 zlib bad err=CompressData
 zstd bad err=CompressData

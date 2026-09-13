@@ -37,6 +37,7 @@ class RegistryIdentityTest(unittest.TestCase):
         self.requests = []
         self.statuses = {}
         self.disconnect = set()
+        self.before_get = None
         owner = self
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
@@ -47,6 +48,8 @@ class RegistryIdentityTest(unittest.TestCase):
 
             def do_GET(self):
                 owner.requests.append(self.path)
+                if owner.before_get:
+                    owner.before_get(self.path)
                 if self.path in owner.disconnect:
                     self.close_connection = True
                     return
@@ -83,9 +86,11 @@ class RegistryIdentityTest(unittest.TestCase):
             for registry, key in keys.items()))
 
     def package(self, registry, name, *, deps=(), identity=None, version='1.0.0',
-                extra=(), signature=True, contents=None):
+                extra=(), signature=True, contents=None, nurl_version=None):
         actual_name, actual_version = identity or (name, version)
         manifest = f'[package]\nname="{actual_name}"\nversion="{actual_version}"\n'
+        if nurl_version is not None:
+            manifest += f'nurl-version="{nurl_version}"\n'
         if deps:
             manifest += '[dependencies]\n' + ''.join(f'{dep}="^1"\n' for dep in deps)
         files = [('nurl.toml', manifest.encode()),
@@ -286,6 +291,103 @@ class RegistryIdentityTest(unittest.TestCase):
         run = self.assert_publish_gate_failed({**env, 'NURL_STDLIB': str(root)}, b'missing_symbol')
         self.assertNotIn(b'every imported stdlib FILE exists', run.stderr)
 
+    def test_publish_typechecks_every_library_source_module(self):
+        env = self.publish_project()
+        root = self.publish_toolchain()
+        (self.project/'src/main.nu').unlink()
+        (self.project/'src/lib.nu').write_text('@ answer → i { ^ 42 }\n')
+        for path in ['src/independent.nu', 'src/nested/module.nu', 'root.nu']:
+            with self.subTest(module=path):
+                module = self.project/path
+                module.parent.mkdir(parents=True, exist_ok=True)
+                module.write_text('@ answer → i { ^ missing_library_symbol }\n')
+                run = self.assert_publish_gate_failed(
+                    {**env, 'NURL_STDLIB': str(root)}, b'missing_library_symbol')
+                self.assertIn(path.encode(), run.stderr)
+                module.unlink()
+        run = self.run_pkg('publish', '--dry-run', env={**env, 'NURL_STDLIB': str(root)})
+        self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
+        self.assertIn(b'every gate passed', run.stdout)
+
+    def test_publish_library_requires_installed_compiler(self):
+        env = self.publish_project()
+        (self.project/'src/main.nu').rename(self.project/'src/lib.nu')
+        self.assert_publish_gate_failed(env, b'no installed compiler')
+
+    def test_publish_checks_minimum_against_selected_compiler(self):
+        env = self.publish_project()
+        root = self.publish_toolchain()
+        manifest = self.project/'nurl.toml'
+        original = manifest.read_text()
+        manifest.write_text(original.replace('[package]', '[package]\nnurl-version="999.0.0"'))
+        self.assert_publish_gate_failed({**env, 'NURL_STDLIB': str(root)}, b'requires NURL >= 999.0.0')
+        manifest.write_text(original.replace('[package]', '[package]\nnurl-version="0.1.0"'))
+        run = self.run_pkg('publish', '--dry-run', env={**env, 'NURL_STDLIB': str(root)})
+        self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
+
+    def test_root_and_path_minimum_reject_before_link_or_lock(self):
+        self.manifest([])
+        manifest = self.project/'nurl.toml'
+        original = manifest.read_text()
+        manifest.write_text(original.replace('[package]', '[package]\nnurl-version="999.0.0"'))
+        self.assert_failed_without_publish(token=b'requires NURL >= 999.0.0')
+        target = self.project/'local/foo'
+        target.mkdir(parents=True)
+        (target/'nurl.toml').write_text('[package]\nname="foo"\nversion="1.0.0"\nnurl-version="999.0.0"\n')
+        manifest.write_text(original+'foo={path="local/foo"}\n')
+        self.assert_failed_without_publish(token=b'requires NURL >= 999.0.0')
+        self.assertFalse((self.project/'deps/foo').exists())
+
+    def test_signed_minimum_checked_before_extract_and_preserves_prior_install(self):
+        self.package('b', 'foo', nurl_version='999.0.0')
+        self.manifest([('foo', 'b')])
+        self.assert_failed_without_publish(token=b'PkgToolchain')
+        self.assertFalse((self.project/'deps/foo').exists())
+        self.package('b', 'foo', nurl_version='0.1.0')
+        run = self.run_pkg('install')
+        self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
+        old = (self.project/'deps/foo/nurl.toml').read_bytes()
+        self.package('b', 'foo', nurl_version='999.0.0')
+        self.assert_failed_without_publish(token=b'PkgToolchain')
+        self.assertEqual((self.project/'deps/foo/nurl.toml').read_bytes(), old)
+
+    def test_existing_path_link_rechecks_changed_transitive_minimum(self):
+        self.manifest([])
+        manifest = self.project/'nurl.toml'
+        manifest.write_text(manifest.read_text()+'foo={path="local/foo"}\n')
+        foo, bar = self.project/'local/foo', self.project/'local/bar'
+        foo.mkdir(parents=True)
+        bar.mkdir()
+        (foo/'nurl.toml').write_text('[package]\nname="foo"\nversion="1.0.0"\n[dependencies]\nbar={path="../bar"}\n')
+        original = '[package]\nname="bar"\nversion="1.0.0"\n'
+        (bar/'nurl.toml').write_text(original)
+        run = self.run_pkg('install')
+        self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
+        (bar/'nurl.toml').write_text(original+'nurl-version="999.0.0"\n')
+        self.assert_failed_without_publish(token=b'bar requires NURL >= 999.0.0')
+
+    def test_existing_directory_cannot_substitute_local_path_dependency(self):
+        self.manifest([])
+        manifest = self.project/'nurl.toml'
+        original = manifest.read_text()
+        manifest.write_text(original+'foo={path="local/foo"}\n')
+        local, installed = self.project/'local/foo', self.project/'deps/foo'
+        local.mkdir(parents=True)
+        installed.mkdir(parents=True)
+        (local/'nurl.toml').write_text('[package]\nname="foo"\nversion="1.0.0"\nnurl-version="0.1.0"\n')
+        prior = '[package]\nname="foo"\nversion="2.0.0"\nnurl-version="999.0.0"\n'
+        (installed/'nurl.toml').write_text(prior)
+        self.assert_failed_without_publish(token=b'existing deps entry is not the declared path')
+        self.assertEqual((installed/'nurl.toml').read_text(), prior)
+        self.assertFalse(installed.is_symlink())
+        # The caller can explicitly select the in-place directory; then that
+        # actual manifest, including its minimum, is what must be checked.
+        manifest.write_text(original+'foo={path="./deps/../deps/foo"}\n')
+        self.assert_failed_without_publish(token=b'requires NURL >= 999.0.0')
+        (installed/'nurl.toml').write_text(prior.replace('999.0.0', '0.1.0'))
+        run = self.run_pkg('install')
+        self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
+
     def test_publish_compiler_paths_are_literal_arguments(self):
         env = self.publish_project()
         # A shell must never interpret either the spaces or this substitution.
@@ -333,6 +435,203 @@ class RegistryIdentityTest(unittest.TestCase):
         self.assertIn('/b/index/foo.json', self.requests)
         self.assertNotIn(b'UNCHECKED', run.stderr)
         self.assertNotIn(b'every gate passed', run.stdout)
+
+    def publish_override(self):
+        env = self.publish_project()
+        toolchain = self.publish_toolchain()
+        local = self.project/'local/foo'
+        local.mkdir(parents=True)
+        (local/'nurl.toml').write_text('[package]\nname="foo"\nversion="1.0.0"\n')
+        (local/'lib.nu').write_text('@ foo_answer → i { ^ 22 }\n')
+        manifest = self.project/'nurl.toml'
+        manifest.write_text(manifest.read_text()+
+            f'foo={{path="local/foo",version="^1",registry="{self.base}/b/"}}\n')
+        return {**env, 'NURL_STDLIB': str(toolchain)}, local
+
+    def assert_override_refused(self, env, diagnostic):
+        for command in [('publish', '--dry-run'), ('publish',)]:
+            run = self.run_pkg(*command, env=env)
+            self.assertNotEqual(run.returncode, 0, run.stdout+run.stderr)
+            self.assertIn(diagnostic, run.stderr)
+            self.assertNotIn(b'every gate passed', run.stdout)
+        self.assertFalse(any('/api/' in path for path in self.requests), self.requests)
+        self.assertEqual((self.project/'nurl.lock').read_bytes(), b'prior lock must survive\n')
+
+    def test_publish_drift_verification_errors_refuse_publication(self):
+        env, local = self.publish_override()
+        for defect, diagnostic in [
+                ('http', b'PkgHttp'), ('checksum', b'PkgChecksumMismatch'),
+                ('signature', b'PkgBadSig'), ('identity', b'PkgBadIdentity'),
+                ('minimum', b'PkgToolchain'), ('gzip', b'PkgDecompress'),
+                ('extract', b'PkgUnpack')]:
+            with self.subTest(defect=defect):
+                self.routes.clear()
+                self.statuses.clear()
+                self.requests.clear()
+                url = self.package('b', 'foo',
+                    identity=('impostor', '1.0.0') if defect == 'identity' else None,
+                    signature=defect != 'signature',
+                    nurl_version='999.0.0' if defect == 'minimum' else None,
+                    extra=[('../escape.nu', b'forbidden')] if defect == 'extract' else [])
+                if defect == 'http':
+                    self.statuses[url] = 503
+                if defect == 'checksum':
+                    self.routes[url] += b'changed'
+                if defect == 'gzip':
+                    self.routes[url] = b'not a gzip archive'
+                    index = json.loads(self.routes['/b/index/foo.json'])
+                    index['versions'][0]['checksum'] = hashlib.sha256(self.routes[url]).hexdigest()
+                    self.routes['/b/index/foo.json'] = json.dumps(index).encode()
+                    payload = self.project/'bad-gzip'
+                    payload.write_bytes(self.routes[url])
+                    self.routes[url+'.minisig'] = sign_file(payload, self.keys['b'])
+                self.assert_override_refused(env, diagnostic)
+                self.assertFalse((local/'escape.nu').exists())
+
+    def test_publish_drift_requires_available_local_version(self):
+        env, _ = self.publish_override()
+        for defect in ['missing_package', 'missing_version', 'yanked']:
+            with self.subTest(defect=defect):
+                self.routes.clear()
+                self.requests.clear()
+                if defect != 'missing_package':
+                    self.package('b', 'foo', version='1.1.0' if defect == 'missing_version' else '1.0.0')
+                    if defect == 'yanked':
+                        index = json.loads(self.routes['/b/index/foo.json'])
+                        index['versions'][0]['yanked'] = True
+                        self.routes['/b/index/foo.json'] = json.dumps(index).encode()
+                self.assert_override_refused(env,
+                    b'not found' if defect == 'missing_package' else b'not published and installable')
+                self.assertFalse(any('/pkgs/' in path for path in self.requests))
+
+    def test_publish_drift_validates_local_identity_and_requirement(self):
+        env, local = self.publish_override()
+        manifest = self.project/'nurl.toml'
+        original = manifest.read_text()
+        original_local = (local/'nurl.toml').read_text()
+        for defect, diagnostic in [
+                ('absent', b'local dependency manifest'),
+                ('malformed', b'local dependency manifest'),
+                ('name', b'name does not match'),
+                ('version', b'invalid local dependency version'),
+                ('requirement', b'invalid path dependency version requirement'),
+                ('mismatch', b"but the local copy is"),
+                ('no_requirement', b'no registry version requirement')]:
+            with self.subTest(defect=defect):
+                manifest.write_text(original)
+                (local/'nurl.toml').write_text(original_local)
+                if defect == 'absent':
+                    (local/'nurl.toml').unlink()
+                elif defect == 'malformed':
+                    (local/'nurl.toml').write_text('not TOML')
+                elif defect in ['name', 'version']:
+                    (local/'nurl.toml').write_text(original_local.replace(
+                        'foo' if defect == 'name' else '1.0.0',
+                        'impostor' if defect == 'name' else 'invalid'))
+                elif defect == 'requirement':
+                    manifest.write_text(original.replace('version="^1"', 'version="invalid"'))
+                elif defect == 'mismatch':
+                    manifest.write_text(original.replace('version="^1"', 'version="^2"'))
+                else:
+                    manifest.write_text(original.replace('version="^1",', ''))
+                self.assert_override_refused(env, diagnostic)
+                self.assertEqual(self.requests, [])
+
+    def test_publish_drift_compares_root_nested_and_relative_source_paths(self):
+        env, local = self.publish_override()
+        self.package('b', 'foo')
+        # Correct explicit origin and matching root library are a positive control.
+        self.package('a', 'foo', contents=b'wrong registry source')
+        run = self.run_pkg('publish', '--dry-run', env=env)
+        self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
+        self.assertTrue(all(path.startswith('/b/') for path in self.requests), self.requests)
+        (local/'lib.nu').write_text('@ foo_answer → i { ^ 23 }\n')
+        self.assert_override_refused(env, b'differs from the published')
+        (local/'lib.nu').write_text('@ foo_answer → i { ^ 22 }\n')
+        source = '@ nested_answer → i { ^ 7 }\n'.encode()
+        nested = local/'src/a/module.nu'
+        nested.parent.mkdir(parents=True)
+        nested.write_bytes(source)
+        for published in ['src/b/module.nu', 'src/a/module.nu']:
+            self.package('b', 'foo', extra=[(published, source)])
+            run = self.run_pkg('publish', '--dry-run', env=env)
+            self.assertEqual(run.returncode, 0 if published == 'src/a/module.nu' else 1,
+                             run.stdout+run.stderr)
+        nested.write_text('@ nested_answer → i { ^ 8 }\n')
+        self.assert_override_refused(env, b'differs from the published')
+        nested.unlink()
+        self.assert_override_refused(env, b'differs from the published')
+
+    def test_publish_drift_uses_packaged_source_ignores(self):
+        env, local = self.publish_override()
+        self.package('b', 'foo')
+        (local/'.gitignore').write_text('ignored.nu\n')
+        for path in ['ignored.nu', 'src/ignored.nu', 'tests/fixture.nu', 'examples/demo.nu',
+                     'build/generated.nu']:
+            target = local/path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('deliberately invalid source ignored by the package source audit')
+        run = self.run_pkg('publish', '--dry-run', env=env)
+        self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
+        self.assertIn(b'every gate passed', run.stdout)
+
+    @unittest.skipIf(os.name == 'nt' or (hasattr(os, 'geteuid') and os.geteuid() == 0),
+                     'requires POSIX file read permissions')
+    def test_publish_drift_source_inventory_failure_is_not_a_match(self):
+        env, local = self.publish_override()
+        url = self.package('b', 'foo')
+        source = local/'lib.nu'
+        temp = self.project/'comparison-temp'
+        temp.mkdir()
+        def remove_read_permission(path):
+            if path == url+'.minisig':
+                source.chmod(0)
+        self.before_get = remove_read_permission
+        try:
+            run = self.run_pkg('publish', '--dry-run', env={**env, 'TMPDIR': str(temp)})
+            self.assertNotEqual(run.returncode, 0, run.stdout+run.stderr)
+            self.assertIn(b'cannot enumerate local dependency sources: PackReadFailed', run.stderr)
+            self.assertNotIn(b'differs from the published', run.stderr)
+            self.assertNotIn(b'every gate passed', run.stdout)
+            self.assertEqual(list(temp.iterdir()), [])
+        finally:
+            source.chmod(0o644)
+
+    def test_publish_drift_staging_is_private_and_cleaned(self):
+        env, _ = self.publish_override()
+        url = self.package('b', 'foo')
+        temp = self.project/'comparison temporary root'
+        temp.mkdir()
+        legacy = temp/'nurlpkg-drift-foo'
+        legacy.mkdir()
+        (legacy/'sentinel').write_text('unrelated directory')
+        seen = []
+        barrier = threading.Barrier(2)
+        def hold_signature(path):
+            if path == url+'.minisig':
+                barrier.wait(timeout=15)
+                seen.append({p.name for p in temp.glob('nurlpkg-drift-*') if p != legacy})
+                barrier.wait(timeout=15)
+        self.before_get = hold_signature
+        processes = [subprocess.Popen([str(self.binary), 'publish', '--dry-run'],
+            cwd=self.project, env={**env, 'TMPDIR': str(temp)},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE) for _ in range(2)]
+        try:
+            for process in processes:
+                out, err = process.communicate(timeout=30)
+                self.assertEqual(process.returncode, 0, out+err)
+                self.assertNotIn(b'Sanitizer', out+err)
+                self.assertNotIn(b'runtime error:', out+err)
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+        self.assertEqual(len(seen), 2)
+        self.assertTrue(all(len(names) == 2 for names in seen), seen)
+        self.assertEqual(seen[0], seen[1])
+        self.assertEqual((legacy/'sentinel').read_text(), 'unrelated directory')
+        self.assertEqual(list(temp.iterdir()), [legacy])
 
     def test_two_registries_use_independent_keys(self):
         self.package('a', 'alpha')

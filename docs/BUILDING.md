@@ -86,13 +86,24 @@ The build script performs a complete bootstrap:
 2. `nurlc_lastgood.bin` compiles `compiler/nurlc.nu` → `build/nurlc_self` (stage 1).
 3. `nurlc_self` compiles `compiler/nurlc.nu` again → `build/nurlc_self2` (stage 2).
 4. Verifies stages 1 and 2 produce **byte-identical LLVM IR** (the bootstrap fixed point).
-5. Copies stage 2 to `build/nurlc` and symlinks it at the repo root.
+5. Atomically replaces `build/nurlc` with the completed stage 2 executable
+   and updates the compiler entry at the repo root.
 6. Runs the snapshot test suite (`compiler/tests/run_tests.sh`; on
    Windows `run_tests.ps1`, which needs PowerShell 7) and diffs against
    the golden baseline.
 
 It prints `BUILD SUCCESS & TESTS PASSED` on success, or the full log / diff
 on failure. All artefacts land under `build/`.
+
+POSIX compiler, formatter and package-manager builds preserve their previous
+executables until replacement succeeds. A failed required tool still fails
+the complete build. The POSIX program driver also links beside its destination
+and then renames the completed executable, so a running process can retain its
+old binary while a new one is published. Failed links preserve the previous
+executable and its coverage notes or macOS debug bundle.
+The Windows program driver also stages the linked executable and preserves
+the previous output on failure. MSVC debug builds publish an adjacent PDB with
+a stable embedded filename; failed publication restores the prior PDB.
 
 When a grammar / runtime-ABI change leaves the committed snapshot unable to
 compile the current `nurlc.nu`, refresh it with `./build.sh
@@ -328,6 +339,46 @@ locations. Combine `NURL_SAN=1` with `--debug` for `.nu` locations in ASan
 reports; `./build.sh --san` alone does not request NURL DWARF metadata.
 End-to-end regression: `./tools/dwarf_test.sh` (no-op
 when `gdb` isn't installed).
+
+## Line and branch coverage
+
+`--coverage` instruments generated NURL code with LLVM's GCOV pass. It
+implies `--debug` and disables split lowering and LTO. Use `-O0` when
+investigating individual source lines:
+
+```sh
+./nurl.sh --coverage -O0 src/myprog.nu build/myprog
+./build/myprog
+cd build
+llvm-cov gcov -b myprog.gcda
+```
+
+Compilation writes `build/myprog.gcno`; a normal process exit writes
+`build/myprog.gcda`. Runs accumulate counters. Both paths are absolute in
+the generated module, so launching from another directory retains the
+requested destination. Reports include imported NURL source files. The C
+runtime is linked without coverage instrumentation.
+
+`--emit-ir --coverage` preserves the mapping for a later `clang --coverage`
+compile; `--emit-asm --coverage` emits instrumented assembly and its notes.
+The compiler interface is `nurlc --coverage=PREFIX source.nu`: it emits
+`!llvm.gcov` and DWARF metadata, and requires `clang --coverage` to lower
+the IR and link the profiling runtime. Standard output always names the final
+notes and data destinations, including the `.ll` artifact retained after a
+linked build; that IR remains usable for a later coverage compile.
+
+Drivers that stage executable publication can additionally pass the pair
+`--coverage-notes=STAGED_GCNO --coverage-link-ir=STAGED_MODULE_LL`. From the same
+source snapshot and compilation, the compiler writes a second module with the
+staged notes destination and the final runtime data destination. The driver
+links this module and publishes completed notes with the executable. Failed
+compilation or linking leaves the previous executable and notes intact.
+Both staging options require `--coverage=PREFIX` and each other; `--check`
+creates no module artifacts.
+
+The regression gate checks actual line and branch counts at `-O0` and
+`-O2`, cumulative runs, imported files, and output paths containing spaces,
+quotes and non-ASCII bytes: `python3 tools/tests/test_driver_coverage.py`.
 
 ## Sanitizer coverage
 

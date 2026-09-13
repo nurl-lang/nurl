@@ -28,8 +28,9 @@
 //
 //   * Inputs are BORROWED — the caller still owns and frees the source
 //     Vec[u]. Outputs are OWNED Vec[u] handles; free with `vec_free [u]`.
-//   * Empty input produces an empty output for both compress and
-//     decompress. No magic header bytes are produced for empty payloads.
+//   * gzip/zlib encoders frame empty payloads normally; empty compressed
+//     input is malformed. gzip decoding accepts complete concatenated members
+//     and rejects trailing garbage. zlib decoding requires exactly one stream.
 //
 // Wire format:
 //
@@ -57,8 +58,8 @@ $ `stdlib/std/deflate.nu`  // pure-NURL DEFLATE/inflate + crc32/adler32
 $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
 
 : | CompressErr {
-    CompressBufTooSmall  // dst buffer overflow on grow-and-retry
-    CompressData  // malformed input (zlib Z_DATA_ERROR / zstd error code)
+    CompressBufTooSmall  // decoded output would exceed the caller cap
+    CompressData  // malformed framing, stream or checksum
     CompressMemory  // libz Z_MEM_ERROR / zstd out-of-memory
     CompressOther
 }
@@ -82,6 +83,7 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
         DeflateBadDist → # CompressErr CompressData
         DeflateTruncated → # CompressErr CompressData
         DeflateOther → # CompressErr CompressOther
+        DeflateLimit → # CompressErr CompressBufTooSmall
     }
 }
 
@@ -110,9 +112,6 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
 // the pure encoder has a single mode.
 @ zlib_compress_at ( Vec u ) src i level → !( Vec u ) CompressErr {
     : i n ( vec_len [u] src )
-    ? <= n 0 {
-        ^ @ !( Vec u ) CompressErr { T ( vec_new [u] ) }
-    } {}
     : ( Vec u ) body ( deflate src )
     : ( Vec u ) out ( vec_with_cap [u] + ( vec_len [u] body ) 6 )
     ( vec_push [u] out # u 120 )  // CMF 0x78
@@ -131,30 +130,41 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
 // with CompressBufTooSmall the moment the output would pass `max_out` —
 // the decompression-bomb guard an HTTP client needs before it trusts a
 // Content-Encoding: deflate body.
-@ zlib_decompress_max ( Vec u ) src i max_out → !( Vec u ) CompressErr {
-    : i n ( vec_len [u] src )
-    ? <= n 0 {
-        ^ @ !( Vec u ) CompressErr { T ( vec_new [u] ) }
-    } {}
-    ? < n 6 { ^ @ !( Vec u ) CompressErr { F CompressData } } {}
-    // Strip the 2-byte header and 4-byte Adler-32 trailer.
-    : ( Vec u ) raw ( vec_new [u] )
-    : *u sp ( vec_data [u] src )
-    ( bytes_extend_raw raw # s + # i sp 2 - n 6 )
-    : !( Vec u ) DeflateErr r ( inflate_max raw max_out )
-    ( vec_free [u] raw )
-    ?? r {
-        F e → ^ @ !( Vec u ) CompressErr { F ( __df_to_compress_err_cap e ) }
-        T out → ^ @ !( Vec u ) CompressErr { T out }
-    }
+@ __df_read_be32 * u data i pos → i {
+    ^ | | << # i . data pos 24 << # i . data + pos 1 16
+    | << # i . data + pos 2 8 # i . data + pos 3
 }
 
-// __df_to_compress_err, with the cap (DeflateBadLength from inflate_max)
-// named for what it is.
-@ __df_to_compress_err_cap DeflateErr e → CompressErr {
-    ^ ?? e {
-        DeflateBadLength → # CompressErr CompressBufTooSmall
-        _ → ( __df_to_compress_err e )
+@ __df_read_le32 * u data i pos → i {
+    ^ | | # i . data pos << # i . data + pos 1 8
+    | << # i . data + pos 2 16 << # i . data + pos 3 24
+}
+
+@ zlib_decompress_max ( Vec u ) src i max_out → !( Vec u ) CompressErr {
+    : i n ( vec_len [u] src )
+    ? < n 8 { ^ @ !( Vec u ) CompressErr { F CompressData } } {}
+    : *u data ( vec_data [u] src )
+    : i cmf # i . data 0
+    : i flg # i . data 1
+    // RFC 1950: DEFLATE, at most 32 KiB, FCHECK divisible by 31.
+    // This API has no preset dictionary argument, so FDICT is unsupported.
+    ? | != & cmf 15 8 | > >> cmf 4 7
+    | != % + << cmf 8 flg 31 0 != & flg 32 0 {
+        ^ @ !( Vec u ) CompressErr { F CompressData }
+    } {}
+    : i window << 1 + >> cmf 4 8
+    ?? ( _inflate_prefix_window src 2 ? > max_out 0 max_out -1 window ) {
+        F error → ^ @ !( Vec u ) CompressErr { F ( __df_to_compress_err error ) }
+        T decoded → {
+            : i trailer + 2 . decoded consumed
+            : b valid & == trailer - n 4
+            == ( adler32 . decoded bytes ) ( __df_read_be32 data - n 4 )
+            ? ! valid {
+                ( vec_free [u] . decoded bytes )
+                ^ @ !( Vec u ) CompressErr { F CompressData }
+            } {}
+            ^ @ !( Vec u ) CompressErr { T . decoded bytes }
+        }
     }
 }
 
@@ -168,9 +178,6 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
 // ISIZE (LE, length mod 2^32). `level` accepted for API compatibility.
 @ gzip_compress_at ( Vec u ) src i level → !( Vec u ) CompressErr {
     : i n ( vec_len [u] src )
-    ? <= n 0 {
-        ^ @ !( Vec u ) CompressErr { T ( vec_new [u] ) }
-    } {}
     : ( Vec u ) body ( deflate src )
     : ( Vec u ) out ( vec_with_cap [u] + ( vec_len [u] body ) 18 )
     ( vec_push [u] out # u 31 )  // ID1 0x1f
@@ -192,44 +199,98 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
     ^ ( gzip_decompress_max src 0 )
 }
 
-// gzip_decompress with an output cap (0 = unlimited) — see
-// zlib_decompress_max.
-@ gzip_decompress_max ( Vec u ) src i max_out → !( Vec u ) CompressErr {
+// Parse one RFC 1952 member header and return its DEFLATE offset.
+@ __gzip_header ( Vec u ) src i start → !i CompressErr {
     : i n ( vec_len [u] src )
-    ? <= n 0 {
-        ^ @ !( Vec u ) CompressErr { T ( vec_new [u] ) }
+    ? < - n start 18 { ^ @ !i CompressErr { F CompressData } } {}
+    : *u data ( vec_data [u] src )
+    : i flags # i . data + start 3
+    ? | != # i . data start 31 | != # i . data + start 1 139
+    | != # i . data + start 2 8 != & flags 224 0 {
+        ^ @ !i CompressErr { F CompressData }
     } {}
-    ? < n 2 { ^ @ !( Vec u ) CompressErr { F CompressData } } {}
-    : *u sp ( vec_data [u] src )
-    // Accept a zlib stream too (matches zlib's inflateInit2(15+32) auto-
-    // detect): non-gzip-magic input is routed to zlib_decompress.
-    ? | != # i . sp 0 31 != # i . sp 1 139 {
-        ^ ( zlib_decompress_max src max_out )
+    : ~ i pos + start 10
+    ? != & flags 4 0 {
+        ? < - n pos 2 { ^ @ !i CompressErr { F CompressData } } {}
+        : i extra | # i . data pos << # i . data + pos 1 8
+        = pos + pos 2
+        ? > extra - n pos { ^ @ !i CompressErr { F CompressData } } {}
+        = pos + pos extra
     } {}
-    ? < n 18 { ^ @ !( Vec u ) CompressErr { F CompressData } } {}
-    : i flg # i . sp 3
-    : ~ i p 10
-    // FEXTRA (4): 2-byte XLEN + XLEN bytes.
-    ? != & flg 4 0 {
-        ? > + p 2 n { ^ @ !( Vec u ) CompressErr { F CompressData } } {}
-        : i xlen + # i . sp p << # i . sp + p 1 8
-        = p + + p 2 xlen
-    } {}
-    // FNAME (8): NUL-terminated.
-    ? != & flg 8 0 { ~ & < p n != # i . sp p 0 { = p + p 1 } = p + p 1 } {}
-    // FCOMMENT (16): NUL-terminated.
-    ? != & flg 16 0 { ~ & < p n != # i . sp p 0 { = p + p 1 } = p + p 1 } {}
-    // FHCRC (2): 2 bytes.
-    ? != & flg 2 0 { = p + p 2 } {}
-    ? >= p - n 8 { ^ @ !( Vec u ) CompressErr { F CompressData } } {}
-    : ( Vec u ) raw ( vec_new [u] )
-    ( bytes_extend_raw raw # s + # i sp p - - n 8 p )
-    : !( Vec u ) DeflateErr r ( inflate_max raw max_out )
-    ( vec_free [u] raw )
-    ?? r {
-        F e → ^ @ !( Vec u ) CompressErr { F ( __df_to_compress_err_cap e ) }
-        T out → ^ @ !( Vec u ) CompressErr { T out }
+    // Optional strings include their terminating NUL.
+    : ~ i flag 8
+    ~ <= flag 16 {
+        ? != & flags flag 0 {
+            ~ & < pos n != # i . data pos 0 { = pos + pos 1 }
+            ? >= pos n { ^ @ !i CompressErr { F CompressData } } {}
+            = pos + pos 1
+        } {}
+        = flag * flag 2
     }
+    ? != & flags 2 0 {
+        ? < - n pos 2 { ^ @ !i CompressErr { F CompressData } } {}
+        : ( Vec u ) header ( vec_new [u] )
+        ( bytes_extend_raw header # s + # i data start - pos start )
+        : i actual & ( crc32 header ) 65535
+        ( vec_free [u] header )
+        : i expected | # i . data pos << # i . data + pos 1 8
+        ? != actual expected { ^ @ !i CompressErr { F CompressData } } {}
+        = pos + pos 2
+    } {}
+    ? < - n pos 10 { ^ @ !i CompressErr { F CompressData } } {}
+    ^ @ !i CompressErr { T pos }
+}
+
+: GzipMember { ( Vec u ) bytes i next }
+
+// `limit` is exact: zero permits only an empty member; -1 is unlimited.
+@ __gzip_member ( Vec u ) src i start i limit → !GzipMember CompressErr {
+    : i body ?? ( __gzip_header src start ) {
+        T offset → offset
+        F error → { ^ @ !GzipMember CompressErr { F error } }
+    }
+    : !Inflated DeflateErr result ( _inflate_prefix_window src body limit 32768 )
+    ?? result {
+        F error → ^ @ !GzipMember CompressErr { F ( __df_to_compress_err error ) }
+        T decoded → {
+            : i trailer + body . decoded consumed
+            : *u data ( vec_data [u] src )
+            : ~ b valid >= - ( vec_len [u] src ) trailer 8
+            ? valid {
+                = valid & == ( crc32 . decoded bytes ) ( __df_read_le32 data trailer )
+                == & ( vec_len [u] . decoded bytes ) 4294967295 ( __df_read_le32 data + trailer 4 )
+            } {}
+            ? ! valid {
+                ( vec_free [u] . decoded bytes )
+                ^ @ !GzipMember CompressErr { F CompressData }
+            } {}
+            ^ @ !GzipMember CompressErr { T @ GzipMember { . decoded bytes + trailer 8 } }
+        }
+    }
+}
+
+// Strict gzip with an output cap across ALL members (0 = unlimited).
+// Each member has independent DEFLATE history, CRC-32 and ISIZE. No zlib
+// autodetection and no ignored suffix; framing decides which codec to call.
+@ gzip_decompress_max ( Vec u ) src i max_out → !( Vec u ) CompressErr {
+    ? == ( vec_len [u] src ) 0 { ^ @ !( Vec u ) CompressErr { F CompressData } } {}
+    : ( Vec u ) out ( vec_new [u] )
+    : ~ i pos 0
+    ~ < pos ( vec_len [u] src ) {
+        : i remaining ? > max_out 0 - max_out ( vec_len [u] out ) -1
+        ?? ( __gzip_member src pos remaining ) {
+            F error → {
+                ( vec_free [u] out )
+                ^ @ !( Vec u ) CompressErr { F error }
+            }
+            T member → {
+                ( vec_extend [u] out . member bytes )
+                ( vec_free [u] . member bytes )
+                = pos . member next
+            }
+        }
+    }
+    ^ @ !( Vec u ) CompressErr { T out }
 }
 
 // ── zstd public API ───────────────────────────────────────────────
@@ -270,15 +331,13 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
 
 // ── Raw-DEFLATE streaming codec (RFC 1951, no zlib/gzip wrapper) ────
 //
-// The `zlib_*` / `gzip_*` helpers above are ONE-SHOT: each call spins up
-// a fresh `z_stream`, runs to Z_FINISH, and tears it down. RFC 7692
+// The `zlib_*` / `gzip_*` helpers above are one-shot streams. RFC 7692
 // WebSocket permessage-deflate instead needs a PERSISTENT stream that
 // survives across many messages so the LZ77 sliding window carries over
 // ("context takeover"), and each message is flushed with Z_SYNC_FLUSH
-// rather than ended with Z_FINISH. This section exposes exactly that as
+// rather than ended with a final block. This section exposes that as
 // a reusable raw-DEFLATE codec — raw because permessage-deflate frames
-// carry bare DEFLATE blocks with no 2-byte zlib header / 4-byte Adler-32
-// trailer (achieved via libz's NEGATIVE windowBits).
+// carry bare DEFLATE blocks with no zlib header or Adler-32 trailer.
 //
 //   ( raw_deflate_new   i window_bits i level ) → ! ZDeflate CompressErr
 //   ( raw_deflate_block ZDeflate d ( Vec u ) in ) → ! ( Vec u ) CompressErr
@@ -297,8 +356,7 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
 // never exceeds the inflater's window — inflating at 15 (the max) is
 // always safe regardless of the encoder's choice.
 //
-// Memory: ZDeflate / ZInflate own a heap `z_stream`; there is no
-// auto-Drop for the raw `*u` handle, so callers MUST pair every
+// Memory: ZDeflate / ZInflate own their history vectors. Pair every
 // successful `*_new` with a `*_free`.
 
 // A persistent raw-DEFLATE compressor. `history` is the uncompressed
@@ -354,12 +412,7 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
     : !( Vec u ) DeflateErr r ( inflate_stream . d history input max_out )
     ?? r {
         F e → {
-            // inflate_stream signals the max_out (decompression-bomb) cap
-            // with DeflateBadLength → surface it as CompressBufTooSmall.
-            : CompressErr ce ?? e {
-                DeflateBadLength → # CompressErr CompressBufTooSmall
-                _ → ( __df_to_compress_err e )
-            }
+            : CompressErr ce ( __df_to_compress_err e )
             ^ @ !( Vec u ) CompressErr { F ce }
         }
         T out → ^ @ !( Vec u ) CompressErr { T out }

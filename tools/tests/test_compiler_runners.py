@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fault injection against the real corpus runners in an isolated checkout."""
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import shutil
 import signal
@@ -113,6 +114,64 @@ chmod +x "$output"
                 pass
             proc.communicate()
 
+    def artifacts(self, result):
+        lines = [line.removeprefix('Artifacts: ') for line in result.stdout.splitlines()
+                 if line.startswith('Artifacts: ')]
+        self.assertEqual(len(lines), 1, result.stdout + result.stderr)
+        path = Path(lines[0])
+        self.assertTrue(path.is_dir(), path)
+        return path
+
+    def test_concurrent_same_test_has_isolated_artifacts(self):
+        self.fixture('runtime_probe', '@ main → i { ^ 0 }\n',
+                     'COMPILE OK\nLINK OK\nEXIT 0\nOUTPUT\n')
+        self.script(self.root / 'build/nurlc', r'''touch "$BARRIER/$RUNNER_ID"
+while [[ ! -f "$BARRIER/a" || ! -f "$BARRIER/b" ]]; do sleep 0.01; done
+printf '%s\n' "$RUNNER_ID"
+''')
+        shutil.copy2(self.root / 'build/nurlc', self.root / 'build/nurlc.exe')
+        self.script(self.bin / 'clang', r'''while [[ $# -gt 0 ]]; do
+ case "$1" in
+  *.ll) source="$1" ;;
+  -o) shift; output="$1" ;;
+ esac
+ shift
+done
+[[ "$output" == /dev/null ]] && exit 0
+[[ $(cat "$source") == "$RUNNER_ID" ]] || { echo 'IR overwritten by another invocation' >&2; exit 4; }
+printf '#!/usr/bin/env bash\n# runner %s\nexit 0\n' "$RUNNER_ID" > "$output"
+chmod +x "$output"
+''')
+        for san in self.runners:
+            with self.subTest(san=san):
+                barrier = self.root / ('barrier-' + str(san))
+                barrier.mkdir()
+                env = {**self.env, 'BARRIER': str(barrier), 'NURL_COMPILE_TIMEOUT': '5'}
+                if san == 'powershell':
+                    command = [self.env['NURL_TEST_PWSH'], '-NoProfile', '-File',
+                               str(self.tests / 'run_tests.ps1'), 'runtime_probe']
+                else:
+                    runner = 'run_san_tests.sh' if san else 'run_tests.sh'
+                    command = ['bash', str(self.tests / runner), 'runtime_probe']
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    jobs = [pool.submit(subprocess.run, command,
+                                        env={**env, 'RUNNER_ID': ident}, text=True,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        timeout=30 if san == 'powershell' else 8)
+                            for ident in ('a', 'b')]
+                    results = [job.result() for job in jobs]
+                directories = []
+                for ident, result in zip(('a', 'b'), results):
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    directory = self.artifacts(result)
+                    directories.append(directory)
+                    self.assertEqual((directory / 'runtime_probe.ll').read_text(), ident + '\n')
+                    binary = directory / ('runtime_probe.exe' if san == 'powershell' else 'runtime_probe')
+                    self.assertIn('# runner ' + ident, binary.read_text())
+                    if san != 'powershell':
+                        self.assertEqual((directory / '.verdicts').read_text(), 'runtime_probe PASS\n')
+                self.assertNotEqual(directories[0], directories[1])
+
     def test_valid_rejection(self):
         for san in self.runners:
             with self.subTest(san=san):
@@ -126,8 +185,8 @@ chmod +x "$output"
                 r = self.run_runner(san)
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
                 if san != 'powershell':
-                    verdict = self.root / ('build/tests-san' if san else 'build/tests') / '.verdicts'
-                    self.assertEqual(verdict.read_text(), 'should_fail_probe PASS\n')
+                    artifact_dir = self.artifacts(r)
+                    self.assertEqual((artifact_dir / '.verdicts').read_text(), 'should_fail_probe PASS\n')
                 else:
                     self.assertIn('PASS 1', r.stdout)
 

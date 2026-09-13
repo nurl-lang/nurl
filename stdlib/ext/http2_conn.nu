@@ -6,13 +6,20 @@
 //
 // Public surface:
 //
-//   h2_conn_new TcpConn → ! H2Connection H2ConnErr
-//     Reads the client preface, sends our SETTINGS, applies the
-//     peer's SETTINGS (received as the very first client frame),
-//     and ACKs both directions. Returns a connection ready for the
-//     serve loop.
+//   h2_conn_new_until TcpConn deadline_ns → !H2Connection H2ConnErr
+//   h2_conn_next[_until] inout H2Connection [deadline_ns]
+//                                                   → !H2Event H2ConnErr
+//     Incremental headers, DATA, trailers, reset, and control events. DATA
+//     belongs to the caller, with no hidden request-body accumulation.
+//   h2_stream_headers / h2_stream_data / h2_stream_trailers / h2_stream_reset
+//     Explicit response phases; a DATA write returns the bytes accepted by
+//     available stream and connection flow credit. No nested reader loop.
 //
-//   h2_conn_serve H2Connection conn ( @ HttpResponse HttpRequest ) handler
+//   h2_conn_new TcpConn → ! H2Connection H2ConnErr
+//     Reads the client preface and sends our SETTINGS. The first next/serve
+//     iteration requires the peer's non-ACK SETTINGS and acknowledges it.
+//
+//   h2_conn_serve inout H2Connection conn ( @ HttpResponse HttpRequest ) handler
 //                                                   → ! v H2ConnErr
 //     Main loop. Reads frames, dispatches to the stream state
 //     machine, calls `handler` once per fully-received request,
@@ -54,6 +61,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/panic.nu`
+$ `stdlib/std/time.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
@@ -107,6 +115,7 @@ $ `stdlib/ext/http2_hpack.nu`
         H2FrameReadShort → { ^ # H2ConnErr H2ConnReadShort }
         H2FrameReadTimeout → { ^ # H2ConnErr H2ConnReadTimeout }
         H2FrameWriteIo → { ^ # H2ConnErr H2ConnWriteIo }
+        H2FrameWouldBlock → { ^ # H2ConnErr H2ConnEnhanceCalm }
         H2FrameOversized → { ^ # H2ConnErr H2ConnFrameSize }
         H2FrameBadStreamId → { ^ # H2ConnErr H2ConnProtocol }
         H2FrameBadPadding → { ^ # H2ConnErr H2ConnProtocol }
@@ -161,6 +170,10 @@ $ `stdlib/ext/http2_hpack.nu`
     b end_stream_received  // peer closed their half
     i send_window  // bytes we can send on this stream
     i recv_window  // bytes peer can send on this stream
+    i body_received  // cumulative DATA bytes, independent of application buffering
+    b receiving_trailers
+    b response_headers_sent
+    b refused  // still decode its HPACK block to keep the connection table in sync
 }
 
 // `send_init` is the credit WE may send on this stream — it equals the
@@ -182,6 +195,7 @@ $ `stdlib/ext/http2_hpack.nu`
         F
         send_init
         recv_init
+        0 F F F
     }
 }
 
@@ -246,6 +260,9 @@ $ `stdlib/ext/http2_hpack.nu`
     // rebuilt only after a panic consumed it. __h2_dispatch used to build a
     // fresh one per request and drop it unfreed when the handler's response
     // replaced it — one HttpResponse leaked per HTTP/2 request.
+    b peer_settings_seen
+    b peer_goaway
+    H2FrameWriter writer
 }
 
 @ h2_conn_free sink H2Connection c → v {
@@ -255,6 +272,7 @@ $ `stdlib/ext/http2_hpack.nu`
     \ H2Stream s → v { ( __h2_stream_free s ) } )
     ( vec_free [u] . c rx )
     ( http_response_free . c panic_resp )
+    ( h2_frame_writer_free . c writer )
 }
 
 // ── Initial handshake ─────────────────────────────────────────────────
@@ -273,6 +291,26 @@ $ `stdlib/ext/http2_hpack.nu`
 
 @ h2_conn_new TcpConn tcp → !H2Connection H2ConnErr {
     ^ ( h2_conn_new_buffered tcp ( vec_with_cap [u] 16384 ) ( h2_default_max_body_bytes ) )
+}
+
+// Bound the whole preface handshake, including a peer that trickles bytes.
+@ h2_conn_new_until TcpConn tcp i deadline_ns → !H2Connection H2ConnErr {
+    : i previous ( __h2_write_begin tcp deadline_ns )
+    : !H2Connection H2ConnErr result ( __h2_conn_new_until tcp deadline_ns )
+    ( tcp_set_write_deadline tcp previous )
+    ^ result
+}
+
+@ __h2_conn_new_until TcpConn tcp i deadline_ns → !H2Connection H2ConnErr {
+    : ( Vec u ) carry ( vec_with_cap [u] 16384 )
+    : !v H2FrameErr read ( __h2_buffer_ensure_until tcp carry ( h2_conn_preface_len ) deadline_ns )
+    ?? read {
+        T _ → { ^ ( h2_conn_new_buffered tcp carry ( h2_default_max_body_bytes ) ) }
+        F e → {
+            ( vec_free [u] carry )
+            ^ @ !H2Connection H2ConnErr { F ( __h2_frame_err_to_conn e ) }
+        }
+    }
 }
 
 // h2_conn_new over a connection whose first bytes have already been read:
@@ -311,13 +349,13 @@ $ `stdlib/ext/http2_hpack.nu`
     ( vec_push [H2Setting] initial_settings @ H2Setting {
         ( h2_settings_header_table_size ) 4096 } )
     ( vec_push [H2Setting] initial_settings @ H2Setting {
-        ( h2_settings_enable_push ) 0 } )
-    ( vec_push [H2Setting] initial_settings @ H2Setting {
         ( h2_settings_max_concurrent_streams ) 256 } )
     ( vec_push [H2Setting] initial_settings @ H2Setting {
         ( h2_settings_initial_window_size ) 65535 } )
     ( vec_push [H2Setting] initial_settings @ H2Setting {
         ( h2_settings_max_frame_size ) 16384 } )
+    ( vec_push [H2Setting] initial_settings @ H2Setting {
+        ( h2_settings_max_header_list_size ) ( _h2_max_header_block_bytes ) } )
     : !v H2FrameErr sr ( h2_send_settings tcp initial_settings )
     ( vec_free [H2Setting] initial_settings )
     ?? sr {
@@ -347,6 +385,8 @@ $ `stdlib/ext/http2_hpack.nu`
         carry
         body_max
         ( response_text 500 `internal server error\n` )
+        F F
+        ( h2_frame_writer tcp 1048576 )
     }
     ^ @ !H2Connection H2ConnErr { T c }
 }
@@ -698,10 +738,11 @@ $ `stdlib/ext/http2_hpack.nu`
 }
 
 @ __h2_is_connection_specific s name → b {
-    ? | | | != 0 ( __h2_eq_ci name `connection` )
+    ? | | | | != 0 ( __h2_eq_ci name `connection` )
     != 0 ( __h2_eq_ci name `proxy-connection` )
     != 0 ( __h2_eq_ci name `keep-alive` )
     != 0 ( __h2_eq_ci name `transfer-encoding` )
+    != 0 ( __h2_eq_ci name `upgrade` )
     { ^ T } {}
     ^ F
 }
@@ -723,7 +764,11 @@ $ `stdlib/ext/http2_hpack.nu`
     : ~ b bad F
     ~ & ! bad < k n {
         : i b ( string_get nm k )
-        ? | == b 0 | == b 10 | == b 13 == b 32 { = bad T } {}
+        // RFC 9110 token, plus a leading ':' for pseudo-fields.
+        : b alpha | & >= b 97 <= b 122 & >= b 65 <= b 90
+        : b digit & >= b 48 <= b 57
+        : b special | | | | | | | | | | | | | == b 33 == b 35 == b 36 == b 37 == b 38 == b 39 == b 42 == b 43 == b 45 == b 46 == b 94 == b 95 == b 96 | == b 124 == b 126
+        ? ! | | alpha digit | special & == k 0 == b 58 { = bad T } {}
         = k + k 1
     }
     ^ bad
@@ -834,7 +879,10 @@ $ `stdlib/ext/http2_hpack.nu`
     ~ & ! bad < k n {
         : i c & ( nurl_str_get text k ) 255
         ? | < c 48 > c 57 { = bad T } {
-            = acc + * acc 10 - c 48
+            : i digit - c 48
+            ? > acc / - 9223372036854775807 digit 10 { = bad T } {
+                = acc + * acc 10 digit
+            }
         }
         = k + k 1
     }
@@ -867,7 +915,7 @@ $ `stdlib/ext/http2_hpack.nu`
     }
     ? bad { ^ T } {}
     ? >= declared 0 {
-        : i actual ( vec_len [u] . s body )
+        : i actual . s body_received
         ? != declared actual { ^ T } {}
     } {}
     ^ F
@@ -883,7 +931,7 @@ $ `stdlib/ext/http2_hpack.nu`
 // `:scheme`, `:authority` — which the HTTP/1.1 request shape stores as
 // `method`, `path`, plus a synthesised `Host` header from `:authority`.
 
-@ __h2_stream_to_request H2Stream s → HttpRequest {
+@ __h2_stream_to_request inout H2Stream s → HttpRequest {
     : HttpRequest req ( request_new )
     : i nh ( vec_len [Header] . s decoded_headers )
     : *Header hp ( vec_data [Header] . s decoded_headers )
@@ -936,8 +984,11 @@ $ `stdlib/ext/http2_hpack.nu`
     }
     ( string_free . req version )
     = . req version ( string_from `HTTP/2` )
-    // Body
-    ( vec_extend [u] . req body . s body )
+    // Transfer the body to the request. A cleared duplicate would retain a
+    // whole request allocation for the lifetime of a flow-blocked response.
+    ( vec_free [u] . req body )
+    = . req body . s body
+    = . s body ( vec_new [u] )
     ^ req
 }
 
@@ -964,264 +1015,42 @@ $ `stdlib/ext/http2_hpack.nu`
     ^ # s + # i raw from
 }
 
-// ── Response emission ────────────────────────────────────────────────
-//
-// Build a HEADERS frame from HttpResponse status + headers, then one
-// or more DATA frames (split on max_frame_size and the stream/conn
-// send windows) carrying the body. The final DATA frame sets END_STREAM.
+// ── Incremental server transport ──────────────────────────────────────
+// Each call consumes exactly one frame. DATA is transferred to the caller,
+// never accumulated by the transport. Call h2_event_free after consumption.
+// Control events are observable so a blocked writer can retry immediately
+// after WINDOW_UPDATE. All connection mutations use inout explicitly.
 
-@ __h2_send_response H2Connection c i sid HttpResponse r → !H2Connection H2ConnErr {
-    : ~ H2Connection cur c
-    // Build pseudo-header :status + copy regular headers
-    : ( Vec Header ) all ( vec_new [Header] )
-    : String status_str ( __h2_status_str . r status )
-    ( vec_push [Header] all ( header_new `:status` ( string_data status_str ) ) )
-    ( string_free status_str )
-    : i nh ( vec_len [Header] . r headers )
-    : *Header hp ( vec_data [Header] . r headers )
-    : ~ i k 0
-    ~ < k nh {
-        : Header h . hp k
-        // Skip Connection, Transfer-Encoding, Keep-Alive headers per
-        // RFC 9113 §8.2.2 — HTTP/2 forbids hop-by-hop.
-        : s nm ( string_data . h name )
-        : b is_hop | | | | != 0 ( __h2_eq_ci nm `connection` )
-        != 0 ( __h2_eq_ci nm `transfer-encoding` )
-        != 0 ( __h2_eq_ci nm `keep-alive` )
-        != 0 ( __h2_eq_ci nm `proxy-connection` )
-        != 0 ( __h2_eq_ci nm `upgrade` )
-        ? is_hop {} {
-            ( vec_push [Header] all
-            ( header_new nm ( string_data . h value ) ) )
-        }
-        = k + k 1
-    }
-    : HpackEncoded enc ( hpack_encode_headers_dyn all . cur enc_dyn . cur enc_size_update )
-    = . cur enc_dyn . enc dyn
-    = . cur enc_size_update -1
-    : ( Vec u ) hdr_block . enc block
-    ( vec_free_with [Header] all \ Header hh → v { ( header_free hh ) } )
-
-    : i body_len ( vec_len [u] . r body )
-    : i hdr_len ( vec_len [u] hdr_block )
-    ? > hdr_len . cur peer_max_frame_size {
-        ( vec_free [u] hdr_block )
-        ^ @ !H2Connection H2ConnErr { F H2ConnFrameSize }
-    } {}
-    : i hw_cap ? > . cur peer_max_frame_size 16384
-    16384 . cur peer_max_frame_size
-    // HEADERS — and, when the whole body fits one DATA frame within the
-    // stream and connection send windows, that DATA frame too — leave as
-    // ONE write: both frame headers from `wire`, the body straight from the
-    // response (tcp_write_all2: one sendmsg on plaintext, one sealed pair
-    // on TLS). No body copy, no second syscall — the same shape the
-    // HTTP/1.1 path took in #1050/#1051.
-    : ( Vec u ) wire ( vec_with_cap [u] + hdr_len 18 )
-    : i hflags + ( h2_flag_end_headers ) ? == body_len 0 ( h2_flag_end_stream ) 0
-    ( h2_push_frame_header wire hdr_len ( h2_type_headers ) hflags sid )
-    ( vec_extend [u] wire hdr_block )
-    ( vec_free [u] hdr_block )
-    : ~ b emitted_end_stream == body_len 0
-    : ~ i pos 0
-    : i sidx0 ( __h2_find_stream_index cur sid )
-    : ~ i first_window 0
-    ? >= sidx0 0 {
-        : H2Stream cs0 ( __h2_get_stream cur sidx0 )
-        : i sw0 . cs0 send_window
-        : i cw0 . cur conn_send_window
-        = first_window ? > sw0 cw0 cw0 sw0
-    } {}
-    : b coalesce & & > body_len 0 <= body_len hw_cap <= body_len first_window
-    ? coalesce {
-        ( h2_push_frame_header wire body_len ( h2_type_data ) ( h2_flag_end_stream ) sid )
-        : !v NetErr w2 ( tcp_write_all2 . cur tcp wire . r body )
-        ( vec_free [u] wire )
-        ?? w2 {
-            T _ → {}
-            F _ → { ^ @ !H2Connection H2ConnErr { F H2ConnWriteIo } }
-        }
-        = pos body_len
-        = . cur conn_send_window - . cur conn_send_window body_len
-        : H2Stream cs1 ( __h2_get_stream cur sidx0 )
-        = . cs1 send_window - . cs1 send_window body_len
-        ( __h2_set_stream cur sidx0 cs1 )
-        = emitted_end_stream T
-    } {
-        : !v NetErr w1 ( tcp_write_all . cur tcp wire )
-        ( vec_free [u] wire )
-        ?? w1 {
-            T _ → {}
-            F _ → { ^ @ !H2Connection H2ConnErr { F H2ConnWriteIo } }
-        }
-    }
-
-    // Emit body in DATA frames bounded by min(peer max_frame_size, 16K)
-    // AND by the stream + connection send-windows (RFC 9113 §5.2.1,
-    // §6.9.1). When a window is exhausted, pump WINDOW_UPDATE frames
-    // off the peer until credit is restored. The pump accepts only
-    // WINDOW_UPDATE and silently consumes PRIORITY (RFC 9113 §5.3 —
-    // a deprecated-but-permitted control frame). Anything else means
-    // the peer is doing something we can't service mid-write; bail
-    // and let the main loop handle subsequent frames after the empty
-    // DATA(END_STREAM) tear-down below.
-    : ~ b pump_has_err F
-    : ~ H2ConnErr pump_err H2ConnOther
-    ? & > body_len 0 ! emitted_end_stream {
-        : ~ b bail F
-        ~ & ! bail < pos body_len {
-            : i sidx ( __h2_find_stream_index cur sid )
-            ? < sidx 0 {
-                = bail T
-            } {
-                : H2Stream cs ( __h2_get_stream cur sidx )
-                : i sw . cs send_window
-                : i cw . cur conn_send_window
-                : i window ? > sw cw cw sw
-                ? <= window 0 {
-                    : !H2Frame H2FrameErr fr ( h2_read_frame_buf . cur tcp . cur rx
-                    . cur our_max_frame_size )
-                    ?? fr {
-                        T frame → {
-                            : i ft . frame frame_type
-                            : i fsid . frame stream_id
-                            ? & == ft 8 == ( vec_len [u] . frame payload ) 4 {
-                                : *u wp ( vec_data [u] . frame payload )
-                                : i w0 & # i . wp 0 255
-                                : i w1 & # i . wp 1 255
-                                : i w2 & # i . wp 2 255
-                                : i w3 & # i . wp 3 255
-                                : i inc + + + << & w0 127 24 << w1 16 << w2 8 w3
-                                // Same flow-control rules as the main loop:
-                                // a 0 increment is a PROTOCOL_ERROR and a
-                                // window past 2^31-1 is a FLOW_CONTROL_ERROR
-                                // (RFC 9113 §6.9.1). Without these the pump
-                                // let a peer drive both windows arbitrarily
-                                // high while a response was stalled.
-                                ? == inc 0 {
-                                    = pump_has_err T = pump_err H2ConnProtocol = bail T
-                                } {
-                                    ? == fsid 0 {
-                                        : i nw + . cur conn_send_window inc
-                                        ? > nw ( h2_max_window_size ) {
-                                            = pump_has_err T = pump_err H2ConnFlowControl = bail T
-                                        } {
-                                            = . cur conn_send_window nw
-                                        }
-                                    } {
-                                        ? == fsid sid {
-                                            : H2Stream usc ( __h2_get_stream cur sidx )
-                                            : i nsw + . usc send_window inc
-                                            ? > nsw ( h2_max_window_size ) {
-                                                = pump_has_err T = pump_err H2ConnFlowControl = bail T
-                                            } {
-                                                = . usc send_window nsw
-                                                ( __h2_set_stream cur sidx usc )
-                                            }
-                                        } {}
-                                    }
-                                }
-                            } {
-                                ? == ft 2 {
-                                    // PRIORITY — accepted on closed/half-
-                                    // closed streams (§5.3), just discard.
-                                } {
-                                    ? & == ft 4 == fsid 0 {
-                                        // SETTINGS — apply + ACK. Critical
-                                        // for tests that raise the window
-                                        // via a second SETTINGS frame
-                                        // after the stream is already
-                                        // pending a response.
-                                        ? != 0 & . frame flags ( h2_flag_ack ) {
-                                            // ACK — peer ACKing our SETTINGS.
-                                        } {
-                                            : !H2Connection H2ConnErr ar
-                                            ( __h2_apply_settings cur frame )
-                                            ?? ar {
-                                                T newc → { = cur newc }
-                                                F _ → { = bail T }
-                                            }
-                                            ? ! bail {
-                                                : !v H2FrameErr sack
-                                                ( h2_send_settings_ack . cur tcp )
-                                                ?? sack { T _ → {} F _ → {} }
-                                            } {}
-                                        }
-                                    } {
-                                        ? & == ft 1 != fsid 0 {
-                                            // HEADERS for a NEW stream while
-                                            // we're still busy writing a
-                                            // previous response. We're not
-                                            // multi-streaming the writer, so
-                                            // refuse this stream — §5.1.2.
-                                            : !v H2FrameErr rs
-                                            ( h2_send_rst_stream . cur tcp fsid
-                                            ( h2_err_refused_stream ) )
-                                            ?? rs { T _ → {} F _ → {} }
-                                        } {
-                                            = bail T
-                                        }
-                                    }
-                                }
-                            }
-                            ( h2_frame_free frame )
-                        }
-                        F _ → { = bail T }
-                    }
-                } {
-                    : i remaining - body_len pos
-                    : ~ i chunk ? > remaining hw_cap hw_cap remaining
-                    ? > chunk window { = chunk window } {}
-                    : b is_last >= + pos chunk body_len
-                    : i df_flags ? is_last ( h2_flag_end_stream ) 0
-                    // Frame header + a BORROWED view of the body slice, one
-                    // write — the body is never copied per chunk.
-                    : ( Vec u ) fh ( vec_with_cap [u] 9 )
-                    ( h2_push_frame_header fh chunk ( h2_type_data ) df_flags sid )
-                    : *u bp ( vec_data [u] . r body )
-                    : ( Vec u ) view ( vec_borrow_raw [u] # *u + # i bp pos chunk )
-                    : !v NetErr wd ( tcp_write_all2 . cur tcp fh view )
-                    ( vec_free [u] view )
-                    ( vec_free [u] fh )
-                    ?? wd {
-                        T _ → {}
-                        F _ → { ^ @ !H2Connection H2ConnErr { F H2ConnWriteIo } }
-                    }
-                    = pos + pos chunk
-                    = . cur conn_send_window - . cur conn_send_window chunk
-                    : H2Stream cs2 ( __h2_get_stream cur sidx )
-                    = . cs2 send_window - . cs2 send_window chunk
-                    ( __h2_set_stream cur sidx cs2 )
-                    ? is_last { = emitted_end_stream T } {}
-                }
-            }
-        }
-    } {}
-    // A WINDOW_UPDATE seen by the pump that violated flow control is a
-    // connection error — tear the whole connection down (GOAWAY) rather
-    // than limp on with a corrupted window.
-    ? pump_has_err {
-        ^ @ !H2Connection H2ConnErr { F pump_err }
-    } {}
-    // If we bailed before the body was fully delivered (peer hit us with
-    // a non-WINDOW_UPDATE non-PRIORITY frame, or a read failed mid-write),
-    // close the stream with an empty DATA(END_STREAM). §6.9.1 explicitly
-    // permits zero-length DATA frames with END_STREAM even when the
-    // flow-control window is 0.
-    ? ! emitted_end_stream {
-        : ( Vec u ) empty ( vec_new [u] )
-        : H2Frame ef @ H2Frame {
-            ( h2_type_data ) ( h2_flag_end_stream ) sid empty
-        }
-        : !v H2FrameErr we ( h2_write_frame . cur tcp ef
-        . cur peer_max_frame_size )
-        ( h2_frame_free ef )
-        ?? we { T _ → {} F _ → {} }
-    } {}
-    ^ @ !H2Connection H2ConnErr { T cur }
+: H2Event {
+    i kind
+    i stream_id
+    ( Vec Header ) headers
+    ( Vec u ) data
+    b end_stream
+    i error_code
 }
 
-@ __h2_status_str i status → String {
-    ^ ( string_from ( nurl_str_int status ) )
+@ h2_event_control → i { ^ 0 }
+
+@ h2_event_headers → i { ^ 1 }
+
+@ h2_event_data → i { ^ 2 }
+
+@ h2_event_trailers → i { ^ 3 }
+
+@ h2_event_reset → i { ^ 4 }
+
+@ h2_event_goaway → i { ^ 5 }
+
+@ h2_event_closed → i { ^ 6 }
+
+@ __h2_event i kind i sid b end i code → H2Event {
+    ^ @ H2Event { kind sid ( vec_new [Header] ) ( vec_new [u] ) end code }
+}
+
+@ h2_event_free sink H2Event event → v {
+    ( vec_free_with [Header] . event headers \ Header h → v { ( header_free h ) } )
+    ( vec_free [u] . event data )
 }
 
 @ __h2_eq_ci s a s b → i {
@@ -1241,629 +1070,6 @@ $ `stdlib/ext/http2_hpack.nu`
     ^ ok
 }
 
-// ── Serve loop ────────────────────────────────────────────────────────
-
-@ h2_conn_serve H2Connection conn ( @ HttpResponse HttpRequest ) handler → !v H2ConnErr {
-    : ~ H2Connection cur conn
-    : ~ b done F
-    : ~ b ok T
-    : ~ H2ConnErr err H2ConnOther
-    ~ & ! done ok {
-        : !H2Frame H2FrameErr fr ( h2_read_frame_buf . cur tcp . cur rx
-        . cur our_max_frame_size )
-        ?? fr {
-            T frame → {
-                : i ft . frame frame_type
-                : i sid . frame stream_id
-                // While a HEADERS+CONTINUATION sequence is in flight,
-                // ONLY CONTINUATION frames on that stream are allowed
-                // (§6.10).
-                ? != . cur partial_headers_stream 0 {
-                    ? | != ft ( h2_type_continuation )
-                    != sid . cur partial_headers_stream
-                    { = err H2ConnProtocol = ok F } {}
-                } {}
-
-                // ── Flood accounting (RFC 9113 §10.5) ──────────────────
-                // Classify the frame before dispatch: a HEADERS (new
-                // request or trailers) or a DATA frame carrying payload is
-                // real progress and clears the idle-frame run; every cheap
-                // control frame or empty DATA frame adds to it. RST_STREAM
-                // is counted separately (Rapid Reset). streams_opened is
-                // bumped where a new stream is admitted, below.
-                : i __plen ( vec_len [u] . frame payload )
-                ? | == ft ( h2_type_headers ) & == ft ( h2_type_data ) > __plen 0 {
-                    = . cur idle_frames 0
-                } {
-                    ? | == ft ( h2_type_ping ) | == ft ( h2_type_settings ) | == ft ( h2_type_priority ) | == ft ( h2_type_window_update ) | == ft ( h2_type_continuation ) & == ft ( h2_type_data ) == __plen 0 {
-                        = . cur idle_frames + . cur idle_frames 1
-                    } {
-                        ? > ft 9 { = . cur idle_frames + . cur idle_frames 1 } {}
-                    }
-                }
-                ? == ft ( h2_type_rst_stream ) {
-                    = . cur peer_resets + . cur peer_resets 1
-                } {}
-                ? & ok | > . cur idle_frames ( __h2_max_idle_frames ) > . cur peer_resets ( _h2_max_resets ) {
-                    = err H2ConnEnhanceCalm = ok F
-                } {}
-
-                ?? ft {
-                    4 → {
-                        // SETTINGS (RFC 9113 §6.5)
-                        // - MUST be stream 0 → PROTOCOL_ERROR
-                        // - ACK MUST have zero-length payload → FRAME_SIZE_ERROR
-                        ? != sid 0 {
-                            = err H2ConnProtocol = ok F
-                        } {}
-                        ? & ok != 0 & . frame flags ( h2_flag_ack ) {
-                            ? != ( vec_len [u] . frame payload ) 0 {
-                                = err H2ConnFrameSize = ok F
-                            } {}
-                        } {}
-                        ? ok {
-                            ? != 0 & . frame flags ( h2_flag_ack ) {
-                                // Peer ACKing our SETTINGS — nothing to do.
-                            } {
-                                : !H2Connection H2ConnErr ar
-                                ( __h2_apply_settings cur frame )
-                                ?? ar {
-                                    T newc → { = cur newc }
-                                    F e → { = err e = ok F }
-                                }
-                                ? ok {
-                                    : !v H2FrameErr ack
-                                    ( h2_send_settings_ack . cur tcp )
-                                    ?? ack {
-                                        T _ → {}
-                                        F fe → {
-                                            = err ( __h2_frame_err_to_conn fe )
-                                            = ok F
-                                        }
-                                    }
-                                } {}
-                            }
-                        } {}
-                    }
-                    6 → {
-                        // PING — must be 8 bytes + stream 0
-                        ? != ( vec_len [u] . frame payload ) 8 {
-                            = err H2ConnFrameSize = ok F
-                        } {}
-                        ? & ok != sid 0 {
-                            = err H2ConnProtocol = ok F
-                        } {}
-                        ? & ok == 0 & . frame flags ( h2_flag_ack ) {
-                            : !v H2FrameErr pa
-                            ( h2_send_ping_ack . cur tcp . frame payload )
-                            ?? pa {
-                                T _ → {}
-                                F fe → {
-                                    = err ( __h2_frame_err_to_conn fe )
-                                    = ok F
-                                }
-                            }
-                        } {}
-                    }
-                    7 → {
-                        // GOAWAY (RFC 9113 §6.8). MUST be stream 0.
-                        ? != sid 0 {
-                            = err H2ConnProtocol = ok F
-                        } {}
-                        // Peer initiated graceful shutdown — keep
-                        // processing in-flight frames (PING, RST_STREAM,
-                        // in-progress streams) until the peer closes the
-                        // socket; only accepting NEW streams is forbidden.
-                        // The natural loop exit (peer half-close →
-                        // read_frame returns ReadShort) terminates us.
-                    }
-                    8 → {
-                        // WINDOW_UPDATE
-                        ? != ( vec_len [u] . frame payload ) 4 {
-                            = err H2ConnFrameSize = ok F
-                        } {
-                            : *u wp ( vec_data [u] . frame payload )
-                            : i w0 & # i . wp 0 255
-                            : i w1 & # i . wp 1 255
-                            : i w2 & # i . wp 2 255
-                            : i w3 & # i . wp 3 255
-                            : i inc + + + << & w0 127 24 << w1 16 << w2 8 w3
-                            ? == inc 0 {
-                                = err H2ConnProtocol = ok F
-                            } {
-                                ? == sid 0 {
-                                    : i new_w + . cur conn_send_window inc
-                                    // §6.9.1 — window MUST NOT exceed 2^31-1.
-                                    ? > new_w ( h2_max_window_size ) {
-                                        = err H2ConnFlowControl = ok F
-                                    } {
-                                        = . cur conn_send_window new_w
-                                    }
-                                } {
-                                    : i idx ( __h2_find_stream_index cur sid )
-                                    ? >= idx 0 {
-                                        : H2Stream s ( __h2_get_stream cur idx )
-                                        : i new_sw + . s send_window inc
-                                        ? > new_sw ( h2_max_window_size ) {
-                                            // §6.9.1 — per-stream window
-                                            // overflow is a STREAM error,
-                                            // not a connection error: send
-                                            // RST_STREAM and close just this
-                                            // stream, keep the connection up.
-                                            : !v H2FrameErr rs
-                                            ( h2_send_rst_stream . cur tcp sid
-                                            ( h2_err_flow_control_error ) )
-                                            ?? rs { T _ → {} F _ → {} }
-                                            = . s state ( h2_state_closed )
-                                            ( __h2_set_stream cur idx s )
-                                        } {
-                                            = . s send_window new_sw
-                                            ( __h2_set_stream cur idx s )
-                                        }
-                                    } {
-                                        // §5.1 — WINDOW_UPDATE on an idle
-                                        // stream (sid > last_peer_stream_id
-                                        // AND never opened) is PROTOCOL_ERROR.
-                                        // A closed stream (sid <= last_peer_*)
-                                        // silently no-ops.
-                                        ? > sid . cur last_peer_stream_id {
-                                            = err H2ConnProtocol = ok F
-                                        } {}
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    3 → {
-                        // RST_STREAM (RFC 9113 §6.4)
-                        // - MUST be stream != 0 → PROTOCOL_ERROR
-                        // - MUST have length 4 → FRAME_SIZE_ERROR
-                        // - MUST NOT be sent on idle stream → PROTOCOL_ERROR
-                        ? == sid 0 {
-                            = err H2ConnProtocol = ok F
-                        } {}
-                        ? & ok != ( vec_len [u] . frame payload ) 4 {
-                            = err H2ConnFrameSize = ok F
-                        } {}
-                        ? ok {
-                            : i idx ( __h2_find_stream_index cur sid )
-                            ? >= idx 0 {
-                                : H2Stream s ( __h2_get_stream cur idx )
-                                = . s state ( h2_state_closed )
-                                ( __h2_set_stream cur idx s )
-                            } {
-                                // Idle stream (we've never seen this id, and
-                                // id <= last_peer_stream_id would mean it was
-                                // closed — RST on either is PROTOCOL_ERROR).
-                                ? <= sid . cur last_peer_stream_id {
-                                    // Closed stream — RST_STREAM on a closed
-                                    // stream is a no-op per §5.1, ignore.
-                                } {
-                                    = err H2ConnProtocol = ok F
-                                }
-                            }
-                        } {}
-                    }
-                    1 → {
-                        // HEADERS — start of a new stream, OR trailers
-                        // on an already-open stream (RFC 9113 §8.1).
-                        ? | <= sid 0 == 0 & sid 1 {
-                            // Stream ID must be positive AND odd (client-initiated).
-                            = err H2ConnProtocol = ok F
-                        } {}
-                        // §5.3.1 — stream MUST NOT depend on itself.
-                        ? ok {
-                            : i hdep ( __h2_headers_priority_dep frame )
-                            ? & >= hdep 0 == hdep sid {
-                                = err H2ConnProtocol = ok F
-                            } {}
-                        } {}
-                        // §8.1 — HEADERS on an existing open stream is
-                        // the trailers section. Handle that case before
-                        // the new-stream path; trailers MUST carry
-                        // END_STREAM (and END_HEADERS, since we don't
-                        // implement multi-frame trailers here).
-                        : ~ b handled_as_trailers F
-                        ? ok {
-                            : i ex_idx ( __h2_find_stream_index cur sid )
-                            ? >= ex_idx 0 {
-                                : H2Stream exs ( __h2_get_stream cur ex_idx )
-                                : i exs_state . exs state
-                                ? | == exs_state 1 == exs_state 2 {
-                                    ? == 0 & . frame flags ( h2_flag_end_stream ) {
-                                        = err H2ConnProtocol = ok F
-                                        = handled_as_trailers T
-                                    } {
-                                        : !( Vec u ) H2ConnErr thpr
-                                        ( __h2_extract_headers_payload frame )
-                                        ?? thpr {
-                                            T thb → {
-                                                // The handler only sees the
-                                                // request headers; trailers
-                                                // are accepted but their
-                                                // contents are discarded.
-                                                ( vec_free [u] thb )
-                                                = . exs end_stream_received T
-                                                = . exs state ( h2_state_half_closed_remote )
-                                                ( __h2_set_stream cur ex_idx exs )
-                                                : !H2Connection H2ConnErr tdisp
-                                                ( __h2_dispatch cur sid handler )
-                                                ?? tdisp {
-                                                    T newc → { = cur newc }
-                                                    F e → { = err e = ok F }
-                                                }
-                                                = handled_as_trailers T
-                                            }
-                                            F e → { = err e = ok F = handled_as_trailers T }
-                                        }
-                                    }
-                                } {
-                                    // Existing stream in idle/half-closed-
-                                    // remote/closed state — HEADERS is
-                                    // not legal here.
-                                    = err H2ConnProtocol = ok F
-                                    = handled_as_trailers T
-                                }
-                            } {}
-                        } {}
-                        ? & ok ! handled_as_trailers {
-                            ? <= sid . cur last_peer_stream_id {
-                                // Reused or out-of-order stream ID with no
-                                // open record — closed-stream reuse.
-                                = err H2ConnProtocol = ok F
-                            } {
-                                // Reclaim closed streams before counting, so
-                                // the cap reflects only genuinely-active
-                                // streams (RFC 9113 §5.1.2) and the table
-                                // stays bounded (see _h2_prune_closed).
-                                = cur ( _h2_prune_closed cur )
-                                : i ns ( vec_len [H2Stream] . cur streams )
-                                ? & > . cur our_max_concurrent_streams 0
-                                >= ns . cur our_max_concurrent_streams
-                                {
-                                    : !v H2FrameErr rs
-                                    ( h2_send_rst_stream . cur tcp sid
-                                    ( h2_err_refused_stream ) )
-                                    ?? rs { T _ → {} F _ → {} }
-                                    // A stream we refuse over the concurrency
-                                    // cap counts toward the reset budget: a
-                                    // peer that keeps offering streams past
-                                    // the cap is a flood, not a client.
-                                    = . cur peer_resets + . cur peer_resets 1
-                                    ? > . cur peer_resets ( _h2_max_resets ) {
-                                        = err H2ConnEnhanceCalm = ok F
-                                    } {}
-                                } {
-                                    : H2Stream new_s ( __h2_stream_new sid
-                                    . cur peer_initial_window_size
-                                    . cur our_initial_window_size )
-                                    : !( Vec u ) H2ConnErr hpr
-                                    ( __h2_extract_headers_payload frame )
-                                    ?? hpr {
-                                        T hb → {
-                                            ( vec_extend [u] . new_s header_block hb )
-                                            ( vec_free [u] hb )
-                                            ? > ( vec_len [u] . new_s header_block ) ( _h2_max_header_block_bytes ) {
-                                                = err H2ConnProtocol = ok F
-                                            } {}
-                                            = . new_s state ( h2_state_open )
-                                            ? != 0 & . frame flags ( h2_flag_end_stream ) {
-                                                = . new_s end_stream_received T
-                                                = . new_s state ( h2_state_half_closed_remote )
-                                            } {}
-                                            ? != 0 & . frame flags ( h2_flag_end_headers ) {
-                                                = . new_s headers_complete T
-                                                = . cur partial_headers_stream 0
-                                            } {
-                                                = . cur partial_headers_stream sid
-                                            }
-                                            ( vec_push [H2Stream] . cur streams new_s )
-                                            = . cur last_peer_stream_id sid
-                                            // Total streams this connection
-                                            // has opened, bounding the work a
-                                            // Rapid-Reset flood can extract.
-                                            = . cur streams_opened + . cur streams_opened 1
-                                            ? > . cur streams_opened ( __h2_max_streams_per_conn ) {
-                                                = err H2ConnEnhanceCalm = ok F
-                                            } {}
-                                            // If complete, decode + dispatch
-                                            // (skip if the cap guard tripped).
-                                            ? & ok . new_s headers_complete {
-                                                : i sidx ( __h2_find_stream_index cur sid )
-                                                : !H2Connection H2ConnErr dr
-                                                ( __h2_decode_stream_headers cur sidx )
-                                                ?? dr {
-                                                    T newc → { = cur newc }
-                                                    F e → { = err e = ok F }
-                                                }
-                                                ? ok {
-                                                    : i vidx ( __h2_find_stream_index cur sid )
-                                                    ? >= vidx 0 {
-                                                        : H2Stream vs ( __h2_get_stream cur vidx )
-                                                        : ?H2ConnErr verr
-                                                        ( __h2_check_request_headers vs )
-                                                        ?? verr {
-                                                            T ve → { = err ve = ok F }
-                                                            F _ → {}
-                                                        }
-                                                    } {}
-                                                } {}
-                                                ? & ok . new_s end_stream_received {
-                                                    : !H2Connection H2ConnErr disp
-                                                    ( __h2_dispatch cur sid handler )
-                                                    ?? disp {
-                                                        T newc → { = cur newc }
-                                                        F e → { = err e = ok F }
-                                                    }
-                                                } {}
-                                            } {}
-                                        }
-                                        F e → { = err e = ok F }
-                                    }
-                                }
-                            }
-                        } {}
-                    }
-                    9 → {
-                        // CONTINUATION
-                        ? != sid . cur partial_headers_stream {
-                            = err H2ConnProtocol = ok F
-                        } {
-                            : i idx ( __h2_find_stream_index cur sid )
-                            ? < idx 0 {
-                                = err H2ConnProtocol = ok F
-                            } {
-                                : H2Stream s ( __h2_get_stream cur idx )
-                                ( vec_extend [u] . s header_block . frame payload )
-                                // CONTINUATION-flood guard: bound the total
-                                // accumulated header block (see
-                                // _h2_max_header_block_bytes).
-                                ? > ( vec_len [u] . s header_block ) ( _h2_max_header_block_bytes ) {
-                                    = err H2ConnProtocol = ok F
-                                } {}
-                                ? != 0 & . frame flags ( h2_flag_end_headers ) {
-                                    = . s headers_complete T
-                                    = . cur partial_headers_stream 0
-                                } {}
-                                ( __h2_set_stream cur idx s )
-                                ? & ok . s headers_complete {
-                                    : !H2Connection H2ConnErr dr
-                                    ( __h2_decode_stream_headers cur idx )
-                                    ?? dr {
-                                        T newc → { = cur newc }
-                                        F e → { = err e = ok F }
-                                    }
-                                    ? ok {
-                                        : i vidx ( __h2_find_stream_index cur sid )
-                                        ? >= vidx 0 {
-                                            : H2Stream vs ( __h2_get_stream cur vidx )
-                                            : ?H2ConnErr verr
-                                            ( __h2_check_request_headers vs )
-                                            ?? verr {
-                                                T ve → { = err ve = ok F }
-                                                F _ → {}
-                                            }
-                                        } {}
-                                    } {}
-                                    ? & ok . s end_stream_received {
-                                        : !H2Connection H2ConnErr disp
-                                        ( __h2_dispatch cur sid handler )
-                                        ?? disp {
-                                            T newc → { = cur newc }
-                                            F e → { = err e = ok F }
-                                        }
-                                    } {}
-                                } {}
-                            }
-                        }
-                    }
-                    0 → {
-                        // DATA (RFC 9113 §6.1)
-                        // - MUST be stream != 0 → PROTOCOL_ERROR
-                        // - Stream must be open / half-closed (local);
-                        //   otherwise STREAM_CLOSED (mapped to connection
-                        //   PROTOCOL_ERROR here — h2spec only inspects the
-                        //   first frame and either GOAWAY or RST satisfies).
-                        ? == sid 0 {
-                            = err H2ConnProtocol = ok F
-                        } {}
-                        : i idx ( __h2_find_stream_index cur sid )
-                        ? & ok < idx 0 {
-                            = err H2ConnProtocol = ok F
-                        } {}
-                        ? & ok >= idx 0 {
-                            : H2Stream sst ( __h2_get_stream cur idx )
-                            : i st . sst state
-                            // Open (1) and half-closed-local (2) accept DATA.
-                            // half-closed-remote (3), closed (4), idle (0)
-                            // reject.
-                            ? & != st 1 != st 2 {
-                                = err H2ConnProtocol = ok F
-                            } {}
-                        } {}
-                        ? ok {
-                            : H2Stream s ( __h2_get_stream cur idx )
-                            : !( Vec u ) H2FrameErr dr ( h2_data_strip_padding frame )
-                            ?? dr {
-                                T data → {
-                                    // §6.9.1 — flow control counts the ENTIRE
-                                    // DATA frame payload (pad-length octet +
-                                    // data + padding), not just the stripped
-                                    // bytes. `data_ok` gates the accept path:
-                                    // it is cleared on a flow-control overrun
-                                    // (fatal, connection error) or once an
-                                    // over-cap stream has been reset (the
-                                    // connection survives — see below).
-                                    : i flow_len ( vec_len [u] . frame payload )
-                                    : ~ b data_ok T
-                                    // Enforce that the peer respected the window
-                                    // WE advertised. A peer that sends more than
-                                    // we granted is a FLOW_CONTROL_ERROR (§6.9);
-                                    // without this it could burst-flood our
-                                    // buffers faster than we ACK.
-                                    ? | > flow_len . s recv_window
-                                    > flow_len . cur conn_recv_window {
-                                        = err H2ConnFlowControl = ok F = data_ok F
-                                    } {}
-                                    ? data_ok {
-                                        ( vec_extend [u] . s body data )
-                                    } {}
-                                    ( vec_free [u] data )
-                                    ? data_ok {
-                                        = . s recv_window - . s recv_window flow_len
-                                        = . cur conn_recv_window
-                                        - . cur conn_recv_window flow_len
-                                        ? != 0 & . frame flags ( h2_flag_end_stream ) {
-                                            = . s end_stream_received T
-                                            = . s state ( h2_state_half_closed_remote )
-                                        } {}
-                                        // Absolute body cap — backstop against
-                                        // unbounded cumulative buffering across
-                                        // many WINDOW_UPDATE-replenished frames
-                                        // (see h2_default_max_body_bytes). Reset just
-                                        // this stream with ENHANCE_YOUR_CALM and
-                                        // keep the connection alive.
-                                        ? > ( vec_len [u] . s body ) . cur body_max {
-                                            : !v H2FrameErr rbc
-                                            ( h2_send_rst_stream . cur tcp sid
-                                            ( h2_err_enhance_your_calm ) )
-                                            ?? rbc { T _ → {} F _ → {} }
-                                            = . s state ( h2_state_closed )
-                                            ( __h2_set_stream cur idx s )
-                                            = data_ok F
-                                        } {}
-                                    } {}
-                                    ? data_ok {
-                                        // Replenish the PER-STREAM window too (the
-                                        // connection-level grant below covers stream
-                                        // 0 only). Without this the peer's stream
-                                        // send_window hits 0 after the initial 64 KB
-                                        // and never reopens, so a request body larger
-                                        // than the stream window can never be fully
-                                        // received. Skip once END_STREAM is in — no
-                                        // more DATA will arrive on this stream.
-                                        ? & ! . s end_stream_received
-                                        < . s recv_window / ( h2_default_initial_window_size ) 2
-                                        {
-                                            : i sgrant - ( h2_default_initial_window_size )
-                                            . s recv_window
-                                            : !v H2FrameErr swu
-                                            ( h2_send_window_update . cur tcp sid sgrant )
-                                            ?? swu { T _ → {} F _ → {} }
-                                            = . s recv_window ( h2_default_initial_window_size )
-                                        } {}
-                                        ( __h2_set_stream cur idx s )
-                                        // Replenish flow-control credit when
-                                        // window drops below half. Keeps the
-                                        // peer's data tap open at steady state.
-                                        ? < . cur conn_recv_window
-                                        / ( h2_default_initial_window_size ) 2
-                                        {
-                                            : i grant - ( h2_default_initial_window_size )
-                                            . cur conn_recv_window
-                                            : !v H2FrameErr wu
-                                            ( h2_send_window_update . cur tcp 0 grant )
-                                            ?? wu { T _ → {} F _ → {} }
-                                            = . cur conn_recv_window
-                                            ( h2_default_initial_window_size )
-                                        } {}
-                                        ? & . s end_stream_received . s headers_decoded {
-                                            : !H2Connection H2ConnErr disp
-                                            ( __h2_dispatch cur sid handler )
-                                            ?? disp {
-                                                T newc → { = cur newc }
-                                                F e → { = err e = ok F }
-                                            }
-                                        } {}
-                                    } {}
-                                }
-                                F fe → {
-                                    = err ( __h2_frame_err_to_conn fe )
-                                    = ok F
-                                }
-                            }
-                        } {}
-                    }
-                    2 → {
-                        // PRIORITY (RFC 9113 §6.3) — deprecated by RFC 9218
-                        // but still framing-validated.
-                        // - MUST be stream != 0 → PROTOCOL_ERROR
-                        // - MUST have length 5 → FRAME_SIZE_ERROR (treated
-                        //   as STREAM_ERROR per spec, but at h2c level the
-                        //   connection error path matches h2spec's expected
-                        //   GOAWAY shape for a single-frame validation).
-                        // - §5.3.1 — a stream cannot depend on itself.
-                        ? == sid 0 {
-                            = err H2ConnProtocol = ok F
-                        } {}
-                        ? & ok != ( vec_len [u] . frame payload ) 5 {
-                            = err H2ConnFrameSize = ok F
-                        } {}
-                        ? ok {
-                            : *u prp ( vec_data [u] . frame payload )
-                            : i d0 # i . prp 0
-                            : i d1 # i . prp 1
-                            : i d2 # i . prp 2
-                            : i d3 # i . prp 3
-                            // Mask the exclusive-bit (top bit of d0).
-                            : i dep + + + << & d0 127 24
-                            << & d1 255 16
-                            << & d2 255 8
-                            & d3 255
-                            ? == dep sid {
-                                = err H2ConnProtocol = ok F
-                            } {}
-                        } {}
-                    }
-                    5 → {
-                        // PUSH_PROMISE (RFC 9113 §6.6). Server advertises
-                        // SETTINGS_ENABLE_PUSH=0, so the peer (client)
-                        // MUST NOT send PUSH_PROMISE; doing so is a
-                        // PROTOCOL_ERROR. PUSH_PROMISE from a client is
-                        // also semantically nonsensical — only servers
-                        // are allowed to push streams.
-                        = err H2ConnProtocol = ok F
-                    }
-                    _ → {
-                        // Unknown frame type → ignore per §4.1
-                    }
-                }
-                ( h2_frame_free frame )
-            }
-            F e → {
-                : H2ConnErr ce ( __h2_frame_err_to_conn e )
-                ?? ce {
-                    H2ConnReadShort → { = done T }  // peer closed cleanly
-                    H2ConnReadTimeout → {
-                        // The connection's idle deadline (tcp_set_timeout)
-                        // fired on a quiet peer: graceful shutdown, not an
-                        // error — GOAWAY(NO_ERROR) naming the last stream we
-                        // processed (§6.8), then the caller closes.
-                        ? ! . cur goaway_sent {
-                            : !v H2FrameErr ga ( h2_send_goaway . cur tcp
-                            . cur last_peer_stream_id ( h2_err_no_error ) `` )
-                            ?? ga { T _ → {} F _ → {} }
-                            = . cur goaway_sent T
-                        } {}
-                        = done T
-                    }
-                    _ → { = err ce = ok F }
-                }
-            }
-        }
-    }
-    ? ! ok {
-        // Best-effort GOAWAY before bailing — peer learns we noticed.
-        ? ! . cur goaway_sent {
-            : !v H2FrameErr ga ( h2_send_goaway . cur tcp
-            . cur last_peer_stream_id ( __h2_err_to_code err ) `` )
-            ?? ga { T _ → {} F _ → {} }
-        } {}
-        ^ @ !v H2ConnErr { F err }
-    } {}
-    ^ @ !v H2ConnErr { T 0 }
-}
-
 @ __h2_err_to_code H2ConnErr e → i {
     ^ ?? e {
         H2ConnProtocol → ( h2_err_protocol_error )
@@ -1871,68 +1077,905 @@ $ `stdlib/ext/http2_hpack.nu`
         H2ConnFlowControl → ( h2_err_flow_control_error )
         H2ConnFrameSize → ( h2_err_frame_size_error )
         H2ConnRefusedStream → ( h2_err_refused_stream )
-        H2ConnInternal → ( h2_err_internal_error )
         H2ConnEnhanceCalm → ( h2_err_enhance_your_calm )
         _ → ( h2_err_internal_error )
     }
 }
 
-// Call handler with the assembled HttpRequest and write the response
-// back. Mark the stream closed afterwards.
-@ __h2_dispatch H2Connection c i sid ( @ HttpResponse HttpRequest ) handler → !H2Connection H2ConnErr {
-    : ~ H2Connection cur c
-    : i idx ( __h2_find_stream_index cur sid )
-    ? < idx 0 {
-        ^ @ !H2Connection H2ConnErr { F H2ConnInternal }
+@ __h2_u32 ( Vec u ) bytes i offset → i {
+    : *u p ( vec_data [u] bytes )
+    ^ + + + << & # i . p offset 255 24
+    << & # i . p + offset 1 255 16
+    << & # i . p + offset 2 255 8 & # i . p + offset 3 255
+}
+
+@ __h2_remote_end H2Stream s → H2Stream {
+    : ~ H2Stream cur s
+    = . cur end_stream_received T
+    = . cur state ? == . cur state ( h2_state_half_closed_local )
+    ( h2_state_closed ) ( h2_state_half_closed_remote )
+    ^ cur
+}
+
+@ __h2_local_end H2Stream s → H2Stream {
+    : ~ H2Stream cur s
+    = . cur state ? . cur end_stream_received
+    ( h2_state_closed ) ( h2_state_half_closed_local )
+    ^ cur
+}
+
+@ __h2_copy_headers ( Vec Header ) headers → ( Vec Header ) {
+    : ( Vec Header ) result ( vec_new [Header] )
+    : *Header p ( vec_data [Header] headers )
+    : ~ i k 0
+    ~ < k ( vec_len [Header] headers ) {
+        : Header h . p k
+        ( vec_push [Header] result ( header_new ( string_data . h name ) ( string_data . h value ) ) )
+        = k + k 1
+    }
+    ^ result
+}
+
+@ __h2_trailers_valid ( Vec Header ) headers → b {
+    : *Header p ( vec_data [Header] headers )
+    : ~ i k 0
+    ~ < k ( vec_len [Header] headers ) {
+        : Header h . p k
+        : s nm ( string_data . h name )
+        ? | | | ( __h2_is_pseudo nm ) ( __h2_name_has_uppercase nm )
+        ( __h2_name_malformed . h name ) ( __h2_value_malformed . h value ) { ^ F } {}
+        ? | | ( __h2_is_connection_specific nm )
+        ( __h2_te_violates nm ( string_data . h value ) )
+        != 0 ( nurl_str_eq nm `content-length` ) { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// Decode EVERY header block, including refused streams and trailers. HPACK
+// state belongs to the connection, so dropping any block corrupts later RPCs.
+@ __h2_finish_headers inout H2Connection c i sid → !H2Event H2ConnErr {
+    : i idx ( __h2_find_stream_index c sid )
+    : H2Stream s ( __h2_get_stream c idx )
+    : !HpackDecoded HpackErr dr ( hpack_decode_block . s header_block . c dec_dyn )
+    ?? dr {
+        F _ → { ^ @ !H2Event H2ConnErr { F H2ConnCompression } }
+        T dd → {
+            = . c dec_dyn . dd dyn
+            ( vec_clear [u] . s header_block )
+            = . s headers_complete T
+            = . c partial_headers_stream 0
+            : ~ i header_bytes 0
+            : *Header hp ( vec_data [Header] . dd headers )
+            : ~ i k 0
+            ~ < k ( vec_len [Header] . dd headers ) {
+                : Header h . hp k
+                = header_bytes + header_bytes + 32 + ( string_len . h name ) ( string_len . h value )
+                = k + k 1
+            }
+            ? > header_bytes ( _h2_max_header_block_bytes ) {
+                ( vec_free_with [Header] . dd headers \ Header h → v { ( header_free h ) } )
+                ^ @ !H2Event H2ConnErr { F H2ConnEnhanceCalm }
+            } {}
+            ? . s receiving_trailers {
+                ? ! ( __h2_trailers_valid . dd headers ) {
+                    ( vec_free_with [Header] . dd headers \ Header h → v { ( header_free h ) } )
+                    ^ @ !H2Event H2ConnErr { F H2ConnProtocol }
+                } {}
+                ? ( __h2_content_length_mismatch s ) {
+                    ( vec_free_with [Header] . dd headers \ Header h → v { ( header_free h ) } )
+                    ^ @ !H2Event H2ConnErr { F H2ConnProtocol }
+                } {}
+                : H2Stream ended ( __h2_remote_end s )
+                ( __h2_set_stream c idx ended )
+                ^ @ !H2Event H2ConnErr { T @ H2Event {
+                        ( h2_event_trailers ) sid . dd headers ( vec_new [u] ) T 0 } }
+            } {}
+            ( vec_free_with [Header] . s decoded_headers \ Header h → v { ( header_free h ) } )
+            = . s decoded_headers . dd headers
+            = . s headers_decoded T
+            ( __h2_set_stream c idx s )
+            : ?H2ConnErr vr ( __h2_check_request_headers s )
+            ?? vr { T e → { ^ @ !H2Event H2ConnErr { F e } } F _ → {} }
+            ? & . s end_stream_received ( __h2_content_length_mismatch s ) {
+                ^ @ !H2Event H2ConnErr { F H2ConnProtocol }
+            } {}
+            ? . s refused {
+                : !v H2ConnErr rs ( h2_stream_reset c sid ( h2_err_refused_stream ) )
+                ?? rs { T _ → {} F e → { ^ @ !H2Event H2ConnErr { F e } } }
+                ^ @ !H2Event H2ConnErr { T ( __h2_event ( h2_event_reset ) sid T ( h2_err_refused_stream ) ) }
+            } {}
+            ^ @ !H2Event H2ConnErr { T @ H2Event {
+                    ( h2_event_headers ) sid ( __h2_copy_headers . s decoded_headers )
+                    ( vec_new [u] ) . s end_stream_received 0 } }
+        }
+    }
+}
+
+// Release receive credit only as the caller asks for another event. At most
+// the advertised window is outstanding; the transport never queues bodies.
+@ __h2_queue_frame H2Connection c i kind i flags i sid ( Vec u ) payload → !v H2FrameErr {
+    : H2Frame frame @ H2Frame { kind flags sid payload }
+    : !v H2FrameErr queued ( h2_frame_writer_queue . c writer frame . c peer_max_frame_size )
+    ?? queued { T _ → {} F e → { ^ @ !v H2FrameErr { F e } } }
+    : !i H2FrameErr flushed ( h2_frame_writer_flush . c writer )
+    ?? flushed { T _ → {} F e → { ^ @ !v H2FrameErr { F e } } }
+    ^ @ !v H2FrameErr { T 0 }
+}
+
+@ __h2_send_settings_ack H2Connection c → !v H2FrameErr {
+    : ( Vec u ) empty ( vec_new [u] )
+    : !v H2FrameErr result ( __h2_queue_frame c ( h2_type_settings ) ( h2_flag_ack ) 0 empty )
+    ( vec_free [u] empty )
+    ^ result
+}
+
+@ __h2_send_ping_ack H2Connection c ( Vec u ) opaque → !v H2FrameErr {
+    ^ ( __h2_queue_frame c ( h2_type_ping ) ( h2_flag_ack ) 0 opaque )
+}
+
+@ __h2_send_window_update H2Connection c i sid i increment → !v H2FrameErr {
+    : ( Vec u ) payload ( vec_new [u] )
+    ( bytes_push_u32_be payload # u32 increment )
+    : !v H2FrameErr result ( __h2_queue_frame c ( h2_type_window_update ) 0 sid payload )
+    ( vec_free [u] payload )
+    ^ result
+}
+
+@ __h2_send_rst_stream H2Connection c i sid i code → !v H2FrameErr {
+    : ( Vec u ) payload ( vec_new [u] )
+    ( bytes_push_u32_be payload # u32 code )
+    : !v H2FrameErr result ( __h2_queue_frame c ( h2_type_rst_stream ) 0 sid payload )
+    ( vec_free [u] payload )
+    ^ result
+}
+
+@ __h2_send_goaway H2Connection c i sid i code s debug → !v H2FrameErr {
+    : ( Vec u ) payload ( vec_new [u] )
+    ( bytes_push_u32_be payload # u32 sid )
+    ( bytes_push_u32_be payload # u32 code )
+    ( bytes_extend_str payload debug )
+    : !v H2FrameErr result ( __h2_queue_frame c ( h2_type_goaway ) 0 0 payload )
+    ( vec_free [u] payload )
+    ^ result
+}
+
+@ __h2_receive_credit inout H2Connection c → !v H2ConnErr {
+    ? < . c conn_recv_window / ( h2_default_initial_window_size ) 2 {
+        : i grant - ( h2_default_initial_window_size ) . c conn_recv_window
+        : !v H2FrameErr wr ( __h2_send_window_update c 0 grant )
+        ?? wr { T _ → {} F e → { ^ @ !v H2ConnErr { F ( __h2_frame_err_to_conn e ) } } }
+        = . c conn_recv_window ( h2_default_initial_window_size )
     } {}
-    : H2Stream s ( __h2_get_stream cur idx )
-    // RFC 9113 §8.1.1 — content-length must match the actual body size.
-    // Invoking the handler on a mismatched request would surface a
-    // semantic inconsistency that the spec mandates be caught at the
-    // protocol level.
-    ? ( __h2_content_length_mismatch s ) {
-        ^ @ !H2Connection H2ConnErr { F H2ConnProtocol }
+    : ~ i k 0
+    ~ < k ( vec_len [H2Stream] . c streams ) {
+        : H2Stream s ( __h2_get_stream c k )
+        ? & & ! . s end_stream_received != . s state ( h2_state_closed )
+        < . s recv_window / . c our_initial_window_size 2 {
+            : i grant - . c our_initial_window_size . s recv_window
+            : !v H2FrameErr wr ( __h2_send_window_update c . s id grant )
+            ?? wr { T _ → {} F e → { ^ @ !v H2ConnErr { F ( __h2_frame_err_to_conn e ) } } }
+            = . s recv_window . c our_initial_window_size
+            ( __h2_set_stream c k s )
+        } {}
+        = k + k 1
+    }
+    ^ @ !v H2ConnErr { T 0 }
+}
+
+// Frame dispatcher shared by incremental servers and HttpApp. Borrows frame.
+@ __h2_receive_frame inout H2Connection c H2Frame frame → !H2Event H2ConnErr {
+    : i ft . frame frame_type
+    : i sid . frame stream_id
+    : i plen ( vec_len [u] . frame payload )
+    ? ! . c peer_settings_seen {
+        ? | | != ft 4 != sid 0 != 0 & . frame flags ( h2_flag_ack ) {
+            ^ @ !H2Event H2ConnErr { F H2ConnProtocol }
+        } {}
+        = . c peer_settings_seen T
     } {}
+    ? & != . c partial_headers_stream 0
+    | != ft 9 != sid . c partial_headers_stream {
+        ^ @ !H2Event H2ConnErr { F H2ConnProtocol }
+    } {}
+    ? | == ft 1 & == ft 0 > plen 0 { = . c idle_frames 0 } {
+        ? != ft 3 { = . c idle_frames + . c idle_frames 1 } {}
+    }
+    ? == ft 3 { = . c peer_resets + . c peer_resets 1 } {}
+    ? | > . c idle_frames ( __h2_max_idle_frames ) > . c peer_resets ( _h2_max_resets ) {
+        ^ @ !H2Event H2ConnErr { F H2ConnEnhanceCalm }
+    } {}
+    ?? ft {
+        4 → {
+            ? != sid 0 { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+            ? != 0 & . frame flags ( h2_flag_ack ) {
+                ? != plen 0 { ^ @ !H2Event H2ConnErr { F H2ConnFrameSize } } {}
+            } {
+                : !H2Connection H2ConnErr ar ( __h2_apply_settings c frame )
+                ?? ar { T changed → { = c changed } F e → { ^ @ !H2Event H2ConnErr { F e } } }
+                : !v H2FrameErr wr ( __h2_send_settings_ack c )
+                ?? wr { T _ → {} F e → { ^ @ !H2Event H2ConnErr { F ( __h2_frame_err_to_conn e ) } } }
+            }
+        }
+        6 → {
+            ? != plen 8 { ^ @ !H2Event H2ConnErr { F H2ConnFrameSize } } {}
+            ? != sid 0 { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+            ? == 0 & . frame flags ( h2_flag_ack ) {
+                : !v H2FrameErr wr ( __h2_send_ping_ack c . frame payload )
+                ?? wr { T _ → {} F e → { ^ @ !H2Event H2ConnErr { F ( __h2_frame_err_to_conn e ) } } }
+            } {}
+        }
+        7 → {
+            ? != sid 0 { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+            ? < plen 8 { ^ @ !H2Event H2ConnErr { F H2ConnFrameSize } } {}
+            = . c peer_goaway T
+            ^ @ !H2Event H2ConnErr { T ( __h2_event ( h2_event_goaway )
+                & ( __h2_u32 . frame payload 0 ) 2147483647 F ( __h2_u32 . frame payload 4 ) ) }
+        }
+        8 → {
+            ? != plen 4 { ^ @ !H2Event H2ConnErr { F H2ConnFrameSize } } {}
+            : i increment & ( __h2_u32 . frame payload 0 ) 2147483647
+            ? == increment 0 { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+            ? == sid 0 {
+                : i window + . c conn_send_window increment
+                ? > window ( h2_max_window_size ) { ^ @ !H2Event H2ConnErr { F H2ConnFlowControl } } {}
+                = . c conn_send_window window
+            } {
+                : i idx ( __h2_find_stream_index c sid )
+                ? >= idx 0 {
+                    : H2Stream s ( __h2_get_stream c idx )
+                    ? != . s state ( h2_state_closed ) {
+                        : i window + . s send_window increment
+                        ? > window ( h2_max_window_size ) {
+                            : !v H2ConnErr wr ( h2_stream_reset c sid ( h2_err_flow_control_error ) )
+                            ?? wr { T _ → {} F e → { ^ @ !H2Event H2ConnErr { F e } } }
+                            ^ @ !H2Event H2ConnErr { T ( __h2_event ( h2_event_reset ) sid T ( h2_err_flow_control_error ) ) }
+                        } {}
+                        = . s send_window window
+                        ( __h2_set_stream c idx s )
+                    } {}
+                } {
+                    ? > sid . c last_peer_stream_id { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+                }
+            }
+        }
+        3 → {
+            ? == sid 0 { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+            ? != plen 4 { ^ @ !H2Event H2ConnErr { F H2ConnFrameSize } } {}
+            : i idx ( __h2_find_stream_index c sid )
+            ? >= idx 0 {
+                : H2Stream s ( __h2_get_stream c idx )
+                = . s state ( h2_state_closed )
+                ( __h2_set_stream c idx s )
+                ^ @ !H2Event H2ConnErr { T ( __h2_event ( h2_event_reset ) sid T ( __h2_u32 . frame payload 0 ) ) }
+            } {
+                ? > sid . c last_peer_stream_id { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+            }
+        }
+        1 → {
+            ? | <= sid 0 == 0 & sid 1 { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+            ? == ( __h2_headers_priority_dep frame ) sid { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+            : ~ i idx ( __h2_find_stream_index c sid )
+            ? < idx 0 {
+                ? | <= sid . c last_peer_stream_id . c peer_goaway { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+                = c ( _h2_prune_closed c )
+                : H2Stream s ( __h2_stream_new sid . c peer_initial_window_size . c our_initial_window_size )
+                = . s state ( h2_state_open )
+                = . s refused & > . c our_max_concurrent_streams 0
+                >= ( vec_len [H2Stream] . c streams ) . c our_max_concurrent_streams
+                ( vec_push [H2Stream] . c streams s )
+                = idx - ( vec_len [H2Stream] . c streams ) 1
+                = . c last_peer_stream_id sid
+                = . c streams_opened + . c streams_opened 1
+                ? > . c streams_opened ( __h2_max_streams_per_conn ) { ^ @ !H2Event H2ConnErr { F H2ConnEnhanceCalm } } {}
+            } {
+                : H2Stream s ( __h2_get_stream c idx )
+                ? | | ! . s headers_decoded . s end_stream_received
+                == . s state ( h2_state_closed ) { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+                ? == 0 & . frame flags ( h2_flag_end_stream ) { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+                = . s receiving_trailers T
+                = . s headers_complete F
+                ( vec_clear [u] . s header_block )
+                ( __h2_set_stream c idx s )
+            }
+            : H2Stream s ( __h2_get_stream c idx )
+            : !( Vec u ) H2ConnErr hr ( __h2_extract_headers_payload frame )
+            ?? hr {
+                T block → { ( vec_extend [u] . s header_block block ) ( vec_free [u] block ) }
+                F e → { ^ @ !H2Event H2ConnErr { F e } }
+            }
+            ? > ( vec_len [u] . s header_block ) ( _h2_max_header_block_bytes ) { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+            ? & ! . s receiving_trailers != 0 & . frame flags ( h2_flag_end_stream ) {
+                : H2Stream ended ( __h2_remote_end s )
+                ( __h2_set_stream c idx ended )
+            } { ( __h2_set_stream c idx s ) }
+            ? != 0 & . frame flags ( h2_flag_end_headers ) { ^ ( __h2_finish_headers c sid ) } {
+                = . c partial_headers_stream sid
+            }
+        }
+        9 → {
+            ? | == sid 0 != sid . c partial_headers_stream { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+            : i idx ( __h2_find_stream_index c sid )
+            ? < idx 0 { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+            : H2Stream s ( __h2_get_stream c idx )
+            ? > plen - ( _h2_max_header_block_bytes ) ( vec_len [u] . s header_block ) {
+                ^ @ !H2Event H2ConnErr { F H2ConnProtocol }
+            } {}
+            ( vec_extend [u] . s header_block . frame payload )
+            ? != 0 & . frame flags ( h2_flag_end_headers ) { ^ ( __h2_finish_headers c sid ) } {}
+        }
+        0 → {
+            ? == sid 0 { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+            ? > plen . c conn_recv_window { ^ @ !H2Event H2ConnErr { F H2ConnFlowControl } } {}
+            : i idx ( __h2_find_stream_index c sid )
+            ? < idx 0 {
+                ? > sid . c last_peer_stream_id { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+                = . c conn_recv_window - . c conn_recv_window plen
+                : !v H2FrameErr closed ( __h2_send_rst_stream c sid ( h2_err_stream_closed ) )
+                ?? closed { T _ → {} F e → { ^ @ !H2Event H2ConnErr { F ( __h2_frame_err_to_conn e ) } } }
+                = . c peer_resets + . c peer_resets 1
+                ^ @ !H2Event H2ConnErr { T ( __h2_event ( h2_event_reset ) sid T ( h2_err_stream_closed ) ) }
+            } {}
+            : H2Stream s ( __h2_get_stream c idx )
+            ? | == . s state ( h2_state_closed ) . s end_stream_received {
+                = . c conn_recv_window - . c conn_recv_window plen
+                // Frames already in flight after a LOCAL reset are ignored;
+                // DATA after a received END_STREAM/reset is STREAM_CLOSED.
+                ? . s refused { ^ @ !H2Event H2ConnErr { T ( __h2_event ( h2_event_control ) sid F 0 ) } } {}
+                : !v H2ConnErr closed ( h2_stream_reset c sid ( h2_err_stream_closed ) )
+                ?? closed { T _ → {} F e → { ^ @ !H2Event H2ConnErr { F e } } }
+                ^ @ !H2Event H2ConnErr { T ( __h2_event ( h2_event_reset ) sid T ( h2_err_stream_closed ) ) }
+            } {}
+            ? ! . s headers_decoded { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+            ? > plen . s recv_window { ^ @ !H2Event H2ConnErr { F H2ConnFlowControl } } {}
+            : !( Vec u ) H2FrameErr dr ( h2_data_strip_padding frame )
+            ?? dr {
+                F e → { ^ @ !H2Event H2ConnErr { F ( __h2_frame_err_to_conn e ) } }
+                T data → {
+                    : i n ( vec_len [u] data )
+                    ? > n - 9223372036854775807 . s body_received {
+                        ( vec_free [u] data )
+                        ^ @ !H2Event H2ConnErr { F H2ConnEnhanceCalm }
+                    } {}
+                    = . s body_received + . s body_received n
+                    = . s recv_window - . s recv_window plen
+                    = . c conn_recv_window - . c conn_recv_window plen
+                    : b end != 0 & . frame flags ( h2_flag_end_stream )
+                    ? end {
+                        ? ( __h2_content_length_mismatch s ) {
+                            ( vec_free [u] data )
+                            ^ @ !H2Event H2ConnErr { F H2ConnProtocol }
+                        } {}
+                        : H2Stream ended ( __h2_remote_end s )
+                        ( __h2_set_stream c idx ended )
+                    } { ( __h2_set_stream c idx s ) }
+                    ^ @ !H2Event H2ConnErr { T @ H2Event {
+                            ( h2_event_data ) sid ( vec_new [Header] ) data end 0 } }
+                }
+            }
+        }
+        2 → {
+            ? == sid 0 { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+            ? != plen 5 { ^ @ !H2Event H2ConnErr { F H2ConnFrameSize } } {}
+            ? == & ( __h2_u32 . frame payload 0 ) 2147483647 sid { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
+        }
+        5 → { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } }
+        _ → {}
+    }
+    ^ @ !H2Event H2ConnErr { T ( __h2_event ( h2_event_control ) sid F 0 ) }
+}
+
+// Preserve partial wire bytes on timeout; the next call resumes the frame.
+// Recompute the absolute deadline before EVERY read, including a peer that
+// trickles bytes. Socket timeout is restored after each read.
+@ __h2_buffer_ensure_until TcpConn tcp ( Vec u ) rx i count i deadline_ns → !v H2FrameErr {
+    ~ < ( vec_len [u] rx ) count {
+        : i remain - deadline_ns ( monotonic_ns )
+        ? <= remain 0 { ^ @ !v H2FrameErr { F H2FrameReadTimeout } } {}
+        : i old_timeout ( nurl_tcp_timeout_ms # i . tcp raw )
+        : ~ i wait_ms + / remain 1000000 ? > % remain 1000000 0 1 0
+        ? & > old_timeout 0 < old_timeout wait_ms { = wait_ms old_timeout } {}
+        ( tcp_set_timeout tcp wait_ms )
+        : !i NetErr read ( tcp_read_into tcp rx 16384 )
+        ( tcp_set_timeout tcp old_timeout )
+        ?? read {
+            T n → { ? <= n 0 { ^ @ !v H2FrameErr { F H2FrameReadShort } } {} }
+            F e → {
+                ?? e {
+                    NetClosed → { ^ @ !v H2FrameErr { F H2FrameReadShort } }
+                    NetTimeout → { ^ @ !v H2FrameErr { F H2FrameReadTimeout } }
+                    _ → { ^ @ !v H2FrameErr { F H2FrameReadIo } }
+                }
+            }
+        }
+    }
+    ^ @ !v H2FrameErr { T 0 }
+}
+
+@ __h2_read_frame_until H2Connection c i deadline_ns → !H2Frame H2FrameErr {
+    ? & > deadline_ns 0 >= ( monotonic_ns ) deadline_ns { ^ @ !H2Frame H2FrameErr { F H2FrameReadTimeout } } {}
+    : !v H2FrameErr hr ( __h2_duplex_ensure c 9 deadline_ns )
+    ?? hr { T _ → {} F e → { ^ @ !H2Frame H2FrameErr { F e } } }
+    : *u p ( vec_data [u] . c rx )
+    : i length + + << & # i . p 0 255 16 << & # i . p 1 255 8 & # i . p 2 255
+    ? > length . c our_max_frame_size { ^ @ !H2Frame H2FrameErr { F H2FrameOversized } } {}
+    : !v H2FrameErr pr ( __h2_duplex_ensure c + 9 length deadline_ns )
+    ?? pr { T _ → {} F e → { ^ @ !H2Frame H2FrameErr { F e } } }
+    ^ ( h2_read_frame_buf . c tcp . c rx . c our_max_frame_size )
+}
+
+// Try both directions before parking. Neither raw TCP backpressure nor a
+// partial TLS record may trap the connection in a blocking write/read loop.
+// Yield a control event when pending output progresses, so the application
+// can refill its bounded writer without waiting for an unrelated peer frame.
+@ __h2_duplex_ensure H2Connection c i count i deadline_ns → !v H2FrameErr {
+    ~ < ( vec_len [u] . c rx ) count {
+        ? & > deadline_ns 0 >= ( monotonic_ns ) deadline_ns {
+            ^ @ !v H2FrameErr { F H2FrameReadTimeout }
+        } {}
+        : !i NetErr read ( tcp_try_read_into . c tcp . c rx 16384 )
+        : ~ i received 0
+        ?? read {
+            T n → { = received n }
+            F e → {
+                ?? e {
+                    NetClosed → { ^ @ !v H2FrameErr { F H2FrameReadShort } }
+                    NetTimeout → { ^ @ !v H2FrameErr { F H2FrameReadTimeout } }
+                    _ → { ^ @ !v H2FrameErr { F H2FrameReadIo } }
+                }
+            }
+        }
+        ? == received 0 {
+            : !i H2FrameErr flushed ( h2_frame_writer_flush . c writer )
+            ?? flushed {
+                F e → { ^ @ !v H2FrameErr { F e } }
+                T n → { ? > n 0 { ^ @ !v H2FrameErr { F H2FrameWouldBlock } } {} }
+            }
+            : ~ i wait_ms -1
+            ? > deadline_ns 0 {
+                : i remaining - deadline_ns ( monotonic_ns )
+                ? <= remaining 0 { ^ @ !v H2FrameErr { F H2FrameReadTimeout } } {}
+                = wait_ms + / remaining 1000000 ? > % remaining 1000000 0 1 0
+            } {}
+            : i ready ( tcp_wait_io . c tcp T > ( h2_frame_writer_pending . c writer ) 0 wait_ms )
+            ? == ready 0 { ^ @ !v H2FrameErr { F H2FrameReadTimeout } } {}
+            ? < ready 0 { ^ @ !v H2FrameErr { F H2FrameReadIo } } {}
+        } {}
+    }
+    ^ @ !v H2FrameErr { T 0 }
+}
+
+@ h2_conn_next inout H2Connection c → !H2Event H2ConnErr {
+    ^ ( h2_conn_next_until c 0 )
+}
+
+@ __h2_write_begin TcpConn tcp i deadline_ns → i {
+    : i previous ( tcp_write_deadline tcp )
+    : ~ i deadline deadline_ns
+    ? & > previous 0 | <= deadline 0 < previous deadline { = deadline previous } {}
+    ? > deadline 0 { ( tcp_set_write_deadline tcp deadline ) } {}
+    ^ previous
+}
+
+// deadline_ns is absolute monotonic time; zero uses the socket idle timeout.
+// A deadline timeout is recoverable and does not emit GOAWAY: an RPC deadline
+// must be able to expire one stream while other streams remain alive.
+@ h2_conn_next_until inout H2Connection c i deadline_ns → !H2Event H2ConnErr {
+    : ~ i deadline deadline_ns
+    ? <= deadline 0 {
+        : i timeout_ms ( nurl_tcp_timeout_ms # i . . c tcp raw )
+        ? > timeout_ms 0 { = deadline + ( monotonic_ns ) * timeout_ms 1000000 } {}
+    } {}
+    : i previous ( __h2_write_begin . c tcp deadline )
+    : !H2Event H2ConnErr result ( __h2_conn_next_until c deadline )
+    ( tcp_set_write_deadline . c tcp previous )
+    ^ result
+}
+
+@ __h2_conn_next_until inout H2Connection c i deadline_ns → !H2Event H2ConnErr {
+    ? & > deadline_ns 0 >= ( monotonic_ns ) deadline_ns {
+        ^ @ !H2Event H2ConnErr { F H2ConnReadTimeout }
+    } {}
+    : !v H2ConnErr credit ( __h2_receive_credit c )
+    ?? credit { T _ → {} F e → { ^ @ !H2Event H2ConnErr { F e } } }
+    : !H2Frame H2FrameErr rr ( __h2_read_frame_until c deadline_ns )
+    ?? rr {
+        F e → {
+            ?? e {
+                H2FrameWouldBlock → {
+                    ^ @ !H2Event H2ConnErr { T ( __h2_event ( h2_event_control ) 0 F 0 ) }
+                }
+                H2FrameReadShort → {
+                    ? == ( vec_len [u] . c rx ) 0 {
+                        ^ @ !H2Event H2ConnErr { T ( __h2_event ( h2_event_closed ) 0 T 0 ) }
+                    } {}
+                }
+                H2FrameOversized → {
+                    ? ! . c goaway_sent {
+                        : !v H2FrameErr wr ( __h2_send_goaway c . c last_peer_stream_id ( h2_err_frame_size_error ) `` )
+                        ?? wr { T _ → {} F _ → {} }
+                        = . c goaway_sent T
+                    } {}
+                }
+                _ → {}
+            }
+            ^ @ !H2Event H2ConnErr { F ( __h2_frame_err_to_conn e ) }
+        }
+        T frame → {
+            : !H2Event H2ConnErr result ( __h2_receive_frame c frame )
+            ( h2_frame_free frame )
+            ?? result {
+                T event → { ^ @ !H2Event H2ConnErr { T event } }
+                F e → {
+                    ? ! . c goaway_sent {
+                        : !v H2FrameErr wr ( __h2_send_goaway c . c last_peer_stream_id ( __h2_err_to_code e ) `` )
+                        ?? wr { T _ → {} F _ → {} }
+                        = . c goaway_sent T
+                    } {}
+                    ^ @ !H2Event H2ConnErr { F e }
+                }
+            }
+        }
+    }
+}
+
+// ── Nonblocking-by-flow-control response writer ────────────────────────
+// These APIs never read from the socket. A short data write means the caller
+// retains the unsent bytes and drives h2_conn_next until credit is available.
+
+@ h2_stream_reset inout H2Connection c i sid i code → !v H2ConnErr {
+    : i idx ( __h2_find_stream_index c sid )
+    ? < idx 0 { ^ @ !v H2ConnErr { F H2ConnProtocol } } {}
+    : H2Stream s ( __h2_get_stream c idx )
+    : !v H2FrameErr wr ( __h2_send_rst_stream c sid code )
+    ?? wr { T _ → {} F e → { ^ @ !v H2ConnErr { F ( __h2_frame_err_to_conn e ) } } }
+    = . s state ( h2_state_closed )
+    = . s refused T
+    ( __h2_set_stream c idx s )
+    = . c peer_resets + . c peer_resets 1
+    ^ @ !v H2ConnErr { T 0 }
+}
+
+@ __h2_write_header_block inout H2Connection c i sid ( Vec Header ) headers b end → !v H2ConnErr {
+    : ~ i list_size 0
+    : *Header hp ( vec_data [Header] headers )
+    : ~ i k 0
+    ~ < k ( vec_len [Header] headers ) {
+        : Header h . hp k
+        = list_size + list_size + 32 + ( string_len . h name ) ( string_len . h value )
+        = k + k 1
+    }
+    ? & > . c peer_max_header_list_size 0 > list_size . c peer_max_header_list_size {
+        ^ @ !v H2ConnErr { F H2ConnFrameSize }
+    } {}
+    : HpackEncoded encoded ( hpack_encode_headers_dyn headers . c enc_dyn . c enc_size_update )
+    = . c enc_dyn . encoded dyn
+    = . c enc_size_update -1
+    : ( Vec u ) block . encoded block
+    : i length ( vec_len [u] block )
+    : ~ i offset 0
+    : ~ b first T
+    : ~ b more T
+    ~ more {
+        : i count ? > - length offset . c peer_max_frame_size . c peer_max_frame_size - length offset
+        : b last >= + offset count length
+        : i flags + ? last ( h2_flag_end_headers ) 0 ? & first end ( h2_flag_end_stream ) 0
+        : *u p ( vec_data [u] block )
+        : ( Vec u ) view ( vec_borrow_raw [u] # *u + # i p offset count )
+        : !v H2FrameErr wr ( __h2_queue_frame c ? first ( h2_type_headers ) ( h2_type_continuation ) flags sid view )
+        ( vec_free [u] view )
+        ?? wr {
+            T _ → {}
+            F e → { ( vec_free [u] block ) ^ @ !v H2ConnErr { F ( __h2_frame_err_to_conn e ) } }
+        }
+        = offset + offset count
+        = first F
+        = more ! last
+    }
+    ( vec_free [u] block )
+    ^ @ !v H2ConnErr { T 0 }
+}
+
+@ h2_stream_headers inout H2Connection c i sid ( Vec Header ) headers b end_stream → !v H2ConnErr {
+    : i idx ( __h2_find_stream_index c sid )
+    ? < idx 0 { ^ @ !v H2ConnErr { F H2ConnProtocol } } {}
+    : H2Stream s ( __h2_get_stream c idx )
+    ? | . s response_headers_sent
+    | == . s state ( h2_state_closed ) == . s state ( h2_state_half_closed_local ) {
+        ^ @ !v H2ConnErr { F H2ConnProtocol }
+    } {}
+    : ~ i status_count 0
+    : *Header hp ( vec_data [Header] headers )
+    : ~ i k 0
+    ~ < k ( vec_len [Header] headers ) {
+        : Header h . hp k
+        : s nm ( string_data . h name )
+        ? | | | ( __h2_name_malformed . h name ) ( __h2_name_has_uppercase nm )
+        ( __h2_value_malformed . h value ) ( __h2_is_connection_specific nm ) {
+            ^ @ !v H2ConnErr { F H2ConnProtocol }
+        } {}
+        ? ( __h2_is_pseudo nm ) {
+            ? | != k 0 == 0 ( nurl_str_eq nm `:status` ) { ^ @ !v H2ConnErr { F H2ConnProtocol } } {}
+            : i status ( __h2_parse_dec ( string_data . h value ) )
+            ? | < status 200 > status 599 { ^ @ !v H2ConnErr { F H2ConnProtocol } } {}
+            = status_count + status_count 1
+        } {}
+        = k + k 1
+    }
+    ? != status_count 1 { ^ @ !v H2ConnErr { F H2ConnProtocol } } {}
+    : !v H2ConnErr wr ( __h2_write_header_block c sid headers end_stream )
+    ?? wr { T _ → {} F e → { ^ @ !v H2ConnErr { F e } } }
+    = . s response_headers_sent T
+    ? end_stream {
+        : H2Stream ended ( __h2_local_end s )
+        ( __h2_set_stream c idx ended )
+    } { ( __h2_set_stream c idx s ) }
+    ^ @ !v H2ConnErr { T 0 }
+}
+
+@ h2_stream_trailers inout H2Connection c i sid ( Vec Header ) headers → !v H2ConnErr {
+    : i idx ( __h2_find_stream_index c sid )
+    ? < idx 0 { ^ @ !v H2ConnErr { F H2ConnProtocol } } {}
+    : H2Stream s ( __h2_get_stream c idx )
+    ? | ! . s response_headers_sent
+    | == . s state ( h2_state_closed ) == . s state ( h2_state_half_closed_local ) {
+        ^ @ !v H2ConnErr { F H2ConnProtocol }
+    } {}
+    ? ! ( __h2_trailers_valid headers ) { ^ @ !v H2ConnErr { F H2ConnProtocol } } {}
+    : !v H2ConnErr wr ( __h2_write_header_block c sid headers T )
+    ?? wr { T _ → {} F e → { ^ @ !v H2ConnErr { F e } } }
+    : H2Stream ended ( __h2_local_end s )
+    ( __h2_set_stream c idx ended )
+    ^ @ !v H2ConnErr { T 0 }
+}
+
+@ h2_stream_data inout H2Connection c i sid ( Vec u ) data b end_stream → !i H2ConnErr {
+    : i idx ( __h2_find_stream_index c sid )
+    ? < idx 0 { ^ @ !i H2ConnErr { F H2ConnProtocol } } {}
+    : H2Stream s ( __h2_get_stream c idx )
+    ? | ! . s response_headers_sent
+    | == . s state ( h2_state_closed ) == . s state ( h2_state_half_closed_local ) {
+        ^ @ !i H2ConnErr { F H2ConnProtocol }
+    } {}
+    : i length ( vec_len [u] data )
+    ? & > length 0 >= ( h2_frame_writer_pending . c writer ) 65536 {
+        ^ @ !i H2ConnErr { T 0 }
+    } {}
+    : ~ i count length
+    ? > count 16384 { = count 16384 } {}
+    ? > count . c peer_max_frame_size { = count . c peer_max_frame_size } {}
+    ? > count . c conn_send_window { = count . c conn_send_window } {}
+    ? > count . s send_window { = count . s send_window } {}
+    ? & > length 0 <= count 0 { ^ @ !i H2ConnErr { T 0 } } {}
+    // Empty END_STREAM is permitted even with zero or negative credit.
+    ? == length 0 { = count 0 } {}
+    : b ended & end_stream == count length
+    ? ! ( h2_frame_writer_room . c writer + count 9 ) { ^ @ !i H2ConnErr { T 0 } } {}
+    : ( Vec u ) view ( vec_borrow_raw [u] ( vec_data [u] data ) count )
+    : !v H2FrameErr wr ( __h2_queue_frame c ( h2_type_data ) ? ended ( h2_flag_end_stream ) 0 sid view )
+    ( vec_free [u] view )
+    ?? wr { T _ → {} F e → { ^ @ !i H2ConnErr { F ( __h2_frame_err_to_conn e ) } } }
+    = . c conn_send_window - . c conn_send_window count
+    = . s send_window - . s send_window count
+    ? ended {
+        : H2Stream finished ( __h2_local_end s )
+        ( __h2_set_stream c idx finished )
+    } { ( __h2_set_stream c idx s ) }
+    ^ @ !i H2ConnErr { T count }
+}
+// ── Buffered HttpApp adapter ──────────────────────────────────────────
+// A response waiting for peer credit remains in this bounded queue while
+// the same frame dispatcher handles PING, SETTINGS, cancellation, and other
+// request streams. A response is never truncated to make room for a frame.
+
+: H2PendingResponse {
+    i stream_id
+    HttpResponse response
+    i offset
+    b headers_sent
+}
+
+@ __h2_pending_free sink H2PendingResponse pending → v {
+    ? > . pending stream_id 0 { ( http_response_free . pending response ) } {}
+}
+
+@ h2_default_max_buffered_bytes → i { ^ 67108864 }
+
+@ __h2_buffered_bytes H2Connection c ( Vec H2PendingResponse ) pending → i {
+    : ~ i total 0
+    : ~ i k 0
+    ~ < k ( vec_len [H2Stream] . c streams ) {
+        : H2Stream s ( __h2_get_stream c k )
+        = total + total ( vec_len [u] . s body )
+        = k + k 1
+    }
+    : *H2PendingResponse p ( vec_data [H2PendingResponse] pending )
+    = k 0
+    ~ < k ( vec_len [H2PendingResponse] pending ) {
+        : H2PendingResponse r . p k
+        = total + total ( vec_len [u] . . r response body )
+        = k + k 1
+    }
+    ^ total
+}
+
+@ __h2_response_headers HttpResponse r → ( Vec Header ) {
+    : ( Vec Header ) headers ( vec_new [Header] )
+    ( vec_push [Header] headers ( header_new `:status` ( nurl_str_int . r status ) ) )
+    : *Header p ( vec_data [Header] . r headers )
+    : ~ i k 0
+    ~ < k ( vec_len [Header] . r headers ) {
+        : Header h . p k
+        : s name ( string_data . h name )
+        ? ! ( __h2_is_connection_specific name ) {
+            : String lower ( string_new )
+            : ~ i j 0
+            ~ < j ( string_len . h name ) {
+                : i ch ( string_get . h name j )
+                ( string_push_char lower ? & >= ch 65 <= ch 90 + ch 32 ch )
+                = j + j 1
+            }
+            ( vec_push [Header] headers ( header_new ( string_data lower ) ( string_data . h value ) ) )
+            ( string_free lower )
+        } {}
+        = k + k 1
+    }
+    ^ headers
+}
+
+@ __h2_flush_responses inout H2Connection c ( Vec H2PendingResponse ) pending → !v H2ConnErr {
+    : ~ b progress T
+    ~ progress {
+        = progress F
+        : ~ i k 0
+        : ~ i w 0
+        : i n ( vec_len [H2PendingResponse] pending )
+        : *H2PendingResponse p ( vec_data [H2PendingResponse] pending )
+        ~ < k n {
+            : H2PendingResponse item . p k
+            : i sid . item stream_id
+            : i idx ( __h2_find_stream_index c sid )
+            : ~ b complete < idx 0
+            ? >= idx 0 {
+                : H2Stream s ( __h2_get_stream c idx )
+                = complete == . s state ( h2_state_closed )
+            } {}
+            ? ! complete {
+                : HttpResponse r . item response
+                : i length ( vec_len [u] . r body )
+                ? ! . item headers_sent {
+                    : ( Vec Header ) headers ( __h2_response_headers r )
+                    : !v H2ConnErr hr ( h2_stream_headers c sid headers == length 0 )
+                    ( vec_free_with [Header] headers \ Header h → v { ( header_free h ) } )
+                    ?? hr { T _ → {} F e → { ^ @ !v H2ConnErr { F e } } }
+                    = . item headers_sent T
+                    = progress T
+                    = complete == length 0
+                } {}
+                ? ! complete {
+                    : *u bp ( vec_data [u] . r body )
+                    : ( Vec u ) view ( vec_borrow_raw [u] # *u + # i bp . item offset - length . item offset )
+                    : !i H2ConnErr wr ( h2_stream_data c sid view T )
+                    ( vec_free [u] view )
+                    ?? wr {
+                        T written → {
+                            = . item offset + . item offset written
+                            ? > written 0 { = progress T } {}
+                            = complete == . item offset length
+                        }
+                        F e → { ^ @ !v H2ConnErr { F e } }
+                    }
+                } {}
+            } {}
+            ? complete {
+                ( __h2_pending_free item )
+                = . item stream_id 0
+                = . p k item
+            } {
+                = . p k item
+            }
+            = k + k 1
+        }
+        = k 0
+        ~ < k n {
+            : H2PendingResponse live . p k
+            ? > . live stream_id 0 { = . p w live = w + w 1 } {}
+            = k + k 1
+        }
+        ( vec_set_len [H2PendingResponse] pending w )
+    }
+    ^ @ !v H2ConnErr { T 0 }
+}
+
+@ __h2_queue_response inout H2Connection c i sid ( Vec H2PendingResponse ) pending
+( @ HttpResponse HttpRequest ) handler → !v H2ConnErr {
+    : i idx ( __h2_find_stream_index c sid )
+    ? < idx 0 { ^ @ !v H2ConnErr { F H2ConnInternal } } {}
+    : ~ H2Stream s ( __h2_get_stream c idx )
     : HttpRequest req ( __h2_stream_to_request s )
-    // Wrap the handler in `recover` so a panic inside it doesn't unwind the
-    // whole connection serve loop (and, under server_run_pool, kill the
-    // worker thread). Mirrors the HTTP/1.1 path: on panic the default 500
-    // flows back to the client over this stream and the message is logged.
+    ( __h2_set_stream c idx s )
+    : ~ HttpResponse response . c panic_resp
     : ( @ HttpResponse HttpRequest ) f handler
-    // `resp` starts as the connection's pre-built 500 and is replaced by
-    // the handler's response on the normal path. Replacement is detected
-    // by comparing body-Vec DATA pointers, exactly as the HTTP/1.1 loop
-    // does: a closure captures the struct binding by reference, so
-    // `= resp` inside `recover` reaches this scope, and two live responses
-    // never share a body buffer.
-    : ~ HttpResponse resp . cur panic_resp
-    : !v PanicInfo pr ( recover \ → v { = resp ( f req ) } )
-    ?? pr {
+    : !v PanicInfo recovered ( recover \ → v { = response ( f req ) } )
+    ?? recovered {
         T _ → {}
-        F p → {
-            ( nurl_eprintln ( nurl_str_cat `[panic] HTTP/2 handler: ` ( string_data . p msg ) ) )
-            ( panic_info_free p )
+        F info → {
+            ( nurl_eprintln ( nurl_str_cat `[panic] HTTP/2 handler: ` ( string_data . info msg ) ) )
+            ( panic_info_free info )
         }
     }
     ( request_free req )
-    : HttpResponse fallback . cur panic_resp
-    : b replaced != # i ( vec_data [u] . resp body ) # i ( vec_data [u] . fallback body )
-    : !H2Connection H2ConnErr wr ( __h2_send_response cur sid resp )
-    ( http_response_free resp )
-    // A panic consumed the connection's fallback (resp WAS panic_resp and
-    // is freed above) — rebuild it for the next panic. Cold path.
-    ? replaced {} { = . cur panic_resp ( response_text 500 `internal server error\n` ) }
-    ?? wr {
-        T newc → {
-            = cur newc
-            : i ridx ( __h2_find_stream_index cur sid )
-            ? >= ridx 0 {
-                : H2Stream sf ( __h2_get_stream cur ridx )
-                = . sf state ( h2_state_closed )
-                ( __h2_set_stream cur ridx sf )
-            } {}
-            ^ @ !H2Connection H2ConnErr { T cur }
-        }
-        F e → { ^ @ !H2Connection H2ConnErr { F e } }
+    : HttpResponse fallback . c panic_resp
+    ? == # i ( vec_data [u] . response body ) # i ( vec_data [u] . fallback body ) {
+        = . c panic_resp ( response_text 500 `internal server error\n` )
+    } {}
+    ? > ( vec_len [u] . response body ) - ( h2_default_max_buffered_bytes ) ( __h2_buffered_bytes c pending ) {
+        ( http_response_free response )
+        ^ ( h2_stream_reset c sid ( h2_err_enhance_your_calm ) )
+    } {}
+    ( vec_push [H2PendingResponse] pending @ H2PendingResponse { sid response 0 F } )
+    ^ @ !v H2ConnErr { T 0 }
+}
+
+@ h2_conn_serve inout H2Connection conn ( @ HttpResponse HttpRequest ) handler → !v H2ConnErr {
+    : ( Vec H2PendingResponse ) pending ( vec_new [H2PendingResponse] )
+    : ~ b done F
+    : ~ b failed F
+    : ~ H2ConnErr error H2ConnOther
+    ~ & ! done ! failed {
+        : !v H2ConnErr sent ( __h2_flush_responses conn pending )
+        ?? sent { T _ → {} F e → { = failed T = error e } }
+        ? ! failed {
+            : !H2Event H2ConnErr next ( h2_conn_next conn )
+            ?? next {
+                F e → {
+                    ?? e {
+                        H2ConnReadTimeout → {
+                            : !v H2FrameErr wr ( __h2_send_goaway conn . conn last_peer_stream_id ( h2_err_no_error ) `` )
+                            ?? wr { T _ → {} F _ → {} }
+                            = . conn goaway_sent T
+                            = done T
+                        }
+                        _ → { = failed T = error e }
+                    }
+                }
+                T event → {
+                    : i kind . event kind
+                    : i sid . event stream_id
+                    ? == kind ( h2_event_closed ) { = done T } {}
+                    ? | | == kind ( h2_event_headers ) == kind ( h2_event_data ) == kind ( h2_event_trailers ) {
+                        : i idx ( __h2_find_stream_index conn sid )
+                        : ~ b admitted >= idx 0
+                        ? & admitted == kind ( h2_event_data ) {
+                            : H2Stream s ( __h2_get_stream conn idx )
+                            : i n ( vec_len [u] . event data )
+                            ? | > . s body_received . conn body_max
+                            > n - ( h2_default_max_buffered_bytes ) ( __h2_buffered_bytes conn pending ) {
+                                : !v H2ConnErr rs ( h2_stream_reset conn sid ( h2_err_enhance_your_calm ) )
+                                ?? rs { T _ → {} F e → { = failed T = error e } }
+                                = admitted F
+                            } {
+                                ( vec_extend [u] . s body . event data )
+                            }
+                        } {}
+                        ? & & admitted ! failed . event end_stream {
+                            : !v H2ConnErr queued ( __h2_queue_response conn sid pending handler )
+                            ?? queued { T _ → {} F e → { = failed T = error e } }
+                        } {}
+                    } {}
+                    ( h2_event_free event )
+                }
+            }
+        } {}
     }
+    ( vec_free_with [H2PendingResponse] pending \ H2PendingResponse p → v { ( __h2_pending_free p ) } )
+    ? failed {
+        ? ! . conn goaway_sent {
+            : !v H2FrameErr wr ( __h2_send_goaway conn . conn last_peer_stream_id ( __h2_err_to_code error ) `` )
+            ?? wr { T _ → {} F _ → {} }
+            = . conn goaway_sent T
+        } {}
+        ^ @ !v H2ConnErr { F error }
+    } {}
+    ^ @ !v H2ConnErr { T 0 }
 }

@@ -122,6 +122,7 @@ $ `stdlib/net/tcpstack.nu`
     i peer_ip
     i peer_port
     i timeout_ms
+    i write_deadline_ns
     b nonblock
     b eof  // peer FIN seen AND the receive queue drained
     b shut  // sock_shutdown was called: wake and refuse
@@ -229,6 +230,7 @@ $ `stdlib/net/tcpstack.nu`
     = . s peer_ip 0
     = . s peer_port 0
     = . s timeout_ms 0
+    = . s write_deadline_ns 0
     = . s nonblock F
     = . s eof F
     = . s shut F
@@ -331,6 +333,34 @@ $ `stdlib/net/tcpstack.nu`
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ 0 } {}
     ^ . s timeout_ms
+}
+
+// Absolute deadlines remain sans-IO: the socket ABI supplies now_ns.
+@ sock_set_write_deadline * SockTab st i fd i ns → v {
+    : *Sock socket ( __sock st fd )
+    ? == # i socket 0 { ^ } {}
+    = . socket write_deadline_ns ? > ns 0 ns 0
+}
+
+@ sock_write_deadline * SockTab st i fd → i {
+    : *Sock socket ( __sock st fd )
+    ? == # i socket 0 { ^ 0 } {}
+    ^ . socket write_deadline_ns
+}
+
+@ sock_write_wait_ms * SockTab st i fd i now_ns → i {
+    : *Sock socket ( __sock st fd )
+    ? == # i socket 0 { ^ 0 } {}
+    : ~ i ms ? > . socket timeout_ms 0 . socket timeout_ms -1
+    ? > . socket write_deadline_ns 0 {
+        ? >= now_ns . socket write_deadline_ns {
+            = . socket err ( sock_err_again )
+            ^ 0
+        } {}
+        : i left + / - - . socket write_deadline_ns now_ns 1 1000000 1
+        ? | < ms 0 < left ms { = ms left } {}
+    } {}
+    ^ ms
 }
 
 @ sock_kind * SockTab st i fd → i {

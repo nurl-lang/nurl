@@ -200,6 +200,19 @@ FFI declarations (`& "lib" @ name …`) and trait/impl methods are
 intentionally **not** renamed — FFI symbols resolve at the linker by
 literal C-ABI name, and trait dispatch is mangled by impl-target type.
 
+For an executable, NURL source functions have LLVM linkage names in the
+reserved `__nurl_fn.` namespace. This prevents a source function such as
+`open` from replacing libc's `open`; source lookup, visibility and debug
+names still use the NURL name. Calls, trait methods, generated destructors
+and split compilation use the same lowering rule. `pub` controls NURL
+visibility and does not by itself expose a C symbol.
+
+An explicit FFI declaration preserves its literal symbol even when a NURL
+function supplies the implementation. `--keep=name` also preserves that
+literal name and retains the function for callers in C. A compilation with
+no `main` retains its external function names for separately linked callers;
+the executable's generated C `main` entry is unchanged.
+
 ### 3.2b `__` file-private functions
 
 A top-level function whose name begins with `__` is **file-scoped**, in
@@ -1050,6 +1063,9 @@ Semantics (v2.3, 2026-08-03):
   statement was actually executed. A defer inside an untaken branch
   does not run; a defer inside a loop body runs **once**, not once per
   iteration.
+- **Nested registration** — a defer body can register further cleanup.
+  After that body completes, its reached nested defers run in LIFO order
+  before older cleanup. An unreached parent does not run its nested defers.
 - **Ownership interaction** — a defer body may reference any owned
   value (string, slice, `% Drop` value, closure) whose binding was
   registered *before* the `;` statement; those values stay alive
@@ -1059,8 +1075,10 @@ Semantics (v2.3, 2026-08-03):
   sharp edge: with several return paths, a pre-defer owned value that
   is returned on one path but not another is *leaked* (never
   double-freed) on the path that does not return it.
-- `^` (return) inside a defer body is a compile error — the chain runs
-  during return. `;` inside a closure body is a compile error (a
+- `^` (return) and `\` (failure propagation) inside a defer body are
+  compile errors — the chain runs during return; handle cleanup failures
+  locally with `??`. A closure defined there has its own return context.
+  `;` inside a closure body is a compile error (a
   closure is its own function; defer there would chain into the
   enclosing function).
 
@@ -1457,9 +1475,13 @@ A function parameter may carry a leading convention marker (§7.2):
 
 - *(none)* / `in` — immutable borrow by value (the default).
 - `inout` — exclusive mutable borrow. The argument MUST be a mutable
-  (`: ~`) binding or a field target `. obj field`; it is passed by
+  (`: ~`) binding, a field target `. obj field`, or an element of a mutable
+  typed-pointer binding `. pointer index`; it is passed by
   address. The callee mutates the caller's storage in place. Ordinary
   and generic declarations may follow their callers.
+  Pointer indices must be integers and are evaluated once. Named fields through
+  struct pointers are addressable as well. The pointee must match the declared
+  parameter type exactly; raw-pointer bounds remain the caller's responsibility.
 - `sink` — consume / move. The callee takes ownership; the caller may
   not use the argument binding afterwards. Compiler-managed enum owners
   transfer their drop obligation. Transfer for raw owned strings, slices,

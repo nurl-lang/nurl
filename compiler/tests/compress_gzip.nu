@@ -1,6 +1,6 @@
 // compress_gzip.nu — round-trip + wire-format checks for the gzip
 // helpers in stdlib/ext/compress.nu (RFC 1952 file format via the
-// runtime.c §22 bridge over libz's streaming API).
+// pure-NURL DEFLATE codec).
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
@@ -96,7 +96,7 @@ $ `stdlib/ext/compress.nu`
         F _ → ( nurl_print `gzip lvl0 compress err\n` )
     }
 
-    // ── Empty input passes through ──────────────────────────────────
+    // ── Empty input produces a valid gzip member ──────────────────────────────────
     : ( Vec u ) empty ( vec_new [u] )
     : !( Vec u ) CompressErr ge ( gzip_compress empty )
     ?? ge {
@@ -110,8 +110,7 @@ $ `stdlib/ext/compress.nu`
     }
     ( vec_free [u] empty )
 
-    // ── Auto-detect: gzip_decompress accepts a zlib-format stream ──
-    // (windowBits=15+32 enables auto gzip/zlib detection in libz.)
+    // ── Framing is strict: a zlib stream is not gzip ───────────────
     : !( Vec u ) CompressErr zc ( zlib_compress input )
     ?? zc {
         T comp → {

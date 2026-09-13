@@ -1,0 +1,26 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+body
+latest
+outer
+child-owned
+taken child
+inner second
+42
+inner first
+earliest
+body
+latest
+outer
+child-owned
+inner second
+42
+inner first
+earliest
+loop outer
+loop child once
+early child
+7
+42

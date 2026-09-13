@@ -48,7 +48,7 @@ initialiser is a *fresh allocation produced on the spot*:
 - a slice literal `[ T | ... ]`,
 - a slice-returning call,
 - an allocating string call (`nurl_str_cat`, `_cat3/4`, `_int`,
-  `_float`, `_slice`, `nurl_read_file`),
+  `_float`, `_slice`, `nurl_read_file`, `nurl_argv`, `nurl_argv_get`),
 - a named-struct literal `@ T { ... }` whose fields are themselves
   fresh allocations (each such field is tracked individually),
 - a value of a type with a user `Drop` trait impl.
@@ -57,6 +57,25 @@ At the end of the owning binding's scope the compiler emits the
 matching `nurl_free` / `drop`. Reassigning an owned binding frees the
 previous value first. Returning a fresh allocation **transfers
 ownership** to the caller and suppresses the local drop.
+
+Both argv accessors return owned copies, including an allocated empty string
+for an absent argument. Bindings and temporary arguments are reclaimed
+automatically; do not add a manual `nurl_free`.
+
+A `?` or `??` expression can select between a borrowed raw pointer and an
+owned string. Its value keeps the selected pointer's identity; a separate
+ownership value is null on borrowed branches and holds the allocation on
+owned branches. Arguments, bindings, returns and reassignment preserve that
+ownership, including nested joins. The compiler never copies an unproved
+borrow: `s` can also hold an opaque foreign handle.
+
+A helper that retains an owned raw string, such as `string_from_take`, takes
+over its buffer at the call. The compiler evaluates all arguments first, then
+clears the caller's ownership slot. This permits a later argument to inspect
+the same buffer's length. A conditional call transfers only on the branch
+that executes it; the other branch still drops the original owner. Named
+arguments and forward declarations use the same transfer rule. The receiving
+handle now owns the buffer, so the original binding must no longer be used.
 
 ### A closure body has two exits, and both drop
 

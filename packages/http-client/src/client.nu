@@ -332,7 +332,11 @@ $ `stdlib/ext/compress.nu`
     ? == code 1 { ^ # HttpClientErr HcConnect } {}
     ? == code 2 { ^ # HttpClientErr HcTimeout } {}
     ? == code 3 { ^ # HttpClientErr HcTls } {}
+    ? == code 4 { ^ # HttpClientErr HcDns } {}
+    ? == code 5 { ^ # HttpClientErr HcInvalidUrl } {}
+    ? == code 6 { ^ # HttpClientErr HcProtocol } {}
     ? == code 7 { ^ # HttpClientErr HcTooLarge } {}
+    ? == code 9 { ^ # HttpClientErr HcDecode } {}
     ^ # HttpClientErr HcOther
 }
 
@@ -397,7 +401,7 @@ $ `stdlib/ext/compress.nu`
             = . c last_pq . o pq
             : ~ i h3e 0
             ?? ( __hc_do_h3 c o method path user body ) {
-                T r → { ( __hc_free_headers user ) ^ @ !HttpResponse HttpClientErr { T r } }
+                T r → { ( __hc_free_headers user ) ^ ( __hc_decode_response c r method ) }
                 F e → { = h3e e }
             }
             ? == h3e 4 { ( __hc_free_headers user ) ^ @ !HttpResponse HttpClientErr { F # HttpClientErr HcTooLarge } } {}
@@ -457,10 +461,7 @@ $ `stdlib/ext/compress.nu`
     ( __hc_free_headers hs )
     ?? rr {
         F e → { ^ @ !HttpResponse i { F e } }
-        T resp → {
-            : HttpResponse dec ( __hc_decode_response c resp )
-            ^ @ !HttpResponse i { T dec }
-        }
+        T resp → { ^ @ !HttpResponse i { T resp } }
     }
 }
 
@@ -540,13 +541,13 @@ $ `stdlib/ext/compress.nu`
         = . o proto 0
         ^ @ !HttpResponse HttpClientErr { F ( __hc_stream_err ek ) }
     } {}
-    : HttpResponse r ( __hc_response_from_stream c st )
+    : !HttpResponse HttpClientErr r ( __hc_response_from_stream c st method )
     // Re-pool the connection when the response left it reusable.
     ?? ( hp_stream_release st ) {
         T back → { = . o h1 back = . o has_h1 1 }
         F _ → { = . o proto 0 }
     }
-    ^ @ !HttpResponse HttpClientErr { T r }
+    ^ r
 }
 
 @ __hc_stream_err i ek → HttpClientErr {
@@ -559,7 +560,7 @@ $ `stdlib/ext/compress.nu`
 
 // Assemble an HttpResponse (status, headers, body) from a finished h1
 // stream, decoding the body if it is compressed and decompression is on.
-@ __hc_response_from_stream * HttpClient c * HttpStreamState st → HttpResponse {
+@ __hc_response_from_stream * HttpClient c * HttpStreamState st s method → !HttpResponse HttpClientErr {
     : HttpResponse r ( response_new ( hp_stream_status st ) )
     : i hc ( hp_stream_header_count st )
     : ~ i k 0
@@ -567,9 +568,9 @@ $ `stdlib/ext/compress.nu`
         ( response_add_header r ( hp_stream_header_name st k ) ( hp_stream_header_value st k ) )
         = k + k 1
     }
-    : ( Vec u ) raw ( hp_stream_body_take st )
-    ( __hc_apply_body c r raw )
-    ^ r
+    ( vec_free [u] . r body )
+    = . r body ( hp_stream_body_take st )
+    ^ ( __hc_decode_response c r method )
 }
 
 // ── HTTP/2 over the pooled multiplexed connection ─────────────────────
@@ -610,10 +611,7 @@ $ `stdlib/ext/compress.nu`
                     : !HttpResponse H2ClientErr tr ( h2_client_take_response . o h2 sid )
                     ?? tr {
                         F e → { ^ @ !HttpResponse HttpClientErr { F ( __hc_h2_err e ) } }
-                        T resp → {
-                            : HttpResponse dec ( __hc_decode_response c resp )
-                            ^ @ !HttpResponse HttpClientErr { T dec }
-                        }
+                        T resp → { ^ ( __hc_decode_response c resp method ) }
                     }
                 }
             }
@@ -643,49 +641,49 @@ $ `stdlib/ext/compress.nu`
     ^ hit
 }
 
-// Decompress an already-assembled HttpResponse's body in place (h2 path),
-// returning a possibly-new HttpResponse.
-@ __hc_decode_response * HttpClient c HttpResponse r → HttpResponse {
-    ? == . c decompress 0 { ^ r } {}
+// All transports share this owning response decoder. Malformed compressed
+// content is a protocol error; compressed output beyond the configured cap
+// is HcTooLarge. On failure the response is freed, never returned encoded.
+@ __hc_decode_response * HttpClient c HttpResponse r s method → !HttpResponse HttpClientErr {
+    ? & > . c body_max 0 > ( vec_len [u] . r body ) . c body_max {
+        ( http_response_free r )
+        ^ @ !HttpResponse HttpClientErr { F HcTooLarge }
+    } {}
+    // HEAD and no-content statuses carry representation metadata without
+    // an encoded payload; an absent gzip member there is not corruption.
+    ? | == . c decompress 0 | != 0 ( nurl_str_eq method `HEAD` )
+    | == . r status 204 == . r status 304 {
+        ^ @ !HttpResponse HttpClientErr { T r }
+    } {}
     : String enc ( __hc_header_value . r headers `content-encoding` )
     : s ed ( string_data enc )
-    ? | ( nurl_str_eq ed `gzip` ) ( nurl_str_eq ed `deflate` ) {
-        : !( Vec u ) CompressErr dr ( gzip_decompress_max . r body ? > . c body_max 0 . c body_max 0 )
+    ? | ( _hc_eq_ci ed `gzip` ) ( _hc_eq_ci ed `deflate` ) {
+        : !( Vec u ) CompressErr dr ? ( _hc_eq_ci ed `gzip` )
+        ( gzip_decompress_max . r body . c body_max )
+        ( zlib_decompress_max . r body . c body_max )
         ?? dr {
             T out → {
                 ( vec_free [u] . r body )
                 = . r body out
                 ( __hc_strip_encoding r )
+                : String length ( string_new )
+                ( string_push_int length ( vec_len [u] out ) )
+                ( response_set_header r `Content-Length` ( string_data length ) )
+                ( string_free length )
             }
-            F _ → {}
-        }
-    } {}
-    ( string_free enc )
-    ^ r
-}
-
-// Decode a body Vec for the h1 path (response already built).
-@ __hc_apply_body * HttpClient c HttpResponse r ( Vec u ) raw → v {
-    ? == . c decompress 0 { ( response_set_body_bytes r raw ) ( vec_free [u] raw ) ^ v } {}
-    : String enc ( __hc_header_value . r headers `content-encoding` )
-    : s ed ( string_data enc )
-    ? | ( nurl_str_eq ed `gzip` ) ( nurl_str_eq ed `deflate` ) {
-        : !( Vec u ) CompressErr dr ( gzip_decompress_max raw ? > . c body_max 0 . c body_max 0 )
-        ?? dr {
-            T out → {
-                ( response_set_body_bytes r out )
-                ( vec_free [u] out )
-                ( vec_free [u] raw )
-                ( __hc_strip_encoding r )
+            F error → {
                 ( string_free enc )
-                ^ v
+                ( http_response_free r )
+                : HttpClientErr mapped ?? error {
+                    CompressBufTooSmall → # HttpClientErr HcTooLarge
+                    _ → # HttpClientErr HcProtocol
+                }
+                ^ @ !HttpResponse HttpClientErr { F mapped }
             }
-            F _ → {}
         }
     } {}
     ( string_free enc )
-    ( response_set_body_bytes r raw )
-    ( vec_free [u] raw )
+    ^ @ !HttpResponse HttpClientErr { T r }
 }
 
 // Drop the Content-Encoding header once we have decoded the body, so the
@@ -845,7 +843,10 @@ $ `stdlib/ext/compress.nu`
         HcDns → 4
         HcInvalidUrl → 5
         HcTooLarge → 7
-        _ → 6
+        HcProtocol → 6
+        HcTooManyRedirects → 100
+        HcOther → 8
+        HcDecode → 9
     }
 }
 

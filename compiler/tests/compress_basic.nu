@@ -93,7 +93,7 @@ $ `stdlib/ext/compress.nu`
         }
     }
 
-    // ── Empty input passes through ─────────────────────────────────
+    // ── Empty zlib input is a framed stream ─────────────────────────────────
     : ( Vec u ) empty ( vec_new [u] )
     : !( Vec u ) CompressErr ez ( zlib_compress empty )
     ?? ez {

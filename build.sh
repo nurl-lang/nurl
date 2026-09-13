@@ -433,8 +433,7 @@ step "clean"         bash -c 'rm -f build/nurlc_lastgood.bin \
                           build/nurlc_self.ll build/nurlc_self \
                           build/nurlc_self2.ll build/nurlc_self2 \
                           build/nurlc_self.[0-9]*.ll build/nurlc_self.[0-9]*.o \
-                          build/nurlc_self2.[0-9]*.ll build/nurlc_self2.[0-9]*.o \
-                          build/nurlc'
+                          build/nurlc_self2.[0-9]*.ll build/nurlc_self2.[0-9]*.o'
 
 # Stage 0: link the committed snapshot IR. No Python anywhere —
 # the .ll was produced by a previous nurlc run and lives in the
@@ -602,8 +601,31 @@ if ! cmp -s build/nurlc_self.ll build/nurlc_self2.ll; then
     fail "bootstrap fixed point"
 fi
 
-cp build/nurlc_self2 build/nurlc
-ln -sf build/nurlc nurlc 2>/dev/null || cp build/nurlc nurlc
+# Preserve the live compiler until the complete, fixed-point-checked candidate
+# is ready. Copying onto a running executable fails with ETXTBSY; unlinking it
+# first leaves a lookup gap. A rename from its own filesystem avoids both.
+publish_compiler() {
+    local staged
+    staged=$(mktemp -d build/.nurlc.publish.XXXXXX) || return 1
+    if ! cp -p build/nurlc_self2 "$staged/nurlc" || ! mv -f "$staged/nurlc" build/nurlc; then
+        rm -rf "$staged"
+        return 1
+    fi
+    rmdir "$staged" || return 1
+    staged=$(mktemp -d ./.nurlc.publish.XXXXXX) || return 1
+    if ! ln -s build/nurlc "$staged/nurlc" 2>/dev/null; then
+        if ! cp -p build/nurlc "$staged/nurlc"; then
+            rm -rf "$staged"
+            return 1
+        fi
+    fi
+    if ! mv -f "$staged/nurlc" nurlc; then
+        rm -rf "$staged"
+        return 1
+    fi
+    rmdir "$staged"
+}
+step "publish compiler" publish_compiler
 
 # ── Partitioned emission ─────────────────────────────────────
 # The stage links above already ran through `nurlc --split`, so a
@@ -634,7 +656,8 @@ if (( RUN_TESTS == 1 )); then
 fi
 
 # Both tools are required outputs of a complete toolchain build. Their
-# builders remove stale binaries and use nurl.sh, including sanitizer mode.
+# builders preserve working binaries until nurl.sh publishes each successful
+# replacement, including in sanitizer mode. Any failure still fails the build.
 step "nurlfmt" bash "$SCRIPT_DIR/tools/nurlfmt/build.sh"
 step "nurlfmt round-trip" bash compiler/tests/nurlfmt_idempotent.sh \
     examples/fizzbuzz.nu examples/calculator.nu stdlib/core/string.nu

@@ -170,6 +170,7 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
     (void)cmd; (void)argv_buf; (void)argc; (void)stdin_blob;
     return 0;
 }
+long long nurl_proc_run_shell(const char *command) { (void)command; return 0; }
 
 long long nurl_proc_exit_code(long long h) { (void)h; return -1; }
 long long nurl_proc_err_kind(long long h)  { (void)h; return 4; }  /* OTHER */
