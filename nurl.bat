@@ -98,14 +98,13 @@ if "%~2"=="" (
 for %%I in ("%OUTBASE%") do set "OUTBASE=%%~fI"
 for %%I in ("%OUTBASE%") do set "EXEDIR=%%~dpI"
 for %%I in ("%OUTBASE%") do set "OUTNAME=%%~nxI"
-REM %~dp0 carries whatever the install directory is named, and a name may
-REM hold %, ! and &. Those do not survive being carried through expansion
-REM into every derived path below -- the toolchain then looks for nurlc.exe
-REM and runtime.o at a path with the specials rubbed out, finds neither, and
-REM says it was never built. The short (8.3) form of the same directory has
-REM none of them. Where a volume has short names disabled the call hands
-REM back the long form unchanged, which is exactly today's behaviour.
-for %%I in ("%~dp0.") do set "SCRIPTDIR=%%~sI\"
+REM `set "VAR=%~dp0"` and nothing cleverer. An install directory may be
+REM named with % ! or & in it, and the assignment's quotes are what keep
+REM those from being read as syntax. Handing the same %~dp0 to a FOR
+REM instead -- to shorten it to its 8.3 form, which would have had none of
+REM them -- put it somewhere the quotes did not cover: the & ended the
+REM command, and SCRIPTDIR came back as the PARENT directory.
+set "SCRIPTDIR=%~dp0"
 REM Values inserted through delayed expansion are not parsed as command
 REM operators and their embedded ! characters are not expanded again.
 setlocal EnableDelayedExpansion
