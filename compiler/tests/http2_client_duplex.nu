@@ -23,6 +23,12 @@ $ `stdlib/std/thread.nu`
     ^ value
 }
 
+// A stall has a shape: how far each side got, and what it was waiting for.
+@ count s label i value → v {
+    ( nurl_print label ) ( nurl_print `=` )
+    ( nurl_print ( nurl_str_int value ) ) ( nurl_print `\n` )
+}
+
 @ small_send_buffer TcpConn tcp → b {
     : b zero ?? ( tcp_set_send_buffer tcp 0 ) { T _ → F F _ → T }
     : b negative ?? ( tcp_set_send_buffer tcp -1 ) { T _ → F F _ → T }
@@ -158,6 +164,14 @@ $ `stdlib/std/thread.nu`
         ( note `peer_received_all` == received 1048576 )
         ( note `peer_sent_end_stream` response_end )
         ( note `peer_saw_backpressure` pressure )
+        ( note `peer_saw_headers` headers )
+        ( note `peer_saw_request_end` request_end )
+        ( count `peer_received` received )
+        ( count `peer_sent` sent )
+        ( count `peer_conn_credit` conn_credit )
+        ( count `peer_stream_credit` stream_credit )
+        ( count `peer_write_pending` ( h2_frame_writer_pending writer ) )
+        ( count `peer_rx_buffered` ( vec_len [u] rx ) )
     } {}
     ( vec_set [i] outcome 0 ? complete 1 0 )
     // A completed response can leave WINDOW_UPDATE frames in flight. Drain
