@@ -29,6 +29,27 @@ class KeyUpdateTest(unittest.TestCase):
         subprocess.run(['cc', '-O2', str(ROOT/'tools/tests/net_key_update_peer.c'),
                         '-o', str(cls.peer), '-lssl', '-lcrypto'], check=True, capture_output=True)
 
+    # The child is started, then waited for. Seven seconds is a fast
+    # machine's idea of "it should be up by now", and the CI container runs
+    # this suite about four times slower than a developer box — the wait
+    # expired while the peer was still starting. A budget is here to bound a
+    # hang, so leave room only a hang can use, and say what the child was
+    # doing if it is ever reached: a process that died reads exactly like a
+    # process that was slow, and a bare socket timeout tells them apart
+    # for nobody.
+    WAIT = 30
+
+    def child_state(self, process, note):
+        if process.poll() is None:
+            return f'{note}: still running after {self.WAIT}s'
+        output, errors = b'', b''
+        try:
+            output, errors = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        return (f'{note}: exited {process.returncode}\n'
+                + (output + errors).decode(errors='replace'))
+
     def exchange(self, role, mode, request, cipher):
         errors = []
         sockets = []
@@ -41,7 +62,7 @@ class KeyUpdateTest(unittest.TestCase):
                 sockets.append(listener)
                 listener.bind(('127.0.0.1', 0))
                 listener.listen()
-                listener.settimeout(7)
+                listener.settimeout(self.WAIT)
                 port = listener.getsockname()[1]
             else:
                 port = 0
@@ -50,18 +71,23 @@ class KeyUpdateTest(unittest.TestCase):
                                     stderr=subprocess.PIPE)
             processes.append(nurl)
             if role == 0:
-                connection, _ = listener.accept()
+                try:
+                    connection, _ = listener.accept()
+                except socket.timeout:
+                    self.fail(self.child_state(nurl, 'nurl never connected'))
             else:
-                self.assertTrue(select.select([nurl.stdout], [], [], 7)[0], 'listener did not start')
+                self.assertTrue(select.select([nurl.stdout], [], [], self.WAIT)[0],
+                                self.child_state(nurl, 'nurl listener did not start'))
                 address = nurl.stdout.readline().decode().strip()
                 if not address:
                     self.fail(nurl.stderr.read())
-                connection = socket.create_connection(('127.0.0.1', int(address.rsplit(':', 1)[1])), 7)
+                connection = socket.create_connection(
+                    ('127.0.0.1', int(address.rsplit(':', 1)[1])), self.WAIT)
             sockets.append(connection)
             left, right = socket.socketpair()
             sockets.extend([left, right])
-            connection.settimeout(7)
-            left.settimeout(7)
+            connection.settimeout(self.WAIT)
+            left.settimeout(self.WAIT)
             peer = subprocess.Popen([str(self.peer), str(right.fileno()), str(1-role), str(request),
                                      str(self.cert), str(self.key), cipher], pass_fds=(right.fileno(),),
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
