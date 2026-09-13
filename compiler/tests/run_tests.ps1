@@ -223,6 +223,14 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
         # which would make a LINK FAIL golden non-deterministic. Collapse
         # the temp-dir prefix and the -<hash> suffix to a stable form.
         $s = $s -replace '(?i)[A-Za-z]:\\[^\r\n:]*\\([A-Za-z0-9_.]+)-[0-9a-f]{6,}\.o', '$1.o'
+        # Same rule for this invocation's own artifact directory. The
+        # runner names it build\tests\run.<guid> so concurrent runs cannot
+        # overwrite each other, and argv_test prints argv[0] — so without
+        # this the record carries a name that is new on every run and the
+        # golden can never match again. Collapse it to the stable form.
+        $leaf = Split-Path -Leaf $WorkDir
+        $s = $s -replace [regex]::Escape('build\tests\' + $leaf + '\'), 'build\tests\'
+        $s = $s -replace [regex]::Escape('build/tests/' + $leaf + '/'), 'build/tests/'
         return $s
     }
     # Append text, capping to MaxOutLines newline-terminated lines.

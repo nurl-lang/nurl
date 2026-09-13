@@ -5571,16 +5571,25 @@
         : s index ( str_first_word rest ) = rest ( str_skip_word rest )
         ( nurl_print `@.__nurl_argtransfer.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` )
-        ( nurl_print ? ( str_contains_word ( nurl_sym_get g_fn_escapes callee ) index ) `true` `false` )
+        ( nurl_print ? ( str_contains_word ( nurl_sym_get g_fn_sink callee ) index ) `true` `false` )
         ( nurl_print `\n` )
     }
 }
 
-// An owned binding passed to a retaining argument leaves this scope's
+// An owned binding passed to a CONSUMING argument leaves this scope's
 // ownership at the CALL, not at the declaration or the branch join. Keep
 // the move queued until all arguments have been evaluated (a later argument
 // may inspect the same buffer, e.g. string_from_take raw (strlen raw)).
-// Forward/generic helpers use their final whole-module escape summary.
+// Forward/generic helpers use their final whole-module sink summary.
+//
+// Consuming means `sink` (declared or inferred), never merely escaping.
+// g_fn_escapes answers a lifetime question — "could this pointer outlive
+// the call?" — and over-approximates on purpose, so that a stack address
+// handed to such a parameter is rejected. Ownership is a different
+// question. __build_argv stores its `cmd` argument into the argv block it
+// hands to execvp: an escape, but nothing there ever frees it. Reading
+// that as a move strands the buffer AND nulls the caller's binding, which
+// is still live on the arms below the call.
 @ mem_string_arg_transfer i syms s callee i index i tt s ident i line → s {
     ? | == 0 g_auto_drop_strings ! ( is_ident_tok tt ) { ^ ( nurl_str_cat `` `` ) } {}
     : s slot ( nurl_sym_get2 syms ident `__ptr` )
@@ -9680,8 +9689,7 @@
         ? & ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
         ( is_ident_tok bck_arg_tt )
         { : s sink_ptr ( nurl_sym_get2 syms bck_arg_val `__ptr` )
-            ? & ! ( __is_autodrop_enum at syms ) | | ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) bck_arg_val )
-            ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) sink_ptr )
+            ? & ! ( __is_autodrop_enum at syms ) | ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) bck_arg_val )
             | ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) sink_ptr )
             ( str_contains_word ( nurl_sym_get syms `__owned_struct_fields__` ) sink_ptr )
             { ( die lex ( nurl_str_cat3
@@ -16224,9 +16232,13 @@
             : i pvid ( nurl_str_to_int pvn )
             : s pcal ( bck_field rec 5 )
             : s paix ( bck_field rec 6 )
-            // A tracked raw-string owner also moves when the callee keeps
-            // its address. The same final escape fact controls emitted IR.
-            : s psink ( nurl_sym_get ? ( seq kind `pendretain` ) g_fn_escapes g_fn_sink pcal )
+            // A tracked raw-string owner moves only when the callee CONSUMES
+            // that parameter. Escaping is not consuming: a callee may store a
+            // borrowed pointer in a scratch container it never frees (argv for
+            // execvp), and calling that a move both strands the buffer and
+            // nulls a binding the caller still reads. The same consumption
+            // fact controls emitted IR (mem_emit_arg_flags).
+            : s psink ( nurl_sym_get g_fn_sink pcal )
             : s palias ? ( seq kind `pendretain` ) `` ( nurl_sym_get g_fn_ret_alias pcal )
             ? ( str_contains_word psink paix )
             { ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st pvid )

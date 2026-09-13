@@ -373,7 +373,7 @@ $ `stdlib/core/char.nu`
 // Used by fast file I/O paths (CSV / arena loaders) to avoid the
 // `nurl_memcpy` over the full content — for a 100 MB CSV that's
 // ~33 ms saved per load.
-@ string_from_take s raw i raw_cap → String {
+@ string_from_take sink s raw i raw_cap → String {
     : i n ( nurl_str_len raw )
     : s ctl ( nurl_zalloc 24 )
     ( nurl_poke ctl 0 # i raw )

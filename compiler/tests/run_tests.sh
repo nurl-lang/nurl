@@ -171,7 +171,16 @@ append_capped() {
 # place, but BSD sed (FreeBSD, macOS) requires a backup-suffix argument and
 # otherwise mis-parses the script as the suffix (this silently left paths
 # unstripped on FreeBSD). Write to a temp file and move it back instead.
-strip_root() { sed "s|$ROOT_DIR/||g" "$1" > "$1.sr" && mv -f "$1.sr" "$1"; }
+# Rewrite absolute paths to repo-relative, and collapse this invocation's
+# own artifact directory. WORKDIR is build/tests/run.<random> so concurrent
+# runners cannot overwrite each other; that random name must never reach a
+# golden, or the golden can never match again (the Windows runner records
+# argv[0], which is exactly such a path). Both runners honour the rule.
+WORKDIR_LEAF=$(basename "$WORKDIR")
+strip_root() {
+    sed -e "s|$ROOT_DIR/||g" -e "s|build/tests/$WORKDIR_LEAF/|build/tests/|g" \
+        "$1" > "$1.sr" && mv -f "$1.sr" "$1"
+}
 
 # ── run_one <name> ──────────────────────────────────────────────
 #   Produces $WORKDIR/$name.actual (the record) and prints a single
